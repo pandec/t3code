@@ -6,9 +6,10 @@ import {
   TurnId,
   type OrchestrationThreadShell,
 } from "@t3tools/contracts";
-import { shouldAutoSettleThread } from "./ThreadSettlementPolicy.ts";
+import { resolveAutoSettlementAt } from "./ThreadSettlementPolicy.ts";
 
 const NOW = "2026-08-28T12:00:00.000Z";
+const LAST_ACTIVITY_AT = "2026-08-20T00:00:00.000Z";
 const makeThread = (
   overrides: Partial<OrchestrationThreadShell> = {},
 ): OrchestrationThreadShell => ({
@@ -22,24 +23,24 @@ const makeThread = (
   worktreePath: "/repo",
   latestTurn: null,
   createdAt: "2026-08-01T00:00:00.000Z",
-  updatedAt: "2026-08-20T00:00:00.000Z",
+  updatedAt: LAST_ACTIVITY_AT,
   archivedAt: null,
   settledOverride: null,
   settledAt: null,
   session: null,
-  latestUserMessageAt: "2026-08-20T00:00:00.000Z",
+  latestUserMessageAt: LAST_ACTIVITY_AT,
   hasPendingApprovals: false,
   hasPendingUserInput: false,
   hasActionableProposedPlan: false,
   ...overrides,
 });
 
-const decide = (
+const settlementAt = (
   thread: OrchestrationThreadShell,
   pullRequest: { state: "open" | "closed" | "merged"; updatedAt: string | null } | null = null,
   settings: { enabled?: boolean; days?: number | null; merge?: boolean } = {},
 ) =>
-  shouldAutoSettleThread({
+  resolveAutoSettlementAt({
     thread,
     pullRequest,
     now: NOW,
@@ -48,67 +49,116 @@ const decide = (
     autoSettleOnMerge: settings.merge ?? true,
   });
 
-describe("shouldAutoSettleThread", () => {
+describe("resolveAutoSettlementAt", () => {
+  it("returns the last activity time for persisted settlement", () => {
+    expect(
+      resolveAutoSettlementAt({
+        thread: makeThread({
+          latestTurn: {
+            turnId: TurnId.make("turn-terminal"),
+            state: "completed",
+            requestedAt: "2026-08-19T00:00:00.000Z",
+            startedAt: "2026-08-19T00:01:00.000Z",
+            completedAt: "2026-08-21T00:00:00.000Z",
+            assistantMessageId: null,
+          },
+        }),
+        pullRequest: null,
+        now: NOW,
+        threadAutoSettleEnabled: true,
+        autoSettleAfterDays: 3,
+        autoSettleOnMerge: true,
+      }),
+    ).toBe("2026-08-21T00:00:00.000Z");
+  });
+
+  it("uses creation time for PR settlement when the thread has no activity", () => {
+    expect(
+      resolveAutoSettlementAt({
+        thread: makeThread({
+          latestUserMessageAt: null,
+          latestTurn: null,
+          updatedAt: "2026-08-27T00:00:00.000Z",
+        }),
+        pullRequest: { state: "closed", updatedAt: NOW },
+        now: NOW,
+        threadAutoSettleEnabled: true,
+        autoSettleAfterDays: null,
+        autoSettleOnMerge: true,
+      }),
+    ).toBe("2026-08-01T00:00:00.000Z");
+  });
+
   it("settles inactive threads and leaves never-used threads active", () => {
-    expect(decide(makeThread())).toBe(true);
-    expect(decide(makeThread({ latestUserMessageAt: null }))).toBe(false);
-    expect(decide(makeThread(), null, { days: null })).toBe(false);
+    expect(settlementAt(makeThread())).toBe(LAST_ACTIVITY_AT);
+    expect(settlementAt(makeThread({ latestUserMessageAt: null }))).toBeNull();
+    expect(settlementAt(makeThread(), null, { days: null })).toBeNull();
   });
 
   it("disables every automatic settlement reason behind the master gate", () => {
-    expect(decide(makeThread(), null, { enabled: false })).toBe(false);
+    expect(settlementAt(makeThread(), null, { enabled: false })).toBeNull();
     expect(
-      decide(makeThread(), { state: "closed", updatedAt: NOW }, { enabled: false, days: null }),
-    ).toBe(false);
+      settlementAt(
+        makeThread(),
+        { state: "closed", updatedAt: NOW },
+        { enabled: false, days: null },
+      ),
+    ).toBeNull();
   });
 
   it("keeps indefinitely snoozed threads out of automatic settlement", () => {
-    const thread = makeThread({ snoozedAt: "2026-08-20T00:00:00.000Z", snoozedUntil: null });
-    expect(decide(thread)).toBe(false);
-    expect(decide(thread, { state: "closed", updatedAt: NOW }, { days: null })).toBe(false);
+    const thread = makeThread({ snoozedAt: LAST_ACTIVITY_AT, snoozedUntil: null });
+    expect(settlementAt(thread)).toBeNull();
+    expect(settlementAt(thread, { state: "closed", updatedAt: NOW }, { days: null })).toBeNull();
   });
 
   it("keeps a thread active at the exact inactivity boundary", () => {
-    expect(decide(makeThread({ latestUserMessageAt: "2026-08-25T12:00:00.000Z" }))).toBe(false);
+    expect(
+      settlementAt(makeThread({ latestUserMessageAt: "2026-08-25T12:00:00.000Z" })),
+    ).toBeNull();
   });
 
   it("keeps open pull requests active", () => {
-    expect(decide(makeThread(), { state: "open", updatedAt: NOW })).toBe(false);
+    expect(settlementAt(makeThread(), { state: "open", updatedAt: NOW })).toBeNull();
   });
 
   it("settles closed requests and honors the merge setting", () => {
-    expect(decide(makeThread(), { state: "closed", updatedAt: NOW }, { merge: false })).toBe(true);
-    expect(decide(makeThread(), { state: "merged", updatedAt: NOW }, { merge: false })).toBe(true);
+    expect(settlementAt(makeThread(), { state: "closed", updatedAt: NOW }, { merge: false })).toBe(
+      LAST_ACTIVITY_AT,
+    );
+    expect(settlementAt(makeThread(), { state: "merged", updatedAt: NOW }, { merge: false })).toBe(
+      LAST_ACTIVITY_AT,
+    );
     expect(
-      decide(makeThread(), { state: "merged", updatedAt: NOW }, { merge: false, days: null }),
-    ).toBe(false);
+      settlementAt(makeThread(), { state: "merged", updatedAt: NOW }, { merge: false, days: null }),
+    ).toBeNull();
   });
 
   it("does not settle again after user activity newer than the PR", () => {
     expect(
-      decide(
+      settlementAt(
         makeThread({ latestUserMessageAt: "2026-08-27T00:00:00.000Z" }),
         { state: "merged", updatedAt: "2026-08-26T00:00:00.000Z" },
         { days: null },
       ),
-    ).toBe(false);
+    ).toBeNull();
   });
 
   it("does not inherit a terminal pull request older than the thread", () => {
     expect(
-      decide(
-        makeThread({ createdAt: "2026-08-20T00:00:00.000Z", latestUserMessageAt: null }),
+      settlementAt(
+        makeThread({ createdAt: LAST_ACTIVITY_AT, latestUserMessageAt: null }),
         { state: "closed", updatedAt: "2026-08-19T00:00:00.000Z" },
         { days: null },
       ),
-    ).toBe(false);
+    ).toBeNull();
   });
 
   it("requires a comparable PR timestamp for immediate settlement", () => {
     const recentThread = makeThread({ latestUserMessageAt: "2026-08-27T00:00:00.000Z" });
-    expect(decide(recentThread, { state: "closed", updatedAt: null })).toBe(false);
-    expect(decide(recentThread, { state: "merged", updatedAt: "unknown" })).toBe(false);
-    expect(decide(makeThread(), { state: "closed", updatedAt: null })).toBe(true);
+    expect(settlementAt(recentThread, { state: "closed", updatedAt: null })).toBeNull();
+    expect(settlementAt(recentThread, { state: "merged", updatedAt: "unknown" })).toBeNull();
+    expect(settlementAt(makeThread(), { state: "closed", updatedAt: null })).toBe(LAST_ACTIVITY_AT);
   });
 
   it("uses user request time instead of completion time as the PR anchor", () => {
@@ -122,18 +172,20 @@ describe("shouldAutoSettleThread", () => {
         assistantMessageId: null,
       },
     });
-    expect(decide(thread, { state: "merged", updatedAt: "2026-08-26T00:00:00.000Z" })).toBe(true);
+    expect(settlementAt(thread, { state: "merged", updatedAt: "2026-08-26T00:00:00.000Z" })).toBe(
+      "2026-08-27T00:00:00.000Z",
+    );
   });
 
   it("blocks pins, snooze, pending work, live sessions, and queued starts", () => {
-    expect(decide(makeThread({ settledOverride: "active" }))).toBe(false);
-    expect(decide(makeThread({ snoozedUntil: "2026-08-29T00:00:00.000Z" }))).toBe(false);
-    expect(decide(makeThread({ hasPendingApprovals: true }))).toBe(false);
-    expect(decide(makeThread({ hasPendingUserInput: true }))).toBe(false);
-    expect(decide(makeThread({ backgroundLiveness: "working" }))).toBe(false);
-    expect(decide(makeThread({ backgroundLiveness: "monitoring" }))).toBe(false);
+    expect(settlementAt(makeThread({ settledOverride: "active" }))).toBeNull();
+    expect(settlementAt(makeThread({ snoozedUntil: "2026-08-29T00:00:00.000Z" }))).toBeNull();
+    expect(settlementAt(makeThread({ hasPendingApprovals: true }))).toBeNull();
+    expect(settlementAt(makeThread({ hasPendingUserInput: true }))).toBeNull();
+    expect(settlementAt(makeThread({ backgroundLiveness: "working" }))).toBeNull();
+    expect(settlementAt(makeThread({ backgroundLiveness: "monitoring" }))).toBeNull();
     expect(
-      decide(
+      settlementAt(
         makeThread({
           session: {
             threadId: ThreadId.make("thread-1"),
@@ -146,15 +198,17 @@ describe("shouldAutoSettleThread", () => {
           },
         }),
       ),
-    ).toBe(false);
+    ).toBeNull();
     expect(
-      decide(makeThread({ latestUserMessageAt: "2026-08-28T11:59:00.000Z", latestTurn: null })),
-    ).toBe(false);
+      settlementAt(
+        makeThread({ latestUserMessageAt: "2026-08-28T11:59:00.000Z", latestTurn: null }),
+      ),
+    ).toBeNull();
   });
 
   it("allows a fresh completion to wake snooze before settlement", () => {
     expect(
-      decide(
+      settlementAt(
         makeThread({
           snoozedAt: "2026-08-19T00:00:00.000Z",
           snoozedUntil: "2026-08-29T00:00:00.000Z",
@@ -163,11 +217,11 @@ describe("shouldAutoSettleThread", () => {
             state: "completed",
             requestedAt: "2026-08-18T00:00:00.000Z",
             startedAt: "2026-08-18T00:01:00.000Z",
-            completedAt: "2026-08-20T00:00:00.000Z",
+            completedAt: LAST_ACTIVITY_AT,
             assistantMessageId: null,
           },
         }),
       ),
-    ).toBe(true);
+    ).toBe(LAST_ACTIVITY_AT);
   });
 });

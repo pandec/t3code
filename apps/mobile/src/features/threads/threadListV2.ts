@@ -13,7 +13,10 @@ import {
 import type { SnoozePreset } from "@t3tools/client-runtime/state/thread-settled";
 import type { EnvironmentThreadShell } from "@t3tools/client-runtime/state/shell";
 import { threadSearchMatchKey } from "@t3tools/client-runtime/state/thread-search";
-import { sortPinnedThreadsByOrderKey } from "@t3tools/client-runtime/state/thread-sort";
+import {
+  resolveSettledThreadTimestamp,
+  sortPinnedThreadsByOrderKey,
+} from "@t3tools/client-runtime/state/thread-sort";
 import type { EnvironmentId, ProjectId } from "@t3tools/contracts";
 
 import type { PendingNewTask } from "../../state/use-pending-new-tasks";
@@ -417,25 +420,21 @@ export function buildThreadListV2ListItems(input: {
   readonly settledShelfHeaderIndex?: number | null;
   readonly snoozeLabelNow?: string;
 }): ThreadListV2ListItem[] {
-  const threadItems = input.items.map(
-    (item): ThreadListV2ListItem => ({
-      type: "v2-thread",
-      key: `v2-thread:${item.thread.environmentId}:${item.thread.id}`,
-      item,
-      snoozeWakeLabelText:
-        item.snoozed && item.thread.snoozedUntil != null && input.snoozeLabelNow !== undefined
-          ? snoozeWakeLabel(item.thread.snoozedUntil, { now: input.snoozeLabelNow })
-          : undefined,
-    }),
-  );
-  const pendingItems = input.pendingTasks.map(
-    (pendingTask, index): ThreadListV2ListItem => ({
-      type: "v2-pending",
-      key: `v2-pending:${pendingTask.message.messageId}`,
-      pendingTask,
-      showPendingDivider: index === 0,
-    }),
-  );
+  const threadItems = input.items.map((item): ThreadListV2ListItem => ({
+    type: "v2-thread",
+    key: `v2-thread:${item.thread.environmentId}:${item.thread.id}`,
+    item,
+    snoozeWakeLabelText:
+      item.snoozed && item.thread.snoozedUntil != null && input.snoozeLabelNow !== undefined
+        ? snoozeWakeLabel(item.thread.snoozedUntil, { now: input.snoozeLabelNow })
+        : undefined,
+  }));
+  const pendingItems = input.pendingTasks.map((pendingTask, index): ThreadListV2ListItem => ({
+    type: "v2-pending",
+    key: `v2-pending:${pendingTask.message.messageId}`,
+    pendingTask,
+    showPendingDivider: index === 0,
+  }));
   const olderCount = input.olderCount ?? 0;
   const olderShelfHeaderIndex = input.olderShelfHeaderIndex ?? null;
   const snoozedCount = input.snoozedCount ?? 0;
@@ -669,8 +668,8 @@ export function buildThreadListV2Items(input: {
         );
   const orderedSettled = [...settled].sort(
     (left, right) =>
-      firstValidTimestampMs(right.latestUserMessageAt, right.updatedAt) -
-      firstValidTimestampMs(left.latestUserMessageAt, left.updatedAt),
+      parseTimestampMs(resolveSettledThreadTimestamp(right) ?? "") -
+      parseTimestampMs(resolveSettledThreadTimestamp(left) ?? ""),
   );
   const settledLimit = input.settledLimit ?? Number.POSITIVE_INFINITY;
   const pagedSettled =

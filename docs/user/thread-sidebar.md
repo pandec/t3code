@@ -24,6 +24,10 @@ web, desktop, or mobile client is connected. **Settings → Extras → Sidebar �
 is the master switch. **Settings → General** controls settlement after inactivity and pull request
 merges. Turning the master switch off keeps manual settlement available.
 
+**Settled** lists threads by when their work finished, newest first. A thread you settle yourself
+sorts by the moment you settled it. A thread that settled on its own sorts by its last message or
+turn, not by when the server noticed it was inactive.
+
 Changing any of these settings writes the change to every environment you are connected to at that
 moment. An environment that is offline keeps its old value. When a connected environment holds a
 different value, **Settings > General** shows a warning that names it. Choose **Apply to all** to
@@ -114,6 +118,28 @@ widening your view: the list says T3 Code is not connected to it instead of repo
 no threads, and its thread count is hidden while T3 Code cannot see it. An environment you remove
 from your connections is reported as unavailable instead, so a temporary outage and a deliberate
 removal never look alike.
+
+## Panel motion
+
+The main sidebar, right panel, and terminal drawer open and close immediately by default. Under
+**Settings → Appearance → Motion**, move the **Panel animations** slider above 0 ms to add motion.
+The duration can be set up to 400 ms. Clicking the preview replays all three panel transitions; at
+0 ms, it snaps between the same open and closed states.
+
+## Environment icons
+
+When you are connected to more than one environment, every thread that lives somewhere other than
+the machine you are on wears a small icon for that machine at the end of its row: a server, a cloud
+VM, a desktop, a laptop, a Mac mini, or a Mac Studio. In the hosted web app and the mobile app,
+where every environment is remote, each row wears its machine so you can tell them apart at a
+glance. The same icon appears in the thread tooltip, the "Run on" picker, the pull request server
+filter, and the environment lists under **Settings → Connections**.
+
+Servers pick the icon themselves from the hardware they run on. A Mac reports its model, a Linux
+machine reports its chassis type and whether it is a virtual machine, and anything without a usable
+signal shows a generic server. To override it, open **Settings → Connections** and choose an icon
+for that environment; **Automatic** goes back to what the server detected. The choice is stored on
+that server, so every device that connects to it sees the same icon.
 
 ## Environment artwork
 

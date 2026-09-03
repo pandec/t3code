@@ -1701,12 +1701,10 @@ function threadStateEntryChanges(environmentId: EnvironmentIdType, threadId: Thr
       makeEnvironmentThreadState(threadId).pipe(
         Effect.map((handle) =>
           SubscriptionRef.changes(handle.state).pipe(
-            Stream.map(
-              (state): EnvironmentThreadStateEntry => ({
-                state,
-                loadOlderMessages: handle.loadOlderMessages,
-              }),
-            ),
+            Stream.map((state): EnvironmentThreadStateEntry => ({
+              state,
+              loadOlderMessages: handle.loadOlderMessages,
+            })),
           ),
         ),
       ),

@@ -53,20 +53,23 @@ it("preserves actionable project action conflicts from the live server", () => {
   assert.strictEqual(error.cause, cause);
 });
 
-it("includes the thread env-mode override in project list summaries", () => {
+it("includes project settings in project list summaries", () => {
   const shell = {
     id: "project-1",
     title: "Project",
     workspaceRoot: "/tmp/project",
     defaultModelSelection: null,
     defaultThreadEnvMode: "worktree",
+    autoPull: true,
     scripts: [],
     createdAt: "2026-08-09T00:00:00.000Z",
     updatedAt: "2026-08-09T00:00:00.000Z",
   } as unknown as Parameters<typeof projectListSummary>[0];
 
   assert.strictEqual(projectListSummary(shell).defaultThreadEnvMode, "worktree");
+  assert.isTrue(projectListSummary(shell).autoPull);
   assert.isNull(
     projectListSummary({ ...shell, defaultThreadEnvMode: undefined }).defaultThreadEnvMode,
   );
+  assert.isFalse(projectListSummary({ ...shell, autoPull: undefined }).autoPull);
 });

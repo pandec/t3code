@@ -532,14 +532,12 @@ export function buildSelectionChoices(
   platform: NodeJS.Platform,
 ): ReadonlyArray<SelectionChoice> {
   return [
-    ...remoteTargets.map(
-      (target): SelectionChoice => ({
-        id: `remote:${target}`,
-        target,
-        kind: "remote-desktop",
-        label: `${target} desktop (remote)`,
-      }),
-    ),
+    ...remoteTargets.map((target): SelectionChoice => ({
+      id: `remote:${target}`,
+      target,
+      kind: "remote-desktop",
+      label: `${target} desktop (remote)`,
+    })),
     {
       id: "local:desktop",
       target: localMachine,
@@ -769,14 +767,12 @@ function remoteResults(result: CommandResult): ReadonlyArray<StageResult> {
     ];
   }
   const failedIndex = REMOTE_STAGES.indexOf(failure as (typeof REMOTE_STAGES)[number]);
-  return REMOTE_STAGES.map(
-    (stage, index): StageResult => ({
-      stage,
-      status: index < failedIndex ? "OK" : index === failedIndex ? "FAILED" : "SKIPPED",
-      detail: index === failedIndex ? `exit ${String(result.exitCode)}` : undefined,
-      tail: index === failedIndex ? resultTail(result) : undefined,
-    }),
-  );
+  return REMOTE_STAGES.map((stage, index): StageResult => ({
+    stage,
+    status: index < failedIndex ? "OK" : index === failedIndex ? "FAILED" : "SKIPPED",
+    detail: index === failedIndex ? `exit ${String(result.exitCode)}` : undefined,
+    tail: index === failedIndex ? resultTail(result) : undefined,
+  }));
 }
 
 function appendTail(current: string, chunk: Buffer): string {
@@ -1504,9 +1500,10 @@ export async function runLocalTarget(
     if (status.cancelled || branch.cancelled) {
       stages.push({ stage: "preflight", status: "CANCELLED" });
       stages.push(
-        ...remainingLocalStages(plan, 1).map(
-          (stage): StageResult => ({ stage, status: "CANCELLED" }),
-        ),
+        ...remainingLocalStages(plan, 1).map((stage): StageResult => ({
+          stage,
+          status: "CANCELLED",
+        })),
       );
       const result = {
         target: plan.machine,
@@ -1532,9 +1529,10 @@ export async function runLocalTarget(
         detail: "checkout changed after preflight",
       });
       stages.push(
-        ...remainingLocalStages(plan, 1).map(
-          (stage): StageResult => ({ stage, status: "SKIPPED" }),
-        ),
+        ...remainingLocalStages(plan, 1).map((stage): StageResult => ({
+          stage,
+          status: "SKIPPED",
+        })),
       );
       const result = {
         target: plan.machine,
@@ -1558,9 +1556,10 @@ export async function runLocalTarget(
       if (switched.exitCode !== 0 || switched.cancelled) {
         stages.push(commandFailure("preflight", switched));
         stages.push(
-          ...remainingLocalStages(plan, 1).map(
-            (stage): StageResult => ({ stage, status: "SKIPPED" }),
-          ),
+          ...remainingLocalStages(plan, 1).map((stage): StageResult => ({
+            stage,
+            status: "SKIPPED",
+          })),
         );
         const result = {
           target: plan.machine,
@@ -1597,9 +1596,10 @@ export async function runLocalTarget(
     if (cleanDev?.some((result) => result.cancelled)) {
       stages.push({ stage: "preflight", status: "CANCELLED" });
       stages.push(
-        ...remainingLocalStages(plan, 1).map(
-          (stage): StageResult => ({ stage, status: "CANCELLED" }),
-        ),
+        ...remainingLocalStages(plan, 1).map((stage): StageResult => ({
+          stage,
+          status: "CANCELLED",
+        })),
       );
       const result = {
         target: plan.machine,
@@ -1620,9 +1620,10 @@ export async function runLocalTarget(
     ) {
       stages.push({ stage: "preflight", status: "FAILED", detail: "expected clean dev checkout" });
       stages.push(
-        ...remainingLocalStages(plan, 1).map(
-          (stage): StageResult => ({ stage, status: "SKIPPED" }),
-        ),
+        ...remainingLocalStages(plan, 1).map((stage): StageResult => ({
+          stage,
+          status: "SKIPPED",
+        })),
       );
       const result = {
         target: plan.machine,
@@ -1655,9 +1656,10 @@ export async function runLocalTarget(
     stages.push(commandFailure(stage, commandResult));
     const status = commandResult.cancelled ? "CANCELLED" : "SKIPPED";
     stages.push(
-      ...remainingLocalStages(plan, index + 1).map(
-        (remainingStage): StageResult => ({ stage: remainingStage, status }),
-      ),
+      ...remainingLocalStages(plan, index + 1).map((remainingStage): StageResult => ({
+        stage: remainingStage,
+        status,
+      })),
     );
     const result = {
       target: plan.machine,

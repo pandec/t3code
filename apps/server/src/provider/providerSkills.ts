@@ -24,25 +24,9 @@ export const listProviderSkillsForCwd = Effect.fn("listProviderSkillsForCwd")(fu
     return { skills: [] } satisfies ServerProviderSkillsResult;
   }
 
-  const snapshot = yield* instance.snapshot.getSnapshot;
-
-  // Providers with a workspace-scoped snapshot probe (Codex, OpenCode) answer
-  // through the machine registry: its per-cwd cache is authoritative once
-  // populated, and its claim-based dedupe means this RPC and the client's
-  // provider-refresh path share one probe instead of launching two app
-  // servers. When no per-cwd snapshot is available (probe failed, still in
-  // flight under another claim, or not yet cached), fall back to machine
-  // skills — the same fallback the client's own status resolution uses.
-  if (instance.enabled && instance.snapshotForCwd !== undefined) {
-    const providers = yield* providerRegistry.refreshWorkspaceSnapshot(input);
-    const provider = providers.find((candidate) => candidate.instanceId === input.instanceId);
-    const workspace = provider?.workspaceSnapshots?.find((entry) => entry.cwd === input.cwd);
-    if (workspace !== undefined) {
-      return { skills: workspace.skills } satisfies ServerProviderSkillsResult;
-    }
-    return { skills: provider?.skills ?? snapshot.skills } satisfies ServerProviderSkillsResult;
-  }
-
+  // Claude's adapter enriches the disk scan with SDK plugin and bundle skills,
+  // so it gets the first chance even when the driver also exposes a filesystem
+  // workspace snapshot. An empty adapter answer is authoritative.
   if (instance.enabled && instance.adapter.listSkills !== undefined) {
     const result = yield* instance.adapter
       .listSkills({ cwd: input.cwd })
@@ -65,6 +49,23 @@ export const listProviderSkillsForCwd = Effect.fn("listProviderSkillsForCwd")(fu
         ...(Result.isFailure(result) ? { cause: result.failure } : { cause: "request timed out" }),
       },
     );
+  }
+
+  const snapshot = yield* instance.snapshot.getSnapshot;
+
+  // Providers with a workspace-scoped snapshot probe answer through the
+  // machine registry after adapter discovery is unavailable or failed. Its
+  // per-cwd cache is authoritative once populated, and its claim-based dedupe
+  // means this RPC and the client's provider-refresh path share one probe.
+  // When no per-cwd snapshot is available, fall back to machine skills.
+  if (instance.enabled && instance.snapshotForCwd !== undefined) {
+    const providers = yield* providerRegistry.refreshWorkspaceSnapshot(input);
+    const provider = providers.find((candidate) => candidate.instanceId === input.instanceId);
+    const workspace = provider?.workspaceSnapshots?.find((entry) => entry.cwd === input.cwd);
+    if (workspace !== undefined) {
+      return { skills: workspace.skills } satisfies ServerProviderSkillsResult;
+    }
+    return { skills: provider?.skills ?? snapshot.skills } satisfies ServerProviderSkillsResult;
   }
 
   return { skills: snapshot.skills } satisfies ServerProviderSkillsResult;

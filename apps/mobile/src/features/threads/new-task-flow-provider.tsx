@@ -78,6 +78,7 @@ import {
   useSavedRemoteConnections,
 } from "../../state/use-remote-environment-registry";
 import { EnvironmentProject } from "@t3tools/client-runtime/state/shell";
+import { resolveProviderSkillsForCwd } from "@t3tools/client-runtime/providerSkills";
 import { resolveEffectiveProviderSkills } from "@t3tools/client-runtime/state/server";
 import { type VcsRef } from "@t3tools/client-runtime/state/vcs";
 import {
@@ -482,14 +483,19 @@ export function NewTaskFlowProvider(props: React.PropsWithChildren) {
       ) ?? null,
     [selectedEnvironmentServerConfig, selectedModel?.instanceId],
   );
-  const selectedProviderSnapshotSkills = selectedProviderStatus?.skills ?? [];
+  const selectedProviderCwd = selectedProject
+    ? (selectedWorktreePath ?? selectedProject.workspaceRoot)
+    : null;
+  const selectedProviderSnapshotSkills = selectedProviderStatus
+    ? resolveProviderSkillsForCwd(selectedProviderStatus, selectedProviderCwd)
+    : [];
   const selectedProviderSkillsQuery = useEnvironmentQuery(
-    selectedProject !== null && selectedModel !== null
+    selectedProject !== null && selectedModel !== null && selectedProviderCwd !== null
       ? serverEnvironment.providerSkills({
           environmentId: selectedProject.environmentId,
           input: {
             instanceId: selectedModel.instanceId,
-            cwd: selectedWorktreePath ?? selectedProject.workspaceRoot,
+            cwd: selectedProviderCwd,
           },
         })
       : null,

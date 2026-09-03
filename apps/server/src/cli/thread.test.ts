@@ -108,8 +108,14 @@ it("includes snooze timestamps in thread summaries", () => {
 });
 
 it("reports server settlement state in thread summaries", () => {
-  assert.isTrue(threadSummary(threadWith({ settledOverride: "settled" })).settled);
-  assert.isFalse(threadSummary(threadWith({ settledOverride: "active" })).settled);
+  const settledAt = "2026-07-25T09:00:00.000Z";
+  const settled = threadSummary(threadWith({ settledOverride: "settled", settledAt }));
+  const unsettled = threadSummary(threadWith({ settledOverride: "active" }));
+
+  assert.isTrue(settled.settled);
+  assert.equal(settled.settledAt, settledAt);
+  assert.isFalse(unsettled.settled);
+  assert.isNull(unsettled.settledAt);
   assert.isFalse(threadSummary(threadWith({})).settled);
 });
 

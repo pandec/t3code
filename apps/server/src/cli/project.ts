@@ -478,6 +478,7 @@ export const projectListSummary = (project: OrchestrationProjectShell) => ({
   // Per-project thread env-mode override; null means the checked-in
   // t3.json and the global setting decide (older servers omit it).
   defaultThreadEnvMode: project.defaultThreadEnvMode ?? null,
+  autoPull: project.autoPull ?? false,
 });
 
 const projectListCommand = Command.make("list", {

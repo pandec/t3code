@@ -14,6 +14,9 @@ vi.mock("react-native", () => ({
 vi.mock("../../components/AppSymbol", () => ({ SymbolView: "SymbolView" }));
 vi.mock("../../components/AppText", () => ({ AppText: "Text" }));
 vi.mock("../../components/ControlPill", () => ({ ControlPillMenu: "ControlPillMenu" }));
+vi.mock("../../components/EnvironmentMachineSymbol", () => ({
+  EnvironmentMachineSymbol: "EnvironmentMachineSymbol",
+}));
 vi.mock("../../components/ProjectFavicon", () => ({ ProjectFavicon: "ProjectFavicon" }));
 vi.mock("../../components/ProviderIcon", () => ({ ProviderIcon: "ProviderIcon" }));
 vi.mock("../../lib/useUniwindTheme", () => ({

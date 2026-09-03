@@ -87,6 +87,7 @@ const buildSourcemap: boolean | "hidden" =
 const ISOLATED_TEST_FILES = [
   "src/authBootstrap.test.ts",
   "src/branding.test.ts",
+  "src/browser/browserDefaults.test.ts",
   "src/browser/browserRecording.test.ts",
   "src/browser/browserTargetResolver.test.ts",
   "src/browser/browserViewportActions.test.ts",

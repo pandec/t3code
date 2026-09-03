@@ -7,7 +7,7 @@ import * as SqlClient from "effect/unstable/sql/SqlClient";
 import { ServerConfig } from "../../config.ts";
 import { OrchestrationEventStoreLive } from "../Layers/OrchestrationEventStore.ts";
 import { runMigrations } from "../Migrations.ts";
-import * as NodeSqliteClient from "../NodeSqliteClient.ts";
+import * as NodeSqliteClient from "@t3tools/shared/nodeSqliteClient";
 import {
   ORCHESTRATION_PROJECTOR_NAMES,
   OrchestrationProjectionPipelineLive,

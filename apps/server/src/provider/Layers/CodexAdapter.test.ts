@@ -65,18 +65,17 @@ class FakeCodexRuntime implements CodexSessionRuntimeShape {
   private readonly eventQueue = Effect.runSync(Queue.unbounded<ProviderEvent>());
   private readonly now = "2026-01-01T00:00:00.000Z";
 
-  public readonly startImpl = vi.fn(
-    (): Promise<ProviderSession> =>
-      Promise.resolve({
-        provider: ProviderDriverKind.make("codex"),
-        status: "ready" as const,
-        runtimeMode: this.options.runtimeMode,
-        threadId: this.options.threadId,
-        cwd: this.options.cwd,
-        ...(this.options.model ? { model: this.options.model } : {}),
-        createdAt: this.now,
-        updatedAt: this.now,
-      } satisfies ProviderSession),
+  public readonly startImpl = vi.fn((): Promise<ProviderSession> =>
+    Promise.resolve({
+      provider: ProviderDriverKind.make("codex"),
+      status: "ready" as const,
+      runtimeMode: this.options.runtimeMode,
+      threadId: this.options.threadId,
+      cwd: this.options.cwd,
+      ...(this.options.model ? { model: this.options.model } : {}),
+      createdAt: this.now,
+      updatedAt: this.now,
+    } satisfies ProviderSession),
   );
 
   public readonly sendTurnImpl = vi.fn(
@@ -87,24 +86,22 @@ class FakeCodexRuntime implements CodexSessionRuntimeShape {
       }),
   );
 
-  public readonly interruptTurnImpl = vi.fn(
-    (_turnId?: TurnId): Promise<void> => Promise.resolve(undefined),
+  public readonly interruptTurnImpl = vi.fn((_turnId?: TurnId): Promise<void> =>
+    Promise.resolve(undefined),
   );
 
-  public readonly readThreadImpl = vi.fn(
-    (): Promise<CodexThreadSnapshot> =>
-      Promise.resolve({
-        threadId: "provider-thread-1",
-        turns: [],
-      }),
+  public readonly readThreadImpl = vi.fn((): Promise<CodexThreadSnapshot> =>
+    Promise.resolve({
+      threadId: "provider-thread-1",
+      turns: [],
+    }),
   );
 
-  public readonly rollbackThreadImpl = vi.fn(
-    (_numTurns: number): Promise<CodexThreadSnapshot> =>
-      Promise.resolve({
-        threadId: "provider-thread-1",
-        turns: [],
-      }),
+  public readonly rollbackThreadImpl = vi.fn((_numTurns: number): Promise<CodexThreadSnapshot> =>
+    Promise.resolve({
+      threadId: "provider-thread-1",
+      turns: [],
+    }),
   );
 
   public readonly readAccountUsageImpl = vi.fn(() =>

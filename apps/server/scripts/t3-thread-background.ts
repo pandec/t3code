@@ -55,7 +55,7 @@ import {
   make as makeThreadBackgroundLiveness,
   type ThreadBackgroundLiveness,
 } from "../src/orchestration/ThreadBackgroundLiveness.ts";
-import * as NodeSqliteClient from "../src/persistence/NodeSqliteClient.ts";
+import * as NodeSqliteClient from "@t3tools/shared/nodeSqliteClient";
 
 export class ThreadBackgroundDatabaseMissingError extends Schema.TaggedErrorClass<ThreadBackgroundDatabaseMissingError>()(
   "ThreadBackgroundDatabaseMissingError",
@@ -477,7 +477,7 @@ export function probeSession(resumeId: string | null, options: ProbeOptions): Se
   // provider session it is probing. Reporting our own process tree as the
   // stuck work would be the tool's most embarrassing false positive.
   const self = new Set<number>();
-  for (let pid: number | undefined = NodeProcess.pid; pid !== undefined && pid !== 0; ) {
+  for (let pid: number | undefined = NodeProcess.pid; pid !== undefined && pid !== 0;) {
     self.add(pid);
     pid = processes.find((candidate) => candidate.pid === pid)?.ppid;
     if (pid !== undefined && self.has(pid)) break;

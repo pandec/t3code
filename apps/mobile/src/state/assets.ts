@@ -1,7 +1,11 @@
 import { useAtomValue } from "@effect/atom-react";
-import { createAssetEnvironmentAtoms, resolveAssetUrl } from "@t3tools/client-runtime/state/assets";
+import {
+  type AssetUrlState,
+  assetUrlStateFromResult,
+  createAssetEnvironmentAtoms,
+  EMPTY_ASSET_URL_ATOM,
+} from "@t3tools/client-runtime/state/assets";
 import type { AssetResource, EnvironmentId } from "@t3tools/contracts";
-import { AsyncResult, Atom } from "effect/unstable/reactivity";
 import { useCallback } from "react";
 
 import { connectionAtomRuntime } from "../connection/runtime";
@@ -9,16 +13,9 @@ import { appAtomRegistry } from "./atom-registry";
 import { environmentSession, usePreparedConnection } from "./session";
 import { useAtomQueryRunner } from "./use-atom-query-runner";
 
+export type { AssetUrlState } from "@t3tools/client-runtime/state/assets";
+
 export const assetEnvironment = createAssetEnvironmentAtoms(connectionAtomRuntime);
-
-export type AssetUrlState =
-  | { readonly _tag: "Loading" }
-  | { readonly _tag: "Failure" }
-  | { readonly _tag: "Success"; readonly url: string };
-
-const EMPTY_ASSET_URL_ATOM = Atom.make(AsyncResult.initial<never, never>(false)).pipe(
-  Atom.withLabel("mobile-asset-url:empty"),
-);
 
 export function useAssetUrlState(
   environmentId: EnvironmentId | null,
@@ -30,14 +27,10 @@ export function useAssetUrlState(
       ? EMPTY_ASSET_URL_ATOM
       : assetEnvironment.createUrl({ environmentId, input: { resource } }),
   );
-  if (result._tag === "Failure") {
-    return { _tag: "Failure" };
-  }
-  if (preparedConnection._tag === "None" || result._tag !== "Success") {
-    return { _tag: "Loading" };
-  }
-  const url = resolveAssetUrl(preparedConnection.value.httpBaseUrl, result.value.relativeUrl);
-  return url === null ? { _tag: "Failure" } : { _tag: "Success", url };
+  return assetUrlStateFromResult(
+    result,
+    preparedConnection._tag === "Some" ? preparedConnection.value.httpBaseUrl : null,
+  );
 }
 
 export function useAssetUrl(
@@ -74,15 +67,16 @@ export function watchAssetUrl(
     onResolved(url);
   };
   const evaluate = () => {
-    const result = appAtomRegistry.get(urlAtom);
-    if (result._tag === "Failure") {
+    const connection = appAtomRegistry.get(connectionAtom);
+    const state = assetUrlStateFromResult(
+      appAtomRegistry.get(urlAtom),
+      connection._tag === "Some" ? connection.value.httpBaseUrl : null,
+    );
+    if (state._tag === "Failure") {
       finish(null);
       return;
     }
-    if (result._tag !== "Success") return;
-    const connection = appAtomRegistry.get(connectionAtom);
-    if (connection._tag === "None") return;
-    finish(resolveAssetUrl(connection.value.httpBaseUrl, result.value.relativeUrl));
+    if (state._tag === "Success") finish(state.url);
   };
 
   unsubscribeUrl = appAtomRegistry.subscribe(urlAtom, evaluate);
@@ -109,9 +103,10 @@ export function useRefreshAssetUrl(
   });
   return useCallback(async () => {
     if (environmentId === null || resource === null || httpBaseUrl === null) return null;
-    const result = await createUrl({ environmentId, input: { resource } });
-    return result._tag === "Success"
-      ? resolveAssetUrl(httpBaseUrl, result.value.relativeUrl)
-      : null;
+    const state = assetUrlStateFromResult(
+      await createUrl({ environmentId, input: { resource } }),
+      httpBaseUrl,
+    );
+    return state._tag === "Success" ? state.url : null;
   }, [createUrl, environmentId, httpBaseUrl, resource]);
 }

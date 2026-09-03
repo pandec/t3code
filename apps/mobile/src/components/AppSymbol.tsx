@@ -24,16 +24,19 @@ import IconBox from "@tabler/icons-react-native/IconBox";
 import IconCamera from "@tabler/icons-react-native/IconCamera";
 import IconChartBar from "@tabler/icons-react-native/IconChartBar";
 import IconCheck from "@tabler/icons-react-native/IconCheck";
+import IconCloud from "@tabler/icons-react-native/IconCloud";
 import IconChevronDown from "@tabler/icons-react-native/IconChevronDown";
 import IconChevronLeft from "@tabler/icons-react-native/IconChevronLeft";
 import IconChevronRight from "@tabler/icons-react-native/IconChevronRight";
 import IconChevronUp from "@tabler/icons-react-native/IconChevronUp";
 import IconCircleCheck from "@tabler/icons-react-native/IconCircleCheck";
+import IconCircleDashed from "@tabler/icons-react-native/IconCircleDashed";
 import IconCircleXFilled from "@tabler/icons-react-native/IconCircleXFilled";
 import IconClock from "@tabler/icons-react-native/IconClock";
 import IconCode from "@tabler/icons-react-native/IconCode";
 import IconCopy from "@tabler/icons-react-native/IconCopy";
 import IconDeviceDesktop from "@tabler/icons-react-native/IconDeviceDesktop";
+import IconDeviceLaptop from "@tabler/icons-react-native/IconDeviceLaptop";
 import IconDots from "@tabler/icons-react-native/IconDots";
 import IconDotsCircleHorizontal from "@tabler/icons-react-native/IconDotsCircleHorizontal";
 import IconEdit from "@tabler/icons-react-native/IconEdit";
@@ -41,6 +44,7 @@ import IconExternalLink from "@tabler/icons-react-native/IconExternalLink";
 import IconEye from "@tabler/icons-react-native/IconEye";
 import IconFileText from "@tabler/icons-react-native/IconFileText";
 import IconFilter from "@tabler/icons-react-native/IconFilter";
+import IconFilterFilled from "@tabler/icons-react-native/IconFilterFilled";
 import IconFolder from "@tabler/icons-react-native/IconFolder";
 import IconFolderOpen from "@tabler/icons-react-native/IconFolderOpen";
 import IconFolderPlus from "@tabler/icons-react-native/IconFolderPlus";
@@ -85,6 +89,7 @@ import IconTextIncrease from "@tabler/icons-react-native/IconTextIncrease";
 import IconTool from "@tabler/icons-react-native/IconTool";
 import IconTrash from "@tabler/icons-react-native/IconTrash";
 import IconTypography from "@tabler/icons-react-native/IconTypography";
+import IconUpload from "@tabler/icons-react-native/IconUpload";
 import IconUserCircle from "@tabler/icons-react-native/IconUserCircle";
 import IconVolume from "@tabler/icons-react-native/IconVolume";
 import IconVolume2 from "@tabler/icons-react-native/IconVolume2";
@@ -166,7 +171,9 @@ const ANDROID_ICON_BY_SF_SYMBOL: Partial<Record<SFSymbol, Icon>> = {
   "chart.bar.xaxis": IconChartBar,
   checkmark: IconCheck,
   "checkmark.circle": IconCircleCheck,
+  "circle.dashed": IconCircleDashed,
   clock: IconClock,
+  cloud: IconCloud,
   cube: IconBox,
   "chevron.down": IconChevronDown,
   "chevron.left": IconChevronLeft,
@@ -191,10 +198,14 @@ const ANDROID_ICON_BY_SF_SYMBOL: Partial<Record<SFSymbol, Icon>> = {
   headphones: IconHeadphones,
   internaldrive: IconServer,
   "info.circle": IconInfoCircle,
+  laptopcomputer: IconDeviceLaptop,
   link: IconLink,
   "line.3.horizontal.decrease": IconListFilter,
   "line.3.horizontal.decrease.circle": IconFilter,
-  "line.3.horizontal.decrease.circle.fill": IconFilter,
+  "line.3.horizontal.decrease.circle.fill": IconFilterFilled,
+  // Tabler has no Apple desktops; the closest silhouettes stand in on Android.
+  macmini: IconServer,
+  macstudio: IconDeviceDesktop,
   magnifyingglass: IconSearch,
   mic: IconMicrophone,
   "mic.fill": IconMicrophoneFilled,
@@ -231,6 +242,7 @@ const ANDROID_ICON_BY_SF_SYMBOL: Partial<Record<SFSymbol, Icon>> = {
   "textformat.size.larger": IconTextIncrease,
   "textformat.size.smaller": IconTextDecrease,
   trash: IconTrash,
+  "tray.and.arrow.up": IconUpload,
   waveform: IconAudioLines,
   "wifi.slash": IconWifiOff,
   xmark: IconX,

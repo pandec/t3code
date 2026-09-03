@@ -12,7 +12,6 @@ import Animated, {
 import type { ComponentProps } from "react";
 
 import { AppText as Text } from "../../../components/AppText";
-import { useUniwindTheme } from "../../../lib/useUniwindTheme";
 
 type SymbolName = ComponentProps<typeof SymbolView>["name"];
 
@@ -46,10 +45,6 @@ export function SettingsSliderRow(props: {
   readonly value: number;
   readonly onChange: (value: number) => void;
 }) {
-  const theme = useUniwindTheme();
-  const trackColor = theme["--color-secondary-border"];
-  const fillColor = theme["--color-primary"];
-
   const latest = useRef(props);
   latest.current = props;
 
@@ -195,12 +190,12 @@ export function SettingsSliderRow(props: {
             }}
           >
             <View
-              className="w-full rounded-full"
-              style={{ backgroundColor: trackColor, height: TRACK_HEIGHT }}
+              className="w-full rounded-full bg-secondary-border"
+              style={{ height: TRACK_HEIGHT }}
             >
               <Animated.View
-                className="absolute inset-y-0 left-0 rounded-full"
-                style={[{ backgroundColor: fillColor }, fillStyle]}
+                className="absolute inset-y-0 left-0 rounded-full bg-primary"
+                style={fillStyle}
               />
             </View>
             <Animated.View

@@ -64,6 +64,8 @@ const isSafeDownloadMimeType = (mimeType: string): boolean =>
   !/(?:^text\/html$|\/xml(?:$|-)|\+xml$)/i.test(mimeType.trim().toLowerCase());
 const isSafeMediaMimeType = (mimeType: string): boolean =>
   DOWNLOAD_MIME_TYPE_PATTERN.test(mimeType) && /^(?:audio|video)\//i.test(mimeType);
+const isSafeInlineDocumentMimeType = (mimeType: string): boolean =>
+  mimeType.toLowerCase() === "application/pdf" || mimeType.toLowerCase() === "text/html";
 
 // Speech recordings are issued as bare attachment claims with no MIME (the
 // mobile listening player scrubs them with Range requests), so range
@@ -87,8 +89,7 @@ export function downloadContentDisposition(fileName?: string): string {
     return "attachment";
   }
   // toWellFormed: encodeURIComponent throws URIError on unpaired surrogates.
-  // eslint-disable-next-line no-control-regex -- Header filenames must strip ASCII controls.
-  const sanitized = fileName.toWellFormed().replace(/[\u0000-\u001f"\\]/g, "_");
+  const sanitized = fileName.toWellFormed().replace(/[\p{Cc}"\\]/gu, "_");
   const asciiFallback = sanitized.replace(/[^\u0020-\u007e]/g, "_");
   const needsExtended = asciiFallback !== sanitized;
   const extendedName = encodeURIComponent(sanitized).replace(
@@ -109,7 +110,7 @@ export function assetResponseHeaders(
   },
 ): Record<string, string> {
   const lowerPath = filePath.toLowerCase();
-  const inlineMediaMimeType = options?.mimeType?.split(";", 1)[0]?.trim();
+  const inlineMimeType = options?.mimeType?.split(";", 1)[0]?.trim();
   return {
     "Cache-Control": "private, max-age=3600",
     "X-Content-Type-Options": "nosniff",
@@ -122,14 +123,24 @@ export function assetResponseHeaders(
               ? options.mimeType
               : "application/octet-stream",
         }
-      : inlineMediaMimeType !== undefined && isSafeMediaMimeType(inlineMediaMimeType)
-        ? { "Content-Type": inlineMediaMimeType }
-        : lowerPath.endsWith(".html") || lowerPath.endsWith(".htm")
+      : inlineMimeType !== undefined && isSafeMediaMimeType(inlineMimeType)
+        ? { "Content-Type": inlineMimeType }
+        : inlineMimeType !== undefined && isSafeInlineDocumentMimeType(inlineMimeType)
           ? {
-              "Content-Type": "text/html; charset=utf-8",
-              "Content-Security-Policy": HTML_CONTENT_SECURITY_POLICY,
+              "Content-Type":
+                inlineMimeType.toLowerCase() === "text/html"
+                  ? "text/html; charset=utf-8"
+                  : "application/pdf",
+              ...(inlineMimeType.toLowerCase() === "text/html"
+                ? { "Content-Security-Policy": HTML_CONTENT_SECURITY_POLICY }
+                : {}),
             }
-          : {}),
+          : lowerPath.endsWith(".html") || lowerPath.endsWith(".htm")
+            ? {
+                "Content-Type": "text/html; charset=utf-8",
+                "Content-Security-Policy": HTML_CONTENT_SECURITY_POLICY,
+              }
+            : {}),
     ...(!options?.download && lowerPath.endsWith(".svg")
       ? { "Content-Security-Policy": SVG_CONTENT_SECURITY_POLICY }
       : {}),

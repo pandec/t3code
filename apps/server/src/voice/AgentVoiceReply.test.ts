@@ -10,7 +10,7 @@ import * as SqlClient from "effect/unstable/sql/SqlClient";
 import { describe, expect, it } from "vite-plus/test";
 
 import * as ServerConfig from "../config.ts";
-import * as SqliteClient from "../persistence/NodeSqliteClient.ts";
+import * as SqliteClient from "@t3tools/shared/nodeSqliteClient";
 import * as ServerSettingsModule from "../serverSettings.ts";
 import {
   AgentVoiceReply,

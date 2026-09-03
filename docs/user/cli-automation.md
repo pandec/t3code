@@ -52,6 +52,7 @@ t3 project remove /absolute/path/to/repository --json
 
 Project commands target the T3 data directory selected by `--base-dir` or `T3CODE_HOME` and use its
 running server. If that server is unavailable, the command fails without opening the database.
+`project list --json` returns each project's `defaultThreadEnvMode` and `autoPull` settings.
 
 ### Project actions
 
@@ -142,7 +143,9 @@ list and status summaries also include `backgroundLiveness`: `"working"` for nat
 workflows, `"monitoring"` when only watch loops remain, and `null` when no native background work is
 known. Summaries also carry `settled` — `true` when the server has settled the thread, whether a
 person settled it or the server's automatic settlement (inactivity, merged or closed pull request)
-did. Settling is an inbox overlay like snooze and does not change the thread's turn `state`.
+did. `settledAt` is `null` when unsettled; automatic settlement stamps the last qualifying activity,
+while manual settlement stamps the settle moment. Settling is an inbox overlay like snooze and does
+not change the thread's turn `state`.
 
 ### Reading messages
 
@@ -291,7 +294,8 @@ the configured default — the server creates the thread as part of the turn sta
 `createCommandId` is `null`. Thread list and status summaries also
 include `branch` and `worktreePath` (both `null` for plain checkout threads), so automation can
 discover where a thread runs. `project list --json` reports each project's `defaultThreadEnvMode`
-override (`null` when the checked-in `t3.json` and the global setting decide).
+override (`null` when the checked-in `t3.json` and the global setting decide) and `autoPull` setting
+(`false` when disabled).
 
 ## Session import
 

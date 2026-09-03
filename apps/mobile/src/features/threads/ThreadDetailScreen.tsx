@@ -6,6 +6,7 @@ import {
 import { resolveEffectiveProviderSkills } from "@t3tools/client-runtime/state/server";
 import type { EnvironmentThreadStatus } from "@t3tools/client-runtime/state/threads";
 import { useKeyboardChatComposerInset, useKeyboardScrollToEnd } from "@legendapp/list/keyboard";
+import { resolveProviderSkillsForCwd } from "@t3tools/client-runtime/providerSkills";
 import type { LegendListRef } from "@legendapp/list/react-native";
 import { HeaderHeightContext } from "@react-navigation/elements";
 import type {
@@ -551,17 +552,16 @@ export const ThreadDetailScreen = memo(function ThreadDetailScreen(props: Thread
   const contentMaxWidth = isSplitLayout ? CHAT_CONTENT_MAX_WIDTH : undefined;
   const selectedInstanceId = props.selectedThread.modelSelection.instanceId;
   useStreamingHaptics(props.selectedThread.id, props.selectedThreadFeed);
-  const providerSnapshotSkills = useMemo(
-    () =>
-      props.serverConfig?.providers.find((provider) => provider.instanceId === selectedInstanceId)
-        ?.skills ?? [],
-    [props.serverConfig, selectedInstanceId],
+  const providerCwd = props.threadCwd ?? props.projectWorkspaceRoot;
+  const provider = props.serverConfig?.providers.find(
+    (candidate) => candidate.instanceId === selectedInstanceId,
   );
+  const providerSnapshotSkills = provider ? resolveProviderSkillsForCwd(provider, providerCwd) : [];
   const providerSkillsQuery = useEnvironmentQuery(
-    props.threadCwd !== null
+    providerCwd
       ? serverEnvironment.providerSkills({
           environmentId: props.environmentId,
-          input: { instanceId: selectedInstanceId, cwd: props.threadCwd },
+          input: { instanceId: selectedInstanceId, cwd: providerCwd },
         })
       : null,
   );
@@ -953,7 +953,7 @@ export const ThreadDetailScreen = memo(function ThreadDetailScreen(props: Thread
                   serverConfig={props.serverConfig}
                   queueCount={props.selectedThreadQueueCount}
                   environmentId={props.environmentId}
-                  projectCwd={props.threadCwd}
+                  projectCwd={providerCwd}
                   providerSkills={selectedProviderSkills}
                   bottomInset={composerBottomInset}
                   onChangeDraftMessage={props.onChangeDraftMessage}

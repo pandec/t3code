@@ -98,6 +98,31 @@ describe("listProviderSkillsForCwd", () => {
     }),
   );
 
+  it.effect("prefers adapter skills when both workspace discovery hooks exist", () =>
+    Effect.gen(function* () {
+      const listSkills = vi.fn(() => Effect.succeed<ReadonlyArray<ServerProviderSkill>>([]));
+      const refreshWorkspaceSnapshot = vi.fn(() =>
+        Effect.succeed<ReadonlyArray<ServerProvider>>([snapshot]),
+      );
+      const registry = {
+        getInstance: () =>
+          Effect.succeed(
+            makeInstance(listSkills, undefined, () => Effect.die("probed outside the registry")),
+          ),
+      };
+
+      const result = yield* listProviderSkillsForCwd(
+        registry,
+        { refreshWorkspaceSnapshot },
+        { instanceId, cwd: "/workspace" },
+      );
+
+      assert.deepEqual(result.skills, []);
+      assert.deepEqual(listSkills.mock.calls, [[{ cwd: "/workspace" }]]);
+      assert.equal(refreshWorkspaceSnapshot.mock.calls.length, 0);
+    }),
+  );
+
   it.effect("falls back to snapshot skills when workspace discovery fails", () =>
     Effect.gen(function* () {
       const registry = {
@@ -124,9 +149,17 @@ describe("listProviderSkillsForCwd", () => {
     }),
   );
 
-  it.effect("answers from the registry's workspace snapshot when the provider supports it", () =>
+  it.effect("falls back to the workspace snapshot when adapter discovery fails", () =>
     Effect.gen(function* () {
-      const listSkills = vi.fn(() => Effect.succeed([snapshotSkill]));
+      const listSkills = vi.fn(() =>
+        Effect.fail(
+          new ProviderAdapterRequestError({
+            provider: "claudeAgent",
+            method: "skills/list",
+            detail: "skills unavailable",
+          }),
+        ),
+      );
       const refreshWorkspaceSnapshot = vi.fn(() =>
         Effect.succeed<ReadonlyArray<ServerProvider>>([
           {
@@ -155,11 +188,46 @@ describe("listProviderSkillsForCwd", () => {
         { instanceId, cwd: "/workspace" },
       );
 
-      // The registry cache is the authority for this cwd — including when the
-      // cached answer is empty — and the adapter probe must not run.
+      assert.deepEqual(result.skills, [projectSkill]);
+      assert.deepEqual(listSkills.mock.calls, [[{ cwd: "/workspace" }]]);
+      assert.deepEqual(refreshWorkspaceSnapshot.mock.calls, [[{ instanceId, cwd: "/workspace" }]]);
+    }),
+  );
+
+  it.effect("answers from the registry's workspace snapshot when the provider supports it", () =>
+    Effect.gen(function* () {
+      const refreshWorkspaceSnapshot = vi.fn(() =>
+        Effect.succeed<ReadonlyArray<ServerProvider>>([
+          {
+            ...snapshot,
+            workspaceSnapshots: [
+              {
+                cwd: "/workspace",
+                checkedAt: "2026-07-20T00:00:00.000Z",
+                slashCommands: [],
+                skills: [projectSkill],
+              },
+            ],
+          },
+        ]),
+      );
+      const registry = {
+        getInstance: () =>
+          Effect.succeed(
+            makeInstance(undefined, undefined, () => Effect.die("probed outside the registry")),
+          ),
+      };
+
+      const result = yield* listProviderSkillsForCwd(
+        registry,
+        { refreshWorkspaceSnapshot },
+        { instanceId, cwd: "/workspace" },
+      );
+
+      // The registry cache is the authority for this cwd, including when the
+      // cached answer is empty.
       assert.deepEqual(result.skills, [projectSkill]);
       assert.deepEqual(refreshWorkspaceSnapshot.mock.calls, [[{ instanceId, cwd: "/workspace" }]]);
-      assert.equal(listSkills.mock.calls.length, 0);
     }),
   );
 

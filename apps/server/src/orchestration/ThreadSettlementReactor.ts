@@ -18,7 +18,7 @@ import * as OrchestrationEngine from "./Services/OrchestrationEngine.ts";
 import * as ProjectionSnapshotQuery from "./Services/ProjectionSnapshotQuery.ts";
 import {
   isAutoSettlementCandidate,
-  shouldAutoSettleThread,
+  resolveAutoSettlementAt,
   type SettlementPullRequest,
 } from "./ThreadSettlementPolicy.ts";
 
@@ -104,16 +104,15 @@ export const make = Effect.gen(function* () {
               Effect.gen(function* () {
                 const settings = yield* settingsService.getSettings;
                 const decisionNow = DateTime.formatIso(yield* DateTime.now);
-                if (
-                  !shouldAutoSettleThread({
-                    thread,
-                    pullRequest,
-                    now: decisionNow,
-                    threadAutoSettleEnabled: settings.threadAutoSettleEnabled,
-                    autoSettleAfterDays: settings.sidebarAutoSettleAfterDays,
-                    autoSettleOnMerge: settings.sidebarAutoSettleOnMerge,
-                  })
-                ) {
+                const settledAt = resolveAutoSettlementAt({
+                  thread,
+                  pullRequest,
+                  now: decisionNow,
+                  threadAutoSettleEnabled: settings.threadAutoSettleEnabled,
+                  autoSettleAfterDays: settings.sidebarAutoSettleAfterDays,
+                  autoSettleOnMerge: settings.sidebarAutoSettleOnMerge,
+                });
+                if (settledAt === null) {
                   return;
                 }
                 const uuid = yield* crypto.randomUUIDv4;
@@ -122,6 +121,7 @@ export const make = Effect.gen(function* () {
                   commandId: CommandId.make(`server:auto-settle:${thread.id}:${uuid}`),
                   threadId: thread.id,
                   snapshotSequence: snapshot.snapshotSequence,
+                  settledAt,
                 });
               }).pipe(
                 Effect.catchCause((cause) =>

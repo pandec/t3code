@@ -85,6 +85,8 @@ export function useComposerCommandMenu({
     setSelection(composerSelectionAtEnd(draftMessage));
   }, [draftMessage, ownerKey]);
 
+  const slashCommands = selectedProviderStatus?.slashCommands ?? [];
+
   const trigger = useMemo(() => {
     if (!enabled || selection.start !== selection.end) {
       return null;
@@ -164,8 +166,7 @@ export function useComposerCommandMenu({
       // locally and skills insert a `$` mention the server dispatches from
       // any position, so only provider commands are position-gated.
       const providerCommands: ComposerCommandItem[] = [];
-      const expandableCommands =
-        trigger.rangeStart === 0 ? (selectedProviderStatus?.slashCommands ?? []) : [];
+      const expandableCommands = trigger.rangeStart === 0 ? slashCommands : [];
       for (const command of expandableCommands) {
         if (!command.name.toLowerCase().includes(q)) continue;
         // Codex feedback uploads an existing thread's session and logs.
@@ -304,6 +305,7 @@ export function useComposerCommandMenu({
     pathSearch.entries,
     providerSkills,
     selectedProviderStatus,
+    slashCommands,
     trigger,
   ]);
 
