@@ -156,6 +156,7 @@ it.effect("shares request dispatch locking with persistent clients", () =>
       getSpeechByMessageId: () => Effect.succeed(Option.none()),
       listPendingSpeechRequests: Effect.succeed([]),
       listByThreadId: () => Effect.succeed([]),
+      getLatestUserMessageAt: () => Effect.succeed(null),
       deleteByThreadId: () => Effect.void,
       copyTextMessagesForFork: () => Effect.void,
     };

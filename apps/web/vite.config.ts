@@ -145,6 +145,7 @@ const ISOLATED_TEST_FILES = [
   "src/notifications/turnCompletion.test.ts",
   "src/openVsxThemes.test.ts",
   "src/rpc/requestLatencyState.test.ts",
+  "src/terminal/ghostty/core.test.ts",
   "src/timestampFormat.test.ts",
   "src/versionSkew.test.ts",
 ];
@@ -354,6 +355,7 @@ export default defineConfig(() => {
     build: {
       outDir: "dist",
       emptyOutDir: true,
+      manifest: true,
       sourcemap: buildSourcemap,
     },
     test: {

@@ -122,6 +122,7 @@ const repositoryService = (
         [...current.values()].filter((message) => message.threadId === threadId),
       ),
     ),
+  getLatestUserMessageAt: () => Effect.succeed(null),
   deleteByThreadId: ({ threadId }) =>
     Ref.update(
       messages,

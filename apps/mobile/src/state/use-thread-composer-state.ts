@@ -165,6 +165,16 @@ export function useThreadComposerState() {
     () => (selectedThreadKey ? (queuedMessagesByThreadKey[selectedThreadKey] ?? []) : []),
     [queuedMessagesByThreadKey, selectedThreadKey],
   );
+  const localFeedbackMessages = useMemo(() => {
+    const submissions = selectedThreadKey
+      ? (feedbackSubmissionsByThreadKey[selectedThreadKey] ?? [])
+      : [];
+    return submissions.flatMap((submission) =>
+      submission.status === "interrupted"
+        ? []
+        : [codexFeedbackMessage(submission), codexFeedbackMessage(submission, "assistant")],
+    );
+  }, [feedbackSubmissionsByThreadKey, selectedThreadKey]);
   // A thread's detail snapshot can carry far more messages than the window
   // keeps hydrated for display. Build the feed from the window's messages so a
   // long history costs a bounded amount of feed-building work per stream tick,
@@ -178,22 +188,17 @@ export function useThreadComposerState() {
     selectedThreadShell?.id ?? null,
   );
   const windowedMessages = messageWindow.messages;
-  const selectedThreadFeed = useMemo(() => {
-    if (!selectedThreadDetail) {
-      return [];
-    }
-    const submissions = selectedThreadKey
-      ? (feedbackSubmissionsByThreadKey[selectedThreadKey] ?? [])
-      : [];
-    return buildThreadFeed(selectedThreadDetail, {
-      loadedMessages: windowedMessages,
-      localMessages: submissions.flatMap((submission) =>
-        submission.status === "interrupted"
-          ? []
-          : [codexFeedbackMessage(submission), codexFeedbackMessage(submission, "assistant")],
-      ),
-    });
-  }, [feedbackSubmissionsByThreadKey, selectedThreadDetail, selectedThreadKey, windowedMessages]);
+  const selectedThreadActivities = selectedThreadDetail?.activities;
+  const selectedThreadFeed = useMemo(
+    () =>
+      selectedThreadActivities
+        ? buildThreadFeed(
+            { messages: windowedMessages, activities: selectedThreadActivities },
+            { loadedMessages: windowedMessages, localMessages: localFeedbackMessages },
+          )
+        : [],
+    [localFeedbackMessages, selectedThreadActivities, windowedMessages],
+  );
   const threadHistoryWindow = useMemo<ThreadHistoryWindowState>(
     () => ({
       hasOlderMessages: messageWindow.hasOlderMessages,
