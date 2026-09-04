@@ -482,6 +482,7 @@ projectionSnapshotLayer("ProjectionSnapshotQuery", (it) => {
           },
           autoPull: false,
           faviconPath: null,
+          projectIcon: null,
           scripts: [
             {
               id: "script-1",
@@ -631,6 +632,7 @@ projectionSnapshotLayer("ProjectionSnapshotQuery", (it) => {
           },
           autoPull: false,
           faviconPath: null,
+          projectIcon: null,
           scripts: [
             {
               id: "script-1",
@@ -700,6 +702,7 @@ projectionSnapshotLayer("ProjectionSnapshotQuery", (it) => {
           latestUserMessageAt: "2026-02-24T00:00:04.000Z",
           hasPendingApprovals: true,
           hasPendingUserInput: false,
+          hasPendingBlockingUserInput: false,
           hasActionableProposedPlan: false,
           backgroundLiveness: null,
           planProgress: null,
@@ -735,6 +738,61 @@ projectionSnapshotLayer("ProjectionSnapshotQuery", (it) => {
         assert.isUndefined(corrected.value.messages[0]?.generatedSummary);
         assert.isUndefined(corrected.value.messages[0]?.speech);
       }
+    }),
+  );
+
+  it.effect("distinguishes blocking from message-mode pending user input", () =>
+    Effect.gen(function* () {
+      const snapshotQuery = yield* ProjectionSnapshotQuery;
+      const sql = yield* SqlClient.SqlClient;
+
+      yield* sql`DELETE FROM projection_thread_activities`;
+      yield* sql`DELETE FROM projection_threads`;
+      yield* sql`
+        INSERT INTO projection_threads (
+          thread_id, project_id, title, model_selection_json, runtime_mode, interaction_mode,
+          pending_approval_count, pending_user_input_count, has_actionable_proposed_plan,
+          created_at, updated_at, deleted_at
+        ) VALUES
+          (
+            'thread-blocking-input', 'project-input', 'Blocking input',
+            '{"provider":"codex","model":"gpt-5-codex"}', 'full-access', 'default',
+            0, 1, 0, '2026-02-24T01:00:00.000Z', '2026-02-24T01:00:00.000Z', NULL
+          ),
+          (
+            'thread-message-input', 'project-input', 'Message input',
+            '{"provider":"codex","model":"gpt-5-codex"}', 'full-access', 'default',
+            0, 1, 0, '2026-02-24T01:00:01.000Z', '2026-02-24T01:00:01.000Z', NULL
+          )
+      `;
+      yield* sql`
+        INSERT INTO projection_thread_activities (
+          activity_id, thread_id, turn_id, tone, kind, summary, payload_json, created_at
+        ) VALUES
+          (
+            'activity-blocking-input', 'thread-blocking-input', NULL, 'info',
+            'user-input.requested', 'User input requested',
+            '{"requestId":"blocking-1","questions":[]}', '2026-02-24T01:00:02.000Z'
+          ),
+          (
+            'activity-message-input', 'thread-message-input', NULL, 'info',
+            'user-input.requested', 'User input requested',
+            '{"requestId":"message-1","responseMode":"message","questions":[]}',
+            '2026-02-24T01:00:03.000Z'
+          )
+      `;
+
+      const blocking = (yield* snapshotQuery.getThreadShellById(
+        ThreadId.make("thread-blocking-input"),
+      )).pipe(Option.getOrThrow);
+      const message = (yield* snapshotQuery.getThreadShellById(
+        ThreadId.make("thread-message-input"),
+      )).pipe(Option.getOrThrow);
+
+      assert.isTrue(blocking.hasPendingUserInput);
+      assert.isTrue(blocking.hasPendingBlockingUserInput);
+      assert.isTrue(message.hasPendingUserInput);
+      assert.isFalse(message.hasPendingBlockingUserInput);
     }),
   );
 
@@ -1000,6 +1058,12 @@ projectionSnapshotLayer("ProjectionSnapshotQuery", (it) => {
       assert.deepEqual(
         recentArchived.threads.map((thread) => thread.id),
         [ThreadId.make("thread-archived")],
+      );
+      // The fork-only archive shelf must carry the same linked PR the other
+      // shell builders do; the column is selected but was once left unmapped.
+      assert.deepEqual(
+        recentArchived.threads[0]?.linkedPullRequest,
+        archivedDetail._tag === "Some" ? archivedDetail.value.linkedPullRequest : undefined,
       );
     }),
   );

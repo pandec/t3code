@@ -32,6 +32,7 @@ interface RetainedRecording {
 interface DesktopVoiceRecorderProps {
   readonly environmentId: EnvironmentId;
   readonly disabled: boolean;
+  readonly onActiveChange: (active: boolean) => void;
   readonly onTranscript: (text: string) => void;
 }
 
@@ -64,6 +65,7 @@ function formatDuration(durationMs: number): string {
 export function DesktopVoiceRecorder({
   environmentId,
   disabled,
+  onActiveChange,
   onTranscript,
 }: DesktopVoiceRecorderProps) {
   const transcribe = useAtomCommand(transcribeVoiceRecording, { reportFailure: false });
@@ -113,6 +115,11 @@ export function DesktopVoiceRecorder({
       phase === "starting" || phase === "recording",
     );
   }, [phase]);
+
+  useEffect(() => {
+    onActiveChange(phase !== "idle");
+    return () => onActiveChange(false);
+  }, [onActiveChange, phase]);
 
   const submitRecording = useCallback(
     async (recording: RetainedRecording) => {

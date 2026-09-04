@@ -1,4 +1,6 @@
 import {
+  ApprovalRequestId,
+  CommandId,
   MessageId,
   ProjectId,
   ProviderInstanceId,
@@ -7,6 +9,7 @@ import {
   type OrchestrationMessage,
   type OrchestrationShellSnapshot,
   type OrchestrationThreadDetailSnapshot,
+  type OrchestrationThreadActivity,
   type OrchestrationThreadMessagePage,
   type OrchestrationThreadShell,
 } from "@t3tools/contracts";
@@ -29,13 +32,17 @@ import {
 } from "./orchestration.ts";
 import {
   buildNewWorktreeBootstrap,
+  buildThreadInputRespondCommand,
+  collectPendingThreadInputRequests,
   collectThreadMessages,
   compensateFailedThreadStart,
   decideThreadCliWorkspace,
+  decodeThreadInputAnswersJson,
   renderThreadMessagesText,
   resolveThreadCliDefaultWorkspace,
   resolveThreadCliWorkspaceSelection,
   ThreadCliMessageCursorError,
+  threadInputRespondReport,
   threadMessagesReport,
   threadSummary,
   threadWaitDrainFlag,
@@ -90,6 +97,7 @@ const threadWith = (input: Partial<OrchestrationThreadShell>): OrchestrationThre
     snoozedAt: undefined,
     hasPendingApprovals: false,
     hasPendingUserInput: false,
+    hasPendingBlockingUserInput: false,
     latestUserMessageAt: null,
     updatedAt: "2026-07-25T00:00:00.000Z",
     ...input,
@@ -387,6 +395,21 @@ it("normalizes missing branch and worktree path to null in thread summaries", ()
   assert.isNull(summary.worktreePath);
 });
 
+it("includes blocking user-input state in thread summaries", () => {
+  assert.isTrue(
+    threadSummary(threadWith({ hasPendingUserInput: true, hasPendingBlockingUserInput: true }))
+      .hasPendingBlockingUserInput,
+  );
+  assert.isTrue(
+    threadSummary(threadWith({ hasPendingUserInput: true, hasPendingBlockingUserInput: undefined }))
+      .hasPendingBlockingUserInput,
+  );
+  assert.isFalse(
+    threadSummary(threadWith({ hasPendingUserInput: true, hasPendingBlockingUserInput: false }))
+      .hasPendingBlockingUserInput,
+  );
+});
+
 it("includes background liveness in thread summaries", () => {
   assert.strictEqual(
     threadSummary(threadWith({ backgroundLiveness: "working" })).backgroundLiveness,
@@ -594,6 +617,141 @@ it.layer(NodeServices.layer)("thread default workspace resolution", (it) => {
         settingsPath,
       });
       assert.deepEqual(selection, { mode: "checkout" });
+    }),
+  );
+});
+
+describe("thread input", () => {
+  const activityWith = (
+    input: Partial<OrchestrationThreadActivity> & Pick<OrchestrationThreadActivity, "id" | "kind">,
+  ): OrchestrationThreadActivity =>
+    ({
+      tone: "info",
+      summary: "Activity",
+      payload: {},
+      turnId: null,
+      createdAt: "2026-09-04T10:00:00.000Z",
+      ...input,
+    }) as OrchestrationThreadActivity;
+
+  it("lists unresolved requests and normalizes question and option fields", () => {
+    const pending = activityWith({
+      id: "activity-async-question" as OrchestrationThreadActivity["id"],
+      kind: "user-input.requested",
+      sequence: 1,
+      payload: {
+        requestId: "request-async",
+        responseMode: "message",
+        questions: [
+          {
+            id: "scope",
+            header: "Scope",
+            question: "Which area should I inspect?",
+            options: [
+              { value: "server", label: "Server", description: "Inspect the server." },
+              { label: "Web", description: "Inspect the web app." },
+            ],
+            allowCustomAnswer: true,
+            multiSelect: false,
+          },
+        ],
+      },
+    });
+    const resolved = activityWith({
+      id: "activity-blocking-question" as OrchestrationThreadActivity["id"],
+      kind: "user-input.requested",
+      sequence: 2,
+      payload: {
+        requestId: "request-blocking",
+        questions: [
+          {
+            id: "confirm",
+            header: "Confirm",
+            question: "Proceed?",
+            options: [],
+            allowCustomAnswer: false,
+          },
+        ],
+      },
+    });
+    const resolution = activityWith({
+      id: "activity-blocking-resolution" as OrchestrationThreadActivity["id"],
+      kind: "user-input.resolved",
+      sequence: 503,
+      payload: { requestId: "request-blocking", answers: { confirm: "yes" } },
+    });
+    const laterActivities = Array.from({ length: 500 }, (_, index) =>
+      activityWith({
+        id: `activity-later-${index}` as OrchestrationThreadActivity["id"],
+        kind: "command",
+        sequence: index + 3,
+      }),
+    );
+
+    assert.deepEqual(
+      collectPendingThreadInputRequests([pending, resolved, ...laterActivities, resolution]),
+      [
+        {
+          id: "request-async",
+          responseMode: "message",
+          questions: [
+            {
+              id: "scope",
+              header: "Scope",
+              prompt: "Which area should I inspect?",
+              options: [
+                {
+                  id: "server",
+                  label: "Server",
+                  description: "Inspect the server.",
+                },
+                { id: "Web", label: "Web", description: "Inspect the web app." },
+              ],
+              allowCustomAnswer: true,
+              multiSelect: false,
+            },
+          ],
+          createdAt: "2026-09-04T10:00:00.000Z",
+        },
+      ],
+    );
+  });
+
+  it.effect("builds the response command and acknowledgement report from answers JSON", () =>
+    Effect.gen(function* () {
+      const answers = yield* decodeThreadInputAnswersJson(
+        '{"scope":"server","checks":["lint","tests"]}',
+      );
+      const command = buildThreadInputRespondCommand({
+        commandId: CommandId.make("command-input-response"),
+        threadId: ThreadId.make("thread-1"),
+        requestId: ApprovalRequestId.make("request-async"),
+        answers,
+        createdAt: "2026-09-04T10:05:00.000Z",
+      });
+
+      assert.deepEqual(command, {
+        type: "thread.user-input.respond",
+        commandId: CommandId.make("command-input-response"),
+        threadId: ThreadId.make("thread-1"),
+        requestId: ApprovalRequestId.make("request-async"),
+        answers: { scope: "server", checks: ["lint", "tests"] },
+        createdAt: "2026-09-04T10:05:00.000Z",
+      });
+      assert.deepEqual(threadInputRespondReport({ command, sequence: 42 }), {
+        threadId: ThreadId.make("thread-1"),
+        requestId: ApprovalRequestId.make("request-async"),
+        commandId: CommandId.make("command-input-response"),
+        sequence: 42,
+        action: "response-requested",
+      });
+    }),
+  );
+
+  it.effect("rejects malformed answers JSON before dispatch", () =>
+    Effect.gen(function* () {
+      const error = yield* decodeThreadInputAnswersJson("not-json").pipe(Effect.flip);
+      assert.isDefined(error);
     }),
   );
 });

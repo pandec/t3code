@@ -38,6 +38,7 @@ import {
   type SourceControlRepositoryInfo,
   type ThreadId,
   PRIMARY_LOCAL_ENVIRONMENT_ID,
+  resolveEnvironmentMachineKind,
 } from "@t3tools/contracts";
 import { useLocation, useNavigate, useParams } from "@tanstack/react-router";
 import * as Option from "effect/Option";
@@ -61,7 +62,6 @@ import {
   PaletteIcon,
   PinIcon,
   PinOffIcon,
-  ServerIcon,
   SettingsIcon,
   SquarePenIcon,
   TextSearchIcon,
@@ -175,6 +175,7 @@ import { resolveEnvironmentOptionLabel } from "./BranchToolbar.logic";
 import { CommandPaletteContent } from "./CommandPaletteContent";
 import { CommandPaletteResults } from "./CommandPaletteResults";
 import { AzureDevOpsIcon, BitbucketIcon, GitHubIcon, GitLabIcon } from "./Icons";
+import { EnvironmentMachineIcon } from "./EnvironmentMachineIcon";
 import { ProjectFavicon } from "./ProjectFavicon";
 import { ProjectFilePicker } from "./files/ProjectFilePicker";
 import { ProjectContentSearchDialog } from "./search/ProjectContentSearchDialog";
@@ -225,8 +226,10 @@ function projectFavicon(project: Project) {
     <ProjectFavicon
       environmentId={project.environmentId}
       cwd={project.workspaceRoot}
+      projectName={project.title}
       faviconPath={project.faviconPath}
-      className={ITEM_ICON_CLASS}
+      projectIcon={project.projectIcon}
+      className="size-4"
     />
   );
 }
@@ -861,6 +864,7 @@ function OpenCommandPaletteDialog(props: {
                 : isLocal
                   ? `${environment.label} (Local)`
                   : environment.label,
+              machine: resolveEnvironmentMachineKind(environment.serverConfig),
             },
           ] as const;
         }),
@@ -1092,6 +1096,16 @@ function OpenCommandPaletteDialog(props: {
       ),
     [projects],
   );
+  const projectIconByKey = useMemo(
+    () =>
+      new Map(
+        projects.map(
+          (project) =>
+            [`${project.environmentId}:${project.id}`, project.projectIcon ?? null] as const,
+        ),
+      ),
+    [projects],
+  );
   const projectTitleByKey = useMemo(
     () =>
       new Map<string, string>(
@@ -1271,12 +1285,17 @@ function OpenCommandPaletteDialog(props: {
             const location = projectEnvironmentLocationById.get(project.environmentId) ?? {
               kind: "remote",
               label: "Remote",
+              machine: "server" as const,
             };
             return (
               <span className="flex min-w-0 items-center gap-1">
                 <span className="inline-flex min-w-0 items-center gap-1">
                   {location.kind === "remote" ? (
-                    <ServerIcon aria-hidden className={COMMAND_PALETTE_META_ICON_CLASS} />
+                    <EnvironmentMachineIcon
+                      aria-hidden
+                      kind={location.machine}
+                      className={COMMAND_PALETTE_META_ICON_CLASS}
+                    />
                   ) : null}
                   <span className="truncate">{location.label}</span>
                 </span>
@@ -1341,6 +1360,9 @@ function OpenCommandPaletteDialog(props: {
               projectFaviconPath={
                 projectFaviconPathByKey.get(`${thread.environmentId}:${thread.projectId}`) ?? null
               }
+              projectIcon={
+                projectIconByKey.get(`${thread.environmentId}:${thread.projectId}`) ?? null
+              }
               projectTitle={projectTitle ?? null}
               branch={thread.branch}
               worktreePath={thread.worktreePath}
@@ -1397,6 +1419,7 @@ function OpenCommandPaletteDialog(props: {
       projectCwdByKey,
       projectFaviconPathByKey,
       projectTitleByKey,
+      projectIconByKey,
       providerEntryByEnvironmentAndInstanceId,
       threadContentMatchByKey,
       threadSearchQuery,

@@ -125,6 +125,8 @@ t3 thread send <thread-id> --message "Also check the logs" --json
 t3 thread rename <thread-id> "Investigate test failures" --json
 t3 thread status <thread-id> --json
 t3 thread messages <thread-id> --json
+t3 thread input list <thread-id> --json
+t3 thread input respond <thread-id> <request-id> --answers-json '{"scope":"server"}' --json
 t3 thread interrupt <thread-id> --json
 t3 thread wait <thread-id> --json
 t3 thread archive <thread-id> --json
@@ -132,7 +134,8 @@ t3 thread archive <thread-id> --json
 
 Thread commands require a running T3 server. `thread new` creates a thread and starts its first
 agent turn. `thread send` starts a new turn when the thread is idle and steers the active turn when
-the provider supports steering. Thread list and status JSON summaries include `snoozedUntil` and
+the provider supports steering. It does not resolve a user-input request. Use `thread input respond`
+for that request. Thread list and status JSON summaries include `snoozedUntil` and
 `snoozedAt`; both are `null` when the thread is not snoozed, and an indefinite snooze ("until I wake
 it") carries a `snoozedAt` with a `null` `snoozedUntil`. Snooze is an inbox overlay and does not
 change the thread's turn `state`.
@@ -146,6 +149,33 @@ person settled it or the server's automatic settlement (inactivity, merged or cl
 did. `settledAt` is `null` when unsettled; automatic settlement stamps the last qualifying activity,
 while manual settlement stamps the settle moment. Settling is an inbox overlay like snooze and does
 not change the thread's turn `state`.
+
+### Answering user input
+
+List unresolved questions before answering one:
+
+```bash
+t3 thread input list <thread-id> --json
+t3 thread input respond <thread-id> <request-id> \
+  --answers-json '{"scope":"server","checks":["lint","tests"]}' \
+  --json
+```
+
+The list result is `{ "threadId", "requests" }`. Each request has `id`, `responseMode`
+(`"blocking"` or `"message"`), `createdAt`, and `questions`. Each question has `id`, `header`,
+`prompt`, `allowCustomAnswer`, `multiSelect`, and `options`; each option has `id`, `label`, and
+`description`. Use question ids as the answer-map keys. Use option ids as values, an array of option
+ids for a multi-select question, or a custom string when the question allows one.
+
+`thread input respond` requires the complete answer map. The server rejects missing answers, stale
+request ids, and duplicate replies. A successful JSON result has `threadId`, `requestId`,
+`commandId`, `sequence`, and `action: "response-requested"`. The sequence is the mutation
+acknowledgement and can be passed to `thread wait --after-sequence` when the response starts or
+steers a turn.
+
+Message-mode questions do not pause the active turn. Answering one resolves the request and sends the
+answers as a user message in one operation. A plain `thread send` only sends or steers a message and
+leaves the question unresolved.
 
 ### Reading messages
 
@@ -197,9 +227,10 @@ t3 thread wait "$thread_id" --after-sequence "$seq"
 
 Use `--turn <turn-id>` to wait for one specific turn. If another turn becomes latest first, the wait
 returns `superseded` with exit code 0; an unknown or mistyped turn id has the same result because the
-shell cannot distinguish it from an older turn. By default a pending approval or user-input request
-returns immediately as outcome `blocked`; `--on-blocked wait` keeps waiting instead. A newly dispatched
-turn can briefly exist before a provider session adopts it, so `wait` treats a queued start it observes
+shell cannot distinguish it from an older turn. By default a pending approval or blocking user-input
+request returns immediately as outcome `blocked`; `--on-blocked wait` keeps waiting instead. A
+message-mode request does not end the wait while its turn is active. A newly dispatched turn can briefly
+exist before a provider session adopts it, so `wait` treats a queued start it observes
 as pending for up to two minutes. If that observed start never adopts before the grace expires, it
 returns `unadopted` with exit code 2 and `adoptionTimedOut: true`. An already-old message on a plain idle
 thread is not treated as an adoption timeout.

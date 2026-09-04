@@ -1,4 +1,8 @@
 import {
+  threadOutboxFlushBatchIds,
+  type ThreadOutboxDispatchResult,
+} from "@t3tools/client-runtime/state/thread-outbox-delivery";
+import {
   CommandId,
   EnvironmentId,
   MessageId,
@@ -9,6 +13,10 @@ import {
 import { afterEach, beforeEach, describe, expect, it, vi } from "vite-plus/test";
 
 import type { PreparedTurnAttachments } from "../lib/attachmentUpload";
+import {
+  resolveThreadOutboxDeliveryAction,
+  selectNextQueuedThreadDispatch,
+} from "./thread-outbox-model";
 
 const harness = vi.hoisted(() => ({
   manager: null as unknown as ReturnType<
@@ -129,6 +137,11 @@ vi.mock("./entities", () => ({
   useServerConfigs: () => new Map(),
   useThreadShells: () => [],
 }));
+
+vi.mock("./server", async () => {
+  const { Atom } = await import("effect/unstable/reactivity");
+  return { serverEnvironment: { configValueAtom: Atom.family(() => Atom.make(null)) } };
+});
 
 vi.mock("./threads", () => ({
   threadEnvironment: {},
@@ -292,7 +305,7 @@ describe("thread outbox attachment preparation", () => {
       releaseUploads,
     });
 
-    await expect(preparation).resolves.toEqual({ status: "abandoned" });
+    await expect(preparation).resolves.toEqual({ status: "deferred" });
     expect(remainingMessages()).toEqual([edited]);
     expect(releaseUploads).not.toHaveBeenCalled();
   });
@@ -408,7 +421,7 @@ describe("thread outbox attachment preparation", () => {
     await harness.manager.update(edited);
 
     await expect(prepareQueuedMessageAttachments(message)).resolves.toEqual({
-      status: "abandoned",
+      status: "removed",
     });
     expect(harness.prepareTurnAttachments).not.toHaveBeenCalled();
     expect(remainingMessages()).toEqual([edited]);
@@ -614,7 +627,7 @@ describe("thread outbox delivered creation recovery", () => {
       await harness.manager.update(newer);
 
       releaseRecovery.resolve();
-      await expect(recovery).resolves.toBe(false);
+      await expect(recovery).resolves.toBe("deferred");
 
       expect(remainingMessages()).toEqual([newer]);
       expect(
@@ -652,7 +665,7 @@ describe("thread outbox delivered creation recovery", () => {
       appAtomRegistry.set(editingQueuedMessageIdsAtom, { [message.messageId]: true });
 
       releaseRecovery.resolve();
-      await expect(recovery).resolves.toBe(true);
+      await expect(recovery).resolves.toBe("deferred");
 
       expect(remainingMessages()).toEqual([message]);
       expect(
@@ -679,10 +692,10 @@ describe("thread outbox delivered creation recovery", () => {
     try {
       await harness.manager.enqueue(message);
 
-      await expect(recoverEditedCreationAfterDelivery(message)).resolves.toBe(false);
+      await expect(recoverEditedCreationAfterDelivery(message)).resolves.toBe("failed");
       expect(remainingMessages()).toEqual([message]);
 
-      await expect(recoverEditedCreationAfterDelivery(message)).resolves.toBe(true);
+      await expect(recoverEditedCreationAfterDelivery(message)).resolves.toBe("removed");
 
       const draft = composerDrafts.getComposerDraftSnapshot(draftKey);
       expect(draft.text).toBe(message.text);
@@ -702,7 +715,7 @@ describe("thread outbox delivered creation recovery", () => {
     await harness.manager.enqueue(message);
     harness.draftFile.setWriteError(new Error("disk full"));
 
-    await expect(recoverEditedCreationAfterDelivery(message)).resolves.toBe(false);
+    await expect(recoverEditedCreationAfterDelivery(message)).resolves.toBe("failed");
 
     expect(remainingMessages()).toEqual([message]);
   });
@@ -763,5 +776,51 @@ describe("thread outbox recovery rollback", () => {
     );
     expect(remainingMessages()).toEqual([]);
     expect(harness.setPendingConnectionError).toHaveBeenCalledWith("too large");
+  });
+});
+
+describe("mobile thread outbox flush batches", () => {
+  it("keeps later rows behind a leader deferred after confirmation", () => {
+    const leader = queuedMessage({ messageId: "mobile-race-leader", text: "leader" });
+    const follower = queuedMessage({ messageId: "mobile-race-follower", text: "follower" });
+    const queue = [leader, follower];
+    const resolveAction = (threadStatus: "idle" | "running") =>
+      resolveThreadOutboxDeliveryAction({
+        isCreation: false,
+        threadExists: true,
+        shellStatus: "live",
+        environmentConnected: true,
+        threadStatus,
+        deliveryIntent: "queue",
+      });
+    const selected = selectNextQueuedThreadDispatch(queue, {
+      isHeld: () => false,
+      resolveAction: () => resolveAction("idle"),
+    });
+    expect(selected).toEqual({ message: leader, action: "send" });
+
+    // Another client starts a turn while confirmQueued is pending.
+    const freshAction = resolveAction("running");
+    const result: ThreadOutboxDispatchResult =
+      freshAction === selected?.action
+        ? {
+            outcome: "delivered",
+            context: {
+              sessionBaselineKnown: true,
+              sessionStatus: "running",
+              sessionUpdatedAt: null,
+              latestTurnId: null,
+            },
+          }
+        : { outcome: "deferred" };
+
+    expect(result).toEqual({ outcome: "deferred" });
+    expect(threadOutboxFlushBatchIds(queue, leader, { result, action: "send" }).size).toBe(0);
+    expect(
+      selectNextQueuedThreadDispatch(queue, {
+        isHeld: () => false,
+        resolveAction: () => freshAction,
+      }),
+    ).toBeNull();
   });
 });

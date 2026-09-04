@@ -5,6 +5,7 @@ import * as Cause from "effect/Cause";
 
 import {
   CommandId,
+  DEFAULT_PROVIDER_INTERACTION_MODE,
   MessageId,
   PROVIDER_SEND_TURN_MAX_ATTACHMENTS,
   type EnvironmentId,
@@ -35,6 +36,8 @@ import { deriveActiveWorkStartedAt } from "@t3tools/shared/orchestrationTiming";
 
 import type { ThreadHistoryWindowState } from "../features/threads/threadHistoryLoadMore";
 import { makeQueuedMessageMetadata } from "../lib/commandMetadata";
+import { isModelSelectionUnavailable } from "../lib/modelOptions";
+import { resolveProviderInteractionMode } from "../features/threads/legacy-plan-mode";
 import {
   convertPastedImagesToAttachments,
   pasteComposerClipboard,
@@ -67,6 +70,7 @@ import { enqueueThreadOutboxMessage } from "./thread-outbox";
 import type { ThreadOutboxDeliveryIntent } from "./thread-outbox-model";
 import { useSteerPendingMessageIds } from "./thread-steer-pending";
 import { threadEnvironment, useLoadOlderMessages, useThreadMessageWindow } from "./threads";
+import { dispatchingQueuedMessageIdAtom } from "./use-thread-outbox-drain";
 import { useAtomCommand } from "./use-atom-command";
 import {
   composerAttachmentUploadBlockReason,
@@ -141,6 +145,7 @@ export function useThreadComposerState() {
   const selectedThreadDetail = useSelectedThreadDetail();
   const composerDrafts = useAtomValue(composerDraftsAtom);
   const queuedMessagesByThreadKey = useThreadOutboxMessages();
+  const dispatchingQueuedMessageId = useAtomValue(dispatchingQueuedMessageIdAtom);
   const [feedbackSubmissionsByThreadKey, setFeedbackSubmissionsByThreadKey] = useState<
     Record<string, ReadonlyArray<CodexFeedbackSubmission>>
   >({});
@@ -213,8 +218,7 @@ export function useThreadComposerState() {
   const selectedThread = selectedThreadDetail ?? selectedThreadShell;
   // Latch staged-override expiry: once the thread moves off a field's
   // baseline the entry is deleted, so a later return to the baseline value
-  // (another client's pick, a plan follow-up flipping modes back) cannot
-  // revive a pick the user is no longer looking at.
+  // cannot revive a pick the user is no longer looking at.
   useEffect(() => {
     if (selectedThreadKey && selectedThread) {
       pruneExpiredStagedThreadSettings(selectedThreadKey, selectedThread);
@@ -227,7 +231,12 @@ export function useThreadComposerState() {
     : null;
   const modelSelection = resolvedThreadSettings?.modelSelection ?? null;
   const runtimeMode = resolvedThreadSettings?.runtimeMode ?? null;
-  const interactionMode = resolvedThreadSettings?.interactionMode ?? null;
+  const selectedProvider = selectedEnvironmentRuntime?.serverConfig?.providers.find(
+    (provider) => provider.instanceId === modelSelection?.instanceId,
+  );
+  const interactionMode = resolvedThreadSettings
+    ? resolveProviderInteractionMode(selectedProvider, resolvedThreadSettings.interactionMode)
+    : null;
 
   const selectedThreadSessionActivity = useMemo(() => {
     const selectedThread = selectedThreadDetail ?? selectedThreadShell;
@@ -255,6 +264,48 @@ export function useThreadComposerState() {
       [selectedThreadDetail, selectedThreadSessionActivity],
     ),
   );
+  const isCompacting = useMemo(() => {
+    const queuedMessage = selectedThreadQueuedMessages.findLast(
+      (message) =>
+        message.messageId === dispatchingQueuedMessageId &&
+        message.text.trim().toLowerCase() === "/compact" &&
+        message.attachments.length === 0,
+    );
+    const latestCompactMessage = selectedThreadDetail?.messages.findLast(
+      (message) =>
+        message.role === "user" &&
+        message.text.trim().toLowerCase() === "/compact" &&
+        !message.attachments?.length,
+    );
+    const compactRequestIsActive =
+      latestCompactMessage !== undefined &&
+      (latestCompactMessage.createdAt >
+        (selectedThread?.latestTurn?.requestedAt ?? latestCompactMessage.createdAt) ||
+        (selectedThread?.latestTurn?.state === "running" &&
+          latestCompactMessage.createdAt === selectedThread.latestTurn.requestedAt));
+    const compactionSettled = selectedThreadDetail?.activities.some((activity) => {
+      if (!["context-compaction", "provider.turn.start.failed"].includes(activity.kind)) {
+        return false;
+      }
+      const payload =
+        typeof activity.payload === "object" && activity.payload !== null
+          ? (activity.payload as { readonly requestId?: unknown })
+          : null;
+      return payload?.requestId === latestCompactMessage?.id;
+    });
+    return (
+      queuedMessage !== undefined ||
+      ((selectedThread?.session?.status === "starting" ||
+        selectedThread?.session?.status === "running") &&
+        compactRequestIsActive &&
+        !compactionSettled)
+    );
+  }, [
+    dispatchingQueuedMessageId,
+    selectedThread,
+    selectedThreadDetail,
+    selectedThreadQueuedMessages,
+  ]);
 
   const activeWorkStartedAt = useMemo(() => {
     const selectedThread = selectedThreadDetail ?? selectedThreadShell;
@@ -359,8 +410,19 @@ export function useThreadComposerState() {
         return null;
       }
 
-      const provider = selectedEnvironmentRuntime?.serverConfig?.providers.find(
-        (entry) => entry.instanceId === thread.modelSelection.instanceId,
+      const serverConfig = selectedEnvironmentRuntime?.serverConfig;
+      if (
+        selectedEnvironmentRuntime?.connectionState === "connected" &&
+        isModelSelectionUnavailable(serverConfig, stagedSettings.modelSelection)
+      ) {
+        Alert.alert(
+          "Antigravity model unavailable",
+          "Open model settings to finish setup or choose another model.",
+        );
+        return null;
+      }
+      const provider = serverConfig?.providers.find(
+        (entry) => entry.instanceId === stagedSettings.modelSelection.instanceId,
       );
       const feedbackCommand =
         attachments.length === 0 &&
@@ -441,7 +503,7 @@ export function useThreadComposerState() {
         attachments,
         modelSelection: stagedSettings.modelSelection,
         runtimeMode: stagedSettings.runtimeMode,
-        interactionMode: stagedSettings.interactionMode,
+        interactionMode: resolveProviderInteractionMode(provider, stagedSettings.interactionMode),
         threadSettings: {
           archivedAt: thread.archivedAt,
           modelSelection: thread.modelSelection,
@@ -462,7 +524,11 @@ export function useThreadComposerState() {
         (error: unknown) => {
           // Preserve anything typed since this send while restoring content from
           // the failed write. The uncapped path cannot evict restored files.
-          void mergeComposerDraftContent(threadKey, { text, attachments: [] });
+          void mergeComposerDraftContent(threadKey, {
+            text,
+            ...(draft.inputOrigin !== undefined ? { inputOrigin: draft.inputOrigin } : {}),
+            attachments: [],
+          });
           appendComposerDraftAttachments(threadKey, attachments, { allowOverflow: true });
           setPendingConnectionError(
             error instanceof Error ? error.message : "Failed to save the queued message.",
@@ -629,9 +695,21 @@ export function useThreadComposerState() {
       if (!selectedThreadKey || !baseline) {
         return;
       }
-      stageThreadSettings(selectedThreadKey, { modelSelection: value }, baseline);
+      const provider = selectedEnvironmentRuntime?.serverConfig?.providers.find(
+        (candidate) => candidate.instanceId === value.instanceId,
+      );
+      stageThreadSettings(
+        selectedThreadKey,
+        {
+          modelSelection: value,
+          ...(provider?.showInteractionModeToggle === false
+            ? { interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE }
+            : {}),
+        },
+        baseline,
+      );
     },
-    [selectedThreadKey],
+    [selectedEnvironmentRuntime?.serverConfig, selectedThreadKey],
   );
 
   const onUpdateRuntimeMode = useCallback(
@@ -651,9 +729,20 @@ export function useThreadComposerState() {
       if (!selectedThreadKey || !baseline) {
         return;
       }
-      stageThreadSettings(selectedThreadKey, { interactionMode: value }, baseline);
+      const staged = resolveStagedThreadSettings(
+        getStagedThreadSettings(selectedThreadKey),
+        baseline,
+      );
+      const provider = selectedEnvironmentRuntime?.serverConfig?.providers.find(
+        (candidate) => candidate.instanceId === staged.modelSelection.instanceId,
+      );
+      stageThreadSettings(
+        selectedThreadKey,
+        { interactionMode: resolveProviderInteractionMode(provider, value) },
+        baseline,
+      );
     },
-    [selectedThreadKey],
+    [selectedEnvironmentRuntime?.serverConfig, selectedThreadKey],
   );
 
   return {
@@ -662,6 +751,7 @@ export function useThreadComposerState() {
     threadHistoryWindow,
     selectedThreadQueueCount,
     activeWorkStartedAt,
+    isCompacting,
     draftMessage,
     draftAttachments,
     modelSelection,

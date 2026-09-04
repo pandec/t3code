@@ -64,18 +64,20 @@ function SheetPopup({
   showCloseButton = true,
   keepMounted = false,
   transitionDurationMs,
+  backdropClassName,
+  viewportClassName,
   side = "right",
   variant = "default",
-  backdropClassName,
   style,
   ...props
 }: SheetPrimitive.Popup.Props & {
   showCloseButton?: boolean;
   keepMounted?: boolean;
   transitionDurationMs?: number;
+  backdropClassName?: string | undefined;
+  viewportClassName?: string | undefined;
   side?: "right" | "left" | "top" | "bottom";
   variant?: "default" | "inset";
-  backdropClassName?: string | undefined;
 }) {
   const transitionStyle =
     transitionDurationMs === undefined
@@ -87,13 +89,13 @@ function SheetPopup({
     <SheetPortal keepMounted={keepMounted}>
       <SheetBackdrop
         className={cn(
-          backdropClassName,
           instant &&
             "transition-none! data-ending-style:opacity-100! data-starting-style:opacity-100!",
+          backdropClassName,
         )}
         style={transitionStyle}
       />
-      <SheetViewport side={side} variant={variant}>
+      <SheetViewport className={viewportClassName} side={side} variant={variant}>
         <SheetPrimitive.Popup
           className={cn(
             "relative flex max-h-full min-h-0 w-full min-w-0 flex-col bg-popover not-dark:bg-clip-padding text-popover-foreground shadow-lg/5 transition-[opacity,translate] duration-200 ease-in-out will-change-transform before:pointer-events-none before:absolute before:inset-0 before:shadow-[0_1px_--theme(--color-black/4%)] data-ending-style:opacity-0 data-starting-style:opacity-0 max-sm:before:hidden dark:before:shadow-[0_-1px_--theme(--color-white/6%)]",

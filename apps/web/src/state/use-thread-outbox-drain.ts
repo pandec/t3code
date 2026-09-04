@@ -4,12 +4,15 @@ import type {
   EnvironmentShellStatus,
   EnvironmentThreadShell,
 } from "@t3tools/client-runtime/state/shell";
-import { createThreadOutboxDelivery } from "@t3tools/client-runtime/state/thread-outbox-delivery";
+import {
+  createThreadOutboxDelivery,
+  threadOutboxFlushBatchIds,
+  type ThreadOutboxDispatchResult,
+} from "@t3tools/client-runtime/state/thread-outbox-delivery";
 import {
   flattenQueuedThreadMessages,
   isSteerWaitingOutGraceWindow,
   pruneExpeditedQueuedMessageIds,
-  queueFlushBatchIds,
   queuedThreadMessageIntent,
   resolveThreadOutboxDeliveryAction,
   scopedThreadKey,
@@ -282,65 +285,79 @@ export function useThreadOutboxDrain(): void {
         continue;
       }
       const nextQueuedMessage = candidate.message;
-      const thread = findThread(threads, nextQueuedMessage);
 
       beginDispatchingQueuedMessage(nextQueuedMessage);
-      const dispatch = confirmThreadOutboxMessageQueued(nextQueuedMessage).then((queued) => {
+      const dispatch: Promise<ThreadOutboxDispatchResult> = confirmThreadOutboxMessageQueued(
+        nextQueuedMessage,
+      ).then(async (queued) => {
         if (!queued) {
-          return true;
+          return { outcome: "removed" };
         }
         if (appAtomRegistry.get(editingQueuedMessageIdsAtom)[nextQueuedMessage.messageId]) {
-          return true;
+          return { outcome: "deferred" };
         }
         const freshThread = findThread(
           appAtomRegistry.get(environmentThreadShells.threadShellsAtom),
           nextQueuedMessage,
         );
         const freshThreadSettings = freshThread ?? nextQueuedMessage.threadSettings;
-        const freshThreadBusy =
-          freshThread?.session?.status === "running" || freshThread?.session?.status === "starting";
-        if (
-          candidate.action === "send" &&
-          queuedThreadMessageIntent(nextQueuedMessage) !== "steer" &&
-          freshThreadBusy
-        ) {
-          return true;
+        const freshConnection = Option.getOrElse(
+          AsyncResult.value(
+            appAtomRegistry.get(environmentCatalog.stateAtom(nextQueuedMessage.environmentId)),
+          ),
+          () => AVAILABLE_CONNECTION_STATE,
+        );
+        const freshAction = resolveThreadOutboxDeliveryAction({
+          isCreation: false,
+          threadExists: freshThreadSettings !== undefined,
+          shellStatus: appAtomRegistry.get(
+            environmentShell.stateValueAtom(nextQueuedMessage.environmentId),
+          ).status,
+          environmentConnected: freshConnection.phase === "connected",
+          threadStatus: freshThread?.session?.status ?? null,
+          deliveryIntent: flushBatchRef.current.get(threadKey)?.has(nextQueuedMessage.messageId)
+            ? "steer"
+            : queuedThreadMessageIntent(nextQueuedMessage),
+        });
+        if (freshAction !== candidate.action) {
+          return { outcome: "deferred" };
         }
-        return candidate.action === "remove"
-          ? removeThreadOutboxMessage(nextQueuedMessage).then(
-              () => true,
-              (error) => {
-                console.warn("[thread-outbox] failed to remove message for a missing thread", {
-                  environmentId: nextQueuedMessage.environmentId,
-                  threadId: nextQueuedMessage.threadId,
-                  messageId: nextQueuedMessage.messageId,
-                  error,
-                });
-                return false;
-              },
-            )
-          : freshThreadSettings !== undefined
-            ? delivery.sendQueuedMessage(nextQueuedMessage, freshThreadSettings, {
-                sessionBaselineKnown: freshThread !== undefined,
-                sessionStatus: freshThread?.session?.status ?? null,
-                sessionUpdatedAt: freshThread?.session?.updatedAt ?? null,
-                latestTurnId: freshThread?.latestTurn?.turnId ?? null,
-              })
-            : Promise.resolve(false);
+        if (candidate.action === "remove") {
+          try {
+            const removed = await removeThreadOutboxMessage(nextQueuedMessage);
+            return { outcome: removed ? "removed" : "deferred" };
+          } catch (error) {
+            console.warn("[thread-outbox] failed to remove message for a missing thread", {
+              environmentId: nextQueuedMessage.environmentId,
+              threadId: nextQueuedMessage.threadId,
+              messageId: nextQueuedMessage.messageId,
+              error,
+            });
+            return { outcome: "failed" };
+          }
+        }
+        if (freshThreadSettings === undefined) {
+          return { outcome: "deferred" };
+        }
+        return delivery.sendQueuedMessage(nextQueuedMessage, freshThreadSettings, {
+          sessionBaselineKnown: freshThread !== undefined,
+          sessionStatus: freshThread?.session?.status ?? null,
+          sessionUpdatedAt: freshThread?.session?.updatedAt ?? null,
+          latestTurnId: freshThread?.latestTurn?.turnId ?? null,
+        });
       });
       void dispatch
-        .then((sent) => {
+        .then((result) => {
           if (!flushBatchRef.current.has(threadKey)) {
-            const batchIds = queueFlushBatchIds(queuedMessages, nextQueuedMessage, {
-              delivered: sent,
+            const batchIds = threadOutboxFlushBatchIds(queuedMessages, nextQueuedMessage, {
+              result,
               action: candidate.action,
-              threadStatus: thread?.session?.status ?? null,
             });
             if (batchIds.size > 0) {
               flushBatchRef.current.set(threadKey, batchIds);
             }
           }
-          if (sent) {
+          if (result.outcome !== "failed") {
             retryAttemptRef.current.delete(nextQueuedMessage.messageId);
             retryNotBeforeRef.current.delete(nextQueuedMessage.messageId);
             const pendingTimer = retryTimersRef.current.get(nextQueuedMessage.messageId);

@@ -2,12 +2,14 @@
 import * as NodeOS from "node:os";
 
 import {
+  ApprovalRequestId,
   CommandId,
   DEFAULT_PROVIDER_INTERACTION_MODE,
   DEFAULT_RUNTIME_MODE,
   DEFAULT_SERVER_SETTINGS,
   MessageId,
   ProviderInteractionMode,
+  ProviderUserInputAnswers,
   RuntimeMode,
   ServerSettings,
   T3_PROJECT_FILE_NAME,
@@ -17,11 +19,13 @@ import {
   type OrchestrationMessage,
   type OrchestrationMessageRole,
   type OrchestrationProjectShell,
+  type OrchestrationThreadActivity,
   type OrchestrationThreadDetailSnapshot,
   type OrchestrationThreadMessagePage,
   type OrchestrationThreadShell,
   type ThreadEnvMode,
   type ThreadTurnStartBootstrap,
+  UserInputQuestion,
 } from "@t3tools/contracts";
 import { buildTemporaryWorktreeBranchName } from "@t3tools/shared/git";
 import { fromLenientJson } from "@t3tools/shared/schemaJson";
@@ -480,6 +484,139 @@ const requireTrimmedTitle = (title: string) => {
     : Effect.fail(new ThreadCliTitleEmptyError({ operation: "validateTitle" }));
 };
 
+const ThreadUserInputRequestedActivityPayload = Schema.Struct({
+  requestId: ApprovalRequestId,
+  questions: Schema.Array(UserInputQuestion),
+  responseMode: Schema.optional(Schema.Literal("message")),
+});
+const decodeThreadUserInputRequestedActivityPayload = Schema.decodeUnknownOption(
+  ThreadUserInputRequestedActivityPayload,
+);
+export const decodeThreadInputAnswersJson = Schema.decodeUnknownEffect(
+  fromLenientJson(ProviderUserInputAnswers),
+);
+
+export interface ThreadInputRequestReport {
+  readonly id: string;
+  readonly responseMode: "blocking" | "message";
+  readonly questions: ReadonlyArray<{
+    readonly id: string;
+    readonly header: string;
+    readonly prompt: string;
+    readonly options: ReadonlyArray<{
+      readonly id: string;
+      readonly label: string;
+      readonly description: string;
+    }>;
+    readonly allowCustomAnswer: boolean;
+    readonly multiSelect: boolean;
+  }>;
+  readonly createdAt: string;
+}
+
+const isStaleUserInputResponseFailure = (activity: OrchestrationThreadActivity): boolean => {
+  if (activity.kind !== "provider.user-input.respond.failed") return false;
+  if (typeof activity.payload !== "object" || activity.payload === null) return false;
+  const detail = Reflect.get(activity.payload, "detail");
+  if (typeof detail !== "string") return false;
+  const normalized = detail.toLowerCase();
+  return [
+    "stale pending user-input request",
+    "unknown pending user-input request",
+    "unknown pending user input request",
+    "unknown pending codex user input request",
+  ].some((fragment) => normalized.includes(fragment));
+};
+
+export const collectPendingThreadInputRequests = (
+  activities: ReadonlyArray<OrchestrationThreadActivity>,
+): ReadonlyArray<ThreadInputRequestReport> => {
+  const pending = new Map<
+    string,
+    {
+      readonly activity: OrchestrationThreadActivity;
+      readonly payload: typeof ThreadUserInputRequestedActivityPayload.Type;
+    }
+  >();
+  const ordered = [...activities].toSorted(
+    (left, right) =>
+      (left.sequence ?? -1) - (right.sequence ?? -1) ||
+      left.createdAt.localeCompare(right.createdAt) ||
+      left.id.localeCompare(right.id),
+  );
+
+  for (const activity of ordered) {
+    if (activity.kind === "user-input.requested") {
+      const payload = decodeThreadUserInputRequestedActivityPayload(activity.payload);
+      if (Option.isSome(payload)) {
+        pending.set(payload.value.requestId, { activity, payload: payload.value });
+      }
+      continue;
+    }
+    if (activity.kind !== "user-input.resolved" && !isStaleUserInputResponseFailure(activity)) {
+      continue;
+    }
+    if (typeof activity.payload !== "object" || activity.payload === null) continue;
+    const requestId = Reflect.get(activity.payload, "requestId");
+    if (typeof requestId === "string") pending.delete(requestId);
+  }
+
+  return [...pending.values()]
+    .toSorted(
+      (left, right) =>
+        left.activity.createdAt.localeCompare(right.activity.createdAt) ||
+        left.payload.requestId.localeCompare(right.payload.requestId),
+    )
+    .map(({ activity, payload }) => ({
+      id: payload.requestId,
+      responseMode: payload.responseMode ?? "blocking",
+      questions: payload.questions.map((question) => ({
+        id: question.id,
+        header: question.header,
+        prompt: question.question,
+        options: question.options.map((option) => ({
+          id: option.value ?? option.label,
+          label: option.label,
+          description: option.description,
+        })),
+        allowCustomAnswer: question.allowCustomAnswer !== false,
+        multiSelect: question.multiSelect ?? false,
+      })),
+      createdAt: activity.createdAt,
+    }));
+};
+
+type ThreadUserInputRespondCommand = Extract<
+  ClientOrchestrationCommand,
+  { readonly type: "thread.user-input.respond" }
+>;
+
+export const buildThreadInputRespondCommand = (input: {
+  readonly commandId: CommandId;
+  readonly threadId: ThreadId;
+  readonly requestId: ApprovalRequestId;
+  readonly answers: typeof ProviderUserInputAnswers.Type;
+  readonly createdAt: string;
+}): ThreadUserInputRespondCommand => ({
+  type: "thread.user-input.respond",
+  commandId: input.commandId,
+  threadId: input.threadId,
+  requestId: input.requestId,
+  answers: input.answers,
+  createdAt: input.createdAt,
+});
+
+export const threadInputRespondReport = (input: {
+  readonly command: ThreadUserInputRespondCommand;
+  readonly sequence: number;
+}) => ({
+  threadId: input.command.threadId,
+  requestId: input.command.requestId,
+  commandId: input.command.commandId,
+  sequence: input.sequence,
+  action: "response-requested" as const,
+});
+
 export const deriveThreadCliTitle = (message: string): string => {
   const compact = message.trim().replace(/\s+/g, " ");
   return compact.length <= 72 ? compact : `${compact.slice(0, 69).trimEnd()}...`;
@@ -501,6 +638,7 @@ export const threadSummary = (thread: OrchestrationThreadShell) => ({
   settledAt: thread.settledAt ?? null,
   hasPendingApprovals: thread.hasPendingApprovals,
   hasPendingUserInput: thread.hasPendingUserInput,
+  hasPendingBlockingUserInput: thread.hasPendingBlockingUserInput ?? thread.hasPendingUserInput,
   latestUserMessageAt: thread.latestUserMessageAt,
   updatedAt: thread.updatedAt,
 });
@@ -1550,6 +1688,84 @@ const threadMessagesCommand = Command.make("messages", {
   ),
 );
 
+const threadInputListCommand = Command.make("list", {
+  ...projectLocationFlags,
+  threadId: Argument.string("thread-id").pipe(Argument.withDescription("Thread id.")),
+  json: jsonFlag,
+}).pipe(
+  Command.withDescription("List unresolved user-input requests for a thread."),
+  Command.withHandler((flags) =>
+    runThreadCli(flags, flags.json, (input) =>
+      Effect.gen(function* () {
+        const thread = yield* resolveThread(input.live, flags.threadId);
+        const detail = yield* fetchLiveOrchestrationThreadDetail(
+          input.live.origin,
+          input.token,
+          thread.id,
+          input.timeouts,
+        );
+        const requests = collectPendingThreadInputRequests(detail.thread.activities);
+        yield* Console.log(
+          flags.json
+            ? jsonOutput({ threadId: thread.id, requests })
+            : requests.length === 0
+              ? `Thread ${thread.id} has no unresolved user-input requests.`
+              : stripTerminalControlCharacters(
+                  requests
+                    .map(
+                      (request) =>
+                        `${request.id}\t${request.responseMode}\t${request.questions.map((question) => question.prompt).join(" / ")}`,
+                    )
+                    .join("\n"),
+                ),
+        );
+      }),
+    ),
+  ),
+);
+
+const threadInputRespondCommand = Command.make("respond", {
+  ...projectLocationFlags,
+  threadId: Argument.string("thread-id").pipe(Argument.withDescription("Thread id.")),
+  requestId: Argument.string("request-id").pipe(
+    Argument.withSchema(ApprovalRequestId),
+    Argument.withDescription("User-input request id."),
+  ),
+  answersJson: Flag.string("answers-json").pipe(
+    Flag.withDescription("Complete JSON answer map keyed by question id."),
+  ),
+  json: jsonFlag,
+}).pipe(
+  Command.withDescription("Answer an unresolved user-input request."),
+  Command.withHandler((flags) =>
+    runThreadCli(flags, flags.json, (input) =>
+      Effect.gen(function* () {
+        const thread = yield* resolveThread(input.live, flags.threadId);
+        const answers = yield* decodeThreadInputAnswersJson(flags.answersJson);
+        const command = buildThreadInputRespondCommand({
+          commandId: CommandId.make(yield* randomUuid),
+          threadId: thread.id,
+          requestId: flags.requestId,
+          answers,
+          createdAt: DateTime.formatIso(yield* DateTime.now),
+        });
+        const result = yield* dispatchThreadCommand(input, command);
+        const report = threadInputRespondReport({ command, sequence: result.sequence });
+        yield* Console.log(
+          flags.json
+            ? jsonOutput(report)
+            : `Submitted answers for user-input request ${report.requestId} in thread ${report.threadId}.`,
+        );
+      }),
+    ),
+  ),
+);
+
+const threadInputCommand = Command.make("input").pipe(
+  Command.withDescription("Inspect and answer thread user-input requests."),
+  Command.withSubcommands([threadInputListCommand, threadInputRespondCommand]),
+);
+
 const threadArchiveCommand = Command.make("archive", {
   ...projectLocationFlags,
   threadId: Argument.string("thread-id").pipe(Argument.withDescription("Thread id.")),
@@ -1589,6 +1805,7 @@ export const threadCommand = Command.make("thread").pipe(
     threadInterruptCommand,
     threadStatusCommand,
     threadMessagesCommand,
+    threadInputCommand,
     threadWaitCommand,
     threadArchiveCommand,
   ]),

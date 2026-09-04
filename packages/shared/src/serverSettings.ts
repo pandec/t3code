@@ -122,6 +122,22 @@ function mergeModelSelectionOptionsById(input: {
   return [...merged.entries()].map(([id, value]) => ({ id, value }));
 }
 
+/** Upsert each patched entry; `null` removes it. Entries the patch omits are untouched. */
+function mergeUsageLimitSources(
+  current: ServerSettings["usageLimitSources"],
+  patch: NonNullable<ServerSettingsPatch["usageLimitSources"]>,
+): ServerSettings["usageLimitSources"] {
+  const next = new Map(Object.entries(current));
+  for (const [id, config] of Object.entries(patch)) {
+    if (config === null) {
+      next.delete(id);
+    } else {
+      next.set(id, config);
+    }
+  }
+  return Object.fromEntries(next) as ServerSettings["usageLimitSources"];
+}
+
 export function applyServerSettingsPatch(
   current: ServerSettings,
   patch: ServerSettingsPatch,
@@ -134,6 +150,8 @@ export function applyServerSettingsPatch(
     backgroundActivity,
     projectAccentColorsFill,
     savedPromptLibrary,
+    // Merged per entry below; its `null` removals must not reach deepMerge.
+    usageLimitSources: usageLimitSourcesPatch,
     ...patchForMerge
   } = patch;
   const currentBackgroundActivity = normalizeServerBackgroundActivitySettings(current);
@@ -214,6 +232,14 @@ export function applyServerSettingsPatch(
     ...(savedPromptLibrary !== undefined &&
     savedPromptLibrary.updatedAt > current.savedPromptLibrary.updatedAt
       ? { savedPromptLibrary }
+      : {}),
+    ...(usageLimitSourcesPatch !== undefined
+      ? {
+          usageLimitSources: mergeUsageLimitSources(
+            current.usageLimitSources,
+            usageLimitSourcesPatch,
+          ),
+        }
       : {}),
     ...(patch.sourceControlWriterModelSelection !== undefined
       ? { sourceControlWriterModelSelection: patch.sourceControlWriterModelSelection }

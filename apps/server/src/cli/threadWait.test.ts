@@ -45,6 +45,7 @@ const threadWith = (input: Partial<OrchestrationThreadShell> = {}): Orchestratio
     session: null,
     hasPendingApprovals: false,
     hasPendingUserInput: false,
+    hasPendingBlockingUserInput: false,
     backgroundLiveness: null,
     ...input,
   }) as OrchestrationThreadShell;
@@ -227,7 +228,10 @@ it("returns unadopted only after observing a queued start age out", () => {
 });
 
 it("returns blocked by default or keeps waiting when requested", () => {
-  const blocked = threadWith({ hasPendingUserInput: true });
+  const blocked = threadWith({
+    hasPendingUserInput: true,
+    hasPendingBlockingUserInput: true,
+  });
 
   assert.strictEqual(evaluate({ thread: blocked }).outcome, "blocked");
   assert.strictEqual(
@@ -242,6 +246,26 @@ it("returns blocked by default or keeps waiting when requested", () => {
     }).outcome,
     "timeout",
   );
+});
+
+it("keeps waiting through message-mode input while the turn is active", () => {
+  const active = threadWith({
+    latestTurn: { ...completedTurn!, state: "running", completedAt: null },
+    session: { status: "running" } as OrchestrationThreadShell["session"],
+    hasPendingUserInput: true,
+    hasPendingBlockingUserInput: false,
+  });
+
+  assert.strictEqual(evaluate({ thread: active }).status, "pending");
+});
+
+it("falls back to the legacy pending-input flag when the blocking field is absent", () => {
+  const legacy = threadWith({
+    hasPendingUserInput: true,
+    hasPendingBlockingUserInput: undefined,
+  });
+
+  assert.strictEqual(evaluate({ thread: legacy }).outcome, "blocked");
 });
 
 it("settles after steering folds into a turn without requestedAt advancing", () => {

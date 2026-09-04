@@ -105,6 +105,7 @@ import { EnvironmentProviderSettings } from "./ProviderSettingsPanel";
 
 const environmentId = EnvironmentId.make("remote-device");
 const codexId = ProviderInstanceId.make("codex");
+const antigravityId = ProviderInstanceId.make("antigravity");
 const customId = ProviderInstanceId.make("codex_work");
 
 function provider(): ServerProvider {
@@ -134,12 +135,16 @@ function provider(): ServerProvider {
 
 function renderPanel(options?: {
   readonly readOnly?: boolean;
+  readonly targetInstanceId?: ProviderInstanceId;
 }): ReactElement<Record<string, unknown>> {
   hooks.beginRender();
   return EnvironmentProviderSettings({
     environmentId,
     environmentLabel: "Remote device",
     ...(options?.readOnly === undefined ? {} : { readOnly: options.readOnly }),
+    ...(options?.targetInstanceId === undefined
+      ? {}
+      : { targetInstanceId: options.targetInstanceId }),
   }) as ReactElement<Record<string, unknown>>;
 }
 
@@ -169,17 +174,6 @@ function isRefreshButton(element: ReactElement<Record<string, unknown>>): boolea
 
 function isAddProviderButton(element: ReactElement<Record<string, unknown>>): boolean {
   return element.props["aria-label"] === "Add provider";
-}
-
-function findAdvancedPanel(panel: ReactElement<Record<string, unknown>>) {
-  return visitElements(
-    panel,
-    (element) => element.props.className === "mt-1" && typeof element.props.open === "boolean",
-  );
-}
-
-function flushEffects(): void {
-  for (const effect of settingsSearchState.effects.splice(0)) effect();
 }
 
 async function flushPromises(): Promise<void> {
@@ -215,7 +209,10 @@ describe("EnvironmentProviderSettings routing", () => {
     (refreshButton?.props.onClick as (() => void) | undefined)?.();
     await flushPromises();
 
-    expect(commands.refresh).toHaveBeenCalledWith({ environmentId, input: {} });
+    expect(commands.refresh).toHaveBeenCalledWith({
+      environmentId,
+      input: { refreshModels: true },
+    });
 
     const providerCard = visitElements(
       panel,
@@ -230,6 +227,26 @@ describe("EnvironmentProviderSettings routing", () => {
       environmentId,
       input: { provider: ProviderDriverKind.make("codex"), instanceId: codexId },
     });
+  });
+
+  it("opens the requested provider instance instead of the first provider", () => {
+    settingsState.value = {
+      ...DEFAULT_UNIFIED_SETTINGS,
+      providerInstances: {
+        [customId]: { driver: ProviderDriverKind.make("codex"), enabled: true },
+      },
+    };
+    atoms.providers = [provider()];
+    const panel = renderPanel({ targetInstanceId: customId });
+    const editor = visitElements(panel, (element) => element.props.mode === "editor");
+    expect(editor?.props.instanceId).toBe(customId);
+  });
+
+  it("does not substitute another account when the requested instance was removed", () => {
+    atoms.providers = [provider()];
+    const panel = renderPanel({ targetInstanceId: customId });
+    expect(visitElements(panel, (element) => element.props.mode === "editor")).toBeNull();
+    expect(settingsState.updateSettings).not.toHaveBeenCalled();
   });
 
   it("keeps provider selection available while write controls are read only", () => {
@@ -331,6 +348,92 @@ describe("EnvironmentProviderSettings routing", () => {
     });
   });
 
+  it("keeps an editor change when Antigravity setup enables the instance", () => {
+    settingsState.value = {
+      ...DEFAULT_UNIFIED_SETTINGS,
+      providerInstances: {
+        [antigravityId]: {
+          driver: ProviderDriverKind.make("antigravity"),
+          enabled: false,
+          config: { authMethod: "oauth-personal" },
+        },
+      },
+    };
+    const panel = renderPanel({ targetInstanceId: antigravityId });
+    const editorCard = visitElements(
+      panel,
+      (element) => element.props.instanceId === antigravityId && element.props.mode === "editor",
+    );
+    expect(editorCard).not.toBeNull();
+
+    const editor = renderProviderCard(editorCard!);
+    const displayNameInput = visitElements(
+      editor,
+      (element) => element.props.id === `provider-instance-${antigravityId}-display-name`,
+    );
+    (displayNameInput?.props.onCommit as ((value: string) => void) | undefined)?.("Work");
+
+    const setup = visitElements(
+      editorCard?.props.setup,
+      (element) => typeof element.props.onEnable === "function",
+    );
+    (setup?.props.onEnable as (() => void) | undefined)?.();
+
+    expect(settingsState.updateSettings.mock.lastCall?.[0]).toMatchObject({
+      providerInstances: {
+        [antigravityId]: {
+          driver: ProviderDriverKind.make("antigravity"),
+          enabled: true,
+          displayName: "Work",
+          config: { authMethod: "oauth-personal" },
+        },
+      },
+    });
+  });
+
+  it("keeps setup enablement when the Antigravity editor changes next", () => {
+    settingsState.value = {
+      ...DEFAULT_UNIFIED_SETTINGS,
+      providerInstances: {
+        [antigravityId]: {
+          driver: ProviderDriverKind.make("antigravity"),
+          enabled: false,
+          config: { authMethod: "oauth-personal" },
+        },
+      },
+    };
+    const panel = renderPanel({ targetInstanceId: antigravityId });
+    const editorCard = visitElements(
+      panel,
+      (element) => element.props.instanceId === antigravityId && element.props.mode === "editor",
+    );
+    expect(editorCard).not.toBeNull();
+
+    const setup = visitElements(
+      editorCard?.props.setup,
+      (element) => typeof element.props.onEnable === "function",
+    );
+    (setup?.props.onEnable as (() => void) | undefined)?.();
+
+    const editor = renderProviderCard(editorCard!);
+    const displayNameInput = visitElements(
+      editor,
+      (element) => element.props.id === `provider-instance-${antigravityId}-display-name`,
+    );
+    (displayNameInput?.props.onCommit as ((value: string) => void) | undefined)?.("Work");
+
+    expect(settingsState.updateSettings.mock.lastCall?.[0]).toMatchObject({
+      providerInstances: {
+        [antigravityId]: {
+          driver: ProviderDriverKind.make("antigravity"),
+          enabled: true,
+          displayName: "Work",
+          config: { authMethod: "oauth-personal" },
+        },
+      },
+    });
+  });
+
   it("keeps model and usage-source editors inside the read-only inert boundary", () => {
     settingsState.value = {
       ...DEFAULT_UNIFIED_SETTINGS,
@@ -413,15 +516,19 @@ describe("EnvironmentProviderSettings routing", () => {
     ).toBeNull();
   });
 
-  it("opens Advanced when search targets the provider health interval", () => {
-    settingsSearchState.targetId = "provider-health-check-interval";
+  it("keeps Advanced visible when search targets the provider health interval", () => {
     let panel = renderPanel();
+    expect(visitElements(panel, (element) => element.props.title === "Advanced")).not.toBeNull();
+    expect(
+      visitElements(panel, (element) => element.props.id === "provider-health-check-interval"),
+    ).not.toBeNull();
 
-    expect(findAdvancedPanel(panel)?.props.open).toBe(false);
-    flushEffects();
-
+    settingsSearchState.targetId = "provider-health-check-interval";
     panel = renderPanel();
-    expect(findAdvancedPanel(panel)?.props.open).toBe(true);
+    expect(visitElements(panel, (element) => element.props.title === "Advanced")).not.toBeNull();
+    expect(
+      visitElements(panel, (element) => element.props.id === "provider-health-check-interval"),
+    ).not.toBeNull();
   });
 
   it("deletes and resets provider configuration without erasing shared preferences", () => {

@@ -121,6 +121,7 @@ function createProviderServiceHarness() {
     startSession: () => unsupported(),
     forkConversation: () => unsupported(),
     sendTurn: () => unsupported(),
+    compactThread: () => unsupported(),
     interruptTurn: () => unsupported(),
     respondToRequest: () => unsupported(),
     respondToUserInput: () => unsupported(),
@@ -128,6 +129,7 @@ function createProviderServiceHarness() {
     stopSessionIfUnchanged: () => Effect.succeed(false),
     listSessions: () => Effect.succeed([...runtimeSessions]),
     getCapabilities: () => Effect.succeed({ sessionModelSwitch: "in-session" }),
+    assertConversationRollbackSupported: () => unsupported(),
     getInstanceInfo: (instanceId) => {
       const driverKind = ProviderDriverKind.make(String(instanceId));
       return Effect.succeed({
@@ -2598,6 +2600,56 @@ describe("ProviderRuntimeIngestion", () => {
     expect(message?.streaming).toBe(false);
   });
 
+  it("keeps streaming while an async question is pending", async () => {
+    const harness = await createHarness({ serverSettings: { enableLegacyTokenStreaming: true } });
+    const base = {
+      provider: ProviderDriverKind.make("codex"),
+      createdAt: "2026-01-01T00:00:00.000Z",
+      threadId: asThreadId("thread-1"),
+      turnId: asTurnId("turn-async"),
+    };
+    harness.emit({ ...base, type: "turn.started", eventId: asEventId("async-start") });
+    harness.emit({
+      ...base,
+      type: "content.delta",
+      eventId: asEventId("async-before"),
+      itemId: asItemId("message-1"),
+      payload: { streamKind: "assistant_text", delta: "Before. " },
+    });
+    harness.emit({
+      ...base,
+      type: "user-input.requested",
+      eventId: asEventId("async-request"),
+      requestId: ApprovalRequestId.make("codex-async:question-1"),
+      payload: {
+        responseMode: "message",
+        questions: [
+          {
+            id: "0",
+            header: "Question",
+            question: "Which name?",
+            options: [],
+            allowCustomAnswer: true,
+          },
+        ],
+      },
+    });
+    harness.emit({
+      ...base,
+      type: "content.delta",
+      eventId: asEventId("async-after"),
+      itemId: asItemId("message-1"),
+      payload: { streamKind: "assistant_text", delta: "After." },
+    });
+    await harness.drain();
+    const thread = (await harness.readModel()).threads[0];
+    expect(thread?.session?.status).toBe("running");
+    expect(thread?.messages).toMatchObject([{ text: "Before. After.", streaming: true }]);
+    expect(
+      thread?.activities.find((activity) => activity.kind === "user-input.requested")?.payload,
+    ).toMatchObject({ responseMode: "message", requestId: "codex-async:question-1" });
+  });
+
   it("does not create assistant segments for whitespace-only buffered text at approval boundaries", async () => {
     const harness = await createHarness();
     const startedAt = "2026-03-28T06:28:00.000Z";
@@ -3358,6 +3410,16 @@ describe("ProviderRuntimeIngestion", () => {
         itemType: "command_execution",
         status: "inProgress",
         title: "Command run",
+        toolSurface: "computer",
+        toolIcon: {
+          _tag: "native-app",
+          app: { _tag: "app-id", appId: "com.apple.Terminal" },
+        },
+        toolSource: {
+          key: "native-app:com.apple.terminal",
+          name: "Terminal",
+          kind: "computer",
+        },
         detail: "Bash: vp test run",
         data: {
           toolName: "Bash",
@@ -3385,6 +3447,17 @@ describe("ProviderRuntimeIngestion", () => {
       itemType: "command_execution",
       toolCallId: "tool-call-9",
       status: "inProgress",
+      title: "Command run",
+      toolSurface: "computer",
+      toolIcon: {
+        _tag: "native-app",
+        app: { _tag: "app-id", appId: "com.apple.Terminal" },
+      },
+      toolSource: {
+        key: "native-app:com.apple.terminal",
+        name: "Terminal",
+        kind: "computer",
+      },
       detail: "Bash: vp test run",
       data: {
         toolName: "Bash",
@@ -3745,6 +3818,44 @@ describe("ProviderRuntimeIngestion", () => {
       lastUsedTokens: 1075,
       compactsAutomatically: true,
     });
+  });
+
+  it("projects no rate-limit activity for a typed-only event", async () => {
+    const harness = await createHarness();
+    const now = "2026-01-01T00:00:00.000Z";
+
+    // The typed half feeds the provider snapshot; the activity exists for the
+    // raw payload clients normalize, so a typed-only event has nothing to show.
+    harness.emit({
+      type: "account.rate-limits.updated",
+      eventId: asEventId("evt-typed-only-rate-limits"),
+      provider: ProviderDriverKind.make("codex"),
+      providerInstanceId: ProviderInstanceId.make("codex-work"),
+      createdAt: now,
+      threadId: asThreadId("thread-1"),
+      payload: { limits: { windows: [] } },
+    });
+    harness.emit({
+      type: "account.rate-limits.updated",
+      eventId: asEventId("evt-raw-after-typed-only"),
+      provider: ProviderDriverKind.make("codex"),
+      providerInstanceId: ProviderInstanceId.make("codex-work"),
+      createdAt: "2026-01-01T00:00:01.000Z",
+      threadId: asThreadId("thread-1"),
+      payload: { rateLimits: { rateLimits: { limitId: "codex", primary: null, secondary: null } } },
+    });
+
+    const thread = await waitForThread(harness.readModel, (entry) =>
+      entry.activities.some(
+        (activity: ProviderRuntimeTestActivity) => activity.kind === "account.rate-limits.updated",
+      ),
+    );
+    const rateLimitActivities = thread.activities.filter(
+      (activity: ProviderRuntimeTestActivity) => activity.kind === "account.rate-limits.updated",
+    );
+    expect(rateLimitActivities.map((activity) => activity.id)).toEqual([
+      "evt-raw-after-typed-only",
+    ]);
   });
 
   it("projects account rate-limit updates into thread activities with the raw payload", async () => {
@@ -4158,10 +4269,55 @@ describe("ProviderRuntimeIngestion", () => {
     const harness = await createHarness();
     const now = "2026-01-01T00:00:00.000Z";
 
+    const compactCommand = {
+      type: "thread.turn.start",
+      commandId: CommandId.make("cmd-thread-compact"),
+      threadId: asThreadId("thread-1"),
+      message: {
+        messageId: asMessageId("message-compact"),
+        role: "user",
+        text: "/compact",
+        attachments: [],
+      },
+      interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
+      runtimeMode: "approval-required",
+      createdAt: now,
+    } satisfies OrchestrationCommand;
+    await harness.dispatch(compactCommand);
+    harness.emit({
+      type: "session.state.changed",
+      eventId: asEventId("evt-session-starting-compact"),
+      provider: ProviderDriverKind.make("codex"),
+      providerInstanceId: ProviderInstanceId.make("codex"),
+      createdAt: now,
+      threadId: asThreadId("thread-1"),
+      payload: { state: "starting" },
+    });
+    await waitForThread(harness.readModel, (entry) => entry.session?.status === "starting");
+
+    for (const [index, usedTokens] of [899_000, 0].entries()) {
+      harness.emit({
+        type: "thread.token-usage.updated",
+        eventId: asEventId(`evt-thread-token-usage-${index}`),
+        provider: ProviderDriverKind.make("codex"),
+        createdAt: now,
+        threadId: asThreadId("thread-1"),
+        payload: { usage: { usedTokens } },
+      });
+    }
+    await waitForThread(
+      harness.readModel,
+      (entry) =>
+        entry.activities.filter(
+          (activity: ProviderRuntimeTestActivity) => activity.kind === "context-window.updated",
+        ).length === 2,
+    );
+
     harness.emit({
       type: "thread.state.changed",
       eventId: asEventId("evt-thread-compacted"),
       provider: ProviderDriverKind.make("codex"),
+      providerInstanceId: ProviderInstanceId.make("codex"),
       createdAt: now,
       threadId: asThreadId("thread-1"),
       turnId: asTurnId("turn-1"),
@@ -4173,15 +4329,16 @@ describe("ProviderRuntimeIngestion", () => {
 
     const thread = await waitForThread(harness.readModel, (entry) =>
       entry.activities.some(
-        (activity: ProviderRuntimeTestActivity) => activity.kind === "context-compaction",
+        (activity: ProviderRuntimeTestActivity) => activity.id === "evt-thread-compacted",
       ),
     );
 
     const activity = thread.activities.find(
-      (candidate: ProviderRuntimeTestActivity) => candidate.kind === "context-compaction",
+      (candidate: ProviderRuntimeTestActivity) => candidate.id === "evt-thread-compacted",
     );
-    expect(activity?.summary).toBe("Context compacted");
+    expect(activity?.summary).toBe("Compacted context 899K → 0 tokens");
     expect(activity?.tone).toBe("info");
+    expect(activity?.payload).toMatchObject({ requestId: "message-compact" });
   });
 
   it("excludes synthesized workflow member rows from background liveness", async () => {

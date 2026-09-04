@@ -1,4 +1,5 @@
 import {
+  ApprovalRequestId,
   ChatAttachment,
   CheckpointRef,
   CommandId,
@@ -19,6 +20,7 @@ import {
   OrchestrationThreadDetailSnapshot,
   OrchestrationThreadMessagePage,
   ProjectScript,
+  ProjectIconOverride,
   RepositoryIdentity,
   TurnId,
   type OrchestrationCheckpointSummary,
@@ -113,6 +115,7 @@ const ProjectionProjectDbRowSchema = ProjectionProject.mapFields(
     defaultModelSelection: Schema.NullOr(Schema.fromJsonString(ModelSelection)),
     repositoryIdentity: Schema.NullOr(Schema.fromJsonString(RepositoryIdentity)),
     autoPull: Schema.Number,
+    projectIcon: Schema.NullOr(Schema.fromJsonString(ProjectIconOverride)),
     scripts: Schema.fromJsonString(Schema.Array(ProjectScript)),
   }),
 );
@@ -145,6 +148,7 @@ const ProjectionThreadDbRowSchema = ProjectionThread.mapFields(
   Struct.assign({
     modelSelection: Schema.fromJsonString(ModelSelection),
     linkedPullRequest: Schema.NullOr(Schema.fromJsonString(ThreadLinkedPullRequest)),
+    hasPendingBlockingUserInput: Schema.Number,
   }),
 );
 const ProjectionThreadActivityDbRowSchema = ProjectionThreadActivity.mapFields(
@@ -431,6 +435,7 @@ function mapProjectShellRow(
     defaultThreadEnvMode: row.defaultThreadEnvMode,
     autoPull: row.autoPull === 1,
     faviconPath: row.faviconPath ?? null,
+    projectIcon: row.projectIcon ?? null,
     scripts: row.scripts,
     createdAt: row.createdAt,
     updatedAt: row.updatedAt,
@@ -617,6 +622,51 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
     );
   });
 
+  const pendingBlockingUserInputColumn = sql`
+    CASE
+      WHEN projection_threads.pending_user_input_count > 0
+        AND EXISTS (
+          SELECT 1
+          FROM (
+            SELECT
+              activity.kind,
+              activity.payload_json,
+              ROW_NUMBER() OVER (
+                PARTITION BY json_extract(activity.payload_json, '$.requestId')
+                ORDER BY activity.created_at DESC, activity.activity_id DESC
+              ) AS request_order
+            FROM projection_thread_activities AS activity
+            WHERE activity.thread_id = projection_threads.thread_id
+              AND (
+                activity.kind IN ('user-input.requested', 'user-input.resolved')
+                OR (
+                  activity.kind = 'provider.user-input.respond.failed'
+                  AND (
+                    lower(COALESCE(json_extract(activity.payload_json, '$.detail'), ''))
+                      LIKE '%stale pending user-input request%'
+                    OR lower(COALESCE(json_extract(activity.payload_json, '$.detail'), ''))
+                      LIKE '%unknown pending user-input request%'
+                    OR lower(COALESCE(json_extract(activity.payload_json, '$.detail'), ''))
+                      LIKE '%unknown pending user input request%'
+                    OR lower(COALESCE(json_extract(activity.payload_json, '$.detail'), ''))
+                      LIKE '%unknown pending codex user input request%'
+                  )
+                )
+              )
+              AND json_extract(activity.payload_json, '$.requestId') IS NOT NULL
+          ) AS user_input_lifecycle
+          WHERE user_input_lifecycle.request_order = 1
+            AND user_input_lifecycle.kind = 'user-input.requested'
+            AND COALESCE(
+              json_extract(user_input_lifecycle.payload_json, '$.responseMode'),
+              ''
+            ) <> 'message'
+        )
+      THEN 1
+      ELSE 0
+    END AS "hasPendingBlockingUserInput"
+  `;
+
   const listProjectRows = SqlSchema.findAll({
     Request: Schema.Void,
     Result: ProjectionProjectDbRowSchema,
@@ -631,6 +681,7 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
           default_thread_env_mode AS "defaultThreadEnvMode",
           auto_pull AS "autoPull",
           favicon_path AS "faviconPath",
+          project_icon_json AS "projectIcon",
           scripts_json AS "scripts",
           created_at AS "createdAt",
           updated_at AS "updatedAt",
@@ -672,6 +723,7 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
           latest_user_message_at AS "latestUserMessageAt",
           pending_approval_count AS "pendingApprovalCount",
           pending_user_input_count AS "pendingUserInputCount",
+          ${pendingBlockingUserInputColumn},
           has_actionable_proposed_plan AS "hasActionableProposedPlan",
           deleted_at AS "deletedAt"
         FROM projection_threads
@@ -711,6 +763,7 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
           latest_user_message_at AS "latestUserMessageAt",
           pending_approval_count AS "pendingApprovalCount",
           pending_user_input_count AS "pendingUserInputCount",
+          ${pendingBlockingUserInputColumn},
           has_actionable_proposed_plan AS "hasActionableProposedPlan",
           deleted_at AS "deletedAt"
         FROM projection_threads
@@ -752,6 +805,7 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
           latest_user_message_at AS "latestUserMessageAt",
           pending_approval_count AS "pendingApprovalCount",
           pending_user_input_count AS "pendingUserInputCount",
+          ${pendingBlockingUserInputColumn},
           has_actionable_proposed_plan AS "hasActionableProposedPlan",
           deleted_at AS "deletedAt"
         FROM projection_threads
@@ -792,6 +846,7 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
           latest_user_message_at AS "latestUserMessageAt",
           pending_approval_count AS "pendingApprovalCount",
           pending_user_input_count AS "pendingUserInputCount",
+          ${pendingBlockingUserInputColumn},
           has_actionable_proposed_plan AS "hasActionableProposedPlan",
           deleted_at AS "deletedAt"
         FROM projection_threads
@@ -1180,6 +1235,7 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
           default_thread_env_mode AS "defaultThreadEnvMode",
           auto_pull AS "autoPull",
           favicon_path AS "faviconPath",
+          project_icon_json AS "projectIcon",
           scripts_json AS "scripts",
           created_at AS "createdAt",
           updated_at AS "updatedAt",
@@ -1206,6 +1262,7 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
           default_thread_env_mode AS "defaultThreadEnvMode",
           auto_pull AS "autoPull",
           favicon_path AS "faviconPath",
+          project_icon_json AS "projectIcon",
           scripts_json AS "scripts",
           created_at AS "createdAt",
           updated_at AS "updatedAt",
@@ -1284,6 +1341,7 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
           latest_user_message_at AS "latestUserMessageAt",
           pending_approval_count AS "pendingApprovalCount",
           pending_user_input_count AS "pendingUserInputCount",
+          ${pendingBlockingUserInputColumn},
           has_actionable_proposed_plan AS "hasActionableProposedPlan",
           deleted_at AS "deletedAt"
         FROM projection_threads
@@ -1485,6 +1543,40 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
           activity_id ASC
       `,
   });
+
+  const getUserInputActivityRow = SqlSchema.findOneOption({
+    Request: Schema.Struct({ threadId: ThreadId, requestId: ApprovalRequestId }),
+    Result: ProjectionThreadActivityDbRowSchema,
+    execute: ({ threadId, requestId }) => sql`
+      SELECT
+        activity_id AS "activityId",
+        thread_id AS "threadId",
+        turn_id AS "turnId",
+        tone,
+        kind,
+        summary,
+        payload_json AS "payload",
+        sequence,
+        created_at AS "createdAt"
+      FROM projection_thread_activities
+      WHERE thread_id = ${threadId}
+        AND kind IN ('user-input.requested', 'user-input.resolved')
+        AND json_extract(payload_json, '$.requestId') = ${requestId}
+      ORDER BY sequence DESC, created_at DESC, activity_id DESC
+      LIMIT 1
+    `,
+  });
+
+  const getUserInputActivity: ProjectionSnapshotQueryShape["getUserInputActivity"] = (input) =>
+    getUserInputActivityRow(input).pipe(
+      Effect.map(Option.map(mapThreadActivityRow)),
+      Effect.mapError(
+        toPersistenceSqlOrDecodeError(
+          "ProjectionSnapshotQuery.getUserInputActivity:query",
+          "ProjectionSnapshotQuery.getUserInputActivity:decodeRow",
+        ),
+      ),
+    );
 
   const listThreadActivityIdsByThread = SqlSchema.findAll({
     Request: ThreadIdLookupInput,
@@ -1844,7 +1936,7 @@ pending_approval_requests AS (
         )
   `;
 
-  // Blocking request payloads must remain available even if they predate the
+  // Pending request payloads must remain available even if they predate the
   // recent activity window. Each CTE returns at most one unresolved row per
   // request, so the merge below stays bounded by actionable work.
   const listPinnedThreadActivityRowsByThread = SqlSchema.findAll({
@@ -2268,6 +2360,7 @@ pending_approval_requests AS (
                 defaultThreadEnvMode: row.defaultThreadEnvMode,
                 autoPull: row.autoPull === 1,
                 faviconPath: row.faviconPath ?? null,
+                projectIcon: row.projectIcon ?? null,
                 scripts: row.scripts,
                 createdAt: row.createdAt,
                 updatedAt: row.updatedAt,
@@ -2407,6 +2500,7 @@ pending_approval_requests AS (
                   defaultThreadEnvMode: row.defaultThreadEnvMode,
                   autoPull: row.autoPull === 1,
                   faviconPath: row.faviconPath ?? null,
+                  projectIcon: row.projectIcon ?? null,
                   scripts: row.scripts,
                   createdAt: row.createdAt,
                   updatedAt: row.updatedAt,
@@ -2660,6 +2754,7 @@ pending_approval_requests AS (
                       latestUserMessageAt: row.latestUserMessageAt,
                       hasPendingApprovals: row.pendingApprovalCount > 0,
                       hasPendingUserInput: row.pendingUserInputCount > 0,
+                      hasPendingBlockingUserInput: row.hasPendingBlockingUserInput > 0,
                       hasActionableProposedPlan: row.hasActionableProposedPlan > 0,
                       backgroundLiveness: threadBackgroundLiveness.getThreadBackgroundLiveness(
                         row.threadId,
@@ -2809,6 +2904,7 @@ pending_approval_requests AS (
                 latestUserMessageAt: row.latestUserMessageAt,
                 hasPendingApprovals: row.pendingApprovalCount > 0,
                 hasPendingUserInput: row.pendingUserInputCount > 0,
+                hasPendingBlockingUserInput: row.hasPendingBlockingUserInput > 0,
                 hasActionableProposedPlan: row.hasActionableProposedPlan > 0,
                 backgroundLiveness: threadBackgroundLiveness.getThreadBackgroundLiveness(
                   row.threadId,
@@ -2939,10 +3035,14 @@ pending_approval_requests AS (
               movedToTopAt: row.movedToTopAt,
               pinnedAt: row.pinnedAt,
               titleRegeneration: mapTitleRegeneration(row),
+              ...(row.linkedPullRequest === null
+                ? {}
+                : { linkedPullRequest: row.linkedPullRequest }),
               session: Option.isSome(sessionRow) ? mapSessionRow(sessionRow.value) : null,
               latestUserMessageAt: row.latestUserMessageAt,
               hasPendingApprovals: row.pendingApprovalCount > 0,
               hasPendingUserInput: row.pendingUserInputCount > 0,
+              hasPendingBlockingUserInput: row.hasPendingBlockingUserInput > 0,
               hasActionableProposedPlan: row.hasActionableProposedPlan > 0,
             };
           });
@@ -3058,6 +3158,7 @@ pending_approval_requests AS (
                     defaultThreadEnvMode: option.value.defaultThreadEnvMode,
                     autoPull: option.value.autoPull === 1,
                     faviconPath: option.value.faviconPath ?? null,
+                    projectIcon: option.value.projectIcon ?? null,
                     scripts: option.value.scripts,
                     createdAt: option.value.createdAt,
                     updatedAt: option.value.updatedAt,
@@ -3239,6 +3340,7 @@ pending_approval_requests AS (
         latestUserMessageAt: threadRow.value.latestUserMessageAt,
         hasPendingApprovals: threadRow.value.pendingApprovalCount > 0,
         hasPendingUserInput: threadRow.value.pendingUserInputCount > 0,
+        hasPendingBlockingUserInput: threadRow.value.hasPendingBlockingUserInput > 0,
         hasActionableProposedPlan: threadRow.value.hasActionableProposedPlan > 0,
         backgroundLiveness: threadBackgroundLiveness.getThreadBackgroundLiveness(
           threadRow.value.threadId,
@@ -3803,6 +3905,7 @@ pending_approval_requests AS (
 
   return {
     getCommandReadModel,
+    getUserInputActivity,
     getSnapshot,
     getShellSnapshot,
     getArchivedShellSnapshot,

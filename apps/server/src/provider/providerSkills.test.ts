@@ -65,6 +65,7 @@ function makeInstance(
       getSnapshot: Effect.succeed(snapshot),
       refresh: Effect.succeed(snapshot),
       streamChanges: Stream.empty,
+      applyUsageLimits: () => Effect.void,
     },
     adapter: {
       listSkills,

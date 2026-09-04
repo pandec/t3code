@@ -21,6 +21,7 @@ import {
 } from "@t3tools/contracts";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import * as Clock from "effect/Clock";
+import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
 import * as Exit from "effect/Exit";
 import * as Layer from "effect/Layer";
@@ -28,6 +29,7 @@ import * as ManagedRuntime from "effect/ManagedRuntime";
 import * as PubSub from "effect/PubSub";
 import * as Scope from "effect/Scope";
 import * as Stream from "effect/Stream";
+import { it as effectIt } from "@effect/vitest";
 import { afterEach, describe, expect, it, vi } from "vite-plus/test";
 
 import * as CheckpointStore from "../../checkpointing/CheckpointStore.ts";
@@ -56,6 +58,7 @@ import {
   type ProviderServiceShape,
 } from "../../provider/Services/ProviderService.ts";
 import { checkpointRefForThreadTurn } from "../../checkpointing/Utils.ts";
+import { ProviderValidationError } from "../../provider/Errors.ts";
 import { ServerConfig } from "../../config.ts";
 import * as WorkspaceEntries from "../../workspace/WorkspaceEntries.ts";
 import * as WorkspacePaths from "../../workspace/WorkspacePaths.ts";
@@ -87,6 +90,9 @@ function createProviderServiceHarness(
   const rollbackConversation = vi.fn(
     (_input: { readonly threadId: ThreadId; readonly numTurns: number }) => Effect.void,
   );
+  const assertConversationRollbackSupported = vi.fn<
+    ProviderServiceShape["assertConversationRollbackSupported"]
+  >(() => Effect.void);
 
   const unsupported = <A>() =>
     Effect.die(new Error("Unsupported provider call in test")) as Effect.Effect<A, never>;
@@ -108,6 +114,7 @@ function createProviderServiceHarness(
     startSession: () => unsupported(),
     forkConversation: () => unsupported(),
     sendTurn: () => unsupported(),
+    compactThread: () => unsupported(),
     interruptTurn: () => unsupported(),
     respondToRequest: () => unsupported(),
     respondToUserInput: () => unsupported(),
@@ -115,6 +122,7 @@ function createProviderServiceHarness(
     stopSessionIfUnchanged: () => Effect.succeed(false),
     listSessions,
     getCapabilities: () => Effect.succeed({ sessionModelSwitch: "in-session" }),
+    assertConversationRollbackSupported,
     getInstanceInfo: (instanceId) =>
       Effect.succeed({
         instanceId,
@@ -139,6 +147,7 @@ function createProviderServiceHarness(
 
   return {
     service,
+    assertConversationRollbackSupported,
     rollbackConversation,
     emit,
   };
@@ -288,6 +297,7 @@ describe("CheckpointReactor", () => {
     readonly providerSessionCwd?: string;
     readonly providerName?: ProviderDriverKind;
     readonly gitStatusRefreshCalls?: Array<string>;
+    readonly pullRequestRefreshCalls?: Array<string>;
   }) {
     const cwd = createGitRepository();
     tempDirs.push(cwd);
@@ -326,7 +336,8 @@ describe("CheckpointReactor", () => {
           Effect.as({
             isRepo: true,
             hasPrimaryRemote: false,
-            isDefaultRef: true,
+            isDefaultRef:
+              options?.localStatusRefName === undefined || options.localStatusRefName === "main",
             refName:
               options?.localStatusRefName !== undefined ? options.localStatusRefName : "main",
             hasWorkingTreeChanges: false,
@@ -334,6 +345,10 @@ describe("CheckpointReactor", () => {
           }),
         ),
       refreshStatus: () => Effect.die("refreshStatus should not be called in this test"),
+      refreshPullRequestStatus: (cwd: string) =>
+        Effect.sync(() => {
+          options?.pullRequestRefreshCalls?.push(cwd);
+        }).pipe(Effect.as(null)),
       streamStatus: () => Stream.empty,
     });
 
@@ -554,6 +569,78 @@ describe("CheckpointReactor", () => {
     expect(gitStatusRefreshCalls).toEqual([harness.cwd]);
   });
 
+  it("re-asks for the pull request at turn end when the thread branch is checked out", async () => {
+    const pullRequestRefreshCalls: string[] = [];
+    const harness = await createHarness({
+      seedFilesystemCheckpoints: false,
+      threadBranch: "t3code/feature",
+      localStatusRefName: "t3code/feature",
+      pullRequestRefreshCalls,
+    });
+
+    harness.provider.emit({
+      type: "turn.completed",
+      eventId: EventId.make("evt-turn-completed-refresh-pr"),
+      provider: ProviderDriverKind.make("codex"),
+      createdAt: "2026-01-01T00:00:00.000Z",
+      threadId: ThreadId.make("thread-1"),
+      turnId: asTurnId("turn-refresh-pr"),
+      payload: { state: "completed" },
+    });
+
+    await harness.drain();
+
+    expect(pullRequestRefreshCalls).toEqual([harness.cwd]);
+  });
+
+  it("re-asks for the pull request after adopting a drifted checkout", async () => {
+    const pullRequestRefreshCalls: string[] = [];
+    const harness = await createHarness({
+      seedFilesystemCheckpoints: false,
+      threadBranch: "t3code/original-branch",
+      localStatusRefName: "t3code/renamed-by-agent",
+      pullRequestRefreshCalls,
+    });
+
+    harness.provider.emit({
+      type: "turn.completed",
+      eventId: EventId.make("evt-turn-completed-drift-pr"),
+      provider: ProviderDriverKind.make("codex"),
+      createdAt: "2026-01-01T00:00:00.000Z",
+      threadId: ThreadId.make("thread-1"),
+      turnId: asTurnId("turn-drift-pr"),
+      payload: { state: "completed" },
+    });
+
+    await harness.drain();
+
+    expect(pullRequestRefreshCalls).toEqual([harness.cwd]);
+  });
+
+  it("does not re-ask for the pull request at turn end on the default branch", async () => {
+    const pullRequestRefreshCalls: string[] = [];
+    const harness = await createHarness({
+      seedFilesystemCheckpoints: false,
+      threadBranch: "main",
+      localStatusRefName: "main",
+      pullRequestRefreshCalls,
+    });
+
+    harness.provider.emit({
+      type: "turn.completed",
+      eventId: EventId.make("evt-turn-completed-no-pr-refresh"),
+      provider: ProviderDriverKind.make("codex"),
+      createdAt: "2026-01-01T00:00:00.000Z",
+      threadId: ThreadId.make("thread-1"),
+      turnId: asTurnId("turn-no-pr-refresh"),
+      payload: { state: "completed" },
+    });
+
+    await harness.drain();
+
+    expect(pullRequestRefreshCalls).toEqual([]);
+  });
+
   it("adopts a drifted checkout as the thread branch on a dedicated worktree", async () => {
     const harness = await createHarness({
       seedFilesystemCheckpoints: false,
@@ -586,11 +673,13 @@ describe("CheckpointReactor", () => {
   });
 
   it("does not adopt a drifted checkout when the worktree is shared by another thread", async () => {
+    const pullRequestRefreshCalls: string[] = [];
     const harness = await createHarness({
       seedFilesystemCheckpoints: false,
       threadBranch: "t3code/original-branch",
       localStatusRefName: "t3code/renamed-by-agent",
       secondThreadSharingWorktree: true,
+      pullRequestRefreshCalls,
     });
 
     harness.provider.emit({
@@ -608,6 +697,7 @@ describe("CheckpointReactor", () => {
     const snapshot = await harness.readModel();
     const thread = snapshot.threads.find((entry) => entry.id === ThreadId.make("thread-1"));
     expect(thread?.branch).toBe("t3code/original-branch");
+    expect(pullRequestRefreshCalls).toEqual([]);
   });
 
   it("does not adopt a temporary placeholder checkout as the thread branch", async () => {
@@ -635,7 +725,13 @@ describe("CheckpointReactor", () => {
   });
 
   it("ignores auxiliary thread turn completion while primary turn is active", async () => {
-    const harness = await createHarness({ seedFilesystemCheckpoints: false });
+    const pullRequestRefreshCalls: string[] = [];
+    const harness = await createHarness({
+      seedFilesystemCheckpoints: false,
+      threadBranch: "t3code/feature",
+      localStatusRefName: "t3code/feature",
+      pullRequestRefreshCalls,
+    });
     const createdAt = "2026-01-01T00:00:00.000Z";
 
     await Effect.runPromise(
@@ -687,6 +783,7 @@ describe("CheckpointReactor", () => {
     const midReadModel = await harness.readModel();
     const midThread = midReadModel.threads.find((entry) => entry.id === ThreadId.make("thread-1"));
     expect(midThread?.checkpoints).toHaveLength(0);
+    expect(pullRequestRefreshCalls).toEqual([]);
 
     harness.provider.emit({
       type: "turn.completed",
@@ -704,6 +801,8 @@ describe("CheckpointReactor", () => {
       (entry) => entry.latestTurn?.turnId === "turn-main" && entry.checkpoints.length === 1,
     );
     expect(thread.checkpoints[0]?.checkpointTurnCount).toBe(1);
+    await harness.drain();
+    expect(pullRequestRefreshCalls).toEqual([harness.cwd]);
   });
 
   it("captures pre-turn and completion checkpoints for claude runtime events", async () => {
@@ -1003,6 +1102,89 @@ describe("CheckpointReactor", () => {
       gitRefExists(harness.cwd, checkpointRefForThreadTurn(ThreadId.make("thread-1"), 0)),
     ).toBe(true);
   });
+
+  effectIt.effect("rejects unsupported rewind before changing files, checkpoints, or history", () =>
+    Effect.gen(function* () {
+      const harness = yield* Effect.promise(() =>
+        createHarness({ providerName: ProviderDriverKind.make("antigravity") }),
+      );
+      const threadId = ThreadId.make("thread-1");
+      const createdAt = "2026-01-01T00:00:00.000Z";
+      const checked = yield* Deferred.make<void>();
+      harness.provider.assertConversationRollbackSupported.mockImplementation(() =>
+        Deferred.succeed(checked, undefined).pipe(
+          Effect.andThen(
+            Effect.fail(
+              new ProviderValidationError({
+                operation: "ProviderService.assertConversationRollbackSupported",
+                issue: "Provider 'antigravity' does not support conversation rewind.",
+              }),
+            ),
+          ),
+        ),
+      );
+
+      for (const turnCount of [1, 2]) {
+        yield* harness.engine.dispatch({
+          type: "thread.turn.start",
+          commandId: CommandId.make(`cmd-unsupported-rewind-message-${turnCount}`),
+          threadId,
+          message: {
+            messageId: MessageId.make(`message-unsupported-rewind-${turnCount}`),
+            role: "user",
+            text: `Keep message ${turnCount}`,
+            attachments: [],
+          },
+          interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
+          runtimeMode: "approval-required",
+          createdAt,
+        });
+        yield* harness.engine.dispatch({
+          type: "thread.turn.diff.complete",
+          commandId: CommandId.make(`cmd-unsupported-rewind-diff-${turnCount}`),
+          threadId,
+          turnId: asTurnId(`turn-unsupported-rewind-${turnCount}`),
+          completedAt: createdAt,
+          checkpointRef: checkpointRefForThreadTurn(threadId, turnCount),
+          status: "ready",
+          files: [],
+          checkpointTurnCount: turnCount,
+          createdAt,
+        });
+      }
+      const before = (yield* Effect.promise(() => harness.readModel())).threads.find(
+        (thread) => thread.id === threadId,
+      );
+
+      yield* harness.engine.dispatch({
+        type: "thread.checkpoint.revert",
+        commandId: CommandId.make("cmd-unsupported-rewind"),
+        threadId,
+        turnCount: 1,
+        createdAt,
+      });
+      yield* Deferred.await(checked);
+      yield* Effect.promise(() => harness.drain());
+
+      const after = (yield* Effect.promise(() => harness.readModel())).threads.find(
+        (thread) => thread.id === threadId,
+      );
+      expect(after?.checkpoints).toEqual(before?.checkpoints);
+      expect(after?.messages).toEqual(before?.messages);
+      expect(after?.latestTurn).toEqual(before?.latestTurn);
+      expect(after?.activities).toContainEqual(
+        expect.objectContaining({
+          kind: "checkpoint.revert.failed",
+          payload: expect.objectContaining({
+            detail: expect.stringContaining("does not support conversation rewind"),
+          }),
+        }),
+      );
+      expect(harness.provider.rollbackConversation).not.toHaveBeenCalled();
+      expect(NodeFS.readFileSync(NodePath.join(harness.cwd, "README.md"), "utf8")).toBe("v3\n");
+      expect(gitRefExists(harness.cwd, checkpointRefForThreadTurn(threadId, 2))).toBe(true);
+    }),
+  );
 
   it("executes provider revert and emits thread.reverted for checkpoint revert requests", async () => {
     const harness = await createHarness();

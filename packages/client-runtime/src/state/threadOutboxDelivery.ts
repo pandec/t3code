@@ -21,10 +21,12 @@ import type {
 } from "./threadCommands.ts";
 import {
   modelSelectionsEqual,
+  queueFlushBatchIds,
   resolveQueuedThreadSettings,
   resolveThreadOutboxFailureAction,
   type QueuedThreadMessage,
   type ThreadOutboxCommandStage,
+  type ThreadOutboxDeliveryAction,
   type ThreadSettingsSnapshot,
 } from "./threadOutboxModel.ts";
 import type { AtomCommandResult } from "./runtime.ts";
@@ -54,6 +56,12 @@ export interface ThreadOutboxDeliveryContext {
   readonly latestTurnId: TurnId | null;
 }
 
+export type ThreadOutboxDispatchResult =
+  | { readonly outcome: "delivered"; readonly context: ThreadOutboxDeliveryContext }
+  | { readonly outcome: "deferred" }
+  | { readonly outcome: "removed" }
+  | { readonly outcome: "failed" };
+
 const IDLE_DELIVERY_CONTEXT: ThreadOutboxDeliveryContext = {
   sessionBaselineKnown: false,
   sessionStatus: null,
@@ -61,10 +69,28 @@ const IDLE_DELIVERY_CONTEXT: ThreadOutboxDeliveryContext = {
   latestTurnId: null,
 };
 
+export function threadOutboxFlushBatchIds(
+  messages: ReadonlyArray<Pick<QueuedThreadMessage, "messageId" | "creation" | "deliveryIntent">>,
+  dispatchedMessage: Pick<QueuedThreadMessage, "messageId" | "creation">,
+  input: {
+    readonly result: ThreadOutboxDispatchResult;
+    readonly action: Exclude<ThreadOutboxDeliveryAction, "wait">;
+  },
+): ReadonlySet<QueuedThreadMessage["messageId"]> {
+  if (input.result.outcome !== "delivered") {
+    return new Set();
+  }
+  return queueFlushBatchIds(messages, dispatchedMessage, {
+    delivered: true,
+    action: input.action,
+    threadStatus: input.result.context.sessionStatus,
+  });
+}
+
 export interface ThreadOutboxDeliveryOptions {
   readonly commands: ThreadOutboxDeliveryCommands;
   /** Removes a delivered message from the queue; rejections are reported, not thrown. */
-  readonly removeQueuedMessage: (message: QueuedThreadMessage) => Promise<unknown>;
+  readonly removeQueuedMessage: (message: QueuedThreadMessage) => Promise<boolean>;
   /** Fires after startTurn is accepted, before queue cleanup or projection catch-up. */
   readonly onStartTurnAccepted?: (
     message: QueuedThreadMessage,
@@ -116,7 +142,7 @@ function toStartTurnAttachments(
  * The single send pipeline for queued messages: settings sync, then startTurn,
  * then queue cleanup. Shared by every platform's drain so delivery semantics
  * cannot diverge. Callers own the dispatch slot and any retry policy; the
- * returned boolean is "delivered and cleaned up" — false means retry later.
+ * returned result separates delivery, deferral, removal, and retryable failure.
  */
 export function createThreadOutboxDelivery(options: ThreadOutboxDeliveryOptions) {
   const warn = options.warn;
@@ -147,13 +173,18 @@ export function createThreadOutboxDelivery(options: ThreadOutboxDeliveryOptions)
     };
     const completeDelivery = async (
       deliveryResult: AtomCommandResult<unknown, unknown>,
-    ): Promise<boolean> => {
-      if (reportFailure(deliveryResult, "start-turn")) {
-        return false;
+      context: ThreadOutboxDeliveryContext,
+    ): Promise<ThreadOutboxDispatchResult> => {
+      if (AsyncResult.isFailure(deliveryResult)) {
+        reportFailure(deliveryResult, "start-turn");
+        return { outcome: "failed" };
       }
 
       try {
-        await options.removeQueuedMessage(queuedMessage);
+        const removed = await options.removeQueuedMessage(queuedMessage);
+        if (!removed) {
+          return { outcome: "deferred" };
+        }
       } catch (error) {
         warn("[thread-outbox] failed to remove delivered queued message", {
           environmentId: queuedMessage.environmentId,
@@ -161,9 +192,9 @@ export function createThreadOutboxDelivery(options: ThreadOutboxDeliveryOptions)
           messageId: queuedMessage.messageId,
           error,
         });
-        return false;
+        return { outcome: "failed" };
       }
-      return true;
+      return { outcome: "delivered", context };
     };
     return { reportFailure, completeDelivery };
   };
@@ -172,7 +203,7 @@ export function createThreadOutboxDelivery(options: ThreadOutboxDeliveryOptions)
     queuedMessage: QueuedThreadMessage,
     thread: ThreadSettingsSnapshot,
     context: ThreadOutboxDeliveryContext = IDLE_DELIVERY_CONTEXT,
-  ): Promise<boolean> => {
+  ): Promise<ThreadOutboxDispatchResult> => {
     const settings = resolveQueuedThreadSettings(queuedMessage, thread);
     const { reportFailure, completeDelivery } = makeDeliveryHelpers(queuedMessage);
 
@@ -192,7 +223,7 @@ export function createThreadOutboxDelivery(options: ThreadOutboxDeliveryOptions)
       });
       if (AsyncResult.isFailure(updateResult)) {
         reportFailure(updateResult, "settings-sync");
-        return false;
+        return { outcome: "failed" };
       }
     }
     if (branchChanged) {
@@ -207,7 +238,7 @@ export function createThreadOutboxDelivery(options: ThreadOutboxDeliveryOptions)
       });
       if (AsyncResult.isFailure(updateResult)) {
         reportFailure(updateResult, "settings-sync");
-        return false;
+        return { outcome: "failed" };
       }
     }
 
@@ -223,7 +254,7 @@ export function createThreadOutboxDelivery(options: ThreadOutboxDeliveryOptions)
       });
       if (AsyncResult.isFailure(runtimeResult)) {
         reportFailure(runtimeResult, "settings-sync");
-        return false;
+        return { outcome: "failed" };
       }
     }
 
@@ -239,7 +270,7 @@ export function createThreadOutboxDelivery(options: ThreadOutboxDeliveryOptions)
       });
       if (AsyncResult.isFailure(interactionResult)) {
         reportFailure(interactionResult, "settings-sync");
-        return false;
+        return { outcome: "failed" };
       }
     }
 
@@ -250,7 +281,7 @@ export function createThreadOutboxDelivery(options: ThreadOutboxDeliveryOptions)
         threadId: queuedMessage.threadId,
         messageId: queuedMessage.messageId,
       });
-      return false;
+      return { outcome: "failed" };
     }
 
     const deliveryResult = await options.commands.startTurn({
@@ -285,8 +316,8 @@ export function createThreadOutboxDelivery(options: ThreadOutboxDeliveryOptions)
         });
       }
     }
-    const delivered = await completeDelivery(deliveryResult);
-    if (delivered) {
+    const result = await completeDelivery(deliveryResult, context);
+    if (result.outcome === "delivered") {
       try {
         options.onDelivered?.(queuedMessage, thread, context);
       } catch (error) {
@@ -298,7 +329,7 @@ export function createThreadOutboxDelivery(options: ThreadOutboxDeliveryOptions)
         });
       }
     }
-    return delivered;
+    return result;
   };
 
   return { makeDeliveryHelpers, sendQueuedMessage };

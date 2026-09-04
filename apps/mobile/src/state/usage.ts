@@ -15,6 +15,7 @@ import {
   type EnvironmentId,
   type UsageSummaryInput,
 } from "@t3tools/contracts";
+import { runAtomCommand } from "@t3tools/client-runtime/state/runtime";
 import { mergeUsage, type EnvironmentUsage, type MergedUsage } from "@t3tools/shared/usageMerge";
 import * as Option from "effect/Option";
 import { AsyncResult, Atom } from "effect/unstable/reactivity";
@@ -105,11 +106,29 @@ export function useUsage(input: UsageSummaryInput): UsageView {
   // Refreshing only the derived atom would re-read the per-environment SWR
   // queries within their stale window and change nothing. Refresh each
   // environment's query so pull-to-refresh always rescans.
+  //
+  // Each environment refetches model pricing first, so a model released since
+  // its last daily fetch gets priced by the rescan. The rescan runs whether or
+  // not the refetch succeeds: an offline environment still recounts tokens.
   const refresh = useCallback(() => {
     const input = JSON.parse(windowKey) as UsageSummaryInput;
     for (const environment of environments) {
-      appAtomRegistry.refresh(
-        serverEnvironment.usageSummary({ environmentId: environment.environmentId, input }),
+      const { environmentId } = environment;
+      const query = serverEnvironment.usageSummary({ environmentId, input });
+      void runAtomCommand(
+        appAtomRegistry,
+        serverEnvironment.refreshUsageRates,
+        { environmentId, input: {} },
+        { reportFailure: false },
+      ).finally(() => appAtomRegistry.refresh(query));
+      // The Limits section on the same screen reads provider quota snapshots,
+      // which the transcript rescan above never touches (web refreshes them
+      // explicitly on its Limits tab).
+      void runAtomCommand(
+        appAtomRegistry,
+        serverEnvironment.refreshProviders,
+        { environmentId, input: {} },
+        { reportFailure: false },
       );
     }
   }, [environments, windowKey]);

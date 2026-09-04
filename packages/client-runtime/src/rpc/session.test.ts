@@ -726,7 +726,9 @@ describe("RpcSessionFactory", () => {
           const registry = EnvironmentRegistry.EnvironmentRegistry.of({
             entries: yield* SubscriptionRef.make(new Map()),
           } as unknown as EnvironmentRegistry.EnvironmentRegistry["Service"]);
-          const configState = yield* makeEnvironmentServerConfigState(true).pipe(
+          const configState = yield* makeEnvironmentServerConfigState({
+            environmentThemes: true,
+          }).pipe(
             Effect.provideService(EnvironmentSupervisor.EnvironmentSupervisor, supervisor),
             Effect.provideService(EnvironmentRegistry.EnvironmentRegistry, registry),
             Effect.provideService(Persistence.EnvironmentCacheStore, cache),

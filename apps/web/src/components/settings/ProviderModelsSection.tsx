@@ -228,6 +228,7 @@ export function ProviderModelsSection({
   }, [displayModels]);
 
   const handleAdd = () => {
+    if (driverKind === "antigravity") return;
     const parsed = parseCustomModelEntry(input);
     if (!parsed) {
       setError("Enter a model slug.");
@@ -542,7 +543,7 @@ export function ProviderModelsSection({
         })}
       </div>
 
-      {isAdding ? (
+      {driverKind === "antigravity" ? null : isAdding ? (
         <div className="mt-3 flex flex-col gap-2 sm:flex-row">
           <Input
             id={`provider-instance-${instanceId}-custom-model`}
@@ -588,11 +589,15 @@ export function ProviderModelsSection({
         </Button>
       )}
 
-      <p className="mt-2 text-xs text-muted-foreground">
-        Append <code className="text-[11px]">=Label</code> to show a custom display name.
-      </p>
+      {driverKind !== "antigravity" ? (
+        <p className="mt-2 text-xs text-muted-foreground">
+          Append <code className="text-[11px]">=Label</code> to show a custom display name.
+        </p>
+      ) : null}
 
-      {error ? <p className="mt-2 text-xs text-destructive">{error}</p> : null}
+      {driverKind !== "antigravity" && error ? (
+        <p className="mt-2 text-xs text-destructive">{error}</p>
+      ) : null}
     </div>
   );
 }

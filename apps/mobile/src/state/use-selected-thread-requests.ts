@@ -68,27 +68,30 @@ export function useSelectedThreadRequests() {
     : null;
 
   const onSelectUserInputOption = useCallback(
-    (requestId: ApprovalRequestId, question: UserInputQuestion, label: string) => {
+    (requestId: ApprovalRequestId, question: UserInputQuestion, value: string) => {
       if (!selectedThreadShell) {
         return;
       }
 
       const requestKey = scopedRequestKey(selectedThreadShell.environmentId, requestId);
-      setUserInputDraftOption(requestKey, question, label);
+      setUserInputDraftOption(requestKey, question, value);
     },
     [selectedThreadShell],
   );
 
   const onChangeUserInputCustomAnswer = useCallback(
     (requestId: ApprovalRequestId, questionId: string, customAnswer: string) => {
-      if (!selectedThreadShell) {
+      const question = activePendingUserInputs
+        .find((request) => request.requestId === requestId)
+        ?.questions.find((entry) => entry.id === questionId);
+      if (!selectedThreadShell || !question) {
         return;
       }
 
       const requestKey = scopedRequestKey(selectedThreadShell.environmentId, requestId);
-      setUserInputDraftCustomAnswer(requestKey, questionId, customAnswer);
+      setUserInputDraftCustomAnswer(requestKey, question, customAnswer);
     },
-    [selectedThreadShell],
+    [activePendingUserInputs, selectedThreadShell],
   );
 
   const onRespondToApproval = useCallback(

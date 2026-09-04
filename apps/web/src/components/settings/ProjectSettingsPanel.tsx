@@ -15,6 +15,7 @@ import {
 import type {
   ContextMenuItem,
   ModelSelection,
+  ProjectIconOverride,
   ProviderDriverKind,
   SidebarProjectAccentColor,
   SidebarProjectGroupingMode,
@@ -36,6 +37,8 @@ import {
   Trash2Icon,
 } from "lucide-react";
 import {
+  lazy,
+  Suspense,
   useCallback,
   useEffect,
   useMemo,
@@ -132,6 +135,12 @@ import {
 } from "./ProjectFaviconPickerDialog";
 import { ProviderAccentColorPicker } from "./ProviderAccentColorPicker";
 import { projectGroupTitleNeedsUpdate } from "./ProjectSettingsPanel.logic";
+
+const ProjectIconPickerDialog = lazy(() =>
+  import("./ProjectIconPickerDialog").then((module) => ({
+    default: module.ProjectIconPickerDialog,
+  })),
+);
 
 export const PROJECT_GROUPING_MODE_LABELS: Record<SidebarProjectGroupingMode, string> = {
   repository: "Group by repository",
@@ -350,6 +359,7 @@ function ProjectDetail({ group }: { group: SidebarProjectSnapshot }) {
   });
 
   const faviconPath = representative.faviconPath ?? null;
+  const projectIcon = representative.projectIcon ?? null;
   const pickProjectFavicon =
     typeof window !== "undefined" &&
     group.memberProjects.every(
@@ -427,6 +437,7 @@ function ProjectDetail({ group }: { group: SidebarProjectSnapshot }) {
         defaultThreadEnvMode: ThreadEnvMode | null;
         autoPull: boolean;
         faviconPath: string | null;
+        projectIcon: ProjectIconOverride | null;
       }>,
       failureTitle: string,
     ): Promise<AtomCommandResult<void, unknown>> => {
@@ -526,17 +537,18 @@ function ProjectDetail({ group }: { group: SidebarProjectSnapshot }) {
     [updateAllMembers],
   );
 
-  // ----- favicon -----
+  // ----- project icon -----
   const [faviconPickerOpen, setFaviconPickerOpen] = useState(false);
+  const [iconPickerOpen, setIconPickerOpen] = useState(false);
   const [isSavingFavicon, setIsSavingFavicon] = useState(false);
   const savingFaviconRef = useRef(false);
-  const setFaviconPath = useCallback(
-    async (faviconPath: string | null) => {
+  const setProjectIcon = useCallback(
+    async (input: { faviconPath: string | null; projectIcon: ProjectIconOverride | null }) => {
       if (savingFaviconRef.current) return;
       savingFaviconRef.current = true;
       setIsSavingFavicon(true);
       try {
-        await updateAllMembers({ faviconPath }, "Failed to update project icon");
+        await updateAllMembers(input, "Failed to update project icon");
       } finally {
         savingFaviconRef.current = false;
         setIsSavingFavicon(false);
@@ -890,13 +902,19 @@ function ProjectDetail({ group }: { group: SidebarProjectSnapshot }) {
           />
           <SettingsRow
             title="Project icon"
-            description={faviconPath ?? "Automatic"}
+            description={
+              projectIcon?.kind === "lucide"
+                ? `${projectIcon.name} · ${projectIcon.color}`
+                : projectIcon?.kind === "emoji"
+                  ? projectIcon.emoji
+                  : (faviconPath ?? "Automatic")
+            }
             resetAction={
-              faviconPath !== null ? (
+              faviconPath !== null || projectIcon !== null ? (
                 <SettingResetButton
                   label="project icon"
                   disabled={isSavingFavicon}
-                  onClick={() => void setFaviconPath(null)}
+                  onClick={() => void setProjectIcon({ faviconPath: null, projectIcon: null })}
                 />
               ) : null
             }
@@ -905,9 +923,21 @@ function ProjectDetail({ group }: { group: SidebarProjectSnapshot }) {
                 <ProjectFavicon
                   environmentId={representative.environmentId}
                   cwd={representative.workspaceRoot}
+                  projectName={representative.title}
                   faviconPath={faviconPath}
+                  projectIcon={projectIcon}
                   className="size-6"
                 />
+                <Button
+                  size="sm"
+                  variant="outline"
+                  type="button"
+                  aria-label="Choose a project icon"
+                  disabled={isSavingFavicon}
+                  onClick={() => setIconPickerOpen(true)}
+                >
+                  Choose icon
+                </Button>
                 <Button
                   size="sm"
                   variant="outline"
@@ -959,6 +989,12 @@ function ProjectDetail({ group }: { group: SidebarProjectSnapshot }) {
                     modelOptionsByInstance={modelOptionsByInstance}
                     triggerVariant="outline"
                     triggerClassName={SETTINGS_PICKER_TRIGGER_CLASSNAME}
+                    onOpenProviderSetup={(instanceId) => {
+                      void navigate({
+                        to: "/settings/providers",
+                        search: { environmentId: representative.environmentId, instanceId },
+                      });
+                    }}
                     onInstanceModelChange={(instanceId, model) => {
                       setDefaultModel(createModelSelection(instanceId, model));
                     }}
@@ -1352,10 +1388,20 @@ function ProjectDetail({ group }: { group: SidebarProjectSnapshot }) {
         {...(pickProjectFavicon
           ? { onPickExternal: () => pickProjectFavicon(representative.workspaceRoot) }
           : {})}
-        onSelect={(path) => void setFaviconPath(path)}
+        onSelect={(path) => void setProjectIcon({ faviconPath: path, projectIcon: null })}
         open={faviconPickerOpen}
         projectName={group.displayName}
       />
+      {iconPickerOpen ? (
+        <Suspense fallback={null}>
+          <ProjectIconPickerDialog
+            current={projectIcon}
+            open
+            onOpenChange={setIconPickerOpen}
+            onSelect={(icon) => void setProjectIcon({ faviconPath: null, projectIcon: icon })}
+          />
+        </Suspense>
+      ) : null}
     </>
   );
 }

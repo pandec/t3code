@@ -19,7 +19,7 @@ import {
 } from "@t3tools/client-runtime/state/provider-usage-presentation";
 import type { ProviderInstanceId } from "@t3tools/contracts";
 import { formatUsd } from "@t3tools/shared/usageFormat";
-import { RefreshCwIcon } from "lucide-react";
+import { Minimize2Icon, RefreshCwIcon } from "lucide-react";
 import { Fragment, useMemo, useRef } from "react";
 
 import { useProviderUsageThresholds } from "~/hooks/useSettings";
@@ -29,7 +29,7 @@ import { type ContextWindowSnapshot, formatContextWindowTokens } from "~/lib/con
 import { formatProviderUsageEmail } from "~/providerUsageEmail";
 import { Popover, PopoverPopup, PopoverTrigger } from "../ui/popover";
 import { formatContextWindowCompactionMessage } from "./ContextWindowMeter.logic";
-import { Minimize2Icon } from "lucide-react";
+import { composerFloatingLayerProps } from "./composerEventScope";
 
 /**
  * Two concentric rings in one control: the outer ring is the thread's context
@@ -392,6 +392,7 @@ export function ContextWindowMeter(props: {
         }
       />
       <PopoverPopup
+        {...composerFloatingLayerProps}
         tooltipStyle
         side="top"
         align="end"

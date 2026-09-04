@@ -1,5 +1,6 @@
 import {
   CommandId,
+  DEFAULT_PROVIDER_INTERACTION_MODE,
   EnvironmentId,
   IsoDateTime,
   MessageId,
@@ -14,6 +15,7 @@ import {
   type ProjectId as ProjectIdType,
   type ProviderInteractionMode as ProviderInteractionModeType,
   type RuntimeMode as RuntimeModeType,
+  type ServerProvider,
 } from "@t3tools/contracts";
 import * as Schema from "effect/Schema";
 
@@ -258,12 +260,20 @@ export interface ThreadSettingsSnapshot {
 export function resolveQueuedThreadSettings(
   message: QueuedThreadMessage,
   thread: ThreadSettingsSnapshot,
+  providers: ReadonlyArray<Pick<ServerProvider, "instanceId" | "showInteractionModeToggle">> = [],
 ): ThreadSettingsSnapshot {
+  const modelSelection = message.modelSelection ?? thread.modelSelection;
+  const provider = providers.find(
+    (candidate) => candidate.instanceId === modelSelection.instanceId,
+  );
   return {
-    modelSelection: message.modelSelection ?? thread.modelSelection,
+    modelSelection,
     branch: message.localCheckoutBranch ?? thread.branch,
     runtimeMode: message.runtimeMode ?? thread.runtimeMode,
-    interactionMode: message.interactionMode ?? thread.interactionMode,
+    interactionMode:
+      provider?.showInteractionModeToggle === false
+        ? DEFAULT_PROVIDER_INTERACTION_MODE
+        : (message.interactionMode ?? thread.interactionMode),
   };
 }
 
@@ -438,11 +448,11 @@ export function resolveThreadOutboxDispatchStep(input: {
   if (input.deliveryAction !== "send") {
     return { step: input.deliveryAction };
   }
-  if (input.fileAttachments.length === 0) {
-    return { step: "send" };
-  }
   if (input.serverConfig === null) {
     return { step: "retry" };
+  }
+  if (input.fileAttachments.length === 0) {
+    return { step: "send" };
   }
   const maxBytes = input.serverConfig.maxFileUploadBytes;
   if (maxBytes === undefined) {

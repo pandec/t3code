@@ -242,6 +242,7 @@ export const make = Effect.gen(function* () {
       projectAccentColorsFill: true,
       savedPrompts: true,
       environmentThemes: true,
+      usageLimitSources: true,
       threadPinning: true,
       threadPinReorder: true,
       threadTitleRegeneration: true,

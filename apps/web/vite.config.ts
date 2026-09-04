@@ -1,6 +1,5 @@
 import * as NodeZlib from "node:zlib";
 
-import tailwindcss from "@tailwindcss/vite";
 import react, { reactCompilerPreset } from "@vitejs/plugin-react";
 import babel from "@rolldown/plugin-babel";
 import { tanstackRouter } from "@tanstack/router-plugin/vite";
@@ -14,6 +13,7 @@ import { DEV_PROXIED_PATH_PREFIXES } from "@t3tools/shared/devProxy";
 
 import { loadRepoEnv } from "../../scripts/lib/public-config";
 import { sharedTestDefaults } from "../../scripts/lib/vitest-shared.ts";
+import { tailwindPlugins } from "./vite/tailwind";
 
 const repoEnv = loadRepoEnv();
 Object.assign(process.env, repoEnv);
@@ -86,6 +86,7 @@ const buildSourcemap: boolean | "hidden" =
  */
 const ISOLATED_TEST_FILES = [
   "src/authBootstrap.test.ts",
+  "src/bootstrap.test.ts",
   "src/branding.test.ts",
   "src/browser/browserDefaults.test.ts",
   "src/browser/browserRecording.test.ts",
@@ -93,6 +94,7 @@ const ISOLATED_TEST_FILES = [
   "src/browser/browserViewportActions.test.ts",
   "src/browser/desktopTabLifetime.test.ts",
   "src/browserFaviconStore.test.ts",
+  "src/browserHistoryStore.test.ts",
   "src/clientPersistenceStorage.test.ts",
   "src/cloud/linkEnvironment.test.ts",
   "src/cloud/managedAuth.test.ts",
@@ -101,7 +103,6 @@ const ISOLATED_TEST_FILES = [
   "src/components/chat/ContextWindowMeter.test.tsx",
   "src/components/chat/ExpandedImagePreview.test.ts",
   "src/components/chat/MessagesTimeline.test.tsx",
-  "src/components/files/projectFilesQueryState.test.tsx",
   "src/components/ChatMarkdown.test.tsx",
   "src/components/ChatMarkdown.workspace-images.test.tsx",
   "src/components/ChatView.logic.test.ts",
@@ -111,31 +112,38 @@ const ISOLATED_TEST_FILES = [
   "src/components/diffs/AnnotatableCodeView.test.tsx",
   "src/components/diffs/StyledDiffCodeView.test.tsx",
   "src/components/files/fileSaveCoordinator.test.ts",
-  "src/components/ProjectFavicon.test.tsx",
+  "src/components/files/projectFilesQueryState.test.tsx",
   "src/components/preview/openTerminalLinkInPreview.test.ts",
   "src/components/preview/PreviewEmptyState.test.tsx",
   "src/components/preview/PreviewFaviconIcon.test.tsx",
   "src/components/preview/previewNavigationReadiness.test.ts",
   "src/components/preview/PreviewView.test.tsx",
+  "src/components/ProjectFavicon.test.tsx",
   "src/components/ProviderUpdateEnvironmentRows.test.tsx",
+  "src/components/ServerUpdateAction.test.tsx",
   "src/components/settings/AddProviderInstanceDialog.environment.test.tsx",
   "src/components/settings/ProjectFaviconPickerDialog.test.tsx",
+  "src/components/settings/ProjectIconPickerDialog.test.tsx",
   "src/components/settings/PromptsSettings.test.tsx",
   "src/components/settings/ProviderSettingsPanel.environment.test.tsx",
-  "src/components/ServerUpdateAction.test.tsx",
+  "src/components/settings/ProviderSetupSection.test.tsx",
   "src/components/Sidebar.logic.test.ts",
   "src/components/sidebar/SidebarUpdateReleaseNotes.test.tsx",
+  "src/components/thread-split/threadSplitStore.test.ts",
   "src/components/usage/UsagePage.test.tsx",
   "src/composerDraftStore.test.ts",
   "src/hooks/useEnvironmentThemeSync.test.ts",
+  "src/hooks/useHandleNewThread.test.ts",
   "src/hooks/useTheme.test.ts",
   "src/lib/attachmentUploadQueue.test.ts",
   "src/lib/imageCompression.test.ts",
+  "src/lib/previewAnnotation.test.ts",
   "src/lib/selectionActions.test.ts",
   "src/lib/syntaxHighlighting.test.ts",
   "src/lib/terminalCloseConfirm.test.ts",
   "src/localApi.test.ts",
   "src/notifications/turnCompletion.test.ts",
+  "src/openVsxThemes.test.ts",
   "src/rpc/requestLatencyState.test.ts",
   "src/timestampFormat.test.ts",
   "src/versionSkew.test.ts",
@@ -247,7 +255,7 @@ export default defineConfig(() => {
         parserOpts: { plugins: ["typescript", "jsx"] },
         presets: [reactCompilerPreset()],
       }),
-      tailwindcss(),
+      tailwindPlugins(bundledDev),
     ],
     optimizeDeps: {
       include: [
@@ -337,6 +345,11 @@ export default defineConfig(() => {
             },
           }
         : {}),
+    },
+    // @tailwindcss/vite only emits a CSS sourcemap when devSourcemap is on; without it
+    // rolldown flags the transform as SOURCEMAP_BROKEN on every sourcemapped build.
+    css: {
+      devSourcemap: buildSourcemap !== false,
     },
     build: {
       outDir: "dist",

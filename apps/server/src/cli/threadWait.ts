@@ -168,7 +168,10 @@ export const evaluateThreadWait = (input: EvaluateThreadWaitInput): ThreadWaitEv
   const adoptionTimedOut = queuedStartObserved && hasUnadoptedTurnStart(thread) && !queuedStart;
 
   if (sessionErrorIsFresh(thread)) return terminal("error", { drainUnsupported });
-  if (thread.hasPendingApprovals || thread.hasPendingUserInput) {
+  if (
+    thread.hasPendingApprovals ||
+    (thread.hasPendingBlockingUserInput ?? thread.hasPendingUserInput)
+  ) {
     return input.options.onBlocked === "return"
       ? terminal("blocked", { drainUnsupported })
       : pendingOrTimeout(input.deadlineReached, { drainUnsupported });

@@ -25,10 +25,11 @@ const pendingUserInput = {
 describe("pending user input draft snapshots", () => {
   it("reads the latest atom value at submission time", () => {
     const requestKey = scopedRequestKey(environmentId, pendingUserInput.requestId);
-    setUserInputDraftCustomAnswer(requestKey, "details", "First answer");
+    const question = pendingUserInput.questions[0];
+    setUserInputDraftCustomAnswer(requestKey, question, "First answer");
     const renderedAnswers = readPendingUserInputAnswersSnapshot(environmentId, pendingUserInput);
 
-    setUserInputDraftCustomAnswer(requestKey, "details", "Latest answer");
+    setUserInputDraftCustomAnswer(requestKey, question, "Latest answer");
     const submittedAnswers = readPendingUserInputAnswersSnapshot(environmentId, pendingUserInput);
 
     expect(renderedAnswers).toEqual({ details: "First answer" });

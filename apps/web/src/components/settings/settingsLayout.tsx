@@ -21,36 +21,54 @@ import { WorkspacePageContainer, type WorkspacePageWidth } from "../WorkspacePag
 import { Button } from "../ui/button";
 import { Tooltip, TooltipPopup, TooltipTrigger } from "../ui/tooltip";
 
+declare module "@tanstack/react-router" {
+  interface HistoryState {
+    settingsTargetHighlight?: boolean;
+  }
+}
+
 interface SettingsSearchTargetContextValue {
   readonly targetId: string | null;
+  readonly highlightTarget: boolean;
   readonly onTargetHandled: () => void;
 }
 
 const noop = () => undefined;
 const SettingsSearchTargetContext = createContext<SettingsSearchTargetContextValue>({
   targetId: null,
+  highlightTarget: true,
   onTargetHandled: noop,
 });
 
 export function SettingsSearchTargetProvider({
   targetId,
+  highlightTarget = true,
   onTargetHandled = noop,
   children,
 }: {
   targetId: string | null;
+  highlightTarget?: boolean;
   onTargetHandled?: () => void;
   children: ReactNode;
 }) {
-  const value = useMemo(() => ({ targetId, onTargetHandled }), [onTargetHandled, targetId]);
+  const value = useMemo(
+    () => ({ targetId, highlightTarget, onTargetHandled }),
+    [highlightTarget, onTargetHandled, targetId],
+  );
   return <SettingsSearchTargetContext value={value}>{children}</SettingsSearchTargetContext>;
 }
 
-function scrollAndFocusSettingsTarget(target: HTMLElement): void {
+function scrollAndFocusSettingsTarget(target: HTMLElement, highlight = true): void {
   const prefersReducedMotion = window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+  const markedScrollTarget =
+    typeof target.querySelector === "function"
+      ? target.querySelector<HTMLElement>(":scope > [data-settings-scroll-target]")
+      : null;
   const scrollTarget =
-    target.tagName === "SECTION" && target.firstElementChild
+    markedScrollTarget ??
+    (target.tagName === "SECTION" && target.firstElementChild
       ? (target.firstElementChild as HTMLElement)
-      : target;
+      : target);
 
   scrollTarget.scrollIntoView({
     behavior: prefersReducedMotion ? "auto" : "smooth",
@@ -58,7 +76,7 @@ function scrollAndFocusSettingsTarget(target: HTMLElement): void {
   });
   target.focus({ preventScroll: true });
   target.classList.remove("settings-search-target-pulse");
-  if (prefersReducedMotion) return;
+  if (!highlight || prefersReducedMotion) return;
   void target.offsetWidth;
   target.classList.add("settings-search-target-pulse");
   // The class also suppresses the focus outline (the pulse is the destination
@@ -73,17 +91,17 @@ export function useSettingsSearchTargetId(): string | null {
   return useContext(SettingsSearchTargetContext).targetId;
 }
 
-function useSettingsSearchTarget<T extends HTMLElement>(id: string | undefined) {
-  const { targetId, onTargetHandled } = useContext(SettingsSearchTargetContext);
+export function useSettingsSearchTarget<T extends HTMLElement>(id: string | undefined) {
+  const { targetId, highlightTarget, onTargetHandled } = useContext(SettingsSearchTargetContext);
   const isSearchTarget = id !== undefined && id === targetId;
   const targetRef = useCallback(
     (target: T | null) => {
       if (target && isSearchTarget) {
-        scrollAndFocusSettingsTarget(target);
+        scrollAndFocusSettingsTarget(target, highlightTarget);
         onTargetHandled();
       }
     },
-    [isSearchTarget, onTargetHandled],
+    [highlightTarget, isSearchTarget, onTargetHandled],
   );
 
   return targetRef;
@@ -140,54 +158,81 @@ export function useRelativeTimeTick(intervalMs = 1_000) {
 
 export function SettingsSection({
   title,
+  description,
+  hideTitle = false,
   icon,
   headerAction,
-  collapsed,
+  collapsed = false,
   onToggleCollapsed,
+  variant = "grouped",
   children,
   className,
   ...sectionProps
 }: ComponentPropsWithoutRef<"section"> & {
   title: string;
+  description?: ReactNode;
+  hideTitle?: boolean;
   icon?: ReactNode;
   headerAction?: ReactNode;
   collapsed?: boolean;
   onToggleCollapsed?: (() => void) | undefined;
+  variant?: "grouped" | "plain";
   children: ReactNode;
 }) {
   const contentId = useId();
   const isCollapsible = onToggleCollapsed !== undefined;
   const targetRef = useSettingsSearchTarget<HTMLElement>(sectionProps.id);
+
   return (
     <section
       {...sectionProps}
       ref={targetRef}
       tabIndex={sectionProps.id ? -1 : sectionProps.tabIndex}
-      className={cn("space-y-3", className)}
+      className={cn(!hideTitle && "space-y-2.5", className)}
     >
-      <div className="flex min-h-8 items-center justify-between gap-4 px-3 sm:px-4">
-        <h2 className="flex min-w-0 flex-1 items-center gap-2 text-lg font-semibold tracking-[-0.025em] text-foreground">
-          {isCollapsible ? (
-            <button
-              type="button"
-              aria-controls={contentId}
-              aria-expanded={!collapsed}
-              aria-label={`${collapsed ? "Expand" : "Collapse"} ${title}`}
-              className="-m-1 inline-flex size-5 cursor-pointer items-center justify-center rounded-sm text-muted-foreground hover:bg-muted hover:text-foreground focus-visible:outline-hidden focus-visible:ring-1 focus-visible:ring-ring"
-              onClick={onToggleCollapsed}
-            >
-              {collapsed ? <PlusIcon className="size-3" /> : <MinusIcon className="size-3" />}
-            </button>
-          ) : null}
-          {icon}
-          <span className="min-w-0 truncate">{title}</span>
-        </h2>
-        <div className="flex min-h-7 min-w-7 items-center justify-end">{headerAction}</div>
-      </div>
+      {hideTitle ? (
+        <h2 className="sr-only">{title}</h2>
+      ) : (
+        <div
+          data-settings-scroll-target
+          className="flex min-h-7 items-start justify-between gap-4 px-3 sm:px-4"
+        >
+          <div className="min-w-0">
+            <h2 className="flex min-h-7 items-center gap-2 text-sm font-normal tracking-[-0.005em] text-foreground/70">
+              {isCollapsible ? (
+                <button
+                  type="button"
+                  aria-controls={contentId}
+                  aria-expanded={!collapsed}
+                  aria-label={`${collapsed ? "Expand" : "Collapse"} ${title}`}
+                  className="-m-1 inline-flex size-5 cursor-pointer items-center justify-center rounded-sm text-muted-foreground hover:bg-muted hover:text-foreground focus-visible:outline-hidden focus-visible:ring-1 focus-visible:ring-ring"
+                  onClick={onToggleCollapsed}
+                >
+                  {collapsed ? <PlusIcon className="size-3" /> : <MinusIcon className="size-3" />}
+                </button>
+              ) : null}
+              {icon}
+              <span className="min-w-0 truncate">{title}</span>
+            </h2>
+            {description ? (
+              <div className="flex min-w-0 flex-wrap items-center gap-x-1.5 text-[13px] leading-[1.45] text-muted-foreground/80">
+                {description}
+              </div>
+            ) : null}
+          </div>
+          <div className="flex min-h-7 min-w-7 items-center justify-end">{headerAction}</div>
+        </div>
+      )}
       <div
         id={contentId}
         hidden={collapsed}
-        className="relative space-y-1 overflow-visible text-foreground"
+        data-settings-scroll-target={hideTitle ? "" : undefined}
+        className={cn(
+          "relative overflow-visible text-foreground",
+          variant === "grouped"
+            ? "rounded-xl border border-border/60 bg-card/40 shadow-xs/5 [&>*+*]:border-t [&>*+*]:border-border/50 [&>[data-slot=settings-row]]:rounded-none"
+            : "space-y-1",
+        )}
       >
         {children}
       </div>
@@ -259,6 +304,7 @@ export function SettingsRow({
       {...rowProps}
       ref={targetRef}
       tabIndex={rowProps.id ? -1 : rowProps.tabIndex}
+      data-slot="settings-row"
       className={cn("rounded-xl px-3 sm:px-4", children ? "pt-3 pb-1" : "py-3", className)}
     >
       <div className="flex flex-col gap-3 sm:grid sm:grid-cols-[minmax(0,1fr)_minmax(10rem,auto)] sm:items-center sm:gap-8">
@@ -338,18 +384,31 @@ export function SettingsPageContainer({
 }) {
   const navigate = useNavigate();
   const hash = useLocation({ select: (location) => location.hash });
+  const highlightTarget = useLocation({
+    select: (location) => location.state.settingsTargetHighlight !== false,
+  });
   const targetId = hash.replace(/^#/, "") || null;
   const clearTargetHash = useCallback(() => {
-    void navigate({ hash: "", replace: true, resetScroll: false, hashScrollIntoView: false });
+    void navigate({
+      hash: "",
+      replace: true,
+      resetScroll: false,
+      hashScrollIntoView: false,
+      state: { settingsTargetHighlight: true },
+    });
   }, [navigate]);
 
   return (
-    <SettingsSearchTargetProvider targetId={targetId} onTargetHandled={clearTargetHash}>
+    <SettingsSearchTargetProvider
+      targetId={targetId}
+      highlightTarget={highlightTarget}
+      onTargetHandled={clearTargetHash}
+    >
       <div
         className="topbar-scroll-fade scrollbar-gutter-both flex-1 overflow-y-auto"
         data-settings-page-scroll
       >
-        <WorkspacePageContainer width={width} className={cn("gap-12", className)}>
+        <WorkspacePageContainer width={width} className={cn("gap-8", className)}>
           {children}
         </WorkspacePageContainer>
       </div>
@@ -357,9 +416,12 @@ export function SettingsPageContainer({
   );
 }
 
-export function scrollToSettingsTarget(targetId: string): boolean {
+export function scrollToSettingsTarget(
+  targetId: string,
+  { highlight = true }: { readonly highlight?: boolean } = {},
+): boolean {
   const target = document.getElementById(targetId);
   if (!target) return false;
-  scrollAndFocusSettingsTarget(target);
+  scrollAndFocusSettingsTarget(target, highlight);
   return true;
 }

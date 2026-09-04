@@ -48,12 +48,36 @@ function retainRecent<T>(entries: ReadonlyArray<T>): ReadonlyArray<T> {
     : entries;
 }
 
+// Async (message-mode) questions can stay open while the agent keeps producing
+// activity; the server pins them past its window and the client must too, or
+// the pending question disappears locally while the server still awaits it.
+function unresolvedMessageModeRequests(
+  activities: ReadonlyArray<OrchestrationThreadActivity>,
+): Set<OrchestrationThreadActivity> {
+  const pending = new Map<string, OrchestrationThreadActivity>();
+  for (const activity of activities) {
+    const payload =
+      activity.payload && typeof activity.payload === "object"
+        ? (activity.payload as Record<string, unknown>)
+        : null;
+    const requestId = payload?.requestId;
+    if (typeof requestId !== "string") continue;
+    if (activity.kind === "user-input.requested" && payload?.responseMode === "message") {
+      pending.set(requestId, activity);
+    } else if (activity.kind === "user-input.resolved") {
+      pending.delete(requestId);
+    }
+  }
+  return new Set(pending.values());
+}
+
 function retainRecentActivities(
   activities: ReadonlyArray<OrchestrationThreadActivity>,
 ): ReadonlyArray<OrchestrationThreadActivity> {
   if (activities.length <= THREAD_HISTORY_RETENTION_LIMIT) return activities;
 
   const recent = activities.slice(-THREAD_HISTORY_RETENTION_LIMIT);
+  const pinned: Array<OrchestrationThreadActivity> = [];
   let latestContextWindow: OrchestrationThreadActivity | undefined;
   for (let index = activities.length - 1; index >= 0; index -= 1) {
     const activity = activities[index]!;
@@ -62,9 +86,15 @@ function retainRecentActivities(
       break;
     }
   }
-  if (latestContextWindow === undefined || recent.includes(latestContextWindow)) return recent;
+  if (latestContextWindow !== undefined && !recent.includes(latestContextWindow)) {
+    pinned.push(latestContextWindow);
+  }
+  for (const request of unresolvedMessageModeRequests(activities)) {
+    if (!recent.includes(request)) pinned.push(request);
+  }
+  if (pinned.length === 0) return recent;
 
-  return pipe(recent.slice(1), Arr.append(latestContextWindow), Arr.sort(activityOrder));
+  return pipe(recent.slice(pinned.length), Arr.appendAll(pinned), Arr.sort(activityOrder));
 }
 
 /** Bounds memory and cache growth for thread snapshots from any source. */

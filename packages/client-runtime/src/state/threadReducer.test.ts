@@ -182,6 +182,55 @@ describe("retainRecentThreadHistory", () => {
     expect(retained.activities.at(-1)?.id).toBe("activity-500");
   });
 
+  it("pins an unresolved message-mode question past the activity cap", () => {
+    const question = {
+      id: EventId.make("activity-async-question"),
+      tone: "info" as const,
+      kind: "user-input.requested",
+      summary: "Question",
+      payload: { requestId: "req-1", responseMode: "message", questions: [] },
+      turnId: TurnId.make("turn-1"),
+      sequence: 0,
+      createdAt: "2026-04-01T00:00:00.000Z",
+    };
+    const resolvedQuestion = {
+      ...question,
+      id: EventId.make("activity-resolved-question"),
+      payload: { requestId: "req-0", responseMode: "message", questions: [] },
+      sequence: 1,
+    };
+    const resolution = {
+      ...question,
+      id: EventId.make("activity-resolution"),
+      kind: "user-input.resolved",
+      payload: { requestId: "req-0" },
+      sequence: 2,
+    };
+    const laterActivities = Array.from({ length: 500 }, (_, index) => ({
+      id: EventId.make(`activity-${index + 1}`),
+      tone: "tool" as const,
+      kind: "command",
+      summary: `Ran command ${index + 1}`,
+      payload: {},
+      turnId: TurnId.make("turn-1"),
+      sequence: index + 3,
+      createdAt: "2026-04-01T00:00:01.000Z",
+    }));
+
+    const retained = retainRecentThreadHistory({
+      ...baseThread,
+      activities: [question, resolvedQuestion, resolution, ...laterActivities],
+    });
+
+    // The open question survives; the resolved one and its resolution do not.
+    expect(retained.activities).toHaveLength(500);
+    expect(retained.activities[0]?.id).toBe("activity-async-question");
+    expect(
+      retained.activities.some((activity) => activity.id === "activity-resolved-question"),
+    ).toBe(false);
+    expect(retained.activities.at(-1)?.id).toBe("activity-500");
+  });
+
   it("retains a bounded message tail and records the load-older cursor", () => {
     const retained = retainRecentThreadHistory(
       {

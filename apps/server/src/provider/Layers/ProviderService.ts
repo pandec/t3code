@@ -10,16 +10,20 @@
  * @module ProviderServiceLive
  */
 import {
+  EventId,
+  MessageId,
   ModelSelection,
   NonNegativeInt,
-  ThreadId,
   ProviderInterruptTurnInput,
   ProviderRespondToRequestInput,
   ProviderRespondToUserInputInput,
+  RuntimeRequestId,
   ProviderSendTurnInput,
   ProviderSessionStartInput,
   ProviderStopSessionInput,
   ProviderUploadFeedbackInput,
+  ThreadId,
+  TurnId,
   type ProviderInstanceId,
   type ProviderDriverKind,
   type ProviderRuntimeEvent,
@@ -57,7 +61,11 @@ import {
   providerTurnMetricAttributes,
   withMetrics,
 } from "../../observability/Metrics.ts";
-import { type ProviderAdapterError, ProviderValidationError } from "../Errors.ts";
+import {
+  type ProviderAdapterError,
+  ProviderAdapterRequestError,
+  ProviderValidationError,
+} from "../Errors.ts";
 import { readPersistedContinuationKey } from "../runtimeBindingContinuation.ts";
 import type { ProviderAdapterShape } from "../Services/ProviderAdapter.ts";
 import * as ProviderAdapterRegistry from "../Services/ProviderAdapterRegistry.ts";
@@ -74,6 +82,16 @@ import * as ServerSettings from "../../serverSettings.ts";
 
 const isModelSelection = Schema.is(ModelSelection);
 const STRICT_PROVIDER_LIFECYCLE_GUARD = process.env.T3CODE_STRICT_PROVIDER_LIFECYCLE_GUARD !== "0";
+
+interface PendingCompaction {
+  readonly completion: Deferred.Deferred<string>;
+  readonly native: boolean;
+  readonly providerInstanceId: ProviderInstanceId;
+  readonly requestId: MessageId | undefined;
+  readonly earlyEvents: ProviderRuntimeEvent[];
+  compactedEventObserved: boolean;
+  expectedTurnId: TurnId | undefined;
+}
 
 /**
  * Hook for tests that want to override the canonical event logger pulled
@@ -376,6 +394,15 @@ const makeProviderService = Effect.fn("makeProviderService")(function* (
   const pendingSessionReplacements = yield* Ref.make(
     new Map<ThreadId, PendingSessionReplacement>(),
   );
+  const pendingCompactions = new Map<ThreadId, PendingCompaction>();
+  const timedOutNativeCompactions = new Set<ThreadId>();
+  const settleCompaction = (threadId: ThreadId, pending: PendingCompaction, terminal: string) =>
+    Effect.gen(function* () {
+      if (pendingCompactions.get(threadId) !== pending) return false;
+      pendingCompactions.delete(threadId);
+      yield* Deferred.succeed(pending.completion, terminal);
+      return true;
+    });
   const threadLocksRef = yield* Ref.make<ReadonlyMap<string, Semaphore.Semaphore>>(new Map());
   const getThreadLock = Effect.fn("ProviderService.getThreadLock")(function* (threadId: ThreadId) {
     const existing = (yield* Ref.get(threadLocksRef)).get(threadId);
@@ -426,17 +453,12 @@ const makeProviderService = Effect.fn("makeProviderService")(function* (
       Effect.logWarning("provider.session.continuation-key-backfill-failed", { error }),
     ),
   );
-
   const nowIso = Effect.map(DateTime.now, DateTime.formatIso);
   /**
-   * Attach the `t3-code` MCP server to the session that is about to start.
+   * Attach the enabled `t3-code` MCP toolsets to the session that is about to
+   * start. This is the only place a credential is minted, so withholding one
+   * here denies every provider and external MCP client.
    *
-   * This is the only place a credential is minted, so withholding one here is
-   * what disables agent browser access everywhere: every adapter already
-   * treats a missing session as "no MCP server", and the `/mcp` endpoint
-   * accepts nothing but tokens issued from this path.
-   */
-  /**
    * Deny on an unreadable settings file rather than letting the read failure
    * escape: adding `ServerSettingsError` to `ProviderServiceError` would widen
    * a union every caller handles, for a branch that only decides whether one
@@ -495,7 +517,7 @@ const makeProviderService = Effect.fn("makeProviderService")(function* (
 
   const publishRuntimeEvent = (
     event: ProviderRuntimeEvent,
-    eventIsStaleGeneration: boolean,
+    eventIsStaleGeneration = false,
   ): Effect.Effect<void> =>
     Effect.succeed(event).pipe(
       Effect.tap((canonicalEvent) =>
@@ -632,6 +654,64 @@ const makeProviderService = Effect.fn("makeProviderService")(function* (
     }
     return false;
   });
+  const isCompactedEvent = (
+    event: ProviderRuntimeEvent,
+  ): event is Extract<ProviderRuntimeEvent, { readonly type: "thread.state.changed" }> =>
+    event.type === "thread.state.changed" && event.payload.state === "compacted";
+  const withCompactionRequestId = (
+    event: ProviderRuntimeEvent,
+    pending: PendingCompaction,
+  ): ProviderRuntimeEvent =>
+    pending.requestId === undefined
+      ? event
+      : {
+          ...event,
+          requestId: RuntimeRequestId.make(String(pending.requestId)),
+        };
+  const compactionTerminal = (event: ProviderRuntimeEvent): string | null =>
+    event.type === "turn.completed"
+      ? event.payload.state
+      : event.type === "runtime.error" || event.type === "turn.aborted"
+        ? event.type
+        : null;
+  const processFallbackCompactionEvent = (
+    pending: PendingCompaction,
+    event: ProviderRuntimeEvent,
+  ): Effect.Effect<void> =>
+    Effect.gen(function* () {
+      if (pendingCompactions.get(event.threadId) !== pending) {
+        yield* publishRuntimeEvent(event);
+        return;
+      }
+      const matchesTurn = event.turnId !== undefined && event.turnId === pending.expectedTurnId;
+      if (matchesTurn && isCompactedEvent(event)) {
+        pending.compactedEventObserved = true;
+        yield* publishRuntimeEvent(withCompactionRequestId(event, pending));
+        return;
+      }
+      yield* publishRuntimeEvent(event);
+      const terminal = compactionTerminal(event);
+      if (!matchesTurn || terminal === null) return;
+      const settled = yield* settleCompaction(event.threadId, pending, terminal);
+      if (!settled || terminal !== "completed" || pending.compactedEventObserved) return;
+      const compactedEvent = {
+        ...event,
+        eventId: EventId.make(`${event.eventId}:context-compaction`),
+        type: "thread.state.changed",
+        payload: {
+          state: "compacted",
+          detail: { source: "provider-native-command" },
+        },
+        ...(pending.requestId !== undefined
+          ? { requestId: RuntimeRequestId.make(String(pending.requestId)) }
+          : {}),
+      } satisfies ProviderRuntimeEvent;
+      yield* increment(providerRuntimeEventsTotal, {
+        provider: compactedEvent.provider,
+        eventType: compactedEvent.type,
+      });
+      yield* publishRuntimeEvent(compactedEvent);
+    });
 
   const requireBindingInstanceId = (
     operation: string,
@@ -724,26 +804,64 @@ const makeProviderService = Effect.fn("makeProviderService")(function* (
     },
     event: ProviderRuntimeEvent,
   ): Effect.Effect<void> =>
-    Effect.sync(() => correlateRuntimeEventWithInstance(source, event)).pipe(
-      Effect.flatMap((canonicalEvent) =>
-        refreshBindingFromRuntimeEvent(source, canonicalEvent).pipe(
-          Effect.catchCause((cause) =>
-            Effect.logWarning("provider.session.runtime-event-refresh-failed", {
-              threadId: canonicalEvent.threadId,
-              provider: canonicalEvent.provider,
-              providerInstanceId: source.instanceId,
-              cause,
-            }).pipe(Effect.as(false)),
-          ),
-          Effect.flatMap((eventIsStaleGeneration) =>
-            increment(providerRuntimeEventsTotal, {
-              provider: canonicalEvent.provider,
-              eventType: canonicalEvent.type,
-            }).pipe(Effect.andThen(publishRuntimeEvent(canonicalEvent, eventIsStaleGeneration))),
-          ),
+    Effect.gen(function* () {
+      const canonicalEvent = yield* Effect.sync(() =>
+        correlateRuntimeEventWithInstance(source, event),
+      );
+      const eventIsStaleGeneration = yield* refreshBindingFromRuntimeEvent(
+        source,
+        canonicalEvent,
+      ).pipe(
+        Effect.catchCause((cause) =>
+          Effect.logWarning("provider.session.runtime-event-refresh-failed", {
+            threadId: canonicalEvent.threadId,
+            provider: canonicalEvent.provider,
+            providerInstanceId: source.instanceId,
+            cause,
+          }).pipe(Effect.as(false)),
         ),
-      ),
-    );
+      );
+      yield* increment(providerRuntimeEventsTotal, {
+        provider: canonicalEvent.provider,
+        eventType: canonicalEvent.type,
+      });
+      if (eventIsStaleGeneration) {
+        yield* publishRuntimeEvent(canonicalEvent, true);
+        return;
+      }
+      if (
+        isCompactedEvent(canonicalEvent) &&
+        timedOutNativeCompactions.delete(canonicalEvent.threadId)
+      ) {
+        yield* publishRuntimeEvent(canonicalEvent);
+        return;
+      }
+      const pendingCompaction = pendingCompactions.get(canonicalEvent.threadId);
+      if (!pendingCompaction || pendingCompaction.providerInstanceId !== source.instanceId) {
+        yield* publishRuntimeEvent(canonicalEvent);
+        return;
+      }
+      if (pendingCompaction.native) {
+        const compacted = isCompactedEvent(canonicalEvent);
+        const terminal = compacted ? "completed" : compactionTerminal(canonicalEvent);
+        yield* publishRuntimeEvent(
+          compacted ? withCompactionRequestId(canonicalEvent, pendingCompaction) : canonicalEvent,
+        );
+        if (terminal !== null) {
+          yield* settleCompaction(canonicalEvent.threadId, pendingCompaction, terminal);
+        }
+        return;
+      }
+      if (
+        pendingCompaction.expectedTurnId === undefined &&
+        canonicalEvent.turnId !== undefined &&
+        (isCompactedEvent(canonicalEvent) || compactionTerminal(canonicalEvent) !== null)
+      ) {
+        pendingCompaction.earlyEvents.push(canonicalEvent);
+        return;
+      }
+      yield* processFallbackCompactionEvent(pendingCompaction, canonicalEvent);
+    });
 
   // `subscribedAdapters` is our source-of-truth for "which instance adapters
   // are currently wired into the runtime event bus". It both tracks the set
@@ -872,6 +990,7 @@ const makeProviderService = Effect.fn("makeProviderService")(function* (
         // or background tasks armed by the previous process are gone.
         { clearHasPendingWork: true },
       );
+      timedOutNativeCompactions.delete(input.binding.threadId);
       yield* analytics.record("provider.session.recovered", {
         provider: resumed.provider,
         strategy: "resume-thread",
@@ -1077,7 +1196,12 @@ const makeProviderService = Effect.fn("makeProviderService")(function* (
           bindingCompatibility === "same-instance" || bindingCompatibility === "continuation-group";
         const persistedCursorPresent =
           persistedBinding?.resumeCursor !== null && persistedBinding?.resumeCursor !== undefined;
-        const persistedStateIncompatible = persistedCursorPresent && !reusePersistedState;
+        const persistedStateIncompatible =
+          (input.resumeCursor !== undefined || persistedCursorPresent) && !reusePersistedState;
+        const targetConversationIsInstanceOwned =
+          persistedBinding?.provider === resolvedProvider &&
+          instanceInfo.continuationIdentity.continuationKey ===
+            `${resolvedProvider}:instance:${resolvedInstanceId}`;
         // A persisted cursor is the thread's conversation. When it cannot be
         // carried, either the caller deliberately replaces the provider
         // (`start-fresh`, only valid when incompatibility is provable) or the
@@ -1087,7 +1211,8 @@ const makeProviderService = Effect.fn("makeProviderService")(function* (
           persistedStateIncompatible &&
           (input.resumeCursor !== undefined ||
             options?.onIncompatiblePersistedState === "fail" ||
-            bindingCompatibility === "unprovable");
+            bindingCompatibility === "unprovable" ||
+            targetConversationIsInstanceOwned);
         if (persistedStateIncompatible && persistedBinding !== undefined) {
           yield* Effect.logWarning("provider.session.resume-state-not-carried", {
             threadId,
@@ -1229,6 +1354,7 @@ const makeProviderService = Effect.fn("makeProviderService")(function* (
             typeof input.modelSelection?.model === "string" &&
             input.modelSelection.model.trim().length > 0,
         });
+        timedOutNativeCompactions.delete(threadId);
 
         // Changing runtime mode restarts the session, so the transition is only
         // observable here, by diffing against the mode the previous session for
@@ -1503,6 +1629,147 @@ const makeProviderService = Effect.fn("makeProviderService")(function* (
     );
   });
 
+  const compactThread: ProviderServiceMethod<"compactThread"> = Effect.fn("compactThread")(
+    function* (threadId, modelSelection, requestId) {
+      const pendingCompaction = yield* withThreadLock(
+        threadId,
+        Effect.gen(function* () {
+          const routed = yield* resolveRoutableSession({
+            threadId,
+            operation: "ProviderService.compactThread",
+            allowRecovery: true,
+          });
+          yield* Effect.annotateCurrentSpan({
+            "provider.operation": "compact-thread",
+            "provider.kind": routed.adapter.provider,
+            "provider.thread_id": threadId,
+          });
+          yield* McpSessionRegistry.touchActiveMcpThread(threadId);
+          const nativeCompaction = routed.adapter.compactThread;
+          const completion = yield* Deferred.make<string>();
+          const pending: PendingCompaction = {
+            completion,
+            native: nativeCompaction !== undefined,
+            providerInstanceId: routed.instanceId,
+            requestId,
+            earlyEvents: [],
+            compactedEventObserved: false,
+            expectedTurnId: undefined,
+          };
+          if (nativeCompaction !== undefined && timedOutNativeCompactions.has(threadId)) {
+            return yield* new ProviderAdapterRequestError({
+              provider: routed.adapter.provider,
+              method: "thread/compact",
+              detail:
+                "The previous context compaction may still be running. Restart the provider session before retrying.",
+            });
+          }
+          const claimed = yield* Effect.sync(() => {
+            if (pendingCompactions.has(threadId)) return false;
+            pendingCompactions.set(threadId, pending);
+            return true;
+          });
+          if (!claimed) {
+            return yield* new ProviderAdapterRequestError({
+              provider: routed.adapter.provider,
+              method: "thread/compact",
+              detail: "Context compaction is already in progress.",
+            });
+          }
+          const clearPending = Effect.sync(() => {
+            if (pendingCompactions.get(threadId) === pending) {
+              pendingCompactions.delete(threadId);
+            }
+          });
+          const nativeCompletionTimeout =
+            routed.adapter.provider === "codex" || routed.adapter.provider === "opencode"
+              ? "10 minutes"
+              : "30 seconds";
+          const awaitNativeCompaction = (start: Effect.Effect<void, ProviderAdapterError>) =>
+            start.pipe(
+              Effect.andThen(Deferred.await(completion)),
+              Effect.timeout(nativeCompletionTimeout),
+              Effect.catchTag("TimeoutError", (cause) =>
+                Effect.sync(() => {
+                  timedOutNativeCompactions.add(threadId);
+                }).pipe(
+                  Effect.andThen(
+                    Effect.fail(
+                      new ProviderAdapterRequestError({
+                        provider: routed.adapter.provider,
+                        method: "thread/compact",
+                        detail: `Provider did not report completed context compaction within ${nativeCompletionTimeout}.`,
+                        cause,
+                      }),
+                    ),
+                  ),
+                ),
+              ),
+            );
+          const awaitFallbackCompaction = Deferred.await(completion).pipe(
+            Effect.timeout("10 minutes"),
+            Effect.mapError(
+              (cause) =>
+                new ProviderAdapterRequestError({
+                  provider: routed.adapter.provider,
+                  method: "turn/start",
+                  detail: "Provider did not finish context compaction within 10 minutes.",
+                  cause,
+                }),
+            ),
+          );
+          const awaitTerminal = yield* Effect.gen(function* () {
+            if (nativeCompaction !== undefined) {
+              return {
+                wait: awaitNativeCompaction(nativeCompaction(routed.threadId, modelSelection)),
+              };
+            }
+            const turn = yield* sendTurn({
+              threadId,
+              input: routed.adapter.provider === "cursor" ? "/compress" : "/compact",
+              ...(modelSelection !== undefined ? { modelSelection } : {}),
+            }).pipe(
+              Effect.onError(() =>
+                Effect.forEach(
+                  pending.earlyEvents.splice(0),
+                  (event) => publishRuntimeEvent(event),
+                  {
+                    discard: true,
+                  },
+                ),
+              ),
+            );
+            pending.expectedTurnId = turn.turnId;
+            const earlyEvents = pending.earlyEvents.splice(0);
+            for (const earlyEvent of earlyEvents) {
+              yield* processFallbackCompactionEvent(pending, earlyEvent);
+            }
+            return { wait: awaitFallbackCompaction };
+          }).pipe(Effect.onError(() => clearPending));
+          // The pending claim prevents parallel compaction. Native work and
+          // completion waiting run outside the thread lock so stop/start can
+          // settle or replace the in-flight operation.
+          return {
+            wait: awaitTerminal.wait.pipe(Effect.ensuring(clearPending)),
+            provider: routed.adapter.provider,
+            native: nativeCompaction !== undefined,
+          };
+        }),
+      );
+      const terminal = yield* pendingCompaction.wait;
+      if (terminal !== "completed") {
+        return yield* new ProviderAdapterRequestError({
+          provider: pendingCompaction.provider,
+          method: pendingCompaction.native ? "thread/compact" : "turn/start",
+          detail: `Context compaction ended with ${terminal}.`,
+        });
+      }
+      yield* analytics.record("provider.thread.compacted", {
+        provider: pendingCompaction.provider,
+      });
+    },
+  );
+
   const interruptTurn: ProviderServiceMethod<"interruptTurn"> = Effect.fn("interruptTurn")(
     function* (rawInput) {
       const input = yield* decodeInputOrValidationError({
@@ -1635,6 +1902,11 @@ const makeProviderService = Effect.fn("makeProviderService")(function* (
         if (routed.isActive) {
           yield* routed.adapter.stopSession(routed.threadId);
         }
+        const pendingCompaction = pendingCompactions.get(input.threadId);
+        if (pendingCompaction !== undefined) {
+          yield* settleCompaction(input.threadId, pendingCompaction, "turn.aborted");
+        }
+        timedOutNativeCompactions.delete(input.threadId);
         yield* clearMcpSession(input.threadId);
         yield* directory.upsert({
           threadId: input.threadId,
@@ -1831,6 +2103,21 @@ const makeProviderService = Effect.fn("makeProviderService")(function* (
   const getInstanceInfo: ProviderServiceMethod<"getInstanceInfo"> = (instanceId) =>
     registry.getInstanceInfo(instanceId);
 
+  const assertConversationRollbackSupported: ProviderServiceMethod<"assertConversationRollbackSupported"> =
+    Effect.fn("assertConversationRollbackSupported")(function* (threadId) {
+      const routed = yield* resolveRoutableSession({
+        threadId,
+        operation: "ProviderService.assertConversationRollbackSupported",
+        allowRecovery: false,
+      });
+      if (routed.adapter.capabilities.supportsConversationRollback === false) {
+        return yield* toValidationError(
+          "ProviderService.assertConversationRollbackSupported",
+          `Provider '${routed.adapter.provider}' does not support conversation rewind.`,
+        );
+      }
+    });
+
   const rollbackConversation: ProviderServiceMethod<"rollbackConversation"> = Effect.fn(
     "rollbackConversation",
   )(function* (rawInput) {
@@ -1844,6 +2131,7 @@ const makeProviderService = Effect.fn("makeProviderService")(function* (
     }
     let metricProvider = "unknown";
     return yield* Effect.gen(function* () {
+      yield* assertConversationRollbackSupported(input.threadId);
       const routed = yield* resolveRoutableSession({
         threadId: input.threadId,
         operation: "ProviderService.rollbackConversation",
@@ -1995,6 +2283,7 @@ const makeProviderService = Effect.fn("makeProviderService")(function* (
     // a concurrent stop/start cannot swap the session out mid-fork.
     forkConversation: (input) => withThreadLock(input.sourceThreadId, forkConversation(input)),
     sendTurn: (input) => withThreadLock(input.threadId, sendTurn(input)),
+    compactThread,
     interruptTurn: (input) => withThreadLock(input.threadId, interruptTurn(input)),
     respondToRequest: (input) => withThreadLock(input.threadId, respondToRequest(input)),
     respondToUserInput: (input) => withThreadLock(input.threadId, respondToUserInput(input)),
@@ -2003,6 +2292,8 @@ const makeProviderService = Effect.fn("makeProviderService")(function* (
     listSessions,
     getCapabilities,
     getInstanceInfo,
+    assertConversationRollbackSupported: (threadId) =>
+      withThreadLock(threadId, assertConversationRollbackSupported(threadId)),
     rollbackConversation: (input) => withThreadLock(input.threadId, rollbackConversation(input)),
     uploadFeedback: (input) => withThreadLock(input.threadId, uploadFeedback(input)),
     // Each access creates a fresh PubSub subscription so multiple consumers
