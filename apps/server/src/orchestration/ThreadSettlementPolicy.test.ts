@@ -118,8 +118,8 @@ describe("resolveAutoSettlementAt", () => {
     ).toBeNull();
   });
 
-  it("keeps open pull requests active", () => {
-    expect(settlementAt(makeThread(), { state: "open", updatedAt: NOW })).toBeNull();
+  it("settles inactive threads with open pull requests", () => {
+    expect(settlementAt(makeThread(), { state: "open", updatedAt: NOW })).toBe(LAST_ACTIVITY_AT);
   });
 
   it("settles closed requests and honors the merge setting", () => {

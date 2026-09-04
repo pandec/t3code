@@ -39,7 +39,7 @@ style.
 Settings saved by older clients on one device no longer control this behavior.
 
 By default, the server settles threads after three days without activity and when their pull request
-merges. An eligible idle thread also settles when its pull request closes. An open pull request blocks
+merges. An eligible idle thread also settles when its pull request closes. An open pull request does not block
 inactivity settlement. Active work, pending input, and live background work keep the thread active.
 A closed or merged pull request settles a thread only when its timestamp is not older than the user's
 latest activity. If that timestamp is unavailable, the inactivity rule still applies. Changing the

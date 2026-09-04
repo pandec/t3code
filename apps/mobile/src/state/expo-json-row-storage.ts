@@ -12,6 +12,7 @@ export interface ExpoJsonRowStorageOptions<Row> {
   readonly decode: (value: unknown) => Row;
   readonly encode: (row: Row) => unknown;
   readonly invalidRowWarning: string;
+  readonly strictRows?: boolean;
   readonly loadError: (cause: unknown) => unknown;
   readonly readError: (fileName: string, cause: unknown) => unknown;
   readonly writeError: (row: Row, fileName: string, cause: unknown) => unknown;
@@ -55,19 +56,25 @@ export function createExpoJsonRowStorage<Row>(options: ExpoJsonRowStorageOptions
     storage: {
       load: async () => {
         const rows: Row[] = [];
+        let File: typeof import("expo-file-system").File;
+        let entries: ReturnType<Awaited<ReturnType<typeof getDirectory>>["list"]>;
         try {
-          const { File } = await import("expo-file-system");
-          const directory = await getDirectory();
-          for (const entry of directory.list()) {
-            if (!(entry instanceof File) || !entry.name.endsWith(".json")) continue;
-            try {
-              rows.push(options.decode(JSON.parse(await entry.text()) as unknown));
-            } catch (cause) {
-              console.warn(options.invalidRowWarning, options.readError(entry.name, cause));
-            }
-          }
+          ({ File } = await import("expo-file-system"));
+          entries = (await getDirectory()).list();
         } catch (cause) {
           throw options.loadError(cause);
+        }
+        for (const entry of entries) {
+          if (!(entry instanceof File) || !entry.name.endsWith(".json")) continue;
+          try {
+            rows.push(options.decode(JSON.parse(await entry.text()) as unknown));
+          } catch (cause) {
+            const error = options.readError(entry.name, cause);
+            if (options.strictRows === true) {
+              throw error;
+            }
+            console.warn(options.invalidRowWarning, error);
+          }
         }
         return rows;
       },

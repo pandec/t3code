@@ -624,12 +624,13 @@ describe("composer draft record split", () => {
     expect(hashMetrics.maxActive).toBeLessThanOrEqual(2);
   });
 
-  it("treats an invalid split record as missing during targeted rehydration", async () => {
+  it("rejects an invalid split record during targeted rehydration", async () => {
     const draftKey = "environment-1:thread-invalid-targeted-record";
     persistedFiles.set(draftRecordPath(draftKey), "{invalid json");
 
-    await expect(hydratePersistedComposerDraftKey(draftKey)).resolves.toEqual({
-      state: "missing",
+    await expect(hydratePersistedComposerDraftKey(draftKey)).rejects.toMatchObject({
+      operation: "decode",
+      fileName: `${encodeURIComponent(draftKey)}.json`,
     });
   });
 

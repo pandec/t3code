@@ -32,6 +32,7 @@ import {
   TurnId,
 } from "@t3tools/contracts";
 import * as Clock from "effect/Clock";
+import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
 import * as Exit from "effect/Exit";
 import * as Layer from "effect/Layer";
@@ -39,6 +40,7 @@ import * as ManagedRuntime from "effect/ManagedRuntime";
 import * as PubSub from "effect/PubSub";
 import * as Scope from "effect/Scope";
 import * as Stream from "effect/Stream";
+import * as Tracer from "effect/Tracer";
 import { it as effectIt } from "@effect/vitest";
 import { afterEach, describe, expect, it } from "vite-plus/test";
 
@@ -65,6 +67,7 @@ import { ServerConfig } from "../../config.ts";
 import { ServerSettingsService } from "../../serverSettings.ts";
 import * as AgentVoiceReply from "../../voice/AgentVoiceReply.ts";
 import * as NodeServices from "@effect/platform-node/NodeServices";
+import { makeSqlStatementCounter } from "../../../integration/SqlStatementCounter.integration.ts";
 
 function makeTestServerSettingsLayer(overrides: Partial<ServerSettings> = {}) {
   return ServerSettingsService.layerTest(overrides);
@@ -110,8 +113,11 @@ function isLegacyTurnCompletedEvent(
 function createProviderServiceHarness() {
   const runtimeEventPubSub = Effect.runSync(
     PubSub.unbounded<{
-      readonly event: ProviderRuntimeEvent;
-      readonly eventIsStaleGeneration: boolean;
+      readonly events: ReadonlyArray<{
+        readonly event: ProviderRuntimeEvent;
+        readonly eventIsStaleGeneration: boolean;
+      }>;
+      readonly enqueued?: Deferred.Deferred<void>;
     }>(),
   );
   const runtimeSessions: ProviderSession[] = [];
@@ -147,10 +153,19 @@ function createProviderServiceHarness() {
     uploadFeedback: () => unsupported(),
     get streamEvents() {
       return Stream.fromPubSub(runtimeEventPubSub).pipe(
-        Stream.filter(({ eventIsStaleGeneration }) =>
-          shouldApplySessionScopedRuntimeEvent(eventIsStaleGeneration, true),
+        Stream.flatMap(({ events, enqueued }) =>
+          Stream.concat(
+            Stream.fromIterable(events).pipe(
+              Stream.filter(({ eventIsStaleGeneration }) =>
+                shouldApplySessionScopedRuntimeEvent(eventIsStaleGeneration, true),
+              ),
+              Stream.map(({ event }) => event),
+            ),
+            enqueued
+              ? Stream.fromEffect(Deferred.succeed(enqueued, undefined)).pipe(Stream.drain)
+              : Stream.empty,
+          ),
         ),
-        Stream.map(({ event }) => event),
       );
     },
   };
@@ -189,15 +204,34 @@ function createProviderServiceHarness() {
   ): void => {
     Effect.runSync(
       PubSub.publish(runtimeEventPubSub, {
-        event: normalizeLegacyEvent(event),
-        eventIsStaleGeneration: options?.eventIsStaleGeneration ?? false,
+        events: [
+          {
+            event: normalizeLegacyEvent(event),
+            eventIsStaleGeneration: options?.eventIsStaleGeneration ?? false,
+          },
+        ],
       }),
     );
   };
 
+  const emitAndWaitForEnqueue = Effect.fnUntraced(function* (
+    events: ReadonlyArray<LegacyProviderRuntimeEvent>,
+  ) {
+    const enqueued = yield* Deferred.make<void>();
+    yield* PubSub.publish(runtimeEventPubSub, {
+      events: events.map((event) => ({
+        event: normalizeLegacyEvent(event),
+        eventIsStaleGeneration: false,
+      })),
+      enqueued,
+    });
+    yield* Deferred.await(enqueued);
+  });
+
   return {
     service,
     emit,
+    emitAndWaitForEnqueue,
     setSession,
     clearSessions,
   };
@@ -299,6 +333,7 @@ describe("ProviderRuntimeIngestion", () => {
       streamChanges: Stream.empty,
       subscribeChanges: Effect.flatMap(PubSub.unbounded<void>(), PubSub.subscribe),
     });
+    const sqlCounter = makeSqlStatementCounter();
     const orchestrationLayer = OrchestrationEngineLive.pipe(
       Layer.provide(OrchestrationProjectionSnapshotQueryLive),
       Layer.provide(OrchestrationProjectionPipelineLive),
@@ -334,19 +369,23 @@ describe("ProviderRuntimeIngestion", () => {
           : Layer.succeed(AgentVoiceReply.AgentVoiceReply, options.agentVoiceReply),
       ),
       Layer.provideMerge(NodeServices.layer),
+      Layer.provideMerge(Layer.succeed(Tracer.Tracer, sqlCounter.tracer)),
     );
-    runtime = ManagedRuntime.make(layer);
-    const engine = await runtime.runPromise(Effect.service(OrchestrationEngineService));
-    const snapshotQuery = await runtime.runPromise(Effect.service(ProjectionSnapshotQuery));
-    const ingestion = await runtime.runPromise(Effect.service(ProviderRuntimeIngestionService));
+    const testRuntime = ManagedRuntime.make(layer);
+    runtime = testRuntime;
+    const engine = await testRuntime.runPromise(Effect.service(OrchestrationEngineService));
+    const snapshotQuery = await testRuntime.runPromise(Effect.service(ProjectionSnapshotQuery));
+    const ingestion = await testRuntime.runPromise(Effect.service(ProviderRuntimeIngestionService));
     scope = await Effect.runPromise(Scope.make("sequential"));
-    await Effect.runPromise(ingestion.start().pipe(Scope.provide(scope)));
-    const drain = () => Effect.runPromise(ingestion.drain);
-    // Promise-facing helpers so tests do not add manual Effect runners
-    // (see oxlint-plugin-t3code/rules/no-manual-effect-runtime-in-tests.ts).
+    await testRuntime.runPromise(ingestion.start().pipe(Scope.provide(scope)));
+    const drain = () => testRuntime.runPromise(ingestion.drain);
     const seedDispatch = (command: Parameters<(typeof engine)["dispatch"]>[0]) =>
-      Effect.runPromise(engine.dispatch(command));
+      testRuntime.runPromise(engine.dispatch(command));
     const dispatch = (command: OrchestrationCommand) => seedDispatch(command);
+    const emitAndDrain = (events: ReadonlyArray<LegacyProviderRuntimeEvent>) =>
+      testRuntime.runPromise(
+        provider.emitAndWaitForEnqueue(events).pipe(Effect.andThen(ingestion.drain)),
+      );
 
     const createdAt = "2026-01-01T00:00:00.000Z";
     await seedDispatch({
@@ -401,23 +440,28 @@ describe("ProviderRuntimeIngestion", () => {
       updatedAt: createdAt,
     });
 
-    const backgroundLiveness = await runtime.runPromise(
+    const backgroundLiveness = await testRuntime.runPromise(
       Effect.service(ThreadBackgroundLiveness.ThreadBackgroundLivenessService),
     );
     const getThreadBackgroundLiveness = (targetThreadId: ThreadId) =>
       backgroundLiveness.getThreadBackgroundLiveness(targetThreadId);
 
-    const providerInstanceHealth = await runtime.runPromise(Effect.service(ProviderInstanceHealth));
+    const providerInstanceHealth = await testRuntime.runPromise(
+      Effect.service(ProviderInstanceHealth),
+    );
     const getRateLimitState = (targetInstanceId: ProviderInstanceId) =>
-      Effect.runPromise(providerInstanceHealth.getRateLimitState(targetInstanceId));
-    const listUsageSnapshots = () => Effect.runPromise(providerInstanceHealth.listUsageSnapshots());
+      testRuntime.runPromise(providerInstanceHealth.getRateLimitState(targetInstanceId));
+    const listUsageSnapshots = () =>
+      testRuntime.runPromise(providerInstanceHealth.listUsageSnapshots());
 
     return {
       engine,
       workspaceRoot,
       dispatch,
-      readModel: () => Effect.runPromise(snapshotQuery.getSnapshot()),
+      readModel: () => testRuntime.runPromise(snapshotQuery.getSnapshot()),
       emit: provider.emit,
+      emitAndDrain,
+      sqlCount: sqlCounter.count,
       setProviderSession: provider.setSession,
       clearProviderSessions: provider.clearSessions,
       drain,
@@ -2643,39 +2687,40 @@ describe("ProviderRuntimeIngestion", () => {
     expect(proposedPlan?.planMarkdown).toBe("## Buffered plan\n\n- first\n- second");
   });
 
-  it("buffers assistant deltas by default until completion", async () => {
+  it("buffers assistant deltas with one lifecycle query per event until completion", async () => {
     const harness = await createHarness();
     const now = "2026-01-01T00:00:00.000Z";
 
-    harness.emit({
-      type: "turn.started",
-      eventId: asEventId("evt-turn-started-buffered"),
-      provider: ProviderDriverKind.make("codex"),
-      createdAt: now,
-      threadId: asThreadId("thread-1"),
-      turnId: asTurnId("turn-buffered"),
-    });
-    await waitForThread(
-      harness.readModel,
-      (thread) =>
-        thread.session?.status === "running" && thread.session?.activeTurnId === "turn-buffered",
-    );
-
-    harness.emit({
-      type: "content.delta",
-      eventId: asEventId("evt-message-delta-buffered"),
-      provider: ProviderDriverKind.make("codex"),
-      createdAt: now,
-      threadId: asThreadId("thread-1"),
-      turnId: asTurnId("turn-buffered"),
-      itemId: asItemId("item-buffered"),
-      payload: {
-        streamKind: "assistant_text",
-        delta: "buffer me",
+    await harness.emitAndDrain([
+      {
+        type: "turn.started",
+        eventId: asEventId("evt-turn-started-buffered"),
+        provider: ProviderDriverKind.make("codex"),
+        createdAt: now,
+        threadId: asThreadId("thread-1"),
+        turnId: asTurnId("turn-buffered"),
       },
-    });
+    ]);
 
-    await harness.drain();
+    const eventCount = 1_000;
+    const before = harness.sqlCount();
+    await harness.emitAndDrain(
+      Array.from({ length: eventCount }, (_, index) => ({
+        type: "content.delta",
+        eventId: asEventId(`evt-message-delta-buffered-${index}`),
+        provider: ProviderDriverKind.make("codex"),
+        createdAt: now,
+        threadId: asThreadId("thread-1"),
+        turnId: asTurnId("turn-buffered"),
+        itemId: asItemId("item-buffered"),
+        payload: {
+          streamKind: "assistant_text",
+          delta: "a",
+        },
+      })),
+    );
+    expect(harness.sqlCount() - before).toBe(eventCount);
+
     const midReadModel = await harness.readModel();
     const midThread = midReadModel.threads.find((entry) => entry.id === ThreadId.make("thread-1"));
     expect(
@@ -2684,30 +2729,25 @@ describe("ProviderRuntimeIngestion", () => {
       ),
     ).toBe(false);
 
-    harness.emit({
-      type: "item.completed",
-      eventId: asEventId("evt-message-completed-buffered"),
-      provider: ProviderDriverKind.make("codex"),
-      createdAt: now,
-      threadId: asThreadId("thread-1"),
-      turnId: asTurnId("turn-buffered"),
-      itemId: asItemId("item-buffered"),
-      payload: {
-        itemType: "assistant_message",
-        status: "completed",
+    await harness.emitAndDrain([
+      {
+        type: "item.completed",
+        eventId: asEventId("evt-message-completed-buffered"),
+        provider: ProviderDriverKind.make("codex"),
+        createdAt: now,
+        threadId: asThreadId("thread-1"),
+        turnId: asTurnId("turn-buffered"),
+        itemId: asItemId("item-buffered"),
+        payload: {
+          itemType: "assistant_message",
+          status: "completed",
+        },
       },
-    });
-
-    const thread = await waitForThread(harness.readModel, (entry) =>
-      entry.messages.some(
-        (message: ProviderRuntimeTestMessage) =>
-          message.id === "assistant:item-buffered" && !message.streaming,
-      ),
-    );
-    const message = thread.messages.find(
-      (entry: ProviderRuntimeTestMessage) => entry.id === "assistant:item-buffered",
-    );
-    expect(message?.text).toBe("buffer me");
+    ]);
+    const readModel = await harness.readModel();
+    const thread = readModel.threads.find((entry) => entry.id === asThreadId("thread-1"));
+    const message = thread?.messages.find((entry) => entry.id === "assistant:item-buffered");
+    expect(message?.text).toBe("a".repeat(eventCount));
     expect(message?.streaming).toBe(false);
   });
 

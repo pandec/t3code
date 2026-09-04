@@ -114,6 +114,7 @@ const persistenceQueue = new SerializedAsyncQueue();
 /** Resets module-level state between test runs. */
 export function resetComposerDraftsLoadState(): void {
   loadPromise = null;
+  hydrationComplete = false;
 }
 
 function normalizeDraft(draft: ComposerDraft | undefined): ComposerDraft {
@@ -371,6 +372,17 @@ function requeueFailedDrafts(
 }
 
 async function savePendingComposerDrafts(): Promise<void> {
+  if (!hydrationComplete) {
+    try {
+      await waitForComposerDraftsLoaded();
+    } catch {
+      if (pendingDraftKeys.size > 0) {
+        requeueFailedDrafts(new Set(pendingDraftKeys), pendingAttachmentSweep);
+      }
+      return;
+    }
+  }
+
   const pending = takePendingPersistence();
   if (pending.draftKeys.size === 0 && !pending.sweepAttachments) {
     await persistenceQueue.run(async () => undefined);
@@ -443,16 +455,19 @@ async function persistComposerCloudDraftState(
 
 export async function flushComposerDrafts(): Promise<void> {
   clearPersistenceTimers();
-  if (cloudPersistencePending) {
-    await persistComposerCloudDraftState();
-  }
   await savePendingComposerDrafts();
-  clearPersistenceTimers();
+  if (!hydrationComplete) {
+    return;
+  }
   if (cloudPersistencePending) {
     await persistComposerCloudDraftState();
   }
+  clearPersistenceTimers();
   if (pendingDraftKeys.size > 0 || pendingAttachmentSweep) {
     await savePendingComposerDrafts();
+  }
+  if (cloudPersistencePending) {
+    await persistComposerCloudDraftState();
   }
 }
 
@@ -719,14 +734,11 @@ export function ensureComposerDraftsLoaded(): void {
   if (loadPromise !== null) {
     return;
   }
-  loadPromise = persistenceQueue
+  const loading = persistenceQueue
     .run(async () => ({
       draftState: await loadPersistedComposerDraftState(),
       stickyModelSelection: await loadStickyComposerModelSelection(),
-      cloudDrafts: await loadPersistedComposerCloudDraftState().catch((error) => {
-        console.warn("[composer-drafts] failed to hydrate cloud drafts", error);
-        return appAtomRegistry.get(composerCloudDraftsAtom);
-      }),
+      cloudDrafts: await loadPersistedComposerCloudDraftState(),
     }))
     .then(({ draftState: persisted, stickyModelSelection, cloudDrafts }) => {
       appAtomRegistry.set(composerCloudDraftsAtom, cloudDrafts);
@@ -751,23 +763,26 @@ export function ensureComposerDraftsLoaded(): void {
       ) {
         appAtomRegistry.set(stickyComposerModelSelectionAtom, stickyModelSelection);
       }
-    })
-    .catch((cause) => {
-      console.warn(
-        "[composer-drafts] failed to hydrate drafts",
-        new ComposerDraftPersistenceError({
-          operation: "hydrate",
-          directory: "composer-drafts",
-          fileName: "*",
-          cause,
-        }),
-      );
-      // Draft loading is best-effort; in-memory drafts still keep working.
-    })
-    .finally(() => {
       hydrationComplete = true;
       draftKeysMutatedBeforeHydration.clear();
     });
+  loadPromise = loading;
+  // Keep fire-and-forget hook loads observable without swallowing the
+  // rejection from persistence and cleanup callers. A later call retries.
+  void loading.catch((cause) => {
+    if (loadPromise === loading) loadPromise = null;
+    console.warn(
+      "[composer-drafts] failed to hydrate drafts",
+      cause instanceof ComposerDraftPersistenceError
+        ? cause
+        : new ComposerDraftPersistenceError({
+            operation: "hydrate",
+            directory: "composer-drafts",
+            fileName: "*",
+            cause,
+          }),
+    );
+  });
 }
 
 /** Wait until persisted drafts have been merged into the in-memory composer state. */

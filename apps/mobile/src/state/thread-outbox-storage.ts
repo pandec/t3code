@@ -23,6 +23,7 @@ const threadOutboxStore = createExpoJsonRowStorage<QueuedThreadMessage>({
   decode: decodeQueuedThreadMessage,
   encode: encodeQueuedThreadMessage,
   invalidRowWarning: "[thread-outbox] ignored invalid persisted message",
+  strictRows: true,
   loadError: (cause) =>
     new ThreadOutboxStorageError({
       operation: "load",

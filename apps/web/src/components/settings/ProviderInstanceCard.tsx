@@ -731,7 +731,9 @@ export function ProviderInstanceCard({
       </span>
     );
     const listVersionCodeNode = versionLabel ? (
-      <code className="text-xs text-muted-foreground">{versionLabel}</code>
+      <code className="max-w-24 shrink-0 truncate text-xs text-muted-foreground">
+        {versionLabel}
+      </code>
     ) : null;
     const listStatusDotNode =
       statusKey === "warning" || statusKey === "error" ? (

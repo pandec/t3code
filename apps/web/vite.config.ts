@@ -146,6 +146,7 @@ const ISOLATED_TEST_FILES = [
   "src/openVsxThemes.test.ts",
   "src/rpc/requestLatencyState.test.ts",
   "src/terminal/ghostty/core.test.ts",
+  "src/terminal/ghostty/surface.test.ts",
   "src/timestampFormat.test.ts",
   "src/versionSkew.test.ts",
 ];

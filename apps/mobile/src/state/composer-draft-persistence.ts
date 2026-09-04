@@ -435,15 +435,12 @@ async function loadRecordDocuments(): Promise<ReadonlyArray<PersistedComposerDra
       try {
         documents.push(decodeComposerDraftRecordDocument(JSON.parse(raw) as unknown));
       } catch (cause) {
-        console.warn(
-          "[composer-drafts] ignored invalid persisted draft record",
-          new ComposerDraftPersistenceError({
-            operation: "decode",
-            directory: `${COMPOSER_DRAFTS_DIRECTORY}/${COMPOSER_DRAFT_RECORDS_DIRECTORY}`,
-            fileName: entry.name,
-            cause,
-          }),
-        );
+        throw new ComposerDraftPersistenceError({
+          operation: "decode",
+          directory: `${COMPOSER_DRAFTS_DIRECTORY}/${COMPOSER_DRAFT_RECORDS_DIRECTORY}`,
+          fileName: entry.name,
+          cause,
+        });
       }
     }
     return documents;
@@ -629,9 +626,20 @@ async function loadLegacyDrafts(): Promise<{
   if (!file.exists) {
     return { drafts: {}, exists: false, valid: true };
   }
+  let raw: string;
+  try {
+    raw = await file.text();
+  } catch (cause) {
+    throw new ComposerDraftPersistenceError({
+      operation: "read",
+      directory: COMPOSER_DRAFTS_DIRECTORY,
+      fileName: LEGACY_COMPOSER_DRAFTS_FILE,
+      cause,
+    });
+  }
   try {
     return {
-      drafts: decodePersistedComposerDrafts(JSON.parse(await file.text()) as unknown),
+      drafts: decodePersistedComposerDrafts(JSON.parse(raw) as unknown),
       exists: true,
       valid: true,
     };
@@ -774,8 +782,19 @@ async function loadComposerCloudDraftDocument(): Promise<Schema.Schema.Type<
   if (!file.exists) {
     return null;
   }
+  let raw: string;
   try {
-    return decodeComposerCloudDraftStateDocument(JSON.parse(await file.text()) as unknown);
+    raw = await file.text();
+  } catch (cause) {
+    throw new ComposerDraftPersistenceError({
+      operation: "read",
+      directory: COMPOSER_DRAFTS_DIRECTORY,
+      fileName: CLOUD_DRAFTS_FILE,
+      cause,
+    });
+  }
+  try {
+    return decodeComposerCloudDraftStateDocument(JSON.parse(raw) as unknown);
   } catch (cause) {
     throw new ComposerDraftPersistenceError({
       operation: "decode",
@@ -1018,12 +1037,27 @@ export async function hydratePersistedComposerDraftKey(
   if (!file.exists) {
     return { state: "missing" };
   }
-  const raw = await file.text();
+  let raw: string;
+  try {
+    raw = await file.text();
+  } catch (cause) {
+    throw new ComposerDraftPersistenceError({
+      operation: "read",
+      directory: `${COMPOSER_DRAFTS_DIRECTORY}/${COMPOSER_DRAFT_RECORDS_DIRECTORY}`,
+      fileName: file.name,
+      cause,
+    });
+  }
   let record: PersistedComposerDraftRecord;
   try {
     record = decodeComposerDraftRecordDocument(JSON.parse(raw) as unknown);
-  } catch {
-    return { state: "missing" };
+  } catch (cause) {
+    throw new ComposerDraftPersistenceError({
+      operation: "decode",
+      directory: `${COMPOSER_DRAFTS_DIRECTORY}/${COMPOSER_DRAFT_RECORDS_DIRECTORY}`,
+      fileName: file.name,
+      cause,
+    });
   }
   const hydrated = await hydrateRecord(record, attachments);
   if (hydrated.repairedRecord !== null) {

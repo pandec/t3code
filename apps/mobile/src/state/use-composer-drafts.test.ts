@@ -14,6 +14,7 @@ const failNextMove = { value: false };
 const failMovePathFragments = new Set<string>();
 const failReadPathFragments = new Set<string>();
 const moveAttempts = new Map<string, number>();
+const readAttempts = new Map<string, number>();
 const readGate: {
   uri: string | null;
   promise: Promise<void> | null;
@@ -79,6 +80,7 @@ vi.mock("expo-file-system", () => {
     }
 
     async text(): Promise<string> {
+      readAttempts.set(this.uri, (readAttempts.get(this.uri) ?? 0) + 1);
       if ([...failReadPathFragments].some((fragment) => this.uri.includes(fragment))) {
         throw new Error(`read failed: ${this.uri}`);
       }
@@ -299,6 +301,7 @@ afterEach(() => {
   failMovePathFragments.clear();
   failReadPathFragments.clear();
   moveAttempts.clear();
+  readAttempts.clear();
   readGate.uri = null;
   readGate.promise = null;
   readGate.notifyStarted = null;
@@ -1125,6 +1128,103 @@ describe("mobile composer drafts", () => {
         new Set(),
       ),
     ).toEqual({ "new-task:environment-1:project-1": configured });
+  });
+
+  it.each(["read", "decode"] as const)(
+    "retries hydration after a draft record %s failure without dropping saved work",
+    async (failure) => {
+      const savedKey = "environment-1:saved";
+      const newKey = "environment-1:new";
+      const image = testImage("saved-image", "data:image/png;base64,YWJj");
+      const contentHash = testContentHash(image.dataUrl);
+      const savedRecord = JSON.stringify({
+        schemaVersion: 2,
+        draftKey: savedKey,
+        draft: {
+          text: "Saved draft",
+          attachments: [
+            {
+              id: image.id,
+              type: image.type,
+              name: image.name,
+              mimeType: image.mimeType,
+              sizeBytes: image.sizeBytes,
+              contentHash,
+            },
+          ],
+        },
+      });
+      const recordPath = draftRecordPath(savedKey);
+      const sidecarPath = attachmentPath(contentHash);
+      persistedFiles.set(recordPath, failure === "decode" ? "not-json" : savedRecord);
+      persistedFiles.set(sidecarPath, image.dataUrl);
+      if (failure === "read") {
+        failReadPathFragments.add(`${encodeURIComponent(savedKey)}.json`);
+      }
+
+      await expect(waitForComposerDraftsLoaded()).rejects.toMatchObject({ operation: failure });
+      setComposerDraftText(newKey, "Keep my new edits too");
+      await expect(flushComposerDrafts()).resolves.toBeUndefined();
+
+      expect(persistedFiles.get(recordPath)).toBe(failure === "decode" ? "not-json" : savedRecord);
+      expect(persistedFiles.get(sidecarPath)).toBe(image.dataUrl);
+      expect(hasUnpersistedComposerDrafts()).toBe(true);
+
+      failReadPathFragments.clear();
+      persistedFiles.set(recordPath, savedRecord);
+      await waitForComposerDraftsLoaded();
+      await flushComposerDrafts();
+
+      expect(getComposerDraftSnapshot(savedKey)).toMatchObject({
+        text: "Saved draft",
+        attachments: [{ ...image, previewUri: image.dataUrl }],
+      });
+      expect(getComposerDraftSnapshot(newKey)).toEqual({
+        text: "Keep my new edits too",
+        attachments: [],
+      });
+      expect(persistedFiles.has(draftRecordPath(newKey))).toBe(true);
+      expect(hasUnpersistedComposerDrafts()).toBe(false);
+    },
+  );
+
+  it("backs off repeated hydration retries after a storage failure", async () => {
+    vi.useFakeTimers();
+    const cloudPath = "file:///document/composer-drafts/cloud-drafts.json";
+    persistedFiles.set(cloudPath, "not-json");
+    setComposerDraftText("environment-1:pending", "Keep this edit");
+
+    await flushComposerDrafts();
+    expect(readAttempts.get(cloudPath)).toBe(2);
+
+    await vi.advanceTimersByTimeAsync(1_000);
+    expect(readAttempts.get(cloudPath)).toBe(4);
+    await vi.advanceTimersByTimeAsync(1_999);
+    expect(readAttempts.get(cloudPath)).toBe(4);
+    await vi.advanceTimersByTimeAsync(1);
+    expect(readAttempts.get(cloudPath)).toBe(6);
+  });
+
+  it("blocks cloud archival when the saved ownership document cannot be read", async () => {
+    const cloudPath = "file:///document/composer-drafts/cloud-drafts.json";
+    const originalCloud = JSON.stringify({
+      schemaVersion: 1,
+      accountId: "account-a",
+      signedOut: {},
+    });
+    persistedFiles.set(cloudPath, originalCloud);
+    failReadPathFragments.add("cloud-drafts.json");
+    appAtomRegistry.set(composerDraftsAtom, { "environment-1:thread-1": DRAFT });
+
+    await expect(
+      archiveCloudComposerDrafts("account-a", new Set([EnvironmentId.make("environment-1")])),
+    ).rejects.toMatchObject({ operation: "read", fileName: "cloud-drafts.json" });
+
+    expect(persistedFiles.get(cloudPath)).toBe(originalCloud);
+    expect(appAtomRegistry.get(composerDraftsAtom)).toEqual({
+      "environment-1:thread-1": DRAFT,
+    });
+    expect(composerAttachmentCleanupMocks.remove).not.toHaveBeenCalled();
   });
 
   it("persists and hydrates the sticky model selection", async () => {

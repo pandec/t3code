@@ -233,6 +233,7 @@ describe("ProviderSessionReaper", () => {
           getFirstActiveThreadIdByProjectId: () => Effect.die("unused"),
           getThreadCheckpointContext: () => Effect.die("unused"),
           getFullThreadDiffContext: () => Effect.die("unused"),
+          getThreadRuntimeContext: () => Effect.die("unused"),
           getThreadShellById: (threadId) =>
             Effect.gen(function* () {
               yield* input.beforeThreadLookupResult?.(threadId) ?? Effect.void;
