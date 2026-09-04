@@ -120,10 +120,6 @@ vi.mock("../features/archive/useArchivedThreadSnapshots", () => ({
   refreshArchivedThreadsForEnvironment: vi.fn(),
 }));
 
-vi.mock("./thread-steer-pending", () => ({
-  noteThreadSteerDispatch: vi.fn(),
-}));
-
 vi.mock("./entities", () => ({
   useProjects: () => [],
   useServerConfigs: () => new Map(),

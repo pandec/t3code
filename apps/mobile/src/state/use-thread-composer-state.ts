@@ -244,7 +244,6 @@ export function useThreadComposerState() {
   // Steers dispatched into this turn that the agent has not read yet. Only the
   // Claude adapter can hold one for long, but the signal is provider-agnostic.
   const steerPendingMessageIds = useSteerPendingMessageIds(
-    selectedThreadKey,
     useMemo(
       () => ({
         sessionStatus: selectedThreadSessionActivity?.orchestrationStatus ?? null,

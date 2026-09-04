@@ -8,18 +8,10 @@ import {
   type OrchestrationMessage,
   type OrchestrationThreadActivity,
 } from "@t3tools/contracts";
-import { AtomRegistry } from "effect/unstable/reactivity";
 
 import {
-  createThreadSteerPendingStore,
-  isSteerStillUnread,
   latestParentAgentProgressAt,
-  nextSteerPendingRevealDelayMs,
-  revealedSteerPendingMessageIds,
-  shouldTrackSteerDispatch,
-  STEER_PENDING_REVEAL_DELAY_MS,
-  unreadSteerDispatches,
-  type PendingSteerDispatch,
+  unreadSteerMessageIds,
   type SteerPendingThreadSnapshot,
 } from "./threadSteerPending.ts";
 
@@ -51,57 +43,34 @@ function activity(
   };
 }
 
-function assistantMessage(createdAt: string): OrchestrationMessage {
+function message(
+  overrides: Partial<Omit<OrchestrationMessage, "id">> & { readonly id: string },
+): OrchestrationMessage {
   return {
-    id: MessageId.make(`assistant-${createdAt}`),
-    role: "assistant",
-    text: "on it",
-    turnId,
+    role: "user",
+    text: "steer",
+    turnId: null,
     streaming: false,
-    createdAt,
-    updatedAt: createdAt,
+    createdAt: at(10),
+    updatedAt: at(10),
+    ...overrides,
+    id: MessageId.make(overrides.id),
   };
 }
 
+const assistantMessage = (createdAt: string): OrchestrationMessage =>
+  message({ id: `assistant-${createdAt}`, role: "assistant", text: "on it", turnId, createdAt });
+
+/** The user message that opened the turn shares the turn's requestedAt. */
+const openingMessage = message({ id: "opening", createdAt: at(-60) });
+const steer = message({ id: steerMessageId, createdAt: at(10) });
+
 const runningThread: SteerPendingThreadSnapshot = {
   sessionStatus: "running",
-  latestTurn: { turnId, state: "running" },
-  messages: [],
+  latestTurn: { turnId, state: "running", requestedAt: at(-60) },
+  messages: [openingMessage, steer],
   activities: [blockingToolStarted],
 };
-
-const pendingSteer: PendingSteerDispatch = {
-  messageId: steerMessageId,
-  dispatchedAt: at(10),
-  progressWatermarkAt: at(0),
-  turnId,
-};
-
-describe("shouldTrackSteerDispatch", () => {
-  it("tracks a steer that landed on a turn already running", () => {
-    expect(shouldTrackSteerDispatch({ deliveryIntent: "steer", sessionStatus: "running" })).toBe(
-      true,
-    );
-  });
-
-  it("ignores a plain queued send", () => {
-    expect(shouldTrackSteerDispatch({ deliveryIntent: "queue", sessionStatus: "running" })).toBe(
-      false,
-    );
-  });
-
-  it("ignores a steer that started its own turn", () => {
-    // Drained after the turn settled, or after the grace window outlived it:
-    // nothing queues behind a tool call, so there is nothing to wait for.
-    expect(shouldTrackSteerDispatch({ deliveryIntent: "steer", sessionStatus: "idle" })).toBe(
-      false,
-    );
-    expect(shouldTrackSteerDispatch({ deliveryIntent: "steer", sessionStatus: "starting" })).toBe(
-      false,
-    );
-    expect(shouldTrackSteerDispatch({ deliveryIntent: "steer", sessionStatus: null })).toBe(false);
-  });
-});
 
 describe("latestParentAgentProgressAt", () => {
   it("takes the newest main-agent tool start or assistant message", () => {
@@ -129,16 +98,22 @@ describe("latestParentAgentProgressAt", () => {
   });
 });
 
-describe("isSteerStillUnread", () => {
-  it("stays pending while the parent is blocked in its tool call", () => {
-    expect(isSteerStillUnread(pendingSteer, runningThread)).toBe(true);
+describe("unreadSteerMessageIds", () => {
+  it("marks a steer while the parent is blocked in its tool call", () => {
+    expect(unreadSteerMessageIds(runningThread)).toStrictEqual([steerMessageId]);
+  });
+
+  it("never marks the message that opened the turn", () => {
+    expect(unreadSteerMessageIds({ ...runningThread, messages: [openingMessage] })).toStrictEqual(
+      [],
+    );
   });
 
   it("is unmoved by subagent activity streaming under the blocked parent", () => {
     // The whole point of the marker: a subagent narrates continuously while the
     // parent has not looked at its prompt queue once.
     expect(
-      isSteerStillUnread(pendingSteer, {
+      unreadSteerMessageIds({
         ...runningThread,
         activities: [
           blockingToolStarted,
@@ -148,203 +123,85 @@ describe("isSteerStillUnread", () => {
           activity({ id: "sub-bypass", createdAt: at(50), payload: { timelineBypass: true } }),
         ],
       }),
-    ).toBe(true);
+    ).toStrictEqual([steerMessageId]);
   });
 
   it("resolves once the main agent starts its next tool", () => {
     expect(
-      isSteerStillUnread(pendingSteer, {
-        ...runningThread,
-        activities: [blockingToolStarted, activity({ id: "next", createdAt: at(60) })],
-      }),
-    ).toBe(false);
-  });
-
-  it("resolves once the main agent answers in prose", () => {
-    expect(
-      isSteerStillUnread(pendingSteer, { ...runningThread, messages: [assistantMessage(at(60))] }),
-    ).toBe(false);
-  });
-
-  it("ignores main-agent work that predates the dispatch", () => {
-    expect(
-      isSteerStillUnread(pendingSteer, {
-        ...runningThread,
-        messages: [assistantMessage(at(-30))],
-        activities: [activity({ id: "earlier", createdAt: at(-10) }), blockingToolStarted],
-      }),
-    ).toBe(true);
-  });
-
-  it("uses the server progress watermark when the client clock is skewed", () => {
-    expect(
-      isSteerStillUnread(
-        { ...pendingSteer, dispatchedAt: "2099-01-01T00:00:00.000Z" },
-        {
-          ...runningThread,
-          activities: [blockingToolStarted, activity({ id: "next", createdAt: at(60) })],
-        },
-      ),
-    ).toBe(false);
-  });
-
-  it("resolves when the turn completes", () => {
-    expect(
-      isSteerStillUnread(pendingSteer, {
-        ...runningThread,
-        sessionStatus: "ready",
-        latestTurn: { turnId, state: "completed" },
-      }),
-    ).toBe(false);
-  });
-
-  it("resolves when the turn is interrupted or errors", () => {
-    expect(
-      isSteerStillUnread(pendingSteer, {
-        ...runningThread,
-        sessionStatus: "interrupted",
-        latestTurn: { turnId, state: "interrupted" },
-      }),
-    ).toBe(false);
-    expect(
-      isSteerStillUnread(pendingSteer, {
-        ...runningThread,
-        sessionStatus: "error",
-        latestTurn: { turnId, state: "error" },
-      }),
-    ).toBe(false);
-    expect(isSteerStillUnread(pendingSteer, { ...runningThread, latestTurn: null })).toBe(false);
-  });
-
-  it("resolves when the provider answered the steer with a turn of its own", () => {
-    // Codex injects a mid-turn message at the protocol level and opens a fresh
-    // turn for it, so the turn the steer joined no longer being current means
-    // it was taken. No provider gate needed.
-    expect(
-      isSteerStillUnread(pendingSteer, {
-        ...runningThread,
-        latestTurn: { turnId: otherTurnId, state: "running" },
-      }),
-    ).toBe(false);
-  });
-});
-
-describe("unreadSteerDispatches", () => {
-  it("keeps array identity while nothing resolves", () => {
-    const pending = [pendingSteer];
-    expect(unreadSteerDispatches(pending, runningThread)).toBe(pending);
-  });
-
-  it("drops the steers the agent has read", () => {
-    expect(
-      unreadSteerDispatches([pendingSteer], {
+      unreadSteerMessageIds({
         ...runningThread,
         activities: [blockingToolStarted, activity({ id: "next", createdAt: at(60) })],
       }),
     ).toStrictEqual([]);
   });
-});
 
-describe("reveal delay", () => {
-  it("hides a steer that may still be read within a round trip", () => {
-    const dispatchedAtMs = Date.parse(pendingSteer.dispatchedAt);
-    expect(revealedSteerPendingMessageIds([pendingSteer], dispatchedAtMs).size).toBe(0);
-    expect(nextSteerPendingRevealDelayMs([pendingSteer], dispatchedAtMs)).toBe(
-      STEER_PENDING_REVEAL_DELAY_MS,
-    );
-    expect([
-      ...revealedSteerPendingMessageIds(
-        [pendingSteer],
-        dispatchedAtMs + STEER_PENDING_REVEAL_DELAY_MS,
-      ),
-    ]).toStrictEqual([steerMessageId]);
+  it("resolves once the main agent answers in prose", () => {
     expect(
-      nextSteerPendingRevealDelayMs([pendingSteer], dispatchedAtMs + STEER_PENDING_REVEAL_DELAY_MS),
-    ).toBeNull();
-  });
-});
-
-describe("createThreadSteerPendingStore", () => {
-  const makeStore = () => {
-    const registry = AtomRegistry.make();
-    const store = createThreadSteerPendingStore({ registry, atomLabel: "test" });
-    return { store, read: () => registry.get(store.pendingByThreadKeyAtom) };
-  };
-
-  it("replaces a re-tracked message instead of duplicating it", () => {
-    const { store, read } = makeStore();
-    store.retain("env:thread");
-    store.track("env:thread", pendingSteer);
-    store.track("env:thread", { ...pendingSteer, dispatchedAt: at(20) });
-    expect(read()["env:thread"]).toStrictEqual([{ ...pendingSteer, dispatchedAt: at(20) }]);
+      unreadSteerMessageIds({
+        ...runningThread,
+        messages: [...runningThread.messages, assistantMessage(at(60))],
+      }),
+    ).toStrictEqual([]);
   });
 
-  it("drops a thread's key once nothing is pending for it", () => {
-    const { store, read } = makeStore();
-    store.retain("env:thread");
-    store.track("env:thread", pendingSteer);
-    store.setThread("env:thread", []);
-    expect(read()).toStrictEqual({});
+  it("keeps only the steers newer than the last main-agent progress", () => {
+    const later = message({ id: "steer-2", createdAt: at(70) });
+    expect(
+      unreadSteerMessageIds({
+        ...runningThread,
+        messages: [openingMessage, steer, later],
+        activities: [blockingToolStarted, activity({ id: "next", createdAt: at(60) })],
+      }),
+    ).toStrictEqual([later.id]);
   });
 
-  it("retains different threads independently", () => {
-    const { store, read } = makeStore();
-    store.retain("env:left");
-    store.retain("env:right");
-    store.track("env:left", pendingSteer);
-    store.track("env:right", pendingSteer);
-    expect(read()).toStrictEqual({
-      "env:left": [pendingSteer],
-      "env:right": [pendingSteer],
-    });
-
-    store.release("env:left");
-
-    expect(read()).toStrictEqual({ "env:right": [pendingSteer] });
-    store.track("env:left", pendingSteer);
-    expect(read()).toStrictEqual({ "env:right": [pendingSteer] });
+  it("ignores main-agent work that predates the steer", () => {
+    expect(
+      unreadSteerMessageIds({
+        ...runningThread,
+        messages: [openingMessage, assistantMessage(at(-30)), steer],
+        activities: [activity({ id: "earlier", createdAt: at(-10) }), blockingToolStarted],
+      }),
+    ).toStrictEqual([steerMessageId]);
   });
 
-  it("holds a thread's markers until its last view releases it", () => {
-    const { store, read } = makeStore();
-    // Mobile's files route stacks a second view of the same thread over the
-    // first; closing it must not stop the still-mounted one from marking.
-    store.retain("env:thread");
-    store.retain("env:thread");
-    store.track("env:thread", pendingSteer);
-
-    store.release("env:thread");
-    expect(read()["env:thread"]).toStrictEqual([pendingSteer]);
-
-    store.release("env:thread");
-    expect(read()).toStrictEqual({});
-    store.track("env:thread", pendingSteer);
-    expect(read()).toStrictEqual({});
+  it("resolves when the turn completes", () => {
+    expect(
+      unreadSteerMessageIds({
+        ...runningThread,
+        sessionStatus: "ready",
+        latestTurn: { ...runningThread.latestTurn!, state: "completed" },
+      }),
+    ).toStrictEqual([]);
   });
 
-  it("purges a single view's markers on release", () => {
-    const { store, read } = makeStore();
-    store.retain("env:thread");
-    store.track("env:thread", pendingSteer);
-
-    store.release("env:thread");
-
-    expect(read()).toStrictEqual({});
-    store.track("env:thread", pendingSteer);
-    expect(read()).toStrictEqual({});
+  it("resolves when the turn is interrupted, errors, or is gone", () => {
+    expect(
+      unreadSteerMessageIds({
+        ...runningThread,
+        sessionStatus: "interrupted",
+        latestTurn: { ...runningThread.latestTurn!, state: "interrupted" },
+      }),
+    ).toStrictEqual([]);
+    expect(
+      unreadSteerMessageIds({
+        ...runningThread,
+        sessionStatus: "error",
+        latestTurn: { ...runningThread.latestTurn!, state: "error" },
+      }),
+    ).toStrictEqual([]);
+    expect(unreadSteerMessageIds({ ...runningThread, latestTurn: null })).toStrictEqual([]);
   });
 
-  it("caps the active thread at eight pending steers", () => {
-    const { store, read } = makeStore();
-    store.retain("env:thread");
-    for (let index = 0; index < 10; index += 1) {
-      store.track("env:thread", {
-        ...pendingSteer,
-        messageId: MessageId.make(`steer-${index}`),
-      });
-    }
-    expect(read()["env:thread"]?.map(({ messageId }) => messageId)).toStrictEqual(
-      Array.from({ length: 8 }, (_, index) => MessageId.make(`steer-${index + 2}`)),
-    );
+  it("resolves when the provider answered the steer with a turn of its own", () => {
+    // Codex injects a mid-turn message at the protocol level and opens a fresh
+    // turn for it. The steer is now that turn's opening message: it is not
+    // newer than the turn it belongs to, so nothing is waiting.
+    expect(
+      unreadSteerMessageIds({
+        ...runningThread,
+        latestTurn: { turnId: otherTurnId, state: "running", requestedAt: at(10) },
+      }),
+    ).toStrictEqual([]);
   });
 });

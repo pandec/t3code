@@ -60,7 +60,6 @@ import {
   THREAD_OUTBOX_HYDRATION_MAX_RETRIES,
   THREAD_OUTBOX_HYDRATION_RECOVERY_RETRY_MS,
 } from "./thread-outbox-hydration";
-import { noteThreadSteerDispatch } from "./thread-steer-pending";
 import {
   environmentThreadShells,
   environmentThreads,
@@ -1010,7 +1009,6 @@ export function useThreadOutboxDrain(): void {
       if (thread.archivedAt != null) {
         refreshArchivedThreadsForEnvironment(persistedMessage.environmentId);
       }
-      noteThreadSteerDispatch(persistedMessage, context);
       // The delivered turn holds its own copy of the bytes. A failed delete is
       // surfaced without failing the accepted turn; the server also expires
       // leaked pending uploads.
