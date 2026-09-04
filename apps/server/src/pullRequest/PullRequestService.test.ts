@@ -2917,10 +2917,11 @@ it.effect("a listing narrowed to some projects is its own cache entry", () =>
   }),
 );
 
-it.effect("an explicit invalidation makes the next listing ask the host again", () =>
+it.effect("explicit and turn invalidations make the next listing ask the host again", () =>
   Effect.gen(function* () {
     let hostCalls = 0;
     let viewerCalls = 0;
+    const reference = { projectId: "p1" as ProjectId, repository: "acme/web", number: 1 };
     const service = yield* makeService({
       projects: [project({ id: "p1", title: "web", workspaceRoot: "/a", repository: "acme/web" })],
       providers: [
@@ -2944,11 +2945,14 @@ it.effect("an explicit invalidation makes the next listing ask the host again", 
     assert.strictEqual(viewerCalls, 2);
 
     // Forgetting one change request leaves the listings shared.
-    yield* service.invalidate({
-      reference: { projectId: "p1" as ProjectId, repository: "acme/web", number: 1 },
-    });
+    yield* service.invalidate({ reference });
     yield* service.list({ state: "open" });
     assert.strictEqual(hostCalls, 2);
+    yield* service.refreshAfterTurn;
+    const refresh = Option.getOrThrow(yield* Stream.runHead(service.subscribeRefreshes));
+    yield* service.list({ state: "open" });
+    assert.isAbove(refresh, 0);
+    assert.strictEqual(hostCalls, 3);
   }),
 );
 
@@ -4171,7 +4175,7 @@ it.effect("refuses a remark rewritten into nothing but whitespace", () =>
   }),
 );
 
-it.effect("forgets the cached detail after a rewrite, like the other mutations", () =>
+it.effect("forgets the cached detail after a rewrite or terminal turn", () =>
   Effect.gen(function* () {
     let coreCalls = 0;
     const reference = { projectId: "p1" as ProjectId, repository: "acme/web", number: 1 };
@@ -4206,8 +4210,11 @@ it.effect("forgets the cached detail after a rewrite, like the other mutations",
     yield* service.detail(reference);
     yield* service.update({ ...reference, title: "Renamed" });
     yield* service.detail(reference);
-
     assert.strictEqual(coreCalls, 2);
+
+    yield* service.refreshAfterTurn;
+    yield* service.detail(reference);
+    assert.strictEqual(coreCalls, 3);
   }),
 );
 

@@ -48,6 +48,10 @@ settings affects future settlement and does not reopen a settled thread.
 When you un-settle a thread, it returns to the top of the active list. Its conversation and timestamps
 do not change, and other threads keep their positions.
 
+A thread whose composer holds unsent text or attachments shows an amber tint and a pen icon in the
+sidebar, the same marks a new-thread draft uses. On web and desktop, hover the row and choose the
+**X** to discard that draft without opening the thread.
+
 Right-click a pull request link in a thread and choose **Link to thread** to show that pull request
 in the sidebar. The thread settles when the linked pull request merges if **Auto-settle merged
 threads** is enabled. Right-click the same link and choose **Unlink from thread** to remove it.

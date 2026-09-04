@@ -501,6 +501,196 @@ describe("ProviderRuntimeIngestion", () => {
     expect(thread.session?.lastError).toBe("turn failed");
   });
 
+  it.each([
+    { delivery: "buffered", enableLegacyTokenStreaming: false },
+    { delivery: "streamed", enableLegacyTokenStreaming: true },
+  ])("settles OpenCode aborted turns and saves $delivery assistant text", async (settings) => {
+    const harness = await createHarness({
+      serverSettings: { enableLegacyTokenStreaming: settings.enableLegacyTokenStreaming },
+    });
+    const threadId = asThreadId("thread-1");
+    const turnId = asTurnId("opencode-aborted-turn");
+    const base = {
+      provider: ProviderDriverKind.make("opencode"),
+      threadId,
+      turnId,
+      createdAt: "2026-01-01T00:00:01.000Z",
+    };
+    harness.emit({ ...base, type: "turn.started", eventId: asEventId("opencode-started") });
+    harness.emit({
+      ...base,
+      type: "content.delta",
+      eventId: asEventId("opencode-partial-text"),
+      itemId: asItemId("opencode-text-part"),
+      payload: { streamKind: "assistant_text", delta: "Work before the stop." },
+    });
+    harness.emit({
+      ...base,
+      type: "turn.aborted",
+      eventId: asEventId("opencode-aborted"),
+      createdAt: "2026-01-01T00:00:02.000Z",
+      payload: { reason: "Interrupted by user." },
+    });
+
+    await harness.drain();
+    const thread = (await harness.readModel()).threads.find((entry) => entry.id === threadId);
+    expect(thread?.session).toMatchObject({
+      status: "interrupted",
+      activeTurnId: null,
+      lastError: null,
+    });
+    expect(thread?.latestTurn).toMatchObject({
+      turnId,
+      state: "interrupted",
+      completedAt: "2026-01-01T00:00:02.000Z",
+    });
+    expect(thread?.messages).toEqual([
+      expect.objectContaining({
+        role: "assistant",
+        turnId,
+        text: "Work before the stop.",
+        streaming: false,
+      }),
+    ]);
+  });
+
+  it.each([
+    { source: "the previous turn", turnId: asTurnId("opencode-stopped-turn") },
+    { source: "an unspecified turn", turnId: undefined },
+  ])("ignores late OpenCode aborts for $source across newer turns", async (lateAbort) => {
+    const harness = await createHarness({
+      serverSettings: { enableLegacyTokenStreaming: true },
+    });
+    const threadId = asThreadId("thread-1");
+    const stoppedTurnId = asTurnId("opencode-stopped-turn");
+    const nextTurnId = asTurnId("opencode-next-turn");
+    const base = {
+      provider: ProviderDriverKind.make("opencode"),
+      threadId,
+      createdAt: "2026-01-01T00:00:01.000Z",
+    };
+    harness.emit({
+      ...base,
+      type: "turn.started",
+      eventId: asEventId("opencode-first-started"),
+      turnId: stoppedTurnId,
+    });
+    harness.emit({
+      ...base,
+      type: "turn.aborted",
+      eventId: asEventId("opencode-first-aborted"),
+      turnId: stoppedTurnId,
+      payload: { reason: "Interrupted by user." },
+    });
+    harness.emit({
+      ...base,
+      type: "turn.started",
+      eventId: asEventId("opencode-next-started"),
+      turnId: nextTurnId,
+    });
+    harness.emit({
+      ...base,
+      type: "content.delta",
+      eventId: asEventId("opencode-next-partial-text"),
+      turnId: nextTurnId,
+      itemId: asItemId("opencode-next-text-part"),
+      payload: { streamKind: "assistant_text", delta: "The next turn is running." },
+    });
+    await harness.drain();
+
+    harness.emit({
+      ...base,
+      type: "turn.aborted",
+      eventId: asEventId("opencode-late-abort"),
+      ...(lateAbort.turnId ? { turnId: lateAbort.turnId } : {}),
+      payload: { reason: "Interrupted by user." },
+    });
+    await harness.drain();
+
+    const thread = (await harness.readModel()).threads.find((entry) => entry.id === threadId);
+    expect(thread?.session).toMatchObject({ status: "running", activeTurnId: nextTurnId });
+    expect(thread?.latestTurn).toMatchObject({ turnId: nextTurnId, state: "running" });
+    expect(thread?.messages).toEqual([
+      expect.objectContaining({
+        turnId: nextTurnId,
+        text: "The next turn is running.",
+        streaming: true,
+      }),
+    ]);
+
+    harness.emit({
+      ...base,
+      type: "turn.completed",
+      eventId: asEventId("opencode-next-completed"),
+      turnId: nextTurnId,
+      createdAt: "2026-01-01T00:00:02.000Z",
+      payload: { state: "completed" },
+    });
+    await harness.drain();
+
+    const pendingAt = "2026-01-01T00:00:03.000Z";
+    for (const hasPendingStart of [false, true]) {
+      if (hasPendingStart) {
+        await harness.dispatch({
+          type: "thread.turn.start",
+          commandId: CommandId.make("opencode-pending-start"),
+          threadId,
+          message: {
+            messageId: asMessageId("opencode-pending-message"),
+            role: "user",
+            text: "Start another turn.",
+            attachments: [],
+          },
+          interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
+          runtimeMode: "approval-required",
+          createdAt: pendingAt,
+        });
+        harness.emit({
+          ...base,
+          type: "session.state.changed",
+          eventId: asEventId("opencode-pending-starting"),
+          createdAt: pendingAt,
+          payload: { state: "starting" },
+        });
+      }
+      harness.emit({
+        ...base,
+        type: "turn.aborted",
+        eventId: asEventId(`opencode-late-abort-after-completion-${hasPendingStart}`),
+        ...(lateAbort.turnId ? { turnId: lateAbort.turnId } : {}),
+        createdAt: "2026-01-01T00:00:04.000Z",
+        payload: { reason: "Interrupted by user." },
+      });
+      await harness.drain();
+
+      const completedThread = (await harness.readModel()).threads.find(
+        (entry) => entry.id === threadId,
+      );
+      expect(completedThread?.session).toMatchObject({
+        status: hasPendingStart ? "starting" : "ready",
+        activeTurnId: null,
+      });
+      expect(completedThread?.latestTurn).toMatchObject({ turnId: nextTurnId, state: "completed" });
+    }
+
+    harness.emit({
+      ...base,
+      type: "turn.started",
+      eventId: asEventId("opencode-pending-started"),
+      turnId: asTurnId("opencode-pending-turn"),
+      createdAt: "2026-01-01T00:00:05.000Z",
+    });
+    await harness.drain();
+    const startedThread = (await harness.readModel()).threads.find(
+      (entry) => entry.id === threadId,
+    );
+    expect(startedThread?.latestTurn).toMatchObject({
+      turnId: asTurnId("opencode-pending-turn"),
+      state: "running",
+      requestedAt: pendingAt,
+    });
+  });
+
   it("applies provider session.state.changed transitions directly", async () => {
     const harness = await createHarness();
     const waitingAt = "2026-01-01T00:00:00.000Z";
@@ -1573,6 +1763,54 @@ describe("ProviderRuntimeIngestion", () => {
         ),
     );
     expect(fake.removedAudio).toEqual(["thread-1-agent-voice-dropped"]);
+    expect(
+      thread.messages.every((message: ProviderRuntimeTestMessage) => message.speech === undefined),
+    ).toBe(true);
+  });
+
+  it("drops a staged voice reply when the turn is aborted", async () => {
+    const staged = makeStagedVoiceReply({ speechId: "thread-1-agent-voice-aborted" });
+    const fake = makeFakeAgentVoiceReply(staged, asTurnId("turn-voice-aborted"));
+    const harness = await createHarness({ agentVoiceReply: fake.shape });
+    const now = "2026-01-01T00:00:00.000Z";
+
+    harness.emit({
+      type: "turn.started",
+      eventId: asEventId("evt-voice-aborted-started"),
+      provider: ProviderDriverKind.make("codex"),
+      createdAt: now,
+      threadId: asThreadId("thread-1"),
+      turnId: asTurnId("turn-voice-aborted"),
+    });
+    await harness.drain();
+
+    harness.emit({
+      type: "content.delta",
+      eventId: asEventId("evt-voice-aborted-delta"),
+      provider: ProviderDriverKind.make("codex"),
+      createdAt: now,
+      threadId: asThreadId("thread-1"),
+      turnId: asTurnId("turn-voice-aborted"),
+      itemId: asItemId("item-voice-aborted"),
+      payload: { streamKind: "assistant_text", delta: "partial reply" },
+    });
+    harness.emit({
+      type: "turn.aborted",
+      eventId: asEventId("evt-voice-aborted-turn"),
+      provider: ProviderDriverKind.make("codex"),
+      createdAt: now,
+      threadId: asThreadId("thread-1"),
+      turnId: asTurnId("turn-voice-aborted"),
+      payload: { reason: "Interrupted by user." },
+    });
+
+    const thread = await waitForThread(harness.readModel, (entry) =>
+      entry.messages.some(
+        (message: ProviderRuntimeTestMessage) =>
+          message.id === "assistant:item-voice-aborted" && !message.streaming,
+      ),
+    );
+    expect(fake.removedAudio).toEqual(["thread-1-agent-voice-aborted"]);
     expect(
       thread.messages.every((message: ProviderRuntimeTestMessage) => message.speech === undefined),
     ).toBe(true);

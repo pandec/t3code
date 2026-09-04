@@ -170,6 +170,24 @@ describe("ContextWindowMeter", () => {
     expect(markup).toContain("Claude Session (5h) at 3%");
   });
 
+  it("renders a visible and accessible OpenRouter-only indicator", () => {
+    const markup = renderToStaticMarkup(
+      <ContextWindowMeter
+        usage={null}
+        openRouterCredits={{
+          configured: true,
+          balanceUsd: 12.34,
+          observedAt: Date.now(),
+          error: null,
+          unavailable: false,
+        }}
+      />,
+    );
+
+    expect(markup).toContain('aria-label="OpenRouter credits $12.34 left"');
+    expect(markup).toContain('data-testid="openrouter-credits-indicator"');
+  });
+
   it("renders a known context window at zero usage", () => {
     const markup = renderToStaticMarkup(
       <ContextWindowMeter usage={contextUsage(0, 0)} providerUsage={null} />,

@@ -68,6 +68,7 @@ import {
   beginBackgroundDraftSubmissionByRef,
   clearBackgroundDraftSubmissionByRef,
   clearComposerDraftsEnvironment,
+  composerDraftHasUserContent,
   finalizePromotedDraftThreadByRef,
   hydrateImagesFromPersisted,
   markPromotedDraftThread,
@@ -423,6 +424,31 @@ describe("composerDraftStore clearComposerContent", () => {
     const draft = draftFor(threadId, TEST_ENVIRONMENT_ID);
     expect(draft).toBeUndefined();
     expect(revokeSpy).not.toHaveBeenCalledWith("blob:optimistic");
+  });
+});
+
+describe("composerDraftStore unsent draft marker", () => {
+  const threadId = ThreadId.make("thread-unsent-marker");
+  const threadRef = scopeThreadRef(TEST_ENVIRONMENT_ID, threadId);
+
+  beforeEach(() => {
+    resetComposerDraftStore();
+  });
+
+  it("reports content for typed text and clears when the composer is emptied", () => {
+    const hasDraft = () =>
+      composerDraftHasUserContent(useComposerDraftStore.getState().getComposerDraft(threadRef));
+
+    expect(hasDraft()).toBe(false);
+
+    useComposerDraftStore.getState().setPrompt(threadRef, "   ");
+    expect(hasDraft()).toBe(false);
+
+    useComposerDraftStore.getState().setPrompt(threadRef, "follow up on the relay case");
+    expect(hasDraft()).toBe(true);
+
+    useComposerDraftStore.getState().clearComposerContent(threadRef);
+    expect(hasDraft()).toBe(false);
   });
 });
 

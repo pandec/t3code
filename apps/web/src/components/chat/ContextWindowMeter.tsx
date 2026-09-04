@@ -19,7 +19,7 @@ import {
 } from "@t3tools/client-runtime/state/provider-usage-presentation";
 import type { ProviderInstanceId } from "@t3tools/contracts";
 import { formatUsd } from "@t3tools/shared/usageFormat";
-import { Minimize2Icon, RefreshCwIcon } from "lucide-react";
+import { CircleDollarSignIcon, Minimize2Icon, RefreshCwIcon } from "lucide-react";
 import { Fragment, useMemo, useRef } from "react";
 
 import { useProviderUsageThresholds } from "~/hooks/useSettings";
@@ -304,6 +304,20 @@ export function ContextWindowMeter(props: {
     : providerUsage
       ? `${providerUsage.providerLabel} usage`
       : null;
+  const openRouterAriaLabel = props.openRouterCredits
+    ? props.openRouterCredits.balanceUsd !== null
+      ? `OpenRouter credits ${formatUsd(props.openRouterCredits.balanceUsd)} left`
+      : props.openRouterCredits.unavailable
+        ? "OpenRouter credits unavailable"
+        : props.openRouterCredits.error !== null
+          ? "OpenRouter credits error"
+          : props.openRouterCredits.configured
+            ? "OpenRouter credits"
+            : "OpenRouter credits not configured"
+    : null;
+  const showOpenRouterOnlyIndicator = Boolean(
+    props.openRouterCredits && !usage && !quotaWindow && !fableUsage,
+  );
 
   const ariaLabel = [
     usage
@@ -313,6 +327,7 @@ export function ContextWindowMeter(props: {
       : null,
     quotaAriaLabel,
     fableAriaLabel,
+    openRouterAriaLabel,
   ]
     .filter(Boolean)
     .join(", ");
@@ -387,6 +402,13 @@ export function ContextWindowMeter(props: {
                   />
                 ) : null}
               </svg>
+              {showOpenRouterOnlyIndicator ? (
+                <CircleDollarSignIcon
+                  aria-hidden
+                  className="size-4 text-muted-foreground/70"
+                  data-testid="openrouter-credits-indicator"
+                />
+              ) : null}
             </span>
           </Button>
         }
