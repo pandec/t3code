@@ -6,8 +6,9 @@ import {
 import { MessageId } from "@t3tools/contracts";
 import { useEffect, useMemo, useState } from "react";
 
+// Mirror of apps/web/src/state/threadSteerPending.ts. Keep in sync.
 const NO_PENDING_MESSAGE_IDS: ReadonlySet<MessageId> = new Set();
-const UNREAD_KEY_SEPARATOR = " ";
+const UNREAD_KEY_SEPARATOR = "\u0000";
 
 /**
  * The user messages whose steer is still sitting in the provider's prompt
@@ -20,8 +21,9 @@ const UNREAD_KEY_SEPARATOR = " ";
 export function useSteerPendingMessageIds(
   snapshot: SteerPendingThreadSnapshot,
 ): ReadonlySet<MessageId> {
-  // Keyed by content so subagent chatter that leaves the unread set unchanged
-  // does not restart the reveal timer.
+  // Keyed by content, and the Set rebuilt from the key rather than the array,
+  // so subagent chatter that leaves the unread set unchanged neither restarts
+  // the reveal timer nor needs a ref to keep Set identity stable.
   const unreadKey = useMemo(
     () => unreadSteerMessageIds(snapshot).join(UNREAD_KEY_SEPARATOR),
     [snapshot],
@@ -36,8 +38,8 @@ export function useSteerPendingMessageIds(
   const [revealed, setRevealed] = useState<ReadonlySet<MessageId>>(NO_PENDING_MESSAGE_IDS);
 
   // A steer that resolves drops out of `unread` at once; one that stays is
-  // revealed once the delay passes. A second steer arriving inside the delay
-  // restarts it for both, which is within the window's own imprecision.
+  // revealed once the delay passes. A second steer arriving before the first
+  // is revealed delays both; one arriving after does not hide the first.
   useEffect(() => {
     let allRevealed = true;
     for (const messageId of unread) {

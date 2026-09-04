@@ -3578,6 +3578,69 @@ projectionSnapshotLayer("ProjectionSnapshotQuery windowed thread detail", (it) =
     }),
   );
 
+  it.effect("pins the running turn's newest main-agent tool start past the activity window", () =>
+    Effect.gen(function* () {
+      yield* seedFanOutThread();
+      const snapshotQuery = yield* ProjectionSnapshotQuery;
+      const sql = yield* SqlClient.SqlClient;
+
+      yield* sql`DELETE FROM projection_thread_activities`;
+      yield* sql`
+        INSERT INTO projection_thread_sessions (
+          thread_id, status, provider_name, provider_session_id, provider_thread_id,
+          runtime_mode, active_turn_id, last_error, updated_at
+        )
+        VALUES (
+          'thread-w', 'running', 'claude', NULL, NULL, 'full-access', 'turn-5', NULL,
+          '2026-03-01T00:04:00.000Z'
+        )
+      `;
+      // The parent's blocking Agent call, then a subagent-attributed tool start
+      // and 500 rows of subagent progress that push both out of the window.
+      yield* sql`
+        WITH RECURSIVE progress_rows(sequence) AS (
+          SELECT 3
+          UNION ALL
+          SELECT sequence + 1 FROM progress_rows WHERE sequence < 502
+        )
+        INSERT INTO projection_thread_activities (
+          activity_id, thread_id, turn_id, tone, kind, summary, payload_json, sequence, created_at
+        )
+        SELECT
+          'parent-tool-start', 'thread-w', 'turn-5', 'tool', 'tool.started', 'Agent',
+          json_object('itemType', 'tool', 'title', 'Agent'), 1, '2026-03-01T00:04:01.000Z'
+        UNION ALL
+        SELECT
+          'subagent-tool-start', 'thread-w', 'turn-5', 'tool', 'tool.started', 'Read',
+          json_object('itemType', 'tool', 'title', 'Read', 'agentId', 'agent-1'), 2,
+          '2026-03-01T00:04:02.000Z'
+        UNION ALL
+        SELECT
+          printf('progress-%04d', sequence), 'thread-w', 'turn-5', 'info', 'task.progress',
+          'working', json_object('sequence', sequence), sequence, '2026-03-01T00:04:03.000Z'
+        FROM progress_rows
+      `;
+
+      const detail = yield* snapshotQuery.getThreadDetailById(threadW);
+      assert.equal(detail._tag, "Some");
+      if (detail._tag === "Some") {
+        const ids = detail.value.activities.map((activity) => activity.id);
+        assert.equal(ids.length, 501);
+        assert.equal(ids[0], asEventId("parent-tool-start"));
+        assert.equal(ids.includes(asEventId("subagent-tool-start")), false);
+      }
+
+      // Once the turn is over nothing resolves against it, so it is not pinned.
+      yield* sql`UPDATE projection_thread_sessions SET status = 'ready', active_turn_id = NULL`;
+      const settled = yield* snapshotQuery.getThreadDetailById(threadW);
+      assert.equal(settled._tag, "Some");
+      if (settled._tag === "Some") {
+        assert.equal(settled.value.activities.length, 500);
+        assert.equal(settled.value.activities[0]?.id, asEventId("progress-0003"));
+      }
+    }),
+  );
+
   it.effect("a thread with no turns returns its content unwindowed on the first page", () =>
     Effect.gen(function* () {
       const sql = yield* SqlClient.SqlClient;

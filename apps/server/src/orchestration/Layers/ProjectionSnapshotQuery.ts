@@ -1832,6 +1832,25 @@ pending_approval_requests AS (
             )
             AND json_extract(activity.payload_json, '$.requestId') IS NOT NULL
         ),
+        running_turn AS (
+          SELECT active_turn_id AS turn_id
+          FROM projection_thread_sessions
+          WHERE thread_id = ${threadId}
+            AND status = 'running'
+            AND active_turn_id IS NOT NULL
+        ),
+        latest_parent_progress AS (
+          SELECT activity.activity_id
+          FROM running_turn
+          INNER JOIN projection_thread_activities AS activity
+            ON activity.thread_id = ${threadId}
+            AND activity.turn_id = running_turn.turn_id
+          WHERE activity.kind = 'tool.started'
+            AND json_extract(activity.payload_json, '$.agentId') IS NULL
+            AND COALESCE(json_extract(activity.payload_json, '$.timelineBypass'), 0) = 0
+          ORDER BY activity.sequence DESC, activity.created_at DESC, activity.activity_id DESC
+          LIMIT 1
+        ),
         pinned_activity_ids AS (
           SELECT activity_id
           FROM pending_approval_activities
@@ -1841,12 +1860,18 @@ pending_approval_requests AS (
           FROM user_input_lifecycle
           WHERE request_order = 1
             AND kind = 'user-input.requested'
+          UNION ALL
+          SELECT activity_id
+          FROM latest_parent_progress
         )
   `;
 
   // Blocking request payloads must remain available even if they predate the
   // recent activity window. Each CTE returns at most one unresolved row per
-  // request, so the merge below stays bounded by actionable work.
+  // request, so the merge below stays bounded by actionable work. The running
+  // turn's newest main-agent tool start rides along for the same reason: the
+  // client's steer-pending marker resolves against it, and a long subagent
+  // fan-out can push it past the window while the steer is still unread.
   const listPinnedThreadActivityRowsByThread = SqlSchema.findAll({
     Request: ThreadIdLookupInput,
     Result: ProjectionThreadActivityDbRowSchema,

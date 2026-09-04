@@ -144,6 +144,22 @@ describe("unreadSteerMessageIds", () => {
     ).toStrictEqual([]);
   });
 
+  it("ignores a user message the provider already attached to a turn", () => {
+    expect(
+      unreadSteerMessageIds({
+        ...runningThread,
+        messages: [openingMessage, message({ id: "attached", turnId, createdAt: at(10) })],
+      }),
+    ).toStrictEqual([]);
+  });
+
+  it("lists several unread steers in timeline order", () => {
+    const later = message({ id: "steer-2", createdAt: at(20) });
+    expect(
+      unreadSteerMessageIds({ ...runningThread, messages: [openingMessage, steer, later] }),
+    ).toStrictEqual([steerMessageId, later.id]);
+  });
+
   it("keeps only the steers newer than the last main-agent progress", () => {
     const later = message({ id: "steer-2", createdAt: at(70) });
     expect(
