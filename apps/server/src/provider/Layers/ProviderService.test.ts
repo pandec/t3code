@@ -373,6 +373,69 @@ function makeFakeCodexAdapter(
   };
 }
 
+interface RecordedAnalyticsEvent {
+  readonly event: string;
+  readonly properties?: Readonly<Record<string, unknown>>;
+}
+
+function makeRecordingAnalytics() {
+  const events: Array<RecordedAnalyticsEvent> = [];
+  const layer = Layer.succeed(
+    AnalyticsService.AnalyticsService,
+    AnalyticsService.AnalyticsService.of({
+      record: (event, properties) =>
+        Effect.sync(() => {
+          events.push({ event, ...(properties ? { properties } : {}) });
+        }),
+      flush: Effect.void,
+    }),
+  );
+
+  return {
+    layer,
+    reset: () => {
+      events.length = 0;
+    },
+    eventsByName: (event: string) => events.filter((entry) => entry.event === event),
+  };
+}
+
+function makeStaticInstanceRegistry(
+  entries: ReadonlyArray<readonly [ProviderInstanceId, ProviderAdapterShape<ProviderAdapterError>]>,
+): ProviderAdapterRegistry.ProviderAdapterRegistry["Service"] {
+  const adapters = new Map(entries);
+  const unsupported = (instanceId: ProviderInstanceId) =>
+    new ProviderUnsupportedError({
+      provider: ProviderDriverKind.make(instanceId),
+    });
+
+  return {
+    getByInstance: (instanceId) => {
+      const adapter = adapters.get(instanceId);
+      return adapter ? Effect.succeed(adapter) : Effect.fail(unsupported(instanceId));
+    },
+    getInstanceInfo: (instanceId) => {
+      const adapter = adapters.get(instanceId);
+      return adapter
+        ? Effect.succeed({
+            instanceId,
+            driverKind: adapter.provider,
+            displayName: undefined,
+            enabled: true,
+            continuationIdentity: {
+              driverKind: adapter.provider,
+              continuationKey: `${adapter.provider}:instance:${instanceId}`,
+            },
+          })
+        : Effect.fail(unsupported(instanceId));
+    },
+    listInstances: () => Effect.succeed(Array.from(adapters.keys())),
+    subscribeChanges: Effect.flatMap(PubSub.unbounded<void>(), (pubsub) =>
+      PubSub.subscribe(pubsub),
+    ),
+  };
+}
+
 const advanceTestClock = (ms: number) =>
   TestClock.adjust(`${ms} millis`).pipe(Effect.andThen(Effect.yieldNow));
 
@@ -391,6 +454,7 @@ function makeProviderServiceLayer(
   input: {
     readonly directory?: ProviderSessionDirectory.ProviderSessionDirectory["Service"];
     readonly supportsConversationRollback?: boolean;
+    readonly analyticsLayer?: Layer.Layer<AnalyticsService.AnalyticsService>;
     readonly registry?: ProviderAdapterRegistry.ProviderAdapterRegistry["Service"];
   } = {},
 ) {
@@ -424,7 +488,7 @@ function makeProviderServiceLayer(
         Layer.provide(directoryLayer),
         Layer.provide(defaultServerSettingsLayer),
         Layer.provide(serverConfigTestLayer),
-        Layer.provideMerge(AnalyticsService.layerTest),
+        Layer.provideMerge(input.analyticsLayer ?? AnalyticsService.layerTest),
         Layer.provide(
           Layer.succeed(
             ProviderEventLoggers.ProviderEventLoggers,
@@ -577,6 +641,110 @@ it.effect("ProviderServiceLive records the turns its shutdown stranded", () =>
     );
 
     yield* Scope.close(dependencyScope, Exit.void);
+  }),
+);
+
+it.effect("ProviderServiceLive flushes deferred completions during shutdown", () =>
+  Effect.gen(function* () {
+    const recordedAnalytics = makeRecordingAnalytics();
+    const codex = makeFakeCodexAdapter();
+    const registry = makeStaticInstanceRegistry([[codexInstanceId, codex.adapter]]);
+    const providerAdapterLayer = Layer.succeed(
+      ProviderAdapterRegistry.ProviderAdapterRegistry,
+      registry,
+    );
+    const runtimeRepositoryLayer = ProviderSessionRuntime.layer.pipe(
+      Layer.provide(SqlitePersistenceMemory),
+    );
+    const directoryLayer = ProviderSessionDirectoryLive.pipe(Layer.provide(runtimeRepositoryLayer));
+    const providerLayer = Layer.mergeAll(
+      makeProviderServiceLive().pipe(
+        Layer.provide(providerAdapterLayer),
+        Layer.provide(directoryLayer),
+        Layer.provide(defaultServerSettingsLayer),
+        Layer.provide(serverConfigTestLayer),
+        Layer.provide(recordedAnalytics.layer),
+        Layer.provide(
+          Layer.succeed(
+            ProviderEventLoggers.ProviderEventLoggers,
+            ProviderEventLoggers.NoOpProviderEventLoggers,
+          ),
+        ),
+      ),
+      directoryLayer,
+      runtimeRepositoryLayer,
+      NodeServices.layer,
+    );
+    const scope = yield* Scope.make();
+    const runtimeServices = yield* Layer.build(providerLayer).pipe(Scope.provide(scope));
+    const provider = yield* ProviderService.ProviderService.pipe(Effect.provide(runtimeServices));
+    const threadId = asThreadId("thread-turn-analytics-stop-all-deferred");
+    const sendStarted = yield* Deferred.make<void>();
+    const sendRelease = yield* Deferred.make<void>();
+    const turnId = asTurnId("turn-analytics-stop-all-deferred");
+    yield* provider.startSession(threadId, {
+      provider: CODEX_DRIVER,
+      providerInstanceId: codexInstanceId,
+      threadId,
+      runtimeMode: "full-access",
+    });
+    codex.sendTurn.mockImplementationOnce(() =>
+      Effect.gen(function* () {
+        yield* Deferred.succeed(sendStarted, undefined);
+        yield* Deferred.await(sendRelease);
+        return { threadId, turnId };
+      }),
+    );
+
+    const send = yield* provider
+      .sendTurn({ threadId, input: "first", attachments: [] })
+      .pipe(Effect.forkChild);
+    yield* Deferred.await(sendStarted);
+
+    const runtimeEvents = yield* Stream.take(provider.streamEvents, 2).pipe(
+      Stream.runDrain,
+      Effect.forkChild,
+    );
+    yield* Effect.yieldNow;
+    codex.emit({
+      type: "turn.started",
+      eventId: asEventId("evt-turn-analytics-stop-all-deferred-start"),
+      provider: CODEX_DRIVER,
+      createdAt: "2026-01-01T00:00:00.000Z",
+      threadId,
+      turnId,
+      payload: { model: "native-stop-all" },
+    });
+    codex.emit({
+      type: "turn.completed",
+      eventId: asEventId("evt-turn-analytics-stop-all-deferred-complete"),
+      provider: CODEX_DRIVER,
+      createdAt: "2026-01-01T00:00:00.000Z",
+      threadId,
+      turnId,
+      payload: {
+        state: "completed",
+        tokenUsage: {
+          usageStatus: "complete",
+          usageScope: "main_agent",
+          inputTokens: 1_200,
+          outputTokens: 300,
+          hasSubagents: false,
+        },
+      },
+    });
+    yield* Fiber.join(runtimeEvents);
+    assert.equal(recordedAnalytics.eventsByName("provider.turn.completed").length, 0);
+
+    const closeExit = yield* Scope.close(scope, Exit.void).pipe(Effect.exit);
+    const completed = recordedAnalytics.eventsByName("provider.turn.completed");
+    assert.equal(Exit.isSuccess(closeExit), true);
+    assert.equal(completed.length, 1);
+    assert.equal(completed[0]?.properties?.model, "native-stop-all");
+    assert.equal(completed[0]?.properties?.inputTokens, 1_200);
+    assert.equal(completed[0]?.properties?.outputTokens, 300);
+    yield* Fiber.interrupt(send);
+    assert.equal(recordedAnalytics.eventsByName("provider.turn.completed").length, 1);
   }),
 );
 
@@ -3254,7 +3422,7 @@ fanout.layer("ProviderServiceLive fanout", (it) => {
         createdAt: "2026-01-01T00:00:00.000Z",
         threadId: session.threadId,
         turnId: asTurnId("turn-1"),
-        status: "completed",
+        payload: { state: "completed" },
       };
 
       fanout.codex.emit(completedEvent);
@@ -3694,7 +3862,7 @@ fanout.layer("ProviderServiceLive fanout", (it) => {
         createdAt: "2026-01-01T00:00:00.000Z",
         threadId: session.threadId,
         turnId: asTurnId("turn-1"),
-        status: "completed",
+        payload: { state: "completed" },
       });
 
       yield* Fiber.join(consumer);
@@ -3760,7 +3928,7 @@ fanout.layer("ProviderServiceLive fanout", (it) => {
           createdAt: "2026-01-01T00:00:00.000Z",
           threadId: session.threadId,
           turnId: asTurnId("turn-1"),
-          status: "completed",
+          payload: { state: "completed" },
         },
       ];
 
@@ -4002,6 +4170,1140 @@ citations.layer("ProviderServiceLive assistant citations", (it) => {
         prompts,
       );
       yield* provider.stopSession({ threadId });
+    }),
+  );
+});
+
+const recordedTurnAnalytics = makeRecordingAnalytics();
+const secondaryCodexInstanceId = ProviderInstanceId.make("codex_work");
+const primaryAnalyticsCodex = makeFakeCodexAdapter();
+const secondaryAnalyticsCodex = makeFakeCodexAdapter();
+const turnAnalytics = makeProviderServiceLayer({
+  analyticsLayer: recordedTurnAnalytics.layer,
+  registry: makeInstanceRegistry([
+    {
+      instanceId: codexInstanceId,
+      driverKind: CODEX_DRIVER,
+      continuationKey: "codex:shared-analytics-test-home",
+      adapter: primaryAnalyticsCodex.adapter,
+    },
+    {
+      instanceId: secondaryCodexInstanceId,
+      driverKind: CODEX_DRIVER,
+      continuationKey: "codex:shared-analytics-test-home",
+      adapter: secondaryAnalyticsCodex.adapter,
+    },
+  ]),
+});
+
+turnAnalytics.layer("ProviderServiceLive turn analytics", (it) => {
+  it.effect("records one completed-turn event with the allowed properties", () =>
+    Effect.gen(function* () {
+      recordedTurnAnalytics.reset();
+      const provider = yield* ProviderService.ProviderService;
+      const threadId = asThreadId("thread-turn-analytics-complete");
+      yield* provider.startSession(threadId, {
+        provider: CODEX_DRIVER,
+        providerInstanceId: codexInstanceId,
+        threadId,
+        runtimeMode: "full-access",
+      });
+      const turn = yield* provider.sendTurn({
+        threadId,
+        input: "measure this turn",
+        attachments: [],
+        interactionMode: "plan",
+        modelSelection: createModelSelection(codexInstanceId, "gpt-5.6-sol", [
+          { id: "reasoningEffort", value: "high" },
+        ]),
+      });
+      yield* advanceTestClock(40);
+
+      const runtimeEvents = yield* Stream.take(provider.streamEvents, 2).pipe(
+        Stream.runDrain,
+        Effect.forkChild,
+      );
+      yield* Effect.yieldNow;
+      const completedEvent: LegacyProviderRuntimeEvent = {
+        type: "turn.completed",
+        eventId: asEventId("evt-turn-analytics-complete"),
+        provider: CODEX_DRIVER,
+        createdAt: "2026-01-01T00:00:00.000Z",
+        threadId,
+        turnId: turn.turnId,
+        payload: {
+          state: "completed",
+          tokenUsage: {
+            usageStatus: "complete",
+            usageScope: "main_agent",
+            inputTokens: 1_200,
+            cachedInputTokens: 800,
+            cacheCreationTokens: 100,
+            outputTokens: 300,
+            reasoningTokens: 120,
+            hasSubagents: false,
+          },
+        },
+      };
+      primaryAnalyticsCodex.emit(completedEvent);
+      primaryAnalyticsCodex.emit({
+        ...completedEvent,
+        eventId: asEventId("evt-turn-analytics-complete-duplicate"),
+      });
+      yield* Fiber.join(runtimeEvents);
+
+      const completed = recordedTurnAnalytics.eventsByName("provider.turn.completed");
+      assert.equal(completed.length, 1);
+      assert.deepEqual(completed[0]?.properties, {
+        provider: CODEX_DRIVER,
+        model: "gpt-5.6-sol",
+        effort: "high",
+        interactionMode: "plan",
+        runtimeMode: "full-access",
+        mixedModels: false,
+        durationMs: 40,
+        terminalStatus: "completed",
+        usageStatus: "complete",
+        usageScope: "main_agent",
+        hasSubagents: false,
+        inputTokens: 1_200,
+        cachedInputTokens: 800,
+        cacheCreationTokens: 100,
+        outputTokens: 300,
+        reasoningTokens: 120,
+      });
+    }),
+  );
+
+  it.effect("does not report a generic model variant as reasoning effort", () =>
+    Effect.gen(function* () {
+      recordedTurnAnalytics.reset();
+      const provider = yield* ProviderService.ProviderService;
+      const threadId = asThreadId("thread-turn-analytics-generic-variant");
+      yield* provider.startSession(threadId, {
+        provider: CODEX_DRIVER,
+        providerInstanceId: codexInstanceId,
+        threadId,
+        runtimeMode: "full-access",
+      });
+      const turn = yield* provider.sendTurn({
+        threadId,
+        input: "use the provider preset",
+        attachments: [],
+        modelSelection: createModelSelection(codexInstanceId, "provider/model", [
+          { id: "variant", value: "high" },
+        ]),
+      });
+
+      const runtimeEvent = yield* Stream.take(provider.streamEvents, 1).pipe(
+        Stream.runDrain,
+        Effect.forkChild,
+      );
+      yield* Effect.yieldNow;
+      primaryAnalyticsCodex.emit({
+        type: "turn.completed",
+        eventId: asEventId("evt-turn-analytics-generic-variant"),
+        provider: CODEX_DRIVER,
+        createdAt: "2026-01-01T00:00:00.000Z",
+        threadId,
+        turnId: turn.turnId,
+        payload: { state: "completed" },
+      });
+      yield* Fiber.join(runtimeEvent);
+
+      const completed = recordedTurnAnalytics.eventsByName("provider.turn.completed");
+      assert.equal(completed.length, 1);
+      assert.notProperty(completed[0]?.properties ?? {}, "effort");
+    }),
+  );
+
+  it.effect("ignores model metadata bound to another provider instance", () =>
+    Effect.gen(function* () {
+      recordedTurnAnalytics.reset();
+      const provider = yield* ProviderService.ProviderService;
+      const threadId = asThreadId("thread-turn-analytics-mismatched-model-instance");
+      yield* provider.startSession(threadId, {
+        provider: CODEX_DRIVER,
+        providerInstanceId: codexInstanceId,
+        threadId,
+        runtimeMode: "full-access",
+      });
+      const turn = yield* provider.sendTurn({
+        threadId,
+        input: "ignore this mismatched selection",
+        attachments: [],
+        modelSelection: createModelSelection(secondaryCodexInstanceId, "wrong-model", [
+          { id: "reasoningEffort", value: "high" },
+        ]),
+      });
+
+      const runtimeEvent = yield* Stream.take(provider.streamEvents, 1).pipe(
+        Stream.runDrain,
+        Effect.forkChild,
+      );
+      yield* Effect.yieldNow;
+      primaryAnalyticsCodex.emit({
+        type: "turn.completed",
+        eventId: asEventId("evt-turn-analytics-mismatched-model-instance"),
+        provider: CODEX_DRIVER,
+        createdAt: "2026-01-01T00:00:00.000Z",
+        threadId,
+        turnId: turn.turnId,
+        payload: { state: "completed" },
+      });
+      yield* Fiber.join(runtimeEvent);
+
+      const completed = recordedTurnAnalytics.eventsByName("provider.turn.completed");
+      assert.equal(completed.length, 1);
+      assert.notProperty(completed[0]?.properties ?? {}, "model");
+      assert.notProperty(completed[0]?.properties ?? {}, "effort");
+    }),
+  );
+
+  it.effect("keeps request metadata with out-of-order responses across threads", () =>
+    Effect.gen(function* () {
+      recordedTurnAnalytics.reset();
+      const provider = yield* ProviderService.ProviderService;
+      const firstThreadId = asThreadId("thread-turn-analytics-overlap-first");
+      const secondThreadId = asThreadId("thread-turn-analytics-overlap-second");
+      for (const threadId of [firstThreadId, secondThreadId]) {
+        yield* provider.startSession(threadId, {
+          provider: CODEX_DRIVER,
+          providerInstanceId: codexInstanceId,
+          threadId,
+          runtimeMode: "full-access",
+        });
+      }
+
+      const firstStarted = yield* Deferred.make<void>();
+      const secondStarted = yield* Deferred.make<void>();
+      const firstRelease = yield* Deferred.make<void>();
+      const secondRelease = yield* Deferred.make<void>();
+      const initialStartsObserved = yield* Deferred.make<void>();
+      let initialStartCount = 0;
+      const firstTurnId = asTurnId("turn-analytics-overlap-first");
+      const secondTurnId = asTurnId("turn-analytics-overlap-second");
+      primaryAnalyticsCodex.sendTurn
+        .mockImplementationOnce((input) =>
+          Effect.gen(function* () {
+            yield* Deferred.succeed(firstStarted, undefined);
+            yield* Deferred.await(firstRelease);
+            return { threadId: input.threadId, turnId: firstTurnId };
+          }),
+        )
+        .mockImplementationOnce((input) =>
+          Effect.gen(function* () {
+            yield* Deferred.succeed(secondStarted, undefined);
+            yield* Deferred.await(secondRelease);
+            return { threadId: input.threadId, turnId: secondTurnId };
+          }),
+        );
+
+      const runtimeEvents = yield* Stream.take(provider.streamEvents, 5).pipe(
+        Stream.tap((event) => {
+          if (event.type !== "turn.started" || initialStartCount >= 2) return Effect.void;
+          initialStartCount += 1;
+          return initialStartCount === 2
+            ? Deferred.succeed(initialStartsObserved, undefined).pipe(Effect.asVoid)
+            : Effect.void;
+        }),
+        Stream.runDrain,
+        Effect.forkChild,
+      );
+      const firstSend = yield* provider
+        .sendTurn({
+          threadId: firstThreadId,
+          input: "first",
+          attachments: [],
+          interactionMode: "default",
+          modelSelection: createModelSelection(codexInstanceId, "requested-first"),
+        })
+        .pipe(Effect.forkChild);
+      yield* Deferred.await(firstStarted);
+      const secondSend = yield* provider
+        .sendTurn({
+          threadId: secondThreadId,
+          input: "second",
+          attachments: [],
+          interactionMode: "plan",
+          modelSelection: createModelSelection(codexInstanceId, "requested-second"),
+        })
+        .pipe(Effect.forkChild);
+      yield* Deferred.await(secondStarted);
+
+      for (const [turnId, suffix, threadId] of [
+        [firstTurnId, "first", firstThreadId],
+        [secondTurnId, "second", secondThreadId],
+      ] as const) {
+        primaryAnalyticsCodex.emit({
+          type: "turn.started",
+          eventId: asEventId(`evt-turn-analytics-overlap-start-${suffix}`),
+          provider: CODEX_DRIVER,
+          createdAt: "2026-01-01T00:00:00.000Z",
+          threadId,
+          turnId,
+          payload: { model: `native-${suffix}`, effort: `native-effort-${suffix}` },
+        });
+      }
+      yield* Deferred.await(initialStartsObserved);
+      yield* Deferred.succeed(secondRelease, undefined);
+      yield* Fiber.join(secondSend);
+      primaryAnalyticsCodex.emit({
+        type: "turn.started",
+        eventId: asEventId("evt-turn-analytics-overlap-start-second-duplicate"),
+        provider: CODEX_DRIVER,
+        createdAt: "2026-01-01T00:00:00.000Z",
+        threadId: secondThreadId,
+        turnId: secondTurnId,
+        payload: { model: "native-second", effort: "native-effort-second" },
+      });
+      yield* Deferred.succeed(firstRelease, undefined);
+      yield* Fiber.join(firstSend);
+      for (const [turnId, suffix, threadId] of [
+        [secondTurnId, "second", secondThreadId],
+        [firstTurnId, "first", firstThreadId],
+      ] as const) {
+        primaryAnalyticsCodex.emit({
+          type: "turn.completed",
+          eventId: asEventId(`evt-turn-analytics-overlap-complete-${suffix}`),
+          provider: CODEX_DRIVER,
+          createdAt: "2026-01-01T00:00:00.000Z",
+          threadId,
+          turnId,
+          payload: { state: "completed" },
+        });
+      }
+      yield* Fiber.join(runtimeEvents);
+
+      const completed = recordedTurnAnalytics.eventsByName("provider.turn.completed");
+      assert.equal(completed.length, 2);
+      assert.deepInclude(completed[0]?.properties ?? {}, {
+        model: "native-second",
+        effort: "native-effort-second",
+        interactionMode: "plan",
+      });
+      assert.deepInclude(completed[1]?.properties ?? {}, {
+        model: "native-first",
+        effort: "native-effort-first",
+        interactionMode: "default",
+      });
+    }),
+  );
+
+  it.effect("waits for the adapter response when a turn completes before sendTurn returns", () =>
+    Effect.gen(function* () {
+      recordedTurnAnalytics.reset();
+      const provider = yield* ProviderService.ProviderService;
+      const threadId = asThreadId("thread-turn-analytics-fast-completion");
+      const turnId = asTurnId("turn-analytics-fast-completion");
+      const returnRelease = yield* Deferred.make<void>();
+      yield* provider.startSession(threadId, {
+        provider: CODEX_DRIVER,
+        providerInstanceId: codexInstanceId,
+        threadId,
+        runtimeMode: "full-access",
+      });
+      yield* Effect.yieldNow;
+      primaryAnalyticsCodex.sendTurn.mockImplementationOnce((input) =>
+        Effect.gen(function* () {
+          primaryAnalyticsCodex.emit({
+            type: "turn.started",
+            eventId: asEventId("evt-turn-analytics-fast-start"),
+            provider: CODEX_DRIVER,
+            createdAt: "2026-01-01T00:00:00.000Z",
+            threadId,
+            turnId,
+            payload: { model: "native-fast", effort: "high" },
+          });
+          primaryAnalyticsCodex.emit({
+            type: "turn.completed",
+            eventId: asEventId("evt-turn-analytics-fast-complete"),
+            provider: CODEX_DRIVER,
+            createdAt: "2026-01-01T00:00:00.000Z",
+            threadId,
+            turnId,
+            payload: { state: "completed" },
+          });
+          yield* Deferred.await(returnRelease);
+          return { threadId: input.threadId, turnId };
+        }),
+      );
+
+      const terminalReceipt = yield* provider.streamEvents.pipe(
+        Stream.filter((event) => event.type === "turn.completed"),
+        Stream.runHead,
+        Effect.forkChild,
+      );
+      yield* Effect.yieldNow;
+      const sendFiber = yield* provider
+        .sendTurn({
+          threadId,
+          input: "finish immediately",
+          attachments: [],
+          interactionMode: "plan",
+          modelSelection: createModelSelection(codexInstanceId, "requested-fast"),
+        })
+        .pipe(Effect.forkChild);
+      const terminal = yield* Fiber.join(terminalReceipt);
+      assert.equal(terminal._tag, "Some");
+      assert.equal(sendFiber.pollUnsafe(), undefined);
+      assert.equal(recordedTurnAnalytics.eventsByName("provider.turn.completed").length, 0);
+
+      yield* Deferred.succeed(returnRelease, undefined);
+      yield* Fiber.join(sendFiber);
+      const completed = recordedTurnAnalytics.eventsByName("provider.turn.completed");
+      assert.equal(completed.length, 1);
+      assert.deepInclude(completed[0]?.properties ?? {}, {
+        model: "native-fast",
+        effort: "high",
+        interactionMode: "plan",
+      });
+    }),
+  );
+
+  it.effect("does not give a synthetic turn the metadata of an in-flight send", () =>
+    Effect.gen(function* () {
+      recordedTurnAnalytics.reset();
+      const provider = yield* ProviderService.ProviderService;
+      const threadId = asThreadId("thread-turn-analytics-synthetic-start");
+      const syntheticTurnId = asTurnId("turn-analytics-synthetic");
+      const realTurnId = asTurnId("turn-analytics-real");
+      yield* provider.startSession(threadId, {
+        provider: CODEX_DRIVER,
+        providerInstanceId: codexInstanceId,
+        threadId,
+        runtimeMode: "full-access",
+      });
+      yield* Effect.yieldNow;
+      // Claude closes a leftover synthetic turn while it prepares the real
+      // turn, so both events arrive before sendTurn returns the real turn ID.
+      primaryAnalyticsCodex.sendTurn.mockImplementationOnce((input) =>
+        Effect.gen(function* () {
+          primaryAnalyticsCodex.emit({
+            type: "turn.started",
+            eventId: asEventId("evt-turn-analytics-synthetic-start"),
+            provider: CODEX_DRIVER,
+            createdAt: "2026-01-01T00:00:00.000Z",
+            threadId,
+            turnId: syntheticTurnId,
+            payload: {},
+          });
+          primaryAnalyticsCodex.emit({
+            type: "turn.completed",
+            eventId: asEventId("evt-turn-analytics-synthetic-complete"),
+            provider: CODEX_DRIVER,
+            createdAt: "2026-01-01T00:00:00.000Z",
+            threadId,
+            turnId: syntheticTurnId,
+            payload: { state: "completed" },
+          });
+          primaryAnalyticsCodex.emit({
+            type: "turn.started",
+            eventId: asEventId("evt-turn-analytics-real-start"),
+            provider: CODEX_DRIVER,
+            createdAt: "2026-01-01T00:00:00.000Z",
+            threadId,
+            turnId: realTurnId,
+            payload: { model: "native-real" },
+          });
+          yield* Effect.yieldNow;
+          return { threadId: input.threadId, turnId: realTurnId };
+        }),
+      );
+
+      yield* provider.sendTurn({
+        threadId,
+        input: "start the real turn",
+        attachments: [],
+        interactionMode: "plan",
+        modelSelection: createModelSelection(codexInstanceId, "requested-real"),
+      });
+      const realCompletion = yield* provider.streamEvents.pipe(
+        Stream.filter((event) => event.type === "turn.completed" && event.turnId === realTurnId),
+        Stream.runHead,
+        Effect.forkChild,
+      );
+      yield* Effect.yieldNow;
+      primaryAnalyticsCodex.emit({
+        type: "turn.completed",
+        eventId: asEventId("evt-turn-analytics-real-complete"),
+        provider: CODEX_DRIVER,
+        createdAt: "2026-01-01T00:00:00.000Z",
+        threadId,
+        turnId: realTurnId,
+        payload: { state: "completed" },
+      });
+      yield* Fiber.join(realCompletion);
+
+      const completed = recordedTurnAnalytics.eventsByName("provider.turn.completed");
+      assert.equal(completed.length, 2);
+      assert.equal(completed[0]?.properties?.interactionMode, undefined);
+      assert.equal(completed[0]?.properties?.model, undefined);
+      assert.deepInclude(completed[1]?.properties ?? {}, {
+        model: "native-real",
+        interactionMode: "plan",
+      });
+    }),
+  );
+
+  it.effect("defers terminal analytics until each cross-thread request is associated", () =>
+    Effect.gen(function* () {
+      recordedTurnAnalytics.reset();
+      const provider = yield* ProviderService.ProviderService;
+      const firstThreadId = asThreadId("thread-turn-analytics-overlap-fast-first");
+      const secondThreadId = asThreadId("thread-turn-analytics-overlap-fast-second");
+      const firstStarted = yield* Deferred.make<void>();
+      const secondStarted = yield* Deferred.make<void>();
+      const firstRelease = yield* Deferred.make<void>();
+      const secondRelease = yield* Deferred.make<void>();
+      const firstTurnId = asTurnId("turn-analytics-overlap-fast-first");
+      const secondTurnId = asTurnId("turn-analytics-overlap-fast-second");
+      for (const threadId of [firstThreadId, secondThreadId]) {
+        yield* provider.startSession(threadId, {
+          provider: CODEX_DRIVER,
+          providerInstanceId: codexInstanceId,
+          threadId,
+          runtimeMode: "full-access",
+        });
+      }
+      primaryAnalyticsCodex.sendTurn
+        .mockImplementationOnce((input) =>
+          Effect.gen(function* () {
+            yield* Deferred.succeed(firstStarted, undefined);
+            yield* Deferred.await(firstRelease);
+            return { threadId: input.threadId, turnId: firstTurnId };
+          }),
+        )
+        .mockImplementationOnce((input) =>
+          Effect.gen(function* () {
+            yield* Deferred.succeed(secondStarted, undefined);
+            yield* Deferred.await(secondRelease);
+            return { threadId: input.threadId, turnId: secondTurnId };
+          }),
+        );
+
+      const runtimeEvents = yield* Stream.take(provider.streamEvents, 4).pipe(
+        Stream.runDrain,
+        Effect.forkChild,
+      );
+      const firstSend = yield* provider
+        .sendTurn({
+          threadId: firstThreadId,
+          input: "first fast completion",
+          attachments: [],
+          interactionMode: "default",
+          modelSelection: createModelSelection(codexInstanceId, "requested-first"),
+        })
+        .pipe(Effect.forkChild);
+      yield* Deferred.await(firstStarted);
+      yield* advanceTestClock(10);
+      const secondSend = yield* provider
+        .sendTurn({
+          threadId: secondThreadId,
+          input: "second fast completion",
+          attachments: [],
+          interactionMode: "plan",
+          modelSelection: createModelSelection(codexInstanceId, "requested-second"),
+        })
+        .pipe(Effect.forkChild);
+      yield* Deferred.await(secondStarted);
+      yield* advanceTestClock(20);
+
+      for (const [turnId, suffix, threadId] of [
+        [firstTurnId, "first", firstThreadId],
+        [secondTurnId, "second", secondThreadId],
+      ] as const) {
+        primaryAnalyticsCodex.emit({
+          type: "turn.started",
+          eventId: asEventId(`evt-turn-analytics-overlap-fast-start-${suffix}`),
+          provider: CODEX_DRIVER,
+          createdAt: "2026-01-01T00:00:00.000Z",
+          threadId,
+          turnId,
+          payload: { model: `native-${suffix}`, effort: `native-effort-${suffix}` },
+        });
+        primaryAnalyticsCodex.emit({
+          type: "turn.completed",
+          eventId: asEventId(`evt-turn-analytics-overlap-fast-complete-${suffix}`),
+          provider: CODEX_DRIVER,
+          createdAt: "2026-01-01T00:00:00.000Z",
+          threadId,
+          turnId,
+          payload: { state: "completed" },
+        });
+      }
+      yield* Fiber.join(runtimeEvents);
+      assert.equal(recordedTurnAnalytics.eventsByName("provider.turn.completed").length, 0);
+      yield* advanceTestClock(40);
+
+      yield* Deferred.succeed(secondRelease, undefined);
+      yield* Fiber.join(secondSend);
+      let completed = recordedTurnAnalytics.eventsByName("provider.turn.completed");
+      assert.equal(completed.length, 1);
+      assert.deepInclude(completed[0]?.properties ?? {}, {
+        model: "native-second",
+        effort: "native-effort-second",
+        interactionMode: "plan",
+        durationMs: 20,
+      });
+
+      yield* Deferred.succeed(firstRelease, undefined);
+      yield* Fiber.join(firstSend);
+      completed = recordedTurnAnalytics.eventsByName("provider.turn.completed");
+      assert.equal(completed.length, 2);
+      assert.deepInclude(completed[1]?.properties ?? {}, {
+        model: "native-first",
+        effort: "native-effort-first",
+        interactionMode: "default",
+        durationMs: 30,
+      });
+    }),
+  );
+
+  it.effect("cleans pending metadata when a send is canceled", () =>
+    Effect.gen(function* () {
+      recordedTurnAnalytics.reset();
+      const provider = yield* ProviderService.ProviderService;
+      const threadId = asThreadId("thread-turn-analytics-canceled-send");
+      const canceledStarted = yield* Deferred.make<void>();
+      const canceledRelease = yield* Deferred.make<void>();
+      const nextReturnRelease = yield* Deferred.make<void>();
+      const nextTurnId = asTurnId("turn-analytics-after-canceled-send");
+      yield* provider.startSession(threadId, {
+        provider: CODEX_DRIVER,
+        providerInstanceId: codexInstanceId,
+        threadId,
+        runtimeMode: "full-access",
+      });
+      primaryAnalyticsCodex.sendTurn
+        .mockImplementationOnce(() =>
+          Effect.gen(function* () {
+            yield* Deferred.succeed(canceledStarted, undefined);
+            yield* Deferred.await(canceledRelease);
+            return { threadId, turnId: asTurnId("turn-analytics-canceled") };
+          }),
+        )
+        .mockImplementationOnce(() =>
+          Effect.gen(function* () {
+            primaryAnalyticsCodex.emit({
+              type: "turn.started",
+              eventId: asEventId("evt-turn-analytics-after-canceled-start"),
+              provider: CODEX_DRIVER,
+              createdAt: "2026-01-01T00:00:00.000Z",
+              threadId,
+              turnId: nextTurnId,
+              payload: { model: "native-next", effort: "high" },
+            });
+            primaryAnalyticsCodex.emit({
+              type: "turn.completed",
+              eventId: asEventId("evt-turn-analytics-after-canceled-complete"),
+              provider: CODEX_DRIVER,
+              createdAt: "2026-01-01T00:00:00.000Z",
+              threadId,
+              turnId: nextTurnId,
+              payload: { state: "completed" },
+            });
+            yield* Deferred.await(nextReturnRelease);
+            return { threadId, turnId: nextTurnId };
+          }),
+        );
+
+      const canceledSend = yield* provider
+        .sendTurn({
+          threadId,
+          input: "cancel this request",
+          attachments: [],
+          interactionMode: "default",
+        })
+        .pipe(Effect.forkChild);
+      yield* Deferred.await(canceledStarted);
+      yield* Fiber.interrupt(canceledSend);
+
+      const terminalReceipt = yield* provider.streamEvents.pipe(
+        Stream.filter((event) => event.type === "turn.completed"),
+        Stream.runHead,
+        Effect.forkChild,
+      );
+      yield* Effect.yieldNow;
+      const nextSend = yield* provider
+        .sendTurn({
+          threadId,
+          input: "measure the next request",
+          attachments: [],
+          interactionMode: "plan",
+        })
+        .pipe(Effect.forkChild);
+      const terminal = yield* Fiber.join(terminalReceipt);
+      assert.equal(terminal._tag, "Some");
+      assert.equal(nextSend.pollUnsafe(), undefined);
+      // The canceled request must not hold the completion. The live request
+      // still does, until its adapter response links it to the turn.
+      assert.equal(recordedTurnAnalytics.eventsByName("provider.turn.completed").length, 0);
+      yield* Deferred.succeed(nextReturnRelease, undefined);
+      const nextTurn = yield* Fiber.join(nextSend);
+      assert.equal(nextTurn.turnId, nextTurnId);
+
+      const completed = recordedTurnAnalytics.eventsByName("provider.turn.completed");
+      assert.equal(completed.length, 1);
+      assert.deepInclude(completed[0]?.properties ?? {}, {
+        model: "native-next",
+        effort: "high",
+        interactionMode: "plan",
+      });
+    }),
+  );
+
+  it.effect("bounds deferred completions and drains them after a send is canceled", () =>
+    Effect.gen(function* () {
+      recordedTurnAnalytics.reset();
+      const provider = yield* ProviderService.ProviderService;
+      const threadId = asThreadId("thread-turn-analytics-bounded-deferred");
+      const sendStarted = yield* Deferred.make<void>();
+      const sendRelease = yield* Deferred.make<void>();
+      const turnIds = Array.from({ length: 9 }, (_, index) =>
+        asTurnId(`turn-analytics-bounded-deferred-${index + 1}`),
+      );
+      yield* provider.startSession(threadId, {
+        provider: CODEX_DRIVER,
+        providerInstanceId: codexInstanceId,
+        threadId,
+        runtimeMode: "full-access",
+      });
+      primaryAnalyticsCodex.sendTurn.mockImplementationOnce((input) =>
+        Effect.gen(function* () {
+          yield* Deferred.succeed(sendStarted, undefined);
+          yield* Deferred.await(sendRelease);
+          return { threadId: input.threadId, turnId: turnIds.at(-1)! };
+        }),
+      );
+
+      const runtimeEvents = yield* Stream.take(provider.streamEvents, turnIds.length * 2).pipe(
+        Stream.runDrain,
+        Effect.forkChild,
+      );
+      yield* Effect.yieldNow;
+      const send = yield* provider
+        .sendTurn({
+          threadId,
+          input: "bound deferred analytics",
+          attachments: [],
+          interactionMode: "default",
+        })
+        .pipe(Effect.forkChild);
+      yield* Deferred.await(sendStarted);
+
+      for (const [index, turnId] of turnIds.entries()) {
+        primaryAnalyticsCodex.emit({
+          type: "turn.started",
+          eventId: asEventId(`evt-turn-analytics-bounded-deferred-start-${index + 1}`),
+          provider: CODEX_DRIVER,
+          createdAt: "2026-01-01T00:00:00.000Z",
+          threadId,
+          turnId,
+          payload: { model: `native-bounded-${index + 1}` },
+        });
+        primaryAnalyticsCodex.emit({
+          type: "turn.completed",
+          eventId: asEventId(`evt-turn-analytics-bounded-deferred-complete-${index + 1}`),
+          provider: CODEX_DRIVER,
+          createdAt: "2026-01-01T00:00:00.000Z",
+          threadId,
+          turnId,
+          payload: { state: "completed" },
+        });
+      }
+      yield* Fiber.join(runtimeEvents);
+      assert.equal(recordedTurnAnalytics.eventsByName("provider.turn.completed").length, 1);
+
+      yield* Fiber.interrupt(send);
+      assert.equal(recordedTurnAnalytics.eventsByName("provider.turn.completed").length, 9);
+    }),
+  );
+
+  it.effect("keeps the first metadata when steering reuses a rerouted turn", () =>
+    Effect.gen(function* () {
+      recordedTurnAnalytics.reset();
+      const provider = yield* ProviderService.ProviderService;
+      const threadId = asThreadId("thread-turn-analytics-steering");
+      yield* provider.startSession(threadId, {
+        provider: CODEX_DRIVER,
+        providerInstanceId: codexInstanceId,
+        threadId,
+        runtimeMode: "auto",
+      });
+      const firstTurn = yield* provider.sendTurn({
+        threadId,
+        input: "start",
+        attachments: [],
+        interactionMode: "default",
+        modelSelection: createModelSelection(codexInstanceId, "gpt-5.6-sol", [
+          { id: "reasoningEffort", value: "high" },
+        ]),
+      });
+      yield* advanceTestClock(10);
+
+      const reroutedEvent = yield* Stream.take(provider.streamEvents, 1).pipe(
+        Stream.runDrain,
+        Effect.forkChild,
+      );
+      yield* Effect.yieldNow;
+      primaryAnalyticsCodex.emit({
+        type: "model.rerouted",
+        eventId: asEventId("evt-turn-analytics-rerouted"),
+        provider: CODEX_DRIVER,
+        createdAt: "2026-01-01T00:00:00.000Z",
+        threadId,
+        turnId: firstTurn.turnId,
+        payload: {
+          fromModel: "gpt-5.6-sol",
+          toModel: "gpt-5.6-terra",
+          reason: "capacity",
+        },
+      });
+      yield* Fiber.join(reroutedEvent);
+      yield* advanceTestClock(15);
+
+      const steeredTurn = yield* provider.sendTurn({
+        threadId,
+        input: "steer",
+        attachments: [],
+        interactionMode: "plan",
+        modelSelection: createModelSelection(codexInstanceId, "gpt-5.6-terra", [
+          { id: "reasoningEffort", value: "low" },
+        ]),
+      });
+      assert.equal(steeredTurn.turnId, firstTurn.turnId);
+      yield* advanceTestClock(20);
+
+      const completedEvent = yield* Stream.take(provider.streamEvents, 1).pipe(
+        Stream.runDrain,
+        Effect.forkChild,
+      );
+      yield* Effect.yieldNow;
+      primaryAnalyticsCodex.emit({
+        type: "turn.completed",
+        eventId: asEventId("evt-turn-analytics-steered-complete"),
+        provider: CODEX_DRIVER,
+        createdAt: "2026-01-01T00:00:00.000Z",
+        threadId,
+        turnId: firstTurn.turnId,
+        payload: {
+          state: "completed",
+          tokenUsage: {
+            usageStatus: "complete",
+            usageScope: "main_agent",
+            inputTokens: 500,
+            outputTokens: 100,
+            hasSubagents: false,
+          },
+        },
+      });
+      yield* Fiber.join(completedEvent);
+
+      const completed = recordedTurnAnalytics.eventsByName("provider.turn.completed");
+      assert.equal(completed.length, 1);
+      assert.equal(completed[0]?.properties?.model, "gpt-5.6-sol");
+      assert.equal(completed[0]?.properties?.effort, "high");
+      assert.equal(completed[0]?.properties?.interactionMode, "default");
+      assert.equal(completed[0]?.properties?.mixedModels, true);
+      assert.equal(completed[0]?.properties?.durationMs, 45);
+    }),
+  );
+
+  it.effect("bounds active metadata while preserving recent delayed completions", () =>
+    Effect.gen(function* () {
+      recordedTurnAnalytics.reset();
+      const provider = yield* ProviderService.ProviderService;
+      const threadId = asThreadId("thread-turn-analytics-bounded-active");
+      const runtimeEvents = yield* Stream.take(provider.streamEvents, 12).pipe(
+        Stream.runDrain,
+        Effect.forkChild,
+      );
+      yield* Effect.yieldNow;
+
+      for (let index = 1; index <= 10; index += 1) {
+        primaryAnalyticsCodex.emit({
+          type: "turn.started",
+          eventId: asEventId(`evt-turn-analytics-bounded-start-${index}`),
+          provider: CODEX_DRIVER,
+          createdAt: "2026-01-01T00:00:00.000Z",
+          threadId,
+          turnId: asTurnId(`turn-analytics-bounded-${index}`),
+          payload: { model: `model-${index}` },
+        });
+      }
+      for (const index of [3, 1]) {
+        primaryAnalyticsCodex.emit({
+          type: "turn.completed",
+          eventId: asEventId(`evt-turn-analytics-bounded-complete-${index}`),
+          provider: CODEX_DRIVER,
+          createdAt: "2026-01-01T00:00:00.000Z",
+          threadId,
+          turnId: asTurnId(`turn-analytics-bounded-${index}`),
+          payload: { state: "completed" },
+        });
+      }
+      yield* Fiber.join(runtimeEvents);
+
+      const completed = recordedTurnAnalytics.eventsByName("provider.turn.completed");
+      assert.equal(completed.length, 2);
+      assert.equal(completed[0]?.properties?.model, "model-3");
+      assert.notProperty(completed[1]?.properties ?? {}, "model");
+    }),
+  );
+
+  it.effect("separates provider instances and omits unavailable counts", () =>
+    Effect.gen(function* () {
+      recordedTurnAnalytics.reset();
+      const provider = yield* ProviderService.ProviderService;
+      const threadId = asThreadId("thread-turn-analytics-instances");
+      const turnId = asTurnId("turn-shared-between-instances");
+      const runtimeEvents = yield* Stream.take(provider.streamEvents, 2).pipe(
+        Stream.runDrain,
+        Effect.forkChild,
+      );
+      yield* Effect.yieldNow;
+      const event: LegacyProviderRuntimeEvent = {
+        type: "turn.completed",
+        eventId: asEventId("evt-turn-analytics-primary-instance"),
+        provider: CODEX_DRIVER,
+        createdAt: "2026-01-01T00:00:00.000Z",
+        threadId,
+        turnId,
+        payload: {
+          state: "completed",
+          tokenUsage: {
+            usageStatus: "unavailable",
+            usageScope: "main_agent",
+            hasSubagents: false,
+          },
+        },
+      };
+      primaryAnalyticsCodex.emit(event);
+      secondaryAnalyticsCodex.emit({
+        ...event,
+        eventId: asEventId("evt-turn-analytics-secondary-instance"),
+      });
+      yield* Fiber.join(runtimeEvents);
+
+      const completed = recordedTurnAnalytics.eventsByName("provider.turn.completed");
+      assert.equal(completed.length, 2);
+      for (const entry of completed) {
+        assert.deepEqual(entry.properties, {
+          provider: CODEX_DRIVER,
+          terminalStatus: "completed",
+          usageStatus: "unavailable",
+          usageScope: "main_agent",
+          hasSubagents: false,
+        });
+      }
+    }),
+  );
+
+  it.effect("clears stale instance analytics when its replaced session exits", () =>
+    Effect.gen(function* () {
+      recordedTurnAnalytics.reset();
+      const provider = yield* ProviderService.ProviderService;
+      const threadId = asThreadId("thread-turn-analytics-stale-exit");
+      const initialSession = yield* provider.startSession(threadId, {
+        provider: CODEX_DRIVER,
+        providerInstanceId: codexInstanceId,
+        threadId,
+        runtimeMode: "full-access",
+      });
+      const turn = yield* provider.sendTurn({
+        threadId,
+        input: "measure the replaced generation",
+        attachments: [],
+        modelSelection: createModelSelection(codexInstanceId, "stale-model"),
+      });
+      yield* provider.startSession(threadId, {
+        provider: CODEX_DRIVER,
+        providerInstanceId: secondaryCodexInstanceId,
+        threadId,
+        runtimeMode: "full-access",
+      });
+
+      const exitProcessed = yield* provider.streamEvents.pipe(
+        Stream.filter(
+          (event) =>
+            event.type === "thread.state.changed" &&
+            event.eventId === asEventId("evt-turn-analytics-stale-exit-marker"),
+        ),
+        Stream.runHead,
+        Effect.forkChild,
+      );
+      yield* Effect.yieldNow;
+      primaryAnalyticsCodex.emit({
+        type: "session.exited",
+        eventId: asEventId("evt-turn-analytics-stale-exit"),
+        provider: CODEX_DRIVER,
+        createdAt: "2026-01-01T00:00:00.000Z",
+        threadId,
+        payload: {
+          sessionGenerationId: initialSession.sessionGenerationId,
+        },
+      });
+      primaryAnalyticsCodex.emit({
+        type: "thread.state.changed",
+        eventId: asEventId("evt-turn-analytics-stale-exit-marker"),
+        provider: CODEX_DRIVER,
+        createdAt: "2026-01-01T00:00:01.000Z",
+        threadId,
+        payload: { state: "compacted" },
+      });
+      assert.equal((yield* Fiber.join(exitProcessed))._tag, "Some");
+      yield* advanceTestClock(50);
+
+      const staleCompletion = yield* provider.streamEvents.pipe(
+        Stream.filter(
+          (event) =>
+            event.type === "turn.completed" &&
+            event.eventId === asEventId("evt-turn-analytics-after-stale-exit"),
+        ),
+        Stream.runHead,
+        Effect.forkChild,
+      );
+      yield* Effect.yieldNow;
+      primaryAnalyticsCodex.emit({
+        type: "turn.completed",
+        eventId: asEventId("evt-turn-analytics-after-stale-exit"),
+        provider: CODEX_DRIVER,
+        createdAt: "2026-01-01T00:00:01.000Z",
+        threadId,
+        turnId: turn.turnId,
+        payload: { state: "completed" },
+      });
+      assert.equal((yield* Fiber.join(staleCompletion))._tag, "Some");
+
+      const completed = recordedTurnAnalytics.eventsByName("provider.turn.completed");
+      assert.equal(completed.length, 1);
+      assert.notProperty(completed[0]?.properties ?? {}, "model");
+    }),
+  );
+
+  it.effect("ignores a stale-generation abort without clearing current turn analytics", () =>
+    Effect.gen(function* () {
+      recordedTurnAnalytics.reset();
+      const provider = yield* ProviderService.ProviderService;
+      const threadId = asThreadId("thread-turn-analytics-stale-abort");
+      const initialSession = yield* provider.startSession(threadId, {
+        provider: CODEX_DRIVER,
+        providerInstanceId: codexInstanceId,
+        threadId,
+        runtimeMode: "full-access",
+      });
+      const currentSession = yield* provider.startSession(threadId, {
+        provider: CODEX_DRIVER,
+        providerInstanceId: codexInstanceId,
+        threadId,
+        runtimeMode: "full-access",
+      });
+      const turn = yield* provider.sendTurn({
+        threadId,
+        input: "measure only the replacement generation",
+        attachments: [],
+        interactionMode: "plan",
+        modelSelection: createModelSelection(codexInstanceId, "current-model"),
+      });
+
+      primaryAnalyticsCodex.emit({
+        type: "turn.aborted",
+        eventId: asEventId("evt-turn-analytics-stale-abort"),
+        provider: CODEX_DRIVER,
+        createdAt: "2026-01-01T00:00:00.000Z",
+        threadId,
+        turnId: turn.turnId,
+        payload: {
+          reason: "Interrupted by replaced session",
+          sessionGenerationId: initialSession.sessionGenerationId,
+        },
+      });
+      yield* advanceTestClock(50);
+      assert.notEqual(currentSession.sessionGenerationId, initialSession.sessionGenerationId);
+      assert.equal(recordedTurnAnalytics.eventsByName("provider.turn.completed").length, 0);
+
+      const currentCompletion = yield* provider.streamEvents.pipe(
+        Stream.filter(
+          (event) =>
+            event.type === "turn.completed" &&
+            event.eventId === asEventId("evt-turn-analytics-current-completion"),
+        ),
+        Stream.runHead,
+        Effect.forkChild,
+      );
+      yield* Effect.yieldNow;
+      primaryAnalyticsCodex.emit({
+        type: "turn.completed",
+        eventId: asEventId("evt-turn-analytics-current-completion"),
+        provider: CODEX_DRIVER,
+        createdAt: "2026-01-01T00:00:01.000Z",
+        threadId,
+        turnId: turn.turnId,
+        payload: {
+          state: "completed",
+          sessionGenerationId: currentSession.sessionGenerationId,
+        },
+      });
+      assert.equal((yield* Fiber.join(currentCompletion))._tag, "Some");
+
+      const completed = recordedTurnAnalytics.eventsByName("provider.turn.completed");
+      assert.equal(completed.length, 1);
+      assert.equal(completed[0]?.properties?.terminalStatus, "completed");
+      assert.equal(completed[0]?.properties?.model, "current-model");
+      assert.equal(completed[0]?.properties?.interactionMode, "plan");
+    }),
+  );
+
+  it.effect("records known token counts for an interrupted turn", () =>
+    Effect.gen(function* () {
+      recordedTurnAnalytics.reset();
+      const provider = yield* ProviderService.ProviderService;
+      const threadId = asThreadId("thread-turn-analytics-interrupted");
+      yield* provider.startSession(threadId, {
+        provider: CODEX_DRIVER,
+        providerInstanceId: codexInstanceId,
+        threadId,
+        runtimeMode: "approval-required",
+      });
+      const turn = yield* provider.sendTurn({
+        threadId,
+        input: "stop after some work",
+        attachments: [],
+      });
+
+      const runtimeEvent = yield* Stream.take(provider.streamEvents, 1).pipe(
+        Stream.runDrain,
+        Effect.forkChild,
+      );
+      yield* Effect.yieldNow;
+      primaryAnalyticsCodex.emit({
+        type: "turn.aborted",
+        eventId: asEventId("evt-turn-analytics-interrupted"),
+        provider: CODEX_DRIVER,
+        createdAt: "2026-01-01T00:00:00.000Z",
+        threadId,
+        turnId: turn.turnId,
+        payload: {
+          reason: "Interrupted by user",
+          tokenUsage: {
+            usageStatus: "partial",
+            usageScope: "main_agent",
+            inputTokens: 120,
+            outputTokens: 30,
+            hasSubagents: true,
+          },
+        },
+      });
+      yield* Fiber.join(runtimeEvent);
+
+      const completed = recordedTurnAnalytics.eventsByName("provider.turn.completed");
+      assert.equal(completed.length, 1);
+      assert.equal(completed[0]?.properties?.terminalStatus, "interrupted");
+      assert.equal(completed[0]?.properties?.usageStatus, "partial");
+      assert.equal(completed[0]?.properties?.inputTokens, 120);
+      assert.equal(completed[0]?.properties?.outputTokens, 30);
+      assert.equal(completed[0]?.properties?.hasSubagents, true);
     }),
   );
 });
