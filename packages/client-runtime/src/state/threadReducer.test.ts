@@ -182,6 +182,40 @@ describe("retainRecentThreadHistory", () => {
     expect(retained.activities.at(-1)?.id).toBe("activity-500");
   });
 
+  it("keeps the main agent's latest tool start within the cap", () => {
+    const parentToolStart = {
+      id: EventId.make("activity-parent-tool-start"),
+      tone: "tool" as const,
+      kind: "tool.started",
+      summary: "Agent started",
+      payload: { itemType: "tool", title: "Agent" },
+      turnId: TurnId.make("turn-1"),
+      sequence: 0,
+      createdAt: "2026-04-01T00:00:00.000Z",
+    };
+    // Subagent tool starts are not main-agent progress and are not pinned.
+    const subagentActivities = Array.from({ length: 500 }, (_, index) => ({
+      id: EventId.make(`activity-${index + 1}`),
+      tone: "tool" as const,
+      kind: "tool.started",
+      summary: `Subagent read ${index + 1}`,
+      payload: { itemType: "tool", title: "Read", agentId: "agent-1" },
+      turnId: TurnId.make("turn-1"),
+      sequence: index + 1,
+      createdAt: "2026-04-01T00:00:01.000Z",
+    }));
+
+    const retained = retainRecentThreadHistory({
+      ...baseThread,
+      activities: [parentToolStart, ...subagentActivities],
+    });
+
+    expect(retained.activities).toHaveLength(500);
+    expect(retained.activities[0]?.id).toBe("activity-parent-tool-start");
+    expect(retained.activities[1]?.id).toBe("activity-2");
+    expect(retained.activities.at(-1)?.id).toBe("activity-500");
+  });
+
   it("retains a bounded message tail and records the load-older cursor", () => {
     const retained = retainRecentThreadHistory(
       {

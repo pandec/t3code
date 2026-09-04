@@ -15,6 +15,8 @@ import type {
 } from "@t3tools/contracts";
 import { messageArtifactTextHash } from "@t3tools/shared/messageArtifactIdentity";
 
+import { isParentAgentProgressActivity } from "./threadSteerPending.ts";
+
 export type ThreadDetailReducerResult =
   | { readonly kind: "updated"; readonly thread: OrchestrationThread }
   | { readonly kind: "deleted" }
@@ -48,23 +50,36 @@ function retainRecent<T>(entries: ReadonlyArray<T>): ReadonlyArray<T> {
     : entries;
 }
 
+/**
+ * Rows the cap must not evict: consumers read only the newest of each and a
+ * subagent fan-out can push it thousands of rows back. The context-window
+ * meter reads the latest resolvable update; the steer-pending marker resolves
+ * against the main agent's latest tool start (mirrored server-side by the
+ * pinned-activity CTE in ProjectionSnapshotQuery).
+ */
+const RETAINED_LATEST_ACTIVITY_PREDICATES: ReadonlyArray<
+  (activity: OrchestrationThreadActivity) => boolean
+> = [isResolvableContextWindowActivity, isParentAgentProgressActivity];
+
 function retainRecentActivities(
   activities: ReadonlyArray<OrchestrationThreadActivity>,
 ): ReadonlyArray<OrchestrationThreadActivity> {
   if (activities.length <= THREAD_HISTORY_RETENTION_LIMIT) return activities;
 
   const recent = activities.slice(-THREAD_HISTORY_RETENTION_LIMIT);
-  let latestContextWindow: OrchestrationThreadActivity | undefined;
-  for (let index = activities.length - 1; index >= 0; index -= 1) {
-    const activity = activities[index]!;
-    if (isResolvableContextWindowActivity(activity)) {
-      latestContextWindow = activity;
-      break;
+  const pinned: Array<OrchestrationThreadActivity> = [];
+  for (const matches of RETAINED_LATEST_ACTIVITY_PREDICATES) {
+    for (let index = activities.length - 1; index >= 0; index -= 1) {
+      const activity = activities[index]!;
+      if (matches(activity)) {
+        if (!recent.includes(activity) && !pinned.includes(activity)) pinned.push(activity);
+        break;
+      }
     }
   }
-  if (latestContextWindow === undefined || recent.includes(latestContextWindow)) return recent;
+  if (pinned.length === 0) return recent;
 
-  return pipe(recent.slice(1), Arr.append(latestContextWindow), Arr.sort(activityOrder));
+  return pipe(recent.slice(pinned.length), Arr.appendAll(pinned), Arr.sort(activityOrder));
 }
 
 /** Bounds memory and cache growth for thread snapshots from any source. */

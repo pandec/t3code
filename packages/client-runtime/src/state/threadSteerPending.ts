@@ -4,50 +4,32 @@ import type {
   OrchestrationMessage,
   OrchestrationSessionStatus,
   OrchestrationThreadActivity,
-  TurnId,
 } from "@t3tools/contracts";
-import { Atom, type AtomRegistry } from "effect/unstable/reactivity";
 
 import { isAgentAttributedToolActivity, isTimelineBypassActivity } from "./subagentRuntime.ts";
-import type { ThreadOutboxDeliveryIntent } from "./threadOutboxModel.ts";
 
 /**
  * Steering is not the same as being heard. Claude Code holds a mid-turn prompt
  * in its own queue and only reads it between a tool result and the next model
  * request, so a steer sent behind a long `Agent` or `Bash` call can sit unread
- * for minutes while the timeline keeps scrolling. This module tracks the gap
- * between "dispatched" and "read" so the message bubble can say which one it is.
+ * for minutes while the timeline keeps scrolling. This module tells the two
+ * apart from thread state alone so the message bubble can say which one it is.
  *
- * The state is deliberately in-memory and client-local: it describes what this
- * client is waiting for, not a fact about the thread. It does not survive a
- * reload and a second device does not see it.
+ * A steer is a user message that joined a turn already running: the server
+ * records it with a null turn id and a `createdAt` later than the running
+ * turn's `requestedAt`. Both timestamps are server-stamped (the server replaces
+ * the client's `createdAt` on receipt, and adapters stamp activities with the
+ * server clock), so every comparison here is between server readings. Nothing
+ * is client-local: the marker survives reloads and shows on every device.
  */
 
-/** One steer that reached the server while its thread's turn was already running. */
-export interface PendingSteerDispatch {
-  readonly messageId: MessageId;
-  /**
-   * Client clock at dispatch. Only ever compared with other client-clock
-   * readings (the reveal delay below) — never with a server timestamp.
-   */
-  readonly dispatchedAt: string;
-  /**
-   * Newest main-agent progress timestamp this client had for the thread when
-   * the steer went out, or null when it had none. Resolution compares server
-   * timestamps against this watermark instead of against the client clock, so a
-   * remote client whose wall clock differs from the environment's still clears
-   * the marker at the right moment.
-   */
-  readonly progressWatermarkAt: string | null;
-  /** The turn the steer joined. A different turn means its queue point passed. */
-  readonly turnId: TurnId | null;
-}
-
-/** The thread state a pending steer is resolved against. */
+/** The thread state a steer is resolved against. */
 export interface SteerPendingThreadSnapshot {
   readonly sessionStatus: OrchestrationSessionStatus | null;
-  readonly latestTurn: Pick<OrchestrationLatestTurn, "turnId" | "state"> | null;
-  readonly messages: ReadonlyArray<Pick<OrchestrationMessage, "role" | "createdAt">>;
+  readonly latestTurn: Pick<OrchestrationLatestTurn, "turnId" | "state" | "requestedAt"> | null;
+  readonly messages: ReadonlyArray<
+    Pick<OrchestrationMessage, "id" | "role" | "turnId" | "createdAt">
+  >;
   readonly activities: ReadonlyArray<OrchestrationThreadActivity>;
 }
 
@@ -59,9 +41,6 @@ export interface SteerPendingThreadSnapshot {
  * common flicker without claiming to prove provider-side queue state.
  */
 export const STEER_PENDING_REVEAL_DELAY_MS = 1_500;
-
-/** Most recent steers kept per thread; a queue deeper than this is not a UI problem. */
-const MAX_PENDING_STEERS_PER_THREAD = 8;
 
 /**
  * The only activity kind useful as evidence that the main agent issued a new
@@ -100,9 +79,9 @@ function parsedTimestamp(value: string | null | undefined): number {
 }
 
 /**
- * The newest main-agent progress timestamp in a thread, used as the watermark a
- * later steer is measured against. Assistant messages count alongside tool
- * starts: a turn that answers in prose never starts another tool.
+ * The newest main-agent progress timestamp in a thread. Assistant messages
+ * count alongside tool starts: a turn that answers in prose never starts
+ * another tool.
  */
 export function latestParentAgentProgressAt(
   snapshot: Pick<SteerPendingThreadSnapshot, "messages" | "activities">,
@@ -129,198 +108,38 @@ export function latestParentAgentProgressAt(
   return latest;
 }
 
-function hasParentAgentProgressSince(
-  snapshot: Pick<SteerPendingThreadSnapshot, "messages" | "activities">,
-  watermarkAt: string | null,
-): boolean {
-  const watermarkMs = parsedTimestamp(watermarkAt);
-  for (const message of snapshot.messages) {
-    if (message.role === "assistant" && parsedTimestamp(message.createdAt) > watermarkMs) {
-      return true;
-    }
-  }
-  for (const activity of snapshot.activities) {
-    if (
-      parsedTimestamp(activity.createdAt) > watermarkMs &&
-      isParentAgentProgressActivity(activity)
-    ) {
-      return true;
-    }
-  }
-  return false;
-}
-
 /**
- * Whether a delivery is worth tracking. Only a steer that landed on a turn that
- * was already running can queue behind a tool call; anything delivered to an
- * idle thread starts its own turn and is read straight away.
+ * The user messages steered into the running turn that the agent has not
+ * reached yet, in timeline order. Every way the turn can end is a way out:
+ * completion, interruption, an error, a lost session, and a provider that
+ * answered the steer by opening its own turn (the steer's message then carries
+ * no evidence it queued behind anything, and the turn it joined is no longer
+ * current). Within a live turn, the first main-agent tool start or assistant
+ * message after a steer proves the queue drained past it.
  */
-export function shouldTrackSteerDispatch(input: {
-  readonly deliveryIntent: ThreadOutboxDeliveryIntent;
-  readonly sessionStatus: OrchestrationSessionStatus | null;
-}): boolean {
-  return input.deliveryIntent === "steer" && input.sessionStatus === "running";
-}
-
-/**
- * Whether the agent still has not reached the drain point for this steer. Every
- * way the turn can end is a way out: completion, interruption, an error, a lost
- * session, and a provider that answered the steer by opening its own turn.
- */
-export function isSteerStillUnread(
-  pending: PendingSteerDispatch,
+export function unreadSteerMessageIds(
   snapshot: SteerPendingThreadSnapshot,
-): boolean {
+): ReadonlyArray<MessageId> {
   if (snapshot.sessionStatus !== "running") {
-    return false;
+    return [];
   }
   const latestTurn = snapshot.latestTurn;
   if (latestTurn === null || latestTurn.state !== "running") {
-    return false;
+    return [];
   }
-  if (latestTurn.turnId !== pending.turnId) {
-    return false;
+  const turnRequestedAtMs = parsedTimestamp(latestTurn.requestedAt);
+  const progressMs = parsedTimestamp(latestParentAgentProgressAt(snapshot));
+  const unread: Array<MessageId> = [];
+  for (const message of snapshot.messages) {
+    if (message.role !== "user" || message.turnId !== null) {
+      continue;
+    }
+    const createdAtMs = parsedTimestamp(message.createdAt);
+    // The turn's own opening message shares its requestedAt; only later ones steered.
+    if (createdAtMs <= turnRequestedAtMs || createdAtMs <= progressMs) {
+      continue;
+    }
+    unread.push(message.id);
   }
-  return !hasParentAgentProgressSince(snapshot, pending.progressWatermarkAt);
-}
-
-/**
- * Drops the steers the agent has since read. Returns the input array unchanged
- * when nothing resolved, so callers can use identity to skip a write.
- */
-export function unreadSteerDispatches(
-  pending: ReadonlyArray<PendingSteerDispatch>,
-  snapshot: SteerPendingThreadSnapshot,
-): ReadonlyArray<PendingSteerDispatch> {
-  if (pending.length === 0) {
-    return pending;
-  }
-  const unread = pending.filter((entry) => isSteerStillUnread(entry, snapshot));
-  return unread.length === pending.length ? pending : unread;
-}
-
-/** The pending steers old enough to show a marker for. */
-export function revealedSteerPendingMessageIds(
-  pending: ReadonlyArray<PendingSteerDispatch>,
-  nowMs: number,
-): ReadonlySet<MessageId> {
-  const revealed = new Set<MessageId>();
-  for (const entry of pending) {
-    if (parsedTimestamp(entry.dispatchedAt) + STEER_PENDING_REVEAL_DELAY_MS <= nowMs) {
-      revealed.add(entry.messageId);
-    }
-  }
-  return revealed;
-}
-
-/**
- * Milliseconds until the next still-hidden steer would be revealed, or null
- * when none is waiting. Nothing else re-renders at that moment.
- */
-export function nextSteerPendingRevealDelayMs(
-  pending: ReadonlyArray<PendingSteerDispatch>,
-  nowMs: number,
-): number | null {
-  let soonest: number | null = null;
-  for (const entry of pending) {
-    const remainingMs = parsedTimestamp(entry.dispatchedAt) + STEER_PENDING_REVEAL_DELAY_MS - nowMs;
-    if (remainingMs > 0 && (soonest === null || remainingMs < soonest)) {
-      soonest = remainingMs;
-    }
-  }
-  return soonest;
-}
-
-export interface ThreadSteerPendingStoreOptions {
-  readonly registry: AtomRegistry.AtomRegistry;
-  readonly atomLabel?: string;
-}
-
-export type ThreadSteerPendingStore = ReturnType<typeof createThreadSteerPendingStore>;
-
-/**
- * The ephemeral per-thread record of dispatched-but-unread steers. Web and
- * mobile each instantiate one against their own atom registry; the behaviour
- * they share lives in the pure helpers above.
- */
-export function createThreadSteerPendingStore(options: ThreadSteerPendingStoreOptions) {
-  const pendingByThreadKeyAtom = Atom.make<Record<string, ReadonlyArray<PendingSteerDispatch>>>(
-    {},
-  ).pipe(Atom.keepAlive, Atom.withLabel(options.atomLabel ?? "thread-steer-pending"));
-  /**
-   * Mounted views lease their own thread independently. A thread can also be on
-   * screen more than once — mobile's files route stacks a second thread view
-   * over the first — so each key keeps a reference count.
-   */
-  const retainedViewCountByThreadKey = new Map<string, number>();
-
-  const read = (): Record<string, ReadonlyArray<PendingSteerDispatch>> =>
-    options.registry.get(pendingByThreadKeyAtom);
-
-  const track = (threadKey: string, dispatch: PendingSteerDispatch): void => {
-    // The outbox drains every thread. A delivery that finishes after navigation
-    // must not recreate state for a thread whose marker can no longer be shown.
-    if (!retainedViewCountByThreadKey.has(threadKey)) {
-      return;
-    }
-    const current = read();
-    const existing = current[threadKey] ?? [];
-    const next = [
-      ...existing.filter((entry) => entry.messageId !== dispatch.messageId),
-      dispatch,
-    ].slice(-MAX_PENDING_STEERS_PER_THREAD);
-    options.registry.set(pendingByThreadKeyAtom, { ...current, [threadKey]: next });
-  };
-
-  const setThread = (threadKey: string, pending: ReadonlyArray<PendingSteerDispatch>): void => {
-    const current = read();
-    if (current[threadKey] === pending) {
-      return;
-    }
-    if (pending.length === 0) {
-      if (current[threadKey] === undefined) {
-        return;
-      }
-      const { [threadKey]: _dropped, ...rest } = current;
-      options.registry.set(pendingByThreadKeyAtom, rest);
-      return;
-    }
-    options.registry.set(pendingByThreadKeyAtom, { ...current, [threadKey]: pending });
-  };
-
-  /**
-   * Leases the store to a thread on screen. Every call must be paired with a
-   * `release` for the same key.
-   */
-  const retain = (threadKey: string | null): void => {
-    if (threadKey === null) {
-      return;
-    }
-    retainedViewCountByThreadKey.set(
-      threadKey,
-      (retainedViewCountByThreadKey.get(threadKey) ?? 0) + 1,
-    );
-  };
-
-  /**
-   * Stops accepting late deliveries and forgets pending markers once the last
-   * view of this thread unmounts. Releasing an unleased key is a no-op.
-   */
-  const release = (threadKey: string | null): void => {
-    if (threadKey === null) {
-      return;
-    }
-    const retainedViewCount = retainedViewCountByThreadKey.get(threadKey);
-    if (retainedViewCount === undefined) {
-      return;
-    }
-    if (retainedViewCount > 1) {
-      retainedViewCountByThreadKey.set(threadKey, retainedViewCount - 1);
-      return;
-    }
-    retainedViewCountByThreadKey.delete(threadKey);
-    setThread(threadKey, []);
-  };
-
-  return { pendingByThreadKeyAtom, track, setThread, retain, release };
+  return unread;
 }
