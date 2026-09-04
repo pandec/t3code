@@ -5,26 +5,40 @@ import {
 } from "@t3tools/contracts";
 import * as Schema from "effect/Schema";
 
-/**
- * Self-contained persisted shape of a composer image attachment. The dataUrl
- * carries the full payload so a queued message can round-trip through storage
- * and back into a platform composer without live File/blob handles.
- */
-const DraftComposerImageAttachmentFields = {
+const NonEmptyString = Schema.String.check(Schema.isNonEmpty());
+
+const DraftComposerImageAttachmentBaseFields = {
   id: Schema.String,
   type: Schema.Literal("image"),
   name: Schema.String,
   mimeType: Schema.String,
   sizeBytes: Schema.Number,
-  dataUrl: Schema.String,
   uploadedAttachmentId: Schema.optional(Schema.String),
   uploadEnvironmentId: Schema.optional(EnvironmentId),
 };
 
-export const DraftComposerImageAttachmentSchema = Schema.Struct({
-  ...DraftComposerImageAttachmentFields,
-  previewUri: Schema.String,
-});
+const InlineDraftComposerImageAttachmentFields = {
+  ...DraftComposerImageAttachmentBaseFields,
+  dataUrl: NonEmptyString,
+  fileUri: Schema.optional(NonEmptyString),
+};
+
+const FileBackedDraftComposerImageAttachmentFields = {
+  ...DraftComposerImageAttachmentBaseFields,
+  dataUrl: Schema.optional(NonEmptyString),
+  fileUri: NonEmptyString,
+};
+
+export const DraftComposerImageAttachmentSchema = Schema.Union([
+  Schema.Struct({
+    ...InlineDraftComposerImageAttachmentFields,
+    previewUri: Schema.String,
+  }),
+  Schema.Struct({
+    ...FileBackedDraftComposerImageAttachmentFields,
+    previewUri: Schema.String,
+  }),
+]);
 
 export const DraftComposerFileAttachmentSchema = Schema.Struct({
   id: Schema.String,
@@ -32,7 +46,7 @@ export const DraftComposerFileAttachmentSchema = Schema.Struct({
   name: Schema.String,
   mimeType: Schema.String,
   sizeBytes: Schema.Number,
-  fileUri: Schema.String,
+  fileUri: NonEmptyString,
   uploadedAttachmentId: Schema.optional(Schema.String),
   uploadEnvironmentId: Schema.optional(EnvironmentId),
 });
@@ -42,24 +56,40 @@ export const DraftComposerAttachmentSchema = Schema.Union([
   DraftComposerFileAttachmentSchema,
 ]);
 
-// The outbox persists only the self-contained image payload. Legacy rows may
-// still include previewUri; decode always reconstructs it from dataUrl.
-export const PersistedDraftComposerImageAttachmentSchema = Schema.Struct({
-  ...DraftComposerImageAttachmentFields,
-  previewUri: Schema.optional(Schema.String),
-});
+// Outbox rows omit duplicate previews for inline images. File-backed images
+// retain previewUri because their bytes cannot reconstruct it until delivery.
+export const PersistedDraftComposerImageAttachmentSchema = Schema.Union([
+  Schema.Struct({
+    ...InlineDraftComposerImageAttachmentFields,
+    previewUri: Schema.optional(Schema.String),
+  }),
+  Schema.Struct({
+    ...FileBackedDraftComposerImageAttachmentFields,
+    previewUri: Schema.optional(Schema.String),
+  }),
+]);
 
 export const PersistedDraftComposerAttachmentSchema = Schema.Union([
   PersistedDraftComposerImageAttachmentSchema,
   DraftComposerFileAttachmentSchema,
 ]);
 
-export interface DraftComposerImageAttachment extends UploadChatImageAttachment {
+interface DraftComposerImageAttachmentBase extends Omit<UploadChatImageAttachment, "dataUrl"> {
   readonly id: string;
   readonly previewUri: string;
   readonly uploadedAttachmentId?: string | undefined;
   readonly uploadEnvironmentId?: EnvironmentIdType | undefined;
 }
+
+export type DraftComposerImageAttachment =
+  | (DraftComposerImageAttachmentBase & {
+      readonly dataUrl: string;
+      readonly fileUri?: string | undefined;
+    })
+  | (DraftComposerImageAttachmentBase & {
+      readonly dataUrl?: string | undefined;
+      readonly fileUri: string;
+    });
 
 export interface DraftComposerFileAttachment {
   readonly id: string;
@@ -74,15 +104,29 @@ export interface DraftComposerFileAttachment {
 
 export type DraftComposerAttachment = DraftComposerImageAttachment | DraftComposerFileAttachment;
 
-/** Wire shape for startTurn: pure uploads without client draft id / previewUri. */
+/** Any composer attachment whose bytes live in a local file. */
+export type FileBackedComposerAttachment = DraftComposerAttachment & { readonly fileUri: string };
+
+export function isFileBackedComposerAttachment(
+  attachment: DraftComposerAttachment,
+): attachment is FileBackedComposerAttachment {
+  return attachment.fileUri !== undefined;
+}
+
+/** Wire shape for startTurn: pure inline images without draft-only fields. */
 export function toUploadChatImageAttachments(
   attachments: ReadonlyArray<DraftComposerImageAttachment>,
 ): ReadonlyArray<UploadChatImageAttachment> {
-  return attachments.map((attachment) => ({
-    type: attachment.type,
-    name: attachment.name,
-    mimeType: attachment.mimeType,
-    sizeBytes: attachment.sizeBytes,
-    dataUrl: attachment.dataUrl,
-  }));
+  return attachments.map((attachment) => {
+    if (attachment.dataUrl === undefined) {
+      throw new Error(`'${attachment.name}' must be materialized before sending.`);
+    }
+    return {
+      type: attachment.type,
+      name: attachment.name,
+      mimeType: attachment.mimeType,
+      sizeBytes: attachment.sizeBytes,
+      dataUrl: attachment.dataUrl,
+    };
+  });
 }

@@ -1,8 +1,10 @@
 import {
+  isFileBackedComposerAttachment,
   toUploadChatImageAttachments,
   type DraftComposerAttachment,
   type DraftComposerFileAttachment,
   type DraftComposerImageAttachment,
+  type FileBackedComposerAttachment,
 } from "@t3tools/client-runtime/state/composer-attachment";
 import {
   clampFileAttachmentUploadBytes,
@@ -26,10 +28,12 @@ import { beginForegroundHandoff } from "./foreground-handoff";
 import { uuidv4 } from "./uuid";
 
 export {
+  isFileBackedComposerAttachment,
   toUploadChatImageAttachments,
   type DraftComposerAttachment,
   type DraftComposerFileAttachment,
   type DraftComposerImageAttachment,
+  type FileBackedComposerAttachment,
 };
 
 const OWNED_PASTED_IMAGE_DIRECTORY = "t3-composer-paste";

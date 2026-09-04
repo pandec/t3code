@@ -196,6 +196,27 @@ export async function requestThreadUnpinConfirmation(input: {
   );
 }
 
+/** One prompt for a multi-select unpin; the per-thread dialog would stack once per row. */
+export async function requestBulkThreadUnpinConfirmation(input: {
+  enabled: boolean;
+  count: number;
+  confirm: ((message: string) => Promise<boolean>) | null;
+}) {
+  const { confirm } = input;
+  if (!input.enabled || confirm === null) {
+    return AsyncResult.success(true);
+  }
+
+  return settlePromise(() =>
+    confirm(
+      [
+        `Unpin ${input.count} thread${input.count === 1 ? "" : "s"}?`,
+        "This will move these threads out of your pinned section.",
+      ].join("\n"),
+    ),
+  );
+}
+
 export function useThreadActions() {
   const closeTerminal = useAtomCommand(terminalEnvironment.close);
   const archiveThreadMutation = useAtomCommand(threadEnvironment.archive, {

@@ -27,7 +27,7 @@ import {
 } from "./composerAttachment.ts";
 import type { EnvironmentShellStatus } from "./shell.ts";
 
-const THREAD_OUTBOX_SCHEMA_VERSION = 7;
+const THREAD_OUTBOX_SCHEMA_VERSION = 8;
 const THREAD_OUTBOX_MAX_RETRY_DELAY_MS = 16_000;
 
 const QueuedThreadCreationSchema = Schema.Struct({
@@ -60,7 +60,7 @@ export const ThreadOutboxDeliveryIntent = Schema.Literals(["queue", "steer"]);
 export type ThreadOutboxDeliveryIntent = typeof ThreadOutboxDeliveryIntent.Type;
 
 export const QueuedThreadMessageSchema = Schema.Struct({
-  schemaVersion: Schema.Literals([1, 2, 3, 4, 5, 6, THREAD_OUTBOX_SCHEMA_VERSION]),
+  schemaVersion: Schema.Literals([1, 2, 3, 4, 5, 6, 7, THREAD_OUTBOX_SCHEMA_VERSION]),
   environmentId: EnvironmentId,
   threadId: ThreadId,
   messageId: MessageId,
@@ -106,7 +106,7 @@ export interface QueuedThreadMessage {
   readonly messageId: MessageId;
   readonly commandId: CommandId;
   readonly text: string;
-  readonly inputOrigin?: typeof MessageInputOrigin.Type | undefined;
+  readonly inputOrigin?: MessageInputOrigin | undefined;
   readonly attachments: ReadonlyArray<DraftComposerAttachment>;
   readonly modelSelection?: ModelSelectionType | undefined;
   readonly runtimeMode?: RuntimeModeType | undefined;
@@ -293,8 +293,8 @@ export function encodeQueuedThreadMessage(message: QueuedThreadMessage): unknown
       if (attachment.type === "file") {
         return attachment;
       }
-      const { previewUri: _previewUri, ...persisted } = attachment;
-      return persisted;
+      const { previewUri, ...persisted } = attachment;
+      return attachment.dataUrl === undefined ? { ...persisted, previewUri } : persisted;
     }),
   });
 }
@@ -303,14 +303,22 @@ export function decodeQueuedThreadMessage(value: unknown): QueuedThreadMessage {
   const { schemaVersion: _, ...message } = decodeStoredQueuedThreadMessage(value);
   return {
     ...message,
-    attachments: message.attachments.map((attachment) =>
-      attachment.type === "image"
-        ? {
-            ...attachment,
-            previewUri: attachment.dataUrl,
-          }
-        : attachment,
-    ),
+    attachments: message.attachments.map((attachment) => {
+      if (attachment.type === "file") {
+        return attachment;
+      }
+      if (attachment.dataUrl !== undefined) {
+        return { ...attachment, dataUrl: attachment.dataUrl, previewUri: attachment.dataUrl };
+      }
+      if (attachment.fileUri !== undefined) {
+        return {
+          ...attachment,
+          fileUri: attachment.fileUri,
+          previewUri: attachment.previewUri ?? attachment.fileUri,
+        };
+      }
+      throw new Error(`Queued image '${attachment.name}' has no preview source.`);
+    }),
   };
 }
 

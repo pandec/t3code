@@ -1165,7 +1165,6 @@ export function useThreadOutboxDrain(): void {
           ...(queuedMessage.inputOrigin !== undefined
             ? { inputOrigin: queuedMessage.inputOrigin }
             : {}),
-          attachments: queuedMessage.attachments,
           uploadedAttachments: prepared.attachments,
           modelSelection: sendSettings.modelSelection,
           runtimeMode: sendSettings.runtimeMode,

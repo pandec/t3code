@@ -139,7 +139,6 @@ export function useCreateProjectThread() {
           createdAt: metadata.createdAt,
           text: initialMessageText,
           ...(input.inputOrigin !== undefined ? { inputOrigin: input.inputOrigin } : {}),
-          attachments: input.initialAttachments,
           uploadedAttachments: prepared.attachments,
           modelSelection: input.modelSelection,
           runtimeMode: input.runtimeMode,

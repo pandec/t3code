@@ -14,19 +14,22 @@ import type {
   OrchestrationClientOrigin,
   OrchestrationCommand,
   OrchestrationEvent,
+  ThreadId,
 } from "@t3tools/contracts";
 import * as Context from "effect/Context";
 import type * as Effect from "effect/Effect";
 import type * as Scope from "effect/Scope";
 import type * as Stream from "effect/Stream";
 
+import type { OrchestrationEventStoreError } from "../../persistence/Errors.ts";
+import type { OrchestrationAggregateReplayStats } from "../../persistence/Services/OrchestrationEventStore.ts";
 import type { OrchestrationDispatchError } from "../Errors.ts";
-import type {
-  OrchestrationEventStoreError,
-  ProjectionRepositoryError,
-} from "../../persistence/Errors.ts";
-import type { OrchestrationEventStreamFilter } from "../../persistence/Services/OrchestrationEventStore.ts";
-import type { ProjectionEventReplayStats } from "./ProjectionSnapshotQuery.ts";
+
+export interface OrchestrationThreadReplayRange {
+  readonly threadId: ThreadId;
+  readonly fromSequenceExclusive: number;
+  readonly toSequenceInclusive: number;
+}
 
 /**
  * OrchestrationEngineShape - Service API for orchestration command and event flow.
@@ -37,17 +40,24 @@ export interface OrchestrationEngineShape {
    *
    * @param fromSequenceExclusive - Sequence cursor (exclusive).
    * @param limit - Maximum number of events to read. Defaults to the event
-   *   store's page-bounded default.
-   * @param filter - Optional aggregate filter applied by storage before event
-   *   decoding. Use this for per-thread catch-up so unrelated activity is not
-   *   read from the global event stream.
+   *   store's page-bounded default; pass a higher value when the caller must
+   *   read a wider global range. Thread subscriptions use readThreadEvents.
    * @returns Stream containing ordered events.
    */
   readonly readEvents: (
     fromSequenceExclusive: number,
     limit?: number,
-    filter?: OrchestrationEventStreamFilter,
   ) => Stream.Stream<OrchestrationEvent, OrchestrationEventStoreError, never>;
+
+  /** Read only this thread's events through a captured authoritative head. */
+  readonly readThreadEvents: (
+    input: OrchestrationThreadReplayRange & { readonly limit?: number },
+  ) => Stream.Stream<OrchestrationEvent, OrchestrationEventStoreError>;
+
+  /** Measure a bounded thread replay without decoding its event bodies. */
+  readonly getThreadReplayStats: (
+    input: OrchestrationThreadReplayRange & { readonly maxEvents: number },
+  ) => Effect.Effect<OrchestrationAggregateReplayStats, OrchestrationEventStoreError>;
 
   /**
    * Dispatch a validated orchestration command.
@@ -82,16 +92,6 @@ export interface OrchestrationEngineShape {
     never,
     Scope.Scope
   >;
-
-  /**
-   * Measure a persisted event range without decoding payload bodies. The
-   * optional aggregate filter is applied in SQL before counting bytes.
-   */
-  readonly getEventReplayStats: (input: {
-    readonly fromSequenceExclusive: number;
-    readonly toSequenceInclusive: number;
-    readonly filter?: OrchestrationEventStreamFilter;
-  }) => Effect.Effect<ProjectionEventReplayStats, ProjectionRepositoryError>;
 
   /**
    * The latest sequence reflected in the engine's authoritative command read

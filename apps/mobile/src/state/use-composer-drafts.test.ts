@@ -15,6 +15,11 @@ const failMovePathFragments = new Set<string>();
 const failReadPathFragments = new Set<string>();
 const moveAttempts = new Map<string, number>();
 const readAttempts = new Map<string, number>();
+const readImage = vi.fn(async (uri: string) => {
+  const content = persistedFiles.get(uri);
+  if (content === undefined) throw new Error(`missing file: ${uri}`);
+  return content.startsWith("data:") ? (content.split(",")[1] ?? "") : content;
+});
 const readGate: {
   uri: string | null;
   promise: Promise<void> | null;
@@ -28,9 +33,11 @@ const hashGate: {
 vi.mock("expo-file-system", () => {
   class File {
     uri: string;
+    parentDirectory = null;
 
-    constructor(directory: { uri: string }, name: string) {
-      this.uri = `${directory.uri}/${name}`;
+    constructor(base: string | { uri: string }, name?: string) {
+      const baseUri = typeof base === "string" ? base : base.uri;
+      this.uri = name === undefined ? baseUri : `${baseUri}/${name}`;
     }
 
     get name(): string {
@@ -92,6 +99,10 @@ vi.mock("expo-file-system", () => {
       }
       return persistedFiles.get(this.uri) ?? "";
     }
+
+    async base64(): Promise<string> {
+      return readImage(this.uri);
+    }
   }
 
   class Directory {
@@ -112,7 +123,7 @@ vi.mock("expo-file-system", () => {
   }
 
   return {
-    Paths: { document: "file:///document" },
+    Paths: { document: { uri: "file:///document" } },
     Directory,
     File,
   };
@@ -144,7 +155,24 @@ const incomingShareStorageMocks = vi.hoisted(() => ({
 }));
 
 vi.mock("../lib/composerImages", () => ({
+  isFileBackedComposerAttachment: (attachment: { readonly fileUri?: string }) =>
+    attachment.fileUri !== undefined,
   removePersistedComposerAttachmentFile: composerAttachmentCleanupMocks.remove,
+}));
+
+vi.mock("../lib/uuid", () => ({ uuidv4: () => "uuid", randomHex: () => "0000" }));
+vi.mock("./assets", () => ({ assetEnvironment: {} }));
+vi.mock("./attachments", () => ({ attachmentEnvironment: {} }));
+vi.mock("./session", () => ({ environmentSession: {} }));
+vi.mock("@t3tools/client-runtime/state/runtime", () => ({
+  createEnvironmentRpcCommand: () => Symbol("rpc-command"),
+  executeAtomQuery: () => {
+    throw new Error("Unexpected network query in the inline read test");
+  },
+  runAtomCommand: () => {
+    throw new Error("Unexpected network command in the inline read test");
+  },
+  squashAtomCommandFailure: (result: { readonly error: unknown }) => result.error,
 }));
 
 vi.mock("../lib/attachmentUpload", () => ({
@@ -163,6 +191,7 @@ import {
   appendComposerDraftContentDurably,
   archiveCloudComposerDrafts,
   clearComposerDraft,
+  clearComposerDraftContent,
   clearComposerDraftContentIfUnchangedState,
   clearComposerDraftContentState,
   clearComposerDraftsEnvironment,
@@ -292,6 +321,12 @@ afterEach(() => {
   resetComposerDraftPersistenceForTests();
   resetComposerDraftsLoadState();
   vi.useRealTimers();
+  readImage.mockReset();
+  readImage.mockImplementation(async (uri: string) => {
+    const content = persistedFiles.get(uri);
+    if (content === undefined) throw new Error(`missing file: ${uri}`);
+    return content.startsWith("data:") ? (content.split(",")[1] ?? "") : content;
+  });
   appAtomRegistry.set(composerDraftsAtom, {});
   appAtomRegistry.set(composerCloudDraftsAtom, { accountId: null, signedOut: {} });
   appAtomRegistry.set(stickyComposerModelSelectionAtom, null);
@@ -336,6 +371,57 @@ describe("mobile composer drafts", () => {
     ).toEqual({
       "environment-1:thread-1": { text: "Review this file", attachments: [file] },
     });
+  });
+
+  it("bridges file-backed images into hashed sidecars and hydrates inline bytes", async () => {
+    const draftKey = "environment-1:thread-file-backed-image";
+    const fileUri = "file:///document/t3-composer-attachments/photo.png";
+    const dataUrl = "data:image/png;base64,YWJj";
+    const image = {
+      id: "file-backed-image",
+      type: "image" as const,
+      name: "photo.png",
+      mimeType: "image/png",
+      sizeBytes: 3,
+      fileUri,
+      previewUri: fileUri,
+    };
+    persistedFiles.set(fileUri, "YWJj");
+    appendComposerDraftAttachments(draftKey, [image]);
+
+    await flushComposerDrafts();
+
+    const contentHash = testContentHash(dataUrl);
+    expect(JSON.parse(persistedFiles.get(draftRecordPath(draftKey)) ?? "null")).toMatchObject({
+      schemaVersion: 2,
+      draft: {
+        attachments: [
+          {
+            id: image.id,
+            type: "image",
+            contentHash,
+          },
+        ],
+      },
+    });
+    expect(persistedFiles.get(attachmentPath(contentHash))).toBe(dataUrl);
+
+    appAtomRegistry.set(composerDraftsAtom, {});
+    resetComposerDraftPersistenceForTests();
+    resetComposerDraftsLoadState();
+    await waitForComposerDraftsLoaded();
+
+    expect(getComposerDraftSnapshot(draftKey).attachments).toEqual([
+      {
+        id: image.id,
+        type: "image",
+        name: image.name,
+        mimeType: image.mimeType,
+        sizeBytes: image.sizeBytes,
+        dataUrl,
+        previewUri: dataUrl,
+      },
+    ]);
   });
 
   it("releases videos rejected by the live draft limit and keeps accepted files", async () => {
@@ -411,6 +497,108 @@ describe("mobile composer drafts", () => {
     appAtomRegistry.set(composerDraftsAtom, {});
     await releaseUnusedComposerAttachmentFiles([file]);
     expect(composerAttachmentCleanupMocks.remove).toHaveBeenCalledWith(file.fileUri);
+  });
+
+  it("retains a referenced file-backed image and releases it once unreferenced", async () => {
+    const outboxLoad = vi.spyOn(threadOutboxManager, "load").mockResolvedValue(true);
+    onTestFinished(() => outboxLoad.mockRestore());
+    const image = {
+      id: "image-1",
+      type: "image" as const,
+      name: "photo.png",
+      mimeType: "image/png",
+      sizeBytes: 3,
+      fileUri: "file:///documents/t3-composer-attachments/photo.png",
+      previewUri: "file:///documents/t3-composer-attachments/photo.png",
+    };
+    appAtomRegistry.set(composerDraftsAtom, {
+      "environment-1:thread-1": { text: "look at this", attachments: [image] },
+    });
+
+    await releaseUnusedComposerAttachmentFiles([image]);
+    expect(composerAttachmentCleanupMocks.remove).not.toHaveBeenCalled();
+
+    // A queued outbox message must keep the bytes alive after the draft clears.
+    appAtomRegistry.set(composerDraftsAtom, {});
+    appAtomRegistry.set(threadOutboxManager.queuedMessagesByThreadKeyAtom, {
+      "environment-1:thread-1": [
+        {
+          environmentId: EnvironmentId.make("environment-1"),
+          threadId: ThreadId.make("thread-1"),
+          messageId: MessageId.make("queued-image"),
+          commandId: CommandId.make("command-image"),
+          text: "look at this",
+          attachments: [image],
+          createdAt: "2026-08-31T12:00:00.000Z",
+        },
+      ],
+    });
+    await releaseUnusedComposerAttachmentFiles([image]);
+    expect(composerAttachmentCleanupMocks.remove).not.toHaveBeenCalled();
+
+    appAtomRegistry.set(threadOutboxManager.queuedMessagesByThreadKeyAtom, {});
+    await releaseUnusedComposerAttachmentFiles([image]);
+    expect(composerAttachmentCleanupMocks.remove).toHaveBeenCalledExactlyOnceWith(image.fileUri);
+  });
+
+  it("keeps an image through an inline read after its draft is removed", async () => {
+    const { prepareTurnAttachments } =
+      await vi.importActual<typeof import("../lib/attachmentUpload")>("../lib/attachmentUpload");
+    const image = {
+      id: "image-reading",
+      type: "image" as const,
+      name: "photo.png",
+      mimeType: "image/png",
+      sizeBytes: 3,
+      fileUri: "file:///documents/t3-composer-attachments/photo.png",
+      previewUri: "file:///documents/t3-composer-attachments/photo.png",
+    };
+    persistedFiles.set(image.fileUri, "YWJj");
+    appendComposerDraftAttachments("environment-1:thread-1", [image]);
+    await flushComposerDrafts();
+
+    const readStarted = Promise.withResolvers<void>();
+    const read = Promise.withResolvers<void>();
+    const removed = Promise.withResolvers<void>();
+    let imageExists = true;
+    readImage.mockImplementation(async () => {
+      readStarted.resolve();
+      await read.promise;
+      if (!imageExists) throw new Error("The image was deleted during its read");
+      return "YWJj";
+    });
+    composerAttachmentCleanupMocks.remove.mockImplementationOnce(async () => {
+      imageExists = false;
+      removed.resolve();
+    });
+    const preparing = prepareTurnAttachments({
+      environmentId: EnvironmentId.make("environment-1"),
+      attachments: [image],
+    });
+    onTestFinished(async () => {
+      read.resolve();
+      await preparing.catch(() => undefined);
+    });
+    await readStarted.promise;
+    clearComposerDraftContent("environment-1:thread-1", { deferAttachmentCleanup: true });
+    await releaseUnusedComposerAttachmentFiles([image]);
+    expect(imageExists).toBe(true);
+
+    read.resolve();
+    const prepared = await preparing;
+    expect(prepared.status).toBe("ready");
+    if (prepared.status !== "ready") return;
+    expect(prepared.attachments).toEqual([
+      {
+        type: "image",
+        name: "photo.png",
+        mimeType: "image/png",
+        sizeBytes: 3,
+        dataUrl: "data:image/png;base64,YWJj",
+      },
+    ]);
+    await removed.promise;
+    expect(imageExists).toBe(false);
   });
 
   it("keeps a failed-send draft's pending upload for retry", async () => {
@@ -501,71 +689,113 @@ describe("mobile composer drafts", () => {
     expect(composerAttachmentCleanupMocks.remove).not.toHaveBeenCalled();
   });
 
-  it("keeps signed-out files through cleanup and restart, and restores only the owning account", async () => {
-    const load = vi.spyOn(threadOutboxManager, "load").mockResolvedValue(true);
-    onTestFinished(() => load.mockRestore());
-    await waitForComposerDraftsLoaded();
-    const environmentId = EnvironmentId.make("cloud-environment");
-    const key = `${environmentId}:thread-1`;
-    const file = {
-      id: "local-pdf",
-      type: "file" as const,
-      name: "notes.pdf",
-      mimeType: "application/pdf",
-      sizeBytes: 42,
-      fileUri: "file:///documents/t3-composer-attachments/notes.pdf",
-      uploadEnvironmentId: environmentId,
-      uploadedAttachmentId: "pending-pdf",
-    };
-    const queued = {
-      environmentId,
-      threadId: ThreadId.make("thread-2"),
-      messageId: MessageId.make("queued-1"),
-      commandId: CommandId.make("command-1"),
-      text: "Send later",
-      attachments: [file],
-      createdAt: "2026-08-31T12:00:00.000Z",
-    };
-    appAtomRegistry.set(composerDraftsAtom, {
-      [key]: { text: "Unsent notes", attachments: [file] },
-      "direct-environment:thread-1": DRAFT,
-      "pending-task:queued-1": { text: "Edited queued task", attachments: [file] },
-    });
-    appAtomRegistry.set(threadOutboxManager.queuedMessagesByThreadKeyAtom, { queued: [queued] });
-    await archiveCloudComposerDrafts("account-a", new Set([environmentId]));
-    expect(appAtomRegistry.get(composerDraftsAtom)).toEqual({
-      "direct-environment:thread-1": DRAFT,
-    });
-    // The registry can remove the active outbox and drafts after the backup lands.
-    appAtomRegistry.set(threadOutboxManager.queuedMessagesByThreadKeyAtom, {});
-    await clearComposerDraftsEnvironment(environmentId);
-    await releaseUnusedComposerAttachmentFiles([file]);
-    expect(composerAttachmentCleanupMocks.remove).not.toHaveBeenCalled();
-    expect(composerAttachmentCleanupMocks.releaseUploads).not.toHaveBeenCalled();
+  it.each(["file", "image"] as const)(
+    "keeps signed-out %s attachments through cleanup and restart, and restores only the owning account",
+    async (type) => {
+      const load = vi.spyOn(threadOutboxManager, "load").mockResolvedValue(true);
+      onTestFinished(() => load.mockRestore());
+      await waitForComposerDraftsLoaded();
+      const environmentId = EnvironmentId.make("cloud-environment");
+      const key = `${environmentId}:thread-1`;
+      const name = type === "image" ? "notes.png" : "notes.pdf";
+      const metadata = {
+        id: "local-notes",
+        name,
+        mimeType: type === "image" ? "image/png" : "application/pdf",
+        sizeBytes: 42,
+        fileUri: `file:///documents/t3-composer-attachments/${name}`,
+        uploadEnvironmentId: environmentId,
+        uploadedAttachmentId: "pending-notes",
+      };
+      const file =
+        type === "image"
+          ? { ...metadata, type, previewUri: metadata.fileUri }
+          : { ...metadata, type };
+      if (type === "image") {
+        persistedFiles.set(file.fileUri, "YWJj");
+      }
+      const queued = {
+        environmentId,
+        threadId: ThreadId.make("thread-2"),
+        messageId: MessageId.make("queued-1"),
+        commandId: CommandId.make("command-1"),
+        text: "Send later",
+        attachments: [file],
+        createdAt: "2026-08-31T12:00:00.000Z",
+      };
+      appAtomRegistry.set(composerDraftsAtom, {
+        [key]: { text: "Unsent notes", attachments: [file] },
+        "direct-environment:thread-1": DRAFT,
+        "pending-task:queued-1": { text: "Edited queued task", attachments: [file] },
+      });
+      appAtomRegistry.set(threadOutboxManager.queuedMessagesByThreadKeyAtom, { queued: [queued] });
+      await archiveCloudComposerDrafts("account-a", new Set([environmentId]));
+      expect(appAtomRegistry.get(composerDraftsAtom)).toEqual({
+        "direct-environment:thread-1": DRAFT,
+      });
+      // The registry can remove the active outbox and drafts after the backup lands.
+      appAtomRegistry.set(threadOutboxManager.queuedMessagesByThreadKeyAtom, {});
+      await clearComposerDraftsEnvironment(environmentId);
+      await releaseUnusedComposerAttachmentFiles([file]);
+      expect(composerAttachmentCleanupMocks.remove).not.toHaveBeenCalled();
+      expect(composerAttachmentCleanupMocks.releaseUploads).not.toHaveBeenCalled();
 
-    appAtomRegistry.set(composerDraftsAtom, {});
-    appAtomRegistry.set(composerCloudDraftsAtom, { accountId: null, signedOut: {} });
-    resetComposerDraftsLoadState();
-    await waitForComposerDraftsLoaded();
-    await restoreCloudComposerDrafts("account-b");
-    expect(getComposerDraftSnapshot(key).attachments).toEqual([]);
-    expect(appAtomRegistry.get(threadOutboxManager.queuedMessagesByThreadKeyAtom)).toEqual({});
-    const enqueue = vi.spyOn(threadOutboxManager, "enqueue").mockResolvedValue();
-    onTestFinished(() => enqueue.mockRestore());
-    await restoreCloudComposerDrafts("account-a");
-    expect(getComposerDraftSnapshot(key)).toEqual({ text: "Unsent notes", attachments: [file] });
-    expect(getComposerDraftSnapshot("pending-task:queued-1").text).toBe("Edited queued task");
-    expect(enqueue).toHaveBeenCalledExactlyOnceWith(queued);
-    expect(appAtomRegistry.get(composerCloudDraftsAtom).signedOut).toEqual({});
-    const persistedDraft = JSON.parse(persistedFiles.get(draftRecordPath(key)) ?? "null") as {
-      readonly draft?: { readonly attachments?: ReadonlyArray<Record<string, unknown>> };
-    } | null;
-    expect(persistedDraft?.draft?.attachments).toEqual([file]);
-    const persistedCloud = JSON.parse(
-      persistedFiles.get("file:///document/composer-drafts/cloud-drafts.json") ?? "null",
-    ) as { readonly accountId?: string } | null;
-    expect(persistedCloud?.accountId).toBe("account-a");
-  });
+      appAtomRegistry.set(composerDraftsAtom, {});
+      appAtomRegistry.set(composerCloudDraftsAtom, { accountId: null, signedOut: {} });
+      resetComposerDraftsLoadState();
+      await waitForComposerDraftsLoaded();
+      await restoreCloudComposerDrafts("account-b");
+      expect(getComposerDraftSnapshot(key).attachments).toEqual([]);
+      expect(appAtomRegistry.get(threadOutboxManager.queuedMessagesByThreadKeyAtom)).toEqual({});
+      const enqueue = vi.spyOn(threadOutboxManager, "enqueue").mockResolvedValue();
+      onTestFinished(() => enqueue.mockRestore());
+      await restoreCloudComposerDrafts("account-a");
+      const restoredFile =
+        type === "image"
+          ? {
+              id: file.id,
+              type: file.type,
+              name: file.name,
+              mimeType: file.mimeType,
+              sizeBytes: file.sizeBytes,
+              dataUrl: "data:image/png;base64,YWJj",
+              previewUri: "data:image/png;base64,YWJj",
+              uploadedAttachmentId: file.uploadedAttachmentId,
+              uploadEnvironmentId: file.uploadEnvironmentId,
+            }
+          : file;
+      expect(getComposerDraftSnapshot(key)).toEqual({
+        text: "Unsent notes",
+        attachments: [restoredFile],
+      });
+      expect(getComposerDraftSnapshot("pending-task:queued-1").text).toBe("Edited queued task");
+      expect(enqueue).toHaveBeenCalledExactlyOnceWith(queued);
+      expect(appAtomRegistry.get(composerCloudDraftsAtom).signedOut).toEqual({});
+      const persistedDraft = JSON.parse(persistedFiles.get(draftRecordPath(key)) ?? "null") as {
+        readonly draft?: { readonly attachments?: ReadonlyArray<Record<string, unknown>> };
+      } | null;
+      expect(persistedDraft?.draft?.attachments).toEqual(
+        type === "image"
+          ? [
+              {
+                id: file.id,
+                type: file.type,
+                name: file.name,
+                mimeType: file.mimeType,
+                sizeBytes: file.sizeBytes,
+                contentHash: testContentHash("data:image/png;base64,YWJj"),
+                uploadedAttachmentId: file.uploadedAttachmentId,
+                uploadEnvironmentId: file.uploadEnvironmentId,
+              },
+            ]
+          : [file],
+      );
+      const persistedCloud = JSON.parse(
+        persistedFiles.get("file:///document/composer-drafts/cloud-drafts.json") ?? "null",
+      ) as { readonly accountId?: string } | null;
+      expect(persistedCloud?.accountId).toBe("account-a");
+    },
+  );
 
   it("fails sign-out preservation before cleanup if a durable backup cannot be written", async () => {
     const load = vi.spyOn(threadOutboxManager, "load").mockResolvedValue(true);
@@ -604,45 +834,52 @@ describe("mobile composer drafts", () => {
     ).toEqual(DRAFT);
   });
 
-  it("keeps a removed file until both playback and a share copy finish", async () => {
-    const outboxLoad = vi.spyOn(threadOutboxManager, "load").mockResolvedValue(true);
-    onTestFinished(() => outboxLoad.mockRestore());
-    const fileName = "33333333-3333-4333-8333-333333333333-recording.mp4";
-    const file = {
-      id: "file-preview",
-      type: "file" as const,
-      name: "recording.mp4",
-      mimeType: "video/mp4",
-      sizeBytes: 42,
-      fileUri: `file:///private/var/mobile/Containers/Data/Application/11111111-1111-4111-8111-111111111111/Documents/t3-composer-attachments/${fileName}`,
-    };
-    const currentFile = {
-      ...file,
-      fileUri: `file:///var/mobile/Containers/Data/Application/22222222-2222-4222-8222-222222222222/Documents/t3-composer-attachments/${fileName}`,
-    };
-    const releasePlayback = retainComposerAttachmentFileForPreview(file);
-    const releaseShareCopy = retainComposerAttachmentFileForPreview(currentFile);
-    onTestFinished(releasePlayback);
-    onTestFinished(releaseShareCopy);
+  it.each(["file", "image"] as const)(
+    "keeps a removed %s until both preview and a share copy finish",
+    async (type) => {
+      const outboxLoad = vi.spyOn(threadOutboxManager, "load").mockResolvedValue(true);
+      onTestFinished(() => outboxLoad.mockRestore());
+      const name = type === "image" ? "photo.png" : "recording.mp4";
+      const fileName = `33333333-3333-4333-8333-333333333333-${name}`;
+      const metadata = {
+        id: "file-preview",
+        name,
+        mimeType: type === "image" ? "image/png" : "video/mp4",
+        sizeBytes: 42,
+        fileUri: `file:///private/var/mobile/Containers/Data/Application/11111111-1111-4111-8111-111111111111/Documents/t3-composer-attachments/${fileName}`,
+      };
+      const file =
+        type === "image"
+          ? { ...metadata, type, previewUri: metadata.fileUri }
+          : { ...metadata, type };
+      const currentFile = {
+        ...file,
+        fileUri: `file:///var/mobile/Containers/Data/Application/22222222-2222-4222-8222-222222222222/Documents/t3-composer-attachments/${fileName}`,
+      };
+      const releasePlayback = retainComposerAttachmentFileForPreview(file);
+      const releaseShareCopy = retainComposerAttachmentFileForPreview(currentFile);
+      onTestFinished(releasePlayback);
+      onTestFinished(releaseShareCopy);
 
-    await releaseUnusedComposerAttachmentFiles([currentFile]);
-    expect(composerAttachmentCleanupMocks.remove).not.toHaveBeenCalled();
+      await releaseUnusedComposerAttachmentFiles([currentFile]);
+      expect(composerAttachmentCleanupMocks.remove).not.toHaveBeenCalled();
 
-    releasePlayback();
-    releasePlayback();
-    await releaseUnusedComposerAttachmentFiles([file]);
-    expect(composerAttachmentCleanupMocks.remove).not.toHaveBeenCalled();
+      releasePlayback();
+      releasePlayback();
+      await releaseUnusedComposerAttachmentFiles([file]);
+      expect(composerAttachmentCleanupMocks.remove).not.toHaveBeenCalled();
 
-    const deleted = Promise.withResolvers<void>();
-    composerAttachmentCleanupMocks.remove.mockImplementationOnce(async () => {
-      deleted.resolve();
-      return undefined;
-    });
-    releaseShareCopy();
-    await deleted.promise;
+      const deleted = Promise.withResolvers<void>();
+      composerAttachmentCleanupMocks.remove.mockImplementationOnce(async () => {
+        deleted.resolve();
+        return undefined;
+      });
+      releaseShareCopy();
+      await deleted.promise;
 
-    expect(composerAttachmentCleanupMocks.remove.mock.calls).toEqual([[currentFile.fileUri]]);
-  });
+      expect(composerAttachmentCleanupMocks.remove.mock.calls).toEqual([[currentFile.fileUri]]);
+    },
+  );
 
   it("preserves a preview opened while cleanup is checking the incoming inbox", async () => {
     const outboxLoad = vi.spyOn(threadOutboxManager, "load").mockResolvedValue(true);
@@ -971,6 +1208,29 @@ describe("mobile composer drafts", () => {
     expect(hasUnpersistedComposerDrafts()).toBe(true);
     expect(composerAttachmentCleanupMocks.remove).not.toHaveBeenCalled();
     failMovePathFragments.clear();
+  });
+
+  it("rejects persisted images without image bytes or a file URI", () => {
+    expect(() =>
+      decodePersistedComposerDrafts({
+        schemaVersion: 1,
+        drafts: {
+          "environment-1:thread-1": {
+            text: "Saved image",
+            attachments: [
+              {
+                id: "image-1",
+                type: "image",
+                name: "photo.png",
+                mimeType: "image/png",
+                sizeBytes: 3,
+                previewUri: "file:///photo.png",
+              },
+            ],
+          },
+        },
+      }),
+    ).toThrow();
   });
 
   it("hydrates selector state even when the message content is empty", () => {

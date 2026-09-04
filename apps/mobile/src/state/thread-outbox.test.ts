@@ -200,6 +200,15 @@ describe("thread outbox", () => {
     ).toThrow();
   });
 
+  it.each([1, 2, 3, 4, 5, 6, 7])("keeps the v%s outbox reader", (schemaVersion) => {
+    const message = queuedMessage({
+      messageId: `message-v${schemaVersion}`,
+      createdAt: "2026-06-08T10:00:01.000Z",
+    });
+
+    expect(decodeQueuedThreadMessage({ ...message, schemaVersion })).toEqual(message);
+  });
+
   it("persists generic attachment paths without embedding their contents", () => {
     const message = {
       ...queuedMessage({
@@ -221,6 +230,61 @@ describe("thread outbox", () => {
     } satisfies QueuedThreadMessage;
 
     expect(decodeQueuedThreadMessage(encodeQueuedThreadMessage(message))).toEqual(message);
+  });
+
+  it("reads file-backed images from v4 queued messages", () => {
+    const message = {
+      ...queuedMessage({
+        messageId: "message-image",
+        createdAt: "2026-06-08T10:00:01.000Z",
+      }),
+      attachments: [
+        {
+          id: "image-1",
+          type: "image" as const,
+          name: "photo.png",
+          mimeType: "image/png",
+          sizeBytes: 3,
+          fileUri: "file:///documents/t3-composer-attachments/photo.png",
+          previewUri: "file:///documents/t3-composer-attachments/photo.png",
+          uploadedAttachmentId: "pending-photo-png",
+          uploadEnvironmentId: EnvironmentId.make("environment-1"),
+        },
+      ],
+    } satisfies QueuedThreadMessage;
+
+    expect(decodeQueuedThreadMessage({ ...message, schemaVersion: 4 })).toEqual(message);
+  });
+
+  it("writes v8 file-backed images and preserves their preview on decode", () => {
+    const message = {
+      ...queuedMessage({
+        messageId: "message-image-v8",
+        createdAt: "2026-09-04T10:00:01.000Z",
+      }),
+      attachments: [
+        {
+          id: "image-v8",
+          type: "image" as const,
+          name: "photo.png",
+          mimeType: "image/png",
+          sizeBytes: 3,
+          fileUri: "file:///documents/t3-composer-attachments/photo.png",
+          previewUri: "file:///documents/t3-composer-attachments/photo-preview.png",
+        },
+      ],
+    } satisfies QueuedThreadMessage;
+
+    const encoded = encodeQueuedThreadMessage(message) as {
+      readonly schemaVersion: number;
+      readonly attachments: ReadonlyArray<Record<string, unknown>>;
+    };
+    expect(encoded.schemaVersion).toBe(8);
+    expect(encoded.attachments[0]).toMatchObject({
+      fileUri: message.attachments[0].fileUri,
+      previewUri: message.attachments[0].previewUri,
+    });
+    expect(decodeQueuedThreadMessage(encoded)).toEqual(message);
   });
 
   it("persists the exact selector snapshot while remaining compatible with v1 messages", () => {

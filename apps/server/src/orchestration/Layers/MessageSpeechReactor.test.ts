@@ -155,11 +155,12 @@ const engineService = (
   commands: Ref.Ref<ReadonlyArray<OrchestrationCommand>>,
 ): OrchestrationEngineShape => ({
   readEvents: () => Stream.empty,
+  readThreadEvents: () => Stream.empty,
+  getThreadReplayStats: () => Effect.die("unused thread replay stats"),
   dispatch: (command) =>
     Ref.update(commands, (current) => [...current, command]).pipe(Effect.as({ sequence: 1 })),
   streamDomainEvents: Stream.fromQueue(events),
   subscribeDomainEvents: Effect.succeed(Stream.fromQueue(events)),
-  getEventReplayStats: () => Effect.succeed({ eventCount: 0, payloadBytes: 0 }),
   latestSequence: Effect.succeed(0),
 });
 

@@ -6,14 +6,12 @@ import {
   ThreadId,
 } from "@t3tools/contracts";
 import { serializeAssistantCitation } from "@t3tools/shared/assistantCitations";
-import { describe, expect, it, vi } from "vite-plus/test";
+import { describe, expect, it } from "vite-plus/test";
 
 import {
   buildProjectThreadStartTurnInput,
   deriveThreadTitleFromPrompt,
 } from "./projectThreadStartTurn";
-
-vi.mock("./composerImages", () => ({ toUploadChatImageAttachments: () => [] }));
 
 describe("project thread title", () => {
   it("keeps ordinary titles and the empty-prompt fallback", () => {
@@ -52,7 +50,8 @@ describe("project thread title", () => {
       messageId: "message",
       createdAt: "2026-09-01T00:00:00Z",
       text,
-      attachments: [],
+      inputOrigin: "voice-transcription",
+      uploadedAttachments: [],
       modelSelection: { instanceId: ProviderInstanceId.make("codex"), model: "gpt-5.6-sol" },
       runtimeMode: "full-access",
       interactionMode: "default",
@@ -66,5 +65,6 @@ describe("project thread title", () => {
     expect(input.titleSeed).toBe(title);
     expect(input.bootstrap.createThread.title).toBe(input.titleSeed);
     expect(input.message.text).toBe(text);
+    expect(input.message.inputOrigin).toBe("voice-transcription");
   });
 });

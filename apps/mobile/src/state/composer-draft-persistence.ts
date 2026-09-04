@@ -1,3 +1,4 @@
+import { isFileBackedComposerAttachment } from "@t3tools/client-runtime/state/composer-attachment";
 import {
   EnvironmentId,
   ModelSelection as ModelSelectionSchema,
@@ -9,6 +10,10 @@ import * as Schema from "effect/Schema";
 import type { Directory as ExpoDirectory } from "expo-file-system";
 
 import { DraftComposerAttachmentSchema } from "../lib/composer-image-schema";
+import {
+  COMPOSER_ATTACHMENT_DIRECTORY,
+  resolveOwnedComposerAttachmentFileUri,
+} from "../lib/composerAttachmentFiles";
 import type { DraftComposerAttachment, DraftComposerImageAttachment } from "../lib/composerImages";
 import { isServerThreadDraftKey } from "../lib/scopedEntities";
 import type { ModelSelection } from "@t3tools/contracts";
@@ -242,6 +247,40 @@ function imageAttachmentReference(
   };
 }
 
+async function composerImageAttachmentContent(
+  attachment: DraftComposerImageAttachment,
+): Promise<string> {
+  if (attachment.dataUrl !== undefined) {
+    return attachment.dataUrl;
+  }
+  if (!isFileBackedComposerAttachment(attachment)) {
+    throw new ComposerDraftPersistenceError({
+      operation: "read",
+      directory: COMPOSER_ATTACHMENT_DIRECTORY,
+      fileName: attachment.name,
+      cause: new Error("Image attachment has no file or inline bytes."),
+    });
+  }
+  try {
+    const { File, Paths } = await loadExpoFileSystem();
+    const uri =
+      resolveOwnedComposerAttachmentFileUri(attachment.fileUri, Paths.document.uri) ??
+      attachment.fileUri;
+    const base64 = await new File(uri).base64();
+    if (base64.length === 0) {
+      throw new Error("Image attachment file is empty.");
+    }
+    return `data:${attachment.mimeType};base64,${base64}`;
+  } catch (cause) {
+    throw new ComposerDraftPersistenceError({
+      operation: "read",
+      directory: COMPOSER_ATTACHMENT_DIRECTORY,
+      fileName: attachment.name,
+      cause,
+    });
+  }
+}
+
 export async function splitComposerDraftForPersistence(
   draftKey: string,
   draft: ComposerDraft,
@@ -254,12 +293,13 @@ export async function splitComposerDraftForPersistence(
       attachments.push(attachment);
       continue;
     }
-    const contentHash = await hashContent(attachment.dataUrl, attachment);
+    const content = await composerImageAttachmentContent(attachment);
+    const contentHash = await hashContent(content, attachment);
     const existing = attachmentContents.get(contentHash);
-    if (existing !== undefined && existing !== attachment.dataUrl) {
+    if (existing !== undefined && existing !== content) {
       throw new Error(`Composer attachment hash collision for ${contentHash}.`);
     }
-    attachmentContents.set(contentHash, attachment.dataUrl);
+    attachmentContents.set(contentHash, content);
     attachments.push(imageAttachmentReference(attachment, contentHash));
   }
 

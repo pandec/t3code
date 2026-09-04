@@ -122,7 +122,7 @@ import {
 } from "../sidebarProjectGrouping";
 import { legacyProjectCwdPreferenceKey, useUiStateStore } from "../uiStateStore";
 import { useThreadSelectionStore } from "../threadSelectionStore";
-import { useThreadActions } from "../hooks/useThreadActions";
+import { requestBulkThreadUnpinConfirmation, useThreadActions } from "../hooks/useThreadActions";
 import { useHandleNewThread } from "../hooks/useHandleNewThread";
 import { openCommandPalette } from "../commandPaletteBus";
 import { resolveThreadActionProjectRef, startNewThreadFromContext } from "../lib/chatThreadActions";
@@ -170,6 +170,7 @@ import {
   admitNewSidebarV2AttentionThreads,
   createSidebarV2AttentionFilter,
   buildBulkTitleRegenerationContextMenuItem,
+  buildBulkUnpinContextMenuItem,
   formatWorkingDurationLabel,
   firstValidTimestampMs,
   hasUnseenCompletion,
@@ -2237,6 +2238,7 @@ export default function Sidebar() {
   const keybindings = useAtomValue(primaryServerKeybindingsAtom);
 
   const confirmThreadDelete = useClientSettings((s) => s.confirmThreadDelete);
+  const confirmThreadUnpin = useClientSettings((s) => s.confirmThreadUnpin);
   const sidebarProjectSortOrder = useClientSettings((s) => s.sidebarProjectSortOrder);
   // Accents are server settings, merged across every connected environment —
   // that is what makes them reach the mobile app and other machines.
@@ -2276,6 +2278,7 @@ export default function Sidebar() {
     snoozeThread,
     unsnoozeThread,
     pinThread,
+    unpinThread,
     confirmAndUnpinThread,
     reorderPinnedThread,
     deleteThread,
@@ -3907,6 +3910,17 @@ export default function Sidebar() {
         supportedCount: titleRegenerationThreads.length,
         actionableCount: regeneratableTitleThreads.length,
       });
+      // Unpin (k) counts only the pinned rows in pin-capable environments —
+      // on a mixed selection the unpinned rows are untouched, and the item
+      // is omitted entirely when nothing selected is pinned.
+      const pinnedSelectedThreads = selectedThreads.filter(
+        (thread) =>
+          serverConfigs.get(thread.environmentId)?.environment.capabilities.threadPinning ===
+            true && thread.pinnedAt != null,
+      );
+      const unpinMenuItem = buildBulkUnpinContextMenuItem({
+        pinnedCount: pinnedSelectedThreads.length,
+      });
       // The indefinite preset needs every selected environment to support
       // it; a mixed selection would half-apply the same way blocked work
       // would.
@@ -3920,6 +3934,7 @@ export default function Sidebar() {
       const clicked = await settlePromise(() =>
         api.contextMenu.show(
           [
+            ...(unpinMenuItem ? [unpinMenuItem] : []),
             { id: "settle", label: `Settle (${count})` },
             ...(canSnoozeSelection
               ? [
@@ -3999,6 +4014,31 @@ export default function Sidebar() {
             );
           }
         }
+        return;
+      }
+      if (clicked.value === "unpin") {
+        const confirmed = await requestBulkThreadUnpinConfirmation({
+          enabled: confirmThreadUnpin,
+          count: pinnedSelectedThreads.length,
+          confirm: (message) => api.dialogs.confirm(message),
+        });
+        if (confirmed._tag === "Failure" || !confirmed.value) return;
+        // Each unpin reports its own failure, like the single-row action.
+        for (const thread of pinnedSelectedThreads) {
+          void unpinThread(scopeThreadRef(thread.environmentId, thread.id)).then((result) => {
+            if (result._tag === "Failure" && !isAtomCommandInterrupted(result)) {
+              const error = squashAtomCommandFailure(result);
+              toastManager.add(
+                stackedThreadToast({
+                  type: "error",
+                  title: "Failed to unpin thread",
+                  description: error instanceof Error ? error.message : "An error occurred.",
+                }),
+              );
+            }
+          });
+        }
+        clearSelection();
         return;
       }
       if (clicked.value === "regenerate-title") {
@@ -4092,12 +4132,14 @@ export default function Sidebar() {
       attemptSnooze,
       clearSelection,
       confirmThreadDelete,
+      confirmThreadUnpin,
       deleteThread,
       markThreadUnread,
       performSnooze,
       removeFromSelection,
       serverConfigs,
       attemptUnsnooze,
+      unpinThread,
       updateThreadMetadata,
       timestampFormat,
     ],

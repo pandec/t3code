@@ -473,11 +473,21 @@ const makeOrchestrationEngine = Effect.gen(function* () {
     Effect.annotateLogs({ sequence: commandReadModel.snapshotSequence }),
   );
 
-  const readEvents: OrchestrationEngineShape["readEvents"] = (
-    fromSequenceExclusive,
-    limit,
-    filter,
-  ) => eventStore.readFromSequence(fromSequenceExclusive, limit, filter);
+  const readEvents: OrchestrationEngineShape["readEvents"] = (fromSequenceExclusive, limit) =>
+    eventStore.readFromSequence(fromSequenceExclusive, limit);
+
+  const readThreadEvents: OrchestrationEngineShape["readThreadEvents"] = ({ threadId, ...range }) =>
+    eventStore.readAggregateRange({ ...range, aggregateKind: "thread", aggregateId: threadId });
+
+  const getThreadReplayStats: OrchestrationEngineShape["getThreadReplayStats"] = ({
+    threadId,
+    ...range
+  }) =>
+    eventStore.getAggregateReplayStats({
+      ...range,
+      aggregateKind: "thread",
+      aggregateId: threadId,
+    });
 
   const dispatch: OrchestrationEngineShape["dispatch"] = (command, options) =>
     Effect.gen(function* () {
@@ -491,16 +501,10 @@ const makeOrchestrationEngine = Effect.gen(function* () {
       return yield* Deferred.await(result);
     });
 
-  const getEventReplayStats: OrchestrationEngineShape["getEventReplayStats"] = ({
-    filter,
-    ...range
-  }) => {
-    const query = { ...range, ...filter };
-    return projectionSnapshotQuery.getEventReplayStats(query);
-  };
-
   return {
     readEvents,
+    readThreadEvents,
+    getThreadReplayStats,
     dispatch,
     // Each access creates a fresh PubSub subscription so that multiple
     // consumers (wsServer, ProviderRuntimeIngestion, CheckpointReactor, etc.)
@@ -509,7 +513,6 @@ const makeOrchestrationEngine = Effect.gen(function* () {
       return Stream.fromPubSub(eventPubSub);
     },
     subscribeDomainEvents: PubSub.subscribe(eventPubSub).pipe(Effect.map(Stream.fromSubscription)),
-    getEventReplayStats,
     // The command read model's snapshotSequence tracks the latest committed
     // event sequence (updated on the worker fiber). A plain property read is a
     // consistent, committed value — reassignment of `commandReadModel` is
