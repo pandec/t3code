@@ -537,6 +537,7 @@ export const SETTINGS_SEARCH_ITEMS = [
     id: "openrouter-credits",
     title: "OpenRouter credits",
     to: "/settings/extras",
+    searchTerms: ["balance budget spend management key"],
   },
   {
     id: "extras-sidebar",

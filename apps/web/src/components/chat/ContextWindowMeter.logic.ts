@@ -1,4 +1,6 @@
+import type { ProviderUsageWindow } from "@t3tools/client-runtime/state/provider-usage";
 import type { ModelSelection, ProviderDriverKind, ProviderInstanceId } from "@t3tools/contracts";
+import { formatUsd } from "@t3tools/shared/usageFormat";
 import {
   CLAUDE_RESUME_COMPACTION_NEVER_ANSWER,
   isClaudeResumeCompactionQuestion,
@@ -107,4 +109,29 @@ export function formatContextWindowCompactionMessage(
   return modelDisplayName
     ? `Context for ${modelDisplayName} compacts automatically when needed.`
     : "Context compacts automatically when needed.";
+}
+
+/**
+ * The OpenRouter balance as a quota window against the user's budget, so the
+ * popover can draw it with the same row, bar, and colour thresholds as a
+ * provider window. OpenRouter only reports what is left; the budget setting
+ * says what "full" is. Spending past the budget pins the bar at 100% rather
+ * than going negative, and a topped-up balance above the budget reads as 0%.
+ */
+export function openRouterCreditsBudgetWindow(
+  balanceUsd: number | null,
+  budgetUsd: number | null,
+): ProviderUsageWindow | null {
+  if (balanceUsd === null || budgetUsd === null) return null;
+  if (!Number.isFinite(balanceUsd) || !Number.isFinite(budgetUsd) || budgetUsd <= 0) return null;
+  const usedPercent = Math.max(0, Math.min(100, ((budgetUsd - balanceUsd) / budgetUsd) * 100));
+  return {
+    id: "openrouter_budget",
+    group: "other",
+    label: `Budget ${formatUsd(budgetUsd)}`,
+    shortLabel: "OR",
+    usedPercent,
+    resetsAt: null,
+    status: "ok",
+  };
 }

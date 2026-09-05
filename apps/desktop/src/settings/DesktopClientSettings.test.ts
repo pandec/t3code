@@ -56,6 +56,7 @@ const clientSettings: ClientSettings = {
   glassOpacity: 80,
   maskProviderUsageEmails: false,
   showOpenRouterCredits: false,
+  openRouterCreditsBudgetUsd: null,
   panelAnimationDurationMs: 0,
   planModeEnabled: false,
   proactivePanelsEnabled: true,

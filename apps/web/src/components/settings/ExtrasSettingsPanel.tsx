@@ -9,12 +9,14 @@ import {
   DEFAULT_UNIFIED_SETTINGS,
   MAX_ARCHIVED_SECTION_VISIBLE_COUNT,
   MAX_ACCENT_TINT_INTENSITY_PERCENT,
+  MAX_OPENROUTER_CREDITS_BUDGET_USD,
   MAX_PROVIDER_USAGE_ALERT_PERCENT,
   MAX_SIDEBAR_OLDER_SECTION_AFTER_DAYS,
   MAX_STEER_GRACE_WINDOW_MS,
   MAX_TURN_COMPLETION_MIN_DURATION_SECONDS,
   MIN_ACCENT_TINT_INTENSITY_PERCENT,
   MIN_ARCHIVED_SECTION_VISIBLE_COUNT,
+  MIN_OPENROUTER_CREDITS_BUDGET_USD,
   MIN_PROVIDER_USAGE_ALERT_PERCENT,
   MIN_SIDEBAR_OLDER_SECTION_AFTER_DAYS,
   MIN_STEER_GRACE_WINDOW_MS,
@@ -52,7 +54,10 @@ import {
 import { Select, SelectItem, SelectPopup, SelectTrigger, SelectValue } from "../ui/select";
 import { Switch } from "../ui/switch";
 import { toastManager } from "../ui/toast";
-import { resolveProviderUsageThresholdCommit } from "./ExtrasSettingsPanel.logic";
+import {
+  resolveOpenRouterCreditsBudgetCommit,
+  resolveProviderUsageThresholdCommit,
+} from "./ExtrasSettingsPanel.logic";
 import {
   SettingResetButton,
   SettingsPageContainer,
@@ -101,6 +106,8 @@ function SettingsNumberField({
   max,
   min,
   onCommit,
+  placeholder,
+  prefix,
   suffix,
   value,
 }: {
@@ -108,11 +115,15 @@ function SettingsNumberField({
   readonly max: number;
   readonly min: number;
   readonly onCommit: (value: number | null) => void;
-  readonly suffix: string;
-  readonly value: number;
+  readonly placeholder?: string;
+  readonly prefix?: string;
+  readonly suffix?: string;
+  /** Null renders an empty field, for settings where unset is a real state. */
+  readonly value: number | null;
 }) {
   return (
     <div className="flex w-full items-center gap-2 sm:w-auto">
+      {prefix ? <span className="shrink-0 text-xs text-muted-foreground">{prefix}</span> : null}
       <NumberField
         className="w-28"
         max={max}
@@ -124,11 +135,11 @@ function SettingsNumberField({
       >
         <NumberFieldGroup>
           <NumberFieldDecrement aria-label={`Decrease ${ariaLabel}`} />
-          <NumberFieldInput aria-label={ariaLabel} />
+          <NumberFieldInput aria-label={ariaLabel} placeholder={placeholder} />
           <NumberFieldIncrement aria-label={`Increase ${ariaLabel}`} />
         </NumberFieldGroup>
       </NumberField>
-      <span className="shrink-0 text-xs text-muted-foreground">{suffix}</span>
+      {suffix ? <span className="shrink-0 text-xs text-muted-foreground">{suffix}</span> : null}
     </div>
   );
 }
@@ -587,6 +598,39 @@ function ProviderUsageExtrasSection() {
               />
             ))}
           </div>
+          <SettingsRow
+            title="OpenRouter budget"
+            description="The starting balance to measure spend against. With a budget set, the usage meter shows how much of it you have spent, coloured by the warning and critical thresholds under Notifications. Leave empty or enter 0 to show the dollar amount only; budgets under $1 count as none."
+            resetAction={
+              settings.openRouterCreditsBudgetUsd !==
+              DEFAULT_UNIFIED_SETTINGS.openRouterCreditsBudgetUsd ? (
+                <SettingResetButton
+                  label="OpenRouter budget"
+                  onClick={() =>
+                    updateSettings({
+                      openRouterCreditsBudgetUsd:
+                        DEFAULT_UNIFIED_SETTINGS.openRouterCreditsBudgetUsd,
+                    })
+                  }
+                />
+              ) : null
+            }
+            control={
+              <SettingsNumberField
+                ariaLabel="OpenRouter budget"
+                max={MAX_OPENROUTER_CREDITS_BUDGET_USD}
+                min={MIN_OPENROUTER_CREDITS_BUDGET_USD}
+                onCommit={(next) =>
+                  updateSettings({
+                    openRouterCreditsBudgetUsd: resolveOpenRouterCreditsBudgetCommit(next),
+                  })
+                }
+                placeholder="None"
+                prefix="$"
+                value={settings.openRouterCreditsBudgetUsd}
+              />
+            }
+          />
         </>
       ) : null}
     </SettingsSection>

@@ -554,6 +554,13 @@ export function useSettingsRestore(onRestored?: () => void) {
       ...(settings.maskProviderUsageEmails !== DEFAULT_UNIFIED_SETTINGS.maskProviderUsageEmails
         ? ["Mask provider emails"]
         : []),
+      ...(settings.showOpenRouterCredits !== DEFAULT_UNIFIED_SETTINGS.showOpenRouterCredits
+        ? ["OpenRouter credits"]
+        : []),
+      ...(settings.openRouterCreditsBudgetUsd !==
+      DEFAULT_UNIFIED_SETTINGS.openRouterCreditsBudgetUsd
+        ? ["OpenRouter budget"]
+        : []),
       ...(settings.panelAnimationDurationMs !== DEFAULT_UNIFIED_SETTINGS.panelAnimationDurationMs
         ? ["Panel animations"]
         : []),
@@ -726,6 +733,8 @@ export function useSettingsRestore(onRestored?: () => void) {
       settings.accentTintsEnabled,
       settings.accentTintIntensityPercent,
       settings.maskProviderUsageEmails,
+      settings.showOpenRouterCredits,
+      settings.openRouterCreditsBudgetUsd,
       settings.providerUsageWarningPercent,
       settings.providerUsageCriticalPercent,
       settings.steerGraceWindowMs,
@@ -875,6 +884,8 @@ export function useSettingsRestore(onRestored?: () => void) {
       environmentIdentificationMode: DEFAULT_UNIFIED_SETTINGS.environmentIdentificationMode,
       glassOpacity: DEFAULT_UNIFIED_SETTINGS.glassOpacity,
       maskProviderUsageEmails: DEFAULT_UNIFIED_SETTINGS.maskProviderUsageEmails,
+      showOpenRouterCredits: DEFAULT_UNIFIED_SETTINGS.showOpenRouterCredits,
+      openRouterCreditsBudgetUsd: DEFAULT_UNIFIED_SETTINGS.openRouterCreditsBudgetUsd,
       panelAnimationDurationMs: DEFAULT_UNIFIED_SETTINGS.panelAnimationDurationMs,
       sidebarThreadPreviewCount: DEFAULT_UNIFIED_SETTINGS.sidebarThreadPreviewCount,
       archivedSectionVisibleCount: DEFAULT_UNIFIED_SETTINGS.archivedSectionVisibleCount,
