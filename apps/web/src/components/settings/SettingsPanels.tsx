@@ -36,6 +36,7 @@ import {
   MAX_CODE_FONT_SIZE,
   MAX_GLASS_OPACITY,
   MAX_INTERFACE_FONT_SIZE,
+  MAX_MESSAGE_FONT_SIZE,
   MAX_PANEL_ANIMATION_DURATION_MS,
   MAX_PROMPT_FONT_SIZE,
   MAX_SIDEBAR_AUTO_SETTLE_AFTER_DAYS,
@@ -44,6 +45,7 @@ import {
   MIN_APPEARANCE_CONTRAST,
   MIN_GLASS_OPACITY,
   MIN_INTERFACE_FONT_SIZE,
+  MIN_MESSAGE_FONT_SIZE,
   MIN_PANEL_ANIMATION_DURATION_MS,
   MIN_PROMPT_FONT_SIZE,
   MIN_SIDEBAR_AUTO_SETTLE_AFTER_DAYS,
@@ -133,7 +135,12 @@ import {
   resolveTerminalFontSizePreference,
   TYPOGRAPHY_ADVANCED_STORAGE_KEY,
 } from "../../appearanceFonts";
-import { CodeFontPreview, PromptFontPreview, TerminalFontPreview } from "./SettingsFontPreviews";
+import {
+  CodeFontPreview,
+  MessageFontPreview,
+  PromptFontPreview,
+  TerminalFontPreview,
+} from "./SettingsFontPreviews";
 import { SharedSettingsMismatchAlert } from "./SharedSettingsMismatchAlert";
 import { discoverInstalledFonts, FontFamilyPicker, useFontEnumeration } from "./FontFamilyPicker";
 import {
@@ -754,10 +761,12 @@ export function useSettingsRestore(onRestored?: () => void) {
       settings.contextWindowMeterEnabled,
       settings.fontFamilyCode,
       settings.fontFamilyComposer,
+      settings.fontFamilyMessage,
       settings.fontFamilySans,
       settings.fontFamilyTerminal,
       settings.fontSizeCode,
       settings.fontSizeInterface,
+      settings.fontSizeMessage,
       settings.fontSizePrompt,
       settings.fontSizeTerminal,
       settings.glassOpacity,
@@ -919,10 +928,12 @@ export function useSettingsRestore(onRestored?: () => void) {
       textGenerationModelSelection: DEFAULT_UNIFIED_SETTINGS.textGenerationModelSelection,
       fontFamilySans: DEFAULT_UNIFIED_SETTINGS.fontFamilySans,
       fontFamilyComposer: DEFAULT_UNIFIED_SETTINGS.fontFamilyComposer,
+      fontFamilyMessage: DEFAULT_UNIFIED_SETTINGS.fontFamilyMessage,
       fontFamilyCode: DEFAULT_UNIFIED_SETTINGS.fontFamilyCode,
       fontFamilyTerminal: DEFAULT_UNIFIED_SETTINGS.fontFamilyTerminal,
       fontSizeInterface: DEFAULT_UNIFIED_SETTINGS.fontSizeInterface,
       fontSizePrompt: DEFAULT_UNIFIED_SETTINGS.fontSizePrompt,
+      fontSizeMessage: DEFAULT_UNIFIED_SETTINGS.fontSizeMessage,
       fontSizeCode: DEFAULT_UNIFIED_SETTINGS.fontSizeCode,
       fontSizeTerminal: DEFAULT_UNIFIED_SETTINGS.fontSizeTerminal,
       browserDefaultViewport: DEFAULT_UNIFIED_SETTINGS.browserDefaultViewport,
@@ -1570,6 +1581,37 @@ function PromptFontRow() {
   );
 }
 
+function MessageFontRow() {
+  const settings = usePrimarySettings();
+  const updateSettings = useUpdatePrimarySettings();
+  const defaults = useFontDefaultFamilies();
+  return (
+    <FontFamilySettingsRow
+      {...searchableSetting("message-font")}
+      description="Agent replies and your messages in the thread. Everything around them keeps the interface size."
+      defaultFamily={defaults.interfaceFamily}
+      defaultValue={DEFAULT_UNIFIED_SETTINGS.fontFamilyMessage}
+      value={settings.fontFamilyMessage}
+      onValueChange={(fontFamilyMessage) => updateSettings({ fontFamilyMessage })}
+      onReset={() =>
+        updateSettings({
+          fontFamilyMessage: DEFAULT_UNIFIED_SETTINGS.fontFamilyMessage,
+          fontSizeMessage: DEFAULT_UNIFIED_SETTINGS.fontSizeMessage,
+        })
+      }
+      size={{
+        label: "Message font size",
+        min: MIN_MESSAGE_FONT_SIZE,
+        max: MAX_MESSAGE_FONT_SIZE,
+        value: settings.fontSizeMessage,
+        defaultValue: DEFAULT_UNIFIED_SETTINGS.fontSizeMessage,
+        onChange: (fontSizeMessage) => updateSettings({ fontSizeMessage }),
+      }}
+      preview={<MessageFontPreview />}
+    />
+  );
+}
+
 function CodeFontRow({
   title,
   description = "Code blocks, diffs, and file previews.",
@@ -1712,6 +1754,7 @@ function FontSettingsGroup() {
     <>
       <InterfaceFontRow />
       <PromptFontRow />
+      <MessageFontRow />
       <CodeFontRow />
       <TerminalFontRow />
       <FontSmoothingRow />
@@ -1758,6 +1801,7 @@ function SimpleFontRows() {
 // must not flip the section - the target would never mount to be scrolled to.
 const ADVANCED_TYPOGRAPHY_TARGET_IDS: ReadonlySet<string> = new Set([
   "prompt-font",
+  "message-font",
   "terminal-font",
   ...(typeof navigator !== "undefined" && isMacPlatform(navigator.platform)
     ? ["font-smoothing"]

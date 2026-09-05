@@ -1838,6 +1838,7 @@ function AssistantTimelineRow({ row }: { row: Extract<TimelineRow, { kind: "mess
               isStreaming={Boolean(row.message.streaming)}
               lineBreaks={shouldPreserveAssistantLineBreaks(messageText)}
               skills={ctx.skills}
+              className="chat-message-text"
               onUseArtifactTemplate={ctx.onUseArtifactTemplate}
               onImageExpand={ctx.onImageExpand}
             />
@@ -3036,7 +3037,7 @@ const CollapsibleUserMessageBody = memo(function CollapsibleUserMessageBody(prop
     <div>
       {hasVisibleBody ? (
         <div
-          className={cn("relative", isCollapsed && "max-h-44 overflow-hidden")}
+          className={cn("chat-message-text relative", isCollapsed && "max-h-44 overflow-hidden")}
           data-user-message-body="true"
           data-user-message-collapsed={isCollapsed ? "true" : "false"}
           data-user-message-collapsible={canCollapse ? "true" : "false"}
@@ -3113,7 +3114,7 @@ const UserMessageBody = memo(function UserMessageBody(props: {
             cwd={props.markdownCwd}
             threadRef={ctx.threadRef ?? undefined}
             skills={props.skills}
-            className="text-message-foreground"
+            className="text-message-foreground text-[length:inherit]"
             lineBreaks
             parseRawHtml={false}
           />
@@ -3126,7 +3127,7 @@ const UserMessageBody = memo(function UserMessageBody(props: {
   const reviewCommentSegments = parseReviewCommentMessageSegments(props.text);
   if (reviewCommentSegments.some((segment) => segment.kind === "review-comment")) {
     return (
-      <div className="space-y-3 text-message-foreground text-sm leading-relaxed">
+      <div className="space-y-3 text-message-foreground leading-relaxed">
         {reviewCommentSegments.map((segment) =>
           segment.kind === "text" ? (
             segment.text.trim().length > 0 ? (
@@ -3136,7 +3137,7 @@ const UserMessageBody = memo(function UserMessageBody(props: {
                   cwd={props.markdownCwd}
                   threadRef={ctx.threadRef ?? undefined}
                   skills={props.skills}
-                  className="text-message-foreground"
+                  className="text-message-foreground text-[length:inherit]"
                   lineBreaks
                   parseRawHtml={false}
                 />
@@ -3196,7 +3197,7 @@ const UserMessageBody = memo(function UserMessageBody(props: {
         }
 
         return (
-          <div className="whitespace-pre-wrap wrap-break-word text-message-foreground text-sm leading-relaxed">
+          <div className="whitespace-pre-wrap wrap-break-word text-message-foreground leading-relaxed">
             {inlineNodes}
           </div>
         );
@@ -3225,7 +3226,7 @@ const UserMessageBody = memo(function UserMessageBody(props: {
           cwd={props.markdownCwd}
           threadRef={ctx.threadRef ?? undefined}
           skills={props.skills}
-          className="text-message-foreground"
+          className="text-message-foreground text-[length:inherit]"
           lineBreaks
           parseRawHtml={false}
         />,
@@ -3235,7 +3236,7 @@ const UserMessageBody = memo(function UserMessageBody(props: {
     }
 
     return (
-      <div className="whitespace-pre-wrap wrap-break-word text-message-foreground text-sm leading-relaxed">
+      <div className="whitespace-pre-wrap wrap-break-word text-message-foreground leading-relaxed">
         {inlineNodes}
       </div>
     );
@@ -3251,7 +3252,7 @@ const UserMessageBody = memo(function UserMessageBody(props: {
       cwd={props.markdownCwd}
       threadRef={ctx.threadRef ?? undefined}
       skills={props.skills}
-      className="text-message-foreground"
+      className="text-message-foreground text-[length:inherit]"
       lineBreaks
       parseRawHtml={false}
     />

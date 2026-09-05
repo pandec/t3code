@@ -172,6 +172,14 @@ export const PromptFontSize = Schema.Int.check(
 export type PromptFontSize = typeof PromptFontSize.Type;
 export const DEFAULT_PROMPT_FONT_SIZE: PromptFontSize = 14;
 
+export const MIN_MESSAGE_FONT_SIZE = 12;
+export const MAX_MESSAGE_FONT_SIZE = 20;
+export const MessageFontSize = Schema.Int.check(
+  Schema.isBetween({ minimum: MIN_MESSAGE_FONT_SIZE, maximum: MAX_MESSAGE_FONT_SIZE }),
+);
+export type MessageFontSize = typeof MessageFontSize.Type;
+export const DEFAULT_MESSAGE_FONT_SIZE: MessageFontSize = 14;
+
 export const MIN_CODE_FONT_SIZE = 10;
 export const MAX_CODE_FONT_SIZE = 18;
 export const CodeFontSize = Schema.Int.check(
@@ -458,6 +466,9 @@ export const ClientSettingsSchema = Schema.Struct({
   fontSizePrompt: PromptFontSize.pipe(
     Schema.withDecodingDefault(Effect.succeed(DEFAULT_PROMPT_FONT_SIZE)),
   ),
+  fontSizeMessage: MessageFontSize.pipe(
+    Schema.withDecodingDefault(Effect.succeed(DEFAULT_MESSAGE_FONT_SIZE)),
+  ),
   fontSizeCode: CodeFontSize.pipe(
     Schema.withDecodingDefault(Effect.succeed(DEFAULT_CODE_FONT_SIZE)),
   ),
@@ -466,6 +477,7 @@ export const ClientSettingsSchema = Schema.Struct({
   ),
   fontFamilyCode: FontFamilyPreference.pipe(Schema.withDecodingDefault(Effect.succeed(""))),
   fontFamilyComposer: FontFamilyPreference.pipe(Schema.withDecodingDefault(Effect.succeed(""))),
+  fontFamilyMessage: FontFamilyPreference.pipe(Schema.withDecodingDefault(Effect.succeed(""))),
   fontFamilySans: FontFamilyPreference.pipe(Schema.withDecodingDefault(Effect.succeed(""))),
   fontFamilyTerminal: FontFamilyPreference.pipe(Schema.withDecodingDefault(Effect.succeed(""))),
   // Grayscale `-webkit-font-smoothing: antialiased` (thinner strokes);
@@ -1598,10 +1610,12 @@ export const ClientSettingsPatch = Schema.Struct({
   glassOpacity: Schema.optionalKey(GlassOpacity),
   fontSizeInterface: Schema.optionalKey(InterfaceFontSize),
   fontSizePrompt: Schema.optionalKey(PromptFontSize),
+  fontSizeMessage: Schema.optionalKey(MessageFontSize),
   fontSizeCode: Schema.optionalKey(CodeFontSize),
   fontSizeTerminal: Schema.optionalKey(TerminalFontSize),
   fontFamilyCode: Schema.optionalKey(FontFamilyPreference),
   fontFamilyComposer: Schema.optionalKey(FontFamilyPreference),
+  fontFamilyMessage: Schema.optionalKey(FontFamilyPreference),
   fontFamilySans: Schema.optionalKey(FontFamilyPreference),
   fontFamilyTerminal: Schema.optionalKey(FontFamilyPreference),
   fontSmoothing: Schema.optionalKey(Schema.Boolean),

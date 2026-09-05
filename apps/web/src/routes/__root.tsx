@@ -188,8 +188,10 @@ function FontAppearanceSync() {
   const fontFamilySans = useClientSettings((settings) => settings.fontFamilySans);
   const fontFamilyCode = useClientSettings((settings) => settings.fontFamilyCode);
   const fontFamilyComposer = useClientSettings((settings) => settings.fontFamilyComposer);
+  const fontFamilyMessage = useClientSettings((settings) => settings.fontFamilyMessage);
   const fontSizeInterface = useClientSettings((settings) => settings.fontSizeInterface);
   const fontSizePrompt = useClientSettings((settings) => settings.fontSizePrompt);
+  const fontSizeMessage = useClientSettings((settings) => settings.fontSizeMessage);
   const fontSizeCode = useClientSettings((settings) => settings.fontSizeCode);
   const fontSmoothing = useClientSettings((settings) => settings.fontSmoothing);
 
@@ -198,17 +200,21 @@ function FontAppearanceSync() {
       sans: fontFamilySans,
       code: fontFamilyCode,
       composer: fontFamilyComposer,
+      message: fontFamilyMessage,
       sizeInterface: fontSizeInterface,
       sizePrompt: fontSizePrompt,
+      sizeMessage: fontSizeMessage,
       sizeCode: fontSizeCode,
       smoothing: fontSmoothing,
     });
   }, [
     fontFamilyCode,
     fontFamilyComposer,
+    fontFamilyMessage,
     fontFamilySans,
     fontSizeCode,
     fontSizeInterface,
+    fontSizeMessage,
     fontSizePrompt,
     fontSmoothing,
   ]);

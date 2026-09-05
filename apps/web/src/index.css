@@ -1472,6 +1472,16 @@ code {
   font-size: var(--font-size-code, inherit);
 }
 
+/* Thread message bodies (assistant replies and user prompts) carry their own
+   family and size preference, in absolute pixels like the prompt box, so they
+   can grow without scaling the rest of the interface. Only these bodies opt
+   in; tool rows, plan cards, summaries, and other chat markdown stay at the
+   interface size. */
+.chat-message-text {
+  font-family: var(--font-message, var(--font-sans));
+  font-size: var(--font-size-message, 0.875rem);
+}
+
 /* @pierre/diffs surfaces (diffs, file previews, annotatable code, search
    lines) render inside shadow roots but consult these hooks with their own
    literal stacks as fallback. Custom properties inherit across the shadow
@@ -1544,22 +1554,25 @@ code {
   color: var(--contrast-foreground);
 }
 
+/* Headings scale with the surrounding markdown (em, not rem) so a larger
+   message size keeps its heading hierarchy instead of flattening into body
+   text. The ratios match the former rem values at the 14px default. */
 .chat-markdown h1 {
-  font-size: 1.25rem;
+  font-size: 1.43em;
 }
 
 .chat-markdown h2 {
-  font-size: 1.125rem;
+  font-size: 1.29em;
 }
 
 .chat-markdown h3 {
-  font-size: 1rem;
+  font-size: 1.14em;
 }
 
 .chat-markdown h4,
 .chat-markdown h5,
 .chat-markdown h6 {
-  font-size: 0.875rem;
+  font-size: 1em;
 }
 
 .chat-markdown h6 {
@@ -1679,7 +1692,7 @@ code {
   background: var(--muted);
   padding: 0.1rem 0.35rem;
   color: var(--contrast-foreground);
-  font-size: 0.75rem;
+  font-size: 0.86em;
 }
 
 .chat-markdown .chat-markdown-file-link,
