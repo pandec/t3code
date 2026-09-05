@@ -87,16 +87,20 @@ function ensureSharedPlayer(): AudioPlayer {
   player.addListener("playbackStatusUpdate", (status) => {
     // Native lock-screen play, pause, and seek actions emit this same status,
     // so every app surface stays bound to the native player's real state.
+    // Position goes out before the playing flag: the at-rest state is derived
+    // when the flag flips, and a finish pins the position to the end because
+    // the native player's final reported position can fall short of it.
+    listeningPlayback.setProgress(
+      status.didJustFinish
+        ? { currentTime: status.duration, duration: status.duration }
+        : { currentTime: status.currentTime, duration: status.duration },
+    );
     if (status.playing && listeningPlayback.getSnapshot().blocked) {
       pauseSharedPlayer();
       listeningPlayback.setTrackPlaying(false);
     } else {
       listeningPlayback.setTrackPlaying(status.playing);
     }
-    listeningPlayback.setProgress({
-      currentTime: status.currentTime,
-      duration: status.duration,
-    });
   });
   sharedPlayer = player;
   // Speed changes mid-playback land on the native player immediately.

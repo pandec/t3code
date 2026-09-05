@@ -29,42 +29,41 @@ export const speechFailureReasonFor = (
   error.reason === "quota_exceeded" ? "provider_quota_exceeded" : "provider_failed";
 
 /**
- * ElevenLabs answers quota exhaustion with a 401 whose body carries
+ * The `detail.status` code of an ElevenLabs error body, or null when the body
+ * is not that shape. Quota exhaustion arrives as a 401 with
  * `detail.status: "quota_exceeded"`; by status alone it looks like a bad key.
  */
-const isQuotaExceededBody = (body: string): boolean => {
+const errorStatusOf = (body: string): string | null => {
   try {
     const parsed: unknown = JSON.parse(body);
-    if (typeof parsed !== "object" || parsed === null || !("detail" in parsed)) return false;
+    if (typeof parsed !== "object" || parsed === null || !("detail" in parsed)) return null;
     const detail = parsed.detail;
-    return (
-      typeof detail === "object" &&
-      detail !== null &&
-      "status" in detail &&
-      detail.status === "quota_exceeded"
-    );
+    if (typeof detail !== "object" || detail === null || !("status" in detail)) return null;
+    return typeof detail.status === "string" ? detail.status : null;
   } catch {
-    return false;
+    return null;
   }
 };
 
 /**
- * Classifies a non-2xx response, logging status and body so the server log
- * names the cause instead of a bare status code.
+ * Classifies a non-2xx response and logs why. Only the vendor's status code
+ * is logged when the body parses: validation errors can echo the submitted
+ * text back, and that is the user's transcript.
  */
 const rejectedResponseError = (response: HttpClientResponse.HttpClientResponse) =>
   response.text.pipe(
     Effect.orElseSucceed(() => ""),
-    Effect.tap((body) =>
+    Effect.map(errorStatusOf),
+    Effect.tap((errorStatus) =>
       Effect.logWarning("elevenlabs text-to-speech request rejected", {
         status: response.status,
-        body: body.slice(0, 500),
+        errorStatus,
       }),
     ),
-    Effect.flatMap((body) =>
+    Effect.flatMap((errorStatus) =>
       Effect.fail(
         new ElevenLabsTtsError({
-          reason: isQuotaExceededBody(body) ? "quota_exceeded" : "request_failed",
+          reason: errorStatus === "quota_exceeded" ? "quota_exceeded" : "request_failed",
         }),
       ),
     ),

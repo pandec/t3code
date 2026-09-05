@@ -144,15 +144,23 @@ function ensureSharedAudio(): HTMLAudioElement {
     // trusting the UA to rebuild its extrapolation across a resume.
     publishMediaSessionPosition(element);
   });
+  // Position goes out before the playing flag on pause and end: the at-rest
+  // state is derived when the flag flips, and the throttled tick can lag the
+  // real position by up to 200ms.
   element.addEventListener("pause", () => {
+    publishProgress(element);
     listeningPlayback.setTrackPlaying(false);
     setMediaSessionPlaybackState("paused");
     publishMediaSessionPosition(element);
   });
   element.addEventListener("ended", () => {
+    // Pin the position to the end. Elements without a finite duration cannot
+    // report one, and the finish signal is what decides at-rest, not the
+    // last reported position.
+    const duration = Number.isFinite(element.duration) ? element.duration : element.currentTime;
+    listeningPlayback.setProgress({ currentTime: duration, duration });
     listeningPlayback.setTrackPlaying(false);
     setMediaSessionPlaybackState("paused");
-    publishProgress(element);
     publishMediaSessionPosition(element);
   });
   element.addEventListener("error", () => {

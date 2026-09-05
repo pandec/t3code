@@ -260,8 +260,10 @@ describe("listening playback active track", () => {
     coordinator.setProgress({ currentTime: 13, duration: 60 });
     expect(listener).not.toHaveBeenCalled();
 
-    // Played to the end: still loaded (archive/delete keep working) but the
-    // list shows nothing, since there is nothing left to resume.
+    // Played to the end, in the order the platform controllers publish
+    // (position first, then the flag): still loaded (archive/delete keep
+    // working) but the list shows nothing, since there is nothing left to
+    // resume. One wake, not two.
     coordinator.setProgress({ currentTime: 60, duration: 60 });
     coordinator.setTrackPlaying(false);
     expect(threadListeningState(coordinator.getSnapshot(), "env-1", "thread-1")).toBeNull();
@@ -280,6 +282,18 @@ describe("listening playback active track", () => {
     coordinator.setProgress({ currentTime: 0, duration: 60 });
     expect(threadListeningState(coordinator.getSnapshot(), "env-1", "thread-1")).toBeNull();
     coordinator.setProgress({ currentTime: 20, duration: 60 });
+    expect(threadListeningState(coordinator.getSnapshot(), "env-1", "thread-1")).toBe("paused");
+  });
+
+  it("keeps the toggle for a pause just after the start once the position catches up", () => {
+    const coordinator = createListeningPlaybackCoordinator();
+    coordinator.activate(trackA.speechId, vi.fn(), trackA);
+    coordinator.setTrackPlaying(true);
+    // A stale tick from within the epsilon, then the pause lands with the
+    // real position published first: never at rest.
+    coordinator.setProgress({ currentTime: 0.05, duration: 60 });
+    coordinator.setProgress({ currentTime: 0.4, duration: 60 });
+    coordinator.setTrackPlaying(false);
     expect(threadListeningState(coordinator.getSnapshot(), "env-1", "thread-1")).toBe("paused");
   });
 });
