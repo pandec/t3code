@@ -28,7 +28,10 @@ import { Button } from "../ui/button";
 import { type ContextWindowSnapshot, formatContextWindowTokens } from "~/lib/contextWindow";
 import { formatProviderUsageEmail } from "~/providerUsageEmail";
 import { Popover, PopoverPopup, PopoverTrigger } from "../ui/popover";
-import { formatContextWindowCompactionMessage } from "./ContextWindowMeter.logic";
+import {
+  formatContextWindowCompactionMessage,
+  openRouterCreditsBudgetWindow,
+} from "./ContextWindowMeter.logic";
 import { composerFloatingLayerProps } from "./composerEventScope";
 
 /**
@@ -145,6 +148,56 @@ function QuotaWindowRow(props: { window: ProviderUsageWindow; nowMs: number }) {
   );
 }
 
+function OpenRouterCreditsRow(props: {
+  readonly credits: OpenRouterCreditsDisplay;
+  readonly budgetWindow: ProviderUsageWindow | null;
+  readonly nowMs: number;
+  readonly refreshing: boolean;
+}) {
+  const { credits, budgetWindow, nowMs, refreshing } = props;
+  const stale = isProviderUsageSnapshotStale(credits.observedAt, nowMs);
+  const dimmed = credits.unavailable || stale;
+  return (
+    <div className="flex flex-col gap-2">
+      {/* Mirrors an account row: the balance and bar dim when stale and say
+          how old they are; the status line below stays legible because it
+          is what explains the dimming. */}
+      <div className={cn("flex flex-col gap-2", dimmed && "opacity-55")}>
+        <div className="flex items-baseline justify-between gap-3 text-[11px]">
+          <span className="flex min-w-0 items-baseline gap-1.5">
+            <span className="font-semibold text-muted-foreground/90">OpenRouter credits</span>
+            {dimmed && !refreshing && credits.balanceUsd !== null ? (
+              <span className="shrink-0 text-[10px] tabular-nums text-muted-foreground/60">
+                {formatProviderUsageAge(credits.observedAt, nowMs)}
+              </span>
+            ) : null}
+          </span>
+          {credits.balanceUsd !== null ? (
+            <span className="shrink-0 font-medium tabular-nums text-muted-foreground/90">
+              {formatUsd(credits.balanceUsd)} left
+            </span>
+          ) : null}
+        </div>
+        {budgetWindow ? <QuotaWindowRow window={budgetWindow} nowMs={nowMs} /> : null}
+      </div>
+      {/* An error outranks the add-a-key hint: an unreadable secret store
+          also reports unconfigured, and "add your key" would be the wrong
+          remedy for it. */}
+      {credits.unavailable ? (
+        <div className="text-[11px] text-muted-foreground/60">
+          Couldn't load the latest balance.
+        </div>
+      ) : credits.error !== null ? (
+        <div className="text-[11px] text-destructive/90">{credits.error}</div>
+      ) : !credits.configured ? (
+        <div className="text-[11px] text-muted-foreground/60">
+          Add your OpenRouter management key in Settings → Extras.
+        </div>
+      ) : null}
+    </div>
+  );
+}
+
 /**
  * OpenRouter account balance shown in the popover when the user enabled it in
  * Settings → Extras. Account-wide (one OpenRouter account per environment), so
@@ -155,6 +208,12 @@ export interface OpenRouterCreditsDisplay {
   readonly configured: boolean;
   /** Credits remaining in USD; null while unconfigured or failed. */
   readonly balanceUsd: number | null;
+  /**
+   * The starting balance spend is measured against, from Settings → Extras.
+   * Null shows the balance alone; a value adds a spent-percentage bar under
+   * it like a provider window.
+   */
+  readonly budgetUsd: number | null;
   readonly observedAt: number | null;
   readonly error: string | null;
   /**
@@ -228,6 +287,12 @@ export function ContextWindowMeter(props: {
   openRouterCredits?: OpenRouterCreditsDisplay | null;
   /** Called on popover open, at most once a minute; re-reads the balance. */
   onRefreshOpenRouterCredits?: () => void;
+  /**
+   * The credits read is in flight. Separate from the provider refresh flag:
+   * the two reads are gated independently, so one must not hide or show the
+   * other's staleness stamp.
+   */
+  openRouterCreditsRefreshing?: boolean;
 }) {
   const { usage, modelDisplayName, onCompact, compactDisabled, compactDisabledReason } = props;
   // Colour thresholds are a user setting; re-evaluate the snapshot on read so a
@@ -252,6 +317,12 @@ export function ContextWindowMeter(props: {
         : null,
     [props.fableUsage, usageThresholds],
   );
+  const openRouterBalanceUsd = props.openRouterCredits?.balanceUsd ?? null;
+  const openRouterBudgetUsd = props.openRouterCredits?.budgetUsd ?? null;
+  const openRouterBudgetWindow = useMemo(() => {
+    const window = openRouterCreditsBudgetWindow(openRouterBalanceUsd, openRouterBudgetUsd);
+    return window ? applyProviderUsageWindowThresholds(window, usageThresholds) : null;
+  }, [openRouterBalanceUsd, openRouterBudgetUsd, usageThresholds]);
   const nowMs = Date.now();
   const panelObservedAt = oldestProviderUsageObservedAt(providerUsageAccounts);
   // When this popover last asked for a read, so an account that never reports
@@ -304,13 +375,20 @@ export function ContextWindowMeter(props: {
     : providerUsage
       ? `${providerUsage.providerLabel} usage`
       : null;
+  // A failed read keeps the previous balance on screen, so the failure has
+  // to outrank the number here or the label would announce a stale figure
+  // and percentage as current.
   const openRouterAriaLabel = props.openRouterCredits
-    ? props.openRouterCredits.balanceUsd !== null
-      ? `OpenRouter credits ${formatUsd(props.openRouterCredits.balanceUsd)} left`
-      : props.openRouterCredits.unavailable
-        ? "OpenRouter credits unavailable"
-        : props.openRouterCredits.error !== null
-          ? "OpenRouter credits error"
+    ? props.openRouterCredits.unavailable
+      ? "OpenRouter credits unavailable"
+      : props.openRouterCredits.error !== null
+        ? "OpenRouter credits error"
+        : props.openRouterCredits.balanceUsd !== null
+          ? `OpenRouter credits ${formatUsd(props.openRouterCredits.balanceUsd)} left${
+              openRouterBudgetWindow
+                ? `, ${describeProviderUsageWindowValue(openRouterBudgetWindow)} of budget used`
+                : ""
+            }`
           : props.openRouterCredits.configured
             ? "OpenRouter credits"
             : "OpenRouter credits not configured"
@@ -458,9 +536,16 @@ export function ContextWindowMeter(props: {
                       type="button"
                       className="inline-flex size-6 items-center justify-center rounded text-muted-foreground/70 hover:bg-muted hover:text-foreground disabled:cursor-not-allowed disabled:opacity-50"
                       onClick={() => {
-                        lastRefreshAskedAtRef.current = Date.now();
+                        const askedAtMs = Date.now();
+                        lastRefreshAskedAtRef.current = askedAtMs;
                         props.onProbeThreadAccount?.({ force: true });
                         void props.onRefreshProviderUsage?.();
+                        // The credits row now lives under this header, so the
+                        // button has to cover it too.
+                        if (props.openRouterCredits && props.onRefreshOpenRouterCredits) {
+                          lastOpenRouterRefreshAskedAtRef.current = askedAtMs;
+                          props.onRefreshOpenRouterCredits();
+                        }
                       }}
                       disabled={props.providerUsageRefreshing}
                       aria-label="Refresh provider usage"
@@ -483,14 +568,20 @@ export function ContextWindowMeter(props: {
               </div>
             ) : null}
 
-            {providerUsage || providerUsageAccounts.length > 0 ? (
+            {providerUsage || providerUsageAccounts.length > 0 || props.openRouterCredits ? (
               // Focusable and labelled: the rows hold no controls, so without a
               // tab stop a keyboard user has nothing to scroll the list from.
               <div
                 className="flex min-h-0 flex-1 flex-col gap-3 overflow-y-auto overscroll-contain rounded outline-none focus-visible:ring-1 focus-visible:ring-ring"
                 tabIndex={0}
                 role="group"
-                aria-label={`${props.providerUsageLabel ?? providerUsage?.providerLabel ?? "Provider"} usage`}
+                aria-label={
+                  providerUsage || providerUsageAccounts.length > 0
+                    ? `${props.providerUsageLabel ?? providerUsage?.providerLabel ?? "Provider"} usage${
+                        props.openRouterCredits ? " and OpenRouter credits" : ""
+                      }`
+                    : "OpenRouter credits"
+                }
               >
                 {providerUsage && providerUsageAccounts.length === 0 ? (
                   <div className="flex flex-col gap-2">
@@ -569,53 +660,24 @@ export function ContextWindowMeter(props: {
                     </Fragment>
                   );
                 })}
-              </div>
-            ) : null}
 
-            {props.openRouterCredits ? (
-              <>
-                {providerUsage || providerUsageAccounts.length > 0 ? (
-                  <div className="h-px w-full shrink-0 bg-border/60" />
-                ) : null}
-                <div className="flex shrink-0 flex-col gap-1">
-                  <div className="flex items-baseline justify-between gap-3">
-                    <span className="font-medium text-muted-foreground text-xs">
-                      OpenRouter credits
-                    </span>
-                    {props.openRouterCredits.balanceUsd !== null ? (
-                      <span
-                        className={cn(
-                          "text-[11px] font-medium tabular-nums text-muted-foreground/90",
-                          (props.openRouterCredits.unavailable ||
-                            isProviderUsageSnapshotStale(
-                              props.openRouterCredits.observedAt,
-                              nowMs,
-                            )) &&
-                            "opacity-55",
-                        )}
-                      >
-                        {formatUsd(props.openRouterCredits.balanceUsd)} left
-                      </span>
+                {/* Last in the list, not pinned: the balance is one more
+                    account to read, and pinning it stole room from the
+                    accounts above it on short screens. */}
+                {props.openRouterCredits ? (
+                  <>
+                    {providerUsage || providerUsageAccounts.length > 0 ? (
+                      <div className="h-px w-full shrink-0 bg-border/60" />
                     ) : null}
-                  </div>
-                  {/* An error outranks the add-a-key hint: an unreadable
-                      secret store also reports unconfigured, and "add your
-                      key" would be the wrong remedy for it. */}
-                  {props.openRouterCredits.unavailable ? (
-                    <div className="text-[11px] text-muted-foreground/60">
-                      Couldn't load the latest balance.
-                    </div>
-                  ) : props.openRouterCredits.error !== null ? (
-                    <div className="text-[11px] text-destructive/90">
-                      {props.openRouterCredits.error}
-                    </div>
-                  ) : !props.openRouterCredits.configured ? (
-                    <div className="text-[11px] text-muted-foreground/60">
-                      Add your OpenRouter management key in Settings → Extras.
-                    </div>
-                  ) : null}
-                </div>
-              </>
+                    <OpenRouterCreditsRow
+                      credits={props.openRouterCredits}
+                      budgetWindow={openRouterBudgetWindow}
+                      nowMs={nowMs}
+                      refreshing={props.openRouterCreditsRefreshing ?? false}
+                    />
+                  </>
+                ) : null}
+              </div>
             ) : null}
 
             {(providerUsage || providerUsageAccounts.length > 0 || props.openRouterCredits) &&

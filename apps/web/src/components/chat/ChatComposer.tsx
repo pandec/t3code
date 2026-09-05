@@ -1104,6 +1104,7 @@ const ComposerFooterPrimaryActions = memo(function ComposerFooterPrimaryActions(
   providerUsageLabel: string | null;
   openRouterCredits: OpenRouterCreditsDisplay | null;
   onRefreshOpenRouterCredits: () => void;
+  openRouterCreditsRefreshing: boolean;
   onRefreshProviderUsage: () => Promise<void>;
   onProbeThreadAccount: (options?: { readonly force?: boolean }) => void;
   activeThreadModelDisplayName: string | null;
@@ -1151,6 +1152,7 @@ const ComposerFooterPrimaryActions = memo(function ComposerFooterPrimaryActions(
           providerUsageLabel={props.providerUsageLabel}
           openRouterCredits={props.openRouterCredits}
           onRefreshOpenRouterCredits={props.onRefreshOpenRouterCredits}
+          openRouterCreditsRefreshing={props.openRouterCreditsRefreshing}
           onRefreshProviderUsage={props.onRefreshProviderUsage}
           onProbeThreadAccount={props.onProbeThreadAccount}
           modelDisplayName={props.activeThreadModelDisplayName}
@@ -2293,6 +2295,7 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
       configured: data.configured,
       balanceUsd:
         data.snapshot === null ? null : data.snapshot.totalCreditsUsd - data.snapshot.totalUsageUsd,
+      budgetUsd: settings.openRouterCreditsBudgetUsd,
       observedAt: data.snapshot?.observedAt ?? null,
       error: data.error ?? null,
       // `data` keeps the previous success when a refresh fails (environment
@@ -2300,7 +2303,12 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
       // the meter would present yesterday's balance as current.
       unavailable: openRouterCreditsQuery.error !== null,
     };
-  }, [showOpenRouterCredits, openRouterCreditsQuery.data, openRouterCreditsQuery.error]);
+  }, [
+    showOpenRouterCredits,
+    openRouterCreditsQuery.data,
+    openRouterCreditsQuery.error,
+    settings.openRouterCreditsBudgetUsd,
+  ]);
   useProviderUsageAlerts(activeProviderUsage, environmentId);
   const activeThreadModelDisplayName = useMemo(
     () => resolveContextWindowModelDisplayName(activeThreadModelSelection, modelOptionsByInstance),
@@ -6331,6 +6339,7 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
                     providerUsageLabel={effectiveProviderUsageLabel}
                     openRouterCredits={openRouterCredits}
                     onRefreshOpenRouterCredits={openRouterCreditsQuery.refresh}
+                    openRouterCreditsRefreshing={openRouterCreditsQuery.isPending}
                     onRefreshProviderUsage={refreshProviderUsage}
                     onProbeThreadAccount={probeThreadGatewayAccount}
                     activeThreadModelDisplayName={activeThreadModelDisplayName}

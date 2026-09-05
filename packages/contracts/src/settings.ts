@@ -282,6 +282,24 @@ export function clampProviderUsageAlertPercent(
   }) as ProviderUsageAlertPercent;
 }
 
+/**
+ * Optional starting balance the OpenRouter spend is measured against, in
+ * USD. The balance endpoint only reports what is left, so without a
+ * reference amount there is no percentage to show; the user names the
+ * balance they started from and the meter renders the spend like a
+ * provider quota.
+ */
+export const MIN_OPENROUTER_CREDITS_BUDGET_USD = 1;
+export const MAX_OPENROUTER_CREDITS_BUDGET_USD = 1_000_000;
+export const OpenRouterCreditsBudgetUsd = Schema.Number.check(
+  Schema.isFinite(),
+  Schema.isBetween({
+    minimum: MIN_OPENROUTER_CREDITS_BUDGET_USD,
+    maximum: MAX_OPENROUTER_CREDITS_BUDGET_USD,
+  }),
+);
+export type OpenRouterCreditsBudgetUsd = typeof OpenRouterCreditsBudgetUsd.Type;
+
 export const MIN_ACCENT_TINT_INTENSITY_PERCENT = 4;
 export const MAX_ACCENT_TINT_INTENSITY_PERCENT = 30;
 export const AccentTintIntensityPercent = Schema.Int.check(
@@ -525,6 +543,13 @@ export const ClientSettingsSchema = Schema.Struct({
    * Extras) for the balance to actually appear.
    */
   showOpenRouterCredits: Schema.Boolean.pipe(Schema.withDecodingDefault(Effect.succeed(false))),
+  /**
+   * Web-only: the starting balance OpenRouter spend is measured against.
+   * Null shows the dollar amount alone; a value adds a spent-percentage bar.
+   */
+  openRouterCreditsBudgetUsd: Schema.NullOr(OpenRouterCreditsBudgetUsd).pipe(
+    Schema.withDecodingDefault(Effect.succeed(null)),
+  ),
   // Legacy plan mode. The composer's Build/Plan toggle was removed from the
   // default UI; this beta flag restores it (plus the /plan and /default slash
   // commands) for users who still rely on the old workflow.
@@ -1668,6 +1693,7 @@ export const ClientSettingsPatch = Schema.Struct({
   providerUsageCriticalPercent: Schema.optionalKey(ProviderUsageAlertPercent),
   maskProviderUsageEmails: Schema.optionalKey(Schema.Boolean),
   showOpenRouterCredits: Schema.optionalKey(Schema.Boolean),
+  openRouterCreditsBudgetUsd: Schema.optionalKey(Schema.NullOr(OpenRouterCreditsBudgetUsd)),
   planModeEnabled: Schema.optionalKey(Schema.Boolean),
   contextWindowMeterEnabled: Schema.optionalKey(Schema.Boolean),
   composerCollapseOnBlur: Schema.optionalKey(Schema.Boolean),
