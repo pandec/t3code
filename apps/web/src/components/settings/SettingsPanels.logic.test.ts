@@ -58,6 +58,12 @@ describe("typography settings restore", () => {
         fontFamilyCode: "Fira Code",
       }),
     ).toEqual(["Interface font", "Code font"]);
+    expect(
+      getChangedTypographySettingLabels({
+        ...DEFAULT_UNIFIED_SETTINGS,
+        fontSizeMessage: 16,
+      }),
+    ).toEqual(["Message font"]);
   });
 });
 
