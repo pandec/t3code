@@ -3039,7 +3039,7 @@ const CollapsibleUserMessageBody = memo(function CollapsibleUserMessageBody(prop
         <div
           className={cn(
             "chat-message-text relative",
-            // Clip about eleven lines at any message size, not a fixed 176px.
+            // Clip about eight lines at any message size, not a fixed 176px.
             isCollapsed && "max-h-[calc(var(--font-size-message,0.875rem)*12.5)] overflow-hidden",
           )}
           data-user-message-body="true"
