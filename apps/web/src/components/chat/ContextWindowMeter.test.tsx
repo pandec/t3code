@@ -1,4 +1,4 @@
-import { EventId, ProviderInstanceId, TurnId } from "@t3tools/contracts";
+import { EventId, TurnId } from "@t3tools/contracts";
 import type { ReactNode } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it, vi } from "vite-plus/test";
@@ -205,62 +205,28 @@ describe("ContextWindowMeter", () => {
       />,
     );
 
-    expect(markup).toContain('aria-label="OpenRouter credits $47.23 left at 5.5%"');
-    expect(markup).toContain('aria-label="Budget $50.00 usage"');
+    expect(markup).toContain('aria-label="OpenRouter credits $47.23 left, 5.5% of budget used"');
     expect(markup).toContain('aria-valuenow="6"');
   });
 
-  it("lists OpenRouter credits after the provider accounts, inside the scrolling group", () => {
+  it("does not announce a retained balance as current after a failed read", () => {
     const markup = renderToStaticMarkup(
       <ContextWindowMeter
-        usage={contextUsage(50_000, 25)}
-        providerUsageLabel="Codex"
-        providerUsageAccounts={[
-          {
-            instanceId: ProviderInstanceId.make("codex"),
-            displayName: "Codex",
-            email: "someone@example.com",
-            isCurrent: true,
-            usage: {
-              providerLabel: "Codex",
-              providerInstanceId: "codex",
-              windows: [
-                {
-                  id: "weekly",
-                  group: "weekly" as const,
-                  label: "Weekly",
-                  shortLabel: "Wk",
-                  usedPercent: 76,
-                  resetsAt: null,
-                  status: "ok" as const,
-                },
-              ],
-              status: "ok" as const,
-              updatedAt: "2026-07-27T05:00:00.000Z",
-            },
-            observedAt: Date.now(),
-          },
-        ]}
+        usage={null}
         openRouterCredits={{
           configured: true,
           balanceUsd: 47.23,
           budgetUsd: 50,
-          observedAt: Date.now(),
+          observedAt: Date.now() - 10 * 60_000,
           error: null,
-          unavailable: false,
+          unavailable: true,
         }}
       />,
     );
 
-    // Search from the scrolling group: the trigger's aria-label names the
-    // credits too, and that copy sits before the popover in the markup.
-    const group = markup.indexOf('aria-label="Codex usage"');
-    const groupEnd = markup.indexOf("Context Window", group);
-    const weekly = markup.indexOf('aria-label="Weekly usage"', group);
-    const credits = markup.indexOf(">OpenRouter credits<", group);
-    expect(group).toBeGreaterThan(-1);
-    expect(credits).toBeGreaterThan(weekly);
-    expect(credits).toBeLessThan(groupEnd);
+    expect(markup).toContain('aria-label="OpenRouter credits unavailable"');
+    expect(markup).toContain("Couldn&#x27;t load the latest balance.");
+    expect(markup).toContain("updated 10m ago");
   });
 
   it("renders a known context window at zero usage", () => {

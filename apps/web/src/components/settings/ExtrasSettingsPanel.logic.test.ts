@@ -78,9 +78,13 @@ describe("resolveOpenRouterCreditsBudgetCommit", () => {
     expect(resolveOpenRouterCreditsBudgetCommit(Number.NaN)).toBeNull();
   });
 
-  it("clamps out-of-range input into the schema bounds", () => {
-    expect(resolveOpenRouterCreditsBudgetCommit(0)).toBe(1);
-    expect(resolveOpenRouterCreditsBudgetCommit(-20)).toBe(1);
+  it("treats zero and negatives as no budget", () => {
+    expect(resolveOpenRouterCreditsBudgetCommit(0)).toBeNull();
+    expect(resolveOpenRouterCreditsBudgetCommit(-20)).toBeNull();
+    expect(resolveOpenRouterCreditsBudgetCommit(0.5)).toBeNull();
+  });
+
+  it("clamps an oversized budget down to the schema maximum", () => {
     expect(resolveOpenRouterCreditsBudgetCommit(5_000_000)).toBe(1_000_000);
   });
 });

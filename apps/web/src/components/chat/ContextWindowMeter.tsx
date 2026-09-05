@@ -152,20 +152,34 @@ function OpenRouterCreditsRow(props: {
   readonly credits: OpenRouterCreditsDisplay;
   readonly budgetWindow: ProviderUsageWindow | null;
   readonly nowMs: number;
+  readonly refreshing: boolean;
 }) {
-  const { credits, budgetWindow, nowMs } = props;
-  const dimmed = credits.unavailable || isProviderUsageSnapshotStale(credits.observedAt, nowMs);
+  const { credits, budgetWindow, nowMs, refreshing } = props;
+  const stale = isProviderUsageSnapshotStale(credits.observedAt, nowMs);
+  const dimmed = credits.unavailable || stale;
   return (
-    <div className={cn("flex flex-col gap-2", dimmed && "opacity-55")}>
-      <div className="flex items-baseline justify-between gap-3 text-[11px]">
-        <span className="font-semibold text-muted-foreground/90">OpenRouter credits</span>
-        {credits.balanceUsd !== null ? (
-          <span className="font-medium tabular-nums text-muted-foreground/90">
-            {formatUsd(credits.balanceUsd)} left
+    <div className="flex flex-col gap-2">
+      {/* Mirrors an account row: the balance and bar dim when stale and say
+          how old they are; the status line below stays legible because it
+          is what explains the dimming. */}
+      <div className={cn("flex flex-col gap-2", dimmed && "opacity-55")}>
+        <div className="flex items-baseline justify-between gap-3 text-[11px]">
+          <span className="flex min-w-0 items-baseline gap-1.5">
+            <span className="font-semibold text-muted-foreground/90">OpenRouter credits</span>
+            {dimmed && !refreshing && credits.balanceUsd !== null ? (
+              <span className="shrink-0 text-[10px] tabular-nums text-muted-foreground/60">
+                {formatProviderUsageAge(credits.observedAt, nowMs)}
+              </span>
+            ) : null}
           </span>
-        ) : null}
+          {credits.balanceUsd !== null ? (
+            <span className="shrink-0 font-medium tabular-nums text-muted-foreground/90">
+              {formatUsd(credits.balanceUsd)} left
+            </span>
+          ) : null}
+        </div>
+        {budgetWindow ? <QuotaWindowRow window={budgetWindow} nowMs={nowMs} /> : null}
       </div>
-      {budgetWindow ? <QuotaWindowRow window={budgetWindow} nowMs={nowMs} /> : null}
       {/* An error outranks the add-a-key hint: an unreadable secret store
           also reports unconfigured, and "add your key" would be the wrong
           remedy for it. */}
@@ -195,8 +209,9 @@ export interface OpenRouterCreditsDisplay {
   /** Credits remaining in USD; null while unconfigured or failed. */
   readonly balanceUsd: number | null;
   /**
-   * What 100% means, from Settings → Extras. Null shows the balance alone;
-   * a value adds a used-percentage bar under it like a provider window.
+   * The starting balance spend is measured against, from Settings → Extras.
+   * Null shows the balance alone; a value adds a spent-percentage bar under
+   * it like a provider window.
    */
   readonly budgetUsd: number | null;
   readonly observedAt: number | null;
@@ -354,17 +369,20 @@ export function ContextWindowMeter(props: {
     : providerUsage
       ? `${providerUsage.providerLabel} usage`
       : null;
+  // A failed read keeps the previous balance on screen, so the failure has
+  // to outrank the number here or the label would announce a stale figure
+  // and percentage as current.
   const openRouterAriaLabel = props.openRouterCredits
-    ? props.openRouterCredits.balanceUsd !== null
-      ? `OpenRouter credits ${formatUsd(props.openRouterCredits.balanceUsd)} left${
-          openRouterBudgetWindow
-            ? ` at ${describeProviderUsageWindowValue(openRouterBudgetWindow)}`
-            : ""
-        }`
-      : props.openRouterCredits.unavailable
-        ? "OpenRouter credits unavailable"
-        : props.openRouterCredits.error !== null
-          ? "OpenRouter credits error"
+    ? props.openRouterCredits.unavailable
+      ? "OpenRouter credits unavailable"
+      : props.openRouterCredits.error !== null
+        ? "OpenRouter credits error"
+        : props.openRouterCredits.balanceUsd !== null
+          ? `OpenRouter credits ${formatUsd(props.openRouterCredits.balanceUsd)} left${
+              openRouterBudgetWindow
+                ? `, ${describeProviderUsageWindowValue(openRouterBudgetWindow)} of budget used`
+                : ""
+            }`
           : props.openRouterCredits.configured
             ? "OpenRouter credits"
             : "OpenRouter credits not configured"
@@ -512,9 +530,16 @@ export function ContextWindowMeter(props: {
                       type="button"
                       className="inline-flex size-6 items-center justify-center rounded text-muted-foreground/70 hover:bg-muted hover:text-foreground disabled:cursor-not-allowed disabled:opacity-50"
                       onClick={() => {
-                        lastRefreshAskedAtRef.current = Date.now();
+                        const askedAtMs = Date.now();
+                        lastRefreshAskedAtRef.current = askedAtMs;
                         props.onProbeThreadAccount?.({ force: true });
                         void props.onRefreshProviderUsage?.();
+                        // The credits row now lives under this header, so the
+                        // button has to cover it too.
+                        if (props.openRouterCredits && props.onRefreshOpenRouterCredits) {
+                          lastOpenRouterRefreshAskedAtRef.current = askedAtMs;
+                          props.onRefreshOpenRouterCredits();
+                        }
                       }}
                       disabled={props.providerUsageRefreshing}
                       aria-label="Refresh provider usage"
@@ -546,7 +571,9 @@ export function ContextWindowMeter(props: {
                 role="group"
                 aria-label={
                   providerUsage || providerUsageAccounts.length > 0
-                    ? `${props.providerUsageLabel ?? providerUsage?.providerLabel ?? "Provider"} usage`
+                    ? `${props.providerUsageLabel ?? providerUsage?.providerLabel ?? "Provider"} usage${
+                        props.openRouterCredits ? " and OpenRouter credits" : ""
+                      }`
                     : "OpenRouter credits"
                 }
               >
@@ -640,6 +667,7 @@ export function ContextWindowMeter(props: {
                       credits={props.openRouterCredits}
                       budgetWindow={openRouterBudgetWindow}
                       nowMs={nowMs}
+                      refreshing={props.providerUsageRefreshing ?? false}
                     />
                   </>
                 ) : null}

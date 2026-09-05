@@ -282,10 +282,11 @@ export function clampProviderUsageAlertPercent(
 }
 
 /**
- * Optional spend budget the OpenRouter balance is measured against, in USD.
- * The balance endpoint only reports what is left, so without a reference
- * amount there is no percentage to show; the user names the amount they
- * consider "full" and the meter renders the burn like a provider quota.
+ * Optional starting balance the OpenRouter spend is measured against, in
+ * USD. The balance endpoint only reports what is left, so without a
+ * reference amount there is no percentage to show; the user names the
+ * balance they started from and the meter renders the spend like a
+ * provider quota.
  */
 export const MIN_OPENROUTER_CREDITS_BUDGET_USD = 1;
 export const MAX_OPENROUTER_CREDITS_BUDGET_USD = 1_000_000;
@@ -545,8 +546,8 @@ export const ClientSettingsSchema = Schema.Struct({
    */
   showOpenRouterCredits: Schema.Boolean.pipe(Schema.withDecodingDefault(Effect.succeed(false))),
   /**
-   * Web-only: what 100% means for the OpenRouter balance. Null shows the
-   * dollar amount alone; a value adds a used-percentage bar against it.
+   * Web-only: the starting balance OpenRouter spend is measured against.
+   * Null shows the dollar amount alone; a value adds a spent-percentage bar.
    */
   openRouterCreditsBudgetUsd: Schema.NullOr(OpenRouterCreditsBudgetUsd).pipe(
     Schema.withDecodingDefault(Effect.succeed(null)),

@@ -482,6 +482,18 @@ describe("ClientSettings extras", () => {
     });
   });
 
+  it("clears and round-trips the OpenRouter budget", () => {
+    expect(decodeClientSettingsPatch({ openRouterCreditsBudgetUsd: null })).toEqual({
+      openRouterCreditsBudgetUsd: null,
+    });
+    for (const budget of [12.5, null]) {
+      const encoded = encodeClientSettings(
+        decodeClientSettings({ openRouterCreditsBudgetUsd: budget }),
+      );
+      expect(decodeClientSettings(encoded).openRouterCreditsBudgetUsd).toBe(budget);
+    }
+  });
+
   it.each([
     { steerGraceWindowMs: 15_001 },
     { steerGraceWindowMs: -1 },
