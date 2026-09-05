@@ -1,6 +1,9 @@
 import { describe, expect, it } from "vite-plus/test";
 
-import { resolveProviderUsageThresholdCommit } from "./ExtrasSettingsPanel.logic";
+import {
+  resolveOpenRouterCreditsBudgetCommit,
+  resolveProviderUsageThresholdCommit,
+} from "./ExtrasSettingsPanel.logic";
 
 const current = {
   providerUsageWarningPercent: 80,
@@ -61,5 +64,23 @@ describe("resolveProviderUsageThresholdCommit", () => {
         current: { providerUsageWarningPercent: 90, providerUsageCriticalPercent: 40 },
       }),
     ).toEqual({ providerUsageWarningPercent: 40, providerUsageCriticalPercent: 40 });
+  });
+});
+
+describe("resolveOpenRouterCreditsBudgetCommit", () => {
+  it("keeps an in-range budget, decimals included", () => {
+    expect(resolveOpenRouterCreditsBudgetCommit(50)).toBe(50);
+    expect(resolveOpenRouterCreditsBudgetCommit(12.5)).toBe(12.5);
+  });
+
+  it("persists an emptied field as no budget", () => {
+    expect(resolveOpenRouterCreditsBudgetCommit(null)).toBeNull();
+    expect(resolveOpenRouterCreditsBudgetCommit(Number.NaN)).toBeNull();
+  });
+
+  it("clamps out-of-range input into the schema bounds", () => {
+    expect(resolveOpenRouterCreditsBudgetCommit(0)).toBe(1);
+    expect(resolveOpenRouterCreditsBudgetCommit(-20)).toBe(1);
+    expect(resolveOpenRouterCreditsBudgetCommit(5_000_000)).toBe(1_000_000);
   });
 });

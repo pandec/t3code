@@ -2,6 +2,9 @@ import {
   clampProviderUsageAlertPercent,
   DEFAULT_PROVIDER_USAGE_CRITICAL_PERCENT,
   DEFAULT_PROVIDER_USAGE_WARNING_PERCENT,
+  MAX_OPENROUTER_CREDITS_BUDGET_USD,
+  MIN_OPENROUTER_CREDITS_BUDGET_USD,
+  type OpenRouterCreditsBudgetUsd,
   type ProviderUsageAlertPercent,
 } from "@t3tools/contracts/settings";
 
@@ -66,4 +69,21 @@ export function resolveProviderUsageThresholdCommit(input: {
     ) as ProviderUsageAlertPercent,
     providerUsageCriticalPercent: critical,
   };
+}
+
+/**
+ * Commit the OpenRouter budget field. Unlike the threshold rows, an emptied
+ * field is a real choice here — "no budget" — so `null` persists as null
+ * rather than snapping back. Out-of-range or non-finite input clamps into the
+ * schema's bounds, since the patch would otherwise be rejected on decode and
+ * the field would silently keep the old value.
+ */
+export function resolveOpenRouterCreditsBudgetCommit(
+  value: number | null,
+): OpenRouterCreditsBudgetUsd | null {
+  if (value === null || !Number.isFinite(value)) return null;
+  return Math.min(
+    MAX_OPENROUTER_CREDITS_BUDGET_USD,
+    Math.max(MIN_OPENROUTER_CREDITS_BUDGET_USD, value),
+  ) as OpenRouterCreditsBudgetUsd;
 }

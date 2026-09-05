@@ -449,6 +449,7 @@ describe("ClientSettings extras", () => {
     expect(settings.providerUsageWarningPercent).toBe(80);
     expect(settings.providerUsageCriticalPercent).toBe(95);
     expect(settings.maskProviderUsageEmails).toBe(false);
+    expect(settings.openRouterCreditsBudgetUsd).toBeNull();
     expect(settings.accentTintsEnabled).toBe(true);
     expect(settings.accentTintIntensityPercent).toBe(12);
     expect(settings.sidebarAlwaysShowPinnedInAttention).toBe(false);
@@ -462,6 +463,7 @@ describe("ClientSettings extras", () => {
         providerUsageWarningPercent: 1,
         providerUsageCriticalPercent: 100,
         maskProviderUsageEmails: true,
+        openRouterCreditsBudgetUsd: 50,
         accentTintsEnabled: false,
         accentTintIntensityPercent: 30,
         sidebarAlwaysShowPinnedInAttention: true,
@@ -472,6 +474,7 @@ describe("ClientSettings extras", () => {
       providerUsageWarningPercent: 1,
       providerUsageCriticalPercent: 100,
       maskProviderUsageEmails: true,
+      openRouterCreditsBudgetUsd: 50,
       accentTintsEnabled: false,
       accentTintIntensityPercent: 30,
       sidebarAlwaysShowPinnedInAttention: true,
@@ -484,6 +487,9 @@ describe("ClientSettings extras", () => {
     { steerGraceWindowMs: -1 },
     { providerUsageWarningPercent: 0 },
     { providerUsageCriticalPercent: 101 },
+    { openRouterCreditsBudgetUsd: 0 },
+    { openRouterCreditsBudgetUsd: -5 },
+    { openRouterCreditsBudgetUsd: 1_000_001 },
     { accentTintIntensityPercent: 3 },
     { accentTintIntensityPercent: 31 },
     { turnCompletionMinDurationSeconds: -1 },

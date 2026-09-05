@@ -5,6 +5,7 @@ import {
   formatContextWindowCompactionMessage,
   hasAvailableCompactionProvider,
   hasDismissedResumeCompaction,
+  openRouterCreditsBudgetWindow,
   resolveContextWindowModelDisplayName,
   shouldOfferResumeCompaction,
 } from "./ContextWindowMeter.logic";
@@ -234,5 +235,26 @@ describe("hasDismissedResumeCompaction", () => {
         { kind: "user-input.resolved", payload: { answers: ["Don't ask again"] } },
       ]),
     ).toBe(false);
+  });
+});
+
+describe("openRouterCreditsBudgetWindow", () => {
+  it("measures the burn against the budget", () => {
+    const window = openRouterCreditsBudgetWindow(47.23, 50);
+    expect(window?.usedPercent).toBeCloseTo(5.54, 2);
+    expect(window?.label).toBe("Budget $50.00");
+    expect(window?.status).toBe("ok");
+  });
+
+  it("pins overspend at 100% and a topped-up balance at 0%", () => {
+    expect(openRouterCreditsBudgetWindow(-3, 50)?.usedPercent).toBe(100);
+    expect(openRouterCreditsBudgetWindow(80, 50)?.usedPercent).toBe(0);
+  });
+
+  it("has no window without both a balance and a positive budget", () => {
+    expect(openRouterCreditsBudgetWindow(null, 50)).toBeNull();
+    expect(openRouterCreditsBudgetWindow(47.23, null)).toBeNull();
+    expect(openRouterCreditsBudgetWindow(47.23, 0)).toBeNull();
+    expect(openRouterCreditsBudgetWindow(Number.NaN, 50)).toBeNull();
   });
 });
