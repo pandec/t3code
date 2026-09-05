@@ -187,6 +187,7 @@ const ProviderRuntimeEventType = Schema.Literals([
   "hook.completed",
   "tool.progress",
   "tool.summary",
+  "tool.denied",
   "auth.status",
   "account.updated",
   "account.rate-limits.updated",
@@ -805,11 +806,13 @@ export type AccountUpdatedPayload = typeof AccountUpdatedPayload.Type;
  * Adapters normalise their native rate-limit payload at the boundary so the
  * consumer that folds it into the provider snapshot never sees driver shapes.
  *
- * The fork keeps the raw provider payload beside the typed windows: gateway
- * pool attribution and rate-limit failover read the native `rate_limit_info`
- * verdict, which typed utilization cannot express. Either half may be absent
- * (typed normalisation can fail on an unfamiliar payload; a raw-only event
- * must still reach failover), so consumers read only the half they own.
+ * Upstream requires `limits`. The fork widens it on purpose: the raw provider
+ * payload rides beside the typed windows because gateway pool attribution and
+ * rate-limit failover read the native `rate_limit_info` verdict, which typed
+ * utilization cannot express. Either half may be absent (typed normalisation
+ * can fail on an unfamiliar payload; a raw-only event must still reach
+ * failover), so consumers read only the half they own and skip `undefined`.
+ * Keep both optional; making `limits` required would drop raw-only events.
  */
 const AccountRateLimitsUpdatedPayload = Schema.Struct({
   limits: Schema.optional(ProviderUsageLimitsUpdate),

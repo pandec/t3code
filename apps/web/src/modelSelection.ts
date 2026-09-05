@@ -10,9 +10,10 @@ import {
   type ServerSettingsPatch,
 } from "@t3tools/contracts";
 import {
+  type CustomModelDefinition,
   createModelSelection,
   normalizeCustomModelSlug,
-  parseCustomModelEntry,
+  readCustomModelEntries,
   resolveSelectableModel,
 } from "@t3tools/shared/model";
 import { getComposerProviderState } from "./components/chat/composerProviderState";
@@ -56,14 +57,14 @@ function readInstanceCustomModels(
   settings: UnifiedSettings,
   instanceId: ProviderInstanceId,
   driverKind: ProviderDriverKind,
-): ReadonlyArray<string> {
+): ReadonlyArray<CustomModelDefinition> {
   if (driverKind === "antigravity") return [];
   const instance = settings.providerInstances?.[instanceId];
   const config = instance?.config;
   if (config !== null && typeof config === "object") {
     const value = (config as Record<string, unknown>).customModels;
     if (Array.isArray(value)) {
-      return value.filter((entry): entry is string => typeof entry === "string");
+      return readCustomModelEntries(value);
     }
   }
   const defaultInstanceId = defaultInstanceIdForDriver(driverKind);
@@ -72,9 +73,9 @@ function readInstanceCustomModels(
   }
   const legacyProviders = settings.providers as Record<
     string,
-    { readonly customModels: ReadonlyArray<string> } | undefined
+    { readonly customModels: ReadonlyArray<unknown> } | undefined
   >;
-  return legacyProviders[driverKind]?.customModels ?? [];
+  return readCustomModelEntries(legacyProviders[driverKind]?.customModels ?? []);
 }
 
 // Null prototype, like every record readInstanceCustomModelIcons returns:
@@ -211,25 +212,24 @@ function applyInstanceModelPreferences(
 }
 
 export function normalizeCustomModelEntries(
-  models: Iterable<string | null | undefined>,
+  models: ReadonlyArray<CustomModelDefinition>,
   builtInModelSlugs: ReadonlySet<string>,
-): Array<{ readonly slug: string; readonly name: string }> {
-  const normalizedModels: Array<{ readonly slug: string; readonly name: string }> = [];
+): CustomModelDefinition[] {
+  const normalizedModels: CustomModelDefinition[] = [];
   const seen = new Set<string>();
 
   for (const candidate of models) {
-    const parsed = parseCustomModelEntry(candidate);
     if (
-      !parsed ||
-      parsed.slug.length > MAX_CUSTOM_MODEL_LENGTH ||
-      builtInModelSlugs.has(parsed.slug) ||
-      seen.has(parsed.slug)
+      candidate.slug.length > MAX_CUSTOM_MODEL_LENGTH ||
+      builtInModelSlugs.has(candidate.slug) ||
+      seen.has(candidate.slug)
     ) {
       continue;
     }
 
-    seen.add(parsed.slug);
-    normalizedModels.push(parsed);
+    seen.add(candidate.slug);
+    normalizedModels.push(candidate);
+
     if (normalizedModels.length >= MAX_CUSTOM_MODEL_COUNT) {
       break;
     }
@@ -264,17 +264,13 @@ export function getAppModelOptions(
   // see the user's authored custom models.
   const defaultInstanceId = defaultInstanceIdForDriver(provider);
   const customModels = readInstanceCustomModels(settings, defaultInstanceId, provider);
-  for (const { slug, name } of normalizeCustomModelEntries(customModels, builtInModelSlugs)) {
-    if (seen.has(slug)) {
+  for (const entry of normalizeCustomModelEntries(customModels, builtInModelSlugs)) {
+    if (seen.has(entry.slug)) {
       continue;
     }
 
-    seen.add(slug);
-    options.push({
-      slug,
-      name,
-      isCustom: true,
-    });
+    seen.add(entry.slug);
+    options.push({ slug: entry.slug, name: entry.name, isCustom: true });
   }
 
   const preferences = readInstanceModelPreferences(settings, defaultInstanceId);
@@ -319,13 +315,13 @@ export function getAppModelOptionsForInstance(
   );
 
   const customModels = readInstanceCustomModels(settings, entry.instanceId, entry.driverKind);
-  for (const { slug, name } of normalizeCustomModelEntries(customModels, builtInModelSlugs)) {
-    if (seen.has(slug)) {
+  for (const custom of normalizeCustomModelEntries(customModels, builtInModelSlugs)) {
+    if (seen.has(custom.slug)) {
       continue;
     }
 
-    seen.add(slug);
-    options.push({ slug, name, isCustom: true });
+    seen.add(custom.slug);
+    options.push({ slug: custom.slug, name: custom.name, isCustom: true });
   }
 
   const preferences = readInstanceModelPreferences(settings, entry.instanceId);

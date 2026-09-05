@@ -36,6 +36,7 @@ import * as Config from "effect/Config";
 import * as DateTime from "effect/DateTime";
 import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
+import * as FileSystem from "effect/FileSystem";
 import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
 import * as PubSub from "effect/PubSub";
@@ -63,9 +64,10 @@ import {
   withMetrics,
 } from "../../observability/Metrics.ts";
 import {
-  type ProviderAdapterError,
   ProviderAdapterRequestError,
+  type ProviderAdapterError,
   ProviderValidationError,
+  ProviderWorkspaceMissingError,
 } from "../Errors.ts";
 import { readPersistedContinuationKey } from "../runtimeBindingContinuation.ts";
 import type { ProviderAdapterShape } from "../Services/ProviderAdapter.ts";
@@ -245,6 +247,7 @@ function toRuntimePayloadFromSession(
   session: ProviderSession,
   extra?: {
     readonly modelSelection?: unknown;
+    readonly continueAfterServerUpdate?: TurnId;
     readonly lastRuntimeEvent?: string;
     readonly lastRuntimeEventAt?: string;
     readonly clearHasPendingWork?: boolean;
@@ -260,6 +263,9 @@ function toRuntimePayloadFromSession(
       ? { sessionGenerationId: session.sessionGenerationId }
       : {}),
     ...(extra?.clearHasPendingWork === true ? { hasPendingWork: false } : {}),
+    ...(extra?.continueAfterServerUpdate !== undefined
+      ? { continueAfterServerUpdate: extra.continueAfterServerUpdate }
+      : {}),
     ...(extra?.modelSelection !== undefined ? { modelSelection: extra.modelSelection } : {}),
     ...(extra?.lastRuntimeEvent !== undefined ? { lastRuntimeEvent: extra.lastRuntimeEvent } : {}),
     ...(extra?.lastRuntimeEventAt !== undefined
@@ -460,6 +466,7 @@ const makeProviderService = Effect.fn("makeProviderService")(function* (
     options?.issueMcpCredential ?? McpSessionRegistry.issueActiveMcpCredential;
   const revokeMcpCredential =
     options?.revokeMcpCredential ?? McpSessionRegistry.revokeActiveMcpThread;
+  const fileSystem = yield* FileSystem.FileSystem;
   const runtimeEventPubSub = yield* PubSub.unbounded<ProviderRuntimeEvent>();
   const pendingSessionReplacements = yield* Ref.make(
     new Map<ThreadId, PendingSessionReplacement>(),
@@ -1166,6 +1173,7 @@ const makeProviderService = Effect.fn("makeProviderService")(function* (
     threadId: ThreadId,
     extra?: {
       readonly modelSelection?: unknown;
+      readonly continueAfterServerUpdate?: TurnId;
       readonly lastRuntimeEvent?: string;
       readonly lastRuntimeEventAt?: string;
       readonly clearHasPendingWork?: boolean;
@@ -1452,27 +1460,6 @@ const makeProviderService = Effect.fn("makeProviderService")(function* (
     );
   });
 
-  /**
-   * The turn `stopAll` recorded as still running when it tore this thread's
-   * session down, if the marker survives and no turn has been sent since.
-   *
-   * Only shutdown writes it, from the adapter's own live session state, so it
-   * cannot be confused with a turn that finished or one the user stopped.
-   */
-  const bindingStrandedTurnId = (runtimePayload: unknown | null | undefined): string | null => {
-    if (
-      runtimePayload === null ||
-      runtimePayload === undefined ||
-      typeof runtimePayload !== "object" ||
-      Array.isArray(runtimePayload) ||
-      !("strandedTurnId" in runtimePayload)
-    ) {
-      return null;
-    }
-    const value = runtimePayload.strandedTurnId;
-    return typeof value === "string" && value.length > 0 ? value : null;
-  };
-
   const resolveRoutableSession = Effect.fn("resolveRoutableSession")(function* (input: {
     readonly threadId: ThreadId;
     readonly operation: string;
@@ -1489,13 +1476,6 @@ const makeProviderService = Effect.fn("makeProviderService")(function* (
     const instanceId = yield* requireBindingInstanceId(input.operation, binding);
     const adapter = yield* registry.getByInstance(instanceId);
 
-    // A turn was live when this thread's session was last torn down, and
-    // nothing has been sent since. Read before any recovery, which rewrites
-    // the binding from the fresh session, and reported on every branch: a
-    // caller usually restarts the session itself before routing here, so the
-    // marker must not depend on this call being the one that recovers.
-    const strandedPriorTurn = bindingStrandedTurnId(binding.runtimePayload) !== null;
-
     const hasRequestedSession = yield* adapter.hasSession(input.threadId);
     if (hasRequestedSession) {
       return {
@@ -1504,7 +1484,6 @@ const makeProviderService = Effect.fn("makeProviderService")(function* (
         threadId: input.threadId,
         runtimeMode: binding.runtimeMode,
         isActive: true,
-        strandedPriorTurn,
       } as const;
     }
 
@@ -1515,7 +1494,6 @@ const makeProviderService = Effect.fn("makeProviderService")(function* (
         threadId: input.threadId,
         runtimeMode: binding.runtimeMode,
         isActive: false,
-        strandedPriorTurn,
       } as const;
     }
 
@@ -1529,7 +1507,6 @@ const makeProviderService = Effect.fn("makeProviderService")(function* (
       threadId: input.threadId,
       runtimeMode: recovered.session.runtimeMode,
       isActive: true,
-      strandedPriorTurn,
     } as const;
   });
 
@@ -1721,6 +1698,20 @@ const makeProviderService = Effect.fn("makeProviderService")(function* (
           }),
           "provider.cwd.effective": effectiveCwd ?? "",
         });
+        if (effectiveCwd !== undefined) {
+          // Fail fast with an actionable error when the workspace folder is
+          // gone (e.g. moved, deleted, or replaced by a plain file).
+          // Otherwise every adapter surfaces this as a misleading "failed to
+          // spawn <binary>" process error. Stat failures other than "missing"
+          // fall through to the adapter.
+          const workspaceIsDirectory = yield* fileSystem.stat(effectiveCwd).pipe(
+            Effect.map((workspaceStat) => workspaceStat.type === "Directory"),
+            Effect.catch((statError) => Effect.succeed(statError.reason._tag !== "NotFound")),
+          );
+          if (!workspaceIsDirectory) {
+            return yield* new ProviderWorkspaceMissingError({ threadId, cwd: effectiveCwd });
+          }
+        }
         const adapter = yield* registry.getByInstance(resolvedInstanceId);
         const previousGenerationId = readSessionGenerationId(persistedBinding?.runtimePayload);
         const pendingReplacement =
@@ -2029,9 +2020,6 @@ const makeProviderService = Effect.fn("makeProviderService")(function* (
       yield* McpSessionRegistry.touchActiveMcpThread(input.threadId);
       const analyticsModelSelection =
         input.modelSelection?.instanceId === routed.instanceId ? input.modelSelection : undefined;
-      const adapterInput = routed.strandedPriorTurn
-        ? { ...input, priorTurnEndedUnrequested: true }
-        : input;
       const turn = yield* Effect.acquireUseRelease(
         beginTurnAnalytics({
           providerInstanceId: routed.instanceId,
@@ -2043,7 +2031,7 @@ const makeProviderService = Effect.fn("makeProviderService")(function* (
         }),
         (turnMetadata) =>
           Effect.gen(function* () {
-            const turn = yield* routed.adapter.sendTurn(adapterInput);
+            const turn = yield* routed.adapter.sendTurn(input);
             yield* associateTurnAnalytics({
               providerInstanceId: routed.instanceId,
               threadId: input.threadId,
@@ -2068,10 +2056,9 @@ const makeProviderService = Effect.fn("makeProviderService")(function* (
         runtimePayload: {
           ...(input.modelSelection !== undefined ? { modelSelection: input.modelSelection } : {}),
           activeTurnId: turn.turnId,
-          // The turn carrying the notice has been sent, so the marker is
-          // spent. `upsert` merges runtime payloads, so it has to be cleared
-          // by name — omitting it would leave it set forever.
-          strandedTurnId: null,
+          // Admission and marker consumption must survive the same restart.
+          continueAfterServerUpdate: null,
+          continueAfterServerUpdatePrepared: null,
           lastRuntimeEvent: "provider.sendTurn",
           lastRuntimeEventAt: yield* nowIso,
         },
@@ -2395,6 +2382,8 @@ const makeProviderService = Effect.fn("makeProviderService")(function* (
             // background tasks die with it — the binding must not keep the
             // pending-work reaper extension.
             hasPendingWork: false,
+            continueAfterServerUpdate: null,
+            continueAfterServerUpdatePrepared: null,
           },
         });
         yield* analytics.record("provider.session.stopped", {
@@ -2678,6 +2667,10 @@ const makeProviderService = Effect.fn("makeProviderService")(function* (
   );
 
   const runStopAll = Effect.fn("runStopAll")(function* () {
+    const continueAfterRestart = yield* serverSettings.getSettings.pipe(
+      Effect.map((settings) => settings.continueThreadsAfterServerUpdate),
+      Effect.orElseSucceed(() => false),
+    );
     const properties = yield* Ref.modify(turnAnalytics, (state) => {
       const completed: Array<Readonly<Record<string, unknown>>> = [];
       for (const [sessionKey, session] of state.sessions) {
@@ -2702,21 +2695,12 @@ const makeProviderService = Effect.fn("makeProviderService")(function* (
         ),
       ),
     ).pipe(Effect.map((sessionsByAdapter) => sessionsByAdapter.flatMap((sessions) => sessions)));
-    // Shutting down cancels whatever a running turn was doing, and the agent
-    // is told its tool call was rejected. Remember the turns that were live
-    // here — before the adapters tear their sessions down — so the next
-    // message on those threads can explain it. The sessions are the only
-    // trustworthy source: a binding keeps naming the last turn it started
-    // long after that turn finished.
-    const strandedTurnIdByThread = new Map<ThreadId, string>();
-    for (const session of activeSessions) {
-      if (session.activeTurnId !== undefined) {
-        strandedTurnIdByThread.set(session.threadId, session.activeTurnId);
-      }
-    }
     yield* Effect.forEach(activeSessions, (session) =>
       Effect.flatMap(nowIso, (lastRuntimeEventAt) =>
         upsertSessionBinding(session, session.threadId, {
+          ...(continueAfterRestart && session.status === "running" && session.activeTurnId
+            ? { continueAfterServerUpdate: session.activeTurnId }
+            : {}),
           lastRuntimeEvent: "provider.stopAll",
           lastRuntimeEventAt,
         }),
@@ -2732,7 +2716,6 @@ const makeProviderService = Effect.fn("makeProviderService")(function* (
           "ProviderService.stopAll",
           binding,
         );
-        const strandedTurnId = strandedTurnIdByThread.get(binding.threadId);
         return yield* directory.upsert({
           threadId: binding.threadId,
           provider: binding.provider,
@@ -2741,7 +2724,6 @@ const makeProviderService = Effect.fn("makeProviderService")(function* (
           runtimePayload: {
             activeTurnId: null,
             hasPendingWork: false,
-            ...(strandedTurnId !== undefined ? { strandedTurnId } : {}),
             lastRuntimeEvent: "provider.stopAll",
             lastRuntimeEventAt: yield* nowIso,
           },

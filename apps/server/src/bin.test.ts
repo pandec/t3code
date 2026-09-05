@@ -67,8 +67,10 @@ import {
   CliOrchestrationUndeclaredStatusError,
   dispatchLiveOrchestrationCommand,
   withCliOrchestrationSession,
+  CliOrchestrationDeclaredResponseError,
 } from "./cli/orchestration.ts";
 import { ProjectActionServerUnsupportedError } from "./cli/project.ts";
+import { ProjectNotFoundError } from "./cli/projectTarget.ts";
 
 import packageJson from "../package.json" with { type: "json" };
 
@@ -605,6 +607,135 @@ it.layer(NodeServices.layer)("bin cli parsing", (it) => {
             (project) => project.id === addedProject?.id,
           );
           assert.isTrue((removedProject?.deletedAt ?? null) !== null);
+        }),
+      );
+    }),
+  );
+
+  it.effect("manages a project through the running server after its workspace disappears", () =>
+    Effect.gen(function* () {
+      const baseDir = NodeFS.mkdtempSync(
+        NodePath.join(NodeOS.tmpdir(), "t3-cli-projects-missing-workspace-test-"),
+      );
+      const workspaceRoot = NodeFS.mkdtempSync(
+        NodePath.join(NodeOS.tmpdir(), "t3-cli-projects-missing-workspace-"),
+      );
+
+      yield* withLiveProjectCliServer(baseDir, () =>
+        Effect.gen(function* () {
+          yield* runCliWithRuntime(["project", "add", workspaceRoot, "--base-dir", baseDir]);
+          const projectionSnapshotQuery = yield* ProjectionSnapshotQuery.ProjectionSnapshotQuery;
+          const afterAdd = yield* projectionSnapshotQuery.getSnapshot();
+          const project = afterAdd.projects.find(
+            (candidate) =>
+              candidate.workspaceRoot === workspaceRoot && candidate.deletedAt === null,
+          );
+          assert.isDefined(project);
+
+          const engine = yield* OrchestrationEngine.OrchestrationEngineService;
+          yield* engine.dispatch({
+            type: "thread.create",
+            commandId: CommandId.make("cmd-cli-missing-workspace-thread"),
+            threadId: ThreadId.make("thread-cli-missing-workspace"),
+            projectId: project.id,
+            title: "Thread",
+            modelSelection: {
+              instanceId: ProviderInstanceId.make("codex"),
+              model: "gpt-5-codex",
+            },
+            interactionMode: "default",
+            runtimeMode: "approval-required",
+            branch: null,
+            worktreePath: null,
+            createdAt: DateTime.formatIso(yield* DateTime.now),
+          });
+
+          NodeFS.renameSync(workspaceRoot, `${workspaceRoot}-moved`);
+          assert.isFalse(NodeFS.existsSync(workspaceRoot));
+
+          yield* runCliWithRuntime([
+            "project",
+            "rename",
+            project.id,
+            "Renamed by ID",
+            "--base-dir",
+            baseDir,
+          ]);
+          yield* runCliWithRuntime([
+            "project",
+            "rename",
+            workspaceRoot,
+            "Renamed by stored path",
+            "--base-dir",
+            baseDir,
+          ]);
+
+          const removalError = yield* runCliWithRuntime([
+            "project",
+            "remove",
+            workspaceRoot,
+            "--base-dir",
+            baseDir,
+          ]).pipe(Effect.flip);
+          // The live server answers a decider invariant with a typed
+          // internal_error that carries only a reason code, never the detail
+          // string, so the refusal is proven by the error class plus the
+          // project surviving below.
+          assert.instanceOf(removalError, CliOrchestrationDeclaredResponseError);
+          assert.equal(removalError.code, "internal_error");
+
+          const retained = yield* projectionSnapshotQuery.getSnapshot();
+          assert.isNull(
+            retained.projects.find((candidate) => candidate.id === project.id)?.deletedAt ?? null,
+          );
+          assert.equal(
+            retained.projects.find((candidate) => candidate.id === project.id)?.title,
+            "Renamed by stored path",
+          );
+          assert.isNull(
+            retained.threads.find((thread) => thread.id === "thread-cli-missing-workspace")
+              ?.deletedAt ?? null,
+          );
+
+          yield* runCliWithRuntime([
+            "project",
+            "remove",
+            workspaceRoot,
+            "--force",
+            "--base-dir",
+            baseDir,
+          ]);
+          const removed = yield* projectionSnapshotQuery.getSnapshot();
+          assert.isNotNull(
+            removed.projects.find((candidate) => candidate.id === project.id)?.deletedAt ?? null,
+          );
+          assert.isNotNull(
+            removed.threads.find((thread) => thread.id === "thread-cli-missing-workspace")
+              ?.deletedAt ?? null,
+          );
+        }),
+      );
+    }),
+  );
+
+  it.effect("rejects a project identifier from another running server", () =>
+    Effect.gen(function* () {
+      const baseDir = NodeFS.mkdtempSync(
+        NodePath.join(NodeOS.tmpdir(), "t3-cli-projects-unrelated-server-test-"),
+      );
+
+      yield* withLiveProjectCliServer(baseDir, () =>
+        Effect.gen(function* () {
+          const error = yield* runCliWithRuntime([
+            "project",
+            "rename",
+            ProjectId.make("project-from-another-server"),
+            "Wrong server",
+            "--base-dir",
+            baseDir,
+          ]).pipe(Effect.flip);
+
+          assert.instanceOf(error, ProjectNotFoundError);
         }),
       );
     }),

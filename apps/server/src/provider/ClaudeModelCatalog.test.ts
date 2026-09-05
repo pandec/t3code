@@ -9,6 +9,7 @@ import {
   getClaudeCatalogModelCapabilities,
   normalizeClaudeCatalogEffort,
   resolveClaudeCatalogApiModelId,
+  resolveClaudeCatalogEffort,
   resolveClaudeModelCatalog,
   resolveClaudeModelsForVersion,
   resolveClaudeModelSlug,
@@ -138,10 +139,9 @@ describe("Claude model catalog", () => {
     assert.isFalse(hasValidClaudeManifestAdapters(malformed));
   });
 
-  // The fork's custom (gateway-served) models consume effort through a
-  // parenthesized model-name suffix instead of Claude-native effort. These
-  // rules must survive manifest changes: the remote manifest owns built-ins,
-  // never the fork's configured custom models.
+  // Gateway-served custom models encode effort in the model id instead of
+  // using Claude's native effort option. The remote manifest owns built-ins,
+  // never these instance-scoped rules.
   describe("custom gateway models", () => {
     const claude = ProviderInstanceId.make("claudeAgent");
     const catalog = scopeClaudeModelCatalog(BUNDLED_CLAUDE_MODEL_CATALOG, [
@@ -170,12 +170,14 @@ describe("Claude model catalog", () => {
       );
     });
 
-    it("leaves a custom slug bare when no effort is selected and no default applies", () => {
-      const id = resolveClaudeCatalogApiModelId(catalog, {
-        instanceId: claude,
-        model: "gpt-5.6-luna",
-      });
-      assert.match(id, /^gpt-5\.6-luna(\([a-z]+\))?$/);
+    it("uses the standard default when no effort is selected", () => {
+      assert.strictEqual(
+        resolveClaudeCatalogApiModelId(catalog, {
+          instanceId: claude,
+          model: "gpt-5.6-luna",
+        }),
+        "gpt-5.6-luna(high)",
+      );
     });
 
     it("never passes Claude-native effort for a custom model", () => {
@@ -197,6 +199,78 @@ describe("Claude model catalog", () => {
       } else {
         assert.fail("custom-model effort descriptor is not a select");
       }
+    });
+
+    it("keeps structured names and supported non-effort descriptors", () => {
+      const scoped = scopeClaudeModelCatalog(resolveClaudeModelCatalog(manifest()), [
+        "synthetic",
+        {
+          slug: "claude-custom-tuned",
+          name: "Tuned",
+          capabilities: {
+            optionDescriptors: [
+              {
+                id: "effort",
+                label: "Reasoning",
+                type: "select",
+                options: [
+                  { id: "gentle", label: "Gentle", isDefault: true },
+                  { id: "brutal", label: "Brutal" },
+                ],
+              },
+              {
+                id: "fastMode",
+                label: "Fast mode",
+                type: "boolean",
+                currentValue: true,
+              },
+              {
+                id: "thinking",
+                label: "Thinking",
+                type: "boolean",
+              },
+              {
+                id: "temperature",
+                label: "Temperature",
+                type: "select",
+                options: [{ id: "hot", label: "Hot", isDefault: true }],
+              },
+            ],
+          },
+        },
+      ]);
+
+      // A bare custom slug shadows the built-in alias and remains custom even
+      // without authored capabilities.
+      assert.strictEqual(resolveClaudeModelSlug(scoped, "synthetic"), "synthetic");
+      assert.strictEqual(resolveClaudeCatalogEffort(scoped, "synthetic", "extreme"), "high");
+
+      // Authored effort choices cannot replace the gateway's standard ladder.
+      assert.strictEqual(
+        resolveClaudeCatalogEffort(scoped, "claude-custom-tuned", "brutal"),
+        "high",
+      );
+      assert.strictEqual(
+        normalizeClaudeCatalogEffort(scoped, "brutal", "claude-custom-tuned"),
+        undefined,
+      );
+      assert.strictEqual(
+        resolveClaudeCatalogApiModelId(scoped, {
+          instanceId: claude,
+          model: "claude-custom-tuned",
+          options: [{ id: "effort", value: "brutal" }],
+        }),
+        "claude-custom-tuned(high)",
+      );
+
+      const customModel = resolveClaudeModelsForVersion(scoped, "3.2.0").find(
+        (model) => model.slug === "claude-custom-tuned",
+      );
+      assert.strictEqual(customModel?.name, "Tuned");
+      assert.deepStrictEqual(
+        customModel?.capabilities?.optionDescriptors?.map((descriptor) => descriptor.id),
+        ["effort", "fastMode", "thinking"],
+      );
     });
   });
 });

@@ -124,7 +124,7 @@ import { legacyProjectCwdPreferenceKey, useUiStateStore } from "../uiStateStore"
 import { useThreadSelectionStore } from "../threadSelectionStore";
 import { requestBulkThreadUnpinConfirmation, useThreadActions } from "../hooks/useThreadActions";
 import { useHandleNewThread } from "../hooks/useHandleNewThread";
-import { openCommandPalette } from "../commandPaletteBus";
+import { isCommandPaletteOpen, openCommandPalette } from "../commandPaletteBus";
 import { resolveThreadActionProjectRef, startNewThreadFromContext } from "../lib/chatThreadActions";
 import { useAccentTintSettings, useClientSettings } from "../hooks/useSettings";
 import {
@@ -186,6 +186,7 @@ import {
   resolveSidebarThreadStatus,
   searchSidebarThreadsByTitle,
   shouldCreateNewThreadInCurrentProject,
+  shouldRecedeSidebarThread,
   resolveWorkingStartedAt,
   sidebarProjectScopeSignature,
   sortLogicalProjectsForSidebar,
@@ -1009,17 +1010,17 @@ const SidebarThreadRow = memo(function SidebarThreadRow(props: {
       wokeAt: props.wokeAt,
       ...(lastVisitedAt === undefined ? {} : { lastVisitedAt }),
     }) && thread.settledOverride !== "settled";
-  // In-flight rows (working, or waiting on approval/input) fade as a whole:
-  // there is nothing for the user to do yet, so prominence is reserved for
-  // rows that need a human — done (unread), read-but-unsettled, failed, and
-  // freshly woken. The status label keeps its hue, so waiting rows stay
-  // findable. In-flight rows recede the same as read-ready ones (inbox-zero:
-  // working threads aren't your problem yet) — only the colored status label
-  // stands out.
   const isInFlight =
     status === "working" || status === "monitoring" || status === "approval" || status === "input";
-  const shouldRecede =
-    (status === "ready" || isInFlight) && !isUnread && !isWoke && !props.isActive && !isSelected;
+  // Background work always recedes when it is not selected. Ready and
+  // action-required rows retain unread and wake prominence.
+  const shouldRecede = shouldRecedeSidebarThread({
+    status,
+    isUnread,
+    isWoke,
+    isActive: props.isActive,
+    isSelected,
+  });
   // Status hues follow the system-wide convention set by sidebar v1 and the
   // mobile Live Activity/widgets (amber approval, indigo input, sky working)
   // so a thread reads the same color everywhere it surfaces.
@@ -1370,21 +1371,23 @@ const SidebarThreadRow = memo(function SidebarThreadRow(props: {
         variant === "card"
           ? cn(
               "truncate",
-              isUnread || isWoke
-                ? "text-foreground"
-                : shouldRecede
-                  ? "text-secondary-label"
+              shouldRecede
+                ? "text-secondary-label"
+                : isUnread || isWoke
+                  ? "text-foreground"
                   : status === "failed"
                     ? "text-foreground/95"
                     : "text-foreground/90",
             )
           : cn(
               "truncate group-hover/sidebar-row:text-foreground",
-              props.isActive || isWoke
-                ? "text-foreground"
-                : isUnread
-                  ? "text-muted-foreground"
-                  : "text-secondary-label/70",
+              shouldRecede
+                ? "text-secondary-label/70"
+                : props.isActive || isWoke
+                  ? "text-foreground"
+                  : isUnread
+                    ? "text-muted-foreground"
+                    : "text-secondary-label/70",
             ),
         isRegeneratingTitle && "opacity-[0.55]",
       )}
@@ -2822,7 +2825,10 @@ export default function Sidebar() {
     [isMobile, router, setOpenMobile],
   );
   const handleProjectSettings = useCallback(
-    (event: ReactMouseEvent<HTMLButtonElement>, projectGroup: SidebarProjectSnapshot) => {
+    (
+      event: ReactMouseEvent<HTMLElement> | ReactKeyboardEvent<HTMLElement>,
+      projectGroup: SidebarProjectSnapshot,
+    ) => {
       event.preventDefault();
       event.stopPropagation();
       setProjectScopeMenuOpen(false);
@@ -4396,7 +4402,9 @@ export default function Sidebar() {
   );
   useEffect(() => {
     const onWindowKeyDown = (event: KeyboardEvent) => {
-      if (event.defaultPrevented || event.repeat) return;
+      if (event.defaultPrevented || event.repeat || isCommandPaletteOpen() || isModelPickerOpen()) {
+        return;
+      }
       const command = resolveShortcutCommand(event, keybindings, {
         platform: navigator.platform,
         context: {
@@ -4683,6 +4691,24 @@ export default function Sidebar() {
                             key={scopeKey}
                             checked={resolvedProjectScopeKeys?.has(scopeKey) ?? false}
                             onCheckedChange={() => selectProjectScope(scopeKey)}
+                            onContextMenu={(event) => {
+                              void handleProjectSettings(event, project);
+                            }}
+                            onKeyDown={(event) => {
+                              if (
+                                event.target !== event.currentTarget ||
+                                event.defaultPrevented ||
+                                event.nativeEvent.isComposing ||
+                                event.ctrlKey ||
+                                event.altKey ||
+                                event.metaKey ||
+                                (event.key !== "ContextMenu" &&
+                                  !(event.shiftKey && event.key === "F10"))
+                              ) {
+                                return;
+                              }
+                              void handleProjectSettings(event, project);
+                            }}
                             className={cn(
                               "h-8 min-h-8 py-0 ps-1 pe-1 text-sm font-medium [&>span:last-child]:flex [&>span:last-child]:min-w-0 [&>span:last-child]:items-center [&>span:last-child]:gap-2",
                               isHidden && "text-muted-foreground",

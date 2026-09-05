@@ -174,6 +174,7 @@ it.layer(NodeServices.layer)("ServerEnvironmentLive", (it) => {
       expect(second.capabilities.attachmentUploads).toBe(true);
       expect(second.capabilities.fileAttachments).toEqual({ maxUploadBytes: 50 * 1024 * 1024 });
       expect(second.capabilities.pullRequests).toBe(true);
+      expect(second.capabilities.usagePriceOverrides).toBe(true);
       expect(second.capabilities.threadTitleRegeneration).toBe(true);
       expect(second.capabilities.threadPullRequestLinking).toBe(true);
       expect(second.capabilities.agentActivityPublishing).toBe(false);
@@ -262,7 +263,7 @@ it.layer(NodeServices.layer)("ServerEnvironmentLive", (it) => {
       expect(withoutFd.capabilities.serverSelfUpdate).toBe("desktop-managed");
       expect(withoutFd.capabilities.desktopAppUpdate).toBeUndefined();
       expect(withoutFd.capabilities.serverSelfUpdateProgress).toBeUndefined();
-      expect(withoutFd.capabilities.serverUpdateThreadContinuation).toBeUndefined();
+      expect(withoutFd.capabilities.serverUpdateThreadContinuation).toBe(true);
 
       const developmentIdentity = yield* describeWith(
         { mode: "desktop", desktopTelemetryControlFd: 5 },
@@ -271,9 +272,11 @@ it.layer(NodeServices.layer)("ServerEnvironmentLive", (it) => {
       expect(developmentIdentity.capabilities.serverSelfUpdate).toBeUndefined();
       expect(developmentIdentity.capabilities.desktopAppUpdate).toBeUndefined();
       expect(developmentIdentity.capabilities.serverSelfUpdateProgress).toBeUndefined();
+      expect(developmentIdentity.capabilities.serverUpdateThreadContinuation).toBe(true);
 
       const web = yield* describeWith({ mode: "web", desktopTelemetryControlFd: 5 });
       expect(web.capabilities.desktopAppUpdate).toBeUndefined();
+      expect(web.capabilities.serverUpdateThreadContinuation).toBe(true);
     }),
   );
 

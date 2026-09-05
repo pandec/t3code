@@ -21,6 +21,7 @@ import * as Cause from "effect/Cause";
 import * as Option from "effect/Option";
 import { AsyncResult, Atom } from "effect/unstable/reactivity";
 import { useCallback, useEffect, useRef, useState } from "react";
+import { Alert } from "react-native";
 
 import { scopedProjectKey, scopedThreadKey } from "../lib/scopedEntities";
 import { prepareTurnAttachments, type PreparedTurnAttachments } from "../lib/attachmentUpload";
@@ -634,7 +635,6 @@ export function useThreadOutboxDrain(): void {
   }, [connectedEnvironments, dispatchingQueuedMessageId, queuedMessagesByThreadKey]);
 
   const acknowledgedMessageRevisionsRef = useRef(new Map<MessageId, number>());
-  const acknowledgedPreparedAttachmentsRef = useRef(new Map<MessageId, PreparedTurnAttachments>());
   const blockedRecoverySubscriptionsRef = useRef(
     new Map<
       MessageId,
@@ -808,6 +808,21 @@ export function useThreadOutboxDrain(): void {
         console.warn("[thread-outbox] storage hydration failed; delivering in-memory queue", {
           attempts: THREAD_OUTBOX_HYDRATION_MAX_RETRIES,
         });
+        Alert.alert(
+          "Some queued messages could not be loaded",
+          "Unreadable records and attachment files are still saved. Other messages can still be sent.",
+          [
+            { text: "Dismiss", style: "cancel" },
+            {
+              text: "Retry",
+              onPress: () => {
+                hydrationRetryAttemptRef.current = 0;
+                setHydrationDegraded(false);
+                void ensureThreadOutboxLoaded();
+              },
+            },
+          ],
+        );
       }
       setHydrationDegraded(true);
       hydrationRetryTimerRef.current = setTimeout(() => {
@@ -1040,7 +1055,6 @@ export function useThreadOutboxDrain(): void {
       }
       noteThreadOutboxStartAccepted(persistedMessage, thread, context);
       acknowledgedMessageRevisionsRef.current.set(persistedMessage.messageId, deliveryRevision);
-      acknowledgedPreparedAttachmentsRef.current.set(persistedMessage.messageId, prepared);
       const outcome = await completeQueuedMessageDelivery(persistedMessage, deliveryRevision);
       if (outcome === "failed") {
         return { outcome: "failed" };
@@ -1050,17 +1064,10 @@ export function useThreadOutboxDrain(): void {
       }
 
       acknowledgedMessageRevisionsRef.current.delete(persistedMessage.messageId);
-      acknowledgedPreparedAttachmentsRef.current.delete(persistedMessage.messageId);
       if (thread.archivedAt != null) {
         refreshArchivedThreadsForEnvironment(persistedMessage.environmentId);
       }
       noteThreadSteerDispatch(persistedMessage, context);
-      // The delivered turn holds its own copy of the bytes. A failed delete is
-      // surfaced without failing the accepted turn; the server also expires
-      // leaked pending uploads.
-      await prepared.releaseUploads().catch((error) => {
-        console.warn("[thread-outbox] could not delete consumed pending uploads", error);
-      });
       return { outcome: "delivered", context };
     },
     [
@@ -1185,7 +1192,6 @@ export function useThreadOutboxDrain(): void {
         return restoreQueuedMessage(persistedMessage, failure.message);
       }
       acknowledgedMessageRevisionsRef.current.set(persistedMessage.messageId, deliveryRevision);
-      acknowledgedPreparedAttachmentsRef.current.set(persistedMessage.messageId, prepared);
       const outcome = await completeQueuedMessageDelivery(persistedMessage, deliveryRevision);
       if (outcome === "failed") {
         return { outcome: "failed" };
@@ -1198,10 +1204,6 @@ export function useThreadOutboxDrain(): void {
       }
 
       acknowledgedMessageRevisionsRef.current.delete(persistedMessage.messageId);
-      acknowledgedPreparedAttachmentsRef.current.delete(persistedMessage.messageId);
-      await prepared.releaseUploads().catch((error) => {
-        console.warn("[thread-outbox] could not delete consumed pending uploads", error);
-      });
       return { outcome: "delivered", context: CREATION_DELIVERY_CONTEXT };
     },
     [makeDeliveryHelpers, restoreQueuedMessage, startTurn],
@@ -1225,11 +1227,6 @@ export function useThreadOutboxDrain(): void {
         continue;
       }
       acknowledgedMessageRevisionsRef.current.delete(messageId);
-      const prepared = acknowledgedPreparedAttachmentsRef.current.get(messageId);
-      acknowledgedPreparedAttachmentsRef.current.delete(messageId);
-      void prepared?.releaseUploads().catch((error) => {
-        console.warn("[thread-outbox] could not delete consumed pending uploads", error);
-      });
     }
 
     for (const [threadKey, queuedMessages] of Object.entries(queuedMessagesByThreadKey)) {
@@ -1263,13 +1260,6 @@ export function useThreadOutboxDrain(): void {
               clearTimeout(pendingTimer);
               retryTimersRef.current.delete(acknowledgedMessage.messageId);
             }
-            const prepared = acknowledgedPreparedAttachmentsRef.current.get(
-              acknowledgedMessage.messageId,
-            );
-            acknowledgedPreparedAttachmentsRef.current.delete(acknowledgedMessage.messageId);
-            await prepared?.releaseUploads().catch((error) => {
-              console.warn("[thread-outbox] could not delete consumed pending uploads", error);
-            });
           })
           .finally(() => finishDispatchingQueuedMessage(acknowledgedMessage.messageId));
         return;

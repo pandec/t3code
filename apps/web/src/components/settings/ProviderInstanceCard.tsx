@@ -26,8 +26,11 @@ import {
   type ServerProvider,
   type ServerProviderModel,
 } from "@t3tools/contracts";
-import { parseCustomModelEntry } from "@t3tools/shared/model";
-
+import {
+  type CustomModelDefinition,
+  readCustomModelEntries,
+  toCustomModelSetting,
+} from "@t3tools/shared/model";
 import { cn } from "../../lib/utils";
 import { useCopyToClipboard } from "../../hooks/useCopyToClipboard";
 import { normalizeProviderAccentColor } from "../../providerInstances";
@@ -100,16 +103,13 @@ function providerEnvironmentsEqual(
 }
 
 /**
- * Read a string[] at `key` from the opaque config blob, filtering out
- * non-string entries. Used for `customModels`, which is always typed as
- * `string[]` by the concrete driver schemas but arrives here as
- * `Schema.Unknown`.
+ * Read `customModels` from the opaque config blob. The concrete driver
+ * schemas type it as `CustomModelSetting[]`, but it arrives here as
+ * `Schema.Unknown`, so the shared reader does the shape checking.
  */
-function readConfigStringArray(config: unknown, key: string): ReadonlyArray<string> {
+function readConfigCustomModels(config: unknown): ReadonlyArray<CustomModelDefinition> {
   if (config === null || typeof config !== "object") return [];
-  const value = (config as Record<string, unknown>)[key];
-  if (!Array.isArray(value)) return [];
-  return value.filter((entry): entry is string => typeof entry === "string");
+  return readCustomModelEntries((config as Record<string, unknown>).customModels);
 }
 
 /**
@@ -137,27 +137,6 @@ function readConfigStringRecord(config: unknown, key: string): Readonly<Record<s
     }
   }
   return record;
-}
-
-/**
- * Read the custom-model entry list (`slug` or `slug=Label`) from the config
- * blob: entries are trimmed, invalid ones dropped, and duplicates (by
- * parsed slug) collapse to the first occurrence. Keying everything by the
- * parsed slug keeps Settings-side consumers (display rows, icon lookups,
- * pruning) consistent with the trimmed `customModelIcons` record and with
- * the normalized slugs the model picker resolves — a hand-edited
- * `" gpt-5.6-sol "` heals to its trimmed form on the next write instead of
- * splitting into two identities.
- */
-function readConfigCustomModels(config: unknown): ReadonlyArray<string> {
-  const entriesBySlug = new Map<string, string>();
-  for (const rawEntry of readConfigStringArray(config, "customModels")) {
-    const parsed = parseCustomModelEntry(rawEntry);
-    if (parsed !== null && !entriesBySlug.has(parsed.slug)) {
-      entriesBySlug.set(parsed.slug, rawEntry.trim());
-    }
-  }
-  return [...entriesBySlug.values()];
 }
 
 /**
@@ -239,9 +218,14 @@ function nextConfigBlobWithValue(
   return base;
 }
 
+/**
+ * Custom rows come from current settings so name/descriptor edits show
+ * instantly; a bare entry falls back to the live row's driver-default
+ * capabilities (the server fills those in on its next probe).
+ */
 export function deriveProviderModelsForDisplay(input: {
   readonly liveModels: ReadonlyArray<ServerProviderModel> | undefined;
-  readonly customModels: ReadonlyArray<string>;
+  readonly customModels: ReadonlyArray<CustomModelDefinition>;
 }): ReadonlyArray<ServerProviderModel> {
   const liveCustomModelsBySlug = new Map(
     Arr.filterMap(input.liveModels ?? [], (model) =>
@@ -249,22 +233,14 @@ export function deriveProviderModelsForDisplay(input: {
     ),
   );
   const serverModels = input.liveModels?.filter((model) => !model.isCustom) ?? [];
-  const seen = new Set<string>();
-  const customModels = Arr.filterMap(input.customModels, (entry) => {
-    const parsed = parseCustomModelEntry(entry);
-    if (!parsed || seen.has(parsed.slug)) {
-      return Result.failVoid;
-    }
-    seen.add(parsed.slug);
-    return Result.succeed(
-      liveCustomModelsBySlug.get(parsed.slug) ?? {
-        slug: parsed.slug,
-        name: parsed.name,
-        isCustom: true,
-        capabilities: null,
-      },
-    );
-  });
+  const customModels = input.customModels.map((entry) => ({
+    slug: entry.slug,
+    name: entry.name,
+    isCustom: true,
+    capabilities:
+      entry.capabilities ?? liveCustomModelsBySlug.get(entry.slug)?.capabilities ?? null,
+  }));
+
   return [...serverModels, ...customModels];
 }
 
@@ -798,11 +774,12 @@ export function ProviderInstanceCard({
   }
 
   const customModels =
-    instance.driver === "antigravity" ? [] : readConfigCustomModels(instance.config);
+    instance.driver === "antigravity" ? [] : readConfigCustomModels(baseConfig());
   const customModelIcons =
     instance.driver === "antigravity"
       ? EMPTY_STRING_RECORD
-      : readConfigStringRecord(instance.config, "customModelIcons");
+      : readConfigStringRecord(baseConfig(), "customModelIcons");
+
   // Server-returned models may lag behind settings writes. Treat probe
   // models as the source for built-ins only; custom rows come directly
   // from the current instance config so add/remove reflects immediately.
@@ -865,37 +842,36 @@ export function ProviderInstanceCard({
     commitConfig(next);
   };
 
-  const addCustomModel = (entry: string) => {
+  const updateCustomModels = (next: ReadonlyArray<CustomModelDefinition>) => {
     const base = baseConfig();
-    const entries = readConfigCustomModels(base);
-    const slug = parseCustomModelEntry(entry)?.slug;
-    if (slug === undefined) return;
-    // Authoritative dedupe by parsed slug: the section validates against
-    // its rendered list, which may lag behind an in-flight add of the same
-    // slug (possibly under a different label).
-    if (entries.some((existing) => parseCustomModelEntry(existing)?.slug === slug)) return;
-    commitConfig(nextConfigBlobWithValue(base, "customModels", [...entries, entry.trim()]));
-  };
-
-  const removeCustomModel = (slug: string) => {
-    const base = baseConfig();
-    const entries = readConfigCustomModels(base).filter(
-      (entry) => parseCustomModelEntry(entry)?.slug !== slug,
+    // `onChange` describes one edit relative to this render. Replay that
+    // delta onto the latest pending list so a second add/edit/remove cannot
+    // overwrite an earlier write that the server has not echoed yet.
+    const nextSlugs = new Set(next.map((entry) => entry.slug));
+    const removedSlugs = new Set(
+      customModels.filter((entry) => !nextSlugs.has(entry.slug)).map((entry) => entry.slug),
     );
-    const nextConfig = nextConfigBlobWithValue(base, "customModels", [...entries]);
-    // Prune icon overrides for removed slugs in the same write — a separate
-    // icons write here would start from the same base and lose the
-    // model-list change. Icons are keyed by the parsed slug, not the raw
-    // labeled entry.
-    const remainingSlugs = new Set(
-      Arr.filterMap(entries, (entry) => {
-        const parsed = parseCustomModelEntry(entry);
-        return parsed !== null ? Result.succeed(parsed.slug) : Result.failVoid;
-      }),
+    let merged = readConfigCustomModels(base).filter((entry) => !removedSlugs.has(entry.slug));
+    for (const nextEntry of next) {
+      const renderedEntry = customModels.find((entry) => entry.slug === nextEntry.slug);
+      const currentIndex = merged.findIndex((entry) => entry.slug === nextEntry.slug);
+      if (renderedEntry === undefined) {
+        if (currentIndex === -1) merged = [...merged, nextEntry];
+      } else if (!configsEqual(renderedEntry, nextEntry) && currentIndex !== -1) {
+        merged = merged.map((entry, index) => (index === currentIndex ? nextEntry : entry));
+      }
+    }
+    const nextConfig = nextConfigBlobWithValue(
+      base,
+      "customModels",
+      merged.map(toCustomModelSetting),
     );
+    // Model removal and icon pruning belong to one config write so a stale
+    // icon map cannot resurrect an override for a deleted slug.
+    const remainingSlugs = new Set(merged.map((entry) => entry.slug));
     const keptIcons = Object.fromEntries(
-      Object.entries(readConfigStringRecord(base, "customModelIcons")).filter(([iconSlug]) =>
-        remainingSlugs.has(iconSlug),
+      Object.entries(readConfigStringRecord(base, "customModelIcons")).filter(([slug]) =>
+        remainingSlugs.has(slug),
       ),
     );
     if (Object.keys(keptIcons).length > 0) {
@@ -1342,8 +1318,7 @@ export function ProviderInstanceCard({
               hiddenModels={hiddenModels}
               favoriteModels={favoriteModels}
               modelOrder={modelOrder}
-              onAddCustomModel={addCustomModel}
-              onRemoveCustomModel={removeCustomModel}
+              onChange={updateCustomModels}
               onCustomModelIconChange={updateCustomModelIcon}
               onHiddenModelsChange={onHiddenModelsChange}
               onFavoriteModelsChange={onFavoriteModelsChange}

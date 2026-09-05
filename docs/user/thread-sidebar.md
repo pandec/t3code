@@ -1,164 +1,132 @@
-# Organizing threads
+# Working with threads
 
-Pin a thread from its context menu, or from the pin button that appears when you hover its card on
-web and desktop, to keep it in the pinned section above your active work. The same button, filled
-while the thread is pinned, unpins it again. `mod+shift+p` pins or unpins the thread you have
-open. Pinned threads are shown independently of their project, including when you connect to more
-than one environment.
+Use a new thread for a separate task. Choose **New worktree** when its code changes need a separate
+branch and working directory.
 
-To require confirmation before unpinning, enable **Settings → General → Unpin confirmation**. The
-confirmation applies to the sidebar controls, thread menus, and the `mod+shift+p` shortcut.
+## Start a thread
 
-The pinned section folds behind its **Pinned** header like the other sections, with a count while
-it is folded. It starts unfolded, and folding it is remembered per device. The thread you have
-open keeps its row even while the section is folded, and while the Attention filter is on or you
-are searching, the fold steps aside entirely — both have already narrowed the list to what you
-asked to see, and a pinned match should never sit behind a fold.
+On web and desktop, a new thread keeps the current project and carries your model and mode
+selections, unless the destination project has its own model default. Its branch and workspace mode
+come from your configured defaults. To continue in an existing worktree, use **New thread in this
+worktree** from the branch toolbar.
 
-Pinned threads still move to **Settled** when they become inactive or their pull request closes or
-merges. Settling and pinning are mutually exclusive, so un-settling returns the thread to the active
-list rather than restoring its old pinned position.
+When you change a new thread's project, T3 Code stays in the current environment if that project
+exists there. Otherwise it selects an environment that has it.
 
-Each server stores its own copy of the automatic settlement settings and checks them even when no
-web, desktop, or mobile client is connected. **Settings → Extras → Sidebar → Auto-settle threads**
-is the master switch. **Settings → General** controls settlement after inactivity and pull request
-merges. Turning the master switch off keeps manual settlement available.
+### Start in the background
 
-**Settled** lists threads by when their work finished, newest first. A thread you settle yourself
-sorts by the moment you settled it. A thread that settled on its own sorts by its last message or
-turn, not by when the server noticed it was inactive.
+In a desktop browser or the desktop app, press `Cmd+Enter` on macOS or `Ctrl+Enter` on Windows and
+Linux to start a new thread and immediately open another draft. The next draft keeps the workspace
+mode and base branch you selected. With **New worktree**, each background submission creates its own
+worktree.
 
-Change these rules in **Settings > General**. The change is written to every connected environment
-whose server supports shared settings. An environment that is offline or needs a server update
-keeps its old value and does not appear in mismatch warnings. When a connected environment whose
-server supports shared settings holds a different value, **Settings > General** shows a warning
-that names it. Choose **Apply to all** to write your current values to the environments named in
-the warning. The same applies to the new-thread workspace mode and the source control writing
-style.
+Rows for background work still show **Working** or **Monitoring**, but recede when they are not
+selected. The colored status remains visible while the sidebar gives more prominence to work that
+needs your attention.
 
-Settings saved by older clients on one device no longer control this behavior.
+## Pin and reorder threads
 
-By default, the server settles threads after three days without activity and when their pull request
-merges. An eligible idle thread also settles when its pull request closes. An open pull request does not block
-inactivity settlement. Active work, pending input, and live background work keep the thread active.
-A closed or merged pull request settles a thread only when its timestamp is not older than the user's
-latest activity. If that timestamp is unavailable, the inactivity rule still applies. Changing the
-settings affects future settlement and does not reopen a settled thread.
+Pin a thread from its menu or use the pin button that appears when you hover its row on web and
+desktop. The filled button unpins it. `Cmd/Ctrl+Shift+P` toggles the open thread. Drag pinned threads
+to reorder them on web and desktop, or use **Move up** and **Move down** on mobile. The order syncs
+across devices.
 
-When you un-settle a thread, it returns to the top of the active list. Its conversation and timestamps
-do not change, and other threads keep their positions.
+The **Pinned** section is collapsible and shows its thread count while folded. T3 Code remembers the
+fold state on each device. Search and the Attention filter show matching pinned threads even when
+the section was folded.
 
-A thread whose composer holds unsent text or attachments shows an amber tint and a pen icon in the
-sidebar, the same marks a new-thread draft uses. On web and desktop, hover the row and choose the
-**X** to discard that draft without opening the thread.
+Pinning does not prevent automatic settlement. Settling a thread removes its pin.
 
-Right-click a pull request link in a thread and choose **Link to thread** to show that pull request
-in the sidebar. The thread settles when the linked pull request merges if **Auto-settle merged
-threads** is enabled. Right-click the same link and choose **Unlink from thread** to remove it.
+## Snooze or promote active work
 
-## Snoozing and moving active threads
+Choose **Snooze** to hide a thread until a preset time. **Until I wake it** snoozes without a timer
+on supported environments. A snoozed thread returns when its timer expires, you wake it, or it needs
+attention.
 
-Choose **Snooze** from a thread's menu to hide it until a preset time. On environments that support
-indefinite snooze, **Until I wake it** hides the thread without a timer. Snoozed threads stay in their
-own section. They return when the timer expires, when you wake them manually, or when the thread
-raises its hand for attention.
+Choose **Move to top** for an active, unpinned thread. This changes its sidebar position without
+changing conversation timestamps. The action is unavailable for pinned, snoozed, or settled
+threads and on environments that need a server update.
 
-Choose **Move to top** for an active, unpinned thread to place it above the other active work. This
-changes its sidebar position without changing its conversation timestamps. The action is hidden for
-pinned, snoozed, or settled threads and on environments that need a server update.
+## Settle finished work
 
-On web and desktop, drag a pinned thread to change its position. On mobile, open the thread's menu
-and choose **Move up** or **Move down**. The order is stored by the server and appears on your
-other connected devices.
+Choose **Settle thread** from its menu to move finished work out of the active list without deleting
+the conversation. **Un-settle thread** restores it to the top of active work and prevents automatic
+settlement until new activity resumes the usual rules.
 
-If reordering is unavailable for one environment, update the T3 Code server running in that
-environment. Older servers can still pin and unpin threads, but do not understand synced ordering;
-their pinned threads keep the default newest-first order below the ones you have arranged.
+**Settings → Extras → Sidebar → Auto-settle threads** is the master switch. Turn it off to stop
+automatic settlement while keeping manual settlement available. **Settings → General** controls
+settlement after inactivity and pull request merges.
 
-## Folding away older threads
+By default, environments settle inactive threads after three days and settle threads whose pull
+request merged. A closed pull request can also settle an idle thread. Work in progress, pending
+questions or approvals, and live background work prevent automatic settlement. An open pull request
+does not prevent inactivity settlement, but an old closed or merged pull request does not settle
+work you resumed after it closed.
 
-Some threads are worth keeping around without being worth looking at today. Turn on **Older
-section** — Settings → Extras → Sidebar on web and desktop, Settings → General on mobile — and the
-thread list files anything that has gone quiet into a foldable **Older** section below your live
-threads, with a count on the header while it is folded.
+These rules continue to run when your apps are closed. Changes apply to connected environments that
+support shared settings. Offline environments and older servers keep their previous values. If
+connected environments disagree, **Apply to all** copies your current settings to those named in
+the warning. Changing a rule does not reopen already settled threads.
 
-Quiet means no messages and no agent turns for longer than the window you set — seven days by
-default, anywhere from one day to a year. Nothing is settled, snoozed, or archived on your behalf:
-an Older thread is an ordinary active thread that happens to be grouped, and it returns to the list
-the moment you message it or un-settle it (or move it to the top, on servers that support that).
-Pinned, snoozed, and settled threads stay in their own sections and are never filed here.
+## Link a pull request
 
-Live and waiting work is never folded away, however long it has been sitting there: a thread with a
-running session, background work still going after its turn, an approval or input request, or a
-plan waiting on your decision stays in the list. So does a thread that has just come back from a
-snooze — waking it puts it in front of you, which is the whole point. While the Attention filter is
-on, or while you are searching, the section steps aside entirely: both have already narrowed the
-list to what you asked to see, and a search match should never sit behind a fold.
+On web and desktop, right-click a pull request link in a thread and choose **Link to thread**. Use
+**Unlink from thread** on the same link to remove it. The linked pull request participates in
+automatic settlement.
 
-The section starts folded; a second setting starts it unfolded instead. Whichever you choose, once
-you fold or unfold the section yourself that choice wins, remembered per device on every client.
-The thread you have open keeps its row even while the section is folded, so it never disappears
-out from under you.
+## Fold older threads
 
-The window and the choices around it are set per device: mobile keeps its own copy of these
-settings rather than following the ones on your desktop.
+Enable **Older section** under **Settings → Extras → Sidebar** on web and desktop, or
+**Settings → General** on mobile. It groups quiet active threads below current work without
+settling, snoozing, or archiving them.
 
-## Filtering by environment
+The default threshold is seven days and can be set from one day to one year. Pinned, snoozed,
+settled, running, monitoring, and attention-needed threads stay in their normal sections. Activity
+moves an older thread back into the active list. You can choose whether the section starts folded,
+and T3 Code remembers later fold changes on each device.
 
-When you are connected to more than one environment, a button beside the search box narrows the
-thread list to the environments you pick. Choose any combination, or use **This environment only**
-and **Remote environments only** for the two common cases. **All environments** clears the filter.
-The button appears once you have more than one environment to choose between, and stays put while
-a filter is active so you can always clear one.
+## Filter threads
 
-Each row in the menu shows a status dot and how many threads that environment currently
-contributes, and the machine you are using is marked as this device. Your selection is remembered
-on this device until you change it.
+Use the project menu beside search to show selected projects or hide projects from the list. The
+project filter stays active while you navigate between threads and other app views. Use **Clear
+project filter** to return to all projects.
 
-Threads and unsent drafts follow your selection. The recently archived section hides itself while
-a filter is active — as it already does when you filter by project — and comes back when you
-return to all environments.
+When more than one environment is connected, use the environment filter beside search to select any
+combination. Shortcuts select this environment only, remote environments only, or all environments.
+The selection is remembered on the device until you change it. Thread rows and unsent drafts follow
+the filter.
 
-A filtered environment that stops responding keeps its place in the filter rather than quietly
-widening your view: the list says T3 Code is not connected to it instead of reporting that it has
-no threads, and its thread count is hidden while T3 Code cannot see it. An environment you remove
-from your connections is reported as unavailable instead, so a temporary outage and a deliberate
-removal never look alike.
+A selected environment that stops responding remains in the filter and is marked disconnected. An
+environment removed from Connections is marked unavailable. T3 Code does not silently widen the
+filter or show either state as an empty environment.
 
-## Panel motion
+## Find and reference work
 
-The main sidebar, right panel, and terminal drawer open and close immediately by default. Under
-**Settings → Appearance → Motion**, move the **Panel animations** slider above 0 ms to add motion.
-The duration can be set up to 400 ms. Clicking the preview replays all three panel transitions; at
-0 ms, it snaps between the same open and closed states.
+On web and desktop, open the command palette with `Cmd/Ctrl+K` to search threads across connected
+environments. Message search starts after two characters and includes your messages and final agent
+responses.
 
-## Environment icons
+Use **Settings → Keybindings** to find or customize shortcuts for searching files and copying a
+thread reference. A copied reference uses the thread's pull request link when available, otherwise
+its thread ID. See [keybindings](./keybindings.md) for custom configuration.
 
-When you are connected to more than one environment, every thread that lives somewhere other than
-the machine you are on wears a small icon for that machine at the end of its row: a server, a cloud
-VM, a desktop, a laptop, a Mac mini, or a Mac Studio. In the hosted web app and the mobile app,
-where every environment is remote, each row wears its machine so you can tell them apart at a
-glance. The same icon appears wherever an environment is named: the thread tooltip, the command
-palette, the "Run on" picker, the pull request server filter, the provider settings device tabs,
-and the environment lists under **Settings → Connections**. On mobile it appears in the thread
-lists, the archive, the new-task environment picker, and the Environments and storage settings.
+## Inspect agent work
 
-Servers pick the icon themselves from the hardware they run on. A Mac reports its model, a Linux
-machine reports its chassis type and whether it is a virtual machine, and anything without a usable
-signal shows a generic server. To override it, open **Settings → Connections** and choose an icon
-for that environment; **Automatic** goes back to what the server detected. The choice is stored on
-that server, so every device that connects to it sees the same icon.
+On web and desktop, use **Agents** to follow work delegated to subagents.
 
-## Environment artwork
+Expand a tool call in the conversation to see its full command and output. Summaries shorten shell
+wrappers and can still describe the latest call after it finishes. The call's own result shows its
+status.
 
-Development-build and Nightly environments can identify themselves with artwork at the top of the
-sidebar and in the send button. Packaged Dev builds remain protected from development artwork.
-Choose **Artwork**, **Version pill**, or **None** in Settings under environment identification.
-Artwork is recolored to match each built-in theme; custom themes use the **Version pill** fallback
-because their colors are not controlled by T3 Code.
+## Identify environments
 
-## Regenerating a thread title
+Development and Nightly environments can show artwork at the top of the sidebar and in the send
+button. Choose **Artwork**, **Version pill**, or **None** under environment identification in
+Settings. Packaged Dev builds are protected from development artwork. Custom themes use the version
+pill because T3 Code cannot recolor their palette safely.
 
-To generate a fresh title from the conversation, open a thread's context menu and choose
-**Regenerate title**. While T3 Code is generating it, the action reads **Regenerating…** and cannot
-be selected again. The option is hidden when the connected environment needs a server update.
+## Regenerate a thread title
+
+Open a thread's menu and choose **Regenerate title** to generate a new title from its conversation.
+The action reads **Regenerating…** while it runs and cannot be selected again. It is hidden when the
+connected environment needs a server update.

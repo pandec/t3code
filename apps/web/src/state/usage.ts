@@ -7,35 +7,46 @@
  * @module state/usage
  */
 import { useAtomValue } from "@effect/atom-react";
+import { runAtomCommand } from "@t3tools/client-runtime/state/runtime";
 import {
   USAGE_CONTRACT_VERSION,
   type EnvironmentId,
+  type UsageSummary,
   type UsageSummaryInput,
 } from "@t3tools/contracts";
-import { runAtomCommand } from "@t3tools/client-runtime/state/runtime";
-import * as Option from "effect/Option";
-import { AsyncResult, Atom } from "effect/unstable/reactivity";
-import { useCallback, useMemo } from "react";
-
 import {
   mergeUsage,
   type EnvironmentUsage,
   type MergedUsage,
   type UsageAttribution,
 } from "@t3tools/shared/usageMerge";
+import * as Option from "effect/Option";
+import { AsyncResult, Atom } from "effect/unstable/reactivity";
+import { useCallback, useMemo } from "react";
+
+import { appAtomRegistry } from "../rpc/atomRegistry";
 import {
   classifyEnvironmentUsage,
   usageProgress,
   type EnvironmentUsageState,
 } from "../usage/usageCoverage";
-import { appAtomRegistry } from "../rpc/atomRegistry";
 import { environmentPresentations } from "./presentation";
 import { serverEnvironment } from "./server";
 
 export interface EnvironmentUsageStatus {
   readonly environmentId: EnvironmentId;
   readonly label: string;
-  readonly state: EnvironmentUsageState;
+  readonly isPending: boolean;
+  readonly error: string | null;
+  readonly summary: UsageSummary | null;
+  /** Rich coverage classification layered over upstream's progressive status fields. */
+  readonly state?: EnvironmentUsageState;
+}
+
+function environmentUsageState(environment: EnvironmentUsageStatus): EnvironmentUsageState {
+  if (environment.state !== undefined) return environment.state;
+  if (environment.summary !== null) return { kind: "reported", summary: environment.summary };
+  return environment.error === null ? { kind: "reporting" } : { kind: "failed" };
 }
 
 /**
@@ -58,14 +69,19 @@ const usageByWindowAtom = Atom.family((windowKey: string) =>
     const statuses: EnvironmentUsageStatus[] = [];
     for (const [environmentId, presentation] of presentations) {
       const result = get(serverEnvironment.usageSummary({ environmentId, input }));
+      const summary = Option.getOrNull(AsyncResult.value(result));
+      const state = classifyEnvironmentUsage({
+        phase: presentation.connection.phase,
+        failed: result._tag === "Failure",
+        summary,
+      });
       statuses.push({
         environmentId,
         label: presentation.entry.target.label,
-        state: classifyEnvironmentUsage({
-          phase: presentation.connection.phase,
-          failed: result._tag === "Failure",
-          summary: Option.getOrNull(AsyncResult.value(result)),
-        }),
+        isPending: result.waiting,
+        error: state.kind === "failed" ? "This environment could not report usage." : null,
+        summary,
+        state,
       });
     }
     return statuses;
@@ -75,19 +91,24 @@ const usageByWindowAtom = Atom.family((windowKey: string) =>
 export interface UsageView {
   readonly merged: MergedUsage;
   readonly environments: readonly EnvironmentUsageStatus[];
-  /** True until at least one environment has answered. */
+  readonly selectedEnvironments: readonly EnvironmentUsageStatus[];
+  /** True until at least one selected environment has answered. */
   readonly isPending: boolean;
   /**
-   * True while environments that can still answer are answering. Failed and
-   * not-connected environments are reported through their own coverage rows:
-   * totals will not improve by waiting on them, so they must not read as
-   * "still reporting".
+   * True while selected environments that can still answer are answering.
+   * Failed and not-connected environments are reported through their own
+   * coverage rows: totals will not improve by waiting on them, so they must not
+   * read as "still reporting".
    */
   readonly isPartial: boolean;
   readonly refresh: () => void;
 }
 
-export function useUsage(input: UsageSummaryInput, attribution?: UsageAttribution): UsageView {
+export function useUsage(
+  input: UsageSummaryInput,
+  selectedEnvironmentIds: ReadonlySet<EnvironmentId> | null = null,
+  attribution: UsageAttribution = "pool",
+): UsageView {
   const windowKey = useMemo(
     () =>
       JSON.stringify({
@@ -109,17 +130,26 @@ export function useUsage(input: UsageSummaryInput, attribution?: UsageAttributio
   );
   const atom = usageByWindowAtom(windowKey);
   const environments = useAtomValue(atom);
+  const selectedEnvironments = useMemo(
+    () =>
+      selectedEnvironmentIds === null
+        ? environments
+        : environments.filter((environment) =>
+            selectedEnvironmentIds.has(environment.environmentId),
+          ),
+    [environments, selectedEnvironmentIds],
+  );
 
   // Refreshing only the derived atom would re-read the per-environment SWR
-  // queries within their stale window and change nothing. Refresh each
-  // environment's query so the button always rescans.
+  // queries within their stale window and change nothing. Refresh each selected
+  // environment's query so the button always rescans exactly the visible scope.
   //
   // Each environment refetches model pricing first, so a model released since
   // its last daily fetch gets priced by the rescan. The rescan runs whether or
   // not the refetch succeeds: an offline environment still recounts tokens.
   const refresh = useCallback(() => {
     const input = JSON.parse(windowKey) as UsageSummaryInput;
-    for (const environment of environments) {
+    for (const environment of selectedEnvironments) {
       const { environmentId } = environment;
       const query = serverEnvironment.usageSummary({ environmentId, input });
       void runAtomCommand(
@@ -129,28 +159,30 @@ export function useUsage(input: UsageSummaryInput, attribution?: UsageAttributio
         { reportFailure: false },
       ).finally(() => appAtomRegistry.refresh(query));
     }
-  }, [environments, windowKey]);
+  }, [selectedEnvironments, windowKey]);
 
   const merged = useMemo(() => {
-    const answered: EnvironmentUsage[] = environments.flatMap((environment) =>
-      environment.state.kind === "reported"
+    const answered: EnvironmentUsage[] = selectedEnvironments.flatMap((environment) => {
+      const state = environmentUsageState(environment);
+      return state.kind === "reported"
         ? [
             {
               environmentId: environment.environmentId,
               label: environment.label,
-              summary: environment.state.summary,
+              summary: state.summary,
             },
           ]
-        : [],
-    );
-    return mergeUsage(answered, USAGE_CONTRACT_VERSION, { attribution: attribution ?? "pool" });
-  }, [environments, attribution]);
+        : [];
+    });
+    return mergeUsage(answered, USAGE_CONTRACT_VERSION, { attribution });
+  }, [selectedEnvironments, attribution]);
 
-  const progress = usageProgress(environments.map((environment) => environment.state));
+  const progress = usageProgress(selectedEnvironments.map(environmentUsageState));
 
   return {
     merged,
     environments,
+    selectedEnvironments,
     isPending: progress.isPending,
     isPartial: progress.isPartial,
     refresh,

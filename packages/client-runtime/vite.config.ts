@@ -8,5 +8,6 @@ export default defineConfig({
     ...sharedTestDefaults,
     environment: "node",
     include: ["src/**/*.test.ts"],
+    setupFiles: ["../shared/src/testing/longTempDir.ts"],
   },
 });

@@ -58,10 +58,13 @@ function makeInstance(
     displayName: undefined,
     enabled: true,
     snapshot: {
-      maintenanceCapabilities: makeManualOnlyProviderMaintenanceCapabilities({
-        provider: ProviderDriverKind.make("codex"),
-        packageName: "@openai/codex",
-      }),
+      resolveMaintenance: () =>
+        Effect.succeed(
+          makeManualOnlyProviderMaintenanceCapabilities({
+            provider: ProviderDriverKind.make("codex"),
+            packageName: "@openai/codex",
+          }),
+        ),
       getSnapshot: Effect.succeed(snapshot),
       refresh: Effect.succeed(snapshot),
       streamChanges: Stream.empty,

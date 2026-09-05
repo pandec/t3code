@@ -75,10 +75,9 @@ export const findActiveProjectTarget = Effect.fn("findActiveProjectTarget")(func
   );
   const normalizedWorkspaceRoot =
     normalizedWorkspaceRootResult._tag === "Success" ? normalizedWorkspaceRootResult.success : null;
-  const resolved =
-    normalizedWorkspaceRoot === null
-      ? undefined
-      : activeProjects.find((project) => project.workspaceRoot === normalizedWorkspaceRoot);
+  const resolved = activeProjects.find(
+    (project) => project.workspaceRoot === (normalizedWorkspaceRoot ?? trimmedIdentifier),
+  );
   if (!resolved) {
     return yield* new ProjectNotFoundError({
       operation: "resolveProjectTarget",

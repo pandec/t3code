@@ -54,6 +54,14 @@ Project commands target the T3 data directory selected by `--base-dir` or `T3COD
 running server. If that server is unavailable, the command fails without opening the database.
 `project list --json` returns each project's `defaultThreadEnvMode` and `autoPull` settings.
 
+A project id or its exact stored workspace path remains valid for renaming, removal, and action
+management after the folder is moved or deleted. Commands that need the workspace cannot continue.
+For example, starting provider work fails with: "This thread's workspace folder no longer exists or
+is not a directory: <path>. Restore the folder at this path before retrying."
+
+Removing a project that still has child threads requires `--force`, even when its workspace folder is
+missing.
+
 ### Project actions
 
 Project actions can also be managed by project id or exact workspace-root path:
@@ -168,10 +176,11 @@ The list result is `{ "threadId", "requests" }`. Each request has `id`, `respons
 ids for a multi-select question, or a custom string when the question allows one.
 
 `thread input respond` requires the complete answer map. The server rejects missing answers, stale
-request ids, and duplicate replies. A successful JSON result has `threadId`, `requestId`,
-`commandId`, `sequence`, and `action: "response-requested"`. The sequence is the mutation
-acknowledgement and can be passed to `thread wait --after-sequence` when the response starts or
-steers a turn.
+request ids, and duplicate replies. A pending native input request may disappear when its turn ends.
+If that happens, a later `thread input respond` call is stale and the server rejects it. A successful
+JSON result has `threadId`, `requestId`, `commandId`, and `sequence`. Its `action` is
+`"response-requested"`. The sequence is the mutation acknowledgement and can be passed to `thread
+wait --after-sequence` when the response starts or steers a turn.
 
 Message-mode questions do not pause the active turn. Answering one resolves the request and sends the
 answers as a user message in one operation. A plain `thread send` only sends or steers a message and

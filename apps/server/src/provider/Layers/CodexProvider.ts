@@ -15,6 +15,7 @@ import * as CodexErrors from "effect-codex-app-server/errors";
 
 import type {
   CodexSettings,
+  CustomModelSetting,
   ServerProvider,
   ServerProviderState,
   ModelCapabilities,
@@ -24,7 +25,7 @@ import type {
 } from "@t3tools/contracts";
 import { PREFERRED_DEFAULT_CODEX_MODELS, ServerSettingsError } from "@t3tools/contracts";
 
-import { createModelCapabilities, parseCustomModelEntry } from "@t3tools/shared/model";
+import { createModelCapabilities, readCustomModelEntries } from "@t3tools/shared/model";
 import { resolveSpawnCommand } from "@t3tools/shared/shell";
 import { codexAppServerArgs, resolveCodexLaunchArgs } from "./codexLaunchArgs.ts";
 import {
@@ -244,9 +245,14 @@ export function applyPreferredCodexDefaultModel(
   });
 }
 
+/**
+ * Codex has no static default capability set, so a bare custom slug borrows
+ * the first built-in's descriptors; an entry with its own capabilities keeps
+ * them.
+ */
 function appendCustomCodexModels(
   models: ReadonlyArray<ServerProviderModel>,
-  customModels: ReadonlyArray<string>,
+  customModels: ReadonlyArray<CustomModelSetting>,
 ): ReadonlyArray<ServerProviderModel> {
   if (customModels.length === 0) {
     return models;
@@ -255,17 +261,16 @@ function appendCustomCodexModels(
   const seen = new Set(models.map((model) => model.slug));
   const fallbackCapabilities = models.find((model) => model.capabilities)?.capabilities ?? null;
   const customEntries: ServerProviderModel[] = [];
-  for (const rawModel of customModels) {
-    const parsed = parseCustomModelEntry(rawModel);
-    if (!parsed || seen.has(parsed.slug)) {
+  for (const entry of readCustomModelEntries(customModels)) {
+    if (seen.has(entry.slug)) {
       continue;
     }
-    seen.add(parsed.slug);
+    seen.add(entry.slug);
     customEntries.push({
-      slug: parsed.slug,
-      name: parsed.name,
+      slug: entry.slug,
+      name: entry.name,
       isCustom: true,
-      capabilities: fallbackCapabilities,
+      capabilities: entry.capabilities ?? fallbackCapabilities,
     });
   }
   return customEntries.length === 0 ? models : [...models, ...customEntries];
@@ -399,7 +404,7 @@ const probeCodexAppServerProvider = Effect.fn("probeCodexAppServerProvider")(fun
   readonly homePath?: string;
   readonly launchArgs?: string;
   readonly cwd: string;
-  readonly customModels?: ReadonlyArray<string>;
+  readonly customModels?: ReadonlyArray<CustomModelSetting>;
   readonly environment?: NodeJS.ProcessEnv;
 }) {
   const { client, initialize } = yield* withCodexAppServerClient(input);
@@ -470,24 +475,8 @@ export const probeCodexSkillsForCwd = Effect.fn("probeCodexSkillsForCwd")(functi
   return parseCodexSkillsListResponse(skillsResponse, input.cwd);
 });
 
-const emptyCodexModelsFromSettings = (codexSettings: CodexSettings): ServerProvider["models"] => {
-  const seen = new Set<string>();
-  const models: Array<ServerProvider["models"][number]> = [];
-  for (const model of codexSettings.customModels) {
-    const parsed = parseCustomModelEntry(model);
-    if (!parsed || seen.has(parsed.slug)) {
-      continue;
-    }
-    seen.add(parsed.slug);
-    models.push({
-      slug: parsed.slug,
-      name: parsed.name,
-      isCustom: true,
-      capabilities: null,
-    });
-  }
-  return models;
-};
+const emptyCodexModelsFromSettings = (codexSettings: CodexSettings): ServerProvider["models"] =>
+  appendCustomCodexModels([], codexSettings.customModels);
 
 const makePendingCodexProvider = (
   codexSettings: CodexSettings,
@@ -565,7 +554,7 @@ export const checkCodexProviderStatus = Effect.fn("checkCodexProviderStatus")(fu
     readonly homePath?: string;
     readonly launchArgs?: string;
     readonly cwd: string;
-    readonly customModels: ReadonlyArray<string>;
+    readonly customModels: ReadonlyArray<CustomModelSetting>;
     readonly environment?: NodeJS.ProcessEnv;
   }) => Effect.Effect<
     CodexAppServerProviderSnapshot,

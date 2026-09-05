@@ -1,7 +1,7 @@
 import {
+  EnvironmentId,
+  UsageDay,
   USAGE_CONTRACT_VERSION,
-  type EnvironmentId,
-  type UsageDay,
   type UsageSummary,
 } from "@t3tools/contracts";
 import { mergeUsage } from "@t3tools/shared/usageMerge";
@@ -14,6 +14,7 @@ const testState = vi.hoisted(() => ({
   useUsage: vi.fn(),
   metric: "cost" as "cost" | "tokens",
   breakdown: "time" as "model" | "time",
+  attribution: "pool" as "pool" | "source",
 }));
 
 vi.mock("react", async (importOriginal) => {
@@ -44,6 +45,9 @@ vi.mock("react", async (importOriginal) => {
 });
 
 vi.mock("../../env", () => ({ isElectron: false }));
+vi.mock("../../hooks/useLocalStorage", () => ({
+  useLocalStorage: () => [testState.attribution, vi.fn()],
+}));
 vi.mock("../../state/usage", () => ({ useUsage: testState.useUsage }));
 vi.mock("../ui/button", () => ({ Button: "button" }));
 vi.mock("../ui/scroll-area", () => ({ ScrollArea: "div" }));
@@ -64,6 +68,7 @@ vi.mock("../WorkspaceBreadcrumb", () => ({
 vi.mock("../WorkspacePageContainer", () => ({ WorkspacePageContainer: "main" }));
 vi.mock("../WorkspacePageHeader", () => ({ WorkspacePageHeader: "header" }));
 vi.mock("./UsageProviderChart", () => ({ UsageProviderChart: "div" }));
+vi.mock("./UsagePriceOverrides", () => ({ UsagePriceOverrides: () => null }));
 vi.mock("./usageProviders", async (importOriginal) => {
   const actual = await importOriginal<typeof import("./usageProviders")>();
   return {
@@ -92,9 +97,16 @@ const SUMMARY: UsageSummary = {
 function environment(
   environmentId: string,
   label: string,
-  state: EnvironmentUsageStatus["state"],
+  state: NonNullable<EnvironmentUsageStatus["state"]>,
 ): EnvironmentUsageStatus {
-  return { environmentId: environmentId as EnvironmentId, label, state };
+  return {
+    environmentId: environmentId as EnvironmentId,
+    label,
+    isPending: state.kind === "reporting",
+    error: state.kind === "failed" ? "Failed" : null,
+    summary: state.kind === "reported" ? state.summary : null,
+    state,
+  };
 }
 
 const providerTotals = (codex: number, claude: number) =>
@@ -130,9 +142,30 @@ const modelTotals = Object.freeze([
   },
 ]);
 
+const environments = [
+  {
+    environmentId: EnvironmentId.make("test-environment"),
+    label: "Test environment",
+    isPending: false,
+    error: null,
+    summary: {
+      contractVersion: USAGE_CONTRACT_VERSION,
+      readAt: "2026-08-11T12:37:00.000Z",
+      sinceDay: UsageDay.make("2026-08-10"),
+      untilDay: UsageDay.make("2026-08-11"),
+      timeZone: "UTC",
+      buckets: [],
+      sources: [],
+      pricing: { status: "fresh", source: "test", fetchedAt: null, knownModels: 1 },
+      scanDurationMs: 1,
+    },
+  },
+];
+
 beforeEach(() => {
   testState.metric = "cost";
   testState.breakdown = "time";
+  testState.attribution = "pool";
   testState.useUsage.mockReturnValue({
     merged: {
       ...mergeUsage([], USAGE_CONTRACT_VERSION),
@@ -154,7 +187,8 @@ beforeEach(() => {
         },
       ],
     },
-    environments: [],
+    environments,
+    selectedEnvironments: environments,
     isPending: false,
     isPartial: false,
     refresh: vi.fn(),
@@ -191,6 +225,16 @@ describe("UsageCoverageNotice", () => {
     expect(markup).toContain(
       "Counted once across environments sharing a transcript directory: Worktree: /Users/theo/.claude",
     );
+  });
+});
+
+describe("UsagePage attribution", () => {
+  it("passes the selected attribution through to usage merging", () => {
+    testState.attribution = "source";
+
+    renderToStaticMarkup(<UsagePage />);
+
+    expect(testState.useUsage).toHaveBeenLastCalledWith(expect.anything(), null, "source");
   });
 });
 

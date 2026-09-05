@@ -471,7 +471,7 @@ describe("EnvironmentProviderSettings routing", () => {
       editor,
       (element) =>
         Array.isArray(element.props.customModels) &&
-        typeof element.props.onAddCustomModel === "function",
+        typeof element.props.onCustomModelIconChange === "function",
     );
     expect(modelsSection?.props.models).toEqual([
       {
@@ -484,8 +484,7 @@ describe("EnvironmentProviderSettings routing", () => {
     expect(modelsSection?.props.customModelIcons).toMatchObject({
       "gpt-custom": "claudeAgent",
     });
-    expect(modelsSection?.props.onAddCustomModel).toBeTypeOf("function");
-    expect(modelsSection?.props.onRemoveCustomModel).toBeTypeOf("function");
+    expect(modelsSection?.props.onChange).toBeTypeOf("function");
     expect(modelsSection?.props.onCustomModelIconChange).toBeTypeOf("function");
     const usageSection = visitElements(
       editor,

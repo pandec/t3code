@@ -1,3 +1,7 @@
+// @effect-diagnostics nodeBuiltinImport:off - the home-expansion test compares against the real home directory.
+import * as NodeOS from "node:os";
+import * as NodePath from "node:path";
+
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import { expect, it } from "@effect/vitest";
 import {
@@ -251,6 +255,18 @@ it.layer(testLayer)("AntigravityDriver", (it) => {
       expect(h.launches).toEqual([]);
       expect(yield* h.fs.exists(h.profileDirectory)).toBe(false);
     }).pipe(Effect.scoped),
+  );
+
+  it.effect.skipIf(windowsHost)(
+    "expands a home-relative binary path before asking the installation for it",
+    () =>
+      Effect.gen(function* () {
+        const h = yield* makeHarness({ config: { binaryPath: "~/bin/antigravity" } });
+        yield* h.refresh();
+        expect(h.acquisitions.map((acquisition) => acquisition.binaryPath)).toEqual([
+          NodePath.join(NodeOS.homedir(), "bin/antigravity"),
+        ]);
+      }).pipe(Effect.scoped),
   );
 
   it.effect.skipIf(windowsHost)("refreshes models after slow process startup", () =>

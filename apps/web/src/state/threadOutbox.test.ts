@@ -138,7 +138,7 @@ describe("thread outbox enqueue durability", () => {
     createThreadOutboxManager({
       registry: appAtomRegistry,
       storage: {
-        load: () => Promise.resolve([]),
+        load: () => Promise.resolve({ messages: [], errors: [] }),
         write: () => Promise.reject(cause),
         remove: () => Promise.resolve(),
       },

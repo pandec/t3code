@@ -1,19 +1,31 @@
-import type { UsageProviderKind } from "@t3tools/contracts";
+import { useAtomValue } from "@effect/atom-react";
+import {
+  USAGE_CONTRACT_VERSION,
+  type EnvironmentId,
+  type UsageProviderKind,
+} from "@t3tools/contracts";
 import * as Schema from "effect/Schema";
-import { CheckIcon, RefreshCwIcon, XIcon } from "lucide-react";
+import {
+  CircleAlertIcon,
+  ChevronDownIcon,
+  CircleDashedIcon,
+  RefreshCwIcon,
+  SlidersHorizontalIcon,
+} from "lucide-react";
 import { useMemo, useState } from "react";
 
-import type {
-  DailyTotals,
-  HourlyTotals,
-  PartialUsageSource,
-  UsageAttribution,
+import {
+  isCompatibleUsageContractVersion,
+  type DailyTotals,
+  type HourlyTotals,
+  type PartialUsageSource,
+  type UsageAttribution,
 } from "@t3tools/shared/usageMerge";
 
 import { isElectron } from "../../env";
-import { cn } from "../../lib/utils";
 import { useLocalStorage } from "../../hooks/useLocalStorage";
-import { useEnvironments } from "../../state/environments";
+import { cn } from "../../lib/utils";
+import { environmentPresentations } from "../../state/presentation";
 import { serverEnvironment } from "../../state/server";
 import { useUsage, type EnvironmentUsageStatus } from "../../state/usage";
 import { useAtomCommand } from "../../state/use-atom-command";
@@ -28,9 +40,16 @@ import {
   formatTokens,
   formatUsd,
   makeWindow,
-  refreshWindow,
 } from "@t3tools/shared/usageFormat";
 import { Button } from "../ui/button";
+import {
+  Menu,
+  MenuCheckboxItem,
+  MenuItem,
+  MenuPopup,
+  MenuSeparator,
+  MenuTrigger,
+} from "../ui/menu";
 import { ScrollArea } from "../ui/scroll-area";
 import { Select, SelectItem, SelectPopup, SelectTrigger, SelectValue } from "../ui/select";
 import { SidebarInset } from "../ui/sidebar";
@@ -44,6 +63,7 @@ import {
 import { WorkspacePageContainer } from "../WorkspacePageContainer";
 import { WorkspacePageHeader } from "../WorkspacePageHeader";
 import { UsageLimitsSection } from "./UsageLimits";
+import { UsagePriceOverrides } from "./UsagePriceOverrides";
 import { UsageProviderChart, type UsageChartMetric } from "./UsageProviderChart";
 import { PROVIDER_ORDER, PROVIDER_PRESENTATION, providersWithUsage } from "./usageProviders";
 
@@ -65,13 +85,7 @@ const WINDOW_OPTIONS = [
   { days: 90, label: "90 days" },
 ] as const;
 
-const DEFAULT_WINDOW_DAYS = 30;
-
-/**
- * How provider rows group buckets: by the subscription pool the model spends
- * ("pool", so gateway-routed requests count against the vendor that billed
- * them) or by the app whose transcripts recorded them ("source").
- */
+/** Provider rows can follow either the billed subscription or the recording app. */
 const ATTRIBUTION_STORAGE_KEY = "t3code:usage:attribution";
 const ATTRIBUTION_SCHEMA = Schema.Literals(["pool", "source"]);
 const ATTRIBUTION_OPTIONS = [
@@ -80,12 +94,9 @@ const ATTRIBUTION_OPTIONS = [
 ] as const;
 
 export function UsagePage() {
-  // Keep the full request identity together so hourly and daily queries never
-  // reuse each other's cached state. Refresh recomputes the same resolution and
-  // only rescans in place when every bound is unchanged.
   const [windowSelection, setWindowSelection] = useState(() => ({
-    days: DEFAULT_WINDOW_DAYS,
-    window: makeWindow(DEFAULT_WINDOW_DAYS),
+    days: 30,
+    window: makeWindow(30),
   }));
   const [metric, setMetric] = useState<UsageMetric>("cost");
   const showingLimits = metric === "limits";
@@ -95,24 +106,19 @@ export function UsagePage() {
     "pool",
     ATTRIBUTION_SCHEMA,
   );
+  const [selectedEnvironmentIds, setSelectedEnvironmentIds] =
+    useState<ReadonlySet<EnvironmentId> | null>(null);
   const { days: windowDays, window } = windowSelection;
   const isPast24Hours = windowDays === 1;
-  const {
-    merged,
-    environments,
-    isPending,
-    isPartial,
-    refresh: rescan,
-  } = useUsage(window, attribution);
-  const { environments: availableEnvironments } = useEnvironments();
+  const { merged, environments, selectedEnvironments, isPending, isPartial, refresh } = useUsage(
+    window,
+    selectedEnvironmentIds,
+    attribution,
+  );
+  const presentations = useAtomValue(environmentPresentations.presentationsAtom);
   const refreshProviders = useAtomCommand(serverEnvironment.refreshProviders, {
     reportFailure: false,
   });
-
-  // Hold the content until every environment is terminal. Rendering merged
-  // totals while devices are still answering makes every number on the page
-  // jump as each one lands.
-  const settling = isPending || isPartial;
 
   const days = useMemo(
     () => enumerateDays(window.sinceDay, window.untilDay),
@@ -149,17 +155,24 @@ export function UsagePage() {
       window: makeWindow(days, undefined, days === 1 ? "hour" : "day"),
     });
   };
-  const refreshUsage = () => {
+  const refreshWindow = () => {
     if (showingLimits) {
-      for (const environment of availableEnvironments) {
-        if (environment.connection.phase !== "connected") continue;
-        void refreshProviders({ environmentId: environment.environmentId, input: {} });
+      for (const [environmentId, presentation] of presentations) {
+        if (selectedEnvironmentIds !== null && !selectedEnvironmentIds.has(environmentId)) continue;
+        if (presentation.connection.phase === "connected" && presentation.serverConfig !== null) {
+          void refreshProviders({ environmentId, input: {} });
+        }
       }
       return;
     }
-    const nextWindow = refreshWindow(window, windowDays);
-    if (nextWindow === window) {
-      rescan();
+    const nextWindow = makeWindow(windowDays, undefined, isPast24Hours ? "hour" : "day");
+    if (
+      nextWindow.sinceDay === window.sinceDay &&
+      nextWindow.untilDay === window.untilDay &&
+      nextWindow.sinceTime === window.sinceTime &&
+      nextWindow.untilTime === window.untilTime
+    ) {
+      refresh();
     } else {
       setWindowSelection({ days: windowDays, window: nextWindow });
     }
@@ -169,21 +182,32 @@ export function UsagePage() {
       ? `${formatDateTimeShort(window.sinceTime, window.timeZone)} to ${formatDateTimeShort(window.untilTime, window.timeZone)}`
       : `${formatDayShort(window.sinceDay)} to ${formatDayShort(window.untilDay)}`;
   const topbarContent = (
-    <div className="flex w-full min-w-0 items-center gap-3">
-      <WorkspaceBreadcrumb ariaLabel="Usage breadcrumb" className="min-w-0">
-        <WorkspaceBreadcrumbItem current>
+    <div className="grid w-full min-w-0 grid-cols-[minmax(0,1fr)_auto] items-center gap-x-3 gap-y-2 py-2 xl:flex">
+      <WorkspaceBreadcrumb ariaLabel="Usage breadcrumb" className="col-span-2 min-w-0">
+        <WorkspaceBreadcrumbItem>
           <h1>Usage</h1>
         </WorkspaceBreadcrumbItem>
-        {showingLimits ? null : (
-          <>
-            <WorkspaceBreadcrumbSeparator className="hidden md:flex" />
-            <WorkspaceBreadcrumbItem className="hidden min-w-0 shrink md:flex">
-              <span className="truncate">{windowLabel}</span>
-            </WorkspaceBreadcrumbItem>
-          </>
-        )}
+        <WorkspaceBreadcrumbSeparator />
+        <WorkspaceBreadcrumbItem current className="min-w-10">
+          <UsageEnvironmentFilter
+            environments={environments}
+            selectedEnvironments={selectedEnvironments}
+            selectedEnvironmentIds={selectedEnvironmentIds}
+            onSelectionChange={setSelectedEnvironmentIds}
+            showUsageStatus={!showingLimits}
+            isPartial={isPartial}
+            partialSources={merged.partialSources}
+            duplicateSources={merged.duplicateSources}
+            staleEnvironments={merged.staleEnvironments}
+          />
+        </WorkspaceBreadcrumbItem>
       </WorkspaceBreadcrumb>
-      <div className="ms-auto hidden min-w-0 items-center justify-end gap-2 lg:flex">
+      {!showingLimits ? (
+        <span className="hidden min-w-0 truncate text-xs text-muted-foreground 2xl:block">
+          {windowLabel}
+        </span>
+      ) : null}
+      <div className="ms-auto hidden min-w-0 items-center justify-end gap-2 xl:flex">
         <ToggleGroup
           aria-label="Usage attribution"
           variant="segmented"
@@ -216,12 +240,13 @@ export function UsagePage() {
             </Toggle>
           ))}
         </ToggleGroup>
+        {/* The period does not apply to Limits, so it stays in place but
+            disabled; unmounting it shifted the metric toggle ~300px. */}
         <ToggleGroup
           aria-label="Usage period"
           variant="segmented"
           value={[String(windowDays)]}
           disabled={showingLimits}
-          className={showingLimits ? "invisible" : undefined}
           onValueChange={(next) => {
             const value = next[0];
             if (value) selectWindow(Number(value));
@@ -234,7 +259,7 @@ export function UsagePage() {
           ))}
         </ToggleGroup>
         <Button
-          onClick={refreshUsage}
+          onClick={refreshWindow}
           aria-label={showingLimits ? "Refresh limits" : "Refresh usage"}
           size="icon-sm"
           variant="ghost"
@@ -242,7 +267,7 @@ export function UsagePage() {
           <RefreshCwIcon className="size-3.5" />
         </Button>
       </div>
-      <div className="ms-auto flex min-w-0 items-center justify-end gap-1 lg:hidden">
+      <div className="col-span-2 ms-auto flex min-w-0 items-center justify-end gap-1 xl:hidden">
         <Select
           value={attribution}
           disabled={showingLimits}
@@ -301,7 +326,7 @@ export function UsagePage() {
             aria-label="Usage period"
             size="compact"
             variant="ghost"
-            className={cn("w-auto min-w-0", showingLimits && "invisible")}
+            className="w-auto min-w-0"
           >
             <SelectValue>
               {WINDOW_OPTIONS.find((option) => option.days === windowDays)?.label}
@@ -316,7 +341,7 @@ export function UsagePage() {
           </SelectPopup>
         </Select>
         <Button
-          onClick={refreshUsage}
+          onClick={refreshWindow}
           aria-label={showingLimits ? "Refresh limits" : "Refresh usage"}
           size="icon-sm"
           variant="ghost"
@@ -330,26 +355,24 @@ export function UsagePage() {
   return (
     <SidebarInset className="h-dvh min-h-0 overflow-hidden overscroll-y-none bg-background text-foreground isolate">
       <div className="flex min-h-0 min-w-0 flex-1 flex-col bg-background text-foreground">
-        <WorkspacePageHeader electron={isElectron}>{topbarContent}</WorkspacePageHeader>
+        <WorkspacePageHeader electron={isElectron} className="h-auto">
+          {topbarContent}
+        </WorkspacePageHeader>
 
         <ScrollArea className="min-h-0 flex-1">
           <WorkspacePageContainer width="wide">
-            {showingLimits ? (
-              <UsageLimitsSection />
-            ) : settling ? (
-              <>
-                {environments.length > 1 ? <UsageDeviceStrip environments={environments} /> : null}
-                <UsageSkeleton />
-              </>
+            {selectedEnvironments.length === 0 ? (
+              <p className="text-sm text-muted-foreground">
+                {environments.length === 0
+                  ? `Connect an environment to see ${showingLimits ? "limits" : "usage"}.`
+                  : `Select an environment to see ${showingLimits ? "limits" : "usage"}.`}
+              </p>
+            ) : showingLimits ? (
+              <UsageLimitsSection selectedEnvironmentIds={selectedEnvironmentIds} />
+            ) : isPending ? (
+              <UsageSkeleton />
             ) : (
               <>
-                <UsageCoverageNotice
-                  environments={environments}
-                  partialSources={merged.partialSources}
-                  duplicateSources={merged.duplicateSources}
-                  staleEnvironments={merged.staleEnvironments}
-                />
-
                 <section className="grid gap-6 lg:grid-cols-[minmax(0,18rem)_minmax(0,1fr)]">
                   <div className="flex min-w-0 flex-col gap-5">
                     <div className="flex flex-col gap-1">
@@ -370,9 +393,6 @@ export function UsagePage() {
                       const share =
                         metric === "cost" ? (totals?.costShare ?? 0) : (totals?.tokenShare ?? 0);
                       const providerSessions = totals?.sessions ?? 0;
-                      // A session lives in one app but can spend from both
-                      // subscription pools, so pool rows carry no session
-                      // count — the headline total above stays exact.
                       const sessionLabel =
                         attribution === "source"
                           ? `${formatCount(providerSessions)} ${
@@ -622,12 +642,18 @@ function Metric({ label, value }: { readonly label: string; readonly value: stri
   );
 }
 
+/** Returns the richer coverage state, falling back to upstream's status fields. */
+function usageState(environment: EnvironmentUsageStatus) {
+  if (environment.state !== undefined) return environment.state;
+  if (environment.summary !== null)
+    return { kind: "reported" as const, summary: environment.summary };
+  return environment.error === null ? { kind: "reporting" as const } : { kind: "failed" as const };
+}
+
 /**
- * Says plainly when the totals are incomplete: an environment that failed or
- * is not connected, an owned transcript source that was only partly readable,
- * or one whose transcripts another environment already reported. Environments
- * that are still answering never reach this notice; the page shows the loading
- * skeleton until every one is terminal.
+ * Explains incomplete selected-environment coverage without blocking progressive
+ * totals. It stays inside the environment filter so arriving results do not
+ * move the page.
  */
 export function UsageCoverageNotice({
   environments,
@@ -640,9 +666,9 @@ export function UsageCoverageNotice({
   readonly duplicateSources: readonly string[];
   readonly staleEnvironments: readonly string[];
 }) {
-  const failed = environments.filter((environment) => environment.state.kind === "failed");
+  const failed = environments.filter((environment) => usageState(environment).kind === "failed");
   const unreachable = environments.filter(
-    (environment) => environment.state.kind === "unreachable",
+    (environment) => usageState(environment).kind === "unreachable",
   );
   const stale = environments.filter((environment) =>
     staleEnvironments.includes(environment.environmentId),
@@ -658,7 +684,7 @@ export function UsageCoverageNotice({
   }
 
   return (
-    <div className="flex flex-col gap-1 border border-border px-3 py-2 text-xs text-muted-foreground">
+    <div className="flex flex-col gap-1 border-t border-border px-2 py-2 text-xs text-muted-foreground">
       {failed.map((environment) => (
         <span key={environment.environmentId}>{environment.label} could not report usage.</span>
       ))}
@@ -688,78 +714,173 @@ export function UsageCoverageNotice({
   );
 }
 
-/**
- * Per-device progress while the page waits for every environment to answer.
- * Only rendered with two or more devices; a lone device has nothing to
- * enumerate.
- */
-function UsageDeviceStrip({
+/** Environment selection and scan progress share a permanent header control. */
+function UsageEnvironmentFilter({
   environments,
+  selectedEnvironments,
+  selectedEnvironmentIds,
+  onSelectionChange,
+  showUsageStatus,
+  isPartial,
+  partialSources,
+  duplicateSources,
+  staleEnvironments,
 }: {
   readonly environments: readonly EnvironmentUsageStatus[];
+  readonly selectedEnvironments: readonly EnvironmentUsageStatus[];
+  readonly selectedEnvironmentIds: ReadonlySet<EnvironmentId> | null;
+  readonly onSelectionChange: (ids: ReadonlySet<EnvironmentId> | null) => void;
+  readonly showUsageStatus: boolean;
+  readonly isPartial: boolean;
+  readonly partialSources: readonly PartialUsageSource[];
+  readonly duplicateSources: readonly string[];
+  readonly staleEnvironments: readonly string[];
 }) {
-  const scanning = environments.filter((environment) => environment.state.kind === "reporting");
+  const [modelPricesOpen, setModelPricesOpen] = useState(false);
+  const allSelected = selectedEnvironmentIds === null;
+  const label = allSelected
+    ? "All environments"
+    : selectedEnvironments.length === 1
+      ? selectedEnvironments[0]!.label
+      : `${selectedEnvironments.length} environments`;
+  const pendingCount = selectedEnvironments.filter((environment) => {
+    const state = usageState(environment);
+    return state.kind === "reporting" || (state.kind === "reported" && environment.isPending);
+  }).length;
+  const hasIssue =
+    selectedEnvironments.some((environment) => {
+      const kind = usageState(environment).kind;
+      return kind === "failed" || kind === "unreachable";
+    }) ||
+    partialSources.length > 0 ||
+    duplicateSources.length > 0 ||
+    staleEnvironments.length > 0;
+
   return (
-    <div className="flex flex-wrap items-baseline gap-x-4 gap-y-1 border border-border px-3 py-2 text-xs">
-      {environments.map((environment) => {
-        switch (environment.state.kind) {
-          case "reported":
+    <>
+      <Menu>
+        <MenuTrigger className="group/usage-environment inline-flex min-w-0 max-w-full cursor-pointer items-center gap-1 rounded-sm text-left focus-visible:outline-hidden focus-visible:ring-2 focus-visible:ring-ring">
+          <span className="min-w-0 truncate">{label}</span>
+          <span className="flex size-3.5 shrink-0 items-center justify-center text-muted-foreground">
+            {showUsageStatus && pendingCount > 0 ? (
+              <>
+                <CircleDashedIcon className="size-3.5" aria-hidden />
+                <span className="sr-only">
+                  {pendingCount} {pendingCount === 1 ? "environment" : "environments"} still
+                  scanning
+                  {isPartial ? "; totals are partial" : ""}
+                </span>
+              </>
+            ) : showUsageStatus && hasIssue ? (
+              <CircleAlertIcon
+                className="size-3.5 text-amber-600 dark:text-amber-400"
+                aria-label="Some environments could not report complete usage"
+              />
+            ) : (
+              <ChevronDownIcon
+                className="size-3.5 opacity-0 transition-opacity group-hover/usage-environment:opacity-100 group-focus-visible/usage-environment:opacity-100 group-data-popup-open/usage-environment:opacity-100"
+                aria-hidden
+              />
+            )}
+          </span>
+        </MenuTrigger>
+        <MenuPopup align="start" className="w-80 max-w-[calc(100vw-2rem)]">
+          <MenuCheckboxItem
+            checked={allSelected}
+            closeOnClick={false}
+            onCheckedChange={(checked) => onSelectionChange(checked ? null : new Set())}
+          >
+            All environments
+          </MenuCheckboxItem>
+          <MenuSeparator />
+          {environments.map((environment) => {
+            const checked =
+              selectedEnvironmentIds === null ||
+              selectedEnvironmentIds.has(environment.environmentId);
+            const state = usageState(environment);
+            const status =
+              state.kind === "failed"
+                ? "Unavailable"
+                : state.kind === "unreachable"
+                  ? "Not connected"
+                  : state.kind === "reported" &&
+                      !isCompatibleUsageContractVersion(
+                        state.summary.contractVersion,
+                        USAGE_CONTRACT_VERSION,
+                      )
+                    ? "Update required"
+                    : state.kind === "reporting"
+                      ? "Scanning…"
+                      : environment.isPending
+                        ? "Refreshing…"
+                        : "Ready";
             return (
-              <span
+              <MenuCheckboxItem
                 key={environment.environmentId}
-                className="flex items-center gap-1 text-foreground"
+                checked={checked}
+                closeOnClick={false}
+                className="grid-cols-[1rem_minmax(0,1fr)]"
+                onCheckedChange={(nextChecked) => {
+                  const next = new Set(selectedEnvironments.map((entry) => entry.environmentId));
+                  if (nextChecked) next.add(environment.environmentId);
+                  else next.delete(environment.environmentId);
+                  onSelectionChange(next.size === environments.length ? null : next);
+                }}
               >
-                <CheckIcon
-                  className="size-3 text-emerald-600 dark:text-emerald-300/90"
-                  aria-hidden
-                />
-                {environment.label}
-              </span>
+                <span className="flex min-w-0 items-center gap-3">
+                  <span className="min-w-0 flex-1 truncate">{environment.label}</span>
+                  {showUsageStatus ? (
+                    <span
+                      className={cn(
+                        "shrink-0 text-xs text-muted-foreground",
+                        state.kind === "failed" && "text-destructive",
+                      )}
+                    >
+                      {status}
+                    </span>
+                  ) : null}
+                </span>
+              </MenuCheckboxItem>
             );
-          case "failed":
-            return (
-              <span
-                key={environment.environmentId}
-                className="flex items-center gap-1 text-destructive"
-              >
-                <XIcon className="size-3" aria-hidden />
-                {environment.label}
-              </span>
-            );
-          case "unreachable":
-            return (
-              <span
-                key={environment.environmentId}
-                className="flex items-center gap-1 text-muted-foreground"
-              >
-                <XIcon className="size-3" aria-hidden />
-                {environment.label} · not connected
-              </span>
-            );
-          case "reporting":
-            return (
-              <span
-                key={environment.environmentId}
-                className="animate-status-pulse text-muted-foreground"
-              >
-                {environment.label}…
-              </span>
-            );
-        }
-      })}
-      <span className="ms-auto text-muted-foreground">
-        {scanning.length === 1
-          ? "1 device still scanning"
-          : `${scanning.length} devices still scanning`}
-      </span>
-    </div>
+          })}
+          {environments.length === 0 ? (
+            <p className="px-2 py-2 text-xs text-muted-foreground">No environments connected.</p>
+          ) : null}
+          {showUsageStatus && isPartial ? (
+            <p className="px-2 py-2 text-xs text-muted-foreground">
+              Totals are partial while selected environments scan.
+            </p>
+          ) : null}
+          {showUsageStatus ? (
+            <UsageCoverageNotice
+              environments={selectedEnvironments}
+              partialSources={partialSources}
+              duplicateSources={duplicateSources}
+              staleEnvironments={staleEnvironments}
+            />
+          ) : null}
+          <MenuSeparator />
+          <MenuItem onClick={() => setModelPricesOpen(true)}>
+            <SlidersHorizontalIcon aria-hidden />
+            Model prices
+          </MenuItem>
+        </MenuPopup>
+      </Menu>
+      {modelPricesOpen ? (
+        <UsagePriceOverrides
+          usage={environments}
+          initialSelectedEnvironmentIds={selectedEnvironmentIds}
+          onOpenChange={setModelPricesOpen}
+        />
+      ) : null}
+    </>
   );
 }
 
 /**
  * Stand-in with the loaded page's shape, using the shared `Skeleton` bars so it
  * breathes with the same `animate-skeleton` pulse as every other loading state.
- * Blocks fill in exactly once when the last device answers.
+ * Replaced by results as soon as the first environment answers.
  */
 function UsageSkeleton() {
   return (

@@ -55,7 +55,7 @@ type ConnectionLayerSource =
   | typeof mobileBackgroundActivityReporterLayer;
 
 const providedClientConnectionLayer = Layer.mergeAll(
-  Connection.layer,
+  Connection.layerWithOptions({ usageLimitSources: true }),
   snapshotLoaderLayer,
   threadPrewarmTriggersLayer,
   threadPrewarmRunGateLayer,

@@ -19,8 +19,13 @@ export class ThreadOutboxStorageError extends Schema.TaggedErrorClass<ThreadOutb
   }
 }
 
+export interface ThreadOutboxLoadResult {
+  readonly messages: ReadonlyArray<QueuedThreadMessage>;
+  readonly errors: ReadonlyArray<ThreadOutboxStorageError>;
+}
+
 export interface ThreadOutboxStorage {
-  readonly load: () => Promise<ReadonlyArray<QueuedThreadMessage>>;
+  readonly load: () => Promise<ThreadOutboxLoadResult>;
   readonly write: (message: QueuedThreadMessage) => Promise<void>;
   readonly remove: (message: QueuedThreadMessage) => Promise<void>;
 }

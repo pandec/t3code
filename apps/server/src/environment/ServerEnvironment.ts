@@ -243,6 +243,7 @@ export const make = Effect.gen(function* () {
       savedPrompts: true,
       environmentThemes: true,
       usageLimitSources: true,
+      usagePriceOverrides: true,
       threadPinning: true,
       threadPinReorder: true,
       threadTitleRegeneration: true,
@@ -253,11 +254,9 @@ export const make = Effect.gen(function* () {
       ...(advertisedServerSelfUpdate === null
         ? {}
         : { serverSelfUpdate: advertisedServerSelfUpdate }),
+      serverUpdateThreadContinuation: true,
       ...(advertisedServerSelfUpdate === "boot-service" || desktopAppUpdate
-        ? {
-            serverSelfUpdateProgress: true,
-            serverUpdateThreadContinuation: true,
-          }
+        ? { serverSelfUpdateProgress: true }
         : {}),
       ...(desktopAppUpdate ? { desktopAppUpdate: true } : {}),
     },

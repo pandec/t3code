@@ -157,11 +157,8 @@ export function useCreateProjectThread() {
         );
         return AsyncResult.failure(result.cause);
       }
-      await prepared.releaseUploads().catch((error) => {
-        console.warn("[project-thread] could not delete consumed pending uploads", error);
-      });
       setPendingConnectionError(null);
-      scheduleUnusedComposerAttachmentCleanup(input.initialAttachments);
+      scheduleUnusedComposerAttachmentCleanup(prepared.draftAttachments);
 
       return mapAtomCommandResult(result, () =>
         scopeThreadRef(input.project.environmentId, threadId),

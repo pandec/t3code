@@ -36,6 +36,7 @@ import {
 } from "../acp/AntigravityAcpSupport.ts";
 import type { AcpSessionRuntime, AcpSessionRuntimeStartResult } from "../acp/AcpSessionRuntime.ts";
 import type { ServerProviderDraft } from "../providerSnapshot.ts";
+import { withExpandedProviderBinaryPath } from "../ProviderBinaryPath.ts";
 import { removeAntigravitySessionFiles } from "../acp/AntigravitySessionFiles.ts";
 import { ProviderDriverError } from "../Errors.ts";
 import { makeAntigravityAdapter } from "../Layers/AntigravityAdapter.ts";
@@ -82,7 +83,10 @@ export const AntigravityDriver: ProviderDriver<AntigravitySettings, AntigravityD
       const installation = yield* AntigravityInstallation;
       const loggers = yield* ProviderEventLoggers;
       const modelManifest = yield* ModelManifest.ModelManifest;
-      const settings = { ...config, enabled } satisfies AntigravitySettings;
+      const settings = withExpandedProviderBinaryPath({
+        ...config,
+        enabled,
+      } satisfies AntigravitySettings);
       const auth: AntigravityAuthConfig = {
         authMethod: settings.authMethod,
         apiKey: settings.apiKey,

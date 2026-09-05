@@ -1,4 +1,5 @@
 import {
+  type CustomModelSetting,
   type ModelCapabilities,
   type ModelSelection,
   ProviderDriverKind,
@@ -11,7 +12,7 @@ import {
   getProviderOptionCurrentValue,
   getProviderOptionDescriptors,
   normalizeCustomModelSlug,
-  parseCustomModelEntry,
+  readCustomModelEntries,
 } from "@t3tools/shared/model";
 
 import { buildSelectOptionDescriptor } from "./providerSnapshot.ts";
@@ -48,6 +49,21 @@ export const CUSTOM_CLAUDE_MODEL_CAPABILITIES: ModelCapabilities = createModelCa
 });
 
 const CUSTOM_MODEL_EFFORT_SUFFIX_PATTERN = /\([^()]*\)$/;
+
+function customClaudeModelCapabilities(capabilities: ModelCapabilities): ModelCapabilities {
+  const supportedDescriptors = (capabilities.optionDescriptors ?? []).filter(
+    (descriptor, index, descriptors) =>
+      (descriptor.id === "fastMode" || descriptor.id === "thinking") &&
+      descriptor.type === "boolean" &&
+      descriptors.findIndex((candidate) => candidate.id === descriptor.id) === index,
+  );
+  return createModelCapabilities({
+    optionDescriptors: [
+      ...(CUSTOM_CLAUDE_MODEL_CAPABILITIES.optionDescriptors ?? []),
+      ...supportedDescriptors,
+    ],
+  });
+}
 
 export interface ClaudeCatalogModel {
   readonly model: ServerProviderModel;
@@ -94,33 +110,51 @@ export function resolveClaudeModelCatalog(manifest: ModelManifestData): ClaudeMo
 
 export const BUNDLED_CLAUDE_MODEL_CATALOG = resolveClaudeModelCatalog(BUNDLED_MODEL_MANIFEST);
 
-/** Keeps custom model aliases opaque while preserving canonical built-in models and capabilities. */
+/**
+ * Scope the catalog to one instance's settings. Custom slugs stay opaque, keep
+ * the gateway effort ladder, and may add only the non-effort descriptors that
+ * the adapter handles directly. Built-in aliases shadowed by custom slugs are
+ * removed without changing canonical built-in models.
+ */
 export function scopeClaudeModelCatalog(
   catalog: ClaudeModelCatalog,
-  customModels: ReadonlyArray<string>,
+  customModels: ReadonlyArray<CustomModelSetting>,
 ): ClaudeModelCatalog {
-  const customAliases = new Set(
-    customModels.flatMap((model) => {
-      const entry = parseCustomModelEntry(model);
-      return entry ? [entry.slug.toLowerCase()] : [];
-    }),
-  );
-  if (customAliases.size === 0) return catalog;
+  const customEntries = readCustomModelEntries(customModels);
+  if (customEntries.length === 0) return catalog;
+  const customAliases = new Set(customEntries.map((entry) => entry.slug.toLowerCase()));
+
+  const builtInModels = catalog.models.map((entry) => {
+    if (!entry.model.aliases?.some((alias) => customAliases.has(alias.toLowerCase()))) {
+      return entry;
+    }
+    return {
+      ...entry,
+      model: {
+        ...entry.model,
+        aliases: entry.model.aliases.filter((alias) => !customAliases.has(alias.toLowerCase())),
+      },
+    };
+  });
+  const builtInSlugs = new Set(builtInModels.map((entry) => entry.model.slug));
+  const customCatalogModels: Array<ClaudeCatalogModel> = [];
+  for (const entry of customEntries) {
+    if (!entry.capabilities || builtInSlugs.has(entry.slug)) continue;
+    customCatalogModels.push({
+      model: {
+        slug: entry.slug,
+        name: entry.name,
+        isCustom: true,
+        capabilities: customClaudeModelCapabilities(entry.capabilities),
+      },
+      runtime: {},
+      compatibility: {},
+    });
+  }
 
   return {
+    models: [...builtInModels, ...customCatalogModels],
     customModelSlugs: customAliases,
-    models: catalog.models.map((entry) => {
-      if (!entry.model.aliases?.some((alias) => customAliases.has(alias.toLowerCase()))) {
-        return entry;
-      }
-      return {
-        ...entry,
-        model: {
-          ...entry.model,
-          aliases: entry.model.aliases.filter((alias) => !customAliases.has(alias.toLowerCase())),
-        },
-      };
-    }),
   };
 }
 
@@ -147,18 +181,24 @@ export function isCustomClaudeCatalogModel(
   slugOrAlias: string | null | undefined,
 ): boolean {
   const slug = normalizeCustomModelSlug(slugOrAlias ?? "");
-  return slug ? (catalog.customModelSlugs?.has(slug.toLowerCase()) ?? false) : false;
+  if (!slug || !catalog.customModelSlugs) return false;
+  if (catalog.customModelSlugs.has(slug.toLowerCase())) return true;
+  if (!CUSTOM_MODEL_EFFORT_SUFFIX_PATTERN.test(slug)) return false;
+  const baseSlug = normalizeCustomModelSlug(slug.replace(CUSTOM_MODEL_EFFORT_SUFFIX_PATTERN, ""));
+  return baseSlug ? catalog.customModelSlugs.has(baseSlug.toLowerCase()) : false;
 }
 
 export function getClaudeCatalogModelCapabilities(
   catalog: ClaudeModelCatalog,
   slugOrAlias: string | null | undefined,
 ): ModelCapabilities {
-  const builtIn = resolveClaudeCatalogModel(catalog, slugOrAlias);
-  if (builtIn) return builtIn.model.capabilities ?? EMPTY_CAPABILITIES;
-  return isCustomClaudeCatalogModel(catalog, slugOrAlias)
-    ? CUSTOM_CLAUDE_MODEL_CAPABILITIES
-    : EMPTY_CAPABILITIES;
+  if (isCustomClaudeCatalogModel(catalog, slugOrAlias)) {
+    const custom = resolveClaudeCatalogModel(catalog, slugOrAlias);
+    return custom?.model.isCustom
+      ? (custom.model.capabilities ?? CUSTOM_CLAUDE_MODEL_CAPABILITIES)
+      : CUSTOM_CLAUDE_MODEL_CAPABILITIES;
+  }
+  return resolveClaudeCatalogModel(catalog, slugOrAlias)?.model.capabilities ?? EMPTY_CAPABILITIES;
 }
 
 function isVersionSupported(

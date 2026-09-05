@@ -1,13 +1,13 @@
 "use client";
 
-import { ArrowDownIcon, ArrowUpIcon, PlusIcon, StarIcon, XIcon } from "lucide-react";
+import { ArrowDownIcon, ArrowUpIcon, PencilIcon, PlusIcon, StarIcon, XIcon } from "lucide-react";
 import { useEffect, useMemo, useRef, useState } from "react";
 import {
   ProviderDriverKind,
   type ProviderInstanceId,
   type ServerProviderModel,
 } from "@t3tools/contracts";
-import { parseCustomModelEntry } from "@t3tools/shared/model";
+import { type CustomModelDefinition, normalizeCustomModelSlug } from "@t3tools/shared/model";
 
 import { cn } from "../../lib/utils";
 import { sortModelsForProviderInstance } from "../../modelOrdering";
@@ -22,6 +22,7 @@ import { Input } from "../ui/input";
 import { Popover, PopoverPopup, PopoverTrigger } from "../ui/popover";
 import { Switch } from "../ui/switch";
 import { Tooltip, TooltipPopup, TooltipTrigger } from "../ui/tooltip";
+import { CustomModelEditor } from "./CustomModelEditor";
 
 /**
  * Placeholder text for the "add a custom model" input, keyed by driver
@@ -116,24 +117,14 @@ interface ProviderModelsSectionProps {
    */
   readonly models: ReadonlyArray<ServerProviderModel>;
   /**
-   * The persisted custom-model entry list for this instance (`slug` or
-   * `slug=Label`). Drives the rendered rows and best-effort duplicate
-   * validation by parsed slug; mutations flow back as per-entry add /
-   * per-slug remove deltas so the owner can merge them into the latest
-   * written config rather than a stale rendered snapshot.
+   * The persisted custom-model list for this instance, resolved. Drives
+   * dedup, and is the list we hand back (with an entry appended / replaced /
+   * removed) via `onChange`.
    */
-  readonly customModels: ReadonlyArray<string>;
-  /**
-   * Per-custom-model icon overrides (slug → driver-kind icon id). Lives in
-   * the instance config blob next to `customModels`.
-   */
+  readonly customModels: ReadonlyArray<CustomModelDefinition>;
+  /** Per-custom-model icon overrides (slug → driver-kind icon id). */
   readonly customModelIcons: Readonly<Record<string, string>>;
-  /**
-   * Set (or clear, with `null`) one model's icon override. A per-slug delta
-   * rather than a full record: the owner merges it into the latest written
-   * config, so two quick picks on different rows cannot overwrite each other
-   * with stale snapshots of the whole record.
-   */
+  /** Set or clear one custom model's icon override. */
   readonly onCustomModelIconChange: (slug: string, icon: string | null) => void;
   /** Server-returned model slugs hidden from the model picker. */
   readonly hiddenModels: ReadonlyArray<string>;
@@ -142,13 +133,11 @@ interface ProviderModelsSectionProps {
   /** Explicit user-authored model ordering for this provider instance. */
   readonly modelOrder: ReadonlyArray<string>;
   /**
-   * Append one custom model entry (`slug` or `slug=Label`). The owner
-   * routes the write to the correct storage and dedupes by parsed slug
-   * against its latest written list.
+   * Commit the new custom-model list. Caller is responsible for routing the
+   * write to the correct storage (legacy `settings.providers[kind]` vs.
+   * `providerInstances[id].config`).
    */
-  readonly onAddCustomModel: (entry: string) => void;
-  /** Remove one custom model slug (the owner also prunes its icon override). */
-  readonly onRemoveCustomModel: (slug: string) => void;
+  readonly onChange: (next: ReadonlyArray<CustomModelDefinition>) => void;
   readonly onHiddenModelsChange: (next: ReadonlyArray<string>) => void;
   readonly onFavoriteModelsChange: (next: ReadonlyArray<string>) => void;
   readonly onModelOrderChange: (next: ReadonlyArray<string>) => void;
@@ -174,8 +163,7 @@ export function ProviderModelsSection({
   hiddenModels,
   favoriteModels,
   modelOrder,
-  onAddCustomModel,
-  onRemoveCustomModel,
+  onChange,
   onCustomModelIconChange,
   onHiddenModelsChange,
   onFavoriteModelsChange,
@@ -185,6 +173,8 @@ export function ProviderModelsSection({
   const [isAdding, setIsAdding] = useState(false);
   const [filter, setFilter] = useState("");
   const [error, setError] = useState<string | null>(null);
+  // Slug of the custom model whose inline editor is open, if any.
+  const [editingSlug, setEditingSlug] = useState<string | null>(null);
   const listRef = useRef<HTMLDivElement>(null);
   // Slug of a just-added custom model, scrolled into view once its row exists.
   const scrollToSlugRef = useRef<string | null>(null);
@@ -203,6 +193,7 @@ export function ProviderModelsSection({
   const hiddenCount = displayModels.filter(
     (model) => !model.isCustom && hiddenModelSet.has(model.slug),
   ).length;
+  const builtInModels = useMemo(() => models.filter((model) => !model.isCustom), [models]);
   const showFilter = models.length > FILTER_THRESHOLD;
   const normalizedFilter = filter.trim().toLowerCase();
   const isFiltering = showFilter && normalizedFilter.length > 0;
@@ -229,29 +220,29 @@ export function ProviderModelsSection({
 
   const handleAdd = () => {
     if (driverKind === "antigravity") return;
-    const parsed = parseCustomModelEntry(input);
-    if (!parsed) {
+    const normalized = normalizeCustomModelSlug(input);
+    if (!normalized) {
       setError("Enter a model slug.");
       return;
     }
-    if (models.some((model) => !model.isCustom && model.slug === parsed.slug)) {
+    if (models.some((model) => !model.isCustom && model.slug === normalized)) {
       setError("That model is already built in.");
       return;
     }
-    if (parsed.slug.length > MAX_CUSTOM_MODEL_LENGTH) {
+    if (normalized.length > MAX_CUSTOM_MODEL_LENGTH) {
       setError(`Model slugs must be ${MAX_CUSTOM_MODEL_LENGTH} characters or less.`);
       return;
     }
-    if (customModels.some((entry) => parseCustomModelEntry(entry)?.slug === parsed.slug)) {
+    if (customModels.some((entry) => entry.slug === normalized)) {
       setError("That custom model is already saved.");
       return;
     }
 
     // Clear the filter so the new row renders even when it does not match,
     // which is also what lets the pending scroll target resolve and clear.
-    scrollToSlugRef.current = parsed.slug;
+    scrollToSlugRef.current = normalized;
     setFilter("");
-    onAddCustomModel(parsed.name === parsed.slug ? parsed.slug : `${parsed.slug}=${parsed.name}`);
+    onChange([...customModels, { slug: normalized, name: normalized, capabilities: null }]);
     setInput("");
     setError(null);
     setIsAdding(false);
@@ -264,10 +255,16 @@ export function ProviderModelsSection({
   };
 
   const handleRemove = (slug: string) => {
-    onRemoveCustomModel(slug);
+    if (editingSlug === slug) setEditingSlug(null);
+    onChange(customModels.filter((entry) => entry.slug !== slug));
     onModelOrderChange(modelOrder.filter((model) => model !== slug));
     onFavoriteModelsChange(favoriteModels.filter((model) => model !== slug));
     setError(null);
+  };
+
+  const handleSaveEdit = (next: CustomModelDefinition) => {
+    onChange(customModels.map((entry) => (entry.slug === next.slug ? next : entry)));
+    setEditingSlug(null);
   };
 
   const setHidden = (slug: string, hidden: boolean) => {
@@ -381,21 +378,40 @@ export function ProviderModelsSection({
         </>
       ) : null}
       {model.isCustom ? (
-        <Tooltip>
-          <TooltipTrigger
-            render={
-              <Button
-                size="icon-micro"
-                variant="ghost-muted"
-                aria-label={`Remove ${model.slug}`}
-                onClick={() => handleRemove(model.slug)}
-              />
-            }
-          >
-            <XIcon className="size-3" />
-          </TooltipTrigger>
-          <TooltipPopup side="top">Remove custom model</TooltipPopup>
-        </Tooltip>
+        <>
+          <Tooltip>
+            <TooltipTrigger
+              render={
+                <Button
+                  size="icon-micro"
+                  variant="ghost-muted"
+                  aria-label={`Edit ${model.slug}`}
+                  onClick={() =>
+                    setEditingSlug((current) => (current === model.slug ? null : model.slug))
+                  }
+                />
+              }
+            >
+              <PencilIcon className="size-3" />
+            </TooltipTrigger>
+            <TooltipPopup side="top">Edit name and options</TooltipPopup>
+          </Tooltip>
+          <Tooltip>
+            <TooltipTrigger
+              render={
+                <Button
+                  size="icon-micro"
+                  variant="ghost-muted"
+                  aria-label={`Remove ${model.slug}`}
+                  onClick={() => handleRemove(model.slug)}
+                />
+              }
+            >
+              <XIcon className="size-3" />
+            </TooltipTrigger>
+            <TooltipPopup side="top">Remove custom model</TooltipPopup>
+          </Tooltip>
+        </>
       ) : null}
     </span>
   );
@@ -446,7 +462,9 @@ export function ProviderModelsSection({
         key={`${instanceId}:${model.slug}`}
         data-model-slug={model.slug}
         className={cn(
-          "grid h-7 grid-cols-[1.5rem_1.5rem_minmax(0,1fr)_auto_4rem_auto] items-center gap-2 rounded-md px-2 transition-colors hover:bg-muted/30",
+          // Actions column is at least wide enough for the four custom-row
+          // buttons so capability labels line up across built-in and custom rows.
+          "grid h-7 grid-cols-[1.5rem_1.5rem_minmax(0,1fr)_auto_minmax(5.5rem,auto)_auto] items-center gap-2 rounded-md px-2 transition-colors hover:bg-muted/30",
           isHidden && "opacity-50",
         )}
       >
@@ -464,12 +482,13 @@ export function ProviderModelsSection({
         )}
         <span className="flex min-w-0 items-baseline gap-2">
           <span className={cn(nameClassName, "truncate")}>{model.name}</span>
-          {model.isCustom ? (
-            <span className="text-[11px] text-muted-foreground/70">custom</span>
-          ) : model.name !== model.slug ? (
+          {model.name !== model.slug ? (
             <code className="truncate font-mono text-[11px] text-muted-foreground/70">
               {model.slug}
             </code>
+          ) : null}
+          {model.isCustom ? (
+            <span className="text-[11px] text-muted-foreground/70">custom</span>
           ) : null}
         </span>
         {/*
@@ -526,6 +545,10 @@ export function ProviderModelsSection({
           const group = groupOf(model);
           const previous = visibleModels[index - 1];
           const startsGroup = previous === undefined || groupOf(previous) !== group;
+          const editingEntry =
+            model.isCustom && editingSlug === model.slug
+              ? customModels.find((entry) => entry.slug === model.slug)
+              : undefined;
           return (
             <div key={`${instanceId}:${model.slug}:group`}>
               {startsGroup && favoriteCount > 0 && group === "favorite"
@@ -538,6 +561,17 @@ export function ProviderModelsSection({
                 ? groupLabel("Hidden from picker", index === 0)
                 : null}
               {renderRow(model)}
+              {editingEntry ? (
+                <CustomModelEditor
+                  key={`${instanceId}:${model.slug}:editor`}
+                  instanceId={instanceId}
+                  driverKind={driverKind}
+                  entry={editingEntry}
+                  builtInModels={builtInModels}
+                  onSave={handleSaveEdit}
+                  onCancel={() => setEditingSlug(null)}
+                />
+              ) : null}
             </div>
           );
         })}
@@ -589,12 +623,6 @@ export function ProviderModelsSection({
         </Button>
       )}
 
-      {driverKind !== "antigravity" ? (
-        <p className="mt-2 text-xs text-muted-foreground">
-          Append <code className="text-[11px]">=Label</code> to show a custom display name.
-        </p>
-      ) : null}
-
       {driverKind !== "antigravity" && error ? (
         <p className="mt-2 text-xs text-destructive">{error}</p>
       ) : null}
@@ -605,9 +633,7 @@ export function ProviderModelsSection({
 /**
  * Per-custom-model icon selector. The trigger shows the current override (or
  * the instance driver's icon, subdued, when unset); the popup offers every
- * provider glyph plus a reset to the driver default. Lets a gateway-served
- * model (e.g. a Codex model behind the Claude provider) carry the icon of
- * its real model family in the model picker.
+ * provider glyph plus a reset to the driver default.
  */
 function CustomModelIconPicker({
   modelName,
