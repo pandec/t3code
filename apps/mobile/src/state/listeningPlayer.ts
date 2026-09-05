@@ -90,10 +90,11 @@ function ensureSharedPlayer(): AudioPlayer {
     // Position goes out before the playing flag: the at-rest state is derived
     // when the flag flips, and a finish pins the position to the end because
     // the native player's final reported position can fall short of it.
+    const duration = Number.isFinite(status.duration) ? status.duration : 0;
     listeningPlayback.setProgress(
       status.didJustFinish
-        ? { currentTime: status.duration, duration: status.duration }
-        : { currentTime: status.currentTime, duration: status.duration },
+        ? { currentTime: duration, duration }
+        : { currentTime: status.currentTime, duration },
     );
     if (status.playing && listeningPlayback.getSnapshot().blocked) {
       pauseSharedPlayer();
