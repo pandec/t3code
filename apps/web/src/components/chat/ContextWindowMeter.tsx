@@ -287,6 +287,12 @@ export function ContextWindowMeter(props: {
   openRouterCredits?: OpenRouterCreditsDisplay | null;
   /** Called on popover open, at most once a minute; re-reads the balance. */
   onRefreshOpenRouterCredits?: () => void;
+  /**
+   * The credits read is in flight. Separate from the provider refresh flag:
+   * the two reads are gated independently, so one must not hide or show the
+   * other's staleness stamp.
+   */
+  openRouterCreditsRefreshing?: boolean;
 }) {
   const { usage, modelDisplayName, onCompact, compactDisabled, compactDisabledReason } = props;
   // Colour thresholds are a user setting; re-evaluate the snapshot on read so a
@@ -667,7 +673,7 @@ export function ContextWindowMeter(props: {
                       credits={props.openRouterCredits}
                       budgetWindow={openRouterBudgetWindow}
                       nowMs={nowMs}
-                      refreshing={props.providerUsageRefreshing ?? false}
+                      refreshing={props.openRouterCreditsRefreshing ?? false}
                     />
                   </>
                 ) : null}

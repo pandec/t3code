@@ -16,6 +16,7 @@ import {
   MAX_TURN_COMPLETION_MIN_DURATION_SECONDS,
   MIN_ACCENT_TINT_INTENSITY_PERCENT,
   MIN_ARCHIVED_SECTION_VISIBLE_COUNT,
+  MIN_OPENROUTER_CREDITS_BUDGET_USD,
   MIN_PROVIDER_USAGE_ALERT_PERCENT,
   MIN_SIDEBAR_OLDER_SECTION_AFTER_DAYS,
   MIN_STEER_GRACE_WINDOW_MS,
@@ -599,7 +600,7 @@ function ProviderUsageExtrasSection() {
           </div>
           <SettingsRow
             title="OpenRouter budget"
-            description="The starting balance to measure spend against. With a budget set, the usage meter shows how much of it you have spent, coloured by the warning and critical thresholds under Notifications. Leave empty or enter 0 to show the dollar amount only."
+            description="The starting balance to measure spend against. With a budget set, the usage meter shows how much of it you have spent, coloured by the warning and critical thresholds under Notifications. Leave empty or enter 0 to show the dollar amount only; budgets under $1 count as none."
             resetAction={
               settings.openRouterCreditsBudgetUsd !==
               DEFAULT_UNIFIED_SETTINGS.openRouterCreditsBudgetUsd ? (
@@ -618,12 +619,12 @@ function ProviderUsageExtrasSection() {
               <SettingsNumberField
                 ariaLabel="OpenRouter budget"
                 max={MAX_OPENROUTER_CREDITS_BUDGET_USD}
+                min={MIN_OPENROUTER_CREDITS_BUDGET_USD}
                 onCommit={(next) =>
                   updateSettings({
                     openRouterCreditsBudgetUsd: resolveOpenRouterCreditsBudgetCommit(next),
                   })
                 }
-                min={0}
                 placeholder="None"
                 prefix="$"
                 value={settings.openRouterCreditsBudgetUsd}
