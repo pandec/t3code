@@ -124,6 +124,12 @@ export const SETTINGS_SEARCH_ITEMS = [
     searchTerms: ["typography family size composer input"],
   },
   {
+    id: "message-font",
+    title: "Message font",
+    to: "/settings/appearance",
+    searchTerms: ["typography family size thread messages chat replies"],
+  },
+  {
     id: "code-font",
     title: "Code font",
     to: "/settings/appearance",
