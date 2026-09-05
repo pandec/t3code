@@ -1476,7 +1476,8 @@ code {
    family and size preference, in absolute pixels like the prompt box, so they
    can grow without scaling the rest of the interface. Only these bodies opt
    in; tool rows, plan cards, summaries, and other chat markdown stay at the
-   interface size. */
+   interface size. Deliberately unlayered so it outranks the `text-sm`
+   utility the markdown root carries. */
 .chat-message-text {
   font-family: var(--font-message, var(--font-sans));
   font-size: var(--font-size-message, 0.875rem);
@@ -1554,19 +1555,20 @@ code {
   color: var(--contrast-foreground);
 }
 
-/* Headings scale with the surrounding markdown (em, not rem) so a larger
-   message size keeps its heading hierarchy instead of flattening into body
-   text. The ratios match the former rem values at the 14px default. */
+/* Headings, inline code, tables, and footnotes scale with the surrounding
+   markdown (em, not rem) so a larger message size keeps its hierarchy
+   instead of flattening into body text. Each ratio is the former rem value
+   over the 0.875rem body, so nothing moves at the default size. */
 .chat-markdown h1 {
-  font-size: 1.43em;
+  font-size: calc(1.25 / 0.875 * 1em);
 }
 
 .chat-markdown h2 {
-  font-size: 1.29em;
+  font-size: calc(1.125 / 0.875 * 1em);
 }
 
 .chat-markdown h3 {
-  font-size: 1.14em;
+  font-size: calc(1 / 0.875 * 1em);
 }
 
 .chat-markdown h4,
@@ -1663,7 +1665,7 @@ code {
   border-top: 1px solid var(--contrast-border);
   padding-top: 0.75rem;
   color: var(--contrast-muted-foreground);
-  font-size: 0.75rem;
+  font-size: calc(0.75 / 0.875 * 1em);
 }
 
 .chat-markdown section[data-footnotes] ol {
@@ -1682,7 +1684,7 @@ code {
   justify-content: center;
   border-radius: 0.25rem;
   text-decoration: none;
-  font-size: 0.6875rem;
+  font-size: calc(0.6875 / 0.875 * 1em);
   font-weight: 600;
 }
 
@@ -1692,7 +1694,13 @@ code {
   background: var(--muted);
   padding: 0.1rem 0.35rem;
   color: var(--contrast-foreground);
-  font-size: 0.86em;
+  font-size: calc(0.75 / 0.875 * 1em);
+}
+
+/* Inside a heading the em ratio would compound against the heading size;
+   code there sits a step under the heading instead of towering over prose. */
+.chat-markdown :is(h1, h2, h3, h4, h5, h6) :not(pre) > code {
+  font-size: 0.9em;
 }
 
 .chat-markdown .chat-markdown-file-link,
@@ -1773,7 +1781,7 @@ code {
   border-collapse: collapse;
   overflow-wrap: normal;
   word-break: normal;
-  font-size: 0.75rem;
+  font-size: calc(0.75 / 0.875 * 1em);
 }
 
 .chat-markdown th,

@@ -3037,7 +3037,11 @@ const CollapsibleUserMessageBody = memo(function CollapsibleUserMessageBody(prop
     <div>
       {hasVisibleBody ? (
         <div
-          className={cn("chat-message-text relative", isCollapsed && "max-h-44 overflow-hidden")}
+          className={cn(
+            "chat-message-text relative",
+            // Clip about eleven lines at any message size, not a fixed 176px.
+            isCollapsed && "max-h-[calc(var(--font-size-message,0.875rem)*12.5)] overflow-hidden",
+          )}
           data-user-message-body="true"
           data-user-message-collapsed={isCollapsed ? "true" : "false"}
           data-user-message-collapsible={canCollapse ? "true" : "false"}
@@ -3114,6 +3118,8 @@ const UserMessageBody = memo(function UserMessageBody(props: {
             cwd={props.markdownCwd}
             threadRef={ctx.threadRef ?? undefined}
             skills={props.skills}
+            // `text-[length:inherit]` makes tailwind-merge drop the markdown root's
+            // `text-sm`, so the body size set on the wrapper reaches the text.
             className="text-message-foreground text-[length:inherit]"
             lineBreaks
             parseRawHtml={false}

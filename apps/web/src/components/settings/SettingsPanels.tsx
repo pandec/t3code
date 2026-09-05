@@ -1588,7 +1588,7 @@ function MessageFontRow() {
   return (
     <FontFamilySettingsRow
       {...searchableSetting("message-font")}
-      description="Agent replies and your messages in the thread. Everything around them keeps the interface size."
+      description="Agent replies and your own messages. Tool rows and the rest of the interface keep their size."
       defaultFamily={defaults.interfaceFamily}
       defaultValue={DEFAULT_UNIFIED_SETTINGS.fontFamilyMessage}
       value={settings.fontFamilyMessage}
