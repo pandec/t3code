@@ -53,6 +53,9 @@ export const MessageSpeechFailureReason = Schema.Literals([
   "source_too_long",
   "script_failed",
   "provider_failed",
+  // The speech vendor refused the request because the account's character
+  // quota is used up; retrying cannot help until credits are added or reset.
+  "provider_quota_exceeded",
   "storage_failed",
 ]);
 export type MessageSpeechFailureReason = typeof MessageSpeechFailureReason.Type;
@@ -134,10 +137,31 @@ export class AgentVoiceReplyError extends Schema.TaggedErrorClass<AgentVoiceRepl
       "script_too_long",
       "turn_unavailable",
       "provider_failed",
+      "provider_quota_exceeded",
       "storage_failed",
     ]),
   },
-) {}
+) {
+  /** The tool error text the agent sees, so it can tell the user what went wrong. */
+  override get message(): string {
+    switch (this.reason) {
+      case "unavailable":
+        return "Voice replies are not configured on this server.";
+      case "empty_script":
+        return "The script is empty.";
+      case "script_too_long":
+        return "The script is too long for one recording. Shorten it.";
+      case "turn_unavailable":
+        return "There is no active turn to attach the recording to.";
+      case "provider_failed":
+        return "ElevenLabs could not synthesize the recording. Reply in text instead.";
+      case "provider_quota_exceeded":
+        return "ElevenLabs refused the request: the account's character quota is used up. Do not retry; tell the user in your written reply.";
+      case "storage_failed":
+        return "The recording could not be stored on the server.";
+    }
+  }
+}
 
 export const MessageSummaryRequest = Schema.Struct({
   messageId: MessageId,

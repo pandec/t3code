@@ -951,9 +951,10 @@ const SidebarThreadRow = memo(function SidebarThreadRow(props: {
   });
   const terminalStatus = terminalStatusFromRunningIds(runningTerminalIds);
   const terminalProcessCount = runningTerminalIds.length;
-  // Set while this thread owns the loaded track (playing or paused), so
-  // pausing from the list keeps a way back in. The subscription re-renders
-  // the row only when the state flips — never on the player's progress tick.
+  // Set while this thread's recording is playing or paused mid-way, so
+  // pausing from the list keeps a way back in. A finished recording clears
+  // it. The subscription re-renders the row only when the state flips, never
+  // on the player's progress tick.
   const listeningState = useThreadListeningState(thread.environmentId, thread.id);
   // Unsent composer text on this thread. The open thread shows its own
   // composer, so the marker only decorates rows you have navigated away from.

@@ -128,6 +128,7 @@ export const EnvironmentInternalErrorReason = Schema.Literals([
   "speech_unavailable",
   "speech_script_failed",
   "speech_provider_failed",
+  "speech_provider_quota_exceeded",
   "internal_error",
 ]);
 export type EnvironmentInternalErrorReason = typeof EnvironmentInternalErrorReason.Type;

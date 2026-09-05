@@ -136,9 +136,9 @@ describe("listening playback active track", () => {
     coordinator.subscribe(listener);
 
     expect(coordinator.activate(trackA.speechId, vi.fn(), trackA)).toBe(true);
-    expect(coordinator.getSnapshot().track).toEqual({ ...trackA, playing: false });
+    expect(coordinator.getSnapshot().track).toEqual({ ...trackA, playing: false, atRest: true });
     coordinator.setTrackPlaying(true);
-    expect(coordinator.getSnapshot().track).toEqual({ ...trackA, playing: true });
+    expect(coordinator.getSnapshot().track).toEqual({ ...trackA, playing: true, atRest: false });
     coordinator.setTrackPlaying(true);
     expect(listener).toHaveBeenCalledTimes(2);
   });
@@ -148,7 +148,7 @@ describe("listening playback active track", () => {
     coordinator.activate(trackA.speechId, vi.fn(), trackA);
     coordinator.setTrackPlaying(true);
     coordinator.activate(trackA.speechId, vi.fn(), trackA);
-    expect(coordinator.getSnapshot().track).toEqual({ ...trackA, playing: true });
+    expect(coordinator.getSnapshot().track).toEqual({ ...trackA, playing: true, atRest: false });
   });
 
   it("replaces the track and resets progress when another recording activates", () => {
@@ -160,7 +160,7 @@ describe("listening playback active track", () => {
 
     coordinator.activate(trackB.speechId, vi.fn(), trackB);
     expect(pauseA).toHaveBeenCalledOnce();
-    expect(coordinator.getSnapshot().track).toEqual({ ...trackB, playing: false });
+    expect(coordinator.getSnapshot().track).toEqual({ ...trackB, playing: false, atRest: true });
     expect(coordinator.getProgress()).toEqual({ currentTime: 0, duration: 0 });
   });
 
@@ -174,6 +174,7 @@ describe("listening playback active track", () => {
   it("notifies progress listeners without waking snapshot listeners", () => {
     const coordinator = createListeningPlaybackCoordinator();
     coordinator.activate(trackA.speechId, vi.fn(), trackA);
+    coordinator.setTrackPlaying(true);
     const snapshotListener = vi.fn();
     const progressListener = vi.fn();
     coordinator.subscribe(snapshotListener);
@@ -181,7 +182,10 @@ describe("listening playback active track", () => {
 
     coordinator.setProgress({ currentTime: 1, duration: 60 });
     coordinator.setProgress({ currentTime: 1, duration: 60 });
-    expect(progressListener).toHaveBeenCalledOnce();
+    coordinator.setProgress({ currentTime: 60, duration: 60 });
+    expect(progressListener).toHaveBeenCalledTimes(2);
+    // Ticks, including reaching the end while still playing, never wake
+    // snapshot subscribers; only a pause at an edge does.
     expect(snapshotListener).not.toHaveBeenCalled();
   });
 
@@ -197,7 +201,7 @@ describe("listening playback active track", () => {
     pauseThreadListening(coordinator, trackA.environmentId, trackA.threadId);
     expect(pause).toHaveBeenCalledOnce();
     // Paused, not cleared: the recording stays loaded and resumable.
-    expect(coordinator.getSnapshot().track).toEqual({ ...trackA, playing: true });
+    expect(coordinator.getSnapshot().track).toEqual({ ...trackA, playing: true, atRest: false });
   });
 
   it("resolves the now-playing indicator only for the playing thread", () => {
@@ -227,19 +231,56 @@ describe("listening playback active track", () => {
     expect(threadListeningState(coordinator.getSnapshot(), "env-1", "thread-1")).toBeNull();
     expect(isThreadListeningLoaded(coordinator.getSnapshot(), "env-1", "thread-1")).toBe(false);
 
+    // Loaded but not yet played: nothing to resume, so no indicator yet.
     coordinator.activate(trackA.speechId, vi.fn(), trackA);
-    expect(threadListeningState(coordinator.getSnapshot(), "env-1", "thread-1")).toBe("paused");
+    expect(threadListeningState(coordinator.getSnapshot(), "env-1", "thread-1")).toBeNull();
     expect(isThreadListeningLoaded(coordinator.getSnapshot(), "env-1", "thread-1")).toBe(true);
-    expect(threadListeningState(coordinator.getSnapshot(), "env-1", "thread-2")).toBeNull();
 
     coordinator.setTrackPlaying(true);
     expect(threadListeningState(coordinator.getSnapshot(), "env-1", "thread-1")).toBe("playing");
+    expect(threadListeningState(coordinator.getSnapshot(), "env-1", "thread-2")).toBeNull();
 
+    coordinator.setProgress({ currentTime: 12, duration: 60 });
     coordinator.setTrackPlaying(false);
     expect(threadListeningState(coordinator.getSnapshot(), "env-1", "thread-1")).toBe("paused");
 
     coordinator.setTrack(null);
     expect(threadListeningState(coordinator.getSnapshot(), "env-1", "thread-1")).toBeNull();
+  });
+
+  it("clears the indicator once the recording finishes or is parked at an edge", () => {
+    const coordinator = createListeningPlaybackCoordinator();
+    const listener = vi.fn();
+    coordinator.activate(trackA.speechId, vi.fn(), trackA);
+    coordinator.setTrackPlaying(true);
+    coordinator.subscribe(listener);
+
+    // Ticks mid-track never wake snapshot subscribers.
+    coordinator.setProgress({ currentTime: 12, duration: 60 });
+    coordinator.setProgress({ currentTime: 13, duration: 60 });
+    expect(listener).not.toHaveBeenCalled();
+
+    // Played to the end: still loaded (archive/delete keep working) but the
+    // list shows nothing, since there is nothing left to resume.
+    coordinator.setProgress({ currentTime: 60, duration: 60 });
+    coordinator.setTrackPlaying(false);
+    expect(threadListeningState(coordinator.getSnapshot(), "env-1", "thread-1")).toBeNull();
+    expect(isThreadListeningLoaded(coordinator.getSnapshot(), "env-1", "thread-1")).toBe(true);
+    expect(listener).toHaveBeenCalledTimes(1);
+
+    // Replay from the start brings it back.
+    coordinator.setProgress({ currentTime: 0, duration: 60 });
+    coordinator.setTrackPlaying(true);
+    expect(threadListeningState(coordinator.getSnapshot(), "env-1", "thread-1")).toBe("playing");
+
+    // Paused mid-way and dragged to the start: gone again, no play needed.
+    coordinator.setProgress({ currentTime: 20, duration: 60 });
+    coordinator.setTrackPlaying(false);
+    expect(threadListeningState(coordinator.getSnapshot(), "env-1", "thread-1")).toBe("paused");
+    coordinator.setProgress({ currentTime: 0, duration: 60 });
+    expect(threadListeningState(coordinator.getSnapshot(), "env-1", "thread-1")).toBeNull();
+    coordinator.setProgress({ currentTime: 20, duration: 60 });
+    expect(threadListeningState(coordinator.getSnapshot(), "env-1", "thread-1")).toBe("paused");
   });
 });
 
@@ -385,7 +426,7 @@ describe("listening playback startup generations", () => {
     await first;
     // Ownership and track survive: recording-block pauses must still reach
     // the player, and the lists must still show the playing indicator.
-    expect(coordinator.getSnapshot().track).toEqual({ ...trackA, playing: true });
+    expect(coordinator.getSnapshot().track).toEqual({ ...trackA, playing: true, atRest: false });
     coordinator.pauseActive();
     expect(pause).toHaveBeenCalledOnce();
   });

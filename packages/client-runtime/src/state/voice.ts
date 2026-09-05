@@ -32,6 +32,8 @@ export const messageSpeechFailureDescription = (
       return "This message is too long to prepare as audio.";
     case "message_unavailable":
       return "This message changed before audio was ready. Try again.";
+    case "provider_quota_exceeded":
+      return "The server's ElevenLabs character quota is used up. Add credits or wait for the monthly reset.";
     default:
       return "T3 Code could not prepare audio for this message. Try again in a moment.";
   }

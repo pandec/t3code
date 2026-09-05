@@ -475,9 +475,9 @@ export const ThreadListRow = memo(function ThreadListRow(props: {
   const { thread, onSelectThread, onArchiveThread, onDeleteThread, onRegenerateThreadTitle } =
     props;
   const status = resolveThreadStatus(thread);
-  // Set while this thread owns the loaded track (playing or paused), so
-  // pausing from the list keeps a way back in. Re-renders only when the
-  // state flips — never on the player's progress tick.
+  // Set while this thread's recording is playing or paused mid-way, so
+  // pausing from the list keeps a way back in. A finished recording clears
+  // it. Re-renders only when the state flips, never on the progress tick.
   const listeningState = useThreadListeningState(thread.environmentId, thread.id);
   const toggleListeningAudio = useCallback(() => toggleLoadedListeningTrack(), []);
   const listeningActionLabel = listeningState === "playing" ? "Pause audio" : "Play audio";

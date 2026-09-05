@@ -2255,7 +2255,7 @@ function ListeningTransportProgress({ blocked }: { blocked: boolean }) {
   }, [setScrubTime]);
   const handleSeekKeyDown = useCallback(
     (event: KeyboardEvent<HTMLInputElement>) => {
-      // Native range steps are useless for audio (1s per press); arrows jump
+      // Native arrow steps are useless for audio; arrows jump
       // 5s and PageUp/PageDown 15s instead, applied immediately so keyboard
       // seeking never waits on a pointer-style commit.
       const jump =
@@ -2304,7 +2304,10 @@ function ListeningTransportProgress({ blocked }: { blocked: boolean }) {
         onKeyDown={handleSeekKeyDown}
         onPointerCancel={() => setScrubTime(null)}
         onPointerUp={commitScrub}
-        step={1}
+        // Continuous, so the thumb sits on the exact position. Whole-second
+        // steps snapped it ahead of or behind the continuous fill and short
+        // of the end on a fractional duration.
+        step="any"
         style={listeningSliderFillStyle(ratio)}
         type="range"
         value={shownTime}

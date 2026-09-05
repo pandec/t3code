@@ -27,7 +27,11 @@ import { ServerSettingsService } from "../serverSettings.ts";
 import { TextGeneration } from "../textGeneration/TextGeneration.ts";
 import { messageArtifactTextHash } from "../messageArtifacts/identity.ts";
 import { makeMessageArtifactLockCoordinator } from "../messageArtifacts/lock.ts";
-import { SPEECH_MIME_TYPE, synthesizeElevenLabsSpeech } from "./elevenLabsTts.ts";
+import {
+  SPEECH_MIME_TYPE,
+  speechFailureReasonFor,
+  synthesizeElevenLabsSpeech,
+} from "./elevenLabsTts.ts";
 
 export { makeMessageArtifactLockCoordinator as makeMessageSpeechLockCoordinator };
 
@@ -349,7 +353,11 @@ export const layer = Layer.effect(
         voiceId,
         ttsModel,
         text: transcript,
-      }).pipe(Effect.mapError(() => new MessageSpeechError({ reason: "provider_failed" })));
+      }).pipe(
+        Effect.mapError(
+          (error) => new MessageSpeechError({ reason: speechFailureReasonFor(error) }),
+        ),
+      );
 
       // Synthesis can be slow. Revalidate the exact source before committing an
       // attachment so a message edit, deletion, or agent recording that landed

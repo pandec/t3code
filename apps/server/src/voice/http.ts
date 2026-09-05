@@ -151,6 +151,8 @@ export const voiceHttpApiLayer = HttpApiBuilder.group(
           return failEnvironmentInternal("speech_script_failed", cause);
         case "provider_failed":
           return failEnvironmentInternal("speech_provider_failed", cause);
+        case "provider_quota_exceeded":
+          return failEnvironmentInternal("speech_provider_quota_exceeded", cause);
         case "storage_failed":
           return failEnvironmentInternal("internal_error", cause);
       }

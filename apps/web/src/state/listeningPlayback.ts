@@ -339,9 +339,10 @@ export function useListeningPlaybackProgress() {
 }
 
 /**
- * Indicator state for a sidebar row: "playing", "paused" while the thread
- * still owns the loaded track, or null. String snapshots bail out of
- * re-renders exactly like a boolean selector would.
+ * Indicator state for a sidebar row: "playing", "paused" while the thread's
+ * recording sits mid-way, or null (including once it has played to the end).
+ * String snapshots bail out of re-renders exactly like a boolean selector
+ * would.
  */
 export function useThreadListeningState(
   environmentId: string,
