@@ -1477,11 +1477,11 @@ code {
    can grow without scaling the rest of the interface. Only these bodies opt
    in; tool rows, plan cards, summaries, and other chat markdown stay at the
    interface size. Deliberately unlayered so it outranks the `text-sm`
-   utility the markdown root carries. */
+   utility the markdown root carries. The body-size override lives with the
+   markdown rules below, where it can outrank the `.chat-markdown` default. */
 .chat-message-text {
-  --markdown-body-size: var(--font-size-message, 0.875rem);
   font-family: var(--font-message, var(--font-sans));
-  font-size: var(--markdown-body-size);
+  font-size: var(--font-size-message, 0.875rem);
 }
 
 /* @pierre/diffs surfaces (diffs, file previews, annotatable code, search
@@ -1565,6 +1565,14 @@ code {
    never nest, so the ratio cannot compound. */
 .chat-markdown {
   --markdown-body-size: 0.875rem;
+}
+
+/* Assistant replies carry both classes on one element; user messages put
+   the message class on a wrapper above the markdown root. Two selectors,
+   both more specific than the default above, cover both shapes. */
+.chat-markdown.chat-message-text,
+.chat-message-text .chat-markdown {
+  --markdown-body-size: var(--font-size-message, 0.875rem);
 }
 
 .chat-markdown h1 {
