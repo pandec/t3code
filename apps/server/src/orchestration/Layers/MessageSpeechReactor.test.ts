@@ -116,6 +116,8 @@ const repositoryService = (
       ),
     ),
   ),
+  hasAssistantMessageForTurn: () => Effect.die("unused"),
+  getLatestAssistantMessageIdForTurn: () => Effect.die("unused"),
   listByThreadId: ({ threadId }) =>
     Ref.get(messages).pipe(
       Effect.map((current) =>

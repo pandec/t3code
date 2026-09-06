@@ -28,7 +28,6 @@ import { useAccentTintSettings } from "../../state/use-mobile-preferences";
 import type { PendingNewTask } from "../../state/use-pending-new-tasks";
 import { useThreadPr } from "../../state/use-thread-pr";
 import { ThreadSwipeable } from "../home/thread-swipe-actions";
-import { useAppearancePreferences } from "../settings/appearance/AppearancePreferencesProvider";
 import { buildThreadTitleRegenerationMenuItems } from "./thread-title-regeneration-menu";
 import {
   resolveThreadListV2MenuActionIds,
@@ -60,11 +59,11 @@ const MONO_FONT = Platform.select({
 const STATUS_LABEL_BY_STATUS: Partial<
   Record<ThreadListV2Status, { label: string; className: string }>
 > = {
-  approval: { label: "Approval", className: "text-adaptive-amber-700-300" },
-  input: { label: "Input", className: "text-adaptive-indigo-600-300" },
-  working: { label: "Working", className: "text-adaptive-sky-600-400" },
-  monitoring: { label: "Monitoring", className: "text-adaptive-sky-600-400" },
-  failed: { label: "Failed", className: "text-adaptive-red-700-300" },
+  approval: { label: "Approval", className: "text-warning-foreground" },
+  input: { label: "Input", className: "text-foreground-secondary" },
+  working: { label: "Working", className: "text-foreground-secondary" },
+  monitoring: { label: "Monitoring", className: "text-foreground-secondary" },
+  failed: { label: "Failed", className: "text-danger-foreground" },
 };
 
 function threadTimeLabel(thread: EnvironmentThreadShell): string {
@@ -120,12 +119,6 @@ const SNOOZED_MENU_ACTIONS: MenuAction[] = [
 
 /** Rounded-row radius shared with the v1 sidebar rows. */
 const SIDEBAR_V2_ROW_RADIUS = 12;
-
-// Leading-swipe hues. Archive keeps the panel's default blue; pin and fork
-// take iOS system tints no other swipe button uses, so a hue never means two
-// different actions (the trailing panel already owns indigo for Snooze).
-const PIN_SWIPE_COLOR = "#ff9500";
-const FORK_SWIPE_COLOR = "#30b0c7";
 
 /**
  * The project accent as a flat tint layered over the row's own background,
@@ -233,9 +226,6 @@ export const ThreadListV2PinnedShelfHeader = memo(function ThreadListV2PinnedShe
   );
 });
 
-const SNOOZE_ACCENT_LIGHT = "#2563eb";
-const SNOOZE_ACCENT_DARK = "#60a5fa";
-
 export const ThreadListV2SnoozedShelfHeader = memo(function ThreadListV2SnoozedShelfHeader(props: {
   readonly count: number;
   readonly disabled?: boolean;
@@ -243,7 +233,6 @@ export const ThreadListV2SnoozedShelfHeader = memo(function ThreadListV2SnoozedS
   readonly onToggle: () => void;
   readonly pane?: "screen" | "sidebar";
 }) {
-  const { themeAppearance: colorScheme } = useAppearancePreferences();
   return (
     <Pressable
       accessibilityHint={
@@ -260,14 +249,14 @@ export const ThreadListV2SnoozedShelfHeader = memo(function ThreadListV2SnoozedS
       onPress={props.onToggle}
       style={({ pressed }) => ({ opacity: pressed ? 0.6 : 1 })}
     >
-      <Text className="text-xs font-t3-medium text-adaptive-blue-600-400">
+      <Text className="text-xs font-t3-medium text-foreground-secondary">
         {props.expanded ? "Snoozed" : `Snoozed (${props.count})`}
       </Text>
-      <View className="h-px flex-1 bg-adaptive-blue-500-a20-blue-400-a15" />
+      <View className="h-px flex-1 bg-primary/20" />
       <SymbolView
         name="chevron.down"
         size={10}
-        tintColor={colorScheme === "dark" ? SNOOZE_ACCENT_DARK : SNOOZE_ACCENT_LIGHT}
+        tintColorClassName="accent-icon-muted"
         type="monochrome"
         style={{ transform: [{ rotate: props.expanded ? "180deg" : "0deg" }] }}
       />
@@ -886,12 +875,14 @@ export const ThreadListV2Row = memo(function ThreadListV2Row(props: {
     [handleMenuAction, snoozePresetActions, swipeActions.secondary, thread.title],
   );
   // Leading panel, ordered from the screen edge inward. Archive stays last so
-  // it remains what a full swipe right commits, as it always has.
+  // it remains what a full swipe right commits, as it always has. Tones keep
+  // each action distinct: pin is warning, fork is secondary, archive is the
+  // panel's primary default (the trailing panel owns danger for Delete).
   const leftActions = swipeActions.left.map((action) => {
     if (action === "pin") {
       return {
         accessibilityLabel: `Pin ${thread.title}`,
-        backgroundColor: PIN_SWIPE_COLOR,
+        tone: "warning" as const,
         icon: "pin" as const,
         label: "Pin",
         onPress: handlePin,
@@ -900,7 +891,7 @@ export const ThreadListV2Row = memo(function ThreadListV2Row(props: {
     if (action === "unpin") {
       return {
         accessibilityLabel: `Unpin ${thread.title}`,
-        backgroundColor: PIN_SWIPE_COLOR,
+        tone: "warning" as const,
         icon: "pin.slash" as const,
         label: "Unpin",
         onPress: handleUnpin,
@@ -909,7 +900,7 @@ export const ThreadListV2Row = memo(function ThreadListV2Row(props: {
     if (action === "fork") {
       return {
         accessibilityLabel: `Fork ${thread.title}`,
-        backgroundColor: FORK_SWIPE_COLOR,
+        tone: "secondary" as const,
         icon: "arrow.triangle.branch" as const,
         label: "Fork",
         onPress: handleFork,
@@ -1002,7 +993,7 @@ export const ThreadListV2Row = memo(function ThreadListV2Row(props: {
           <Text
             className={cn(
               "flex-1 text-xs",
-              selected ? "text-user-bubble-foreground-muted" : "text-adaptive-red-600-a80-400-a80",
+              selected ? "text-user-bubble-foreground-muted" : "text-danger-foreground",
             )}
             numberOfLines={1}
           >
@@ -1233,7 +1224,7 @@ export const ThreadListV2Row = memo(function ThreadListV2Row(props: {
               selected
                 ? "text-user-bubble-foreground-muted"
                 : snoozedRow
-                  ? "text-adaptive-blue-600-400"
+                  ? "text-foreground-secondary"
                   : "text-foreground-tertiary",
             )}
             style={{ fontFamily: MONO_FONT }}

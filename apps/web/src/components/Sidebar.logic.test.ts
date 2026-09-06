@@ -1,6 +1,8 @@
 import { THREAD_STATUS_PARITY_CASES } from "@t3tools/client-runtime/testing/thread-status-parity";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vite-plus/test";
 import { defaultAnimateLayoutChanges, type AnimateLayoutChanges } from "@dnd-kit/sortable";
+import * as Cause from "effect/Cause";
+import { AsyncResult } from "effect/unstable/reactivity";
 import {
   animatePinnedLayoutChanges,
   archiveSelectedThreadEntries,
@@ -11,13 +13,12 @@ import {
   canArchiveThreadNow,
   createSidebarV2AttentionFilter,
   createThreadJumpHintVisibilityController,
+  deleteSelectedThreadEntries,
   filterSidebarProjectScopeItems,
   getSidebarThreadIdsToPrewarm,
-  getVisibleSidebarThreadIds,
   resolveAdjacentThreadId,
   reduceSidebarProjectScopeMenuState,
   getFallbackThreadIdAfterDelete,
-  getVisibleThreadsForProject,
   getProjectSortTimestamp,
   hasUnseenCompletion,
   hasUnseenWake,
@@ -290,6 +291,102 @@ describe("canArchiveThreadNow", () => {
     expect(
       canArchiveThreadNow({ session: { ...session, activeTurnId: TurnId.make("turn-1") } }),
     ).toBe(true);
+  });
+});
+
+describe("deleteSelectedThreadEntries", () => {
+  const entries = [{ threadKey: "one" }, { threadKey: "two" }, { threadKey: "three" }] as const;
+  const success = AsyncResult.success(undefined);
+  const failure = AsyncResult.failure(Cause.fail(new Error("Delete failed")));
+  const interrupted = AsyncResult.failure(Cause.interrupt());
+
+  it("waits for each delete and excludes only earlier successes from worktree checks", async () => {
+    let resolveDelete!: (result: typeof success) => void;
+    const pendingDelete = new Promise<typeof success>((resolve) => {
+      resolveDelete = resolve;
+    });
+    const worktreeChecks: { threadKey: string; deletedThreadKeys: string[] }[] = [];
+    const deletion = deleteSelectedThreadEntries({
+      entries,
+      delete: async ({ threadKey }, deletedThreadKeys) => {
+        worktreeChecks.push({ threadKey, deletedThreadKeys: [...deletedThreadKeys] });
+        return threadKey === "one" ? pendingDelete : success;
+      },
+    });
+
+    expect(worktreeChecks).toEqual([{ threadKey: "one", deletedThreadKeys: [] }]);
+    resolveDelete(success);
+    const outcome = await deletion;
+
+    expect(worktreeChecks).toEqual([
+      { threadKey: "one", deletedThreadKeys: [] },
+      { threadKey: "two", deletedThreadKeys: ["one"] },
+      { threadKey: "three", deletedThreadKeys: ["one", "two"] },
+    ]);
+    expect(outcome).toEqual({
+      deletedThreadKeys: new Set(["one", "two", "three"]),
+      firstFailure: null,
+    });
+  });
+
+  it("continues after ordinary failures and keeps the first failure", async () => {
+    const laterFailure = AsyncResult.failure(Cause.fail(new Error("Later failure")));
+    const deletedKeysAtLastEntry: string[][] = [];
+    const outcome = await deleteSelectedThreadEntries({
+      entries: [...entries, { threadKey: "four" }],
+      delete: async ({ threadKey }, deletedThreadKeys) => {
+        if (threadKey === "one") return failure;
+        if (threadKey === "three") return laterFailure;
+        if (threadKey === "four") deletedKeysAtLastEntry.push([...deletedThreadKeys]);
+        return success;
+      },
+    });
+
+    expect(deletedKeysAtLastEntry).toEqual([["two"]]);
+    expect(outcome).toEqual({
+      deletedThreadKeys: new Set(["two", "four"]),
+      firstFailure: failure,
+    });
+  });
+
+  it.each([
+    { firstResult: success, deletedThreadKeys: new Set(["one"]), firstFailure: null },
+    { firstResult: failure, deletedThreadKeys: new Set<string>(), firstFailure: failure },
+  ])("stops on interruption and preserves earlier results %#", async (testCase) => {
+    const attemptedThreadKeys: string[] = [];
+    const outcome = await deleteSelectedThreadEntries({
+      entries,
+      delete: async ({ threadKey }) => {
+        attemptedThreadKeys.push(threadKey);
+        return threadKey === "one" ? testCase.firstResult : interrupted;
+      },
+    });
+
+    expect(attemptedThreadKeys).toEqual(["one", "two"]);
+    expect(outcome).toEqual({
+      deletedThreadKeys: testCase.deletedThreadKeys,
+      firstFailure: testCase.firstFailure,
+    });
+  });
+
+  it("does not count a skipped entry as deleted", async () => {
+    const visibleEntries = new Set(entries.map(({ threadKey }) => threadKey));
+    const worktreeChecks: string[][] = [];
+    const outcome = await deleteSelectedThreadEntries({
+      entries,
+      delete: async ({ threadKey }, deletedThreadKeys) => {
+        if (!visibleEntries.has(threadKey)) return null;
+        worktreeChecks.push([...deletedThreadKeys]);
+        visibleEntries.delete("two");
+        return success;
+      },
+    });
+
+    expect(worktreeChecks).toEqual([[], ["one"]]);
+    expect(outcome).toEqual({
+      deletedThreadKeys: new Set(["one", "three"]),
+      firstFailure: null,
+    });
   });
 });
 
@@ -951,46 +1048,6 @@ describe("resolveAdjacentThreadId", () => {
         direction: "previous",
       }),
     ).toBeNull();
-  });
-});
-
-describe("getVisibleSidebarThreadIds", () => {
-  it("returns only the rendered visible thread order across projects", () => {
-    expect(
-      getVisibleSidebarThreadIds([
-        {
-          renderedThreadIds: [
-            ThreadId.make("thread-12"),
-            ThreadId.make("thread-11"),
-            ThreadId.make("thread-10"),
-          ],
-        },
-        {
-          renderedThreadIds: [ThreadId.make("thread-8"), ThreadId.make("thread-6")],
-        },
-      ]),
-    ).toEqual([
-      ThreadId.make("thread-12"),
-      ThreadId.make("thread-11"),
-      ThreadId.make("thread-10"),
-      ThreadId.make("thread-8"),
-      ThreadId.make("thread-6"),
-    ]);
-  });
-
-  it("skips threads from collapsed projects whose thread panels are not shown", () => {
-    expect(
-      getVisibleSidebarThreadIds([
-        {
-          shouldShowThreadPanel: false,
-          renderedThreadIds: [ThreadId.make("thread-hidden-2"), ThreadId.make("thread-hidden-1")],
-        },
-        {
-          shouldShowThreadPanel: true,
-          renderedThreadIds: [ThreadId.make("thread-12"), ThreadId.make("thread-11")],
-        },
-      ]),
-    ).toEqual([ThreadId.make("thread-12"), ThreadId.make("thread-11")]);
   });
 });
 
@@ -1864,57 +1921,6 @@ describe("resolveProjectStatusIndicator", () => {
         },
       ]),
     ).toMatchObject({ label: "Plan Ready", dotClass: "bg-violet-500" });
-  });
-});
-
-describe("getVisibleThreadsForProject", () => {
-  it("includes the active thread even when it falls below the folded preview", () => {
-    const threads = Array.from({ length: 8 }, (_, index) =>
-      makeThread({
-        id: ThreadId.make(`thread-${index + 1}`),
-        title: `Thread ${index + 1}`,
-      }),
-    );
-
-    const result = getVisibleThreadsForProject({
-      threads,
-      activeThreadId: ThreadId.make("thread-8"),
-      isThreadListExpanded: false,
-      previewLimit: 6,
-    });
-
-    expect(result.hasHiddenThreads).toBe(true);
-    expect(result.visibleThreads.map((thread) => thread.id)).toEqual([
-      ThreadId.make("thread-1"),
-      ThreadId.make("thread-2"),
-      ThreadId.make("thread-3"),
-      ThreadId.make("thread-4"),
-      ThreadId.make("thread-5"),
-      ThreadId.make("thread-6"),
-      ThreadId.make("thread-8"),
-    ]);
-    expect(result.hiddenThreads.map((thread) => thread.id)).toEqual([ThreadId.make("thread-7")]);
-  });
-
-  it("returns all threads when the list is expanded", () => {
-    const threads = Array.from({ length: 8 }, (_, index) =>
-      makeThread({
-        id: ThreadId.make(`thread-${index + 1}`),
-      }),
-    );
-
-    const result = getVisibleThreadsForProject({
-      threads,
-      activeThreadId: ThreadId.make("thread-8"),
-      isThreadListExpanded: true,
-      previewLimit: 6,
-    });
-
-    expect(result.hasHiddenThreads).toBe(true);
-    expect(result.visibleThreads.map((thread) => thread.id)).toEqual(
-      threads.map((thread) => thread.id),
-    );
-    expect(result.hiddenThreads).toEqual([]);
   });
 });
 

@@ -16,6 +16,7 @@ import {
   type UsageSummaryInput,
 } from "@t3tools/contracts";
 import { runAtomCommand } from "@t3tools/client-runtime/state/runtime";
+import { refreshUsage } from "@t3tools/client-runtime/state/usage";
 import { mergeUsage, type EnvironmentUsage, type MergedUsage } from "@t3tools/shared/usageMerge";
 import * as Option from "effect/Option";
 import { AsyncResult, Atom } from "effect/unstable/reactivity";
@@ -70,17 +71,23 @@ const usageByWindowAtom = Atom.family((windowKey: string) =>
 export interface UsageView {
   readonly merged: MergedUsage;
   readonly environments: readonly EnvironmentUsageStatus[];
+  readonly selectedEnvironments: readonly EnvironmentUsageStatus[];
   /** True until at least one environment has answered. */
   readonly isPending: boolean;
   /**
    * True while environments that can still answer are answering. Failed and
-   * unreachable environments are terminal and reported through coverage rows.
+   * unreachable environments are terminal and reported through coverage rows:
+   * totals will not improve by waiting on them, so they must not read as
+   * "still reporting".
    */
   readonly isPartial: boolean;
-  readonly refresh: () => void;
+  readonly refresh: (input?: UsageSummaryInput) => Promise<void>;
 }
 
-export function useUsage(input: UsageSummaryInput): UsageView {
+export function useUsage(
+  input: UsageSummaryInput,
+  selectedEnvironmentIds: ReadonlySet<EnvironmentId> | null = null,
+): UsageView {
   const windowKey = useMemo(
     () =>
       JSON.stringify({
@@ -102,39 +109,44 @@ export function useUsage(input: UsageSummaryInput): UsageView {
   );
   const atom = usageByWindowAtom(windowKey);
   const environments = useAtomValue(atom);
+  const selectedEnvironments = useMemo(
+    () =>
+      selectedEnvironmentIds === null
+        ? environments
+        : environments.filter(({ environmentId }) => selectedEnvironmentIds.has(environmentId)),
+    [environments, selectedEnvironmentIds],
+  );
 
-  // Refreshing only the derived atom would re-read the per-environment SWR
-  // queries within their stale window and change nothing. Refresh each
-  // environment's query so pull-to-refresh always rescans.
-  //
-  // Each environment refetches model pricing first, so a model released since
-  // its last daily fetch gets priced by the rescan. The rescan runs whether or
-  // not the refetch succeeds: an offline environment still recounts tokens.
-  const refresh = useCallback(() => {
-    const input = JSON.parse(windowKey) as UsageSummaryInput;
-    for (const environment of environments) {
-      const { environmentId } = environment;
-      const query = serverEnvironment.usageSummary({ environmentId, input });
-      void runAtomCommand(
-        appAtomRegistry,
-        serverEnvironment.refreshUsageRates,
-        { environmentId, input: {} },
-        { reportFailure: false },
-      ).finally(() => appAtomRegistry.refresh(query));
+  // The shared helper refetches model pricing, then rescans each selected
+  // environment's transcripts, so a model released since the last daily fetch
+  // gets priced by the rescan.
+  const refresh = useCallback(
+    (nextInput?: UsageSummaryInput) => {
+      const environmentIds = selectedEnvironments.map(({ environmentId }) => environmentId);
       // The Limits section on the same screen reads provider quota snapshots,
-      // which the transcript rescan above never touches (web refreshes them
+      // which the transcript rescan never touches (web refreshes them
       // explicitly on its Limits tab).
-      void runAtomCommand(
-        appAtomRegistry,
-        serverEnvironment.refreshProviders,
-        { environmentId, input: {} },
-        { reportFailure: false },
-      );
-    }
-  }, [environments, windowKey]);
+      for (const environmentId of environmentIds) {
+        void runAtomCommand(
+          appAtomRegistry,
+          serverEnvironment.refreshProviders,
+          { environmentId, input: {} },
+          { reportFailure: false },
+        );
+      }
+      return refreshUsage({
+        registry: appAtomRegistry,
+        server: serverEnvironment,
+        presentations: environmentPresentations,
+        environmentIds,
+        input: nextInput ?? (JSON.parse(windowKey) as UsageSummaryInput),
+      });
+    },
+    [selectedEnvironments, windowKey],
+  );
 
   const merged = useMemo(() => {
-    const answered: EnvironmentUsage[] = environments.flatMap((environment) =>
+    const answered: EnvironmentUsage[] = selectedEnvironments.flatMap((environment) =>
       environment.state.kind === "reported"
         ? [
             {
@@ -146,13 +158,14 @@ export function useUsage(input: UsageSummaryInput): UsageView {
         : [],
     );
     return mergeUsage(answered, USAGE_CONTRACT_VERSION);
-  }, [environments]);
+  }, [selectedEnvironments]);
 
-  const progress = usageProgress(environments.map((environment) => environment.state));
+  const progress = usageProgress(selectedEnvironments.map((environment) => environment.state));
 
   return {
     merged,
     environments,
+    selectedEnvironments,
     isPending: progress.isPending,
     isPartial: progress.isPartial,
     refresh,

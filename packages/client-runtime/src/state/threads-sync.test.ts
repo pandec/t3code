@@ -1477,6 +1477,64 @@ describe("EnvironmentThreads", () => {
     }),
   );
 
+  it.effect("clears an older-page error on a live thread when the connection reports ready", () =>
+    Effect.gen(function* () {
+      const recent = [makeThreadMessage(3), makeThreadMessage(4)];
+      const harness = yield* makeHarness({
+        cached: {
+          ...BASE_THREAD,
+          messages: recent,
+          messageWindow: {
+            hasMoreOlder: true,
+            oldestLoadedMessageId: recent[0]!.id,
+            totalCount: 4,
+          },
+        },
+        messagePage: Option.some({
+          threadId: THREAD_ID,
+          messages: [makeThreadMessage(1), makeThreadMessage(2)],
+          hasMoreOlder: false,
+          snapshotSequence: CACHED_SNAPSHOT_SEQUENCE,
+        }),
+      });
+      yield* awaitThreadState(
+        harness.observed,
+        (value) => value.status === "live" && Option.isSome(value.data),
+      );
+
+      // Losing the prepared connection alone leaves the subscription live but
+      // fails the page attempt, which is the stale-error shape under test.
+      yield* SubscriptionRef.set(harness.prepared, Option.none());
+      yield* harness.loadOlderMessages();
+      const failed = yield* awaitThreadState(
+        harness.observed,
+        (value) => value.olderMessages.settledCount === 1,
+      );
+      expect(failed.status).toBe("live");
+      expect(failed.olderMessages.error).toBe("The environment is not connected.");
+
+      // A connection "ready" tick on a still-live thread must clear the stale
+      // page error without demoting the thread to synchronizing.
+      yield* SubscriptionRef.set(harness.prepared, Option.some(PREPARED));
+      yield* SubscriptionRef.set(harness.supervisorState, {
+        desired: true,
+        network: "online",
+        phase: "connected",
+        stage: null,
+        attempt: 2,
+        generation: 2,
+        lastFailure: null,
+        retryAt: null,
+      });
+      const ready = yield* awaitThreadState(
+        harness.observed,
+        (value) => value.olderMessages.error === null,
+      );
+      expect(ready.status).toBe("live");
+      expect(ready.olderMessages.settledCount).toBe(1);
+    }),
+  );
+
   it.effect("clears a disconnected page error on warm resume and pages on the next attempt", () =>
     Effect.gen(function* () {
       const recent = [makeThreadMessage(3), makeThreadMessage(4)];

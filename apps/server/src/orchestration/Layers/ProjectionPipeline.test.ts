@@ -766,6 +766,102 @@ it.layer(Layer.fresh(makeProjectionPipelinePrefixedTestLayer("t3-generation-prov
   },
 );
 
+it.layer(Layer.fresh(makeProjectionPipelinePrefixedTestLayer("t3-import-shell-")))(
+  "imported thread shell projection",
+  (it) => {
+    it.effect("does not mark imported user messages as queued work in thread shells", () =>
+      Effect.gen(function* () {
+        const projectionPipeline = yield* OrchestrationProjectionPipeline;
+        const eventStore = yield* OrchestrationEventStore;
+        const sql = yield* SqlClient.SqlClient;
+        const createdAt = "2026-08-24T10:00:00.000Z";
+        const threadId = ThreadId.make("import:codex:shell-session");
+
+        yield* eventStore.append({
+          type: "thread.created",
+          eventId: EventId.make("evt-import-shell-thread"),
+          aggregateKind: "thread",
+          aggregateId: threadId,
+          occurredAt: createdAt,
+          commandId: CommandId.make("cmd-import-shell-thread"),
+          causationEventId: null,
+          correlationId: CommandId.make("cmd-import-shell-thread"),
+          metadata: {},
+          payload: {
+            threadId,
+            projectId: ProjectId.make("project-import-shell"),
+            title: "Imported thread",
+            modelSelection: { instanceId: ProviderInstanceId.make("codex"), model: "gpt-5" },
+            runtimeMode: "full-access",
+            interactionMode: "default",
+            branch: null,
+            worktreePath: null,
+            createdAt,
+            updatedAt: createdAt,
+          },
+        });
+        yield* eventStore.append({
+          type: "thread.message-sent",
+          eventId: EventId.make("evt-import-shell-message"),
+          aggregateKind: "thread",
+          aggregateId: threadId,
+          occurredAt: createdAt,
+          commandId: CommandId.make("cmd-import-shell-message"),
+          causationEventId: null,
+          correlationId: CommandId.make("cmd-import-shell-message"),
+          metadata: { historyImport: true },
+          payload: {
+            threadId,
+            messageId: MessageId.make("import:codex:shell-session:0"),
+            role: "user",
+            text: "Imported user prompt",
+            turnId: null,
+            streaming: false,
+            createdAt,
+            updatedAt: createdAt,
+          },
+        });
+
+        yield* projectionPipeline.bootstrap;
+
+        const readLatestUserMessageAt = sql<{ readonly latestUserMessageAt: string | null }>`
+        SELECT latest_user_message_at AS "latestUserMessageAt"
+        FROM projection_threads
+        WHERE thread_id = ${threadId}
+      `;
+        assert.deepEqual(yield* readLatestUserMessageAt, [{ latestUserMessageAt: null }]);
+
+        const sessionEvent = yield* eventStore.append({
+          type: "thread.session-set",
+          eventId: EventId.make("evt-import-shell-session"),
+          aggregateKind: "thread",
+          aggregateId: threadId,
+          occurredAt: createdAt,
+          commandId: CommandId.make("cmd-import-shell-session"),
+          causationEventId: null,
+          correlationId: CommandId.make("cmd-import-shell-session"),
+          metadata: {},
+          payload: {
+            threadId,
+            session: {
+              threadId,
+              status: "ready",
+              providerName: "codex",
+              providerInstanceId: ProviderInstanceId.make("codex"),
+              runtimeMode: "full-access",
+              activeTurnId: null,
+              lastError: null,
+              updatedAt: createdAt,
+            },
+          },
+        });
+        yield* projectionPipeline.projectEvent(sessionEvent);
+        assert.deepEqual(yield* readLatestUserMessageAt, [{ latestUserMessageAt: null }]);
+      }),
+    );
+  },
+);
+
 it.layer(BaseTestLayer)("OrchestrationProjectionPipeline", (it) => {
   it.effect("bootstraps all projection states and writes projection rows", () =>
     Effect.gen(function* () {
@@ -3430,7 +3526,7 @@ it.layer(BaseTestLayer)("OrchestrationProjectionPipeline", (it) => {
     }),
   );
 
-  it.effect("maintains shell summaries without reading message bodies", () =>
+  it.effect("maintains shell summaries without decoding message or plan bodies", () =>
     Effect.gen(function* () {
       const projectionPipeline = yield* OrchestrationProjectionPipeline;
       const eventStore = yield* OrchestrationEventStore;
@@ -3656,12 +3752,13 @@ it.layer(BaseTestLayer)("OrchestrationProjectionPipeline", (it) => {
           ('summary-other-thread', 'thread-shell-summary-other', NULL, 'pending', NULL,
            '2026-03-01T08:00:06.000Z', NULL)
       `;
+      // Empty markdown must not be decoded when the shell only needs plan status.
       yield* sql`
         INSERT INTO projection_thread_proposed_plans (
           plan_id, thread_id, turn_id, plan_markdown, implemented_at,
           implementation_thread_id, created_at, updated_at
         ) VALUES (
-          'summary-plan', 'thread-shell-summary', 'turn-shell-summary-1', '# Plan', NULL,
+          'summary-plan', 'thread-shell-summary', 'turn-shell-summary-1', '', NULL,
           NULL, '2026-03-01T08:00:06.000Z', '2026-03-01T08:00:06.000Z'
         )
       `;

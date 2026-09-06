@@ -9,8 +9,8 @@ import * as NodeHttpServer from "@effect/platform-node/NodeHttpServer";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import {
   CommandId,
+  EnvironmentHttpApi,
   EnvironmentId,
-  EnvironmentMetadataHttpApi,
   EnvironmentOrchestrationHttpApi,
   type ExecutionEnvironmentDescriptor,
   MessageId,
@@ -91,7 +91,7 @@ const DisconnectedLauncherChildLayer = Layer.mergeAll(
   }),
 );
 class ProjectCliHttpApi extends HttpApi.make("environment")
-  .add(EnvironmentMetadataHttpApi)
+  .add(EnvironmentHttpApi.groups.metadata)
   .add(EnvironmentOrchestrationHttpApi) {}
 
 const connectCli = makeCli({ cloudEnabled: true });

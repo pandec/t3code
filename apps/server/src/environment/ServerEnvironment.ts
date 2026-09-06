@@ -234,6 +234,7 @@ export const make = Effect.gen(function* () {
       conditionalProjectScriptUpdates: true,
       sessionImport: true,
       providerCatalog: true,
+      threadRestartContinuation: true,
       threadSnooze: true,
       threadSnoozeIndefinite: true,
       threadMoveToTop: true,

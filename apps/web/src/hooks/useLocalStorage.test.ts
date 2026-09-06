@@ -1,13 +1,6 @@
 import * as Schema from "effect/Schema";
 import { afterEach, describe, expect, it, vi } from "vite-plus/test";
 
-import {
-  getLocalStorageItem,
-  LocalStorageOperationError,
-  removeLocalStorageItem,
-  setLocalStorageItem,
-} from "./useLocalStorage";
-
 function createStorage(overrides: Partial<Storage> = {}): Storage {
   const store = new Map<string, string>();
   return {
@@ -27,21 +20,21 @@ function createStorage(overrides: Partial<Storage> = {}): Storage {
   };
 }
 
-// The module resolves its storage on every call, so a plain global stub is
-// enough — no module re-import needed for it to take effect.
-function useStorage(storage: Storage) {
+async function loadWithStorage(storage: Storage) {
   vi.stubGlobal("window", { localStorage: storage });
   vi.stubGlobal("localStorage", storage);
+  return import("./useLocalStorage");
 }
 
 afterEach(() => {
+  vi.resetModules();
   vi.unstubAllGlobals();
 });
 
 describe("local storage errors", () => {
-  it("preserves read failure context", () => {
+  it("preserves read failure context", async () => {
     const cause = new Error("storage unavailable");
-    useStorage(
+    const { getLocalStorageItem, LocalStorageOperationError } = await loadWithStorage(
       createStorage({
         getItem: () => {
           throw cause;
@@ -62,8 +55,29 @@ describe("local storage errors", () => {
     }
   });
 
-  it("preserves decode failure context", () => {
-    useStorage(createStorage({ getItem: () => "not-json" }));
+  it("retries when access to browser storage becomes available", async () => {
+    const storage = createStorage();
+    storage.setItem("read-key", JSON.stringify("saved value"));
+    let blocked = true;
+    vi.stubGlobal("window", {
+      get localStorage() {
+        if (blocked) throw new Error("storage unavailable");
+        return storage;
+      },
+    });
+    const { getLocalStorageItem, LocalStorageOperationError } = await import("./useLocalStorage");
+
+    expect(() => getLocalStorageItem("read-key", Schema.String)).toThrow(
+      LocalStorageOperationError,
+    );
+    blocked = false;
+    expect(getLocalStorageItem("read-key", Schema.String)).toBe("saved value");
+  });
+
+  it.each(["", "not-json"])("preserves decode failure context for %j", async (value) => {
+    const { getLocalStorageItem, LocalStorageOperationError } = await loadWithStorage(
+      createStorage({ getItem: () => value }),
+    );
 
     try {
       getLocalStorageItem("decode-key", Schema.String);
@@ -78,9 +92,9 @@ describe("local storage errors", () => {
     }
   });
 
-  it("preserves write failure context", () => {
+  it("preserves write failure context", async () => {
     const cause = new Error("storage quota exceeded");
-    useStorage(
+    const { LocalStorageOperationError, setLocalStorageItem } = await loadWithStorage(
       createStorage({
         setItem: () => {
           throw cause;
@@ -101,9 +115,9 @@ describe("local storage errors", () => {
     }
   });
 
-  it("preserves removal failure context", () => {
+  it("preserves removal failure context", async () => {
     const cause = new Error("storage unavailable");
-    useStorage(
+    const { LocalStorageOperationError, removeLocalStorageItem } = await loadWithStorage(
       createStorage({
         removeItem: () => {
           throw cause;

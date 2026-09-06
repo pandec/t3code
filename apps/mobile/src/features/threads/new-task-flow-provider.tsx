@@ -44,6 +44,7 @@ import { useEnvironmentQuery } from "../../state/query";
 import {
   appendComposerDraftAttachments,
   clearComposerDraft,
+  copyComposerDraftContentIfEmpty,
   getComposerDraftSnapshot,
   isComposerDraftEmpty,
   removeComposerDraftAttachment,
@@ -96,6 +97,7 @@ import {
   resolveNewTaskBranchWorktreePath,
   resolveNewTaskLocalWorkspaceSelection,
 } from "./new-task-context-presentation";
+import { resolveEnvironmentProjectMatch } from "./new-task-project-selection";
 
 type WorkspaceMode = "local" | "worktree";
 
@@ -435,7 +437,9 @@ export function NewTaskFlowProvider(props: React.PropsWithChildren) {
   );
   const projectDefaultModelSelection = resolveDefaultableModelSelection(
     selectedEnvironmentServerConfig,
-    selectedProject?.defaultModelSelection ?? null,
+    selectedProject?.defaultModelSelection ??
+      selectedEnvironmentServerConfig?.settings.defaultModelSelection ??
+      null,
   );
   const storedStickyModelSelection = useStickyComposerModelSelection();
   const stickyModelSelection = resolveDefaultableModelSelection(
@@ -652,9 +656,26 @@ export function NewTaskFlowProvider(props: React.PropsWithChildren) {
     );
   }, [availableBranches, branchQuery]);
 
-  // Drafts stay scoped to their project on purpose: copying the current draft
-  // into the next project's empty draft made one sticky draft spread to every
-  // project and resurrect after the user cleared it.
+  // New-task drafts are keyed per (environment, project), so following the
+  // same repository onto another environment would otherwise show the target's
+  // empty draft and strand what the user typed under the old key.
+  const carryDraftContentTo = useCallback(
+    (project: EnvironmentProject) => {
+      const nextDraftKey = `new-task:${scopedProjectKey(project.environmentId, project.id)}`;
+      if (
+        selectedProjectDraftKey?.startsWith("new-task:") &&
+        selectedProjectDraftKey !== nextDraftKey
+      ) {
+        void copyComposerDraftContentIfEmpty(selectedProjectDraftKey, nextDraftKey);
+      }
+    },
+    [selectedProjectDraftKey],
+  );
+
+  // Drafts stay scoped to their project on purpose (#178): copying the current
+  // draft into the next project's empty draft made one sticky draft spread to
+  // every project and resurrect after the user cleared it. Only an environment
+  // switch that lands on the same repository carries the draft along.
   const setProject = useCallback((project: EnvironmentProject) => {
     setSelectedEnvironmentId(project.environmentId);
     setSelectedProjectKey(scopedProjectKey(project.environmentId, project.id));
@@ -662,33 +683,17 @@ export function NewTaskFlowProvider(props: React.PropsWithChildren) {
 
   const selectEnvironment = useCallback(
     (environmentId: EnvironmentId) => {
-      const projectsOnTarget = projects.filter(
-        (project) => project.environmentId === environmentId,
+      const match = resolveEnvironmentProjectMatch(
+        projects.filter((project) => project.environmentId === environmentId),
+        selectedProject,
       );
-      const repositoryKey = selectedProject?.repositoryIdentity?.canonicalKey ?? null;
-      // Prefer the repository identity; projects without one (e.g. not yet
-      // indexed) fall back to workspace basename, then title, so switching
-      // computers still follows the same repo instead of resetting to
-      // whatever project is first on the target machine.
-      const workspaceBasename = selectedProject?.workspaceRoot.split("/").at(-1) || null;
-      const match =
-        (repositoryKey !== null
-          ? projectsOnTarget.find(
-              (project) => (project.repositoryIdentity?.canonicalKey ?? null) === repositoryKey,
-            )
-          : undefined) ??
-        (workspaceBasename !== null
-          ? projectsOnTarget.find(
-              (project) => project.workspaceRoot.split("/").at(-1) === workspaceBasename,
-            )
-          : undefined) ??
-        (selectedProject !== null
-          ? projectsOnTarget.find((project) => project.title === selectedProject.title)
-          : undefined);
+      if (match) {
+        carryDraftContentTo(match);
+      }
       setSelectedEnvironmentId(environmentId);
       setSelectedProjectKey(match ? scopedProjectKey(match.environmentId, match.id) : null);
     },
-    [projects, selectedProject],
+    [projects, selectedProject, carryDraftContentTo],
   );
 
   const setWorkspaceMode = useCallback(

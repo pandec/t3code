@@ -62,17 +62,27 @@ interface ThreadSwipeAction {
   readonly onPress: () => void;
 }
 
+type SwipeActionTone = "primary" | "secondary" | "warning" | "danger";
+
+/** Compiled Uniwind tokens per tone: the circle fill and the icon tint. */
+const SWIPE_ACTION_TONE_CLASSES: Record<
+  SwipeActionTone,
+  { readonly circle: string; readonly icon: string }
+> = {
+  primary: { circle: "bg-primary", icon: "accent-primary-foreground" },
+  secondary: { circle: "bg-secondary", icon: "accent-secondary-foreground" },
+  warning: { circle: "bg-warning", icon: "accent-warning-foreground" },
+  danger: { circle: "bg-danger", icon: "accent-danger-foreground" },
+};
+
 interface ThreadSwipeSecondaryAction extends ThreadSwipeAction {
-  readonly backgroundColor: string;
+  readonly tone: SwipeActionTone;
 }
 
 interface ThreadSwipeLeftAction extends ThreadSwipeAction {
-  /** Defaults to the archive blue the single-action panel has always used. */
-  readonly backgroundColor?: string;
+  /** Defaults to "primary", the archive tone the single-action panel has always used. */
+  readonly tone?: SwipeActionTone;
 }
-
-/** The archive blue every leading action fell back to before the panel grew. */
-const DEFAULT_LEFT_ACTION_COLOR = "#007aff";
 
 function swipeActionsWidth(hasSecondaryAction: boolean) {
   return hasSecondaryAction ? THREAD_SWIPE_ACTIONS_WIDTH : ACTION_ITEM_WIDTH;
@@ -89,7 +99,7 @@ function resolveSecondaryAction(input: {
   if (input.secondaryAction === undefined) {
     return {
       accessibilityLabel: `Delete ${input.threadTitle}`,
-      backgroundColor: "#ff2d55",
+      tone: "danger",
       icon: "trash",
       label: "Delete",
       onPress: () => {
@@ -101,7 +111,7 @@ function resolveSecondaryAction(input: {
   const action = input.secondaryAction;
   return {
     ...action,
-    backgroundColor: "#5856d6",
+    tone: "secondary",
     menu:
       action.menu === undefined
         ? undefined
@@ -447,7 +457,7 @@ export function ThreadSwipeable(props: {
 function SwipeActionButton(props: {
   readonly accessibilityLabel: string;
   readonly actionsWidth: number;
-  readonly backgroundColor: string;
+  readonly tone: SwipeActionTone;
   readonly compact: boolean;
   readonly entryRange: readonly [number, number];
   readonly fullSwipeThreshold: number;
@@ -570,9 +580,9 @@ function SwipeActionButton(props: {
     >
       <View style={{ height: circleSize, width: circleSize }}>
         <Animated.View
+          className={SWIPE_ACTION_TONE_CLASSES[props.tone].circle}
           style={[
             {
-              backgroundColor: props.backgroundColor,
               borderRadius: 999,
               height: circleSize,
               left: 0,
@@ -596,7 +606,12 @@ function SwipeActionButton(props: {
             iconStyle,
           ]}
         >
-          <SymbolView name={props.icon} size={iconSize} tintColor="#ffffff" type="monochrome" />
+          <SymbolView
+            name={props.icon}
+            size={iconSize}
+            tintColorClassName={SWIPE_ACTION_TONE_CLASSES[props.tone].icon}
+            type="monochrome"
+          />
         </Animated.View>
       </View>
       <Animated.View
@@ -681,7 +696,7 @@ function ThreadSwipeLeftActions(props: {
             key={index}
             accessibilityLabel={action.accessibilityLabel}
             actionsWidth={actionsWidth}
-            backgroundColor={action.backgroundColor ?? DEFAULT_LEFT_ACTION_COLOR}
+            tone={action.tone ?? "primary"}
             compact={props.compact}
             entryRange={[offset + 8, offset + ACTION_ITEM_WIDTH * 0.72]}
             fullSwipeThreshold={props.fullSwipeThreshold}
@@ -735,7 +750,7 @@ export function ThreadSwipeActions(props: {
       <SwipeActionButton
         accessibilityLabel={props.primaryAction.accessibilityLabel}
         actionsWidth={actionsWidth}
-        backgroundColor="#007aff"
+        tone="primary"
         compact={props.compact}
         entryRange={
           secondaryAction === null
@@ -754,7 +769,7 @@ export function ThreadSwipeActions(props: {
         <SwipeActionButton
           accessibilityLabel={secondaryAction.accessibilityLabel}
           actionsWidth={actionsWidth}
-          backgroundColor={secondaryAction.backgroundColor}
+          tone={secondaryAction.tone}
           compact={props.compact}
           entryRange={[8, ACTION_ITEM_WIDTH * 0.72]}
           fullSwipeThreshold={props.fullSwipeThreshold}

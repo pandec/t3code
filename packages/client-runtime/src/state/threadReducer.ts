@@ -13,6 +13,8 @@ import type {
   OrchestrationThreadMessagePage,
   TurnId,
 } from "@t3tools/contracts";
+import { isImportedAgentSessionMessageId } from "@t3tools/contracts";
+import { compareDateTimeStrings } from "@t3tools/shared/dateTime";
 import { messageArtifactTextHash } from "@t3tools/shared/messageArtifactIdentity";
 
 export type ThreadDetailReducerResult =
@@ -1165,7 +1167,9 @@ function retainMessagesAfterRevert(
 ): OrchestrationMessage[] {
   const retainedMessageIds = new Set<MessageId>();
   for (const message of messages) {
-    if (message.role === "system") {
+    // Imported agent-session messages predate any turn, so a revert never owns
+    // them and they must not consume the retained-turn budget below.
+    if (message.role === "system" || isImportedAgentSessionMessageId(message.id)) {
       retainedMessageIds.add(message.id);
     } else if (message.turnId !== null && retainedTurnIds.has(message.turnId)) {
       retainedMessageIds.add(message.id);
@@ -1175,7 +1179,10 @@ function retainMessagesAfterRevert(
   const retainFallbackMessages = (role: "user" | "assistant") => {
     const windowTurnCount = messages.filter((message) => message.role === role).length;
     const retainedCount = messages.filter(
-      (message) => message.role === role && retainedMessageIds.has(message.id),
+      (message) =>
+        message.role === role &&
+        !isImportedAgentSessionMessageId(message.id) &&
+        retainedMessageIds.has(message.id),
     ).length;
     const missingCount = Math.max(0, Math.min(turnCount, windowTurnCount) - retainedCount);
     const fallbackMessages = messages
@@ -1188,7 +1195,8 @@ function retainMessagesAfterRevert(
       // The filtered copy is safe to sort in place; Hermes does not support toSorted.
       .sort(
         (left, right) =>
-          left.createdAt.localeCompare(right.createdAt) || left.id.localeCompare(right.id),
+          compareDateTimeStrings(left.createdAt, right.createdAt) ||
+          left.id.localeCompare(right.id),
       )
       .slice(0, missingCount);
     for (const message of fallbackMessages) retainedMessageIds.add(message.id);
@@ -1196,5 +1204,6 @@ function retainMessagesAfterRevert(
 
   retainFallbackMessages("user");
   retainFallbackMessages("assistant");
+
   return Arr.filter(messages, (message) => retainedMessageIds.has(message.id));
 }

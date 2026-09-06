@@ -11,16 +11,13 @@ import * as SubscriptionRef from "effect/SubscriptionRef";
 import type { HttpClient } from "effect/unstable/http";
 import type { Atom } from "effect/unstable/reactivity";
 
+import { RemoteEnvironmentAuthorization } from "../authorization/service.ts";
 import type { EnvironmentRegistry } from "../connection/registry.ts";
 import { EnvironmentSupervisor } from "../connection/supervisor.ts";
 import { environmentEndpointUrl } from "../environment/endpoint.ts";
 import { ManagedRelayDpopSigner } from "../relay/managedRelay.ts";
-import {
-  executeEnvironmentHttpRequest,
-  makeEnvironmentHttpApiClient,
-  RemoteEnvironmentAuthFetchError,
-} from "../rpc/http.ts";
-import { buildEnvironmentAuthHeaders, withEnvironmentCredentials } from "./environmentHttpAuth.ts";
+import { RemoteEnvironmentAuthFetchError } from "../rpc/http.ts";
+import { executeAuthenticatedEnvironmentHttpRequest } from "./environmentHttpAuth.ts";
 import { createEnvironmentCommand } from "./runtime.ts";
 
 const MESSAGE_SUMMARY_TIMEOUT_MS = 240_000;
@@ -153,26 +150,18 @@ export const summarizeMessage = Effect.fn("clientRuntime.messageArtifacts.summar
       });
     }
 
-    const requestUrl = environmentEndpointUrl(
-      prepared.value.httpBaseUrl,
-      "/api/messages/summaries",
-    );
-    const client = yield* makeEnvironmentHttpApiClient(prepared.value.httpBaseUrl);
     const signer = yield* Effect.serviceOption(ManagedRelayDpopSigner);
-    const headers = yield* buildEnvironmentAuthHeaders(
-      prepared.value.httpAuthorization,
-      "POST",
-      requestUrl,
+    const remoteAuthorization = yield* Effect.serviceOption(RemoteEnvironmentAuthorization);
+    return yield* executeAuthenticatedEnvironmentHttpRequest({
+      prepared: prepared.value,
       signer,
-    );
-    return yield* executeEnvironmentHttpRequest(
-      requestUrl,
-      MESSAGE_SUMMARY_TIMEOUT_MS,
-      withEnvironmentCredentials(
-        prepared.value.httpAuthorization,
+      remoteAuthorization,
+      method: "POST",
+      url: (httpBaseUrl) => environmentEndpointUrl(httpBaseUrl, "/api/messages/summaries"),
+      timeoutMs: MESSAGE_SUMMARY_TIMEOUT_MS,
+      request: ({ client, headers }) =>
         client.messageArtifacts.summarizeMessage({ payload: request, headers }),
-      ),
-    );
+    });
   },
 );
 

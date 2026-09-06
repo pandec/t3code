@@ -211,7 +211,7 @@ function applyInstanceModelPreferences(
   );
 }
 
-export function normalizeCustomModelEntries(
+function normalizeCustomModelEntries(
   models: ReadonlyArray<CustomModelDefinition>,
   builtInModelSlugs: ReadonlySet<string>,
 ): CustomModelDefinition[] {
@@ -238,7 +238,7 @@ export function normalizeCustomModelEntries(
   return normalizedModels;
 }
 
-export function getAppModelOptions(
+function getAppModelOptions(
   settings: UnifiedSettings,
   providers: ReadonlyArray<ServerProvider>,
   provider: ProviderDriverKind,

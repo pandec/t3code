@@ -155,6 +155,8 @@ it.effect("shares request dispatch locking with persistent clients", () =>
       getByMessageId: () => Ref.get(projected).pipe(Effect.map(Option.some)),
       getSpeechByMessageId: () => Effect.succeed(Option.none()),
       listPendingSpeechRequests: Effect.succeed([]),
+      hasAssistantMessageForTurn: () => Effect.die("unused"),
+      getLatestAssistantMessageIdForTurn: () => Effect.die("unused"),
       listByThreadId: () => Effect.succeed([]),
       getLatestUserMessageAt: () => Effect.succeed(null),
       deleteByThreadId: () => Effect.void,

@@ -8,7 +8,6 @@ import type {
 } from "@t3tools/contracts";
 import { Atom, type AtomRegistry } from "effect/unstable/reactivity";
 
-import { isAgentAttributedToolActivity, isTimelineBypassActivity } from "./subagentRuntime.ts";
 import type { ThreadOutboxDeliveryIntent } from "./threadOutboxModel.ts";
 
 /**
@@ -81,6 +80,23 @@ const MAX_PENDING_STEERS_PER_THREAD = 8;
  * early, falling back to the previous unmarked presentation.
  */
 const PARENT_AGENT_PROGRESS_ACTIVITY_KIND = "tool.started";
+
+function activityPayload(activity: OrchestrationThreadActivity): Record<string, unknown> | null {
+  return typeof activity.payload === "object" && activity.payload !== null
+    ? (activity.payload as Record<string, unknown>)
+    : null;
+}
+
+/** Tool rows attributed to an owning agent belong to the Agents surface. */
+function isAgentAttributedToolActivity(activity: OrchestrationThreadActivity): boolean {
+  const agentId = activityPayload(activity)?.agentId;
+  return typeof agentId === "string" && agentId.trim().length > 0;
+}
+
+/** Timeline-bypassing synthesized rows (Codex children, workflow members). */
+function isTimelineBypassActivity(activity: OrchestrationThreadActivity): boolean {
+  return activityPayload(activity)?.timelineBypass === true;
+}
 
 /** Whether an activity is the main agent starting a tool, not a subagent's. */
 export function isParentAgentProgressActivity(activity: OrchestrationThreadActivity): boolean {

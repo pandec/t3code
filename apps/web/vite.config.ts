@@ -85,6 +85,15 @@ const buildSourcemap: boolean | "hidden" =
  * files, not in the new test.
  */
 const ISOLATED_TEST_FILES = [
+  "src/hooks/useLocalStorage.test.ts",
+  "src/browser/HostedBrowserWebview.test.tsx",
+  "src/browser/browserLinkTarget.test.ts",
+  "src/components/ComposerPromptEditor.serialization.test.tsx",
+  "src/components/cloud/CloudEnvironmentConnectList.test.tsx",
+  "src/components/diffs/DiffFileTree.test.tsx",
+  "src/components/preview/PreviewAutomationHosts.test.tsx",
+  "src/components/settings/IntegrationsSettings.test.tsx",
+  "src/hooks/useSettings.test.ts",
   "src/authBootstrap.test.ts",
   "src/bootstrap.test.ts",
   "src/branding.test.ts",
@@ -113,7 +122,6 @@ const ISOLATED_TEST_FILES = [
   "src/components/chat/ExpandedImagePreview.test.ts",
   "src/components/chat/MessagesTimeline.test.tsx",
   "src/components/desktopUpdate.toast.test.tsx",
-  "src/components/diffs/AnnotatableCodeView.test.tsx",
   "src/components/diffs/StyledDiffCodeView.test.tsx",
   "src/components/files/fileSaveCoordinator.test.ts",
   "src/components/files/projectFilesQueryState.test.tsx",

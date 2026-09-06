@@ -23,23 +23,6 @@ export function resolveProviderOptionDescriptors(input: {
 }
 
 /**
- * Labels for the option values currently in effect (select values plus
- * enabled booleans), used to summarize the thread configuration in the
- * composer trigger pill.
- */
-export function providerOptionValueLabels(
-  descriptors: ReadonlyArray<ProviderOptionDescriptor>,
-): ReadonlyArray<string> {
-  return descriptors.flatMap((descriptor) => {
-    if (descriptor.type === "boolean") {
-      return descriptor.currentValue ? [descriptor.label] : [];
-    }
-    const label = getProviderOptionCurrentLabel(descriptor);
-    return label ? [label] : [];
-  });
-}
-
-/**
  * Applies one option change (by descriptor id) and returns the full selection
  * list to store on the model selection, or null when the change doesn't match
  * an advertised descriptor / choice.
@@ -71,4 +54,21 @@ export function applyProviderOptionSelection(
   ) as ReadonlyArray<ProviderOptionDescriptor>;
 
   return buildProviderOptionSelectionsFromDescriptors(nextDescriptors) ?? [];
+}
+
+/**
+ * Labels for the option values currently in effect (select values plus
+ * enabled booleans). The fork's composer settings pill reads them out as its
+ * accessibility value.
+ */
+export function providerOptionValueLabels(
+  descriptors: ReadonlyArray<ProviderOptionDescriptor>,
+): ReadonlyArray<string> {
+  return descriptors.flatMap((descriptor) => {
+    if (descriptor.type === "boolean") {
+      return descriptor.currentValue ? [descriptor.label] : [];
+    }
+    const label = getProviderOptionCurrentLabel(descriptor);
+    return label ? [label] : [];
+  });
 }

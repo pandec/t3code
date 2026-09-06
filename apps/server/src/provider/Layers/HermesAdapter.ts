@@ -1709,6 +1709,7 @@ export function makeHermesAdapter(
       capabilities: { sessionModelSwitch: "in-session" },
       startSession,
       sendTurn,
+      compaction: { type: "slash-command", command: "/compact" },
       interruptTurn,
       readThread,
       rollbackThread,

@@ -4,10 +4,12 @@ import * as NodeOS from "node:os";
 import {
   ApprovalRequestId,
   CommandId,
+  DEFAULT_MODEL,
   DEFAULT_PROVIDER_INTERACTION_MODE,
   DEFAULT_RUNTIME_MODE,
   DEFAULT_SERVER_SETTINGS,
   MessageId,
+  ProviderInstanceId,
   ProviderInteractionMode,
   ProviderUserInputAnswers,
   RuntimeMode,
@@ -51,7 +53,6 @@ import { resolveAttachmentPath } from "../attachmentStore.ts";
 import * as EnvironmentAuth from "../auth/EnvironmentAuth.ts";
 import * as ServerConfig from "../config.ts";
 import { expandHomePath } from "../pathExpansion.ts";
-import * as ServerRuntimeStartup from "../serverRuntimeStartup.ts";
 import * as WorkspacePaths from "../workspace/WorkspacePaths.ts";
 import {
   type CliAuthLocationFlags,
@@ -955,10 +956,16 @@ const threadNewCommand = Command.make("new", {
               });
             })
           : undefined;
+        // Same fallback chain as the server's own thread bootstrap: project
+        // default, then the server-wide default, then the built-in Codex model.
         const modelSelection =
           explicitModelSelection ??
           projectShell.defaultModelSelection ??
-          ServerRuntimeStartup.getAutoBootstrapThreadModelSelection();
+          (yield* readThreadDefaultSettings(input.settingsPath)).defaultModelSelection ??
+          ({
+            instanceId: ProviderInstanceId.make("codex"),
+            model: DEFAULT_MODEL,
+          } satisfies ModelSelection);
         const threadId = ThreadId.make(yield* randomUuid);
         const commandId = CommandId.make(yield* randomUuid);
         const messageId = MessageId.make(yield* randomUuid);

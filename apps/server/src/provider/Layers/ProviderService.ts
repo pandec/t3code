@@ -28,10 +28,12 @@ import {
   type ProviderDriverKind,
   type ProviderRuntimeEvent,
   type ProviderSession,
+  type ServerSettings,
 } from "@t3tools/contracts";
 import { expandAssistantCitationsForProvider } from "@t3tools/shared/assistantCitations";
 import { getModelSelectionStringOptionValue } from "@t3tools/shared/model";
 import { causeErrorTag } from "@t3tools/shared/observability";
+import { resolveProjectAgentBrowserAccess } from "@t3tools/shared/serverSettings";
 import * as Config from "effect/Config";
 import * as DateTime from "effect/DateTime";
 import * as Deferred from "effect/Deferred";
@@ -81,10 +83,14 @@ import { isExistingDirectory } from "../../pathExpansion.ts";
 import type * as McpInvocationContext from "../../mcp/McpInvocationContext.ts";
 import * as McpProviderSession from "../../mcp/McpProviderSession.ts";
 import * as McpSessionRegistry from "../../mcp/McpSessionRegistry.ts";
-import * as ServerSettings from "../../serverSettings.ts";
+import * as ServerSettingsService from "../../serverSettings.ts";
+import * as ProjectionSnapshotQuery from "../../orchestration/Services/ProjectionSnapshotQuery.ts";
 
 const isModelSelection = Schema.is(ModelSelection);
 const STRICT_PROVIDER_LIFECYCLE_GUARD = process.env.T3CODE_STRICT_PROVIDER_LIFECYCLE_GUARD !== "0";
+
+/** How long a manual context compaction may run before ProviderService gives up on it. */
+const COMPACTION_COMPLETION_TIMEOUT = "10 minutes";
 
 interface PendingCompaction {
   readonly completion: Deferred.Deferred<string>;
@@ -461,7 +467,10 @@ const makeProviderService = Effect.fn("makeProviderService")(function* (
 
   const registry = yield* ProviderAdapterRegistry.ProviderAdapterRegistry;
   const directory = yield* ProviderSessionDirectory.ProviderSessionDirectory;
-  const serverSettings = yield* ServerSettings.ServerSettingsService;
+  const serverSettings = yield* ServerSettingsService.ServerSettingsService;
+  const projectionQuery = yield* Effect.serviceOption(
+    ProjectionSnapshotQuery.ProjectionSnapshotQuery,
+  );
   const issueMcpCredential =
     options?.issueMcpCredential ?? McpSessionRegistry.issueActiveMcpCredential;
   const revokeMcpCredential =
@@ -909,16 +918,32 @@ const makeProviderService = Effect.fn("makeProviderService")(function* (
   const agentVoiceReplyAvailable =
     Option.isSome(elevenLabsApiKey) && Redacted.value(elevenLabsApiKey.value).trim().length > 0;
 
-  const mcpSessionCapabilities = serverSettings.getSettings.pipe(
-    Effect.map(
-      (settings): ReadonlySet<McpInvocationContext.McpCapability> =>
-        new Set<McpInvocationContext.McpCapability>([
-          ...(settings.enableAgentBrowserAccess ? (["preview"] as const) : []),
-          ...(agentVoiceReplyAvailable && settings.voice.enableAgentVoiceReplies
-            ? (["voice"] as const)
-            : []),
-        ]),
-    ),
+  // Browser access honors per-project overrides; voice replies are a global
+  // toggle only, so project resolution never applies to them.
+  const agentBrowserAccessEnabled = (settings: ServerSettings, threadId: ThreadId) =>
+    Effect.gen(function* () {
+      if (Object.keys(settings.projectAgentBrowserAccessOverrides).length === 0) {
+        return settings.enableAgentBrowserAccess;
+      }
+      // Provider-only runtimes may omit orchestration. An unresolved project
+      // must not bypass an explicit browser override.
+      if (Option.isNone(projectionQuery)) return false;
+      const thread = yield* projectionQuery.value.getThreadShellById(threadId);
+      if (Option.isNone(thread)) return false;
+      return resolveProjectAgentBrowserAccess(settings, thread.value.projectId);
+    });
+
+  const mcpSessionCapabilities = Effect.fn("ProviderService.mcpSessionCapabilities")(
+    function* (threadId: ThreadId) {
+      const settings = yield* serverSettings.getSettings;
+      const preview = yield* agentBrowserAccessEnabled(settings, threadId);
+      return new Set<McpInvocationContext.McpCapability>([
+        ...(preview ? (["preview"] as const) : []),
+        ...(agentVoiceReplyAvailable && settings.voice.enableAgentVoiceReplies
+          ? (["voice"] as const)
+          : []),
+      ]) as ReadonlySet<McpInvocationContext.McpCapability>;
+    },
     Effect.catch((cause) =>
       Effect.logWarning(
         "Could not read server settings; withholding agent MCP toolsets for this session.",
@@ -929,7 +954,7 @@ const makeProviderService = Effect.fn("makeProviderService")(function* (
 
   const prepareMcpSession = (threadId: ThreadId, providerInstanceId: ProviderInstanceId) =>
     Effect.gen(function* () {
-      const capabilities = yield* mcpSessionCapabilities;
+      const capabilities = yield* mcpSessionCapabilities(threadId);
       if (capabilities.size === 0) {
         // Revoke as well as clear. Every other prepare path reaches
         // `issueActiveMcpCredential`, which revokes the thread first, so
@@ -2107,18 +2132,24 @@ const makeProviderService = Effect.fn("makeProviderService")(function* (
             "provider.thread_id": threadId,
           });
           yield* McpSessionRegistry.touchActiveMcpThread(threadId);
-          const nativeCompaction = routed.adapter.compactThread;
+          const compaction = routed.adapter.compaction;
+          if (compaction === undefined) {
+            return yield* toValidationError(
+              "ProviderService.compactThread",
+              `Provider '${routed.adapter.provider}' does not support context compaction.`,
+            );
+          }
           const completion = yield* Deferred.make<string>();
           const pending: PendingCompaction = {
             completion,
-            native: nativeCompaction !== undefined,
+            native: compaction.type === "native",
             providerInstanceId: routed.instanceId,
             requestId,
             earlyEvents: [],
             compactedEventObserved: false,
             expectedTurnId: undefined,
           };
-          if (nativeCompaction !== undefined && timedOutNativeCompactions.has(threadId)) {
+          if (compaction.type === "native" && timedOutNativeCompactions.has(threadId)) {
             return yield* new ProviderAdapterRequestError({
               provider: routed.adapter.provider,
               method: "thread/compact",
@@ -2143,14 +2174,10 @@ const makeProviderService = Effect.fn("makeProviderService")(function* (
               pendingCompactions.delete(threadId);
             }
           });
-          const nativeCompletionTimeout =
-            routed.adapter.provider === "codex" || routed.adapter.provider === "opencode"
-              ? "10 minutes"
-              : "30 seconds";
           const awaitNativeCompaction = (start: Effect.Effect<void, ProviderAdapterError>) =>
             start.pipe(
               Effect.andThen(Deferred.await(completion)),
-              Effect.timeout(nativeCompletionTimeout),
+              Effect.timeout(COMPACTION_COMPLETION_TIMEOUT),
               Effect.catchTag("TimeoutError", (cause) =>
                 Effect.sync(() => {
                   timedOutNativeCompactions.add(threadId);
@@ -2160,7 +2187,7 @@ const makeProviderService = Effect.fn("makeProviderService")(function* (
                       new ProviderAdapterRequestError({
                         provider: routed.adapter.provider,
                         method: "thread/compact",
-                        detail: `Provider did not report completed context compaction within ${nativeCompletionTimeout}.`,
+                        detail: `Provider did not report completed context compaction within ${COMPACTION_COMPLETION_TIMEOUT}.`,
                         cause,
                       }),
                     ),
@@ -2169,26 +2196,26 @@ const makeProviderService = Effect.fn("makeProviderService")(function* (
               ),
             );
           const awaitFallbackCompaction = Deferred.await(completion).pipe(
-            Effect.timeout("10 minutes"),
+            Effect.timeout(COMPACTION_COMPLETION_TIMEOUT),
             Effect.mapError(
               (cause) =>
                 new ProviderAdapterRequestError({
                   provider: routed.adapter.provider,
                   method: "turn/start",
-                  detail: "Provider did not finish context compaction within 10 minutes.",
+                  detail: `Provider did not finish context compaction within ${COMPACTION_COMPLETION_TIMEOUT}.`,
                   cause,
                 }),
             ),
           );
           const awaitTerminal = yield* Effect.gen(function* () {
-            if (nativeCompaction !== undefined) {
+            if (compaction.type === "native") {
               return {
-                wait: awaitNativeCompaction(nativeCompaction(routed.threadId, modelSelection)),
+                wait: awaitNativeCompaction(compaction.start(routed.threadId, modelSelection)),
               };
             }
             const turn = yield* sendTurn({
               threadId,
-              input: routed.adapter.provider === "cursor" ? "/compress" : "/compact",
+              input: compaction.command,
               ...(modelSelection !== undefined ? { modelSelection } : {}),
             }).pipe(
               Effect.onError(() =>
@@ -2214,7 +2241,7 @@ const makeProviderService = Effect.fn("makeProviderService")(function* (
           return {
             wait: awaitTerminal.wait.pipe(Effect.ensuring(clearPending)),
             provider: routed.adapter.provider,
-            native: nativeCompaction !== undefined,
+            native: compaction.type === "native",
           };
         }),
       );

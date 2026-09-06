@@ -37,7 +37,7 @@ import { flushThreadOutbox, threadOutboxManager } from "./thread-outbox";
 import type { QueuedThreadMessage } from "./thread-outbox-model";
 import { removeStagedThreadSettingsForEnvironment } from "./use-thread-staged-settings";
 
-export { ComposerDraftPersistenceError, decodePersistedComposerDrafts };
+export { ComposerDraftPersistenceError };
 
 const PERSIST_DEBOUNCE_MS = 1_000;
 const PERSIST_MAX_DELAY_MS = 5_000;
@@ -1534,16 +1534,34 @@ export function copyComposerDraftContentState(
   if (!sourceHasContent || targetHasContent) {
     return current;
   }
+  // Pending uploads live on one server. Crossing environments keeps the local
+  // bytes (the upload worker re-sends them to the new key's environment) but
+  // drops the old stamp, so it cannot pin the source environment's pending
+  // upload alive from the copy.
+  const targetEnvironmentId = composerDraftEnvironmentId(targetDraftKey, []);
+  const attachments = source.attachments.map((attachment) =>
+    attachment.uploadEnvironmentId !== undefined &&
+    attachment.uploadEnvironmentId !== targetEnvironmentId
+      ? stripAttachmentUploadReference(attachment)
+      : attachment,
+  );
   return {
     ...current,
     [targetDraftKey]: {
       ...target,
       text: source.text,
       ...(source.inputOrigin !== undefined ? { inputOrigin: source.inputOrigin } : {}),
-      attachments: source.attachments,
+      attachments,
       ...(source.importedShareIds ? { importedShareIds: source.importedShareIds } : {}),
     },
   };
+}
+
+function stripAttachmentUploadReference(
+  attachment: DraftComposerAttachment,
+): DraftComposerAttachment {
+  const { uploadedAttachmentId: _id, uploadEnvironmentId: _environmentId, ...rest } = attachment;
+  return rest;
 }
 
 export async function copyComposerDraftContentIfEmpty(

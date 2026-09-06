@@ -15,6 +15,7 @@ import {
   BlocksIcon,
   BotIcon,
   GitBranchIcon,
+  PanelsTopLeftIcon,
   KeyboardIcon,
   Link2Icon,
   NotebookPenIcon,
@@ -74,6 +75,7 @@ const SETTINGS_SECTION_ICONS: Readonly<
 > = {
   "/settings/general": Settings2Icon,
   "/settings/appearance": PaletteIcon,
+  "/settings/projects": PanelsTopLeftIcon,
   "/settings/keybindings": KeyboardIcon,
   "/settings/prompts": NotebookPenIcon,
   "/settings/providers": BotIcon,
@@ -84,7 +86,7 @@ const SETTINGS_SECTION_ICONS: Readonly<
   "/settings/archived": ArchiveIcon,
 };
 
-export const SETTINGS_NAV_ITEMS: ReadonlyArray<{
+const SETTINGS_NAV_ITEMS: ReadonlyArray<{
   label: string;
   to: SettingsPath;
   icon: ComponentType<{ className?: string }>;
@@ -278,12 +280,18 @@ export function SettingsSidebarNav({ pathname }: { pathname: string }) {
         setOpenMobile(false);
       }
       const targetId = item.targetId ?? item.id;
-      if (pathname === item.to && currentHash.replace(/^#/, "") === targetId) {
+      if (
+        item.to !== "/settings/projects" &&
+        pathname === item.to &&
+        currentHash.replace(/^#/, "") === targetId
+      ) {
         scrollToSettingsTarget(targetId);
         return;
       }
       void navigate({
         to: item.to,
+        search: (previous) =>
+          item.to === "/settings/projects" ? { ...previous, project: undefined } : previous,
         hash: targetId,
         replace: true,
         hashScrollIntoView: false,

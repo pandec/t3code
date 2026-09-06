@@ -149,7 +149,7 @@ const defaultOlderTurnRequestRegistry = makeThreadOlderTurnRequestRegistry();
  * instance is shared with the sync `requestOlderThreadTurns` entry point so
  * the apps get working wiring without providing anything.
  */
-export class ThreadOlderTurnRequests extends Context.Reference<ThreadOlderTurnRequestRegistry>(
+class ThreadOlderTurnRequests extends Context.Reference<ThreadOlderTurnRequestRegistry>(
   "@t3tools/client-runtime/state/threads/ThreadOlderTurnRequests",
   { defaultValue: () => defaultOlderTurnRequestRegistry },
 ) {}
@@ -207,10 +207,18 @@ function matchesThreadSnapshot(
         currentPage.hasMore === page.hasMore;
 }
 
+// A retained "live" state stays live: the cursor resume that follows only
+// replays what the thread missed, and on servers that send the completion
+// marker the first replayed event moves the status to "synchronizing" on its
+// own. Downgrading here would flash a sync label on every return to a
+// recently viewed thread.
 function cachedThreadState(value: EnvironmentThreadState): EnvironmentThreadState {
   return {
     ...value,
-    status: value.status === "deleted" ? "deleted" : statusWithoutLiveData(value.data),
+    status:
+      value.status === "deleted" || (value.status === "live" && Option.isSome(value.data))
+        ? value.status
+        : statusWithoutLiveData(value.data),
     error: Option.none(),
     page: Option.map(value.page, (page) => ({ ...page, loadingOlder: false })),
     olderMessages: { ...value.olderMessages, isLoading: false, error: null },
@@ -589,8 +597,8 @@ export const makeEnvironmentThreadState = Effect.fn("EnvironmentThreadState.make
     Effect.forkIn(teardownScope),
   );
 
-  const setSynchronizing = SubscriptionRef.update(state, (current) =>
-    current.status === "deleted"
+  const setConnecting = SubscriptionRef.update(state, (current) =>
+    current.status === "deleted" || Option.isSome(current.error)
       ? current
       : {
           ...current,
@@ -598,11 +606,15 @@ export const makeEnvironmentThreadState = Effect.fn("EnvironmentThreadState.make
           error: Option.none(),
         },
   );
+  // A terminated load keeps its diagnostic until the subscription itself
+  // retries, so it is not touched.
   const setReady = SubscriptionRef.update(state, (current) =>
-    current.status === "deleted"
+    current.status === "deleted" || Option.isSome(current.error)
       ? current
       : {
           ...current,
+          // A live thread is already caught up and keeps its status; it still
+          // gets its older-page failure cleared so the next scroll can retry.
           status: current.status === "live" ? current.status : ("synchronizing" as const),
           error: Option.none(),
           olderMessages: { ...current.olderMessages, error: null },
@@ -661,14 +673,14 @@ export const makeEnvironmentThreadState = Effect.fn("EnvironmentThreadState.make
           : Effect.void,
       ),
     );
-  const setStreamError = (cause: Cause.Cause<unknown>) =>
+  const setStreamError = (message: string) =>
     Ref.set(awaitingCompletion, false).pipe(
       Effect.andThen(
         SubscriptionRef.update(state, (current) => ({
           ...current,
           status:
             current.status === "deleted" ? current.status : statusWithoutLiveData(current.data),
-          error: Option.some(formatThreadError(cause)),
+          error: Option.some(message),
         })),
       ),
     );
@@ -679,6 +691,10 @@ export const makeEnvironmentThreadState = Effect.fn("EnvironmentThreadState.make
     // recent turns); a snapshot or merged page passes its own page state.
     page: Option.Option<EnvironmentThreadPageState> | "keep",
     messageWindowLimit: number | null = historyWindow.messageWindowLimit,
+    // The warm HTTP refresh hydrates an already-loaded thread; it is not the
+    // cursor resume replaying missed events, so it must not flash a sync label
+    // over a thread that was already live.
+    preserveLiveStatus = false,
   ) {
     const waiting = yield* Ref.get(awaitingCompletion);
     const currentState = yield* SubscriptionRef.get(state);
@@ -692,8 +708,15 @@ export const makeEnvironmentThreadState = Effect.fn("EnvironmentThreadState.make
       : retainRecentThreadHistory(thread, { messageWindowLimit });
     yield* SubscriptionRef.set(state, {
       data: Option.some(retainedThread),
-      status: waiting ? "synchronizing" : "live",
-      error: Option.none(),
+      // Buffered values from the failed attempt can still arrive after its error.
+      status: Option.isSome(currentState.error)
+        ? ("cached" as const)
+        : preserveLiveStatus && currentState.status === "live"
+          ? ("live" as const)
+          : waiting
+            ? ("synchronizing" as const)
+            : ("live" as const),
+      error: currentState.error,
       page: nextPage,
       olderMessages: currentState.olderMessages,
     });
@@ -1348,7 +1371,7 @@ export const makeEnvironmentThreadState = Effect.fn("EnvironmentThreadState.make
     if (synchronized) {
       yield* Ref.set(awaitingCompletion, false);
       yield* SubscriptionRef.update(state, (current) =>
-        Option.isSome(current.data) && current.status !== "deleted"
+        Option.isSome(current.data) && current.status !== "deleted" && Option.isNone(current.error)
           ? { ...current, status: "live" as const, error: Option.none() }
           : current,
       );
@@ -1517,6 +1540,8 @@ export const makeEnvironmentThreadState = Effect.fn("EnvironmentThreadState.make
                   false,
                 ),
                 "keep",
+                historyWindow.messageWindowLimit,
+                true,
               );
               return;
             }
@@ -1533,6 +1558,8 @@ export const makeEnvironmentThreadState = Effect.fn("EnvironmentThreadState.make
             yield* setThread(
               httpSnapshot.value.thread,
               pageStateFromSnapshot(httpSnapshot.value.page),
+              historyWindow.messageWindowLimit,
+              true,
             );
             return;
           }
@@ -1543,6 +1570,8 @@ export const makeEnvironmentThreadState = Effect.fn("EnvironmentThreadState.make
               httpSnapshot.value.snapshotSequence === sequence,
             ),
             "keep",
+            historyWindow.messageWindowLimit,
+            true,
           );
           return;
         }
@@ -1580,6 +1609,7 @@ export const makeEnvironmentThreadState = Effect.fn("EnvironmentThreadState.make
             historyWindow.messageWindowLimit === null
               ? null
               : historyWindow.messageWindowLimit + refreshedOlderCount,
+            true,
           );
           return;
         }
@@ -1591,6 +1621,7 @@ export const makeEnvironmentThreadState = Effect.fn("EnvironmentThreadState.make
           ),
           "keep",
           retainedLimit,
+          true,
         );
       }).pipe(Effect.andThen(remember)),
     );
@@ -1617,7 +1648,7 @@ export const makeEnvironmentThreadState = Effect.fn("EnvironmentThreadState.make
     Stream.runForEach((connectionState) => {
       switch (connectionProjectionPhase(connectionState)) {
         case "synchronizing":
-          return flushPending.pipe(Effect.andThen(setSynchronizing));
+          return flushPending.pipe(Effect.andThen(setConnecting));
         case "disconnected":
           return flushPending.pipe(Effect.andThen(setDisconnected));
         case "ready":
@@ -1633,7 +1664,22 @@ export const makeEnvironmentThreadState = Effect.fn("EnvironmentThreadState.make
       service.changes.pipe(Stream.filter(ConnectionWakeups.shouldResubscribeAfterWakeup)),
   });
 
-  yield* setSynchronizing;
+  // Only the first subscription after a warm live resume keeps the retained
+  // status. A replacement session or foreground resubscribe on the same scope
+  // may have missed events, so those show sync progress until confirmed.
+  const resumingLive = yield* Ref.make(initialState.status === "live");
+  const markSynchronizing = Effect.gen(function* () {
+    if (yield* Ref.get(resumingLive)) return;
+    // Connection notifications do not establish that a terminated load restarted.
+    // Clear its diagnostic only when this subscription actually tries again.
+    yield* SubscriptionRef.update(state, (current) =>
+      current.status === "deleted"
+        ? current
+        : { ...current, status: "synchronizing" as const, error: Option.none() },
+    );
+  });
+
+  yield* markSynchronizing;
   yield* Effect.forkIn(
     subscribeDynamic(
       ORCHESTRATION_WS_METHODS.subscribeThread,
@@ -1657,7 +1703,8 @@ export const makeEnvironmentThreadState = Effect.fn("EnvironmentThreadState.make
         const turnLimit = initialTurnLimit ?? INITIAL_THREAD_USER_TURN_LIMIT;
         yield* Ref.set(paginationSupported, supportsPagination);
         yield* Ref.set(awaitingCompletion, supportsCompletionMarker);
-        yield* setSynchronizing;
+        yield* markSynchronizing;
+        yield* Ref.set(resumingLive, false);
         yield* flushPending;
 
         let current = yield* SubscriptionRef.get(state);
@@ -1746,7 +1793,10 @@ export const makeEnvironmentThreadState = Effect.fn("EnvironmentThreadState.make
         };
       }),
       {
-        onExpectedFailure: (cause) => flushPending.pipe(Effect.andThen(setStreamError(cause))),
+        onDefect: () =>
+          flushPending.pipe(Effect.andThen(setStreamError("Could not synchronize the thread."))),
+        onExpectedFailure: (cause) =>
+          flushPending.pipe(Effect.andThen(setStreamError(formatThreadError(cause)))),
         retryExpectedFailureAfter: "250 millis",
         resubscribe: foregroundResubscriptions,
       },

@@ -5,13 +5,21 @@ import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
 import * as Schema from "effect/Schema";
 import * as Struct from "effect/Struct";
-import { ChatAttachment, CommandId, IsoDateTime, MessageInputOrigin } from "@t3tools/contracts";
+import {
+  ChatAttachment,
+  CommandId,
+  IsoDateTime,
+  MessageId,
+  MessageInputOrigin,
+} from "@t3tools/contracts";
 
 import { toPersistenceSqlError } from "../Errors.ts";
 import {
   AppendStreamingProjectionThreadMessage,
   GetProjectionThreadMessageInput,
   CopyProjectionThreadMessagesForForkInput,
+  GetLatestProjectionThreadAssistantMessageInput,
+  HasProjectionThreadAssistantMessageInput,
   ProjectionThreadMessageRepository,
   type ProjectionThreadMessageRepositoryShape,
   DeleteProjectionThreadMessagesInput,
@@ -32,6 +40,8 @@ const ProjectionThreadMessageDbRowSchema = ProjectionThreadMessage.mapFields(
     speechRequestStartedAt: Schema.NullOr(IsoDateTime),
   }),
 );
+const ProjectionThreadMessageExistsDbRowSchema = Schema.Struct({ exists: Schema.Number });
+const ProjectionThreadMessageIdDbRowSchema = Schema.Struct({ messageId: MessageId });
 
 function toProjectionThreadMessage(
   row: Schema.Schema.Type<typeof ProjectionThreadMessageDbRowSchema>,
@@ -279,6 +289,38 @@ const makeProjectionThreadMessageRepository = Effect.gen(function* () {
       `,
   });
 
+  const hasProjectionThreadAssistantMessageRow = SqlSchema.findOne({
+    Request: HasProjectionThreadAssistantMessageInput,
+    Result: ProjectionThreadMessageExistsDbRowSchema,
+    execute: ({ threadId, turnId, streamingOnly }) =>
+      sql`
+        SELECT EXISTS (
+          SELECT 1
+          FROM projection_thread_messages
+          WHERE thread_id = ${threadId}
+            AND turn_id = ${turnId}
+            AND role = 'assistant'
+            AND (${streamingOnly ? 1 : 0} = 0 OR is_streaming = 1)
+          LIMIT 1
+        ) AS "exists"
+      `,
+  });
+
+  const getLatestProjectionThreadAssistantMessageIdRow = SqlSchema.findOneOption({
+    Request: GetLatestProjectionThreadAssistantMessageInput,
+    Result: ProjectionThreadMessageIdDbRowSchema,
+    execute: ({ threadId, turnId }) =>
+      sql`
+        SELECT message_id AS "messageId"
+        FROM projection_thread_messages
+        WHERE thread_id = ${threadId}
+          AND turn_id = ${turnId}
+          AND role = 'assistant'
+        ORDER BY created_at DESC, message_id DESC
+        LIMIT 1
+      `,
+  });
+
   const listProjectionThreadMessageRows = SqlSchema.findAll({
     Request: ListProjectionThreadMessagesInput,
     Result: ProjectionThreadMessageDbRowSchema,
@@ -314,6 +356,7 @@ const makeProjectionThreadMessageRepository = Effect.gen(function* () {
       SELECT MAX(created_at) AS "latestUserMessageAt"
       FROM projection_thread_messages
       WHERE thread_id = ${threadId} AND role = 'user'
+        AND message_id NOT GLOB 'import:*'
     `,
   });
 
@@ -405,6 +448,28 @@ const makeProjectionThreadMessageRepository = Effect.gen(function* () {
       ),
     );
 
+  const hasAssistantMessageForTurn: ProjectionThreadMessageRepositoryShape["hasAssistantMessageForTurn"] =
+    (input) =>
+      hasProjectionThreadAssistantMessageRow(input).pipe(
+        Effect.mapError(
+          toPersistenceSqlError(
+            "ProjectionThreadMessageRepository.hasAssistantMessageForTurn:query",
+          ),
+        ),
+        Effect.map((row) => row.exists === 1),
+      );
+
+  const getLatestAssistantMessageIdForTurn: ProjectionThreadMessageRepositoryShape["getLatestAssistantMessageIdForTurn"] =
+    (input) =>
+      getLatestProjectionThreadAssistantMessageIdRow(input).pipe(
+        Effect.mapError(
+          toPersistenceSqlError(
+            "ProjectionThreadMessageRepository.getLatestAssistantMessageIdForTurn:query",
+          ),
+        ),
+        Effect.map(Option.map((row) => row.messageId)),
+      );
+
   const listByThreadId: ProjectionThreadMessageRepositoryShape["listByThreadId"] = (input) =>
     listProjectionThreadMessageRows(input).pipe(
       Effect.mapError(
@@ -444,6 +509,8 @@ const makeProjectionThreadMessageRepository = Effect.gen(function* () {
     getByMessageId,
     getSpeechByMessageId,
     listPendingSpeechRequests,
+    hasAssistantMessageForTurn,
+    getLatestAssistantMessageIdForTurn,
     listByThreadId,
     getLatestUserMessageAt,
     deleteByThreadId,

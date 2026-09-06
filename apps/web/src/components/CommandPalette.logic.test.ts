@@ -4,7 +4,6 @@ import { EnvironmentId, ProjectId, ProviderInstanceId, ThreadId } from "@t3tools
 import { SidebarProjectAccentColor } from "@t3tools/contracts/settings";
 import type { Project, Thread } from "../types";
 import {
-  browseInputEndPaddingClass,
   buildBrowseGroups,
   buildArchiveCurrentThreadAction,
   buildArchivedThreadsActionItems,
@@ -15,7 +14,6 @@ import {
   enumerateCommandPaletteItems,
   filterPinnedBrowseEntries,
   filterCommandPaletteGroups,
-  normalizeSearchText,
   reduceCommandPaletteUiState,
   type CommandPaletteGroup,
 } from "./CommandPalette.logic";
@@ -197,35 +195,6 @@ describe("buildArchivedThreadsActionItems", () => {
     expect(openArchived).toHaveBeenCalledWith(null);
     await items[1]?.run();
     expect(openArchived).toHaveBeenCalledWith("environment-local:project-a");
-  });
-});
-
-describe("browseInputEndPaddingClass", () => {
-  it("reserves the widest space for the create action", () => {
-    expect(
-      browseInputEndPaddingClass({
-        willCreateProjectPath: true,
-        hasHighlightedBrowseItem: false,
-      }),
-    ).toContain("pe-38");
-  });
-
-  it("reserves space for the wider highlighted-item shortcut", () => {
-    expect(
-      browseInputEndPaddingClass({
-        willCreateProjectPath: false,
-        hasHighlightedBrowseItem: true,
-      }),
-    ).toContain("pe-30");
-  });
-
-  it("keeps the compact reserve for the normal add action", () => {
-    expect(
-      browseInputEndPaddingClass({
-        willCreateProjectPath: false,
-        hasHighlightedBrowseItem: false,
-      }),
-    ).toContain("pe-24");
   });
 });
 
@@ -589,10 +558,33 @@ describe("buildThreadActionItems", () => {
   });
 
   it("normalizes case independently of the host locale", () => {
-    const localeLowerCase = vi.spyOn(String.prototype, "toLocaleLowerCase").mockReturnValue("gıt");
+    const toLocaleLowerCase = String.prototype.toLocaleLowerCase;
+    const localeLowerCase = vi
+      .spyOn(String.prototype, "toLocaleLowerCase")
+      .mockImplementation(function (this: string) {
+        return toLocaleLowerCase.call(this, "tr");
+      });
     try {
-      expect(normalizeSearchText("GIT")).toBe("git");
-      expect(localeLowerCase).not.toHaveBeenCalled();
+      const groups = filterCommandPaletteGroups({
+        activeGroups: [],
+        query: "GIT",
+        isInSubmenu: false,
+        projectSearchItems: [],
+        threadSearchItems: [],
+        settingsSearchItems: [
+          {
+            kind: "action",
+            value: "setting:version-control",
+            title: "Version control",
+            searchTerms: ["git"],
+            icon: null,
+            run: async () => undefined,
+          },
+        ],
+      });
+      expect(groups.flatMap((group) => group.items.map((item) => item.value))).toEqual([
+        "setting:version-control",
+      ]);
     } finally {
       localeLowerCase.mockRestore();
     }
