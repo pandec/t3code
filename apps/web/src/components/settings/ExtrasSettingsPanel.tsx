@@ -24,11 +24,15 @@ import {
   type SidebarThreadProviderIconVisibility,
 } from "@t3tools/contracts/settings";
 import type { EnvironmentId } from "@t3tools/contracts";
+import { normalizeLinearTeamKeys } from "@t3tools/contracts/settings";
 import { formatUsd } from "@t3tools/shared/usageFormat";
 
 import { isElectron } from "../../env";
 import { useEnvironments } from "../../state/environments";
-import { useEnvironmentQuery } from "../../state/query";
+import { useServerConfigs } from "../../state/entities";
+import { environmentReadsLinearIssues } from "../../lib/openLinearLink";
+import { formatEnvironmentQueryError, useEnvironmentQuery } from "../../state/query";
+import { linearEnvironment } from "../../state/linear";
 import { primaryServerConfigAtom, serverEnvironment } from "../../state/server";
 import { useAtomCommand } from "../../state/use-atom-command";
 import {
@@ -637,6 +641,174 @@ function ProviderUsageExtrasSection() {
   );
 }
 
+/** One environment's Linear connection: who the key belongs to and which workspace it reads. */
+function LinearEnvironmentStatus({
+  environmentId,
+  label,
+  onDetectedTeamKeys,
+}: {
+  readonly environmentId: EnvironmentId;
+  readonly label: string;
+  readonly onDetectedTeamKeys: (teamKeys: ReadonlyArray<string>) => void;
+}) {
+  const query = useEnvironmentQuery(linearEnvironment.status({ environmentId, input: {} }));
+  let status: string;
+  let teamKeys: ReadonlyArray<string> = [];
+  if (query.error !== null) {
+    status = "Unavailable";
+  } else if (query.data !== null) {
+    const { configured, viewer, workspace, error } = query.data;
+    if (!configured) {
+      status = error ?? "No API key";
+    } else if (viewer !== null && workspace !== null) {
+      status = `${viewer.displayName} · ${workspace.urlKey}`;
+      teamKeys = query.data.teamKeys;
+    } else {
+      status = error ?? "No data";
+    }
+  } else {
+    status = "Checking…";
+  }
+  return (
+    <div className="flex items-baseline justify-between gap-3">
+      <span className="text-muted-foreground">{label}</span>
+      <span className="flex min-w-0 items-baseline gap-2 text-muted-foreground/80">
+        <span className="truncate">{status}</span>
+        {teamKeys.length > 0 ? (
+          <button
+            type="button"
+            className="shrink-0 cursor-pointer underline-offset-2 hover:text-foreground hover:underline"
+            onClick={() => onDetectedTeamKeys(teamKeys)}
+          >
+            use detected: {teamKeys.join(", ")}
+          </button>
+        ) : null}
+      </span>
+    </div>
+  );
+}
+
+function LinearExtrasSection() {
+  const settings = usePrimarySettings();
+  const updateSettings = useUpdatePrimarySettings();
+  const serverConfigs = useServerConfigs();
+  // Only servers that expose the RPCs: an older one would reject the probe and read as a failure.
+  const environments = useEnvironments().environments.filter((environment) =>
+    environmentReadsLinearIssues(serverConfigs, environment.environmentId),
+  );
+  const configureLinear = useAtomCommand(linearEnvironment.configure, { reportFailure: false });
+
+  // Like the OpenRouter key, one personal key applies to every connected environment; the
+  // server probes it before storing, so a rejected key never replaces a working one. The
+  // command runs serially per environment, so a save and a clear in quick succession land in
+  // the order they were asked for.
+  const applyLinearApiKey = useCallback(
+    async (apiKey: string) => {
+      if (environments.length === 0) {
+        toastManager.add({
+          type: "warning",
+          title: "No environments connected",
+          description: "Connect an environment before saving the Linear API key.",
+        });
+        return;
+      }
+      const results = await Promise.all(
+        environments.map(async (environment) => ({
+          label: environment.label,
+          result: await configureLinear({
+            environmentId: environment.environmentId,
+            input: { apiKey },
+          }),
+        })),
+      );
+      const failed = results.filter(({ result }) => result._tag === "Failure");
+      const removed = apiKey.trim().length === 0;
+      if (failed.length === 0) {
+        toastManager.add({
+          type: "success",
+          title: removed ? "Linear API key removed" : "Linear API key saved",
+        });
+        return;
+      }
+      const firstFailure = failed[0]!.result;
+      toastManager.add({
+        type: "warning",
+        title: removed
+          ? "Could not remove the key everywhere"
+          : "Could not save the key everywhere",
+        description: `Failed for: ${failed.map(({ label }) => label).join(", ")}.${
+          firstFailure._tag === "Failure"
+            ? ` ${formatEnvironmentQueryError(firstFailure.cause)}`
+            : ""
+        }`,
+      });
+    },
+    [configureLinear, environments],
+  );
+  const setTeamKeys = useCallback(
+    (teamKeys: ReadonlyArray<string>) => updateSettings({ linearTeamKeys: teamKeys }),
+    [updateSettings],
+  );
+
+  return (
+    <SettingsSection {...searchableSetting("extras-linear")}>
+      <SettingsRow
+        title="Linear API key"
+        description="A personal API key from linear.app/settings/account/security. Stored in each environment's secret store and only used server-side to read issues and post comments. Applied to every connected environment on save."
+        resetAction={
+          <SettingResetButton label="Linear API key" onClick={() => void applyLinearApiKey("")} />
+        }
+        control={
+          <DraftInput
+            className="w-full sm:w-72"
+            value=""
+            onCommit={(next) => {
+              const trimmed = next.trim();
+              if (trimmed.length > 0) void applyLinearApiKey(trimmed);
+            }}
+            type="password"
+            autoComplete="off"
+            placeholder="lin_api_…"
+            spellCheck={false}
+            aria-label="Linear API key"
+          />
+        }
+      />
+      <div className="flex max-w-xl flex-col gap-1 px-3 text-[13px] leading-[1.45] sm:px-4">
+        {environments.map((environment) => (
+          <LinearEnvironmentStatus
+            key={environment.environmentId}
+            environmentId={environment.environmentId}
+            label={environment.label}
+            onDetectedTeamKeys={setTeamKeys}
+          />
+        ))}
+      </div>
+      <SettingsRow
+        title="Linear team keys"
+        description="Comma-separated team keys (for example SP, OP). Bare identifiers like SP-123 in messages become issue links only for these keys; linear.app links always open in the panel."
+        resetAction={
+          settings.linearTeamKeys.length > 0 ? (
+            <SettingResetButton label="Linear team keys" onClick={() => setTeamKeys([])} />
+          ) : null
+        }
+        control={
+          <DraftInput
+            key={settings.linearTeamKeys.join(",")}
+            className="w-full sm:w-72"
+            value={settings.linearTeamKeys.join(", ")}
+            onCommit={(next) => setTeamKeys(normalizeLinearTeamKeys(next.split(",")))}
+            autoComplete="off"
+            placeholder="SP, OP"
+            spellCheck={false}
+            aria-label="Linear team keys"
+          />
+        }
+      />
+    </SettingsSection>
+  );
+}
+
 function SidebarExtrasSection() {
   const settings = usePrimarySettings();
   const updateSettings = useUpdatePrimarySettings();
@@ -1218,6 +1390,7 @@ export function ExtrasSettingsPanel() {
     <SettingsPageContainer>
       <NotificationsExtrasSection />
       <ProviderUsageExtrasSection />
+      <LinearExtrasSection />
       <SidebarExtrasSection />
       <ComposerExtrasSection />
       <AccentTintsExtrasSection />

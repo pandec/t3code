@@ -559,6 +559,12 @@ export const SETTINGS_SEARCH_ITEMS = [
     searchTerms: ["balance budget spend management key"],
   },
   {
+    id: "extras-linear",
+    title: "Linear",
+    to: "/settings/extras",
+    searchTerms: ["issues api key team keys workspace"],
+  },
+  {
     id: "extras-sidebar",
     title: "Sidebar",
     to: "/settings/extras",

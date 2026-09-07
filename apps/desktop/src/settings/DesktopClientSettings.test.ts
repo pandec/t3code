@@ -56,6 +56,7 @@ const clientSettings: ClientSettings = {
   maskProviderUsageEmails: false,
   showOpenRouterCredits: false,
   openRouterCreditsBudgetUsd: null,
+  linearTeamKeys: [],
   onboardingCompletedAt: null,
   panelAnimationDurationMs: 0,
   planModeEnabled: false,

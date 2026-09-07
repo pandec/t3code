@@ -105,6 +105,18 @@ import {
   OpenRouterCreditsReadInput,
   OpenRouterCreditsResult,
 } from "./openRouterCredits.ts";
+import {
+  LinearComment,
+  LinearCommentsInput,
+  LinearCommentsResult,
+  LinearConfigureInput,
+  LinearCreateCommentInput,
+  LinearIssue,
+  LinearIssueInput,
+  LinearRpcError,
+  LinearStatus,
+  LinearStatusInput,
+} from "./linear.ts";
 import { ProviderInstanceId } from "./providerInstance.ts";
 import {
   ProviderUsageReadInput,
@@ -343,6 +355,11 @@ export const WS_METHODS = {
   providerUsageThreadAccount: "providerUsage.threadAccount",
   openRouterCreditsRead: "openRouterCredits.read",
   openRouterCreditsConfigure: "openRouterCredits.configure",
+  linearStatus: "linear.status",
+  linearConfigure: "linear.configure",
+  linearIssue: "linear.issue",
+  linearComments: "linear.comments",
+  linearCreateComment: "linear.createComment",
   serverListProviderSkills: "server.listProviderSkills",
   serverUpdateProvider: "server.updateProvider",
   serverUpdateServer: "server.updateServer",
@@ -485,6 +502,38 @@ const WsOpenRouterCreditsConfigureRpc = Rpc.make(WS_METHODS.openRouterCreditsCon
   payload: OpenRouterCreditsConfigureInput,
   success: OpenRouterCreditsConfigureResult,
   error: EnvironmentAuthorizationError,
+});
+
+const LinearRpcErrors = Schema.Union([LinearRpcError, EnvironmentAuthorizationError]);
+
+const WsLinearStatusRpc = Rpc.make(WS_METHODS.linearStatus, {
+  payload: LinearStatusInput,
+  success: LinearStatus,
+  error: EnvironmentAuthorizationError,
+});
+
+const WsLinearConfigureRpc = Rpc.make(WS_METHODS.linearConfigure, {
+  payload: LinearConfigureInput,
+  success: LinearStatus,
+  error: LinearRpcErrors,
+});
+
+const WsLinearIssueRpc = Rpc.make(WS_METHODS.linearIssue, {
+  payload: LinearIssueInput,
+  success: LinearIssue,
+  error: LinearRpcErrors,
+});
+
+const WsLinearCommentsRpc = Rpc.make(WS_METHODS.linearComments, {
+  payload: LinearCommentsInput,
+  success: LinearCommentsResult,
+  error: LinearRpcErrors,
+});
+
+const WsLinearCreateCommentRpc = Rpc.make(WS_METHODS.linearCreateComment, {
+  payload: LinearCreateCommentInput,
+  success: LinearComment,
+  error: LinearRpcErrors,
 });
 
 const WsServerListProviderSkillsRpc = Rpc.make(WS_METHODS.serverListProviderSkills, {
@@ -1282,6 +1331,11 @@ export const WsRpcGroup = RpcGroup.make(
   WsProviderUsageThreadAccountRpc,
   WsOpenRouterCreditsReadRpc,
   WsOpenRouterCreditsConfigureRpc,
+  WsLinearStatusRpc,
+  WsLinearConfigureRpc,
+  WsLinearIssueRpc,
+  WsLinearCommentsRpc,
+  WsLinearCreateCommentRpc,
   WsServerListProviderSkillsRpc,
   WsServerUpdateProviderRpc,
   WsProviderConsumeResetCreditRpc,

@@ -48,6 +48,19 @@ describe("RPC authorization scopes", () => {
     );
   });
 
+  it("reads Linear issues under read scope and writes under operate scope", () => {
+    for (const method of [
+      WS_METHODS.linearStatus,
+      WS_METHODS.linearIssue,
+      WS_METHODS.linearComments,
+    ]) {
+      expect(requiredScopeForRpcMethod(method)).toBe(AuthOrchestrationReadScope);
+    }
+    for (const method of [WS_METHODS.linearConfigure, WS_METHODS.linearCreateComment]) {
+      expect(requiredScopeForRpcMethod(method)).toBe(AuthOrchestrationOperateScope);
+    }
+  });
+
   it("allows relay status reads without granting relay installation access", () => {
     expect(requiredScopeForRpcMethod(WS_METHODS.cloudGetRelayClientStatus)).toBe(
       AuthRelayReadScope,

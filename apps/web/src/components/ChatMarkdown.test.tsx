@@ -57,6 +57,10 @@ vi.mock("~/lib/openPullRequestLink", () => ({
   parseChangeRequestUrl: () => null,
   useOpenChangeRequestLink: () => vi.fn(),
 }));
+vi.mock("~/lib/openLinearLink", () => ({
+  parseLinearIssueUrl: () => null,
+  useOpenLinearIssueLink: () => vi.fn(),
+}));
 
 import ChatMarkdown, {
   canUseMarkdownFileShellActions,

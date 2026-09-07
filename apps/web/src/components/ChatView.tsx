@@ -194,6 +194,7 @@ import { isThreadOwnPullRequest } from "./pullRequest/pullRequestDetail.logic";
 import { PullRequestDetailPanel } from "./pullRequest/PullRequestDetailPanel";
 import { PullRequestDetailGhost } from "./pullRequest/PullRequestGhosts";
 import { PullRequestsUnavailableState } from "./pullRequest/PullRequestsUnavailableState";
+import { LinearIssueDetailPanel } from "./linear/LinearIssueDetailPanel";
 import { RightPanelTabs, type PullRequestTabStatus } from "./RightPanelTabs";
 import { AgentsPanel } from "./AgentsPanel";
 import {
@@ -8820,6 +8821,16 @@ export default function ChatView(props: ChatViewProps) {
           workspaceMutationId={workspaceMutationId}
         />
       </Suspense>
+    ) : renderedRightPanelSurface?.kind === "linear-issue" ? (
+      // Keyed by thread too: the same identifier open beside two threads must not share a
+      // comment draft, and the panel reads through the thread's own environment.
+      <LinearIssueDetailPanel
+        key={`${activeThreadKey}:${renderedRightPanelSurface.id}`}
+        environmentId={activeThread.environmentId}
+        threadRef={activeThreadRef}
+        identifier={renderedRightPanelSurface.identifier}
+        supported={serverConfig?.environment.capabilities.linearIssues === true}
+      />
     ) : renderedRightPanelSurface?.kind === "pull-request" && !pullRequestsCapabilityKnown ? (
       <PullRequestDetailGhost />
     ) : renderedRightPanelSurface?.kind === "pull-request" && !supportsPullRequests ? (

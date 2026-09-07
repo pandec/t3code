@@ -21,6 +21,7 @@ const RIGHT_PANEL_KINDS = [
   "preview",
   "terminal",
   "pull-request",
+  "linear-issue",
   "agents",
 ] as const;
 export type RightPanelKind = (typeof RIGHT_PANEL_KINDS)[number];
@@ -66,6 +67,12 @@ export type RightPanelSurface =
       repository: string;
       number: number;
     }
+  | {
+      /** A Linear issue opened beside a thread; the identifier lives in the id so several stay open. */
+      id: `linear-issue:${string}`;
+      kind: "linear-issue";
+      identifier: string;
+    }
   | { id: "agents"; kind: "agents" };
 
 const RIGHT_PANEL_STORAGE_KEY = "t3code:right-panel-state:v2";
@@ -102,7 +109,7 @@ interface RightPanelStoreState {
   ) => boolean;
   open: (
     ref: ScopedThreadRef,
-    kind: Exclude<RightPanelKind, "file" | "terminal" | "pull-request">,
+    kind: Exclude<RightPanelKind, "file" | "terminal" | "pull-request" | "linear-issue">,
   ) => void;
   openBrowser: (ref: ScopedThreadRef, tabId: string | null) => void;
   openFile: (ref: ScopedThreadRef, relativePath: string, line?: number) => void;
@@ -111,6 +118,7 @@ interface RightPanelStoreState {
     ref: ScopedThreadRef,
     target: { environmentId?: string; projectId: string; repository: string; number: number },
   ) => void;
+  openLinearIssue: (ref: ScopedThreadRef, identifier: string) => void;
   openTerminal: (ref: ScopedThreadRef, terminalId: string) => void;
   splitTerminal: (
     ref: ScopedThreadRef,
@@ -132,7 +140,7 @@ interface RightPanelStoreState {
   toggleVisibility: (ref: ScopedThreadRef) => void;
   toggle: (
     ref: ScopedThreadRef,
-    kind: Exclude<RightPanelKind, "file" | "terminal" | "pull-request">,
+    kind: Exclude<RightPanelKind, "file" | "terminal" | "pull-request" | "linear-issue">,
   ) => void;
   removeThread: (ref: ScopedThreadRef) => void;
 }
@@ -144,7 +152,7 @@ const EMPTY_THREAD_STATE: ThreadRightPanelState = {
 };
 
 const singletonSurface = (
-  kind: Exclude<RightPanelKind, "file" | "preview" | "terminal" | "pull-request">,
+  kind: Exclude<RightPanelKind, "file" | "preview" | "terminal" | "pull-request" | "linear-issue">,
 ): RightPanelSurface => {
   switch (kind) {
     case "diff":
@@ -219,6 +227,17 @@ export function pullRequestSurface(target: {
     repository: target.repository,
     number: target.number,
   };
+}
+
+export type LinearIssueSurface = Extract<RightPanelSurface, { kind: "linear-issue" }>;
+
+export function linearIssueSurfaceId(identifier: string): LinearIssueSurface["id"] {
+  return `linear-issue:${identifier}`;
+}
+
+/** The one shape a Linear surface takes, whether opened now or restored from storage. */
+export function linearIssueSurface(identifier: string): LinearIssueSurface {
+  return { id: linearIssueSurfaceId(identifier), kind: "linear-issue", identifier };
 }
 
 const upsertSurface = (
@@ -330,6 +349,11 @@ export function migratePersistedRightPanelState(persistedState: unknown): {
                           ...(typeof environmentId === "string" ? { environmentId } : {}),
                         }),
                       ];
+                    }
+                    if (surface.kind === "linear-issue") {
+                      return typeof surface.identifier === "string" && surface.identifier !== ""
+                        ? [linearIssueSurface(surface.identifier)]
+                        : [];
                     }
                     if (surface.kind !== "terminal") return [surface];
                     if (
@@ -446,6 +470,12 @@ export const useRightPanelStore = create<RightPanelStoreState>()(
           userAction(state, scopedThreadKey(ref), (current) => {
             return upsertSurface(current, pullRequestSurface(target));
           }),
+        ),
+      openLinearIssue: (ref, identifier) =>
+        set((state) =>
+          userAction(state, scopedThreadKey(ref), (current) =>
+            upsertSurface(current, linearIssueSurface(identifier)),
+          ),
         ),
       openFile: (ref, relativePath, line) =>
         set((state) =>
