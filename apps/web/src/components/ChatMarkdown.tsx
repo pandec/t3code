@@ -183,7 +183,11 @@ import { resolveLinkTarget } from "../browser/browserLinkTarget";
 import { PullRequestLinkPreview } from "./pullRequest/PullRequestLinkPreview";
 import { LinearIssueLinkPreview } from "./linear/LinearIssueLinkPreview";
 import { remarkLinearAutolinks } from "./linear/linearMarkdown.logic";
-import { parseLinearIssueUrl, useOpenLinearIssueLink } from "~/lib/openLinearLink";
+import {
+  environmentCanOpenLinearLink,
+  parseLinearIssueUrl,
+  useOpenLinearIssueLink,
+} from "~/lib/openLinearLink";
 
 interface ChatMarkdownProps {
   text: string;
@@ -2809,11 +2813,17 @@ const CHAT_MARKDOWN_COMPONENTS = {
             };
       const linearAutolink =
         String((props as Record<string, unknown>)["data-linear-autolink"] ?? "") === "reference";
-      const linearIssue =
+      const linearLink =
         environmentId !== null &&
         serverConfig?.environment.capabilities.linearIssues === true &&
         href !== undefined
           ? parseLinearIssueUrl(href)
+          : null;
+      const linearIssue =
+        linearLink !== null &&
+        environmentId !== null &&
+        environmentCanOpenLinearLink(environmentId, linearLink)
+          ? linearLink
           : null;
       const isSameDocumentLink = href?.startsWith("#") ?? false;
       const onClick = props.onClick;

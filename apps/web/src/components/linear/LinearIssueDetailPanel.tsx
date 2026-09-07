@@ -10,7 +10,7 @@ import { useCallback, useState } from "react";
 import { RefreshIcon } from "~/components/ui/refresh-icon";
 import { readLocalApi } from "~/localApi";
 import { linearEnvironment, useLinearFailureReason } from "~/state/linear";
-import { useEnvironmentQuery } from "~/state/query";
+import { formatEnvironmentQueryError, useEnvironmentQuery } from "~/state/query";
 import { useAtomCommand } from "~/state/use-atom-command";
 import { useAtomQueryRunner } from "~/state/use-atom-query-runner";
 import { formatRelativeTimeLabel } from "~/timestampFormat";
@@ -211,15 +211,25 @@ export function LinearIssueDetailPanel({
   const refreshIssue = issueQuery.refresh;
   const refreshComments = commentsQuery.refresh;
   // The server caches each read for a minute; `refresh: true` busts it, and the displayed atoms
-  // then re-read the fresh entry.
+  // then re-read the fresh entry. A forced read that fails leaves the server's old entry in
+  // place, so re-reading would show it as if fresh; say so instead.
   const refresh = useCallback(async () => {
     setRefreshing(true);
-    await Promise.all([
+    const results = await Promise.all([
       readIssue({ environmentId, input: { identifier, refresh: true } }),
       readComments({ environmentId, input: { identifier, refresh: true } }),
     ]);
-    refreshIssue();
-    refreshComments();
+    const failure = results.find((result) => result._tag === "Failure");
+    if (failure !== undefined) {
+      toastManager.add({
+        type: "error",
+        title: `Could not refresh ${identifier}`,
+        description: formatEnvironmentQueryError(failure.cause),
+      });
+    } else {
+      refreshIssue();
+      refreshComments();
+    }
     setRefreshing(false);
   }, [environmentId, identifier, readComments, readIssue, refreshComments, refreshIssue]);
 

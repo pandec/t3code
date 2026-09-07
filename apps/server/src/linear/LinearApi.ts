@@ -19,7 +19,7 @@ import type {
   LinearIssueInput,
   LinearStatus,
 } from "@t3tools/contracts";
-import { LinearRpcError } from "@t3tools/contracts";
+import { LinearRpcError, TrimmedNonEmptyString } from "@t3tools/contracts";
 import * as Cause from "effect/Cause";
 import * as Clock from "effect/Clock";
 import * as Effect from "effect/Effect";
@@ -71,41 +71,39 @@ const COMMENT_CREATE_MUTATION = `mutation T3LinearCommentCreate($input: CommentC
   commentCreate(input: $input) { success comment { ${COMMENT_FIELDS} } }
 }`;
 
+// Decoded as strictly as the RPC contract encodes, so a blank field from Linear fails here as
+// an "unexpected payload" rather than later, when the response is being written to the wire.
+const Text = TrimmedNonEmptyString;
 const User = Schema.Struct({
-  name: Schema.String,
-  displayName: Schema.String,
+  name: Text,
+  displayName: Text,
   avatarUrl: Schema.optional(Schema.NullOr(Schema.String)),
 });
 const IssueBody = Schema.Struct({
-  id: Schema.String,
-  identifier: Schema.String,
-  url: Schema.String,
-  title: Schema.String,
+  id: Text,
+  identifier: Text,
+  url: Text,
+  title: Text,
   description: Schema.optional(Schema.NullOr(Schema.String)),
-  priorityLabel: Schema.String,
+  priorityLabel: Text,
   createdAt: Schema.String,
   updatedAt: Schema.String,
   dueDate: Schema.optional(Schema.NullOr(Schema.String)),
-  state: Schema.Struct({ name: Schema.String, type: Schema.String, color: Schema.String }),
-  team: Schema.Struct({ name: Schema.String }),
-  project: Schema.optional(Schema.NullOr(Schema.Struct({ name: Schema.String }))),
+  state: Schema.Struct({ name: Text, type: Text, color: Text }),
+  team: Schema.Struct({ name: Text }),
+  project: Schema.optional(Schema.NullOr(Schema.Struct({ name: Text }))),
   assignee: Schema.optional(Schema.NullOr(User)),
   creator: Schema.optional(Schema.NullOr(User)),
-  labels: Schema.Struct({
-    nodes: Schema.Array(Schema.Struct({ name: Schema.String, color: Schema.String })),
-  }),
+  labels: Schema.Struct({ nodes: Schema.Array(Schema.Struct({ name: Text, color: Text })) }),
 });
 const CommentBody = Schema.Struct({
-  id: Schema.String,
+  id: Text,
   body: Schema.String,
   createdAt: Schema.String,
   user: Schema.optional(Schema.NullOr(User)),
   botActor: Schema.optional(
     Schema.NullOr(
-      Schema.Struct({
-        name: Schema.String,
-        avatarUrl: Schema.optional(Schema.NullOr(Schema.String)),
-      }),
+      Schema.Struct({ name: Text, avatarUrl: Schema.optional(Schema.NullOr(Schema.String)) }),
     ),
   ),
 });
@@ -118,9 +116,9 @@ const StatusEnvelope = Schema.Struct({
   data: Schema.optional(
     Schema.NullOr(
       Schema.Struct({
-        viewer: Schema.Struct({ name: Schema.String, displayName: Schema.String }),
-        organization: Schema.Struct({ name: Schema.String, urlKey: Schema.String }),
-        teams: Schema.Struct({ nodes: Schema.Array(Schema.Struct({ key: Schema.String })) }),
+        viewer: Schema.Struct({ name: Text, displayName: Text }),
+        organization: Schema.Struct({ name: Text, urlKey: Text }),
+        teams: Schema.Struct({ nodes: Schema.Array(Schema.Struct({ key: Text })) }),
       }),
     ),
   ),
@@ -172,6 +170,8 @@ interface CacheEntry<T> {
 let statusCache: CacheEntry<LinearStatus> | null = null;
 const issueCache = new Map<string, CacheEntry<LinearIssue>>();
 const commentsCache = new Map<string, CacheEntry<LinearCommentsResult>>();
+/** Bumped on every posted comment so a read that started before it never caches over it. */
+let commentsGeneration = 0;
 const requestGate = Semaphore.makeUnsafe(4);
 
 /** Drop every cached read. Called when the API key changes, and by tests between cases. */
@@ -445,6 +445,7 @@ export const readLinearComments = (
     const cached = commentsCache.get(identifier);
     if (input.refresh !== true && isFresh(cached, apiKey, now)) return cached!.value;
     evictExpired(now);
+    const generation = commentsGeneration;
     const envelope = yield* graphql(
       apiKey,
       COMMENTS_QUERY,
@@ -458,7 +459,10 @@ export const readLinearComments = (
       comments: issue.comments.nodes.map(toComment),
       truncated: issue.comments.pageInfo.hasNextPage,
     };
-    commentsCache.set(identifier, { apiKey, value, atMs: now });
+    // A comment posted while this read was in flight is not in it; let the next read fetch it.
+    if (generation === commentsGeneration) {
+      commentsCache.set(identifier, { apiKey, value, atMs: now });
+    }
     return value;
   });
 
@@ -483,6 +487,7 @@ export const createLinearComment = (
     if (result === undefined || !result.success || comment === null) {
       return yield* fail("failed", "Linear did not create the comment.");
     }
+    commentsGeneration += 1;
     for (const [identifier, entry] of issueCache) {
       if (entry.value.id === input.issueId) commentsCache.delete(identifier);
     }
