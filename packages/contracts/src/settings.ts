@@ -18,6 +18,7 @@ import {
 } from "./model.ts";
 import { ModelSelection, ProjectScript } from "./orchestration.ts";
 import { BrowserProfile, BrowserProfileId, DEFAULT_BROWSER_PROFILE_ID } from "./browserProfile.ts";
+import { LINEAR_TEAM_KEY_SOURCE } from "./linear.ts";
 import {
   DEFAULT_PREVIEW_APPEARANCE,
   DEFAULT_PREVIEW_ZOOM_FACTOR,
@@ -305,6 +306,33 @@ export const OpenRouterCreditsBudgetUsd = Schema.Number.check(
 );
 export type OpenRouterCreditsBudgetUsd = typeof OpenRouterCreditsBudgetUsd.Type;
 
+const LINEAR_TEAM_KEY_PATTERN = new RegExp(`^${LINEAR_TEAM_KEY_SOURCE}$`, "u");
+export const LinearTeamKey = Schema.String.check(Schema.isPattern(LINEAR_TEAM_KEY_PATTERN));
+export type LinearTeamKey = typeof LinearTeamKey.Type;
+
+export function normalizeLinearTeamKeys(
+  values: ReadonlyArray<string>,
+): ReadonlyArray<LinearTeamKey> {
+  return [
+    ...new Set(
+      values
+        .map((value) => value.trim().toUpperCase())
+        .filter((value): value is LinearTeamKey => LINEAR_TEAM_KEY_PATTERN.test(value)),
+    ),
+  ];
+}
+
+export const LinearTeamKeys = Schema.Array(Schema.String).pipe(
+  Schema.decodeTo(
+    Schema.Array(LinearTeamKey),
+    SchemaTransformation.transform({
+      decode: normalizeLinearTeamKeys,
+      encode: normalizeLinearTeamKeys,
+    }),
+  ),
+);
+export type LinearTeamKeys = typeof LinearTeamKeys.Type;
+
 export const MIN_ACCENT_TINT_INTENSITY_PERCENT = 4;
 export const MAX_ACCENT_TINT_INTENSITY_PERCENT = 30;
 export const AccentTintIntensityPercent = Schema.Int.check(
@@ -569,6 +597,8 @@ export const ClientSettingsSchema = Schema.Struct({
   openRouterCreditsBudgetUsd: Schema.NullOr(OpenRouterCreditsBudgetUsd).pipe(
     Schema.withDecodingDefault(Effect.succeed(null)),
   ),
+  /** Web-only: team keys whose bare Linear identifiers become issue links. */
+  linearTeamKeys: LinearTeamKeys.pipe(Schema.withDecodingDefault(Effect.succeed([]))),
   // Legacy plan mode. The composer's Build/Plan toggle was removed from the
   // default UI; this beta flag restores it (plus the /plan and /default slash
   // commands) for users who still rely on the old workflow.
@@ -1744,6 +1774,7 @@ export const ClientSettingsPatch = Schema.Struct({
   maskProviderUsageEmails: Schema.optionalKey(Schema.Boolean),
   showOpenRouterCredits: Schema.optionalKey(Schema.Boolean),
   openRouterCreditsBudgetUsd: Schema.optionalKey(Schema.NullOr(OpenRouterCreditsBudgetUsd)),
+  linearTeamKeys: Schema.optionalKey(LinearTeamKeys),
   planModeEnabled: Schema.optionalKey(Schema.Boolean),
   contextWindowMeterEnabled: Schema.optionalKey(Schema.Boolean),
   composerCollapseOnBlur: Schema.optionalKey(Schema.Boolean),

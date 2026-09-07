@@ -55,6 +55,7 @@ import { PanelTabCloseButton } from "~/components/ui/panel-tab-close-button";
 import { faviconUrlForOrigin } from "~/lib/favicon";
 import { useTheme } from "~/hooks/useTheme";
 import { pullRequestEnvironment } from "~/state/pullRequests";
+import { LinearIcon } from "./Icons";
 import { useEnvironmentQuery } from "~/state/query";
 import { COLLAPSED_SIDEBAR_TITLEBAR_INSET_CLASS } from "~/workspaceTitlebar";
 
@@ -607,6 +608,8 @@ function surfaceTitle(
       );
     case "pull-request":
       return `#${surface.number}`;
+    case "linear-issue":
+      return surface.identifier;
     case "agents":
       return "Agents";
     case "preview": {
@@ -688,6 +691,8 @@ function SurfaceIcon({
           seed={pullRequestStatusSeeds?.[surface.id]}
         />
       );
+    case "linear-issue":
+      return <LinearIcon className="size-3 shrink-0 text-muted-foreground" />;
     case "agents":
       return <Bot className="size-3 shrink-0" />;
   }

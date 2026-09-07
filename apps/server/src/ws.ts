@@ -124,6 +124,13 @@ import * as ProviderSessionDirectory from "./provider/Services/ProviderSessionDi
 import * as ProviderService from "./provider/Services/ProviderService.ts";
 import { makeThreadGatewayAccountReader } from "./provider/threadGatewayAccount.ts";
 import { configureOpenRouterCredits, readOpenRouterCredits } from "./provider/openRouterCredits.ts";
+import {
+  configureLinear,
+  createLinearComment,
+  readLinearComments,
+  readLinearIssue,
+  readLinearStatus,
+} from "./linear/LinearApi.ts";
 import * as ServerSecretStore from "./auth/ServerSecretStore.ts";
 import type { ProviderInstance } from "./provider/ProviderDriver.ts";
 import * as ProviderMaintenanceRunner from "./provider/providerMaintenanceRunner.ts";
@@ -542,7 +549,7 @@ const makeWsRpcLayer = (
       });
       const wsHttpClient = yield* HttpClient.HttpClient;
       const serverSecretStore = yield* ServerSecretStore.ServerSecretStore;
-      const provideOpenRouterCreditsServices = <A, E>(
+      const provideSecretHttpServices = <A, E>(
         effect: Effect.Effect<A, E, HttpClient.HttpClient | ServerSecretStore.ServerSecretStore>,
       ): Effect.Effect<A, E> =>
         effect.pipe(
@@ -1632,17 +1639,45 @@ const makeWsRpcLayer = (
         [WS_METHODS.openRouterCreditsRead]: (_input) =>
           observeRpcEffect(
             WS_METHODS.openRouterCreditsRead,
-            provideOpenRouterCreditsServices(readOpenRouterCredits),
+            provideSecretHttpServices(readOpenRouterCredits),
             { "rpc.aggregate": "server" },
           ),
         [WS_METHODS.openRouterCreditsConfigure]: (input) =>
           observeRpcEffect(
             WS_METHODS.openRouterCreditsConfigure,
-            provideOpenRouterCreditsServices(
+            provideSecretHttpServices(
               // A secret-store failure surfaces as the command's failure; the
               // result schema only reports the configured state.
               configureOpenRouterCredits(input.apiKey).pipe(Effect.orDie),
             ),
+            { "rpc.aggregate": "server" },
+          ),
+        [WS_METHODS.linearStatus]: (_input) =>
+          observeRpcEffect(WS_METHODS.linearStatus, provideSecretHttpServices(readLinearStatus), {
+            "rpc.aggregate": "server",
+          }),
+        [WS_METHODS.linearConfigure]: (input) =>
+          observeRpcEffect(
+            WS_METHODS.linearConfigure,
+            provideSecretHttpServices(configureLinear(input.apiKey)),
+            { "rpc.aggregate": "server" },
+          ),
+        [WS_METHODS.linearIssue]: (input) =>
+          observeRpcEffect(
+            WS_METHODS.linearIssue,
+            provideSecretHttpServices(readLinearIssue(input)),
+            { "rpc.aggregate": "server" },
+          ),
+        [WS_METHODS.linearComments]: (input) =>
+          observeRpcEffect(
+            WS_METHODS.linearComments,
+            provideSecretHttpServices(readLinearComments(input)),
+            { "rpc.aggregate": "server" },
+          ),
+        [WS_METHODS.linearCreateComment]: (input) =>
+          observeRpcEffect(
+            WS_METHODS.linearCreateComment,
+            provideSecretHttpServices(createLinearComment(input)),
             { "rpc.aggregate": "server" },
           ),
         [WS_METHODS.serverListProviderSkills]: (input) =>

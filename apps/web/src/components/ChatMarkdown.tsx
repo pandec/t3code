@@ -181,6 +181,9 @@ import {
 } from "../browser/openFileInPreview";
 import { resolveLinkTarget } from "../browser/browserLinkTarget";
 import { PullRequestLinkPreview } from "./pullRequest/PullRequestLinkPreview";
+import { LinearIssueLinkPreview } from "./linear/LinearIssueLinkPreview";
+import { remarkLinearAutolinks } from "./linear/linearMarkdown.logic";
+import { parseLinearIssueUrl, useOpenLinearIssueLink } from "~/lib/openLinearLink";
 
 interface ChatMarkdownProps {
   text: string;
@@ -438,7 +441,7 @@ const CHAT_MARKDOWN_SANITIZE_SCHEMA = {
     code: [...(defaultSchema.attributes?.code ?? []), "dataCodeMeta", "dataInlineCode"],
     blockquote: [...(defaultSchema.attributes?.blockquote ?? []), "dataAlert"],
     div: [...(defaultSchema.attributes?.div ?? []), ...CODEX_ARTIFACT_TEMPLATE_HAST_PROPERTIES],
-    a: [...(defaultSchema.attributes?.a ?? []), "dataPullRequestAutolink"],
+    a: [...(defaultSchema.attributes?.a ?? []), "dataPullRequestAutolink", "dataLinearAutolink"],
     img: [
       ...(defaultSchema.attributes?.img ?? []),
       "dataLocalSrc",
@@ -2326,6 +2329,19 @@ function useChatMarkdownState({
     event.clipboardData.setData("text/html", payload.html);
   }, []);
   const openChangeRequestLink = useOpenChangeRequestLink(threadRef);
+  const openLinearIssueLink = useOpenLinearIssueLink(threadRef);
+  const supportsLinearIssues = serverConfig?.environment.capabilities.linearIssues === true;
+  // Bare `SP-123` references only link for the team keys the user listed, and only where the
+  // environment can open them. The plugin depends on nothing that loads later, so every message
+  // parses once; the workspace-less URL it writes is one the panel opens from directly.
+  const linearTeamKeys = useClientSettings((settings) => settings.linearTeamKeys);
+  const linearRemarkPlugins = useMemo<NonNullable<ReactMarkdownOptions["remarkPlugins"]>>(
+    () =>
+      supportsLinearIssues && linearTeamKeys.length > 0
+        ? [[remarkLinearAutolinks, { teamKeys: linearTeamKeys }]]
+        : EMPTY_REMARK_PLUGINS,
+    [linearTeamKeys, supportsLinearIssues],
+  );
   const openDeferredMarkdownLink = useOpenLink(threadRef);
   // Subscribed rather than read at click time: the anchor has to decide
   // synchronously whether to intercept its `_blank`, and a subscription is what
@@ -2588,6 +2604,7 @@ function useChatMarkdownState({
       onTaskListChange,
       onUseArtifactTemplate,
       openChangeRequestLink,
+      openLinearIssueLink,
       openDeferredMarkdownLink,
       openExternalLinkInPreview,
       openMarkdownMedia,
@@ -2614,6 +2631,7 @@ function useChatMarkdownState({
       onTaskListChange,
       onUseArtifactTemplate,
       openChangeRequestLink,
+      openLinearIssueLink,
       openDeferredMarkdownLink,
       openExternalLinkInPreview,
       openMarkdownMedia,
@@ -2633,6 +2651,7 @@ function useChatMarkdownState({
     markdownUrlTransform,
     localMediaPreview,
     setLocalMediaPreview,
+    linearRemarkPlugins,
   };
 }
 
@@ -2731,6 +2750,7 @@ const CHAT_MARKDOWN_COMPONENTS = {
       threadRef,
       openMarkdownMedia,
       openChangeRequestLink,
+      openLinearIssueLink,
       openDeferredMarkdownLink,
       linkTargetPreference,
       openExternalLinkInPreview,
@@ -2787,6 +2807,14 @@ const CHAT_MARKDOWN_COMPONENTS = {
                 number: pullRequestCandidate.number,
               },
             };
+      const linearAutolink =
+        String((props as Record<string, unknown>)["data-linear-autolink"] ?? "") === "reference";
+      const linearIssue =
+        environmentId !== null &&
+        serverConfig?.environment.capabilities.linearIssues === true &&
+        href !== undefined
+          ? parseLinearIssueUrl(href)
+          : null;
       const isSameDocumentLink = href?.startsWith("#") ?? false;
       const onClick = props.onClick;
       const canOpenInPreview = Boolean(threadRef) && isPreviewSupportedInRuntime();
@@ -2824,6 +2852,7 @@ const CHAT_MARKDOWN_COMPONENTS = {
             // conversation instead of in a browser: it is the thing being talked about, and
             // the panel it opens offers the browser as one of its actions.
             if (!href || openChangeRequestLink(event, href)) return;
+            if (linearIssue !== null && openLinearIssueLink(event, href)) return;
             // Anything else follows the "Open links in" setting. The system browser
             // keeps the `_blank` the shell already handles; the in-app browser needs
             // the click intercepted here. A modifier click is the way out of the
@@ -2906,7 +2935,7 @@ const CHAT_MARKDOWN_COMPONENTS = {
             });
           }}
         >
-          {faviconHost && hastHasText(node) && !isPullRequestAutolink ? (
+          {faviconHost && hastHasText(node) && !isPullRequestAutolink && !linearAutolink ? (
             <MarkdownExternalLinkContent host={faviconHost} plainText={plainHastText(node)}>
               {linkChildren}
             </MarkdownExternalLinkContent>
@@ -2917,6 +2946,31 @@ const CHAT_MARKDOWN_COMPONENTS = {
       );
       if (!faviconHost || !href) {
         return link;
+      }
+      if (linearIssue !== null && environmentId !== null) {
+        return (
+          <LinearIssueLinkPreview
+            link={link}
+            originalUrl={href}
+            environmentId={environmentId}
+            identifier={linearIssue.identifier}
+            confirmBeforeOpen={linearAutolink}
+            onOpenIssue={(targetUrl) =>
+              openLinearIssueLink(
+                {
+                  metaKey: false,
+                  ctrlKey: false,
+                  shiftKey: false,
+                  altKey: false,
+                  preventDefault: () => undefined,
+                  stopPropagation: () => undefined,
+                },
+                targetUrl,
+              )
+            }
+            onOpenFallback={openDeferredMarkdownLink}
+          />
+        );
       }
       if (pullRequestPreviewTarget !== null) {
         return (
@@ -3119,13 +3173,15 @@ function ChatMarkdown({
     markdownUrlTransform,
     localMediaPreview,
     setLocalMediaPreview,
+    linearRemarkPlugins,
   } = useChatMarkdownState({ text, ...props });
   const remarkPlugins = useMemo(
     () => [
       ...(lineBreaks ? CHAT_MARKDOWN_REMARK_PLUGINS_WITH_BREAKS : CHAT_MARKDOWN_REMARK_PLUGINS),
       ...extraRemarkPlugins,
+      ...linearRemarkPlugins,
     ],
-    [extraRemarkPlugins, lineBreaks],
+    [extraRemarkPlugins, linearRemarkPlugins, lineBreaks],
   );
 
   // react-markdown converts unparsed HTML nodes to text when skipHtml is false.
