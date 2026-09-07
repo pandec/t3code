@@ -22,13 +22,26 @@ import { Empty, EmptyDescription, EmptyHeader, EmptyMedia, EmptyTitle } from "..
 import { Textarea } from "../ui/textarea";
 import { toastManager } from "../ui/toast";
 import { Tooltip, TooltipPopup, TooltipTrigger } from "../ui/tooltip";
+import { linearIssueUrl } from "./linearMarkdown.logic";
 import { LinearStateBadge, LinearUserAvatar, linearUserLabel } from "./linearPresentation";
 
 function openExternal(url: string) {
   void readLocalApi()?.shell.openExternal(url);
 }
 
-function LinearUnavailable({ title, description }: { title: string; description: string }) {
+/**
+ * The panel's stand-in when it has no issue to show. The link that opened it was taken over
+ * from the browser, so the way out to Linear has to be offered here.
+ */
+function LinearUnavailable({
+  title,
+  description,
+  identifier,
+}: {
+  title: string;
+  description: string;
+  identifier: string;
+}) {
   return (
     <Empty className="px-4 py-16 md:px-4">
       <EmptyMedia variant="icon">
@@ -38,6 +51,10 @@ function LinearUnavailable({ title, description }: { title: string; description:
         <EmptyTitle>{title}</EmptyTitle>
         <EmptyDescription>{description}</EmptyDescription>
       </EmptyHeader>
+      <Button size="xs" variant="outline" onClick={() => openExternal(linearIssueUrl(identifier))}>
+        <ExternalLinkIcon className="size-3.5" />
+        Open in Linear
+      </Button>
     </Empty>
   );
 }
@@ -238,6 +255,7 @@ export function LinearIssueDetailPanel({
       <LinearUnavailable
         title="Linear issues unavailable"
         description="Update this environment's T3 Code server to open Linear issues here."
+        identifier={identifier}
       />
     );
   }
@@ -252,6 +270,7 @@ export function LinearIssueDetailPanel({
             ? "Add a Linear API key for this environment under Settings → Extras → Linear."
             : issueQuery.error
         }
+        identifier={identifier}
       />
     );
   }
