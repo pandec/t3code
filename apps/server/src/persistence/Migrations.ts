@@ -80,6 +80,10 @@ import Migration0055 from "./Migrations/055_ProjectionProjectsAutoPull.ts";
 import Migration0056 from "./Migrations/056_RepairAutomaticSettlementTimestamps.ts";
 // Upstream shipped this as 047; renumbered after the fork's migration history.
 import Migration0057 from "./Migrations/057_ProjectionProjectIcon.ts";
+// Upstream shipped this as 048; renumbered after the fork's migration history.
+import Migration0058 from "./Migrations/058_ProjectionThreadBranchPullRequest.ts";
+// Upstream shipped this as 049; renumbered after the fork's migration history.
+import Migration0059 from "./Migrations/059_ProjectionThreadsActiveOrderKey.ts";
 
 /**
  * Migration loader with all migrations defined inline.
@@ -149,6 +153,8 @@ export const migrationEntries = [
   [55, "ProjectionProjectsAutoPull", Migration0055],
   [56, "RepairAutomaticSettlementTimestamps", Migration0056],
   [57, "ProjectionProjectIcon", Migration0057],
+  [58, "ProjectionThreadBranchPullRequest", Migration0058],
+  [59, "ProjectionThreadsActiveOrderKey", Migration0059],
 ] as const;
 
 export const migrationManifest = migrationEntries.map(([id, name]) => [id, name] as const);

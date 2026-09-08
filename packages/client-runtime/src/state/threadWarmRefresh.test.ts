@@ -25,7 +25,6 @@ const baseThread: OrchestrationThread = {
   archivedAt: null,
   settledOverride: null,
   settledAt: null,
-  movedToTopAt: null,
   deletedAt: null,
   messages: [],
   completedTurnAssistantMessageIds: [],

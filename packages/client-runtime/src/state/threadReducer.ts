@@ -281,6 +281,7 @@ function applyThreadDetailEventUnretained(
           interactionMode: event.payload.interactionMode,
           branch: event.payload.branch,
           worktreePath: event.payload.worktreePath,
+          branchPullRequest: null,
           latestTurn: null,
           createdAt: event.payload.createdAt,
           updatedAt: event.payload.updatedAt,
@@ -288,9 +289,9 @@ function applyThreadDetailEventUnretained(
           settledOverride: null,
           settledAt: null,
           unsettledAt: null,
+          activeOrderKey: null,
           snoozedUntil: null,
           snoozedAt: null,
-          movedToTopAt: null,
           deletedAt: null,
           messages: [],
           completedTurnAssistantMessageIds: [],
@@ -329,6 +330,7 @@ function applyThreadDetailEventUnretained(
           settledOverride: "settled",
           settledAt: event.payload.settledAt,
           unsettledAt: null,
+          activeOrderKey: null,
           updatedAt: event.payload.updatedAt,
         },
       };
@@ -369,15 +371,6 @@ function applyThreadDetailEventUnretained(
           snoozedUntil: null,
           snoozedAt: null,
           updatedAt: event.payload.updatedAt,
-        },
-      };
-
-    case "thread.moved-to-top":
-      return {
-        kind: "updated",
-        thread: {
-          ...thread,
-          movedToTopAt: event.payload.movedToTopAt,
         },
       };
 
@@ -434,6 +427,12 @@ function applyThreadDetailEventUnretained(
             : {}),
           ...(event.payload.linkedPullRequest !== undefined
             ? { linkedPullRequest: event.payload.linkedPullRequest }
+            : {}),
+          ...(event.payload.branchPullRequest !== undefined
+            ? { branchPullRequest: event.payload.branchPullRequest }
+            : {}),
+          ...(event.payload.activeOrderKey !== undefined
+            ? { activeOrderKey: event.payload.activeOrderKey }
             : {}),
           updatedAt: event.payload.updatedAt,
         },

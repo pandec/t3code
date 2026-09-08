@@ -51,10 +51,10 @@ export type SettleThreadInput = CommandInput<"thread.settle">;
 export type UnsettleThreadInput = CommandInput<"thread.unsettle">;
 export type SnoozeThreadInput = CommandInput<"thread.snooze">;
 export type UnsnoozeThreadInput = CommandInput<"thread.unsnooze">;
-export type MoveThreadToTopInput = CommandInput<"thread.move-to-top">;
 export type PinThreadInput = CommandInput<"thread.pin">;
 export type UnpinThreadInput = CommandInput<"thread.unpin">;
 export type ReorderPinnedThreadInput = CommandInput<"thread.pin.reorder">;
+export type ReorderActiveThreadInput = CommandInput<"thread.active.reorder">;
 export type UpdateThreadMetadataInput = CommandInput<"thread.meta.update">;
 export type SetThreadRuntimeModeInput = CommandInput<"thread.runtime-mode.set">;
 export type SetThreadInteractionModeInput = CommandInput<"thread.interaction-mode.set">;
@@ -66,6 +66,7 @@ export type StartThreadTurnInput = CommandInput<"thread.turn.start">;
 export type InterruptThreadTurnInput = CommandInput<"thread.turn.interrupt">;
 export type RespondToThreadApprovalInput = CommandInput<"thread.approval.respond">;
 export type RespondToThreadUserInputInput = CommandInput<"thread.user-input.respond">;
+export type DismissThreadUserInputInput = CommandInput<"thread.user-input.dismiss">;
 export type RevertThreadCheckpointInput = CommandInput<"thread.checkpoint.revert">;
 export type StopThreadSessionInput = CommandInput<"thread.session.stop">;
 
@@ -234,16 +235,6 @@ export const unsnoozeThread: (input: UnsnoozeThreadInput) => CommandEffect = Eff
   });
 });
 
-export const moveThreadToTop: (input: MoveThreadToTopInput) => CommandEffect = Effect.fn(
-  "EnvironmentCommands.moveThreadToTop",
-)(function* (input) {
-  return yield* dispatch({
-    ...input,
-    type: "thread.move-to-top",
-    commandId: yield* commandId(input),
-  });
-});
-
 export const pinThread: (input: PinThreadInput) => CommandEffect = Effect.fn(
   "EnvironmentCommands.pinThread",
 )(function* (input) {
@@ -270,6 +261,16 @@ export const reorderPinnedThread: (input: ReorderPinnedThreadInput) => CommandEf
   return yield* dispatch({
     ...input,
     type: "thread.pin.reorder",
+    commandId: yield* commandId(input),
+  });
+});
+
+export const reorderActiveThread: (input: ReorderActiveThreadInput) => CommandEffect = Effect.fn(
+  "EnvironmentCommands.reorderActiveThread",
+)(function* (input) {
+  return yield* dispatch({
+    ...input,
+    type: "thread.active.reorder",
     commandId: yield* commandId(input),
   });
 });
@@ -363,6 +364,17 @@ export const respondToThreadUserInput: (input: RespondToThreadUserInputInput) =>
     return yield* dispatch({
       ...input,
       type: "thread.user-input.respond",
+      commandId: metadata.commandId,
+      createdAt: metadata.createdAt,
+    });
+  });
+
+export const dismissThreadUserInput: (input: DismissThreadUserInputInput) => CommandEffect =
+  Effect.fn("EnvironmentCommands.dismissThreadUserInput")(function* (input) {
+    const metadata = yield* timestampedCommandMetadata(input);
+    return yield* dispatch({
+      ...input,
+      type: "thread.user-input.dismiss",
       commandId: metadata.commandId,
       createdAt: metadata.createdAt,
     });

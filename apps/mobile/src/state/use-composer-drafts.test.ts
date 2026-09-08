@@ -3,6 +3,7 @@ import {
   CommandId,
   EnvironmentId,
   MessageId,
+  ProjectId,
   ProviderInstanceId,
   ThreadId,
 } from "@t3tools/contracts";
@@ -203,6 +204,8 @@ import {
   copyComposerDraftContentIfEmpty,
   copyComposerDraftContentState,
   ensureComposerDraftsLoaded,
+  createNewTaskDraft,
+  findNewTaskDraftKeys,
   flushComposerDrafts,
   type ComposerDraft,
   getComposerDraftSnapshot,
@@ -220,6 +223,7 @@ import {
   restoreComposerDraftSnapshot,
   restoreComposerDraftSnapshotState,
   restoreCloudComposerDrafts,
+  retargetNewTaskDraft,
   setComposerDraftText,
   setComposerDraftAttachmentUpload,
   waitForComposerDraftsLoaded,
@@ -440,7 +444,7 @@ describe("mobile composer drafts", () => {
       sizeBytes: 42,
       fileUri: `file:///documents/t3-composer-attachments/${id}.mov`,
     });
-    const draftKey = "new-task:environment-1:project-cap";
+    const draftKey = "new-task:draft-cap";
     const existing = Array.from({ length: 7 }, (_, index) => makeAttachment(`held-${index}`));
     appAtomRegistry.set(composerDraftsAtom, {
       [draftKey]: { text: "send this", attachments: existing },
@@ -1239,7 +1243,7 @@ describe("mobile composer drafts", () => {
       decodePersistedComposerDrafts({
         schemaVersion: 1,
         drafts: {
-          "new-task:environment-1:project-1": {
+          "new-task:draft-1": {
             text: "",
             attachments: [],
             modelSelection: {
@@ -1258,7 +1262,7 @@ describe("mobile composer drafts", () => {
         },
       }),
     ).toEqual({
-      "new-task:environment-1:project-1": {
+      "new-task:draft-1": {
         text: "",
         attachments: [],
         modelSelection: {
@@ -1303,7 +1307,7 @@ describe("mobile composer drafts", () => {
           // A model beside another selector setting is a deliberate
           // configuration; only a BARE model is the stale seed the
           // hydration strip removes (covered by its own test above).
-          "new-task:environment-1:project-1": {
+          "new-task:draft-1": {
             text: "",
             attachments: [],
             modelSelection,
@@ -1318,7 +1322,7 @@ describe("mobile composer drafts", () => {
         text: "legacy content",
         attachments: [],
       },
-      "new-task:environment-1:project-1": {
+      "new-task:draft-1": {
         text: "",
         attachments: [],
         modelSelection,
@@ -1361,12 +1365,124 @@ describe("mobile composer drafts", () => {
     // The empty-draft filter must keep receipt-bearing drafts — or the same
     // native share would re-import after restart.
     expect(
-      mergeHydratedComposerDrafts(
-        { "new-task:environment-1:project-1": receiptDraft },
-        {},
-        new Set(),
-      ),
-    ).toEqual({ "new-task:environment-1:project-1": receiptDraft });
+      mergeHydratedComposerDrafts({ "new-task:draft-1": receiptDraft }, {}, new Set()),
+    ).toEqual({ "new-task:draft-1": receiptDraft });
+  });
+
+  it("keeps a freshly minted new-task draft bound until content arrives, then lists it per project", () => {
+    const project = {
+      environmentId: EnvironmentId.make("environment-1"),
+      projectId: ProjectId.make("project-1"),
+    };
+    const first = createNewTaskDraft(project);
+    const second = createNewTaskDraft(project);
+    expect(first).not.toBe(second);
+    // Empty stamped drafts stay in memory so the composer has a key to write
+    // to, but the persisted document leaves them out.
+    expect(appAtomRegistry.get(composerDraftsAtom)[first]?.project).toMatchObject(project);
+
+    setComposerDraftText(first, "first idea");
+    setComposerDraftText(second, "second idea");
+    expect(findNewTaskDraftKeys(appAtomRegistry.get(composerDraftsAtom), project)).toEqual(
+      expect.arrayContaining([first, second]),
+    );
+
+    // Clearing content on the way out drops the stamp with it.
+    clearComposerDraftContent(first, { clearModelSelection: true, clearWorkspaceSelection: true });
+    expect(appAtomRegistry.get(composerDraftsAtom)[first]).toBeUndefined();
+    expect(getComposerDraftSnapshot(second).text).toBe("second idea");
+  });
+
+  it("persists project stamps and voice provenance through relaunch and cloud archival", async () => {
+    const project = {
+      environmentId: EnvironmentId.make("environment-1"),
+      projectId: ProjectId.make("project-1"),
+    };
+    const key = createNewTaskDraft(project);
+    setComposerDraftText(key, "voice draft", "voice-transcription");
+    const stamp = getComposerDraftSnapshot(key).project;
+    await flushComposerDrafts();
+    expect(JSON.parse(persistedFiles.get(draftRecordPath(key)) ?? "null")).toMatchObject({
+      draft: { project: stamp, inputOrigin: "voice-transcription" },
+    });
+
+    appAtomRegistry.set(composerDraftsAtom, {});
+    resetComposerDraftPersistenceForTests();
+    resetComposerDraftsLoadState();
+    await waitForComposerDraftsLoaded();
+    expect(getComposerDraftSnapshot(key)).toMatchObject({
+      text: "voice draft",
+      project: stamp,
+      inputOrigin: "voice-transcription",
+    });
+
+    await archiveCloudComposerDrafts("account-1", new Set([project.environmentId]));
+    expect(appAtomRegistry.get(composerDraftsAtom)[key]).toBeUndefined();
+    appAtomRegistry.set(composerCloudDraftsAtom, { accountId: null, signedOut: {} });
+    resetComposerDraftPersistenceForTests();
+    resetComposerDraftsLoadState();
+    await waitForComposerDraftsLoaded();
+    await restoreCloudComposerDrafts("account-1");
+    expect(getComposerDraftSnapshot(key)).toMatchObject({
+      text: "voice draft",
+      project: stamp,
+      inputOrigin: "voice-transcription",
+    });
+    expect(findNewTaskDraftKeys(appAtomRegistry.get(composerDraftsAtom), project)).toEqual([key]);
+  });
+
+  it("ignores project-keyed legacy drafts without attachment hydration warnings", async () => {
+    const legacyKey = "new-task:environment-1:project-1";
+    const legacyDraft = { text: "old draft", attachments: [] };
+    expect(
+      decodePersistedComposerDrafts({
+        schemaVersion: 1,
+        drafts: { [legacyKey]: legacyDraft },
+      }),
+    ).toEqual({});
+    expect(mergeHydratedComposerDrafts({ [legacyKey]: legacyDraft }, {}, new Set())).toEqual({});
+    seedPartiallyAvailableDraft(legacyKey);
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => undefined);
+    try {
+      await waitForComposerDraftsLoaded();
+      expect(appAtomRegistry.get(composerDraftsAtom)[legacyKey]).toBeUndefined();
+      expect(warn).not.toHaveBeenCalled();
+    } finally {
+      warn.mockRestore();
+    }
+  });
+
+  it("retargets a new-task draft to another project without losing its text", () => {
+    const from = {
+      environmentId: EnvironmentId.make("environment-1"),
+      projectId: ProjectId.make("project-1"),
+    };
+    const to = {
+      environmentId: EnvironmentId.make("environment-2"),
+      projectId: ProjectId.make("project-2"),
+    };
+    const key = createNewTaskDraft(from);
+    setComposerDraftText(key, "moving house");
+    appAtomRegistry.set(composerDraftsAtom, {
+      ...appAtomRegistry.get(composerDraftsAtom),
+      [key]: {
+        ...getComposerDraftSnapshot(key),
+        runtimeMode: "approval-required",
+        workspaceSelection: { mode: "worktree", branch: "feature/a", worktreePath: null },
+      },
+    });
+    const createdAt = getComposerDraftSnapshot(key).project?.createdAt;
+
+    retargetNewTaskDraft(key, to);
+
+    const moved = getComposerDraftSnapshot(key);
+    expect(moved.text).toBe("moving house");
+    expect(moved.runtimeMode).toBe("approval-required");
+    // Branch and worktree belong to the old repo.
+    expect(moved.workspaceSelection).toBeUndefined();
+    expect(moved.project).toEqual({ ...to, createdAt });
+    expect(findNewTaskDraftKeys(appAtomRegistry.get(composerDraftsAtom), from)).toEqual([]);
+    expect(findNewTaskDraftKeys(appAtomRegistry.get(composerDraftsAtom), to)).toEqual([key]);
   });
 
   it("strips a stale bare model selection from hydrated new-task drafts", () => {
@@ -1377,18 +1493,12 @@ describe("mobile composer drafts", () => {
       attachments: [],
       modelSelection: { instanceId: ProviderInstanceId.make("codex"), model: "gpt-5.4" },
     };
-    expect(
-      mergeHydratedComposerDrafts({ "new-task:environment-1:project-1": bare }, {}, new Set()),
-    ).toEqual({});
+    expect(mergeHydratedComposerDrafts({ "new-task:draft-1": bare }, {}, new Set())).toEqual({});
 
     const configured: ComposerDraft = { ...bare, runtimeMode: "approval-required" };
-    expect(
-      mergeHydratedComposerDrafts(
-        { "new-task:environment-1:project-1": configured },
-        {},
-        new Set(),
-      ),
-    ).toEqual({ "new-task:environment-1:project-1": configured });
+    expect(mergeHydratedComposerDrafts({ "new-task:draft-1": configured }, {}, new Set())).toEqual({
+      "new-task:draft-1": configured,
+    });
   });
 
   it.each(["read", "decode"] as const)(
@@ -1546,7 +1656,7 @@ describe("mobile composer drafts", () => {
       interactionMode: "plan" as const,
     };
 
-    for (const draftKey of ["new-task:environment-1:project-1", "pending-task:message-1"]) {
+    for (const draftKey of ["new-task:draft-1", "pending-task:message-1"]) {
       expect(
         clearComposerDraftContentState(
           {
@@ -1590,7 +1700,7 @@ describe("mobile composer drafts", () => {
   });
 
   it("drops draft-local model and workspace selections after sending a new task", () => {
-    const draftKey = "new-task:environment-1:project-1";
+    const draftKey = "new-task:draft-1";
     const draft: ComposerDraft = {
       text: "send this",
       attachments: [],
@@ -1630,56 +1740,7 @@ describe("mobile composer drafts", () => {
     expect(getComposerDraftSnapshot(draftKey)).toEqual(selectedDraft);
   });
 
-  it("carries unfinished content to a newly selected project without overwriting its settings", () => {
-    const sourceKey = "new-task:environment-1:project-1";
-    const targetKey = "new-task:environment-1:project-2";
-    const source: ComposerDraft = {
-      text: "Keep this task",
-      attachments: [],
-      importedShareIds: ["share-1"],
-      workspaceSelection: {
-        mode: "worktree",
-        branch: "feature/source",
-        worktreePath: null,
-      },
-    };
-    const target: ComposerDraft = {
-      text: "",
-      attachments: [],
-      runtimeMode: "approval-required",
-    };
-
-    expect(
-      copyComposerDraftContentState(
-        { [sourceKey]: source, [targetKey]: target },
-        sourceKey,
-        targetKey,
-      ),
-    ).toEqual({
-      [sourceKey]: source,
-      [targetKey]: {
-        ...target,
-        text: source.text,
-        attachments: source.attachments,
-        importedShareIds: source.importedShareIds,
-      },
-    });
-  });
-
-  it("does not overwrite unfinished content already stored for the selected project", () => {
-    const sourceKey = "new-task:environment-1:project-1";
-    const targetKey = "new-task:environment-1:project-2";
-    const drafts: Record<string, ComposerDraft> = {
-      [sourceKey]: { text: "Source task", attachments: [] },
-      [targetKey]: { text: "Target task", attachments: [] },
-    };
-
-    expect(copyComposerDraftContentState(drafts, sourceKey, targetKey)).toBe(drafts);
-  });
-
-  it("drops another environment's upload stamp when carrying attachments across machines", () => {
-    const sourceKey = "new-task:environment-1:project-1";
-    const targetKey = "new-task:environment-2:project-2";
+  it("drops another environment's upload stamp when a draft moves across machines", () => {
     const uploadedElsewhere: DraftComposerAttachment = {
       id: "image-1",
       type: "image",
@@ -1697,14 +1758,25 @@ describe("mobile composer drafts", () => {
       uploadedAttachmentId: "upload-2",
       uploadEnvironmentId: EnvironmentId.make("environment-2"),
     };
+    const key = createNewTaskDraft({
+      environmentId: EnvironmentId.make("environment-1"),
+      projectId: ProjectId.make("project-1"),
+    });
+    appAtomRegistry.set(composerDraftsAtom, {
+      ...appAtomRegistry.get(composerDraftsAtom),
+      [key]: {
+        ...getComposerDraftSnapshot(key),
+        text: "Ship it",
+        attachments: [uploadedElsewhere, uploadedOnTarget],
+      },
+    });
 
-    const next = copyComposerDraftContentState(
-      { [sourceKey]: { text: "Ship it", attachments: [uploadedElsewhere, uploadedOnTarget] } },
-      sourceKey,
-      targetKey,
-    );
+    retargetNewTaskDraft(key, {
+      environmentId: EnvironmentId.make("environment-2"),
+      projectId: ProjectId.make("project-2"),
+    });
 
-    expect(next[targetKey]?.attachments).toEqual([
+    expect(getComposerDraftSnapshot(key).attachments).toEqual([
       {
         id: "image-1",
         type: "image",
@@ -1716,11 +1788,10 @@ describe("mobile composer drafts", () => {
       },
       uploadedOnTarget,
     ]);
-    expect(next[sourceKey]?.attachments).toEqual([uploadedElsewhere, uploadedOnTarget]);
   });
 
   it("merges shared content into a project draft without duplicating retries", () => {
-    const draftKey = "new-task:environment-1:project-1";
+    const draftKey = "new-task:draft-1";
     const sharedAttachment = {
       id: "share-1:image:0",
       type: "image" as const,
@@ -1755,7 +1826,7 @@ describe("mobile composer drafts", () => {
   });
 
   it("preserves existing images when shared content exceeds the draft attachment limit", () => {
-    const draftKey = "new-task:environment-1:project-1";
+    const draftKey = "new-task:draft-1";
     const image = (id: string) => ({
       id,
       type: "image" as const,
@@ -1780,7 +1851,7 @@ describe("mobile composer drafts", () => {
   });
 
   it("restores the exact draft captured before an interrupted share import", () => {
-    const draftKey = "new-task:environment-1:project-1";
+    const draftKey = "new-task:draft-1";
     const beforeImport: ComposerDraft = {
       text: "Existing context",
       attachments: [],
@@ -1807,19 +1878,36 @@ describe("mobile composer drafts", () => {
     const environmentId = EnvironmentId.make("environment-cloud");
     const retainedEnvironmentId = EnvironmentId.make("environment-local");
 
+    const cloudDraft: ComposerDraft = {
+      ...DRAFT,
+      project: {
+        environmentId,
+        projectId: ProjectId.make("project-cloud"),
+        createdAt: "2026-09-05T00:00:00.000Z",
+      },
+    };
+    const localDraft: ComposerDraft = {
+      ...DRAFT,
+      project: {
+        environmentId: retainedEnvironmentId,
+        projectId: ProjectId.make("project-local"),
+        createdAt: "2026-09-05T00:00:00.000Z",
+      },
+    };
+
     expect(
       removeComposerDraftsForEnvironment(
         {
           [`${environmentId}:thread-cloud`]: DRAFT,
-          [`new-task:${environmentId}:project-cloud`]: DRAFT,
+          "new-task:cloud-draft": cloudDraft,
           [`${retainedEnvironmentId}:thread-local`]: DRAFT,
-          [`new-task:${retainedEnvironmentId}:project-local`]: DRAFT,
+          "new-task:local-draft": localDraft,
         },
         environmentId,
       ),
     ).toEqual({
       [`${retainedEnvironmentId}:thread-local`]: DRAFT,
-      [`new-task:${retainedEnvironmentId}:project-local`]: DRAFT,
+      "new-task:local-draft": localDraft,
     });
   });
 
@@ -2070,8 +2158,8 @@ describe("mobile composer drafts", () => {
   });
 
   it("waits for persisted drafts before copying content between projects", async () => {
-    const sourceKey = "new-task:environment-1:project-1";
-    const targetKey = "new-task:environment-1:project-2";
+    const sourceKey = "new-task:draft-1";
+    const targetKey = "new-task:draft-2";
     const unrelatedKey = "environment-1:thread-1";
     const source = { text: "Current task", attachments: [] } satisfies ComposerDraft;
     const target = { text: "Persisted target", attachments: [] } satisfies ComposerDraft;

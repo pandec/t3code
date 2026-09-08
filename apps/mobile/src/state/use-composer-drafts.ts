@@ -4,6 +4,7 @@ import {
   type EnvironmentId,
   type MessageInputOrigin,
   type ModelSelection,
+  type ProjectId,
   type ProviderInteractionMode,
   type RuntimeMode,
 } from "@t3tools/contracts";
@@ -33,6 +34,11 @@ import {
   saveStickyComposerModelSelection,
   type PersistedComposerCloudDraftState,
 } from "./composer-draft-persistence";
+import {
+  isNewTaskDraftKey,
+  newTaskDraftKey,
+  parseLegacyNewTaskDraftKey,
+} from "./new-task-draft-key";
 import { flushThreadOutbox, threadOutboxManager } from "./thread-outbox";
 import type { QueuedThreadMessage } from "./thread-outbox-model";
 import { removeStagedThreadSettingsForEnvironment } from "./use-thread-staged-settings";
@@ -53,6 +59,18 @@ export interface ComposerDraft {
   readonly runtimeMode?: RuntimeMode;
   readonly interactionMode?: ProviderInteractionMode;
   readonly workspaceSelection?: ComposerDraftWorkspaceSelection;
+  /**
+   * Set on new-task drafts only. The project is stored here rather than in
+   * the key so a project can hold any number of drafts and a draft can be
+   * retargeted to another project without changing identity.
+   */
+  readonly project?: ComposerDraftProject;
+}
+
+export interface ComposerDraftProject {
+  readonly environmentId: EnvironmentId;
+  readonly projectId: ProjectId;
+  readonly createdAt: string;
 }
 
 export interface ComposerDraftContent {
@@ -77,7 +95,7 @@ export interface ComposerDraftWorkspaceSelection {
 
 export type ComposerDraftSettingsUpdate = Pick<
   ComposerDraft,
-  "modelSelection" | "runtimeMode" | "interactionMode" | "workspaceSelection"
+  "modelSelection" | "runtimeMode" | "interactionMode" | "workspaceSelection" | "project"
 >;
 
 const EMPTY_DRAFT: ComposerDraft = {
@@ -136,6 +154,8 @@ export function isComposerDraftEmpty(draft: ComposerDraft): boolean {
   return isEmptyDraft(draft);
 }
 
+// The project stamp is identity, not content: a new-task draft with nothing
+// else in it is still empty and gets dropped like any other.
 function isEmptyDraft(draft: ComposerDraft): boolean {
   return (
     draft.text.length === 0 &&
@@ -146,6 +166,33 @@ function isEmptyDraft(draft: ComposerDraft): boolean {
     draft.interactionMode === undefined &&
     draft.workspaceSelection === undefined
   );
+}
+
+/**
+ * Writes a draft back, dropping it once empty. A new-task draft keeps its
+ * entry while the composer is bound to it (the project stamp is what the
+ * composer binds to); the persist sweep still leaves empty ones off disk.
+ */
+function withComposerDraft(
+  current: Record<string, ComposerDraft>,
+  draftKey: string,
+  draft: ComposerDraft,
+): Record<string, ComposerDraft> {
+  if (isEmptyDraft(draft) && draft.project === undefined) {
+    const next = { ...current };
+    delete next[draftKey];
+    return next;
+  }
+  return { ...current, [draftKey]: draft };
+}
+
+export { isNewTaskDraftKey, newTaskDraftKey } from "./new-task-draft-key";
+
+// Draft ids only need to be unique within this device's draft file. Deriving
+// them from time plus randomness keeps this module free of native imports,
+// which the persistence tests rely on.
+function newDraftId(): string {
+  return `${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 10)}`;
 }
 
 function stripThreadDraftSettings(draft: ComposerDraft): ComposerDraft {
@@ -162,6 +209,7 @@ function sanitizeHydratedComposerDraft(
   draftKey: string,
   draft: ComposerDraft,
 ): ComposerDraft | null {
+  if (parseLegacyNewTaskDraftKey(draftKey) !== null) return null;
   let sanitized = isServerThreadDraftKey(draftKey) ? stripThreadDraftSettings(draft) : draft;
   // Stale new-task drafts left on disk by builds before the model-precedence
   // fix carry a bare modelSelection with no other selector settings. Strip it
@@ -823,7 +871,7 @@ export async function archiveCloudComposerDrafts(
   const savedDrafts = { ...cloud.signedOut[owner]?.drafts };
   const removedDraftKeys = new Set<string>();
   for (const [draftKey, draft] of Object.entries(current)) {
-    const environmentId = composerDraftEnvironmentId(draftKey, queued);
+    const environmentId = composerDraftEnvironmentId(draftKey, queued, draft);
     if (environmentId !== null && environmentIds.has(environmentId)) {
       savedDrafts[draftKey] = draft;
       delete remaining[draftKey];
@@ -1069,15 +1117,7 @@ export function setComposerDraftText(
       text: value,
       ...(nextInputOrigin !== undefined ? { inputOrigin: nextInputOrigin } : {}),
     };
-    if (isEmptyDraft(draft)) {
-      const next = { ...current };
-      delete next[draftKey];
-      return next;
-    }
-    return {
-      ...current,
-      [draftKey]: draft,
-    };
+    return withComposerDraft(current, draftKey, draft);
   });
 }
 
@@ -1190,7 +1230,7 @@ export async function revertComposerDraftAppend(
           ? { inputOrigin: latest.inputOrigin }
           : {}),
     };
-    if (isEmptyDraft(draft)) {
+    if (isEmptyDraft(draft) && draft.project === undefined) {
       const next = { ...current };
       delete next[draftKey];
       return next;
@@ -1325,7 +1365,7 @@ export function replaceComposerDraftAttachments(
         ...normalizeDraft(current[draftKey]),
         attachments,
       };
-      if (isEmptyDraft(draft)) {
+      if (isEmptyDraft(draft) && draft.project === undefined) {
         const next = { ...current };
         delete next[draftKey];
         return next;
@@ -1353,7 +1393,7 @@ export function removeComposerDraftAttachment(draftKey: string, attachmentId: st
         ...existing,
         attachments: existing.attachments.filter((attachment) => attachment.id !== attachmentId),
       };
-      if (isEmptyDraft(draft)) {
+      if (isEmptyDraft(draft) && draft.project === undefined) {
         const next = { ...current };
         delete next[draftKey];
         return next;
@@ -1419,15 +1459,7 @@ export function updateComposerDraftSettings(
       ...normalizeDraft(current[draftKey]),
       ...settings,
     };
-    if (isEmptyDraft(draft)) {
-      const next = { ...current };
-      delete next[draftKey];
-      return next;
-    }
-    return {
-      ...current,
-      [draftKey]: draft,
-    };
+    return withComposerDraft(current, draftKey, draft);
   });
 }
 
@@ -1443,11 +1475,15 @@ export function clearComposerDraftContentState(
   if (!existing) {
     return current;
   }
+  // Clearing content is the "this draft is done" moment (sent, queued, or
+  // discarded), so the project stamp goes too and an otherwise-empty new-task
+  // draft leaves the store rather than lingering as a blank row.
   const {
     importedShareIds: _importedShareIds,
     inputOrigin: _inputOrigin,
     modelSelection,
     workspaceSelection,
+    project: _project,
     ...retained
   } = existing;
   const retainedSettings = isServerThreadDraftKey(draftKey)
@@ -1503,7 +1539,7 @@ export function restoreComposerDraftSnapshotState(
   snapshot: ComposerDraft,
 ): Record<string, ComposerDraft> {
   const next = { ...current };
-  if (isEmptyDraft(snapshot)) {
+  if (isEmptyDraft(snapshot) && snapshot.project === undefined) {
     delete next[draftKey];
   } else {
     next[draftKey] = snapshot;
@@ -1538,7 +1574,7 @@ export function copyComposerDraftContentState(
   // bytes (the upload worker re-sends them to the new key's environment) but
   // drops the old stamp, so it cannot pin the source environment's pending
   // upload alive from the copy.
-  const targetEnvironmentId = composerDraftEnvironmentId(targetDraftKey, []);
+  const targetEnvironmentId = composerDraftEnvironmentId(targetDraftKey, [], target);
   const attachments = source.attachments.map((attachment) =>
     attachment.uploadEnvironmentId !== undefined &&
     attachment.uploadEnvironmentId !== targetEnvironmentId
@@ -1714,7 +1750,8 @@ export function sameComposerDraftState(a: ComposerDraft, b: ComposerDraft): bool
     a.modelSelection === b.modelSelection &&
     a.runtimeMode === b.runtimeMode &&
     a.interactionMode === b.interactionMode &&
-    a.workspaceSelection === b.workspaceSelection
+    a.workspaceSelection === b.workspaceSelection &&
+    a.project === b.project
   );
 }
 
@@ -1772,15 +1809,7 @@ export function undoComposerDraftMergeState(
     interactionMode: undoSetting("interactionMode"),
     workspaceSelection: undoSetting("workspaceSelection"),
   };
-  if (isEmptyDraft(draft)) {
-    const next = { ...current };
-    delete next[draftKey];
-    return next;
-  }
-  return {
-    ...current,
-    [draftKey]: draft,
-  };
+  return withComposerDraft(current, draftKey, draft);
 }
 
 /** Applies undoComposerDraftMergeState and lands it durably. */
@@ -1881,13 +1910,98 @@ export function removeComposerDraftsForEnvironment(
   environmentId: EnvironmentId,
 ): Record<string, ComposerDraft> {
   const environmentPrefix = `${environmentId}:`;
-  const newTaskPrefix = `new-task:${environmentId}:`;
   return Object.fromEntries(
     Object.entries(drafts).filter(
-      ([draftKey]) =>
-        !draftKey.startsWith(environmentPrefix) && !draftKey.startsWith(newTaskPrefix),
+      ([draftKey, draft]) =>
+        !draftKey.startsWith(environmentPrefix) && draft.project?.environmentId !== environmentId,
     ),
   );
+}
+
+/**
+ * Mints a new-task draft for a project. The entry is published immediately so
+ * the composer can bind to its key before the user types; it stays out of the
+ * list until it has content, and the empty-draft sweep drops it on persist if
+ * nothing is ever written.
+ */
+export function createNewTaskDraft(project: {
+  readonly environmentId: EnvironmentId;
+  readonly projectId: ProjectId;
+}): string {
+  const draftKey = newTaskDraftKey(newDraftId());
+  const stamp: ComposerDraftProject = {
+    environmentId: project.environmentId,
+    projectId: project.projectId,
+    createdAt: new Date().toISOString(),
+  };
+  updateComposerDrafts(draftKey, (current) => ({
+    ...current,
+    [draftKey]: { ...EMPTY_DRAFT, project: stamp },
+  }));
+  return draftKey;
+}
+
+/**
+ * Points an existing new-task draft at a different project, keeping its
+ * content and identity. Workspace selection is project-specific (branch,
+ * worktree), so it is cleared; model and mode choices carry over.
+ */
+export function retargetNewTaskDraft(
+  draftKey: string,
+  project: { readonly environmentId: EnvironmentId; readonly projectId: ProjectId },
+): void {
+  updateComposerDrafts(draftKey, (current) => {
+    const existing = current[draftKey];
+    const stamp = existing?.project;
+    if (
+      stamp !== undefined &&
+      stamp.environmentId === project.environmentId &&
+      stamp.projectId === project.projectId
+    ) {
+      return current;
+    }
+    const { workspaceSelection: _workspaceSelection, ...retained } = normalizeDraft(existing);
+    // Pending uploads live on one server. Crossing environments keeps the
+    // local bytes (the upload worker re-sends them to the new environment)
+    // but drops the old stamp, so it cannot pin the source environment's
+    // pending upload alive from the moved draft.
+    const attachments = retained.attachments.map((attachment) =>
+      attachment.uploadEnvironmentId !== undefined &&
+      attachment.uploadEnvironmentId !== project.environmentId
+        ? stripAttachmentUploadReference(attachment)
+        : attachment,
+    );
+    return {
+      ...current,
+      [draftKey]: {
+        ...retained,
+        attachments,
+        project: {
+          environmentId: project.environmentId,
+          projectId: project.projectId,
+          createdAt: stamp?.createdAt ?? new Date().toISOString(),
+        },
+      },
+    };
+  });
+}
+
+/** New-task drafts for a project, newest first. */
+export function findNewTaskDraftKeys(
+  drafts: Readonly<Record<string, ComposerDraft>>,
+  project: { readonly environmentId: EnvironmentId; readonly projectId: ProjectId },
+): ReadonlyArray<string> {
+  return Object.entries(drafts)
+    .filter(
+      ([key, draft]) =>
+        isNewTaskDraftKey(key) &&
+        draft.project?.environmentId === project.environmentId &&
+        draft.project.projectId === project.projectId,
+    )
+    .sort(([, left], [, right]) =>
+      (right.project?.createdAt ?? "").localeCompare(left.project?.createdAt ?? ""),
+    )
+    .map(([key]) => key);
 }
 
 export async function clearComposerDraftsEnvironment(environmentId: EnvironmentId): Promise<void> {

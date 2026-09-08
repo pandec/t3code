@@ -189,7 +189,7 @@ function enqueueClientSettingsPersistence<A>(work: () => Promise<A>): Promise<A>
 export function persistClientSettingsPatch(
   patch: ClientSettingsPatch,
   persist: (settings: ClientSettings) => Promise<void> = defaultClientSettingsPersistence,
-): void {
+): Promise<void> {
   // Patches queued before hydration must publish before newer optimistic patches.
   const deferPatch =
     clientSettingsHydrationStatus !== "ready" || deferredClientSettingsPatchCount > 0;
@@ -198,7 +198,7 @@ export function persistClientSettingsPatch(
   } else {
     replaceClientSettingsSnapshot({ ...getClientSettingsSnapshot(), ...patch });
   }
-  void enqueueClientSettingsPersistence(async () => {
+  return enqueueClientSettingsPersistence(async () => {
     if (deferPatch) {
       try {
         if (clientSettingsHydrationStatus !== "ready") {
@@ -549,7 +549,7 @@ function useUpdateSettingsTarget(environmentId: EnvironmentId | null) {
         }
       }
       if (Object.keys(clientPatch).length > 0) {
-        persistClientSettingsPatch(clientPatch);
+        void persistClientSettingsPatch(clientPatch);
       }
     },
     [environmentId, environments, persistServerSettings],
@@ -651,7 +651,7 @@ export function useUpdatePrimarySettings() {
 
 export function useUpdateClientSettings() {
   return useCallback((patch: ClientSettingsPatch) => {
-    persistClientSettingsPatch(patch);
+    return persistClientSettingsPatch(patch);
   }, []);
 }
 

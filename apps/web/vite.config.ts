@@ -162,6 +162,12 @@ const ISOLATED_TEST_FILES = [
   "src/terminal/ghostty/surface.test.ts",
   "src/timestampFormat.test.ts",
   "src/versionSkew.test.ts",
+  "src/components/Sidebar.pointer.test.ts",
+  "src/components/desktop/SnapShotCoordinator.test.ts",
+  "src/components/settings/CaptureShortcutConfig.test.tsx",
+  "src/components/settings/SnapShotSettings.test.tsx",
+  "src/components/settings/useSnapShotShortcutRecorder.test.tsx",
+  "src/lib/snapShotSetupResume.test.ts",
 ];
 
 const unitTestProject = {

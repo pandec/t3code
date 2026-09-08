@@ -658,13 +658,27 @@ const make = Effect.gen(function* () {
           }
 
           nextSecretKeys.add(secretName);
+          // Match the provider environment's last-value-wins behavior for duplicate names.
+          const previous = variable.valueRedacted
+            ? current.providerInstances[ProviderInstanceId.make(instanceId)]?.environment?.findLast(
+                (entry) => entry.name === variable.name,
+              )
+            : undefined;
+          const inlineValue =
+            previous?.sensitive && !previous.valueRedacted && previous.value.length > 0
+              ? previous.value
+              : undefined;
           // The value decides, not the flag: a caller that sends a non-empty
           // value alongside `valueRedacted: true` (hand-edited settings, a
           // stale client envelope) must have that value stored, not silently
-          // dropped in favor of whatever the secret store already holds.
-          if (variable.value.length > 0 || !variable.valueRedacted) {
-            if (variable.value.length > 0) {
-              yield* secretStore.set(secretName, textEncoder.encode(variable.value)).pipe(
+          // dropped in favor of whatever the secret store already holds. A
+          // redacted echo with no value may still recover the previous inline
+          // secret so a redacted save does not lose it.
+          const value =
+            variable.value.length > 0 ? variable.value : (inlineValue ?? variable.value);
+          if (variable.value.length > 0 || !variable.valueRedacted || inlineValue !== undefined) {
+            if (value.length > 0) {
+              yield* secretStore.set(secretName, textEncoder.encode(value)).pipe(
                 Effect.mapError(
                   (cause) =>
                     new ServerSettingsError({

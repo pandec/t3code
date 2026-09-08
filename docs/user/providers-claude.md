@@ -58,6 +58,10 @@ Automatic failover requires shared session state. Both providers must use the sa
 does not move a thread to an account that cannot resume its conversation, so failover stays
 disabled for isolated config directories.
 
+Claude Code's verbose mode can stay enabled when you use Claude for text generation, including
+thread titles, branch names, commit messages, and pull request descriptions. On a remote connection,
+T3 Code uses the Claude configuration on the connected server.
+
 ## Compact long conversations
 
 Set **Auto-compact after** in the Claude provider settings to an integer between `100000` and

@@ -18,7 +18,10 @@ vi.mock("../../components/EnvironmentMachineSymbol", () => ({
   EnvironmentMachineSymbol: "EnvironmentMachineSymbol",
 }));
 vi.mock("../../components/ProjectFavicon", () => ({ ProjectFavicon: "ProjectFavicon" }));
-vi.mock("../../components/ProviderIcon", () => ({ ProviderIcon: "ProviderIcon" }));
+vi.mock("../../components/ProviderIcon", () => ({
+  ProviderIcon: "ProviderIcon",
+  ProviderInstanceIcon: "ProviderInstanceIcon",
+}));
 vi.mock("../../lib/useUniwindTheme", () => ({
   useUniwindTheme: () => new Proxy({}, { get: () => "#000" }),
 }));

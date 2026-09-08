@@ -344,7 +344,7 @@ describe("composer draft record split", () => {
   });
 
   it("round-trips a contentless draft that carries a share-import receipt", async () => {
-    const draftKey = "new-task:environment-1:project-1";
+    const draftKey = "new-task:draft-1";
     const receiptDraft: ComposerDraft = {
       text: "",
       attachments: [],

@@ -11,6 +11,7 @@ const environmentId = EnvironmentId.make("pending-input-snapshot-env");
 const pendingUserInput = {
   requestId: ApprovalRequestId.make("pending-input-snapshot-request"),
   createdAt: "2026-08-11T00:00:00.000Z",
+  dismissible: false,
   questions: [
     {
       id: "details",

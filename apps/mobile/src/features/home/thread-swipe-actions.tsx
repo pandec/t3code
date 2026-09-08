@@ -7,6 +7,7 @@ import {
   use,
   useCallback,
   useEffect,
+  useLayoutEffect,
   useRef,
   useState,
   type ComponentProps,
@@ -25,15 +26,22 @@ import ReanimatedSwipeable, {
   type SwipeableMethods,
 } from "react-native-gesture-handler/ReanimatedSwipeable";
 import Animated, {
+  cancelAnimation,
+  Easing,
   Extrapolation,
+  ReduceMotion,
   interpolate,
   runOnJS,
+  runOnUI,
   type SharedValue,
   useAnimatedReaction,
   useAnimatedStyle,
+  useSharedValue,
+  withTiming,
 } from "react-native-reanimated";
 
 import { AppText as Text } from "../../components/AppText";
+import { registerThreadDismissal } from "./thread-dismissal";
 
 // Wide enough for the longest action label ("Unarchive").
 const ACTION_ITEM_WIDTH = 58;
@@ -237,7 +245,7 @@ export function useSwipeableScrollGate(options?: {
   };
 }
 
-export function ThreadSwipeable(props: {
+interface ThreadSwipeableProps {
   readonly backgroundColor: ColorValue;
   readonly children: (close: () => void) => ReactNode;
   /** Uses action visuals that fit inside compact 44pt rows. The press target
@@ -265,6 +273,7 @@ export function ThreadSwipeable(props: {
   readonly onSwipeableClose?: (methods: SwipeableMethods) => void;
   readonly onSwipeableWillOpen?: (methods: SwipeableMethods) => void;
   readonly primaryAction: ThreadSwipeAction;
+  readonly threadKey: string;
   /**
    * Omitted keeps the v1 destructive Delete action. Explicit null opts out of
    * a secondary action entirely so a gated Snooze can never fall back to an
@@ -281,7 +290,15 @@ export function ThreadSwipeable(props: {
     typeof ReanimatedSwipeable
   >["simultaneousWithExternalGesture"];
   readonly threadTitle: string;
-}) {
+}
+
+export function ThreadSwipeable(props: ThreadSwipeableProps) {
+  // Recycled content gets fresh native and animation state. Late callbacks
+  // from the previous row retain its action, never the replacement's action.
+  return <ThreadSwipeableRow key={props.resetKey} {...props} />;
+}
+
+function ThreadSwipeableRow(props: ThreadSwipeableProps) {
   const swipeableRef = useRef<SwipeableMethods | null>(null);
   const fullSwipeArmedRef = useRef(false);
   const leftFullSwipeArmedRef = useRef(false);
@@ -299,15 +316,143 @@ export function ThreadSwipeable(props: {
     props.fullSwipeAction ?? (props.secondaryAction === undefined ? "delete" : "primary");
   const close = useCallback(() => swipeableRef.current?.close(), []);
   const gateEnabled = use(SwipeableScrollGateContext);
-  const resetKey = props.resetKey;
-  useEffect(() => {
-    if (resetKey === undefined) {
-      return;
-    }
+  const mountedRef = useRef(true);
+  const dismissalRef = useRef<{ finished: Promise<void>; restore: () => void } | null>(null);
+  const pendingDismissRef = useRef<(() => void) | null>(null);
+  const activeTranslationRef = useRef<SharedValue<number> | null>(null);
+  const [isDismissing, setIsDismissing] = useState(false);
+  const dismissing = useSharedValue(false);
+  const rowHeight = useSharedValue(0);
+  const rowWidth = useSharedValue(props.fullSwipeWidth);
+  const collapse = useSharedValue(0);
+  const fallbackTranslation = useSharedValue(0);
+  const actionOpacity = useSharedValue(1);
+  const primaryAction = props.primaryAction;
+  const onSwipeableClose = props.onSwipeableClose;
+
+  const restoreRow = useCallback(() => {
+    if (!mountedRef.current) return;
+    dismissalRef.current = null;
     fullSwipeArmedRef.current = false;
     leftFullSwipeArmedRef.current = false;
     swipeableRef.current?.reset();
-  }, [resetKey]);
+    fallbackTranslation.set(0);
+    collapse.set(0);
+    actionOpacity.set(1);
+    dismissing.set(false);
+    setIsDismissing(false);
+  }, [actionOpacity, collapse, dismissing, fallbackTranslation]);
+
+  const finishDismiss = useCallback(() => {
+    const finish = pendingDismissRef.current;
+    pendingDismissRef.current = null;
+    finish?.();
+  }, []);
+
+  useLayoutEffect(() => {
+    mountedRef.current = true;
+    return () => {
+      mountedRef.current = false;
+      cancelAnimation(collapse);
+      cancelAnimation(actionOpacity);
+      cancelAnimation(fallbackTranslation);
+      if (activeTranslationRef.current) cancelAnimation(activeTranslationRef.current);
+      // Recycling a row must not prevent the waiting action from running.
+      finishDismiss();
+    };
+  }, [actionOpacity, collapse, fallbackTranslation, finishDismiss]);
+
+  const dismiss = useCallback(
+    (translation: SharedValue<number>) => {
+      "worklet";
+      if (dismissing.value) return;
+      dismissing.set(true);
+      const timing = {
+        duration: 220,
+        easing: Easing.out(Easing.cubic),
+        reduceMotion: ReduceMotion.System,
+      };
+      actionOpacity.set(withTiming(0, timing));
+      // Never reverse a swipe that already carried the row beyond its width.
+      translation.set(
+        withTiming(
+          translation.value > 0
+            ? Math.max(translation.value, rowWidth.value)
+            : Math.min(translation.value, -rowWidth.value),
+          timing,
+          (finished) => {
+            if (!finished) return;
+            collapse.set(
+              withTiming(1, { ...timing, duration: 180 }, (collapsed) => {
+                if (collapsed) runOnJS(finishDismiss)();
+              }),
+            );
+          },
+        ),
+      );
+    },
+    [actionOpacity, collapse, dismissing, finishDismiss, rowWidth],
+  );
+  useLayoutEffect(
+    () =>
+      registerThreadDismissal(props.threadKey, () => {
+        if (dismissalRef.current) return dismissalRef.current;
+        const finished = new Promise<void>((resolve) => {
+          pendingDismissRef.current = resolve;
+        });
+        fullSwipeArmedRef.current = false;
+        leftFullSwipeArmedRef.current = false;
+        setIsDismissing(true);
+        if (swipeableRef.current) onSwipeableClose?.(swipeableRef.current);
+        runOnUI(dismiss)(activeTranslationRef.current ?? fallbackTranslation);
+        dismissalRef.current = { finished, restore: restoreRow };
+        return dismissalRef.current;
+      }),
+    [dismiss, fallbackTranslation, onSwipeableClose, props.threadKey, restoreRow],
+  );
+  const dismissStyle = useAnimatedStyle(() => ({
+    height: dismissing.value ? rowHeight.value * (1 - collapse.value) : undefined,
+    pointerEvents: dismissing.value ? "none" : "auto",
+    overflow: "hidden",
+    transform: [{ translateX: fallbackTranslation.value }],
+  }));
+  const actionStyle = useAnimatedStyle(() => ({ opacity: actionOpacity.value, height: "100%" }));
+  const commitPrimaryAction = useCallback(() => {
+    fullSwipeArmedRef.current = false;
+    leftFullSwipeArmedRef.current = false;
+    primaryAction.onPress();
+    if (!pendingDismissRef.current) swipeableRef.current?.close();
+  }, [primaryAction]);
+  const commitLeftAction = useCallback(() => {
+    fullSwipeArmedRef.current = false;
+    leftFullSwipeArmedRef.current = false;
+    leftFullSwipeAction?.onPress();
+    if (!pendingDismissRef.current) swipeableRef.current?.close();
+  }, [leftFullSwipeAction]);
+  const handleRelease = useCallback(
+    (translation: SharedValue<number>) => {
+      "worklet";
+      if (dismissing.value) return true;
+      if (hasLeftActions && translation.value >= leftFullSwipeThreshold) {
+        runOnJS(commitLeftAction)();
+        return true;
+      }
+      if (fullSwipeAction === "primary" && -translation.value >= fullSwipeThreshold) {
+        runOnJS(commitPrimaryAction)();
+        return true;
+      }
+      return false;
+    },
+    [
+      commitLeftAction,
+      commitPrimaryAction,
+      dismissing,
+      fullSwipeAction,
+      fullSwipeThreshold,
+      hasLeftActions,
+      leftFullSwipeThreshold,
+    ],
+  );
   const handleFullSwipeArmedChange = useCallback((armed: boolean) => {
     if (armed && !fullSwipeArmedRef.current) {
       void Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
@@ -322,135 +467,129 @@ export function ThreadSwipeable(props: {
   }, []);
 
   return (
-    <ReanimatedSwipeable
-      ref={swipeableRef}
-      animationOptions={THREAD_SWIPE_SPRING}
-      childrenContainerStyle={{ backgroundColor: props.backgroundColor }}
-      containerStyle={[{ backgroundColor: props.backgroundColor }, props.containerStyle]}
-      // Rows without a left action keep the RNGH default so an inert pan
-      // can't activate earlier than it used to.
-      dragOffsetFromLeftEdge={hasLeftActions ? 8 : 10}
-      dragOffsetFromRightEdge={8}
-      enabled={props.enabled !== false && gateEnabled}
-      enableTrackpadTwoFingerGesture={props.enableTrackpadSwipe ?? true}
-      // Fail the swipe once the pan is vertically dominant (patched-in RNGH
-      // prop) — otherwise trackpad scrolls with ~8px of horizontal drift
-      // start opening rows because the swipe pan runs simultaneously with
-      // the list scroll gesture and never gets disqualified by Y movement.
-      failOffsetY={[-10, 10]}
-      friction={1}
-      onSwipeableClose={() => {
-        fullSwipeArmedRef.current = false;
-        leftFullSwipeArmedRef.current = false;
-        if (swipeableRef.current) {
-          props.onSwipeableClose?.(swipeableRef.current);
-        }
-      }}
-      onSwipeableOpenStartDrag={() => {
-        if (swipeableRef.current) {
-          props.onSwipeableWillOpen?.(swipeableRef.current);
-        }
-      }}
-      // A cross-direction drag from an already-open row can cross the
-      // full-swipe threshold, but RNGH resolves that release to translation 0
-      // so onSwipeableWillOpen never fires. Commit here so an armed swipe
-      // (haptic already delivered) always keeps its promise. The refs are
-      // cleared before close() on the normal commit paths, so this cannot
-      // double-fire.
-      onSwipeableWillClose={() => {
-        if (leftFullSwipeArmedRef.current) {
-          leftFullSwipeArmedRef.current = false;
-          leftFullSwipeAction?.onPress();
-          return;
-        }
-        if (fullSwipeArmedRef.current) {
-          fullSwipeArmedRef.current = false;
-          if (fullSwipeAction === "primary") {
-            props.primaryAction.onPress();
-          } else {
-            props.onDelete();
-          }
-        }
-      }}
-      // RNGH reports the swipe direction, not the panel side: RIGHT means the
-      // user swiped right, so the LEFT panel is what opened.
-      onSwipeableWillOpen={(direction) => {
-        const methods = swipeableRef.current;
-        if (!methods) {
-          return;
-        }
-
-        props.onSwipeableWillOpen?.(methods);
-        if (direction === SwipeDirection.RIGHT) {
-          if (leftFullSwipeArmedRef.current) {
+    <Animated.View style={dismissStyle}>
+      <View
+        onLayout={({ nativeEvent: { layout } }) => {
+          rowHeight.set(layout.height);
+          rowWidth.set(layout.width);
+        }}
+      >
+        <ReanimatedSwipeable
+          ref={swipeableRef}
+          animationOptions={THREAD_SWIPE_SPRING}
+          childrenContainerStyle={{ backgroundColor: props.backgroundColor }}
+          containerStyle={[{ backgroundColor: props.backgroundColor }, props.containerStyle]}
+          dragOffsetFromLeftEdge={hasLeftActions ? 8 : 10}
+          dragOffsetFromRightEdge={8}
+          enabled={!isDismissing && props.enabled !== false && gateEnabled}
+          enableTrackpadTwoFingerGesture={props.enableTrackpadSwipe ?? true}
+          // Fail the swipe once the pan is vertically dominant (patched-in RNGH
+          // prop) — otherwise trackpad scrolls with ~8px of horizontal drift
+          // start opening rows because the swipe pan runs simultaneously with
+          // the list scroll gesture and never gets disqualified by Y movement.
+          failOffsetY={[-10, 10]}
+          friction={1}
+          onSwipeableClose={() => {
+            fullSwipeArmedRef.current = false;
             leftFullSwipeArmedRef.current = false;
-            methods.close();
-            leftFullSwipeAction?.onPress();
+            if (swipeableRef.current) {
+              props.onSwipeableClose?.(swipeableRef.current);
+            }
+          }}
+          onSwipeableRelease={handleRelease}
+          onSwipeableOpenStartDrag={() => {
+            if (swipeableRef.current) {
+              props.onSwipeableWillOpen?.(swipeableRef.current);
+            }
+          }}
+          onSwipeableWillClose={() => {
+            if (fullSwipeArmedRef.current && fullSwipeAction === "delete") {
+              fullSwipeArmedRef.current = false;
+              props.onDelete();
+            }
+          }}
+          onSwipeableWillOpen={(direction) => {
+            const methods = swipeableRef.current;
+            if (!methods) {
+              return;
+            }
+
+            props.onSwipeableWillOpen?.(methods);
+            if (
+              direction === SwipeDirection.LEFT &&
+              fullSwipeArmedRef.current &&
+              fullSwipeAction !== "primary"
+            ) {
+              fullSwipeArmedRef.current = false;
+              methods.close();
+              props.onDelete();
+            }
+          }}
+          overshootFriction={1}
+          overshootLeft={hasLeftActions}
+          leftThreshold={leftActionsWidth * 0.42}
+          renderLeftActions={
+            hasLeftActions
+              ? (_progress, translation, methods) => (
+                  <Animated.View
+                    ref={() => {
+                      activeTranslationRef.current = translation;
+                    }}
+                    style={actionStyle}
+                  >
+                    <ThreadSwipeLeftActions
+                      actions={leftActions.map((action) => ({
+                        ...action,
+                        onPress: () => {
+                          action.onPress();
+                          if (!pendingDismissRef.current) methods.close();
+                        },
+                      }))}
+                      backgroundColor={props.backgroundColor}
+                      compact={props.compactActions === true}
+                      fullSwipeThreshold={leftFullSwipeThreshold}
+                      onFullSwipeArmedChange={handleLeftFullSwipeArmedChange}
+                      translation={translation}
+                    />
+                  </Animated.View>
+                )
+              : undefined
           }
-          return;
-        }
-        if (fullSwipeArmedRef.current) {
-          fullSwipeArmedRef.current = false;
-          methods.close();
-          if (fullSwipeAction === "primary") {
-            props.primaryAction.onPress();
-          } else {
-            props.onDelete();
-          }
-        }
-      }}
-      overshootFriction={1}
-      overshootLeft={hasLeftActions}
-      overshootRight
-      leftThreshold={leftActionsWidth * 0.42}
-      renderLeftActions={
-        hasLeftActions
-          ? (_progress, translation, methods) => (
-              <ThreadSwipeLeftActions
-                actions={leftActions.map((action) => ({
-                  ...action,
-                  onPress: () => {
-                    methods.close();
-                    action.onPress();
-                  },
-                }))}
+          overshootRight
+          renderRightActions={(_progress, translation, methods) => (
+            <Animated.View
+              ref={() => {
+                activeTranslationRef.current = translation;
+              }}
+              style={actionStyle}
+            >
+              <ThreadSwipeActions
                 backgroundColor={props.backgroundColor}
                 compact={props.compactActions === true}
-                fullSwipeThreshold={leftFullSwipeThreshold}
-                onFullSwipeArmedChange={handleLeftFullSwipeArmedChange}
+                fullSwipeAction={fullSwipeAction}
+                fullSwipeThreshold={fullSwipeThreshold}
+                onFullSwipeArmedChange={handleFullSwipeArmedChange}
+                primaryAction={{
+                  ...primaryAction,
+                  onPress: commitPrimaryAction,
+                }}
+                secondaryAction={resolveSecondaryAction({
+                  close: () => methods.close(),
+                  onDelete: props.onDelete,
+                  secondaryAction: props.secondaryAction,
+                  threadTitle: props.threadTitle,
+                })}
                 translation={translation}
               />
-            )
-          : undefined
-      }
-      renderRightActions={(_progress, translation, methods) => (
-        <ThreadSwipeActions
-          backgroundColor={props.backgroundColor}
-          compact={props.compactActions === true}
-          fullSwipeAction={fullSwipeAction}
-          fullSwipeThreshold={fullSwipeThreshold}
-          onFullSwipeArmedChange={handleFullSwipeArmedChange}
-          primaryAction={{
-            ...props.primaryAction,
-            onPress: () => {
-              methods.close();
-              props.primaryAction.onPress();
-            },
-          }}
-          secondaryAction={resolveSecondaryAction({
-            close: () => methods.close(),
-            onDelete: props.onDelete,
-            secondaryAction: props.secondaryAction,
-            threadTitle: props.threadTitle,
-          })}
-          translation={translation}
-        />
-      )}
-      rightThreshold={actionsWidth * 0.42}
-      simultaneousWithExternalGesture={props.simultaneousWithExternalGesture}
-    >
-      {props.children(close)}
-    </ReanimatedSwipeable>
+            </Animated.View>
+          )}
+          rightThreshold={actionsWidth * 0.42}
+          simultaneousWithExternalGesture={props.simultaneousWithExternalGesture}
+        >
+          {props.children(close)}
+        </ReanimatedSwipeable>
+      </View>
+    </Animated.View>
   );
 }
 

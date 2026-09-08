@@ -16,7 +16,6 @@ export type ThreadOlderSource = Pick<
   | "hasPendingUserInput"
   | "latestTurn"
   | "latestUserMessageAt"
-  | "movedToTopAt"
   | "session"
   | "unsettledAt"
   | "snoozedAt"
@@ -29,9 +28,7 @@ export type ThreadOlderSource = Pick<
  *
  * `threadLastActivityAt` covers messages and every turn stamp. Creation time
  * is the floor, so a thread opened and never used still ages instead of
- * reading as undateable. A manual move to top counts as activity — it is the
- * user saying the thread matters again, and a row lifted to the top must not
- * fall straight back down. So does a snooze wake: "show me this on the 1st"
+ * reading as undateable. A snooze wake also counts: "show me this on the 1st"
  * is answered by the thread reappearing in the list, not by it landing in a
  * folded shelf still aged from the work it was snoozed on top of. And so does
  * an un-settle, for the same reason: a thread re-entering the active list is
@@ -46,7 +43,6 @@ export function threadOlderRecencyAtMs(
   for (const candidate of [
     thread.createdAt,
     threadLastActivityAt(thread),
-    thread.movedToTopAt ?? null,
     thread.unsettledAt ?? null,
     threadWokeAt(thread, { now: options.now }),
   ]) {

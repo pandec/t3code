@@ -81,7 +81,10 @@ describe("DesktopEarlyElectronStartup", () => {
     });
 
     assert.deepEqual(options, {
+      isDevelopment: true,
+      usesDevelopmentIdentity: true,
       linuxWmClass: "t3code-dev",
+      linuxDesktopEntryName: "com.t3tools.T3Code.Development.desktop",
       passwordStore: "gnome-libsecret",
     });
   });
@@ -115,7 +118,12 @@ describe("DesktopEarlyElectronStartup", () => {
     });
 
     assert.deepEqual(options, {
+      // Packaged Dev is not a dev-server run, but it carries the development
+      // identity so its portal entry never overwrites the release one.
+      isDevelopment: false,
+      usesDevelopmentIdentity: true,
       linuxWmClass: "t3code-dev",
+      linuxDesktopEntryName: "com.t3tools.T3Code.Development.desktop",
       passwordStore: "gnome-libsecret",
     });
   });

@@ -5279,7 +5279,7 @@ describe("ProviderCommandReactor", () => {
     }),
   );
 
-  effectIt("rejects a fork while a source turn start is still being established", () =>
+  effectIt.effect("rejects a fork while a source turn start is still being established", () =>
     Effect.gen(function* () {
       const harness = yield* Effect.promise(() => createHarness());
       const now = "2026-01-01T00:00:00.000Z";

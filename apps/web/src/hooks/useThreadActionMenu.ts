@@ -20,7 +20,7 @@ import { stackedThreadToast, toastManager } from "../components/ui/toast";
 import { threadEnvironment } from "../state/threads";
 import { useAtomCommand } from "../state/use-atom-command";
 import {
-  readEnvironmentSupportsMoveToTop,
+  readEnvironmentSupportsActiveReorder,
   readEnvironmentSupportsPinning,
   readEnvironmentSupportsSettlement,
   readEnvironmentSupportsSnooze,
@@ -158,11 +158,12 @@ export function useThreadActionMenu(input: {
           supports,
           snoozePresets,
           forkExtras: {
-            // The legacy sidebar never reads movedToTopAt, so offering this
-            // there would mutate a field nothing renders. Same guard as the
-            // command palette's Move to top action.
+            // The legacy sidebar never reads the saved active order, so
+            // offering this there would write a key nothing renders. Same
+            // guard as the command palette's Move to top action.
             moveToTop:
-              !legacySidebarEnabled && readEnvironmentSupportsMoveToTop(threadRef.environmentId),
+              !legacySidebarEnabled &&
+              readEnvironmentSupportsActiveReorder(threadRef.environmentId),
             fork: canForkConversation(thread),
           },
         });

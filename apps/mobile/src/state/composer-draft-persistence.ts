@@ -1,6 +1,7 @@
 import { isFileBackedComposerAttachment } from "@t3tools/client-runtime/state/composer-attachment";
 import {
   EnvironmentId,
+  ProjectId,
   ModelSelection as ModelSelectionSchema,
   ProviderInteractionMode as ProviderInteractionModeSchema,
   RuntimeMode as RuntimeModeSchema,
@@ -24,6 +25,7 @@ import {
   type QueuedThreadMessage,
 } from "./thread-outbox-model";
 import type { ComposerDraft } from "./use-composer-drafts";
+import { parseLegacyNewTaskDraftKey } from "./new-task-draft-key";
 
 const LEGACY_SCHEMA_VERSION = 1;
 const RECORD_SCHEMA_VERSION = 2;
@@ -89,6 +91,12 @@ const ComposerDraftWorkspaceSelectionSchema = Schema.Struct({
   startFromOrigin: Schema.optional(Schema.Boolean),
 });
 
+const ComposerDraftProjectSchema = Schema.Struct({
+  environmentId: EnvironmentId,
+  projectId: ProjectId,
+  createdAt: Schema.String,
+});
+
 const LegacyComposerDraftSchema = Schema.Struct({
   text: Schema.String,
   inputOrigin: Schema.optional(MessageInputOrigin),
@@ -98,6 +106,7 @@ const LegacyComposerDraftSchema = Schema.Struct({
   runtimeMode: Schema.optional(RuntimeModeSchema),
   interactionMode: Schema.optional(ProviderInteractionModeSchema),
   workspaceSelection: Schema.optional(ComposerDraftWorkspaceSelectionSchema),
+  project: Schema.optional(ComposerDraftProjectSchema),
 });
 
 const LegacyComposerDraftsSchema = Schema.Struct({
@@ -141,6 +150,7 @@ const PersistedComposerDraftSchema = Schema.Struct({
   runtimeMode: Schema.optional(RuntimeModeSchema),
   interactionMode: Schema.optional(ProviderInteractionModeSchema),
   workspaceSelection: Schema.optional(ComposerDraftWorkspaceSelectionSchema),
+  project: Schema.optional(ComposerDraftProjectSchema),
 });
 
 const PersistedComposerDraftRecordSchema = Schema.Struct({
@@ -223,7 +233,9 @@ function composerDraftForPersistence(draftKey: string, draft: ComposerDraft): Co
 export function decodePersistedComposerDrafts(value: unknown): Record<string, ComposerDraft> {
   const parsed = decodeLegacyComposerDraftsDocument(value);
   return Object.fromEntries(
-    Object.entries(parsed.drafts).filter(([, draft]) => !isDiscardableDraft(draft)),
+    Object.entries(parsed.drafts).filter(
+      ([key, draft]) => parseLegacyNewTaskDraftKey(key) === null && !isDiscardableDraft(draft),
+    ),
   );
 }
 
@@ -461,6 +473,12 @@ async function loadRecordDocuments(): Promise<ReadonlyArray<PersistedComposerDra
       if (!entry.name.endsWith(DRAFT_RECORD_SUFFIX)) {
         continue;
       }
+      try {
+        const key = decodeURIComponent(entry.name.slice(0, -DRAFT_RECORD_SUFFIX.length));
+        if (parseLegacyNewTaskDraftKey(key) !== null) continue;
+      } catch {
+        // Malformed filenames still go through the normal record validation.
+      }
       let raw: string;
       try {
         raw = await entry.text();
@@ -473,7 +491,8 @@ async function loadRecordDocuments(): Promise<ReadonlyArray<PersistedComposerDra
         });
       }
       try {
-        documents.push(decodeComposerDraftRecordDocument(JSON.parse(raw) as unknown));
+        const record = decodeComposerDraftRecordDocument(JSON.parse(raw) as unknown);
+        if (parseLegacyNewTaskDraftKey(record.draftKey) === null) documents.push(record);
       } catch (cause) {
         throw new ComposerDraftPersistenceError({
           operation: "decode",
@@ -855,6 +874,7 @@ export async function loadPersistedComposerCloudDraftState(): Promise<PersistedC
   for (const [accountId, saved] of Object.entries(document.signedOut)) {
     const drafts: Record<string, ComposerDraft> = {};
     for (const record of saved.drafts) {
+      if (parseLegacyNewTaskDraftKey(record.draftKey) !== null) continue;
       const hydrated = await hydrateRecord(record, attachments);
       if (hydrated.state === "unavailable") {
         throw new ComposerDraftPersistenceError({
@@ -891,6 +911,7 @@ export async function savePersistedComposerCloudDraftState(
   for (const [accountId, saved] of Object.entries(state.signedOut)) {
     const drafts: PersistedComposerDraftRecord[] = [];
     for (const [draftKey, draft] of Object.entries(saved.drafts)) {
+      if (parseLegacyNewTaskDraftKey(draftKey) !== null) continue;
       if (isDiscardableDraft(draft)) {
         continue;
       }
@@ -1071,6 +1092,7 @@ export type PersistedComposerDraftHydration =
 export async function hydratePersistedComposerDraftKey(
   draftKey: string,
 ): Promise<PersistedComposerDraftHydration> {
+  if (parseLegacyNewTaskDraftKey(draftKey) !== null) return { state: "missing" };
   const { File } = await loadExpoFileSystem();
   const { records, attachments } = await getStorageDirectories();
   const file = new File(records, draftRecordFileName(draftKey));

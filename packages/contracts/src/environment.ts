@@ -21,13 +21,14 @@ export const ExecutionEnvironmentPlatformArch = Schema.Literals(["arm64", "x64",
 export type ExecutionEnvironmentPlatformArch = typeof ExecutionEnvironmentPlatformArch.Type;
 
 /**
- * The curated set of machine shapes an environment can wear as its icon.
+ * The curated set of machine shapes and OS identities an environment can wear as its icon.
  * Servers detect one from the hardware they run on (`platform.machine`), and
  * the `environmentIcon` server setting lets a user pick one instead.
  */
 export const ENVIRONMENT_MACHINE_KINDS = [
   "server",
   "cloud",
+  "linux",
   "desktop",
   "laptop",
   "mac-mini",
@@ -115,9 +116,6 @@ export const ExecutionEnvironmentCapabilities = Schema.Struct({
       requires a wake time, so clients hide the preset instead of sending
       a command that would fail to decode. */
   threadSnoozeIndefinite: Schema.optionalKey(Schema.Boolean),
-  /** Server understands thread.move-to-top. Absent on older servers, so
-      clients hide the action instead of sending an unknown command. */
-  threadMoveToTop: Schema.optionalKey(Schema.Boolean),
   /** Server exposes a bounded recent-archive query for always-mounted shelves. */
   recentArchivedThreads: Schema.optionalKey(Schema.Boolean),
   /** Server persists ServerSettings.projectAccentColors and accepts its
@@ -148,6 +146,8 @@ export const ExecutionEnvironmentCapabilities = Schema.Struct({
   /** Server understands thread.pin.reorder (and orderKey on thread.pin).
       Same version-skew contract as threadSettlement. */
   threadPinReorder: Schema.optionalKey(Schema.Boolean),
+  /** Server persists manual Active order through thread.active.reorder. */
+  threadActiveReorder: Schema.optionalKey(Schema.Boolean),
   /** Server understands regenerateTitle on thread.meta.update. Absent on
       older servers, so clients hide the action instead of sending it. */
   threadTitleRegeneration: Schema.optionalKey(Schema.Boolean),

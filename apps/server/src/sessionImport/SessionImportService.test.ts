@@ -117,7 +117,6 @@ const makeProjectionThread = (input: {
   unsettledAt: null,
   snoozedUntil: null,
   snoozedAt: null,
-  movedToTopAt: null,
   pinnedAt: null,
   latestUserMessageAt: null,
   pendingApprovalCount: 0,

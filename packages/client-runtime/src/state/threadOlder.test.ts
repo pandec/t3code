@@ -20,7 +20,6 @@ function thread(overrides: Partial<ThreadOlderSource> = {}): ThreadOlderSource {
     hasPendingUserInput: false,
     latestUserMessageAt: null,
     latestTurn: null,
-    movedToTopAt: null,
     session: null,
     snoozedAt: null,
     snoozedUntil: null,
@@ -55,18 +54,6 @@ function session(
 }
 
 describe("threadOlderRecencyAtMs", () => {
-  it("takes the newest of creation, activity, and a manual move to top", () => {
-    expect(
-      threadOlderRecencyAtMs(
-        thread({
-          latestUserMessageAt: "2026-04-02T00:00:00.000Z",
-          movedToTopAt: "2026-04-09T00:00:00.000Z",
-        }),
-        { now: NOW },
-      ),
-    ).toBe(Date.parse("2026-04-09T00:00:00.000Z"));
-  });
-
   it("uses a turn completion the user never followed up on", () => {
     expect(
       threadOlderRecencyAtMs(
@@ -119,18 +106,6 @@ describe("threadIsOlder", () => {
     expect(threadIsOlder(thread(), { now: NOW, afterDays: 7 })).toBe(true);
     expect(
       threadIsOlder(thread({ createdAt: "2026-04-09T00:00:00.000Z" }), { now: NOW, afterDays: 7 }),
-    ).toBe(false);
-  });
-
-  it("lifts a thread back out as soon as it is moved to top", () => {
-    expect(
-      threadIsOlder(
-        thread({
-          latestUserMessageAt: "2026-04-01T00:00:00.000Z",
-          movedToTopAt: "2026-04-09T00:00:00.000Z",
-        }),
-        { now: NOW, afterDays: 7 },
-      ),
     ).toBe(false);
   });
 
