@@ -615,6 +615,11 @@ export const SETTINGS_SEARCH_ITEMS = [
     requiresThreadAutoSettlement: true,
   },
   {
+    id: "skip-missing-worktree-recreation",
+    title: "Skip recreating removed worktrees",
+    to: "/settings/extras",
+  },
+  {
     id: "extras-composer",
     title: "Composer",
     to: "/settings/extras",

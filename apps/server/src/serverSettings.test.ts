@@ -301,7 +301,7 @@ it.layer(NodeServices.layer)("server settings", (it) => {
     ).pipe(Effect.provide(makeServerSettingsLayer())),
   );
 
-  it.effect("persists and broadcasts thread settlement settings", () =>
+  it.effect("persists and broadcasts thread recovery and settlement settings", () =>
     Effect.scoped(
       Effect.gen(function* () {
         const serverConfig = yield* ServerConfig.ServerConfig;
@@ -311,6 +311,7 @@ it.layer(NodeServices.layer)("server settings", (it) => {
 
         const next = yield* serverSettings.updateSettings({
           threadAutoSettleEnabled: false,
+          skipMissingWorktreeRecreation: false,
           sidebarAutoSettleAfterDays: null,
           sidebarAutoSettleOnMerge: false,
         });
@@ -320,6 +321,9 @@ it.layer(NodeServices.layer)("server settings", (it) => {
         // @effect-diagnostics-next-line preferSchemaOverJson:off
         const persisted = JSON.parse(raw) as Record<string, unknown>;
 
+        assert.isFalse(next.skipMissingWorktreeRecreation);
+        assert.isFalse(change?.skipMissingWorktreeRecreation);
+        assert.isFalse(persisted.skipMissingWorktreeRecreation);
         assert.isFalse(next.threadAutoSettleEnabled);
         assert.strictEqual(next.sidebarAutoSettleAfterDays, null);
         assert.isFalse(next.sidebarAutoSettleOnMerge);

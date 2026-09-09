@@ -1510,7 +1510,19 @@ const ThreadPullRequestSyncCommand = Schema.Struct({
   linkedPullRequest: Schema.optional(ThreadLinkedPullRequest),
 });
 
+const ThreadWorktreeFallbackCommand = Schema.Struct({
+  type: Schema.Literal("thread.worktree.fallback"),
+  commandId: CommandId,
+  threadId: ThreadId,
+  expectedWorktreePath: TrimmedNonEmptyString,
+  expectedWorkspaceRoot: TrimmedNonEmptyString,
+  messageId: MessageId,
+  notice: TrimmedNonEmptyString,
+  createdAt: IsoDateTime,
+});
+
 const InternalOrchestrationCommand = Schema.Union([
+  ThreadWorktreeFallbackCommand,
   ThreadImportCommand,
   ThreadAutoSettleCommand,
   ThreadSessionSetCommand,

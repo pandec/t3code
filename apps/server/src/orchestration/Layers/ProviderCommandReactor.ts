@@ -2,6 +2,7 @@ import {
   type ChatAttachment,
   CommandId,
   EventId,
+  MessageId,
   type ModelSelection,
   type MessageInputOrigin,
   type OrchestrationEvent,
@@ -580,50 +581,85 @@ const make = Effect.gen(function* () {
       .pipe(Effect.map(Option.getOrUndefined));
   });
 
-  /**
-   * Recreates a thread's worktree from its branch when the directory has
-   * disappeared. Provider sessions resume into the persisted cwd, so a missing
-   * worktree makes every later turn fail as a bogus "session not found".
-   * Best-effort: on failure the turn proceeds and reports the real error.
-   */
-  const ensureThreadWorktree = Effect.fnUntraced(function* (thread: {
-    readonly id: ThreadId;
-    readonly projectId: ProjectId;
-    readonly branch: string | null;
-    readonly worktreePath: string | null;
-  }) {
+  const ensureThreadWorktree = Effect.fnUntraced(function* (
+    thread: {
+      readonly id: ThreadId;
+      readonly projectId: ProjectId;
+      readonly branch: string | null;
+      readonly worktreePath: string | null;
+      readonly session: OrchestrationSession | null;
+    },
+    message: { readonly id: MessageId; readonly createdAt: string },
+  ) {
     const { worktreePath, branch } = thread;
-    if (!worktreePath || !branch) {
+    // A steer must not move or restart a running conversation.
+    if (
+      !worktreePath ||
+      thread.session?.status === "running" ||
+      thread.session?.status === "starting"
+    )
       return;
-    }
-    const exists = yield* fileSystem.exists(worktreePath).pipe(Effect.orElseSucceed(() => true));
-    if (exists) {
-      return;
-    }
-    const project = yield* resolveProject(thread.projectId);
-    if (!project) {
-      return;
-    }
-    const cwd = project.workspaceRoot;
-    yield* Effect.logWarning("provider command reactor recreating missing worktree", {
-      threadId: thread.id,
-      worktreePath,
-      branch,
-    });
-    // A directory deleted without `git worktree remove` leaves an admin entry
-    // that makes `git worktree add` refuse the path; prune clears it.
-    yield* gitWorkflow.pruneWorktrees({ cwd }).pipe(
-      Effect.andThen(gitWorkflow.createWorktree({ cwd, refName: branch, path: worktreePath })),
-      Effect.catchCause((cause) =>
-        Cause.hasInterruptsOnly(cause)
-          ? Effect.failCause(cause)
-          : Effect.logWarning("provider command reactor failed to recreate worktree", {
-              threadId: thread.id,
-              worktreePath,
-              cause: Cause.pretty(cause),
-            }),
+    const missing = yield* fileSystem.stat(worktreePath).pipe(
+      Effect.as(false),
+      Effect.catch((error) =>
+        error.reason._tag === "NotFound" ? Effect.succeed(true) : Effect.fail(error),
       ),
     );
+    if (!missing) return;
+    const project = yield* resolveProject(thread.projectId);
+    if (!project) return;
+    const cwd = project.workspaceRoot;
+    const settings = yield* serverSettingsService.getSettings;
+    const attemptRecreation = !settings.skipMissingWorktreeRecreation && branch !== null;
+    if (attemptRecreation) {
+      // Prune handles directories removed without `git worktree remove`.
+      const recreated = yield* gitWorkflow.pruneWorktrees({ cwd }).pipe(
+        Effect.andThen(gitWorkflow.createWorktree({ cwd, refName: branch, path: worktreePath })),
+        Effect.andThen(fileSystem.stat(worktreePath)),
+        Effect.map((stat) => stat.type === "Directory"),
+        Effect.catchCause((cause) =>
+          Cause.hasInterruptsOnly(cause)
+            ? Effect.failCause(cause)
+            : Effect.logDebug("Worktree recreation failed; trying the project checkout", {
+                threadId: thread.id,
+                cause: Cause.pretty(cause),
+              }).pipe(Effect.as(false)),
+        ),
+      );
+      if (recreated) return;
+    }
+    const usableCheckout = yield* fileSystem.stat(cwd).pipe(
+      Effect.map((stat) => stat.type === "Directory"),
+      Effect.catch((error) =>
+        error.reason._tag === "NotFound" ? Effect.succeed(false) : Effect.fail(error),
+      ),
+    );
+    if (!usableCheckout)
+      return yield* new ProviderWorkspaceMissingError({ threadId: thread.id, cwd });
+    const reason = settings.skipMissingWorktreeRecreation
+      ? "Worktree recreation is disabled in Settings > Extras."
+      : attemptRecreation
+        ? "T3 could not recreate it from its saved branch."
+        : "There is no saved branch to recreate it from.";
+    const quotedWorktree = yield* Schema.encodeEffect(Schema.fromJsonString(Schema.String))(
+      worktreePath,
+    );
+    const quotedCheckout = yield* Schema.encodeEffect(Schema.fromJsonString(Schema.String))(cwd);
+    const notice = `T3 notice: The worktree at ${quotedWorktree} no longer exists. ${reason} This thread is now continuing in the main project checkout at ${quotedCheckout}. Files from the removed worktree may no longer be available.`;
+    yield* orchestrationEngine.dispatch({
+      type: "thread.worktree.fallback",
+      commandId: yield* serverCommandId("worktree-fallback"),
+      threadId: thread.id,
+      expectedWorktreePath: worktreePath,
+      expectedWorkspaceRoot: cwd,
+      messageId: MessageId.make(`worktree-recovery:${message.id}`),
+      notice,
+      // The triggering user message already exists; show the notice just before it.
+      createdAt: DateTime.formatIso(
+        DateTime.subtract(DateTime.makeUnsafe(message.createdAt), { milliseconds: 1 }),
+      ),
+    });
+    return notice;
   });
 
   const resolveThreadShell = Effect.fnUntraced(function* (threadId: ThreadId) {
@@ -676,6 +712,7 @@ const make = Effect.gen(function* () {
     options?: {
       readonly modelSelection?: ModelSelection;
       readonly pendingTurnStart?: boolean;
+      readonly recoverMissingWorkspace?: boolean;
     },
   ) {
     const thread = yield* resolveThreadShell(threadId);
@@ -885,7 +922,10 @@ const make = Effect.gen(function* () {
           },
           // A thread keeps its conversation across an instance switch, so a
           // start that cannot carry the cursor must fail rather than reset it.
-          { onIncompatiblePersistedState: "fail" },
+          {
+            onIncompatiblePersistedState: "fail",
+            ...(options?.recoverMissingWorkspace ? { recoverMissingWorkspace: true } : {}),
+          },
         )
         .pipe(Effect.tap(() => refreshWorkspaceSnapshot));
 
@@ -1018,6 +1058,7 @@ const make = Effect.gen(function* () {
     readonly messageText: string;
     readonly attachments?: ReadonlyArray<ChatAttachment>;
     readonly inputOrigin?: MessageInputOrigin;
+    readonly workspaceRecoveryNotice?: string;
     readonly modelSelection?: ModelSelection;
     readonly interactionMode?: "default" | "plan";
     readonly createdAt: string;
@@ -1031,10 +1072,14 @@ const make = Effect.gen(function* () {
     const ensuredSession = yield* ensureSessionForThread(input.threadId, input.createdAt, {
       ...(input.modelSelection !== undefined ? { modelSelection: input.modelSelection } : {}),
       pendingTurnStart: true,
+      ...(input.workspaceRecoveryNotice ? { recoverMissingWorkspace: true } : {}),
     });
     const effectiveInputModelSelection =
       input.modelSelection !== undefined ? ensuredSession.effectiveModelSelection : undefined;
-    const normalizedInput = withInputOriginNotice(input.messageText, input.inputOrigin);
+    const userInput = withInputOriginNotice(input.messageText, input.inputOrigin);
+    const normalizedInput = input.workspaceRecoveryNotice
+      ? `${input.workspaceRecoveryNotice}\n\n${userInput ?? ""}`
+      : userInput;
     const normalizedAttachments = input.attachments ?? [];
     const activeSession = yield* providerService
       .listSessions()
@@ -1477,10 +1522,15 @@ const make = Effect.gen(function* () {
       return;
     }
 
-    yield* ensureThreadWorktree(thread);
+    const workspaceRecovery = yield* ensureThreadWorktree(thread, message).pipe(
+      Effect.map(Option.some),
+      Effect.catchCause((cause) => handleTurnStartFailure(cause).pipe(Effect.as(Option.none()))),
+    );
+    if (Option.isNone(workspaceRecovery)) return;
+    const recoveryNotice = workspaceRecovery.value ?? turnStart.value.workspaceRecoveryNotice;
 
     const isCompactCommand = isCompactCommandMessage(message);
-    if (!hasOtherUserMessages && !isCompactCommand) {
+    if (!hasOtherUserMessages && !isCompactCommand && !recoveryNotice) {
       const project = yield* resolveProject(thread.projectId);
       const generationCwd =
         resolveThreadWorkspaceCwd({
@@ -1578,8 +1628,12 @@ const make = Effect.gen(function* () {
           event.payload.threadId,
           event.payload.createdAt,
           event.payload.modelSelection !== undefined
-            ? { modelSelection: event.payload.modelSelection, pendingTurnStart: true }
-            : { pendingTurnStart: true },
+            ? {
+                modelSelection: event.payload.modelSelection,
+                pendingTurnStart: true,
+                recoverMissingWorkspace: recoveryNotice !== undefined,
+              }
+            : { pendingTurnStart: true, recoverMissingWorkspace: recoveryNotice !== undefined },
         );
         compactionSessionEnsured = true;
         // Rate-limit failover may have routed the session to a sibling
@@ -1608,6 +1662,7 @@ const make = Effect.gen(function* () {
     const sendTurnRequest = yield* buildSendTurnRequestForThread({
       threadId: event.payload.threadId,
       messageText: message.text,
+      ...(recoveryNotice ? { workspaceRecoveryNotice: recoveryNotice } : {}),
       ...(message.attachments !== undefined ? { attachments: message.attachments } : {}),
       ...(message.inputOrigin !== undefined ? { inputOrigin: message.inputOrigin } : {}),
       ...(event.payload.modelSelection !== undefined

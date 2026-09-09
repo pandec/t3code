@@ -156,7 +156,10 @@ const ProjectionThreadMessageArtifactDbRowSchema = Schema.Struct({
   speechOrigin: Schema.NullOr(MessageSpeechOrigin),
 });
 const ProjectionTurnStartMessageDbRowSchema = ProjectionThreadMessageDbRowSchema.mapFields(
-  Struct.assign({ hasOtherUserMessages: Schema.Number }),
+  Struct.assign({
+    hasOtherUserMessages: Schema.Number,
+    workspaceRecoveryNotice: Schema.NullOr(Schema.String),
+  }),
 );
 const ProjectionThreadProposedPlanDbRowSchema = ProjectionThreadProposedPlan;
 const ProjectionThreadDbRowSchema = ProjectionThread.mapFields(
@@ -1516,7 +1519,20 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
               LOWER(TRIM(other.text, ${MESSAGE_TRIM_WHITESPACE})) != '/compact'
               OR COALESCE(json_array_length(other.attachments_json), 0) > 0
             )
-        ) AS "hasOtherUserMessages"
+        ) AS "hasOtherUserMessages",
+        (
+          SELECT notice.text FROM projection_thread_messages AS notice
+          WHERE notice.thread_id = ${threadId}
+            AND notice.message_id GLOB 'worktree-recovery:*'
+            AND notice.created_at <= projection_thread_messages.created_at
+            AND NOT EXISTS (
+              SELECT 1 FROM projection_thread_messages AS reply
+              WHERE reply.thread_id = ${threadId} AND reply.role = 'assistant'
+                AND reply.created_at >= notice.created_at
+                AND reply.is_streaming = 0 AND LENGTH(reply.text) > 0
+            )
+          ORDER BY notice.created_at DESC LIMIT 1
+        ) AS "workspaceRecoveryNotice"
       FROM projection_thread_messages
       WHERE thread_id = ${threadId} AND message_id = ${messageId}
       LIMIT 1
@@ -3561,6 +3577,9 @@ pending_approval_requests AS (
         ...(row.attachments !== null ? { attachments: row.attachments } : {}),
       },
       hasOtherUserMessages: row.hasOtherUserMessages === 1,
+      ...(row.workspaceRecoveryNotice !== null
+        ? { workspaceRecoveryNotice: row.workspaceRecoveryNotice }
+        : {}),
     }));
   });
 

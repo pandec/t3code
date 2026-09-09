@@ -25,6 +25,7 @@ const SHARED_SERVER_SETTING_KEYS = [
   // it governs, so one flip disables automatic settlement everywhere.
   "threadAutoSettleEnabled",
   "continueThreadsAfterServerUpdate",
+  "skipMissingWorktreeRecreation",
   "sidebarAutoSettleAfterDays",
   "sidebarAutoSettleOnMerge",
   "newWorktreesStartFromOrigin",
