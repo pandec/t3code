@@ -13,7 +13,7 @@ const ELEVENLABS_TEXT_TO_SPEECH_TIMEOUT = "120 seconds";
 
 export const SPEECH_MIME_TYPE = "audio/mpeg" as const;
 
-export class ElevenLabsTtsError extends Schema.TaggedErrorClass<ElevenLabsTtsError>()(
+export class ElevenLabsTtsError extends Schema.TaggedError<ElevenLabsTtsError>()(
   "ElevenLabsTtsError",
   {
     // quota_exceeded: the account has no characters left for this request;

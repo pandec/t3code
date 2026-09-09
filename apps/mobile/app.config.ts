@@ -42,7 +42,7 @@ const runtimeVersionPolicy =
 const personalTeamBundleIdentifier = repoEnv.T3CODE_IOS_PERSONAL_TEAM_BUNDLE_ID?.trim();
 // Marketing version. Forks that ship their own builds set T3CODE_FORK_VERSION so the
 // Settings screen distinguishes them from an upstream build; otherwise use upstream's version.
-const appVersion = repoEnv.T3CODE_FORK_VERSION?.trim() || "1.1.0";
+const appVersion = repoEnv.T3CODE_FORK_VERSION?.trim() || "1.1.1";
 // CFBundleVersion. Only set when a build pipeline supplies one: App Store Connect
 // rejects a repeat build number, but leaving it unset elsewhere keeps `expo prebuild`
 // output stable for local dev builds.
@@ -297,7 +297,7 @@ const config: ExpoConfig = {
   icon: variant.assets.appIcon,
   userInterfaceStyle: "automatic",
   updates: {
-    enabled: easProject !== undefined,
+    enabled: easProject !== undefined && repoEnv.T3CODE_MOBILE_UPDATES_ENABLED !== "0",
     url: `https://u.expo.dev/${(easProject ?? UPSTREAM_EAS_PROJECT).projectId}`,
     checkAutomatically: "ON_LOAD",
     fallbackToCacheTimeout: 0,
@@ -366,6 +366,9 @@ const config: ExpoConfig = {
   android: {
     icon: variant.assets.appIcon,
     package: variant.androidPackage,
+    ...(repoEnv.T3CODE_ANDROID_GOOGLE_SERVICES_FILE
+      ? { googleServicesFile: repoEnv.T3CODE_ANDROID_GOOGLE_SERVICES_FILE }
+      : {}),
     adaptiveIcon: {
       backgroundColor: variant.assets.androidAdaptiveBackgroundColor,
       ...(variant.assets.androidAdaptiveBackgroundImage
@@ -488,6 +491,10 @@ const config: ExpoConfig = {
     [
       "expo-build-properties",
       {
+        android: {
+          // Keep the supported floor explicit and covered by native notification tests.
+          minSdkVersion: 24,
+        },
         ios: {
           deploymentTarget: IOS_DEPLOYMENT_TARGET,
           // Precompiled Expo modules assume React Native stays on its prebuilt

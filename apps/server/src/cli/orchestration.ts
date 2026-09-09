@@ -36,7 +36,7 @@ const encodeClientOrchestrationCommandJson = Schema.encodeSync(
   Schema.fromJsonString(ClientOrchestrationCommand),
 );
 
-export class CliOrchestrationDeclaredResponseError extends Schema.TaggedErrorClass<CliOrchestrationDeclaredResponseError>()(
+export class CliOrchestrationDeclaredResponseError extends Schema.TaggedError<CliOrchestrationDeclaredResponseError>()(
   "CliOrchestrationDeclaredResponseError",
   {
     operation: Schema.Literal("callLiveServer"),
@@ -50,7 +50,7 @@ export class CliOrchestrationDeclaredResponseError extends Schema.TaggedErrorCla
   }
 }
 
-export class CliOrchestrationUndeclaredStatusError extends Schema.TaggedErrorClass<CliOrchestrationUndeclaredStatusError>()(
+export class CliOrchestrationUndeclaredStatusError extends Schema.TaggedError<CliOrchestrationUndeclaredStatusError>()(
   "CliOrchestrationUndeclaredStatusError",
   {
     operation: Schema.Literal("callLiveServer"),
@@ -63,7 +63,7 @@ export class CliOrchestrationUndeclaredStatusError extends Schema.TaggedErrorCla
   }
 }
 
-export class CliOrchestrationRequestError extends Schema.TaggedErrorClass<CliOrchestrationRequestError>()(
+export class CliOrchestrationRequestError extends Schema.TaggedError<CliOrchestrationRequestError>()(
   "CliOrchestrationRequestError",
   {
     operation: Schema.Literal("callLiveServer"),
@@ -75,7 +75,7 @@ export class CliOrchestrationRequestError extends Schema.TaggedErrorClass<CliOrc
   }
 }
 
-export class CliOrchestrationConflictError extends Schema.TaggedErrorClass<CliOrchestrationConflictError>()(
+export class CliOrchestrationConflictError extends Schema.TaggedError<CliOrchestrationConflictError>()(
   "CliOrchestrationConflictError",
   {
     operation: Schema.Literal("callLiveServer"),
@@ -88,7 +88,7 @@ export class CliOrchestrationConflictError extends Schema.TaggedErrorClass<CliOr
   }
 }
 
-export class CliOrchestrationOutcomeUnknownError extends Schema.TaggedErrorClass<CliOrchestrationOutcomeUnknownError>()(
+export class CliOrchestrationOutcomeUnknownError extends Schema.TaggedError<CliOrchestrationOutcomeUnknownError>()(
   "CliOrchestrationOutcomeUnknownError",
   {
     operation: Schema.Literal("dispatchLiveServer"),
@@ -100,7 +100,7 @@ export class CliOrchestrationOutcomeUnknownError extends Schema.TaggedErrorClass
   }
 }
 
-export class CliOrchestrationWaitOutcomeUnknownError extends Schema.TaggedErrorClass<CliOrchestrationWaitOutcomeUnknownError>()(
+export class CliOrchestrationWaitOutcomeUnknownError extends Schema.TaggedError<CliOrchestrationWaitOutcomeUnknownError>()(
   "CliOrchestrationWaitOutcomeUnknownError",
   {
     operation: Schema.Literal("waitLiveServer"),
@@ -113,7 +113,7 @@ export class CliOrchestrationWaitOutcomeUnknownError extends Schema.TaggedErrorC
   }
 }
 
-export class CliOrchestrationServerUnavailableError extends Schema.TaggedErrorClass<CliOrchestrationServerUnavailableError>()(
+export class CliOrchestrationServerUnavailableError extends Schema.TaggedError<CliOrchestrationServerUnavailableError>()(
   "CliOrchestrationServerUnavailableError",
   {
     operation: Schema.Literal("resolveLiveServer"),
@@ -134,7 +134,7 @@ export const CliLiveServerReadPhase = Schema.Literals([
 ]);
 export type CliLiveServerReadPhase = typeof CliLiveServerReadPhase.Type;
 
-export class CliOrchestrationReadTimeoutError extends Schema.TaggedErrorClass<CliOrchestrationReadTimeoutError>()(
+export class CliOrchestrationReadTimeoutError extends Schema.TaggedError<CliOrchestrationReadTimeoutError>()(
   "CliOrchestrationReadTimeoutError",
   {
     operation: Schema.Literal("callLiveServer"),
@@ -444,7 +444,7 @@ export const fetchLiveOrchestrationShell = (
 
 const isEnvironmentResourceNotFoundError = Schema.is(EnvironmentResourceNotFoundError);
 
-export class CliOrchestrationThreadNotFoundError extends Schema.TaggedErrorClass<CliOrchestrationThreadNotFoundError>()(
+export class CliOrchestrationThreadNotFoundError extends Schema.TaggedError<CliOrchestrationThreadNotFoundError>()(
   "CliOrchestrationThreadNotFoundError",
   {
     operation: Schema.Literal("fetchThreadMessages"),

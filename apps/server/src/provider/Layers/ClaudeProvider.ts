@@ -60,6 +60,7 @@ import {
 const CLAUDE_PRESENTATION = {
   displayName: "Claude",
   showInteractionModeToggle: true,
+  reportsContextWindow: true,
 } as const;
 export function getClaudeModelCapabilities(model: string | null | undefined): ModelCapabilities {
   return (

@@ -13,7 +13,7 @@ import * as Schema from "effect/Schema";
 
 const isProjectScriptCommand = Schema.is(SCRIPT_RUN_COMMAND_PATTERN);
 
-export class ProjectActionNotFoundError extends Schema.TaggedErrorClass<ProjectActionNotFoundError>()(
+export class ProjectActionNotFoundError extends Schema.TaggedError<ProjectActionNotFoundError>()(
   "ProjectActionNotFoundError",
   {
     projectId: ProjectId,
@@ -26,7 +26,7 @@ export class ProjectActionNotFoundError extends Schema.TaggedErrorClass<ProjectA
   }
 }
 
-export class ProjectActionAlreadyExistsError extends Schema.TaggedErrorClass<ProjectActionAlreadyExistsError>()(
+export class ProjectActionAlreadyExistsError extends Schema.TaggedError<ProjectActionAlreadyExistsError>()(
   "ProjectActionAlreadyExistsError",
   {
     projectId: ProjectId,
@@ -38,7 +38,7 @@ export class ProjectActionAlreadyExistsError extends Schema.TaggedErrorClass<Pro
   }
 }
 
-export class ProjectActionValidationError extends Schema.TaggedErrorClass<ProjectActionValidationError>()(
+export class ProjectActionValidationError extends Schema.TaggedError<ProjectActionValidationError>()(
   "ProjectActionValidationError",
   {
     field: Schema.Literals(["id", "name", "command", "previewUrl", "autoOpenPreview"]),

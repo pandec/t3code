@@ -150,7 +150,7 @@ export function isMessageSpeechCacheReusable(input: {
   );
 }
 
-export class MessageSpeechError extends Schema.TaggedErrorClass<MessageSpeechError>()(
+export class MessageSpeechError extends Schema.TaggedError<MessageSpeechError>()(
   "MessageSpeechError",
   {
     reason: MessageSpeechFailureReason,

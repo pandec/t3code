@@ -48,6 +48,7 @@ import {
 import { AndroidHomeFabLayout } from "../home/AndroidHomeFab";
 import { HomeListOptionsProvider } from "../home/home-list-options";
 import { ThreadAttentionFilterProvider } from "../threads/use-thread-attention-filter";
+import { useAppearancePreferences } from "../settings/appearance/AppearancePreferencesProvider";
 import { ThreadNavigationSidebar } from "../threads/ThreadNavigationSidebar";
 import { WORKSPACE_PANE_TIMING } from "./workspace-pane-animation";
 import { WorkspaceInspectorPane } from "./workspace-inspector-pane";
@@ -220,6 +221,7 @@ function AdaptiveWorkspaceLayoutContent(
   },
 ) {
   const projectGroupingMode = props.projectGroupingMode;
+  const { materialYouStyleLayoutActive } = useAppearancePreferences();
   const { width, height } = useWindowDimensions();
   const pathname = props.pathname;
   const navigation = useNavigation();
@@ -583,7 +585,14 @@ function AdaptiveWorkspaceLayoutContent(
                 </View>
               </Animated.View>
             ) : null}
-            <View className="flex-1 overflow-hidden bg-screen" collapsable={false}>
+            <View
+              className={
+                materialYouStyleLayoutActive
+                  ? "flex-1 overflow-hidden bg-header"
+                  : "flex-1 overflow-hidden bg-screen"
+              }
+              collapsable={false}
+            >
               <View
                 collapsable={false}
                 style={

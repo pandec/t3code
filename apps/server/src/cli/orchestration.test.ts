@@ -143,7 +143,7 @@ const issuedSession = {
   token: "token-cli-retry-test",
 } as EnvironmentAuth.IssuedBearerSession;
 
-class TestSessionError extends Schema.TaggedErrorClass<TestSessionError>()("TestSessionError", {
+class TestSessionError extends Schema.TaggedError<TestSessionError>()("TestSessionError", {
   code: Schema.String,
   detail: Schema.String,
 }) {

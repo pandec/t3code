@@ -125,7 +125,7 @@ export const AgentVoiceReplyResult = Schema.Struct({
 });
 export type AgentVoiceReplyResult = typeof AgentVoiceReplyResult.Type;
 
-export class AgentVoiceReplyError extends Schema.TaggedErrorClass<AgentVoiceReplyError>()(
+export class AgentVoiceReplyError extends Schema.TaggedError<AgentVoiceReplyError>()(
   "AgentVoiceReplyError",
   {
     // turn_unavailable: the thread has no identifiable active turn, or the

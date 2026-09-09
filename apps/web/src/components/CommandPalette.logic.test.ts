@@ -2,7 +2,7 @@ import { describe, expect, it, vi } from "vite-plus/test";
 import { scopeThreadRef } from "@t3tools/client-runtime/environment";
 import { EnvironmentId, ProjectId, ProviderInstanceId, ThreadId } from "@t3tools/contracts";
 import { SidebarProjectAccentColor } from "@t3tools/contracts/settings";
-import type { Project, Thread } from "../types";
+import type { Thread } from "../types";
 import {
   buildBrowseGroups,
   buildArchiveCurrentThreadAction,
@@ -16,6 +16,7 @@ import {
   filterCommandPaletteGroups,
   reduceCommandPaletteUiState,
   type CommandPaletteGroup,
+  type CommandPaletteProject,
 } from "./CommandPalette.logic";
 
 describe("buildArchiveCurrentThreadAction", () => {
@@ -299,6 +300,21 @@ describe("enumerateCommandPaletteItems", () => {
 const LOCAL_ENVIRONMENT_ID = EnvironmentId.make("environment-local");
 const PROJECT_ID = ProjectId.make("project-1");
 
+function makeProject(overrides: Partial<CommandPaletteProject> = {}): CommandPaletteProject {
+  return {
+    id: PROJECT_ID,
+    environmentId: LOCAL_ENVIRONMENT_ID,
+    title: "Project",
+    displayName: "Project",
+    workspaceRoot: "/repos/project",
+    defaultModelSelection: null,
+    scripts: [],
+    createdAt: "2026-03-01T00:00:00.000Z",
+    updatedAt: "2026-03-01T00:00:00.000Z",
+    ...overrides,
+  };
+}
+
 function makeThread(overrides: Partial<Thread> = {}): Thread {
   return {
     id: ThreadId.make("thread-1"),
@@ -323,20 +339,6 @@ function makeThread(overrides: Partial<Thread> = {}): Thread {
     worktreePath: null,
     checkpoints: [],
     activities: [],
-    ...overrides,
-  };
-}
-
-function makeProject(overrides: Partial<Project> = {}): Project {
-  return {
-    id: PROJECT_ID,
-    environmentId: LOCAL_ENVIRONMENT_ID,
-    title: "Project",
-    workspaceRoot: "/repos/project",
-    defaultModelSelection: null,
-    scripts: [],
-    createdAt: "2026-03-01T00:00:00.000Z",
-    updatedAt: "2026-03-01T00:00:00.000Z",
     ...overrides,
   };
 }
@@ -392,6 +394,28 @@ describe("buildProjectActionItems", () => {
 
     expect(items[0]?.shortcutCommand).toBe("thread.jump.1");
     expect(items[0]?.projectAccentColor).toBe(accent);
+  });
+});
+
+describe("buildProjectActionItems", () => {
+  it("shows the grouped display name but keeps the real title for icons", () => {
+    const project = makeProject({ title: "fleet", workspaceRoot: "/Users/theo/Code/p/fleet" });
+    const iconTitles: string[] = [];
+    const [item] = buildProjectActionItems({
+      projects: [{ ...project, displayName: "t3dotgg/fleet" }],
+      valuePrefix: "project",
+      icon: (candidate) => {
+        iconTitles.push(candidate.title);
+        return null;
+      },
+      runProject: async () => undefined,
+    });
+
+    expect(item?.title).toBe("t3dotgg/fleet");
+    expect(item?.searchTerms).toEqual(
+      expect.arrayContaining(["t3dotgg/fleet", "fleet", "/Users/theo/Code/p/fleet"]),
+    );
+    expect(iconTitles).toEqual(["fleet"]);
   });
 });
 

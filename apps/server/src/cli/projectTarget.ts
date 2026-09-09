@@ -14,7 +14,7 @@ type ProjectTargetCandidate = ProjectMutationTarget & {
   readonly deletedAt?: string | null;
 };
 
-export class ProjectIdentifierEmptyError extends Schema.TaggedErrorClass<ProjectIdentifierEmptyError>()(
+export class ProjectIdentifierEmptyError extends Schema.TaggedError<ProjectIdentifierEmptyError>()(
   "ProjectIdentifierEmptyError",
   {
     operation: Schema.Literal("resolveProjectTarget"),
@@ -26,7 +26,7 @@ export class ProjectIdentifierEmptyError extends Schema.TaggedErrorClass<Project
   }
 }
 
-export class ProjectNotFoundError extends Schema.TaggedErrorClass<ProjectNotFoundError>()(
+export class ProjectNotFoundError extends Schema.TaggedError<ProjectNotFoundError>()(
   "ProjectNotFoundError",
   {
     operation: Schema.Literal("resolveProjectTarget"),

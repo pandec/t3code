@@ -168,6 +168,7 @@ const ISOLATED_TEST_FILES = [
   "src/components/settings/SnapShotSettings.test.tsx",
   "src/components/settings/useSnapShotShortcutRecorder.test.tsx",
   "src/lib/snapShotSetupResume.test.ts",
+  "src/questionAttachments.test.ts",
 ];
 
 const unitTestProject = {

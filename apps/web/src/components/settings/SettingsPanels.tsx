@@ -2989,7 +2989,7 @@ export function GeneralSettingsPanel() {
         <SettingsRow
           serverScoped
           {...searchableSetting("text-generation-model")}
-          description="Used for thread titles and other generated text. Source control can override it."
+          description="Used for thread titles and other generated text on connected devices with this provider. Source control can override it."
           resetAction={
             isTextGenerationModelDirty ? (
               <SettingResetButton
@@ -3588,15 +3588,7 @@ export function ArchivedThreadsPanel({
                       });
                     }
               }
-              icon={
-                <ProjectFavicon
-                  environmentId={group.representativeProject.environmentId}
-                  cwd={group.representativeProject.workspaceRoot}
-                  projectName={group.representativeProject.title}
-                  faviconPath={group.representativeProject.faviconPath}
-                  projectIcon={group.representativeProject.projectIcon}
-                />
-              }
+              icon={<ProjectFavicon project={group.representativeProject} />}
             >
               {group.threads.map(({ environmentLabel, thread }) => {
                 const threadRef = scopeThreadRef(thread.environmentId, thread.id);

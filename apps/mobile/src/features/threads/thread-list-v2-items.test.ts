@@ -37,6 +37,10 @@ vi.mock("../../state/use-mobile-preferences", () => ({
 vi.mock("../../state/listeningPlayback", () => ({ useThreadListeningState: () => null }));
 vi.mock("../../state/listeningPlayer", () => ({ toggleLoadedListeningTrack: () => {} }));
 vi.mock("../../state/use-thread-pr", () => ({ useThreadPr: () => null }));
+// The arrangement action reaches the app atom registry and thread-order store,
+// whose module graph loads expo-crypto and needs the React Native runtime.
+vi.mock("../../state/atom-registry", () => ({ appAtomRegistry: { set: () => {} } }));
+vi.mock("../../state/thread-order", () => ({ threadArrangementOpenAtom: {} }));
 vi.mock("../home/thread-swipe-actions", () => ({ ThreadSwipeable: "ThreadSwipeable" }));
 vi.mock("./thread-search-match", () => ({ ThreadSearchMatchExcerpt: "ThreadSearchMatchExcerpt" }));
 

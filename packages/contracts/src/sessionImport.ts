@@ -9,7 +9,7 @@ export const SESSION_IMPORT_WS_METHODS = {
   importSession: "sessionImport.import",
 } as const;
 
-export class SessionImportError extends Schema.TaggedErrorClass<SessionImportError>()(
+export class SessionImportError extends Schema.TaggedError<SessionImportError>()(
   "SessionImportError",
   {
     reason: Schema.Literals([

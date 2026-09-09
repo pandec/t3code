@@ -5285,7 +5285,10 @@ describe("ProviderCommandReactor", () => {
       const now = "2026-01-01T00:00:00.000Z";
       const sourceThreadId = ThreadId.make("thread-1");
       const destinationThreadId = ThreadId.make("thread-fork-during-start");
-      harness.sendTurn.mockImplementation(() => Effect.never);
+      const sendTurnStarted = yield* Deferred.make<void>();
+      harness.sendTurn.mockImplementation(() =>
+        Deferred.succeed(sendTurnStarted, undefined).pipe(Effect.andThen(Effect.never)),
+      );
 
       yield* harness.engine.dispatch({
         type: "thread.session.set",
@@ -5317,30 +5320,34 @@ describe("ProviderCommandReactor", () => {
         runtimeMode: "approval-required",
         createdAt: now,
       });
-      yield* Effect.promise(() => waitFor(() => harness.sendTurn.mock.calls.length === 1));
-
-      yield* harness.engine.dispatch({
-        type: "thread.fork",
-        commandId: CommandId.make("cmd-fork-during-pending-turn"),
-        sourceThreadId,
-        threadId: destinationThreadId,
-        createdAt: now,
-      });
-      yield* Effect.promise(() =>
-        waitFor(async () => {
-          const readModel = await harness.readModel();
-          return (
-            readModel.threads.find((thread) => thread.id === destinationThreadId)?.session
-              ?.status === "error"
-          );
-        }),
+      yield* Deferred.await(sendTurnStarted);
+      const source = (yield* Effect.promise(harness.readModel)).threads.find(
+        (thread) => thread.id === sourceThreadId,
       );
+      expect(source?.session?.status).toBe("starting");
+      expect(source?.session?.activeTurnId).toBeNull();
+      expect(source?.latestTurn?.state).not.toBe("running");
+
+      const error = yield* harness.engine
+        .dispatch({
+          type: "thread.fork",
+          commandId: CommandId.make("cmd-fork-during-pending-turn"),
+          sourceThreadId,
+          threadId: destinationThreadId,
+          createdAt: now,
+        })
+        .pipe(Effect.flip);
+      expect(error).toMatchObject({
+        _tag: "OrchestrationCommandInvariantError",
+        commandType: "thread.fork",
+        detail: "Thread 'thread-1' cannot be forked while a turn is active.",
+      });
 
       expect(harness.forkConversation).not.toHaveBeenCalled();
       const destination = (yield* Effect.promise(harness.readModel)).threads.find(
         (thread) => thread.id === destinationThreadId,
       );
-      expect(destination?.session?.lastError).toContain("source conversation is starting a turn");
+      expect(destination).toBeUndefined();
     }),
   );
 

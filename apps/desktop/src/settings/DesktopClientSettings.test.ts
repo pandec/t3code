@@ -91,6 +91,7 @@ const clientSettings: ClientSettings = {
   steerGraceWindowMs: 5_000,
   loadBalancingEnabled: false,
   loadBalancingWeights: { "environment-1": 75, "environment-2": 0 },
+  pullRequestMergeMethodOverrides: {},
   timestampFormat: "24-hour",
   turnCompletionMinDurationSeconds: 0,
   wordWrap: true,

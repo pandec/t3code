@@ -42,7 +42,7 @@ const attachmentContentHashes = new WeakMap<DraftComposerImageAttachment, Promis
 let expoCryptoPromise: Promise<typeof import("expo-crypto")> | null = null;
 let expoFileSystemPromise: Promise<typeof import("expo-file-system")> | null = null;
 
-export class ComposerDraftPersistenceError extends Schema.TaggedErrorClass<ComposerDraftPersistenceError>()(
+export class ComposerDraftPersistenceError extends Schema.TaggedError<ComposerDraftPersistenceError>()(
   "ComposerDraftPersistenceError",
   {
     operation: Schema.Literals([

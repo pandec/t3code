@@ -121,7 +121,7 @@ export const LinearRpcErrorReason = Schema.Literals([
 ]);
 export type LinearRpcErrorReason = typeof LinearRpcErrorReason.Type;
 
-export class LinearRpcError extends Schema.TaggedErrorClass<LinearRpcError>()("LinearRpcError", {
+export class LinearRpcError extends Schema.TaggedError<LinearRpcError>()("LinearRpcError", {
   reason: LinearRpcErrorReason,
   detail: TrimmedNonEmptyString,
 }) {

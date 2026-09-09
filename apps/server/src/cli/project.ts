@@ -69,7 +69,7 @@ const jsonFlag = Flag.boolean("json").pipe(
 
 const jsonOutput = (value: unknown) => JSON.stringify(value, null, 2);
 
-export class ProjectCommandIdGenerationError extends Schema.TaggedErrorClass<ProjectCommandIdGenerationError>()(
+export class ProjectCommandIdGenerationError extends Schema.TaggedError<ProjectCommandIdGenerationError>()(
   "ProjectCommandIdGenerationError",
   {
     operation: Schema.Literal("generateProjectCommandId"),
@@ -81,7 +81,7 @@ export class ProjectCommandIdGenerationError extends Schema.TaggedErrorClass<Pro
   }
 }
 
-export class ProjectTitleEmptyError extends Schema.TaggedErrorClass<ProjectTitleEmptyError>()(
+export class ProjectTitleEmptyError extends Schema.TaggedError<ProjectTitleEmptyError>()(
   "ProjectTitleEmptyError",
   {
     operation: Schema.Literal("validateProjectTitle"),
@@ -93,7 +93,7 @@ export class ProjectTitleEmptyError extends Schema.TaggedErrorClass<ProjectTitle
   }
 }
 
-export class ProjectAlreadyExistsError extends Schema.TaggedErrorClass<ProjectAlreadyExistsError>()(
+export class ProjectAlreadyExistsError extends Schema.TaggedError<ProjectAlreadyExistsError>()(
   "ProjectAlreadyExistsError",
   {
     operation: Schema.Literal("addProject"),
@@ -106,7 +106,7 @@ export class ProjectAlreadyExistsError extends Schema.TaggedErrorClass<ProjectAl
   }
 }
 
-export class ProjectActionServerUnsupportedError extends Schema.TaggedErrorClass<ProjectActionServerUnsupportedError>()(
+export class ProjectActionServerUnsupportedError extends Schema.TaggedError<ProjectActionServerUnsupportedError>()(
   "ProjectActionServerUnsupportedError",
   {
     operation: Schema.Literal("validateProjectActionServerCapability"),

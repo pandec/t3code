@@ -112,7 +112,7 @@ export const threadWaitDrainFlag = Flag.boolean("drain").pipe(
 const jsonOutput = (value: unknown) => JSON.stringify(value, null, 2);
 const isCliOrchestrationOutcomeUnknownError = Schema.is(CliOrchestrationOutcomeUnknownError);
 
-export class ThreadCliNotFoundError extends Schema.TaggedErrorClass<ThreadCliNotFoundError>()(
+export class ThreadCliNotFoundError extends Schema.TaggedError<ThreadCliNotFoundError>()(
   "ThreadCliNotFoundError",
   {
     operation: Schema.Literal("resolveThread"),
@@ -124,7 +124,7 @@ export class ThreadCliNotFoundError extends Schema.TaggedErrorClass<ThreadCliNot
   }
 }
 
-export class ThreadCliMessageCursorError extends Schema.TaggedErrorClass<ThreadCliMessageCursorError>()(
+export class ThreadCliMessageCursorError extends Schema.TaggedError<ThreadCliMessageCursorError>()(
   "ThreadCliMessageCursorError",
   {
     operation: Schema.Literal("fetchThreadMessages"),
@@ -145,7 +145,7 @@ export class ThreadCliMessageCursorError extends Schema.TaggedErrorClass<ThreadC
   }
 }
 
-export class ThreadCliMessageEmptyError extends Schema.TaggedErrorClass<ThreadCliMessageEmptyError>()(
+export class ThreadCliMessageEmptyError extends Schema.TaggedError<ThreadCliMessageEmptyError>()(
   "ThreadCliMessageEmptyError",
   {
     operation: Schema.Literal("validateMessage"),
@@ -156,7 +156,7 @@ export class ThreadCliMessageEmptyError extends Schema.TaggedErrorClass<ThreadCl
   }
 }
 
-export class ThreadCliTitleEmptyError extends Schema.TaggedErrorClass<ThreadCliTitleEmptyError>()(
+export class ThreadCliTitleEmptyError extends Schema.TaggedError<ThreadCliTitleEmptyError>()(
   "ThreadCliTitleEmptyError",
   {
     operation: Schema.Literal("validateTitle"),
@@ -167,7 +167,7 @@ export class ThreadCliTitleEmptyError extends Schema.TaggedErrorClass<ThreadCliT
   }
 }
 
-export class ThreadCliNoActiveTurnError extends Schema.TaggedErrorClass<ThreadCliNoActiveTurnError>()(
+export class ThreadCliNoActiveTurnError extends Schema.TaggedError<ThreadCliNoActiveTurnError>()(
   "ThreadCliNoActiveTurnError",
   {
     operation: Schema.Literal("interruptThread"),
@@ -179,7 +179,7 @@ export class ThreadCliNoActiveTurnError extends Schema.TaggedErrorClass<ThreadCl
   }
 }
 
-export class ThreadCliWorkspaceFlagError extends Schema.TaggedErrorClass<ThreadCliWorkspaceFlagError>()(
+export class ThreadCliWorkspaceFlagError extends Schema.TaggedError<ThreadCliWorkspaceFlagError>()(
   "ThreadCliWorkspaceFlagError",
   {
     operation: Schema.Literal("resolveWorkspaceFlags"),
@@ -191,7 +191,7 @@ export class ThreadCliWorkspaceFlagError extends Schema.TaggedErrorClass<ThreadC
   }
 }
 
-export class ThreadCliWorktreePathError extends Schema.TaggedErrorClass<ThreadCliWorktreePathError>()(
+export class ThreadCliWorktreePathError extends Schema.TaggedError<ThreadCliWorktreePathError>()(
   "ThreadCliWorktreePathError",
   {
     operation: Schema.Literal("resolveWorktreePath"),

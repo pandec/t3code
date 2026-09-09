@@ -27,7 +27,7 @@ import type { CodexScanState, UsageRecord } from "./usageTranscripts.ts";
 // v3 was independently used by the fork for malformed-record counts and by
 // upstream for incremental parse positions, so neither v3 shape is compatible.
 // v4 carries both incremental state and completed/tail malformed counts.
-export const USAGE_SCAN_CACHE_VERSION = 4 as const;
+const USAGE_SCAN_CACHE_VERSION = 4 as const;
 
 export interface CachedFile {
   readonly size: number;

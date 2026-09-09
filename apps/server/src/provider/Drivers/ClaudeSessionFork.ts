@@ -3,7 +3,7 @@ import * as Effect from "effect/Effect";
 import * as Schema from "effect/Schema";
 import * as Semaphore from "effect/Semaphore";
 
-export class ClaudeSessionForkError extends Schema.TaggedErrorClass<ClaudeSessionForkError>()(
+export class ClaudeSessionForkError extends Schema.TaggedError<ClaudeSessionForkError>()(
   "ClaudeSessionForkError",
   {
     sessionId: Schema.String,

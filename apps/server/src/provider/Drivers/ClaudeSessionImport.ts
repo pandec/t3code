@@ -15,7 +15,7 @@ import * as Schema from "effect/Schema";
 
 import { extractSubstantiveUserText } from "./substantiveUserText.ts";
 
-export class ClaudeTranscriptParseError extends Schema.TaggedErrorClass<ClaudeTranscriptParseError>()(
+export class ClaudeTranscriptParseError extends Schema.TaggedError<ClaudeTranscriptParseError>()(
   "ClaudeTranscriptParseError",
   {
     sessionId: Schema.String,
@@ -293,7 +293,7 @@ export function claudeProjectDirectoryName(canonicalCwd: string): string {
   return canonicalCwd.replace(/[^a-zA-Z0-9]/g, "-");
 }
 
-export class ClaudeSessionImportIoError extends Schema.TaggedErrorClass<ClaudeSessionImportIoError>()(
+export class ClaudeSessionImportIoError extends Schema.TaggedError<ClaudeSessionImportIoError>()(
   "ClaudeSessionImportIoError",
   {
     detail: Schema.String,

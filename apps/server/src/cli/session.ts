@@ -72,7 +72,7 @@ const jsonOutput = (value: unknown) => JSON.stringify(value, null, 2);
 const isProjectNotFoundError = Schema.is(ProjectNotFoundError);
 const isEnvironmentSessionImportError = Schema.is(EnvironmentSessionImportError);
 
-export class SessionCliError extends Schema.TaggedErrorClass<SessionCliError>()("SessionCliError", {
+export class SessionCliError extends Schema.TaggedError<SessionCliError>()("SessionCliError", {
   operation: Schema.String,
   detail: Schema.String,
   cause: Schema.optional(Schema.Defect()),
@@ -82,7 +82,7 @@ export class SessionCliError extends Schema.TaggedErrorClass<SessionCliError>()(
   }
 }
 
-export class SessionCliServerUnsupportedError extends Schema.TaggedErrorClass<SessionCliServerUnsupportedError>()(
+export class SessionCliServerUnsupportedError extends Schema.TaggedError<SessionCliServerUnsupportedError>()(
   "SessionCliServerUnsupportedError",
   {
     serverVersion: Schema.String,
