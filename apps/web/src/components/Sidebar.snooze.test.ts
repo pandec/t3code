@@ -1,6 +1,10 @@
 import { describe, expect, it } from "vite-plus/test";
 
-import { resolveSnoozePresets, snoozeWakeDescription } from "./Sidebar.snooze";
+import {
+  resolveSnoozePresets,
+  snoozeWakeDescription,
+  snoozedUntilToastTitle,
+} from "./Sidebar.snooze";
 
 // Local-time constructor so preset math is timezone-stable in tests.
 function localDate(year: number, month: number, day: number, hour: number, minute = 0): Date {
@@ -63,6 +67,17 @@ describe("resolveSnoozePresets", () => {
     const last = presets.at(-1);
     expect(last?.id).toBe("until-woken");
     expect(last?.snoozedUntil).toBe(null);
+  });
+
+  it("leads with until-done when opted in and keeps until-woken last", () => {
+    const presets = resolveSnoozePresets(localDate(2026, 4, 8, 10), "locale", {
+      untilDone: true,
+      untilWoken: true,
+    });
+    expect(presets[0]).toMatchObject({ id: "until-done", snoozedUntil: null, untilDone: true });
+    expect(presets.at(-1)?.id).toBe("until-woken");
+    expect(snoozedUntilToastTitle(presets[0]!, "locale")).toBe("Snoozed until it's done");
+    expect(snoozedUntilToastTitle(presets.at(-1)!, "locale")).toBe("Snoozed until you wake it");
   });
 
   it("puts next week a full week out when today is Monday", () => {

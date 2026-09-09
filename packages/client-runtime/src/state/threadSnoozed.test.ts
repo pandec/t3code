@@ -5,6 +5,7 @@ import { describe, expect, it } from "vite-plus/test";
 
 import {
   canSnooze,
+  canSnoozeUntilDone,
   effectiveSnoozed,
   hasQueuedTurnStart,
   resolveSnoozePresets,
@@ -27,14 +28,19 @@ function localDate(year: number, month: number, day: number, hour: number, minut
 function makeShell(input: {
   readonly snoozedUntil?: string | null;
   readonly snoozedAt?: string | null;
+  readonly snoozedUntilTurnId?: string | null;
   readonly sessionStatus?: "starting" | "running" | "ready" | "error";
   readonly pending?: "approval" | "user-input";
   readonly turnCompletedAt?: string | null;
+  readonly turnId?: string;
+  readonly turnState?: "running" | "interrupted" | "completed" | "error";
 }): ThreadSnoozeShell {
   const threadId = ThreadId.make("thread-1");
   return {
     snoozedUntil: input.snoozedUntil ?? null,
     snoozedAt: input.snoozedAt ?? (input.snoozedUntil != null ? SNOOZED_AT : null),
+    snoozedUntilTurnId:
+      input.snoozedUntilTurnId == null ? null : TurnId.make(input.snoozedUntilTurnId),
     hasPendingApprovals: input.pending === "approval",
     hasPendingUserInput: input.pending === "user-input",
     session:
@@ -50,18 +56,20 @@ function makeShell(input: {
             updatedAt: "2026-04-10T11:00:00.000Z",
           },
     latestTurn:
-      input.turnCompletedAt === undefined
+      input.turnCompletedAt === undefined && input.turnState === undefined
         ? null
         : {
-            turnId: TurnId.make("turn-1"),
-            state: "completed",
+            turnId: TurnId.make(input.turnId ?? "turn-1"),
+            state: input.turnState ?? "completed",
             requestedAt: SNOOZED_AT,
             startedAt: null,
-            completedAt: input.turnCompletedAt,
+            completedAt: input.turnCompletedAt ?? null,
             assistantMessageId: null,
           },
   };
 }
+
+const UNTIL_DONE = { snoozedAt: SNOOZED_AT, snoozedUntilTurnId: "turn-1" } as const;
 
 type QueuedTurnShell = Pick<
   OrchestrationThreadShell,
@@ -163,6 +171,55 @@ describe("effectiveSnoozed", () => {
     ).toBe(false);
   });
 
+  it("wakes early when the turn was interrupted after the snooze — the agent stopped", () => {
+    expect(
+      effectiveSnoozed(
+        makeShell({
+          snoozedUntil: FUTURE_WAKE,
+          turnState: "interrupted",
+          turnCompletedAt: "2026-04-10T10:30:00.000Z",
+        }),
+        { now: NOW },
+      ),
+    ).toBe(false);
+    expect(
+      effectiveSnoozed(
+        makeShell({
+          snoozedAt: SNOOZED_AT,
+          turnState: "interrupted",
+          turnCompletedAt: "2026-04-10T10:30:00.000Z",
+        }),
+        { now: NOW },
+      ),
+    ).toBe(false);
+  });
+
+  it("hides an until-done snooze while its turn is still running", () => {
+    expect(effectiveSnoozed(makeShell({ ...UNTIL_DONE, turnState: "running" }), { now: NOW })).toBe(
+      true,
+    );
+  });
+
+  it("wakes an until-done snooze when its turn ends, however it ends", () => {
+    for (const turnState of ["completed", "interrupted", "error"] as const) {
+      expect(
+        effectiveSnoozed(
+          makeShell({ ...UNTIL_DONE, turnState, turnCompletedAt: "2026-04-10T10:30:00.000Z" }),
+          { now: NOW },
+        ),
+      ).toBe(false);
+    }
+  });
+
+  it("wakes an until-done snooze when a different turn replaced the awaited one", () => {
+    expect(
+      effectiveSnoozed(makeShell({ ...UNTIL_DONE, turnId: "turn-2", turnState: "running" }), {
+        now: NOW,
+      }),
+    ).toBe(false);
+    expect(effectiveSnoozed(makeShell({ ...UNTIL_DONE }), { now: NOW })).toBe(false);
+  });
+
   it("ignores runs that completed before the snooze — the user saw that result", () => {
     expect(
       effectiveSnoozed(
@@ -231,6 +288,14 @@ describe("canSnooze", () => {
         { now: NOW },
       ),
     ).toBe(true);
+  });
+});
+
+describe("canSnoozeUntilDone", () => {
+  it("requires a running turn", () => {
+    expect(canSnoozeUntilDone(makeShell({ turnState: "running" }))).toBe(true);
+    expect(canSnoozeUntilDone(makeShell({}))).toBe(false);
+    expect(canSnoozeUntilDone(makeShell({ turnCompletedAt: NOW }))).toBe(false);
   });
 });
 
@@ -323,6 +388,30 @@ describe("threadWokeAt", () => {
     ).toBe("2026-04-10T11:00:00.000Z");
   });
 
+  it("reports the turn end for an until-done wake, including interruption", () => {
+    expect(threadWokeAt(makeShell({ ...UNTIL_DONE, turnState: "running" }), { now: NOW })).toBe(
+      null,
+    );
+    expect(
+      threadWokeAt(
+        makeShell({
+          ...UNTIL_DONE,
+          turnState: "interrupted",
+          turnCompletedAt: "2026-04-10T10:30:00.000Z",
+        }),
+        { now: NOW },
+      ),
+    ).toBe("2026-04-10T10:30:00.000Z");
+  });
+
+  it("reports the replacement turn's request time when the awaited turn was superseded", () => {
+    expect(
+      threadWokeAt(makeShell({ ...UNTIL_DONE, turnId: "turn-2", turnState: "running" }), {
+        now: NOW,
+      }),
+    ).toBe(SNOOZED_AT);
+  });
+
   it("keeps the early wake authoritative after the scheduled time passes", () => {
     // Woke early at 10:30 via run-completed; the scheduled wake (PAST_WAKE
     // 10:00 relative to a later now) has ALSO passed. Reporting the
@@ -370,8 +459,23 @@ describe("resolveSnoozePresets", () => {
     expect(presets.find((preset) => preset.id === "three-hours")?.label).toBe("In 3 hours");
     expect(presets.find((preset) => preset.id === "evening")?.label).toBe("This evening");
     expect(
-      new Date(presets.find((preset) => preset.id === "tomorrow")!.snoozedUntil).getHours(),
+      new Date(presets.find((preset) => preset.id === "tomorrow")!.snoozedUntil!).getHours(),
     ).toBe(9);
+  });
+
+  it("leads with until-done only when asked", () => {
+    expect(resolveSnoozePresets(localDate(2026, 4, 8, 10)).some((p) => p.id === "until-done")).toBe(
+      false,
+    );
+    const presets = resolveSnoozePresets(localDate(2026, 4, 8, 10), { untilDone: true });
+    expect(presets[0]).toMatchObject({ id: "until-done", snoozedUntil: null, untilDone: true });
+    expect(presets.map((preset) => preset.id).slice(1)).toEqual([
+      "hour",
+      "three-hours",
+      "evening",
+      "tomorrow",
+      "next-week",
+    ]);
   });
 
   it("drops the evening choice once evening is near or past", () => {
@@ -386,7 +490,7 @@ describe("resolveSnoozePresets", () => {
   it("puts next week on the following Monday", () => {
     const nextWeek = new Date(
       resolveSnoozePresets(localDate(2026, 4, 6, 10)).find((preset) => preset.id === "next-week")!
-        .snoozedUntil,
+        .snoozedUntil!,
     );
     expect(nextWeek.getDay()).toBe(1);
     expect(nextWeek.getDate()).toBe(13);
@@ -401,7 +505,7 @@ describe("resolveSnoozePresets", () => {
       "evening",
       "tomorrow",
     ]);
-    const tomorrow = new Date(presets.find((preset) => preset.id === "tomorrow")!.snoozedUntil);
+    const tomorrow = new Date(presets.find((preset) => preset.id === "tomorrow")!.snoozedUntil!);
     expect(tomorrow.getDay()).toBe(1);
   });
 });

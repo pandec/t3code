@@ -9,6 +9,7 @@ import {
   type EnvironmentProject,
   type EnvironmentThreadShell,
 } from "@t3tools/client-runtime/state/shell";
+import type { SnoozePreset } from "@t3tools/client-runtime/state/thread-settled";
 import { selectRecentArchivedThreads } from "@t3tools/client-runtime/state/threads";
 import {
   threadSearchMatchKey,
@@ -146,7 +147,7 @@ interface HomeScreenProps {
   readonly onSettleThread: (thread: EnvironmentThreadShell) => Promise<boolean>;
   readonly onSnoozeThread: (
     thread: EnvironmentThreadShell,
-    snoozedUntil: string,
+    preset: SnoozePreset,
   ) => Promise<boolean>;
   readonly onUnsnoozeThread: (thread: EnvironmentThreadShell) => Promise<boolean>;
   readonly onUnsettleThread: (thread: EnvironmentThreadShell) => void;
@@ -620,8 +621,8 @@ export function HomeScreen(props: HomeScreenProps) {
   // optimistic holds.
   const handleSettleThread = props.onSettleThread;
   const handleSnoozeThread = useCallback(
-    (thread: EnvironmentThreadShell, snoozedUntil: string) => {
-      void props.onSnoozeThread(thread, snoozedUntil);
+    (thread: EnvironmentThreadShell, preset: SnoozePreset) => {
+      void props.onSnoozeThread(thread, preset);
     },
     [props.onSnoozeThread],
   );
@@ -721,6 +722,15 @@ export function HomeScreen(props: HomeScreenProps) {
     const supported = new Set<EnvironmentId>();
     for (const [environmentId, config] of serverConfigs) {
       if (config.environment.capabilities.threadSnooze === true) {
+        supported.add(environmentId);
+      }
+    }
+    return supported;
+  }, [serverConfigs]);
+  const snoozeUntilDoneEnvironmentIds = useMemo(() => {
+    const supported = new Set<EnvironmentId>();
+    for (const [environmentId, config] of serverConfigs) {
+      if (config.environment.capabilities.threadSnoozeUntilDone === true) {
         supported.add(environmentId);
       }
     }
@@ -1085,6 +1095,7 @@ export function HomeScreen(props: HomeScreenProps) {
           settlementSupported={settlementEnvironmentIds.has(thread.environmentId)}
           onSettleThread={handleSettleThread}
           snoozeSupported={snoozeEnvironmentIds.has(thread.environmentId)}
+          snoozeUntilDoneSupported={snoozeUntilDoneEnvironmentIds.has(thread.environmentId)}
           pinningSupported={pinningEnvironmentIds.has(thread.environmentId)}
           reorderSupported={
             item.item.pinned

@@ -110,6 +110,23 @@ describe("resolveThreadListV2SnoozeMenuSelection", () => {
     ).toEqual({ _tag: "expired" });
   });
 
+  it("selects a displayed until-done preset without a clock check", () => {
+    const displayedPresets = resolveSnoozePresets(new Date(2026, 4, 8, 10), { untilDone: true });
+    const selection = resolveThreadListV2SnoozeMenuSelection({
+      event: "snooze:until-done",
+      displayedPresets,
+      now: new Date(2026, 4, 9, 10),
+    });
+    expect(selection).toEqual({ _tag: "selected", preset: displayedPresets[0] });
+    expect(
+      resolveThreadListV2SnoozeMenuSelection({
+        event: "snooze:until-done",
+        displayedPresets: resolveSnoozePresets(new Date(2026, 4, 8, 10)),
+        now: new Date(2026, 4, 8, 10),
+      }),
+    ).toEqual({ _tag: "expired" });
+  });
+
   it("recomputes presets that remain available instead of using old timestamps", () => {
     const displayedPresets = resolveSnoozePresets(new Date(2026, 4, 8, 10));
     const selectedAt = new Date(2026, 4, 8, 10, 30);

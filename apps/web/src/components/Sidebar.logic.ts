@@ -326,13 +326,14 @@ export function applySidebarThreadDrop<
     | "activeOrderKey"
     | "snoozedAt"
     | "snoozedUntil"
+    | "snoozedUntilTurnId"
     | "settledAt"
     | "settledOverride"
     | "unsettledAt"
   >,
 >(thread: T, section: "pinned" | "active" | "settled", now: string, orderKey?: string): T {
   const wasSettled = thread.settledOverride === "settled";
-  const awake = { ...thread, snoozedAt: null, snoozedUntil: null };
+  const awake = { ...thread, snoozedAt: null, snoozedUntil: null, snoozedUntilTurnId: null };
   if (section === "settled") {
     return {
       ...awake,

@@ -155,6 +155,7 @@ export function pendingThreadCreationShell(
     settledAt: null,
     snoozedUntil: null,
     snoozedAt: null,
+    snoozedUntilTurnId: null,
     session: null,
     latestUserMessageAt: message.createdAt,
     hasPendingApprovals: false,

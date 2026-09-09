@@ -79,18 +79,43 @@ export function resolveThreadListV2SnoozeMenuSelection(input: {
   | { readonly _tag: "not-snooze" } {
   if (!input.event.startsWith("snooze:")) return { _tag: "not-snooze" };
 
+  // "Until it's done" has no clock to go stale; it is selected iff it was
+  // displayed. The server still rejects it if the turn ended meanwhile.
+  const displayedPreset = input.displayedPresets.find(
+    (candidate) => input.event === `snooze:${candidate.id}`,
+  );
+  if (displayedPreset?.untilDone === true) return { _tag: "selected", preset: displayedPreset };
+
   const currentPreset = resolveSnoozePresets(input.now).find(
     (candidate) => input.event === `snooze:${candidate.id}`,
   );
   if (currentPreset) return { _tag: "selected", preset: currentPreset };
 
-  const displayedPreset = input.displayedPresets.find(
-    (candidate) => input.event === `snooze:${candidate.id}`,
-  );
-  if (displayedPreset && Date.parse(displayedPreset.snoozedUntil) > input.now.getTime()) {
+  if (
+    displayedPreset?.snoozedUntil != null &&
+    Date.parse(displayedPreset.snoozedUntil) > input.now.getTime()
+  ) {
     return { _tag: "selected", preset: displayedPreset };
   }
   return { _tag: "expired" };
+}
+
+/** Snoozed-shelf label for a row without a wake countdown. */
+export function snoozeShelfLabel(
+  thread: Pick<EnvironmentThreadShell, "snoozedUntilTurnId">,
+): string {
+  return thread.snoozedUntilTurnId != null ? "until done" : "parked";
+}
+
+// Snoozed-shelf sort key: "until it's done" rows first, then timed wakes
+// ascending, then indefinite snoozes (no wake time) last. Mirrors the web
+// sidebar's snoozeWakeSortMs.
+function snoozeWakeSortMs(
+  thread: Pick<EnvironmentThreadShell, "snoozedUntil" | "snoozedUntilTurnId">,
+): number {
+  if (thread.snoozedUntilTurnId != null) return Number.MIN_SAFE_INTEGER;
+  if (thread.snoozedUntil == null) return Number.MAX_SAFE_INTEGER;
+  return parseTimestampMs(thread.snoozedUntil);
 }
 
 export type ThreadListV2LeftSwipeAction = "pin" | "unpin" | "fork" | "archive";
@@ -457,10 +482,13 @@ export function buildThreadListV2ListItems(input: {
     type: "v2-thread",
     key: `v2-thread:${item.thread.environmentId}:${item.thread.id}`,
     item,
-    snoozeWakeLabelText:
-      item.snoozed && item.thread.snoozedUntil != null && input.snoozeLabelNow !== undefined
-        ? snoozeWakeLabel(item.thread.snoozedUntil, { now: input.snoozeLabelNow })
-        : undefined,
+    snoozeWakeLabelText: !item.snoozed
+      ? undefined
+      : item.thread.snoozedUntil != null
+        ? input.snoozeLabelNow !== undefined
+          ? snoozeWakeLabel(item.thread.snoozedUntil, { now: input.snoozeLabelNow })
+          : undefined
+        : snoozeShelfLabel(item.thread),
   }));
   const pendingTasks = [
     ...input.pendingTasks.filter((task) => task.kind === "pending"),
@@ -710,8 +738,7 @@ export function buildThreadListV2Items(input: {
   );
   const orderedOlder = sortOlderThreadsForSidebar(older, { now });
   const orderedSnoozed = [...snoozed].sort(
-    (left, right) =>
-      parseTimestampMs(left.snoozedUntil ?? "") - parseTimestampMs(right.snoozedUntil ?? ""),
+    (left, right) => snoozeWakeSortMs(left) - snoozeWakeSortMs(right),
   );
   const selectedThreadKey = input.selectedThreadKey ?? null;
   const visibleOlder =

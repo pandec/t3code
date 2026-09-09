@@ -9,7 +9,12 @@ import type {
 import type { EnvironmentThreadSearchMatch } from "@t3tools/client-runtime/state/thread-search";
 import { canForkConversation } from "@t3tools/client-runtime/state/thread-fork";
 import type { EnvironmentMachineKind } from "@t3tools/contracts";
-import { canSnooze, resolveSnoozePresets } from "@t3tools/client-runtime/state/thread-settled";
+import {
+  canSnooze,
+  canSnoozeUntilDone,
+  resolveSnoozePresets,
+  type SnoozePreset,
+} from "@t3tools/client-runtime/state/thread-settled";
 import { resolveSettledThreadTimestamp } from "@t3tools/client-runtime/state/thread-sort";
 import type { MenuAction } from "@react-native-menu/menu";
 import { memo, useCallback, useEffect, useMemo, useState, type ComponentProps } from "react";
@@ -518,7 +523,7 @@ export const ThreadListV2Row = memo(function ThreadListV2Row(props: {
   readonly onNewThreadOnBranch: (thread: EnvironmentThreadShell) => void;
   readonly onRegenerateThreadTitle: (thread: EnvironmentThreadShell) => void;
   readonly onSettleThread: (thread: EnvironmentThreadShell) => Promise<boolean>;
-  readonly onSnoozeThread: (thread: EnvironmentThreadShell, snoozedUntil: string) => void;
+  readonly onSnoozeThread: (thread: EnvironmentThreadShell, preset: SnoozePreset) => void;
   readonly onUnsnoozeThread: (thread: EnvironmentThreadShell) => void;
   readonly onUnsettleThread: (thread: EnvironmentThreadShell) => void;
   readonly onArchiveThread: (thread: EnvironmentThreadShell) => void;
@@ -532,6 +537,9 @@ export const ThreadListV2Row = memo(function ThreadListV2Row(props: {
   readonly settlementSupported: boolean;
   /** False on servers that predate thread.snooze/unsnooze. */
   readonly snoozeSupported: boolean;
+  /** Server accepts an "until it's done" snooze; the row also requires a
+      running turn before offering it. */
+  readonly snoozeUntilDoneSupported: boolean;
   /** False on servers that predate thread.pin/unpin. */
   readonly pinningSupported: boolean;
   /** False on servers that predate thread title regeneration. */
@@ -664,7 +672,7 @@ export const ThreadListV2Row = memo(function ThreadListV2Row(props: {
   );
   const handleSettle = useCallback(() => onSettleThread(thread), [onSettleThread, thread]);
   const handleSnooze = useCallback(
-    (snoozedUntil: string) => onSnoozeThread(thread, snoozedUntil),
+    (preset: SnoozePreset) => onSnoozeThread(thread, preset),
     [onSnoozeThread, thread],
   );
   const handleUnsnooze = useCallback(() => onUnsnoozeThread(thread), [onUnsnoozeThread, thread]);
@@ -700,9 +708,13 @@ export const ThreadListV2Row = memo(function ThreadListV2Row(props: {
     pinned: pinnedRow,
     forkable,
   });
+  const untilDoneOffered = props.snoozeUntilDoneSupported && canSnoozeUntilDone(thread);
   const snoozePresets = useMemo(
-    () => (swipeActions.secondary === "snooze" ? resolveSnoozePresets(new Date()) : ([] as const)),
-    [props.snoozePresetMinute, swipeActions.secondary],
+    () =>
+      swipeActions.secondary === "snooze"
+        ? resolveSnoozePresets(new Date(), { untilDone: untilDoneOffered })
+        : ([] as const),
+    [props.snoozePresetMinute, swipeActions.secondary, untilDoneOffered],
   );
   const snoozePresetActions = useMemo<MenuAction[]>(
     () =>
@@ -844,7 +856,7 @@ export const ThreadListV2Row = memo(function ThreadListV2Row(props: {
         now: new Date(),
       });
       if (snoozeSelection._tag === "selected") {
-        handleSnooze(snoozeSelection.preset.snoozedUntil);
+        handleSnooze(snoozeSelection.preset);
       } else if (snoozeSelection._tag === "expired") {
         Alert.alert("Could not snooze thread", "That snooze time has passed. Choose another time.");
       }

@@ -81,9 +81,11 @@ their default order until the server is updated.
 
 ## Snooze or promote active work
 
-Choose **Snooze** to hide a thread until a preset time. **Until I wake it** snoozes without a timer
-on supported environments. A snoozed thread returns when its timer expires, you wake it, or it needs
-attention.
+Choose **Snooze** to hide a thread until a preset time. **Until it's done** appears while the agent
+is mid-turn and hides the thread until that turn ends. **Until I wake it** snoozes without a timer.
+Both need a server that supports them. A snoozed thread returns when its timer expires, its turn
+ends, you wake it, or it needs attention. Threads snoozed until done sit at the top of the Snoozed
+section.
 
 Choose **Move to top** for an active, unpinned thread. It saves the thread at the top of the
 arranged active order, the same order drag-and-drop writes, without changing conversation

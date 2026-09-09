@@ -212,6 +212,16 @@ export function readEnvironmentSupportsSnoozeIndefinite(environmentId: Environme
   );
 }
 
+/** Whether the environment's server accepts thread.snooze with untilDone.
+    Older servers drop the unknown key and would park the thread
+    indefinitely, so this gates the "Until it's done" preset. */
+export function readEnvironmentSupportsSnoozeUntilDone(environmentId: EnvironmentId): boolean {
+  return (
+    appAtomRegistry.get(environmentServerConfigsAtom).get(environmentId)?.environment.capabilities
+      .threadSnoozeUntilDone === true
+  );
+}
+
 /** Whether the environment's server understands thread.pin/unpin.
     Same version-skew contract as settlement. */
 export function readEnvironmentSupportsPinning(environmentId: EnvironmentId): boolean {

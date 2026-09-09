@@ -225,6 +225,43 @@ describe("resolveAutoSettlementAt", () => {
     ).toBeNull();
   });
 
+  it("keeps an until-done snooze out of settlement only while its turn runs", () => {
+    const untilDone = {
+      snoozedAt: "2026-08-19T00:00:00.000Z",
+      snoozedUntilTurnId: TurnId.make("turn-done"),
+    };
+    expect(
+      settlementAt(
+        makeThread({
+          ...untilDone,
+          latestTurn: {
+            turnId: TurnId.make("turn-done"),
+            state: "running",
+            requestedAt: "2026-08-18T00:00:00.000Z",
+            startedAt: "2026-08-18T00:01:00.000Z",
+            completedAt: null,
+            assistantMessageId: null,
+          },
+        }),
+      ),
+    ).toBeNull();
+    expect(
+      settlementAt(
+        makeThread({
+          ...untilDone,
+          latestTurn: {
+            turnId: TurnId.make("turn-done"),
+            state: "interrupted",
+            requestedAt: "2026-08-18T00:00:00.000Z",
+            startedAt: "2026-08-18T00:01:00.000Z",
+            completedAt: LAST_ACTIVITY_AT,
+            assistantMessageId: null,
+          },
+        }),
+      ),
+    ).toBe(LAST_ACTIVITY_AT);
+  });
+
   it("allows a fresh completion to wake snooze before settlement", () => {
     expect(
       settlementAt(

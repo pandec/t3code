@@ -662,6 +662,7 @@ export const threadSummary = (thread: OrchestrationThreadShell) => ({
   backgroundLiveness: thread.backgroundLiveness ?? null,
   snoozedUntil: thread.snoozedUntil ?? null,
   snoozedAt: thread.snoozedAt ?? null,
+  snoozedUntilTurnId: thread.snoozedUntilTurnId ?? null,
   settled: thread.settledOverride === "settled",
   settledAt: thread.settledAt ?? null,
   hasPendingApprovals: thread.hasPendingApprovals,
@@ -1281,9 +1282,11 @@ const threadStatusCommand = Command.make("status", {
                 `Snoozed: ${
                   summary.snoozedUntil
                     ? `until ${summary.snoozedUntil}`
-                    : summary.snoozedAt
-                      ? "until woken"
-                      : "no"
+                    : summary.snoozedUntilTurnId
+                      ? "until done"
+                      : summary.snoozedAt
+                        ? "until woken"
+                        : "no"
                 }`,
                 `Pending approval: ${summary.hasPendingApprovals ? "yes" : "no"}`,
                 `Pending input: ${summary.hasPendingUserInput ? "yes" : "no"}`,

@@ -143,10 +143,11 @@ t3 thread archive <thread-id> --json
 Thread commands require a running T3 server. `thread new` creates a thread and starts its first
 agent turn. `thread send` starts a new turn when the thread is idle and steers the active turn when
 the provider supports steering. It does not resolve a user-input request. Use `thread input respond`
-for that request. Thread list and status JSON summaries include `snoozedUntil` and
-`snoozedAt`; both are `null` when the thread is not snoozed, and an indefinite snooze ("until I wake
-it") carries a `snoozedAt` with a `null` `snoozedUntil`. Snooze is an inbox overlay and does not
-change the thread's turn `state`.
+for that request. Thread list and status JSON summaries include `snoozedUntil`, `snoozedAt`, and
+`snoozedUntilTurnId`; all are `null` when the thread is not snoozed. An indefinite snooze ("until I
+wake it") carries a `snoozedAt` with a `null` `snoozedUntil`, and a snooze until the turn ends
+("until it's done") also carries the awaited turn in `snoozedUntilTurnId`. Snooze is an inbox
+overlay and does not change the thread's turn `state`.
 
 The project argument accepts either a project id or an exact workspace-root path. Thread mutation
 commands intentionally require a thread id so automation cannot act on an ambiguous title. Thread

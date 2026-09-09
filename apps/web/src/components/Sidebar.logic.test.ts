@@ -2102,6 +2102,7 @@ describe("applySidebarThreadDrop", () => {
     activeOrderKey: null,
     snoozedAt: null,
     snoozedUntil: null,
+    snoozedUntilTurnId: null,
     settledAt: null,
     settledOverride: null,
     unsettledAt: null,
