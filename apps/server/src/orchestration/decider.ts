@@ -1233,6 +1233,66 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
       };
     }
 
+    case "thread.worktree.fallback": {
+      const thread = yield* requireThreadNotArchived({
+        readModel,
+        command,
+        threadId: command.threadId,
+      });
+      const project = yield* requireProject({ readModel, command, projectId: thread.projectId });
+      if (
+        thread.worktreePath !== command.expectedWorktreePath ||
+        project.workspaceRoot !== command.expectedWorkspaceRoot ||
+        thread.session?.status === "running" ||
+        thread.session?.status === "starting"
+      ) {
+        return yield* new OrchestrationCommandInvariantError({
+          commandType: command.type,
+          detail:
+            "The thread's workspace or session changed before worktree recovery. Retry the message.",
+        });
+      }
+      const occurredAt = yield* nowIso;
+      // Keep the workspace move and its explanation in the same transaction.
+      return [
+        {
+          ...(yield* withEventBase({
+            aggregateKind: "thread",
+            aggregateId: command.threadId,
+            occurredAt,
+            commandId: command.commandId,
+          })),
+          type: "thread.meta-updated",
+          payload: {
+            threadId: command.threadId,
+            worktreePath: null,
+            branch: null,
+            updatedAt: occurredAt,
+          },
+        },
+        {
+          ...(yield* withEventBase({
+            aggregateKind: "thread",
+            aggregateId: command.threadId,
+            occurredAt,
+            commandId: command.commandId,
+          })),
+          type: "thread.message-sent",
+          payload: {
+            threadId: command.threadId,
+            messageId: command.messageId,
+            role: "user",
+            text: command.notice,
+            attachments: [],
+            turnId: null,
+            streaming: false,
+            createdAt: command.createdAt,
+            updatedAt: command.createdAt,
+          },
+        },
+      ];
+    }
+
     case "thread.meta.update": {
       const thread = yield* requireThread({
         readModel,
