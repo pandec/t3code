@@ -56,6 +56,8 @@ export interface ProviderSessionStartOptions {
    * previous provider's conversation.
    */
   readonly onIncompatiblePersistedState?: "start-fresh" | "fail";
+  /** A thread has recorded its move from a deleted worktree to the project checkout. */
+  readonly recoverMissingWorkspace?: boolean;
 }
 
 /**

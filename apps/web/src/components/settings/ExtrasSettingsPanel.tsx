@@ -1148,6 +1148,35 @@ function ComposerExtrasSection() {
   return (
     <SettingsSection {...searchableSetting("extras-composer")}>
       <SettingsRow
+        serverScoped
+        {...searchableSetting("skip-missing-worktree-recreation")}
+        title="Skip recreating removed worktrees"
+        description="Continue in the main project checkout when a thread's worktree is gone. Turn this off to try recreating the worktree first; if that fails, continue in the main checkout."
+        resetAction={
+          settings.skipMissingWorktreeRecreation !==
+          DEFAULT_UNIFIED_SETTINGS.skipMissingWorktreeRecreation ? (
+            <SettingResetButton
+              label="removed worktree recovery"
+              onClick={() =>
+                updateSettings({
+                  skipMissingWorktreeRecreation:
+                    DEFAULT_UNIFIED_SETTINGS.skipMissingWorktreeRecreation,
+                })
+              }
+            />
+          ) : null
+        }
+        control={
+          <Switch
+            checked={settings.skipMissingWorktreeRecreation}
+            onCheckedChange={(checked) =>
+              updateSettings({ skipMissingWorktreeRecreation: Boolean(checked) })
+            }
+            aria-label="Skip recreating removed worktrees"
+          />
+        }
+      />
+      <SettingsRow
         title="Steer grace window"
         description="How long a steered message waits in the composer before it is sent to the running agent. Until the window elapses the message can still be edited or recalled; 0s locks it in immediately."
         resetAction={
