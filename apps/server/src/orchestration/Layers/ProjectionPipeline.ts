@@ -1898,7 +1898,13 @@ const makeOrchestrationProjectionPipeline = Effect.fn("makeOrchestrationProjecti
             yield* projectionTurnRepository.upsertByTurnId({
               ...existingTurn.value,
               state: "interrupted",
-              completedAt: existingTurn.value.completedAt ?? event.payload.createdAt,
+              // A running turn can already carry a placeholder completedAt from
+              // a mid-turn checkpoint; the interrupt is the real end. Keep an
+              // earlier stamp only for a turn that had already ended.
+              completedAt:
+                existingTurn.value.state === "running"
+                  ? event.payload.createdAt
+                  : (existingTurn.value.completedAt ?? event.payload.createdAt),
               startedAt: existingTurn.value.startedAt ?? event.payload.createdAt,
               requestedAt: existingTurn.value.requestedAt ?? event.payload.createdAt,
             });
