@@ -3075,6 +3075,110 @@ it.layer(BaseTestLayer)("OrchestrationProjectionPipeline", (it) => {
     }),
   );
 
+  it.effect("an interrupt stamps the turn end over a mid-turn placeholder checkpoint", () =>
+    Effect.gen(function* () {
+      const projectionPipeline = yield* OrchestrationProjectionPipeline;
+      const eventStore = yield* OrchestrationEventStore;
+      const sql = yield* SqlClient.SqlClient;
+      const now = "2026-01-01T00:00:00.000Z";
+      const threadId = ThreadId.make("thread-turn-placeholder");
+      const turnId = TurnId.make("turn-placeholder");
+
+      yield* eventStore.append({
+        type: "thread.created",
+        eventId: EventId.make("evt-tp1"),
+        aggregateKind: "thread",
+        aggregateId: threadId,
+        occurredAt: now,
+        commandId: CommandId.make("cmd-tp1"),
+        causationEventId: null,
+        correlationId: CorrelationId.make("cmd-tp1"),
+        metadata: {},
+        payload: {
+          threadId,
+          projectId: ProjectId.make("project-turn-placeholder"),
+          title: "Turn placeholder",
+          modelSelection: {
+            instanceId: ProviderInstanceId.make("codex"),
+            model: "gpt-5-codex",
+          },
+          runtimeMode: "full-access",
+          branch: null,
+          worktreePath: null,
+          createdAt: now,
+          updatedAt: now,
+        },
+      });
+      yield* eventStore.append({
+        type: "thread.session-set",
+        eventId: EventId.make("evt-tp2"),
+        aggregateKind: "thread",
+        aggregateId: threadId,
+        occurredAt: "2026-01-01T00:00:01.000Z",
+        commandId: CommandId.make("cmd-tp2"),
+        causationEventId: null,
+        correlationId: CorrelationId.make("cmd-tp2"),
+        metadata: {},
+        payload: {
+          threadId,
+          session: {
+            threadId,
+            status: "running",
+            providerName: "codex",
+            runtimeMode: "full-access",
+            activeTurnId: turnId,
+            lastError: null,
+            updatedAt: "2026-01-01T00:00:01.000Z",
+          },
+        },
+      });
+      // A mid-turn diff update: the session is still running this turn, so
+      // the checkpoint is a placeholder and its completedAt is not the end.
+      yield* eventStore.append({
+        type: "thread.turn-diff-completed",
+        eventId: EventId.make("evt-tp3"),
+        aggregateKind: "thread",
+        aggregateId: threadId,
+        occurredAt: "2026-01-01T00:00:10.000Z",
+        commandId: CommandId.make("cmd-tp3"),
+        causationEventId: null,
+        correlationId: CorrelationId.make("cmd-tp3"),
+        metadata: {},
+        payload: {
+          threadId,
+          turnId,
+          checkpointTurnCount: 1,
+          checkpointRef: CheckpointRef.make("refs/t3/checkpoints/placeholder/turn/1"),
+          status: "ready",
+          files: [],
+          assistantMessageId: null,
+          completedAt: "2026-01-01T00:00:10.000Z",
+        },
+      });
+      yield* eventStore.append({
+        type: "thread.turn-interrupt-requested",
+        eventId: EventId.make("evt-tp4"),
+        aggregateKind: "thread",
+        aggregateId: threadId,
+        occurredAt: "2026-01-01T00:00:30.000Z",
+        commandId: CommandId.make("cmd-tp4"),
+        causationEventId: null,
+        correlationId: CorrelationId.make("cmd-tp4"),
+        metadata: {},
+        payload: { threadId, turnId, createdAt: "2026-01-01T00:00:30.000Z" },
+      });
+
+      yield* projectionPipeline.bootstrap;
+
+      const rows = yield* sql<{ readonly state: string; readonly completedAt: string | null }>`
+        SELECT state, completed_at AS "completedAt"
+        FROM projection_turns
+        WHERE thread_id = ${threadId} AND turn_id = ${turnId}
+      `;
+      assert.deepEqual(rows, [{ state: "interrupted", completedAt: "2026-01-01T00:00:30.000Z" }]);
+    }),
+  );
+
   it.effect("keeps accumulated assistant text when completion payload text is empty", () =>
     Effect.gen(function* () {
       const projectionPipeline = yield* OrchestrationProjectionPipeline;

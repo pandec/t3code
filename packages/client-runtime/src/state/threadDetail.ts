@@ -69,6 +69,7 @@ export function mergeEnvironmentThread(
     activeOrderKey: shell.activeOrderKey,
     snoozedUntil: shell.snoozedUntil,
     snoozedAt: shell.snoozedAt,
+    snoozedUntilTurnId: shell.snoozedUntilTurnId,
     pinnedAt: shell.pinnedAt,
     pinOrderKey: shell.pinOrderKey,
     session: shell.session,

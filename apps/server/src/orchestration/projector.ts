@@ -357,6 +357,7 @@ export function projectEvent(
             activeOrderKey: null,
             snoozedUntil: null,
             snoozedAt: null,
+            snoozedUntilTurnId: null,
             deletedAt: null,
             messages: [],
             activities: [],
@@ -508,6 +509,7 @@ export function projectEvent(
           threads: updateThread(nextBase.threads, payload.threadId, {
             snoozedUntil: payload.snoozedUntil,
             snoozedAt: payload.snoozedAt,
+            snoozedUntilTurnId: payload.snoozedUntilTurnId ?? null,
             updatedAt: payload.updatedAt,
           }),
         })),
@@ -520,6 +522,7 @@ export function projectEvent(
           threads: updateThread(nextBase.threads, payload.threadId, {
             snoozedUntil: null,
             snoozedAt: null,
+            snoozedUntilTurnId: null,
             updatedAt: payload.updatedAt,
           }),
         })),

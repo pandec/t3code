@@ -6,7 +6,11 @@ import {
   squashAtomCommandFailure,
 } from "@t3tools/client-runtime/state/runtime";
 import { canForkConversation } from "@t3tools/client-runtime/state/thread-fork";
-import { canSnooze, effectiveSnoozed } from "@t3tools/client-runtime/state/thread-settled";
+import {
+  canSnooze,
+  canSnoozeUntilDone,
+  effectiveSnoozed,
+} from "@t3tools/client-runtime/state/thread-settled";
 import type { ScopedThreadRef, ThreadId } from "@t3tools/contracts";
 import { useRouter } from "@tanstack/react-router";
 import { useCallback, useMemo } from "react";
@@ -25,6 +29,7 @@ import {
   readEnvironmentSupportsSettlement,
   readEnvironmentSupportsSnooze,
   readEnvironmentSupportsSnoozeIndefinite,
+  readEnvironmentSupportsSnoozeUntilDone,
   readEnvironmentSupportsTitleRegeneration,
   readThreadShell,
   useProjects,
@@ -144,6 +149,9 @@ export function useThreadActionMenu(input: {
         const isRegeneratingTitle = thread.titleRegeneration != null;
         const snoozePresets = resolveSnoozePresets(now, timestampFormat, {
           untilWoken: readEnvironmentSupportsSnoozeIndefinite(threadRef.environmentId),
+          untilDone:
+            canSnoozeUntilDone(thread) &&
+            readEnvironmentSupportsSnoozeUntilDone(threadRef.environmentId),
         });
         const items = buildThreadActionMenuItems({
           branch: thread.branch ?? null,
@@ -173,7 +181,9 @@ export function useThreadActionMenu(input: {
         if (action.startsWith("snooze:")) {
           const preset = snoozePresets.find((candidate) => `snooze:${candidate.id}` === action);
           if (!preset) return;
-          const result = await snoozeThread(threadRef, preset.snoozedUntil);
+          const result = await snoozeThread(threadRef, preset.snoozedUntil, {
+            untilDone: preset.untilDone === true,
+          });
           if (result._tag === "Failure") {
             if (!isAtomCommandInterrupted(result)) {
               failureToast("Failed to snooze thread", squashAtomCommandFailure(result));
@@ -183,7 +193,7 @@ export function useThreadActionMenu(input: {
           toastManager.add(
             stackedThreadToast({
               type: "success",
-              title: snoozedUntilToastTitle(preset.snoozedUntil, timestampFormat),
+              title: snoozedUntilToastTitle(preset, timestampFormat),
               timeout: 5_000,
               actionProps: {
                 children: "Undo",

@@ -16,8 +16,11 @@ export interface SnoozePreset {
   /** Menu-row time column. Complements the label instead of repeating it:
       "Tomorrow" pairs with "9:00 AM", not "tomorrow 9:00 AM". */
   readonly whenLabel: string;
-  /** ISO wake time, or null for the indefinite "until I wake it" snooze. */
+  /** ISO wake time, or null for the indefinite "until I wake it" and the
+      "until it's done" snoozes. */
   readonly snoozedUntil: string | null;
+  /** "Until it's done": wake when the running turn ends. */
+  readonly untilDone?: true;
 }
 
 const DAY_MS = 24 * 60 * 60 * 1_000;
@@ -27,16 +30,20 @@ function timeOfDayLabel(date: Date, timestampFormat: TimestampFormat): string {
 }
 
 /**
- * Presets for "snooze until", computed against local time. The indefinite
- * "Until I wake it" preset is opt-in because it requires the
- * threadSnoozeIndefinite server capability.
+ * Presets for "snooze until", computed against local time. "Until it's
+ * done" leads when the thread has a running turn and the server supports
+ * it; the indefinite "Until I wake it" preset is opt-in because it requires
+ * the threadSnoozeIndefinite server capability.
  */
 export function resolveSnoozePresets(
   now: Date,
   timestampFormat: TimestampFormat,
-  options?: { readonly untilWoken?: boolean },
+  options?: { readonly untilWoken?: boolean; readonly untilDone?: boolean },
 ): ReadonlyArray<SnoozePreset> {
-  const presets: SnoozePreset[] = resolveSharedSnoozePresets(now).map((preset) => {
+  const presets: SnoozePreset[] = resolveSharedSnoozePresets(now, {
+    untilDone: options?.untilDone === true,
+  }).map((preset) => {
+    if (preset.snoozedUntil === null) return preset;
     const wake = parseTimestampDate(preset.snoozedUntil);
     if (wake === null) return preset;
     const time = timeOfDayLabel(wake, timestampFormat);
@@ -90,10 +97,11 @@ export function snoozeWakeDescription(
  * is never called with null from any surface.
  */
 export function snoozedUntilToastTitle(
-  snoozedUntil: string | null,
+  preset: Pick<SnoozePreset, "snoozedUntil" | "untilDone">,
   timestampFormat: TimestampFormat,
 ): string {
-  return snoozedUntil === null
+  if (preset.untilDone === true) return "Snoozed until it's done";
+  return preset.snoozedUntil === null
     ? "Snoozed until you wake it"
-    : `Snoozed until ${snoozeWakeDescription(snoozedUntil, new Date(), timestampFormat)}`;
+    : `Snoozed until ${snoozeWakeDescription(preset.snoozedUntil, new Date(), timestampFormat)}`;
 }

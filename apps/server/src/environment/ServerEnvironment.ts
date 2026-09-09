@@ -240,6 +240,7 @@ export const make = Effect.gen(function* () {
       threadRestartContinuation: true,
       threadSnooze: true,
       threadSnoozeIndefinite: true,
+      threadSnoozeUntilDone: true,
       recentArchivedThreads: true,
       projectAccentColors: true,
       projectAccentColorsFill: true,

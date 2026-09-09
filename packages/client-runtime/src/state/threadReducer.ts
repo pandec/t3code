@@ -303,6 +303,7 @@ function applyThreadDetailEventUnretained(
           activeOrderKey: null,
           snoozedUntil: null,
           snoozedAt: null,
+          snoozedUntilTurnId: null,
           deletedAt: null,
           messages: [],
           completedTurnAssistantMessageIds: [],
@@ -370,6 +371,7 @@ function applyThreadDetailEventUnretained(
           ...thread,
           snoozedUntil: event.payload.snoozedUntil,
           snoozedAt: event.payload.snoozedAt,
+          snoozedUntilTurnId: event.payload.snoozedUntilTurnId ?? null,
           updatedAt: event.payload.updatedAt,
         },
       };
@@ -381,6 +383,7 @@ function applyThreadDetailEventUnretained(
           ...thread,
           snoozedUntil: null,
           snoozedAt: null,
+          snoozedUntilTurnId: null,
           updatedAt: event.payload.updatedAt,
         },
       };

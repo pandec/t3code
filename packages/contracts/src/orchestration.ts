@@ -695,6 +695,12 @@ export const OrchestrationThread = Schema.Struct({
   // Optional so payloads from pre-snooze servers still decode.
   snoozedUntil: Schema.optional(Schema.NullOr(IsoDateTime)),
   snoozedAt: Schema.optional(Schema.NullOr(IsoDateTime)),
+  // The turn an "until it's done" snooze is waiting on. Set only by that
+  // preset (snoozedUntil is null); the thread stops classifying as snoozed
+  // once this turn is no longer the running latest turn. Cleared with the
+  // other snooze fields on wake. Optional so payloads from older servers
+  // still decode.
+  snoozedUntilTurnId: Schema.optional(Schema.NullOr(TurnId)),
   // Active pinned threads render in the pinned block. Settled and snoozed
   // threads remain in their respective shelves even when pinned.
   // Optional so payloads from pre-pinning servers still decode.
@@ -775,6 +781,7 @@ export const OrchestrationThreadShell = Schema.Struct({
   unsettledAt: Schema.optional(Schema.NullOr(IsoDateTime)),
   snoozedUntil: Schema.optional(Schema.NullOr(IsoDateTime)),
   snoozedAt: Schema.optional(Schema.NullOr(IsoDateTime)),
+  snoozedUntilTurnId: Schema.optional(Schema.NullOr(TurnId)),
   pinnedAt: Schema.optional(Schema.NullOr(IsoDateTime)),
   pinOrderKey: Schema.optional(Schema.NullOr(TrimmedNonEmptyString)),
   activeOrderKey: Schema.optional(Schema.NullOr(TrimmedNonEmptyString)),
@@ -1143,12 +1150,16 @@ const ThreadSnoozeCommand = Schema.Struct({
   commandId: CommandId,
   threadId: ThreadId,
   // The wake time, or null for an indefinite snooze ("until I wake it") that
-  // only user action or real activity clears. Event-based wake conditions
-  // (PR merged, review posted) will arrive as an optional condition field
-  // alongside this; time-based snooze is just the first kind of condition.
-  // Null requires the threadSnoozeIndefinite capability: older servers
-  // decode snoozedUntil as a required IsoDateTime and would reject it.
+  // only user action or real activity clears. Null requires the
+  // threadSnoozeIndefinite capability: older servers decode snoozedUntil as
+  // a required IsoDateTime and would reject it.
   snoozedUntil: Schema.NullOr(IsoDateTime),
+  // "Until it's done": wake when the thread's running turn ends. Only valid
+  // with a null snoozedUntil while a turn is running; the decider rejects
+  // it otherwise and stamps the turn it is waiting on. Requires the
+  // threadSnoozeUntilDone capability, since older servers would strip the
+  // key and park the thread indefinitely instead.
+  untilDone: Schema.optional(Schema.Boolean),
 });
 
 const ThreadUnsnoozeCommand = Schema.Struct({
@@ -1746,6 +1757,9 @@ export const ThreadSnoozedPayload = Schema.Struct({
   // until the user wakes it (or activity does).
   snoozedUntil: Schema.NullOr(IsoDateTime),
   snoozedAt: IsoDateTime,
+  // Set for "until it's done" snoozes. Optional so events written by older
+  // servers still decode as plain snoozes.
+  snoozedUntilTurnId: Schema.optional(Schema.NullOr(TurnId)),
   updatedAt: IsoDateTime,
 });
 

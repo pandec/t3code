@@ -78,6 +78,7 @@ export type ThreadSnoozeShell = Pick<
   OrchestrationThreadShell,
   | "snoozedUntil"
   | "snoozedAt"
+  | "snoozedUntilTurnId"
   | "hasPendingApprovals"
   | "hasPendingUserInput"
   | "session"
@@ -87,10 +88,12 @@ export type ThreadSnoozeShell = Pick<
 /**
  * A snoozed thread "raises its hand" when something happens that outranks
  * the user's snooze: the agent is blocked on them (approval / user input),
- * the session failed, or a run completed after the snooze was set — the
- * v1 taste of event-based snooze ("something happened" wakes early).
- * Raising a hand never clears the server-side snooze fields; it only stops
- * the thread from classifying as snoozed.
+ * the session failed, or a turn ended after the snooze was set — the v1
+ * taste of event-based snooze ("something happened" wakes early). An
+ * interrupted turn counts the same as a completed one: either way the agent
+ * stopped and the thread wants a look. Raising a hand never clears the
+ * server-side snooze fields; it only stops the thread from classifying as
+ * snoozed. Mirrored by the server's isThreadSnoozed; keep the two in step.
  */
 export function threadRaisedHandWhileSnoozed(shell: ThreadSnoozeShell): boolean {
   if (shell.hasPendingApprovals || shell.hasPendingUserInput) return true;
@@ -106,13 +109,22 @@ export function threadRaisedHandWhileSnoozed(shell: ThreadSnoozeShell): boolean 
   }
   if (
     shell.snoozedAt != null &&
-    shell.latestTurn?.state === "completed" &&
+    shell.latestTurn != null &&
+    shell.latestTurn.state !== "running" &&
     shell.latestTurn.completedAt != null &&
     Date.parse(shell.latestTurn.completedAt) > Date.parse(shell.snoozedAt)
   ) {
     return true;
   }
   return false;
+}
+
+/**
+ * Whether an "until it's done" snooze may be offered: the server rejects it
+ * unless a turn is running, so the client hides the preset on quiet threads.
+ */
+export function canSnoozeUntilDone(shell: Pick<OrchestrationThreadShell, "latestTurn">): boolean {
+  return shell.latestTurn?.state === "running";
 }
 
 /**
@@ -151,6 +163,17 @@ export function effectiveSnoozed(
     // fields clear together on wake, so a lone snoozedAt is never stale —
     // but malformed data never hides a thread, same as the timed branch.
     if (shell.snoozedAt == null || Number.isNaN(Date.parse(shell.snoozedAt))) return false;
+    // "Until it's done": snoozed only while the awaited turn is still the
+    // running latest turn. Any other shape (ended, replaced, dropped)
+    // wakes — the raised-hand rule below reports the same for an ended
+    // turn, but a replaced or missing turn needs this check.
+    if (
+      shell.snoozedUntilTurnId != null &&
+      (shell.latestTurn?.turnId !== shell.snoozedUntilTurnId ||
+        shell.latestTurn.state !== "running")
+    ) {
+      return false;
+    }
     return !threadRaisedHandWhileSnoozed(shell);
   }
   const wakeAtMs = Date.parse(shell.snoozedUntil);
@@ -192,12 +215,25 @@ export function threadWokeAt(
   if (threadRaisedHandWhileSnoozed(shell)) {
     if (
       shell.snoozedAt != null &&
-      shell.latestTurn?.state === "completed" &&
+      shell.latestTurn != null &&
+      shell.latestTurn.state !== "running" &&
       shell.latestTurn.completedAt != null &&
       Date.parse(shell.latestTurn.completedAt) > Date.parse(shell.snoozedAt)
     ) {
       return shell.latestTurn.completedAt;
     }
+    return shell.session?.updatedAt ?? shell.snoozedAt ?? null;
+  }
+  // "Until it's done" that woke without a raised hand: the awaited turn was
+  // replaced or dropped (a new turn started, or it vanished), or it ended
+  // with a completedAt no newer than the snooze (an interrupt keeps a
+  // placeholder stamp from before the snooze). Either way the thread is
+  // awake and the Woke pill needs a time.
+  if (shell.snoozedUntilTurnId != null) {
+    if (shell.latestTurn?.turnId !== shell.snoozedUntilTurnId) {
+      return shell.latestTurn?.requestedAt ?? shell.snoozedAt ?? null;
+    }
+    if (shell.latestTurn.state === "running") return null;
     return shell.session?.updatedAt ?? shell.snoozedAt ?? null;
   }
   // No raised hand: an indefinite snooze is simply still snoozed; a timed
@@ -210,7 +246,13 @@ const HOUR_MS = 60 * 60 * 1_000;
 const EVENING_HOUR = 18;
 const MORNING_HOUR = 9;
 
-export type SnoozePresetId = "hour" | "three-hours" | "evening" | "tomorrow" | "next-week";
+export type SnoozePresetId =
+  | "until-done"
+  | "hour"
+  | "three-hours"
+  | "evening"
+  | "tomorrow"
+  | "next-week";
 
 export interface SnoozePreset {
   readonly id: SnoozePresetId;
@@ -218,9 +260,25 @@ export interface SnoozePreset {
   /** Menu-row time column. Complements the label instead of repeating it:
       "Tomorrow" pairs with "9:00 AM", not "tomorrow 9:00 AM". */
   readonly whenLabel: string;
-  /** ISO wake time. */
-  readonly snoozedUntil: string;
+  /** ISO wake time, or null for a condition-based preset. */
+  readonly snoozedUntil: string | null;
+  /** "Until it's done": wake when the running turn ends. */
+  readonly untilDone?: true;
 }
+
+/**
+ * The "until it's done" preset: hides a working thread until its running
+ * turn ends. Listed first because it is the one choice that is about the
+ * thread rather than the clock. Callers gate it on canSnoozeUntilDone and
+ * the threadSnoozeUntilDone capability.
+ */
+export const SNOOZE_UNTIL_DONE_PRESET: SnoozePreset = {
+  id: "until-done",
+  label: "Until it's done",
+  whenLabel: "when the turn ends",
+  snoozedUntil: null,
+  untilDone: true,
+};
 
 function snoozeTimeOfDayLabel(date: Date): string {
   return date.toLocaleTimeString(undefined, { hour: "numeric", minute: "2-digit" });
@@ -248,10 +306,14 @@ function addSnoozeDays(base: Date, days: number): Date {
  * instant collapse: on Sundays "Tomorrow" and "Next week" are both Monday
  * morning, so only "Tomorrow" is offered.
  */
-export function resolveSnoozePresets(now: Date): ReadonlyArray<SnoozePreset> {
+export function resolveSnoozePresets(
+  now: Date,
+  options?: { readonly untilDone?: boolean },
+): ReadonlyArray<SnoozePreset> {
   const inAnHour = new Date(now.getTime() + HOUR_MS);
   const inThreeHours = new Date(now.getTime() + 3 * HOUR_MS);
   const presets: SnoozePreset[] = [
+    ...(options?.untilDone === true ? [SNOOZE_UNTIL_DONE_PRESET] : []),
     {
       id: "hour",
       label: "In 1 hour",

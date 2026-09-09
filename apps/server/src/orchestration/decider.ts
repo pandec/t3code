@@ -43,7 +43,11 @@ import {
   requireThreadNotArchived,
 } from "./commandInvariants.ts";
 import { projectEvent } from "./projector.ts";
-import { QUEUED_TURN_START_GRACE_MS, threadHasQueuedTurnStart } from "./ThreadSettlementPolicy.ts";
+import {
+  QUEUED_TURN_START_GRACE_MS,
+  isThreadSnoozed,
+  threadHasQueuedTurnStart,
+} from "./ThreadSettlementPolicy.ts";
 
 const isScriptRunCommand = Schema.is(SCRIPT_RUN_COMMAND_PATTERN);
 
@@ -824,7 +828,8 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
       if (
         command.type === "thread.auto-settle" &&
         thread.snoozedAt != null &&
-        thread.snoozedUntil == null
+        thread.snoozedUntil == null &&
+        thread.snoozedUntilTurnId == null
       ) {
         return yield* Effect.fail(
           new OrchestrationCommandInvariantError({
@@ -1020,12 +1025,55 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
           }),
         );
       }
-      // Re-snoozing an already-snoozed thread to the SAME wake time is a
-      // duplicate (double-click, raced clients): re-emit with the original
-      // timestamps so the projection is a no-op. A different wake time is a
-      // real change and stamps fresh.
+      // "Until it's done" waits on the running turn. Without one there is
+      // nothing to finish and the snooze would never wake, so reject rather
+      // than silently parking the thread indefinitely. Background work that
+      // outlives a settled turn does not count: the wake rule reads
+      // latestTurn, and that turn has already ended.
+      const untilDoneTurnId =
+        command.untilDone === true && thread.latestTurn?.state === "running"
+          ? thread.latestTurn.turnId
+          : null;
+      if (command.untilDone === true && command.snoozedUntil !== null) {
+        return yield* Effect.fail(
+          new OrchestrationCommandInvariantError({
+            commandType: command.type,
+            detail: `thread ${command.threadId} cannot snooze until done with a wake time`,
+          }),
+        );
+      }
+      if (command.untilDone === true && untilDoneTurnId === null) {
+        return yield* Effect.fail(
+          new OrchestrationCommandInvariantError({
+            commandType: command.type,
+            detail: `thread ${command.threadId} has no running turn to wait for`,
+          }),
+        );
+      }
+      // Re-snoozing an already-snoozed thread to the SAME wake condition is
+      // a duplicate (double-click, raced clients): re-emit with the original
+      // timestamps so the projection is a no-op. A different condition is a
+      // real change and stamps fresh. So is re-snoozing a thread whose
+      // fields match but which already woke by derivation (a turn ended, a
+      // failure landed): keeping the old snoozedAt would leave the wake
+      // newer than the snooze, and the thread would stay visible.
       const existingSnoozedAt =
-        thread.snoozedUntil === command.snoozedUntil && thread.snoozedAt != null
+        thread.snoozedUntil === command.snoozedUntil &&
+        (thread.snoozedUntilTurnId ?? null) === untilDoneTurnId &&
+        thread.snoozedAt != null &&
+        isThreadSnoozed(
+          {
+            snoozedUntil: thread.snoozedUntil,
+            snoozedAt: thread.snoozedAt,
+            snoozedUntilTurnId: thread.snoozedUntilTurnId,
+            session: thread.session,
+            latestTurn: thread.latestTurn,
+            // Open requests were already rejected above.
+            hasPendingApprovals: false,
+            hasPendingUserInput: false,
+          },
+          occurredAt,
+        )
           ? thread.snoozedAt
           : null;
       return {
@@ -1040,6 +1088,7 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
           threadId: command.threadId,
           snoozedUntil: command.snoozedUntil,
           snoozedAt: existingSnoozedAt ?? occurredAt,
+          snoozedUntilTurnId: untilDoneTurnId,
           updatedAt: existingSnoozedAt !== null ? thread.updatedAt : occurredAt,
         },
       };

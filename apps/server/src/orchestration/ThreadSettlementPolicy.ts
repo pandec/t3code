@@ -99,17 +99,59 @@ export function isAutoSettlementCandidate(thread: OrchestrationThreadShell, now:
   if (thread.session?.status === "starting" || thread.session?.status === "running") return false;
   if (thread.backgroundLiveness != null) return false;
   if (threadHasQueuedTurnStart(thread, now)) return false;
-  if (thread.snoozedAt != null && thread.snoozedUntil == null) return false;
-  if (thread.snoozedUntil == null || Date.parse(thread.snoozedUntil) <= Date.parse(now))
-    return true;
-  const wokeOnError =
+  // An indefinite snooze only wakes by hand; the decider rejects auto-settle
+  // for it, so it is never a candidate. Timed and until-done snoozes wake
+  // on their own and are candidates once awake.
+  if (thread.snoozedAt != null && thread.snoozedUntil == null && thread.snoozedUntilTurnId == null)
+    return false;
+  if (thread.snoozedAt == null && thread.snoozedUntil == null) return true;
+  return !isThreadSnoozed(thread, now);
+}
+
+/**
+ * Server twin of client-runtime's effectiveSnoozed: hidden while the wake
+ * condition holds and the thread has not raised its hand. A raised hand is
+ * blocked-on-you work, a fresh failure, or a turn that ended after the
+ * snooze was set. Keep the two in step.
+ */
+export function isThreadSnoozed(
+  thread: Pick<
+    OrchestrationThreadShell,
+    | "snoozedUntil"
+    | "snoozedAt"
+    | "snoozedUntilTurnId"
+    | "hasPendingApprovals"
+    | "hasPendingUserInput"
+    | "session"
+    | "latestTurn"
+  >,
+  now: string,
+): boolean {
+  if (thread.hasPendingApprovals || thread.hasPendingUserInput) return false;
+  if (
     thread.session?.status === "error" &&
     (thread.snoozedAt == null ||
-      Date.parse(thread.session.updatedAt) > Date.parse(thread.snoozedAt));
-  const wokeOnCompletion =
+      Date.parse(thread.session.updatedAt) > Date.parse(thread.snoozedAt))
+  ) {
+    return false;
+  }
+  if (
     thread.snoozedAt != null &&
-    thread.latestTurn?.state === "completed" &&
+    thread.latestTurn != null &&
+    thread.latestTurn.state !== "running" &&
     thread.latestTurn.completedAt != null &&
-    Date.parse(thread.latestTurn.completedAt) > Date.parse(thread.snoozedAt);
-  return wokeOnError || wokeOnCompletion;
+    Date.parse(thread.latestTurn.completedAt) > Date.parse(thread.snoozedAt)
+  ) {
+    return false;
+  }
+  // "Until it's done": snoozed only while the awaited turn is still the
+  // running latest turn. Any other shape (ended, replaced, dropped) wakes.
+  if (thread.snoozedUntilTurnId != null) {
+    return (
+      thread.latestTurn?.turnId === thread.snoozedUntilTurnId &&
+      thread.latestTurn.state === "running"
+    );
+  }
+  if (thread.snoozedUntil == null) return thread.snoozedAt != null;
+  return Date.parse(thread.snoozedUntil) > Date.parse(now);
 }
