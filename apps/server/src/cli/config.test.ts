@@ -60,6 +60,7 @@ it.layer(NodeServices.layer)("cli config resolution", (it) => {
                     env: {
                       T3CODE_HOME: baseDir,
                       T3CODE_STATE_DIR: stateDir,
+                      T3CODE_TRACE_FILE: path.join(baseDir, "custom.trace.ndjson"),
                       T3CODE_PORT: "3773",
                       T3CODE_MODE: "desktop",
                     },
@@ -72,6 +73,7 @@ it.layer(NodeServices.layer)("cli config resolution", (it) => {
           assert.equal(resolved.stateDir, explicit ? path.join(baseDir, "userdata") : stateDir);
           assert.equal(resolved.dbPath, path.join(resolved.stateDir, "state.sqlite"));
           assert.equal(resolved.secretsDir, path.join(resolved.stateDir, "secrets"));
+          assert.equal(resolved.serverTracePath, path.join(baseDir, "custom.trace.ndjson"));
         }),
       ),
   );

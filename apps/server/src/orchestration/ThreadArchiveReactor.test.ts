@@ -31,7 +31,7 @@ const threadId = ThreadId.make("archive");
 const projectId = ProjectId.make("project");
 const requestId = CommandId.make("request");
 
-it.effect.each(["success", "dirty", "shared", "stop-failed"] as const)(
+it.effect.each(["success", "dirty", "shared", "detached", "stop-failed"] as const)(
   "recovers archived cleanup on startup: %s",
   (scenario) =>
     Effect.scoped(
@@ -142,6 +142,24 @@ it.effect.each(["success", "dirty", "shared", "stop-failed"] as const)(
               }),
           }),
           Layer.mock(GitVcsDriver)({
+            statusDetailsLocal: (cwd) =>
+              Effect.sync(() => {
+                expect(cwd).toBe("/repo/worktree");
+                calls.push("status");
+                return {
+                  isRepo: true,
+                  hasOriginRemote: true,
+                  isDefaultBranch: false,
+                  branch: scenario === "detached" ? null : "feature",
+                  upstreamRef: null,
+                  hasWorkingTreeChanges: false,
+                  workingTree: { files: [], insertions: 0, deletions: 0 },
+                  hasUpstream: false,
+                  aheadCount: 0,
+                  behindCount: 0,
+                  aheadOfDefaultCount: 0,
+                };
+              }),
             removeWorktree: (input) =>
               Effect.sync(() => {
                 expect(input).toEqual({ cwd: "/repo", path: "/repo/worktree" });
@@ -170,20 +188,22 @@ it.effect.each(["success", "dirty", "shared", "stop-failed"] as const)(
           yield* reactor.drain;
           if (scenario === "success") {
             expect(error).toBeUndefined();
-            expect(calls).toEqual(["stop", "terminals", "remove"]);
+            expect(calls).toEqual(["stop", "terminals", "status", "remove"]);
           } else {
             expect(error).toContain(
               scenario === "dirty"
                 ? "dirty"
                 : scenario === "shared"
                   ? "Another unarchived thread"
-                  : "Cannot stop",
+                  : scenario === "detached"
+                    ? "Detached"
+                    : "Cannot stop",
             );
             expect(calls).toEqual(
               scenario === "dirty"
-                ? ["stop", "terminals", "remove"]
-                : scenario === "shared"
-                  ? ["stop", "terminals"]
+                ? ["stop", "terminals", "status", "remove"]
+                : scenario === "shared" || scenario === "detached"
+                  ? ["stop", "terminals", "status"]
                   : ["stop"],
             );
           }

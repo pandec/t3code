@@ -682,11 +682,14 @@ const runThreadCli = Effect.fn("runThreadCli")(function* <A, E, R>(
     readonly settingsPath: string;
     readonly attachmentsDir: string;
   }) => Effect.Effect<A, E, R>,
+  // Machine-consumed stdout (`--shell`) must stay free of log lines even when
+  // errors keep their human formatting.
+  options?: { readonly suppressLogs?: boolean },
 ) {
   const logLevel = yield* GlobalFlag.LogLevel;
   return yield* Effect.gen(function* () {
     const config = yield* resolveCliAuthConfig(flags, logLevel);
-    const minimumLogLevel = json ? "None" : config.logLevel;
+    const minimumLogLevel = json || options?.suppressLogs ? "None" : config.logLevel;
     return yield* Effect.gen(function* () {
       const environmentAuth = yield* EnvironmentAuth.EnvironmentAuth;
       const timeouts = yield* resolveCliLiveServerReadTimeouts(flags.timeoutMs ?? Option.none());
@@ -1805,21 +1808,46 @@ const threadContextCommand = Command.make("context", {
 }).pipe(
   Command.withDescription("Read the target thread's current execution context."),
   Command.withHandler((flags) =>
-    runThreadCli(flags, flags.json, (input) =>
-      Effect.gen(function* () {
-        if (flags.shell && flags.json)
-          return yield* new SessionCliError({
-            operation: "thread.context",
-            detail: "Choose either --shell or --json.",
-          });
-        const thread = yield* resolveThread(input.live, flags.threadId);
-        const project = input.live.shell.projects.find((entry) => entry.id === thread.projectId);
-        const environment = threadContextEnvironment(thread, project?.workspaceRoot ?? "");
-        yield* Console.log(flags.shell ? threadContextShell(environment) : jsonOutput(environment));
-      }),
+    runThreadCli(
+      flags,
+      flags.json,
+      (input) =>
+        Effect.gen(function* () {
+          if (flags.shell && flags.json)
+            return yield* new SessionCliError({
+              operation: "thread.context",
+              detail: "Choose either --shell or --json.",
+            });
+          const thread = yield* resolveThread(input.live, flags.threadId);
+          const project = input.live.shell.projects.find((entry) => entry.id === thread.projectId);
+          if (!project)
+            return yield* new SessionCliError({
+              operation: "thread.context",
+              detail: `Project '${thread.projectId}' for thread '${thread.id}' was not found.`,
+            });
+          const environment = threadContextEnvironment(thread, project.workspaceRoot);
+          yield* Console.log(
+            flags.shell ? threadContextShell(environment) : jsonOutput(environment),
+          );
+        }),
+      { suppressLogs: flags.shell },
     ),
   ),
 );
+
+export function archiveStatusText(
+  threadId: string,
+  archivedAt: string | null,
+  archiveRequest: OrchestrationThreadShell["archiveRequest"] | null,
+): string {
+  const lines = [
+    `thread: ${threadId}`,
+    `archived: ${archivedAt ?? "no"}`,
+    `request: ${archiveRequest ? archiveRequest.status : "none"}`,
+  ];
+  if (archiveRequest?.detail) lines.push(`detail: ${archiveRequest.detail}`);
+  return lines.join("\n");
+}
 
 const threadArchiveCommand = Command.make("archive", {
   ...projectLocationFlags,
@@ -1867,12 +1895,11 @@ const threadArchiveCommand = Command.make("archive", {
             ThreadId.make(threadId),
             input.timeouts,
           );
+          const archiveRequest = detail.thread.archiveRequest ?? null;
           yield* Console.log(
-            jsonOutput({
-              threadId,
-              archivedAt: detail.thread.archivedAt,
-              archiveRequest: detail.thread.archiveRequest ?? null,
-            }),
+            flags.json
+              ? jsonOutput({ threadId, archivedAt: detail.thread.archivedAt, archiveRequest })
+              : archiveStatusText(threadId, detail.thread.archivedAt, archiveRequest),
           );
           return;
         }

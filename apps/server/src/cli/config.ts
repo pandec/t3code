@@ -437,11 +437,14 @@ export const resolveCliAuthConfig = (
     const stateDir = yield* Config.string("T3CODE_STATE_DIR").pipe(Config.option);
     if (Option.isSome(flags.baseDir) || Option.isNone(stateDir) || !stateDir.value.trim())
       return config;
+    const traceFile = yield* Config.string("T3CODE_TRACE_FILE").pipe(Config.option);
+    const derived = yield* ServerConfig.deriveServerPaths(config.baseDir, config.devUrl, {
+      stateDir: stateDir.value,
+    });
     return {
       ...config,
-      ...(yield* ServerConfig.deriveServerPaths(config.baseDir, config.devUrl, {
-        stateDir: stateDir.value,
-      })),
+      ...derived,
+      serverTracePath: Option.getOrElse(traceFile, () => derived.serverTracePath),
     };
   });
 

@@ -11,6 +11,7 @@ import {
   type OrchestrationReadModel,
   type OrchestrationThread,
   type OrchestrationThreadActivity,
+  type TurnId,
 } from "@t3tools/contracts";
 import { compareDateTimeStrings } from "@t3tools/shared/dateTime";
 import * as DateTime from "effect/DateTime";
@@ -42,7 +43,7 @@ import {
   requireThreadNotArchived,
 } from "./commandInvariants.ts";
 import { projectEvent } from "./projector.ts";
-import { threadHasQueuedTurnStart } from "./ThreadSettlementPolicy.ts";
+import { QUEUED_TURN_START_GRACE_MS, threadHasQueuedTurnStart } from "./ThreadSettlementPolicy.ts";
 
 const isScriptRunCommand = Schema.is(SCRIPT_RUN_COMMAND_PATTERN);
 
@@ -99,6 +100,22 @@ function openRequests(thread: Pick<OrchestrationThread, "activities">) {
     }
   }
   return requests;
+}
+
+/** Threads that checkpoint: worktree-backed, branch-tracked, or already captured. */
+function isGitThread(
+  thread: Pick<OrchestrationThread, "branch" | "worktreePath" | "checkpoints">,
+): boolean {
+  return thread.branch !== null || thread.worktreePath !== null || thread.checkpoints.length > 0;
+}
+
+function hasReadyCheckpoint(
+  thread: Pick<OrchestrationThread, "checkpoints">,
+  turnId: TurnId | null,
+): boolean {
+  return thread.checkpoints.some(
+    (checkpoint) => checkpoint.turnId === turnId && checkpoint.status === "ready",
+  );
 }
 
 /** Apply the shared shell-level rule to the detailed command read model. */
@@ -606,20 +623,38 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
         if (thread.archiveRequest?.status === "pending") {
           return yield* reject("An archive is already pending. Cancel it before replacing it.");
         }
-        const turnId = thread.latestTurn?.state === "running" ? thread.latestTurn.turnId : null;
+        const runningTurnId =
+          thread.latestTurn?.state === "running" ? thread.latestTurn.turnId : null;
         if (
           hasQueuedTurnStartForThread(thread, occurredAt) ||
-          (turnId === null &&
+          (runningTurnId === null &&
             (thread.session?.status === "starting" || thread.session?.status === "running"))
         ) {
           return yield* reject("A turn is starting. Retry once it has started.");
         }
-        if (turnId !== null && !command.afterTurn) {
+        if (runningTurnId !== null && !command.afterTurn) {
           return yield* reject("Use --after-turn to clean up a running thread.");
         }
         if (command.removeWorktree && thread.worktreePath === null) {
           return yield* reject("This thread has no worktree to remove.");
         }
+        // A turn that just completed may still be capturing its checkpoint.
+        // Defer to the execute path so the archive waits for that capture. The
+        // window is bounded so an old turn whose capture never landed still
+        // archives immediately instead of pending forever.
+        const awaitingCheckpointTurnId =
+          thread.latestTurn?.state === "completed" &&
+          thread.latestTurn.completedAt !== null &&
+          Date.parse(occurredAt) - Date.parse(thread.latestTurn.completedAt) <=
+            QUEUED_TURN_START_GRACE_MS &&
+          isGitThread(thread) &&
+          !thread.checkpoints.some(
+            (checkpoint) =>
+              checkpoint.turnId === thread.latestTurn?.turnId && checkpoint.status !== "missing",
+          )
+            ? thread.latestTurn.turnId
+            : null;
+        const turnId = runningTurnId ?? awaitingCheckpointTurnId;
         const request = update({
           requestId: command.commandId,
           turnId,
@@ -688,12 +723,7 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
       )
         return yield* reject("The turn has not finished.");
       // Git completion must include the final checkpoint, not an ingestion placeholder.
-      if (
-        (thread.branch !== null || thread.worktreePath !== null) &&
-        !thread.checkpoints.some(
-          (checkpoint) => checkpoint.turnId === request.turnId && checkpoint.status === "ready",
-        )
-      ) {
+      if (isGitThread(thread) && !hasReadyCheckpoint(thread, request.turnId)) {
         return yield* reject("The turn checkpoint has not finished.");
       }
       return {

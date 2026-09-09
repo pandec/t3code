@@ -80,7 +80,9 @@ export const make = Effect.gen(function* () {
       }
       yield* terminals.close({ threadId });
       if (!request.removeWorktree || request.worktreePath === null) return;
-      if (archived.branch === null)
+      // Thread metadata ignores a detached HEAD, so read the live checkout.
+      const status = yield* git.statusDetailsLocal(request.worktreePath);
+      if (status.isRepo && status.branch === null)
         return yield* new ArchiveCleanupError({
           message: "Detached worktrees require manual removal to preserve unreferenced commits.",
         });

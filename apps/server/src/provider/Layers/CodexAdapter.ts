@@ -1,4 +1,3 @@
-import { providerThreadEnvironment } from "../ProviderThreadEnvironment.ts";
 /**
  * CodexAdapterLive - Scoped live implementation for the Codex provider adapter.
  *
@@ -77,6 +76,7 @@ import {
   listCodexImportableSessions,
   readCodexImportableThread,
 } from "../Drivers/CodexImportReader.ts";
+import { providerThreadEnvironment } from "../ProviderThreadEnvironment.ts";
 import { resolveCodexLaunchArgs } from "./codexLaunchArgs.ts";
 import {
   type CodexRateLimitSnapshot,
@@ -2554,7 +2554,11 @@ export const makeCodexAdapter = Effect.fn("makeCodexAdapter")(function* (
       cwd: input.cwd ?? process.cwd(),
       binaryPath: codexConfig.binaryPath,
       launchArgs: resolveCodexLaunchArgs(codexConfig.launchArgs, options?.environment),
-      ...(options?.environment ? { environment: options.environment } : {}),
+      environment: providerThreadEnvironment(
+        { threadId: input.destinationThreadId, cwd: input.cwd ?? process.cwd() },
+        options?.environment,
+        serverConfig,
+      ),
       ...(codexConfig.homePath ? { homePath: codexConfig.homePath } : {}),
       forkResumeCursor: input.sourceResumeCursor,
       runtimeMode: input.runtimeMode,

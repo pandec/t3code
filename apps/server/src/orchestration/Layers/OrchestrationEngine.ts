@@ -284,11 +284,15 @@ const makeOrchestrationEngine = Effect.gen(function* () {
         }
 
         // Reserve a worktree while archive cleanup runs. New clients cannot
-        // restart the owner or attach another thread while Git removes it.
+        // restart the owner, delete it, or attach another thread while Git
+        // removes it. Answering an async question starts a turn, so it is
+        // guarded here as well.
         if (
           envelope.command.type === "thread.create" ||
           envelope.command.type === "thread.meta.update" ||
           envelope.command.type === "thread.unarchive" ||
+          envelope.command.type === "thread.delete" ||
+          envelope.command.type === "thread.user-input.respond" ||
           envelope.command.type === "thread.turn.start"
         ) {
           const command = envelope.command;
@@ -345,8 +349,10 @@ const makeOrchestrationEngine = Effect.gen(function* () {
             ? yield* projectionSnapshotQuery.getUserInputActivity(envelope.command)
             : Option.none();
         // Startup command snapshots omit checkpoints. Load this one thread's
-        // durable checkpoint before executing an archive recovered after restart.
+        // durable checkpoints before deciding whether an archive must wait for
+        // its final capture, including one recovered after restart.
         const archiveCheckpoints =
+          envelope.command.type === "thread.archive.schedule" ||
           envelope.command.type === "thread.archive.execute"
             ? yield* projectionSnapshotQuery.getThreadCheckpointContext(envelope.command.threadId)
             : Option.none();
