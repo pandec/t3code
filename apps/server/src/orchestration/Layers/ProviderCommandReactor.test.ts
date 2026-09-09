@@ -2556,7 +2556,7 @@ describe("ProviderCommandReactor", () => {
       },
     );
 
-    it("falls back after recreation fails and retains the notice until a reply lands", async () => {
+    it("falls back after recreation fails and retains the notice until a turn starts", async () => {
       const { harness, baseDir } = await setup(false);
       harness.createWorktree.mockImplementation(() => Effect.die("branch was deleted"));
       harness.startSession.mockImplementationOnce(() =>
@@ -2580,15 +2580,30 @@ describe("ProviderCommandReactor", () => {
       expect(
         thread.messages.filter((message) => message.id.startsWith("worktree-recovery:")),
       ).toHaveLength(1);
+      // A reply from an earlier turn landing after the notice does not retire it.
       await harness.dispatch({
         type: "thread.message.assistant.complete",
-        commandId: CommandId.make("recovery-reply"),
+        commandId: CommandId.make("recovery-late-reply"),
         threadId,
-        messageId: asMessageId("recovery-reply"),
-        fallbackText: "Acknowledged",
+        messageId: asMessageId("recovery-late-reply"),
+        fallbackText: "Earlier turn finishing late",
         createdAt: "2026-01-01T00:00:04.000Z",
       });
-      await harness.dispatch(startTurn("later", "2026-01-01T00:00:05.000Z"));
+      await harness.dispatch(startTurn("again", "2026-01-01T00:00:05.000Z"));
+      await harness.drain();
+      expect(harness.sendTurn.mock.calls.at(-1)?.[0].input).toContain("T3 could not recreate it");
+      await harness.dispatch({
+        type: "thread.session.set",
+        commandId: CommandId.make("recovery-turn-started"),
+        threadId,
+        session: {
+          ...(await harness.readModel()).threads[0]!.session!,
+          status: "running",
+          activeTurnId: asTurnId("recovery-turn"),
+        },
+        createdAt: "2026-01-01T00:00:06.000Z",
+      });
+      await harness.dispatch(startTurn("later", "2026-01-01T00:00:07.000Z"));
       await harness.drain();
       expect(harness.sendTurn.mock.calls.at(-1)?.[0].input).toBe("What did we decide?");
     });

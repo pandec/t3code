@@ -1521,15 +1521,20 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
             )
         ) AS "hasOtherUserMessages",
         (
+          -- A recovery notice stays pending until a turn requested at or after
+          -- it actually starts. Both timestamps come from the client's message
+          -- clock; assistant replies use the server clock and a previous turn
+          -- can finish after a queued follow-up was written, so they cannot
+          -- retire the notice.
           SELECT notice.text FROM projection_thread_messages AS notice
           WHERE notice.thread_id = ${threadId}
             AND notice.message_id GLOB 'worktree-recovery:*'
             AND notice.created_at <= projection_thread_messages.created_at
             AND NOT EXISTS (
-              SELECT 1 FROM projection_thread_messages AS reply
-              WHERE reply.thread_id = ${threadId} AND reply.role = 'assistant'
-                AND reply.created_at >= notice.created_at
-                AND reply.is_streaming = 0 AND LENGTH(reply.text) > 0
+              SELECT 1 FROM projection_turns AS turn
+              WHERE turn.thread_id = ${threadId}
+                AND turn.turn_id IS NOT NULL
+                AND turn.requested_at >= notice.created_at
             )
           ORDER BY notice.created_at DESC LIMIT 1
         ) AS "workspaceRecoveryNotice"
