@@ -478,9 +478,8 @@ function readPersistedCwd(
  * `imported-session` — the conversation came from an external transcript that
  * ran somewhere else, so the import decided the directory.
  * `runtime-observed` — the live session moved itself (the agent entered or left
- * a worktree). The provider stores the resumable transcript under the project
- * directory derived from that cwd, so resuming anywhere else cannot find the
- * conversation.
+ * a worktree). Preserve that choice while it exists. Current Claude and Codex
+ * versions can resume by native session ID in another directory during recovery.
  */
 const CWD_AUTHORITIES = ["imported-session", "runtime-observed"] as const;
 type CwdAuthority = (typeof CWD_AUTHORITIES)[number];
@@ -1824,8 +1823,14 @@ const makeProviderService = Effect.fn("makeProviderService")(function* (
               : `Thread '${threadId}' has persisted conversation state owned by provider instance '${persistedBindingInstanceId}' and is not continuation-compatible with instance '${resolvedInstanceId}'. Starting here would discard the conversation context; switch the thread to a compatible instance or start a new thread.`,
           );
         }
-        const effectiveResumeCursor =
+        const resumeCursor =
           input.resumeCursor ?? (reusePersistedState ? persistedBinding?.resumeCursor : undefined);
+        const effectiveResumeCursor =
+          options?.recoverMissingWorkspace === true &&
+          resolvedProvider === "codex" &&
+          Schema.is(Schema.Struct({ threadId: Schema.String }))(resumeCursor)
+            ? { ...resumeCursor, strictResume: true }
+            : resumeCursor;
         const persistedCwd = reusePersistedState
           ? readPersistedCwd(persistedBinding?.runtimePayload)
           : undefined;
@@ -1837,11 +1842,12 @@ const makeProviderService = Effect.fn("makeProviderService")(function* (
         // while it still exists: an agent-created worktree can be removed
         // between sessions, and nothing downgrades the authority on its own, so
         // the thread would keep being started somewhere that is gone. The
-        // imported-session authority keeps its existing behavior — there the
-        // recorded directory is the whole point of the import.
+        // imported-session authority only yields after the thread explicitly
+        // records recovery from its deleted worktree.
         const persistedCwdMissing =
           persistedCwdOutranksRequest &&
-          readDurableCwdAuthority(persistedBinding?.runtimePayload) === "runtime-observed" &&
+          (readDurableCwdAuthority(persistedBinding?.runtimePayload) === "runtime-observed" ||
+            options?.recoverMissingWorkspace === true) &&
           !isExistingDirectory(persistedCwd);
         if (persistedCwdMissing) {
           yield* Effect.logWarning("provider.session.observed-cwd-missing", {

@@ -1,3 +1,4 @@
+import { normalizeProjectPathForComparison } from "@t3tools/shared/path";
 import type {
   OrchestrationClientOrigin,
   OrchestrationEvent,
@@ -282,12 +283,54 @@ const makeOrchestrationEngine = Effect.gen(function* () {
           });
         }
 
+        // Reserve a worktree while archive cleanup runs. New clients cannot
+        // restart the owner, delete it, or attach another thread while Git
+        // removes it. Answering an async question starts a turn, so it is
+        // guarded here as well.
+        if (
+          envelope.command.type === "thread.create" ||
+          envelope.command.type === "thread.meta.update" ||
+          envelope.command.type === "thread.unarchive" ||
+          envelope.command.type === "thread.delete" ||
+          envelope.command.type === "thread.user-input.respond" ||
+          envelope.command.type === "thread.turn.start"
+        ) {
+          const command = envelope.command;
+          const thread = commandReadModel.threads.find((entry) => entry.id === command.threadId);
+          const projectId =
+            command.type === "thread.create" ? command.projectId : thread?.projectId;
+          const project = commandReadModel.projects.find((entry) => entry.id === projectId);
+          const worktreePath =
+            "worktreePath" in command && command.worktreePath !== undefined
+              ? command.worktreePath
+              : thread?.worktreePath;
+          const cwd = worktreePath ?? project?.workspaceRoot;
+          const cleanup = commandReadModel.threads.find(
+            (entry) =>
+              entry.deletedAt === null &&
+              entry.archivedAt !== null &&
+              entry.archiveRequest?.status === "pending" &&
+              (entry.id === command.threadId ||
+                (entry.archiveRequest.removeWorktree &&
+                  cwd !== undefined &&
+                  entry.archiveRequest.worktreePath !== null &&
+                  normalizeProjectPathForComparison(entry.archiveRequest.worktreePath) ===
+                    normalizeProjectPathForComparison(cwd))),
+          );
+          if (cleanup)
+            return yield* new OrchestrationCommandInvariantError({
+              commandType: command.type,
+              detail: `Thread ${cleanup.id} is finishing archive cleanup. Retry after cleanup finishes.`,
+            });
+        }
+
         // Live background work (subagents, workflows, monitors) blocks both
         // automatic settlement and the settle-cleanup session stop that would
         // tear that work down. Liveness is engine state, not read-model state,
         // so the pure decider cannot make this call.
         if (
           (envelope.command.type === "thread.auto-settle" ||
+            envelope.command.type === "thread.archive.execute" ||
             (envelope.command.type === "thread.session.stop" &&
               envelope.command.onlyIfSettled === true)) &&
           threadBackgroundLiveness.getThreadBackgroundLiveness(envelope.command.threadId) !== null
@@ -305,9 +348,26 @@ const makeOrchestrationEngine = Effect.gen(function* () {
           envelope.command.type === "thread.user-input.dismiss"
             ? yield* projectionSnapshotQuery.getUserInputActivity(envelope.command)
             : Option.none();
+        // Startup command snapshots omit checkpoints. Load this one thread's
+        // durable checkpoints before deciding whether an archive must wait for
+        // its final capture, including one recovered after restart.
+        const archiveCheckpoints =
+          envelope.command.type === "thread.archive.schedule" ||
+          envelope.command.type === "thread.archive.execute"
+            ? yield* projectionSnapshotQuery.getThreadCheckpointContext(envelope.command.threadId)
+            : Option.none();
         const eventBase = yield* decideOrchestrationCommand({
           command: envelope.command,
-          readModel: commandReadModel,
+          readModel: Option.isSome(archiveCheckpoints)
+            ? {
+                ...commandReadModel,
+                threads: commandReadModel.threads.map((thread) =>
+                  thread.id === archiveCheckpoints.value.threadId
+                    ? { ...thread, checkpoints: archiveCheckpoints.value.checkpoints }
+                    : thread,
+                ),
+              }
+            : commandReadModel,
           ...(Option.isSome(userInputActivity)
             ? { userInputActivity: userInputActivity.value }
             : {}),

@@ -893,6 +893,8 @@ describe("ClaudeAdapterLive", () => {
         provider: ProviderDriverKind.make("claudeAgent"),
         runtimeMode: "full-access",
       });
+      assert.equal(harness.getLastCreateQueryInput()?.options.env?.T3CODE_THREAD_ID, THREAD_ID);
+      assert.equal(harness.getLastCreateQueryInput()?.options.env?.T3CODE_TURN_ID, undefined);
       assert.equal(session.status, "ready");
       assert.equal(harness.query.usageCalls, 0);
 

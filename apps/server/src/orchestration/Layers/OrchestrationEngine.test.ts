@@ -20,6 +20,7 @@ import {
 } from "@t3tools/contracts";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import { it as effectIt } from "@effect/vitest";
+import * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import * as ManagedRuntime from "effect/ManagedRuntime";
@@ -844,6 +845,330 @@ describe("OrchestrationEngine", () => {
     const readModelB = await system.readModel();
     expect(readModelB).toEqual(readModelA);
     await system.dispose();
+  });
+
+  it.each([
+    "completed",
+    "interrupted",
+    "error",
+    "new-turn",
+    "cancel",
+    "manual",
+    "checkpoint-failed",
+  ] as const)("persists a deferred archive across restart and handles %s", async (outcome) => {
+    const directory = await NodeFSP.mkdtemp(NodePath.join(NodeOS.tmpdir(), "t3-archive-"));
+    const databasePath = NodePath.join(directory, "state.sqlite");
+    let system = await createOrchestrationSystem({ databasePath });
+    const threadId = ThreadId.make("deferred-archive");
+    const projectId = ProjectId.make("archive-project");
+    const turnId = TurnId.make("target-turn");
+    const requestId = CommandId.make("schedule-archive");
+    const dispatch = (command: OrchestrationCommand) => system.run(system.engine.dispatch(command));
+    const session = (
+      status: "running" | "ready" | "interrupted" | "error",
+      activeTurnId: TurnId | null,
+    ) => ({
+      threadId,
+      status,
+      providerName: "codex" as const,
+      runtimeMode: "full-access" as const,
+      activeTurnId,
+      lastError: status === "error" ? "Failed" : null,
+      updatedAt: now(),
+    });
+    try {
+      await dispatch({
+        type: "project.create",
+        commandId: CommandId.make("project"),
+        projectId,
+        title: "Archive",
+        workspaceRoot: directory,
+        createdAt: now(),
+      });
+      await dispatch({
+        type: "thread.create",
+        commandId: CommandId.make("thread"),
+        threadId,
+        projectId,
+        title: "Archive",
+        modelSelection: { instanceId: ProviderInstanceId.make("codex"), model: "gpt-5-codex" },
+        runtimeMode: "full-access",
+        interactionMode: "default",
+        branch: "feature",
+        worktreePath: directory + "/worktree",
+        createdAt: now(),
+      });
+      await dispatch({
+        type: "thread.session.set",
+        commandId: CommandId.make("running"),
+        threadId,
+        session: session("running", turnId),
+        createdAt: now(),
+      });
+      await dispatch({
+        type: "thread.archive.schedule",
+        commandId: requestId,
+        threadId,
+        afterTurn: true,
+        removeWorktree: true,
+      });
+      expect((await system.readModel()).threads[0]?.archiveRequest).toMatchObject({
+        turnId,
+        status: "pending",
+      });
+      expect((await system.readModel()).threads[0]?.archivedAt).toBeNull();
+      await expect(
+        dispatch({
+          type: "thread.archive.execute",
+          commandId: CommandId.make("too-early"),
+          threadId,
+          requestId,
+        }),
+      ).rejects.toThrow("not finished");
+      await system.dispose();
+      system = await createOrchestrationSystem({ databasePath });
+      expect((await system.readModel()).threads[0]?.archiveRequest?.turnId).toBe(turnId);
+      if (outcome === "manual") {
+        await dispatch({ type: "thread.archive", commandId: CommandId.make("manual"), threadId });
+      } else if (outcome === "checkpoint-failed") {
+        await dispatch({
+          type: "thread.activity.append",
+          commandId: CommandId.make("capture-failed"),
+          threadId,
+          createdAt: now(),
+          activity: {
+            id: EventId.make("capture-failed"),
+            kind: "checkpoint.capture.failed",
+            summary: "Checkpoint failed",
+            tone: "error",
+            payload: {},
+            turnId,
+            createdAt: now(),
+          },
+        });
+        await system.dispose();
+        system = await createOrchestrationSystem({ databasePath });
+      } else if (outcome === "cancel") {
+        await dispatch({
+          type: "thread.archive.cancel",
+          commandId: CommandId.make("cancel"),
+          threadId,
+        });
+      } else {
+        await dispatch({
+          type: "thread.session.set",
+          commandId: CommandId.make("finish"),
+          threadId,
+          session: session(
+            outcome === "new-turn" ? "running" : outcome === "completed" ? "ready" : outcome,
+            outcome === "new-turn" ? TurnId.make("new-turn") : null,
+          ),
+          createdAt: now(),
+        });
+        if (outcome === "completed") {
+          await expect(
+            dispatch({
+              type: "thread.archive.execute",
+              commandId: CommandId.make("before-checkpoint"),
+              threadId,
+              requestId,
+            }),
+          ).rejects.toThrow("checkpoint");
+          await dispatch({
+            type: "thread.turn.diff.complete",
+            commandId: CommandId.make("checkpoint"),
+            threadId,
+            turnId,
+            completedAt: now(),
+            checkpointRef: CheckpointRef.make("refs/t3/checkpoint"),
+            status: "ready",
+            files: [],
+            assistantMessageId: MessageId.make("assistant"),
+            checkpointTurnCount: 1,
+            createdAt: now(),
+          });
+          // The engine's startup snapshot deliberately omits checkpoints.
+          await system.dispose();
+          system = await createOrchestrationSystem({ databasePath });
+        }
+        await dispatch({
+          type: "thread.archive.execute",
+          commandId: CommandId.make("execute"),
+          threadId,
+          requestId,
+        });
+      }
+      const thread = (await system.readModel()).threads[0];
+      if (outcome === "completed") {
+        expect(thread?.archivedAt).not.toBeNull();
+        await expect(
+          dispatch({
+            type: "thread.unarchive",
+            commandId: CommandId.make("unsafe-reopen"),
+            threadId,
+          }),
+        ).rejects.toThrow("cleanup");
+        await expect(
+          dispatch({
+            type: "thread.create",
+            commandId: CommandId.make("attach-during-cleanup"),
+            threadId: ThreadId.make("new-owner"),
+            projectId,
+            title: "New owner",
+            modelSelection: thread!.modelSelection,
+            runtimeMode: "full-access",
+            interactionMode: "default",
+            branch: "feature",
+            worktreePath: directory + "/worktree",
+            createdAt: now(),
+          }),
+        ).rejects.toThrow("cleanup");
+        await expect(
+          dispatch({
+            type: "thread.delete",
+            commandId: CommandId.make("delete-during-cleanup"),
+            threadId,
+          }),
+        ).rejects.toThrow("cleanup");
+        await dispatch({
+          type: "thread.archive.complete",
+          commandId: CommandId.make("cleanup"),
+          threadId,
+          requestId,
+          error: "Worktree is dirty.",
+        });
+        expect((await system.readModel()).threads[0]?.archiveRequest).toMatchObject({
+          status: "error",
+          detail: "Worktree is dirty.",
+        });
+        await dispatch({
+          type: "thread.unarchive",
+          commandId: CommandId.make("reopen"),
+          threadId,
+        });
+      } else {
+        if (outcome === "manual") expect(thread?.archivedAt).not.toBeNull();
+        else expect(thread?.archivedAt).toBeNull();
+        expect(thread?.archiveRequest?.status).toBe(
+          outcome === "checkpoint-failed" ? "error" : "cancelled",
+        );
+      }
+    } finally {
+      await system.dispose();
+      await NodeFSP.rm(directory, { recursive: true, force: true });
+    }
+  });
+
+  it("waits for the final checkpoint when scheduling right after a turn completes", async () => {
+    const directory = await NodeFSP.mkdtemp(NodePath.join(NodeOS.tmpdir(), "t3-archive-idle-"));
+    const databasePath = NodePath.join(directory, "state.sqlite");
+    let system = await createOrchestrationSystem({ databasePath });
+    const threadId = ThreadId.make("idle-archive");
+    const projectId = ProjectId.make("idle-archive-project");
+    const turnId = TurnId.make("finished-turn");
+    const requestId = CommandId.make("schedule-idle");
+    const dispatch = (command: OrchestrationCommand) => system.run(system.engine.dispatch(command));
+    const session = (status: "running" | "ready", activeTurnId: TurnId | null) => ({
+      threadId,
+      status,
+      providerName: "codex" as const,
+      runtimeMode: "full-access" as const,
+      activeTurnId,
+      lastError: null,
+      updatedAt: now(),
+    });
+    try {
+      await dispatch({
+        type: "project.create",
+        commandId: CommandId.make("project"),
+        projectId,
+        title: "Archive",
+        workspaceRoot: directory,
+        createdAt: now(),
+      });
+      await dispatch({
+        type: "thread.create",
+        commandId: CommandId.make("thread"),
+        threadId,
+        projectId,
+        title: "Archive",
+        modelSelection: { instanceId: ProviderInstanceId.make("codex"), model: "gpt-5-codex" },
+        runtimeMode: "full-access",
+        interactionMode: "default",
+        branch: "feature",
+        worktreePath: directory + "/worktree",
+        createdAt: now(),
+      });
+      await dispatch({
+        type: "thread.session.set",
+        commandId: CommandId.make("running"),
+        threadId,
+        session: session("running", turnId),
+        createdAt: now(),
+      });
+      // Completed just now, in real time: the decider clocks the checkpoint
+      // wait against the turn's completion timestamp.
+      const completedAt = DateTime.formatIso(DateTime.nowUnsafe());
+      await dispatch({
+        type: "thread.session.set",
+        commandId: CommandId.make("ready"),
+        threadId,
+        session: { ...session("ready", null), updatedAt: completedAt },
+        createdAt: completedAt,
+      });
+      // Session is idle but the turn's checkpoint has not landed: schedule
+      // must defer rather than archive immediately.
+      await dispatch({
+        type: "thread.archive.schedule",
+        commandId: requestId,
+        threadId,
+        afterTurn: false,
+        removeWorktree: true,
+      });
+      let thread = (await system.readModel()).threads[0];
+      expect(thread?.archivedAt).toBeNull();
+      expect(thread?.archiveRequest).toMatchObject({ turnId, status: "pending" });
+      await dispatch({
+        type: "thread.turn.diff.complete",
+        commandId: CommandId.make("checkpoint"),
+        threadId,
+        turnId,
+        completedAt: now(),
+        checkpointRef: CheckpointRef.make("refs/t3/checkpoint"),
+        status: "ready",
+        files: [],
+        assistantMessageId: MessageId.make("assistant"),
+        checkpointTurnCount: 1,
+        createdAt: now(),
+      });
+      await dispatch({
+        type: "thread.archive.execute",
+        commandId: CommandId.make("execute"),
+        threadId,
+        requestId,
+      });
+      thread = (await system.readModel()).threads[0];
+      expect(thread?.archivedAt).not.toBeNull();
+      // Once the checkpoint exists, a fresh schedule on an idle thread archives at once.
+      await dispatch({
+        type: "thread.archive.complete",
+        commandId: CommandId.make("cleanup"),
+        threadId,
+        requestId,
+      });
+      await dispatch({ type: "thread.unarchive", commandId: CommandId.make("reopen"), threadId });
+      await dispatch({
+        type: "thread.archive.schedule",
+        commandId: CommandId.make("schedule-again"),
+        threadId,
+        afterTurn: false,
+        removeWorktree: false,
+      });
+      expect((await system.readModel()).threads[0]?.archivedAt).not.toBeNull();
+    } finally {
+      await system.dispose();
+      await NodeFSP.rm(directory, { recursive: true, force: true });
+    }
   });
 
   it("archives and unarchives threads through orchestration commands", async () => {

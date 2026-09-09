@@ -1,3 +1,4 @@
+import { providerThreadEnvironment } from "../ProviderThreadEnvironment.ts";
 import {
   ApprovalRequestId,
   type HermesSettings,
@@ -738,7 +739,11 @@ export function makeHermesAdapter(
           const mcpSession = McpProviderSession.readMcpProviderSession(input.threadId);
           const acp = yield* makeHermesAcpRuntime({
             hermesSettings,
-            ...(options?.environment ? { environment: options.environment } : {}),
+            environment: providerThreadEnvironment(
+              { threadId: input.threadId, cwd: cwd },
+              options?.environment,
+              serverConfig,
+            ),
             childProcessSpawner,
             cwd,
             ...(resumeSessionId ? { resumeSessionId } : {}),

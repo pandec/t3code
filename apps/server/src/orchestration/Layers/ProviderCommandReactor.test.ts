@@ -175,6 +175,8 @@ describe("ProviderCommandReactor", () => {
 
   async function createHarness(input?: {
     readonly baseDir?: string;
+    readonly workspaceRoot?: string;
+    readonly skipMissingWorktreeRecreation?: boolean;
     readonly threadModelSelection?: ModelSelection;
     readonly sessionModelSwitch?: "unsupported" | "in-session";
     readonly requiresNewThreadForModelChange?: boolean;
@@ -543,7 +545,11 @@ describe("ProviderCommandReactor", () => {
           generateThreadTitle,
         }),
       ),
-      Layer.provideMerge(ServerSettingsService.layerTest()),
+      Layer.provideMerge(
+        ServerSettingsService.layerTest({
+          skipMissingWorktreeRecreation: input?.skipMissingWorktreeRecreation ?? true,
+        }),
+      ),
       Layer.provideMerge(SqlitePersistenceMemory),
       Layer.provideMerge(ServerConfig.layerTest(process.cwd(), baseDir)),
       Layer.provideMerge(ProviderInstanceHealthLive),
@@ -568,7 +574,7 @@ describe("ProviderCommandReactor", () => {
       commandId: CommandId.make("cmd-project-create"),
       projectId: asProjectId("project-1"),
       title: "Provider Project",
-      workspaceRoot: "/tmp/provider-project",
+      workspaceRoot: input?.workspaceRoot ?? "/tmp/provider-project",
       defaultModelSelection: modelSelection,
       createdAt: now,
     });
@@ -2340,6 +2346,8 @@ describe("ProviderCommandReactor", () => {
 
   it("generates a worktree branch name for the first turn", async () => {
     const harness = await createHarness();
+    const worktreePath = NodePath.join(harness.stateDir, "existing-worktree");
+    NodeFS.mkdirSync(worktreePath, { recursive: true });
     const now = "2026-01-01T00:00:00.000Z";
     const prompt = `Add a safer reconnect backoff. ${serializeAssistantCitation(assistantCitation)}`;
     const statusRefreshed = await harness.runEffect(Deferred.make<void>());
@@ -2354,7 +2362,7 @@ describe("ProviderCommandReactor", () => {
         commandId: CommandId.make("cmd-thread-branch"),
         threadId: ThreadId.make("thread-1"),
         branch: "t3code/1234abcd",
-        worktreePath: "/tmp/provider-project-worktree",
+        worktreePath: worktreePath,
       }),
     );
 
@@ -2396,7 +2404,7 @@ describe("ProviderCommandReactor", () => {
       `Add a safer reconnect backoff. ${assistantQuoteText}`,
     );
     expect(harness.generateBranchName.mock.calls[0]?.[0].message).not.toContain("t3-citation://");
-    expect(harness.refreshStatus.mock.calls[0]?.[0]).toBe("/tmp/provider-project-worktree");
+    expect(harness.refreshStatus.mock.calls[0]?.[0]).toBe(worktreePath);
     const readModel = await harness.readModel();
     expect(
       readModel.threads
@@ -2406,9 +2414,16 @@ describe("ProviderCommandReactor", () => {
   });
 
   it("recreates a missing worktree from the thread branch before starting a turn", async () => {
-    const harness = await createHarness();
+    const harness = await createHarness({ skipMissingWorktreeRecreation: false });
     const now = "2026-01-01T00:00:00.000Z";
     const worktreePath = NodePath.join(harness.stateDir, "missing-worktree");
+
+    harness.createWorktree.mockImplementation((input) =>
+      Effect.sync(() => {
+        NodeFS.mkdirSync(input.path!, { recursive: true });
+        return { worktree: { path: input.path!, refName: input.refName } };
+      }),
+    );
 
     await harness.runEffect(
       harness.engine.dispatch({
@@ -2437,7 +2452,7 @@ describe("ProviderCommandReactor", () => {
       }),
     );
 
-    await waitFor(() => harness.startSession.mock.calls.length === 1);
+    await harness.drain();
     expect(harness.pruneWorktrees).toHaveBeenCalledWith({ cwd: "/tmp/provider-project" });
     expect(harness.createWorktree).toHaveBeenCalledWith({
       cwd: "/tmp/provider-project",
@@ -2447,6 +2462,232 @@ describe("ProviderCommandReactor", () => {
     expect(harness.createWorktree.mock.invocationCallOrder[0]).toBeLessThan(
       harness.startSession.mock.invocationCallOrder[0]!,
     );
+  });
+
+  describe("removed worktree recovery", () => {
+    const threadId = ThreadId.make("thread-1");
+    const startTurn = (suffix: string, createdAt = "2026-01-01T00:00:02.000Z") => ({
+      type: "thread.turn.start" as const,
+      commandId: CommandId.make(`recovery-turn-${suffix}`),
+      threadId,
+      message: {
+        messageId: asMessageId(`recovery-user-${suffix}`),
+        role: "user" as const,
+        text: "What did we decide?",
+        attachments: [],
+      },
+      interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
+      runtimeMode: "approval-required" as const,
+      createdAt,
+    });
+    const setup = async (skipMissingWorktreeRecreation = true, provider = "codex") => {
+      const baseDir = NodeFS.mkdtempSync(NodePath.join(NodeOS.tmpdir(), "t3-worktree-recovery-"));
+      const harness = await createHarness({
+        baseDir,
+        workspaceRoot: baseDir,
+        skipMissingWorktreeRecreation,
+        threadModelSelection: {
+          instanceId: ProviderInstanceId.make(provider),
+          model: provider === "codex" ? "gpt-5-codex" : "claude-sonnet-4-6",
+        },
+      });
+      const worktreePath = NodePath.join(baseDir, "removed-worktree");
+      await harness.dispatch({
+        type: "thread.meta.update",
+        commandId: CommandId.make("recovery-workspace"),
+        threadId,
+        branch: "feature/finished",
+        worktreePath,
+      });
+      return { harness, baseDir, worktreePath };
+    };
+
+    it.each(["codex", "claudeAgent"])(
+      "moves a cold %s thread to the checkout and injects the notice before the prompt",
+      async (provider) => {
+        const { harness, baseDir, worktreePath } = await setup(true, provider);
+        await harness.dispatch(startTurn("cold"));
+        await harness.drain();
+        expect(harness.createWorktree).not.toHaveBeenCalled();
+        expect(harness.pruneWorktrees).not.toHaveBeenCalled();
+        expect(harness.startSession.mock.calls[0]?.[1]).toMatchObject({ cwd: baseDir });
+        expect(harness.sendTurn).toHaveBeenCalledTimes(1);
+        const thread = (await harness.readModel()).threads[0]!;
+        expect(thread.worktreePath).toBeNull();
+        expect(thread.branch).toBeNull();
+        const notice = thread.messages.find(
+          (entry) => entry.id === asMessageId("worktree-recovery:recovery-user-cold"),
+        )!;
+        expect(notice.role).toBe("user");
+        expect(notice.text).toContain(worktreePath);
+        expect(notice.text).toContain(baseDir);
+        expect(notice.text).toContain("recreation is disabled");
+        expect(notice.createdAt < startTurn("cold").createdAt).toBe(true);
+        expect(harness.sendTurn.mock.calls[0]?.[0].input).toBe(
+          `${notice.text}\n\nWhat did we decide?`,
+        );
+      },
+    );
+
+    it.each(["codex", "claudeAgent"])(
+      "restarts an idle %s session with its existing cursor after deletion",
+      async (provider) => {
+        const { harness, baseDir, worktreePath } = await setup(true, provider);
+        NodeFS.mkdirSync(worktreePath);
+        await harness.dispatch(startTurn("before", "2026-01-01T00:00:00.000Z"));
+        await harness.drain();
+        const thread = (await harness.readModel()).threads[0]!;
+        await harness.dispatch({
+          type: "thread.session.set",
+          commandId: CommandId.make("recovery-ready"),
+          threadId,
+          session: { ...thread.session!, status: "ready", activeTurnId: null },
+          createdAt: "2026-01-01T00:00:01.000Z",
+        });
+        NodeFS.rmdirSync(worktreePath);
+        await harness.dispatch(startTurn("after"));
+        await harness.drain();
+        expect(harness.startSession).toHaveBeenCalledTimes(2);
+        expect(harness.startSession.mock.calls[1]?.[1]).toMatchObject({
+          cwd: baseDir,
+          resumeCursor: { opaque: "resume-1" },
+        });
+        expect(harness.sendTurn.mock.calls[1]?.[0].input).toContain("T3 notice:");
+      },
+    );
+
+    it("falls back after recreation fails and retains the notice until a turn starts", async () => {
+      const { harness, baseDir } = await setup(false);
+      harness.createWorktree.mockImplementation(() => Effect.die("branch was deleted"));
+      harness.startSession.mockImplementationOnce(() =>
+        Effect.fail(
+          new ProviderAdapterRequestError({
+            provider: "codex",
+            method: "startSession",
+            detail: "temporarily unavailable",
+          }),
+        ),
+      );
+      await harness.dispatch(startTurn("failed"));
+      await harness.drain();
+      expect(harness.createWorktree).toHaveBeenCalledTimes(1);
+      expect(harness.sendTurn).not.toHaveBeenCalled();
+      await harness.dispatch(startTurn("retry", "2026-01-01T00:00:03.000Z"));
+      await harness.drain();
+      expect(harness.startSession.mock.calls[1]?.[1]).toMatchObject({ cwd: baseDir });
+      expect(harness.sendTurn.mock.calls[0]?.[0].input).toContain("T3 could not recreate it");
+      const thread = (await harness.readModel()).threads[0]!;
+      expect(
+        thread.messages.filter((message) => message.id.startsWith("worktree-recovery:")),
+      ).toHaveLength(1);
+      // A reply from an earlier turn landing after the notice does not retire it.
+      await harness.dispatch({
+        type: "thread.message.assistant.complete",
+        commandId: CommandId.make("recovery-late-reply"),
+        threadId,
+        messageId: asMessageId("recovery-late-reply"),
+        fallbackText: "Earlier turn finishing late",
+        createdAt: "2026-01-01T00:00:04.000Z",
+      });
+      await harness.dispatch(startTurn("again", "2026-01-01T00:00:05.000Z"));
+      await harness.drain();
+      expect(harness.sendTurn.mock.calls.at(-1)?.[0].input).toContain("T3 could not recreate it");
+      await harness.dispatch({
+        type: "thread.session.set",
+        commandId: CommandId.make("recovery-turn-started"),
+        threadId,
+        session: {
+          ...(await harness.readModel()).threads[0]!.session!,
+          status: "running",
+          activeTurnId: asTurnId("recovery-turn"),
+        },
+        createdAt: "2026-01-01T00:00:06.000Z",
+      });
+      await harness.dispatch(startTurn("later", "2026-01-01T00:00:07.000Z"));
+      await harness.drain();
+      expect(harness.sendTurn.mock.calls.at(-1)?.[0].input).toBe("What did we decide?");
+    });
+
+    it("falls back from a detached worktree even when recreation is enabled", async () => {
+      const { harness, baseDir } = await setup(false);
+      await harness.dispatch({
+        type: "thread.meta.update",
+        commandId: CommandId.make("recovery-detached"),
+        threadId,
+        branch: null,
+      });
+      await harness.dispatch(startTurn("detached"));
+      await harness.drain();
+      expect(harness.createWorktree).not.toHaveBeenCalled();
+      expect(harness.startSession.mock.calls[0]?.[1]).toMatchObject({ cwd: baseDir });
+      expect(harness.sendTurn.mock.calls[0]?.[0].input).toContain("no saved branch");
+    });
+
+    it("keeps the workspace and history intact when the main checkout is also missing", async () => {
+      const { harness, baseDir, worktreePath } = await setup();
+      await harness.dispatch({
+        type: "project.meta.update",
+        commandId: CommandId.make("recovery-missing-project"),
+        projectId: asProjectId("project-1"),
+        workspaceRoot: NodePath.join(baseDir, "missing-project"),
+      });
+      await harness.dispatch(startTurn("missing"));
+      await harness.drain();
+      expect(harness.startSession).not.toHaveBeenCalled();
+      expect(harness.sendTurn).not.toHaveBeenCalled();
+      const thread = (await harness.readModel()).threads[0]!;
+      expect(thread.worktreePath).toBe(worktreePath);
+      expect(thread.messages).toHaveLength(1);
+      expect(thread.session?.lastError).toContain("missing-project");
+    });
+
+    it("rejects stale recovery without adding a notice or overwriting the workspace", async () => {
+      const { harness, baseDir, worktreePath } = await setup();
+      const nextPath = NodePath.join(baseDir, "other-worktree");
+      await harness.dispatch({
+        type: "thread.meta.update",
+        commandId: CommandId.make("recovery-concurrent-move"),
+        threadId,
+        worktreePath: nextPath,
+        branch: "other-branch",
+      });
+      await expect(
+        harness.dispatch({
+          type: "thread.worktree.fallback",
+          commandId: CommandId.make("recovery-stale"),
+          threadId,
+          expectedWorktreePath: worktreePath,
+          expectedWorkspaceRoot: baseDir,
+          messageId: asMessageId("worktree-recovery:stale"),
+          notice: "T3 notice: stale",
+          createdAt: "2026-01-01T00:00:02.000Z",
+        }),
+      ).rejects.toMatchObject({ _tag: "OrchestrationCommandInvariantError" });
+      const thread = (await harness.readModel()).threads[0]!;
+      expect(thread.worktreePath).toBe(nextPath);
+      expect(thread.branch).toBe("other-branch");
+      expect(thread.messages).toHaveLength(0);
+    });
+
+    it("does not move a running thread when steering into a missing worktree", async () => {
+      const { harness, worktreePath } = await setup();
+      NodeFS.mkdirSync(worktreePath);
+      await harness.dispatch(startTurn("running-before", "2026-01-01T00:00:00.000Z"));
+      await harness.drain();
+      const thread = (await harness.readModel()).threads[0]!;
+      await harness.dispatch({
+        type: "thread.session.set",
+        commandId: CommandId.make("recovery-running"),
+        threadId,
+        session: { ...thread.session!, status: "running", activeTurnId: asTurnId("active") },
+        createdAt: "2026-01-01T00:00:01.000Z",
+      });
+      NodeFS.rmdirSync(worktreePath);
+      await harness.dispatch(startTurn("steer"));
+      await harness.drain();
+      expect(harness.startSession).toHaveBeenCalledTimes(1);
+      expect((await harness.readModel()).threads[0]?.worktreePath).toBe(worktreePath);
+    });
   });
 
   it("forwards codex model options through session start and turn send", async () => {
@@ -4043,6 +4284,8 @@ describe("ProviderCommandReactor", () => {
         model: "claude-sonnet-4-6",
       },
     });
+    const worktreePath = NodePath.join(harness.stateDir, "existing-worktree");
+    NodeFS.mkdirSync(worktreePath, { recursive: true });
     const now = "2026-01-01T00:00:00.000Z";
 
     await Effect.runPromise(
@@ -4073,7 +4316,7 @@ describe("ProviderCommandReactor", () => {
         type: "thread.meta.update",
         commandId: CommandId.make("cmd-thread-worktree-change"),
         threadId: ThreadId.make("thread-1"),
-        worktreePath: "/tmp/provider-project-worktree",
+        worktreePath: worktreePath,
       }),
     );
 
@@ -4099,7 +4342,7 @@ describe("ProviderCommandReactor", () => {
     expect(harness.stopSession.mock.calls.length).toBe(0);
     expect(harness.startSession.mock.calls[1]?.[1]).toMatchObject({
       threadId: ThreadId.make("thread-1"),
-      cwd: "/tmp/provider-project-worktree",
+      cwd: worktreePath,
       resumeCursor: { opaque: "resume-1" },
       modelSelection: {
         instanceId: ProviderInstanceId.make("claudeAgent"),

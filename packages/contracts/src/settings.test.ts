@@ -644,6 +644,19 @@ describe("ClientSettings pull request merge methods", () => {
   });
 });
 
+describe("removed worktree recovery setting", () => {
+  it("skips recreation by default and accepts an explicit opt-out", () => {
+    expect(decodeServerSettings({}).skipMissingWorktreeRecreation).toBe(true);
+    expect(
+      decodeServerSettings({ skipMissingWorktreeRecreation: false }).skipMissingWorktreeRecreation,
+    ).toBe(false);
+    expect(
+      decodeServerSettingsPatch({ skipMissingWorktreeRecreation: false })
+        .skipMissingWorktreeRecreation,
+    ).toBe(false);
+  });
+});
+
 describe("ClientSettings extras", () => {
   it("keeps prior behaviour by default", () => {
     const settings = decodeClientSettings({});

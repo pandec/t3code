@@ -627,7 +627,7 @@ function GeneralSettingsSection() {
   return (
     <SettingsSection title="General">
       <SettingsRow icon="folder" label="Project Grouping" target="SettingsProjectGrouping" />
-      <AutoSettleSettingsRows />
+      <SharedThreadSettingsRows />
       <SettingsRow icon="chart.bar.xaxis" label="Usage" target="SettingsUsage" />
       <SettingsSliderRow
         description="How long a steered message can still be edited or recalled before it is sent to the running agent. 0.0s sends it immediately."
@@ -828,12 +828,12 @@ function ThreadSyncRow() {
 const AUTO_SETTLE_DEFAULT_DAYS = DEFAULT_SERVER_SETTINGS.sidebarAutoSettleAfterDays ?? 3;
 
 /**
- * Auto-settlement is a user preference that every server has to hold. Mobile
+ * Shared thread preferences must be stored on every eligible server. Mobile
  * has no primary environment, so the first eligible sync target provides the
  * reference value. Edits fan out to every eligible target, and a mismatch row
  * lets the user push the reference out.
  */
-function AutoSettleSettingsRows() {
+function SharedThreadSettingsRows() {
   const { environments } = useEnvironments();
   const updateSettings = useAtomCommand(serverEnvironment.updateSettings, {
     label: "server settings update",
@@ -888,6 +888,13 @@ function AutoSettleSettingsRows() {
 
   return (
     <>
+      <SettingsSwitchRow
+        icon="arrow.triangle.branch"
+        label="Skip recreating removed worktrees"
+        subtitle="Continue in the main project checkout when a worktree is gone. Turn off to try recreating it first, with the main checkout as a fallback."
+        value={referenceSettings.skipMissingWorktreeRecreation}
+        onValueChange={(value) => writeToAll({ skipMissingWorktreeRecreation: value })}
+      />
       <SettingsSwitchRow
         icon="checkmark.circle"
         label="Settle threads automatically"

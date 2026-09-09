@@ -1,4 +1,10 @@
-import { AntigravitySettings, ProviderDriverKind, ProviderSetupError } from "@t3tools/contracts";
+import { providerThreadEnvironment } from "../ProviderThreadEnvironment.ts";
+import {
+  AntigravitySettings,
+  ProviderDriverKind,
+  ProviderSetupError,
+  ThreadId,
+} from "@t3tools/contracts";
 import { HostProcessPlatform } from "@t3tools/shared/hostProcess";
 import * as Crypto from "effect/Crypto";
 import * as Deferred from "effect/Deferred";
@@ -166,7 +172,13 @@ export const AntigravityDriver: ProviderDriver<AntigravitySettings, AntigravityD
             installation: executable,
             profile,
             cwd: input.cwd,
-            baseEnv: processEnvironment,
+            baseEnv: input.threadId
+              ? providerThreadEnvironment(
+                  { threadId: ThreadId.make(input.threadId), cwd: input.cwd },
+                  processEnvironment,
+                  input.t3Paths,
+                )
+              : processEnvironment,
             auth,
           }),
         }).pipe(Effect.provideService(Crypto.Crypto, crypto));

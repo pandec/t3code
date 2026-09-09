@@ -3064,9 +3064,8 @@ routing.layer("ProviderServiceLive routing", (it) => {
       const directory = yield* ProviderSessionDirectory.ProviderSessionDirectory;
       const threadId = asThreadId("thread-runtime-observed-cwd");
       const movedCwd = NodeFS.mkdtempSync(NodePath.join(NodeOS.tmpdir(), "t3-moved-worktree-"));
-      // A session that entered a worktree mid-run: the provider stores its
-      // transcript under the project directory derived from that cwd, so a cold
-      // resume at the workspace root would not find the conversation.
+      // A session that entered a worktree mid-run keeps using that directory
+      // while it exists, even when its caller still names the project root.
       yield* directory.upsert({
         threadId,
         provider: CODEX_DRIVER,
@@ -3090,6 +3089,55 @@ routing.layer("ProviderServiceLive routing", (it) => {
       });
 
       assert.equal(routing.codex.startSession.mock.calls[0]?.[0]?.cwd, movedCwd);
+    }),
+  );
+
+  it.effect("recovers an imported missing worktree only after an explicit thread fallback", () =>
+    Effect.gen(function* () {
+      const provider = yield* ProviderService.ProviderService;
+      const directory = yield* ProviderSessionDirectory.ProviderSessionDirectory;
+      const threadId = asThreadId("thread-imported-missing-worktree");
+      const cwd = fixtureCwd("recovery-main-checkout");
+      yield* directory.upsert({
+        threadId,
+        provider: CODEX_DRIVER,
+        providerInstanceId: codexInstanceId,
+        status: "stopped",
+        runtimeMode: "full-access",
+        resumeCursor: { threadId: "native-recovery" },
+        runtimePayload: {
+          cwd: NodePath.join(cwd, "deleted-worktree"),
+          cwdAuthority: "imported-session",
+        },
+      });
+      const input = {
+        threadId,
+        provider: CODEX_DRIVER,
+        providerInstanceId: codexInstanceId,
+        cwd,
+        runtimeMode: "full-access" as const,
+      };
+      const error = yield* provider.startSession(threadId, input).pipe(Effect.flip);
+      assert.instanceOf(error, ProviderWorkspaceMissingError);
+      routing.codex.startSession.mockClear();
+      yield* provider.startSession(threadId, input, {
+        recoverMissingWorkspace: true,
+        onIncompatiblePersistedState: "fail",
+      });
+      assert.equal(routing.codex.startSession.mock.calls[0]?.[0]?.cwd, cwd);
+      assert.deepEqual(routing.codex.startSession.mock.calls[0]?.[0]?.resumeCursor, {
+        threadId: "native-recovery",
+        strictResume: true,
+      });
+      yield* provider.stopSession({ threadId });
+      routing.codex.startSession.mockClear();
+      yield* provider.startSession(threadId, input);
+      assert.equal(routing.codex.startSession.mock.calls[0]?.[0]?.cwd, cwd);
+      assert.deepEqual(routing.codex.startSession.mock.calls[0]?.[0]?.resumeCursor, {
+        threadId: "native-recovery",
+        strictResume: true,
+      });
+      yield* provider.stopSession({ threadId });
     }),
   );
 

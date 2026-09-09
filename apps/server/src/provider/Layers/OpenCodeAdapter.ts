@@ -1,3 +1,4 @@
+import { providerThreadEnvironment } from "../ProviderThreadEnvironment.ts";
 import {
   EventId,
   type OpenCodeSettings,
@@ -2845,7 +2846,11 @@ export function makeOpenCodeAdapter(
                 directory,
                 serverUrl,
                 ...(serverPassword ? { serverPassword } : {}),
-                ...(options?.environment ? { environment: options.environment } : {}),
+                environment: providerThreadEnvironment(
+                  { threadId: input.threadId, cwd: directory },
+                  options?.environment,
+                  serverConfig,
+                ),
               });
               const client = openCodeRuntime.createOpenCodeSdkClient({
                 baseUrl: server.url,
