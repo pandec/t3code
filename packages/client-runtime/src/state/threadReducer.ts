@@ -17,6 +17,8 @@ import { isImportedAgentSessionMessageId } from "@t3tools/contracts";
 import { compareDateTimeStrings } from "@t3tools/shared/dateTime";
 import { messageArtifactTextHash } from "@t3tools/shared/messageArtifactIdentity";
 
+import { isParentAgentProgressActivity } from "./threadSteerPending.ts";
+
 export type ThreadDetailReducerResult =
   | { readonly kind: "updated"; readonly thread: OrchestrationThread }
   | { readonly kind: "deleted" }
@@ -50,6 +52,17 @@ function retainRecent<T>(entries: ReadonlyArray<T>): ReadonlyArray<T> {
     : entries;
 }
 
+/**
+ * Rows the cap must not evict because consumers read only the newest of each,
+ * and a subagent fan-out can push it thousands of rows back: the context-window
+ * meter reads the latest resolvable update, and the steer-pending marker
+ * resolves against the main agent's latest tool start (mirrored server-side by
+ * the pinned-activity CTE in ProjectionSnapshotQuery).
+ */
+const RETAINED_LATEST_ACTIVITY_PREDICATES: ReadonlyArray<
+  (activity: OrchestrationThreadActivity) => boolean
+> = [isResolvableContextWindowActivity, isParentAgentProgressActivity];
+
 // Async (message-mode) questions can stay open while the agent keeps producing
 // activity; the server pins them past its window and the client must too, or
 // the pending question disappears locally while the server still awaits it.
@@ -80,16 +93,14 @@ function retainRecentActivities(
 
   const recent = activities.slice(-THREAD_HISTORY_RETENTION_LIMIT);
   const pinned: Array<OrchestrationThreadActivity> = [];
-  let latestContextWindow: OrchestrationThreadActivity | undefined;
-  for (let index = activities.length - 1; index >= 0; index -= 1) {
-    const activity = activities[index]!;
-    if (isResolvableContextWindowActivity(activity)) {
-      latestContextWindow = activity;
-      break;
+  for (const matches of RETAINED_LATEST_ACTIVITY_PREDICATES) {
+    for (let index = activities.length - 1; index >= 0; index -= 1) {
+      const activity = activities[index]!;
+      if (matches(activity)) {
+        if (!recent.includes(activity) && !pinned.includes(activity)) pinned.push(activity);
+        break;
+      }
     }
-  }
-  if (latestContextWindow !== undefined && !recent.includes(latestContextWindow)) {
-    pinned.push(latestContextWindow);
   }
   for (const request of unresolvedMessageModeRequests(activities)) {
     if (!recent.includes(request)) pinned.push(request);

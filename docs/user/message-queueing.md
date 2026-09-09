@@ -29,10 +29,9 @@ sent while a long search, subagent, or shell command is running can sit unread u
 finishes. That can take minutes.
 
 While that is the case the message is shown dimmed, with **Waiting for the agent to pick this up**
-underneath it. The note clears when the client sees the main agent move on, and also if the turn
-finishes, is interrupted, or fails. Silence from the agent is expected while the note is showing;
-you have not been ignored.
+underneath it. The note clears when the main agent moves on, and also if the turn finishes, is
+interrupted, or fails. Silence from the agent is expected while the note is showing; you have not
+been ignored.
 
-The note is a live view from the device you sent on. It is not part of the conversation, so it does
-not appear on your other devices and it does not come back after a reload — the message itself is
-unaffected either way.
+The note follows the conversation, not the device: it shows on every device, survives a reload, and
+is still there when you come back to the thread later.

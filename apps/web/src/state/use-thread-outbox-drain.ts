@@ -43,7 +43,6 @@ import {
   threadOutboxManager,
   useThreadOutboxMessages,
 } from "./threadOutbox";
-import { noteThreadSteerDispatch } from "./threadSteerPending";
 import { environmentThreadShells, threadEnvironment } from "./threads";
 import { useAtomCommand } from "./use-atom-command";
 
@@ -177,11 +176,10 @@ export function useThreadOutboxDrain(): void {
           setInteractionMode: setThreadInteractionMode,
         },
         removeQueuedMessage: removeThreadOutboxMessage,
-        onDelivered: (message, thread, context) => {
+        onDelivered: (message, thread) => {
           if (thread.archivedAt != null) {
             refreshArchivedThreadsForEnvironment(message.environmentId);
           }
-          noteThreadSteerDispatch(message, context);
         },
         warn: (message, attributes) => {
           console.warn(message, attributes);
