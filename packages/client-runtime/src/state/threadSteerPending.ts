@@ -6,8 +6,6 @@ import type {
   OrchestrationThreadActivity,
 } from "@t3tools/contracts";
 
-import { isAgentAttributedToolActivity, isTimelineBypassActivity } from "./subagentRuntime.ts";
-
 /**
  * Steering is not the same as being heard. Claude Code holds a mid-turn prompt
  * in its own queue and only reads it between a tool result and the next model
