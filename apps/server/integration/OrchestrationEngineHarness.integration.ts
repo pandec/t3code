@@ -1,3 +1,4 @@
+import * as ThreadArchiveReactor from "../src/orchestration/ThreadArchiveReactor.ts";
 // @effect-diagnostics nodeBuiltinImport:off
 import { ProviderInstanceHealthLive } from "../src/provider/Layers/ProviderInstanceHealthLive.ts";
 import * as NodeChildProcess from "node:child_process";
@@ -403,6 +404,12 @@ export const makeOrchestrationIntegrationHarness = (
       ),
       Layer.provideMerge(
         Layer.succeed(MessageSpeechReactor, {
+          start: () => Effect.void,
+          drain: Effect.void,
+        }),
+      ),
+      Layer.provideMerge(
+        Layer.succeed(ThreadArchiveReactor.ThreadArchiveReactor, {
           start: () => Effect.void,
           drain: Effect.void,
         }),

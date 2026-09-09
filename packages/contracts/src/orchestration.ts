@@ -636,6 +636,17 @@ export const ThreadLinkedPullRequest = Schema.Struct({
 });
 export type ThreadLinkedPullRequest = typeof ThreadLinkedPullRequest.Type;
 
+export const ThreadArchiveRequest = Schema.Struct({
+  requestId: CommandId,
+  turnId: Schema.NullOr(TurnId),
+  removeWorktree: Schema.Boolean,
+  worktreePath: Schema.NullOr(TrimmedNonEmptyString),
+  requestedAt: IsoDateTime,
+  status: Schema.Literals(["pending", "completed", "cancelled", "error"]),
+  detail: Schema.optional(TrimmedNonEmptyString),
+});
+export type ThreadArchiveRequest = typeof ThreadArchiveRequest.Type;
+
 export const OrchestrationThread = Schema.Struct({
   id: ThreadId,
   projectId: ProjectId,
@@ -682,6 +693,7 @@ export const OrchestrationThread = Schema.Struct({
   activeOrderKey: Schema.optional(Schema.NullOr(TrimmedNonEmptyString)),
   // Pending-only state. Optional so older servers remain compatible.
   titleRegeneration: Schema.optional(Schema.NullOr(ThreadTitleRegeneration)),
+  archiveRequest: Schema.optional(Schema.NullOr(ThreadArchiveRequest)),
   deletedAt: Schema.NullOr(IsoDateTime),
   messages: Schema.Array(OrchestrationMessage),
   messageWindow: Schema.optional(OrchestrationThreadMessageWindow),
@@ -751,6 +763,7 @@ export const OrchestrationThreadShell = Schema.Struct({
   pinOrderKey: Schema.optional(Schema.NullOr(TrimmedNonEmptyString)),
   activeOrderKey: Schema.optional(Schema.NullOr(TrimmedNonEmptyString)),
   titleRegeneration: Schema.optional(Schema.NullOr(ThreadTitleRegeneration)),
+  archiveRequest: Schema.optional(Schema.NullOr(ThreadArchiveRequest)),
   session: Schema.NullOr(OrchestrationSession),
   latestUserMessageAt: Schema.NullOr(IsoDateTime),
   hasPendingApprovals: Schema.Boolean,
@@ -1050,6 +1063,35 @@ const ThreadArchiveCommand = Schema.Struct({
   threadId: ThreadId,
 });
 
+const ThreadArchiveScheduleCommand = Schema.Struct({
+  type: Schema.Literal("thread.archive.schedule"),
+  commandId: CommandId,
+  threadId: ThreadId,
+  afterTurn: Schema.Boolean,
+  removeWorktree: Schema.Boolean,
+});
+
+const ThreadArchiveCancelCommand = Schema.Struct({
+  type: Schema.Literal("thread.archive.cancel"),
+  commandId: CommandId,
+  threadId: ThreadId,
+});
+
+const ThreadArchiveExecuteCommand = Schema.Struct({
+  type: Schema.Literal("thread.archive.execute"),
+  commandId: CommandId,
+  threadId: ThreadId,
+  requestId: CommandId,
+});
+
+const ThreadArchiveCompleteCommand = Schema.Struct({
+  type: Schema.Literal("thread.archive.complete"),
+  commandId: CommandId,
+  threadId: ThreadId,
+  requestId: CommandId,
+  error: Schema.optional(TrimmedNonEmptyString),
+});
+
 const ThreadUnarchiveCommand = Schema.Struct({
   type: Schema.Literal("thread.unarchive"),
   commandId: CommandId,
@@ -1319,6 +1361,8 @@ const DispatchableClientOrchestrationCommand = Schema.Union([
   ThreadForkCommand,
   ThreadDeleteCommand,
   ThreadArchiveCommand,
+  ThreadArchiveScheduleCommand,
+  ThreadArchiveCancelCommand,
   ThreadUnarchiveCommand,
   ThreadSettleCommand,
   ThreadUnsettleCommand,
@@ -1351,6 +1395,8 @@ export const ClientOrchestrationCommand = Schema.Union([
   ThreadForkCommand,
   ThreadDeleteCommand,
   ThreadArchiveCommand,
+  ThreadArchiveScheduleCommand,
+  ThreadArchiveCancelCommand,
   ThreadUnarchiveCommand,
   ThreadSettleCommand,
   ThreadUnsettleCommand,
@@ -1522,6 +1568,8 @@ const ThreadWorktreeFallbackCommand = Schema.Struct({
 });
 
 const InternalOrchestrationCommand = Schema.Union([
+  ThreadArchiveExecuteCommand,
+  ThreadArchiveCompleteCommand,
   ThreadWorktreeFallbackCommand,
   ThreadImportCommand,
   ThreadAutoSettleCommand,
@@ -1727,6 +1775,7 @@ export const ThreadMetaUpdatedPayload = Schema.Struct({
   previousTitle: Schema.optional(TrimmedNonEmptyString),
   /** Pending state shared with clients. Null clears a matching request. */
   titleRegeneration: Schema.optional(Schema.NullOr(ThreadTitleRegeneration)),
+  archiveRequest: Schema.optional(Schema.NullOr(ThreadArchiveRequest)),
   modelSelection: Schema.optional(ModelSelection),
   branch: Schema.optional(Schema.NullOr(TrimmedNonEmptyString)),
   worktreePath: Schema.optional(Schema.NullOr(TrimmedNonEmptyString)),

@@ -388,6 +388,8 @@ validationLayer("CodexAdapterLive validation", (it) => {
 
       NodeAssert.deepStrictEqual(result.resumeCursor, { threadId: "forked-provider-thread" });
       NodeAssert.equal(forkRuntime?.options.forkResumeCursor?.threadId, "source-provider-thread");
+      NodeAssert.equal(forkRuntime?.options.environment?.T3CODE_THREAD_ID, "fork-destination");
+      NodeAssert.equal(forkRuntime?.options.environment?.T3CODE_WORKTREE_PATH, "/tmp/project");
       NodeAssert.equal(forkRuntime?.closeImpl.mock.calls.length, 1);
       NodeAssert.equal(yield* adapter.hasSession(destinationThreadId), false);
       validationRuntimeFactory.factory.mockClear();
@@ -465,7 +467,11 @@ validationLayer("CodexAdapterLive validation", (it) => {
         runtimeMode: "full-access",
       });
 
-      NodeAssert.deepStrictEqual(validationRuntimeFactory.factory.mock.calls[0]?.[0], {
+      const { environment, ...runtimeOptions } = validationRuntimeFactory.factory.mock.calls[0]![0];
+      NodeAssert.equal(environment?.T3CODE_THREAD_ID, "thread-1");
+      NodeAssert.equal(environment?.T3CODE_WORKTREE_PATH, process.cwd());
+      NodeAssert.equal(environment?.T3CODE_TURN_ID, undefined);
+      NodeAssert.deepStrictEqual(runtimeOptions, {
         binaryPath: "codex",
         cwd: process.cwd(),
         launchArgs: "",

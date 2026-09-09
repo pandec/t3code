@@ -1,3 +1,4 @@
+import * as ThreadArchiveReactor from "../ThreadArchiveReactor.ts";
 import * as Effect from "effect/Effect";
 import * as Exit from "effect/Exit";
 import * as Layer from "effect/Layer";
@@ -74,6 +75,12 @@ describe("OrchestrationReactor", () => {
               return Effect.void;
             },
             drainThrough: () => Effect.void,
+          }),
+        ),
+        Layer.provideMerge(
+          Layer.succeed(ThreadArchiveReactor.ThreadArchiveReactor, {
+            start: () => Effect.void,
+            drain: Effect.void,
           }),
         ),
         Layer.provideMerge(

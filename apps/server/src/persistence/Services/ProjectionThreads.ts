@@ -15,6 +15,7 @@ import {
   ProviderInteractionMode,
   RuntimeMode,
   ThreadLinkedPullRequest,
+  ThreadArchiveRequest,
   ThreadId,
   TurnId,
 } from "@t3tools/contracts";
@@ -36,6 +37,7 @@ export const ProjectionThread = Schema.Struct({
   worktreePath: Schema.NullOr(Schema.String),
   linkedPullRequest: Schema.optional(Schema.NullOr(ThreadLinkedPullRequest)),
   branchPullRequest: Schema.optional(Schema.NullOr(ThreadLinkedPullRequest)),
+  archiveRequest: Schema.optional(Schema.NullOr(ThreadArchiveRequest)),
   latestTurnId: Schema.NullOr(TurnId),
   createdAt: IsoDateTime,
   updatedAt: IsoDateTime,
@@ -82,6 +84,11 @@ export interface ProjectionThreadRepositoryShape {
    *
    * Upserts by `threadId`.
    */
+  readonly listPendingArchives: () => Effect.Effect<
+    ReadonlyArray<ThreadId>,
+    ProjectionRepositoryError
+  >;
+
   readonly upsert: (thread: ProjectionThread) => Effect.Effect<void, ProjectionRepositoryError>;
 
   /**

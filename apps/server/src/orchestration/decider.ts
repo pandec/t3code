@@ -11,6 +11,7 @@ import {
   type OrchestrationReadModel,
   type OrchestrationThread,
   type OrchestrationThreadActivity,
+  type TurnId,
 } from "@t3tools/contracts";
 import { compareDateTimeStrings } from "@t3tools/shared/dateTime";
 import * as DateTime from "effect/DateTime";
@@ -42,7 +43,7 @@ import {
   requireThreadNotArchived,
 } from "./commandInvariants.ts";
 import { projectEvent } from "./projector.ts";
-import { threadHasQueuedTurnStart } from "./ThreadSettlementPolicy.ts";
+import { QUEUED_TURN_START_GRACE_MS, threadHasQueuedTurnStart } from "./ThreadSettlementPolicy.ts";
 
 const isScriptRunCommand = Schema.is(SCRIPT_RUN_COMMAND_PATTERN);
 
@@ -99,6 +100,22 @@ function openRequests(thread: Pick<OrchestrationThread, "activities">) {
     }
   }
   return requests;
+}
+
+/** Threads that checkpoint: worktree-backed, branch-tracked, or already captured. */
+function isGitThread(
+  thread: Pick<OrchestrationThread, "branch" | "worktreePath" | "checkpoints">,
+): boolean {
+  return thread.branch !== null || thread.worktreePath !== null || thread.checkpoints.length > 0;
+}
+
+function hasReadyCheckpoint(
+  thread: Pick<OrchestrationThread, "checkpoints">,
+  turnId: TurnId | null,
+): boolean {
+  return thread.checkpoints.some(
+    (checkpoint) => checkpoint.turnId === turnId && checkpoint.status === "ready",
+  );
 }
 
 /** Apply the shared shell-level rule to the detailed command read model. */
@@ -579,27 +596,192 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
       };
     }
 
+    case "thread.archive.schedule":
+    case "thread.archive.cancel":
+    case "thread.archive.execute":
+    case "thread.archive.complete": {
+      const thread = yield* requireThread({ readModel, command, threadId: command.threadId });
+      const occurredAt = yield* nowIso;
+      const base = yield* withEventBase({
+        aggregateKind: "thread",
+        aggregateId: thread.id,
+        occurredAt,
+        commandId: command.commandId,
+      });
+      const update = (archiveRequest: NonNullable<OrchestrationThread["archiveRequest"]>) => ({
+        ...base,
+        type: "thread.meta-updated" as const,
+        payload: { threadId: thread.id, archiveRequest, updatedAt: occurredAt },
+      });
+      const reject = (detail: string) =>
+        new OrchestrationCommandInvariantError({
+          commandType: command.type,
+          detail,
+        });
+      if (command.type === "thread.archive.schedule") {
+        if (thread.archivedAt !== null) return yield* reject("Thread is already archived.");
+        if (thread.archiveRequest?.status === "pending") {
+          return yield* reject("An archive is already pending. Cancel it before replacing it.");
+        }
+        const runningTurnId =
+          thread.latestTurn?.state === "running" ? thread.latestTurn.turnId : null;
+        if (
+          hasQueuedTurnStartForThread(thread, occurredAt) ||
+          (runningTurnId === null &&
+            (thread.session?.status === "starting" || thread.session?.status === "running"))
+        ) {
+          return yield* reject("A turn is starting. Retry once it has started.");
+        }
+        if (runningTurnId !== null && !command.afterTurn) {
+          return yield* reject("Use --after-turn to clean up a running thread.");
+        }
+        if (command.removeWorktree && thread.worktreePath === null) {
+          return yield* reject("This thread has no worktree to remove.");
+        }
+        // A turn that just completed may still be capturing its checkpoint.
+        // Defer to the execute path so the archive waits for that capture. The
+        // window is bounded so an old turn whose capture never landed still
+        // archives immediately instead of pending forever.
+        const awaitingCheckpointTurnId =
+          thread.latestTurn?.state === "completed" &&
+          thread.latestTurn.completedAt !== null &&
+          Date.parse(occurredAt) - Date.parse(thread.latestTurn.completedAt) <=
+            QUEUED_TURN_START_GRACE_MS &&
+          isGitThread(thread) &&
+          !thread.checkpoints.some(
+            (checkpoint) =>
+              checkpoint.turnId === thread.latestTurn?.turnId && checkpoint.status !== "missing",
+          )
+            ? thread.latestTurn.turnId
+            : null;
+        const turnId = runningTurnId ?? awaitingCheckpointTurnId;
+        const request = update({
+          requestId: command.commandId,
+          turnId,
+          removeWorktree: command.removeWorktree,
+          worktreePath: thread.worktreePath,
+          requestedAt: occurredAt,
+          status: "pending",
+        });
+        if (turnId !== null) return request;
+        return [
+          request,
+          {
+            ...(yield* withEventBase({
+              aggregateKind: "thread",
+              aggregateId: thread.id,
+              occurredAt,
+              commandId: command.commandId,
+            })),
+            type: "thread.archived" as const,
+            payload: { threadId: thread.id, archivedAt: occurredAt, updatedAt: occurredAt },
+          },
+        ];
+      }
+      const request = thread.archiveRequest;
+      if (
+        request?.status !== "pending" ||
+        ("requestId" in command && command.requestId !== request.requestId)
+      ) {
+        return yield* reject("The archive request is no longer pending.");
+      }
+      if (command.type === "thread.archive.cancel") {
+        if (thread.archivedAt !== null)
+          return yield* reject("Archive cleanup has already started.");
+        return update({ ...request, status: "cancelled", detail: "Cancelled by user." });
+      }
+      if (command.type === "thread.archive.complete") {
+        return update({
+          ...request,
+          status: command.error ? "error" : "completed",
+          ...(command.error ? { detail: command.error } : {}),
+        });
+      }
+      if (thread.archivedAt !== null) return yield* reject("Thread is already archived.");
+      if (
+        thread.worktreePath !== request.worktreePath ||
+        thread.latestTurn?.turnId !== request.turnId ||
+        hasQueuedTurnStartForThread(thread, occurredAt)
+      ) {
+        return update({
+          ...request,
+          status: "cancelled",
+          detail: "The thread started new work or changed workspace.",
+        });
+      }
+      if (thread.latestTurn.state === "error" || thread.latestTurn.state === "interrupted") {
+        return update({
+          ...request,
+          status: "cancelled",
+          detail: "The turn failed or was interrupted.",
+        });
+      }
+      if (
+        thread.latestTurn.state !== "completed" ||
+        thread.session?.status === "running" ||
+        thread.session?.status === "starting"
+      )
+        return yield* reject("The turn has not finished.");
+      // Git completion must include the final checkpoint, not an ingestion placeholder.
+      if (isGitThread(thread) && !hasReadyCheckpoint(thread, request.turnId)) {
+        return yield* reject("The turn checkpoint has not finished.");
+      }
+      return {
+        ...base,
+        type: "thread.archived",
+        payload: {
+          threadId: thread.id,
+          archivedAt: occurredAt,
+          updatedAt: occurredAt,
+        },
+      };
+    }
+
     case "thread.archive": {
-      yield* requireThreadNotArchived({
+      const thread = yield* requireThreadNotArchived({
         readModel,
         command,
         threadId: command.threadId,
       });
       const occurredAt = yield* nowIso;
-      return {
+      const archived = {
         ...(yield* withEventBase({
           aggregateKind: "thread",
           aggregateId: command.threadId,
           occurredAt,
           commandId: command.commandId,
         })),
-        type: "thread.archived",
+        type: "thread.archived" as const,
         payload: {
           threadId: command.threadId,
           archivedAt: occurredAt,
           updatedAt: occurredAt,
         },
       };
+      if (thread.archiveRequest?.status === "pending") {
+        return [
+          {
+            ...(yield* withEventBase({
+              aggregateKind: "thread",
+              aggregateId: thread.id,
+              occurredAt,
+              commandId: command.commandId,
+            })),
+            type: "thread.meta-updated" as const,
+            payload: {
+              threadId: thread.id,
+              updatedAt: occurredAt,
+              archiveRequest: {
+                ...thread.archiveRequest,
+                status: "cancelled" as const,
+                detail: "The thread was archived manually.",
+              },
+            },
+          },
+          archived,
+        ];
+      }
+      return archived;
     }
 
     case "thread.unarchive": {
@@ -2083,6 +2265,34 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
           activity: command.activity,
         },
       };
+      if (
+        command.activity.kind === "checkpoint.capture.failed" &&
+        thread.archiveRequest?.status === "pending" &&
+        thread.archivedAt === null &&
+        command.activity.turnId === thread.archiveRequest.turnId
+      ) {
+        return [
+          activityAppendedEvent,
+          {
+            ...(yield* withEventBase({
+              aggregateKind: "thread",
+              aggregateId: thread.id,
+              occurredAt: command.createdAt,
+              commandId: command.commandId,
+            })),
+            type: "thread.meta-updated",
+            payload: {
+              threadId: thread.id,
+              updatedAt: command.createdAt,
+              archiveRequest: {
+                ...thread.archiveRequest,
+                status: "error",
+                detail: "The final checkpoint failed. The thread was left unarchived.",
+              },
+            },
+          },
+        ];
+      }
       // An approval or user-input request is blocked-on-you work — it must
       // never stay hidden inside a settled slim row.
       const wakesSettledThread =

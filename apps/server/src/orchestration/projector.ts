@@ -571,6 +571,9 @@ export function projectEvent(
             ...(payload.activeOrderKey !== undefined
               ? { activeOrderKey: payload.activeOrderKey }
               : {}),
+            ...(payload.archiveRequest !== undefined
+              ? { archiveRequest: payload.archiveRequest }
+              : {}),
             ...(payload.titleRegeneration !== undefined
               ? { titleRegeneration: payload.titleRegeneration }
               : {}),

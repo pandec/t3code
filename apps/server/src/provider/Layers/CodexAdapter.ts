@@ -76,6 +76,7 @@ import {
   listCodexImportableSessions,
   readCodexImportableThread,
 } from "../Drivers/CodexImportReader.ts";
+import { providerThreadEnvironment } from "../ProviderThreadEnvironment.ts";
 import { resolveCodexLaunchArgs } from "./codexLaunchArgs.ts";
 import {
   type CodexRateLimitSnapshot,
@@ -2307,7 +2308,11 @@ export const makeCodexAdapter = Effect.fn("makeCodexAdapter")(function* (
           cwd: input.cwd ?? process.cwd(),
           binaryPath: codexConfig.binaryPath,
           launchArgs: resolveCodexLaunchArgs(codexConfig.launchArgs, options?.environment),
-          ...(options?.environment ? { environment: options.environment } : {}),
+          environment: providerThreadEnvironment(
+            { ...input, cwd: input.cwd ?? process.cwd() },
+            options?.environment,
+            serverConfig,
+          ),
           ...(codexConfig.homePath ? { homePath: codexConfig.homePath } : {}),
           ...(isCodexResumeCursorSchema(input.resumeCursor)
             ? { resumeCursor: input.resumeCursor }
@@ -2320,7 +2325,11 @@ export const makeCodexAdapter = Effect.fn("makeCodexAdapter")(function* (
           ...(mcpSession
             ? {
                 environment: {
-                  ...(options?.environment ?? process.env),
+                  ...providerThreadEnvironment(
+                    { ...input, cwd: input.cwd ?? process.cwd() },
+                    options?.environment,
+                    serverConfig,
+                  ),
                   T3_MCP_BEARER_TOKEN: mcpSession.authorizationHeader.replace(/^Bearer\s+/, ""),
                 },
                 appServerArgs: [
@@ -2545,7 +2554,11 @@ export const makeCodexAdapter = Effect.fn("makeCodexAdapter")(function* (
       cwd: input.cwd ?? process.cwd(),
       binaryPath: codexConfig.binaryPath,
       launchArgs: resolveCodexLaunchArgs(codexConfig.launchArgs, options?.environment),
-      ...(options?.environment ? { environment: options.environment } : {}),
+      environment: providerThreadEnvironment(
+        { threadId: input.destinationThreadId, cwd: input.cwd ?? process.cwd() },
+        options?.environment,
+        serverConfig,
+      ),
       ...(codexConfig.homePath ? { homePath: codexConfig.homePath } : {}),
       forkResumeCursor: input.sourceResumeCursor,
       runtimeMode: input.runtimeMode,

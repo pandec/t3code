@@ -9,6 +9,8 @@ This is a personal fork of [pingdotgg/t3code](https://github.com/pingdotgg/t3cod
 
 ## What the fork adds
 
+- **Archive after a turn.** Agents can run `t3 thread archive self --after-turn --remove-worktree` to archive after successful completion and remove a clean worktree. Explicit thread IDs work for other running threads. Requests survive restarts and can be inspected or cancelled through the CLI. [Usage and cleanup limits](docs/user/cli-automation.md#archiving-after-a-turn).
+
 ### Conversations & threads
 
 - **Removed worktree recovery**. Follow-up messages continue the same conversation in the main project checkout when a worktree is gone. A T3 notice appears as a user message and tells the agent where it is running. Settings → Extras → **Skip recreating removed worktrees** is on by default. Turn it off to try recreation first, with the main checkout as a fallback if recreation fails. Mobile exposes the same shared setting under Settings → General.
@@ -71,7 +73,7 @@ This is a personal fork of [pingdotgg/t3code](https://github.com/pingdotgg/t3cod
 
 ### CLI & automation
 
-- **`t3` CLI automation** — project and thread automation commands: manage projects and their actions by repository path, create and control threads, send and steer messages, and inspect server/project/thread status, with JSON output kept clean for scripting. Live reads use configurable phase-specific timeouts (`--timeout-ms` / `T3CODE_CLI_TIMEOUT_MS`), commands reuse one auth session, `--json` failures emit a stable machine-readable error document, and read-only listings fall back to local state when the server is busy.
+- **`t3` CLI automation** — project and thread automation commands: manage projects and their actions by repository path, create and control threads, send and steer messages, and inspect server/project/thread status, with JSON output kept clean for scripting. Live reads use configurable phase-specific timeouts (`--timeout-ms` / `T3CODE_CLI_TIMEOUT_MS`), commands reuse one auth session, `--json` failures emit a stable machine-readable error document, and read-only listings require a running server.
 - **CLI thread waiting** — `t3 thread wait` blocks until a turn settles, can anchor itself after a send sequence and drain native background agents or monitors, and returns outcome-specific exit codes plus diagnostic JSON for reliable shell composition. When only a stale `"working"` liveness keeps an agents drain pending, the wait self-heals after 3 minutes of observed thread inactivity and reports `drainStale: true` instead of timing out. Only a pending approval or a blocking question ends the wait as `blocked`; a Codex message-mode question keeps the turn running and is reported without ending the wait.
 - **CLI thread questions** — `t3 thread input list` prints a thread's unresolved questions with their ids, response mode, and options, and `t3 thread input respond` answers one with a complete answer map, so an agent driving another thread can answer a Codex question that `thread send` alone would leave open.
 - **`/t3-wait` composer command** — the web composer's slash menu opens a filterable picker of the workspace's recent threads (activity indicators; running threads first in the unfiltered list) and inserts a ready-made "wait for thread `<id>` to finish, then …" instruction at the cursor for the user to complete and send — nothing is sent automatically.

@@ -1,3 +1,4 @@
+import { providerThreadEnvironment } from "../ProviderThreadEnvironment.ts";
 import {
   ApprovalRequestId,
   type GrokSettings,
@@ -1009,7 +1010,11 @@ export function makeGrokAdapter(grokSettings: GrokSettings, options?: GrokAdapte
           const mcpSession = McpProviderSession.readMcpProviderSession(input.threadId);
           const acp = yield* makeGrokAcpRuntime({
             grokSettings,
-            ...(options?.environment ? { environment: options.environment } : {}),
+            environment: providerThreadEnvironment(
+              { threadId: input.threadId, cwd: cwd },
+              options?.environment,
+              serverConfig,
+            ),
             childProcessSpawner,
             cwd,
             runtimeMode: input.runtimeMode,
