@@ -50,6 +50,7 @@ import { FetchHttpClient } from "effect/unstable/http";
 import type * as HttpClient from "effect/unstable/http/HttpClient";
 
 import { resolveAttachmentPath } from "../attachmentStore.ts";
+import { isThreadSnoozed } from "../orchestration/ThreadSettlementPolicy.ts";
 import * as EnvironmentAuth from "../auth/EnvironmentAuth.ts";
 import * as ServerConfig from "../config.ts";
 import { expandHomePath } from "../pathExpansion.ts";
@@ -1270,6 +1271,9 @@ const threadStatusCommand = Command.make("status", {
       Effect.gen(function* () {
         const thread = yield* resolveThread(live, flags.threadId);
         const summary = threadSummary(thread);
+        // Snooze fields persist after a derived wake (timer passed, turn
+        // ended); the human line reports what the clients show.
+        const snoozed = isThreadSnoozed(thread, DateTime.formatIso(yield* DateTime.now));
         yield* Console.log(
           flags.json
             ? jsonOutput(summary)
@@ -1280,13 +1284,13 @@ const threadStatusCommand = Command.make("status", {
                 ...(summary.branch ? [`Branch: ${summary.branch}`] : []),
                 `Session: ${summary.sessionStatus ?? "not started"}`,
                 `Snoozed: ${
-                  summary.snoozedUntil
-                    ? `until ${summary.snoozedUntil}`
-                    : summary.snoozedUntilTurnId
-                      ? "until done"
-                      : summary.snoozedAt
-                        ? "until woken"
-                        : "no"
+                  !snoozed
+                    ? "no"
+                    : summary.snoozedUntil
+                      ? `until ${summary.snoozedUntil}`
+                      : summary.snoozedUntilTurnId
+                        ? "until done"
+                        : "until woken"
                 }`,
                 `Pending approval: ${summary.hasPendingApprovals ? "yes" : "no"}`,
                 `Pending input: ${summary.hasPendingUserInput ? "yes" : "no"}`,

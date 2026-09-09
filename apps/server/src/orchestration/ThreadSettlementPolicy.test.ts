@@ -6,7 +6,11 @@ import {
   TurnId,
   type OrchestrationThreadShell,
 } from "@t3tools/contracts";
-import { type SettlementPullRequest, resolveAutoSettlementAt } from "./ThreadSettlementPolicy.ts";
+import {
+  type SettlementPullRequest,
+  isThreadSnoozed,
+  resolveAutoSettlementAt,
+} from "./ThreadSettlementPolicy.ts";
 
 const NOW = "2026-08-28T12:00:00.000Z";
 const LAST_ACTIVITY_AT = "2026-08-20T00:00:00.000Z";
@@ -260,6 +264,26 @@ describe("resolveAutoSettlementAt", () => {
         }),
       ),
     ).toBe(LAST_ACTIVITY_AT);
+    // The awaited turn was replaced by a newer running one, or vanished:
+    // awake either way. (Settlement itself still waits for the live
+    // session / completion rules, so assert the classification directly.)
+    expect(
+      isThreadSnoozed(
+        makeThread({
+          ...untilDone,
+          latestTurn: {
+            turnId: TurnId.make("turn-next"),
+            state: "running",
+            requestedAt: "2026-08-21T00:00:00.000Z",
+            startedAt: "2026-08-21T00:01:00.000Z",
+            completedAt: null,
+            assistantMessageId: null,
+          },
+        }),
+        NOW,
+      ),
+    ).toBe(false);
+    expect(isThreadSnoozed(makeThread({ ...untilDone, latestTurn: null }), NOW)).toBe(false);
   });
 
   it("allows a fresh completion to wake snooze before settlement", () => {

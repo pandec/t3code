@@ -43,7 +43,11 @@ import {
   requireThreadNotArchived,
 } from "./commandInvariants.ts";
 import { projectEvent } from "./projector.ts";
-import { QUEUED_TURN_START_GRACE_MS, threadHasQueuedTurnStart } from "./ThreadSettlementPolicy.ts";
+import {
+  QUEUED_TURN_START_GRACE_MS,
+  isThreadSnoozed,
+  threadHasQueuedTurnStart,
+} from "./ThreadSettlementPolicy.ts";
 
 const isScriptRunCommand = Schema.is(SCRIPT_RUN_COMMAND_PATTERN);
 
@@ -1049,11 +1053,27 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
       // Re-snoozing an already-snoozed thread to the SAME wake condition is
       // a duplicate (double-click, raced clients): re-emit with the original
       // timestamps so the projection is a no-op. A different condition is a
-      // real change and stamps fresh.
+      // real change and stamps fresh. So is re-snoozing a thread whose
+      // fields match but which already woke by derivation (a turn ended, a
+      // failure landed): keeping the old snoozedAt would leave the wake
+      // newer than the snooze, and the thread would stay visible.
       const existingSnoozedAt =
         thread.snoozedUntil === command.snoozedUntil &&
         (thread.snoozedUntilTurnId ?? null) === untilDoneTurnId &&
-        thread.snoozedAt != null
+        thread.snoozedAt != null &&
+        isThreadSnoozed(
+          {
+            snoozedUntil: thread.snoozedUntil,
+            snoozedAt: thread.snoozedAt,
+            snoozedUntilTurnId: thread.snoozedUntilTurnId,
+            session: thread.session,
+            latestTurn: thread.latestTurn,
+            // Open requests were already rejected above.
+            hasPendingApprovals: false,
+            hasPendingUserInput: false,
+          },
+          occurredAt,
+        )
           ? thread.snoozedAt
           : null;
       return {

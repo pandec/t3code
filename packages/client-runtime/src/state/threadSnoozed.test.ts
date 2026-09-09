@@ -404,6 +404,19 @@ describe("threadWokeAt", () => {
     ).toBe("2026-04-10T10:30:00.000Z");
   });
 
+  it("reports a wake when the awaited turn ended with a stale completedAt", () => {
+    // An interrupt keeps a placeholder completedAt from before the snooze.
+    // Still awake (the turn is over), and the Woke pill needs a time.
+    const shell = makeShell({
+      ...UNTIL_DONE,
+      turnState: "interrupted",
+      turnCompletedAt: "2026-04-10T08:00:00.000Z",
+      sessionStatus: "ready",
+    });
+    expect(effectiveSnoozed(shell, { now: NOW })).toBe(false);
+    expect(threadWokeAt(shell, { now: NOW })).toBe("2026-04-10T11:00:00.000Z");
+  });
+
   it("reports the replacement turn's request time when the awaited turn was superseded", () => {
     expect(
       threadWokeAt(makeShell({ ...UNTIL_DONE, turnId: "turn-2", turnState: "running" }), {

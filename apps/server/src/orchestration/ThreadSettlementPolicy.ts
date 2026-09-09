@@ -114,7 +114,19 @@ export function isAutoSettlementCandidate(thread: OrchestrationThreadShell, now:
  * blocked-on-you work, a fresh failure, or a turn that ended after the
  * snooze was set. Keep the two in step.
  */
-export function isThreadSnoozed(thread: OrchestrationThreadShell, now: string): boolean {
+export function isThreadSnoozed(
+  thread: Pick<
+    OrchestrationThreadShell,
+    | "snoozedUntil"
+    | "snoozedAt"
+    | "snoozedUntilTurnId"
+    | "hasPendingApprovals"
+    | "hasPendingUserInput"
+    | "session"
+    | "latestTurn"
+  >,
+  now: string,
+): boolean {
   if (thread.hasPendingApprovals || thread.hasPendingUserInput) return false;
   if (
     thread.session?.status === "error" &&

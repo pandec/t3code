@@ -3297,13 +3297,17 @@ export default function Sidebar() {
   }, [activeSearchResultIndex, isSearchingThreads, threadSearchResultOrderKey]);
 
   // Arm a timeout for the earliest upcoming wake so the shelf empties the
-  // moment a snooze expires instead of on the next minute tick. Sorted
-  // soonest-first, so entry 0 is the boundary.
+  // moment a snooze expires instead of on the next minute tick. Scans every
+  // row: until-done rows sort first but carry no timer, so entry 0 is not
+  // the boundary.
   useEffect(() => {
-    const nextWakeAtMs =
-      snoozedThreads.length > 0 && snoozedThreads[0]?.snoozedUntil != null
-        ? Date.parse(snoozedThreads[0].snoozedUntil)
-        : Number.NaN;
+    let nextWakeAtMs = Number.NaN;
+    for (const thread of snoozedThreads) {
+      if (thread.snoozedUntil == null) continue;
+      const wakeAtMs = Date.parse(thread.snoozedUntil);
+      if (Number.isNaN(wakeAtMs)) continue;
+      if (Number.isNaN(nextWakeAtMs) || wakeAtMs < nextWakeAtMs) nextWakeAtMs = wakeAtMs;
+    }
     if (Number.isNaN(nextWakeAtMs)) return;
     // setTimeout delays are signed 32-bit: anything larger overflows and
     // fires immediately, turning a far-future wake (event-condition snoozes

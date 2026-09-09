@@ -21,6 +21,7 @@ const NOW = "2026-01-01T00:00:00.000Z";
 const FUTURE_WAKE = "1970-01-02T09:00:00.000Z";
 const PAST_WAKE = "1969-12-31T09:00:00.000Z";
 const SNOOZED_AT = "1969-12-30T00:00:00.000Z";
+const NOW_EPOCH = "1970-01-01T00:00:00.000Z";
 const RUNNING_TURN: NonNullable<OrchestrationThread["latestTurn"]> = {
   turnId: TurnId.make("turn-1"),
   state: "running",
@@ -212,6 +213,34 @@ it.layer(NodeServices.layer)("snoozed thread decider", (it) => {
         expect(events[0].payload.snoozedAt).toBe(SNOOZED_AT);
         expect(events[0].payload.updatedAt).toBe(NOW);
       }
+    }),
+  );
+
+  it.effect("re-snoozing after a derived wake stamps fresh so the thread hides again", () =>
+    Effect.gen(function* () {
+      // Snoozed at SNOOZED_AT, then the turn was interrupted after that. The
+      // thread is awake by derivation; a same-deadline re-snooze must not
+      // keep the old snoozedAt or the interruption stays newer than it.
+      const event = yield* decideOrchestrationCommand({
+        command: {
+          type: "thread.snooze",
+          commandId: CommandId.make("cmd-snooze-after-wake"),
+          threadId: ThreadId.make("thread-1"),
+          snoozedUntil: FUTURE_WAKE,
+        },
+        readModel: makeReadModel({
+          snoozedUntil: FUTURE_WAKE,
+          latestTurn: {
+            ...RUNNING_TURN,
+            state: "interrupted",
+            completedAt: "1969-12-31T00:00:00.000Z",
+          },
+        }),
+      });
+      const events = Array.isArray(event) ? event : [event];
+      if (events[0]?.type !== "thread.snoozed") throw new Error("expected thread.snoozed");
+      expect(events[0].payload.snoozedAt).not.toBe(SNOOZED_AT);
+      expect(events[0].payload.snoozedAt).toBe(NOW_EPOCH);
     }),
   );
 

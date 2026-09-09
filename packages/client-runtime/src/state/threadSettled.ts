@@ -224,11 +224,17 @@ export function threadWokeAt(
     }
     return shell.session?.updatedAt ?? shell.snoozedAt ?? null;
   }
-  // "Until it's done" whose turn was replaced or dropped without ending
-  // (a new turn started, or the turn vanished): woke when that happened.
+  // "Until it's done" that woke without a raised hand: the awaited turn was
+  // replaced or dropped (a new turn started, or it vanished), or it ended
+  // with a completedAt no newer than the snooze (an interrupt keeps a
+  // placeholder stamp from before the snooze). Either way the thread is
+  // awake and the Woke pill needs a time.
   if (shell.snoozedUntilTurnId != null) {
-    if (shell.latestTurn?.turnId === shell.snoozedUntilTurnId) return null;
-    return shell.latestTurn?.requestedAt ?? shell.snoozedAt ?? null;
+    if (shell.latestTurn?.turnId !== shell.snoozedUntilTurnId) {
+      return shell.latestTurn?.requestedAt ?? shell.snoozedAt ?? null;
+    }
+    if (shell.latestTurn.state === "running") return null;
+    return shell.session?.updatedAt ?? shell.snoozedAt ?? null;
   }
   // No raised hand: an indefinite snooze is simply still snoozed; a timed
   // one woke iff the timer elapsed.
