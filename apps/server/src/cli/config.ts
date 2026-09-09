@@ -17,7 +17,7 @@ import { readBootstrapEnvelope } from "../bootstrap.ts";
 import * as ServerConfig from "../config.ts";
 import { expandHomePath, resolveBaseDir } from "../os-jank.ts";
 
-export const modeFlag = Flag.choice("mode", ServerConfig.RuntimeMode.literals).pipe(
+const modeFlag = Flag.choice("mode", ServerConfig.RuntimeMode.literals).pipe(
   Flag.withDescription("Runtime mode. `desktop` keeps loopback defaults unless overridden."),
   Flag.optional,
 );
@@ -69,7 +69,7 @@ const tailscaleServeFlag = Flag.boolean("tailscale-serve").pipe(
   ),
   Flag.optional,
 );
-export const tailscaleServePortFlag = Flag.integer("tailscale-serve-port").pipe(
+const tailscaleServePortFlag = Flag.integer("tailscale-serve-port").pipe(
   Flag.withSchema(PortSchema),
   Flag.withDescription("HTTPS port for Tailscale Serve when --tailscale-serve is enabled."),
   Flag.optional,
@@ -416,23 +416,37 @@ export const resolveCliAuthConfig = (
   flags: CliAuthLocationFlags,
   cliLogLevel: Option.Option<LogLevel.LogLevel>,
 ) =>
-  resolveServerConfig(
-    {
-      mode: Option.none(),
-      port: Option.none(),
-      host: Option.none(),
-      baseDir: flags.baseDir,
-      cwd: Option.none(),
-      devUrl: flags.devUrl ?? Option.none(),
-      noBrowser: Option.none(),
-      bootstrapFd: Option.none(),
-      autoBootstrapProjectFromCwd: Option.none(),
-      logWebSocketEvents: Option.none(),
-      tailscaleServeEnabled: Option.none(),
-      tailscaleServePort: Option.none(),
-    },
-    cliLogLevel,
-  );
+  Effect.gen(function* () {
+    const config = yield* resolveServerConfig(
+      {
+        mode: Option.none(),
+        port: Option.none(),
+        host: Option.none(),
+        baseDir: flags.baseDir,
+        cwd: Option.none(),
+        devUrl: flags.devUrl ?? Option.none(),
+        noBrowser: Option.none(),
+        bootstrapFd: Option.none(),
+        autoBootstrapProjectFromCwd: Option.none(),
+        logWebSocketEvents: Option.none(),
+        tailscaleServeEnabled: Option.none(),
+        tailscaleServePort: Option.none(),
+      },
+      cliLogLevel,
+    );
+    const stateDir = yield* Config.string("T3CODE_STATE_DIR").pipe(Config.option);
+    if (Option.isSome(flags.baseDir) || Option.isNone(stateDir) || !stateDir.value.trim())
+      return config;
+    const traceFile = yield* Config.string("T3CODE_TRACE_FILE").pipe(Config.option);
+    const derived = yield* ServerConfig.deriveServerPaths(config.baseDir, config.devUrl, {
+      stateDir: stateDir.value,
+    });
+    return {
+      ...config,
+      ...derived,
+      serverTracePath: Option.getOrElse(traceFile, () => derived.serverTracePath),
+    };
+  });
 
 const DurationShorthandPattern = /^(?<value>\d+)(?<unit>ms|s|m|h|d|w)$/i;
 

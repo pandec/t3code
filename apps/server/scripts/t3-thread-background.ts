@@ -57,7 +57,7 @@ import {
 } from "../src/orchestration/ThreadBackgroundLiveness.ts";
 import * as NodeSqliteClient from "@t3tools/shared/nodeSqliteClient";
 
-export class ThreadBackgroundDatabaseMissingError extends Schema.TaggedErrorClass<ThreadBackgroundDatabaseMissingError>()(
+export class ThreadBackgroundDatabaseMissingError extends Schema.TaggedError<ThreadBackgroundDatabaseMissingError>()(
   "ThreadBackgroundDatabaseMissingError",
   { databasePath: Schema.String },
 ) {
@@ -66,7 +66,7 @@ export class ThreadBackgroundDatabaseMissingError extends Schema.TaggedErrorClas
   }
 }
 
-export class ThreadBackgroundMissingThreadError extends Schema.TaggedErrorClass<ThreadBackgroundMissingThreadError>()(
+export class ThreadBackgroundMissingThreadError extends Schema.TaggedError<ThreadBackgroundMissingThreadError>()(
   "ThreadBackgroundMissingThreadError",
   {},
 ) {
@@ -75,7 +75,7 @@ export class ThreadBackgroundMissingThreadError extends Schema.TaggedErrorClass<
   }
 }
 
-export class ThreadBackgroundDatabaseError extends Schema.TaggedErrorClass<ThreadBackgroundDatabaseError>()(
+export class ThreadBackgroundDatabaseError extends Schema.TaggedError<ThreadBackgroundDatabaseError>()(
   "ThreadBackgroundDatabaseError",
   { databasePath: Schema.String, cause: Schema.Defect() },
 ) {

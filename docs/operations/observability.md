@@ -557,6 +557,43 @@ Current high-value span and metric boundaries include:
 - the old `serverLogPath` still exists in config for compatibility, but the trace file is the primary
   structured persisted artifact
 
+## Diagnose stuck thread background work
+
+Run the background liveness diagnostic from the environment that owns the thread:
+
+```bash
+node apps/server/scripts/t3-thread-background.ts [--thread <id>] [--all] [--json]
+```
+
+The command defaults to `T3CODE_THREAD_ID` and `T3CODE_STATE_DIR`, which T3 terminals set
+automatically. Use `--all` to inspect every thread. Add `--show-all-children` when the normal
+MCP-server process filter hides a process you need to inspect. The database remains read-only.
+
+Read the process-probe verdict first:
+
+- `LIVE` means the provider process was found.
+- `ORPHANED` means the process is gone but persisted activity still classifies the task as live.
+- `UNKNOWN` means the probe could not run. This includes Codex sessions without a command-line
+  identifier and hosts without `ps`.
+
+The diagnostic hides task activity last seen before the current server start recorded in
+`server-runtime.json`. A restart clears the in-memory registry that drives the sidebar status, so
+older rows cannot explain a current Working or Monitoring label. The cutoff applies per task, which
+allows new activity on an old thread to appear normally.
+
+An `--all` sweep prints one compact line with each orphan's ID and title. Use `--show-orphaned` for full
+blocks, including previously dismissed orphans. Use `--dismiss-orphans` to record the current set in
+`<base>/caches/t3-thread-background-dismissed.json`. An orphan verdict is permanent for that task,
+so later runs can omit it. Delete the cache file to show dismissed entries again.
+
+The command replays persisted `task.*` activity through `ThreadBackgroundLivenessService`, the same
+classifier used by the sidebar. Replay is not the live in-memory registry. Activity rows are never
+pruned, while a restart or provider exit clears the registry. If a terminal row was lost, replay can
+classify a task as live indefinitely. A trailing usage event can revive a task in both replay and
+the registry. Reverting a thread rewrites activity rows without changing the registry, so a report
+taken during a revert can disagree with the sidebar. Use the process-probe verdict to decide whether
+work is actually running.
+
 ## Mobile Diagnostics Journal
 
 A fork-only, build-gated journal in `apps/mobile/src/diagnostics/` for investigating mobile

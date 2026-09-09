@@ -2,12 +2,16 @@
 import * as NodeOS from "node:os";
 
 import {
+  ApprovalRequestId,
   CommandId,
+  DEFAULT_MODEL,
   DEFAULT_PROVIDER_INTERACTION_MODE,
   DEFAULT_RUNTIME_MODE,
   DEFAULT_SERVER_SETTINGS,
   MessageId,
+  ProviderInstanceId,
   ProviderInteractionMode,
+  ProviderUserInputAnswers,
   RuntimeMode,
   ServerSettings,
   T3_PROJECT_FILE_NAME,
@@ -17,11 +21,13 @@ import {
   type OrchestrationMessage,
   type OrchestrationMessageRole,
   type OrchestrationProjectShell,
+  type OrchestrationThreadActivity,
   type OrchestrationThreadDetailSnapshot,
   type OrchestrationThreadMessagePage,
   type OrchestrationThreadShell,
   type ThreadEnvMode,
   type ThreadTurnStartBootstrap,
+  UserInputQuestion,
 } from "@t3tools/contracts";
 import { buildTemporaryWorktreeBranchName } from "@t3tools/shared/git";
 import { fromLenientJson } from "@t3tools/shared/schemaJson";
@@ -39,7 +45,7 @@ import * as Option from "effect/Option";
 import * as Path from "effect/Path";
 import * as References from "effect/References";
 import * as Schema from "effect/Schema";
-import { Argument, Command, Flag, GlobalFlag } from "effect/unstable/cli";
+import { Argument, Command, Flag, GlobalFlag, Param, Primitive } from "effect/unstable/cli";
 import { FetchHttpClient } from "effect/unstable/http";
 import type * as HttpClient from "effect/unstable/http/HttpClient";
 
@@ -47,7 +53,6 @@ import { resolveAttachmentPath } from "../attachmentStore.ts";
 import * as EnvironmentAuth from "../auth/EnvironmentAuth.ts";
 import * as ServerConfig from "../config.ts";
 import { expandHomePath } from "../pathExpansion.ts";
-import * as ServerRuntimeStartup from "../serverRuntimeStartup.ts";
 import * as WorkspacePaths from "../workspace/WorkspacePaths.ts";
 import {
   type CliAuthLocationFlags,
@@ -96,9 +101,30 @@ const jsonFlag = Flag.boolean("json").pipe(
   Flag.withDefault(false),
 );
 
-export const threadWaitDrainFlag = Flag.boolean("drain").pipe(
-  Flag.map((enabled): ThreadWaitDrainMode => (enabled ? "agents" : null)),
-  Flag.orElse(() => Flag.choice("drain", ["agents", "all"] as const)),
+// One flag that accepts a bare `--drain` and an inline `--drain=agents|all`.
+// It keeps the Boolean primitive tag so the parser treats a bare flag as
+// "true" and never swallows the next positional as its value (a
+// space-separated `--drain agents` stays an unexpected argument). Effect
+// rc.112 registers `Flag.orElse` alternates, so a boolean and a choice flag
+// sharing the name "drain" would now fail as a duplicate flag.
+const threadWaitDrainPrimitive: Primitive.Primitive<ThreadWaitDrainMode> = Object.assign(
+  Object.create(Object.getPrototypeOf(Primitive.boolean)),
+  {
+    _tag: "Boolean",
+    parse: (value: string) =>
+      value === "agents" || value === "all"
+        ? Effect.succeed(value)
+        : Effect.map(Primitive.boolean.parse(value), (enabled) => (enabled ? "agents" : null)),
+  },
+);
+
+export const threadWaitDrainFlag = Param.makeSingle({
+  kind: Param.flagKind,
+  name: "drain",
+  primitiveType: threadWaitDrainPrimitive,
+  typeName: "agents | all",
+}).pipe(
+  Flag.withDefault(null),
   Flag.withDescription(
     "After the turn settles, wait for background agents/workflows; use --drain=all to include monitors.",
   ),
@@ -107,7 +133,7 @@ export const threadWaitDrainFlag = Flag.boolean("drain").pipe(
 const jsonOutput = (value: unknown) => JSON.stringify(value, null, 2);
 const isCliOrchestrationOutcomeUnknownError = Schema.is(CliOrchestrationOutcomeUnknownError);
 
-export class ThreadCliNotFoundError extends Schema.TaggedErrorClass<ThreadCliNotFoundError>()(
+export class ThreadCliNotFoundError extends Schema.TaggedError<ThreadCliNotFoundError>()(
   "ThreadCliNotFoundError",
   {
     operation: Schema.Literal("resolveThread"),
@@ -115,11 +141,13 @@ export class ThreadCliNotFoundError extends Schema.TaggedErrorClass<ThreadCliNot
   },
 ) {
   override get message(): string {
-    return `No active thread found for '${this.threadId}'.`;
+    return this.threadId === "self" && !process.env.T3CODE_THREAD_ID?.trim()
+      ? "self requires T3CODE_THREAD_ID. Pass an explicit thread id outside a provider session."
+      : `No active thread found for '${this.threadId}'.`;
   }
 }
 
-export class ThreadCliMessageCursorError extends Schema.TaggedErrorClass<ThreadCliMessageCursorError>()(
+export class ThreadCliMessageCursorError extends Schema.TaggedError<ThreadCliMessageCursorError>()(
   "ThreadCliMessageCursorError",
   {
     operation: Schema.Literal("fetchThreadMessages"),
@@ -140,7 +168,7 @@ export class ThreadCliMessageCursorError extends Schema.TaggedErrorClass<ThreadC
   }
 }
 
-export class ThreadCliMessageEmptyError extends Schema.TaggedErrorClass<ThreadCliMessageEmptyError>()(
+export class ThreadCliMessageEmptyError extends Schema.TaggedError<ThreadCliMessageEmptyError>()(
   "ThreadCliMessageEmptyError",
   {
     operation: Schema.Literal("validateMessage"),
@@ -151,7 +179,7 @@ export class ThreadCliMessageEmptyError extends Schema.TaggedErrorClass<ThreadCl
   }
 }
 
-export class ThreadCliTitleEmptyError extends Schema.TaggedErrorClass<ThreadCliTitleEmptyError>()(
+export class ThreadCliTitleEmptyError extends Schema.TaggedError<ThreadCliTitleEmptyError>()(
   "ThreadCliTitleEmptyError",
   {
     operation: Schema.Literal("validateTitle"),
@@ -162,7 +190,7 @@ export class ThreadCliTitleEmptyError extends Schema.TaggedErrorClass<ThreadCliT
   }
 }
 
-export class ThreadCliNoActiveTurnError extends Schema.TaggedErrorClass<ThreadCliNoActiveTurnError>()(
+export class ThreadCliNoActiveTurnError extends Schema.TaggedError<ThreadCliNoActiveTurnError>()(
   "ThreadCliNoActiveTurnError",
   {
     operation: Schema.Literal("interruptThread"),
@@ -174,7 +202,7 @@ export class ThreadCliNoActiveTurnError extends Schema.TaggedErrorClass<ThreadCl
   }
 }
 
-export class ThreadCliWorkspaceFlagError extends Schema.TaggedErrorClass<ThreadCliWorkspaceFlagError>()(
+export class ThreadCliWorkspaceFlagError extends Schema.TaggedError<ThreadCliWorkspaceFlagError>()(
   "ThreadCliWorkspaceFlagError",
   {
     operation: Schema.Literal("resolveWorkspaceFlags"),
@@ -186,7 +214,7 @@ export class ThreadCliWorkspaceFlagError extends Schema.TaggedErrorClass<ThreadC
   }
 }
 
-export class ThreadCliWorktreePathError extends Schema.TaggedErrorClass<ThreadCliWorktreePathError>()(
+export class ThreadCliWorktreePathError extends Schema.TaggedError<ThreadCliWorktreePathError>()(
   "ThreadCliWorktreePathError",
   {
     operation: Schema.Literal("resolveWorktreePath"),
@@ -455,7 +483,10 @@ const resolveThread = (
   live: CliLiveOrchestrationServer,
   rawThreadId: string,
 ): Effect.Effect<OrchestrationThreadShell, ThreadCliNotFoundError> => {
-  const threadId = rawThreadId.trim();
+  const threadId =
+    rawThreadId.trim() === "self"
+      ? (process.env.T3CODE_THREAD_ID?.trim() ?? "")
+      : rawThreadId.trim();
   const thread = live.shell.threads.find(
     (candidate) => candidate.id === threadId && candidate.archivedAt === null,
   );
@@ -480,12 +511,146 @@ const requireTrimmedTitle = (title: string) => {
     : Effect.fail(new ThreadCliTitleEmptyError({ operation: "validateTitle" }));
 };
 
+const ThreadUserInputRequestedActivityPayload = Schema.Struct({
+  requestId: ApprovalRequestId,
+  questions: Schema.Array(UserInputQuestion),
+  responseMode: Schema.optional(Schema.Literal("message")),
+});
+const decodeThreadUserInputRequestedActivityPayload = Schema.decodeUnknownOption(
+  ThreadUserInputRequestedActivityPayload,
+);
+export const decodeThreadInputAnswersJson = Schema.decodeUnknownEffect(
+  fromLenientJson(ProviderUserInputAnswers),
+);
+
+export interface ThreadInputRequestReport {
+  readonly id: string;
+  readonly responseMode: "blocking" | "message";
+  readonly questions: ReadonlyArray<{
+    readonly id: string;
+    readonly header: string;
+    readonly prompt: string;
+    readonly options: ReadonlyArray<{
+      readonly id: string;
+      readonly label: string;
+      readonly description: string;
+    }>;
+    readonly allowCustomAnswer: boolean;
+    readonly multiSelect: boolean;
+  }>;
+  readonly createdAt: string;
+}
+
+const isStaleUserInputResponseFailure = (activity: OrchestrationThreadActivity): boolean => {
+  if (activity.kind !== "provider.user-input.respond.failed") return false;
+  if (typeof activity.payload !== "object" || activity.payload === null) return false;
+  const detail = Reflect.get(activity.payload, "detail");
+  if (typeof detail !== "string") return false;
+  const normalized = detail.toLowerCase();
+  return [
+    "stale pending user-input request",
+    "unknown pending user-input request",
+    "unknown pending user input request",
+    "unknown pending codex user input request",
+  ].some((fragment) => normalized.includes(fragment));
+};
+
+export const collectPendingThreadInputRequests = (
+  activities: ReadonlyArray<OrchestrationThreadActivity>,
+): ReadonlyArray<ThreadInputRequestReport> => {
+  const pending = new Map<
+    string,
+    {
+      readonly activity: OrchestrationThreadActivity;
+      readonly payload: typeof ThreadUserInputRequestedActivityPayload.Type;
+    }
+  >();
+  const ordered = [...activities].toSorted(
+    (left, right) =>
+      (left.sequence ?? -1) - (right.sequence ?? -1) ||
+      left.createdAt.localeCompare(right.createdAt) ||
+      left.id.localeCompare(right.id),
+  );
+
+  for (const activity of ordered) {
+    if (activity.kind === "user-input.requested") {
+      const payload = decodeThreadUserInputRequestedActivityPayload(activity.payload);
+      if (Option.isSome(payload)) {
+        pending.set(payload.value.requestId, { activity, payload: payload.value });
+      }
+      continue;
+    }
+    if (activity.kind !== "user-input.resolved" && !isStaleUserInputResponseFailure(activity)) {
+      continue;
+    }
+    if (typeof activity.payload !== "object" || activity.payload === null) continue;
+    const requestId = Reflect.get(activity.payload, "requestId");
+    if (typeof requestId === "string") pending.delete(requestId);
+  }
+
+  return [...pending.values()]
+    .toSorted(
+      (left, right) =>
+        left.activity.createdAt.localeCompare(right.activity.createdAt) ||
+        left.payload.requestId.localeCompare(right.payload.requestId),
+    )
+    .map(({ activity, payload }) => ({
+      id: payload.requestId,
+      responseMode: payload.responseMode ?? "blocking",
+      questions: payload.questions.map((question) => ({
+        id: question.id,
+        header: question.header,
+        prompt: question.question,
+        options: question.options.map((option) => ({
+          id: option.value ?? option.label,
+          label: option.label,
+          description: option.description,
+        })),
+        allowCustomAnswer: question.allowCustomAnswer !== false,
+        multiSelect: question.multiSelect ?? false,
+      })),
+      createdAt: activity.createdAt,
+    }));
+};
+
+type ThreadUserInputRespondCommand = Extract<
+  ClientOrchestrationCommand,
+  { readonly type: "thread.user-input.respond" }
+>;
+
+export const buildThreadInputRespondCommand = (input: {
+  readonly commandId: CommandId;
+  readonly threadId: ThreadId;
+  readonly requestId: ApprovalRequestId;
+  readonly answers: typeof ProviderUserInputAnswers.Type;
+  readonly createdAt: string;
+}): ThreadUserInputRespondCommand => ({
+  type: "thread.user-input.respond",
+  commandId: input.commandId,
+  threadId: input.threadId,
+  requestId: input.requestId,
+  answers: input.answers,
+  createdAt: input.createdAt,
+});
+
+export const threadInputRespondReport = (input: {
+  readonly command: ThreadUserInputRespondCommand;
+  readonly sequence: number;
+}) => ({
+  threadId: input.command.threadId,
+  requestId: input.command.requestId,
+  commandId: input.command.commandId,
+  sequence: input.sequence,
+  action: "response-requested" as const,
+});
+
 export const deriveThreadCliTitle = (message: string): string => {
   const compact = message.trim().replace(/\s+/g, " ");
   return compact.length <= 72 ? compact : `${compact.slice(0, 69).trimEnd()}...`;
 };
 
 export const threadSummary = (thread: OrchestrationThreadShell) => ({
+  archiveRequest: thread.archiveRequest ?? null,
   id: thread.id,
   projectId: thread.projectId,
   title: thread.title,
@@ -501,6 +666,7 @@ export const threadSummary = (thread: OrchestrationThreadShell) => ({
   settledAt: thread.settledAt ?? null,
   hasPendingApprovals: thread.hasPendingApprovals,
   hasPendingUserInput: thread.hasPendingUserInput,
+  hasPendingBlockingUserInput: thread.hasPendingBlockingUserInput ?? thread.hasPendingUserInput,
   latestUserMessageAt: thread.latestUserMessageAt,
   updatedAt: thread.updatedAt,
 });
@@ -537,11 +703,14 @@ const runThreadCli = Effect.fn("runThreadCli")(function* <A, E, R>(
     readonly settingsPath: string;
     readonly attachmentsDir: string;
   }) => Effect.Effect<A, E, R>,
+  // Machine-consumed stdout (`--shell`) must stay free of log lines even when
+  // errors keep their human formatting.
+  options?: { readonly suppressLogs?: boolean },
 ) {
   const logLevel = yield* GlobalFlag.LogLevel;
   return yield* Effect.gen(function* () {
     const config = yield* resolveCliAuthConfig(flags, logLevel);
-    const minimumLogLevel = json ? "None" : config.logLevel;
+    const minimumLogLevel = json || options?.suppressLogs ? "None" : config.logLevel;
     return yield* Effect.gen(function* () {
       const environmentAuth = yield* EnvironmentAuth.EnvironmentAuth;
       const timeouts = yield* resolveCliLiveServerReadTimeouts(flags.timeoutMs ?? Option.none());
@@ -817,10 +986,16 @@ const threadNewCommand = Command.make("new", {
               });
             })
           : undefined;
+        // Same fallback chain as the server's own thread bootstrap: project
+        // default, then the server-wide default, then the built-in Codex model.
         const modelSelection =
           explicitModelSelection ??
           projectShell.defaultModelSelection ??
-          ServerRuntimeStartup.getAutoBootstrapThreadModelSelection();
+          (yield* readThreadDefaultSettings(input.settingsPath)).defaultModelSelection ??
+          ({
+            instanceId: ProviderInstanceId.make("codex"),
+            model: DEFAULT_MODEL,
+          } satisfies ModelSelection);
         const threadId = ThreadId.make(yield* randomUuid);
         const commandId = CommandId.make(yield* randomUuid);
         const messageId = MessageId.make(yield* randomUuid);
@@ -1550,29 +1725,245 @@ const threadMessagesCommand = Command.make("messages", {
   ),
 );
 
-const threadArchiveCommand = Command.make("archive", {
+const threadInputListCommand = Command.make("list", {
   ...projectLocationFlags,
   threadId: Argument.string("thread-id").pipe(Argument.withDescription("Thread id.")),
   json: jsonFlag,
 }).pipe(
-  Command.withDescription("Archive a thread."),
+  Command.withDescription("List unresolved user-input requests for a thread."),
   Command.withHandler((flags) =>
     runThreadCli(flags, flags.json, (input) =>
       Effect.gen(function* () {
         const thread = yield* resolveThread(input.live, flags.threadId);
-        const commandId = CommandId.make(yield* randomUuid);
-        yield* dispatchThreadCommand(input, {
-          type: "thread.archive",
-          commandId,
+        const detail = yield* fetchLiveOrchestrationThreadDetail(
+          input.live.origin,
+          input.token,
+          thread.id,
+          input.timeouts,
+        );
+        const requests = collectPendingThreadInputRequests(detail.thread.activities);
+        yield* Console.log(
+          flags.json
+            ? jsonOutput({ threadId: thread.id, requests })
+            : requests.length === 0
+              ? `Thread ${thread.id} has no unresolved user-input requests.`
+              : stripTerminalControlCharacters(
+                  requests
+                    .map(
+                      (request) =>
+                        `${request.id}\t${request.responseMode}\t${request.questions.map((question) => question.prompt).join(" / ")}`,
+                    )
+                    .join("\n"),
+                ),
+        );
+      }),
+    ),
+  ),
+);
+
+const threadInputRespondCommand = Command.make("respond", {
+  ...projectLocationFlags,
+  threadId: Argument.string("thread-id").pipe(Argument.withDescription("Thread id.")),
+  requestId: Argument.string("request-id").pipe(
+    Argument.withSchema(ApprovalRequestId),
+    Argument.withDescription("User-input request id."),
+  ),
+  answersJson: Flag.string("answers-json").pipe(
+    Flag.withDescription("Complete JSON answer map keyed by question id."),
+  ),
+  json: jsonFlag,
+}).pipe(
+  Command.withDescription("Answer an unresolved user-input request."),
+  Command.withHandler((flags) =>
+    runThreadCli(flags, flags.json, (input) =>
+      Effect.gen(function* () {
+        const thread = yield* resolveThread(input.live, flags.threadId);
+        const answers = yield* decodeThreadInputAnswersJson(flags.answersJson);
+        const command = buildThreadInputRespondCommand({
+          commandId: CommandId.make(yield* randomUuid),
           threadId: thread.id,
+          requestId: flags.requestId,
+          answers,
+          createdAt: DateTime.formatIso(yield* DateTime.now),
         });
+        const result = yield* dispatchThreadCommand(input, command);
+        const report = threadInputRespondReport({ command, sequence: result.sequence });
+        yield* Console.log(
+          flags.json
+            ? jsonOutput(report)
+            : `Submitted answers for user-input request ${report.requestId} in thread ${report.threadId}.`,
+        );
+      }),
+    ),
+  ),
+);
+
+const threadInputCommand = Command.make("input").pipe(
+  Command.withDescription("Inspect and answer thread user-input requests."),
+  Command.withSubcommands([threadInputListCommand, threadInputRespondCommand]),
+);
+
+export function threadContextEnvironment(thread: OrchestrationThreadShell, workspaceRoot: string) {
+  return {
+    T3CODE_THREAD_ID: thread.id,
+    T3CODE_TURN_ID:
+      (thread.session?.status === "running" ? thread.session.activeTurnId : null) ??
+      (thread.latestTurn?.state === "running" ? thread.latestTurn.turnId : ""),
+    T3CODE_WORKTREE_PATH: thread.worktreePath ?? workspaceRoot,
+  };
+}
+
+export function threadContextShell(environment: ReturnType<typeof threadContextEnvironment>) {
+  return Object.entries(environment)
+    .map(([name, value]) => `export ${name}='${value.replaceAll("'", "'\\''")}'`)
+    .join("\n");
+}
+
+const threadContextCommand = Command.make("context", {
+  ...projectLocationFlags,
+  threadId: Argument.string("thread-id").pipe(Argument.withDescription("Thread id, or self.")),
+  shell: Flag.boolean("shell").pipe(
+    Flag.withDescription("Print POSIX shell exports, including the current native turn id."),
+  ),
+  json: jsonFlag,
+}).pipe(
+  Command.withDescription("Read the target thread's current execution context."),
+  Command.withHandler((flags) =>
+    runThreadCli(
+      flags,
+      flags.json,
+      (input) =>
+        Effect.gen(function* () {
+          if (flags.shell && flags.json)
+            return yield* new SessionCliError({
+              operation: "thread.context",
+              detail: "Choose either --shell or --json.",
+            });
+          const thread = yield* resolveThread(input.live, flags.threadId);
+          const project = input.live.shell.projects.find((entry) => entry.id === thread.projectId);
+          if (!project)
+            return yield* new SessionCliError({
+              operation: "thread.context",
+              detail: `Project '${thread.projectId}' for thread '${thread.id}' was not found.`,
+            });
+          const environment = threadContextEnvironment(thread, project.workspaceRoot);
+          yield* Console.log(
+            flags.shell ? threadContextShell(environment) : jsonOutput(environment),
+          );
+        }),
+      { suppressLogs: flags.shell },
+    ),
+  ),
+);
+
+export function archiveStatusText(
+  threadId: string,
+  archivedAt: string | null,
+  archiveRequest: OrchestrationThreadShell["archiveRequest"] | null,
+): string {
+  const lines = [
+    `thread: ${threadId}`,
+    `archived: ${archivedAt ?? "no"}`,
+    `request: ${archiveRequest ? archiveRequest.status : "none"}`,
+  ];
+  if (archiveRequest?.detail) lines.push(`detail: ${archiveRequest.detail}`);
+  return lines.join("\n");
+}
+
+const threadArchiveCommand = Command.make("archive", {
+  ...projectLocationFlags,
+  threadId: Argument.string("thread-id").pipe(
+    Argument.withDescription("Thread id, or self inside a provider session."),
+  ),
+  afterTurn: Flag.boolean("after-turn").pipe(
+    Flag.withDescription(
+      "Archive after the target thread's current turn succeeds; archive idle threads immediately.",
+    ),
+  ),
+  removeWorktree: Flag.boolean("remove-worktree").pipe(
+    Flag.withDescription("Remove the clean worktree after archiving, preserving its branch."),
+  ),
+  status: Flag.boolean("status").pipe(
+    Flag.withDescription("Inspect archive progress, including archived threads."),
+  ),
+  cancel: Flag.boolean("cancel").pipe(Flag.withDescription("Cancel a pending archive request.")),
+  json: jsonFlag,
+}).pipe(
+  Command.withDescription(
+    "Archive a thread, or schedule or cancel archive after its current turn.",
+  ),
+  Command.withHandler((flags) =>
+    runThreadCli(flags, flags.json, (input) =>
+      Effect.gen(function* () {
+        if (flags.status) {
+          if (flags.cancel || flags.afterTurn || flags.removeWorktree)
+            return yield* new SessionCliError({
+              operation: "thread.archive",
+              detail: "--status cannot be combined with archive actions.",
+            });
+          const threadId =
+            flags.threadId.trim() === "self"
+              ? process.env.T3CODE_THREAD_ID?.trim()
+              : flags.threadId.trim();
+          if (!threadId)
+            return yield* new ThreadCliNotFoundError({
+              operation: "resolveThread",
+              threadId: flags.threadId,
+            });
+          const detail = yield* fetchLiveOrchestrationThreadDetail(
+            input.live.origin,
+            input.token,
+            ThreadId.make(threadId),
+            input.timeouts,
+          );
+          const archiveRequest = detail.thread.archiveRequest ?? null;
+          yield* Console.log(
+            flags.json
+              ? jsonOutput({ threadId, archivedAt: detail.thread.archivedAt, archiveRequest })
+              : archiveStatusText(threadId, detail.thread.archivedAt, archiveRequest),
+          );
+          return;
+        }
+        if (flags.cancel && (flags.afterTurn || flags.removeWorktree)) {
+          return yield* new SessionCliError({
+            operation: "thread.archive",
+            detail: "--cancel cannot be combined with --after-turn or --remove-worktree.",
+          });
+        }
+        const thread = yield* resolveThread(input.live, flags.threadId);
+        const commandId = CommandId.make(yield* randomUuid);
+        const scheduled = flags.afterTurn || flags.removeWorktree;
+        yield* dispatchThreadCommand(
+          input,
+          flags.cancel
+            ? {
+                type: "thread.archive.cancel",
+                commandId,
+                threadId: thread.id,
+              }
+            : scheduled
+              ? {
+                  type: "thread.archive.schedule",
+                  commandId,
+                  threadId: thread.id,
+                  afterTurn: flags.afterTurn,
+                  removeWorktree: flags.removeWorktree,
+                }
+              : { type: "thread.archive", commandId, threadId: thread.id },
+        );
+        const action = flags.cancel
+          ? "archive-cancelled"
+          : scheduled
+            ? "archive-requested"
+            : "archived";
         yield* Console.log(
           flags.json
             ? jsonOutput({
                 threadId: thread.id,
-                action: "archived",
+                action,
+                ...(scheduled ? { requestId: commandId } : {}),
               })
-            : `Archived thread ${thread.id}.`,
+            : `${action}: ${thread.id}.`,
         );
       }),
     ),
@@ -1589,7 +1980,9 @@ export const threadCommand = Command.make("thread").pipe(
     threadInterruptCommand,
     threadStatusCommand,
     threadMessagesCommand,
+    threadInputCommand,
     threadWaitCommand,
     threadArchiveCommand,
+    threadContextCommand,
   ]),
 );

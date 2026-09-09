@@ -3,7 +3,7 @@ import * as Schema from "effect/Schema";
 
 import type { QueuedThreadMessage } from "./threadOutboxModel.ts";
 
-export class ThreadOutboxStorageError extends Schema.TaggedErrorClass<ThreadOutboxStorageError>()(
+export class ThreadOutboxStorageError extends Schema.TaggedError<ThreadOutboxStorageError>()(
   "ThreadOutboxStorageError",
   {
     operation: Schema.Literals(["load", "read-message", "write", "remove"]),
@@ -19,8 +19,13 @@ export class ThreadOutboxStorageError extends Schema.TaggedErrorClass<ThreadOutb
   }
 }
 
+export interface ThreadOutboxLoadResult {
+  readonly messages: ReadonlyArray<QueuedThreadMessage>;
+  readonly errors: ReadonlyArray<ThreadOutboxStorageError>;
+}
+
 export interface ThreadOutboxStorage {
-  readonly load: () => Promise<ReadonlyArray<QueuedThreadMessage>>;
+  readonly load: () => Promise<ThreadOutboxLoadResult>;
   readonly write: (message: QueuedThreadMessage) => Promise<void>;
   readonly remove: (message: QueuedThreadMessage) => Promise<void>;
 }

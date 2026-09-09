@@ -1,4 +1,9 @@
-import { MAX_SCRIPT_ID_LENGTH, type ProjectScript } from "@t3tools/contracts";
+import {
+  MAX_SCRIPT_ID_LENGTH,
+  type ProjectId,
+  type ProjectScript,
+  type ServerSettings,
+} from "@t3tools/contracts";
 
 export interface ProjectScriptInput {
   readonly name: ProjectScript["name"];
@@ -85,6 +90,26 @@ export function normalizeProjectSetupScript(
     }),
     clearedActionIds,
   };
+}
+
+/** Missing entries preserve existing actions; null explicitly resets a checkout to machine defaults. */
+export function resolveProjectScripts(
+  settings: Pick<ServerSettings, "defaultProjectScripts" | "projectScriptOverrides">,
+  project: { id: ProjectId; scripts: readonly ProjectScript[] },
+): readonly ProjectScript[] {
+  const override = settings.projectScriptOverrides[project.id];
+  if (override === null) return settings.defaultProjectScripts;
+  return (
+    override ?? (project.scripts.length > 0 ? project.scripts : settings.defaultProjectScripts)
+  );
+}
+
+export function projectScriptsInheritDefaults(
+  settings: Pick<ServerSettings, "projectScriptOverrides">,
+  project: { id: ProjectId; scripts: readonly ProjectScript[] },
+): boolean {
+  const override = settings.projectScriptOverrides[project.id];
+  return override === null || (override === undefined && project.scripts.length === 0);
 }
 
 interface ProjectScriptRuntimeEnvInput {

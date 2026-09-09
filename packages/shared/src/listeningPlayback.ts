@@ -51,6 +51,13 @@ export interface ListeningTrackMetadata {
 
 export interface ListeningActiveTrack extends ListeningTrackRef {
   readonly playing: boolean;
+  /**
+   * Paused at the very start or the very end: the recording has finished, or
+   * the user parked it at an edge. Derived from progress but published only
+   * when it flips, so thread lists can hide their indicator without
+   * subscribing to the player's ticks.
+   */
+  readonly atRest: boolean;
 }
 
 export interface ListeningPlaybackSnapshot {
@@ -70,6 +77,18 @@ export interface ListeningPlaybackProgress {
   readonly duration: number;
 }
 
+function threadOwnsTrack(
+  snapshot: ListeningPlaybackSnapshot,
+  environmentId: string,
+  threadId: string,
+): ListeningActiveTrack | null {
+  const track = snapshot.track;
+  if (track === null || track.environmentId !== environmentId || track.threadId !== threadId) {
+    return null;
+  }
+  return track;
+}
+
 /** True when the actively PLAYING (not merely loaded) track belongs to the thread. */
 export function isThreadListeningPlaying(
   snapshot: ListeningPlaybackSnapshot,
@@ -79,33 +98,38 @@ export function isThreadListeningPlaying(
   return threadListeningState(snapshot, environmentId, threadId) === "playing";
 }
 
-/** True when the loaded track (playing or paused) belongs to the thread. */
+/**
+ * True when the loaded track belongs to the thread, whether playing, paused,
+ * or at rest. Archive and delete keep using this: a finished recording is
+ * still loaded and must still be paused or cleared with its thread.
+ */
 export function isThreadListeningLoaded(
   snapshot: ListeningPlaybackSnapshot,
   environmentId: string,
   threadId: string,
 ): boolean {
-  return threadListeningState(snapshot, environmentId, threadId) !== null;
+  return threadOwnsTrack(snapshot, environmentId, threadId) !== null;
 }
 
 export type ThreadListeningState = "playing" | "paused" | null;
 
 /**
  * What the thread-list indicator should show for a thread: "playing" while
- * its audio runs, "paused" while it still owns the loaded track (the
+ * its audio runs, "paused" while it holds the recording mid-way (the
  * indicator is a toggle, so pausing from the list must leave a way back in),
- * null otherwise.
+ * null otherwise. A recording that played to the end, or was parked at the
+ * start or the end, shows nothing: there is nothing left to resume, and the
+ * message row still offers replay.
  */
 export function threadListeningState(
   snapshot: ListeningPlaybackSnapshot,
   environmentId: string,
   threadId: string,
 ): ThreadListeningState {
-  const track = snapshot.track;
-  if (track === null || track.environmentId !== environmentId || track.threadId !== threadId) {
-    return null;
-  }
-  return track.playing ? "playing" : "paused";
+  const track = threadOwnsTrack(snapshot, environmentId, threadId);
+  if (track === null) return null;
+  if (track.playing) return "playing";
+  return track.atRest ? null : "paused";
 }
 
 /** How close to the end still counts as "finished" for replay purposes. */
@@ -169,6 +193,7 @@ function sameActiveTrack(a: ListeningActiveTrack | null, b: ListeningActiveTrack
   if (a === null || b === null) return false;
   return (
     a.playing === b.playing &&
+    a.atRest === b.atRest &&
     a.speechId === b.speechId &&
     a.messageId === b.messageId &&
     a.threadId === b.threadId &&
@@ -199,10 +224,26 @@ export function createListeningPlaybackCoordinator(): ListeningPlaybackCoordinat
     for (const listener of listeners) listener();
   };
 
+  // Position 0 counts as the start even before the duration is known, so a
+  // freshly loaded recording starts at rest and the indicator appears only
+  // once it actually plays.
+  const isAtEdge = (position: ListeningPlaybackProgress) =>
+    position.currentTime <= LISTENING_TRACK_END_EPSILON_S ||
+    (position.duration > 0 &&
+      position.currentTime >= position.duration - LISTENING_TRACK_END_EPSILON_S);
+
+  const withRest = (track: ListeningActiveTrack, position: ListeningPlaybackProgress) => {
+    const atRest = !track.playing && isAtEdge(position);
+    return track.atRest === atRest ? track : { ...track, atRest };
+  };
+
   const publishProgress = (next: ListeningPlaybackProgress) => {
     if (next.currentTime === progress.currentTime && next.duration === progress.duration) return;
     progress = next;
     for (const listener of progressListeners) listener();
+    if (snapshot.track !== null) {
+      publish({ ...snapshot, track: withRest(snapshot.track, next) });
+    }
   };
 
   const pauseActive = () => {
@@ -223,6 +264,8 @@ export function createListeningPlaybackCoordinator(): ListeningPlaybackCoordinat
     const sameSpeech = previous !== null && previous.speechId === track.speechId;
     // Re-activating the loaded recording keeps its playing flag; a new
     // recording starts paused until the platform player reports playback.
+    const playing = sameSpeech && previous.playing;
+    const position = sameSpeech ? progress : ZERO_PROGRESS;
     publish({
       ...snapshot,
       track: {
@@ -230,7 +273,8 @@ export function createListeningPlaybackCoordinator(): ListeningPlaybackCoordinat
         threadId: track.threadId,
         messageId: track.messageId,
         speechId: track.speechId,
-        playing: sameSpeech && previous.playing,
+        playing,
+        atRest: !playing && isAtEdge(position),
       },
     });
     if (!sameSpeech) publishProgress(ZERO_PROGRESS);
@@ -270,7 +314,7 @@ export function createListeningPlaybackCoordinator(): ListeningPlaybackCoordinat
     setTrack,
     setTrackPlaying: (playing) => {
       if (snapshot.track === null || snapshot.track.playing === playing) return;
-      publish({ ...snapshot, track: { ...snapshot.track, playing } });
+      publish({ ...snapshot, track: withRest({ ...snapshot.track, playing }, progress) });
     },
     setProgress: publishProgress,
   };

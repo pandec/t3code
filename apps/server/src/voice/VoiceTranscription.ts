@@ -22,7 +22,7 @@ export const ElevenLabsTranscriptionResponse = Schema.Struct({
   language_code: Schema.optionalKey(Schema.NullOr(Schema.String)),
 });
 
-export class VoiceTranscriptionError extends Schema.TaggedErrorClass<VoiceTranscriptionError>()(
+export class VoiceTranscriptionError extends Schema.TaggedError<VoiceTranscriptionError>()(
   "VoiceTranscriptionError",
   {
     reason: Schema.Literals(["unavailable", "invalid_audio", "provider_failed"]),

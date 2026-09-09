@@ -84,14 +84,24 @@ const makeProviderSessionReaper = (options?: ProviderSessionReaperLiveOptions) =
           continue;
         }
 
-        const idleDurationMs = now - lastSeenMs;
-        if (idleDurationMs < inactivityThresholdMs) {
+        if (now - lastSeenMs < inactivityThresholdMs) {
           continue;
         }
 
         const thread = yield* projectionSnapshotQuery
           .getThreadShellById(binding.threadId)
           .pipe(Effect.map(Option.getOrUndefined));
+        // Ingestion updates this timestamp alongside activeTurnId when a turn
+        // settles. Long turns must get a full idle window after that transition,
+        // even though the binding was last touched when the turn was sent.
+        const lastActivityMs = Math.max(
+          lastSeenMs,
+          Date.parse(thread?.session?.updatedAt ?? binding.lastSeenAt),
+        );
+        const idleDurationMs = now - lastActivityMs;
+        if (idleDurationMs < inactivityThresholdMs) {
+          continue;
+        }
         if (thread?.session?.activeTurnId != null) {
           yield* Effect.logDebug("provider.session.reaper.skipped-active-turn", {
             threadId: binding.threadId,
@@ -137,8 +147,30 @@ const makeProviderSessionReaper = (options?: ProviderSessionReaperLiveOptions) =
           continue;
         }
 
-        const currentIdleDurationMs = now - currentLastSeenMs;
+        // The binding re-read above does not cover projection state: ingestion
+        // can settle or start a turn without touching the directory. Re-read
+        // the shell too, and use the same activity basis as the initial guard
+        // so a turn that settled after the binding was last touched still gets
+        // its full idle window here.
+        const currentThread = yield* projectionSnapshotQuery
+          .getThreadShellById(binding.threadId)
+          .pipe(Effect.map(Option.getOrUndefined));
+        if (currentThread?.session?.activeTurnId != null) {
+          continue;
+        }
+        const currentIdleDurationMs =
+          now -
+          Math.max(
+            currentLastSeenMs,
+            Date.parse(currentThread?.session?.updatedAt ?? currentBinding.lastSeenAt),
+          );
         if (currentIdleDurationMs < inactivityThresholdMs) {
+          continue;
+        }
+        if (
+          currentThread?.backgroundLiveness != null &&
+          currentIdleDurationMs < maxPendingExtensionMs
+        ) {
           continue;
         }
 
@@ -155,7 +187,7 @@ const makeProviderSessionReaper = (options?: ProviderSessionReaperLiveOptions) =
 
         const reason = hasPendingWork
           ? "pending_work_expired"
-          : thread?.backgroundLiveness != null
+          : currentThread?.backgroundLiveness != null
             ? "background_work_expired"
             : "inactivity_threshold";
 

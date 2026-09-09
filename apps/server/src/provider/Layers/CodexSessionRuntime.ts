@@ -200,6 +200,7 @@ export interface CodexSessionRuntimeShape {
   readonly sendTurn: (
     input: CodexSessionRuntimeSendTurnInput,
   ) => Effect.Effect<ProviderTurnStartResult, CodexSessionRuntimeError>;
+  readonly compactThread: Effect.Effect<void, CodexSessionRuntimeError>;
   readonly interruptTurn: (turnId?: TurnId) => Effect.Effect<void, CodexSessionRuntimeError>;
   readonly readThread: Effect.Effect<CodexThreadSnapshot, CodexSessionRuntimeError>;
   readonly rollbackThread: (
@@ -228,7 +229,7 @@ export type CodexSessionRuntimeError =
   | CodexSessionRuntimeInvalidUserInputAnswersError
   | CodexSessionRuntimeThreadIdMissingError;
 
-export class CodexSessionRuntimePendingApprovalNotFoundError extends Schema.TaggedErrorClass<CodexSessionRuntimePendingApprovalNotFoundError>()(
+export class CodexSessionRuntimePendingApprovalNotFoundError extends Schema.TaggedError<CodexSessionRuntimePendingApprovalNotFoundError>()(
   "CodexSessionRuntimePendingApprovalNotFoundError",
   {
     requestId: Schema.String,
@@ -239,7 +240,7 @@ export class CodexSessionRuntimePendingApprovalNotFoundError extends Schema.Tagg
   }
 }
 
-export class CodexSessionRuntimePendingUserInputNotFoundError extends Schema.TaggedErrorClass<CodexSessionRuntimePendingUserInputNotFoundError>()(
+export class CodexSessionRuntimePendingUserInputNotFoundError extends Schema.TaggedError<CodexSessionRuntimePendingUserInputNotFoundError>()(
   "CodexSessionRuntimePendingUserInputNotFoundError",
   {
     requestId: Schema.String,
@@ -250,7 +251,7 @@ export class CodexSessionRuntimePendingUserInputNotFoundError extends Schema.Tag
   }
 }
 
-export class CodexSessionRuntimeInvalidUserInputAnswersError extends Schema.TaggedErrorClass<CodexSessionRuntimeInvalidUserInputAnswersError>()(
+export class CodexSessionRuntimeInvalidUserInputAnswersError extends Schema.TaggedError<CodexSessionRuntimeInvalidUserInputAnswersError>()(
   "CodexSessionRuntimeInvalidUserInputAnswersError",
   {
     questionId: Schema.String,
@@ -261,7 +262,7 @@ export class CodexSessionRuntimeInvalidUserInputAnswersError extends Schema.Tagg
   }
 }
 
-export class CodexSessionRuntimeThreadIdMissingError extends Schema.TaggedErrorClass<CodexSessionRuntimeThreadIdMissingError>()(
+export class CodexSessionRuntimeThreadIdMissingError extends Schema.TaggedError<CodexSessionRuntimeThreadIdMissingError>()(
   "CodexSessionRuntimeThreadIdMissingError",
   {
     threadId: Schema.String,
@@ -698,13 +699,27 @@ export function isRecoverableThreadResumeError(error: unknown): boolean {
 
 type CodexThreadOpenResponse =
   | CodexRpc.ClientRequestResponsesByMethod["thread/start"]
-  | CodexRpc.ClientRequestResponsesByMethod["thread/resume"]
   | CodexRpc.ClientRequestResponsesByMethod["thread/fork"];
 
 type CodexThreadOpenMethod = "thread/start" | "thread/resume" | "thread/fork";
 
+const CodexThreadResumeMetadata = Schema.Struct({
+  cwd: Schema.String,
+  model: Schema.String,
+  thread: Schema.Struct({ id: Schema.String }),
+});
+const decodeCodexThreadResumeMetadata = Schema.decodeUnknownEffect(CodexThreadResumeMetadata);
+
 interface CodexThreadOpenClient {
-  readonly request: <M extends CodexThreadOpenMethod>(
+  readonly raw: {
+    readonly request: (
+      method: "thread/resume",
+      payload: CodexRpc.ClientRequestParamsByMethod["thread/resume"] & {
+        readonly excludeTurns?: boolean;
+      },
+    ) => Effect.Effect<unknown, CodexErrors.CodexAppServerError>;
+  };
+  readonly request: <M extends Exclude<CodexThreadOpenMethod, "thread/resume">>(
     method: M,
     payload: CodexRpc.ClientRequestParamsByMethod[M],
   ) => Effect.Effect<CodexRpc.ClientRequestResponsesByMethod[M], CodexErrors.CodexAppServerError>;
@@ -720,7 +735,10 @@ export const openCodexThread = (input: {
   readonly resumeThreadId: string | undefined;
   readonly strictResume?: boolean | undefined;
   readonly forkThreadId?: string | undefined;
-}): Effect.Effect<CodexThreadOpenResponse, CodexErrors.CodexAppServerError> => {
+}): Effect.Effect<
+  CodexThreadOpenResponse | typeof CodexThreadResumeMetadata.Type,
+  CodexErrors.CodexAppServerError
+> => {
   const resumeThreadId = input.resumeThreadId;
   const startParams = buildThreadStartParams({
     cwd: input.cwd,
@@ -742,21 +760,36 @@ export const openCodexThread = (input: {
     return input.client.request("thread/start", startParams);
   }
 
+  // Older providers may still return history despite excludeTurns. Only the
+  // session metadata is needed here, so unrelated historical items cannot
+  // prevent resuming a valid provider thread.
+  const resumeMetadata = (
+    params: CodexRpc.ClientRequestParamsByMethod["thread/resume"],
+  ): Effect.Effect<typeof CodexThreadResumeMetadata.Type, CodexErrors.CodexAppServerError> =>
+    input.client.raw
+      .request("thread/resume", { ...params, excludeTurns: true })
+      .pipe(
+        Effect.flatMap((response) =>
+          decodeCodexThreadResumeMetadata(response).pipe(
+            Effect.mapError((error) =>
+              CodexErrors.CodexAppServerRequestError.invalidPayload(
+                "thread/resume",
+                "decode-payload",
+                error,
+              ),
+            ),
+          ),
+        ),
+      );
+
   if (input.strictResume === true) {
     // Imported external session: no fresh-start fallback, and no model
     // override — the thread keeps the model it was recorded with (a model
     // switch on resume triggers codex warnings/compaction behavior).
     const { model: _model, ...strictParams } = startParams;
-    return input.client.request("thread/resume", {
-      threadId: resumeThreadId,
-      ...strictParams,
-    });
+    return resumeMetadata({ threadId: resumeThreadId, ...strictParams });
   }
-  const resumeRequest = input.client.request("thread/resume", {
-    threadId: resumeThreadId,
-    ...startParams,
-  });
-  return resumeRequest.pipe(
+  return resumeMetadata({ threadId: resumeThreadId, ...startParams }).pipe(
     Effect.catchIf(isRecoverableThreadResumeError, (error) =>
       Effect.logWarning("codex app-server thread resume fell back to fresh start", {
         threadId: input.threadId,
@@ -2344,6 +2377,10 @@ export const makeCodexSessionRuntime = (
     return {
       start,
       getSession: Ref.get(sessionRef),
+      compactThread: Effect.gen(function* () {
+        const providerThreadId = yield* readProviderThreadId;
+        yield* client.request("thread/compact/start", { threadId: providerThreadId });
+      }),
       sendTurn: (input) =>
         Effect.gen(function* () {
           const providerThreadId = yield* readProviderThreadId;

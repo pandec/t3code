@@ -17,7 +17,7 @@ import { expandHomePath } from "../../pathExpansion.ts";
 import { codexAppServerArgs } from "../Layers/codexLaunchArgs.ts";
 import { buildCodexInitializeParams } from "../Layers/CodexProvider.ts";
 
-export class CodexImportReaderError extends Schema.TaggedErrorClass<CodexImportReaderError>()(
+export class CodexImportReaderError extends Schema.TaggedError<CodexImportReaderError>()(
   "CodexImportReaderError",
   {
     detail: Schema.String,

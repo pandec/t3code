@@ -1,7 +1,8 @@
-import { CommandId, MessageId, ThreadId } from "@t3tools/contracts";
+import { CommandId, MessageId, ThreadId, TurnId } from "@t3tools/contracts";
 import { assert, it } from "@effect/vitest";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
+import * as Option from "effect/Option";
 
 import { ProjectionThreadMessageRepository } from "../Services/ProjectionThreadMessages.ts";
 import { ProjectionThreadMessageRepositoryLive } from "./ProjectionThreadMessages.ts";
@@ -12,6 +13,61 @@ const layer = it.layer(
 );
 
 layer("ProjectionThreadMessageRepository", (it) => {
+  it.effect("finds the latest live user-message time within one thread", () =>
+    Effect.gen(function* () {
+      const repository = yield* ProjectionThreadMessageRepository;
+      const threadId = ThreadId.make("thread-latest-user-message");
+      assert.isNull(yield* repository.getLatestUserMessageAt({ threadId }));
+
+      yield* repository.upsert({
+        messageId: MessageId.make("import:codex:latest-user-message:000000"),
+        threadId,
+        turnId: null,
+        role: "user",
+        text: "Imported prompt",
+        isStreaming: false,
+        createdAt: "2026-02-28T19:05:06.000Z",
+        updatedAt: "2026-02-28T19:05:06.000Z",
+      });
+      assert.isNull(yield* repository.getLatestUserMessageAt({ threadId }));
+
+      const messages = [
+        { role: "user", createdAt: "2026-02-28T19:05:02.000Z" },
+        { role: "user", createdAt: "2026-02-28T19:05:01.000Z" },
+        { role: "assistant", createdAt: "2026-02-28T19:05:03.000Z" },
+        { role: "system", createdAt: "2026-02-28T19:05:04.000Z" },
+      ] as const;
+      for (const [index, message] of messages.entries()) {
+        yield* repository.upsert({
+          messageId: MessageId.make(`latest-user-message-${index}`),
+          threadId,
+          turnId: null,
+          ...message,
+          text: "Message body",
+          isStreaming: false,
+          updatedAt: "2026-02-28T19:06:00.000Z",
+        });
+      }
+      yield* repository.upsert({
+        messageId: MessageId.make("latest-user-message-other-thread"),
+        threadId: ThreadId.make("thread-latest-user-message-other"),
+        turnId: null,
+        role: "user",
+        text: "Other thread",
+        isStreaming: false,
+        createdAt: "2026-02-28T19:05:05.000Z",
+        updatedAt: "2026-02-28T19:05:05.000Z",
+      });
+
+      assert.strictEqual(
+        yield* repository.getLatestUserMessageAt({ threadId }),
+        "2026-02-28T19:05:02.000Z",
+      );
+      yield* repository.deleteByThreadId({ threadId });
+      assert.isNull(yield* repository.getLatestUserMessageAt({ threadId }));
+    }),
+  );
+
   it.effect("appends streaming text and applies attachment updates", () =>
     Effect.gen(function* () {
       const repository = yield* ProjectionThreadMessageRepository;
@@ -233,6 +289,103 @@ layer("ProjectionThreadMessageRepository", (it) => {
         assert.equal(cleared.value.speechRequestId, null);
         assert.equal(cleared.value.speechRequestStartedAt, null);
       }
+    }),
+  );
+
+  it.effect("checks assistant turn state without hydrating message text", () =>
+    Effect.gen(function* () {
+      const repository = yield* ProjectionThreadMessageRepository;
+      const threadId = ThreadId.make("thread-assistant-turn-state");
+      const turnId = TurnId.make("turn-assistant-state");
+      const createdAt = "2026-03-01T00:00:00.000Z";
+
+      yield* repository.upsert({
+        messageId: MessageId.make("message-assistant-turn-state"),
+        threadId,
+        turnId,
+        role: "assistant",
+        text: "large text that the existence query must not select",
+        isStreaming: false,
+        createdAt,
+        updatedAt: createdAt,
+      });
+
+      assert.equal(
+        yield* repository.hasAssistantMessageForTurn({
+          threadId,
+          turnId,
+          streamingOnly: false,
+        }),
+        true,
+      );
+      assert.equal(
+        yield* repository.hasAssistantMessageForTurn({
+          threadId,
+          turnId,
+          streamingOnly: true,
+        }),
+        false,
+      );
+      assert.equal(
+        yield* repository.hasAssistantMessageForTurn({
+          threadId,
+          turnId: TurnId.make("turn-assistant-state-missing"),
+          streamingOnly: false,
+        }),
+        false,
+      );
+    }),
+  );
+
+  it.effect("finds the turn's latest assistant message id without hydrating text", () =>
+    Effect.gen(function* () {
+      const repository = yield* ProjectionThreadMessageRepository;
+      const threadId = ThreadId.make("thread-latest-assistant");
+      const turnId = TurnId.make("turn-latest-assistant");
+      const baseMessage = { threadId, turnId, isStreaming: false };
+
+      assert.isTrue(
+        Option.isNone(yield* repository.getLatestAssistantMessageIdForTurn({ threadId, turnId })),
+      );
+
+      yield* repository.upsert({
+        ...baseMessage,
+        messageId: MessageId.make("assistant-first"),
+        role: "assistant",
+        text: "first",
+        createdAt: "2026-03-01T00:00:00.000Z",
+        updatedAt: "2026-03-01T00:00:00.000Z",
+      });
+      yield* repository.upsert({
+        ...baseMessage,
+        messageId: MessageId.make("assistant-second"),
+        role: "assistant",
+        text: "second",
+        createdAt: "2026-03-01T00:00:01.000Z",
+        updatedAt: "2026-03-01T00:00:01.000Z",
+      });
+      yield* repository.upsert({
+        ...baseMessage,
+        messageId: MessageId.make("user-later"),
+        role: "user",
+        text: "not an assistant message",
+        createdAt: "2026-03-01T00:00:02.000Z",
+        updatedAt: "2026-03-01T00:00:02.000Z",
+      });
+      yield* repository.upsert({
+        ...baseMessage,
+        turnId: TurnId.make("turn-other"),
+        messageId: MessageId.make("assistant-other-turn"),
+        role: "assistant",
+        text: "other turn",
+        createdAt: "2026-03-01T00:00:03.000Z",
+        updatedAt: "2026-03-01T00:00:03.000Z",
+      });
+
+      assert.deepEqual(
+        yield* repository.getLatestAssistantMessageIdForTurn({ threadId, turnId }),
+        Option.some(MessageId.make("assistant-second")),
+      );
     }),
   );
 });

@@ -1,5 +1,6 @@
 import {
   CommandId,
+  DEFAULT_PROVIDER_INTERACTION_MODE,
   EnvironmentId,
   IsoDateTime,
   MessageId,
@@ -14,6 +15,7 @@ import {
   type ProjectId as ProjectIdType,
   type ProviderInteractionMode as ProviderInteractionModeType,
   type RuntimeMode as RuntimeModeType,
+  type ServerProvider,
 } from "@t3tools/contracts";
 import * as Schema from "effect/Schema";
 
@@ -25,7 +27,7 @@ import {
 } from "./composerAttachment.ts";
 import type { EnvironmentShellStatus } from "./shell.ts";
 
-const THREAD_OUTBOX_SCHEMA_VERSION = 7;
+const THREAD_OUTBOX_SCHEMA_VERSION = 8;
 const THREAD_OUTBOX_MAX_RETRY_DELAY_MS = 16_000;
 
 const QueuedThreadCreationSchema = Schema.Struct({
@@ -58,7 +60,7 @@ export const ThreadOutboxDeliveryIntent = Schema.Literals(["queue", "steer"]);
 export type ThreadOutboxDeliveryIntent = typeof ThreadOutboxDeliveryIntent.Type;
 
 export const QueuedThreadMessageSchema = Schema.Struct({
-  schemaVersion: Schema.Literals([1, 2, 3, 4, 5, 6, THREAD_OUTBOX_SCHEMA_VERSION]),
+  schemaVersion: Schema.Literals([1, 2, 3, 4, 5, 6, 7, THREAD_OUTBOX_SCHEMA_VERSION]),
   environmentId: EnvironmentId,
   threadId: ThreadId,
   messageId: MessageId,
@@ -104,7 +106,7 @@ export interface QueuedThreadMessage {
   readonly messageId: MessageId;
   readonly commandId: CommandId;
   readonly text: string;
-  readonly inputOrigin?: typeof MessageInputOrigin.Type | undefined;
+  readonly inputOrigin?: MessageInputOrigin | undefined;
   readonly attachments: ReadonlyArray<DraftComposerAttachment>;
   readonly modelSelection?: ModelSelectionType | undefined;
   readonly runtimeMode?: RuntimeModeType | undefined;
@@ -258,12 +260,20 @@ export interface ThreadSettingsSnapshot {
 export function resolveQueuedThreadSettings(
   message: QueuedThreadMessage,
   thread: ThreadSettingsSnapshot,
+  providers: ReadonlyArray<Pick<ServerProvider, "instanceId" | "showInteractionModeToggle">> = [],
 ): ThreadSettingsSnapshot {
+  const modelSelection = message.modelSelection ?? thread.modelSelection;
+  const provider = providers.find(
+    (candidate) => candidate.instanceId === modelSelection.instanceId,
+  );
   return {
-    modelSelection: message.modelSelection ?? thread.modelSelection,
+    modelSelection,
     branch: message.localCheckoutBranch ?? thread.branch,
     runtimeMode: message.runtimeMode ?? thread.runtimeMode,
-    interactionMode: message.interactionMode ?? thread.interactionMode,
+    interactionMode:
+      provider?.showInteractionModeToggle === false
+        ? DEFAULT_PROVIDER_INTERACTION_MODE
+        : (message.interactionMode ?? thread.interactionMode),
   };
 }
 
@@ -283,8 +293,8 @@ export function encodeQueuedThreadMessage(message: QueuedThreadMessage): unknown
       if (attachment.type === "file") {
         return attachment;
       }
-      const { previewUri: _previewUri, ...persisted } = attachment;
-      return persisted;
+      const { previewUri, ...persisted } = attachment;
+      return attachment.dataUrl === undefined ? { ...persisted, previewUri } : persisted;
     }),
   });
 }
@@ -293,14 +303,22 @@ export function decodeQueuedThreadMessage(value: unknown): QueuedThreadMessage {
   const { schemaVersion: _, ...message } = decodeStoredQueuedThreadMessage(value);
   return {
     ...message,
-    attachments: message.attachments.map((attachment) =>
-      attachment.type === "image"
-        ? {
-            ...attachment,
-            previewUri: attachment.dataUrl,
-          }
-        : attachment,
-    ),
+    attachments: message.attachments.map((attachment) => {
+      if (attachment.type === "file") {
+        return attachment;
+      }
+      if (attachment.dataUrl !== undefined) {
+        return { ...attachment, dataUrl: attachment.dataUrl, previewUri: attachment.dataUrl };
+      }
+      if (attachment.fileUri !== undefined) {
+        return {
+          ...attachment,
+          fileUri: attachment.fileUri,
+          previewUri: attachment.previewUri ?? attachment.fileUri,
+        };
+      }
+      throw new Error(`Queued image '${attachment.name}' has no preview source.`);
+    }),
   };
 }
 
@@ -438,11 +456,11 @@ export function resolveThreadOutboxDispatchStep(input: {
   if (input.deliveryAction !== "send") {
     return { step: input.deliveryAction };
   }
-  if (input.fileAttachments.length === 0) {
-    return { step: "send" };
-  }
   if (input.serverConfig === null) {
     return { step: "retry" };
+  }
+  if (input.fileAttachments.length === 0) {
+    return { step: "send" };
   }
   const maxBytes = input.serverConfig.maxFileUploadBytes;
   if (maxBytes === undefined) {
@@ -530,13 +548,19 @@ export function outboxDeliveryErrorMessages(error: unknown): ReadonlyArray<strin
 }
 
 export function shouldRetryThreadOutboxDelivery(error: unknown): boolean {
-  if (
-    typeof error === "object" &&
-    error !== null &&
-    "_tag" in error &&
-    error._tag === "ConnectionTransientError"
-  ) {
-    return true;
+  if (typeof error === "object" && error !== null && "_tag" in error) {
+    switch (error._tag) {
+      case "OrchestrationDispatchCommandError":
+      case "EnvironmentAuthorizationError":
+        return false;
+      case "ConnectionTransientError":
+      case "RpcClientError":
+      case "EnvironmentRpcUnavailableError":
+      case "EnvironmentNotRegisteredError":
+        return true;
+      default:
+        break;
+    }
   }
   if (error instanceof Error) {
     return isTransportConnectionErrorMessage(error.message);

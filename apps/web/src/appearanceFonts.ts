@@ -8,12 +8,15 @@
 import {
   DEFAULT_CODE_FONT_SIZE,
   DEFAULT_INTERFACE_FONT_SIZE,
+  DEFAULT_MESSAGE_FONT_SIZE,
   DEFAULT_PROMPT_FONT_SIZE,
   MAX_CODE_FONT_SIZE,
   MAX_INTERFACE_FONT_SIZE,
+  MAX_MESSAGE_FONT_SIZE,
   MAX_PROMPT_FONT_SIZE,
   MIN_CODE_FONT_SIZE,
   MIN_INTERFACE_FONT_SIZE,
+  MIN_MESSAGE_FONT_SIZE,
   MIN_PROMPT_FONT_SIZE,
 } from "@t3tools/contracts";
 
@@ -75,8 +78,10 @@ export interface AppearanceFontPreferences {
   readonly sans: string;
   readonly code: string;
   readonly composer: string;
+  readonly message: string;
   readonly sizeInterface: number;
   readonly sizePrompt: number;
+  readonly sizeMessage: number;
   readonly sizeCode: number;
   /** Grayscale `antialiased` rendering; false keeps the heavier platform default. */
   readonly smoothing: boolean;
@@ -87,8 +92,8 @@ export interface AppearanceFontPreferences {
  * override so the stylesheet defaults (and theme changes) stay in charge.
  *
  * Sizes are always written: the interface size drives the root font size (and
- * with it every rem-based dimension), while the prompt and code sizes stay in
- * absolute pixels so they do not scale twice.
+ * with it every rem-based dimension), while the prompt, message, and code
+ * sizes stay in absolute pixels so they do not scale twice.
  */
 export function applyAppearanceFontVariables(
   root: HTMLElement,
@@ -99,6 +104,8 @@ export function applyAppearanceFontVariables(
     ["--font-mono", preferences.code, DEFAULT_CODE_FONT_STACK],
     // The composer falls back to whatever the sans preference resolves to.
     ["--font-composer", preferences.composer, "var(--font-sans)"],
+    // Thread messages likewise fall back to the sans preference.
+    ["--font-message", preferences.message, "var(--font-sans)"],
   ];
   for (const [variable, custom, fallback] of families) {
     const list = cssFontFamilies(custom);
@@ -111,6 +118,10 @@ export function applyAppearanceFontVariables(
 
   root.style.fontSize = `${clampInterfaceFontSize(preferences.sizeInterface)}px`;
   root.style.setProperty("--font-size-prompt", `${clampPromptFontSize(preferences.sizePrompt)}px`);
+  root.style.setProperty(
+    "--font-size-message",
+    `${clampMessageFontSize(preferences.sizeMessage)}px`,
+  );
   const code = clampCodeFontSize(preferences.sizeCode);
   root.style.setProperty("--font-size-code", `${code}px`);
   // The @pierre/diffs surfaces read their own hook for code text.
@@ -143,6 +154,15 @@ export function clampInterfaceFontSize(value: number): number {
 
 export function clampPromptFontSize(value: number): number {
   return clampFontSize(value, MIN_PROMPT_FONT_SIZE, MAX_PROMPT_FONT_SIZE, DEFAULT_PROMPT_FONT_SIZE);
+}
+
+export function clampMessageFontSize(value: number): number {
+  return clampFontSize(
+    value,
+    MIN_MESSAGE_FONT_SIZE,
+    MAX_MESSAGE_FONT_SIZE,
+    DEFAULT_MESSAGE_FONT_SIZE,
+  );
 }
 
 export function clampCodeFontSize(value: number): number {

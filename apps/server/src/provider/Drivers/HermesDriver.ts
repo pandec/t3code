@@ -28,11 +28,7 @@ import {
 import { withExpandedProviderBinaryPath } from "../ProviderBinaryPath.ts";
 import type { ServerProviderDraft } from "../providerSnapshot.ts";
 import { mergeProviderInstanceEnvironment } from "../ProviderInstanceEnvironment.ts";
-import {
-  makeManualOnlyProviderMaintenanceCapabilities,
-  makeStaticProviderMaintenanceResolver,
-  resolveProviderMaintenanceCapabilitiesEffect,
-} from "../providerMaintenance.ts";
+import { makeManualOnlyProviderMaintenanceCapabilities } from "../providerMaintenance.ts";
 import {
   haveProviderSnapshotSettingsChanged,
   makeProviderSnapshotSettingsSource,
@@ -41,12 +37,12 @@ import {
 const decodeHermesSettings = Schema.decodeSync(HermesSettings);
 
 const DRIVER_KIND = ProviderDriverKind.make("hermes");
-const UPDATE = makeStaticProviderMaintenanceResolver(
-  makeManualOnlyProviderMaintenanceCapabilities({
-    provider: DRIVER_KIND,
-    packageName: null,
-  }),
-);
+// Hermes has no package manager or self-update command; like Grok it stays
+// manual-update-only, so there is no binary to resolve or ownership to detect.
+const MAINTENANCE_CAPABILITIES = makeManualOnlyProviderMaintenanceCapabilities({
+  provider: DRIVER_KIND,
+  packageName: null,
+});
 
 export type HermesDriverEnv =
   | BackgroundPolicy.BackgroundPolicy
@@ -106,10 +102,6 @@ export const HermesDriver: ProviderDriver<HermesSettings, HermesDriverEnv> = {
         ...config,
         enabled,
       } satisfies HermesSettings);
-      const maintenanceCapabilities = yield* resolveProviderMaintenanceCapabilitiesEffect(UPDATE, {
-        binaryPath: effectiveConfig.binaryPath,
-        env: processEnv,
-      });
 
       const adapter = yield* makeHermesAdapter(effectiveConfig, {
         environment: processEnv,
@@ -127,7 +119,7 @@ export const HermesDriver: ProviderDriver<HermesSettings, HermesDriverEnv> = {
 
       const snapshotSettings = makeProviderSnapshotSettingsSource(effectiveConfig, serverSettings);
       const snapshot = yield* makeManagedServerProvider<ProviderSnapshotSettings<HermesSettings>>({
-        maintenanceCapabilities,
+        resolveMaintenance: () => Effect.succeed(MAINTENANCE_CAPABILITIES),
         getSettings: snapshotSettings.getSettings,
         streamSettings: snapshotSettings.streamSettings,
         haveSettingsChanged: haveProviderSnapshotSettingsChanged,
@@ -137,7 +129,7 @@ export const HermesDriver: ProviderDriver<HermesSettings, HermesDriverEnv> = {
         enrichSnapshot: ({ settings, snapshot: currentSnapshot, publishSnapshot }) =>
           enrichHermesSnapshot({
             snapshot: currentSnapshot,
-            maintenanceCapabilities,
+            maintenanceCapabilities: MAINTENANCE_CAPABILITIES,
             enableProviderUpdateChecks: settings.enableProviderUpdateChecks,
             publishSnapshot,
             httpClient,

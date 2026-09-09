@@ -54,6 +54,14 @@ Project commands target the T3 data directory selected by `--base-dir` or `T3COD
 running server. If that server is unavailable, the command fails without opening the database.
 `project list --json` returns each project's `defaultThreadEnvMode` and `autoPull` settings.
 
+A project id or its exact stored workspace path remains valid for renaming, removal, and action
+management after the folder is moved or deleted. Commands that need the workspace cannot continue.
+For example, starting provider work fails with: "This thread's workspace folder no longer exists or
+is not a directory: <path>. Restore the folder at this path before retrying."
+
+Removing a project that still has child threads requires `--force`, even when its workspace folder is
+missing.
+
 ### Project actions
 
 Project actions can also be managed by project id or exact workspace-root path:
@@ -125,6 +133,8 @@ t3 thread send <thread-id> --message "Also check the logs" --json
 t3 thread rename <thread-id> "Investigate test failures" --json
 t3 thread status <thread-id> --json
 t3 thread messages <thread-id> --json
+t3 thread input list <thread-id> --json
+t3 thread input respond <thread-id> <request-id> --answers-json '{"scope":"server"}' --json
 t3 thread interrupt <thread-id> --json
 t3 thread wait <thread-id> --json
 t3 thread archive <thread-id> --json
@@ -132,7 +142,8 @@ t3 thread archive <thread-id> --json
 
 Thread commands require a running T3 server. `thread new` creates a thread and starts its first
 agent turn. `thread send` starts a new turn when the thread is idle and steers the active turn when
-the provider supports steering. Thread list and status JSON summaries include `snoozedUntil` and
+the provider supports steering. It does not resolve a user-input request. Use `thread input respond`
+for that request. Thread list and status JSON summaries include `snoozedUntil` and
 `snoozedAt`; both are `null` when the thread is not snoozed, and an indefinite snooze ("until I wake
 it") carries a `snoozedAt` with a `null` `snoozedUntil`. Snooze is an inbox overlay and does not
 change the thread's turn `state`.
@@ -146,6 +157,34 @@ person settled it or the server's automatic settlement (inactivity, merged or cl
 did. `settledAt` is `null` when unsettled; automatic settlement stamps the last qualifying activity,
 while manual settlement stamps the settle moment. Settling is an inbox overlay like snooze and does
 not change the thread's turn `state`.
+
+### Answering user input
+
+List unresolved questions before answering one:
+
+```bash
+t3 thread input list <thread-id> --json
+t3 thread input respond <thread-id> <request-id> \
+  --answers-json '{"scope":"server","checks":["lint","tests"]}' \
+  --json
+```
+
+The list result is `{ "threadId", "requests" }`. Each request has `id`, `responseMode`
+(`"blocking"` or `"message"`), `createdAt`, and `questions`. Each question has `id`, `header`,
+`prompt`, `allowCustomAnswer`, `multiSelect`, and `options`; each option has `id`, `label`, and
+`description`. Use question ids as the answer-map keys. Use option ids as values, an array of option
+ids for a multi-select question, or a custom string when the question allows one.
+
+`thread input respond` requires the complete answer map. The server rejects missing answers, stale
+request ids, and duplicate replies. A pending native input request may disappear when its turn ends.
+If that happens, a later `thread input respond` call is stale and the server rejects it. A successful
+JSON result has `threadId`, `requestId`, `commandId`, and `sequence`. Its `action` is
+`"response-requested"`. The sequence is the mutation acknowledgement and can be passed to `thread
+wait --after-sequence` when the response starts or steers a turn.
+
+Message-mode questions do not pause the active turn. Answering one resolves the request and sends the
+answers as a user message in one operation. A plain `thread send` only sends or steers a message and
+leaves the question unresolved.
 
 ### Reading messages
 
@@ -175,6 +214,56 @@ environment id and label when the server reports them. When you run this command
 another machine, the paths belong to that host, not yours. Fetch the files over SSH rather than
 concluding they are missing.
 
+### Archiving after a turn
+
+To have an agent archive its thread when it finishes, use:
+
+```bash
+t3 thread archive self --after-turn --remove-worktree --json
+```
+
+An explicit thread ID works too, including another running thread. The server selects that
+thread's current turn when it accepts the request. Idle threads archive immediately, unless the
+last turn finished within the past two minutes and its checkpoint has not landed yet; then the
+archive waits for that checkpoint. There is no turn-ID argument. Requests survive server
+restarts, wait for a successful turn and its final checkpoint, and cancel if the turn fails, is
+interrupted, or newer work starts. Background work must finish before a scheduled archive
+executes.
+
+`--remove-worktree` is optional. Cleanup stops the provider session and closes the thread's
+terminals before removing the worktree. It preserves the branch and refuses dirty or locked
+worktrees, detached worktrees, the project checkout, and worktrees used by another unarchived
+thread. A cleanup failure leaves the worktree in place and records the error on the archive
+request. The thread may already be archived.
+
+Inspect progress or cancel before archiving starts:
+
+```bash
+t3 thread archive <thread-id> --status --json
+t3 thread archive <thread-id> --cancel --json
+```
+
+Status works after the thread is archived. Thread list and status summaries include
+`archiveRequest`, with its selected turn, request ID, status, and any failure detail.
+
+Provider processes receive `T3CODE_THREAD_ID`, `T3CODE_WORKTREE_PATH`, `T3CODE_HOME`, and
+`T3CODE_STATE_DIR` for their owning thread and environment. The worktree variable contains the
+effective working directory, including the project checkout when no worktree is selected.
+`self` resolves from `T3CODE_THREAD_ID`; outside a provider process or T3 terminal, pass a thread ID.
+For a provider connected to an externally managed server, T3 cannot change that server's process
+environment, so pass the explicit thread ID.
+
+Native turn IDs are assigned after launch and change when a persistent session starts another
+turn. Read current context when needed instead of inheriting a stale turn ID:
+
+```bash
+t3 thread context self --json
+eval "$(t3 thread context self --shell)"
+```
+
+The POSIX shell form exports all three context variables, including `T3CODE_TURN_ID`. That value
+is empty while idle and is a snapshot of the turn at command time. Refresh it for each turn.
+
 ### Waiting for turns
 
 `t3 thread wait <thread-id>` blocks until the thread's current turn settles. The default timeout is 30
@@ -197,9 +286,10 @@ t3 thread wait "$thread_id" --after-sequence "$seq"
 
 Use `--turn <turn-id>` to wait for one specific turn. If another turn becomes latest first, the wait
 returns `superseded` with exit code 0; an unknown or mistyped turn id has the same result because the
-shell cannot distinguish it from an older turn. By default a pending approval or user-input request
-returns immediately as outcome `blocked`; `--on-blocked wait` keeps waiting instead. A newly dispatched
-turn can briefly exist before a provider session adopts it, so `wait` treats a queued start it observes
+shell cannot distinguish it from an older turn. By default a pending approval or blocking user-input
+request returns immediately as outcome `blocked`; `--on-blocked wait` keeps waiting instead. A
+message-mode request does not end the wait while its turn is active. A newly dispatched turn can briefly
+exist before a provider session adopts it, so `wait` treats a queued start it observes
 as pending for up to two minutes. If that observed start never adopts before the grace expires, it
 returns `unadopted` with exit code 2 and `adoptionTimedOut: true`. An already-old message on a plain idle
 thread is not treated as an adoption timeout.

@@ -3,6 +3,7 @@ import { scopedProjectKey, scopeProjectRef } from "@t3tools/client-runtime/envir
 import { squashAtomCommandFailure } from "@t3tools/client-runtime/state/runtime";
 import {
   Outlet,
+  redirect,
   createRootRoute,
   type ErrorComponentProps,
   useLocation,
@@ -16,9 +17,11 @@ import { resolveServerBackedAppDisplayName } from "../branding.logic";
 import { AppSidebarLayout } from "../components/AppSidebarLayout";
 import { CommandPalette } from "../components/CommandPalette";
 import { ConfirmDialogHost } from "../components/ConfirmDialogHost";
+import { FirstRunGate } from "../components/onboarding/FirstRunGate";
 import { ConnectOnboardingDialog } from "../components/cloud/ConnectOnboardingDialog";
 import { RelayClientInstallDialog } from "../components/cloud/RelayClientInstallDialog";
 import { SshPasswordPromptDialog } from "../components/desktop/SshPasswordPromptDialog";
+import { SnapShotCoordinator } from "../components/desktop/SnapShotCoordinator";
 import { DesktopAppActivationCoordinator } from "../components/desktop/DesktopAppActivationCoordinator";
 import { ProviderUpdateLaunchNotification } from "../components/ProviderUpdateLaunchNotification";
 import { SlowRpcRequestToastCoordinator } from "../components/SlowRpcRequestToastCoordinator";
@@ -65,6 +68,9 @@ import {
   type KeybindingsUpdateToastController,
 } from "../components/KeybindingsUpdateToast.logic";
 
+import { getDesktopSnapShotBridge } from "../lib/desktopSnapShot";
+import { shouldResumeSnapShotSetupOnStartup } from "../lib/snapShotSetupResume";
+
 export const Route = createRootRoute({
   beforeLoad: async ({ location }) => {
     if (location.pathname === "/pair" && hasHostedPairingRequest(new URL(window.location.href))) {
@@ -84,6 +90,14 @@ export const Route = createRootRoute({
     }
 
     const authGateState = await resolveInitialServerAuthGateState();
+    if (
+      authGateState.status === "authenticated" &&
+      getDesktopSnapShotBridge() &&
+      shouldResumeSnapShotSetupOnStartup() &&
+      location.pathname !== "/settings/snap-shot"
+    ) {
+      throw redirect({ to: "/settings/snap-shot", replace: true });
+    }
     return {
       authGateState,
     };
@@ -103,6 +117,16 @@ function RootRouteView() {
     primaryEnvironmentAuthenticated || authGateState.status === "hosted-static";
   const isStandaloneRoute =
     pathname === "/pair" || pathname === "/connect" || pathname.startsWith("/connect/");
+  // The welcome wizard is full-screen like /pair, but keeps the appearance
+  // syncs and toasts so its connect/import actions can report failures.
+  const isWelcomeRoute = pathname === "/welcome";
+  const returningFromWelcomeRef = useRef(isWelcomeRoute);
+
+  useEffect(() => {
+    if (pathname === "/welcome") {
+      returningFromWelcomeRef.current = true;
+    }
+  }, [pathname]);
 
   useEffect(() => {
     const frame = window.requestAnimationFrame(() => {
@@ -113,43 +137,92 @@ function RootRouteView() {
     };
   }, [pathname]);
 
+  if (isStandaloneRoute) {
+    return (
+      <>
+        <DocumentTitleSync />
+        <Outlet />
+      </>
+    );
+  }
+
+  // Show onboarding over the workspace, keeping automatic thread navigation
+  // and other startup dialogs suspended until setup finishes.
+  if (isWelcomeRoute) {
+    return (
+      <ToastProvider>
+        <AnchoredToastProvider>
+          <DocumentTitleSync />
+          <ContrastAppearanceSync />
+          <EnvironmentThemeSync />
+          <GlassAppearanceSync />
+          <FontAppearanceSync />
+          <CommandPalette>
+            <AppSidebarLayout>
+              <Outlet />
+            </AppSidebarLayout>
+          </CommandPalette>
+        </AnchoredToastProvider>
+      </ToastProvider>
+    );
+  }
+
+  if (!hasEnvironmentShell) {
+    return (
+      <>
+        <DocumentTitleSync />
+        <Outlet />
+      </>
+    );
+  }
+
+  const appShell = (
+    <CommandPalette>
+      <AppSidebarLayout>
+        <Outlet />
+      </AppSidebarLayout>
+    </CommandPalette>
+  );
+
+  // FirstRunGate holds back everything below it — including EventRouter,
+  // whose welcome payload navigates into a thread — until the first-run
+  // decision is known, so a fresh install renders nothing (not the shell,
+  // not a flash of threads) before landing on the welcome wizard.
   return (
     <ToastProvider>
       <AnchoredToastProvider>
         <DocumentTitleSync />
-        {hasEnvironmentShell ? <TurnCompletionNotifications /> : null}
-        {isStandaloneRoute || !hasEnvironmentShell ? (
-          <Outlet />
-        ) : (
-          <>
-            <ContrastAppearanceSync />
-            <EnvironmentThemeSync />
-            <GlassAppearanceSync />
-            <FontAppearanceSync />
-            {primaryEnvironmentAuthenticated ? <AuthenticatedTracingBootstrap /> : null}
-            {primaryEnvironmentAuthenticated ? <DesktopAppActivationCoordinator /> : null}
-            <RelayClientInstallDialog />
-            <ConnectOnboardingDialog />
-            <SshPasswordPromptDialog />
-            <ConfirmDialogHost />
-            <SlowRpcRequestToastCoordinator />
-            <HostedStaticEnvironmentBootstrap />
-            {primaryEnvironmentAuthenticated ? <EventRouter /> : null}
-            {primaryEnvironmentAuthenticated ? <PlanAgentSelectionHeal /> : null}
-            {/* Also under hosted-static: any connected capable environment
-                can go stale and needs the reconnect repair. */}
-            <SavedPromptLibrarySync />
-            {primaryEnvironmentAuthenticated ? <ProviderUpdateLaunchNotification /> : null}
-            <CommandPalette>
-              <AppSidebarLayout>
-                <Outlet />
-              </AppSidebarLayout>
-            </CommandPalette>
-          </>
-        )}
-        {/* Above the router: a theme draft is judged by walking the app, so the
-            editor has to survive navigation away from settings. */}
-        <ThemeEditorHost />
+        <TurnCompletionNotifications />
+        <ContrastAppearanceSync />
+        <EnvironmentThemeSync />
+        <GlassAppearanceSync />
+        <FontAppearanceSync />
+        <FirstRunGate
+          enabled={primaryEnvironmentAuthenticated}
+          hostedStatic={authGateState.status === "hosted-static"}
+        >
+          {primaryEnvironmentAuthenticated ? <AuthenticatedTracingBootstrap /> : null}
+          {primaryEnvironmentAuthenticated ? <DesktopAppActivationCoordinator /> : null}
+          <RelayClientInstallDialog />
+          <ConnectOnboardingDialog />
+          <SshPasswordPromptDialog />
+          <SnapShotCoordinator />
+          <ConfirmDialogHost />
+          <SlowRpcRequestToastCoordinator />
+          <HostedStaticEnvironmentBootstrap />
+          {primaryEnvironmentAuthenticated ? (
+            <EventRouter skipInitialBootstrapNavigation={returningFromWelcomeRef.current} />
+          ) : null}
+          {primaryEnvironmentAuthenticated ? <PlanAgentSelectionHeal /> : null}
+          {/* Also under hosted-static: any connected capable environment
+              can go stale and needs the reconnect repair. */}
+          <SavedPromptLibrarySync />
+          {primaryEnvironmentAuthenticated ? <ProviderUpdateLaunchNotification /> : null}
+          {appShell}
+          {/* Above the router: a theme draft is judged by walking the app, so the
+              editor has to survive navigation away from settings. */}
+          <ThemeEditorHost />
+        </FirstRunGate>
       </AnchoredToastProvider>
     </ToastProvider>
   );
@@ -188,8 +261,10 @@ function FontAppearanceSync() {
   const fontFamilySans = useClientSettings((settings) => settings.fontFamilySans);
   const fontFamilyCode = useClientSettings((settings) => settings.fontFamilyCode);
   const fontFamilyComposer = useClientSettings((settings) => settings.fontFamilyComposer);
+  const fontFamilyMessage = useClientSettings((settings) => settings.fontFamilyMessage);
   const fontSizeInterface = useClientSettings((settings) => settings.fontSizeInterface);
   const fontSizePrompt = useClientSettings((settings) => settings.fontSizePrompt);
+  const fontSizeMessage = useClientSettings((settings) => settings.fontSizeMessage);
   const fontSizeCode = useClientSettings((settings) => settings.fontSizeCode);
   const fontSmoothing = useClientSettings((settings) => settings.fontSmoothing);
 
@@ -198,17 +273,21 @@ function FontAppearanceSync() {
       sans: fontFamilySans,
       code: fontFamilyCode,
       composer: fontFamilyComposer,
+      message: fontFamilyMessage,
       sizeInterface: fontSizeInterface,
       sizePrompt: fontSizePrompt,
+      sizeMessage: fontSizeMessage,
       sizeCode: fontSizeCode,
       smoothing: fontSmoothing,
     });
   }, [
     fontFamilyCode,
     fontFamilyComposer,
+    fontFamilyMessage,
     fontFamilySans,
     fontSizeCode,
     fontSizeInterface,
+    fontSizeMessage,
     fontSizePrompt,
     fontSmoothing,
   ]);
@@ -380,7 +459,11 @@ function AuthenticatedTracingBootstrap() {
   return null;
 }
 
-function EventRouter() {
+function EventRouter({
+  skipInitialBootstrapNavigation,
+}: {
+  readonly skipInitialBootstrapNavigation: boolean;
+}) {
   const navigate = useNavigate();
   const pathname = useLocation({ select: (loc) => loc.pathname });
   const projectGroupingSettings = useClientSettings(selectProjectGroupingSettings);
@@ -393,6 +476,7 @@ function EventRouter() {
   const serverWelcome = useAtomValue(primaryServerWelcomeAtom);
   const readPathname = useEffectEvent(() => pathname);
   const handledBootstrapThreadIdRef = useRef<string | null>(null);
+  const skipInitialBootstrapNavigationRef = useRef(skipInitialBootstrapNavigation);
   const handledConfigEventRef = useRef(serverConfigEvent);
   const [keybindingsToastController] = useState<KeybindingsUpdateToastController>(() =>
     createKeybindingsUpdateToastController({}),
@@ -422,6 +506,11 @@ function EventRouter() {
       useUiStateStore.getState().setProjectExpanded(bootstrapProjectKey, true);
 
       if (readPathname() !== "/") {
+        return;
+      }
+      if (skipInitialBootstrapNavigationRef.current) {
+        skipInitialBootstrapNavigationRef.current = false;
+        handledBootstrapThreadIdRef.current = payload.bootstrapThreadId;
         return;
       }
       if (handledBootstrapThreadIdRef.current === payload.bootstrapThreadId) {

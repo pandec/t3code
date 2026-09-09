@@ -18,9 +18,10 @@ function messageStorageKey(message: QueuedThreadMessage): string {
 export const localThreadOutboxStorage: ThreadOutboxStorage = {
   load: async () => {
     if (typeof localStorage === "undefined") {
-      return [];
+      return { messages: [], errors: [] };
     }
     const messages: QueuedThreadMessage[] = [];
+    const errors: ThreadOutboxStorageError[] = [];
     const keys: string[] = [];
     for (let index = 0; index < localStorage.length; index += 1) {
       const key = localStorage.key(index);
@@ -36,8 +37,7 @@ export const localThreadOutboxStorage: ThreadOutboxStorage = {
       try {
         messages.push(decodeQueuedThreadMessage(JSON.parse(raw)));
       } catch (cause) {
-        console.warn(
-          "[thread-outbox] skipping invalid persisted message",
+        errors.push(
           new ThreadOutboxStorageError({
             operation: "read-message",
             environmentId: null,
@@ -49,7 +49,7 @@ export const localThreadOutboxStorage: ThreadOutboxStorage = {
         );
       }
     }
-    return messages;
+    return { messages, errors };
   },
   write: async (message) => {
     localStorage.setItem(

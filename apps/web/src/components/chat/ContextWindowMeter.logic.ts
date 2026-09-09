@@ -1,4 +1,6 @@
-import type { ModelSelection, ProviderInstanceId } from "@t3tools/contracts";
+import type { ProviderUsageWindow } from "@t3tools/client-runtime/state/provider-usage";
+import type { ModelSelection, ProviderDriverKind, ProviderInstanceId } from "@t3tools/contracts";
+import { formatUsd } from "@t3tools/shared/usageFormat";
 import {
   CLAUDE_RESUME_COMPACTION_NEVER_ANSWER,
   isClaudeResumeCompactionQuestion,
@@ -9,30 +11,36 @@ import {
 } from "../../providerInstances";
 import { getTriggerDisplayModelName, type ModelEsque } from "./providerIconUtils";
 
-export const CLAUDE_RESUME_COMPACTION_MINUTES = 70;
-export const CLAUDE_RESUME_COMPACTION_TOKENS = 100_000;
+const CLAUDE_RESUME_COMPACTION_MINUTES = 70;
+const CLAUDE_RESUME_COMPACTION_TOKENS = 100_000;
 
-export function hasAvailableClaudeCompactionProvider(input: {
+export function providerSupportsManualCompaction(
+  provider: ProviderInstanceEntry | null | undefined,
+): boolean {
+  return provider?.snapshot.slashCommands.some((command) => command.name === "compact") ?? false;
+}
+
+export function hasAvailableCompactionProvider(input: {
   readonly providers: ReadonlyArray<ProviderInstanceEntry>;
+  readonly driverKind: ProviderDriverKind;
   readonly instanceId: ProviderInstanceId | null;
   readonly lockedInstanceId: ProviderInstanceId | null;
 }): boolean {
-  const claudeProviders = input.providers.filter(
-    (provider) => provider.driverKind === "claudeAgent",
+  const driverProviders = input.providers.filter(
+    (provider) => provider.driverKind === input.driverKind,
   );
   const lockedContinuationGroupKey = input.lockedInstanceId
-    ? claudeProviders.find((provider) => provider.instanceId === input.lockedInstanceId)
+    ? driverProviders.find((provider) => provider.instanceId === input.lockedInstanceId)
         ?.continuationGroupKey
     : undefined;
   const compatibleProviders = lockedContinuationGroupKey
-    ? claudeProviders.filter(
+    ? driverProviders.filter(
         (provider) => provider.continuationGroupKey === lockedContinuationGroupKey,
       )
-    : claudeProviders;
+    : driverProviders;
 
-  return (
-    resolveSelectableProviderInstanceEntry(compatibleProviders, input.instanceId ?? undefined) !==
-    undefined
+  return providerSupportsManualCompaction(
+    resolveSelectableProviderInstanceEntry(compatibleProviders, input.instanceId ?? undefined),
   );
 }
 
@@ -101,4 +109,56 @@ export function formatContextWindowCompactionMessage(
   return modelDisplayName
     ? `Context for ${modelDisplayName} compacts automatically when needed.`
     : "Context compacts automatically when needed.";
+}
+
+/**
+ * The OpenRouter balance as a quota window against the user's budget, so the
+ * popover can draw it with the same row, bar, and colour thresholds as a
+ * provider window. OpenRouter only reports what is left; the budget setting
+ * says what "full" is. Spending past the budget pins the bar at 100% rather
+ * than going negative, and a topped-up balance above the budget reads as 0%.
+ */
+export function openRouterCreditsBudgetWindow(
+  balanceUsd: number | null,
+  budgetUsd: number | null,
+): ProviderUsageWindow | null {
+  if (balanceUsd === null || budgetUsd === null) return null;
+  if (!Number.isFinite(balanceUsd) || !Number.isFinite(budgetUsd) || budgetUsd <= 0) return null;
+  const usedPercent = Math.max(0, Math.min(100, ((budgetUsd - balanceUsd) / budgetUsd) * 100));
+  return {
+    id: "openrouter_budget",
+    group: "other",
+    label: `Budget ${formatUsd(budgetUsd)}`,
+    shortLabel: "OR",
+    usedPercent,
+    resetsAt: null,
+    status: "ok",
+  };
+}
+
+/**
+ * Whether the footer should hold the meter's slot before a snapshot exists.
+ *
+ * The snapshot comes from thread activities, which load after the shell.
+ * Reserving the slot while the detail loads, for a started thread, keeps the
+ * attach button still until the meter mounts. Once the detail is in, a
+ * missing snapshot means there is no usage to show and nothing is reserved.
+ *
+ * The meter renders from stored activities whatever the provider's state, so
+ * only a provider known not to stream usage skips the reservation. An unknown
+ * provider (catalog still loading, or the thread's provider disabled) reserves.
+ */
+export function shouldReserveContextWindowMeter(input: {
+  readonly meterEnabled: boolean;
+  readonly detailLoading: boolean;
+  readonly threadStarted: boolean;
+  /** `null` while the thread's provider is not in the catalog. */
+  readonly providerReportsContextWindow: boolean | null;
+}): boolean {
+  return (
+    input.meterEnabled &&
+    input.detailLoading &&
+    input.threadStarted &&
+    input.providerReportsContextWindow !== false
+  );
 }

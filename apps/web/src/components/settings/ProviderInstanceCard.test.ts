@@ -36,33 +36,58 @@ describe("deriveProviderModelsForDisplay", () => {
     expect(
       deriveProviderModelsForDisplay({
         liveModels,
-        customModels: ["kept-custom"],
+        customModels: [{ slug: "kept-custom", name: "kept-custom", capabilities: null }],
       }).map((model) => model.slug),
     ).toEqual(["server-model", "kept-custom"]);
   });
 
-  it("parses labeled entries so rows match live custom models by slug", () => {
+  it("prefers the entry's name and capabilities over the stale live custom row", () => {
+    const liveCapabilities = { optionDescriptors: [] };
+    const customCapabilities = {
+      optionDescriptors: [
+        {
+          id: "reasoningEffort",
+          label: "Reasoning",
+          type: "select" as const,
+          options: [{ id: "high", label: "High", isDefault: true }],
+          currentValue: "high",
+        },
+      ],
+    };
     const liveModels: ReadonlyArray<ServerProviderModel> = [
-      {
-        slug: "gpt-5.6-sol",
-        name: "GPT-5.6-Sol",
-        isCustom: true,
-        capabilities: null,
-      },
+      { slug: "bare", name: "bare", isCustom: true, capabilities: liveCapabilities },
+      { slug: "named", name: "named", isCustom: true, capabilities: liveCapabilities },
     ];
 
-    const models = deriveProviderModelsForDisplay({
+    const display = deriveProviderModelsForDisplay({
       liveModels,
-      customModels: ["gpt-5.6-sol=GPT-5.6-Sol"],
+      customModels: [
+        { slug: "bare", name: "bare", capabilities: null },
+        { slug: "named", name: "My Model", capabilities: customCapabilities },
+      ],
     });
-    expect(models).toEqual([liveModels[0]]);
+
+    // A bare entry keeps the driver default the server filled in.
+    expect(display[0]).toEqual({
+      slug: "bare",
+      name: "bare",
+      isCustom: true,
+      capabilities: liveCapabilities,
+    });
+    expect(display[1]).toEqual({
+      slug: "named",
+      name: "My Model",
+      isCustom: true,
+      capabilities: customCapabilities,
+    });
   });
 
-  it("labels entries the live snapshot does not know yet", () => {
+  it("renders structured entries the live snapshot does not know yet", () => {
     const models = deriveProviderModelsForDisplay({
       liveModels: [],
-      customModels: ["gpt-5.6-sol=GPT-5.6-Sol"],
+      customModels: [{ slug: "gpt-5.6-sol", name: "GPT-5.6-Sol", capabilities: null }],
     });
+
     expect(models).toEqual([
       {
         slug: "gpt-5.6-sol",

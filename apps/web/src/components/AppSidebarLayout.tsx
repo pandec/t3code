@@ -1,8 +1,6 @@
 import { useAtomValue } from "@effect/atom-react";
 import * as Schema from "effect/Schema";
 import {
-  lazy,
-  Suspense,
   useEffect,
   useState,
   useSyncExternalStore,
@@ -17,9 +15,14 @@ import { resolveShortcutCommand, shortcutLabelForCommand } from "../keybindings"
 import { cn, isMacPlatform } from "../lib/utils";
 import { primaryServerKeybindingsAtom } from "../state/server";
 import { useEnvironmentIdentificationMode, useLegacySidebarEnabled } from "../hooks/useSettings";
-import { usePanelAnimationSettings } from "../panelAnimations";
+import {
+  PanelAnimationSuppressionProvider,
+  usePanelAnimationSettings,
+  usePanelNavigationSuppression,
+} from "../panelAnimations";
 import LegacyThreadSidebar from "./LegacySidebar";
 import ThreadSidebar from "./Sidebar";
+import { SettingsSidebarNav } from "./settings/SettingsSidebarNav";
 import { SidebarChromeHeader } from "./sidebar/SidebarChrome";
 import {
   resolveSidebarStageFocusRingOffsetClass,
@@ -43,14 +46,6 @@ import {
 import { Tooltip, TooltipPopup, TooltipTrigger } from "./ui/tooltip";
 
 const MACOS_TRAFFIC_LIGHTS_LEFT_INSET = "90px";
-
-// The settings nav (and the Clerk profile surfaces behind it) only renders on
-// settings routes; lazy-loading it keeps that subtree out of the startup chunk.
-const SettingsSidebarNav = lazy(() =>
-  import("./settings/SettingsSidebarNav").then((module) => ({
-    default: module.SettingsSidebarNav,
-  })),
-);
 
 function subscribeToViewportWidth(onChange: () => void): () => void {
   window.addEventListener("resize", onChange);
@@ -153,6 +148,8 @@ export function AppSidebarLayout({ children }: { children: ReactNode }) {
   // Settings routes show the settings nav in place of whichever thread
   // sidebar is active.
   const pathname = useLocation({ select: (location) => location.pathname });
+  const panelAnimationsSuppressed = usePanelNavigationSuppression(pathname);
+  const routePanelAnimationsActive = panelAnimationsActive && !panelAnimationsSuppressed;
   const isOnSettings = pathname === "/settings" || pathname.startsWith("/settings/");
   const isMacosDesktop = isElectron && isMacPlatform(navigator.platform);
   const [sidebarWidth, setSidebarWidth] = useState(readInitialThreadSidebarWidth);
@@ -221,46 +218,46 @@ export function AppSidebarLayout({ children }: { children: ReactNode }) {
   }, [navigate, pathname]);
 
   return (
-    <SidebarProvider
-      className="h-dvh! min-h-0!"
-      data-panel-animations={panelAnimationsActive ? "true" : "false"}
-      defaultOpen
-      style={sidebarProviderStyle}
-    >
-      <ProjectProjectionRetention />
-      <Sidebar
-        side="left"
-        collapsible="offcanvas"
-        data-app-sidebar=""
-        className="border-r border-sidebar-border bg-sidebar text-sidebar-foreground"
-        resizable={{
-          maxWidth: sidebarMaximumWidth,
-          minWidth: THREAD_SIDEBAR_MIN_WIDTH,
-          // Same rule as the clamp above, measured against the live wrapper so
-          // the two never disagree and refuse a width the clamp just allowed.
-          shouldAcceptWidth: ({ currentWidth, nextWidth, wrapper }) =>
-            nextWidth <= currentWidth ||
-            nextWidth <= resolveThreadSidebarMaximumWidth(wrapper.clientWidth),
-          storageKey: THREAD_SIDEBAR_WIDTH_STORAGE_KEY,
-          onResize: setSidebarWidth,
-        }}
+    <PanelAnimationSuppressionProvider value={panelAnimationsSuppressed}>
+      <SidebarProvider
+        className="h-dvh! min-h-0!"
+        data-panel-animations={routePanelAnimationsActive ? "true" : "false"}
+        defaultOpen
+        style={sidebarProviderStyle}
       >
-        {isOnSettings ? (
-          <>
-            <SidebarChromeHeader isElectron={isElectron} />
-            <Suspense fallback={null}>
+        <ProjectProjectionRetention />
+        <Sidebar
+          side="left"
+          collapsible="offcanvas"
+          data-app-sidebar=""
+          className="border-r border-sidebar-border bg-sidebar text-sidebar-foreground"
+          resizable={{
+            maxWidth: sidebarMaximumWidth,
+            minWidth: THREAD_SIDEBAR_MIN_WIDTH,
+            // Match the responsive clamp above so a drag is never rejected at
+            // a width that the live viewport limit just allowed.
+            shouldAcceptWidth: ({ currentWidth, nextWidth, wrapper }) =>
+              nextWidth <= currentWidth ||
+              nextWidth <= resolveThreadSidebarMaximumWidth(wrapper.clientWidth),
+            storageKey: THREAD_SIDEBAR_WIDTH_STORAGE_KEY,
+            onResize: setSidebarWidth,
+          }}
+        >
+          {isOnSettings ? (
+            <>
+              <SidebarChromeHeader isElectron={isElectron} />
               <SettingsSidebarNav pathname={pathname} />
-            </Suspense>
-          </>
-        ) : legacySidebarEnabled ? (
-          <LegacyThreadSidebar />
-        ) : (
-          <ThreadSidebar />
-        )}
-        <SidebarRail onDoubleClick={resetSidebarWidth} />
-      </Sidebar>
-      {children}
-      <SidebarControl />
-    </SidebarProvider>
+            </>
+          ) : legacySidebarEnabled ? (
+            <LegacyThreadSidebar />
+          ) : (
+            <ThreadSidebar />
+          )}
+          <SidebarRail onDoubleClick={resetSidebarWidth} />
+        </Sidebar>
+        {children}
+        <SidebarControl />
+      </SidebarProvider>
+    </PanelAnimationSuppressionProvider>
   );
 }

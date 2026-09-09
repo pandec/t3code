@@ -4,6 +4,7 @@ import {
   type ServerProvider,
   type ServerProviderModel,
   type ServerProviderSlashCommand,
+  type CustomModelSetting,
 } from "@t3tools/contracts";
 import type * as EffectAcpSchema from "effect-acp/schema";
 import { causeErrorTag } from "@t3tools/shared/observability";
@@ -98,7 +99,7 @@ export function buildInitialHermesProviderSnapshot(
 }
 
 function hermesModelsFromSettings(
-  customModels: ReadonlyArray<string> | undefined,
+  customModels: ReadonlyArray<CustomModelSetting> | undefined,
   builtInModels: ReadonlyArray<ServerProviderModel> = HERMES_DEFAULT_MODELS,
 ): ReadonlyArray<ServerProviderModel> {
   return providerModelsFromSettings(builtInModels, customModels ?? [], EMPTY_CAPABILITIES);

@@ -23,6 +23,7 @@ export interface Preferences {
   readonly lightThemeId?: MobileThemeId;
   readonly darkThemeId?: MobileThemeId;
   readonly themeMode?: MobileThemeMode;
+  readonly materialYouStyleLayoutEnabled?: boolean;
   readonly baseFontSize?: number;
   readonly terminalFontSize?: number | null;
   readonly markdownFontSize?: number;
@@ -84,7 +85,7 @@ export interface Preferences {
   readonly threadLastVisitedAtById?: Readonly<Record<string, string>>;
 }
 
-export class MobilePreferencesLoadError extends Schema.TaggedErrorClass<MobilePreferencesLoadError>()(
+export class MobilePreferencesLoadError extends Schema.TaggedError<MobilePreferencesLoadError>()(
   "MobilePreferencesLoadError",
   { cause: Schema.Defect() },
 ) {
@@ -93,7 +94,7 @@ export class MobilePreferencesLoadError extends Schema.TaggedErrorClass<MobilePr
   }
 }
 
-export class MobilePreferencesSaveError extends Schema.TaggedErrorClass<MobilePreferencesSaveError>()(
+export class MobilePreferencesSaveError extends Schema.TaggedError<MobilePreferencesSaveError>()(
   "MobilePreferencesSaveError",
   { cause: Schema.Defect() },
 ) {
@@ -129,6 +130,7 @@ export function sanitizePreferences(parsed: Preferences): Preferences {
     lightThemeId?: MobileThemeId;
     darkThemeId?: MobileThemeId;
     themeMode?: MobileThemeMode;
+    materialYouStyleLayoutEnabled?: boolean;
     baseFontSize?: number;
     terminalFontSize?: number | null;
     markdownFontSize?: number;
@@ -186,6 +188,9 @@ export function sanitizePreferences(parsed: Preferences): Preferences {
     parsed.themeMode === "dark"
   ) {
     preferences.themeMode = parsed.themeMode;
+  }
+  if (typeof parsed.materialYouStyleLayoutEnabled === "boolean") {
+    preferences.materialYouStyleLayoutEnabled = parsed.materialYouStyleLayoutEnabled;
   }
   if (typeof parsed.baseFontSize === "number") preferences.baseFontSize = parsed.baseFontSize;
   if (typeof parsed.terminalFontSize === "number" || parsed.terminalFontSize === null) {

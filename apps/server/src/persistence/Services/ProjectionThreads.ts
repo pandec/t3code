@@ -15,6 +15,7 @@ import {
   ProviderInteractionMode,
   RuntimeMode,
   ThreadLinkedPullRequest,
+  ThreadArchiveRequest,
   ThreadId,
   TurnId,
 } from "@t3tools/contracts";
@@ -35,6 +36,8 @@ export const ProjectionThread = Schema.Struct({
   branch: Schema.NullOr(Schema.String),
   worktreePath: Schema.NullOr(Schema.String),
   linkedPullRequest: Schema.optional(Schema.NullOr(ThreadLinkedPullRequest)),
+  branchPullRequest: Schema.optional(Schema.NullOr(ThreadLinkedPullRequest)),
+  archiveRequest: Schema.optional(Schema.NullOr(ThreadArchiveRequest)),
   latestTurnId: Schema.NullOr(TurnId),
   createdAt: IsoDateTime,
   updatedAt: IsoDateTime,
@@ -44,9 +47,9 @@ export const ProjectionThread = Schema.Struct({
   unsettledAt: Schema.NullOr(IsoDateTime),
   snoozedUntil: Schema.NullOr(IsoDateTime),
   snoozedAt: Schema.NullOr(IsoDateTime),
-  movedToTopAt: Schema.NullOr(IsoDateTime),
   pinnedAt: Schema.NullOr(IsoDateTime),
   pinOrderKey: Schema.optional(Schema.NullOr(Schema.String)),
+  activeOrderKey: Schema.optional(Schema.NullOr(Schema.String)),
   titleRegenerationRequestId: Schema.optional(Schema.NullOr(CommandId)),
   titleRegenerationStartedAt: Schema.optional(Schema.NullOr(IsoDateTime)),
   latestUserMessageAt: Schema.NullOr(IsoDateTime),
@@ -81,6 +84,11 @@ export interface ProjectionThreadRepositoryShape {
    *
    * Upserts by `threadId`.
    */
+  readonly listPendingArchives: () => Effect.Effect<
+    ReadonlyArray<ThreadId>,
+    ProjectionRepositoryError
+  >;
+
   readonly upsert: (thread: ProjectionThread) => Effect.Effect<void, ProjectionRepositoryError>;
 
   /**

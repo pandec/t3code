@@ -1,6 +1,57 @@
 import { isProviderDriverKind, ProviderDriverKind } from "@t3tools/contracts";
-import { ClaudeAI, CursorIcon, GrokIcon, HermesIcon, Icon, OpenAI, OpenCodeIcon } from "../Icons";
-import { PROVIDER_OPTIONS } from "../../session-logic";
+import {
+  AntigravityIcon,
+  ClaudeAI,
+  CursorIcon,
+  GrokIcon,
+  HermesIcon,
+  Icon,
+  OpenAI,
+  OpenCodeIcon,
+} from "../Icons";
+
+export type ProviderPickerKind = ProviderDriverKind;
+
+export const PROVIDER_OPTIONS: Array<{
+  value: ProviderPickerKind;
+  label: string;
+  available: boolean;
+  /** Shown on the model picker sidebar when relevant */
+  pickerSidebarBadge?: "new" | "soon";
+}> = [
+  { value: ProviderDriverKind.make("codex"), label: "Codex", available: true },
+  { value: ProviderDriverKind.make("claudeAgent"), label: "Claude", available: true },
+  {
+    value: ProviderDriverKind.make("opencode"),
+    label: "OpenCode",
+    available: true,
+    pickerSidebarBadge: "new",
+  },
+  {
+    value: ProviderDriverKind.make("cursor"),
+    label: "Cursor",
+    available: true,
+    pickerSidebarBadge: "new",
+  },
+  {
+    value: ProviderDriverKind.make("grok"),
+    label: "Grok",
+    available: true,
+    pickerSidebarBadge: "new",
+  },
+  {
+    value: ProviderDriverKind.make("hermes"),
+    label: "Hermes",
+    available: true,
+    pickerSidebarBadge: "new",
+  },
+  {
+    value: ProviderDriverKind.make("antigravity"),
+    label: "Antigravity",
+    available: true,
+    pickerSidebarBadge: "new",
+  },
+];
 
 export const PROVIDER_ICON_BY_PROVIDER: Partial<Record<ProviderDriverKind, Icon>> = {
   [ProviderDriverKind.make("codex")]: OpenAI,
@@ -9,6 +60,7 @@ export const PROVIDER_ICON_BY_PROVIDER: Partial<Record<ProviderDriverKind, Icon>
   [ProviderDriverKind.make("cursor")]: CursorIcon,
   [ProviderDriverKind.make("grok")]: GrokIcon,
   [ProviderDriverKind.make("hermes")]: HermesIcon,
+  [ProviderDriverKind.make("antigravity")]: AntigravityIcon,
 };
 
 /**
@@ -58,6 +110,8 @@ export type ModelEsque = {
   name: string;
   shortName?: string | undefined;
   subProvider?: string | undefined;
+  aliases?: ReadonlyArray<string> | undefined;
+  isDefault?: boolean | undefined;
   badge?: "new" | undefined;
   isLegacy?: boolean | undefined;
   /** Per-model icon override (a driver-kind id); see {@link getModelIconComponent}. */

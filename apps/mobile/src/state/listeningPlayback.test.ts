@@ -153,7 +153,7 @@ describe("mobile listening playback startup", () => {
     });
 
     expect(order).toEqual(["prepareSource", "prepareAudioMode", "play"]);
-    expect(coordinator.getSnapshot().track).toEqual({ ...track, playing: false });
+    expect(coordinator.getSnapshot().track).toEqual({ ...track, playing: false, atRest: true });
   });
 
   it("stops after source attach when recording starts mid-load", async () => {

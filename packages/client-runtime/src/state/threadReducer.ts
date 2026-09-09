@@ -13,6 +13,8 @@ import type {
   OrchestrationThreadMessagePage,
   TurnId,
 } from "@t3tools/contracts";
+import { isImportedAgentSessionMessageId } from "@t3tools/contracts";
+import { compareDateTimeStrings } from "@t3tools/shared/dateTime";
 import { messageArtifactTextHash } from "@t3tools/shared/messageArtifactIdentity";
 
 import { isParentAgentProgressActivity } from "./threadSteerPending.ts";
@@ -51,15 +53,38 @@ function retainRecent<T>(entries: ReadonlyArray<T>): ReadonlyArray<T> {
 }
 
 /**
- * Rows the cap must not evict: consumers read only the newest of each and a
- * subagent fan-out can push it thousands of rows back. The context-window
- * meter reads the latest resolvable update; the steer-pending marker resolves
- * against the main agent's latest tool start (mirrored server-side by the
- * pinned-activity CTE in ProjectionSnapshotQuery).
+ * Rows the cap must not evict because consumers read only the newest of each,
+ * and a subagent fan-out can push it thousands of rows back: the context-window
+ * meter reads the latest resolvable update, and the steer-pending marker
+ * resolves against the main agent's latest tool start (mirrored server-side by
+ * the pinned-activity CTE in ProjectionSnapshotQuery).
  */
 const RETAINED_LATEST_ACTIVITY_PREDICATES: ReadonlyArray<
   (activity: OrchestrationThreadActivity) => boolean
 > = [isResolvableContextWindowActivity, isParentAgentProgressActivity];
+
+// Async (message-mode) questions can stay open while the agent keeps producing
+// activity; the server pins them past its window and the client must too, or
+// the pending question disappears locally while the server still awaits it.
+function unresolvedMessageModeRequests(
+  activities: ReadonlyArray<OrchestrationThreadActivity>,
+): Set<OrchestrationThreadActivity> {
+  const pending = new Map<string, OrchestrationThreadActivity>();
+  for (const activity of activities) {
+    const payload =
+      activity.payload && typeof activity.payload === "object"
+        ? (activity.payload as Record<string, unknown>)
+        : null;
+    const requestId = payload?.requestId;
+    if (typeof requestId !== "string") continue;
+    if (activity.kind === "user-input.requested" && payload?.responseMode === "message") {
+      pending.set(requestId, activity);
+    } else if (activity.kind === "user-input.resolved") {
+      pending.delete(requestId);
+    }
+  }
+  return new Set(pending.values());
+}
 
 function retainRecentActivities(
   activities: ReadonlyArray<OrchestrationThreadActivity>,
@@ -76,6 +101,9 @@ function retainRecentActivities(
         break;
       }
     }
+  }
+  for (const request of unresolvedMessageModeRequests(activities)) {
+    if (!recent.includes(request)) pinned.push(request);
   }
   if (pinned.length === 0) return recent;
 
@@ -264,6 +292,7 @@ function applyThreadDetailEventUnretained(
           interactionMode: event.payload.interactionMode,
           branch: event.payload.branch,
           worktreePath: event.payload.worktreePath,
+          branchPullRequest: null,
           latestTurn: null,
           createdAt: event.payload.createdAt,
           updatedAt: event.payload.updatedAt,
@@ -271,9 +300,9 @@ function applyThreadDetailEventUnretained(
           settledOverride: null,
           settledAt: null,
           unsettledAt: null,
+          activeOrderKey: null,
           snoozedUntil: null,
           snoozedAt: null,
-          movedToTopAt: null,
           deletedAt: null,
           messages: [],
           completedTurnAssistantMessageIds: [],
@@ -312,6 +341,7 @@ function applyThreadDetailEventUnretained(
           settledOverride: "settled",
           settledAt: event.payload.settledAt,
           unsettledAt: null,
+          activeOrderKey: null,
           updatedAt: event.payload.updatedAt,
         },
       };
@@ -352,15 +382,6 @@ function applyThreadDetailEventUnretained(
           snoozedUntil: null,
           snoozedAt: null,
           updatedAt: event.payload.updatedAt,
-        },
-      };
-
-    case "thread.moved-to-top":
-      return {
-        kind: "updated",
-        thread: {
-          ...thread,
-          movedToTopAt: event.payload.movedToTopAt,
         },
       };
 
@@ -417,6 +438,12 @@ function applyThreadDetailEventUnretained(
             : {}),
           ...(event.payload.linkedPullRequest !== undefined
             ? { linkedPullRequest: event.payload.linkedPullRequest }
+            : {}),
+          ...(event.payload.branchPullRequest !== undefined
+            ? { branchPullRequest: event.payload.branchPullRequest }
+            : {}),
+          ...(event.payload.activeOrderKey !== undefined
+            ? { activeOrderKey: event.payload.activeOrderKey }
             : {}),
           updatedAt: event.payload.updatedAt,
         },
@@ -1150,7 +1177,9 @@ function retainMessagesAfterRevert(
 ): OrchestrationMessage[] {
   const retainedMessageIds = new Set<MessageId>();
   for (const message of messages) {
-    if (message.role === "system") {
+    // Imported agent-session messages predate any turn, so a revert never owns
+    // them and they must not consume the retained-turn budget below.
+    if (message.role === "system" || isImportedAgentSessionMessageId(message.id)) {
       retainedMessageIds.add(message.id);
     } else if (message.turnId !== null && retainedTurnIds.has(message.turnId)) {
       retainedMessageIds.add(message.id);
@@ -1160,7 +1189,10 @@ function retainMessagesAfterRevert(
   const retainFallbackMessages = (role: "user" | "assistant") => {
     const windowTurnCount = messages.filter((message) => message.role === role).length;
     const retainedCount = messages.filter(
-      (message) => message.role === role && retainedMessageIds.has(message.id),
+      (message) =>
+        message.role === role &&
+        !isImportedAgentSessionMessageId(message.id) &&
+        retainedMessageIds.has(message.id),
     ).length;
     const missingCount = Math.max(0, Math.min(turnCount, windowTurnCount) - retainedCount);
     const fallbackMessages = messages
@@ -1173,7 +1205,8 @@ function retainMessagesAfterRevert(
       // The filtered copy is safe to sort in place; Hermes does not support toSorted.
       .sort(
         (left, right) =>
-          left.createdAt.localeCompare(right.createdAt) || left.id.localeCompare(right.id),
+          compareDateTimeStrings(left.createdAt, right.createdAt) ||
+          left.id.localeCompare(right.id),
       )
       .slice(0, missingCount);
     for (const message of fallbackMessages) retainedMessageIds.add(message.id);
@@ -1181,5 +1214,6 @@ function retainMessagesAfterRevert(
 
   retainFallbackMessages("user");
   retainFallbackMessages("assistant");
+
   return Arr.filter(messages, (message) => retainedMessageIds.has(message.id));
 }

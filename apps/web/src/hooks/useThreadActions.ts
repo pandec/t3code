@@ -20,8 +20,8 @@ import { useCallback, useMemo, useRef } from "react";
 import {
   canArchiveThreadNow,
   getFallbackThreadIdAfterDelete,
-  nextSidebarThreadBumpAt,
   pinOrderKeyBetween,
+  planMoveActiveThreadToTop,
 } from "../components/Sidebar.logic";
 import { useComposerDraftStore } from "../composerDraftStore";
 import { pauseListeningForThread, stopListeningForThread } from "../state/listeningPlayback";
@@ -33,9 +33,9 @@ import { refreshArchivedThreadsForEnvironment } from "../lib/archivedThreadsStat
 import { releaseComposerDraftUploads } from "../lib/composerDraftUploads";
 import { readLocalApi } from "../localApi";
 import {
-  readEnvironmentSupportsMoveToTop,
   readEnvironmentSupportsPinning,
   readEnvironmentSupportsPinReorder,
+  readEnvironmentSupportsActiveReorder,
   readEnvironmentSupportsSettlement,
   readEnvironmentSupportsSnooze,
   readEnvironmentSupportsSnoozeIndefinite,
@@ -53,7 +53,7 @@ import { useClientSettings } from "./useSettings";
 import { useAtomCommand } from "../state/use-atom-command";
 import { threadActionUndoHistory } from "../archiveUndo";
 
-export class ThreadArchiveBlockedError extends Schema.TaggedErrorClass<ThreadArchiveBlockedError>()(
+export class ThreadArchiveBlockedError extends Schema.TaggedError<ThreadArchiveBlockedError>()(
   "ThreadArchiveBlockedError",
   {
     environmentId: EnvironmentId,
@@ -71,7 +71,7 @@ const archivingThreadKeys = new Set<string>();
 // surface (hover quick-action, context menus, palette) inherits it.
 const forkingThreadKeys = new Set<string>();
 
-export class ThreadSettlementUnsupportedError extends Schema.TaggedErrorClass<ThreadSettlementUnsupportedError>()(
+export class ThreadSettlementUnsupportedError extends Schema.TaggedError<ThreadSettlementUnsupportedError>()(
   "ThreadSettlementUnsupportedError",
   {
     environmentId: EnvironmentId,
@@ -104,7 +104,7 @@ export function useUnarchiveThread() {
   );
 }
 
-export class ThreadSnoozeUnsupportedError extends Schema.TaggedErrorClass<ThreadSnoozeUnsupportedError>()(
+export class ThreadSnoozeUnsupportedError extends Schema.TaggedError<ThreadSnoozeUnsupportedError>()(
   "ThreadSnoozeUnsupportedError",
   {
     environmentId: EnvironmentId,
@@ -116,19 +116,7 @@ export class ThreadSnoozeUnsupportedError extends Schema.TaggedErrorClass<Thread
   }
 }
 
-export class ThreadMoveToTopUnsupportedError extends Schema.TaggedErrorClass<ThreadMoveToTopUnsupportedError>()(
-  "ThreadMoveToTopUnsupportedError",
-  {
-    environmentId: EnvironmentId,
-    threadId: ThreadId,
-  },
-) {
-  override get message(): string {
-    return "This environment's server does not support Move to top yet. Update the server to use it.";
-  }
-}
-
-export class ThreadSnoozeBlockedError extends Schema.TaggedErrorClass<ThreadSnoozeBlockedError>()(
+export class ThreadSnoozeBlockedError extends Schema.TaggedError<ThreadSnoozeBlockedError>()(
   "ThreadSnoozeBlockedError",
   {
     environmentId: EnvironmentId,
@@ -152,7 +140,7 @@ function topOfPinnedRunOrderKey(): string | undefined {
   return pinOrderKeyBetween(null, firstKey) ?? undefined;
 }
 
-export class ThreadPinningUnsupportedError extends Schema.TaggedErrorClass<ThreadPinningUnsupportedError>()(
+export class ThreadPinningUnsupportedError extends Schema.TaggedError<ThreadPinningUnsupportedError>()(
   "ThreadPinningUnsupportedError",
   {
     environmentId: EnvironmentId,
@@ -164,7 +152,7 @@ export class ThreadPinningUnsupportedError extends Schema.TaggedErrorClass<Threa
   }
 }
 
-export class ThreadPinReorderUnsupportedError extends Schema.TaggedErrorClass<ThreadPinReorderUnsupportedError>()(
+export class ThreadPinReorderUnsupportedError extends Schema.TaggedError<ThreadPinReorderUnsupportedError>()(
   "ThreadPinReorderUnsupportedError",
   {
     environmentId: EnvironmentId,
@@ -173,6 +161,18 @@ export class ThreadPinReorderUnsupportedError extends Schema.TaggedErrorClass<Th
 ) {
   override get message(): string {
     return "This environment's server does not support reordering pinned threads yet. Update the server to reorder pins.";
+  }
+}
+
+export class ThreadActiveReorderUnsupportedError extends Schema.TaggedError<ThreadActiveReorderUnsupportedError>()(
+  "ThreadActiveReorderUnsupportedError",
+  {
+    environmentId: EnvironmentId,
+    threadId: ThreadId,
+  },
+) {
+  override get message(): string {
+    return "Update this environment's server to reorder active threads.";
   }
 }
 
@@ -194,6 +194,42 @@ export async function requestThreadUnpinConfirmation(input: {
       ].join("\n"),
     ),
   );
+}
+
+/** One prompt for a multi-select unpin; the per-thread dialog would stack once per row. */
+export async function requestBulkThreadUnpinConfirmation(input: {
+  enabled: boolean;
+  count: number;
+  confirm: ((message: string) => Promise<boolean>) | null;
+}) {
+  const { confirm } = input;
+  if (!input.enabled || confirm === null) {
+    return AsyncResult.success(true);
+  }
+
+  return settlePromise(() =>
+    confirm(
+      [
+        `Unpin ${input.count} thread${input.count === 1 ? "" : "s"}?`,
+        "This will move these threads out of your pinned section.",
+      ].join("\n"),
+    ),
+  );
+}
+
+/** Report navigation separately so a completed deletion can still finish worktree cleanup. */
+export async function navigateAfterThreadDeletion(navigate: () => Promise<void>) {
+  const result = await settlePromise(navigate);
+  if (result._tag === "Failure") {
+    const error = squashAtomCommandFailure(result);
+    toastManager.add(
+      stackedThreadToast({
+        type: "error",
+        title: "Thread deleted, but navigation failed",
+        description: error instanceof Error ? error.message : "An error occurred.",
+      }),
+    );
+  }
 }
 
 export function useThreadActions() {
@@ -223,13 +259,13 @@ export function useThreadActions() {
   const reorderPinnedThreadMutation = useAtomCommand(threadEnvironment.reorderPin, {
     reportFailure: false,
   });
+  const reorderActiveThreadMutation = useAtomCommand(threadEnvironment.reorderActive, {
+    reportFailure: false,
+  });
   const snoozeThreadMutation = useAtomCommand(threadEnvironment.snooze, {
     reportFailure: false,
   });
   const unsnoozeThreadMutation = useAtomCommand(threadEnvironment.unsnooze, {
-    reportFailure: false,
-  });
-  const moveThreadToTopMutation = useAtomCommand(threadEnvironment.moveToTop, {
     reportFailure: false,
   });
   const stopThreadSession = useAtomCommand(threadEnvironment.stopSession);
@@ -517,39 +553,20 @@ export function useThreadActions() {
       clearTerminalUiState(threadRef);
 
       if (shouldNavigateToFallback) {
-        if (fallbackThreadId) {
-          const fallbackThread = readThreadShell(
-            scopeThreadRef(threadRef.environmentId, fallbackThreadId),
-          );
-          if (fallbackThread) {
-            const navigationResult = await settlePromise(() =>
-              router.navigate({
+        const fallbackThread = fallbackThreadId
+          ? readThreadShell(scopeThreadRef(threadRef.environmentId, fallbackThreadId))
+          : null;
+        await navigateAfterThreadDeletion(() =>
+          fallbackThread
+            ? router.navigate({
                 to: "/$environmentId/$threadId",
                 params: buildThreadRouteParams(
                   scopeThreadRef(fallbackThread.environmentId, fallbackThread.id),
                 ),
                 replace: true,
-              }),
-            );
-            if (navigationResult._tag === "Failure") {
-              return navigationResult;
-            }
-          } else {
-            const navigationResult = await settlePromise(() =>
-              router.navigate({ to: "/", replace: true }),
-            );
-            if (navigationResult._tag === "Failure") {
-              return navigationResult;
-            }
-          }
-        } else {
-          const navigationResult = await settlePromise(() =>
-            router.navigate({ to: "/", replace: true }),
-          );
-          if (navigationResult._tag === "Failure") {
-            return navigationResult;
-          }
-        }
+              })
+            : router.navigate({ to: "/", replace: true }),
+        );
       }
 
       if (!shouldDeleteWorktree || !orphanedWorktreePath || !threadProject) {
@@ -578,9 +595,10 @@ export function useThreadActions() {
             ? refreshResult
             : null;
       if (cleanupFailure) {
+        const removalFailed = removeResult._tag === "Failure";
         const error = squashAtomCommandFailure(cleanupFailure);
-        const message = error instanceof Error ? error.message : "Unknown error removing worktree.";
-        console.error("Failed to remove orphaned worktree after thread deletion", {
+        const message = error instanceof Error ? error.message : "An error occurred.";
+        console.error("Worktree cleanup failed after thread deletion", {
           threadId: threadRef.threadId,
           projectCwd: threadProject.workspaceRoot,
           worktreePath: orphanedWorktreePath,
@@ -589,11 +607,16 @@ export function useThreadActions() {
         toastManager.add(
           stackedThreadToast({
             type: "error",
-            title: "Thread deleted, but worktree removal failed",
-            description: `Could not remove ${displayWorktreePath ?? orphanedWorktreePath}. ${message}`,
+            title: removalFailed
+              ? "Failed to delete worktree"
+              : "Worktree deleted, but Git status refresh failed",
+            description: removalFailed
+              ? `Could not remove ${displayWorktreePath ?? orphanedWorktreePath}. ${message}`
+              : message,
           }),
         );
-        return cleanupFailure;
+        // The thread was deleted. Cleanup has its own toast; returning its
+        // failure would make callers incorrectly report a thread deletion error.
       }
       return deleteResult;
     },
@@ -763,6 +786,26 @@ export function useThreadActions() {
     [reorderPinnedThreadMutation],
   );
 
+  const reorderActiveThread = useCallback(
+    async (target: ScopedThreadRef, orderKey: string) => {
+      if (!readEnvironmentSupportsActiveReorder(target.environmentId)) {
+        return AsyncResult.failure(
+          Cause.fail(
+            new ThreadActiveReorderUnsupportedError({
+              environmentId: target.environmentId,
+              threadId: target.threadId,
+            }),
+          ),
+        );
+      }
+      return reorderActiveThreadMutation({
+        environmentId: target.environmentId,
+        input: { threadId: target.threadId, orderKey },
+      });
+    },
+    [reorderActiveThreadMutation],
+  );
+
   const snoozeThread = useCallback(
     async (target: ScopedThreadRef, snoozedUntil: string | null) => {
       // Version skew: never send the command to a server that predates it.
@@ -836,41 +879,45 @@ export function useThreadActions() {
     [unsnoozeThreadMutation],
   );
 
-  const moveThreadToTop = useCallback(
-    async (target: ScopedThreadRef, movedToTopAt: string) => {
-      if (!readEnvironmentSupportsMoveToTop(target.environmentId)) {
-        return AsyncResult.failure(
-          Cause.fail(
-            new ThreadMoveToTopUnsupportedError({
-              environmentId: target.environmentId,
-              threadId: target.threadId,
-            }),
-          ),
-        );
-      }
-      return moveThreadToTopMutation({
-        environmentId: target.environmentId,
-        input: { threadId: target.threadId, movedToTopAt },
-      });
-    },
-    [moveThreadToTopMutation],
-  );
-
   /**
-   * Move-to-top for menu callers. The bump has to outrank every other active
-   * thread's sort key, so it is computed against the whole unarchived set
-   * rather than the caller's filtered view — a sidebar scoped to one project
-   * must still move the thread above threads it cannot see.
+   * Move-to-top for menu callers. It rides the same saved active order that
+   * drag-and-drop writes: the thread is planned to the head of the whole
+   * unarchived active partition (not the caller's filtered view, so a sidebar
+   * scoped to one project still moves it above threads it cannot see), and
+   * every key the planner materializes is written sequentially. There is
+   * deliberately no rollback: each key write is a complete placement, and the
+   * next arrangement repairs whatever a partial failure leaves behind.
    */
   const attemptMoveThreadToTop = useCallback(
     async (target: ScopedThreadRef) => {
-      const unarchivedThreads = readThreadShells().filter((shell) => shell.archivedAt === null);
-      const result = await moveThreadToTop(
-        target,
-        nextSidebarThreadBumpAt(unarchivedThreads, {
-          sortByLatestUserMessage: sortActiveByLatestUserMessage,
-        }),
-      );
+      if (!readEnvironmentSupportsActiveReorder(target.environmentId)) {
+        const error = new ThreadActiveReorderUnsupportedError({
+          environmentId: target.environmentId,
+          threadId: target.threadId,
+        });
+        toastManager.add(
+          stackedThreadToast({
+            type: "error",
+            title: "Failed to move thread to top",
+            description: error.message,
+          }),
+        );
+        return AsyncResult.failure(Cause.fail(error));
+      }
+      const targetKey = scopedThreadKey(target);
+      const assignments = planMoveActiveThreadToTop({
+        threads: readThreadShells(),
+        targetKey,
+        keyOf: (shell) => scopedThreadKey(scopeThreadRef(shell.environmentId, shell.id)),
+        options: { sortByLatestUserMessage: sortActiveByLatestUserMessage },
+      });
+      let result: AsyncResult.AsyncResult<unknown, unknown> = AsyncResult.success(undefined);
+      for (const assignment of assignments) {
+        const ref = parseScopedThreadKey(assignment.id);
+        if (ref === null) continue;
+        result = await reorderActiveThread(ref, assignment.orderKey);
+        if (result._tag === "Failure") break;
+      }
       if (result._tag === "Failure" && !isAtomCommandInterrupted(result)) {
         const error = squashAtomCommandFailure(result);
         toastManager.add(
@@ -883,7 +930,7 @@ export function useThreadActions() {
       }
       return result;
     },
-    [moveThreadToTop, sortActiveByLatestUserMessage],
+    [reorderActiveThread, sortActiveByLatestUserMessage],
   );
 
   const confirmAndDeleteThread = useCallback(
@@ -928,11 +975,11 @@ export function useThreadActions() {
       snoozeThread,
       unsnoozeThread,
       attemptMoveThreadToTop,
-      moveThreadToTop,
       pinThread,
       unpinThread,
       confirmAndUnpinThread,
       reorderPinnedThread,
+      reorderActiveThread,
     }),
     [
       archiveThread,
@@ -942,9 +989,9 @@ export function useThreadActions() {
       deleteThread,
       forkThread,
       attemptMoveThreadToTop,
-      moveThreadToTop,
       pinThread,
       reorderPinnedThread,
+      reorderActiveThread,
       settleThread,
       snoozeThread,
       unarchiveThread,

@@ -89,6 +89,7 @@ const expandGlob = Effect.fnUntraced(function* (pattern: string) {
   return matchedPaths.toSorted((left, right) => left.localeCompare(right));
 });
 
+// Exported for the fork: scripts/machine-update.ts lists fleet hosts from ~/.ssh/config alone.
 export const collectSshConfigAliasesFromFile = Effect.fnUntraced(function* (
   filePath: string,
   visited = new Set<string>(),

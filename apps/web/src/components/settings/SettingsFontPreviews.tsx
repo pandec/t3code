@@ -1,5 +1,6 @@
 import { preloadPatchFile } from "@pierre/diffs/ssr";
 import { useCallback, useEffect, useRef, useState } from "react";
+import ChatMarkdown from "../ChatMarkdown";
 import { ComposerPromptEditor, type ComposerPromptEditorHandle } from "../ComposerPromptEditor";
 import { terminalThemeFromApp } from "../ThreadTerminalDrawer";
 import { useTheme } from "../../hooks/useTheme";
@@ -51,6 +52,27 @@ export function PromptFontPreview() {
         onChange={onChange}
         onPaste={noop}
       />
+    </div>
+  );
+}
+
+// A short assistant reply with the inline elements messages commonly carry:
+// a heading, inline code, emphasis, and a list, so the size choice shows how
+// the hierarchy holds up.
+const MESSAGE_PREVIEW_TEXT = [
+  "### Fixed the flaky test",
+  "",
+  "The timer in `surface.test.ts` raced the highlighter. I replaced it with an awaited receipt, so the assertion now runs **after** the first frame lands.",
+  "",
+  "- Ran the focused test three times",
+  "- No other callers touched",
+].join("\n");
+
+/** The real markdown renderer, carrying the same class the timeline applies. */
+export function MessageFontPreview() {
+  return (
+    <div className="mt-1 mb-2 rounded-lg border border-border bg-background px-3 py-2">
+      <ChatMarkdown text={MESSAGE_PREVIEW_TEXT} cwd={undefined} className="chat-message-text" />
     </div>
   );
 }

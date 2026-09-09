@@ -4,6 +4,7 @@ import {
   areFontAdvancesMonospace,
   clampCodeFontSize,
   clampInterfaceFontSize,
+  clampMessageFontSize,
   clampPromptFontSize,
   cssFontFamilies,
   resolveDefaultFamilyLabel,
@@ -99,6 +100,8 @@ describe("font size clamping", () => {
     expect(clampInterfaceFontSize(2)).toBe(12);
     expect(clampInterfaceFontSize(96)).toBe(20);
     expect(clampPromptFontSize(40)).toBe(20);
+    expect(clampMessageFontSize(40)).toBe(20);
+    expect(clampMessageFontSize(3)).toBe(12);
     expect(clampCodeFontSize(1)).toBe(10);
   });
 

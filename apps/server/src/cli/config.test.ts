@@ -18,7 +18,7 @@ import {
 import * as NetService from "@t3tools/shared/Net";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import { deriveServerPaths } from "../config.ts";
-import { resolveServerConfig } from "./config.ts";
+import { resolveCliAuthConfig, resolveServerConfig } from "./config.ts";
 
 const deriveExplicitServerPaths = (baseDir: string, devUrl: URL | undefined) =>
   deriveServerPaths(baseDir, devUrl, { baseDirIsExplicit: true });
@@ -40,6 +40,44 @@ const makeDesktopBootstrap = (
 });
 
 it.layer(NodeServices.layer)("cli config resolution", (it) => {
+  it.effect.each([false, true])(
+    "uses the owning state directory unless --base-dir is explicit: %s",
+    (explicit) =>
+      Effect.scoped(
+        Effect.gen(function* () {
+          const fs = yield* FileSystem.FileSystem;
+          const path = yield* Path.Path;
+          const baseDir = yield* fs.makeTempDirectoryScoped({ prefix: "t3-cli-context-" });
+          const stateDir = path.join(baseDir, "dev");
+          const resolved = yield* resolveCliAuthConfig(
+            { baseDir: explicit ? Option.some(baseDir) : Option.none() },
+            Option.none(),
+          ).pipe(
+            Effect.provide(
+              Layer.merge(
+                ConfigProvider.layer(
+                  ConfigProvider.fromEnv({
+                    env: {
+                      T3CODE_HOME: baseDir,
+                      T3CODE_STATE_DIR: stateDir,
+                      T3CODE_TRACE_FILE: path.join(baseDir, "custom.trace.ndjson"),
+                      T3CODE_PORT: "3773",
+                      T3CODE_MODE: "desktop",
+                    },
+                  }),
+                ),
+                NetService.layer,
+              ),
+            ),
+          );
+          assert.equal(resolved.stateDir, explicit ? path.join(baseDir, "userdata") : stateDir);
+          assert.equal(resolved.dbPath, path.join(resolved.stateDir, "state.sqlite"));
+          assert.equal(resolved.secretsDir, path.join(resolved.stateDir, "secrets"));
+          assert.equal(resolved.serverTracePath, path.join(baseDir, "custom.trace.ndjson"));
+        }),
+      ),
+  );
+
   const defaultObservabilityConfig = {
     traceMinLevel: "Info",
     traceTimingEnabled: true,
@@ -63,7 +101,16 @@ it.layer(NodeServices.layer)("cli config resolution", (it) => {
     yield* fs.writeFileString(filePath, `${encoded}\n`);
     return yield* Effect.acquireRelease(
       Effect.sync(() => NodeFS.openSync(filePath, "r")),
-      (fd) => Effect.sync(() => NodeFS.closeSync(fd)),
+      // Without a /proc or /dev/fd path to reopen, the reader consumes the fd
+      // itself (autoClose), so on Windows it is already closed here.
+      (fd) =>
+        Effect.sync(() => {
+          try {
+            NodeFS.closeSync(fd);
+          } catch (error) {
+            if ((error as NodeJS.ErrnoException).code !== "EBADF") throw error;
+          }
+        }),
     );
   });
 
@@ -290,13 +337,15 @@ it.layer(NodeServices.layer)("cli config resolution", (it) => {
 
   it.effect("uses bootstrap envelope values as fallbacks when flags and env are absent", () =>
     Effect.gen(function* () {
-      const { join } = yield* Path.Path;
-      const baseDir = "/tmp/t3-bootstrap-home";
+      const { join, resolve } = yield* Path.Path;
+      // The resolver absolutises the configured home, so the expectation must
+      // carry the host's drive on Windows.
+      const baseDir = resolve("/tmp/t3-bootstrap-home");
       const fd = yield* openBootstrapFd(
         makeDesktopBootstrap({
           port: 4888,
           host: "127.0.0.2",
-          t3Home: baseDir,
+          t3Home: "/tmp/t3-bootstrap-home",
           noBrowser: true,
           desktopBootstrapToken: "desktop-token",
           desktopTelemetryFd: 4,

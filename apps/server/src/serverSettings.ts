@@ -19,8 +19,10 @@ import {
   type ProviderInstanceConfig,
   type ProviderInstanceEnvironmentVariable,
   type ProviderInstanceUsageSource,
+  type UsageLimitSourceConfig,
   ProviderDriverKind,
   ProviderInstanceId,
+  resolveProviderInstanceEnabled,
   ServerSettings,
   ServerSettingsError,
   type ServerSettingsPatch,
@@ -150,6 +152,17 @@ function redactProviderUsageSource(
   };
 }
 
+/**
+ * On disk the hub key is replaced by this marker and the real value lives in
+ * the secret store, mirroring provider environment secrets. A client that
+ * sends the marker back means "keep what you have".
+ */
+const USAGE_LIMIT_SOURCE_KEY_REDACTED = "\u2022\u2022\u2022\u2022\u2022\u2022";
+
+function usageLimitSourceSecretName(sourceId: string): string {
+  return `usage-limit-source-${Buffer.from(sourceId, "utf8").toString("base64url")}`;
+}
+
 function redactProviderEnvironmentVariable(
   variable: ProviderInstanceEnvironmentVariable,
 ): ProviderInstanceEnvironmentVariable {
@@ -181,7 +194,17 @@ export function redactServerSettingsForClient(settings: ServerSettings): ServerS
         : instance,
     ]),
   );
-  return { ...settings, providerInstances };
+  // The hub key is a bearer secret; clients only need to know one is set.
+  const usageLimitSources = Object.fromEntries(
+    Object.entries(settings.usageLimitSources).map(([id, source]) => [
+      id,
+      {
+        ...source,
+        managementKey: source.managementKey.length > 0 ? USAGE_LIMIT_SOURCE_KEY_REDACTED : "",
+      },
+    ]),
+  );
+  return { ...settings, providerInstances, usageLimitSources };
 }
 
 export class ServerSettingsService extends Context.Service<
@@ -321,7 +344,13 @@ function resolveTextGenerationProvider(settings: ServerSettings): ServerSettings
 }
 
 function fallbackTextGenerationProvider(settings: ServerSettings): ServerSettings {
-  const fallbackEntry = Object.entries(settings.providers).find(([, provider]) => provider.enabled);
+  // Same precedence as isModelSelectionProviderEnabled: an explicit provider
+  // instance wins over the legacy providers map, which decodes to defaults
+  // (codex enabled) when the Providers UI has only written providerInstances.
+  const fallbackEntry = Object.entries(settings.providers).find(([driver, provider]) => {
+    const instance = settings.providerInstances[ProviderInstanceId.make(driver)];
+    return instance === undefined ? provider.enabled : resolveProviderInstanceEnabled(instance);
+  });
   const fallback = fallbackEntry ? ProviderDriverKind.make(fallbackEntry[0]) : undefined;
   if (!fallback) {
     return settings;
@@ -554,9 +583,28 @@ const make = Effect.gen(function* () {
           ...(usageSource ? { usageSource } : {}),
         } satisfies ProviderInstanceConfig;
       }
+      const usageLimitSources: Record<string, UsageLimitSourceConfig> = {};
+      for (const [sourceId, source] of Object.entries(settings.usageLimitSources)) {
+        if (source.managementKey !== USAGE_LIMIT_SOURCE_KEY_REDACTED) {
+          usageLimitSources[sourceId] = source;
+          continue;
+        }
+        const secret = yield* secretStore
+          .get(usageLimitSourceSecretName(sourceId))
+          .pipe(
+            Effect.mapError(
+              (cause) => new ServerSettingsError({ settingsPath, operation: "read-secret", cause }),
+            ),
+          );
+        usageLimitSources[sourceId] = {
+          ...source,
+          managementKey: Option.isSome(secret) ? textDecoder.decode(secret.value) : "",
+        };
+      }
       return {
         ...settings,
         providerInstances: providerInstances as ServerSettings["providerInstances"],
+        usageLimitSources: usageLimitSources as ServerSettings["usageLimitSources"],
       };
     });
 
@@ -610,13 +658,27 @@ const make = Effect.gen(function* () {
           }
 
           nextSecretKeys.add(secretName);
+          // Match the provider environment's last-value-wins behavior for duplicate names.
+          const previous = variable.valueRedacted
+            ? current.providerInstances[ProviderInstanceId.make(instanceId)]?.environment?.findLast(
+                (entry) => entry.name === variable.name,
+              )
+            : undefined;
+          const inlineValue =
+            previous?.sensitive && !previous.valueRedacted && previous.value.length > 0
+              ? previous.value
+              : undefined;
           // The value decides, not the flag: a caller that sends a non-empty
           // value alongside `valueRedacted: true` (hand-edited settings, a
           // stale client envelope) must have that value stored, not silently
-          // dropped in favor of whatever the secret store already holds.
-          if (variable.value.length > 0 || !variable.valueRedacted) {
-            if (variable.value.length > 0) {
-              yield* secretStore.set(secretName, textEncoder.encode(variable.value)).pipe(
+          // dropped in favor of whatever the secret store already holds. A
+          // redacted echo with no value may still recover the previous inline
+          // secret so a redacted save does not lose it.
+          const value =
+            variable.value.length > 0 ? variable.value : (inlineValue ?? variable.value);
+          if (variable.value.length > 0 || !variable.valueRedacted || inlineValue !== undefined) {
+            if (value.length > 0) {
+              yield* secretStore.set(secretName, textEncoder.encode(value)).pipe(
                 Effect.mapError(
                   (cause) =>
                     new ServerSettingsError({
@@ -737,9 +799,52 @@ const make = Effect.gen(function* () {
         }
       }
 
+      const usageLimitSources: Record<string, UsageLimitSourceConfig> = {};
+      for (const [sourceId, source] of Object.entries(next.usageLimitSources)) {
+        const secretName = usageLimitSourceSecretName(sourceId);
+        if (source.managementKey === USAGE_LIMIT_SOURCE_KEY_REDACTED) {
+          // Unchanged from the client's point of view; the store already has it.
+          usageLimitSources[sourceId] = source;
+          continue;
+        }
+        if (source.managementKey.length === 0) {
+          yield* secretStore
+            .remove(secretName)
+            .pipe(
+              Effect.mapError(
+                (cause) =>
+                  new ServerSettingsError({ settingsPath, operation: "remove-secret", cause }),
+              ),
+            );
+          usageLimitSources[sourceId] = source;
+          continue;
+        }
+        yield* secretStore
+          .set(secretName, textEncoder.encode(source.managementKey))
+          .pipe(
+            Effect.mapError(
+              (cause) =>
+                new ServerSettingsError({ settingsPath, operation: "write-secret", cause }),
+            ),
+          );
+        usageLimitSources[sourceId] = { ...source, managementKey: USAGE_LIMIT_SOURCE_KEY_REDACTED };
+      }
+      for (const sourceId of Object.keys(current.usageLimitSources)) {
+        if (sourceId in next.usageLimitSources) continue;
+        yield* secretStore
+          .remove(usageLimitSourceSecretName(sourceId))
+          .pipe(
+            Effect.mapError(
+              (cause) =>
+                new ServerSettingsError({ settingsPath, operation: "remove-stale-secret", cause }),
+            ),
+          );
+      }
+
       return {
         ...next,
         providerInstances: providerInstances as ServerSettings["providerInstances"],
+        usageLimitSources: usageLimitSources as ServerSettings["usageLimitSources"],
       };
     });
 

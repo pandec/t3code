@@ -23,7 +23,10 @@ export interface RepositoryIdentityResolverOptions {
 }
 
 export interface RepositoryIdentityResolveOptions {
+  /** Bypass both caches without touching them (mutation authorization). */
   readonly fresh?: boolean;
+  /** Drop cached entries for this cwd and repopulate them (linker reads). */
+  readonly refresh?: boolean;
 }
 
 export class RepositoryIdentityResolver extends Context.Service<
@@ -178,6 +181,7 @@ export const make = Effect.fn("RepositoryIdentityResolver.make")(function* (
   const resolve: RepositoryIdentityResolver["Service"]["resolve"] = Effect.fn(
     "RepositoryIdentityResolver.resolve",
   )(function* (cwd, resolveOptions) {
+    if (resolveOptions?.refresh === true) yield* Cache.invalidate(repositoryRootCache, cwd);
     if (resolveOptions?.fresh === true) {
       const cacheKey = yield* resolveRepositoryIdentityCacheKey(cwd).pipe(
         Effect.provideService(ProcessRunner.ProcessRunner, processRunner),
@@ -187,9 +191,10 @@ export const make = Effect.fn("RepositoryIdentityResolver.make")(function* (
         Effect.provideService(ProcessRunner.ProcessRunner, processRunner),
       );
     }
-
     const cacheKey = yield* Cache.get(repositoryRootCache, cwd);
     if (cacheKey === null) return null;
+    if (resolveOptions?.refresh === true)
+      yield* Cache.invalidate(repositoryIdentityCache, cacheKey);
     return yield* Cache.get(repositoryIdentityCache, cacheKey);
   });
 

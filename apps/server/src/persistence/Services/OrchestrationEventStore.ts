@@ -9,21 +9,25 @@
  *
  * @module OrchestrationEventStore
  */
-import {
-  type OrchestrationAggregateKind,
-  OrchestrationEvent,
-  type ProjectId,
-  type ThreadId,
-} from "@t3tools/contracts";
+import { OrchestrationEvent } from "@t3tools/contracts";
 import * as Context from "effect/Context";
 import type * as Effect from "effect/Effect";
 import type * as Stream from "effect/Stream";
 
 import type { OrchestrationEventStoreError } from "../Errors.ts";
 
-export interface OrchestrationEventStreamFilter {
-  readonly aggregateKind: OrchestrationAggregateKind;
-  readonly aggregateId: ProjectId | ThreadId;
+export interface OrchestrationAggregateReplayRange {
+  readonly aggregateKind: OrchestrationEvent["aggregateKind"];
+  readonly aggregateId: string;
+  readonly fromSequenceExclusive: number;
+  readonly toSequenceInclusive: number;
+}
+
+export interface OrchestrationAggregateReplayStats {
+  readonly eventCount: number;
+  readonly payloadBytes: number;
+  /** A creation in this range does not prove that the aggregate still exists. */
+  readonly hasCreateEvent: boolean;
 }
 
 /**
@@ -47,8 +51,6 @@ export interface OrchestrationEventStoreShape {
    *
    * @param sequenceExclusive - Sequence cursor (exclusive).
    * @param limit - Maximum number of events to emit.
-   * @param filter - Optional aggregate filter applied by storage before rows
-   *   are decoded.
    * @returns Stream containing ordered events.
    *
    * Captures the current persisted high-water sequence before reading, then
@@ -59,8 +61,20 @@ export interface OrchestrationEventStoreShape {
   readonly readFromSequence: (
     sequenceExclusive: number,
     limit?: number,
-    filter?: OrchestrationEventStreamFilter,
   ) => Stream.Stream<OrchestrationEvent, OrchestrationEventStoreError>;
+
+  /** Read one aggregate through an explicit captured global head. */
+  readonly readAggregateRange: (
+    input: OrchestrationAggregateReplayRange & { readonly limit?: number },
+  ) => Stream.Stream<OrchestrationEvent, OrchestrationEventStoreError>;
+
+  /**
+   * Measure at most maxEvents + 1 rows without decoding payloads. The extra
+   * row tells the caller to use a snapshot instead of a truncated replay.
+   */
+  readonly getAggregateReplayStats: (
+    input: OrchestrationAggregateReplayRange & { readonly maxEvents: number },
+  ) => Effect.Effect<OrchestrationAggregateReplayStats, OrchestrationEventStoreError>;
 
   /**
    * Read all events from the beginning of the stream.

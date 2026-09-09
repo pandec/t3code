@@ -14,12 +14,19 @@ import type { SnoozePreset } from "@t3tools/client-runtime/state/thread-settled"
 import type { EnvironmentThreadShell } from "@t3tools/client-runtime/state/shell";
 import { threadSearchMatchKey } from "@t3tools/client-runtime/state/thread-search";
 import {
+  sortActiveThreadsByOrderKey,
   resolveSettledThreadTimestamp,
   sortPinnedThreadsByOrderKey,
 } from "@t3tools/client-runtime/state/thread-sort";
 import type { EnvironmentId, ProjectId } from "@t3tools/contracts";
 
 import type { PendingNewTask } from "../../state/use-pending-new-tasks";
+
+import {
+  applyPendingThreadOrder,
+  reconcilePendingThreadOrder,
+  type PendingThreadOrder,
+} from "./threadOrder";
 
 export { snoozeWakeLabel };
 
@@ -241,32 +248,17 @@ export interface ThreadListV2ActiveSortOptions {
   readonly sortByLatestUserMessage?: boolean;
 }
 
-/**
- * Active-thread sort: newest anchor on top. Organic activity (agent replies,
- * turn completion) never reorders the list — a row holds its position between
- * lifecycle transitions.
- *
- * Three anchors compete and the newest wins: the base key, an un-settle
- * re-anchor (so a thread returning to the active list surfaces at the top
- * instead of sinking back to its creation slot), and the fork's explicit
- * server-backed `movedToTopAt` bump.
- *
- * `sortByLatestUserMessage` swaps the base key for the newest user message,
- * matching `sortActiveThreadsForSidebar` on web — including its fallback
- * chain rather than a max, so a thread with no user message sorts by creation
- * and an imported thread (fresh createdAt, old messages) still sorts by its
- * conversation. That rules out upstream's `activeThreadAnchorTimestampMs`
- * here: it folds `createdAt` back in unconditionally, which would floor the
- * key. Both keys are server-projected, so the two surfaces agree on the order
- * regardless of which client sent the message.
- */
+/** Keyless rows lead the saved arrangement. Their recency key uses the
+    latest user message when enabled, falling back to creation only when
+    that message timestamp is absent or invalid. Un-settle can re-anchor it. */
 export function sortThreadsForListV2<
   T extends {
     readonly id: string;
     readonly createdAt: string;
     readonly latestUserMessageAt?: string | null | undefined;
-    readonly movedToTopAt?: string | null | undefined;
     readonly unsettledAt?: string | null | undefined;
+    readonly activeOrderKey?: string | null | undefined;
+    readonly environmentId?: string | undefined;
   },
 >(threads: readonly T[], options: ThreadListV2ActiveSortOptions = {}): T[] {
   const sortTimestamp = (thread: T) => {
@@ -274,17 +266,58 @@ export function sortThreadsForListV2<
       options.sortByLatestUserMessage === true
         ? firstValidTimestampMs(thread.latestUserMessageAt, thread.createdAt)
         : parseTimestampMs(thread.createdAt);
-    return Math.max(
-      base,
-      firstValidTimestampMs(thread.unsettledAt),
-      firstValidTimestampMs(thread.movedToTopAt),
-    );
+    return Math.max(base, firstValidTimestampMs(thread.unsettledAt));
   };
-  // .sort() on a copy, not .toSorted(): Hermes doesn't ship the ES2023
-  // change-by-copy array methods.
-  return [...threads].sort(
-    (left, right) => sortTimestamp(right) - sortTimestamp(left) || left.id.localeCompare(right.id),
+  const keyless = threads.filter((thread) => thread.activeOrderKey == null);
+  const arranged = threads.filter((thread) => thread.activeOrderKey != null);
+  keyless.sort(
+    (left, right) =>
+      sortTimestamp(right) - sortTimestamp(left) ||
+      left.id.localeCompare(right.id) ||
+      (left.environmentId ?? "").localeCompare(right.environmentId ?? ""),
   );
+  return [...keyless, ...sortActiveThreadsByOrderKey(arranged)];
+}
+
+/** Canonical card section for Move up/down, independent of search or scope. */
+export function getThreadListV2OrderedSection(input: {
+  readonly threads: readonly EnvironmentThreadShell[];
+  readonly section: "pinned" | "active";
+  readonly sortActiveByLatestUserMessage?: boolean;
+  readonly pendingOrder?: PendingThreadOrder | null;
+  readonly now: string;
+  readonly settlementEnvironmentIds?: ReadonlySet<EnvironmentId>;
+  readonly snoozeEnvironmentIds?: ReadonlySet<EnvironmentId>;
+  readonly queuedThreadKeys?: ReadonlySet<string>;
+}): EnvironmentThreadShell[] {
+  const threads = input.threads.filter((thread) => {
+    if (thread.archivedAt !== null) return false;
+    if (
+      (input.settlementEnvironmentIds?.has(thread.environmentId) ?? true) &&
+      thread.settledOverride === "settled" &&
+      input.queuedThreadKeys?.has(`${thread.environmentId}:${thread.id}`) !== true
+    ) {
+      return false;
+    }
+    if (
+      (input.snoozeEnvironmentIds?.has(thread.environmentId) ?? true) &&
+      effectiveSnoozed(thread, { now: input.now })
+    ) {
+      return false;
+    }
+    return (thread.pinnedAt != null) === (input.section === "pinned");
+  });
+  const ordered =
+    input.section === "pinned"
+      ? sortPinnedThreadsByOrderKey(threads)
+      : sortThreadsForListV2(threads, {
+          sortByLatestUserMessage: input.sortActiveByLatestUserMessage === true,
+        });
+  const pending =
+    input.pendingOrder?.section === input.section
+      ? reconcilePendingThreadOrder(input.pendingOrder, ordered)
+      : null;
+  return applyPendingThreadOrder(ordered, input.section, pending);
 }
 
 export interface ThreadListV2Item {
@@ -342,7 +375,7 @@ export interface ThreadListV2PendingListItem {
   readonly type: "v2-pending";
   readonly key: string;
   readonly pendingTask: PendingNewTask;
-  /** First queued row after the active block draws the PENDING divider. */
+  /** First unsent row after the active block draws the divider. */
   readonly showPendingDivider: boolean;
 }
 
@@ -394,8 +427,8 @@ export type ThreadListV2ListItem =
   | ThreadListV2SettledShelfListItem;
 
 /**
- * Builds the shared mobile order: pinned → pinned divider → active → pending →
- * older shelf → snoozed shelf → settled.
+ * Builds the shared mobile order: pinned, active, pending creations, drafts,
+ * older, snoozed, and settled shelves.
  * Pending tasks are waiting rather than asking, and parked work remains
  * reachable without competing with either the inbox or settled history.
  */
@@ -429,9 +462,13 @@ export function buildThreadListV2ListItems(input: {
         ? snoozeWakeLabel(item.thread.snoozedUntil, { now: input.snoozeLabelNow })
         : undefined,
   }));
-  const pendingItems = input.pendingTasks.map((pendingTask, index): ThreadListV2ListItem => ({
+  const pendingTasks = [
+    ...input.pendingTasks.filter((task) => task.kind === "pending"),
+    ...input.pendingTasks.filter((task) => task.kind === "draft"),
+  ];
+  const pendingItems = pendingTasks.map((pendingTask, index): ThreadListV2ListItem => ({
     type: "v2-pending",
-    key: `v2-pending:${pendingTask.message.messageId}`,
+    key: `v2-${pendingTask.key}`,
     pendingTask,
     showPendingDivider: index === 0,
   }));
@@ -507,17 +544,17 @@ export function buildThreadListV2ListItems(input: {
 }
 
 /**
- * Partitions visible threads into the active card block (manual/creation
- * recency, or newest user message when `sortActiveByLatestUserMessage` is on)
- * and the server-projected settled recency tail, matching the web v2 list.
+ * Partitions visible threads into active cards and lifecycle shelves.
+ * Active cards keep their saved order, with unarranged rows leading by recency.
  */
 export function buildThreadListV2Items(input: {
+  readonly pendingOrder?: PendingThreadOrder | null;
   readonly threads: ReadonlyArray<EnvironmentThreadShell>;
   /** Sticky "needs attention" membership ("environmentId:threadId" keys).
       Null/absent leaves the list unfiltered. */
   readonly attentionMemberThreadKeys?: ReadonlySet<string> | null;
   readonly alwaysShowPinnedInAttention?: boolean;
-  /** Sorts the active block by newest user message. Off = creation order. */
+  /** Sorts unarranged active rows by newest user message. Off = creation order. */
   readonly sortActiveByLatestUserMessage?: boolean;
   readonly environmentId: EnvironmentId | null;
   /** Model slug filter; null shows every model. */
@@ -553,8 +590,23 @@ export function buildThreadListV2Items(input: {
   /** The selected thread remains visible on an otherwise collapsed shelf so
       a split-view detail can never lose its navigation row. */
   readonly selectedThreadKey?: string | null;
+  /** Thread keys (`environmentId:threadId`) with a message waiting in the
+      outbox. Such a thread has work the user is waiting on, so it stays in
+      the active block even when the server has settled it. */
+  readonly queuedThreadKeys?: ReadonlySet<string>;
 }): ThreadListV2Layout {
   const now = input.now;
+  const pending =
+    input.pendingOrder == null
+      ? null
+      : reconcilePendingThreadOrder(
+          input.pendingOrder,
+          getThreadListV2OrderedSection({
+            ...input,
+            section: input.pendingOrder.section,
+            pendingOrder: null,
+          }),
+        );
   const query = input.searchQuery.trim().toLocaleLowerCase();
   // The Attention filter and an active search have both already narrowed the
   // list to rows the user asked for; folding a subset of them away would
@@ -618,7 +670,9 @@ export function buildThreadListV2Items(input: {
       }
       continue;
     }
-    if (supportsSettlement && thread.settledOverride === "settled") {
+    const hasQueuedMessages =
+      input.queuedThreadKeys?.has(`${thread.environmentId}:${thread.id}`) === true;
+    if (supportsSettlement && thread.settledOverride === "settled" && !hasQueuedMessages) {
       settled.push(thread);
       continue;
     }
@@ -636,19 +690,25 @@ export function buildThreadListV2Items(input: {
     // Classified with the second-precise clock for the same reason snoozing
     // is: a wake counts as recency, and the quantized minute would leave a
     // just-woken thread on the shelf until the minute ticks over.
-    if (olderSectionEnabled && threadIsOlder(thread, { now, afterDays: olderSectionAfterDays })) {
+    if (
+      !hasQueuedMessages &&
+      olderSectionEnabled &&
+      threadIsOlder(thread, { now, afterDays: olderSectionAfterDays })
+    ) {
       older.push(thread);
       continue;
     }
     active.push(thread);
   }
 
-  const orderedActive = sortThreadsForListV2(active, {
-    sortByLatestUserMessage: input.sortActiveByLatestUserMessage === true,
-  });
-  // "What did I leave behind most recently", ordered by the same key that
-  // decided these rows belong here.
-  const orderedOlder = sortOlderThreadsForSidebar(older, { now: now });
+  const orderedActive = applyPendingThreadOrder(
+    sortThreadsForListV2(active, {
+      sortByLatestUserMessage: input.sortActiveByLatestUserMessage === true,
+    }),
+    "active",
+    pending,
+  );
+  const orderedOlder = sortOlderThreadsForSidebar(older, { now });
   const orderedSnoozed = [...snoozed].sort(
     (left, right) =>
       parseTimestampMs(left.snoozedUntil ?? "") - parseTimestampMs(right.snoozedUntil ?? ""),
@@ -685,7 +745,11 @@ export function buildThreadListV2Items(input: {
           (thread) => `${thread.environmentId}:${thread.id}` === selectedThreadKey,
         );
 
-  const orderedPinned = sortPinnedThreadsByOrderKey(pinned);
+  const orderedPinned = applyPendingThreadOrder(
+    sortPinnedThreadsByOrderKey(pinned),
+    "pinned",
+    pending,
+  );
   // The collapse must never hide rows the Attention filter or a search asked
   // for, so the shelf only folds (and only draws its header) outside those
   // modes — the same contract the Older shelf follows.

@@ -15,8 +15,11 @@ export {
 
 const isScriptRunCommand = Schema.is(SCRIPT_RUN_COMMAND_PATTERN);
 
-export const commandForProjectScript = (scriptId: string): KeybindingCommand =>
-  SCRIPT_RUN_COMMAND_PATTERN.make(`script.${scriptId}.run`);
+/** Legacy script IDs may not support shortcuts; keep those scripts usable without one. */
+export function commandForProjectScript(scriptId: string): KeybindingCommand | null {
+  const command = `script.${scriptId}.run`;
+  return isScriptRunCommand(command) ? command : null;
+}
 
 export function projectScriptIdFromCommand(command: string): string | null {
   const trimmed = command.trim();

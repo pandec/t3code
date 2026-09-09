@@ -144,15 +144,23 @@ function ensureSharedAudio(): HTMLAudioElement {
     // trusting the UA to rebuild its extrapolation across a resume.
     publishMediaSessionPosition(element);
   });
+  // Position goes out before the playing flag on pause and end: the at-rest
+  // state is derived when the flag flips, and the throttled tick can lag the
+  // real position by up to 200ms.
   element.addEventListener("pause", () => {
+    publishProgress(element);
     listeningPlayback.setTrackPlaying(false);
     setMediaSessionPlaybackState("paused");
     publishMediaSessionPosition(element);
   });
   element.addEventListener("ended", () => {
+    // Pin the position to the end. Elements without a finite duration cannot
+    // report one, and the finish signal is what decides at-rest, not the
+    // last reported position.
+    const duration = Number.isFinite(element.duration) ? element.duration : element.currentTime;
+    listeningPlayback.setProgress({ currentTime: duration, duration });
     listeningPlayback.setTrackPlaying(false);
     setMediaSessionPlaybackState("paused");
-    publishProgress(element);
     publishMediaSessionPosition(element);
   });
   element.addEventListener("error", () => {
@@ -339,9 +347,10 @@ export function useListeningPlaybackProgress() {
 }
 
 /**
- * Indicator state for a sidebar row: "playing", "paused" while the thread
- * still owns the loaded track, or null. String snapshots bail out of
- * re-renders exactly like a boolean selector would.
+ * Indicator state for a sidebar row: "playing", "paused" while the thread's
+ * recording sits mid-way, or null (including once it has played to the end).
+ * String snapshots bail out of re-renders exactly like a boolean selector
+ * would.
  */
 export function useThreadListeningState(
   environmentId: string,

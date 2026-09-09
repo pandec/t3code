@@ -1,3 +1,8 @@
+import { acknowledgedThreadMessagesAtom } from "./acknowledged-thread-messages";
+import {
+  threadOutboxFlushBatchIds,
+  type ThreadOutboxDispatchResult,
+} from "@t3tools/client-runtime/state/thread-outbox-delivery";
 import {
   CommandId,
   EnvironmentId,
@@ -9,6 +14,10 @@ import {
 import { afterEach, beforeEach, describe, expect, it, vi } from "vite-plus/test";
 
 import type { PreparedTurnAttachments } from "../lib/attachmentUpload";
+import {
+  resolveThreadOutboxDeliveryAction,
+  selectNextQueuedThreadDispatch,
+} from "./thread-outbox-model";
 
 const harness = vi.hoisted(() => ({
   manager: null as unknown as ReturnType<
@@ -96,6 +105,8 @@ const harness = vi.hoisted(() => ({
   })(),
 }));
 
+vi.mock("react-native", () => ({ Alert: { alert: vi.fn() } }));
+
 vi.mock("expo-file-system", () => ({
   Directory: harness.draftFile.Directory,
   File: harness.draftFile.File,
@@ -125,6 +136,11 @@ vi.mock("./entities", () => ({
   useServerConfigs: () => new Map(),
   useThreadShells: () => [],
 }));
+
+vi.mock("./server", async () => {
+  const { Atom } = await import("effect/unstable/reactivity");
+  return { serverEnvironment: { configValueAtom: Atom.family(() => Atom.make(null)) } };
+});
 
 vi.mock("./threads", () => ({
   threadEnvironment: {},
@@ -159,7 +175,7 @@ vi.mock("./thread-outbox", async () => {
   harness.manager = createThreadOutboxManager({
     registry: appAtomRegistry,
     storage: {
-      load: async () => [],
+      load: async () => ({ messages: [], errors: [] }),
       write: async () => undefined,
       remove: (message) => harness.removeOutboxMessage(message),
     },
@@ -177,8 +193,13 @@ vi.mock("./thread-outbox", async () => {
 });
 
 import { appAtomRegistry } from "./atom-registry";
+import {
+  clearPendingThreadCreationOutcome,
+  pendingThreadCreationOutcomesAtom,
+} from "./pending-thread-creation";
 import type { QueuedThreadMessage } from "./thread-outbox-model";
 import * as composerDrafts from "./use-composer-drafts";
+import { recoverFailedThreadDraft } from "./recover-failed-thread-draft";
 import { editingQueuedMessageIdsAtom } from "./use-thread-outbox";
 import {
   completeQueuedMessageDelivery,
@@ -238,6 +259,7 @@ function remainingMessages(): ReadonlyArray<QueuedThreadMessage> {
 }
 
 beforeEach(() => {
+  appAtomRegistry.set(acknowledgedThreadMessagesAtom, []);
   harness.draftFile.setDocument({ schemaVersion: 1, drafts: {} });
 });
 
@@ -248,6 +270,7 @@ afterEach(() => {
   appAtomRegistry.set(composerDrafts.composerDraftsAtom, {});
   appAtomRegistry.set(composerDrafts.composerCloudDraftsAtom, { accountId: null, signedOut: {} });
   appAtomRegistry.set(editingQueuedMessageIdsAtom, {});
+  appAtomRegistry.set(pendingThreadCreationOutcomesAtom, {});
   harness.draftFile.setWriteError(null);
   harness.removePersistedFile.mockClear();
   harness.removeOutboxMessage.mockClear();
@@ -267,7 +290,6 @@ describe("thread outbox attachment preparation", () => {
     );
     const preparationStarted = Promise.withResolvers<void>();
     const preparationBarrier = Promise.withResolvers<PreparedTurnAttachments>();
-    const releaseUploads = vi.fn(async () => undefined);
     harness.prepareTurnAttachments.mockImplementationOnce(async () => {
       preparationStarted.resolve();
       return preparationBarrier.promise;
@@ -285,12 +307,10 @@ describe("thread outbox attachment preparation", () => {
       attachments: [],
       draftAttachments: message.attachments,
       pendingAttachmentIds: ["pending-reused-upload"],
-      releaseUploads,
     });
 
-    await expect(preparation).resolves.toEqual({ status: "abandoned" });
+    await expect(preparation).resolves.toEqual({ status: "deferred" });
     expect(remainingMessages()).toEqual([edited]);
-    expect(releaseUploads).not.toHaveBeenCalled();
   });
 
   it("keeps an unchanged queued payload ready after attachment reuse", async () => {
@@ -302,13 +322,11 @@ describe("thread outbox attachment preparation", () => {
       }),
       "pending-reused-upload",
     );
-    const releaseUploads = vi.fn(async () => undefined);
     harness.prepareTurnAttachments.mockResolvedValueOnce({
       status: "ready",
       attachments: [],
       draftAttachments: message.attachments,
       pendingAttachmentIds: ["pending-reused-upload"],
-      releaseUploads,
     });
     await harness.manager.enqueue(message);
     const revision = harness.manager.revisionOf(message.messageId);
@@ -319,7 +337,6 @@ describe("thread outbox attachment preparation", () => {
       persistedMessage: message,
       deliveryRevision: revision,
     });
-    expect(releaseUploads).not.toHaveBeenCalled();
   });
 
   it("reuses an uploaded image when image uploads are supported", async () => {
@@ -348,7 +365,6 @@ describe("thread outbox attachment preparation", () => {
         attachments: [],
         draftAttachments: [image],
         pendingAttachmentIds: ["pending-image-upload"],
-        releaseUploads: async () => undefined,
       };
     });
     await harness.manager.enqueue(message);
@@ -381,7 +397,6 @@ describe("thread outbox attachment preparation", () => {
         attachments: [],
         draftAttachments: uploadedAttachments,
         pendingAttachmentIds: ["pending-new-upload"],
-        releaseUploads: async () => undefined,
       };
     });
     await harness.manager.enqueue(message);
@@ -404,7 +419,7 @@ describe("thread outbox attachment preparation", () => {
     await harness.manager.update(edited);
 
     await expect(prepareQueuedMessageAttachments(message)).resolves.toEqual({
-      status: "abandoned",
+      status: "removed",
     });
     expect(harness.prepareTurnAttachments).not.toHaveBeenCalled();
     expect(remainingMessages()).toEqual([edited]);
@@ -554,6 +569,7 @@ describe("thread outbox drain delivery cleanup", () => {
     await expect(completeQueuedMessageDelivery(message, deliveryRevision)).resolves.toBe("removed");
 
     expect(remainingMessages()).toEqual([]);
+    expect(appAtomRegistry.get(acknowledgedThreadMessagesAtom)).toEqual([message]);
   });
 
   it("keeps a delivered message when its editor opens during storage removal", async () => {
@@ -610,7 +626,7 @@ describe("thread outbox delivered creation recovery", () => {
       await harness.manager.update(newer);
 
       releaseRecovery.resolve();
-      await expect(recovery).resolves.toBe(false);
+      await expect(recovery).resolves.toBe("deferred");
 
       expect(remainingMessages()).toEqual([newer]);
       expect(
@@ -648,7 +664,7 @@ describe("thread outbox delivered creation recovery", () => {
       appAtomRegistry.set(editingQueuedMessageIdsAtom, { [message.messageId]: true });
 
       releaseRecovery.resolve();
-      await expect(recovery).resolves.toBe(true);
+      await expect(recovery).resolves.toBe("deferred");
 
       expect(remainingMessages()).toEqual([message]);
       expect(
@@ -675,10 +691,10 @@ describe("thread outbox delivered creation recovery", () => {
     try {
       await harness.manager.enqueue(message);
 
-      await expect(recoverEditedCreationAfterDelivery(message)).resolves.toBe(false);
+      await expect(recoverEditedCreationAfterDelivery(message)).resolves.toBe("failed");
       expect(remainingMessages()).toEqual([message]);
 
-      await expect(recoverEditedCreationAfterDelivery(message)).resolves.toBe(true);
+      await expect(recoverEditedCreationAfterDelivery(message)).resolves.toBe("removed");
 
       const draft = composerDrafts.getComposerDraftSnapshot(draftKey);
       expect(draft.text).toBe(message.text);
@@ -698,14 +714,64 @@ describe("thread outbox delivered creation recovery", () => {
     await harness.manager.enqueue(message);
     harness.draftFile.setWriteError(new Error("disk full"));
 
-    await expect(recoverEditedCreationAfterDelivery(message)).resolves.toBe(false);
+    await expect(recoverEditedCreationAfterDelivery(message)).resolves.toBe("failed");
 
     expect(remainingMessages()).toEqual([message]);
   });
 });
 
 describe("thread outbox recovery rollback", () => {
-  it("restores a rejected new task into its durable project draft", async () => {
+  it("reopens a rejected task with setup edits and every attachment, even above the send cap", async () => {
+    const message = queuedMessage({ messageId: "failed-setup", text: "Original prompt" });
+    const sourceKey = `${message.environmentId}:${message.threadId}`;
+    const targetKey = "new-task:restored-failed-setup";
+    const files = Array.from(
+      { length: 10 },
+      (_, index) =>
+        queuedMessage({
+          messageId: `attachment-${index}`,
+          text: "",
+          fileUri: `file:///file-${index}`,
+        }).attachments[0]!,
+    );
+    appAtomRegistry.set(composerDrafts.composerDraftsAtom, {
+      [targetKey]: { text: message.text, attachments: files.slice(0, 8) },
+      [sourceKey]: { text: "Please include tests", attachments: files.slice(8) },
+    });
+    await recoverFailedThreadDraft(message);
+    expect(composerDrafts.getComposerDraftSnapshot(targetKey)).toMatchObject({
+      text: "Original prompt\n\nPlease include tests",
+      attachments: files,
+    });
+    expect(composerDrafts.getComposerDraftSnapshot(sourceKey)).toMatchObject({
+      text: "",
+      attachments: [],
+    });
+    await recoverFailedThreadDraft(message);
+    expect(composerDrafts.getComposerDraftSnapshot(targetKey).text).toBe(
+      "Original prompt\n\nPlease include tests",
+    );
+  });
+
+  it("keeps setup edits recoverable when saving their recovery draft fails", async () => {
+    const message = queuedMessage({ messageId: "failed-save", text: "Original prompt" });
+    const sourceKey = `${message.environmentId}:${message.threadId}`;
+    appAtomRegistry.set(composerDrafts.composerDraftsAtom, {
+      "new-task:restored-failed-save": { text: message.text, attachments: [] },
+      [sourceKey]: { text: "Follow-up", attachments: [] },
+    });
+    harness.draftFile.setWriteError(new Error("disk full"));
+    // Two drafts flush together here, so the batch wrapper is what surfaces.
+    await expect(recoverFailedThreadDraft(message)).rejects.toThrow("Failed to persist");
+    expect(composerDrafts.getComposerDraftSnapshot(sourceKey).text).toBe("Follow-up");
+    harness.draftFile.setWriteError(null);
+    await recoverFailedThreadDraft(message);
+    expect(composerDrafts.getComposerDraftSnapshot("new-task:restored-failed-save").text).toBe(
+      "Original prompt\n\nFollow-up",
+    );
+  });
+
+  it("restores a rejected new task as its own draft for the project", async () => {
     const message: QueuedThreadMessage = {
       ...queuedMessage({ messageId: "message-creation-restore", text: "new task text" }),
       modelSelection: { instanceId: ProviderInstanceId.make("codex"), model: "gpt-5.6-sol" },
@@ -722,17 +788,58 @@ describe("thread outbox recovery rollback", () => {
       "restored",
     );
 
+    // The draft is keyed by the message so a retry lands on the same one, and
+    // stamped with the project so it shows up as a Draft row for that project.
     expect(
-      composerDrafts.getComposerDraftSnapshot(
-        `new-task:${message.environmentId}:${message.creation!.projectId}`,
-      ),
+      composerDrafts.getComposerDraftSnapshot(`new-task:restored-${message.messageId}`),
     ).toMatchObject({
       text: message.text,
       attachments: message.attachments,
       modelSelection: message.modelSelection,
+      project: {
+        environmentId: message.environmentId,
+        projectId: message.creation!.projectId,
+        createdAt: message.createdAt,
+      },
     });
     expect(remainingMessages()).toEqual([]);
     expect(harness.setPendingConnectionError).toHaveBeenCalledWith("rejected by server");
+    // The thread screen opened for this creation reads the failure from here.
+    expect(
+      appAtomRegistry.get(pendingThreadCreationOutcomesAtom)[
+        `${message.environmentId}:${message.threadId}`
+      ],
+    ).toEqual({ kind: "failed", message, reason: "rejected by server" });
+  });
+
+  it("keeps a failed outcome until its thread screen consumes it", async () => {
+    const message: QueuedThreadMessage = {
+      ...queuedMessage({ messageId: "message-creation-kept", text: "new task text" }),
+      modelSelection: { instanceId: ProviderInstanceId.make("codex"), model: "gpt-5.6-sol" },
+      creation: {
+        projectId: ProjectId.make("project-1"),
+        workspaceMode: "local",
+        branch: null,
+        worktreePath: null,
+      },
+    };
+    await harness.manager.enqueue(message);
+    await restoreRejectedQueuedMessage(message, "rejected by server");
+
+    const key = `${message.environmentId}:${message.threadId}`;
+    expect(appAtomRegistry.get(pendingThreadCreationOutcomesAtom)[key]?.kind).toBe("failed");
+
+    clearPendingThreadCreationOutcome(key);
+    expect(appAtomRegistry.get(pendingThreadCreationOutcomesAtom)[key]).toBeUndefined();
+  });
+
+  it("does not record a creation outcome for a rejected follow-up message", async () => {
+    const message = queuedMessage({ messageId: "message-followup-restore", text: "follow up" });
+    await harness.manager.enqueue(message);
+
+    await expect(restoreRejectedQueuedMessage(message, "rejected")).resolves.toBe("restored");
+
+    expect(appAtomRegistry.get(pendingThreadCreationOutcomesAtom)).toEqual({});
   });
 
   it("rolls a failed recovery merge back so the retry cannot duplicate the text", async () => {
@@ -759,5 +866,51 @@ describe("thread outbox recovery rollback", () => {
     );
     expect(remainingMessages()).toEqual([]);
     expect(harness.setPendingConnectionError).toHaveBeenCalledWith("too large");
+  });
+});
+
+describe("mobile thread outbox flush batches", () => {
+  it("keeps later rows behind a leader deferred after confirmation", () => {
+    const leader = queuedMessage({ messageId: "mobile-race-leader", text: "leader" });
+    const follower = queuedMessage({ messageId: "mobile-race-follower", text: "follower" });
+    const queue = [leader, follower];
+    const resolveAction = (threadStatus: "idle" | "running") =>
+      resolveThreadOutboxDeliveryAction({
+        isCreation: false,
+        threadExists: true,
+        shellStatus: "live",
+        environmentConnected: true,
+        threadStatus,
+        deliveryIntent: "queue",
+      });
+    const selected = selectNextQueuedThreadDispatch(queue, {
+      isHeld: () => false,
+      resolveAction: () => resolveAction("idle"),
+    });
+    expect(selected).toEqual({ message: leader, action: "send" });
+
+    // Another client starts a turn while confirmQueued is pending.
+    const freshAction = resolveAction("running");
+    const result: ThreadOutboxDispatchResult =
+      freshAction === selected?.action
+        ? {
+            outcome: "delivered",
+            context: {
+              sessionBaselineKnown: true,
+              sessionStatus: "running",
+              sessionUpdatedAt: null,
+              latestTurnId: null,
+            },
+          }
+        : { outcome: "deferred" };
+
+    expect(result).toEqual({ outcome: "deferred" });
+    expect(threadOutboxFlushBatchIds(queue, leader, { result, action: "send" }).size).toBe(0);
+    expect(
+      selectNextQueuedThreadDispatch(queue, {
+        isHeld: () => false,
+        resolveAction: () => freshAction,
+      }),
+    ).toBeNull();
   });
 });

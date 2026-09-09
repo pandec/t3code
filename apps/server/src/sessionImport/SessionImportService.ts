@@ -53,7 +53,7 @@ import { extractSubstantiveUserText } from "../provider/Drivers/substantiveUserT
 import { ProviderInstanceRegistry } from "../provider/Services/ProviderInstanceRegistry.ts";
 import { ProviderSessionDirectory } from "../provider/Services/ProviderSessionDirectory.ts";
 
-class SessionImportGitError extends Schema.TaggedErrorClass<SessionImportGitError>()(
+class SessionImportGitError extends Schema.TaggedError<SessionImportGitError>()(
   "SessionImportGitError",
   {
     detail: Schema.String,

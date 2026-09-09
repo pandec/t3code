@@ -75,7 +75,7 @@ const ClaudeShadowHomeContext = {
   shadowConfigDirPath: Schema.String,
 };
 
-export class ClaudeShadowHomeFileSystemError extends Schema.TaggedErrorClass<ClaudeShadowHomeFileSystemError>()(
+export class ClaudeShadowHomeFileSystemError extends Schema.TaggedError<ClaudeShadowHomeFileSystemError>()(
   "ClaudeShadowHomeFileSystemError",
   {
     ...ClaudeShadowHomeContext,
@@ -99,7 +99,7 @@ export class ClaudeShadowHomeFileSystemError extends Schema.TaggedErrorClass<Cla
   }
 }
 
-export class ClaudeShadowHomePathConflictError extends Schema.TaggedErrorClass<ClaudeShadowHomePathConflictError>()(
+export class ClaudeShadowHomePathConflictError extends Schema.TaggedError<ClaudeShadowHomePathConflictError>()(
   "ClaudeShadowHomePathConflictError",
   ClaudeShadowHomeContext,
 ) {
@@ -108,7 +108,7 @@ export class ClaudeShadowHomePathConflictError extends Schema.TaggedErrorClass<C
   }
 }
 
-export class ClaudeShadowHomeEntryConflictError extends Schema.TaggedErrorClass<ClaudeShadowHomeEntryConflictError>()(
+export class ClaudeShadowHomeEntryConflictError extends Schema.TaggedError<ClaudeShadowHomeEntryConflictError>()(
   "ClaudeShadowHomeEntryConflictError",
   {
     ...ClaudeShadowHomeContext,
@@ -122,7 +122,7 @@ export class ClaudeShadowHomeEntryConflictError extends Schema.TaggedErrorClass<
   }
 }
 
-export class ClaudeShadowHomeRelativeConfigPathError extends Schema.TaggedErrorClass<ClaudeShadowHomeRelativeConfigPathError>()(
+export class ClaudeShadowHomeRelativeConfigPathError extends Schema.TaggedError<ClaudeShadowHomeRelativeConfigPathError>()(
   "ClaudeShadowHomeRelativeConfigPathError",
   {
     shadowConfigDirPath: Schema.String,

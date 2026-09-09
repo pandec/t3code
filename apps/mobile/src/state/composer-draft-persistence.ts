@@ -1,5 +1,7 @@
+import { isFileBackedComposerAttachment } from "@t3tools/client-runtime/state/composer-attachment";
 import {
   EnvironmentId,
+  ProjectId,
   ModelSelection as ModelSelectionSchema,
   ProviderInteractionMode as ProviderInteractionModeSchema,
   RuntimeMode as RuntimeModeSchema,
@@ -9,6 +11,10 @@ import * as Schema from "effect/Schema";
 import type { Directory as ExpoDirectory } from "expo-file-system";
 
 import { DraftComposerAttachmentSchema } from "../lib/composer-image-schema";
+import {
+  COMPOSER_ATTACHMENT_DIRECTORY,
+  resolveOwnedComposerAttachmentFileUri,
+} from "../lib/composerAttachmentFiles";
 import type { DraftComposerAttachment, DraftComposerImageAttachment } from "../lib/composerImages";
 import { isServerThreadDraftKey } from "../lib/scopedEntities";
 import type { ModelSelection } from "@t3tools/contracts";
@@ -19,6 +25,7 @@ import {
   type QueuedThreadMessage,
 } from "./thread-outbox-model";
 import type { ComposerDraft } from "./use-composer-drafts";
+import { parseLegacyNewTaskDraftKey } from "./new-task-draft-key";
 
 const LEGACY_SCHEMA_VERSION = 1;
 const RECORD_SCHEMA_VERSION = 2;
@@ -35,7 +42,7 @@ const attachmentContentHashes = new WeakMap<DraftComposerImageAttachment, Promis
 let expoCryptoPromise: Promise<typeof import("expo-crypto")> | null = null;
 let expoFileSystemPromise: Promise<typeof import("expo-file-system")> | null = null;
 
-export class ComposerDraftPersistenceError extends Schema.TaggedErrorClass<ComposerDraftPersistenceError>()(
+export class ComposerDraftPersistenceError extends Schema.TaggedError<ComposerDraftPersistenceError>()(
   "ComposerDraftPersistenceError",
   {
     operation: Schema.Literals([
@@ -84,6 +91,12 @@ const ComposerDraftWorkspaceSelectionSchema = Schema.Struct({
   startFromOrigin: Schema.optional(Schema.Boolean),
 });
 
+const ComposerDraftProjectSchema = Schema.Struct({
+  environmentId: EnvironmentId,
+  projectId: ProjectId,
+  createdAt: Schema.String,
+});
+
 const LegacyComposerDraftSchema = Schema.Struct({
   text: Schema.String,
   inputOrigin: Schema.optional(MessageInputOrigin),
@@ -93,6 +106,7 @@ const LegacyComposerDraftSchema = Schema.Struct({
   runtimeMode: Schema.optional(RuntimeModeSchema),
   interactionMode: Schema.optional(ProviderInteractionModeSchema),
   workspaceSelection: Schema.optional(ComposerDraftWorkspaceSelectionSchema),
+  project: Schema.optional(ComposerDraftProjectSchema),
 });
 
 const LegacyComposerDraftsSchema = Schema.Struct({
@@ -136,6 +150,7 @@ const PersistedComposerDraftSchema = Schema.Struct({
   runtimeMode: Schema.optional(RuntimeModeSchema),
   interactionMode: Schema.optional(ProviderInteractionModeSchema),
   workspaceSelection: Schema.optional(ComposerDraftWorkspaceSelectionSchema),
+  project: Schema.optional(ComposerDraftProjectSchema),
 });
 
 const PersistedComposerDraftRecordSchema = Schema.Struct({
@@ -218,7 +233,9 @@ function composerDraftForPersistence(draftKey: string, draft: ComposerDraft): Co
 export function decodePersistedComposerDrafts(value: unknown): Record<string, ComposerDraft> {
   const parsed = decodeLegacyComposerDraftsDocument(value);
   return Object.fromEntries(
-    Object.entries(parsed.drafts).filter(([, draft]) => !isDiscardableDraft(draft)),
+    Object.entries(parsed.drafts).filter(
+      ([key, draft]) => parseLegacyNewTaskDraftKey(key) === null && !isDiscardableDraft(draft),
+    ),
   );
 }
 
@@ -242,6 +259,40 @@ function imageAttachmentReference(
   };
 }
 
+async function composerImageAttachmentContent(
+  attachment: DraftComposerImageAttachment,
+): Promise<string> {
+  if (attachment.dataUrl !== undefined) {
+    return attachment.dataUrl;
+  }
+  if (!isFileBackedComposerAttachment(attachment)) {
+    throw new ComposerDraftPersistenceError({
+      operation: "read",
+      directory: COMPOSER_ATTACHMENT_DIRECTORY,
+      fileName: attachment.name,
+      cause: new Error("Image attachment has no file or inline bytes."),
+    });
+  }
+  try {
+    const { File, Paths } = await loadExpoFileSystem();
+    const uri =
+      resolveOwnedComposerAttachmentFileUri(attachment.fileUri, Paths.document.uri) ??
+      attachment.fileUri;
+    const base64 = await new File(uri).base64();
+    if (base64.length === 0) {
+      throw new Error("Image attachment file is empty.");
+    }
+    return `data:${attachment.mimeType};base64,${base64}`;
+  } catch (cause) {
+    throw new ComposerDraftPersistenceError({
+      operation: "read",
+      directory: COMPOSER_ATTACHMENT_DIRECTORY,
+      fileName: attachment.name,
+      cause,
+    });
+  }
+}
+
 export async function splitComposerDraftForPersistence(
   draftKey: string,
   draft: ComposerDraft,
@@ -254,12 +305,13 @@ export async function splitComposerDraftForPersistence(
       attachments.push(attachment);
       continue;
     }
-    const contentHash = await hashContent(attachment.dataUrl, attachment);
+    const content = await composerImageAttachmentContent(attachment);
+    const contentHash = await hashContent(content, attachment);
     const existing = attachmentContents.get(contentHash);
-    if (existing !== undefined && existing !== attachment.dataUrl) {
+    if (existing !== undefined && existing !== content) {
       throw new Error(`Composer attachment hash collision for ${contentHash}.`);
     }
-    attachmentContents.set(contentHash, attachment.dataUrl);
+    attachmentContents.set(contentHash, content);
     attachments.push(imageAttachmentReference(attachment, contentHash));
   }
 
@@ -421,6 +473,12 @@ async function loadRecordDocuments(): Promise<ReadonlyArray<PersistedComposerDra
       if (!entry.name.endsWith(DRAFT_RECORD_SUFFIX)) {
         continue;
       }
+      try {
+        const key = decodeURIComponent(entry.name.slice(0, -DRAFT_RECORD_SUFFIX.length));
+        if (parseLegacyNewTaskDraftKey(key) !== null) continue;
+      } catch {
+        // Malformed filenames still go through the normal record validation.
+      }
       let raw: string;
       try {
         raw = await entry.text();
@@ -433,17 +491,15 @@ async function loadRecordDocuments(): Promise<ReadonlyArray<PersistedComposerDra
         });
       }
       try {
-        documents.push(decodeComposerDraftRecordDocument(JSON.parse(raw) as unknown));
+        const record = decodeComposerDraftRecordDocument(JSON.parse(raw) as unknown);
+        if (parseLegacyNewTaskDraftKey(record.draftKey) === null) documents.push(record);
       } catch (cause) {
-        console.warn(
-          "[composer-drafts] ignored invalid persisted draft record",
-          new ComposerDraftPersistenceError({
-            operation: "decode",
-            directory: `${COMPOSER_DRAFTS_DIRECTORY}/${COMPOSER_DRAFT_RECORDS_DIRECTORY}`,
-            fileName: entry.name,
-            cause,
-          }),
-        );
+        throw new ComposerDraftPersistenceError({
+          operation: "decode",
+          directory: `${COMPOSER_DRAFTS_DIRECTORY}/${COMPOSER_DRAFT_RECORDS_DIRECTORY}`,
+          fileName: entry.name,
+          cause,
+        });
       }
     }
     return documents;
@@ -629,9 +685,20 @@ async function loadLegacyDrafts(): Promise<{
   if (!file.exists) {
     return { drafts: {}, exists: false, valid: true };
   }
+  let raw: string;
+  try {
+    raw = await file.text();
+  } catch (cause) {
+    throw new ComposerDraftPersistenceError({
+      operation: "read",
+      directory: COMPOSER_DRAFTS_DIRECTORY,
+      fileName: LEGACY_COMPOSER_DRAFTS_FILE,
+      cause,
+    });
+  }
   try {
     return {
-      drafts: decodePersistedComposerDrafts(JSON.parse(await file.text()) as unknown),
+      drafts: decodePersistedComposerDrafts(JSON.parse(raw) as unknown),
       exists: true,
       valid: true,
     };
@@ -774,8 +841,19 @@ async function loadComposerCloudDraftDocument(): Promise<Schema.Schema.Type<
   if (!file.exists) {
     return null;
   }
+  let raw: string;
   try {
-    return decodeComposerCloudDraftStateDocument(JSON.parse(await file.text()) as unknown);
+    raw = await file.text();
+  } catch (cause) {
+    throw new ComposerDraftPersistenceError({
+      operation: "read",
+      directory: COMPOSER_DRAFTS_DIRECTORY,
+      fileName: CLOUD_DRAFTS_FILE,
+      cause,
+    });
+  }
+  try {
+    return decodeComposerCloudDraftStateDocument(JSON.parse(raw) as unknown);
   } catch (cause) {
     throw new ComposerDraftPersistenceError({
       operation: "decode",
@@ -796,6 +874,7 @@ export async function loadPersistedComposerCloudDraftState(): Promise<PersistedC
   for (const [accountId, saved] of Object.entries(document.signedOut)) {
     const drafts: Record<string, ComposerDraft> = {};
     for (const record of saved.drafts) {
+      if (parseLegacyNewTaskDraftKey(record.draftKey) !== null) continue;
       const hydrated = await hydrateRecord(record, attachments);
       if (hydrated.state === "unavailable") {
         throw new ComposerDraftPersistenceError({
@@ -832,6 +911,7 @@ export async function savePersistedComposerCloudDraftState(
   for (const [accountId, saved] of Object.entries(state.signedOut)) {
     const drafts: PersistedComposerDraftRecord[] = [];
     for (const [draftKey, draft] of Object.entries(saved.drafts)) {
+      if (parseLegacyNewTaskDraftKey(draftKey) !== null) continue;
       if (isDiscardableDraft(draft)) {
         continue;
       }
@@ -1012,18 +1092,34 @@ export type PersistedComposerDraftHydration =
 export async function hydratePersistedComposerDraftKey(
   draftKey: string,
 ): Promise<PersistedComposerDraftHydration> {
+  if (parseLegacyNewTaskDraftKey(draftKey) !== null) return { state: "missing" };
   const { File } = await loadExpoFileSystem();
   const { records, attachments } = await getStorageDirectories();
   const file = new File(records, draftRecordFileName(draftKey));
   if (!file.exists) {
     return { state: "missing" };
   }
-  const raw = await file.text();
+  let raw: string;
+  try {
+    raw = await file.text();
+  } catch (cause) {
+    throw new ComposerDraftPersistenceError({
+      operation: "read",
+      directory: `${COMPOSER_DRAFTS_DIRECTORY}/${COMPOSER_DRAFT_RECORDS_DIRECTORY}`,
+      fileName: file.name,
+      cause,
+    });
+  }
   let record: PersistedComposerDraftRecord;
   try {
     record = decodeComposerDraftRecordDocument(JSON.parse(raw) as unknown);
-  } catch {
-    return { state: "missing" };
+  } catch (cause) {
+    throw new ComposerDraftPersistenceError({
+      operation: "decode",
+      directory: `${COMPOSER_DRAFTS_DIRECTORY}/${COMPOSER_DRAFT_RECORDS_DIRECTORY}`,
+      fileName: file.name,
+      cause,
+    });
   }
   const hydrated = await hydrateRecord(record, attachments);
   if (hydrated.repairedRecord !== null) {

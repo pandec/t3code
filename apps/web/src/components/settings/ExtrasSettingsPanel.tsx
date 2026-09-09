@@ -9,12 +9,14 @@ import {
   DEFAULT_UNIFIED_SETTINGS,
   MAX_ARCHIVED_SECTION_VISIBLE_COUNT,
   MAX_ACCENT_TINT_INTENSITY_PERCENT,
+  MAX_OPENROUTER_CREDITS_BUDGET_USD,
   MAX_PROVIDER_USAGE_ALERT_PERCENT,
   MAX_SIDEBAR_OLDER_SECTION_AFTER_DAYS,
   MAX_STEER_GRACE_WINDOW_MS,
   MAX_TURN_COMPLETION_MIN_DURATION_SECONDS,
   MIN_ACCENT_TINT_INTENSITY_PERCENT,
   MIN_ARCHIVED_SECTION_VISIBLE_COUNT,
+  MIN_OPENROUTER_CREDITS_BUDGET_USD,
   MIN_PROVIDER_USAGE_ALERT_PERCENT,
   MIN_SIDEBAR_OLDER_SECTION_AFTER_DAYS,
   MIN_STEER_GRACE_WINDOW_MS,
@@ -22,11 +24,15 @@ import {
   type SidebarThreadProviderIconVisibility,
 } from "@t3tools/contracts/settings";
 import type { EnvironmentId } from "@t3tools/contracts";
+import { normalizeLinearTeamKeys } from "@t3tools/contracts/settings";
 import { formatUsd } from "@t3tools/shared/usageFormat";
 
 import { isElectron } from "../../env";
 import { useEnvironments } from "../../state/environments";
-import { useEnvironmentQuery } from "../../state/query";
+import { useServerConfigs } from "../../state/entities";
+import { environmentReadsLinearIssues } from "../../lib/openLinearLink";
+import { formatEnvironmentQueryError, useEnvironmentQuery } from "../../state/query";
+import { linearEnvironment } from "../../state/linear";
 import { primaryServerConfigAtom, serverEnvironment } from "../../state/server";
 import { useAtomCommand } from "../../state/use-atom-command";
 import {
@@ -52,7 +58,10 @@ import {
 import { Select, SelectItem, SelectPopup, SelectTrigger, SelectValue } from "../ui/select";
 import { Switch } from "../ui/switch";
 import { toastManager } from "../ui/toast";
-import { resolveProviderUsageThresholdCommit } from "./ExtrasSettingsPanel.logic";
+import {
+  resolveOpenRouterCreditsBudgetCommit,
+  resolveProviderUsageThresholdCommit,
+} from "./ExtrasSettingsPanel.logic";
 import {
   SettingResetButton,
   SettingsPageContainer,
@@ -101,6 +110,8 @@ function SettingsNumberField({
   max,
   min,
   onCommit,
+  placeholder,
+  prefix,
   suffix,
   value,
 }: {
@@ -108,11 +119,15 @@ function SettingsNumberField({
   readonly max: number;
   readonly min: number;
   readonly onCommit: (value: number | null) => void;
-  readonly suffix: string;
-  readonly value: number;
+  readonly placeholder?: string;
+  readonly prefix?: string;
+  readonly suffix?: string;
+  /** Null renders an empty field, for settings where unset is a real state. */
+  readonly value: number | null;
 }) {
   return (
     <div className="flex w-full items-center gap-2 sm:w-auto">
+      {prefix ? <span className="shrink-0 text-xs text-muted-foreground">{prefix}</span> : null}
       <NumberField
         className="w-28"
         max={max}
@@ -124,11 +139,11 @@ function SettingsNumberField({
       >
         <NumberFieldGroup>
           <NumberFieldDecrement aria-label={`Decrease ${ariaLabel}`} />
-          <NumberFieldInput aria-label={ariaLabel} />
+          <NumberFieldInput aria-label={ariaLabel} placeholder={placeholder} />
           <NumberFieldIncrement aria-label={`Increase ${ariaLabel}`} />
         </NumberFieldGroup>
       </NumberField>
-      <span className="shrink-0 text-xs text-muted-foreground">{suffix}</span>
+      {suffix ? <span className="shrink-0 text-xs text-muted-foreground">{suffix}</span> : null}
     </div>
   );
 }
@@ -587,8 +602,209 @@ function ProviderUsageExtrasSection() {
               />
             ))}
           </div>
+          <SettingsRow
+            title="OpenRouter budget"
+            description="The starting balance to measure spend against. With a budget set, the usage meter shows how much of it you have spent, coloured by the warning and critical thresholds under Notifications. Leave empty or enter 0 to show the dollar amount only; budgets under $1 count as none."
+            resetAction={
+              settings.openRouterCreditsBudgetUsd !==
+              DEFAULT_UNIFIED_SETTINGS.openRouterCreditsBudgetUsd ? (
+                <SettingResetButton
+                  label="OpenRouter budget"
+                  onClick={() =>
+                    updateSettings({
+                      openRouterCreditsBudgetUsd:
+                        DEFAULT_UNIFIED_SETTINGS.openRouterCreditsBudgetUsd,
+                    })
+                  }
+                />
+              ) : null
+            }
+            control={
+              <SettingsNumberField
+                ariaLabel="OpenRouter budget"
+                max={MAX_OPENROUTER_CREDITS_BUDGET_USD}
+                min={MIN_OPENROUTER_CREDITS_BUDGET_USD}
+                onCommit={(next) =>
+                  updateSettings({
+                    openRouterCreditsBudgetUsd: resolveOpenRouterCreditsBudgetCommit(next),
+                  })
+                }
+                placeholder="None"
+                prefix="$"
+                value={settings.openRouterCreditsBudgetUsd}
+              />
+            }
+          />
         </>
       ) : null}
+    </SettingsSection>
+  );
+}
+
+/** One environment's Linear connection: who the key belongs to and which workspace it reads. */
+function LinearEnvironmentStatus({
+  environmentId,
+  label,
+  onDetectedTeamKeys,
+}: {
+  readonly environmentId: EnvironmentId;
+  readonly label: string;
+  readonly onDetectedTeamKeys: (teamKeys: ReadonlyArray<string>) => void;
+}) {
+  const query = useEnvironmentQuery(linearEnvironment.status({ environmentId, input: {} }));
+  let status: string;
+  let teamKeys: ReadonlyArray<string> = [];
+  if (query.error !== null) {
+    status = "Unavailable";
+  } else if (query.data !== null) {
+    const { configured, viewer, workspace, error } = query.data;
+    if (!configured) {
+      status = error ?? "No API key";
+    } else if (viewer !== null && workspace !== null) {
+      status = `${viewer.displayName} · ${workspace.urlKey}`;
+      teamKeys = query.data.teamKeys;
+    } else {
+      status = error ?? "No data";
+    }
+  } else {
+    status = "Checking…";
+  }
+  return (
+    <div className="flex items-baseline justify-between gap-3">
+      <span className="text-muted-foreground">{label}</span>
+      <span className="flex min-w-0 items-baseline gap-2 text-muted-foreground/80">
+        <span className="truncate">{status}</span>
+        {teamKeys.length > 0 ? (
+          <button
+            type="button"
+            className="shrink-0 cursor-pointer underline-offset-2 hover:text-foreground hover:underline"
+            onClick={() => onDetectedTeamKeys(teamKeys)}
+          >
+            use detected: {teamKeys.join(", ")}
+          </button>
+        ) : null}
+      </span>
+    </div>
+  );
+}
+
+function LinearExtrasSection() {
+  const settings = usePrimarySettings();
+  const updateSettings = useUpdatePrimarySettings();
+  const serverConfigs = useServerConfigs();
+  // Only servers that expose the RPCs: an older one would reject the probe and read as a failure.
+  const environments = useEnvironments().environments.filter((environment) =>
+    environmentReadsLinearIssues(serverConfigs, environment.environmentId),
+  );
+  const configureLinear = useAtomCommand(linearEnvironment.configure, { reportFailure: false });
+
+  // Like the OpenRouter key, one personal key applies to every connected environment; the
+  // server probes it before storing, so a rejected key never replaces a working one. The
+  // command runs serially per environment, so a save and a clear in quick succession land in
+  // the order they were asked for.
+  const applyLinearApiKey = useCallback(
+    async (apiKey: string) => {
+      if (environments.length === 0) {
+        toastManager.add({
+          type: "warning",
+          title: "No environments connected",
+          description: "Connect an environment before saving the Linear API key.",
+        });
+        return;
+      }
+      const results = await Promise.all(
+        environments.map(async (environment) => ({
+          label: environment.label,
+          result: await configureLinear({
+            environmentId: environment.environmentId,
+            input: { apiKey },
+          }),
+        })),
+      );
+      const failed = results.filter(({ result }) => result._tag === "Failure");
+      const removed = apiKey.trim().length === 0;
+      if (failed.length === 0) {
+        toastManager.add({
+          type: "success",
+          title: removed ? "Linear API key removed" : "Linear API key saved",
+        });
+        return;
+      }
+      const firstFailure = failed[0]!.result;
+      toastManager.add({
+        type: "warning",
+        title: removed
+          ? "Could not remove the key everywhere"
+          : "Could not save the key everywhere",
+        description: `Failed for: ${failed.map(({ label }) => label).join(", ")}.${
+          firstFailure._tag === "Failure"
+            ? ` ${formatEnvironmentQueryError(firstFailure.cause)}`
+            : ""
+        }`,
+      });
+    },
+    [configureLinear, environments],
+  );
+  const setTeamKeys = useCallback(
+    (teamKeys: ReadonlyArray<string>) => updateSettings({ linearTeamKeys: teamKeys }),
+    [updateSettings],
+  );
+
+  return (
+    <SettingsSection {...searchableSetting("extras-linear")}>
+      <SettingsRow
+        title="Linear API key"
+        description="A personal API key from linear.app/settings/account/security. Stored in each environment's secret store and only used server-side to read issues and post comments. Applied to every connected environment on save."
+        resetAction={
+          <SettingResetButton label="Linear API key" onClick={() => void applyLinearApiKey("")} />
+        }
+        control={
+          <DraftInput
+            className="w-full sm:w-72"
+            value=""
+            onCommit={(next) => {
+              const trimmed = next.trim();
+              if (trimmed.length > 0) void applyLinearApiKey(trimmed);
+            }}
+            type="password"
+            autoComplete="off"
+            placeholder="lin_api_…"
+            spellCheck={false}
+            aria-label="Linear API key"
+          />
+        }
+      />
+      <div className="flex max-w-xl flex-col gap-1 px-3 text-[13px] leading-[1.45] sm:px-4">
+        {environments.map((environment) => (
+          <LinearEnvironmentStatus
+            key={environment.environmentId}
+            environmentId={environment.environmentId}
+            label={environment.label}
+            onDetectedTeamKeys={setTeamKeys}
+          />
+        ))}
+      </div>
+      <SettingsRow
+        title="Linear team keys"
+        description="Comma-separated team keys (for example SP, OP). Bare identifiers like SP-123 in messages become issue links only for these keys; linear.app links always open in the panel."
+        resetAction={
+          settings.linearTeamKeys.length > 0 ? (
+            <SettingResetButton label="Linear team keys" onClick={() => setTeamKeys([])} />
+          ) : null
+        }
+        control={
+          <DraftInput
+            key={settings.linearTeamKeys.join(",")}
+            className="w-full sm:w-72"
+            value={settings.linearTeamKeys.join(", ")}
+            onCommit={(next) => setTeamKeys(normalizeLinearTeamKeys(next.split(",")))}
+            autoComplete="off"
+            placeholder="SP, OP"
+            spellCheck={false}
+            aria-label="Linear team keys"
+          />
+        }
+      />
     </SettingsSection>
   );
 }
@@ -932,6 +1148,35 @@ function ComposerExtrasSection() {
   return (
     <SettingsSection {...searchableSetting("extras-composer")}>
       <SettingsRow
+        serverScoped
+        {...searchableSetting("skip-missing-worktree-recreation")}
+        title="Skip recreating removed worktrees"
+        description="Continue in the main project checkout when a thread's worktree is gone. Turn this off to try recreating the worktree first; if that fails, continue in the main checkout."
+        resetAction={
+          settings.skipMissingWorktreeRecreation !==
+          DEFAULT_UNIFIED_SETTINGS.skipMissingWorktreeRecreation ? (
+            <SettingResetButton
+              label="removed worktree recovery"
+              onClick={() =>
+                updateSettings({
+                  skipMissingWorktreeRecreation:
+                    DEFAULT_UNIFIED_SETTINGS.skipMissingWorktreeRecreation,
+                })
+              }
+            />
+          ) : null
+        }
+        control={
+          <Switch
+            checked={settings.skipMissingWorktreeRecreation}
+            onCheckedChange={(checked) =>
+              updateSettings({ skipMissingWorktreeRecreation: Boolean(checked) })
+            }
+            aria-label="Skip recreating removed worktrees"
+          />
+        }
+      />
+      <SettingsRow
         title="Steer grace window"
         description="How long a steered message waits in the composer before it is sent to the running agent. Until the window elapses the message can still be edited or recalled; 0s locks it in immediately."
         resetAction={
@@ -1174,6 +1419,7 @@ export function ExtrasSettingsPanel() {
     <SettingsPageContainer>
       <NotificationsExtrasSection />
       <ProviderUsageExtrasSection />
+      <LinearExtrasSection />
       <SidebarExtrasSection />
       <ComposerExtrasSection />
       <AccentTintsExtrasSection />

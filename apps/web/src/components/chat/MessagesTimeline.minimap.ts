@@ -1,4 +1,7 @@
-import type { MessagesTimelineRow } from "./MessagesTimeline.logic";
+import {
+  resolveTimelineMinimapCurrentIndex,
+  type MessagesTimelineRow,
+} from "./MessagesTimeline.logic";
 
 export const TIMELINE_MINIMAP_ARIA_EXCERPT_MAX_LENGTH = 120;
 export const TIMELINE_MINIMAP_PREVIEW_MAX_LENGTH = 240;
@@ -386,4 +389,48 @@ export function resolveTimelineMinimapVisibleItemIds(input: {
     visibleIds.push(item.id);
   }
   return visibleIds;
+}
+
+/** Resolves navigation without scanning every marker on each scroll. */
+export function resolveTimelineMinimapCurrentIndexFromState(input: {
+  readonly items: ReadonlyArray<TimelineMinimapItem>;
+  readonly state: TimelineMinimapPositionState;
+  readonly scrollTop: number;
+  readonly scrollBottom: number;
+}): number | null {
+  const scan = () =>
+    resolveTimelineMinimapCurrentIndex({
+      scrollTop: input.scrollTop,
+      scrollBottom: input.scrollBottom,
+      itemBounds: input.items.map((item) => ({
+        top: resolveTimelineRowTop(input.state, item.rowIndex),
+        height: resolveTimelineRowHeight(input.state, item.rowIndex),
+      })),
+    });
+  let low = 0;
+  let high = input.items.length;
+  while (low < high) {
+    const middle = low + Math.floor((high - low) / 2);
+    const top = resolveTimelineRowTop(input.state, input.items[middle]!.rowIndex);
+    if (top === null) return scan();
+    if (top < input.scrollTop) low = middle + 1;
+    else high = middle;
+  }
+  const precedingIndex = low - 1;
+  if (precedingIndex >= 0) {
+    const preceding = input.items[precedingIndex]!;
+    const top = resolveTimelineRowTop(input.state, preceding.rowIndex);
+    if (top === null) return scan();
+    const height = resolveTimelineRowHeight(input.state, preceding.rowIndex);
+    if (top < input.scrollBottom && top + Math.max(1, height ?? 1) > input.scrollTop) {
+      return precedingIndex;
+    }
+  }
+  const following = input.items[low];
+  if (following) {
+    const top = resolveTimelineRowTop(input.state, following.rowIndex);
+    if (top === null) return scan();
+    if (top < input.scrollBottom) return low;
+  }
+  return precedingIndex >= 0 ? precedingIndex : null;
 }

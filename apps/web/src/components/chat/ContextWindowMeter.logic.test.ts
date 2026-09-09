@@ -3,10 +3,12 @@ import { describe, expect, it } from "vite-plus/test";
 import { deriveProviderInstanceEntries } from "../../providerInstances";
 import {
   formatContextWindowCompactionMessage,
-  hasAvailableClaudeCompactionProvider,
+  hasAvailableCompactionProvider,
   hasDismissedResumeCompaction,
+  openRouterCreditsBudgetWindow,
   resolveContextWindowModelDisplayName,
   shouldOfferResumeCompaction,
+  shouldReserveContextWindowMeter,
 } from "./ContextWindowMeter.logic";
 
 function claudeProvider(input: {
@@ -25,12 +27,12 @@ function claudeProvider(input: {
     auth: { status: "authenticated" },
     checkedAt: "2026-08-24T12:00:00.000Z",
     models: [],
-    slashCommands: [],
+    slashCommands: [{ name: "compact", description: "" }],
     skills: [],
   };
 }
 
-describe("hasAvailableClaudeCompactionProvider", () => {
+describe("hasAvailableCompactionProvider", () => {
   const originalInstanceId = ProviderInstanceId.make("claude_original");
 
   it("rejects a fallback in a different locked continuation group", () => {
@@ -47,8 +49,9 @@ describe("hasAvailableClaudeCompactionProvider", () => {
     ]);
 
     expect(
-      hasAvailableClaudeCompactionProvider({
+      hasAvailableCompactionProvider({
         providers,
+        driverKind: ProviderDriverKind.make("claudeAgent"),
         instanceId: originalInstanceId,
         lockedInstanceId: originalInstanceId,
       }),
@@ -69,8 +72,9 @@ describe("hasAvailableClaudeCompactionProvider", () => {
     ]);
 
     expect(
-      hasAvailableClaudeCompactionProvider({
+      hasAvailableCompactionProvider({
         providers,
+        driverKind: ProviderDriverKind.make("claudeAgent"),
         instanceId: originalInstanceId,
         lockedInstanceId: originalInstanceId,
       }),
@@ -232,5 +236,75 @@ describe("hasDismissedResumeCompaction", () => {
         { kind: "user-input.resolved", payload: { answers: ["Don't ask again"] } },
       ]),
     ).toBe(false);
+  });
+});
+
+describe("openRouterCreditsBudgetWindow", () => {
+  it("measures the burn against the budget", () => {
+    const window = openRouterCreditsBudgetWindow(47.23, 50);
+    expect(window?.usedPercent).toBeCloseTo(5.54, 2);
+    expect(window?.label).toBe("Budget $50.00");
+    expect(window?.status).toBe("ok");
+  });
+
+  it("pins overspend at 100% and a topped-up balance at 0%", () => {
+    expect(openRouterCreditsBudgetWindow(-3, 50)?.usedPercent).toBe(100);
+    expect(openRouterCreditsBudgetWindow(80, 50)?.usedPercent).toBe(0);
+  });
+
+  it("has no window without both a balance and a positive budget", () => {
+    expect(openRouterCreditsBudgetWindow(null, 50)).toBeNull();
+    expect(openRouterCreditsBudgetWindow(47.23, null)).toBeNull();
+    expect(openRouterCreditsBudgetWindow(47.23, 0)).toBeNull();
+    expect(openRouterCreditsBudgetWindow(Number.NaN, 50)).toBeNull();
+  });
+});
+
+describe("shouldReserveContextWindowMeter", () => {
+  const loadingStartedThread = {
+    meterEnabled: true,
+    detailLoading: true,
+    threadStarted: true,
+    providerReportsContextWindow: true,
+  };
+
+  it("holds the meter's slot while a started thread's detail loads", () => {
+    expect(shouldReserveContextWindowMeter(loadingStartedThread)).toBe(true);
+  });
+
+  it("reserves nothing once the detail is in", () => {
+    expect(shouldReserveContextWindowMeter({ ...loadingStartedThread, detailLoading: false })).toBe(
+      false,
+    );
+  });
+
+  it("reserves nothing for a thread that never ran a turn", () => {
+    expect(shouldReserveContextWindowMeter({ ...loadingStartedThread, threadStarted: false })).toBe(
+      false,
+    );
+  });
+
+  it("reserves while the thread's provider is not in the catalog yet", () => {
+    expect(
+      shouldReserveContextWindowMeter({
+        ...loadingStartedThread,
+        providerReportsContextWindow: null,
+      }),
+    ).toBe(true);
+  });
+
+  it("reserves nothing for a provider that does not stream usage", () => {
+    expect(
+      shouldReserveContextWindowMeter({
+        ...loadingStartedThread,
+        providerReportsContextWindow: false,
+      }),
+    ).toBe(false);
+  });
+
+  it("reserves nothing while the meter is switched off", () => {
+    expect(shouldReserveContextWindowMeter({ ...loadingStartedThread, meterEnabled: false })).toBe(
+      false,
+    );
   });
 });

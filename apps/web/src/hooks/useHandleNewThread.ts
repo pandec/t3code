@@ -7,6 +7,7 @@ import {
 import type { EnvironmentProject } from "@t3tools/client-runtime/state/shell";
 import {
   DEFAULT_RUNTIME_MODE,
+  DEFAULT_SERVER_SETTINGS,
   type ModelSelection,
   type ScopedProjectRef,
   type ThreadId,
@@ -36,7 +37,7 @@ import {
   resolveNewDraftStartFromOrigin,
 } from "../lib/chatThreadActions";
 import { readT3ProjectFileDefaultThreadEnvMode } from "../lib/t3ProjectFileDefaults";
-import { primaryServerSettingsAtom } from "../state/server";
+import { environmentServerConfigsAtom, primaryServerSettingsAtom } from "../state/server";
 import { resolveThreadRouteTarget } from "../threadRoutes";
 import { legacyProjectCwdPreferenceKey, useUiStateStore } from "../uiStateStore";
 import { useClientSettings } from "./useSettings";
@@ -155,11 +156,7 @@ function pickExplicitWorkspaceOptions(options: NewThreadWorkspaceOptions | undef
 }
 
 export function useNewThreadHandler() {
-  // New-thread defaults are a user preference, and the settings UI only ever
-  // edits the primary environment's settings.json. Reading the target
-  // environment's own settings here would silently reset remote projects to
-  // the decoded defaults ("local" mode, current branch), since nothing can
-  // set those values on a remote server.
+  const environmentServerConfigs = useAtomValue(environmentServerConfigsAtom);
   const primaryServerSettings = useAtomValue(primaryServerSettingsAtom);
   const projectGroupingSettings = useClientSettings(selectProjectGroupingSettings);
   const router = useRouter();
@@ -183,6 +180,8 @@ export function useNewThreadHandler() {
       // up again and finding whichever draft it happens to hold.
     ): Promise<{ draftId: DraftId; threadId: ThreadId } | null> => {
       const projects = readProjects();
+      const targetServerSettings =
+        environmentServerConfigs.get(projectRef.environmentId)?.settings ?? DEFAULT_SERVER_SETTINGS;
       const {
         getComposerDraft,
         getDraftSessionByLogicalProjectKey,
@@ -191,6 +190,8 @@ export function useNewThreadHandler() {
         setDraftThreadContext,
         setLogicalProjectDraftThreadId,
       } = useComposerDraftStore.getState();
+      const requestingRouteHref = router.state.location.href;
+      const routeChangedSinceRequest = () => router.state.location.href !== requestingRouteHref;
       const currentRouteTarget = getCurrentRouteTarget();
       // A new thread carries the user's working mode from the thread being
       // viewed. A same-logical-project model carry wins over the project
@@ -246,7 +247,7 @@ export function useNewThreadHandler() {
                 project.workspaceRoot,
               )
             : null,
-          globalDefault: primaryServerSettings.defaultThreadEnvMode,
+          globalDefault: targetServerSettings.defaultThreadEnvMode,
         });
       };
       const logicalProjectKey = project
@@ -318,6 +319,9 @@ export function useNewThreadHandler() {
             workspaceContext = pickExplicitWorkspaceOptions(options);
           } else if (!isDraftAlreadyOpen) {
             const defaultEnvMode = await resolveDefaultEnvMode();
+            if (routeChangedSinceRequest()) {
+              return null;
+            }
             // The await yields. If the draft was opened (a concurrent
             // invocation's navigation landed), promoted to a real thread,
             // remapped away (a concurrent invocation registered a fresh
@@ -372,7 +376,10 @@ export function useNewThreadHandler() {
             seedNewDraftModelState({
               draftId: emptyStoredDraftThread.draftId,
               logicalProjectKey,
-              projectDefaultModelSelection: project?.defaultModelSelection ?? null,
+              projectDefaultModelSelection:
+                project?.defaultModelSelection ??
+                targetServerSettings.defaultModelSelection ??
+                null,
               carryModelSelection,
               carrySourceLogicalProjectKey,
             });
@@ -450,6 +457,9 @@ export function useNewThreadHandler() {
       const createdAt = new Date().toISOString();
       return (async () => {
         const initialEnvMode = options?.envMode ?? (await resolveDefaultEnvMode());
+        if (routeChangedSinceRequest()) {
+          return null;
+        }
         // The await yields, so a concurrent invocation may have registered a
         // draft for this logical project in the meantime. Registering ours
         // too would evict that draft while its navigation is in flight —
@@ -504,7 +514,8 @@ export function useNewThreadHandler() {
         seedNewDraftModelState({
           draftId,
           logicalProjectKey,
-          projectDefaultModelSelection: project?.defaultModelSelection ?? null,
+          projectDefaultModelSelection:
+            project?.defaultModelSelection ?? targetServerSettings.defaultModelSelection ?? null,
           carryModelSelection,
           carrySourceLogicalProjectKey,
         });
@@ -516,7 +527,13 @@ export function useNewThreadHandler() {
         return { draftId, threadId };
       })();
     },
-    [getCurrentRouteTarget, primaryServerSettings, projectGroupingSettings, router],
+    [
+      environmentServerConfigs,
+      getCurrentRouteTarget,
+      primaryServerSettings.newWorktreesStartFromOrigin,
+      projectGroupingSettings,
+      router,
+    ],
   );
 }
 
@@ -527,6 +544,7 @@ export function useHandleNewThread() {
     select: (params) => resolveThreadRouteTarget(params),
   });
   const routeThreadRef = routeTarget?.kind === "server" ? routeTarget.threadRef : null;
+  const routeDraftId = routeTarget?.kind === "draft" ? routeTarget.draftId : null;
   const activeThread = useThread(routeThreadRef);
   const getDraftThread = useComposerDraftStore((store) => store.getDraftThread);
   const activeDraftThread = useComposerDraftStore(() =>
@@ -557,6 +575,7 @@ export function useHandleNewThread() {
       ? scopeProjectRef(orderedProjects[0].environmentId, orderedProjects[0].id)
       : null,
     handleNewThread,
+    routeDraftId,
     routeThreadRef,
   };
 }

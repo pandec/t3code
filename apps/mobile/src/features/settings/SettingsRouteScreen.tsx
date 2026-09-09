@@ -64,8 +64,10 @@ import {
   type ServerSettingsPatch,
 } from "@t3tools/contracts";
 import {
+  filterSharedServerPatch,
   findSharedSettingsMismatches,
   pickSharedServerSettings,
+  supportsSharedSettingsSync,
 } from "@t3tools/client-runtime/state/shared-settings";
 import {
   useAlwaysShowPinnedInAttention,
@@ -196,6 +198,10 @@ function ConfiguredSettingsRouteScreen() {
   const savePreferences = useAtomSet(updateMobilePreferencesAtom);
   const agentAwarenessPushAvailable = supportsAgentAwarenessPush();
   const agentAwarenessPlatform = resolveAgentAwarenessPlatformPresentation(Platform.OS);
+  const agentAwarenessSubtitle =
+    Platform.OS === "android" && !agentAwarenessPushAvailable
+      ? "Install a newer app build to enable notifications"
+      : agentAwarenessPlatform.subtitle;
   const insets = useSafeAreaInsets();
   const navigation = useNavigation();
   const { getToken, isLoaded, isSignedIn } = useAuth({ treatPendingAsSignedOut: false });
@@ -217,7 +223,7 @@ function ConfiguredSettingsRouteScreen() {
   }, [isLoaded, isSignedIn, user?.primaryEmailAddress?.emailAddress]);
 
   const refreshNotifications = useCallback(async () => {
-    if (process.env.EXPO_OS !== "ios") {
+    if (Platform.OS !== "ios" && Platform.OS !== "android") {
       setNotificationStatus("unsupported");
       return;
     }
@@ -282,10 +288,7 @@ function ConfiguredSettingsRouteScreen() {
       // Permission alone is not enough: the switch stays off until the relay
       // registration succeeds, so tell the user the truth about which happened.
       if (getAgentAwarenessRegistrationStatus() === "registered") {
-        Alert.alert(
-          "Notifications enabled",
-          "Live Activity notifications are enabled for this device.",
-        );
+        Alert.alert("Notifications enabled", "Agent notifications are enabled for this device.");
       } else {
         Alert.alert(
           "Couldn't finish enabling notifications",
@@ -298,7 +301,7 @@ function ConfiguredSettingsRouteScreen() {
       setNotificationStatus("unsupported");
       Alert.alert(
         "Notifications unavailable",
-        "Live Activity notifications are only available on iOS.",
+        "Agent notifications are unavailable on this platform.",
       );
       return;
     }
@@ -338,13 +341,40 @@ function ConfiguredSettingsRouteScreen() {
     }
 
     setLiveActivityStatus("linking");
+    if (Platform.OS === "android") {
+      const permission = await settleAsyncResult(() =>
+        runtime.runPromiseExit(requestAgentNotificationPermission),
+      );
+      if (permission._tag === "Failure") {
+        setLiveActivityStatus("disabled");
+        const error = squashAtomCommandFailure(permission);
+        Alert.alert(
+          "Ongoing activity unavailable",
+          error instanceof Error ? error.message : "Could not enable agent notifications.",
+        );
+        return;
+      }
+      if (permission.value.type !== "granted") {
+        setLiveActivityStatus("disabled");
+        Alert.alert(
+          "Notification permission needed",
+          "Enable notifications in system Settings to show ongoing agent activity.",
+          [
+            { text: "Cancel", style: "cancel" },
+            { text: "Open Settings", onPress: () => void Linking.openSettings() },
+          ],
+        );
+        return;
+      }
+      setNotificationStatus("enabled");
+    }
     const tokenResult = await settlePromise(() => getToken(resolveRelayClerkTokenOptions()));
     if (tokenResult._tag === "Failure") {
       setLiveActivityStatus("disabled");
       const error = squashAtomCommandFailure(tokenResult);
       Alert.alert(
-        "Live Activities unavailable",
-        error instanceof Error ? error.message : "Could not enable Live Activity updates.",
+        Platform.OS === "android" ? "Ongoing activity unavailable" : "Live Activities unavailable",
+        error instanceof Error ? error.message : "Could not enable agent activity updates.",
       );
       return;
     }
@@ -369,8 +399,10 @@ function ConfiguredSettingsRouteScreen() {
       if (!isAtomCommandInterrupted(updateResult)) {
         const error = squashAtomCommandFailure(updateResult);
         Alert.alert(
-          "Live Activities unavailable",
-          error instanceof Error ? error.message : "Could not enable Live Activity updates.",
+          Platform.OS === "android"
+            ? "Ongoing activity unavailable"
+            : "Live Activities unavailable",
+          error instanceof Error ? error.message : "Could not enable agent activity updates.",
         );
       }
       return;
@@ -384,15 +416,15 @@ function ConfiguredSettingsRouteScreen() {
     // Activities are live until the device is actually registered.
     if (getAgentAwarenessRegistrationStatus() === "registered") {
       Alert.alert(
-        "Live Activities enabled",
+        Platform.OS === "android" ? "Ongoing activity enabled" : "Live Activities enabled",
         environmentCount > 0
-          ? `${environmentCount} environment${environmentCount === 1 ? "" : "s"} linked for Live Activity updates.`
-          : "Live Activity updates are enabled. Add an environment to start receiving updates.",
+          ? `${environmentCount} environment${environmentCount === 1 ? "" : "s"} linked for agent activity updates.`
+          : "Agent activity updates are enabled. Add an environment to start receiving updates.",
       );
     } else {
       Alert.alert(
-        "Couldn't finish enabling Live Activities",
-        "This device could not be registered with T3 Connect, so Live Activities won't appear yet. They'll start once registration succeeds.",
+        "Couldn't finish enabling activity updates",
+        "This device could not be registered with T3 Connect, so activity updates won't appear yet. They'll start once registration succeeds.",
       );
     }
   }, [
@@ -408,20 +440,24 @@ function ConfiguredSettingsRouteScreen() {
   const handleDeviceNotificationsChange = useCallback(
     (enabled: boolean) => {
       if (enabled) {
+        if (!isSignedIn) {
+          promptSignIn();
+          return;
+        }
         void requestNotifications();
         return;
       }
 
       Alert.alert(
         "Disable notifications",
-        "Notification permission is controlled by iOS. Open Settings to disable notifications for T3 Code.",
+        "Open system Settings to disable notifications for T3 Code.",
         [
           { text: "Cancel", style: "cancel" },
           { text: "Open Settings", onPress: () => void Linking.openSettings() },
         ],
       );
     },
-    [requestNotifications],
+    [isSignedIn, promptSignIn, requestNotifications],
   );
 
   const handleLiveActivitiesChange = useCallback(
@@ -530,7 +566,7 @@ function ConfiguredSettingsRouteScreen() {
               notificationStatus === "checking" ||
               notificationStatus === "unsupported"
             }
-            subtitle={agentAwarenessPlatform.subtitle}
+            subtitle={agentAwarenessSubtitle}
             // Only reads as on when this device is actually registered with the
             // relay; otherwise notifications cannot be delivered regardless of
             // the local iOS permission.
@@ -548,8 +584,8 @@ function ConfiguredSettingsRouteScreen() {
               liveActivityStatus === "linking"
             }
             icon="bolt.circle"
-            label="Live Activity Updates"
-            subtitle={agentAwarenessPlatform.subtitle}
+            label={Platform.OS === "android" ? "Ongoing Agent Activity" : "Live Activity Updates"}
+            subtitle={agentAwarenessSubtitle}
             // Same gate: a saved preference is meaningless until the device
             // registration the relay needs to push updates has succeeded.
             value={
@@ -591,7 +627,7 @@ function GeneralSettingsSection() {
   return (
     <SettingsSection title="General">
       <SettingsRow icon="folder" label="Project Grouping" target="SettingsProjectGrouping" />
-      <AutoSettleSettingsRows />
+      <SharedThreadSettingsRows />
       <SettingsRow icon="chart.bar.xaxis" label="Usage" target="SettingsUsage" />
       <SettingsSliderRow
         description="How long a steered message can still be edited or recalled before it is sent to the running agent. 0.0s sends it immediately."
@@ -792,24 +828,20 @@ function ThreadSyncRow() {
 const AUTO_SETTLE_DEFAULT_DAYS = DEFAULT_SERVER_SETTINGS.sidebarAutoSettleAfterDays ?? 3;
 
 /**
- * Auto-settlement is a user preference that every server has to hold. Mobile
- * has no primary environment, so the first connected environment that
- * supports it is the reference value. Edits fan out to every connected
- * capable environment, and a mismatch row lets the user push the reference out.
+ * Shared thread preferences must be stored on every eligible server. Mobile
+ * has no primary environment, so the first eligible sync target provides the
+ * reference value. Edits fan out to every eligible target, and a mismatch row
+ * lets the user push the reference out.
  */
-function AutoSettleSettingsRows() {
+function SharedThreadSettingsRows() {
   const { environments } = useEnvironments();
   const updateSettings = useAtomCommand(serverEnvironment.updateSettings, {
     label: "server settings update",
     reportFailure: true,
   });
 
-  const connected = environments.filter(
-    (environment) =>
-      environment.connection.phase === "connected" &&
-      environment.serverConfig?.environment.capabilities.threadAutoSettlement === true,
-  );
-  const reference = connected[0] ?? null;
+  const syncTargets = environments.filter(supportsSharedSettingsSync);
+  const reference = syncTargets[0] ?? null;
   const referenceSettings = reference?.serverConfig?.settings ?? null;
   const [daysDraft, setDaysDraft] = useState<string | null>(null);
 
@@ -818,7 +850,7 @@ function AutoSettleSettingsRows() {
   }
 
   const writeToAll = (patch: ServerSettingsPatch) => {
-    for (const environment of connected) {
+    for (const environment of syncTargets) {
       void updateSettings({ environmentId: environment.environmentId, input: { patch } });
     }
   };
@@ -826,11 +858,13 @@ function AutoSettleSettingsRows() {
   const mismatches = findSharedSettingsMismatches({
     primaryEnvironmentId: reference.environmentId,
     primarySettings: referenceSettings,
-    environments: connected.map((environment) => ({
+    primaryCapabilities: reference.serverConfig?.environment.capabilities,
+    environments: environments.map((environment) => ({
       environmentId: environment.environmentId,
       label: environment.label,
-      connected: true,
+      syncEligible: supportsSharedSettingsSync(environment),
       settings: environment.serverConfig?.settings ?? null,
+      capabilities: environment.serverConfig?.environment.capabilities,
     })),
   });
 
@@ -840,7 +874,7 @@ function AutoSettleSettingsRows() {
     const draft = (daysDraft ?? "").trim();
     setDaysDraft(null);
     // Whole-string check so "3.5" and "3days" are rejected instead of
-    // silently becoming 3 on every connected environment.
+    // silently becoming 3 on every eligible sync target.
     const parsed = /^\d+$/.test(draft) ? Number(draft) : Number.NaN;
     if (
       Number.isInteger(parsed) &&
@@ -854,6 +888,13 @@ function AutoSettleSettingsRows() {
 
   return (
     <>
+      <SettingsSwitchRow
+        icon="arrow.triangle.branch"
+        label="Skip recreating removed worktrees"
+        subtitle="Continue in the main project checkout when a worktree is gone. Turn off to try recreating it first, with the main checkout as a fallback."
+        value={referenceSettings.skipMissingWorktreeRecreation}
+        onValueChange={(value) => writeToAll({ skipMissingWorktreeRecreation: value })}
+      />
       <SettingsSwitchRow
         icon="checkmark.circle"
         label="Settle threads automatically"
@@ -906,11 +947,24 @@ function AutoSettleSettingsRows() {
           <Pressable
             accessibilityRole="button"
             onPress={() => {
-              const patch = pickSharedServerSettings(referenceSettings);
+              const patch = pickSharedServerSettings(
+                referenceSettings,
+                reference.serverConfig?.environment.capabilities,
+              );
               for (const mismatch of mismatches) {
+                const target = environments.find(
+                  (candidate) => candidate.environmentId === mismatch.environmentId,
+                );
                 void updateSettings({
                   environmentId: mismatch.environmentId,
-                  input: { patch },
+                  input: {
+                    patch: filterSharedServerPatch(
+                      patch,
+                      target?.serverConfig?.environment.capabilities,
+                      target?.serverConfig?.settings,
+                      referenceSettings,
+                    ),
+                  },
                 });
               }
             }}

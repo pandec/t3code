@@ -54,7 +54,10 @@ const repository = (
   getByMessageId: () => Effect.succeed(projected),
   getSpeechByMessageId: () => Effect.succeed(Option.none()),
   listPendingSpeechRequests: Effect.succeed([]),
+  hasAssistantMessageForTurn: () => Effect.die("unused"),
+  getLatestAssistantMessageIdForTurn: () => Effect.die("unused"),
   listByThreadId: () => Effect.succeed([]),
+  getLatestUserMessageAt: () => Effect.succeed(null),
   deleteByThreadId: () => Effect.void,
   copyTextMessagesForFork: () => Effect.void,
 });

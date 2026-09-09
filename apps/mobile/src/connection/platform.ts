@@ -119,6 +119,9 @@ const capabilitiesLayer = Layer.effectContext(
     return Context.make(
       CloudSession,
       CloudSession.of({
+        identity: Effect.sync(() =>
+          Option.fromNullishOr(appAtomRegistry.get(managedRelaySessionAtom)),
+        ),
         clerkToken: Effect.gen(function* () {
           const session = appAtomRegistry.get(managedRelaySessionAtom);
           if (session === null) {
@@ -216,9 +219,9 @@ const environmentOwnedDataCleanupLayer = Layer.succeed(
     clear: (environmentId) =>
       Effect.all(
         [
-          Effect.promise(() => clearThreadOutboxEnvironment(environmentId)),
-          Effect.promise(() => clearThreadLifecycleOutboxEnvironment(environmentId)),
-          Effect.promise(() => clearComposerDraftsEnvironment(environmentId)),
+          Effect.tryPromise(() => clearThreadOutboxEnvironment(environmentId)),
+          Effect.tryPromise(() => clearThreadLifecycleOutboxEnvironment(environmentId)),
+          Effect.tryPromise(() => clearComposerDraftsEnvironment(environmentId)),
         ],
         { concurrency: "unbounded", discard: true },
       ).pipe(

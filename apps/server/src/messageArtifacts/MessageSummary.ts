@@ -63,7 +63,7 @@ export function withLowSummaryEffort(
   };
 }
 
-export class MessageSummaryError extends Schema.TaggedErrorClass<MessageSummaryError>()(
+export class MessageSummaryError extends Schema.TaggedError<MessageSummaryError>()(
   "MessageSummaryError",
   {
     reason: Schema.Literals([

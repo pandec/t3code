@@ -3,7 +3,7 @@ import * as Schema from "effect/Schema";
 
 import type { ThreadLifecycleIntent } from "./threadLifecycleOutboxModel.ts";
 
-export class ThreadLifecycleOutboxStorageError extends Schema.TaggedErrorClass<ThreadLifecycleOutboxStorageError>()(
+export class ThreadLifecycleOutboxStorageError extends Schema.TaggedError<ThreadLifecycleOutboxStorageError>()(
   "ThreadLifecycleOutboxStorageError",
   {
     operation: Schema.Literals(["load", "read-intent", "write", "remove"]),

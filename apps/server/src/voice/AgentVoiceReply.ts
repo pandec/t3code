@@ -25,7 +25,11 @@ import { createAttachmentId } from "../attachmentStore.ts";
 import { resolveAttachmentRelativePath } from "../attachmentPaths.ts";
 import * as ServerConfig from "../config.ts";
 import { ServerSettingsService } from "../serverSettings.ts";
-import { SPEECH_MIME_TYPE, synthesizeElevenLabsSpeech } from "./elevenLabsTts.ts";
+import {
+  SPEECH_MIME_TYPE,
+  speechFailureReasonFor,
+  synthesizeElevenLabsSpeech,
+} from "./elevenLabsTts.ts";
 import {
   DEFAULT_ELEVENLABS_TTS_MODEL,
   DEFAULT_ELEVENLABS_TTS_VOICE_ID,
@@ -265,7 +269,11 @@ export const layer = Layer.effect(
           voiceId,
           ttsModel,
           text: script,
-        }).pipe(Effect.mapError(() => new AgentVoiceReplyError({ reason: "provider_failed" })));
+        }).pipe(
+          Effect.mapError(
+            (error) => new AgentVoiceReplyError({ reason: speechFailureReasonFor(error) }),
+          ),
+        );
 
         // Synthesis can take a while; if the thread was steered to a
         // different turn in the meantime, this recording belongs to a turn

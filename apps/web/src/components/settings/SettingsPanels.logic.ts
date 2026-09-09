@@ -108,10 +108,12 @@ type TypographySettings = Pick<
   UnifiedSettings,
   | "fontFamilySans"
   | "fontFamilyComposer"
+  | "fontFamilyMessage"
   | "fontFamilyCode"
   | "fontFamilyTerminal"
   | "fontSizeInterface"
   | "fontSizePrompt"
+  | "fontSizeMessage"
   | "fontSizeCode"
   | "fontSizeTerminal"
 >;
@@ -126,6 +128,10 @@ export function getChangedTypographySettingLabels(settings: TypographySettings):
     ...(settings.fontFamilyComposer !== DEFAULT_UNIFIED_SETTINGS.fontFamilyComposer ||
     settings.fontSizePrompt !== DEFAULT_UNIFIED_SETTINGS.fontSizePrompt
       ? ["Prompt font"]
+      : []),
+    ...(settings.fontFamilyMessage !== DEFAULT_UNIFIED_SETTINGS.fontFamilyMessage ||
+    settings.fontSizeMessage !== DEFAULT_UNIFIED_SETTINGS.fontSizeMessage
+      ? ["Message font"]
       : []),
     ...(settings.fontFamilyCode !== DEFAULT_UNIFIED_SETTINGS.fontFamilyCode ||
     settings.fontSizeCode !== DEFAULT_UNIFIED_SETTINGS.fontSizeCode
@@ -144,6 +150,7 @@ export type BrowserDefaultSettings = Pick<
   | "browserDefaultZoomFactor"
   | "browserDefaultAppearance"
   | "browserRecordingFrameRate"
+  | "browserLinkTarget"
   | "browserAutoShowFloatingPreview"
 >;
 
@@ -154,7 +161,7 @@ export type BrowserDefaultSettings = Pick<
  * reports every stored viewport as changed — including one that matches the
  * default.
  */
-export function isSamePreviewViewport(
+function isSamePreviewViewport(
   left: PreviewViewportSetting,
   right: PreviewViewportSetting,
 ): boolean {
@@ -183,6 +190,9 @@ export function getChangedBrowserSettingLabels(settings: BrowserDefaultSettings)
       : []),
     ...(settings.browserRecordingFrameRate !== DEFAULT_UNIFIED_SETTINGS.browserRecordingFrameRate
       ? ["Recording frame rate"]
+      : []),
+    ...(settings.browserLinkTarget !== DEFAULT_UNIFIED_SETTINGS.browserLinkTarget
+      ? ["Open links in"]
       : []),
     ...(settings.browserAutoShowFloatingPreview !==
     DEFAULT_UNIFIED_SETTINGS.browserAutoShowFloatingPreview

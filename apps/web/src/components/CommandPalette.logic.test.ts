@@ -2,9 +2,8 @@ import { describe, expect, it, vi } from "vite-plus/test";
 import { scopeThreadRef } from "@t3tools/client-runtime/environment";
 import { EnvironmentId, ProjectId, ProviderInstanceId, ThreadId } from "@t3tools/contracts";
 import { SidebarProjectAccentColor } from "@t3tools/contracts/settings";
-import type { Project, Thread } from "../types";
+import type { Thread } from "../types";
 import {
-  browseInputEndPaddingClass,
   buildBrowseGroups,
   buildArchiveCurrentThreadAction,
   buildArchivedThreadsActionItems,
@@ -15,9 +14,9 @@ import {
   enumerateCommandPaletteItems,
   filterPinnedBrowseEntries,
   filterCommandPaletteGroups,
-  normalizeSearchText,
   reduceCommandPaletteUiState,
   type CommandPaletteGroup,
+  type CommandPaletteProject,
 } from "./CommandPalette.logic";
 
 describe("buildArchiveCurrentThreadAction", () => {
@@ -200,35 +199,6 @@ describe("buildArchivedThreadsActionItems", () => {
   });
 });
 
-describe("browseInputEndPaddingClass", () => {
-  it("reserves the widest space for the create action", () => {
-    expect(
-      browseInputEndPaddingClass({
-        willCreateProjectPath: true,
-        hasHighlightedBrowseItem: false,
-      }),
-    ).toContain("pe-38");
-  });
-
-  it("reserves space for the wider highlighted-item shortcut", () => {
-    expect(
-      browseInputEndPaddingClass({
-        willCreateProjectPath: false,
-        hasHighlightedBrowseItem: true,
-      }),
-    ).toContain("pe-30");
-  });
-
-  it("keeps the compact reserve for the normal add action", () => {
-    expect(
-      browseInputEndPaddingClass({
-        willCreateProjectPath: false,
-        hasHighlightedBrowseItem: false,
-      }),
-    ).toContain("pe-24");
-  });
-});
-
 describe("reduceCommandPaletteUiState", () => {
   const closedState = { open: false, mode: "command", openIntent: null } as const;
 
@@ -330,6 +300,21 @@ describe("enumerateCommandPaletteItems", () => {
 const LOCAL_ENVIRONMENT_ID = EnvironmentId.make("environment-local");
 const PROJECT_ID = ProjectId.make("project-1");
 
+function makeProject(overrides: Partial<CommandPaletteProject> = {}): CommandPaletteProject {
+  return {
+    id: PROJECT_ID,
+    environmentId: LOCAL_ENVIRONMENT_ID,
+    title: "Project",
+    displayName: "Project",
+    workspaceRoot: "/repos/project",
+    defaultModelSelection: null,
+    scripts: [],
+    createdAt: "2026-03-01T00:00:00.000Z",
+    updatedAt: "2026-03-01T00:00:00.000Z",
+    ...overrides,
+  };
+}
+
 function makeThread(overrides: Partial<Thread> = {}): Thread {
   return {
     id: ThreadId.make("thread-1"),
@@ -354,20 +339,6 @@ function makeThread(overrides: Partial<Thread> = {}): Thread {
     worktreePath: null,
     checkpoints: [],
     activities: [],
-    ...overrides,
-  };
-}
-
-function makeProject(overrides: Partial<Project> = {}): Project {
-  return {
-    id: PROJECT_ID,
-    environmentId: LOCAL_ENVIRONMENT_ID,
-    title: "Project",
-    workspaceRoot: "/repos/project",
-    defaultModelSelection: null,
-    scripts: [],
-    createdAt: "2026-03-01T00:00:00.000Z",
-    updatedAt: "2026-03-01T00:00:00.000Z",
     ...overrides,
   };
 }
@@ -423,6 +394,28 @@ describe("buildProjectActionItems", () => {
 
     expect(items[0]?.shortcutCommand).toBe("thread.jump.1");
     expect(items[0]?.projectAccentColor).toBe(accent);
+  });
+});
+
+describe("buildProjectActionItems", () => {
+  it("shows the grouped display name but keeps the real title for icons", () => {
+    const project = makeProject({ title: "fleet", workspaceRoot: "/Users/theo/Code/p/fleet" });
+    const iconTitles: string[] = [];
+    const [item] = buildProjectActionItems({
+      projects: [{ ...project, displayName: "t3dotgg/fleet" }],
+      valuePrefix: "project",
+      icon: (candidate) => {
+        iconTitles.push(candidate.title);
+        return null;
+      },
+      runProject: async () => undefined,
+    });
+
+    expect(item?.title).toBe("t3dotgg/fleet");
+    expect(item?.searchTerms).toEqual(
+      expect.arrayContaining(["t3dotgg/fleet", "fleet", "/Users/theo/Code/p/fleet"]),
+    );
+    expect(iconTitles).toEqual(["fleet"]);
   });
 });
 
@@ -589,10 +582,33 @@ describe("buildThreadActionItems", () => {
   });
 
   it("normalizes case independently of the host locale", () => {
-    const localeLowerCase = vi.spyOn(String.prototype, "toLocaleLowerCase").mockReturnValue("gıt");
+    const toLocaleLowerCase = String.prototype.toLocaleLowerCase;
+    const localeLowerCase = vi
+      .spyOn(String.prototype, "toLocaleLowerCase")
+      .mockImplementation(function (this: string) {
+        return toLocaleLowerCase.call(this, "tr");
+      });
     try {
-      expect(normalizeSearchText("GIT")).toBe("git");
-      expect(localeLowerCase).not.toHaveBeenCalled();
+      const groups = filterCommandPaletteGroups({
+        activeGroups: [],
+        query: "GIT",
+        isInSubmenu: false,
+        projectSearchItems: [],
+        threadSearchItems: [],
+        settingsSearchItems: [
+          {
+            kind: "action",
+            value: "setting:version-control",
+            title: "Version control",
+            searchTerms: ["git"],
+            icon: null,
+            run: async () => undefined,
+          },
+        ],
+      });
+      expect(groups.flatMap((group) => group.items.map((item) => item.value))).toEqual([
+        "setting:version-control",
+      ]);
     } finally {
       localeLowerCase.mockRestore();
     }

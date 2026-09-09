@@ -9,7 +9,7 @@ import {
 } from "./threadLifecycleOutboxModel.ts";
 import type { ThreadLifecycleOutboxStorage } from "./threadLifecycleOutboxStorage.ts";
 
-export class ThreadLifecycleOutboxManagerError extends Schema.TaggedErrorClass<ThreadLifecycleOutboxManagerError>()(
+export class ThreadLifecycleOutboxManagerError extends Schema.TaggedError<ThreadLifecycleOutboxManagerError>()(
   "ThreadLifecycleOutboxManagerError",
   {
     operation: Schema.Literals([

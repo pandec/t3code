@@ -6,15 +6,12 @@ import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
 import { HttpClient } from "effect/unstable/http";
 
+import { RemoteEnvironmentAuthorization } from "../authorization/service.ts";
 import type { PreparedConnection } from "../connection/model.ts";
 import { environmentEndpointUrl } from "../environment/endpoint.ts";
 import { ManagedRelayDpopSigner } from "../relay/managedRelay.ts";
-import {
-  executeEnvironmentHttpRequest,
-  makeEnvironmentHttpApiClient,
-  type RemoteEnvironmentRequestError,
-} from "../rpc/http.ts";
-import { buildEnvironmentAuthHeaders, withEnvironmentCredentials } from "./environmentHttpAuth.ts";
+import { type RemoteEnvironmentRequestError } from "../rpc/http.ts";
+import { executeAuthenticatedEnvironmentHttpRequest } from "./environmentHttpAuth.ts";
 
 const DEFAULT_THREAD_MESSAGES_TIMEOUT_MS = 6_000;
 
@@ -26,26 +23,21 @@ export const fetchEnvironmentThreadMessagePage = Effect.fn(
   readonly before?: MessageId;
   readonly limit: number;
   readonly signer: Option.Option<ManagedRelayDpopSigner["Service"]>;
+  readonly remoteAuthorization?: Option.Option<RemoteEnvironmentAuthorization["Service"]>;
   readonly timeoutMs?: number;
 }) {
   const query = new URLSearchParams({ limit: String(input.limit) });
   if (input.before !== undefined) query.set("before", input.before);
-  const requestUrl = environmentEndpointUrl(
-    input.prepared.httpBaseUrl,
-    `/api/orchestration/threads/${input.threadId}/messages?${query.toString()}`,
-  );
-  const client = yield* makeEnvironmentHttpApiClient(input.prepared.httpBaseUrl);
-  const headers = yield* buildEnvironmentAuthHeaders(
-    input.prepared.httpAuthorization,
-    "GET",
-    requestUrl,
-    input.signer,
-  );
-  return yield* executeEnvironmentHttpRequest(
-    requestUrl,
-    input.timeoutMs ?? DEFAULT_THREAD_MESSAGES_TIMEOUT_MS,
-    withEnvironmentCredentials(
-      input.prepared.httpAuthorization,
+  return yield* executeAuthenticatedEnvironmentHttpRequest({
+    ...input,
+    method: "GET",
+    url: (httpBaseUrl) =>
+      environmentEndpointUrl(
+        httpBaseUrl,
+        `/api/orchestration/threads/${input.threadId}/messages?${query.toString()}`,
+      ),
+    timeoutMs: input.timeoutMs ?? DEFAULT_THREAD_MESSAGES_TIMEOUT_MS,
+    request: ({ client, headers }) =>
       client.orchestration.threadMessages({
         params: { threadId: input.threadId },
         query: {
@@ -54,8 +46,7 @@ export const fetchEnvironmentThreadMessagePage = Effect.fn(
         },
         headers,
       }),
-    ),
-  );
+  });
 });
 
 export type FetchEnvironmentThreadMessagePageError = RemoteEnvironmentRequestError;
@@ -83,6 +74,7 @@ export const threadMessagePageLoaderLayer: Layer.Layer<
   Effect.gen(function* () {
     const httpClient = yield* HttpClient.HttpClient;
     const signer = yield* Effect.serviceOption(ManagedRelayDpopSigner);
+    const remoteAuthorization = yield* Effect.serviceOption(RemoteEnvironmentAuthorization);
     return ThreadMessagePageLoader.of({
       loadOlder: (prepared, threadId, options) =>
         fetchEnvironmentThreadMessagePage({
@@ -91,6 +83,7 @@ export const threadMessagePageLoaderLayer: Layer.Layer<
           limit: options.limit,
           ...(options.beforeMessageId === null ? {} : { before: options.beforeMessageId }),
           signer,
+          remoteAuthorization,
         }).pipe(
           Effect.map(Option.some<OrchestrationThreadMessagePage>),
           Effect.provideService(HttpClient.HttpClient, httpClient),

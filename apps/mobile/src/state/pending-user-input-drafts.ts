@@ -36,7 +36,7 @@ export function setUserInputDraftOption(
 
 export function setUserInputDraftCustomAnswer(
   requestKey: string,
-  questionId: string,
+  question: UserInputQuestion,
   customAnswer: string,
 ): void {
   const current = appAtomRegistry.get(userInputDraftsByRequestKeyAtom);
@@ -44,8 +44,9 @@ export function setUserInputDraftCustomAnswer(
     ...current,
     [requestKey]: {
       ...current[requestKey],
-      [questionId]: setPendingUserInputCustomAnswer(
-        current[requestKey]?.[questionId],
+      [question.id]: setPendingUserInputCustomAnswer(
+        question,
+        current[requestKey]?.[question.id],
         customAnswer,
       ),
     },

@@ -15,7 +15,6 @@ import {
   formatDiagnosticsDescription,
   getChangedBrowserSettingLabels,
   getChangedTypographySettingLabels,
-  isSamePreviewViewport,
   hasChangedBackgroundActivitySettings,
   isProjectGroupingEnabled,
   projectGroupingModeFromToggle,
@@ -58,6 +57,12 @@ describe("typography settings restore", () => {
         fontFamilyCode: "Fira Code",
       }),
     ).toEqual(["Interface font", "Code font"]);
+    expect(
+      getChangedTypographySettingLabels({
+        ...DEFAULT_UNIFIED_SETTINGS,
+        fontSizeMessage: 16,
+      }),
+    ).toEqual(["Message font"]);
   });
 });
 
@@ -383,6 +388,7 @@ describe("getChangedBrowserSettingLabels", () => {
         browserDefaultZoomFactor: 1.5,
         browserDefaultAppearance: "dark",
         browserRecordingFrameRate: 60,
+        browserLinkTarget: "app",
         browserAutoShowFloatingPreview: !DEFAULT_UNIFIED_SETTINGS.browserAutoShowFloatingPreview,
       }),
     ).toEqual([
@@ -390,29 +396,8 @@ describe("getChangedBrowserSettingLabels", () => {
       "Browser zoom",
       "Browser appearance",
       "Recording frame rate",
+      "Open links in",
       "Floating preview",
     ]);
-  });
-});
-
-describe("isSamePreviewViewport", () => {
-  it("separates presets that share a size", () => {
-    // Two presets can agree on width and height and still be different
-    // entries in the picker, so the id has to take part in the comparison.
-    expect(
-      isSamePreviewViewport(
-        { _tag: "preset", width: 390, height: 844, presetId: "iphone-12-pro" },
-        { _tag: "preset", width: 390, height: 844, presetId: "ipad-mini" },
-      ),
-    ).toBe(false);
-  });
-
-  it("separates a freeform viewport from a preset of the same size", () => {
-    expect(
-      isSamePreviewViewport(
-        { _tag: "freeform", width: 390, height: 844 },
-        { _tag: "preset", width: 390, height: 844, presetId: "iphone-12-pro" },
-      ),
-    ).toBe(false);
   });
 });

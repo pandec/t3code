@@ -5,7 +5,6 @@ import {
 } from "@t3tools/client-runtime/connection";
 import {
   createEnvironmentShellAtoms,
-  createEnvironmentShellSummaryAtom,
   createEnvironmentSnapshotAtom,
   createShellEnvironmentAtoms,
   type EnvironmentShellState,
@@ -20,10 +19,6 @@ import { connectionAtomRuntime } from "../connection/runtime";
 export const shellEnvironment = createShellEnvironmentAtoms(connectionAtomRuntime);
 export const environmentShell = createEnvironmentShellAtoms(connectionAtomRuntime);
 export const environmentSnapshotAtom = createEnvironmentSnapshotAtom(environmentShell.stateAtom);
-export const environmentShellSummaryAtom = createEnvironmentShellSummaryAtom({
-  catalogValueAtom: environmentCatalog.catalogValueAtom,
-  shellStateValueAtom: environmentShell.stateValueAtom,
-});
 
 function disconnectedEnvironmentIsSettled(connection: SupervisorConnectionState): boolean {
   if (connectionProjectionPhase(connection) !== "disconnected") {

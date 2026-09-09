@@ -78,6 +78,13 @@ import Migration0054 from "./Migrations/054_ClearAutomaticProjectModelDefaults.t
 import Migration0055 from "./Migrations/055_ProjectionProjectsAutoPull.ts";
 // Upstream shipped this as 046; renumbered after the fork's migration history.
 import Migration0056 from "./Migrations/056_RepairAutomaticSettlementTimestamps.ts";
+// Upstream shipped this as 047; renumbered after the fork's migration history.
+import Migration0057 from "./Migrations/057_ProjectionProjectIcon.ts";
+// Upstream shipped this as 048; renumbered after the fork's migration history.
+import Migration0058 from "./Migrations/058_ProjectionThreadBranchPullRequest.ts";
+// Upstream shipped this as 049; renumbered after the fork's migration history.
+import Migration0059 from "./Migrations/059_ProjectionThreadsActiveOrderKey.ts";
+import Migration0060 from "./Migrations/060_ProjectionThreadArchiveRequest.ts";
 
 /**
  * Migration loader with all migrations defined inline.
@@ -89,7 +96,7 @@ import Migration0056 from "./Migrations/056_RepairAutomaticSettlementTimestamps.
  * Uses Migrator.fromRecord which parses the key format and
  * returns migrations sorted by ID.
  */
-export const migrationEntries = [
+const migrationEntries = [
   [1, "OrchestrationEvents", Migration0001],
   [2, "OrchestrationCommandReceipts", Migration0002],
   [3, "CheckpointDiffBlobs", Migration0003],
@@ -146,11 +153,15 @@ export const migrationEntries = [
   [54, "ClearAutomaticProjectModelDefaults", Migration0054],
   [55, "ProjectionProjectsAutoPull", Migration0055],
   [56, "RepairAutomaticSettlementTimestamps", Migration0056],
+  [57, "ProjectionProjectIcon", Migration0057],
+  [58, "ProjectionThreadBranchPullRequest", Migration0058],
+  [59, "ProjectionThreadsActiveOrderKey", Migration0059],
+  [60, "ProjectionThreadArchiveRequest", Migration0060],
 ] as const;
 
 export const migrationManifest = migrationEntries.map(([id, name]) => [id, name] as const);
 
-export const makeMigrationLoader = (throughId?: number) =>
+const makeMigrationLoader = (throughId?: number) =>
   Migrator.fromRecord(
     Object.fromEntries(
       migrationEntries

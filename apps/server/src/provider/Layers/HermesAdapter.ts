@@ -1,3 +1,4 @@
+import { providerThreadEnvironment } from "../ProviderThreadEnvironment.ts";
 import {
   ApprovalRequestId,
   type HermesSettings,
@@ -332,6 +333,7 @@ export function makeHermesAdapter(
     const path = yield* Path.Path;
     const childProcessSpawner = yield* ChildProcessSpawner.ChildProcessSpawner;
     const serverConfig = yield* Effect.service(ServerConfig);
+    const ownerScope = yield* Effect.scope;
     const crypto = yield* Crypto.Crypto;
     const nativeEventLogger =
       options?.nativeEventLogger ??
@@ -666,7 +668,10 @@ export function makeHermesAdapter(
       return Effect.succeed(ctx);
     };
 
-    const stopSessionInternal = (ctx: HermesSessionContext) =>
+    const stopSessionInternal = (
+      ctx: HermesSessionContext,
+      exit?: { readonly exitKind: "error"; readonly reason: string },
+    ) =>
       Effect.gen(function* () {
         if (ctx.stopped) return;
         ctx.stopped = true;
@@ -682,7 +687,8 @@ export function makeHermesAdapter(
           provider: PROVIDER,
           threadId: ctx.threadId,
           payload: {
-            exitKind: "graceful",
+            exitKind: exit?.exitKind ?? "graceful",
+            ...(exit ? { reason: exit.reason } : {}),
             sessionGenerationId: ctx.sessionGenerationId,
           },
         });
@@ -733,7 +739,11 @@ export function makeHermesAdapter(
           const mcpSession = McpProviderSession.readMcpProviderSession(input.threadId);
           const acp = yield* makeHermesAcpRuntime({
             hermesSettings,
-            ...(options?.environment ? { environment: options.environment } : {}),
+            environment: providerThreadEnvironment(
+              { threadId: input.threadId, cwd: cwd },
+              options?.environment,
+              serverConfig,
+            ),
             childProcessSpawner,
             cwd,
             ...(resumeSessionId ? { resumeSessionId } : {}),
@@ -972,8 +982,20 @@ export function makeHermesAdapter(
                   yield* logNative(ctx.threadId, "session/update", event.rawPayload);
                 }
 
-                if (event._tag === "ModeChanged") {
-                  return;
+                switch (event._tag) {
+                  case "ModeChanged":
+                  case "AvailableCommandsUpdated":
+                  case "ConfigOptionsUpdated":
+                  case "ThoughtDelta":
+                    return;
+                  case "ConnectionTerminated": {
+                    const reason =
+                      event.error.message.trim().slice(0, 1_000) || "Hermes process stopped.";
+                    yield* stopSessionInternal(ctx, { exitKind: "error", reason }).pipe(
+                      Effect.forkIn(ownerScope),
+                    );
+                    return;
+                  }
                 }
 
                 const notificationTurnId = resolveNotificationTurnId(ctx);
@@ -1674,7 +1696,9 @@ export function makeHermesAdapter(
       });
 
     const stopAll: HermesAdapterShape["stopAll"] = () =>
-      Effect.forEach(Array.from(sessions.values()), stopSessionInternal, { discard: true });
+      Effect.forEach(Array.from(sessions.values()), (ctx) => stopSessionInternal(ctx), {
+        discard: true,
+      });
 
     yield* Effect.addFinalizer(() =>
       Effect.ignore(stopAll()).pipe(
@@ -1690,6 +1714,7 @@ export function makeHermesAdapter(
       capabilities: { sessionModelSwitch: "in-session" },
       startSession,
       sendTurn,
+      compaction: { type: "slash-command", command: "/compact" },
       interruptTurn,
       readThread,
       rollbackThread,

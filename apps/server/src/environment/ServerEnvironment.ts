@@ -26,7 +26,7 @@ import * as ProcessRunner from "../processRunner.ts";
 import { resolveServerEnvironmentLabel } from "./ServerEnvironmentLabel.ts";
 import { detectServerEnvironmentMachineKind } from "./ServerEnvironmentMachine.ts";
 
-export class ServerEnvironmentIdPersistenceError extends Schema.TaggedErrorClass<ServerEnvironmentIdPersistenceError>()(
+export class ServerEnvironmentIdPersistenceError extends Schema.TaggedError<ServerEnvironmentIdPersistenceError>()(
   "ServerEnvironmentIdPersistenceError",
   {
     operation: Schema.Literals(["check", "read", "write", "initialize"]),
@@ -183,6 +183,7 @@ const makeIdentity = Effect.gen(function* () {
   });
 });
 
+/** @public Service construction is part of the canonical Effect module API. */
 export const make = Effect.gen(function* () {
   const path = yield* Path.Path;
   const serverConfig = yield* ServerConfig.ServerConfig;
@@ -227,23 +228,28 @@ export const make = Effect.gen(function* () {
       connectionProbe: true,
       messageSummaries: true,
       attachmentUploads: true,
+      questionAttachments: true,
       fileAttachments: { maxUploadBytes: PROVIDER_SEND_TURN_MAX_FILE_BYTES },
       pullRequests: true,
+      linearIssues: true,
       threadSettlement: true,
       threadAutoSettlement: true,
       conditionalProjectScriptUpdates: true,
       sessionImport: true,
       providerCatalog: true,
+      threadRestartContinuation: true,
       threadSnooze: true,
       threadSnoozeIndefinite: true,
-      threadMoveToTop: true,
       recentArchivedThreads: true,
       projectAccentColors: true,
       projectAccentColorsFill: true,
       savedPrompts: true,
       environmentThemes: true,
+      usageLimitSources: true,
+      usagePriceOverrides: true,
       threadPinning: true,
       threadPinReorder: true,
+      threadActiveReorder: true,
       threadTitleRegeneration: true,
       threadPullRequestLinking: true,
       turnStartBootstrap: true,
@@ -252,11 +258,9 @@ export const make = Effect.gen(function* () {
       ...(advertisedServerSelfUpdate === null
         ? {}
         : { serverSelfUpdate: advertisedServerSelfUpdate }),
+      serverUpdateThreadContinuation: true,
       ...(advertisedServerSelfUpdate === "boot-service" || desktopAppUpdate
-        ? {
-            serverSelfUpdateProgress: true,
-            serverUpdateThreadContinuation: true,
-          }
+        ? { serverSelfUpdateProgress: true }
         : {}),
       ...(desktopAppUpdate ? { desktopAppUpdate: true } : {}),
     },

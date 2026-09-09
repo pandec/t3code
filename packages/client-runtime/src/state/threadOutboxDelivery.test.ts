@@ -7,11 +7,14 @@ import {
   ThreadId,
   TurnId,
 } from "@t3tools/contracts";
+import * as Cause from "effect/Cause";
 import { AsyncResult } from "effect/unstable/reactivity";
 
 import {
   createThreadOutboxDelivery,
+  threadOutboxFlushBatchIds,
   type ThreadOutboxDeliveryContext,
+  type ThreadOutboxDispatchResult,
 } from "./threadOutboxDelivery.ts";
 import {
   decodeQueuedThreadMessage,
@@ -66,6 +69,7 @@ describe("thread outbox delivery", () => {
     });
     const removeQueuedMessage = vi.fn(async () => {
       calls.push("remove");
+      return true;
     });
     const onStartTurnAccepted = vi.fn(() => {
       calls.push("start-accepted");
@@ -102,7 +106,7 @@ describe("thread outbox delivery", () => {
     };
     await expect(
       delivery.sendQueuedMessage(message, threadSettings, deliveryContext),
-    ).resolves.toBe(true);
+    ).resolves.toEqual({ outcome: "delivered", context: deliveryContext });
     expect(updateMetadata).toHaveBeenCalledTimes(2);
     expect(updateMetadata).toHaveBeenNthCalledWith(1, {
       environmentId: message.environmentId,
@@ -144,12 +148,56 @@ describe("thread outbox delivery", () => {
         setRuntimeMode: vi.fn(async () => AsyncResult.success(undefined)),
         setInteractionMode: vi.fn(async () => AsyncResult.success(undefined)),
       },
-      removeQueuedMessage: vi.fn(async () => undefined),
+      removeQueuedMessage: vi.fn(async () => true),
       warn: () => undefined,
     });
 
-    await expect(delivery.sendQueuedMessage(queuedMessage(), threadSettings)).resolves.toBe(true);
+    await expect(delivery.sendQueuedMessage(queuedMessage(), threadSettings)).resolves.toEqual({
+      outcome: "delivered",
+      context: {
+        sessionBaselineKnown: false,
+        sessionStatus: null,
+        sessionUpdatedAt: null,
+        latestTurnId: null,
+      },
+    });
     expect(updateMetadata).not.toHaveBeenCalled();
+  });
+
+  it("classifies a command failure without attempting cleanup", async () => {
+    const removeQueuedMessage = vi.fn(async () => true);
+    const delivery = createThreadOutboxDelivery({
+      commands: {
+        startTurn: vi.fn(async () => AsyncResult.failure(Cause.fail(new Error("rejected")))),
+        updateMetadata: vi.fn(async () => AsyncResult.success(undefined)),
+        setRuntimeMode: vi.fn(async () => AsyncResult.success(undefined)),
+        setInteractionMode: vi.fn(async () => AsyncResult.success(undefined)),
+      },
+      removeQueuedMessage,
+      warn: () => undefined,
+    });
+
+    await expect(delivery.sendQueuedMessage(queuedMessage(), threadSettings)).resolves.toEqual({
+      outcome: "failed",
+    });
+    expect(removeQueuedMessage).not.toHaveBeenCalled();
+  });
+
+  it("classifies a cleanup ownership change as deferred", async () => {
+    const delivery = createThreadOutboxDelivery({
+      commands: {
+        startTurn: vi.fn(async () => AsyncResult.success(undefined)),
+        updateMetadata: vi.fn(async () => AsyncResult.success(undefined)),
+        setRuntimeMode: vi.fn(async () => AsyncResult.success(undefined)),
+        setInteractionMode: vi.fn(async () => AsyncResult.success(undefined)),
+      },
+      removeQueuedMessage: vi.fn(async () => false),
+      warn: () => undefined,
+    });
+
+    await expect(delivery.sendQueuedMessage(queuedMessage(), threadSettings)).resolves.toEqual({
+      outcome: "deferred",
+    });
   });
 
   it("keeps a delivered message complete when its notification callback throws", async () => {
@@ -161,17 +209,78 @@ describe("thread outbox delivery", () => {
         setRuntimeMode: vi.fn(async () => AsyncResult.success(undefined)),
         setInteractionMode: vi.fn(async () => AsyncResult.success(undefined)),
       },
-      removeQueuedMessage: vi.fn(async () => undefined),
+      removeQueuedMessage: vi.fn(async () => true),
       onDelivered: () => {
         throw new Error("refresh failed");
       },
       warn,
     });
 
-    await expect(delivery.sendQueuedMessage(queuedMessage(), threadSettings)).resolves.toBe(true);
+    await expect(delivery.sendQueuedMessage(queuedMessage(), threadSettings)).resolves.toEqual({
+      outcome: "delivered",
+      context: {
+        sessionBaselineKnown: false,
+        sessionStatus: null,
+        sessionUpdatedAt: null,
+        latestTurnId: null,
+      },
+    });
     expect(warn).toHaveBeenCalledWith(
       "[thread-outbox] delivered-message callback failed",
       expect.objectContaining({ error: expect.any(Error) }),
     );
+  });
+});
+
+describe("thread outbox flush batch dispatch results", () => {
+  const leader = queuedMessage({ messageId: MessageId.make("leader") });
+  const follower = queuedMessage({
+    messageId: MessageId.make("follower"),
+    commandId: CommandId.make("command-follower"),
+  });
+  const idleContext: ThreadOutboxDeliveryContext = {
+    sessionBaselineKnown: true,
+    sessionStatus: "idle",
+    sessionUpdatedAt: "2026-07-24T10:00:00.000Z",
+    latestTurnId: TurnId.make("turn-idle"),
+  };
+
+  it.each<[ThreadOutboxDispatchResult["outcome"], ThreadOutboxDispatchResult]>([
+    ["deferred", { outcome: "deferred" }],
+    ["removed", { outcome: "removed" }],
+    ["failed", { outcome: "failed" }],
+  ])("does not open a batch for a %s dispatch", (_outcome, result) => {
+    expect(
+      threadOutboxFlushBatchIds([leader, follower], leader, { result, action: "send" }).size,
+    ).toBe(0);
+  });
+
+  it("opens a batch only for a delivered idle-thread leader", () => {
+    const ids = threadOutboxFlushBatchIds([leader, follower], leader, {
+      result: { outcome: "delivered", context: idleContext },
+      action: "send",
+    });
+
+    expect([...ids]).toEqual([follower.messageId]);
+  });
+
+  it("uses the post-confirmation session status when another client starts a turn", () => {
+    const result: ThreadOutboxDispatchResult = { outcome: "deferred" };
+
+    expect(
+      threadOutboxFlushBatchIds([leader, follower], leader, { result, action: "send" }).size,
+    ).toBe(0);
+  });
+
+  it("does not batch a steer delivered into a turn another client started", () => {
+    expect(
+      threadOutboxFlushBatchIds([leader, follower], leader, {
+        result: {
+          outcome: "delivered",
+          context: { ...idleContext, sessionStatus: "running" },
+        },
+        action: "send",
+      }).size,
+    ).toBe(0);
   });
 });

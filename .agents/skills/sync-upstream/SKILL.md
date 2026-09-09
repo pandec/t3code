@@ -29,18 +29,18 @@ Verify these facts from live Git state before changing anything. Stop if the rem
 
 1. Inspect `git status --short --branch`, `git remote -v`, `git worktree list --porcelain`, branch tracking, any in-progress Git operation, and `git stash list`.
 2. Record the old tips of local `main`, `origin/main`, local `dev`, and `upstream-sync/main`, plus the existing stash refs so hook-created leftovers can be detected later. Note the time (`date`) now and at each later numbered-phase boundary so the report can state per-phase durations.
-3. Fetch `origin` and `upstream-sync` with pruning.
+3. Fetch `origin` and `upstream-sync` with pruning, then record the fetched `upstream-sync/main` tip as this sync's **target**. The target is pinned for the whole run: every later step synchronizes to it, `upstream-sync` is fetched only here, and anything upstream publishes afterwards is the next sync's range. A pinned target ships in one pass; chasing upstream restarts review and validation per range and once dragged a single sync across five ranges and six hours.
 4. Require clean worktrees for branches that will change. Leave unrelated worktrees untouched. If `dev` is not checked out, create a temporary sibling worktree rather than switching an active worktree; remove it only after successful completion while it is clean.
 5. Stop instead of stashing, committing, or discarding pre-existing changes.
 
 ## 2. Fast-forward main
 
-1. Prove both local `main` and `origin/main` are ancestors of `upstream-sync/main`. Stop and report unexpected commits if either has diverged or contains fork-only work.
+1. Prove both local `main` and `origin/main` are ancestors of the target. Stop and report unexpected commits if either has diverged or contains fork-only work.
 2. Advance local `main` with fast-forward-only semantics:
-   - In a clean `main` worktree, use `git merge --ff-only upstream-sync/main`.
+   - In a clean `main` worktree, use `git merge --ff-only <target>`.
    - If `main` is not checked out, atomically update `refs/heads/main` only after the ancestry proof and while requiring its recorded old tip.
 3. Push `main:main` to `origin` normally. If rejected, fetch again and repeat the ancestry checks. Never force the push.
-4. Verify `main`, `origin/main`, and `upstream-sync/main` now identify the same commit.
+4. Verify `main` and `origin/main` now identify the target.
 
 ## 3. Review behavioral overlap
 
@@ -107,17 +107,17 @@ Complete the applicable local verification before pushing `dev`.
    - completion criterion: every CLI-affecting upstream or merge change is either reflected in the implementation, tests, and documentation or reported as a concrete unresolved decision
 10. Update `LEDGER.md` as part of the sync commit: record new standing decisions made during this sync, add watchpoints for newly observed fork/upstream friction files, resolve watchpoint checks that ran, and apply the ledger's self-cleaning rules. Keep it scoped to what changes future syncs — never a fork feature list.
 11. Only after the applicable local gates and CLI audit pass, create the merge commit. Verify the commit has the expected parents, no merge operation remains, the worktree and index are clean, and the stash refs still match preflight. A hook can print an error after Git has already created the commit, so determine the actual result from Git state rather than hook output alone.
-12. Before pushing, enter an `origin/dev` convergence loop:
+12. Before pushing, enter an `origin/dev` convergence loop. It exists only because a normal push cannot land over a moved `origin/dev`; it never widens the target, so a further upstream advance is out of scope here even if the fetch happens to show one.
     - fetch `origin` with pruning immediately before the push and compare `origin/dev` with the last reviewed tip
     - if `origin/dev` advanced, inspect that exact new range and its behavioral overlap with the synchronized candidate, then merge `origin/dev` with `--no-ff --no-commit` under the same conflict rules
     - rerun every gate invalidated by the new delta; behavioral or source changes require at least `vp check`, `vp run typecheck`, `env -u CLAUDE_CONFIG_DIR vp run test`, and relevant focused or conditional checks
     - commit the reconciliation, perform the post-commit checks above, fetch again, and repeat until the freshly fetched `origin/dev` is an ancestor of local `dev`
     - push `dev:dev` normally only after that ancestry proof; if the push is rejected because `origin/dev` moved again, repeat the loop. Never force the push.
-13. Fetch `origin` after the push. Verify `dev` equals `origin/dev`, `main` equals both `origin/main` and `upstream-sync/main`, `dev` contains the synchronized `main` tip, and the worktree is clean.
+13. Fetch `origin` after the push. Verify `dev` equals `origin/dev`, `main` equals `origin/main` at the target, `dev` contains the target, and the worktree is clean.
 
 ## Report
 
-Report old and new upstream tips, the `main` update and push, the `dev` merge and push, conflicts resolved, fork behavior preserved, checks run, and per-phase durations from the recorded timestamps. If stopped, separate completed safe work from the user decision and state whether a merge remains in progress. Do not call the sync complete until required checks pass and both origin branches are verified. Deliver this report as soon as the sync is verified; follow-up work such as a full audit, a TestFlight build, cleanup, or feature PRs is a separate task that starts only after the report.
+Report the old tip and the target, the `main` update and push, the `dev` merge and push, conflicts resolved, fork behavior preserved, checks run, and per-phase durations from the recorded timestamps. If stopped, separate completed safe work from the user decision and state whether a merge remains in progress. Do not call the sync complete until required checks pass and both origin branches are verified. If the final `origin` fetch shows upstream already past the target, say so in one line as the next sync's range. Deliver this report as soon as the sync is verified; follow-up work such as a full audit, a TestFlight build, cleanup, or feature PRs is a separate task that starts only after the report.
 
 After a completed sync, summarize what the fork gained from upstream: group the incorporated upstream commits into user-visible features, fixes, and notable internal changes, highlighting anything that affects fork-customized areas. Write it for the fork owner deciding what to try or watch out for, not as a raw commit list.
 
