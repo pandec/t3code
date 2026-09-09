@@ -10194,6 +10194,48 @@ it.layer(NodeServices.layer)("server router seam", (it) => {
     }).pipe(Effect.provide(NodeHttpServer.layerTest)),
   );
 
+  it.effect("schedules archive over WebSocket without stopping the running thread", () =>
+    Effect.gen(function* () {
+      const threadId = ThreadId.make("other-running-thread");
+      const effects: string[] = [];
+      const commands: OrchestrationCommand[] = [];
+      yield* buildAppUnderTest({
+        layers: {
+          terminalManager: {
+            close: () =>
+              Effect.sync(() => {
+                effects.push("close");
+              }),
+          },
+          orchestrationEngine: {
+            dispatch: (command) =>
+              Effect.sync(() => {
+                commands.push(command);
+                effects.push(command.type);
+                return { sequence: 1 };
+              }),
+          },
+        },
+      });
+      const wsUrl = yield* getWsServerUrl("/ws");
+      const command = {
+        type: "thread.archive.schedule" as const,
+        commandId: CommandId.make("schedule"),
+        threadId,
+        afterTurn: true,
+        removeWorktree: true,
+      };
+      const result = yield* Effect.scoped(
+        withWsRpcClient(wsUrl, (client) =>
+          client[ORCHESTRATION_WS_METHODS.dispatchCommand](command),
+        ),
+      );
+      assert.equal(result.sequence, 1);
+      assert.deepEqual(commands, [command]);
+      assert.deepEqual(effects, ["thread.archive.schedule"]);
+    }).pipe(Effect.provide(NodeHttpServer.layerTest)),
+  );
+
   it.effect("stops the provider session and closes thread terminals after archive", () =>
     Effect.gen(function* () {
       const threadId = ThreadId.make("thread-archive");

@@ -120,7 +120,9 @@ export class ThreadCliNotFoundError extends Schema.TaggedErrorClass<ThreadCliNot
   },
 ) {
   override get message(): string {
-    return `No active thread found for '${this.threadId}'.`;
+    return this.threadId === "self" && !process.env.T3CODE_THREAD_ID?.trim()
+      ? "self requires T3CODE_THREAD_ID. Pass an explicit thread id outside a provider session."
+      : `No active thread found for '${this.threadId}'.`;
   }
 }
 
@@ -460,7 +462,10 @@ const resolveThread = (
   live: CliLiveOrchestrationServer,
   rawThreadId: string,
 ): Effect.Effect<OrchestrationThreadShell, ThreadCliNotFoundError> => {
-  const threadId = rawThreadId.trim();
+  const threadId =
+    rawThreadId.trim() === "self"
+      ? (process.env.T3CODE_THREAD_ID?.trim() ?? "")
+      : rawThreadId.trim();
   const thread = live.shell.threads.find(
     (candidate) => candidate.id === threadId && candidate.archivedAt === null,
   );
@@ -624,6 +629,7 @@ export const deriveThreadCliTitle = (message: string): string => {
 };
 
 export const threadSummary = (thread: OrchestrationThreadShell) => ({
+  archiveRequest: thread.archiveRequest ?? null,
   id: thread.id,
   projectId: thread.projectId,
   title: thread.title,
@@ -1773,29 +1779,143 @@ const threadInputCommand = Command.make("input").pipe(
   Command.withSubcommands([threadInputListCommand, threadInputRespondCommand]),
 );
 
-const threadArchiveCommand = Command.make("archive", {
+export function threadContextEnvironment(thread: OrchestrationThreadShell, workspaceRoot: string) {
+  return {
+    T3CODE_THREAD_ID: thread.id,
+    T3CODE_TURN_ID:
+      (thread.session?.status === "running" ? thread.session.activeTurnId : null) ??
+      (thread.latestTurn?.state === "running" ? thread.latestTurn.turnId : ""),
+    T3CODE_WORKTREE_PATH: thread.worktreePath ?? workspaceRoot,
+  };
+}
+
+export function threadContextShell(environment: ReturnType<typeof threadContextEnvironment>) {
+  return Object.entries(environment)
+    .map(([name, value]) => `export ${name}='${value.replaceAll("'", "'\\''")}'`)
+    .join("\n");
+}
+
+const threadContextCommand = Command.make("context", {
   ...projectLocationFlags,
-  threadId: Argument.string("thread-id").pipe(Argument.withDescription("Thread id.")),
+  threadId: Argument.string("thread-id").pipe(Argument.withDescription("Thread id, or self.")),
+  shell: Flag.boolean("shell").pipe(
+    Flag.withDescription("Print POSIX shell exports, including the current native turn id."),
+  ),
   json: jsonFlag,
 }).pipe(
-  Command.withDescription("Archive a thread."),
+  Command.withDescription("Read the target thread's current execution context."),
   Command.withHandler((flags) =>
     runThreadCli(flags, flags.json, (input) =>
       Effect.gen(function* () {
+        if (flags.shell && flags.json)
+          return yield* new SessionCliError({
+            operation: "thread.context",
+            detail: "Choose either --shell or --json.",
+          });
+        const thread = yield* resolveThread(input.live, flags.threadId);
+        const project = input.live.shell.projects.find((entry) => entry.id === thread.projectId);
+        const environment = threadContextEnvironment(thread, project?.workspaceRoot ?? "");
+        yield* Console.log(flags.shell ? threadContextShell(environment) : jsonOutput(environment));
+      }),
+    ),
+  ),
+);
+
+const threadArchiveCommand = Command.make("archive", {
+  ...projectLocationFlags,
+  threadId: Argument.string("thread-id").pipe(
+    Argument.withDescription("Thread id, or self inside a provider session."),
+  ),
+  afterTurn: Flag.boolean("after-turn").pipe(
+    Flag.withDescription(
+      "Archive after the target thread's current turn succeeds; archive idle threads immediately.",
+    ),
+  ),
+  removeWorktree: Flag.boolean("remove-worktree").pipe(
+    Flag.withDescription("Remove the clean worktree after archiving, preserving its branch."),
+  ),
+  status: Flag.boolean("status").pipe(
+    Flag.withDescription("Inspect archive progress, including archived threads."),
+  ),
+  cancel: Flag.boolean("cancel").pipe(Flag.withDescription("Cancel a pending archive request.")),
+  json: jsonFlag,
+}).pipe(
+  Command.withDescription(
+    "Archive a thread, or schedule or cancel archive after its current turn.",
+  ),
+  Command.withHandler((flags) =>
+    runThreadCli(flags, flags.json, (input) =>
+      Effect.gen(function* () {
+        if (flags.status) {
+          if (flags.cancel || flags.afterTurn || flags.removeWorktree)
+            return yield* new SessionCliError({
+              operation: "thread.archive",
+              detail: "--status cannot be combined with archive actions.",
+            });
+          const threadId =
+            flags.threadId.trim() === "self"
+              ? process.env.T3CODE_THREAD_ID?.trim()
+              : flags.threadId.trim();
+          if (!threadId)
+            return yield* new ThreadCliNotFoundError({
+              operation: "resolveThread",
+              threadId: flags.threadId,
+            });
+          const detail = yield* fetchLiveOrchestrationThreadDetail(
+            input.live.origin,
+            input.token,
+            ThreadId.make(threadId),
+            input.timeouts,
+          );
+          yield* Console.log(
+            jsonOutput({
+              threadId,
+              archivedAt: detail.thread.archivedAt,
+              archiveRequest: detail.thread.archiveRequest ?? null,
+            }),
+          );
+          return;
+        }
+        if (flags.cancel && (flags.afterTurn || flags.removeWorktree)) {
+          return yield* new SessionCliError({
+            operation: "thread.archive",
+            detail: "--cancel cannot be combined with --after-turn or --remove-worktree.",
+          });
+        }
         const thread = yield* resolveThread(input.live, flags.threadId);
         const commandId = CommandId.make(yield* randomUuid);
-        yield* dispatchThreadCommand(input, {
-          type: "thread.archive",
-          commandId,
-          threadId: thread.id,
-        });
+        const scheduled = flags.afterTurn || flags.removeWorktree;
+        yield* dispatchThreadCommand(
+          input,
+          flags.cancel
+            ? {
+                type: "thread.archive.cancel",
+                commandId,
+                threadId: thread.id,
+              }
+            : scheduled
+              ? {
+                  type: "thread.archive.schedule",
+                  commandId,
+                  threadId: thread.id,
+                  afterTurn: flags.afterTurn,
+                  removeWorktree: flags.removeWorktree,
+                }
+              : { type: "thread.archive", commandId, threadId: thread.id },
+        );
+        const action = flags.cancel
+          ? "archive-cancelled"
+          : scheduled
+            ? "archive-requested"
+            : "archived";
         yield* Console.log(
           flags.json
             ? jsonOutput({
                 threadId: thread.id,
-                action: "archived",
+                action,
+                ...(scheduled ? { requestId: commandId } : {}),
               })
-            : `Archived thread ${thread.id}.`,
+            : `${action}: ${thread.id}.`,
         );
       }),
     ),
@@ -1815,5 +1935,6 @@ export const threadCommand = Command.make("thread").pipe(
     threadInputCommand,
     threadWaitCommand,
     threadArchiveCommand,
+    threadContextCommand,
   ]),
 );

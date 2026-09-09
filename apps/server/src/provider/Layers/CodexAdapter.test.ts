@@ -465,7 +465,11 @@ validationLayer("CodexAdapterLive validation", (it) => {
         runtimeMode: "full-access",
       });
 
-      NodeAssert.deepStrictEqual(validationRuntimeFactory.factory.mock.calls[0]?.[0], {
+      const { environment, ...runtimeOptions } = validationRuntimeFactory.factory.mock.calls[0]![0];
+      NodeAssert.equal(environment?.T3CODE_THREAD_ID, "thread-1");
+      NodeAssert.equal(environment?.T3CODE_WORKTREE_PATH, process.cwd());
+      NodeAssert.equal(environment?.T3CODE_TURN_ID, undefined);
+      NodeAssert.deepStrictEqual(runtimeOptions, {
         binaryPath: "codex",
         cwd: process.cwd(),
         launchArgs: "",

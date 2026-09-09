@@ -790,6 +790,8 @@ export const makeAntigravityAdapter = Effect.fn("makeAntigravityAdapter")(functi
               // the paths ProviderService injects into the turn text. It is a
               // leaf directory holding only uploads.
               const runtime = yield* options.makeRuntime({
+                threadId: input.threadId,
+                t3Paths: serverConfig,
                 cwd,
                 clientInfo: { name: "t3-code", version: "0.0.0" },
                 clientFileSystem: true,

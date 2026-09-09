@@ -1,3 +1,4 @@
+import { providerThreadEnvironment } from "../ProviderThreadEnvironment.ts";
 /**
  * CursorAdapterLive — Cursor CLI (`agent acp`) via ACP.
  *
@@ -547,7 +548,11 @@ export function makeCursorAdapter(
           const mcpSession = McpProviderSession.readMcpProviderSession(input.threadId);
           const acp = yield* makeCursorAcpRuntime({
             cursorSettings: effectiveCursorSettings,
-            ...(options?.environment ? { environment: options.environment } : {}),
+            environment: providerThreadEnvironment(
+              { threadId: input.threadId, cwd: cwd },
+              options?.environment,
+              serverConfig,
+            ),
             childProcessSpawner,
             cwd,
             runtimeMode: input.runtimeMode,

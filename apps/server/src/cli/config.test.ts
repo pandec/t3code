@@ -18,7 +18,7 @@ import {
 import * as NetService from "@t3tools/shared/Net";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import { deriveServerPaths } from "../config.ts";
-import { resolveServerConfig } from "./config.ts";
+import { resolveCliAuthConfig, resolveServerConfig } from "./config.ts";
 
 const deriveExplicitServerPaths = (baseDir: string, devUrl: URL | undefined) =>
   deriveServerPaths(baseDir, devUrl, { baseDirIsExplicit: true });
@@ -40,6 +40,42 @@ const makeDesktopBootstrap = (
 });
 
 it.layer(NodeServices.layer)("cli config resolution", (it) => {
+  it.effect.each([false, true])(
+    "uses the owning state directory unless --base-dir is explicit: %s",
+    (explicit) =>
+      Effect.scoped(
+        Effect.gen(function* () {
+          const fs = yield* FileSystem.FileSystem;
+          const path = yield* Path.Path;
+          const baseDir = yield* fs.makeTempDirectoryScoped({ prefix: "t3-cli-context-" });
+          const stateDir = path.join(baseDir, "dev");
+          const resolved = yield* resolveCliAuthConfig(
+            { baseDir: explicit ? Option.some(baseDir) : Option.none() },
+            Option.none(),
+          ).pipe(
+            Effect.provide(
+              Layer.merge(
+                ConfigProvider.layer(
+                  ConfigProvider.fromEnv({
+                    env: {
+                      T3CODE_HOME: baseDir,
+                      T3CODE_STATE_DIR: stateDir,
+                      T3CODE_PORT: "3773",
+                      T3CODE_MODE: "desktop",
+                    },
+                  }),
+                ),
+                NetService.layer,
+              ),
+            ),
+          );
+          assert.equal(resolved.stateDir, explicit ? path.join(baseDir, "userdata") : stateDir);
+          assert.equal(resolved.dbPath, path.join(resolved.stateDir, "state.sqlite"));
+          assert.equal(resolved.secretsDir, path.join(resolved.stateDir, "secrets"));
+        }),
+      ),
+  );
+
   const defaultObservabilityConfig = {
     traceMinLevel: "Info",
     traceTimingEnabled: true,

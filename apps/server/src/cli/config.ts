@@ -416,23 +416,34 @@ export const resolveCliAuthConfig = (
   flags: CliAuthLocationFlags,
   cliLogLevel: Option.Option<LogLevel.LogLevel>,
 ) =>
-  resolveServerConfig(
-    {
-      mode: Option.none(),
-      port: Option.none(),
-      host: Option.none(),
-      baseDir: flags.baseDir,
-      cwd: Option.none(),
-      devUrl: flags.devUrl ?? Option.none(),
-      noBrowser: Option.none(),
-      bootstrapFd: Option.none(),
-      autoBootstrapProjectFromCwd: Option.none(),
-      logWebSocketEvents: Option.none(),
-      tailscaleServeEnabled: Option.none(),
-      tailscaleServePort: Option.none(),
-    },
-    cliLogLevel,
-  );
+  Effect.gen(function* () {
+    const config = yield* resolveServerConfig(
+      {
+        mode: Option.none(),
+        port: Option.none(),
+        host: Option.none(),
+        baseDir: flags.baseDir,
+        cwd: Option.none(),
+        devUrl: flags.devUrl ?? Option.none(),
+        noBrowser: Option.none(),
+        bootstrapFd: Option.none(),
+        autoBootstrapProjectFromCwd: Option.none(),
+        logWebSocketEvents: Option.none(),
+        tailscaleServeEnabled: Option.none(),
+        tailscaleServePort: Option.none(),
+      },
+      cliLogLevel,
+    );
+    const stateDir = yield* Config.string("T3CODE_STATE_DIR").pipe(Config.option);
+    if (Option.isSome(flags.baseDir) || Option.isNone(stateDir) || !stateDir.value.trim())
+      return config;
+    return {
+      ...config,
+      ...(yield* ServerConfig.deriveServerPaths(config.baseDir, config.devUrl, {
+        stateDir: stateDir.value,
+      })),
+    };
+  });
 
 const DurationShorthandPattern = /^(?<value>\d+)(?<unit>ms|s|m|h|d|w)$/i;
 

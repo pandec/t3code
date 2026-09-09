@@ -1,3 +1,6 @@
+// @effect-diagnostics nodeBuiltinImport:off
+import * as NodeChildProcess from "node:child_process";
+import { HostProcessPlatform } from "@t3tools/shared/hostProcess";
 import {
   ApprovalRequestId,
   CommandId,
@@ -45,6 +48,8 @@ import {
   threadInputRespondReport,
   threadMessagesReport,
   threadSummary,
+  threadContextEnvironment,
+  threadContextShell,
   threadWaitDrainFlag,
   threadWaitSummary,
   type ThreadMessagesFetchDeps,
@@ -1169,3 +1174,21 @@ describe("thread messages report", () => {
     );
   });
 });
+
+it.effect(
+  "exports current thread context and quotes shell metacharacters without executing them",
+  () =>
+    Effect.gen(function* () {
+      if ((yield* HostProcessPlatform) === "win32") return;
+      const thread = threadWith({ worktreePath: "/repo/it's $(printf bad)\nfolder" });
+      const environment = threadContextEnvironment(thread, "/checkout");
+      assert.equal(environment.T3CODE_THREAD_ID, thread.id);
+      assert.equal(environment.T3CODE_TURN_ID, "");
+      const output = NodeChildProcess.execFileSync(
+        "sh",
+        ["-c", threadContextShell(environment) + '\nprintf "%s" "$T3CODE_WORKTREE_PATH"'],
+        { encoding: "utf8" },
+      );
+      assert.equal(output, thread.worktreePath);
+    }),
+);
