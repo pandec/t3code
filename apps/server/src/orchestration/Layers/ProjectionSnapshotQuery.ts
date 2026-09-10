@@ -917,7 +917,7 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
   const listRecentArchivedThreadRows = SqlSchema.findAll({
     Request: OrchestrationGetRecentArchivedThreadsInput,
     Result: ProjectionThreadDbRowSchema,
-    execute: ({ limit }) =>
+    execute: ({ limit, projectIds }) =>
       sql`
         SELECT
           thread_id AS "threadId",
@@ -955,20 +955,22 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
         FROM projection_threads
         WHERE deleted_at IS NULL
           AND archived_at IS NOT NULL
+          ${projectIds === undefined ? sql`` : sql`AND ${sql.in("project_id", projectIds)}`}
         ORDER BY archived_at DESC, thread_id DESC
         LIMIT ${limit}
       `,
   });
 
   const getArchivedThreadCount = SqlSchema.findOne({
-    Request: Schema.Void,
+    Request: OrchestrationGetRecentArchivedThreadsInput,
     Result: ArchivedThreadCountRowSchema,
-    execute: () =>
+    execute: ({ projectIds }) =>
       sql`
         SELECT COUNT(*) AS "totalArchivedCount"
         FROM projection_threads
         WHERE deleted_at IS NULL
           AND archived_at IS NOT NULL
+          ${projectIds === undefined ? sql`` : sql`AND ${sql.in("project_id", projectIds)}`}
       `,
   });
 
@@ -3363,7 +3365,7 @@ pending_approval_requests AS (
                 ),
               ),
             ),
-            getArchivedThreadCount(undefined).pipe(
+            getArchivedThreadCount(input).pipe(
               Effect.mapError(
                 toPersistenceSqlOrDecodeError(
                   "ProjectionSnapshotQuery.getRecentArchivedThreads:countThreads:query",

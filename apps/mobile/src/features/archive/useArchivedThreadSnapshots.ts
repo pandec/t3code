@@ -7,7 +7,7 @@ import {
   makeRecentArchivedThreadsKey,
   type RecentArchivedSnapshotEntry,
 } from "@t3tools/client-runtime/state/threads";
-import type { EnvironmentId } from "@t3tools/contracts";
+import type { EnvironmentId, ProjectId } from "@t3tools/contracts";
 import { Atom } from "effect/unstable/reactivity";
 import { useCallback, useEffect, useMemo, useRef } from "react";
 
@@ -28,10 +28,20 @@ const archivedSnapshotsAtom = createArchivedThreadSnapshotsAtomFamily({
   labelPrefix: "mobile:archived-thread-snapshots",
 });
 
-function recentArchivedThreadsAtom(environmentId: EnvironmentId, limit: number) {
+function recentArchivedThreadsAtom(
+  environmentId: EnvironmentId,
+  limit: number,
+  projectIds?: ReadonlyArray<ProjectId>,
+) {
   return orchestrationEnvironment.recentArchivedThreads({
     environmentId,
-    input: { limit },
+    // The family keys on JSON.stringify of this input. The subscriber arrives
+    // with the parsed (sorted) list and the invalidation refresh with the
+    // sidebar's raw one, so sort here or the refresh names an atom nobody reads.
+    input: {
+      limit,
+      ...(projectIds === undefined ? {} : { projectIds: [...projectIds].sort() }),
+    },
   });
 }
 
@@ -42,6 +52,13 @@ const supportsRecentArchivedThreadsAtom = Atom.family((environmentId: Environmen
         .recentArchivedThreads === true,
   ),
 );
+const supportsRecentArchivedThreadsProjectFilterAtom = Atom.family((environmentId: EnvironmentId) =>
+  Atom.make(
+    (get) =>
+      get(environmentServerConfigsAtom).get(environmentId)?.environment.capabilities
+        .recentArchivedThreadsProjectFilter === true,
+  ),
+);
 const archiveInvalidationSequenceAtom = Atom.family((environmentId: EnvironmentId) =>
   Atom.make(
     (get) => get(environmentShell.stateValueAtom(environmentId)).archiveInvalidationSequence,
@@ -49,6 +66,7 @@ const archiveInvalidationSequenceAtom = Atom.family((environmentId: EnvironmentI
 );
 const recentArchivedSnapshotsAtom = createRecentArchivedThreadSnapshotsAtomFamily({
   supportsRecentAtom: supportsRecentArchivedThreadsAtom,
+  supportsRecentProjectFilterAtom: supportsRecentArchivedThreadsProjectFilterAtom,
   getRecentAtom: recentArchivedThreadsAtom,
   getFallbackAtom: archivedSnapshotAtom,
   getInvalidationSequenceAtom: archiveInvalidationSequenceAtom,
@@ -79,6 +97,8 @@ export function useArchivedThreadSnapshots(environmentIds: ReadonlyArray<Environ
   return { ...result, refresh };
 }
 
+// Mobile hides the shelf under any filter (see archiveShelfVisible), so it
+// never sends a project filter and only needs the unfiltered key.
 export function useRecentArchivedThreadSnapshots(
   environmentIds: ReadonlyArray<EnvironmentId>,
   visibleCount: number,

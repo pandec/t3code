@@ -242,6 +242,7 @@ export const make = Effect.gen(function* () {
       threadSnoozeIndefinite: true,
       threadSnoozeUntilDone: true,
       recentArchivedThreads: true,
+      recentArchivedThreadsProjectFilter: true,
       projectAccentColors: true,
       projectAccentColorsFill: true,
       savedPrompts: true,

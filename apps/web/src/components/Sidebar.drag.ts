@@ -103,8 +103,9 @@ export function createSidebarSortingStrategy(input: {
   snoozedThreadCount?: number;
   cardHeight?: number;
   slimHeight?: number;
-  /** Space each pinned boundary opens for its label while dragging. The
-   * markers stay zero height at rest, so nothing is reserved until pickup. */
+  /** Space each pinned boundary opens for its label while dragging. A
+   * boundary that already shows a label at rest keeps its measured height;
+   * the zero-height ones reserve nothing until pickup. */
   boundaryLabelHeight?: number;
 }): SortingStrategy {
   const { items } = input;
@@ -201,10 +202,15 @@ export function createSidebarSortingStrategy(input: {
           ? cardHeight
           : slimHeight;
       const moved = item.kind === "thread" && item.key === active.key;
+      // The divider shows its rest label only above a pinned block; the drop
+      // that empties Pinned collapses it, so preview that rather than the
+      // measured height.
       const height =
         item.kind === "marker" &&
         (item.marker === "pinned-header" || item.marker === "pinned-divider")
-          ? labelHeight
+          ? item.marker === "pinned-divider" && groups.pinned.length === 0
+            ? labelHeight
+            : Math.max(rect?.height ?? 0, labelHeight)
           : item.kind === "marker" && item.marker.endsWith("placeholder")
             ? slimHeight
             : moved
