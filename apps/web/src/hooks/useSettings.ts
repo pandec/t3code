@@ -482,8 +482,7 @@ export function usePrimarySettingsAvailable(): boolean {
 /**
  * Returns an updater that routes each key to the correct backing store.
  *
- * Server keys are optimistically patched in atom-backed server state, then
- * persisted via RPC. Shared server keys (see `SHARED_SERVER_SETTING_KEYS`)
+ * Server keys are persisted via RPC and reflected by the config stream. Shared server keys (see `SHARED_SERVER_SETTING_KEYS`)
  * are written to every eligible sync target, not only the selected target, so
  * a user preference does not silently drift between machines. Client keys go
  * through client persistence.

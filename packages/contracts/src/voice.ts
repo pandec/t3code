@@ -33,6 +33,157 @@ export const VoiceTranscriptionResult = Schema.Struct({
 });
 export type VoiceTranscriptionResult = typeof VoiceTranscriptionResult.Type;
 
+/**
+ * Which vendor synthesizes speech. ElevenLabs is keyed by the server's
+ * `ELEVENLABS_API_KEY`; OpenRouter by an inference key kept in the server's
+ * secret store, and covers every model its speech endpoint lists.
+ */
+export const TtsProvider = Schema.Literals(["elevenlabs", "openrouter"]);
+export type TtsProvider = typeof TtsProvider.Type;
+
+export const TTS_PROVIDER_LABELS: Record<TtsProvider, string> = {
+  elevenlabs: "ElevenLabs",
+  openrouter: "OpenRouter",
+};
+
+/**
+ * A fully resolved synthesis target, as the server uses it and as the test
+ * dialog submits it. Settings hold a partial form of this whose empty fields
+ * fall back to the server's defaults (see `TtsProfileSettings`).
+ */
+export const TtsProfile = Schema.Struct({
+  provider: TtsProvider,
+  modelId: TrimmedNonEmptyString,
+  voiceId: TrimmedNonEmptyString,
+  /** Style direction for models that take one; ignored elsewhere. */
+  instructions: Schema.optionalKey(TrimmedNonEmptyString),
+});
+export type TtsProfile = typeof TtsProfile.Type;
+
+export const TtsCatalogVoice = Schema.Struct({
+  id: TrimmedNonEmptyString,
+  name: TrimmedNonEmptyString,
+  /** Free-form hint such as "pl · male" for ElevenLabs library voices. */
+  detail: Schema.optionalKey(TrimmedNonEmptyString),
+});
+export type TtsCatalogVoice = typeof TtsCatalogVoice.Type;
+
+export const TtsCatalogModel = Schema.Struct({
+  id: TrimmedNonEmptyString,
+  name: TrimmedNonEmptyString,
+  /**
+   * Voices this model accepts. Null means any voice in the catalog's shared
+   * `voices` list (ElevenLabs voices are account-wide, not per model).
+   */
+  voices: Schema.NullOr(Schema.Array(TtsCatalogVoice)),
+  /** Longest text one request accepts, when the vendor states it. */
+  maxInputChars: Schema.NullOr(NonNegativeInt),
+  /** List price per million input characters, when derivable. */
+  priceUsdPerMillionChars: Schema.NullOr(Schema.Number.check(Schema.isFinite())),
+  /** Additional per-million output audio token price (token-priced models). */
+  priceUsdPerMillionAudioTokens: Schema.NullOr(Schema.Number.check(Schema.isFinite())),
+  supportsInstructions: Schema.Boolean,
+});
+export type TtsCatalogModel = typeof TtsCatalogModel.Type;
+
+export const TtsCatalogInput = Schema.Struct({
+  provider: TtsProvider,
+});
+export type TtsCatalogInput = typeof TtsCatalogInput.Type;
+
+export const TtsCatalogResult = Schema.Struct({
+  provider: TtsProvider,
+  configured: Schema.Boolean,
+  models: Schema.Array(TtsCatalogModel),
+  /** Account-wide voices for providers whose models set `voices: null`. */
+  voices: Schema.Array(TtsCatalogVoice),
+  /** Why the catalog is empty or stale; safe to render verbatim. */
+  error: Schema.optional(Schema.String),
+});
+export type TtsCatalogResult = typeof TtsCatalogResult.Type;
+
+export const TtsStatusInput = Schema.Struct({});
+export type TtsStatusInput = typeof TtsStatusInput.Type;
+
+/**
+ * What a profile with blank model and voice resolves to on this server: its
+ * `*_TTS_MODEL` / `*_TTS_VOICE_ID` environment overrides, else the built-in
+ * defaults. Clients display and test against these instead of guessing.
+ */
+export const TtsProviderDefaults = Schema.Struct({
+  modelId: TrimmedNonEmptyString,
+  voiceId: TrimmedNonEmptyString,
+});
+export type TtsProviderDefaults = typeof TtsProviderDefaults.Type;
+
+export const TtsProviderStatus = Schema.Struct({
+  configured: Schema.Boolean,
+  defaults: TtsProviderDefaults,
+  /** Why a key could not be read; safe to render verbatim. */
+  error: Schema.optional(Schema.String),
+});
+export type TtsProviderStatus = typeof TtsProviderStatus.Type;
+
+export const TtsStatusResult = Schema.Struct({
+  elevenlabs: TtsProviderStatus,
+  openrouter: TtsProviderStatus,
+});
+export type TtsStatusResult = typeof TtsStatusResult.Type;
+
+export const TtsConfigureOpenRouterInput = Schema.Struct({
+  /** An OpenRouter inference key; empty removes the stored key. */
+  apiKey: Schema.String,
+});
+export type TtsConfigureOpenRouterInput = typeof TtsConfigureOpenRouterInput.Type;
+
+export const TtsConfigureOpenRouterResult = Schema.Struct({
+  configured: Schema.Boolean,
+});
+export type TtsConfigureOpenRouterResult = typeof TtsConfigureOpenRouterResult.Type;
+
+export const TTS_TEST_MAX_TEXT_CHARS = 2_000;
+
+export const TtsTestInput = Schema.Struct({
+  profile: TtsProfile,
+  text: TrimmedNonEmptyString.check(Schema.isMaxLength(TTS_TEST_MAX_TEXT_CHARS)),
+});
+export type TtsTestInput = typeof TtsTestInput.Type;
+
+export const TtsSynthesisCost = Schema.Struct({
+  /** Billed amount in USD when the vendor reports it (OpenRouter). */
+  usd: Schema.NullOr(Schema.Number.check(Schema.isFinite())),
+  /** Characters the vendor billed for (ElevenLabs `character-cost`). */
+  billedCharacters: Schema.NullOr(NonNegativeInt),
+});
+export type TtsSynthesisCost = typeof TtsSynthesisCost.Type;
+
+export const TtsTestResult = Schema.Struct({
+  mimeType: Schema.Literal("audio/mpeg"),
+  audioBase64: TrimmedNonEmptyString,
+  sizeBytes: NonNegativeInt,
+  characterCount: NonNegativeInt,
+  cost: TtsSynthesisCost,
+});
+export type TtsTestResult = typeof TtsTestResult.Type;
+
+export const TtsRpcErrorReason = Schema.Literals([
+  "unavailable",
+  "invalid_profile",
+  "provider_failed",
+  "provider_quota_exceeded",
+  "text_too_long",
+]);
+export type TtsRpcErrorReason = typeof TtsRpcErrorReason.Type;
+
+export class TtsRpcError extends Schema.TaggedError<TtsRpcError>()("TtsRpcError", {
+  reason: TtsRpcErrorReason,
+  detail: TrimmedNonEmptyString,
+}) {
+  override get message(): string {
+    return this.detail;
+  }
+}
+
 export const MESSAGE_SPEECH_MAX_SOURCE_CHARS = 40_000;
 export const MESSAGE_SPEECH_MAX_SCRIPT_CHARS = 40_000;
 export const MESSAGE_SUMMARY_MAX_SOURCE_CHARS = 120_000;
@@ -154,9 +305,9 @@ export class AgentVoiceReplyError extends Schema.TaggedError<AgentVoiceReplyErro
       case "turn_unavailable":
         return "There is no active turn to attach the recording to.";
       case "provider_failed":
-        return "ElevenLabs could not synthesize the recording. Reply in text instead.";
+        return "The speech provider could not synthesize the recording. Reply in text instead.";
       case "provider_quota_exceeded":
-        return "ElevenLabs refused the request: the account's character quota is used up. Do not retry; tell the user in your written reply.";
+        return "The speech provider refused the request: the account's quota or credits are used up. Do not retry; tell the user in your written reply.";
       case "storage_failed":
         return "The recording could not be stored on the server.";
     }

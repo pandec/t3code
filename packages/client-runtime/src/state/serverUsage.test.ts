@@ -7,6 +7,7 @@ import {
   type ServerConfig,
   type ServerConfigStreamEvent,
   type ServerSettings,
+  type TtsStatusResult,
   type UsageSummary,
   type UsageSummaryInput,
 } from "@t3tools/contracts";
@@ -58,7 +59,20 @@ const makeHarness = Effect.fn("ServerUsageTest.makeHarness")(function* (
   const events = yield* Queue.unbounded<ServerConfigStreamEvent>();
   let settings = DEFAULT_SERVER_SETTINGS;
   let requests = 0;
+  let ttsStatusRequests = 0;
+  let textToSpeech: ServerConfig["textToSpeech"] = { available: true };
   const client = {
+    [WS_METHODS.ttsStatus]: () =>
+      Effect.sync(() => {
+        ttsStatusRequests += 1;
+        const defaults = { modelId: "model", voiceId: "voice" };
+        return {
+          // The request number rides along so a test can tell which fetch
+          // produced the value it is looking at.
+          elevenlabs: { configured: false, defaults, error: String(ttsStatusRequests) },
+          openrouter: { configured: textToSpeech.available, defaults },
+        } satisfies TtsStatusResult;
+      }),
     [WS_METHODS.subscribeServerConfig]: () =>
       Stream.concat(
         Stream.make({ version: 1 as const, type: "snapshot" as const, config: CONFIG }),
@@ -160,12 +174,17 @@ const makeHarness = Effect.fn("ServerUsageTest.makeHarness")(function* (
   );
   const updateSettings = Effect.fn("ServerUsageTest.updateSettings")(function* (
     next: ServerSettings,
+    nextTextToSpeech?: ServerConfig["textToSpeech"],
   ) {
     settings = next;
+    if (nextTextToSpeech !== undefined) textToSpeech = nextTextToSpeech;
     yield* Queue.offer(events, {
       version: 1,
       type: "settingsUpdated",
-      payload: { settings },
+      payload: {
+        settings,
+        ...(nextTextToSpeech === undefined ? {} : { textToSpeech: nextTextToSpeech }),
+      },
     });
     yield* AtomRegistry.toStream(registry, atoms.settingsValueAtom(TARGET.environmentId)).pipe(
       Stream.filter((current) => current === next),
@@ -175,10 +194,28 @@ const makeHarness = Effect.fn("ServerUsageTest.makeHarness")(function* (
   return {
     registry,
     requests: () => requests,
+    ttsStatusRequests: () => ttsStatusRequests,
     updateSettings,
     summary: (input = INPUT) => atoms.usageSummary({ environmentId: TARGET.environmentId, input }),
+    ttsStatus: () => atoms.ttsStatus({ environmentId: TARGET.environmentId, input: {} }),
   };
 });
+
+function waitForTtsStatus<E>(
+  registry: AtomRegistry.AtomRegistry,
+  atom: Atom.Atom<AsyncResult.AsyncResult<TtsStatusResult, E>>,
+  matches: (value: TtsStatusResult) => boolean,
+) {
+  return AtomRegistry.toStream(registry, atom).pipe(
+    Stream.filter(
+      (result) => AsyncResult.isSuccess(result) && !result.waiting && matches(result.value),
+    ),
+    Stream.runHead,
+    Effect.map((result) =>
+      Option.getOrThrow(Option.flatMap(result, (settled) => AsyncResult.value(settled))),
+    ),
+  );
+}
 
 function waitForCost<E>(
   registry: AtomRegistry.AtomRegistry,
@@ -264,6 +301,35 @@ it.effect("restarts a pending usage read after a price change", () =>
       yield* waitForCost(harness.registry, summary, 5);
       yield* Deferred.await(interrupted);
       expect(harness.requests()).toBe(2);
+      unmount();
+    }),
+  ),
+);
+
+it.effect("refreshes speech status when availability flips, not on every settings update", () =>
+  Effect.scoped(
+    Effect.gen(function* () {
+      const harness = yield* makeHarness();
+      const status = harness.ttsStatus();
+      const unmount = harness.registry.mount(status);
+      yield* waitForTtsStatus(harness.registry, status, (value) => value.elevenlabs.error === "1");
+
+      // The fixture config carries no availability, so the first update is a change.
+      yield* harness.updateSettings({ ...DEFAULT_SERVER_SETTINGS }, { available: true });
+      yield* waitForTtsStatus(harness.registry, status, (value) => value.elevenlabs.error === "2");
+      // Same availability in a freshly built payload object: no refetch.
+      yield* harness.updateSettings(
+        { ...DEFAULT_SERVER_SETTINGS },
+        { available: true, persistentJobs: true },
+      );
+      yield* harness.updateSettings({ ...DEFAULT_SERVER_SETTINGS }, { available: false });
+      const settled = yield* waitForTtsStatus(
+        harness.registry,
+        status,
+        (value) => !value.openrouter.configured,
+      );
+      expect(settled.elevenlabs.error).toBe("3");
+      expect(harness.ttsStatusRequests()).toBe(3);
       unmount();
     }),
   ),

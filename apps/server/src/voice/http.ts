@@ -279,7 +279,7 @@ export const voiceHttpApiLayer = HttpApiBuilder.group(
         Effect.fn("environment.voice.synthesizeMessage")(function* (args) {
           yield* annotateEnvironmentRequest(args.endpoint.name);
           yield* requireEnvironmentScope(AuthOrchestrationOperateScope);
-          if (!messageSpeech.available) {
+          if (!(yield* messageSpeech.available)) {
             return yield* failEnvironmentInternal(
               "speech_unavailable",
               new Error("Message speech synthesis is unavailable"),

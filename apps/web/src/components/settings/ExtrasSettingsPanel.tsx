@@ -69,21 +69,13 @@ import {
   SettingsSection,
 } from "./settingsLayout";
 import { searchableSetting } from "./settingsSearch";
+import { VoiceSettingsSection } from "./VoiceSettingsSection";
 
 const THREAD_PROVIDER_ICON_LABELS: Record<SidebarThreadProviderIconVisibility, string> = {
   hover: "On hover",
   always: "Always",
   never: "Never",
 };
-
-/**
- * Mirrors the server's built-in ElevenLabs defaults (`DEFAULT_ELEVENLABS_TTS_*`
- * in `apps/server/src/voice/MessageSpeech.ts`). Duplicated as placeholder copy
- * only — the client never sends these, it sends "" to mean "leave it to the
- * server" — but keep the two in sync when the server default changes.
- */
-const DEFAULT_TTS_MODEL_PLACEHOLDER = "eleven_flash_v2_5";
-const DEFAULT_TTS_VOICE_PLACEHOLDER = "JBFqnCBsd6RMkjVDRZzb";
 
 /** Half-second granularity keeps the steer window readable in seconds. */
 const STEER_GRACE_WINDOW_STEP_MS = 500;
@@ -1312,108 +1304,6 @@ function AccentTintsExtrasSection() {
   );
 }
 
-function VoiceExtrasSection() {
-  const settings = usePrimarySettings();
-  const updateSettings = useUpdatePrimarySettings();
-
-  return (
-    <SettingsSection {...searchableSetting("extras-voice-listening")}>
-      <SettingsRow
-        serverScoped
-        title="Text-to-speech model"
-        description="ElevenLabs model used to read assistant messages aloud. Leave empty to use the server's configured default."
-        resetAction={
-          settings.voice.ttsModelId !== DEFAULT_UNIFIED_SETTINGS.voice.ttsModelId ? (
-            <SettingResetButton
-              label="text-to-speech model"
-              onClick={() =>
-                updateSettings({
-                  voice: { ttsModelId: DEFAULT_UNIFIED_SETTINGS.voice.ttsModelId },
-                })
-              }
-            />
-          ) : null
-        }
-        control={
-          <DraftInput
-            className="w-full sm:w-72"
-            value={settings.voice.ttsModelId}
-            onCommit={(next) => updateSettings({ voice: { ttsModelId: next } })}
-            placeholder={DEFAULT_TTS_MODEL_PLACEHOLDER}
-            spellCheck={false}
-            aria-label="Text-to-speech model"
-          />
-        }
-      />
-
-      <SettingsRow
-        serverScoped
-        title="Text-to-speech voice"
-        description="ElevenLabs voice id used for playback. Leave empty to use the server's configured default."
-        resetAction={
-          settings.voice.ttsVoiceId !== DEFAULT_UNIFIED_SETTINGS.voice.ttsVoiceId ? (
-            <SettingResetButton
-              label="text-to-speech voice"
-              onClick={() =>
-                updateSettings({
-                  voice: { ttsVoiceId: DEFAULT_UNIFIED_SETTINGS.voice.ttsVoiceId },
-                })
-              }
-            />
-          ) : null
-        }
-        control={
-          <DraftInput
-            className="w-full sm:w-72"
-            value={settings.voice.ttsVoiceId}
-            onCommit={(next) => updateSettings({ voice: { ttsVoiceId: next } })}
-            placeholder={DEFAULT_TTS_VOICE_PLACEHOLDER}
-            spellCheck={false}
-            aria-label="Text-to-speech voice id"
-          />
-        }
-      />
-
-      <SettingsRow
-        serverScoped
-        {...searchableSetting("agent-voice-replies")}
-        title="Agent voice replies"
-        description="Give agents a voice_reply tool that answers with a spoken recording shown as the main message. Applies to sessions started from now on."
-        resetAction={
-          settings.voice.enableAgentVoiceReplies !==
-          DEFAULT_UNIFIED_SETTINGS.voice.enableAgentVoiceReplies ? (
-            <SettingResetButton
-              label="agent voice replies"
-              onClick={() =>
-                updateSettings({
-                  voice: {
-                    enableAgentVoiceReplies: DEFAULT_UNIFIED_SETTINGS.voice.enableAgentVoiceReplies,
-                  },
-                })
-              }
-            />
-          ) : null
-        }
-        control={
-          <Switch
-            checked={settings.voice.enableAgentVoiceReplies}
-            onCheckedChange={(checked) =>
-              updateSettings({ voice: { enableAgentVoiceReplies: Boolean(checked) } })
-            }
-            aria-label="Allow agent voice replies"
-          />
-        }
-      />
-
-      <p className="max-w-xl px-3 text-[13px] leading-[1.45] text-muted-foreground/80 sm:px-4">
-        Speech playback and agent voice replies need <code>ELEVENLABS_API_KEY</code> in the server's
-        environment. When set, these fields override the server's <code>ELEVENLABS_TTS_MODEL</code>{" "}
-        and <code>ELEVENLABS_TTS_VOICE_ID</code> environment variables.
-      </p>
-    </SettingsSection>
-  );
-}
-
 export function ExtrasSettingsPanel() {
   return (
     <SettingsPageContainer>
@@ -1423,7 +1313,7 @@ export function ExtrasSettingsPanel() {
       <SidebarExtrasSection />
       <ComposerExtrasSection />
       <AccentTintsExtrasSection />
-      <VoiceExtrasSection />
+      <VoiceSettingsSection />
     </SettingsPageContainer>
   );
 }

@@ -289,6 +289,47 @@ const decodePersistedOptionalProviderSettingsJsonExit = Schema.decodeUnknownExit
   fromLenientJson(PersistedOptionalProviderSettings),
 );
 
+/**
+ * The pre-OpenRouter voice settings named an ElevenLabs model and voice
+ * directly. Fold them into the ElevenLabs profile so an install that chose
+ * a voice keeps it (and keeps using ElevenLabs) after the upgrade; the
+ * file converges on the next write.
+ */
+const LegacyVoiceSettings = Schema.Struct({
+  voice: Schema.optionalKey(
+    Schema.Struct({
+      ttsModelId: Schema.optionalKey(Schema.String),
+      ttsVoiceId: Schema.optionalKey(Schema.String),
+      tts: Schema.optionalKey(Schema.Unknown),
+    }),
+  ),
+});
+const decodeLegacyVoiceSettingsJsonExit = Schema.decodeUnknownExit(
+  fromLenientJson(LegacyVoiceSettings),
+);
+
+export function foldLegacyVoiceSettings(
+  settings: ServerSettings,
+  legacy: typeof LegacyVoiceSettings.Type,
+): ServerSettings {
+  // Any persisted file without the new profile shape predates OpenRouter.
+  // Preserve its previous ElevenLabs behavior even when both legacy override
+  // fields were empty and the built-in model and voice were in use.
+  if (legacy.voice?.tts !== undefined) {
+    return settings;
+  }
+  const modelId = legacy.voice?.ttsModelId?.trim() ?? "";
+  const voiceId = legacy.voice?.ttsVoiceId?.trim() ?? "";
+  const tts = settings.voice.tts;
+  return {
+    ...settings,
+    voice: {
+      ...settings.voice,
+      tts: { ...tts, provider: "elevenlabs", modelId, voiceId },
+    },
+  };
+}
+
 function restoreUsedProviders(
   settings: ServerSettings,
   persisted: typeof PersistedOptionalProviderSettings.Type,
@@ -379,6 +420,10 @@ const ATOMIC_SETTINGS_KEYS: ReadonlySet<string> = new Set([
 ]);
 
 // Preserve both enabled states because provider history cannot recover a new opt-in.
+// The speech provider is always written too: `foldLegacyVoiceSettings` treats a
+// file without `voice.tts` as pre-OpenRouter, so stripping the default provider
+// would refold a saved OpenRouter profile (or a fresh install) to ElevenLabs on
+// the next load.
 const PERSISTED_SERVER_SETTINGS_DEFAULTS = {
   ...DEFAULT_SERVER_SETTINGS,
   providers: {
@@ -386,6 +431,10 @@ const PERSISTED_SERVER_SETTINGS_DEFAULTS = {
     cursor: { ...DEFAULT_SERVER_SETTINGS.providers.cursor, enabled: undefined },
     grok: { ...DEFAULT_SERVER_SETTINGS.providers.grok, enabled: undefined },
     opencode: { ...DEFAULT_SERVER_SETTINGS.providers.opencode, enabled: undefined },
+  },
+  voice: {
+    ...DEFAULT_SERVER_SETTINGS.voice,
+    tts: { ...DEFAULT_SERVER_SETTINGS.voice.tts, provider: undefined },
   },
 };
 
@@ -484,6 +533,10 @@ const make = Effect.gen(function* () {
         }
       } else {
         settings = decoded.value;
+        const legacyVoice = decodeLegacyVoiceSettingsJsonExit(raw);
+        if (legacyVoice._tag === "Success") {
+          settings = foldLegacyVoiceSettings(settings, legacyVoice.value);
+        }
       }
     }
 

@@ -124,6 +124,7 @@ import * as ProviderSessionDirectory from "./provider/Services/ProviderSessionDi
 import * as ProviderService from "./provider/Services/ProviderService.ts";
 import { makeThreadGatewayAccountReader } from "./provider/threadGatewayAccount.ts";
 import { configureOpenRouterCredits, readOpenRouterCredits } from "./provider/openRouterCredits.ts";
+import { TtsService } from "./voice/TtsService.ts";
 import {
   configureLinear,
   createLinearComment,
@@ -549,6 +550,7 @@ const makeWsRpcLayer = (
       });
       const wsHttpClient = yield* HttpClient.HttpClient;
       const serverSecretStore = yield* ServerSecretStore.ServerSecretStore;
+      const ttsService = yield* TtsService;
       const provideSecretHttpServices = <A, E>(
         effect: Effect.Effect<A, E, HttpClient.HttpClient | ServerSecretStore.ServerSecretStore>,
       ): Effect.Effect<A, E> =>
@@ -1021,7 +1023,7 @@ const makeWsRpcLayer = (
               available: (process.env.ELEVENLABS_API_KEY?.trim().length ?? 0) > 0,
             },
             textToSpeech: {
-              available: (process.env.ELEVENLABS_API_KEY?.trim().length ?? 0) > 0,
+              available: yield* ttsService.isConfigured(settings.voice.tts.provider),
               persistentJobs: true,
             },
             shellResumeCompletionMarker: true,
@@ -1652,6 +1654,24 @@ const makeWsRpcLayer = (
             ),
             { "rpc.aggregate": "server" },
           ),
+        [WS_METHODS.ttsStatus]: (_input) =>
+          observeRpcEffect(WS_METHODS.ttsStatus, ttsService.status, {
+            "rpc.aggregate": "server",
+          }),
+        [WS_METHODS.ttsCatalog]: (input) =>
+          observeRpcEffect(WS_METHODS.ttsCatalog, ttsService.catalog(input.provider), {
+            "rpc.aggregate": "server",
+          }),
+        [WS_METHODS.ttsConfigureOpenRouter]: (input) =>
+          observeRpcEffect(
+            WS_METHODS.ttsConfigureOpenRouter,
+            ttsService.configureOpenRouter(input.apiKey),
+            { "rpc.aggregate": "server" },
+          ),
+        [WS_METHODS.ttsTest]: (input) =>
+          observeRpcEffect(WS_METHODS.ttsTest, ttsService.test(input), {
+            "rpc.aggregate": "server",
+          }),
         [WS_METHODS.linearStatus]: (_input) =>
           observeRpcEffect(WS_METHODS.linearStatus, provideSecretHttpServices(readLinearStatus), {
             "rpc.aggregate": "server",
@@ -2674,11 +2694,29 @@ const makeWsRpcLayer = (
                     )
                   : Stream.empty;
               const settingsUpdates = serverSettings.streamChanges.pipe(
-                Stream.map((settings) => ServerSettings.redactServerSettingsForClient(settings)),
-                Stream.map((settings) => ({
+                Stream.mapEffect((settings) =>
+                  ttsService.isConfigured(settings.voice.tts.provider).pipe(
+                    Effect.map((available) => ({
+                      settings: ServerSettings.redactServerSettingsForClient(settings),
+                      textToSpeech: { available, persistentJobs: true },
+                    })),
+                  ),
+                ),
+                Stream.map((payload) => ({
                   version: 1 as const,
                   type: "settingsUpdated" as const,
-                  payload: { settings },
+                  payload,
+                })),
+              );
+              // A speech key stored or removed at runtime flips
+              // `textToSpeech.available` without a settings change, so it needs
+              // a fresh snapshot rather than a settingsUpdated event.
+              const speechAvailabilityUpdates = ttsService.configuredChanges.pipe(
+                Stream.mapEffect(() => loadServerConfig({ usageLimitsCommand })),
+                Stream.map((snapshot) => ({
+                  version: 1 as const,
+                  type: "snapshot" as const,
+                  config: snapshot,
                 })),
               );
 
@@ -2691,7 +2729,7 @@ const makeWsRpcLayer = (
                 Stream.merge(
                   providerStatuses,
                   Stream.merge(
-                    settingsUpdates,
+                    Stream.merge(settingsUpdates, speechAvailabilityUpdates),
                     Stream.merge(environmentThemeUpdates, usageLimitSourceUpdates),
                   ),
                 ),

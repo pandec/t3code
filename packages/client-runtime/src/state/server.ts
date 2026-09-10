@@ -983,12 +983,35 @@ export function createServerEnvironmentAtoms<R, E>(
       Atom.withLabel(`environment-data:server:providers:${environmentId}`),
     ),
   );
+  // Availability alone, not the `textToSpeech` object: that object is rebuilt
+  // on every config event, and an identity-triggered refresh would refetch
+  // both vendor catalogs on each unrelated settings change while the voice
+  // section is mounted.
+  const ttsAvailabilityAtom = Atom.family((environmentId: EnvironmentId) =>
+    Atom.make((get) => get(configValueAtom(environmentId))?.textToSpeech?.available ?? null).pipe(
+      Atom.withLabel(`environment-data:server:tts-availability:${environmentId}`),
+    ),
+  );
   // OpenRouter caches its credits endpoint for about a minute and the
   // server mirrors that, so a tighter staleness would only re-read cache.
   const openRouterCredits = createEnvironmentRpcQueryAtomFamily(runtime, {
     label: "environment-data:server:openrouter-credits",
     tag: WS_METHODS.openRouterCreditsRead,
     staleTimeMs: 60_000,
+  });
+  const ttsStatus = createEnvironmentRpcQueryAtomFamily(runtime, {
+    label: "environment-data:server:tts-status",
+    tag: WS_METHODS.ttsStatus,
+    staleTimeMs: 60_000,
+    refreshTrigger: ({ environmentId }) => ttsAvailabilityAtom(environmentId),
+  });
+  // Vendor catalogs change rarely; a long staleness keeps the settings page
+  // from re-fetching models and voices on every visit.
+  const ttsCatalog = createEnvironmentRpcQueryAtomFamily(runtime, {
+    label: "environment-data:server:tts-catalog",
+    tag: WS_METHODS.ttsCatalog,
+    staleTimeMs: 10 * 60_000,
+    refreshTrigger: ({ environmentId }) => ttsAvailabilityAtom(environmentId),
   });
   const welcomeStateFamily = Atom.family((environmentId: EnvironmentId) =>
     runtime
@@ -1093,6 +1116,8 @@ export function createServerEnvironmentAtoms<R, E>(
       staleTimeMs: 30_000,
     }),
     openRouterCredits,
+    ttsStatus,
+    ttsCatalog,
     resourceTelemetry: createEnvironmentRpcSubscriptionAtomFamily(runtime, {
       label: "environment-data:server:resource-telemetry",
       tag: WS_METHODS.subscribeResourceTelemetry,
@@ -1163,6 +1188,25 @@ export function createServerEnvironmentAtoms<R, E>(
       // pre-configure state until something remounted them.
       onSuccess: ({ environmentId }, registry) =>
         Effect.sync(() => registry.refresh(openRouterCredits({ environmentId, input: {} }))),
+    }),
+    configureTtsOpenRouter: createEnvironmentRpcCommand(runtime, {
+      label: "environment-data:server:configure-tts-openrouter",
+      tag: WS_METHODS.ttsConfigureOpenRouter,
+      concurrency: {
+        mode: "singleFlight",
+        key: ({ environmentId, input }) => `${environmentId}:${input.apiKey}`,
+      },
+      // The status and OpenRouter catalog both depend on the stored key.
+      onSuccess: ({ environmentId }, registry) =>
+        Effect.sync(() => {
+          registry.refresh(ttsStatus({ environmentId, input: {} }));
+          registry.refresh(ttsCatalog({ environmentId, input: { provider: "openrouter" } }));
+        }),
+    }),
+    testTts: createEnvironmentRpcCommand(runtime, {
+      label: "environment-data:server:test-tts",
+      tag: WS_METHODS.ttsTest,
+      concurrency: { mode: "parallel" },
     }),
     readProviderUsageThreadAccount: createEnvironmentRpcCommand(runtime, {
       label: "environment-data:server:read-provider-usage-thread-account",

@@ -38,7 +38,6 @@ import { expandAssistantCitationsForProvider } from "@t3tools/shared/assistantCi
 import { getModelSelectionStringOptionValue } from "@t3tools/shared/model";
 import { causeErrorTag } from "@t3tools/shared/observability";
 import { resolveProjectAgentBrowserAccess } from "@t3tools/shared/serverSettings";
-import * as Config from "effect/Config";
 import * as DateTime from "effect/DateTime";
 import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
@@ -46,7 +45,6 @@ import * as FileSystem from "effect/FileSystem";
 import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
 import * as PubSub from "effect/PubSub";
-import * as Redacted from "effect/Redacted";
 import * as Ref from "effect/Ref";
 import * as Schema from "effect/Schema";
 import * as SchemaIssue from "effect/SchemaIssue";
@@ -86,6 +84,7 @@ import * as ProviderEventLoggers from "./ProviderEventLoggers.ts";
 import * as AnalyticsService from "../../telemetry/AnalyticsService.ts";
 import { isExistingDirectory } from "../../pathExpansion.ts";
 import type * as McpInvocationContext from "../../mcp/McpInvocationContext.ts";
+import { AgentVoiceReply } from "../../voice/AgentVoiceReply.ts";
 import * as McpProviderSession from "../../mcp/McpProviderSession.ts";
 import * as McpSessionRegistry from "../../mcp/McpSessionRegistry.ts";
 import * as ServerSettingsService from "../../serverSettings.ts";
@@ -1057,11 +1056,14 @@ const makeProviderService = Effect.fn("makeProviderService")(function* (
    * "off" silently becoming "on" would violate the user's stated choice,
    * whereas the reverse costs an agent one toolset and is visible immediately.
    */
-  // Whether the server can synthesize agent voice replies at all. Read once;
-  // per-session enablement additionally consults the settings toggle below.
-  const elevenLabsApiKey = yield* Config.redacted("ELEVENLABS_API_KEY").pipe(Config.option);
-  const agentVoiceReplyAvailable =
-    Option.isSome(elevenLabsApiKey) && Redacted.value(elevenLabsApiKey.value).trim().length > 0;
+  // Whether the server can synthesize agent voice replies at all. Read per
+  // session start because an OpenRouter key can be added at runtime; the
+  // settings toggle below additionally gates each session. Absent in
+  // provider-only runtimes (tests), where the tool is never attached.
+  const agentVoiceReply = yield* Effect.serviceOption(AgentVoiceReply);
+  const agentVoiceReplyAvailable = Option.isSome(agentVoiceReply)
+    ? agentVoiceReply.value.available
+    : Effect.succeed(false);
 
   // Browser access honors per-project overrides; voice replies are a global
   // toggle only, so project resolution never applies to them.
@@ -1082,11 +1084,10 @@ const makeProviderService = Effect.fn("makeProviderService")(function* (
     function* (threadId: ThreadId) {
       const settings = yield* serverSettings.getSettings;
       const preview = yield* agentBrowserAccessEnabled(settings, threadId);
+      const voice = settings.voice.enableAgentVoiceReplies && (yield* agentVoiceReplyAvailable);
       return new Set<McpInvocationContext.McpCapability>([
         ...(preview ? (["preview"] as const) : []),
-        ...(agentVoiceReplyAvailable && settings.voice.enableAgentVoiceReplies
-          ? (["voice"] as const)
-          : []),
+        ...(voice ? (["voice"] as const) : []),
       ]) as ReadonlySet<McpInvocationContext.McpCapability>;
     },
     Effect.catch((cause) =>

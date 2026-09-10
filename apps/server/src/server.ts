@@ -156,6 +156,7 @@ import * as TurnStartBootstrap from "./orchestration/Services/TurnStartBootstrap
 import * as VoiceTranscription from "./voice/VoiceTranscription.ts";
 import * as MessageSpeech from "./voice/MessageSpeech.ts";
 import * as AgentVoiceReply from "./voice/AgentVoiceReply.ts";
+import * as TtsService from "./voice/TtsService.ts";
 import { voiceHttpApiLayer } from "./voice/http.ts";
 import * as MessageSummary from "./messageArtifacts/MessageSummary.ts";
 import { messageArtifactsHttpApiLayer } from "./messageArtifacts/http.ts";
@@ -351,6 +352,7 @@ const ProviderSessionDirectoryLayerLive = ProviderSessionDirectoryLive.pipe(
 // NDJSON writers and is provided at the outer runtime layer so both
 // `ProviderService` and the per-instance drivers read the same logger pair.
 const ProviderLayerLive = ProviderServiceLive.pipe(
+  Layer.provide(AgentVoiceReply.layer),
   Layer.provide(ProviderAdapterRegistryLive),
   Layer.provideMerge(ProviderSessionDirectoryLayerLive),
 );
@@ -545,6 +547,9 @@ const RuntimeCoreDependenciesLive = Layer.mergeAll(
     Layer.provideMerge(GitLayerLive),
     Layer.provideMerge(VcsLayerLive),
     Layer.provideMerge(ProviderRuntimeLayerLive),
+    // Share the speech client across listening, voice replies, and settings RPCs.
+    Layer.provideMerge(TtsService.layer.pipe(Layer.provide(ServerSecretStore.layer))),
+    Layer.provideMerge(ServerSettingsLayerLive),
     Layer.provideMerge(Layer.mergeAll(TerminalLayerLive, PreviewLayerLive)),
     Layer.provideMerge(PersistenceLayerLive),
     // Both read a user-owned file out of the state directory and stream changes

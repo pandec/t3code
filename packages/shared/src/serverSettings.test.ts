@@ -223,32 +223,93 @@ describe("serverSettings helpers", () => {
     });
   });
 
-  it("merges the voice group one field at a time", () => {
+  it("merges the voice profiles one field at a time", () => {
+    const tts = {
+      provider: "elevenlabs" as const,
+      modelId: "eleven_v3",
+      voiceId: "voice-a",
+      instructions: "",
+    };
     const current = {
       ...DEFAULT_SERVER_SETTINGS,
-      voice: { ttsModelId: "eleven_v3", ttsVoiceId: "voice-a", enableAgentVoiceReplies: true },
+      voice: { tts, agentReplyTts: null, enableAgentVoiceReplies: true },
     };
 
     // A patch touching one field leaves the others alone...
-    expect(applyServerSettingsPatch(current, { voice: { ttsVoiceId: "voice-b" } }).voice).toEqual({
-      ttsModelId: "eleven_v3",
-      ttsVoiceId: "voice-b",
+    expect(
+      applyServerSettingsPatch(current, { voice: { tts: { voiceId: "voice-b" } } }).voice,
+    ).toEqual({
+      tts: { ...tts, voiceId: "voice-b" },
+      agentReplyTts: null,
       enableAgentVoiceReplies: true,
     });
     // ...and an empty string clears a field back to "unset".
-    expect(applyServerSettingsPatch(current, { voice: { ttsModelId: "" } }).voice).toEqual({
-      ttsModelId: "",
-      ttsVoiceId: "voice-a",
+    expect(applyServerSettingsPatch(current, { voice: { tts: { modelId: "" } } }).voice).toEqual({
+      tts: { ...tts, modelId: "" },
+      agentReplyTts: null,
       enableAgentVoiceReplies: true,
     });
     expect(
       applyServerSettingsPatch(current, { voice: { enableAgentVoiceReplies: false } }).voice,
-    ).toEqual({
-      ttsModelId: "eleven_v3",
-      ttsVoiceId: "voice-a",
-      enableAgentVoiceReplies: false,
-    });
+    ).toEqual({ tts, agentReplyTts: null, enableAgentVoiceReplies: false });
     expect(applyServerSettingsPatch(current, {}).voice).toEqual(current.voice);
+  });
+
+  it("seeds, patches, and removes the agent reply override", () => {
+    const tts = {
+      provider: "openrouter" as const,
+      modelId: "google/gemini-3.1-flash-tts-preview",
+      voiceId: "Kore",
+      instructions: "",
+    };
+    const current = {
+      ...DEFAULT_SERVER_SETTINGS,
+      voice: { tts, agentReplyTts: null, enableAgentVoiceReplies: true },
+    };
+
+    // A partial override starts from the default profile.
+    const seeded = applyServerSettingsPatch(current, {
+      voice: { agentReplyTts: { voiceId: "Puck" } },
+    });
+    expect(seeded.voice.agentReplyTts).toEqual({ ...tts, voiceId: "Puck" });
+    // A provider change clears provider-specific ids unless replacements
+    // arrive in the same patch.
+    const patched = applyServerSettingsPatch(seeded, {
+      voice: { agentReplyTts: { provider: "elevenlabs" } },
+    });
+    expect(patched.voice.agentReplyTts).toEqual({
+      ...tts,
+      provider: "elevenlabs",
+      modelId: "",
+      voiceId: "",
+    });
+    expect(
+      applyServerSettingsPatch(current, {
+        voice: {
+          tts: {
+            provider: "elevenlabs",
+            modelId: "eleven_v3",
+            voiceId: "voice-a",
+          },
+        },
+      }).voice.tts,
+    ).toEqual({
+      ...tts,
+      provider: "elevenlabs",
+      modelId: "eleven_v3",
+      voiceId: "voice-a",
+    });
+    // Null removes it so agent replies inherit the default again.
+    expect(
+      applyServerSettingsPatch(patched, { voice: { agentReplyTts: null } }).voice.agentReplyTts,
+    ).toBeNull();
+    expect(
+      applyServerSettingsPatch(patched, { voice: { tts: { voiceId: "Zephyr" } } }).voice,
+    ).toEqual({
+      tts: { ...tts, voiceId: "Zephyr" },
+      agentReplyTts: { ...tts, provider: "elevenlabs", modelId: "", voiceId: "" },
+      enableAgentVoiceReplies: true,
+    });
   });
 
   it("replaces text generation selection when provider/model are provided", () => {

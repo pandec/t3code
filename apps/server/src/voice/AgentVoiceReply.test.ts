@@ -9,6 +9,7 @@ import { HttpClient, HttpClientResponse } from "effect/unstable/http";
 import * as SqlClient from "effect/unstable/sql/SqlClient";
 import { describe, expect, it } from "vite-plus/test";
 
+import * as ServerSecretStore from "../auth/ServerSecretStore.ts";
 import * as ServerConfig from "../config.ts";
 import * as SqliteClient from "@t3tools/shared/nodeSqliteClient";
 import * as ServerSettingsModule from "../serverSettings.ts";
@@ -19,6 +20,15 @@ import {
   stripLeadingId3v2Tag,
   stripLeadingXingFrame,
 } from "./AgentVoiceReply.ts";
+import * as TtsService from "./TtsService.ts";
+
+const emptySecretStore = ServerSecretStore.ServerSecretStore.of({
+  get: () => Effect.succeedNone,
+  set: () => Effect.void,
+  create: () => Effect.void,
+  getOrCreateRandom: () => Effect.succeed(new Uint8Array()),
+  remove: () => Effect.void,
+});
 
 const id3Tag = (bodyLength: number, options?: { footer?: boolean }): Uint8Array => {
   const footer = options?.footer === true;
@@ -40,6 +50,18 @@ const headerFrame = (fourcc: string): Uint8Array => {
   frame.set(
     [...fourcc].map((char) => char.charCodeAt(0)),
     21,
+  );
+  return frame;
+};
+
+// A 192-byte MPEG2 layer III frame (64kbps, 24kHz, mono). OpenRouter
+// providers commonly return this lower sample-rate shape.
+const mpeg2HeaderFrame = (fourcc: string): Uint8Array => {
+  const frame = new Uint8Array(192);
+  frame.set([0xff, 0xf3, 0x84, 0xc0]);
+  frame.set(
+    [...fourcc].map((char) => char.charCodeAt(0)),
+    13,
   );
   return frame;
 };
@@ -84,6 +106,7 @@ describe("stripLeadingXingFrame", () => {
     const audio = frames(0xff, 0xfb, 0x90, 0x64, 0x01, 0x02);
     expect(stripLeadingXingFrame(concat(headerFrame("Info"), audio))).toEqual(audio);
     expect(stripLeadingXingFrame(concat(headerFrame("Xing"), audio))).toEqual(audio);
+    expect(stripLeadingXingFrame(concat(mpeg2HeaderFrame("Info"), audio))).toEqual(audio);
   });
 
   it("leaves plain audio frames and non-frame data unchanged", () => {
@@ -106,6 +129,12 @@ describe("appendSpeechAudio", () => {
 
     const merged = appendSpeechAudio(first, second);
     expect(merged).toEqual(frames(0x01, 0x02, 0x03, 0x04));
+
+    const mpeg2Merged = appendSpeechAudio(
+      concat(mpeg2HeaderFrame("Info"), frames(0x05, 0x06)),
+      concat(mpeg2HeaderFrame("Info"), frames(0x07, 0x08)),
+    );
+    expect(mpeg2Merged).toEqual(frames(0x05, 0x06, 0x07, 0x08));
     // Re-appending to an already merged stream is stable.
     expect(appendSpeechAudio(merged, second)).toEqual(frames(0x01, 0x02, 0x03, 0x04, 0x03, 0x04));
   });
@@ -131,15 +160,42 @@ describe("stage", () => {
 
   const TestLayer = agentVoiceReplyLayer.pipe(
     Layer.provideMerge(
+      TtsService.layer.pipe(
+        Layer.provide(
+          Layer.mergeAll(
+            Layer.succeed(HttpClient.HttpClient, stubHttpClient),
+            Layer.succeed(ServerSecretStore.ServerSecretStore, emptySecretStore),
+            ConfigProvider.layer(
+              ConfigProvider.fromEnv({ env: { ELEVENLABS_API_KEY: "test-key" } }),
+            ),
+          ),
+        ),
+      ),
+    ),
+    Layer.provideMerge(
       Layer.mergeAll(
         SqliteClient.layerMemory(),
         ServerConfig.layerTest(process.cwd(), { prefix: "agent-voice-reply-test-" }),
-        ServerSettingsModule.layerTest(),
-        Layer.succeed(HttpClient.HttpClient, stubHttpClient),
-        ConfigProvider.layer(ConfigProvider.fromEnv({ env: { ELEVENLABS_API_KEY: "test-key" } })),
+        // The pre-OpenRouter default is ElevenLabs; the stub above answers as it.
+        ServerSettingsModule.layerTest({ voice: { tts: { provider: "elevenlabs" } } }),
       ),
     ),
     Layer.provideMerge(NodeServices.layer),
+  );
+
+  effectIt.effect("checks the selected agent profile before synthesis", () =>
+    Effect.gen(function* () {
+      const service = yield* AgentVoiceReply;
+      const settings = yield* ServerSettingsModule.ServerSettingsService;
+      expect(yield* service.available).toBe(true);
+      yield* settings.updateSettings({ voice: { agentReplyTts: { provider: "openrouter" } } });
+      expect(yield* service.available).toBe(false);
+      expect(
+        yield* service.stage({ threadId, script: "Unavailable." }).pipe(Effect.result),
+      ).toMatchObject({ _tag: "Failure", failure: { reason: "unavailable" } });
+      yield* settings.updateSettings({ voice: { agentReplyTts: null } });
+      expect(yield* service.available).toBe(true);
+    }).pipe(Effect.provide(TestLayer)),
   );
 
   effectIt.effect("appends same-turn calls into one recording, replaces on a newer turn", () =>

@@ -34,6 +34,7 @@ import {
   type ProviderDriverKind,
 } from "./providerInstance.ts";
 import { PullRequestMergeMethod } from "./pullRequest.ts";
+import { TtsProvider } from "./voice.ts";
 
 // ── Client Settings (local-only) ───────────────────────────────
 
@@ -1248,16 +1249,41 @@ export const ObservabilitySettings = Schema.Struct({
 export type ObservabilitySettings = typeof ObservabilitySettings.Type;
 
 /**
- * Text-to-speech overrides for message playback. Empty means "unset": the
- * server falls back to its `ELEVENLABS_TTS_*` environment variables and then
- * to its built-in defaults, so an untouched install behaves exactly as before.
+ * One text-to-speech target as stored in settings. Empty strings mean
+ * "unset": the server fills them from its environment variables and then its
+ * built-in defaults (see `resolveTtsProfile` in `apps/server/src/voice/ttsProfile.ts`).
+ */
+export const TtsProfileSettings = Schema.Struct({
+  provider: TtsProvider.pipe(Schema.withDecodingDefault(Effect.succeed("openrouter" as const))),
+  modelId: TrimmedString.pipe(Schema.withDecodingDefault(Effect.succeed(""))),
+  voiceId: TrimmedString.pipe(Schema.withDecodingDefault(Effect.succeed(""))),
+  instructions: TrimmedString.pipe(Schema.withDecodingDefault(Effect.succeed(""))),
+});
+export type TtsProfileSettings = typeof TtsProfileSettings.Type;
+
+export const TtsProfileSettingsPatch = Schema.Struct({
+  provider: Schema.optionalKey(TtsProvider),
+  modelId: Schema.optionalKey(TrimmedString),
+  voiceId: Schema.optionalKey(TrimmedString),
+  instructions: Schema.optionalKey(TrimmedString),
+});
+export type TtsProfileSettingsPatch = typeof TtsProfileSettingsPatch.Type;
+
+/**
+ * Text-to-speech settings. `tts` is the profile used for message listening
+ * and, unless `agentReplyTts` is set, for agent voice replies too. An
+ * untouched install resolves to the server defaults, so behaviour only
+ * changes once a field is filled in.
  */
 export const VoiceSettings = Schema.Struct({
-  ttsModelId: TrimmedString.pipe(Schema.withDecodingDefault(Effect.succeed(""))),
-  ttsVoiceId: TrimmedString.pipe(Schema.withDecodingDefault(Effect.succeed(""))),
+  tts: TtsProfileSettings.pipe(Schema.withDecodingDefault(Effect.succeed({}))),
+  /** Separate profile for agent voice replies; null inherits `tts`. */
+  agentReplyTts: Schema.NullOr(TtsProfileSettings).pipe(
+    Schema.withDecodingDefault(Effect.succeed(null)),
+  ),
   // Exposes the voice_reply MCP tool to agent sessions so they can answer
-  // with a staged recording. Only effective while the server has an
-  // ELEVENLABS_API_KEY; defaults to on so setting the key is enough.
+  // with a staged recording. Only effective while a speech provider is
+  // configured; defaults to on so setting a key is enough.
   enableAgentVoiceReplies: Schema.Boolean.pipe(Schema.withDecodingDefault(Effect.succeed(true))),
 });
 export type VoiceSettings = typeof VoiceSettings.Type;
@@ -1742,8 +1768,10 @@ export const ServerSettingsPatch = Schema.Struct({
   ),
   voice: Schema.optionalKey(
     Schema.Struct({
-      ttsModelId: Schema.optionalKey(TrimmedString),
-      ttsVoiceId: Schema.optionalKey(TrimmedString),
+      tts: Schema.optionalKey(TtsProfileSettingsPatch),
+      // A patch object merges into the existing override (or seeds one from
+      // defaults); null removes the override so agent replies inherit `tts`.
+      agentReplyTts: Schema.optionalKey(Schema.NullOr(TtsProfileSettingsPatch)),
       enableAgentVoiceReplies: Schema.optionalKey(Schema.Boolean),
     }),
   ),

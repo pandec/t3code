@@ -106,6 +106,17 @@ import {
   OpenRouterCreditsResult,
 } from "./openRouterCredits.ts";
 import {
+  TtsCatalogInput,
+  TtsCatalogResult,
+  TtsConfigureOpenRouterInput,
+  TtsConfigureOpenRouterResult,
+  TtsRpcError,
+  TtsStatusInput,
+  TtsStatusResult,
+  TtsTestInput,
+  TtsTestResult,
+} from "./voice.ts";
+import {
   LinearComment,
   LinearCommentsInput,
   LinearCommentsResult,
@@ -356,6 +367,10 @@ export const WS_METHODS = {
   providerUsageThreadAccount: "providerUsage.threadAccount",
   openRouterCreditsRead: "openRouterCredits.read",
   openRouterCreditsConfigure: "openRouterCredits.configure",
+  ttsStatus: "tts.status",
+  ttsCatalog: "tts.catalog",
+  ttsConfigureOpenRouter: "tts.configureOpenRouter",
+  ttsTest: "tts.test",
   linearStatus: "linear.status",
   linearConfigure: "linear.configure",
   linearIssue: "linear.issue",
@@ -503,6 +518,32 @@ const WsOpenRouterCreditsConfigureRpc = Rpc.make(WS_METHODS.openRouterCreditsCon
   payload: OpenRouterCreditsConfigureInput,
   success: OpenRouterCreditsConfigureResult,
   error: EnvironmentAuthorizationError,
+});
+
+const TtsRpcErrors = Schema.Union([TtsRpcError, EnvironmentAuthorizationError]);
+
+const WsTtsStatusRpc = Rpc.make(WS_METHODS.ttsStatus, {
+  payload: TtsStatusInput,
+  success: TtsStatusResult,
+  error: EnvironmentAuthorizationError,
+});
+
+const WsTtsCatalogRpc = Rpc.make(WS_METHODS.ttsCatalog, {
+  payload: TtsCatalogInput,
+  success: TtsCatalogResult,
+  error: EnvironmentAuthorizationError,
+});
+
+const WsTtsConfigureOpenRouterRpc = Rpc.make(WS_METHODS.ttsConfigureOpenRouter, {
+  payload: TtsConfigureOpenRouterInput,
+  success: TtsConfigureOpenRouterResult,
+  error: TtsRpcErrors,
+});
+
+const WsTtsTestRpc = Rpc.make(WS_METHODS.ttsTest, {
+  payload: TtsTestInput,
+  success: TtsTestResult,
+  error: TtsRpcErrors,
 });
 
 const LinearRpcErrors = Schema.Union([LinearRpcError, EnvironmentAuthorizationError]);
@@ -1332,6 +1373,10 @@ export const WsRpcGroup = RpcGroup.make(
   WsProviderUsageThreadAccountRpc,
   WsOpenRouterCreditsReadRpc,
   WsOpenRouterCreditsConfigureRpc,
+  WsTtsStatusRpc,
+  WsTtsCatalogRpc,
+  WsTtsConfigureOpenRouterRpc,
+  WsTtsTestRpc,
   WsLinearStatusRpc,
   WsLinearConfigureRpc,
   WsLinearIssueRpc,

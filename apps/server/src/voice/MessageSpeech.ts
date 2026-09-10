@@ -6,19 +6,16 @@ import {
   MessageSpeechFailureReason,
   type MessageSpeechAttachment,
   type MessageSpeechSynthesisRequest,
+  type ModelSelection,
 } from "@t3tools/contracts";
-import * as Config from "effect/Config";
 import * as Context from "effect/Context";
 import * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
 import * as Exit from "effect/Exit";
 import * as FileSystem from "effect/FileSystem";
 import * as Layer from "effect/Layer";
-import * as Option from "effect/Option";
-import * as Redacted from "effect/Redacted";
 import * as Schema from "effect/Schema";
 import * as SqlClient from "effect/unstable/sql/SqlClient";
-import { HttpClient } from "effect/unstable/http";
 
 import { createAttachmentId } from "../attachmentStore.ts";
 import { resolveAttachmentRelativePath } from "../attachmentPaths.ts";
@@ -27,17 +24,36 @@ import { ServerSettingsService } from "../serverSettings.ts";
 import { TextGeneration } from "../textGeneration/TextGeneration.ts";
 import { messageArtifactTextHash } from "../messageArtifacts/identity.ts";
 import { makeMessageArtifactLockCoordinator } from "../messageArtifacts/lock.ts";
-import {
-  SPEECH_MIME_TYPE,
-  speechFailureReasonFor,
-  synthesizeElevenLabsSpeech,
-} from "./elevenLabsTts.ts";
+import { SPEECH_MIME_TYPE } from "./elevenLabsTts.ts";
+import { getTtsCharacterLimit, resolveListeningTtsProfile } from "./ttsProfile.ts";
+import { TtsService } from "./TtsService.ts";
+import { speechFailureReasonFor } from "./ttsTypes.ts";
 
 export { makeMessageArtifactLockCoordinator as makeMessageSpeechLockCoordinator };
+export {
+  DEFAULT_ELEVENLABS_TTS_MODEL,
+  DEFAULT_ELEVENLABS_TTS_VOICE_ID,
+  getTtsCharacterLimit,
+  resolveMessageSpeechVoiceSetting,
+} from "./ttsProfile.ts";
 
-export const DEFAULT_ELEVENLABS_TTS_MODEL = "eleven_flash_v2_5";
-export const DEFAULT_ELEVENLABS_TTS_VOICE_ID = "JBFqnCBsd6RMkjVDRZzb";
 const SPEECH_SCRIPT_RECIPE_VERSION = 2;
+
+export function messageSpeechRecipeHash(input: {
+  readonly modelSelection: ModelSelection;
+  readonly instructions?: string | undefined;
+}): string {
+  return NodeCrypto.createHash("sha256")
+    .update(
+      JSON.stringify({
+        version: SPEECH_SCRIPT_RECIPE_VERSION,
+        modelSelection: input.modelSelection,
+        instructions: input.instructions?.trim() || null,
+      }),
+      "utf8",
+    )
+    .digest("hex");
+}
 
 interface MessageSpeechCacheRow {
   readonly messageId: string;
@@ -91,46 +107,6 @@ export function isMessageSpeechSourceEligible(input: {
   return getMessageSpeechSourceFailureReason(input) === null;
 }
 
-export function getElevenLabsTtsCharacterLimit(model: string): number {
-  switch (model) {
-    case "eleven_flash_v2_5":
-    case "eleven_turbo_v2_5":
-      return 40_000;
-    case "eleven_flash_v2":
-    case "eleven_turbo_v2":
-      return 30_000;
-    case "eleven_multilingual_v2":
-    case "eleven_multilingual_v1":
-      return 10_000;
-    case "eleven_v3":
-      return 5_000;
-    default:
-      return 5_000;
-  }
-}
-
-/**
- * Resolution order for the TTS model and voice: the server setting wins, then
- * the `ELEVENLABS_TTS_*` environment variable, then the built-in default.
- *
- * The setting is read per synthesis, so changing it takes effect on the next
- * playback without restarting the server; an empty (or whitespace-only) value
- * means "unset" and defers to the environment, which is how an untouched
- * install keeps its previous behaviour.
- */
-export function resolveMessageSpeechVoiceSetting(
-  settingValue: string | null | undefined,
-  environmentValue: string | null | undefined,
-  defaultValue: string,
-): string {
-  const setting = settingValue?.trim();
-  if (setting && setting.length > 0) {
-    return setting;
-  }
-  const environment = environmentValue?.trim();
-  return environment && environment.length > 0 ? environment : defaultValue;
-}
-
 export function isMessageSpeechCacheReusable(input: {
   readonly cache: Pick<
     MessageSpeechCacheRow,
@@ -160,7 +136,8 @@ export class MessageSpeechError extends Schema.TaggedError<MessageSpeechError>()
 export class MessageSpeech extends Context.Service<
   MessageSpeech,
   {
-    readonly available: boolean;
+    /** Whether the listening profile's provider currently holds a key. Read per call. */
+    readonly available: Effect.Effect<boolean>;
     readonly synthesize: (
       request: MessageSpeechSynthesisRequest,
     ) => Effect.Effect<MessageSpeechAttachment, MessageSpeechError>;
@@ -173,17 +150,7 @@ const storageError = () => new MessageSpeechError({ reason: "storage_failed" });
 export const layer = Layer.effect(
   MessageSpeech,
   Effect.gen(function* () {
-    const apiKey = yield* Config.redacted("ELEVENLABS_API_KEY").pipe(Config.option);
-    // Environment fallbacks, read once; the per-synthesis server setting takes
-    // precedence over them (see resolveMessageSpeechVoiceSetting).
-    const envTtsModel = yield* Config.string("ELEVENLABS_TTS_MODEL").pipe(
-      Config.withDefault(DEFAULT_ELEVENLABS_TTS_MODEL),
-    );
-    const envVoiceId = yield* Config.string("ELEVENLABS_TTS_VOICE_ID").pipe(
-      Config.withDefault(DEFAULT_ELEVENLABS_TTS_VOICE_ID),
-    );
-    const available = Option.isSome(apiKey) && Redacted.value(apiKey.value).trim().length > 0;
-    const httpClient = yield* HttpClient.HttpClient;
+    const tts = yield* TtsService;
     const fileSystem = yield* FileSystem.FileSystem;
     const sql = yield* SqlClient.SqlClient;
     const serverConfig = yield* ServerConfig.ServerConfig;
@@ -252,10 +219,6 @@ export const layer = Layer.effect(
     const synthesizeUnlocked = Effect.fn("MessageSpeech.synthesizeUnlocked")(function* (
       request: MessageSpeechSynthesisRequest,
     ) {
-      if (!available || Option.isNone(apiKey)) {
-        return yield* new MessageSpeechError({ reason: "unavailable" });
-      }
-
       const messageRows = yield* findMessage(request.messageId);
       const message = messageRows[0];
       if (!message) {
@@ -267,19 +230,17 @@ export const layer = Layer.effect(
       const settings = yield* serverSettings.getSettings.pipe(
         Effect.mapError(() => new MessageSpeechError({ reason: "script_failed" })),
       );
-      const ttsModel = resolveMessageSpeechVoiceSetting(
-        settings.voice.ttsModelId,
-        envTtsModel,
-        DEFAULT_ELEVENLABS_TTS_MODEL,
-      );
-      const voiceId = resolveMessageSpeechVoiceSetting(
-        settings.voice.ttsVoiceId,
-        envVoiceId,
-        DEFAULT_ELEVENLABS_TTS_VOICE_ID,
-      );
+      const profile = resolveListeningTtsProfile(settings.voice, tts.environmentDefaults);
+      if (!(yield* tts.isConfigured(profile.provider).pipe(Effect.orElseSucceed(() => false)))) {
+        return yield* new MessageSpeechError({ reason: "unavailable" });
+      }
+      // The persisted attachment records the vendor with the model so a cache
+      // hit for one provider's model id never serves another provider's audio.
+      const ttsModel = `${profile.provider}:${profile.modelId}`;
+      const voiceId = profile.voiceId;
 
       const sourceText = message.text.trim();
-      const ttsCharacterLimit = getElevenLabsTtsCharacterLimit(ttsModel);
+      const ttsCharacterLimit = getTtsCharacterLimit(profile);
       const sourceFailureReason = getMessageSpeechSourceFailureReason({
         role: message.role,
         isStreaming: message.isStreaming !== 0,
@@ -291,16 +252,10 @@ export const layer = Layer.effect(
       }
 
       const sourceTextHash = messageArtifactTextHash(sourceText);
-      const scriptRecipeHash = NodeCrypto.createHash("sha256")
-        .update(
-          // @effect-diagnostics-next-line preferSchemaOverJson:off
-          JSON.stringify({
-            version: SPEECH_SCRIPT_RECIPE_VERSION,
-            modelSelection: settings.textGenerationModelSelection,
-          }),
-          "utf8",
-        )
-        .digest("hex");
+      const scriptRecipeHash = messageSpeechRecipeHash({
+        modelSelection: settings.textGenerationModelSelection,
+        instructions: profile.instructions,
+      });
       const cachedRows = yield* findCachedSpeech(request.messageId);
       const cached = cachedRows[0];
       // An agent recording is event-owned: a projection replay rebuilds its
@@ -347,13 +302,8 @@ export const layer = Layer.effect(
         return yield* new MessageSpeechError({ reason: "script_failed" });
       }
 
-      const audioBytes = yield* synthesizeElevenLabsSpeech({
-        httpClient,
-        apiKey: apiKey.value,
-        voiceId,
-        ttsModel,
-        text: transcript,
-      }).pipe(
+      const audioBytes = yield* tts.synthesize({ profile, text: transcript }).pipe(
+        Effect.map((synthesized) => synthesized.bytes),
         Effect.mapError(
           (error) => new MessageSpeechError({ reason: speechFailureReasonFor(error) }),
         ),
@@ -409,6 +359,15 @@ export const layer = Layer.effect(
         createdAt,
       } satisfies MessageSpeechAttachment;
     });
+
+    const available = serverSettings.getSettings.pipe(
+      Effect.flatMap((settings) =>
+        tts.isConfigured(
+          resolveListeningTtsProfile(settings.voice, tts.environmentDefaults).provider,
+        ),
+      ),
+      Effect.orElseSucceed(() => false),
+    );
 
     return MessageSpeech.of({
       available,

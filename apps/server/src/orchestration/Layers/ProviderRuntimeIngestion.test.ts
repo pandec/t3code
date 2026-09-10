@@ -1753,7 +1753,7 @@ describe("ProviderRuntimeIngestion", () => {
       if (entry) removedAudio.push(entry.attachment.speechId);
     };
     const shape: AgentVoiceReply.AgentVoiceReplyShape = {
-      available: true,
+      available: Effect.succeed(true),
       stage: () => Effect.die(new Error("stage is not exercised by ingestion tests")),
       claimStagedForTurn: (_threadId, turnId) => take((entry) => entry.turnId === turnId),
       discardStagedForTurn: (_threadId, turnId) =>

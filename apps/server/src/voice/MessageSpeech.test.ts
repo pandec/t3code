@@ -1,4 +1,4 @@
-import { MESSAGE_SPEECH_MAX_SOURCE_CHARS } from "@t3tools/contracts";
+import { DEFAULT_SERVER_SETTINGS, MESSAGE_SPEECH_MAX_SOURCE_CHARS } from "@t3tools/contracts";
 import { it as effectIt } from "@effect/vitest";
 import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
@@ -10,10 +10,11 @@ import { describe, expect, it } from "vite-plus/test";
 import {
   DEFAULT_ELEVENLABS_TTS_MODEL,
   DEFAULT_ELEVENLABS_TTS_VOICE_ID,
-  getElevenLabsTtsCharacterLimit,
+  getTtsCharacterLimit,
   isMessageSpeechCacheReusable,
   isMessageSpeechSourceEligible,
   makeMessageSpeechLockCoordinator,
+  messageSpeechRecipeHash,
   resolveMessageSpeechVoiceSetting,
 } from "./MessageSpeech.ts";
 
@@ -101,13 +102,24 @@ describe("message speech eligibility", () => {
   });
 });
 
-describe("ElevenLabs TTS character limits", () => {
-  it("uses the documented limit for each configurable model family", () => {
-    expect(getElevenLabsTtsCharacterLimit("eleven_flash_v2_5")).toBe(40_000);
-    expect(getElevenLabsTtsCharacterLimit("eleven_flash_v2")).toBe(30_000);
-    expect(getElevenLabsTtsCharacterLimit("eleven_multilingual_v2")).toBe(10_000);
-    expect(getElevenLabsTtsCharacterLimit("eleven_v3")).toBe(5_000);
-    expect(getElevenLabsTtsCharacterLimit("future_model")).toBe(5_000);
+describe("TTS character limits", () => {
+  const elevenlabs = (modelId: string) => ({ provider: "elevenlabs" as const, modelId });
+
+  it("uses the documented ElevenLabs limit for each configurable model family", () => {
+    expect(getTtsCharacterLimit(elevenlabs("eleven_flash_v2_5"))).toBe(40_000);
+    expect(getTtsCharacterLimit(elevenlabs("eleven_flash_v2"))).toBe(30_000);
+    expect(getTtsCharacterLimit(elevenlabs("eleven_multilingual_v2"))).toBe(10_000);
+    expect(getTtsCharacterLimit(elevenlabs("eleven_v3"))).toBe(5_000);
+    expect(getTtsCharacterLimit(elevenlabs("future_model"))).toBe(5_000);
+  });
+
+  it("caps OpenRouter models at the smallest documented input window", () => {
+    expect(
+      getTtsCharacterLimit({
+        provider: "openrouter",
+        modelId: "google/gemini-3.1-flash-tts-preview",
+      }),
+    ).toBe(20_000);
   });
 });
 
@@ -139,6 +151,26 @@ describe("TTS model and voice resolution", () => {
 });
 
 describe("message speech cache identity", () => {
+  it("invalidates cached audio when style instructions change", () => {
+    const modelSelection = DEFAULT_SERVER_SETTINGS.textGenerationModelSelection;
+    const calm = messageSpeechRecipeHash({ modelSelection, instructions: "calm" });
+    const energetic = messageSpeechRecipeHash({ modelSelection, instructions: "energetic" });
+    expect(energetic).not.toBe(calm);
+    expect(messageSpeechRecipeHash({ modelSelection, instructions: " calm " })).toBe(calm);
+    expect(messageSpeechRecipeHash({ modelSelection, instructions: " " })).toBe(
+      messageSpeechRecipeHash({ modelSelection }),
+    );
+    expect(
+      isMessageSpeechCacheReusable({
+        cache: { ...cache, scriptRecipeHash: calm },
+        sourceTextHash: "hash",
+        scriptRecipeHash: energetic,
+        voiceId: "voice",
+        ttsModel: "model",
+      }),
+    ).toBe(false);
+  });
+
   const cache = {
     sourceTextHash: "hash",
     scriptRecipeHash: "recipe",

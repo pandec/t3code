@@ -707,12 +707,13 @@ export function useSettingsRestore(onRestored?: () => void) {
       DEFAULT_UNIFIED_SETTINGS.accentTintIntensityPercent
         ? ["Tint intensity"]
         : []),
-      ...(settings.voice.ttsModelId !== DEFAULT_UNIFIED_SETTINGS.voice.ttsModelId
-        ? ["Text-to-speech model"]
+      ...(settings.voice.tts.provider !== DEFAULT_UNIFIED_SETTINGS.voice.tts.provider ||
+      settings.voice.tts.modelId !== "" ||
+      settings.voice.tts.voiceId !== "" ||
+      settings.voice.tts.instructions !== ""
+        ? ["Text-to-speech"]
         : []),
-      ...(settings.voice.ttsVoiceId !== DEFAULT_UNIFIED_SETTINGS.voice.ttsVoiceId
-        ? ["Text-to-speech voice"]
-        : []),
+      ...(settings.voice.agentReplyTts !== null ? ["Separate voice for agent replies"] : []),
       ...(settings.confirmQuit !== DEFAULT_UNIFIED_SETTINGS.confirmQuit ? ["Quit shortcut"] : []),
       ...(isTextGenerationModelDirty ? ["Text generation model"] : []),
       ...getChangedBrowserSettingLabels(settings),
@@ -732,8 +733,8 @@ export function useSettingsRestore(onRestored?: () => void) {
       settings.providerUsageCriticalPercent,
       settings.steerGraceWindowMs,
       settings.turnCompletionMinDurationSeconds,
-      settings.voice.ttsModelId,
-      settings.voice.ttsVoiceId,
+      settings.voice.tts,
+      settings.voice.agentReplyTts,
       projectAccentColors.hasAnyServerAccentColors,
       settings.browserDefaultViewport,
       settings.browserDefaultZoomFactor,
@@ -923,8 +924,13 @@ export function useSettingsRestore(onRestored?: () => void) {
       accentTintIntensityPercent: DEFAULT_UNIFIED_SETTINGS.accentTintIntensityPercent,
       confirmThreadUnpin: DEFAULT_UNIFIED_SETTINGS.confirmThreadUnpin,
       voice: {
-        ttsModelId: DEFAULT_UNIFIED_SETTINGS.voice.ttsModelId,
-        ttsVoiceId: DEFAULT_UNIFIED_SETTINGS.voice.ttsVoiceId,
+        tts: {
+          provider: DEFAULT_UNIFIED_SETTINGS.voice.tts.provider,
+          modelId: "",
+          voiceId: "",
+          instructions: "",
+        },
+        agentReplyTts: null,
       },
       confirmQuit: DEFAULT_UNIFIED_SETTINGS.confirmQuit,
       textGenerationModelSelection: DEFAULT_UNIFIED_SETTINGS.textGenerationModelSelection,

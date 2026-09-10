@@ -73,6 +73,9 @@ export function applyServerConfigProjection(
         config: {
           ...projection.config,
           settings: event.payload.settings,
+          ...(event.payload.textToSpeech === undefined
+            ? {}
+            : { textToSpeech: event.payload.textToSpeech }),
         },
         latestEvent: event,
         source: "live",

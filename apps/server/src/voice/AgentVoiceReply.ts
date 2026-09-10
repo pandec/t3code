@@ -9,33 +9,22 @@ import {
   type ThreadId,
   type TurnId,
 } from "@t3tools/contracts";
-import * as Config from "effect/Config";
 import * as Context from "effect/Context";
 import * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
 import * as FileSystem from "effect/FileSystem";
 import * as Layer from "effect/Layer";
-import * as Option from "effect/Option";
-import * as Redacted from "effect/Redacted";
 import * as SynchronizedRef from "effect/SynchronizedRef";
-import { HttpClient } from "effect/unstable/http";
 import * as SqlClient from "effect/unstable/sql/SqlClient";
 
 import { createAttachmentId } from "../attachmentStore.ts";
 import { resolveAttachmentRelativePath } from "../attachmentPaths.ts";
 import * as ServerConfig from "../config.ts";
 import { ServerSettingsService } from "../serverSettings.ts";
-import {
-  SPEECH_MIME_TYPE,
-  speechFailureReasonFor,
-  synthesizeElevenLabsSpeech,
-} from "./elevenLabsTts.ts";
-import {
-  DEFAULT_ELEVENLABS_TTS_MODEL,
-  DEFAULT_ELEVENLABS_TTS_VOICE_ID,
-  getElevenLabsTtsCharacterLimit,
-  resolveMessageSpeechVoiceSetting,
-} from "./MessageSpeech.ts";
+import { SPEECH_MIME_TYPE } from "./elevenLabsTts.ts";
+import { getTtsCharacterLimit, resolveAgentReplyTtsProfile } from "./ttsProfile.ts";
+import { TtsService } from "./TtsService.ts";
+import { speechFailureReasonFor } from "./ttsTypes.ts";
 
 /**
  * A recording staged by the voice_reply MCP tool, bound to the turn that was
@@ -63,7 +52,8 @@ export interface StagedAgentVoiceReply {
  * two recordings.
  */
 export interface AgentVoiceReplyShape {
-  readonly available: boolean;
+  /** Whether the agent-reply profile's provider currently holds a key. Read per call. */
+  readonly available: Effect.Effect<boolean>;
   readonly stage: (input: {
     readonly threadId: ThreadId;
     readonly script: string;
@@ -88,13 +78,16 @@ export class AgentVoiceReply extends Context.Service<AgentVoiceReply, AgentVoice
 
 /**
  * Joins two MP3 segments from the same synthesis pipeline into one playable
- * stream. Every ElevenLabs response here is CBR 44.1kHz mono, so bare frame
- * streams concatenate cleanly — but each segment leads with an ID3v2 tag and
- * a Xing/Info header frame that declares that segment's frame count. Both are
- * dropped from both sides (a no-op on an already merged left side): a header
- * frame surviving into the merge caps the reported duration at the first
- * segment, and without one, CBR players derive the correct duration from the
- * file size.
+ * stream. ElevenLabs returns CBR 44.1kHz mono and OpenRouter's MP3 output is
+ * assumed CBR too (not checked per model), so bare frame streams concatenate
+ * cleanly. Each segment can lead with an ID3v2 tag and a Xing/Info header
+ * frame that declares that segment's frame count. Both are dropped from both
+ * sides (a no-op on an already merged left side): a header frame surviving
+ * into the merge caps the reported duration at the first segment, and without
+ * one, CBR players derive the correct duration from the file size. Segments
+ * from different providers within one turn would mix sample rates; the
+ * profile is read per call, so a settings change mid-turn is the only way
+ * that happens.
  */
 export function appendSpeechAudio(previous: Uint8Array, next: Uint8Array): Uint8Array {
   const left = stripLeadingXingFrame(stripLeadingId3v2Tag(previous));
@@ -106,21 +99,21 @@ export function appendSpeechAudio(previous: Uint8Array, next: Uint8Array): Uint8
 }
 
 /**
- * Drops a leading Xing/Info header frame. Only the shape this pipeline emits
- * is parsed — MPEG1 Layer III without CRC; anything else needs different
- * bitrate tables and fourcc offsets, so it is returned untouched rather than
- * guessed at. The fourcc sits right after the side info, whose size is fixed
- * per channel mode, so only that offset is probed — matching arbitrary audio
- * bytes by content alone could false-positive.
+ * Drops a leading Xing/Info frame from MPEG Layer III audio without CRC.
+ * Version-specific tables locate the frame boundary and side-info offset.
+ * Other layouts are left untouched rather than matched against audio bytes.
  */
 export function stripLeadingXingFrame(bytes: Uint8Array): Uint8Array {
   if (bytes.byteLength < 4 || bytes[0] !== 0xff || (bytes[1]! & 0xe0) !== 0xe0) {
     return bytes;
   }
-  const isMpeg1 = (bytes[1]! & 0x18) === 0x18;
+  const versionBits = bytes[1]! & 0x18;
+  const isMpeg1 = versionBits === 0x18;
+  const isMpeg2 = versionBits === 0x10;
+  const isMpeg25 = versionBits === 0;
   const isLayer3 = (bytes[1]! & 0x06) === 0x02;
   const hasCrc = (bytes[1]! & 0x01) === 0;
-  if (!isMpeg1 || !isLayer3 || hasCrc) {
+  if ((!isMpeg1 && !isMpeg2 && !isMpeg25) || !isLayer3 || hasCrc) {
     return bytes;
   }
   const bitrateIndex = (bytes[2]! >> 4) & 0x0f;
@@ -128,15 +121,24 @@ export function stripLeadingXingFrame(bytes: Uint8Array): Uint8Array {
   if (bitrateIndex === 0 || bitrateIndex === 0x0f || sampleRateIndex === 3) {
     return bytes;
   }
-  const bitrate = [0, 32, 40, 48, 56, 64, 80, 96, 112, 128, 160, 192, 224, 256, 320][bitrateIndex]!;
-  const sampleRate = [44100, 48000, 32000][sampleRateIndex]!;
+  const bitrateTable = isMpeg1
+    ? [0, 32, 40, 48, 56, 64, 80, 96, 112, 128, 160, 192, 224, 256, 320]
+    : [0, 8, 16, 24, 32, 40, 48, 56, 64, 80, 96, 112, 128, 144, 160];
+  const sampleRateTable = isMpeg1
+    ? [44100, 48000, 32000]
+    : isMpeg2
+      ? [22050, 24000, 16000]
+      : [11025, 12000, 8000];
+  const bitrate = bitrateTable[bitrateIndex]!;
+  const sampleRate = sampleRateTable[sampleRateIndex]!;
   const padding = (bytes[2]! >> 1) & 0x01;
-  const frameLength = Math.floor((144 * bitrate * 1000) / sampleRate) + padding;
+  const frameLength = Math.floor(((isMpeg1 ? 144 : 72) * bitrate * 1000) / sampleRate) + padding;
   if (frameLength > bytes.byteLength) {
     return bytes;
   }
   const isMono = (bytes[3]! & 0xc0) === 0xc0;
-  const fourccOffset = 4 + (isMono ? 17 : 32);
+  const sideInfoLength = isMpeg1 ? (isMono ? 17 : 32) : isMono ? 9 : 17;
+  const fourccOffset = 4 + sideInfoLength;
   const fourcc = String.fromCharCode(...bytes.subarray(fourccOffset, fourccOffset + 4));
   return fourcc === "Xing" || fourcc === "Info" ? bytes.subarray(frameLength) : bytes;
 }
@@ -163,7 +165,7 @@ export function stripLeadingId3v2Tag(bytes: Uint8Array): Uint8Array {
 
 /** Inert instance for tests and harnesses that do not exercise voice replies. */
 export const layerNoop = Layer.succeed(AgentVoiceReply, {
-  available: false,
+  available: Effect.succeed(false),
   stage: () => Effect.fail(new AgentVoiceReplyError({ reason: "unavailable" })),
   claimStagedForTurn: () => Effect.succeed(undefined),
   discardStagedForTurn: () => Effect.void,
@@ -173,15 +175,7 @@ export const layerNoop = Layer.succeed(AgentVoiceReply, {
 export const layer = Layer.effect(
   AgentVoiceReply,
   Effect.gen(function* () {
-    const apiKey = yield* Config.redacted("ELEVENLABS_API_KEY").pipe(Config.option);
-    const envTtsModel = yield* Config.string("ELEVENLABS_TTS_MODEL").pipe(
-      Config.withDefault(DEFAULT_ELEVENLABS_TTS_MODEL),
-    );
-    const envVoiceId = yield* Config.string("ELEVENLABS_TTS_VOICE_ID").pipe(
-      Config.withDefault(DEFAULT_ELEVENLABS_TTS_VOICE_ID),
-    );
-    const available = Option.isSome(apiKey) && Redacted.value(apiKey.value).trim().length > 0;
-    const httpClient = yield* HttpClient.HttpClient;
+    const tts = yield* TtsService;
     const fileSystem = yield* FileSystem.FileSystem;
     const sql = yield* SqlClient.SqlClient;
     const serverConfig = yield* ServerConfig.ServerConfig;
@@ -229,23 +223,16 @@ export const layer = Layer.effect(
 
     const stage: AgentVoiceReplyShape["stage"] = Effect.fn("AgentVoiceReply.stage")(
       function* (input) {
-        if (!available || Option.isNone(apiKey)) {
-          return yield* new AgentVoiceReplyError({ reason: "unavailable" });
-        }
-
         const settings = yield* serverSettings.getSettings.pipe(
           Effect.mapError(() => new AgentVoiceReplyError({ reason: "storage_failed" })),
         );
-        const ttsModel = resolveMessageSpeechVoiceSetting(
-          settings.voice.ttsModelId,
-          envTtsModel,
-          DEFAULT_ELEVENLABS_TTS_MODEL,
-        );
-        const voiceId = resolveMessageSpeechVoiceSetting(
-          settings.voice.ttsVoiceId,
-          envVoiceId,
-          DEFAULT_ELEVENLABS_TTS_VOICE_ID,
-        );
+        const profile = resolveAgentReplyTtsProfile(settings.voice, tts.environmentDefaults);
+        if (!(yield* tts.isConfigured(profile.provider).pipe(Effect.orElseSucceed(() => false)))) {
+          return yield* new AgentVoiceReplyError({ reason: "unavailable" });
+        }
+        // Vendor-qualified so a persisted recording names where it came from.
+        const ttsModel = `${profile.provider}:${profile.modelId}`;
+        const voiceId = profile.voiceId;
 
         const script = input.script.trim();
         if (script.length === 0) {
@@ -253,7 +240,7 @@ export const layer = Layer.effect(
         }
         const characterLimit = Math.min(
           AGENT_VOICE_REPLY_MAX_SCRIPT_CHARS,
-          getElevenLabsTtsCharacterLimit(ttsModel),
+          getTtsCharacterLimit(profile),
         );
         if (script.length > characterLimit) {
           return yield* new AgentVoiceReplyError({ reason: "script_too_long" });
@@ -263,13 +250,8 @@ export const layer = Layer.effect(
         if (turnId === null) {
           return yield* new AgentVoiceReplyError({ reason: "turn_unavailable" });
         }
-        const audioBytes = yield* synthesizeElevenLabsSpeech({
-          httpClient,
-          apiKey: apiKey.value,
-          voiceId,
-          ttsModel,
-          text: script,
-        }).pipe(
+        const audioBytes = yield* tts.synthesize({ profile, text: script }).pipe(
+          Effect.map((synthesized) => synthesized.bytes),
           Effect.mapError(
             (error) => new AgentVoiceReplyError({ reason: speechFailureReasonFor(error) }),
           ),
@@ -382,6 +364,15 @@ export const layer = Layer.effect(
 
     const discardEntry = (entry: StagedAgentVoiceReply | undefined) =>
       entry ? removeAudioFile(entry.attachment.speechId) : Effect.void;
+
+    const available = serverSettings.getSettings.pipe(
+      Effect.flatMap((settings) =>
+        tts.isConfigured(
+          resolveAgentReplyTtsProfile(settings.voice, tts.environmentDefaults).provider,
+        ),
+      ),
+      Effect.orElseSucceed(() => false),
+    );
 
     return AgentVoiceReply.of({
       available,
