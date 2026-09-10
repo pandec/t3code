@@ -9,33 +9,22 @@ import {
   type ThreadId,
   type TurnId,
 } from "@t3tools/contracts";
-import * as Config from "effect/Config";
 import * as Context from "effect/Context";
 import * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
 import * as FileSystem from "effect/FileSystem";
 import * as Layer from "effect/Layer";
-import * as Option from "effect/Option";
-import * as Redacted from "effect/Redacted";
 import * as SynchronizedRef from "effect/SynchronizedRef";
-import { HttpClient } from "effect/unstable/http";
 import * as SqlClient from "effect/unstable/sql/SqlClient";
 
 import { createAttachmentId } from "../attachmentStore.ts";
 import { resolveAttachmentRelativePath } from "../attachmentPaths.ts";
 import * as ServerConfig from "../config.ts";
 import { ServerSettingsService } from "../serverSettings.ts";
-import {
-  SPEECH_MIME_TYPE,
-  speechFailureReasonFor,
-  synthesizeElevenLabsSpeech,
-} from "./elevenLabsTts.ts";
-import {
-  DEFAULT_ELEVENLABS_TTS_MODEL,
-  DEFAULT_ELEVENLABS_TTS_VOICE_ID,
-  getElevenLabsTtsCharacterLimit,
-  resolveMessageSpeechVoiceSetting,
-} from "./MessageSpeech.ts";
+import { SPEECH_MIME_TYPE } from "./elevenLabsTts.ts";
+import { getTtsCharacterLimit, resolveAgentReplyTtsProfile } from "./ttsProfile.ts";
+import { TtsService } from "./TtsService.ts";
+import { speechFailureReasonFor } from "./ttsTypes.ts";
 
 /**
  * A recording staged by the voice_reply MCP tool, bound to the turn that was
@@ -63,7 +52,8 @@ export interface StagedAgentVoiceReply {
  * two recordings.
  */
 export interface AgentVoiceReplyShape {
-  readonly available: boolean;
+  /** Whether any speech provider currently holds a key. Read per call. */
+  readonly available: Effect.Effect<boolean>;
   readonly stage: (input: {
     readonly threadId: ThreadId;
     readonly script: string;
@@ -88,13 +78,15 @@ export class AgentVoiceReply extends Context.Service<AgentVoiceReply, AgentVoice
 
 /**
  * Joins two MP3 segments from the same synthesis pipeline into one playable
- * stream. Every ElevenLabs response here is CBR 44.1kHz mono, so bare frame
- * streams concatenate cleanly — but each segment leads with an ID3v2 tag and
- * a Xing/Info header frame that declares that segment's frame count. Both are
- * dropped from both sides (a no-op on an already merged left side): a header
- * frame surviving into the merge caps the reported duration at the first
- * segment, and without one, CBR players derive the correct duration from the
- * file size.
+ * stream. ElevenLabs returns CBR 44.1kHz mono and OpenRouter's MP3 output is
+ * CBR as well, so bare frame streams concatenate cleanly — but each segment
+ * can lead with an ID3v2 tag and a Xing/Info header frame that declares that
+ * segment's frame count. Both are dropped from both sides (a no-op on an
+ * already merged left side): a header frame surviving into the merge caps the
+ * reported duration at the first segment, and without one, CBR players derive
+ * the correct duration from the file size. Segments from different providers
+ * within one turn would mix sample rates; the profile is read per call, so a
+ * settings change mid-turn is the only way that happens.
  */
 export function appendSpeechAudio(previous: Uint8Array, next: Uint8Array): Uint8Array {
   const left = stripLeadingXingFrame(stripLeadingId3v2Tag(previous));
@@ -163,7 +155,7 @@ export function stripLeadingId3v2Tag(bytes: Uint8Array): Uint8Array {
 
 /** Inert instance for tests and harnesses that do not exercise voice replies. */
 export const layerNoop = Layer.succeed(AgentVoiceReply, {
-  available: false,
+  available: Effect.succeed(false),
   stage: () => Effect.fail(new AgentVoiceReplyError({ reason: "unavailable" })),
   claimStagedForTurn: () => Effect.succeed(undefined),
   discardStagedForTurn: () => Effect.void,
@@ -173,15 +165,7 @@ export const layerNoop = Layer.succeed(AgentVoiceReply, {
 export const layer = Layer.effect(
   AgentVoiceReply,
   Effect.gen(function* () {
-    const apiKey = yield* Config.redacted("ELEVENLABS_API_KEY").pipe(Config.option);
-    const envTtsModel = yield* Config.string("ELEVENLABS_TTS_MODEL").pipe(
-      Config.withDefault(DEFAULT_ELEVENLABS_TTS_MODEL),
-    );
-    const envVoiceId = yield* Config.string("ELEVENLABS_TTS_VOICE_ID").pipe(
-      Config.withDefault(DEFAULT_ELEVENLABS_TTS_VOICE_ID),
-    );
-    const available = Option.isSome(apiKey) && Redacted.value(apiKey.value).trim().length > 0;
-    const httpClient = yield* HttpClient.HttpClient;
+    const tts = yield* TtsService;
     const fileSystem = yield* FileSystem.FileSystem;
     const sql = yield* SqlClient.SqlClient;
     const serverConfig = yield* ServerConfig.ServerConfig;
@@ -229,23 +213,17 @@ export const layer = Layer.effect(
 
     const stage: AgentVoiceReplyShape["stage"] = Effect.fn("AgentVoiceReply.stage")(
       function* (input) {
-        if (!available || Option.isNone(apiKey)) {
+        if (!(yield* tts.anyConfigured)) {
           return yield* new AgentVoiceReplyError({ reason: "unavailable" });
         }
 
         const settings = yield* serverSettings.getSettings.pipe(
           Effect.mapError(() => new AgentVoiceReplyError({ reason: "storage_failed" })),
         );
-        const ttsModel = resolveMessageSpeechVoiceSetting(
-          settings.voice.ttsModelId,
-          envTtsModel,
-          DEFAULT_ELEVENLABS_TTS_MODEL,
-        );
-        const voiceId = resolveMessageSpeechVoiceSetting(
-          settings.voice.ttsVoiceId,
-          envVoiceId,
-          DEFAULT_ELEVENLABS_TTS_VOICE_ID,
-        );
+        const profile = resolveAgentReplyTtsProfile(settings.voice, tts.environmentDefaults);
+        // Vendor-qualified so a persisted recording names where it came from.
+        const ttsModel = `${profile.provider}:${profile.modelId}`;
+        const voiceId = profile.voiceId;
 
         const script = input.script.trim();
         if (script.length === 0) {
@@ -253,7 +231,7 @@ export const layer = Layer.effect(
         }
         const characterLimit = Math.min(
           AGENT_VOICE_REPLY_MAX_SCRIPT_CHARS,
-          getElevenLabsTtsCharacterLimit(ttsModel),
+          getTtsCharacterLimit(profile),
         );
         if (script.length > characterLimit) {
           return yield* new AgentVoiceReplyError({ reason: "script_too_long" });
@@ -263,13 +241,8 @@ export const layer = Layer.effect(
         if (turnId === null) {
           return yield* new AgentVoiceReplyError({ reason: "turn_unavailable" });
         }
-        const audioBytes = yield* synthesizeElevenLabsSpeech({
-          httpClient,
-          apiKey: apiKey.value,
-          voiceId,
-          ttsModel,
-          text: script,
-        }).pipe(
+        const audioBytes = yield* tts.synthesize({ profile, text: script }).pipe(
+          Effect.map((synthesized) => synthesized.bytes),
           Effect.mapError(
             (error) => new AgentVoiceReplyError({ reason: speechFailureReasonFor(error) }),
           ),
@@ -384,7 +357,7 @@ export const layer = Layer.effect(
       entry ? removeAudioFile(entry.attachment.speechId) : Effect.void;
 
     return AgentVoiceReply.of({
-      available,
+      available: tts.anyConfigured,
       stage,
       claimStagedForTurn: (threadId, turnId) =>
         takeMatching(threadId, (entry) => entry.turnId === turnId),

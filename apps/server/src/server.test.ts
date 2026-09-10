@@ -145,6 +145,7 @@ import * as ServerRuntimeStartup from "./serverRuntimeStartup.ts";
 import * as ServiceLauncherClient from "./cloud/serviceLauncherClient.ts";
 import * as ServerSettings from "./serverSettings.ts";
 import * as MessageSpeech from "./voice/MessageSpeech.ts";
+import * as TtsService from "./voice/TtsService.ts";
 import * as MessageSummary from "./messageArtifacts/MessageSummary.ts";
 import * as TerminalManager from "./terminal/Manager.ts";
 import * as PreviewManager from "./preview/Manager.ts";
@@ -759,9 +760,10 @@ const buildAppUnderTest = (options?: {
           // setup script services provided below.
           TurnStartBootstrap.layer,
           Layer.mock(MessageSpeech.MessageSpeech)({
-            available: false,
+            available: Effect.succeed(false),
             synthesize: () => Effect.die("message speech is not configured for this test"),
           }),
+          TtsService.layerNoop,
           Layer.mock(MessageSummary.MessageSummary)({
             summarize: () => Effect.die("message summary is not configured for this test"),
           }),

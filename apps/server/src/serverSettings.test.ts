@@ -616,6 +616,46 @@ it.layer(NodeServices.layer)("server settings", (it) => {
     }).pipe(Effect.provide(makeServerSettingsLayer())),
   );
 
+  it.effect("folds a pre-OpenRouter ElevenLabs model and voice into the ElevenLabs profile", () =>
+    Effect.gen(function* () {
+      const serverConfig = yield* ServerConfig.ServerConfig;
+      const fileSystem = yield* FileSystem.FileSystem;
+      const serverSettings = yield* ServerSettingsModule.ServerSettingsService;
+      yield* fileSystem.writeFileString(
+        serverConfig.settingsPath,
+        '{"voice":{"ttsModelId":"eleven_multilingual_v2","ttsVoiceId":"voice-a"}}',
+      );
+
+      const settings = yield* serverSettings.getSettings;
+
+      assert.deepEqual(settings.voice.tts, {
+        provider: "elevenlabs",
+        modelId: "eleven_multilingual_v2",
+        voiceId: "voice-a",
+        instructions: "",
+      });
+      assert.isNull(settings.voice.agentReplyTts);
+    }).pipe(Effect.provide(makeServerSettingsLayer())),
+  );
+
+  it.effect("keeps a profile already saved under the new shape over the legacy keys", () =>
+    Effect.gen(function* () {
+      const serverConfig = yield* ServerConfig.ServerConfig;
+      const fileSystem = yield* FileSystem.FileSystem;
+      const serverSettings = yield* ServerSettingsModule.ServerSettingsService;
+      yield* fileSystem.writeFileString(
+        serverConfig.settingsPath,
+        '{"voice":{"ttsModelId":"eleven_v3","tts":{"provider":"openrouter","voiceId":"Puck"}}}',
+      );
+
+      const settings = yield* serverSettings.getSettings;
+
+      assert.equal(settings.voice.tts.provider, "openrouter");
+      assert.equal(settings.voice.tts.voiceId, "Puck");
+      assert.equal(settings.voice.tts.modelId, "");
+    }).pipe(Effect.provide(makeServerSettingsLayer())),
+  );
+
   it.effect("preserves existing provider instances without explicit enabled flags", () =>
     Effect.gen(function* () {
       const serverConfig = yield* ServerConfig.ServerConfig;

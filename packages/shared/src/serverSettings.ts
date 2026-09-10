@@ -177,6 +177,7 @@ export function applyServerSettingsPatch(
     usagePriceOverrides: usagePriceOverridesPatch,
     projectAgentBrowserAccessOverrides: projectAgentBrowserAccessOverridesPatch,
     projectAutoPullOverrides: projectAutoPullOverridesPatch,
+    voice: voicePatch,
     ...patchForMerge
   } = patch;
   const currentBackgroundActivity = normalizeServerBackgroundActivitySettings(current);
@@ -215,6 +216,31 @@ export function applyServerSettingsPatch(
           }
         : undefined;
   const next = deepMerge(current, patchForMerge);
+  // Voice merges one field at a time, except the agent-reply override, whose
+  // `null` removes it (deepMerge would otherwise keep the old object). A
+  // partial override patch seeds the missing fields from the default profile.
+  const nextVoice =
+    voicePatch === undefined
+      ? current.voice
+      : {
+          ...current.voice,
+          ...(voicePatch.enableAgentVoiceReplies !== undefined
+            ? { enableAgentVoiceReplies: voicePatch.enableAgentVoiceReplies }
+            : {}),
+          tts:
+            voicePatch.tts === undefined
+              ? current.voice.tts
+              : deepMerge(current.voice.tts, voicePatch.tts),
+          agentReplyTts:
+            voicePatch.agentReplyTts === undefined
+              ? current.voice.agentReplyTts
+              : voicePatch.agentReplyTts === null
+                ? null
+                : deepMerge(
+                    current.voice.agentReplyTts ?? current.voice.tts,
+                    voicePatch.agentReplyTts,
+                  ),
+        };
   const nextProjectAccentColors =
     patch.projectAccentColors === undefined
       ? { ...next.projectAccentColors }
@@ -228,6 +254,7 @@ export function applyServerSettingsPatch(
   }
   const nextWithReplacementsBase = {
     ...next,
+    voice: nextVoice,
     ...(backgroundActivity !== undefined
       ? {
           backgroundActivity: {

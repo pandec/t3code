@@ -200,7 +200,7 @@ it.layer(NodeServices.layer)("MessageSpeechReactor", (it) => {
         Layer.succeed(OrchestrationEngineService, engineService(events, commands)),
         Layer.succeed(ProjectionThreadMessageRepository, repositoryService(messages)),
         Layer.succeed(MessageSpeech, {
-          available: true,
+          available: Effect.succeed(true),
           synthesize: ({ messageId }) => synthesize(messageId),
           deleteAttachment: () => Effect.void,
         }),
@@ -317,7 +317,7 @@ it.layer(NodeServices.layer)("MessageSpeechReactor", (it) => {
         }),
         Layer.succeed(ProjectionThreadMessageRepository, repositoryService(messages)),
         Layer.succeed(MessageSpeech, {
-          available: true,
+          available: Effect.succeed(true),
           synthesize: () => Effect.succeed(speech(messageId)),
           deleteAttachment: () => Effect.void,
         }),
@@ -393,7 +393,7 @@ it.layer(NodeServices.layer)("MessageSpeechReactor", (it) => {
         }),
         Layer.succeed(ProjectionThreadMessageRepository, repository),
         Layer.succeed(MessageSpeech, {
-          available: true,
+          available: Effect.succeed(true),
           synthesize: () => Effect.succeed(replacement),
           deleteAttachment: (speechId) =>
             Ref.update(deletedSpeechIds, (current) => [...current, speechId]),
@@ -443,7 +443,7 @@ it.layer(NodeServices.layer)("MessageSpeechReactor", (it) => {
         }),
         Layer.succeed(ProjectionThreadMessageRepository, repositoryService(messages)),
         Layer.succeed(MessageSpeech, {
-          available: true,
+          available: Effect.succeed(true),
           synthesize: () =>
             Effect.gen(function* () {
               yield* Ref.set(
@@ -533,7 +533,7 @@ it.layer(NodeServices.layer)("MessageSpeechReactor", (it) => {
         }),
         Layer.succeed(ProjectionThreadMessageRepository, repository),
         Layer.succeed(MessageSpeech, {
-          available: true,
+          available: Effect.succeed(true),
           synthesize: () => Effect.succeed(generated),
           deleteAttachment: (speechId) =>
             Ref.update(deletedSpeechIds, (current) => [...current, speechId]),
@@ -598,7 +598,7 @@ it.layer(NodeServices.layer)("MessageSpeechReactor", (it) => {
         Layer.succeed(OrchestrationEngineService, engineService(events, commands)),
         Layer.succeed(ProjectionThreadMessageRepository, repository),
         Layer.succeed(MessageSpeech, {
-          available: true,
+          available: Effect.succeed(true),
           synthesize: () => Effect.die("startup must fail before synthesis"),
           deleteAttachment: () => Effect.void,
         }),
@@ -643,7 +643,7 @@ it.layer(NodeServices.layer)("MessageSpeechReactor", (it) => {
         Layer.succeed(ServerActivation, Deferred.await(activation)),
         Layer.succeed(OrchestrationEngineService, engineService(events, commands)),
         Layer.succeed(MessageSpeech, {
-          available: true,
+          available: Effect.succeed(true),
           synthesize: () => Effect.die("stale startup requests must not synthesize"),
           deleteAttachment: () => Effect.void,
         }),

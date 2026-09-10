@@ -27,10 +27,17 @@ const synthesize = (httpClient: HttpClient.HttpClient) =>
 const failureOf = (httpClient: HttpClient.HttpClient) => synthesize(httpClient).pipe(Effect.flip);
 
 describe("synthesizeElevenLabsSpeech", () => {
-  it.effect("returns the audio bytes on success", () =>
+  it.effect("returns the audio bytes and the vendor's billed character count", () =>
     Effect.gen(function* () {
-      const bytes = yield* synthesize(respondWith(Uint8Array.from([1, 2, 3])));
-      expect(bytes).toEqual(Uint8Array.from([1, 2, 3]));
+      const synthesized = yield* synthesize(
+        respondWith(Uint8Array.from([1, 2, 3]), { headers: { "character-cost": "12" } }),
+      );
+      expect(synthesized.bytes).toEqual(Uint8Array.from([1, 2, 3]));
+      expect(synthesized.mimeType).toBe("audio/mpeg");
+      expect(synthesized.cost).toEqual({ usd: null, billedCharacters: 12 });
+
+      const withoutHeader = yield* synthesize(respondWith(Uint8Array.from([1])));
+      expect(withoutHeader.cost).toEqual({ usd: null, billedCharacters: null });
     }),
   );
 

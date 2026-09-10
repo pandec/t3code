@@ -9,6 +9,7 @@ import { HttpClient, HttpClientResponse } from "effect/unstable/http";
 import * as SqlClient from "effect/unstable/sql/SqlClient";
 import { describe, expect, it } from "vite-plus/test";
 
+import * as ServerSecretStore from "../auth/ServerSecretStore.ts";
 import * as ServerConfig from "../config.ts";
 import * as SqliteClient from "@t3tools/shared/nodeSqliteClient";
 import * as ServerSettingsModule from "../serverSettings.ts";
@@ -19,6 +20,15 @@ import {
   stripLeadingId3v2Tag,
   stripLeadingXingFrame,
 } from "./AgentVoiceReply.ts";
+import * as TtsService from "./TtsService.ts";
+
+const emptySecretStore = ServerSecretStore.ServerSecretStore.of({
+  get: () => Effect.succeedNone,
+  set: () => Effect.void,
+  create: () => Effect.void,
+  getOrCreateRandom: () => Effect.succeed(new Uint8Array()),
+  remove: () => Effect.void,
+});
 
 const id3Tag = (bodyLength: number, options?: { footer?: boolean }): Uint8Array => {
   const footer = options?.footer === true;
@@ -131,12 +141,24 @@ describe("stage", () => {
 
   const TestLayer = agentVoiceReplyLayer.pipe(
     Layer.provideMerge(
+      TtsService.layer.pipe(
+        Layer.provide(
+          Layer.mergeAll(
+            Layer.succeed(HttpClient.HttpClient, stubHttpClient),
+            Layer.succeed(ServerSecretStore.ServerSecretStore, emptySecretStore),
+            ConfigProvider.layer(
+              ConfigProvider.fromEnv({ env: { ELEVENLABS_API_KEY: "test-key" } }),
+            ),
+          ),
+        ),
+      ),
+    ),
+    Layer.provideMerge(
       Layer.mergeAll(
         SqliteClient.layerMemory(),
         ServerConfig.layerTest(process.cwd(), { prefix: "agent-voice-reply-test-" }),
-        ServerSettingsModule.layerTest(),
-        Layer.succeed(HttpClient.HttpClient, stubHttpClient),
-        ConfigProvider.layer(ConfigProvider.fromEnv({ env: { ELEVENLABS_API_KEY: "test-key" } })),
+        // The pre-OpenRouter default is ElevenLabs; the stub above answers as it.
+        ServerSettingsModule.layerTest({ voice: { tts: { provider: "elevenlabs" } } }),
       ),
     ),
     Layer.provideMerge(NodeServices.layer),

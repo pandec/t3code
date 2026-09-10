@@ -990,6 +990,18 @@ export function createServerEnvironmentAtoms<R, E>(
     tag: WS_METHODS.openRouterCreditsRead,
     staleTimeMs: 60_000,
   });
+  const ttsStatus = createEnvironmentRpcQueryAtomFamily(runtime, {
+    label: "environment-data:server:tts-status",
+    tag: WS_METHODS.ttsStatus,
+    staleTimeMs: 60_000,
+  });
+  // Vendor catalogs change rarely; a long staleness keeps the settings page
+  // from re-fetching models and voices on every visit.
+  const ttsCatalog = createEnvironmentRpcQueryAtomFamily(runtime, {
+    label: "environment-data:server:tts-catalog",
+    tag: WS_METHODS.ttsCatalog,
+    staleTimeMs: 10 * 60_000,
+  });
   const welcomeStateFamily = Atom.family((environmentId: EnvironmentId) =>
     runtime
       .atom(serverWelcomeStateChanges(environmentId), { initialValue: null })
@@ -1093,6 +1105,8 @@ export function createServerEnvironmentAtoms<R, E>(
       staleTimeMs: 30_000,
     }),
     openRouterCredits,
+    ttsStatus,
+    ttsCatalog,
     resourceTelemetry: createEnvironmentRpcSubscriptionAtomFamily(runtime, {
       label: "environment-data:server:resource-telemetry",
       tag: WS_METHODS.subscribeResourceTelemetry,
@@ -1163,6 +1177,25 @@ export function createServerEnvironmentAtoms<R, E>(
       // pre-configure state until something remounted them.
       onSuccess: ({ environmentId }, registry) =>
         Effect.sync(() => registry.refresh(openRouterCredits({ environmentId, input: {} }))),
+    }),
+    configureTtsOpenRouter: createEnvironmentRpcCommand(runtime, {
+      label: "environment-data:server:configure-tts-openrouter",
+      tag: WS_METHODS.ttsConfigureOpenRouter,
+      concurrency: {
+        mode: "singleFlight",
+        key: ({ environmentId, input }) => `${environmentId}:${input.apiKey}`,
+      },
+      // The status and OpenRouter catalog both depend on the stored key.
+      onSuccess: ({ environmentId }, registry) =>
+        Effect.sync(() => {
+          registry.refresh(ttsStatus({ environmentId, input: {} }));
+          registry.refresh(ttsCatalog({ environmentId, input: { provider: "openrouter" } }));
+        }),
+    }),
+    testTts: createEnvironmentRpcCommand(runtime, {
+      label: "environment-data:server:test-tts",
+      tag: WS_METHODS.ttsTest,
+      concurrency: { mode: "parallel" },
     }),
     readProviderUsageThreadAccount: createEnvironmentRpcCommand(runtime, {
       label: "environment-data:server:read-provider-usage-thread-account",

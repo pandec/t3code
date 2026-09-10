@@ -738,28 +738,48 @@ describe("ClientSettings extras", () => {
 });
 
 describe("ServerSettings.voice", () => {
-  it("defaults to unset, so the server keeps its env/default resolution", () => {
+  const unsetProfile = { provider: "openrouter", modelId: "", voiceId: "", instructions: "" };
+
+  it("defaults to an unset OpenRouter profile, so the server keeps its env/default resolution", () => {
     expect(DEFAULT_SERVER_SETTINGS.voice).toEqual({
-      ttsModelId: "",
-      ttsVoiceId: "",
+      tts: unsetProfile,
+      agentReplyTts: null,
       enableAgentVoiceReplies: true,
     });
     expect(decodeServerSettings({}).voice).toEqual({
-      ttsModelId: "",
-      ttsVoiceId: "",
+      tts: unsetProfile,
+      agentReplyTts: null,
       enableAgentVoiceReplies: true,
     });
   });
 
-  it("trims values in both the settings and the patch", () => {
-    expect(decodeServerSettings({ voice: { ttsModelId: "  eleven_v3  " } }).voice).toEqual({
-      ttsModelId: "eleven_v3",
-      ttsVoiceId: "",
+  it("fills a partial profile and trims values in both the settings and the patch", () => {
+    expect(
+      decodeServerSettings({
+        voice: { tts: { provider: "elevenlabs", modelId: "  eleven_v3  " } },
+      }).voice,
+    ).toEqual({
+      tts: { ...unsetProfile, provider: "elevenlabs", modelId: "eleven_v3" },
+      agentReplyTts: null,
       enableAgentVoiceReplies: true,
     });
-    expect(decodeServerSettingsPatch({ voice: { ttsVoiceId: "  abc  " } })).toEqual({
-      voice: { ttsVoiceId: "abc" },
+    expect(
+      decodeServerSettings({ voice: { agentReplyTts: { voiceId: " Puck " } } }).voice.agentReplyTts,
+    ).toEqual({ ...unsetProfile, voiceId: "Puck" });
+    expect(decodeServerSettingsPatch({ voice: { tts: { voiceId: "  abc  " } } })).toEqual({
+      voice: { tts: { voiceId: "abc" } },
     });
+    expect(decodeServerSettingsPatch({ voice: { agentReplyTts: null } })).toEqual({
+      voice: { agentReplyTts: null },
+    });
+  });
+
+  it("ignores the pre-OpenRouter model and voice keys", () => {
+    // The server folds these into the ElevenLabs profile on load; the schema
+    // itself must not reject a file that still carries them.
+    expect(
+      decodeServerSettings({ voice: { ttsModelId: "eleven_v3", ttsVoiceId: "abc" } }).voice.tts,
+    ).toEqual(unsetProfile);
   });
 
   it("round-trips the agent voice replies toggle through the patch", () => {

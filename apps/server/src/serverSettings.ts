@@ -289,6 +289,47 @@ const decodePersistedOptionalProviderSettingsJsonExit = Schema.decodeUnknownExit
   fromLenientJson(PersistedOptionalProviderSettings),
 );
 
+/**
+ * The pre-OpenRouter voice settings named an ElevenLabs model and voice
+ * directly. Fold them into the ElevenLabs profile so an install that chose
+ * a voice keeps it (and keeps using ElevenLabs) after the upgrade; the
+ * file converges on the next write.
+ */
+const LegacyVoiceSettings = Schema.Struct({
+  voice: Schema.optionalKey(
+    Schema.Struct({
+      ttsModelId: Schema.optionalKey(Schema.String),
+      ttsVoiceId: Schema.optionalKey(Schema.String),
+    }),
+  ),
+});
+const decodeLegacyVoiceSettingsJsonExit = Schema.decodeUnknownExit(
+  fromLenientJson(LegacyVoiceSettings),
+);
+
+export function foldLegacyVoiceSettings(
+  settings: ServerSettings,
+  legacy: typeof LegacyVoiceSettings.Type,
+): ServerSettings {
+  const modelId = legacy.voice?.ttsModelId?.trim() ?? "";
+  const voiceId = legacy.voice?.ttsVoiceId?.trim() ?? "";
+  if (modelId.length === 0 && voiceId.length === 0) {
+    return settings;
+  }
+  const tts = settings.voice.tts;
+  // A profile the user already filled in under the new shape wins.
+  if (tts.modelId.length > 0 || tts.voiceId.length > 0) {
+    return settings;
+  }
+  return {
+    ...settings,
+    voice: {
+      ...settings.voice,
+      tts: { ...tts, provider: "elevenlabs", modelId, voiceId },
+    },
+  };
+}
+
 function restoreUsedProviders(
   settings: ServerSettings,
   persisted: typeof PersistedOptionalProviderSettings.Type,
@@ -484,6 +525,10 @@ const make = Effect.gen(function* () {
         }
       } else {
         settings = decoded.value;
+        const legacyVoice = decodeLegacyVoiceSettingsJsonExit(raw);
+        if (legacyVoice._tag === "Success") {
+          settings = foldLegacyVoiceSettings(settings, legacyVoice.value);
+        }
       }
     }
 

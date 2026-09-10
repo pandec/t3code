@@ -156,6 +156,7 @@ import * as TurnStartBootstrap from "./orchestration/Services/TurnStartBootstrap
 import * as VoiceTranscription from "./voice/VoiceTranscription.ts";
 import * as MessageSpeech from "./voice/MessageSpeech.ts";
 import * as AgentVoiceReply from "./voice/AgentVoiceReply.ts";
+import * as TtsService from "./voice/TtsService.ts";
 import { voiceHttpApiLayer } from "./voice/http.ts";
 import * as MessageSummary from "./messageArtifacts/MessageSummary.ts";
 import { messageArtifactsHttpApiLayer } from "./messageArtifacts/http.ts";
@@ -529,6 +530,10 @@ const RuntimeCoreDependenciesLive = Layer.mergeAll(
         ProviderAuthServiceLive,
       ),
     ),
+    // One speech-provider client below message listening, agent voice
+    // replies, the provider service's voice capability check, and the
+    // settings RPCs, so a stored OpenRouter key is seen by all of them.
+    Layer.provideMerge(TtsService.layer.pipe(Layer.provide(ServerSecretStore.layer))),
     // Shared bootstrap program for thread.turn.start commands, consumed by both
     // the WebSocket dispatch path and the HTTP dispatch route. Its git, setup
     // script, and orchestration engine dependencies are provided below.

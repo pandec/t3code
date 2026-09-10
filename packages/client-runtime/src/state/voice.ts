@@ -30,7 +30,7 @@ export const messageSpeechFailureDescription = (
     case "message_unavailable":
       return "This message changed before audio was ready. Try again.";
     case "provider_quota_exceeded":
-      return "The server's ElevenLabs character quota is used up. Add credits or wait for the monthly reset.";
+      return "The server's speech provider is out of quota or credits. Top it up or wait for the reset.";
     default:
       return "T3 Code could not prepare audio for this message. Try again in a moment.";
   }
