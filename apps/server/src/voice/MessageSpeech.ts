@@ -6,6 +6,7 @@ import {
   MessageSpeechFailureReason,
   type MessageSpeechAttachment,
   type MessageSpeechSynthesisRequest,
+  type ModelSelection,
 } from "@t3tools/contracts";
 import * as Context from "effect/Context";
 import * as DateTime from "effect/DateTime";
@@ -37,6 +38,22 @@ export {
 } from "./ttsProfile.ts";
 
 const SPEECH_SCRIPT_RECIPE_VERSION = 2;
+
+export function messageSpeechRecipeHash(input: {
+  readonly modelSelection: ModelSelection;
+  readonly instructions?: string | undefined;
+}): string {
+  return NodeCrypto.createHash("sha256")
+    .update(
+      JSON.stringify({
+        version: SPEECH_SCRIPT_RECIPE_VERSION,
+        modelSelection: input.modelSelection,
+        instructions: input.instructions?.trim() || null,
+      }),
+      "utf8",
+    )
+    .digest("hex");
+}
 
 interface MessageSpeechCacheRow {
   readonly messageId: string;
@@ -236,16 +253,10 @@ export const layer = Layer.effect(
       }
 
       const sourceTextHash = messageArtifactTextHash(sourceText);
-      const scriptRecipeHash = NodeCrypto.createHash("sha256")
-        .update(
-          // @effect-diagnostics-next-line preferSchemaOverJson:off
-          JSON.stringify({
-            version: SPEECH_SCRIPT_RECIPE_VERSION,
-            modelSelection: settings.textGenerationModelSelection,
-          }),
-          "utf8",
-        )
-        .digest("hex");
+      const scriptRecipeHash = messageSpeechRecipeHash({
+        modelSelection: settings.textGenerationModelSelection,
+        instructions: profile.instructions,
+      });
       const cachedRows = yield* findCachedSpeech(request.messageId);
       const cached = cachedRows[0];
       // An agent recording is event-owned: a projection replay rebuilds its

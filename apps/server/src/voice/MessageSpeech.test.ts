@@ -1,4 +1,4 @@
-import { MESSAGE_SPEECH_MAX_SOURCE_CHARS } from "@t3tools/contracts";
+import { DEFAULT_SERVER_SETTINGS, MESSAGE_SPEECH_MAX_SOURCE_CHARS } from "@t3tools/contracts";
 import { it as effectIt } from "@effect/vitest";
 import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
@@ -14,6 +14,7 @@ import {
   isMessageSpeechCacheReusable,
   isMessageSpeechSourceEligible,
   makeMessageSpeechLockCoordinator,
+  messageSpeechRecipeHash,
   resolveMessageSpeechVoiceSetting,
 } from "./MessageSpeech.ts";
 
@@ -150,6 +151,26 @@ describe("TTS model and voice resolution", () => {
 });
 
 describe("message speech cache identity", () => {
+  it("invalidates cached audio when style instructions change", () => {
+    const modelSelection = DEFAULT_SERVER_SETTINGS.textGenerationModelSelection;
+    const calm = messageSpeechRecipeHash({ modelSelection, instructions: "calm" });
+    const energetic = messageSpeechRecipeHash({ modelSelection, instructions: "energetic" });
+    expect(energetic).not.toBe(calm);
+    expect(messageSpeechRecipeHash({ modelSelection, instructions: " calm " })).toBe(calm);
+    expect(messageSpeechRecipeHash({ modelSelection, instructions: " " })).toBe(
+      messageSpeechRecipeHash({ modelSelection }),
+    );
+    expect(
+      isMessageSpeechCacheReusable({
+        cache: { ...cache, scriptRecipeHash: calm },
+        sourceTextHash: "hash",
+        scriptRecipeHash: energetic,
+        voiceId: "voice",
+        ttsModel: "model",
+      }),
+    ).toBe(false);
+  });
+
   const cache = {
     sourceTextHash: "hash",
     scriptRecipeHash: "recipe",
