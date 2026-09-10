@@ -420,6 +420,10 @@ const ATOMIC_SETTINGS_KEYS: ReadonlySet<string> = new Set([
 ]);
 
 // Preserve both enabled states because provider history cannot recover a new opt-in.
+// The speech provider is always written too: `foldLegacyVoiceSettings` treats a
+// file without `voice.tts` as pre-OpenRouter, so stripping the default provider
+// would refold a saved OpenRouter profile (or a fresh install) to ElevenLabs on
+// the next load.
 const PERSISTED_SERVER_SETTINGS_DEFAULTS = {
   ...DEFAULT_SERVER_SETTINGS,
   providers: {
@@ -427,6 +431,10 @@ const PERSISTED_SERVER_SETTINGS_DEFAULTS = {
     cursor: { ...DEFAULT_SERVER_SETTINGS.providers.cursor, enabled: undefined },
     grok: { ...DEFAULT_SERVER_SETTINGS.providers.grok, enabled: undefined },
     opencode: { ...DEFAULT_SERVER_SETTINGS.providers.opencode, enabled: undefined },
+  },
+  voice: {
+    ...DEFAULT_SERVER_SETTINGS.voice,
+    tts: { ...DEFAULT_SERVER_SETTINGS.voice.tts, provider: undefined },
   },
 };
 

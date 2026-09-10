@@ -659,6 +659,48 @@ it.layer(NodeServices.layer)("server settings", (it) => {
     }).pipe(Effect.provide(makeServerSettingsLayer())),
   );
 
+  it.effect("keeps a saved OpenRouter profile with blank ids across a reload", () =>
+    Effect.gen(function* () {
+      const serverConfig = yield* ServerConfig.ServerConfig;
+      const fileSystem = yield* FileSystem.FileSystem;
+      const serverSettings = yield* ServerSettingsModule.ServerSettingsService;
+      yield* fileSystem.writeFileString(
+        serverConfig.settingsPath,
+        '{"voice":{"ttsModelId":"eleven_v3","ttsVoiceId":"voice-a"}}',
+      );
+      assert.equal((yield* serverSettings.getSettings).voice.tts.provider, "elevenlabs");
+
+      // The Reset button writes exactly this: the default provider with every
+      // other field blank. Nothing here differs from the schema defaults, so
+      // the provider must survive default stripping to mark the new shape.
+      yield* serverSettings.updateSettings({
+        voice: { tts: { provider: "openrouter", modelId: "", voiceId: "", instructions: "" } },
+      });
+      const raw = yield* fileSystem.readFileString(serverConfig.settingsPath);
+      // @effect-diagnostics-next-line preferSchemaOverJson:off
+      assert.deepEqual(JSON.parse(raw).voice, { tts: { provider: "openrouter" } });
+
+      const reloaded = yield* ServerSettingsModule.ServerSettingsService.pipe(
+        Effect.flatMap((service) => service.getSettings),
+        Effect.provide(
+          Layer.fresh(ServerSettingsModule.layer).pipe(
+            Layer.provide(ServerSecretStore.layer),
+            Layer.provideMerge(Layer.fresh(SqlitePersistenceMemory)),
+            Layer.provideMerge(
+              Layer.fresh(ServerConfig.layerTest(process.cwd(), serverConfig.baseDir)),
+            ),
+          ),
+        ),
+      );
+      assert.deepEqual(reloaded.voice.tts, {
+        provider: "openrouter",
+        modelId: "",
+        voiceId: "",
+        instructions: "",
+      });
+    }).pipe(Effect.provide(makeServerSettingsLayer())),
+  );
+
   it.effect("keeps a profile already saved under the new shape over the legacy keys", () =>
     Effect.gen(function* () {
       const serverConfig = yield* ServerConfig.ServerConfig;
@@ -1150,6 +1192,7 @@ it.layer(NodeServices.layer)("server settings", (it) => {
           },
         },
         automaticGitFetchInterval: 10_000,
+        voice: { tts: { provider: "openrouter" } },
       });
     }).pipe(Effect.provide(makeServerSettingsLayer())),
   );
