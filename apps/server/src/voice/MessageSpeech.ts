@@ -136,7 +136,7 @@ export class MessageSpeechError extends Schema.TaggedError<MessageSpeechError>()
 export class MessageSpeech extends Context.Service<
   MessageSpeech,
   {
-    /** Whether any speech provider currently holds a key. Read per call. */
+    /** Whether the listening profile's provider currently holds a key. Read per call. */
     readonly available: Effect.Effect<boolean>;
     readonly synthesize: (
       request: MessageSpeechSynthesisRequest,

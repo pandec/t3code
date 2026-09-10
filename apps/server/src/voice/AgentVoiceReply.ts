@@ -52,7 +52,7 @@ export interface StagedAgentVoiceReply {
  * two recordings.
  */
 export interface AgentVoiceReplyShape {
-  /** Whether any speech provider currently holds a key. Read per call. */
+  /** Whether the agent-reply profile's provider currently holds a key. Read per call. */
   readonly available: Effect.Effect<boolean>;
   readonly stage: (input: {
     readonly threadId: ThreadId;
@@ -79,14 +79,15 @@ export class AgentVoiceReply extends Context.Service<AgentVoiceReply, AgentVoice
 /**
  * Joins two MP3 segments from the same synthesis pipeline into one playable
  * stream. ElevenLabs returns CBR 44.1kHz mono and OpenRouter's MP3 output is
- * CBR as well, so bare frame streams concatenate cleanly — but each segment
- * can lead with an ID3v2 tag and a Xing/Info header frame that declares that
- * segment's frame count. Both are dropped from both sides (a no-op on an
- * already merged left side): a header frame surviving into the merge caps the
- * reported duration at the first segment, and without one, CBR players derive
- * the correct duration from the file size. Segments from different providers
- * within one turn would mix sample rates; the profile is read per call, so a
- * settings change mid-turn is the only way that happens.
+ * assumed CBR too (not checked per model), so bare frame streams concatenate
+ * cleanly. Each segment can lead with an ID3v2 tag and a Xing/Info header
+ * frame that declares that segment's frame count. Both are dropped from both
+ * sides (a no-op on an already merged left side): a header frame surviving
+ * into the merge caps the reported duration at the first segment, and without
+ * one, CBR players derive the correct duration from the file size. Segments
+ * from different providers within one turn would mix sample rates; the
+ * profile is read per call, so a settings change mid-turn is the only way
+ * that happens.
  */
 export function appendSpeechAudio(previous: Uint8Array, next: Uint8Array): Uint8Array {
   const left = stripLeadingXingFrame(stripLeadingId3v2Tag(previous));

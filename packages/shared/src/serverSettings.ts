@@ -228,8 +228,8 @@ export function applyServerSettingsPatch(
         : undefined;
   const next = deepMerge(current, patchForMerge);
   // Voice merges one field at a time, except the agent-reply override, whose
-  // `null` removes it. A
-  // partial override patch seeds the missing fields from the default profile.
+  // `null` removes it. A partial override patch seeds the missing fields from
+  // the default profile; a provider change clears the old provider's ids.
   const nextVoice =
     voicePatch === undefined
       ? current.voice

@@ -2709,7 +2709,8 @@ const makeWsRpcLayer = (
                 })),
               );
               // A speech key stored or removed at runtime flips
-              // `textToSpeech.available`, which only travels in the snapshot.
+              // `textToSpeech.available` without a settings change, so it needs
+              // a fresh snapshot rather than a settingsUpdated event.
               const speechAvailabilityUpdates = ttsService.configuredChanges.pipe(
                 Stream.mapEffect(() => loadServerConfig({ usageLimitsCommand })),
                 Stream.map((snapshot) => ({
