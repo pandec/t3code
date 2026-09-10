@@ -183,6 +183,21 @@ describe("stage", () => {
     Layer.provideMerge(NodeServices.layer),
   );
 
+  effectIt.effect("checks the selected agent profile before synthesis", () =>
+    Effect.gen(function* () {
+      const service = yield* AgentVoiceReply;
+      const settings = yield* ServerSettingsModule.ServerSettingsService;
+      expect(yield* service.available).toBe(true);
+      yield* settings.updateSettings({ voice: { agentReplyTts: { provider: "openrouter" } } });
+      expect(yield* service.available).toBe(false);
+      expect(
+        yield* service.stage({ threadId, script: "Unavailable." }).pipe(Effect.result),
+      ).toMatchObject({ _tag: "Failure", failure: { reason: "unavailable" } });
+      yield* settings.updateSettings({ voice: { agentReplyTts: null } });
+      expect(yield* service.available).toBe(true);
+    }).pipe(Effect.provide(TestLayer)),
+  );
+
   effectIt.effect("appends same-turn calls into one recording, replaces on a newer turn", () =>
     Effect.gen(function* () {
       const sql = yield* SqlClient.SqlClient;

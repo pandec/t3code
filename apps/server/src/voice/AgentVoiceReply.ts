@@ -222,14 +222,13 @@ export const layer = Layer.effect(
 
     const stage: AgentVoiceReplyShape["stage"] = Effect.fn("AgentVoiceReply.stage")(
       function* (input) {
-        if (!(yield* tts.anyConfigured)) {
-          return yield* new AgentVoiceReplyError({ reason: "unavailable" });
-        }
-
         const settings = yield* serverSettings.getSettings.pipe(
           Effect.mapError(() => new AgentVoiceReplyError({ reason: "storage_failed" })),
         );
         const profile = resolveAgentReplyTtsProfile(settings.voice, tts.environmentDefaults);
+        if (!(yield* tts.isConfigured(profile.provider).pipe(Effect.orElseSucceed(() => false)))) {
+          return yield* new AgentVoiceReplyError({ reason: "unavailable" });
+        }
         // Vendor-qualified so a persisted recording names where it came from.
         const ttsModel = `${profile.provider}:${profile.modelId}`;
         const voiceId = profile.voiceId;
@@ -365,8 +364,17 @@ export const layer = Layer.effect(
     const discardEntry = (entry: StagedAgentVoiceReply | undefined) =>
       entry ? removeAudioFile(entry.attachment.speechId) : Effect.void;
 
+    const available = serverSettings.getSettings.pipe(
+      Effect.flatMap((settings) =>
+        tts.isConfigured(
+          resolveAgentReplyTtsProfile(settings.voice, tts.environmentDefaults).provider,
+        ),
+      ),
+      Effect.orElseSucceed(() => false),
+    );
+
     return AgentVoiceReply.of({
-      available: tts.anyConfigured,
+      available,
       stage,
       claimStagedForTurn: (threadId, turnId) =>
         takeMatching(threadId, (entry) => entry.turnId === turnId),

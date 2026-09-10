@@ -427,11 +427,18 @@ describe("server state projection", () => {
     const projected = applyServerConfigProjection(snapshot, {
       version: 1,
       type: "settingsUpdated",
-      payload: { settings },
+      payload: { settings, textToSpeech: { available: true, persistentJobs: true } },
     });
 
     const result = Option.getOrThrow(projected);
     expect(result.config.settings).toBe(settings);
+    expect(result.config.textToSpeech?.available).toBe(true);
+    const refreshed = applyServerConfigProjection(projected, {
+      version: 1,
+      type: "snapshot",
+      config: { ...CONFIG, textToSpeech: { available: false, persistentJobs: true } },
+    });
+    expect(Option.getOrThrow(refreshed).config.textToSpeech?.available).toBe(false);
     expect(result.latestEvent.type).toBe("settingsUpdated");
   });
 

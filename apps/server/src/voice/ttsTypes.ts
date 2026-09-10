@@ -8,7 +8,7 @@ import * as Schema from "effect/Schema";
  * problem. `detail` is safe to show to the user.
  */
 export class TtsError extends Schema.TaggedError<TtsError>()("TtsError", {
-  reason: Schema.Literals(["request_failed", "quota_exceeded", "empty_audio"]),
+  reason: Schema.Literals(["unavailable", "request_failed", "quota_exceeded", "empty_audio"]),
   detail: Schema.String,
 }) {}
 
@@ -21,5 +21,9 @@ export interface SynthesizedSpeech {
 /** The speech failure reason a TTS error maps to, shared by both synthesis paths. */
 export const speechFailureReasonFor = (
   error: TtsError,
-): "provider_failed" | "provider_quota_exceeded" =>
-  error.reason === "quota_exceeded" ? "provider_quota_exceeded" : "provider_failed";
+): "unavailable" | "provider_failed" | "provider_quota_exceeded" =>
+  error.reason === "unavailable"
+    ? "unavailable"
+    : error.reason === "quota_exceeded"
+      ? "provider_quota_exceeded"
+      : "provider_failed";

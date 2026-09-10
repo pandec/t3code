@@ -493,8 +493,8 @@ export function VoiceSettingsSection() {
   const updateSettings = useUpdatePrimarySettings();
   const primaryEnvironmentId = usePrimaryEnvironmentId();
   const status = useTtsStatus(primaryEnvironmentId);
-  const anyConfigured =
-    status.data === null || status.data.elevenlabs.configured || status.data.openrouter.configured;
+  const providerConfigured = (provider: TtsProvider) =>
+    status.data === null || status.data[provider].configured;
 
   const defaultProfile = settings.voice.tts;
   const override = settings.voice.agentReplyTts;
@@ -538,7 +538,7 @@ export function VoiceSettingsSection() {
           <TestButton
             environmentId={primaryEnvironmentId}
             profile={defaultProfile}
-            disabled={!anyConfigured}
+            disabled={!providerConfigured(defaultProfile.provider)}
           />
         }
       >
@@ -601,7 +601,7 @@ export function VoiceSettingsSection() {
               <TestButton
                 environmentId={primaryEnvironmentId}
                 profile={override}
-                disabled={!anyConfigured}
+                disabled={!providerConfigured(override.provider)}
               />
             ) : null}
             <Switch

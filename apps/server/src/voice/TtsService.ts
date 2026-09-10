@@ -48,8 +48,6 @@ export interface TtsServiceShape {
   readonly environmentDefaults: TtsEnvironmentDefaults;
   /** Whether the named provider currently has a usable key. */
   readonly isConfigured: (provider: TtsProvider) => Effect.Effect<boolean>;
-  /** Whether any provider is configured: gates the listen and voice_reply features. */
-  readonly anyConfigured: Effect.Effect<boolean>;
   /** Re-emits after a key is stored or removed, so config snapshots can refresh. */
   readonly configuredChanges: Stream.Stream<void>;
   readonly status: Effect.Effect<TtsStatusResult>;
@@ -75,7 +73,7 @@ export class TtsService extends Context.Service<TtsService, TtsServiceShape>()(
 
 const unavailableError = (provider: TtsProvider) =>
   new TtsError({
-    reason: "request_failed",
+    reason: "unavailable",
     detail: `${TTS_PROVIDER_LABELS[provider]} is not configured on this server.`,
   });
 
@@ -129,11 +127,6 @@ export const layer = Layer.effect(
 
     const isConfigured = (provider: TtsProvider) =>
       providerStatus(provider).pipe(Effect.map((status) => status.configured));
-
-    const anyConfigured = Effect.gen(function* () {
-      if (Option.isSome(elevenLabsKey)) return true;
-      return yield* isConfigured("openrouter");
-    });
 
     const status: Effect.Effect<TtsStatusResult> = Effect.gen(function* () {
       return {
@@ -241,7 +234,11 @@ export const layer = Layer.effect(
           (error) =>
             new TtsRpcError({
               reason:
-                error.reason === "quota_exceeded" ? "provider_quota_exceeded" : "provider_failed",
+                error.reason === "unavailable"
+                  ? "unavailable"
+                  : error.reason === "quota_exceeded"
+                    ? "provider_quota_exceeded"
+                    : "provider_failed",
               detail: error.detail,
             }),
         ),
@@ -258,7 +255,6 @@ export const layer = Layer.effect(
     return TtsService.of({
       environmentDefaults,
       isConfigured,
-      anyConfigured,
       configuredChanges: Stream.fromPubSub(configuredChanges),
       status,
       catalog,
@@ -278,7 +274,6 @@ export const layerNoop = Layer.succeed(
       openrouter: { modelId: "google/gemini-3.1-flash-tts-preview", voiceId: "Kore" },
     },
     isConfigured: () => Effect.succeed(false),
-    anyConfigured: Effect.succeed(false),
     configuredChanges: Stream.empty,
     status: Effect.succeed({
       elevenlabs: { configured: false },

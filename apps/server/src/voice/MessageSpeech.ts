@@ -219,10 +219,6 @@ export const layer = Layer.effect(
     const synthesizeUnlocked = Effect.fn("MessageSpeech.synthesizeUnlocked")(function* (
       request: MessageSpeechSynthesisRequest,
     ) {
-      if (!(yield* tts.anyConfigured)) {
-        return yield* new MessageSpeechError({ reason: "unavailable" });
-      }
-
       const messageRows = yield* findMessage(request.messageId);
       const message = messageRows[0];
       if (!message) {
@@ -235,6 +231,9 @@ export const layer = Layer.effect(
         Effect.mapError(() => new MessageSpeechError({ reason: "script_failed" })),
       );
       const profile = resolveListeningTtsProfile(settings.voice, tts.environmentDefaults);
+      if (!(yield* tts.isConfigured(profile.provider).pipe(Effect.orElseSucceed(() => false)))) {
+        return yield* new MessageSpeechError({ reason: "unavailable" });
+      }
       // The persisted attachment records the vendor with the model so a cache
       // hit for one provider's model id never serves another provider's audio.
       const ttsModel = `${profile.provider}:${profile.modelId}`;
@@ -361,8 +360,17 @@ export const layer = Layer.effect(
       } satisfies MessageSpeechAttachment;
     });
 
+    const available = serverSettings.getSettings.pipe(
+      Effect.flatMap((settings) =>
+        tts.isConfigured(
+          resolveListeningTtsProfile(settings.voice, tts.environmentDefaults).provider,
+        ),
+      ),
+      Effect.orElseSucceed(() => false),
+    );
+
     return MessageSpeech.of({
-      available: tts.anyConfigured,
+      available,
       synthesize: (request) =>
         synthesisLocks.withMessageLock(request.messageId, synthesizeUnlocked(request)),
       deleteAttachment: (speechId) => {

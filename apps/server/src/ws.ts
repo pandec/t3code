@@ -1023,7 +1023,7 @@ const makeWsRpcLayer = (
               available: (process.env.ELEVENLABS_API_KEY?.trim().length ?? 0) > 0,
             },
             textToSpeech: {
-              available: yield* ttsService.anyConfigured,
+              available: yield* ttsService.isConfigured(settings.voice.tts.provider),
               persistentJobs: true,
             },
             shellResumeCompletionMarker: true,
@@ -2694,11 +2694,18 @@ const makeWsRpcLayer = (
                     )
                   : Stream.empty;
               const settingsUpdates = serverSettings.streamChanges.pipe(
-                Stream.map((settings) => ServerSettings.redactServerSettingsForClient(settings)),
-                Stream.map((settings) => ({
+                Stream.mapEffect((settings) =>
+                  ttsService.isConfigured(settings.voice.tts.provider).pipe(
+                    Effect.map((available) => ({
+                      settings: ServerSettings.redactServerSettingsForClient(settings),
+                      textToSpeech: { available, persistentJobs: true },
+                    })),
+                  ),
+                ),
+                Stream.map((payload) => ({
                   version: 1 as const,
                   type: "settingsUpdated" as const,
-                  payload: { settings },
+                  payload,
                 })),
               );
               // A speech key stored or removed at runtime flips
