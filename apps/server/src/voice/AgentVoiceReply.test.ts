@@ -54,6 +54,18 @@ const headerFrame = (fourcc: string): Uint8Array => {
   return frame;
 };
 
+// A 192-byte MPEG2 layer III frame (64kbps, 24kHz, mono). OpenRouter
+// providers commonly return this lower sample-rate shape.
+const mpeg2HeaderFrame = (fourcc: string): Uint8Array => {
+  const frame = new Uint8Array(192);
+  frame.set([0xff, 0xf3, 0x84, 0xc0]);
+  frame.set(
+    [...fourcc].map((char) => char.charCodeAt(0)),
+    13,
+  );
+  return frame;
+};
+
 const frames = (...bytes: number[]) => Uint8Array.from(bytes);
 
 const concat = (...parts: Uint8Array[]) => {
@@ -94,6 +106,7 @@ describe("stripLeadingXingFrame", () => {
     const audio = frames(0xff, 0xfb, 0x90, 0x64, 0x01, 0x02);
     expect(stripLeadingXingFrame(concat(headerFrame("Info"), audio))).toEqual(audio);
     expect(stripLeadingXingFrame(concat(headerFrame("Xing"), audio))).toEqual(audio);
+    expect(stripLeadingXingFrame(concat(mpeg2HeaderFrame("Info"), audio))).toEqual(audio);
   });
 
   it("leaves plain audio frames and non-frame data unchanged", () => {
@@ -116,6 +129,12 @@ describe("appendSpeechAudio", () => {
 
     const merged = appendSpeechAudio(first, second);
     expect(merged).toEqual(frames(0x01, 0x02, 0x03, 0x04));
+
+    const mpeg2Merged = appendSpeechAudio(
+      concat(mpeg2HeaderFrame("Info"), frames(0x05, 0x06)),
+      concat(mpeg2HeaderFrame("Info"), frames(0x07, 0x08)),
+    );
+    expect(mpeg2Merged).toEqual(frames(0x05, 0x06, 0x07, 0x08));
     // Re-appending to an already merged stream is stable.
     expect(appendSpeechAudio(merged, second)).toEqual(frames(0x01, 0x02, 0x03, 0x04, 0x03, 0x04));
   });

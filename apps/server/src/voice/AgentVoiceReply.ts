@@ -98,21 +98,21 @@ export function appendSpeechAudio(previous: Uint8Array, next: Uint8Array): Uint8
 }
 
 /**
- * Drops a leading Xing/Info header frame. Only the shape this pipeline emits
- * is parsed — MPEG1 Layer III without CRC; anything else needs different
- * bitrate tables and fourcc offsets, so it is returned untouched rather than
- * guessed at. The fourcc sits right after the side info, whose size is fixed
- * per channel mode, so only that offset is probed — matching arbitrary audio
- * bytes by content alone could false-positive.
+ * Drops a leading Xing/Info frame from MPEG Layer III audio without CRC.
+ * Version-specific tables locate the frame boundary and side-info offset.
+ * Other layouts are left untouched rather than matched against audio bytes.
  */
 export function stripLeadingXingFrame(bytes: Uint8Array): Uint8Array {
   if (bytes.byteLength < 4 || bytes[0] !== 0xff || (bytes[1]! & 0xe0) !== 0xe0) {
     return bytes;
   }
-  const isMpeg1 = (bytes[1]! & 0x18) === 0x18;
+  const versionBits = bytes[1]! & 0x18;
+  const isMpeg1 = versionBits === 0x18;
+  const isMpeg2 = versionBits === 0x10;
+  const isMpeg25 = versionBits === 0;
   const isLayer3 = (bytes[1]! & 0x06) === 0x02;
   const hasCrc = (bytes[1]! & 0x01) === 0;
-  if (!isMpeg1 || !isLayer3 || hasCrc) {
+  if ((!isMpeg1 && !isMpeg2 && !isMpeg25) || !isLayer3 || hasCrc) {
     return bytes;
   }
   const bitrateIndex = (bytes[2]! >> 4) & 0x0f;
@@ -120,15 +120,24 @@ export function stripLeadingXingFrame(bytes: Uint8Array): Uint8Array {
   if (bitrateIndex === 0 || bitrateIndex === 0x0f || sampleRateIndex === 3) {
     return bytes;
   }
-  const bitrate = [0, 32, 40, 48, 56, 64, 80, 96, 112, 128, 160, 192, 224, 256, 320][bitrateIndex]!;
-  const sampleRate = [44100, 48000, 32000][sampleRateIndex]!;
+  const bitrateTable = isMpeg1
+    ? [0, 32, 40, 48, 56, 64, 80, 96, 112, 128, 160, 192, 224, 256, 320]
+    : [0, 8, 16, 24, 32, 40, 48, 56, 64, 80, 96, 112, 128, 144, 160];
+  const sampleRateTable = isMpeg1
+    ? [44100, 48000, 32000]
+    : isMpeg2
+      ? [22050, 24000, 16000]
+      : [11025, 12000, 8000];
+  const bitrate = bitrateTable[bitrateIndex]!;
+  const sampleRate = sampleRateTable[sampleRateIndex]!;
   const padding = (bytes[2]! >> 1) & 0x01;
-  const frameLength = Math.floor((144 * bitrate * 1000) / sampleRate) + padding;
+  const frameLength = Math.floor(((isMpeg1 ? 144 : 72) * bitrate * 1000) / sampleRate) + padding;
   if (frameLength > bytes.byteLength) {
     return bytes;
   }
   const isMono = (bytes[3]! & 0xc0) === 0xc0;
-  const fourccOffset = 4 + (isMono ? 17 : 32);
+  const sideInfoLength = isMpeg1 ? (isMono ? 17 : 32) : isMono ? 9 : 17;
+  const fourccOffset = 4 + sideInfoLength;
   const fourcc = String.fromCharCode(...bytes.subarray(fourccOffset, fourccOffset + 4));
   return fourcc === "Xing" || fourcc === "Info" ? bytes.subarray(frameLength) : bytes;
 }
