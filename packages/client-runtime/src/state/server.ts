@@ -983,9 +983,13 @@ export function createServerEnvironmentAtoms<R, E>(
       Atom.withLabel(`environment-data:server:providers:${environmentId}`),
     ),
   );
-  const ttsConfigurationAtom = Atom.family((environmentId: EnvironmentId) =>
-    Atom.make((get) => get(configValueAtom(environmentId))?.textToSpeech ?? null).pipe(
-      Atom.withLabel(`environment-data:server:tts-configuration:${environmentId}`),
+  // Availability alone, not the `textToSpeech` object: that object is rebuilt
+  // on every config event, and an identity-triggered refresh would refetch
+  // both vendor catalogs on each unrelated settings change while the voice
+  // section is mounted.
+  const ttsAvailabilityAtom = Atom.family((environmentId: EnvironmentId) =>
+    Atom.make((get) => get(configValueAtom(environmentId))?.textToSpeech?.available ?? null).pipe(
+      Atom.withLabel(`environment-data:server:tts-availability:${environmentId}`),
     ),
   );
   // OpenRouter caches its credits endpoint for about a minute and the
@@ -999,7 +1003,7 @@ export function createServerEnvironmentAtoms<R, E>(
     label: "environment-data:server:tts-status",
     tag: WS_METHODS.ttsStatus,
     staleTimeMs: 60_000,
-    refreshTrigger: ({ environmentId }) => ttsConfigurationAtom(environmentId),
+    refreshTrigger: ({ environmentId }) => ttsAvailabilityAtom(environmentId),
   });
   // Vendor catalogs change rarely; a long staleness keeps the settings page
   // from re-fetching models and voices on every visit.
@@ -1007,7 +1011,7 @@ export function createServerEnvironmentAtoms<R, E>(
     label: "environment-data:server:tts-catalog",
     tag: WS_METHODS.ttsCatalog,
     staleTimeMs: 10 * 60_000,
-    refreshTrigger: ({ environmentId }) => ttsConfigurationAtom(environmentId),
+    refreshTrigger: ({ environmentId }) => ttsAvailabilityAtom(environmentId),
   });
   const welcomeStateFamily = Atom.family((environmentId: EnvironmentId) =>
     runtime
