@@ -187,14 +187,26 @@ describe("recent archive project filter", () => {
   it.each([
     { recent: true, projectFilter: false },
     { recent: false, projectFilter: false },
-  ])("filters the full archive locally when the server cannot (%o)", (capabilities) => {
+  ])("contributes nothing when the server cannot filter (%o)", (capabilities) => {
     recentCalls.length = 0;
     const registry = AtomRegistry.make();
     const state = registry.get(makeFamily(capabilities)(filteredKey));
+    // Never the unbounded full-archive fallback for a filtered shelf.
     expect(recentCalls).toEqual([]);
-    expect(state.snapshots).toEqual([
-      { environmentId, threads: [thread("kept", inScope)], totalArchivedCount: 1 },
-    ]);
+    expect(state.snapshots).toEqual([{ environmentId, threads: [], totalArchivedCount: 0 }]);
+    registry.dispose();
+  });
+
+  it("answers an empty filter without asking the server", () => {
+    recentCalls.length = 0;
+    const registry = AtomRegistry.make();
+    const state = registry.get(
+      makeFamily({ recent: true, projectFilter: true })(
+        makeRecentArchivedThreadsKey([environmentId], 3, new Map([[environmentId, []]])),
+      ),
+    );
+    expect(recentCalls).toEqual([]);
+    expect(state.snapshots).toEqual([{ environmentId, threads: [], totalArchivedCount: 0 }]);
     registry.dispose();
   });
 

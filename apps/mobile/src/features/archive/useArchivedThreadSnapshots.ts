@@ -35,7 +35,13 @@ function recentArchivedThreadsAtom(
 ) {
   return orchestrationEnvironment.recentArchivedThreads({
     environmentId,
-    input: { limit, ...(projectIds === undefined ? {} : { projectIds }) },
+    // The family keys on JSON.stringify of this input. The subscriber arrives
+    // with the parsed (sorted) list and the invalidation refresh with the
+    // sidebar's raw one, so sort here or the refresh names an atom nobody reads.
+    input: {
+      limit,
+      ...(projectIds === undefined ? {} : { projectIds: [...projectIds].sort() }),
+    },
   });
 }
 

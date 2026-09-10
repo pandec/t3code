@@ -163,10 +163,22 @@ export function createRecentArchivedThreadSnapshotsAtomFamily<E>(options: {
           environmentId,
           get(options.getInvalidationSequenceAtom(environmentId)),
         );
-        const supportsRecent =
-          get(options.supportsRecentAtom(environmentId)) &&
-          (projectIds === undefined || get(options.supportsRecentProjectFilterAtom(environmentId)));
-        if (supportsRecent) {
+        if (projectIds !== undefined) {
+          // A filtered shelf only runs the bounded server query. An empty
+          // filter matches nothing by definition, and a server without the
+          // filter could only answer through the unbounded full-archive
+          // snapshot, which is exactly what an always-mounted shelf must not
+          // page over a remote link. Both contribute nothing.
+          if (
+            projectIds.length === 0 ||
+            !get(options.supportsRecentAtom(environmentId)) ||
+            !get(options.supportsRecentProjectFilterAtom(environmentId))
+          ) {
+            snapshots.push({ environmentId, threads: [], totalArchivedCount: 0 });
+            continue;
+          }
+        }
+        if (get(options.supportsRecentAtom(environmentId))) {
           const result = get(options.getRecentAtom(environmentId, visibleCount, projectIds));
           isLoading ||= result.waiting;
           const value = Option.getOrNull(AsyncResult.value(result));
@@ -181,20 +193,14 @@ export function createRecentArchivedThreadSnapshotsAtomFamily<E>(options: {
             error = "Failed to load recent archived threads.";
           }
         } else {
-          // The fallback snapshot is the whole archive (also the route for
-          // servers that can't filter), so the project filter applies here.
           const result = get(options.getFallbackAtom(environmentId));
           isLoading ||= result.waiting;
           const value = Option.getOrNull(AsyncResult.value(result));
           if (value !== null) {
-            const threads =
-              projectIds === undefined
-                ? value.threads
-                : value.threads.filter((thread) => projectIds.includes(thread.projectId));
             snapshots.push({
               environmentId,
-              threads,
-              totalArchivedCount: threads.length,
+              threads: value.threads,
+              totalArchivedCount: value.threads.length,
             });
           }
           if (error === null && result._tag === "Failure") {

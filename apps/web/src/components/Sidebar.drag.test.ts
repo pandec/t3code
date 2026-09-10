@@ -467,6 +467,20 @@ describe("sidebar drag projection", () => {
     expect(strategy({ ...args, index: 2 })?.y).toBe(24);
     expect(strategy({ ...args, index: 4 })?.y).toBe(24);
     expect(strategy({ ...args, index: 5 })?.y).toBe(24);
+
+    // Dragging the last pin out previews the divider at its drag height,
+    // since the drop leaves no pinned block for the rest label to sit under.
+    const emptied = layout(items, "p", "a");
+    emptied.rects[2] = { ...rests, height: 32, bottom: rests.top + 32 };
+    for (let index = 3; index < items.length; index += 1) {
+      const rect = emptied.rects[index]!;
+      emptied.rects[index] = { ...rect, top: rect.top + 32, bottom: rect.bottom + 32 };
+    }
+    // Header 24, divider 24: p lands after a, so a rises by its own row-less
+    // slot and the divider only by the pinned row it lost.
+    expect(strategy({ ...emptied, index: 2 })?.y).toBe(24 - 83);
+    expect(strategy({ ...emptied, index: 3 })?.y).toBe(24 + 24 - 32 - 83);
+    expect(strategy({ ...emptied, index: 4 })?.y).toBe(24 + 24 - 32);
   });
 
   it("scales the label space with the measured root scale", () => {

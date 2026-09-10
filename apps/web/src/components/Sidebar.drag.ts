@@ -202,10 +202,15 @@ export function createSidebarSortingStrategy(input: {
           ? cardHeight
           : slimHeight;
       const moved = item.kind === "thread" && item.key === active.key;
+      // The divider shows its rest label only above a pinned block; the drop
+      // that empties Pinned collapses it, so preview that rather than the
+      // measured height.
       const height =
         item.kind === "marker" &&
         (item.marker === "pinned-header" || item.marker === "pinned-divider")
-          ? Math.max(rect?.height ?? 0, labelHeight)
+          ? item.marker === "pinned-divider" && groups.pinned.length === 0
+            ? labelHeight
+            : Math.max(rect?.height ?? 0, labelHeight)
           : item.kind === "marker" && item.marker.endsWith("placeholder")
             ? slimHeight
             : moved
