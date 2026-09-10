@@ -65,6 +65,7 @@ const THREAD: OrchestrationThread = {
   runtimeMode: "full-access",
   interactionMode: "default",
   branch: "main",
+  pullRequests: [],
   worktreePath: null,
   latestTurn: null,
   completedTurnAssistantMessageIds: [],

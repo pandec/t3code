@@ -3,6 +3,7 @@ import {
   sortOlderThreadsForSidebar,
   threadIsOlder,
 } from "@t3tools/client-runtime/state/thread-older";
+import { threadPullRequestSearchTerms } from "@t3tools/shared/threadPullRequests";
 import {
   effectiveSnoozed,
   hasQueuedTurnStart,
@@ -637,6 +638,9 @@ export function buildThreadListV2Items(input: {
     if (
       query.length > 0 &&
       !thread.title.toLocaleLowerCase().includes(query) &&
+      !threadPullRequestSearchTerms(thread).some((term) =>
+        term.toLocaleLowerCase().includes(query),
+      ) &&
       input.matchedThreadKeys?.has(
         threadSearchMatchKey({
           environmentId: thread.environmentId,

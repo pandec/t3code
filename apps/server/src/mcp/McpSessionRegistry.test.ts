@@ -55,6 +55,31 @@ it.effect("stores only a token hash, resolves the bearer token, and revokes by t
   }),
 );
 
+it.effect("always grants pull-requests and gates the other toolkits on the request", () =>
+  Effect.gen(function* () {
+    const registry = yield* makeRegistry(() => 1_000);
+    const withPreview = yield* registry.issue({
+      threadId: ThreadId.make("thread-preview"),
+      providerInstanceId: ProviderInstanceId.make("codex"),
+      capabilities: new Set(["preview"] as const),
+    });
+    const withoutPreview = yield* registry.issue({
+      threadId: ThreadId.make("thread-no-preview"),
+      providerInstanceId: ProviderInstanceId.make("codex"),
+      capabilities: new Set(),
+    });
+    const capabilitiesOf = (issued: typeof withPreview) =>
+      registry
+        .resolve(issued.config.authorizationHeader.replace(/^Bearer\s+/, ""))
+        .pipe(Effect.map((scope) => [...(scope?.capabilities ?? [])].sort()));
+
+    expect(yield* capabilitiesOf(withPreview)).toEqual(["preview", "pull-requests"]);
+    expect([...withPreview.config.capabilities].sort()).toEqual(["preview", "pull-requests"]);
+    expect(yield* capabilitiesOf(withoutPreview)).toEqual(["pull-requests"]);
+    expect(withoutPreview.config.endpoint).toBe("http://127.0.0.1:43123/mcp/pull-requests");
+  }),
+);
+
 it.effect("builds MCP endpoints from the bound server host", () =>
   Effect.gen(function* () {
     const cases = [
@@ -83,6 +108,7 @@ it.effect("routes each capability combination to its own MCP endpoint", () =>
       [new Set(["preview", "voice"] as const), "http://127.0.0.1:43123/mcp"],
       [new Set(["preview"] as const), "http://127.0.0.1:43123/mcp/preview"],
       [new Set(["voice"] as const), "http://127.0.0.1:43123/mcp/voice"],
+      [new Set([] as const), "http://127.0.0.1:43123/mcp/pull-requests"],
     ] as const;
 
     for (const [capabilities, expectedEndpoint] of cases) {

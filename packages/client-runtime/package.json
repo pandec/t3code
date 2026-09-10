@@ -318,6 +318,10 @@
     "./testing/thread-status-parity": {
       "types": "./src/testing/threadStatusParity.ts",
       "default": "./src/testing/threadStatusParity.ts"
+    },
+    "./thread-pull-request-compatibility": {
+      "types": "./src/threadPullRequestCompatibility.ts",
+      "default": "./src/threadPullRequestCompatibility.ts"
     }
   },
   "scripts": {

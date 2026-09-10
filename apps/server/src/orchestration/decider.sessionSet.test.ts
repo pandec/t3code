@@ -30,6 +30,7 @@ function makeReadModel(session: OrchestrationSession | null): OrchestrationReadM
         interactionMode: "default",
         branch: null,
         worktreePath: null,
+        pullRequests: [],
         latestTurn: null,
         createdAt: NOW,
         updatedAt: NOW,

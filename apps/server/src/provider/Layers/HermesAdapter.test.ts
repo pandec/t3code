@@ -964,11 +964,13 @@ it.layer(hermesAdapterTestLayer)("HermesAdapter", (it) => {
       const [updatedSession] = yield* adapter.listSessions();
       assert.equal(updatedSession?.model, "default");
       const snapshot = yield* adapter.readThread(threadId);
+      // Each prompt carries the user text first; the trailing runtime
+      // instructions block is shared harness context, not turn content.
       expect(snapshot.turns).toMatchObject([
         {
           items: [
-            { prompt: [{ type: "text", text: "first prompt" }] },
-            { prompt: [{ type: "text", text: "steer prompt" }] },
+            { prompt: [{ type: "text", text: "first prompt" }, { type: "text" }] },
+            { prompt: [{ type: "text", text: "steer prompt" }, { type: "text" }] },
           ],
         },
       ]);

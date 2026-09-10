@@ -156,7 +156,7 @@ commands intentionally require a thread id so automation cannot act on an ambigu
 list and status summaries also include `backgroundLiveness`: `"working"` for native subagents or
 workflows, `"monitoring"` when only watch loops remain, and `null` when no native background work is
 known. Summaries also carry `settled` — `true` when the server has settled the thread, whether a
-person settled it or the server's automatic settlement (inactivity, merged or closed pull request)
+person settled it or the server's automatic settlement (inactivity, or every linked pull request merged or closed)
 did. `settledAt` is `null` when unsettled; automatic settlement stamps the last qualifying activity,
 while manual settlement stamps the settle moment. Settling is an inbox overlay like snooze and does
 not change the thread's turn `state`.

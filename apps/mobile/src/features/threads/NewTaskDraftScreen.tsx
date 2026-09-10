@@ -30,7 +30,6 @@ import {
   ComposerActionButton,
   ComposerInlineControl,
   ComposerToolbarRow,
-  ComposerToolbarScroller,
 } from "../../components/ComposerToolbar";
 import { AndroidScreenHeader } from "../../components/AndroidScreenHeader";
 import { ComposerAttachmentButton } from "../../components/ComposerAttachmentButton";
@@ -1299,7 +1298,7 @@ export function NewTaskDraftScreen(props: {
           accessibilityRole="button"
           className="px-3 py-2"
           disabled={isComposerInteractionLocked}
-          onPress={settingsSheetPresentation.open}
+          onPress={openSettings}
         >
           <Text className="text-xs text-foreground">Model unavailable. Open model settings.</Text>
         </Pressable>
@@ -1370,21 +1369,23 @@ export function NewTaskDraftScreen(props: {
                     onPickFiles={handlePickFiles}
                     onOverlayVisibilityChange={handleAttachmentOverlayVisibilityChange}
                   />
-                  <ComposerToolbarScroller align="end" contentPaddingRight={0} fadeSurface="sheet">
-                    <ComposerInlineControl
-                      accessibilityLabel="Model and reasoning settings"
-                      disabled={isComposerInteractionLocked}
-                      emphasized
-                      iconNode={
-                        <ProviderIcon
-                          provider={flow.selectedModelOption?.providerDriver}
-                          size={16}
-                        />
-                      }
-                      label={flow.selectedModelOption?.label ?? "Choose model"}
-                      maxWidth={152}
-                      onPress={openSettings}
-                    />
+                  <View className="min-w-0 flex-1 flex-row items-center justify-end gap-2">
+                    <View className="min-w-0 shrink">
+                      <ComposerInlineControl
+                        accessibilityLabel="Model and reasoning settings"
+                        disabled={isComposerInteractionLocked}
+                        emphasized
+                        iconNode={
+                          <ProviderIcon
+                            provider={flow.selectedModelOption?.providerDriver}
+                            size={16}
+                          />
+                        }
+                        label={flow.selectedModelOption?.label ?? "Choose model"}
+                        maxWidth="100%"
+                        onPress={openSettings}
+                      />
+                    </View>
                     {flow.planModeEnabled ? (
                       <ComposerInlineControl
                         accessibilityHint={`Switches to ${flow.interactionMode === "plan" ? "Build" : "Plan"} mode`}
@@ -1405,7 +1406,7 @@ export function NewTaskDraftScreen(props: {
                         showChevron={false}
                       />
                     ) : null}
-                  </ComposerToolbarScroller>
+                  </View>
                 </>
               )}
               <ComposerDictationPrimaryAction

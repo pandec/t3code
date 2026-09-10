@@ -175,7 +175,9 @@ export function resolveProactiveTurnDiffAction(input: {
   activeSurfaceKind: RightPanelSurface["kind"] | null;
 }): "defer" | "ignore" | "open" {
   // Never yank the panel away from a pull request the user is reading.
-  if (input.activeSurfaceKind === "pull-request") return "ignore";
+  if (input.activeSurfaceKind === "pull-request" || input.activeSurfaceKind === "pull-requests") {
+    return "ignore";
+  }
   if (input.checkpoint === undefined || input.checkpoint.status === "missing") return "defer";
   if (input.isGitRepo === undefined) return "defer";
   if (
@@ -360,6 +362,7 @@ export function buildLocalDraftThread(
     branch: draftThread.branch,
     worktreePath: draftThread.worktreePath,
     checkpoints: [],
+    pullRequests: [],
     activities: [],
     proposedPlans: [],
   };

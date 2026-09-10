@@ -261,8 +261,6 @@ export interface ProviderServiceLiveOptions {
    * test see whether a credential was requested at all.
    */
   readonly issueMcpCredential?: typeof McpSessionRegistry.issueActiveMcpCredential;
-  /** Same seam as `issueMcpCredential`, for observing the deny path's revoke. */
-  readonly revokeMcpCredential?: typeof McpSessionRegistry.revokeActiveMcpThread;
 }
 
 interface TurnAnalyticsMetadata {
@@ -617,8 +615,6 @@ const makeProviderService = Effect.fn("makeProviderService")(function* (
   );
   const issueMcpCredential =
     options?.issueMcpCredential ?? McpSessionRegistry.issueActiveMcpCredential;
-  const revokeMcpCredential =
-    options?.revokeMcpCredential ?? McpSessionRegistry.revokeActiveMcpThread;
   const fileSystem = yield* FileSystem.FileSystem;
   const runtimeEventPubSub = yield* PubSub.unbounded<ProviderRuntimeEvent>();
   const pendingSessionReplacements = yield* Ref.make(
@@ -1046,8 +1042,10 @@ const makeProviderService = Effect.fn("makeProviderService")(function* (
   });
   /**
    * Attach the enabled `t3-code` MCP toolsets to the session that is about to
-   * start. This is the only place a credential is minted, so withholding one
-   * here denies every provider and external MCP client.
+   * start. Every session gets a credential: the pull request toolkit is always
+   * on, since it only registers links on the session's own thread. Browser
+   * access and voice replies are capabilities on that credential, so turning a
+   * setting off withholds those tools without taking the server away.
    *
    * Deny on an unreadable settings file rather than letting the read failure
    * escape: adding `ServerSettingsError` to `ProviderServiceError` would widen
@@ -1086,32 +1084,29 @@ const makeProviderService = Effect.fn("makeProviderService")(function* (
       const preview = yield* agentBrowserAccessEnabled(settings, threadId);
       const voice = settings.voice.enableAgentVoiceReplies && (yield* agentVoiceReplyAvailable);
       return new Set<McpInvocationContext.McpCapability>([
+        "pull-requests",
         ...(preview ? (["preview"] as const) : []),
         ...(voice ? (["voice"] as const) : []),
       ]) as ReadonlySet<McpInvocationContext.McpCapability>;
     },
     Effect.catch((cause) =>
       Effect.logWarning(
-        "Could not read server settings; withholding agent MCP toolsets for this session.",
+        "Could not read server settings; withholding gated agent MCP toolsets for this session.",
         { cause },
-      ).pipe(Effect.as<ReadonlySet<McpInvocationContext.McpCapability>>(new Set())),
+      ).pipe(
+        Effect.as<ReadonlySet<McpInvocationContext.McpCapability>>(new Set(["pull-requests"])),
+      ),
     ),
   );
 
+  /**
+   * Mint the session's `t3-code` MCP credential. `issueActiveMcpCredential`
+   * revokes the thread's previous token first, which matters because a session
+   * restart (runtime mode, cwd, model) re-prepares without stopping.
+   */
   const prepareMcpSession = (threadId: ThreadId, providerInstanceId: ProviderInstanceId) =>
     Effect.gen(function* () {
       const capabilities = yield* mcpSessionCapabilities(threadId);
-      if (capabilities.size === 0) {
-        // Revoke as well as clear. Every other prepare path reaches
-        // `issueActiveMcpCredential`, which revokes the thread first, so
-        // skipping it here would leave a previously issued bearer token valid
-        // against `/mcp` for the rest of its liveness window — and later turns
-        // would keep refreshing it. A session restart (runtime mode, cwd,
-        // model) re-prepares without stopping, so it relies on this.
-        yield* revokeMcpCredential(threadId);
-        yield* Effect.sync(() => McpProviderSession.clearMcpProviderSession(threadId));
-        return undefined;
-      }
       const credential = yield* issueMcpCredential({ threadId, providerInstanceId, capabilities });
       if (credential) {
         yield* Effect.sync(() => McpProviderSession.setMcpProviderSession(credential.config));

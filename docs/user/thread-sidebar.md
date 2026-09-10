@@ -101,9 +101,10 @@ settlement after inactivity and pull request merges.
 
 By default, environments settle inactive threads after three days and settle threads whose pull
 request merged. A closed pull request can also settle an idle thread. Work in progress, pending
-questions or approvals, and live background work prevent automatic settlement. An open pull request
-does not prevent inactivity settlement, but an old closed or merged pull request does not settle
-work you resumed after it closed.
+questions or approvals, and live background work prevent automatic settlement. A linked pull
+request that is still open, or whose status the server has not read yet, keeps the thread active;
+once every linked pull request is merged or closed the newest one decides. An old closed or merged
+pull request does not settle work you resumed after it closed.
 
 These rules continue to run when your apps are closed. Changes apply to connected environments that
 support shared settings. Offline environments and older servers keep their previous values. If
@@ -117,9 +118,11 @@ apps are closed. Settled threads keep their saved links. Update the server if
 automatic branch links do not appear.
 
 On web and desktop, right-click a pull request link in a thread and choose
-**Link to thread** to select a different PR. Use **Unlink from thread** on the
-same link to return to the branch PR, if one exists.
-The linked pull request participates in automatic settlement.
+**Link to thread** to add that PR; a thread can hold several links, including
+stacks. Use **Unlink from thread** on a link to remove it; with no links left
+the branch PR shows again, if one exists. Linked pull requests participate in
+automatic settlement. See the source control guide for stacks and the linked
+pull requests panel.
 
 ## Fold older threads
 

@@ -43,6 +43,7 @@ function readModel(messages: ReadonlyArray<OrchestrationMessage> = []): Orchestr
         interactionMode: "default",
         branch: null,
         worktreePath: null,
+        pullRequests: [],
         latestTurn: null,
         createdAt: NOW,
         updatedAt: NOW,

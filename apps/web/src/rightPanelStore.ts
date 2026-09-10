@@ -27,6 +27,7 @@ const RIGHT_PANEL_KINDS = [
   "terminal",
   "pull-request",
   "linear-issue",
+  "pull-requests",
   "agents",
 ] as const;
 export type RightPanelKind = (typeof RIGHT_PANEL_KINDS)[number];
@@ -69,6 +70,7 @@ export type RightPanelSurface =
        */
       environmentId?: string;
       projectId: string;
+      host?: string;
       repository: string;
       number: number;
       url?: string;
@@ -79,6 +81,8 @@ export type RightPanelSurface =
       kind: "linear-issue";
       identifier: string;
     }
+  /** The thread's linked pull requests, one singleton tab beside any number of `pull-request` tabs. */
+  | { id: "pull-requests"; kind: "pull-requests" }
   | { id: "agents"; kind: "agents" };
 
 const RIGHT_PANEL_STORAGE_KEY = "t3code:right-panel-state:v2";
@@ -131,6 +135,7 @@ interface RightPanelStoreState {
     target: {
       environmentId?: string;
       projectId: string;
+      host?: string;
       repository: string;
       number: number;
       url?: string;
@@ -177,6 +182,8 @@ const singletonSurface = (
       return { id: "diff", kind };
     case "files":
       return { id: "files", kind };
+    case "pull-requests":
+      return { id: "pull-requests", kind };
     case "agents":
       return { id: "agents", kind };
   }
@@ -221,6 +228,7 @@ export type PullRequestSurface = Extract<RightPanelSurface, { kind: "pull-reques
 export function pullRequestSurfaceId(target: {
   environmentId?: string;
   projectId: string;
+  host?: string;
   repository: string;
   number: number;
 }): PullRequestSurface["id"] {
@@ -228,12 +236,14 @@ export function pullRequestSurfaceId(target: {
   // servers is two tabs rather than one tab that changes its mind about which server it is on.
   const scope =
     target.environmentId === undefined ? "" : `${encodeURIComponent(target.environmentId)}:`;
-  return `pull-request:${scope}${encodeURIComponent(target.projectId)}:${encodeURIComponent(target.repository)}:${target.number}`;
+  const host = target.host === undefined ? "" : `${encodeURIComponent(target.host.toLowerCase())}:`;
+  return `pull-request:${scope}${encodeURIComponent(target.projectId)}:${host}${encodeURIComponent(target.repository)}:${target.number}`;
 }
 
 export function pullRequestSurface(target: {
   environmentId?: string;
   projectId: string;
+  host?: string;
   repository: string;
   number: number;
   url?: string;
@@ -243,6 +253,7 @@ export function pullRequestSurface(target: {
     kind: "pull-request",
     ...(target.environmentId === undefined ? {} : { environmentId: target.environmentId }),
     projectId: target.projectId,
+    ...(typeof target.host === "string" ? { host: target.host.toLowerCase() } : {}),
     repository: target.repository,
     number: target.number,
     ...(typeof target.url === "string" ? { url: target.url } : {}),
@@ -454,9 +465,10 @@ export const useRightPanelStore = create<RightPanelStoreState>()(
           }
           // A linked PR takes priority over a completed-turn diff. Manual actions
           // always apply, and later user choices reject both proactive requests.
+          const activeKind = selectActiveRightPanel(state.byThreadKey, ref);
           if (
             surface.kind === "diff" &&
-            selectActiveRightPanel(state.byThreadKey, ref) === "pull-request"
+            (activeKind === "pull-request" || activeKind === "pull-requests")
           ) {
             return state;
           }

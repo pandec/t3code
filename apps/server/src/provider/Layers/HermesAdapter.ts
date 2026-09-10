@@ -71,6 +71,7 @@ import { collectComposerSkillTokens } from "@t3tools/shared/composerInlineTokens
 import { rewriteHermesPrompt } from "../acp/HermesPromptRewrite.ts";
 import { readHermesSkillsSnapshot } from "../hermesSkillsSnapshot.ts";
 import { type HermesAdapterShape } from "../Services/HermesAdapter.ts";
+import { buildRuntimeInstructions } from "../RuntimeInstructions.ts";
 import { type EventNdjsonLogger, makeEventNdjsonLogger } from "./EventNdjsonLogger.ts";
 
 const encodeUnknownJsonStringExit = Schema.encodeUnknownExit(Schema.fromJsonString(Schema.Unknown));
@@ -1201,6 +1202,16 @@ export function makeHermesAdapter(
                   const promptParts: Array<EffectAcpSchema.ContentBlock> = [
                     ...(text ? [{ type: "text" as const, text }] : []),
                     ...imagePromptParts,
+                    // Same trailing runtime context Antigravity sends: the harness
+                    // name plus the pull-request linking instructions that make the
+                    // always-attached `t3-code` PR toolkit actually get used.
+                    {
+                      type: "text" as const,
+                      text: buildRuntimeInstructions({
+                        harness: "Hermes",
+                        model: requestedTurnModelId,
+                      }),
+                    },
                   ];
 
                   if (promptParts.length === 0) {

@@ -282,6 +282,9 @@ export function isStructuralThreadStreamItem(item: OrchestrationThreadStreamItem
     case "thread.session-stop-requested":
     case "thread.session-set":
     case "thread.meta-updated":
+    case "thread.pull-request-linked":
+    case "thread.pull-request-unlinked":
+    case "thread.pull-request-synced":
     case "thread.runtime-mode-set":
     case "thread.interaction-mode-set":
     case "thread.proposed-plan-upserted":

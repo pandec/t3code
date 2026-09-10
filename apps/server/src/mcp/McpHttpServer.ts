@@ -30,6 +30,8 @@ import {
 } from "./toolkits/preview/tools.ts";
 import { VoiceToolkitHandlersLive } from "./toolkits/voice/handlers.ts";
 import { VoiceToolkit } from "./toolkits/voice/tools.ts";
+import { PullRequestsToolkitHandlersLive } from "./toolkits/pullRequests/handlers.ts";
+import { PullRequestsToolkit } from "./toolkits/pullRequests/tools.ts";
 
 const unauthorized = HttpServerResponse.jsonUnsafe(
   {
@@ -443,6 +445,10 @@ const VoiceToolkitRegistrationLive = McpServer.toolkit(VoiceToolkit).pipe(
   Layer.provide(VoiceToolkitHandlersLive),
 );
 
+export const PullRequestsToolkitRegistrationLive = McpServer.toolkit(PullRequestsToolkit).pipe(
+  Layer.provide(PullRequestsToolkitHandlersLive),
+);
+
 const makeMcpTransport = (path: `/${string}`) =>
   McpServer.layerHttp({
     name: "T3 Code",
@@ -455,10 +461,11 @@ const makeMcpTransport = (path: `/${string}`) =>
  * Tool registration is per McpServer instance and tools/list has no per-token
  * filter, so each capability combination gets its own server island at its
  * own path — a session's credential (whose endpoint McpSessionRegistry picks
- * from its capabilities) then only ever sees the tools it can call. Layer
- * boundaries: Layer.fresh un-memoizes the McpServer inside each island while
- * the handlers' dependencies (broker, voice staging, session registry) stay
- * requirements satisfied by the shared runtime, so all islands share one
+ * from its capabilities) then only ever sees the tools it can call. The pull
+ * request toolkit is on every island because every credential carries it.
+ * Layer boundaries: Layer.fresh un-memoizes the McpServer inside each island
+ * while the handlers' dependencies (broker, voice staging, session registry)
+ * stay requirements satisfied by the shared runtime, so all islands share one
  * instance of each.
  */
 const mcpToolkitIsland = <E, R>(path: `/${string}`, registrations: Layer.Layer<never, E, R>) =>
@@ -467,8 +474,19 @@ const mcpToolkitIsland = <E, R>(path: `/${string}`, registrations: Layer.Layer<n
 export const layer = Layer.mergeAll(
   mcpToolkitIsland(
     "/mcp",
-    Layer.mergeAll(PreviewToolkitRegistrationLive, VoiceToolkitRegistrationLive),
+    Layer.mergeAll(
+      PreviewToolkitRegistrationLive,
+      VoiceToolkitRegistrationLive,
+      PullRequestsToolkitRegistrationLive,
+    ),
   ),
-  mcpToolkitIsland("/mcp/preview", PreviewToolkitRegistrationLive),
-  mcpToolkitIsland("/mcp/voice", VoiceToolkitRegistrationLive),
+  mcpToolkitIsland(
+    "/mcp/preview",
+    Layer.mergeAll(PreviewToolkitRegistrationLive, PullRequestsToolkitRegistrationLive),
+  ),
+  mcpToolkitIsland(
+    "/mcp/voice",
+    Layer.mergeAll(VoiceToolkitRegistrationLive, PullRequestsToolkitRegistrationLive),
+  ),
+  mcpToolkitIsland("/mcp/pull-requests", PullRequestsToolkitRegistrationLive),
 );

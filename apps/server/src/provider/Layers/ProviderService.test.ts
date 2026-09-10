@@ -6160,8 +6160,6 @@ boundedListing.layer("ProviderServiceLive session listing", (it) => {
 const decodeBrowserAccessThreadShell = Schema.decodeUnknownEffect(OrchestrationThreadShell);
 
 describe("agent browser access", () => {
-  const revokedThreads: Array<ThreadId> = [];
-  const issuedCapabilities: Array<ReadonlySet<string>> = [];
   const projectId = ProjectId.make("project-browser-access");
 
   const startSessionWith = (
@@ -6171,7 +6169,10 @@ describe("agent browser access", () => {
     voice?: { readonly available: boolean; readonly enabled?: boolean },
   ) =>
     Effect.gen(function* () {
-      const issued: Array<ThreadId> = [];
+      const issued: Array<{
+        readonly threadId: ThreadId;
+        readonly capabilities: ReadonlyArray<string>;
+      }> = [];
       const codex = makeFakeCodexAdapter();
       const providerAdapterLayer = Layer.succeed(
         ProviderAdapterRegistry.ProviderAdapterRegistry,
@@ -6232,11 +6233,12 @@ describe("agent browser access", () => {
       const providerLayer = makeProviderServiceLive({
         issueMcpCredential: (request) =>
           Effect.sync(() => {
-            issued.push(request.threadId);
-            issuedCapabilities.push(request.capabilities);
+            issued.push({
+              threadId: request.threadId,
+              capabilities: [...request.capabilities].sort(),
+            });
             return undefined;
           }),
-        revokeMcpCredential: (revoked) => Effect.sync(() => void revokedThreads.push(revoked)),
       }).pipe(
         Layer.provide(providerAdapterLayer),
         Layer.provide(directoryLayer),
@@ -6277,71 +6279,55 @@ describe("agent browser access", () => {
 
   it.effect("gates voice MCP credentials on speech availability and the user toggle", () =>
     Effect.gen(function* () {
-      issuedCapabilities.length = 0;
       const enabledThread = asThreadId("thread-voice-enabled");
       assert.deepEqual(
         yield* startSessionWith(false, enabledThread, undefined, { available: true }),
-        [enabledThread],
+        [{ threadId: enabledThread, capabilities: ["pull-requests", "voice"] }],
       );
-      assert.deepEqual([...issuedCapabilities[0]!], ["voice"]);
+      const unavailableThread = asThreadId("thread-voice-unavailable");
       assert.deepEqual(
-        yield* startSessionWith(false, asThreadId("thread-voice-unavailable"), undefined, {
-          available: false,
-        }),
-        [],
+        yield* startSessionWith(false, unavailableThread, undefined, { available: false }),
+        [{ threadId: unavailableThread, capabilities: ["pull-requests"] }],
       );
+      const disabledThread = asThreadId("thread-voice-disabled");
       assert.deepEqual(
-        yield* startSessionWith(false, asThreadId("thread-voice-disabled"), undefined, {
+        yield* startSessionWith(false, disabledThread, undefined, {
           available: true,
           enabled: false,
         }),
-        [],
+        [{ threadId: disabledThread, capabilities: ["pull-requests"] }],
       );
     }).pipe(Effect.provide(NodeServices.layer)),
   );
 
-  // Credential issuance is the observable that matters: it is the only place a
-  // credential is minted, and `/mcp` accepts nothing else, so withholding it is
-  // what actually denies every provider and external MCP client.
-  it.effect("requests no MCP credential when agent browser access is off", () =>
+  // The capability set on the credential is the observable that matters: a
+  // session always gets a credential (the pull request toolkit is never
+  // withheld), and `preview` / `voice` on it are what grant or deny those tools.
+  it.effect("issues a credential without preview when agent browser access is off", () =>
     Effect.gen(function* () {
-      const issued = yield* startSessionWith(false, asThreadId("thread-browser-off"));
+      const threadId = asThreadId("thread-browser-off");
 
-      assert.deepEqual(issued, []);
+      const issued = yield* startSessionWith(false, threadId);
+
+      assert.deepEqual(issued, [{ threadId, capabilities: ["pull-requests"] }]);
     }).pipe(Effect.provide(NodeServices.layer)),
   );
 
-  it.effect("revokes an already-issued credential when access is off", () =>
-    Effect.gen(function* () {
-      const threadId = asThreadId("thread-browser-revoke");
-      revokedThreads.length = 0;
-
-      yield* startSessionWith(false, threadId);
-
-      // Clearing the in-memory map is not enough: a token issued before the
-      // toggle flipped stays valid against `/mcp` for its whole liveness
-      // window, and later turns refresh it.
-      assert.deepEqual(revokedThreads, [threadId]);
-    }).pipe(Effect.provide(NodeServices.layer)),
-  );
-
-  it.effect("requests an MCP credential when agent browser access is on", () =>
+  it.effect("issues a credential with preview when agent browser access is on", () =>
     Effect.gen(function* () {
       const threadId = asThreadId("thread-browser-on");
 
       const issued = yield* startSessionWith(true, threadId);
 
-      assert.deepEqual(issued, [threadId]);
+      assert.deepEqual(issued, [{ threadId, capabilities: ["preview", "pull-requests"] }]);
     }).pipe(Effect.provide(NodeServices.layer)),
   );
 
-  it.effect("withholds and revokes MCP credentials when the project disables browser access", () =>
+  it.effect("issues a credential without preview when the project disables browser access", () =>
     Effect.gen(function* () {
       const threadId = asThreadId("thread-project-browser-off");
-      revokedThreads.length = 0;
       const issued = yield* startSessionWith(true, threadId, false);
-      assert.deepEqual(issued, []);
-      assert.deepEqual(revokedThreads, [threadId]);
+      assert.deepEqual(issued, [{ threadId, capabilities: ["pull-requests"] }]);
     }).pipe(Effect.provide(NodeServices.layer)),
   );
 
@@ -6349,7 +6335,7 @@ describe("agent browser access", () => {
     Effect.gen(function* () {
       const threadId = asThreadId("thread-project-browser-on");
       const issued = yield* startSessionWith(false, threadId, true);
-      assert.deepEqual(issued, [threadId]);
+      assert.deepEqual(issued, [{ threadId, capabilities: ["preview", "pull-requests"] }]);
     }).pipe(Effect.provide(NodeServices.layer)),
   );
 });

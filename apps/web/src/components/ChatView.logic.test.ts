@@ -405,6 +405,13 @@ describe("proactive panels", () => {
         activeSurfaceKind: "pull-request",
       }),
     ).toBe("ignore");
+    expect(
+      resolveProactiveTurnDiffAction({
+        checkpoint: changedCheckpoint,
+        isGitRepo: true,
+        activeSurfaceKind: "pull-requests",
+      }),
+    ).toBe("ignore");
   });
 });
 
@@ -751,6 +758,7 @@ function makeThread(overrides: Partial<Thread> = {}): Thread {
     proposedPlans: [],
     activities: [],
     checkpoints: [],
+    pullRequests: [],
     createdAt: now,
     updatedAt: now,
     archivedAt: null,
@@ -868,6 +876,7 @@ describe("buildLoadingThreadFromShell", () => {
       snoozedUntil: null,
       snoozedAt: null,
       session: null,
+      pullRequests: [],
       latestUserMessageAt: now,
       hasPendingApprovals: false,
       hasPendingUserInput: false,

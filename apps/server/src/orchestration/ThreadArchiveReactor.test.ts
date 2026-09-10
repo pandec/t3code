@@ -80,6 +80,7 @@ it.effect.each(["success", "dirty", "shared", "detached", "stop-failed"] as cons
           interactionMode: "default",
           branch: "feature",
           worktreePath: "/repo/worktree",
+          pullRequests: [],
           latestTurn: null,
           createdAt: now,
           updatedAt: now,

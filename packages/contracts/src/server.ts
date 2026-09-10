@@ -566,6 +566,12 @@ export function environmentThemeFileHasColors(file: EnvironmentThemeFile): boole
   );
 }
 
+export const ServerTextToSpeechAvailability = Schema.Struct({
+  available: Schema.Boolean,
+  /** Server owns listening-version requests and publishes their completion. */
+  persistentJobs: Schema.optionalKey(Schema.Boolean),
+});
+
 export const ServerConfig = Schema.Struct({
   environment: ExecutionEnvironmentDescriptor,
   auth: ServerAuthDescriptor,
@@ -588,11 +594,9 @@ export const ServerConfig = Schema.Struct({
   speechToText: Schema.Struct({
     available: Schema.Boolean,
   }).pipe(Schema.withDecodingDefault(Effect.succeed({ available: false }))),
-  textToSpeech: Schema.Struct({
-    available: Schema.Boolean,
-    /** Server owns listening-version requests and publishes their completion. */
-    persistentJobs: Schema.optionalKey(Schema.Boolean),
-  }).pipe(Schema.withDecodingDefault(Effect.succeed({ available: false }))),
+  textToSpeech: ServerTextToSpeechAvailability.pipe(
+    Schema.withDecodingDefault(Effect.succeed({ available: false })),
+  ),
   /** Whether shell subscriptions can emit an opt-in catch-up completion marker. */
   shellResumeCompletionMarker: Schema.optionalKey(Schema.Boolean),
   /** Whether shell.openInEditor honors `LaunchEditorInput.reveal` for the
@@ -684,7 +688,9 @@ export type ServerConfigProviderStatusesPayload = typeof ServerConfigProviderSta
 
 export const ServerConfigSettingsUpdatedPayload = Schema.Struct({
   settings: ServerSettings,
-  textToSpeech: Schema.optionalKey(ServerConfig.fields.textToSpeech),
+  // Absent means "unchanged": the config field's decoding default must not
+  // materialise `{ available: false }` on an update that did not report it.
+  textToSpeech: Schema.optionalKey(ServerTextToSpeechAvailability),
 });
 export type ServerConfigSettingsUpdatedPayload = typeof ServerConfigSettingsUpdatedPayload.Type;
 
