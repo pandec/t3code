@@ -105,8 +105,20 @@ export type TtsCatalogResult = typeof TtsCatalogResult.Type;
 export const TtsStatusInput = Schema.Struct({});
 export type TtsStatusInput = typeof TtsStatusInput.Type;
 
+/**
+ * What a profile with blank model and voice resolves to on this server: its
+ * `*_TTS_MODEL` / `*_TTS_VOICE_ID` environment overrides, else the built-in
+ * defaults. Clients display and test against these instead of guessing.
+ */
+export const TtsProviderDefaults = Schema.Struct({
+  modelId: TrimmedNonEmptyString,
+  voiceId: TrimmedNonEmptyString,
+});
+export type TtsProviderDefaults = typeof TtsProviderDefaults.Type;
+
 export const TtsProviderStatus = Schema.Struct({
   configured: Schema.Boolean,
+  defaults: TtsProviderDefaults,
   /** Why a key could not be read; safe to render verbatim. */
   error: Schema.optional(Schema.String),
 });

@@ -6,6 +6,7 @@ import {
   formatSmallUsd,
   resolveDisplayedTtsProfile,
   voicesForModel,
+  voiceIdAfterModelChange,
 } from "./VoiceSettings.logic";
 
 const gemini = {
@@ -31,24 +32,30 @@ const elevenFlash = {
 describe("resolveDisplayedTtsProfile", () => {
   it("fills empty fields with the provider defaults and drops blank instructions", () => {
     expect(
-      resolveDisplayedTtsProfile({
-        provider: "openrouter",
-        modelId: "",
-        voiceId: " ",
-        instructions: "  ",
-      }),
+      resolveDisplayedTtsProfile(
+        {
+          provider: "openrouter",
+          modelId: "",
+          voiceId: " ",
+          instructions: "  ",
+        },
+        { modelId: "env/model", voiceId: "EnvVoice" },
+      ),
     ).toEqual({
       provider: "openrouter",
-      modelId: "google/gemini-3.1-flash-tts-preview",
-      voiceId: "Kore",
+      modelId: "env/model",
+      voiceId: "EnvVoice",
     });
     expect(
-      resolveDisplayedTtsProfile({
-        provider: "elevenlabs",
-        modelId: "eleven_v3",
-        voiceId: "abc",
-        instructions: "warm",
-      }),
+      resolveDisplayedTtsProfile(
+        {
+          provider: "elevenlabs",
+          modelId: "eleven_v3",
+          voiceId: "abc",
+          instructions: "warm",
+        },
+        { modelId: "env/model", voiceId: "EnvVoice" },
+      ),
     ).toEqual({
       provider: "elevenlabs",
       modelId: "eleven_v3",
@@ -115,5 +122,21 @@ describe("formatSmallUsd", () => {
     expect(formatSmallUsd(1.5)).toBe("$1.50");
     expect(formatSmallUsd(0.0325)).toBe("$0.033");
     expect(formatSmallUsd(0.00042)).toBe("$0.00042");
+  });
+});
+
+describe("voiceIdAfterModelChange", () => {
+  it("retains supported voices and chooses a compatible replacement", () => {
+    const openai = { ...gemini, id: "openai/tts", voices: [{ id: "alloy", name: "Alloy" }] };
+    const catalog = {
+      provider: "openrouter" as const,
+      configured: true,
+      models: [gemini, openai, elevenFlash],
+      voices: [{ id: "shared", name: "Shared" }],
+    };
+    expect(voiceIdAfterModelChange(catalog, openai.id, "Kore")).toBe("alloy");
+    expect(voiceIdAfterModelChange(catalog, openai.id, "alloy")).toBe("alloy");
+    expect(voiceIdAfterModelChange(catalog, elevenFlash.id, "shared")).toBe("shared");
+    expect(voiceIdAfterModelChange(null, openai.id, "custom")).toBe("custom");
   });
 });

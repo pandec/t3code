@@ -40,7 +40,10 @@ export interface TtsEnvironmentDefaults {
 export const readTtsEnvironmentDefaults: Effect.Effect<TtsEnvironmentDefaults> = Effect.gen(
   function* () {
     const read = (name: string, fallback: string) =>
-      Config.string(name).pipe(Config.withDefault(fallback));
+      Config.string(name).pipe(
+        Config.withDefault(fallback),
+        Effect.map((value) => value.trim() || fallback),
+      );
     return {
       elevenlabs: {
         modelId: yield* read("ELEVENLABS_TTS_MODEL", DEFAULT_ELEVENLABS_TTS_MODEL),

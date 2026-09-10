@@ -111,7 +111,10 @@ export const layer = Layer.effect(
 
     const providerStatus = (provider: TtsProvider): Effect.Effect<TtsProviderStatus> =>
       readKey(provider).pipe(
-        Effect.map((key) => ({ configured: Option.isSome(key) })),
+        Effect.map((key) => ({
+          configured: Option.isSome(key),
+          defaults: environmentDefaults[provider],
+        })),
         Effect.catch((error) =>
           Effect.logWarning("Failed to read a text-to-speech API key.", {
             provider,
@@ -119,6 +122,7 @@ export const layer = Layer.effect(
           }).pipe(
             Effect.as({
               configured: false,
+              defaults: environmentDefaults[provider],
               error: `Could not read the stored ${TTS_PROVIDER_LABELS[provider]} key.`,
             }),
           ),
@@ -265,19 +269,21 @@ export const layer = Layer.effect(
   }),
 );
 
+const noopDefaults: TtsEnvironmentDefaults = {
+  elevenlabs: { modelId: "eleven_flash_v2_5", voiceId: "JBFqnCBsd6RMkjVDRZzb" },
+  openrouter: { modelId: "google/gemini-3.1-flash-tts-preview", voiceId: "Kore" },
+};
+
 /** Inert instance for tests and harnesses that do not exercise speech. */
 export const layerNoop = Layer.succeed(
   TtsService,
   TtsService.of({
-    environmentDefaults: {
-      elevenlabs: { modelId: "eleven_flash_v2_5", voiceId: "JBFqnCBsd6RMkjVDRZzb" },
-      openrouter: { modelId: "google/gemini-3.1-flash-tts-preview", voiceId: "Kore" },
-    },
+    environmentDefaults: noopDefaults,
     isConfigured: () => Effect.succeed(false),
     configuredChanges: Stream.empty,
     status: Effect.succeed({
-      elevenlabs: { configured: false },
-      openrouter: { configured: false },
+      elevenlabs: { configured: false, defaults: noopDefaults.elevenlabs },
+      openrouter: { configured: false, defaults: noopDefaults.openrouter },
     }),
     catalog: (provider) => Effect.succeed({ provider, configured: false, models: [], voices: [] }),
     configureOpenRouter: () =>

@@ -4,31 +4,21 @@ import type {
   TtsCatalogVoice,
   TtsProfile,
   TtsProfileSettings,
-  TtsProvider,
+  TtsProviderDefaults,
   TtsSynthesisCost,
 } from "@t3tools/contracts";
-
-/**
- * Mirrors the server's built-in defaults (`DEFAULT_TTS_*` in
- * `apps/server/src/voice/ttsProfile.ts`). Duplicated for display only: the
- * client sends "" to mean "leave it to the server". Keep both in sync.
- */
-export const DEFAULT_TTS_MODEL_BY_PROVIDER: Record<TtsProvider, string> = {
-  elevenlabs: "eleven_flash_v2_5",
-  openrouter: "google/gemini-3.1-flash-tts-preview",
-};
-export const DEFAULT_TTS_VOICE_BY_PROVIDER: Record<TtsProvider, string> = {
-  elevenlabs: "JBFqnCBsd6RMkjVDRZzb",
-  openrouter: "Kore",
-};
 
 export const TTS_TEST_SAMPLE_TEXT =
   "Here's a quick summary. I refactored the settings panel, added a provider dropdown, and wired up the test button. Two tests failed at first because of a stale mock, so I fixed those too. Everything passes now.";
 
 /** The model and voice the server will use for a stored profile. */
-export function resolveDisplayedTtsProfile(profile: TtsProfileSettings): TtsProfile {
-  const modelId = profile.modelId.trim() || DEFAULT_TTS_MODEL_BY_PROVIDER[profile.provider];
-  const voiceId = profile.voiceId.trim() || DEFAULT_TTS_VOICE_BY_PROVIDER[profile.provider];
+export function resolveDisplayedTtsProfile(
+  profile: TtsProfileSettings,
+  defaults: TtsProviderDefaults | null,
+): TtsProfile | null {
+  if (defaults === null) return null;
+  const modelId = profile.modelId.trim() || defaults.modelId;
+  const voiceId = profile.voiceId.trim() || defaults.voiceId;
   const instructions = profile.instructions.trim();
   return {
     provider: profile.provider,
@@ -52,6 +42,18 @@ export function voicesForModel(
 ): ReadonlyArray<TtsCatalogVoice> {
   if (model?.voices !== null && model?.voices !== undefined) return model.voices;
   return catalog?.voices ?? [];
+}
+
+export function voiceIdAfterModelChange(
+  catalog: TtsCatalogResult | null,
+  modelId: string,
+  currentVoiceId: string,
+): string {
+  const model = findCatalogModel(catalog, modelId);
+  if (model === null) return currentVoiceId;
+  const voices = voicesForModel(catalog, model);
+  if (voices.some((voice) => voice.id === currentVoiceId)) return currentVoiceId;
+  return voices[0]?.id ?? currentVoiceId;
 }
 
 export function formatUsdPerMillionChars(price: number | null): string | null {

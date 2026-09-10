@@ -39,14 +39,13 @@ import { toastManager } from "../ui/toast";
 import { SettingResetButton, SettingsRow, SettingsSection } from "./settingsLayout";
 import { searchableSetting } from "./settingsSearch";
 import {
-  DEFAULT_TTS_MODEL_BY_PROVIDER,
-  DEFAULT_TTS_VOICE_BY_PROVIDER,
   describeCatalogModel,
   describeTestCost,
   findCatalogModel,
   resolveDisplayedTtsProfile,
   TTS_TEST_SAMPLE_TEXT,
   voicesForModel,
+  voiceIdAfterModelChange,
 } from "./VoiceSettings.logic";
 
 const TTS_PROVIDERS: ReadonlyArray<TtsProvider> = ["openrouter", "elevenlabs"];
@@ -85,7 +84,17 @@ function TtsProfileFields({
 }) {
   const status = useTtsStatus(environmentId);
   const catalog = useTtsCatalog(environmentId, profile.provider);
-  const resolved = resolveDisplayedTtsProfile(profile);
+  const resolved = resolveDisplayedTtsProfile(
+    profile,
+    status.data?.[profile.provider].defaults ?? null,
+  );
+  if (resolved === null) {
+    return (
+      <p className="text-xs text-muted-foreground">
+        {status.error ? "Voice defaults unavailable" : "Loading voice defaults…"}
+      </p>
+    );
+  }
   const model = findCatalogModel(catalog.data, resolved.modelId);
   const voices = voicesForModel(catalog.data, model);
   const modelKnown = model !== null;
@@ -137,11 +146,10 @@ function TtsProfileFields({
         <Select
           value={resolved.modelId}
           onValueChange={(next) => {
-            if (next === null || next === resolved.modelId) return;
-            // Voices are per model on OpenRouter; clear so the default applies.
+            if (next === null || next === profile.modelId) return;
             onPatch({
-              modelId: next === DEFAULT_TTS_MODEL_BY_PROVIDER[profile.provider] ? "" : next,
-              voiceId: "",
+              modelId: next,
+              voiceId: voiceIdAfterModelChange(catalog.data, next, resolved.voiceId),
             });
           }}
           disabled={disabled}
@@ -180,9 +188,9 @@ function TtsProfileFields({
         <Select
           value={resolved.voiceId}
           onValueChange={(next) => {
-            if (next === null || next === resolved.voiceId) return;
+            if (next === null || next === profile.voiceId) return;
             onPatch({
-              voiceId: next === DEFAULT_TTS_VOICE_BY_PROVIDER[profile.provider] ? "" : next,
+              voiceId: next,
             });
           }}
           disabled={disabled}
@@ -366,7 +374,11 @@ function TestButton({
   readonly disabled: boolean;
 }) {
   const [open, setOpen] = useState(false);
-  const resolved = resolveDisplayedTtsProfile(profile);
+  const status = useTtsStatus(environmentId);
+  const resolved = resolveDisplayedTtsProfile(
+    profile,
+    status.data?.[profile.provider].defaults ?? null,
+  );
   const catalog = useTtsCatalog(environmentId, profile.provider);
   return (
     <>
@@ -374,11 +386,11 @@ function TestButton({
         size="xs"
         variant="outline"
         onClick={() => setOpen(true)}
-        disabled={disabled || environmentId === null}
+        disabled={disabled || environmentId === null || resolved === null}
       >
         Test
       </Button>
-      {environmentId !== null ? (
+      {environmentId !== null && resolved !== null ? (
         <TtsTestDialog
           open={open}
           onOpenChange={setOpen}
