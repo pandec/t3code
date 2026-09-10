@@ -616,6 +616,27 @@ it.layer(NodeServices.layer)("server settings", (it) => {
     }).pipe(Effect.provide(makeServerSettingsLayer())),
   );
 
+  it.effect("keeps untouched pre-OpenRouter voice settings on ElevenLabs", () =>
+    Effect.gen(function* () {
+      const serverConfig = yield* ServerConfig.ServerConfig;
+      const fileSystem = yield* FileSystem.FileSystem;
+      const serverSettings = yield* ServerSettingsModule.ServerSettingsService;
+      yield* fileSystem.writeFileString(
+        serverConfig.settingsPath,
+        '{"voice":{"ttsModelId":"","ttsVoiceId":"","enableAgentVoiceReplies":true}}',
+      );
+
+      const settings = yield* serverSettings.getSettings;
+
+      assert.deepEqual(settings.voice.tts, {
+        provider: "elevenlabs",
+        modelId: "",
+        voiceId: "",
+        instructions: "",
+      });
+    }).pipe(Effect.provide(makeServerSettingsLayer())),
+  );
+
   it.effect("folds a pre-OpenRouter ElevenLabs model and voice into the ElevenLabs profile", () =>
     Effect.gen(function* () {
       const serverConfig = yield* ServerConfig.ServerConfig;

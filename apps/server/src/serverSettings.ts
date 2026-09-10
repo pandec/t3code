@@ -300,6 +300,7 @@ const LegacyVoiceSettings = Schema.Struct({
     Schema.Struct({
       ttsModelId: Schema.optionalKey(Schema.String),
       ttsVoiceId: Schema.optionalKey(Schema.String),
+      tts: Schema.optionalKey(Schema.Unknown),
     }),
   ),
 });
@@ -311,16 +312,15 @@ export function foldLegacyVoiceSettings(
   settings: ServerSettings,
   legacy: typeof LegacyVoiceSettings.Type,
 ): ServerSettings {
+  // Any persisted file without the new profile shape predates OpenRouter.
+  // Preserve its previous ElevenLabs behavior even when both legacy override
+  // fields were empty and the built-in model and voice were in use.
+  if (legacy.voice?.tts !== undefined) {
+    return settings;
+  }
   const modelId = legacy.voice?.ttsModelId?.trim() ?? "";
   const voiceId = legacy.voice?.ttsVoiceId?.trim() ?? "";
-  if (modelId.length === 0 && voiceId.length === 0) {
-    return settings;
-  }
   const tts = settings.voice.tts;
-  // A profile the user already filled in under the new shape wins.
-  if (tts.modelId.length > 0 || tts.voiceId.length > 0) {
-    return settings;
-  }
   return {
     ...settings,
     voice: {
