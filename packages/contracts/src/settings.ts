@@ -718,9 +718,6 @@ export const ClientSettingsSchema = Schema.Struct({
   sidebarAlwaysShowPinnedInAttention: Schema.Boolean.pipe(
     Schema.withDecodingDefault(Effect.succeed(false)),
   ),
-  sidebarV2SortActiveByLatestUserMessage: Schema.Boolean.pipe(
-    Schema.withDecodingDefault(Effect.succeed(false)),
-  ),
   sidebarV2NewThreadButtonInProjectRow: Schema.Boolean.pipe(
     Schema.withDecodingDefault(Effect.succeed(false)),
   ),
@@ -1879,7 +1876,6 @@ export const ClientSettingsPatch = Schema.Struct({
   sidebarThreadPreviewCount: Schema.optionalKey(SidebarThreadPreviewCount),
   sidebarV2CompactCards: Schema.optionalKey(Schema.Boolean),
   sidebarAlwaysShowPinnedInAttention: Schema.optionalKey(Schema.Boolean),
-  sidebarV2SortActiveByLatestUserMessage: Schema.optionalKey(Schema.Boolean),
   sidebarV2NewThreadButtonInProjectRow: Schema.optionalKey(Schema.Boolean),
   sidebarOlderSectionEnabled: Schema.optionalKey(Schema.Boolean),
   sidebarOlderSectionAfterDays: Schema.optionalKey(SidebarOlderSectionAfterDays),

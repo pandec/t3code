@@ -980,35 +980,6 @@ function SidebarExtrasSection() {
             }
           />
           <SettingsRow
-            title="Move messaged threads to top"
-            description="Reorder active threads when you send a message. Agent responses and turn completion do not move them."
-            resetAction={
-              settings.sidebarV2SortActiveByLatestUserMessage !==
-              DEFAULT_UNIFIED_SETTINGS.sidebarV2SortActiveByLatestUserMessage ? (
-                <SettingResetButton
-                  label="message-based thread ordering"
-                  onClick={() =>
-                    updateSettings({
-                      sidebarV2SortActiveByLatestUserMessage:
-                        DEFAULT_UNIFIED_SETTINGS.sidebarV2SortActiveByLatestUserMessage,
-                    })
-                  }
-                />
-              ) : null
-            }
-            control={
-              <Switch
-                checked={settings.sidebarV2SortActiveByLatestUserMessage}
-                onCheckedChange={(checked) =>
-                  updateSettings({
-                    sidebarV2SortActiveByLatestUserMessage: Boolean(checked),
-                  })
-                }
-                aria-label="Move messaged threads to top"
-              />
-            }
-          />
-          <SettingsRow
             title="Older section"
             description="Move threads that have gone quiet into a foldable Older section instead of leaving them in the thread list. They stay active — nothing is settled, snoozed, or archived — and any activity brings them straight back."
             resetAction={

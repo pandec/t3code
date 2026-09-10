@@ -601,10 +601,6 @@ export function useSettingsRestore(onRestored?: () => void) {
       DEFAULT_UNIFIED_SETTINGS.sidebarAlwaysShowPinnedInAttention
         ? ["Pinned threads in Attention"]
         : []),
-      ...(settings.sidebarV2SortActiveByLatestUserMessage !==
-      DEFAULT_UNIFIED_SETTINGS.sidebarV2SortActiveByLatestUserMessage
-        ? ["Message-based thread ordering"]
-        : []),
       ...(settings.sidebarV2NewThreadButtonInProjectRow !==
       DEFAULT_UNIFIED_SETTINGS.sidebarV2NewThreadButtonInProjectRow
         ? ["New thread button position"]
@@ -785,7 +781,6 @@ export function useSettingsRestore(onRestored?: () => void) {
       settings.threadAutoSettleEnabled,
       settings.sidebarV2CompactCards,
       settings.sidebarAlwaysShowPinnedInAttention,
-      settings.sidebarV2SortActiveByLatestUserMessage,
       settings.sidebarV2NewThreadButtonInProjectRow,
       settings.sidebarOlderSectionEnabled,
       settings.sidebarOlderSectionAfterDays,
@@ -890,8 +885,6 @@ export function useSettingsRestore(onRestored?: () => void) {
       sidebarV2CompactCards: DEFAULT_UNIFIED_SETTINGS.sidebarV2CompactCards,
       sidebarAlwaysShowPinnedInAttention:
         DEFAULT_UNIFIED_SETTINGS.sidebarAlwaysShowPinnedInAttention,
-      sidebarV2SortActiveByLatestUserMessage:
-        DEFAULT_UNIFIED_SETTINGS.sidebarV2SortActiveByLatestUserMessage,
       sidebarV2NewThreadButtonInProjectRow:
         DEFAULT_UNIFIED_SETTINGS.sidebarV2NewThreadButtonInProjectRow,
       sidebarOlderSectionEnabled: DEFAULT_UNIFIED_SETTINGS.sidebarOlderSectionEnabled,

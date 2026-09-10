@@ -257,58 +257,24 @@ function parseTimestampMs(isoDate: string): number {
   return Number.isNaN(parsed) ? 0 : parsed;
 }
 
-/** First VALID timestamp wins: a present-yet-malformed string falls through
-    to the next candidate rather than sinking the row to the epoch. */
-function firstValidTimestampMs(...candidates: ReadonlyArray<string | null | undefined>): number {
-  for (const candidate of candidates) {
-    if (candidate == null) continue;
-    const parsed = Date.parse(candidate);
-    if (!Number.isNaN(parsed)) return parsed;
-  }
-  return 0;
-}
-
-export interface ThreadListV2ActiveSortOptions {
-  /** Opt-in device preference mirroring the web fork's Extras toggle. */
-  readonly sortByLatestUserMessage?: boolean;
-}
-
-/** Keyless rows lead the saved arrangement. Their recency key uses the
-    latest user message when enabled, falling back to creation only when
-    that message timestamp is absent or invalid. Un-settle can re-anchor it. */
+/** New and reopened threads lead in creation order; arranged threads keep their
+    saved arrangement. Activity does not move a thread. */
 export function sortThreadsForListV2<
   T extends {
     readonly id: string;
     readonly createdAt: string;
-    readonly latestUserMessageAt?: string | null | undefined;
     readonly unsettledAt?: string | null | undefined;
     readonly activeOrderKey?: string | null | undefined;
     readonly environmentId?: string | undefined;
   },
->(threads: readonly T[], options: ThreadListV2ActiveSortOptions = {}): T[] {
-  const sortTimestamp = (thread: T) => {
-    const base =
-      options.sortByLatestUserMessage === true
-        ? firstValidTimestampMs(thread.latestUserMessageAt, thread.createdAt)
-        : parseTimestampMs(thread.createdAt);
-    return Math.max(base, firstValidTimestampMs(thread.unsettledAt));
-  };
-  const keyless = threads.filter((thread) => thread.activeOrderKey == null);
-  const arranged = threads.filter((thread) => thread.activeOrderKey != null);
-  keyless.sort(
-    (left, right) =>
-      sortTimestamp(right) - sortTimestamp(left) ||
-      left.id.localeCompare(right.id) ||
-      (left.environmentId ?? "").localeCompare(right.environmentId ?? ""),
-  );
-  return [...keyless, ...sortActiveThreadsByOrderKey(arranged)];
+>(threads: readonly T[]): T[] {
+  return sortActiveThreadsByOrderKey(threads);
 }
 
 /** Canonical card section for Move up/down, independent of search or scope. */
 export function getThreadListV2OrderedSection(input: {
   readonly threads: readonly EnvironmentThreadShell[];
   readonly section: "pinned" | "active";
-  readonly sortActiveByLatestUserMessage?: boolean;
   readonly pendingOrder?: PendingThreadOrder | null;
   readonly now: string;
   readonly settlementEnvironmentIds?: ReadonlySet<EnvironmentId>;
@@ -335,9 +301,7 @@ export function getThreadListV2OrderedSection(input: {
   const ordered =
     input.section === "pinned"
       ? sortPinnedThreadsByOrderKey(threads)
-      : sortThreadsForListV2(threads, {
-          sortByLatestUserMessage: input.sortActiveByLatestUserMessage === true,
-        });
+      : sortThreadsForListV2(threads);
   const pending =
     input.pendingOrder?.section === input.section
       ? reconcilePendingThreadOrder(input.pendingOrder, ordered)
@@ -582,8 +546,6 @@ export function buildThreadListV2Items(input: {
       Null/absent leaves the list unfiltered. */
   readonly attentionMemberThreadKeys?: ReadonlySet<string> | null;
   readonly alwaysShowPinnedInAttention?: boolean;
-  /** Sorts unarranged active rows by newest user message. Off = creation order. */
-  readonly sortActiveByLatestUserMessage?: boolean;
   readonly environmentId: EnvironmentId | null;
   /** Model slug filter; null shows every model. */
   readonly model?: string | null;
@@ -729,13 +691,7 @@ export function buildThreadListV2Items(input: {
     active.push(thread);
   }
 
-  const orderedActive = applyPendingThreadOrder(
-    sortThreadsForListV2(active, {
-      sortByLatestUserMessage: input.sortActiveByLatestUserMessage === true,
-    }),
-    "active",
-    pending,
-  );
+  const orderedActive = applyPendingThreadOrder(sortThreadsForListV2(active), "active", pending);
   const orderedOlder = sortOlderThreadsForSidebar(older, { now });
   const orderedSnoozed = [...snoozed].sort(
     (left, right) => snoozeWakeSortMs(left) - snoozeWakeSortMs(right),

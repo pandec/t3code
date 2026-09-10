@@ -79,18 +79,13 @@ If dragging is unavailable for one environment, update the T3 Code server runnin
 environment. Pinned and active reordering require server support. Threads from older servers keep
 their default order until the server is updated.
 
-## Snooze or promote active work
+## Snooze active work
 
 Choose **Snooze** to hide a thread until a preset time. **Until it's done** appears while the agent
 is mid-turn and hides the thread until that turn ends. **Until I wake it** snoozes without a timer.
 Both need a server that supports them. A snoozed thread returns when its timer expires, its turn
 ends, you wake it, or it needs attention. Threads snoozed until done sit at the top of the Snoozed
 section.
-
-Choose **Move to top** for an active, unpinned thread. It saves the thread at the top of the
-arranged active order, the same order drag-and-drop writes, without changing conversation
-timestamps. The action is unavailable for pinned, snoozed, or settled threads and on environments
-that need a server update.
 
 ## Settle finished work
 

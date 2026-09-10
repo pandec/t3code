@@ -261,27 +261,6 @@ export function buildArchiveCurrentThreadAction(input: {
   };
 }
 
-export function buildMoveCurrentThreadToTopAction(input: {
-  threadRef: ScopedThreadRef | null;
-  icon: ReactNode;
-  runThread: (threadRef: ScopedThreadRef) => void | Promise<void>;
-}): CommandPaletteActionItem | null {
-  if (!input.threadRef) {
-    return null;
-  }
-  const threadRef = input.threadRef;
-  return {
-    kind: "action",
-    value: "action:move-current-thread-to-top",
-    searchTerms: ["move", "top", "raise", "current thread"],
-    title: "Move current thread to top",
-    icon: input.icon,
-    run: async () => {
-      await input.runThread(threadRef);
-    },
-  };
-}
-
 /**
  * Per-thread actions the palette offers for the open thread, mirroring the
  * per-thread context menu. Ids are shared between the item builder and the

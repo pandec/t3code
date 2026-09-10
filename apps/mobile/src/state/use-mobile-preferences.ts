@@ -63,12 +63,6 @@ export function useAlwaysShowPinnedInAttention(): boolean {
   return preferences.sidebarAlwaysShowPinnedInAttention ?? false;
 }
 
-/** Whether the active block sorts by newest user message instead of creation. */
-export function useSortActiveByLatestUserMessage(): boolean {
-  const { preferences } = useMobilePreferences();
-  return preferences.sidebarV2SortActiveByLatestUserMessage ?? false;
-}
-
 /**
  * Whether threads settle on their own. Off means inactivity and merged pull
  * requests both stop filing threads away; explicit settling still works.

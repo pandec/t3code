@@ -203,9 +203,9 @@ import {
   sidebarListItemId,
   sidebarMarkerId,
   sortLogicalProjectsForSidebar,
-  sortActiveThreadsForSidebar,
   sortPinnedThreadsForSidebar,
   sortSettledThreadsForSidebar,
+  sortThreadsForSidebar,
   toggleSidebarProjectHidden,
   toggleSidebarProjectSelection,
   useRetainedValue,
@@ -2509,9 +2509,6 @@ export default function Sidebar() {
   const alwaysShowPinnedInAttention = useClientSettings(
     (s) => s.sidebarAlwaysShowPinnedInAttention,
   );
-  const sortActiveByLatestUserMessage = useClientSettings(
-    (s) => s.sidebarV2SortActiveByLatestUserMessage,
-  );
   const newThreadButtonInProjectRow = useClientSettings(
     (s) => s.sidebarV2NewThreadButtonInProjectRow,
   );
@@ -2530,7 +2527,6 @@ export default function Sidebar() {
   const projectGroupingSettings = useClientSettings(selectProjectGroupingSettings);
   const {
     attemptArchiveThread,
-    attemptMoveThreadToTop,
     unarchiveThread,
     settleThread,
     unsettleThread,
@@ -3208,9 +3204,7 @@ export default function Sidebar() {
     // sort, or mixed-version fleets would render different pinned orders on
     // web and mobile from the same data.
     const sortedPinned = sortPinnedThreadsForSidebar(pinned);
-    const sortedActive = sortActiveThreadsForSidebar(active, {
-      sortByLatestUserMessage: sortActiveByLatestUserMessage,
-    });
+    const sortedActive = sortThreadsForSidebar(active);
     return {
       pinnedThreads:
         optimisticDrop?.section !== "pinned" || optimisticDrop.order === null
@@ -3259,7 +3253,6 @@ export default function Sidebar() {
     scopedProjectKeys,
     serverConfigs,
     snoozeWakeTick,
-    sortActiveByLatestUserMessage,
     threads,
   ]);
 
@@ -4912,9 +4905,6 @@ export default function Sidebar() {
           true;
         const supportsSnooze =
           serverConfigs.get(thread.environmentId)?.environment.capabilities.threadSnooze === true;
-        const supportsMoveToTop =
-          serverConfigs.get(thread.environmentId)?.environment.capabilities.threadActiveReorder ===
-          true;
         const supportsPinning =
           serverConfigs.get(thread.environmentId)?.environment.capabilities.threadPinning === true;
         const supportsTitleRegeneration =
@@ -4953,7 +4943,6 @@ export default function Sidebar() {
               },
               snoozePresets,
               forkExtras: {
-                moveToTop: supportsMoveToTop,
                 fork: canForkConversation(thread),
               },
             }),
@@ -5042,9 +5031,6 @@ export default function Sidebar() {
           case "mark-unread":
             markThreadUnread(threadKey, thread.latestTurn?.completedAt);
             return;
-          case "move-to-top":
-            await attemptMoveThreadToTop(threadRef);
-            return;
           case "fork": {
             attemptFork(threadRef);
             return;
@@ -5107,7 +5093,6 @@ export default function Sidebar() {
       })();
     },
     [
-      attemptMoveThreadToTop,
       attemptPin,
       attemptSettle,
       attemptSnooze,

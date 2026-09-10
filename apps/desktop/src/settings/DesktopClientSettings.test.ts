@@ -83,7 +83,6 @@ const clientSettings: ClientSettings = {
   legacySidebarEnabled: false,
   sidebarV2CompactCards: true,
   sidebarAlwaysShowPinnedInAttention: true,
-  sidebarV2SortActiveByLatestUserMessage: true,
   sidebarV2NewThreadButtonInProjectRow: true,
   sidebarOlderSectionEnabled: true,
   sidebarOlderSectionAfterDays: 14,

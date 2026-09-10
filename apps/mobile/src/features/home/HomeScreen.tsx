@@ -45,7 +45,6 @@ import {
   useAlwaysShowPinnedInAttention,
   useArchivedSectionVisibleCount,
   useOlderSectionSettings,
-  useSortActiveByLatestUserMessage,
   useThreadShelfExpansion,
 } from "../../state/use-mobile-preferences";
 import { useRecentArchivedThreadSnapshots } from "../archive/useArchivedThreadSnapshots";
@@ -253,7 +252,6 @@ export function HomeScreen(props: HomeScreenProps) {
   const threadListV2Enabled = useThreadListV2Enabled();
   const archivedSectionVisibleCount = useArchivedSectionVisibleCount();
   const alwaysShowPinnedInAttention = useAlwaysShowPinnedInAttention();
-  const sortActiveByLatestUserMessage = useSortActiveByLatestUserMessage();
   const olderSection = useOlderSectionSettings();
   const { expanded: olderShelfExpanded, toggle: toggleOlderShelf } =
     useThreadShelfExpansion("older");
@@ -801,7 +799,6 @@ export function HomeScreen(props: HomeScreenProps) {
           threads: props.threads,
           section,
           pendingOrder,
-          sortActiveByLatestUserMessage,
           now: new Date().toISOString(),
           settlementEnvironmentIds,
           snoozeEnvironmentIds,
@@ -814,7 +811,6 @@ export function HomeScreen(props: HomeScreenProps) {
     props.threads,
     pendingOrder,
     queuedThreadKeys,
-    sortActiveByLatestUserMessage,
     settlementEnvironmentIds,
     snoozeEnvironmentIds,
     nowMinute,
@@ -842,7 +838,6 @@ export function HomeScreen(props: HomeScreenProps) {
       threads: props.threads.filter((thread) => thread.archivedAt === null),
       attentionMemberThreadKeys: props.attentionMemberThreadKeys,
       alwaysShowPinnedInAttention,
-      sortActiveByLatestUserMessage,
       environmentId: props.selectedEnvironmentId,
       model: props.selectedModel,
       projectRefs: v2ScopedProjectGroup === null ? null : v2ScopedProjectGroup.projectRefs,
@@ -863,7 +858,6 @@ export function HomeScreen(props: HomeScreenProps) {
     });
   }, [
     alwaysShowPinnedInAttention,
-    sortActiveByLatestUserMessage,
     olderSection.enabled,
     olderSection.afterDays,
     olderShelfExpanded,

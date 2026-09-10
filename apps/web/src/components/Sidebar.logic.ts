@@ -1020,13 +1020,6 @@ export function admitNewSidebarV2AttentionThreads(
   return toSidebarAttentionFilterState(next);
 }
 
-/** NaN-safe Date.parse for sort comparators: a malformed timestamp must not
-    poison the whole ordering, so it sinks to the epoch instead. */
-function parseTimestampMs(isoDate: string): number {
-  const parsed = Date.parse(isoDate);
-  return Number.isNaN(parsed) ? 0 : parsed;
-}
-
 /** First VALID timestamp wins: `a ?? b` falls through on null, but a present-
     yet-malformed string must also fall through to the next candidate rather
     than sink the row to the epoch. */
@@ -1059,109 +1052,6 @@ export { sortActiveThreadsByOrderKey as sortThreadsForSidebar } from "@t3tools/c
 // (state/thread-sort) so web and mobile compute identical pinned orders.
 export { pinOrderKeyBetween, planPinnedReorder } from "@t3tools/client-runtime/state/thread-sort";
 export { sortPinnedThreadsByOrderKey as sortPinnedThreadsForSidebar } from "@t3tools/client-runtime/state/thread-sort";
-
-export interface SidebarActiveThreadSortOptions {
-  readonly sortByLatestUserMessage: boolean;
-}
-
-function activeThreadSortTimestamp<
-  T extends {
-    readonly createdAt: string;
-    readonly latestUserMessageAt?: string | null;
-    readonly unsettledAt?: string | null | undefined;
-  },
->(thread: T, options: SidebarActiveThreadSortOptions): number {
-  const baseTimestamp = options.sortByLatestUserMessage
-    ? firstValidTimestampMs(thread.latestUserMessageAt, thread.createdAt)
-    : parseTimestampMs(thread.createdAt);
-  // Un-settle can re-anchor recency, but creation time must not floor an
-  // imported thread's older message timestamp.
-  return Math.max(baseTimestamp, firstValidTimestampMs(thread.unsettledAt));
-}
-
-/**
- * Plan the key writes that put one thread at the head of the active section.
- * "Move to top" rides the same saved order drag-and-drop writes: the desired
- * order is the target followed by every other unpinned active thread in its
- * current display order, and the planner materializes keys for whatever
- * keyless neighbours would otherwise still outrank the moved row.
- */
-export function planMoveActiveThreadToTop<
-  T extends {
-    readonly id: string;
-    readonly environmentId: string;
-    readonly createdAt: string;
-    readonly latestUserMessageAt?: string | null;
-    readonly unsettledAt?: string | null | undefined;
-    readonly activeOrderKey?: string | null | undefined;
-    readonly archivedAt?: string | null | undefined;
-    readonly pinnedAt?: string | null | undefined;
-    readonly settledOverride?: string | null | undefined;
-    readonly snoozedUntil?: string | null | undefined;
-    readonly snoozedAt?: string | null | undefined;
-  },
->(input: {
-  readonly threads: readonly T[];
-  readonly targetKey: string;
-  readonly keyOf: (thread: T) => string;
-  readonly options: SidebarActiveThreadSortOptions;
-}): ReadonlyArray<{ readonly id: string; readonly orderKey: string }> {
-  const unarchived = input.threads.filter((thread) => thread.archivedAt == null);
-  const active = sortActiveThreadsForSidebar(
-    unarchived.filter(
-      (thread) =>
-        thread.pinnedAt == null &&
-        thread.settledOverride !== "settled" &&
-        thread.snoozedUntil == null &&
-        thread.snoozedAt == null,
-    ),
-    input.options,
-  );
-  const orderedIds = [
-    input.targetKey,
-    ...active.map(input.keyOf).filter((key) => key !== input.targetKey),
-  ];
-  return planPinnedReorder({
-    orderedIds,
-    // Hidden rows (snoozed, settled) retain their keys; they must not be reused.
-    keysById: new Map(
-      unarchived.map((thread) => [input.keyOf(thread), thread.activeOrderKey ?? null]),
-    ),
-    movedId: input.targetKey,
-  });
-}
-
-/** Keyless threads lead in the chosen recency order; arranged threads keep their saved order. */
-export function sortActiveThreadsForSidebar<
-  T extends {
-    readonly id: string;
-    readonly createdAt: string;
-    readonly latestUserMessageAt?: string | null;
-    readonly unsettledAt?: string | null | undefined;
-    readonly activeOrderKey?: string | null | undefined;
-    readonly environmentId?: string | undefined;
-  },
->(threads: readonly T[], options: SidebarActiveThreadSortOptions): T[] {
-  return threads.toSorted((left, right) => {
-    const leftKey = left.activeOrderKey;
-    const rightKey = right.activeOrderKey;
-    if (leftKey == null && rightKey != null) return -1;
-    if (leftKey != null && rightKey == null) return 1;
-    const order =
-      leftKey != null && rightKey != null
-        ? leftKey < rightKey
-          ? -1
-          : leftKey > rightKey
-            ? 1
-            : 0
-        : activeThreadSortTimestamp(right, options) - activeThreadSortTimestamp(left, options);
-    return (
-      order ||
-      left.id.localeCompare(right.id) ||
-      (left.environmentId ?? "").localeCompare(right.environmentId ?? "")
-    );
-  });
-}
 
 /**
  * Search the already-ordered sidebar thread collection by title only.
