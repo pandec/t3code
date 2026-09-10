@@ -1411,6 +1411,23 @@ projectionSnapshotLayer("ProjectionSnapshotQuery", (it) => {
       assert.equal(recentArchived.threads[0]?.activeOrderKey, "m");
       assert.equal(recentArchived.threads[0]?.pinOrderKey, "n");
 
+      // The shelf's project filter narrows the window and its total together;
+      // an empty list is a real filter that matches nothing, not "all".
+      const inScope = yield* snapshotQuery.getRecentArchivedThreads({
+        limit: 1,
+        projectIds: [asProjectId("project-archive-test")],
+      });
+      assert.equal(inScope.totalArchivedCount, 1);
+      assert.deepEqual(
+        inScope.threads.map((thread) => thread.id),
+        [ThreadId.make("thread-archived")],
+      );
+      for (const projectIds of [[asProjectId("project-other")], []]) {
+        const outOfScope = yield* snapshotQuery.getRecentArchivedThreads({ limit: 1, projectIds });
+        assert.equal(outOfScope.totalArchivedCount, 0);
+        assert.deepEqual(outOfScope.threads, []);
+      }
+
       assert.deepEqual(archivedShellSnapshot.threads[0]?.branchPullRequest, branchPullRequest);
       const activeContext = yield* snapshotQuery.getThreadRuntimeContext(
         ThreadId.make("thread-active"),

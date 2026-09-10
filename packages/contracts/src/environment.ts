@@ -124,6 +124,10 @@ export const ExecutionEnvironmentCapabilities = Schema.Struct({
   threadSnoozeUntilDone: Schema.optionalKey(Schema.Boolean),
   /** Server exposes a bounded recent-archive query for always-mounted shelves. */
   recentArchivedThreads: Schema.optionalKey(Schema.Boolean),
+  /** The recent-archive query honors `projectIds`. Older servers drop the
+      unknown key and answer unfiltered, so clients fall back to the full
+      archived snapshot while a project filter is on. */
+  recentArchivedThreadsProjectFilter: Schema.optionalKey(Schema.Boolean),
   /** Server persists ServerSettings.projectAccentColors and accepts its
       whole-map patch. Absent on older servers, whose patch decoder silently
       drops the unknown key, so clients must not send accent writes. */

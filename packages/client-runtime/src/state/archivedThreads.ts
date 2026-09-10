@@ -1,5 +1,6 @@
 import {
   EnvironmentId,
+  ProjectId,
   type OrchestrationGetRecentArchivedThreadsResult,
   type OrchestrationShellSnapshot,
 } from "@t3tools/contracts";
@@ -57,26 +58,49 @@ export function parseArchivedThreadsEnvironmentKey(key: string): ReadonlyArray<E
   );
 }
 
+export interface RecentArchivedThreadsTarget {
+  readonly environmentId: EnvironmentId;
+  /** Projects the shelf may show for this environment; absent means all of
+      them. Mirrors the client's project filter so the server-side window and
+      total count agree with the rest of the list. */
+  readonly projectIds?: ReadonlyArray<ProjectId>;
+}
+
 export function makeRecentArchivedThreadsKey(
   environmentIds: ReadonlyArray<EnvironmentId>,
   visibleCount: number,
+  projectIdsByEnvironment?: ReadonlyMap<EnvironmentId, ReadonlyArray<ProjectId>>,
 ): string {
   return JSON.stringify({
-    environmentIds: pipe(environmentIds, Arr.sort(environmentIdOrder)),
+    targets: pipe(
+      environmentIds,
+      Arr.sort(environmentIdOrder),
+      Arr.map((environmentId) => {
+        const projectIds = projectIdsByEnvironment?.get(environmentId);
+        return projectIds === undefined
+          ? [environmentId]
+          : [environmentId, pipe(projectIds, Arr.sort(Order.String))];
+      }),
+    ),
     visibleCount,
   });
 }
 
-function parseRecentArchivedThreadsKey(key: string): {
-  readonly environmentIds: ReadonlyArray<EnvironmentId>;
+export function parseRecentArchivedThreadsKey(key: string): {
+  readonly targets: ReadonlyArray<RecentArchivedThreadsTarget>;
   readonly visibleCount: number;
 } {
   const parsed = JSON.parse(key) as {
-    readonly environmentIds: ReadonlyArray<string>;
+    readonly targets: ReadonlyArray<readonly [string, ReadonlyArray<string>?]>;
     readonly visibleCount: number;
   };
   return {
-    environmentIds: parsed.environmentIds.map((environmentId) => EnvironmentId.make(environmentId)),
+    targets: parsed.targets.map(([environmentId, projectIds]) => ({
+      environmentId: EnvironmentId.make(environmentId),
+      ...(projectIds === undefined
+        ? {}
+        : { projectIds: projectIds.map((projectId) => ProjectId.make(projectId)) }),
+    })),
     visibleCount: parsed.visibleCount,
   };
 }
@@ -114,9 +138,11 @@ export function createArchivedThreadSnapshotsAtomFamily<E>(options: {
 
 export function createRecentArchivedThreadSnapshotsAtomFamily<E>(options: {
   readonly supportsRecentAtom: (environmentId: EnvironmentId) => Atom.Atom<boolean>;
+  readonly supportsRecentProjectFilterAtom: (environmentId: EnvironmentId) => Atom.Atom<boolean>;
   readonly getRecentAtom: (
     environmentId: EnvironmentId,
     limit: number,
+    projectIds?: ReadonlyArray<ProjectId>,
   ) => Atom.Atom<AsyncResult.AsyncResult<OrchestrationGetRecentArchivedThreadsResult, E>>;
   readonly getFallbackAtom: (
     environmentId: EnvironmentId,
@@ -125,21 +151,23 @@ export function createRecentArchivedThreadSnapshotsAtomFamily<E>(options: {
   readonly labelPrefix: string;
 }) {
   return Atom.family((key: string) => {
-    const { environmentIds, visibleCount } = parseRecentArchivedThreadsKey(key);
+    const { targets, visibleCount } = parseRecentArchivedThreadsKey(key);
     return Atom.make((get): RecentArchivedThreadSnapshotsState => {
       const snapshots: RecentArchivedSnapshotEntry[] = [];
       const invalidationSequences = new Map<EnvironmentId, number>();
       let error: string | null = null;
       let isLoading = false;
 
-      for (const environmentId of environmentIds) {
+      for (const { environmentId, projectIds } of targets) {
         invalidationSequences.set(
           environmentId,
           get(options.getInvalidationSequenceAtom(environmentId)),
         );
-        const supportsRecent = get(options.supportsRecentAtom(environmentId));
+        const supportsRecent =
+          get(options.supportsRecentAtom(environmentId)) &&
+          (projectIds === undefined || get(options.supportsRecentProjectFilterAtom(environmentId)));
         if (supportsRecent) {
-          const result = get(options.getRecentAtom(environmentId, visibleCount));
+          const result = get(options.getRecentAtom(environmentId, visibleCount, projectIds));
           isLoading ||= result.waiting;
           const value = Option.getOrNull(AsyncResult.value(result));
           if (value !== null) {
@@ -153,14 +181,20 @@ export function createRecentArchivedThreadSnapshotsAtomFamily<E>(options: {
             error = "Failed to load recent archived threads.";
           }
         } else {
+          // The fallback snapshot is the whole archive (also the route for
+          // servers that can't filter), so the project filter applies here.
           const result = get(options.getFallbackAtom(environmentId));
           isLoading ||= result.waiting;
           const value = Option.getOrNull(AsyncResult.value(result));
           if (value !== null) {
+            const threads =
+              projectIds === undefined
+                ? value.threads
+                : value.threads.filter((thread) => projectIds.includes(thread.projectId));
             snapshots.push({
               environmentId,
-              threads: value.threads,
-              totalArchivedCount: value.threads.length,
+              threads,
+              totalArchivedCount: threads.length,
             });
           }
           if (error === null && result._tag === "Failure") {

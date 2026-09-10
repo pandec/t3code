@@ -920,6 +920,9 @@ export type OrchestrationShellSnapshot = typeof OrchestrationShellSnapshot.Type;
 
 export const OrchestrationGetRecentArchivedThreadsInput = Schema.Struct({
   limit: Schema.Int.check(Schema.isBetween({ minimum: 1, maximum: 50 })),
+  /** Restrict the window and its total to these projects. Absent means every
+      project; an empty list matches nothing. */
+  projectIds: Schema.optional(Schema.Array(ProjectId)),
 });
 export type OrchestrationGetRecentArchivedThreadsInput =
   typeof OrchestrationGetRecentArchivedThreadsInput.Type;

@@ -85,15 +85,20 @@ export function useSidebarEnvironmentFilter(input: {
         : null,
     [environments, input.environmentsReady, input.shellsBootstrapped, scope],
   );
-  // Archived recents are hidden outright while any scope is set (matching the
-  // project filter), so subscribing to their per-environment RPCs would page
-  // remote links for rows that are guaranteed not to render.
+  // Archived recents follow the scope like live rows do, so only the scoped
+  // environments' per-environment RPCs are subscribed; an unresolved catalog
+  // subscribes nothing rather than paging remote links for rows that may
+  // not render.
   const environmentIds = useMemo(
     () =>
-      input.environmentsReady && scope === null
-        ? input.environments.map((environment) => environment.environmentId)
-        : [],
-    [input.environments, input.environmentsReady, scope],
+      !input.environmentsReady
+        ? []
+        : resolvedScope === null
+          ? input.environments.map((environment) => environment.environmentId)
+          : input.environments.flatMap((environment) =>
+              resolvedScope.has(environment.environmentId) ? [environment.environmentId] : [],
+            ),
+    [input.environments, input.environmentsReady, resolvedScope],
   );
   const toggleEnvironment = useCallback(
     (environmentId: string) => {

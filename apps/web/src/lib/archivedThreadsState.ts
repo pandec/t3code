@@ -7,7 +7,7 @@ import {
   makeRecentArchivedThreadsKey,
   type RecentArchivedSnapshotEntry,
 } from "@t3tools/client-runtime/state/threads";
-import type { EnvironmentId } from "@t3tools/contracts";
+import type { EnvironmentId, ProjectId } from "@t3tools/contracts";
 import { Atom } from "effect/unstable/reactivity";
 import { useCallback, useEffect, useMemo, useRef } from "react";
 
@@ -28,10 +28,14 @@ const archivedSnapshotsAtom = createArchivedThreadSnapshotsAtomFamily({
   labelPrefix: "web:archived-thread-snapshots",
 });
 
-function recentArchivedThreadsAtom(environmentId: EnvironmentId, limit: number) {
+function recentArchivedThreadsAtom(
+  environmentId: EnvironmentId,
+  limit: number,
+  projectIds?: ReadonlyArray<ProjectId>,
+) {
   return orchestrationEnvironment.recentArchivedThreads({
     environmentId,
-    input: { limit },
+    input: { limit, ...(projectIds === undefined ? {} : { projectIds }) },
   });
 }
 
@@ -42,6 +46,13 @@ const supportsRecentArchivedThreadsAtom = Atom.family((environmentId: Environmen
         .recentArchivedThreads === true,
   ),
 );
+const supportsRecentArchivedThreadsProjectFilterAtom = Atom.family((environmentId: EnvironmentId) =>
+  Atom.make(
+    (get) =>
+      get(environmentServerConfigsAtom).get(environmentId)?.environment.capabilities
+        .recentArchivedThreadsProjectFilter === true,
+  ),
+);
 const archiveInvalidationSequenceAtom = Atom.family((environmentId: EnvironmentId) =>
   Atom.make(
     (get) => get(environmentShell.stateValueAtom(environmentId)).archiveInvalidationSequence,
@@ -49,6 +60,7 @@ const archiveInvalidationSequenceAtom = Atom.family((environmentId: EnvironmentI
 );
 const recentArchivedSnapshotsAtom = createRecentArchivedThreadSnapshotsAtomFamily({
   supportsRecentAtom: supportsRecentArchivedThreadsAtom,
+  supportsRecentProjectFilterAtom: supportsRecentArchivedThreadsProjectFilterAtom,
   getRecentAtom: recentArchivedThreadsAtom,
   getFallbackAtom: archivedSnapshotAtom,
   getInvalidationSequenceAtom: archiveInvalidationSequenceAtom,
@@ -85,14 +97,15 @@ export function useArchivedThreadSnapshots(environmentIds: ReadonlyArray<Environ
 export function useRecentArchivedThreadSnapshots(
   environmentIds: ReadonlyArray<EnvironmentId>,
   visibleCount: number,
+  projectIdsByEnvironment?: ReadonlyMap<EnvironmentId, ReadonlyArray<ProjectId>>,
 ): {
   readonly snapshots: ReadonlyArray<RecentArchivedSnapshotEntry>;
   readonly error: string | null;
   readonly isLoading: boolean;
 } {
   const key = useMemo(
-    () => makeRecentArchivedThreadsKey(environmentIds, visibleCount),
-    [environmentIds, visibleCount],
+    () => makeRecentArchivedThreadsKey(environmentIds, visibleCount, projectIdsByEnvironment),
+    [environmentIds, projectIdsByEnvironment, visibleCount],
   );
   const result = useAtomValue(recentArchivedSnapshotsAtom(key));
   const previousInvalidationSequences = useRef<ReadonlyMap<EnvironmentId, number> | null>(null);
@@ -104,15 +117,18 @@ export function useRecentArchivedThreadSnapshots(
     const serverConfigs = appAtomRegistry.get(environmentServerConfigsAtom);
     for (const [environmentId, sequence] of result.invalidationSequences) {
       if (previous.get(environmentId) === sequence) continue;
+      const capabilities = serverConfigs.get(environmentId)?.environment.capabilities;
+      const projectIds = projectIdsByEnvironment?.get(environmentId);
       if (
-        serverConfigs.get(environmentId)?.environment.capabilities.recentArchivedThreads === true
+        capabilities?.recentArchivedThreads === true &&
+        (projectIds === undefined || capabilities.recentArchivedThreadsProjectFilter === true)
       ) {
-        appAtomRegistry.refresh(recentArchivedThreadsAtom(environmentId, visibleCount));
+        appAtomRegistry.refresh(recentArchivedThreadsAtom(environmentId, visibleCount, projectIds));
       } else {
         appAtomRegistry.refresh(archivedSnapshotAtom(environmentId));
       }
     }
-  }, [result.invalidationSequences, visibleCount]);
+  }, [projectIdsByEnvironment, result.invalidationSequences, visibleCount]);
 
   return { snapshots: result.snapshots, error: result.error, isLoading: result.isLoading };
 }

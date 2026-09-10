@@ -438,6 +438,37 @@ describe("sidebar drag projection", () => {
     expect(result.get(sidebarMarkerId("settled-header"))?.y).toBe(32);
   });
 
+  it("keeps a divider that shows its label at rest at its measured height", () => {
+    const items = [
+      pinnedHeader,
+      thread("p", "pinned"),
+      divider,
+      thread("a", "active"),
+      settledHeader,
+      thread("s", "settled"),
+    ];
+    const strategy = createSidebarSortingStrategy({
+      items,
+      settledOrder: ["s"],
+      settledExpanded: true,
+      boundaryLabelHeight: 24,
+    });
+    const args = layout(items, "a", "a");
+    // At rest the divider is a 32px shelf header, not a zero-height marker.
+    const rests = args.rects[2]!;
+    args.rects[2] = { ...rests, height: 32, bottom: rests.top + 32 };
+    for (let index = 3; index < items.length; index += 1) {
+      const rect = args.rects[index]!;
+      args.rects[index] = { ...rect, top: rect.top + 32, bottom: rect.bottom + 32 };
+    }
+    // Only the header opens its 24px; the divider holds its 32 instead of
+    // shrinking to the label height, so nothing below it moves twice.
+    expect(strategy({ ...args, index: 1 })?.y).toBe(24);
+    expect(strategy({ ...args, index: 2 })?.y).toBe(24);
+    expect(strategy({ ...args, index: 4 })?.y).toBe(24);
+    expect(strategy({ ...args, index: 5 })?.y).toBe(24);
+  });
+
   it("scales the label space with the measured root scale", () => {
     const items = [pinnedHeader, thread("p", "pinned"), divider, thread("a1", "active")];
     const result = preview(

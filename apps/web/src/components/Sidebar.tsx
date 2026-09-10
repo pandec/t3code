@@ -44,7 +44,9 @@ import {
 import {
   resolveEnvironmentMachineKind,
   type AccentTintIntensityPercent,
+  type EnvironmentId,
   type EnvironmentMachineKind,
+  type ProjectId,
   type ScopedThreadRef,
   type SidebarProjectAccentColor,
   type SidebarThreadProviderIconVisibility,
@@ -287,6 +289,7 @@ const SNOOZED_SHELF_EXPANDED_KEY = "t3code:sidebar-v2:snoozed-expanded";
 const OLDER_SHELF_EXPANDED_KEY = "t3code:sidebar-v2:older-expanded";
 const ARCHIVED_SHELF_EXPANDED_KEY = "t3code:sidebar-v2:archived-expanded";
 const PINNED_SHELF_EXPANDED_KEY = "t3code:sidebar-v2:pinned-expanded";
+const DRAFTS_SHELF_EXPANDED_KEY = "t3code:sidebar-v2:drafts-expanded";
 
 function threadTimeLabel(thread: SidebarThreadSummary): string {
   const timestamp = thread.latestUserMessageAt ?? thread.updatedAt;
@@ -715,15 +718,29 @@ function SidebarDragBoundary(props: {
   label: string;
   visible: boolean;
   isDropTarget: boolean;
+  /** Keep a muted label on screen at rest, at shelf-header height. The
+      sorting strategy keeps that measured height while dragging, so pickup
+      swaps the label's tone without moving the rows below. */
+  restLabel?: boolean;
 }) {
+  const labelClassName = cn(
+    "absolute inset-x-2 flex h-4 items-center gap-2",
+    props.restLabel ? "top-3" : "top-1",
+  );
   return (
     <SortableSidebarMarker
       marker={props.marker}
       data-testid={`sidebar-${props.marker}`}
-      className="pointer-events-none relative mx-0.5 -mb-px h-0"
+      className={cn("pointer-events-none relative mx-0.5", props.restLabel ? "h-8" : "-mb-px h-0")}
     >
       {props.visible ? (
-        <div className="sidebar-drag-boundary-label absolute inset-x-2 top-1 flex h-4 items-center gap-2">
+        <div
+          className={cn("sidebar-drag-boundary-label", labelClassName)}
+          // The reveal delay exists so rows can open clearance first; a
+          // rest label already holds that space, so its drag tone swaps in
+          // immediately instead of blinking out for a beat.
+          style={props.restLabel ? { animation: "none" } : undefined}
+        >
           <span
             className={cn(
               "shrink-0 text-xs font-medium",
@@ -739,6 +756,13 @@ function SidebarDragBoundary(props: {
               props.isDropTarget ? "bg-primary/50" : "bg-sidebar-foreground/25",
             )}
           />
+        </div>
+      ) : props.restLabel ? (
+        <div className={labelClassName}>
+          <span className="shrink-0 text-xs font-medium text-muted-foreground/50">
+            {props.label}
+          </span>
+          <span aria-hidden className="h-px flex-1 bg-sidebar-border/60" />
         </div>
       ) : null}
     </SortableSidebarMarker>
@@ -911,10 +935,11 @@ interface SidebarDraftRowData {
   composer: ComposerThreadDraftState;
 }
 
-// Draft sessions with user content, surfaced above the pinned block so an
-// interrupted "new thread" stays one click away. Self-contained (own store
-// subscription + closing divider) so per-keystroke composer updates
-// re-render only this block, never the whole sidebar. Vanishes at count 0.
+// Draft sessions with user content, surfaced as their own foldable section
+// above the pinned block so an interrupted "new thread" stays one click
+// away. Self-contained (own store subscription + closing divider) so
+// per-keystroke composer updates re-render only this block, never the
+// whole sidebar. Vanishes at count 0.
 const SidebarDraftBlock = memo(function SidebarDraftBlock(props: {
   projectByKey: ReadonlyMap<string, EnvironmentProject>;
   projectDisplayNameByKey: ReadonlyMap<string, string>;
@@ -924,6 +949,10 @@ const SidebarDraftBlock = memo(function SidebarDraftBlock(props: {
   routeDraftId: string | null;
   onNavigateToDraft: (draftId: DraftId) => void;
 }) {
+  // Folds like the other shelves and is remembered per device. The open
+  // draft keeps its row while folded, the same exception every shelf makes.
+  const [expanded, setExpanded] = useLocalStorage(DRAFTS_SHELF_EXPANDED_KEY, true, Schema.Boolean);
+  const toggleExpanded = useCallback(() => setExpanded((value) => !value), [setExpanded]);
   const draftThreadsByThreadKey = useComposerDraftStore((store) => store.draftThreadsByThreadKey);
   const draftsByThreadKey = useComposerDraftStore((store) => store.draftsByThreadKey);
   const clearDraftThread = useComposerDraftStore((store) => store.clearDraftThread);
@@ -1012,9 +1041,33 @@ const SidebarDraftBlock = memo(function SidebarDraftBlock(props: {
   if (drafts.length === 0) {
     return null;
   }
+  const visibleDrafts = expanded
+    ? drafts
+    : drafts.filter((draft) => draft.draftId === props.routeDraftId);
   return (
     <>
-      {drafts.map(({ composer, draftId, session }) => {
+      <li data-thread-selection-safe className="list-none">
+        <button
+          type="button"
+          onClick={toggleExpanded}
+          aria-expanded={expanded}
+          data-testid="sidebar-drafts-shelf-toggle"
+          className="mb-1 flex w-full cursor-pointer items-center gap-2 px-2.5 text-left"
+        >
+          <span className="text-xs font-medium text-muted-foreground/50">
+            {expanded ? "Drafts" : `Drafts (${drafts.length})`}
+          </span>
+          <span className="h-px flex-1 bg-sidebar-border/60" />
+          <ChevronDownIcon
+            aria-hidden
+            className={cn(
+              "size-3 text-muted-foreground/50 transition-transform",
+              expanded && "rotate-180",
+            )}
+          />
+        </button>
+      </li>
+      {visibleDrafts.map(({ composer, draftId, session }) => {
         const projectKey = `${session.environmentId}:${session.projectId}`;
         return (
           <SidebarDraftRow
@@ -2881,9 +2934,28 @@ export default function Sidebar() {
     // the hook rather than beside its own toggle.
     shellsBootstrapped: allEnvironmentShellsBootstrapped,
   });
+  // The archive shelf follows the project filter the same way live rows do:
+  // per environment, the physical project ids left after scoping and hiding.
+  // No filter means no list, so unfiltered environments keep the cheaper
+  // unrestricted query.
+  const archivedProjectIdsByEnvironment = useMemo(() => {
+    if (scopedProjectKeys === null && hiddenPhysicalProjectKeys.size === 0) return undefined;
+    const byEnvironment = new Map<EnvironmentId, ProjectId[]>();
+    for (const environmentId of environmentFilter.environmentIds) {
+      byEnvironment.set(environmentId, []);
+    }
+    for (const project of projects) {
+      const projectKey = `${project.environmentId}:${project.id}`;
+      if (hiddenPhysicalProjectKeys.has(projectKey)) continue;
+      if (scopedProjectKeys !== null && !scopedProjectKeys.has(projectKey)) continue;
+      byEnvironment.get(project.environmentId)?.push(project.id);
+    }
+    return byEnvironment;
+  }, [environmentFilter.environmentIds, hiddenPhysicalProjectKeys, projects, scopedProjectKeys]);
   const { snapshots: archivedSnapshots } = useRecentArchivedThreadSnapshots(
     environmentFilter.environmentIds,
     archivedSectionVisibleCount,
+    archivedProjectIdsByEnvironment,
   );
   const recentArchive = useMemo(
     () =>
@@ -3006,13 +3078,12 @@ export default function Sidebar() {
           scopedProjectGroups.length > 0
         ? `${projectScopeLabel}: ${projectScopeDetailParts.join(", ")}`
         : projectScopeLabel;
-  const displayedRecentArchive =
-    environmentFilter.scope === null &&
-    projectScopeKeys === null &&
-    hiddenProjectKeys.size === 0 &&
-    !attentionFilterEnabled
-      ? recentArchive
-      : { threads: [], totalCount: 0 };
+  // Environment and project filters are applied at the query, so only the
+  // Attention filter (a live-status snapshot archived rows can't join) hides
+  // the shelf outright.
+  const displayedRecentArchive = attentionFilterEnabled
+    ? { threads: [], totalCount: 0 }
+    : recentArchive;
   const toggleAttentionFilter = useCallback(() => {
     setAttentionFilterState((current) => {
       if (current !== null) return null;
@@ -5980,6 +6051,9 @@ export default function Sidebar() {
                                 label="Active"
                                 visible={from !== null}
                                 isDropTarget={dragTargetSection === "active"}
+                                // Labeled at rest only under a pinned block:
+                                // an unsectioned list needs no divider.
+                                restLabel={pinnedThreads.length > 0 && !attentionFilterEnabled}
                               />,
                             );
                             break;
