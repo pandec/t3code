@@ -272,14 +272,32 @@ describe("serverSettings helpers", () => {
       voice: { agentReplyTts: { voiceId: "Puck" } },
     });
     expect(seeded.voice.agentReplyTts).toEqual({ ...tts, voiceId: "Puck" });
-    // A later patch merges into the existing override, not the default.
+    // A provider change clears provider-specific ids unless replacements
+    // arrive in the same patch.
     const patched = applyServerSettingsPatch(seeded, {
       voice: { agentReplyTts: { provider: "elevenlabs" } },
     });
     expect(patched.voice.agentReplyTts).toEqual({
       ...tts,
       provider: "elevenlabs",
-      voiceId: "Puck",
+      modelId: "",
+      voiceId: "",
+    });
+    expect(
+      applyServerSettingsPatch(current, {
+        voice: {
+          tts: {
+            provider: "elevenlabs",
+            modelId: "eleven_v3",
+            voiceId: "voice-a",
+          },
+        },
+      }).voice.tts,
+    ).toEqual({
+      ...tts,
+      provider: "elevenlabs",
+      modelId: "eleven_v3",
+      voiceId: "voice-a",
     });
     // Null removes it so agent replies inherit the default again.
     expect(
@@ -289,7 +307,7 @@ describe("serverSettings helpers", () => {
       applyServerSettingsPatch(patched, { voice: { tts: { voiceId: "Zephyr" } } }).voice,
     ).toEqual({
       tts: { ...tts, voiceId: "Zephyr" },
-      agentReplyTts: { ...tts, provider: "elevenlabs", voiceId: "Puck" },
+      agentReplyTts: { ...tts, provider: "elevenlabs", modelId: "", voiceId: "" },
       enableAgentVoiceReplies: true,
     });
   });

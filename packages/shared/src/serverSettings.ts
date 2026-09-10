@@ -144,6 +144,17 @@ function mergeModelSelectionOptionsById(input: {
   return [...merged.entries()].map(([id, value]) => ({ id, value }));
 }
 
+function mergeTtsProfilePatch(
+  current: ServerSettings["voice"]["tts"],
+  patch: NonNullable<NonNullable<ServerSettingsPatch["voice"]>["tts"]>,
+): ServerSettings["voice"]["tts"] {
+  const base =
+    patch.provider !== undefined && patch.provider !== current.provider
+      ? { ...current, modelId: "", voiceId: "" }
+      : current;
+  return deepMerge(base, patch);
+}
+
 /** Upsert each patched entry; `null` removes it. Entries the patch omits are untouched. */
 function mergeSettingsEntries<Value>(
   current: Readonly<Record<string, Value>>,
@@ -217,7 +228,7 @@ export function applyServerSettingsPatch(
         : undefined;
   const next = deepMerge(current, patchForMerge);
   // Voice merges one field at a time, except the agent-reply override, whose
-  // `null` removes it (deepMerge would otherwise keep the old object). A
+  // `null` removes it. A
   // partial override patch seeds the missing fields from the default profile.
   const nextVoice =
     voicePatch === undefined
@@ -230,13 +241,13 @@ export function applyServerSettingsPatch(
           tts:
             voicePatch.tts === undefined
               ? current.voice.tts
-              : deepMerge(current.voice.tts, voicePatch.tts),
+              : mergeTtsProfilePatch(current.voice.tts, voicePatch.tts),
           agentReplyTts:
             voicePatch.agentReplyTts === undefined
               ? current.voice.agentReplyTts
               : voicePatch.agentReplyTts === null
                 ? null
-                : deepMerge(
+                : mergeTtsProfilePatch(
                     current.voice.agentReplyTts ?? current.voice.tts,
                     voicePatch.agentReplyTts,
                   ),
