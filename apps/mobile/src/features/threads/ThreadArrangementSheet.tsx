@@ -19,7 +19,6 @@ import {
   threadDropBusyAtom,
   threadArrangementOpenAtom,
 } from "../../state/thread-order";
-import { useSortActiveByLatestUserMessage } from "../../state/use-mobile-preferences";
 import { queuedThreadKeysAtom } from "../../state/use-thread-outbox";
 import { useThreadListActions } from "../home/useThreadListActions";
 import { useThreadListV2State } from "./use-thread-list-v2-enabled";
@@ -175,14 +174,12 @@ export function ThreadArrangementSheet(props: { onClose: () => void }) {
     );
     return () => clearTimeout(timer);
   }, [threads, now]);
-  const sortActiveByLatestUserMessage = useSortActiveByLatestUserMessage();
   const sections = useMemo(() => {
     const shared = {
       threads,
       now,
       queuedThreadKeys,
       pendingOrder,
-      sortActiveByLatestUserMessage,
       settlementEnvironmentIds: new Set(
         [...configs].flatMap(([id, config]) =>
           config.environment.capabilities.threadSettlement ? [id] : [],
@@ -206,7 +203,7 @@ export function ThreadArrangementSheet(props: { onClose: () => void }) {
       snoozed: parked.filter((thread) => effectiveSnoozed(thread, { now })),
       settled: parked.filter((thread) => !effectiveSnoozed(thread, { now })),
     };
-  }, [threads, configs, now, queuedThreadKeys, pendingOrder, sortActiveByLatestUserMessage]);
+  }, [threads, configs, now, queuedThreadKeys, pendingOrder]);
   const planners = useMemo(() => {
     const planner = (section: "pinned" | "active") =>
       createThreadMovePlanner({

@@ -402,7 +402,6 @@ describe("ClientSettings sidebar", () => {
     const settings = decodeClientSettings({});
     expect(settings.legacySidebarEnabled).toBe(false);
     expect(settings.sidebarV2CompactCards).toBe(false);
-    expect(settings.sidebarV2SortActiveByLatestUserMessage).toBe(false);
     expect(settings.sidebarV2NewThreadButtonInProjectRow).toBe(false);
   });
 
@@ -411,14 +410,6 @@ describe("ClientSettings sidebar", () => {
       decodeClientSettingsPatch({
         sidebarV2NewThreadButtonInProjectRow: true,
       }).sidebarV2NewThreadButtonInProjectRow,
-    ).toBe(true);
-  });
-
-  it("accepts opting into latest-user-message ordering", () => {
-    expect(
-      decodeClientSettingsPatch({
-        sidebarV2SortActiveByLatestUserMessage: true,
-      }).sidebarV2SortActiveByLatestUserMessage,
     ).toBe(true);
   });
 

@@ -42,7 +42,6 @@ import * as Option from "effect/Option";
 import {
   ArchiveIcon,
   ArrowLeftIcon,
-  ArrowUpToLineIcon,
   CircleCheckIcon,
   CircleDotIcon,
   ArrowLeftRightIcon,
@@ -85,11 +84,7 @@ import { useSavedPromptList } from "../hooks/useSavedPrompts";
 import { savedPromptPreview } from "./chat/composerPromptPicker";
 import { useThreadActions } from "../hooks/useThreadActions";
 import { useProjectAccentColors } from "../hooks/useProjectAccentColors";
-import {
-  useAccentTintSettings,
-  useClientSettings,
-  useLegacySidebarEnabled,
-} from "../hooks/useSettings";
+import { useAccentTintSettings, useClientSettings } from "../hooks/useSettings";
 import { useOpenPanelPullRequestUrl } from "../hooks/useOpenPanelPullRequestUrl";
 import { useTheme } from "../hooks/useTheme";
 import { readLocalApi } from "../localApi";
@@ -150,7 +145,6 @@ import {
   savedPromptItemValue,
   buildArchivedThreadsActionItems,
   buildCurrentThreadActionItems,
-  buildMoveCurrentThreadToTopAction,
   buildBrowseGroups,
   buildProjectActionItems,
   buildRootGroups,
@@ -690,7 +684,6 @@ function OpenCommandPaletteDialog(props: {
     useHandleNewThread();
   const {
     attemptArchiveThread,
-    attemptMoveThreadToTop,
     forkThread,
     pinThread,
     settleThread,
@@ -762,7 +755,6 @@ function OpenCommandPaletteDialog(props: {
   const projectOrder = useUiStateStore((store) => store.projectOrder);
   const threads = useThreadShells();
   const serverConfigs = useServerConfigs();
-  const defaultSidebarEnabled = !useLegacySidebarEnabled();
   const keybindings = useAtomValue(primaryServerKeybindingsAtom);
   const { theme, themeHalves, resolvedTheme } = useTheme();
   const providers = useAtomValue(primaryServerProvidersAtom);
@@ -1847,22 +1839,6 @@ function OpenCommandPaletteDialog(props: {
             thread.archivedAt === null,
         ) ?? null);
   const openUnarchivedThreadRef = openUnarchivedThread === null ? null : routeThreadRef;
-  const moveCurrentThreadToTopAction = buildMoveCurrentThreadToTopAction({
-    threadRef:
-      defaultSidebarEnabled &&
-      openUnarchivedThreadRef !== null &&
-      serverConfigs.get(openUnarchivedThreadRef.environmentId)?.environment.capabilities
-        .threadActiveReorder === true
-        ? openUnarchivedThreadRef
-        : null,
-    icon: <ArrowUpToLineIcon className={ITEM_ICON_CLASS} />,
-    runThread: async (threadRef) => {
-      await attemptMoveThreadToTop(threadRef);
-    },
-  });
-  if (moveCurrentThreadToTopAction) {
-    actionItems.push(moveCurrentThreadToTopAction);
-  }
   const archiveCurrentThreadAction = buildArchiveCurrentThreadAction({
     threadRef: openUnarchivedThreadRef,
     icon: <ArchiveIcon className={ITEM_ICON_CLASS} />,

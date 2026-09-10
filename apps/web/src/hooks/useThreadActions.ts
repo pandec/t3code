@@ -21,7 +21,6 @@ import {
   canArchiveThreadNow,
   getFallbackThreadIdAfterDelete,
   pinOrderKeyBetween,
-  planMoveActiveThreadToTop,
 } from "../components/Sidebar.logic";
 import { useComposerDraftStore } from "../composerDraftStore";
 import { pauseListeningForThread, stopListeningForThread } from "../state/listeningPlayback";
@@ -278,9 +277,6 @@ export function useThreadActions() {
   });
   const sidebarThreadSortOrder = useClientSettings((settings) => settings.sidebarThreadSortOrder);
   const confirmThreadArchive = useClientSettings((settings) => settings.confirmThreadArchive);
-  const sortActiveByLatestUserMessage = useClientSettings(
-    (settings) => settings.sidebarV2SortActiveByLatestUserMessage,
-  );
   const confirmThreadDelete = useClientSettings((settings) => settings.confirmThreadDelete);
   const confirmThreadUnpin = useClientSettings((settings) => settings.confirmThreadUnpin);
   const clearComposerDraftForThread = useComposerDraftStore((store) => store.clearDraftThread);
@@ -892,60 +888,6 @@ export function useThreadActions() {
     [unsnoozeThreadMutation],
   );
 
-  /**
-   * Move-to-top for menu callers. It rides the same saved active order that
-   * drag-and-drop writes: the thread is planned to the head of the whole
-   * unarchived active partition (not the caller's filtered view, so a sidebar
-   * scoped to one project still moves it above threads it cannot see), and
-   * every key the planner materializes is written sequentially. There is
-   * deliberately no rollback: each key write is a complete placement, and the
-   * next arrangement repairs whatever a partial failure leaves behind.
-   */
-  const attemptMoveThreadToTop = useCallback(
-    async (target: ScopedThreadRef) => {
-      if (!readEnvironmentSupportsActiveReorder(target.environmentId)) {
-        const error = new ThreadActiveReorderUnsupportedError({
-          environmentId: target.environmentId,
-          threadId: target.threadId,
-        });
-        toastManager.add(
-          stackedThreadToast({
-            type: "error",
-            title: "Failed to move thread to top",
-            description: error.message,
-          }),
-        );
-        return AsyncResult.failure(Cause.fail(error));
-      }
-      const targetKey = scopedThreadKey(target);
-      const assignments = planMoveActiveThreadToTop({
-        threads: readThreadShells(),
-        targetKey,
-        keyOf: (shell) => scopedThreadKey(scopeThreadRef(shell.environmentId, shell.id)),
-        options: { sortByLatestUserMessage: sortActiveByLatestUserMessage },
-      });
-      let result: AsyncResult.AsyncResult<unknown, unknown> = AsyncResult.success(undefined);
-      for (const assignment of assignments) {
-        const ref = parseScopedThreadKey(assignment.id);
-        if (ref === null) continue;
-        result = await reorderActiveThread(ref, assignment.orderKey);
-        if (result._tag === "Failure") break;
-      }
-      if (result._tag === "Failure" && !isAtomCommandInterrupted(result)) {
-        const error = squashAtomCommandFailure(result);
-        toastManager.add(
-          stackedThreadToast({
-            type: "error",
-            title: "Failed to move thread to top",
-            description: error instanceof Error ? error.message : "An error occurred.",
-          }),
-        );
-      }
-      return result;
-    },
-    [reorderActiveThread, sortActiveByLatestUserMessage],
-  );
-
   const confirmAndDeleteThread = useCallback(
     async (target: ScopedThreadRef) => {
       const localApi = readLocalApi();
@@ -987,7 +929,6 @@ export function useThreadActions() {
       unsettleThread,
       snoozeThread,
       unsnoozeThread,
-      attemptMoveThreadToTop,
       pinThread,
       unpinThread,
       confirmAndUnpinThread,
@@ -1001,7 +942,6 @@ export function useThreadActions() {
       confirmAndUnpinThread,
       deleteThread,
       forkThread,
-      attemptMoveThreadToTop,
       pinThread,
       reorderPinnedThread,
       reorderActiveThread,

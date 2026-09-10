@@ -73,14 +73,6 @@ export interface Preferences {
   readonly accentTintsEnabled?: boolean;
   readonly accentTintIntensityPercent?: number;
   readonly sidebarAlwaysShowPinnedInAttention?: boolean;
-  /**
-   * Sorts the active block by the newest user message instead of creation
-   * time. The sort key itself (`latestUserMessageAt`) is projected by the
-   * server from the thread's messages, so once this is on here and on the
-   * web client, both surfaces order the active block identically no matter
-   * which client sent the message.
-   */
-  readonly sidebarV2SortActiveByLatestUserMessage?: boolean;
   /** Device-local visit markers used by the sticky attention filter. */
   readonly threadLastVisitedAtById?: Readonly<Record<string, string>>;
 }
@@ -154,7 +146,6 @@ export function sanitizePreferences(parsed: Preferences): Preferences {
     accentTintsEnabled?: boolean;
     accentTintIntensityPercent?: number;
     sidebarAlwaysShowPinnedInAttention?: boolean;
-    sidebarV2SortActiveByLatestUserMessage?: boolean;
     threadLastVisitedAtById?: Readonly<Record<string, string>>;
   } = {};
 
@@ -265,10 +256,6 @@ export function sanitizePreferences(parsed: Preferences): Preferences {
   }
   if (typeof parsed.sidebarAlwaysShowPinnedInAttention === "boolean") {
     preferences.sidebarAlwaysShowPinnedInAttention = parsed.sidebarAlwaysShowPinnedInAttention;
-  }
-  if (typeof parsed.sidebarV2SortActiveByLatestUserMessage === "boolean") {
-    preferences.sidebarV2SortActiveByLatestUserMessage =
-      parsed.sidebarV2SortActiveByLatestUserMessage;
   }
   if (
     typeof parsed.threadLastVisitedAtById === "object" &&

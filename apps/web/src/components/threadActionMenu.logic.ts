@@ -18,7 +18,6 @@ export type ThreadActionMenuId =
   | "rename"
   | "regenerate-title"
   | "mark-unread"
-  | "move-to-top"
   | "fork"
   | "copy"
   | "copy-path"
@@ -33,9 +32,6 @@ export type ThreadActionMenuId =
  * each surface still decides which actions it can actually perform.
  */
 export interface ThreadActionMenuForkExtras {
-  // Reorders the unpinned active partition only, so it is hidden once the
-  // thread is pinned, settled, or snoozed (those rows have their own order).
-  readonly moveToTop: boolean;
   readonly fork: boolean;
 }
 
@@ -130,9 +126,6 @@ export function buildThreadActionMenuItems(
         ]
       : []),
     { id: "mark-unread", label: "Mark unread", icon: "mail-open" },
-    ...(state.forkExtras?.moveToTop && !state.isPinned && !state.isSettled && !state.isSnoozed
-      ? [{ id: "move-to-top" as const, label: "Move to top" }]
-      : []),
     ...(state.forkExtras?.fork ? [{ id: "fork" as const, label: "Fork conversation" }] : []),
     {
       id: "copy",

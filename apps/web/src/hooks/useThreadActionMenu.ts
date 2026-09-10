@@ -24,7 +24,6 @@ import { stackedThreadToast, toastManager } from "../components/ui/toast";
 import { threadEnvironment } from "../state/threads";
 import { useAtomCommand } from "../state/use-atom-command";
 import {
-  readEnvironmentSupportsActiveReorder,
   readEnvironmentSupportsPinning,
   readEnvironmentSupportsSettlement,
   readEnvironmentSupportsSnooze,
@@ -45,7 +44,7 @@ import { buildPhysicalToLogicalProjectKeyMap } from "../sidebarProjectGrouping";
 import { useUiStateStore } from "../uiStateStore";
 import { useCopyToClipboard } from "./useCopyToClipboard";
 import { useNewThreadHandler } from "./useHandleNewThread";
-import { useClientSettings, useLegacySidebarEnabled } from "./useSettings";
+import { useClientSettings } from "./useSettings";
 import { useThreadActions } from "./useThreadActions";
 
 function failureToast(title: string, error: unknown) {
@@ -97,7 +96,6 @@ export function useThreadActionMenu(input: {
     confirmAndUnpinThread,
     deleteThread,
     attemptArchiveThread,
-    attemptMoveThreadToTop,
     forkThread,
   } = useThreadActions();
   const updateThreadMetadata = useAtomCommand(threadEnvironment.updateMetadata, {
@@ -107,7 +105,6 @@ export function useThreadActionMenu(input: {
   const markThreadUnread = useUiStateStore((s) => s.markThreadUnread);
   const confirmThreadDelete = useClientSettings((s) => s.confirmThreadDelete);
   const timestampFormat = useClientSettings((s) => s.timestampFormat);
-  const legacySidebarEnabled = useLegacySidebarEnabled();
   const { copyToClipboard: copyPathToClipboard } = useCopyToClipboard<{ path: string }>({
     onCopy: ({ path }) => {
       toastManager.add({ type: "success", title: "Path copied", description: path });
@@ -166,12 +163,6 @@ export function useThreadActionMenu(input: {
           supports,
           snoozePresets,
           forkExtras: {
-            // The legacy sidebar never reads the saved active order, so
-            // offering this there would write a key nothing renders. Same
-            // guard as the command palette's Move to top action.
-            moveToTop:
-              !legacySidebarEnabled &&
-              readEnvironmentSupportsActiveReorder(threadRef.environmentId),
             fork: canForkConversation(thread),
           },
         });
@@ -282,9 +273,6 @@ export function useThreadActionMenu(input: {
           case "mark-unread":
             markThreadUnread(scopedThreadKey(threadRef), thread.latestTurn?.completedAt);
             return;
-          case "move-to-top":
-            await attemptMoveThreadToTop(threadRef);
-            return;
           case "fork":
             await reportFailure("Failed to fork conversation", () => forkThread(threadRef));
             return;
@@ -349,7 +337,6 @@ export function useThreadActionMenu(input: {
     },
     [
       attemptArchiveThread,
-      attemptMoveThreadToTop,
       confirmThreadDelete,
       confirmAndUnpinThread,
       copyBranchToClipboard,
@@ -358,7 +345,6 @@ export function useThreadActionMenu(input: {
       deleteThread,
       forkThread,
       handleNewThread,
-      legacySidebarEnabled,
       logicalProjectKeyByPhysicalKey,
       markThreadUnread,
       onStartRename,

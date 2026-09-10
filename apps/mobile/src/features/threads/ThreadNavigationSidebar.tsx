@@ -38,7 +38,6 @@ import {
   useAlwaysShowPinnedInAttention,
   useArchivedSectionVisibleCount,
   useOlderSectionSettings,
-  useSortActiveByLatestUserMessage,
   useThreadShelfExpansion,
 } from "../../state/use-mobile-preferences";
 import { useRecentArchivedThreadSnapshots } from "../archive/useArchivedThreadSnapshots";
@@ -210,7 +209,6 @@ function ThreadNavigationSidebarPane(
     useArchivedThreadListActions();
   const archivedSectionVisibleCount = useArchivedSectionVisibleCount();
   const alwaysShowPinnedInAttention = useAlwaysShowPinnedInAttention();
-  const sortActiveByLatestUserMessage = useSortActiveByLatestUserMessage();
   const olderSection = useOlderSectionSettings();
   const { expanded: olderShelfExpanded, toggle: toggleOlderShelf } =
     useThreadShelfExpansion("older");
@@ -660,7 +658,6 @@ function ThreadNavigationSidebarPane(
           threads,
           section,
           pendingOrder,
-          sortActiveByLatestUserMessage,
           now: new Date().toISOString(),
           settlementEnvironmentIds,
           snoozeEnvironmentIds,
@@ -673,7 +670,6 @@ function ThreadNavigationSidebarPane(
     threads,
     pendingOrder,
     queuedThreadKeys,
-    sortActiveByLatestUserMessage,
     settlementEnvironmentIds,
     snoozeEnvironmentIds,
     nowMinute,
@@ -699,7 +695,6 @@ function ThreadNavigationSidebarPane(
       threads: threads.filter((thread) => thread.archivedAt === null),
       attentionMemberThreadKeys: attentionFilter.memberThreadKeys,
       alwaysShowPinnedInAttention,
-      sortActiveByLatestUserMessage,
       environmentId: options.selectedEnvironmentId,
       model: options.selectedModel,
       projectRefs: selectedProjectScope === null ? null : selectedProjectScope.projectRefs,
@@ -720,7 +715,6 @@ function ThreadNavigationSidebarPane(
     });
   }, [
     alwaysShowPinnedInAttention,
-    sortActiveByLatestUserMessage,
     attentionFilter.memberThreadKeys,
     olderSection.enabled,
     olderSection.afterDays,

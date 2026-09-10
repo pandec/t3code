@@ -80,13 +80,9 @@ describe("buildThreadActionMenuItems", () => {
     expect(items.at(-1)).toMatchObject({ id: "delete", destructive: true });
   });
 
-  const forkExtras = {
-    moveToTop: true,
-    fork: true,
-  };
+  const forkExtras = { fork: true };
 
   it("omits the fork-only entries for surfaces that pass no extras", () => {
-    expect(ids(baseState)).not.toContain("move-to-top");
     expect(ids(baseState)).not.toContain("fork");
     expect(allIds(baseState).filter((id) => id === "copy-thread-id")).toHaveLength(1);
   });
@@ -99,7 +95,6 @@ describe("buildThreadActionMenuItems", () => {
       "rename",
       "regenerate-title",
       "mark-unread",
-      "move-to-top",
       "fork",
       "copy",
       "project-settings",
@@ -119,16 +114,6 @@ describe("buildThreadActionMenuItems", () => {
       "copy-branch",
       "copy-thread-id",
     ]);
-  });
-
-  it("hides move to top on rows whose order it cannot affect", () => {
-    for (const state of [
-      { ...baseState, forkExtras, isPinned: true },
-      { ...baseState, forkExtras, isSettled: true },
-      { ...baseState, forkExtras, isSnoozed: true },
-    ]) {
-      expect(ids(state)).not.toContain("move-to-top");
-    }
   });
 
   it("offers archive as a non-destructive action right before delete", () => {

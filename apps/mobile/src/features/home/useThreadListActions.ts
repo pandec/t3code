@@ -33,7 +33,6 @@ import {
 } from "../../state/thread-lifecycle-outbox";
 import { environmentThreadShells, threadEnvironment } from "../../state/threads";
 import { queuedThreadKeysAtom } from "../../state/use-thread-outbox";
-import { useSortActiveByLatestUserMessage } from "../../state/use-mobile-preferences";
 import { useAtomCommand } from "../../state/use-atom-command";
 import { useRemoteConnectionStatus } from "../../state/use-remote-environment-registry";
 import {
@@ -661,7 +660,6 @@ export function useThreadListActions(options: {
   const reorderActiveMutation = useAtomCommand(threadEnvironment.reorderActive, {
     reportFailure: false,
   });
-  const sortActiveByLatestUserMessage = useSortActiveByLatestUserMessage();
   const moveThread = useCallback(
     async (thread: EnvironmentThreadShell, direction: ThreadMoveDestination) => {
       if (getPendingThreadOrder() !== null || appAtomRegistry.get(threadDropBusyAtom)) return false;
@@ -703,7 +701,6 @@ export function useThreadListActions(options: {
       const ordered = getThreadListV2OrderedSection({
         threads: shells,
         section,
-        sortActiveByLatestUserMessage,
         now: new Date().toISOString(),
         queuedThreadKeys: appAtomRegistry.get(queuedThreadKeysAtom),
         settlementEnvironmentIds: new Set(
@@ -812,7 +809,6 @@ export function useThreadListActions(options: {
       }
     },
     [
-      sortActiveByLatestUserMessage,
       settleThread,
       reorderActiveMutation,
       reorderPinnedMutation,

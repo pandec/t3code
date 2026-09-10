@@ -1,4 +1,3 @@
-import { generateSpreadPinOrderKeys } from "@t3tools/client-runtime/state/thread-sort";
 import { THREAD_STATUS_PARITY_CASES } from "@t3tools/client-runtime/testing/thread-status-parity";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vite-plus/test";
 import { defaultAnimateLayoutChanges, type AnimateLayoutChanges } from "@dnd-kit/sortable";
@@ -18,7 +17,6 @@ import {
   deleteSelectedThreadEntries,
   filterSidebarProjectScopeItems,
   getSidebarThreadIdsToPrewarm,
-  planMoveActiveThreadToTop,
   resolveAdjacentThreadId,
   reduceSidebarProjectScopeMenuState,
   getFallbackThreadIdAfterDelete,
@@ -42,7 +40,6 @@ import {
   formatWorkingDurationLabel,
   shouldClearThreadSelectionOnMouseDown,
   shouldRecedeSidebarThread,
-  sortActiveThreadsForSidebar,
   sortLogicalProjectsForSidebar,
   sortSettledThreadsForSidebar,
   resolveSidebarDropTarget,
@@ -1323,177 +1320,6 @@ describe("sortThreadsForSidebar", () => {
     ]);
 
     expect(sorted.map((thread) => thread.id)).toEqual(["newest", "stale-stamp"]);
-  });
-});
-
-describe("sortActiveThreadsForSidebar", () => {
-  const threads = [
-    {
-      id: "older",
-      createdAt: "2026-03-09T08:00:00.000Z",
-      latestUserMessageAt: "2026-03-09T13:00:00.000Z",
-    },
-    {
-      id: "newer",
-      createdAt: "2026-03-09T12:00:00.000Z",
-      latestUserMessageAt: "2026-03-09T12:00:00.000Z",
-    },
-  ];
-  const options = (sortByLatestUserMessage = false) => ({ sortByLatestUserMessage });
-
-  it("preserves creation order unless a recency layer is enabled", () => {
-    expect(sortActiveThreadsForSidebar(threads, options()).map((thread) => thread.id)).toEqual([
-      "newer",
-      "older",
-    ]);
-  });
-
-  it("can order by latest user message without using assistant activity", () => {
-    expect(sortActiveThreadsForSidebar(threads, options(true)).map((thread) => thread.id)).toEqual([
-      "older",
-      "newer",
-    ]);
-  });
-
-  it("keeps saved active order behind keyless rows in either recency mode", () => {
-    const arranged = [
-      ...threads,
-      { ...threads[0]!, id: "arranged-b", activeOrderKey: "b" },
-      { ...threads[1]!, id: "arranged-a", activeOrderKey: "a" },
-    ];
-    expect(sortActiveThreadsForSidebar(arranged, options()).map((thread) => thread.id)).toEqual([
-      "newer",
-      "older",
-      "arranged-a",
-      "arranged-b",
-    ]);
-    expect(sortActiveThreadsForSidebar(arranged, options(true)).map((thread) => thread.id)).toEqual(
-      ["older", "newer", "arranged-a", "arranged-b"],
-    );
-  });
-
-  it("re-anchors keyless threads on un-settle in creation order", () => {
-    const unsettled = sortActiveThreadsForSidebar(
-      threads.map((thread) =>
-        thread.id === "older" ? { ...thread, unsettledAt: "2026-03-09T14:00:00.000Z" } : thread,
-      ),
-      options(),
-    );
-    expect(unsettled.map((thread) => thread.id)).toEqual(["older", "newer"]);
-  });
-
-  // An imported thread carries a fresh createdAt with its original message
-  // timestamps, so folding createdAt into the key would sort every import as
-  // brand new and bury genuinely recent conversations.
-  it("does not floor the latest-user-message key with creation time", () => {
-    const sorted = sortActiveThreadsForSidebar(
-      [
-        {
-          id: "imported",
-          createdAt: "2026-03-09T18:00:00.000Z",
-          latestUserMessageAt: "2026-01-05T10:00:00.000Z",
-        },
-        {
-          id: "recent",
-          createdAt: "2026-03-08T08:00:00.000Z",
-          latestUserMessageAt: "2026-03-09T09:00:00.000Z",
-        },
-      ],
-      options(true),
-    );
-    expect(sorted.map((thread) => thread.id)).toEqual(["recent", "imported"]);
-  });
-
-  it("re-anchors on un-settle when ordering by the latest user message", () => {
-    const unsettled = sortActiveThreadsForSidebar(
-      threads.map((thread) =>
-        thread.id === "newer" ? { ...thread, unsettledAt: "2026-03-09T15:00:00.000Z" } : thread,
-      ),
-      options(true),
-    );
-    expect(unsettled.map((thread) => thread.id)).toEqual(["newer", "older"]);
-  });
-
-  describe("planMoveActiveThreadToTop", () => {
-    const keyOf = (thread: { readonly environmentId: string; readonly id: string }) =>
-      `${thread.environmentId}:${thread.id}`;
-    const base = {
-      environmentId: "env",
-      createdAt: "2026-03-09T08:00:00.000Z",
-      archivedAt: null,
-      pinnedAt: null,
-      settledOverride: null,
-      snoozedUntil: null,
-      snoozedAt: null,
-    };
-    const options = { sortByLatestUserMessage: false };
-
-    it("writes keys for the moved thread and every keyless neighbour it must outrank", () => {
-      const threads = [
-        { ...base, id: "a", createdAt: "2026-03-09T12:00:00.000Z", activeOrderKey: null },
-        { ...base, id: "b", createdAt: "2026-03-09T11:00:00.000Z", activeOrderKey: null },
-        { ...base, id: "c", createdAt: "2026-03-09T10:00:00.000Z", activeOrderKey: null },
-      ];
-      const assignments = planMoveActiveThreadToTop({
-        threads,
-        targetKey: "env:c",
-        keyOf,
-        options,
-      });
-      const keys = new Map(assignments.map((assignment) => [assignment.id, assignment.orderKey]));
-      // Keyless rows sort above keyed rows, so a single key for "c" would sink it.
-      expect(keys.has("env:c")).toBe(true);
-      expect(keys.has("env:a")).toBe(true);
-      expect(keys.has("env:b")).toBe(true);
-      const ordered = sortActiveThreadsForSidebar(
-        threads.map((thread) => ({ ...thread, activeOrderKey: keys.get(keyOf(thread)) ?? null })),
-        options,
-      ).map((thread) => thread.id);
-      expect(ordered).toEqual(["c", "a", "b"]);
-    });
-
-    it("needs only one key when the section is already arranged", () => {
-      const [keyA, keyB, keyC] = generateSpreadPinOrderKeys(3) as [string, string, string];
-      const threads = [
-        { ...base, id: "a", activeOrderKey: keyA },
-        { ...base, id: "b", activeOrderKey: keyB },
-        { ...base, id: "c", activeOrderKey: keyC },
-      ];
-      const assignments = planMoveActiveThreadToTop({
-        threads,
-        targetKey: "env:c",
-        keyOf,
-        options,
-      });
-      expect(assignments.map((assignment) => assignment.id)).toEqual(["env:c"]);
-      expect(assignments[0]!.orderKey < keyA).toBe(true);
-    });
-
-    it("ignores pinned, snoozed, settled, and archived rows when planning the order", () => {
-      const [keyA, snoozedKey, keyC] = generateSpreadPinOrderKeys(3) as [string, string, string];
-      const threads = [
-        { ...base, id: "pinned", pinnedAt: "2026-03-09T09:00:00.000Z", activeOrderKey: null },
-        {
-          ...base,
-          id: "snoozed",
-          snoozedUntil: "2099-01-01T00:00:00.000Z",
-          activeOrderKey: snoozedKey,
-        },
-        { ...base, id: "settled", settledOverride: "settled", activeOrderKey: null },
-        { ...base, id: "archived", archivedAt: "2026-03-09T09:00:00.000Z", activeOrderKey: null },
-        { ...base, id: "a", activeOrderKey: keyA },
-        { ...base, id: "c", activeOrderKey: keyC },
-      ];
-      const assignments = planMoveActiveThreadToTop({
-        threads,
-        targetKey: "env:c",
-        keyOf,
-        options,
-      });
-      expect(assignments.map((assignment) => assignment.id)).toEqual(["env:c"]);
-      // A retained snoozed key is still avoided by the planner.
-      expect(assignments[0]!.orderKey).not.toBe(snoozedKey);
-    });
   });
 });
 
