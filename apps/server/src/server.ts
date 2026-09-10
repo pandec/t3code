@@ -352,6 +352,7 @@ const ProviderSessionDirectoryLayerLive = ProviderSessionDirectoryLive.pipe(
 // NDJSON writers and is provided at the outer runtime layer so both
 // `ProviderService` and the per-instance drivers read the same logger pair.
 const ProviderLayerLive = ProviderServiceLive.pipe(
+  Layer.provide(AgentVoiceReply.layer),
   Layer.provide(ProviderAdapterRegistryLive),
   Layer.provideMerge(ProviderSessionDirectoryLayerLive),
 );
@@ -530,10 +531,6 @@ const RuntimeCoreDependenciesLive = Layer.mergeAll(
         ProviderAuthServiceLive,
       ),
     ),
-    // One speech-provider client below message listening, agent voice
-    // replies, the provider service's voice capability check, and the
-    // settings RPCs, so a stored OpenRouter key is seen by all of them.
-    Layer.provideMerge(TtsService.layer.pipe(Layer.provide(ServerSecretStore.layer))),
     // Shared bootstrap program for thread.turn.start commands, consumed by both
     // the WebSocket dispatch path and the HTTP dispatch route. Its git, setup
     // script, and orchestration engine dependencies are provided below.
@@ -550,6 +547,9 @@ const RuntimeCoreDependenciesLive = Layer.mergeAll(
     Layer.provideMerge(GitLayerLive),
     Layer.provideMerge(VcsLayerLive),
     Layer.provideMerge(ProviderRuntimeLayerLive),
+    // Share the speech client across listening, voice replies, and settings RPCs.
+    Layer.provideMerge(TtsService.layer.pipe(Layer.provide(ServerSecretStore.layer))),
+    Layer.provideMerge(ServerSettingsLayerLive),
     Layer.provideMerge(Layer.mergeAll(TerminalLayerLive, PreviewLayerLive)),
     Layer.provideMerge(PersistenceLayerLive),
     // Both read a user-owned file out of the state directory and stream changes

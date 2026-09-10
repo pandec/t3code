@@ -75,6 +75,7 @@ import {
 } from "../../persistence/Layers/Sqlite.ts";
 import * as ServerConfig from "../../config.ts";
 import * as ServerSettings from "../../serverSettings.ts";
+import { AgentVoiceReply } from "../../voice/AgentVoiceReply.ts";
 import * as AnalyticsService from "../../telemetry/AnalyticsService.ts";
 import { makeAdapterRegistryMock } from "../testUtils/providerAdapterRegistryMock.ts";
 import * as ProjectionSnapshotQuery from "../../orchestration/Services/ProjectionSnapshotQuery.ts";
@@ -6160,12 +6161,14 @@ const decodeBrowserAccessThreadShell = Schema.decodeUnknownEffect(OrchestrationT
 
 describe("agent browser access", () => {
   const revokedThreads: Array<ThreadId> = [];
+  const issuedCapabilities: Array<ReadonlySet<string>> = [];
   const projectId = ProjectId.make("project-browser-access");
 
   const startSessionWith = (
     enableAgentBrowserAccess: boolean,
     threadId: ThreadId,
     projectOverride?: boolean,
+    voice?: { readonly available: boolean; readonly enabled?: boolean },
   ) =>
     Effect.gen(function* () {
       const issued: Array<ThreadId> = [];
@@ -6230,6 +6233,7 @@ describe("agent browser access", () => {
         issueMcpCredential: (request) =>
           Effect.sync(() => {
             issued.push(request.threadId);
+            issuedCapabilities.push(request.capabilities);
             return undefined;
           }),
         revokeMcpCredential: (revoked) => Effect.sync(() => void revokedThreads.push(revoked)),
@@ -6238,11 +6242,14 @@ describe("agent browser access", () => {
         Layer.provide(directoryLayer),
         Layer.provide(projectionLayer),
         Layer.provide(
+          Layer.mock(AgentVoiceReply)({ available: Effect.succeed(voice?.available ?? false) }),
+        ),
+        Layer.provide(
           ServerSettings.ServerSettingsService.layerTest({
             enableAgentBrowserAccess,
             projectAgentBrowserAccessOverrides:
               projectOverride === undefined ? {} : { [projectId]: projectOverride },
-            voice: { enableAgentVoiceReplies: false },
+            voice: { enableAgentVoiceReplies: voice !== undefined && voice.enabled !== false },
           }),
         ),
         Layer.provide(serverConfigTestLayer),
@@ -6267,6 +6274,31 @@ describe("agent browser access", () => {
 
       return issued;
     });
+
+  it.effect("gates voice MCP credentials on speech availability and the user toggle", () =>
+    Effect.gen(function* () {
+      issuedCapabilities.length = 0;
+      const enabledThread = asThreadId("thread-voice-enabled");
+      assert.deepEqual(
+        yield* startSessionWith(false, enabledThread, undefined, { available: true }),
+        [enabledThread],
+      );
+      assert.deepEqual([...issuedCapabilities[0]!], ["voice"]);
+      assert.deepEqual(
+        yield* startSessionWith(false, asThreadId("thread-voice-unavailable"), undefined, {
+          available: false,
+        }),
+        [],
+      );
+      assert.deepEqual(
+        yield* startSessionWith(false, asThreadId("thread-voice-disabled"), undefined, {
+          available: true,
+          enabled: false,
+        }),
+        [],
+      );
+    }).pipe(Effect.provide(NodeServices.layer)),
+  );
 
   // Credential issuance is the observable that matters: it is the only place a
   // credential is minted, and `/mcp` accepts nothing else, so withholding it is
