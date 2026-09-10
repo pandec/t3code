@@ -6,6 +6,7 @@ import type {
   TtsProfileSettings,
   TtsProviderDefaults,
   TtsSynthesisCost,
+  TtsTestResult,
 } from "@t3tools/contracts";
 
 export const TTS_TEST_SAMPLE_TEXT =
@@ -112,4 +113,29 @@ export function formatSmallUsd(value: number): string {
   if (value === 0) return "$0";
   if (value >= 0.01) return `$${value.toFixed(value >= 1 ? 2 : 3)}`;
   return `$${value.toFixed(5).replace(/0+$/, "")}`;
+}
+
+/** Owns the test recording and rejects responses from closed or replaced requests. */
+export function createTtsTestAudioSession() {
+  let generation = 0;
+  let audioUrl: string | null = null;
+  const revoke = () => {
+    if (audioUrl !== null) URL.revokeObjectURL(audioUrl);
+    audioUrl = null;
+  };
+  return {
+    begin: () => ++generation,
+    isCurrent: (request: number) => request === generation,
+    accept: (request: number, result: TtsTestResult): string | null => {
+      if (request !== generation) return null;
+      const bytes = Uint8Array.from(atob(result.audioBase64), (char) => char.charCodeAt(0));
+      revoke();
+      audioUrl = URL.createObjectURL(new Blob([bytes], { type: result.mimeType }));
+      return audioUrl;
+    },
+    clear: () => {
+      generation++;
+      revoke();
+    },
+  };
 }

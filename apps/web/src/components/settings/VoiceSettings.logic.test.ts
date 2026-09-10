@@ -1,6 +1,7 @@
-import { describe, expect, it } from "vite-plus/test";
+import { describe, expect, it, vi } from "vite-plus/test";
 
 import {
+  createTtsTestAudioSession,
   describeCatalogModel,
   describeTestCost,
   formatSmallUsd,
@@ -138,5 +139,45 @@ describe("voiceIdAfterModelChange", () => {
     expect(voiceIdAfterModelChange(catalog, openai.id, "alloy")).toBe("alloy");
     expect(voiceIdAfterModelChange(catalog, elevenFlash.id, "shared")).toBe("shared");
     expect(voiceIdAfterModelChange(null, openai.id, "custom")).toBe("custom");
+  });
+});
+
+describe("test audio lifecycle", () => {
+  it("discards late responses and revokes replaced and closed recordings", async () => {
+    const create = vi
+      .spyOn(URL, "createObjectURL")
+      .mockReturnValueOnce("blob:first")
+      .mockReturnValueOnce("blob:second");
+    const revoke = vi.spyOn(URL, "revokeObjectURL").mockImplementation(() => {});
+    const session = createTtsTestAudioSession();
+    const result = {
+      audioBase64: "AQID",
+      mimeType: "audio/mpeg" as const,
+      sizeBytes: 3,
+      characterCount: 1,
+      cost: { usd: null, billedCharacters: null },
+    };
+    try {
+      const stale = session.begin();
+      session.clear();
+      expect(session.accept(stale, result)).toBeNull();
+      expect(create).not.toHaveBeenCalled();
+      const first = session.begin();
+      expect(session.accept(first, result)).toBe("blob:first");
+      const second = session.begin();
+      expect(session.isCurrent(first)).toBe(false);
+      expect(session.accept(first, result)).toBeNull();
+      expect(session.accept(second, result)).toBe("blob:second");
+      expect(revoke).toHaveBeenCalledWith("blob:first");
+      expect(new Uint8Array(await (create.mock.calls[0]![0] as Blob).arrayBuffer())).toEqual(
+        new Uint8Array([1, 2, 3]),
+      );
+      session.clear();
+      expect(revoke).toHaveBeenCalledWith("blob:second");
+      expect(session.accept(second, result)).toBeNull();
+    } finally {
+      session.clear();
+      vi.restoreAllMocks();
+    }
   });
 });

@@ -39,6 +39,7 @@ import { toastManager } from "../ui/toast";
 import { SettingResetButton, SettingsRow, SettingsSection } from "./settingsLayout";
 import { searchableSetting } from "./settingsSearch";
 import {
+  createTtsTestAudioSession,
   describeCatalogModel,
   describeTestCost,
   findCatalogModel,
@@ -262,41 +263,47 @@ function TtsTestDialog({
   const [audioUrl, setAudioUrl] = useState<string | null>(null);
   const audioRef = useRef<HTMLAudioElement | null>(null);
 
-  const replaceAudio = useCallback((next: string | null) => {
-    setAudioUrl((previous) => {
-      if (previous !== null) URL.revokeObjectURL(previous);
-      return next;
-    });
-  }, []);
+  const [audioSession] = useState(createTtsTestAudioSession);
 
   useEffect(() => {
-    if (open) return;
-    replaceAudio(null);
+    setAudioUrl(null);
     setResult(null);
     setError(null);
-  }, [open, replaceAudio]);
+    setPending(false);
+    return () => audioSession.clear();
+  }, [
+    audioSession,
+    open,
+    environmentId,
+    profile.provider,
+    profile.modelId,
+    profile.voiceId,
+    profile.instructions,
+  ]);
 
-  useEffect(() => () => replaceAudio(null), [replaceAudio]);
+  useEffect(() => {
+    if (open && audioUrl !== null) void audioRef.current?.play().catch(() => undefined);
+  }, [open, audioUrl]);
 
   const generate = useCallback(async () => {
     const trimmed = text.trim();
-    if (trimmed.length === 0 || pending) return;
+    if (!open || trimmed.length === 0 || pending) return;
+    const request = audioSession.begin();
     setPending(true);
     setError(null);
     const outcome = await testTts({ environmentId, input: { profile, text: trimmed } });
+    if (!audioSession.isCurrent(request)) return;
     setPending(false);
     if (outcome._tag === "Failure") {
-      replaceAudio(null);
+      audioSession.clear();
+      setAudioUrl(null);
       setResult(null);
       setError(formatEnvironmentQueryError(outcome.cause));
       return;
     }
-    const bytes = Uint8Array.from(atob(outcome.value.audioBase64), (char) => char.charCodeAt(0));
-    replaceAudio(URL.createObjectURL(new Blob([bytes], { type: outcome.value.mimeType })));
+    setAudioUrl(audioSession.accept(request, outcome.value));
     setResult(outcome.value);
-    // Play once the element has the new source.
-    queueMicrotask(() => void audioRef.current?.play().catch(() => undefined));
-  }, [environmentId, pending, profile, replaceAudio, testTts, text]);
+  }, [audioSession, environmentId, open, pending, profile, testTts, text]);
 
   const model = findCatalogModel(catalog, profile.modelId);
   const voiceName =
