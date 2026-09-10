@@ -152,6 +152,30 @@ describe("synthesizeOpenRouterSpeech", () => {
       expect(badRequest.detail).toContain("Unknown voice");
     }),
   );
+
+  it.effect("omits OpenAI-specific instructions for unsupported model families", () =>
+    Effect.gen(function* () {
+      const seen: Array<{ readonly url: string; readonly body: string }> = [];
+      yield* synthesizeOpenRouterSpeech({
+        httpClient: routed(
+          { "https://openrouter.ai/api/v1/audio/speech": () => new Response(Uint8Array.from([1])) },
+          seen,
+        ),
+        apiKey,
+        modelId: "deepgram/aura-2",
+        voiceId: "asteria",
+        instructions: "Cheerful",
+        text: "Hi.",
+        withCost: false,
+      });
+      expect(decodeRequestBody(seen[0]!.body)).toEqual({
+        model: "deepgram/aura-2",
+        input: "Hi.",
+        voice: "asteria",
+        response_format: "mp3",
+      });
+    }),
+  );
 });
 
 describe("OpenRouter speech catalog", () => {
@@ -182,6 +206,7 @@ describe("OpenRouter speech catalog", () => {
         pricing: { prompt: "0.00003", completion: "0" },
       }).priceUsdPerMillionAudioTokens,
     ).toBeNull();
+    expect(toOpenRouterCatalogModel({ id: "deepgram/aura-2" }).supportsInstructions).toBe(false);
   });
 
   it.effect("lists models from the speech-filtered endpoint, name-sorted", () =>

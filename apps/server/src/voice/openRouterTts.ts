@@ -34,7 +34,13 @@ const OPENROUTER_GENERATION_TIMEOUT = "5 seconds";
  * the input text instead, so the instruction is folded into the prompt for
  * them (their docs show exactly this "Say cheerfully: ..." form).
  */
-export const OPENROUTER_INSTRUCTION_PREFIXES: ReadonlyArray<string> = ["google/"];
+export type OpenRouterInstructionMode = "prompt" | "openai" | "none";
+
+export function getOpenRouterInstructionMode(modelId: string): OpenRouterInstructionMode {
+  if (modelId.startsWith("google/")) return "prompt";
+  if (modelId.startsWith("openai/")) return "openai";
+  return "none";
+}
 
 const SpeechModelsBody = Schema.Struct({
   data: Schema.Array(
@@ -94,7 +100,7 @@ export function toOpenRouterCatalogModel(entry: {
     priceUsdPerMillionChars: promptPrice === null ? null : promptPrice * 1_000_000,
     priceUsdPerMillionAudioTokens:
       completionPrice === null || completionPrice === 0 ? null : completionPrice * 1_000_000,
-    supportsInstructions: true,
+    supportsInstructions: getOpenRouterInstructionMode(entry.id) !== "none",
   };
 }
 
@@ -214,12 +220,11 @@ export const synthesizeOpenRouterSpeech = (input: {
 }): Effect.Effect<SynthesizedSpeech, TtsError> =>
   Effect.gen(function* () {
     const instructions = input.instructions?.trim();
+    const instructionMode = getOpenRouterInstructionMode(input.modelId);
     const foldInstructions =
-      instructions !== undefined &&
-      instructions.length > 0 &&
-      OPENROUTER_INSTRUCTION_PREFIXES.some((prefix) => input.modelId.startsWith(prefix));
+      instructions !== undefined && instructions.length > 0 && instructionMode === "prompt";
     const providerOptions =
-      instructions !== undefined && instructions.length > 0 && !foldInstructions
+      instructions !== undefined && instructions.length > 0 && instructionMode === "openai"
         ? { provider: { options: { openai: { instructions } } } }
         : {};
     const response = yield* input.httpClient
