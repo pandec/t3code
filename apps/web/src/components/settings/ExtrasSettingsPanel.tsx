@@ -919,8 +919,8 @@ function SidebarExtrasSection() {
             }
           />
           <SettingsRow
-            title="New thread button beside projects"
-            description="Move the New thread button from the Search row to beside New project."
+            title="New thread button in the project row"
+            description="Show the New thread button at the end of the project filter row instead of the search row."
             resetAction={
               settings.sidebarV2NewThreadButtonInProjectRow !==
               DEFAULT_UNIFIED_SETTINGS.sidebarV2NewThreadButtonInProjectRow ? (
@@ -941,7 +941,7 @@ function SidebarExtrasSection() {
                 onCheckedChange={(checked) =>
                   updateSettings({ sidebarV2NewThreadButtonInProjectRow: Boolean(checked) })
                 }
-                aria-label="Place new thread button beside new project"
+                aria-label="Show new thread button in the project row"
               />
             }
           />

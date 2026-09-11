@@ -225,6 +225,14 @@ export const HermesIcon: Icon = ({ className, ...props }) => (
   </svg>
 );
 
+export const ZaiIcon: Icon = ({ className, ...props }) => (
+  <svg {...props} viewBox="0 0 24 24" className={cn("fill-current", className)} aria-hidden="true">
+    <path d="M4.9 5.6h7.7l-1.3 1.9H4.9Z" />
+    <path d="M13.1 5.6h6.2l-8.4 12.6H4.7Z" />
+    <path d="M12.6 16.4h6.5v1.8h-7.7Z" />
+  </svg>
+);
+
 export const TraeIcon: Icon = (props) => (
   <svg {...props} viewBox="0 0 24 24" fill="currentColor">
     {/* Back rectangle: left strip + bottom strip drawn separately — empty bottom-left corner is the gap between them */}

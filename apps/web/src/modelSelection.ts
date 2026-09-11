@@ -84,8 +84,8 @@ const EMPTY_ICON_RECORD: Readonly<Record<string, string>> = Object.freeze(Object
 
 /**
  * Read the per-custom-model icon overrides for an instance from its
- * `providerInstances[id].config.customModelIcons` blob (slug → driver-kind
- * icon id, see `getModelIconComponent`). Icons only ever live in the
+ * `providerInstances[id].config.customModelIcons` blob (slug → model icon
+ * id, see `getModelIconComponent`). Icons only ever live in the
  * instance envelope — the legacy per-kind bucket predates the feature, so
  * there is no fallback to it.
  */
@@ -125,7 +125,7 @@ export interface AppModelOption {
   isCustom: boolean;
   isDefault?: boolean;
   isLegacy?: boolean;
-  /** Per-model icon override for custom models (a driver-kind icon id). */
+  /** Per-model icon override for custom models (a model icon id). */
   icon?: string;
   isUnavailable?: boolean;
 }
