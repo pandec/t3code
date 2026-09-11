@@ -11,7 +11,7 @@ export const ProviderInstanceIcon = memo(function ProviderInstanceIcon(props: {
   driverKind: ProviderDriverKind;
   displayName: string;
   /**
-   * Per-model icon override (a driver-kind icon id). When it resolves to a
+   * Per-model icon override (a model icon id). When it resolves to a
    * known glyph it replaces the driver's icon; the accent badge and status
    * dot stay instance-scoped either way.
    */

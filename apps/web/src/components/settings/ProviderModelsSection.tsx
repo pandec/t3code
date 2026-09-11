@@ -137,7 +137,7 @@ interface ProviderModelsSectionProps {
    * removed) via `onChange`.
    */
   readonly customModels: ReadonlyArray<CustomModelDefinition>;
-  /** Per-custom-model icon overrides (slug → driver-kind icon id). */
+  /** Per-custom-model icon overrides (slug → model icon id). */
   readonly customModelIcons: Readonly<Record<string, string>>;
   /** Set or clear one custom model's icon override. */
   readonly onCustomModelIconChange: (slug: string, icon: string | null) => void;

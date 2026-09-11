@@ -5470,7 +5470,58 @@ export default function Sidebar() {
                 onSelectPrimaryOnly={environmentFilter.selectPrimaryOnly}
                 onSelectRemoteOnly={environmentFilter.selectRemoteOnly}
               />
-              {!newThreadButtonInProjectRow ? newThreadButton : null}
+              <Tooltip>
+                <TooltipTrigger
+                  render={
+                    <SidebarMenuButton
+                      size="icon"
+                      type="button"
+                      isActive={attentionFilterEnabled}
+                      aria-pressed={attentionFilterEnabled}
+                      aria-label="Threads needing attention"
+                      disabled={!allEnvironmentShellsBootstrapped && !attentionFilterEnabled}
+                      data-testid="sidebar-v2-attention-filter-toggle"
+                      className="relative shrink-0 focus-visible:ring-offset-2 focus-visible:ring-offset-sidebar"
+                      onClick={toggleAttentionFilter}
+                    />
+                  }
+                >
+                  <ListFilterIcon />
+                  <span
+                    className="pointer-events-none absolute left-1/2 top-1/2 size-[max(100%,3rem)] -translate-1/2 pointer-fine:hidden"
+                    aria-hidden="true"
+                  />
+                </TooltipTrigger>
+                <TooltipPopup side="right">
+                  {!allEnvironmentShellsBootstrapped && !attentionFilterEnabled
+                    ? "Loading threads…"
+                    : attentionFilterEnabled
+                      ? "Clear attention filter"
+                      : "Show only threads needing attention"}
+                </TooltipPopup>
+              </Tooltip>
+              <Tooltip>
+                <TooltipTrigger
+                  render={
+                    <SidebarMenuButton
+                      size="icon"
+                      className="relative shrink-0 focus-visible:ring-offset-2 focus-visible:ring-offset-sidebar"
+                      onClick={openAddProjectCommandPalette}
+                      type="button"
+                      aria-label="New project"
+                    />
+                  }
+                >
+                  <FolderPlusIcon />
+                  <span
+                    className="pointer-events-none absolute left-1/2 top-1/2 size-[max(100%,3rem)] -translate-1/2 pointer-fine:hidden"
+                    aria-hidden="true"
+                  />
+                </TooltipTrigger>
+                <TooltipPopup side="right">New project</TooltipPopup>
+              </Tooltip>
+              {/* With no projects the project row is absent, so the search row keeps the button. */}
+              {!newThreadButtonInProjectRow || projectGroups.length === 0 ? newThreadButton : null}
             </div>
             {projectGroups.length > 0 ? (
               <div className="flex items-center gap-1">
@@ -5633,56 +5684,6 @@ export default function Sidebar() {
                     </Tooltip>
                   ) : null}
                 </div>
-                <Tooltip>
-                  <TooltipTrigger
-                    render={
-                      <SidebarMenuButton
-                        size="icon"
-                        type="button"
-                        isActive={attentionFilterEnabled}
-                        aria-pressed={attentionFilterEnabled}
-                        aria-label="Threads needing attention"
-                        disabled={!allEnvironmentShellsBootstrapped && !attentionFilterEnabled}
-                        data-testid="sidebar-v2-attention-filter-toggle"
-                        className="relative shrink-0 focus-visible:ring-offset-2 focus-visible:ring-offset-sidebar"
-                        onClick={toggleAttentionFilter}
-                      />
-                    }
-                  >
-                    <ListFilterIcon />
-                    <span
-                      className="pointer-events-none absolute left-1/2 top-1/2 size-[max(100%,3rem)] -translate-1/2 pointer-fine:hidden"
-                      aria-hidden="true"
-                    />
-                  </TooltipTrigger>
-                  <TooltipPopup side="right">
-                    {!allEnvironmentShellsBootstrapped && !attentionFilterEnabled
-                      ? "Loading threads…"
-                      : attentionFilterEnabled
-                        ? "Clear attention filter"
-                        : "Show only threads needing attention"}
-                  </TooltipPopup>
-                </Tooltip>
-                <Tooltip>
-                  <TooltipTrigger
-                    render={
-                      <SidebarMenuButton
-                        size="icon"
-                        className="relative shrink-0 focus-visible:ring-offset-2 focus-visible:ring-offset-sidebar"
-                        onClick={openAddProjectCommandPalette}
-                        type="button"
-                        aria-label="New project"
-                      />
-                    }
-                  >
-                    <FolderPlusIcon />
-                    <span
-                      className="pointer-events-none absolute left-1/2 top-1/2 size-[max(100%,3rem)] -translate-1/2 pointer-fine:hidden"
-                      aria-hidden="true"
-                    />
-                  </TooltipTrigger>
-                  <TooltipPopup side="right">New project</TooltipPopup>
-                </Tooltip>
                 {newThreadButtonInProjectRow ? newThreadButton : null}
               </div>
             ) : null}

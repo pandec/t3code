@@ -116,7 +116,7 @@ function readConfigCustomModels(config: unknown): ReadonlyArray<CustomModelDefin
 /**
  * Read a string-to-string record at `key` from the opaque config blob,
  * filtering out non-string values and trimming keys and values. Used for
- * `customModelIcons` (custom model slug → driver-kind icon id). Returns a
+ * `customModelIcons` (custom model slug → model icon id). Returns a
  * null-prototype record so user-authored keys like "constructor" miss
  * cleanly instead of resolving to `Object.prototype` members.
  */

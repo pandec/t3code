@@ -6,7 +6,11 @@ import {
 } from "@t3tools/contracts";
 import { DEFAULT_UNIFIED_SETTINGS, type UnifiedSettings } from "@t3tools/contracts/settings";
 import { describe, expect, it } from "vite-plus/test";
-import { getModelIconComponent } from "./components/chat/providerIconUtils";
+import {
+  EXTRA_MODEL_ICON_IDS,
+  getModelIconComponent,
+  PROVIDER_ICON_BY_PROVIDER,
+} from "./components/chat/providerIconUtils";
 import { createModelSelection } from "@t3tools/shared/model";
 import { deriveEffectiveComposerModelState } from "./composerDraftStore";
 import { getComposerProviderState } from "./components/chat/composerProviderState";
@@ -341,11 +345,18 @@ describe("instance-scoped model selection", () => {
   it("resolves icon ids without falling through to Object.prototype", () => {
     expect(getModelIconComponent("codex")).not.toBeNull();
     expect(getModelIconComponent("claudeAgent")).not.toBeNull();
+    expect(getModelIconComponent("zai")).not.toBeNull();
     expect(getModelIconComponent("constructor")).toBeNull();
     expect(getModelIconComponent("hasOwnProperty")).toBeNull();
     expect(getModelIconComponent("not-a-known-driver")).toBeNull();
     expect(getModelIconComponent("")).toBeNull();
     expect(getModelIconComponent(undefined)).toBeNull();
+  });
+
+  it("keeps extra model icon ids from shadowing provider icons", () => {
+    for (const id of EXTRA_MODEL_ICON_IDS) {
+      expect(Object.hasOwn(PROVIDER_ICON_BY_PROVIDER, id)).toBe(false);
+    }
   });
 
   it("does not inject an unknown selected slug into the stock instance list", () => {
