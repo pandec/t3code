@@ -2208,16 +2208,20 @@ function AssistantSpeechPlayer(props: {
   const accentColor = playerTheme["--color-accent"];
   const foregroundColor = String(playerTheme["--color-foreground"]);
   const { trackColor, outlineColor } = listeningPlayerChrome(foregroundColor);
+  // The name ends the signed URL, and the native player sniffs the container
+  // from it; a WAV recording served as `.mp3` fails to decode on iOS.
+  const speechFileName = (speech: { speechId: string; mimeType: string }) =>
+    `${speech.speechId}${speech.mimeType === "audio/wav" ? ".wav" : ".mp3"}`;
   const audioUrlState = useAssetUrlState(props.environmentId, {
     _tag: "attachment",
     attachmentId: props.speech.speechId,
-    fileName: `${props.speech.speechId}.mp3`,
+    fileName: speechFileName(props.speech),
     mimeType: props.speech.mimeType,
   });
   const audioUrl = audioUrlState._tag === "Success" ? audioUrlState.url : null;
   // This row is a view over the app-scoped player: the recording keeps
   // playing when the row unmounts (thread switches, virtualization), and
-  // remounting binds back to it. The MP3 is only fetched when the user
+  // remounting binds back to it. The audio is only fetched when the user
   // presses play — a thread can hold many recordings and the app may be on
   // a remote or cellular link.
   const isActiveTrack = track !== null && track.speechId === props.speech.speechId;
@@ -2261,7 +2265,7 @@ function AssistantSpeechPlayer(props: {
           {
             _tag: "attachment",
             attachmentId: speechId,
-            fileName: `${speechId}.mp3`,
+            fileName: speechFileName({ speechId, mimeType: speechMimeType }),
             mimeType: speechMimeType,
           },
           onResolved,

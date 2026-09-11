@@ -11,8 +11,8 @@ import {
   type HttpClientError,
 } from "effect/unstable/http";
 
-import { SPEECH_MIME_TYPE } from "./elevenLabsTts.ts";
-import { TtsError, type SynthesizedSpeech } from "./ttsTypes.ts";
+import { MP3_MIME_TYPE, TtsError, WAV_MIME_TYPE, type SynthesizedSpeech } from "./ttsTypes.ts";
+import { parsePcmContentType, wrapPcmAsWav } from "./wavAudio.ts";
 
 const OPENROUTER_SPEECH_URL = "https://openrouter.ai/api/v1/audio/speech";
 const OPENROUTER_SPEECH_MODELS_URL = "https://openrouter.ai/api/v1/models?output_modalities=speech";
@@ -40,6 +40,18 @@ export function getOpenRouterInstructionMode(modelId: string): OpenRouterInstruc
   if (modelId.startsWith("google/")) return "prompt";
   if (modelId.startsWith("openai/")) return "openai";
   return "none";
+}
+
+/**
+ * OpenRouter's Gemini TTS route rejects every `response_format` but `pcm`
+ * (raw 16-bit little-endian, 24 kHz mono), while the other speech vendors
+ * return MP3. The catalog does not expose per-model formats, so the vendor
+ * prefix decides; PCM is wrapped as WAV before it leaves the adapter.
+ */
+export type OpenRouterResponseFormat = "mp3" | "pcm";
+
+export function getOpenRouterResponseFormat(modelId: string): OpenRouterResponseFormat {
+  return modelId.startsWith("google/") ? "pcm" : "mp3";
 }
 
 const SpeechModelsBody = Schema.Struct({
@@ -204,8 +216,8 @@ const readGenerationCost = (input: {
     );
 
 /**
- * One OpenRouter speech request. Every model on the endpoint returns MP3 when
- * asked, which keeps the persisted attachment contract (`audio/mpeg`) intact.
+ * One OpenRouter speech request. MP3 is stored as-is; a PCM response is
+ * wrapped as WAV using the rate and channel count from its content type.
  * The cost is read from the generation record the response header names.
  */
 export const synthesizeOpenRouterSpeech = (input: {
@@ -223,6 +235,7 @@ export const synthesizeOpenRouterSpeech = (input: {
     const instructionMode = getOpenRouterInstructionMode(input.modelId);
     const foldInstructions =
       instructions !== undefined && instructions.length > 0 && instructionMode === "prompt";
+    const responseFormat = getOpenRouterResponseFormat(input.modelId);
     const providerOptions =
       instructions !== undefined && instructions.length > 0 && instructionMode === "openai"
         ? { provider: { options: { openai: { instructions } } } }
@@ -234,7 +247,7 @@ export const synthesizeOpenRouterSpeech = (input: {
           model: input.modelId,
           input: foldInstructions ? `${instructions}: ${input.text}` : input.text,
           voice: input.voiceId,
-          response_format: "mp3",
+          response_format: responseFormat,
           ...providerOptions,
         }),
       })
@@ -244,13 +257,20 @@ export const synthesizeOpenRouterSpeech = (input: {
     }
     const generationId = response.headers["x-generation-id"]?.trim() || undefined;
     const buffer = yield* response.arrayBuffer.pipe(Effect.timeout(OPENROUTER_SPEECH_TIMEOUT));
-    const bytes = new Uint8Array(buffer);
-    if (bytes.byteLength === 0) {
+    const rawBytes = new Uint8Array(buffer);
+    if (rawBytes.byteLength === 0) {
       return yield* new TtsError({
         reason: "empty_audio",
         detail: "OpenRouter returned no audio.",
       });
     }
+    const { bytes, mimeType }: Pick<SynthesizedSpeech, "bytes" | "mimeType"> =
+      responseFormat === "pcm"
+        ? {
+            bytes: wrapPcmAsWav(rawBytes, parsePcmContentType(response.headers["content-type"])),
+            mimeType: WAV_MIME_TYPE,
+          }
+        : { bytes: rawBytes, mimeType: MP3_MIME_TYPE };
     const usd =
       input.withCost && generationId !== undefined
         ? yield* readGenerationCost({
@@ -259,11 +279,7 @@ export const synthesizeOpenRouterSpeech = (input: {
             generationId,
           })
         : null;
-    return {
-      bytes,
-      mimeType: SPEECH_MIME_TYPE,
-      cost: { usd, billedCharacters: null },
-    } satisfies SynthesizedSpeech;
+    return { bytes, mimeType, cost: { usd, billedCharacters: null } } satisfies SynthesizedSpeech;
   }).pipe(
     Effect.mapError(
       (error: TtsError | HttpClientError.HttpClientError | { readonly _tag: "TimeoutError" }) =>

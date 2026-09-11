@@ -149,6 +149,14 @@ export const TtsTestInput = Schema.Struct({
 });
 export type TtsTestInput = typeof TtsTestInput.Type;
 
+/**
+ * Container a synthesized recording is stored and served in. ElevenLabs and
+ * most OpenRouter models return MP3; OpenRouter's Gemini route only serves
+ * raw PCM, which the server wraps as WAV so every client plays it natively.
+ */
+export const SpeechAudioMimeType = Schema.Literals(["audio/mpeg", "audio/wav"]);
+export type SpeechAudioMimeType = typeof SpeechAudioMimeType.Type;
+
 export const TtsSynthesisCost = Schema.Struct({
   /** Billed amount in USD when the vendor reports it (OpenRouter). */
   usd: Schema.NullOr(Schema.Number.check(Schema.isFinite())),
@@ -158,7 +166,7 @@ export const TtsSynthesisCost = Schema.Struct({
 export type TtsSynthesisCost = typeof TtsSynthesisCost.Type;
 
 export const TtsTestResult = Schema.Struct({
-  mimeType: Schema.Literal("audio/mpeg"),
+  mimeType: SpeechAudioMimeType,
   audioBase64: TrimmedNonEmptyString,
   sizeBytes: NonNegativeInt,
   characterCount: NonNegativeInt,
@@ -220,7 +228,7 @@ export const MessageSpeechSynthesisResult = Schema.Struct({
   messageId: MessageId,
   speechId: TrimmedNonEmptyString,
   transcript: TrimmedNonEmptyString.check(Schema.isMaxLength(MESSAGE_SPEECH_MAX_SCRIPT_CHARS)),
-  mimeType: Schema.Literal("audio/mpeg"),
+  mimeType: SpeechAudioMimeType,
   sizeBytes: NonNegativeInt,
   // Optional so payloads persisted before agent voice replies still decode;
   // absent means "user".
@@ -233,14 +241,15 @@ export const AGENT_VOICE_REPLY_MAX_SCRIPT_CHARS = 10_000;
 
 /**
  * Speech metadata carried on an assistant-message completion. The audio bytes
- * live in the server attachments directory under `<speechId>.mp3` (written
+ * live in the server attachments directory under `<speechId>.mp3` or `.wav`
+ * by MIME type (written
  * before the command is dispatched, mirroring how user image attachments are
  * persisted by the normalizer); the event stream only ever sees metadata.
  */
 const MessageSpeechAttachmentBase = {
   speechId: TrimmedNonEmptyString,
   transcript: TrimmedNonEmptyString.check(Schema.isMaxLength(MESSAGE_SPEECH_MAX_SCRIPT_CHARS)),
-  mimeType: Schema.Literal("audio/mpeg"),
+  mimeType: SpeechAudioMimeType,
   sizeBytes: NonNegativeInt,
   sourceTextHash: TrimmedNonEmptyString,
   voiceId: TrimmedNonEmptyString,

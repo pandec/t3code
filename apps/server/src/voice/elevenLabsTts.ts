@@ -10,7 +10,7 @@ import {
   type HttpClientError,
 } from "effect/unstable/http";
 
-import { TtsError, type SynthesizedSpeech } from "./ttsTypes.ts";
+import { MP3_MIME_TYPE, TtsError, type SynthesizedSpeech } from "./ttsTypes.ts";
 
 export { TtsError as ElevenLabsTtsError, speechFailureReasonFor } from "./ttsTypes.ts";
 
@@ -26,8 +26,6 @@ const ELEVENLABS_CATALOG_TIMEOUT = "15 seconds";
  * report 0.5. Subscription credits price differently; this is the API rate.
  */
 const ELEVENLABS_USD_PER_MILLION_CHARS_AT_MULTIPLIER_ONE = 100;
-
-export const SPEECH_MIME_TYPE = "audio/mpeg" as const;
 
 const ModelsBody = Schema.Array(
   Schema.Struct({
@@ -261,7 +259,7 @@ export const synthesizeElevenLabsSpeech = (input: {
             )
           : Effect.succeed({
               bytes,
-              mimeType: SPEECH_MIME_TYPE,
+              mimeType: MP3_MIME_TYPE,
               cost: { usd: null, billedCharacters },
             } satisfies SynthesizedSpeech);
       }),

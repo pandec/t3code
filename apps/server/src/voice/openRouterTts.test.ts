@@ -11,6 +11,7 @@ import {
   toOpenRouterCatalogModel,
 } from "./openRouterTts.ts";
 import { TtsError } from "./ttsTypes.ts";
+import { wrapPcmAsWav } from "./wavAudio.ts";
 
 const decodeRequestBody = Schema.decodeUnknownSync(Schema.fromJsonString(Schema.Unknown));
 
@@ -34,14 +35,18 @@ const routed = (
   );
 
 describe("synthesizeOpenRouterSpeech", () => {
-  it.effect("requests mp3 and reads the cost from the generation record", () =>
+  it.effect("requests pcm for Gemini, wraps it as WAV, and reads the generation cost", () =>
     Effect.gen(function* () {
       const seen: Array<{ readonly url: string; readonly body: string }> = [];
+      const pcm = Uint8Array.from([9, 8, 7, 6]);
       const httpClient = routed(
         {
           "https://openrouter.ai/api/v1/audio/speech": () =>
-            new Response(Uint8Array.from([9, 8, 7]), {
-              headers: { "x-generation-id": "gen-1" },
+            new Response(pcm, {
+              headers: {
+                "x-generation-id": "gen-1",
+                "content-type": "audio/pcm;rate=24000;channels=1",
+              },
             }),
           "https://openrouter.ai/api/v1/generation": () =>
             Response.json({ data: { id: "gen-1", total_cost: 0.00042 } }),
@@ -57,7 +62,10 @@ describe("synthesizeOpenRouterSpeech", () => {
         text: "Hello there.",
         withCost: true,
       });
-      expect(synthesized.bytes).toEqual(Uint8Array.from([9, 8, 7]));
+      expect(synthesized.mimeType).toBe("audio/wav");
+      expect(synthesized.bytes).toEqual(
+        wrapPcmAsWav(pcm, { sampleRate: 24_000, channels: 1, bitsPerSample: 16 }),
+      );
       expect(synthesized.cost).toEqual({ usd: 0.00042, billedCharacters: null });
 
       expect(decodeRequestBody(seen[0]!.body)).toEqual({
@@ -65,9 +73,34 @@ describe("synthesizeOpenRouterSpeech", () => {
         // Google models take direction inline; no provider options block.
         input: "Speak warmly: Hello there.",
         voice: "Kore",
-        response_format: "mp3",
+        response_format: "pcm",
       });
       expect(seen[1]!.url).toContain("/api/v1/generation?id=gen-1");
+    }),
+  );
+
+  it.effect("keeps MP3 models as MP3", () =>
+    Effect.gen(function* () {
+      const seen: Array<{ readonly url: string; readonly body: string }> = [];
+      const synthesized = yield* synthesizeOpenRouterSpeech({
+        httpClient: routed(
+          {
+            "https://openrouter.ai/api/v1/audio/speech": () =>
+              new Response(Uint8Array.from([9, 8, 7]), {
+                headers: { "content-type": "audio/mpeg" },
+              }),
+          },
+          seen,
+        ),
+        apiKey,
+        modelId: "deepgram/aura-2",
+        voiceId: "asteria",
+        text: "Hello there.",
+        withCost: false,
+      });
+      expect(synthesized.mimeType).toBe("audio/mpeg");
+      expect(synthesized.bytes).toEqual(Uint8Array.from([9, 8, 7]));
+      expect(decodeRequestBody(seen[0]!.body)).toMatchObject({ response_format: "mp3" });
     }),
   );
 
@@ -116,7 +149,7 @@ describe("synthesizeOpenRouterSpeech", () => {
         text: "Hi.",
         withCost: true,
       });
-      expect(synthesized.bytes).toEqual(Uint8Array.from([1]));
+      expect(synthesized.mimeType).toBe("audio/wav");
       expect(synthesized.cost.usd).toBeNull();
     }),
   );

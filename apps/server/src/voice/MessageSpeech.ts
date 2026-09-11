@@ -4,6 +4,7 @@ import * as NodeCrypto from "node:crypto";
 import {
   MESSAGE_SPEECH_MAX_SOURCE_CHARS,
   MessageSpeechFailureReason,
+  SpeechAudioMimeType,
   type MessageSpeechAttachment,
   type MessageSpeechSynthesisRequest,
   type ModelSelection,
@@ -24,10 +25,22 @@ import { ServerSettingsService } from "../serverSettings.ts";
 import { TextGeneration } from "../textGeneration/TextGeneration.ts";
 import { messageArtifactTextHash } from "../messageArtifacts/identity.ts";
 import { makeMessageArtifactLockCoordinator } from "../messageArtifacts/lock.ts";
-import { SPEECH_MIME_TYPE } from "./elevenLabsTts.ts";
 import { getTtsCharacterLimit, resolveListeningTtsProfile } from "./ttsProfile.ts";
 import { TtsService } from "./TtsService.ts";
-import { speechFailureReasonFor } from "./ttsTypes.ts";
+import {
+  isSpeechAudioMimeType,
+  MP3_MIME_TYPE,
+  speechFailureReasonFor,
+  speechFileExtension,
+} from "./ttsTypes.ts";
+
+/**
+ * Rows are only ever written by this module, and every row from before WAV
+ * existed is MP3, so an unrecognised value can only mean a hand-edited
+ * database; MP3 is the safe reading of it.
+ */
+const cachedSpeechMimeType = (row: Pick<MessageSpeechCacheRow, "mimeType">): SpeechAudioMimeType =>
+  isSpeechAudioMimeType(row.mimeType) ? row.mimeType : MP3_MIME_TYPE;
 
 export { makeMessageArtifactLockCoordinator as makeMessageSpeechLockCoordinator };
 export {
@@ -122,7 +135,7 @@ export function isMessageSpeechCacheReusable(input: {
     input.cache.scriptRecipeHash === input.scriptRecipeHash &&
     input.cache.voiceId === input.voiceId &&
     input.cache.ttsModel === input.ttsModel &&
-    input.cache.mimeType === SPEECH_MIME_TYPE
+    isSpeechAudioMimeType(input.cache.mimeType)
   );
 }
 
@@ -158,10 +171,10 @@ export const layer = Layer.effect(
     const textGeneration = yield* TextGeneration;
     const synthesisLocks = yield* makeMessageArtifactLockCoordinator();
 
-    const resolveSpeechPath = (speechId: string) =>
+    const resolveSpeechPath = (speechId: string, mimeType: SpeechAudioMimeType) =>
       resolveAttachmentRelativePath({
         attachmentsDir: serverConfig.attachmentsDir,
-        relativePath: `${speechId}.mp3`,
+        relativePath: `${speechId}${speechFileExtension(mimeType)}`,
       });
 
     const findMessage = (messageId: string) =>
@@ -204,7 +217,7 @@ export const layer = Layer.effect(
       const attachment = {
         speechId: row.speechId,
         transcript: row.transcript as MessageSpeechAttachment["transcript"],
-        mimeType: SPEECH_MIME_TYPE,
+        mimeType: cachedSpeechMimeType(row),
         sizeBytes: row.sizeBytes as MessageSpeechAttachment["sizeBytes"],
         sourceTextHash: row.sourceTextHash,
         voiceId: row.voiceId,
@@ -275,7 +288,7 @@ export const layer = Layer.effect(
           ttsModel,
         })
       ) {
-        const cachedPath = resolveSpeechPath(cached.speechId);
+        const cachedPath = resolveSpeechPath(cached.speechId, cachedSpeechMimeType(cached));
         if (
           cachedPath &&
           (yield* fileSystem.exists(cachedPath).pipe(Effect.orElseSucceed(() => false)))
@@ -302,12 +315,13 @@ export const layer = Layer.effect(
         return yield* new MessageSpeechError({ reason: "script_failed" });
       }
 
-      const audioBytes = yield* tts.synthesize({ profile, text: transcript }).pipe(
-        Effect.map((synthesized) => synthesized.bytes),
-        Effect.mapError(
-          (error) => new MessageSpeechError({ reason: speechFailureReasonFor(error) }),
-        ),
-      );
+      const { bytes: audioBytes, mimeType } = yield* tts
+        .synthesize({ profile, text: transcript })
+        .pipe(
+          Effect.mapError(
+            (error) => new MessageSpeechError({ reason: speechFailureReasonFor(error) }),
+          ),
+        );
 
       // Synthesis can be slow. Revalidate the exact source before committing an
       // attachment so a message edit, deletion, or agent recording that landed
@@ -330,7 +344,7 @@ export const layer = Layer.effect(
       }
 
       const speechId = createAttachmentId(message.threadId);
-      const speechPath = speechId ? resolveSpeechPath(speechId) : null;
+      const speechPath = speechId ? resolveSpeechPath(speechId, mimeType) : null;
       if (!speechId || !speechPath) {
         return yield* storageError();
       }
@@ -349,7 +363,7 @@ export const layer = Layer.effect(
       return {
         speechId,
         transcript,
-        mimeType: SPEECH_MIME_TYPE,
+        mimeType,
         sizeBytes: audioBytes.byteLength,
         sourceTextHash,
         scriptRecipeHash,
@@ -373,12 +387,15 @@ export const layer = Layer.effect(
       available,
       synthesize: (request) =>
         synthesisLocks.withMessageLock(request.messageId, synthesizeUnlocked(request)),
-      deleteAttachment: (speechId) => {
-        const speechPath = resolveSpeechPath(speechId);
-        return speechPath === null
-          ? Effect.fail(storageError())
-          : fileSystem.remove(speechPath, { force: true }).pipe(Effect.mapError(storageError));
-      },
+      // Callers only hold the id, so both containers are removed; at most
+      // one exists.
+      deleteAttachment: (speechId) =>
+        Effect.forEach(SpeechAudioMimeType.literals, (mimeType) => {
+          const speechPath = resolveSpeechPath(speechId, mimeType);
+          return speechPath === null
+            ? Effect.fail(storageError())
+            : fileSystem.remove(speechPath, { force: true }).pipe(Effect.mapError(storageError));
+        }).pipe(Effect.asVoid),
     });
   }),
 );

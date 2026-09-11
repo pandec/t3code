@@ -21,6 +21,7 @@ import {
   stripLeadingXingFrame,
 } from "./AgentVoiceReply.ts";
 import * as TtsService from "./TtsService.ts";
+import { wrapPcmAsWav } from "./wavAudio.ts";
 
 const emptySecretStore = ServerSecretStore.ServerSecretStore.of({
   get: () => Effect.succeedNone,
@@ -127,16 +128,37 @@ describe("appendSpeechAudio", () => {
     const first = concat(id3Tag(20), headerFrame("Info"), frames(0x01, 0x02));
     const second = concat(id3Tag(30), headerFrame("Info"), frames(0x03, 0x04));
 
-    const merged = appendSpeechAudio(first, second);
+    const merged = appendSpeechAudio(first, second, "audio/mpeg");
     expect(merged).toEqual(frames(0x01, 0x02, 0x03, 0x04));
 
     const mpeg2Merged = appendSpeechAudio(
       concat(mpeg2HeaderFrame("Info"), frames(0x05, 0x06)),
       concat(mpeg2HeaderFrame("Info"), frames(0x07, 0x08)),
+      "audio/mpeg",
     );
     expect(mpeg2Merged).toEqual(frames(0x05, 0x06, 0x07, 0x08));
     // Re-appending to an already merged stream is stable.
-    expect(appendSpeechAudio(merged, second)).toEqual(frames(0x01, 0x02, 0x03, 0x04, 0x03, 0x04));
+    expect(appendSpeechAudio(merged!, second, "audio/mpeg")).toEqual(
+      frames(0x01, 0x02, 0x03, 0x04, 0x03, 0x04),
+    );
+  });
+
+  it("joins WAV recordings under one header and refuses mismatched formats", () => {
+    const mono24k = { sampleRate: 24_000, channels: 1, bitsPerSample: 16 };
+    const first = wrapPcmAsWav(frames(0x01, 0x02), mono24k);
+    const second = wrapPcmAsWav(frames(0x03, 0x04), mono24k);
+    expect(appendSpeechAudio(first, second, "audio/wav")).toEqual(
+      wrapPcmAsWav(frames(0x01, 0x02, 0x03, 0x04), mono24k),
+    );
+    expect(
+      appendSpeechAudio(
+        first,
+        wrapPcmAsWav(frames(0x03, 0x04), { ...mono24k, channels: 2 }),
+        "audio/wav",
+      ),
+    ).toBeNull();
+    // A bare MP3 stream on the WAV path is not spliced in as noise.
+    expect(appendSpeechAudio(first, frames(0xff, 0xfb), "audio/wav")).toBeNull();
   });
 });
 

@@ -5,6 +5,7 @@ import {
   AGENT_VOICE_REPLY_MAX_SCRIPT_CHARS,
   AgentVoiceReplyError,
   MESSAGE_SPEECH_MAX_SCRIPT_CHARS,
+  SpeechAudioMimeType,
   type MessageSpeechAttachment,
   type ThreadId,
   type TurnId,
@@ -21,10 +22,10 @@ import { createAttachmentId } from "../attachmentStore.ts";
 import { resolveAttachmentRelativePath } from "../attachmentPaths.ts";
 import * as ServerConfig from "../config.ts";
 import { ServerSettingsService } from "../serverSettings.ts";
-import { SPEECH_MIME_TYPE } from "./elevenLabsTts.ts";
 import { getTtsCharacterLimit, resolveAgentReplyTtsProfile } from "./ttsProfile.ts";
 import { TtsService } from "./TtsService.ts";
-import { speechFailureReasonFor } from "./ttsTypes.ts";
+import { speechFailureReasonFor, speechFileExtension } from "./ttsTypes.ts";
+import { appendWavAudio } from "./wavAudio.ts";
 
 /**
  * A recording staged by the voice_reply MCP tool, bound to the turn that was
@@ -44,7 +45,7 @@ export interface StagedAgentVoiceReply {
  * appends to it (the segments play in call order as one recording), while a
  * call from a newer turn replaces it.
  *
- * The MP3 is written to the attachments directory at stage time so the later
+ * The audio is written to the attachments directory at stage time so the later
  * attach command can stay metadata-only, mirroring how user image attachments
  * are persisted by the normalizer before their event is recorded. Consumers
  * take entries with the atomic claim/discard operations below — never
@@ -77,19 +78,28 @@ export class AgentVoiceReply extends Context.Service<AgentVoiceReply, AgentVoice
 ) {}
 
 /**
- * Joins two MP3 segments from the same synthesis pipeline into one playable
- * stream. ElevenLabs returns CBR 44.1kHz mono and OpenRouter's MP3 output is
+ * Joins two recordings from the same synthesis pipeline into one playable
+ * stream, or returns null when the containers differ (a settings change
+ * mid-turn switched between an MP3 and a WAV model, the only way that
+ * happens since the profile is read per call). WAV segments are re-wrapped
+ * with a header covering both PCM payloads.
+ *
+ * For MP3: ElevenLabs returns CBR 44.1kHz mono and OpenRouter's MP3 output is
  * assumed CBR too (not checked per model), so bare frame streams concatenate
  * cleanly. Each segment can lead with an ID3v2 tag and a Xing/Info header
  * frame that declares that segment's frame count. Both are dropped from both
  * sides (a no-op on an already merged left side): a header frame surviving
  * into the merge caps the reported duration at the first segment, and without
- * one, CBR players derive the correct duration from the file size. Segments
- * from different providers within one turn would mix sample rates; the
- * profile is read per call, so a settings change mid-turn is the only way
- * that happens.
+ * one, CBR players derive the correct duration from the file size.
  */
-export function appendSpeechAudio(previous: Uint8Array, next: Uint8Array): Uint8Array {
+export function appendSpeechAudio(
+  previous: Uint8Array,
+  next: Uint8Array,
+  mimeType: SpeechAudioMimeType,
+): Uint8Array | null {
+  if (mimeType === "audio/wav") {
+    return appendWavAudio(previous, next);
+  }
   const left = stripLeadingXingFrame(stripLeadingId3v2Tag(previous));
   const right = stripLeadingXingFrame(stripLeadingId3v2Tag(next));
   const merged = new Uint8Array(left.byteLength + right.byteLength);
@@ -184,14 +194,16 @@ export const layer = Layer.effect(
       new Map(),
     );
 
-    const resolveSpeechPath = (speechId: string) =>
+    const resolveSpeechPath = (speechId: string, mimeType: SpeechAudioMimeType) =>
       resolveAttachmentRelativePath({
         attachmentsDir: serverConfig.attachmentsDir,
-        relativePath: `${speechId}.mp3`,
+        relativePath: `${speechId}${speechFileExtension(mimeType)}`,
       });
 
-    const removeAudioFile = (speechId: string) => {
-      const path = resolveSpeechPath(speechId);
+    const removeAudioFile = (
+      attachment: Pick<MessageSpeechAttachment, "speechId" | "mimeType">,
+    ) => {
+      const path = resolveSpeechPath(attachment.speechId, attachment.mimeType);
       return path ? fileSystem.remove(path, { force: true }).pipe(Effect.ignore) : Effect.void;
     };
 
@@ -250,12 +262,13 @@ export const layer = Layer.effect(
         if (turnId === null) {
           return yield* new AgentVoiceReplyError({ reason: "turn_unavailable" });
         }
-        const audioBytes = yield* tts.synthesize({ profile, text: script }).pipe(
-          Effect.map((synthesized) => synthesized.bytes),
-          Effect.mapError(
-            (error) => new AgentVoiceReplyError({ reason: speechFailureReasonFor(error) }),
-          ),
-        );
+        const { bytes: audioBytes, mimeType } = yield* tts
+          .synthesize({ profile, text: script })
+          .pipe(
+            Effect.mapError(
+              (error) => new AgentVoiceReplyError({ reason: speechFailureReasonFor(error) }),
+            ),
+          );
 
         // Synthesis can take a while; if the thread was steered to a
         // different turn in the meantime, this recording belongs to a turn
@@ -273,7 +286,7 @@ export const layer = Layer.effect(
         const storeSegment = (bytes: Uint8Array) =>
           Effect.gen(function* () {
             const speechId = createAttachmentId(input.threadId);
-            const speechPath = speechId ? resolveSpeechPath(speechId) : null;
+            const speechPath = speechId ? resolveSpeechPath(speechId, mimeType) : null;
             if (!speechId || !speechPath) {
               return yield* new AgentVoiceReplyError({ reason: "storage_failed" });
             }
@@ -295,7 +308,7 @@ export const layer = Layer.effect(
         const staged_ = yield* SynchronizedRef.modifyEffect(staged, (entries) =>
           Effect.gen(function* () {
             const previous = entries.get(input.threadId);
-            const supersededSpeechId = previous?.attachment.speechId;
+            const superseded = previous?.attachment;
 
             // A second call in the same turn appends: the recordings play in
             // call order as one stream. An entry left by an older turn is
@@ -305,7 +318,10 @@ export const layer = Layer.effect(
               if (transcript.length > MESSAGE_SPEECH_MAX_SCRIPT_CHARS) {
                 return yield* new AgentVoiceReplyError({ reason: "script_too_long" });
               }
-              const previousPath = resolveSpeechPath(previous.attachment.speechId);
+              const previousPath = resolveSpeechPath(
+                previous.attachment.speechId,
+                previous.attachment.mimeType,
+              );
               if (!previousPath) {
                 return yield* new AgentVoiceReplyError({ reason: "storage_failed" });
               }
@@ -314,7 +330,13 @@ export const layer = Layer.effect(
                 .pipe(
                   Effect.mapError(() => new AgentVoiceReplyError({ reason: "storage_failed" })),
                 );
-              const mergedBytes = appendSpeechAudio(previousBytes, audioBytes);
+              const mergedBytes =
+                previous.attachment.mimeType === mimeType
+                  ? appendSpeechAudio(previousBytes, audioBytes, mimeType)
+                  : null;
+              if (mergedBytes === null) {
+                return yield* new AgentVoiceReplyError({ reason: "storage_failed" });
+              }
               // The merge lands under a fresh id so a failed write leaves the
               // already staged recording intact. voiceId, ttsModel and
               // createdAt stay those of the first segment — deliberate: they
@@ -332,7 +354,7 @@ export const layer = Layer.effect(
               };
               const next = new Map(entries);
               next.set(input.threadId, { turnId, attachment });
-              return [{ attachment, supersededSpeechId }, next] as const;
+              return [{ attachment, superseded }, next] as const;
             }
 
             const speechId = yield* storeSegment(audioBytes);
@@ -340,7 +362,7 @@ export const layer = Layer.effect(
             const attachment: MessageSpeechAttachment = {
               speechId,
               transcript: script as MessageSpeechAttachment["transcript"],
-              mimeType: SPEECH_MIME_TYPE,
+              mimeType,
               sizeBytes: audioBytes.byteLength as MessageSpeechAttachment["sizeBytes"],
               sourceTextHash: NodeCrypto.createHash("sha256")
                 .update(script, "utf8")
@@ -352,18 +374,18 @@ export const layer = Layer.effect(
             };
             const next = new Map(entries);
             next.set(input.threadId, { turnId, attachment });
-            return [{ attachment, supersededSpeechId }, next] as const;
+            return [{ attachment, superseded }, next] as const;
           }),
         );
-        if (staged_.supersededSpeechId !== undefined) {
-          yield* removeAudioFile(staged_.supersededSpeechId);
+        if (staged_.superseded !== undefined) {
+          yield* removeAudioFile(staged_.superseded);
         }
         return staged_.attachment;
       },
     );
 
     const discardEntry = (entry: StagedAgentVoiceReply | undefined) =>
-      entry ? removeAudioFile(entry.attachment.speechId) : Effect.void;
+      entry ? removeAudioFile(entry.attachment) : Effect.void;
 
     const available = serverSettings.getSettings.pipe(
       Effect.flatMap((settings) =>
