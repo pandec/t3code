@@ -1,4 +1,8 @@
-import { SpeechAudioMimeType, type TtsSynthesisCost } from "@t3tools/contracts";
+import {
+  SpeechAudioMimeType,
+  speechAudioFileExtension,
+  type TtsSynthesisCost,
+} from "@t3tools/contracts";
 import * as Schema from "effect/Schema";
 
 /**
@@ -23,9 +27,7 @@ export const isSpeechAudioMimeType = Schema.is(SpeechAudioMimeType);
 export const MP3_MIME_TYPE: SpeechAudioMimeType = "audio/mpeg";
 export const WAV_MIME_TYPE: SpeechAudioMimeType = "audio/wav";
 
-/** File extension a stored recording gets, keyed by the container it is in. */
-export const speechFileExtension = (mimeType: SpeechAudioMimeType): ".mp3" | ".wav" =>
-  mimeType === WAV_MIME_TYPE ? ".wav" : ".mp3";
+export const speechFileExtension = speechAudioFileExtension;
 
 /** The speech failure reason a TTS error maps to, shared by both synthesis paths. */
 export const speechFailureReasonFor = (

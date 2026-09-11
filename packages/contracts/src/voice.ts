@@ -157,6 +157,14 @@ export type TtsTestInput = typeof TtsTestInput.Type;
 export const SpeechAudioMimeType = Schema.Literals(["audio/mpeg", "audio/wav"]);
 export type SpeechAudioMimeType = typeof SpeechAudioMimeType.Type;
 
+/**
+ * Extension a recording is stored under and named with in its asset URL.
+ * Native players pick the decoder from this suffix, so clients must derive
+ * it from the MIME type rather than assume `.mp3`.
+ */
+export const speechAudioFileExtension = (mimeType: SpeechAudioMimeType): ".mp3" | ".wav" =>
+  mimeType === "audio/wav" ? ".wav" : ".mp3";
+
 export const TtsSynthesisCost = Schema.Struct({
   /** Billed amount in USD when the vendor reports it (OpenRouter). */
   usd: Schema.NullOr(Schema.Number.check(Schema.isFinite())),

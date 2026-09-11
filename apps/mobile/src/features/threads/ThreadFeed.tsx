@@ -14,6 +14,7 @@ import type {
   ThreadId,
   TurnId,
 } from "@t3tools/contracts";
+import { speechAudioFileExtension } from "@t3tools/contracts";
 import { renderAssistantCitationsAsText } from "@t3tools/shared/assistantCitations";
 import {
   codexArtifactTemplatePresentationLabel,
@@ -2208,14 +2209,10 @@ function AssistantSpeechPlayer(props: {
   const accentColor = playerTheme["--color-accent"];
   const foregroundColor = String(playerTheme["--color-foreground"]);
   const { trackColor, outlineColor } = listeningPlayerChrome(foregroundColor);
-  // The name ends the signed URL, and the native player sniffs the container
-  // from it; a WAV recording served as `.mp3` fails to decode on iOS.
-  const speechFileName = (speech: { speechId: string; mimeType: string }) =>
-    `${speech.speechId}${speech.mimeType === "audio/wav" ? ".wav" : ".mp3"}`;
   const audioUrlState = useAssetUrlState(props.environmentId, {
     _tag: "attachment",
     attachmentId: props.speech.speechId,
-    fileName: speechFileName(props.speech),
+    fileName: `${props.speech.speechId}${speechAudioFileExtension(props.speech.mimeType)}`,
     mimeType: props.speech.mimeType,
   });
   const audioUrl = audioUrlState._tag === "Success" ? audioUrlState.url : null;
@@ -2265,7 +2262,7 @@ function AssistantSpeechPlayer(props: {
           {
             _tag: "attachment",
             attachmentId: speechId,
-            fileName: speechFileName({ speechId, mimeType: speechMimeType }),
+            fileName: `${speechId}${speechAudioFileExtension(speechMimeType)}`,
             mimeType: speechMimeType,
           },
           onResolved,

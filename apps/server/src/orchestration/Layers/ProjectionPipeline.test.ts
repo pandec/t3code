@@ -2315,8 +2315,8 @@ it.layer(
       const keepPath = path.join(attachmentsDir, `${keepAttachmentId}.png`);
       const keepFilePath = path.join(attachmentsDir, `${keepFileAttachmentId}.pdf`);
       const removePath = path.join(attachmentsDir, `${removeAttachmentId}.png`);
-      const keepSpeechPath = path.join(attachmentsDir, `${keepSpeechId}.mp3`);
-      const removeSpeechPath = path.join(attachmentsDir, `${removeSpeechId}.mp3`);
+      const keepSpeechPath = path.join(attachmentsDir, `${keepSpeechId}.wav`);
+      const removeSpeechPath = path.join(attachmentsDir, `${removeSpeechId}.wav`);
       yield* fileSystem.makeDirectory(attachmentsDir, { recursive: true });
       yield* fileSystem.writeFileString(path.join(attachmentsDir, `${answerKeepId}.txt`), "answer");
       yield* fileSystem.writeFileString(
@@ -2333,9 +2333,9 @@ it.layer(
           message_id, thread_id, speech_id, transcript, mime_type, size_bytes,
           source_text_hash, script_recipe_hash, voice_id, tts_model, created_at
         ) VALUES
-          ('message-keep', ${threadId}, ${keepSpeechId}, 'Keep speech', 'audio/mpeg', 11,
+          ('message-keep', ${threadId}, ${keepSpeechId}, 'Keep speech', 'audio/wav', 11,
            'keep-source', 'recipe', 'voice', 'model', ${now}),
-          ('message-remove', ${threadId}, ${removeSpeechId}, 'Remove speech', 'audio/mpeg', 13,
+          ('message-remove', ${threadId}, ${removeSpeechId}, 'Remove speech', 'audio/wav', 13,
            'remove-source', 'recipe', 'voice', 'model', ${now})
       `;
       yield* sql`

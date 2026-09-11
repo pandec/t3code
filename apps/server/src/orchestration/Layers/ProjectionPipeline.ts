@@ -1,5 +1,6 @@
 import {
   ApprovalRequestId,
+  SpeechAudioMimeType,
   isImportedAgentSessionMessageId,
   UserInputAttachmentAnswerPayload,
   type ChatAttachment,
@@ -22,6 +23,8 @@ import {
   legacyThreadPullRequestKey,
   threadPullRequestKeysEqual,
 } from "@t3tools/shared/threadPullRequests";
+
+import { isSpeechAudioMimeType, speechFileExtension } from "../../voice/ttsTypes.ts";
 
 import { toPersistenceSqlError, type ProjectionRepositoryError } from "../../persistence/Errors.ts";
 import { OrchestrationEventStore } from "../../persistence/Services/OrchestrationEventStore.ts";
@@ -437,7 +440,11 @@ const runAttachmentSideEffects = Effect.fn("runAttachmentSideEffects")(function*
     // Spoken-message artifacts are tracked separately from chat attachments.
     // Keep them during checkpoint pruning; full thread deletion still removes
     // both the files and their projection rows.
-    if (relativePath.endsWith(".mp3")) {
+    if (
+      SpeechAudioMimeType.literals.some((mimeType) =>
+        relativePath.endsWith(speechFileExtension(mimeType)),
+      )
+    ) {
       return;
     }
     const attachmentId = parseAttachmentIdFromRelativePath(relativePath);
@@ -474,8 +481,8 @@ const runAttachmentSideEffects = Effect.fn("runAttachmentSideEffects")(function*
       return;
     }
 
-    const staleSpeechRows = yield* sql<{ readonly speechId: string }>`
-      SELECT speech_id AS "speechId"
+    const staleSpeechRows = yield* sql<{ readonly speechId: string; readonly mimeType: string }>`
+      SELECT speech_id AS "speechId", mime_type AS "mimeType"
       FROM projection_message_speech AS speech
       WHERE speech.thread_id = ${threadId}
         AND NOT EXISTS (
@@ -487,8 +494,9 @@ const runAttachmentSideEffects = Effect.fn("runAttachmentSideEffects")(function*
     `;
     yield* Effect.forEach(
       staleSpeechRows,
-      ({ speechId }) => {
-        const relativePath = `${speechId}.mp3`;
+      ({ speechId, mimeType }) => {
+        if (!isSpeechAudioMimeType(mimeType)) return Effect.void;
+        const relativePath = `${speechId}${speechFileExtension(mimeType)}`;
         const parsedId = parseAttachmentIdFromRelativePath(relativePath);
         const parsedThreadSegment = parsedId ? parseThreadSegmentFromAttachmentId(parsedId) : null;
         if (parsedThreadSegment !== threadSegment) return Effect.void;

@@ -48,6 +48,19 @@ describe("readWavPcm", () => {
     expect(readWavPcm(floatWav)).toBeNull();
   });
 
+  it("refuses truncated or out-of-container chunks instead of merging partial audio", () => {
+    const valid = wrapPcmAsWav(Uint8Array.from([1, 2, 3, 4]), mono24k);
+    const truncated = valid.subarray(0, valid.byteLength - 2);
+    expect(readWavPcm(truncated)).toBeNull();
+    expect(appendWavAudio(valid, truncated)).toBeNull();
+    const oversizedData = valid.slice();
+    new DataView(oversizedData.buffer).setUint32(40, 100, true);
+    expect(readWavPcm(oversizedData)).toBeNull();
+    const shortContainer = valid.slice();
+    new DataView(shortContainer.buffer).setUint32(4, 36, true);
+    expect(readWavPcm(shortContainer)).toBeNull();
+  });
+
   it("skips foreign chunks before the data chunk", () => {
     const wav = wrapPcmAsWav(Uint8Array.from([7, 8]), mono24k);
     const list = new Uint8Array(8 + 3 + 1); // odd-sized chunk plus pad byte
@@ -57,6 +70,7 @@ describe("readWavPcm", () => {
     withList.set(wav.subarray(0, 36), 0);
     withList.set(list, 36);
     withList.set(wav.subarray(36), 36 + list.byteLength);
+    new DataView(withList.buffer).setUint32(4, withList.byteLength - 8, true);
     expect(readWavPcm(withList)?.pcm).toEqual(Uint8Array.from([7, 8]));
   });
 });

@@ -36,8 +36,8 @@ export function parsePcmContentType(contentType: string | undefined): PcmFormat 
   };
 }
 
-export function wrapPcmAsWav(pcm: Uint8Array, format: PcmFormat): Uint8Array {
-  const wav = new Uint8Array(WAV_HEADER_BYTES + pcm.byteLength);
+const makeWavBuffer = (pcmBytes: number, format: PcmFormat): Uint8Array => {
+  const wav = new Uint8Array(WAV_HEADER_BYTES + pcmBytes);
   const view = new DataView(wav.buffer);
   const blockAlign = (format.channels * format.bitsPerSample) / 8;
   const writeAscii = (offset: number, text: string) => {
@@ -46,7 +46,7 @@ export function wrapPcmAsWav(pcm: Uint8Array, format: PcmFormat): Uint8Array {
     }
   };
   writeAscii(0, "RIFF");
-  view.setUint32(4, 36 + pcm.byteLength, true);
+  view.setUint32(4, 36 + pcmBytes, true);
   writeAscii(8, "WAVE");
   writeAscii(12, "fmt ");
   view.setUint32(16, 16, true);
@@ -57,7 +57,12 @@ export function wrapPcmAsWav(pcm: Uint8Array, format: PcmFormat): Uint8Array {
   view.setUint16(32, blockAlign, true);
   view.setUint16(34, format.bitsPerSample, true);
   writeAscii(36, "data");
-  view.setUint32(40, pcm.byteLength, true);
+  view.setUint32(40, pcmBytes, true);
+  return wav;
+};
+
+export function wrapPcmAsWav(pcm: Uint8Array, format: PcmFormat): Uint8Array {
+  const wav = makeWavBuffer(pcm.byteLength, format);
   wav.set(pcm, WAV_HEADER_BYTES);
   return wav;
 }
@@ -76,12 +81,16 @@ export function readWavPcm(bytes: Uint8Array): { format: PcmFormat; pcm: Uint8Ar
     return null;
   }
   const view = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength);
+  const riffEnd = 8 + view.getUint32(4, true);
+  if (riffEnd > bytes.byteLength || riffEnd < WAV_HEADER_BYTES) return null;
   let format: PcmFormat | null = null;
   let offset = 12;
-  while (offset + 8 <= bytes.byteLength) {
+  while (offset + 8 <= riffEnd) {
     const chunkId = ascii(bytes, offset);
     const chunkSize = view.getUint32(offset + 4, true);
     const body = offset + 8;
+    const chunkEnd = body + chunkSize;
+    if (chunkEnd + (chunkSize % 2) > riffEnd) return null;
     if (chunkId === "fmt " && chunkSize >= 16 && body + 16 <= bytes.byteLength) {
       if (view.getUint16(body, true) !== 1) return null;
       format = {
@@ -91,7 +100,7 @@ export function readWavPcm(bytes: Uint8Array): { format: PcmFormat; pcm: Uint8Ar
       };
     } else if (chunkId === "data") {
       if (format === null) return null;
-      return { format, pcm: bytes.subarray(body, Math.min(body + chunkSize, bytes.byteLength)) };
+      return { format, pcm: bytes.subarray(body, chunkEnd) };
     }
     offset = body + chunkSize + (chunkSize % 2);
   }
@@ -116,10 +125,10 @@ export function appendWavAudio(previous: Uint8Array, next: Uint8Array): Uint8Arr
   ) {
     return null;
   }
-  const pcm = new Uint8Array(left.pcm.byteLength + right.pcm.byteLength);
-  pcm.set(left.pcm, 0);
-  pcm.set(right.pcm, left.pcm.byteLength);
-  return wrapPcmAsWav(pcm, left.format);
+  const wav = makeWavBuffer(left.pcm.byteLength + right.pcm.byteLength, left.format);
+  wav.set(left.pcm, WAV_HEADER_BYTES);
+  wav.set(right.pcm, WAV_HEADER_BYTES + left.pcm.byteLength);
+  return wav;
 }
 
 const ascii = (bytes: Uint8Array, offset: number) =>

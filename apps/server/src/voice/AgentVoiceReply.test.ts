@@ -21,6 +21,7 @@ import {
   stripLeadingXingFrame,
 } from "./AgentVoiceReply.ts";
 import * as TtsService from "./TtsService.ts";
+import type { SynthesizedSpeech } from "./ttsTypes.ts";
 import { wrapPcmAsWav } from "./wavAudio.ts";
 
 const emptySecretStore = ServerSecretStore.ServerSecretStore.of({
@@ -217,6 +218,73 @@ describe("stage", () => {
       ).toMatchObject({ _tag: "Failure", failure: { reason: "unavailable" } });
       yield* settings.updateSettings({ voice: { agentReplyTts: null } });
       expect(yield* service.available).toBe(true);
+    }).pipe(Effect.provide(TestLayer)),
+  );
+
+  effectIt.effect("keeps staged WAV audio on merge failure and cleans up both containers", () =>
+    Effect.gen(function* () {
+      const sql = yield* SqlClient.SqlClient;
+      const fileSystem = yield* FileSystem.FileSystem;
+      const config = yield* ServerConfig.ServerConfig;
+      const tts = yield* TtsService.TtsService;
+      const wav = (marker: number) =>
+        wrapPcmAsWav(frames(marker, marker), {
+          sampleRate: 24_000,
+          channels: 1,
+          bitsPerSample: 16,
+        });
+      let next: SynthesizedSpeech = {
+        bytes: wav(1),
+        mimeType: "audio/wav",
+        cost: { usd: null, billedCharacters: null },
+      };
+      const service = yield* AgentVoiceReply.pipe(
+        Effect.provide(
+          Layer.fresh(agentVoiceReplyLayer).pipe(
+            Layer.provide(
+              Layer.succeed(TtsService.TtsService, {
+                ...tts,
+                synthesize: () => Effect.sync(() => next),
+              }),
+            ),
+          ),
+        ),
+      );
+      const speechPath = (speechId: string, extension = ".wav") =>
+        `${config.attachmentsDir}/${speechId}${extension}`;
+      yield* sql`CREATE TABLE projection_thread_sessions (thread_id TEXT, active_turn_id TEXT)`;
+      yield* sql`INSERT INTO projection_thread_sessions VALUES (${threadId}, ${turnOne})`;
+      const first = yield* service.stage({ threadId, script: "First." });
+      next = { ...next, bytes: wav(2) };
+      const second = yield* service.stage({ threadId, script: "Second." });
+      expect(second.mimeType).toBe("audio/wav");
+      expect(yield* fileSystem.exists(speechPath(first.speechId))).toBe(false);
+      expect(Uint8Array.from(yield* fileSystem.readFile(speechPath(second.speechId)))).toEqual(
+        wrapPcmAsWav(frames(1, 1, 2, 2), { sampleRate: 24_000, channels: 1, bitsPerSample: 16 }),
+      );
+      next = { ...next, bytes: segment(3), mimeType: "audio/mpeg" };
+      expect(
+        yield* service.stage({ threadId, script: "Wrong container." }).pipe(Effect.result),
+      ).toMatchObject({ _tag: "Failure", failure: { reason: "storage_failed" } });
+      next = { ...next, bytes: wav(3).subarray(0, 44), mimeType: "audio/wav" };
+      expect(
+        yield* service.stage({ threadId, script: "Truncated." }).pipe(Effect.result),
+      ).toMatchObject({ _tag: "Failure", failure: { reason: "storage_failed" } });
+      expect(yield* fileSystem.readDirectory(config.attachmentsDir)).toEqual([
+        `${second.speechId}.wav`,
+      ]);
+      const claimed = yield* service.claimStagedForTurn(threadId, turnOne);
+      expect(claimed?.attachment).toEqual(second);
+
+      next = { ...next, bytes: wav(4) };
+      const third = yield* service.stage({ threadId, script: "Another WAV." });
+      yield* sql`UPDATE projection_thread_sessions SET active_turn_id = ${turnTwo}`;
+      next = { ...next, bytes: segment(5), mimeType: "audio/mpeg" };
+      const fourth = yield* service.stage({ threadId, script: "New turn MP3." });
+      expect(yield* fileSystem.exists(speechPath(third.speechId))).toBe(false);
+      yield* service.discardStaged(threadId);
+      expect(yield* fileSystem.exists(speechPath(fourth.speechId, ".mp3"))).toBe(false);
+      expect(yield* fileSystem.exists(speechPath(second.speechId))).toBe(true);
     }).pipe(Effect.provide(TestLayer)),
   );
 
