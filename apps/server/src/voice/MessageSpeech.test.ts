@@ -179,6 +179,27 @@ describe("message speech cache identity", () => {
     mimeType: "audio/mpeg",
   };
 
+  it("reuses WAV cache entries but rejects unsupported MIME types", () => {
+    const identity = {
+      sourceTextHash: "hash",
+      scriptRecipeHash: "recipe",
+      voiceId: "voice",
+      ttsModel: "model",
+    };
+    expect(
+      isMessageSpeechCacheReusable({
+        ...identity,
+        cache: { ...cache, mimeType: "audio/wav" },
+      }),
+    ).toBe(true);
+    expect(
+      isMessageSpeechCacheReusable({
+        ...identity,
+        cache: { ...cache, mimeType: "audio/pcm" },
+      }),
+    ).toBe(false);
+  });
+
   it("reuses audio only when source, voice, model, and format still match", () => {
     expect(
       isMessageSpeechCacheReusable({

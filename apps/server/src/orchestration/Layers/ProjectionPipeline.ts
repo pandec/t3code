@@ -1,5 +1,6 @@
 import {
   ApprovalRequestId,
+  SpeechAudioMimeType,
   isImportedAgentSessionMessageId,
   UserInputAttachmentAnswerPayload,
   type ChatAttachment,
@@ -22,6 +23,8 @@ import {
   legacyThreadPullRequestKey,
   threadPullRequestKeysEqual,
 } from "@t3tools/shared/threadPullRequests";
+
+import { isSpeechAudioMimeType, MP3_MIME_TYPE, speechFileExtension } from "../../voice/ttsTypes.ts";
 
 import { toPersistenceSqlError, type ProjectionRepositoryError } from "../../persistence/Errors.ts";
 import { OrchestrationEventStore } from "../../persistence/Services/OrchestrationEventStore.ts";
@@ -62,6 +65,7 @@ import {
 } from "../Services/ProjectionPipeline.ts";
 import {
   attachmentRelativePath,
+  parseAttachmentFileExtension,
   parseAttachmentIdFromRelativePath,
   parseThreadSegmentFromAttachmentId,
   toSafeThreadAttachmentSegment,
@@ -434,14 +438,21 @@ const runAttachmentSideEffects = Effect.fn("runAttachmentSideEffects")(function*
     if (relativePath.length === 0 || relativePath.includes("/")) {
       return;
     }
-    // Spoken-message artifacts are tracked separately from chat attachments.
-    // Keep them during checkpoint pruning; full thread deletion still removes
-    // both the files and their projection rows.
-    if (relativePath.endsWith(".mp3")) {
-      return;
-    }
     const attachmentId = parseAttachmentIdFromRelativePath(relativePath);
     if (!attachmentId) {
+      return;
+    }
+    // Spoken-message artifacts are tracked separately from chat attachments.
+    // Keep them during checkpoint pruning; full thread deletion still removes
+    // both the files and their projection rows. A speech id carries no
+    // embedded extension, unlike an uploaded `recording.wav`, whose id ends
+    // in `-wav` and which must stay prunable.
+    if (
+      parseAttachmentFileExtension(attachmentId) === null &&
+      SpeechAudioMimeType.literals.some((mimeType) =>
+        relativePath.endsWith(speechFileExtension(mimeType)),
+      )
+    ) {
       return;
     }
     const attachmentThreadSegment = parseThreadSegmentFromAttachmentId(attachmentId);
@@ -474,8 +485,8 @@ const runAttachmentSideEffects = Effect.fn("runAttachmentSideEffects")(function*
       return;
     }
 
-    const staleSpeechRows = yield* sql<{ readonly speechId: string }>`
-      SELECT speech_id AS "speechId"
+    const staleSpeechRows = yield* sql<{ readonly speechId: string; readonly mimeType: string }>`
+      SELECT speech_id AS "speechId", mime_type AS "mimeType"
       FROM projection_message_speech AS speech
       WHERE speech.thread_id = ${threadId}
         AND NOT EXISTS (
@@ -487,8 +498,12 @@ const runAttachmentSideEffects = Effect.fn("runAttachmentSideEffects")(function*
     `;
     yield* Effect.forEach(
       staleSpeechRows,
-      ({ speechId }) => {
-        const relativePath = `${speechId}.mp3`;
+      ({ speechId, mimeType }) => {
+        // Rows predating WAV are MP3; an unknown value reads the same way as
+        // MessageSpeech's cache fallback so the row's file is not orphaned.
+        const relativePath = `${speechId}${speechFileExtension(
+          isSpeechAudioMimeType(mimeType) ? mimeType : MP3_MIME_TYPE,
+        )}`;
         const parsedId = parseAttachmentIdFromRelativePath(relativePath);
         const parsedThreadSegment = parsedId ? parseThreadSegmentFromAttachmentId(parsedId) : null;
         if (parsedThreadSegment !== threadSegment) return Effect.void;

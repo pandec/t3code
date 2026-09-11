@@ -14,6 +14,7 @@ import type {
   ThreadId,
   TurnId,
 } from "@t3tools/contracts";
+import { speechAudioFileExtension } from "@t3tools/contracts";
 import { renderAssistantCitationsAsText } from "@t3tools/shared/assistantCitations";
 import {
   codexArtifactTemplatePresentationLabel,
@@ -2211,13 +2212,13 @@ function AssistantSpeechPlayer(props: {
   const audioUrlState = useAssetUrlState(props.environmentId, {
     _tag: "attachment",
     attachmentId: props.speech.speechId,
-    fileName: `${props.speech.speechId}.mp3`,
+    fileName: `${props.speech.speechId}${speechAudioFileExtension(props.speech.mimeType)}`,
     mimeType: props.speech.mimeType,
   });
   const audioUrl = audioUrlState._tag === "Success" ? audioUrlState.url : null;
   // This row is a view over the app-scoped player: the recording keeps
   // playing when the row unmounts (thread switches, virtualization), and
-  // remounting binds back to it. The MP3 is only fetched when the user
+  // remounting binds back to it. The audio is only fetched when the user
   // presses play — a thread can hold many recordings and the app may be on
   // a remote or cellular link.
   const isActiveTrack = track !== null && track.speechId === props.speech.speechId;
@@ -2261,7 +2262,7 @@ function AssistantSpeechPlayer(props: {
           {
             _tag: "attachment",
             attachmentId: speechId,
-            fileName: `${speechId}.mp3`,
+            fileName: `${speechId}${speechAudioFileExtension(speechMimeType)}`,
             mimeType: speechMimeType,
           },
           onResolved,

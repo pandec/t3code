@@ -59,6 +59,7 @@ import {
   toPersistenceSqlError,
   type ProjectionRepositoryError,
 } from "../../persistence/Errors.ts";
+import { isSpeechAudioMimeType } from "../../voice/ttsTypes.ts";
 import { ProjectionCheckpoint } from "../../persistence/Services/ProjectionCheckpoints.ts";
 import { ThreadBackgroundLivenessService } from "../ThreadBackgroundLiveness.ts";
 import { ThreadPlanProgressService } from "../ThreadPlanProgress.ts";
@@ -539,7 +540,7 @@ function mapMessageRow(
       : {}),
     ...(row.speechId !== null &&
     row.speechTranscript !== null &&
-    row.speechMimeType === "audio/mpeg" &&
+    isSpeechAudioMimeType(row.speechMimeType) &&
     row.speechSizeBytes !== null &&
     row.speechCreatedAt !== null &&
     // An agent recording's transcript is authored independently of the

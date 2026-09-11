@@ -1,4 +1,8 @@
-import type { TtsSynthesisCost } from "@t3tools/contracts";
+import {
+  SpeechAudioMimeType,
+  speechAudioFileExtension,
+  type TtsSynthesisCost,
+} from "@t3tools/contracts";
 import * as Schema from "effect/Schema";
 
 /**
@@ -14,9 +18,16 @@ export class TtsError extends Schema.TaggedError<TtsError>()("TtsError", {
 
 export interface SynthesizedSpeech {
   readonly bytes: Uint8Array;
-  readonly mimeType: "audio/mpeg";
+  readonly mimeType: SpeechAudioMimeType;
   readonly cost: TtsSynthesisCost;
 }
+
+export const isSpeechAudioMimeType = Schema.is(SpeechAudioMimeType);
+
+export const MP3_MIME_TYPE: SpeechAudioMimeType = "audio/mpeg";
+export const WAV_MIME_TYPE: SpeechAudioMimeType = "audio/wav";
+
+export const speechFileExtension = speechAudioFileExtension;
 
 /** The speech failure reason a TTS error maps to, shared by both synthesis paths. */
 export const speechFailureReasonFor = (
