@@ -2317,7 +2317,18 @@ it.layer(
       const removePath = path.join(attachmentsDir, `${removeAttachmentId}.png`);
       const keepSpeechPath = path.join(attachmentsDir, `${keepSpeechId}.wav`);
       const removeSpeechPath = path.join(attachmentsDir, `${removeSpeechId}.wav`);
+      // An uploaded recording is a chat attachment whose id embeds `-wav`; the
+      // speech exemption must not shield it from pruning.
+      const removeWavUploadPath = path.join(
+        attachmentsDir,
+        "thread-revert-files-00000000-0000-4000-8000-00000000000a-wav.wav",
+      );
+      // A speech row from before the MIME column carried WAV is read as MP3.
+      const legacySpeechId = "thread-revert-files-00000000-0000-4000-8000-00000000000b";
+      const legacySpeechPath = path.join(attachmentsDir, `${legacySpeechId}.mp3`);
       yield* fileSystem.makeDirectory(attachmentsDir, { recursive: true });
+      yield* fileSystem.writeFileString(removeWavUploadPath, "uploaded wav");
+      yield* fileSystem.writeFileString(legacySpeechPath, "legacy mp3");
       yield* fileSystem.writeFileString(path.join(attachmentsDir, `${answerKeepId}.txt`), "answer");
       yield* fileSystem.writeFileString(
         path.join(attachmentsDir, `${answerRemoveId}.txt`),
@@ -2336,7 +2347,9 @@ it.layer(
           ('message-keep', ${threadId}, ${keepSpeechId}, 'Keep speech', 'audio/wav', 11,
            'keep-source', 'recipe', 'voice', 'model', ${now}),
           ('message-remove', ${threadId}, ${removeSpeechId}, 'Remove speech', 'audio/wav', 13,
-           'remove-source', 'recipe', 'voice', 'model', ${now})
+           'remove-source', 'recipe', 'voice', 'model', ${now}),
+          ('message-legacy', ${threadId}, ${legacySpeechId}, 'Legacy speech', 'audio/x-legacy', 10,
+           'legacy-source', 'recipe', 'voice', 'model', ${now})
       `;
       yield* sql`
         INSERT INTO projection_message_summary (
@@ -2451,6 +2464,8 @@ it.layer(
       assert.isTrue(yield* exists(otherThreadPath));
       assert.isTrue(yield* exists(keepSpeechPath));
       assert.isFalse(yield* exists(removeSpeechPath));
+      assert.isFalse(yield* exists(removeWavUploadPath));
+      assert.isFalse(yield* exists(legacySpeechPath));
       const speechRows = yield* sql<{ readonly messageId: string }>`
         SELECT message_id AS "messageId"
         FROM projection_message_speech

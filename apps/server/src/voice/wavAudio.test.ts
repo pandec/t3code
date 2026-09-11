@@ -37,6 +37,13 @@ describe("wrapPcmAsWav", () => {
     expect(view.getUint32(40, true)).toBe(pcm.byteLength);
     expect(readWavPcm(wav)).toEqual({ format: mono24k, pcm });
   });
+
+  it("drops a trailing partial sample frame so the data chunk stays aligned", () => {
+    const wav = wrapPcmAsWav(Uint8Array.from([1, 2, 3, 4, 5]), mono24k);
+    expect(readWavPcm(wav)).toEqual({ format: mono24k, pcm: Uint8Array.from([1, 2, 3, 4]) });
+    const stereo = wrapPcmAsWav(Uint8Array.from([1, 2, 3, 4, 5, 6]), { ...mono24k, channels: 2 });
+    expect(readWavPcm(stereo)?.pcm).toEqual(Uint8Array.from([1, 2, 3, 4]));
+  });
 });
 
 describe("readWavPcm", () => {

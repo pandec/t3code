@@ -61,9 +61,16 @@ const makeWavBuffer = (pcmBytes: number, format: PcmFormat): Uint8Array => {
   return wav;
 };
 
+/**
+ * A trailing partial sample frame (a stream cut mid-sample) is dropped: it
+ * would break block alignment and, being odd-sized, leave the data chunk
+ * without the RIFF pad byte `readWavPcm` requires.
+ */
 export function wrapPcmAsWav(pcm: Uint8Array, format: PcmFormat): Uint8Array {
-  const wav = makeWavBuffer(pcm.byteLength, format);
-  wav.set(pcm, WAV_HEADER_BYTES);
+  const blockAlign = (format.channels * format.bitsPerSample) / 8;
+  const wholeFrames = pcm.subarray(0, pcm.byteLength - (pcm.byteLength % blockAlign));
+  const wav = makeWavBuffer(wholeFrames.byteLength, format);
+  wav.set(wholeFrames, WAV_HEADER_BYTES);
   return wav;
 }
 
