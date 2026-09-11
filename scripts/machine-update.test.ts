@@ -299,7 +299,7 @@ it("constructs and classifies the remote desktop command", () => {
   assert.include(script, "git status --porcelain=v1 --untracked-files=all");
   assert.include(script, "git switch dev || exit 46");
   assert.include(script, "git pull --ff-only || exit 42");
-  assert.include(script, "pnpm install || exit 43");
+  assert.include(script, "pnpm install --frozen-lockfile || exit 43");
   assert.include(script, "pnpm run install:desktop:dev || exit 44");
   assert.isUndefined(classifyRemoteExit(0));
   assert.equal(classifyRemoteExit(42), "pull");

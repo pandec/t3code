@@ -678,7 +678,7 @@ export function buildRemoteScript(checkout?: string, expectedBranch = "dev"): st
     'printf "__T3_STAGE__ pull\\n"',
     "git pull --ff-only || exit 42",
     'printf "__T3_STAGE__ dependencies\\n"',
-    "pnpm install || exit 43",
+    "pnpm install --frozen-lockfile || exit 43",
     'printf "__T3_STAGE__ desktop\\n"',
     "pnpm run install:desktop:dev || exit 44",
   ].join("\n");
@@ -1638,7 +1638,7 @@ export async function runLocalTarget(
   }
   for (const [index, stage, command, args] of [
     [1, "pull", "git", ["pull", "--ff-only"]],
-    [2, "dependencies", "pnpm", ["install"]],
+    [2, "dependencies", "pnpm", ["install", "--frozen-lockfile"]],
   ] as const) {
     dependencies.progress?.stage(jobId, stage);
     const commandResult = await dependencies.runner.run({
