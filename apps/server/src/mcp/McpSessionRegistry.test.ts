@@ -109,6 +109,10 @@ it.effect("routes each capability combination to its own MCP endpoint", () =>
       [new Set(["preview"] as const), "http://127.0.0.1:43123/mcp/preview"],
       [new Set(["voice"] as const), "http://127.0.0.1:43123/mcp/voice"],
       [new Set([] as const), "http://127.0.0.1:43123/mcp/pull-requests"],
+      [new Set(["device"] as const), "http://127.0.0.1:43123/mcp/device"],
+      [new Set(["device", "preview"] as const), "http://127.0.0.1:43123/mcp/device/preview"],
+      [new Set(["device", "voice"] as const), "http://127.0.0.1:43123/mcp/device/voice"],
+      [new Set(["device", "preview", "voice"] as const), "http://127.0.0.1:43123/mcp/device/all"],
     ] as const;
 
     for (const [capabilities, expectedEndpoint] of cases) {
@@ -118,6 +122,10 @@ it.effect("routes each capability combination to its own MCP endpoint", () =>
         capabilities,
       });
       expect(issued.config.endpoint).toBe(expectedEndpoint);
+      const token = issued.config.authorizationHeader.replace(/^Bearer\s+/, "");
+      expect([...(yield* registry.resolve(token))!.capabilities].sort()).toEqual(
+        ["pull-requests", ...capabilities].sort(),
+      );
     }
   }),
 );

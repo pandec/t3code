@@ -740,10 +740,13 @@ export function makeHermesAdapter(
           const mcpSession = McpProviderSession.readMcpProviderSession(input.threadId);
           const acp = yield* makeHermesAcpRuntime({
             hermesSettings,
-            environment: providerThreadEnvironment(
-              { threadId: input.threadId, cwd: cwd },
-              options?.environment,
-              serverConfig,
+            environment: McpProviderSession.withAgentDeviceEnvironment(
+              providerThreadEnvironment(
+                { threadId: input.threadId, cwd: cwd },
+                options?.environment,
+                serverConfig,
+              ),
+              mcpSession,
             ),
             childProcessSpawner,
             cwd,
@@ -1722,7 +1725,7 @@ export function makeHermesAdapter(
 
     return {
       provider: PROVIDER,
-      capabilities: { sessionModelSwitch: "in-session" },
+      capabilities: { sessionModelSwitch: "in-session", supportsConversationRollback: false },
       startSession,
       sendTurn,
       compaction: { type: "slash-command", command: "/compact" },

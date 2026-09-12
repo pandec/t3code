@@ -41,6 +41,7 @@ const HERMES_PRESENTATION = {
   badgeLabel: "Early Access",
   showInteractionModeToggle: false,
   requiresNewThreadForModelChange: false,
+  supportsConversationRollback: false,
 } as const;
 const EMPTY_CAPABILITIES: ModelCapabilities = createModelCapabilities({
   optionDescriptors: [],

@@ -1045,6 +1045,7 @@ projectionSnapshotLayer("ProjectionSnapshotQuery", (it) => {
       assert.equal(context._tag, "Some");
       if (context._tag === "Some") {
         assert.equal(context.value.id, "thread-activity-filter");
+        assert.equal(context.value.projectId, "project-activity-filter");
         assert.equal(context.value.title, "Activity Filter");
         assert.equal(context.value.branch, null);
         assert.equal(context.value.worktreePath, null);

@@ -4,8 +4,12 @@ import {
   type OrchestrationReadModel,
   ProjectId,
   ProjectScriptIcon,
+  type ServerSettings,
+  type ServerSettingsPatch,
   type ClientOrchestrationCommand,
 } from "@t3tools/contracts";
+import { resolveProjectScripts } from "@t3tools/shared/projectScripts";
+import { resolveProjectSettings } from "@t3tools/shared/projectSettings";
 import * as Console from "effect/Console";
 import * as Crypto from "effect/Crypto";
 import * as DateTime from "effect/DateTime";
@@ -38,6 +42,8 @@ import {
   dispatchLiveOrchestrationCommand,
   fetchLiveEnvironmentDescriptor,
   fetchLiveOrchestrationSnapshot,
+  fetchLiveServerSettings,
+  updateLiveServerSettings,
   resolveCliLiveServerReadTimeouts,
   withResolvedLiveOrchestrationServer,
 } from "./orchestration.ts";
@@ -216,6 +222,10 @@ const runProjectMutation = Effect.fn("runProjectMutation")(function* (
   json: boolean,
   run: (input: {
     readonly snapshot: OrchestrationReadModel;
+    readonly getSettings: Effect.Effect<ServerSettings, Error, HttpClient.HttpClient>;
+    readonly updateSettings: (
+      patch: ServerSettingsPatch,
+    ) => Effect.Effect<ServerSettings, Error, HttpClient.HttpClient>;
     readonly dispatch: (
       command: ProjectCliDispatchCommand,
     ) => Effect.Effect<void, Error, FileSystem.FileSystem | HttpClient.HttpClient | Path.Path>;
@@ -250,7 +260,7 @@ const runProjectMutation = Effect.fn("runProjectMutation")(function* (
             Effect.gen(function* () {
               if (options?.requireConditionalProjectScriptUpdates) {
                 const descriptor = yield* fetchLiveEnvironmentDescriptor(live.origin, timeouts);
-                if (descriptor.capabilities.conditionalProjectScriptUpdates !== true) {
+                if (descriptor.capabilities.conditionalProjectSettingsScriptUpdates !== true) {
                   return yield* new ProjectActionServerUnsupportedError({
                     operation: "validateProjectActionServerCapability",
                     serverVersion: descriptor.serverVersion,
@@ -260,6 +270,8 @@ const runProjectMutation = Effect.fn("runProjectMutation")(function* (
               const snapshot = yield* fetchLiveOrchestrationSnapshot(live.origin, token, timeouts);
               const output = yield* run({
                 snapshot,
+                getSettings: fetchLiveServerSettings(live.origin, token, timeouts),
+                updateSettings: (patch) => updateLiveServerSettings(live.origin, token, patch),
                 dispatch: (command) =>
                   dispatchLiveOrchestrationCommand(live.origin, token, command).pipe(Effect.asVoid),
                 mode: "live",
@@ -442,7 +454,15 @@ const runProjectList = Effect.fn("runProjectList")(function* (
     const liveAttempt = yield* Effect.result(
       withResolvedLiveOrchestrationServer(
         { environmentAuth, config, label: "t3 project cli", timeouts },
-        (live) => Effect.succeed(live.shell.projects),
+        (live, token) =>
+          fetchLiveServerSettings(live.origin, token, timeouts).pipe(
+            Effect.map((settings) =>
+              live.shell.projects.map((project) => ({
+                ...project,
+                ...projectListSummary(project, settings),
+              })),
+            ),
+          ),
       ),
     );
     if (liveAttempt._tag === "Failure") {
@@ -470,16 +490,31 @@ const runProjectList = Effect.fn("runProjectList")(function* (
   );
 });
 
-export const projectListSummary = (project: OrchestrationProjectShell) => ({
-  id: project.id,
-  title: project.title,
-  workspaceRoot: project.workspaceRoot,
-  defaultModelSelection: project.defaultModelSelection,
-  // Per-project thread env-mode override; null means the checked-in
-  // t3.json and the global setting decide (older servers omit it).
-  defaultThreadEnvMode: project.defaultThreadEnvMode ?? null,
-  autoPull: project.autoPull ?? false,
-});
+export const projectListSummary = (
+  project: OrchestrationProjectShell,
+  settings?: ServerSettings,
+) => {
+  const resolved =
+    settings === undefined ? undefined : resolveProjectSettings(settings, project.id, project);
+  return {
+    id: project.id,
+    title: project.title,
+    workspaceRoot: project.workspaceRoot,
+    defaultModelSelection:
+      resolved === undefined
+        ? project.defaultModelSelection
+        : resolved.settings.defaultModelSelection,
+    // Per-project thread env-mode override; null means the checked-in
+    // t3.json and the global setting decide (older servers omit it).
+    defaultThreadEnvMode:
+      resolved === undefined
+        ? (project.defaultThreadEnvMode ?? null)
+        : resolved.sources.defaultThreadEnvMode === "project"
+          ? resolved.settings.defaultThreadEnvMode
+          : null,
+    autoPull: resolved?.settings.defaultAutoPull ?? project.autoPull ?? false,
+  };
+};
 
 const projectListCommand = Command.make("list", {
   ...projectLocationFlags,
@@ -489,7 +524,7 @@ const projectListCommand = Command.make("list", {
   Command.withHandler((flags) =>
     Effect.gen(function* () {
       const { mode, projects: projectShells } = yield* runProjectList(flags, flags.json);
-      const projects = projectShells.map(projectListSummary);
+      const projects = projectShells.map((project) => projectListSummary(project));
       yield* Console.log(
         flags.json
           ? jsonOutput({ mode, projects })
@@ -536,20 +571,21 @@ const projectActionListCommand = Command.make("list", {
 }).pipe(
   Command.withDescription("List a project's actions."),
   Command.withHandler((flags) =>
-    runProjectMutation(flags, flags.json, ({ snapshot, mode }) =>
+    runProjectMutation(flags, flags.json, ({ snapshot, mode, getSettings }) =>
       Effect.gen(function* () {
         const project = yield* findProjectForAction(snapshot, flags.project);
+        const scripts = resolveProjectScripts(yield* getSettings, project);
         return flags.json
           ? jsonOutput({
               mode,
               projectId: project.id,
               title: project.title,
               workspaceRoot: project.workspaceRoot,
-              actions: project.scripts,
+              actions: scripts,
             })
-          : project.scripts.length === 0
+          : scripts.length === 0
             ? `Project ${project.id} has no actions.`
-            : project.scripts
+            : scripts
                 .map((action) => `${action.id}\t${action.name}\t${action.icon}\t${action.command}`)
                 .join("\n");
       }),
@@ -583,11 +619,12 @@ const projectActionAddCommand = Command.make("add", {
     runProjectMutation(
       flags,
       flags.json,
-      Effect.fn("projectActionAddMutation")(function* ({ snapshot, dispatch }) {
+      Effect.fn("projectActionAddMutation")(function* ({ snapshot, getSettings, updateSettings }) {
         const project = yield* findProjectForAction(snapshot, flags.project);
+        const scripts = resolveProjectScripts(yield* getSettings, project);
         const result = addProjectAction({
           projectId: project.id,
-          scripts: project.scripts,
+          scripts: scripts,
           action: {
             ...(Option.isSome(flags.id) ? { id: flags.id.value } : {}),
             name: flags.name,
@@ -601,12 +638,12 @@ const projectActionAddCommand = Command.make("add", {
         if ("_tag" in result) {
           return yield* result;
         }
-        yield* dispatch({
-          type: "project.meta.update",
-          commandId: CommandId.make(yield* projectCommandUuid),
-          projectId: project.id,
-          expectedScripts: Array.from(project.scripts),
-          scripts: Array.from(result.scripts),
+        yield* updateSettings({
+          projectScriptUpdate: {
+            projectId: project.id,
+            expectedScripts: Array.from(scripts),
+            scripts: Array.from(result.scripts),
+          },
         });
         return flags.json
           ? jsonOutput({
@@ -652,8 +689,13 @@ const projectActionUpdateCommand = Command.make("update", {
     runProjectMutation(
       flags,
       flags.json,
-      Effect.fn("projectActionUpdateMutation")(function* ({ snapshot, dispatch }) {
+      Effect.fn("projectActionUpdateMutation")(function* ({
+        snapshot,
+        getSettings,
+        updateSettings,
+      }) {
         const project = yield* findProjectForAction(snapshot, flags.project);
+        const scripts = resolveProjectScripts(yield* getSettings, project);
         if (flags.clearPreviewUrl && Option.isSome(flags.previewUrl)) {
           return yield* new ProjectActionValidationError({
             field: "previewUrl",
@@ -662,7 +704,7 @@ const projectActionUpdateCommand = Command.make("update", {
         }
         const result = updateProjectAction({
           projectId: project.id,
-          scripts: project.scripts,
+          scripts: scripts,
           actionId: flags.actionId,
           updates: {
             ...(Option.isSome(flags.name) ? { name: flags.name.value } : {}),
@@ -684,13 +726,13 @@ const projectActionUpdateCommand = Command.make("update", {
         if ("_tag" in result) {
           return yield* result;
         }
-        const changed = !Equal.equals(result.scripts, project.scripts);
-        yield* dispatch({
-          type: "project.meta.update",
-          commandId: CommandId.make(yield* projectCommandUuid),
-          projectId: project.id,
-          expectedScripts: Array.from(project.scripts),
-          scripts: Array.from(result.scripts),
+        const changed = !Equal.equals(result.scripts, scripts);
+        yield* updateSettings({
+          projectScriptUpdate: {
+            projectId: project.id,
+            expectedScripts: Array.from(scripts),
+            scripts: Array.from(result.scripts),
+          },
         });
         return flags.json
           ? jsonOutput({
@@ -719,22 +761,27 @@ const projectActionRemoveCommand = Command.make("remove", {
     runProjectMutation(
       flags,
       flags.json,
-      Effect.fn("projectActionRemoveMutation")(function* ({ snapshot, dispatch }) {
+      Effect.fn("projectActionRemoveMutation")(function* ({
+        snapshot,
+        getSettings,
+        updateSettings,
+      }) {
         const project = yield* findProjectForAction(snapshot, flags.project);
+        const scripts = resolveProjectScripts(yield* getSettings, project);
         const result = removeProjectAction({
           projectId: project.id,
-          scripts: project.scripts,
+          scripts: scripts,
           actionId: flags.actionId,
         });
         if ("_tag" in result) {
           return yield* result;
         }
-        yield* dispatch({
-          type: "project.meta.update",
-          commandId: CommandId.make(yield* projectCommandUuid),
-          projectId: project.id,
-          expectedScripts: Array.from(project.scripts),
-          scripts: Array.from(result.scripts),
+        yield* updateSettings({
+          projectScriptUpdate: {
+            projectId: project.id,
+            expectedScripts: Array.from(scripts),
+            scripts: Array.from(result.scripts),
+          },
         });
         return flags.json
           ? jsonOutput({

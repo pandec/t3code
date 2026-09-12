@@ -26,19 +26,15 @@ export const fetchEnvironmentThreadMessagePage = Effect.fn(
   readonly remoteAuthorization?: Option.Option<RemoteEnvironmentAuthorization["Service"]>;
   readonly timeoutMs?: number;
 }) {
-  const query = new URLSearchParams({ limit: String(input.limit) });
-  if (input.before !== undefined) query.set("before", input.before);
   return yield* executeAuthenticatedEnvironmentHttpRequest({
+    group: "orchestration",
     ...input,
     method: "GET",
     url: (httpBaseUrl) =>
-      environmentEndpointUrl(
-        httpBaseUrl,
-        `/api/orchestration/threads/${input.threadId}/messages?${query.toString()}`,
-      ),
+      environmentEndpointUrl(httpBaseUrl, `/api/orchestration/threads/${input.threadId}/messages`),
     timeoutMs: input.timeoutMs ?? DEFAULT_THREAD_MESSAGES_TIMEOUT_MS,
     request: ({ client, headers }) =>
-      client.orchestration.threadMessages({
+      client.threadMessages({
         params: { threadId: input.threadId },
         query: {
           limit: input.limit,

@@ -1,9 +1,5 @@
 import { useSupportsMultiplePullRequests } from "~/hooks/useSupportsMultiplePullRequests";
-import { LinkBranchPullRequestButton } from "./pullRequest/LinkBranchPullRequestButton";
-import {
-  resolveThreadCurrentPullRequestLink,
-  visibleThreadPullRequests,
-} from "@t3tools/shared/threadPullRequests";
+import { resolveThreadCurrentPullRequestLink } from "@t3tools/shared/threadPullRequests";
 import { useAtomValue } from "@effect/atom-react";
 import * as Schema from "effect/Schema";
 import {
@@ -128,6 +124,7 @@ import { useSidebarPendingFileDropStore } from "../sidebarPendingFileDropStore";
 import { getProjectOrderKey, selectProjectGroupingSettings } from "../logicalProject";
 import {
   buildSidebarProjectSnapshots,
+  projectGroupsSpanEnvironments,
   type SidebarProjectSnapshot,
 } from "../sidebarProjectGrouping";
 import { legacyProjectCwdPreferenceKey, useUiStateStore } from "../uiStateStore";
@@ -169,6 +166,7 @@ import { formatCompactRelativeTimeLabel } from "../timestampFormat";
 import type { SidebarThreadSummary } from "../types";
 import type { EnvironmentProject } from "@t3tools/client-runtime/state/shell";
 import { EnvironmentMachineIcon } from "./EnvironmentMachineIcon";
+import { ProjectEnvironmentBadge } from "./ProjectEnvironmentBadge";
 import { buildThreadActionMenuItems } from "./threadActionMenu.logic";
 import { openThreadInActivePane } from "./thread-split/threadOpenTarget";
 import {
@@ -1618,6 +1616,7 @@ const SidebarThreadRow = memo(function SidebarThreadRow(props: {
   // content; surface is reserved for interaction (hover, multi-select, route).
   const rowSurfaceClassName = cn(
     "group/sidebar-row relative w-full cursor-pointer overflow-hidden rounded-md text-left outline-none select-none",
+    variantAction === "unsettle" && "[&:not(:hover):not(:focus-within)_*]:text-secondary-label/70",
     props.isActive
       ? "bg-sidebar-row-active text-sidebar-foreground"
       : isSelected
@@ -1715,7 +1714,7 @@ const SidebarThreadRow = memo(function SidebarThreadRow(props: {
                     : "text-foreground/90",
             )
           : cn(
-              "truncate group-hover/sidebar-row:text-foreground",
+              "truncate group-focus-within/sidebar-row:text-foreground group-hover/sidebar-row:text-foreground",
               shouldRecede
                 ? "text-secondary-label/70"
                 : props.isActive || isWoke
@@ -1731,7 +1730,7 @@ const SidebarThreadRow = memo(function SidebarThreadRow(props: {
     </span>
   );
 
-  // Stacks show their layer count; unrelated links show the current PR and a remainder count.
+  // Stacks show their layer count; multiple unrelated links show their total count.
   // Plain clicks open T3; individual PR links also support opening the host in a new tab.
   const prBadgeShape = supportsMultiplePullRequests
     ? resolveThreadPullRequestBadge(thread.pullRequests)
@@ -1778,13 +1777,6 @@ const SidebarThreadRow = memo(function SidebarThreadRow(props: {
       <ThreadWorktreeIndicator thread={thread} />
       {terminalStatusIcon}
       {prBadge}
-      {prBadge &&
-      pr &&
-      (supportsMultiplePullRequests
-        ? visibleThreadPullRequests(thread.pullRequests).length === 0
-        : thread.linkedPullRequest == null) ? (
-        <LinkBranchPullRequestButton threadRef={threadRef} url={pr.url} />
-      ) : null}
       {diff ? (
         <span className="shrink-0 font-mono text-xs">
           <span className="text-diff-addition-foreground">+{diff.insertions}</span>{" "}
@@ -1926,8 +1918,8 @@ const SidebarThreadRow = memo(function SidebarThreadRow(props: {
             <span
               className={cn(
                 "shrink-0 transition-opacity",
-                !props.isActive &&
-                  "opacity-40 grayscale group-hover/sidebar-row:opacity-100 group-hover/sidebar-row:grayscale-0",
+                (!props.isActive || variantAction === "unsettle") &&
+                  "opacity-40 grayscale group-focus-within/sidebar-row:opacity-100 group-focus-within/sidebar-row:grayscale-0 group-hover/sidebar-row:opacity-100 group-hover/sidebar-row:grayscale-0",
               )}
             >
               {props.project ? <ProjectFavicon project={props.project} className="size-4" /> : null}
@@ -1961,13 +1953,6 @@ const SidebarThreadRow = memo(function SidebarThreadRow(props: {
               remain visible AND clickable while the row is hovered. Only
               the time/jump label yields to the settle affordance. */}
             {prBadge}
-            {prBadge &&
-            pr &&
-            (supportsMultiplePullRequests
-              ? visibleThreadPullRequests(thread.pullRequests).length === 0
-              : thread.linkedPullRequest == null) ? (
-              <LinkBranchPullRequestButton threadRef={threadRef} url={pr.url} />
-            ) : null}
             {sortable?.isDragging ? (
               dragDestination
             ) : (
@@ -2863,6 +2848,13 @@ export default function Sidebar() {
   const hiddenProjectKeys = useMemo(
     () => new Set(storedHiddenProjectKeys),
     [storedHiddenProjectKeys],
+  );
+  // Same-named projects on two machines are only told apart by where they
+  // live, so rows on another machine carry its icon once the catalog spans
+  // more than one environment; a single-machine catalog stays as it was.
+  const showProjectEnvironments = useMemo(
+    () => projectGroupsSpanEnvironments(projectGroups),
+    [projectGroups],
   );
   const scopedProjectGroups = useMemo(
     () =>
@@ -5545,6 +5537,13 @@ export default function Sidebar() {
                         <FolderIcon className="size-4 shrink-0" />
                       )}
                       <span className="min-w-0 flex-1 truncate">{projectScopeLabel}</span>
+                      {singleScopedProjectGroup && showProjectEnvironments ? (
+                        <ProjectEnvironmentBadge
+                          group={singleScopedProjectGroup}
+                          primaryEnvironmentId={primaryEnvironmentId}
+                          machineByEnvironmentId={environmentMachineById}
+                        />
+                      ) : null}
                       {projectScopeKeys !== null || hiddenProjectKeys.size > 0 ? (
                         <span aria-hidden className="size-6 shrink-0" />
                       ) : null}
@@ -5614,6 +5613,13 @@ export default function Sidebar() {
                                 />
                                 <span className="sr-only">Accent {accentColor}</span>
                               </>
+                            ) : null}
+                            {showProjectEnvironments ? (
+                              <ProjectEnvironmentBadge
+                                group={project}
+                                primaryEnvironmentId={primaryEnvironmentId}
+                                machineByEnvironmentId={environmentMachineById}
+                              />
                             ) : null}
                             <Tooltip>
                               <TooltipTrigger

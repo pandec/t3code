@@ -7,6 +7,7 @@ import * as NodeServices from "@effect/platform-node/NodeServices";
 import { assert, it } from "@effect/vitest";
 
 import {
+  DEFAULT_SERVER_SETTINGS,
   EnvironmentHttpConflictError,
   EnvironmentInternalError,
   ProjectId,
@@ -85,6 +86,21 @@ it("includes project settings in project list summaries", () => {
     projectListSummary({ ...shell, defaultThreadEnvMode: undefined }).defaultThreadEnvMode,
   );
   assert.isFalse(projectListSummary({ ...shell, autoPull: undefined }).autoPull);
+  const reset = projectListSummary(shell, {
+    ...DEFAULT_SERVER_SETTINGS,
+    projectSettingsFolded: true,
+  });
+  assert.isNull(reset.defaultThreadEnvMode);
+  assert.isFalse(reset.autoPull);
+  const overridden = projectListSummary(shell, {
+    ...DEFAULT_SERVER_SETTINGS,
+    projectSettingsFolded: true,
+    projectSettingsOverrides: {
+      [shell.id]: { defaultAutoPull: true, defaultThreadEnvMode: "local" },
+    },
+  });
+  assert.isTrue(overridden.autoPull);
+  assert.equal(overridden.defaultThreadEnvMode, "local");
 });
 
 it.layer(NodeServices.layer)("project target lookup", (it) => {

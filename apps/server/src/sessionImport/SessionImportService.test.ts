@@ -1267,13 +1267,13 @@ it.layer(NodeServices.layer)("SessionImportService", (it) => {
     Effect.gen(function* () {
       const { state, layer } = makeHarness({
         importedModel: "claude-legacy-model",
-        models: [{ slug: "claude-fable-5" }, { slug: "claude-sonnet-5" }],
+        models: [{ slug: "claude-sonnet-5" }, { slug: "claude-fable-5-1" }],
       });
       const service = yield* makeSessionImportService.pipe(Effect.provide(layer));
 
       yield* service.importSession({ projectId, instanceId, nativeSessionId: NATIVE_SESSION_ID });
       const command = state.dispatched[0] as unknown as { modelSelection: { model: string } };
-      expect(command.modelSelection.model).toBe("claude-sonnet-5");
+      expect(command.modelSelection.model).toBe("claude-fable-5-1");
     }),
   );
 
@@ -1284,7 +1284,7 @@ it.layer(NodeServices.layer)("SessionImportService", (it) => {
 
       yield* service.importSession({ projectId, instanceId, nativeSessionId: NATIVE_SESSION_ID });
       const command = state.dispatched[0] as unknown as { modelSelection: { model: string } };
-      expect(command.modelSelection.model).toBe("claude-sonnet-5");
+      expect(command.modelSelection.model).toBe("claude-fable-5-1");
     }),
   );
 

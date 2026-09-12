@@ -12,6 +12,7 @@ import {
   EnvironmentHttpApi,
   EnvironmentId,
   EnvironmentOrchestrationHttpApi,
+  EnvironmentSettingsHttpApi,
   type ExecutionEnvironmentDescriptor,
   MessageId,
   ProjectId,
@@ -40,6 +41,8 @@ import {
   SERVICE_LAUNCHER_CONTEXT_ENV,
   SERVICE_LAUNCHER_PROTOCOL,
 } from "./cloud/serviceProtocol.ts";
+import { settingsHttpApiLayer } from "./settingsHttp.ts";
+import * as ServerSettingsModule from "./serverSettings.ts";
 import * as ServerConfig from "./config.ts";
 import * as ServerEnvironment from "./environment/ServerEnvironment.ts";
 import * as ProjectionSnapshotQuery from "./orchestration/Services/ProjectionSnapshotQuery.ts";
@@ -66,6 +69,7 @@ import {
   CliOrchestrationServerUnavailableError,
   CliOrchestrationUndeclaredStatusError,
   dispatchLiveOrchestrationCommand,
+  updateLiveServerSettings,
   withCliOrchestrationSession,
   CliOrchestrationDeclaredResponseError,
 } from "./cli/orchestration.ts";
@@ -92,7 +96,8 @@ const DisconnectedLauncherChildLayer = Layer.mergeAll(
 );
 class ProjectCliHttpApi extends HttpApi.make("environment")
   .add(EnvironmentHttpApi.groups.metadata)
-  .add(EnvironmentOrchestrationHttpApi) {}
+  .add(EnvironmentOrchestrationHttpApi)
+  .add(EnvironmentSettingsHttpApi) {}
 
 const connectCli = makeCli({ cloudEnabled: true });
 const noConnectCli = makeCli({ cloudEnabled: false });
@@ -190,7 +195,13 @@ const withLiveProjectCliServer = <A, E, R>(
   Effect.gen(function* () {
     const config = yield* makeCliTestServerConfig(baseDir);
     const routesLayer = HttpApiBuilder.layer(ProjectCliHttpApi).pipe(
-      Layer.provide(Layer.merge(orchestrationHttpApiLayer, serverEnvironmentHttpApiLayer)),
+      Layer.provide(
+        Layer.mergeAll(
+          orchestrationHttpApiLayer,
+          serverEnvironmentHttpApiLayer,
+          settingsHttpApiLayer,
+        ),
+      ),
       Layer.provide(
         Layer.mock(TurnStartBootstrap.TurnStartBootstrap)({
           dispatchTurnStart:
@@ -209,7 +220,10 @@ const withLiveProjectCliServer = <A, E, R>(
         repositoryIdentity: true,
         ...(options?.conditionalProjectScriptUpdates === false
           ? {}
-          : { conditionalProjectScriptUpdates: true }),
+          : {
+              conditionalProjectScriptUpdates: true,
+              conditionalProjectSettingsScriptUpdates: true,
+            }),
       },
     };
     const appLayer = HttpRouter.serve(routesLayer, {
@@ -230,6 +244,7 @@ const withLiveProjectCliServer = <A, E, R>(
           Layer.provide(ServerSecretStore.layer),
         ),
       ),
+      Layer.provideMerge(ServerSettingsModule.layerTest({ projectSettingsFolded: true })),
       Layer.provideMerge(makeProjectPersistenceLayer(config)),
       Layer.provideMerge(
         Layer.succeed(
@@ -963,47 +978,27 @@ it.layer(NodeServices.layer)("bin cli parsing", (it) => {
           );
           assert.isTrue(projectAfterSetup !== undefined);
           const environmentAuth = yield* EnvironmentAuth.EnvironmentAuth;
-          const unguardedCommand = {
-            type: "project.meta.update",
-            commandId: CommandId.make("cmd-cli-project-actions-unguarded"),
-            projectId: projectAfterSetup!.id,
-            scripts: [],
-          } as const;
-          const staleCommand = {
-            type: "project.meta.update",
-            commandId: CommandId.make("cmd-cli-project-actions-stale"),
-            projectId: projectAfterSetup!.id,
-            expectedScripts: [],
-            scripts: [],
-          } as const;
+          const stalePatch = {
+            projectScriptUpdate: {
+              projectId: projectAfterSetup!.id,
+              expectedScripts: [],
+              scripts: [],
+            },
+          };
           const conflictResults = yield* withCliOrchestrationSession(
             environmentAuth,
             "t3 project action conflict test",
             (token) =>
               Effect.gen(function* () {
-                const unguarded = yield* dispatchLiveOrchestrationCommand(
-                  origin,
-                  token,
-                  unguardedCommand,
-                ).pipe(Effect.flip);
-                const first = yield* dispatchLiveOrchestrationCommand(
-                  origin,
-                  token,
-                  staleCommand,
-                ).pipe(Effect.flip);
-                const replay = yield* dispatchLiveOrchestrationCommand(
-                  origin,
-                  token,
-                  staleCommand,
-                ).pipe(Effect.flip);
-                return { unguarded, stale: [first, replay] };
+                const first = yield* updateLiveServerSettings(origin, token, stalePatch).pipe(
+                  Effect.flip,
+                );
+                const replay = yield* updateLiveServerSettings(origin, token, stalePatch).pipe(
+                  Effect.flip,
+                );
+                return { stale: [first, replay] };
               }),
           ).pipe(Effect.provide(FetchHttpClient.layer));
-          assert.instanceOf(conflictResults.unguarded, CliOrchestrationConflictError);
-          assert.equal(
-            conflictResults.unguarded.message,
-            "This client cannot safely update project actions. Update or refresh T3 Code, then retry.",
-          );
           for (const conflict of conflictResults.stale) {
             assert.instanceOf(conflict, CliOrchestrationConflictError);
             assert.equal(
@@ -1085,7 +1080,10 @@ it.layer(NodeServices.layer)("bin cli parsing", (it) => {
             (candidate) => candidate.workspaceRoot === workspaceRoot,
           );
           assert.deepEqual(
-            project?.scripts.map((action) => action.id),
+            (yield* (yield* ServerSettingsModule.ServerSettingsService)
+              .getSettings).projectSettingsOverrides[project!.id]?.defaultProjectScripts?.map(
+              (action) => action.id,
+            ),
             ["setup"],
           );
         }),

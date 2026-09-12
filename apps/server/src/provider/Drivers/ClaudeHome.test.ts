@@ -25,8 +25,7 @@ it.layer(NodeServices.layer)("ClaudeHome", (it) => {
         expect(yield* resolveClaudeConfigDirPath({ homePath: "" })).toBe(
           path.join(resolved, ".claude"),
         );
-        // A snapshot, never `process.env` by reference: a live reference
-        // would observe the fork driver's temporary CLAUDE_CONFIG_DIR swap.
+        // Instance environments remain snapshots when the process environment changes.
         const environment = yield* makeClaudeEnvironment({ homePath: "", shadowHomePath: "" });
         expect(environment).not.toBe(process.env);
         expect(environment).toEqual({ ...process.env });

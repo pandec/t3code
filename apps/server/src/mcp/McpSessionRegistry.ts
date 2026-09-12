@@ -116,7 +116,14 @@ const makeWithOptions = Effect.fn("McpSessionRegistry.make")(function* (
       : capabilities.has("voice")
         ? "/mcp/voice"
         : "/mcp/pull-requests";
-    return `${endpointBase}${path}`;
+    const endpointPath = capabilities.has("device")
+      ? path === "/mcp"
+        ? "/mcp/device/all"
+        : path === "/mcp/pull-requests"
+          ? "/mcp/device"
+          : path.replace("/mcp/", "/mcp/device/")
+      : path;
+    return `${endpointBase}${endpointPath}`;
   };
 
   const hashToken = (token: string) =>

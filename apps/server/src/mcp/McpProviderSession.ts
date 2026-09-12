@@ -9,8 +9,31 @@ export interface McpProviderSessionConfig {
   readonly providerInstanceId: ProviderInstanceId;
   readonly endpoint: string;
   readonly authorizationHeader: string;
-  /** The toolkits the credential grants; the pull request toolkit is always among them. */
+  /** The toolkits the credential grants; pull requests are always included. */
   readonly capabilities: ReadonlySet<McpCapability>;
+  /**
+   * Set when the session may drive devices. Adapters spread this into the
+   * provider subprocess environment so the `agent-device` CLI is on PATH.
+   * device_open supplies the config for the selected host.
+   */
+  readonly agentDeviceEnvironment?: Readonly<Record<string, string>>;
+}
+
+/** Provider env with the device variables applied over `base`, or `base` untouched. */
+export function withAgentDeviceEnvironment(
+  base: NodeJS.ProcessEnv,
+  config: Pick<McpProviderSessionConfig, "agentDeviceEnvironment"> | undefined,
+): NodeJS.ProcessEnv {
+  const extra = config?.agentDeviceEnvironment;
+  if (!extra) return base;
+  const separator = extra.PATH_SEPARATOR ?? ":";
+  const basePath = base.PATH ?? base.Path;
+  const { PATH: shimDir, PATH_SEPARATOR: _separator, ...rest } = extra;
+  return {
+    ...base,
+    ...rest,
+    ...(shimDir ? { PATH: basePath ? `${shimDir}${separator}${basePath}` : shimDir } : {}),
+  };
 }
 
 const sessionsByThread = new Map<ThreadId, McpProviderSessionConfig>();

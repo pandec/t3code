@@ -1,6 +1,7 @@
 import { describe, expect, it } from "@effect/vitest";
 import {
   EnvironmentId,
+  MessageId,
   ProjectId,
   ProviderInstanceId,
   ThreadId,
@@ -33,6 +34,7 @@ import {
 } from "./pullRequestDiffHttp.ts";
 import { fetchEnvironmentSessionState } from "./session.ts";
 import { fetchEnvironmentShellSnapshot } from "./shellSnapshotHttp.ts";
+import { fetchEnvironmentThreadMessagePage } from "./threadMessagesHttp.ts";
 import { fetchEnvironmentThreadSnapshot } from "./threadSnapshotHttp.ts";
 
 const TARGET = new RelayConnectionTarget({
@@ -216,6 +218,46 @@ const LOADERS: ReadonlyArray<{
 ];
 
 describe("authenticated environment HTTP requests", () => {
+  it.effect("loads a fork message page through the grouped orchestration client", () =>
+    Effect.gen(function* () {
+      const page = {
+        threadId: THREAD.thread.id,
+        messages: [],
+        hasMoreOlder: false,
+        snapshotSequence: 2,
+      };
+      const harness = makeHarness(() => Response.json(page));
+      const result = yield* fetchEnvironmentThreadMessagePage({
+        ...harness.input,
+        threadId: THREAD.thread.id,
+        before: MessageId.make("older-message"),
+        limit: 20,
+      }).pipe(Effect.provide(harness.httpLayer));
+      expect(result).toEqual(page);
+      expect(harness.calls).toHaveLength(1);
+      const call = harness.calls[0]!;
+      const url = new URL(call.url);
+      expect(`${url.origin}${url.pathname}`).toBe(
+        `${CURRENT_ORIGIN}/api/orchestration/threads/thread-1/messages`,
+      );
+      expect(url.searchParams.get("limit")).toBe("20");
+      expect(url.searchParams.get("before")).toBe("older-message");
+      expect(new Headers(call.init.headers).get("authorization")).toBe("DPoP current-token");
+      expect(harness.proofs[0]?.url).toBe(`${url.origin}${url.pathname}`);
+    }),
+  );
+
+  it.effect.each(LOADERS)("rejects an invalid $name response", (loader) =>
+    Effect.gen(function* () {
+      const harness = makeHarness(() => Response.json({}));
+      const result = yield* loader
+        .load(harness.input)
+        .pipe(Effect.provide(harness.httpLayer), Effect.asVoid, Effect.flip);
+      expect(result._tag).toBe("RemoteEnvironmentAuthInvalidJsonError");
+      expect(harness.calls).toHaveLength(1);
+    }),
+  );
+
   it.effect.each(LOADERS)("uses current relay authorization and endpoint for $name", (loader) =>
     Effect.gen(function* () {
       const harness = makeHarness(() => Response.json(loader.response));

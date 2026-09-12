@@ -50,13 +50,14 @@ export const transcribeVoiceRecording = Effect.fn("clientRuntime.voice.transcrib
     const signer = yield* Effect.serviceOption(ManagedRelayDpopSigner);
     const remoteAuthorization = yield* Effect.serviceOption(RemoteEnvironmentAuthorization);
     return yield* executeAuthenticatedEnvironmentHttpRequest({
+      group: "voice",
       prepared: prepared.value,
       signer,
       remoteAuthorization,
       method: "POST",
       url: (httpBaseUrl) => environmentEndpointUrl(httpBaseUrl, "/api/voice/transcriptions"),
       timeoutMs: VOICE_TRANSCRIPTION_TIMEOUT_MS,
-      request: ({ client, headers }) => client.voice.transcribe({ payload: request, headers }),
+      request: ({ client, headers }) => client.transcribe({ payload: request, headers }),
     });
   },
 );
@@ -85,14 +86,14 @@ export const synthesizeMessageSpeech = Effect.fn("clientRuntime.voice.synthesize
     const signer = yield* Effect.serviceOption(ManagedRelayDpopSigner);
     const remoteAuthorization = yield* Effect.serviceOption(RemoteEnvironmentAuthorization);
     return yield* executeAuthenticatedEnvironmentHttpRequest({
+      group: "voice",
       prepared: prepared.value,
       signer,
       remoteAuthorization,
       method: "POST",
       url: (httpBaseUrl) => environmentEndpointUrl(httpBaseUrl, "/api/voice/message-speech"),
       timeoutMs: MESSAGE_SPEECH_SYNTHESIS_TIMEOUT_MS,
-      request: ({ client, headers }) =>
-        client.voice.synthesizeMessage({ payload: request, headers }),
+      request: ({ client, headers }) => client.synthesizeMessage({ payload: request, headers }),
     });
   },
 );

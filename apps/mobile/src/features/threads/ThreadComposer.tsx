@@ -47,7 +47,7 @@ import {
 import Animated, {
   FadeIn,
   FadeOut,
-  LinearTransition,
+  type LayoutAnimationFunction,
   ReduceMotion,
   useAnimatedStyle,
   useSharedValue,
@@ -228,10 +228,32 @@ export interface ThreadComposerProps {
 // running alongside that translate reads as jitter. Snapping the layout and
 // letting the keyboard-synced slide be the only motion looks native there.
 export const COMPOSER_TRANSITION_DURATION_MS = 220;
+// Side panes already animate the dock's width. Nested horizontal layout
+// transitions would leave the surface trailing its toolbar's new position.
+// Keep the vertical pill/card morph while horizontal layout follows the dock.
+const composerHeightTransition: LayoutAnimationFunction = (values) => {
+  "worklet";
+  const timing = {
+    duration: COMPOSER_TRANSITION_DURATION_MS,
+    reduceMotion: ReduceMotion.System,
+  };
+  return {
+    initialValues: {
+      originX: values.targetOriginX,
+      originY: values.currentOriginY,
+      width: values.targetWidth,
+      height: values.currentHeight,
+    },
+    animations: {
+      originX: values.targetOriginX,
+      originY: withTiming(values.targetOriginY, timing),
+      width: values.targetWidth,
+      height: withTiming(values.targetHeight, timing),
+    },
+  };
+};
 export const COMPOSER_LAYOUT_TRANSITION =
-  Platform.OS === "android"
-    ? undefined
-    : LinearTransition.duration(COMPOSER_TRANSITION_DURATION_MS).reduceMotion(ReduceMotion.System);
+  Platform.OS === "android" ? undefined : composerHeightTransition;
 
 const COMPOSER_ATTACHMENT_ENTERING =
   Platform.OS === "android"
@@ -446,10 +468,14 @@ export const ThreadComposer = memo(function ThreadComposer(props: ThreadComposer
     voiceInput.elapsedSeconds,
   );
   const isVoiceInputPresented = voicePresentation.statusLabel !== null;
-  // Opening and presentation count as active so focus can move from the editor
-  // into either native sheet without collapsing the composer underneath it.
+  // Opening, presentation, and the focus handoff back count as active so focus
+  // can move from the editor into either native sheet without collapsing the
+  // composer underneath it. An open draft stays visible; only a collapsed
+  // composer becomes a voice strip.
   const isExpanded =
-    isFocused || settingsSheetPresentation.isActive || usageSheetPresentation.isActive;
+    isFocused ||
+    settingsSheetPresentation.keepsComposerExpanded ||
+    usageSheetPresentation.keepsComposerExpanded;
   const showsCompactDictation = isVoiceInputPresented && !isExpanded;
   const isToolbarVisible = isExpanded || isVoiceInputPresented;
   const attachmentBlockReason = composerAttachmentUploadBlockReason({
@@ -513,7 +539,10 @@ export const ThreadComposer = memo(function ThreadComposer(props: ThreadComposer
 
   const handleBlur = useCallback(() => {
     setIsFocused(false);
-    if (!settingsSheetPresentation.isActive && !usageSheetPresentation.isActive) {
+    if (
+      !settingsSheetPresentation.keepsComposerExpanded &&
+      !usageSheetPresentation.keepsComposerExpanded
+    ) {
       onExpandedChange?.(false);
     }
     onEditorFocusChange?.(false);
@@ -521,8 +550,8 @@ export const ThreadComposer = memo(function ThreadComposer(props: ThreadComposer
   }, [
     onEditorFocusChange,
     onExpandedChange,
-    settingsSheetPresentation.isActive,
-    usageSheetPresentation.isActive,
+    settingsSheetPresentation.keepsComposerExpanded,
+    usageSheetPresentation.keepsComposerExpanded,
   ]);
   const selectedThreadDetail = useSelectedThreadDetail();
   const providerUsageQuery = useEnvironmentQuery(

@@ -1,6 +1,9 @@
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import {
   DEFAULT_SERVER_SETTINGS,
+  ModelSelection,
+  ProjectId,
+  ProjectScript,
   ProviderDriverKind,
   ProviderInstanceId,
   resolveProviderInstanceEnabled,
@@ -1543,4 +1546,189 @@ it.layer(NodeServices.layer)("server settings", (it) => {
       assert.include(persisted, '"valueRedacted": true');
     }).pipe(Effect.provide(makeServerSettingsLayer())),
   );
+
+  it.effect("folds legacy project overrides into projectSettingsOverrides once", () =>
+    Effect.gen(function* () {
+      const serverConfig = yield* ServerConfig.ServerConfig;
+      const fileSystem = yield* FileSystem.FileSystem;
+      const sql = yield* SqlClient.SqlClient;
+      const serverSettings = yield* ServerSettingsModule.ServerSettingsService;
+      const legacyProject = ProjectId.make("project-legacy");
+      const scriptedProject = ProjectId.make("project-scripted");
+      const script: ProjectScript = {
+        id: "check",
+        name: "Check",
+        command: "npm test",
+        icon: "play",
+        runOnWorktreeCreate: false,
+      };
+      const model = createModelSelection(ProviderInstanceId.make("codex"), "gpt-5.5");
+      const modelJson = yield* Schema.encodeEffect(Schema.fromJsonString(ModelSelection))(model);
+      const scriptsJson = yield* Schema.encodeEffect(
+        Schema.fromJsonString(Schema.Array(ProjectScript)),
+      )([script]);
+      for (const [projectId, modelColumn, envMode, autoPull, scripts] of [
+        // The legacy project also carries aggregate scripts, but its stored
+        // null override reset them; the fold must not bring them back.
+        [legacyProject, modelJson, "worktree", 1, scriptsJson],
+        [scriptedProject, null, null, 0, scriptsJson],
+      ] as const) {
+        yield* sql`
+          INSERT INTO projection_projects (
+            project_id, title, workspace_root, default_model_selection_json,
+            default_thread_env_mode, auto_pull, scripts_json, created_at, updated_at
+          )
+          VALUES (
+            ${projectId}, ${"Project"}, ${`/tmp/${projectId}`}, ${modelColumn},
+            ${envMode}, ${autoPull}, ${scripts},
+            ${"2026-08-25T00:00:00.000Z"}, ${"2026-08-25T00:00:00.000Z"}
+          )
+        `;
+      }
+      yield* fileSystem.writeFileString(
+        serverConfig.settingsPath,
+        `{"projectAgentBrowserAccessOverrides":{"${legacyProject}":false},"projectAutoPullOverrides":{"${scriptedProject}":true},"projectScriptOverrides":{"${legacyProject}":null}}`,
+      );
+
+      const settings = yield* serverSettings.getSettings;
+      assert.isTrue(settings.projectSettingsFolded);
+      assert.deepEqual<ServerSettings["projectSettingsOverrides"]>(
+        settings.projectSettingsOverrides,
+        {
+          [legacyProject]: {
+            enableAgentBrowserAccess: false,
+            defaultModelSelection: model,
+            defaultThreadEnvMode: "worktree",
+            defaultAutoPull: true,
+          },
+          [scriptedProject]: { defaultAutoPull: true, defaultProjectScripts: [script] },
+        },
+      );
+      // Derived legacy views keep older clients reading the same values.
+      assert.deepEqual<ServerSettings["projectAutoPullOverrides"]>(
+        settings.projectAutoPullOverrides,
+        {
+          [legacyProject]: true,
+          [scriptedProject]: true,
+        },
+      );
+      assert.deepEqual<ServerSettings["projectScriptOverrides"]>(settings.projectScriptOverrides, {
+        [scriptedProject]: [script],
+      });
+
+      // A reset survives the next load: the fold does not run again.
+      yield* serverSettings.updateSettings({
+        projectSettingsOverrides: { [legacyProject]: null },
+      });
+      const raw = yield* fileSystem.readFileString(serverConfig.settingsPath);
+      const persisted = yield* decodeServerSettings(
+        // @effect-diagnostics-next-line preferSchemaOverJson:off
+        JSON.parse(raw),
+      );
+      assert.isTrue(persisted.projectSettingsFolded);
+      assert.isUndefined(persisted.projectSettingsOverrides[legacyProject]);
+    }).pipe(Effect.provide(makeServerSettingsLayer())),
+  );
+
+  it.effect("leaves an unreadable settings.json untouched instead of folding over it", () =>
+    Effect.gen(function* () {
+      const serverConfig = yield* ServerConfig.ServerConfig;
+      const fileSystem = yield* FileSystem.FileSystem;
+      const sql = yield* SqlClient.SqlClient;
+      const serverSettings = yield* ServerSettingsModule.ServerSettingsService;
+      yield* sql`
+        INSERT INTO projection_projects (
+          project_id, title, workspace_root, auto_pull, scripts_json, created_at, updated_at
+        )
+        VALUES (
+          ${"project-broken"}, ${"Project"}, ${"/tmp/project-broken"}, ${1}, ${"[]"},
+          ${"2026-08-25T00:00:00.000Z"}, ${"2026-08-25T00:00:00.000Z"}
+        )
+      `;
+      const broken = '{"defaultAutoPull": tru';
+      yield* fileSystem.writeFileString(serverConfig.settingsPath, broken);
+
+      const settings = yield* serverSettings.getSettings;
+      assert.isFalse(settings.projectSettingsFolded);
+      assert.deepEqual(settings.projectSettingsOverrides, {});
+      // The user's file is still there to repair; nothing was written over it.
+      assert.equal(yield* fileSystem.readFileString(serverConfig.settingsPath), broken);
+    }).pipe(Effect.provide(makeServerSettingsLayer())),
+  );
 });
+
+it.effect("serializes project action updates and preserves sibling overrides", () =>
+  Effect.gen(function* () {
+    const service = yield* ServerSettingsModule.ServerSettingsService;
+    const projectId = ProjectId.make("actions-cas");
+    yield* service.updateSettings({
+      projectSettingsOverrides: { [projectId]: { defaultAutoPull: true } },
+    });
+    const script = {
+      id: "test",
+      name: "Test",
+      command: "vp test",
+      icon: "play" as const,
+      runOnWorktreeCreate: false,
+    };
+    const results = yield* Effect.all(
+      [
+        service
+          .updateSettings({
+            projectScriptUpdate: { projectId, expectedScripts: [], scripts: [script] },
+          })
+          .pipe(Effect.result),
+        service
+          .updateSettings({
+            projectScriptUpdate: {
+              projectId,
+              expectedScripts: [],
+              scripts: [{ ...script, id: "other" }],
+            },
+          })
+          .pipe(Effect.result),
+      ],
+      { concurrency: "unbounded" },
+    );
+    assert.equal(results.filter((result) => result._tag === "Success").length, 1);
+    const failure = results.find((result) => result._tag === "Failure");
+    assert.equal(
+      failure?._tag === "Failure" ? failure.failure.operation : undefined,
+      "project-actions-conflict",
+    );
+    const settings = yield* service.getSettings;
+    assert.equal(settings.projectSettingsOverrides[projectId]?.defaultAutoPull, true);
+    assert.equal(settings.projectSettingsOverrides[projectId]?.defaultProjectScripts?.length, 1);
+  }).pipe(
+    Effect.provide(
+      ServerSettingsModule.layerTest({ projectSettingsFolded: true, defaultProjectScripts: [] }),
+    ),
+  ),
+);
+
+it.effect("rejects stale inherited actions and accepts an empty project override", () =>
+  Effect.gen(function* () {
+    const service = yield* ServerSettingsModule.ServerSettingsService;
+    const projectId = ProjectId.make("inherited-actions");
+    const script = {
+      id: "test",
+      name: "Test",
+      command: "vp test",
+      icon: "play" as const,
+      runOnWorktreeCreate: false,
+    };
+    yield* service.updateSettings({ defaultProjectScripts: [script] });
+    const stale = yield* service
+      .updateSettings({ projectScriptUpdate: { projectId, expectedScripts: [], scripts: [] } })
+      .pipe(Effect.flip);
+    assert.equal(stale.operation, "project-actions-conflict");
+    const next = yield* service.updateSettings({
+      projectScriptUpdate: { projectId, expectedScripts: [{ ...script }], scripts: [] },
+    });
+    assert.deepEqual(next.projectSettingsOverrides[projectId]?.defaultProjectScripts, []);
+  }).pipe(
+    Effect.provide(
+      ServerSettingsModule.layerTest({ projectSettingsFolded: true, defaultProjectScripts: [] }),
+    ),
+  ),
+);

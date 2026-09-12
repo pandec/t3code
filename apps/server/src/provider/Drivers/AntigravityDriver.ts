@@ -1,3 +1,4 @@
+import { withAgentDeviceEnvironment } from "../../mcp/McpProviderSession.ts";
 import { providerThreadEnvironment } from "../ProviderThreadEnvironment.ts";
 import {
   AntigravitySettings,
@@ -172,13 +173,16 @@ export const AntigravityDriver: ProviderDriver<AntigravitySettings, AntigravityD
             installation: executable,
             profile,
             cwd: input.cwd,
-            baseEnv: input.threadId
-              ? providerThreadEnvironment(
-                  { threadId: ThreadId.make(input.threadId), cwd: input.cwd },
-                  processEnvironment,
-                  input.t3Paths,
-                )
-              : processEnvironment,
+            baseEnv: withAgentDeviceEnvironment(
+              input.threadId
+                ? providerThreadEnvironment(
+                    { threadId: ThreadId.make(input.threadId), cwd: input.cwd },
+                    processEnvironment,
+                    input.t3Paths,
+                  )
+                : processEnvironment,
+              input,
+            ),
             auth,
           }),
         }).pipe(Effect.provideService(Crypto.Crypto, crypto));

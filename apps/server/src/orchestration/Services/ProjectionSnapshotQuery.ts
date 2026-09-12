@@ -222,7 +222,10 @@ export interface ProjectionSnapshotQueryShape {
     threadId: ThreadId,
   ) => Effect.Effect<
     Option.Option<
-      Pick<OrchestrationThreadShell, "id" | "title" | "branch" | "worktreePath" | "session">
+      Pick<
+        OrchestrationThreadShell,
+        "id" | "projectId" | "title" | "branch" | "worktreePath" | "session"
+      >
     >,
     ProjectionRepositoryError
   >;

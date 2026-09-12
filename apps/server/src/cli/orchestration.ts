@@ -1,5 +1,7 @@
 import {
   AuthAdministrativeScopes,
+  ServerSettings,
+  ServerSettingsPatch,
   ClientOrchestrationCommand,
   DispatchResult,
   EnvironmentHttpApi,
@@ -26,6 +28,11 @@ import {
   clearPersistedServerRuntimeState,
   readPersistedServerRuntimeState,
 } from "../serverRuntimeState.ts";
+
+const decodeServerSettings = Schema.decodeUnknownEffect(ServerSettings);
+const encodeSettingsPatchJson = Schema.encodeSync(
+  Schema.fromJsonString(Schema.Struct({ patch: ServerSettingsPatch })),
+);
 
 const isEnvironmentHttpCommonError = Schema.is(EnvironmentHttpCommonError);
 const isEnvironmentHttpConflictError = Schema.is(EnvironmentHttpConflictError);
@@ -258,7 +265,7 @@ interface DispatchAcknowledgement {
 const fetchDispatchAcknowledgement = (
   origin: string,
   bearerToken: string,
-  command: ClientOrchestrationCommand,
+  request: { readonly path: string; readonly method: "POST" | "PATCH"; readonly body: string },
   timeoutMilliseconds: number,
 ): Effect.Effect<
   DispatchAcknowledgement,
@@ -312,13 +319,13 @@ const fetchDispatchAcknowledgement = (
     }, timeoutMilliseconds);
     // @effect-diagnostics-next-line globalFetchInEffect:off - explicit AbortController ownership is required to bound acknowledgement body reads.
     globalThis
-      .fetch(new URL("/api/orchestration/dispatch", origin), {
-        method: "POST",
+      .fetch(new URL(request.path, origin), {
+        method: request.method,
         headers: {
           authorization: `Bearer ${bearerToken}`,
           "content-type": "application/json",
         },
-        body: encodeClientOrchestrationCommandJson(command),
+        body: request.body,
         signal: controller.signal,
       })
       .then(async (response) => {
@@ -403,6 +410,21 @@ export const withCliOrchestrationSession = <A, E, R>(
       environmentAuth
         .revokeSession(issued.sessionId)
         .pipe(Effect.retry(authSessionBusyRetryPolicy), Effect.ignore({ log: true })),
+  );
+
+export const fetchLiveServerSettings = (
+  origin: string,
+  bearerToken: string,
+  timeouts: CliLiveServerReadTimeouts,
+) =>
+  Effect.gen(function* () {
+    const client = yield* makeLiveServerClient(origin);
+    return yield* client.settings.getSettings({
+      headers: { authorization: `Bearer ${bearerToken}` },
+    });
+  }).pipe(
+    Effect.mapError(cliOrchestrationErrorFromRequest),
+    withLiveServerReadTimeout("snapshot", timeouts.read),
   );
 
 export const fetchLiveOrchestrationSnapshot = (
@@ -544,7 +566,11 @@ export const dispatchLiveOrchestrationCommand = (
     const { response, payload: responsePayload } = yield* fetchDispatchAcknowledgement(
       origin,
       bearerToken,
-      command,
+      {
+        path: "/api/orchestration/dispatch",
+        method: "POST",
+        body: encodeClientOrchestrationCommandJson(command),
+      },
       options?.timeoutMilliseconds === undefined
         ? CLI_LIVE_SERVER_DISPATCH_TIMEOUT_MS
         : options.timeoutMilliseconds,
@@ -573,6 +599,57 @@ export const dispatchLiveOrchestrationCommand = (
       });
     }
     return yield* decodeDispatchResult(responsePayload).pipe(
+      Effect.mapError(
+        (cause) =>
+          new CliOrchestrationOutcomeUnknownError({
+            operation: "dispatchLiveServer",
+            cause,
+          }),
+      ),
+    );
+  });
+
+export const updateLiveServerSettings = (
+  origin: string,
+  bearerToken: string,
+  patch: ServerSettingsPatch,
+  options?: {
+    readonly timeoutMilliseconds?: number;
+  },
+) =>
+  Effect.gen(function* () {
+    const { response, payload: responsePayload } = yield* fetchDispatchAcknowledgement(
+      origin,
+      bearerToken,
+      { path: "/api/settings", method: "PATCH", body: encodeSettingsPatchJson({ patch }) },
+      options?.timeoutMilliseconds === undefined
+        ? CLI_LIVE_SERVER_DISPATCH_TIMEOUT_MS
+        : options.timeoutMilliseconds,
+    );
+    if (!response.ok) {
+      const conflict = decodeEnvironmentHttpConflictError(responsePayload);
+      if (Option.isSome(conflict)) {
+        return yield* cliOrchestrationErrorFromRequest(conflict.value);
+      }
+      const declared = decodeEnvironmentHttpCommonError(responsePayload);
+      if (Option.isSome(declared)) {
+        return yield* cliOrchestrationErrorFromRequest(declared.value);
+      }
+      // An undeclared 5xx can occur after the command committed, so the
+      // outcome is unknown; sub-5xx statuses prove the command was rejected.
+      if (response.status >= 500) {
+        return yield* new CliOrchestrationOutcomeUnknownError({
+          operation: "dispatchLiveServer",
+          cause: responsePayload,
+        });
+      }
+      return yield* new CliOrchestrationUndeclaredStatusError({
+        operation: "callLiveServer",
+        status: response.status,
+        cause: responsePayload,
+      });
+    }
+    return yield* decodeServerSettings(responsePayload).pipe(
       Effect.mapError(
         (cause) =>
           new CliOrchestrationOutcomeUnknownError({

@@ -196,6 +196,7 @@ const ProjectionThreadActivityIdRowSchema = Schema.Struct({
 const ProjectionThreadSessionDbRowSchema = ProjectionThreadSession;
 const ProjectionThreadRuntimeContextDbRowSchema = Schema.Struct({
   id: ThreadId,
+  projectId: ProjectId,
   title: Schema.String,
   branch: Schema.NullOr(Schema.String),
   worktreePath: Schema.NullOr(Schema.String),
@@ -1598,6 +1599,7 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
       sql`
         SELECT
           threads.thread_id AS id,
+          threads.project_id AS "projectId",
           threads.title,
           threads.branch,
           threads.worktree_path AS "worktreePath",
@@ -1620,6 +1622,7 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
         Effect.map((rows) =>
           rows.map((row) => ({
             id: row.id,
+            projectId: row.projectId,
             title: row.title,
             branch: row.branch,
             worktreePath: row.worktreePath,
@@ -3851,6 +3854,7 @@ pending_approval_requests AS (
       );
       return Option.map(context, (row) => ({
         id: row.id,
+        projectId: row.projectId,
         title: row.title,
         branch: row.branch,
         worktreePath: row.worktreePath,
@@ -3879,6 +3883,7 @@ pending_approval_requests AS (
         createdAt: row.createdAt,
         updatedAt: row.updatedAt,
         ...(row.attachments !== null ? { attachments: row.attachments } : {}),
+        ...(row.inputOrigin !== null ? { inputOrigin: row.inputOrigin } : {}),
       },
       hasOtherUserMessages: row.hasOtherUserMessages === 1,
       ...(row.workspaceRecoveryNotice !== null

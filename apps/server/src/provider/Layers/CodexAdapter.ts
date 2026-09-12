@@ -2325,10 +2325,13 @@ export const makeCodexAdapter = Effect.fn("makeCodexAdapter")(function* (
           ...(mcpSession
             ? {
                 environment: {
-                  ...providerThreadEnvironment(
-                    { ...input, cwd: input.cwd ?? process.cwd() },
-                    options?.environment,
-                    serverConfig,
+                  ...McpProviderSession.withAgentDeviceEnvironment(
+                    providerThreadEnvironment(
+                      { ...input, cwd: input.cwd ?? process.cwd() },
+                      options?.environment,
+                      serverConfig,
+                    ),
+                    mcpSession,
                   ),
                   T3_MCP_BEARER_TOKEN: mcpSession.authorizationHeader.replace(/^Bearer\s+/, ""),
                 },
@@ -2338,7 +2341,7 @@ export const makeCodexAdapter = Effect.fn("makeCodexAdapter")(function* (
                   "-c",
                   'mcp_servers.t3-code.bearer_token_env_var="T3_MCP_BEARER_TOKEN"',
                 ],
-                browserToolsAvailable: mcpSession.capabilities.has("preview"),
+                mcpCapabilities: mcpSession.capabilities,
               }
             : {}),
         };

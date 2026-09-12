@@ -6,7 +6,6 @@ import {
   CommandId,
   DEFAULT_MODEL,
   DEFAULT_PROVIDER_INTERACTION_MODE,
-  DEFAULT_RUNTIME_MODE,
   DEFAULT_SERVER_SETTINGS,
   MessageId,
   ProviderInstanceId,
@@ -29,6 +28,7 @@ import {
   type ThreadTurnStartBootstrap,
   UserInputQuestion,
 } from "@t3tools/contracts";
+import { resolveProjectSettings } from "@t3tools/shared/projectSettings";
 import { buildTemporaryWorktreeBranchName } from "@t3tools/shared/git";
 import { fromLenientJson } from "@t3tools/shared/schemaJson";
 import { parseT3ProjectFile } from "@t3tools/shared/t3ProjectFile";
@@ -72,6 +72,7 @@ import {
   dispatchLiveOrchestrationCommand,
   fetchLiveEnvironmentDescriptor,
   fetchLiveOrchestrationShell,
+  fetchLiveServerSettings,
   fetchLiveOrchestrationThreadDetail,
   fetchLiveOrchestrationThreadMessages,
   isLiveServerRouteMissing,
@@ -339,8 +340,9 @@ export const resolveThreadCliDefaultWorkspace = Effect.fn("resolveThreadCliDefau
     readonly projectSetting: ThreadEnvMode | null | undefined;
     readonly workspaceRoot: string;
     readonly settingsPath: string;
+    readonly settings?: ServerSettings;
   }) {
-    const settings = yield* readThreadDefaultSettings(input.settingsPath);
+    const settings = input.settings ?? (yield* readThreadDefaultSettings(input.settingsPath));
     const projectFile =
       input.projectSetting == null ? yield* readT3ProjectFileEnvMode(input.workspaceRoot) : null;
     const envMode = resolveDefaultThreadEnvMode({
@@ -832,9 +834,7 @@ const threadNewCommand = Command.make("new", {
   project: Flag.string("project").pipe(Flag.withDescription("Project id or workspace root.")),
   message: Flag.string("message").pipe(Flag.withDescription("Initial user message.")),
   title: Flag.string("title").pipe(Flag.withDescription("Optional thread title."), Flag.optional),
-  runtimeMode: Flag.choice("runtime-mode", RuntimeMode.literals).pipe(
-    Flag.withDefault(DEFAULT_RUNTIME_MODE),
-  ),
+  runtimeMode: Flag.choice("runtime-mode", RuntimeMode.literals).pipe(Flag.optional),
   interactionMode: Flag.choice("interaction-mode", ProviderInteractionMode.literals).pipe(
     Flag.withDefault(DEFAULT_PROVIDER_INTERACTION_MODE),
   ),
@@ -892,6 +892,15 @@ const threadNewCommand = Command.make("new", {
           identifier: flags.project,
         });
         const projectShell = input.live.shell.projects.find((item) => item.id === project.id)!;
+        const resolved = resolveProjectSettings(
+          yield* fetchLiveServerSettings(input.live.origin, input.token, input.timeouts),
+          project.id,
+          projectShell,
+        );
+        const runtimeMode = Option.getOrElse(
+          flags.runtimeMode,
+          () => resolved.settings.defaultRuntimeMode,
+        );
         // Without an explicit workspace flag the configured defaults decide,
         // like the app's new-thread flow: per-project setting > checked-in
         // t3.json > global server setting.
@@ -899,7 +908,11 @@ const threadNewCommand = Command.make("new", {
         const requestedWorkspace =
           explicitWorkspace.mode === "default"
             ? yield* resolveThreadCliDefaultWorkspace({
-                projectSetting: projectShell.defaultThreadEnvMode,
+                projectSetting:
+                  resolved.sources.defaultThreadEnvMode === "project"
+                    ? resolved.settings.defaultThreadEnvMode
+                    : null,
+                settings: resolved.settings,
                 workspaceRoot: projectShell.workspaceRoot,
                 settingsPath: input.settingsPath,
               })
@@ -992,8 +1005,7 @@ const threadNewCommand = Command.make("new", {
         // default, then the server-wide default, then the built-in Codex model.
         const modelSelection =
           explicitModelSelection ??
-          projectShell.defaultModelSelection ??
-          (yield* readThreadDefaultSettings(input.settingsPath)).defaultModelSelection ??
+          resolved.settings.defaultModelSelection ??
           ({
             instanceId: ProviderInstanceId.make("codex"),
             model: DEFAULT_MODEL,
@@ -1016,13 +1028,13 @@ const threadNewCommand = Command.make("new", {
               message: { messageId, role: "user", text: message, attachments: [] },
               modelSelection,
               ...(hasExplicitTitle ? { titlePinned: true } : { titleSeed: title }),
-              runtimeMode: flags.runtimeMode,
+              runtimeMode,
               interactionMode: flags.interactionMode,
               bootstrap: buildNewWorktreeBootstrap({
                 project: projectShell,
                 title,
                 modelSelection,
-                runtimeMode: flags.runtimeMode,
+                runtimeMode,
                 interactionMode: flags.interactionMode,
                 workspace,
                 worktreeBranch,
@@ -1074,7 +1086,7 @@ const threadNewCommand = Command.make("new", {
           projectId: project.id,
           title,
           modelSelection,
-          runtimeMode: flags.runtimeMode,
+          runtimeMode,
           interactionMode: flags.interactionMode,
           branch: existingWorktree?.branch ?? null,
           worktreePath: existingWorktree?.worktreePath ?? null,
@@ -1087,7 +1099,7 @@ const threadNewCommand = Command.make("new", {
           message: { messageId, role: "user", text: message, attachments: [] },
           modelSelection,
           ...(hasExplicitTitle ? { titlePinned: true } : { titleSeed: title }),
-          runtimeMode: flags.runtimeMode,
+          runtimeMode,
           interactionMode: flags.interactionMode,
           createdAt,
         }).pipe(

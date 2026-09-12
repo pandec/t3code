@@ -1,3 +1,4 @@
+import { ServerSettings, ServerSettingsPatch } from "./settings.ts";
 import * as Context from "effect/Context";
 import type * as DateTime from "effect/DateTime";
 import * as Schema from "effect/Schema";
@@ -122,6 +123,8 @@ export const EnvironmentInternalErrorReason = Schema.Literals([
   "orchestration_snapshot_failed",
   "orchestration_thread_snapshot_failed",
   "orchestration_dispatch_failed",
+  "settings_read_failed",
+  "settings_update_failed",
   "summary_generation_failed",
   "transcription_unavailable",
   "transcription_provider_failed",
@@ -761,7 +764,25 @@ class EnvironmentConnectHttpApi extends HttpApiGroup.make("connect")
     }),
   ) {}
 
+export class EnvironmentSettingsHttpApi extends HttpApiGroup.make("settings")
+  .add(
+    HttpApiEndpoint.get("getSettings", "/api/settings", {
+      headers: OptionalBearerHeaders,
+      success: ServerSettings,
+      error: EnvironmentHttpCommonError,
+    }).middleware(EnvironmentAuthenticatedAuth),
+  )
+  .add(
+    HttpApiEndpoint.patch("updateSettings", "/api/settings", {
+      headers: OptionalBearerHeaders,
+      payload: Schema.Struct({ patch: ServerSettingsPatch }),
+      success: ServerSettings,
+      error: [EnvironmentHttpCommonError, EnvironmentHttpConflictError],
+    }).middleware(EnvironmentAuthenticatedAuth),
+  ) {}
+
 export class EnvironmentHttpApi extends HttpApi.make("environment")
+  .add(EnvironmentSettingsHttpApi)
   .add(EnvironmentMetadataHttpApi)
   .add(EnvironmentAuthHttpApi)
   .add(EnvironmentOrchestrationHttpApi)

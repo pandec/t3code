@@ -64,10 +64,7 @@ export const makeClaudeEnvironment = Effect.fn("makeClaudeEnvironment")(function
   config: Pick<ClaudeSettings, "homePath" | "shadowHomePath">,
   baseEnv?: NodeJS.ProcessEnv,
 ): Effect.fn.Return<NodeJS.ProcessEnv, never, Path.Path> {
-  // Always a copy, never the base env by reference: when the base is
-  // `process.env`, a by-reference environment would observe the fork driver's
-  // temporary CLAUDE_CONFIG_DIR override (see ClaudeSessionFork.ts) at
-  // whatever moment a session start happens to snapshot it.
+  // Keep the instance environment independent of later process environment changes.
   const environment = { ...(baseEnv ?? process.env) };
   // Isolate this instance's config via CLAUDE_CONFIG_DIR rather than HOME.
   // Overriding HOME also relocates the macOS login keychain lookup

@@ -22,7 +22,12 @@ import {
   type ReactNode,
 } from "react";
 import { useWindowDimensions, View } from "react-native";
-import Animated, { useAnimatedStyle, useSharedValue, withTiming } from "react-native-reanimated";
+import Animated, {
+  useAnimatedStyle,
+  useDerivedValue,
+  useSharedValue,
+  withTiming,
+} from "react-native-reanimated";
 import { AsyncResult } from "effect/unstable/reactivity";
 
 import {
@@ -52,6 +57,7 @@ import { useAppearancePreferences } from "../settings/appearance/AppearancePrefe
 import { ThreadNavigationSidebar } from "../threads/ThreadNavigationSidebar";
 import { WORKSPACE_PANE_TIMING } from "./workspace-pane-animation";
 import { WorkspaceInspectorPane } from "./workspace-inspector-pane";
+import { WorkspaceContentWidthContext } from "./workspace-content-width";
 
 interface AdaptiveWorkspaceContextValue {
   readonly layout: Layout;
@@ -513,6 +519,10 @@ function AdaptiveWorkspaceLayoutContent(
   const contentSettledWidth = layout.usesSplitView
     ? Math.max(0, panes.contentPaneWidth - inspectorColumnTargetWidth)
     : null;
+  const renderedInspectorWidth = useSharedValue(inspectorColumnTargetWidth);
+  const renderedContentWidth = useDerivedValue(() =>
+    Math.max(0, width - renderedSidebarWidth.value - renderedInspectorWidth.value),
+  );
 
   const handleSelectedThreadRemoved = useCallback(() => {
     setFileInspectorPreferredVisible(false);
@@ -601,10 +611,15 @@ function AdaptiveWorkspaceLayoutContent(
                     : { flex: 1 }
                 }
               >
-                {props.children}
+                <WorkspaceContentWidthContext
+                  value={layout.usesSplitView ? renderedContentWidth : null}
+                >
+                  {props.children}
+                </WorkspaceContentWidthContext>
               </View>
             </View>
             <WorkspaceInspectorPane
+              renderedInspectorWidth={renderedInspectorWidth}
               active={workspaceInspector?.active ?? false}
               panes={panes}
               renderInspector={workspaceInspector?.render}

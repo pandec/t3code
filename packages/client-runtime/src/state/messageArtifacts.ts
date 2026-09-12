@@ -153,14 +153,14 @@ export const summarizeMessage = Effect.fn("clientRuntime.messageArtifacts.summar
     const signer = yield* Effect.serviceOption(ManagedRelayDpopSigner);
     const remoteAuthorization = yield* Effect.serviceOption(RemoteEnvironmentAuthorization);
     return yield* executeAuthenticatedEnvironmentHttpRequest({
+      group: "messageArtifacts",
       prepared: prepared.value,
       signer,
       remoteAuthorization,
       method: "POST",
       url: (httpBaseUrl) => environmentEndpointUrl(httpBaseUrl, "/api/messages/summaries"),
       timeoutMs: MESSAGE_SUMMARY_TIMEOUT_MS,
-      request: ({ client, headers }) =>
-        client.messageArtifacts.summarizeMessage({ payload: request, headers }),
+      request: ({ client, headers }) => client.summarizeMessage({ payload: request, headers }),
     });
   },
 );

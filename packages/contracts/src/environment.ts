@@ -102,6 +102,8 @@ export const ExecutionEnvironmentCapabilities = Schema.Struct({
       older servers, so action-management clients must not send whole-array
       script mutations that could silently lose concurrent changes. */
   conditionalProjectScriptUpdates: Schema.optionalKey(Schema.Boolean),
+  /** Server atomically compares and updates effective project actions in settings. */
+  conditionalProjectSettingsScriptUpdates: Schema.optionalKey(Schema.Boolean),
   /** Server exposes authenticated session-import HTTP endpoints. */
   sessionImport: Schema.optionalKey(Schema.Boolean),
   /** Server exposes authenticated provider catalog metadata. */
@@ -110,6 +112,8 @@ export const ExecutionEnvironmentCapabilities = Schema.Struct({
   threadAutoSettlement: Schema.optionalKey(Schema.Boolean),
   /** Server persists the opt-in for continuing interrupted threads after restarts. */
   threadRestartContinuation: Schema.optionalKey(Schema.Boolean),
+  /** Server resolves `projectSettingsOverrides`; older servers ignore the key. */
+  projectSettingsOverrides: Schema.optionalKey(Schema.Boolean),
   /** Server understands thread.snooze / thread.unsnooze commands. Same
       version-skew contract as threadSettlement. */
   threadSnooze: Schema.optionalKey(Schema.Boolean),

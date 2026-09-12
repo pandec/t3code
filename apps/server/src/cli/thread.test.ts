@@ -2,6 +2,7 @@
 import * as NodeChildProcess from "node:child_process";
 import { HostProcessPlatform } from "@t3tools/shared/hostProcess";
 import {
+  DEFAULT_SERVER_SETTINGS,
   ApprovalRequestId,
   CommandId,
   MessageId,
@@ -536,6 +537,27 @@ it.layer(NodeServices.layer)("thread default workspace resolution", (it) => {
         settingsPath,
       });
       assert.deepEqual(selection, { mode: "checkout" });
+    }),
+  );
+
+  it.effect("uses live effective settings instead of the local settings file", () =>
+    Effect.gen(function* () {
+      const { workspaceRoot, settingsPath, writeSettings } = yield* makeWorkspace;
+      yield* writeSettings(
+        '{ "defaultThreadEnvMode": "local", "newWorktreesStartFromOrigin": true }',
+      );
+      const selection = yield* resolveThreadCliDefaultWorkspace({
+        projectSetting: "worktree",
+        workspaceRoot,
+        settingsPath,
+        settings: { ...DEFAULT_SERVER_SETTINGS, newWorktreesStartFromOrigin: false },
+      });
+      assert.deepEqual(selection, {
+        mode: "new-worktree",
+        base: null,
+        branch: null,
+        startFromOrigin: false,
+      });
     }),
   );
 

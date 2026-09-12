@@ -52,7 +52,7 @@ t3 project remove /absolute/path/to/repository --json
 
 Project commands target the T3 data directory selected by `--base-dir` or `T3CODE_HOME` and use its
 running server. If that server is unavailable, the command fails without opening the database.
-`project list --json` returns each project's `defaultThreadEnvMode` and `autoPull` settings.
+`project list --json` returns each project's effective default model and auto-pull setting. `defaultThreadEnvMode` is the project override, or `null` when the repository and environment defaults decide.
 
 A project id or its exact stored workspace path remains valid for renaming, removal, and action
 management after the folder is moved or deleted. Commands that need the workspace cannot continue.
@@ -88,6 +88,8 @@ UI are available as `--run-on-worktree-create`, `--preview-url`, and `--auto-ope
 boolean update flags also accept the `--no-...` form, and `--clear-preview-url` removes both preview
 settings. Keybindings are user-level settings rather than project action data and are not changed by
 these commands.
+
+Actions inherit environment defaults until a project overrides them. CLI edits save the effective list as a project override in Settings, preserving the project's other settings.
 
 Action listing, adding, updating, and removing require the running server so concurrent UI and CLI
 edits can be serialized safely. If another client
@@ -342,9 +344,7 @@ liveness so callers can distinguish active work from stale or wedged state.
 ### Permissions and Isolation
 
 `thread new` accepts `--runtime-mode` (`approval-required`, `auto-accept-edits`, `auto`,
-`full-access`) and `--interaction-mode` (`default`, `plan`). Both default to the product defaults,
-which means **`--runtime-mode full-access`**: the agent edits files and runs commands without asking
-for approval. Pass `--runtime-mode approval-required` for unattended automation you do not fully
+`full-access`) and `--interaction-mode` (`default`, `plan`). Runtime mode inherits the project's effective setting, falling back to the environment setting. Interaction mode defaults to `default`. With `--runtime-mode full-access`, the agent edits files and runs commands without asking for approval. Pass `--runtime-mode approval-required` for unattended automation you do not fully
 trust. `--runtime-mode auto` is provider-specific: Codex sends on-request approvals to its AI
 reviewer, Claude uses Claude Code's native Auto permission mode, and providers without Auto support
 continue prompting the user. It is not equivalent to full access and is not suitable for fully
