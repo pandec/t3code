@@ -36,7 +36,6 @@ import {
   type SourceControlDiscoveryResult,
   type SourceControlProviderKind,
   type SourceControlRepositoryInfo,
-  type ThreadId,
   PRIMARY_LOCAL_ENVIRONMENT_ID,
   resolveEnvironmentMachineKind,
 } from "@t3tools/contracts";
@@ -49,7 +48,6 @@ import {
   CircleDotIcon,
   ArrowLeftRightIcon,
   Columns2Icon,
-  CopyIcon,
   CornerLeftUpIcon,
   FileSearchIcon,
   FolderIcon,
@@ -82,7 +80,7 @@ import { useAtomValue } from "@effect/atom-react";
 
 import { isDesktopLocalConnectionTarget } from "../connection/desktopLocal";
 import { useDesktopLocalBootstraps } from "../connection/useDesktopLocalBootstraps";
-import { useCopyToClipboard, writeTextToClipboard } from "../hooks/useCopyToClipboard";
+import { writeTextToClipboard } from "../hooks/useCopyToClipboard";
 import { useHandleNewThread } from "../hooks/useHandleNewThread";
 import { useSavedPromptList } from "../hooks/useSavedPrompts";
 import { savedPromptPreview } from "./chat/composerPromptPicker";
@@ -481,8 +479,6 @@ function threadActionIcon(id: CommandPaletteThreadActionId): ReactNode {
       return <PinOffIcon className={ITEM_ICON_CLASS} />;
     case "fork":
       return <GitForkIcon className={ITEM_ICON_CLASS} />;
-    case "copy-thread-id":
-      return <CopyIcon className={ITEM_ICON_CLASS} />;
   }
 }
 
@@ -746,23 +742,6 @@ function OpenCommandPaletteDialog(props: {
     confirmAndUnpinThread,
     unsettleThread,
   } = useThreadActions();
-  const { copyToClipboard: copyThreadIdToClipboard } = useCopyToClipboard<{
-    threadId: ThreadId;
-  }>({
-    target: "thread ID",
-    onCopy: ({ threadId }) => {
-      toastManager.add({ type: "success", title: "Thread ID copied", description: threadId });
-    },
-    onError: (error) => {
-      toastManager.add(
-        stackedThreadToast({
-          type: "error",
-          title: "Failed to copy thread ID",
-          description: errorMessage(error),
-        }),
-      );
-    },
-  });
   const projects = useProjects();
   const projectAccentColors = useProjectAccentColors();
   const accentTint = useAccentTintSettings();
@@ -1920,14 +1899,11 @@ function OpenCommandPaletteDialog(props: {
     promptPreview: savedPromptPreview,
     itemIcon: <NotebookPenIcon className={ITEM_ICON_CLASS} />,
     addonIcon: <NotebookPenIcon className={ADDON_ICON_CLASS} />,
-    copyPrompt: async (prompt) => {
-      const didCopy = await writeTextToClipboard(prompt.content, "prompt");
-      if (didCopy) {
-        toastManager.add({
-          type: "success",
-          title: "Prompt copied",
-          description: prompt.title,
-        });
+    insertPrompt: (prompt) => {
+      const composer = (activeThreadPaneComposerHandle() ?? composerHandleRef)?.current;
+      // Keep the palette open if a missing or busy composer refuses insertion.
+      if (composer?.insertTextAtEnd(prompt.content, { ensureLeadingBoundary: true })) {
+        setOpen(false);
       }
     },
   });
@@ -2001,9 +1977,6 @@ function OpenCommandPaletteDialog(props: {
             await reportThreadActionFailure("Failed to fork conversation", () =>
               forkThread(threadRef),
             );
-            return;
-          case "copy-thread-id":
-            copyThreadIdToClipboard(threadRef.threadId, { threadId: threadRef.threadId });
             return;
         }
       },
@@ -2733,13 +2706,6 @@ function OpenCommandPaletteDialog(props: {
     getCommandPaletteInputPlaceholder(paletteMode);
   const isSubmenu = paletteMode === "submenu" || paletteMode === "submenu-browse";
   const isSavedPromptsView = currentView?.groups[0]?.value === SAVED_PROMPTS_GROUP_VALUE;
-  // Ref read at render: fine for a footer hint — the composer mounts long
-  // before the palette opens, and re-opening re-renders this component. The
-  // active split pane's composer takes precedence over the app-root one —
-  // same resolution as the insert below, so the hint never advertises an
-  // insert the action would refuse (composer-less secondary notice state).
-  const canInsertSavedPrompt =
-    isSavedPromptsView && (activeThreadPaneComposerHandle() ?? composerHandleRef)?.current != null;
   const hasHighlightedBrowseItem = highlightedItemValue?.startsWith("browse:") ?? false;
   const canSubmitBrowsePath =
     isBrowsing &&
@@ -2845,8 +2811,7 @@ function OpenCommandPaletteDialog(props: {
       return;
     }
 
-    // Plain Enter copies the highlighted prompt (its `run`); the primary
-    // modifier turns it into "insert into the composer" instead.
+    // Intercept modified Enter before the list runs its default insert action.
     if (isSavedPromptsView && event.key === "Enter" && isPrimaryModifierPressed(event)) {
       event.preventDefault();
       event.stopPropagation();
@@ -2857,12 +2822,25 @@ function OpenCommandPaletteDialog(props: {
       const prompt = savedPrompts.find(
         (candidate) => savedPromptItemValue(candidate) === highlightedItem?.value,
       );
-      const composer = (activeThreadPaneComposerHandle() ?? composerHandleRef)?.current;
-      // Close only on a successful insert — a busy composer (approval,
-      // pending input) refuses it, and silently dismissing the palette would
-      // make that failure look like success.
-      if (prompt && composer?.insertTextAtEnd(prompt.content, { ensureLeadingBoundary: true })) {
+      if (prompt) {
         setOpen(false);
+        void writeTextToClipboard(prompt.content, "prompt")
+          .then((didCopy) => {
+            if (didCopy) {
+              toastManager.add({
+                type: "success",
+                title: "Prompt copied",
+                description: prompt.title,
+              });
+            }
+          })
+          .catch((error: unknown) => {
+            toastManager.add({
+              type: "error",
+              title: "Failed to copy prompt",
+              description: errorMessage(error),
+            });
+          });
       }
       return;
     }
@@ -3100,17 +3078,17 @@ function OpenCommandPaletteDialog(props: {
     ) : null;
 
   const footerActionLabel = isSavedPromptsView
-    ? "Copy"
+    ? "Insert"
     : addProjectCloneFlow?.step === "repository"
       ? (remoteProjectButtonLabel ?? "Continue")
       : !canSubmitBrowsePath || hasHighlightedBrowseItem
         ? "Select"
         : undefined;
 
-  const footerTrailing = canInsertSavedPrompt ? (
-    <KbdGroup className="items-center gap-1.5">
+  const footerTrailing = isSavedPromptsView ? (
+    <KbdGroup className="shrink-0 items-center gap-1.5 whitespace-nowrap">
       <Kbd>{`${submitModifierLabel} Enter`}</Kbd>
-      <span>Insert into composer</span>
+      <span>Copy</span>
     </KbdGroup>
   ) : canOpenProjectFromFileManager ? (
     <CommandFooterAction
@@ -3171,7 +3149,7 @@ function OpenCommandPaletteDialog(props: {
       }}
       onValueChange={handleQueryChange}
       panelClassName="max-h-[min(28rem,70vh)]"
-      showBackHint={isSubmenu}
+      showBackHint={isSubmenu && !isSavedPromptsView}
       value={query}
     >
       {remoteProjectContext ? (
