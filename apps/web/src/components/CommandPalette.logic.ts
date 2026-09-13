@@ -251,20 +251,13 @@ export function savedPromptItemValue(prompt: SavedPrompt): string {
   return `saved-prompt:${prompt.id}`;
 }
 
-/**
- * The ⌘K "Prompts..." submenu. Enter runs `copyPrompt` on the picked item;
- * the palette's keydown handler additionally offers primary-modifier+Enter
- * to insert the highlighted prompt into the composer. Note the submenu
- * snapshots its items when pushed — only the insert path re-resolves against
- * the live library, so a library change while the submenu is open can make
- * the two keys briefly disagree.
- */
+/** Prompt selection inserts; the palette handles primary-modifier+Enter to copy. */
 export function buildSavedPromptsSubmenu(input: {
   prompts: ReadonlyArray<SavedPrompt>;
   promptPreview: (prompt: SavedPrompt) => string;
   itemIcon: ReactNode;
   addonIcon: ReactNode;
-  copyPrompt: (prompt: SavedPrompt) => Promise<void>;
+  insertPrompt: (prompt: SavedPrompt) => void;
 }): CommandPaletteSubmenuItem | null {
   if (input.prompts.length === 0) {
     return null;
@@ -287,8 +280,9 @@ export function buildSavedPromptsSubmenu(input: {
           title: prompt.title,
           description: input.promptPreview(prompt),
           icon: input.itemIcon,
+          keepOpen: true,
           run: async () => {
-            await input.copyPrompt(prompt);
+            input.insertPrompt(prompt);
           },
         })),
       },
@@ -323,13 +317,7 @@ export function buildArchiveCurrentThreadAction(input: {
  * per-thread context menu. Ids are shared between the item builder and the
  * dispatcher so labels and handlers cannot drift apart.
  */
-export type CommandPaletteThreadActionId =
-  | "settle"
-  | "unsettle"
-  | "pin"
-  | "unpin"
-  | "fork"
-  | "copy-thread-id";
+export type CommandPaletteThreadActionId = "settle" | "unsettle" | "pin" | "unpin" | "fork";
 
 interface CommandPaletteThreadActionSpec {
   readonly id: CommandPaletteThreadActionId;
@@ -362,11 +350,6 @@ const THREAD_ACTION_SPECS = {
     id: "fork",
     title: "Fork current thread",
     searchTerms: ["fork", "fork conversation", "branch", "duplicate", "current thread"],
-  },
-  "copy-thread-id": {
-    id: "copy-thread-id",
-    title: "Copy current thread ID",
-    searchTerms: ["copy thread id", "thread id", "identifier", "clipboard", "current thread"],
   },
 } as const satisfies Record<CommandPaletteThreadActionId, CommandPaletteThreadActionSpec>;
 
@@ -402,7 +385,6 @@ export function buildCurrentThreadActionItems(input: {
   if (input.canFork) {
     ids.push("fork");
   }
-  ids.push("copy-thread-id");
 
   return ids.map((id) => {
     const spec: CommandPaletteThreadActionSpec = THREAD_ACTION_SPECS[id];

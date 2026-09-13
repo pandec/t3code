@@ -79,7 +79,6 @@ describe("buildCurrentThreadActionItems", () => {
       "action:thread:pin",
       "action:thread:settle",
       "action:thread:fork",
-      "action:thread:copy-thread-id",
     ]);
   });
 
@@ -88,12 +87,7 @@ describe("buildCurrentThreadActionItems", () => {
       buildCurrentThreadActionItems({ ...baseInput, isPinned: true, isSettled: true }).map(
         (item) => item.value,
       ),
-    ).toEqual([
-      "action:thread:unpin",
-      "action:thread:unsettle",
-      "action:thread:fork",
-      "action:thread:copy-thread-id",
-    ]);
+    ).toEqual(["action:thread:unpin", "action:thread:unsettle", "action:thread:fork"]);
   });
 
   it("drops capability-gated and unavailable actions", () => {
@@ -103,7 +97,7 @@ describe("buildCurrentThreadActionItems", () => {
         canFork: false,
         supports: { settlement: false, pinning: false },
       }).map((item) => item.value),
-    ).toEqual(["action:thread:copy-thread-id"]);
+    ).toEqual([]);
   });
 
   it("disables settle while the thread cannot be settled", () => {
