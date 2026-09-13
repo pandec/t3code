@@ -6,6 +6,7 @@ import {
   MessageId,
   MessageInputOrigin,
   ModelSelection,
+  OrchestrationMessageContext,
   type OrchestrationSessionStatus,
   ProjectId,
   ProviderInteractionMode,
@@ -27,7 +28,7 @@ import {
 } from "./composerAttachment.ts";
 import type { EnvironmentShellStatus } from "./shell.ts";
 
-const THREAD_OUTBOX_SCHEMA_VERSION = 8;
+const THREAD_OUTBOX_SCHEMA_VERSION = 9;
 const THREAD_OUTBOX_MAX_RETRY_DELAY_MS = 16_000;
 
 const QueuedThreadCreationSchema = Schema.Struct({
@@ -60,13 +61,14 @@ export const ThreadOutboxDeliveryIntent = Schema.Literals(["queue", "steer"]);
 export type ThreadOutboxDeliveryIntent = typeof ThreadOutboxDeliveryIntent.Type;
 
 export const QueuedThreadMessageSchema = Schema.Struct({
-  schemaVersion: Schema.Literals([1, 2, 3, 4, 5, 6, 7, THREAD_OUTBOX_SCHEMA_VERSION]),
+  schemaVersion: Schema.Literals([1, 2, 3, 4, 5, 6, 7, 8, THREAD_OUTBOX_SCHEMA_VERSION]),
   environmentId: EnvironmentId,
   threadId: ThreadId,
   messageId: MessageId,
   commandId: CommandId,
   text: Schema.String,
   inputOrigin: Schema.optional(MessageInputOrigin),
+  context: Schema.optional(OrchestrationMessageContext),
   attachments: Schema.Array(PersistedDraftComposerAttachmentSchema),
   modelSelection: Schema.optional(ModelSelection),
   runtimeMode: Schema.optional(RuntimeMode),
@@ -107,6 +109,7 @@ export interface QueuedThreadMessage {
   readonly commandId: CommandId;
   readonly text: string;
   readonly inputOrigin?: MessageInputOrigin | undefined;
+  readonly context?: OrchestrationMessageContext | undefined;
   readonly attachments: ReadonlyArray<DraftComposerAttachment>;
   readonly modelSelection?: ModelSelectionType | undefined;
   readonly runtimeMode?: RuntimeModeType | undefined;
@@ -408,9 +411,11 @@ export function resolveThreadOutboxDeliveryAction(input: {
   readonly threadExists: boolean;
   readonly shellStatus: EnvironmentShellStatus;
   readonly environmentConnected: boolean;
+  readonly environmentEnabled?: boolean | undefined;
   readonly threadStatus: OrchestrationSessionStatus | null;
   readonly deliveryIntent: ThreadOutboxDeliveryIntent;
 }): ThreadOutboxDeliveryAction {
+  if (input.environmentEnabled === false) return "wait";
   if (input.isCreation) {
     // A pending task creates its thread on delivery. If the thread already
     // exists the creation command went through and only cleanup remains.

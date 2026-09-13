@@ -9,6 +9,7 @@ import {
   createShellEnvironmentAtoms,
   type EnvironmentShellState,
 } from "@t3tools/client-runtime/state/shell";
+import { enabledEnvironmentIds } from "@t3tools/client-runtime/state/connections";
 import type { EnvironmentId } from "@t3tools/contracts";
 import * as Option from "effect/Option";
 import { AsyncResult, Atom } from "effect/unstable/reactivity";
@@ -47,7 +48,7 @@ export const allEnvironmentShellsBootstrappedAtom = Atom.make((get) => {
   if (Option.isNone(catalog)) {
     return false;
   }
-  for (const environmentId of catalog.value.entries.keys()) {
+  for (const environmentId of enabledEnvironmentIds(catalog.value)) {
     if (Option.isSome(get(environmentShell.stateValueAtom(environmentId)).snapshot)) {
       continue;
     }
@@ -68,7 +69,7 @@ export const environmentIdsReadyForTurnCompletionAtom = Atom.make((get) => {
   if (Option.isNone(catalog)) {
     return readyEnvironmentIds;
   }
-  for (const environmentId of catalog.value.entries.keys()) {
+  for (const environmentId of enabledEnvironmentIds(catalog.value)) {
     const shell = get(environmentShell.stateValueAtom(environmentId));
     const connection = AsyncResult.value(get(environmentCatalog.stateAtom(environmentId)));
     if (isEnvironmentShellReadyForTurnCompletion(shell, connection)) {

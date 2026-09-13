@@ -23,7 +23,9 @@ import { AsyncResult, Atom } from "effect/unstable/reactivity";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { Alert } from "react-native";
 
+import { environmentCatalog } from "../connection/catalog";
 import { scopedThreadKey } from "../lib/scopedEntities";
+import { serializeComposerMessageForServer, uploadedComposerContext } from "../lib/composerContext";
 import { prepareTurnAttachments, type PreparedTurnAttachments } from "../lib/attachmentUpload";
 import { buildProjectThreadStartTurnInput } from "../lib/projectThreadStartTurn";
 import { randomHex } from "../lib/uuid";
@@ -361,6 +363,7 @@ export async function recoverEditedCreationAfterDelivery(
     // deleting attachment files. allowOverflow matches send-failure recovery.
     await mergeComposerDraftContent(draftKey, {
       text: kept.text,
+      context: kept.context,
       ...(kept.inputOrigin !== undefined ? { inputOrigin: kept.inputOrigin } : {}),
       attachments: [],
     });
@@ -457,6 +460,7 @@ export async function restoreRejectedQueuedMessage(
         ...(queuedMessage.inputOrigin !== undefined
           ? { inputOrigin: queuedMessage.inputOrigin }
           : {}),
+        context: queuedMessage.context,
         attachments: queuedMessage.attachments,
       });
     } finally {
@@ -668,7 +672,9 @@ export function useThreadOutboxDrain(): void {
       const environmentId = batched[0]?.environmentId;
       const stillConnected = connectedEnvironments.some(
         (connected) =>
-          connected.environmentId === environmentId && connected.connectionState === "connected",
+          connected.environmentId === environmentId &&
+          connected.isEnabled &&
+          connected.connectionState === "connected",
       );
       if (!stillConnected) {
         flushBatchRef.current.delete(threadKey);
@@ -1076,7 +1082,15 @@ export function useThreadOutboxDrain(): void {
           message: {
             messageId: queuedMessage.messageId,
             role: "user",
-            text: queuedMessage.text,
+            ...serializeComposerMessageForServer(
+              queuedMessage.text,
+              uploadedComposerContext(
+                queuedMessage.context,
+                queuedMessage.attachments,
+                prepared.attachments,
+              ),
+              currentConfig.environment.capabilities.inlineMessageContext === true,
+            ),
             attachments: prepared.attachments,
             ...(queuedMessage.inputOrigin !== undefined
               ? { inputOrigin: queuedMessage.inputOrigin }
@@ -1209,7 +1223,15 @@ export function useThreadOutboxDrain(): void {
           commandId: queuedMessage.commandId,
           messageId: queuedMessage.messageId,
           createdAt: queuedMessage.createdAt,
-          text: queuedMessage.text.trim(),
+          ...serializeComposerMessageForServer(
+            queuedMessage.text.trim(),
+            uploadedComposerContext(
+              queuedMessage.context,
+              queuedMessage.attachments,
+              prepared.attachments,
+            ),
+            currentConfig.environment.capabilities.inlineMessageContext === true,
+          ),
           ...(queuedMessage.inputOrigin !== undefined
             ? { inputOrigin: queuedMessage.inputOrigin }
             : {}),
@@ -1374,6 +1396,7 @@ export function useThreadOutboxDrain(): void {
             isCreation: creation !== undefined,
             threadExists: threadSettings !== undefined,
             shellStatus,
+            environmentEnabled: environment?.isEnabled,
             environmentConnected: environment?.connectionState === "connected",
             threadStatus: thread?.session?.status ?? null,
             // The turn this batch waited for has ended and its first message
@@ -1511,6 +1534,9 @@ export function useThreadOutboxDrain(): void {
           isCreation: creation !== undefined,
           threadExists: freshThreadSettings !== undefined,
           shellStatus,
+          environmentEnabled: appAtomRegistry
+            .get(environmentCatalog.catalogValueAtom)
+            .entries.get(nextQueuedMessage.environmentId)?.enabled,
           environmentConnected: environment?.connectionState === "connected",
           threadStatus: freshThread?.session?.status ?? null,
           deliveryIntent: flushBatchRef.current.get(threadKey)?.has(nextQueuedMessage.messageId)

@@ -6,6 +6,7 @@ import {
   type TurnId,
   type UploadChatImageAttachment,
 } from "@t3tools/contracts";
+import { serializeLegacyContextMessage } from "@t3tools/shared/composerContextLegacySend";
 import * as Cause from "effect/Cause";
 import { AsyncResult } from "effect/unstable/reactivity";
 
@@ -89,6 +90,7 @@ export function threadOutboxFlushBatchIds(
 
 export interface ThreadOutboxDeliveryOptions {
   readonly commands: ThreadOutboxDeliveryCommands;
+  readonly supportsInlineMessageContext?: (environmentId: EnvironmentId) => boolean;
   /** Removes a delivered message from the queue; rejections are reported, not thrown. */
   readonly removeQueuedMessage: (message: QueuedThreadMessage) => Promise<boolean>;
   /** Fires after startTurn is accepted, before queue cleanup or projection catch-up. */
@@ -133,6 +135,7 @@ function toStartTurnAttachments(
       name: attachment.name,
       mimeType: attachment.mimeType,
       sizeBytes: attachment.sizeBytes,
+      ...(attachment.source ? { source: attachment.source } : {}),
     });
   }
   return prepared;
@@ -284,6 +287,30 @@ export function createThreadOutboxDelivery(options: ThreadOutboxDeliveryOptions)
       return { outcome: "failed" };
     }
 
+    const messageContext = queuedMessage.context
+      ? {
+          ...queuedMessage.context,
+          records: queuedMessage.context.records.map((record) => {
+            if (!("attachmentId" in record)) return record;
+            const attachment = queuedMessage.attachments.find(
+              (item) => item.id === record.attachmentId,
+            );
+            return attachment?.type === "file" && attachment.uploadedAttachmentId
+              ? { ...record, attachmentId: attachment.uploadedAttachmentId }
+              : record;
+          }),
+        }
+      : undefined;
+    const inlineContext =
+      options.supportsInlineMessageContext?.(queuedMessage.environmentId) === true;
+    const text =
+      messageContext && !inlineContext
+        ? serializeLegacyContextMessage({
+            text: queuedMessage.text,
+            records: messageContext.records,
+          })
+        : queuedMessage.text;
+
     const deliveryResult = await options.commands.startTurn({
       environmentId: queuedMessage.environmentId,
       input: {
@@ -292,7 +319,8 @@ export function createThreadOutboxDelivery(options: ThreadOutboxDeliveryOptions)
         message: {
           messageId: queuedMessage.messageId,
           role: "user",
-          text: queuedMessage.text,
+          text,
+          ...(inlineContext && messageContext ? { context: messageContext } : {}),
           attachments,
           ...(queuedMessage.inputOrigin !== undefined
             ? { inputOrigin: queuedMessage.inputOrigin }

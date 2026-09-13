@@ -4,6 +4,7 @@ import {
   steerGraceRemainingMs,
   type QueuedThreadMessage,
 } from "@t3tools/client-runtime/state/thread-outbox-model";
+import { replaceComposerContextReferences } from "@t3tools/shared/composerContextReferences";
 import type { MessageId } from "@t3tools/contracts";
 import { ArrowUpIcon, LoaderIcon, PencilIcon, Trash2Icon } from "lucide-react";
 import { useEffect, useState } from "react";
@@ -82,7 +83,15 @@ export function ComposerQueuedMessages({
                   isSteering ? "text-foreground/80" : "text-muted-foreground",
                 )}
               >
-                {queuedThreadMessagePreview(message)}
+                {queuedThreadMessagePreview({
+                  ...message,
+                  // Queued text keeps its canonical context links; the strip
+                  // shows the chip labels the composer would render for them.
+                  text: replaceComposerContextReferences(
+                    message.text,
+                    (reference) => reference.label,
+                  ),
+                })}
               </span>
               <span className="flex shrink-0 items-center gap-0.5">
                 {isDispatching ? (

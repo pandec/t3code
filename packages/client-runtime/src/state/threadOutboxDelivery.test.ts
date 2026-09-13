@@ -1,6 +1,7 @@
 import { describe, expect, it, vi } from "@effect/vitest";
 import {
   CommandId,
+  ComposerContextId,
   EnvironmentId,
   MessageId,
   ProviderInstanceId,
@@ -14,11 +15,13 @@ import {
   createThreadOutboxDelivery,
   threadOutboxFlushBatchIds,
   type ThreadOutboxDeliveryContext,
+  type ThreadOutboxDeliveryCommands,
   type ThreadOutboxDispatchResult,
 } from "./threadOutboxDelivery.ts";
 import {
   decodeQueuedThreadMessage,
   encodeQueuedThreadMessage,
+  resolveThreadOutboxDeliveryAction,
   type QueuedThreadMessage,
   type ThreadSettingsSnapshot,
 } from "./threadOutboxModel.ts";
@@ -50,6 +53,104 @@ const threadSettings: ThreadSettingsSnapshot = {
 };
 
 describe("thread outbox delivery", () => {
+  it.each([true, false])(
+    "keeps queued creation=%s rows while the environment is disabled",
+    (isCreation) => {
+      expect(
+        resolveThreadOutboxDeliveryAction({
+          isCreation,
+          threadExists: false,
+          shellStatus: "live",
+          environmentConnected: true,
+          environmentEnabled: false,
+          threadStatus: null,
+          deliveryIntent: "queue",
+        }),
+      ).toBe("wait");
+    },
+  );
+
+  it.each([true, false])(
+    "preserves persisted context when delivering to inline-capable=%s servers",
+    async (supportsInlineContext) => {
+      const message = decodeQueuedThreadMessage(
+        encodeQueuedThreadMessage(
+          queuedMessage({
+            text: "Inspect [terminal](t3-context://v1/terminal/terminal_1)",
+            context: {
+              version: 1,
+              records: [
+                {
+                  version: 1,
+                  kind: "terminal",
+                  contextId: ComposerContextId.make("terminal_1"),
+                  label: "Terminal",
+                  terminalId: "terminal-1",
+                  terminalLabel: "Shell",
+                  lineStart: 1,
+                  lineEnd: 1,
+                  text: "unique diagnostic output",
+                },
+                {
+                  version: 1,
+                  kind: "file",
+                  contextId: ComposerContextId.make("file_1"),
+                  label: "Paste",
+                  attachmentId: "local-file",
+                  name: "paste.txt",
+                  mimeType: "text/plain",
+                  sizeBytes: 10,
+                },
+              ],
+            },
+            attachments: [
+              {
+                id: "local-file",
+                type: "file",
+                name: "paste.txt",
+                mimeType: "text/plain",
+                sizeBytes: 10,
+                fileUri: "file:///paste.txt",
+                uploadedAttachmentId: "uploaded-file",
+                source: { _tag: "pasted-text" },
+              },
+            ],
+          }),
+        ),
+      );
+      const startTurn = vi.fn(
+        async (_args: Parameters<ThreadOutboxDeliveryCommands["startTurn"]>[0]) =>
+          AsyncResult.success(undefined),
+      );
+      const delivery = createThreadOutboxDelivery({
+        commands: {
+          startTurn,
+          updateMetadata: async () => AsyncResult.success(undefined),
+          setRuntimeMode: async () => AsyncResult.success(undefined),
+          setInteractionMode: async () => AsyncResult.success(undefined),
+        },
+        supportsInlineMessageContext: () => supportsInlineContext,
+        removeQueuedMessage: async () => true,
+        warn: () => undefined,
+      });
+      expect((await delivery.sendQueuedMessage(message, threadSettings)).outcome).toBe("delivered");
+      const sent = startTurn.mock.calls[0]![0].input.message;
+      expect(sent.attachments[0]).toMatchObject({
+        id: "uploaded-file",
+        source: { _tag: "pasted-text" },
+      });
+      if (supportsInlineContext) {
+        expect(sent.text).toBe(message.text);
+        expect(sent.context?.records[0]).toEqual(message.context?.records[0]);
+        expect(sent.context?.records[1]).toMatchObject({ attachmentId: "uploaded-file" });
+      } else {
+        expect(sent.context).toBeUndefined();
+        expect(sent.text).toContain("unique diagnostic output");
+        expect(sent.text).not.toContain("t3-context://");
+      }
+    },
+  );
+
   it("persists the existing-thread settings fallback", () => {
     const message = queuedMessage({ threadSettings });
     expect(decodeQueuedThreadMessage(encodeQueuedThreadMessage(message)).threadSettings).toEqual(

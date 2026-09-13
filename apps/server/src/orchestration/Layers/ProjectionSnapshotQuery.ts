@@ -2,6 +2,7 @@ import {
   AgentSessionImportSource,
   ApprovalRequestId,
   ChatAttachment,
+  OrchestrationMessageContext,
   CheckpointRef,
   CommandId,
   IsoDateTime,
@@ -133,6 +134,7 @@ const ProjectionProjectDbRowSchema = ProjectionProject.mapFields(
   Struct.assign({
     defaultModelSelection: Schema.NullOr(Schema.fromJsonString(ModelSelection)),
     repositoryIdentity: Schema.NullOr(Schema.fromJsonString(RepositoryIdentity)),
+    repositoryIdentityJson: Schema.NullOr(Schema.String),
     autoPull: Schema.Number,
     projectIcon: Schema.NullOr(Schema.fromJsonString(ProjectIconOverride)),
     scripts: Schema.fromJsonString(Schema.Array(ProjectScript)),
@@ -145,6 +147,7 @@ const ProjectionThreadMessageDbRowSchema = ProjectionThreadMessage.mapFields(
     inputOrigin: Schema.NullOr(MessageInputOrigin),
     speechRequestId: Schema.NullOr(CommandId),
     speechRequestStartedAt: Schema.NullOr(IsoDateTime),
+    context: Schema.NullOr(Schema.fromJsonString(OrchestrationMessageContext)),
   }),
 );
 const ProjectionThreadMessageArtifactDbRowSchema = Schema.Struct({
@@ -518,6 +521,7 @@ function mapMessageRow(
     text: row.text,
     ...(row.attachments !== null ? { attachments: row.attachments } : {}),
     ...(row.inputOrigin !== null ? { inputOrigin: row.inputOrigin } : {}),
+    ...(row.context !== null ? { context: row.context } : {}),
     ...(row.speechRequestId !== null && row.speechRequestStartedAt !== null
       ? {
           speechRequest: {
@@ -642,7 +646,8 @@ function repositoryIdentitiesEqual(left: RepositoryIdentity, right: RepositoryId
     left.displayName === right.displayName &&
     left.provider === right.provider &&
     left.owner === right.owner &&
-    left.name === right.name
+    left.name === right.name &&
+    left.webUrl === right.webUrl
   );
 }
 
@@ -688,13 +693,13 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
     yield* Effect.forEach(
       rowsWithChangedRepositoryIdentity,
       ({ row, repositoryIdentity }) => {
-        const previousRepositoryIdentityJson = JSON.stringify(row.repositoryIdentity);
+        // Compare the original bytes so schema field ordering cannot suppress a refresh.
         return sql`
           UPDATE projection_projects
           SET repository_identity_json = ${JSON.stringify(repositoryIdentity)}
           WHERE project_id = ${row.projectId}
             AND workspace_root = ${row.workspaceRoot}
-            AND COALESCE(repository_identity_json, 'null') = ${previousRepositoryIdentityJson}
+            AND repository_identity_json IS ${row.repositoryIdentityJson}
         `.pipe(
           Effect.catch((cause) =>
             Effect.logWarning("failed to persist resolved project repository identity").pipe(
@@ -760,15 +765,21 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
   `;
 
   const listProjectRows = SqlSchema.findAll({
-    Request: Schema.Void,
+    Request: Schema.UndefinedOr(
+      Schema.Struct({
+        activeOnly: Schema.Boolean,
+        projectIds: Schema.optional(Schema.Array(ProjectId)),
+      }),
+    ),
     Result: ProjectionProjectDbRowSchema,
-    execute: () =>
+    execute: (filter) =>
       sql`
         SELECT
           project_id AS "projectId",
           title,
           workspace_root AS "workspaceRoot",
           repository_identity_json AS "repositoryIdentity",
+          repository_identity_json AS "repositoryIdentityJson",
           default_model_selection_json AS "defaultModelSelection",
           default_thread_env_mode AS "defaultThreadEnvMode",
           auto_pull AS "autoPull",
@@ -779,6 +790,8 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
           updated_at AS "updatedAt",
           deleted_at AS "deletedAt"
         FROM projection_projects
+        WHERE ${filter?.activeOnly === true ? sql`deleted_at IS NULL` : sql`1 = 1`}
+          AND ${filter?.projectIds === undefined ? sql`1 = 1` : sql.in("project_id", filter.projectIds)}
         ORDER BY created_at ASC, project_id ASC
       `,
   });
@@ -1406,6 +1419,7 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
           title,
           workspace_root AS "workspaceRoot",
           repository_identity_json AS "repositoryIdentity",
+          repository_identity_json AS "repositoryIdentityJson",
           default_model_selection_json AS "defaultModelSelection",
           default_thread_env_mode AS "defaultThreadEnvMode",
           auto_pull AS "autoPull",
@@ -1433,6 +1447,7 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
           title,
           workspace_root AS "workspaceRoot",
           repository_identity_json AS "repositoryIdentity",
+          repository_identity_json AS "repositoryIdentityJson",
           default_model_selection_json AS "defaultModelSelection",
           default_thread_env_mode AS "defaultThreadEnvMode",
           auto_pull AS "autoPull",
@@ -1565,6 +1580,7 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
       messages.role,
       messages.text,
       messages.attachments_json AS "attachments",
+      messages.context_json AS "context",
       messages.input_origin AS "inputOrigin",
       messages.is_streaming AS "isStreaming",
       messages.created_at AS "createdAt",
@@ -1646,6 +1662,7 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
         input_origin AS "inputOrigin",
         speech_request_id AS "speechRequestId",
         speech_request_started_at AS "speechRequestStartedAt",
+        context_json AS "context",
         is_streaming AS "isStreaming",
         created_at AS "createdAt",
         updated_at AS "updatedAt",
@@ -3619,6 +3636,25 @@ pending_approval_requests AS (
         ),
       );
 
+  const getProjectShells: ProjectionSnapshotQueryShape["getProjectShells"] = (projectIds) => {
+    if (projectIds?.length === 0) return Effect.succeed([]);
+    return listProjectRows({ activeOnly: true, projectIds }).pipe(
+      Effect.mapError(
+        toPersistenceSqlOrDecodeError(
+          "ProjectionSnapshotQuery.getProjectShells:query",
+          "ProjectionSnapshotQuery.getProjectShells:decodeRows",
+        ),
+      ),
+      Effect.flatMap((projects) =>
+        resolveRepositoryIdentitiesForProjects(projects).pipe(
+          Effect.map((identities) =>
+            projects.map((row) => mapProjectShellRow(row, identities.get(row.projectId) ?? null)),
+          ),
+        ),
+      ),
+    );
+  };
+
   const getProjectShellById: ProjectionSnapshotQueryShape["getProjectShellById"] = (projectId) =>
     getActiveProjectRowById({ projectId }).pipe(
       Effect.mapError(
@@ -3884,6 +3920,7 @@ pending_approval_requests AS (
         updatedAt: row.updatedAt,
         ...(row.attachments !== null ? { attachments: row.attachments } : {}),
         ...(row.inputOrigin !== null ? { inputOrigin: row.inputOrigin } : {}),
+        ...(row.context !== null ? { context: row.context } : {}),
       },
       hasOtherUserMessages: row.hasOtherUserMessages === 1,
       ...(row.workspaceRecoveryNotice !== null
@@ -4476,6 +4513,7 @@ pending_approval_requests AS (
     getEventReplayStats,
     getActiveProjectByWorkspaceRoot,
     getProjectShellById,
+    getProjectShells,
     getFirstActiveThreadIdByProjectId,
     getImportedAgentSessionSources,
     getThreadCheckpointContext,

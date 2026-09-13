@@ -46,6 +46,7 @@ import {
   requestBrowserNotificationPermission,
   showSystemNotification,
 } from "../../notifications/turnCompletion";
+import { unlockNotificationAudio } from "../../threadNotifications";
 import { Button } from "../ui/button";
 import { DraftInput } from "../ui/draft-input";
 import {
@@ -195,7 +196,7 @@ function NotificationsExtrasSection() {
     <SettingsSection {...searchableSetting("extras-notifications")}>
       <SettingsRow
         title="Completion toasts"
-        description="Show an in-app toast when an agent turn finishes."
+        description="Show an in-app toast when an agent turn finishes or a thread needs you."
         resetAction={
           settings.enableTurnCompletionToasts !==
           DEFAULT_UNIFIED_SETTINGS.enableTurnCompletionToasts ? (
@@ -222,7 +223,7 @@ function NotificationsExtrasSection() {
 
       <SettingsRow
         title="System notifications"
-        description={`Notify through the operating system when an agent turn finishes while the app is in the background. ${buildNotificationSettingsSupportText(browserPermissionState)}`}
+        description={`Notify through the operating system while the app is in the background. ${buildNotificationSettingsSupportText(browserPermissionState)}`}
         resetAction={
           settings.enableTurnCompletionSystemNotifications !==
           DEFAULT_UNIFIED_SETTINGS.enableTurnCompletionSystemNotifications ? (
@@ -252,8 +253,65 @@ function NotificationsExtrasSection() {
       />
 
       <SettingsRow
+        title="Input and approval alerts"
+        description="Use the enabled toast, system notification and sound settings when a thread needs input or approval."
+        resetAction={
+          settings.enableInputRequestNotifications !==
+          DEFAULT_UNIFIED_SETTINGS.enableInputRequestNotifications ? (
+            <SettingResetButton
+              label="input and approval alerts"
+              onClick={() =>
+                updateSettings({
+                  enableInputRequestNotifications:
+                    DEFAULT_UNIFIED_SETTINGS.enableInputRequestNotifications,
+                })
+              }
+            />
+          ) : null
+        }
+        control={
+          <Switch
+            checked={settings.enableInputRequestNotifications}
+            onCheckedChange={(checked) =>
+              updateSettings({ enableInputRequestNotifications: Boolean(checked) })
+            }
+            aria-label="Announce input and approval requests"
+          />
+        }
+      />
+
+      <SettingsRow
+        title="Notification sounds"
+        description="Play a distinct sound for completions and for input requests. System notifications go silent so nothing plays twice."
+        resetAction={
+          settings.enableNotificationSounds !==
+          DEFAULT_UNIFIED_SETTINGS.enableNotificationSounds ? (
+            <SettingResetButton
+              label="notification sounds"
+              onClick={() =>
+                updateSettings({
+                  enableNotificationSounds: DEFAULT_UNIFIED_SETTINGS.enableNotificationSounds,
+                })
+              }
+            />
+          ) : null
+        }
+        control={
+          <Switch
+            checked={settings.enableNotificationSounds}
+            onCheckedChange={(checked) => {
+              // Enabling happens inside a gesture, the one place audio can be armed.
+              if (checked) unlockNotificationAudio();
+              updateSettings({ enableNotificationSounds: Boolean(checked) });
+            }}
+            aria-label="Play notification sounds"
+          />
+        }
+      />
+
+      <SettingsRow
         title="Minimum turn duration"
-        description="Skip both the toast and the system notification for turns that finish faster than this. 0 announces every completed turn."
+        description="Skip every completion announcement for turns that finish faster than this. 0 announces every completed turn. Input and approval alerts are not affected."
         resetAction={
           minDurationSeconds !== DEFAULT_UNIFIED_SETTINGS.turnCompletionMinDurationSeconds ? (
             <SettingResetButton

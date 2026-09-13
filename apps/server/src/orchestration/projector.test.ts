@@ -1464,7 +1464,7 @@ describe("orchestration projector", () => {
     }),
   );
 
-  effectIt.effect("drops pending message speech state when forking", () =>
+  effectIt.effect("serializes context and drops attachment and speech state when forking", () =>
     Effect.gen(function* () {
       const createdAt = "2026-02-23T09:45:00.000Z";
       let state = createEmptyReadModel(createdAt);
@@ -1512,7 +1512,32 @@ describe("orchestration projector", () => {
             threadId: "thread-source",
             messageId: "assistant:source",
             role: "assistant",
-            text: "Source reply",
+            text: "see [Terminal 1 line 4](t3-context://v1/terminal/ctx_1)",
+            context: {
+              version: 1,
+              records: [
+                {
+                  version: 1,
+                  contextId: "ctx_1",
+                  kind: "terminal",
+                  label: "Terminal 1 line 4",
+                  terminalId: "default",
+                  terminalLabel: "Terminal 1",
+                  lineStart: 4,
+                  lineEnd: 4,
+                  text: "boom",
+                },
+              ],
+            },
+            attachments: [
+              {
+                type: "image",
+                id: "thread-source-image",
+                name: "image.png",
+                mimeType: "image/png",
+                sizeBytes: 1,
+              },
+            ],
             turnId: "turn-1",
             streaming: false,
             createdAt,
@@ -1553,6 +1578,12 @@ describe("orchestration projector", () => {
         ?.messages[0];
       expect(forkedMessage?.id).toBe("fork:thread-fork:assistant:source");
       expect(forkedMessage?.speechRequest).toBeUndefined();
+      expect(forkedMessage?.speech).toBeUndefined();
+      expect(forkedMessage?.context).toBeUndefined();
+      expect(forkedMessage?.attachments).toBeUndefined();
+      expect(forkedMessage?.text).toBe(
+        "see @terminal-1:4\n\n<terminal_context>\n- Terminal 1 line 4:\n  4 | boom\n</terminal_context>",
+      );
     }),
   );
 

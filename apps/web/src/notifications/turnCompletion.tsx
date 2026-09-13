@@ -5,12 +5,23 @@ import { useEffect, useEffectEvent, useMemo, useRef } from "react";
 import { toastManager } from "../components/ui/toast";
 import { isElectron } from "../env";
 import {
+  getClientSettings,
   useClientSettings,
   useClientSettingsHydrated,
   useTurnCompletionMinDurationSeconds,
 } from "../hooks/useSettings";
 import { useEnvironmentIdsReadyForTurnCompletion, useThreadShells } from "../state/entities";
 import { buildThreadRouteParams } from "../threadRoutes";
+import {
+  type NotificationSoundKind,
+  playNotificationSound,
+  unlockNotificationAudio,
+} from "../threadNotifications";
+import {
+  buildInputRequestCopy,
+  collectInputRequestCandidates,
+  type InputRequestCandidate,
+} from "./inputRequest.logic";
 import {
   advanceTurnCompletionSnapshot,
   buildTurnCompletionCopy,
@@ -82,6 +93,8 @@ type ShowSystemNotificationInput = {
   readonly body: string;
   readonly threadRef?: DesktopNotificationThreadRef;
   readonly tag?: string;
+  /** Suppress the OS sound when the app plays its own. */
+  readonly silent?: boolean;
   readonly onBrowserNotificationClick?: () => void;
 };
 
@@ -98,6 +111,7 @@ export async function showSystemNotification(input: ShowSystemNotificationInput)
         title: input.title,
         body: input.body,
         ...(input.threadRef !== undefined ? { threadRef: input.threadRef } : {}),
+        ...(input.silent !== undefined ? { silent: input.silent } : {}),
       });
     } catch {
       return false;
@@ -113,7 +127,11 @@ export async function showSystemNotification(input: ShowSystemNotificationInput)
       (input.threadRef
         ? `turn-completed:${input.threadRef.environmentId}:${input.threadRef.threadId}`
         : "turn-completed:test");
-    const notification = new Notification(input.title, { body: input.body, tag });
+    const notification = new Notification(input.title, {
+      body: input.body,
+      tag,
+      ...(input.silent !== undefined ? { silent: input.silent } : {}),
+    });
     notification.addEventListener("click", () => {
       window.focus();
       input.onBrowserNotificationClick?.();
@@ -124,12 +142,50 @@ export async function showSystemNotification(input: ShowSystemNotificationInput)
   }
 }
 
+type Announcement = {
+  readonly threadRef: DesktopNotificationThreadRef;
+  readonly title: string;
+  readonly body: string;
+  readonly sound: NotificationSoundKind;
+  readonly tag: string;
+};
+
+function completionAnnouncement(candidate: TurnCompletionCandidate): Announcement {
+  const threadRef = { environmentId: candidate.environmentId, threadId: candidate.threadId };
+  return {
+    threadRef,
+    ...buildTurnCompletionCopy(candidate),
+    sound: "completion",
+    tag: `turn-completed:${threadRef.environmentId}:${threadRef.threadId}`,
+  };
+}
+
+function inputRequestAnnouncement(candidate: InputRequestCandidate): Announcement {
+  const threadRef = { environmentId: candidate.environmentId, threadId: candidate.threadId };
+  return {
+    threadRef,
+    ...buildInputRequestCopy(candidate),
+    sound: "input",
+    tag: `input-requested:${threadRef.environmentId}:${threadRef.threadId}`,
+  };
+}
+
+/**
+ * The one client-side notification coordinator: turn completions and
+ * input/approval requests share the same shell snapshot, the same replay
+ * guards, and the same delivery channels (toast, background-only system
+ * notification, optional sound).
+ */
 export function TurnCompletionNotifications() {
   const navigate = useNavigate();
   const toastsEnabled = useClientSettings((settings) => settings.enableTurnCompletionToasts);
   const systemEnabled = useClientSettings(
     (settings) => settings.enableTurnCompletionSystemNotifications,
   );
+  const inputRequestsEnabled = useClientSettings(
+    (settings) => settings.enableInputRequestNotifications,
+  );
+  const soundsEnabled = useClientSettings((settings) => settings.enableNotificationSounds);
   const minDurationSeconds = useTurnCompletionMinDurationSeconds();
   const settingsHydrated = useClientSettingsHydrated();
   const threadShells = useThreadShells();
@@ -159,6 +215,18 @@ export function TurnCompletionNotifications() {
   }, [navigateToThread]);
 
   useEffect(() => {
+    // Browsers only let audio start from a gesture; arm the context on the
+    // first interaction so a later background completion can still play.
+    if (!soundsEnabled) return;
+    document.addEventListener("pointerdown", unlockNotificationAudio);
+    document.addEventListener("keydown", unlockNotificationAudio);
+    return () => {
+      document.removeEventListener("pointerdown", unlockNotificationAudio);
+      document.removeEventListener("keydown", unlockNotificationAudio);
+    };
+  }, [soundsEnabled]);
+
+  useEffect(() => {
     // Only authoritative environments enter the baseline. Each environment
     // independently enters as unseen history, so initial sync, additions, and
     // reconnect replay stay silent without pausing healthy environments.
@@ -167,11 +235,16 @@ export function TurnCompletionNotifications() {
       return;
     }
 
+    // Input requests are pure transitions between consecutive snapshots, so
+    // they are read before the snapshot advances.
+    const inputRequestCandidates = inputRequestsEnabled
+      ? collectInputRequestCandidates(snapshotRef.current.shells, authoritativeThreadShells)
+      : [];
     const { snapshot, candidates } = advanceTurnCompletionSnapshot(
       snapshotRef.current,
       authoritativeThreadShells,
     );
-    // Always advance, even with both toggles off — re-enabling a toggle must
+    // Always advance, even with every toggle off — re-enabling a toggle must
     // not burst out a backlog of stale completions.
     snapshotRef.current = snapshot;
 
@@ -182,14 +255,18 @@ export function TurnCompletionNotifications() {
     );
     pendingCandidatesRef.current = [...resolvedCandidates.pending];
     // Short turns are dropped after the snapshot advanced, so raising the
-    // threshold never resurrects them later; both channels are suppressed
+    // threshold never resurrects them later; every channel is suppressed
     // together — a toast is as interrupting as a notification here.
-    const candidatesToDeliver = filterTurnCompletionCandidatesByDuration(
+    const completionsToDeliver = filterTurnCompletionCandidatesByDuration(
       resolvedCandidates.deliver,
       minDurationSeconds,
     );
 
-    if (candidatesToDeliver.length === 0 || (!toastsEnabled && !systemEnabled)) {
+    const announcements = [
+      ...completionsToDeliver.map(completionAnnouncement),
+      ...(settingsHydrated ? inputRequestCandidates.map(inputRequestAnnouncement) : []),
+    ];
+    if (announcements.length === 0 || (!toastsEnabled && !systemEnabled && !soundsEnabled)) {
       return;
     }
 
@@ -198,15 +275,11 @@ export function TurnCompletionNotifications() {
       visibilityState: document.visibilityState,
       hasFocus: document.hasFocus(),
     });
-    for (const candidate of candidatesToDeliver) {
-      const threadRef: DesktopNotificationThreadRef = {
-        environmentId: candidate.environmentId,
-        threadId: candidate.threadId,
-      };
-      const { title, body } = buildTurnCompletionCopy(candidate);
+    for (const announcement of announcements) {
+      const { threadRef, title, body } = announcement;
       if (toastsEnabled) {
         toastManager.add({
-          type: "success",
+          type: announcement.sound === "completion" ? "success" : "info",
           title,
           description: body,
           actionProps: {
@@ -215,19 +288,30 @@ export function TurnCompletionNotifications() {
           },
         });
       }
+      if (soundsEnabled) {
+        void playNotificationSound(
+          announcement.sound,
+          () => getClientSettings().enableNotificationSounds,
+        );
+      }
       if (notifySystem) {
         void showSystemNotification({
           title,
           body,
           threadRef,
+          tag: announcement.tag,
+          // The in-app sound already played (or was deliberately off).
+          silent: soundsEnabled,
           onBrowserNotificationClick: () => navigateToThread(threadRef),
         });
       }
     }
   }, [
     authoritativeThreadShells,
+    inputRequestsEnabled,
     minDurationSeconds,
     settingsHydrated,
+    soundsEnabled,
     toastsEnabled,
     systemEnabled,
     navigateToThread,

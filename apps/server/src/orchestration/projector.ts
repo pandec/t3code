@@ -1,3 +1,4 @@
+import { serializeLegacyContextMessage } from "@t3tools/shared/composerContextLegacySend";
 import type {
   OrchestrationEvent,
   OrchestrationProject,
@@ -505,11 +506,22 @@ export function projectEvent(
                 (message.role === "user" || message.role === "assistant") && !message.streaming,
             )
             .map((message) => {
-              const { speechRequest: _, ...forkedMessage } = message;
+              const {
+                speechRequest: _,
+                speech: _speech,
+                context: _context,
+                attachments: _attachments,
+                ...forkedMessage
+              } = message;
               return {
                 ...forkedMessage,
                 id: MessageId.make(`fork:${payload.threadId}:${message.id}`),
-                attachments: [],
+                text: message.context
+                  ? serializeLegacyContextMessage({
+                      text: message.text,
+                      records: message.context.records,
+                    })
+                  : message.text,
                 streaming: false,
               };
             });
@@ -850,6 +862,7 @@ export function projectEvent(
                   },
                 }
               : {}),
+            ...(payload.context !== undefined ? { context: payload.context } : {}),
             turnId: payload.turnId,
             streaming: payload.streaming,
             createdAt: payload.createdAt,
@@ -880,6 +893,7 @@ export function projectEvent(
                       ? { inputOrigin: message.inputOrigin }
                       : {}),
                     ...(message.speech !== undefined ? { speech: message.speech } : {}),
+                    ...(message.context !== undefined ? { context: message.context } : {}),
                   }
                 : entry,
             )

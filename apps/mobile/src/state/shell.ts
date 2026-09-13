@@ -9,6 +9,7 @@ import {
   createEnvironmentSnapshotAtom,
   createShellEnvironmentAtoms,
 } from "@t3tools/client-runtime/state/shell";
+import { enabledEnvironmentIds } from "@t3tools/client-runtime/state/connections";
 import * as Option from "effect/Option";
 import { AsyncResult, Atom } from "effect/unstable/reactivity";
 
@@ -42,7 +43,7 @@ export const allEnvironmentShellsBootstrappedAtom = Atom.make((get) => {
   if (Option.isNone(catalog)) {
     return false;
   }
-  for (const environmentId of catalog.value.entries.keys()) {
+  for (const environmentId of enabledEnvironmentIds(catalog.value)) {
     if (Option.isSome(get(environmentShell.stateValueAtom(environmentId)).snapshot)) {
       continue;
     }

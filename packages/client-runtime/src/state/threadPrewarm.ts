@@ -24,7 +24,7 @@ import { EnvironmentSupervisor } from "../connection/supervisor.ts";
 import * as ConnectionWakeups from "../connection/wakeups.ts";
 import { withEnvironmentCacheMutationLock } from "../platform/environmentCacheMutationLock.ts";
 import { EnvironmentCacheStore } from "../platform/persistence.ts";
-import type { EnvironmentCatalogState } from "./connections.ts";
+import { type EnvironmentCatalogState, enabledEnvironmentIds } from "./connections.ts";
 import { threadKey } from "./entities.ts";
 import { followStreamInEnvironment } from "./runtime.ts";
 import { retainRecentThreadHistory } from "./threadReducer.ts";
@@ -748,7 +748,7 @@ export function didEnvironmentPrewarmRunsAdvance(
 }
 
 /**
- * Keeps a prewarm stream mounted for every catalog environment and exposes a
+ * Keeps a prewarm stream mounted for every enabled environment and exposes a
  * small aggregate so a single always-mounted subscriber drives all of them
  * (and a "last synced" surface can display it).
  */
@@ -765,7 +765,7 @@ export function createThreadPrewarmSummaryAtom<E>(input: {
     let syncing = false;
     const environmentLastRunAt = new Map<EnvironmentIdType, number | null>();
     const environmentLastManualRequestCompletedAt = new Map<EnvironmentIdType, number | null>();
-    for (const environmentId of get(input.catalogValueAtom).entries.keys()) {
+    for (const environmentId of enabledEnvironmentIds(get(input.catalogValueAtom))) {
       const status = Option.getOrElse(
         AsyncResult.value(get(input.statusAtom(environmentId))),
         () => EMPTY_ENVIRONMENT_THREAD_PREWARM_STATUS,

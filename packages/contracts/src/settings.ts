@@ -575,7 +575,12 @@ export const ClientSettingsSchema = Schema.Struct({
   dismissedProviderUpdateNotificationKeys: Schema.Array(TrimmedNonEmptyString).pipe(
     Schema.withDecodingDefault(Effect.succeed([])),
   ),
+  diffFilesCollapsed: Schema.Boolean.pipe(Schema.withDecodingDefault(Effect.succeed(false))),
   diffIgnoreWhitespace: Schema.Boolean.pipe(Schema.withDecodingDefault(Effect.succeed(true))),
+  enableInputRequestNotifications: Schema.Boolean.pipe(
+    Schema.withDecodingDefault(Effect.succeed(false)),
+  ),
+  enableNotificationSounds: Schema.Boolean.pipe(Schema.withDecodingDefault(Effect.succeed(false))),
   enableTurnCompletionToasts: Schema.Boolean.pipe(
     Schema.withDecodingDefault(Effect.succeed(false)),
   ),
@@ -762,8 +767,8 @@ export const ClientSettingsSchema = Schema.Struct({
     Schema.withDecodingDefault(Effect.succeed(DEFAULT_TIMESTAMP_FORMAT)),
   ),
   /**
-   * Turns shorter than this announce nothing — neither toast nor system
-   * notification. 0 (the default) announces every completed turn.
+   * Suppresses completion toasts, system notifications and sounds for shorter turns.
+   * Zero announces every completed turn; input and approval alerts ignore this threshold.
    */
   turnCompletionMinDurationSeconds: TurnCompletionMinDurationSeconds.pipe(
     Schema.withDecodingDefault(Effect.succeed(DEFAULT_TURN_COMPLETION_MIN_DURATION_SECONDS)),
@@ -1965,7 +1970,10 @@ export const ClientSettingsPatch = Schema.Struct({
   confirmThreadArchive: Schema.optionalKey(Schema.Boolean),
   confirmThreadDelete: Schema.optionalKey(Schema.Boolean),
   confirmThreadUnpin: Schema.optionalKey(Schema.Boolean),
+  diffFilesCollapsed: Schema.optionalKey(Schema.Boolean),
   diffIgnoreWhitespace: Schema.optionalKey(Schema.Boolean),
+  enableInputRequestNotifications: Schema.optionalKey(Schema.Boolean),
+  enableNotificationSounds: Schema.optionalKey(Schema.Boolean),
   enableTurnCompletionToasts: Schema.optionalKey(Schema.Boolean),
   enableTurnCompletionSystemNotifications: Schema.optionalKey(Schema.Boolean),
   enableRateLimitAlerts: Schema.optionalKey(Schema.Boolean),

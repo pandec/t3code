@@ -835,6 +835,19 @@ describe("thread messages report", () => {
     assert.equal(report.title, "Thread");
   });
 
+  it("includes optional structured context in JSON message reports", () => {
+    const context: NonNullable<OrchestrationMessage["context"]> = { version: 1, records: [] };
+    const report = reportWith({
+      messages: [
+        messageWith({ id: "m1", role: "user", context }),
+        messageWith({ id: "m2", role: "assistant" }),
+      ],
+    });
+    assert.deepEqual(report.messages[0]?.context, context);
+    assert.isFalse(Object.hasOwn(report.messages[1]!, "context"));
+    assert.include(JSON.stringify(report), `"context":${JSON.stringify(context)}`);
+  });
+
   it("narrows to a single role when requested", () => {
     const report = reportWith({
       role: "assistant",

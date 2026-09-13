@@ -4,6 +4,7 @@ import {
   ThreadId,
   type MessageInputOrigin,
   type ModelSelection,
+  type OrchestrationMessageContext,
   type ProjectId,
   type ProviderInteractionMode,
   type RuntimeMode,
@@ -31,6 +32,7 @@ export interface ProjectThreadStartTurnSpec {
   readonly createdAt: string;
   readonly text: string;
   readonly inputOrigin?: MessageInputOrigin | undefined;
+  readonly context?: OrchestrationMessageContext;
   /** Wire attachments from `prepareTurnAttachments`, in composer order. */
   readonly uploadedAttachments: ReadonlyArray<UploadedMobileAttachment>;
   readonly modelSelection: ModelSelection;
@@ -59,6 +61,7 @@ export function buildProjectThreadStartTurnInput(spec: ProjectThreadStartTurnSpe
       messageId: MessageId.make(spec.messageId),
       role: "user" as const,
       text: spec.text,
+      ...(spec.context ? { context: spec.context } : {}),
       attachments: spec.uploadedAttachments,
       ...(spec.inputOrigin !== undefined ? { inputOrigin: spec.inputOrigin } : {}),
     },

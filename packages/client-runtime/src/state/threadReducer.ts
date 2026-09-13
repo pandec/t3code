@@ -638,6 +638,7 @@ function applyThreadDetailEventUnretained(
           ? { attachments: event.payload.attachments }
           : {}),
         ...(speech !== undefined ? { speech } : {}),
+        ...(event.payload.context !== undefined ? { context: event.payload.context } : {}),
         turnId: event.payload.turnId,
         streaming: event.payload.streaming,
         createdAt: event.payload.createdAt,
@@ -660,6 +661,7 @@ function applyThreadDetailEventUnretained(
           ...(message.streaming ? {} : { updatedAt: message.updatedAt }),
           ...(message.attachments !== undefined ? { attachments: message.attachments } : {}),
           ...(speech !== undefined ? { speech } : {}),
+          ...(message.context !== undefined ? { context: message.context } : {}),
         };
       });
       if (!found) messages.push(message);

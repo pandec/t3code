@@ -18,6 +18,8 @@ import * as DesktopClientSettings from "./DesktopClientSettings.ts";
 
 const clientSettings: ClientSettings = {
   ...DEFAULT_CLIENT_SETTINGS,
+  enableInputRequestNotifications: true,
+  enableNotificationSounds: true,
   appearanceContrast: 100,
   archivedSectionVisibleCount: 10,
   accentTintsEnabled: true,
@@ -38,6 +40,7 @@ const clientSettings: ClientSettings = {
   contextWindowMeterEnabled: false,
   composerCollapseOnScroll: true,
   dismissedProviderUpdateNotificationKeys: [],
+  diffFilesCollapsed: true,
   diffIgnoreWhitespace: true,
   enableTurnCompletionToasts: true,
   enableTurnCompletionSystemNotifications: true,

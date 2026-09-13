@@ -31,6 +31,7 @@ import { useClientSettingsHydrated, useSteerGraceWindowMs } from "../hooks/useSe
 import { refreshArchivedThreadsForEnvironment } from "../lib/archivedThreadsState";
 import { appAtomRegistry } from "../rpc/atomRegistry";
 import { useThreadShells } from "./entities";
+import { serverEnvironment } from "./server";
 import { environmentShell } from "./shell";
 import {
   confirmThreadOutboxMessageQueued,
@@ -126,6 +127,7 @@ export function useThreadOutboxDrain(): void {
   const shellStatuses = useAtomValue(threadOutboxShellStatusesAtom);
   const environmentConnectivity = useAtomValue(threadOutboxEnvironmentConnectivityAtom);
   const threads = useThreadShells();
+  const catalog = useAtomValue(environmentCatalog.catalogValueAtom);
   const [retryTick, setRetryTick] = useState(0);
   const retryAttemptRef = useRef(new Map<MessageId, number>());
   const retryNotBeforeRef = useRef(new Map<MessageId, number>());
@@ -175,6 +177,9 @@ export function useThreadOutboxDrain(): void {
           setRuntimeMode: setThreadRuntimeMode,
           setInteractionMode: setThreadInteractionMode,
         },
+        supportsInlineMessageContext: (environmentId) =>
+          appAtomRegistry.get(serverEnvironment.configValueAtom(environmentId))?.environment
+            .capabilities.inlineMessageContext === true,
         removeQueuedMessage: removeThreadOutboxMessage,
         onDelivered: (message, thread) => {
           if (thread.archivedAt != null) {
@@ -266,6 +271,7 @@ export function useThreadOutboxDrain(): void {
             isCreation: false,
             threadExists: threadSettings !== undefined,
             shellStatus: shellStatuses.get(message.environmentId) ?? "empty",
+            environmentEnabled: catalog.entries.get(message.environmentId)?.enabled,
             environmentConnected: environmentConnectivity.get(message.environmentId) === true,
             threadStatus: thread?.session?.status ?? null,
             // The turn this batch waited for has ended and its first message
@@ -290,6 +296,13 @@ export function useThreadOutboxDrain(): void {
       ).then(async (queued) => {
         if (!queued) {
           return { outcome: "removed" };
+        }
+        if (
+          appAtomRegistry
+            .get(environmentCatalog.catalogValueAtom)
+            .entries.get(nextQueuedMessage.environmentId)?.enabled === false
+        ) {
+          return { outcome: "deferred" };
         }
         if (appAtomRegistry.get(editingQueuedMessageIdsAtom)[nextQueuedMessage.messageId]) {
           return { outcome: "deferred" };
@@ -386,6 +399,7 @@ export function useThreadOutboxDrain(): void {
       return;
     }
   }, [
+    catalog,
     delivery,
     clientSettingsHydrated,
     dispatchingQueuedMessage,

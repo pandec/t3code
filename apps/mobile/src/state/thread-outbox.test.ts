@@ -5,6 +5,7 @@ import { isTransportConnectionErrorMessage } from "@t3tools/client-runtime/error
 import { EnvironmentRpcUnavailableError } from "@t3tools/client-runtime/rpc";
 import {
   CommandId,
+  ComposerContextId,
   EnvironmentAuthorizationError,
   EnvironmentId,
   MessageId,
@@ -141,6 +142,31 @@ describe("thread outbox", () => {
     expect(isThreadOutboxMessageWaitingForPreferences(queued, false, false)).toBe(false);
   });
 
+  it("retains structured context through a persisted offline queue round trip", () => {
+    const message: QueuedThreadMessage = {
+      ...queuedMessage({ messageId: "context-message", createdAt: "2026-09-06T12:00:00.000Z" }),
+      text: "[Build](t3-context://v1/terminal/build-output)",
+      context: {
+        version: 1,
+        records: [
+          {
+            version: 1,
+            kind: "terminal",
+            contextId: ComposerContextId.make("build-output"),
+            label: "Build",
+            terminalId: "main",
+            terminalLabel: "Terminal",
+            lineStart: 2,
+            lineEnd: 2,
+            text: "Build failed",
+          },
+        ],
+      },
+    };
+    expect(
+      decodeQueuedThreadMessage(JSON.parse(JSON.stringify(encodeQueuedThreadMessage(message)))),
+    ).toEqual(message);
+  });
   it.each(["read", "json", "schema"] as const)(
     "recovers usable messages without permitting cleanup after a record %s failure",
     async (failure) => {
@@ -334,7 +360,7 @@ describe("thread outbox", () => {
     ).toThrow();
   });
 
-  it.each([1, 2, 3, 4, 5, 6, 7])("keeps the v%s outbox reader", (schemaVersion) => {
+  it.each([1, 2, 3, 4, 5, 6, 7, 8])("keeps the v%s outbox reader", (schemaVersion) => {
     const message = queuedMessage({
       messageId: `message-v${schemaVersion}`,
       createdAt: "2026-06-08T10:00:01.000Z",
@@ -390,7 +416,7 @@ describe("thread outbox", () => {
     expect(decodeQueuedThreadMessage({ ...message, schemaVersion: 4 })).toEqual(message);
   });
 
-  it("writes v8 file-backed images and preserves their preview on decode", () => {
+  it("writes v9 file-backed images and preserves their preview on decode", () => {
     const message = {
       ...queuedMessage({
         messageId: "message-image-v8",
@@ -413,7 +439,7 @@ describe("thread outbox", () => {
       readonly schemaVersion: number;
       readonly attachments: ReadonlyArray<Record<string, unknown>>;
     };
-    expect(encoded.schemaVersion).toBe(8);
+    expect(encoded.schemaVersion).toBe(9);
     expect(encoded.attachments[0]).toMatchObject({
       fileUri: message.attachments[0].fileUri,
       previewUri: message.attachments[0].previewUri,

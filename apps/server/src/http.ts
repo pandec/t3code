@@ -63,7 +63,7 @@ const DOWNLOAD_MIME_TYPE_PATTERN = /^[\w!#$&^.+-]+\/[\w!#$&^.+-]+$/;
 const isSafeDownloadMimeType = (mimeType: string): boolean =>
   DOWNLOAD_MIME_TYPE_PATTERN.test(mimeType) &&
   !/(?:^text\/html$|\/xml(?:$|-)|\+xml$)/i.test(mimeType.trim().toLowerCase());
-const isSafeMediaMimeType = (mimeType: string): boolean =>
+const isSafeInlineMediaMimeType = (mimeType: string): boolean =>
   DOWNLOAD_MIME_TYPE_PATTERN.test(mimeType) && /^(?:audio|video)\//i.test(mimeType);
 const isSafeInlineDocumentMimeType = (mimeType: string): boolean =>
   mimeType.toLowerCase() === "application/pdf" || mimeType.toLowerCase() === "text/html";
@@ -124,7 +124,7 @@ export function assetResponseHeaders(
               ? options.mimeType
               : "application/octet-stream",
         }
-      : inlineMimeType !== undefined && isSafeMediaMimeType(inlineMimeType)
+      : inlineMimeType !== undefined && isSafeInlineMediaMimeType(inlineMimeType)
         ? { "Content-Type": inlineMimeType }
         : inlineMimeType !== undefined && isSafeInlineDocumentMimeType(inlineMimeType)
           ? {
@@ -188,8 +188,8 @@ export const assetFileResponse = Effect.fn("assetFileResponse")(function* (
   const mediaInfo = mediaFile ? yield* statMediaFile(asset.path, mediaFile) : undefined;
   const mediaMimeType =
     asset.mimeType?.split(";", 1)[0]?.trim() ?? mediaMimeTypeFromPath(asset.path);
-  const isMedia = mediaMimeType !== undefined && isSafeMediaMimeType(mediaMimeType);
-  if (mediaFile && isMedia) {
+  const isMedia = mediaMimeType !== undefined && isSafeInlineMediaMimeType(mediaMimeType);
+  if (isMedia) {
     // Guarded host media can change in place. Do not invite conditional range
     // requests with validators that cannot establish byte-for-byte identity.
     headers["Cache-Control"] = "private, no-store";

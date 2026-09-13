@@ -89,6 +89,8 @@ import Migration0061 from "./Migrations/061_ProjectionThreadsSnoozedUntilTurn.ts
 import Migration0062 from "./Migrations/062_DropRetiredMovedToTopEvents.ts";
 // Upstream shipped this as 050; renumbered after the fork's migration history.
 import Migration0063 from "./Migrations/063_ProjectionThreadPullRequests.ts";
+// Upstream shipped this as 051; renumbered after the fork's migration history.
+import Migration0064 from "./Migrations/064_ProjectionThreadMessageContext.ts";
 
 /**
  * Migration loader with all migrations defined inline.
@@ -164,6 +166,7 @@ const migrationEntries = [
   [61, "ProjectionThreadsSnoozedUntilTurn", Migration0061],
   [62, "DropRetiredMovedToTopEvents", Migration0062],
   [63, "ProjectionThreadPullRequests", Migration0063],
+  [64, "ProjectionThreadMessageContext", Migration0064],
 ] as const;
 
 export const migrationManifest = migrationEntries.map(([id, name]) => [id, name] as const);

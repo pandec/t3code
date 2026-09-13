@@ -173,6 +173,7 @@ export async function editQueuedMessage(message: QueuedThreadMessage): Promise<v
     const append = await appendComposerDraftContentDurably(threadKey, {
       text: message.text,
       ...(message.inputOrigin !== undefined ? { inputOrigin: message.inputOrigin } : {}),
+      ...(message.context !== undefined ? { context: message.context } : {}),
       attachments: message.attachments,
     });
     revertAppend = () => revertComposerDraftAppend(threadKey, append);

@@ -619,6 +619,9 @@ export function useSettingsRestore(onRestored?: () => void) {
         : []),
       ...(settings.wordWrap !== DEFAULT_UNIFIED_SETTINGS.wordWrap ? ["Word wrap"] : []),
       ...getChangedTypographySettingLabels(settings),
+      ...(settings.diffFilesCollapsed !== DEFAULT_UNIFIED_SETTINGS.diffFilesCollapsed
+        ? ["Default diff file state"]
+        : []),
       ...(settings.diffIgnoreWhitespace !== DEFAULT_UNIFIED_SETTINGS.diffIgnoreWhitespace
         ? ["Diff whitespace changes"]
         : []),
@@ -677,6 +680,13 @@ export function useSettingsRestore(onRestored?: () => void) {
       ...(settings.enableTurnCompletionSystemNotifications !==
       DEFAULT_UNIFIED_SETTINGS.enableTurnCompletionSystemNotifications
         ? ["System notifications"]
+        : []),
+      ...(settings.enableInputRequestNotifications !==
+      DEFAULT_UNIFIED_SETTINGS.enableInputRequestNotifications
+        ? ["Input and approval alerts"]
+        : []),
+      ...(settings.enableNotificationSounds !== DEFAULT_UNIFIED_SETTINGS.enableNotificationSounds
+        ? ["Notification sounds"]
         : []),
       ...(settings.enableRateLimitAlerts !== DEFAULT_UNIFIED_SETTINGS.enableRateLimitAlerts
         ? ["Rate limit alerts"]
@@ -747,12 +757,15 @@ export function useSettingsRestore(onRestored?: () => void) {
       settings.confirmThreadDelete,
       settings.enableTurnCompletionToasts,
       settings.enableTurnCompletionSystemNotifications,
+      settings.enableInputRequestNotifications,
+      settings.enableNotificationSounds,
       settings.enableRateLimitAlerts,
       settings.confirmThreadUnpin,
       settings.composerCollapseOnScroll,
       settings.addProjectBaseDirectory,
       settings.defaultThreadEnvMode,
       settings.newWorktreesStartFromOrigin,
+      settings.diffFilesCollapsed,
       settings.diffIgnoreWhitespace,
       settings.diffLayout,
       settings.proactivePanelsEnabled,
@@ -864,6 +877,7 @@ export function useSettingsRestore(onRestored?: () => void) {
       diffColorScheme: DEFAULT_UNIFIED_SETTINGS.diffColorScheme,
       timestampFormat: DEFAULT_UNIFIED_SETTINGS.timestampFormat,
       wordWrap: DEFAULT_UNIFIED_SETTINGS.wordWrap,
+      diffFilesCollapsed: DEFAULT_UNIFIED_SETTINGS.diffFilesCollapsed,
       diffIgnoreWhitespace: DEFAULT_UNIFIED_SETTINGS.diffIgnoreWhitespace,
       diffLayout: DEFAULT_UNIFIED_SETTINGS.diffLayout,
       proactivePanelsEnabled: DEFAULT_UNIFIED_SETTINGS.proactivePanelsEnabled,
@@ -910,6 +924,8 @@ export function useSettingsRestore(onRestored?: () => void) {
       enableTurnCompletionToasts: DEFAULT_UNIFIED_SETTINGS.enableTurnCompletionToasts,
       enableTurnCompletionSystemNotifications:
         DEFAULT_UNIFIED_SETTINGS.enableTurnCompletionSystemNotifications,
+      enableInputRequestNotifications: DEFAULT_UNIFIED_SETTINGS.enableInputRequestNotifications,
+      enableNotificationSounds: DEFAULT_UNIFIED_SETTINGS.enableNotificationSounds,
       enableRateLimitAlerts: DEFAULT_UNIFIED_SETTINGS.enableRateLimitAlerts,
       turnCompletionMinDurationSeconds: DEFAULT_UNIFIED_SETTINGS.turnCompletionMinDurationSeconds,
       providerUsageWarningPercent: DEFAULT_UNIFIED_SETTINGS.providerUsageWarningPercent,
@@ -2548,6 +2564,48 @@ export function GeneralSettingsPanel() {
           }
         />
         <SettingsRow
+          {...searchableSetting("default-diff-file-state")}
+          description="Start with files expanded or collapsed when opening diffs or a pull request's Code tab."
+          resetAction={
+            settings.diffFilesCollapsed !== DEFAULT_UNIFIED_SETTINGS.diffFilesCollapsed ? (
+              <SettingResetButton
+                label="default diff file state"
+                onClick={() =>
+                  updateSettings({
+                    diffFilesCollapsed: DEFAULT_UNIFIED_SETTINGS.diffFilesCollapsed,
+                  })
+                }
+              />
+            ) : null
+          }
+          control={
+            <Select
+              value={settings.diffFilesCollapsed ? "collapsed" : "expanded"}
+              onValueChange={(value) => {
+                if (value === "expanded" || value === "collapsed") {
+                  updateSettings({ diffFilesCollapsed: value === "collapsed" });
+                }
+              }}
+            >
+              <SelectTrigger
+                size="sm"
+                className="w-full sm:w-40"
+                aria-label="Default diff file state"
+              >
+                <SelectValue>{settings.diffFilesCollapsed ? "Collapsed" : "Expanded"}</SelectValue>
+              </SelectTrigger>
+              <SelectPopup align="end" alignItemWithTrigger={false}>
+                <SelectItem hideIndicator value="expanded">
+                  Expanded
+                </SelectItem>
+                <SelectItem hideIndicator value="collapsed">
+                  Collapsed
+                </SelectItem>
+              </SelectPopup>
+            </Select>
+          }
+        />
+        <SettingsRow
           {...searchableSetting("diff-layout")}
           description="Show diffs stacked or side by side. The toggle in the diff toolbar changes this too."
           resetAction={
@@ -3173,6 +3231,19 @@ export function GeneralSettingsPanel() {
               variant="outline"
             >
               View diagnostics
+            </Button>
+          }
+        />
+        <SettingsRow
+          {...searchableSetting("open-source-licenses")}
+          description="Notices for dependencies, assets, and optional tools used by T3 Code."
+          control={
+            <Button
+              render={<Link to="/settings/open-source-licenses" />}
+              size="xs"
+              variant="outline"
+            >
+              View licenses
             </Button>
           }
         />

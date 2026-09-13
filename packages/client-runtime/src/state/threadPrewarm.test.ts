@@ -1467,6 +1467,7 @@ describe("createThreadPrewarmSummaryAtom", () => {
 
   function environmentEntry(environmentId: EnvironmentId) {
     return {
+      enabled: true,
       target: new PrimaryConnectionTarget({
         environmentId,
         label: environmentId,
@@ -1477,7 +1478,7 @@ describe("createThreadPrewarmSummaryAtom", () => {
     };
   }
 
-  function makeHarness() {
+  function makeHarness(otherEnabled = true) {
     const statusAtoms = Atom.family((_environmentId: EnvironmentId) =>
       Atom.make(
         AsyncResult.success<EnvironmentThreadPrewarmStatus>(
@@ -1490,13 +1491,32 @@ describe("createThreadPrewarmSummaryAtom", () => {
         isReady: true,
         entries: new Map([
           [ENVIRONMENT_ID, environmentEntry(ENVIRONMENT_ID)],
-          [OTHER_ENVIRONMENT_ID, environmentEntry(OTHER_ENVIRONMENT_ID)],
+          [
+            OTHER_ENVIRONMENT_ID,
+            { ...environmentEntry(OTHER_ENVIRONMENT_ID), enabled: otherEnabled },
+          ],
         ]),
       }),
       statusAtom: statusAtoms,
     });
     return { registry: AtomRegistry.make(), statusAtoms, summaryAtom };
   }
+
+  it("excludes disabled environments from sync progress and request cursors", () => {
+    const harness = makeHarness(false);
+    harness.registry.set(
+      harness.statusAtoms(OTHER_ENVIRONMENT_ID),
+      AsyncResult.success<EnvironmentThreadPrewarmStatus>({
+        ...EMPTY_ENVIRONMENT_THREAD_PREWARM_STATUS,
+        running: true,
+        refreshed: 10,
+      }),
+    );
+    const summary = harness.registry.get(harness.summaryAtom);
+    expect(summary.syncing).toBe(false);
+    expect(summary.refreshed).toBe(0);
+    expect(summary.environmentLastRunAt.has(OTHER_ENVIRONMENT_ID)).toBe(false);
+  });
 
   it("reports syncing while any environment has a run in flight", () => {
     const harness = makeHarness();

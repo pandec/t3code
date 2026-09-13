@@ -18,6 +18,7 @@ export async function recoverFailedThreadDraft(message: QueuedThreadMessage): Pr
 
   await mergeComposerDraftContent(targetKey, {
     text: source.text,
+    context: source.context,
     attachments: [],
     // Keep the voice provenance the failed send carried.
     ...(source.inputOrigin ? { inputOrigin: source.inputOrigin } : {}),

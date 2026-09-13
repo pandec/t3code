@@ -264,16 +264,23 @@ export const make = Effect.gen(function* () {
     settings: ServerSettingsValue,
   ) {
     const roots = new Map<string, TranscriptDir>();
-    const addRoot = (provider: UsageProviderKind, root: string, fileName?: string) => {
-      const resolved = path.resolve(root);
+    const addRoot = Effect.fn(function* (
+      provider: UsageProviderKind,
+      root: string,
+      fileName?: string,
+    ) {
+      const directory = path.resolve(root);
+      const resolved = yield* fileSystem
+        .realPath(directory)
+        .pipe(Effect.orElseSucceed(() => directory));
       if (!roots.has(`${provider}\0${resolved}`)) {
-        roots.set(`${provider}\0${resolved}`, { provider, dir: resolved, fileName });
+        roots.set(`${provider}\0${resolved}`, { provider, dir: directory, fileName });
       }
-    };
+    });
 
     const instances = deriveProviderInstanceConfigMap(settings);
     for (const instance of Object.values(instances)) {
-      const environment = mergeProviderInstanceEnvironment(instance.environment);
+      const environment = mergeProviderInstanceEnvironment(instance.environment, hostEnvironment);
       if (instance.driver === "claudeAgent") {
         const config = yield* decodeClaudeSettings(instance.config ?? {}).pipe(
           Effect.mapError(
@@ -291,7 +298,7 @@ export const make = Effect.gen(function* () {
         );
         // Shadow config dirs link `projects` back to this shared config dir.
         // Walking both paths would enumerate the same transcripts twice.
-        addRoot("claude", path.join(configDir, "projects"));
+        yield* addRoot("claude", path.join(configDir, "projects"));
       } else if (instance.driver === "codex") {
         const config = yield* decodeCodexSettings(instance.config ?? {}).pipe(
           Effect.mapError(
@@ -306,7 +313,7 @@ export const make = Effect.gen(function* () {
         const layout = yield* resolveCodexHomeLayout(config, environment);
         // Auth overlays link `sessions` into the shared home. The effective
         // home is credential-local, not an additional transcript source.
-        addRoot("codex", path.join(layout.sharedHomePath, "sessions"));
+        yield* addRoot("codex", path.join(layout.sharedHomePath, "sessions"));
       } else if (instance.driver === "grok") {
         // Grok Settings only expose the binary path, so the home comes from the
         // environment: the instance's own `GROK_HOME` if it sets one, else the
@@ -331,7 +338,7 @@ export const make = Effect.gen(function* () {
               : path.join(NodeOS.homedir(), ".grok");
         // Grok stores turn records in `updates.jsonl`; its sibling logs are
         // large and carry no usage, so the walk is pinned to that one name.
-        addRoot("grok", path.join(grokHome, "sessions"), "updates.jsonl");
+        yield* addRoot("grok", path.join(grokHome, "sessions"), "updates.jsonl");
       }
     }
 

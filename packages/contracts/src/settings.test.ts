@@ -170,6 +170,42 @@ describe("ClaudeSettings auto-compaction", () => {
   });
 });
 
+describe("ClientSettings notifications", () => {
+  it("preserves completion preferences while new alerts and sounds require opt-in", () => {
+    const settings = decodeClientSettings({
+      enableTurnCompletionToasts: true,
+      enableTurnCompletionSystemNotifications: true,
+    });
+    expect(settings.enableTurnCompletionToasts).toBe(true);
+    expect(settings.enableTurnCompletionSystemNotifications).toBe(true);
+    expect(settings.enableInputRequestNotifications).toBe(false);
+    expect(settings.enableNotificationSounds).toBe(false);
+  });
+
+  it.each(["enableInputRequestNotifications", "enableNotificationSounds"] as const)(
+    "round-trips %s",
+    (key) => {
+      expect(encodeClientSettings(decodeClientSettings({ [key]: true }))[key]).toBe(true);
+      expect(decodeClientSettingsPatch({ [key]: true })[key]).toBe(true);
+      expect(decodeClientSettingsPatch({})).not.toHaveProperty(key);
+    },
+  );
+});
+
+describe("ClientSettings default diff file state", () => {
+  it("keeps files expanded when existing settings omit the preference", () => {
+    expect(decodeClientSettings({}).diffFilesCollapsed).toBe(false);
+  });
+
+  it.each([true, false])("preserves a saved collapsed preference of %s", (diffFilesCollapsed) => {
+    const settings = decodeClientSettings({ diffFilesCollapsed });
+    expect(encodeClientSettings(settings).diffFilesCollapsed).toBe(diffFilesCollapsed);
+    expect(decodeClientSettingsPatch({ diffFilesCollapsed }).diffFilesCollapsed).toBe(
+      diffFilesCollapsed,
+    );
+  });
+});
+
 describe("ClientSettings diff colors", () => {
   it("keeps red and green for existing settings without a saved palette", () => {
     expect(decodeClientSettings({}).diffColorScheme).toBe("red-green");

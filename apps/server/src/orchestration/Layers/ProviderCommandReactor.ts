@@ -16,6 +16,7 @@ import {
   type TurnId,
 } from "@t3tools/contracts";
 import { assistantCitationsToPlainText } from "@t3tools/shared/assistantCitations";
+import { projectComposerContextForProvider } from "@t3tools/shared/composerContextReferences";
 import { isTemporaryWorktreeBranch, WORKTREE_BRANCH_PREFIX } from "@t3tools/shared/git";
 import { THREAD_FORK_FAILURE_PREFIX } from "@t3tools/shared/conversationFork";
 import * as Cache from "effect/Cache";
@@ -1785,7 +1786,10 @@ const make = Effect.gen(function* () {
     }
     const sendTurnRequest = yield* buildSendTurnRequestForThread({
       threadId: event.payload.threadId,
-      messageText: message.text,
+      messageText: projectComposerContextForProvider({
+        text: message.text,
+        records: message.context?.records ?? [],
+      }),
       ...(recoveryNotice ? { workspaceRecoveryNotice: recoveryNotice } : {}),
       ...(message.attachments !== undefined ? { attachments: message.attachments } : {}),
       ...(message.inputOrigin !== undefined ? { inputOrigin: message.inputOrigin } : {}),

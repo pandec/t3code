@@ -205,13 +205,12 @@ function makeService(input: {
             input.resolveHandle ?? (() => Effect.die("Unexpected provider refinement")),
         }),
         Layer.mock(ProjectionSnapshotQuery.ProjectionSnapshotQuery)({
-          getShellSnapshot: () =>
-            Effect.succeed({
-              snapshotSequence: 1,
-              projects: input.projects,
-              threads: [],
-              updatedAt: "2026-07-01T00:00:00Z",
-            }),
+          getProjectShells: (projectIds) =>
+            Effect.succeed(
+              input.projects.filter((project) => projectIds?.includes(project.id) ?? true),
+            ),
+          getProjectShellById: (projectId) =>
+            Effect.succeed(Option.fromNullishOr(input.projects.find((p) => p.id === projectId))),
         }),
         SourceControlRateLimit.layer,
         Layer.effect(PullRequestReadCache.PullRequestReadCache, PullRequestReadCache.make).pipe(
@@ -1194,56 +1193,60 @@ it.effect("spends the shared host budget when a mutation falls back to a sibling
   }),
 );
 
-it.effect("refines an unknown self-hosted GitLab sibling before verifying a mutation", () =>
-  Effect.gen(function* () {
-    const refinementRoots: string[] = [];
-    const resolutionRoots: string[] = [];
-    const actionRoots: string[] = [];
-    const selected = project({
-      id: "p1",
-      title: "selected gone",
-      workspaceRoot: "/gone",
-      repository: "group/project",
-      provider: "unknown",
-      host: "code.example.test",
-    });
-    const healthy = { ...selected, id: "p2" as ProjectId, workspaceRoot: "/healthy" };
-    const service = yield* makeService({
-      projects: [selected, healthy],
-      providers: [
-        fakeProvider("gitlab", {
-          runAction: (input) => {
-            actionRoots.push(input.cwd);
-            return Effect.void;
+it.effect(
+  "refines unknown self-hosted GitLab and Forgejo siblings before verifying a mutation",
+  () =>
+    Effect.gen(function* () {
+      for (const kind of ["gitlab", "forgejo"] as const) {
+        const refinementRoots: string[] = [];
+        const resolutionRoots: string[] = [];
+        const actionRoots: string[] = [];
+        const selected = project({
+          id: "p1",
+          title: "selected gone",
+          workspaceRoot: "/gone",
+          repository: "group/project",
+          provider: "unknown",
+          host: "code.example.test",
+        });
+        const healthy = { ...selected, id: "p2" as ProjectId, workspaceRoot: "/healthy" };
+        const service = yield* makeService({
+          projects: [selected, healthy],
+          providers: [
+            fakeProvider(kind, {
+              runAction: (input) => {
+                actionRoots.push(input.cwd);
+                return Effect.void;
+              },
+            }),
+          ],
+          resolveHandle: ({ cwd, context }) => {
+            refinementRoots.push(cwd);
+            return cwd === "/gone"
+              ? Effect.succeed({ context: context!, provider: undefined as never })
+              : Effect.succeed({
+                  context: { ...context!, provider: { ...context!.provider, kind } },
+                  provider: undefined as never,
+                });
           },
-        }),
-      ],
-      resolveHandle: ({ cwd, context }) => {
-        refinementRoots.push(cwd);
-        return cwd === "/gone"
-          ? Effect.succeed({ context: context!, provider: undefined as never })
-          : Effect.succeed({
-              context: { ...context!, provider: { ...context!.provider, kind: "gitlab" } },
-              provider: undefined as never,
-            });
-      },
-      resolveRepositoryIdentity: (cwd) => {
-        resolutionRoots.push(cwd);
-        return Effect.succeed(cwd === "/healthy" ? (healthy.repositoryIdentity ?? null) : null);
-      },
-    });
+          resolveRepositoryIdentity: (cwd) => {
+            resolutionRoots.push(cwd);
+            return Effect.succeed(cwd === "/healthy" ? (healthy.repositoryIdentity ?? null) : null);
+          },
+        });
 
-    yield* service.runAction({
-      projectId: "p1" as ProjectId,
-      repository: "group/project",
-      number: 1,
-      action: "close",
-    });
+        yield* service.runAction({
+          projectId: "p1" as ProjectId,
+          repository: "group/project",
+          number: 1,
+          action: "close",
+        });
 
-    assert.deepStrictEqual(refinementRoots, ["/gone", "/healthy"]);
-    assert.deepStrictEqual(resolutionRoots, ["/gone", "/healthy"]);
-    assert.deepStrictEqual(actionRoots, ["/healthy"]);
-  }),
+        assert.deepStrictEqual(refinementRoots, ["/gone", "/healthy"]);
+        assert.deepStrictEqual(resolutionRoots, ["/gone", "/healthy"]);
+        assert.deepStrictEqual(actionRoots, ["/healthy"]);
+      }
+    }),
 );
 
 it.effect("refuses an action the host never claimed it could run", () =>
@@ -1928,6 +1931,118 @@ it.effect("reads a host-native stack through the provider and null where it has 
         number: 7,
       }),
     );
+  }),
+);
+
+it.effect("routes explicit Forgejo HTTP authorities through SSH checkouts after refinement", () =>
+  Effect.gen(function* () {
+    for (const provider of ["forgejo", "unknown"] as const) {
+      const seen: string[] = [];
+      const viewers: Array<string | undefined> = [];
+      const service = yield* makeService({
+        projects: [
+          project({
+            id: "ssh",
+            title: "ssh",
+            workspaceRoot: "/ssh",
+            repository: "team/repo",
+            provider,
+            host: "ssh.code.example",
+            remoteUrl: "git@ssh.code.example:team/repo.git",
+          }),
+        ],
+        providers: [
+          fakeProvider("forgejo", {
+            getViewer: (input) => {
+              viewers.push(input.host);
+              assert.strictEqual(input.host, "code.example:3000");
+              return Effect.succeed("bilal");
+            },
+            listChangeRequests: (input) => {
+              assert.strictEqual(input.host, "code.example:3000");
+              return Effect.succeed({ items: [], truncated: false, continues: true });
+            },
+            getChangeRequest: (input) => {
+              assert.strictEqual(input.host, "code.example:3000");
+              return Effect.succeed({ ...hostedChangeRequest("Forgejo detail"), number: 42 });
+            },
+            getChangeRequestSummary: (input) =>
+              Effect.sync(() => {
+                seen.push(input.host);
+                return changeRequest(42, "2026-07-02T00:00:00Z");
+              }),
+          }),
+        ],
+        resolveHandle: ({ context }) => {
+          if (context?.requestedHost === undefined) {
+            return Effect.succeed({ context: context!, provider: undefined as never });
+          }
+          assert.strictEqual(context.requestedHost, "code.example:3000");
+          return Effect.succeed({
+            context: {
+              ...context,
+              provider: { kind: "forgejo", name: "Forgejo", baseUrl: "http://code.example:3000" },
+            },
+            provider: undefined as never,
+          });
+        },
+      });
+      yield* service.summary(
+        {
+          projectId: "ssh" as ProjectId,
+          host: "code.example:3000",
+          repository: "team/repo",
+          number: 42,
+        },
+        { recoverTransientFailure: false },
+      );
+      assert.deepStrictEqual(seen, ["code.example:3000"]);
+      const listed = yield* service.list({
+        projectId: "ssh" as ProjectId,
+        host: "code.example:3000",
+        state: "open",
+      });
+      assert.strictEqual(listed.viewers["code.example:3000"], "bilal");
+      const detail = yield* service.detail({
+        projectId: "ssh" as ProjectId,
+        host: "code.example:3000",
+        repository: "team/repo",
+        number: 42,
+      });
+      assert.strictEqual(detail.body, "Forgejo detail");
+      assert.deepStrictEqual(viewers, ["code.example:3000"]);
+    }
+  }),
+);
+
+it.effect("rejects a different Forgejo HTTP port for an HTTP checkout", () =>
+  Effect.gen(function* () {
+    const service = yield* makeService({
+      projects: [
+        project({
+          id: "http",
+          title: "http",
+          workspaceRoot: "/http",
+          repository: "team/repo",
+          provider: "forgejo",
+          host: "code.example",
+          remoteUrl: "http://code.example:4000/team/repo.git",
+        }),
+      ],
+      providers: [fakeProvider("forgejo")],
+    });
+    const failure = yield* service
+      .summary(
+        {
+          projectId: "http" as ProjectId,
+          host: "code.example:3000",
+          repository: "team/repo",
+          number: 42,
+        },
+        { recoverTransientFailure: false },
+      )
+      .pipe(Effect.flip);
+    assert.strictEqual(failure._tag, "PullRequestUnavailableError");
   }),
 );
 

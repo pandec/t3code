@@ -258,6 +258,12 @@ export const SETTINGS_SEARCH_ITEMS = [
     searchTerms: ["diff ignore spaces edits default"],
   },
   {
+    id: "default-diff-file-state",
+    title: "Default diff file state",
+    to: "/settings/general",
+    searchTerms: ["collapsed expanded collapse expand files pull request pr code tab"],
+  },
+  {
     id: "diff-layout",
     title: "Diff layout",
     to: "/settings/general",
@@ -369,6 +375,11 @@ export const SETTINGS_SEARCH_ITEMS = [
     title: "Diagnostics",
     to: "/settings/general",
     searchTerms: ["logs traces processes resource history failures spans cpu memory"],
+  },
+  {
+    id: "open-source-licenses",
+    title: "Open source licenses",
+    to: "/settings/general",
   },
   {
     id: "legacy-plan-mode",
@@ -570,7 +581,7 @@ export const SETTINGS_SEARCH_ITEMS = [
     to: "/settings/source-control",
     scope: "environment-defaults",
     searchTerms: [
-      "version control git github gitlab bitbucket azure devops hosting integrations credentials scan server environment",
+      "version control git github gitlab forgejo gitea tea codeberg bitbucket azure devops hosting integrations credentials scan server environment",
     ],
   },
   {
@@ -695,6 +706,9 @@ export const SETTINGS_SEARCH_ITEMS = [
     id: "extras-notifications",
     title: "Notifications",
     to: "/settings/extras",
+    searchTerms: [
+      "toast system desktop sound alert completion input approval turn duration rate limit",
+    ],
   },
   {
     id: "extras-provider-usage",

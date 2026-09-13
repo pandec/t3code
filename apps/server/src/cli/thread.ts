@@ -1571,6 +1571,7 @@ export const threadMessagesReport = (input: {
       id: message.id,
       role: message.role,
       text: message.text,
+      ...(message.context !== undefined ? { context: message.context } : {}),
       createdAt: message.createdAt,
       turnId: message.turnId,
       ...(message.streaming ? { streaming: true } : {}),

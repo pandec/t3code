@@ -197,7 +197,8 @@ leaves the question unresolved.
 messages only, without tool calls or file activity. `--json` returns a document with `threadId`,
 `title`, `state`, `archived`, `machine`, `messages`, `hasMoreOlder`, and `nextBefore`; each message
 carries its id, role, text, `createdAt` timestamp, turn id, and attachment metadata, plus
-`streaming: true` while the assistant is still writing it. Unlike the
+`streaming: true` while the assistant is still writing it. Messages with inline context also
+include the optional `context` object, containing its version and context records. Unlike the
 other thread commands, this one also reads archived threads; the output marks those with
 `"archived": true` and a `null` title and state. On servers that predate the dedicated messages
 route (including upstream ones), the command falls back to the full thread snapshot and windows it

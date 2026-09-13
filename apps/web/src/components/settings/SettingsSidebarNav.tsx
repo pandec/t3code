@@ -326,7 +326,10 @@ export function SettingsSidebarNav({ pathname }: { pathname: string }) {
             <SidebarMenu className="ps-px">
               {navItems.map((item) => {
                 const Icon = item.icon;
-                const isActive = pathname === item.to || pathname.startsWith(`${item.to}/`);
+                const isGeneralDetailPage =
+                  item.to === "/settings/general" && pathname === "/settings/open-source-licenses";
+                const isActive =
+                  isGeneralDetailPage || pathname === item.to || pathname.startsWith(`${item.to}/`);
                 return (
                   <SidebarMenuItem key={item.to}>
                     <SidebarMenuButton
@@ -343,7 +346,7 @@ export function SettingsSidebarNav({ pathname }: { pathname: string }) {
           )}
         </SidebarGroup>
       </SidebarContent>
-      <SidebarFooter className="p-[var(--sidebar-content-inset)]">
+      <SidebarFooter className="px-[var(--sidebar-content-inset)] py-1">
         <Suspense fallback={null}>
           <T3ConnectSidebarSignIn />
         </Suspense>

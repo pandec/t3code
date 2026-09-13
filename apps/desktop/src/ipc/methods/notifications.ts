@@ -79,6 +79,7 @@ export const showNotification = DesktopIpc.makeIpcMethod({
 
     const notification = new Electron.Notification({
       title,
+      ...(input.silent !== undefined ? { silent: input.silent } : {}),
       ...(input.body !== undefined ? { body: input.body } : {}),
     });
     const releaseNotification = retainNotification(notification);

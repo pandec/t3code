@@ -6,6 +6,9 @@ import {
   ProviderInteractionMode as ProviderInteractionModeSchema,
   RuntimeMode as RuntimeModeSchema,
   MessageInputOrigin,
+  ComposerContextRecord,
+  ForwardCompatibleArray,
+  PastedTextAttachmentSource,
 } from "@t3tools/contracts";
 import * as Schema from "effect/Schema";
 import type { Directory as ExpoDirectory } from "expo-file-system";
@@ -97,9 +100,15 @@ const ComposerDraftProjectSchema = Schema.Struct({
   createdAt: Schema.String,
 });
 
+const PersistedComposerContextSchema = Schema.Struct({
+  version: Schema.Literal(1),
+  records: ForwardCompatibleArray(ComposerContextRecord),
+});
+
 const LegacyComposerDraftSchema = Schema.Struct({
   text: Schema.String,
   inputOrigin: Schema.optional(MessageInputOrigin),
+  context: Schema.optional(PersistedComposerContextSchema),
   attachments: Schema.Array(DraftComposerAttachmentSchema),
   importedShareIds: Schema.optional(Schema.Array(Schema.String)),
   modelSelection: Schema.optional(ModelSelectionSchema),
@@ -132,6 +141,7 @@ const PersistedFileAttachmentReferenceSchema = Schema.Struct({
   mimeType: Schema.String,
   sizeBytes: Schema.Number,
   fileUri: Schema.String,
+  source: Schema.optional(PastedTextAttachmentSource),
   uploadedAttachmentId: Schema.optional(Schema.String),
   uploadEnvironmentId: Schema.optional(EnvironmentId),
 });
@@ -144,6 +154,7 @@ const PersistedAttachmentReferenceSchema = Schema.Union([
 const PersistedComposerDraftSchema = Schema.Struct({
   text: Schema.String,
   inputOrigin: Schema.optional(MessageInputOrigin),
+  context: Schema.optional(PersistedComposerContextSchema),
   attachments: Schema.Array(PersistedAttachmentReferenceSchema),
   importedShareIds: Schema.optional(Schema.Array(Schema.String)),
   modelSelection: Schema.optional(ModelSelectionSchema),
@@ -209,6 +220,7 @@ function isEmptyDraft(draft: ComposerDraft): boolean {
   return (
     draft.text.length === 0 &&
     draft.inputOrigin === undefined &&
+    draft.context === undefined &&
     draft.attachments.length === 0 &&
     draft.modelSelection === undefined &&
     draft.runtimeMode === undefined &&
@@ -1061,6 +1073,7 @@ function isEmptyPersistedDraft(draft: PersistedComposerDraftRecord["draft"]): bo
   return (
     draft.text.length === 0 &&
     draft.inputOrigin === undefined &&
+    draft.context === undefined &&
     draft.attachments.length === 0 &&
     // Share-import receipts must survive persistence, or an interrupted
     // handoff re-imports the same native share after restart.

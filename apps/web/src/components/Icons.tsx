@@ -789,3 +789,16 @@ export const LinearIcon: Icon = (props) => (
     <path d="M1.225 61.523c-.222-.949.908-1.546 1.597-.857l36.512 36.512c.69.69.092 1.82-.857 1.597C20.075 94.451 5.549 79.925 1.225 61.523ZM.002 46.889a.99.99 0 0 0 .29.76L52.35 99.71a.99.99 0 0 0 .76.29c2.53-.06 5.01-.29 7.44-.68a.99.99 0 0 0 .54-1.68L2.06 39.05a.99.99 0 0 0-1.68.54c-.39 2.43-.62 4.91-.68 7.44Zm3.45-18.8a.99.99 0 0 0 .21 1.08l67.17 67.17a.99.99 0 0 0 1.08.21c1.9-.8 3.74-1.7 5.52-2.7a.99.99 0 0 0 .18-1.56L8.2 22.78a.99.99 0 0 0-1.56.18c-1 1.78-1.9 3.62-2.7 5.52Zm8.16-12.14a.99.99 0 0 1-.05-1.36C20.85 4.63 34.84 0 50 0c27.61 0 50 22.39 50 50 0 15.16-4.63 29.15-14.59 38.44a.99.99 0 0 1-1.36-.05L11.61 15.95Z" />
   </svg>
 );
+
+// Official two-color mark from https://forgejo.org/favicon.svg.
+export const ForgejoIcon: Icon = (props) => (
+  <svg viewBox="0 0 212 212" aria-hidden="true" {...props}>
+    <g transform="translate(6 6)" fill="none">
+      <path d="M58 168 v-98 a50 50 0 0 1 50-50 h20" stroke="#ff6600" strokeWidth="25" />
+      <path d="M58 168 v-30 a50 50 0 0 1 50-50 h20" stroke="#d40000" strokeWidth="25" />
+      <circle cx="142" cy="20" r="18" stroke="#ff6600" strokeWidth="15" />
+      <circle cx="142" cy="88" r="18" stroke="#d40000" strokeWidth="15" />
+      <circle cx="58" cy="180" r="18" stroke="#d40000" strokeWidth="15" />
+    </g>
+  </svg>
+);

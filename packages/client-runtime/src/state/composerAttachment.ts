@@ -1,5 +1,7 @@
 import {
   EnvironmentId,
+  PastedTextAttachmentSource,
+  SnapShotSource,
   type EnvironmentId as EnvironmentIdType,
   type UploadChatImageAttachment,
 } from "@t3tools/contracts";
@@ -10,6 +12,7 @@ const NonEmptyString = Schema.String.check(Schema.isNonEmpty());
 const DraftComposerImageAttachmentBaseFields = {
   id: Schema.String,
   type: Schema.Literal("image"),
+  source: Schema.optional(SnapShotSource),
   name: Schema.String,
   mimeType: Schema.String,
   sizeBytes: Schema.Number,
@@ -47,6 +50,7 @@ export const DraftComposerFileAttachmentSchema = Schema.Struct({
   mimeType: Schema.String,
   sizeBytes: Schema.Number,
   fileUri: NonEmptyString,
+  source: Schema.optional(PastedTextAttachmentSource),
   uploadedAttachmentId: Schema.optional(Schema.String),
   uploadEnvironmentId: Schema.optional(EnvironmentId),
 });
@@ -98,6 +102,7 @@ export interface DraftComposerFileAttachment {
   readonly mimeType: string;
   readonly sizeBytes: number;
   readonly fileUri: string;
+  readonly source?: PastedTextAttachmentSource | undefined;
   readonly uploadedAttachmentId?: string | undefined;
   readonly uploadEnvironmentId?: EnvironmentIdType | undefined;
 }
@@ -122,11 +127,13 @@ export function toUploadChatImageAttachments(
       throw new Error(`'${attachment.name}' must be materialized before sending.`);
     }
     return {
+      id: attachment.id,
       type: attachment.type,
       name: attachment.name,
       mimeType: attachment.mimeType,
       sizeBytes: attachment.sizeBytes,
       dataUrl: attachment.dataUrl,
+      ...(attachment.source ? { source: attachment.source } : {}),
     };
   });
 }

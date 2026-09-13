@@ -13,6 +13,7 @@ import { DEV_PROXIED_PATH_PREFIXES } from "@t3tools/shared/devProxy";
 
 import { loadRepoEnv } from "../../scripts/lib/public-config";
 import { sharedTestDefaults } from "../../scripts/lib/vitest-shared.ts";
+import { thirdPartyLicensesPlugin } from "../../scripts/lib/third-party-licenses";
 import { tailwindPlugins } from "./vite/tailwind";
 
 const repoEnv = loadRepoEnv();
@@ -85,6 +86,9 @@ const buildSourcemap: boolean | "hidden" =
  * files, not in the new test.
  */
 const ISOLATED_TEST_FILES = [
+  "src/components/ComposerContextReferenceNode.test.ts",
+  "src/components/files/AttachmentFilePreview.test.tsx",
+
   "src/components/device/DeviceStreamView.test.tsx",
   "src/components/device/deviceStream.test.ts",
   "src/components/permissions/usePermissionStatus.test.ts",
@@ -273,6 +277,15 @@ export default defineConfig(() => {
     assetsInclude: ["**/*.wasm"],
     plugins: [
       devCompressionPlugin(),
+      thirdPartyLicensesPlugin({
+        bundleName: "web",
+        configFile: new URL("../../third-party-licenses.config.json", import.meta.url),
+        packageManifests: [
+          { bundle: "web", path: new URL("./package.json", import.meta.url) },
+          { bundle: "server", path: new URL("../server/package.json", import.meta.url) },
+          { bundle: "desktop", path: new URL("../desktop/package.json", import.meta.url) },
+        ],
+      }),
       // Route components load as split chunks so settings, pull-request, and
       // usage code stay out of the cold-start payload; the router prefetches
       // them on navigation intent (see getRouter's defaultPreload).
