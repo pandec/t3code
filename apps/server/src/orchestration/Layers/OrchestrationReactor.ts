@@ -11,6 +11,7 @@ import { MessageSpeechReactor } from "../Services/MessageSpeechReactor.ts";
 import { ProviderRuntimeIngestionService } from "../Services/ProviderRuntimeIngestion.ts";
 import { ThreadDeletionReactor } from "../Services/ThreadDeletionReactor.ts";
 import * as ThreadSettlementReactor from "../ThreadSettlementReactor.ts";
+import * as ThreadWorktreeSwitchReactor from "../ThreadWorktreeSwitchReactor.ts";
 import * as ThreadArchiveReactor from "../ThreadArchiveReactor.ts";
 import * as PullRequestSyncReactor from "../PullRequestSyncReactor.ts";
 import * as ThreadPullRequestReactor from "../ThreadPullRequestReactor.ts";
@@ -23,6 +24,8 @@ export const makeOrchestrationReactor = Effect.gen(function* () {
   const checkpointReactor = yield* CheckpointReactor;
   const threadDeletionReactor = yield* ThreadDeletionReactor;
   const threadSettlementReactor = yield* ThreadSettlementReactor.ThreadSettlementReactor;
+  const threadWorktreeSwitchReactor =
+    yield* ThreadWorktreeSwitchReactor.ThreadWorktreeSwitchReactor;
   const threadArchiveReactor = yield* ThreadArchiveReactor.ThreadArchiveReactor;
   const pullRequestSyncReactor = yield* PullRequestSyncReactor.PullRequestSyncReactor;
   const threadPullRequestReactor = yield* ThreadPullRequestReactor.ThreadPullRequestReactor;
@@ -36,6 +39,7 @@ export const makeOrchestrationReactor = Effect.gen(function* () {
     yield* threadDeletionReactor.start();
     yield* threadPullRequestReactor.start();
     yield* threadArchiveReactor.start();
+    yield* threadWorktreeSwitchReactor.start();
     yield* threadSettlementReactor.start();
     yield* pullRequestSyncReactor.start();
     yield* agentAwarenessRelay.start();

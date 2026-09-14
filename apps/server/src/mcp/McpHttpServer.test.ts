@@ -64,6 +64,38 @@ const PullRequestsTestLayer = McpHttpServer.PullRequestsToolkitRegistrationLive.
   ),
 );
 
+const WorktreeTestLayer = McpHttpServer.WorktreeToolkitRegistrationLive.pipe(
+  Layer.provideMerge(McpServer.McpServer.layer),
+  Layer.provide(
+    Layer.mergeAll(
+      Layer.mock(ProjectionSnapshotQuery)({ getThreadShellById: () => Effect.succeedNone }),
+      Layer.mock(OrchestrationEngineService)({}),
+      NodeServices.layer,
+    ),
+  ),
+);
+
+it.effect("exposes worktree tools and rejects a credential whose thread is gone", () =>
+  Effect.gen(function* () {
+    const server = yield* McpServer.McpServer;
+    expect(server.tools.map(({ tool }) => tool.name)).toEqual(
+      expect.arrayContaining([
+        "switch_worktree",
+        "worktree_switch_status",
+        "cancel_worktree_switch",
+      ]),
+    );
+    const result = yield* server
+      .callTool({ name: "switch_worktree", arguments: { path: "/worktree" } })
+      .pipe(
+        Effect.provideService(McpInvocationContext.McpInvocationContext, invocation),
+        Effect.provideService(McpSchema.McpServerClient, client),
+      );
+    expect(result.isError).toBe(true);
+    expect(result.content).toEqual([{ type: "text", text: "This thread no longer exists." }]);
+  }).pipe(Effect.provide(WorktreeTestLayer)),
+);
+
 const snapshotResult = {
   url: "http://example.test/",
   title: "Example",

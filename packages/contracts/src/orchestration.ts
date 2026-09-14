@@ -675,6 +675,18 @@ export const ThreadLinkedPullRequest = Schema.Struct({
 });
 export type ThreadLinkedPullRequest = typeof ThreadLinkedPullRequest.Type;
 
+export const ThreadWorktreeSwitch = Schema.Struct({
+  requestId: CommandId,
+  turnId: TurnId,
+  sourceWorktreePath: Schema.NullOr(TrimmedNonEmptyString),
+  sourceBranch: Schema.NullOr(TrimmedNonEmptyString),
+  targetPath: TrimmedNonEmptyString,
+  requestedAt: IsoDateTime,
+  status: Schema.Literals(["pending", "completed", "cancelled", "error"]),
+  detail: Schema.optional(Schema.String),
+});
+export type ThreadWorktreeSwitch = typeof ThreadWorktreeSwitch.Type;
+
 export const ThreadArchiveRequest = Schema.Struct({
   requestId: CommandId,
   turnId: Schema.NullOr(TurnId),
@@ -817,6 +829,7 @@ export const OrchestrationThread = Schema.Struct({
   // Pending-only state. Optional so older servers remain compatible.
   titleRegeneration: Schema.optional(Schema.NullOr(ThreadTitleRegeneration)),
   archiveRequest: Schema.optional(Schema.NullOr(ThreadArchiveRequest)),
+  worktreeSwitch: Schema.optional(Schema.NullOr(ThreadWorktreeSwitch)),
   deletedAt: Schema.NullOr(IsoDateTime),
   messages: Schema.Array(OrchestrationMessage),
   messageWindow: Schema.optional(OrchestrationThreadMessageWindow),
@@ -891,6 +904,7 @@ export const OrchestrationThreadShell = Schema.Struct({
   activeOrderKey: Schema.optional(Schema.NullOr(TrimmedNonEmptyString)),
   titleRegeneration: Schema.optional(Schema.NullOr(ThreadTitleRegeneration)),
   archiveRequest: Schema.optional(Schema.NullOr(ThreadArchiveRequest)),
+  worktreeSwitch: Schema.optional(Schema.NullOr(ThreadWorktreeSwitch)),
   session: Schema.NullOr(OrchestrationSession),
   latestUserMessageAt: Schema.NullOr(IsoDateTime),
   hasPendingApprovals: Schema.Boolean,
@@ -1191,6 +1205,30 @@ const ThreadArchiveCommand = Schema.Struct({
   type: Schema.Literal("thread.archive"),
   commandId: CommandId,
   threadId: ThreadId,
+});
+
+const ThreadWorktreeSwitchScheduleCommand = Schema.Struct({
+  type: Schema.Literal("thread.worktree-switch.schedule"),
+  commandId: CommandId,
+  threadId: ThreadId,
+  turnId: TurnId,
+  targetPath: TrimmedNonEmptyString,
+});
+
+const ThreadWorktreeSwitchCancelCommand = Schema.Struct({
+  type: Schema.Literal("thread.worktree-switch.cancel"),
+  commandId: CommandId,
+  threadId: ThreadId,
+});
+
+const ThreadWorktreeSwitchExecuteCommand = Schema.Struct({
+  type: Schema.Literal("thread.worktree-switch.execute"),
+  commandId: CommandId,
+  threadId: ThreadId,
+  requestId: CommandId,
+  branch: Schema.NullOr(TrimmedNonEmptyString),
+  worktreePath: Schema.NullOr(TrimmedNonEmptyString),
+  error: Schema.optional(Schema.String),
 });
 
 const ThreadArchiveScheduleCommand = Schema.Struct({
@@ -1743,6 +1781,9 @@ const ThreadPullRequestLinkSyncCommand = Schema.Struct({
 });
 
 const InternalOrchestrationCommand = Schema.Union([
+  ThreadWorktreeSwitchScheduleCommand,
+  ThreadWorktreeSwitchCancelCommand,
+  ThreadWorktreeSwitchExecuteCommand,
   ThreadArchiveExecuteCommand,
   ThreadArchiveCompleteCommand,
   ThreadWorktreeFallbackCommand,
@@ -1958,6 +1999,7 @@ export const ThreadMetaUpdatedPayload = Schema.Struct({
   /** Pending state shared with clients. Null clears a matching request. */
   titleRegeneration: Schema.optional(Schema.NullOr(ThreadTitleRegeneration)),
   archiveRequest: Schema.optional(Schema.NullOr(ThreadArchiveRequest)),
+  worktreeSwitch: Schema.optional(Schema.NullOr(ThreadWorktreeSwitch)),
   modelSelection: Schema.optional(ModelSelection),
   branch: Schema.optional(Schema.NullOr(TrimmedNonEmptyString)),
   worktreePath: Schema.optional(Schema.NullOr(TrimmedNonEmptyString)),

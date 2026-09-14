@@ -1,3 +1,5 @@
+import { WorktreeToolkitHandlersLive } from "./toolkits/worktree/handlers.ts";
+import { WorktreeToolkit } from "./toolkits/worktree/tools.ts";
 import * as NodeCrypto from "node:crypto";
 import * as Cause from "effect/Cause";
 import * as Clock from "effect/Clock";
@@ -635,19 +637,28 @@ const makeMcpTransport = (path: `/${string}`) =>
     protocols: [McpProtocol.v2025_06_18],
   }).pipe(Layer.provide(McpAuthMiddlewareLive));
 
+export const WorktreeToolkitRegistrationLive = McpServer.toolkit(WorktreeToolkit).pipe(
+  Layer.provide(WorktreeToolkitHandlersLive),
+);
+
 /**
  * Tool registration is per McpServer instance and tools/list has no per-token
  * filter, so each capability combination gets its own server island at its
  * own path — a session's credential (whose endpoint McpSessionRegistry picks
  * from its capabilities) then only ever sees the tools it can call. The pull
- * request toolkit is on every island because every credential carries it.
+ * request toolkit is on every island because every credential carries it. The
+ * worktree toolkit is also shared and only operates on the authenticated thread.
  * Layer boundaries: Layer.fresh un-memoizes the McpServer inside each island
  * while the handlers' dependencies (broker, voice staging, session registry)
  * stay requirements satisfied by the shared runtime, so all islands share one
  * instance of each.
  */
 const mcpToolkitIsland = <E, R>(path: `/${string}`, registrations: Layer.Layer<never, E, R>) =>
-  Layer.fresh(registrations.pipe(Layer.provideMerge(makeMcpTransport(path))));
+  Layer.fresh(
+    Layer.merge(registrations, WorktreeToolkitRegistrationLive).pipe(
+      Layer.provideMerge(makeMcpTransport(path)),
+    ),
+  );
 
 export const layer = Layer.mergeAll(
   mcpToolkitIsland(

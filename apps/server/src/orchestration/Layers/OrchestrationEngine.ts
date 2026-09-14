@@ -331,6 +331,7 @@ const makeOrchestrationEngine = Effect.gen(function* () {
         if (
           (envelope.command.type === "thread.auto-settle" ||
             envelope.command.type === "thread.archive.execute" ||
+            envelope.command.type === "thread.worktree-switch.execute" ||
             (envelope.command.type === "thread.session.stop" &&
               envelope.command.onlyIfSettled === true)) &&
           threadBackgroundLiveness.getThreadBackgroundLiveness(envelope.command.threadId) !== null
@@ -372,21 +373,22 @@ const makeOrchestrationEngine = Effect.gen(function* () {
             ? yield* projectionSnapshotQuery.getUserInputActivity(envelope.command)
             : Option.none();
         // Startup command snapshots omit checkpoints. Load this one thread's
-        // durable checkpoints before deciding whether an archive must wait for
+        // durable checkpoints before deciding whether an archive or worktree switch waits for
         // its final capture, including one recovered after restart.
-        const archiveCheckpoints =
+        const completionCheckpoints =
           envelope.command.type === "thread.archive.schedule" ||
-          envelope.command.type === "thread.archive.execute"
+          envelope.command.type === "thread.archive.execute" ||
+          envelope.command.type === "thread.worktree-switch.execute"
             ? yield* projectionSnapshotQuery.getThreadCheckpointContext(envelope.command.threadId)
             : Option.none();
         const eventBase = yield* decideOrchestrationCommand({
           command: envelope.command,
-          readModel: Option.isSome(archiveCheckpoints)
+          readModel: Option.isSome(completionCheckpoints)
             ? {
                 ...commandReadModel,
                 threads: commandReadModel.threads.map((thread) =>
-                  thread.id === archiveCheckpoints.value.threadId
-                    ? { ...thread, checkpoints: archiveCheckpoints.value.checkpoints }
+                  thread.id === completionCheckpoints.value.threadId
+                    ? { ...thread, checkpoints: completionCheckpoints.value.checkpoints }
                     : thread,
                 ),
               }

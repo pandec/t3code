@@ -18,12 +18,14 @@ import {
   ThreadId,
   ModelSelection,
   ThreadArchiveRequest,
+  ThreadWorktreeSwitch,
   ThreadLinkedPullRequest,
 } from "@t3tools/contracts";
 
 const ProjectionThreadDbRow = ProjectionThread.mapFields(
   Struct.assign({
     archiveRequest: Schema.NullOr(Schema.fromJsonString(ThreadArchiveRequest)),
+    worktreeSwitch: Schema.NullOr(Schema.fromJsonString(ThreadWorktreeSwitch)),
     modelSelection: Schema.fromJsonString(ModelSelection),
     linkedPullRequest: Schema.NullOr(Schema.fromJsonString(ThreadLinkedPullRequest)),
     branchPullRequest: Schema.NullOr(Schema.fromJsonString(ThreadLinkedPullRequest)),
@@ -63,6 +65,7 @@ const makeProjectionThreadRepository = Effect.gen(function* () {
           pin_order_key,
           active_order_key,
           archive_request_json,
+          worktree_switch_json,
           title_regeneration_request_id,
           title_regeneration_started_at,
           latest_user_message_at,
@@ -96,6 +99,7 @@ const makeProjectionThreadRepository = Effect.gen(function* () {
           ${row.pinOrderKey ?? null},
           ${row.activeOrderKey ?? null},
           ${row.archiveRequest == null ? null : JSON.stringify(row.archiveRequest)},
+          ${row.worktreeSwitch == null ? null : JSON.stringify(row.worktreeSwitch)},
           ${row.titleRegenerationRequestId ?? null},
           ${row.titleRegenerationStartedAt ?? null},
           ${row.latestUserMessageAt},
@@ -129,6 +133,7 @@ const makeProjectionThreadRepository = Effect.gen(function* () {
           pin_order_key = excluded.pin_order_key,
           active_order_key = excluded.active_order_key,
           archive_request_json = excluded.archive_request_json,
+          worktree_switch_json = excluded.worktree_switch_json,
           title_regeneration_request_id = excluded.title_regeneration_request_id,
           title_regeneration_started_at = excluded.title_regeneration_started_at,
           latest_user_message_at = excluded.latest_user_message_at,
@@ -169,6 +174,7 @@ const makeProjectionThreadRepository = Effect.gen(function* () {
           pin_order_key AS "pinOrderKey",
           active_order_key AS "activeOrderKey",
           archive_request_json AS "archiveRequest",
+          worktree_switch_json AS "worktreeSwitch",
           title_regeneration_request_id AS "titleRegenerationRequestId",
           title_regeneration_started_at AS "titleRegenerationStartedAt",
           latest_user_message_at AS "latestUserMessageAt",
@@ -211,6 +217,7 @@ const makeProjectionThreadRepository = Effect.gen(function* () {
           pin_order_key AS "pinOrderKey",
           active_order_key AS "activeOrderKey",
           archive_request_json AS "archiveRequest",
+          worktree_switch_json AS "worktreeSwitch",
           title_regeneration_request_id AS "titleRegenerationRequestId",
           title_regeneration_started_at AS "titleRegenerationStartedAt",
           latest_user_message_at AS "latestUserMessageAt",
@@ -266,9 +273,23 @@ const makeProjectionThreadRepository = Effect.gen(function* () {
         toPersistenceSqlError("ProjectionThreadRepository.listPendingArchives:query"),
       ),
     );
+  const pendingWorktreeSwitchRows = SqlSchema.findAll({
+    Request: Schema.Void,
+    Result: Schema.Struct({ threadId: ThreadId }),
+    execute: () => sql`SELECT thread_id AS "threadId" FROM projection_threads
+      WHERE deleted_at IS NULL AND json_extract(worktree_switch_json, '$.status') = 'pending'`,
+  });
+  const listPendingWorktreeSwitches = () =>
+    pendingWorktreeSwitchRows(undefined).pipe(
+      Effect.map((rows) => rows.map((row) => row.threadId)),
+      Effect.mapError(
+        toPersistenceSqlError("ProjectionThreadRepository.listPendingWorktreeSwitches:query"),
+      ),
+    );
 
   return {
     listPendingArchives,
+    listPendingWorktreeSwitches,
     upsert,
     getById,
     listByProjectId,

@@ -965,6 +965,9 @@ const makeOrchestrationProjectionPipeline = Effect.fn("makeOrchestrationProjecti
             ...(event.payload.archiveRequest !== undefined
               ? { archiveRequest: event.payload.archiveRequest }
               : {}),
+            ...(event.payload.worktreeSwitch !== undefined
+              ? { worktreeSwitch: event.payload.worktreeSwitch }
+              : {}),
             ...(event.payload.titleRegeneration !== undefined
               ? {
                   titleRegenerationRequestId: event.payload.titleRegeneration?.requestId ?? null,

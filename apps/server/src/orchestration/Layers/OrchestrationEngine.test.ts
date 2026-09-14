@@ -1,4 +1,5 @@
 // @effect-diagnostics nodeBuiltinImport:off
+import * as NodeChildProcess from "node:child_process";
 import * as NodeFSP from "node:fs/promises";
 import * as NodeOS from "node:os";
 import * as NodePath from "node:path";
@@ -31,6 +32,8 @@ import * as Stream from "effect/Stream";
 import { TestClock } from "effect/testing";
 import { describe, expect, it, vi } from "vite-plus/test";
 
+import * as ThreadWorktreeSwitchReactor from "../ThreadWorktreeSwitchReactor.ts";
+import { ProjectionThreadRepositoryLive } from "../../persistence/Layers/ProjectionThreads.ts";
 import { PersistenceSqlError } from "../../persistence/Errors.ts";
 import { OrchestrationCommandReceiptRepositoryLive } from "../../persistence/Layers/OrchestrationCommandReceipts.ts";
 import * as OrchestrationCommandReceipts from "../../persistence/Services/OrchestrationCommandReceipts.ts";
@@ -75,11 +78,17 @@ function makeOrchestrationLayer(options: OrchestrationSystemOptions = {}) {
   const ServerConfigLayer = ServerConfig.layerTest(process.cwd(), {
     prefix: "t3-orchestration-engine-test-",
   });
+  const engine = OrchestrationEngineLive.pipe(
+    Layer.provide(OrchestrationProjectionSnapshotQueryLive),
+    Layer.provide(OrchestrationProjectionPipelineLive),
+  );
   return Layer.mergeAll(
-    OrchestrationEngineLive.pipe(
+    ThreadWorktreeSwitchReactor.layer.pipe(
+      Layer.provide(ProjectionThreadRepositoryLive),
+      Layer.provide(engine),
       Layer.provide(OrchestrationProjectionSnapshotQueryLive),
-      Layer.provide(OrchestrationProjectionPipelineLive),
     ),
+    engine,
     OrchestrationProjectionSnapshotQueryLive,
   ).pipe(
     Layer.provideMerge(ThreadBackgroundLiveness.layer),
@@ -110,6 +119,28 @@ async function createOrchestrationSystem(options: OrchestrationSystemOptions = {
   const snapshotQuery = await runtime.runPromise(Effect.service(ProjectionSnapshotQuery));
   return {
     engine,
+    finishWorktreeSwitch: (threadId: ThreadId) =>
+      runtime.runPromise(
+        Effect.scoped(
+          Effect.gen(function* () {
+            const events = yield* engine.subscribeDomainEvents;
+            const reactor = yield* ThreadWorktreeSwitchReactor.ThreadWorktreeSwitchReactor;
+            yield* reactor.start();
+            yield* events.pipe(
+              Stream.filter(
+                (event) =>
+                  event.type === "thread.meta-updated" &&
+                  event.payload.threadId === threadId &&
+                  event.payload.worktreeSwitch?.status !== undefined &&
+                  event.payload.worktreeSwitch.status !== "pending",
+              ),
+              Stream.take(1),
+              Stream.runDrain,
+            );
+            yield* reactor.drain;
+          }),
+        ),
+      ),
     readModel: () => runtime.runPromise(snapshotQuery.getSnapshot()),
     readThread: (threadId: ThreadId) =>
       runtime.runPromise(snapshotQuery.getThreadDetailById(threadId)),
@@ -1061,6 +1092,211 @@ describe("OrchestrationEngine", () => {
           outcome === "checkpoint-failed" ? "error" : "cancelled",
         );
       }
+    } finally {
+      await system.dispose();
+      await NodeFSP.rm(directory, { recursive: true, force: true });
+    }
+  });
+
+  it.each([
+    "completed",
+    "interrupted",
+    "error",
+    "new-turn",
+    "manual",
+    "cancel",
+    "checkpoint-failed",
+    "target-removed",
+    "archived",
+  ] as const)("persists a worktree switch across restart and handles %s", async (outcome) => {
+    const directory = await NodeFSP.mkdtemp(NodePath.join(NodeOS.tmpdir(), "t3-worktree-switch-"));
+    const root = await NodeFSP.realpath(directory);
+    const target = NodePath.join(root, "target");
+    NodeChildProcess.execFileSync("git", ["init", "-b", "dev", root], { stdio: "ignore" });
+    NodeChildProcess.execFileSync(
+      "git",
+      [
+        "-c",
+        "user.name=Test",
+        "-c",
+        "user.email=test@example.com",
+        "commit",
+        "--allow-empty",
+        "-m",
+        "initial",
+      ],
+      { cwd: root, stdio: "ignore" },
+    );
+    NodeChildProcess.execFileSync("git", ["worktree", "add", "-b", "feature", target], {
+      cwd: root,
+      stdio: "ignore",
+    });
+    const databasePath = NodePath.join(root, "state.sqlite");
+    let system = await createOrchestrationSystem({ databasePath });
+    const threadId = ThreadId.make("switch-thread");
+    const projectId = ProjectId.make("switch-project");
+    const turnId = TurnId.make("switch-turn");
+    const requestId = CommandId.make("switch-request");
+    const dispatch = (command: OrchestrationCommand) => system.run(system.engine.dispatch(command));
+    const session = (
+      status: "running" | "ready" | "interrupted" | "error",
+      activeTurnId: TurnId | null,
+    ) => ({
+      threadId,
+      status,
+      providerName: "codex" as const,
+      providerInstanceId: ProviderInstanceId.make("codex"),
+      runtimeMode: "full-access" as const,
+      activeTurnId,
+      lastError: null,
+      updatedAt: now(),
+    });
+    const execute = (id: string) =>
+      dispatch({
+        type: "thread.worktree-switch.execute",
+        commandId: CommandId.make(id),
+        threadId,
+        requestId,
+        branch: "feature",
+        worktreePath: target,
+      });
+    try {
+      await dispatch({
+        type: "project.create",
+        commandId: CommandId.make("project"),
+        projectId,
+        title: "Switch",
+        workspaceRoot: root,
+        createdAt: now(),
+      });
+      await dispatch({
+        type: "thread.create",
+        commandId: CommandId.make("thread"),
+        threadId,
+        projectId,
+        title: "Switch",
+        modelSelection: { instanceId: ProviderInstanceId.make("codex"), model: "gpt-5-codex" },
+        runtimeMode: "full-access",
+        interactionMode: "default",
+        branch: null,
+        worktreePath: null,
+        createdAt: now(),
+      });
+      await dispatch({
+        type: "thread.session.set",
+        commandId: CommandId.make("running"),
+        threadId,
+        session: session("running", turnId),
+        createdAt: now(),
+      });
+      await dispatch({
+        type: "thread.worktree-switch.schedule",
+        commandId: requestId,
+        threadId,
+        turnId,
+        targetPath: target,
+      });
+      expect((await system.readModel()).threads[0]?.worktreePath).toBeNull();
+      await expect(execute("early")).rejects.toThrow("not finished");
+      await system.dispose();
+      system = await createOrchestrationSystem({ databasePath });
+      expect((await system.readModel()).threads[0]?.worktreeSwitch).toMatchObject({
+        status: "pending",
+        turnId,
+        targetPath: target,
+      });
+      if (outcome === "cancel") {
+        await dispatch({
+          type: "thread.worktree-switch.cancel",
+          commandId: CommandId.make("cancel"),
+          threadId,
+        });
+      } else if (outcome === "checkpoint-failed") {
+        await dispatch({
+          type: "thread.activity.append",
+          commandId: CommandId.make("failed"),
+          threadId,
+          createdAt: now(),
+          activity: {
+            id: EventId.make("failed"),
+            kind: "checkpoint.capture.failed",
+            summary: "Capture failed",
+            tone: "error",
+            payload: {},
+            turnId,
+            createdAt: now(),
+          },
+        });
+      } else {
+        if (outcome === "manual")
+          await dispatch({
+            type: "thread.meta.update",
+            commandId: CommandId.make("manual"),
+            threadId,
+            branch: "other",
+            worktreePath: root + "/other",
+          });
+        await dispatch({
+          type: "thread.session.set",
+          commandId: CommandId.make("finish"),
+          threadId,
+          session: session(
+            outcome === "new-turn"
+              ? "running"
+              : outcome === "interrupted" || outcome === "error"
+                ? outcome
+                : "ready",
+            outcome === "new-turn" ? TurnId.make("new") : null,
+          ),
+          createdAt: now(),
+        });
+        if (outcome === "completed" || outcome === "target-removed") {
+          // Even a root checkout without a tracked branch must wait for capture.
+          await expect(execute("before-checkpoint")).rejects.toThrow("checkpoint");
+          await dispatch({
+            type: "thread.turn.diff.complete",
+            commandId: CommandId.make("checkpoint"),
+            threadId,
+            turnId,
+            completedAt: now(),
+            checkpointRef: CheckpointRef.make("refs/t3/checkpoint"),
+            status: "ready",
+            files: [],
+            assistantMessageId: MessageId.make("assistant"),
+            checkpointTurnCount: 1,
+            createdAt: now(),
+          });
+          if (outcome === "target-removed")
+            await NodeFSP.rm(target, { recursive: true, force: true });
+          await system.dispose();
+          system = await createOrchestrationSystem({ databasePath });
+          await system.finishWorktreeSwitch(threadId);
+        } else {
+          if (outcome === "archived")
+            await dispatch({
+              type: "thread.archive",
+              commandId: CommandId.make("archive"),
+              threadId,
+            });
+          await execute("execute");
+        }
+      }
+      const thread = (await system.readModel()).threads[0]!;
+      expect(thread.worktreeSwitch?.status).toBe(
+        outcome === "completed"
+          ? "completed"
+          : outcome === "checkpoint-failed" || outcome === "target-removed"
+            ? "error"
+            : "cancelled",
+      );
+      expect(thread.worktreePath).toBe(
+        outcome === "completed" ? target : outcome === "manual" ? root + "/other" : null,
+      );
+      if (outcome === "completed") expect(thread.branch).toBe("feature");
+      // The completed/cancelled result is durable too.
+      await system.dispose();
+      system = await createOrchestrationSystem({ databasePath });
+      expect((await system.readModel()).threads[0]?.worktreeSwitch).toEqual(thread.worktreeSwitch);
     } finally {
       await system.dispose();
       await NodeFSP.rm(directory, { recursive: true, force: true });
