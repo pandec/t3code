@@ -3300,9 +3300,17 @@ export function ArchivedThreadsPanel() {
     () => new Set(),
   );
   const searchInputRef = useRef<HTMLInputElement>(null);
+  const scopeFilter = useMemo(() => resolveArchivedThreadScopeFilter(scope), [scope]);
+  const selectedProjectLabel = scopeFilter?.label ?? "selected project";
+  // A scope pinned to one environment only asks that environment, so another
+  // machine's outage or slow load cannot mark this view failed or pending.
+  const scopedEnvironmentId = scopeFilter?.environmentId ?? null;
   const environmentIds = useMemo(
-    () => environments.map((environment) => environment.environmentId),
-    [environments],
+    () =>
+      scopedEnvironmentId === null
+        ? environments.map((environment) => environment.environmentId)
+        : [scopedEnvironmentId],
+    [environments, scopedEnvironmentId],
   );
   const environmentLabelById = useMemo(
     () =>
@@ -3337,11 +3345,9 @@ export function ArchivedThreadsPanel() {
       projects,
     ],
   );
-  const scopeFilter = useMemo(() => resolveArchivedThreadScopeFilter(scope), [scope]);
-  const selectedProjectLabel = scopeFilter?.label ?? "selected project";
   const filteredArchivedGroups = useMemo(() => {
     return archivedGroups.flatMap((group) => {
-      if (!archivedThreadGroupMatchesScope(group.key, scopeFilter)) {
+      if (!archivedThreadGroupMatchesScope(group, scopeFilter)) {
         return [];
       }
       const matchingThreads = group.threads.filter(

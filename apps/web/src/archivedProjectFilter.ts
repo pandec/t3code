@@ -4,6 +4,8 @@ import type { EnvironmentId } from "@t3tools/contracts";
 import type { ResolvedSettingsScope } from "./components/settings/settingsScope";
 import { derivePhysicalProjectKey } from "./logicalProject";
 
+type ProjectIdentity = Pick<EnvironmentProject, "environmentId" | "workspaceRoot">;
+
 /**
  * The narrowing the archive takes from the shared settings scope. The project
  * axis narrows by logical group so every checkout's threads stay together; the
@@ -12,9 +14,17 @@ import { derivePhysicalProjectKey } from "./logicalProject";
 export interface ArchivedThreadScopeFilter {
   readonly label: string;
   readonly groupKey: string | null;
+  /**
+   * Physical keys of the selected group's live checkouts. Archive grouping also
+   * sees snapshot projects, which can key the same checkout under a different
+   * group, so a group that contains one of these checkouts matches too.
+   */
+  readonly memberPhysicalProjectKeys: ReadonlySet<string>;
   readonly environmentId: EnvironmentId | null;
   readonly physicalProjectKey: string | null;
 }
+
+const NO_MEMBERS: ReadonlySet<string> = new Set();
 
 export function resolveArchivedThreadScopeFilter(
   scope: ResolvedSettingsScope,
@@ -24,22 +34,23 @@ export function resolveArchivedThreadScopeFilter(
       return {
         label: scope.label,
         groupKey: null,
+        memberPhysicalProjectKeys: NO_MEMBERS,
         environmentId: scope.environmentId,
         physicalProjectKey: null,
       };
     case "project":
-      return {
-        label: scope.environmentId === null ? scope.group.displayName : scope.label,
-        groupKey: scope.group.projectKey,
-        environmentId: scope.environmentId,
-        physicalProjectKey: null,
-      };
     case "checkout":
       return {
-        label: scope.label,
+        label:
+          scope.kind === "project" && scope.environmentId === null
+            ? scope.group.displayName
+            : scope.label,
         groupKey: scope.group.projectKey,
+        memberPhysicalProjectKeys: new Set(
+          scope.group.memberProjects.map((member) => member.physicalProjectKey),
+        ),
         environmentId: scope.environmentId,
-        physicalProjectKey: scope.checkout.physicalProjectKey,
+        physicalProjectKey: scope.kind === "checkout" ? scope.checkout.physicalProjectKey : null,
       };
     default:
       return null;
@@ -47,15 +58,18 @@ export function resolveArchivedThreadScopeFilter(
 }
 
 export function archivedThreadGroupMatchesScope(
-  groupKey: string,
+  group: { readonly key: string; readonly projects: ReadonlyArray<ProjectIdentity> },
   filter: ArchivedThreadScopeFilter | null,
 ): boolean {
-  return filter === null || filter.groupKey === null || filter.groupKey === groupKey;
+  if (filter === null || filter.groupKey === null || filter.groupKey === group.key) return true;
+  return group.projects.some((project) =>
+    filter.memberPhysicalProjectKeys.has(derivePhysicalProjectKey(project)),
+  );
 }
 
 export function archivedThreadMatchesScope(
   item: {
-    readonly project: Pick<EnvironmentProject, "environmentId" | "workspaceRoot">;
+    readonly project: ProjectIdentity;
     readonly thread: Pick<EnvironmentProject, "environmentId">;
   },
   filter: ArchivedThreadScopeFilter | null,

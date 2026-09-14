@@ -2206,9 +2206,15 @@ function OpenCommandPaletteDialog(props: {
         currentProjectKey !== null ? (projectTitleByKey.get(currentProjectKey) ?? null) : null,
       icon: <ArchiveIcon className={ITEM_ICON_CLASS} />,
       openArchived: async (projectFilterKey) => {
+        // Explicit keys: the settings layout keeps the previous scope when a
+        // navigation names none, and the unfiltered action must show everything.
         await navigate({
           to: "/settings/archived",
-          search: projectFilterKey === null ? {} : { project: projectFilterKey },
+          search: {
+            project: projectFilterKey ?? undefined,
+            machine: undefined,
+            checkout: undefined,
+          },
         });
       },
     }),

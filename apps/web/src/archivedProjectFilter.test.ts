@@ -52,6 +52,10 @@ function threadItem(project: SidebarProjectGroupMember) {
   return { project, thread: { environmentId: project.environmentId } };
 }
 
+function archivedGroup(key: string, projects: ReadonlyArray<SidebarProjectGroupMember>) {
+  return { key, projects };
+}
+
 describe("resolveArchivedThreadScopeFilter", () => {
   it("does not narrow for the all scope or an unavailable selection", () => {
     expect(
@@ -79,6 +83,10 @@ describe("resolveArchivedThreadScopeFilter", () => {
     expect(resolveArchivedThreadScopeFilter(scope)).toEqual({
       label: "T3 Code",
       groupKey: group.projectKey,
+      memberPhysicalProjectKeys: new Set([
+        laptopCheckout.physicalProjectKey,
+        serverCheckout.physicalProjectKey,
+      ]),
       environmentId: null,
       physicalProjectKey: null,
     });
@@ -105,7 +113,7 @@ describe("resolveArchivedThreadScopeFilter", () => {
       environmentId: serverId,
       label: "T3 Code / Server · /repos/worktree",
     };
-    expect(resolveArchivedThreadScopeFilter(checkout)).toEqual({
+    expect(resolveArchivedThreadScopeFilter(checkout)).toMatchObject({
       label: "T3 Code / Server · /repos/worktree",
       groupKey: group.projectKey,
       environmentId: serverId,
@@ -116,7 +124,7 @@ describe("resolveArchivedThreadScopeFilter", () => {
 
 describe("archived scope matching", () => {
   it("matches every group and thread without a filter", () => {
-    expect(archivedThreadGroupMatchesScope("anything", null)).toBe(true);
+    expect(archivedThreadGroupMatchesScope(archivedGroup("anything", []), null)).toBe(true);
     expect(archivedThreadMatchesScope(threadItem(laptopCheckout), null)).toBe(true);
   });
 
@@ -128,10 +136,34 @@ describe("archived scope matching", () => {
       environmentId: null,
       label: "T3 Code / All checkouts",
     });
-    expect(archivedThreadGroupMatchesScope(group.projectKey, filter)).toBe(true);
-    expect(archivedThreadGroupMatchesScope("other", filter)).toBe(false);
+    expect(archivedThreadGroupMatchesScope(archivedGroup(group.projectKey, []), filter)).toBe(true);
+    expect(archivedThreadGroupMatchesScope(archivedGroup("other", []), filter)).toBe(false);
     expect(archivedThreadMatchesScope(threadItem(laptopCheckout), filter)).toBe(true);
     expect(archivedThreadMatchesScope(threadItem(serverCheckout), filter)).toBe(true);
+  });
+
+  it("matches an archive group keyed differently for one of the selected checkouts", () => {
+    // Archive grouping also sees snapshot projects, which can carry a fresher
+    // repository identity than the live project and so land under another key.
+    const filter = resolveArchivedThreadScopeFilter({
+      ...base,
+      kind: "project",
+      group,
+      environmentId: null,
+      label: "T3 Code / All checkouts",
+    });
+    expect(
+      archivedThreadGroupMatchesScope(
+        archivedGroup("laptop:/repos/main", [laptopCheckout]),
+        filter,
+      ),
+    ).toBe(true);
+    expect(
+      archivedThreadGroupMatchesScope(
+        archivedGroup("laptop:/repos/elsewhere", [member("elsewhere", laptopId)]),
+        filter,
+      ),
+    ).toBe(false);
   });
 
   it("narrows threads by environment without touching group membership", () => {
@@ -141,7 +173,7 @@ describe("archived scope matching", () => {
       environmentId: serverId,
       label: "Server",
     });
-    expect(archivedThreadGroupMatchesScope("other", filter)).toBe(true);
+    expect(archivedThreadGroupMatchesScope(archivedGroup("other", []), filter)).toBe(true);
     expect(archivedThreadMatchesScope(threadItem(laptopCheckout), filter)).toBe(false);
     expect(archivedThreadMatchesScope(threadItem(serverCheckout), filter)).toBe(true);
   });
