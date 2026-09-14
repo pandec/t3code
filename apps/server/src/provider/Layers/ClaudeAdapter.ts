@@ -1,3 +1,4 @@
+// @effect-diagnostics nodeBuiltinImport:off
 import { providerThreadEnvironment } from "../ProviderThreadEnvironment.ts";
 /**
  * ClaudeAdapterLive - Scoped live implementation for the Claude Agent provider adapter.
@@ -7,6 +8,7 @@ import { providerThreadEnvironment } from "../ProviderThreadEnvironment.ts";
  *
  * @module ClaudeAdapterLive
  */
+
 import {
   type CanUseTool,
   type HookCallback,
@@ -78,6 +80,7 @@ import {
   CLAUDE_RESUME_COMPACTION_NEVER_ANSWER,
   formatClaudeResumeCompactionQuestion,
 } from "@t3tools/shared/claudeCompaction";
+import { HostProcessIsExecutable } from "@t3tools/shared/hostProcess";
 import * as Cause from "effect/Cause";
 import * as Crypto from "effect/Crypto";
 import * as DateTime from "effect/DateTime";
@@ -151,7 +154,7 @@ const encodeUnknownJsonStringExit = Schema.encodeUnknownExit(Schema.fromJsonStri
 const decodeUnknownJsonStringExit = Schema.decodeUnknownExit(Schema.fromJsonString(Schema.Unknown));
 const encodeHistoryArgs = Schema.encodeSync(Schema.fromJsonString(Schema.Unknown));
 const decodeHistoryFork = Schema.decodeSync(
-  Schema.fromJsonString(Schema.Struct({ sessionId: Schema.NonEmptyString })),
+  Schema.fromJsonString(Schema.Struct({ sessionId: Schema.String.check(Schema.isUUID()) })),
 );
 const decodeSessionMessages = Schema.decodeSync(
   Schema.fromJsonString(
@@ -5498,21 +5501,26 @@ export const makeClaudeAdapter = Effect.fn("makeClaudeAdapter")(function* (
     historySessionId: string,
     args: object,
   ) {
-    const historyWorkerPath = yield* path
-      .fromFileUrl(
-        new URL(
-          import.meta.url.endsWith(".ts")
-            ? "../../claudeHistoryWorker.ts"
-            : "./claudeHistoryWorker.mjs",
-          import.meta.url,
-        ),
-      )
-      .pipe(Effect.mapError((cause) => toRequestError(threadId, "session/history", cause)));
+    // SEA hosts the worker itself; Node and Electron run the bundled sibling entry.
+    const historyWorkerArguments = (yield* HostProcessIsExecutable)
+      ? ["__claude-history"]
+      : [
+          yield* path
+            .fromFileUrl(
+              new URL(
+                import.meta.url.endsWith(".ts")
+                  ? "../../claude-history-worker.ts"
+                  : "./claude-history-worker.mjs",
+                import.meta.url,
+              ),
+            )
+            .pipe(Effect.mapError((cause) => toRequestError(threadId, "session/history", cause))),
+        ];
     const result = yield* spawnAndCollect(
       process.execPath,
       ChildProcess.make(
         process.execPath,
-        [historyWorkerPath, method, historySessionId, encodeHistoryArgs(args)],
+        [...historyWorkerArguments, method, historySessionId, encodeHistoryArgs(args)],
         {
           env: {
             ...claudeEnvironment,

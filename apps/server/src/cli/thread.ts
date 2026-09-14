@@ -1064,12 +1064,13 @@ const threadNewCommand = Command.make("new", {
                   messageId,
                   sequence: result.sequence,
                   workspace: {
-                    mode: "new-worktree",
+                    mode:
+                      startedThread && !startedThread.worktreePath ? "checkout" : "new-worktree",
                     branch: startedThread?.branch ?? null,
                     worktreePath: startedThread?.worktreePath ?? null,
                   },
                 })
-              : `Created thread ${threadId} (${title}) in a new worktree${
+              : `Created thread ${threadId} (${title}) in ${startedThread && !startedThread.worktreePath ? "the project checkout" : "a new worktree"}${
                   startedThread?.worktreePath ? ` at ${startedThread.worktreePath}` : ""
                 }${
                   startedThread?.branch ? ` on branch ${startedThread.branch}` : ""

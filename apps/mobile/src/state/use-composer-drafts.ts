@@ -1584,7 +1584,7 @@ export async function revertComposerDraftAppend(
     );
     const attachments = [...latest.attachments];
     for (let index = appendedAttachments.length - 1; index >= 0; index -= 1) {
-      const attachment = appendedAttachments[index];
+      const attachment = appendedAttachments[index]!;
       const currentIndex = attachments.lastIndexOf(attachment);
       if (currentIndex >= 0) {
         attachments.splice(currentIndex, 1);

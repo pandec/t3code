@@ -441,8 +441,8 @@ describe("thread outbox", () => {
     };
     expect(encoded.schemaVersion).toBe(9);
     expect(encoded.attachments[0]).toMatchObject({
-      fileUri: message.attachments[0].fileUri,
-      previewUri: message.attachments[0].previewUri,
+      fileUri: message.attachments[0]!.fileUri,
+      previewUri: message.attachments[0]!.previewUri,
     });
     expect(decodeQueuedThreadMessage(encoded)).toEqual(message);
   });
@@ -506,7 +506,7 @@ describe("thread outbox", () => {
     expect(decodeQueuedThreadMessage(encoded).attachments).toEqual([
       {
         ...message.attachments[0],
-        previewUri: message.attachments[0].dataUrl,
+        previewUri: message.attachments[0]!.dataUrl,
       },
     ]);
   });

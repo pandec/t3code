@@ -382,6 +382,11 @@ Two further flags select a worktree explicitly, matching the workspace picker in
   worktree of the project's repository; the worktree's checked-out branch is recorded on the thread
   automatically, and an explicit `--branch <ref>` fails the command when it does not match.
 
+When worktrees are unavailable because the project is not a Git repository or has no initial
+commit, bootstrap starts in the project checkout. A failed setup script is reported, then the
+turn continues in the created worktree. Check the returned `workspace.mode` and
+`workspace.worktreePath` before relying on isolation.
+
 `thread new --json` always includes a `workspace` object (`mode` plus `branch`/`worktreePath`,
 both `null` for the plain checkout mode). In new-worktree mode — whether from the explicit flag or
 the configured default — the server creates the thread as part of the turn start, so
@@ -430,6 +435,24 @@ Status reports whether the selected local server is running, its origin and proc
 thread counts, running-thread count, and pending approval or user-input counts.
 
 Use `--base-dir <path>` consistently when managing a non-default T3 installation.
+
+## Updating the CLI and background service
+
+```bash
+t3 update [version] [--channel stable|nightly|preview] [--allow-downgrade] [--yes]
+t3 service restart
+t3 uninstall [--yes]
+```
+
+`t3 update` downloads a self-contained release and repoints the launcher and any installed
+background service. It asks before restarting that service; scripts must pass `--yes` to restart
+it immediately. If restart is deferred, `t3 service restart` activates the prepared version later.
+`service update` is deprecated and retains its older behavior of installing the invoking CLI's
+version. Use `t3 update` to fetch a newer release.
+
+`t3 uninstall` removes the owned launcher, downloaded versions, and background service, while
+keeping projects, threads, and settings. `t3 service uninstall` removes only the service.
+These commands print human-readable output and do not support `--json`.
 
 ## Triage — not an automation command
 

@@ -143,8 +143,10 @@ import * as ServerLifecycleEvents from "./serverLifecycleEvents.ts";
 import * as ServerRuntimeStartup from "./serverRuntimeStartup.ts";
 import * as ServerSettings from "./serverSettings.ts";
 import * as TerminalManager from "./terminal/Manager.ts";
+import { withTerminalOutputWindow } from "./terminal/OutputProtocol.ts";
 import * as PreviewAutomationBroker from "./mcp/PreviewAutomationBroker.ts";
 import * as DeviceService from "./device/DeviceService.ts";
+import { remoteSshDeviceHosts } from "./device/localSshDeviceHost.ts";
 import * as PreviewManager from "./preview/Manager.ts";
 import { issueAssetUrl } from "./assets/AssetAccess.ts";
 import { deletePendingAttachment, issueAttachmentUploadUrl } from "./assets/AttachmentUpload.ts";
@@ -160,6 +162,7 @@ import * as VcsProvisioningService from "./vcs/VcsProvisioningService.ts";
 import * as GitWorkflowService from "./git/GitWorkflowService.ts";
 import { linkCreatedPullRequest } from "./git/linkCreatedPullRequest.ts";
 import * as ReviewService from "./review/ReviewService.ts";
+import * as WorktreeSetupTracker from "./project/WorktreeSetupTracker.ts";
 import * as AgentSessionScanner from "./project/AgentSessionScanner.ts";
 import { importRecentAgentThreads } from "./project/AgentSessionImporter.ts";
 import * as ServerEnvironment from "./environment/ServerEnvironment.ts";
@@ -259,6 +262,12 @@ function projectEntriesFailureContext(error: WorkspaceEntries.WorkspaceEntriesEr
       return {
         failure: "workspace_root_not_directory",
         normalizedCwd: error.normalizedWorkspaceRoot,
+      };
+    case "WorkspaceEntriesReadDirectoryError":
+      return {
+        failure: "directory_list_failed",
+        ...(error.cwd !== undefined ? { normalizedCwd: error.cwd } : {}),
+        detail: error.message,
       };
     case "WorkspaceSearchIndexCreateFailed":
       return {
@@ -536,6 +545,8 @@ const makeWsRpcLayer = (
       const terminalManager = yield* TerminalManager.TerminalManager;
       const previewManager = yield* PreviewManager.PreviewManager;
       const deviceService = yield* DeviceService.DeviceService;
+      const deviceHostContext =
+        yield* Effect.context<Effect.Services<ReturnType<typeof remoteSshDeviceHosts>>>();
       const portDiscovery = yield* PortScanner.PortDiscovery;
       const providerRegistry = yield* ProviderRegistry.ProviderRegistry;
       const providerInstanceHealth = yield* ProviderInstanceHealth.ProviderInstanceHealth;
@@ -632,6 +643,7 @@ const makeWsRpcLayer = (
         }
         return true;
       });
+      const worktreeSetupTracker = yield* WorktreeSetupTracker.WorktreeSetupTracker;
       const agentSessionScanner = yield* AgentSessionScanner.AgentSessionScanner;
       const serverEnvironment = yield* ServerEnvironment.ServerEnvironment;
       const backgroundPolicy = yield* BackgroundPolicy.BackgroundPolicy;
@@ -666,6 +678,7 @@ const makeWsRpcLayer = (
       const sourceControlRepositories =
         yield* SourceControlRepositoryService.SourceControlRepositoryService;
       const pullRequests = yield* PullRequestService.PullRequestService;
+      const withPullRequestViewer = pullRequests.withRoutingCredential;
       const pullRequestSync = yield* PullRequestSyncReactor.PullRequestSyncReactor;
       const bootstrapCredentials = yield* PairingGrantStore.PairingGrantStore;
       const sessions = yield* SessionStore.SessionStore;
@@ -1903,9 +1916,18 @@ const makeWsRpcLayer = (
         [WS_METHODS.serverUpdateSettings]: ({ patch }) =>
           observeRpcEffect(
             WS_METHODS.serverUpdateSettings,
-            serverSettings
-              .updateSettings(patch)
-              .pipe(Effect.map(ServerSettings.redactServerSettingsForClient)),
+            Effect.gen(function* () {
+              const deviceHosts = patch.deviceHosts
+                ? yield* remoteSshDeviceHosts(patch.deviceHosts).pipe(
+                    Effect.provide(deviceHostContext),
+                  )
+                : undefined;
+              const settings = yield* serverSettings.updateSettings({
+                ...patch,
+                ...(deviceHosts ? { deviceHosts } : {}),
+              });
+              return ServerSettings.redactServerSettingsForClient(settings);
+            }),
             {
               "rpc.aggregate": "server",
             },
@@ -2054,14 +2076,34 @@ const makeWsRpcLayer = (
           observeRpcEffect(WS_METHODS.pullRequestsListStats, pullRequests.listStats(input), {
             "rpc.aggregate": "pull-requests",
           }),
+        [WS_METHODS.pullRequestsRoutingIdentity]: (input) =>
+          observeRpcEffect(
+            WS_METHODS.pullRequestsRoutingIdentity,
+            pullRequests.routingIdentity(input),
+            {
+              "rpc.aggregate": "pull-requests",
+            },
+          ),
+        [WS_METHODS.pullRequestsRouting]: (input) =>
+          observeRpcEffect(WS_METHODS.pullRequestsRouting, pullRequests.routing(input), {
+            "rpc.aggregate": "pull-requests",
+          }),
         [WS_METHODS.pullRequestsSummary]: (input) =>
-          observeRpcEffect(WS_METHODS.pullRequestsSummary, pullRequests.summary(input), {
-            "rpc.aggregate": "pull-requests",
-          }),
+          observeRpcEffect(
+            WS_METHODS.pullRequestsSummary,
+            withPullRequestViewer(input, pullRequests.summary(input)),
+            {
+              "rpc.aggregate": "pull-requests",
+            },
+          ),
         [WS_METHODS.pullRequestsStack]: (input) =>
-          observeRpcEffect(WS_METHODS.pullRequestsStack, pullRequests.stack(input), {
-            "rpc.aggregate": "pull-requests",
-          }),
+          observeRpcEffect(
+            WS_METHODS.pullRequestsStack,
+            withPullRequestViewer(input, pullRequests.stack(input)),
+            {
+              "rpc.aggregate": "pull-requests",
+            },
+          ),
         [WS_METHODS.pullRequestsLinkedThreads]: (input) =>
           observeRpcEffect(
             WS_METHODS.pullRequestsLinkedThreads,
@@ -2077,17 +2119,25 @@ const makeWsRpcLayer = (
             { "rpc.aggregate": "pull-requests" },
           ),
         [WS_METHODS.pullRequestsDetail]: (input) =>
-          observeRpcEffect(WS_METHODS.pullRequestsDetail, pullRequests.detail(input), {
-            "rpc.aggregate": "pull-requests",
-          }),
+          observeRpcEffect(
+            WS_METHODS.pullRequestsDetail,
+            withPullRequestViewer(input, pullRequests.detail(input)),
+            {
+              "rpc.aggregate": "pull-requests",
+            },
+          ),
         [WS_METHODS.pullRequestsActivity]: (input) =>
-          observeRpcEffect(WS_METHODS.pullRequestsActivity, pullRequests.activity(input), {
-            "rpc.aggregate": "pull-requests",
-          }),
+          observeRpcEffect(
+            WS_METHODS.pullRequestsActivity,
+            withPullRequestViewer(input, pullRequests.activity(input)),
+            {
+              "rpc.aggregate": "pull-requests",
+            },
+          ),
         [WS_METHODS.pullRequestsThreadComments]: (input) =>
           observeRpcEffect(
             WS_METHODS.pullRequestsThreadComments,
-            pullRequests.threadComments(input),
+            withPullRequestViewer(input, pullRequests.threadComments(input)),
             {
               "rpc.aggregate": "pull-requests",
             },
@@ -2095,61 +2145,75 @@ const makeWsRpcLayer = (
         [WS_METHODS.pullRequestsDiffFileContents]: (input) =>
           observeRpcEffect(
             WS_METHODS.pullRequestsDiffFileContents,
-            pullRequests.diffFileContents(input),
+            withPullRequestViewer(input, pullRequests.diffFileContents(input)),
             { "rpc.aggregate": "pull-requests" },
           ),
         [WS_METHODS.pullRequestsRunAction]: (input) =>
           observeRpcEffect(
             WS_METHODS.pullRequestsRunAction,
-            pullRequests
-              .runAction(input)
-              .pipe(
-                Effect.tap(() =>
-                  resolvePullRequestSyncKey(input).pipe(
-                    Effect.flatMap((key) =>
-                      key === null ? Effect.void : pullRequestSync.requestSync(key),
-                    ),
+            withPullRequestViewer(input, pullRequests.runAction(input)).pipe(
+              Effect.tap(() =>
+                resolvePullRequestSyncKey(input).pipe(
+                  Effect.flatMap((key) =>
+                    key === null ? Effect.void : pullRequestSync.requestSync(key),
                   ),
                 ),
               ),
+            ),
             { "rpc.aggregate": "pull-requests" },
           ),
         [WS_METHODS.pullRequestsUpdate]: (input) =>
-          observeRpcEffect(WS_METHODS.pullRequestsUpdate, pullRequests.update(input), {
-            "rpc.aggregate": "pull-requests",
-          }),
+          observeRpcEffect(
+            WS_METHODS.pullRequestsUpdate,
+            withPullRequestViewer(input, pullRequests.update(input)),
+            {
+              "rpc.aggregate": "pull-requests",
+            },
+          ),
         [WS_METHODS.pullRequestsComment]: (input) =>
-          observeRpcEffect(WS_METHODS.pullRequestsComment, pullRequests.comment(input), {
-            "rpc.aggregate": "pull-requests",
-          }),
+          observeRpcEffect(
+            WS_METHODS.pullRequestsComment,
+            withPullRequestViewer(input, pullRequests.comment(input)),
+            {
+              "rpc.aggregate": "pull-requests",
+            },
+          ),
         [WS_METHODS.pullRequestsUpdateComment]: (input) =>
           observeRpcEffect(
             WS_METHODS.pullRequestsUpdateComment,
-            pullRequests.updateComment(input),
+            withPullRequestViewer(input, pullRequests.updateComment(input)),
             {
               "rpc.aggregate": "pull-requests",
             },
           ),
         [WS_METHODS.pullRequestsSubmitReview]: (input) =>
-          observeRpcEffect(WS_METHODS.pullRequestsSubmitReview, pullRequests.submitReview(input), {
-            "rpc.aggregate": "pull-requests",
-          }),
+          observeRpcEffect(
+            WS_METHODS.pullRequestsSubmitReview,
+            withPullRequestViewer(input, pullRequests.submitReview(input)),
+            {
+              "rpc.aggregate": "pull-requests",
+            },
+          ),
         [WS_METHODS.pullRequestsReplyToThread]: (input) =>
           observeRpcEffect(
             WS_METHODS.pullRequestsReplyToThread,
-            pullRequests.replyToThread(input),
+            withPullRequestViewer(input, pullRequests.replyToThread(input)),
             { "rpc.aggregate": "pull-requests" },
           ),
         [WS_METHODS.pullRequestsSetThreadResolution]: (input) =>
           observeRpcEffect(
             WS_METHODS.pullRequestsSetThreadResolution,
-            pullRequests.setThreadResolution(input),
+            withPullRequestViewer(input, pullRequests.setThreadResolution(input)),
             { "rpc.aggregate": "pull-requests" },
           ),
         [WS_METHODS.pullRequestsSetReaction]: (input) =>
-          observeRpcEffect(WS_METHODS.pullRequestsSetReaction, pullRequests.setReaction(input), {
-            "rpc.aggregate": "pull-requests",
-          }),
+          observeRpcEffect(
+            WS_METHODS.pullRequestsSetReaction,
+            withPullRequestViewer(input, pullRequests.setReaction(input)),
+            {
+              "rpc.aggregate": "pull-requests",
+            },
+          ),
         [WS_METHODS.pullRequestsInvalidate]: (input) =>
           observeRpcEffect(
             WS_METHODS.pullRequestsInvalidate,
@@ -2177,25 +2241,29 @@ const makeWsRpcLayer = (
         [WS_METHODS.pullRequestsReviewerCandidates]: (input) =>
           observeRpcEffect(
             WS_METHODS.pullRequestsReviewerCandidates,
-            pullRequests.reviewerCandidates(input),
+            withPullRequestViewer(input, pullRequests.reviewerCandidates(input)),
             { "rpc.aggregate": "pull-requests" },
           ),
         [WS_METHODS.pullRequestsRequestReviewers]: (input) =>
           observeRpcEffect(
             WS_METHODS.pullRequestsRequestReviewers,
-            pullRequests.requestReviewers(input),
+            withPullRequestViewer(input, pullRequests.requestReviewers(input)),
             { "rpc.aggregate": "pull-requests" },
           ),
         [WS_METHODS.pullRequestsLabelCandidates]: (input) =>
           observeRpcEffect(
             WS_METHODS.pullRequestsLabelCandidates,
-            pullRequests.labelCandidates(input),
+            withPullRequestViewer(input, pullRequests.labelCandidates(input)),
             { "rpc.aggregate": "pull-requests" },
           ),
         [WS_METHODS.pullRequestsSetLabels]: (input) =>
-          observeRpcEffect(WS_METHODS.pullRequestsSetLabels, pullRequests.setLabels(input), {
-            "rpc.aggregate": "pull-requests",
-          }),
+          observeRpcEffect(
+            WS_METHODS.pullRequestsSetLabels,
+            withPullRequestViewer(input, pullRequests.setLabels(input)),
+            {
+              "rpc.aggregate": "pull-requests",
+            },
+          ),
         [WS_METHODS.sourceControlLookupRepository]: (input) =>
           observeRpcEffect(
             WS_METHODS.sourceControlLookupRepository,
@@ -2449,6 +2517,20 @@ const makeWsRpcLayer = (
             {
               "rpc.aggregate": "vcs",
             },
+          ),
+        [WS_METHODS.subscribeWorktreeSetup]: (input) =>
+          observeRpcStream(
+            WS_METHODS.subscribeWorktreeSetup,
+            worktreeSetupTracker.stream(input.threadId),
+            { "rpc.aggregate": "vcs" },
+          ),
+        [WS_METHODS.worktreeSetupCancel]: (input) =>
+          observeRpcEffect(
+            WS_METHODS.worktreeSetupCancel,
+            worktreeSetupTracker
+              .cancel(input.threadId)
+              .pipe(Effect.map((cancelled) => ({ cancelled }))),
+            { "rpc.aggregate": "vcs" },
           ),
         [WS_METHODS.vcsRefreshStatus]: (input) =>
           observeRpcEffect(
@@ -3017,8 +3099,14 @@ export const websocketRpcRouteLayer = Layer.unwrap(
         const clientAnalyticsProps = readClientAnalyticsProps(request);
         yield* sessions.recordClientConnection(session.sessionId, clientOrigin);
         yield* analytics.record("client.connected", clientAnalyticsProps);
-        const rpcWebSocketHttpEffect = yield* RpcServer.toHttpEffectWebsocket(WsRpcGroup, {
-          disableTracing: true,
+        const rpcWebSocketHttpEffect = yield* Effect.gen(function* () {
+          const { protocol, httpEffect } = yield* RpcServer.makeProtocolWithHttpEffectWebsocket;
+          yield* RpcServer.make(WsRpcGroup, { disableTracing: true }).pipe(
+            Effect.provideService(RpcServer.Protocol, withTerminalOutputWindow(protocol)),
+            Effect.forkScoped,
+          );
+          // @effect-diagnostics-next-line returnEffectInGen:off
+          return httpEffect;
         }).pipe(
           Effect.provide(
             makeWsRpcLayer(

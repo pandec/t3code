@@ -10,13 +10,19 @@ function makeShell(input: {
   approvals?: boolean;
   input?: boolean;
   archivedAt?: string | null;
+  sessionError?: boolean;
+  turnError?: boolean;
 }): EnvironmentThreadShell {
   return {
     id: input.id,
     environmentId: input.environmentId ?? "env-1",
     title: `Thread ${input.id}`,
     archivedAt: input.archivedAt ?? null,
-    latestTurn: { turnId: input.turnId ?? `${input.id}-turn` },
+    latestTurn: {
+      turnId: input.turnId ?? `${input.id}-turn`,
+      state: input.turnError ? "error" : "running",
+    },
+    session: input.sessionError ? { status: "error" } : null,
     hasPendingApprovals: input.approvals ?? false,
     hasPendingUserInput: input.input ?? false,
   } as unknown as EnvironmentThreadShell;
@@ -25,6 +31,7 @@ function makeShell(input: {
 const idle = (id: string) => makeShell({ id });
 const needsInput = (id: string) => makeShell({ id, input: true });
 const needsApproval = (id: string) => makeShell({ id, approvals: true });
+const failed = (id: string) => makeShell({ id, turnError: true });
 
 describe("collectInputRequestCandidates", () => {
   it("fires when a known thread starts waiting for input or approval", () => {
@@ -34,6 +41,15 @@ describe("collectInputRequestCandidates", () => {
     expect(collectInputRequestCandidates([idle("a")], [needsApproval("a")])).toEqual([
       { environmentId: "env-1", threadId: "a", kind: "approval", title: "Thread a" },
     ]);
+  });
+
+  it("fires when a known thread's session or latest turn fails", () => {
+    expect(collectInputRequestCandidates([idle("a")], [failed("a")])).toEqual([
+      { environmentId: "env-1", threadId: "a", kind: "failed", title: "Thread a" },
+    ]);
+    expect(
+      collectInputRequestCandidates([idle("a")], [makeShell({ id: "a", sessionError: true })]),
+    ).toEqual([{ environmentId: "env-1", threadId: "a", kind: "failed", title: "Thread a" }]);
   });
 
   it("stays silent for threads absent from the previous list (initial sync, reconnect)", () => {
@@ -91,6 +107,10 @@ describe("buildInputRequestCopy", () => {
     expect(buildInputRequestCopy({ kind: "input", title: "  " })).toEqual({
       title: "Input needed",
       body: "A thread is waiting for input.",
+    });
+    expect(buildInputRequestCopy({ kind: "failed", title: "  " })).toEqual({
+      title: "Thread failed",
+      body: "A thread failed.",
     });
   });
 });

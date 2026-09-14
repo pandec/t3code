@@ -26,6 +26,7 @@ import {
   ThreadId,
   ProviderInstanceId,
 } from "@t3tools/contracts";
+import { HostProcessIsExecutable } from "@t3tools/shared/hostProcess";
 import { createModelSelection } from "@t3tools/shared/model";
 import { assert, describe, it } from "@effect/vitest";
 import * as Cause from "effect/Cause";
@@ -1449,68 +1450,89 @@ describe("ClaudeAdapterLive", () => {
     }).pipe(Effect.provide(harness.layer));
   });
 
-  it.effect("runs fork history in a worker with the live session's pinned config directory", () => {
-    const originalConfigDir = process.env.CLAUDE_CONFIG_DIR;
-    const commands: Array<{ args: ReadonlyArray<string>; options: { env: NodeJS.ProcessEnv } }> =
-      [];
-    const spawner = ChildProcessSpawner.make((command) => {
-      commands.push(command as unknown as (typeof commands)[number]);
-      return Effect.succeed(
-        ChildProcessSpawner.makeHandle({
-          pid: ChildProcessSpawner.ProcessId(1),
-          exitCode: Effect.succeed(ChildProcessSpawner.ExitCode(0)),
-          isRunning: Effect.succeed(false),
-          kill: () => Effect.void,
-          unref: Effect.succeed(Effect.void),
-          stdin: Sink.drain,
-          stdout: Stream.encodeText(Stream.make(JSON.stringify({ sessionId: "copied-session" }))),
-          stderr: Stream.empty,
-          all: Stream.empty,
-          getInputFd: () => Sink.drain,
-          getOutputFd: () => Stream.empty,
-        }),
+  for (const executable of [false, true]) {
+    it.effect(`runs fork history with pinned config in ${executable ? "SEA" : "Node"}`, () => {
+      const originalConfigDir = process.env.CLAUDE_CONFIG_DIR;
+      const commands: Array<{ args: ReadonlyArray<string>; options: { env: NodeJS.ProcessEnv } }> =
+        [];
+      const spawner = ChildProcessSpawner.make((command) => {
+        commands.push(command as unknown as (typeof commands)[number]);
+        return Effect.succeed(
+          ChildProcessSpawner.makeHandle({
+            pid: ChildProcessSpawner.ProcessId(1),
+            exitCode: Effect.succeed(ChildProcessSpawner.ExitCode(0)),
+            isRunning: Effect.succeed(false),
+            kill: () => Effect.void,
+            unref: Effect.succeed(Effect.void),
+            stdin: Sink.drain,
+            stdout: Stream.encodeText(
+              Stream.make(JSON.stringify({ sessionId: "22222222-2222-4222-8222-222222222222" })),
+            ),
+            stderr: Stream.empty,
+            all: Stream.empty,
+            getInputFd: () => Sink.drain,
+            getOutputFd: () => Stream.empty,
+          }),
+        );
+      });
+      const harness = makeHarness({
+        spawner,
+        environment: { ...process.env, CLAUDE_CONFIG_DIR: "relative-claude" },
+      });
+      return Effect.gen(function* () {
+        const adapter = yield* ClaudeAdapter;
+        const session = yield* adapter.startSession({
+          threadId: THREAD_ID,
+          cwd: "/tmp/source-project",
+          runtimeMode: "full-access",
+        });
+        yield* adapter.forkSession!({
+          sourceThreadId: THREAD_ID,
+          destinationThreadId: ThreadId.make("fork-destination"),
+          sourceResumeCursor: session.resumeCursor,
+          cwd: "/tmp/destination-project",
+          runtimeMode: "full-access",
+        });
+        assert.equal(commands.length, 1);
+        if (executable) {
+          assert.equal(commands[0]!.args[0], "__claude-history");
+        } else {
+          assert.match(commands[0]!.args[0]!, /claude-history-worker\.(ts|mjs)$/);
+        }
+        assert.equal(commands[0]!.args[1], "forkSession");
+        assert.equal(
+          commands[0]!.options.env.CLAUDE_CONFIG_DIR,
+          "/tmp/source-project/relative-claude",
+        );
+        assert.equal(commands[0]!.options.env.ELECTRON_RUN_AS_NODE, "1");
+        assert.equal(process.env.CLAUDE_CONFIG_DIR, originalConfigDir);
+      }).pipe(
+        Effect.provideService(HostProcessIsExecutable, executable),
+        Effect.provide(harness.layer),
       );
     });
-    const harness = makeHarness({
-      spawner,
-      environment: { ...process.env, CLAUDE_CONFIG_DIR: "relative-claude" },
-    });
-    return Effect.gen(function* () {
-      const adapter = yield* ClaudeAdapter;
-      const session = yield* adapter.startSession({
-        threadId: THREAD_ID,
-        cwd: "/tmp/source-project",
-        runtimeMode: "full-access",
-      });
-      yield* adapter.forkSession!({
-        sourceThreadId: THREAD_ID,
-        destinationThreadId: ThreadId.make("fork-destination"),
-        sourceResumeCursor: session.resumeCursor,
-        cwd: "/tmp/destination-project",
-        runtimeMode: "full-access",
-      });
-      assert.equal(commands.length, 1);
-      assert.match(commands[0]!.args[0]!, /claudeHistoryWorker\.(ts|mjs)$/);
-      assert.equal(commands[0]!.args[1], "forkSession");
-      assert.equal(
-        commands[0]!.options.env.CLAUDE_CONFIG_DIR,
-        "/tmp/source-project/relative-claude",
-      );
-      assert.equal(commands[0]!.options.env.ELECTRON_RUN_AS_NODE, "1");
-      assert.equal(process.env.CLAUDE_CONFIG_DIR, originalConfigDir);
-    }).pipe(Effect.provide(harness.layer));
-  });
+  }
 
   it.effect("remaps full-conversation fork boundaries and rejects invalid fork output", () => {
     let invalidFork = false;
     const sourceId = "11111111-1111-4111-8111-111111111111";
     const destinationId = "22222222-2222-4222-8222-222222222222";
+    const sourceMessageIds = [
+      "33333333-3333-4333-8333-333333333331",
+      "33333333-3333-4333-8333-333333333332",
+      "33333333-3333-4333-8333-333333333333",
+    ];
+    const copiedMessageIds = [
+      "44444444-4444-4444-8444-444444444441",
+      "44444444-4444-4444-8444-444444444442",
+      "44444444-4444-4444-8444-444444444443",
+    ];
     const harness = makeHarness({
-      forkSession: async () => ({ sessionId: invalidFork ? "" : destinationId }),
+      forkSession: async () => ({ sessionId: invalidFork ? "invalid-session-id" : destinationId }),
       getSessionMessages: async (sessionId) =>
-        ["first", "steer", "second"].map((id) => ({
+        sourceMessageIds.map((id, index) => ({
           type: "user" as const,
-          uuid: sessionId === sourceId ? id : `copied-${id}`,
+          uuid: sessionId === sourceId ? id : copiedMessageIds[index]!,
           session_id: sessionId,
           parent_tool_use_id: null,
           parent_agent_id: null,
@@ -1525,7 +1547,7 @@ describe("ClaudeAdapterLive", () => {
         sourceResumeCursor: {
           resume: sourceId,
           turnCount: 2,
-          turnStartMessageIds: ["first", "second"],
+          turnStartMessageIds: [sourceMessageIds[0]!, sourceMessageIds[2]!],
         },
         cwd: "/tmp/project",
         runtimeMode: "full-access" as const,
@@ -1535,7 +1557,7 @@ describe("ClaudeAdapterLive", () => {
         threadId: "destination-thread",
         resume: destinationId,
         turnCount: 2,
-        turnStartMessageIds: ["copied-first", "copied-second"],
+        turnStartMessageIds: [copiedMessageIds[0], copiedMessageIds[2]],
       });
       invalidFork = true;
       const failed = yield* adapter.forkSession!(input).pipe(Effect.result);
@@ -8610,6 +8632,7 @@ describe("ClaudeAdapterLive", () => {
   });
 
   it.effect("rewinds a steered Claude turn after recovery and preserves fork boundaries", () => {
+    const copiedFirstMessageId = "550e8400-e29b-41d4-a716-446655440031";
     const forkCalls: Array<Parameters<NonNullable<ClaudeAdapterLiveOptions["forkSession"]>>> = [];
     let firstTurnId = "";
     let secondTurnId = "";
@@ -8690,7 +8713,11 @@ describe("ClaudeAdapterLive", () => {
           },
         ];
         return sessionId.endsWith("0020")
-          ? history.slice(0, 4).map((message) => ({ ...message, uuid: `fork-${message.uuid}` }))
+          ? history.slice(0, 4).map((message, index) => ({
+              ...message,
+              uuid:
+                index === 0 ? copiedFirstMessageId : `550e8400-e29b-41d4-a716-44665544004${index}`,
+            }))
           : legacyHistory
             ? history.slice(0, 6)
             : missingBoundary
@@ -8815,7 +8842,7 @@ describe("ClaudeAdapterLive", () => {
         threadId: session.threadId,
         resume: "550e8400-e29b-41d4-a716-446655440020",
         turnCount: 1,
-        turnStartMessageIds: [`fork-${firstTurnId}`],
+        turnStartMessageIds: [copiedFirstMessageId],
       });
 
       yield* adapter.rollbackThread(session.threadId, 2);

@@ -28,6 +28,8 @@ import { appBlurTargetRef } from "./lib/appBlurTarget";
 import { useMobileNavigationTheme } from "./lib/useMobileNavigationTheme";
 import { MobileDiagnosticsCoordinator } from "./diagnostics/MobileDiagnosticsCoordinator";
 
+import { SubscriptionUsageCoordinator } from "./widgets/SubscriptionUsageCoordinator";
+
 import "../global.css";
 
 if (process.env.EXPO_PUBLIC_SHOWCASE === "1") {
@@ -102,6 +104,7 @@ function AppContent() {
       <ThreadPrewarmCoordinator />
       <ComposerDraftPersistenceCoordinator />
       <MobileDiagnosticsCoordinator />
+      <SubscriptionUsageCoordinator />
       <GestureHandlerRootView className="flex-1">
         <KeyboardProvider statusBarTranslucent>
           <KeyboardStickyResetCoordinator />

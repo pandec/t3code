@@ -17,6 +17,7 @@ import {
 } from "~/components/ui/sheet";
 import { Skeleton } from "~/components/ui/skeleton";
 import { Tooltip, TooltipPopup, TooltipTrigger } from "~/components/ui/tooltip";
+import { useResizeDrag } from "~/hooks/useResizeDrag";
 import { useIsMobile } from "~/hooks/useMediaQuery";
 import { getLocalStorageItem, setLocalStorageItem } from "~/hooks/useLocalStorage";
 import { resolveSidebarState, type ResponsiveSidebarState } from "./sidebarState";
@@ -78,20 +79,10 @@ type SidebarResolvedResizableOptions = {
 };
 
 type SidebarResizeState = {
-  moved: boolean;
-  // Captured at pointer-down: a drag settles against the configuration that
-  // started it, so options changing mid-drag cannot redirect where the result
-  // is persisted or which callback hears about it.
-  options: SidebarResolvedResizableOptions;
-  pointerId: number;
   pendingWidth: number;
   rail: HTMLButtonElement;
-  rafId: number | null;
   sidebarRoot: HTMLElement;
   side: "left" | "right";
-  startWidth: number;
-  startX: number;
-  transitionTargets: HTMLElement[];
   width: number;
   wrapper: HTMLElement;
 };
@@ -417,6 +408,7 @@ function SidebarRail({
   onClick,
   onDoubleClick,
   onPointerCancel,
+  onLostPointerCapture,
   onPointerDown,
   onPointerMove,
   onPointerUp,
@@ -426,7 +418,7 @@ function SidebarRail({
   const sidebarInstance = React.use(SidebarInstanceContext);
   const railRef = React.useRef<HTMLButtonElement | null>(null);
   const suppressClickRef = React.useRef(false);
-  const resizeStateRef = React.useRef<SidebarResizeState | null>(null);
+  const resizingRef = React.useRef(false);
   const hydratedStorageKeyRef = React.useRef<string | null>(null);
   const observedStorageKeyRef = React.useRef<string | null>(null);
   // The width the user actually asked for, kept unclamped so a window that
@@ -439,154 +431,68 @@ function SidebarRail({
   const canResize = resolvedResizable !== null && open;
   const railLabel = canResize ? "Resize Sidebar" : "Toggle Sidebar";
   const railTitle = canResize ? "Drag to resize sidebar" : "Toggle Sidebar";
+  const resize = useResizeDrag<HTMLButtonElement>((event) => {
+    if (!resolvedResizable || !open) return null;
+    const rail = event.currentTarget;
+    const wrapper = rail.closest<HTMLElement>("[data-slot='sidebar-wrapper']");
+    const sidebarRoot = rail.closest<HTMLElement>("[data-slot='sidebar']");
+    const sidebarContainer = sidebarRoot?.querySelector<HTMLElement>(
+      "[data-slot='sidebar-container']",
+    );
+    if (!wrapper || !sidebarRoot || !sidebarContainer) return null;
 
-  const stopResize = React.useCallback((pointerId: number) => {
-    const resizeState = resizeStateRef.current;
-    if (!resizeState) {
-      return;
-    }
-    if (resizeState.rafId !== null) {
-      window.cancelAnimationFrame(resizeState.rafId);
-      resizeState.rafId = null;
-    }
-    const options = resizeState.options;
-    applyPendingSidebarResize(resizeState, options);
-    resizeState.transitionTargets.forEach((element) => {
-      element.style.removeProperty("transition-duration");
+    const options = resolvedResizable;
+    const side = sidebarInstance?.side ?? "left";
+    const width = clampSidebarWidth(
+      sidebarContainer.getBoundingClientRect().width,
+      resolvedResizable,
+    );
+    const transitionTargets = [
+      sidebarRoot.querySelector<HTMLElement>("[data-slot='sidebar-gap']"),
+      sidebarContainer,
+    ].filter((element): element is HTMLElement => element !== null);
+    transitionTargets.forEach((element) => {
+      element.style.setProperty("transition-duration", "0ms");
     });
-    if (options.storageKey && typeof window !== "undefined") {
-      setLocalStorageItem(options.storageKey, resizeState.width, Schema.Finite);
-    }
-    preferredWidthRef.current = {
-      storageKey: options.storageKey,
-      width: resizeState.width,
+    wrapper.style.setProperty("--sidebar-width", `${width}px`);
+
+    const state: SidebarResizeState = {
+      width,
+      pendingWidth: width,
+      rail,
+      side,
+      sidebarRoot,
+      wrapper,
     };
-    options.onResize?.(resizeState.width);
-    resizeStateRef.current = null;
-    if (resizeState.rail.hasPointerCapture(pointerId)) {
-      resizeState.rail.releasePointerCapture(pointerId);
-    }
-    document.body.style.removeProperty("cursor");
-    document.body.style.removeProperty("user-select");
-  }, []);
-
-  const handlePointerDown = React.useCallback(
-    (event: React.PointerEvent<HTMLButtonElement>) => {
-      onPointerDown?.(event);
-      if (event.defaultPrevented) return;
-      if (!resolvedResizable || !open || event.button !== 0) return;
-
-      const wrapper = event.currentTarget.closest<HTMLElement>("[data-slot='sidebar-wrapper']");
-      const sidebarRoot = event.currentTarget.closest<HTMLElement>("[data-slot='sidebar']");
-      if (!wrapper || !sidebarRoot) {
-        return;
-      }
-
-      const sidebarContainer = sidebarRoot.querySelector<HTMLElement>(
-        "[data-slot='sidebar-container']",
-      );
-      if (!sidebarContainer) {
-        return;
-      }
-
-      const startWidth = sidebarContainer.getBoundingClientRect().width;
-      const initialWidth = clampSidebarWidth(startWidth, resolvedResizable);
-      const transitionTargets = [
-        sidebarRoot.querySelector<HTMLElement>("[data-slot='sidebar-gap']"),
-        sidebarRoot.querySelector<HTMLElement>("[data-slot='sidebar-container']"),
-      ].filter((element): element is HTMLElement => element !== null);
-      transitionTargets.forEach((element) => {
-        element.style.setProperty("transition-duration", "0ms");
-      });
-
-      event.preventDefault();
-      event.stopPropagation();
-      resizeStateRef.current = {
-        moved: false,
-        options: resolvedResizable,
-        pointerId: event.pointerId,
-        pendingWidth: initialWidth,
-        rail: event.currentTarget,
-        rafId: null,
-        sidebarRoot,
-        side: sidebarInstance?.side ?? "left",
-        startWidth: initialWidth,
-        startX: event.clientX,
-        transitionTargets,
-        width: initialWidth,
-        wrapper,
-      };
-      wrapper.style.setProperty("--sidebar-width", `${initialWidth}px`);
-      event.currentTarget.setPointerCapture(event.pointerId);
-      document.body.style.cursor = "col-resize";
-      document.body.style.userSelect = "none";
-    },
-    [onPointerDown, open, resolvedResizable, sidebarInstance?.side],
-  );
-
-  const handlePointerMove = React.useCallback(
-    (event: React.PointerEvent<HTMLButtonElement>) => {
-      onPointerMove?.(event);
-      if (event.defaultPrevented) return;
-      const resizeState = resizeStateRef.current;
-      if (!resizeState || resizeState.pointerId !== event.pointerId || !resolvedResizable) return;
-
-      event.preventDefault();
-      const delta =
-        resizeState.side === "right"
-          ? resizeState.startX - event.clientX
-          : event.clientX - resizeState.startX;
-      if (Math.abs(delta) > 2) {
-        resizeState.moved = true;
-      }
-      resizeState.pendingWidth = clampSidebarWidth(
-        resizeState.startWidth + delta,
-        resolvedResizable,
-      );
-      if (resizeState.rafId !== null) {
-        return;
-      }
-
-      resizeState.rafId = window.requestAnimationFrame(() => {
-        const activeResizeState = resizeStateRef.current;
-        if (!activeResizeState || !resolvedResizable) return;
-
-        activeResizeState.rafId = null;
-        applyPendingSidebarResize(activeResizeState, activeResizeState.options);
-      });
-    },
-    [onPointerMove, resolvedResizable],
-  );
-
-  const endResizeInteraction = React.useCallback(
-    (event: React.PointerEvent<HTMLButtonElement>) => {
-      const resizeState = resizeStateRef.current;
-      if (!resizeState || resizeState.pointerId !== event.pointerId) return;
-
-      event.preventDefault();
-      suppressClickRef.current = resizeState.moved;
-      stopResize(event.pointerId);
-    },
-    [stopResize],
-  );
-
-  const handlePointerUp = React.useCallback(
-    (event: React.PointerEvent<HTMLButtonElement>) => {
-      onPointerUp?.(event);
-      if (event.defaultPrevented) return;
-      endResizeInteraction(event);
-    },
-    [endResizeInteraction, onPointerUp],
-  );
-
-  const handlePointerCancel = React.useCallback(
-    (event: React.PointerEvent<HTMLButtonElement>) => {
-      onPointerCancel?.(event);
-      if (event.defaultPrevented) return;
-      endResizeInteraction(event);
-    },
-    [endResizeInteraction, onPointerCancel],
-  );
+    resizingRef.current = true;
+    return {
+      width,
+      edge: side === "left" ? "right" : "left",
+      resize(value) {
+        state.pendingWidth = clampSidebarWidth(value, options);
+        applyPendingSidebarResize(state, options);
+        return state.width;
+      },
+      finish(finalWidth, moved) {
+        suppressClickRef.current = moved;
+        preferredWidthRef.current = { storageKey: options.storageKey, width: finalWidth };
+        if (options.storageKey) {
+          try {
+            setLocalStorageItem(options.storageKey, finalWidth, Schema.Finite);
+          } catch (error) {
+            console.error("Could not persist sidebar width.", error);
+          }
+        }
+        options.onResize?.(finalWidth);
+      },
+      cleanup() {
+        resizingRef.current = false;
+        transitionTargets.forEach((element) => {
+          element.style.removeProperty("transition-duration");
+        });
+      },
+    };
+  });
 
   const handleClick = React.useCallback(
     (event: React.MouseEvent<HTMLButtonElement>) => {
@@ -638,7 +544,7 @@ function SidebarRail({
     if (hydratedStorageKeyRef.current === storageKey) return;
     // A drag owns the width until it settles, and it settles against the options
     // it began with — so restoring waits rather than racing it.
-    if (resizeStateRef.current) return;
+    if (resizingRef.current) return;
     const rail = railRef.current;
     if (!rail) return;
     const wrapper = rail.closest<HTMLElement>("[data-slot='sidebar-wrapper']");
@@ -668,7 +574,7 @@ function SidebarRail({
   React.useLayoutEffect(() => {
     if (!resolvedResizable || typeof window === "undefined") return;
     // Never fight a drag in progress — the pointer owns the width until it settles.
-    if (resizeStateRef.current) return;
+    if (resizingRef.current) return;
     const rail = railRef.current;
     if (!rail) return;
     const wrapper = rail.closest<HTMLElement>("[data-slot='sidebar-wrapper']");
@@ -718,20 +624,6 @@ function SidebarRail({
     resolvedResizable.onResize?.(clampedWidth);
   });
 
-  React.useEffect(() => {
-    return () => {
-      const resizeState = resizeStateRef.current;
-      if (resizeState?.rafId != null) {
-        window.cancelAnimationFrame(resizeState.rafId);
-      }
-      resizeState?.transitionTargets.forEach((element) => {
-        element.style.removeProperty("transition-duration");
-      });
-      document.body.style.removeProperty("cursor");
-      document.body.style.removeProperty("user-select");
-    };
-  }, []);
-
   return (
     <Tooltip>
       <TooltipTrigger
@@ -753,10 +645,26 @@ function SidebarRail({
             data-slot="sidebar-rail"
             onClick={handleClick}
             onDoubleClick={handleDoubleClick}
-            onPointerCancel={handlePointerCancel}
-            onPointerDown={handlePointerDown}
-            onPointerMove={handlePointerMove}
-            onPointerUp={handlePointerUp}
+            onLostPointerCapture={(event) => {
+              onLostPointerCapture?.(event);
+              if (!event.defaultPrevented) resize.onLostPointerCapture(event);
+            }}
+            onPointerCancel={(event) => {
+              onPointerCancel?.(event);
+              if (!event.defaultPrevented) resize.onPointerCancel(event);
+            }}
+            onPointerDown={(event) => {
+              onPointerDown?.(event);
+              if (!event.defaultPrevented) resize.onPointerDown(event);
+            }}
+            onPointerMove={(event) => {
+              onPointerMove?.(event);
+              if (!event.defaultPrevented) resize.onPointerMove(event);
+            }}
+            onPointerUp={(event) => {
+              onPointerUp?.(event);
+              if (!event.defaultPrevented) resize.onPointerUp(event);
+            }}
             ref={railRef}
             tabIndex={-1}
             type="button"

@@ -1,6 +1,8 @@
 import { assert, describe, it } from "@effect/vitest";
 import * as Crypto from "effect/Crypto";
 import * as Effect from "effect/Effect";
+import * as Deferred from "effect/Deferred";
+import * as Fiber from "effect/Fiber";
 import * as Layer from "effect/Layer";
 import {
   CommandId,
@@ -12,6 +14,8 @@ import {
 } from "@t3tools/contracts";
 
 import * as GitWorkflowService from "../../git/GitWorkflowService.ts";
+import * as WorktreeSetupTracker from "../../project/WorktreeSetupTracker.ts";
+import * as TerminalManager from "../../terminal/Manager.ts";
 import * as ProjectSetupScriptRunner from "../../project/ProjectSetupScriptRunner.ts";
 import * as VcsStatusBroadcaster from "../../vcs/VcsStatusBroadcaster.ts";
 import * as OrchestrationEngine from "./OrchestrationEngine.ts";
@@ -81,6 +85,8 @@ const makeLayer = (input: {
   readonly projectSetupScriptRunner?: Partial<
     ProjectSetupScriptRunner.ProjectSetupScriptRunner["Service"]
   >;
+  readonly tracker?: Partial<WorktreeSetupTracker.WorktreeSetupTracker["Service"]>;
+  readonly terminalManager?: Partial<TerminalManager.TerminalManager["Service"]>;
   readonly failTurnStart?: boolean;
   readonly failThreadDelete?: boolean;
 }) =>
@@ -101,6 +107,9 @@ const makeLayer = (input: {
     ),
     Layer.provide(
       Layer.mock(GitWorkflowService.GitWorkflowService)({
+        isRepository: () => Effect.succeed(true),
+        hasCommit: () => Effect.succeed(true),
+        removeWorktree: () => Effect.void,
         localStatus: () => localStatusWithRef("dev"),
         createWorktree: (request) =>
           Effect.succeed({
@@ -130,6 +139,19 @@ const makeLayer = (input: {
         drainThrough: () => Effect.void,
       }),
     ),
+    Layer.provide(
+      Layer.mock(WorktreeSetupTracker.WorktreeSetupTracker)({
+        begin: () => Effect.void,
+        update: () => Effect.void,
+        stage: () => Effect.void,
+        stageStatus: () => Effect.void,
+        appendTail: () => Effect.void,
+        finish: () => Effect.void,
+        markUncancellable: () => Effect.void,
+        ...input.tracker,
+      }),
+    ),
+    Layer.provide(Layer.mock(TerminalManager.TerminalManager)({ ...input.terminalManager })),
     Layer.provide(testCryptoLayer),
   );
 
@@ -208,6 +230,7 @@ describe("TurnStartBootstrap", () => {
                   status: "started" as const,
                   scriptId: "script-1",
                   scriptName: "Setup",
+                  scriptCommand: "bun install",
                   terminalId: "terminal-1",
                   cwd: "/tmp/worktrees/t3code/test-branch",
                 }),
@@ -470,6 +493,159 @@ describe("TurnStartBootstrap", () => {
 
       assert.equal(result._tag, "OrchestrationDispatchCommandError");
       assert.deepEqual(dispatched, []);
+    }),
+  );
+
+  for (const missing of ["repository", "commit"] as const) {
+    it.effect(`uses the project checkout when the ${missing} is missing`, () =>
+      Effect.gen(function* () {
+        const dispatched: Array<OrchestrationCommand> = [];
+        yield* Effect.gen(function* () {
+          const bootstrap = yield* TurnStartBootstrap.TurnStartBootstrap;
+          yield* bootstrap.dispatchTurnStart(
+            makeTurnStartCommand({
+              createThread: createThreadBootstrap,
+              prepareWorktree: { projectCwd: "/tmp/project", baseBranch: "main", branch: "test" },
+            }),
+          );
+        }).pipe(
+          Effect.provide(
+            makeLayer({
+              dispatched,
+              gitWorkflow: {
+                isRepository: () => Effect.succeed(missing !== "repository"),
+                hasCommit: () => Effect.succeed(false),
+                createWorktree: () => Effect.die("must use the checkout"),
+              },
+            }),
+          ),
+        );
+        assert.deepEqual(
+          dispatched.map((command) => command.type),
+          ["thread.create", "thread.turn.start"],
+        );
+      }),
+    );
+  }
+
+  it.effect("waits for tracked setup completion before dispatching the first turn", () =>
+    Effect.gen(function* () {
+      const dispatched: Array<OrchestrationCommand> = [];
+      const waiting = yield* Deferred.make<void>();
+      const complete = yield* Deferred.make<{ exitCode: number | null; durationMs: number }>();
+      const stages: Array<string> = [];
+      yield* Effect.gen(function* () {
+        const bootstrap = yield* TurnStartBootstrap.TurnStartBootstrap;
+        const dispatch = yield* Effect.forkChild(
+          bootstrap.dispatchTurnStart(
+            makeTurnStartCommand({
+              createThread: createThreadBootstrap,
+              prepareWorktree: { projectCwd: "/tmp/project", baseBranch: "main", branch: "test" },
+              runSetupScript: true,
+            }),
+          ),
+        );
+        yield* Deferred.await(waiting);
+        assert.isFalse(dispatched.some((command) => command.type === "thread.turn.start"));
+        yield* Deferred.succeed(complete, { exitCode: 1, durationMs: 10 });
+        yield* Fiber.join(dispatch);
+        assert.equal(dispatched.at(-1)?.type, "thread.turn.start");
+        assert.include(stages, "setup-script:failed");
+        assert.include(stages, "agent:done");
+      }).pipe(
+        Effect.provide(
+          makeLayer({
+            dispatched,
+            tracker: {
+              stageStatus: (_threadId, stage, status) =>
+                Effect.sync(() => {
+                  stages.push(`${stage}:${status}`);
+                }),
+            },
+            projectSetupScriptRunner: {
+              runForThread: () =>
+                Effect.succeed({
+                  status: "started" as const,
+                  scriptId: "script",
+                  scriptName: "Setup",
+                  scriptCommand: "install",
+                  terminalId: "terminal",
+                  cwd: "/tmp/worktrees/test",
+                  completion: Deferred.succeed(waiting, undefined).pipe(
+                    Effect.andThen(Deferred.await(complete)),
+                  ),
+                }),
+            },
+          }),
+        ),
+      );
+    }),
+  );
+
+  it.effect("cancels setup, closes its terminal, and removes the created thread and worktree", () =>
+    Effect.gen(function* () {
+      const dispatched: Array<OrchestrationCommand> = [];
+      const setupFiber = yield* Deferred.make<Fiber.Fiber<unknown, unknown>>();
+      const waiting = yield* Deferred.make<void>();
+      const cleanup: Array<string> = [];
+      yield* Effect.gen(function* () {
+        const bootstrap = yield* TurnStartBootstrap.TurnStartBootstrap;
+        const dispatch = yield* Effect.forkChild(
+          bootstrap
+            .dispatchTurnStart(
+              makeTurnStartCommand({
+                createThread: createThreadBootstrap,
+                prepareWorktree: { projectCwd: "/tmp/project", baseBranch: "main", branch: "test" },
+                runSetupScript: true,
+              }),
+            )
+            .pipe(Effect.flip),
+        );
+        yield* Deferred.await(waiting);
+        yield* Fiber.interrupt(yield* Deferred.await(setupFiber));
+        const result = yield* Fiber.join(dispatch);
+        assert.equal(result.bootstrapThreadDisposition, "deleted");
+        assert.equal(result.message, "Worktree setup cancelled.");
+        assert.isFalse(dispatched.some((command) => command.type === "thread.turn.start"));
+        assert.equal(dispatched.at(-1)?.type, "thread.delete");
+        assert.deepEqual(cleanup, ["terminal", "worktree"]);
+      }).pipe(
+        Effect.provide(
+          makeLayer({
+            dispatched,
+            tracker: {
+              begin: ({ fiber }) =>
+                fiber ? Deferred.succeed(setupFiber, fiber).pipe(Effect.asVoid) : Effect.void,
+            },
+            terminalManager: {
+              close: () =>
+                Effect.sync(() => {
+                  cleanup.push("terminal");
+                }),
+            },
+            gitWorkflow: {
+              removeWorktree: () =>
+                Effect.sync(() => {
+                  cleanup.push("worktree");
+                }),
+            },
+            projectSetupScriptRunner: {
+              runForThread: () =>
+                Effect.succeed({
+                  status: "started" as const,
+                  scriptId: "script",
+                  scriptName: "Setup",
+                  scriptCommand: "install",
+                  terminalId: "terminal",
+                  cwd: "/tmp/worktrees/test",
+                  completion: Deferred.succeed(waiting, undefined).pipe(
+                    Effect.andThen(Effect.never),
+                  ),
+                }),
+            },
+          }),
+        ),
+      );
     }),
   );
 });

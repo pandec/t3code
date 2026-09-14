@@ -1,4 +1,4 @@
-import type { DesktopNotificationThreadRef } from "@t3tools/contracts";
+import type { DesktopNotificationThreadRef, EnvironmentId } from "@t3tools/contracts";
 import { useNavigate } from "@tanstack/react-router";
 import { useEffect, useEffectEvent, useMemo, useRef } from "react";
 
@@ -11,10 +11,12 @@ import {
   useTurnCompletionMinDurationSeconds,
 } from "../hooks/useSettings";
 import { useEnvironmentIdsReadyForTurnCompletion, useThreadShells } from "../state/entities";
+import { useEnvironments } from "../state/environments";
 import { buildThreadRouteParams } from "../threadRoutes";
 import {
   type NotificationSoundKind,
   playNotificationSound,
+  setNotificationBadge,
   unlockNotificationAudio,
 } from "../threadNotifications";
 import {
@@ -96,6 +98,7 @@ type ShowSystemNotificationInput = {
   /** Suppress the OS sound when the app plays its own. */
   readonly silent?: boolean;
   readonly onBrowserNotificationClick?: () => void;
+  readonly onBrowserNotification?: (notification: Notification) => void;
 };
 
 /**
@@ -132,6 +135,7 @@ export async function showSystemNotification(input: ShowSystemNotificationInput)
       tag,
       ...(input.silent !== undefined ? { silent: input.silent } : {}),
     });
+    input.onBrowserNotification?.(notification);
     notification.addEventListener("click", () => {
       window.focus();
       input.onBrowserNotificationClick?.();
@@ -148,6 +152,7 @@ type Announcement = {
   readonly body: string;
   readonly sound: NotificationSoundKind;
   readonly tag: string;
+  readonly failed?: boolean;
 };
 
 function completionAnnouncement(candidate: TurnCompletionCandidate): Announcement {
@@ -165,6 +170,7 @@ function inputRequestAnnouncement(candidate: InputRequestCandidate): Announcemen
   return {
     threadRef,
     ...buildInputRequestCopy(candidate),
+    failed: candidate.kind === "failed",
     sound: "input",
     tag: `input-requested:${threadRef.environmentId}:${threadRef.threadId}`,
   };
@@ -172,7 +178,7 @@ function inputRequestAnnouncement(candidate: InputRequestCandidate): Announcemen
 
 /**
  * The one client-side notification coordinator: turn completions and
- * input/approval requests share the same shell snapshot, the same replay
+ * input/approval requests and failures share the same shell snapshot, the same replay
  * guards, and the same delivery channels (toast, background-only system
  * notification, optional sound).
  */
@@ -196,6 +202,46 @@ export function TurnCompletionNotifications() {
   );
   const snapshotRef = useRef<TurnCompletionSnapshot | null>(null);
   const pendingCandidatesRef = useRef<TurnCompletionCandidate[]>([]);
+  const { environments } = useEnvironments();
+  const activeEnvironmentIds = useMemo(
+    () => new Set(environments.map((environment) => environment.environmentId)),
+    [environments],
+  );
+  const activeEnvironmentIdsRef = useRef(activeEnvironmentIds);
+  activeEnvironmentIdsRef.current = activeEnvironmentIds;
+  const pendingNotificationsRef = useRef(
+    new Map<string, { environmentId: EnvironmentId; notification?: Notification }>(),
+  );
+  const badgeEpochRef = useRef(0);
+
+  useEffect(() => {
+    const clear = () => {
+      badgeEpochRef.current++;
+      for (const pending of pendingNotificationsRef.current.values()) pending.notification?.close();
+      pendingNotificationsRef.current.clear();
+      setNotificationBadge(0);
+    };
+    clear();
+    if (!systemEnabled) return;
+    const unsubscribe = window.desktopBridge?.onNotificationBadgeClear?.(clear);
+    window.addEventListener("focus", clear);
+    return () => {
+      unsubscribe?.();
+      window.removeEventListener("focus", clear);
+      clear();
+    };
+  }, [systemEnabled]);
+
+  useEffect(() => {
+    let changed = false;
+    for (const [key, pending] of pendingNotificationsRef.current) {
+      if (activeEnvironmentIds.has(pending.environmentId)) continue;
+      pending.notification?.close();
+      pendingNotificationsRef.current.delete(key);
+      changed = true;
+    }
+    if (changed) setNotificationBadge(pendingNotificationsRef.current.size);
+  }, [activeEnvironmentIds]);
 
   const navigateToThread = useEffectEvent((threadRef: DesktopNotificationThreadRef) => {
     void navigate({
@@ -279,7 +325,11 @@ export function TurnCompletionNotifications() {
       const { threadRef, title, body } = announcement;
       if (toastsEnabled) {
         toastManager.add({
-          type: announcement.sound === "completion" ? "success" : "info",
+          type: announcement.failed
+            ? "error"
+            : announcement.sound === "completion"
+              ? "success"
+              : "info",
           title,
           description: body,
           actionProps: {
@@ -295,6 +345,8 @@ export function TurnCompletionNotifications() {
         );
       }
       if (notifySystem) {
+        const epoch = badgeEpochRef.current;
+        let browserNotification: Notification | undefined;
         void showSystemNotification({
           title,
           body,
@@ -303,6 +355,25 @@ export function TurnCompletionNotifications() {
           // The in-app sound already played (or was deliberately off).
           silent: soundsEnabled,
           onBrowserNotificationClick: () => navigateToThread(threadRef),
+          onBrowserNotification: (notification) => {
+            browserNotification = notification;
+          },
+        }).then((delivered) => {
+          if (!delivered) return;
+          if (
+            epoch !== badgeEpochRef.current ||
+            !activeEnvironmentIdsRef.current.has(threadRef.environmentId)
+          ) {
+            browserNotification?.close();
+            return;
+          }
+          const key = `${threadRef.environmentId}:${threadRef.threadId}`;
+          pendingNotificationsRef.current.get(key)?.notification?.close();
+          pendingNotificationsRef.current.set(key, {
+            environmentId: threadRef.environmentId,
+            ...(browserNotification ? { notification: browserNotification } : {}),
+          });
+          setNotificationBadge(pendingNotificationsRef.current.size);
         });
       }
     }

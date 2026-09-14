@@ -69,8 +69,8 @@ export function createMobileDiagnosticJournal(
         mobileDiagnosticEvent(
           "journal",
           { droppedEvents: droppedEventsInBatch },
-          batch[0].t,
-          batch[0].m,
+          batch[0]!.t,
+          batch[0]!.m,
         ),
       );
       droppedEvents = 0;

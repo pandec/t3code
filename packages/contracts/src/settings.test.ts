@@ -505,6 +505,14 @@ describe("ClientSettings sidebar", () => {
     expect(decoded).not.toHaveProperty("sidebarV2ConfiguredByUser");
   });
 
+  it("drops the retired compact sidebar keys for users who opted in", () => {
+    const stored = { compactSidebarEnabled: true, sidebarCompactThreadRows: true };
+    const decoded = decodeClientSettings(stored);
+    expect(decoded).not.toHaveProperty("compactSidebarEnabled");
+    expect(decoded).not.toHaveProperty("sidebarCompactThreadRows");
+    expect(decodeClientSettingsPatch(stored)).toEqual({});
+  });
+
   it("preserves an explicit legacy sidebar opt-in", () => {
     expect(decodeClientSettings({ legacySidebarEnabled: true }).legacySidebarEnabled).toBe(true);
     expect(decodeClientSettingsPatch({ legacySidebarEnabled: true }).legacySidebarEnabled).toBe(

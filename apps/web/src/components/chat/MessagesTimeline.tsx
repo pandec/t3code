@@ -15,6 +15,7 @@ import {
   type ServerProviderSkill,
   type ToolActivityIcon,
   type TurnId,
+  type WorktreeSetupSnapshot,
 } from "@t3tools/contracts";
 import { parseScopedThreadKey } from "@t3tools/client-runtime/environment";
 import { replaceComposerContextReferences } from "@t3tools/shared/composerContextReferences";
@@ -220,6 +221,7 @@ import {
 } from "./MessagesTimeline.minimap";
 import { TerminalContextInlineChip } from "./TerminalContextInlineChip";
 import { Tooltip, TooltipPopup, TooltipTrigger } from "../ui/tooltip";
+import { WorktreeSetupCard } from "./WorktreeSetupCard";
 import {
   ContextChipPopover as UserMessageContextPopover,
   ContextChipShell,
@@ -259,6 +261,7 @@ import {
 import { createContextPresentationRegistry } from "../contextPresentationRegistry";
 import { useOpenPrLink } from "~/lib/openPullRequestLink";
 import type { ChatMarkdownContextReference } from "../ChatMarkdown";
+import { useMediaQuery } from "~/hooks/useMediaQuery";
 import { cn } from "~/lib/utils";
 import { useUiStateStore } from "~/uiStateStore";
 import { type TimestampFormat } from "@t3tools/contracts/settings";
@@ -329,6 +332,9 @@ interface TimelineRowSharedState {
   agentPanelModel: AgentPanelModel;
   expandedSpawnEntryIds: ReadonlySet<string>;
   onOpenAgents: () => void;
+  onCancelWorktreeSetup: (() => void) | null;
+  onWorktreeSetupWorkLocally: (() => void) | null;
+  onOpenWorktreeSetupTerminal: ((terminalId: string) => void) | null;
 }
 
 interface TimelineRowActivityState {
@@ -406,6 +412,13 @@ const TIMELINE_MAINTAIN_SCROLL_AT_END = {
     layout: true,
   },
 } as const satisfies MaintainScrollAtEndOptions;
+// Streamed text lands a paragraph at a time. A smooth scroll to the end
+// turns each landing into a short glide instead of a jump. Thread switches
+// and layout settles keep the instant variant so nothing visibly travels.
+const TIMELINE_MAINTAIN_SCROLL_AT_END_SMOOTH = {
+  ...TIMELINE_MAINTAIN_SCROLL_AT_END,
+  animated: true,
+} as const satisfies MaintainScrollAtEndOptions;
 
 // ---------------------------------------------------------------------------
 // Props (public API)
@@ -424,6 +437,11 @@ interface MessagesTimelineProps {
   isPreparingWorktree?: boolean;
   isCompacting?: boolean;
   activeTurnStartedAt: string | null;
+  /** Live bootstrap progress for this thread, or null when none is tracked. */
+  worktreeSetup?: WorktreeSetupSnapshot | null;
+  onCancelWorktreeSetup?: () => void;
+  onWorktreeSetupWorkLocally?: () => void;
+  onOpenWorktreeSetupTerminal?: (terminalId: string) => void;
   listRef: React.RefObject<LegendListRef | null>;
   timelineEntries: ReturnType<typeof deriveTimelineEntries>;
   latestTurn: TimelineLatestTurn | null;
@@ -494,6 +512,10 @@ export const MessagesTimeline = memo(function MessagesTimeline({
   citationHistoryLoading = false,
   onCiteAssistantText,
   isWorking,
+  worktreeSetup = null,
+  onCancelWorktreeSetup,
+  onWorktreeSetupWorkLocally,
+  onOpenWorktreeSetupTerminal,
   isPreparingWorktree = false,
   isCompacting = false,
   activeTurnStartedAt,
@@ -545,14 +567,19 @@ export const MessagesTimeline = memo(function MessagesTimeline({
     new Set(),
   );
   const listIdentityKey = displayThreadKey ?? routeThreadKey;
+  const prefersReducedMotion = useMediaQuery("(prefers-reduced-motion: reduce)");
   const listIdentityRef = useRef(listIdentityKey);
   const previousLatestTurnRef = useRef(latestTurn);
+  // The list stays mounted across thread switches. Its first end pins on the
+  // new thread must snap, not glide, even if that thread is mid-turn.
+  const [settlingListIdentity, setSettlingListIdentity] = useState<string | null>(null);
   let paintedExpandedTurnIds = expandedTurnIds;
   let paintedExpandedWorkGroupIds = expandedWorkGroupIds;
   let paintedExpandedSpawnEntryIds = expandedSpawnEntryIds;
   if (listIdentityRef.current !== listIdentityKey) {
     listIdentityRef.current = listIdentityKey;
     previousLatestTurnRef.current = latestTurn;
+    setSettlingListIdentity(listIdentityKey);
     paintedExpandedTurnIds = new Set();
     paintedExpandedWorkGroupIds = new Set();
     paintedExpandedSpawnEntryIds = new Set();
@@ -605,6 +632,21 @@ export const MessagesTimeline = memo(function MessagesTimeline({
       }
     };
   }, []);
+
+  useEffect(() => {
+    if (settlingListIdentity === null) return;
+    // Two frames covers the fresh-data layout pass and the initial end pin.
+    let second: number | null = null;
+    const first = requestAnimationFrame(() => {
+      second = requestAnimationFrame(() => {
+        setSettlingListIdentity((current) => (current === settlingListIdentity ? null : current));
+      });
+    });
+    return () => {
+      cancelAnimationFrame(first);
+      if (second !== null) cancelAnimationFrame(second);
+    };
+  }, [settlingListIdentity]);
 
   const suspendEndScrollMaintenanceForDisclosure = useCallback(
     (anchorKey: string, collapsed = false) => {
@@ -752,6 +794,7 @@ export const MessagesTimeline = memo(function MessagesTimeline({
         turnDiffSummaries,
         supportsConversationRollback,
         liveAgentTaskIds,
+        worktreeSetup,
       },
       previous?.threadKey === listIdentityKey && previous.workspaceRoot === workspaceRoot
         ? previous.projection
@@ -774,6 +817,7 @@ export const MessagesTimeline = memo(function MessagesTimeline({
     turnDiffSummaries,
     supportsConversationRollback,
     liveAgentTaskIds,
+    worktreeSetup,
   ]);
   const rows = useStableRows(rawRows, listIdentityKey);
   const minimapState = useTimelineMinimapState(rows, listIdentityKey);
@@ -976,6 +1020,9 @@ export const MessagesTimeline = memo(function MessagesTimeline({
       agentPanelModel: agentPanelModel ?? EMPTY_AGENT_PANEL_MODEL,
       expandedSpawnEntryIds: paintedExpandedSpawnEntryIds,
       onOpenAgents,
+      onCancelWorktreeSetup: onCancelWorktreeSetup ?? null,
+      onWorktreeSetupWorkLocally: onWorktreeSetupWorkLocally ?? null,
+      onOpenWorktreeSetupTerminal: onOpenWorktreeSetupTerminal ?? null,
     }),
     [
       readyCitationRequest,
@@ -1007,6 +1054,9 @@ export const MessagesTimeline = memo(function MessagesTimeline({
       agentPanelModel,
       paintedExpandedSpawnEntryIds,
       onOpenAgents,
+      onCancelWorktreeSetup,
+      onWorktreeSetupWorkLocally,
+      onOpenWorktreeSetupTerminal,
     ],
   );
   const activityState = useMemo<TimelineRowActivityState>(
@@ -1100,7 +1150,9 @@ export const MessagesTimeline = memo(function MessagesTimeline({
               !liveFollowEnabled ||
               disclosureToggleSettling
                 ? false
-                : TIMELINE_MAINTAIN_SCROLL_AT_END
+                : isWorking && !prefersReducedMotion && settlingListIdentity === null
+                  ? TIMELINE_MAINTAIN_SCROLL_AT_END_SMOOTH
+                  : TIMELINE_MAINTAIN_SCROLL_AT_END
             }
             maintainVisibleContentPosition={
               citationPositioning ? false : maintainVisibleContentPosition
@@ -1521,7 +1573,8 @@ const TimelineRowContent = memo(function TimelineRowContent({ row }: { row: Time
                   row.kind === "work" ||
                   row.kind === "work-live" ||
                   row.kind === "work-toggle" ||
-                  row.kind === "thinking"
+                  row.kind === "thinking" ||
+                  row.kind === "worktree-setup"
                 ? "pb-2"
                 : "pb-4",
         (row.kind === "message" && row.message.role === "assistant") ||
@@ -1556,6 +1609,7 @@ const TimelineRowContent = memo(function TimelineRowContent({ row }: { row: Time
       {row.kind === "proposed-plan" ? <ProposedPlanTimelineRow row={row} /> : null}
       {row.kind === "working" ? <WorkingTimelineRow row={row} /> : null}
       {row.kind === "thinking" ? <ThinkingTimelineRow /> : null}
+      {row.kind === "worktree-setup" ? <WorktreeSetupTimelineRow row={row} /> : null}
     </div>
   );
 });
@@ -1572,6 +1626,28 @@ function SteerPendingMarker() {
       <CircleDashedIcon className="size-3 shrink-0" />
       <span>Waiting for the agent to pick this up</span>
     </div>
+  );
+}
+
+function WorktreeSetupTimelineRow({
+  row,
+}: {
+  row: Extract<TimelineRow, { kind: "worktree-setup" }>;
+}) {
+  const ctx = use(TimelineRowCtx);
+  const terminalId = row.snapshot.setupScript?.terminalId ?? null;
+  const openTerminal = ctx.onOpenWorktreeSetupTerminal;
+  const onOpenTerminal = useMemo(
+    () => (openTerminal && terminalId ? () => openTerminal(terminalId) : null),
+    [openTerminal, terminalId],
+  );
+  return (
+    <WorktreeSetupCard
+      snapshot={row.snapshot}
+      onCancel={ctx.onCancelWorktreeSetup}
+      onWorkLocally={row.snapshot.phase === "running" ? ctx.onWorktreeSetupWorkLocally : null}
+      onOpenTerminal={onOpenTerminal}
+    />
   );
 }
 
@@ -4915,6 +4991,7 @@ const PlainWorkEntryRow = memo(function PlainWorkEntryRow(props: {
       className={cn(
         "flex flex-col rounded-md px-0.5 transition-colors",
         isExpandedToolGroupEntry ? "py-0" : "py-0.5",
+        expanded && "mb-1",
         canExpand &&
           "cursor-pointer hover:bg-accent/20 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring/70",
       )}

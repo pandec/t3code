@@ -2,7 +2,7 @@ import type { EnvironmentThreadShell } from "@t3tools/client-runtime/state/shell
 import { threadKey } from "@t3tools/client-runtime/state/entities";
 import type { EnvironmentId, ThreadId } from "@t3tools/contracts";
 
-type InputRequestKind = "approval" | "input";
+type InputRequestKind = "approval" | "input" | "failed";
 
 export interface InputRequestCandidate {
   readonly environmentId: EnvironmentId;
@@ -25,11 +25,12 @@ function inputRequestKind(shell: EnvironmentThreadShell): InputRequestKind | nul
   if (shell.archivedAt !== null) return null;
   if (shell.hasPendingApprovals) return "approval";
   if (shell.hasPendingUserInput) return "input";
+  if (shell.session?.status === "error" || shell.latestTurn?.state === "error") return "failed";
   return null;
 }
 
 /**
- * Threads that entered a pending approval/input state between two shell
+ * Threads that entered a pending approval/input or failed state between two shell
  * lists. Threads absent from the previous list never fire: initial sync,
  * environment reconnect, and replayed history arrive already-blocked and must
  * stay silent. A request that merely changes kind (input after approval)
@@ -70,12 +71,19 @@ export function buildInputRequestCopy(candidate: Pick<InputRequestCandidate, "ki
 } {
   const threadLabel = candidate.title.trim();
   return {
-    title: candidate.kind === "approval" ? "Approval needed" : "Input needed",
+    title:
+      candidate.kind === "approval"
+        ? "Approval needed"
+        : candidate.kind === "failed"
+          ? "Thread failed"
+          : "Input needed",
     body:
       threadLabel.length > 0
         ? threadLabel
         : candidate.kind === "approval"
           ? "A thread is waiting for approval."
-          : "A thread is waiting for input.",
+          : candidate.kind === "failed"
+            ? "A thread failed."
+            : "A thread is waiting for input.",
   };
 }

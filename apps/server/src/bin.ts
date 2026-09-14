@@ -21,7 +21,12 @@ import { statusCommand } from "./cli/status.ts";
 import { threadCommand } from "./cli/thread.ts";
 import { serviceCommand } from "./cli/service.ts";
 import { sessionCommand } from "./cli/session.ts";
+import { uninstallCommand } from "./cli/uninstall.ts";
+import { updateCommand } from "./cli/update.ts";
+import { claudeHistoryCommand } from "./cli/claudeHistory.ts";
+import { serviceLauncherCommand } from "./cli/serviceLauncher.ts";
 import { servicePreflightCommand } from "./cli/servicePreflight.ts";
+import { sshHelperCommand } from "./cli/sshHelper.ts";
 import { themeCommand } from "./cli/theme.ts";
 import { triageCommand } from "./cli/triage.ts";
 
@@ -66,7 +71,12 @@ export const makeCli = ({ cloudEnabled = hasCloudPublicConfig } = {}) =>
       sessionCommand,
       statusCommand,
       serviceCommand,
+      updateCommand,
+      uninstallCommand,
+      serviceLauncherCommand,
+      claudeHistoryCommand,
       servicePreflightCommand,
+      sshHelperCommand,
       themeCommand,
       triageCommand,
       cloudEnabled ? connectCommand : connectUnavailableCommand,

@@ -253,8 +253,8 @@ function NotificationsExtrasSection() {
       />
 
       <SettingsRow
-        title="Input and approval alerts"
-        description="Use the enabled toast, system notification and sound settings when a thread needs input or approval."
+        title="Input, approval and failure alerts"
+        description="Use the enabled toast, system notification and sound settings when a thread fails or needs input or approval."
         resetAction={
           settings.enableInputRequestNotifications !==
           DEFAULT_UNIFIED_SETTINGS.enableInputRequestNotifications ? (
@@ -311,7 +311,7 @@ function NotificationsExtrasSection() {
 
       <SettingsRow
         title="Minimum turn duration"
-        description="Skip every completion announcement for turns that finish faster than this. 0 announces every completed turn. Input and approval alerts are not affected."
+        description="Skip every completion announcement for turns that finish faster than this. 0 announces every completed turn. Input, approval and failure alerts are not affected."
         resetAction={
           minDurationSeconds !== DEFAULT_UNIFIED_SETTINGS.turnCompletionMinDurationSeconds ? (
             <SettingResetButton
