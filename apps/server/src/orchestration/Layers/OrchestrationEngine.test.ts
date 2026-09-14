@@ -1272,12 +1272,28 @@ describe("OrchestrationEngine", () => {
           system = await createOrchestrationSystem({ databasePath });
           await system.finishWorktreeSwitch(threadId);
         } else {
-          if (outcome === "archived")
+          if (outcome === "archived") {
             await dispatch({
               type: "thread.archive",
               commandId: CommandId.make("archive"),
               threadId,
             });
+            await dispatch({
+              type: "thread.activity.append",
+              commandId: CommandId.make("late-checkpoint-failure"),
+              threadId,
+              createdAt: now(),
+              activity: {
+                id: EventId.make("late-checkpoint-failure"),
+                kind: "checkpoint.capture.failed",
+                summary: "Capture failed after archiving",
+                tone: "error",
+                payload: {},
+                turnId,
+                createdAt: now(),
+              },
+            });
+          }
           await execute("execute");
         }
       }

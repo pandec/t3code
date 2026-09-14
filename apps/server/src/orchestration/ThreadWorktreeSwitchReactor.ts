@@ -6,6 +6,7 @@ import * as Crypto from "effect/Crypto";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
+import * as Schedule from "effect/Schedule";
 import type * as Scope from "effect/Scope";
 import * as Stream from "effect/Stream";
 import { ProjectionThreadRepository } from "../persistence/Services/ProjectionThreads.ts";
@@ -65,6 +66,7 @@ export const make = Effect.gen(function* () {
   });
   const worker = yield* makeDrainableWorker((threadId: ThreadId) =>
     process(threadId).pipe(
+      Effect.retry({ times: 3, schedule: Schedule.exponential("100 millis") }),
       Effect.catchCause((cause) =>
         Cause.hasInterruptsOnly(cause)
           ? Effect.failCause(cause)
@@ -104,6 +106,7 @@ export const make = Effect.gen(function* () {
         const pending = yield* threads.listPendingWorktreeSwitches();
         yield* Effect.forEach(pending, worker.enqueue, { discard: true });
       }).pipe(
+        Effect.retry({ times: 3, schedule: Schedule.exponential("100 millis") }),
         Effect.catchCause((cause) =>
           Effect.logWarning("Worktree switch recovery failed", { cause }),
         ),

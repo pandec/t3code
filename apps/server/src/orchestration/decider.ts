@@ -2704,6 +2704,7 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
       if (
         command.activity.kind === "checkpoint.capture.failed" &&
         thread.worktreeSwitch?.status === "pending" &&
+        thread.archivedAt === null &&
         command.activity.turnId === thread.worktreeSwitch.turnId
       ) {
         return [
