@@ -1,3 +1,4 @@
+import * as ThreadWorktreeSwitchReactor from "../ThreadWorktreeSwitchReactor.ts";
 import * as ThreadArchiveReactor from "../ThreadArchiveReactor.ts";
 import * as Effect from "effect/Effect";
 import * as Exit from "effect/Exit";
@@ -76,6 +77,12 @@ describe("OrchestrationReactor", () => {
               return Effect.void;
             },
             drainThrough: () => Effect.void,
+          }),
+        ),
+        Layer.provideMerge(
+          Layer.succeed(ThreadWorktreeSwitchReactor.ThreadWorktreeSwitchReactor, {
+            start: () => Effect.void,
+            drain: Effect.void,
           }),
         ),
         Layer.provideMerge(

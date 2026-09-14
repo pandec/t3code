@@ -1,3 +1,4 @@
+import * as ThreadWorktreeSwitchReactor from "../src/orchestration/ThreadWorktreeSwitchReactor.ts";
 import * as ThreadArchiveReactor from "../src/orchestration/ThreadArchiveReactor.ts";
 // @effect-diagnostics nodeBuiltinImport:off
 import { ProviderInstanceHealthLive } from "../src/provider/Layers/ProviderInstanceHealthLive.ts";
@@ -402,6 +403,12 @@ export const makeOrchestrationIntegrationHarness = (
       ),
       Layer.provideMerge(
         Layer.succeed(MessageSpeechReactor, {
+          start: () => Effect.void,
+          drain: Effect.void,
+        }),
+      ),
+      Layer.provideMerge(
+        Layer.succeed(ThreadWorktreeSwitchReactor.ThreadWorktreeSwitchReactor, {
           start: () => Effect.void,
           drain: Effect.void,
         }),

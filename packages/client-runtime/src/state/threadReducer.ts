@@ -455,6 +455,9 @@ function applyThreadDetailEventUnretained(
         thread: {
           ...thread,
           ...(event.payload.title !== undefined ? { title: event.payload.title } : {}),
+          ...(event.payload.worktreeSwitch !== undefined
+            ? { worktreeSwitch: event.payload.worktreeSwitch }
+            : {}),
           ...(event.payload.titleRegeneration !== undefined
             ? { titleRegeneration: event.payload.titleRegeneration }
             : {}),
