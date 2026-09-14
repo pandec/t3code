@@ -6,6 +6,7 @@ import * as NodePath from "node:path";
 import {
   ApprovalRequestId,
   CodexSettings,
+  EnvironmentId,
   EventId,
   ProviderDriverKind,
   ProviderInstanceId,
@@ -38,6 +39,7 @@ import * as CodexErrors from "effect-codex-app-server/errors";
 import { ChildProcess, ChildProcessSpawner } from "effect/unstable/process";
 
 import { ServerConfig } from "../../config.ts";
+import * as McpProviderSession from "../../mcp/McpProviderSession.ts";
 import { ServerSettingsService } from "../../serverSettings.ts";
 import { ProviderAdapterValidationError } from "../Errors.ts";
 import type { CodexAdapterShape } from "../Services/CodexAdapter.ts";
@@ -481,6 +483,43 @@ validationLayer("CodexAdapterLive validation", (it) => {
         threadId: asThreadId("thread-1"),
         runtimeMode: "full-access",
       });
+    }),
+  );
+  it.effect("gives the t3-code MCP server a tool-call budget that covers speech synthesis", () =>
+    Effect.gen(function* () {
+      validationRuntimeFactory.factory.mockClear();
+      const threadId = asThreadId("thread-mcp-timeout");
+      McpProviderSession.setMcpProviderSession({
+        environmentId: EnvironmentId.make("env-codex-mcp"),
+        threadId,
+        providerSessionId: "provider-session-mcp",
+        providerInstanceId: ProviderInstanceId.make("codex"),
+        endpoint: "http://127.0.0.1:4100/mcp/voice",
+        authorizationHeader: "Bearer mcp-token",
+        capabilities: new Set(["pull-requests", "voice"]),
+      });
+      const adapter = yield* CodexAdapter;
+
+      yield* adapter
+        .startSession({
+          provider: ProviderDriverKind.make("codex"),
+          threadId,
+          runtimeMode: "full-access",
+        })
+        .pipe(
+          Effect.ensuring(Effect.sync(() => McpProviderSession.clearMcpProviderSession(threadId))),
+        );
+
+      // Codex defaults to 60 s per MCP tool call, which voice_reply outlives.
+      const { appServerArgs } = validationRuntimeFactory.factory.mock.calls[0]![0];
+      NodeAssert.deepStrictEqual(appServerArgs, [
+        "-c",
+        "mcp_servers.t3-code.url=http://127.0.0.1:4100/mcp/voice",
+        "-c",
+        'mcp_servers.t3-code.bearer_token_env_var="T3_MCP_BEARER_TOKEN"',
+        "-c",
+        "mcp_servers.t3-code.tool_timeout_sec=240",
+      ]);
     }),
   );
 });

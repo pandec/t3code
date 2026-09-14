@@ -2,6 +2,17 @@ import type { EnvironmentId, ProviderInstanceId, ThreadId } from "@t3tools/contr
 
 import type { McpCapability } from "./McpInvocationContext.ts";
 
+/**
+ * Per-call budget the provider CLI gives a `t3-code` MCP tool before it
+ * abandons the request. Claude Code and Codex both default to 60 seconds,
+ * which `voice_reply` outlives: speech synthesis is allowed two minutes per
+ * request, and a Gemini script of a few thousand characters routinely needs
+ * more than a minute. Progress heartbeats do not extend either client's
+ * limit, so the budget must cover the longest handler outright. Four minutes
+ * clears synthesis and a simulator boot with room to spare.
+ */
+export const MCP_TOOL_CALL_TIMEOUT_MS = 240_000;
+
 export interface McpProviderSessionConfig {
   readonly environmentId: EnvironmentId;
   readonly threadId: ThreadId;

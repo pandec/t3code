@@ -18,6 +18,7 @@ import type {
 import {
   ApprovalRequestId,
   ClaudeSettings,
+  EnvironmentId,
   ProviderDriverKind,
   ProviderItemId,
   ProviderRuntimeEvent,
@@ -45,6 +46,7 @@ import * as TestClock from "effect/testing/TestClock";
 
 import { attachmentRelativePath } from "../../attachmentStore.ts";
 import { ServerConfig } from "../../config.ts";
+import * as McpProviderSession from "../../mcp/McpProviderSession.ts";
 import { ServerSettingsService } from "../../serverSettings.ts";
 import {
   SYNTHETIC_CLAUDE_CAPABLE_MODEL,
@@ -920,6 +922,42 @@ describe("ClaudeAdapterLive", () => {
       });
       assert.equal(secondSession.status, "ready");
     }).pipe(Effect.provide(harness.layer), Effect.scoped);
+  });
+
+  it.effect("gives the t3-code MCP server a tool-call budget that covers speech synthesis", () => {
+    const harness = makeHarness();
+    McpProviderSession.setMcpProviderSession({
+      environmentId: EnvironmentId.make("env-claude-mcp"),
+      threadId: THREAD_ID,
+      providerSessionId: "provider-session-mcp",
+      providerInstanceId: ProviderInstanceId.make("claudeAgent"),
+      endpoint: "http://127.0.0.1:4100/mcp/voice",
+      authorizationHeader: "Bearer mcp-token",
+      capabilities: new Set(["pull-requests", "voice"]),
+    });
+
+    return Effect.gen(function* () {
+      const adapter = yield* ClaudeAdapter;
+      yield* adapter.startSession({
+        threadId: THREAD_ID,
+        provider: ProviderDriverKind.make("claudeAgent"),
+        runtimeMode: "full-access",
+      });
+      // The SDK's default per-call limit is 60 s and heartbeats do not
+      // extend it, so voice_reply must get the server-side synthesis budget.
+      assert.deepEqual(harness.getLastCreateQueryInput()?.options.mcpServers, {
+        "t3-code": {
+          type: "http",
+          url: "http://127.0.0.1:4100/mcp/voice",
+          headers: { Authorization: "Bearer mcp-token" },
+          timeout: McpProviderSession.MCP_TOOL_CALL_TIMEOUT_MS,
+        },
+      });
+    }).pipe(
+      Effect.provide(harness.layer),
+      Effect.scoped,
+      Effect.ensuring(Effect.sync(() => McpProviderSession.clearMcpProviderSession(THREAD_ID))),
+    );
   });
 
   it.effect("does not let a stalled usage request block session startup", () => {

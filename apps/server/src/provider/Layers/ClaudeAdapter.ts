@@ -5264,6 +5264,7 @@ export const makeClaudeAdapter = Effect.fn("makeClaudeAdapter")(function* (
                   headers: {
                     Authorization: mcpSession.authorizationHeader,
                   },
+                  timeout: McpProviderSession.MCP_TOOL_CALL_TIMEOUT_MS,
                 },
               },
             }
