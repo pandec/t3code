@@ -405,7 +405,7 @@ export function buildCurrentThreadActionItems(input: {
 }
 
 export function buildArchivedThreadsActionItems(input: {
-  /** Scoped project key of the open thread's project, when there is one. */
+  /** Logical group key of the open thread's project, when there is one. */
   readonly projectFilterKey: string | null;
   readonly projectTitle: string | null;
   readonly icon: ReactNode;

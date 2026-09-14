@@ -112,7 +112,6 @@ import {
   isUnsupportedWindowsProjectPath,
   resolveProjectPathForDispatch,
 } from "../lib/projectPaths";
-import { archivedProjectFilterKey } from "../archivedProjectFilter";
 import { onOpenCommandPalette } from "../commandPaletteBus";
 import { isPreviewFocused } from "../lib/previewFocus";
 import { isTerminalFocused } from "../lib/terminalFocus";
@@ -2195,18 +2194,27 @@ function OpenCommandPaletteDialog(props: {
     ...buildArchivedThreadsActionItems({
       projectFilterKey:
         currentProjectEnvironmentId !== null && currentProjectId !== null
-          ? archivedProjectFilterKey({
-              environmentId: currentProjectEnvironmentId,
-              id: currentProjectId,
-            })
+          ? (projectGroups.find((group) =>
+              group.memberProjectRefs.some(
+                (projectRef) =>
+                  projectRef.environmentId === currentProjectEnvironmentId &&
+                  projectRef.projectId === currentProjectId,
+              ),
+            )?.projectKey ?? null)
           : null,
       projectTitle:
         currentProjectKey !== null ? (projectTitleByKey.get(currentProjectKey) ?? null) : null,
       icon: <ArchiveIcon className={ITEM_ICON_CLASS} />,
       openArchived: async (projectFilterKey) => {
+        // Explicit keys: the settings layout keeps the previous scope when a
+        // navigation names none, and the unfiltered action must show everything.
         await navigate({
           to: "/settings/archived",
-          search: projectFilterKey === null ? {} : { project: projectFilterKey },
+          search: {
+            project: projectFilterKey ?? undefined,
+            machine: undefined,
+            checkout: undefined,
+          },
         });
       },
     }),

@@ -21,7 +21,7 @@ import {
   type SidebarProjectGroupingMode,
 } from "@t3tools/contracts";
 import { scopeThreadRef } from "@t3tools/client-runtime/environment";
-import { scopeProject, type EnvironmentThreadShell } from "@t3tools/client-runtime/state/shell";
+import type { EnvironmentThreadShell } from "@t3tools/client-runtime/state/shell";
 import {
   isAtomCommandInterrupted,
   settlePromise,
@@ -184,16 +184,11 @@ import { ProjectFavicon } from "../ProjectFavicon";
 import { ProviderInstanceIcon } from "../chat/ProviderInstanceIcon";
 import { buildArchivedThreadGroups } from "../../archivedThreadGrouping";
 import { selectProjectGroupingSettings } from "../../logicalProject";
-import { buildSidebarProjectSnapshots } from "../../sidebarProjectGrouping";
 import {
-  archivedProjectFilterKey,
-  archivedProjectSelectValue,
-  archivedThreadMatchesProject,
-  buildArchivedProjectFilterOptions,
-  parseArchivedProjectSelectValue,
-  resolveArchivedProjectFilterGroup,
+  archivedThreadGroupMatchesScope,
+  archivedThreadMatchesScope,
+  resolveArchivedThreadScopeFilter,
   shouldDeferArchivedEmptyState,
-  shouldShowUnresolvedArchivedProjectFilterOption,
 } from "../../archivedProjectFilter";
 import { PanelAnimationsPreview } from "./PanelAnimationsPreview";
 
@@ -3292,13 +3287,8 @@ function ArchivedThreadModelIcon({ thread }: { readonly thread: EnvironmentThrea
   );
 }
 
-export function ArchivedThreadsPanel({
-  projectFilterKey,
-  onProjectFilterChange,
-}: {
-  readonly projectFilterKey: string | null;
-  readonly onProjectFilterChange: (projectKey: string | null) => void;
-}) {
+export function ArchivedThreadsPanel() {
+  const { scope } = useSettingsScope();
   const { environments, isReady: environmentsReady } = useEnvironments();
   const environmentShellsBootstrapped = useAllEnvironmentShellsBootstrapped();
   const primaryEnvironment = usePrimaryEnvironment();
@@ -3310,9 +3300,17 @@ export function ArchivedThreadsPanel({
     () => new Set(),
   );
   const searchInputRef = useRef<HTMLInputElement>(null);
+  const scopeFilter = useMemo(() => resolveArchivedThreadScopeFilter(scope), [scope]);
+  const selectedProjectLabel = scopeFilter?.label ?? "selected project";
+  // A scope pinned to one environment only asks that environment, so another
+  // machine's outage or slow load cannot mark this view failed or pending.
+  const scopedEnvironmentId = scopeFilter?.environmentId ?? null;
   const environmentIds = useMemo(
-    () => environments.map((environment) => environment.environmentId),
-    [environments],
+    () =>
+      scopedEnvironmentId === null
+        ? environments.map((environment) => environment.environmentId)
+        : [scopedEnvironmentId],
+    [environments, scopedEnvironmentId],
   );
   const environmentLabelById = useMemo(
     () =>
@@ -3347,114 +3345,34 @@ export function ArchivedThreadsPanel({
       projects,
     ],
   );
-  const allProjectGroups = useMemo(
-    () =>
-      buildSidebarProjectSnapshots({
-        projects: [
-          ...projects,
-          ...archivedSnapshots.flatMap(({ environmentId, snapshot }) =>
-            snapshot.projects.map((project) => scopeProject(environmentId, project)),
-          ),
-        ],
-        settings: groupingSettings,
-        primaryEnvironmentId: primaryEnvironment?.environmentId ?? null,
-        resolveEnvironmentLabel: (environmentId) =>
-          environmentLabelById.get(environmentId) ??
-          (environmentId === primaryEnvironment?.environmentId ? "Local" : "Remote"),
-      }),
-    [
-      archivedSnapshots,
-      environmentLabelById,
-      groupingSettings,
-      primaryEnvironment?.environmentId,
-      projects,
-    ],
-  );
-  const selectedProjectGroup = resolveArchivedProjectFilterGroup(
-    allProjectGroups,
-    projectFilterKey,
-  );
-  const selectedLogicalProjectKey = selectedProjectGroup?.projectKey ?? null;
-  const projectFilterOptions = useMemo(() => {
-    const candidates = archivedGroups.map((group) => {
-      const routeProjectKey =
-        group.key === selectedLogicalProjectKey && projectFilterKey !== null
-          ? projectFilterKey
-          : archivedProjectFilterKey(group.representativeProject);
-      return {
-        displayName: group.displayName,
-        environmentLabel:
-          environmentLabelById.get(group.representativeProject.environmentId) ??
-          (group.representativeProject.environmentId === primaryEnvironment?.environmentId
-            ? "Local"
-            : "Remote"),
-        logicalKey: group.key,
-        projectKey: routeProjectKey,
-        workspaceRoot: group.representativeProject.workspaceRoot,
-      };
-    });
-    if (
-      projectFilterKey !== null &&
-      selectedProjectGroup !== null &&
-      !candidates.some((option) => option.logicalKey === selectedProjectGroup.projectKey)
-    ) {
-      candidates.push({
-        displayName: selectedProjectGroup.displayName,
-        environmentLabel:
-          environmentLabelById.get(selectedProjectGroup.environmentId) ??
-          (selectedProjectGroup.environmentId === primaryEnvironment?.environmentId
-            ? "Local"
-            : "Remote"),
-        logicalKey: selectedProjectGroup.projectKey,
-        projectKey: projectFilterKey,
-        workspaceRoot: selectedProjectGroup.workspaceRoot,
-      });
-    }
-    return buildArchivedProjectFilterOptions(candidates).toSorted(
-      (left, right) =>
-        left.label.localeCompare(right.label) || left.logicalKey.localeCompare(right.logicalKey),
-    );
-  }, [
-    archivedGroups,
-    environmentLabelById,
-    primaryEnvironment?.environmentId,
-    projectFilterKey,
-    selectedLogicalProjectKey,
-    selectedProjectGroup,
-  ]);
-  const selectedProjectLabel =
-    projectFilterOptions.find((option) => option.logicalKey === selectedLogicalProjectKey)?.label ??
-    selectedProjectGroup?.displayName ??
-    "selected project";
   const filteredArchivedGroups = useMemo(() => {
-    if (projectFilterKey !== null && selectedLogicalProjectKey === null) {
-      return [];
-    }
     return archivedGroups.flatMap((group) => {
-      if (!archivedThreadMatchesProject(group.key, selectedLogicalProjectKey)) {
+      if (!archivedThreadGroupMatchesScope(group, scopeFilter)) {
         return [];
       }
-      const matchingThreads = group.threads.filter(({ environmentLabel, project, thread }) =>
-        archivedThreadMatchesSearch(
-          {
-            environmentLabel,
-            modelName: thread.modelSelection.model,
-            projectName: `${group.displayName} ${project.title}`,
-            projectCwd: project.workspaceRoot,
-            threadTitle: thread.title,
-          },
-          searchQuery,
-        ),
+      const matchingThreads = group.threads.filter(
+        ({ environmentLabel, project, thread }) =>
+          archivedThreadMatchesScope({ project, thread }, scopeFilter) &&
+          archivedThreadMatchesSearch(
+            {
+              environmentLabel,
+              modelName: thread.modelSelection.model,
+              projectName: `${group.displayName} ${project.title}`,
+              projectCwd: project.workspaceRoot,
+              threadTitle: thread.title,
+            },
+            searchQuery,
+          ),
       );
       return matchingThreads.length > 0 ? [{ ...group, threads: matchingThreads }] : [];
     });
-  }, [archivedGroups, projectFilterKey, searchQuery, selectedLogicalProjectKey]);
+  }, [archivedGroups, scopeFilter, searchQuery]);
   const matchingThreadCount = useMemo(
     () => filteredArchivedGroups.reduce((count, group) => count + group.threads.length, 0),
     [filteredArchivedGroups],
   );
   const hasSearchQuery = searchQuery.trim().length > 0;
-  const hasProjectFilter = projectFilterKey !== null;
+  const hasProjectFilter = scopeFilter !== null;
   const hasActiveFilter = hasSearchQuery || hasProjectFilter;
   const archiveSourcesReady = environmentsReady && environmentShellsBootstrapped;
   const isLoadingArchiveSources = !archiveSourcesReady || isLoadingArchive;
@@ -3462,10 +3380,6 @@ export function ArchivedThreadsPanel({
     hasMatchingGroups: filteredArchivedGroups.length > 0,
     isLoading: isLoadingArchiveSources,
     hasError: archiveError !== null,
-  });
-  const showUnresolvedProjectFilterOption = shouldShowUnresolvedArchivedProjectFilterOption({
-    hasProjectFilter,
-    hasResolvedProject: selectedProjectGroup !== null,
   });
 
   useEffect(() => {
@@ -3544,79 +3458,43 @@ export function ArchivedThreadsPanel({
   return (
     <SettingsPageContainer>
       <div className="space-y-1.5">
-        <div className="grid gap-2 sm:grid-cols-[minmax(0,1fr)_minmax(12rem,16rem)]">
-          <div className="relative">
-            <SearchIcon
-              className="pointer-events-none absolute top-1/2 left-3 size-3.5 -translate-y-1/2 text-muted-foreground"
-              aria-hidden
-            />
-            <input
-              ref={searchInputRef}
-              type="search"
-              value={searchQuery}
-              onChange={(event) => setSearchQuery(event.currentTarget.value)}
-              onKeyDown={(event) => {
-                if (event.key === "Escape" && searchQuery.length > 0) {
-                  event.preventDefault();
-                  event.stopPropagation();
-                  setSearchQuery("");
-                }
-              }}
-              placeholder="Search archived threads"
-              aria-label="Search archived threads"
-              aria-describedby="archived-thread-search-status"
-              className="h-9 w-full rounded-lg border border-input bg-background pr-9 pl-9 text-sm text-foreground shadow-xs/5 outline-none placeholder:text-muted-foreground/72 focus-visible:border-ring focus-visible:ring-[3px] focus-visible:ring-ring/24 [&::-webkit-search-cancel-button]:appearance-none [&::-webkit-search-decoration]:appearance-none"
-            />
-            {searchQuery.length > 0 ? (
-              <Button
-                type="button"
-                size="icon-xs"
-                variant="ghost"
-                className="absolute top-1/2 right-2 size-6 -translate-y-1/2 rounded-sm text-muted-foreground hover:text-foreground"
-                onClick={() => {
-                  setSearchQuery("");
-                  searchInputRef.current?.focus({ preventScroll: true });
-                }}
-                aria-label="Clear archived thread search"
-              >
-                <XIcon className="size-3.5" />
-              </Button>
-            ) : null}
-          </div>
-          <Select
-            value={archivedProjectSelectValue(projectFilterKey)}
-            onValueChange={(value) => {
-              if (!value) return;
-              onProjectFilterChange(parseArchivedProjectSelectValue(value));
+        <div className="relative">
+          <SearchIcon
+            className="pointer-events-none absolute top-1/2 left-3 size-3.5 -translate-y-1/2 text-muted-foreground"
+            aria-hidden
+          />
+          <input
+            ref={searchInputRef}
+            type="search"
+            value={searchQuery}
+            onChange={(event) => setSearchQuery(event.currentTarget.value)}
+            onKeyDown={(event) => {
+              if (event.key === "Escape" && searchQuery.length > 0) {
+                event.preventDefault();
+                event.stopPropagation();
+                setSearchQuery("");
+              }
             }}
-          >
-            <SelectTrigger className="h-9" aria-label="Filter archived threads by project">
-              <SelectValue>{hasProjectFilter ? selectedProjectLabel : "All projects"}</SelectValue>
-            </SelectTrigger>
-            <SelectPopup align="start" alignItemWithTrigger={false}>
-              <SelectItem hideIndicator value={archivedProjectSelectValue(null)}>
-                All projects
-              </SelectItem>
-              {showUnresolvedProjectFilterOption && projectFilterKey !== null ? (
-                <SelectItem
-                  disabled
-                  hideIndicator
-                  value={archivedProjectSelectValue(projectFilterKey)}
-                >
-                  Selected project ({isLoadingArchiveSources ? "loading" : "unavailable"})
-                </SelectItem>
-              ) : null}
-              {projectFilterOptions.map((option) => (
-                <SelectItem
-                  hideIndicator
-                  key={option.logicalKey}
-                  value={archivedProjectSelectValue(option.projectKey)}
-                >
-                  {option.label}
-                </SelectItem>
-              ))}
-            </SelectPopup>
-          </Select>
+            placeholder="Search archived threads"
+            aria-label="Search archived threads"
+            aria-describedby="archived-thread-search-status"
+            className="h-9 w-full rounded-lg border border-input bg-background pr-9 pl-9 text-sm text-foreground shadow-xs/5 outline-none placeholder:text-muted-foreground/72 focus-visible:border-ring focus-visible:ring-[3px] focus-visible:ring-ring/24 [&::-webkit-search-cancel-button]:appearance-none [&::-webkit-search-decoration]:appearance-none"
+          />
+          {searchQuery.length > 0 ? (
+            <Button
+              type="button"
+              size="icon-xs"
+              variant="ghost"
+              className="absolute top-1/2 right-2 size-6 -translate-y-1/2 rounded-sm text-muted-foreground hover:text-foreground"
+              onClick={() => {
+                setSearchQuery("");
+                searchInputRef.current?.focus({ preventScroll: true });
+              }}
+              aria-label="Clear archived thread search"
+            >
+              <XIcon className="size-3.5" />
+            </Button>
+          ) : null}
         </div>
         <p
           id="archived-thread-search-status"
@@ -3707,7 +3585,7 @@ export function ArchivedThreadsPanel({
             }
             description={
               hasProjectFilter && !hasSearchQuery
-                ? "Choose another project or show all projects."
+                ? "Widen the scope above or choose another project or environment."
                 : "Try a different thread title, project, or workspace path."
             }
           />

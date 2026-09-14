@@ -3765,7 +3765,10 @@ export default function Sidebar() {
   );
   const openAllArchivedThreads = useCallback(() => {
     if (isMobile) setOpenMobile(false);
-    void router.navigate({ to: "/settings/archived", search: {} });
+    void router.navigate({
+      to: "/settings/archived",
+      search: { project: undefined, machine: undefined, checkout: undefined },
+    });
   }, [isMobile, router, setOpenMobile]);
 
   // Dropping files on a row opens that thread and attaches the files there.

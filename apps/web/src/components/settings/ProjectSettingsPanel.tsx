@@ -17,7 +17,6 @@ import * as Cause from "effect/Cause";
 import { ArchiveIcon, ImportIcon, Trash2Icon } from "lucide-react";
 import { lazy, Suspense, useCallback, useEffect, useMemo, useRef, useState } from "react";
 
-import { archivedProjectFilterKey } from "../../archivedProjectFilter";
 import { useComposerDraftStore } from "../../composerDraftStore";
 import { useProjectAccentColors } from "../../hooks/useProjectAccentColors";
 import { releaseProjectDraftUploads } from "../../lib/composerDraftUploads";
@@ -315,15 +314,10 @@ function ProjectDetail({
   );
 
   // ----- archived threads -----
-  // Filters by the logical group key, so a grouped project shows every
-  // checkout's archived threads rather than only the representative's.
+  // Keeps the current scope so the archive shows the same project, checkout,
+  // and environment the settings page is already narrowed to.
   const openArchivedThreads = useCallback(async () => {
-    const result = await settlePromise(() =>
-      navigate({
-        to: "/settings/archived",
-        search: { project: archivedProjectFilterKey(group) },
-      }),
-    );
+    const result = await settlePromise(() => navigate({ to: "/settings/archived", hash: "" }));
     if (result._tag === "Failure") {
       const error = squashAtomCommandFailure(result);
       toastManager.add(
@@ -334,7 +328,7 @@ function ProjectDetail({
         }),
       );
     }
-  }, [group, navigate]);
+  }, [navigate]);
 
   const hasMultipleCheckouts = group.memberProjects.length > 1;
 
