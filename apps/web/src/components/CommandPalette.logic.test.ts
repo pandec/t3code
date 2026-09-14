@@ -141,7 +141,7 @@ describe("buildArchivedThreadsActionItems", () => {
   it("adds a project-scoped entry naming the current project", async () => {
     const openArchived = vi.fn(async () => undefined);
     const items = buildArchivedThreadsActionItems({
-      projectFilterKey: "environment-local:project-a",
+      projectFilterKey: "github.com/t3tools/t3code",
       projectTitle: "T3 Code",
       icon: null,
       openArchived,
@@ -156,7 +156,7 @@ describe("buildArchivedThreadsActionItems", () => {
     await items[0]?.run();
     expect(openArchived).toHaveBeenCalledWith(null);
     await items[1]?.run();
-    expect(openArchived).toHaveBeenCalledWith("environment-local:project-a");
+    expect(openArchived).toHaveBeenCalledWith("github.com/t3tools/t3code");
   });
 });
 

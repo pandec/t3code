@@ -223,7 +223,6 @@ import {
   type SidebarProjectGroupMember,
   type SidebarProjectSnapshot,
 } from "../sidebarProjectGrouping";
-import { archivedProjectFilterKey } from "../archivedProjectFilter";
 const SIDEBAR_SORT_LABELS: Record<SidebarProjectSortOrder, string> = {
   updated_at: "Last user message",
   created_at: "Created at",
@@ -1783,7 +1782,7 @@ const SidebarProjectItem = memo(function SidebarProjectItem(props: SidebarProjec
     const result = await settlePromise(() =>
       router.navigate({
         to: "/settings/archived",
-        search: { project: archivedProjectFilterKey(project) },
+        search: { project: project.projectKey },
       }),
     );
     if (result._tag === "Failure") {

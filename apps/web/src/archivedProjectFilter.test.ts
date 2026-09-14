@@ -2,123 +2,174 @@ import { EnvironmentId, ProjectId } from "@t3tools/contracts";
 import { describe, expect, it } from "vite-plus/test";
 
 import {
-  archivedProjectFilterKey,
-  archivedProjectSelectValue,
-  archivedThreadMatchesProject,
-  buildArchivedProjectFilterOptions,
-  parseArchivedProjectFilterKey,
-  parseArchivedProjectSelectValue,
-  resolveArchivedProjectFilterGroup,
+  archivedThreadGroupMatchesScope,
+  archivedThreadMatchesScope,
+  resolveArchivedThreadScopeFilter,
   shouldDeferArchivedEmptyState,
-  shouldShowUnresolvedArchivedProjectFilterOption,
 } from "./archivedProjectFilter";
+import type { ResolvedSettingsScope } from "./components/settings/settingsScope";
+import type { SidebarProjectGroupMember, SidebarProjectSnapshot } from "./sidebarProjectGrouping";
 
-describe("archived project filter keys", () => {
-  it("uses a stable scoped project identity", () => {
-    const key = archivedProjectFilterKey({
-      environmentId: EnvironmentId.make("environment-a"),
-      id: ProjectId.make("project-a"),
-    });
+const laptopId = EnvironmentId.make("laptop");
+const serverId = EnvironmentId.make("server");
 
-    expect(key).toBe("environment-a:project-a");
-    expect(parseArchivedProjectFilterKey(key)).toBe(key);
-    expect(parseArchivedProjectFilterKey("not-scoped")).toBeNull();
+function member(id: string, environmentId: EnvironmentId): SidebarProjectGroupMember {
+  return {
+    id: ProjectId.make(id),
+    environmentId,
+    title: "T3 Code",
+    workspaceRoot: `/repos/${id}`,
+    physicalProjectKey: `${environmentId}:/repos/${id}`,
+    environmentLabel: environmentId === laptopId ? "Laptop" : "Server",
+    defaultModelSelection: null,
+    scripts: [],
+    createdAt: "2026-09-07T00:00:00.000Z",
+    updatedAt: "2026-09-07T00:00:00.000Z",
+  };
+}
+
+const laptopCheckout = member("main", laptopId);
+const serverCheckout = member("worktree", serverId);
+const group: SidebarProjectSnapshot = {
+  ...laptopCheckout,
+  projectKey: "github.com/t3tools/t3code",
+  displayName: "T3 Code",
+  memberProjects: [laptopCheckout, serverCheckout],
+  memberProjectRefs: [
+    { environmentId: laptopId, projectId: laptopCheckout.id },
+    { environmentId: serverId, projectId: serverCheckout.id },
+  ],
+  groupedProjectCount: 2,
+  environmentPresence: "mixed",
+  allRemoteMembersAreDesktopLocal: false,
+  allRemoteMembersAreWsl: false,
+  remoteEnvironmentLabels: ["Server"],
+};
+
+const base = { members: group.memberProjects, environmentIds: [laptopId, serverId] };
+
+function threadItem(project: SidebarProjectGroupMember) {
+  return { project, thread: { environmentId: project.environmentId } };
+}
+
+describe("resolveArchivedThreadScopeFilter", () => {
+  it("does not narrow for the all scope or an unavailable selection", () => {
+    expect(
+      resolveArchivedThreadScopeFilter({ ...base, kind: "all", label: "All environments" }),
+    ).toBeNull();
+    expect(
+      resolveArchivedThreadScopeFilter({
+        ...base,
+        kind: "unavailable",
+        reason: "project-missing",
+        label: "Unavailable selection",
+        message: "This project is no longer available.",
+      }),
+    ).toBeNull();
   });
 
-  it("keeps select control values separate from project keys", () => {
-    const collisionProneKey = "all:project";
-
-    expect(archivedProjectSelectValue(null)).toBe("all");
-    expect(archivedProjectSelectValue(collisionProneKey)).toBe("project:all:project");
-    expect(parseArchivedProjectSelectValue("all")).toBeNull();
-    expect(parseArchivedProjectSelectValue("project:all:project")).toBe(collisionProneKey);
-  });
-
-  it("resolves the stable identity through a changed logical grouping key", () => {
-    const projectRef = {
-      environmentId: EnvironmentId.make("environment-a"),
-      projectId: ProjectId.make("project-a"),
+  it("labels a project across every checkout by its display name", () => {
+    const scope: ResolvedSettingsScope = {
+      ...base,
+      kind: "project",
+      group,
+      environmentId: null,
+      label: "T3 Code / All checkouts",
     };
-    const projectFilterKey = archivedProjectFilterKey({
-      environmentId: projectRef.environmentId,
-      id: projectRef.projectId,
+    expect(resolveArchivedThreadScopeFilter(scope)).toEqual({
+      label: "T3 Code",
+      groupKey: group.projectKey,
+      environmentId: null,
+      physicalProjectKey: null,
     });
+  });
 
-    expect(
-      resolveArchivedProjectFilterGroup(
-        [{ projectKey: "github.com/t3tools/t3code", memberProjectRefs: [projectRef] }],
-        projectFilterKey,
-      )?.projectKey,
-    ).toBe("github.com/t3tools/t3code");
-    expect(
-      resolveArchivedProjectFilterGroup(
-        [{ projectKey: "environment-a:/workspace/t3code", memberProjectRefs: [projectRef] }],
-        projectFilterKey,
-      )?.projectKey,
-    ).toBe("environment-a:/workspace/t3code");
+  it("keeps the environment and checkout labels once the scope narrows further", () => {
+    const projectOnServer: ResolvedSettingsScope = {
+      ...base,
+      kind: "project",
+      group,
+      environmentId: serverId,
+      label: "T3 Code / Server",
+    };
+    expect(resolveArchivedThreadScopeFilter(projectOnServer)).toMatchObject({
+      label: "T3 Code / Server",
+      groupKey: group.projectKey,
+      environmentId: serverId,
+    });
+    const checkout: ResolvedSettingsScope = {
+      ...base,
+      kind: "checkout",
+      group,
+      checkout: serverCheckout,
+      environmentId: serverId,
+      label: "T3 Code / Server · /repos/worktree",
+    };
+    expect(resolveArchivedThreadScopeFilter(checkout)).toEqual({
+      label: "T3 Code / Server · /repos/worktree",
+      groupKey: group.projectKey,
+      environmentId: serverId,
+      physicalProjectKey: serverCheckout.physicalProjectKey,
+    });
   });
 });
 
-describe("buildArchivedProjectFilterOptions", () => {
-  it("disambiguates the complete option set by path and environment", () => {
-    const options = buildArchivedProjectFilterOptions([
-      {
-        displayName: "T3 Code",
-        environmentLabel: "Mac",
-        logicalKey: "local:/workspace/t3code",
-        projectKey: "local:project",
-        workspaceRoot: "/workspace/t3code",
-      },
-      {
-        displayName: "T3 Code",
-        environmentLabel: "Ubuntu",
-        logicalKey: "remote:/workspace/t3code",
-        projectKey: "remote:project",
-        workspaceRoot: "/workspace/t3code",
-      },
-      {
-        displayName: "T3 Code",
-        environmentLabel: "Grey Mac",
-        logicalKey: "remote:/workspace/other",
-        projectKey: "grey:project",
-        workspaceRoot: "/workspace/other",
-      },
-    ]);
-
-    expect(options.map((option) => option.label)).toEqual([
-      "T3 Code — /workspace/t3code · Mac",
-      "T3 Code — /workspace/t3code · Ubuntu",
-      "T3 Code — /workspace/other",
-    ]);
-  });
-});
-
-describe("archivedThreadMatchesProject", () => {
-  it("matches every group without a project filter", () => {
-    expect(archivedThreadMatchesProject("project-a", null)).toBe(true);
+describe("archived scope matching", () => {
+  it("matches every group and thread without a filter", () => {
+    expect(archivedThreadGroupMatchesScope("anything", null)).toBe(true);
+    expect(archivedThreadMatchesScope(threadItem(laptopCheckout), null)).toBe(true);
   });
 
-  it("matches only the selected logical project", () => {
-    expect(archivedThreadMatchesProject("project-a", "project-a")).toBe(true);
-    expect(archivedThreadMatchesProject("project-b", "project-a")).toBe(false);
+  it("narrows by logical group but keeps every checkout of that group", () => {
+    const filter = resolveArchivedThreadScopeFilter({
+      ...base,
+      kind: "project",
+      group,
+      environmentId: null,
+      label: "T3 Code / All checkouts",
+    });
+    expect(archivedThreadGroupMatchesScope(group.projectKey, filter)).toBe(true);
+    expect(archivedThreadGroupMatchesScope("other", filter)).toBe(false);
+    expect(archivedThreadMatchesScope(threadItem(laptopCheckout), filter)).toBe(true);
+    expect(archivedThreadMatchesScope(threadItem(serverCheckout), filter)).toBe(true);
+  });
+
+  it("narrows threads by environment without touching group membership", () => {
+    const filter = resolveArchivedThreadScopeFilter({
+      ...base,
+      kind: "environment",
+      environmentId: serverId,
+      label: "Server",
+    });
+    expect(archivedThreadGroupMatchesScope("other", filter)).toBe(true);
+    expect(archivedThreadMatchesScope(threadItem(laptopCheckout), filter)).toBe(false);
+    expect(archivedThreadMatchesScope(threadItem(serverCheckout), filter)).toBe(true);
+  });
+
+  it("narrows threads to the selected checkout", () => {
+    const filter = resolveArchivedThreadScopeFilter({
+      ...base,
+      kind: "checkout",
+      group,
+      checkout: serverCheckout,
+      environmentId: serverId,
+      label: "T3 Code / Server · /repos/worktree",
+    });
+    expect(archivedThreadMatchesScope(threadItem(serverCheckout), filter)).toBe(true);
+    expect(archivedThreadMatchesScope(threadItem(laptopCheckout), filter)).toBe(false);
+    expect(archivedThreadMatchesScope(threadItem(member("other-worktree", serverId)), filter)).toBe(
+      false,
+    );
   });
 });
 
 describe("shouldDeferArchivedEmptyState", () => {
   it("does not claim an empty result while archive data is incomplete", () => {
     expect(
-      shouldDeferArchivedEmptyState({
-        hasMatchingGroups: false,
-        isLoading: true,
-        hasError: false,
-      }),
+      shouldDeferArchivedEmptyState({ hasMatchingGroups: false, isLoading: true, hasError: false }),
     ).toBe(true);
     expect(
-      shouldDeferArchivedEmptyState({
-        hasMatchingGroups: false,
-        isLoading: false,
-        hasError: true,
-      }),
+      shouldDeferArchivedEmptyState({ hasMatchingGroups: false, isLoading: false, hasError: true }),
     ).toBe(true);
   });
 
@@ -128,26 +179,6 @@ describe("shouldDeferArchivedEmptyState", () => {
         hasMatchingGroups: false,
         isLoading: false,
         hasError: false,
-      }),
-    ).toBe(false);
-  });
-});
-
-describe("shouldShowUnresolvedArchivedProjectFilterOption", () => {
-  it("keeps an unresolved scoped filter represented in the select", () => {
-    expect(
-      shouldShowUnresolvedArchivedProjectFilterOption({
-        hasProjectFilter: true,
-        hasResolvedProject: false,
-      }),
-    ).toBe(true);
-  });
-
-  it("does not add a fallback option after the project resolves", () => {
-    expect(
-      shouldShowUnresolvedArchivedProjectFilterOption({
-        hasProjectFilter: true,
-        hasResolvedProject: true,
       }),
     ).toBe(false);
   });
