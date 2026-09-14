@@ -654,6 +654,7 @@ export const deriveThreadCliTitle = (message: string): string => {
 
 export const threadSummary = (thread: OrchestrationThreadShell) => ({
   archiveRequest: thread.archiveRequest ?? null,
+  worktreeSwitch: thread.worktreeSwitch ?? null,
   id: thread.id,
   projectId: thread.projectId,
   title: thread.title,

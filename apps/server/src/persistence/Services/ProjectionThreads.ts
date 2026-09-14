@@ -16,6 +16,7 @@ import {
   RuntimeMode,
   ThreadLinkedPullRequest,
   ThreadArchiveRequest,
+  ThreadWorktreeSwitch,
   ThreadId,
   TurnId,
 } from "@t3tools/contracts";
@@ -38,6 +39,7 @@ export const ProjectionThread = Schema.Struct({
   linkedPullRequest: Schema.optional(Schema.NullOr(ThreadLinkedPullRequest)),
   branchPullRequest: Schema.optional(Schema.NullOr(ThreadLinkedPullRequest)),
   archiveRequest: Schema.optional(Schema.NullOr(ThreadArchiveRequest)),
+  worktreeSwitch: Schema.optional(Schema.NullOr(ThreadWorktreeSwitch)),
   latestTurnId: Schema.NullOr(TurnId),
   createdAt: IsoDateTime,
   updatedAt: IsoDateTime,
@@ -82,16 +84,21 @@ export type ListProjectionThreadsByProjectInput = typeof ListProjectionThreadsBy
  * ProjectionThreadRepositoryShape - Service API for projected thread records.
  */
 export interface ProjectionThreadRepositoryShape {
-  /**
-   * Insert or replace a projected thread row.
-   *
-   * Upserts by `threadId`.
-   */
+  readonly listPendingWorktreeSwitches: () => Effect.Effect<
+    ReadonlyArray<ThreadId>,
+    ProjectionRepositoryError
+  >;
+
   readonly listPendingArchives: () => Effect.Effect<
     ReadonlyArray<ThreadId>,
     ProjectionRepositoryError
   >;
 
+  /**
+   * Insert or replace a projected thread row.
+   *
+   * Upserts by `threadId`.
+   */
   readonly upsert: (thread: ProjectionThread) => Effect.Effect<void, ProjectionRepositoryError>;
 
   /**

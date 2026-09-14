@@ -133,6 +133,30 @@ it("reports server settlement state in thread summaries", () => {
   assert.isFalse(threadSummary(threadWith({})).settled);
 });
 
+it("reports worktree moves without changing the current checkout in summaries", () => {
+  const request = {
+    requestId: CommandId.make("switch-request"),
+    turnId: TurnId.make("switch-turn"),
+    sourceWorktreePath: null,
+    sourceBranch: "dev",
+    targetPath: "/repo/worktrees/feature",
+    requestedAt: "2026-09-14T10:00:00.000Z",
+    status: "pending" as const,
+  };
+  const pending = threadSummary(threadWith({ worktreePath: null, worktreeSwitch: request }));
+  assert.deepEqual(pending.worktreeSwitch, request);
+  assert.isNull(pending.worktreePath);
+  const completed = threadSummary(
+    threadWith({
+      worktreePath: request.targetPath,
+      worktreeSwitch: { ...request, status: "completed" },
+    }),
+  );
+  assert.equal(completed.worktreeSwitch?.status, "completed");
+  assert.equal(completed.worktreePath, request.targetPath);
+  assert.isNull(threadSummary(threadWith({})).worktreeSwitch);
+});
+
 it("normalizes missing legacy snooze timestamps to null", () => {
   const summary = threadSummary(threadWith({}));
 

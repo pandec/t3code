@@ -99,6 +99,7 @@ import { MessageSpeechReactorLive } from "./orchestration/Layers/MessageSpeechRe
 import { CheckpointReactorLive } from "./orchestration/Layers/CheckpointReactor.ts";
 import { ThreadDeletionReactorLive } from "./orchestration/Layers/ThreadDeletionReactor.ts";
 import * as ThreadSettlementReactor from "./orchestration/ThreadSettlementReactor.ts";
+import * as ThreadWorktreeSwitchReactor from "./orchestration/ThreadWorktreeSwitchReactor.ts";
 import * as ThreadArchiveReactor from "./orchestration/ThreadArchiveReactor.ts";
 import * as PullRequestSyncReactor from "./orchestration/PullRequestSyncReactor.ts";
 import * as ThreadPullRequestReactor from "./orchestration/ThreadPullRequestReactor.ts";
@@ -293,6 +294,7 @@ const ReactorLayerLive = Layer.empty.pipe(
   Layer.provideMerge(PullRequestSyncReactor.layer),
   Layer.provideMerge(ThreadPullRequestReactor.layer),
   Layer.provideMerge(ThreadArchiveReactor.layer),
+  Layer.provideMerge(ThreadWorktreeSwitchReactor.layer),
   Layer.provideMerge(AgentAwarenessRelay.layer.pipe(Layer.provide(ServerSecretStore.layer))),
   Layer.provideMerge(RuntimeReceiptBusLive),
   Layer.provideMerge(ProviderUsageRefreshLive),

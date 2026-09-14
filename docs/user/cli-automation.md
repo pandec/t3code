@@ -163,6 +163,12 @@ did. `settledAt` is `null` when unsettled; automatic settlement stamps the last 
 while manual settlement stamps the settle moment. Settling is an inbox overlay like snooze and does
 not change the thread's turn `state`.
 
+Summaries include `worktreeSwitch`, the latest agent-requested move or `null`. Its `status` is
+`pending`, `completed`, `cancelled`, or `error`; `detail` explains a cancellation or failure.
+While pending, `worktreePath` still names the current checkout. Read status again before acting
+on the destination. See [moving a Codex thread](thread-sidebar.md#move-a-codex-thread-to-a-worktree)
+for requesting and cancelling moves.
+
 ### Answering user input
 
 List unresolved questions before answering one:

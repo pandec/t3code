@@ -24,6 +24,18 @@ Rows for background work still show **Working** or **Monitoring**, but recede wh
 selected. The colored status remains visible while the sidebar gives more prominence to work that
 needs your attention.
 
+## Move a Codex thread to a worktree
+
+Ask Codex to create a worktree and switch this thread to it. The agent can request the move with
+`switch_worktree`. T3 waits for the current turn and its checkpoint to finish, then updates the
+thread's checkout. Your next message continues the same conversation in that directory.
+
+The move stays pending during the current turn. Ask the agent to inspect or cancel it with
+`worktree_switch_status` or `cancel_worktree_switch`. A failed or interrupted turn cancels the
+move, as does starting new work or changing the checkout before it applies. The target must be an
+existing checkout of the same repository on the connected server. To move back, ask the agent to
+switch to the project checkout.
+
 ## Pin and reorder threads
 
 Pin a thread from its menu or use the pin button that appears when you hover its row on web and

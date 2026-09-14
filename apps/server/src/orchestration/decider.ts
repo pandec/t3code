@@ -615,6 +615,97 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
       };
     }
 
+    case "thread.worktree-switch.schedule":
+    case "thread.worktree-switch.cancel":
+    case "thread.worktree-switch.execute": {
+      const thread = yield* requireThread({
+        readModel,
+        command,
+        threadId: command.threadId,
+      });
+      const occurredAt = yield* nowIso;
+      const base = yield* withEventBase({
+        aggregateKind: "thread",
+        aggregateId: thread.id,
+        occurredAt,
+        commandId: command.commandId,
+      });
+      const update = (worktreeSwitch: NonNullable<OrchestrationThread["worktreeSwitch"]>) => ({
+        ...base,
+        type: "thread.meta-updated" as const,
+        payload: { threadId: thread.id, worktreeSwitch, updatedAt: occurredAt },
+      });
+      const reject = (detail: string) =>
+        new OrchestrationCommandInvariantError({ commandType: command.type, detail });
+      if (command.type === "thread.worktree-switch.schedule") {
+        if (thread.archivedAt !== null) return yield* reject("Thread is already archived.");
+        if (thread.session?.providerName !== "codex")
+          return yield* reject(
+            "Worktree switching is supported for Codex threads. Claude can use EnterWorktree.",
+          );
+        if (thread.latestTurn?.state !== "running" || thread.latestTurn.turnId !== command.turnId)
+          return yield* reject("The requesting turn is no longer running.");
+        if (thread.archiveRequest?.status === "pending")
+          return yield* reject("Cancel the pending archive before switching worktrees.");
+        return update({
+          requestId: command.commandId,
+          turnId: command.turnId,
+          sourceWorktreePath: thread.worktreePath,
+          sourceBranch: thread.branch,
+          targetPath: command.targetPath,
+          requestedAt: occurredAt,
+          status: "pending",
+        });
+      }
+      const request = thread.worktreeSwitch;
+      if (
+        request?.status !== "pending" ||
+        ("requestId" in command && command.requestId !== request.requestId)
+      )
+        return yield* reject("The worktree switch is no longer pending.");
+      if (command.type === "thread.worktree-switch.cancel")
+        return update({ ...request, status: "cancelled", detail: "Cancelled by agent." });
+      if (
+        thread.archivedAt !== null ||
+        thread.worktreePath !== request.sourceWorktreePath ||
+        thread.branch !== request.sourceBranch ||
+        thread.latestTurn?.turnId !== request.turnId ||
+        thread.archiveRequest?.status === "pending" ||
+        hasQueuedTurnStartForThread(thread, occurredAt)
+      )
+        return update({
+          ...request,
+          status: "cancelled",
+          detail: "The thread started new work, changed checkout, or was archived.",
+        });
+      if (thread.latestTurn.state === "error" || thread.latestTurn.state === "interrupted")
+        return update({
+          ...request,
+          status: "cancelled",
+          detail: "The turn failed or was interrupted.",
+        });
+      if (
+        thread.latestTurn.state !== "completed" ||
+        thread.session?.status === "running" ||
+        thread.session?.status === "starting"
+      )
+        return yield* reject("The turn has not finished.");
+      if (command.error) return update({ ...request, status: "error", detail: command.error });
+      if (!hasReadyCheckpoint(thread, request.turnId))
+        return yield* reject("The turn checkpoint has not finished.");
+      // One event changes the checkout and consumes the request. The provider
+      // reactor resumes the same conversation at this cwd before the next turn.
+      const completed = update({ ...request, status: "completed" });
+      return {
+        ...completed,
+        payload: {
+          ...completed.payload,
+          branch: command.branch,
+          worktreePath: command.worktreePath,
+        },
+      };
+    }
+
     case "thread.archive.schedule":
     case "thread.archive.cancel":
     case "thread.archive.execute":
@@ -2610,6 +2701,34 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
           activity: command.activity,
         },
       };
+      if (
+        command.activity.kind === "checkpoint.capture.failed" &&
+        thread.worktreeSwitch?.status === "pending" &&
+        thread.archivedAt === null &&
+        command.activity.turnId === thread.worktreeSwitch.turnId
+      ) {
+        return [
+          activityAppendedEvent,
+          {
+            ...(yield* withEventBase({
+              aggregateKind: "thread",
+              aggregateId: thread.id,
+              occurredAt: command.createdAt,
+              commandId: command.commandId,
+            })),
+            type: "thread.meta-updated",
+            payload: {
+              threadId: thread.id,
+              updatedAt: command.createdAt,
+              worktreeSwitch: {
+                ...thread.worktreeSwitch,
+                status: "error",
+                detail: "The final checkpoint failed. The checkout was not changed.",
+              },
+            },
+          },
+        ];
+      }
       if (
         command.activity.kind === "checkpoint.capture.failed" &&
         thread.archiveRequest?.status === "pending" &&

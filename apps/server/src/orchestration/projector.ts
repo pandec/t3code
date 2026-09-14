@@ -697,6 +697,9 @@ export function projectEvent(
               ...(payload.archiveRequest !== undefined
                 ? { archiveRequest: payload.archiveRequest }
                 : {}),
+              ...(payload.worktreeSwitch !== undefined
+                ? { worktreeSwitch: payload.worktreeSwitch }
+                : {}),
               ...(payload.titleRegeneration !== undefined
                 ? { titleRegeneration: payload.titleRegeneration }
                 : {}),

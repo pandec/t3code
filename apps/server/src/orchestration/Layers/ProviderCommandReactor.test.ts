@@ -4485,80 +4485,84 @@ describe("ProviderCommandReactor", () => {
     ).toBe(false);
   });
 
-  it("restarts the provider session when the thread workspace changes", async () => {
-    const harness = await createHarness({
-      threadModelSelection: {
-        instanceId: ProviderInstanceId.make("claudeAgent"),
-        model: "claude-sonnet-4-6",
-      },
-    });
-    const worktreePath = NodePath.join(harness.stateDir, "existing-worktree");
-    NodeFS.mkdirSync(worktreePath, { recursive: true });
-    const now = "2026-01-01T00:00:00.000Z";
-
-    await Effect.runPromise(
-      harness.engine.dispatch({
-        type: "thread.turn.start",
-        commandId: CommandId.make("cmd-turn-start-workspace-1"),
-        threadId: ThreadId.make("thread-1"),
-        message: {
-          messageId: asMessageId("user-message-workspace-1"),
-          role: "user",
-          text: "first in project root",
-          attachments: [],
+  it.each(["claudeAgent", "codex"] as const)(
+    "resumes %s in the new thread workspace with the same conversation",
+    async (provider) => {
+      const model = provider === "codex" ? "gpt-5-codex" : "claude-sonnet-4-6";
+      const harness = await createHarness({
+        threadModelSelection: {
+          instanceId: ProviderInstanceId.make(provider),
+          model,
         },
-        interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
-        runtimeMode: "approval-required",
-        createdAt: now,
-      }),
-    );
+      });
+      const worktreePath = NodePath.join(harness.stateDir, "existing-worktree");
+      NodeFS.mkdirSync(worktreePath, { recursive: true });
+      const now = "2026-01-01T00:00:00.000Z";
 
-    await waitFor(() => harness.startSession.mock.calls.length === 1);
-    await waitFor(() => harness.sendTurn.mock.calls.length === 1);
-    expect(harness.startSession.mock.calls[0]?.[1]).toMatchObject({
-      cwd: "/tmp/provider-project",
-    });
+      await Effect.runPromise(
+        harness.engine.dispatch({
+          type: "thread.turn.start",
+          commandId: CommandId.make("cmd-turn-start-workspace-1"),
+          threadId: ThreadId.make("thread-1"),
+          message: {
+            messageId: asMessageId("user-message-workspace-1"),
+            role: "user",
+            text: "first in project root",
+            attachments: [],
+          },
+          interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
+          runtimeMode: "approval-required",
+          createdAt: now,
+        }),
+      );
 
-    await Effect.runPromise(
-      harness.engine.dispatch({
-        type: "thread.meta.update",
-        commandId: CommandId.make("cmd-thread-worktree-change"),
+      await waitFor(() => harness.startSession.mock.calls.length === 1);
+      await waitFor(() => harness.sendTurn.mock.calls.length === 1);
+      expect(harness.startSession.mock.calls[0]?.[1]).toMatchObject({
+        cwd: "/tmp/provider-project",
+      });
+
+      await Effect.runPromise(
+        harness.engine.dispatch({
+          type: "thread.meta.update",
+          commandId: CommandId.make("cmd-thread-worktree-change"),
+          threadId: ThreadId.make("thread-1"),
+          worktreePath: worktreePath,
+        }),
+      );
+
+      await Effect.runPromise(
+        harness.engine.dispatch({
+          type: "thread.turn.start",
+          commandId: CommandId.make("cmd-turn-start-workspace-2"),
+          threadId: ThreadId.make("thread-1"),
+          message: {
+            messageId: asMessageId("user-message-workspace-2"),
+            role: "user",
+            text: "second in worktree",
+            attachments: [],
+          },
+          interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
+          runtimeMode: "approval-required",
+          createdAt: now,
+        }),
+      );
+
+      await waitFor(() => harness.startSession.mock.calls.length === 2);
+      await waitFor(() => harness.sendTurn.mock.calls.length === 2);
+      expect(harness.stopSession.mock.calls.length).toBe(0);
+      expect(harness.startSession.mock.calls[1]?.[1]).toMatchObject({
         threadId: ThreadId.make("thread-1"),
-        worktreePath: worktreePath,
-      }),
-    );
-
-    await Effect.runPromise(
-      harness.engine.dispatch({
-        type: "thread.turn.start",
-        commandId: CommandId.make("cmd-turn-start-workspace-2"),
-        threadId: ThreadId.make("thread-1"),
-        message: {
-          messageId: asMessageId("user-message-workspace-2"),
-          role: "user",
-          text: "second in worktree",
-          attachments: [],
+        cwd: worktreePath,
+        resumeCursor: { opaque: "resume-1" },
+        modelSelection: {
+          instanceId: ProviderInstanceId.make(provider),
+          model,
         },
-        interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
         runtimeMode: "approval-required",
-        createdAt: now,
-      }),
-    );
-
-    await waitFor(() => harness.startSession.mock.calls.length === 2);
-    await waitFor(() => harness.sendTurn.mock.calls.length === 2);
-    expect(harness.stopSession.mock.calls.length).toBe(0);
-    expect(harness.startSession.mock.calls[1]?.[1]).toMatchObject({
-      threadId: ThreadId.make("thread-1"),
-      cwd: worktreePath,
-      resumeCursor: { opaque: "resume-1" },
-      modelSelection: {
-        instanceId: ProviderInstanceId.make("claudeAgent"),
-        model: "claude-sonnet-4-6",
-      },
-      runtimeMode: "approval-required",
-    });
-  });
+      });
+    },
+  );
 
   it("restarts claude sessions when claude effort changes", async () => {
     const harness = await createHarness({
