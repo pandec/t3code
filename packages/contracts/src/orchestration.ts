@@ -838,6 +838,7 @@ export const OrchestrationThread = Schema.Struct({
   // Manual Active placement. Keyless threads retain their creation/re-entry
   // order above the arranged run. Settling clears this slot.
   activeOrderKey: Schema.optional(Schema.NullOr(TrimmedNonEmptyString)),
+  customGroupId: Schema.optional(Schema.NullOr(TrimmedNonEmptyString)),
   // Pending-only state. Optional so older servers remain compatible.
   titleRegeneration: Schema.optional(Schema.NullOr(ThreadTitleRegeneration)),
   archiveRequest: Schema.optional(Schema.NullOr(ThreadArchiveRequest)),
@@ -915,6 +916,7 @@ export const OrchestrationThreadShell = Schema.Struct({
   pinnedAt: Schema.optional(Schema.NullOr(IsoDateTime)),
   pinOrderKey: Schema.optional(Schema.NullOr(TrimmedNonEmptyString)),
   activeOrderKey: Schema.optional(Schema.NullOr(TrimmedNonEmptyString)),
+  customGroupId: Schema.optional(Schema.NullOr(TrimmedNonEmptyString)),
   titleRegeneration: Schema.optional(Schema.NullOr(ThreadTitleRegeneration)),
   archiveRequest: Schema.optional(Schema.NullOr(ThreadArchiveRequest)),
   worktreeSwitch: Schema.optional(Schema.NullOr(ThreadWorktreeSwitch)),
@@ -1368,6 +1370,7 @@ const ThreadActiveReorderCommand = Schema.Struct({
 });
 
 const ThreadMetaUpdateCommand = Schema.Struct({
+  customGroupId: Schema.optional(Schema.NullOr(TrimmedNonEmptyString)),
   type: Schema.Literal("thread.meta.update"),
   commandId: CommandId,
   threadId: ThreadId,
@@ -2046,6 +2049,7 @@ export const ThreadMetaUpdatedPayload = Schema.Struct({
   // Order updates use this existing event so older clients can ignore the
   // new field while continuing to decode the event stream.
   activeOrderKey: Schema.optional(Schema.NullOr(TrimmedNonEmptyString)),
+  customGroupId: Schema.optional(Schema.NullOr(TrimmedNonEmptyString)),
   title: Schema.optional(TrimmedNonEmptyString),
   /** Intent marker consumed by the title-generation reactor. Keeping this on
       the existing event lets older clients safely ignore the new field. */

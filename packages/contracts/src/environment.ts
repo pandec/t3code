@@ -166,6 +166,7 @@ export const ExecutionEnvironmentCapabilities = Schema.Struct({
   threadPinReorder: Schema.optionalKey(Schema.Boolean),
   /** Server persists manual Active order through thread.active.reorder. */
   threadActiveReorder: Schema.optionalKey(Schema.Boolean),
+  threadCustomGroups: Schema.optionalKey(Schema.Boolean),
   /** Server understands regenerateTitle on thread.meta.update. Absent on
       older servers, so clients hide the action instead of sending it. */
   threadTitleRegeneration: Schema.optionalKey(Schema.Boolean),

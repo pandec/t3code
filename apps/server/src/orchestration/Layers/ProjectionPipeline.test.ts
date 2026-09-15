@@ -1160,7 +1160,10 @@ it.layer(BaseTestLayer)("OrchestrationProjectionPipeline", (it) => {
       // complete SQL row writes otherwise risk dropping the placement.
       const orderUpdatedAt = "2026-01-01T00:00:00.200Z";
       const orderEvents = [
-        { type: "thread.meta-updated", payload: { activeOrderKey: "gm" } },
+        {
+          type: "thread.meta-updated",
+          payload: { activeOrderKey: "gm", customGroupId: "research" },
+        },
         { type: "thread.pinned", payload: { pinnedAt: now, pinOrderKey: "m" } },
         {
           type: "thread.snoozed",
@@ -1190,12 +1193,15 @@ it.layer(BaseTestLayer)("OrchestrationProjectionPipeline", (it) => {
         yield* projectionPipeline.bootstrap;
         const rows = yield* sql<{
           readonly activeOrderKey: string | null;
+          readonly customGroupId: string | null;
           readonly updatedAt: string;
         }>`
-          SELECT active_order_key AS "activeOrderKey", updated_at AS "updatedAt"
+          SELECT active_order_key AS "activeOrderKey", custom_group_id AS "customGroupId", updated_at AS "updatedAt"
           FROM projection_threads WHERE thread_id = 'thread-1'
         `;
-        assert.deepEqual(rows, [{ activeOrderKey: "gm", updatedAt: orderUpdatedAt }]);
+        assert.deepEqual(rows, [
+          { activeOrderKey: "gm", customGroupId: "research", updatedAt: orderUpdatedAt },
+        ]);
       }
 
       // Settled lifecycle through the DB pipeline: thread.settled writes the
@@ -1232,6 +1238,10 @@ it.layer(BaseTestLayer)("OrchestrationProjectionPipeline", (it) => {
         FROM projection_threads
         WHERE thread_id = 'thread-1'
       `;
+      const groupRows = yield* sql<{
+        customGroupId: string | null;
+      }>`SELECT custom_group_id AS "customGroupId" FROM projection_threads WHERE thread_id = 'thread-1'`;
+      assert.deepEqual(groupRows, [{ customGroupId: "research" }]);
       assert.deepEqual(settledRows, [
         {
           settledOverride: "settled",

@@ -94,6 +94,30 @@ If dragging is unavailable for one environment, update the T3 Code server runnin
 environment. Pinned and active reordering require server support. Threads from older servers keep
 their default order until the server is updated.
 
+## Organize threads into custom groups
+
+On web and desktop, choose **Thread groups** in the sidebar toolbar to create, rename, reorder,
+or remove groups. Drag a thread onto a group header or between its rows, or use **Move to group**
+from the thread menu. Each thread belongs to one group. New threads start in Active.
+Removing a group keeps its threads and returns its active threads to Active.
+
+Groups can contain threads from any project or connected environment. Group definitions propagate
+when a web or mobile client connects to the environments together. An environment that was offline
+catches up when it shares a connected client with an updated environment. Thread assignments stay
+on the server that owns the conversation, so devices connected to that server see the same assignment.
+Update older servers before assigning their threads to groups.
+
+Pinned, snoozed, settled, and archived threads appear in their usual sections and remember their
+group. Unpinning, waking, or reopening returns them to the group when no other state takes precedence.
+Grouped threads still auto-settle, but do not move into Older.
+
+Custom groups stay together above Active by default. On web and desktop, use
+**Settings → Extras → Sidebar → Custom group position** to place them below Active instead.
+Group fold states are remembered on each device.
+
+Mobile shows the same groups. Use **Arrange threads** to drag between groups or back to Active.
+**Move up** and **Move down** stay within the current group. Create and manage groups on web or desktop.
+
 ## Snooze active work
 
 Choose **Snooze** to hide a thread until a preset time. **Until it's done** appears while the agent

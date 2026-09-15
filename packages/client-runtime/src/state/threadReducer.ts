@@ -482,6 +482,9 @@ function applyThreadDetailEventUnretained(
           ...(event.payload.branchPullRequest !== undefined
             ? { branchPullRequest: event.payload.branchPullRequest }
             : {}),
+          ...(event.payload.customGroupId !== undefined
+            ? { customGroupId: event.payload.customGroupId }
+            : {}),
           ...(event.payload.activeOrderKey !== undefined
             ? { activeOrderKey: event.payload.activeOrderKey }
             : {}),

@@ -13,6 +13,7 @@ import {
 } from "@t3tools/contracts";
 import * as Option from "effect/Option";
 import * as Schema from "effect/Schema";
+import { mergeThreadGroups } from "./threadGroups.ts";
 import { deepMerge } from "./Struct.ts";
 import { fromLenientJson } from "./schemaJson.ts";
 import { createModelSelection } from "./model.ts";
@@ -283,6 +284,7 @@ export function applyServerSettingsPatch(
     backgroundActivity,
     projectAccentColorsFill,
     savedPromptLibrary,
+    threadGroups,
     // Merged per entry below; its `null` removals must not reach deepMerge.
     usageLimitSources: usageLimitSourcesPatch,
     usagePriceOverrides: usagePriceOverridesPatch,
@@ -372,6 +374,9 @@ export function applyServerSettingsPatch(
   const nextWithReplacementsBase = {
     ...next,
     voice: nextVoice,
+    ...(threadGroups !== undefined
+      ? { threadGroups: mergeThreadGroups(current.threadGroups, threadGroups) }
+      : {}),
     ...(backgroundActivity !== undefined
       ? {
           backgroundActivity: {

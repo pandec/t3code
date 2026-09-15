@@ -1,3 +1,6 @@
+import { useThreadGroups } from "../../state/use-thread-groups";
+import { useCollapsedThreadGroups } from "../../state/use-mobile-preferences";
+import { ThreadCustomGroupHeader } from "../threads/ThreadCustomGroupHeader";
 import type { ThreadMoveDestination } from "../threads/threadOrder";
 import { createThreadMovePlanner } from "../threads/threadOrder";
 import {
@@ -245,6 +248,8 @@ function HomeTopContentSpacer() {
 /* ─── Main screen ────────────────────────────────────────────────────── */
 
 export function HomeScreen(props: HomeScreenProps) {
+  const customGroups = useThreadGroups();
+  const { ids: collapsedGroupIds, toggle: toggleCustomGroup } = useCollapsedThreadGroups();
   const { materialYouStyleLayoutActive } = useAppearancePreferences();
   const [groupDisplayStates, setGroupDisplayStates] = useState<
     ReadonlyMap<string, HomeGroupDisplayState>
@@ -785,6 +790,7 @@ export function HomeScreen(props: HomeScreenProps) {
   const threadMovePlanners = useMemo(() => {
     const sectionPlanner = (section: "pinned" | "active") =>
       createThreadMovePlanner({
+        groups: customGroups.groups,
         allThreads: props.threads,
         section,
         reorderableEnvironmentIds: new Set(
@@ -808,6 +814,7 @@ export function HomeScreen(props: HomeScreenProps) {
       });
     return { pinned: sectionPlanner("pinned"), active: sectionPlanner("active") };
   }, [
+    customGroups.groups,
     serverConfigs,
     props.threads,
     pendingOrder,
@@ -835,6 +842,7 @@ export function HomeScreen(props: HomeScreenProps) {
     // Settled threads are live shells; archived threads keep their original
     // "hidden from lists" meaning.
     return buildThreadListV2Items({
+      customGroups: customGroups.groups,
       pendingOrder,
       threads: props.threads.filter((thread) => thread.archivedAt === null),
       attentionMemberThreadKeys: props.attentionMemberThreadKeys,
@@ -858,6 +866,7 @@ export function HomeScreen(props: HomeScreenProps) {
       selectedThreadKey: null,
     });
   }, [
+    customGroups.groups,
     alwaysShowPinnedInAttention,
     olderSection.enabled,
     olderSection.afterDays,
@@ -942,6 +951,11 @@ export function HomeScreen(props: HomeScreenProps) {
   const threadListV2Items = useMemo(
     () =>
       buildThreadListV2ListItems({
+        customGroups: customGroups.groups,
+        collapsedGroupIds:
+          props.searchQuery.trim() || props.attentionMemberThreadKeys != null
+            ? new Set()
+            : collapsedGroupIds,
         items: threadListV2Layout.items,
         pendingTasks: v2PendingTasks,
         pinnedCount: threadListV2Layout.pinnedCount,
@@ -959,6 +973,10 @@ export function HomeScreen(props: HomeScreenProps) {
         snoozeLabelNow: `${nowMinute}:00.000Z`,
       }),
     [
+      customGroups.groups,
+      collapsedGroupIds,
+      props.searchQuery,
+      props.attentionMemberThreadKeys,
       nowMinute,
       olderShelfExpanded,
       pinnedShelfExpanded,
@@ -1005,6 +1023,15 @@ export function HomeScreen(props: HomeScreenProps) {
           />
         );
       }
+      if (item.type === "v2-custom-group")
+        return (
+          <ThreadCustomGroupHeader
+            name={item.name}
+            count={item.count}
+            expanded={item.expanded}
+            onToggle={item.groupId ? () => toggleCustomGroup(item.groupId!) : undefined}
+          />
+        );
       if (item.type === "v2-pinned-shelf") {
         return (
           <ThreadListV2PinnedShelfHeader
@@ -1116,6 +1143,7 @@ export function HomeScreen(props: HomeScreenProps) {
       );
     },
     [
+      toggleCustomGroup,
       handleDeleteThread,
       activeReorderEnvironmentIds,
       threadMovePlanners,

@@ -1588,12 +1588,21 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
           ...(command.modelSelection !== undefined
             ? { modelSelection: command.modelSelection }
             : {}),
+          ...(command.customGroupId !== undefined ? { customGroupId: command.customGroupId } : {}),
           ...(branch !== undefined ? { branch } : {}),
           ...(worktreePath !== undefined ? { worktreePath } : {}),
           ...(command.linkedPullRequest !== undefined
             ? { linkedPullRequest: command.linkedPullRequest }
             : {}),
-          updatedAt: occurredAt,
+          updatedAt:
+            command.customGroupId !== undefined &&
+            Object.entries(command).every(
+              ([key, value]) =>
+                value === undefined ||
+                ["type", "commandId", "threadId", "customGroupId"].includes(key),
+            )
+              ? thread.updatedAt
+              : occurredAt,
         },
       };
     }

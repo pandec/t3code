@@ -2001,3 +2001,105 @@ describe("cross-section thread drops", () => {
     ).toEqual({ pin: false, unpin: false, unsettle: false, unsnooze: false });
   });
 });
+
+it("keeps grouped work out of Older and uses the lifecycle shelves when parked", () => {
+  const customGroups = [
+    { id: "research", name: "Research", orderKey: "a", revision: "1:a", deleted: false },
+  ];
+  const grouped = makeThread({
+    id: ThreadId.make("grouped"),
+    title: "Grouped",
+    customGroupId: "research",
+    createdAt: "2020-01-01T00:00:00.000Z",
+    updatedAt: "2020-01-01T00:00:00.000Z",
+  });
+  const layout = buildThreadListV2Items({
+    threads: [grouped],
+    customGroups,
+    environmentId: null,
+    searchQuery: "",
+    now: NOW,
+    olderSectionEnabled: true,
+  });
+  expect(layout.olderCount).toBe(0);
+  const rows = buildThreadListV2ListItems({
+    ...layout,
+    customGroups,
+    pendingTasks: [],
+    collapsedGroupIds: new Set(["research"]),
+  });
+  expect(rows.some((row) => row.type === "v2-thread")).toBe(false);
+  expect(rows).toContainEqual(
+    expect.objectContaining({ type: "v2-custom-group", groupId: "research", count: 1 }),
+  );
+  const snoozed = buildThreadListV2Items({
+    threads: [{ ...grouped, snoozedAt: NOW, snoozedUntil: "2099-01-01T00:00:00.000Z" }],
+    customGroups,
+    environmentId: null,
+    searchQuery: "",
+    now: NOW,
+  });
+  expect(snoozed.snoozedCount).toBe(1);
+});
+
+it("moves up and down within a group and allows Arrange to enter another", () => {
+  const rows = ["a", "b", "c"].map((id, index) =>
+    makeThread({
+      id: ThreadId.make(id),
+      title: id,
+      customGroupId: id === "b" ? "parked" : "research",
+      activeOrderKey: ["g", "m", "t"][index],
+    }),
+  );
+  const planner = createThreadMovePlanner({
+    ordered: rows,
+    section: "active",
+    reorderableEnvironmentIds: new Set([environmentId]),
+  });
+  expect(planner(`${environmentId}:a`, "up")).toBeNull();
+  expect(planner(`${environmentId}:b`, "down")).toBeNull();
+  const moved = planner(`${environmentId}:c`, "up");
+  expect(moved).toHaveLength(1);
+  expect(moved?.[0]?.id).toBe(`${environmentId}:c`);
+  expect(
+    planner(`${environmentId}:a`, {
+      section: "active",
+      customGroupId: "parked",
+      targetId: `${environmentId}:b`,
+      placement: "after",
+    }),
+  ).not.toBeNull();
+});
+
+it("keeps a group reorder pending while unrelated groups are present", () => {
+  const a = makeThread({
+    id: ThreadId.make("a"),
+    title: "A",
+    customGroupId: "research",
+    activeOrderKey: "g",
+  });
+  const b = makeThread({
+    id: ThreadId.make("b"),
+    title: "B",
+    customGroupId: "research",
+    activeOrderKey: "m",
+  });
+  const other = makeThread({
+    id: ThreadId.make("other"),
+    title: "Other",
+    customGroupId: "parked",
+    activeOrderKey: "t",
+  });
+  const pending = createPendingThreadOrder({
+    section: "active",
+    customGroupId: "research",
+    ordered: [a, b],
+    movedId: `${environmentId}:b`,
+    direction: "up",
+    assignments: [{ id: `${environmentId}:b`, orderKey: "a" }],
+  });
+  expect(reconcilePendingThreadOrder(pending, [a, b, other])).not.toBeNull();
+  expect(
+    reconcilePendingThreadOrder(pending, [a, { ...b, customGroupId: "parked" }, other]),
+  ).toBeNull();
+});
