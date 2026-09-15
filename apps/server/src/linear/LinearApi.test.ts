@@ -93,24 +93,74 @@ const statusBody = {
   },
 };
 
+const issueRef = (identifier: string, title: string) => ({
+  identifier,
+  title,
+  url: `https://linear.app/acme/issue/${identifier}`,
+  state: { name: "Todo", type: "unstarted", color: "#e2e2e2" },
+});
+
 const issueBody = {
   data: {
+    organization: { urlKey: "acme" },
     issue: {
       id: "issue-uuid",
       identifier: "SP-123",
       url: "https://linear.app/acme/issue/SP-123/fix-login",
       title: "Fix login",
       description: "Users cannot log in.",
+      priority: 2,
       priorityLabel: "High",
+      estimate: null,
+      branchName: "ada/sp-123-fix-login",
       createdAt: "2026-01-01T00:00:00.000Z",
       updatedAt: "2026-01-02T00:00:00.000Z",
       dueDate: null,
+      startedAt: "2026-01-02T00:00:00.000Z",
+      completedAt: null,
+      canceledAt: null,
       state: { name: "In Progress", type: "started", color: "#f2c94c" },
-      team: { name: "SalesPros" },
-      project: { name: "Auth" },
-      assignee: { name: "Ada Lovelace", displayName: "ada", avatarUrl: null },
+      team: { name: "SalesPros", key: "SP", color: null },
+      project: {
+        name: "Auth",
+        url: "https://linear.app/acme/project/auth-abc",
+        color: "#5e6ad2",
+        status: { name: "In Progress", type: "started", color: "#f2c94c" },
+      },
+      projectMilestone: null,
+      cycle: { number: 4, name: null },
+      assignee: {
+        name: "Ada Lovelace",
+        displayName: "ada",
+        avatarUrl: null,
+        url: "https://linear.app/acme/profiles/ada",
+      },
       creator: { name: "Grace Hopper", displayName: "grace", avatarUrl: "https://x/y.png" },
       labels: { nodes: [{ name: "bug", color: "#eb5757" }] },
+      parent: issueRef("SP-100", "Auth overhaul"),
+      children: { nodes: [issueRef("SP-124", "Add tests")] },
+      relations: {
+        nodes: [
+          { type: "blocks", relatedIssue: issueRef("SP-130", "Ship login") },
+          { type: "related", relatedIssue: issueRef("SP-131", "Login copy") },
+        ],
+      },
+      inverseRelations: {
+        nodes: [
+          { type: "blocks", issue: issueRef("SP-120", "Rotate secrets") },
+          { type: "duplicate", issue: issueRef("SP-125", "Login broken") },
+        ],
+      },
+      attachments: {
+        nodes: [
+          {
+            title: "Fix login #42",
+            subtitle: "acme/app",
+            url: "https://github.com/acme/app/pull/42",
+            sourceType: "github",
+          },
+        ],
+      },
     },
   },
 };
@@ -183,13 +233,34 @@ describe("LinearApi", () => {
         id: "issue-uuid",
         identifier: "SP-123",
         title: "Fix login",
+        priority: 2,
         priorityLabel: "High",
+        branchName: "ada/sp-123-fix-login",
+        workspaceUrlKey: "acme",
         state: { name: "In Progress", type: "started", color: "#f2c94c" },
-        team: { name: "SalesPros" },
-        project: { name: "Auth" },
-        assignee: { displayName: "ada", avatarUrl: null },
+        team: { name: "SalesPros", key: "SP", color: null },
+        project: { name: "Auth", url: "https://linear.app/acme/project/auth-abc" },
+        cycle: { number: 4, name: null },
+        assignee: {
+          displayName: "ada",
+          avatarUrl: null,
+          url: "https://linear.app/acme/profiles/ada",
+        },
+        creator: { displayName: "grace", url: null },
         labels: [{ name: "bug", color: "#eb5757" }],
+        parent: { identifier: "SP-100" },
+        children: [{ identifier: "SP-124", title: "Add tests" }],
+        attachments: [{ title: "Fix login #42", sourceType: "github" }],
       });
+      // Owned edges keep their direction; edges pointing at this issue are turned around.
+      expect(
+        issue.relations?.map((relation) => [relation.kind, relation.issue.identifier]),
+      ).toEqual([
+        ["blocks", "SP-130"],
+        ["related", "SP-131"],
+        ["blocked-by", "SP-120"],
+        ["duplicated-by", "SP-125"],
+      ]);
 
       yield* provide(readLinearIssue({ identifier: "SP-123" }), client, store);
       expect(requests).toHaveLength(1);

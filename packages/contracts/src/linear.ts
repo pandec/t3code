@@ -15,6 +15,8 @@ export const LinearUser = Schema.Struct({
   name: TrimmedNonEmptyString,
   displayName: TrimmedNonEmptyString,
   avatarUrl: Schema.optional(Schema.NullOr(Schema.String)),
+  /** The member's Linear profile page. Absent from servers older than the field. */
+  url: Schema.optional(Schema.NullOr(TrimmedNonEmptyString)),
 });
 export type LinearUser = typeof LinearUser.Type;
 
@@ -51,6 +53,53 @@ export const LinearIssueState = Schema.Struct({
 });
 export type LinearIssueState = typeof LinearIssueState.Type;
 
+/** Another issue named from this one: its parent, a sub-issue, or a relation. */
+export const LinearIssueRef = Schema.Struct({
+  identifier: TrimmedNonEmptyString,
+  title: TrimmedNonEmptyString,
+  url: TrimmedNonEmptyString,
+  state: LinearIssueState,
+});
+export type LinearIssueRef = typeof LinearIssueRef.Type;
+
+/**
+ * A relation as seen from the issue being read. Linear stores one edge per pair and names it
+ * from the side that created it; the server folds the inverse edges into these kinds so the
+ * panel never has to know which side it is on.
+ */
+export const LinearIssueRelationKind = Schema.Literals([
+  "blocks",
+  "blocked-by",
+  "duplicate-of",
+  "duplicated-by",
+  "related",
+]);
+export type LinearIssueRelationKind = typeof LinearIssueRelationKind.Type;
+
+export const LinearIssueRelation = Schema.Struct({
+  kind: LinearIssueRelationKind,
+  issue: LinearIssueRef,
+});
+export type LinearIssueRelation = typeof LinearIssueRelation.Type;
+
+export const LinearAttachment = Schema.Struct({
+  title: Schema.String,
+  subtitle: Schema.NullOr(Schema.String),
+  url: TrimmedNonEmptyString,
+  /** Linear's integration name for the link, such as `github` or `figma`, or null for a plain URL. */
+  sourceType: Schema.NullOr(Schema.String),
+});
+export type LinearAttachment = typeof LinearAttachment.Type;
+
+export const LinearProjectStatus = Schema.Struct({
+  name: TrimmedNonEmptyString,
+  type: TrimmedNonEmptyString,
+  color: TrimmedNonEmptyString,
+});
+export type LinearProjectStatus = typeof LinearProjectStatus.Type;
+
+// Everything after `dueDate` is optional so an issue read from a server that predates the field
+// still decodes; the panel treats a missing field like an empty one.
 export const LinearIssue = Schema.Struct({
   id: TrimmedNonEmptyString,
   identifier: TrimmedNonEmptyString,
@@ -59,8 +108,19 @@ export const LinearIssue = Schema.Struct({
   description: Schema.NullOr(Schema.String),
   priorityLabel: TrimmedNonEmptyString,
   state: LinearIssueState,
-  team: Schema.Struct({ name: TrimmedNonEmptyString }),
-  project: Schema.NullOr(Schema.Struct({ name: TrimmedNonEmptyString })),
+  team: Schema.Struct({
+    name: TrimmedNonEmptyString,
+    key: Schema.optional(TrimmedNonEmptyString),
+    color: Schema.optional(Schema.NullOr(Schema.String)),
+  }),
+  project: Schema.NullOr(
+    Schema.Struct({
+      name: TrimmedNonEmptyString,
+      url: Schema.optional(TrimmedNonEmptyString),
+      color: Schema.optional(Schema.NullOr(Schema.String)),
+      status: Schema.optional(Schema.NullOr(LinearProjectStatus)),
+    }),
+  ),
   assignee: Schema.NullOr(LinearUser),
   creator: Schema.NullOr(LinearUser),
   labels: Schema.Array(
@@ -69,6 +129,25 @@ export const LinearIssue = Schema.Struct({
   createdAt: IsoDateTime,
   updatedAt: IsoDateTime,
   dueDate: Schema.NullOr(Schema.String),
+  /** 0 = none, 1 = urgent, 2 = high, 3 = medium, 4 = low, as Linear numbers them. */
+  priority: Schema.optional(Schema.Number),
+  estimate: Schema.optional(Schema.NullOr(Schema.Number)),
+  cycle: Schema.optional(
+    Schema.NullOr(
+      Schema.Struct({ number: Schema.Number, name: Schema.NullOr(TrimmedNonEmptyString) }),
+    ),
+  ),
+  milestone: Schema.optional(Schema.NullOr(Schema.Struct({ name: TrimmedNonEmptyString }))),
+  /** The workspace's Linear URL key, so team pages can be linked without a URL field. */
+  workspaceUrlKey: Schema.optional(TrimmedNonEmptyString),
+  branchName: Schema.optional(TrimmedNonEmptyString),
+  startedAt: Schema.optional(Schema.NullOr(IsoDateTime)),
+  completedAt: Schema.optional(Schema.NullOr(IsoDateTime)),
+  canceledAt: Schema.optional(Schema.NullOr(IsoDateTime)),
+  parent: Schema.optional(Schema.NullOr(LinearIssueRef)),
+  children: Schema.optional(Schema.Array(LinearIssueRef)),
+  relations: Schema.optional(Schema.Array(LinearIssueRelation)),
+  attachments: Schema.optional(Schema.Array(LinearAttachment)),
 });
 export type LinearIssue = typeof LinearIssue.Type;
 

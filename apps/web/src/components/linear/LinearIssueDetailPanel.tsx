@@ -1,13 +1,26 @@
 import type {
   EnvironmentId,
+  LinearAttachment,
   LinearComment,
   LinearIssue,
+  LinearIssueRef,
+  LinearIssueRelationKind,
+  LinearUser,
   ScopedThreadRef,
 } from "@t3tools/contracts";
-import { ExternalLinkIcon, SendIcon } from "lucide-react";
-import { useCallback, useState } from "react";
+import {
+  CopyIcon,
+  CornerLeftUpIcon,
+  ExternalLinkIcon,
+  GitBranchIcon,
+  GitPullRequestIcon,
+  LinkIcon,
+  SendIcon,
+} from "lucide-react";
+import { useCallback, useRef, useState, type ReactNode } from "react";
 
 import { RefreshIcon } from "~/components/ui/refresh-icon";
+import { cn } from "~/lib/utils";
 import { readLocalApi } from "~/localApi";
 import { linearEnvironment, useLinearFailureReason } from "~/state/linear";
 import { formatEnvironmentQueryError, useEnvironmentQuery } from "~/state/query";
@@ -15,19 +28,60 @@ import { useAtomCommand } from "~/state/use-atom-command";
 import { useAtomQueryRunner } from "~/state/use-atom-query-runner";
 import { formatRelativeTimeLabel } from "~/timestampFormat";
 
+import { useRightPanelStore } from "../../rightPanelStore";
 import ChatMarkdown from "../ChatMarkdown";
 import { LinearIcon } from "../Icons";
+import { showAnchoredCopyErrorToast, showAnchoredCopySuccessToast } from "../ui/anchoredCopyToast";
+import { Badge } from "../ui/badge";
 import { Button } from "../ui/button";
 import { Empty, EmptyDescription, EmptyHeader, EmptyMedia, EmptyTitle } from "../ui/empty";
 import { Textarea } from "../ui/textarea";
 import { toastManager } from "../ui/toast";
 import { Tooltip, TooltipPopup, TooltipTrigger } from "../ui/tooltip";
+import { linearCommentDraftKey, useLinearCommentDraftStore } from "./linearCommentDraftStore";
 import { linearIssueUrl } from "./linearMarkdown.logic";
-import { LinearStateBadge, LinearUserAvatar, linearUserLabel } from "./linearPresentation";
+import {
+  formatLinearDueDate,
+  LinearLabelPill,
+  LinearPriorityIcon,
+  LinearStateIcon,
+  LinearUserAvatar,
+  linearUserLabel,
+} from "./linearPresentation";
+
+/**
+ * Attachment URLs are typed by whoever attached them, so only web URLs are handed to the
+ * shell; every other link the panel opens is one Linear generated.
+ */
+function isWebUrl(url: string): boolean {
+  try {
+    const { protocol } = new URL(url);
+    return protocol === "https:" || protocol === "http:";
+  } catch {
+    return false;
+  }
+}
 
 function openExternal(url: string) {
+  if (!isWebUrl(url)) return;
   void readLocalApi()?.shell.openExternal(url);
 }
+
+/** Team pages have no URL field in Linear's API; this is the shape the app uses for them. */
+function linearTeamUrl(workspaceUrlKey: string, teamKey: string): string {
+  return `https://linear.app/${workspaceUrlKey}/team/${teamKey}/overview`;
+}
+
+const RELATION_GROUPS: ReadonlyArray<{ kind: LinearIssueRelationKind; label: string }> = [
+  { kind: "blocked-by", label: "Blocked by" },
+  { kind: "blocks", label: "Blocks" },
+  { kind: "duplicate-of", label: "Duplicate of" },
+  { kind: "duplicated-by", label: "Duplicated by" },
+  { kind: "related", label: "Related" },
+];
+
+const isEnded = (state: LinearIssueRef["state"]) =>
+  state.type === "completed" || state.type === "canceled";
 
 /**
  * The panel's stand-in when it has no issue to show. The link that opened it was taken over
@@ -59,56 +113,356 @@ function LinearUnavailable({
   );
 }
 
-function MetaRow({ label, children }: { label: string; children: React.ReactNode }) {
+/**
+ * One property of the issue. A chip with a destination renders as a button that opens it in the
+ * browser; the rest are plain badges in the same clothes so the row reads as one thing.
+ */
+function Chip({
+  href,
+  onClick,
+  label,
+  className,
+  children,
+}: {
+  href?: string | null | undefined;
+  onClick?: (() => void) | undefined;
+  /** Accessible name for interactive chips whose visible text alone is ambiguous. */
+  label?: string | undefined;
+  className?: string | undefined;
+  children: ReactNode;
+}) {
+  const open = onClick ?? (href ? () => openExternal(href) : undefined);
+  return (
+    <Badge
+      size="control"
+      variant="outline"
+      className={cn("max-w-full min-w-0 justify-start gap-1.5 font-normal", className)}
+      {...(open ? { render: <button type="button" aria-label={label} onClick={open} /> } : {})}
+    >
+      {children}
+    </Badge>
+  );
+}
+
+function ChipText({ children, muted }: { children: ReactNode; muted?: boolean }) {
+  return (
+    <span className={cn("min-w-0 truncate", muted && "text-muted-foreground")}>{children}</span>
+  );
+}
+
+function PropertyChips({ issue }: { issue: LinearIssue }) {
+  const teamHref =
+    issue.workspaceUrlKey && issue.team.key
+      ? linearTeamUrl(issue.workspaceUrlKey, issue.team.key)
+      : null;
+  return (
+    <div className="mt-3 flex flex-wrap items-center gap-1.5">
+      <Chip>
+        <LinearStateIcon state={issue.state} />
+        <ChipText>{issue.state.name}</ChipText>
+      </Chip>
+      <Chip>
+        {issue.priority !== undefined ? (
+          <LinearPriorityIcon priority={issue.priority} className="text-foreground/80" />
+        ) : null}
+        <ChipText muted={issue.priority === 0}>{issue.priorityLabel}</ChipText>
+      </Chip>
+      <Chip
+        href={issue.assignee?.url}
+        label={issue.assignee ? `Open ${linearUserLabel(issue.assignee, "")} in Linear` : undefined}
+      >
+        <LinearUserAvatar user={issue.assignee} className="size-3.5" />
+        <ChipText muted={issue.assignee === null}>
+          {linearUserLabel(issue.assignee, "Unassigned")}
+        </ChipText>
+      </Chip>
+      {issue.project ? (
+        <Chip href={issue.project.url} label={`Open project ${issue.project.name} in Linear`}>
+          <span
+            aria-hidden
+            className="size-2.5 shrink-0 rounded-[3px]"
+            style={{ backgroundColor: issue.project.color ?? "currentColor" }}
+          />
+          <ChipText>{issue.project.name}</ChipText>
+          {issue.project.status ? (
+            <span className="shrink-0 text-muted-foreground">· {issue.project.status.name}</span>
+          ) : null}
+        </Chip>
+      ) : null}
+      <Chip href={teamHref} label={`Open team ${issue.team.name} in Linear`}>
+        {issue.team.key ? (
+          <span className="shrink-0 rounded-xs bg-muted px-1 font-mono text-[10px] leading-4 text-muted-foreground">
+            {issue.team.key}
+          </span>
+        ) : null}
+        <ChipText>{issue.team.name}</ChipText>
+      </Chip>
+      {issue.cycle ? (
+        <Chip>
+          <span className="shrink-0 text-muted-foreground">Cycle</span>
+          <ChipText>{issue.cycle.name ?? issue.cycle.number}</ChipText>
+        </Chip>
+      ) : null}
+      {issue.milestone ? (
+        <Chip>
+          <span className="shrink-0 text-muted-foreground">Milestone</span>
+          <ChipText>{issue.milestone.name}</ChipText>
+        </Chip>
+      ) : null}
+      {issue.estimate !== null && issue.estimate !== undefined ? (
+        <Chip>
+          <span className="shrink-0 text-muted-foreground">Estimate</span>
+          <ChipText>{issue.estimate}</ChipText>
+        </Chip>
+      ) : null}
+    </div>
+  );
+}
+
+function UserLink({ user }: { user: LinearUser }) {
+  const name = linearUserLabel(user, "");
+  const body = (
+    <>
+      <LinearUserAvatar user={user} className="size-3.5" />
+      <span className="min-w-0 truncate">{name}</span>
+    </>
+  );
+  return user.url ? (
+    <button
+      type="button"
+      onClick={() => openExternal(user.url!)}
+      className="inline-flex min-w-0 cursor-pointer items-center gap-1 underline-offset-2 hover:underline"
+    >
+      {body}
+    </button>
+  ) : (
+    <span className="inline-flex min-w-0 items-center gap-1">{body}</span>
+  );
+}
+
+function DetailRow({ label, children }: { label: string; children: ReactNode }) {
   return (
     <>
       <dt className="text-muted-foreground">{label}</dt>
-      <dd className="min-w-0 truncate text-foreground/90">{children}</dd>
+      <dd className="flex min-w-0 items-center gap-1 truncate text-foreground/90">{children}</dd>
     </>
   );
 }
 
-function IssueMeta({ issue }: { issue: LinearIssue }) {
+function CopyButton({ value, label }: { value: string; label: string }) {
+  const ref = useRef<HTMLButtonElement>(null);
+  const copy = () => {
+    if (!navigator.clipboard?.writeText) {
+      showAnchoredCopyErrorToast(ref, new Error("Clipboard API unavailable."));
+      return;
+    }
+    void navigator.clipboard.writeText(value).then(
+      () => showAnchoredCopySuccessToast(ref),
+      (error: unknown) =>
+        showAnchoredCopyErrorToast(
+          ref,
+          error instanceof Error ? error : new Error("An error occurred."),
+        ),
+    );
+  };
   return (
-    <dl className="mt-3 grid grid-cols-[auto_minmax(0,1fr)] gap-x-4 gap-y-1.5 text-xs">
-      <MetaRow label="State">
-        <LinearStateBadge state={issue.state} />
-      </MetaRow>
-      <MetaRow label="Priority">{issue.priorityLabel}</MetaRow>
-      <MetaRow label="Assignee">
-        <span className="inline-flex min-w-0 items-center gap-1.5">
-          <LinearUserAvatar user={issue.assignee} />
-          <span className="truncate">{linearUserLabel(issue.assignee, "Unassigned")}</span>
-        </span>
-      </MetaRow>
-      <MetaRow label="Team">{issue.team.name}</MetaRow>
-      {issue.project ? <MetaRow label="Project">{issue.project.name}</MetaRow> : null}
-      {issue.labels.length > 0 ? (
-        <MetaRow label="Labels">
-          <span className="flex flex-wrap gap-1">
-            {issue.labels.map((label) => (
-              <span
-                key={label.name}
-                className="inline-flex items-center gap-1 rounded-sm border border-border/60 px-1 text-[11px]"
-              >
-                <span
-                  aria-hidden
-                  className="size-1.5 rounded-full"
-                  style={{ backgroundColor: label.color }}
-                />
-                {label.name}
-              </span>
-            ))}
-          </span>
-        </MetaRow>
+    <Tooltip>
+      <TooltipTrigger
+        render={
+          <Button
+            ref={ref}
+            aria-label={label}
+            size="icon-micro"
+            variant="ghost-muted"
+            onClick={copy}
+          >
+            <CopyIcon className="size-3" />
+          </Button>
+        }
+      />
+      <TooltipPopup side="top">{label}</TooltipPopup>
+    </Tooltip>
+  );
+}
+
+/**
+ * Timestamps, the due date, and the branch name. Two label/value pairs per row once the panel
+ * is wide enough for them, one below the other before that.
+ */
+function IssueDetails({ issue }: { issue: LinearIssue }) {
+  const due = issue.dueDate ? formatLinearDueDate(issue.dueDate) : null;
+  const settled = isEnded(issue.state);
+  return (
+    <div className="mt-5 border-t border-border/60 pt-4 text-xs">
+      <dl className="grid grid-cols-[auto_minmax(0,1fr)] gap-x-3 gap-y-1.5 @[26rem]/linear-issue:grid-cols-[auto_minmax(0,1fr)_auto_minmax(0,1fr)] @[26rem]/linear-issue:gap-x-4">
+        <DetailRow label="Created">
+          <span className="shrink-0">{formatRelativeTimeLabel(issue.createdAt)}</span>
+          {issue.creator ? (
+            <>
+              <span className="shrink-0 text-muted-foreground">by</span>
+              <UserLink user={issue.creator} />
+            </>
+          ) : null}
+        </DetailRow>
+        <DetailRow label="Updated">{formatRelativeTimeLabel(issue.updatedAt)}</DetailRow>
+        {issue.startedAt ? (
+          <DetailRow label="Started">{formatRelativeTimeLabel(issue.startedAt)}</DetailRow>
+        ) : null}
+        {issue.completedAt ? (
+          <DetailRow label="Completed">{formatRelativeTimeLabel(issue.completedAt)}</DetailRow>
+        ) : null}
+        {issue.canceledAt ? (
+          <DetailRow label="Canceled">{formatRelativeTimeLabel(issue.canceledAt)}</DetailRow>
+        ) : null}
+        {due ? (
+          <DetailRow label="Due">
+            <span className={cn(due.overdue && !settled && "text-destructive-foreground")}>
+              {due.label}
+              {due.overdue && !settled ? " · overdue" : ""}
+            </span>
+          </DetailRow>
+        ) : issue.dueDate ? (
+          <DetailRow label="Due">{issue.dueDate}</DetailRow>
+        ) : null}
+      </dl>
+      {issue.branchName ? (
+        <div className="mt-2.5 flex min-w-0 items-center gap-1.5">
+          <GitBranchIcon aria-hidden className="size-3.5 shrink-0 text-muted-foreground" />
+          <code className="min-w-0 truncate font-mono text-[11px] text-foreground/90">
+            {issue.branchName}
+          </code>
+          <CopyButton value={issue.branchName} label="Copy branch name" />
+        </div>
       ) : null}
-      {issue.dueDate ? <MetaRow label="Due">{issue.dueDate}</MetaRow> : null}
-      <MetaRow label="Created">
-        {formatRelativeTimeLabel(issue.createdAt)}
-        {issue.creator ? ` by ${linearUserLabel(issue.creator, "")}` : ""}
-      </MetaRow>
-      <MetaRow label="Updated">{formatRelativeTimeLabel(issue.updatedAt)}</MetaRow>
-    </dl>
+    </div>
+  );
+}
+
+function Section({
+  title,
+  detail,
+  children,
+}: {
+  title: string;
+  detail?: string;
+  children: ReactNode;
+}) {
+  return (
+    <section className="mt-5">
+      <h2 className="text-xs font-medium text-muted-foreground">
+        {title}
+        {detail ? <span className="font-normal"> · {detail}</span> : null}
+      </h2>
+      {children}
+    </section>
+  );
+}
+
+function IssueRefRow({
+  issue,
+  onOpen,
+}: {
+  issue: LinearIssueRef;
+  onOpen: (issue: LinearIssueRef) => void;
+}) {
+  return (
+    <li>
+      <button
+        type="button"
+        onClick={() => onOpen(issue)}
+        className="-mx-1.5 flex w-[calc(100%+--spacing(3))] min-w-0 cursor-pointer items-center gap-2 rounded-md px-1.5 py-1 text-left text-xs hover:bg-accent/50"
+      >
+        <LinearStateIcon state={issue.state} />
+        <span className="shrink-0 text-muted-foreground">{issue.identifier}</span>
+        <span
+          className={cn(
+            "min-w-0 truncate",
+            isEnded(issue.state) ? "text-muted-foreground" : "text-foreground/90",
+          )}
+        >
+          {issue.title}
+        </span>
+      </button>
+    </li>
+  );
+}
+
+function IssueRefList({
+  issues,
+  onOpen,
+}: {
+  issues: ReadonlyArray<LinearIssueRef>;
+  onOpen: (issue: LinearIssueRef) => void;
+}) {
+  return (
+    <ul className="mt-1">
+      {issues.map((issue) => (
+        <IssueRefRow key={issue.identifier} issue={issue} onOpen={onOpen} />
+      ))}
+    </ul>
+  );
+}
+
+function AttachmentRow({ attachment }: { attachment: LinearAttachment }) {
+  const Icon = /github|gitlab|bitbucket/i.test(attachment.sourceType ?? "")
+    ? GitPullRequestIcon
+    : LinkIcon;
+  const title = attachment.title.trim().length > 0 ? attachment.title : attachment.url;
+  return (
+    <li>
+      <button
+        type="button"
+        onClick={() => openExternal(attachment.url)}
+        className="-mx-1.5 flex w-[calc(100%+--spacing(3))] min-w-0 cursor-pointer items-center gap-2 rounded-md px-1.5 py-1 text-left text-xs hover:bg-accent/50"
+      >
+        <Icon aria-hidden className="size-3.5 shrink-0 text-muted-foreground" />
+        <span className="min-w-0 truncate text-foreground/90">{title}</span>
+        {attachment.subtitle ? (
+          <span className="min-w-0 truncate text-muted-foreground">{attachment.subtitle}</span>
+        ) : null}
+        <ExternalLinkIcon aria-hidden className="ml-auto size-2.5 shrink-0 text-muted-foreground" />
+      </button>
+    </li>
+  );
+}
+
+/** Parent, sub-issues, relations, and attachments, each section only when it has something. */
+function IssueConnections({
+  issue,
+  onOpenIssue,
+}: {
+  issue: LinearIssue;
+  onOpenIssue: (issue: LinearIssueRef) => void;
+}) {
+  const children = issue.children ?? [];
+  const relations = issue.relations ?? [];
+  const attachments = (issue.attachments ?? []).filter((attachment) => isWebUrl(attachment.url));
+  const done = children.filter((child) => isEnded(child.state)).length;
+  return (
+    <>
+      {children.length > 0 ? (
+        <Section title="Sub-issues" detail={`${done}/${children.length} done`}>
+          <IssueRefList issues={children} onOpen={onOpenIssue} />
+        </Section>
+      ) : null}
+      {RELATION_GROUPS.map(({ kind, label }) => {
+        const group = relations.filter((relation) => relation.kind === kind);
+        return group.length > 0 ? (
+          <Section key={kind} title={label}>
+            <IssueRefList issues={group.map((relation) => relation.issue)} onOpen={onOpenIssue} />
+          </Section>
+        ) : null;
+      })}
+      {attachments.length > 0 ? (
+        <Section title="Links">
+          <ul className="mt-1">
+            {attachments.map((attachment) => (
+              <AttachmentRow key={attachment.url} attachment={attachment} />
+            ))}
+          </ul>
+        </Section>
+      ) : null}
+    </>
   );
 }
 
@@ -157,27 +511,28 @@ function CommentItem({
 
 function CommentComposer({
   environmentId,
+  threadRef,
   issueId,
   onPosted,
 }: {
   environmentId: EnvironmentId;
+  threadRef: ScopedThreadRef | null;
   issueId: string;
   onPosted: () => void;
 }) {
-  const [body, setBody] = useState("");
-  const [posting, setPosting] = useState(false);
+  const draftKey = linearCommentDraftKey(environmentId, threadRef, issueId);
+  const body = useLinearCommentDraftStore((state) => state.drafts[draftKey]?.body ?? "");
+  const posting = useLinearCommentDraftStore((state) => state.drafts[draftKey]?.posting ?? false);
   const createComment = useAtomCommand(linearEnvironment.createComment, { reportFailure: false });
   const submit = async () => {
-    const trimmed = body.trim();
-    if (trimmed.length === 0 || posting) return;
-    setPosting(true);
+    const trimmed = useLinearCommentDraftStore.getState().beginPost(draftKey);
+    if (trimmed === null) return;
     const result = await createComment({ environmentId, input: { issueId, body: trimmed } });
-    setPosting(false);
+    useLinearCommentDraftStore.getState().finishPost(draftKey, result._tag === "Success");
     if (result._tag === "Failure") {
       toastManager.add({ type: "error", title: "Could not post the comment" });
       return;
     }
-    setBody("");
     onPosted();
   };
   return (
@@ -188,7 +543,9 @@ function CommentComposer({
         rows={3}
         placeholder="Leave a comment"
         aria-label="Comment on this issue"
-        onChange={(event) => setBody(event.target.value)}
+        onChange={(event) =>
+          useLinearCommentDraftStore.getState().setBody(draftKey, event.target.value)
+        }
       />
       <div className="flex justify-end">
         <Button
@@ -249,6 +606,18 @@ export function LinearIssueDetailPanel({
     }
     setRefreshing(false);
   }, [environmentId, identifier, readComments, readIssue, refreshComments, refreshIssue]);
+  // Issues named from this one live in the same workspace, so they open as tabs of their own
+  // beside the thread. Without a thread to attach the tab to, Linear itself is the destination.
+  const openIssue = useCallback(
+    (ref: LinearIssueRef) => {
+      if (threadRef === null) {
+        openExternal(ref.url);
+        return;
+      }
+      useRightPanelStore.getState().openLinearIssue(threadRef, ref.identifier);
+    },
+    [threadRef],
+  );
 
   if (!supported) {
     return (
@@ -311,13 +680,31 @@ export function LinearIssueDetailPanel({
           <RefreshIcon className="size-3.5" refreshing={busy} />
         </Button>
       </div>
-      <div className="min-h-0 flex-1 overflow-y-auto px-4 py-4">
+      <div className="@container/linear-issue min-h-0 flex-1 overflow-y-auto px-4 py-4">
         {issue === null ? (
           <p className="text-xs text-muted-foreground">Loading issue…</p>
         ) : (
           <>
+            {issue.parent ? (
+              <button
+                type="button"
+                onClick={() => openIssue(issue.parent!)}
+                className="mb-1.5 flex max-w-full min-w-0 cursor-pointer items-center gap-1.5 text-xs text-muted-foreground hover:text-foreground"
+              >
+                <CornerLeftUpIcon aria-hidden className="size-3 shrink-0" />
+                <span className="shrink-0 font-medium">{issue.parent.identifier}</span>
+                <span className="min-w-0 truncate">{issue.parent.title}</span>
+              </button>
+            ) : null}
             <h1 className="text-base font-semibold leading-snug text-pretty">{issue.title}</h1>
-            <IssueMeta issue={issue} />
+            <PropertyChips issue={issue} />
+            {issue.labels.length > 0 ? (
+              <div className="mt-2 flex flex-wrap gap-1.5">
+                {issue.labels.map((label) => (
+                  <LinearLabelPill key={label.name} label={label} />
+                ))}
+              </div>
+            ) : null}
             {issue.description && issue.description.trim().length > 0 ? (
               <ChatMarkdown
                 className="mt-4"
@@ -329,6 +716,8 @@ export function LinearIssueDetailPanel({
             ) : (
               <p className="mt-4 text-xs text-muted-foreground">No description.</p>
             )}
+            <IssueDetails issue={issue} />
+            <IssueConnections issue={issue} onOpenIssue={openIssue} />
             <h2 className="mt-6 text-xs font-medium text-muted-foreground">
               Comments
               {commentsQuery.data
@@ -360,6 +749,7 @@ export function LinearIssueDetailPanel({
             ) : null}
             <CommentComposer
               environmentId={environmentId}
+              threadRef={threadRef}
               issueId={issue.id}
               onPosted={refreshComments}
             />
