@@ -784,7 +784,10 @@ export function useThreadListActions(options: {
             environmentId: thread.environmentId,
             input: { threadId: thread.id, customGroupId },
           });
-          if (result._tag === "Failure") return false;
+          if (result._tag === "Failure") {
+            Alert.alert("Could not move thread to group", String(Cause.squash(result.cause)));
+            return false;
+          }
         }
         if (crossSection) {
           if (section === "pinned") {

@@ -71,3 +71,24 @@ it("releases conflicting group moves only after distinguishing them from pending
   ).toBe(false);
   expect(shouldReleaseSidebarGroupDrop({ ...pending, targetExists: false })).toBe(true);
 });
+
+it("does not carry a group into Settled when custom groups are below Active", () => {
+  const belowActive: SidebarListItem[] = [
+    { kind: "marker", marker: "pinned-header" },
+    { kind: "marker", marker: "pinned-divider" },
+    { kind: "marker", marker: "active-header" },
+    { kind: "thread", key: "active", section: "active" },
+    { kind: "marker", marker: "custom-group:research" },
+    { kind: "thread", key: "research", section: "active", customGroupId: "research" },
+    { kind: "marker", marker: "settled-header" },
+    { kind: "thread", key: "settled", section: "settled" },
+  ];
+  for (const source of ["active", "research"]) {
+    for (const target of [sidebarMarkerId("settled-header"), "settled"]) {
+      expect(resolveSidebarDropTarget(belowActive, source, target)).toMatchObject({
+        section: "settled",
+        customGroupId: null,
+      });
+    }
+  }
+});

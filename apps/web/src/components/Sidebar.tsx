@@ -5283,13 +5283,23 @@ export default function Sidebar() {
         );
         if (clicked._tag === "Failure") return;
         if (clicked.value?.startsWith("group:")) {
-          void updateThreadMetadata({
+          const result = await updateThreadMetadata({
             environmentId: threadRef.environmentId,
             input: {
               threadId: threadRef.threadId,
               customGroupId: clicked.value === "group:none" ? null : clicked.value.slice(6),
             },
           });
+          if (result._tag === "Failure" && !isAtomCommandInterrupted(result)) {
+            const error = squashAtomCommandFailure(result);
+            toastManager.add(
+              stackedThreadToast({
+                type: "error",
+                title: "Failed to move thread to group",
+                description: error instanceof Error ? error.message : "An error occurred.",
+              }),
+            );
+          }
           return;
         }
         if (clicked.value?.startsWith("snooze:")) {
@@ -6319,10 +6329,11 @@ export default function Sidebar() {
                               threadGroupId(thread, customGroups.groups) === (group?.id ?? null),
                           ).length;
                           const expanded = !group || !collapsedGroups.has(group.id);
+                          const Header = group ? "button" : "div";
                           items.push(
                             <SortableSidebarMarker key={item.marker} marker={item.marker}>
-                              <button
-                                type="button"
+                              <Header
+                                {...(group ? { type: "button" as const } : {})}
                                 className={cn(
                                   "mb-1 mt-3 flex w-full items-center gap-2 px-2.5 text-left text-xs text-muted-foreground/60",
                                   dragState &&
@@ -6351,7 +6362,7 @@ export default function Sidebar() {
                                     className={cn("size-3", expanded && "rotate-180")}
                                   />
                                 ) : null}
-                              </button>
+                              </Header>
                             </SortableSidebarMarker>,
                           );
                           continue;

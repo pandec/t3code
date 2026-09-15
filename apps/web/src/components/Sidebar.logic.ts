@@ -230,7 +230,7 @@ export function resolveSidebarDropTarget(
     pinnedOrder,
     activeOrder,
     ...(items.some((item) => item.kind === "marker" && item.marker.startsWith("custom-group:"))
-      ? { customGroupId }
+      ? { customGroupId: section === "active" ? customGroupId : null }
       : {}),
   };
 }
