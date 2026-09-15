@@ -38,6 +38,7 @@ import { Empty, EmptyDescription, EmptyHeader, EmptyMedia, EmptyTitle } from "..
 import { Textarea } from "../ui/textarea";
 import { toastManager } from "../ui/toast";
 import { Tooltip, TooltipPopup, TooltipTrigger } from "../ui/tooltip";
+import { linearCommentDraftKey, useLinearCommentDraftStore } from "./linearCommentDraftStore";
 import { linearIssueUrl } from "./linearMarkdown.logic";
 import {
   formatLinearDueDate,
@@ -276,7 +277,7 @@ function CopyButton({ value, label }: { value: string; label: string }) {
  */
 function IssueDetails({ issue }: { issue: LinearIssue }) {
   const due = issue.dueDate ? formatLinearDueDate(issue.dueDate) : null;
-  const settled = issue.completedAt !== null && issue.completedAt !== undefined;
+  const settled = isEnded(issue.state);
   return (
     <div className="mt-5 border-t border-border/60 pt-4 text-xs">
       <dl className="grid grid-cols-[auto_minmax(0,1fr)] gap-x-3 gap-y-1.5 @[26rem]/linear-issue:grid-cols-[auto_minmax(0,1fr)_auto_minmax(0,1fr)] @[26rem]/linear-issue:gap-x-4">
@@ -496,27 +497,28 @@ function CommentItem({
 
 function CommentComposer({
   environmentId,
+  threadRef,
   issueId,
   onPosted,
 }: {
   environmentId: EnvironmentId;
+  threadRef: ScopedThreadRef | null;
   issueId: string;
   onPosted: () => void;
 }) {
-  const [body, setBody] = useState("");
-  const [posting, setPosting] = useState(false);
+  const draftKey = linearCommentDraftKey(environmentId, threadRef, issueId);
+  const body = useLinearCommentDraftStore((state) => state.drafts[draftKey]?.body ?? "");
+  const posting = useLinearCommentDraftStore((state) => state.drafts[draftKey]?.posting ?? false);
   const createComment = useAtomCommand(linearEnvironment.createComment, { reportFailure: false });
   const submit = async () => {
-    const trimmed = body.trim();
-    if (trimmed.length === 0 || posting) return;
-    setPosting(true);
+    const trimmed = useLinearCommentDraftStore.getState().beginPost(draftKey);
+    if (trimmed === null) return;
     const result = await createComment({ environmentId, input: { issueId, body: trimmed } });
-    setPosting(false);
+    useLinearCommentDraftStore.getState().finishPost(draftKey, result._tag === "Success");
     if (result._tag === "Failure") {
       toastManager.add({ type: "error", title: "Could not post the comment" });
       return;
     }
-    setBody("");
     onPosted();
   };
   return (
@@ -527,7 +529,9 @@ function CommentComposer({
         rows={3}
         placeholder="Leave a comment"
         aria-label="Comment on this issue"
-        onChange={(event) => setBody(event.target.value)}
+        onChange={(event) =>
+          useLinearCommentDraftStore.getState().setBody(draftKey, event.target.value)
+        }
       />
       <div className="flex justify-end">
         <Button
@@ -731,6 +735,7 @@ export function LinearIssueDetailPanel({
             ) : null}
             <CommentComposer
               environmentId={environmentId}
+              threadRef={threadRef}
               issueId={issue.id}
               onPosted={refreshComments}
             />

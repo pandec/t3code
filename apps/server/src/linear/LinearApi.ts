@@ -71,7 +71,7 @@ const STATUS_QUERY = `query T3LinearStatus {
   organization { name urlKey }
   teams(first: 250) { nodes { key } }
 }`;
-// The organization rides along so team and cycle pages, which have no URL field, can be linked.
+// The organization rides along so team pages, which have no URL field, can be linked.
 const ISSUE_QUERY = `query T3LinearIssue($id: String!) {
   organization { urlKey }
   issue(id: $id) { ${ISSUE_FIELDS} }

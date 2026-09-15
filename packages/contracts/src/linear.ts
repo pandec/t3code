@@ -138,7 +138,7 @@ export const LinearIssue = Schema.Struct({
     ),
   ),
   milestone: Schema.optional(Schema.NullOr(Schema.Struct({ name: TrimmedNonEmptyString }))),
-  /** The workspace's Linear URL key, so team and cycle pages can be linked without a URL field. */
+  /** The workspace's Linear URL key, so team pages can be linked without a URL field. */
   workspaceUrlKey: Schema.optional(TrimmedNonEmptyString),
   branchName: Schema.optional(TrimmedNonEmptyString),
   startedAt: Schema.optional(Schema.NullOr(IsoDateTime)),
