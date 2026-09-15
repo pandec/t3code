@@ -1,3 +1,4 @@
+import { mergeThreadGroups, threadGroupId } from "@t3tools/shared/threadGroups";
 import {
   unScopeThreadShell,
   type EnvironmentThreadShell,
@@ -704,6 +705,19 @@ export function useThreadListActions(options: {
         );
         return false;
       }
+      const groups = mergeThreadGroups(
+        ...[...configs.values()].map((config) => config.settings.threadGroups),
+      );
+      const customGroupId =
+        typeof direction === "object"
+          ? (direction.customGroupId ?? null)
+          : threadGroupId(thread, groups);
+      if (
+        section === "active" &&
+        customGroupId !== threadGroupId(thread, groups) &&
+        configs.get(thread.environmentId)?.environment.capabilities.threadCustomGroups !== true
+      )
+        return false;
       const ordered = getThreadListV2OrderedSection({
         threads: shells,
         section,
@@ -720,15 +734,19 @@ export function useThreadListActions(options: {
           ),
         ),
       });
+      const groupOrdered = ordered.filter(
+        (row) => section !== "active" || threadGroupId(row, groups) === customGroupId,
+      );
       const assignments = createThreadMovePlanner({
+        groups,
         allThreads: shells,
-        ordered,
+        ordered: groupOrdered,
         section,
         reorderableEnvironmentIds: new Set([...configs.keys()].filter(supportsReorder)),
       })(scopedThreadKey(thread.environmentId, thread.id), direction);
       if (assignments === null) return false;
       const lifecycle = threadDropLifecycle(thread, section, new Date().toISOString());
-      const crossSection = !ordered.some(
+      const crossSection = !groupOrdered.some(
         (row) => row.id === thread.id && row.environmentId === thread.environmentId,
       );
       if (
@@ -750,8 +768,9 @@ export function useThreadListActions(options: {
         ? null
         : beginPendingThreadOrder(
             createPendingThreadOrder({
+              ...(section === "active" ? { customGroupId } : {}),
               section,
-              ordered,
+              ordered: groupOrdered,
               movedId: scopedThreadKey(thread.environmentId, thread.id),
               direction,
               assignments,
@@ -760,6 +779,16 @@ export function useThreadListActions(options: {
       let succeeded = false;
       const reorder = section === "pinned" ? reorderPinnedMutation : reorderActiveMutation;
       try {
+        if (section === "active" && (thread.customGroupId ?? null) !== customGroupId) {
+          const result = await updateThreadMetadata({
+            environmentId: thread.environmentId,
+            input: { threadId: thread.id, customGroupId },
+          });
+          if (result._tag === "Failure") {
+            Alert.alert("Could not move thread to group", String(Cause.squash(result.cause)));
+            return false;
+          }
+        }
         if (crossSection) {
           if (section === "pinned") {
             const orderKey = assignments.find(
@@ -815,6 +844,7 @@ export function useThreadListActions(options: {
       }
     },
     [
+      updateThreadMetadata,
       settleThread,
       reorderActiveMutation,
       reorderPinnedMutation,

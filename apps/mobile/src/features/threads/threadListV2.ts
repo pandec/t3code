@@ -1,3 +1,5 @@
+import type { ThreadGroup } from "@t3tools/contracts";
+import { threadGroupId } from "@t3tools/shared/threadGroups";
 import { passesAttentionFilter } from "@t3tools/client-runtime/state/thread-attention";
 import {
   sortOlderThreadsForSidebar,
@@ -408,6 +410,14 @@ export interface ThreadListV2SettledShelfListItem {
 }
 
 export type ThreadListV2ListItem =
+  | {
+      readonly type: "v2-custom-group";
+      readonly key: string;
+      readonly groupId: string | null;
+      readonly name: string;
+      readonly count: number;
+      readonly expanded: boolean;
+    }
   | ThreadListV2ThreadListItem
   | ThreadListV2PendingListItem
   | ThreadListV2PinnedShelfListItem
@@ -423,6 +433,9 @@ export type ThreadListV2ListItem =
  * reachable without competing with either the inbox or settled history.
  */
 export function buildThreadListV2ListItems(input: {
+  readonly customGroups?: readonly ThreadGroup[];
+  readonly collapsedGroupIds?: ReadonlySet<string>;
+  readonly selectedThreadKey?: string | null;
   readonly items: ReadonlyArray<ThreadListV2Item>;
   readonly pendingTasks: ReadonlyArray<PendingNewTask>;
   readonly pinnedCount?: number;
@@ -505,7 +518,47 @@ export function buildThreadListV2ListItems(input: {
   if (pinnedEnd > 0) {
     result.push({ type: "v2-pinned-divider", key: "v2-pinned-divider" });
   }
-  result.push(...threadItems.slice(pinnedEnd, activeEnd), ...pendingItems);
+  const activeItems = threadItems.slice(pinnedEnd, activeEnd);
+  if (input.customGroups?.length) {
+    for (const group of input.customGroups) {
+      const rows = activeItems.filter(
+        (item) =>
+          item.type === "v2-thread" &&
+          threadGroupId(item.item.thread, input.customGroups ?? []) === group.id,
+      );
+      const expanded = !input.collapsedGroupIds?.has(group.id);
+      result.push({
+        type: "v2-custom-group",
+        key: `v2-custom-group:${group.id}`,
+        groupId: group.id,
+        name: group.name,
+        count: rows.length,
+        expanded,
+      });
+      result.push(
+        ...rows.filter(
+          (row) =>
+            expanded ||
+            (row.type === "v2-thread" &&
+              `${row.item.thread.environmentId}:${row.item.thread.id}` === input.selectedThreadKey),
+        ),
+      );
+    }
+    const ungrouped = activeItems.filter(
+      (item) =>
+        item.type !== "v2-thread" ||
+        threadGroupId(item.item.thread, input.customGroups ?? []) === null,
+    );
+    result.push({
+      type: "v2-custom-group",
+      key: "v2-active-header",
+      groupId: null,
+      name: "Active",
+      count: ungrouped.length,
+      expanded: true,
+    });
+    result.push(...ungrouped, ...pendingItems);
+  } else result.push(...activeItems, ...pendingItems);
   if (olderShelfHeaderIndex !== null && olderCount > 0) {
     result.push({
       type: "v2-older-shelf",
@@ -541,6 +594,7 @@ export function buildThreadListV2ListItems(input: {
  * Active cards keep their saved order, with unarranged rows leading by recency.
  */
 export function buildThreadListV2Items(input: {
+  readonly customGroups?: readonly ThreadGroup[];
   readonly pendingOrder?: PendingThreadOrder | null;
   readonly threads: ReadonlyArray<EnvironmentThreadShell>;
   /** Sticky "needs attention" membership ("environmentId:threadId" keys).
@@ -686,6 +740,7 @@ export function buildThreadListV2Items(input: {
     // just-woken thread on the shelf until the minute ticks over.
     if (
       !hasQueuedMessages &&
+      threadGroupId(thread, input.customGroups ?? []) === null &&
       olderSectionEnabled &&
       threadIsOlder(thread, { now, afterDays: olderSectionAfterDays })
     ) {

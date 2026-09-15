@@ -950,6 +950,27 @@ function SidebarExtrasSection() {
       {defaultSidebarEnabled ? (
         <>
           <SettingsRow
+            title="Custom group position"
+            description="Keep custom groups together above or below Active."
+            control={
+              <Select
+                value={settings.sidebarCustomGroupsPosition}
+                onValueChange={(value) => {
+                  if (value === "above-active" || value === "below-active")
+                    updateSettings({ sidebarCustomGroupsPosition: value });
+                }}
+              >
+                <SelectTrigger aria-label="Custom group position">
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectPopup>
+                  <SelectItem value="above-active">Above Active</SelectItem>
+                  <SelectItem value="below-active">Below Active</SelectItem>
+                </SelectPopup>
+              </Select>
+            }
+          />
+          <SettingsRow
             title="Keep pinned threads in Attention"
             description="Always show pinned threads while the Attention filter is enabled, even when they do not currently need attention."
             resetAction={

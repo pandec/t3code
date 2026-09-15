@@ -1,3 +1,6 @@
+import { ThreadCustomGroupHeader } from "./ThreadCustomGroupHeader";
+import { useCollapsedThreadGroups } from "../../state/use-mobile-preferences";
+import { useThreadGroups } from "../../state/use-thread-groups";
 import { useAppearancePreferences } from "../settings/appearance/AppearancePreferencesProvider";
 import { createThreadMovePlanner } from "./threadOrder";
 import type {
@@ -178,6 +181,8 @@ function ThreadNavigationSidebarPane(
   const projects = useProjects();
   const canonicalThreads = useThreadShells();
   const threadListV2 = useThreadListV2State();
+  const customGroups = useThreadGroups();
+  const { ids: collapsedGroupIds, toggle: toggleCustomGroup } = useCollapsedThreadGroups();
   const threadLifecyclePresentation = useThreadLifecyclePresentation(canonicalThreads);
   const threads = threadListV2.enabled
     ? threadLifecyclePresentation.activeThreads
@@ -644,6 +649,7 @@ function ThreadNavigationSidebarPane(
   const threadMovePlanners = useMemo(() => {
     const sectionPlanner = (section: "pinned" | "active") =>
       createThreadMovePlanner({
+        groups: customGroups.groups,
         allThreads: threads,
         section,
         reorderableEnvironmentIds: new Set(
@@ -667,6 +673,7 @@ function ThreadNavigationSidebarPane(
       });
     return { pinned: sectionPlanner("pinned"), active: sectionPlanner("active") };
   }, [
+    customGroups.groups,
     serverConfigs,
     threads,
     pendingOrder,
@@ -692,6 +699,7 @@ function ThreadNavigationSidebarPane(
         nextSnoozeWakeAt: null,
       };
     return buildThreadListV2Items({
+      customGroups: customGroups.groups,
       pendingOrder,
       threads: threads.filter((thread) => thread.archivedAt === null),
       attentionMemberThreadKeys: attentionFilter.memberThreadKeys,
@@ -715,6 +723,7 @@ function ThreadNavigationSidebarPane(
       selectedThreadKey: props.selectedThreadKey ?? null,
     });
   }, [
+    customGroups.groups,
     alwaysShowPinnedInAttention,
     attentionFilter.memberThreadKeys,
     olderSection.enabled,
@@ -787,6 +796,12 @@ function ThreadNavigationSidebarPane(
           pendingTask.title.toLocaleLowerCase().includes(v2SearchQuery)),
     );
     const items: SidebarListItem[] = buildThreadListV2ListItems({
+      customGroups: customGroups.groups,
+      collapsedGroupIds:
+        props.searchQuery.trim() || attentionFilter.memberThreadKeys !== null
+          ? new Set()
+          : collapsedGroupIds,
+      selectedThreadKey: props.selectedThreadKey ?? null,
       items: threadListV2Layout.items,
       pendingTasks: v2PendingTasks,
       pinnedCount: threadListV2Layout.pinnedCount,
@@ -812,6 +827,10 @@ function ThreadNavigationSidebarPane(
     }
     return items;
   }, [
+    customGroups.groups,
+    collapsedGroupIds,
+    attentionFilter.memberThreadKeys,
+    props.selectedThreadKey,
     listLayout.items,
     attentionFilter.memberPendingTaskKeys,
     nowMinute,
@@ -1099,6 +1118,15 @@ function ThreadNavigationSidebarPane(
           previous.showPendingDivider === item.showPendingDivider
         );
       }
+      if (previous.type === "v2-custom-group" || item.type === "v2-custom-group")
+        return (
+          previous.type === "v2-custom-group" &&
+          item.type === "v2-custom-group" &&
+          previous.groupId === item.groupId &&
+          previous.name === item.name &&
+          previous.count === item.count &&
+          previous.expanded === item.expanded
+        );
       // Static rule: identical whenever both sides are the divider.
       if (previous.type === "v2-pinned-divider" || item.type === "v2-pinned-divider") {
         return previous.type === item.type;
@@ -1257,6 +1285,15 @@ function ThreadNavigationSidebarPane(
             />
           );
         }
+        case "v2-custom-group":
+          return (
+            <ThreadCustomGroupHeader
+              name={item.name}
+              count={item.count}
+              expanded={item.expanded}
+              onToggle={item.groupId ? () => toggleCustomGroup(item.groupId!) : undefined}
+            />
+          );
         case "v2-pinned-shelf":
           return (
             <ThreadListV2PinnedShelfHeader
@@ -1393,6 +1430,7 @@ function ThreadNavigationSidebarPane(
       }
     },
     [
+      toggleCustomGroup,
       materialYouStyleLayoutActive,
       archiveThread,
       activeReorderEnvironmentIds,

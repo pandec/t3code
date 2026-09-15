@@ -49,4 +49,5 @@ export * from "./usage.ts";
 export * from "./rpc.ts";
 export * from "./sessionImport.ts";
 export * from "./voice.ts";
+export * from "./threadGroups.ts";
 export * from "./worktreeSetup.ts";

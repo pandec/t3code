@@ -75,6 +75,7 @@ export function threadDetailToShell(
     snoozedUntil: thread.snoozedUntil ?? null,
     snoozedAt: thread.snoozedAt ?? null,
     snoozedUntilTurnId: thread.snoozedUntilTurnId ?? null,
+    customGroupId: thread.customGroupId ?? null,
     activeOrderKey: thread.activeOrderKey ?? null,
     pinOrderKey: thread.pinOrderKey ?? null,
     pinnedAt: thread.pinnedAt ?? null,

@@ -165,3 +165,22 @@ export function useAccentTintSettings(): AccentTintSettings {
     };
   }, [enabled, intensity]);
 }
+
+export function useCollapsedThreadGroups() {
+  const { preferences } = useMobilePreferences();
+  const save = useAtomSet(updateMobilePreferencesAtom);
+  const ids = useMemo(
+    () => new Set(preferences.collapsedThreadGroups ?? []),
+    [preferences.collapsedThreadGroups],
+  );
+  const toggle = useCallback(
+    (id: string) => {
+      const next = new Set(ids);
+      if (next.has(id)) next.delete(id);
+      else next.add(id);
+      save({ collapsedThreadGroups: [...next] });
+    },
+    [ids, save],
+  );
+  return { ids, toggle };
+}

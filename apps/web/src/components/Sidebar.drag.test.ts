@@ -880,3 +880,48 @@ describe("lifted card clearance", () => {
     expect(511 + apply(511, 36, -500, 136, 114).y).toBe(250);
   });
 });
+
+it("retains all custom group headers while previewing a cross-group drop", () => {
+  const items: SidebarListItem[] = [
+    pinnedHeader,
+    divider,
+    marker("custom-group:research"),
+    { kind: "thread", key: "a", section: "active", customGroupId: "research" },
+    marker("custom-group:parked"),
+    marker("active-header"),
+    thread("b", "active"),
+    settledHeader,
+  ];
+  const result = preview(
+    { items, settledOrder: [], settledExpanded: false },
+    "a",
+    sidebarMarkerId("custom-group:parked"),
+  );
+  for (const name of ["custom-group:research", "custom-group:parked", "active-header"] as const)
+    expect(result.get(sidebarMarkerId(name))?.scaleY).toBe(1);
+});
+
+it("previews a drop below a later group's row without jumping to its top", () => {
+  const items: SidebarListItem[] = [
+    pinnedHeader,
+    divider,
+    marker("active-header"),
+    thread("source", "active"),
+    marker("custom-group:a"),
+    { kind: "thread", key: "a1", section: "active", customGroupId: "a" },
+    marker("custom-group:b"),
+    { kind: "thread", key: "b1", section: "active", customGroupId: "b" },
+    { kind: "thread", key: "b2", section: "active", customGroupId: "b" },
+    settledHeader,
+  ];
+  const result = preview({ items, settledOrder: [], settledExpanded: false }, "source", "b2");
+  const { rects } = layout(items, "source", "b2");
+  const top = (key: string) => {
+    const index = items.findIndex((item) => sidebarListItemId(item) === key);
+    return rects[index]!.top + (result.get(key)?.y ?? 0);
+  };
+  // The lifted row follows the pointer; the other rows reveal its insertion gap.
+  expect(result.get("b1")?.y).toBe(-46);
+  expect(result.get("b2")?.y).toBe(-46);
+  expect(top("b2")).toBeGreaterThan(top("b1"));
+});

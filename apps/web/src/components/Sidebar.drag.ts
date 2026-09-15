@@ -157,9 +157,16 @@ export function createSidebarSortingStrategy(input: {
     const ranks = new Map(order.map((key, index) => [key, index]));
     const rank = ranks.get(active.key) ?? Number.POSITIVE_INFINITY;
     const index = group.findIndex(
-      (item) => (ranks.get(item.key) ?? Number.POSITIVE_INFINITY) > rank,
+      (item) =>
+        (target.section !== "active" ||
+          (item.customGroupId ?? null) === (target.customGroupId ?? null)) &&
+        (ranks.get(item.key) ?? Number.POSITIVE_INFINITY) > rank,
     );
-    group.splice(index < 0 ? group.length : index, 0, { ...active, section: target.section });
+    group.splice(index < 0 ? group.length : index, 0, {
+      ...active,
+      section: target.section,
+      customGroupId: target.customGroupId,
+    });
     const settledOrder = (
       input.settledOrder.length > 0 ? input.settledOrder : groups.settled.map((item) => item.key)
     ).filter((key) => key !== active.key || target.section === "settled");
@@ -180,7 +187,21 @@ export function createSidebarSortingStrategy(input: {
     marker("pinned-header");
     projected.push(...groups.pinned);
     marker("pinned-divider");
-    section("active");
+    if (items.some((item) => item.kind === "marker" && item.marker.startsWith("custom-group:"))) {
+      for (const item of items) {
+        if (
+          item.kind !== "marker" ||
+          (item.marker !== "active-header" && !item.marker.startsWith("custom-group:"))
+        )
+          continue;
+        marker(item.marker);
+        const id =
+          item.marker === "active-header" ? null : item.marker.slice("custom-group:".length);
+        const rows = groups.active.filter((row) => (row.customGroupId ?? null) === id);
+        if (rows.length) projected.push(...rows);
+        else if (id === null) marker("active-placeholder");
+      }
+    } else section("active");
     if (
       groups.snoozed.length > 0 ||
       ((active.section !== "snoozed" || (input.snoozedThreadCount ?? 0) > 1) &&

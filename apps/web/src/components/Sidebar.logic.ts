@@ -28,6 +28,24 @@ import { cn } from "../lib/utils";
 import { isLatestTurnSettled } from "../session-logic";
 
 const THREAD_SELECTION_SAFE_SELECTOR = "[data-thread-item], [data-thread-selection-safe]";
+
+export function shouldReleaseSidebarGroupDrop(input: {
+  sourceGroupId: string | null;
+  targetGroupId: string | null;
+  currentGroupId: string | null;
+  targetExists: boolean;
+  receiptSequence: number | null;
+  shellSequence: number;
+}): boolean {
+  if (!input.targetExists) return true;
+  if (input.currentGroupId === input.targetGroupId) return false;
+  // A third group is a competing move. Returning to the source is also a
+  // conflict once the shell has consumed our metadata command's receipt.
+  return (
+    input.currentGroupId !== input.sourceGroupId ||
+    (input.receiptSequence !== null && input.shellSequence >= input.receiptSequence)
+  );
+}
 export const THREAD_JUMP_HINT_SHOW_DELAY_MS = 200;
 // Visible sidebar rows are prewarmed into the thread-detail cache so opening a
 // nearby thread usually reuses an already-hot subscription. Each prewarmed
@@ -102,10 +120,12 @@ export const animateSidebarLayoutChanges: AnimateLayoutChanges = (args) =>
 export type SidebarSection = "pinned" | "active" | "snoozed" | "settled";
 
 /** Sortable ids: thread rows use their scoped key; structural items use a
-    colon-free prefix: scoped thread keys always contain a colon. */
+    dedicated prefix so group IDs cannot collide with thread rows. */
 const SIDEBAR_MARKER_PREFIX = "sidebar-marker-";
 
 export type SidebarListMarker =
+  | `custom-group:${string}`
+  | "active-header"
   /** The top boundary is also a landing target when there are no pins. */
   | "pinned-header"
   /** Stand-in rows so an empty section has somewhere for the gap to open. */
@@ -121,7 +141,12 @@ export function sidebarMarkerId(marker: SidebarListMarker): string {
 }
 
 export type SidebarListItem =
-  | { readonly kind: "thread"; readonly key: string; readonly section: SidebarSection }
+  | {
+      readonly kind: "thread";
+      readonly key: string;
+      readonly section: SidebarSection;
+      readonly customGroupId?: string | null | undefined;
+    }
   | { readonly kind: "marker"; readonly marker: SidebarListMarker };
 
 export function sidebarListItemId(item: SidebarListItem): string {
@@ -138,6 +163,8 @@ function sectionAtSidebarSlot(items: readonly SidebarListItem[], index: number):
     const item = items[i]!;
     if (item.kind !== "marker") continue;
     if (item.marker === "pinned-divider") section = "active";
+    else if (item.marker === "active-header" || item.marker.startsWith("custom-group:"))
+      section = "active";
     else if (item.marker === "snoozed-header") section = "snoozed";
     else if (item.marker === "settled-header") section = "settled";
   }
@@ -150,6 +177,7 @@ export type SidebarDropTarget = {
   readonly section: "pinned" | "active" | "settled";
   readonly pinnedOrder: readonly string[];
   readonly activeOrder: readonly string[];
+  readonly customGroupId?: string | null | undefined;
 };
 
 export function resolveSidebarDropTarget(
@@ -161,20 +189,50 @@ export function resolveSidebarDropTarget(
   const overIndex = items.findIndex((item) => sidebarListItemId(item) === overId);
   if (activeIndex === -1 || overIndex === -1 || items[activeIndex]?.kind !== "thread") return null;
   const moved = items.filter((_, index) => index !== activeIndex);
-  moved.splice(overIndex, 0, items[activeIndex]!);
-  const section = sectionAtSidebarSlot(moved, overIndex);
+  // Headers own their drop, from either direction, including collapsed groups.
+  const over = items[overIndex];
+  const headerTarget =
+    over?.kind === "marker" &&
+    (over.marker === "active-header" || over.marker.startsWith("custom-group:"));
+  const insertIndex = headerTarget
+    ? moved.findIndex((item) => sidebarListItemId(item) === overId) + 1
+    : overIndex;
+  moved.splice(insertIndex, 0, items[activeIndex]!);
+  const section = sectionAtSidebarSlot(moved, insertIndex);
   if (section === "snoozed") return null;
+  let customGroupId: string | null = null;
+  for (const item of moved.slice(0, insertIndex)) {
+    if (item.kind === "marker") {
+      if (item.marker.startsWith("custom-group:"))
+        customGroupId = item.marker.slice("custom-group:".length);
+      else if (item.marker === "active-header" || item.marker === "pinned-divider")
+        customGroupId = null;
+    }
+  }
   const pinnedOrder: string[] = [];
   const activeOrder: string[] = [];
   let currentSection: SidebarSection = "pinned";
+  let currentGroupId: string | null = null;
   for (const item of moved) {
     if (item.kind === "marker") {
-      if (item.marker === "pinned-divider") currentSection = "active";
-      else if (item.marker === "snoozed-header" || item.marker === "settled-header") break;
+      if (item.marker === "pinned-divider" || item.marker === "active-header") {
+        currentSection = "active";
+        currentGroupId = null;
+      } else if (item.marker.startsWith("custom-group:")) {
+        currentSection = "active";
+        currentGroupId = item.marker.slice("custom-group:".length);
+      } else if (item.marker === "snoozed-header" || item.marker === "settled-header") break;
     } else if (currentSection === "pinned") pinnedOrder.push(item.key);
-    else activeOrder.push(item.key);
+    else if (currentGroupId === customGroupId) activeOrder.push(item.key);
   }
-  return { section, pinnedOrder, activeOrder };
+  return {
+    section,
+    pinnedOrder,
+    activeOrder,
+    ...(items.some((item) => item.kind === "marker" && item.marker.startsWith("custom-group:"))
+      ? { customGroupId: section === "active" ? customGroupId : null }
+      : {}),
+  };
 }
 
 export type SidebarThreadDropPlan =
@@ -225,6 +283,7 @@ export function planSidebarThreadDrop(input: {
   readonly activeKey: string;
   readonly activeSection: SidebarSection;
   /** Snoozed threads can retain pinning and settlement beneath the shelf. */
+  readonly activeCustomGroupId?: string | null;
   readonly activePinned?: boolean;
   readonly activeSettled?: boolean;
   readonly supportsSettlement?: boolean;
@@ -257,6 +316,7 @@ export function planSidebarThreadDrop(input: {
     case "active": {
       const order = target.activeOrder;
       if (
+        (input.activeCustomGroupId ?? null) === (target.customGroupId ?? null) &&
         activeSection === "active" &&
         order.length === activeOrder.length &&
         order.every((key, index) => key === activeOrder[index])
