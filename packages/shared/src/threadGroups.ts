@@ -1,3 +1,4 @@
+import * as Effect from "effect/Effect";
 import type { ThreadGroup } from "@t3tools/contracts";
 
 /** Merge per group so edits on disconnected servers preserve unrelated groups.
@@ -48,4 +49,18 @@ export function threadGroupId(
   return groups.some((group) => !group.deleted && group.id === thread.customGroupId)
     ? (thread.customGroupId ?? null)
     : null;
+}
+
+/** Retry transient replication failures twice, stopping when superseded or disconnected. */
+export async function retryThreadGroupSync(
+  persist: () => Promise<boolean>,
+  signal: AbortSignal,
+): Promise<void> {
+  for (const delay of [0, 1_000, 2_000]) {
+    if (signal.aborted) return;
+    if (delay > 0) {
+      await Effect.runPromiseExit(Effect.sleep(delay), { signal });
+    }
+    if (signal.aborted || (await persist())) return;
+  }
 }

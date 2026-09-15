@@ -6,7 +6,7 @@ export const ThreadGroup = Schema.Struct({
   name: TrimmedNonEmptyString.check(Schema.isMaxLength(80)),
   orderKey: TrimmedNonEmptyString,
   // A monotonic timestamp plus a random edit ID gives concurrent edits a stable winner.
-  revision: TrimmedNonEmptyString,
+  revision: TrimmedNonEmptyString.check(Schema.isPattern(/^\d{16}:[^\s]+$/)),
   // Retained so reconnecting servers cannot resurrect a deleted group.
   deleted: Schema.Boolean,
 });

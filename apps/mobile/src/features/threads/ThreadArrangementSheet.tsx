@@ -91,8 +91,8 @@ function DragHandle(props: {
   onMove: (translation: number) => void;
   onEnd: (cancelled: boolean) => void;
   onStep: (direction: "up" | "down") => void;
-  sectionActions: readonly { name: "pinned" | "active" | "settled"; label: string }[];
-  onSectionMove: (section: "pinned" | "active" | "settled") => void;
+  sectionActions: readonly { name: string; label: string; destination: Destination }[];
+  onSectionMove: (destination: Destination) => void;
   canMoveUp: boolean;
   canMoveDown: boolean;
 }) {
@@ -118,7 +118,7 @@ function DragHandle(props: {
         accessible
         accessibilityRole="adjustable"
         accessibilityLabel={`Reorder ${props.title}`}
-        accessibilityHint="Move up and Move down reorder within this section. Other actions move between sections."
+        accessibilityHint="Move up and Move down reorder within this group or section. Other actions move between groups and sections."
         accessibilityState={{ disabled: props.disabled }}
         accessibilityActions={[
           ...props.sectionActions,
@@ -130,7 +130,7 @@ function DragHandle(props: {
           const sectionAction = props.sectionActions.find(
             (action) => action.name === nativeEvent.actionName,
           );
-          if (sectionAction) props.onSectionMove(sectionAction.name);
+          if (sectionAction) props.onSectionMove(sectionAction.destination);
           if (nativeEvent.actionName === "decrement" && props.canMoveUp) props.onStep("up");
           if (nativeEvent.actionName === "increment" && props.canMoveDown) props.onStep("down");
         }}
@@ -471,14 +471,27 @@ export function ThreadArrangementSheet(props: { onClose: () => void }) {
                   thread && configs.get(thread.environmentId)?.environment.capabilities;
                 const sectionActions = thread
                   ? (["pinned", "active", "settled"] as const).flatMap<{
-                      name: "pinned" | "active" | "settled";
+                      name: string;
                       label: string;
+                      destination: Destination;
                     }>((section) => {
-                      if (section === item.section) return [];
-                      const label = threadDragAction(item.section, section);
+                      if (section === item.section && !(section === "active" && item.customGroupId))
+                        return [];
+                      const destination: Destination = {
+                        section,
+                        customGroupId: null,
+                        targetId: null,
+                        placement: "before",
+                      };
+                      const label =
+                        section === "active" && item.customGroupId
+                          ? "Move to Active"
+                          : threadDragAction(item.section, section);
                       if (!label) return [];
                       if (section === "settled")
-                        return capabilities?.threadSettlement ? [{ name: section, label }] : [];
+                        return capabilities?.threadSettlement
+                          ? [{ name: section, label, destination }]
+                          : [];
                       if (
                         ((section === "pinned" || thread.pinnedAt != null) &&
                           !capabilities?.threadPinning) ||
@@ -495,10 +508,33 @@ export function ThreadArrangementSheet(props: { onClose: () => void }) {
                         targetId: null,
                         placement: "before",
                       })
-                        ? [{ name: section, label }]
+                        ? [{ name: section, label, destination }]
                         : [];
                     })
                   : [];
+                if (
+                  thread &&
+                  capabilities?.threadCustomGroups &&
+                  (thread.pinnedAt == null || capabilities.threadPinning) &&
+                  (item.section !== "settled" || capabilities.threadSettlement) &&
+                  (item.section !== "snoozed" || capabilities.threadSnooze)
+                ) {
+                  for (const group of customGroups.groups) {
+                    if (item.section === "active" && item.customGroupId === group.id) continue;
+                    const destination: Destination = {
+                      section: "active",
+                      customGroupId: group.id,
+                      targetId: null,
+                      placement: "before",
+                    };
+                    if (planners.active(item.key, destination))
+                      sectionActions.push({
+                        name: `custom-group:${group.id}`,
+                        label: `Move to ${group.name}`,
+                        destination,
+                      });
+                  }
+                }
                 return (
                   <ArrangementRow
                     height={item.height}
@@ -533,12 +569,8 @@ export function ThreadArrangementSheet(props: { onClose: () => void }) {
                             )
                           }
                           sectionActions={sectionActions}
-                          onSectionMove={(section) => {
-                            void moveThread(thread, {
-                              section,
-                              targetId: null,
-                              placement: "before",
-                            });
+                          onSectionMove={(destination) => {
+                            void moveThread(thread, destination);
                           }}
                           canMoveUp={planner?.(item.key, "up") != null}
                           canMoveDown={planner?.(item.key, "down") != null}

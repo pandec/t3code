@@ -107,6 +107,9 @@ catches up when it shares a connected client with an updated environment. Thread
 on the server that owns the conversation, so devices connected to that server see the same assignment.
 Update older servers before assigning their threads to groups.
 
+A move saves its group, thread state, and order in separate steps. If a connection fails partway
+through, completed steps remain saved. Reconnect and arrange the thread again to finish the move.
+
 Pinned, snoozed, settled, and archived threads appear in their usual sections and remember their
 group. Unpinning, waking, or reopening returns them to the group when no other state takes precedence.
 Grouped threads still auto-settle, but do not move into Older.
