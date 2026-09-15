@@ -393,6 +393,7 @@ export const decideThreadCliWorkspace = (input: {
 export const buildNewWorktreeBootstrap = (input: {
   readonly project: Pick<OrchestrationProjectShell, "id" | "workspaceRoot">;
   readonly title: string;
+  readonly titleSource?: "manual";
   readonly modelSelection: ModelSelection;
   readonly runtimeMode: RuntimeMode;
   readonly interactionMode: ProviderInteractionMode;
@@ -403,6 +404,7 @@ export const buildNewWorktreeBootstrap = (input: {
   createThread: {
     projectId: input.project.id,
     title: input.title,
+    ...(input.titleSource ? { titleSource: input.titleSource } : {}),
     modelSelection: input.modelSelection,
     runtimeMode: input.runtimeMode,
     interactionMode: input.interactionMode,
@@ -1028,12 +1030,13 @@ const threadNewCommand = Command.make("new", {
               threadId,
               message: { messageId, role: "user", text: message, attachments: [] },
               modelSelection,
-              ...(hasExplicitTitle ? { titlePinned: true } : { titleSeed: title }),
+              ...(!hasExplicitTitle ? { titleSeed: title } : {}),
               runtimeMode,
               interactionMode: flags.interactionMode,
               bootstrap: buildNewWorktreeBootstrap({
                 project: projectShell,
                 title,
+                ...(hasExplicitTitle ? { titleSource: "manual" } : {}),
                 modelSelection,
                 runtimeMode,
                 interactionMode: flags.interactionMode,
@@ -1087,6 +1090,7 @@ const threadNewCommand = Command.make("new", {
           threadId,
           projectId: project.id,
           title,
+          ...(hasExplicitTitle ? { titleSource: "manual" } : {}),
           modelSelection,
           runtimeMode,
           interactionMode: flags.interactionMode,
@@ -1100,7 +1104,7 @@ const threadNewCommand = Command.make("new", {
           threadId,
           message: { messageId, role: "user", text: message, attachments: [] },
           modelSelection,
-          ...(hasExplicitTitle ? { titlePinned: true } : { titleSeed: title }),
+          ...(!hasExplicitTitle ? { titleSeed: title } : {}),
           runtimeMode,
           interactionMode: flags.interactionMode,
           createdAt,

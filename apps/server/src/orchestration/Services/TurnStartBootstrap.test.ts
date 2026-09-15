@@ -4,10 +4,16 @@ import * as Effect from "effect/Effect";
 import * as Deferred from "effect/Deferred";
 import * as Fiber from "effect/Fiber";
 import * as Layer from "effect/Layer";
+import * as Option from "effect/Option";
+import * as Schema from "effect/Schema";
+import { ProjectionSnapshotQuery } from "./ProjectionSnapshotQuery.ts";
 import {
   CommandId,
   MessageId,
   type OrchestrationCommand,
+  type OrchestrationThreadShell,
+  WORKTREE_SETUP_ACTIVITY_KIND,
+  WorktreeSetupSnapshot,
   ProviderInstanceId,
   ThreadId,
   ProjectId,
@@ -25,6 +31,8 @@ import { ThreadDeletionReactor } from "./ThreadDeletionReactor.ts";
 type TurnStartCommand = Extract<OrchestrationCommand, { type: "thread.turn.start" }>;
 type DispatchOptions = Parameters<OrchestrationEngine.OrchestrationEngineShape["dispatch"]>[1];
 
+const decodeWorktreeSetup = Schema.decodeUnknownSync(WorktreeSetupSnapshot);
+
 const threadId = ThreadId.make("thread-bootstrap-test");
 const modelSelection = {
   instanceId: ProviderInstanceId.make("codex"),
@@ -39,6 +47,7 @@ const makeTurnStartCommand = (bootstrap: TurnStartCommand["bootstrap"]): TurnSta
     messageId: MessageId.make("message-1"),
     role: "user",
     text: "Start working",
+    inputOrigin: "voice-transcription",
     attachments: [],
   },
   modelSelection,
@@ -59,6 +68,22 @@ const createThreadBootstrap = {
   worktreePath: null,
   createdAt: "2026-08-03T00:00:00.000Z",
 } as const;
+
+const threadShell: OrchestrationThreadShell = {
+  ...createThreadBootstrap,
+  id: threadId,
+  latestTurn: null,
+  updatedAt: createThreadBootstrap.createdAt,
+  archivedAt: null,
+  settledAt: null,
+  settledOverride: null,
+  pullRequests: [],
+  session: null,
+  latestUserMessageAt: null,
+  hasPendingApprovals: false,
+  hasPendingUserInput: false,
+  hasActionableProposedPlan: false,
+};
 
 const testCryptoLayer = Layer.succeed(
   Crypto.Crypto,
@@ -81,12 +106,14 @@ const localStatusWithRef = (refName: string | null) =>
 const makeLayer = (input: {
   readonly dispatched: Array<OrchestrationCommand>;
   readonly dispatchOptions?: Array<DispatchOptions>;
+  readonly afterDispatch?: (command: OrchestrationCommand) => Effect.Effect<void>;
   readonly gitWorkflow?: Partial<GitWorkflowService.GitWorkflowService["Service"]>;
   readonly projectSetupScriptRunner?: Partial<
     ProjectSetupScriptRunner.ProjectSetupScriptRunner["Service"]
   >;
   readonly tracker?: Partial<WorktreeSetupTracker.WorktreeSetupTracker["Service"]>;
   readonly terminalManager?: Partial<TerminalManager.TerminalManager["Service"]>;
+  readonly getThread?: () => Option.Option<OrchestrationThreadShell>;
   readonly failTurnStart?: boolean;
   readonly failThreadDelete?: boolean;
 }) =>
@@ -101,7 +128,9 @@ const makeLayer = (input: {
           }
           return input.failTurnStart && command.type === "thread.turn.start"
             ? Effect.die(new Error("turn start rejected"))
-            : Effect.succeed({ sequence: input.dispatched.length });
+            : Effect.succeed({ sequence: input.dispatched.length }).pipe(
+                Effect.tap(() => input.afterDispatch?.(command) ?? Effect.void),
+              );
         },
       }),
     ),
@@ -146,12 +175,18 @@ const makeLayer = (input: {
         stage: () => Effect.void,
         stageStatus: () => Effect.void,
         appendTail: () => Effect.void,
-        finish: () => Effect.void,
+        get: () => Effect.succeed(null),
+        finish: () => Effect.succeed(null),
         markUncancellable: () => Effect.void,
         ...input.tracker,
       }),
     ),
     Layer.provide(Layer.mock(TerminalManager.TerminalManager)({ ...input.terminalManager })),
+    Layer.provide(
+      Layer.mock(ProjectionSnapshotQuery)({
+        getThreadShellById: () => Effect.sync(input.getThread ?? (() => Option.some(threadShell))),
+      }),
+    ),
     Layer.provide(testCryptoLayer),
   );
 
@@ -181,16 +216,27 @@ describe("TurnStartBootstrap", () => {
 
       assert.deepEqual(
         dispatched.map((command) => command.type),
-        ["thread.create", "thread.meta.update", "thread.turn.start"],
+        [
+          "thread.create",
+          "thread.message.user.append",
+          "thread.session.set",
+          "thread.meta.update",
+          "thread.turn.start",
+        ],
       );
-      assert.deepEqual(dispatchOptions, [clientOptions, clientOptions, clientOptions]);
-      const metaUpdate = dispatched[1] as Extract<
+      assert.deepEqual(
+        dispatchOptions,
+        Array.from({ length: dispatched.length }, () => clientOptions),
+      );
+      const appended = dispatched.find((command) => command.type === "thread.message.user.append");
+      assert.equal(appended?.message.inputOrigin, "voice-transcription");
+      const metaUpdate = dispatched[3] as Extract<
         OrchestrationCommand,
         { type: "thread.meta.update" }
       >;
       assert.equal(metaUpdate.branch, "t3code/test-branch");
       assert.equal(metaUpdate.worktreePath, "/tmp/worktrees/t3code/test-branch");
-      const turnStart = dispatched[2] as TurnStartCommand;
+      const turnStart = dispatched[4] as TurnStartCommand;
       assert.isUndefined(turnStart.bootstrap);
       assert.equal(result.sequence, dispatched.length);
     }),
@@ -228,6 +274,7 @@ describe("TurnStartBootstrap", () => {
               runForThread: () =>
                 Effect.succeed({
                   status: "started" as const,
+                  async: false,
                   scriptId: "script-1",
                   scriptName: "Setup",
                   scriptCommand: "bun install",
@@ -241,7 +288,7 @@ describe("TurnStartBootstrap", () => {
       );
 
       assert.equal(result._tag, "OrchestrationDispatchCommandError");
-      assert.equal(dispatched.length, 6);
+      assert.equal(dispatched.length, 8);
       assert.deepEqual(
         dispatched
           .filter((command) => command.type === "thread.activity.append")
@@ -329,7 +376,7 @@ describe("TurnStartBootstrap", () => {
       assert.equal(result._tag, "OrchestrationDispatchCommandError");
       assert.deepEqual(
         dispatched.map((command) => command.type),
-        ["thread.create", "thread.delete"],
+        ["thread.create", "thread.message.user.append", "thread.session.set", "thread.delete"],
       );
     }),
   );
@@ -373,7 +420,14 @@ describe("TurnStartBootstrap", () => {
       assert.equal(result._tag, "OrchestrationDispatchCommandError");
       assert.deepEqual(
         dispatched.map((command) => command.type),
-        ["thread.create", "thread.meta.update", "thread.turn.start", "thread.delete"],
+        [
+          "thread.create",
+          "thread.message.user.append",
+          "thread.session.set",
+          "thread.meta.update",
+          "thread.turn.start",
+          "thread.delete",
+        ],
       );
       assert.deepEqual(removedWorktrees, [
         { cwd: "/tmp/project", path: "/tmp/worktrees/t3code/test-branch", force: true },
@@ -413,7 +467,7 @@ describe("TurnStartBootstrap", () => {
       assert.strictEqual(result.bootstrapThreadDisposition, "deleted");
       assert.deepEqual(
         dispatched.map((command) => command.type),
-        ["thread.create", "thread.delete"],
+        ["thread.create", "thread.message.user.append", "thread.session.set", "thread.delete"],
       );
     }),
   );
@@ -456,7 +510,15 @@ describe("TurnStartBootstrap", () => {
       assert.strictEqual(result.bootstrapThreadDisposition, undefined);
       assert.deepEqual(
         dispatched.map((command) => command.type),
-        ["thread.create", "thread.meta.update", "thread.turn.start", "thread.delete"],
+        [
+          "thread.create",
+          "thread.message.user.append",
+          "thread.session.set",
+          "thread.meta.update",
+          "thread.turn.start",
+          "thread.delete",
+          "thread.session.set",
+        ],
       );
       // The worktree cleanup must still run when thread deletion fails.
       assert.deepEqual(removedWorktrees, [
@@ -522,7 +584,7 @@ describe("TurnStartBootstrap", () => {
         );
         assert.deepEqual(
           dispatched.map((command) => command.type),
-          ["thread.create", "thread.turn.start"],
+          ["thread.create", "thread.message.user.append", "thread.turn.start"],
         );
       }),
     );
@@ -566,6 +628,7 @@ describe("TurnStartBootstrap", () => {
               runForThread: () =>
                 Effect.succeed({
                   status: "started" as const,
+                  async: false,
                   scriptId: "script",
                   scriptName: "Setup",
                   scriptCommand: "install",
@@ -633,6 +696,7 @@ describe("TurnStartBootstrap", () => {
               runForThread: () =>
                 Effect.succeed({
                   status: "started" as const,
+                  async: false,
                   scriptId: "script",
                   scriptName: "Setup",
                   scriptCommand: "install",
@@ -647,5 +711,184 @@ describe("TurnStartBootstrap", () => {
         ),
       );
     }),
+  );
+  for (const disposition of ["archived", "deleted", "replaced"] as const) {
+    it.effect(`does not start or delete a thread ${disposition} during detached setup`, () =>
+      Effect.gen(function* () {
+        const dispatched: Array<OrchestrationCommand> = [];
+        const waiting = yield* Deferred.make<void>();
+        const complete = yield* Deferred.make<{ exitCode: number | null; durationMs: number }>();
+        const completedStages: string[] = [];
+        let current: Option.Option<OrchestrationThreadShell> = Option.some(threadShell);
+        yield* Effect.gen(function* () {
+          const bootstrap = yield* TurnStartBootstrap.TurnStartBootstrap;
+          const caller = yield* Effect.forkChild(
+            bootstrap
+              .dispatchTurnStart(
+                makeTurnStartCommand({
+                  createThread: createThreadBootstrap,
+                  prepareWorktree: {
+                    projectCwd: "/tmp/project",
+                    baseBranch: "main",
+                    branch: "test",
+                  },
+                  runSetupScript: true,
+                }),
+              )
+              .pipe(Effect.flip),
+          );
+          yield* Deferred.await(waiting);
+          current =
+            disposition === "deleted"
+              ? Option.none()
+              : Option.some({
+                  ...threadShell,
+                  ...(disposition === "archived"
+                    ? { archivedAt: "2026-08-04T00:00:00.000Z" }
+                    : { createdAt: "2026-08-04T00:00:00.000Z" }),
+                });
+          yield* Deferred.succeed(complete, { exitCode: 1, durationMs: 1 });
+          const error = yield* Fiber.join(caller);
+          assert.include(error.message, "archived, deleted, or replaced");
+          assert.isUndefined(error.bootstrapThreadDisposition);
+          assert.notInclude(completedStages, "setup-script:failed");
+          assert.isFalse(
+            dispatched.some(
+              (command) => command.type === "thread.turn.start" || command.type === "thread.delete",
+            ),
+          );
+        }).pipe(
+          Effect.provide(
+            makeLayer({
+              dispatched,
+              getThread: () => current,
+              tracker: {
+                stageStatus: (_threadId, stage, status) =>
+                  Effect.sync(() => {
+                    completedStages.push(`${stage}:${status}`);
+                  }),
+              },
+              projectSetupScriptRunner: {
+                runForThread: () =>
+                  Effect.succeed({
+                    status: "started" as const,
+                    async: false,
+                    scriptId: "script",
+                    scriptName: "Setup",
+                    scriptCommand: "install",
+                    terminalId: "terminal",
+                    cwd: "/tmp/worktrees/test",
+                    completion: Deferred.succeed(waiting, undefined).pipe(
+                      Effect.andThen(Deferred.await(complete)),
+                    ),
+                  }),
+              },
+            }),
+          ),
+        );
+      }),
+    );
+  }
+
+  it.effect(
+    "keeps the bootstrap running after its caller disconnects and persists async setup completion",
+    () =>
+      Effect.gen(function* () {
+        const dispatched: Array<OrchestrationCommand> = [];
+        const dispatchOptions: Array<DispatchOptions> = [];
+        const tracker = yield* WorktreeSetupTracker.make;
+        const checkout = yield* Deferred.make<void>();
+        const releaseCheckout = yield* Deferred.make<void>();
+        const completeScript = yield* Deferred.make<{
+          exitCode: number | null;
+          durationMs: number;
+        }>();
+        const handedOff = yield* Deferred.make<void>();
+        const settled = yield* Deferred.make<void>();
+        const options = { origin: { surface: "cli" } } as const;
+        yield* Effect.gen(function* () {
+          const bootstrap = yield* TurnStartBootstrap.TurnStartBootstrap;
+          const caller = yield* Effect.forkChild(
+            bootstrap.dispatchTurnStart(
+              makeTurnStartCommand({
+                createThread: { ...createThreadBootstrap, titleSource: "manual" },
+                prepareWorktree: { projectCwd: "/tmp/project", baseBranch: "main", branch: "test" },
+                runSetupScript: true,
+              }),
+              options,
+            ),
+          );
+          yield* Deferred.await(checkout);
+          assert.equal((yield* tracker.get(threadId))?.phase, "running");
+          assert.isTrue(
+            dispatched.some((command) => command.type === "thread.message.user.append"),
+          );
+          assert.isTrue(
+            dispatched.some(
+              (command) => command.type === "thread.create" && command.titleSource === "manual",
+            ),
+          );
+          yield* Fiber.interrupt(caller);
+          yield* Deferred.succeed(releaseCheckout, undefined);
+          yield* Deferred.await(handedOff);
+          assert.isTrue(dispatched.some((command) => command.type === "thread.turn.start"));
+          assert.equal((yield* tracker.get(threadId))?.phase, "running");
+          yield* Deferred.succeed(completeScript, { exitCode: 1, durationMs: 1 });
+          yield* Deferred.await(settled);
+          const final = yield* tracker.get(threadId);
+          assert.equal(final?.phase, "done");
+          assert.equal(
+            final?.stages.find((stage) => stage.id === "setup-script")?.status,
+            "failed",
+          );
+          assert.isTrue(dispatchOptions.every((value) => value === options));
+          assert.isFalse(dispatched.some((command) => command.type === "thread.delete"));
+        }).pipe(
+          Effect.provide(
+            makeLayer({
+              dispatched,
+              dispatchOptions,
+              tracker,
+              afterDispatch: (command) => {
+                if (
+                  command.type !== "thread.activity.append" ||
+                  command.activity.kind !== WORKTREE_SETUP_ACTIVITY_KIND
+                )
+                  return Effect.void;
+                const snapshot = decodeWorktreeSetup(command.activity.payload);
+                if (snapshot.phase === "done")
+                  return Deferred.succeed(settled, undefined).pipe(Effect.asVoid);
+                if (
+                  snapshot.phase === "running" &&
+                  Array.isArray(snapshot.stages) &&
+                  snapshot.stages.some((stage) => stage.id === "agent" && stage.status === "done")
+                )
+                  return Deferred.succeed(handedOff, undefined).pipe(Effect.asVoid);
+                return Effect.void;
+              },
+              gitWorkflow: {
+                createWorktree: () =>
+                  Deferred.succeed(checkout, undefined).pipe(
+                    Effect.andThen(Deferred.await(releaseCheckout)),
+                    Effect.as({ worktree: { path: "/tmp/worktrees/test", refName: "test" } }),
+                  ),
+              },
+              projectSetupScriptRunner: {
+                runForThread: () =>
+                  Effect.succeed({
+                    status: "started" as const,
+                    async: true,
+                    scriptId: "script",
+                    scriptName: "Setup",
+                    scriptCommand: "install",
+                    terminalId: "terminal",
+                    cwd: "/tmp/worktrees/test",
+                    completion: Deferred.await(completeScript),
+                  }),
+              },
+            }),
+          ),
+        );
+      }),
   );
 });

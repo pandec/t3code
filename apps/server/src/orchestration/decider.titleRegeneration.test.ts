@@ -48,6 +48,73 @@ const readModel: OrchestrationReadModel = {
 };
 
 it.layer(NodeServices.layer)("title regeneration decider", (it) => {
+  it.effect("creates explicit placeholder titles with manual ownership atomically", () =>
+    Effect.gen(function* () {
+      const thread = readModel.threads[0]!;
+      const commandId = CommandId.make("explicit-title-create");
+      const created = yield* decideOrchestrationCommand({
+        command: {
+          type: "thread.create",
+          commandId,
+          threadId: thread.id,
+          projectId: thread.projectId,
+          title: "New thread",
+          titleSource: "manual",
+          modelSelection: thread.modelSelection,
+          runtimeMode: thread.runtimeMode,
+          interactionMode: thread.interactionMode,
+          branch: null,
+          worktreePath: null,
+          createdAt: UPDATED_AT,
+        },
+        readModel: {
+          ...readModel,
+          threads: [],
+          projects: [
+            {
+              id: thread.projectId,
+              title: "Project",
+              workspaceRoot: "/tmp/project",
+              defaultModelSelection: null,
+              scripts: [],
+              createdAt: UPDATED_AT,
+              updatedAt: UPDATED_AT,
+              deletedAt: null,
+            },
+          ],
+        },
+      });
+      const event = Array.isArray(created) ? created[0]! : created;
+      expect(event.payload).toMatchObject({
+        title: "New thread",
+        titleState: { source: "manual", version: commandId, needsRefinement: false },
+      });
+      const completed = yield* decideOrchestrationCommand({
+        command: {
+          type: "thread.title.generate.complete",
+          commandId: CommandId.make("automatic-title"),
+          threadId: thread.id,
+          expectedTitle: "New thread",
+          expectedVersion: commandId,
+          title: "Generated title",
+          needsRefinement: true,
+        },
+        readModel: {
+          ...readModel,
+          threads: [
+            {
+              ...thread,
+              title: "New thread",
+              titleState: { source: "manual", version: commandId, needsRefinement: false },
+            },
+          ],
+        },
+      });
+      const completion = Array.isArray(completed) ? completed[0]! : completed;
+      expect(completion.payload).toEqual({ threadId: thread.id, updatedAt: UPDATED_AT });
+    }),
+  );
+
   it.effect("preserves updatedAt for a stale completion", () =>
     Effect.gen(function* () {
       const result = yield* decideOrchestrationCommand({
@@ -69,6 +136,53 @@ it.layer(NodeServices.layer)("title regeneration decider", (it) => {
           updatedAt: UPDATED_AT,
         });
       }
+    }),
+  );
+
+  it.effect("rejects an initial result after a manual rename to the same text", () =>
+    Effect.gen(function* () {
+      const result = yield* decideOrchestrationCommand({
+        command: {
+          type: "thread.title.generate.complete",
+          commandId: CommandId.make("generated"),
+          threadId: ThreadId.make("thread-1"),
+          expectedTitle: "Manual title",
+          expectedVersion: null,
+          title: "Automatic title",
+          needsRefinement: true,
+        },
+        readModel: {
+          ...readModel,
+          threads: readModel.threads.map((thread) => ({
+            ...thread,
+            titleState: {
+              source: "manual" as const,
+              version: CommandId.make("manual"),
+              needsRefinement: false,
+            },
+          })),
+        },
+      });
+      const event = Array.isArray(result) ? result[0] : result;
+      expect(event.payload).toEqual({ threadId: ThreadId.make("thread-1"), updatedAt: UPDATED_AT });
+    }),
+  );
+
+  it.effect("records manual ownership even when the title text does not change", () =>
+    Effect.gen(function* () {
+      const result = yield* decideOrchestrationCommand({
+        command: {
+          type: "thread.meta.update",
+          commandId: CommandId.make("manual-rename"),
+          threadId: ThreadId.make("thread-1"),
+          title: "Manual title",
+        },
+        readModel,
+      });
+      const event = Array.isArray(result) ? result[0] : result;
+      expect(event.payload).toMatchObject({
+        titleState: { source: "manual", version: "manual-rename", needsRefinement: false },
+      });
     }),
   );
 });

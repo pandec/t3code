@@ -105,6 +105,68 @@ it("keeps at most one automatic worktree action", () => {
   ]);
 });
 
+it("preserves explicit blocking setup on unrelated updates", () => {
+  const added = addProjectAction({
+    projectId,
+    scripts: [],
+    action: {
+      id: "setup",
+      name: "Setup",
+      command: "pnpm install",
+      icon: "configure",
+      runOnWorktreeCreate: true,
+      async: false,
+      autoOpenPreview: false,
+    },
+  });
+  if ("_tag" in added) throw added;
+  expect(added.action.async).toBe(false);
+
+  const updated = updateProjectAction({
+    projectId,
+    scripts: added.scripts,
+    actionId: "setup",
+    updates: { name: "Install dependencies" },
+  });
+  if ("_tag" in updated) throw updated;
+  expect(updated.action.async).toBe(false);
+});
+
+it("leaves new setup actions asynchronous by default", () => {
+  const result = addProjectAction({
+    projectId,
+    scripts: [],
+    action: {
+      id: "setup",
+      name: "Setup",
+      command: "pnpm install",
+      icon: "configure",
+      runOnWorktreeCreate: true,
+      autoOpenPreview: false,
+    },
+  });
+  if ("_tag" in result) throw result;
+  expect(result.action).not.toHaveProperty("async");
+});
+
+it("allows setup actions to run asynchronously", () => {
+  const result = addProjectAction({
+    projectId,
+    scripts: [],
+    action: {
+      id: "setup",
+      name: "Setup",
+      command: "pnpm install",
+      icon: "configure",
+      runOnWorktreeCreate: true,
+      async: true,
+      autoOpenPreview: false,
+    },
+  });
+  if ("_tag" in result) throw result;
+  expect(result.action.async).toBe(true);
+});
+
 it("updates fields, clears preview metadata, and preserves the action id", () => {
   const previewAction: ProjectScript = {
     ...testAction,

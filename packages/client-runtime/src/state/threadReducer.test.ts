@@ -217,6 +217,39 @@ describe("retainRecentThreadHistory", () => {
     expect(retained.activities.at(-1)?.id).toBe("activity-500");
   });
 
+  it("keeps the latest worktree setup activity within the cap", () => {
+    const setup = {
+      id: EventId.make("worktree-setup:thread-1"),
+      tone: "info" as const,
+      kind: "worktree-setup",
+      summary: "Preparing worktree",
+      payload: { status: "running" },
+      turnId: null,
+      sequence: 0,
+      createdAt: "2026-04-01T00:00:00.000Z",
+    };
+    const laterActivities = Array.from({ length: 500 }, (_, index) => ({
+      id: EventId.make(`activity-${index + 1}`),
+      tone: "tool" as const,
+      kind: "command",
+      summary: `Ran command ${index + 1}`,
+      payload: {},
+      turnId: TurnId.make("turn-1"),
+      sequence: index + 1,
+      createdAt: "2026-04-01T00:00:01.000Z",
+    }));
+
+    const retained = retainRecentThreadHistory({
+      ...baseThread,
+      activities: [setup, ...laterActivities],
+    });
+
+    expect(retained.activities).toHaveLength(500);
+    expect(retained.activities[0]?.id).toBe("worktree-setup:thread-1");
+    expect(retained.activities[1]?.id).toBe("activity-2");
+    expect(retained.activities.at(-1)?.id).toBe("activity-500");
+  });
+
   it("pins an unresolved message-mode question past the activity cap", () => {
     const question = {
       id: EventId.make("activity-async-question"),

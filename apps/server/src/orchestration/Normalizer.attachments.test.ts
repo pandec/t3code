@@ -9,18 +9,25 @@ import {
   CommandId,
   ApprovalRequestId,
   MessageId,
+  ProjectId,
+  ProviderInstanceId,
   type OrchestrationMessageContext,
   ThreadId,
 } from "@t3tools/contracts";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import * as Schema from "effect/Schema";
+import * as Option from "effect/Option";
+import { ProjectionThreadMessageRepository } from "../persistence/Services/ProjectionThreadMessages.ts";
 
 import * as ServerConfig from "../config.ts";
 import * as WorkspacePaths from "../workspace/WorkspacePaths.ts";
 import { cleanupFailedUploadedAttachments, normalizeDispatchCommand } from "./Normalizer.ts";
 
 const testLayer = Layer.mergeAll(
+  Layer.mock(ProjectionThreadMessageRepository)({
+    getByMessageId: () => Effect.succeed(Option.none()),
+  }),
   WorkspacePaths.layer,
   ServerConfig.layerTest(process.cwd(), { prefix: "t3-normalizer-attachments-" }),
 ).pipe(Layer.provideMerge(NodeServices.layer));
@@ -283,6 +290,71 @@ describe("normalizeDispatchCommand attachments", () => {
       expect(retried.message.attachments[0]?.id.startsWith("thread-retry-")).toBe(true);
     }).pipe(Effect.provide(testLayer)),
   );
+
+  for (const owner of ["retained", "deleted", "different-thread", "different-message"] as const) {
+    it.effect(`preserves bootstrap claims only for the saved message: ${owner}`, () =>
+      Effect.gen(function* () {
+        const config = yield* ServerConfig.ServerConfig;
+        const pendingPath = NodePath.join(config.attachmentsDir, `pending-${attachmentUuid}.png`);
+        NodeFS.writeFileSync(pendingPath, Buffer.from("pixels"));
+        const original = turnStartCommand({
+          attachments: [{ id: `pending-${attachmentUuid}`, sizeBytes: 6 }],
+        });
+        if (original.type !== "thread.turn.start") throw new Error("Expected turn start");
+        const command = {
+          ...original,
+          bootstrap: {
+            createThread: {
+              projectId: ProjectId.make("project"),
+              title: "test",
+              modelSelection: { instanceId: ProviderInstanceId.make("codex"), model: "gpt-5" },
+              runtimeMode: "full-access" as const,
+              interactionMode: "default" as const,
+              branch: null,
+              worktreePath: null,
+              createdAt: original.createdAt,
+            },
+          },
+        };
+        const normalized = yield* normalizeDispatchCommand(command);
+        if (normalized.type !== "thread.turn.start") throw new Error("Expected turn start");
+        const claimedPath = NodePath.join(
+          config.attachmentsDir,
+          `${normalized.message.attachments[0]!.id}.png`,
+        );
+        yield* cleanupFailedUploadedAttachments(command, normalized).pipe(
+          Effect.provide(
+            Layer.mock(ProjectionThreadMessageRepository)({
+              getByMessageId: () =>
+                Effect.succeed(
+                  owner === "deleted"
+                    ? Option.none()
+                    : Option.some({
+                        messageId: normalized.message.messageId,
+                        threadId:
+                          owner === "different-thread"
+                            ? ThreadId.make("other")
+                            : normalized.threadId,
+                        role: "user",
+                        text: normalized.message.text,
+                        attachments: normalized.message.attachments,
+                        turnId: null,
+                        isStreaming: false,
+                        createdAt:
+                          owner === "different-message"
+                            ? "2026-08-02T00:00:00.000Z"
+                            : normalized.createdAt,
+                        updatedAt: normalized.createdAt,
+                      }),
+                ),
+            }),
+          ),
+        );
+        expect(NodeFS.existsSync(claimedPath)).toBe(owner === "retained");
+        expect(NodeFS.existsSync(pendingPath)).toBe(true);
+      }).pipe(Effect.provide(testLayer)),
+    );
+  }
 
   it.effect("removes failed attachment claims without deleting their pending uploads", () =>
     Effect.gen(function* () {

@@ -256,6 +256,7 @@ export const makeHermesTextGeneration = Effect.fn("makeHermesTextGeneration")(fu
     Effect.fn("HermesTextGeneration.generateThreadTitle")(function* (input) {
       const { prompt, outputSchema } = buildThreadTitlePrompt({
         message: input.message,
+        linkedContext: input.linkedContext,
         attachments: input.attachments,
       });
 
@@ -269,6 +270,7 @@ export const makeHermesTextGeneration = Effect.fn("makeHermesTextGeneration")(fu
 
       return {
         title: sanitizeThreadTitle(generated.title),
+        ...(generated.needsRefinement ? { needsRefinement: true } : {}),
       } satisfies TextGeneration.ThreadTitleGenerationResult;
     });
 

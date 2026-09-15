@@ -15,7 +15,7 @@ import type {
   TurnId,
 } from "@t3tools/contracts";
 import { threadPullRequestKeysEqual } from "@t3tools/shared/threadPullRequests";
-import { isImportedAgentSessionMessageId } from "@t3tools/contracts";
+import { isImportedAgentSessionMessageId, WORKTREE_SETUP_ACTIVITY_KIND } from "@t3tools/contracts";
 import { compareDateTimeStrings } from "@t3tools/shared/dateTime";
 import { messageArtifactTextHash } from "@t3tools/shared/messageArtifactIdentity";
 
@@ -86,7 +86,11 @@ function retainRecent<T>(entries: ReadonlyArray<T>): ReadonlyArray<T> {
  */
 const RETAINED_LATEST_ACTIVITY_PREDICATES: ReadonlyArray<
   (activity: OrchestrationThreadActivity) => boolean
-> = [isResolvableContextWindowActivity, isParentAgentProgressActivity];
+> = [
+  isResolvableContextWindowActivity,
+  isParentAgentProgressActivity,
+  (activity) => activity.kind === WORKTREE_SETUP_ACTIVITY_KIND,
+];
 
 // Async (message-mode) questions can stay open while the agent keeps producing
 // activity; the server pins them past its window and the client must too, or
@@ -312,6 +316,7 @@ function applyThreadDetailEventUnretained(
           id: event.payload.threadId,
           projectId: event.payload.projectId,
           title: event.payload.title,
+          titleState: event.payload.titleState ?? null,
           modelSelection: event.payload.modelSelection,
           runtimeMode: event.payload.runtimeMode,
           interactionMode: event.payload.interactionMode,
@@ -457,6 +462,9 @@ function applyThreadDetailEventUnretained(
           ...(event.payload.title !== undefined ? { title: event.payload.title } : {}),
           ...(event.payload.worktreeSwitch !== undefined
             ? { worktreeSwitch: event.payload.worktreeSwitch }
+            : {}),
+          ...(event.payload.titleState !== undefined
+            ? { titleState: event.payload.titleState }
             : {}),
           ...(event.payload.titleRegeneration !== undefined
             ? { titleRegeneration: event.payload.titleRegeneration }

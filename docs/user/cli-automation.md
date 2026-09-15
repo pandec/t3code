@@ -73,6 +73,7 @@ t3 project action add /absolute/path/to/repository \
   --name "Install iOS" \
   --command "pnpm ios:local:release" \
   --icon build \
+  --run-on-worktree-create \
   --json
 
 t3 project action update /absolute/path/to/repository install-ios \
@@ -84,10 +85,13 @@ t3 project action remove /absolute/path/to/repository install-ios --json
 
 `add` derives a stable action id from the name unless `--id` is supplied. Use the exact id returned
 by `add` or `list` for later updates and removals. The optional action fields exposed by the desktop
-UI are available as `--run-on-worktree-create`, `--preview-url`, and `--auto-open-preview`;
+UI are available as `--run-on-worktree-create`, `--async`, `--preview-url`, and `--auto-open-preview`;
 boolean update flags also accept the `--no-...` form, and `--clear-preview-url` removes both preview
 settings. Keybindings are user-level settings rather than project action data and are not changed by
 these commands.
+
+Setup and the first agent turn run together by default. Pass `--no-async` to wait for setup before
+the agent starts. An unrelated update preserves the action's current async setting.
 
 Actions inherit environment defaults until a project overrides them. CLI edits save the effective list as a project override in Settings, preserving the project's other settings.
 
@@ -152,6 +156,9 @@ snooze until the turn ends ("until it's done") also carries the awaited turn in
 `snoozedUntilTurnId`. These fields stay set after a snooze wakes on its own (the timer passed or
 the turn ended); the `thread status` text line reports whether the thread is currently snoozed.
 Snooze is an inbox overlay and does not change the thread's turn `state`.
+
+Passing `--title` records a manual title, so automatic title generation does not replace it. Without
+the flag, T3 derives the title from the first message.
 
 The project argument accepts either a project id or an exact workspace-root path. Thread mutation
 commands intentionally require a thread id so automation cannot act on an ambiguous title. Thread
@@ -387,6 +394,9 @@ Two further flags select a worktree explicitly, matching the workspace picker in
   `git worktree list`). The path must exist on the server machine, is canonicalized, and must be a
   worktree of the project's repository; the worktree's checked-out branch is recorded on the thread
   automatically, and an explicit `--branch <ref>` fails the command when it does not match.
+
+The setup action blocks turn startup only when its `async` field is `false`, set by
+`project action add --no-async` or `project action update --no-async`.
 
 When worktrees are unavailable because the project is not a Git repository or has no initial
 commit, bootstrap starts in the project checkout. A failed setup script is reported, then the

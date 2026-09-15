@@ -40,6 +40,7 @@ import { mobilePreferencesAtom, updateMobilePreferencesAtom } from "../../state/
 import { useThreadSearch } from "../../state/queries";
 import { mergePendingArchivedThreads } from "../../state/thread-lifecycle-outbox";
 import { useAppearancePreferences } from "../settings/appearance/AppearancePreferencesProvider";
+import { useThreadJumpShortcuts } from "../keyboard/threadKeyboardShortcuts";
 import { useThreadListV2Enabled } from "../threads/use-thread-list-v2-enabled";
 import {
   useAlwaysShowPinnedInAttention,
@@ -146,7 +147,7 @@ interface HomeScreenProps {
   readonly onSettleThread: (thread: EnvironmentThreadShell) => Promise<boolean>;
   readonly onSnoozeThread: (
     thread: EnvironmentThreadShell,
-    preset: SnoozePreset,
+    preset: Pick<SnoozePreset, "snoozedUntil" | "untilDone">,
   ) => Promise<boolean>;
   readonly onUnsnoozeThread: (thread: EnvironmentThreadShell) => Promise<boolean>;
   readonly onUnsettleThread: (thread: EnvironmentThreadShell) => void;
@@ -619,7 +620,7 @@ export function HomeScreen(props: HomeScreenProps) {
   // optimistic holds.
   const handleSettleThread = props.onSettleThread;
   const handleSnoozeThread = useCallback(
-    (thread: EnvironmentThreadShell, preset: SnoozePreset) => {
+    (thread: EnvironmentThreadShell, preset: Pick<SnoozePreset, "snoozedUntil" | "untilDone">) => {
       void props.onSnoozeThread(thread, preset);
     },
     [props.onSnoozeThread],
@@ -966,6 +967,11 @@ export function HomeScreen(props: HomeScreenProps) {
       threadListV2Layout,
       v2PendingTasks,
     ],
+  );
+
+  useThreadJumpShortcuts(
+    threadListV2Enabled ? threadListV2Items : listLayout.items,
+    props.onSelectThread,
   );
 
   const renderV2Item = useCallback(

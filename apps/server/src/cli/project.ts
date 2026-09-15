@@ -604,6 +604,10 @@ const projectActionAddCommand = Command.make("add", {
     Flag.withDescription("Run automatically after creating a worktree."),
     Flag.withDefault(false),
   ),
+  async: Flag.boolean("async").pipe(
+    Flag.withDescription("Let a setup action continue while the agent starts."),
+    Flag.optional,
+  ),
   previewUrl: Flag.string("preview-url").pipe(
     Flag.withDescription("Optional desktop preview URL."),
     Flag.optional,
@@ -631,6 +635,7 @@ const projectActionAddCommand = Command.make("add", {
             command: flags.command,
             icon: flags.icon,
             runOnWorktreeCreate: flags.runOnWorktreeCreate,
+            ...(Option.isSome(flags.async) ? { async: flags.async.value } : {}),
             ...(Option.isSome(flags.previewUrl) ? { previewUrl: flags.previewUrl.value } : {}),
             autoOpenPreview: flags.autoOpenPreview,
           },
@@ -668,6 +673,10 @@ const projectActionUpdateCommand = Command.make("update", {
   icon: projectActionIconFlag.pipe(Flag.optional),
   runOnWorktreeCreate: Flag.boolean("run-on-worktree-create").pipe(
     Flag.withDescription("Enable or disable automatic worktree setup."),
+    Flag.optional,
+  ),
+  async: Flag.boolean("async").pipe(
+    Flag.withDescription("Enable or disable asynchronous setup."),
     Flag.optional,
   ),
   previewUrl: Flag.string("preview-url").pipe(
@@ -713,6 +722,7 @@ const projectActionUpdateCommand = Command.make("update", {
             ...(Option.isSome(flags.runOnWorktreeCreate)
               ? { runOnWorktreeCreate: flags.runOnWorktreeCreate.value }
               : {}),
+            ...(Option.isSome(flags.async) ? { async: flags.async.value } : {}),
             ...(flags.clearPreviewUrl
               ? { previewUrl: null }
               : Option.isSome(flags.previewUrl)

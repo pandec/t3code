@@ -39,10 +39,12 @@ import {
   ThreadLinkedPullRequest,
   ThreadArchiveRequest,
   ThreadWorktreeSwitch,
+  ThreadTitleState,
   ThreadId,
   ThreadPullRequestSnapshot,
   ThreadPullRequestStack,
   type ThreadPullRequestLink,
+  WORKTREE_SETUP_ACTIVITY_KIND,
 } from "@t3tools/contracts";
 import { legacyLinkedPullRequestOf } from "@t3tools/shared/threadPullRequests";
 import * as Arr from "effect/Array";
@@ -184,6 +186,7 @@ const ProjectionThreadDbRowSchema = ProjectionThread.mapFields(
     archiveRequest: Schema.NullOr(Schema.fromJsonString(ThreadArchiveRequest)),
     worktreeSwitch: Schema.NullOr(Schema.fromJsonString(ThreadWorktreeSwitch)),
     modelSelection: Schema.fromJsonString(ModelSelection),
+    titleState: Schema.NullOr(Schema.fromJsonString(ThreadTitleState)),
     linkedPullRequest: Schema.NullOr(Schema.fromJsonString(ThreadLinkedPullRequest)),
     hasPendingBlockingUserInput: Schema.Number,
     branchPullRequest: Schema.NullOr(Schema.fromJsonString(ThreadLinkedPullRequest)),
@@ -200,6 +203,7 @@ const ProjectionThreadActivityIdRowSchema = Schema.Struct({
 });
 const ProjectionThreadSessionDbRowSchema = ProjectionThreadSession;
 const ProjectionThreadRuntimeContextDbRowSchema = Schema.Struct({
+  titleState: Schema.NullOr(Schema.fromJsonString(ThreadTitleState)),
   id: ThreadId,
   projectId: ProjectId,
   title: Schema.String,
@@ -807,6 +811,7 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
           thread_id AS "threadId",
           project_id AS "projectId",
           title,
+          title_state_json AS "titleState",
           model_selection_json AS "modelSelection",
           runtime_mode AS "runtimeMode",
           interaction_mode AS "interactionMode",
@@ -851,6 +856,7 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
           thread_id AS "threadId",
           project_id AS "projectId",
           title,
+          title_state_json AS "titleState",
           model_selection_json AS "modelSelection",
           runtime_mode AS "runtimeMode",
           interaction_mode AS "interactionMode",
@@ -897,6 +903,7 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
           thread_id AS "threadId",
           project_id AS "projectId",
           title,
+          title_state_json AS "titleState",
           model_selection_json AS "modelSelection",
           runtime_mode AS "runtimeMode",
           interaction_mode AS "interactionMode",
@@ -943,6 +950,7 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
           thread_id AS "threadId",
           project_id AS "projectId",
           title,
+          title_state_json AS "titleState",
           model_selection_json AS "modelSelection",
           runtime_mode AS "runtimeMode",
           interaction_mode AS "interactionMode",
@@ -1541,6 +1549,7 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
           thread_id AS "threadId",
           project_id AS "projectId",
           title,
+          title_state_json AS "titleState",
           model_selection_json AS "modelSelection",
           runtime_mode AS "runtimeMode",
           interaction_mode AS "interactionMode",
@@ -1626,6 +1635,7 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
           threads.title,
           threads.branch,
           threads.worktree_path AS "worktreePath",
+          threads.title_state_json AS "titleState",
           sessions.thread_id AS "threadId",
           sessions.status,
           sessions.provider_name AS "providerName",
@@ -1649,6 +1659,7 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
             title: row.title,
             branch: row.branch,
             worktreePath: row.worktreePath,
+            titleState: row.titleState,
             session: row.threadId === null ? null : row,
           })),
         ),
@@ -1916,6 +1927,40 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
         toPersistenceSqlOrDecodeError(
           "ProjectionSnapshotQuery.getUserInputActivity:query",
           "ProjectionSnapshotQuery.getUserInputActivity:decodeRow",
+        ),
+      ),
+    );
+
+  const listActivityRowsByKind = SqlSchema.findAll({
+    Request: Schema.Struct({ kind: Schema.String }),
+    Result: ProjectionThreadActivityDbRowSchema,
+    execute: ({ kind }) => sql`
+      SELECT
+        a.activity_id AS "activityId",
+        a.thread_id AS "threadId",
+        a.turn_id AS "turnId",
+        a.tone,
+        a.kind,
+        a.summary,
+        a.payload_json AS "payload",
+        a.sequence,
+        a.created_at AS "createdAt"
+      FROM projection_thread_activities a
+      JOIN projection_threads t ON t.thread_id = a.thread_id
+      WHERE a.kind = ${kind}
+        AND t.deleted_at IS NULL
+        AND t.archived_at IS NULL
+      ORDER BY a.created_at ASC, a.activity_id ASC
+    `,
+  });
+
+  const listActivitiesByKind: ProjectionSnapshotQueryShape["listActivitiesByKind"] = (kind) =>
+    listActivityRowsByKind({ kind }).pipe(
+      Effect.map((rows) => rows.map(mapThreadActivityRow)),
+      Effect.mapError(
+        toPersistenceSqlOrDecodeError(
+          "ProjectionSnapshotQuery.listActivitiesByKind:query",
+          "ProjectionSnapshotQuery.listActivitiesByKind:decodeRow",
         ),
       ),
     );
@@ -2285,6 +2330,14 @@ pending_approval_requests AS (
           ORDER BY activity.sequence DESC, activity.created_at DESC, activity.activity_id DESC
           LIMIT 1
         ),
+        latest_worktree_setup AS (
+          SELECT activity_id
+          FROM projection_thread_activities
+          WHERE thread_id = ${threadId}
+            AND kind = ${WORKTREE_SETUP_ACTIVITY_KIND}
+          ORDER BY sequence DESC, created_at DESC, activity_id DESC
+          LIMIT 1
+        ),
         pinned_activity_ids AS (
           SELECT activity_id
           FROM pending_approval_activities
@@ -2297,6 +2350,9 @@ pending_approval_requests AS (
           UNION ALL
           SELECT activity_id
           FROM latest_parent_progress
+          UNION ALL
+          SELECT activity_id
+          FROM latest_worktree_setup
         )
   `;
 
@@ -2305,7 +2361,8 @@ pending_approval_requests AS (
   // request, so the merge below stays bounded by actionable work. The running
   // turn's newest main-agent tool start rides along for the same reason: the
   // client's steer-pending marker resolves against it, and a long subagent
-  // fan-out can push it past the window while the steer is still unread.
+  // fan-out can push it past the window while the steer is still unread. The
+  // latest worktree setup row is also durable state for an asynchronous setup.
   const listPinnedThreadActivityRowsByThread = SqlSchema.findAll({
     Request: ThreadIdLookupInput,
     Result: ProjectionThreadActivityDbRowSchema,
@@ -2775,6 +2832,7 @@ pending_approval_requests AS (
                 archiveRequest: row.archiveRequest ?? null,
                 worktreeSwitch: row.worktreeSwitch ?? null,
                 titleRegeneration: mapTitleRegeneration(row),
+                titleState: row.titleState,
                 deletedAt: row.deletedAt,
                 messages: messagesByThread.get(row.threadId) ?? [],
                 completedTurnAssistantMessageIds:
@@ -3024,6 +3082,7 @@ pending_approval_requests AS (
                   archiveRequest: row.archiveRequest ?? null,
                   worktreeSwitch: row.worktreeSwitch ?? null,
                   titleRegeneration: mapTitleRegeneration(row),
+                  titleState: row.titleState,
                   deletedAt: row.deletedAt,
                   messages: [],
                   completedTurnAssistantMessageIds: [],
@@ -3183,6 +3242,7 @@ pending_approval_requests AS (
                         archiveRequest: row.archiveRequest ?? null,
                         worktreeSwitch: row.worktreeSwitch ?? null,
                         titleRegeneration: mapTitleRegeneration(row),
+                        titleState: row.titleState,
                         session: sessionByThread.get(row.threadId) ?? null,
                         latestUserMessageAt: row.latestUserMessageAt,
                         hasPendingApprovals: row.pendingApprovalCount > 0,
@@ -3349,6 +3409,7 @@ pending_approval_requests AS (
                   archiveRequest: row.archiveRequest ?? null,
                   worktreeSwitch: row.worktreeSwitch ?? null,
                   titleRegeneration: mapTitleRegeneration(row),
+                  titleState: row.titleState,
                   session: sessionByThread.get(row.threadId) ?? null,
                   latestUserMessageAt: row.latestUserMessageAt,
                   hasPendingApprovals: row.pendingApprovalCount > 0,
@@ -3512,6 +3573,7 @@ pending_approval_requests AS (
               archiveRequest: row.archiveRequest ?? null,
               worktreeSwitch: row.worktreeSwitch ?? null,
               titleRegeneration: mapTitleRegeneration(row),
+              titleState: row.titleState,
               ...mapThreadPullRequests(
                 pullRequestRows.map(mapPullRequestRow),
                 row.projectId,
@@ -3878,6 +3940,7 @@ pending_approval_requests AS (
         archiveRequest: threadRow.value.archiveRequest ?? null,
         worktreeSwitch: threadRow.value.worktreeSwitch ?? null,
         titleRegeneration: mapTitleRegeneration(threadRow.value),
+        titleState: threadRow.value.titleState,
         session: Option.isSome(sessionRow) ? mapSessionRow(sessionRow.value) : null,
         latestUserMessageAt: threadRow.value.latestUserMessageAt,
         hasPendingApprovals: threadRow.value.pendingApprovalCount > 0,
@@ -3907,6 +3970,7 @@ pending_approval_requests AS (
         title: row.title,
         branch: row.branch,
         worktreePath: row.worktreePath,
+        titleState: row.titleState,
         session: row.session === null ? null : mapSessionRow(row.session),
       }));
     });
@@ -4196,6 +4260,7 @@ pending_approval_requests AS (
         archiveRequest: threadRow.value.archiveRequest ?? null,
         worktreeSwitch: threadRow.value.worktreeSwitch ?? null,
         titleRegeneration: mapTitleRegeneration(threadRow.value),
+        titleState: threadRow.value.titleState,
         deletedAt: null,
         messages: messageRows.map(mapMessageRow),
         completedTurnAssistantMessageIds: completedTurnAssistantMessageRows.map(
@@ -4517,6 +4582,7 @@ pending_approval_requests AS (
   return {
     getCommandReadModel,
     getUserInputActivity,
+    listActivitiesByKind,
     getSnapshot,
     getShellSnapshot,
     getArchivedShellSnapshot,

@@ -690,6 +690,7 @@ projectionSnapshotLayer("ProjectionSnapshotQuery", (it) => {
           pinOrderKey: "gm",
           activeOrderKey: "hq",
           titleRegeneration: null,
+          titleState: null,
           deletedAt: null,
           messages: [
             {
@@ -838,6 +839,7 @@ projectionSnapshotLayer("ProjectionSnapshotQuery", (it) => {
           pinOrderKey: "gm",
           activeOrderKey: "hq",
           titleRegeneration: null,
+          titleState: null,
           session: {
             threadId: ThreadId.make("thread-1"),
             status: "running",
@@ -1111,6 +1113,7 @@ projectionSnapshotLayer("ProjectionSnapshotQuery", (it) => {
         assert.equal(context.value.id, "thread-activity-filter");
         assert.equal(context.value.projectId, "project-activity-filter");
         assert.equal(context.value.title, "Activity Filter");
+        assert.equal(context.value.titleState, null);
         assert.equal(context.value.branch, null);
         assert.equal(context.value.worktreePath, null);
         assert.equal(context.value.session?.status, "running");
@@ -1412,7 +1415,8 @@ projectionSnapshotLayer("ProjectionSnapshotQuery", (it) => {
         UPDATE projection_threads
         SET branch_pull_request_json = ${encodeThreadLinkedPullRequest(branchPullRequest)},
             active_order_key = 'm',
-            pin_order_key = 'n'
+            pin_order_key = 'n',
+            title_state_json = ${'{"source":"generated","version":"cmd-title-archived","needsRefinement":true}'}
         WHERE thread_id = 'thread-archived'
       `;
 
@@ -1492,6 +1496,11 @@ projectionSnapshotLayer("ProjectionSnapshotQuery", (it) => {
       );
       assert.equal(recentArchived.threads[0]?.activeOrderKey, "m");
       assert.equal(recentArchived.threads[0]?.pinOrderKey, "n");
+      assert.deepEqual(recentArchived.threads[0]?.titleState, {
+        source: "generated",
+        version: "cmd-title-archived",
+        needsRefinement: true,
+      });
 
       // The shelf's project filter narrows the window and its total together;
       // an empty list is a real filter that matches nothing, not "all".
@@ -4232,6 +4241,55 @@ projectionSnapshotLayer("ProjectionSnapshotQuery windowed thread detail", (it) =
     }),
   );
 
+  it.effect("pins worktree setup past the persisted activity window", () =>
+    Effect.gen(function* () {
+      yield* seedFanOutThread();
+      const snapshotQuery = yield* ProjectionSnapshotQuery;
+      const sql = yield* SqlClient.SqlClient;
+
+      yield* sql`DELETE FROM projection_thread_activities`;
+      yield* sql`
+        WITH RECURSIVE activity_rows(sequence) AS (
+          SELECT 2
+          UNION ALL
+          SELECT sequence + 1 FROM activity_rows WHERE sequence < 501
+        )
+        INSERT INTO projection_thread_activities (
+          activity_id, thread_id, turn_id, tone, kind, summary, payload_json, sequence, created_at
+        )
+        SELECT
+          'worktree-setup:thread-w', 'thread-w', NULL, 'info', 'worktree-setup',
+          'Preparing worktree', '{"status":"running"}', 1, '2026-03-01T00:00:01.000Z'
+        UNION ALL
+        SELECT
+          printf('activity-%04d', sequence), 'thread-w', 'turn-5', 'tool', 'tool.completed',
+          'ran tool', json_object('sequence', sequence), sequence,
+          '2026-03-01T00:04:00.000Z'
+        FROM activity_rows
+      `;
+
+      const fullDetail = yield* snapshotQuery.getThreadDetailById(threadW);
+      assert.equal(fullDetail._tag, "Some");
+      if (fullDetail._tag === "Some") {
+        assert.equal(fullDetail.value.activities.length, 501);
+        assert.equal(fullDetail.value.activities[0]?.id, asEventId("worktree-setup:thread-w"));
+        assert.equal(fullDetail.value.activities[1]?.id, asEventId("activity-0002"));
+      }
+
+      const windowedDetail = yield* snapshotQuery.getThreadDetailSnapshot(threadW, {
+        turnLimit: 2,
+      });
+      assert.equal(windowedDetail._tag, "Some");
+      if (windowedDetail._tag === "Some") {
+        assert.equal(windowedDetail.value.thread.activities.length, 501);
+        assert.equal(
+          windowedDetail.value.thread.activities[0]?.id,
+          asEventId("worktree-setup:thread-w"),
+        );
+      }
+    }),
+  );
+
   it.effect("a thread with no turns returns its content unwindowed on the first page", () =>
     Effect.gen(function* () {
       const sql = yield* SqlClient.SqlClient;
@@ -4573,4 +4631,52 @@ it.effect("omits foreign-host PRs from legacy snapshots while preserving native 
       assert.equal(thread.linkedPullRequest?.url, "https://github.com/acme/web/pull/42");
     }
   }).pipe(Effect.provide(layer));
+});
+
+projectionSnapshotLayer("ProjectionSnapshotQuery activities by kind", (it) => {
+  it.effect("lists one kind across active threads only, without hydrating the threads", () =>
+    Effect.gen(function* () {
+      const query = yield* ProjectionSnapshotQuery;
+      const sql = yield* SqlClient.SqlClient;
+      const timestamp = "2026-03-02T00:00:00.000Z";
+      yield* sql`
+        INSERT INTO projection_projects (
+          project_id, title, workspace_root, scripts_json, created_at, updated_at
+        ) VALUES ('project-kinds', 'Project', '/tmp/project-kinds', '[]', ${timestamp}, ${timestamp})
+      `;
+      yield* sql`
+        INSERT INTO projection_threads (
+          thread_id, project_id, title, model_selection_json, runtime_mode, interaction_mode,
+          created_at, updated_at, deleted_at
+        ) VALUES
+          ('thread-live', 'project-kinds', 'Live', '{"instanceId":"codex","model":"gpt-5"}',
+            'full-access', 'default', ${timestamp}, ${timestamp}, NULL),
+          ('thread-gone', 'project-kinds', 'Gone', '{"instanceId":"codex","model":"gpt-5"}',
+            'full-access', 'default', ${timestamp}, ${timestamp}, ${timestamp}),
+          ('thread-shelved', 'project-kinds', 'Shelved', '{"instanceId":"codex","model":"gpt-5"}',
+            'full-access', 'default', ${timestamp}, ${timestamp}, NULL)
+      `;
+      yield* sql`UPDATE projection_threads SET archived_at = ${timestamp} WHERE thread_id = 'thread-shelved'`;
+      yield* sql`
+        INSERT INTO projection_thread_activities (
+          activity_id, thread_id, turn_id, tone, kind, summary, payload_json, created_at
+        ) VALUES
+          ('setup-live', 'thread-live', NULL, 'info', 'worktree-setup', 'Setting up',
+            '{"phase":"running"}', ${timestamp}),
+          ('other-live', 'thread-live', NULL, 'info', 'tool.completed', 'Other',
+            '{}', ${timestamp}),
+          ('setup-gone', 'thread-gone', NULL, 'info', 'worktree-setup', 'Setting up',
+            '{"phase":"running"}', ${timestamp}),
+          ('setup-shelved', 'thread-shelved', NULL, 'info', 'worktree-setup', 'Setting up',
+            '{"phase":"running"}', ${timestamp})
+      `;
+
+      const setups = yield* query.listActivitiesByKind("worktree-setup");
+      assert.deepEqual(
+        setups.map((activity) => [activity.id, activity.kind, activity.payload]),
+        [["setup-live", "worktree-setup", { phase: "running" }]],
+      );
+      assert.deepEqual(yield* query.listActivitiesByKind("nope"), []);
+    }),
+  );
 });

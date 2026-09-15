@@ -334,7 +334,10 @@ export function useThreadListActions(options: {
   readonly forkThread: (thread: EnvironmentThreadShell) => void;
   readonly confirmDeleteThread: (thread: EnvironmentThreadShell) => void;
   readonly settleThread: (thread: EnvironmentThreadShell) => Promise<boolean>;
-  readonly snoozeThread: (thread: EnvironmentThreadShell, preset: SnoozePreset) => Promise<boolean>;
+  readonly snoozeThread: (
+    thread: EnvironmentThreadShell,
+    preset: Pick<SnoozePreset, "snoozedUntil" | "untilDone">,
+  ) => Promise<boolean>;
   readonly unsnoozeThread: (thread: EnvironmentThreadShell) => Promise<boolean>;
   readonly unsettleThread: (thread: EnvironmentThreadShell) => Promise<boolean>;
   readonly pinThread: (thread: EnvironmentThreadShell) => Promise<boolean>;
@@ -429,7 +432,10 @@ export function useThreadListActions(options: {
     [executeAction],
   );
   const snoozeThread = useCallback(
-    async (thread: EnvironmentThreadShell, preset: SnoozePreset) => {
+    async (
+      thread: EnvironmentThreadShell,
+      preset: Pick<SnoozePreset, "snoozedUntil" | "untilDone">,
+    ) => {
       const key = scopedThreadKey(thread.environmentId, thread.id);
       if (snoozeInFlightThreadKeys.current.has(key)) {
         return false;

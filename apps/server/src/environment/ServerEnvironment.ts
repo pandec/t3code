@@ -262,6 +262,7 @@ export const make = Effect.gen(function* () {
       turnStartBootstrap: true,
       threadMessages: true,
       environmentIcon: true,
+      projectCloneTracking: true,
       ...(advertisedServerSelfUpdate === null
         ? {}
         : { serverSelfUpdate: advertisedServerSelfUpdate }),

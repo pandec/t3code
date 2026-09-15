@@ -538,6 +538,15 @@ it("includes baseBranch and startFromOrigin in the bootstrap when requested", ()
   });
 });
 
+it("marks an explicitly titled bootstrap thread as manual", () => {
+  const bootstrap = buildNewWorktreeBootstrap({
+    ...bootstrapInput(newWorktreeSelection({})),
+    titleSource: "manual",
+  });
+
+  assert.strictEqual(bootstrap.createThread?.titleSource, "manual");
+});
+
 it.layer(NodeServices.layer)("thread default workspace resolution", (it) => {
   const makeWorkspace = Effect.gen(function* () {
     const fs = yield* FileSystem.FileSystem;

@@ -56,6 +56,7 @@ export interface AddProjectActionInput {
   readonly command: string;
   readonly icon: ProjectScript["icon"];
   readonly runOnWorktreeCreate: boolean;
+  readonly async?: boolean;
   readonly previewUrl?: string;
   readonly autoOpenPreview: boolean;
 }
@@ -65,6 +66,7 @@ export interface UpdateProjectActionInput {
   readonly command?: string;
   readonly icon?: ProjectScript["icon"];
   readonly runOnWorktreeCreate?: boolean;
+  readonly async?: boolean;
   readonly previewUrl?: string | null;
   readonly autoOpenPreview?: boolean;
 }
@@ -161,6 +163,7 @@ export function addProjectAction(input: {
     command,
     icon: input.action.icon,
     runOnWorktreeCreate: input.action.runOnWorktreeCreate,
+    ...(input.action.async !== undefined ? { async: input.action.async } : {}),
     previewUrl,
     autoOpenPreview: input.action.autoOpenPreview,
   });
@@ -208,11 +211,17 @@ export function updateProjectAction(input: {
     });
   }
 
+  const runOnWorktreeCreate = input.updates.runOnWorktreeCreate ?? current.runOnWorktreeCreate;
   const action = buildProjectScript(current.id, {
     name,
     command,
     icon: input.updates.icon ?? current.icon,
-    runOnWorktreeCreate: input.updates.runOnWorktreeCreate ?? current.runOnWorktreeCreate,
+    runOnWorktreeCreate,
+    ...(input.updates.async !== undefined
+      ? { async: input.updates.async }
+      : current.async !== undefined
+        ? { async: current.async }
+        : {}),
     previewUrl,
     autoOpenPreview,
   });

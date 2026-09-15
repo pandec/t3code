@@ -86,6 +86,8 @@ const buildSourcemap: boolean | "hidden" =
  * files, not in the new test.
  */
 const ISOLATED_TEST_FILES = [
+  "src/components/pullRequest/PullRequestSummaryTab.test.tsx",
+
   "src/hooks/useResizeDrag.test.tsx",
   "src/components/ThreadNotificationCoordinator.badge.test.tsx",
   "src/components/ThreadNotificationCoordinator.test.tsx",

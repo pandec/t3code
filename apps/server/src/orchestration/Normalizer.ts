@@ -2,6 +2,8 @@ import * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
 import * as FileSystem from "effect/FileSystem";
 import * as Path from "effect/Path";
+import * as Option from "effect/Option";
+import { ProjectionThreadMessageRepository } from "../persistence/Services/ProjectionThreadMessages.ts";
 import {
   type ClientOrchestrationCommand,
   type UserInputAttachments,
@@ -357,9 +359,34 @@ export const cleanupFailedUploadedAttachments = Effect.fn(
         : [];
   if (normalizedAttachments.length === 0) return;
 
+  // A bootstrap persists its user message before setup. If rollback retains
+  // that thread, its claimed uploads are already owned by the saved message.
+  const retainedAttachmentIds = new Set<string>();
+  if (normalizedCommand.type === "thread.turn.start" && normalizedCommand.bootstrap?.createThread) {
+    const messages = yield* ProjectionThreadMessageRepository;
+    const message = yield* messages
+      .getByMessageId({ messageId: normalizedCommand.message.messageId })
+      .pipe(
+        Effect.catch((cause) =>
+          Effect.logWarning("Could not check bootstrap attachment ownership", { cause }).pipe(
+            Effect.as(null),
+          ),
+        ),
+      );
+    if (message === null) return;
+    if (
+      Option.isSome(message) &&
+      message.value.threadId === normalizedCommand.threadId &&
+      message.value.createdAt === normalizedCommand.createdAt
+    ) {
+      for (const attachment of message.value.attachments ?? [])
+        retainedAttachmentIds.add(attachment.id);
+    }
+  }
   const serverConfig = yield* ServerConfig;
   const claimedPaths: string[] = [];
   for (const [index, attachment] of normalizedAttachments.entries()) {
+    if (retainedAttachmentIds.has(attachment.id)) continue;
     const original = originalAttachments[index];
     if (
       !original ||

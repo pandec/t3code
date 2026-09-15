@@ -8,12 +8,17 @@ import * as Fiber from "effect/Fiber";
 import * as Schedule from "effect/Schedule";
 import * as Layer from "effect/Layer";
 import * as Schema from "effect/Schema";
+import * as Option from "effect/Option";
+import { ProjectionSnapshotQuery } from "./ProjectionSnapshotQuery.ts";
 import {
   CommandId,
   EventId,
   type OrchestrationCommand,
   OrchestrationDispatchCommandError,
   type ThreadId,
+  WORKTREE_SETUP_ACTIVITY_KIND,
+  worktreeSetupActivityId,
+  type WorktreeSetupSnapshot,
 } from "@t3tools/contracts";
 
 import * as GitWorkflowService from "../../git/GitWorkflowService.ts";
@@ -80,6 +85,7 @@ export class TurnStartBootstrap extends Context.Service<
 
 export const make = Effect.gen(function* () {
   const crypto = yield* Crypto.Crypto;
+  const query = yield* ProjectionSnapshotQuery;
   const worktreeSetupTracker = yield* WorktreeSetupTracker.WorktreeSetupTracker;
   const terminalManager = yield* TerminalManager.TerminalManager;
   const orchestrationEngine = yield* OrchestrationEngine.OrchestrationEngineService;
@@ -177,35 +183,116 @@ export const make = Effect.gen(function* () {
       const { bootstrap: _bootstrap, ...finalTurnStartCommand } = command;
       const dispatchFromClient = (input: OrchestrationCommand) =>
         orchestrationEngine.dispatch(input, options);
+      const recordWorktreeSetup = (snapshot: WorktreeSetupSnapshot) =>
+        requireCurrentThread.pipe(Effect.andThen(serverCommandId("worktree-setup-activity"))).pipe(
+          Effect.flatMap((commandId) =>
+            dispatchFromClient({
+              type: "thread.activity.append",
+              commandId,
+              threadId: snapshot.threadId,
+              activity: {
+                id: EventId.make(worktreeSetupActivityId(snapshot.threadId)),
+                tone:
+                  snapshot.phase === "failed" ||
+                  snapshot.stages.some((stage) => stage.status === "failed")
+                    ? "error"
+                    : "info",
+                kind: WORKTREE_SETUP_ACTIVITY_KIND,
+                summary:
+                  snapshot.phase === "running"
+                    ? "Setting up worktree"
+                    : snapshot.phase === "done"
+                      ? "Worktree ready"
+                      : snapshot.phase === "cancelled"
+                        ? "Worktree setup cancelled"
+                        : "Worktree setup failed",
+                payload: snapshot,
+                turnId: null,
+                createdAt: snapshot.startedAt,
+              },
+              createdAt: snapshot.endedAt ?? snapshot.startedAt,
+            }),
+          ),
+          Effect.ignoreCause({ log: true }),
+        );
       let setupTerminalId: string | null = null;
       let createdThread = false;
+      let expectedCreatedAt: string | undefined;
+      let staleThread = false;
+      let setupCompletionFiber: Fiber.Fiber<void, never> | null = null;
+      const threadStillCurrent = Effect.gen(function* () {
+        const current = yield* query.getThreadShellById(command.threadId);
+        return (
+          Option.isSome(current) &&
+          current.value.archivedAt === null &&
+          (expectedCreatedAt === undefined || current.value.createdAt === expectedCreatedAt)
+        );
+      });
+      const requireCurrentThread = Effect.gen(function* () {
+        if (yield* threadStillCurrent) return;
+        staleThread = true;
+        return yield* new OrchestrationDispatchCommandError({
+          message: "Worktree setup stopped because the thread was archived, deleted, or replaced.",
+        });
+      });
+      const whileThreadCurrent = (effect: Effect.Effect<void>) =>
+        threadStillCurrent.pipe(
+          Effect.flatMap((current) => (current ? effect : Effect.void)),
+          Effect.ignoreCause({ log: true }),
+        );
       let createdWorktree: { readonly cwd: string; readonly path: string } | null = null;
       const targetProjectId = bootstrap?.createThread?.projectId;
       const targetProjectCwd = bootstrap?.prepareWorktree?.projectCwd;
       let targetWorktreePath = bootstrap?.createThread?.worktreePath ?? null;
 
+      // Set once the checkout starts; see the session.set below.
+      let preparingSessionSet = false;
+      const markPreparingSessionFailed = (detail: string) =>
+        Effect.gen(function* () {
+          const failedAt = yield* nowIso;
+          yield* dispatchFromClient({
+            type: "thread.session.set",
+            commandId: yield* serverCommandId("bootstrap-thread-preparing-failed"),
+            threadId,
+            session: {
+              threadId,
+              status: "error",
+              providerName: null,
+              providerInstanceId:
+                bootstrap?.createThread?.modelSelection.instanceId ??
+                command.modelSelection?.instanceId,
+              runtimeMode: command.runtimeMode,
+              activeTurnId: null,
+              lastError: detail.trim().length > 0 ? detail : "Worktree setup failed.",
+              updatedAt: failedAt,
+            },
+            createdAt: failedAt,
+          });
+        });
       const cleanupCreatedThread = () =>
-        createdThread
-          ? serverCommandId("bootstrap-thread-delete").pipe(
-              Effect.flatMap((commandId) =>
-                orchestrationEngine.dispatch(
-                  {
-                    type: "thread.delete",
-                    commandId,
-                    threadId: command.threadId,
-                  },
-                  options,
+        createdThread && !staleThread
+          ? requireCurrentThread
+              .pipe(Effect.andThen(serverCommandId("bootstrap-thread-delete")))
+              .pipe(
+                Effect.flatMap((commandId) =>
+                  orchestrationEngine.dispatch(
+                    {
+                      type: "thread.delete",
+                      commandId,
+                      threadId: command.threadId,
+                    },
+                    options,
+                  ),
                 ),
-              ),
-              Effect.as(true),
-            )
+                Effect.as(true),
+              )
           : Effect.succeed(false);
 
       // Only when this bootstrap also created the thread: a prepareWorktree-only
       // bootstrap runs against a pre-existing thread whose metadata may already
       // reference the new worktree, so it must survive a failed turn start.
       const cleanupCreatedWorktree = () =>
-        createdThread && createdWorktree !== null
+        createdThread && !staleThread && createdWorktree !== null
           ? gitWorkflow
               .removeWorktree({
                 cwd: createdWorktree.cwd,
@@ -308,15 +395,16 @@ export const make = Effect.gen(function* () {
       const threadId = command.threadId;
       const track = (effect: Effect.Effect<void>) => (tracked ? effect : Effect.void);
 
-      // Runs the setup script and, for tracked bootstraps, waits for it to
-      // exit so the card can show the exit code and the agent stage never
-      // starts on a half-installed tree. Untracked callers keep the old
-      // fire-and-forget behavior.
+      // Starts the setup script. For tracked bootstraps it returns the
+      // effect that waits for the script to exit and records the outcome
+      // on the card; whether the agent stage waits on it depends on the
+      // script's `async` flag. Returns null when nothing is left to await.
+      // Untracked callers keep the old fire-and-forget behavior.
       const runSetupProgram = () =>
         Effect.gen(function* () {
           if (!bootstrap?.runSetupScript || !targetWorktreePath) {
             yield* track(worktreeSetupTracker.stageStatus(threadId, "setup-script", "skipped"));
-            return;
+            return null;
           }
           const worktreePath = targetWorktreePath;
           const requestedAt = yield* nowIso;
@@ -393,21 +481,38 @@ export const make = Effect.gen(function* () {
               }),
             );
           if (!tracked || !setupResult?.completion) {
-            return;
+            return null;
           }
           // The setup script is best effort, like the untracked path: a
           // failed install must not throw away the worktree the user just
           // waited for. The card keeps the failed stage and its terminal.
-          const completion = yield* setupResult.completion;
-          if (completion.exitCode === 0) {
-            yield* worktreeSetupTracker.stageStatus(threadId, "setup-script", "done");
-            return;
+          // Forked right away so the terminal listener behind `completion`
+          // is always consumed, even when the turn dispatch fails before
+          // anyone would otherwise wait on it. The tracker update is a
+          // no-op once the snapshot has been dropped.
+          const completionFiber = yield* setupResult.completion.pipe(
+            Effect.flatMap((completion) => {
+              if (completion.exitCode === 0) {
+                return whileThreadCurrent(
+                  worktreeSetupTracker.stageStatus(threadId, "setup-script", "done"),
+                );
+              }
+              const detail =
+                completion.exitCode === null
+                  ? "terminal closed before the script finished"
+                  : `exit ${completion.exitCode}`;
+              return whileThreadCurrent(
+                worktreeSetupTracker.stageStatus(threadId, "setup-script", "failed", detail),
+              );
+            }),
+            Effect.forkDetach,
+          );
+          setupCompletionFiber = completionFiber;
+          if (!setupResult.async) {
+            yield* Fiber.join(completionFiber);
+            return null;
           }
-          const detail =
-            completion.exitCode === null
-              ? "terminal closed before the script finished"
-              : `exit ${completion.exitCode}`;
-          yield* worktreeSetupTracker.stageStatus(threadId, "setup-script", "failed", detail);
+          return completionFiber;
         });
 
       const bootstrapProgram = Effect.gen(function* () {
@@ -418,6 +523,9 @@ export const make = Effect.gen(function* () {
             threadId: command.threadId,
             projectId: bootstrap.createThread.projectId,
             title: bootstrap.createThread.title,
+            ...(bootstrap.createThread.titleSource
+              ? { titleSource: bootstrap.createThread.titleSource }
+              : {}),
             modelSelection: bootstrap.createThread.modelSelection,
             runtimeMode: bootstrap.createThread.runtimeMode,
             interactionMode: bootstrap.createThread.interactionMode,
@@ -431,8 +539,35 @@ export const make = Effect.gen(function* () {
           // terminals and provider sessions under the reused thread id.
           yield* threadDeletionReactor.drainThrough(created.sequence);
           createdThread = true;
+          expectedCreatedAt = bootstrap.createThread.createdAt;
+          yield* dispatchFromClient({
+            type: "thread.message.user.append",
+            commandId: yield* serverCommandId("bootstrap-thread-message"),
+            threadId,
+            message: {
+              messageId: command.message.messageId,
+              text: command.message.text,
+              attachments: command.message.attachments,
+              ...(command.message.context !== undefined
+                ? { context: command.message.context }
+                : {}),
+              ...(command.message.inputOrigin !== undefined
+                ? { inputOrigin: command.message.inputOrigin }
+                : {}),
+            },
+            createdAt: command.createdAt,
+          });
+          if (tracked) {
+            const running = yield* worktreeSetupTracker.get(threadId);
+            if (running) yield* recordWorktreeSetup(running);
+          }
         }
 
+        if (!bootstrap?.createThread && bootstrap) {
+          const current = yield* query.getThreadShellById(threadId);
+          if (Option.isSome(current)) expectedCreatedAt = current.value.createdAt;
+          yield* requireCurrentThread;
+        }
         const prepareWorktree = bootstrap?.prepareWorktree;
         let shouldPrepareWorktree = prepareWorktree
           ? yield* gitWorkflow.isRepository(prepareWorktree.projectCwd)
@@ -523,6 +658,31 @@ export const make = Effect.gen(function* () {
         }
 
         if (prepareWorktree && shouldPrepareWorktree && worktreeBaseRef && baseBranch) {
+          if (bootstrap?.createThread && createdThread) {
+            // The checkout and setup script can run for minutes before the
+            // turn starts. Project a starting session alongside the saved
+            // prompt so clients list the thread as working and follow its
+            // setup stream when reopened.
+            yield* requireCurrentThread;
+            const preparingAt = yield* nowIso;
+            yield* dispatchFromClient({
+              type: "thread.session.set",
+              commandId: yield* serverCommandId("bootstrap-thread-preparing"),
+              threadId,
+              session: {
+                threadId,
+                status: "starting",
+                providerName: null,
+                providerInstanceId: bootstrap.createThread.modelSelection.instanceId,
+                runtimeMode: command.runtimeMode,
+                activeTurnId: null,
+                lastError: null,
+                updatedAt: preparingAt,
+              },
+              createdAt: preparingAt,
+            });
+            preparingSessionSet = true;
+          }
           yield* worktreeSetupTracker.stageStatus(threadId, "checkout", "running");
           let checkoutTotal: number | null = null;
           const worktree = yield* gitWorkflow.createWorktree(
@@ -607,6 +767,7 @@ export const make = Effect.gen(function* () {
           }));
           targetWorktreePath = worktree.worktree.path;
           createdWorktree = { cwd: prepareWorktree.projectCwd, path: targetWorktreePath };
+          yield* requireCurrentThread;
           yield* dispatchFromClient({
             type: "thread.meta.update",
             commandId: yield* serverCommandId("bootstrap-thread-meta-update"),
@@ -617,38 +778,46 @@ export const make = Effect.gen(function* () {
           yield* refreshGitStatus(targetWorktreePath);
         }
 
-        yield* runSetupProgram();
+        if (bootstrap) yield* requireCurrentThread;
+        const pendingSetupScript = yield* runSetupProgram();
+        if (bootstrap) yield* requireCurrentThread;
 
         yield* track(worktreeSetupTracker.stageStatus(threadId, "agent", "running"));
         // Past this point a cancel would roll back a thread whose turn has
         // started. Drop the cancel handle and make the handoff atomic.
-        yield* track(worktreeSetupTracker.markUncancellable(threadId));
-        const started = yield* Effect.uninterruptible(dispatchFromClient(finalTurnStartCommand));
-        yield* track(
-          worktreeSetupTracker
-            .stageStatus(threadId, "agent", "done")
-            .pipe(Effect.andThen(worktreeSetupTracker.finish(threadId, "done"))),
+        const started = yield* Effect.uninterruptible(
+          Effect.gen(function* () {
+            yield* track(worktreeSetupTracker.markUncancellable(threadId));
+            return yield* dispatchFromClient(finalTurnStartCommand);
+          }),
         );
+        yield* track(worktreeSetupTracker.stageStatus(threadId, "agent", "done"));
+        // An async setup script outlives the handoff: the snapshot stays
+        // running so the client keeps its row next to the agent's work,
+        // and settles when the script exits. The turn already started, so
+        // the wait cannot fail the dispatch.
+        const settle = tracked
+          ? worktreeSetupTracker
+              .finish(threadId, "done")
+              .pipe(
+                Effect.flatMap((snapshot) =>
+                  snapshot ? recordWorktreeSetup(snapshot) : Effect.void,
+                ),
+              )
+          : Effect.void;
+        if (pendingSetupScript) {
+          const running = yield* worktreeSetupTracker.get(threadId);
+          if (running) yield* recordWorktreeSetup(running);
+          yield* Fiber.join(pendingSetupScript).pipe(
+            Effect.ignoreCause({ log: true }),
+            Effect.andThen(whileThreadCurrent(settle)),
+            Effect.forkDetach,
+          );
+        } else {
+          yield* settle;
+        }
         return started;
       });
-
-      const runBootstrap = tracked
-        ? Effect.gen(function* () {
-            const ready = yield* Deferred.make<void>();
-            const fiber = yield* Effect.forkChild(
-              Deferred.await(ready).pipe(Effect.andThen(bootstrapProgram)),
-            );
-            yield* worktreeSetupTracker.begin({
-              threadId,
-              branch: bootstrap?.prepareWorktree?.branch ?? null,
-              baseRef: bootstrap?.prepareWorktree?.baseBranch ?? null,
-              stages: ["fetch", "checkout", "submodules", "setup-script", "agent"],
-              fiber,
-            });
-            yield* Deferred.succeed(ready, undefined);
-            return yield* Fiber.join(fiber);
-          })
-        : bootstrapProgram;
 
       const cleanupAndFail = (dispatchError: OrchestrationDispatchCommandError) => {
         // Uninterruptible so a client disconnect mid-cleanup cannot leave a
@@ -662,6 +831,13 @@ export const make = Effect.gen(function* () {
                   threadId: command.threadId,
                   detail: Cause.pretty(cleanupCause),
                 }).pipe(
+                  Effect.andThen(
+                    preparingSessionSet && !staleThread
+                      ? markPreparingSessionFailed(dispatchError.message).pipe(
+                          Effect.ignoreCause({ log: true }),
+                        )
+                      : Effect.void,
+                  ),
                   Effect.flatMap(() => cleanupCreatedWorktree()),
                   Effect.flatMap(() => Effect.fail(dispatchError)),
                 ),
@@ -686,37 +862,77 @@ export const make = Effect.gen(function* () {
         );
       };
 
-      return yield* runBootstrap.pipe(
-        Effect.catchCause((cause) => {
-          const dispatchError = toBootstrapDispatchCommandCauseError(cause);
-          if (Cause.hasInterruptsOnly(cause)) {
-            if (!tracked) return Effect.fail(dispatchError);
-            const closeSetupTerminal = setupTerminalId
-              ? terminalManager.close({
-                  threadId,
-                  terminalId: setupTerminalId,
-                  deleteHistory: true,
-                })
-              : Effect.void;
-            return Effect.uninterruptible(
-              closeSetupTerminal.pipe(
-                Effect.ignoreCause({ log: true }),
-                Effect.andThen(worktreeSetupTracker.finish(threadId, "cancelled")),
-                Effect.andThen(
-                  cleanupAndFail(
-                    new OrchestrationDispatchCommandError({
-                      message: "Worktree setup cancelled.",
-                    }),
+      const settledBootstrapProgram = Effect.uninterruptibleMask((restore) =>
+        restore(bootstrapProgram).pipe(
+          Effect.onError(() =>
+            setupCompletionFiber
+              ? Fiber.interrupt(setupCompletionFiber).pipe(Effect.asVoid)
+              : Effect.void,
+          ),
+          Effect.catchCause((cause) => {
+            const dispatchError = toBootstrapDispatchCommandCauseError(cause);
+            if (Cause.hasInterruptsOnly(cause)) {
+              if (!tracked) return Effect.fail(dispatchError);
+              const closeSetupTerminal = setupTerminalId
+                ? terminalManager.close({
+                    threadId,
+                    terminalId: setupTerminalId,
+                    deleteHistory: true,
+                  })
+                : Effect.void;
+              return Effect.uninterruptible(
+                closeSetupTerminal.pipe(
+                  Effect.ignoreCause({ log: true }),
+                  Effect.andThen(
+                    worktreeSetupTracker
+                      .finish(threadId, "cancelled")
+                      .pipe(
+                        Effect.flatMap((snapshot) =>
+                          snapshot ? recordWorktreeSetup(snapshot) : Effect.void,
+                        ),
+                      ),
+                  ),
+                  Effect.andThen(
+                    cleanupAndFail(
+                      new OrchestrationDispatchCommandError({
+                        message: "Worktree setup cancelled.",
+                      }),
+                    ),
                   ),
                 ),
-              ),
-            );
-          }
-          return track(worktreeSetupTracker.finish(threadId, "failed", dispatchError.message)).pipe(
-            Effect.andThen(cleanupAndFail(dispatchError)),
+              );
+            }
+            return track(
+              worktreeSetupTracker
+                .finish(threadId, "failed", dispatchError.message)
+                .pipe(
+                  Effect.flatMap((snapshot) =>
+                    snapshot ? recordWorktreeSetup(snapshot) : Effect.void,
+                  ),
+                ),
+            ).pipe(Effect.andThen(cleanupAndFail(dispatchError)));
+          }),
+        ),
+      );
+      if (!tracked) return yield* settledBootstrapProgram;
+      const fiber = yield* Effect.uninterruptible(
+        Effect.gen(function* () {
+          const ready = yield* Deferred.make<void>();
+          const fiber = yield* Effect.forkDetach(
+            Deferred.await(ready).pipe(Effect.andThen(settledBootstrapProgram)),
           );
+          yield* worktreeSetupTracker.begin({
+            threadId,
+            branch: bootstrap?.prepareWorktree?.branch ?? null,
+            baseRef: bootstrap?.prepareWorktree?.baseBranch ?? null,
+            stages: ["fetch", "checkout", "submodules", "setup-script", "agent"],
+            fiber,
+          });
+          yield* Deferred.succeed(ready, undefined);
+          return fiber;
         }),
       );
+      return yield* Fiber.join(fiber);
     });
 
   return TurnStartBootstrap.of({ dispatchTurnStart });

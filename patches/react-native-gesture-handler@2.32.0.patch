@@ -1,3 +1,19 @@
+diff --git a/apple/Handlers/RNHoverHandler.m b/apple/Handlers/RNHoverHandler.m
+index 320cb8c..a88ac5f 100644
+--- a/apple/Handlers/RNHoverHandler.m
++++ b/apple/Handlers/RNHoverHandler.m
+@@ -132,8 +132,10 @@ API_AVAILABLE(ios(13.4))
+ {
+ #if CHECK_TARGET(13_4)
+   if (@available(iOS 13.4, *)) {
++    // The superclass detaches the recognizer, clearing recognizer.view. Remove
++    // the interaction from its own view before it can be recycled by Fabric.
++    [_pointerInteraction.view removeInteraction:_pointerInteraction];
+     [super unbindFromView];
+-    [self.recognizer.view removeInteraction:_pointerInteraction];
+   }
+ #endif
+ }
 diff --git a/lib/commonjs/components/ReanimatedSwipeable/ReanimatedSwipeable.js b/lib/commonjs/components/ReanimatedSwipeable/ReanimatedSwipeable.js
 index 551ab92..5c9c3da 100644
 --- a/lib/commonjs/components/ReanimatedSwipeable/ReanimatedSwipeable.js

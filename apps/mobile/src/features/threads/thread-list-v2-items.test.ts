@@ -2,6 +2,9 @@ import type { EnvironmentThreadShell } from "@t3tools/client-runtime/state/shell
 import { ProviderInstanceId, ThreadId, TurnId } from "@t3tools/contracts";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vite-plus/test";
 
+vi.mock("../../components/RowPressable", () => ({ RowPressable: "RowPressable" }));
+vi.mock("./CustomSnoozeSheet", () => ({ CustomSnoozeSheet: "CustomSnoozeSheet" }));
+
 vi.mock("react-native", () => ({
   Alert: { alert: vi.fn() },
   Platform: { select: <T>(options: { default?: T }) => options.default },
