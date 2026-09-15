@@ -49,7 +49,21 @@ import {
   linearUserLabel,
 } from "./linearPresentation";
 
+/**
+ * Attachment URLs are typed by whoever attached them, so only web URLs are handed to the
+ * shell; every other link the panel opens is one Linear generated.
+ */
+function isWebUrl(url: string): boolean {
+  try {
+    const { protocol } = new URL(url);
+    return protocol === "https:" || protocol === "http:";
+  } catch {
+    return false;
+  }
+}
+
 function openExternal(url: string) {
+  if (!isWebUrl(url)) return;
   void readLocalApi()?.shell.openExternal(url);
 }
 
@@ -422,7 +436,7 @@ function IssueConnections({
 }) {
   const children = issue.children ?? [];
   const relations = issue.relations ?? [];
-  const attachments = issue.attachments ?? [];
+  const attachments = (issue.attachments ?? []).filter((attachment) => isWebUrl(attachment.url));
   const done = children.filter((child) => isEnded(child.state)).length;
   return (
     <>

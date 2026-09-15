@@ -208,8 +208,12 @@ export function formatLinearDueDate(
 ): { label: string; overdue: boolean } | null {
   const match = /^(\d{4})-(\d{2})-(\d{2})/.exec(value);
   if (match === null) return null;
-  const date = new Date(Number(match[1]), Number(match[2]) - 1, Number(match[3]));
-  if (Number.isNaN(date.getTime())) return null;
+  const [year, month, day] = [Number(match[1]), Number(match[2]) - 1, Number(match[3])];
+  const date = new Date(year, month, day);
+  // The constructor rolls an impossible day into the next month; treat that as no date.
+  if (date.getFullYear() !== year || date.getMonth() !== month || date.getDate() !== day) {
+    return null;
+  }
   const today = new Date(now.getFullYear(), now.getMonth(), now.getDate());
   return {
     label: date.toLocaleDateString(undefined, {
