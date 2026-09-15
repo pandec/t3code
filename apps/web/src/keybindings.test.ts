@@ -231,6 +231,34 @@ describe("settle thread shortcut", () => {
 });
 
 describe("copy thread reference shortcut", () => {
+  it("allows separate ID and reference bindings without assigning an ID default", () => {
+    assert.isFalse(DEFAULT_BINDINGS.some((binding) => binding.command === "thread.copyId"));
+    const bindings = compileResolvedKeybindingsConfig([
+      { key: "mod+shift+c", command: "thread.copyId", when: "!terminalFocus" },
+      { key: "mod+shift+u", command: "thread.copyReference", when: "!terminalFocus" },
+    ]);
+    for (const [key, command] of [
+      ["c", "thread.copyId"],
+      ["u", "thread.copyReference"],
+    ] as const) {
+      for (const platform of ["MacIntel", "Linux"]) {
+        const shortcut = event({
+          key,
+          shiftKey: true,
+          metaKey: platform === "MacIntel",
+          ctrlKey: platform !== "MacIntel",
+        });
+        assert.equal(resolveShortcutCommand(shortcut, bindings, { platform }), command);
+        assert.isNull(
+          resolveShortcutCommand(shortcut, bindings, {
+            platform,
+            context: { terminalFocus: true },
+          }),
+        );
+      }
+    }
+  });
+
   it("resolves Cmd+Shift+C on macOS and Ctrl+Shift+C elsewhere", () => {
     assert.equal(
       resolveShortcutCommand(event({ key: "c", metaKey: true, shiftKey: true }), DEFAULT_BINDINGS, {

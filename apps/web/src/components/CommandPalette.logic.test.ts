@@ -2,6 +2,7 @@ import { describe, expect, it, vi } from "vite-plus/test";
 import { scopeThreadRef } from "@t3tools/client-runtime/environment";
 import { EnvironmentId, ProjectId, ProviderInstanceId, ThreadId } from "@t3tools/contracts";
 import { SidebarProjectAccentColor } from "@t3tools/contracts/settings";
+import { resolveThreadReferenceCopyTarget } from "@t3tools/shared/threadReference";
 import type { Thread } from "../types";
 import {
   buildBrowseGroups,
@@ -9,6 +10,7 @@ import {
   buildArchivedThreadsActionItems,
   buildCommandPaletteProjectMetadata,
   buildCurrentThreadActionItems,
+  buildThreadCopyActionItems,
   buildProjectActionItems,
   buildThreadActionItems,
   buildLinkedThreadActionItems,
@@ -19,6 +21,74 @@ import {
   type CommandPaletteGroup,
   type CommandPaletteProject,
 } from "./CommandPalette.logic";
+
+describe("buildThreadCopyActionItems", () => {
+  const threadId = "thread-current";
+  const prUrl = "https://github.com/example/repo/pull/42";
+
+  it.each([
+    {
+      name: "no PR",
+      linkedPullRequestUrl: null,
+      openPanelPullRequestUrl: undefined,
+      hasPr: false,
+    },
+    {
+      name: "linked PR",
+      linkedPullRequestUrl: prUrl,
+      openPanelPullRequestUrl: undefined,
+      hasPr: true,
+    },
+    {
+      name: "loading PR panel",
+      linkedPullRequestUrl: prUrl,
+      openPanelPullRequestUrl: null,
+      hasPr: false,
+    },
+    {
+      name: "open PR panel",
+      linkedPullRequestUrl: null,
+      openPanelPullRequestUrl: prUrl,
+      hasPr: true,
+    },
+  ])(
+    "keeps ID copying available with $name",
+    async ({ linkedPullRequestUrl, openPanelPullRequestUrl, hasPr }) => {
+      const copy = vi.fn(async () => undefined);
+      const reference = resolveThreadReferenceCopyTarget({
+        threadId,
+        linkedPullRequestUrl,
+        openPanelPullRequestUrl,
+      });
+      const items = buildThreadCopyActionItems({ threadId, reference, icon: null, copy });
+      expect(items.map((item) => item.title)).toEqual(
+        hasPr ? ["Copy thread ID", "Copy PR link"] : ["Copy thread ID"],
+      );
+      await items[0]!.run();
+      expect(copy).toHaveBeenLastCalledWith(
+        expect.objectContaining({ kind: "thread", value: threadId }),
+      );
+      if (hasPr) {
+        await items[1]!.run();
+        expect(copy).toHaveBeenLastCalledWith(
+          expect.objectContaining({ kind: "pull-request", value: prUrl }),
+        );
+      }
+    },
+  );
+
+  it("does not offer an ID on the standalone PR page or without a thread", () => {
+    const input = { threadId: null, icon: null, copy: vi.fn(async () => undefined) };
+    expect(buildThreadCopyActionItems({ ...input, reference: null })).toEqual([]);
+    const reference = resolveThreadReferenceCopyTarget({
+      threadId,
+      openPanelPullRequestUrl: prUrl,
+    });
+    expect(buildThreadCopyActionItems({ ...input, reference }).map((item) => item.title)).toEqual([
+      "Copy PR link",
+    ]);
+  });
+});
 
 describe("buildArchiveCurrentThreadAction", () => {
   it("omits the action when no thread is open", () => {

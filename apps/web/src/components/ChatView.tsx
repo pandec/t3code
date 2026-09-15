@@ -6111,30 +6111,32 @@ export default function ChatView(props: ChatViewProps) {
       openPanelPullRequestUrl,
     ],
   );
-  const copyActiveThreadReference = useCallback(() => {
-    const target = activeThreadReferenceCopyTarget;
-    if (target === null) return;
-    void writeTextToClipboard(target.value, target.clipboardTarget).then(
-      (didCopy) => {
-        if (!didCopy) return;
-        toastManager.add({
-          type: "success",
-          title: target.successTitle,
-          description: target.value,
-        });
-      },
-      (error) => {
-        console.error(error);
-        toastManager.add(
-          stackedThreadToast({
-            type: "error",
-            title: target.failureTitle,
-            description: error instanceof Error ? error.message : "An error occurred.",
-          }),
-        );
-      },
-    );
-  }, [activeThreadReferenceCopyTarget]);
+  const copyActiveThreadReference = useCallback(
+    (target = activeThreadReferenceCopyTarget) => {
+      if (target === null) return;
+      void writeTextToClipboard(target.value, target.clipboardTarget).then(
+        (didCopy) => {
+          if (!didCopy) return;
+          toastManager.add({
+            type: "success",
+            title: target.successTitle,
+            description: target.value,
+          });
+        },
+        (error) => {
+          console.error(error);
+          toastManager.add(
+            stackedThreadToast({
+              type: "error",
+              title: target.failureTitle,
+              description: error instanceof Error ? error.message : "An error occurred.",
+            }),
+          );
+        },
+      );
+    },
+    [activeThreadReferenceCopyTarget],
+  );
   const addPullRequestSurface = useCallback(() => {
     if (!supportsPullRequests || activeThreadRef === null || linkedThreadPullRequest === null)
       return;
@@ -6860,6 +6862,15 @@ export default function ChatView(props: ChatViewProps) {
         event.preventDefault();
         event.stopPropagation();
         if (!event.repeat) copyActiveThreadReference();
+        return;
+      }
+
+      if (command === "thread.copyId") {
+        event.preventDefault();
+        event.stopPropagation();
+        if (!event.repeat && isServerThread) {
+          copyActiveThreadReference(resolveThreadReferenceCopyTarget({ threadId: activeThreadId }));
+        }
         return;
       }
 

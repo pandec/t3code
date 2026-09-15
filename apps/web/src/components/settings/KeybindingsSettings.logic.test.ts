@@ -1,6 +1,9 @@
 import { describe, expect, it } from "vite-plus/test";
 import type { ResolvedKeybindingsConfig } from "@t3tools/contracts";
-import { DEFAULT_RESOLVED_KEYBINDINGS } from "@t3tools/shared/keybindings";
+import {
+  compileResolvedKeybindingsConfig,
+  DEFAULT_RESOLVED_KEYBINDINGS,
+} from "@t3tools/shared/keybindings";
 
 import {
   buildKeybindingRows,
@@ -17,6 +20,22 @@ import {
 } from "./KeybindingsSettings.logic";
 
 describe("KeybindingsSettings.logic", () => {
+  it("offers the unbound ID command and finds its custom binding by label", () => {
+    expect(buildKeybindingCommandOptions(DEFAULT_RESOLVED_KEYBINDINGS)).toContain("thread.copyId");
+    expect(commandLabel("thread.copyId")).toBe("Thread: Copy ID");
+    const bindings = compileResolvedKeybindingsConfig([
+      { command: "thread.copyId", key: "mod+shift+c", when: "!terminalFocus" },
+    ]);
+    expect(buildKeybindingRows(bindings, "copy id")).toEqual([
+      expect.objectContaining({
+        command: "thread.copyId",
+        key: "mod+shift+c",
+        defaultKey: null,
+        source: "Custom",
+      }),
+    ]);
+  });
+
   it("lists composer, provider, and pull request commands with editable defaults", () => {
     const rows = buildKeybindingRows(DEFAULT_RESOLVED_KEYBINDINGS, "");
     for (const command of [

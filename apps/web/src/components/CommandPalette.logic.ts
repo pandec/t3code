@@ -1,4 +1,8 @@
 import { threadPullRequestSearchTerms } from "@t3tools/shared/threadPullRequests";
+import {
+  resolveThreadReferenceCopyTarget,
+  type ThreadReferenceCopyTarget,
+} from "@t3tools/shared/threadReference";
 import type { CommandPaletteLinkedThreads } from "../commandPaletteBus";
 import {
   type EnvironmentId,
@@ -24,6 +28,42 @@ import { type Project, type SidebarThreadSummary } from "../types";
 export const RECENT_THREAD_LIMIT = 12;
 export const ITEM_ICON_CLASS = "size-4 text-icon-muted";
 export const ADDON_ICON_CLASS = "size-4";
+
+export function buildThreadCopyActionItems(input: {
+  threadId: string | null;
+  reference: ThreadReferenceCopyTarget | null;
+  icon: ReactNode;
+  copy: (target: ThreadReferenceCopyTarget | null) => Promise<void>;
+}): CommandPaletteActionItem[] {
+  const items: CommandPaletteActionItem[] = [];
+  if (input.threadId !== null) {
+    const target = resolveThreadReferenceCopyTarget({ threadId: input.threadId });
+    items.push({
+      kind: "action",
+      value: "action:copy-thread-id",
+      searchTerms: ["copy", "thread id"],
+      title: "Copy thread ID",
+      description: input.threadId,
+      icon: input.icon,
+      shortcutCommand: "thread.copyId",
+      run: () => input.copy(target),
+    });
+  }
+  const reference = input.reference;
+  if (reference?.kind === "pull-request") {
+    items.push({
+      kind: "action",
+      value: "action:copy-thread-reference",
+      searchTerms: ["copy", "pull request", "pr link", "reference"],
+      title: "Copy PR link",
+      description: reference.value,
+      icon: input.icon,
+      shortcutCommand: "thread.copyReference",
+      run: () => input.copy(reference),
+    });
+  }
+  return items;
+}
 
 /** A PR's relations include archived threads that normal palette search omits. */
 export function buildLinkedThreadActionItems(

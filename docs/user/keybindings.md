@@ -28,6 +28,13 @@ to copy its URL and `mod+shift+k` to copy its number with a `#` prefix.
 Both shortcuts can be changed in Settings. Search for “Copy Link or Thread ID”
 or “Copy Number”. They copy the selected PR and leave terminal input alone.
 
+On web and desktop, “Copy thread ID” stays available in the command palette even
+when the thread has a PR. To give it a shortcut, open Settings → Keybindings,
+choose Add binding, and select “Thread: Copy ID”. It has no default shortcut.
+To use `mod+shift+c`, clear that binding from “Copy Link or Thread ID” first,
+then assign it to “Thread: Copy ID” with `!terminalFocus` as its condition.
+The combined command still copies a PR URL when available and otherwise the thread ID.
+
 ## iPad
 
 With a hardware keyboard, use `Cmd+1` through `Cmd+9` to open the first nine
