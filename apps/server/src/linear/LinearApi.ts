@@ -17,6 +17,8 @@ import type {
   LinearCreateCommentInput,
   LinearIssue,
   LinearIssueInput,
+  LinearIssueRef,
+  LinearIssueRelation,
   LinearStatus,
 } from "@t3tools/contracts";
 import { LinearRpcError, TrimmedNonEmptyString } from "@t3tools/contracts";
@@ -37,17 +39,30 @@ const CACHE_TTL_MS = 60_000;
 const REQUEST_TIMEOUT = "15 seconds";
 const COMMENTS_PAGE_SIZE = 100;
 
-const USER_FIELDS = "name displayName avatarUrl";
+const USER_FIELDS = "name displayName avatarUrl url";
+const STATE_FIELDS = "name type color";
+const ISSUE_REF_FIELDS = `identifier title url state { ${STATE_FIELDS} }`;
+// Bounds the sub-issue, relation, and attachment lists; the panel shows what came back and
+// never pages, which is plenty for an issue a person is reading beside a thread.
+const ISSUE_LIST_LIMIT = 50;
 // Only what the panel renders. Every field here is decoded strictly, so an unused one is a way
 // for a Linear schema change to reject the whole issue for nothing.
 const ISSUE_FIELDS = `
-  id identifier url title description priorityLabel createdAt updatedAt dueDate
-  state { name type color }
-  team { name }
-  project { name }
+  id identifier url title description priority priorityLabel estimate branchName
+  createdAt updatedAt dueDate startedAt completedAt canceledAt
+  state { ${STATE_FIELDS} }
+  team { name key color }
+  project { name url color status { name type color } }
+  projectMilestone { name }
+  cycle { number name }
   assignee { ${USER_FIELDS} }
   creator { ${USER_FIELDS} }
   labels { nodes { name color } }
+  parent { ${ISSUE_REF_FIELDS} }
+  children(first: ${ISSUE_LIST_LIMIT}) { nodes { ${ISSUE_REF_FIELDS} } }
+  relations(first: ${ISSUE_LIST_LIMIT}) { nodes { type relatedIssue { ${ISSUE_REF_FIELDS} } } }
+  inverseRelations(first: ${ISSUE_LIST_LIMIT}) { nodes { type issue { ${ISSUE_REF_FIELDS} } } }
+  attachments(first: ${ISSUE_LIST_LIMIT}) { nodes { title subtitle url sourceType } }
 `;
 const COMMENT_FIELDS = `id body createdAt user { ${USER_FIELDS} } botActor { name avatarUrl }`;
 
@@ -56,7 +71,9 @@ const STATUS_QUERY = `query T3LinearStatus {
   organization { name urlKey }
   teams(first: 250) { nodes { key } }
 }`;
+// The organization rides along so team and cycle pages, which have no URL field, can be linked.
 const ISSUE_QUERY = `query T3LinearIssue($id: String!) {
+  organization { urlKey }
   issue(id: $id) { ${ISSUE_FIELDS} }
 }`;
 const COMMENTS_QUERY = `query T3LinearIssueComments($id: String!, $first: Int!) {
@@ -78,23 +95,60 @@ const User = Schema.Struct({
   name: Text,
   displayName: Text,
   avatarUrl: Schema.optional(Schema.NullOr(Schema.String)),
+  url: Schema.optional(Schema.NullOr(Text)),
 });
+const State = Schema.Struct({ name: Text, type: Text, color: Text });
+const IssueRef = Schema.Struct({ identifier: Text, title: Text, url: Text, state: State });
+const nodes = <S extends Schema.Top>(node: S) => Schema.Struct({ nodes: Schema.Array(node) });
 const IssueBody = Schema.Struct({
   id: Text,
   identifier: Text,
   url: Text,
   title: Text,
   description: Schema.optional(Schema.NullOr(Schema.String)),
+  priority: Schema.Number,
   priorityLabel: Text,
+  estimate: Schema.optional(Schema.NullOr(Schema.Number)),
+  branchName: Text,
   createdAt: Schema.String,
   updatedAt: Schema.String,
   dueDate: Schema.optional(Schema.NullOr(Schema.String)),
-  state: Schema.Struct({ name: Text, type: Text, color: Text }),
-  team: Schema.Struct({ name: Text }),
-  project: Schema.optional(Schema.NullOr(Schema.Struct({ name: Text }))),
+  startedAt: Schema.optional(Schema.NullOr(Schema.String)),
+  completedAt: Schema.optional(Schema.NullOr(Schema.String)),
+  canceledAt: Schema.optional(Schema.NullOr(Schema.String)),
+  state: State,
+  team: Schema.Struct({ name: Text, key: Text, color: Schema.optional(Schema.NullOr(Text)) }),
+  project: Schema.optional(
+    Schema.NullOr(
+      Schema.Struct({
+        name: Text,
+        url: Text,
+        color: Schema.optional(Schema.NullOr(Text)),
+        status: Schema.optional(Schema.NullOr(State)),
+      }),
+    ),
+  ),
+  projectMilestone: Schema.optional(Schema.NullOr(Schema.Struct({ name: Text }))),
+  cycle: Schema.optional(
+    Schema.NullOr(
+      Schema.Struct({ number: Schema.Number, name: Schema.optional(Schema.NullOr(Text)) }),
+    ),
+  ),
   assignee: Schema.optional(Schema.NullOr(User)),
   creator: Schema.optional(Schema.NullOr(User)),
-  labels: Schema.Struct({ nodes: Schema.Array(Schema.Struct({ name: Text, color: Text })) }),
+  labels: nodes(Schema.Struct({ name: Text, color: Text })),
+  parent: Schema.optional(Schema.NullOr(IssueRef)),
+  children: nodes(IssueRef),
+  relations: nodes(Schema.Struct({ type: Schema.String, relatedIssue: IssueRef })),
+  inverseRelations: nodes(Schema.Struct({ type: Schema.String, issue: IssueRef })),
+  attachments: nodes(
+    Schema.Struct({
+      title: Schema.String,
+      subtitle: Schema.optional(Schema.NullOr(Schema.String)),
+      url: Text,
+      sourceType: Schema.optional(Schema.NullOr(Schema.String)),
+    }),
+  ),
 });
 const CommentBody = Schema.Struct({
   id: Text,
@@ -125,7 +179,14 @@ const StatusEnvelope = Schema.Struct({
 });
 const IssueEnvelope = Schema.Struct({
   ...GraphqlErrors,
-  data: Schema.optional(Schema.NullOr(Schema.Struct({ issue: Schema.NullOr(IssueBody) }))),
+  data: Schema.optional(
+    Schema.NullOr(
+      Schema.Struct({
+        organization: Schema.optional(Schema.NullOr(Schema.Struct({ urlKey: Text }))),
+        issue: Schema.NullOr(IssueBody),
+      }),
+    ),
+  ),
 });
 const CommentsEnvelope = Schema.Struct({
   ...GraphqlErrors,
@@ -274,24 +335,96 @@ const graphql = <S extends Schema.Codec<unknown, unknown, never, never>>(
 const toUser = (user: typeof User.Type | null | undefined) =>
   user === null || user === undefined
     ? null
-    : { name: user.name, displayName: user.displayName, avatarUrl: user.avatarUrl ?? null };
+    : {
+        name: user.name,
+        displayName: user.displayName,
+        avatarUrl: user.avatarUrl ?? null,
+        url: user.url ?? null,
+      };
 
-const toIssue = (issue: typeof IssueBody.Type): LinearIssue => ({
+const toIssueRef = (ref: typeof IssueRef.Type): LinearIssueRef => ({
+  identifier: ref.identifier,
+  title: ref.title,
+  url: ref.url,
+  state: ref.state,
+});
+
+/**
+ * Linear names a relation from the side that created it: `relations` are edges this issue
+ * owns and `inverseRelations` are edges pointing at it. Folded into kinds the panel can group
+ * directly. `similar` is Linear's own suggestion queue and reads as related here.
+ */
+const toRelationKind = (
+  type: string,
+  direction: "outgoing" | "incoming",
+): LinearIssueRelation["kind"] => {
+  switch (type) {
+    case "blocks":
+      return direction === "outgoing" ? "blocks" : "blocked-by";
+    case "duplicate":
+      return direction === "outgoing" ? "duplicate-of" : "duplicated-by";
+    default:
+      return "related";
+  }
+};
+
+const toIssue = (
+  issue: typeof IssueBody.Type,
+  workspaceUrlKey: string | undefined,
+): LinearIssue => ({
   id: issue.id,
   identifier: issue.identifier,
   url: issue.url,
   title: issue.title,
   description: issue.description ?? null,
+  priority: issue.priority,
   priorityLabel: issue.priorityLabel,
+  estimate: issue.estimate ?? null,
+  branchName: issue.branchName,
   state: issue.state,
-  team: issue.team,
-  project: issue.project ?? null,
+  team: { name: issue.team.name, key: issue.team.key, color: issue.team.color ?? null },
+  project:
+    issue.project === null || issue.project === undefined
+      ? null
+      : {
+          name: issue.project.name,
+          url: issue.project.url,
+          color: issue.project.color ?? null,
+          status: issue.project.status ?? null,
+        },
+  milestone: issue.projectMilestone ?? null,
+  cycle:
+    issue.cycle === null || issue.cycle === undefined
+      ? null
+      : { number: issue.cycle.number, name: issue.cycle.name ?? null },
   assignee: toUser(issue.assignee),
   creator: toUser(issue.creator),
   labels: issue.labels.nodes,
   createdAt: issue.createdAt,
   updatedAt: issue.updatedAt,
   dueDate: issue.dueDate ?? null,
+  startedAt: issue.startedAt ?? null,
+  completedAt: issue.completedAt ?? null,
+  canceledAt: issue.canceledAt ?? null,
+  parent: issue.parent === null || issue.parent === undefined ? null : toIssueRef(issue.parent),
+  children: issue.children.nodes.map(toIssueRef),
+  relations: [
+    ...issue.relations.nodes.map((edge) => ({
+      kind: toRelationKind(edge.type, "outgoing"),
+      issue: toIssueRef(edge.relatedIssue),
+    })),
+    ...issue.inverseRelations.nodes.map((edge) => ({
+      kind: toRelationKind(edge.type, "incoming"),
+      issue: toIssueRef(edge.issue),
+    })),
+  ],
+  attachments: issue.attachments.nodes.map((attachment) => ({
+    title: attachment.title,
+    subtitle: attachment.subtitle ?? null,
+    url: attachment.url,
+    sourceType: attachment.sourceType ?? null,
+  })),
+  ...(workspaceUrlKey === undefined ? {} : { workspaceUrlKey }),
 });
 
 const toComment = (comment: typeof CommentBody.Type): LinearComment => ({
@@ -430,7 +563,7 @@ export const readLinearIssue = (
     const issue = envelope.data?.issue ?? null;
     if (issue === null)
       return yield* fail("not-found", `Linear issue ${identifier} was not found.`);
-    const value = toIssue(issue);
+    const value = toIssue(issue, envelope.data?.organization?.urlKey);
     issueCache.set(identifier, { apiKey, value, atMs: now });
     return value;
   });
