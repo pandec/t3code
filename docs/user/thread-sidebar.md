@@ -114,7 +114,7 @@ through, completed steps remain saved. Reconnect and arrange the thread again to
 
 Pinned, snoozed, settled, and archived threads appear in their usual sections and remember their
 group. Unpinning, waking, or reopening returns them to the group when no other state takes precedence.
-Grouped threads still auto-settle, but do not move into Older.
+Grouped threads still auto-settle.
 
 Custom groups stay together above Active by default. On web and desktop, use
 **Settings → Extras → Sidebar → Custom group position** to place them below Active instead.
@@ -170,17 +170,6 @@ stacks. Use **Unlink from thread** on a link to remove it; with no links left
 the branch PR shows again, if one exists. Linked pull requests participate in
 automatic settlement. See the source control guide for stacks and the linked
 pull requests panel.
-
-## Fold older threads
-
-Enable **Older section** under **Settings → Extras → Sidebar** on web and desktop, or
-**Settings → General** on mobile. It groups quiet active threads below current work without
-settling, snoozing, or archiving them.
-
-The default threshold is seven days and can be set from one day to one year. Pinned, snoozed,
-settled, running, monitoring, and attention-needed threads stay in their normal sections. Activity
-moves an older thread back into the active list. You can choose whether the section starts folded,
-and T3 Code remembers later fold changes on each device.
 
 ## Filter threads
 

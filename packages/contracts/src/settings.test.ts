@@ -521,6 +521,18 @@ describe("ClientSettings sidebar", () => {
     );
   });
 
+  it("discards retired Older section settings without changing other preferences", () => {
+    const preferences = { sidebarV2CompactCards: true, sidebarThreadPreviewCount: 12 };
+    const stored = {
+      ...preferences,
+      sidebarOlderSectionEnabled: true,
+      sidebarOlderSectionAfterDays: 14,
+      sidebarOlderSectionCollapsedByDefault: false,
+    };
+    expect(decodeClientSettings(stored)).toEqual(decodeClientSettings(preferences));
+    expect(decodeClientSettingsPatch(stored)).toEqual(preferences);
+  });
+
   it("keeps unpin confirmation opt-in and patchable", () => {
     expect(decodeClientSettings({}).confirmThreadUnpin).toBe(false);
     expect(decodeClientSettingsPatch({ confirmThreadUnpin: true }).confirmThreadUnpin).toBe(true);

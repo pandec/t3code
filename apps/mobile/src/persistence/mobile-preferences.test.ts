@@ -36,42 +36,33 @@ describe("mobile preferences persistence", () => {
     ).toBeUndefined();
   });
 
-  it("keeps valid Older section preferences", () => {
-    expect(
-      sanitizePreferences({
-        sidebarOlderSectionEnabled: true,
-        sidebarOlderSectionAfterDays: 30,
-        sidebarOlderSectionCollapsedByDefault: true,
-      }),
-    ).toMatchObject({
+  it("drops retired Older section keys saved by earlier builds", () => {
+    // Preferences persisted before the Older shelf was removed still carry
+    // its keys; they must fall away without disturbing their siblings.
+    const legacyPreferences = {
       sidebarOlderSectionEnabled: true,
       sidebarOlderSectionAfterDays: 30,
       sidebarOlderSectionCollapsedByDefault: true,
-    });
-    expect(
-      sanitizePreferences({
-        sidebarOlderSectionAfterDays: "30" as unknown as number,
-      }),
-    ).toEqual({});
+      sidebarOlderShelfExpanded: true,
+      sidebarSnoozedShelfExpanded: true,
+    };
+    expect(sanitizePreferences(legacyPreferences)).toEqual({ sidebarSnoozedShelfExpanded: true });
   });
 
   it("keeps valid shelf fold states", () => {
     expect(
       sanitizePreferences({
-        sidebarOlderShelfExpanded: true,
         sidebarSnoozedShelfExpanded: true,
         sidebarSettledShelfExpanded: false,
         sidebarArchivedShelfExpanded: true,
       }),
     ).toMatchObject({
-      sidebarOlderShelfExpanded: true,
       sidebarSnoozedShelfExpanded: true,
       sidebarSettledShelfExpanded: false,
       sidebarArchivedShelfExpanded: true,
     });
     expect(
       sanitizePreferences({
-        sidebarOlderShelfExpanded: 1 as unknown as boolean,
         sidebarSnoozedShelfExpanded: "true" as unknown as boolean,
         sidebarSettledShelfExpanded: null as unknown as boolean,
         sidebarArchivedShelfExpanded: "yes" as unknown as boolean,

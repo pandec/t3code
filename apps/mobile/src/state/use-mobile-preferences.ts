@@ -2,15 +2,12 @@ import { useAtomSet, useAtomValue } from "@effect/atom-react";
 import {
   clampArchivedSectionVisibleCount,
   clampAccentTintIntensityPercent,
-  clampSidebarOlderSectionAfterDays,
   clampSteerGraceWindowMs,
   DEFAULT_ARCHIVED_SECTION_VISIBLE_COUNT,
   DEFAULT_ACCENT_TINT_INTENSITY_PERCENT,
-  DEFAULT_SIDEBAR_OLDER_SECTION_AFTER_DAYS,
   DEFAULT_STEER_GRACE_WINDOW_MS,
   type AccentTintIntensityPercent,
   type ArchivedSectionVisibleCount,
-  type SidebarOlderSectionAfterDays,
   type SteerGraceWindowMs,
 } from "@t3tools/contracts/settings";
 import { useCallback, useMemo, useRef } from "react";
@@ -64,42 +61,10 @@ export function useAlwaysShowPinnedInAttention(): boolean {
 }
 
 /**
- * Whether threads settle on their own. Off means inactivity and merged pull
- * requests both stop filing threads away; explicit settling still works.
- */
-export interface OlderSectionSettings {
-  readonly enabled: boolean;
-  readonly afterDays: SidebarOlderSectionAfterDays;
-  readonly collapsedByDefault: boolean;
-}
-
-/** The Older shelf's three settings, clamped on read like the rest. */
-export function useOlderSectionSettings(): OlderSectionSettings {
-  const { preferences } = useMobilePreferences();
-  const enabled = preferences.sidebarOlderSectionEnabled ?? false;
-  const afterDays = preferences.sidebarOlderSectionAfterDays;
-  // Folded by default, as on web: an unfolded shelf on first run would just
-  // be the list the user already had, with a header in the middle of it.
-  const collapsedByDefault = preferences.sidebarOlderSectionCollapsedByDefault ?? true;
-  return useMemo(
-    () => ({
-      enabled,
-      afterDays: clampSidebarOlderSectionAfterDays(
-        afterDays ?? DEFAULT_SIDEBAR_OLDER_SECTION_AFTER_DAYS,
-      ),
-      collapsedByDefault,
-    }),
-    [afterDays, collapsedByDefault, enabled],
-  );
-}
-
-/**
  * One shelf's fold state, remembered per device.
  *
  * A tap writes the choice through, so shelves stay where the user left them
  * across launches — the same thing the web sidebar's local-storage keys do.
- * For the Older shelf the Extras setting only seeds the shelf, and only until
- * that first tap.
  */
 export function useThreadShelfExpansion(shelf: ThreadShelfId): {
   readonly expanded: boolean;
@@ -107,13 +72,8 @@ export function useThreadShelfExpansion(shelf: ThreadShelfId): {
   readonly toggle: () => void;
 } {
   const { preferences, hydrated } = useMobilePreferences();
-  const { collapsedByDefault } = useOlderSectionSettings();
   const savePreferences = useAtomSet(updateMobilePreferencesAtom);
-  const expanded = resolveThreadShelfExpanded({
-    shelf,
-    preferences,
-    olderCollapsedByDefault: collapsedByDefault,
-  });
+  const expanded = resolveThreadShelfExpanded({ shelf, preferences });
   // The ref advances before the write starts, so two presses in one render
   // pass still toggle twice; reading `expanded` alone would make the second
   // press rewrite the value the first one already chose.

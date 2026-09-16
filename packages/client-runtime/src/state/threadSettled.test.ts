@@ -8,7 +8,6 @@ import {
   hasQueuedTurnStart,
   resolveSnoozePresets,
   snoozeWakeLabel,
-  threadLastActivityAt,
   threadWokeAt,
   type ThreadSnoozeShell,
 } from "./threadSettled.ts";
@@ -51,29 +50,6 @@ function makeSnoozeShell(input: {
           },
   };
 }
-
-describe("threadLastActivityAt", () => {
-  it("returns the latest user or turn timestamp", () => {
-    expect(
-      threadLastActivityAt({
-        latestUserMessageAt: "2026-04-04T00:00:00.000Z",
-        latestTurn: {
-          turnId: TurnId.make("turn-activity"),
-          state: "completed",
-          requestedAt: "2026-04-03T00:00:00.000Z",
-          startedAt: "2026-04-05T00:00:00.000Z",
-          completedAt: "2026-04-06T00:00:00.000Z",
-          assistantMessageId: null,
-        },
-      }),
-    ).toBe("2026-04-06T00:00:00.000Z");
-  });
-
-  it("returns null without parseable activity", () => {
-    expect(threadLastActivityAt({ latestUserMessageAt: null, latestTurn: null })).toBeNull();
-    expect(threadLastActivityAt({ latestUserMessageAt: "bad", latestTurn: null })).toBeNull();
-  });
-});
 
 describe("hasQueuedTurnStart", () => {
   it("detects a fresh user message no turn has adopted", () => {

@@ -1391,8 +1391,7 @@ describe("buildThreadListV2ListItems", () => {
   });
 });
 
-/** Fork addition: the Older display shelf for quiet active threads. */
-describe("buildThreadListV2Items older section", () => {
+describe("buildThreadListV2Items quiet active threads", () => {
   const QUIET_SINCE = "2026-05-01T00:00:00.000Z";
   const quietThread = (input: Partial<EnvironmentThreadShell> = {}) =>
     makeThread({
@@ -1403,176 +1402,35 @@ describe("buildThreadListV2Items older section", () => {
       latestUserMessageAt: QUIET_SINCE,
       ...input,
     });
-  const olderInput = {
-    environmentId: null,
-    searchQuery: "",
-    now: NOW,
-    olderSectionEnabled: true,
-    olderShelfExpanded: true,
-  } as const;
 
-  it("keeps a quiet thread active until the server projects settlement", () => {
+  it("keeps a quiet thread an ordinary active card until the server projects settlement", () => {
     const layout = buildThreadListV2Items({
-      threads: [quietThread()],
+      threads: [
+        quietThread(),
+        quietThread({ id: ThreadId.make("unused"), latestUserMessageAt: null }),
+      ],
       environmentId: null,
       searchQuery: "",
       now: NOW,
     });
 
     expect(layout.settledCount).toBe(0);
-    expect(layout.items.map((item) => item.variant)).toEqual(["card"]);
+    expect(layout.snoozedCount).toBe(0);
+    expect(layout.items.map((item) => item.variant)).toEqual(["card", "card"]);
+    expect(
+      buildThreadListV2ListItems({ ...layout, pendingTasks: [] }).map((item) => item.type),
+    ).toEqual(["v2-thread", "v2-thread"]);
   });
 
-  it("files a quiet thread under Older with its own header", () => {
-    const layout = buildThreadListV2Items({ ...olderInput, threads: [quietThread()] });
-
-    expect(layout.olderCount).toBe(1);
-    expect(layout.olderShelfHeaderIndex).toBe(0);
-    // Older rows stay ordinary active cards, not the settled tail's slim rows.
-    expect(layout.items.map((item) => item.variant)).toEqual(["card"]);
-  });
-
-  it("keeps a quiet thread with queued messages out of Older", () => {
+  it("lets server-projected settlement park a quiet thread", () => {
     const layout = buildThreadListV2Items({
-      ...olderInput,
-      threads: [quietThread({ settledOverride: "settled", settledAt: QUIET_SINCE })],
-      queuedThreadKeys: new Set([`${environmentId}:quiet`]),
-    });
-    expect(layout.olderCount).toBe(0);
-    expect(layout.settledCount).toBe(0);
-    expect(layout.items.map((item) => item.thread.id)).toEqual(["quiet"]);
-  });
-
-  it("lets server-projected settlement outrank Older", () => {
-    const layout = buildThreadListV2Items({
-      ...olderInput,
+      environmentId: null,
+      searchQuery: "",
+      now: NOW,
       threads: [quietThread({ settledOverride: "settled", settledAt: NOW })],
     });
 
     expect(layout.settledCount).toBe(1);
-    expect(layout.olderCount).toBe(0);
-  });
-
-  it("ages a thread that was opened and never used", () => {
-    const layout = buildThreadListV2Items({
-      ...olderInput,
-      // No message and no turn: creation time still lets the display-only
-      // Older shelf file the quiet thread.
-      threads: [quietThread({ latestUserMessageAt: null })],
-    });
-
-    expect(layout.olderCount).toBe(1);
-  });
-
-  it("never folds away live or blocked work, however long it has sat there", () => {
-    const layout = buildThreadListV2Items({
-      ...olderInput,
-      threads: [
-        quietThread({ id: ThreadId.make("approval"), hasPendingApprovals: true }),
-        quietThread({ id: ThreadId.make("input"), hasPendingUserInput: true }),
-        quietThread({ id: ThreadId.make("plan"), hasActionableProposedPlan: true }),
-        quietThread({
-          id: ThreadId.make("running"),
-          session: {
-            threadId: ThreadId.make("running"),
-            status: "running",
-            providerName: "Codex",
-            runtimeMode: "full-access",
-            activeTurnId: null,
-            lastError: null,
-            updatedAt: QUIET_SINCE,
-          },
-        }),
-        quietThread({ id: ThreadId.make("background"), backgroundLiveness: "working" }),
-      ],
-    });
-
-    expect(layout.olderCount).toBe(0);
-    expect(layout.olderShelfHeaderIndex).toBeNull();
-  });
-
-  it("steps aside entirely while the attention filter is on", () => {
-    const layout = buildThreadListV2Items({
-      ...olderInput,
-      threads: [quietThread()],
-      attentionMemberThreadKeys: new Set([`${environmentId}:quiet`]),
-    });
-
-    expect(layout.olderCount).toBe(0);
-  });
-
-  it("steps aside while a search is active, so a match can never hide behind the fold", () => {
-    const layout = buildThreadListV2Items({
-      ...olderInput,
-      olderShelfExpanded: false,
-      searchQuery: "quiet",
-      threads: [quietThread()],
-    });
-
-    expect(layout.olderCount).toBe(0);
-    expect(layout.items.map((item) => item.thread.id)).toEqual(["quiet"]);
-  });
-
-  it("keeps the open thread's row on a folded shelf", () => {
-    const layout = buildThreadListV2Items({
-      ...olderInput,
-      olderShelfExpanded: false,
-      threads: [quietThread(), quietThread({ id: ThreadId.make("quiet-2"), title: "quiet 2" })],
-      selectedThreadKey: `${environmentId}:quiet-2`,
-    });
-
-    expect(layout.olderCount).toBe(2);
-    expect(layout.items.map((item) => item.thread.id)).toEqual(["quiet-2"]);
-  });
-
-  it("orders the shelf by the recency that filed the rows there", () => {
-    const layout = buildThreadListV2Items({
-      ...olderInput,
-      threads: [
-        quietThread({ id: ThreadId.make("oldest"), createdAt: "2026-04-01T00:00:00.000Z" }),
-        quietThread({ id: ThreadId.make("newest"), createdAt: "2026-05-20T00:00:00.000Z" }),
-      ],
-    });
-
-    expect(layout.items.map((item) => item.thread.id)).toEqual(["newest", "oldest"]);
-  });
-
-  it("places the Older shelf after queued tasks and before the snoozed shelf", () => {
-    const layout = buildThreadListV2Items({
-      ...olderInput,
-      snoozedShelfExpanded: true,
-      threads: [
-        makeThread({ id: ThreadId.make("active"), title: "active" }),
-        quietThread(),
-        makeThread({
-          id: ThreadId.make("snoozed"),
-          title: "snoozed",
-          snoozedUntil: "2026-06-03T09:00:00.000Z",
-          snoozedAt: "2026-06-01T12:00:00.000Z",
-        }),
-      ],
-    });
-    const items = buildThreadListV2ListItems({
-      items: layout.items,
-      pendingTasks: [makePendingTask("queued")],
-      olderCount: layout.olderCount,
-      olderShelfExpanded: true,
-      olderShelfHeaderIndex: layout.olderShelfHeaderIndex,
-      snoozedCount: layout.snoozedCount,
-      snoozedShelfExpanded: true,
-      snoozedShelfHeaderIndex: layout.snoozedShelfHeaderIndex,
-      settledCount: layout.settledCount,
-      settledShelfHeaderIndex: layout.settledShelfHeaderIndex,
-    });
-
-    expect(items.map((item) => item.key)).toEqual([
-      `v2-thread:${environmentId}:active`,
-      "v2-pending-task:queued",
-      "v2-older-shelf",
-      `v2-thread:${environmentId}:quiet`,
-      "v2-snoozed-shelf",
-      `v2-thread:${environmentId}:snoozed`,
-    ]);
   });
 });
 
@@ -2002,7 +1860,7 @@ describe("cross-section thread drops", () => {
   });
 });
 
-it("keeps grouped work out of Older and uses the lifecycle shelves when parked", () => {
+it("keeps grouped work in its group and uses the lifecycle shelves when parked", () => {
   const customGroups = [
     { id: "research", name: "Research", orderKey: "a", revision: "1:a", deleted: false },
   ];
@@ -2015,13 +1873,10 @@ it("keeps grouped work out of Older and uses the lifecycle shelves when parked",
   });
   const layout = buildThreadListV2Items({
     threads: [grouped],
-    customGroups,
     environmentId: null,
     searchQuery: "",
     now: NOW,
-    olderSectionEnabled: true,
   });
-  expect(layout.olderCount).toBe(0);
   const rows = buildThreadListV2ListItems({
     ...layout,
     customGroups,
@@ -2034,7 +1889,6 @@ it("keeps grouped work out of Older and uses the lifecycle shelves when parked",
   );
   const snoozed = buildThreadListV2Items({
     threads: [{ ...grouped, snoozedAt: NOW, snoozedUntil: "2099-01-01T00:00:00.000Z" }],
-    customGroups,
     environmentId: null,
     searchQuery: "",
     now: NOW,

@@ -70,7 +70,6 @@ import { supportsSharedSettingsSync } from "@t3tools/client-runtime/state/shared
 import {
   useAlwaysShowPinnedInAttention,
   useArchivedSectionVisibleCount,
-  useOlderSectionSettings,
   useSteerGraceWindowMs,
 } from "../../state/use-mobile-preferences";
 import { useThreadListV2Enabled } from "../threads/use-thread-list-v2-enabled";
@@ -86,11 +85,7 @@ import { SettingsSection } from "./components/SettingsSection";
 import { SettingsSliderRow } from "./components/SettingsSliderRow";
 import { SettingsSwitchRow } from "./components/SettingsSwitchRow";
 import {
-  formatOlderSectionAfterDays,
   formatSteerGraceWindowSeconds,
-  OLDER_SECTION_AFTER_DAY_STOPS,
-  olderSectionAfterDaysAtStop,
-  olderSectionAfterDaysStopIndex,
   STEER_GRACE_WINDOW_STEP_MS,
   toStoredArchivedSectionVisibleCount,
   toStoredSteerGraceWindowMs,
@@ -639,7 +634,6 @@ function GeneralSettingsSection() {
   const archivedSectionVisibleCount = useArchivedSectionVisibleCount();
   const alwaysShowPinnedInAttention = useAlwaysShowPinnedInAttention();
   const threadListV2Enabled = useThreadListV2Enabled();
-  const olderSection = useOlderSectionSettings();
 
   return (
     <SettingsSection title="General">
@@ -674,44 +668,6 @@ function GeneralSettingsSection() {
               savePreferences({ sidebarAlwaysShowPinnedInAttention: value })
             }
           />
-          <SettingsSwitchRow
-            disabled={!hydrated}
-            icon="line.3.horizontal.decrease"
-            label="Older section"
-            subtitle="Fold threads that have gone quiet into their own section. They stay active — nothing is settled, snoozed, or archived — and any activity brings them straight back."
-            value={olderSection.enabled}
-            onValueChange={(value) => savePreferences({ sidebarOlderSectionEnabled: value })}
-          />
-          {olderSection.enabled ? (
-            <>
-              <SettingsSliderRow
-                description="How long a thread must go without activity before it moves to Older."
-                disabled={!hydrated}
-                icon="clock"
-                label="Older after"
-                max={OLDER_SECTION_AFTER_DAY_STOPS.length - 1}
-                min={0}
-                onChange={(value) =>
-                  savePreferences({
-                    sidebarOlderSectionAfterDays: olderSectionAfterDaysAtStop(value),
-                  })
-                }
-                step={1}
-                value={olderSectionAfterDaysStopIndex(olderSection.afterDays)}
-                valueLabel={formatOlderSectionAfterDays(olderSection.afterDays)}
-              />
-              <SettingsSwitchRow
-                disabled={!hydrated}
-                icon="chevron.down"
-                label="Start Older folded"
-                subtitle="Once you fold or unfold the section yourself, that choice wins for as long as the thread list stays open."
-                value={olderSection.collapsedByDefault}
-                onValueChange={(value) =>
-                  savePreferences({ sidebarOlderSectionCollapsedByDefault: value })
-                }
-              />
-            </>
-          ) : null}
           <SettingsSliderRow
             description="How many recently archived threads appear at the end of the thread list."
             disabled={!hydrated}

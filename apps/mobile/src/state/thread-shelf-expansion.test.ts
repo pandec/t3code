@@ -5,8 +5,7 @@ import { resolveThreadShelfExpanded, threadShelfExpandedPatch } from "./thread-s
 const resolve = (
   shelf: Parameters<typeof resolveThreadShelfExpanded>[0]["shelf"],
   preferences: Parameters<typeof resolveThreadShelfExpanded>[0]["preferences"] = {},
-  olderCollapsedByDefault = true,
-) => resolveThreadShelfExpanded({ shelf, preferences, olderCollapsedByDefault });
+) => resolveThreadShelfExpanded({ shelf, preferences });
 
 describe("resolveThreadShelfExpanded", () => {
   it("folds snoozed and archived away and opens settled by default", () => {
@@ -15,23 +14,15 @@ describe("resolveThreadShelfExpanded", () => {
     expect(resolve("settled")).toBe(true);
   });
 
-  it("seeds the Older shelf from its setting", () => {
-    expect(resolve("older", {}, true)).toBe(false);
-    expect(resolve("older", {}, false)).toBe(true);
-  });
-
   it("prefers a stored choice over every default", () => {
     expect(resolve("archived", { sidebarArchivedShelfExpanded: true })).toBe(true);
     expect(resolve("settled", { sidebarSettledShelfExpanded: false })).toBe(false);
     expect(resolve("snoozed", { sidebarSnoozedShelfExpanded: true })).toBe(true);
-    // The setting only seeds the shelf; a tap outranks it from then on.
-    expect(resolve("older", { sidebarOlderShelfExpanded: true }, true)).toBe(true);
   });
 });
 
 describe("threadShelfExpandedPatch", () => {
   it("writes exactly the toggled shelf's key", () => {
-    expect(threadShelfExpandedPatch("older", true)).toEqual({ sidebarOlderShelfExpanded: true });
     expect(threadShelfExpandedPatch("snoozed", true)).toEqual({
       sidebarSnoozedShelfExpanded: true,
     });
@@ -44,7 +35,7 @@ describe("threadShelfExpandedPatch", () => {
   });
 
   it("round-trips through resolveThreadShelfExpanded for every shelf", () => {
-    for (const shelf of ["older", "snoozed", "settled", "archived"] as const) {
+    for (const shelf of ["pinned", "snoozed", "settled", "archived"] as const) {
       for (const expanded of [true, false]) {
         expect(resolve(shelf, threadShelfExpandedPatch(shelf, expanded))).toBe(expanded);
       }
