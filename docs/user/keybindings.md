@@ -39,7 +39,11 @@ The combined command still copies a PR URL when available and otherwise the thre
 
 With a hardware keyboard, use `Cmd+1` through `Cmd+9` to open the first nine
 displayed threads. The shortcuts follow the current list filters and order.
-`Cmd+K` opens the command palette to search commands, projects, and threads.
+`Cmd+K` opens the command palette to search commands, projects, and threads. **Rename current
+thread** and **Snooze current thread** live there as well: rename edits the title in the palette's
+input, and snooze lists the usual presets and also accepts a typed wake time such as `45m`, `2pm`, or
+`fri 9am`. Both have unbound commands, “Thread: Rename” and “Thread: Snooze”, that open the palette
+straight into that step once you assign them a shortcut. A snoozed thread's snooze shortcut wakes it.
 Use the arrow keys and Return to choose a result, or `Cmd+1` through `Cmd+9` to
 choose directly. Escape or `Cmd+K` closes the palette. Start a search with `>`
 to show only actions.

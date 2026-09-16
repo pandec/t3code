@@ -622,6 +622,9 @@ export function useSettingsRestore(onRestored?: () => void) {
       DEFAULT_UNIFIED_SETTINGS.sidebarV2NewThreadButtonInProjectRow
         ? ["New thread button position"]
         : []),
+      ...(settings.sidebarThreadGroupsButton !== DEFAULT_UNIFIED_SETTINGS.sidebarThreadGroupsButton
+        ? ["Thread groups button"]
+        : []),
       ...(settings.sidebarOlderSectionEnabled !==
       DEFAULT_UNIFIED_SETTINGS.sidebarOlderSectionEnabled
         ? ["Older section"]
@@ -813,6 +816,7 @@ export function useSettingsRestore(onRestored?: () => void) {
       settings.sidebarV2CompactCards,
       settings.sidebarAlwaysShowPinnedInAttention,
       settings.sidebarV2NewThreadButtonInProjectRow,
+      settings.sidebarThreadGroupsButton,
       settings.sidebarOlderSectionEnabled,
       settings.sidebarOlderSectionAfterDays,
       settings.sidebarOlderSectionCollapsedByDefault,
@@ -920,6 +924,7 @@ export function useSettingsRestore(onRestored?: () => void) {
         DEFAULT_UNIFIED_SETTINGS.sidebarAlwaysShowPinnedInAttention,
       sidebarV2NewThreadButtonInProjectRow:
         DEFAULT_UNIFIED_SETTINGS.sidebarV2NewThreadButtonInProjectRow,
+      sidebarThreadGroupsButton: DEFAULT_UNIFIED_SETTINGS.sidebarThreadGroupsButton,
       sidebarOlderSectionEnabled: DEFAULT_UNIFIED_SETTINGS.sidebarOlderSectionEnabled,
       sidebarOlderSectionAfterDays: DEFAULT_UNIFIED_SETTINGS.sidebarOlderSectionAfterDays,
       sidebarOlderSectionCollapsedByDefault:

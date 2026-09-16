@@ -12,6 +12,8 @@ type CommandPaletteContentProps = Omit<ComponentProps<typeof Command>, "children
   readonly inputAccessory?: ReactNode;
   readonly inputProps: ComponentProps<typeof CommandInput>;
   readonly panelClassName?: string;
+  /** Select the prefilled query on mount so typing replaces it (rename view). */
+  readonly selectInputOnMount?: boolean;
   readonly showBackHint?: boolean;
   readonly testId?: string;
 };
@@ -29,6 +31,7 @@ export function CommandPaletteContent({
   inputAccessory,
   inputProps,
   panelClassName,
+  selectInputOnMount = false,
   showBackHint,
   testId,
   ...commandProps
@@ -40,7 +43,8 @@ export function CommandPaletteContent({
   // typing cannot continue in the composer behind the modal.
   useLayoutEffect(() => {
     inputRef.current?.focus();
-  }, []);
+    if (selectInputOnMount) inputRef.current?.select();
+  }, [selectInputOnMount]);
 
   return (
     <div className="contents" data-testid={testId}>

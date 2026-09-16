@@ -11,11 +11,10 @@ import { useEnvironments } from "~/state/environments";
 import { serverEnvironment } from "~/state/server";
 import { useAtomCommand } from "~/state/use-atom-command";
 
-/** Connected clients bridge the catalog between servers; thread membership stays with its owner. */
-export function useThreadGroups() {
+/** Merged group catalog across environments, read-only. Mount `useThreadGroups`
+ * exactly once (the sidebar) for replication; every other reader uses this. */
+export function useThreadGroupCatalog() {
   const { environments } = useEnvironments();
-  const persist = useAtomCommand(serverEnvironment.updateSettings, { reportFailure: false });
-  const save = useAtomCommand(serverEnvironment.updateSettings, "thread groups update");
   const targets = useMemo(
     () =>
       environments.filter(
@@ -35,6 +34,14 @@ export function useThreadGroups() {
     [environments],
   );
   const groups = useMemo(() => visibleThreadGroups(catalog), [catalog]);
+  return { catalog, groups, targets, canEdit: targets.length > 0 };
+}
+
+/** Connected clients bridge the catalog between servers; thread membership stays with its owner. */
+export function useThreadGroups() {
+  const { catalog, groups, targets, canEdit } = useThreadGroupCatalog();
+  const persist = useAtomCommand(serverEnvironment.updateSettings, { reportFailure: false });
+  const save = useAtomCommand(serverEnvironment.updateSettings, "thread groups update");
   const inFlight = useRef(
     new Map<EnvironmentId, { signature: string; controller: AbortController }>(),
   );
@@ -102,5 +109,5 @@ export function useThreadGroups() {
     },
     [save, targets, catalog],
   );
-  return { groups, update, canEdit: targets.length > 0 };
+  return { groups, update, canEdit };
 }

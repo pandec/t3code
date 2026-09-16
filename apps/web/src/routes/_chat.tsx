@@ -268,6 +268,17 @@ function ChatRouteGlobalShortcuts() {
         return;
       }
 
+      if (command === "thread.rename" || command === "thread.snooze") {
+        if (!shortcutThreadRef) return;
+        if (readThreadShell(shortcutThreadRef)?.archivedAt !== null) return;
+        event.preventDefault();
+        event.stopPropagation();
+        openCommandPalette({
+          open: command === "thread.rename" ? "rename-thread" : "snooze-thread",
+        });
+        return;
+      }
+
       if (command === "thread.archive") {
         if (!shortcutThreadRef) return;
         if (hasOpenArchiveUndoBlockingLayer()) return;

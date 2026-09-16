@@ -96,8 +96,10 @@ their default order until the server is updated.
 
 ## Organize threads into custom groups
 
-On web and desktop, choose **Thread groups** in the sidebar toolbar to create, rename, reorder,
-or remove groups. Drag a thread onto a group header or between its rows, or use **Move to group**
+On web and desktop, open the command palette (`Cmd/Ctrl+K`) and choose **New thread group** or
+**Manage thread groups** to create, rename, reorder, or remove groups; Settings → Extras → Sidebar
+can add a **Thread groups** button to the sidebar toolbar for the same dialog. Drag a thread onto a
+group header or between its rows, use **Move current thread to group** in the palette, or use **Move to group**
 from the thread menu. Each thread belongs to one group. New threads start in Active.
 Removing a group keeps its threads and returns its active threads to Active.
 

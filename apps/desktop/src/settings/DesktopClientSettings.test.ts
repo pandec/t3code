@@ -87,6 +87,7 @@ const clientSettings: ClientSettings = {
   sidebarV2CompactCards: true,
   sidebarAlwaysShowPinnedInAttention: true,
   sidebarV2NewThreadButtonInProjectRow: true,
+  sidebarThreadGroupsButton: true,
   sidebarOlderSectionEnabled: true,
   sidebarOlderSectionAfterDays: 14,
   sidebarOlderSectionCollapsedByDefault: false,

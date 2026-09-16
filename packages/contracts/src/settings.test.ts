@@ -485,6 +485,7 @@ describe("ClientSettings sidebar", () => {
     expect(settings.legacySidebarEnabled).toBe(false);
     expect(settings.sidebarV2CompactCards).toBe(false);
     expect(settings.sidebarV2NewThreadButtonInProjectRow).toBe(false);
+    expect(settings.sidebarThreadGroupsButton).toBe(false);
   });
 
   it("accepts opting into the project-row new-thread button", () => {

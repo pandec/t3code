@@ -9,7 +9,9 @@ This is a personal fork of [pingdotgg/t3code](https://github.com/pingdotgg/t3cod
 
 ## What the fork adds
 
-- **Custom thread groups.** Create named sidebar groups across projects and environments, drag threads between them, and arrange the same groups on mobile. Pinning, snoozing, and settlement retain group membership. Choose whether groups sit above or below Active in Settings → Extras.
+- **Custom thread groups.** Create named sidebar groups across projects and environments, drag threads between them, and arrange the same groups on mobile. Pinning, snoozing, and settlement retain group membership. Choose whether groups sit above or below Active in Settings → Extras, and optionally show a Thread groups toolbar button there; the command palette always offers New thread group, Manage thread groups, and Move current thread to group.
+
+- **Rename and snooze from the command palette.** Rename current thread edits the title inside the palette input, and Snooze current thread lists the snooze presets with their wake times and also parses a typed time such as `45m`, `2pm`, or `fri 9am`. Both are available as unbound keybinding commands (Thread: Rename, Thread: Snooze) that open the palette straight into that step.
 
 - **Agent-requested worktree switches.** Codex can use `switch_worktree` after creating a worktree. T3 waits for the turn and final checkpoint, then updates the thread’s checkout and resumes the same conversation there on the next message. Agents can inspect or cancel pending moves with `worktree_switch_status` and `cancel_worktree_switch`, and return to the project checkout with the same switch tool.
 

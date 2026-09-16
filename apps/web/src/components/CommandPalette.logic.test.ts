@@ -14,6 +14,9 @@ import {
   buildProjectActionItems,
   buildThreadActionItems,
   buildLinkedThreadActionItems,
+  buildMoveToGroupItems,
+  buildRenameThreadViewItems,
+  buildSnoozeThreadViewItems,
   enumerateCommandPaletteItems,
   filterPinnedBrowseEntries,
   filterCommandPaletteGroups,
@@ -193,6 +196,117 @@ describe("buildCurrentThreadActionItems", () => {
     const items = buildCurrentThreadActionItems({ ...baseInput, run });
     await items.find((item) => item.value === "action:thread:fork")?.run();
     expect(run).toHaveBeenCalledWith("fork", threadRef);
+  });
+});
+
+describe("buildMoveToGroupItems", () => {
+  it("leads with No group and disables the thread's current group", async () => {
+    const move = vi.fn(async () => undefined);
+    const items = buildMoveToGroupItems({
+      groups: [
+        { id: "g1", name: "Backend" },
+        { id: "g2", name: "Frontend" },
+      ],
+      currentGroupId: "g2",
+      icon: null,
+      move,
+    });
+    expect(items.map((item) => [item.value, item.disabled ?? false])).toEqual([
+      ["group:none", false],
+      ["group:g1", false],
+      ["group:g2", true],
+    ]);
+    await items[0]!.run();
+    await items[1]!.run();
+    expect(move.mock.calls).toEqual([[null], ["g1"]]);
+  });
+});
+
+describe("buildRenameThreadViewItems", () => {
+  const baseInput = {
+    currentTitle: "Old title",
+    canRegenerateTitle: true,
+    isRegeneratingTitle: false,
+    renameIcon: null,
+    regenerateIcon: null,
+    rename: async () => undefined,
+    regenerate: async () => undefined,
+  };
+
+  it("disables the commit row for blank or unchanged drafts", () => {
+    expect(buildRenameThreadViewItems({ ...baseInput, draft: "  " })[0]?.disabled).toBe(true);
+    expect(buildRenameThreadViewItems({ ...baseInput, draft: " Old title " })[0]?.disabled).toBe(
+      true,
+    );
+    expect(buildRenameThreadViewItems({ ...baseInput, draft: "New" })[0]?.disabled).toBeUndefined();
+  });
+
+  it("commits the trimmed draft and gates regeneration on capability and state", async () => {
+    const rename = vi.fn(async () => undefined);
+    const items = buildRenameThreadViewItems({ ...baseInput, draft: "  New title ", rename });
+    await items[0]!.run();
+    expect(rename).toHaveBeenCalledWith("New title");
+    expect(items[1]?.value).toBe("rename-thread:regenerate");
+    expect(
+      buildRenameThreadViewItems({ ...baseInput, draft: "x", isRegeneratingTitle: true })[1]
+        ?.disabled,
+    ).toBe(true);
+    expect(
+      buildRenameThreadViewItems({ ...baseInput, draft: "x", canRegenerateTitle: false }),
+    ).toHaveLength(1);
+  });
+});
+
+describe("buildSnoozeThreadViewItems", () => {
+  const now = new Date(2026, 8, 16, 10, 30);
+  const presets = [
+    {
+      id: "hour" as const,
+      label: "In an hour",
+      whenLabel: "11:30",
+      snoozedUntil: "2026-09-16T11:30:00.000Z",
+    },
+    {
+      id: "until-woken" as const,
+      label: "Until I wake it",
+      whenLabel: "no timer",
+      snoozedUntil: null,
+    },
+  ];
+  const baseInput = {
+    now,
+    presets,
+    timestampFormat: "24-hour" as const,
+    icon: null,
+    customIcon: null,
+    renderWhen: () => null,
+    snooze: async () => undefined,
+    custom: async () => undefined,
+  };
+
+  it("lists presets then Custom when the query is not a time", () => {
+    expect(
+      buildSnoozeThreadViewItems({ ...baseInput, query: "" }).map((item) => item.value),
+    ).toEqual(["snooze:hour", "snooze:until-woken", "snooze:custom"]);
+  });
+
+  it("prepends a parsed row that snoozes to the typed time and stays searchable", async () => {
+    const snooze = vi.fn(async () => undefined);
+    const items = buildSnoozeThreadViewItems({ ...baseInput, query: "45m", snooze });
+    expect(items[0]?.value).toBe(`snooze:parsed:${new Date(2026, 8, 16, 11, 15).toISOString()}`);
+    expect(items[0]?.title).toBe("Snooze for 45 minutes");
+    expect(items[0]?.searchTerms).toContain("45m");
+    await items[0]!.run();
+    expect(snooze).toHaveBeenCalledWith({
+      snoozedUntil: new Date(2026, 8, 16, 11, 15).toISOString(),
+    });
+  });
+
+  it("passes presets through untouched, including the indefinite one", async () => {
+    const snooze = vi.fn(async () => undefined);
+    const items = buildSnoozeThreadViewItems({ ...baseInput, query: "", snooze });
+    await items[1]!.run();
+    expect(snooze).toHaveBeenCalledWith(presets[1]);
   });
 });
 

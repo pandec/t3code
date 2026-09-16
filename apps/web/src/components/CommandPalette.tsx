@@ -42,8 +42,11 @@ import {
 import { useLocation, useNavigate, useParams } from "@tanstack/react-router";
 import * as Option from "effect/Option";
 import {
+  AlarmClockIcon,
+  AlarmClockOffIcon,
   ArchiveIcon,
   ArrowLeftIcon,
+  CalendarIcon,
   CircleCheckIcon,
   CircleDotIcon,
   ArrowLeftRightIcon,
@@ -54,13 +57,16 @@ import {
   FolderPlusIcon,
   GitForkIcon,
   GitPullRequestArrowIcon,
+  GroupIcon,
   LinkIcon,
   MessageSquareIcon,
   NotebookPenIcon,
   PaletteIcon,
+  PencilIcon,
   PinIcon,
   PinOffIcon,
   SettingsIcon,
+  SparklesIcon,
   SquarePenIcon,
   TextSearchIcon,
 } from "lucide-react";
@@ -85,6 +91,16 @@ import { useHandleNewThread } from "../hooks/useHandleNewThread";
 import { useSavedPromptList } from "../hooks/useSavedPrompts";
 import { savedPromptPreview } from "./chat/composerPromptPicker";
 import { useThreadActions } from "../hooks/useThreadActions";
+import { useThreadGroupCatalog } from "../hooks/useThreadGroups";
+import { requestCustomSnooze } from "./CustomSnoozeDialog";
+import { openThreadGroupsDialog } from "./sidebar/threadGroupsDialogStore";
+import { resolveSnoozePresets } from "./Sidebar.snooze";
+import { threadGroupId } from "@t3tools/shared/threadGroups";
+import {
+  canSnooze,
+  canSnoozeUntilDone,
+  effectiveSnoozed,
+} from "@t3tools/client-runtime/state/thread-settled";
 import { useProjectAccentColors } from "../hooks/useProjectAccentColors";
 import { useAccentTintSettings, useClientSettings } from "../hooks/useSettings";
 import { useOpenPanelPullRequestUrl } from "../hooks/useOpenPanelPullRequestUrl";
@@ -98,7 +114,15 @@ import { sourceControlEnvironment } from "../state/sourceControl";
 import { useAtomCommand } from "../state/use-atom-command";
 import { useAtomQueryRunner } from "../state/use-atom-query-runner";
 import { useEnvironments, usePrimaryEnvironmentId } from "../state/environments";
-import { useProjects, useServerConfigs, useThreadShells, waitForProject } from "../state/entities";
+import {
+  readEnvironmentSupportsSnoozeIndefinite,
+  readEnvironmentSupportsSnoozeUntilDone,
+  useProjects,
+  useServerConfigs,
+  useThreadShells,
+  waitForProject,
+} from "../state/entities";
+import { threadEnvironment } from "../state/threads";
 import { useThreadSearch } from "../state/queries";
 import { resolveThreadActionProjectRef, startNewThreadFromContext } from "../lib/chatThreadActions";
 import {
@@ -153,7 +177,12 @@ import {
   buildRootGroups,
   buildThreadActionItems,
   buildLinkedThreadActionItems,
+  buildMoveToGroupItems,
+  buildRenameThreadViewItems,
+  buildSnoozeThreadViewItems,
   enumerateCommandPaletteItems,
+  RENAME_THREAD_VIEW_VALUE,
+  SNOOZE_THREAD_VIEW_VALUE,
   type CommandPaletteActionItem,
   type CommandPaletteThreadActionId,
   type CommandPaletteOpenIntent,
@@ -519,6 +548,8 @@ export function CommandPalette({ children }: { children: ReactNode }) {
   const openAddProject = useCallback(() => dispatch({ _tag: "OpenAddProject" }), []);
   const openNewThreadIn = useCallback(() => dispatch({ _tag: "OpenNewThreadIn" }), []);
   const openInSplit = useCallback(() => dispatch({ _tag: "OpenInSplit" }), []);
+  const openRenameThread = useCallback(() => dispatch({ _tag: "OpenRenameThread" }), []);
+  const openSnoozeThread = useCallback(() => dispatch({ _tag: "OpenSnoozeThread" }), []);
   const clearOpenIntent = useCallback(() => dispatch({ _tag: "ClearOpenIntent" }), []);
   const keybindings = useAtomValue(primaryServerKeybindingsAtom);
   const { theme, themeHalves, resolvedTheme } = useTheme();
@@ -595,6 +626,10 @@ export function CommandPalette({ children }: { children: ReactNode }) {
           openAddProject();
         } else if (detail.open === "open-in-split") {
           openInSplit();
+        } else if (detail.open === "rename-thread") {
+          openRenameThread();
+        } else if (detail.open === "snooze-thread") {
+          openSnoozeThread();
         } else if (detail.query !== undefined) {
           dispatch({
             _tag: "OpenSearch",
@@ -605,7 +640,7 @@ export function CommandPalette({ children }: { children: ReactNode }) {
           setOpen(true);
         }
       }),
-    [openAddProject, openInSplit, openNewThreadIn, setOpen],
+    [openAddProject, openInSplit, openNewThreadIn, openRenameThread, openSnoozeThread, setOpen],
   );
 
   // Thread picks must target the pane that owned focus when the palette
@@ -742,9 +777,16 @@ function OpenCommandPaletteDialog(props: {
     forkThread,
     pinThread,
     settleThread,
+    snoozeThreadWithToast,
     confirmAndUnpinThread,
     unsettleThread,
+    unsnoozeThread,
   } = useThreadActions();
+  const updateThreadMetadata = useAtomCommand(threadEnvironment.updateMetadata, {
+    reportFailure: false,
+  });
+  const customGroupCatalog = useThreadGroupCatalog();
+  const timestampFormat = useClientSettings((s) => s.timestampFormat);
   const projects = useProjects();
   const projectAccentColors = useProjectAccentColors();
   const accentTint = useAccentTintSettings();
@@ -1512,7 +1554,9 @@ function OpenCommandPaletteDialog(props: {
     browseNavigation.invalidate();
     setHighlightedItemValue(null);
     setQuery(nextQuery);
-    if (nextQuery === "" && currentView?.initialQuery) {
+    // Rename keeps its view on an empty draft: the prefilled title is
+    // selected on open, so the first keystroke would otherwise pop the view.
+    if (nextQuery === "" && currentView?.initialQuery && !isRenameThreadView) {
       popView();
     }
   }
@@ -1995,6 +2039,112 @@ function OpenCommandPaletteDialog(props: {
     }),
   );
 
+  if (openUnarchivedThread !== null && openUnarchivedThreadRef !== null) {
+    const threadRef = openUnarchivedThreadRef;
+    const thread = openUnarchivedThread;
+    actionItems.push({
+      kind: "submenu",
+      value: `action:${RENAME_THREAD_VIEW_VALUE}`,
+      searchTerms: ["rename", "rename thread", "title", "retitle", "current thread"],
+      title: "Rename current thread...",
+      icon: <PencilIcon className={ITEM_ICON_CLASS} />,
+      shortcutCommand: "thread.rename",
+      addonIcon: <PencilIcon className={ADDON_ICON_CLASS} />,
+      groups: [{ value: RENAME_THREAD_VIEW_VALUE, label: "Rename", items: [] }],
+      initialQuery: thread.title,
+    });
+    if (openThreadCapabilities?.threadSnooze === true) {
+      const now = new Date();
+      if (effectiveSnoozed(thread, { now: now.toISOString() })) {
+        actionItems.push({
+          kind: "action",
+          value: "action:thread:unsnooze",
+          searchTerms: ["wake", "unsnooze", "snooze", "resume", "current thread"],
+          title: "Wake current thread",
+          icon: <AlarmClockOffIcon className={ITEM_ICON_CLASS} />,
+          shortcutCommand: "thread.snooze",
+          run: async () => {
+            await reportThreadActionFailure("Failed to wake thread", () =>
+              unsnoozeThread(threadRef),
+            );
+          },
+        });
+      } else {
+        const canSnoozeNow = canSnooze(thread, { now: now.toISOString() });
+        actionItems.push({
+          kind: "submenu",
+          value: `action:${SNOOZE_THREAD_VIEW_VALUE}`,
+          searchTerms: ["snooze", "snooze thread", "hide", "later", "remind", "current thread"],
+          title: "Snooze current thread...",
+          icon: <AlarmClockIcon className={ITEM_ICON_CLASS} />,
+          shortcutCommand: "thread.snooze",
+          ...(canSnoozeNow
+            ? {}
+            : { disabled: true, description: "Thread is waiting on you or has queued work" }),
+          addonIcon: <AlarmClockIcon className={ADDON_ICON_CLASS} />,
+          groups: [{ value: SNOOZE_THREAD_VIEW_VALUE, label: "Snooze until", items: [] }],
+        });
+      }
+    }
+  }
+
+  if (openThreadCapabilities?.threadCustomGroups === true && openUnarchivedThreadRef !== null) {
+    const threadRef = openUnarchivedThreadRef;
+    actionItems.push({
+      kind: "submenu",
+      value: "action:move-to-group",
+      searchTerms: ["move", "group", "move to group", "thread group", "current thread"],
+      title: "Move current thread to group...",
+      icon: <GroupIcon className={ITEM_ICON_CLASS} />,
+      addonIcon: <GroupIcon className={ADDON_ICON_CLASS} />,
+      groups: [
+        {
+          value: "move-to-group",
+          label: "Groups",
+          items: enumerateCommandPaletteItems(
+            buildMoveToGroupItems({
+              groups: customGroupCatalog.groups,
+              currentGroupId: threadGroupId(openUnarchivedThread ?? {}, customGroupCatalog.groups),
+              icon: <GroupIcon className={ITEM_ICON_CLASS} />,
+              move: async (groupId) => {
+                await reportThreadActionFailure("Failed to move thread to group", () =>
+                  updateThreadMetadata({
+                    environmentId: threadRef.environmentId,
+                    input: { threadId: threadRef.threadId, customGroupId: groupId },
+                  }),
+                );
+              },
+            }),
+          ),
+        },
+      ],
+    });
+  }
+  if (customGroupCatalog.canEdit) {
+    actionItems.push(
+      {
+        kind: "action",
+        value: "action:new-thread-group",
+        searchTerms: ["new group", "create group", "thread group", "add group"],
+        title: "New thread group",
+        icon: <GroupIcon className={ITEM_ICON_CLASS} />,
+        run: async () => {
+          openThreadGroupsDialog("new-group");
+        },
+      },
+      {
+        kind: "action",
+        value: "action:manage-thread-groups",
+        searchTerms: ["manage groups", "thread groups", "rename group", "reorder", "delete group"],
+        title: "Manage thread groups",
+        icon: <GroupIcon className={ITEM_ICON_CLASS} />,
+        run: async () => {
+          openThreadGroupsDialog();
+        },
+      },
+    );
+  }
+
   if (splitSupported && openInSplitItems.length > 0) {
     actionItems.push({
       kind: "submenu",
@@ -2266,6 +2416,34 @@ function OpenCommandPaletteDialog(props: {
   }
 
   const rootGroups = buildRootGroups({ actionItems, recentThreadItems });
+
+  useLayoutEffect(() => {
+    if (openIntent?.kind !== "rename-thread" && openIntent?.kind !== "snooze-thread") {
+      return;
+    }
+    const target = actionItems.find(
+      (item) =>
+        item.kind === "submenu" &&
+        item.value ===
+          `action:${openIntent.kind === "rename-thread" ? RENAME_THREAD_VIEW_VALUE : SNOOZE_THREAD_VIEW_VALUE}`,
+    );
+    if (!target || target.kind !== "submenu") {
+      // No open thread, or the thread is already snoozed (wake is a plain
+      // action): the shortcut has nothing to open, so fall back to the root.
+      clearOpenIntent();
+      return;
+    }
+    clearOpenIntent();
+    setAddProjectCloneFlow(null);
+    setViewStack([]);
+    pushPaletteView({
+      addonIcon: target.addonIcon,
+      groups: target.groups,
+      ...(target.initialQuery ? { initialQuery: target.initialQuery } : {}),
+    });
+    // actionItems is rebuilt every render; the intent is consumed on first run.
+  }, [clearOpenIntent, openIntent, pushPaletteView]);
+
   const settingsSearchItems: CommandPaletteActionItem[] = searchSettings(
     deferredQuery,
     availableSettingsSearchItems,
@@ -2297,9 +2475,88 @@ function OpenCommandPaletteDialog(props: {
         )
       : (currentView?.groups ?? rootGroups);
 
+  const isRenameThreadView = currentView?.groups[0]?.value === RENAME_THREAD_VIEW_VALUE;
+  const isSnoozeThreadView = currentView?.groups[0]?.value === SNOOZE_THREAD_VIEW_VALUE;
+  // Rename and snooze views derive their rows from the live query, so they
+  // bypass the text filter (which would drop "Rename to …" for a fresh title).
+  const liveThreadViewGroups: CommandPaletteView["groups"] | null =
+    openUnarchivedThread === null || openUnarchivedThreadRef === null
+      ? null
+      : isRenameThreadView
+        ? [
+            {
+              value: RENAME_THREAD_VIEW_VALUE,
+              label: "Rename",
+              items: buildRenameThreadViewItems({
+                draft: query,
+                currentTitle: openUnarchivedThread.title,
+                canRegenerateTitle: openThreadCapabilities?.threadTitleRegeneration === true,
+                isRegeneratingTitle: openUnarchivedThread.titleRegeneration != null,
+                renameIcon: <PencilIcon className={ITEM_ICON_CLASS} />,
+                regenerateIcon: <SparklesIcon className={ITEM_ICON_CLASS} />,
+                rename: async (title) => {
+                  await reportThreadActionFailure("Failed to rename thread", () =>
+                    updateThreadMetadata({
+                      environmentId: openUnarchivedThreadRef.environmentId,
+                      input: { threadId: openUnarchivedThreadRef.threadId, title },
+                    }),
+                  );
+                },
+                regenerate: async () => {
+                  await reportThreadActionFailure("Failed to regenerate thread title", () =>
+                    updateThreadMetadata({
+                      environmentId: openUnarchivedThreadRef.environmentId,
+                      input: { threadId: openUnarchivedThreadRef.threadId, regenerateTitle: true },
+                    }),
+                  );
+                },
+              }),
+            },
+          ]
+        : isSnoozeThreadView
+          ? (() => {
+              const now = new Date();
+              return [
+                {
+                  value: SNOOZE_THREAD_VIEW_VALUE,
+                  label: "Snooze until",
+                  items: buildSnoozeThreadViewItems({
+                    query: deferredQuery,
+                    now,
+                    presets: resolveSnoozePresets(now, timestampFormat, {
+                      untilWoken: readEnvironmentSupportsSnoozeIndefinite(
+                        openUnarchivedThreadRef.environmentId,
+                      ),
+                      untilDone:
+                        canSnoozeUntilDone(openUnarchivedThread) &&
+                        readEnvironmentSupportsSnoozeUntilDone(
+                          openUnarchivedThreadRef.environmentId,
+                        ),
+                    }),
+                    timestampFormat,
+                    icon: <AlarmClockIcon className={ITEM_ICON_CLASS} />,
+                    customIcon: <CalendarIcon className={ITEM_ICON_CLASS} />,
+                    renderWhen: (whenLabel) => (
+                      <span className="ms-auto shrink-0 text-xs tabular-nums text-muted-foreground/70">
+                        {whenLabel}
+                      </span>
+                    ),
+                    snooze: async (preset) => {
+                      await snoozeThreadWithToast(openUnarchivedThreadRef, preset);
+                    },
+                    custom: async () => {
+                      const choice = await requestCustomSnooze();
+                      if (choice) await snoozeThreadWithToast(openUnarchivedThreadRef, choice);
+                    },
+                  }),
+                },
+              ];
+            })()
+          : null;
+
   const filteredGroups = filterCommandPaletteGroups({
-    activeGroups,
-    query: deferredQuery,
+    activeGroups: liveThreadViewGroups ?? activeGroups,
+    query: liveThreadViewGroups && isRenameThreadView ? "" : deferredQuery,
     isInSubmenu: currentView !== null,
     projectSearchItems: projectSearchItems,
     settingsSearchItems,
@@ -2768,9 +3025,12 @@ function OpenCommandPaletteDialog(props: {
     displayedGroups = relativePathNeedsActiveProject ? [] : browseGroups;
   }
 
-  const inputPlaceholder =
-    remoteProjectInputPlaceholder(addProjectCloneFlow) ??
-    getCommandPaletteInputPlaceholder(paletteMode);
+  const inputPlaceholder = isRenameThreadView
+    ? "New thread title"
+    : isSnoozeThreadView
+      ? "Search presets, or type 45m, 2pm, fri 9am..."
+      : (remoteProjectInputPlaceholder(addProjectCloneFlow) ??
+        getCommandPaletteInputPlaceholder(paletteMode));
   const isSubmenu = paletteMode === "submenu" || paletteMode === "submenu-browse";
   const isSavedPromptsView = currentView?.groups[0]?.value === SAVED_PROMPTS_GROUP_VALUE;
   const hasHighlightedBrowseItem = highlightedItemValue?.startsWith("browse:") ?? false;
@@ -3157,11 +3417,15 @@ function OpenCommandPaletteDialog(props: {
 
   const footerActionLabel = isSavedPromptsView
     ? "Insert"
-    : addProjectCloneFlow?.step === "repository"
-      ? (remoteProjectButtonLabel ?? "Continue")
-      : !canSubmitBrowsePath || hasHighlightedBrowseItem
-        ? "Select"
-        : undefined;
+    : isRenameThreadView
+      ? "Rename"
+      : isSnoozeThreadView
+        ? "Snooze"
+        : addProjectCloneFlow?.step === "repository"
+          ? (remoteProjectButtonLabel ?? "Continue")
+          : !canSubmitBrowsePath || hasHighlightedBrowseItem
+            ? "Select"
+            : undefined;
 
   const footerTrailing = isSavedPromptsView ? (
     <KbdGroup className="shrink-0 items-center gap-1.5 whitespace-nowrap">
@@ -3184,6 +3448,7 @@ function OpenCommandPaletteDialog(props: {
       key={`${viewStack.length}-${browseGeneration}-${isBrowsing}-${addProjectCloneFlow?.step ?? "none"}`}
       aria-label="Command palette"
       autoHighlight={isBrowsing || isRemoteProjectCloneFlow ? false : "always"}
+      selectInputOnMount={isRenameThreadView}
       footerActionLabel={footerActionLabel}
       footerTrailing={footerTrailing}
       inputAccessory={inputAccessory}

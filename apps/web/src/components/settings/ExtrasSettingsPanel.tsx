@@ -1026,6 +1026,33 @@ function SidebarExtrasSection() {
           />
 
           <SettingsRow
+            title="Thread groups button"
+            description="Show a Thread groups button in the sidebar toolbar. The command palette can always open the same dialog."
+            resetAction={
+              settings.sidebarThreadGroupsButton !==
+              DEFAULT_UNIFIED_SETTINGS.sidebarThreadGroupsButton ? (
+                <SettingResetButton
+                  label="thread groups button"
+                  onClick={() =>
+                    updateSettings({
+                      sidebarThreadGroupsButton: DEFAULT_UNIFIED_SETTINGS.sidebarThreadGroupsButton,
+                    })
+                  }
+                />
+              ) : null
+            }
+            control={
+              <Switch
+                checked={settings.sidebarThreadGroupsButton}
+                onCheckedChange={(checked) =>
+                  updateSettings({ sidebarThreadGroupsButton: Boolean(checked) })
+                }
+                aria-label="Show thread groups button in the sidebar"
+              />
+            }
+          />
+
+          <SettingsRow
             title="Compact thread cards"
             description="Show active threads in two lines: the branch line is hidden and its metadata moves beside the title."
             resetAction={

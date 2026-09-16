@@ -16,7 +16,7 @@ import type { ScopedThreadRef, ThreadId } from "@t3tools/contracts";
 import { useRouter } from "@tanstack/react-router";
 import { useCallback, useMemo } from "react";
 
-import { resolveSnoozePresets, snoozedUntilToastTitle } from "../components/Sidebar.snooze";
+import { resolveSnoozePresets } from "../components/Sidebar.snooze";
 import {
   buildThreadActionMenuItems,
   type ThreadActionMenuId,
@@ -91,7 +91,7 @@ export function useThreadActionMenu(input: {
   const {
     settleThread,
     unsettleThread,
-    snoozeThread,
+    snoozeThreadWithToast,
     unsnoozeThread,
     pinThread,
     confirmAndUnpinThread,
@@ -175,33 +175,7 @@ export function useThreadActionMenu(input: {
             action === "snooze:custom"
               ? await requestCustomSnooze()
               : snoozePresets.find((candidate) => `snooze:${candidate.id}` === action);
-          if (!preset) return;
-          const result = await snoozeThread(threadRef, preset.snoozedUntil, {
-            untilDone: "untilDone" in preset && preset.untilDone === true,
-          });
-          if (result._tag === "Failure") {
-            if (!isAtomCommandInterrupted(result)) {
-              failureToast("Failed to snooze thread", squashAtomCommandFailure(result));
-            }
-            return;
-          }
-          toastManager.add(
-            stackedThreadToast({
-              type: "success",
-              title: snoozedUntilToastTitle(preset, timestampFormat),
-              timeout: 5_000,
-              actionProps: {
-                children: "Undo",
-                onClick: () => {
-                  void unsnoozeThread(threadRef).then((undone) => {
-                    if (undone._tag === "Failure" && !isAtomCommandInterrupted(undone)) {
-                      failureToast("Failed to wake thread", squashAtomCommandFailure(undone));
-                    }
-                  });
-                },
-              },
-            }),
-          );
+          if (preset) await snoozeThreadWithToast(threadRef, preset);
           return;
         }
         const reportFailure = async (
@@ -358,7 +332,7 @@ export function useThreadActionMenu(input: {
       projects,
       router,
       settleThread,
-      snoozeThread,
+      snoozeThreadWithToast,
       threadRef,
       timestampFormat,
       unsettleThread,
