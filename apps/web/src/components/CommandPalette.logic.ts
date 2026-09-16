@@ -463,6 +463,22 @@ export const MOVE_TO_GROUP_NONE_VALUE = "group:none";
 export const RENAME_THREAD_VIEW_VALUE = "rename-thread";
 export const SNOOZE_THREAD_VIEW_VALUE = "snooze-thread";
 
+/** Keep shortcut intents pending until their thread and required capabilities arrive. */
+export function resolveThreadUtilityOpenTarget(input: {
+  readonly kind: "rename-thread" | "snooze-thread";
+  readonly items: ReadonlyArray<CommandPaletteActionItem | CommandPaletteSubmenuItem>;
+  readonly hasThreadTarget: boolean;
+  readonly threadLoaded: boolean;
+  readonly capabilitiesLoaded: boolean;
+}): CommandPaletteActionItem | CommandPaletteSubmenuItem | "wait" | null {
+  if (!input.hasThreadTarget) return null;
+  if (!input.threadLoaded || (input.kind === "snooze-thread" && !input.capabilitiesLoaded)) {
+    return "wait";
+  }
+  const command = input.kind === "rename-thread" ? "thread.rename" : "thread.snooze";
+  return input.items.find((item) => item.shortcutCommand === command && !item.disabled) ?? null;
+}
+
 /** "Move thread to group…" submenu rows. The current group reads as such and
  * is disabled, so the list doubles as a "which group is this in" answer. */
 export function buildMoveToGroupItems(input: {

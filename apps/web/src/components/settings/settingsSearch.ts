@@ -745,6 +745,12 @@ export const SETTINGS_SEARCH_ITEMS = [
     to: "/settings/extras",
   },
   {
+    id: "sidebar-thread-groups-button",
+    title: "Thread groups button",
+    to: "/settings/extras",
+    searchTerms: ["sidebar toolbar show hide manage custom groups"],
+  },
+  {
     id: "auto-settle-threads",
     title: "Auto-settle threads",
     to: "/settings/extras",

@@ -35,15 +35,21 @@ To use `mod+shift+c`, clear that binding from “Copy Link or Thread ID” first
 then assign it to “Thread: Copy ID” with `!terminalFocus` as its condition.
 The combined command still copies a PR URL when available and otherwise the thread ID.
 
+## Rename and snooze threads
+
+On web and desktop, open the command palette with `mod+k` and choose **Rename current thread**
+or **Snooze current thread**. Rename edits the title in the palette input. Snooze offers presets
+and accepts a typed wake time such as `45m`, `2pm`, or `fri 9am`.
+
+To open either step directly, assign a shortcut to "Thread: Rename" or "Thread: Snooze" in
+Settings → Keybindings. Neither has a default binding. The snooze shortcut wakes an already
+snoozed thread.
+
 ## iPad
 
 With a hardware keyboard, use `Cmd+1` through `Cmd+9` to open the first nine
 displayed threads. The shortcuts follow the current list filters and order.
-`Cmd+K` opens the command palette to search commands, projects, and threads. **Rename current
-thread** and **Snooze current thread** live there as well: rename edits the title in the palette's
-input, and snooze lists the usual presets and also accepts a typed wake time such as `45m`, `2pm`, or
-`fri 9am`. Both have unbound commands, “Thread: Rename” and “Thread: Snooze”, that open the palette
-straight into that step once you assign them a shortcut. A snoozed thread's snooze shortcut wakes it.
+`Cmd+K` opens the command palette to search commands, projects, and threads.
 Use the arrow keys and Return to choose a result, or `Cmd+1` through `Cmd+9` to
 choose directly. Escape or `Cmd+K` closes the palette. Start a search with `>`
 to show only actions.

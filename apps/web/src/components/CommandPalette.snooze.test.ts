@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vite-plus/test";
+import { describe, expect, it, vi } from "vite-plus/test";
 import { parseSnoozeQuery } from "./CommandPalette.snooze";
 
 // Wednesday 2026-09-16 10:30 local time.
@@ -44,6 +44,34 @@ describe("parseSnoozeQuery", () => {
     expect(wake("today 17:30").getTime()).toBe(new Date(2026, 8, 16, 17, 30).getTime());
     expect(parseSnoozeQuery("today", now)).toBeNull();
     expect(parseSnoozeQuery("today 9", now)).toBeNull();
+  });
+
+  it("rejects overflowing, sub-minute, and inherited-property inputs without throwing", () => {
+    for (const query of ["9".repeat(400) + "d", "999999999999999w", "0.1m", "constructor"]) {
+      expect(parseSnoozeQuery(query, now), query).toBeNull();
+    }
+  });
+
+  it("keeps calendar dates and clock times across local daylight-saving transitions", () => {
+    vi.stubEnv("TZ", "America/New_York");
+    try {
+      const cases = [
+        [new Date(2026, 2, 7, 23, 30), "tomorrow", new Date(2026, 2, 8, 9)],
+        [new Date(2026, 9, 31, 23, 30), "tomorrow", new Date(2026, 10, 1, 9)],
+        [new Date(2026, 10, 1, 0, 30), "tomorrow", new Date(2026, 10, 2, 9)],
+        [new Date(2026, 2, 7, 23), "9am", new Date(2026, 2, 8, 9)],
+        [new Date(2026, 9, 31, 23), "9am", new Date(2026, 10, 1, 9)],
+        [new Date(2026, 2, 7, 23), "mon 9am", new Date(2026, 2, 9, 9)],
+        [new Date(2026, 9, 31, 23), "sat 9am", new Date(2026, 10, 7, 9)],
+      ] as const;
+      expect(cases[0][0].getTimezoneOffset()).toBe(300);
+      expect(cases[0][2].getTimezoneOffset()).toBe(240);
+      for (const [base, query, expected] of cases) {
+        expect(parseSnoozeQuery(query, base)?.snoozedUntil, query).toBe(expected.toISOString());
+      }
+    } finally {
+      vi.unstubAllEnvs();
+    }
   });
 
   it("rejects preset names and free text so they filter the list instead", () => {

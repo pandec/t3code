@@ -98,6 +98,15 @@ describe("searchSettings", () => {
     expect(searchSettings("administrative access")[0]?.id).toBe("connections-environment");
   });
 
+  it("finds the thread groups toolbar setting", () => {
+    expect(searchSettings("thread groups button")[0]?.id).toBe("sidebar-thread-groups-button");
+    expect(searchSettings("sidebar toolbar")[0]?.id).toBe("sidebar-thread-groups-button");
+    expect(searchableSetting("sidebar-thread-groups-button")).toEqual({
+      id: "sidebar-thread-groups-button",
+      title: "Thread groups button",
+    });
+  });
+
   it("lists thread confirmations in panel order", () => {
     expect(searchSettings("confirmation").map((item) => item.id)).toEqual([
       "unpin-confirmation",

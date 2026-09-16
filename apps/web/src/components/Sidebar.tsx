@@ -1,4 +1,4 @@
-import { useThreadGroups } from "../hooks/useThreadGroups";
+import { useThreadGroupCatalog } from "../hooks/useThreadGroups";
 import { threadGroupId } from "@t3tools/shared/threadGroups";
 import { openThreadGroupsDialog } from "./sidebar/threadGroupsDialogStore";
 import { requestCustomSnooze } from "./CustomSnoozeDialog";
@@ -2615,7 +2615,7 @@ export default function Sidebar() {
   const storedHiddenProjectKeys = useUiStateStore((store) => store.sidebarHiddenProjectKeys);
   const updateSidebarProjectFilters = useUiStateStore((store) => store.updateSidebarProjectFilters);
   const threads = useThreadShells();
-  const customGroups = useThreadGroups();
+  const customGroups = useThreadGroupCatalog();
   const customGroupsPosition = useClientSettings(
     (settings) => settings.sidebarCustomGroupsPosition,
   );

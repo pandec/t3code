@@ -180,6 +180,7 @@ import {
   buildMoveToGroupItems,
   buildRenameThreadViewItems,
   buildSnoozeThreadViewItems,
+  resolveThreadUtilityOpenTarget,
   enumerateCommandPaletteItems,
   RENAME_THREAD_VIEW_VALUE,
   SNOOZE_THREAD_VIEW_VALUE,
@@ -858,6 +859,10 @@ function OpenCommandPaletteDialog(props: {
   }, [environments, primaryEnvironmentId, providers]);
   const [viewStack, setViewStack] = useState<CommandPaletteView[]>([]);
   const currentView = viewStack.at(-1) ?? null;
+  const isRenameThreadView = currentView?.groups[0]?.value === RENAME_THREAD_VIEW_VALUE;
+  const isSnoozeThreadView = currentView?.groups[0]?.value === SNOOZE_THREAD_VIEW_VALUE;
+  const consumedThreadIntent = useRef<CommandPaletteOpenIntent | null>(null);
+  const [threadActionPane] = useState(() => useThreadSplitStore.getState().activePaneId);
   const environmentIds = useMemo(
     () =>
       environments
@@ -1114,9 +1119,19 @@ function OpenCommandPaletteDialog(props: {
       getFilesystemBrowsePath(
         query,
         browseEnvironmentPlatform,
-        browseEnvironmentId !== null && !isRemoteProjectRepositoryStep,
+        browseEnvironmentId !== null &&
+          !isRemoteProjectRepositoryStep &&
+          !isRenameThreadView &&
+          !isSnoozeThreadView,
       ),
-    [browseEnvironmentId, browseEnvironmentPlatform, isRemoteProjectRepositoryStep, query],
+    [
+      browseEnvironmentId,
+      browseEnvironmentPlatform,
+      isRemoteProjectRepositoryStep,
+      isRenameThreadView,
+      isSnoozeThreadView,
+      query,
+    ],
   );
   const isBrowsing = browsePath.isBrowsing;
   const browseDirectoryPath = browsePath.directoryPath;
@@ -1499,6 +1514,8 @@ function OpenCommandPaletteDialog(props: {
 
   const splitSecondaryRef = useThreadSplitStore((state) => state.secondaryRef);
   const splitMounted = useThreadSplitStore((state) => state.splitMounted);
+  const currentThreadRef =
+    splitMounted && threadActionPane === "secondary" ? splitSecondaryRef : routeThreadRef;
   const copyThreadIdTarget =
     splitMounted && paletteOwnerPane() === "secondary"
       ? (splitSecondaryRef?.threadId ?? null)
@@ -1531,13 +1548,26 @@ function OpenCommandPaletteDialog(props: {
     [browseNavigation],
   );
 
-  function pushView(item: CommandPaletteSubmenuItem): void {
-    pushPaletteView({
-      addonIcon: item.addonIcon,
-      groups: item.groups,
-      ...(item.initialQuery ? { initialQuery: item.initialQuery } : {}),
-    });
-  }
+  const executeItem = useCallback(
+    (item: CommandPaletteActionItem | CommandPaletteSubmenuItem): void => {
+      if (item.disabled) return;
+      if (item.kind === "submenu") {
+        pushPaletteView(item);
+        return;
+      }
+      if (!item.keepOpen) setOpen(false);
+      void item.run().catch((error: unknown) => {
+        toastManager.add(
+          stackedThreadToast({
+            type: "error",
+            title: "Unable to run command",
+            description: error instanceof Error ? error.message : "An unexpected error occurred.",
+          }),
+        );
+      });
+    },
+    [pushPaletteView, setOpen],
+  );
 
   function popView(): void {
     browseNavigation.invalidate();
@@ -1967,16 +1997,16 @@ function OpenCommandPaletteDialog(props: {
     actionItems.push(savedPromptsSubmenu);
   }
 
-  const openUnarchivedThread =
-    routeThreadRef === null
+  const currentThread =
+    currentThreadRef === null
       ? null
       : (threads.find(
           (thread) =>
-            thread.environmentId === routeThreadRef.environmentId &&
-            thread.id === routeThreadRef.threadId &&
-            thread.archivedAt === null,
+            thread.environmentId === currentThreadRef.environmentId &&
+            thread.id === currentThreadRef.threadId,
         ) ?? null);
-  const openUnarchivedThreadRef = openUnarchivedThread === null ? null : routeThreadRef;
+  const openUnarchivedThread = currentThread?.archivedAt === null ? currentThread : null;
+  const openUnarchivedThreadRef = openUnarchivedThread === null ? null : currentThreadRef;
   const archiveCurrentThreadAction = buildArchiveCurrentThreadAction({
     threadRef: openUnarchivedThreadRef,
     icon: <ArchiveIcon className={ITEM_ICON_CLASS} />,
@@ -2417,32 +2447,34 @@ function OpenCommandPaletteDialog(props: {
 
   const rootGroups = buildRootGroups({ actionItems, recentThreadItems });
 
+  const threadUtilityOpenTarget =
+    openIntent?.kind === "rename-thread" || openIntent?.kind === "snooze-thread"
+      ? resolveThreadUtilityOpenTarget({
+          kind: openIntent.kind,
+          items: actionItems,
+          hasThreadTarget: currentThreadRef !== null,
+          threadLoaded: currentThread !== null,
+          capabilitiesLoaded:
+            currentThreadRef !== null && serverConfigs.has(currentThreadRef.environmentId),
+        })
+      : null;
   useLayoutEffect(() => {
-    if (openIntent?.kind !== "rename-thread" && openIntent?.kind !== "snooze-thread") {
+    if (
+      (openIntent?.kind !== "rename-thread" && openIntent?.kind !== "snooze-thread") ||
+      consumedThreadIntent.current === openIntent ||
+      threadUtilityOpenTarget === "wait"
+    ) {
       return;
     }
-    const target = actionItems.find(
-      (item) =>
-        item.kind === "submenu" &&
-        item.value ===
-          `action:${openIntent.kind === "rename-thread" ? RENAME_THREAD_VIEW_VALUE : SNOOZE_THREAD_VIEW_VALUE}`,
-    );
-    if (!target || target.kind !== "submenu") {
-      // No open thread, or the thread is already snoozed (wake is a plain
-      // action): the shortcut has nothing to open, so fall back to the root.
-      clearOpenIntent();
-      return;
-    }
+    // The target is rebuilt with the action list. Consume each request once,
+    // including effect replay, but only after hydration has finished.
+    consumedThreadIntent.current = openIntent;
     clearOpenIntent();
     setAddProjectCloneFlow(null);
     setViewStack([]);
-    pushPaletteView({
-      addonIcon: target.addonIcon,
-      groups: target.groups,
-      ...(target.initialQuery ? { initialQuery: target.initialQuery } : {}),
-    });
-    // actionItems is rebuilt every render; the intent is consumed on first run.
-  }, [clearOpenIntent, openIntent, pushPaletteView]);
+    setQuery("");
+    if (threadUtilityOpenTarget) executeItem(threadUtilityOpenTarget);
+  }, [clearOpenIntent, consumedThreadIntent, executeItem, openIntent, threadUtilityOpenTarget]);
 
   const settingsSearchItems: CommandPaletteActionItem[] = searchSettings(
     deferredQuery,
@@ -2475,10 +2507,8 @@ function OpenCommandPaletteDialog(props: {
         )
       : (currentView?.groups ?? rootGroups);
 
-  const isRenameThreadView = currentView?.groups[0]?.value === RENAME_THREAD_VIEW_VALUE;
-  const isSnoozeThreadView = currentView?.groups[0]?.value === SNOOZE_THREAD_VIEW_VALUE;
-  // Rename and snooze views derive their rows from the live query, so they
-  // bypass the text filter (which would drop "Rename to …" for a fresh title).
+  // Both views derive rows from the query. Only rename bypasses filtering;
+  // snooze keeps matching presets alongside the parsed time.
   const liveThreadViewGroups: CommandPaletteView["groups"] | null =
     openUnarchivedThread === null || openUnarchivedThreadRef === null
       ? null
@@ -3202,31 +3232,6 @@ function OpenCommandPaletteDialog(props: {
       event.preventDefault();
       popView();
     }
-  }
-
-  function executeItem(item: CommandPaletteActionItem | CommandPaletteSubmenuItem): void {
-    if (item.disabled) {
-      return;
-    }
-
-    if (item.kind === "submenu") {
-      pushView(item);
-      return;
-    }
-
-    if (!item.keepOpen) {
-      setOpen(false);
-    }
-
-    void item.run().catch((error: unknown) => {
-      toastManager.add(
-        stackedThreadToast({
-          type: "error",
-          title: "Unable to run command",
-          description: error instanceof Error ? error.message : "An unexpected error occurred.",
-        }),
-      );
-    });
   }
 
   const handleOpenProjectFromFileManager = useCallback(async () => {

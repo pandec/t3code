@@ -11,7 +11,6 @@ export interface ParsedSnoozeQuery {
 }
 
 const MINUTE_MS = 60_000;
-const DAY_MS = 24 * 60 * MINUTE_MS;
 const DEFAULT_WAKE_HOUR = 9;
 
 const WEEKDAYS = ["sun", "mon", "tue", "wed", "thu", "fri", "sat"] as const;
@@ -74,8 +73,9 @@ function parseClock(
   return { hour, minute };
 }
 
-function atTime(base: Date, hour: number, minute: number): Date {
+function atTime(base: Date, hour: number, minute: number, daysAhead = 0): Date {
   const date = new Date(base);
+  date.setDate(date.getDate() + daysAhead);
   date.setHours(hour, minute, 0, 0);
   return date;
 }
@@ -89,13 +89,14 @@ export function parseSnoozeQuery(query: string, now: Date): ParsedSnoozeQuery | 
   if (duration) {
     const wake = new Date(now.getTime() + duration.minutes * MINUTE_MS);
     wake.setSeconds(0, 0);
+    if (!Number.isFinite(wake.getTime()) || wake.getTime() <= now.getTime()) return null;
     return { snoozedUntil: wake.toISOString(), durationLabel: duration.label };
   }
 
   const clockOnly = parseClock(text.replace(/^at /, ""), { allowBareHour: text.startsWith("at ") });
   if (clockOnly) {
     let wake = atTime(now, clockOnly.hour, clockOnly.minute);
-    if (wake.getTime() <= now.getTime()) wake = new Date(wake.getTime() + DAY_MS);
+    if (wake.getTime() <= now.getTime()) wake = atTime(now, clockOnly.hour, clockOnly.minute, 1);
     return { snoozedUntil: wake.toISOString() };
   }
 
@@ -113,14 +114,14 @@ export function parseSnoozeQuery(query: string, now: Date): ParsedSnoozeQuery | 
     return wake.getTime() > now.getTime() ? { snoozedUntil: wake.toISOString() } : null;
   }
   if (dayWord === "tomorrow" || dayWord === "tmr" || dayWord === "tmrw") {
-    return { snoozedUntil: atTime(new Date(now.getTime() + DAY_MS), hour, minute).toISOString() };
+    return { snoozedUntil: atTime(now, hour, minute, 1).toISOString() };
   }
+  if (!Object.hasOwn(WEEKDAY_ALIASES, dayWord!)) return null;
   const weekday = WEEKDAY_ALIASES[dayWord!];
   if (weekday === undefined) return null;
-  let wake = atTime(now, hour, minute);
   const daysAhead = (weekday - now.getDay() + 7) % 7;
-  wake = new Date(wake.getTime() + daysAhead * DAY_MS);
+  let wake = atTime(now, hour, minute, daysAhead);
   // A same-day name whose time already passed means next week's.
-  if (wake.getTime() <= now.getTime()) wake = new Date(wake.getTime() + 7 * DAY_MS);
+  if (wake.getTime() <= now.getTime()) wake = atTime(now, hour, minute, daysAhead + 7);
   return { snoozedUntil: wake.toISOString() };
 }

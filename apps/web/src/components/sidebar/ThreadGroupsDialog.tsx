@@ -49,6 +49,7 @@ export function ThreadGroupsDialog(props: {
 }) {
   const [name, setName] = useState("");
   const newGroupInputRef = useRef<HTMLInputElement>(null);
+  const popupRef = useRef<HTMLDivElement>(null);
   const [saving, setSaving] = useState(false);
   const save = async (entries: readonly GroupEdit[]) => {
     setSaving(true);
@@ -66,7 +67,10 @@ export function ThreadGroupsDialog(props: {
     <Dialog open={props.open} onOpenChange={props.onOpenChange}>
       {/* "none" focuses the popup itself so Tab starts at the first group's name;
           the default would land in that input and select its text. */}
-      <DialogPopup initialFocus={props.initialFocus === "new-group" ? newGroupInputRef : false}>
+      <DialogPopup
+        ref={popupRef}
+        initialFocus={props.initialFocus === "new-group" ? newGroupInputRef : popupRef}
+      >
         <DialogHeader>
           <DialogTitle>Thread groups</DialogTitle>
           <DialogDescription>

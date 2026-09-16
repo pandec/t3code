@@ -21,6 +21,9 @@ import {
   filterPinnedBrowseEntries,
   filterCommandPaletteGroups,
   reduceCommandPaletteUiState,
+  resolveThreadUtilityOpenTarget,
+  type CommandPaletteActionItem,
+  type CommandPaletteSubmenuItem,
   type CommandPaletteGroup,
   type CommandPaletteProject,
 } from "./CommandPalette.logic";
@@ -199,6 +202,93 @@ describe("buildCurrentThreadActionItems", () => {
   });
 });
 
+describe("resolveThreadUtilityOpenTarget", () => {
+  const rename: CommandPaletteSubmenuItem = {
+    kind: "submenu",
+    value: "rename",
+    title: "Rename",
+    searchTerms: [],
+    icon: null,
+    addonIcon: null,
+    shortcutCommand: "thread.rename",
+    groups: [],
+    initialQuery: "Old title",
+  };
+  const snooze: CommandPaletteSubmenuItem = {
+    ...rename,
+    value: "snooze",
+    shortcutCommand: "thread.snooze",
+  };
+  const wake: CommandPaletteActionItem = {
+    kind: "action",
+    value: "wake",
+    title: "Wake",
+    searchTerms: [],
+    icon: null,
+    shortcutCommand: "thread.snooze",
+    run: async () => undefined,
+  };
+  const ready = { hasThreadTarget: true, threadLoaded: true, capabilitiesLoaded: true };
+
+  it("waits for the target thread and snooze capability snapshot", () => {
+    expect(
+      resolveThreadUtilityOpenTarget({
+        ...ready,
+        kind: "rename-thread",
+        items: [],
+        threadLoaded: false,
+      }),
+    ).toBe("wait");
+    expect(
+      resolveThreadUtilityOpenTarget({
+        ...ready,
+        kind: "snooze-thread",
+        items: [],
+        capabilitiesLoaded: false,
+      }),
+    ).toBe("wait");
+    expect(
+      resolveThreadUtilityOpenTarget({
+        ...ready,
+        kind: "rename-thread",
+        items: [rename],
+        capabilitiesLoaded: false,
+      }),
+    ).toBe(rename);
+    expect(
+      resolveThreadUtilityOpenTarget({ ...ready, kind: "snooze-thread", items: [snooze] }),
+    ).toBe(snooze);
+  });
+
+  it("does not enter disabled or unsupported actions or act without a thread", () => {
+    expect(
+      resolveThreadUtilityOpenTarget({
+        ...ready,
+        kind: "snooze-thread",
+        items: [{ ...snooze, disabled: true }],
+      }),
+    ).toBeNull();
+    expect(
+      resolveThreadUtilityOpenTarget({ ...ready, kind: "snooze-thread", items: [] }),
+    ).toBeNull();
+    expect(
+      resolveThreadUtilityOpenTarget({
+        ...ready,
+        kind: "rename-thread",
+        items: [],
+        hasThreadTarget: false,
+        threadLoaded: false,
+      }),
+    ).toBeNull();
+  });
+
+  it("resolves the same shortcut to Wake for a snoozed thread", () => {
+    expect(
+      resolveThreadUtilityOpenTarget({ ...ready, kind: "snooze-thread", items: [rename, wake] }),
+    ).toBe(wake);
+  });
+});
+
 describe("buildMoveToGroupItems", () => {
   it("leads with No group and disables the thread's current group", async () => {
     const move = vi.fn(async () => undefined);
@@ -301,6 +391,22 @@ describe("buildSnoozeThreadViewItems", () => {
       snoozedUntil: new Date(2026, 8, 16, 11, 15).toISOString(),
     });
   });
+
+  it.each(["in 2 hours", "2:30 pm", "  IN   2 HOURS  ", "fri 9am"])(
+    "keeps the parsed row after token filtering %s",
+    (query) => {
+      const items = buildSnoozeThreadViewItems({ ...baseInput, query });
+      const groups = filterCommandPaletteGroups({
+        activeGroups: [{ value: "snooze-thread", label: "Snooze until", items }],
+        query,
+        isInSubmenu: true,
+        projectSearchItems: [],
+        threadSearchItems: [],
+      });
+      expect(groups[0]?.items[0]?.value).toBe(items[0]?.value);
+      expect(groups[0]?.items[0]?.value).toMatch(/^snooze:parsed:/);
+    },
+  );
 
   it("passes presets through untouched, including the indefinite one", async () => {
     const snooze = vi.fn(async () => undefined);

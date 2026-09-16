@@ -12,7 +12,7 @@ import { serverEnvironment } from "~/state/server";
 import { useAtomCommand } from "~/state/use-atom-command";
 
 /** Merged group catalog across environments, read-only. Mount `useThreadGroups`
- * exactly once (the sidebar) for replication; every other reader uses this. */
+ * exactly once in ThreadGroupsDialogHost for replication; other readers use this. */
 export function useThreadGroupCatalog() {
   const { environments } = useEnvironments();
   const targets = useMemo(
