@@ -92,7 +92,7 @@ export function planThreadMoveToTop(input: {
     return {
       section,
       assignments: [],
-      disabledReason: "Update the servers for this group to support thread ordering",
+      disabledReason: "Update the servers for these threads to support ordering",
     };
   }
   return { section, assignments };
