@@ -283,6 +283,10 @@
       "types": "./src/conversationFork.ts",
       "import": "./src/conversationFork.ts"
     },
+    "./nodeRuntime": {
+      "types": "./src/nodeRuntime.ts",
+      "import": "./src/nodeRuntime.ts"
+    },
     "./hostProcess": {
       "types": "./src/hostProcess.ts",
       "import": "./src/hostProcess.ts"

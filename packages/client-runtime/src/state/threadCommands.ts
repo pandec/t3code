@@ -1,6 +1,13 @@
 import * as Crypto from "effect/Crypto";
 import { Atom } from "effect/unstable/reactivity";
-import { WS_METHODS } from "@t3tools/contracts";
+import {
+  WS_METHODS,
+  type EnvironmentId,
+  type OrchestrationShellSnapshot,
+} from "@t3tools/contracts";
+
+import { createOptimisticThreadLifecycle } from "./threadLifecycle.ts";
+import { canSnooze, effectiveSnoozed } from "./threadSettled.ts";
 
 import {
   createAtomCommandScheduler,
@@ -94,6 +101,8 @@ export type {
 
 export function createThreadEnvironmentAtoms<R, E>(
   runtime: Atom.AtomRuntime<EnvironmentRegistry | Crypto.Crypto | R, E>,
+  snapshotAtom: (environmentId: EnvironmentId) => Atom.Atom<OrchestrationShellSnapshot | null>,
+  options: { readonly optimistic?: boolean } = {},
 ) {
   const scheduler = createAtomCommandScheduler();
   const concurrency = {
@@ -111,7 +120,7 @@ export function createThreadEnvironmentAtoms<R, E>(
     key: ({ environmentId, input }: { environmentId: string; input: RequestMessageSpeechInput }) =>
       JSON.stringify([environmentId, input.threadId, input.messageId]),
   };
-  return {
+  const commands = {
     create: createEnvironmentCommand(runtime, {
       label: "environment-data:commands:thread:create",
       execute: (input: CreateThreadInput) => createThread(input),
@@ -274,5 +283,98 @@ export function createThreadEnvironmentAtoms<R, E>(
       scheduler,
       concurrency,
     }),
+  };
+  // Mobile supplies its durable offline outbox overlay instead.
+  if (options.optimistic === false) return { ...commands, snapshotAtom };
+  const optimistic = createOptimisticThreadLifecycle(snapshotAtom);
+  return {
+    ...commands,
+    snapshotAtom: optimistic.snapshotAtom,
+    settle: optimistic.wrap(commands.settle, (thread, _input, now, accepted) =>
+      !accepted &&
+      (!canSnooze(thread, { now }) ||
+        thread.session?.status === "starting" ||
+        thread.session?.status === "running")
+        ? thread
+        : {
+            ...thread,
+            hasPendingApprovals: false,
+            hasPendingUserInput: false,
+            settledOverride: "settled",
+            settledAt: thread.settledOverride === "settled" ? (thread.settledAt ?? now) : now,
+            unsettledAt: null,
+            activeOrderKey: null,
+            pinnedAt: null,
+            pinOrderKey: null,
+            snoozedAt: null,
+            snoozedUntil: null,
+            snoozedUntilTurnId: null,
+          },
+    ),
+    unsettle: optimistic.wrap(commands.unsettle, (thread, input, now) => ({
+      ...thread,
+      settledOverride: input.reason === "user" ? "active" : null,
+      settledAt: null,
+      unsettledAt: thread.settledOverride === "active" ? (thread.unsettledAt ?? null) : now,
+    })),
+    snooze: optimistic.wrap(commands.snooze, (thread, input, now, accepted) => {
+      const untilDoneTurnId =
+        input.untilDone === true && thread.latestTurn?.state === "running"
+          ? thread.latestTurn.turnId
+          : null;
+      if (
+        (!accepted && !canSnooze(thread, { now })) ||
+        (input.snoozedUntil !== null && !(Date.parse(input.snoozedUntil) > Date.parse(now))) ||
+        (input.untilDone === true && (input.snoozedUntil !== null || untilDoneTurnId === null))
+      )
+        return thread;
+      return {
+        ...thread,
+        hasPendingApprovals: false,
+        hasPendingUserInput: false,
+        snoozedUntil: input.snoozedUntil,
+        snoozedUntilTurnId: untilDoneTurnId,
+        snoozedAt:
+          thread.snoozedUntil === input.snoozedUntil &&
+          (thread.snoozedUntilTurnId ?? null) === untilDoneTurnId &&
+          effectiveSnoozed(thread, { now })
+            ? (thread.snoozedAt ?? now)
+            : now,
+      };
+    }),
+    unsnooze: optimistic.wrap(commands.unsnooze, (thread) => ({
+      ...thread,
+      snoozedUntil: null,
+      snoozedUntilTurnId: null,
+      snoozedAt: null,
+    })),
+    pin: optimistic.wrap(commands.pin, (thread, input, now) => ({
+      ...thread,
+      pinnedAt: thread.pinnedAt ?? now,
+      pinOrderKey: thread.pinnedAt == null ? (input.orderKey ?? null) : thread.pinOrderKey,
+      ...(thread.settledOverride === "settled"
+        ? {
+            settledOverride: "active" as const,
+            settledAt: null,
+            unsettledAt: now,
+          }
+        : {}),
+      snoozedUntil: null,
+      snoozedUntilTurnId: null,
+      snoozedAt: null,
+    })),
+    unpin: optimistic.wrap(commands.unpin, (thread) => ({
+      ...thread,
+      pinnedAt: null,
+      pinOrderKey: null,
+    })),
+    reorderPin: optimistic.wrap(commands.reorderPin, (thread, input) => ({
+      ...thread,
+      pinOrderKey: input.orderKey,
+    })),
+    reorderActive: optimistic.wrap(commands.reorderActive, (thread, input) => ({
+      ...thread,
+      activeOrderKey: input.orderKey,
+    })),
   };
 }

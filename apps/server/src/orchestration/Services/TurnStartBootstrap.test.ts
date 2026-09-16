@@ -191,6 +191,69 @@ const makeLayer = (input: {
   );
 
 describe("TurnStartBootstrap", () => {
+  for (const { remoteBaseExists, explicitBase } of [
+    { remoteBaseExists: true, explicitBase: true },
+    { remoteBaseExists: false, explicitBase: true },
+    { remoteBaseExists: true, explicitBase: false },
+  ]) {
+    it.effect(
+      `fetches the ${explicitBase ? "requested" : "default"} base and uses ${remoteBaseExists ? "its remote commit" : "the local fallback"}`,
+      () =>
+        Effect.gen(function* () {
+          const dispatched: Array<OrchestrationCommand> = [];
+          const fetches: Array<{ cwd: string; remoteName: string; refName?: string }> = [];
+          const bases: string[] = [];
+          yield* Effect.gen(function* () {
+            const bootstrap = yield* TurnStartBootstrap.TurnStartBootstrap;
+            yield* bootstrap.dispatchTurnStart(
+              makeTurnStartCommand({
+                createThread: createThreadBootstrap,
+                prepareWorktree: {
+                  projectCwd: "/tmp/project",
+                  ...(explicitBase ? { baseBranch: "main" } : {}),
+                  branch: "t3code/test-branch",
+                  startFromOrigin: true,
+                },
+              }),
+            );
+          }).pipe(
+            Effect.provide(
+              makeLayer({
+                dispatched,
+                gitWorkflow: {
+                  remoteExists: () => Effect.succeed(true),
+                  fetchRemote: (request) =>
+                    Effect.sync(() => {
+                      fetches.push(request);
+                    }),
+                  remoteBranchExists: () => Effect.succeed(remoteBaseExists),
+                  resolveRemoteTrackingCommit: () =>
+                    remoteBaseExists
+                      ? Effect.succeed({
+                          commitSha: "remote-main-sha",
+                          remoteRefName: explicitBase ? "origin/main" : "origin/dev",
+                        })
+                      : Effect.die("a missing remote branch must use the local base"),
+                  createWorktree: (request) =>
+                    Effect.sync(() => {
+                      bases.push(request.refName);
+                      return {
+                        worktree: { path: "/tmp/worktrees/test", refName: "t3code/test-branch" },
+                      };
+                    }),
+                },
+              }),
+            ),
+          );
+          assert.deepEqual(fetches, [
+            { cwd: "/tmp/project", remoteName: "origin", refName: explicitBase ? "main" : "dev" },
+          ]);
+          assert.deepEqual(bases, [remoteBaseExists ? "remote-main-sha" : "main"]);
+          assert.equal(dispatched.at(-1)?.type, "thread.turn.start");
+        }),
+    );
+  }
+
   it.effect("creates the thread, prepares the worktree, then starts the turn", () =>
     Effect.gen(function* () {
       const dispatched: Array<OrchestrationCommand> = [];

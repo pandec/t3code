@@ -29,6 +29,12 @@ also send files to T3 Code through another app's system share sheet.
 
 See [images and videos](#images-and-videos-in-messages) for previewing and saving media.
 
+## Send while the agent is working
+
+On web and desktop, use **Steer** to send into the running turn or **Queue for later**
+to wait until it finishes. Queued messages survive reloads. You can edit or recall
+a queued message before delivery, or send it now to steer the agent.
+
 ## Queue messages offline on mobile
 
 Mobile keeps local copies of draft attachments, so you can preview them and queue
