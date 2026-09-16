@@ -1845,11 +1845,12 @@ export function threadContextShell(environment: ReturnType<typeof threadContextE
     .join("\n");
 }
 
-const threadContextCommand = Command.make("context", {
+export const threadContextCommand = Command.make("context", {
   ...projectLocationFlags,
   threadId: Argument.string("thread-id").pipe(Argument.withDescription("Thread id, or self.")),
   shell: Flag.boolean("shell").pipe(
     Flag.withDescription("Print POSIX shell exports, including the current native turn id."),
+    Flag.withDefault(false),
   ),
   json: jsonFlag,
 }).pipe(
@@ -1896,7 +1897,7 @@ export function archiveStatusText(
   return lines.join("\n");
 }
 
-const threadArchiveCommand = Command.make("archive", {
+export const threadArchiveCommand = Command.make("archive", {
   ...projectLocationFlags,
   threadId: Argument.string("thread-id").pipe(
     Argument.withDescription("Thread id, or self inside a provider session."),
@@ -1905,14 +1906,20 @@ const threadArchiveCommand = Command.make("archive", {
     Flag.withDescription(
       "Archive after the target thread's current turn succeeds; archive idle threads immediately.",
     ),
+    Flag.withDefault(false),
   ),
   removeWorktree: Flag.boolean("remove-worktree").pipe(
     Flag.withDescription("Remove the clean worktree after archiving, preserving its branch."),
+    Flag.withDefault(false),
   ),
   status: Flag.boolean("status").pipe(
     Flag.withDescription("Inspect archive progress, including archived threads."),
+    Flag.withDefault(false),
   ),
-  cancel: Flag.boolean("cancel").pipe(Flag.withDescription("Cancel a pending archive request.")),
+  cancel: Flag.boolean("cancel").pipe(
+    Flag.withDescription("Cancel a pending archive request."),
+    Flag.withDefault(false),
+  ),
   json: jsonFlag,
 }).pipe(
   Command.withDescription(
