@@ -43,6 +43,8 @@ const THREAD_KEYBINDING_COMMANDS = [
   "thread.copyId",
   "thread.settle",
   "thread.pin",
+  "thread.rename",
+  "thread.snooze",
   ...THREAD_JUMP_KEYBINDING_COMMANDS,
 ] as const;
 export type ThreadKeybindingCommand = (typeof THREAD_KEYBINDING_COMMANDS)[number];

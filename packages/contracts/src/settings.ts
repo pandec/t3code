@@ -742,6 +742,9 @@ export const ClientSettingsSchema = Schema.Struct({
   sidebarV2NewThreadButtonInProjectRow: Schema.Boolean.pipe(
     Schema.withDecodingDefault(Effect.succeed(false)),
   ),
+  /** Sidebar toolbar button for the thread groups dialog; the command palette
+   * always offers the same dialog. */
+  sidebarThreadGroupsButton: Schema.Boolean.pipe(Schema.withDecodingDefault(Effect.succeed(false))),
   /**
    * Files quiet-but-still-active threads under a foldable "Older" section
    * instead of leaving them in the inbox. Opt-in: with it off the sidebar
@@ -2059,6 +2062,7 @@ export const ClientSettingsPatch = Schema.Struct({
   sidebarV2CompactCards: Schema.optionalKey(Schema.Boolean),
   sidebarAlwaysShowPinnedInAttention: Schema.optionalKey(Schema.Boolean),
   sidebarV2NewThreadButtonInProjectRow: Schema.optionalKey(Schema.Boolean),
+  sidebarThreadGroupsButton: Schema.optionalKey(Schema.Boolean),
   sidebarOlderSectionEnabled: Schema.optionalKey(Schema.Boolean),
   sidebarOlderSectionAfterDays: Schema.optionalKey(SidebarOlderSectionAfterDays),
   sidebarOlderSectionCollapsedByDefault: Schema.optionalKey(Schema.Boolean),

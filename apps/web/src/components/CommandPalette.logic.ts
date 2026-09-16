@@ -20,6 +20,8 @@ import type {
 import * as Arr from "effect/Array";
 import * as Result from "effect/Result";
 import { type ReactNode } from "react";
+import { parseSnoozeQuery } from "./CommandPalette.snooze";
+import { snoozeWakeDescription, type SnoozePreset } from "./Sidebar.snooze";
 import { sortThreads } from "../lib/threadSort";
 import { normalizeSearchText } from "../lib/utils";
 import { formatRelativeTimeLabel } from "../timestampFormat";
@@ -106,7 +108,14 @@ export function browseInputEndPaddingClass(input: {
 export type SearchOverlayMode = "command" | "files" | "content";
 
 export type CommandPaletteOpenIntent =
-  | { readonly kind: "add-project" | "new-thread-in" | "open-in-split" }
+  | {
+      readonly kind:
+        | "add-project"
+        | "new-thread-in"
+        | "open-in-split"
+        | "rename-thread"
+        | "snooze-thread";
+    }
   | {
       readonly kind: "search";
       readonly query: string;
@@ -130,6 +139,8 @@ export type CommandPaletteUiAction =
   | { readonly _tag: "OpenAddProject" }
   | { readonly _tag: "OpenNewThreadIn" }
   | { readonly _tag: "OpenInSplit" }
+  | { readonly _tag: "OpenRenameThread" }
+  | { readonly _tag: "OpenSnoozeThread" }
   | { readonly _tag: "ClearOpenIntent" };
 
 export function reduceCommandPaletteUiState(
@@ -161,6 +172,10 @@ export function reduceCommandPaletteUiState(
       return { open: true, mode: "command", openIntent: { kind: "new-thread-in" } };
     case "OpenInSplit":
       return { open: true, mode: "command", openIntent: { kind: "open-in-split" } };
+    case "OpenRenameThread":
+      return { open: true, mode: "command", openIntent: { kind: "rename-thread" } };
+    case "OpenSnoozeThread":
+      return { open: true, mode: "command", openIntent: { kind: "snooze-thread" } };
     case "ClearOpenIntent":
       return state.openIntent ? { ...state, openIntent: null } : state;
   }
@@ -442,6 +457,163 @@ export function buildCurrentThreadActionItems(input: {
       },
     };
   });
+}
+
+export const MOVE_TO_GROUP_NONE_VALUE = "group:none";
+export const RENAME_THREAD_VIEW_VALUE = "rename-thread";
+export const SNOOZE_THREAD_VIEW_VALUE = "snooze-thread";
+
+/** Keep shortcut intents pending until their thread and required capabilities arrive. */
+export function resolveThreadUtilityOpenTarget(input: {
+  readonly kind: "rename-thread" | "snooze-thread";
+  readonly items: ReadonlyArray<CommandPaletteActionItem | CommandPaletteSubmenuItem>;
+  readonly hasThreadTarget: boolean;
+  readonly threadLoaded: boolean;
+  readonly capabilitiesLoaded: boolean;
+}): CommandPaletteActionItem | CommandPaletteSubmenuItem | "wait" | null {
+  if (!input.hasThreadTarget) return null;
+  if (!input.threadLoaded || (input.kind === "snooze-thread" && !input.capabilitiesLoaded)) {
+    return "wait";
+  }
+  const command = input.kind === "rename-thread" ? "thread.rename" : "thread.snooze";
+  return input.items.find((item) => item.shortcutCommand === command && !item.disabled) ?? null;
+}
+
+/** "Move thread to group…" submenu rows. The current group reads as such and
+ * is disabled, so the list doubles as a "which group is this in" answer. */
+export function buildMoveToGroupItems(input: {
+  readonly groups: ReadonlyArray<{ readonly id: string; readonly name: string }>;
+  readonly currentGroupId: string | null;
+  readonly icon: ReactNode;
+  readonly move: (groupId: string | null) => Promise<void>;
+}): CommandPaletteActionItem[] {
+  const entries: Array<{ id: string | null; name: string }> = [
+    { id: null, name: "No group" },
+    ...input.groups,
+  ];
+  return entries.map((entry) => {
+    const current = entry.id === input.currentGroupId;
+    return {
+      kind: "action",
+      value: entry.id === null ? MOVE_TO_GROUP_NONE_VALUE : `group:${entry.id}`,
+      searchTerms: [entry.name],
+      title: entry.name,
+      icon: input.icon,
+      ...(current ? { disabled: true, description: "Current group" } : {}),
+      run: async () => {
+        await input.move(entry.id);
+      },
+    };
+  });
+}
+
+/**
+ * The rename view is the palette input itself: the query is the draft title
+ * and the single row commits it. Blank or unchanged drafts disable the row
+ * rather than hide it so the view never goes empty while typing.
+ */
+export function buildRenameThreadViewItems(input: {
+  readonly draft: string;
+  readonly currentTitle: string;
+  readonly canRegenerateTitle: boolean;
+  readonly isRegeneratingTitle: boolean;
+  readonly renameIcon: ReactNode;
+  readonly regenerateIcon: ReactNode;
+  readonly rename: (title: string) => Promise<void>;
+  readonly regenerate: () => Promise<void>;
+}): CommandPaletteActionItem[] {
+  const title = input.draft.trim();
+  const unchanged = title === input.currentTitle.trim();
+  const items: CommandPaletteActionItem[] = [
+    {
+      kind: "action",
+      value: "rename-thread:commit",
+      searchTerms: [],
+      title: title.length === 0 ? "Rename to…" : `Rename to “${title}”`,
+      icon: input.renameIcon,
+      ...(title.length === 0
+        ? { disabled: true, description: "Type a new title" }
+        : unchanged
+          ? { disabled: true, description: "Title is unchanged" }
+          : {}),
+      run: async () => {
+        await input.rename(title);
+      },
+    },
+  ];
+  if (input.canRegenerateTitle) {
+    items.push({
+      kind: "action",
+      value: "rename-thread:regenerate",
+      searchTerms: [],
+      title: "Regenerate title",
+      icon: input.regenerateIcon,
+      ...(input.isRegeneratingTitle
+        ? { disabled: true, description: "Regenerating…" }
+        : { description: "Let the agent pick a title from the conversation" }),
+      run: input.regenerate,
+    });
+  }
+  return items;
+}
+
+/**
+ * Snooze view rows: presets, "Custom…", and, when the query parses as a time
+ * ("45m", "2pm", "fri 9am"), a synthesized row on top. That row's value
+ * embeds the wake time so highlight state survives re-renders on each key.
+ */
+export function buildSnoozeThreadViewItems(input: {
+  readonly query: string;
+  readonly now: Date;
+  readonly presets: ReadonlyArray<SnoozePreset>;
+  readonly timestampFormat: Parameters<typeof snoozeWakeDescription>[2];
+  readonly icon: ReactNode;
+  readonly customIcon: ReactNode;
+  /** Trailing wake-time column, rendered by the caller (this module is JSX-free). */
+  readonly renderWhen: (whenLabel: string) => ReactNode;
+  readonly snooze: (preset: Pick<SnoozePreset, "snoozedUntil" | "untilDone">) => Promise<void>;
+  readonly custom: () => Promise<void>;
+}): CommandPaletteActionItem[] {
+  const items: CommandPaletteActionItem[] = [];
+  const parsed = parseSnoozeQuery(input.query, input.now);
+  if (parsed) {
+    const wake = snoozeWakeDescription(parsed.snoozedUntil, input.now, input.timestampFormat);
+    items.push({
+      kind: "action",
+      value: `snooze:parsed:${parsed.snoozedUntil}`,
+      // Match whatever produced the parse so the filter keeps the row.
+      searchTerms: [input.query],
+      title: parsed.durationLabel ? `Snooze for ${parsed.durationLabel}` : `Snooze until ${wake}`,
+      ...(parsed.durationLabel ? { description: `Wakes ${wake}` } : {}),
+      icon: input.icon,
+      run: async () => {
+        await input.snooze({ snoozedUntil: parsed.snoozedUntil });
+      },
+    });
+  }
+  for (const preset of input.presets) {
+    items.push({
+      kind: "action",
+      value: `snooze:${preset.id}`,
+      searchTerms: [preset.label, preset.whenLabel],
+      title: preset.label,
+      icon: input.icon,
+      titleTrailingContent: input.renderWhen(preset.whenLabel),
+      run: async () => {
+        await input.snooze(preset);
+      },
+    });
+  }
+  items.push({
+    kind: "action",
+    value: "snooze:custom",
+    searchTerms: ["custom", "pick", "date", "time"],
+    title: "Custom…",
+    description: "Pick a date and time",
+    icon: input.customIcon,
+    run: input.custom,
+  });
+  return items;
 }
 
 export function buildArchivedThreadsActionItems(input: {

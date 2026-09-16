@@ -268,6 +268,19 @@ function ChatRouteGlobalShortcuts() {
         return;
       }
 
+      if (command === "thread.rename" || command === "thread.snooze") {
+        if (!shortcutThreadRef) return;
+        // An unloaded shell passes: the palette holds the intent until the
+        // thread hydrates. Only a loaded, archived thread has nothing to open.
+        if (readThreadShell(shortcutThreadRef)?.archivedAt != null) return;
+        event.preventDefault();
+        event.stopPropagation();
+        openCommandPalette({
+          open: command === "thread.rename" ? "rename-thread" : "snooze-thread",
+        });
+        return;
+      }
+
       if (command === "thread.archive") {
         if (!shortcutThreadRef) return;
         if (hasOpenArchiveUndoBlockingLayer()) return;

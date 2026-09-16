@@ -5,6 +5,7 @@ import {
   scopedThreadKey,
 } from "@t3tools/client-runtime/environment";
 import {
+  type AtomCommandResult,
   isAtomCommandInterrupted,
   settlePromise,
   squashAtomCommandFailure,
@@ -48,6 +49,7 @@ import { useTerminalUiStateStore } from "../terminalUiStateStore";
 import { useUiStateStore } from "../uiStateStore";
 import { buildThreadRouteParams, resolveThreadRouteRef } from "../threadRoutes";
 import { formatWorktreePathForDisplay, getOrphanedWorktreePathForThread } from "../worktreeCleanup";
+import { snoozedUntilToastTitle, type SnoozePreset } from "../components/Sidebar.snooze";
 import { stackedThreadToast, toastManager } from "../components/ui/toast";
 import { useClientSettings } from "./useSettings";
 import { useAtomCommand } from "../state/use-atom-command";
@@ -279,6 +281,7 @@ export function useThreadActions() {
   const confirmThreadArchive = useClientSettings((settings) => settings.confirmThreadArchive);
   const confirmThreadDelete = useClientSettings((settings) => settings.confirmThreadDelete);
   const confirmThreadUnpin = useClientSettings((settings) => settings.confirmThreadUnpin);
+  const timestampFormat = useClientSettings((settings) => settings.timestampFormat);
   const clearComposerDraftForThread = useComposerDraftStore((store) => store.clearDraftThread);
   const clearProjectDraftThreadById = useComposerDraftStore(
     (store) => store.clearProjectDraftThreadById,
@@ -808,7 +811,7 @@ export function useThreadActions() {
       target: ScopedThreadRef,
       snoozedUntil: string | null,
       options: { readonly untilDone?: boolean } = {},
-    ) => {
+    ): Promise<AtomCommandResult<unknown, unknown>> => {
       // Version skew: never send the command to a server that predates it.
       // A null wake time (indefinite snooze) additionally needs the
       // threadSnoozeIndefinite capability — older snooze-capable servers
@@ -888,6 +891,54 @@ export function useThreadActions() {
     [unsnoozeThreadMutation],
   );
 
+  /** Snooze with the shared success toast (wake time plus Undo) and failure
+   * toast, for surfaces that stay in place: menus and the command palette. */
+  const snoozeThreadWithToast = useCallback(
+    async (target: ScopedThreadRef, preset: Pick<SnoozePreset, "snoozedUntil" | "untilDone">) => {
+      const result = await snoozeThread(target, preset.snoozedUntil, {
+        untilDone: preset.untilDone === true,
+      });
+      if (result._tag === "Failure") {
+        if (!isAtomCommandInterrupted(result)) {
+          const error = squashAtomCommandFailure(result);
+          toastManager.add(
+            stackedThreadToast({
+              type: "error",
+              title: "Failed to snooze thread",
+              description: error instanceof Error ? error.message : "An error occurred.",
+            }),
+          );
+        }
+        return;
+      }
+      toastManager.add(
+        stackedThreadToast({
+          type: "success",
+          title: snoozedUntilToastTitle(preset, timestampFormat),
+          timeout: 5_000,
+          actionProps: {
+            children: "Undo",
+            onClick: () => {
+              void unsnoozeThread(target).then((undone) => {
+                if (undone._tag === "Failure" && !isAtomCommandInterrupted(undone)) {
+                  const error = squashAtomCommandFailure(undone);
+                  toastManager.add(
+                    stackedThreadToast({
+                      type: "error",
+                      title: "Failed to wake thread",
+                      description: error instanceof Error ? error.message : "An error occurred.",
+                    }),
+                  );
+                }
+              });
+            },
+          },
+        }),
+      );
+    },
+    [snoozeThread, timestampFormat, unsnoozeThread],
+  );
+
   const confirmAndDeleteThread = useCallback(
     async (target: ScopedThreadRef) => {
       const localApi = readLocalApi();
@@ -928,6 +979,7 @@ export function useThreadActions() {
       settleThread,
       unsettleThread,
       snoozeThread,
+      snoozeThreadWithToast,
       unsnoozeThread,
       pinThread,
       unpinThread,
@@ -947,6 +999,7 @@ export function useThreadActions() {
       reorderActiveThread,
       settleThread,
       snoozeThread,
+      snoozeThreadWithToast,
       unarchiveThread,
       unpinThread,
       unsettleThread,

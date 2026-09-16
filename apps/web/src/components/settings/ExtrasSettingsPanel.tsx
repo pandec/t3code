@@ -971,6 +971,32 @@ function SidebarExtrasSection() {
             }
           />
           <SettingsRow
+            {...searchableSetting("sidebar-thread-groups-button")}
+            description="Show a Thread groups button in the sidebar toolbar. The command palette can always open the same dialog."
+            resetAction={
+              settings.sidebarThreadGroupsButton !==
+              DEFAULT_UNIFIED_SETTINGS.sidebarThreadGroupsButton ? (
+                <SettingResetButton
+                  label="thread groups button"
+                  onClick={() =>
+                    updateSettings({
+                      sidebarThreadGroupsButton: DEFAULT_UNIFIED_SETTINGS.sidebarThreadGroupsButton,
+                    })
+                  }
+                />
+              ) : null
+            }
+            control={
+              <Switch
+                checked={settings.sidebarThreadGroupsButton}
+                onCheckedChange={(checked) =>
+                  updateSettings({ sidebarThreadGroupsButton: Boolean(checked) })
+                }
+                aria-label="Show thread groups button in the sidebar"
+              />
+            }
+          />
+          <SettingsRow
             title="Keep pinned threads in Attention"
             description="Always show pinned threads while the Attention filter is enabled, even when they do not currently need attention."
             resetAction={

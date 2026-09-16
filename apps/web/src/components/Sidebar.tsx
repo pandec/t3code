@@ -1,6 +1,6 @@
-import { useThreadGroups } from "../hooks/useThreadGroups";
+import { useThreadGroupCatalog } from "../hooks/useThreadGroups";
 import { threadGroupId } from "@t3tools/shared/threadGroups";
-import { ThreadGroupsDialog } from "./sidebar/ThreadGroupsDialog";
+import { openThreadGroupsDialog } from "./sidebar/threadGroupsDialogStore";
 import { requestCustomSnooze } from "./CustomSnoozeDialog";
 import { useSupportsMultiplePullRequests } from "~/hooks/useSupportsMultiplePullRequests";
 import { resolveThreadCurrentPullRequestLink } from "@t3tools/shared/threadPullRequests";
@@ -74,6 +74,7 @@ import {
   EyeIcon,
   FolderIcon,
   FolderPlusIcon,
+  GroupIcon,
   GitBranchIcon,
   EyeOffIcon,
   ListFilterIcon,
@@ -2614,11 +2615,11 @@ export default function Sidebar() {
   const storedHiddenProjectKeys = useUiStateStore((store) => store.sidebarHiddenProjectKeys);
   const updateSidebarProjectFilters = useUiStateStore((store) => store.updateSidebarProjectFilters);
   const threads = useThreadShells();
-  const customGroups = useThreadGroups();
+  const customGroups = useThreadGroupCatalog();
   const customGroupsPosition = useClientSettings(
     (settings) => settings.sidebarCustomGroupsPosition,
   );
-  const [groupsDialogOpen, setGroupsDialogOpen] = useState(false);
+  const threadGroupsButton = useClientSettings((s) => s.sidebarThreadGroupsButton);
   const [collapsedGroupIds, setCollapsedGroupIds] = useLocalStorage(
     "t3:collapsed-thread-groups",
     [] as readonly string[],
@@ -5762,23 +5763,25 @@ export default function Sidebar() {
                 </TooltipTrigger>
                 <TooltipPopup side="right">New project</TooltipPopup>
               </Tooltip>
-              <SidebarMenuButton
-                size="icon"
-                type="button"
-                aria-label="Manage thread groups"
-                title="Thread groups"
-                disabled={!customGroups.canEdit}
-                onClick={() => setGroupsDialogOpen(true)}
-              >
-                <FolderIcon />
-              </SidebarMenuButton>
-              <ThreadGroupsDialog
-                open={groupsDialogOpen}
-                onOpenChange={setGroupsDialogOpen}
-                groups={customGroups.groups}
-                disabled={!customGroups.canEdit}
-                update={customGroups.update}
-              />
+              {threadGroupsButton ? (
+                <Tooltip>
+                  <TooltipTrigger
+                    render={
+                      <SidebarMenuButton
+                        size="icon"
+                        className="shrink-0 focus-visible:ring-offset-2 focus-visible:ring-offset-sidebar"
+                        type="button"
+                        aria-label="Manage thread groups"
+                        disabled={!customGroups.canEdit}
+                        onClick={() => openThreadGroupsDialog()}
+                      />
+                    }
+                  >
+                    <GroupIcon />
+                  </TooltipTrigger>
+                  <TooltipPopup side="right">Thread groups</TooltipPopup>
+                </Tooltip>
+              ) : null}
               {/* With no projects the project row is absent, so the search row keeps the button. */}
               {!newThreadButtonInProjectRow || projectGroups.length === 0 ? newThreadButton : null}
             </div>
@@ -6348,7 +6351,7 @@ export default function Sidebar() {
                                 onContextMenu={(event) => {
                                   if (group) {
                                     event.preventDefault();
-                                    setGroupsDialogOpen(true);
+                                    openThreadGroupsDialog();
                                   }
                                 }}
                               >

@@ -10,7 +10,12 @@ export interface CommandPaletteLinkedThreads {
 const COMMAND_PALETTE_OPEN_EVENT = "t3code:open-command-palette";
 
 export interface CommandPaletteOpenDetail {
-  readonly open?: "add-project" | "new-thread-in" | "open-in-split";
+  readonly open?:
+    | "add-project"
+    | "new-thread-in"
+    | "open-in-split"
+    | "rename-thread"
+    | "snooze-thread";
   readonly query?: string;
   readonly linkedThreads?: CommandPaletteLinkedThreads;
 }

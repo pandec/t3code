@@ -1,8 +1,10 @@
 import { pinOrderKeyBetween } from "@t3tools/client-runtime/state/thread-sort";
 import { planThreadGroupMove } from "./ThreadGroupsDialog.logic";
 import { randomUUID } from "~/lib/utils";
-import { useState } from "react";
+import { useRef, useState } from "react";
 import type { ThreadGroup } from "@t3tools/contracts";
+import { useThreadGroups } from "~/hooks/useThreadGroups";
+import { useThreadGroupsDialog } from "./threadGroupsDialogStore";
 import { ArrowDownIcon, ArrowUpIcon, TrashIcon } from "lucide-react";
 import { Button } from "../ui/button";
 import { Input } from "../ui/input";
@@ -16,14 +18,38 @@ import {
 } from "../ui/dialog";
 
 type GroupEdit = Omit<ThreadGroup, "revision">;
+
+/** Mounted once at the app root; opened through `openThreadGroupsDialog`. */
+export function ThreadGroupsDialogHost() {
+  const request = useThreadGroupsDialog((state) => state.request);
+  const close = useThreadGroupsDialog((state) => state.close);
+  const customGroups = useThreadGroups();
+  if (!request) return null;
+  return (
+    <ThreadGroupsDialog
+      open
+      onOpenChange={(open) => {
+        if (!open) close();
+      }}
+      initialFocus={request.focus}
+      groups={customGroups.groups}
+      disabled={!customGroups.canEdit}
+      update={customGroups.update}
+    />
+  );
+}
+
 export function ThreadGroupsDialog(props: {
   open: boolean;
   onOpenChange: (open: boolean) => void;
+  initialFocus: "new-group" | "none";
   groups: readonly ThreadGroup[];
   disabled: boolean;
   update: (entries: readonly GroupEdit[]) => Promise<boolean>;
 }) {
   const [name, setName] = useState("");
+  const newGroupInputRef = useRef<HTMLInputElement>(null);
+  const popupRef = useRef<HTMLDivElement>(null);
   const [saving, setSaving] = useState(false);
   const save = async (entries: readonly GroupEdit[]) => {
     setSaving(true);
@@ -39,7 +65,12 @@ export function ThreadGroupsDialog(props: {
   };
   return (
     <Dialog open={props.open} onOpenChange={props.onOpenChange}>
-      <DialogPopup>
+      {/* "none" focuses the popup itself so Tab starts at the first group's name;
+          the default would land in that input and select its text. */}
+      <DialogPopup
+        ref={popupRef}
+        initialFocus={props.initialFocus === "new-group" ? newGroupInputRef : popupRef}
+      >
         <DialogHeader>
           <DialogTitle>Thread groups</DialogTitle>
           <DialogDescription>
@@ -112,6 +143,7 @@ export function ThreadGroupsDialog(props: {
             }}
           >
             <Input
+              ref={newGroupInputRef}
               aria-label="New group name"
               placeholder="New group name"
               value={name}
