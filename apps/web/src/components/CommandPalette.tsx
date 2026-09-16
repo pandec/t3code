@@ -2064,6 +2064,9 @@ function OpenCommandPaletteDialog(props: {
         pendingMovesToTop.add(moveKey);
         try {
           const reorder = plan.section === "pinned" ? reorderPinnedThread : reorderActiveThread;
+          // Stop on failure; each successful key write remains a valid placement,
+          // as in sidebar drags. Keys live per thread on its own server, so
+          // there is no transaction to roll back.
           for (const assignment of plan.assignments) {
             if (
               !(await reportThreadActionFailure("Failed to move thread to top", () =>
