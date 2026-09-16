@@ -6,9 +6,11 @@ import { FolderPlusIcon } from "lucide-react";
 import { useCallback, useMemo } from "react";
 
 import { openCommandPalette } from "~/commandPaletteBus";
-import { useClientSettings } from "~/hooks/useSettings";
+import { useProjectAccentColors } from "~/hooks/useProjectAccentColors";
+import { useAccentTintSettings, useClientSettings } from "~/hooks/useSettings";
 import { hasExplicitComposerModelSelection } from "~/lib/chatThreadActions";
 import { selectProjectGroupingSettings } from "~/logicalProject";
+import { projectAccentTintStyle } from "~/projectAccentTint";
 import {
   buildSidebarProjectPickerEntries,
   buildSidebarProjectSnapshots,
@@ -48,6 +50,10 @@ export function DraftHeroHeadline({
   const primaryEnvironmentId = usePrimaryEnvironmentId();
   const projectGroupingSettings = useClientSettings(selectProjectGroupingSettings);
   const projectSortOrder = useClientSettings((settings) => settings.sidebarProjectSortOrder);
+  // Same accents and same tint toggle as the sidebar and command palette, so
+  // the picker rows read as the same projects.
+  const projectAccentColors = useProjectAccentColors();
+  const accentTint = useAccentTintSettings();
   const setLogicalProjectDraftThreadId = useComposerDraftStore(
     (store) => store.setLogicalProjectDraftThreadId,
   );
@@ -151,7 +157,9 @@ export function DraftHeroHeadline({
         ) : null}
       </Tooltip>
       <MenuPopup align="center" className="max-h-80 min-w-40! w-max max-w-64 overflow-y-auto">
+        {/* space-y keeps adjacent accent-tinted rows from touching. */}
         <MenuRadioGroup
+          className="space-y-0.5"
           value={activeProjectKey}
           onValueChange={(value) => {
             const entry = projectEntryByKey.get(value as string);
@@ -187,12 +195,16 @@ export function DraftHeroHeadline({
           }}
         >
           {projectPickerEntries.map(({ group }) => {
+            const accentColor = accentTint.enabled
+              ? projectAccentColors.resolve(group.memberProjects)
+              : null;
             return (
               <MenuRadioItem
                 key={group.projectKey}
                 value={group.projectKey}
                 closeOnClick
                 className="[&>span:last-child]:flex [&>span:last-child]:min-w-0 [&>span:last-child]:items-center [&>span:last-child]:gap-2"
+                style={projectAccentTintStyle(accentColor, accentTint.intensityPercent)}
               >
                 <ProjectFavicon project={group} className="size-4 shrink-0" />
                 <Tooltip>
