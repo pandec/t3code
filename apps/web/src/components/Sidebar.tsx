@@ -5901,6 +5901,16 @@ export default function Sidebar() {
                               {project.displayName}
                               {isHidden ? <span className="sr-only"> (hidden)</span> : null}
                             </span>
+                            {showProjectEnvironments ? (
+                              <ProjectEnvironmentBadge
+                                group={project}
+                                primaryEnvironmentId={primaryEnvironmentId}
+                                machineByEnvironmentId={environmentMachineById}
+                              />
+                            ) : null}
+                            {/* Dot after the badge: the badge is only present
+                                on some rows, so the dots would otherwise sit
+                                in two columns. */}
                             {accentColor ? (
                               <>
                                 <span
@@ -5910,13 +5920,6 @@ export default function Sidebar() {
                                 />
                                 <span className="sr-only">Accent {accentColor}</span>
                               </>
-                            ) : null}
-                            {showProjectEnvironments ? (
-                              <ProjectEnvironmentBadge
-                                group={project}
-                                primaryEnvironmentId={primaryEnvironmentId}
-                                machineByEnvironmentId={environmentMachineById}
-                              />
                             ) : null}
                             <Tooltip>
                               <TooltipTrigger
