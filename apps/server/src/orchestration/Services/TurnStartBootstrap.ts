@@ -593,6 +593,7 @@ export const make = Effect.gen(function* () {
             yield* gitWorkflow.fetchRemote({
               cwd: prepareWorktree.projectCwd,
               remoteName: "origin",
+              refName: baseBranch,
             });
             const remoteBaseExists = yield* gitWorkflow.remoteBranchExists({
               cwd: prepareWorktree.projectCwd,

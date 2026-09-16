@@ -239,11 +239,19 @@ const makeHarness = Effect.fn("TestEnvironmentThreads.makeHarness")(function* (o
   const supervisorState = yield* SubscriptionRef.make<SupervisorConnectionState>(
     AVAILABLE_CONNECTION_STATE,
   );
+  // Preserve queued event batches while failing at the first error.
   const streamFrom = (queue: Queue.Queue<TestThreadInput>) =>
     Stream.fromQueue(queue).pipe(
-      Stream.mapEffect((input) =>
-        input instanceof Error ? Effect.fail(input) : Effect.succeed(input),
-      ),
+      Stream.chunks,
+      Stream.flatMap((chunk) => {
+        const errorIndex = chunk.findIndex((input) => input instanceof Error);
+        if (errorIndex === -1) {
+          return Stream.fromArray(chunk as ReadonlyArray<OrchestrationThreadStreamItem>);
+        }
+        const prefix = chunk.slice(0, errorIndex) as ReadonlyArray<OrchestrationThreadStreamItem>;
+        const failure = Stream.fail(chunk[errorIndex] as Error);
+        return prefix.length === 0 ? failure : Stream.concat(Stream.fromArray(prefix), failure);
+      }),
     );
   const client = {
     [ORCHESTRATION_WS_METHODS.subscribeThread]: (input: {
@@ -512,6 +520,38 @@ const sessionSettled = (sequence: number): OrchestrationThreadStreamItem => ({
         activeTurnId: null,
         lastError: null,
         updatedAt: "2026-04-01T01:01:00.000Z",
+      },
+    },
+  },
+});
+
+const sessionSet = (
+  status: "ready" | "running",
+  turnId: string,
+  sequence: number,
+): OrchestrationThreadStreamItem => ({
+  kind: "event",
+  event: {
+    eventId: EventId.make(`event-session-${status}-${sequence}`),
+    sequence,
+    occurredAt: "2026-04-01T03:00:00.000Z",
+    commandId: null,
+    causationEventId: null,
+    correlationId: null,
+    metadata: {},
+    aggregateKind: "thread",
+    aggregateId: THREAD_ID,
+    type: "thread.session-set",
+    payload: {
+      threadId: THREAD_ID,
+      session: {
+        threadId: THREAD_ID,
+        status,
+        providerName: "codex",
+        runtimeMode: "full-access",
+        activeTurnId: status === "running" ? TurnId.make(turnId) : null,
+        lastError: null,
+        updatedAt: "2026-04-01T03:00:00.000Z",
       },
     },
   },
@@ -2690,6 +2730,54 @@ describe("EnvironmentThreads", () => {
         yield* Effect.yieldNow;
       }
       expect(yield* Ref.get(harness.subscriptionCount)).toBe(3);
+    }),
+  );
+
+  it.effect("persists a settled turn before a new turn in the same transport batch", () =>
+    Effect.gen(function* () {
+      const harness = yield* makeHarness({ cached: ACTIVE_THREAD });
+      yield* awaitThreadState(harness.observed, (value) => value.status === "live");
+      yield* Queue.offer(harness.inputs, {
+        kind: "snapshot",
+        snapshot: {
+          thread: ACTIVE_THREAD,
+          snapshotSequence: CACHED_SNAPSHOT_SEQUENCE + 1,
+          page: {
+            beforeCursor: "settled-page",
+            hasMore: true,
+            snapshotSequence: CACHED_SNAPSHOT_SEQUENCE + 1,
+          },
+        },
+      });
+      yield* awaitThreadState(harness.observed, (value) => Option.isSome(value.page));
+      const before = yield* Ref.get(harness.publicationCount);
+
+      // Structural events flush individually even within one transport batch.
+      // The settled state must reach persistence before the next turn starts.
+      yield* Queue.offerAll(harness.inputs, [
+        sessionSet("ready", "turn-1", CACHED_SNAPSHOT_SEQUENCE + 2),
+        sessionSet("running", "turn-2", CACHED_SNAPSHOT_SEQUENCE + 3),
+      ]);
+      yield* awaitThreadState(
+        harness.observed,
+        (value) =>
+          Option.isSome(value.data) &&
+          value.data.value.session?.activeTurnId === TurnId.make("turn-2"),
+      );
+      expect((yield* Ref.get(harness.publicationCount)) - before).toBe(2);
+      yield* TestClock.adjust("500 millis");
+      yield* Effect.yieldNow;
+
+      // The settled state reached the cache under its own sequence even
+      // though the batch ended on a running session.
+      const saved = (yield* Ref.get(harness.savedThreads)).at(-1);
+      expect(saved?.thread.session?.status).toBe("ready");
+      expect(saved?.snapshotSequence).toBe(CACHED_SNAPSHOT_SEQUENCE + 2);
+      expect(saved?.page).toEqual({
+        beforeCursor: "settled-page",
+        hasMore: true,
+        snapshotSequence: CACHED_SNAPSHOT_SEQUENCE + 2,
+      });
     }),
   );
 });

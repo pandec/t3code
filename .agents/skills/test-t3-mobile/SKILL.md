@@ -80,31 +80,24 @@ plutil -p <app-path>/Info.plist | grep -A4 CFBundleURLSchemes
 
 An empty `get_app_container` result for the _default_ identifier is not evidence that no development client is installed. Prove the variant from the display name and scheme, not from the identifier.
 
-## Choose the lightest valid launch path
+## Ensure a compatible native client
 
-- For JavaScript, TypeScript, or asset-only changes, reuse a compatible installed development client and start Metro. Do not rebuild native code merely to load a new bundle.
-- For native source, native dependencies, entitlements, config plugins, generated project changes, **or any merge that pulled in upstream native work**, rebuild the affected platform. After such a merge, run `vp install` before prebuild — a missing new native dependency makes config resolution fail in ways that look like a config bug.
-- If the user requested no native rebuild and no compatible app is installed, reuse an existing compatible `.app` or `.apk` artifact when available. Otherwise report the missing dev client instead of silently rebuilding.
+Authorized mobile verification includes building and installing a development client on the selected simulator host. Respect an explicit instruction not to rebuild. Run `vp install` first when the checkout's dependencies changed.
 
-Before opening a development-client URL, account for any other installed development builds that register the same `t3code-dev` scheme. `simctl openurl` selects by scheme rather than by bundle identifier, so a stale build can receive the URL even after the intended app was launched explicitly (`references/local-setup.md` names this fork's known collider). Remove only a disposable conflicting client installed by the current test; otherwise report the collision and use an uncontested simulator instead of uninstalling unrelated app data.
-
-### Prove native compatibility before starting anything
-
-Reuse is valid only when the installed client already contains every native module the current bundle imports. Check before Metro, before pairing, and before any UI action — it costs one command, and skipping it fails minutes later as a red-box `Cannot find native module` screen:
+Select and boot one explicit iOS UDID or Android emulator serial, then run from the checkout being tested:
 
 ```bash
-APP_PATH=$(xcrun simctl get_app_container <simulator-udid> <resolved-bundle-id> app)
-ls "$APP_PATH/Frameworks" | grep -i '^Expo'
+node scripts/mobile-native-client.ts ensure ios <simulator-udid>
+node scripts/mobile-native-client.ts ensure android <emulator-serial>
 ```
 
-Compare against the `expo-*` dependencies the change touches (`expo-audio` links as `ExpoAudio.framework`; some packages ship as `.bundle` files in the app root instead). Also compare the artifact's age against the last native-affecting change:
+The helper resolves the development app identifier from Expo config. It compares the checkout's local Expo fingerprint and installed binary with its last successful build record. It reuses a match; otherwise it prebuilds, builds and installs the client. Start Metro only after it succeeds. On hosts with an `agent-job` requirement, run the entire command through that queue.
 
-```bash
-stat -f '%Sm' -t '%Y-%m-%dT%H:%M:%S' "$APP_PATH"
-git log -1 --format=%cI -- apps/mobile/package.json apps/mobile/app.config.ts
-```
+Use `check` instead of `ensure` for a read-only decision. Exit 0 means compatible, 2 means a build is required, and 1 means an operational error. Apps installed outside the helper are initially unknown and require one rebuild. Records stay on the simulator host under `~/.cache/t3code/native-clients`; do not copy or edit them.
 
-If a required module is absent or the artifact predates the last native change, the client is native-incompatible regardless of its identifier: stop, report the missing module and build date, and rebuild only per the rules above.
+A JavaScript-only diff, bundle identifier, version or install date does not prove compatibility. The helper fingerprints the whole checkout locally with `APP_VARIANT=development`; it needs no EAS credentials. Fix native sources or config plugins, not generated `ios/` or `android/` output. Diagnose build failures before reporting verification blocked.
+
+Before opening a development-client URL, account for other installed builds that register `t3code-dev`. `simctl openurl` selects by scheme, so a stale build can receive the URL even after the intended app was launched. See the known collider in `references/local-setup.md`. Remove only disposable conflicting clients installed by the current test; otherwise use an uncontested simulator and preserve unrelated app data.
 
 ### Generate or locate the native iOS project
 
@@ -114,8 +107,7 @@ If a required module is absent or the artifact predates the last native change, 
 ls -d apps/mobile/ios/*.xcworkspace 2>/dev/null || echo workspace-missing
 ```
 
-- Missing, and the change is JS-only in a worktree: prefer the primary checkout's generated workspace as the native shell and keep Metro pinned to the worktree — the loaded bundle, not the shell, carries the change under test.
-- Missing or wrong-variant, and a rebuild is authorized: run from `apps/mobile` (about one minute including CocoaPods), then build separately so XcodeBuildMCP stays pinned to one simulator:
+- For a manually diagnosed build, run from `apps/mobile`, then build separately with XcodeBuildMCP pinned to the selected simulator:
 
   ```bash
   APP_VARIANT=development EXPO_NO_GIT_STATUS=1 vp exec expo prebuild --clean --platform ios
@@ -196,10 +188,9 @@ Use `ios-debugger-agent` to select one UDID and set these XcodeBuildMCP session 
 
 `session_set_defaults` does not validate paths; a missing workspace surfaces later as a build failure (see Troubleshoot).
 
-Check the installed client with:
+After `ensure` succeeds, open the Metro URL:
 
 ```bash
-xcrun simctl get_app_container <simulator-udid> <resolved-bundle-id> app
 xcrun simctl openurl <simulator-udid> <printed-dev-client-url>
 ```
 

@@ -57,6 +57,8 @@ import {
   threadHasQueuedTurnStart,
 } from "./ThreadSettlementPolicy.ts";
 
+const monogramSegmenter = new Intl.Segmenter(undefined, { granularity: "grapheme" });
+
 const isScriptRunCommand = Schema.is(SCRIPT_RUN_COMMAND_PATTERN);
 
 const nowIso = Effect.map(DateTime.now, DateTime.formatIso);
@@ -305,6 +307,15 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
           commandType: command.type,
           code: "project_actions_changed",
           detail: `Actions for project '${command.projectId}' changed after they were read.`,
+        });
+      }
+      if (
+        command.projectIcon?.kind === "monogram" &&
+        Array.from(monogramSegmenter.segment(command.projectIcon.text)).length > 2
+      ) {
+        return yield* new OrchestrationCommandInvariantError({
+          commandType: command.type,
+          detail: "Project monograms must contain at most two characters.",
         });
       }
       if (command.scripts !== undefined) {
