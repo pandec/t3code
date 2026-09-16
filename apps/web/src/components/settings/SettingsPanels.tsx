@@ -625,18 +625,6 @@ export function useSettingsRestore(onRestored?: () => void) {
       ...(settings.sidebarThreadGroupsButton !== DEFAULT_UNIFIED_SETTINGS.sidebarThreadGroupsButton
         ? ["Thread groups button"]
         : []),
-      ...(settings.sidebarOlderSectionEnabled !==
-      DEFAULT_UNIFIED_SETTINGS.sidebarOlderSectionEnabled
-        ? ["Older section"]
-        : []),
-      ...(settings.sidebarOlderSectionAfterDays !==
-      DEFAULT_UNIFIED_SETTINGS.sidebarOlderSectionAfterDays
-        ? ["Older threshold"]
-        : []),
-      ...(settings.sidebarOlderSectionCollapsedByDefault !==
-      DEFAULT_UNIFIED_SETTINGS.sidebarOlderSectionCollapsedByDefault
-        ? ["Older section starting fold"]
-        : []),
       ...(settings.wordWrap !== DEFAULT_UNIFIED_SETTINGS.wordWrap ? ["Word wrap"] : []),
       ...getChangedTypographySettingLabels(settings),
       ...(settings.diffFilesCollapsed !== DEFAULT_UNIFIED_SETTINGS.diffFilesCollapsed
@@ -817,9 +805,6 @@ export function useSettingsRestore(onRestored?: () => void) {
       settings.sidebarAlwaysShowPinnedInAttention,
       settings.sidebarV2NewThreadButtonInProjectRow,
       settings.sidebarThreadGroupsButton,
-      settings.sidebarOlderSectionEnabled,
-      settings.sidebarOlderSectionAfterDays,
-      settings.sidebarOlderSectionCollapsedByDefault,
       settings.showSkillsInSlashMenu,
       settings.timestampFormat,
       settings.wordWrap,
@@ -925,10 +910,6 @@ export function useSettingsRestore(onRestored?: () => void) {
       sidebarV2NewThreadButtonInProjectRow:
         DEFAULT_UNIFIED_SETTINGS.sidebarV2NewThreadButtonInProjectRow,
       sidebarThreadGroupsButton: DEFAULT_UNIFIED_SETTINGS.sidebarThreadGroupsButton,
-      sidebarOlderSectionEnabled: DEFAULT_UNIFIED_SETTINGS.sidebarOlderSectionEnabled,
-      sidebarOlderSectionAfterDays: DEFAULT_UNIFIED_SETTINGS.sidebarOlderSectionAfterDays,
-      sidebarOlderSectionCollapsedByDefault:
-        DEFAULT_UNIFIED_SETTINGS.sidebarOlderSectionCollapsedByDefault,
       responseStreamingMode: DEFAULT_UNIFIED_SETTINGS.responseStreamingMode,
       enableProviderUpdateChecks: DEFAULT_UNIFIED_SETTINGS.enableProviderUpdateChecks,
       continueThreadsAfterServerUpdate: DEFAULT_UNIFIED_SETTINGS.continueThreadsAfterServerUpdate,

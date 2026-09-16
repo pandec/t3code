@@ -39,22 +39,12 @@ export interface Preferences {
   readonly projectGroupingEnabled?: boolean;
   readonly projectGroupingMode?: SidebarProjectGroupingMode;
   /**
-   * Device-local mirrors of the web fork's Older section settings. The
-   * section is a display grouping for quiet-but-active threads, so nothing
-   * about it is persisted per thread; `sidebarOlderSectionCollapsedByDefault`
-   * only seeds the shelf's fold state, which a tap then owns.
-   */
-  readonly sidebarOlderSectionEnabled?: boolean;
-  readonly sidebarOlderSectionAfterDays?: number;
-  readonly sidebarOlderSectionCollapsedByDefault?: boolean;
-  /**
    * Fold state of the thread list's shelves, remembered per device the way the
    * web sidebar remembers its own. One key per shelf so a patch can never
    * clobber a sibling's state, and absence genuinely means "never toggled" —
    * see `resolveThreadShelfExpanded` for the defaults each shelf falls back to.
    */
   readonly sidebarPinnedShelfExpanded?: boolean;
-  readonly sidebarOlderShelfExpanded?: boolean;
   readonly sidebarSnoozedShelfExpanded?: boolean;
   readonly sidebarSettledShelfExpanded?: boolean;
   readonly sidebarArchivedShelfExpanded?: boolean;
@@ -138,11 +128,7 @@ export function sanitizePreferences(parsed: Preferences): Preferences {
     composerEnterBehavior?: ComposerEnterBehavior;
     projectGroupingEnabled?: boolean;
     projectGroupingMode?: SidebarProjectGroupingMode;
-    sidebarOlderSectionEnabled?: boolean;
-    sidebarOlderSectionAfterDays?: number;
-    sidebarOlderSectionCollapsedByDefault?: boolean;
     sidebarPinnedShelfExpanded?: boolean;
-    sidebarOlderShelfExpanded?: boolean;
     sidebarSnoozedShelfExpanded?: boolean;
     sidebarSettledShelfExpanded?: boolean;
     sidebarArchivedShelfExpanded?: boolean;
@@ -227,21 +213,8 @@ export function sanitizePreferences(parsed: Preferences): Preferences {
   ) {
     preferences.projectGroupingMode = parsed.projectGroupingMode;
   }
-  if (typeof parsed.sidebarOlderSectionEnabled === "boolean") {
-    preferences.sidebarOlderSectionEnabled = parsed.sidebarOlderSectionEnabled;
-  }
-  if (typeof parsed.sidebarOlderSectionAfterDays === "number") {
-    preferences.sidebarOlderSectionAfterDays = parsed.sidebarOlderSectionAfterDays;
-  }
-  if (typeof parsed.sidebarOlderSectionCollapsedByDefault === "boolean") {
-    preferences.sidebarOlderSectionCollapsedByDefault =
-      parsed.sidebarOlderSectionCollapsedByDefault;
-  }
   if (typeof parsed.sidebarPinnedShelfExpanded === "boolean") {
     preferences.sidebarPinnedShelfExpanded = parsed.sidebarPinnedShelfExpanded;
-  }
-  if (typeof parsed.sidebarOlderShelfExpanded === "boolean") {
-    preferences.sidebarOlderShelfExpanded = parsed.sidebarOlderShelfExpanded;
   }
   if (typeof parsed.sidebarSnoozedShelfExpanded === "boolean") {
     preferences.sidebarSnoozedShelfExpanded = parsed.sidebarSnoozedShelfExpanded;

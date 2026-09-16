@@ -48,7 +48,6 @@ import { useThreadListV2Enabled } from "../threads/use-thread-list-v2-enabled";
 import {
   useAlwaysShowPinnedInAttention,
   useArchivedSectionVisibleCount,
-  useOlderSectionSettings,
   useThreadShelfExpansion,
 } from "../../state/use-mobile-preferences";
 import { useRecentArchivedThreadSnapshots } from "../archive/useArchivedThreadSnapshots";
@@ -72,7 +71,6 @@ import {
   ThreadListV2SettledShelfHeader,
   ThreadListV2SnoozedShelfHeader,
 } from "../threads/thread-list-v2-items";
-import { ThreadListV2OlderShelfHeader } from "../threads/thread-list-v2-older-shelf";
 import { resolveThreadProviderDriver } from "../threads/thread-provider";
 import { pendingTaskAttentionKey } from "../threads/threadAttention";
 import { resolveThreadProviderInstance } from "../threads/thread-provider-instance";
@@ -258,9 +256,6 @@ export function HomeScreen(props: HomeScreenProps) {
   const threadListV2Enabled = useThreadListV2Enabled();
   const archivedSectionVisibleCount = useArchivedSectionVisibleCount();
   const alwaysShowPinnedInAttention = useAlwaysShowPinnedInAttention();
-  const olderSection = useOlderSectionSettings();
-  const { expanded: olderShelfExpanded, toggle: toggleOlderShelf } =
-    useThreadShelfExpansion("older");
   const { expanded: archivedShelfExpanded, toggle: toggleArchivedShelf } =
     useThreadShelfExpansion("archived");
   const queuedThreadKeys = useQueuedThreadKeys();
@@ -695,7 +690,7 @@ export function HomeScreen(props: HomeScreenProps) {
     useThreadShelfExpansion("settled");
   const { expanded: pinnedShelfExpanded, toggle: togglePinnedShelf } =
     useThreadShelfExpansion("pinned");
-  // Queued-start, snooze, and Older helpers need a clock while the list stays open.
+  // Queued-start and snooze helpers need a clock while the list stays open.
   const [nowMinute, setNowMinute] = useState(() => new Date().toISOString().slice(0, 16));
   // Snooze wake times are second-precise; a counter bumped exactly at the
   // next wake boundary re-runs the partition with a fresh clock so a woken
@@ -831,8 +826,6 @@ export function HomeScreen(props: HomeScreenProps) {
         hiddenSettledCount: 0,
         pinnedCount: 0,
         pinnedShelfHeaderVisible: false,
-        olderCount: 0,
-        olderShelfHeaderIndex: null,
         snoozedCount: 0,
         snoozedShelfHeaderIndex: null,
         settledCount: 0,
@@ -852,9 +845,6 @@ export function HomeScreen(props: HomeScreenProps) {
       projectRefs: v2ScopedProjectGroup === null ? null : v2ScopedProjectGroup.projectRefs,
       searchQuery: props.searchQuery,
       matchedThreadKeys,
-      olderSectionEnabled: olderSection.enabled,
-      olderSectionAfterDays: olderSection.afterDays,
-      olderShelfExpanded,
       settlementEnvironmentIds,
       snoozeEnvironmentIds,
       queuedThreadKeys,
@@ -868,9 +858,6 @@ export function HomeScreen(props: HomeScreenProps) {
   }, [
     customGroups.groups,
     alwaysShowPinnedInAttention,
-    olderSection.enabled,
-    olderSection.afterDays,
-    olderShelfExpanded,
     pendingOrder,
     queuedThreadKeys,
     nowMinute,
@@ -961,9 +948,6 @@ export function HomeScreen(props: HomeScreenProps) {
         pinnedCount: threadListV2Layout.pinnedCount,
         pinnedShelfExpanded,
         pinnedShelfHeaderVisible: threadListV2Layout.pinnedShelfHeaderVisible,
-        olderCount: threadListV2Layout.olderCount,
-        olderShelfExpanded,
-        olderShelfHeaderIndex: threadListV2Layout.olderShelfHeaderIndex,
         snoozedCount: threadListV2Layout.snoozedCount,
         snoozedShelfExpanded,
         snoozedShelfHeaderIndex: threadListV2Layout.snoozedShelfHeaderIndex,
@@ -978,7 +962,6 @@ export function HomeScreen(props: HomeScreenProps) {
       props.searchQuery,
       props.attentionMemberThreadKeys,
       nowMinute,
-      olderShelfExpanded,
       pinnedShelfExpanded,
       settledShelfExpanded,
       snoozedShelfExpanded,
@@ -1043,15 +1026,6 @@ export function HomeScreen(props: HomeScreenProps) {
       }
       if (item.type === "v2-pinned-divider") {
         return <ThreadListV2PinnedDivider />;
-      }
-      if (item.type === "v2-older-shelf") {
-        return (
-          <ThreadListV2OlderShelfHeader
-            count={item.count}
-            expanded={item.expanded}
-            onToggle={toggleOlderShelf}
-          />
-        );
       }
       if (item.type === "v2-snoozed-shelf") {
         return (
@@ -1178,7 +1152,6 @@ export function HomeScreen(props: HomeScreenProps) {
       threadListV2Items,
       threadSearchMatchByKey,
       titleRegenerationEnvironmentIds,
-      toggleOlderShelf,
       togglePinnedShelf,
       toggleSettledShelf,
       toggleSnoozedShelf,

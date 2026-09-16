@@ -16,7 +16,6 @@ import {
   useSensors,
   type DragEndEvent,
   type DragOverEvent,
-  type CollisionDetection,
   type DragStartEvent,
   type Modifier,
 } from "@dnd-kit/core";
@@ -30,10 +29,6 @@ import {
   effectiveSnoozed,
   threadWokeAt,
 } from "@t3tools/client-runtime/state/thread-settled";
-import {
-  sortOlderThreadsForSidebar,
-  threadIsOlder,
-} from "@t3tools/client-runtime/state/thread-older";
 import { canForkConversation } from "@t3tools/client-runtime/state/thread-fork";
 import { resolveSettledThreadTimestamp } from "@t3tools/client-runtime/state/thread-sort";
 import type { EnvironmentThreadShell } from "@t3tools/client-runtime/state/models";
@@ -58,7 +53,6 @@ import {
 } from "@t3tools/contracts";
 import {
   clampArchivedSectionVisibleCount,
-  clampSidebarOlderSectionAfterDays,
   type TimestampFormat,
 } from "@t3tools/contracts/settings";
 import {
@@ -295,7 +289,6 @@ const SETTLED_TAIL_PAGE_COUNT = 25;
 // Keep the v2 keys so existing shelf preferences survive the v2-to-default rename.
 const SETTLED_SHELF_EXPANDED_KEY = "t3code:sidebar-v2:settled-expanded";
 const SNOOZED_SHELF_EXPANDED_KEY = "t3code:sidebar-v2:snoozed-expanded";
-const OLDER_SHELF_EXPANDED_KEY = "t3code:sidebar-v2:older-expanded";
 const ARCHIVED_SHELF_EXPANDED_KEY = "t3code:sidebar-v2:archived-expanded";
 const PINNED_SHELF_EXPANDED_KEY = "t3code:sidebar-v2:pinned-expanded";
 const DRAFTS_SHELF_EXPANDED_KEY = "t3code:sidebar-v2:drafts-expanded";
@@ -648,27 +641,6 @@ function SortableThreadRow(props: {
 const draftSurfaceClassName = "bg-amber-400/[0.04] hover:bg-amber-400/[0.08]";
 const draftPenClassName = "size-3 shrink-0 text-amber-600 dark:text-amber-300/80";
 
-// The Older shelf renders inside the next section header's sortable node so
-// the drag preview stacks it correctly, which makes that header's droppable
-// rect cover the Older rows. A drop whose center lands on the shelf must not
-// resolve to the header, so it is turned into a rejected gesture here.
-function excludeOlderShelfFromCollisions(inner: CollisionDetection): CollisionDetection {
-  return (args) => {
-    const collisions = inner(args);
-    const nearest = collisions[0];
-    if (!nearest || nearest.id === args.active.id) return collisions;
-    const shelf = args.droppableContainers
-      .find((container) => container.id === nearest.id)
-      ?.node.current?.querySelector("[data-sidebar-older-shelf]")
-      ?.getBoundingClientRect();
-    if (!shelf) return collisions;
-    const centerY = args.collisionRect.top + args.collisionRect.height / 2;
-    return centerY >= shelf.top && centerY <= shelf.bottom
-      ? collisions.filter((collision) => collision.id === args.active.id)
-      : collisions;
-  };
-}
-
 // Structural list items — the section headers and the
 // empty-section placeholders — take part in the sortable list so they shift
 // with the rows and the gap can open on either side of them. They can't be
@@ -795,7 +767,6 @@ function SidebarDragBoundary(props: {
 function SidebarSectionHeader(props: {
   marker: "snoozed-header" | "settled-header";
   label: string;
-  leadingContent?: ReactNode;
   className?: string;
   // While dragging, the settled header reads at full strength and takes the
   // accent while the lifted row is over it.
@@ -835,9 +806,8 @@ function SidebarSectionHeader(props: {
     <SortableSidebarMarker
       marker={props.marker}
       data-testid={`sidebar-${props.marker}`}
-      className={cn("mx-0.5", props.leadingContent == null && "h-8", props.className)}
+      className={cn("mx-0.5 h-8", props.className)}
     >
-      {props.leadingContent}
       <button
         type="button"
         onClick={props.toggle.onToggle}
@@ -2652,13 +2622,6 @@ export default function Sidebar() {
   const newThreadButtonInProjectRow = useClientSettings(
     (s) => s.sidebarV2NewThreadButtonInProjectRow,
   );
-  const olderSectionEnabled = useClientSettings((s) => s.sidebarOlderSectionEnabled);
-  const olderSectionAfterDays = useClientSettings((s) =>
-    clampSidebarOlderSectionAfterDays(s.sidebarOlderSectionAfterDays),
-  );
-  const olderSectionCollapsedByDefault = useClientSettings(
-    (s) => s.sidebarOlderSectionCollapsedByDefault,
-  );
   const providerIconVisibility = useClientSettings((s) => s.sidebarThreadProviderIconVisibility);
   const archivedSectionVisibleCount = useClientSettings((s) =>
     clampArchivedSectionVisibleCount(s.archivedSectionVisibleCount),
@@ -3267,7 +3230,6 @@ export default function Sidebar() {
     draggableThreadKeys,
     activeReorderableThreadKeys,
     activeThreads,
-    olderThreads,
     snoozedThreads,
     settledThreads,
     snoozeNow,
@@ -3308,7 +3270,6 @@ export default function Sidebar() {
     });
     const pinned: EnvironmentThreadShell[] = [];
     const active: EnvironmentThreadShell[] = [];
-    const older: EnvironmentThreadShell[] = [];
     const snoozed: EnvironmentThreadShell[] = [];
     const settled: EnvironmentThreadShell[] = [];
     const draggable = new Set<string>();
@@ -3362,26 +3323,6 @@ export default function Sidebar() {
         settled.push(thread);
       } else if (thread.pinnedAt != null) {
         pinned.push(thread);
-        // Older is a display grouping, not a lifecycle state: these threads
-        // are still active, nothing was settled or snoozed on the user's
-        // behalf, and any activity puts them straight back in the inbox.
-        // It is checked last on purpose — pinned, snoozed, and settled
-        // threads already have a home and are never filed away here.
-      } else if (
-        threadGroupId(thread, customGroups.groups) === null &&
-        olderSectionEnabled &&
-        // The Attention filter already narrowed the list to rows the user
-        // asked to see; folding a subset of them away would answer a
-        // different question than the one they asked.
-        effectiveAttentionFilterState === null &&
-        // The precise clock, for the same reason snoozing uses it: a wake
-        // counts as recency, and the quantized minute would leave a
-        // just-woken thread classified Older until the minute ticks over.
-        threadIsOlder(thread, { now: preciseNow, afterDays: olderSectionAfterDays })
-      ) {
-        older.push(thread);
-        draggable.delete(threadKey);
-        activeReorderable.delete(threadKey);
       } else {
         active.push(thread);
       }
@@ -3412,7 +3353,6 @@ export default function Sidebar() {
               preferredIds: optimisticDrop.order,
               getId: (thread) => scopedThreadKey(scopeThreadRef(thread.environmentId, thread.id)),
             }),
-      olderThreads: sortOlderThreadsForSidebar(older, { now: preciseNow }),
       // Soonest wake first: "what comes back next" is the shelf's question.
       // snoozeWakeSortMs parks indefinite snoozes (null wake time) last.
       snoozedThreads: snoozed.toSorted(
@@ -3430,15 +3370,12 @@ export default function Sidebar() {
       }),
     };
   }, [
-    customGroups.groups,
     alwaysShowPinnedInAttention,
     effectiveAttentionFilterState,
     hiddenPhysicalProjectKeys,
     nowMinute,
     optimisticDrop,
     environmentFilter.resolvedScope,
-    olderSectionAfterDays,
-    olderSectionEnabled,
     scopedProjectKeys,
     serverConfigs,
     snoozeWakeTick,
@@ -3450,14 +3387,8 @@ export default function Sidebar() {
   const [activeSearchResultIndex, setActiveSearchResultIndex] = useState(0);
   const isSearchingThreads = threadSearchQuery.trim().length > 0;
   const searchableThreads = useMemo(
-    () => [
-      ...pinnedThreads,
-      ...activeThreads,
-      ...olderThreads,
-      ...snoozedThreads,
-      ...settledThreads,
-    ],
-    [activeThreads, olderThreads, pinnedThreads, settledThreads, snoozedThreads],
+    () => [...pinnedThreads, ...activeThreads, ...snoozedThreads, ...settledThreads],
+    [activeThreads, pinnedThreads, settledThreads, snoozedThreads],
   );
   const threadSearchResults = useMemo(
     () => searchSidebarThreads(searchableThreads, threadSearchQuery),
@@ -3604,7 +3535,7 @@ export default function Sidebar() {
   // The collapse stops applying (and the header steps aside) while the
   // Attention filter is on: it already narrowed the list to rows the user
   // asked to see, and folding a subset of them away would answer a different
-  // question — the same contract the Older shelf follows.
+  // question.
   const pinnedShelfCollapsed = !pinnedShelfExpanded && !attentionFilterEnabled;
   // Same exception every other shelf makes: the open thread keeps its row,
   // so a folded pinned block never hides the thread being read.
@@ -3617,29 +3548,6 @@ export default function Sidebar() {
     );
     return routeThread === undefined ? [] : [routeThread];
   }, [pinnedShelfCollapsed, pinnedThreads, routeThreadKey]);
-  // The Older shelf's starting state comes from Extras; toggling it writes a
-  // per-device preference that outranks the setting from then on.
-  const [olderShelfExpanded, setOlderShelfExpanded] = useLocalStorage(
-    OLDER_SHELF_EXPANDED_KEY,
-    !olderSectionCollapsedByDefault,
-    Schema.Boolean,
-  );
-  const toggleOlderShelf = useCallback(
-    () => setOlderShelfExpanded((value) => !value),
-    [setOlderShelfExpanded],
-  );
-  const visibleOlderThreads = useMemo(() => {
-    if (olderShelfExpanded) return olderThreads;
-    // Same exception the snoozed shelf and the settled tail make: the thread
-    // you are reading keeps its row, so the highlight never disappears from
-    // under the route.
-    if (routeThreadKey === null) return [];
-    const routeThread = olderThreads.find(
-      (thread) =>
-        scopedThreadKey(scopeThreadRef(thread.environmentId, thread.id)) === routeThreadKey,
-    );
-    return routeThread === undefined ? [] : [routeThread];
-  }, [olderShelfExpanded, olderThreads, routeThreadKey]);
   const visibleSnoozedThreads = useMemo(() => {
     if (snoozedShelfExpanded) return snoozedThreads;
     // The open thread must never vanish behind the collapsed shelf: a
@@ -3689,17 +3597,10 @@ export default function Sidebar() {
     () => [
       ...visiblePinnedThreads,
       ...activeGroupSections.flatMap((section) => section.threads),
-      ...visibleOlderThreads,
       ...visibleSnoozedThreads,
       ...renderedSettledThreads,
     ],
-    [
-      visiblePinnedThreads,
-      activeGroupSections,
-      visibleOlderThreads,
-      visibleSnoozedThreads,
-      renderedSettledThreads,
-    ],
+    [visiblePinnedThreads, activeGroupSections, visibleSnoozedThreads, renderedSettledThreads],
   );
   const orderedThreadKeys = useMemo(
     () =>
@@ -4432,7 +4333,6 @@ export default function Sidebar() {
     if (
       pinnedThreads.length +
         activeThreads.length +
-        olderThreads.length +
         snoozedThreads.length +
         settledThreads.length +
         customGroups.groups.length ===
@@ -4466,7 +4366,6 @@ export default function Sidebar() {
     activeGroupSections,
     activeThreads,
     pinnedThreads.length,
-    olderThreads.length,
     visiblePinnedThreads,
     renderedSettledThreads,
     settledThreads.length,
@@ -4486,21 +4385,12 @@ export default function Sidebar() {
   // rendered order or a row's section changes. Keying the motion pass on that
   // keeps ordinary updates from forcing a layout read and animating rows
   // whose position drifted for other reasons.
-  // The Older shelf is not sortable, so its rows are folded in here rather
-  // than into sidebarListItems: expanding, collapsing, or reordering it must
-  // still refresh the motion baseline.
   const sidebarListOrderKey = useMemo(
     () =>
-      [
-        ...sidebarListItems.map((item) =>
-          item.kind === "thread" ? `${item.key}:${item.section}` : item.marker,
-        ),
-        ...(olderThreads.length > 0 ? ["older-header"] : []),
-        ...visibleOlderThreads.map(
-          (thread) => `${scopedThreadKey(scopeThreadRef(thread.environmentId, thread.id))}:older`,
-        ),
-      ].join("\0"),
-    [olderThreads.length, sidebarListItems, visibleOlderThreads],
+      sidebarListItems
+        .map((item) => (item.kind === "thread" ? `${item.key}:${item.section}` : item.marker))
+        .join("\0"),
+    [sidebarListItems],
   );
   const sidebarListHasRows = sidebarListItems.length + visibleDraftSessionCount > 0;
   useLayoutEffect(() => {
@@ -4554,14 +4444,12 @@ export default function Sidebar() {
         settledExpanded: settledShelfExpanded,
         settledVisibleCount,
         routeThreadKey,
-        // Keep the header holding Older measured when the last snoozed row leaves.
-        snoozedThreadCount: snoozedThreads.length + (olderThreads.length > 0 ? 1 : 0),
+        snoozedThreadCount: snoozedThreads.length,
         cardHeight: (compactCards ? 3.75 : 5.125) * sidebarRemSizeRef.current,
         slimHeight: 2.25 * sidebarRemSizeRef.current,
       }),
     [
       compactCards,
-      olderThreads.length,
       draggedSettledOrder,
       routeThreadKey,
       settledShelfExpanded,
@@ -4592,7 +4480,7 @@ export default function Sidebar() {
   const draggedThreadKey = dragState?.activeKey;
   const draggedFromSection = dragState?.activeSection;
   const dragActivationY = dragState?.activationY;
-  const dndBaseCollisionDetection = useMemo(() => {
+  const dndCollisionDetection = useMemo(() => {
     if (draggedThreadKey === undefined || draggedFromSection === undefined)
       return createSidebarCollisionDetection(() => true);
     const source = threadByKey.get(draggedThreadKey);
@@ -4647,10 +4535,6 @@ export default function Sidebar() {
     sidebarListItems,
     threadByKey,
   ]);
-  const dndCollisionDetection = useMemo(
-    () => excludeOlderShelfFromCollisions(dndBaseCollisionDetection),
-    [dndBaseCollisionDetection],
-  );
   const handleThreadDragEnd = useCallback(
     (event: DragEndEvent) => {
       const activeKey = String(event.active.id);
@@ -6057,7 +5941,7 @@ export default function Sidebar() {
                     {(() => {
                       const renderThreadRowInner = (
                         thread: EnvironmentThreadShell,
-                        section: SidebarSection | "older",
+                        section: SidebarSection,
                         sortable?: SortableThreadRowBag,
                       ) => {
                         const threadKey = scopedThreadKey(
@@ -6067,15 +5951,8 @@ export default function Sidebar() {
                         // row: every other thread is a full card. Density comes
                         // from users (or the auto rules) actually parking work,
                         // not from the sidebar second-guessing what still matters.
-                        // Older rows stay cards for exactly that reason — the
-                        // shelf hides them wholesale, it doesn't demote them.
-                        const isCard =
-                          section === "active" || section === "pinned" || section === "older";
+                        const isCard = section === "active" || section === "pinned";
                         const rowVariant = isCard ? "card" : "slim";
-                        // Older cards share the card variant but not its place in
-                        // the list, so they need their own key band for the same
-                        // reason the variant is in the key at all.
-                        const rowKeyBand = section === "older" ? "older" : rowVariant;
                         return (
                           <SidebarThreadRow
                             // Keyed per variant on purpose: when a thread settles,
@@ -6084,7 +5961,7 @@ export default function Sidebar() {
                             // FLIP-sliding through every row in between (rows here
                             // are translucent, so a crossing row reads as text
                             // painted over text).
-                            key={`${threadKey}:${rowKeyBand}`}
+                            key={`${threadKey}:${rowVariant}`}
                             thread={thread}
                             variant={rowVariant}
                             // Snoozed rows wake, settled rows un-settle, and cards settle.
@@ -6234,41 +6111,6 @@ export default function Sidebar() {
                           </SortableThreadRow>
                         );
                       };
-                      // Older travels with the next measured header but is not a drag
-                      // source or target (see excludeOlderShelfFromCollisions).
-                      const olderBlock =
-                        olderThreads.length > 0 ? (
-                          <ul role="list" data-sidebar-older-shelf className="flex flex-col gap-px">
-                            <li
-                              key="older-shelf-header"
-                              data-thread-selection-safe
-                              className="list-none"
-                            >
-                              <button
-                                type="button"
-                                onClick={toggleOlderShelf}
-                                aria-expanded={olderShelfExpanded}
-                                data-testid="sidebar-older-shelf-toggle"
-                                className="mb-1 mt-3 flex w-full cursor-pointer items-center gap-2 px-2.5 text-left"
-                              >
-                                <span className="text-xs font-medium text-muted-foreground/50">
-                                  {olderShelfExpanded ? "Older" : `Older (${olderThreads.length})`}
-                                </span>
-                                <span className="h-px flex-1 bg-sidebar-border/60" />
-                                <ChevronDownIcon
-                                  aria-hidden
-                                  className={cn(
-                                    "size-3 text-muted-foreground/50 transition-transform",
-                                    olderShelfExpanded && "rotate-180",
-                                  )}
-                                />
-                              </button>
-                            </li>
-                            {visibleOlderThreads.map((thread) =>
-                              renderThreadRowInner(thread, "older"),
-                            )}
-                          </ul>
-                        ) : null;
                       const from = dragState?.activeSection ?? null;
                       const items: ReactNode[] = [
                         <SidebarDraftBlock
@@ -6423,7 +6265,6 @@ export default function Sidebar() {
                               <SidebarSectionHeader
                                 key="snoozed-shelf-header"
                                 marker="snoozed-header"
-                                leadingContent={olderBlock}
                                 className="mt-auto"
                                 label={
                                   snoozedShelfExpanded
@@ -6442,7 +6283,6 @@ export default function Sidebar() {
                               <SidebarSectionHeader
                                 key="settled-shelf-header"
                                 marker="settled-header"
-                                leadingContent={snoozedThreads.length === 0 ? olderBlock : null}
                                 className={cn(snoozedThreads.length === 0 && "mt-auto")}
                                 label={
                                   settledShelfExpanded
@@ -6566,7 +6406,6 @@ export default function Sidebar() {
           visibleDraftSessionCount === 0 &&
           pinnedThreads.length +
             activeThreads.length +
-            olderThreads.length +
             snoozedThreads.length +
             settledThreads.length ===
             0 &&
