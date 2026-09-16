@@ -49,6 +49,8 @@ import {
   threadInputRespondReport,
   threadMessagesReport,
   threadSummary,
+  threadArchiveCommand,
+  threadContextCommand,
   threadContextEnvironment,
   threadContextShell,
   threadWaitDrainFlag,
@@ -56,6 +58,57 @@ import {
   type ThreadMessagesFetchDeps,
 } from "./thread.ts";
 import type { WaitForThreadResult } from "./threadWait.ts";
+
+describe("thread command boolean flags", () => {
+  for (const [args, enabled] of [
+    [[], []],
+    [
+      ["--after-turn", "--remove-worktree"],
+      ["afterTurn", "removeWorktree"],
+    ],
+    [["--status"], ["status"]],
+    [["--cancel"], ["cancel"]],
+    [
+      ["--after-turn=true", "--remove-worktree=true", "--status=false", "--cancel=false"],
+      ["afterTurn", "removeWorktree"],
+    ],
+  ] as const) {
+    it.effect(`parses archive ${args.join(" ") || "without flags"}`, () =>
+      Command.runWith(
+        threadArchiveCommand.pipe(
+          Command.withHandler((flags) =>
+            Effect.sync(() => {
+              assert.strictEqual(flags.threadId, "thread-1");
+              for (const key of ["afterTurn", "removeWorktree", "status", "cancel"] as const) {
+                assert.strictEqual(
+                  flags[key],
+                  enabled.some((name) => name === key),
+                );
+              }
+            }),
+          ),
+        ),
+        { version: "0.0.0" },
+      )(["thread-1", ...args]).pipe(Effect.provide(NodeServices.layer)),
+    );
+  }
+
+  for (const args of [["--json"], ["--shell"]]) {
+    it.effect(`parses context ${args.join(" ")}`, () =>
+      Command.runWith(
+        threadContextCommand.pipe(
+          Command.withHandler((flags) =>
+            Effect.sync(() => {
+              assert.strictEqual(flags.shell, args.includes("--shell"));
+              assert.strictEqual(flags.json, args.includes("--json"));
+            }),
+          ),
+        ),
+        { version: "0.0.0" },
+      )(["thread-1", ...args]).pipe(Effect.provide(NodeServices.layer)),
+    );
+  }
+});
 
 const parseDrainFlag = (args: ReadonlyArray<string>) => {
   let parsed: "agents" | "all" | null | undefined;
