@@ -558,7 +558,6 @@ export function buildThreadListV2ListItems(input: {
  * Active cards keep their saved order, with unarranged rows leading by recency.
  */
 export function buildThreadListV2Items(input: {
-  readonly customGroups?: readonly ThreadGroup[];
   readonly pendingOrder?: PendingThreadOrder | null;
   readonly threads: ReadonlyArray<EnvironmentThreadShell>;
   /** Sticky "needs attention" membership ("environmentId:threadId" keys).

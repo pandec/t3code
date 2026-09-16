@@ -692,7 +692,6 @@ function ThreadNavigationSidebarPane(
         nextSnoozeWakeAt: null,
       };
     return buildThreadListV2Items({
-      customGroups: customGroups.groups,
       pendingOrder,
       threads: threads.filter((thread) => thread.archivedAt === null),
       attentionMemberThreadKeys: attentionFilter.memberThreadKeys,
@@ -713,7 +712,6 @@ function ThreadNavigationSidebarPane(
       selectedThreadKey: props.selectedThreadKey ?? null,
     });
   }, [
-    customGroups.groups,
     alwaysShowPinnedInAttention,
     attentionFilter.memberThreadKeys,
     pendingOrder,

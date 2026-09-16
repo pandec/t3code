@@ -39,15 +39,14 @@ describe("mobile preferences persistence", () => {
   it("drops retired Older section keys saved by earlier builds", () => {
     // Preferences persisted before the Older shelf was removed still carry
     // its keys; they must fall away without disturbing their siblings.
-    expect(
-      sanitizePreferences({
-        sidebarOlderSectionEnabled: true,
-        sidebarOlderSectionAfterDays: 30,
-        sidebarOlderSectionCollapsedByDefault: true,
-        sidebarOlderShelfExpanded: true,
-        sidebarSnoozedShelfExpanded: true,
-      } as Parameters<typeof sanitizePreferences>[0]),
-    ).toEqual({ sidebarSnoozedShelfExpanded: true });
+    const legacyPreferences = {
+      sidebarOlderSectionEnabled: true,
+      sidebarOlderSectionAfterDays: 30,
+      sidebarOlderSectionCollapsedByDefault: true,
+      sidebarOlderShelfExpanded: true,
+      sidebarSnoozedShelfExpanded: true,
+    };
+    expect(sanitizePreferences(legacyPreferences)).toEqual({ sidebarSnoozedShelfExpanded: true });
   });
 
   it("keeps valid shelf fold states", () => {

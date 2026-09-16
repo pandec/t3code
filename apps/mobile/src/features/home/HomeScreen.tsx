@@ -835,7 +835,6 @@ export function HomeScreen(props: HomeScreenProps) {
     // Settled threads are live shells; archived threads keep their original
     // "hidden from lists" meaning.
     return buildThreadListV2Items({
-      customGroups: customGroups.groups,
       pendingOrder,
       threads: props.threads.filter((thread) => thread.archivedAt === null),
       attentionMemberThreadKeys: props.attentionMemberThreadKeys,
@@ -856,7 +855,6 @@ export function HomeScreen(props: HomeScreenProps) {
       selectedThreadKey: null,
     });
   }, [
-    customGroups.groups,
     alwaysShowPinnedInAttention,
     pendingOrder,
     queuedThreadKeys,
