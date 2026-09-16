@@ -46,6 +46,7 @@ import {
   AlarmClockOffIcon,
   ArchiveIcon,
   ArrowLeftIcon,
+  ArrowUpToLineIcon,
   CalendarIcon,
   CircleCheckIcon,
   CircleDotIcon,
@@ -115,8 +116,11 @@ import { useAtomCommand } from "../state/use-atom-command";
 import { useAtomQueryRunner } from "../state/use-atom-query-runner";
 import { useEnvironments, usePrimaryEnvironmentId } from "../state/environments";
 import {
+  readEnvironmentSupportsActiveReorder,
+  readEnvironmentSupportsPinReorder,
   readEnvironmentSupportsSnoozeIndefinite,
   readEnvironmentSupportsSnoozeUntilDone,
+  readThreadShells,
   useProjects,
   useServerConfigs,
   useThreadShells,
@@ -145,6 +149,7 @@ import {
   useRightPanelStore,
 } from "../rightPanelStore";
 import { getLatestThreadForProject, sortThreads } from "../lib/threadSort";
+import { planThreadMoveToTop } from "../lib/threadMoveToTop";
 import {
   cn,
   getLocalFileManagerName,
@@ -512,10 +517,13 @@ function threadActionIcon(id: CommandPaletteThreadActionId): ReactNode {
   }
 }
 
+// The dialog unmounts between invocations; keep an unfinished reorder across openings.
+const pendingMovesToTop = new Set<string>();
+
 async function reportThreadActionFailure(
   title: string,
   run: () => Promise<AtomCommandResult<unknown, unknown>>,
-): Promise<void> {
+): Promise<boolean> {
   const result = await run();
   if (result._tag === "Failure" && !isAtomCommandInterrupted(result)) {
     toastManager.add(
@@ -526,6 +534,7 @@ async function reportThreadActionFailure(
       }),
     );
   }
+  return result._tag === "Success";
 }
 
 function overlayModeForCommand(command: string | null): SearchOverlayMode | null {
@@ -782,6 +791,8 @@ function OpenCommandPaletteDialog(props: {
     confirmAndUnpinThread,
     unsettleThread,
     unsnoozeThread,
+    reorderPinnedThread,
+    reorderActiveThread,
   } = useThreadActions();
   const updateThreadMetadata = useAtomCommand(threadEnvironment.updateMetadata, {
     reportFailure: false,
@@ -2007,6 +2018,69 @@ function OpenCommandPaletteDialog(props: {
         ) ?? null);
   const openUnarchivedThread = currentThread?.archivedAt === null ? currentThread : null;
   const openUnarchivedThreadRef = openUnarchivedThread === null ? null : currentThreadRef;
+  const moveToTopPlan = useMemo(
+    () =>
+      planThreadMoveToTop({
+        threads,
+        threadRef: currentThreadRef,
+        groups: customGroupCatalog.groups,
+        now: new Date().toISOString(),
+        canReorder: (environmentId, section) => {
+          const capabilities = serverConfigs.get(environmentId)?.environment.capabilities;
+          return section === "pinned"
+            ? capabilities?.threadPinReorder === true
+            : capabilities?.threadActiveReorder === true;
+        },
+      }),
+    [threads, currentThreadRef, customGroupCatalog.groups, serverConfigs],
+  );
+  if (moveToTopPlan !== null && currentThreadRef !== null) {
+    const threadRef = currentThreadRef;
+    actionItems.push({
+      kind: "action",
+      value: "action:thread:move-to-top",
+      title: "Move current thread to top",
+      searchTerms: ["move", "top", "reorder", "group", "current thread"],
+      icon: <ArrowUpToLineIcon className={ITEM_ICON_CLASS} />,
+      ...(moveToTopPlan.disabledReason
+        ? { disabled: true, description: moveToTopPlan.disabledReason }
+        : {}),
+      run: async () => {
+        if (pendingMovesToTop.size > 0) return;
+        // Re-read shells at execution: a snooze or another client's reorder may
+        // have landed while the palette was open.
+        const plan = planThreadMoveToTop({
+          threads: readThreadShells(),
+          threadRef,
+          groups: customGroupCatalog.groups,
+          now: new Date().toISOString(),
+          canReorder: (environmentId, section) =>
+            section === "pinned"
+              ? readEnvironmentSupportsPinReorder(environmentId)
+              : readEnvironmentSupportsActiveReorder(environmentId),
+        });
+        if (plan === null || plan.disabledReason) return;
+        const moveKey = `${threadRef.environmentId}:${threadRef.threadId}`;
+        pendingMovesToTop.add(moveKey);
+        try {
+          const reorder = plan.section === "pinned" ? reorderPinnedThread : reorderActiveThread;
+          // Stop on failure; each successful key write remains a valid placement,
+          // as in sidebar drags. Keys live per thread on its own server, so
+          // there is no transaction to roll back.
+          for (const assignment of plan.assignments) {
+            if (
+              !(await reportThreadActionFailure("Failed to move thread to top", () =>
+                reorder(assignment.threadRef, assignment.orderKey),
+              ))
+            )
+              break;
+          }
+        } finally {
+          pendingMovesToTop.delete(moveKey);
+        }
+      },
+    });
+  }
   const archiveCurrentThreadAction = buildArchiveCurrentThreadAction({
     threadRef: openUnarchivedThreadRef,
     icon: <ArchiveIcon className={ITEM_ICON_CLASS} />,

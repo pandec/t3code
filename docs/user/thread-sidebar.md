@@ -90,6 +90,11 @@ position, so using **Un-settle** returns it to the top. Pinning and snoozing pre
 position until you move it again. Thread activity does not change the order. The settled shelf
 continues to use settlement time.
 
+On web and desktop, **Move current thread to top** in the command palette moves the open thread to
+the top of Pinned, Active, or its custom group without dragging. It counts group members hidden by
+a filter or a collapsed group, so the thread lands above all of them. The action is unavailable for
+drafts and for archived, snoozed, or settled threads.
+
 If dragging is unavailable for one environment, update the T3 Code server running in that
 environment. Pinned and active reordering require server support. Threads from older servers keep
 their default order until the server is updated.
