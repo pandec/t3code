@@ -47,7 +47,13 @@ describe("parseSnoozeQuery", () => {
   });
 
   it("rejects overflowing, sub-minute, and inherited-property inputs without throwing", () => {
-    for (const query of ["9".repeat(400) + "d", "999999999999999w", "0.1m", "constructor"]) {
+    for (const query of [
+      "9".repeat(400) + "d",
+      "999999999999999w",
+      "0.1m",
+      "0.9m",
+      "constructor",
+    ]) {
       expect(parseSnoozeQuery(query, now), query).toBeNull();
     }
   });

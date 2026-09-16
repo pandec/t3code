@@ -50,7 +50,7 @@ function parseDuration(text: string): { minutes: number; label: string } | null 
     minutes += amount * unit[1];
     labels.push(`${amount} ${unit[2]}${amount === 1 ? "" : "s"}`);
   }
-  return minutes > 0 ? { minutes: Math.round(minutes), label: labels.join(" ") } : null;
+  return minutes >= 1 ? { minutes: Math.round(minutes), label: labels.join(" ") } : null;
 }
 
 /** "14:00", "2pm", "2:30 pm", "9". Bare hours are only accepted when the
