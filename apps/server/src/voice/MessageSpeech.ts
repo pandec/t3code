@@ -33,6 +33,7 @@ import {
   speechFailureReasonFor,
   speechFileExtension,
 } from "./ttsTypes.ts";
+import { estimateSpeechDurationMs } from "./speechDuration.ts";
 
 /**
  * Rows are only ever written by this module, and every row from before WAV
@@ -75,6 +76,7 @@ interface MessageSpeechCacheRow {
   readonly transcript: string;
   readonly mimeType: string;
   readonly sizeBytes: number;
+  readonly durationMs: number | null;
   readonly sourceTextHash: string;
   readonly scriptRecipeHash: string;
   readonly voiceId: string;
@@ -202,6 +204,7 @@ export const layer = Layer.effect(
           transcript,
           mime_type AS "mimeType",
           size_bytes AS "sizeBytes",
+          duration_ms AS "durationMs",
           source_text_hash AS "sourceTextHash",
           script_recipe_hash AS "scriptRecipeHash",
           voice_id AS "voiceId",
@@ -219,6 +222,9 @@ export const layer = Layer.effect(
         transcript: row.transcript as MessageSpeechAttachment["transcript"],
         mimeType: cachedSpeechMimeType(row),
         sizeBytes: row.sizeBytes as MessageSpeechAttachment["sizeBytes"],
+        ...(row.durationMs !== null
+          ? { durationMs: row.durationMs as MessageSpeechAttachment["durationMs"] }
+          : {}),
         sourceTextHash: row.sourceTextHash,
         voiceId: row.voiceId,
         ttsModel: row.ttsModel,
@@ -365,6 +371,7 @@ export const layer = Layer.effect(
         transcript,
         mimeType,
         sizeBytes: audioBytes.byteLength,
+        durationMs: estimateSpeechDurationMs(audioBytes, mimeType),
         sourceTextHash,
         scriptRecipeHash,
         voiceId,

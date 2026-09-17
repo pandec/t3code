@@ -125,6 +125,7 @@ const toSynthesisResult = (
   transcript: speech.transcript,
   mimeType: speech.mimeType,
   sizeBytes: speech.sizeBytes,
+  ...(speech.durationMs !== undefined ? { durationMs: speech.durationMs } : {}),
   origin: speech.origin,
   createdAt: speech.createdAt,
 });

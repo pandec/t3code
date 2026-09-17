@@ -3,6 +3,7 @@ import { describe, expect, it, vi } from "vite-plus/test";
 import {
   clampListeningSpeed,
   createListeningPlaybackCoordinator,
+  formatIdleListeningClock,
   formatListeningClock,
   formatListeningSpeed,
   isThreadListeningLoaded,
@@ -224,6 +225,8 @@ describe("listening playback active track", () => {
     expect(formatListeningClock(0)).toBe("0:00");
     expect(formatListeningClock(65.9)).toBe("1:05");
     expect(formatListeningClock(Number.NaN)).toBe("0:00");
+    expect(formatIdleListeningClock(147_300)).toBe("0:00 / 2:27");
+    expect(formatIdleListeningClock(undefined)).toBe("--:-- / --:--");
   });
 
   it("reports loaded and paused states for the indicator toggle", () => {

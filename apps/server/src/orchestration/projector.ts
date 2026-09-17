@@ -872,6 +872,9 @@ export function projectEvent(
                     transcript: payload.speech.transcript,
                     mimeType: payload.speech.mimeType,
                     sizeBytes: payload.speech.sizeBytes,
+                    ...(payload.speech.durationMs !== undefined
+                      ? { durationMs: payload.speech.durationMs }
+                      : {}),
                     origin: payload.speech.origin,
                     createdAt: payload.speech.createdAt,
                   },
@@ -1004,6 +1007,7 @@ export function projectEvent(
                     transcript: speech.transcript,
                     mimeType: speech.mimeType,
                     sizeBytes: speech.sizeBytes,
+                    ...(speech.durationMs !== undefined ? { durationMs: speech.durationMs } : {}),
                     origin: speech.origin,
                     createdAt: speech.createdAt,
                   },

@@ -640,6 +640,9 @@ function applyThreadDetailEventUnretained(
               transcript: event.payload.speech.transcript,
               mimeType: event.payload.speech.mimeType,
               sizeBytes: event.payload.speech.sizeBytes,
+              ...(event.payload.speech.durationMs !== undefined
+                ? { durationMs: event.payload.speech.durationMs }
+                : {}),
               origin: event.payload.speech.origin,
               createdAt: event.payload.speech.createdAt,
             }
@@ -813,6 +816,7 @@ function applyThreadDetailEventUnretained(
             transcript: speech.transcript,
             mimeType: speech.mimeType,
             sizeBytes: speech.sizeBytes,
+            ...(speech.durationMs !== undefined ? { durationMs: speech.durationMs } : {}),
             origin: speech.origin,
             createdAt: speech.createdAt,
           },

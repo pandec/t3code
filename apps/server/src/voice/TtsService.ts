@@ -25,12 +25,20 @@ import {
   synthesizeElevenLabsSpeech,
 } from "./elevenLabsTts.ts";
 import { listOpenRouterSpeechModels, synthesizeOpenRouterSpeech } from "./openRouterTts.ts";
+import { appendSpeechAudio, splitSpeechText } from "./speechChunks.ts";
 import {
   getTtsCharacterLimit,
   readTtsEnvironmentDefaults,
   type TtsEnvironmentDefaults,
 } from "./ttsProfile.ts";
 import { TtsError, type SynthesizedSpeech } from "./ttsTypes.ts";
+
+/**
+ * How many pieces of one script OpenRouter synthesizes side by side. The
+ * ceiling is the vendor's per-project rate limit, not local resources; four
+ * kept a 3,000-character Gemini script under 30 seconds without tripping it.
+ */
+const OPENROUTER_CHUNK_CONCURRENCY = 4;
 
 /**
  * Secret-store name for the OpenRouter inference key used by speech. Kept
@@ -75,6 +83,44 @@ const unavailableError = (provider: TtsProvider) =>
   new TtsError({
     reason: "unavailable",
     detail: `${TTS_PROVIDER_LABELS[provider]} is not configured on this server.`,
+  });
+
+/**
+ * Folds chunk recordings into one, in script order, summing whatever cost the
+ * vendor reported per piece. Every piece came from the same model in the same
+ * call, so a container mismatch means the vendor changed output format
+ * between requests; that is refused rather than spliced together as noise.
+ */
+export const joinSynthesizedSpeech = (
+  pieces: ReadonlyArray<SynthesizedSpeech>,
+): Effect.Effect<SynthesizedSpeech, TtsError> =>
+  Effect.gen(function* () {
+    const [first, ...rest] = pieces;
+    if (first === undefined) {
+      return yield* new TtsError({ reason: "empty_audio", detail: "No speech was produced." });
+    }
+    let bytes = first.bytes;
+    let usd = first.cost.usd;
+    let billedCharacters = first.cost.billedCharacters;
+    for (const piece of rest) {
+      const merged =
+        piece.mimeType === first.mimeType
+          ? appendSpeechAudio(bytes, piece.bytes, first.mimeType)
+          : null;
+      if (merged === null) {
+        return yield* new TtsError({
+          reason: "request_failed",
+          detail: "The speech provider returned pieces in different audio formats.",
+        });
+      }
+      bytes = merged;
+      usd = usd === null || piece.cost.usd === null ? null : usd + piece.cost.usd;
+      billedCharacters =
+        billedCharacters === null || piece.cost.billedCharacters === null
+          ? null
+          : billedCharacters + piece.cost.billedCharacters;
+    }
+    return { bytes, mimeType: first.mimeType, cost: { usd, billedCharacters } };
   });
 
 export const layer = Layer.effect(
@@ -205,6 +251,8 @@ export const layer = Layer.effect(
           return yield* unavailableError(input.profile.provider);
         }
         if (input.profile.provider === "elevenlabs") {
+          // ElevenLabs Flash renders a thousand characters in under two
+          // seconds; splitting would only cost prosody at the seams.
           return yield* synthesizeElevenLabsSpeech({
             httpClient,
             apiKey: key.value,
@@ -213,15 +261,29 @@ export const layer = Layer.effect(
             text: input.text,
           });
         }
-        return yield* synthesizeOpenRouterSpeech({
-          httpClient,
-          apiKey: key.value,
-          modelId: input.profile.modelId,
-          voiceId: input.profile.voiceId,
-          instructions: input.profile.instructions,
-          text: input.text,
-          withCost: input.withCost === true,
+        const apiKey = key.value;
+        const synthesizeChunk = (text: string) =>
+          synthesizeOpenRouterSpeech({
+            httpClient,
+            apiKey,
+            modelId: input.profile.modelId,
+            voiceId: input.profile.voiceId,
+            instructions: input.profile.instructions,
+            text,
+            withCost: input.withCost === true,
+          });
+        const chunks = splitSpeechText(input.text);
+        if (chunks.length <= 1) {
+          return yield* synthesizeChunk(chunks[0] ?? input.text);
+        }
+        // OpenRouter's speech models generate at a few times real time, so a
+        // long script as one request runs for minutes. The pieces synthesize
+        // side by side and fold back together in order; the caller sees one
+        // recording, the same as a single request would have produced.
+        const pieces = yield* Effect.forEach(chunks, synthesizeChunk, {
+          concurrency: OPENROUTER_CHUNK_CONCURRENCY,
         });
+        return yield* joinSynthesizedSpeech(pieces);
       },
     );
 

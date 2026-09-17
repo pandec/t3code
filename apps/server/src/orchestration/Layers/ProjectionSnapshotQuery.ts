@@ -164,6 +164,7 @@ const ProjectionThreadMessageArtifactDbRowSchema = Schema.Struct({
   speechTranscript: Schema.NullOr(Schema.String),
   speechMimeType: Schema.NullOr(Schema.String),
   speechSizeBytes: Schema.NullOr(NonNegativeInt),
+  speechDurationMs: Schema.NullOr(NonNegativeInt),
   speechCreatedAt: Schema.NullOr(IsoDateTime),
   speechSourceTextHash: Schema.NullOr(Schema.String),
   speechOrigin: Schema.NullOr(MessageSpeechOrigin),
@@ -565,6 +566,7 @@ function mapMessageRow(
             transcript: row.speechTranscript,
             mimeType: row.speechMimeType,
             sizeBytes: row.speechSizeBytes,
+            ...(row.speechDurationMs !== null ? { durationMs: row.speechDurationMs } : {}),
             origin: row.speechOrigin ?? "user",
             createdAt: row.speechCreatedAt,
           },
@@ -1617,6 +1619,7 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
       speech.transcript AS "speechTranscript",
       speech.mime_type AS "speechMimeType",
       speech.size_bytes AS "speechSizeBytes",
+      speech.duration_ms AS "speechDurationMs",
       speech.created_at AS "speechCreatedAt",
       speech.source_text_hash AS "speechSourceTextHash",
       speech.origin AS "speechOrigin"

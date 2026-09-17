@@ -114,6 +114,7 @@ it.layer(Layer.fresh(makeProjectionPipelinePrefixedTestLayer("t3-message-speech-
           transcript: "Listening version",
           mimeType: "audio/mpeg" as const,
           sizeBytes: 123,
+          durationMs: 7_700,
           sourceTextHash: messageArtifactTextHash("Written reply"),
           scriptRecipeHash: "recipe-hash",
           voiceId: "voice-1",
@@ -253,12 +254,16 @@ it.layer(Layer.fresh(makeProjectionPipelinePrefixedTestLayer("t3-message-speech-
         `;
         assert.deepEqual(afterUser, [{ requestId: null, startedAt: null }]);
         assert.deepEqual(
-          yield* sql<{ readonly speechId: string; readonly origin: string }>`
-            SELECT speech_id AS "speechId", origin
+          yield* sql<{
+            readonly speechId: string;
+            readonly origin: string;
+            readonly durationMs: number | null;
+          }>`
+            SELECT speech_id AS "speechId", origin, duration_ms AS "durationMs"
             FROM projection_message_speech
             WHERE message_id = ${messageId}
           `,
-          [{ speechId: "speech-user", origin: "user" }],
+          [{ speechId: "speech-user", origin: "user", durationMs: 7_700 }],
         );
 
         const agentSpeech = {

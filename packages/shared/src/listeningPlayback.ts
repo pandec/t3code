@@ -32,6 +32,18 @@ export function formatListeningClock(seconds: number): string {
 }
 
 /**
+ * The clock a player shows before its recording has ever been loaded. The
+ * total comes from the stored recording so the listener sees the length up
+ * front; a recording persisted without one shows both sides unknown rather
+ * than a fake 0:00 total.
+ */
+export function formatIdleListeningClock(durationMs: number | undefined): string {
+  return durationMs === undefined
+    ? "--:-- / --:--"
+    : `0:00 / ${formatListeningClock(durationMs / 1000)}`;
+}
+
+/**
  * Identity of one recording, rich enough for the thread lists to point back
  * at the thread that owns the playing audio. Plain strings on purpose: this
  * package sits below the contracts brands, and the branded ids narrow to
