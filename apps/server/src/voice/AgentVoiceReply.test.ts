@@ -212,8 +212,8 @@ describe("stage", () => {
       segmentQueue.push(segment(0x01));
       const first = yield* agentVoiceReply.stage({ threadId, script: "First part." });
       expect(first.transcript).toBe("First part.");
-      // Length is recorded from the bytes: an MP3 is read at its constant 128 kbps.
-      expect(first.durationMs).toBe(Math.round((segment(0x01).byteLength * 8 * 1000) / 128_000));
+      // The ID3 tag is excluded from the 128 kbps estimate.
+      expect(first.durationMs).toBe(26);
       expect(Uint8Array.from(yield* fileSystem.readFile(speechPath(first.speechId)))).toEqual(
         segment(0x01),
       );

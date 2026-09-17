@@ -63,6 +63,7 @@ export const ProjectionMessageSpeech = Schema.Struct({
   transcript: TrimmedNonEmptyString,
   mimeType: SpeechAudioMimeType,
   sizeBytes: NonNegativeInt,
+  durationMs: Schema.optional(NonNegativeInt),
   sourceTextHash: TrimmedNonEmptyString,
   scriptRecipeHash: TrimmedNonEmptyString,
   voiceId: TrimmedNonEmptyString,

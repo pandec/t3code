@@ -3,6 +3,7 @@ import { assert, it } from "@effect/vitest";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
+import * as SqlClient from "effect/unstable/sql/SqlClient";
 
 import { ProjectionThreadMessageRepository } from "../Services/ProjectionThreadMessages.ts";
 import { ProjectionThreadMessageRepositoryLive } from "./ProjectionThreadMessages.ts";
@@ -13,6 +14,29 @@ const layer = it.layer(
 );
 
 layer("ProjectionThreadMessageRepository", (it) => {
+  it.effect("reads speech duration and omits it for legacy recordings", () =>
+    Effect.gen(function* () {
+      const repository = yield* ProjectionThreadMessageRepository;
+      const sql = yield* SqlClient.SqlClient;
+      const messageId = MessageId.make("message-speech-duration");
+      yield* sql`
+        INSERT INTO projection_message_speech (
+          message_id, thread_id, speech_id, transcript, mime_type, size_bytes, duration_ms,
+          source_text_hash, script_recipe_hash, voice_id, tts_model, created_at
+        ) VALUES (
+          ${messageId}, 'thread-duration', 'speech-duration', 'Transcript.', 'audio/mpeg',
+          16000, 1000, 'hash', 'recipe', 'voice', 'model', '2026-09-17T00:00:00.000Z'
+        )
+      `;
+      const speech = Option.getOrThrow(yield* repository.getSpeechByMessageId({ messageId }));
+      assert.equal(speech.durationMs, 1000);
+
+      yield* sql`UPDATE projection_message_speech SET duration_ms = NULL WHERE message_id = ${messageId}`;
+      const legacy = Option.getOrThrow(yield* repository.getSpeechByMessageId({ messageId }));
+      assert.isFalse("durationMs" in legacy);
+    }),
+  );
+
   it.effect("finds the latest live user-message time within one thread", () =>
     Effect.gen(function* () {
       const repository = yield* ProjectionThreadMessageRepository;

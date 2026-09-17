@@ -11,6 +11,7 @@ import {
   IsoDateTime,
   MessageId,
   MessageInputOrigin,
+  NonNegativeInt,
   OrchestrationMessageContext,
   ThreadId,
 } from "@t3tools/contracts";
@@ -276,7 +277,9 @@ const makeProjectionThreadMessageRepository = Effect.gen(function* () {
 
   const getProjectionMessageSpeechRow = SqlSchema.findOneOption({
     Request: GetProjectionThreadMessageInput,
-    Result: ProjectionMessageSpeech,
+    Result: ProjectionMessageSpeech.mapFields(
+      Struct.assign({ durationMs: Schema.NullOr(NonNegativeInt) }),
+    ),
     execute: ({ messageId }) =>
       sql`
         SELECT
@@ -286,6 +289,7 @@ const makeProjectionThreadMessageRepository = Effect.gen(function* () {
           transcript,
           mime_type AS "mimeType",
           size_bytes AS "sizeBytes",
+          duration_ms AS "durationMs",
           source_text_hash AS "sourceTextHash",
           script_recipe_hash AS "scriptRecipeHash",
           voice_id AS "voiceId",
@@ -482,6 +486,12 @@ const makeProjectionThreadMessageRepository = Effect.gen(function* () {
     getProjectionMessageSpeechRow(input).pipe(
       Effect.mapError(
         toPersistenceSqlError("ProjectionThreadMessageRepository.getSpeechByMessageId:query"),
+      ),
+      Effect.map(
+        Option.map(({ durationMs, ...speech }) => ({
+          ...speech,
+          ...(durationMs !== null ? { durationMs } : {}),
+        })),
       ),
     );
 

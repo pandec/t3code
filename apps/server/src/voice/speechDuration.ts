@@ -1,21 +1,21 @@
 import type { SpeechAudioMimeType } from "@t3tools/contracts";
 
+import { readMp3FrameHeader, stripLeadingId3v2Tag } from "./speechChunks.ts";
 import { readWavPcm } from "./wavAudio.ts";
 
 /**
- * Bit rate of every MP3 this server stores. ElevenLabs is asked for
- * `mp3_44100_128` outright, and OpenRouter's MP3 models are assumed to match
- * (see the join helper in speechChunks). A wrong assumption here only mis-
- * states the length shown before first play; the player corrects itself
- * from the loaded file.
+ * Bit rate assumed when the first MP3 frame cannot be read. ElevenLabs is
+ * asked for `mp3_44100_128` outright, so this only matters for a stream
+ * that does not start with a frame header.
  */
-const MP3_BIT_RATE = 128_000;
+const MP3_FALLBACK_BIT_RATE = 128_000;
 
 /**
  * Playable length of a stored recording, derived from its bytes so clients
  * can show the total before the audio loads. WAV is exact from the header.
- * MP3 is the CBR estimate; a leading ID3 tag or Xing frame adds a few
- * milliseconds of error, well under what the clock displays.
+ * MP3 uses the first frame's bit rate as a constant-bit-rate estimate, the
+ * same assumption the join helper makes, after dropping a leading ID3 tag.
+ * The player corrects the clock from the loaded file if the estimate is off.
  */
 export function estimateSpeechDurationMs(bytes: Uint8Array, mimeType: SpeechAudioMimeType): number {
   if (mimeType === "audio/wav") {
@@ -25,5 +25,7 @@ export function estimateSpeechDurationMs(bytes: Uint8Array, mimeType: SpeechAudi
       (wav.format.sampleRate * wav.format.channels * wav.format.bitsPerSample) / 8;
     return bytesPerSecond > 0 ? Math.round((wav.pcm.byteLength * 1000) / bytesPerSecond) : 0;
   }
-  return Math.round((bytes.byteLength * 8 * 1000) / MP3_BIT_RATE);
+  const audio = stripLeadingId3v2Tag(bytes);
+  const bitRate = readMp3FrameHeader(audio)?.bitRate ?? MP3_FALLBACK_BIT_RATE;
+  return Math.round((audio.byteLength * 8 * 1000) / bitRate);
 }
