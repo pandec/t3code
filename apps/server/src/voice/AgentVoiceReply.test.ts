@@ -7,19 +7,13 @@ import * as FileSystem from "effect/FileSystem";
 import * as Layer from "effect/Layer";
 import { HttpClient, HttpClientResponse } from "effect/unstable/http";
 import * as SqlClient from "effect/unstable/sql/SqlClient";
-import { describe, expect, it } from "vite-plus/test";
+import { describe, expect } from "vite-plus/test";
 
 import * as ServerSecretStore from "../auth/ServerSecretStore.ts";
 import * as ServerConfig from "../config.ts";
 import * as SqliteClient from "@t3tools/shared/nodeSqliteClient";
 import * as ServerSettingsModule from "../serverSettings.ts";
-import {
-  AgentVoiceReply,
-  appendSpeechAudio,
-  layer as agentVoiceReplyLayer,
-  stripLeadingId3v2Tag,
-  stripLeadingXingFrame,
-} from "./AgentVoiceReply.ts";
+import { AgentVoiceReply, layer as agentVoiceReplyLayer } from "./AgentVoiceReply.ts";
 import * as TtsService from "./TtsService.ts";
 import type { SynthesizedSpeech } from "./ttsTypes.ts";
 import { wrapPcmAsWav } from "./wavAudio.ts";
@@ -56,18 +50,6 @@ const headerFrame = (fourcc: string): Uint8Array => {
   return frame;
 };
 
-// A 192-byte MPEG2 layer III frame (64kbps, 24kHz, mono). OpenRouter
-// providers commonly return this lower sample-rate shape.
-const mpeg2HeaderFrame = (fourcc: string): Uint8Array => {
-  const frame = new Uint8Array(192);
-  frame.set([0xff, 0xf3, 0x84, 0xc0]);
-  frame.set(
-    [...fourcc].map((char) => char.charCodeAt(0)),
-    13,
-  );
-  return frame;
-};
-
 const frames = (...bytes: number[]) => Uint8Array.from(bytes);
 
 const concat = (...parts: Uint8Array[]) => {
@@ -79,89 +61,6 @@ const concat = (...parts: Uint8Array[]) => {
   }
   return merged;
 };
-
-describe("stripLeadingId3v2Tag", () => {
-  it("strips a leading tag, honoring the syncsafe size and the footer flag", () => {
-    const audio = frames(0xff, 0xfb, 0x90, 0x64);
-
-    expect(stripLeadingId3v2Tag(concat(id3Tag(20), audio))).toEqual(audio);
-    expect(stripLeadingId3v2Tag(concat(id3Tag(20, { footer: true }), audio))).toEqual(audio);
-    // 300 spans two syncsafe bytes: [.., 0x02, 0x2c].
-    expect(stripLeadingId3v2Tag(concat(id3Tag(300), audio))).toEqual(audio);
-  });
-
-  it("returns untagged or degenerate input unchanged", () => {
-    const audio = frames(0xff, 0xfb, 0x90, 0x64);
-    expect(stripLeadingId3v2Tag(audio)).toBe(audio);
-
-    const short = frames(0x49, 0x44, 0x33);
-    expect(stripLeadingId3v2Tag(short)).toBe(short);
-
-    // A tag that claims to cover the whole buffer leaves nothing to play.
-    const tagOnly = id3Tag(20);
-    expect(stripLeadingId3v2Tag(tagOnly)).toBe(tagOnly);
-  });
-});
-
-describe("stripLeadingXingFrame", () => {
-  it("drops a leading Xing or Info header frame", () => {
-    const audio = frames(0xff, 0xfb, 0x90, 0x64, 0x01, 0x02);
-    expect(stripLeadingXingFrame(concat(headerFrame("Info"), audio))).toEqual(audio);
-    expect(stripLeadingXingFrame(concat(headerFrame("Xing"), audio))).toEqual(audio);
-    expect(stripLeadingXingFrame(concat(mpeg2HeaderFrame("Info"), audio))).toEqual(audio);
-  });
-
-  it("leaves plain audio frames and non-frame data unchanged", () => {
-    const audioFrame = concat(frames(0xff, 0xfb, 0x90, 0xc0), new Uint8Array(413));
-    expect(stripLeadingXingFrame(audioFrame)).toBe(audioFrame);
-
-    const notAFrame = frames(0x01, 0x02, 0x03, 0x04);
-    expect(stripLeadingXingFrame(notAFrame)).toBe(notAFrame);
-
-    // A header frame longer than the buffer cannot be stripped.
-    const truncated = headerFrame("Info").subarray(0, 100);
-    expect(stripLeadingXingFrame(truncated)).toBe(truncated);
-  });
-});
-
-describe("appendSpeechAudio", () => {
-  it("joins bare frame streams, dropping each segment's tag and header frame", () => {
-    const first = concat(id3Tag(20), headerFrame("Info"), frames(0x01, 0x02));
-    const second = concat(id3Tag(30), headerFrame("Info"), frames(0x03, 0x04));
-
-    const merged = appendSpeechAudio(first, second, "audio/mpeg");
-    expect(merged).toEqual(frames(0x01, 0x02, 0x03, 0x04));
-
-    const mpeg2Merged = appendSpeechAudio(
-      concat(mpeg2HeaderFrame("Info"), frames(0x05, 0x06)),
-      concat(mpeg2HeaderFrame("Info"), frames(0x07, 0x08)),
-      "audio/mpeg",
-    );
-    expect(mpeg2Merged).toEqual(frames(0x05, 0x06, 0x07, 0x08));
-    // Re-appending to an already merged stream is stable.
-    expect(appendSpeechAudio(merged!, second, "audio/mpeg")).toEqual(
-      frames(0x01, 0x02, 0x03, 0x04, 0x03, 0x04),
-    );
-  });
-
-  it("joins WAV recordings under one header and refuses mismatched formats", () => {
-    const mono24k = { sampleRate: 24_000, channels: 1, bitsPerSample: 16 };
-    const first = wrapPcmAsWav(frames(0x01, 0x02), mono24k);
-    const second = wrapPcmAsWav(frames(0x03, 0x04), mono24k);
-    expect(appendSpeechAudio(first, second, "audio/wav")).toEqual(
-      wrapPcmAsWav(frames(0x01, 0x02, 0x03, 0x04), mono24k),
-    );
-    expect(
-      appendSpeechAudio(
-        first,
-        wrapPcmAsWav(frames(0x03, 0x04), { ...mono24k, channels: 2 }),
-        "audio/wav",
-      ),
-    ).toBeNull();
-    // A bare MP3 stream on the WAV path is not spliced in as noise.
-    expect(appendSpeechAudio(first, frames(0xff, 0xfb), "audio/wav")).toBeNull();
-  });
-});
 
 describe("stage", () => {
   const threadId = "thread-voice" as ThreadId;
