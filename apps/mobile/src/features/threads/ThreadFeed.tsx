@@ -45,6 +45,7 @@ import { squashAtomCommandFailure } from "@t3tools/client-runtime/state/runtime"
 import { CHAT_LIST_ANCHOR_OFFSET, resolveChatListAnchoredEndSpace } from "@t3tools/shared/chatList";
 import { imageMimeType } from "@t3tools/shared/image";
 import {
+  formatIdleListeningClock,
   formatListeningClock,
   formatListeningSpeed,
   LISTENING_SPEED_MAX,
@@ -2391,11 +2392,16 @@ function AssistantSpeechPlayer(props: {
             {isActiveTrack ? (
               <ListeningTransportProgress trackColor={trackColor} />
             ) : (
-              <View className="flex-1">
+              // Same footprint as the live transport so first play causes no
+              // layout shift.
+              <View className="flex-1 gap-1.5">
                 <View
                   className="h-1.5 overflow-hidden rounded-full"
                   style={{ backgroundColor: trackColor }}
                 />
+                <Text className="font-t3-medium text-[11px] tabular-nums text-foreground-muted">
+                  {formatIdleListeningClock(props.speech.durationMs)}
+                </Text>
               </View>
             )}
           </View>

@@ -50,6 +50,7 @@ import { formatDuration } from "@t3tools/shared/orchestrationTiming";
 import { getProjectFaviconCacheKey } from "@t3tools/shared/projectFavicon";
 import { observeVisibleAnimation } from "../../lib/visibleAnimation";
 import {
+  formatIdleListeningClock,
   formatListeningClock,
   formatListeningSpeed,
   LISTENING_SPEED_MAX,
@@ -2749,10 +2750,8 @@ function AssistantSpeechPlayer({
                   type="range"
                   value={0}
                 />
-                {/* Duration is unknown until the recording loads; a fake
-                    0:00 total would be a lie. Same width under tabular-nums. */}
                 <p className="mt-0.5 text-[11px] tabular-nums text-muted-foreground">
-                  --:-- / --:--
+                  {formatIdleListeningClock(speech.durationMs)}
                 </p>
               </div>
             )}

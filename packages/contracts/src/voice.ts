@@ -238,6 +238,9 @@ export const MessageSpeechSynthesisResult = Schema.Struct({
   transcript: TrimmedNonEmptyString.check(Schema.isMaxLength(MESSAGE_SPEECH_MAX_SCRIPT_CHARS)),
   mimeType: SpeechAudioMimeType,
   sizeBytes: NonNegativeInt,
+  // Playable length, so the player can show the total before the audio
+  // loads. Optional: recordings persisted before it was recorded have none.
+  durationMs: Schema.optional(NonNegativeInt),
   // Optional so payloads persisted before agent voice replies still decode;
   // absent means "user".
   origin: Schema.optional(MessageSpeechOrigin),
@@ -259,6 +262,8 @@ const MessageSpeechAttachmentBase = {
   transcript: TrimmedNonEmptyString.check(Schema.isMaxLength(MESSAGE_SPEECH_MAX_SCRIPT_CHARS)),
   mimeType: SpeechAudioMimeType,
   sizeBytes: NonNegativeInt,
+  // Optional keeps events persisted before the field was recorded replayable.
+  durationMs: Schema.optional(NonNegativeInt),
   sourceTextHash: TrimmedNonEmptyString,
   voiceId: TrimmedNonEmptyString,
   ttsModel: TrimmedNonEmptyString,

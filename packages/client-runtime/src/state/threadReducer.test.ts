@@ -1088,6 +1088,7 @@ describe("applyThreadDetailEvent", () => {
             transcript: "Spoken version",
             mimeType: "audio/mpeg",
             sizeBytes: 4321,
+            durationMs: 270,
             sourceTextHash: "hash",
             voiceId: "voice-1",
             ttsModel: "eleven_flash_v2_5",
@@ -1108,6 +1109,7 @@ describe("applyThreadDetailEvent", () => {
         expect(updated?.speech?.origin).toBe("agent");
         expect(updated?.speech?.speechId).toBe("speech-1");
         expect(updated?.speech?.transcript).toBe("Spoken version");
+        expect(updated?.speech?.durationMs).toBe(270);
       }
     });
 

@@ -212,6 +212,8 @@ describe("stage", () => {
       segmentQueue.push(segment(0x01));
       const first = yield* agentVoiceReply.stage({ threadId, script: "First part." });
       expect(first.transcript).toBe("First part.");
+      // Length is recorded from the bytes: an MP3 is read at its constant 128 kbps.
+      expect(first.durationMs).toBe(Math.round((segment(0x01).byteLength * 8 * 1000) / 128_000));
       expect(Uint8Array.from(yield* fileSystem.readFile(speechPath(first.speechId)))).toEqual(
         segment(0x01),
       );
@@ -224,6 +226,7 @@ describe("stage", () => {
       const mergedBytes = Uint8Array.from(yield* fileSystem.readFile(speechPath(second.speechId)));
       expect(mergedBytes).toEqual(frames(0x01, 0x01, 0x02, 0x02));
       expect(second.sizeBytes).toBe(mergedBytes.byteLength);
+      expect(second.durationMs).toBe(Math.round((mergedBytes.byteLength * 8 * 1000) / 128_000));
       expect(yield* fileSystem.exists(speechPath(first.speechId))).toBe(false);
 
       // A call from a newer turn replaces instead of appending.

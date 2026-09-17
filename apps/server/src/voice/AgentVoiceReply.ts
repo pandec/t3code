@@ -25,6 +25,7 @@ import { ServerSettingsService } from "../serverSettings.ts";
 import { getTtsCharacterLimit, resolveAgentReplyTtsProfile } from "./ttsProfile.ts";
 import { TtsService } from "./TtsService.ts";
 import { appendSpeechAudio } from "./speechChunks.ts";
+import { estimateSpeechDurationMs } from "./speechDuration.ts";
 import { speechFailureReasonFor, speechFileExtension } from "./ttsTypes.ts";
 
 /**
@@ -252,6 +253,10 @@ export const layer = Layer.effect(
                 speechId,
                 transcript: transcript as MessageSpeechAttachment["transcript"],
                 sizeBytes: mergedBytes.byteLength as MessageSpeechAttachment["sizeBytes"],
+                durationMs: estimateSpeechDurationMs(
+                  mergedBytes,
+                  mimeType,
+                ) as MessageSpeechAttachment["durationMs"],
                 sourceTextHash: NodeCrypto.createHash("sha256")
                   .update(transcript, "utf8")
                   .digest("hex") as MessageSpeechAttachment["sourceTextHash"],
@@ -268,6 +273,10 @@ export const layer = Layer.effect(
               transcript: script as MessageSpeechAttachment["transcript"],
               mimeType,
               sizeBytes: audioBytes.byteLength as MessageSpeechAttachment["sizeBytes"],
+              durationMs: estimateSpeechDurationMs(
+                audioBytes,
+                mimeType,
+              ) as MessageSpeechAttachment["durationMs"],
               sourceTextHash: NodeCrypto.createHash("sha256")
                 .update(script, "utf8")
                 .digest("hex") as MessageSpeechAttachment["sourceTextHash"],

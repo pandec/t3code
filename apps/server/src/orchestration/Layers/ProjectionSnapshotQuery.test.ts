@@ -421,11 +421,11 @@ projectionSnapshotLayer("ProjectionSnapshotQuery", (it) => {
       `;
       yield* sql`
         INSERT INTO projection_message_speech (
-          message_id, thread_id, speech_id, transcript, mime_type, size_bytes,
+          message_id, thread_id, speech_id, transcript, mime_type, size_bytes, duration_ms,
           source_text_hash, script_recipe_hash, voice_id, tts_model, created_at
         ) VALUES (
           'message-1', 'thread-1', 'speech-1', 'A persisted transcript.',
-          'audio/mpeg', 42,
+          'audio/mpeg', 42, 2625,
           'cb4c9dde1134dad525db661e435148f33868d34c644cc34bead9caa957d3e700',
           'speech-recipe', 'voice-1',
           'eleven_flash_v2_5', '2026-02-24T00:00:05.500Z'
@@ -719,6 +719,7 @@ projectionSnapshotLayer("ProjectionSnapshotQuery", (it) => {
                 transcript: "A persisted transcript.",
                 mimeType: "audio/mpeg",
                 sizeBytes: 42,
+                durationMs: 2625,
                 origin: "user",
                 createdAt: "2026-02-24T00:00:05.500Z",
               },
