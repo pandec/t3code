@@ -13,3 +13,4 @@ export const ThreadGroup = Schema.Struct({
 export type ThreadGroup = typeof ThreadGroup.Type;
 export const ThreadGroups = Schema.Array(ThreadGroup);
 export const SidebarCustomGroupsPosition = Schema.Literals(["above-active", "below-active"]);
+export type SidebarCustomGroupsPosition = typeof SidebarCustomGroupsPosition.Type;

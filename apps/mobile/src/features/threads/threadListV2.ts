@@ -493,6 +493,21 @@ export function buildThreadListV2ListItems(input: {
   }
   const activeItems = threadItems.slice(pinnedEnd, activeEnd);
   if (input.customGroups?.length) {
+    // Active leads and custom groups follow, matching the web default.
+    const ungrouped = activeItems.filter(
+      (item) =>
+        item.type !== "v2-thread" ||
+        threadGroupId(item.item.thread, input.customGroups ?? []) === null,
+    );
+    result.push({
+      type: "v2-custom-group",
+      key: "v2-active-header",
+      groupId: null,
+      name: "Active",
+      count: ungrouped.length,
+      expanded: true,
+    });
+    result.push(...ungrouped, ...pendingItems);
     for (const group of input.customGroups) {
       const rows = activeItems.filter(
         (item) =>
@@ -517,20 +532,6 @@ export function buildThreadListV2ListItems(input: {
         ),
       );
     }
-    const ungrouped = activeItems.filter(
-      (item) =>
-        item.type !== "v2-thread" ||
-        threadGroupId(item.item.thread, input.customGroups ?? []) === null,
-    );
-    result.push({
-      type: "v2-custom-group",
-      key: "v2-active-header",
-      groupId: null,
-      name: "Active",
-      count: ungrouped.length,
-      expanded: true,
-    });
-    result.push(...ungrouped, ...pendingItems);
   } else result.push(...activeItems, ...pendingItems);
   if (snoozedShelfHeaderIndex !== null && snoozedCount > 0) {
     result.push({

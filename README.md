@@ -11,7 +11,7 @@ This is a personal fork of [pingdotgg/t3code](https://github.com/pingdotgg/t3cod
 
 - **Move a thread to the top.** The command palette can move the current thread to the top of Pinned, Active, or its custom group, including members hidden by filters or collapsed groups. It preserves group membership and excludes drafts, archived, snoozed, and settled threads. New or reopened threads still follow the sidebar's usual placement rules.
 
-- **Custom thread groups.** Create named sidebar groups across projects and environments, drag threads between them, and arrange the same groups on mobile. Pinning, snoozing, and settlement retain group membership. Choose whether groups sit above or below Active in Settings → Extras, and optionally show a Thread groups toolbar button there; the command palette always offers New thread group, Manage thread groups, and Move current thread to group.
+- **Custom thread groups.** Create named sidebar groups across projects and environments, drag threads between them, and arrange the same groups on mobile. Pinning, snoozing, and settlement retain group membership. Groups sit below Active by default; on web and desktop choose above or below in Settings → Extras, and optionally show a Thread groups toolbar button there; the command palette always offers New thread group, Manage thread groups, and Move current thread to group.
 
 - **Rename and snooze from the command palette.** Rename current thread edits the title inside the palette input, and Snooze current thread lists the snooze presets with their wake times and also parses a typed time such as `45m`, `2pm`, or `fri 9am`. Both are available as unbound keybinding commands (Thread: Rename, Thread: Snooze) that open the palette straight into that step.
 

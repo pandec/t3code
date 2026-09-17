@@ -713,6 +713,10 @@ function CommandPaletteDialog(props: {
       data-palette-mode={props.mode}
       data-testid="command-palette"
       finalFocus={() => {
+        // A command may have opened another dialog (thread groups, link PR)
+        // that already holds focus; pulling it back to the composer would
+        // send the user's typing to the thread instead of the dialog.
+        if (document.activeElement?.closest('[data-slot="dialog-popup"]')) return false;
         // The app-root composer belongs to the primary pane; while the split
         // is open with the secondary pane active (including a pick that just
         // activated it), focus must return there instead.
