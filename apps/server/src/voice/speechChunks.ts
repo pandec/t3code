@@ -33,10 +33,11 @@ export function splitSpeechText(text: string, maxChars = SPEECH_CHUNK_MAX_CHARS)
     const unit = paragraph.trim();
     if (unit.length === 0) continue;
     if (unit.length > maxChars) {
-      // Too long for one piece even alone: fall through to sentences.
-      for (const sentence of splitSentences(unit)) {
-        appendUnit(sentence, " ");
-      }
+      // Too long for one piece even alone: fall through to sentences. The
+      // first keeps the paragraph break behind it; the rest follow a space.
+      splitSentences(unit, maxChars).forEach((sentence, index) => {
+        appendUnit(sentence, index === 0 ? "\n\n" : " ");
+      });
       continue;
     }
     appendUnit(unit, "\n\n");
@@ -62,7 +63,7 @@ export function splitSpeechText(text: string, maxChars = SPEECH_CHUNK_MAX_CHARS)
  * matter; the whitespace requirement handles the first and a minimum piece
  * length keeps the second from producing a fragment.
  */
-function splitSentences(paragraph: string): string[] {
+function splitSentences(paragraph: string, maxChars: number): string[] {
   const pieces: string[] = [];
   let start = 0;
   const pattern = /[.!?]["')\]]*\s+/g;
@@ -74,9 +75,15 @@ function splitSentences(paragraph: string): string[] {
   }
   const tail = paragraph.slice(start).trim();
   if (tail.length > 0) {
-    // A short tail joins the previous sentence rather than standing alone.
-    if (tail.length < SPEECH_CHUNK_MIN_CHARS && pieces.length > 0) {
-      pieces[pieces.length - 1] = `${pieces[pieces.length - 1]} ${tail}`;
+    // A short tail joins the previous sentence rather than standing alone,
+    // as long as the pair still fits one piece.
+    const last = pieces[pieces.length - 1];
+    if (
+      tail.length < SPEECH_CHUNK_MIN_CHARS &&
+      last !== undefined &&
+      last.length + 1 + tail.length <= maxChars
+    ) {
+      pieces[pieces.length - 1] = `${last} ${tail}`;
     } else {
       pieces.push(tail);
     }
@@ -129,6 +136,7 @@ export interface Mp3FrameHeader {
   readonly isMono: boolean;
 }
 
+/** Parses the frame header at the start of `bytes`, or null when it is not one this module handles. */
 export function readMp3FrameHeader(bytes: Uint8Array): Mp3FrameHeader | null {
   if (bytes.byteLength < 4 || bytes[0] !== 0xff || (bytes[1]! & 0xe0) !== 0xe0) {
     return null;

@@ -81,6 +81,29 @@ describe("splitSpeechText", () => {
     expect(chunks).toEqual([`${sentences[0]} ${sentences[1]}`, sentences[2]]);
   });
 
+  it("keeps the paragraph break when an oversized paragraph follows a short one", () => {
+    const intro = sentence(1, 200);
+    const sentences = [sentence(2, 250), sentence(3, 250), sentence(4, 250)];
+    const chunks = splitSpeechText(`${intro}\n\n${sentences.join(" ")}`, 520);
+    expect(chunks).toEqual([`${intro}\n\n${sentences[0]}`, `${sentences[1]} ${sentences[2]}`]);
+  });
+
+  it("does not let a short tail push a piece past the limit", () => {
+    const first = sentence(1, 500);
+    const tail = sentence(3, 150);
+    // Room for the tail beside its sentence: it joins.
+    expect(splitSpeechText(`${first} ${sentence(2, 500)} ${tail}`, 800)).toEqual([
+      first,
+      `${sentence(2, 500)} ${tail}`,
+    ]);
+    // No room: it stands alone instead of overflowing the piece.
+    expect(splitSpeechText(`${first} ${sentence(2, 700)} ${tail}`, 800)).toEqual([
+      first,
+      sentence(2, 700),
+      tail,
+    ]);
+  });
+
   it("never cuts a sentence, even one longer than the limit", () => {
     const long = sentence(1, 900);
     expect(splitSpeechText(`${long}\n\n${sentence(2, 100)}`, 400)).toEqual([
