@@ -1887,6 +1887,8 @@ it("keeps grouped work in its group and uses the lifecycle shelves when parked",
   expect(rows).toContainEqual(
     expect.objectContaining({ type: "v2-custom-group", groupId: "research", count: 1 }),
   );
+  const headers = rows.flatMap((row) => (row.type === "v2-custom-group" ? [row.groupId] : []));
+  expect(headers).toEqual([null, "research"]);
   const snoozed = buildThreadListV2Items({
     threads: [{ ...grouped, snoozedAt: NOW, snoozedUntil: "2099-01-01T00:00:00.000Z" }],
     environmentId: null,

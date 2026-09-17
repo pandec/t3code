@@ -237,7 +237,7 @@ export function ThreadArrangementSheet(props: { onClose: () => void }) {
     for (const section of ["pinned", "active", "snoozed", "settled"] as const) {
       if (section === "snoozed" && sections[section].length === 0) continue;
       if (section === "active" && customGroups.groups.length) {
-        for (const group of [...customGroups.groups, null]) {
+        for (const group of [null, ...customGroups.groups]) {
           const members = sections.active.filter(
             (thread) => threadGroupId(thread, customGroups.groups) === (group?.id ?? null),
           );

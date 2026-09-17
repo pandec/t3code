@@ -471,7 +471,7 @@ export const DiffColorScheme = Schema.Literals(["red-green", "blue-orange"]);
 
 export const ClientSettingsSchema = Schema.Struct({
   sidebarCustomGroupsPosition: SidebarCustomGroupsPosition.pipe(
-    Schema.withDecodingDefault(Effect.succeed("above-active" as const)),
+    Schema.withDecodingDefault(Effect.succeed("below-active" as const)),
   ),
   diffColorScheme: DiffColorScheme.pipe(
     Schema.withDecodingDefault(Effect.succeed("red-green" as const)),

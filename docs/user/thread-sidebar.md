@@ -121,8 +121,8 @@ Pinned, snoozed, settled, and archived threads appear in their usual sections an
 group. Unpinning, waking, or reopening returns them to the group when no other state takes precedence.
 Grouped threads still auto-settle.
 
-Custom groups stay together above Active by default. On web and desktop, use
-**Settings → Extras → Sidebar → Custom group position** to place them below Active instead.
+Custom groups stay together below Active by default. On web and desktop, use
+**Settings → Extras → Sidebar → Custom group position** to place them above Active instead.
 Group fold states are remembered on each device.
 
 Mobile shows the same groups. Use **Arrange threads** to drag between groups or back to Active.

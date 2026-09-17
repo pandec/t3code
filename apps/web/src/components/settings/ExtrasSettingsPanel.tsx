@@ -20,7 +20,7 @@ import {
   MIN_TURN_COMPLETION_MIN_DURATION_SECONDS,
   type SidebarThreadProviderIconVisibility,
 } from "@t3tools/contracts/settings";
-import type { EnvironmentId } from "@t3tools/contracts";
+import type { EnvironmentId, SidebarCustomGroupsPosition } from "@t3tools/contracts";
 import { normalizeLinearTeamKeys } from "@t3tools/contracts/settings";
 import { formatUsd } from "@t3tools/shared/usageFormat";
 
@@ -73,6 +73,11 @@ const THREAD_PROVIDER_ICON_LABELS: Record<SidebarThreadProviderIconVisibility, s
   hover: "On hover",
   always: "Always",
   never: "Never",
+};
+
+const CUSTOM_GROUP_POSITION_LABELS: Record<SidebarCustomGroupsPosition, string> = {
+  "below-active": "Below Active",
+  "above-active": "Above Active",
 };
 
 /** Half-second granularity keeps the steer window readable in seconds. */
@@ -955,11 +960,16 @@ function SidebarExtrasSection() {
                 }}
               >
                 <SelectTrigger aria-label="Custom group position">
-                  <SelectValue />
+                  <SelectValue>
+                    {CUSTOM_GROUP_POSITION_LABELS[settings.sidebarCustomGroupsPosition]}
+                  </SelectValue>
                 </SelectTrigger>
-                <SelectPopup>
-                  <SelectItem value="above-active">Above Active</SelectItem>
-                  <SelectItem value="below-active">Below Active</SelectItem>
+                <SelectPopup align="end" alignItemWithTrigger={false}>
+                  {Object.entries(CUSTOM_GROUP_POSITION_LABELS).map(([value, label]) => (
+                    <SelectItem hideIndicator key={value} value={value}>
+                      {label}
+                    </SelectItem>
+                  ))}
                 </SelectPopup>
               </Select>
             }
