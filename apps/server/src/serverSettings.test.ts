@@ -304,6 +304,35 @@ it.layer(NodeServices.layer)("server settings", (it) => {
     ).pipe(Effect.provide(makeServerSettingsLayer())),
   );
 
+  it.effect("persists and broadcasts group placement and ignores stale catalog replicas", () =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        const config = yield* ServerConfig.ServerConfig;
+        const fs = yield* FileSystem.FileSystem;
+        const service = yield* ServerSettingsModule.ServerSettingsService;
+        const original = {
+          id: "research",
+          name: "Research",
+          orderKey: "m",
+          deleted: false,
+          revision: "0000000000000001:a",
+        };
+        yield* service.updateSettings({ threadGroups: [original] });
+        const changes = yield* service.subscribeChanges;
+        const moved = { ...original, aboveActive: true, revision: "0000000000000002:b" };
+        yield* service.updateSettings({ threadGroups: [moved] });
+        const change = Option.getOrUndefined(yield* Stream.runHead(changes));
+        assert.deepEqual(change?.threadGroups, [moved]);
+        const reconnected = yield* service.updateSettings({ threadGroups: [original] });
+        assert.deepEqual(reconnected.threadGroups, [moved]);
+        const persisted = yield* fs
+          .readFileString(config.settingsPath)
+          .pipe(Effect.flatMap(Schema.decodeUnknownEffect(Schema.fromJsonString(ServerSettings))));
+        assert.deepEqual(persisted.threadGroups, [moved]);
+      }),
+    ).pipe(Effect.provide(makeServerSettingsLayer())),
+  );
+
   it.effect("persists and broadcasts thread recovery and settlement settings", () =>
     Effect.scoped(
       Effect.gen(function* () {

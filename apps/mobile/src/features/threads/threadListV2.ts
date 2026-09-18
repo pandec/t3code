@@ -1,5 +1,5 @@
 import type { ThreadGroup } from "@t3tools/contracts";
-import { threadGroupId } from "@t3tools/shared/threadGroups";
+import { threadGroupId, threadGroupSections } from "@t3tools/shared/threadGroups";
 import { passesAttentionFilter } from "@t3tools/client-runtime/state/thread-attention";
 import { threadPullRequestSearchTerms } from "@t3tools/shared/threadPullRequests";
 import {
@@ -498,40 +498,31 @@ export function buildThreadListV2ListItems(input: {
   const isSelected = (row: ThreadListV2ListItem) =>
     row.type === "v2-thread" &&
     `${row.item.thread.environmentId}:${row.item.thread.id}` === input.selectedThreadKey;
-  // Active leads and custom groups follow, matching the web default. Every
-  // group folds the same way: rows hide while collapsed, except the open
-  // thread. Without custom groups the Active header appears only when it
-  // has rows, so an empty list still reads as empty.
-  const ungrouped = activeItems.filter(
-    (item) => item.type !== "v2-thread" || threadGroupId(item.item.thread, customGroups) === null,
-  );
+  // Groups sit on the side of Active chosen on web or desktop. Every group
+  // folds the same way: rows hide while collapsed, except the open thread.
+  // Without custom groups the Active header appears only when it has rows,
+  // so an empty list still reads as empty.
   const activeExpanded = input.activeShelfExpanded !== false;
-  if (ungrouped.length > 0 || customGroups.length > 0) {
-    result.push({
-      type: "v2-custom-group",
-      key: "v2-active-header",
-      groupId: null,
-      name: "Active",
-      count: ungrouped.length,
-      expanded: activeExpanded,
-    });
-  }
-  result.push(...(activeExpanded ? ungrouped : ungrouped.filter(isSelected)), ...pendingItems);
-  for (const group of customGroups) {
+  for (const group of threadGroupSections(customGroups)) {
+    const id = group?.id ?? null;
     const rows = activeItems.filter(
-      (item) =>
-        item.type === "v2-thread" && threadGroupId(item.item.thread, customGroups) === group.id,
+      (item) => item.type === "v2-thread" && threadGroupId(item.item.thread, customGroups) === id,
     );
-    const expanded = !input.collapsedGroupIds?.has(group.id);
+    if (group === null && rows.length === 0 && customGroups.length === 0) {
+      result.push(...pendingItems);
+      continue;
+    }
+    const expanded = group === null ? activeExpanded : !input.collapsedGroupIds?.has(group.id);
     result.push({
       type: "v2-custom-group",
-      key: `v2-custom-group:${group.id}`,
-      groupId: group.id,
-      name: group.name,
+      key: group === null ? "v2-active-header" : `v2-custom-group:${group.id}`,
+      groupId: id,
+      name: group?.name ?? "Active",
       count: rows.length,
       expanded,
     });
     result.push(...(expanded ? rows : rows.filter(isSelected)));
+    if (group === null) result.push(...pendingItems);
   }
   if (snoozedShelfHeaderIndex !== null && snoozedCount > 0) {
     result.push({

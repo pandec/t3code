@@ -2,6 +2,7 @@ import { randomUUID } from "~/lib/utils";
 import { useCallback, useEffect, useMemo, useRef } from "react";
 import type { EnvironmentId, ThreadGroup } from "@t3tools/contracts";
 import {
+  canSyncThreadGroups,
   mergeThreadGroups,
   retryThreadGroupSync,
   nextThreadGroupRevision,
@@ -20,7 +21,7 @@ export function useThreadGroupCatalog() {
       environments.filter(
         (environment) =>
           environment.connection.phase === "connected" &&
-          environment.serverConfig?.environment.capabilities.threadCustomGroups === true,
+          canSyncThreadGroups(environment.serverConfig?.environment.capabilities),
       ),
     [environments],
   );

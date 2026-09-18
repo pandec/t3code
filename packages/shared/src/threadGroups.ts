@@ -1,5 +1,14 @@
 import * as Effect from "effect/Effect";
-import type { ThreadGroup } from "@t3tools/contracts";
+import type { ExecutionEnvironmentCapabilities, ThreadGroup } from "@t3tools/contracts";
+
+/** Only write catalogs where placement survives decoding, including repair pushes. */
+export function canSyncThreadGroups(
+  capabilities:
+    | Pick<ExecutionEnvironmentCapabilities, "threadCustomGroups" | "threadGroupPlacement">
+    | undefined,
+): boolean {
+  return capabilities?.threadCustomGroups === true && capabilities.threadGroupPlacement === true;
+}
 
 /** Merge per group so edits on disconnected servers preserve unrelated groups.
  * Deleted entries remain in the catalog to prevent resurrection on reconnect. */
@@ -13,7 +22,11 @@ export function mergeThreadGroups(
       if (
         !previous ||
         group.revision > previous.revision ||
-        (group.revision === previous.revision && JSON.stringify(group) > JSON.stringify(previous))
+        (group.revision === previous.revision &&
+          // Older clients can echo the same revision with placement stripped.
+          ((group.aboveActive === undefined) === (previous.aboveActive === undefined)
+            ? JSON.stringify(group) > JSON.stringify(previous)
+            : group.aboveActive !== undefined))
       ) {
         groups.set(group.id, group);
       }
@@ -25,9 +38,20 @@ export function mergeThreadGroups(
 export function visibleThreadGroups(catalog: ReadonlyArray<ThreadGroup>): ThreadGroup[] {
   return catalog
     .filter((group) => !group.deleted)
-    .sort((a, b) =>
-      a.orderKey < b.orderKey ? -1 : a.orderKey > b.orderKey ? 1 : a.id < b.id ? -1 : 1,
+    .sort(
+      (a, b) =>
+        Number(b.aboveActive === true) - Number(a.aboveActive === true) ||
+        (a.orderKey < b.orderKey ? -1 : a.orderKey > b.orderKey ? 1 : a.id < b.id ? -1 : 1),
     );
+}
+
+/** Insert Active into the visible, sorted catalog for every client's list and editor. */
+export function threadGroupSections(groups: readonly ThreadGroup[]): Array<ThreadGroup | null> {
+  return [
+    ...groups.filter((group) => group.aboveActive === true),
+    null,
+    ...groups.filter((group) => group.aboveActive !== true),
+  ];
 }
 
 export function nextThreadGroupRevision(

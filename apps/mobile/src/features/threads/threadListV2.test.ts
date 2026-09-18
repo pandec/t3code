@@ -1896,6 +1896,21 @@ it("keeps grouped work in its group and uses the lifecycle shelves when parked",
   );
   const headers = rows.flatMap((row) => (row.type === "v2-custom-group" ? [row.groupId] : []));
   expect(headers).toEqual([null, "research"]);
+  const aboveRows = buildThreadListV2ListItems({
+    ...layout,
+    customGroups: [
+      { ...customGroups[0]!, aboveActive: true },
+      { id: "parked", name: "Parked", orderKey: "b", revision: "1:a", deleted: false },
+    ],
+    pendingTasks: [makePendingTask("queued")],
+  });
+  expect(aboveRows.map((row) => (row.type === "v2-custom-group" ? row.groupId : row.key))).toEqual([
+    "research",
+    "v2-thread:environment-1:grouped",
+    null,
+    "v2-pending-task:queued",
+    "parked",
+  ]);
   const snoozed = buildThreadListV2Items({
     threads: [{ ...grouped, snoozedAt: NOW, snoozedUntil: "2099-01-01T00:00:00.000Z" }],
     environmentId: null,

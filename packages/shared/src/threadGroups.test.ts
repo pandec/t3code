@@ -2,16 +2,19 @@ import { describe, expect, it, vi } from "vite-plus/test";
 import * as Schema from "effect/Schema";
 import {
   DEFAULT_SERVER_SETTINGS,
+  ExecutionEnvironmentCapabilities,
   ServerSettings,
   ServerSettingsPatch,
   type ThreadGroup,
 } from "@t3tools/contracts";
 import { applyServerSettingsPatch } from "./serverSettings.ts";
 import {
+  canSyncThreadGroups,
   mergeThreadGroups,
   retryThreadGroupSync,
   nextThreadGroupRevision,
   threadGroupId,
+  threadGroupSections,
   visibleThreadGroups,
 } from "./threadGroups.ts";
 
@@ -27,6 +30,72 @@ const group = (id: string, revision = "0000000000000001:a"): ThreadGroup => ({
 });
 
 describe("thread group replication", () => {
+  it("excludes older servers from catalog writes and repair pushes", () => {
+    const decodeCapabilities = Schema.decodeSync(ExecutionEnvironmentCapabilities);
+    expect(canSyncThreadGroups(undefined)).toBe(false);
+    expect(canSyncThreadGroups(decodeCapabilities({}))).toBe(false);
+    expect(canSyncThreadGroups(decodeCapabilities({ threadCustomGroups: true }))).toBe(false);
+    expect(
+      canSyncThreadGroups(
+        decodeCapabilities({ threadCustomGroups: true, threadGroupPlacement: false }),
+      ),
+    ).toBe(false);
+    expect(
+      canSyncThreadGroups(
+        decodeCapabilities({ threadCustomGroups: true, threadGroupPlacement: true }),
+      ),
+    ).toBe(true);
+  });
+
+  it("retains explicit placement when an older client echoes the same revision without it", () => {
+    const stripped = group("a");
+    for (const aboveActive of [true, false]) {
+      // Exercise both a client-created object and the contract's decoded key order.
+      const edited = { ...stripped, aboveActive };
+      for (const current of [edited, decodeSettings({ threadGroups: [edited] }).threadGroups[0]!]) {
+        expect(mergeThreadGroups([current], [stripped])).toEqual([current]);
+        expect(mergeThreadGroups([stripped], [current])).toEqual([current]);
+        const settings = applyServerSettingsPatch(DEFAULT_SERVER_SETTINGS, {
+          threadGroups: [current],
+        });
+        expect(applyServerSettingsPatch(settings, { threadGroups: [stripped] })).toEqual(settings);
+      }
+    }
+    // A real newer edit still wins, including deletion from an older client.
+    const deleted = { ...stripped, revision: "0000000000000002:b", deleted: true };
+    expect(mergeThreadGroups([{ ...stripped, aboveActive: true }], [deleted])).toEqual([deleted]);
+  });
+
+  it("defaults old catalogs below Active and syncs placement with each group's revision", () => {
+    const original = [group("a"), group("b"), group("c")];
+    const legacy = decodeSettings({ threadGroups: original });
+    expect(
+      threadGroupSections(visibleThreadGroups(legacy.threadGroups)).map((g) => g?.id ?? null),
+    ).toEqual([null, "a", "b", "c"]);
+    const patch = decodePatch({
+      threadGroups: [{ ...original[1]!, aboveActive: true, revision: "0000000000000002:b" }],
+    });
+    const updated = applyServerSettingsPatch(legacy, patch);
+    const reconnected = applyServerSettingsPatch(updated, { threadGroups: original });
+    expect(reconnected.threadGroups).toEqual(updated.threadGroups);
+    expect(
+      threadGroupSections(visibleThreadGroups(reconnected.threadGroups)).map((g) => g?.id ?? null),
+    ).toEqual(["b", null, "a", "c"]);
+    expect(mergeThreadGroups(original, updated.threadGroups)).toEqual(
+      mergeThreadGroups(updated.threadGroups, original),
+    );
+
+    const restored = applyServerSettingsPatch(
+      updated,
+      decodePatch({
+        threadGroups: [{ ...original[1]!, aboveActive: false, revision: "0000000000000003:c" }],
+      }),
+    );
+    expect(
+      threadGroupSections(visibleThreadGroups(restored.threadGroups)).map((g) => g?.id ?? null),
+    ).toEqual([null, "a", "b", "c"]);
+    expect(threadGroupSections([])).toEqual([null]);
+  });
   it("merges independent edits and converges in either arrival order", () => {
     const left = [group("research"), group("parked")];
     const right = [
