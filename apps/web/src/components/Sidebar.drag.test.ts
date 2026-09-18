@@ -836,6 +836,20 @@ describe("lifted card clearance", () => {
   });
 });
 
+it("retains the Active header and its space while dragging without custom groups", () => {
+  const items = [
+    pinnedHeader,
+    divider,
+    marker("active-header"),
+    thread("a1", "active"),
+    thread("a2", "active"),
+    settledHeader,
+  ];
+  const result = preview({ items, settledOrder: [], settledExpanded: false }, "a1", "a2");
+  expect(result.get(sidebarMarkerId("active-header"))).toEqual(stationary);
+  expect(result.get("a2")).toEqual({ ...stationary, y: -83 });
+});
+
 it("retains all custom group headers while previewing a cross-group drop", () => {
   const items: SidebarListItem[] = [
     pinnedHeader,

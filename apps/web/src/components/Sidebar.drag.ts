@@ -186,7 +186,13 @@ export function createSidebarSortingStrategy(input: {
     marker("pinned-header");
     projected.push(...groups.pinned);
     marker("pinned-divider");
-    if (items.some((item) => item.kind === "marker" && item.marker.startsWith("custom-group:"))) {
+    if (
+      items.some(
+        (item) =>
+          item.kind === "marker" &&
+          (item.marker === "active-header" || item.marker.startsWith("custom-group:")),
+      )
+    ) {
       for (const item of items) {
         if (
           item.kind !== "marker" ||
