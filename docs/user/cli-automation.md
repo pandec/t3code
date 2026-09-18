@@ -244,18 +244,17 @@ t3 thread archive self --after-turn --remove-worktree --json
 ```
 
 An explicit thread ID works too, including another running thread. The server selects that
-thread's current turn when it accepts the request. Idle threads archive immediately, unless the
-last turn finished within the past two minutes and its checkpoint has not landed yet; then the
-archive waits for that checkpoint. There is no turn-ID argument. Requests survive server
-restarts, wait for a successful turn and its final checkpoint, and cancel if the turn fails, is
-interrupted, or newer work starts. Background work must finish before a scheduled archive
-executes.
+thread's current turn when it accepts the request. Idle threads archive immediately once background
+work has finished. If the last turn finished within the past two minutes and its checkpoint has
+not landed yet, the archive also waits for that checkpoint. There is no turn-ID argument.
+Requests survive server restarts, wait for a successful turn and its final checkpoint, and cancel
+if the turn fails, is interrupted, or newer work starts.
 
 `--remove-worktree` is optional. Cleanup stops the provider session and closes the thread's
 terminals before removing the worktree. It preserves the branch and refuses dirty or locked
-worktrees, detached worktrees, the project checkout, and worktrees used by another unarchived
-thread. A cleanup failure leaves the worktree in place and records the error on the archive
-request. The thread may already be archived.
+worktrees, detached worktrees, and worktrees containing a project root, another unarchived
+thread's checkout, or its pending move destination. A cleanup failure leaves the worktree in
+place and records the error on the archive request. The thread may already be archived.
 
 Inspect progress or cancel before archiving starts:
 

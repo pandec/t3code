@@ -238,10 +238,12 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
   command,
   readModel,
   userInputActivity,
+  hasLiveBackgroundWork = false,
 }: {
   readonly command: OrchestrationCommand;
   readonly readModel: OrchestrationReadModel;
   readonly userInputActivity?: OrchestrationThreadActivity;
+  readonly hasLiveBackgroundWork?: boolean;
 }): Effect.fn.Return<
   DecideOrchestrationCommandResult,
   OrchestrationCommandRejection | PlatformError.PlatformError,
@@ -793,7 +795,7 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
           requestedAt: occurredAt,
           status: "pending",
         });
-        if (turnId !== null) return request;
+        if (turnId !== null || hasLiveBackgroundWork) return request;
         return [
           request,
           {
@@ -830,7 +832,7 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
       if (thread.archivedAt !== null) return yield* reject("Thread is already archived.");
       if (
         thread.worktreePath !== request.worktreePath ||
-        thread.latestTurn?.turnId !== request.turnId ||
+        (request.turnId !== null && thread.latestTurn?.turnId !== request.turnId) ||
         hasQueuedTurnStartForThread(thread, occurredAt)
       ) {
         return update({
@@ -839,7 +841,10 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
           detail: "The thread started new work or changed workspace.",
         });
       }
-      if (thread.latestTurn.state === "error" || thread.latestTurn.state === "interrupted") {
+      if (
+        request.turnId !== null &&
+        (thread.latestTurn?.state === "error" || thread.latestTurn?.state === "interrupted")
+      ) {
         return update({
           ...request,
           status: "cancelled",
@@ -847,13 +852,18 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
         });
       }
       if (
-        thread.latestTurn.state !== "completed" ||
+        (request.turnId !== null && thread.latestTurn?.state !== "completed") ||
+        thread.latestTurn?.state === "running" ||
         thread.session?.status === "running" ||
         thread.session?.status === "starting"
       )
         return yield* reject("The turn has not finished.");
       // Git completion must include the final checkpoint, not an ingestion placeholder.
-      if (isGitThread(thread) && !hasReadyCheckpoint(thread, request.turnId)) {
+      if (
+        request.turnId !== null &&
+        isGitThread(thread) &&
+        !hasReadyCheckpoint(thread, request.turnId)
+      ) {
         return yield* reject("The turn checkpoint has not finished.");
       }
       return {
@@ -2120,6 +2130,26 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
       // archive is the strongest such shelf: a message is the user pulling
       // the thread back into the live list, so it unarchives first.
       const lifecycleResetEvents: Array<Omit<OrchestrationEvent, "sequence">> = [];
+      if (targetThread.archiveRequest?.status === "pending") {
+        lifecycleResetEvents.push({
+          ...(yield* withEventBase({
+            aggregateKind: "thread",
+            aggregateId: command.threadId,
+            occurredAt: command.createdAt,
+            commandId: command.commandId,
+          })),
+          type: "thread.meta-updated",
+          payload: {
+            threadId: command.threadId,
+            updatedAt: command.createdAt,
+            archiveRequest: {
+              ...targetThread.archiveRequest,
+              status: "cancelled",
+              detail: "The thread started new work.",
+            },
+          },
+        });
+      }
       if (targetThread.archivedAt !== null) {
         lifecycleResetEvents.push({
           ...(yield* withEventBase({
@@ -2598,6 +2628,34 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
           session: command.session,
         },
       };
+      const sessionEvents = [sessionSetEvent];
+      // An idle archive has no selected turn to compare at execution. A new
+      // provider turn must cancel it even when no user turn-start was sent.
+      if (
+        thread.archiveRequest?.status === "pending" &&
+        thread.archiveRequest.turnId === null &&
+        command.session.activeTurnId !== null &&
+        command.session.activeTurnId !== thread.latestTurn?.turnId
+      ) {
+        sessionEvents.unshift({
+          ...(yield* withEventBase({
+            aggregateKind: "thread",
+            aggregateId: command.threadId,
+            occurredAt: command.createdAt,
+            commandId: command.commandId,
+          })),
+          type: "thread.meta-updated",
+          payload: {
+            threadId: command.threadId,
+            updatedAt: command.createdAt,
+            archiveRequest: {
+              ...thread.archiveRequest,
+              status: "cancelled",
+              detail: "The thread started new work.",
+            },
+          },
+        });
+      }
       // Only a session coming alive is activity worth waking a settled thread
       // for — status writes like ready/stopped/error arrive after the fact and
       // must not fight a user's explicit settle. Snooze is deliberately NOT
@@ -2610,7 +2668,7 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
         command.session.status === "starting" || command.session.status === "running";
       // Real activity resets ANY override (settled wakes, active unpins).
       if (thread.settledOverride === null || !isSessionActivity) {
-        return sessionSetEvent;
+        return sessionEvents.length === 1 ? sessionSetEvent : sessionEvents;
       }
       const unsettledEvent: Omit<OrchestrationEvent, "sequence"> = {
         ...(yield* withEventBase({
@@ -2626,7 +2684,7 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
           updatedAt: command.createdAt,
         },
       };
-      return [unsettledEvent, sessionSetEvent];
+      return [unsettledEvent, ...sessionEvents];
     }
 
     case "thread.message.assistant.delta":

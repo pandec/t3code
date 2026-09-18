@@ -281,6 +281,7 @@ Verification gotchas — apply on every sync:
 
 ## Full audit
 
-- Next cross-feature fork-vs-upstream audit due: **2026-09-08**. The due date has passed; the user's run/postpone answer remains pending as of 2026-09-12. Ask after the successful sync report; this does not block synchronization.
-- Last run: 2026-08-11 — four-domain discovery plus three adversarial verification passes. Confirmed a Linux installer defect, mixed-version capability gaps, stale operational/user documentation, native configuration hazards, and low-severity dead/test-only surfaces.
-- Disposition: leave the confirmed findings unchanged for now. The user manually controls server/iOS rebuilds and installs, does not require mixed-version or automated-release compatibility, and considers the remaining cleanup low value. Revisit only if those operating assumptions change or a finding causes a concrete failure.
+- Next cross-feature fork-vs-upstream audit due: **2026-10-16**.
+- Last run: **2026-09-18**, approved after the sync. Reviewed high-risk cross-feature paths on `dev` at `ee8d0d99ad` against `main` at `994654198d`, including cleanup, deferred lifecycle operations, provider routing, reasoning, voice, client caches, usage, persistence, and desktop integration. Seven failing reproductions confirmed five findings; 55 existing focused control tests passed. No client apps were launched.
+- Current disposition: all five findings fixed in the audit follow-up. Future sync reviews must check canonical ownership and command/removal reservations across every worktree removal path, background liveness for idle archive scheduling, and pending switch destinations during archive cleanup. Reasoning changes must also reach voice attachment selection, mobile prewarming, and same-sequence cache repair. Regression tests live beside the affected implementations.
+- Earlier audit disposition remains: the user manually controls server/iOS rebuilds and installs, does not require mixed-version or automated-release compatibility, and considers the older cleanup findings low value. Revisit those only if the operating assumptions change or a concrete failure occurs.

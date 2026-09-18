@@ -311,6 +311,11 @@ function mergeThreadMessageArtifacts(
       const { generatedSummary: _summary, speech: _speech, ...base } = message;
       return {
         ...base,
+        // Older snapshots project reasoning as system messages. Restore the
+        // authoritative role without replacing loaded scrollback or live text.
+        ...(message.role === "system" && refreshedMessage.role === "reasoning"
+          ? { role: "reasoning" as const }
+          : {}),
         ...(refreshedMessage.generatedSummary === undefined
           ? {}
           : { generatedSummary: refreshedMessage.generatedSummary }),

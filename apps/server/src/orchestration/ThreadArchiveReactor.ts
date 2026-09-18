@@ -1,16 +1,21 @@
 import { CommandId, type ThreadId } from "@t3tools/contracts";
 import { makeDrainableWorker } from "@t3tools/shared/DrainableWorker";
-import { normalizeProjectPathForComparison } from "@t3tools/shared/path";
 import * as Cause from "effect/Cause";
 import * as Context from "effect/Context";
 import * as Crypto from "effect/Crypto";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
+import * as Path from "effect/Path";
 import * as Schema from "effect/Schema";
 import type * as Scope from "effect/Scope";
 import * as Stream from "effect/Stream";
 
+import {
+  canonicalWorkspacePath,
+  reserveWorkspace,
+  withWorkspaceLease,
+} from "../workspace/workspaceLease.ts";
 import { ProjectionThreadRepository } from "../persistence/Services/ProjectionThreads.ts";
 import { ProviderService } from "../provider/Services/ProviderService.ts";
 import { forkParked } from "../serverActivation.ts";
@@ -39,6 +44,7 @@ export const make = Effect.gen(function* () {
   const terminals = yield* TerminalManager;
   const git = yield* GitVcsDriver;
   const crypto = yield* Crypto.Crypto;
+  const path = yield* Path.Path;
   const commandId = crypto.randomUUIDv4.pipe(Effect.map(CommandId.make));
 
   const process = Effect.fn("ThreadArchiveReactor.process")(function* (threadId: ThreadId) {
@@ -79,42 +85,63 @@ export const make = Effect.gen(function* () {
       }
       yield* terminals.close({ threadId });
       if (!request.removeWorktree || request.worktreePath === null) return;
-      // Thread metadata ignores a detached HEAD, so read the live checkout.
-      const status = yield* git.statusDetailsLocal(request.worktreePath);
-      if (status.isRepo && status.branch === null)
-        return yield* new ArchiveCleanupError({
-          message: "Detached worktrees require manual removal to preserve unreferenced commits.",
-        });
-      const snapshot = yield* snapshots.getShellSnapshot();
-      const project = snapshot.projects.find((entry) => entry.id === archived.projectId);
-      if (!project)
-        return yield* Effect.fail(
-          new ArchiveCleanupError({ message: "The project no longer exists." }),
-        );
-      const path = normalizeProjectPathForComparison(request.worktreePath);
-      if (path === normalizeProjectPathForComparison(project.workspaceRoot)) {
-        return yield* Effect.fail(
-          new ArchiveCleanupError({ message: "Refusing to remove the project checkout." }),
-        );
-      }
-      if (
-        snapshot.threads.some(
-          (thread) =>
-            thread.id !== threadId &&
-            thread.archivedAt === null &&
-            normalizeProjectPathForComparison(
+      const worktreePath = request.worktreePath;
+      yield* withWorkspaceLease(
+        worktreePath,
+        Effect.gen(function* () {
+          if (!(yield* reserveWorkspace(worktreePath, "removal"))) {
+            return yield* new ArchiveCleanupError({
+              message: "Another operation is using this worktree. Retry cleanup after it finishes.",
+            });
+          }
+          // Thread metadata ignores a detached HEAD, so read the live checkout.
+          const status = yield* git.statusDetailsLocal(worktreePath);
+          if (status.isRepo && status.branch === null)
+            return yield* new ArchiveCleanupError({
+              message:
+                "Detached worktrees require manual removal to preserve unreferenced commits.",
+            });
+          const snapshot = yield* snapshots.getShellSnapshot();
+          const project = snapshot.projects.find((entry) => entry.id === archived.projectId);
+          if (!project)
+            return yield* new ArchiveCleanupError({ message: "The project no longer exists." });
+          const root = yield* canonicalWorkspacePath(worktreePath);
+          const contains = (cwd: string) => {
+            const relative = path.relative(root, cwd);
+            return (
+              relative === "" ||
+              (relative !== ".." &&
+                !relative.startsWith(`..${path.sep}`) &&
+                !path.isAbsolute(relative))
+            );
+          };
+          for (const entry of snapshot.projects) {
+            if (contains(yield* canonicalWorkspacePath(entry.workspaceRoot))) {
+              return yield* new ArchiveCleanupError({
+                message: "Refusing to remove a project checkout.",
+              });
+            }
+          }
+          for (const thread of snapshot.threads) {
+            if (thread.id === threadId || thread.archivedAt !== null) continue;
+            const cwd =
               thread.worktreePath ??
-                snapshot.projects.find((entry) => entry.id === thread.projectId)?.workspaceRoot ??
-                "",
-            ) === path,
-        )
-      ) {
-        return yield* Effect.fail(
-          new ArchiveCleanupError({ message: "Another unarchived thread uses this worktree." }),
-        );
-      }
-      // Git refuses dirty or locked worktrees. Keep the branch and never force removal.
-      yield* git.removeWorktree({ cwd: project.workspaceRoot, path: request.worktreePath });
+              snapshot.projects.find((entry) => entry.id === thread.projectId)?.workspaceRoot;
+            if (
+              (cwd !== undefined && contains(yield* canonicalWorkspacePath(cwd))) ||
+              (thread.worktreeSwitch?.status === "pending" &&
+                contains(yield* canonicalWorkspacePath(thread.worktreeSwitch.targetPath)))
+            ) {
+              return yield* new ArchiveCleanupError({
+                message:
+                  "Another unarchived thread uses this worktree or is waiting to switch into it.",
+              });
+            }
+          }
+          // Git refuses dirty or locked worktrees. Keep the branch and never force removal.
+          yield* git.removeWorktree({ cwd: project.workspaceRoot, path: worktreePath });
+        }).pipe(Effect.scoped),
+      );
     });
     const error = yield* cleanup.pipe(
       Effect.as(undefined),

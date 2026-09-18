@@ -32,6 +32,7 @@ import * as Stream from "effect/Stream";
 import { TestClock } from "effect/testing";
 import { describe, expect, it, vi } from "vite-plus/test";
 
+import { reserveWorkspace } from "../../workspace/workspaceLease.ts";
 import * as ThreadWorktreeSwitchReactor from "../ThreadWorktreeSwitchReactor.ts";
 import { ProjectionThreadRepositoryLive } from "../../persistence/Layers/ProjectionThreads.ts";
 import { PersistenceSqlError } from "../../persistence/Errors.ts";
@@ -672,6 +673,242 @@ describe("OrchestrationEngine", () => {
       });
       expect(yield* engine.latestSequence).toBe(sequence);
     }).pipe(Effect.provide(makeOrchestrationLayer())),
+  );
+
+  effectIt.effect.each(["create", "fork"] as const)(
+    "rejects %s workspace ownership during removal and accepts a later retry",
+    (scenario) =>
+      Effect.gen(function* () {
+        const engine = yield* OrchestrationEngineService;
+        const projectId = ProjectId.make("cleanup-project");
+        const workspaceRoot = "/tmp/cleanup-ownership-test";
+        yield* engine.dispatch({
+          type: "project.create",
+          commandId: CommandId.make("cleanup-project"),
+          projectId,
+          title: "Cleanup",
+          workspaceRoot,
+          createdAt: now(),
+        });
+        const create = {
+          type: "thread.create" as const,
+          commandId: CommandId.make("cleanup-thread"),
+          threadId: ThreadId.make("cleanup-thread"),
+          projectId,
+          title: "Cleanup",
+          modelSelection: { instanceId: ProviderInstanceId.make("codex"), model: "gpt-5-codex" },
+          interactionMode: "default" as const,
+          runtimeMode: "full-access" as const,
+          branch: "feature",
+          worktreePath: workspaceRoot + "/worktree",
+          createdAt: now(),
+        };
+        const sourceThreadId = ThreadId.make("cleanup-source");
+        if (scenario === "fork") {
+          yield* engine.dispatch({
+            ...create,
+            commandId: CommandId.make("cleanup-source"),
+            threadId: sourceThreadId,
+          });
+          yield* engine.dispatch({
+            type: "thread.session.set",
+            commandId: CommandId.make("cleanup-source-session"),
+            threadId: sourceThreadId,
+            session: {
+              threadId: sourceThreadId,
+              status: "stopped",
+              providerName: "codex",
+              providerInstanceId: ProviderInstanceId.make("codex"),
+              runtimeMode: "full-access",
+              activeTurnId: null,
+              lastError: null,
+              updatedAt: now(),
+            },
+            createdAt: now(),
+          });
+        }
+        const command: OrchestrationCommand =
+          scenario === "fork"
+            ? {
+                type: "thread.fork",
+                commandId: create.commandId,
+                threadId: create.threadId,
+                sourceThreadId,
+                createdAt: now(),
+              }
+            : create;
+        yield* Effect.gen(function* () {
+          expect(yield* reserveWorkspace(create.worktreePath, "removal")).toBe(true);
+          expect((yield* engine.dispatch(command).pipe(Effect.flip)).message).toContain(
+            "being removed",
+          );
+        }).pipe(Effect.scoped);
+        yield* engine.dispatch({ ...command, commandId: CommandId.make("cleanup-thread-retry") });
+        const snapshots = yield* ProjectionSnapshotQuery;
+        expect(
+          (yield* snapshots.getSnapshot()).threads.find((thread) => thread.id === create.threadId)
+            ?.worktreePath,
+        ).toBe(create.worktreePath);
+      }).pipe(Effect.provide(makeOrchestrationLayer())),
+  );
+
+  effectIt.effect("defers project root changes while an old checkout is being removed", () =>
+    Effect.gen(function* () {
+      const engine = yield* OrchestrationEngineService;
+      const snapshots = yield* ProjectionSnapshotQuery;
+      const projectId = ProjectId.make("moving-project");
+      const workspaceRoot = "/tmp/cleanup-moving-project";
+      yield* engine.dispatch({
+        type: "project.create",
+        commandId: CommandId.make("moving-project-create"),
+        projectId,
+        title: "Moving project",
+        workspaceRoot,
+        createdAt: now(),
+      });
+      const update = {
+        type: "project.meta.update" as const,
+        commandId: CommandId.make("moving-project-update"),
+        projectId,
+        workspaceRoot: "/tmp/cleanup-moved-project",
+      };
+      yield* Effect.gen(function* () {
+        expect(yield* reserveWorkspace(`${workspaceRoot}/worktree`, "removal")).toBe(true);
+        expect((yield* engine.dispatch(update).pipe(Effect.flip)).message).toContain(
+          "being removed",
+        );
+        expect((yield* snapshots.getSnapshot()).projects[0]?.workspaceRoot).toBe(workspaceRoot);
+      }).pipe(Effect.scoped);
+      yield* engine.dispatch({ ...update, commandId: CommandId.make("moving-project-retry") });
+      expect((yield* snapshots.getSnapshot()).projects[0]?.workspaceRoot).toBe(
+        update.workspaceRoot,
+      );
+    }).pipe(Effect.provide(makeOrchestrationLayer())),
+  );
+
+  effectIt.effect.each(["drained", "new-turn", "provider-turn", "no-turn"] as const)(
+    "defers idle archive scheduling: %s",
+    (scenario) =>
+      Effect.gen(function* () {
+        const engine = yield* OrchestrationEngineService;
+        const snapshots = yield* ProjectionSnapshotQuery;
+        const liveness = yield* ThreadBackgroundLiveness.ThreadBackgroundLivenessService;
+        const projectId = ProjectId.make("audit-project");
+        const threadId = ThreadId.make("audit-thread");
+        const turnId = TurnId.make("audit-turn");
+        yield* engine.dispatch({
+          type: "project.create",
+          commandId: CommandId.make("audit-project"),
+          projectId,
+          title: "Audit",
+          workspaceRoot: "/tmp/audit-project",
+          createdAt: now(),
+        });
+        yield* engine.dispatch({
+          type: "thread.create",
+          commandId: CommandId.make("audit-thread"),
+          threadId,
+          projectId,
+          title: "Audit",
+          modelSelection: { instanceId: ProviderInstanceId.make("codex"), model: "gpt-5-codex" },
+          interactionMode: "default",
+          runtimeMode: "full-access",
+          branch: null,
+          worktreePath: null,
+          createdAt: now(),
+        });
+        for (const status of scenario === "no-turn" ? [] : (["running", "ready"] as const)) {
+          yield* engine.dispatch({
+            type: "thread.session.set",
+            commandId: CommandId.make(`audit-${status}`),
+            threadId,
+            session: {
+              threadId,
+              status,
+              providerName: "codex",
+              runtimeMode: "full-access",
+              activeTurnId: status === "running" ? turnId : null,
+              lastError: null,
+              updatedAt: now(),
+            },
+            createdAt: now(),
+          });
+        }
+        liveness.recordTaskLiveness({
+          threadId,
+          taskId: "audit-child",
+          taskType: "subagent",
+          status: undefined,
+          kind: "started",
+        });
+        expect(liveness.getThreadBackgroundLiveness(threadId)).toBe("working");
+        yield* engine.dispatch({
+          type: "thread.archive.schedule",
+          commandId: CommandId.make("audit-archive"),
+          threadId,
+          afterTurn: true,
+          removeWorktree: false,
+        });
+        expect(
+          (yield* snapshots.getSnapshot()).threads.find((t) => t.id === threadId)?.archivedAt,
+        ).toBeNull();
+        const execute = {
+          type: "thread.archive.execute" as const,
+          commandId: CommandId.make("audit-execute-live"),
+          threadId,
+          requestId: CommandId.make("audit-archive"),
+        };
+        expect((yield* engine.dispatch(execute).pipe(Effect.flip))._tag).toBe(
+          "OrchestrationCommandInvariantError",
+        );
+        liveness.clearThreadLiveness(threadId);
+        if (scenario === "provider-turn") {
+          yield* engine.dispatch({
+            type: "thread.session.set",
+            commandId: CommandId.make("archive-provider-work"),
+            threadId,
+            session: {
+              threadId,
+              status: "running",
+              providerName: "codex",
+              runtimeMode: "full-access",
+              activeTurnId: TurnId.make("new-provider-turn"),
+              lastError: null,
+              updatedAt: now(),
+            },
+            createdAt: now(),
+          });
+          const thread = (yield* snapshots.getSnapshot()).threads.find((t) => t.id === threadId);
+          expect(thread?.archiveRequest?.status).toBe("cancelled");
+          expect(thread?.archivedAt).toBeNull();
+          return;
+        }
+        if (scenario === "new-turn") {
+          yield* engine.dispatch({
+            type: "thread.turn.start",
+            commandId: CommandId.make("archive-new-work"),
+            threadId,
+            runtimeMode: "full-access",
+            interactionMode: "default",
+            message: {
+              messageId: MessageId.make("new-work"),
+              role: "user",
+              text: "Continue",
+              attachments: [],
+            },
+            createdAt: now(),
+          });
+          const thread = (yield* snapshots.getSnapshot()).threads.find((t) => t.id === threadId);
+          expect(thread?.archiveRequest?.status).toBe("cancelled");
+          expect(thread?.archivedAt).toBeNull();
+          return;
+        }
+
+        yield* engine.dispatch({ ...execute, commandId: CommandId.make("audit-execute-drained") });
+        expect(
+          (yield* snapshots.getSnapshot()).threads.find((t) => t.id === threadId)?.archivedAt,
+        ).not.toBeNull();
+      }).pipe(Effect.provide(makeOrchestrationLayer())),
   );
 
   effectIt.effect(
