@@ -183,9 +183,7 @@ export const make = Effect.gen(function* () {
     for (const project of projects) {
       const projectPath = path.resolve(project.workspaceRoot);
       if (projectPath === worktreePath || inside(worktreePath, projectPath)) return true;
-      const realPath = yield* fs
-        .realPath(projectPath)
-        .pipe(Effect.orElseSucceed(() => projectPath));
+      const realPath = yield* canonicalWorkspacePath(project.workspaceRoot);
       if (realPath === worktreePath || inside(worktreePath, realPath)) return true;
     }
     return false;

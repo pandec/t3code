@@ -752,6 +752,40 @@ describe("OrchestrationEngine", () => {
       }).pipe(Effect.provide(makeOrchestrationLayer())),
   );
 
+  effectIt.effect("defers project root changes while an old checkout is being removed", () =>
+    Effect.gen(function* () {
+      const engine = yield* OrchestrationEngineService;
+      const snapshots = yield* ProjectionSnapshotQuery;
+      const projectId = ProjectId.make("moving-project");
+      const workspaceRoot = "/tmp/cleanup-moving-project";
+      yield* engine.dispatch({
+        type: "project.create",
+        commandId: CommandId.make("moving-project-create"),
+        projectId,
+        title: "Moving project",
+        workspaceRoot,
+        createdAt: now(),
+      });
+      const update = {
+        type: "project.meta.update" as const,
+        commandId: CommandId.make("moving-project-update"),
+        projectId,
+        workspaceRoot: "/tmp/cleanup-moved-project",
+      };
+      yield* Effect.gen(function* () {
+        expect(yield* reserveWorkspace(`${workspaceRoot}/worktree`, "removal")).toBe(true);
+        expect((yield* engine.dispatch(update).pipe(Effect.flip)).message).toContain(
+          "being removed",
+        );
+        expect((yield* snapshots.getSnapshot()).projects[0]?.workspaceRoot).toBe(workspaceRoot);
+      }).pipe(Effect.scoped);
+      yield* engine.dispatch({ ...update, commandId: CommandId.make("moving-project-retry") });
+      expect((yield* snapshots.getSnapshot()).projects[0]?.workspaceRoot).toBe(
+        update.workspaceRoot,
+      );
+    }).pipe(Effect.provide(makeOrchestrationLayer())),
+  );
+
   effectIt.effect.each(["drained", "new-turn", "provider-turn", "no-turn"] as const)(
     "defers idle archive scheduling: %s",
     (scenario) =>

@@ -1494,6 +1494,7 @@ describe("storage cleanup", () => {
     "shared",
     "project-root",
     "nested-project",
+    "missing-project-alias",
     "new-nested-project",
     "session",
     "terminal-cwd",
@@ -1551,7 +1552,8 @@ describe("storage cleanup", () => {
           yield* fs.makeDirectory(worktreePath, { recursive: true });
           yield* fs.writeFileString(path.join(worktreePath, ".git"), "gitdir: /test/admin");
           const aliasPath = path.join(config.baseDir, "worktree-alias");
-          if (protection === "shared-alias") yield* fs.symlink(worktreePath, aliasPath);
+          if (protection === "shared-alias" || protection === "missing-project-alias")
+            yield* fs.symlink(worktreePath, aliasPath);
           const secondWorktreePath = path.join(config.worktreesDir, "feature-two");
           if (protection === "unchanged-two-worktrees") {
             yield* fs.makeDirectory(secondWorktreePath);
@@ -1776,6 +1778,7 @@ describe("storage cleanup", () => {
                           if (
                             protection === "project-root" ||
                             protection === "nested-project" ||
+                            protection === "missing-project-alias" ||
                             (protection === "new-nested-project" && snapshotReads > 1)
                           ) {
                             projects.push(
@@ -1783,7 +1786,12 @@ describe("storage cleanup", () => {
                                 LINKED_PROJECT_ID,
                                 protection === "project-root"
                                   ? worktreePath
-                                  : path.join(worktreePath, "nested"),
+                                  : path.join(
+                                      protection === "missing-project-alias"
+                                        ? aliasPath
+                                        : worktreePath,
+                                      "nested",
+                                    ),
                               ),
                             );
                             threads.push(

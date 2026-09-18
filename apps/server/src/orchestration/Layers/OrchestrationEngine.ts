@@ -358,6 +358,12 @@ const makeOrchestrationEngine = Effect.gen(function* () {
           command.workspaceRoot !== undefined
         ) {
           claimedPaths.push(command.workspaceRoot);
+          if (command.type === "project.meta.update") {
+            const project = commandReadModel.projects.find(
+              (entry) => entry.id === command.projectId,
+            );
+            if (project !== undefined) claimedPaths.push(project.workspaceRoot);
+          }
         }
         for (const cwd of new Set(claimedPaths)) {
           if (!(yield* reserveWorkspace(cwd, "claim"))) {
