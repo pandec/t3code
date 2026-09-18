@@ -11,7 +11,7 @@ const result = Schema.Struct({ request: Schema.NullOr(ThreadWorktreeSwitch) });
 
 const SwitchWorktree = Tool.make("switch_worktree", {
   description:
-    "For Codex: after creating a git worktree, call this with its absolute path to move this thread there AFTER your current turn and final checkpoint finish. Your cwd does NOT change during this turn: finish your response after requesting the move. T3's checkout display and the next turn will use the target, preserving this conversation. You can pass the project checkout path to return there. A later call replaces the pending target. Failed/interrupted turns or concurrent checkout changes cancel the move. Use worktree_switch_status to inspect the request.",
+    "For Codex: when the user asks to work in a new worktree, create the worktree and use this tool to move the current thread there. Pass its absolute path. The move happens AFTER your current turn and final checkpoint finish. Your cwd does NOT change during this turn: finish your response after requesting the move. T3's checkout display and the next turn will use the target, preserving this conversation. You can pass the project checkout path to return there. A later call replaces the pending target. Failed/interrupted turns or concurrent checkout changes cancel the move. Use worktree_switch_status to inspect the request.",
   parameters: Schema.Struct({ path: TrimmedNonEmptyString }),
   success: result,
   failure: WorktreeSwitchError,
