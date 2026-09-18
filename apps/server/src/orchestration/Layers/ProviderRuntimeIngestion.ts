@@ -2608,7 +2608,9 @@ const make = Effect.gen(function* () {
               const stagedVoiceReply = yield* agentVoiceReply.claimStagedForTurn(thread.id, turnId);
               if (stagedVoiceReply) {
                 const speech = stagedVoiceReply.attachment;
-                const finalizedMessageIds = Array.from(assistantMessageIds);
+                const finalizedMessageIds = Array.from(assistantMessageIds).filter(
+                  (messageId) => messageStreamRoleOf(messageId) === "assistant",
+                );
                 const lastFinalizedMessageId = finalizedMessageIds[finalizedMessageIds.length - 1];
                 const lastProjectedMessageId = Option.getOrUndefined(
                   yield* projectionThreadMessages.getLatestAssistantMessageIdForTurn({

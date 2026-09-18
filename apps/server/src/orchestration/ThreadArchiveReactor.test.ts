@@ -31,8 +31,17 @@ const threadId = ThreadId.make("archive");
 const projectId = ProjectId.make("project");
 const requestId = CommandId.make("request");
 
-it.effect.each(["success", "dirty", "shared", "detached", "stop-failed"] as const)(
-  "recovers archived cleanup on startup: %s",
+const cleanupScenarios = [
+  "success",
+  "dirty",
+  "shared",
+  "detached",
+  "stop-failed",
+  "pending-switch",
+] as const;
+
+it.effect.each(cleanupScenarios)(
+  "recovers archived cleanup on startup and protects other worktree owners: %s",
   (scenario) =>
     Effect.scoped(
       Effect.gen(function* () {
@@ -79,7 +88,20 @@ it.effect.each(["success", "dirty", "shared", "detached", "stop-failed"] as cons
           runtimeMode: "full-access",
           interactionMode: "default",
           branch: "feature",
-          worktreePath: "/repo/worktree",
+          worktreePath: scenario === "pending-switch" ? "/repo/other-worktree" : "/repo/worktree",
+          ...(scenario === "pending-switch"
+            ? {
+                worktreeSwitch: {
+                  requestId: CommandId.make("switch"),
+                  turnId: TurnId.make("other-turn"),
+                  sourceWorktreePath: "/repo/other-worktree",
+                  sourceBranch: "other",
+                  targetPath: "/repo/worktree",
+                  requestedAt: now,
+                  status: "pending" as const,
+                },
+              }
+            : {}),
           pullRequests: [],
           latestTurn: null,
           createdAt: now,
@@ -103,7 +125,7 @@ it.effect.each(["success", "dirty", "shared", "detached", "stop-failed"] as cons
               Effect.succeed({
                 snapshotSequence: 1,
                 updatedAt: now,
-                threads: scenario === "shared" ? [other] : [],
+                threads: scenario === "shared" || scenario === "pending-switch" ? [other] : [],
                 projects: [
                   {
                     id: projectId,
@@ -187,7 +209,10 @@ it.effect.each(["success", "dirty", "shared", "detached", "stop-failed"] as cons
           yield* reactor.start();
           const error = yield* Deferred.await(completed);
           yield* reactor.drain;
-          if (scenario === "success") {
+          if (scenario === "pending-switch") {
+            expect(error).toContain("waiting to switch");
+            expect(calls).toEqual(["stop", "terminals", "status"]);
+          } else if (scenario === "success") {
             expect(error).toBeUndefined();
             expect(calls).toEqual(["stop", "terminals", "status", "remove"]);
           } else {

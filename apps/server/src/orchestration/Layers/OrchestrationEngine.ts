@@ -1,4 +1,3 @@
-import { normalizeProjectPathForComparison } from "@t3tools/shared/path";
 import type {
   OrchestrationClientOrigin,
   OrchestrationEvent,
@@ -15,9 +14,11 @@ import * as Deferred from "effect/Deferred";
 import * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";
 import * as Exit from "effect/Exit";
+import * as FileSystem from "effect/FileSystem";
 import * as Layer from "effect/Layer";
 import * as Metric from "effect/Metric";
 import * as Option from "effect/Option";
+import * as Path from "effect/Path";
 import * as PubSub from "effect/PubSub";
 import * as Queue from "effect/Queue";
 import * as Schema from "effect/Schema";
@@ -30,6 +31,7 @@ import {
   orchestrationCommandsTotal,
   orchestrationCommandDuration,
 } from "../../observability/Metrics.ts";
+import { canonicalWorkspacePath, reserveWorkspace } from "../../workspace/workspaceLease.ts";
 import { toPersistenceSqlError } from "../../persistence/Errors.ts";
 import { OrchestrationEventStore } from "../../persistence/Services/OrchestrationEventStore.ts";
 import { OrchestrationCommandReceiptRepository } from "../../persistence/Services/OrchestrationCommandReceipts.ts";
@@ -101,6 +103,8 @@ function commandToAggregateRef(command: OrchestrationCommand): {
 
 const makeOrchestrationEngine = Effect.gen(function* () {
   const sql = yield* SqlClient.SqlClient;
+  const fs = yield* FileSystem.FileSystem;
+  const path = yield* Path.Path;
   const eventStore = yield* OrchestrationEventStore;
   const commandReceiptRepository = yield* OrchestrationCommandReceiptRepository;
   const projectionPipeline = yield* OrchestrationProjectionPipeline;
@@ -283,45 +287,79 @@ const makeOrchestrationEngine = Effect.gen(function* () {
           });
         }
 
-        // Reserve a worktree while archive cleanup runs. New clients cannot
-        // restart the owner, delete it, or attach another thread while Git
-        // removes it. Answering an async question starts a turn, so it is
-        // guarded here as well.
-        if (
-          envelope.command.type === "thread.create" ||
-          envelope.command.type === "thread.meta.update" ||
-          envelope.command.type === "thread.unarchive" ||
-          envelope.command.type === "thread.delete" ||
-          envelope.command.type === "thread.user-input.respond" ||
-          envelope.command.type === "thread.turn.start"
-        ) {
-          const command = envelope.command;
+        const command = envelope.command;
+        const changesWorkspaceUse =
+          command.type === "thread.create" ||
+          command.type === "thread.meta.update" ||
+          command.type === "thread.unarchive" ||
+          command.type === "thread.delete" ||
+          command.type === "thread.user-input.respond" ||
+          command.type === "thread.turn.start" ||
+          command.type === "thread.session.set" ||
+          command.type === "thread.worktree-switch.schedule" ||
+          command.type === "thread.worktree-switch.execute";
+        const claimedPaths: string[] = [];
+        if (changesWorkspaceUse && "threadId" in command) {
           const thread = commandReadModel.threads.find((entry) => entry.id === command.threadId);
           const projectId =
-            command.type === "thread.create" ? command.projectId : thread?.projectId;
+            "projectId" in command ? (command.projectId ?? thread?.projectId) : thread?.projectId;
           const project = commandReadModel.projects.find((entry) => entry.id === projectId);
           const worktreePath =
-            "worktreePath" in command && command.worktreePath !== undefined
-              ? command.worktreePath
-              : thread?.worktreePath;
+            command.type === "thread.worktree-switch.schedule"
+              ? command.targetPath
+              : command.type === "thread.worktree-switch.execute"
+                ? thread?.worktreeSwitch?.targetPath
+                : "worktreePath" in command && command.worktreePath !== undefined
+                  ? command.worktreePath
+                  : thread?.worktreePath;
           const cwd = worktreePath ?? project?.workspaceRoot;
-          const cleanup = commandReadModel.threads.find(
-            (entry) =>
-              entry.deletedAt === null &&
-              entry.archivedAt !== null &&
-              entry.archiveRequest?.status === "pending" &&
-              (entry.id === command.threadId ||
+          if (cwd !== undefined) claimedPaths.push(yield* canonicalWorkspacePath(cwd));
+          // Reserve the old checkout too while a move or metadata update persists.
+          if (thread?.worktreePath)
+            claimedPaths.push(yield* canonicalWorkspacePath(thread.worktreePath));
+          // Archived requests reserve their checkout even before the removal worker starts.
+          // Session projection updates must still record the cleanup's provider stop.
+          // Existing switches execute under the workspace lease. Let them finish
+          // so archive cleanup observes the new owner instead of stranding the move.
+          if (
+            command.type !== "thread.session.set" &&
+            command.type !== "thread.worktree-switch.execute"
+          ) {
+            for (const entry of commandReadModel.threads) {
+              if (
+                entry.deletedAt !== null ||
+                entry.archivedAt === null ||
+                entry.archiveRequest?.status !== "pending"
+              )
+                continue;
+              if (
+                entry.id === command.threadId ||
                 (entry.archiveRequest.removeWorktree &&
-                  cwd !== undefined &&
                   entry.archiveRequest.worktreePath !== null &&
-                  normalizeProjectPathForComparison(entry.archiveRequest.worktreePath) ===
-                    normalizeProjectPathForComparison(cwd))),
-          );
-          if (cleanup)
+                  claimedPaths.includes(
+                    yield* canonicalWorkspacePath(entry.archiveRequest.worktreePath),
+                  ))
+              ) {
+                return yield* new OrchestrationCommandInvariantError({
+                  commandType: command.type,
+                  detail: `Thread ${entry.id} is finishing archive cleanup. Retry after cleanup finishes.`,
+                });
+              }
+            }
+          }
+        } else if (
+          (command.type === "project.create" || command.type === "project.meta.update") &&
+          command.workspaceRoot !== undefined
+        ) {
+          claimedPaths.push(command.workspaceRoot);
+        }
+        for (const cwd of new Set(claimedPaths)) {
+          if (!(yield* reserveWorkspace(cwd, "claim"))) {
             return yield* new OrchestrationCommandInvariantError({
               commandType: command.type,
-              detail: `Thread ${cleanup.id} is finishing archive cleanup. Retry after cleanup finishes.`,
+              detail: "This workspace is being removed. Retry after cleanup finishes.",
             });
+          }
         }
 
         // Live background work (subagents, workflows, monitors) blocks both
@@ -383,6 +421,10 @@ const makeOrchestrationEngine = Effect.gen(function* () {
             : Option.none();
         const eventBase = yield* decideOrchestrationCommand({
           command: envelope.command,
+          hasLiveBackgroundWork:
+            "threadId" in envelope.command &&
+            threadBackgroundLiveness.getThreadBackgroundLiveness(envelope.command.threadId) !==
+              null,
           readModel: Option.isSome(completionCheckpoints)
             ? {
                 ...commandReadModel,
@@ -490,7 +532,12 @@ const makeOrchestrationEngine = Effect.gen(function* () {
           }
         }
         return { sequence: committedCommand.lastSequence };
-      }).pipe(Effect.withSpan(`orchestration.command.${envelope.command.type}`)),
+      }).pipe(
+        Effect.scoped,
+        Effect.provideService(FileSystem.FileSystem, fs),
+        Effect.provideService(Path.Path, path),
+        Effect.withSpan(`orchestration.command.${envelope.command.type}`),
+      ),
     ).pipe(
       Effect.flatMap((exit) =>
         Effect.gen(function* () {

@@ -52,7 +52,7 @@ import { ChildProcessSpawner } from "effect/unstable/process";
 import { ServerConfig } from "../config.ts";
 import * as ThreadBackgroundLiveness from "./ThreadBackgroundLiveness.ts";
 import * as StorageCleanup from "../storageCleanup.ts";
-import { withWorkspaceLease } from "../workspace/workspaceLease.ts";
+import { reserveWorkspace, withWorkspaceLease } from "../workspace/workspaceLease.ts";
 import { TerminalManager } from "../terminal/Manager.ts";
 import { GitVcsDriver } from "../vcs/GitVcsDriver.ts";
 import { ThreadDeletionReactor } from "./Services/ThreadDeletionReactor.ts";
@@ -1455,8 +1455,33 @@ describe("storage cleanup", () => {
     }).pipe(Effect.scoped, Effect.provide(NodeServices.layer)),
   );
 
+  it.effect("reserves aliases and releases ownership claims before removal", () =>
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
+      const path = yield* Path.Path;
+      const directory = yield* fs.makeTempDirectoryScoped();
+      const workspace = path.join(directory, "workspace");
+      const alias = path.join(directory, "alias");
+      yield* fs.makeDirectory(workspace);
+      yield* fs.symlink(workspace, alias);
+      yield* Effect.gen(function* () {
+        assert.strictEqual(yield* reserveWorkspace(alias, "claim"), true);
+        assert.strictEqual(yield* reserveWorkspace(workspace, "removal"), false);
+        assert.strictEqual(yield* reserveWorkspace(path.join(directory, "other"), "removal"), true);
+      }).pipe(Effect.scoped);
+      yield* Effect.gen(function* () {
+        assert.strictEqual(yield* reserveWorkspace(workspace, "removal"), true);
+        assert.strictEqual(yield* reserveWorkspace(alias, "claim"), false);
+        assert.strictEqual(yield* reserveWorkspace(path.join(workspace, "nested"), "claim"), false);
+      }).pipe(Effect.scoped);
+      assert.strictEqual(yield* reserveWorkspace(alias, "claim"), true);
+    }).pipe(Effect.scoped, Effect.provide(NodeServices.layer)),
+  );
+
   for (const protection of [
     "none",
+    "shared-alias",
+    "late-shared",
     "background",
     "late-background",
     "pending-switch",
@@ -1525,6 +1550,8 @@ describe("storage cleanup", () => {
           const worktreePath = path.join(config.worktreesDir, "feature");
           yield* fs.makeDirectory(worktreePath, { recursive: true });
           yield* fs.writeFileString(path.join(worktreePath, ".git"), "gitdir: /test/admin");
+          const aliasPath = path.join(config.baseDir, "worktree-alias");
+          if (protection === "shared-alias") yield* fs.symlink(worktreePath, aliasPath);
           const secondWorktreePath = path.join(config.worktreesDir, "feature-two");
           if (protection === "unchanged-two-worktrees") {
             yield* fs.makeDirectory(secondWorktreePath);
@@ -1704,6 +1731,25 @@ describe("storage cleanup", () => {
                               ? []
                               : [makeProject(PROJECT_ID, config.baseDir)];
                           const threads = tombstoned ? [] : [thread];
+                          if (protection === "late-shared" && snapshotReads > 2) {
+                            threads.push({ ...thread, id: ThreadId.make("new-worktree-owner") });
+                          }
+                          if (protection === "shared-alias") {
+                            threads.push({
+                              ...thread,
+                              id: ThreadId.make("live-alias-owner"),
+                              worktreePath: aliasPath,
+                              session: {
+                                threadId: ThreadId.make("live-alias-owner"),
+                                status: "ready",
+                                providerName: "codex",
+                                runtimeMode: "full-access",
+                                activeTurnId: null,
+                                lastError: null,
+                                updatedAt: NOW,
+                              },
+                            });
+                          }
                           if (
                             protection === "pending-switch" ||
                             protection === "deleted-pending-switch" ||

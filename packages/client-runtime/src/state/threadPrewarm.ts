@@ -335,7 +335,11 @@ const warmEnvironmentOnce = Effect.fn("EnvironmentThreadPrewarm.warmOnce")(funct
   if (Option.isNone(session)) {
     return null;
   }
-  const config = yield* session.value.initialConfig.pipe(Effect.orElseSucceed(() => ({})));
+  const config = yield* session.value.initialConfig.pipe(
+    Effect.orElseSucceed(
+      (): { threadSnapshotPagination?: boolean; reasoningMessages?: boolean } => ({}),
+    ),
+  );
   const snapshotWindow = selectPrewarmSnapshotWindow(config, input.historyWindow);
   // Candidates come from the cached shell rather than a live shell
   // subscription so prewarming never adds a socket or shell request of its
@@ -380,7 +384,12 @@ const warmEnvironmentOnce = Effect.fn("EnvironmentThreadPrewarm.warmOnce")(funct
           skipped += 1;
           return;
         }
-        const fetched = yield* input.loader.load(prepared.value, thread.id, snapshotWindow);
+        const fetched = yield* input.loader.load(
+          prepared.value,
+          thread.id,
+          snapshotWindow,
+          config.reasoningMessages === true,
+        );
         if (Option.isNone(fetched)) {
           failed += 1;
           return;

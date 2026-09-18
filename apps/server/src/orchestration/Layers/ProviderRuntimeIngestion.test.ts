@@ -2182,6 +2182,39 @@ describe("ProviderRuntimeIngestion", () => {
     expect(fake.removedAudio).toEqual([]);
   });
 
+  it("keeps terminal reasoning separate from a voice-only reply", async () => {
+    const fake = makeFakeAgentVoiceReply(makeStagedVoiceReply(), asTurnId("audit-voice"));
+    const harness = await createHarness({ agentVoiceReply: fake.shape });
+    const base = {
+      provider: ProviderDriverKind.make("codex"),
+      createdAt: "2026-01-01T00:00:00.000Z",
+      threadId: asThreadId("thread-1"),
+      turnId: asTurnId("audit-voice"),
+    };
+    await harness.emitAndDrain([
+      {
+        ...base,
+        type: "content.delta",
+        eventId: asEventId("audit-reasoning"),
+        itemId: asItemId("audit-reasoning"),
+        payload: { streamKind: "reasoning_text", delta: "Planning the spoken answer" },
+      },
+      {
+        ...base,
+        type: "turn.completed",
+        eventId: asEventId("audit-complete"),
+        status: "completed",
+      },
+    ]);
+    const thread = (await harness.readModel()).threads[0];
+    expect(thread?.messages.find((message) => message.speech?.origin === "agent")?.text).toBe(
+      "spoken summary",
+    );
+    expect(
+      thread?.messages.find((message) => message.text === "Planning the spoken answer")?.role,
+    ).toBe("reasoning");
+  });
+
   it("publishes the transcript as the message when a voice-only turn completes", async () => {
     const staged = makeStagedVoiceReply({ speechId: "thread-1-agent-voice-only" });
     const fake = makeFakeAgentVoiceReply(staged, asTurnId("turn-voice-only"));

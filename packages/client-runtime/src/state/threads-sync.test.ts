@@ -1796,11 +1796,20 @@ describe("EnvironmentThreads", () => {
       }),
   );
 
-  it.effect("hydrates persisted message artifacts over a same-sequence cache", () =>
+  it.effect("hydrates artifacts and restores thinking roles at the same sequence", () =>
     Effect.gen(function* () {
       const cachedThread: OrchestrationThread = {
         ...BASE_THREAD,
         messages: [
+          {
+            id: MessageId.make("audit-reasoning"),
+            role: "system",
+            text: "Thinking",
+            turnId: null,
+            streaming: false,
+            createdAt: "2026-04-01T00:00:00.000Z",
+            updatedAt: "2026-04-01T00:00:00.000Z",
+          },
           {
             id: MessageId.make("message-1"),
             role: "assistant",
@@ -1816,6 +1825,15 @@ describe("EnvironmentThreads", () => {
         ...cachedThread,
         completedTurnAssistantMessageIds: [MessageId.make("message-1")],
         messages: [
+          {
+            id: MessageId.make("audit-reasoning"),
+            role: "reasoning",
+            text: "Thinking",
+            turnId: null,
+            streaming: false,
+            createdAt: "2026-04-01T00:00:00.000Z",
+            updatedAt: "2026-04-01T00:00:00.000Z",
+          },
           {
             id: MessageId.make("message-1"),
             role: "assistant",
@@ -1844,12 +1862,15 @@ describe("EnvironmentThreads", () => {
         harness.observed,
         (value) =>
           Option.isSome(value.data) &&
-          value.data.value.messages[0]?.generatedSummary?.summary === "Persisted summary",
+          value.data.value.messages.find((m) => m.id === "message-1")?.generatedSummary?.summary ===
+            "Persisted summary",
       );
 
-      expect(Option.getOrThrow(state.data).messages[0]?.generatedSummary?.summary).toBe(
-        "Persisted summary",
-      );
+      expect(
+        Option.getOrThrow(state.data).messages.find((m) => m.id === "message-1")?.generatedSummary
+          ?.summary,
+      ).toBe("Persisted summary");
+      expect(Option.getOrThrow(state.data).messages.some((m) => m.role === "reasoning")).toBe(true);
       expect(Option.getOrThrow(state.data).completedTurnAssistantMessageIds).toEqual(["message-1"]);
       expect(yield* Ref.get(harness.lastSubscribeAfterSequence)).toBe(CACHED_SNAPSHOT_SEQUENCE);
 
@@ -1860,7 +1881,9 @@ describe("EnvironmentThreads", () => {
       yield* Effect.yieldNow;
       const saved = (yield* Ref.get(harness.savedThreads)).at(-1);
       expect(saved?.snapshotSequence).toBe(CACHED_SNAPSHOT_SEQUENCE);
-      expect(saved?.thread.messages[0]?.generatedSummary?.summary).toBe("Persisted summary");
+      expect(
+        saved?.thread.messages.find((m) => m.id === "message-1")?.generatedSummary?.summary,
+      ).toBe("Persisted summary");
     }),
   );
 

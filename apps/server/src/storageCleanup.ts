@@ -35,7 +35,11 @@ import * as Settings from "./serverSettings.ts";
 import * as TerminalManager from "./terminal/Manager.ts";
 import * as GitVcsDriver from "./vcs/GitVcsDriver.ts";
 import { ThreadBackgroundLivenessService } from "./orchestration/ThreadBackgroundLiveness.ts";
-import { canonicalWorkspacePath, withWorkspaceLease } from "./workspace/workspaceLease.ts";
+import {
+  canonicalWorkspacePath,
+  reserveWorkspace,
+  withWorkspaceLease,
+} from "./workspace/workspaceLease.ts";
 
 export class StorageCleanup extends Context.Service<
   StorageCleanup,
@@ -136,19 +140,22 @@ export const make = Effect.gen(function* () {
       !path.isAbsolute(relative)
     );
   };
-  const hasTerminal = (worktreePath: string) =>
-    [...liveTerminals.values()]
-      .flatMap((entries) => [...entries.values()])
-      .some((terminal) => {
-        if (terminal.status !== "starting" && terminal.status !== "running") return false;
-        const cwd = path.resolve(terminal.cwd);
-        return (
-          (terminal.worktreePath !== null &&
-            path.resolve(terminal.worktreePath) === worktreePath) ||
-          cwd === worktreePath ||
-          inside(worktreePath, cwd)
-        );
-      });
+  const hasTerminal = Effect.fn("StorageCleanup.hasTerminal")(function* (worktreePath: string) {
+    for (const terminal of [...liveTerminals.values()].flatMap((entries) => [
+      ...entries.values(),
+    ])) {
+      if (terminal.status !== "starting" && terminal.status !== "running") continue;
+      const cwd = yield* canonicalWorkspacePath(terminal.cwd);
+      if (
+        cwd === worktreePath ||
+        inside(worktreePath, cwd) ||
+        (terminal.worktreePath !== null &&
+          (yield* canonicalWorkspacePath(terminal.worktreePath)) === worktreePath)
+      )
+        return true;
+    }
+    return false;
+  });
 
   const readThreads = Effect.fn("StorageCleanup.readThreads")(function* () {
     const active = yield* snapshots.getShellSnapshot();
@@ -205,13 +212,19 @@ export const make = Effect.gen(function* () {
     const snapshot = yield* readThreads();
     const root = yield* fs.realPath(config.worktreesDir);
     const refreshedDefaultRefs = new Map<string, Set<string>>();
-    const groups = Map.groupBy(
-      snapshot.threads.filter((thread) => thread.worktreePath !== null),
-      (thread) => path.resolve(thread.worktreePath!),
-    );
+    const groups = new Map<string, OrchestrationThreadShell[]>();
+    for (const thread of snapshot.threads) {
+      if (thread.worktreePath === null) continue;
+      const key = yield* canonicalWorkspacePath(thread.worktreePath);
+      const owners = groups.get(key) ?? [];
+      owners.push(thread);
+      groups.set(key, owners);
+    }
     const candidates = [
       ...[...groups.values()].flatMap((group) => (group.length === 1 ? [group[0]!] : [])),
-      ...deletedThreads.filter((thread) => !groups.has(path.resolve(thread.worktreePath))),
+      ...(yield* Effect.filter(deletedThreads, (thread) =>
+        canonicalWorkspacePath(thread.worktreePath).pipe(Effect.map((key) => !groups.has(key))),
+      )),
     ];
     for (const thread of candidates) {
       const settings = resolveWorktreeCleanup(serverSettings, thread.projectId);
@@ -224,7 +237,7 @@ export const make = Effect.gen(function* () {
       if (
         project === undefined ||
         (!deleted && !storageCleanupThreadIdle(thread, now)) ||
-        hasTerminal(worktreePath) ||
+        (yield* hasTerminal(worktreePath)) ||
         backgroundLiveness.getThreadBackgroundLiveness(thread.id) !== null ||
         (yield* hasPendingDestination(worktreePath, snapshot.threads))
       )
@@ -296,47 +309,51 @@ export const make = Effect.gen(function* () {
           }
         }
         if (!eligible) return;
-        // Re-read after Git/host calls so a queued turn, resumed session or new
-        // thread sharing this path cancels the removal.
-        const latestSnapshot = yield* readThreads();
-        if (yield* containsProjectRoot(worktreePath, [project, ...latestSnapshot.projects])) return;
-        const latest = latestSnapshot.threads.filter(
-          (entry) =>
-            entry.worktreePath !== null && path.resolve(entry.worktreePath) === worktreePath,
-        );
-        if (
-          hasTerminal(worktreePath) ||
-          backgroundLiveness.getThreadBackgroundLiveness(thread.id) !== null ||
-          (yield* hasPendingDestination(worktreePath, latestSnapshot.threads))
-        )
-          return;
-        if (deleted) {
+        // Both checks use the same complete predicate. The last one runs under
+        // a removal reservation, so new ownership cannot persist until it ends.
+        const stillUnused = Effect.fn("StorageCleanup.stillUnused")(function* () {
+          const currentSnapshot = yield* readThreads();
+          if (yield* containsProjectRoot(worktreePath, [project, ...currentSnapshot.projects]))
+            return false;
+          const owners = yield* Effect.filter(currentSnapshot.threads, (entry) =>
+            entry.worktreePath === null
+              ? Effect.succeed(false)
+              : canonicalWorkspacePath(entry.worktreePath).pipe(
+                  Effect.map((cwd) => cwd === worktreePath || inside(worktreePath, cwd)),
+                ),
+          );
           if (
-            latest.length > 0 ||
-            !resolveWorktreeCleanup(yield* settingsService.getSettings, thread.projectId)
-              .worktreeOnDelete
+            (yield* hasTerminal(worktreePath)) ||
+            backgroundLiveness.getThreadBackgroundLiveness(thread.id) !== null ||
+            (yield* hasPendingDestination(worktreePath, currentSnapshot.threads))
           )
-            return;
-          // A failed session stop is logged by the deletion reactor. Its drain
-          // alone is not proof that a provider released this checkout.
-          if (
-            (yield* providers.listSessions()).some(
-              (session) =>
-                session.status !== "closed" &&
-                (session.threadId === thread.id ||
-                  (session.cwd !== undefined &&
-                    (path.resolve(session.cwd) === worktreePath ||
-                      inside(worktreePath, path.resolve(session.cwd))))),
+            return false;
+          if (deleted) {
+            if (
+              owners.length > 0 ||
+              !resolveWorktreeCleanup(yield* settingsService.getSettings, thread.projectId)
+                .worktreeOnDelete
             )
+              return false;
+          } else if (
+            owners.length !== 1 ||
+            owners[0]!.id !== thread.id ||
+            !storageCleanupThreadIdle(owners[0]!, now) ||
+            storageCleanupActivityAt(owners[0]!) !== storageCleanupActivityAt(thread)
           )
-            return;
-        } else if (
-          latest.length !== 1 ||
-          latest[0]!.id !== thread.id ||
-          !storageCleanupThreadIdle(latest[0]!, now) ||
-          storageCleanupActivityAt(latest[0]!) !== storageCleanupActivityAt(thread)
-        )
-          return;
+            return false;
+          // A failed stop or stale projection must not authorize removing a live cwd.
+          for (const session of yield* providers.listSessions()) {
+            if (session.status === "closed") continue;
+            if (session.threadId === thread.id) return false;
+            if (session.cwd !== undefined) {
+              const cwd = yield* canonicalWorkspacePath(session.cwd);
+              if (cwd === worktreePath || inside(worktreePath, cwd)) return false;
+            }
+          }
+          return true;
+        });
+        if (!(yield* stillUnused())) return;
         const finalStatus = yield* git.statusDetailsLocal(worktreePath);
         if (
           !finalStatus.isRepo ||
@@ -373,17 +390,18 @@ export const make = Effect.gen(function* () {
           )
         )
           return;
-        const finalSnapshot = yield* readThreads();
-        if (
-          backgroundLiveness.getThreadBackgroundLiveness(thread.id) !== null ||
-          (yield* hasPendingDestination(worktreePath, finalSnapshot.threads))
-        )
-          return;
-        yield* git.removeWorktree({ cwd: project.workspaceRoot, path: worktreePath, force: false });
-        yield* gitManager.invalidateStatus(project.workspaceRoot);
-        // Preserve branch and path so the existing missing-worktree recovery
-        // policy decides whether to recreate it or use the main checkout.
-        yield* Effect.logInfo("storage cleanup removed worktree", { threadId: thread.id });
+        yield* Effect.gen(function* () {
+          if (!(yield* reserveWorkspace(worktreePath, "removal")) || !(yield* stillUnused()))
+            return;
+          yield* git.removeWorktree({
+            cwd: project.workspaceRoot,
+            path: worktreePath,
+            force: false,
+          });
+          yield* gitManager.invalidateStatus(project.workspaceRoot);
+          // Preserve branch and path for the existing missing-worktree recovery policy.
+          yield* Effect.logInfo("storage cleanup removed worktree", { threadId: thread.id });
+        }).pipe(Effect.scoped);
       }).pipe(
         (effect) => withWorkspaceLease(worktreePath, effect),
         Effect.catch((error) =>

@@ -471,11 +471,15 @@ describe("makeEnvironmentThreadPrewarm", () => {
   const makeHarness = Effect.fn("TestThreadPrewarm.makeHarness")(function* (options?: {
     readonly initialPrepared?: Option.Option<PreparedConnection>;
     readonly cachedShell?: false;
-    readonly fetchedSnapshot?: (threadId: string) => OrchestrationThreadDetailSnapshot;
+    readonly fetchedSnapshot?: (
+      threadId: string,
+      reasoningMessages: boolean,
+    ) => OrchestrationThreadDetailSnapshot;
     readonly hangSnapshotLoad?: boolean;
     readonly snapshotLoadStarted?: Deferred.Deferred<void>;
     readonly releaseSnapshotLoad?: Deferred.Deferred<void>;
     readonly paginationCapability?: boolean;
+    readonly reasoningCapability?: boolean;
     readonly initialSession?: "none";
     readonly historyWindow?: ThreadHistoryWindow["Service"];
     readonly runGate?: ThreadPrewarmRunGate["Service"];
@@ -528,7 +532,7 @@ describe("makeEnvironmentThreadPrewarm", () => {
     const loaderWindows = yield* Ref.make<ReadonlyArray<ThreadSnapshotLoadWindow | undefined>>([]);
     const snapshotAvailable = yield* Ref.make(true);
     const loader = ThreadSnapshotLoader.of({
-      load: (_prepared, threadId, window) =>
+      load: (_prepared, threadId, window, reasoningMessages) =>
         Ref.update(loaderCalls, (calls) => [...calls, threadId]).pipe(
           Effect.andThen(Ref.update(loaderWindows, (windows) => [...windows, window])),
           Effect.andThen(
@@ -548,7 +552,8 @@ describe("makeEnvironmentThreadPrewarm", () => {
                   Effect.map((available) =>
                     available
                       ? Option.some(
-                          options?.fetchedSnapshot?.(threadId) ?? detailSnapshot(threadId, 10),
+                          options?.fetchedSnapshot?.(threadId, reasoningMessages === true) ??
+                            detailSnapshot(threadId, 10),
                         )
                       : Option.none(),
                   ),
@@ -566,6 +571,7 @@ describe("makeEnvironmentThreadPrewarm", () => {
       ({
         initialConfig: Effect.succeed({
           threadSnapshotPagination: paginationCapability,
+          reasoningMessages: options?.reasoningCapability === true,
         } as never),
       }) as never;
     const session = yield* SubscriptionRef.make(
@@ -690,6 +696,40 @@ describe("makeEnvironmentThreadPrewarm", () => {
         expect(status.lastRunAt).not.toBe(null);
         expect(yield* Ref.get(harness.loaderCalls)).toEqual(["stale"]);
         expect(yield* Ref.get(harness.saveCalls)).toEqual([]);
+      }),
+    ),
+  );
+
+  it.effect("prewarms thinking messages with the negotiated role", () =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        const harness = yield* makeHarness({
+          reasoningCapability: true,
+          fetchedSnapshot: (threadId, reasoningMessages) => ({
+            ...detailSnapshot(threadId, 10),
+            thread: {
+              ...detailSnapshot(threadId, 10).thread,
+              messages: [
+                {
+                  id: MessageId.make("thinking"),
+                  role: reasoningMessages ? "reasoning" : "system",
+                  text: "Thinking",
+                  turnId: null,
+                  streaming: false,
+                  createdAt: "2026-04-01T00:00:00.000Z",
+                  updatedAt: "2026-04-01T00:00:00.000Z",
+                },
+              ],
+            },
+          }),
+        });
+        yield* SubscriptionRef.set(harness.supervisorState, CONNECTED_STATE);
+        yield* Effect.yieldNow;
+        yield* TestClock.adjust("3 seconds");
+        yield* Queue.take(harness.statuses);
+        expect((yield* Ref.get(harness.stored)).get("stale")?.thread.messages[0]?.role).toBe(
+          "reasoning",
+        );
       }),
     ),
   );
