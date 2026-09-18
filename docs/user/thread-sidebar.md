@@ -129,6 +129,8 @@ Grouped threads still auto-settle.
 New groups start below Active. The Thread groups dialog shows Active as a divider between the
 groups; move a group up or down across it to place that group above or below Active. Placement is
 part of the group definition, so every connected client shows the same arrangement.
+Editing and syncing groups requires an updated server. Older environments' existing groups
+remain visible, but their catalogs are read-only until those servers are upgraded.
 Group fold states are remembered on each device.
 
 Mobile shows the same groups. Use **Arrange threads** to drag between groups or back to Active.

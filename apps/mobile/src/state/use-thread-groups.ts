@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useRef } from "react";
 import type { EnvironmentId } from "@t3tools/contracts";
 import {
+  canSyncThreadGroups,
   mergeThreadGroups,
   retryThreadGroupSync,
   visibleThreadGroups,
@@ -18,7 +19,7 @@ export function useThreadGroups() {
       environments.filter(
         (environment) =>
           environment.connection.phase === "connected" &&
-          environment.serverConfig?.environment.capabilities.threadCustomGroups === true,
+          canSyncThreadGroups(environment.serverConfig?.environment.capabilities),
       ),
     [environments],
   );

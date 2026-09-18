@@ -1,5 +1,14 @@
 import * as Effect from "effect/Effect";
-import type { ThreadGroup } from "@t3tools/contracts";
+import type { ExecutionEnvironmentCapabilities, ThreadGroup } from "@t3tools/contracts";
+
+/** Only write catalogs where placement survives decoding, including repair pushes. */
+export function canSyncThreadGroups(
+  capabilities:
+    | Pick<ExecutionEnvironmentCapabilities, "threadCustomGroups" | "threadGroupPlacement">
+    | undefined,
+): boolean {
+  return capabilities?.threadCustomGroups === true && capabilities.threadGroupPlacement === true;
+}
 
 /** Merge per group so edits on disconnected servers preserve unrelated groups.
  * Deleted entries remain in the catalog to prevent resurrection on reconnect. */
@@ -13,7 +22,11 @@ export function mergeThreadGroups(
       if (
         !previous ||
         group.revision > previous.revision ||
-        (group.revision === previous.revision && JSON.stringify(group) > JSON.stringify(previous))
+        (group.revision === previous.revision &&
+          // Older clients can echo the same revision with placement stripped.
+          ((group.aboveActive === undefined) === (previous.aboveActive === undefined)
+            ? JSON.stringify(group) > JSON.stringify(previous)
+            : group.aboveActive !== undefined))
       ) {
         groups.set(group.id, group);
       }
