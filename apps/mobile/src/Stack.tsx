@@ -36,6 +36,7 @@ import { GitCommitSheet } from "./features/threads/git/GitCommitSheet";
 import { GitConfirmSheet } from "./features/threads/git/GitConfirmSheet";
 import { GitOverviewSheet } from "./features/threads/git/GitOverviewSheet";
 import { ThreadRouteScreen } from "./features/threads/ThreadRouteScreen";
+import { ThreadArrangementHost } from "./features/threads/ThreadArrangementSheet";
 import { ConnectionsRouteScreen } from "./features/connection/ConnectionsRouteScreen";
 import { ConnectionsNewRouteScreen } from "./features/connection/ConnectionsNewRouteScreen";
 import { HomeRouteScreen } from "./features/home/HomeRouteScreen";
@@ -546,6 +547,7 @@ function RootStackLayout(props: {
           </AdaptiveWorkspaceLayout>
         </ProviderUsageRouteProvider>
       </ExistingThreadSettingsRouteProvider>
+      <ThreadArrangementHost />
     </HardwareKeyboardCommandProvider>
   );
 }
