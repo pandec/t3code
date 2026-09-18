@@ -46,9 +46,9 @@ and worktree while you stay in the new thread composer. This requires a Git proj
 Pin a thread from its menu or use the pin button that appears when you hover its row on web and
 desktop. The filled button unpins it. `Cmd/Ctrl+Shift+P` toggles the open thread.
 
-The **Pinned** section is collapsible and shows its thread count while folded. T3 Code remembers the
-fold state on each device. Search and the Attention filter show matching pinned threads even when
-the section was folded.
+The **Pinned** and **Active** sections are collapsible and show their thread counts while folded.
+T3 Code remembers the fold state on each device and keeps the open thread visible. Search and the
+Attention filter show matching threads even when their section was folded.
 
 On web and desktop, you can also drag files from your computer onto any thread row:
 the thread opens and the files are attached in its composer, ready for
@@ -66,8 +66,7 @@ list to unpin it. Dragging a thread onto the **Settled** header settles it, and 
 thread into the active list un-settles it. A snoozed thread can be dragged out of the snoozed
 shelf, which wakes it, but threads cannot be dragged into the shelf because snoozing needs a wake
 time. Dragging a pinned thread out of the pinned section does not ask for unpin confirmation.
-Pinned and active boundary labels appear only while dragging, without moving the rows. The
-other rows slide aside to show where the thread will land. When you cross into another section,
+During a drag, the other rows slide aside to show where the thread will land. When you cross into another section,
 the dragged thread shows the action the drop performs, with its icon: **Pin**, **Unpin**,
 **Settle**, **Un-settle**, or **Wake**. Its status and hover actions hide during the drag. A pinned
 thread keeps its pin only while it stays in the pinned section; once it leaves, the badge takes

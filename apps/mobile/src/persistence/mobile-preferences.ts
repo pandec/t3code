@@ -43,6 +43,7 @@ export interface Preferences {
    * see `resolveThreadShelfExpanded` for the defaults each shelf falls back to.
    */
   readonly sidebarPinnedShelfExpanded?: boolean;
+  readonly sidebarActiveShelfExpanded?: boolean;
   readonly sidebarSnoozedShelfExpanded?: boolean;
   readonly sidebarSettledShelfExpanded?: boolean;
   readonly sidebarArchivedShelfExpanded?: boolean;
@@ -131,6 +132,7 @@ export function sanitizePreferences(parsed: Preferences): Preferences {
     projectGroupingEnabled?: boolean;
     projectGroupingMode?: SidebarProjectGroupingMode;
     sidebarPinnedShelfExpanded?: boolean;
+    sidebarActiveShelfExpanded?: boolean;
     sidebarSnoozedShelfExpanded?: boolean;
     sidebarSettledShelfExpanded?: boolean;
     sidebarArchivedShelfExpanded?: boolean;
@@ -215,6 +217,9 @@ export function sanitizePreferences(parsed: Preferences): Preferences {
   }
   if (typeof parsed.sidebarPinnedShelfExpanded === "boolean") {
     preferences.sidebarPinnedShelfExpanded = parsed.sidebarPinnedShelfExpanded;
+  }
+  if (typeof parsed.sidebarActiveShelfExpanded === "boolean") {
+    preferences.sidebarActiveShelfExpanded = parsed.sidebarActiveShelfExpanded;
   }
   if (typeof parsed.sidebarSnoozedShelfExpanded === "boolean") {
     preferences.sidebarSnoozedShelfExpanded = parsed.sidebarSnoozedShelfExpanded;

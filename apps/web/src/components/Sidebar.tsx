@@ -70,6 +70,7 @@ import {
   FolderPlusIcon,
   GroupIcon,
   GitBranchIcon,
+  InboxIcon,
   EyeOffIcon,
   ListFilterIcon,
   MessageCircleQuestionIcon,
@@ -294,6 +295,7 @@ const SETTLED_SHELF_EXPANDED_KEY = "t3code:sidebar-v2:settled-expanded";
 const SNOOZED_SHELF_EXPANDED_KEY = "t3code:sidebar-v2:snoozed-expanded";
 const ARCHIVED_SHELF_EXPANDED_KEY = "t3code:sidebar-v2:archived-expanded";
 const PINNED_SHELF_EXPANDED_KEY = "t3code:sidebar-v2:pinned-expanded";
+const ACTIVE_SHELF_EXPANDED_KEY = "t3code:sidebar-v2:active-expanded";
 const DRAFTS_SHELF_EXPANDED_KEY = "t3code:sidebar-v2:drafts-expanded";
 
 function threadTimeLabel(thread: SidebarThreadSummary): string {
@@ -653,7 +655,7 @@ function SortableSidebarMarker(props: {
   marker: SidebarListMarker;
   className?: string;
   children?: ReactNode;
-  "data-testid"?: string;
+  "data-testid"?: string | undefined;
 }) {
   const { setNodeRef, transform, transition } = useSortable({
     id: sidebarMarkerId(props.marker),
@@ -715,29 +717,15 @@ function SidebarDragBoundary(props: {
   label: string;
   visible: boolean;
   isDropTarget: boolean;
-  /** Keep a muted label on screen at rest, at shelf-header height. The
-      sorting strategy keeps that measured height while dragging, so pickup
-      swaps the label's tone without moving the rows below. */
-  restLabel?: boolean;
 }) {
-  const labelClassName = cn(
-    "absolute inset-x-2 flex h-4 items-center gap-2",
-    props.restLabel ? "top-3" : "top-1",
-  );
   return (
     <SortableSidebarMarker
       marker={props.marker}
       data-testid={`sidebar-${props.marker}`}
-      className={cn("pointer-events-none relative mx-0.5", props.restLabel ? "h-8" : "-mb-px h-0")}
+      className="pointer-events-none relative mx-0.5 -mb-px h-0"
     >
       {props.visible ? (
-        <div
-          className={cn("sidebar-drag-boundary-label", labelClassName)}
-          // The reveal delay exists so rows can open clearance first; a
-          // rest label already holds that space, so its drag tone swaps in
-          // immediately instead of blinking out for a beat.
-          style={props.restLabel ? { animation: "none" } : undefined}
-        >
+        <div className="sidebar-drag-boundary-label absolute inset-x-2 top-1 flex h-4 items-center gap-2">
           <span
             className={cn(
               "shrink-0 text-xs font-medium",
@@ -753,13 +741,6 @@ function SidebarDragBoundary(props: {
               props.isDropTarget ? "bg-primary/50" : "bg-sidebar-foreground/25",
             )}
           />
-        </div>
-      ) : props.restLabel ? (
-        <div className={labelClassName}>
-          <span className="shrink-0 text-xs font-medium text-muted-foreground/50">
-            {props.label}
-          </span>
-          <span aria-hidden className="h-px flex-1 bg-sidebar-border/60" />
         </div>
       ) : null}
     </SortableSidebarMarker>
@@ -3562,6 +3543,18 @@ export default function Sidebar() {
     () => setPinnedShelfExpanded((value) => !value),
     [setPinnedShelfExpanded],
   );
+  // The built-in Active group folds like a custom group: open by default,
+  // remembered per device under its own key so it can never collide with a
+  // custom group id.
+  const [activeShelfExpanded, setActiveShelfExpanded] = useLocalStorage(
+    ACTIVE_SHELF_EXPANDED_KEY,
+    true,
+    Schema.Boolean,
+  );
+  const toggleActiveShelf = useCallback(
+    () => setActiveShelfExpanded((value) => !value),
+    [setActiveShelfExpanded],
+  );
   // The collapse stops applying (and the header steps aside) while the
   // Attention filter is on: it already narrowed the list to rows the user
   // asked to see, and folding a subset of them away would answer a different
@@ -3607,8 +3600,7 @@ export default function Sidebar() {
         .get(id)!
         .filter(
           (thread) =>
-            id === null ||
-            !collapsedGroups.has(id) ||
+            (id === null ? activeShelfExpanded : !collapsedGroups.has(id)) ||
             attentionFilterEnabled ||
             isSearchingThreads ||
             scopedThreadKey(scopeThreadRef(thread.environmentId, thread.id)) === routeThreadKey,
@@ -3619,6 +3611,7 @@ export default function Sidebar() {
     customGroups.groups,
     customGroupsPosition,
     collapsedGroups,
+    activeShelfExpanded,
     attentionFilterEnabled,
     isSearchingThreads,
     routeThreadKey,
@@ -4385,7 +4378,7 @@ export default function Sidebar() {
     for (const section of activeGroupSections) {
       if (section.id !== null) items.push({ kind: "marker", marker: `custom-group:${section.id}` });
       else {
-        if (customGroups.groups.length) items.push({ kind: "marker", marker: "active-header" });
+        items.push({ kind: "marker", marker: "active-header" });
         items.push({ kind: "marker", marker: "active-placeholder" });
       }
       items.push(...rowsOf(section.threads, "active"));
@@ -4604,6 +4597,7 @@ export default function Sidebar() {
       if (plan.kind === "none") return;
       if (target.customGroupId)
         setCollapsedGroupIds((current) => current.filter((id) => id !== target.customGroupId));
+      else if (target.section === "active") setActiveShelfExpanded(true);
       if (plan.kind === "settle" && settlingThreadKeysRef.current.has(activeKey)) return;
       const assignments =
         plan.kind === "pin"
@@ -4747,6 +4741,7 @@ export default function Sidebar() {
     [
       customGroups.groups,
       setCollapsedGroupIds,
+      setActiveShelfExpanded,
       updateThreadMetadata,
       activeKeysById,
       pinnedKeysById,
@@ -6247,22 +6242,32 @@ export default function Sidebar() {
                             (thread) =>
                               threadGroupId(thread, customGroups.groups) === (group?.id ?? null),
                           ).length;
-                          const expanded = !group || !collapsedGroups.has(group.id);
-                          const Header = group ? "button" : "div";
+                          const expanded = group
+                            ? !collapsedGroups.has(group.id)
+                            : activeShelfExpanded;
                           items.push(
-                            <SortableSidebarMarker key={item.marker} marker={item.marker}>
-                              <Header
-                                {...(group ? { type: "button" as const } : {})}
+                            <SortableSidebarMarker
+                              key={item.marker}
+                              marker={item.marker}
+                              data-testid={group ? undefined : "sidebar-active-header"}
+                            >
+                              <button
+                                type="button"
                                 className={cn(
-                                  "mb-1 mt-3 flex w-full items-center gap-2 px-2.5 text-left text-xs text-muted-foreground/60",
+                                  "mb-1 mt-3 flex w-full cursor-pointer items-center gap-2 px-2.5 text-left text-xs",
+                                  group
+                                    ? "text-muted-foreground/60"
+                                    : "font-medium text-sidebar-foreground/70",
                                   dragState &&
                                     dragTargetSection === "active" &&
                                     dragState.targetCustomGroupId === (group?.id ?? null) &&
                                     "text-primary",
                                 )}
-                                aria-expanded={group ? expanded : undefined}
+                                aria-expanded={expanded}
+                                data-testid={group ? undefined : "sidebar-active-shelf-toggle"}
                                 onClick={() => {
                                   if (group) toggleCustomGroup(group.id);
+                                  else toggleActiveShelf();
                                 }}
                                 onContextMenu={(event) => {
                                   if (group) {
@@ -6271,17 +6276,18 @@ export default function Sidebar() {
                                   }
                                 }}
                               >
+                                {group ? null : (
+                                  <InboxIcon aria-hidden className="size-3 shrink-0" />
+                                )}
                                 <span className="min-w-0 truncate">
                                   {group?.name ?? "Active"}
                                   {!expanded ? ` (${count})` : ""}
                                 </span>
                                 <span className="h-px flex-1 bg-sidebar-border/60" />
-                                {group ? (
-                                  <ChevronDownIcon
-                                    className={cn("size-3", expanded && "rotate-180")}
-                                  />
-                                ) : null}
-                              </Header>
+                                <ChevronDownIcon
+                                  className={cn("size-3 shrink-0", expanded && "rotate-180")}
+                                />
+                              </button>
                             </SortableSidebarMarker>,
                           );
                           continue;
@@ -6300,19 +6306,15 @@ export default function Sidebar() {
                             break;
                           case "pinned-divider":
                             items.push(
+                              // The Active header carries the label; the
+                              // divider's rule is what the collision detector
+                              // reads to switch between Pinned and Active.
                               <SidebarDragBoundary
                                 key="pinned-divider"
                                 marker="pinned-divider"
-                                label={customGroups.groups.length ? "" : "Active"}
+                                label=""
                                 visible={from !== null && customGroups.groups.length === 0}
                                 isDropTarget={dragTargetSection === "active"}
-                                // Labeled at rest only under a pinned block:
-                                // an unsectioned list needs no divider.
-                                restLabel={
-                                  customGroups.groups.length === 0 &&
-                                  pinnedThreads.length > 0 &&
-                                  !attentionFilterEnabled
-                                }
                               />,
                             );
                             break;

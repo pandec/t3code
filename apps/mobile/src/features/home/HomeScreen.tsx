@@ -701,6 +701,8 @@ export function HomeScreen(props: HomeScreenProps) {
     useThreadShelfExpansion("settled");
   const { expanded: pinnedShelfExpanded, toggle: togglePinnedShelf } =
     useThreadShelfExpansion("pinned");
+  const { expanded: activeShelfExpanded, toggle: toggleActiveShelf } =
+    useThreadShelfExpansion("active");
   // Queued-start and snooze helpers need a clock while the list stays open.
   const [nowMinute, setNowMinute] = useState(() => new Date().toISOString().slice(0, 16));
   // Snooze wake times are second-precise; a counter bumped exactly at the
@@ -952,6 +954,10 @@ export function HomeScreen(props: HomeScreenProps) {
           props.searchQuery.trim() || props.attentionMemberThreadKeys != null
             ? new Set()
             : collapsedGroupIds,
+        activeShelfExpanded:
+          activeShelfExpanded ||
+          props.searchQuery.trim().length > 0 ||
+          props.attentionMemberThreadKeys != null,
         items: threadListV2Layout.items,
         pendingTasks: v2PendingTasks,
         pinnedCount: threadListV2Layout.pinnedCount,
@@ -968,6 +974,7 @@ export function HomeScreen(props: HomeScreenProps) {
     [
       customGroups.groups,
       collapsedGroupIds,
+      activeShelfExpanded,
       props.searchQuery,
       props.attentionMemberThreadKeys,
       nowMinute,
@@ -1021,7 +1028,8 @@ export function HomeScreen(props: HomeScreenProps) {
             name={item.name}
             count={item.count}
             expanded={item.expanded}
-            onToggle={item.groupId ? () => toggleCustomGroup(item.groupId!) : undefined}
+            builtIn={item.groupId === null}
+            onToggle={item.groupId ? () => toggleCustomGroup(item.groupId!) : toggleActiveShelf}
           />
         );
       if (item.type === "v2-pinned-shelf") {
@@ -1128,6 +1136,7 @@ export function HomeScreen(props: HomeScreenProps) {
     },
     [
       toggleCustomGroup,
+      toggleActiveShelf,
       handleDeleteThread,
       activeReorderEnvironmentIds,
       threadMovePlanners,

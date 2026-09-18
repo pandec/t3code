@@ -418,6 +418,8 @@ export type ThreadListV2ListItem =
 export function buildThreadListV2ListItems(input: {
   readonly customGroups?: readonly ThreadGroup[];
   readonly collapsedGroupIds?: ReadonlySet<string>;
+  /** False folds the built-in Active group; absent or true keeps it open. */
+  readonly activeShelfExpanded?: boolean;
   readonly selectedThreadKey?: string | null;
   readonly items: ReadonlyArray<ThreadListV2Item>;
   readonly pendingTasks: ReadonlyArray<PendingNewTask>;
@@ -492,47 +494,45 @@ export function buildThreadListV2ListItems(input: {
     result.push({ type: "v2-pinned-divider", key: "v2-pinned-divider" });
   }
   const activeItems = threadItems.slice(pinnedEnd, activeEnd);
-  if (input.customGroups?.length) {
-    // Active leads and custom groups follow, matching the web default.
-    const ungrouped = activeItems.filter(
-      (item) =>
-        item.type !== "v2-thread" ||
-        threadGroupId(item.item.thread, input.customGroups ?? []) === null,
-    );
+  const customGroups = input.customGroups ?? [];
+  const isSelected = (row: ThreadListV2ListItem) =>
+    row.type === "v2-thread" &&
+    `${row.item.thread.environmentId}:${row.item.thread.id}` === input.selectedThreadKey;
+  // Active leads and custom groups follow, matching the web default. Every
+  // group folds the same way: rows hide while collapsed, except the open
+  // thread. Without custom groups the Active header appears only when it
+  // has rows, so an empty list still reads as empty.
+  const ungrouped = activeItems.filter(
+    (item) => item.type !== "v2-thread" || threadGroupId(item.item.thread, customGroups) === null,
+  );
+  const activeExpanded = input.activeShelfExpanded !== false;
+  if (ungrouped.length > 0 || customGroups.length > 0) {
     result.push({
       type: "v2-custom-group",
       key: "v2-active-header",
       groupId: null,
       name: "Active",
       count: ungrouped.length,
-      expanded: true,
+      expanded: activeExpanded,
     });
-    result.push(...ungrouped, ...pendingItems);
-    for (const group of input.customGroups) {
-      const rows = activeItems.filter(
-        (item) =>
-          item.type === "v2-thread" &&
-          threadGroupId(item.item.thread, input.customGroups ?? []) === group.id,
-      );
-      const expanded = !input.collapsedGroupIds?.has(group.id);
-      result.push({
-        type: "v2-custom-group",
-        key: `v2-custom-group:${group.id}`,
-        groupId: group.id,
-        name: group.name,
-        count: rows.length,
-        expanded,
-      });
-      result.push(
-        ...rows.filter(
-          (row) =>
-            expanded ||
-            (row.type === "v2-thread" &&
-              `${row.item.thread.environmentId}:${row.item.thread.id}` === input.selectedThreadKey),
-        ),
-      );
-    }
-  } else result.push(...activeItems, ...pendingItems);
+  }
+  result.push(...(activeExpanded ? ungrouped : ungrouped.filter(isSelected)), ...pendingItems);
+  for (const group of customGroups) {
+    const rows = activeItems.filter(
+      (item) =>
+        item.type === "v2-thread" && threadGroupId(item.item.thread, customGroups) === group.id,
+    );
+    const expanded = !input.collapsedGroupIds?.has(group.id);
+    result.push({
+      type: "v2-custom-group",
+      key: `v2-custom-group:${group.id}`,
+      groupId: group.id,
+      name: group.name,
+      count: rows.length,
+      expanded,
+    });
+    result.push(...(expanded ? rows : rows.filter(isSelected)));
+  }
   if (snoozedShelfHeaderIndex !== null && snoozedCount > 0) {
     result.push({
       type: "v2-snoozed-shelf",
