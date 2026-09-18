@@ -1,5 +1,5 @@
 import type { ThreadGroup } from "@t3tools/contracts";
-import { threadGroupId } from "@t3tools/shared/threadGroups";
+import { threadGroupId, threadGroupSections } from "@t3tools/shared/threadGroups";
 import { passesAttentionFilter } from "@t3tools/client-runtime/state/thread-attention";
 import { threadPullRequestSearchTerms } from "@t3tools/shared/threadPullRequests";
 import {
@@ -493,33 +493,20 @@ export function buildThreadListV2ListItems(input: {
   }
   const activeItems = threadItems.slice(pinnedEnd, activeEnd);
   if (input.customGroups?.length) {
-    // Active leads and custom groups follow, matching the web default.
-    const ungrouped = activeItems.filter(
-      (item) =>
-        item.type !== "v2-thread" ||
-        threadGroupId(item.item.thread, input.customGroups ?? []) === null,
-    );
-    result.push({
-      type: "v2-custom-group",
-      key: "v2-active-header",
-      groupId: null,
-      name: "Active",
-      count: ungrouped.length,
-      expanded: true,
-    });
-    result.push(...ungrouped, ...pendingItems);
-    for (const group of input.customGroups) {
-      const rows = activeItems.filter(
-        (item) =>
-          item.type === "v2-thread" &&
-          threadGroupId(item.item.thread, input.customGroups ?? []) === group.id,
+    // Groups sit on the side of Active chosen on web or desktop.
+    for (const group of threadGroupSections(input.customGroups)) {
+      const id = group?.id ?? null;
+      const rows = activeItems.filter((item) =>
+        item.type === "v2-thread"
+          ? threadGroupId(item.item.thread, input.customGroups ?? []) === id
+          : group === null,
       );
-      const expanded = !input.collapsedGroupIds?.has(group.id);
+      const expanded = group === null || !input.collapsedGroupIds?.has(group.id);
       result.push({
         type: "v2-custom-group",
-        key: `v2-custom-group:${group.id}`,
-        groupId: group.id,
-        name: group.name,
+        key: group === null ? "v2-active-header" : `v2-custom-group:${group.id}`,
+        groupId: id,
+        name: group?.name ?? "Active",
         count: rows.length,
         expanded,
       });
@@ -531,6 +518,7 @@ export function buildThreadListV2ListItems(input: {
               `${row.item.thread.environmentId}:${row.item.thread.id}` === input.selectedThreadKey),
         ),
       );
+      if (group === null) result.push(...pendingItems);
     }
   } else result.push(...activeItems, ...pendingItems);
   if (snoozedShelfHeaderIndex !== null && snoozedCount > 0) {

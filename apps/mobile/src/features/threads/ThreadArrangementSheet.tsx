@@ -1,5 +1,5 @@
 import { useThreadGroups } from "../../state/use-thread-groups";
-import { threadGroupId } from "@t3tools/shared/threadGroups";
+import { threadGroupId, threadGroupSections } from "@t3tools/shared/threadGroups";
 import { appAtomRegistry } from "../../state/atom-registry";
 import { useAtomValue } from "@effect/atom-react";
 import type { EnvironmentThreadShell } from "@t3tools/client-runtime/state/shell";
@@ -237,7 +237,7 @@ export function ThreadArrangementSheet(props: { onClose: () => void }) {
     for (const section of ["pinned", "active", "snoozed", "settled"] as const) {
       if (section === "snoozed" && sections[section].length === 0) continue;
       if (section === "active" && customGroups.groups.length) {
-        for (const group of [null, ...customGroups.groups]) {
+        for (const group of threadGroupSections(customGroups.groups)) {
           const members = sections.active.filter(
             (thread) => threadGroupId(thread, customGroups.groups) === (group?.id ?? null),
           );

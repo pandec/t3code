@@ -1,5 +1,5 @@
 import { useThreadGroupCatalog } from "../hooks/useThreadGroups";
-import { threadGroupId } from "@t3tools/shared/threadGroups";
+import { threadGroupId, threadGroupSections } from "@t3tools/shared/threadGroups";
 import { openThreadGroupsDialog } from "./sidebar/threadGroupsDialogStore";
 import { requestCustomSnooze } from "./CustomSnoozeDialog";
 import { useSupportsMultiplePullRequests } from "~/hooks/useSupportsMultiplePullRequests";
@@ -2591,9 +2591,6 @@ export default function Sidebar() {
   const updateSidebarProjectFilters = useUiStateStore((store) => store.updateSidebarProjectFilters);
   const threads = useThreadShells();
   const customGroups = useThreadGroupCatalog();
-  const customGroupsPosition = useClientSettings(
-    (settings) => settings.sidebarCustomGroupsPosition,
-  );
   const threadGroupsButton = useClientSettings((s) => s.sidebarThreadGroupsButton);
   const [collapsedGroupIds, setCollapsedGroupIds] = useLocalStorage(
     "t3:collapsed-thread-groups",
@@ -3599,16 +3596,14 @@ export default function Sidebar() {
     ]);
     for (const thread of activeThreads)
       sections.get(threadGroupId(thread, customGroups.groups))!.push(thread);
-    const ids = customGroups.groups.map((group) => group.id);
-    const orderedIds = customGroupsPosition === "below-active" ? [null, ...ids] : [...ids, null];
-    return orderedIds.map((id) => ({
-      id,
+    return threadGroupSections(customGroups.groups).map((group) => ({
+      id: group?.id ?? null,
       threads: sections
-        .get(id)!
+        .get(group?.id ?? null)!
         .filter(
           (thread) =>
-            id === null ||
-            !collapsedGroups.has(id) ||
+            group === null ||
+            !collapsedGroups.has(group.id) ||
             attentionFilterEnabled ||
             isSearchingThreads ||
             scopedThreadKey(scopeThreadRef(thread.environmentId, thread.id)) === routeThreadKey,
@@ -3617,7 +3612,6 @@ export default function Sidebar() {
   }, [
     activeThreads,
     customGroups.groups,
-    customGroupsPosition,
     collapsedGroups,
     attentionFilterEnabled,
     isSearchingThreads,

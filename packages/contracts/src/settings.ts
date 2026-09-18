@@ -40,7 +40,7 @@ import {
   type ProviderDriverKind,
 } from "./providerInstance.ts";
 import { PullRequestMergeMethod } from "./pullRequest.ts";
-import { ThreadGroups, SidebarCustomGroupsPosition } from "./threadGroups.ts";
+import { ThreadGroups } from "./threadGroups.ts";
 import { TtsProvider } from "./voice.ts";
 
 // ── Client Settings (local-only) ───────────────────────────────
@@ -470,9 +470,6 @@ export const LoadBalancingWeights = Schema.Record(
 export const DiffColorScheme = Schema.Literals(["red-green", "blue-orange"]);
 
 export const ClientSettingsSchema = Schema.Struct({
-  sidebarCustomGroupsPosition: SidebarCustomGroupsPosition.pipe(
-    Schema.withDecodingDefault(Effect.succeed("below-active" as const)),
-  ),
   diffColorScheme: DiffColorScheme.pipe(
     Schema.withDecodingDefault(Effect.succeed("red-green" as const)),
   ),
@@ -1996,7 +1993,6 @@ export const ServerSettingsPatch = Schema.Struct({
 export type ServerSettingsPatch = typeof ServerSettingsPatch.Type;
 
 export const ClientSettingsPatch = Schema.Struct({
-  sidebarCustomGroupsPosition: Schema.optionalKey(SidebarCustomGroupsPosition),
   diffColorScheme: Schema.optionalKey(DiffColorScheme),
   loadBalancingEnabled: Schema.optionalKey(Schema.Boolean),
   loadBalancingWeights: Schema.optionalKey(LoadBalancingWeights),

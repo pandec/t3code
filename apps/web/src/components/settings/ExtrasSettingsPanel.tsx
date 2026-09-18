@@ -20,7 +20,7 @@ import {
   MIN_TURN_COMPLETION_MIN_DURATION_SECONDS,
   type SidebarThreadProviderIconVisibility,
 } from "@t3tools/contracts/settings";
-import type { EnvironmentId, SidebarCustomGroupsPosition } from "@t3tools/contracts";
+import type { EnvironmentId } from "@t3tools/contracts";
 import { normalizeLinearTeamKeys } from "@t3tools/contracts/settings";
 import { formatUsd } from "@t3tools/shared/usageFormat";
 
@@ -73,11 +73,6 @@ const THREAD_PROVIDER_ICON_LABELS: Record<SidebarThreadProviderIconVisibility, s
   hover: "On hover",
   always: "Always",
   never: "Never",
-};
-
-const CUSTOM_GROUP_POSITION_LABELS: Record<SidebarCustomGroupsPosition, string> = {
-  "below-active": "Below Active",
-  "above-active": "Above Active",
 };
 
 /** Half-second granularity keeps the steer window readable in seconds. */
@@ -948,32 +943,6 @@ function SidebarExtrasSection() {
 
       {defaultSidebarEnabled ? (
         <>
-          <SettingsRow
-            title="Custom group position"
-            description="Keep custom groups together above or below Active."
-            control={
-              <Select
-                value={settings.sidebarCustomGroupsPosition}
-                onValueChange={(value) => {
-                  if (value === "above-active" || value === "below-active")
-                    updateSettings({ sidebarCustomGroupsPosition: value });
-                }}
-              >
-                <SelectTrigger aria-label="Custom group position">
-                  <SelectValue>
-                    {CUSTOM_GROUP_POSITION_LABELS[settings.sidebarCustomGroupsPosition]}
-                  </SelectValue>
-                </SelectTrigger>
-                <SelectPopup align="end" alignItemWithTrigger={false}>
-                  {Object.entries(CUSTOM_GROUP_POSITION_LABELS).map(([value, label]) => (
-                    <SelectItem hideIndicator key={value} value={value}>
-                      {label}
-                    </SelectItem>
-                  ))}
-                </SelectPopup>
-              </Select>
-            }
-          />
           <SettingsRow
             {...searchableSetting("sidebar-thread-groups-button")}
             description="Show a Thread groups button in the sidebar toolbar. The command palette can always open the same dialog."

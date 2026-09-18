@@ -25,9 +25,20 @@ export function mergeThreadGroups(
 export function visibleThreadGroups(catalog: ReadonlyArray<ThreadGroup>): ThreadGroup[] {
   return catalog
     .filter((group) => !group.deleted)
-    .sort((a, b) =>
-      a.orderKey < b.orderKey ? -1 : a.orderKey > b.orderKey ? 1 : a.id < b.id ? -1 : 1,
+    .sort(
+      (a, b) =>
+        Number(b.aboveActive === true) - Number(a.aboveActive === true) ||
+        (a.orderKey < b.orderKey ? -1 : a.orderKey > b.orderKey ? 1 : a.id < b.id ? -1 : 1),
     );
+}
+
+/** Insert Active into the visible, sorted catalog for every client's list and editor. */
+export function threadGroupSections(groups: readonly ThreadGroup[]): Array<ThreadGroup | null> {
+  return [
+    ...groups.filter((group) => group.aboveActive === true),
+    null,
+    ...groups.filter((group) => group.aboveActive !== true),
+  ];
 }
 
 export function nextThreadGroupRevision(

@@ -12,6 +12,7 @@ import {
   retryThreadGroupSync,
   nextThreadGroupRevision,
   threadGroupId,
+  threadGroupSections,
   visibleThreadGroups,
 } from "./threadGroups.ts";
 
@@ -27,6 +28,36 @@ const group = (id: string, revision = "0000000000000001:a"): ThreadGroup => ({
 });
 
 describe("thread group replication", () => {
+  it("defaults old catalogs below Active and syncs placement with each group's revision", () => {
+    const original = [group("a"), group("b"), group("c")];
+    const legacy = decodeSettings({ threadGroups: original });
+    expect(
+      threadGroupSections(visibleThreadGroups(legacy.threadGroups)).map((g) => g?.id ?? null),
+    ).toEqual([null, "a", "b", "c"]);
+    const patch = decodePatch({
+      threadGroups: [{ ...original[1]!, aboveActive: true, revision: "0000000000000002:b" }],
+    });
+    const updated = applyServerSettingsPatch(legacy, patch);
+    const reconnected = applyServerSettingsPatch(updated, { threadGroups: original });
+    expect(reconnected.threadGroups).toEqual(updated.threadGroups);
+    expect(
+      threadGroupSections(visibleThreadGroups(reconnected.threadGroups)).map((g) => g?.id ?? null),
+    ).toEqual(["b", null, "a", "c"]);
+    expect(mergeThreadGroups(original, updated.threadGroups)).toEqual(
+      mergeThreadGroups(updated.threadGroups, original),
+    );
+
+    const restored = applyServerSettingsPatch(
+      updated,
+      decodePatch({
+        threadGroups: [{ ...original[1]!, aboveActive: false, revision: "0000000000000003:c" }],
+      }),
+    );
+    expect(
+      threadGroupSections(visibleThreadGroups(restored.threadGroups)).map((g) => g?.id ?? null),
+    ).toEqual([null, "a", "b", "c"]);
+    expect(threadGroupSections([])).toEqual([null]);
+  });
   it("merges independent edits and converges in either arrival order", () => {
     const left = [group("research"), group("parked")];
     const right = [

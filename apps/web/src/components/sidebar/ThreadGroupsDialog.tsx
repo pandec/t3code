@@ -1,7 +1,7 @@
-import { pinOrderKeyBetween } from "@t3tools/client-runtime/state/thread-sort";
-import { planThreadGroupMove } from "./ThreadGroupsDialog.logic";
+import { newThreadGroupOrderKey, planThreadGroupMove } from "./ThreadGroupsDialog.logic";
+import { threadGroupSections } from "@t3tools/shared/threadGroups";
 import { randomUUID } from "~/lib/utils";
-import { useRef, useState } from "react";
+import { useMemo, useRef, useState } from "react";
 import type { ThreadGroup } from "@t3tools/contracts";
 import { useThreadGroups } from "~/hooks/useThreadGroups";
 import { useThreadGroupsDialog } from "./threadGroupsDialogStore";
@@ -63,6 +63,8 @@ export function ThreadGroupsDialog(props: {
     const group = planThreadGroupMove(props.groups, index, delta);
     if (group) void save([group]);
   };
+  // Groups render around a fixed Active divider; arrows move across it.
+  const sections = useMemo(() => threadGroupSections(props.groups), [props.groups]);
   return (
     <Dialog open={props.open} onOpenChange={props.onOpenChange}>
       {/* "none" focuses the popup itself so Tab starts at the first group's name;
@@ -74,57 +76,70 @@ export function ThreadGroupsDialog(props: {
         <DialogHeader>
           <DialogTitle>Thread groups</DialogTitle>
           <DialogDescription>
-            Organize threads across projects and connected environments. Removing a group keeps its
-            threads.
+            Organize threads across projects and connected environments. Groups above the divider
+            show before Active in the sidebar. Removing a group keeps its threads.
           </DialogDescription>
         </DialogHeader>
         <DialogPanel className="space-y-3">
-          {props.groups.map((group, index) => (
-            <div key={`${group.id}:${group.name}`} className="flex items-center gap-2">
-              <Input
-                aria-label={`Rename ${group.name}`}
-                defaultValue={group.name}
-                maxLength={80}
-                disabled={props.disabled || saving}
-                onBlur={(event) => {
-                  const next = event.target.value.trim();
-                  if (next && next !== group.name) {
-                    const input = event.target;
-                    void save([{ ...group, name: next }]).then((success) => {
-                      if (!success) input.value = group.name;
-                    });
-                  } else event.target.value = group.name;
-                }}
-              />
-              <Button
-                variant="ghost"
-                size="icon"
-                aria-label={`Move ${group.name} up`}
-                disabled={props.disabled || saving || index === 0}
-                onClick={() => move(index, -1)}
+          {sections.map((group, index) =>
+            group === null ? (
+              <div
+                key="active-divider"
+                role="separator"
+                aria-label="Active"
+                className="flex items-center gap-2 text-xs font-medium text-muted-foreground"
               >
-                <ArrowUpIcon />
-              </Button>
-              <Button
-                variant="ghost"
-                size="icon"
-                aria-label={`Move ${group.name} down`}
-                disabled={props.disabled || saving || index === props.groups.length - 1}
-                onClick={() => move(index, 1)}
-              >
-                <ArrowDownIcon />
-              </Button>
-              <Button
-                variant="ghost"
-                size="icon"
-                aria-label={`Remove ${group.name}`}
-                disabled={props.disabled || saving}
-                onClick={() => void save([{ ...group, deleted: true }])}
-              >
-                <TrashIcon />
-              </Button>
-            </div>
-          ))}
+                <div className="h-px flex-1 bg-border" />
+                <span>Active</span>
+                <div className="h-px flex-1 bg-border" />
+              </div>
+            ) : (
+              <div key={`${group.id}:${group.name}`} className="flex items-center gap-2">
+                <Input
+                  aria-label={`Rename ${group.name}`}
+                  defaultValue={group.name}
+                  maxLength={80}
+                  disabled={props.disabled || saving}
+                  onBlur={(event) => {
+                    const next = event.target.value.trim();
+                    if (next && next !== group.name) {
+                      const input = event.target;
+                      void save([{ ...group, name: next }]).then((success) => {
+                        if (!success) input.value = group.name;
+                      });
+                    } else event.target.value = group.name;
+                  }}
+                />
+                <Button
+                  variant="ghost"
+                  size="icon"
+                  aria-label={`Move ${group.name} up`}
+                  disabled={props.disabled || saving || index === 0}
+                  onClick={() => move(index, -1)}
+                >
+                  <ArrowUpIcon />
+                </Button>
+                <Button
+                  variant="ghost"
+                  size="icon"
+                  aria-label={`Move ${group.name} down`}
+                  disabled={props.disabled || saving || index === sections.length - 1}
+                  onClick={() => move(index, 1)}
+                >
+                  <ArrowDownIcon />
+                </Button>
+                <Button
+                  variant="ghost"
+                  size="icon"
+                  aria-label={`Remove ${group.name}`}
+                  disabled={props.disabled || saving}
+                  onClick={() => void save([{ ...group, deleted: true }])}
+                >
+                  <TrashIcon />
+                </Button>
+              </div>
+            ),
+          )}
           <form
             className="flex gap-2"
             onSubmit={(event) => {
@@ -135,7 +150,7 @@ export function ThreadGroupsDialog(props: {
                   id: randomUUID(),
                   name: name.trim(),
                   deleted: false,
-                  orderKey: pinOrderKeyBetween(props.groups.at(-1)?.orderKey ?? null, null) ?? "n",
+                  orderKey: newThreadGroupOrderKey(props.groups),
                 },
               ]).then((success) => {
                 if (success) setName("");
