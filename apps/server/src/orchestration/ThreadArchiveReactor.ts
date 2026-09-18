@@ -6,6 +6,7 @@ import * as Crypto from "effect/Crypto";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
+import * as Path from "effect/Path";
 import * as Schema from "effect/Schema";
 import type * as Scope from "effect/Scope";
 import * as Stream from "effect/Stream";
@@ -43,6 +44,7 @@ export const make = Effect.gen(function* () {
   const terminals = yield* TerminalManager;
   const git = yield* GitVcsDriver;
   const crypto = yield* Crypto.Crypto;
+  const path = yield* Path.Path;
   const commandId = crypto.randomUUIDv4.pipe(Effect.map(CommandId.make));
 
   const process = Effect.fn("ThreadArchiveReactor.process")(function* (threadId: ThreadId) {
@@ -103,11 +105,22 @@ export const make = Effect.gen(function* () {
           const project = snapshot.projects.find((entry) => entry.id === archived.projectId);
           if (!project)
             return yield* new ArchiveCleanupError({ message: "The project no longer exists." });
-          const path = yield* canonicalWorkspacePath(worktreePath);
-          if (path === (yield* canonicalWorkspacePath(project.workspaceRoot))) {
-            return yield* new ArchiveCleanupError({
-              message: "Refusing to remove the project checkout.",
-            });
+          const root = yield* canonicalWorkspacePath(worktreePath);
+          const contains = (cwd: string) => {
+            const relative = path.relative(root, cwd);
+            return (
+              relative === "" ||
+              (relative !== ".." &&
+                !relative.startsWith(`..${path.sep}`) &&
+                !path.isAbsolute(relative))
+            );
+          };
+          for (const entry of snapshot.projects) {
+            if (contains(yield* canonicalWorkspacePath(entry.workspaceRoot))) {
+              return yield* new ArchiveCleanupError({
+                message: "Refusing to remove a project checkout.",
+              });
+            }
           }
           for (const thread of snapshot.threads) {
             if (thread.id === threadId || thread.archivedAt !== null) continue;
@@ -115,9 +128,9 @@ export const make = Effect.gen(function* () {
               thread.worktreePath ??
               snapshot.projects.find((entry) => entry.id === thread.projectId)?.workspaceRoot;
             if (
-              (cwd !== undefined && (yield* canonicalWorkspacePath(cwd)) === path) ||
+              (cwd !== undefined && contains(yield* canonicalWorkspacePath(cwd))) ||
               (thread.worktreeSwitch?.status === "pending" &&
-                (yield* canonicalWorkspacePath(thread.worktreeSwitch.targetPath)) === path)
+                contains(yield* canonicalWorkspacePath(thread.worktreeSwitch.targetPath)))
             ) {
               return yield* new ArchiveCleanupError({
                 message:

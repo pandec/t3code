@@ -675,42 +675,81 @@ describe("OrchestrationEngine", () => {
     }).pipe(Effect.provide(makeOrchestrationLayer())),
   );
 
-  effectIt.effect("rejects new workspace ownership during removal and accepts a later retry", () =>
-    Effect.gen(function* () {
-      const engine = yield* OrchestrationEngineService;
-      const projectId = ProjectId.make("cleanup-project");
-      const workspaceRoot = "/tmp/cleanup-ownership-test";
-      yield* engine.dispatch({
-        type: "project.create",
-        commandId: CommandId.make("cleanup-project"),
-        projectId,
-        title: "Cleanup",
-        workspaceRoot,
-        createdAt: now(),
-      });
-      const create = {
-        type: "thread.create" as const,
-        commandId: CommandId.make("cleanup-thread"),
-        threadId: ThreadId.make("cleanup-thread"),
-        projectId,
-        title: "Cleanup",
-        modelSelection: { instanceId: ProviderInstanceId.make("codex"), model: "gpt-5-codex" },
-        interactionMode: "default" as const,
-        runtimeMode: "full-access" as const,
-        branch: "feature",
-        worktreePath: workspaceRoot + "/worktree",
-        createdAt: now(),
-      };
-      yield* Effect.gen(function* () {
-        expect(yield* reserveWorkspace(create.worktreePath, "removal")).toBe(true);
-        expect((yield* engine.dispatch(create).pipe(Effect.flip)).message).toContain(
-          "being removed",
-        );
-      }).pipe(Effect.scoped);
-      yield* engine.dispatch({ ...create, commandId: CommandId.make("cleanup-thread-retry") });
-      const snapshots = yield* ProjectionSnapshotQuery;
-      expect((yield* snapshots.getSnapshot()).threads[0]?.worktreePath).toBe(create.worktreePath);
-    }).pipe(Effect.provide(makeOrchestrationLayer())),
+  effectIt.effect.each(["create", "fork"] as const)(
+    "rejects %s workspace ownership during removal and accepts a later retry",
+    (scenario) =>
+      Effect.gen(function* () {
+        const engine = yield* OrchestrationEngineService;
+        const projectId = ProjectId.make("cleanup-project");
+        const workspaceRoot = "/tmp/cleanup-ownership-test";
+        yield* engine.dispatch({
+          type: "project.create",
+          commandId: CommandId.make("cleanup-project"),
+          projectId,
+          title: "Cleanup",
+          workspaceRoot,
+          createdAt: now(),
+        });
+        const create = {
+          type: "thread.create" as const,
+          commandId: CommandId.make("cleanup-thread"),
+          threadId: ThreadId.make("cleanup-thread"),
+          projectId,
+          title: "Cleanup",
+          modelSelection: { instanceId: ProviderInstanceId.make("codex"), model: "gpt-5-codex" },
+          interactionMode: "default" as const,
+          runtimeMode: "full-access" as const,
+          branch: "feature",
+          worktreePath: workspaceRoot + "/worktree",
+          createdAt: now(),
+        };
+        const sourceThreadId = ThreadId.make("cleanup-source");
+        if (scenario === "fork") {
+          yield* engine.dispatch({
+            ...create,
+            commandId: CommandId.make("cleanup-source"),
+            threadId: sourceThreadId,
+          });
+          yield* engine.dispatch({
+            type: "thread.session.set",
+            commandId: CommandId.make("cleanup-source-session"),
+            threadId: sourceThreadId,
+            session: {
+              threadId: sourceThreadId,
+              status: "stopped",
+              providerName: "codex",
+              providerInstanceId: ProviderInstanceId.make("codex"),
+              runtimeMode: "full-access",
+              activeTurnId: null,
+              lastError: null,
+              updatedAt: now(),
+            },
+            createdAt: now(),
+          });
+        }
+        const command: OrchestrationCommand =
+          scenario === "fork"
+            ? {
+                type: "thread.fork",
+                commandId: create.commandId,
+                threadId: create.threadId,
+                sourceThreadId,
+                createdAt: now(),
+              }
+            : create;
+        yield* Effect.gen(function* () {
+          expect(yield* reserveWorkspace(create.worktreePath, "removal")).toBe(true);
+          expect((yield* engine.dispatch(command).pipe(Effect.flip)).message).toContain(
+            "being removed",
+          );
+        }).pipe(Effect.scoped);
+        yield* engine.dispatch({ ...command, commandId: CommandId.make("cleanup-thread-retry") });
+        const snapshots = yield* ProjectionSnapshotQuery;
+        expect(
+          (yield* snapshots.getSnapshot()).threads.find((thread) => thread.id === create.threadId)
+            ?.worktreePath,
+        ).toBe(create.worktreePath);
+      }).pipe(Effect.provide(makeOrchestrationLayer())),
   );
 
   effectIt.effect.each(["drained", "new-turn", "provider-turn", "no-turn"] as const)(

@@ -290,6 +290,8 @@ const makeOrchestrationEngine = Effect.gen(function* () {
         const command = envelope.command;
         const changesWorkspaceUse =
           command.type === "thread.create" ||
+          command.type === "thread.fork" ||
+          command.type === "thread.import" ||
           command.type === "thread.meta.update" ||
           command.type === "thread.unarchive" ||
           command.type === "thread.delete" ||
@@ -300,7 +302,11 @@ const makeOrchestrationEngine = Effect.gen(function* () {
           command.type === "thread.worktree-switch.execute";
         const claimedPaths: string[] = [];
         if (changesWorkspaceUse && "threadId" in command) {
-          const thread = commandReadModel.threads.find((entry) => entry.id === command.threadId);
+          const thread = commandReadModel.threads.find(
+            (entry) =>
+              entry.id ===
+              (command.type === "thread.fork" ? command.sourceThreadId : command.threadId),
+          );
           const projectId =
             "projectId" in command ? (command.projectId ?? thread?.projectId) : thread?.projectId;
           const project = commandReadModel.projects.find((entry) => entry.id === projectId);

@@ -35,9 +35,13 @@ const cleanupScenarios = [
   "success",
   "dirty",
   "shared",
+  "shared-nested",
+  "other-project",
+  "nested-project",
   "detached",
   "stop-failed",
   "pending-switch",
+  "pending-switch-nested",
 ] as const;
 
 it.effect.each(cleanupScenarios)(
@@ -45,6 +49,9 @@ it.effect.each(cleanupScenarios)(
   (scenario) =>
     Effect.scoped(
       Effect.gen(function* () {
+        const pendingSwitch = scenario === "pending-switch" || scenario === "pending-switch-nested";
+        const shared = scenario === "shared" || scenario === "shared-nested";
+        const protectedProject = scenario === "other-project" || scenario === "nested-project";
         const completed = yield* Deferred.make<string | undefined>();
         const calls: string[] = [];
         const row: ProjectionThread = {
@@ -88,15 +95,22 @@ it.effect.each(cleanupScenarios)(
           runtimeMode: "full-access",
           interactionMode: "default",
           branch: "feature",
-          worktreePath: scenario === "pending-switch" ? "/repo/other-worktree" : "/repo/worktree",
-          ...(scenario === "pending-switch"
+          worktreePath: pendingSwitch
+            ? "/repo/other-worktree"
+            : scenario === "shared-nested"
+              ? "/repo/worktree/packages/ui"
+              : "/repo/worktree",
+          ...(pendingSwitch
             ? {
                 worktreeSwitch: {
                   requestId: CommandId.make("switch"),
                   turnId: TurnId.make("other-turn"),
                   sourceWorktreePath: "/repo/other-worktree",
                   sourceBranch: "other",
-                  targetPath: "/repo/worktree",
+                  targetPath:
+                    scenario === "pending-switch-nested"
+                      ? "/repo/worktree/nested"
+                      : "/repo/worktree",
                   requestedAt: now,
                   status: "pending" as const,
                 },
@@ -125,8 +139,24 @@ it.effect.each(cleanupScenarios)(
               Effect.succeed({
                 snapshotSequence: 1,
                 updatedAt: now,
-                threads: scenario === "shared" || scenario === "pending-switch" ? [other] : [],
+                threads: shared || pendingSwitch ? [other] : [],
                 projects: [
+                  ...(protectedProject
+                    ? [
+                        {
+                          id: ProjectId.make("other-project"),
+                          title: "Other project",
+                          workspaceRoot:
+                            scenario === "nested-project"
+                              ? "/repo/worktree/packages/ui"
+                              : "/repo/worktree",
+                          defaultModelSelection: null,
+                          scripts: [],
+                          createdAt: now,
+                          updatedAt: now,
+                        },
+                      ]
+                    : []),
                   {
                     id: projectId,
                     title: "Project",
@@ -209,7 +239,10 @@ it.effect.each(cleanupScenarios)(
           yield* reactor.start();
           const error = yield* Deferred.await(completed);
           yield* reactor.drain;
-          if (scenario === "pending-switch") {
+          if (protectedProject) {
+            expect(error).toContain("Refusing to remove a project checkout");
+            expect(calls).toEqual(["stop", "terminals", "status"]);
+          } else if (pendingSwitch) {
             expect(error).toContain("waiting to switch");
             expect(calls).toEqual(["stop", "terminals", "status"]);
           } else if (scenario === "success") {
@@ -219,7 +252,7 @@ it.effect.each(cleanupScenarios)(
             expect(error).toContain(
               scenario === "dirty"
                 ? "dirty"
-                : scenario === "shared"
+                : shared
                   ? "Another unarchived thread"
                   : scenario === "detached"
                     ? "Detached"
@@ -228,7 +261,7 @@ it.effect.each(cleanupScenarios)(
             expect(calls).toEqual(
               scenario === "dirty"
                 ? ["stop", "terminals", "status", "remove"]
-                : scenario === "shared" || scenario === "detached"
+                : shared || scenario === "detached"
                   ? ["stop", "terminals", "status"]
                   : ["stop"],
             );

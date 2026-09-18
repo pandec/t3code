@@ -252,8 +252,8 @@ if the turn fails, is interrupted, or newer work starts.
 
 `--remove-worktree` is optional. Cleanup stops the provider session and closes the thread's
 terminals before removing the worktree. It preserves the branch and refuses dirty or locked
-worktrees, detached worktrees, the project checkout, and worktrees used by another unarchived
-thread or reserved as its pending move destination. A cleanup failure leaves the worktree in
+worktrees, detached worktrees, and worktrees containing a project root, another unarchived
+thread's checkout, or its pending move destination. A cleanup failure leaves the worktree in
 place and records the error on the archive request. The thread may already be archived.
 
 Inspect progress or cancel before archiving starts:
