@@ -99,6 +99,11 @@ const encodeRatesCache = Schema.encodeEffect(
 const ScanCacheJson = Schema.fromJsonString(Schema.Unknown as unknown as Schema.Codec<unknown>);
 const decodeScanCacheFile = Schema.decodeUnknownEffect(ScanCacheJson);
 const encodeScanCacheFile = Schema.encodeEffect(ScanCacheJson);
+const encodeUsageRecordKey = Schema.encodeSync(ScanCacheJson);
+const CachedSource = Schema.Struct({ dir: Schema.String, volumeId: Schema.String });
+const decodeCachedSources = Schema.decodeUnknownOption(
+  Schema.Struct({ sources: Schema.Record(Schema.String, CachedSource) }),
+);
 
 export class UsageService extends Context.Service<
   UsageService,
@@ -145,6 +150,7 @@ export const make = Effect.gen(function* () {
   const hostEnvironment = yield* HostProcessEnvironment;
 
   const fileCache: ScanCache = new Map();
+  const sourceCache = new Map<string, typeof CachedSource.Type>();
   let cacheDirty = false;
   /**
    * One scan at a time.
@@ -158,6 +164,10 @@ export const make = Effect.gen(function* () {
    * and are silently lost until those files change again.
    */
   const scanMutex = yield* Semaphore.make(1);
+  const isWithinDirectory = (filePath: string, dir: string) => {
+    const relative = path.relative(dir, filePath);
+    return relative !== ".." && !relative.startsWith(".." + path.sep) && !path.isAbsolute(relative);
+  };
 
   const ratesCachePath = path.join(config.stateDir, "usage-model-rates.json");
   const scanCachePath = path.join(config.stateDir, "usage-scan-cache.json");
@@ -239,6 +249,7 @@ export const make = Effect.gen(function* () {
   interface TranscriptDir {
     readonly provider: UsageProviderKind;
     readonly dir: string;
+    readonly volumeId: string;
     /** Restricts the walk to one filename; Grok keeps unrelated logs alongside. */
     readonly fileName?: string | undefined;
   }
@@ -262,6 +273,7 @@ export const make = Effect.gen(function* () {
   /** Resolves every configured provider instance to its transcript roots. */
   const resolveTranscriptDirs = Effect.fn("UsageService.resolveTranscriptDirs")(function* (
     settings: ServerSettingsValue,
+    retentionCutoffMs: number,
   ) {
     const roots = new Map<string, TranscriptDir>();
     const addRoot = Effect.fn(function* (
@@ -270,11 +282,31 @@ export const make = Effect.gen(function* () {
       fileName?: string,
     ) {
       const directory = path.resolve(root);
+      const sourceKey = `${provider}\0${directory}`;
+      const previous = sourceCache.get(sourceKey);
       const resolved = yield* fileSystem
         .realPath(directory)
-        .pipe(Effect.orElseSucceed(() => directory));
+        .pipe(Effect.orElseSucceed(() => previous?.dir ?? directory));
+      const currentVolumeId = yield* Effect.promise(() => readDirectoryVolumeId(resolved));
+      const hasRetainedHistory = fileCache
+        .entries()
+        .some(
+          ([filePath, entry]) =>
+            entry.provider === provider &&
+            entry.mtimeMs >= retentionCutoffMs &&
+            entry.records.length + entry.tailRecords.length > 0 &&
+            isWithinDirectory(filePath, resolved),
+        );
+      const volumeId =
+        previous?.dir === resolved && (hasRetainedHistory || currentVolumeId.length === 0)
+          ? previous.volumeId || currentVolumeId
+          : currentVolumeId;
+      if (previous?.dir !== resolved || previous.volumeId !== volumeId) {
+        sourceCache.set(sourceKey, { dir: resolved, volumeId });
+        cacheDirty = true;
+      }
       if (!roots.has(`${provider}\0${resolved}`)) {
-        roots.set(`${provider}\0${resolved}`, { provider, dir: directory, fileName });
+        roots.set(`${provider}\0${resolved}`, { provider, dir: resolved, volumeId, fileName });
       }
     });
 
@@ -360,6 +392,11 @@ export const make = Effect.gen(function* () {
       );
       if (document === null) return;
       for (const [path, entry] of decodeScanCache(document)) fileCache.set(path, entry);
+      const sources = decodeCachedSources(document);
+      if (Option.isSome(sources)) {
+        for (const [key, source] of Object.entries(sources.value.sources))
+          sourceCache.set(key, source);
+      }
     }),
   );
 
@@ -367,7 +404,10 @@ export const make = Effect.gen(function* () {
     if (!cacheDirty) return;
     // Cleared only after the write lands, so a failed persist is retried on
     // the next scan instead of leaving disk permanently stale.
-    yield* encodeScanCacheFile(encodeScanCache(fileCache)).pipe(
+    yield* encodeScanCacheFile({
+      ...encodeScanCache(fileCache),
+      sources: Object.fromEntries(sourceCache),
+    }).pipe(
       Effect.flatMap((serialized) => fileSystem.writeFileString(scanCachePath, serialized)),
       Effect.map(() => {
         cacheDirty = false;
@@ -436,7 +476,14 @@ export const make = Effect.gen(function* () {
       // A read failure is not an empty transcript: caching it under this
       // (size, mtime) would silently drop the file's usage until it changes.
       if (parsed === null) {
-        return { records: [], malformedRecords: 0, unreadable: true };
+        return {
+          records: cached?.provider === provider ? [...cached.records, ...cached.tailRecords] : [],
+          malformedRecords:
+            cached?.provider === provider
+              ? cached.malformedRecords + cached.tailMalformedRecords
+              : 0,
+          unreadable: true,
+        };
       }
 
       // One seen set spans the cached base, the new lines, and the tail so a
@@ -484,16 +531,16 @@ export const make = Effect.gen(function* () {
   const collectDirs = Effect.fn("UsageService.collectDirs")(function* (
     windowStartMs: number,
     settings: ServerSettingsValue,
+    retentionCutoffMs: number,
   ) {
     // The home resolvers ask for `Path` themselves; satisfy them from the
     // instance we already hold so the scan stays context-free.
-    const dirs = yield* resolveTranscriptDirs(settings).pipe(
+    const dirs = yield* resolveTranscriptDirs(settings, retentionCutoffMs).pipe(
       Effect.provideService(Path.Path, path),
     );
     const scanned: ScannedDir[] = [];
     const seenRootIdentities = new Set<string>();
-    for (const { provider, dir, fileName } of dirs) {
-      const volumeId = yield* Effect.promise(() => readDirectoryVolumeId(dir));
+    for (const { provider, dir, volumeId, fileName } of dirs) {
       const exists = yield* fileSystem
         .exists(dir)
         .pipe(Effect.catchCause(() => Effect.succeed(false)));
@@ -568,11 +615,13 @@ export const make = Effect.gen(function* () {
     const windowStartMs =
       (hourlyWindow?.sinceTimeMs ?? DateTime.toEpochMillis(windowStart.value)) - MTIME_SLACK_MS;
 
+    const retentionCutoffMs = startedAtMs - CACHE_RETENTION_DAYS * 24 * 60 * 60 * 1000;
+
     // Pricing only matters once records are aggregated, so the rate table
     // loads while transcripts stream instead of gating them: a cold rates
     // fetch on a slow network no longer delays the scan by its own timeout.
     const [, scannedDirs] = yield* Effect.all(
-      [ensureRates(false), collectDirs(windowStartMs, settings)],
+      [ensureRates(false), collectDirs(windowStartMs, settings, retentionCutoffMs)],
       { concurrency: 2 },
     );
 
@@ -587,24 +636,29 @@ export const make = Effect.gen(function* () {
     });
 
     const sources: UsageSource[] = [];
-    const livePaths = new Set<string>();
-    const walkedRoots: string[] = [];
     // Lexically distinct configured paths can still resolve to one directory
     // through symlinks. Keep only one source per provider and filesystem root.
     const seenRootIdentities = new Set<string>();
 
     for (const { provider, dir, volumeId, files } of scannedDirs) {
-      if (files === null) {
-        sources.push({
-          fingerprint: { hostId, provider, resolvedHomePath: dir, volumeId },
-          status: "missing",
-          scannedFiles: 0,
-          skippedFiles: 0,
-          malformedRecords: 0,
-          distinctSessions: 0,
-          message: "No transcript directory on this environment.",
+      const retainedFiles = [...(files ?? [])];
+      const livePaths = new Set(retainedFiles.map((file) => file.path));
+      // Cleanup may remove transcripts, but the usage we already saved still
+      // contributes to this source. Keep the normal aggregation and dedupe path.
+      for (const [filePath, entry] of fileCache) {
+        if (
+          entry.provider !== provider ||
+          entry.mtimeMs < retentionCutoffMs ||
+          livePaths.has(filePath) ||
+          !isWithinDirectory(filePath, dir)
+        )
+          continue;
+        retainedFiles.push({
+          path: filePath,
+          records: [...entry.records, ...entry.tailRecords],
+          malformedRecords: entry.malformedRecords + entry.tailMalformedRecords,
+          unreadable: false,
         });
-        continue;
       }
 
       if (volumeId.length > 0) {
@@ -613,7 +667,6 @@ export const make = Effect.gen(function* () {
         seenRootIdentities.add(rootIdentity);
       }
 
-      walkedRoots.push(dir);
       let scannedFiles = 0;
       let skippedFiles = 0;
       let unreadableFiles = 0;
@@ -622,25 +675,40 @@ export const make = Effect.gen(function* () {
       // session spans days and models, so clients total this figure instead.
       const sessionIds = new Set<string>();
 
-      for (const file of files) {
-        // Added before the read: the walk saw the file, so it is not deleted,
-        // and a file we merely failed to read must keep its warm cache entry.
-        livePaths.add(file.path);
+      for (const file of retainedFiles) {
         if (provider !== "grok") malformedRecords += file.malformedRecords;
         if (file.unreadable) {
           unreadableFiles += 1;
-          skippedFiles += 1;
-          continue;
+          if (file.records.length === 0) {
+            skippedFiles += 1;
+            continue;
+          }
         }
         if (file.records.length === 0) {
           skippedFiles += 1;
           continue;
         }
         scannedFiles += 1;
+        const codexEventOccurrences = new Map<string, number>();
         for (const record of file.records) {
-          // Only sessions that contributed in-window count: the mtime slack
-          // admits boundary files whose records fall outside the range.
-          if (aggregator.add(record) && record.sessionId.length > 0) {
+          let usageRecord = record;
+          if (record.provider === "codex" && record.sessionId.length > 0) {
+            // Match moved rollout copies without collapsing repeated equal events
+            // within one rollout (timestamps can have only second precision).
+            const key = encodeUsageRecordKey([
+              record.provider,
+              record.sessionId,
+              record.timestampMs,
+              record.model,
+              record.totals,
+            ]);
+            const occurrence = (codexEventOccurrences.get(key) ?? 0) + 1;
+            codexEventOccurrences.set(key, occurrence);
+            usageRecord = { ...record, dedupeKey: key + ":" + occurrence };
+          }
+          // Only sessions contributing in-window count; the mtime slack can
+          // admit boundary files whose records fall outside the range.
+          if (aggregator.add(usageRecord) && record.sessionId.length > 0) {
             sessionIds.add(record.sessionId);
           }
         }
@@ -651,7 +719,8 @@ export const make = Effect.gen(function* () {
         // Files that exist but would not open mean the totals below are a
         // floor, not a figure. Saying "ok" here would present an undercount as
         // a complete answer.
-        status: unreadableFiles > 0 ? "partial" : "ok",
+        status:
+          unreadableFiles > 0 ? "partial" : files === null && scannedFiles === 0 ? "missing" : "ok",
         scannedFiles,
         skippedFiles,
         malformedRecords,
@@ -659,16 +728,13 @@ export const make = Effect.gen(function* () {
         message:
           unreadableFiles > 0
             ? `${unreadableFiles} transcript ${unreadableFiles === 1 ? "file" : "files"} could not be read; usage from ${unreadableFiles === 1 ? "it" : "them"} is missing.`
-            : null,
+            : files === null
+              ? "No transcript directory on this environment. Retained usage is shown from cache."
+              : null,
       });
     }
 
-    const pruned = pruneScanCache(fileCache, {
-      livePaths,
-      walkedRoots,
-      windowStartMs,
-      retentionCutoffMs: startedAtMs - CACHE_RETENTION_DAYS * 24 * 60 * 60 * 1000,
-    });
+    const pruned = pruneScanCache(fileCache, retentionCutoffMs);
     if (pruned > 0) cacheDirty = true;
     yield* persistScanCache();
 

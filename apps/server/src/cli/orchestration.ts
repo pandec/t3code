@@ -485,6 +485,7 @@ export const fetchLiveOrchestrationThreadMessages = (
     readonly threadId: ThreadId;
     readonly before?: MessageId;
     readonly limit?: number;
+    readonly reasoningMessages?: boolean;
   },
   timeouts: CliLiveServerReadTimeouts,
 ) =>
@@ -493,6 +494,7 @@ export const fetchLiveOrchestrationThreadMessages = (
     return yield* client.orchestration.threadMessages({
       params: { threadId: input.threadId },
       query: {
+        ...(input.reasoningMessages === true ? { reasoningMessages: "true" as const } : {}),
         ...(input.before === undefined ? {} : { before: input.before }),
         ...(input.limit === undefined ? {} : { limit: input.limit }),
       },
@@ -522,12 +524,13 @@ export const fetchLiveOrchestrationThreadDetail = (
   bearerToken: string,
   threadId: ThreadId,
   timeouts: CliLiveServerReadTimeouts,
+  reasoningMessages = false,
 ) =>
   Effect.gen(function* () {
     const client = yield* makeLiveServerClient(origin);
     return yield* client.orchestration.threadSnapshot({
       params: { threadId },
-      query: {},
+      query: reasoningMessages ? { reasoningMessages: "true" } : {},
       headers: { authorization: `Bearer ${bearerToken}` },
     });
   }).pipe(

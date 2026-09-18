@@ -4,6 +4,7 @@ import type { Icon, IconProps } from "@tabler/icons-react-native/types";
  * the entire Tabler icon set in Metro.
  */
 import IconAdjustmentsHorizontal from "@tabler/icons-react-native/IconAdjustmentsHorizontal";
+import IconAlignLeft from "@tabler/icons-react-native/IconAlignLeft";
 import IconAlertCircle from "@tabler/icons-react-native/IconAlertCircle";
 import IconAlertCircleFilled from "@tabler/icons-react-native/IconAlertCircleFilled";
 import IconAlertTriangle from "@tabler/icons-react-native/IconAlertTriangle";
@@ -12,6 +13,8 @@ import IconArchive from "@tabler/icons-react-native/IconArchive";
 import IconArrowBackUp from "@tabler/icons-react-native/IconArrowBackUp";
 import IconArrowBarToUp from "@tabler/icons-react-native/IconArrowBarToUp";
 import IconArrowDown from "@tabler/icons-react-native/IconArrowDown";
+import IconArrowForwardUp from "@tabler/icons-react-native/IconArrowForwardUp";
+import IconArrowLeft from "@tabler/icons-react-native/IconArrowLeft";
 import IconArrowDownCircle from "@tabler/icons-react-native/IconArrowDownCircle";
 import IconArrowRightCircle from "@tabler/icons-react-native/IconArrowRightCircle";
 import IconArrowUp from "@tabler/icons-react-native/IconArrowUp";
@@ -32,6 +35,7 @@ import IconChevronDown from "@tabler/icons-react-native/IconChevronDown";
 import IconChevronLeft from "@tabler/icons-react-native/IconChevronLeft";
 import IconChevronRight from "@tabler/icons-react-native/IconChevronRight";
 import IconChevronUp from "@tabler/icons-react-native/IconChevronUp";
+import IconCircle from "@tabler/icons-react-native/IconCircle";
 import IconCircleCheck from "@tabler/icons-react-native/IconCircleCheck";
 import IconCircleDashed from "@tabler/icons-react-native/IconCircleDashed";
 import IconCircleXFilled from "@tabler/icons-react-native/IconCircleXFilled";
@@ -39,9 +43,12 @@ import IconTicket from "@tabler/icons-react-native/IconTicket";
 import IconClock from "@tabler/icons-react-native/IconClock";
 import IconCode from "@tabler/icons-react-native/IconCode";
 import IconCopy from "@tabler/icons-react-native/IconCopy";
+import IconDatabase from "@tabler/icons-react-native/IconDatabase";
 import IconDeviceDesktop from "@tabler/icons-react-native/IconDeviceDesktop";
 import IconDeviceLaptop from "@tabler/icons-react-native/IconDeviceLaptop";
+import IconDeviceMobile from "@tabler/icons-react-native/IconDeviceMobile";
 import IconDots from "@tabler/icons-react-native/IconDots";
+import IconDotsVertical from "@tabler/icons-react-native/IconDotsVertical";
 import IconDotsCircleHorizontal from "@tabler/icons-react-native/IconDotsCircleHorizontal";
 import IconEdit from "@tabler/icons-react-native/IconEdit";
 import IconExternalLink from "@tabler/icons-react-native/IconExternalLink";
@@ -64,8 +71,9 @@ import IconLayoutColumns from "@tabler/icons-react-native/IconLayoutColumns";
 import IconLayoutSidebar from "@tabler/icons-react-native/IconLayoutSidebar";
 import IconLayoutSidebarRight from "@tabler/icons-react-native/IconLayoutSidebarRight";
 import IconLetterSpacing from "@tabler/icons-react-native/IconLetterSpacing";
-import IconMenu2 from "@tabler/icons-react-native/IconMenu2";
+import IconMicrophone from "@tabler/icons-react-native/IconMicrophone";
 import IconLink from "@tabler/icons-react-native/IconLink";
+import IconMenu2 from "@tabler/icons-react-native/IconMenu2";
 import IconMessage from "@tabler/icons-react-native/IconMessage";
 import IconMinus from "@tabler/icons-react-native/IconMinus";
 import IconMoon from "@tabler/icons-react-native/IconMoon";
@@ -73,7 +81,6 @@ import IconNetwork from "@tabler/icons-react-native/IconNetwork";
 import IconPalette from "@tabler/icons-react-native/IconPalette";
 import IconPencil from "@tabler/icons-react-native/IconPencil";
 import IconPhoto from "@tabler/icons-react-native/IconPhoto";
-import IconMicrophone from "@tabler/icons-react-native/IconMicrophone";
 import IconMicrophoneFilled from "@tabler/icons-react-native/IconMicrophoneFilled";
 import IconPin from "@tabler/icons-react-native/IconPin";
 import IconPinnedOff from "@tabler/icons-react-native/IconPinnedOff";
@@ -88,6 +95,8 @@ import IconServer from "@tabler/icons-react-native/IconServer";
 import IconSettings from "@tabler/icons-react-native/IconSettings";
 import IconSparkles from "@tabler/icons-react-native/IconSparkles";
 import IconStack2 from "@tabler/icons-react-native/IconStack2";
+import IconStar from "@tabler/icons-react-native/IconStar";
+import IconStarFilled from "@tabler/icons-react-native/IconStarFilled";
 import IconStethoscope from "@tabler/icons-react-native/IconStethoscope";
 import IconSun from "@tabler/icons-react-native/IconSun";
 import IconTerminal2 from "@tabler/icons-react-native/IconTerminal2";
@@ -105,7 +114,7 @@ import IconWorld from "@tabler/icons-react-native/IconWorld";
 import IconX from "@tabler/icons-react-native/IconX";
 import { forwardRef } from "react";
 import Svg, { Path } from "react-native-svg";
-import type { SFSymbol, SymbolViewProps } from "expo-symbols";
+import type { AndroidSymbol, SFSymbol, SymbolViewProps } from "expo-symbols";
 import { withUniwind } from "uniwind";
 
 const IconListFilter = forwardRef<Svg, IconProps>(function IconListFilter(
@@ -153,8 +162,9 @@ const IconAudioLines = forwardRef<Svg, IconProps>(function IconAudioLines(
   );
 });
 
-const ANDROID_ICON_BY_SF_SYMBOL: Partial<Record<SFSymbol, Icon>> = {
+const ANDROID_ICON_BY_SF_SYMBOL = {
   "arrow.branch": IconGitBranch,
+  "arrow.left": IconArrowLeft,
   "arrow.clockwise": IconRefresh,
   "arrow.down": IconArrowDown,
   "arrow.down.circle": IconArrowDownCircle,
@@ -172,6 +182,7 @@ const ANDROID_ICON_BY_SF_SYMBOL: Partial<Record<SFSymbol, Icon>> = {
   "arrow.up.right.circle": IconArrowUpRightCircle,
   "arrow.up.to.line": IconArrowBarToUp,
   "arrow.uturn.backward": IconArrowBackUp,
+  "arrow.uturn.forward": IconArrowForwardUp,
   archivebox: IconArchive,
   "archivebox.fill": IconArchive,
   "bell.badge": IconBellRinging,
@@ -182,6 +193,7 @@ const ANDROID_ICON_BY_SF_SYMBOL: Partial<Record<SFSymbol, Icon>> = {
   "chart.bar.xaxis": IconChartBar,
   checkmark: IconCheck,
   "checkmark.circle": IconCircleCheck,
+  circle: IconCircle,
   "circle.dashed": IconCircleDashed,
   clock: IconClock,
   ticket: IconTicket,
@@ -206,10 +218,12 @@ const ANDROID_ICON_BY_SF_SYMBOL: Partial<Record<SFSymbol, Icon>> = {
   "folder.badge.plus": IconFolderPlus,
   "folder.fill": IconFolder,
   gearshape: IconSettings,
+  globe: IconWorld,
   hammer: IconHammer,
   headphones: IconHeadphones,
-  internaldrive: IconServer,
   "info.circle": IconInfoCircle,
+  internaldrive: IconDatabase,
+  keyboard: IconKeyboard,
   laptopcomputer: IconDeviceLaptop,
   link: IconLink,
   "line.3.horizontal": IconMenu2,
@@ -231,6 +245,7 @@ const ANDROID_ICON_BY_SF_SYMBOL: Partial<Record<SFSymbol, Icon>> = {
   play: IconPlayerPlay,
   "pause.fill": IconPlayerPause,
   plus: IconPlus,
+  minus: IconMinus,
   "qrcode.viewfinder": IconQrcode,
   "point.3.connected.trianglepath.dotted": IconNetwork,
   "point.topleft.down.curvedto.point.bottomright.up": IconGitMerge,
@@ -247,9 +262,12 @@ const ANDROID_ICON_BY_SF_SYMBOL: Partial<Record<SFSymbol, Icon>> = {
   "square.and.pencil": IconEdit,
   "square.grid.2x2": IconApps,
   "square.split.2x1": IconLayoutColumns,
+  star: IconStar,
+  "star.fill": IconStarFilled,
   "sun.max": IconSun,
   "stop.fill": IconPlayerStopFilled,
   terminal: IconTerminal2,
+  "text.alignleft": IconAlignLeft,
   "text.bubble": IconMessage,
   "text.word.spacing": IconLetterSpacing,
   "textformat.size": IconTypography,
@@ -261,13 +279,14 @@ const ANDROID_ICON_BY_SF_SYMBOL: Partial<Record<SFSymbol, Icon>> = {
   "wifi.slash": IconWifiOff,
   xmark: IconX,
   "xmark.circle.fill": IconCircleXFilled,
-};
+} satisfies Partial<Record<SFSymbol, Icon>>;
+const SF_ICON_LOOKUP: Partial<Record<SFSymbol, Icon>> = ANDROID_ICON_BY_SF_SYMBOL;
 
 // Callers can pass `{ ios, android }` names where `android` is a Material
 // icon name (the raw expo-symbols contract). Resolve those here too so the
 // android key keeps working through this wrapper — it wins over the SF map
 // when both match (e.g. folder vs folder_open for expanded project groups).
-const ANDROID_ICON_BY_MATERIAL_NAME: Record<string, Icon> = {
+const ANDROID_ICON_BY_MATERIAL_NAME = {
   auto_awesome: IconSparkles,
   bolt: IconBolt,
   build: IconTool,
@@ -285,21 +304,35 @@ const ANDROID_ICON_BY_MATERIAL_NAME: Record<string, Icon> = {
   keyboard_arrow_down: IconChevronDown,
   keyboard_arrow_up: IconChevronUp,
   keyboard_hide: IconKeyboardHide,
+  more_vert: IconDotsVertical,
+  merge: IconGitMerge,
   public: IconWorld,
   remove: IconMinus,
+  smartphone: IconDeviceMobile,
   terminal: IconTerminal2,
   visibility: IconEye,
-};
+} satisfies Partial<Record<AndroidSymbol, Icon>>;
 
 export type { SFSymbol } from "expo-symbols";
-export type AppSymbolName = SymbolViewProps["name"];
+export type AppSymbolName =
+  | keyof typeof ANDROID_ICON_BY_SF_SYMBOL
+  | {
+      ios: SFSymbol;
+      android: keyof typeof ANDROID_ICON_BY_MATERIAL_NAME;
+    };
 
-function AppSymbolView(props: SymbolViewProps) {
+export type AppSymbolViewProps = Omit<SymbolViewProps, "name"> & { name: AppSymbolName };
+
+export function isAppSymbolName(name: string): name is Extract<AppSymbolName, string> {
+  return Object.prototype.hasOwnProperty.call(ANDROID_ICON_BY_SF_SYMBOL, name);
+}
+
+function AppSymbolView(props: AppSymbolViewProps) {
   const materialName = typeof props.name === "string" ? undefined : props.name.android;
   const sfSymbol = typeof props.name === "string" ? props.name : props.name.ios;
   const AndroidIcon =
     (materialName ? ANDROID_ICON_BY_MATERIAL_NAME[materialName] : undefined) ??
-    (sfSymbol ? ANDROID_ICON_BY_SF_SYMBOL[sfSymbol] : undefined);
+    (sfSymbol ? SF_ICON_LOOKUP[sfSymbol] : undefined);
 
   if (!AndroidIcon) {
     return props.fallback ?? null;

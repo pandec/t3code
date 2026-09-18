@@ -6,6 +6,7 @@ import {
   AuthSessionId,
   CommandId,
   ProjectId,
+  ThreadId,
   type ClientOrchestrationCommand,
 } from "@t3tools/contracts";
 import { assert, it } from "@effect/vitest";
@@ -15,6 +16,7 @@ import * as Effect from "effect/Effect";
 import * as Option from "effect/Option";
 import * as Schema from "effect/Schema";
 import * as TestClock from "effect/testing/TestClock";
+import * as FetchHttpClient from "effect/unstable/http/FetchHttpClient";
 
 import * as EnvironmentAuth from "../auth/EnvironmentAuth.ts";
 import {
@@ -25,6 +27,8 @@ import {
   CliOrchestrationUndeclaredStatusError,
   defaultCliLiveServerReadTimeouts,
   dispatchLiveOrchestrationCommand,
+  fetchLiveOrchestrationThreadDetail,
+  fetchLiveOrchestrationThreadMessages,
   isConnectionRefused,
   isProcessAlive,
   resolveCliLiveServerReadTimeouts,
@@ -216,13 +220,15 @@ const testDispatchCommand: ClientOrchestrationCommand = {
   title: "dispatch-outcome-test",
 };
 
-const withStatusServer = <A, E>(
+const withStatusServer = <A, E, R>(
   status: number,
-  use: (origin: string) => Effect.Effect<A, E>,
-): Effect.Effect<A, E> =>
+  use: (origin: string) => Effect.Effect<A, E, R>,
+  onRequest?: (url: string) => void,
+): Effect.Effect<A, E, R> =>
   Effect.acquireUseRelease(
     Effect.callback<NodeHttp.Server>((resume) => {
-      const server = NodeHttp.createServer((_request, response) => {
+      const server = NodeHttp.createServer((request, response) => {
+        onRequest?.(request.url ?? "");
         response.statusCode = status;
         response.setHeader("content-type", "application/json");
         response.end(JSON.stringify({ unexpected: true }));
@@ -237,9 +243,56 @@ const withStatusServer = <A, E>(
     },
     (server) =>
       Effect.callback<void>((resume) => {
+        server.closeAllConnections();
         server.close(() => resume(Effect.void));
       }),
   );
+
+for (const reasoningMessages of [false, true]) {
+  it.effect(
+    `negotiates thinking messages on paged and snapshot reads: ${reasoningMessages}`,
+    () => {
+      const requests: string[] = [];
+      return withStatusServer(
+        404,
+        (origin) =>
+          Effect.gen(function* () {
+            const threadId = ThreadId.make("thread-reasoning");
+            yield* Effect.exit(
+              fetchLiveOrchestrationThreadMessages(
+                origin,
+                "test-token",
+                { threadId, reasoningMessages },
+                defaultCliLiveServerReadTimeouts,
+              ),
+            );
+            yield* Effect.exit(
+              fetchLiveOrchestrationThreadDetail(
+                origin,
+                "test-token",
+                threadId,
+                defaultCliLiveServerReadTimeouts,
+                reasoningMessages,
+              ),
+            );
+            assert.strictEqual(requests.length, 2);
+            for (const request of requests) {
+              const url = new URL(request, origin);
+              assert.strictEqual(
+                url.searchParams.get("reasoningMessages"),
+                reasoningMessages ? "true" : null,
+              );
+            }
+            assert.isTrue(
+              requests[0]!.startsWith("/api/orchestration/threads/thread-reasoning/messages"),
+            );
+            assert.isTrue(requests[1]!.startsWith("/api/orchestration/threads/thread-reasoning"));
+          }),
+        (url) => requests.push(url),
+      ).pipe(Effect.provide(FetchHttpClient.layer));
+    },
+  );
+}
 
 it.effect("treats an undeclared 5xx dispatch response as an unknown outcome", () =>
   withStatusServer(503, (origin) =>

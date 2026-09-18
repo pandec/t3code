@@ -36,6 +36,11 @@ move, as does starting new work or changing the checkout before it applies. The 
 existing checkout of the same repository on the connected server. To move back, ask the agent to
 switch to the project checkout.
 
+To send the same prompt to several models on web or desktop, **Shift-click** models
+in a new thread's model picker to add or remove them. A regular click returns to a
+single model. Choose a base branch and send. Each selection starts a separate thread
+and worktree while you stay in the new thread composer. This requires a Git project.
+
 ## Pin and reorder threads
 
 Pin a thread from its menu or use the pin button that appears when you hover its row on web and
@@ -155,9 +160,10 @@ request that is still open, or whose status the server has not read yet, keeps t
 once every linked pull request is merged or closed the newest one decides. An old closed or merged
 pull request does not settle work you resumed after it closed.
 
-Change these rules in **Settings → General**. Select a project to override its rules. They continue to run when your apps
-are closed. On web and desktop, choose an environment at the top to change only
-its rules, or **All environments** to update connected environments together.
+Change these rules in **Settings → General** on web and desktop, or **Settings → Thread behavior**
+on mobile. Select a project to override its rules. They continue to run when your apps are closed.
+On web and desktop, choose an environment at the top to change only its rules, or
+**All environments** to update connected environments together.
 Mixed values show where the selected environments disagree. Mobile applies these
 rules to connected environments that support shared settings. Offline environments
 and older servers keep their previous values. Changing a rule does not reopen

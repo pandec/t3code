@@ -150,6 +150,32 @@ describe("mergeUsage", () => {
     ).toEqual({ claude: 1, codex: 1 });
   });
 
+  it("uses the newest scan when environments share the same transcript directory", () => {
+    const source = { provider: "claude" as const, hostId: "mac", homePath: "/home/theo/.claude" };
+    const environments = [
+      environment(
+        "env-a",
+        summary([bucket({ model: "gpt-5.6-sol", costUsd: 4, records: 2 })], [source]),
+      ),
+      environment("env-b", {
+        ...summary([bucket({ model: "gpt-5.6-sol" })], [source]),
+        readAt: "2026-08-07T01:00:00.000Z",
+      }),
+    ];
+
+    for (const ordered of [environments, environments.toReversed()]) {
+      for (const attribution of ["pool", "source"] as const) {
+        const merged = mergeUsage(ordered, USAGE_CONTRACT_VERSION, { attribution });
+        expect(merged.costUsd).toBe(10);
+        expect(merged.records).toBe(5);
+        expect(merged.sessions).toBe(1);
+        expect(merged.providers[0]?.provider).toBe(attribution === "source" ? "claude" : "codex");
+        expect(merged.contributingEnvironments).toEqual(["env-b"]);
+        expect(merged.duplicateSources).toEqual(["env-a: /home/theo/.claude"]);
+      }
+    }
+  });
+
   it("excludes an environment reporting an older contract version", () => {
     const merged = mergeUsage(
       [

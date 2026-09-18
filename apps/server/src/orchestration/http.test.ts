@@ -102,3 +102,35 @@ it.effect("getThreadMessagesHttp returns the bounded page from ProjectionSnapsho
     expect(calls).toEqual([{ threadId, before: MessageId.make("message-cursor"), limit: 10 }]);
   }),
 );
+
+it.effect.each([undefined, "true"] as const)(
+  "projects reasoning compatibly for opt-in %s",
+  (reasoningMessages) =>
+    Effect.gen(function* () {
+      const reasoning = {
+        id: MessageId.make("thinking"),
+        role: "reasoning" as const,
+        text: "Considering the change.",
+        turnId: null,
+        streaming: false,
+        createdAt: "2026-09-18T00:00:00.000Z",
+        updatedAt: "2026-09-18T00:00:00.000Z",
+      };
+      const source = { ...messagePage, messages: [reasoning], hasMoreOlder: true };
+      const page = yield* getThreadMessagesHttp(
+        { threadId },
+        reasoningMessages ? { reasoningMessages } : {},
+      ).pipe(
+        Effect.provide(
+          Layer.merge(
+            projectionSnapshotQueryLayer(() => Effect.succeed(Option.some(source))),
+            principalLayer(["orchestration:read"]),
+          ),
+        ),
+      );
+      expect(page).toEqual({
+        ...source,
+        messages: [{ ...reasoning, role: reasoningMessages === "true" ? "reasoning" : "system" }],
+      });
+    }),
+);

@@ -68,6 +68,7 @@ export const fetchEnvironmentThreadSnapshot = Effect.fn(
   readonly remoteAuthorization?: Option.Option<RemoteEnvironmentAuthorization["Service"]>;
   readonly window?: ThreadSnapshotLoadWindow;
   readonly timeoutMs?: number;
+  readonly reasoningMessages?: boolean;
 }) {
   return yield* executeAuthenticatedEnvironmentHttpRequest({
     ...input,
@@ -79,7 +80,10 @@ export const fetchEnvironmentThreadSnapshot = Effect.fn(
     request: ({ client, headers }) =>
       client.threadSnapshot({
         params: { threadId: input.threadId },
-        query: windowQuery(input.window),
+        query: {
+          ...windowQuery(input.window),
+          ...(input.reasoningMessages === true ? { reasoningMessages: "true" as const } : {}),
+        },
         headers,
       }),
   });
@@ -100,6 +104,7 @@ export class ThreadSnapshotLoader extends Context.Service<
       prepared: PreparedConnection,
       threadId: ThreadId,
       window?: ThreadSnapshotLoadWindow,
+      reasoningMessages?: boolean,
     ) => Effect.Effect<Option.Option<OrchestrationThreadDetailSnapshot>>;
   }
 >()("@t3tools/client-runtime/state/threadSnapshotHttp/ThreadSnapshotLoader") {}
@@ -118,12 +123,18 @@ export const threadSnapshotLoaderLayer: Layer.Layer<
     const signer = yield* Effect.serviceOption(ManagedRelayDpopSigner);
     const remoteAuthorization = yield* Effect.serviceOption(RemoteEnvironmentAuthorization);
     return ThreadSnapshotLoader.of({
-      load: (prepared: PreparedConnection, threadId: ThreadId, window) =>
+      load: (
+        prepared: PreparedConnection,
+        threadId: ThreadId,
+        window?: ThreadSnapshotLoadWindow,
+        reasoningMessages?: boolean,
+      ) =>
         fetchEnvironmentThreadSnapshot({
           prepared,
           threadId,
           signer,
           remoteAuthorization,
+          ...(reasoningMessages === true ? { reasoningMessages: true } : {}),
           ...(window !== undefined ? { window } : {}),
         }).pipe(
           Effect.map(Option.some<OrchestrationThreadDetailSnapshot>),

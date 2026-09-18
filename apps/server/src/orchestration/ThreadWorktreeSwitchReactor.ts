@@ -10,6 +10,7 @@ import * as Schedule from "effect/Schedule";
 import type * as Scope from "effect/Scope";
 import * as Stream from "effect/Stream";
 import { ProjectionThreadRepository } from "../persistence/Services/ProjectionThreads.ts";
+import { withWorkspaceLease } from "../workspace/workspaceLease.ts";
 import { forkParked } from "../serverActivation.ts";
 import { OrchestrationEngineService } from "./Services/OrchestrationEngine.ts";
 import { ProjectionSnapshotQuery } from "./Services/ProjectionSnapshotQuery.ts";
@@ -37,32 +38,37 @@ export const make = Effect.gen(function* () {
     )
       return;
     const request = row.value.worktreeSwitch;
-    const project = yield* snapshots.getProjectShellById(row.value.projectId);
-    const target = yield* (
-      Option.isSome(project)
-        ? resolveWorktreeSwitchTarget(project.value.workspaceRoot, request.targetPath)
-        : Effect.fail(new WorktreeSwitchError({ message: "The project no longer exists." }))
-    ).pipe(
-      Effect.map((value) => ({ ...value, error: undefined })),
-      Effect.catchTag("WorktreeSwitchError", (error) =>
-        Effect.succeed({
-          branch: null,
-          worktreePath: null,
-          error: error.message,
-        }),
-      ),
+    yield* withWorkspaceLease(
+      request.targetPath,
+      Effect.gen(function* () {
+        const project = yield* snapshots.getProjectShellById(row.value.projectId);
+        const target = yield* (
+          Option.isSome(project)
+            ? resolveWorktreeSwitchTarget(project.value.workspaceRoot, request.targetPath)
+            : Effect.fail(new WorktreeSwitchError({ message: "The project no longer exists." }))
+        ).pipe(
+          Effect.map((value) => ({ ...value, error: undefined })),
+          Effect.catchTag("WorktreeSwitchError", (error) =>
+            Effect.succeed({
+              branch: null,
+              worktreePath: null,
+              error: error.message,
+            }),
+          ),
+        );
+        yield* engine
+          .dispatch({
+            type: "thread.worktree-switch.execute",
+            commandId: CommandId.make(yield* crypto.randomUUIDv4),
+            threadId,
+            requestId: request.requestId,
+            branch: target.branch,
+            worktreePath: target.worktreePath,
+            ...(target.error ? { error: target.error } : {}),
+          })
+          .pipe(Effect.catchTag("OrchestrationCommandInvariantError", () => Effect.void));
+      }),
     );
-    yield* engine
-      .dispatch({
-        type: "thread.worktree-switch.execute",
-        commandId: CommandId.make(yield* crypto.randomUUIDv4),
-        threadId,
-        requestId: request.requestId,
-        branch: target.branch,
-        worktreePath: target.worktreePath,
-        ...(target.error ? { error: target.error } : {}),
-      })
-      .pipe(Effect.catchTag("OrchestrationCommandInvariantError", () => Effect.void));
   });
   const worker = yield* makeDrainableWorker((threadId: ThreadId) =>
     process(threadId).pipe(

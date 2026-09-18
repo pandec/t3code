@@ -1527,6 +1527,7 @@ const liveThreadMessagesFetchDeps = (input: {
   readonly live: CliLiveOrchestrationServer;
   readonly token: string;
   readonly timeouts: CliLiveServerReadTimeouts;
+  readonly reasoningMessages: boolean;
 }): ThreadMessagesFetchDeps<HttpClient.HttpClient> => ({
   fetchPage: (page) =>
     fetchLiveOrchestrationThreadMessages(
@@ -1534,13 +1535,20 @@ const liveThreadMessagesFetchDeps = (input: {
       input.token,
       {
         threadId: page.threadId,
+        reasoningMessages: input.reasoningMessages,
         ...(page.before === null ? {} : { before: page.before }),
         ...(page.limit === null ? {} : { limit: page.limit }),
       },
       input.timeouts,
     ),
   fetchFullThread: (threadId) =>
-    fetchLiveOrchestrationThreadDetail(input.live.origin, input.token, threadId, input.timeouts),
+    fetchLiveOrchestrationThreadDetail(
+      input.live.origin,
+      input.token,
+      threadId,
+      input.timeouts,
+      input.reasoningMessages,
+    ),
 });
 
 export interface ThreadMessagesMachine {
@@ -1563,7 +1571,9 @@ export const threadMessagesReport = (input: {
   readonly attachmentFileExists: (path: string) => boolean;
 }) => {
   const visible = input.messages.filter((message) =>
-    input.role === null ? message.role !== "system" : message.role === input.role,
+    input.role === null
+      ? message.role === "user" || message.role === "assistant"
+      : message.role === input.role,
   );
   // Paging cursor from the unfiltered page, so --before composes with --role.
   const oldest = input.messages[0];
@@ -1668,7 +1678,7 @@ const threadMessagesCommand = Command.make("messages", {
     Flag.withDescription("Only messages older than this message id."),
     Flag.optional,
   ),
-  role: Flag.choice("role", ["user", "assistant", "system"] as const).pipe(
+  role: Flag.choice("role", ["user", "assistant", "system", "reasoning"] as const).pipe(
     Flag.withDescription("Only messages with this role. Default: user and assistant."),
     Flag.optional,
   ),
@@ -1711,7 +1721,11 @@ const threadMessagesCommand = Command.make("messages", {
             pagedRouteAvailable:
               Option.isSome(descriptor) && descriptor.value.capabilities.threadMessages === true,
           },
-          liveThreadMessagesFetchDeps(input),
+          liveThreadMessagesFetchDeps({
+            ...input,
+            reasoningMessages:
+              Option.isSome(descriptor) && descriptor.value.capabilities.reasoningMessages === true,
+          }),
         );
         const thread =
           input.live.shell.threads.find(

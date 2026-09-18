@@ -221,9 +221,11 @@ The default is the full history, paged from the server internally. `--limit N` r
 newest N messages; when older ones remain, the JSON sets `hasMoreOlder` and provides a `nextBefore`
 message id to pass as `--before` on the next call. A `--before` id that matches no message in the
 thread fails with an explicit cursor error rather than printing an empty transcript. `--role
-user|assistant|system` narrows to one role; system messages only appear when requested that way.
-The `--limit` window is counted before any role filtering — including the default exclusion of
-system messages — so a filtered result can contain fewer than N messages, or none, while older
+user|assistant|system|reasoning` narrows to one role. System messages and provider thinking
+summaries only appear when requested that way. `--role reasoning` requires a server that
+exposes thinking messages.
+The `--limit` window is counted before any role filtering, including the default exclusion of
+system and thinking messages, so a filtered result can contain fewer than N messages, or none, while older
 history still exists.
 
 Attachments are files on the machine that runs the server. Each one resolves to an absolute `path`

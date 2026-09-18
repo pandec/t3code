@@ -1,4 +1,4 @@
-import type { EnvironmentId, ServerSettings } from "@t3tools/contracts";
+import type { EnvironmentId, ProjectId, ServerSettings } from "@t3tools/contracts";
 
 // The fork's auto-settle master gate and worktree-recreation preference are
 // edited by the same mobile section, so they replicate and mismatch-check with
@@ -20,13 +20,18 @@ const AUTO_SETTLE_SETTING_KEYS = [
 
 interface AutoSettleSyncTarget {
   readonly environmentId: EnvironmentId;
+  readonly projectId?: ProjectId | null;
   readonly label: string;
   readonly settings: AutoSettleSettings | null;
 }
 
 /** Receives connected, capable targets. Applying these defaults must preserve other settings. */
 export function planAutoSettleSettingsSync(
-  reference: { readonly environmentId: EnvironmentId; readonly settings: AutoSettleSettings },
+  reference: {
+    readonly environmentId: EnvironmentId;
+    readonly projectId?: ProjectId | null;
+    readonly settings: AutoSettleSettings;
+  },
   targets: readonly AutoSettleSyncTarget[],
 ) {
   const patch: AutoSettleSettings = {
@@ -36,7 +41,9 @@ export function planAutoSettleSettingsSync(
     sidebarAutoSettleOnMerge: reference.settings.sidebarAutoSettleOnMerge,
   };
   const mismatches = targets.filter((target) => {
-    if (target.environmentId === reference.environmentId || target.settings === null) {
+    const isReference =
+      target.environmentId === reference.environmentId && target.projectId === reference.projectId;
+    if (isReference || target.settings === null) {
       return false;
     }
     const settings = target.settings;

@@ -82,7 +82,7 @@ describe("listening player chrome contrast", () => {
     it(`keeps the ${label} visible on its card in every theme`, () => {
       for (const themeId of MOBILE_THEME_IDS) {
         for (const appearance of APPEARANCES) {
-          const variables = getMobileThemeRuntimeVariables(themeId, appearance) as Record<
+          const variables = getMobileThemeRuntimeVariables(themeId, appearance, "ios") as Record<
             string,
             string
           >;
@@ -100,7 +100,7 @@ describe("listening player chrome contrast", () => {
   it("beats the surface-ramp tier it replaced on every theme", () => {
     for (const themeId of MOBILE_THEME_IDS) {
       for (const appearance of APPEARANCES) {
-        const variables = getMobileThemeRuntimeVariables(themeId, appearance) as Record<
+        const variables = getMobileThemeRuntimeVariables(themeId, appearance, "ios") as Record<
           string,
           string
         >;

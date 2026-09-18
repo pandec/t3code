@@ -485,6 +485,7 @@ export const makeEnvironmentThreadState = Effect.fn("EnvironmentThreadState.make
   // from the session config. Gates the turn-window mode so a reconnect to a
   // pre-pagination server never sends unsupported query parameters.
   const paginationSupported = yield* Ref.make(false);
+  const reasoningMessagesSupported = yield* Ref.make(false);
   // An older page whose thread watermark is ahead of the live state, parked
   // until the subscription catches up. At most one can exist because the
   // loader no-ops while a fetch is in flight.
@@ -628,6 +629,7 @@ export const makeEnvironmentThreadState = Effect.fn("EnvironmentThreadState.make
     // window parameters to a server that may not accept them.
     // makeSubscribeInput re-sets it from the next session's config.
     yield* Ref.set(paginationSupported, false);
+    yield* Ref.set(reasoningMessagesSupported, false);
     yield* SubscriptionRef.update(state, (current) => ({
       ...current,
       status: current.status === "deleted" ? current.status : statusWithoutLiveData(current.data),
@@ -975,7 +977,12 @@ export const makeEnvironmentThreadState = Effect.fn("EnvironmentThreadState.make
       turnLimit: olderTurnLimit,
       beforeCursor: request.value.beforeCursor,
     };
-    const response = yield* snapshotLoader.load(request.value.prepared, threadId, window);
+    const response = yield* snapshotLoader.load(
+      request.value.prepared,
+      threadId,
+      window,
+      yield* Ref.get(reasoningMessagesSupported),
+    );
 
     // The staleness check and the merge run under the same lock as stream-item
     // application, so a revert/snapshot cannot land between them: anything
@@ -1153,6 +1160,7 @@ export const makeEnvironmentThreadState = Effect.fn("EnvironmentThreadState.make
       : yield* messagePageLoader.value.loadOlder(request.value.prepared, threadId, {
           beforeMessageId: request.value.beforeMessageId,
           limit: request.value.limit,
+          reasoningMessages: yield* Ref.get(reasoningMessagesSupported),
         });
 
     yield* mutationLock.withPermits(1)(
@@ -1483,6 +1491,7 @@ export const makeEnvironmentThreadState = Effect.fn("EnvironmentThreadState.make
         (historyWindow.messageWindowLimit === null
           ? undefined
           : { messageLimit: historyWindow.messageWindowLimit }),
+      yield* Ref.get(reasoningMessagesSupported),
     );
     if (Option.isNone(httpSnapshot)) return;
     yield* mutationLock.withPermits(1)(
@@ -1690,6 +1699,7 @@ export const makeEnvironmentThreadState = Effect.fn("EnvironmentThreadState.make
               ({}) as {
                 threadResumeCompletionMarker?: boolean;
                 threadSnapshotPagination?: boolean;
+                reasoningMessages?: boolean;
               },
           ),
         );
@@ -1701,6 +1711,8 @@ export const makeEnvironmentThreadState = Effect.fn("EnvironmentThreadState.make
         const supportsPagination =
           config.threadSnapshotPagination === true && initialTurnLimit !== null;
         const turnLimit = initialTurnLimit ?? INITIAL_THREAD_USER_TURN_LIMIT;
+        const supportsReasoningMessages = config.reasoningMessages === true;
+        yield* Ref.set(reasoningMessagesSupported, supportsReasoningMessages);
         yield* Ref.set(paginationSupported, supportsPagination);
         yield* Ref.set(awaitingCompletion, supportsCompletionMarker);
         yield* markSynchronizing;
@@ -1756,6 +1768,7 @@ export const makeEnvironmentThreadState = Effect.fn("EnvironmentThreadState.make
                 : historyWindow.messageWindowLimit === null
                   ? undefined
                   : { messageLimit: historyWindow.messageWindowLimit },
+              supportsReasoningMessages,
             );
             if (Option.isSome(httpSnapshot)) {
               yield* acceptItem({ kind: "snapshot", snapshot: httpSnapshot.value });
@@ -1780,6 +1793,7 @@ export const makeEnvironmentThreadState = Effect.fn("EnvironmentThreadState.make
           threadId,
           ...(canResume ? { afterSequence: sequence } : {}),
           ...(supportsCompletionMarker ? { requestCompletionMarker: true as const } : {}),
+          ...(supportsReasoningMessages ? { reasoningMessages: true as const } : {}),
           // The WS fallback snapshot (sent when afterSequence is missing or the
           // gap is too large) is windowed the same way as the HTTP path; without
           // this a resume failure re-downloads the full thread. Never both

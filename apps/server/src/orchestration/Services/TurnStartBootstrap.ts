@@ -644,6 +644,12 @@ export const make = Effect.gen(function* () {
         }
 
         if (prepareWorktree && !shouldPrepareWorktree) {
+          if (prepareWorktree.requireWorktree) {
+            return yield* new OrchestrationDispatchCommandError({
+              message:
+                "A separate worktree requires a Git repository and a base branch with a commit.",
+            });
+          }
           // Not a git repo, or the base has no commit: the thread runs in
           // the project checkout instead. The card says so and moves on.
           yield* track(
@@ -846,13 +852,16 @@ export const make = Effect.gen(function* () {
                 cleanupCreatedWorktree().pipe(
                   Effect.flatMap(() =>
                     Effect.fail(
-                      threadDeleted
+                      threadDeleted ||
+                        (bootstrap?.createThread &&
+                          bootstrap.prepareWorktree?.requireWorktree === true &&
+                          !createdThread)
                         ? new OrchestrationDispatchCommandError({
                             message: dispatchError.message,
                             ...(dispatchError.cause !== undefined
                               ? { cause: dispatchError.cause }
                               : {}),
-                            bootstrapThreadDisposition: "deleted",
+                            bootstrapThreadDisposition: threadDeleted ? "deleted" : "not-created",
                           })
                         : dispatchError,
                     ),
@@ -865,6 +874,7 @@ export const make = Effect.gen(function* () {
 
       const settledBootstrapProgram = Effect.uninterruptibleMask((restore) =>
         restore(bootstrapProgram).pipe(
+          Effect.interruptible,
           Effect.onError(() =>
             setupCompletionFiber
               ? Fiber.interrupt(setupCompletionFiber).pipe(Effect.asVoid)

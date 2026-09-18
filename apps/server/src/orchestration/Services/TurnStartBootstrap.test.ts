@@ -955,3 +955,37 @@ describe("TurnStartBootstrap", () => {
       }),
   );
 });
+
+it.effect("refuses mandatory worktree setup outside a Git repository", () =>
+  Effect.gen(function* () {
+    const dispatched: Array<OrchestrationCommand> = [];
+    const failure = yield* Effect.gen(function* () {
+      const bootstrap = yield* TurnStartBootstrap.TurnStartBootstrap;
+      return yield* bootstrap.dispatchTurnStart(
+        makeTurnStartCommand({
+          createThread: createThreadBootstrap,
+          prepareWorktree: {
+            projectCwd: "/tmp/project",
+            branch: "required",
+            requireWorktree: true,
+          },
+        }),
+      );
+    }).pipe(
+      Effect.provide(
+        makeLayer({ dispatched, gitWorkflow: { isRepository: () => Effect.succeed(false) } }),
+      ),
+      Effect.flip,
+    );
+    assert.match(failure.message, /requires a Git repository/);
+    assert.strictEqual(
+      dispatched.some((command) => command.type === "thread.turn.start"),
+      false,
+    );
+    assert.strictEqual(failure.bootstrapThreadDisposition, "deleted");
+    assert.strictEqual(
+      dispatched.some((command) => command.type === "thread.delete"),
+      true,
+    );
+  }),
+);

@@ -5,7 +5,9 @@ import * as NodeOS from "node:os";
 import * as NodePath from "node:path";
 
 import * as NodeServices from "@effect/platform-node/NodeServices";
+import { mergeUsage } from "@t3tools/shared/usageMerge";
 import {
+  EnvironmentId,
   ProviderDriverKind,
   ProviderInstanceId,
   UsageDay,
@@ -86,9 +88,11 @@ it.layer(NodeServices.layer)("UsageService", (it) => {
         const codexTranscriptDir = path.join(codexHome, "sessions");
         const claudeTranscriptPath = path.join(claudeTranscriptDir, "session.jsonl");
         const scanCachePath = path.join(config.stateDir, "usage-scan-cache.json");
-
         yield* fileSystem.makeDirectory(claudeTranscriptDir, { recursive: true });
         yield* fileSystem.makeDirectory(codexTranscriptDir, { recursive: true });
+        const canonicalClaudeTranscriptDir = yield* Effect.promise(() =>
+          NodeFSP.realpath(claudeTranscriptDir),
+        );
 
         // The suite runs on the test clock, so "now" is the epoch. Stamping
         // the record with the same instant the service will bucket against
@@ -109,7 +113,7 @@ it.layer(NodeServices.layer)("UsageService", (it) => {
             Effect.gen(function* () {
               // The walk probes each provider root exactly once per scan, so
               // the Claude root marks that scan's walk beginning.
-              if (target === claudeTranscriptDir) events.push("scan:start");
+              if (target === canonicalClaudeTranscriptDir) events.push("scan:start");
               // Hand the scheduler an opportunity to run the other scan. If
               // nothing serialises them, both walks start before either ends.
               yield* Effect.yieldNow;
@@ -164,7 +168,7 @@ it.layer(NodeServices.layer)("UsageService", (it) => {
         const persisted = decodeScanCache(
           yield* decodeScanCacheDocument(yield* fileSystem.readFileString(scanCachePath)),
         );
-        assert.isTrue(persisted.has(claudeTranscriptPath));
+        assert.isTrue(persisted.has(path.join(canonicalClaudeTranscriptDir, "session.jsonl")));
       }).pipe(
         Effect.provide(
           Layer.fresh(
@@ -255,21 +259,19 @@ it.layer(NodeServices.layer)("UsageService", (it) => {
         const codexSources = summary.sources.filter(
           (source) => source.fingerprint.provider === "codex",
         );
+        const canonicalClaudeProjects = yield* Effect.promise(() =>
+          NodeFSP.realpath(claudeProjects),
+        );
+        const canonicalCodexSessions = yield* Effect.promise(() => NodeFSP.realpath(codexSessions));
 
         assert.equal(claudeSources.length, 2);
         const overriddenSource = claudeSources.find(
-          (source) => source.fingerprint.resolvedHomePath === claudeProjects,
+          (source) => source.fingerprint.resolvedHomePath === canonicalClaudeProjects,
         );
         assert.isDefined(overriddenSource);
         assert.equal(overriddenSource?.status, "ok");
-        assert.isFalse(
-          claudeSources.some(
-            (source) => source.fingerprint.resolvedHomePath === claudeShadowProjects,
-          ),
-        );
         assert.equal(codexSources.length, 1);
-        assert.equal(codexSources[0]?.fingerprint.resolvedHomePath, codexSessions);
-        assert.notEqual(codexSources[0]?.fingerprint.resolvedHomePath, codexShadowSessions);
+        assert.equal(codexSources[0]?.fingerprint.resolvedHomePath, canonicalCodexSessions);
         assert.equal(
           summary.buckets.reduce((records, bucket) => records + bucket.records, 0),
           1,
@@ -368,6 +370,24 @@ it.layer(NodeServices.layer)("UsageService", (it) => {
 
         // The readable records still landed despite the damage.
         assert.isAbove(summary.buckets.length, 0);
+
+        const firstBuckets = summary.buckets;
+        const goodTranscript = path.join(claudeTranscriptDir, "good.jsonl");
+        yield* Effect.promise(async () => {
+          await NodeFSP.rm(goodTranscript);
+          await NodeFSP.symlink(symlinkTarget, goodTranscript);
+        });
+        const withCachedReadFailure = yield* usage.readSummary({
+          sinceDay: today,
+          untilDay: today,
+          timeZone: "UTC",
+        });
+        assert.deepStrictEqual(withCachedReadFailure.buckets, firstBuckets);
+        const cachedFailureSource = withCachedReadFailure.sources.find(
+          (source) => source.fingerprint.provider === "claude",
+        );
+        assert.equal(cachedFailureSource?.status, "partial");
+        assert.include(cachedFailureSource?.message ?? "", "2 transcript files could not be read");
       }).pipe(
         Effect.provide(
           Layer.fresh(
@@ -481,14 +501,15 @@ describe("UsageService", () => {
           [
             { type: "session_meta", payload: { id: "codex-account-session" } },
             { type: "turn_context", payload: { model: "gpt-5.6-sol" } },
-            {
+            // A-B-A at one timestamp must preserve both equal A events.
+            ...[11, 12, 11].map((outputTokens) => ({
               type: "event_msg",
               timestamp: "2026-08-01T10:00:00Z",
               payload: {
                 type: "token_count",
-                info: { last_token_usage: { input_tokens: 10, output_tokens: 11 } },
+                info: { last_token_usage: { input_tokens: 10, output_tokens: outputTokens } },
               },
-            },
+            })),
           ]
             .map((line) => encodeUnknownJsonString(line))
             .join("\n") + "\n",
@@ -548,7 +569,21 @@ describe("UsageService", () => {
         ),
       );
       const summary = yield* service.readSummary(WINDOW);
-      assert.strictEqual(totalOutputTokens(summary), 36);
+      assert.strictEqual(totalOutputTokens(summary), 59);
+      yield* Effect.promise(() =>
+        NodeFSP.rename(
+          NodePath.join(codexHome, "sessions", "rollout.jsonl"),
+          NodePath.join(codexHome, "sessions", "moved.jsonl"),
+        ),
+      );
+      const moved = yield* service.readSummary(WINDOW);
+      assert.deepStrictEqual(moved.buckets, summary.buckets);
+      yield* Effect.promise(() =>
+        NodeFSP.rm(NodePath.join(codexHome, "sessions"), { recursive: true }),
+      );
+      const removed = yield* service.readSummary(WINDOW);
+      assert.deepStrictEqual(removed.buckets, summary.buckets);
+
       const sources = summary.sources.filter((source) => source.status === "ok");
       assert.strictEqual(sources.length, 4);
       assert.strictEqual(
@@ -591,9 +626,12 @@ describe("UsageService", () => {
           const service = yield* UsageService.make;
           const first = yield* service.readSummary(WINDOW);
           assert.strictEqual(totalOutputTokens(first), 7);
+          const canonicalConfiguredProjects = yield* Effect.promise(() =>
+            NodeFSP.realpath(NodePath.join(configured, "projects")),
+          );
           assert.include(
             first.sources.map((source) => source.fingerprint.resolvedHomePath),
-            NodePath.join(configured, "projects"),
+            canonicalConfiguredProjects,
           );
           yield* settingsService.updateSettings({
             providerInstances: {
@@ -608,9 +646,12 @@ describe("UsageService", () => {
           });
           const second = yield* service.readSummary(WINDOW);
           assert.strictEqual(totalOutputTokens(second), 8);
+          const canonicalEnvironmentProjects = yield* Effect.promise(() =>
+            NodeFSP.realpath(NodePath.join(environmentHome, "projects")),
+          );
           assert.include(
             second.sources.map((source) => source.fingerprint.resolvedHomePath),
-            NodePath.join(environmentHome, "projects"),
+            canonicalEnvironmentProjects,
           );
         }).pipe(
           Effect.provide(
@@ -773,6 +814,110 @@ describe("UsageService", () => {
     }).pipe(Effect.scoped),
   );
 
+  it.live("preserves saved tokens, costs and sessions after transcript cleanup and restart", () =>
+    Effect.gen(function* () {
+      const { transcript, settings, home } = yield* setup;
+      const alias = NodePath.join(home, "claude-alias");
+      yield* Effect.promise(() =>
+        NodeFSP.symlink(NodePath.join(home, "claude"), alias, "junction"),
+      );
+      const content = claudeLine(1, 5);
+      yield* Effect.promise(() => NodeFSP.writeFile(transcript, content));
+      yield* Effect.gen(function* () {
+        const service = yield* UsageService.make;
+        const first = yield* service.readSummary(WINDOW);
+        assert.strictEqual(totalOutputTokens(first), 5);
+        assert.isAbove(first.buckets[0]?.costUsd ?? 0, 0);
+
+        yield* Effect.promise(() => NodeFSP.rm(transcript));
+        const deleted = yield* service.readSummary(WINDOW);
+        assert.deepStrictEqual(deleted.buckets, first.buckets);
+        assert.deepStrictEqual(deleted.sources, first.sources);
+
+        const restarted = yield* UsageService.make;
+        const restored = yield* restarted.readSummary(WINDOW);
+        assert.deepStrictEqual(restored.buckets, first.buckets);
+        assert.deepStrictEqual(restored.sources, first.sources);
+
+        // A moved transcript must not count the saved usage twice.
+        yield* Effect.promise(() => NodeFSP.writeFile(transcript + ".jsonl", content));
+        const moved = yield* restarted.readSummary(WINDOW);
+        assert.deepStrictEqual(moved.buckets, first.buckets);
+        assert.strictEqual(
+          moved.sources.find((source) => source.fingerprint.provider === "claude")
+            ?.distinctSessions,
+          1,
+        );
+
+        const replacementProjects = NodePath.join(home, "replacement-projects");
+        yield* Effect.promise(() => NodeFSP.mkdir(replacementProjects));
+        yield* Effect.promise(() =>
+          NodeFSP.rm(NodePath.join(home, "claude", "projects"), { recursive: true }),
+        );
+        const afterRootCleanup = yield* UsageService.make;
+        const missingRoot = yield* afterRootCleanup.readSummary(WINDOW);
+        const firstClaudeSource = first.sources.find(
+          (source) => source.fingerprint.provider === "claude",
+        );
+        const missingClaudeSource = missingRoot.sources.find(
+          (source) => source.fingerprint.provider === "claude",
+        );
+        assert.deepStrictEqual(missingRoot.buckets, first.buckets);
+        assert.strictEqual(missingClaudeSource?.distinctSessions, 1);
+        assert.strictEqual(missingClaudeSource?.status, "ok");
+        assert.deepStrictEqual(missingClaudeSource?.fingerprint, firstClaudeSource?.fingerprint);
+        yield* Effect.promise(async () => {
+          const projects = NodePath.join(home, "claude", "projects");
+          await NodeFSP.rename(replacementProjects, projects);
+          await NodeFSP.writeFile(NodePath.join(projects, "new.jsonl"), claudeLine(2, 7));
+        });
+        const recreated = yield* afterRootCleanup.readSummary(WINDOW);
+        assert.strictEqual(totalOutputTokens(recreated), 12);
+        assert.deepStrictEqual(
+          recreated.sources.find((source) => source.fingerprint.provider === "claude")?.fingerprint,
+          firstClaudeSource?.fingerprint,
+        );
+
+        const merged = mergeUsage(
+          [
+            {
+              environmentId: EnvironmentId.make("cleanup-test"),
+              label: "test",
+              summary: recreated,
+            },
+            {
+              environmentId: EnvironmentId.make("other-environment"),
+              label: "before cleanup",
+              summary: first,
+            },
+          ],
+          missingRoot.contractVersion,
+        );
+        assert.strictEqual(merged.outputTokens, 12);
+        assert.strictEqual(merged.sessions, 1);
+        assert.strictEqual(merged.costUsd, recreated.buckets[0]?.costUsd);
+
+        const outsideWindow = yield* restarted.readSummary({
+          ...WINDOW,
+          sinceDay: UsageDay.make("2026-08-02"),
+        });
+        assert.deepStrictEqual(outsideWindow.buckets, []);
+        assert.strictEqual(outsideWindow.sources[0]?.distinctSessions, 0);
+      }).pipe(
+        Effect.provide(
+          serviceLayers({
+            prefix: "usage-service-cleanup-test",
+            home,
+            settings: { providers: { ...settings.providers, claudeAgent: { homePath: alias } } },
+            ratesDocument: {
+              "claude-fable-5": { input_cost_per_token: 1e-5, output_cost_per_token: 5e-5 },
+            },
+          }),
+        ),
+      );
+    }).pipe(Effect.scoped),
+  );
+
   it.live("does not share an in-flight scan after custom prices change", () =>
     Effect.gen(function* () {
       const { transcript, settings, home } = yield* setup;
@@ -781,6 +926,9 @@ describe("UsageService", () => {
       yield* Effect.gen(function* () {
         const settingsService = yield* ServerSettings.ServerSettingsService;
         const fileSystem = yield* FileSystem.FileSystem;
+        const canonicalClaudeProjects = yield* Effect.promise(() =>
+          NodeFSP.realpath(NodePath.join(home, "claude", "projects")),
+        );
         const firstScanStarted = yield* Deferred.make<void>();
         const releaseRates = yield* Deferred.make<void>();
         let homeProbes = 0;
@@ -790,7 +938,7 @@ describe("UsageService", () => {
             exists: (path) =>
               fileSystem.exists(path).pipe(
                 Effect.tap(() => {
-                  if (path !== NodePath.join(home, "claude", "projects")) return Effect.void;
+                  if (path !== canonicalClaudeProjects) return Effect.void;
                   homeProbes += 1;
                   return homeProbes === 1
                     ? Deferred.succeed(firstScanStarted, undefined)

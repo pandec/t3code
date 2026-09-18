@@ -6,6 +6,7 @@ import * as Option from "effect/Option";
 import * as TestClock from "effect/testing/TestClock";
 import { AsyncResult, Atom, AtomRegistry } from "effect/unstable/reactivity";
 import { vi } from "vite-plus/test";
+import { ProviderInstanceId } from "@t3tools/contracts";
 
 vi.mock("expo-secure-store", () => ({
   getItemAsync: vi.fn(),
@@ -133,6 +134,45 @@ describe("mobile preferences state", () => {
         collapsedProjectGroups: ["project:new"],
       });
       expect(AsyncResult.isFailure(registry.get(state.updatePreferencesAtom))).toBe(false);
+
+      unmountUpdate();
+      unmountPreferences();
+      registry.dispose();
+    }),
+  );
+
+  it.effect("keeps both favorites when updates are sent before a render", () =>
+    Effect.gen(function* () {
+      let persisted: Preferences = { modelFavorites: [] };
+      const state = makePreferencesState({
+        load: Effect.succeed(persisted),
+        savePatch: () => Effect.die(new Error("Favorite updates must use a transform.")),
+        update: (transform) =>
+          Effect.sync(() => {
+            persisted = { ...persisted, ...transform(persisted) };
+            return persisted;
+          }),
+      });
+      const registry = AtomRegistry.make();
+      const unmountPreferences = registry.mount(state.preferencesAtom);
+      const unmountUpdate = registry.mount(state.updatePreferencesAtom);
+      yield* AtomRegistry.getResult(registry, state.preferencesAtom, { suspendOnWaiting: true });
+
+      const provider = ProviderInstanceId.make("codex");
+      registry.set(state.updatePreferencesAtom, (current) => ({
+        modelFavorites: [...(current.modelFavorites ?? []), { provider, model: "astra" }],
+      }));
+      registry.set(state.updatePreferencesAtom, (current) => ({
+        modelFavorites: [...(current.modelFavorites ?? []), { provider, model: "sol" }],
+      }));
+      yield* AtomRegistry.getResult(registry, state.updatePreferencesAtom, {
+        suspendOnWaiting: true,
+      });
+
+      expect(persisted.modelFavorites).toEqual([
+        { provider, model: "astra" },
+        { provider, model: "sol" },
+      ]);
 
       unmountUpdate();
       unmountPreferences();

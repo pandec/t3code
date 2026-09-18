@@ -24,6 +24,7 @@ export const fetchEnvironmentThreadMessagePage = Effect.fn(
   readonly limit: number;
   readonly signer: Option.Option<ManagedRelayDpopSigner["Service"]>;
   readonly remoteAuthorization?: Option.Option<RemoteEnvironmentAuthorization["Service"]>;
+  readonly reasoningMessages?: boolean;
   readonly timeoutMs?: number;
 }) {
   return yield* executeAuthenticatedEnvironmentHttpRequest({
@@ -39,6 +40,7 @@ export const fetchEnvironmentThreadMessagePage = Effect.fn(
         query: {
           limit: input.limit,
           ...(input.before === undefined ? {} : { before: input.before }),
+          ...(input.reasoningMessages === true ? { reasoningMessages: "true" as const } : {}),
         },
         headers,
       }),
@@ -56,6 +58,7 @@ export class ThreadMessagePageLoader extends Context.Service<
       options: {
         readonly beforeMessageId: MessageId | null;
         readonly limit: number;
+        readonly reasoningMessages?: boolean;
       },
     ) => Effect.Effect<Option.Option<OrchestrationThreadMessagePage>>;
   }
@@ -78,6 +81,7 @@ export const threadMessagePageLoaderLayer: Layer.Layer<
           threadId,
           limit: options.limit,
           ...(options.beforeMessageId === null ? {} : { before: options.beforeMessageId }),
+          ...(options.reasoningMessages === true ? { reasoningMessages: true } : {}),
           signer,
           remoteAuthorization,
         }).pipe(

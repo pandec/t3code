@@ -52,7 +52,9 @@ import {
   sortThreadsForSidebar,
   sortProjectsForSidebar,
   sortScopedProjectsForSidebar,
+  isSidebarProjectScopeIsolated,
   toggleSidebarProjectHidden,
+  toggleSidebarProjectIsolation,
   toggleSidebarProjectScope,
   toggleSidebarProjectSelection,
   shouldCreateNewThreadInCurrentProject,
@@ -147,6 +149,25 @@ describe("Sidebar V2 project scope", () => {
         "project-b",
       ),
     ).toEqual({ scope: new Set(["project-a"]), hidden: new Set() });
+  });
+
+  it("isolates a project from the thread menu and returns to all when it is alone", () => {
+    const isolated = toggleSidebarProjectIsolation(
+      { scope: new Set(["project-a", "project-b"]), hidden: new Set(["project-c", "project-d"]) },
+      "project-c",
+    );
+    expect(isolated).toEqual({ scope: new Set(["project-c"]), hidden: new Set(["project-d"]) });
+    expect(isSidebarProjectScopeIsolated(isolated.scope, "project-c")).toBe(true);
+    expect(isSidebarProjectScopeIsolated(isolated.scope, "project-a")).toBe(false);
+    expect(isSidebarProjectScopeIsolated(new Set(["project-a", "project-c"]), "project-c")).toBe(
+      false,
+    );
+    expect(isSidebarProjectScopeIsolated(null, "project-c")).toBe(false);
+
+    expect(toggleSidebarProjectIsolation(isolated, "project-c")).toEqual({
+      scope: null,
+      hidden: new Set(["project-d"]),
+    });
   });
 
   it("drops unavailable scope entries before hiding the last visible selection", () => {

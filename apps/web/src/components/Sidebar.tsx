@@ -196,6 +196,7 @@ import {
   hasUnseenCompletion,
   hasUnseenWake,
   isSidebarNestedLinkClick,
+  isSidebarProjectScopeIsolated,
   isSidebarV2AttentionThread,
   isTrailingDoubleClick,
   orderItemsByPreferredIds,
@@ -220,6 +221,7 @@ import {
   sortSettledThreadsForSidebar,
   sortThreadsForSidebar,
   toggleSidebarProjectHidden,
+  toggleSidebarProjectIsolation,
   toggleSidebarProjectSelection,
   useRetainedValue,
   useSidebarRowSubscriptionLease,
@@ -1475,6 +1477,7 @@ const SidebarThreadRow = memo(function SidebarThreadRow(props: {
             addFiles: (files) => {
               onFileDropThreads(threadRef, files);
             },
+            addFolders: () => {},
           })
         : null,
     [onFileDropThreads, threadRef],
@@ -2510,6 +2513,7 @@ const SidebarSearchResultRow = memo(function SidebarSearchResultRow(props: {
         addFiles: (files) => {
           props.onFileDropThreads(threadRef, files);
         },
+        addFolders: () => {},
       }),
     [props.onFileDropThreads, threadRef],
   );
@@ -2801,6 +2805,7 @@ export default function Sidebar() {
   );
   const projectGroupsRef = useRef(projectGroups);
   projectGroupsRef.current = projectGroups;
+  const resolvedProjectScopeKeysRef = useRef<SidebarProjectScope>(null);
   const serverConfigs = useAtomValue(environmentServerConfigsAtom);
   // Threads on non-primary environments (T3 Connect, hosted) resolve their
   // provider entry from their own environment's config: default instance ids
@@ -2896,6 +2901,7 @@ export default function Sidebar() {
     () => resolveSidebarProjectScope(projectGroups, projectScopeKeys),
     [projectGroups, projectScopeKeys],
   );
+  resolvedProjectScopeKeysRef.current = resolvedProjectScopeKeys;
   const scopedProjectKeys = useMemo(
     () => resolveSidebarProjectScopePhysicalKeys(projectGroups, resolvedProjectScopeKeys),
     [projectGroups, resolvedProjectScopeKeys],
@@ -3023,6 +3029,29 @@ export default function Sidebar() {
   const clearProjectFilters = useCallback(
     () => updateSidebarProjectFilters(() => ({ scopeKeys: null, hiddenProjectKeys: [] })),
     [updateSidebarProjectFilters],
+  );
+  // The thread menu's "Filter by project" over the persisted multi-select:
+  // isolate this project, or return to all projects when it is already alone.
+  const isolateProjectScope = useCallback(
+    (scopeKey: string) => {
+      updateSidebarProjectFilters((current) => {
+        const next = toggleSidebarProjectIsolation(
+          {
+            scope: resolveSidebarProjectScope(
+              projectGroups,
+              current.scopeKeys === null ? null : new Set(current.scopeKeys),
+            ),
+            hidden: new Set(current.hiddenProjectKeys),
+          },
+          scopeKey,
+        );
+        return {
+          scopeKeys: next.scope === null ? null : [...next.scope],
+          hiddenProjectKeys: [...next.hidden],
+        };
+      });
+    },
+    [projectGroups, updateSidebarProjectFilters],
   );
   // Keyed on the stored intent, not the resolved scope: clearing the selection
   // and collapsing the settled tail answer "the user changed the filter", and
@@ -5150,11 +5179,28 @@ export default function Sidebar() {
             serverConfigs.get(thread.environmentId)?.environment.capabilities
               .threadSnoozeUntilDone === true,
         });
+        const threadProjectGroup =
+          projectGroupsRef.current.find((project) =>
+            project.memberProjectRefs.some(
+              (projectRef) =>
+                projectRef.environmentId === thread.environmentId &&
+                projectRef.projectId === thread.projectId,
+            ),
+          ) ?? null;
         const clicked = await settlePromise(() =>
           api.contextMenu.show(
             [
               ...buildThreadActionMenuItems({
                 branch: thread.branch ?? null,
+                projectFilter: threadProjectGroup
+                  ? {
+                      label: threadProjectGroup.displayName,
+                      isActive: isSidebarProjectScopeIsolated(
+                        resolvedProjectScopeKeysRef.current,
+                        threadProjectGroup.projectKey,
+                      ),
+                    }
+                  : null,
                 isPinned,
                 isSettled,
                 isSnoozed,
@@ -5223,17 +5269,14 @@ export default function Sidebar() {
           return;
         }
         switch (clicked.value) {
-          case "project-settings": {
-            const projectGroup = projectGroupsRef.current.find((group) =>
-              group.memberProjectRefs.some(
-                (projectRef) =>
-                  projectRef.environmentId === thread.environmentId &&
-                  projectRef.projectId === thread.projectId,
-              ),
-            );
-            if (projectGroup) openProjectSettings(projectGroup);
+          case "filter-by-project":
+            // This item is the only scope control here, so picking the
+            // already-isolated project again is the way back to all projects.
+            if (threadProjectGroup) isolateProjectScope(threadProjectGroup.projectKey);
             return;
-          }
+          case "project-settings":
+            if (threadProjectGroup) openProjectSettings(threadProjectGroup);
+            return;
           case "new-thread-on-branch": {
             // Explicit branch carry-over: reuse the thread's worktree when it
             // has one, otherwise its branch on the local checkout.
@@ -5374,6 +5417,7 @@ export default function Sidebar() {
       deleteThread,
       handleMultiSelectContextMenu,
       markThreadUnread,
+      isolateProjectScope,
       openProjectSettings,
       projectByKey,
       serverConfigs,

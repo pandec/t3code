@@ -505,6 +505,38 @@ export function toggleSidebarProjectSelection(
   };
 }
 
+/**
+ * Whether the thread menu's project filter already shows exactly this
+ * project. The menu item flips between "Filter by" and "Show all projects"
+ * on this, so the resolved scope (unavailable entries dropped) is what
+ * matters, not the stored intent.
+ */
+export function isSidebarProjectScopeIsolated(
+  resolvedScope: SidebarProjectScope,
+  projectKey: string,
+): boolean {
+  return resolvedScope !== null && resolvedScope.size === 1 && resolvedScope.has(projectKey);
+}
+
+/**
+ * The thread menu's single filter control, layered over the persisted
+ * multi-select menu: it isolates the thread's project (replacing any wider
+ * selection and unhiding it), and picking the sole isolated project again
+ * returns to all projects. Other hidden projects stay hidden either way;
+ * that intent belongs to the project menu.
+ */
+export function toggleSidebarProjectIsolation(
+  filters: SidebarProjectFilters,
+  projectKey: string,
+): SidebarProjectFilters {
+  const hidden = new Set(filters.hidden);
+  hidden.delete(projectKey);
+  return {
+    scope: isSidebarProjectScopeIsolated(filters.scope, projectKey) ? null : new Set([projectKey]),
+    hidden,
+  };
+}
+
 export function toggleSidebarProjectHidden(
   filters: SidebarProjectFilters,
   projectKey: string,

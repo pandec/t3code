@@ -1,3 +1,4 @@
+import { PullRequestGlyph } from "../pullRequest/pullRequestIcons";
 import type {
   EnvironmentId,
   LinearAttachment,
@@ -13,7 +14,6 @@ import {
   CornerLeftUpIcon,
   ExternalLinkIcon,
   GitBranchIcon,
-  GitPullRequestIcon,
   LinkIcon,
   SendIcon,
 } from "lucide-react";
@@ -405,7 +405,7 @@ function IssueRefList({
 
 function AttachmentRow({ attachment }: { attachment: LinearAttachment }) {
   const Icon = /github|gitlab|bitbucket/i.test(attachment.sourceType ?? "")
-    ? GitPullRequestIcon
+    ? PullRequestGlyph.pullRequest
     : LinkIcon;
   const title = attachment.title.trim().length > 0 ? attachment.title : attachment.url;
   return (

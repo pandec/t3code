@@ -904,10 +904,11 @@ describe("thread messages report", () => {
       ...input,
     });
 
-  it("excludes system messages by default and keeps user and assistant", () => {
+  it("excludes system and reasoning messages by default and keeps user and assistant", () => {
     const report = reportWith({
       messages: [
         messageWith({ id: "m1", role: "system", text: "internal" }),
+        messageWith({ id: "thought", role: "reasoning", text: "thinking summary" }),
         messageWith({ id: "m2", role: "user", text: "question" }),
         messageWith({ id: "m3", role: "assistant", text: "answer" }),
       ],
@@ -946,6 +947,21 @@ describe("thread messages report", () => {
     assert.deepEqual(
       report.messages.map((message) => message.id),
       ["m2"],
+    );
+  });
+
+  it("selects provider thinking summaries only when reasoning is requested", () => {
+    const report = reportWith({
+      role: "reasoning",
+      messages: [
+        messageWith({ id: "m1", role: "user" }),
+        messageWith({ id: "m2", role: "reasoning", text: "checking alternatives" }),
+        messageWith({ id: "m3", role: "assistant" }),
+      ],
+    });
+    assert.deepEqual(
+      report.messages.map((message) => [message.id, message.role, message.text]),
+      [["m2", "reasoning", "checking alternatives"]],
     );
   });
 

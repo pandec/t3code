@@ -213,6 +213,7 @@ const LOADERS: ReadonlyArray<{
         ...input,
         threadId: THREAD.thread.id,
         window: { turnLimit: 20, beforeCursor: "older-page" },
+        reasoningMessages: true,
       }),
   },
 ];
@@ -232,6 +233,7 @@ describe("authenticated environment HTTP requests", () => {
         threadId: THREAD.thread.id,
         before: MessageId.make("older-message"),
         limit: 20,
+        reasoningMessages: true,
       }).pipe(Effect.provide(harness.httpLayer));
       expect(result).toEqual(page);
       expect(harness.calls).toHaveLength(1);
@@ -242,6 +244,7 @@ describe("authenticated environment HTTP requests", () => {
       );
       expect(url.searchParams.get("limit")).toBe("20");
       expect(url.searchParams.get("before")).toBe("older-message");
+      expect(url.searchParams.get("reasoningMessages")).toBe("true");
       expect(new Headers(call.init.headers).get("authorization")).toBe("DPoP current-token");
       expect(harness.proofs[0]?.url).toBe(`${url.origin}${url.pathname}`);
     }),
@@ -284,6 +287,7 @@ describe("authenticated environment HTTP requests", () => {
       if (loader.name === "older thread history") {
         expect(url.searchParams.get("turnLimit")).toBe("20");
         expect(url.searchParams.get("beforeCursor")).toBe("older-page");
+        expect(url.searchParams.get("reasoningMessages")).toBe("true");
       }
       expect(PREPARED.httpAuthorization).toMatchObject({ accessToken: "expired-token" });
     }),

@@ -53,6 +53,74 @@ function waitForPromptStarts(
 }
 
 describe("AcpSessionRuntime", () => {
+  for (const promptConcurrency of ["serialized", "concurrent"] as const) {
+    it.effect(`blocks drained assistant chunks and reopens for ${promptConcurrency} prompts`, () =>
+      Effect.gen(function* () {
+        const events: Array<AcpSessionRuntime.AcpSessionRuntimeEvent> = [];
+        const runtime = yield* AcpSessionRuntime.make({ ...mockRuntimeOptions, promptConcurrency });
+        yield* runtime.start();
+        yield* runtime.getEvents().pipe(
+          Stream.runForEach((event) => {
+            if (event._tag === "EventStreamBarrier")
+              return Deferred.succeed(event.acknowledge, undefined);
+            events.push(event);
+            return Effect.void;
+          }),
+          Effect.forkChild,
+        );
+        yield* runtime.prompt({ prompt: [{ type: "text", text: "first" }] });
+        yield* runtime.drainEvents;
+        yield* runtime.request("_test/startup-metadata", {});
+        yield* runtime.drainEvents;
+        expect(
+          events.filter((event) => event._tag === "ContentDelta").map((event) => event.text),
+        ).toEqual(["hello from mock"]);
+        yield* runtime.prompt({ prompt: [{ type: "text", text: "second" }] });
+        yield* runtime.drainEvents;
+        expect(
+          events.filter((event) => event._tag === "ContentDelta").map((event) => event.text),
+        ).toEqual(["hello from mock", "hello from mock"]);
+      }).pipe(Effect.scoped, Effect.provide(NodeServices.layer)),
+    );
+  }
+
+  it.effect("keeps assistant updates open when a concurrent prompt drains mid-request", () =>
+    Effect.gen(function* () {
+      const dispatched = yield* Deferred.make<void>();
+      const release = yield* Deferred.make<void>();
+      const events: Array<AcpSessionRuntime.AcpSessionRuntimeEvent> = [];
+      const runtime = yield* AcpSessionRuntime.make({
+        ...mockRuntimeOptions,
+        promptConcurrency: "concurrent",
+        requestLogger: (event) =>
+          event.method === "session/prompt" && event.status === "started"
+            ? Deferred.succeed(dispatched, undefined).pipe(Effect.andThen(Deferred.await(release)))
+            : Effect.void,
+      });
+      yield* runtime.start();
+      yield* runtime.getEvents().pipe(
+        Stream.runForEach((event) => {
+          if (event._tag === "EventStreamBarrier")
+            return Deferred.succeed(event.acknowledge, undefined);
+          events.push(event);
+          return Effect.void;
+        }),
+        Effect.forkChild,
+      );
+      const prompt = yield* runtime
+        .prompt({ prompt: [{ type: "text", text: "first" }] })
+        .pipe(Effect.forkChild);
+      yield* Deferred.await(dispatched);
+      yield* runtime.drainEvents;
+      yield* Deferred.succeed(release, undefined);
+      yield* Fiber.join(prompt);
+      yield* runtime.drainEvents;
+      expect(
+        events.filter((event) => event._tag === "ContentDelta").map((event) => event.text),
+      ).toEqual(["hello from mock"]);
+    }).pipe(Effect.scoped, Effect.provide(NodeServices.layer)),
+  );
+
   it.effect("selects authentication from the initialize response", () => {
     const requestEvents: Array<AcpSessionRuntime.AcpSessionRequestLogEvent> = [];
     return Effect.gen(function* () {

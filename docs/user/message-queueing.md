@@ -11,7 +11,7 @@ it up part-way through its current work.
 It rests above the composer for a few seconds first, so you can fix a typo, edit it, or drop it
 before it leaves. On web and desktop, send an empty composer again to skip that wait and go now. The
 recall window is five seconds by default; change it in **Settings → Extras** on web and desktop, or
-**Settings → General** on mobile, where it is set per device.
+**Settings → Thread behavior** on mobile, where it is set per device.
 
 ## Queueing for later
 

@@ -40,11 +40,9 @@ const cliDispatchOptions = { origin: { surface: "cli" } } as const;
  * query (cursor+limit pushdown, ORDER BY created_at, message_id) — instead
  * of hydrating the full thread-detail snapshot just to page messages.
  *
- * This route is only reached by a client talking to a server that does not
- * advertise `threadSnapshotPagination`; current clients page by turn cursor
- * instead. It stays because the endpoint declaration is shared with the
- * client (which still needs to call it against pre-turn-window servers) and
- * the HTTP API requires every declared endpoint to be handled.
+ * The CLI uses this bounded message page directly. UI clients use turn
+ * cursors on current servers and retain this route for older servers.
+ * Reasoning messages require opt-in so older clients still decode the page.
  */
 export const getThreadMessagesHttp = Effect.fn("environment.orchestration.threadMessages.handler")(
   function* (
@@ -63,7 +61,14 @@ export const getThreadMessagesHttp = Effect.fn("environment.orchestration.thread
     if (Option.isNone(page)) {
       return yield* failEnvironmentNotFound("thread_not_found");
     }
-    return page.value;
+    return query.reasoningMessages === "true"
+      ? page.value
+      : {
+          ...page.value,
+          messages: page.value.messages.map((message) =>
+            message.role === "reasoning" ? { ...message, role: "system" as const } : message,
+          ),
+        };
   },
 );
 
@@ -136,7 +141,10 @@ export const orchestrationHttpApiLayer = HttpApiBuilder.group(
           if (Option.isNone(snapshot)) {
             return yield* failEnvironmentNotFound("thread_not_found");
           }
-          return projectThreadDetailSnapshot(snapshot.value);
+          return projectThreadDetailSnapshot(
+            snapshot.value,
+            args.query.reasoningMessages === "true",
+          );
         }),
       )
       .handle(

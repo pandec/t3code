@@ -87,13 +87,15 @@ const buildSourcemap: boolean | "hidden" =
  */
 const ISOLATED_TEST_FILES = [
   "src/components/pullRequest/PullRequestSummaryTab.test.tsx",
+  "src/components/pullRequest/PullRequestDetailPanel.test.tsx",
+  "src/components/pullRequest/usePullRequestFilesViewed.test.tsx",
+  "src/components/settings/colorPickers.test.tsx",
 
   "src/hooks/useResizeDrag.test.tsx",
   "src/components/ThreadNotificationCoordinator.badge.test.tsx",
   "src/components/ThreadNotificationCoordinator.test.tsx",
   "src/hooks/useEnvironmentDisconnectDelay.test.tsx",
 
-  "src/components/ComposerContextReferenceNode.test.ts",
   "src/components/files/AttachmentFilePreview.test.tsx",
 
   "src/components/device/DeviceStreamView.test.tsx",
@@ -106,7 +108,6 @@ const ISOLATED_TEST_FILES = [
   "src/hooks/useLocalStorage.test.ts",
   "src/browser/HostedBrowserWebview.test.tsx",
   "src/browser/browserLinkTarget.test.ts",
-  "src/components/ComposerPromptEditor.serialization.test.tsx",
   "src/components/cloud/CloudEnvironmentConnectList.test.tsx",
   "src/components/diffs/DiffFileTree.test.tsx",
   "src/components/preview/PreviewAutomationHosts.test.tsx",
@@ -129,7 +130,6 @@ const ISOLATED_TEST_FILES = [
   "src/components/ChatMarkdown.workspace-images.test.tsx",
   "src/components/ChatView.logic.test.ts",
   "src/components/CommandPalette.logic.test.ts",
-  "src/components/ComposerPromptEditor.test.ts",
   "src/components/ProjectFavicon.test.tsx",
   "src/components/ProviderUpdateEnvironmentRows.test.tsx",
   "src/components/ServerUpdateAction.test.tsx",

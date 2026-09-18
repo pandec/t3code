@@ -578,6 +578,7 @@ export const EnvironmentOrchestrationThreadSnapshotParams = Schema.Struct({
  * and make old servers return unbounded history.
  */
 export const EnvironmentOrchestrationThreadSnapshotUrlParams = Schema.Struct({
+  reasoningMessages: Schema.optionalKey(Schema.Literal("true")),
   turnLimit: Schema.optionalKey(PositiveInt),
   beforeCursor: Schema.optionalKey(TrimmedNonEmptyString),
   messageLimit: Schema.optionalKey(NonNegativeInt),
@@ -588,6 +589,7 @@ export type EnvironmentOrchestrationThreadSnapshotUrlParams =
 export const EnvironmentOrchestrationThreadMessagesUrlParams = Schema.Struct({
   before: Schema.optionalKey(MessageId),
   limit: Schema.optionalKey(NonNegativeInt),
+  reasoningMessages: Schema.optionalKey(Schema.Literal("true")),
 });
 export type EnvironmentOrchestrationThreadMessagesUrlParams =
   typeof EnvironmentOrchestrationThreadMessagesUrlParams.Type;
