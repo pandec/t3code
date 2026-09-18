@@ -12,6 +12,7 @@ describe("resolveThreadShelfExpanded", () => {
     expect(resolve("snoozed")).toBe(false);
     expect(resolve("archived")).toBe(false);
     expect(resolve("settled")).toBe(true);
+    expect(resolve("active")).toBe(true);
   });
 
   it("prefers a stored choice over every default", () => {
@@ -35,7 +36,7 @@ describe("threadShelfExpandedPatch", () => {
   });
 
   it("round-trips through resolveThreadShelfExpanded for every shelf", () => {
-    for (const shelf of ["pinned", "snoozed", "settled", "archived"] as const) {
+    for (const shelf of ["pinned", "active", "snoozed", "settled", "archived"] as const) {
       for (const expanded of [true, false]) {
         expect(resolve(shelf, threadShelfExpandedPatch(shelf, expanded))).toBe(expanded);
       }
