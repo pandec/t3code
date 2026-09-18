@@ -64,6 +64,7 @@ import IconGitMerge from "@tabler/icons-react-native/IconGitMerge";
 import IconGitPullRequest from "@tabler/icons-react-native/IconGitPullRequest";
 import IconHammer from "@tabler/icons-react-native/IconHammer";
 import IconHeadphones from "@tabler/icons-react-native/IconHeadphones";
+import IconInbox from "@tabler/icons-react-native/IconInbox";
 import IconInfoCircle from "@tabler/icons-react-native/IconInfoCircle";
 import IconKeyboard from "@tabler/icons-react-native/IconKeyboard";
 import IconKeyboardHide from "@tabler/icons-react-native/IconKeyboardHide";
@@ -274,6 +275,7 @@ const ANDROID_ICON_BY_SF_SYMBOL = {
   "textformat.size.larger": IconTextIncrease,
   "textformat.size.smaller": IconTextDecrease,
   trash: IconTrash,
+  tray: IconInbox,
   "tray.and.arrow.up": IconUpload,
   waveform: IconAudioLines,
   "wifi.slash": IconWifiOff,

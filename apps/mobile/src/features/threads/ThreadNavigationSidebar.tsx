@@ -557,6 +557,8 @@ function ThreadNavigationSidebarPane(
     useThreadShelfExpansion("settled");
   const { expanded: pinnedShelfExpanded, toggle: togglePinnedShelf } =
     useThreadShelfExpansion("pinned");
+  const { expanded: activeShelfExpanded, toggle: toggleActiveShelf } =
+    useThreadShelfExpansion("active");
   // Queued-start and snooze helpers need a clock while the pane stays open.
   const [nowMinute, setNowMinute] = useState(() => new Date().toISOString().slice(0, 16));
   // Snooze wake times are second-precise; a counter bumped exactly at the
@@ -789,6 +791,10 @@ function ThreadNavigationSidebarPane(
         props.searchQuery.trim() || attentionFilter.memberThreadKeys !== null
           ? new Set()
           : collapsedGroupIds,
+      activeShelfExpanded:
+        activeShelfExpanded ||
+        props.searchQuery.trim().length > 0 ||
+        attentionFilter.memberThreadKeys !== null,
       selectedThreadKey: props.selectedThreadKey ?? null,
       items: threadListV2Layout.items,
       pendingTasks: v2PendingTasks,
@@ -814,6 +820,7 @@ function ThreadNavigationSidebarPane(
   }, [
     customGroups.groups,
     collapsedGroupIds,
+    activeShelfExpanded,
     attentionFilter.memberThreadKeys,
     props.selectedThreadKey,
     listLayout.items,
@@ -1279,7 +1286,8 @@ function ThreadNavigationSidebarPane(
               name={item.name}
               count={item.count}
               expanded={item.expanded}
-              onToggle={item.groupId ? () => toggleCustomGroup(item.groupId!) : undefined}
+              builtIn={item.groupId === null}
+              onToggle={item.groupId ? () => toggleCustomGroup(item.groupId!) : toggleActiveShelf}
             />
           );
         case "v2-pinned-shelf":
@@ -1401,6 +1409,7 @@ function ThreadNavigationSidebarPane(
     },
     [
       toggleCustomGroup,
+      toggleActiveShelf,
       archiveThread,
       activeReorderEnvironmentIds,
       threadMovePlanners,

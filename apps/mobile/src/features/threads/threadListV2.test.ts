@@ -1152,9 +1152,11 @@ describe("buildThreadListV2ListItems", () => {
             ? item.item.thread.id
             : item.type === "v2-snoozed-shelf"
               ? "snoozed-shelf"
-              : "settled-shelf",
+              : item.type === "v2-custom-group"
+                ? "active-header"
+                : "settled-shelf",
       ),
-    ).toEqual(["active", "queued-1", "queued-2", "settled-shelf", "settled"]);
+    ).toEqual(["active-header", "active", "queued-1", "queued-2", "settled-shelf", "settled"]);
     // Only the leading queued row labels the section, exactly like Settled.
     expect(
       items.filter((item) => item.type === "v2-pending" && item.showPendingDivider),
@@ -1182,6 +1184,7 @@ describe("buildThreadListV2ListItems", () => {
       settledShelfHeaderIndex: layout.settledShelfHeaderIndex,
     });
     expect(items.map((item) => item.key)).toEqual([
+      "v2-active-header",
       `v2-thread:${environmentId}:active`,
       "v2-pending-task:queued",
       "v2-draft-task:draft-1",
@@ -1205,7 +1208,7 @@ describe("buildThreadListV2ListItems", () => {
       pendingTasks: [makePendingTask("queued-1")],
     });
 
-    expect(items.map((item) => item.type)).toEqual(["v2-thread", "v2-pending"]);
+    expect(items.map((item) => item.type)).toEqual(["v2-custom-group", "v2-thread", "v2-pending"]);
   });
 
   it("opens the pinned block with a shelf header and closes it with a divider", () => {
@@ -1233,6 +1236,7 @@ describe("buildThreadListV2ListItems", () => {
       "v2-pinned-shelf",
       `v2-thread:${environmentId}:pinned`,
       "v2-pinned-divider",
+      "v2-active-header",
       `v2-thread:${environmentId}:active`,
       "v2-pending-task:queued",
     ]);
@@ -1272,6 +1276,7 @@ describe("buildThreadListV2ListItems", () => {
       "v2-pinned-shelf",
       `v2-thread:${environmentId}:pinned-a`,
       "v2-pinned-divider",
+      "v2-active-header",
       `v2-thread:${environmentId}:active`,
     ]);
     const header = items[0];
@@ -1341,6 +1346,7 @@ describe("buildThreadListV2ListItems", () => {
     });
 
     expect(items.map((item) => item.key)).toEqual([
+      "v2-active-header",
       `v2-thread:${environmentId}:active`,
       "v2-settled-shelf",
       `v2-thread:${environmentId}:settled`,
@@ -1379,6 +1385,7 @@ describe("buildThreadListV2ListItems", () => {
     });
 
     expect(items.map((item) => item.type)).toEqual([
+      "v2-custom-group",
       "v2-thread",
       "v2-pending",
       "v2-snoozed-shelf",
@@ -1419,7 +1426,7 @@ describe("buildThreadListV2Items quiet active threads", () => {
     expect(layout.items.map((item) => item.variant)).toEqual(["card", "card"]);
     expect(
       buildThreadListV2ListItems({ ...layout, pendingTasks: [] }).map((item) => item.type),
-    ).toEqual(["v2-thread", "v2-thread"]);
+    ).toEqual(["v2-custom-group", "v2-thread", "v2-thread"]);
   });
 
   it("lets server-projected settlement park a quiet thread", () => {
@@ -1958,4 +1965,38 @@ it("keeps a group reorder pending while unrelated groups are present", () => {
   expect(
     reconcilePendingThreadOrder(pending, [a, { ...b, customGroupId: "parked" }, other]),
   ).toBeNull();
+});
+
+it("folds the built-in Active group like a custom group, keeping the open thread", () => {
+  const open = makeThread({ id: ThreadId.make("open"), title: "Open" });
+  const other = makeThread({ id: ThreadId.make("other"), title: "Other" });
+  const layout = buildThreadListV2Items({
+    threads: [open, other],
+    environmentId: null,
+    searchQuery: "",
+    now: NOW,
+  });
+  const expanded = buildThreadListV2ListItems({ ...layout, pendingTasks: [] });
+  expect(expanded.map((row) => row.key)).toEqual([
+    "v2-active-header",
+    `v2-thread:${environmentId}:open`,
+    `v2-thread:${environmentId}:other`,
+  ]);
+  expect(expanded[0]).toMatchObject({ type: "v2-custom-group", groupId: null, expanded: true });
+  const folded = buildThreadListV2ListItems({
+    ...layout,
+    pendingTasks: [],
+    activeShelfExpanded: false,
+    selectedThreadKey: `${environmentId}:open`,
+  });
+  expect(folded.map((row) => row.key)).toEqual([
+    "v2-active-header",
+    `v2-thread:${environmentId}:open`,
+  ]);
+  expect(folded[0]).toMatchObject({ count: 2, expanded: false });
+  const empty = buildThreadListV2ListItems({
+    ...buildThreadListV2Items({ threads: [], environmentId: null, searchQuery: "", now: NOW }),
+    pendingTasks: [],
+  });
+  expect(empty).toEqual([]);
 });
