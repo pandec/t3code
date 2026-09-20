@@ -96,7 +96,7 @@ describe("stage", () => {
     ),
     Layer.provideMerge(
       Layer.mergeAll(
-        SqliteClient.layerMemory(),
+        SqliteClient.layer({ filename: ":memory:" }),
         ServerConfig.layerTest(process.cwd(), { prefix: "agent-voice-reply-test-" }),
         // The pre-OpenRouter default is ElevenLabs; the stub above answers as it.
         ServerSettingsModule.layerTest({ voice: { tts: { provider: "elevenlabs" } } }),

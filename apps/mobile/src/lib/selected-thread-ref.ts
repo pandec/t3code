@@ -16,6 +16,7 @@ export const WORKSPACE_OVERLAY_ROUTES = new Set([
   "SettingsLegal",
   "SettingsSheet",
   "ThreadReviewComment",
+  "ThreadDevicePreview",
 ]);
 
 // Overlay routes that are still scoped to a thread (linked under
@@ -31,6 +32,7 @@ const THREAD_SCOPED_OVERLAY_ROUTES = new Set([
   "GitConfirm",
   "GitOverview",
   "ThreadReviewComment",
+  "ThreadDevicePreview",
 ]);
 
 /**

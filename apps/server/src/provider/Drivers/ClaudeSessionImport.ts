@@ -463,9 +463,9 @@ const readFileTail = Effect.fn("readFileTail")(function* (input: {
     Effect.gen(function* () {
       const file = yield* fileSystem.open(input.filePath, { flag: "r" });
       if (offset > 0) {
-        yield* file.seek(FileSystem.Size(offset), "start");
+        yield* file.seek(BigInt(offset), "start");
       }
-      const chunk = yield* file.readAlloc(FileSystem.Size(length));
+      const chunk = yield* file.readAlloc(length);
       return Option.match(chunk, {
         onNone: () => "",
         onSome: (bytes) => new TextDecoder().decode(bytes),

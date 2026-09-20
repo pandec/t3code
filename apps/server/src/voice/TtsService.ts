@@ -129,7 +129,7 @@ export const layer = Layer.effect(
     const httpClient = yield* HttpClient.HttpClient;
     const secretStore = yield* ServerSecretStore.ServerSecretStore;
     const environmentDefaults = yield* readTtsEnvironmentDefaults;
-    const elevenLabsKey = yield* Config.redacted("ELEVENLABS_API_KEY").pipe(
+    const elevenLabsKey = yield* Config.Redacted("ELEVENLABS_API_KEY").pipe(
       Config.option,
       Effect.map(Option.filter((key) => Redacted.value(key).trim().length > 0)),
       Effect.orDie,

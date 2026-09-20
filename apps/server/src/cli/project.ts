@@ -68,7 +68,7 @@ type ProjectCliDispatchCommand = Extract<
   { type: "project.create" | "project.meta.update" | "project.delete" }
 >;
 
-const jsonFlag = Flag.boolean("json").pipe(
+const jsonFlag = Flag.Boolean("json").pipe(
   Flag.withDescription("Emit JSON instead of human-readable output."),
   Flag.withDefault(false),
 );
@@ -306,10 +306,10 @@ const runProjectMutation = Effect.fn("runProjectMutation")(function* (
 
 const projectAddCommand = Command.make("add", {
   ...projectLocationFlags,
-  workspaceRoot: Argument.string("path").pipe(
+  workspaceRoot: Argument.String("path").pipe(
     Argument.withDescription("Workspace root to add as a project."),
   ),
-  title: Flag.string("title").pipe(Flag.withDescription("Optional project title."), Flag.optional),
+  title: Flag.String("title").pipe(Flag.withDescription("Optional project title."), Flag.optional),
   json: jsonFlag,
 }).pipe(
   Command.withDescription("Add a project."),
@@ -342,11 +342,11 @@ const projectAddCommand = Command.make("add", {
 
 const projectRemoveCommand = Command.make("remove", {
   ...projectLocationFlags,
-  project: Argument.string("project").pipe(
+  project: Argument.String("project").pipe(
     Argument.withDescription("Project id or workspace root to remove."),
   ),
   json: jsonFlag,
-  force: Flag.boolean("force").pipe(
+  force: Flag.Boolean("force").pipe(
     Flag.withDescription("Delete the project and all of its threads."),
     Flag.withDefault(false),
   ),
@@ -385,10 +385,10 @@ const projectRemoveCommand = Command.make("remove", {
 
 const projectRenameCommand = Command.make("rename", {
   ...projectLocationFlags,
-  project: Argument.string("project").pipe(
+  project: Argument.String("project").pipe(
     Argument.withDescription("Project id or workspace root to rename."),
   ),
-  title: Argument.string("title").pipe(Argument.withDescription("New project title.")),
+  title: Argument.String("title").pipe(Argument.withDescription("New project title.")),
   json: jsonFlag,
 }).pipe(
   Command.withDescription("Rename a project."),
@@ -538,15 +538,15 @@ const projectListCommand = Command.make("list", {
   ),
 );
 
-const projectActionTargetArgument = Argument.string("project").pipe(
+const projectActionTargetArgument = Argument.String("project").pipe(
   Argument.withDescription("Project id or workspace root."),
 );
 
-const projectActionIdArgument = Argument.string("action").pipe(
+const projectActionIdArgument = Argument.String("action").pipe(
   Argument.withDescription("Exact project action id."),
 );
 
-const projectActionIconFlag = Flag.choice("icon", ProjectScriptIcon.literals).pipe(
+const projectActionIconFlag = Flag.Literals("icon", ProjectScriptIcon.literals).pipe(
   Flag.withDescription("Action icon."),
 );
 
@@ -596,23 +596,23 @@ const projectActionListCommand = Command.make("list", {
 const projectActionAddCommand = Command.make("add", {
   ...projectLocationFlags,
   project: projectActionTargetArgument,
-  id: Flag.string("id").pipe(Flag.withDescription("Optional stable action id."), Flag.optional),
-  name: Flag.string("name").pipe(Flag.withDescription("Action display name.")),
-  command: Flag.string("command").pipe(Flag.withDescription("Shell command to run.")),
+  id: Flag.String("id").pipe(Flag.withDescription("Optional stable action id."), Flag.optional),
+  name: Flag.String("name").pipe(Flag.withDescription("Action display name.")),
+  command: Flag.String("command").pipe(Flag.withDescription("Shell command to run.")),
   icon: projectActionIconFlag.pipe(Flag.withDefault("play")),
-  runOnWorktreeCreate: Flag.boolean("run-on-worktree-create").pipe(
+  runOnWorktreeCreate: Flag.Boolean("run-on-worktree-create").pipe(
     Flag.withDescription("Run automatically after creating a worktree."),
     Flag.withDefault(false),
   ),
-  async: Flag.boolean("async").pipe(
+  async: Flag.Boolean("async").pipe(
     Flag.withDescription("Let a setup action continue while the agent starts."),
     Flag.optional,
   ),
-  previewUrl: Flag.string("preview-url").pipe(
+  previewUrl: Flag.String("preview-url").pipe(
     Flag.withDescription("Optional desktop preview URL."),
     Flag.optional,
   ),
-  autoOpenPreview: Flag.boolean("auto-open-preview").pipe(
+  autoOpenPreview: Flag.Boolean("auto-open-preview").pipe(
     Flag.withDescription("Open the configured preview automatically."),
     Flag.withDefault(false),
   ),
@@ -668,26 +668,26 @@ const projectActionUpdateCommand = Command.make("update", {
   ...projectLocationFlags,
   project: projectActionTargetArgument,
   actionId: projectActionIdArgument,
-  name: Flag.string("name").pipe(Flag.withDescription("New action display name."), Flag.optional),
-  command: Flag.string("command").pipe(Flag.withDescription("New shell command."), Flag.optional),
+  name: Flag.String("name").pipe(Flag.withDescription("New action display name."), Flag.optional),
+  command: Flag.String("command").pipe(Flag.withDescription("New shell command."), Flag.optional),
   icon: projectActionIconFlag.pipe(Flag.optional),
-  runOnWorktreeCreate: Flag.boolean("run-on-worktree-create").pipe(
+  runOnWorktreeCreate: Flag.Boolean("run-on-worktree-create").pipe(
     Flag.withDescription("Enable or disable automatic worktree setup."),
     Flag.optional,
   ),
-  async: Flag.boolean("async").pipe(
+  async: Flag.Boolean("async").pipe(
     Flag.withDescription("Enable or disable asynchronous setup."),
     Flag.optional,
   ),
-  previewUrl: Flag.string("preview-url").pipe(
+  previewUrl: Flag.String("preview-url").pipe(
     Flag.withDescription("New desktop preview URL."),
     Flag.optional,
   ),
-  clearPreviewUrl: Flag.boolean("clear-preview-url").pipe(
+  clearPreviewUrl: Flag.Boolean("clear-preview-url").pipe(
     Flag.withDescription("Remove the preview URL and automatic preview setting."),
     Flag.withDefault(false),
   ),
-  autoOpenPreview: Flag.boolean("auto-open-preview").pipe(
+  autoOpenPreview: Flag.Boolean("auto-open-preview").pipe(
     Flag.withDescription("Enable or disable automatic preview opening."),
     Flag.optional,
   ),

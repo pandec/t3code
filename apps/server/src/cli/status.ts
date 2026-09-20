@@ -16,7 +16,7 @@ import {
 } from "./orchestration.ts";
 import { threadCliState } from "./threadState.ts";
 
-const jsonFlag = Flag.boolean("json").pipe(
+const jsonFlag = Flag.Boolean("json").pipe(
   Flag.withDescription("Emit JSON instead of human-readable output."),
   Flag.withDefault(false),
 );

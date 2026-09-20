@@ -217,7 +217,7 @@ export const cliLiveServerReadTimeoutsFromMillis = (
 
 export const resolveCliLiveServerReadTimeouts = Effect.fn("resolveCliLiveServerReadTimeouts")(
   function* (flagTimeoutMillis: Option.Option<number>) {
-    const envTimeoutMillis = yield* Config.int("T3CODE_CLI_TIMEOUT_MS").pipe(
+    const envTimeoutMillis = yield* Config.Int("T3CODE_CLI_TIMEOUT_MS").pipe(
       Config.option,
       Effect.catch(() =>
         Console.error("Ignoring invalid T3CODE_CLI_TIMEOUT_MS; using default timeouts.").pipe(

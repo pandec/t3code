@@ -120,13 +120,14 @@ export const makeClaudeCapabilitiesCacheKey = Effect.fn("makeClaudeCapabilitiesC
   function* (
     config: Pick<ClaudeSettings, "binaryPath" | "homePath" | "shadowHomePath">,
     cwd?: string,
+    environment?: NodeJS.ProcessEnv,
   ): Effect.fn.Return<string, never, Path.Path> {
-    const resolvedHomePath = yield* resolveClaudeHomePath(config);
+    const configDirPath = yield* resolveClaudeConfigDirPath(config, environment, cwd);
     // Unlike the continuation key, the capabilities key must separate shadow
     // instances: each shadow dir is its own credential slot, so auth-derived
     // probe results never transfer across accounts.
     const shadowConfigDirPath = yield* resolveClaudeShadowConfigDirPath(config);
-    return `${config.binaryPath}\0${resolvedHomePath}\0${shadowConfigDirPath ?? ""}\0${cwd ?? ""}`;
+    return `${config.binaryPath}\0${configDirPath}\0${shadowConfigDirPath ?? ""}\0${cwd ?? ""}`;
   },
 );
 

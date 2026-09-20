@@ -63,7 +63,7 @@ const SESSION_GIT_TIMEOUT = Duration.seconds(30);
 const SESSION_GIT_MAX_OUTPUT_BYTES = 1024 * 1024;
 const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 
-const jsonFlag = Flag.boolean("json").pipe(
+const jsonFlag = Flag.Boolean("json").pipe(
   Flag.withDescription("Emit JSON instead of human-readable output."),
   Flag.withDefault(false),
 );
@@ -982,8 +982,8 @@ const runSessionCli = Effect.fn("runSessionCli")(function* <A, E, R>(
 
 const sessionCandidatesCommand = Command.make("candidates", {
   ...projectLocationFlags,
-  project: Flag.string("project").pipe(Flag.withDescription("Project id or workspace root.")),
-  cwd: Flag.string("cwd").pipe(
+  project: Flag.String("project").pipe(Flag.withDescription("Project id or workspace root.")),
+  cwd: Flag.String("cwd").pipe(
     Flag.withDescription("Optional existing project worktree to inspect."),
     Flag.optional,
   ),
@@ -1015,29 +1015,29 @@ const sessionCandidatesCommand = Command.make("candidates", {
 
 const sessionImportCommand = Command.make("import", {
   ...projectLocationFlags,
-  file: Flag.string("file").pipe(Flag.withDescription("Provider JSONL session transcript.")),
-  project: Flag.string("project").pipe(
+  file: Flag.String("file").pipe(Flag.withDescription("Provider JSONL session transcript.")),
+  project: Flag.String("project").pipe(
     Flag.withDescription("Project id, workspace root, or existing git repo path to auto-add."),
   ),
-  worktreeBranch: Flag.string("worktree-branch").pipe(
+  worktreeBranch: Flag.String("worktree-branch").pipe(
     Flag.withDescription(
       "Use/create the standard worktree for this local branch. Setup scripts and git-status refresh are not run.",
     ),
     Flag.optional,
   ),
-  model: Flag.string("model").pipe(
+  model: Flag.String("model").pipe(
     Flag.withDescription("Explicit imported thread model."),
     Flag.optional,
   ),
-  effort: Flag.string("effort").pipe(
+  effort: Flag.String("effort").pipe(
     Flag.withDescription("Provider effort/reasoning-effort option."),
     Flag.optional,
   ),
-  instance: Flag.string("instance").pipe(
+  instance: Flag.String("instance").pipe(
     Flag.withDescription("Explicit provider instance id."),
     Flag.optional,
   ),
-  title: Flag.string("title").pipe(
+  title: Flag.String("title").pipe(
     Flag.withDescription("Thread title; defaults to the provider session name."),
     Flag.optional,
   ),

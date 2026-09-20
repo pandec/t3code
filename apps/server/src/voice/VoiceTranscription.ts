@@ -104,11 +104,11 @@ export function buildElevenLabsTranscriptionFormData(options: {
 export const layer = Layer.effect(
   VoiceTranscription,
   Effect.gen(function* () {
-    const apiKey = yield* Config.redacted("ELEVENLABS_API_KEY").pipe(Config.option);
-    const model = yield* Config.string("ELEVENLABS_STT_MODEL").pipe(
+    const apiKey = yield* Config.Redacted("ELEVENLABS_API_KEY").pipe(Config.option);
+    const model = yield* Config.String("ELEVENLABS_STT_MODEL").pipe(
       Config.withDefault("scribe_v2"),
     );
-    const language = yield* Config.string("ELEVENLABS_STT_LANGUAGE").pipe(Config.option);
+    const language = yield* Config.String("ELEVENLABS_STT_LANGUAGE").pipe(Config.option);
     const httpClient = yield* HttpClient.HttpClient;
     const available = Option.isSome(apiKey) && Redacted.value(apiKey.value).trim().length > 0;
 

@@ -57,6 +57,10 @@ Treat the overall testing or implementation loop—not an assistant turn or one 
 
 Keep pairing URLs out of screenshots, committed files, and durable logs. When the user asked for a shared environment, the deliverable IS the full pairing URL — paste it in your reply, token and all; a bare origin is useless to them. A pairing token is short-lived and single-use; opening the URL in another browser or opening it twice can consume it, so never open a URL you handed to the user.
 
+## Optional built-in Browser panel
+
+When T3's preview tools are available, the Browser panel can replace the browser chosen above. Call `preview_status`, open the panel with `preview_open` when needed, then navigate to this test's complete pairing URL once with `preview_navigate`. Use `preview_snapshot` and the returned interaction tools in the same tab. Keep the isolated-state, token, sharing, and teardown rules in this skill. If the panel is unavailable, continue with the existing controlled-browser choices.
+
 ## Recover a consumed or expired pairing token
 
 Run `node apps/server/src/bin.ts pair` from the repository root. It discovers the running dev server (worktree `.t3` first, same precedence as the dev runner) and prints a fresh `Pair URL` against the server's current web origin, including a `--share` tailnet origin. Pass `--base-dir <base-dir>` only when the server was started with `--home-dir`, using the identical path.

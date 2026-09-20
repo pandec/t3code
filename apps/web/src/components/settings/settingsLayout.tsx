@@ -58,7 +58,7 @@ const SettingsSearchTargetContext = createContext<SettingsSearchTargetContextVal
   onTargetHandled: noop,
 });
 
-export function SettingsSearchTargetProvider({
+function SettingsSearchTargetProvider({
   targetId,
   highlightTarget = true,
   onTargetHandled = noop,

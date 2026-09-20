@@ -114,7 +114,7 @@ const smokeCliArchive = Effect.fn("smokeCliArchive")(function* (input: {
   }
 
   // Starting the server is what actually opens sqlite, loads the terminal
-  // and search stacks (node-pty, fff, msgpackr-extract), and serves the
+  // and search stacks (node-pty, fff), and serves the
   // client, so probe a real `serve` in a scratch home rather than a
   // command that only reads package metadata.
   const net = yield* NetService.NetService;
@@ -177,8 +177,8 @@ const smokeCliArchive = Effect.fn("smokeCliArchive")(function* (input: {
 const command = Command.make(
   "smoke-cli-archive",
   {
-    archive: Flag.string("archive"),
-    expectVersion: Flag.string("expect-version"),
+    archive: Flag.String("archive"),
+    expectVersion: Flag.String("expect-version"),
   },
   (input) => smokeCliArchive(input).pipe(Effect.scoped),
 ).pipe(Command.withDescription("Extract a CLI archive and run its executable."));

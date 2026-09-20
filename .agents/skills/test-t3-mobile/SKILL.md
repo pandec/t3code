@@ -56,6 +56,12 @@ Inspect the host and the affected code before launching processes:
 
 Do not treat unavailable iOS tooling as a blocker when Android is a valid representative target.
 
+## Optional built-in Device panel
+
+After resolving the simulator host and obtaining approval for verification, T3's Device panel can replace XcodeBuildMCP or direct Android interaction. Call `device_list`, then `device_open` with the chosen host and device IDs. Follow its returned `quickStart`; use the exact `agentDevice.command` and every returned `targetArgs` on each operation. Inspect with `device_screenshot`.
+
+Continue the native compatibility, resolved app identity, isolated backend, Metro, and pairing steps below on the device host. Pair with the existing native helper, then drive the app through AgentDevice. When opening the app through AgentDevice, pass the resolved bundle/package identifier rather than assuming the upstream default. At teardown, close the AgentDevice session and call `device_close` in addition to stopping the processes this task started. If the panel is unavailable, use the existing platform tooling.
+
 ## Resolve the app identity — never assume it
 
 The development identity on both platforms is:

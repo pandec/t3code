@@ -98,7 +98,7 @@ import {
   waitForThread,
 } from "./threadWait.ts";
 
-const jsonFlag = Flag.boolean("json").pipe(
+const jsonFlag = Flag.Boolean("json").pipe(
   Flag.withDescription("Emit JSON instead of human-readable output."),
   Flag.withDefault(false),
 );
@@ -110,13 +110,13 @@ const jsonFlag = Flag.boolean("json").pipe(
 // rc.112 registers `Flag.orElse` alternates, so a boolean and a choice flag
 // sharing the name "drain" would now fail as a duplicate flag.
 const threadWaitDrainPrimitive: Primitive.Primitive<ThreadWaitDrainMode> = Object.assign(
-  Object.create(Object.getPrototypeOf(Primitive.boolean)),
+  Object.create(Object.getPrototypeOf(Primitive.Boolean)),
   {
     _tag: "Boolean",
     parse: (value: string) =>
       value === "agents" || value === "all"
         ? Effect.succeed(value)
-        : Effect.map(Primitive.boolean.parse(value), (enabled) => (enabled ? "agents" : null)),
+        : Effect.map(Primitive.Boolean.parse(value), (enabled) => (enabled ? "agents" : null)),
   },
 );
 
@@ -789,11 +789,11 @@ export const compensateFailedThreadStart = Effect.fn("compensateFailedThreadStar
 
 const threadListCommand = Command.make("list", {
   ...projectLocationFlags,
-  project: Flag.string("project").pipe(
+  project: Flag.String("project").pipe(
     Flag.withDescription("Filter by project id or workspace root."),
     Flag.optional,
   ),
-  state: Flag.choice("state", ["idle", "running", "interrupted", "completed", "error"]).pipe(
+  state: Flag.Literals("state", ["idle", "running", "interrupted", "completed", "error"]).pipe(
     Flag.withDescription("Filter by latest turn state."),
     Flag.optional,
   ),
@@ -834,51 +834,51 @@ const threadListCommand = Command.make("list", {
 
 const threadNewCommand = Command.make("new", {
   ...projectLocationFlags,
-  project: Flag.string("project").pipe(Flag.withDescription("Project id or workspace root.")),
-  message: Flag.string("message").pipe(Flag.withDescription("Initial user message.")),
-  title: Flag.string("title").pipe(Flag.withDescription("Optional thread title."), Flag.optional),
-  runtimeMode: Flag.choice("runtime-mode", RuntimeMode.literals).pipe(Flag.optional),
-  interactionMode: Flag.choice("interaction-mode", ProviderInteractionMode.literals).pipe(
+  project: Flag.String("project").pipe(Flag.withDescription("Project id or workspace root.")),
+  message: Flag.String("message").pipe(Flag.withDescription("Initial user message.")),
+  title: Flag.String("title").pipe(Flag.withDescription("Optional thread title."), Flag.optional),
+  runtimeMode: Flag.Literals("runtime-mode", RuntimeMode.literals).pipe(Flag.optional),
+  interactionMode: Flag.Literals("interaction-mode", ProviderInteractionMode.literals).pipe(
     Flag.withDefault(DEFAULT_PROVIDER_INTERACTION_MODE),
   ),
-  model: Flag.string("model").pipe(Flag.withDescription("Explicit model slug."), Flag.optional),
-  effort: Flag.string("effort").pipe(
+  model: Flag.String("model").pipe(Flag.withDescription("Explicit model slug."), Flag.optional),
+  effort: Flag.String("effort").pipe(
     Flag.withDescription("Provider effort/reasoning-effort option."),
     Flag.optional,
   ),
-  instance: Flag.string("instance").pipe(
+  instance: Flag.String("instance").pipe(
     Flag.withDescription("Explicit provider instance id."),
     Flag.optional,
   ),
-  checkout: Flag.boolean("checkout").pipe(
+  checkout: Flag.Boolean("checkout").pipe(
     Flag.withDescription(
       "Start the thread in the project checkout even when the configured default is a worktree.",
     ),
     Flag.withDefault(false),
   ),
-  newWorktree: Flag.boolean("new-worktree").pipe(
+  newWorktree: Flag.Boolean("new-worktree").pipe(
     Flag.withDescription(
       "Start the thread in a fresh worktree created by the server (with the project setup script).",
     ),
     Flag.withDefault(false),
   ),
-  worktree: Flag.string("worktree").pipe(
+  worktree: Flag.String("worktree").pipe(
     Flag.withDescription(
       "Start the thread in an existing worktree at this path (see `git worktree list`).",
     ),
     Flag.optional,
   ),
-  branch: Flag.string("branch").pipe(
+  branch: Flag.String("branch").pipe(
     Flag.withDescription(
       "With --new-worktree: name for the new branch (default: temporary name, auto-renamed from the thread title). With --worktree: assert the worktree's checked-out branch (detected automatically when omitted).",
     ),
     Flag.optional,
   ),
-  base: Flag.string("base").pipe(
+  base: Flag.String("base").pipe(
     Flag.withDescription("Base ref for --new-worktree (default: the project's current branch)."),
     Flag.optional,
   ),
-  startFromOrigin: Flag.boolean("start-from-origin").pipe(
+  startFromOrigin: Flag.Boolean("start-from-origin").pipe(
     Flag.withDescription("Base the new worktree on origin/<base> instead of the local ref."),
     Flag.withDefault(false),
   ),
@@ -1157,8 +1157,8 @@ const threadNewCommand = Command.make("new", {
 
 const threadSendCommand = Command.make("send", {
   ...projectLocationFlags,
-  threadId: Argument.string("thread-id").pipe(Argument.withDescription("Thread id.")),
-  message: Flag.string("message").pipe(Flag.withDescription("User message.")),
+  threadId: Argument.String("thread-id").pipe(Argument.withDescription("Thread id.")),
+  message: Flag.String("message").pipe(Flag.withDescription("User message.")),
   json: jsonFlag,
 }).pipe(
   Command.withDescription("Send a message to a thread, steering it when already running."),
@@ -1197,8 +1197,8 @@ const threadSendCommand = Command.make("send", {
 
 const threadRenameCommand = Command.make("rename", {
   ...projectLocationFlags,
-  threadId: Argument.string("thread-id").pipe(Argument.withDescription("Thread id.")),
-  title: Argument.string("title").pipe(Argument.withDescription("New thread title.")),
+  threadId: Argument.String("thread-id").pipe(Argument.withDescription("Thread id.")),
+  title: Argument.String("title").pipe(Argument.withDescription("New thread title.")),
   json: jsonFlag,
 }).pipe(
   Command.withDescription("Rename a thread."),
@@ -1241,7 +1241,7 @@ const threadRenameCommand = Command.make("rename", {
 
 const threadInterruptCommand = Command.make("interrupt", {
   ...projectLocationFlags,
-  threadId: Argument.string("thread-id").pipe(Argument.withDescription("Thread id.")),
+  threadId: Argument.String("thread-id").pipe(Argument.withDescription("Thread id.")),
   json: jsonFlag,
 }).pipe(
   Command.withDescription("Interrupt the active turn in a thread."),
@@ -1280,7 +1280,7 @@ const threadInterruptCommand = Command.make("interrupt", {
 
 const threadStatusCommand = Command.make("status", {
   ...projectLocationFlags,
-  threadId: Argument.string("thread-id").pipe(Argument.withDescription("Thread id.")),
+  threadId: Argument.String("thread-id").pipe(Argument.withDescription("Thread id.")),
   json: jsonFlag,
 }).pipe(
   Command.withDescription("Show thread status."),
@@ -1321,27 +1321,27 @@ const threadStatusCommand = Command.make("status", {
 
 const threadWaitCommand = Command.make("wait", {
   ...projectLocationFlags,
-  threadId: Argument.string("thread-id").pipe(Argument.withDescription("Thread id.")),
-  afterSequence: Flag.integer("after-sequence").pipe(
+  threadId: Argument.String("thread-id").pipe(Argument.withDescription("Thread id.")),
+  afterSequence: Flag.Int("after-sequence").pipe(
     Flag.withSchema(Schema.Int.check(Schema.isGreaterThanOrEqualTo(0))),
     Flag.withDescription("Wait only after the shell reaches this projection sequence."),
     Flag.optional,
   ),
-  turn: Flag.string("turn").pipe(
+  turn: Flag.String("turn").pipe(
     Flag.withDescription("Wait for this specific turn id to settle."),
     Flag.optional,
   ),
-  timeout: Flag.string("timeout").pipe(
+  timeout: Flag.String("timeout").pipe(
     Flag.withSchema(DurationFromString),
     Flag.withDescription("Maximum wait duration, for example `30s`, `5m`, or `1h`."),
     Flag.withDefault(Duration.minutes(30)),
   ),
   drain: threadWaitDrainFlag,
-  onBlocked: Flag.choice("on-blocked", ["wait", "return"] as const).pipe(
+  onBlocked: Flag.Literals("on-blocked", ["wait", "return"] as const).pipe(
     Flag.withDescription("Whether approvals or user-input requests keep waiting."),
     Flag.withDefault("return"),
   ),
-  exitZero: Flag.boolean("exit-zero").pipe(
+  exitZero: Flag.Boolean("exit-zero").pipe(
     Flag.withDescription("Return exit code 0 for every observed terminal outcome."),
     Flag.withDefault(false),
   ),
@@ -1668,17 +1668,17 @@ export const renderThreadMessagesText = (report: ThreadMessagesReport): string =
 
 const threadMessagesCommand = Command.make("messages", {
   ...projectLocationFlags,
-  threadId: Argument.string("thread-id").pipe(Argument.withDescription("Thread id.")),
-  limit: Flag.integer("limit").pipe(
+  threadId: Argument.String("thread-id").pipe(Argument.withDescription("Thread id.")),
+  limit: Flag.Int("limit").pipe(
     Flag.withSchema(Schema.Int.check(Schema.isGreaterThan(0))),
     Flag.withDescription("Only the newest N messages (counted before role filtering)."),
     Flag.optional,
   ),
-  before: Flag.string("before").pipe(
+  before: Flag.String("before").pipe(
     Flag.withDescription("Only messages older than this message id."),
     Flag.optional,
   ),
-  role: Flag.choice("role", ["user", "assistant", "system", "reasoning"] as const).pipe(
+  role: Flag.Literals("role", ["user", "assistant", "system", "reasoning"] as const).pipe(
     Flag.withDescription("Only messages with this role. Default: user and assistant."),
     Flag.optional,
   ),
@@ -1767,7 +1767,7 @@ const threadMessagesCommand = Command.make("messages", {
 
 const threadInputListCommand = Command.make("list", {
   ...projectLocationFlags,
-  threadId: Argument.string("thread-id").pipe(Argument.withDescription("Thread id.")),
+  threadId: Argument.String("thread-id").pipe(Argument.withDescription("Thread id.")),
   json: jsonFlag,
 }).pipe(
   Command.withDescription("List unresolved user-input requests for a thread."),
@@ -1803,12 +1803,12 @@ const threadInputListCommand = Command.make("list", {
 
 const threadInputRespondCommand = Command.make("respond", {
   ...projectLocationFlags,
-  threadId: Argument.string("thread-id").pipe(Argument.withDescription("Thread id.")),
-  requestId: Argument.string("request-id").pipe(
+  threadId: Argument.String("thread-id").pipe(Argument.withDescription("Thread id.")),
+  requestId: Argument.String("request-id").pipe(
     Argument.withSchema(ApprovalRequestId),
     Argument.withDescription("User-input request id."),
   ),
-  answersJson: Flag.string("answers-json").pipe(
+  answersJson: Flag.String("answers-json").pipe(
     Flag.withDescription("Complete JSON answer map keyed by question id."),
   ),
   json: jsonFlag,
@@ -1861,8 +1861,8 @@ export function threadContextShell(environment: ReturnType<typeof threadContextE
 
 export const threadContextCommand = Command.make("context", {
   ...projectLocationFlags,
-  threadId: Argument.string("thread-id").pipe(Argument.withDescription("Thread id, or self.")),
-  shell: Flag.boolean("shell").pipe(
+  threadId: Argument.String("thread-id").pipe(Argument.withDescription("Thread id, or self.")),
+  shell: Flag.Boolean("shell").pipe(
     Flag.withDescription("Print POSIX shell exports, including the current native turn id."),
     Flag.withDefault(false),
   ),
@@ -1913,24 +1913,24 @@ export function archiveStatusText(
 
 export const threadArchiveCommand = Command.make("archive", {
   ...projectLocationFlags,
-  threadId: Argument.string("thread-id").pipe(
+  threadId: Argument.String("thread-id").pipe(
     Argument.withDescription("Thread id, or self inside a provider session."),
   ),
-  afterTurn: Flag.boolean("after-turn").pipe(
+  afterTurn: Flag.Boolean("after-turn").pipe(
     Flag.withDescription(
       "Archive after the target thread's current turn succeeds; archive idle threads immediately.",
     ),
     Flag.withDefault(false),
   ),
-  removeWorktree: Flag.boolean("remove-worktree").pipe(
+  removeWorktree: Flag.Boolean("remove-worktree").pipe(
     Flag.withDescription("Remove the clean worktree after archiving, preserving its branch."),
     Flag.withDefault(false),
   ),
-  status: Flag.boolean("status").pipe(
+  status: Flag.Boolean("status").pipe(
     Flag.withDescription("Inspect archive progress, including archived threads."),
     Flag.withDefault(false),
   ),
-  cancel: Flag.boolean("cancel").pipe(
+  cancel: Flag.Boolean("cancel").pipe(
     Flag.withDescription("Cancel a pending archive request."),
     Flag.withDefault(false),
   ),

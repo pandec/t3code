@@ -40,7 +40,7 @@ export interface TtsEnvironmentDefaults {
 export const readTtsEnvironmentDefaults: Effect.Effect<TtsEnvironmentDefaults> = Effect.gen(
   function* () {
     const read = (name: string, fallback: string) =>
-      Config.string(name).pipe(
+      Config.String(name).pipe(
         Config.withDefault(fallback),
         Effect.map((value) => value.trim() || fallback),
       );

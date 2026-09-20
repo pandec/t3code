@@ -911,37 +911,37 @@ export const runThreadBackground = Effect.fn("runThreadBackground")(function* (
 export const t3ThreadBackgroundCommand = Command.make(
   "t3-thread-background",
   {
-    thread: Flag.string("thread").pipe(
+    thread: Flag.String("thread").pipe(
       Flag.optional,
       Flag.withDescription("Thread id to inspect. Defaults to $T3CODE_THREAD_ID."),
     ),
-    baseDir: Flag.string("base-dir").pipe(
+    baseDir: Flag.String("base-dir").pipe(
       Flag.optional,
       Flag.withDescription(
         "T3 base directory containing userdata/state.sqlite. Defaults to ~/.t3.",
       ),
     ),
-    all: Flag.boolean("all").pipe(
+    all: Flag.Boolean("all").pipe(
       Flag.withDefault(false),
       Flag.withDescription("Sweep every thread with live background work."),
     ),
-    showAllChildren: Flag.boolean("show-all-children").pipe(
+    showAllChildren: Flag.Boolean("show-all-children").pipe(
       Flag.withDefault(false),
       Flag.withDescription("Include child processes hidden by the MCP-server filter."),
     ),
-    showOrphaned: Flag.boolean("show-orphaned").pipe(
+    showOrphaned: Flag.Boolean("show-orphaned").pipe(
       Flag.withDefault(false),
       Flag.withDescription(
         "Print full blocks for orphaned threads instead of the one-line summary, including dismissed ones.",
       ),
     ),
-    dismissOrphans: Flag.boolean("dismiss-orphans").pipe(
+    dismissOrphans: Flag.Boolean("dismiss-orphans").pipe(
       Flag.withDefault(false),
       Flag.withDescription(
         "Record the currently orphaned tasks as reviewed; future runs stop reporting them.",
       ),
     ),
-    json: Flag.boolean("json").pipe(
+    json: Flag.Boolean("json").pipe(
       Flag.withDefault(false),
       Flag.withDescription("Emit the report as JSON."),
     ),

@@ -10,6 +10,7 @@ import {
   type RepositoryIdentity,
 } from "@t3tools/contracts";
 import * as Cause from "effect/Cause";
+import * as ByteSize from "effect/ByteSize";
 import * as Duration from "effect/Duration";
 import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
@@ -194,7 +195,7 @@ export const HTTP_ROUTER_CONFIG = {
 // already closes the websocket gracefully. Do not add an artificial drain before
 // those finalizers get a chance to run.
 const HTTP_PREEMPTIVE_SHUTDOWN_GRACE_MS = 0;
-const VOICE_TRANSCRIPTION_MAX_HTTP_BODY_SIZE = FileSystem.Size(
+const VOICE_TRANSCRIPTION_MAX_HTTP_BODY_SIZE = ByteSize.bytes(
   VOICE_TRANSCRIPTION_MAX_DATA_URL_CHARS + 1_024,
 );
 

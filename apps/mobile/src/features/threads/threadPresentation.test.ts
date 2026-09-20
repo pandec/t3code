@@ -110,18 +110,14 @@ describe("resolveThreadStatus", () => {
       kind: "working",
       label: "Working",
       pillClassName: "bg-adaptive-sky-500-a12-a16",
-      textClassName: "text-adaptive-sky-700-300",
-      iconColor: "#0a84ff",
-      iconBackground: "rgba(10,132,255,0.22)",
+      textClassName: "text-adaptive-sky-600-400",
       pulse: true,
     });
     expect(resolveThreadStatus(makeThread({ backgroundLiveness: "monitoring" }))).toMatchObject({
       kind: "monitoring",
       label: "Monitoring",
       pillClassName: "bg-adaptive-sky-500-a12-a16",
-      textClassName: "text-adaptive-sky-700-300",
-      iconColor: "#0a84ff",
-      iconBackground: "rgba(10,132,255,0.22)",
+      textClassName: "text-adaptive-sky-600-400",
       pulse: false,
     });
   });

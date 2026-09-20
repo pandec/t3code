@@ -32,7 +32,7 @@ export function AccentTintAppearanceSection() {
 
   return (
     <View className="gap-3">
-      <SettingsSection card title="Accent tints">
+      <SettingsSection title="Accent tints">
         <SettingsSwitchRow
           disabled={!hydrated}
           icon="paintbrush"

@@ -25,6 +25,7 @@ vi.mock("../../components/ProviderIcon", () => ({
   ProviderIcon: "ProviderIcon",
   ProviderInstanceIcon: "ProviderInstanceIcon",
 }));
+vi.mock("../../lib/copyTextWithHaptic", () => ({ copyTextWithHaptic: () => {} }));
 vi.mock("../../lib/useUniwindTheme", () => ({
   useUniwindTheme: () => new Proxy({}, { get: () => "#000" }),
 }));

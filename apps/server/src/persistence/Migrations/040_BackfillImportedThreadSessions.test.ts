@@ -22,7 +22,7 @@ const layer = it.layer(
         prefix: "t3-migration-040-import-session-test-",
       }),
     ),
-    Layer.provideMerge(NodeSqliteClient.layerMemory()),
+    Layer.provideMerge(NodeSqliteClient.layer({ filename: ":memory:" })),
     Layer.provideMerge(NodeServices.layer),
   ),
 );
