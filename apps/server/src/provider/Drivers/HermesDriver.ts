@@ -1,5 +1,6 @@
 import { HermesSettings, ProviderDriverKind, type ServerProvider } from "@t3tools/contracts";
 import * as Crypto from "effect/Crypto";
+import * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";
 import * as FileSystem from "effect/FileSystem";
 import * as Path from "effect/Path";
@@ -35,6 +36,14 @@ import {
   type ProviderSnapshotSettings,
 } from "../providerUpdateSettings.ts";
 const decodeHermesSettings = Schema.decodeSync(HermesSettings);
+
+/**
+ * Hermes model/command discovery opens a real ACP session, which initializes
+ * Hermes's memory provider (and any paid prewarm behind it). Re-discover once a
+ * day instead of on the shared provider-health cadence; startup, settings
+ * changes and manual refreshes still probe immediately.
+ */
+const HERMES_DISCOVERY_REFRESH_INTERVAL = Duration.hours(24);
 
 const DRIVER_KIND = ProviderDriverKind.make("hermes");
 // Hermes has no package manager or self-update command; like Grok it stays
@@ -126,6 +135,7 @@ export const HermesDriver: ProviderDriver<HermesSettings, HermesDriverEnv> = {
         initialSnapshot: (settings) =>
           buildInitialHermesProviderSnapshot(settings.provider).pipe(Effect.map(stampIdentity)),
         checkProvider,
+        refreshInterval: HERMES_DISCOVERY_REFRESH_INTERVAL,
         enrichSnapshot: ({ settings, snapshot: currentSnapshot, publishSnapshot }) =>
           enrichHermesSnapshot({
             snapshot: currentSnapshot,
