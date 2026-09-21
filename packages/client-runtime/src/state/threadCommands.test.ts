@@ -166,6 +166,57 @@ describe("remote thread lifecycle commands", () => {
     );
   }
 
+  it.effect("schedules and cancels archival without optimistically hiding a running thread", () =>
+    Effect.gen(function* () {
+      const h = yield* makeHarness();
+      const initial = {
+        ...SNAPSHOT,
+        threads: [
+          {
+            ...SNAPSHOT.threads[0]!,
+            latestTurn: {
+              turnId: TurnId.make("archive-turn"),
+              state: "running" as const,
+              requestedAt: NOW,
+              startedAt: NOW,
+              completedAt: null,
+              assistantMessageId: null,
+            },
+          },
+        ],
+      };
+      h.registry.set(h.snapshotAtom(ENVIRONMENT_ID), initial);
+      const scheduled = h.commands.scheduleArchive.run(h.registry, {
+        environmentId: ENVIRONMENT_ID,
+        input: { threadId: THREAD_ID, afterTurn: true, removeWorktree: false },
+      });
+      const request = yield* Queue.take(h.requests);
+      expect(request.command).toMatchObject({
+        type: "thread.archive.schedule",
+        threadId: THREAD_ID,
+        afterTurn: true,
+        removeWorktree: false,
+      });
+      expect(h.registry.get(h.visibleAtom)).toBe(initial);
+      yield* Deferred.succeed(request.reply, { sequence: 2 });
+      expect((yield* Effect.promise(() => scheduled))._tag).toBe("Success");
+      expect(h.registry.get(h.visibleAtom)).toBe(initial);
+
+      const cancelled = h.commands.cancelArchive.run(h.registry, {
+        environmentId: ENVIRONMENT_ID,
+        input: { threadId: THREAD_ID },
+      });
+      const cancellation = yield* Queue.take(h.requests);
+      expect(cancellation.command).toMatchObject({
+        type: "thread.archive.cancel",
+        threadId: THREAD_ID,
+      });
+      yield* Deferred.fail(cancellation.reply, new Error("Archive cleanup has already started."));
+      expect((yield* Effect.promise(() => cancelled))._tag).toBe("Failure");
+      expect(h.registry.get(h.visibleAtom)).toBe(initial);
+    }),
+  );
+
   it.effect("snoozes until the running turn ends and clears its marker on wake", () =>
     Effect.gen(function* () {
       const h = yield* makeHarness();

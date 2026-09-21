@@ -103,6 +103,13 @@ export function buildComposerSlashCommandItems(input: {
             description: "Set a new thread name",
           },
           {
+            id: "cmd:t3-archive",
+            type: "slash-command" as const,
+            command: "t3-archive",
+            label: "/t3-archive",
+            description: "Archive now or after this turn; add cancel to cancel",
+          },
+          {
             id: "cmd:t3-status",
             type: "slash-command" as const,
             command: "t3-status",

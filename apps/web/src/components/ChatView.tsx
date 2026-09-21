@@ -122,6 +122,7 @@ import { readLocalApi } from "../localApi";
 import { useDiffPanelStore } from "../diffPanelStore";
 import {
   applyThreadStatusEmoji,
+  parseComposerArchiveCommand,
   collapseExpandedComposerCursor,
   type ComposerSubmissionIntent,
   parseComposerRenameCommand,
@@ -1569,6 +1570,12 @@ export default function ChatView(props: ChatViewProps) {
   const closeTerminalMutation = useAtomCommand(terminalEnvironment.close, "terminal close");
   const createThread = useAtomCommand(threadEnvironment.create, { reportFailure: false });
   const deleteThread = useAtomCommand(threadEnvironment.delete, { reportFailure: false });
+  const scheduleThreadArchive = useAtomCommand(threadEnvironment.scheduleArchive, {
+    reportFailure: false,
+  });
+  const cancelThreadArchive = useAtomCommand(threadEnvironment.cancelArchive, {
+    reportFailure: false,
+  });
   const updateThreadMetadata = useAtomCommand(threadEnvironment.updateMetadata, {
     reportFailure: false,
   });
@@ -7658,7 +7665,18 @@ export default function ChatView(props: ChatViewProps) {
     const renameCommand = hasStandaloneCommandContext ? parseComposerRenameCommand(trimmed) : null;
     const statusCommand =
       hasStandaloneCommandContext && !renameCommand ? parseComposerStatusCommand(trimmed) : null;
-    if (renameCommand || statusCommand) {
+    const archiveCommand = hasStandaloneCommandContext
+      ? parseComposerArchiveCommand(trimmed)
+      : null;
+    if (renameCommand || statusCommand || archiveCommand) {
+      if (archiveCommand?.action === null) {
+        toastManager.add({
+          type: "error",
+          title: "Unable to archive thread",
+          description: "Usage: /t3-archive or /t3-archive cancel",
+        });
+        return;
+      }
       if (renameCommand && renameCommand.title === null) {
         toastManager.add({
           type: "error",
@@ -7678,7 +7696,7 @@ export default function ChatView(props: ChatViewProps) {
       if (!isServerThread) {
         toastManager.add({
           type: "error",
-          title: "No thread to rename yet",
+          title: archiveCommand ? "No thread to archive yet" : "No thread to rename yet",
         });
         return;
       }
@@ -7692,7 +7710,42 @@ export default function ChatView(props: ChatViewProps) {
       const nextTitle = statusCommand?.emoji
         ? applyThreadStatusEmoji(activeThread.title, statusCommand.emoji)
         : (renameCommand?.title ?? activeThread.title);
-      if (nextTitle !== activeThread.title) {
+      if (archiveCommand) {
+        sendInFlightRef.current = true;
+        try {
+          const result = await (archiveCommand.action === "cancel"
+            ? cancelThreadArchive({ environmentId, input: { threadId: activeThread.id } })
+            : scheduleThreadArchive({
+                environmentId,
+                input: { threadId: activeThread.id, afterTurn: true, removeWorktree: false },
+              }));
+          if (result._tag === "Failure") {
+            if (!isAtomCommandInterrupted(result)) {
+              const error = squashAtomCommandFailure(result);
+              toastManager.add(
+                stackedThreadToast({
+                  type: "error",
+                  title: "Unable to update thread archive",
+                  description: error instanceof Error ? error.message : "An error occurred.",
+                }),
+              );
+            }
+            return;
+          }
+          toastManager.add(
+            stackedThreadToast({
+              type: "success",
+              title: archiveCommand.action === "cancel" ? "Archive cancelled" : "Archive requested",
+              description:
+                archiveCommand.action === "cancel"
+                  ? "This thread will stay open."
+                  : "Archives when the current turn and background work finish. Use /t3-archive cancel to cancel while pending.",
+            }),
+          );
+        } finally {
+          sendInFlightRef.current = false;
+        }
+      } else if (nextTitle !== activeThread.title) {
         sendInFlightRef.current = true;
         try {
           const result = await updateThreadMetadata({

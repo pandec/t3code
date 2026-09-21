@@ -31,6 +31,7 @@ import {
 } from "@t3tools/client-runtime/state/runtime";
 import {
   applyThreadStatusEmoji,
+  parseComposerArchiveCommand,
   parseComposerRenameCommand,
   parseComposerStatusCommand,
 } from "@t3tools/shared/composerTrigger";
@@ -158,6 +159,12 @@ export function useThreadDraftForThread(input: {
 }
 
 export function useThreadComposerState() {
+  const scheduleThreadArchive = useAtomCommand(threadEnvironment.scheduleArchive, {
+    reportFailure: false,
+  });
+  const cancelThreadArchive = useAtomCommand(threadEnvironment.cancelArchive, {
+    reportFailure: false,
+  });
   const updateThreadMetadata = useAtomCommand(threadEnvironment.updateMetadata, {
     reportFailure: false,
   });
@@ -470,7 +477,15 @@ export function useThreadComposerState() {
       const renameCommand = attachments.length === 0 ? parseComposerRenameCommand(text) : null;
       const statusCommand =
         attachments.length === 0 && !renameCommand ? parseComposerStatusCommand(text) : null;
-      if (renameCommand || statusCommand) {
+      const archiveCommand =
+        attachments.length === 0 && (draft.context?.records.length ?? 0) === 0
+          ? parseComposerArchiveCommand(text)
+          : null;
+      if (renameCommand || statusCommand || archiveCommand) {
+        if (archiveCommand?.action === null) {
+          Alert.alert("Unable to archive thread", "Usage: /t3-archive or /t3-archive cancel");
+          return null;
+        }
         if (renameCommand && renameCommand.title === null) {
           Alert.alert("Unable to rename thread", "Usage: /t3-name <title> or /t3-rename <title>");
           return null;
@@ -483,7 +498,32 @@ export function useThreadComposerState() {
         const nextTitle = statusCommand?.emoji
           ? applyThreadStatusEmoji(selectedThreadShell.title, statusCommand.emoji)
           : (renameCommand?.title ?? selectedThreadShell.title);
-        if (nextTitle !== selectedThreadShell.title) {
+        if (archiveCommand) {
+          const environmentId = selectedThreadShell.environmentId;
+          const threadId = selectedThreadShell.id;
+          const result = await (archiveCommand.action === "cancel"
+            ? cancelThreadArchive({ environmentId, input: { threadId } })
+            : scheduleThreadArchive({
+                environmentId,
+                input: { threadId, afterTurn: true, removeWorktree: false },
+              }));
+          if (result._tag === "Failure") {
+            if (!isAtomCommandInterrupted(result)) {
+              const error = squashAtomCommandFailure(result);
+              Alert.alert(
+                "Unable to update thread archive",
+                error instanceof Error ? error.message : "An error occurred.",
+              );
+            }
+            return null;
+          }
+          Alert.alert(
+            archiveCommand.action === "cancel" ? "Archive cancelled" : "Archive requested",
+            archiveCommand.action === "cancel"
+              ? "This thread will stay open."
+              : "Archives when the current turn and background work finish. Use /t3-archive cancel to cancel while pending.",
+          );
+        } else if (nextTitle !== selectedThreadShell.title) {
           const result = await updateThreadMetadata({
             environmentId: selectedThreadShell.environmentId,
             input: {
@@ -624,6 +664,8 @@ export function useThreadComposerState() {
       selectedThreadDetail,
       selectedThreadShell,
       updateThreadMetadata,
+      scheduleThreadArchive,
+      cancelThreadArchive,
       uploadThreadFeedback,
     ],
   );

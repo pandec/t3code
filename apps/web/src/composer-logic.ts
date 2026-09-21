@@ -11,6 +11,7 @@ import {
 
 export {
   applyThreadStatusEmoji,
+  parseComposerArchiveCommand,
   parseComposerRenameCommand,
   parseComposerStatusCommand,
 } from "@t3tools/shared/composerTrigger";
@@ -23,6 +24,7 @@ export type ComposerSlashCommand =
   | "prompt"
   | "t3-name"
   | "t3-rename"
+  | "t3-archive"
   | "t3-status"
   | "t3-wait";
 /**

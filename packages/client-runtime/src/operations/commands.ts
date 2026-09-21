@@ -46,6 +46,8 @@ export interface ForkThreadResult {
 }
 export type DeleteThreadInput = CommandInput<"thread.delete">;
 export type ArchiveThreadInput = CommandInput<"thread.archive">;
+export type ScheduleThreadArchiveInput = CommandInput<"thread.archive.schedule">;
+export type CancelThreadArchiveInput = CommandInput<"thread.archive.cancel">;
 export type UnarchiveThreadInput = CommandInput<"thread.unarchive">;
 export type SettleThreadInput = CommandInput<"thread.settle">;
 export type UnsettleThreadInput = CommandInput<"thread.unsettle">;
@@ -185,6 +187,25 @@ export const archiveThread: (input: ArchiveThreadInput) => CommandEffect = Effec
   return yield* dispatch({
     ...input,
     type: "thread.archive",
+    commandId: yield* commandId(input),
+  });
+});
+
+export const scheduleThreadArchive: (input: ScheduleThreadArchiveInput) => CommandEffect =
+  Effect.fn("EnvironmentCommands.scheduleThreadArchive")(function* (input) {
+    return yield* dispatch({
+      ...input,
+      type: "thread.archive.schedule",
+      commandId: yield* commandId(input),
+    });
+  });
+
+export const cancelThreadArchive: (input: CancelThreadArchiveInput) => CommandEffect = Effect.fn(
+  "EnvironmentCommands.cancelThreadArchive",
+)(function* (input) {
+  return yield* dispatch({
+    ...input,
+    type: "thread.archive.cancel",
     commandId: yield* commandId(input),
   });
 });

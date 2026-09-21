@@ -16,6 +16,8 @@ import {
 } from "./runtime.ts";
 import {
   type ArchiveThreadInput,
+  type ScheduleThreadArchiveInput,
+  type CancelThreadArchiveInput,
   type CreateThreadInput,
   type DeleteThreadInput,
   type ForkThreadInput,
@@ -42,6 +44,8 @@ import {
   type UnsnoozeThreadInput,
   type UpdateThreadMetadataInput,
   archiveThread,
+  scheduleThreadArchive,
+  cancelThreadArchive,
   createThread,
   deleteThread,
   forkThread,
@@ -72,6 +76,8 @@ import type { EnvironmentRegistry } from "../connection/registry.ts";
 
 export type {
   ArchiveThreadInput,
+  ScheduleThreadArchiveInput,
+  CancelThreadArchiveInput,
   CreateThreadInput,
   DeleteThreadInput,
   ForkThreadInput,
@@ -142,6 +148,18 @@ export function createThreadEnvironmentAtoms<R, E>(
     archive: createEnvironmentCommand(runtime, {
       label: "environment-data:commands:thread:archive",
       execute: (input: ArchiveThreadInput) => archiveThread(input),
+      scheduler,
+      concurrency,
+    }),
+    scheduleArchive: createEnvironmentCommand(runtime, {
+      label: "environment-data:commands:thread:scheduleArchive",
+      execute: (input: ScheduleThreadArchiveInput) => scheduleThreadArchive(input),
+      scheduler,
+      concurrency,
+    }),
+    cancelArchive: createEnvironmentCommand(runtime, {
+      label: "environment-data:commands:thread:cancelArchive",
+      execute: (input: CancelThreadArchiveInput) => cancelThreadArchive(input),
       scheduler,
       concurrency,
     }),

@@ -26,6 +26,28 @@ describe("composerSelectionAtEnd", () => {
 });
 
 describe("mobile slash commands", () => {
+  it("offers archive only for an existing thread and inserts it for submission", () => {
+    const input = {
+      query: "t3-arch",
+      atMessageStart: true,
+      allowInteractionMode: false,
+      selectedProviderStatus: null,
+    };
+    expect(buildComposerSlashCommandItems({ ...input, hasThread: false })).toEqual([]);
+    const items = buildComposerSlashCommandItems({ ...input, hasThread: true });
+    expect(items).toHaveLength(1);
+    const item = items[0];
+    if (!item) throw new Error("Expected archive command");
+    expect(
+      resolveComposerCommandSelection({
+        draftMessage: "/t3-arch",
+        trigger: { rangeStart: 0, rangeEnd: 8 },
+        item,
+        allowInteractionMode: false,
+      }),
+    ).toEqual({ text: "/t3-archive ", cursor: 12, interactionMode: null });
+  });
+
   const antigravity = {
     driver: ProviderDriverKind.make("antigravity"),
     showInteractionModeToggle: false,
