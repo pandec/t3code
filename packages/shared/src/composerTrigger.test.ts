@@ -2,6 +2,7 @@ import { describe, expect, it } from "vite-plus/test";
 
 import {
   detectComposerTrigger,
+  parseComposerArchiveCommand,
   applyThreadStatusEmoji,
   buildThreadTitleComposerText,
   formatForkedThreadTitle,
@@ -95,4 +96,21 @@ describe("applyThreadStatusEmoji", () => {
   it("normalizes a legacy fork marker that follows the replaced status emoji", () => {
     expect(applyThreadStatusEmoji("💡 🔱 Source", "🎯")).toBe("🎯 (🔱) Source");
   });
+});
+
+describe("parseComposerArchiveCommand", () => {
+  it.each(["/t3-archive", "  /T3-ARCHIVE \n"])("schedules %s", (text) => {
+    expect(parseComposerArchiveCommand(text)).toEqual({ action: "schedule" });
+  });
+
+  it("accepts cancellation and rejects unsupported arguments", () => {
+    expect(parseComposerArchiveCommand(" /t3-archive CANCEL ")).toEqual({ action: "cancel" });
+    expect(parseComposerArchiveCommand("/t3-archive now")).toEqual({ action: null });
+    expect(parseComposerArchiveCommand("/t3-archive cancel extra")).toEqual({ action: null });
+  });
+
+  it.each(["Discuss /t3-archive", "/t3-archivex", "/archive", "/t3-archive/cancel"])(
+    "leaves ordinary prompt %s alone",
+    (text) => expect(parseComposerArchiveCommand(text)).toBeNull(),
+  );
 });

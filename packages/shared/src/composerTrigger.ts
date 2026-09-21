@@ -130,6 +130,16 @@ export function detectComposerTrigger(
   };
 }
 
+/** Matches standalone archive commands so ordinary prompts remain provider input. */
+export function parseComposerArchiveCommand(
+  text: string,
+): { action: "schedule" | "cancel" | null } | null {
+  const match = /^\/t3-archive(?:\s+([\s\S]*))?$/i.exec(text.trim());
+  if (!match) return null;
+  const argument = match[1]?.trim().toLowerCase() ?? "";
+  return { action: argument === "" ? "schedule" : argument === "cancel" ? "cancel" : null };
+}
+
 export function parseComposerRenameCommand(text: string): { title: string | null } | null {
   const match = /^\/t3-(?:name|rename)(?:\s+([\s\S]*))?$/i.exec(text.trim());
   if (!match) {

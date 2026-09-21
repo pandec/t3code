@@ -2956,6 +2956,13 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
                 description: "Set a new name for this thread",
               },
               {
+                id: "slash:t3-archive",
+                type: "slash-command" as const,
+                command: "t3-archive" as const,
+                label: "/t3-archive",
+                description: "Archive now or after this turn; add cancel to cancel",
+              },
+              {
                 id: "slash:t3-status",
                 type: "slash-command" as const,
                 command: "t3-status" as const,
@@ -4234,11 +4241,12 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
         if (
           item.command === "t3-name" ||
           item.command === "t3-rename" ||
-          item.command === "t3-status"
+          item.command === "t3-status" ||
+          item.command === "t3-archive"
         ) {
           const replacement =
-            item.command === "t3-status"
-              ? "/t3-status "
+            item.command === "t3-status" || item.command === "t3-archive"
+              ? `/${item.command} `
               : buildThreadTitleComposerText(item.command, activeThread?.title);
           const replacementRangeEnd = extendReplacementRangeForTrailingSpace(
             snapshot.value,
