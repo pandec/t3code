@@ -57,6 +57,7 @@ import {
   rememberCheckoutIsRepo,
   resolveBackgroundDraftWorkspaceOptions,
   resolveComposerInteractionMode,
+  resolveDraftCreationGroup,
   restorePlanFollowUpComposer,
   resolveComposerProviderSelection,
   resolveDraftPromotionNavigationTarget,
@@ -2732,5 +2733,27 @@ describe("worktree setup visibility", () => {
       ...settledDone,
       sequence: 9,
     });
+  });
+});
+
+describe("resolveDraftCreationGroup", () => {
+  const groups = [{ id: "g1" }];
+
+  it("blocks the send when the picked group targets a server that cannot create grouped threads", () => {
+    expect(
+      resolveDraftCreationGroup({ customGroupId: "g1", groups, supportsGroupCreation: false }),
+    ).toMatchObject({ customGroupId: "g1", blockReason: expect.stringContaining("Choose Active") });
+    expect(
+      resolveDraftCreationGroup({ customGroupId: "g1", groups, supportsGroupCreation: true }),
+    ).toEqual({ customGroupId: "g1", blockReason: null });
+  });
+
+  it("falls back to Active for a deleted group and for no pick at all", () => {
+    expect(
+      resolveDraftCreationGroup({ customGroupId: "gone", groups, supportsGroupCreation: false }),
+    ).toEqual({ customGroupId: null, blockReason: null });
+    expect(
+      resolveDraftCreationGroup({ customGroupId: undefined, groups, supportsGroupCreation: false }),
+    ).toEqual({ customGroupId: null, blockReason: null });
   });
 });

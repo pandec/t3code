@@ -281,6 +281,7 @@ import {
 import { useNowMinute } from "../hooks/useNowMinute";
 import { usePanelAnimationSettings, usePanelPresence } from "../panelAnimations";
 import { useNewThreadHandler } from "../hooks/useHandleNewThread";
+import { useThreadGroupCatalog } from "../hooks/useThreadGroups";
 import { useRemoveClonedProject } from "../hooks/useRemoveClonedProject";
 import { useOpenPanelPullRequestUrl } from "../hooks/useOpenPanelPullRequestUrl";
 import { useThreadActions } from "../hooks/useThreadActions";
@@ -459,6 +460,7 @@ import {
   buildExpiredTerminalContextToastCopy,
   buildLocalDraftThread,
   buildLoadingThreadFromShell,
+  resolveDraftCreationGroup,
   buildRunningThreadTurnInterruptInput,
   buildThreadTurnInterruptInput,
   collectUserMessageBlobPreviewUrls,
@@ -1614,6 +1616,7 @@ export default function ChatView(props: ChatViewProps) {
   const closePreview = useAtomCommand(previewEnvironment.close, "preview close");
   const { environments } = useEnvironments();
   const serverConfigs = useServerConfigs();
+  const customGroupCatalog = useThreadGroupCatalog();
   const primaryEnvironment = usePrimaryEnvironment();
   const retryEnvironment = useAtomCommand(environmentCatalog.retryNow, { reportFailure: false });
   const setEnvironmentEnabled = useAtomCommand(environmentCatalog.setEnabled, {
@@ -8007,6 +8010,23 @@ export default function ChatView(props: ChatViewProps) {
       setThreadError(threadIdForSend, "Select a base branch before sending in New worktree mode.");
       return;
     }
+    // The send environment can differ from the one the group was picked in
+    // (load balancing), so the capability is read live for this send.
+    const creationGroup = isLocalDraftThread
+      ? resolveDraftCreationGroup({
+          customGroupId: draftThread?.customGroupId,
+          groups: customGroupCatalog.groups,
+          supportsGroupCreation:
+            appAtomRegistry.get(environmentServerConfigsAtom).get(environmentId)?.environment
+              .capabilities.threadCustomGroupCreation === true,
+        })
+      : null;
+    if (creationGroup?.blockReason) {
+      setThreadError(threadIdForSend, creationGroup.blockReason);
+      return;
+    }
+    const creationGroupFields =
+      creationGroup?.customGroupId != null ? { customGroupId: creationGroup.customGroupId } : {};
 
     const composerImagesSnapshot = [...composerImages];
     const composerFilesSnapshot = [...composerFiles];
@@ -8446,6 +8466,7 @@ export default function ChatView(props: ChatViewProps) {
                       branch: activeThreadBranch,
                       worktreePath: null,
                       createdAt: messageCreatedAt,
+                      ...creationGroupFields,
                     },
                     prepareWorktree: {
                       projectCwd: activeProject.workspaceRoot,
@@ -8790,6 +8811,7 @@ export default function ChatView(props: ChatViewProps) {
                       branch: activeThreadBranch,
                       worktreePath: activeThread.worktreePath,
                       createdAt: activeThread.createdAt,
+                      ...creationGroupFields,
                     },
                   }
                 : {}),

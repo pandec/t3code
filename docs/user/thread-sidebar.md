@@ -116,8 +116,16 @@ On web and desktop, open the command palette (`Cmd/Ctrl+K`) and choose **New thr
 **Manage thread groups** to create, rename, reorder, or remove groups; Settings → Extras → Sidebar
 can add a **Thread groups** button to the sidebar toolbar for the same dialog. Drag a thread onto a
 group header or between its rows, use **Move current thread to group** in the palette, or use **Move to group**
-from the thread menu. Each thread belongs to one group. New threads start in Active.
+from the thread menu. Cmd/Ctrl-click multiple threads, then use **Move to group** from their context
+menu or **Move selected threads to group** in the palette to move them together. If a move fails,
+failed threads remain selected so you can retry. Each thread belongs to one group.
 Removing a group keeps its threads and returns its active threads to Active.
+
+New threads default to Active, which means no custom group. Choose an existing group below the
+new-thread heading, or use **New thread in group…** in the palette to choose the group and then the
+project. The palette's choice appears in the new-thread picker and is saved with the draft until
+its first send. Forked threads inherit the source thread's group. Creating or forking threads into
+a group requires an updated server.
 
 Groups can contain threads from any project or connected environment. Group definitions propagate
 when a web or mobile client connects to the environments together. An environment that was offline
@@ -133,7 +141,7 @@ group. Unpinning, waking, or reopening returns them to the group when no other s
 Grouped threads still auto-settle.
 
 New groups start below Active. The Thread groups dialog shows Active as a divider between the
-groups; move a group up or down across it to place that group above or below Active. Placement is
+groups; drag a group across it, or use the up/down arrows, to place that group above or below Active. Placement is
 part of the group definition, so every connected client shows the same arrangement.
 Editing and syncing groups requires an updated server. Older environments' existing groups
 remain visible, but their catalogs are read-only until those servers are upgraded.

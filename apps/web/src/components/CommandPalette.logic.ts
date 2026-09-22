@@ -489,7 +489,8 @@ export function resolveThreadUtilityOpenTarget(input: {
  * is disabled, so the list doubles as a "which group is this in" answer. */
 export function buildMoveToGroupItems(input: {
   readonly groups: ReadonlyArray<{ readonly id: string; readonly name: string }>;
-  readonly currentGroupId: string | null;
+  /** Group the moved threads share; undefined when they differ, so every row stays enabled. */
+  readonly currentGroupId: string | null | undefined;
   readonly icon: ReactNode;
   readonly move: (groupId: string | null) => Promise<void>;
 }): CommandPaletteActionItem[] {

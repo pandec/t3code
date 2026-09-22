@@ -121,8 +121,45 @@ it.layer(NodeServices.layer)("thread fork decider", (it) => {
           branch: "dev",
           worktreePath: "/tmp/project",
           runtimeMode: "full-access",
+          customGroupId: null,
         });
       }
+    }),
+  );
+
+  it.effect("keeps the source custom group without inheriting its pin or manual order", () =>
+    Effect.gen(function* () {
+      const seeded = yield* seedReadModel;
+      const readModel = {
+        ...seeded,
+        threads: seeded.threads.map((thread) => ({
+          ...thread,
+          customGroupId: "research",
+          pinnedAt: now,
+          activeOrderKey: "m",
+        })),
+      };
+      const result = yield* decideOrchestrationCommand({
+        readModel,
+        command: {
+          type: "thread.fork",
+          commandId: CommandId.make("command-group-fork"),
+          sourceThreadId,
+          threadId: ThreadId.make("destination-group-fork"),
+          createdAt: now,
+        },
+      });
+      let projected: typeof seeded = readModel;
+      for (const event of Array.isArray(result) ? result : [result]) {
+        projected = yield* projectEvent(projected, {
+          ...event,
+          sequence: projected.snapshotSequence + 1,
+        });
+      }
+      const fork = projected.threads.find((thread) => thread.id === "destination-group-fork");
+      expect(fork?.customGroupId).toBe("research");
+      expect(fork?.pinnedAt ?? null).toBeNull();
+      expect(fork?.activeOrderKey).toBeNull();
     }),
   );
 

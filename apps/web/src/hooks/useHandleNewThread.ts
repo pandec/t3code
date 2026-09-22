@@ -171,6 +171,8 @@ export function useNewThreadHandler() {
         worktreePath?: string | null;
         envMode?: DraftThreadEnvMode;
         startFromOrigin?: boolean;
+        /** Custom group the new thread joins on first send. Absent means Active. */
+        customGroupId?: string | null;
         replace?: boolean;
       },
       // Which draft the thread ended up in, so a caller that has something to put in it — a
@@ -267,6 +269,10 @@ export function useNewThreadHandler() {
       const hasWorktreePathOption = options?.worktreePath !== undefined;
       const hasEnvModeOption = options?.envMode !== undefined;
       const hasStartFromOriginOption = options?.startFromOrigin !== undefined;
+      // Every new-thread request states its group explicitly: an ordinary
+      // "New thread" resets a reused draft to Active so a group picked for
+      // an earlier draft never leaks into the next one.
+      const customGroupId = options?.customGroupId ?? null;
       const storedDraftThread = getDraftSessionByLogicalProjectKey(logicalProjectKey);
       const storedDraftThreadRef = storedDraftThread
         ? scopeThreadRef(storedDraftThread.environmentId, storedDraftThread.threadId)
@@ -396,6 +402,7 @@ export function useNewThreadHandler() {
               ...workspaceContext,
               ...(!isDraftAlreadyOpen ? { runtimeMode: defaultRuntimeMode } : {}),
               ...(carryInteractionMode ? { interactionMode: carryInteractionMode } : {}),
+              customGroupId,
             },
           );
           const opened = {
@@ -444,6 +451,7 @@ export function useNewThreadHandler() {
           runtimeMode: latestActiveDraftThread.runtimeMode,
           interactionMode: latestActiveDraftThread.interactionMode,
           ...pickExplicitWorkspaceOptions(options),
+          customGroupId,
         });
         return Promise.resolve({
           draftId: currentRouteTarget.draftId,
@@ -487,6 +495,7 @@ export function useNewThreadHandler() {
             runtimeMode: racedDraft.runtimeMode,
             interactionMode: racedDraft.interactionMode,
             ...pickExplicitWorkspaceOptions(options),
+            customGroupId,
           });
           await router.navigate({
             to: "/draft/$draftId",
@@ -509,6 +518,7 @@ export function useNewThreadHandler() {
             }),
           runtimeMode: defaultRuntimeMode,
           ...(carryInteractionMode ? { interactionMode: carryInteractionMode } : {}),
+          customGroupId,
         });
         seedNewDraftModelState({
           draftId,

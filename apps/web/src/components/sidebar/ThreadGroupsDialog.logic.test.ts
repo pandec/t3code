@@ -54,6 +54,18 @@ it("moves groups across the Active divider and back", () => {
   expect(rowsAfter(down, above)).toEqual([null, "0", "1", "2"]);
 });
 
+it("drags a group several rows at once across the Active divider", () => {
+  // Rows: Active, 0, 1, 2. Dropping "2" on the Active slot moves it above.
+  const up = planThreadGroupMove(groups, 3, -3)!;
+  expect(up).toMatchObject({ id: "2", aboveActive: true });
+  expect(rowsAfter(up)).toEqual(["2", null, "0", "1"]);
+  // Rows: 2, Active, 0, 1. Dropping "2" on the last row crosses back down.
+  const above = visibleThreadGroups(mergeThreadGroups(groups, [{ ...up, revision: "3" }]));
+  const down = planThreadGroupMove(above, 0, 3)!;
+  expect(down).toMatchObject({ id: "2", aboveActive: false });
+  expect(rowsAfter(down, above)).toEqual([null, "0", "1", "2"]);
+});
+
 it("rejects moves past the first or last row", () => {
   expect(planThreadGroupMove(groups, 1, -2)).toBeNull();
   expect(planThreadGroupMove(groups, 3, 1)).toBeNull();

@@ -939,7 +939,11 @@ describe("TurnStartBootstrap", () => {
           const caller = yield* Effect.forkChild(
             bootstrap.dispatchTurnStart(
               makeTurnStartCommand({
-                createThread: { ...createThreadBootstrap, titleSource: "manual" },
+                createThread: {
+                  ...createThreadBootstrap,
+                  titleSource: "manual",
+                  customGroupId: "research",
+                },
                 prepareWorktree: { projectCwd: "/tmp/project", baseBranch: "main", branch: "test" },
                 runSetupScript: true,
               }),
@@ -953,7 +957,10 @@ describe("TurnStartBootstrap", () => {
           );
           assert.isTrue(
             dispatched.some(
-              (command) => command.type === "thread.create" && command.titleSource === "manual",
+              (command) =>
+                command.type === "thread.create" &&
+                command.titleSource === "manual" &&
+                command.customGroupId === "research",
             ),
           );
           yield* Fiber.interrupt(caller);

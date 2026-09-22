@@ -441,6 +441,7 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
         })),
         type: "thread.created",
         payload: {
+          ...(command.customGroupId !== undefined ? { customGroupId: command.customGroupId } : {}),
           threadId: command.threadId,
           projectId: command.projectId,
           title: command.title,
@@ -488,6 +489,7 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
           threadId: command.threadId,
           projectId: source.projectId,
           title: formatForkedThreadTitle(source.title),
+          customGroupId: source.customGroupId ?? null,
           modelSelection: source.modelSelection,
           runtimeMode: source.runtimeMode,
           interactionMode: source.interactionMode,

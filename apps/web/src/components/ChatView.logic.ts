@@ -490,6 +490,32 @@ export function resolveThreadMetadataUpdateForNextTurn(input: {
   };
 }
 
+/**
+ * Which custom group a draft joins when its first send creates the thread.
+ * A group deleted since the pick falls back to Active. A live pick sent to a
+ * server that cannot create grouped threads blocks the send instead of
+ * creating the thread ungrouped: the choice was explicit, so it is never
+ * dropped silently.
+ */
+export function resolveDraftCreationGroup(input: {
+  readonly customGroupId: string | null | undefined;
+  readonly groups: ReadonlyArray<{ readonly id: string }>;
+  readonly supportsGroupCreation: boolean;
+}): { readonly customGroupId: string | null; readonly blockReason: string | null } {
+  const customGroupId =
+    input.customGroupId != null && input.groups.some((group) => group.id === input.customGroupId)
+      ? input.customGroupId
+      : null;
+  if (customGroupId !== null && !input.supportsGroupCreation) {
+    return {
+      customGroupId,
+      blockReason:
+        "This environment cannot create threads in a group. Choose Active or update the environment before sending.",
+    };
+  }
+  return { customGroupId, blockReason: null };
+}
+
 export function buildLocalDraftThread(
   threadId: ThreadId,
   draftThread: DraftThreadState,
