@@ -54,6 +54,21 @@ To open either step directly, assign a shortcut to "Thread: Rename" or "Thread: 
 Settings → Keybindings. Neither has a default binding. The snooze shortcut wakes an already
 snoozed thread.
 
+## Previous thread on desktop
+
+Press `Ctrl+Tab` to switch between the current and previously viewed thread in the
+desktop app. Use Control on macOS too. Opening a third thread replaces the older
+thread in the pair; restarting the app clears the pair.
+
+An unsent draft does not enter the pair. From a new-thread screen, the shortcut
+returns to the most recent available thread in the pair. Change the shortcut under
+**Settings → Keybindings → Thread: Last Visited**.
+
+The shortcut works from the composer and terminal. In split view, it follows the
+focused thread and focuses the other pane when that thread is already visible.
+It does not handle keys inside an embedded browser page and is unavailable in the
+web and mobile clients.
+
 ## iPad
 
 With a hardware keyboard, use `Cmd+1` through `Cmd+9` to open the first nine
