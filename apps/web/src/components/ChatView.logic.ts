@@ -455,10 +455,14 @@ export function hasEnvironmentReconnectWarningGraceElapsed(
 
 export function startNewThreadForProject(
   projectRef: ScopedProjectRef | null,
-  handleNewThread: (projectRef: ScopedProjectRef) => Promise<unknown>,
+  handleNewThread: (
+    projectRef: ScopedProjectRef,
+    options: { customGroupId: null },
+  ) => Promise<unknown>,
 ): boolean {
   if (projectRef === null) return false;
-  void handleNewThread(projectRef);
+  // An explicit New thread starts in Active.
+  void handleNewThread(projectRef, { customGroupId: null });
 
   return true;
 }
@@ -488,6 +492,36 @@ export function resolveThreadMetadataUpdateForNextTurn(input: {
     ...(modelSelectionChanged ? { modelSelection: nextModelSelection } : {}),
     ...(branchChanged ? { branch: input.nextBranch, worktreePath: null } : {}),
   };
+}
+
+/**
+ * Which custom group a draft joins when its first send creates the thread.
+ * An explicit deletion falls back to Active. Missing catalog entries can
+ * still be loading, so keep the pick and block until it can be checked.
+ * A live pick also blocks on servers that cannot create grouped threads.
+ */
+export function resolveDraftCreationGroup(input: {
+  readonly customGroupId: string | null | undefined;
+  readonly catalog: ReadonlyArray<{ readonly id: string; readonly deleted?: boolean }>;
+  readonly supportsGroupCreation: boolean;
+}): { readonly customGroupId: string | null; readonly blockReason: string | null } {
+  const selectedGroup = input.catalog.find((group) => group.id === input.customGroupId);
+  const customGroupId = selectedGroup?.deleted ? null : (input.customGroupId ?? null);
+  if (customGroupId !== null && !selectedGroup) {
+    return {
+      customGroupId,
+      blockReason:
+        "The selected group is unavailable. Wait for its environment to connect, or choose Active before sending.",
+    };
+  }
+  if (customGroupId !== null && !input.supportsGroupCreation) {
+    return {
+      customGroupId,
+      blockReason:
+        "This environment cannot create threads in a group. Choose Active or update the environment before sending.",
+    };
+  }
+  return { customGroupId, blockReason: null };
 }
 
 export function buildLocalDraftThread(

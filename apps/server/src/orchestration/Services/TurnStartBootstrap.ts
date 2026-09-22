@@ -547,6 +547,9 @@ export const make = Effect.gen(function* () {
         if (bootstrap?.createThread) {
           const created = yield* dispatchFromClient({
             type: "thread.create",
+            ...(bootstrap.createThread.customGroupId !== undefined
+              ? { customGroupId: bootstrap.createThread.customGroupId }
+              : {}),
             commandId: yield* serverCommandId("bootstrap-thread-create"),
             threadId: command.threadId,
             projectId: bootstrap.createThread.projectId,

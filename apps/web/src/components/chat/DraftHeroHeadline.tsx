@@ -8,6 +8,7 @@ import { useCallback, useMemo } from "react";
 import { openCommandPalette } from "~/commandPaletteBus";
 import { useProjectAccentColors } from "~/hooks/useProjectAccentColors";
 import { useAccentTintSettings, useClientSettings } from "~/hooks/useSettings";
+import { useThreadGroupCatalog } from "~/hooks/useThreadGroups";
 import { hasExplicitComposerModelSelection } from "~/lib/chatThreadActions";
 import { selectProjectGroupingSettings } from "~/logicalProject";
 import { projectAccentTintStyle } from "~/projectAccentTint";
@@ -60,6 +61,11 @@ export function DraftHeroHeadline({
   const getComposerDraft = useComposerDraftStore((store) => store.getComposerDraft);
   const applyStickyState = useComposerDraftStore((store) => store.applyStickyState);
   const setModelSelection = useComposerDraftStore((store) => store.setModelSelection);
+  const setDraftThreadContext = useComposerDraftStore((store) => store.setDraftThreadContext);
+  const draftCustomGroupId = useComposerDraftStore((store) =>
+    draftId ? (store.getDraftSession(draftId)?.customGroupId ?? null) : null,
+  );
+  const customGroups = useThreadGroupCatalog();
   const openAddProject = useCallback(() => openCommandPalette({ open: "add-project" }), []);
 
   const environmentLabelById = useMemo(
@@ -254,18 +260,84 @@ export function DraftHeroHeadline({
       ? `${activeProjectDisplayName ?? "Choose a project"} to start`
       : "Add a project to start";
 
+  // The group line appears when the draft's environment can create the
+  // thread inside a group, and stays while the draft holds a group on an
+  // environment that cannot, so the user can switch back to Active. A group
+  // deleted since the pick reads as Active, matching what the send will do.
+  const supportsGroupCreation =
+    activeProjectRef !== null &&
+    environments.find((environment) => environment.environmentId === activeProjectRef.environmentId)
+      ?.serverConfig?.environment.capabilities.threadCustomGroupCreation === true;
+  const selectedCustomGroup = customGroups.catalog.find((group) => group.id === draftCustomGroupId);
+  const activeCustomGroup = selectedCustomGroup?.deleted ? null : selectedCustomGroup;
+  const missingCustomGroup = draftCustomGroupId !== null && selectedCustomGroup === undefined;
+  const showGroupLine =
+    draftId !== null &&
+    hasResolvedProject &&
+    (supportsGroupCreation || draftCustomGroupId !== null);
+  const groupSelector = (
+    <Menu>
+      <MenuTrigger
+        disabled={customGroups.groups.length === 0 && !missingCustomGroup}
+        className="pointer-events-auto inline-block max-w-48 truncate border-foreground/60 border-b border-dotted align-baseline font-medium text-foreground transition-colors hover:border-foreground/80 focus-visible:rounded-sm focus-visible:outline-hidden focus-visible:ring-2 focus-visible:ring-ring disabled:border-transparent"
+      >
+        {activeCustomGroup?.name ?? (missingCustomGroup ? "Unavailable" : "Active")}
+      </MenuTrigger>
+      <MenuPopup align="center" className="max-h-80 min-w-40! w-max max-w-64 overflow-y-auto">
+        <MenuRadioGroup
+          value={missingCustomGroup ? draftCustomGroupId : (activeCustomGroup?.id ?? "")}
+          onValueChange={(value) => {
+            if (!draftId) return;
+            setDraftThreadContext(draftId, {
+              customGroupId: typeof value === "string" && value.length > 0 ? value : null,
+            });
+          }}
+        >
+          <MenuRadioItem value="" closeOnClick>
+            Active
+          </MenuRadioItem>
+          {customGroups.groups.map((group) => (
+            <MenuRadioItem
+              key={group.id}
+              value={group.id}
+              closeOnClick
+              disabled={!supportsGroupCreation}
+            >
+              <span className="block min-w-0 truncate">{group.name}</span>
+            </MenuRadioItem>
+          ))}
+        </MenuRadioGroup>
+        {supportsGroupCreation ? null : (
+          <>
+            <MenuSeparator />
+            <div className="px-2 py-1 text-muted-foreground text-xs">
+              This environment cannot create threads in a group.
+            </div>
+          </>
+        )}
+      </MenuPopup>
+    </Menu>
+  );
+
   return (
-    <h1
-      aria-label={headingLabel}
-      className="mx-auto w-full max-w-5xl text-center font-normal text-2xl text-foreground tracking-tight sm:text-3xl"
-    >
-      {hasResolvedProject ? (
-        <>What should we build in {projectSelector}?</>
-      ) : canChooseProject ? (
-        <>{projectSelector} to start</>
-      ) : (
-        <>Add a project to start</>
-      )}
-    </h1>
+    <>
+      <h1
+        aria-label={headingLabel}
+        className="mx-auto w-full max-w-5xl text-center font-normal text-2xl text-foreground tracking-tight sm:text-3xl"
+      >
+        {hasResolvedProject ? (
+          <>What should we build in {projectSelector}?</>
+        ) : canChooseProject ? (
+          <>{projectSelector} to start</>
+        ) : (
+          <>Add a project to start</>
+        )}
+      </h1>
+      {showGroupLine ? (
+        <p className="mx-auto mt-2 w-full max-w-5xl text-center text-muted-foreground text-sm">
+          New thread in {groupSelector} group
+        </p>
+      ) : null}
+    </>
   );
 }

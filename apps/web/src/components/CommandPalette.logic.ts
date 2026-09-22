@@ -282,9 +282,12 @@ export function buildProjectActionItems(input: {
   renderDescription?: (project: CommandPaletteProject) => ReactNode;
   projectAccentColor?: (project: CommandPaletteProject) => SidebarProjectAccentColor | null;
   shortcutCommand?: KeybindingCommand;
+  /** Reason a project cannot be picked; it replaces the description and disables the row. */
+  disabledReason?: (project: CommandPaletteProject) => string | null;
 }): CommandPaletteActionItem[] {
   return input.projects.map((project) => {
     const projectAccentColor = input.projectAccentColor?.(project) ?? null;
+    const disabledReason = input.disabledReason?.(project) ?? null;
     return {
       kind: "action",
       value: `${input.valuePrefix}:${project.environmentId}:${project.id}`,
@@ -298,6 +301,7 @@ export function buildProjectActionItems(input: {
       description: input.renderDescription?.(project) ?? project.workspaceRoot,
       icon: input.icon(project),
       ...(projectAccentColor !== null ? { projectAccentColor } : {}),
+      ...(disabledReason !== null ? { disabled: true, description: disabledReason } : {}),
       ...(input.shortcutCommand !== undefined ? { shortcutCommand: input.shortcutCommand } : {}),
       run: async () => {
         await input.runProject(project);
@@ -489,7 +493,8 @@ export function resolveThreadUtilityOpenTarget(input: {
  * is disabled, so the list doubles as a "which group is this in" answer. */
 export function buildMoveToGroupItems(input: {
   readonly groups: ReadonlyArray<{ readonly id: string; readonly name: string }>;
-  readonly currentGroupId: string | null;
+  /** Group the moved threads share; undefined when they differ, so every row stays enabled. */
+  readonly currentGroupId: string | null | undefined;
   readonly icon: ReactNode;
   readonly move: (groupId: string | null) => Promise<void>;
 }): CommandPaletteActionItem[] {

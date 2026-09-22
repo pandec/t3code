@@ -1227,6 +1227,7 @@ const ProjectDeleteCommand = Schema.Struct({
 
 const ThreadCreateCommand = Schema.Struct({
   type: Schema.Literal("thread.create"),
+  customGroupId: Schema.optional(Schema.NullOr(TrimmedNonEmptyString)),
   commandId: CommandId,
   threadId: ThreadId,
   projectId: ProjectId,
@@ -1505,6 +1506,7 @@ const ThreadMessageSpeechRequestCommand = Schema.Struct({
 });
 
 const ThreadTurnStartBootstrapCreateThread = Schema.Struct({
+  customGroupId: Schema.optional(Schema.NullOr(TrimmedNonEmptyString)),
   projectId: ProjectId,
   title: TrimmedNonEmptyString,
   titleSource: Schema.optional(Schema.Literal("manual")),
@@ -2044,6 +2046,7 @@ export const ProjectDeletedPayload = Schema.Struct({
 });
 
 export const ThreadCreatedPayload = Schema.Struct({
+  customGroupId: Schema.optional(Schema.NullOr(TrimmedNonEmptyString)),
   threadId: ThreadId,
   projectId: ProjectId,
   title: TrimmedNonEmptyString,

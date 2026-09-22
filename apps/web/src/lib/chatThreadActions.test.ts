@@ -152,7 +152,9 @@ describe("chatThreadActions", () => {
     );
 
     expect(didStart).toBe(true);
-    expect(handleNewThread).toHaveBeenCalledWith(scopeProjectRef(ENVIRONMENT_ID, PROJECT_ID));
+    expect(handleNewThread).toHaveBeenCalledWith(scopeProjectRef(ENVIRONMENT_ID, PROJECT_ID), {
+      customGroupId: null,
+    });
   });
 
   it("does not start a thread when there is no project context", async () => {
