@@ -240,7 +240,12 @@ function GroupRow(props: {
     const name = next && next !== group.name ? next : null;
     submittedName.current = name;
     void props.save([name === null ? planned : { ...planned, name }]).then((success) => {
-      if (!success && submittedName.current === name) submittedName.current = null;
+      if (!success && submittedName.current === name) {
+        submittedName.current = null;
+        if (name !== null && inputRef.current?.value.trim() === name) {
+          inputRef.current.value = group.name;
+        }
+      }
     });
   };
   const {

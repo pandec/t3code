@@ -496,20 +496,24 @@ export function resolveThreadMetadataUpdateForNextTurn(input: {
 
 /**
  * Which custom group a draft joins when its first send creates the thread.
- * A group deleted since the pick falls back to Active. A live pick sent to a
- * server that cannot create grouped threads blocks the send instead of
- * creating the thread ungrouped: the choice was explicit, so it is never
- * dropped silently.
+ * An explicit deletion falls back to Active. Missing catalog entries can
+ * still be loading, so keep the pick and block until it can be checked.
+ * A live pick also blocks on servers that cannot create grouped threads.
  */
 export function resolveDraftCreationGroup(input: {
   readonly customGroupId: string | null | undefined;
-  readonly groups: ReadonlyArray<{ readonly id: string }>;
+  readonly catalog: ReadonlyArray<{ readonly id: string; readonly deleted?: boolean }>;
   readonly supportsGroupCreation: boolean;
 }): { readonly customGroupId: string | null; readonly blockReason: string | null } {
-  const customGroupId =
-    input.customGroupId != null && input.groups.some((group) => group.id === input.customGroupId)
-      ? input.customGroupId
-      : null;
+  const selectedGroup = input.catalog.find((group) => group.id === input.customGroupId);
+  const customGroupId = selectedGroup?.deleted ? null : (input.customGroupId ?? null);
+  if (customGroupId !== null && !selectedGroup) {
+    return {
+      customGroupId,
+      blockReason:
+        "The selected group is unavailable. Wait for its environment to connect, or choose Active before sending.",
+    };
+  }
   if (customGroupId !== null && !input.supportsGroupCreation) {
     return {
       customGroupId,

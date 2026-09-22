@@ -8015,7 +8015,7 @@ export default function ChatView(props: ChatViewProps) {
     const creationGroup = isLocalDraftThread
       ? resolveDraftCreationGroup({
           customGroupId: draftThread?.customGroupId,
-          groups: customGroupCatalog.groups,
+          catalog: customGroupCatalog.catalog,
           supportsGroupCreation:
             appAtomRegistry.get(environmentServerConfigsAtom).get(environmentId)?.environment
               .capabilities.threadCustomGroupCreation === true,

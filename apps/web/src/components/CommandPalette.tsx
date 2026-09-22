@@ -2426,7 +2426,7 @@ function OpenCommandPaletteDialog(props: {
       ],
     });
   } else if (
-    selectedThreads.length === 0 &&
+    selectedThreadKeys.size === 0 &&
     openThreadCapabilities?.threadCustomGroups === true &&
     openUnarchivedThreadRef !== null
   ) {

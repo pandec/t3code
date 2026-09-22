@@ -268,21 +268,24 @@ export function DraftHeroHeadline({
     activeProjectRef !== null &&
     environments.find((environment) => environment.environmentId === activeProjectRef.environmentId)
       ?.serverConfig?.environment.capabilities.threadCustomGroupCreation === true;
-  const activeCustomGroup =
-    customGroups.groups.find((group) => group.id === draftCustomGroupId) ?? null;
+  const selectedCustomGroup = customGroups.catalog.find((group) => group.id === draftCustomGroupId);
+  const activeCustomGroup = selectedCustomGroup?.deleted ? null : selectedCustomGroup;
+  const missingCustomGroup = draftCustomGroupId !== null && selectedCustomGroup === undefined;
   const showGroupLine =
-    draftId !== null && hasResolvedProject && (supportsGroupCreation || activeCustomGroup !== null);
+    draftId !== null &&
+    hasResolvedProject &&
+    (supportsGroupCreation || draftCustomGroupId !== null);
   const groupSelector = (
     <Menu>
       <MenuTrigger
-        disabled={customGroups.groups.length === 0}
+        disabled={customGroups.groups.length === 0 && !missingCustomGroup}
         className="pointer-events-auto inline-block max-w-48 truncate border-foreground/60 border-b border-dotted align-baseline font-medium text-foreground transition-colors hover:border-foreground/80 focus-visible:rounded-sm focus-visible:outline-hidden focus-visible:ring-2 focus-visible:ring-ring disabled:border-transparent"
       >
-        {activeCustomGroup?.name ?? "Active"}
+        {activeCustomGroup?.name ?? (missingCustomGroup ? "Unavailable" : "Active")}
       </MenuTrigger>
       <MenuPopup align="center" className="max-h-80 min-w-40! w-max max-w-64 overflow-y-auto">
         <MenuRadioGroup
-          value={activeCustomGroup?.id ?? ""}
+          value={missingCustomGroup ? draftCustomGroupId : (activeCustomGroup?.id ?? "")}
           onValueChange={(value) => {
             if (!draftId) return;
             setDraftThreadContext(draftId, {
