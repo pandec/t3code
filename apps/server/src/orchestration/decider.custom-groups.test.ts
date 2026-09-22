@@ -11,7 +11,7 @@ import { expect, it } from "@effect/vitest";
 import * as Effect from "effect/Effect";
 
 import { decideOrchestrationCommand } from "./decider.ts";
-import { projectEvent } from "./projector.ts";
+import { createEmptyReadModel, projectEvent } from "./projector.ts";
 
 const NOW = "2026-01-01T00:00:00.000Z";
 // The Effect test clock starts at the epoch.
@@ -61,6 +61,62 @@ function makeReadModel(overrides: Partial<OrchestrationThread> = {}): Orchestrat
 }
 
 it.layer(NodeServices.layer)("custom thread groups", (it) => {
+  it.effect(
+    "creates a thread directly in its chosen group and defaults legacy creation to Active",
+    () =>
+      Effect.gen(function* () {
+        let readModel = createEmptyReadModel(NOW);
+        const project = yield* decideOrchestrationCommand({
+          readModel,
+          command: {
+            type: "project.create",
+            commandId: CommandId.make("create-project"),
+            projectId: ProjectId.make("project-1"),
+            title: "Project",
+            workspaceRoot: "/tmp/project",
+            createdAt: NOW,
+          },
+        });
+        for (const event of Array.isArray(project) ? project : [project]) {
+          readModel = yield* projectEvent(readModel, {
+            ...event,
+            sequence: readModel.snapshotSequence + 1,
+          });
+        }
+        for (const customGroupId of ["research", null, undefined]) {
+          const threadId = ThreadId.make(`thread-${customGroupId}`);
+          const decided = yield* decideOrchestrationCommand({
+            readModel,
+            command: {
+              type: "thread.create",
+              commandId: CommandId.make(`create-${customGroupId}`),
+              threadId,
+              projectId: ProjectId.make("project-1"),
+              title: "Thread",
+              modelSelection: { instanceId: ProviderInstanceId.make("codex"), model: "gpt-5.4" },
+              runtimeMode: "full-access",
+              interactionMode: "default",
+              branch: null,
+              worktreePath: null,
+              createdAt: NOW,
+              ...(customGroupId !== undefined ? { customGroupId } : {}),
+            },
+          });
+          for (const event of Array.isArray(decided) ? decided : [decided]) {
+            expect(event.type).toBe("thread.created");
+            readModel = yield* projectEvent(readModel, {
+              ...event,
+              sequence: readModel.snapshotSequence + 1,
+            });
+          }
+          expect(readModel.threads.find((thread) => thread.id === threadId)).toMatchObject({
+            customGroupId: customGroupId ?? null,
+            settledOverride: null,
+          });
+        }
+      }),
+  );
+
   it.effect("assigns, moves and clears a group without changing lifecycle or activity", () =>
     Effect.gen(function* () {
       let readModel = makeReadModel({

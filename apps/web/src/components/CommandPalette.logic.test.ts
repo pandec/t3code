@@ -807,6 +807,22 @@ describe("buildProjectActionItems", () => {
     expect(items[0]).not.toHaveProperty("projectAccentColor");
   });
 
+  it("disables a project with a reason and leaves the others runnable", () => {
+    const items = buildProjectActionItems({
+      projects: [
+        makeProject({ id: ProjectId.make("blocked") }),
+        makeProject({ id: ProjectId.make("ok") }),
+      ],
+      valuePrefix: "new-thread-in-group:g1",
+      icon: () => null,
+      runProject: async (_project) => undefined,
+      disabledReason: (project) => (project.id === "blocked" ? "Environment cannot" : null),
+    });
+
+    expect(items[0]).toMatchObject({ disabled: true, description: "Environment cannot" });
+    expect(items[1]).not.toHaveProperty("disabled");
+  });
+
   it("leaves rows accent-free when no resolver is supplied", () => {
     const items = buildProjectActionItems({
       projects: [makeProject()],

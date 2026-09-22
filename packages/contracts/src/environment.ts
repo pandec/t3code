@@ -184,6 +184,8 @@ export const ExecutionEnvironmentCapabilities = Schema.Struct({
   /** Server persists manual Active order through thread.active.reorder. */
   threadActiveReorder: Schema.optionalKey(Schema.Boolean),
   threadCustomGroups: Schema.optionalKey(Schema.Boolean),
+  /** Server accepts customGroupId during thread creation, including first-send bootstrap. */
+  threadCustomGroupCreation: Schema.optionalKey(Schema.Boolean),
   /** Server preserves each group's placement around Active. Older group servers
       strip it on decode, so clients must not replicate catalogs to them. */
   threadGroupPlacement: Schema.optionalKey(Schema.Boolean),

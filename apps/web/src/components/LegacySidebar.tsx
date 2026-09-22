@@ -2150,10 +2150,12 @@ const SidebarProjectItem = memo(function SidebarProjectItem(props: SidebarProjec
         setOpenMobile(false);
       }
       void (async () => {
-        // No options: branch, worktree, and env mode come from the user's
-        // configured defaults, never from the currently viewed thread.
+        // Branch, worktree, and env mode come from the user's configured
+        // defaults, never from the currently viewed thread.
         const result = await settlePromise(() =>
-          handleNewThread(scopeProjectRef(member.environmentId, member.id)),
+          handleNewThread(scopeProjectRef(member.environmentId, member.id), {
+            customGroupId: null,
+          }),
         );
         if (result._tag === "Failure") {
           const error = squashAtomCommandFailure(result);
@@ -2420,6 +2422,7 @@ const SidebarProjectItem = memo(function SidebarProjectItem(props: SidebarProjec
             worktreePath: thread.worktreePath,
             envMode: thread.worktreePath ? "worktree" : "local",
             startFromOrigin: false,
+            customGroupId: null,
           }),
         );
         if (result._tag === "Failure") {

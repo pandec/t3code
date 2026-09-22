@@ -25,6 +25,7 @@ interface NewThreadHandler {
       worktreePath?: string | null;
       envMode?: DraftThreadEnvMode;
       startFromOrigin?: boolean;
+      customGroupId?: string | null;
     },
     // The opened draft's identity, which most callers have no use for.
   ): Promise<unknown>;
@@ -97,6 +98,8 @@ export async function startNewThreadFromContext(
     return false;
   }
 
-  await context.handleNewThread(projectRef);
+  // An explicit New thread starts in Active; only the group picker or the
+  // palette's grouped entry chooses a group.
+  await context.handleNewThread(projectRef, { customGroupId: null });
   return true;
 }

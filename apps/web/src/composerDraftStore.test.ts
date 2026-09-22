@@ -1956,6 +1956,29 @@ describe("composerDraftStore project draft thread mapping", () => {
     });
   });
 
+  it("keeps a picked group across project changes and reload until it is explicitly reset", () => {
+    const store = useComposerDraftStore.getState();
+    store.setProjectDraftThreadId(projectRef, draftId, { threadId, customGroupId: "group-1" });
+    // Groups span environments, so a project or environment change keeps the pick.
+    store.setDraftThreadContext(draftId, { projectRef: remoteProjectRef });
+    store.setProjectDraftThreadId(projectRef, draftId, { threadId });
+    expect(store.getDraftThread(draftId)?.customGroupId).toBe("group-1");
+
+    const options = useComposerDraftStore.persist.getOptions();
+    const saved = JSON.parse(
+      JSON.stringify(partializeComposerDraftStoreState(useComposerDraftStore.getState())),
+    ) as unknown;
+    resetComposerDraftStore();
+    useComposerDraftStore.setState(options.merge!(saved, useComposerDraftStore.getState()));
+    expect(useComposerDraftStore.getState().getDraftThread(draftId)?.customGroupId).toBe("group-1");
+
+    // An explicit Active pick replaces it.
+    useComposerDraftStore
+      .getState()
+      .setProjectDraftThreadId(projectRef, draftId, { threadId, customGroupId: null });
+    expect(useComposerDraftStore.getState().getDraftThread(draftId)?.customGroupId).toBeNull();
+  });
+
   it("stores the start-from-origin choice with the draft thread", () => {
     const store = useComposerDraftStore.getState();
     store.setProjectDraftThreadId(projectRef, draftId, {

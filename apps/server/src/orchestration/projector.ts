@@ -437,6 +437,7 @@ export function projectEvent(
             projectId: payload.projectId,
             title: payload.title,
             titleState: payload.titleState ?? null,
+            customGroupId: payload.customGroupId ?? null,
             modelSelection: payload.modelSelection,
             runtimeMode: payload.runtimeMode,
             interactionMode: payload.interactionMode,

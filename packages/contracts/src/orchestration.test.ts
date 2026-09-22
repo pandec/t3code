@@ -567,6 +567,7 @@ it.effect("accepts bootstrap metadata in thread.turn.start", () =>
         createThread: {
           projectId: "project-1",
           title: "Bootstrap thread",
+          customGroupId: "research",
           modelSelection: {
             provider: "codex",
             model: "gpt-5.4",
@@ -589,6 +590,7 @@ it.effect("accepts bootstrap metadata in thread.turn.start", () =>
       createdAt: "2026-01-01T00:00:00.000Z",
     });
     assert.strictEqual(parsed.bootstrap?.createThread?.projectId, "project-1");
+    assert.strictEqual(parsed.bootstrap?.createThread?.customGroupId, "research");
     assert.strictEqual(parsed.bootstrap?.prepareWorktree?.baseBranch, "main");
     assert.strictEqual(parsed.bootstrap?.prepareWorktree?.startFromOrigin, true);
     assert.strictEqual(parsed.bootstrap?.prepareWorktree?.requireWorktree, true);

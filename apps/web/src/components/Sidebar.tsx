@@ -1,5 +1,6 @@
 import { useThreadGroupCatalog } from "../hooks/useThreadGroups";
 import { threadGroupId, threadGroupSections } from "@t3tools/shared/threadGroups";
+import { groupMovableThreads, moveThreadsToGroup } from "~/lib/threadGroupMove";
 import { openThreadGroupsDialog } from "./sidebar/threadGroupsDialogStore";
 import { requestCustomSnooze } from "./CustomSnoozeDialog";
 import { useSupportsMultiplePullRequests } from "~/hooks/useSupportsMultiplePullRequests";
@@ -4915,6 +4916,13 @@ export default function Sidebar() {
       const unpinMenuItem = buildBulkUnpinContextMenuItem({
         pinnedCount: pinnedSelectedThreads.length,
       });
+      // Move to group (k) counts only rows whose server accepts group
+      // membership; a mixed selection moves what it can.
+      const groupMovableSelectedThreads = groupMovableThreads(
+        selectedThreads,
+        (environmentId) =>
+          serverConfigs.get(environmentId)?.environment.capabilities.threadCustomGroups === true,
+      );
       // The indefinite preset needs every selected environment to support
       // it; a mixed selection would half-apply the same way blocked work
       // would.
@@ -4952,6 +4960,21 @@ export default function Sidebar() {
                 ]
               : []),
             ...(titleRegenerationMenuItem ? [titleRegenerationMenuItem] : []),
+            ...(groupMovableSelectedThreads.length > 0
+              ? [
+                  {
+                    id: "move-to-group",
+                    label: `Move to group (${groupMovableSelectedThreads.length})`,
+                    children: [
+                      { id: "group:none", label: "No group" },
+                      ...customGroups.groups.map((group) => ({
+                        id: `group:${group.id}`,
+                        label: group.name,
+                      })),
+                    ],
+                  },
+                ]
+              : []),
             { id: "mark-unread", label: `Mark unread (${count})` },
             { id: "delete", label: `Delete (${count})`, destructive: true },
           ],
@@ -4959,6 +4982,33 @@ export default function Sidebar() {
         ),
       );
       if (clicked._tag === "Failure") return;
+      if (clicked.value?.startsWith("group:")) {
+        // Moved rows leave the selection; failed ones stay so a retry
+        // targets exactly what did not move.
+        const outcome = await moveThreadsToGroup({
+          threads: groupMovableSelectedThreads,
+          customGroupId: clicked.value === "group:none" ? null : clicked.value.slice(6),
+          move: (threadRef, customGroupId) =>
+            updateThreadMetadata({
+              environmentId: threadRef.environmentId,
+              input: { threadId: threadRef.threadId, customGroupId },
+            }),
+        });
+        removeFromSelection(outcome.movedThreadKeys);
+        if (outcome.failedCount > 0) {
+          toastManager.add(
+            stackedThreadToast({
+              type: "error",
+              title: `Failed to move ${outcome.failedCount} thread${outcome.failedCount === 1 ? "" : "s"} to group`,
+              description:
+                outcome.firstError instanceof Error
+                  ? outcome.firstError.message
+                  : "An error occurred.",
+            }),
+          );
+        }
+        return;
+      }
       if (clicked.value?.startsWith("snooze:")) {
         const preset =
           clicked.value === "snooze:custom"
@@ -5115,6 +5165,7 @@ export default function Sidebar() {
       clearSelection,
       confirmThreadDelete,
       confirmThreadUnpin,
+      customGroups.groups,
       deleteThread,
       markThreadUnread,
       performSnooze,
@@ -5277,6 +5328,7 @@ export default function Sidebar() {
                 worktreePath: thread.worktreePath,
                 envMode: thread.worktreePath ? "worktree" : "local",
                 startFromOrigin: false,
+                customGroupId: null,
               }),
             );
             if (result._tag === "Failure") {

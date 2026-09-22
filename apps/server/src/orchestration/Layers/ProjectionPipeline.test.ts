@@ -1003,6 +1003,7 @@ it.layer(BaseTestLayer)("OrchestrationProjectionPipeline", (it) => {
           threadId: ThreadId.make("thread-1"),
           projectId: ProjectId.make("project-1"),
           title: "Thread 1",
+          customGroupId: "initial-group",
           modelSelection: {
             instanceId: ProviderInstanceId.make("codex"),
             model: "gpt-5-codex",
@@ -1039,6 +1040,11 @@ it.layer(BaseTestLayer)("OrchestrationProjectionPipeline", (it) => {
       });
 
       yield* projectionPipeline.bootstrap;
+
+      const createdGroupRows = yield* sql<{ customGroupId: string | null }>`
+        SELECT custom_group_id AS "customGroupId" FROM projection_threads WHERE thread_id = 'thread-1'
+      `;
+      assert.deepEqual(createdGroupRows, [{ customGroupId: "initial-group" }]);
 
       const projectRows = yield* sql<{
         readonly projectId: string;
