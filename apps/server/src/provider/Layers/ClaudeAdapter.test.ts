@@ -14,6 +14,7 @@ import type {
   SDKControlReloadSkillsResponse,
   SDKMessage,
   SDKUserMessage,
+  SessionMessage,
 } from "@anthropic-ai/claude-agent-sdk";
 import {
   ApprovalRequestId,
@@ -386,7 +387,7 @@ function claudeHistoryMessage(input: {
   readonly sessionId?: string;
   readonly content?: unknown;
   readonly parentToolUseId?: string | null;
-}) {
+}): SessionMessage {
   const content =
     input.content ??
     (input.type === "user" ? "prompt" : input.type === "assistant" ? [] : { subtype: "init" });
@@ -1564,7 +1565,7 @@ describe("ClaudeAdapterLive", () => {
     });
   }
 
-  it.effect("remaps full-conversation fork boundaries and rejects invalid fork output", () => {
+  it.effect("preserves unknown fork boundaries and rejects invalid fork output", () => {
     let invalidFork = false;
     const sourceId = "11111111-1111-4111-8111-111111111111";
     const destinationId = "22222222-2222-4222-8222-222222222222";
@@ -1597,8 +1598,8 @@ describe("ClaudeAdapterLive", () => {
         destinationThreadId: ThreadId.make("destination-thread"),
         sourceResumeCursor: {
           resume: sourceId,
-          turnCount: 2,
-          turnStartMessageIds: [sourceMessageIds[0]!, sourceMessageIds[2]!],
+          turnCount: 3,
+          turnStartMessageIds: [null, sourceMessageIds[0]!, sourceMessageIds[2]!],
         },
         cwd: "/tmp/project",
         runtimeMode: "full-access" as const,
@@ -1607,9 +1608,17 @@ describe("ClaudeAdapterLive", () => {
       assert.deepEqual(result.resumeCursor, {
         threadId: "destination-thread",
         resume: destinationId,
-        turnCount: 2,
-        turnStartMessageIds: [copiedMessageIds[0], copiedMessageIds[2]],
+        turnCount: 3,
+        turnStartMessageIds: [null, copiedMessageIds[0], copiedMessageIds[2]],
       });
+      const missingBoundary = yield* adapter.forkSession!({
+        ...input,
+        sourceResumeCursor: {
+          ...input.sourceResumeCursor,
+          turnStartMessageIds: [null, sourceMessageIds[0]!, "missing-turn-start"],
+        },
+      }).pipe(Effect.result);
+      assert.equal(missingBoundary._tag, "Failure");
       invalidFork = true;
       const failed = yield* adapter.forkSession!(input).pipe(Effect.result);
       assert.equal(failed._tag, "Failure");
@@ -1618,6 +1627,9 @@ describe("ClaudeAdapterLive", () => {
 
   for (const scenario of [
     "changes system rows",
+    "omits system message bodies",
+    "omits a user message body",
+    "omits an assistant message body",
     "restores a compact conversation prefix",
     "drops a retained message",
     "changes a retained message",
@@ -1636,7 +1648,19 @@ describe("ClaudeAdapterLive", () => {
         uuid: `fork-${message.uuid}`,
         session_id: CLAUDE_FORK_SESSION_ID,
       }));
-      if (scenario === "changes system rows") {
+      if (scenario === "omits system message bodies") {
+        // The SDK returns message: undefined for stop_hook_summary records;
+        // the history worker's JSON output omits that key entirely.
+        history[0]!.message = undefined;
+        forkHistory.unshift({
+          ...claudeHistoryMessage({ type: "system", uuid: "fork-stop-hook-summary" }),
+          message: undefined,
+        });
+      } else if (scenario === "omits a user message body") {
+        forkHistory[0]!.message = undefined;
+      } else if (scenario === "omits an assistant message body") {
+        forkHistory[1]!.message = undefined;
+      } else if (scenario === "changes system rows") {
         forkHistory.splice(
           2,
           0,
@@ -1688,6 +1712,7 @@ describe("ClaudeAdapterLive", () => {
         });
         if (
           scenario === "changes system rows" ||
+          scenario === "omits system message bodies" ||
           scenario === "restores a compact conversation prefix"
         ) {
           assert.deepEqual((yield* fork).resumeCursor, {
@@ -1700,7 +1725,13 @@ describe("ClaudeAdapterLive", () => {
           const error = yield* fork.pipe(Effect.flip);
           assert.equal(error._tag, "ProviderAdapterRequestError");
           assert.ok(error.cause instanceof Error);
-          assert.match(error.cause.message, /did not preserve the source transcript/);
+          assert.match(
+            error.cause.message,
+            scenario === "omits a user message body" ||
+              scenario === "omits an assistant message body"
+              ? /Missing key/
+              : /did not preserve the source transcript/,
+          );
         }
         assert.equal(harness.getLastCreateQueryInput(), undefined);
       }).pipe(Effect.provide(harness.layer));
@@ -9157,7 +9188,7 @@ describe("ClaudeAdapterLive", () => {
     );
   });
 
-  it.effect("rewinds Claude history when the fork omits retained system messages", () => {
+  it.effect("rewinds Claude history when the fork omits bodyless system messages", () => {
     const forkCalls: Array<Parameters<NonNullable<ClaudeAdapterLiveOptions["forkSession"]>>> = [];
     let firstTurnId = "";
     let secondTurnId = "";
@@ -9183,7 +9214,10 @@ describe("ClaudeAdapterLive", () => {
           ];
         }
         return [
-          claudeHistoryMessage({ type: "system", uuid: "system-init" }),
+          {
+            ...claudeHistoryMessage({ type: "system", uuid: "stop-hook-summary" }),
+            message: undefined,
+          },
           claudeHistoryMessage({ type: "user", uuid: firstTurnId, content: "first" }),
           claudeHistoryMessage({ type: "assistant", uuid: "assistant-1" }),
           claudeHistoryMessage({
