@@ -283,7 +283,7 @@ const findLatestArtifact = Effect.fn("installDesktopDev.findLatestArtifact")(
 // executable name, which is the stricter check and leaves no orphaned backend
 // behind.
 export function parseMacRunningAppPid(output: string): number | undefined {
-  const match = /"pid"\s*=\s*(\d+)/u.exec(output);
+  const match = /^\s*(?:"pid"|pid)\s*=\s*(\d+)/mu.exec(output);
   if (!match?.[1]) return undefined;
   const pid = Number.parseInt(match[1], 10);
   return Number.isSafeInteger(pid) && pid > 0 ? pid : undefined;

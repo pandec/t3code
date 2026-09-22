@@ -247,6 +247,17 @@ it("reads the running app pid from LaunchServices output", () => {
   assert.equal(parseMacRunningAppPid('"pid" = 31887'), 31887);
 });
 
+it("reads the unquoted pid from macOS LaunchServices output", () => {
+  const output = `[ NULL ]  [ NULL ]
+    bundleID=[ NULL ]
+    bundle path=[ NULL ]
+    executable path=[ NULL ]
+    pid = 31334 !cgsConnection !signalled type=[ NULL ]  flavor=[ NULL ]  Version=[ NULL ]  Arch=!!none
+`;
+
+  assert.equal(parseMacRunningAppPid(output), 31334);
+});
+
 it("treats empty LaunchServices output as the app not running", () => {
   assert.isUndefined(parseMacRunningAppPid(""));
   assert.isUndefined(parseMacRunningAppPid('"pid"=\n'));
