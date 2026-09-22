@@ -369,8 +369,8 @@ change them.
 ### Workspaces
 
 Without a workspace flag, `thread new` honors the same default environment mode as the app's
-new-thread flow: the per-project setting, then the repository's checked-in `t3.json`
-(`defaultThreadEnvMode`), then the server's global setting. When nothing selects worktrees, the
+new-thread flow: the per-project setting, then the environment setting, then the repository's
+checked-in `t3.json` (`defaultThreadEnvMode`), then the built-in checkout default. When nothing selects worktrees, the
 thread runs directly in the project workspace root, so concurrent CLI threads on the same project
 share one working tree. When the default resolves to worktree mode, `thread new` behaves like
 `--new-worktree` below and also honors the server's "start new worktrees from origin" setting. If
@@ -410,7 +410,7 @@ the configured default — the server creates the thread as part of the turn sta
 `createCommandId` is `null`. Thread list and status summaries also
 include `branch` and `worktreePath` (both `null` for plain checkout threads), so automation can
 discover where a thread runs. `project list --json` reports each project's `defaultThreadEnvMode`
-override (`null` when the checked-in `t3.json` and the global setting decide) and `autoPull` setting
+override (`null` to use the environment setting, then `t3.json`) and `autoPull` setting
 (`false` when disabled).
 
 ## Session import

@@ -678,12 +678,28 @@ it.layer(NodeServices.layer)("thread default workspace resolution", (it) => {
     }),
   );
 
-  it.effect("consults t3.json when the project has no override", () =>
+  it.effect("lets the environment setting beat t3.json", () =>
     Effect.gen(function* () {
       const { workspaceRoot, settingsPath, writeT3Json, writeSettings } = yield* makeWorkspace;
       yield* writeT3Json('{ "defaultThreadEnvMode": "worktree" }');
       yield* writeSettings(
         '{ "defaultThreadEnvMode": "local", "newWorktreesStartFromOrigin": false }',
+      );
+      const selection = yield* resolveThreadCliDefaultWorkspace({
+        projectSetting: null,
+        workspaceRoot,
+        settingsPath,
+      });
+      assert.deepEqual(selection, { mode: "checkout" });
+    }),
+  );
+
+  it.effect("inherits from t3.json when the environment setting is null", () =>
+    Effect.gen(function* () {
+      const { workspaceRoot, settingsPath, writeT3Json, writeSettings } = yield* makeWorkspace;
+      yield* writeT3Json('{ "defaultThreadEnvMode": "worktree" }');
+      yield* writeSettings(
+        '{ "defaultThreadEnvMode": null, "newWorktreesStartFromOrigin": false }',
       );
       const selection = yield* resolveThreadCliDefaultWorkspace({
         projectSetting: null,

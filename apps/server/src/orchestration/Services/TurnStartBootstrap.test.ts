@@ -9,6 +9,7 @@ import * as Schema from "effect/Schema";
 import { ProjectionSnapshotQuery } from "./ProjectionSnapshotQuery.ts";
 import {
   CommandId,
+  DEFAULT_SERVER_SETTINGS,
   MessageId,
   type OrchestrationCommand,
   type OrchestrationThreadShell,
@@ -17,6 +18,7 @@ import {
   ProviderInstanceId,
   ThreadId,
   ProjectId,
+  type ServerSettings,
 } from "@t3tools/contracts";
 
 import * as GitWorkflowService from "../../git/GitWorkflowService.ts";
@@ -27,6 +29,7 @@ import * as VcsStatusBroadcaster from "../../vcs/VcsStatusBroadcaster.ts";
 import * as OrchestrationEngine from "./OrchestrationEngine.ts";
 import * as TurnStartBootstrap from "./TurnStartBootstrap.ts";
 import { ThreadDeletionReactor } from "./ThreadDeletionReactor.ts";
+import { ServerSettingsService } from "../../serverSettings.ts";
 
 type TurnStartCommand = Extract<OrchestrationCommand, { type: "thread.turn.start" }>;
 type DispatchOptions = Parameters<OrchestrationEngine.OrchestrationEngineShape["dispatch"]>[1];
@@ -114,6 +117,7 @@ const makeLayer = (input: {
   readonly tracker?: Partial<WorktreeSetupTracker.WorktreeSetupTracker["Service"]>;
   readonly terminalManager?: Partial<TerminalManager.TerminalManager["Service"]>;
   readonly getThread?: () => Option.Option<OrchestrationThreadShell>;
+  readonly settings?: ServerSettings;
   readonly failTurnStart?: boolean;
   readonly failThreadDelete?: boolean;
 }) =>
@@ -185,6 +189,12 @@ const makeLayer = (input: {
     Layer.provide(
       Layer.mock(ProjectionSnapshotQuery)({
         getThreadShellById: () => Effect.sync(input.getThread ?? (() => Option.some(threadShell))),
+        getProjectShellById: () => Effect.succeed(Option.none()),
+      }),
+    ),
+    Layer.provide(
+      Layer.mock(ServerSettingsService)({
+        getSettings: Effect.succeed(input.settings ?? DEFAULT_SERVER_SETTINGS),
       }),
     ),
     Layer.provide(testCryptoLayer),
@@ -408,6 +418,61 @@ describe("TurnStartBootstrap", () => {
       ]);
     }),
   );
+
+  for (const [name, settings, expected] of [
+    [
+      "project",
+      {
+        ...DEFAULT_SERVER_SETTINGS,
+        worktreeSubmodules: "none",
+        projectSettingsOverrides: {
+          [createThreadBootstrap.projectId]: { worktreeSubmodules: "top-level" },
+        },
+      },
+      "top-level",
+    ],
+    ["environment", { ...DEFAULT_SERVER_SETTINGS, worktreeSubmodules: "none" }, "none"],
+    ["checkout file", DEFAULT_SERVER_SETTINGS, null],
+  ] as const) {
+    it.effect(`passes the ${name} submodule policy to worktree creation`, () =>
+      Effect.gen(function* () {
+        const dispatched: Array<OrchestrationCommand> = [];
+        const submodulePolicies: Array<unknown> = [];
+        yield* Effect.gen(function* () {
+          const bootstrap = yield* TurnStartBootstrap.TurnStartBootstrap;
+          yield* bootstrap.dispatchTurnStart(
+            makeTurnStartCommand({
+              createThread: createThreadBootstrap,
+              prepareWorktree: {
+                projectCwd: "/tmp/project",
+                baseBranch: "main",
+                branch: "t3code/test-branch",
+              },
+            }),
+          );
+        }).pipe(
+          Effect.provide(
+            makeLayer({
+              dispatched,
+              settings,
+              gitWorkflow: {
+                createWorktree: (request, options) => {
+                  submodulePolicies.push(options?.submodules);
+                  return Effect.succeed({
+                    worktree: {
+                      path: "/tmp/worktrees/test",
+                      refName: request.newRefName ?? request.refName,
+                    },
+                  });
+                },
+              },
+            }),
+          ),
+        );
+        assert.deepEqual(submodulePolicies, [expected]);
+      }),
+    );
+  }
 
   it.effect("fails and deletes the created thread when worktree preparation fails", () =>
     Effect.gen(function* () {

@@ -562,7 +562,7 @@ const RuntimeCoreDependenciesLive = Layer.mergeAll(
     // Shared bootstrap program for thread.turn.start commands, consumed by both
     // the WebSocket dispatch path and the HTTP dispatch route. Its git, setup
     // script, and orchestration engine dependencies are provided below.
-    Layer.provideMerge(Layer.mergeAll(TurnStartBootstrap.layer, ServerSettingsLayerLive)),
+    Layer.provideMerge(TurnStartBootstrap.layer),
     // The deletion reactor sits below the bootstrap service so its
     // thread.create fence and the reactor pipeline share one cleanup worker.
     Layer.provideMerge(

@@ -6,7 +6,7 @@ import type { ComposerDraftWorkspaceSelection } from "../../state/use-composer-d
  * itself.
  *
  * Those controls must never persist a mode of their own. The mode they see is
- * usually the resolved default (project setting → t3.json → global), which is
+ * usually the resolved default (project → environment → t3.json → local), which is
  * provisional while t3.json is still loading and must keep tracking the
  * setting even after it settles. Writing it back would freeze it into the
  * draft as an explicit pick, so a branch tap would silently decide the

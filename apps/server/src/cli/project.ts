@@ -505,7 +505,7 @@ export const projectListSummary = (
         ? project.defaultModelSelection
         : resolved.settings.defaultModelSelection,
     // Per-project thread env-mode override; null means the checked-in
-    // t3.json and the global setting decide (older servers omit it).
+    // the environment setting and t3.json decide (older servers omit it).
     defaultThreadEnvMode:
       resolved === undefined
         ? (project.defaultThreadEnvMode ?? null)

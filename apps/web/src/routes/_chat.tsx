@@ -1,11 +1,6 @@
 import { Outlet, createFileRoute, redirect, useParams, useRouter } from "@tanstack/react-router";
 import { useAtomValue } from "@effect/atom-react";
 import { useEffect, useMemo } from "react";
-import {
-  isAtomCommandInterrupted,
-  squashAtomCommandFailure,
-} from "@t3tools/client-runtime/state/runtime";
-import { scopeThreadRef } from "@t3tools/client-runtime/environment";
 
 import { isCommandPaletteOpen } from "../commandPaletteBus";
 import { ThreadRouteView } from "../components/ThreadRouteView";
@@ -20,6 +15,9 @@ import { useHandleNewThread } from "../hooks/useHandleNewThread";
 import { startNewThreadFromContext } from "../lib/chatThreadActions";
 import { isPreviewFocused } from "../lib/previewFocus";
 import { isTerminalFocused } from "../lib/terminalFocus";
+import { isEditableFocused } from "../lib/editableFocus";
+import { isModelPickerOpen } from "../modelPickerVisibility";
+import { undoLatestThreadAction } from "../hooks/showThreadUndoNotice";
 import { resolveShortcutCommand } from "../keybindings";
 import { selectThreadTerminalUiState, useTerminalUiStateStore } from "../terminalUiStateStore";
 import { isPreviewSupportedInRuntime } from "../previewStateStore";
@@ -33,49 +31,9 @@ import {
   useThreadSplitStore,
 } from "~/components/thread-split/threadSplitStore";
 import { primaryServerKeybindingsAtom } from "~/state/server";
-import {
-  threadActionUndoHistory,
-  hasOpenArchiveUndoBlockingLayer,
-  isArchiveUndoShortcut,
-  isEditableKeyboardTarget,
-  resolveEmptyDraftIdForArchiveUndo,
-} from "../archiveUndo";
-import { composerDraftHasUserContent, useComposerDraftStore } from "../composerDraftStore";
-import { draftSubmissionTracker } from "../draftSubmissionState";
+import { hasOpenArchiveUndoBlockingLayer } from "../archiveUndo";
 import { useThreadActions } from "../hooks/useThreadActions";
-import {
-  buildThreadRouteParams,
-  resolveThreadRouteTarget,
-  type ThreadRouteTarget,
-} from "../threadRoutes";
-
-function readCurrentRouteTarget(router: ReturnType<typeof useRouter>): ThreadRouteTarget | null {
-  const params = router.state.matches[router.state.matches.length - 1]?.params ?? {};
-  return resolveThreadRouteTarget(params);
-}
-
-function readEmptyNewThreadDraftId(router: ReturnType<typeof useRouter>): string | null {
-  const target = readCurrentRouteTarget(router);
-  if (target?.kind !== "draft") {
-    return null;
-  }
-  const composerState = useComposerDraftStore.getState();
-  const draftSession = composerState.getDraftSession(target.draftId);
-  const hasObservedThread = Boolean(
-    draftSession &&
-    (draftSession.promotedTo ||
-      readThreadShell(scopeThreadRef(draftSession.environmentId, draftSession.threadId))),
-  );
-  const hasStartedSubmission = draftSubmissionTracker.hasStarted(target.draftId);
-  if (hasObservedThread) {
-    draftSubmissionTracker.clear(target.draftId);
-  }
-  return resolveEmptyDraftIdForArchiveUndo(
-    target,
-    composerDraftHasUserContent(composerState.getComposerDraft(target.draftId)),
-    hasObservedThread || hasStartedSubmission,
-  );
-}
+import { buildThreadRouteParams, resolveThreadRouteTarget } from "../threadRoutes";
 
 function ChatRouteGlobalShortcuts() {
   const clearSelection = useThreadSelectionStore((state) => state.clearSelection);
@@ -88,7 +46,7 @@ function ChatRouteGlobalShortcuts() {
   const projects = useProjects();
   const primaryEnvironmentId = usePrimaryEnvironmentId();
   const router = useRouter();
-  const { attemptArchiveThread, unarchiveThread, unsnoozeThread } = useThreadActions();
+  const { attemptArchiveThread } = useThreadActions();
   const projectGroupCount = useMemo(
     () =>
       buildSidebarProjectSnapshots({
@@ -129,6 +87,8 @@ function ChatRouteGlobalShortcuts() {
           terminalOpen,
           previewFocus: isPreviewFocused(),
           previewOpen,
+          editableFocus: isEditableFocused(event.target),
+          modelPickerOpen: isModelPickerOpen(),
         },
       });
 
@@ -136,74 +96,13 @@ function ChatRouteGlobalShortcuts() {
         return;
       }
 
-      if (
-        isArchiveUndoShortcut(event) &&
-        !isEditableKeyboardTarget(event.target) &&
-        !hasOpenArchiveUndoBlockingLayer()
-      ) {
-        const candidate = threadActionUndoHistory.take();
-        if (candidate) {
-          const emptyDraftId = readEmptyNewThreadDraftId(router);
-
+      if (command === "thread.undo") {
+        if (event.repeat || isModelPickerOpen() || hasOpenArchiveUndoBlockingLayer()) return;
+        if (undoLatestThreadAction()) {
           event.preventDefault();
           event.stopPropagation();
-          void (async () => {
-            const result = await (candidate.action === "archive"
-              ? unarchiveThread(candidate.threadRef)
-              : unsnoozeThread(candidate.threadRef));
-            if (result._tag === "Failure") {
-              threadActionUndoHistory.restore(candidate);
-              if (!isAtomCommandInterrupted(result)) {
-                const error = squashAtomCommandFailure(result);
-                toastManager.add(
-                  stackedThreadToast({
-                    type: "error",
-                    title:
-                      candidate.action === "archive"
-                        ? "Failed to restore thread"
-                        : "Failed to wake thread",
-                    description: error instanceof Error ? error.message : "An error occurred.",
-                  }),
-                );
-              }
-              return;
-            }
-
-            if (emptyDraftId && readEmptyNewThreadDraftId(router) === emptyDraftId) {
-              const navigationResult = await Promise.resolve(
-                router.navigate({
-                  to: "/$environmentId/$threadId",
-                  params: buildThreadRouteParams(candidate.threadRef),
-                }),
-              ).then(
-                () => ({ _tag: "Success" as const }),
-                (error: unknown) => ({ _tag: "Failure" as const, error }),
-              );
-              if (navigationResult._tag === "Failure") {
-                toastManager.add(
-                  stackedThreadToast({
-                    type: "error",
-                    title: "Thread restored, but could not open it",
-                    description:
-                      navigationResult.error instanceof Error
-                        ? navigationResult.error.message
-                        : "An error occurred.",
-                  }),
-                );
-              }
-              return;
-            }
-
-            toastManager.add(
-              stackedThreadToast({
-                type: "success",
-                title: candidate.action === "archive" ? "Thread restored" : "Thread woke",
-                description: candidate.threadTitle,
-              }),
-            );
-          })();
-          return;
         }
+        return;
       }
 
       if (event.key === "Escape" && selectedThreadKeysSize > 0) {
@@ -356,8 +255,6 @@ function ChatRouteGlobalShortcuts() {
     legacySidebarEnabled,
     terminalOpen,
     router,
-    unarchiveThread,
-    unsnoozeThread,
   ]);
 
   return null;

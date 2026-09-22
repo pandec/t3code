@@ -15,6 +15,7 @@ import {
   EventId,
   type OrchestrationCommand,
   OrchestrationDispatchCommandError,
+  type ProjectId,
   type ThreadId,
   WORKTREE_SETUP_ACTIVITY_KIND,
   worktreeSetupActivityId,
@@ -28,6 +29,8 @@ import * as ProjectSetupScriptRunner from "../../project/ProjectSetupScriptRunne
 import * as VcsStatusBroadcaster from "../../vcs/VcsStatusBroadcaster.ts";
 import * as OrchestrationEngine from "./OrchestrationEngine.ts";
 import { ThreadDeletionReactor } from "./ThreadDeletionReactor.ts";
+import { resolveProjectSettings } from "@t3tools/shared/projectSettings";
+import { ServerSettingsService } from "../../serverSettings.ts";
 
 const isOrchestrationDispatchCommandError = Schema.is(OrchestrationDispatchCommandError);
 
@@ -93,6 +96,7 @@ export const make = Effect.gen(function* () {
   const gitWorkflow = yield* GitWorkflowService.GitWorkflowService;
   const projectSetupScriptRunner = yield* ProjectSetupScriptRunner.ProjectSetupScriptRunner;
   const vcsStatusBroadcaster = yield* VcsStatusBroadcaster.VcsStatusBroadcaster;
+  const serverSettings = yield* ServerSettingsService;
 
   const randomUUID = crypto.randomUUIDv4.pipe(
     Effect.mapError(
@@ -173,6 +177,30 @@ export const make = Effect.gen(function* () {
             ),
       ),
     );
+
+  // Project > environment. Null leaves the policy to the newly checked-out
+  // branch's t3.json, which is unavailable until createWorktree has run.
+  const resolveBootstrapWorktreeSubmodules = Effect.fnUntraced(function* (input: {
+    readonly threadId: ThreadId;
+    readonly projectId: ProjectId | null;
+  }) {
+    const settings = yield* serverSettings.getSettings.pipe(Effect.orElseSucceed(() => null));
+    if (settings === null) return null;
+    const projectId =
+      input.projectId ??
+      (yield* query.getThreadShellById(input.threadId).pipe(
+        Effect.map((thread) => Option.getOrNull(thread)?.projectId ?? null),
+        Effect.orElseSucceed(() => null),
+      ));
+    const project =
+      projectId === null
+        ? null
+        : yield* query.getProjectShellById(projectId).pipe(
+            Effect.map(Option.getOrNull),
+            Effect.orElseSucceed(() => null),
+          );
+    return resolveProjectSettings(settings, projectId, project).settings.worktreeSubmodules;
+  });
 
   const dispatchTurnStart = (
     command: ThreadTurnStartCommand,
@@ -692,6 +720,10 @@ export const make = Effect.gen(function* () {
           }
           yield* worktreeSetupTracker.stageStatus(threadId, "checkout", "running");
           let checkoutTotal: number | null = null;
+          const submodules = yield* resolveBootstrapWorktreeSubmodules({
+            threadId,
+            projectId: targetProjectId ?? null,
+          });
           const worktree = yield* gitWorkflow.createWorktree(
             {
               cwd: prepareWorktree.projectCwd,
@@ -701,6 +733,7 @@ export const make = Effect.gen(function* () {
               path: null,
             },
             {
+              submodules,
               progress: {
                 // Git has registered the directory at this point, so a
                 // cancel during the submodule step can still remove it.
@@ -731,6 +764,8 @@ export const make = Effect.gen(function* () {
                         worktreeSetupTracker.stageStatus(threadId, "submodules", "running"),
                       ),
                     ),
+                onSubmodulesDisabled: () =>
+                  worktreeSetupTracker.stageStatus(threadId, "submodules", "skipped", "disabled"),
                 onSubmoduleLine: (line) => {
                   const submodulePath = /Submodule path '([^']+)'/.exec(line)?.[1];
                   return submodulePath === undefined

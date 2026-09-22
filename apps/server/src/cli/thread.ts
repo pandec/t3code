@@ -32,7 +32,6 @@ import { resolveProjectSettings } from "@t3tools/shared/projectSettings";
 import { buildTemporaryWorktreeBranchName } from "@t3tools/shared/git";
 import { fromLenientJson } from "@t3tools/shared/schemaJson";
 import { parseT3ProjectFile } from "@t3tools/shared/t3ProjectFile";
-import { resolveDefaultThreadEnvMode } from "@t3tools/shared/threadEnvMode";
 import * as Console from "effect/Console";
 import * as Crypto from "effect/Crypto";
 import * as DateTime from "effect/DateTime";
@@ -315,24 +314,22 @@ const readThreadDefaultSettings = Effect.fn("readThreadDefaultSettings")(functio
   return Exit.isSuccess(decoded) ? decoded.value : DEFAULT_SERVER_SETTINGS;
 });
 
-// Read `defaultThreadEnvMode` from the project's checked-in t3.json. Missing,
-// unreadable, or invalid files resolve to null, like the app clients.
-const readT3ProjectFileEnvMode = Effect.fn("readT3ProjectFileEnvMode")(function* (
-  workspaceRoot: string,
-) {
+// Read the project's checked-in t3.json. Missing, unreadable, or invalid
+// files resolve to null, like the app clients.
+const readT3ProjectFile = Effect.fn("readT3ProjectFile")(function* (workspaceRoot: string) {
   const path = yield* Path.Path;
   const fileSystem = yield* FileSystem.FileSystem;
   const contents = yield* fileSystem
     .readFileString(path.join(workspaceRoot, T3_PROJECT_FILE_NAME))
     .pipe(Effect.orElseSucceed(() => null));
   if (contents === null) return null;
-  return parseT3ProjectFile(contents)?.defaultThreadEnvMode ?? null;
+  return parseT3ProjectFile(contents);
 });
 
 /** Resolve where a thread starts when no explicit workspace flag was passed.
     Routes through the shared resolver so the CLI cannot disagree with the
-    web/mobile priority order: per-project setting > checked-in t3.json >
-    global server setting (default: the plain checkout). A worktree default
+    web/mobile priority order: per-project setting > environment setting >
+    checked-in t3.json > built-in default. A worktree default
     also honors the "new worktrees start from origin" server setting, matching
     the app's new-thread flow. */
 export const resolveThreadCliDefaultWorkspace = Effect.fn("resolveThreadCliDefaultWorkspace")(
@@ -343,13 +340,15 @@ export const resolveThreadCliDefaultWorkspace = Effect.fn("resolveThreadCliDefau
     readonly settings?: ServerSettings;
   }) {
     const settings = input.settings ?? (yield* readThreadDefaultSettings(input.settingsPath));
-    const projectFile =
-      input.projectSetting == null ? yield* readT3ProjectFileEnvMode(input.workspaceRoot) : null;
-    const envMode = resolveDefaultThreadEnvMode({
-      projectSetting: input.projectSetting,
+    const projectFile = yield* readT3ProjectFile(input.workspaceRoot);
+    const envMode = resolveProjectSettings(
+      input.projectSetting == null
+        ? settings
+        : { ...settings, defaultThreadEnvMode: input.projectSetting },
+      null,
+      null,
       projectFile,
-      globalDefault: settings.defaultThreadEnvMode,
-    });
+    ).settings.defaultThreadEnvMode;
     return envMode === "worktree"
       ? {
           mode: "new-worktree" as const,
@@ -895,18 +894,19 @@ const threadNewCommand = Command.make("new", {
           identifier: flags.project,
         });
         const projectShell = input.live.shell.projects.find((item) => item.id === project.id)!;
-        const resolved = resolveProjectSettings(
-          yield* fetchLiveServerSettings(input.live.origin, input.token, input.timeouts),
-          project.id,
-          projectShell,
+        const liveSettings = yield* fetchLiveServerSettings(
+          input.live.origin,
+          input.token,
+          input.timeouts,
         );
+        const resolved = resolveProjectSettings(liveSettings, project.id, projectShell);
         const runtimeMode = Option.getOrElse(
           flags.runtimeMode,
           () => resolved.settings.defaultRuntimeMode,
         );
         // Without an explicit workspace flag the configured defaults decide,
-        // like the app's new-thread flow: per-project setting > checked-in
-        // t3.json > global server setting.
+        // like the app's new-thread flow: project > environment > t3.json >
+        // built-in default.
         const workspaceFromDefaults = explicitWorkspace.mode === "default";
         const requestedWorkspace =
           explicitWorkspace.mode === "default"

@@ -3,7 +3,7 @@ import { describe, expect, it } from "vite-plus/test";
 import { workspaceMetadataSelection } from "./workspace-selection-draft";
 
 describe("workspace metadata selection", () => {
-  // The provisional default (project setting → t3.json → global) must never
+  // The provisional default (project → environment → t3.json → local) must never
   // reach the draft through a metadata control: t3.json can still land and
   // change it, and the frozen interim value would win.
   it("omits the mode when the user has not picked one", () => {

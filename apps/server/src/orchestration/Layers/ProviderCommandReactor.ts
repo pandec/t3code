@@ -600,9 +600,16 @@ const make = Effect.gen(function* () {
     const settings = yield* serverSettingsService.getSettings;
     const attemptRecreation = !settings.skipMissingWorktreeRecreation && branch !== null;
     if (attemptRecreation) {
+      // Null lets the new checkout's t3.json decide.
+      const submodules = yield* projectSettingsForThread(thread.id).pipe(
+        Effect.map((projectSettings) => projectSettings.worktreeSubmodules),
+        Effect.orElseSucceed(() => null),
+      );
       // Prune handles directories removed without `git worktree remove`.
       const recreated = yield* gitWorkflow.pruneWorktrees({ cwd }).pipe(
-        Effect.andThen(gitWorkflow.createWorktree({ cwd, refName: branch, path: worktreePath })),
+        Effect.andThen(
+          gitWorkflow.createWorktree({ cwd, refName: branch, path: worktreePath }, { submodules }),
+        ),
         Effect.andThen(fileSystem.stat(worktreePath)),
         Effect.map((stat) => stat.type === "Directory"),
         Effect.catchCause((cause) =>

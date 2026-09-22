@@ -86,6 +86,12 @@ const buildSourcemap: boolean | "hidden" =
  * files, not in the new test.
  */
 const ISOLATED_TEST_FILES = [
+  "src/browser/recordingCompositor.test.ts",
+  "src/components/chat/AssistantCitationChip.test.tsx",
+  "src/components/chat/ComposerBannerStack.test.tsx",
+  "src/hooks/showThreadUndoNotice.test.ts",
+  "src/hooks/useThreadActions.undo.test.ts",
+
   "src/components/pullRequest/PullRequestSummaryTab.test.tsx",
   "src/components/pullRequest/PullRequestDetailPanel.test.tsx",
   "src/components/pullRequest/usePullRequestFilesViewed.test.tsx",
@@ -99,7 +105,6 @@ const ISOLATED_TEST_FILES = [
   "src/components/files/AttachmentFilePreview.test.tsx",
 
   "src/components/device/DeviceStreamView.test.tsx",
-  "src/components/device/deviceStream.test.ts",
   "src/components/permissions/usePermissionStatus.test.ts",
   "src/components/projectScriptEditor.test.tsx",
   "src/components/settings/SourceControlWritingSettings.test.tsx",

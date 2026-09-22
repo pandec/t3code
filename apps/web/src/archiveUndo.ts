@@ -1,71 +1,10 @@
-import type { ScopedThreadRef } from "@t3tools/contracts";
+import { scopeThreadRef } from "@t3tools/client-runtime/environment";
+import type { useRouter } from "@tanstack/react-router";
 
-export interface ThreadActionUndoCandidate {
-  readonly id: number;
-  readonly action: "archive" | "snooze";
-  readonly threadRef: ScopedThreadRef;
-  readonly threadTitle: string;
-}
-
-export interface ThreadActionUndoHistory {
-  arm: (input: Omit<ThreadActionUndoCandidate, "id">) => ThreadActionUndoCandidate;
-  take: () => ThreadActionUndoCandidate | null;
-  restore: (candidate: ThreadActionUndoCandidate) => void;
-  discard: (threadRef: ScopedThreadRef) => void;
-}
-
-function isSameThread(left: ScopedThreadRef, right: ScopedThreadRef): boolean {
-  return left.environmentId === right.environmentId && left.threadId === right.threadId;
-}
-
-export function createThreadActionUndoHistory(): ThreadActionUndoHistory {
-  let nextId = 0;
-  let candidate: ThreadActionUndoCandidate | null = null;
-
-  return {
-    arm: (input) => {
-      const nextCandidate = { ...input, id: ++nextId };
-      candidate = nextCandidate;
-      return nextCandidate;
-    },
-    take: () => {
-      const taken = candidate;
-      candidate = null;
-      return taken;
-    },
-    restore: (restoredCandidate) => {
-      // A newer reversible action always wins over a failed attempt to restore an older one.
-      if (candidate === null) {
-        candidate = restoredCandidate;
-      }
-    },
-    discard: (threadRef) => {
-      if (candidate && isSameThread(candidate.threadRef, threadRef)) {
-        candidate = null;
-      }
-    },
-  };
-}
-
-export const threadActionUndoHistory = createThreadActionUndoHistory();
-
-export function isArchiveUndoShortcut(event: {
-  readonly key: string;
-  readonly metaKey: boolean;
-  readonly ctrlKey: boolean;
-  readonly altKey: boolean;
-  readonly shiftKey: boolean;
-  readonly repeat: boolean;
-}): boolean {
-  return (
-    event.key.toLowerCase() === "z" &&
-    event.metaKey &&
-    !event.ctrlKey &&
-    !event.altKey &&
-    !event.shiftKey &&
-    !event.repeat
-  );
-}
+import { composerDraftHasUserContent, useComposerDraftStore } from "./composerDraftStore";
+import { draftSubmissionTracker } from "./draftSubmissionState";
+import { readThreadShell } from "./state/entities";
+import { resolveThreadRouteTarget } from "./threadRoutes";
 
 export function resolveEmptyDraftIdForArchiveUndo(
   routeTarget:
@@ -78,6 +17,33 @@ export function resolveEmptyDraftIdForArchiveUndo(
   return routeTarget?.kind === "draft" && !hasDraftContent && !hasMaterializedThread
     ? routeTarget.draftId
     : null;
+}
+
+/** The draft the current route shows, if it is still empty and never submitted.
+ *  Undoing an archive may replace such a draft with the restored thread; a
+ *  draft the reader typed into or sent stays in view instead. */
+export function readEmptyNewThreadDraftId(router: ReturnType<typeof useRouter>): string | null {
+  const params = router.state.matches[router.state.matches.length - 1]?.params ?? {};
+  const target = resolveThreadRouteTarget(params);
+  if (target?.kind !== "draft") {
+    return null;
+  }
+  const composerState = useComposerDraftStore.getState();
+  const draftSession = composerState.getDraftSession(target.draftId);
+  const hasObservedThread = Boolean(
+    draftSession &&
+    (draftSession.promotedTo ||
+      readThreadShell(scopeThreadRef(draftSession.environmentId, draftSession.threadId))),
+  );
+  const hasStartedSubmission = draftSubmissionTracker.hasStarted(target.draftId);
+  if (hasObservedThread) {
+    draftSubmissionTracker.clear(target.draftId);
+  }
+  return resolveEmptyDraftIdForArchiveUndo(
+    target,
+    composerDraftHasUserContent(composerState.getComposerDraft(target.draftId)),
+    hasObservedThread || hasStartedSubmission,
+  );
 }
 
 const ARCHIVE_UNDO_BLOCKING_LAYER_SELECTOR = [
@@ -94,24 +60,10 @@ const ARCHIVE_UNDO_BLOCKING_LAYER_SELECTOR = [
   '[aria-modal="true"]',
 ].join(", ");
 
+/** Thread archive and undo shortcuts stay inert while a floating layer owns
+ *  the interaction, so a chord meant for a dialog never flips a thread. */
 export function hasOpenArchiveUndoBlockingLayer(
   root: Pick<Document, "querySelector"> | null = typeof document === "undefined" ? null : document,
 ): boolean {
   return root !== null && root.querySelector(ARCHIVE_UNDO_BLOCKING_LAYER_SELECTOR) !== null;
-}
-
-export function isEditableKeyboardTarget(target: EventTarget | null): boolean {
-  const closest =
-    target && typeof target === "object" && "closest" in target
-      ? (target as { readonly closest?: unknown }).closest
-      : null;
-  if (typeof closest !== "function") {
-    return false;
-  }
-  return (
-    closest.call(
-      target,
-      'input, textarea, select, [contenteditable]:not([contenteditable="false"])',
-    ) !== null
-  );
 }

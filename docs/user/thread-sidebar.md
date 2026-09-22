@@ -50,6 +50,13 @@ The **Pinned** and **Active** sections are collapsible and show their thread cou
 T3 Code remembers the fold state on each device and keeps the open thread visible. Search and the
 Attention filter show matching threads even when their section was folded.
 
+On web and desktop, unpinning, settling, snoozing, and archiving a thread each show
+a sidebar notice with **Undo** for five seconds. Undo restores the thread's previous
+state, including its pinned position. If archiving left you on an empty new-thread
+screen, undo can reopen the restored thread. It keeps another active conversation
+in place. `mod+z` triggers the most recent Undo when no text field is focused; see
+[Keybindings](./keybindings.md#commands-with-special-behavior).
+
 On web and desktop, you can also drag files from your computer onto any thread row:
 the thread opens and the files are attached in its composer, ready for
 your next message. The same per-message file limits apply as when attaching

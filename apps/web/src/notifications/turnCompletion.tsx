@@ -1,6 +1,12 @@
 import type { DesktopNotificationThreadRef, EnvironmentId } from "@t3tools/contracts";
 import { useNavigate } from "@tanstack/react-router";
 import { useEffect, useEffectEvent, useMemo, useRef } from "react";
+import {
+  CircleAlertIcon,
+  CircleCheckIcon,
+  MessageCircleQuestionIcon,
+  ShieldQuestionIcon,
+} from "lucide-react";
 
 import { toastManager } from "../components/ui/toast";
 import { isElectron } from "../env";
@@ -153,6 +159,7 @@ type Announcement = {
   readonly sound: NotificationSoundKind;
   readonly tag: string;
   readonly failed?: boolean;
+  readonly approval?: boolean;
 };
 
 function completionAnnouncement(candidate: TurnCompletionCandidate): Announcement {
@@ -171,6 +178,7 @@ function inputRequestAnnouncement(candidate: InputRequestCandidate): Announcemen
     threadRef,
     ...buildInputRequestCopy(candidate),
     failed: candidate.kind === "failed",
+    approval: candidate.kind === "approval",
     sound: "input",
     tag: `input-requested:${threadRef.environmentId}:${threadRef.threadId}`,
   };
@@ -332,6 +340,28 @@ export function TurnCompletionNotifications() {
               : "info",
           title,
           description: body,
+          data: {
+            hideCopyButton: true,
+            leadingIcon:
+              announcement.sound === "completion" ? (
+                <CircleCheckIcon
+                  aria-hidden
+                  className="size-4 text-emerald-700 dark:text-emerald-300"
+                />
+              ) : announcement.approval ? (
+                <ShieldQuestionIcon
+                  aria-hidden
+                  className="size-4 text-amber-700 dark:text-amber-300"
+                />
+              ) : announcement.failed ? (
+                <CircleAlertIcon aria-hidden className="size-4 text-red-700 dark:text-red-300" />
+              ) : (
+                <MessageCircleQuestionIcon
+                  aria-hidden
+                  className="size-4 text-indigo-600 dark:text-indigo-300"
+                />
+              ),
+          },
           actionProps: {
             children: "Open thread",
             onClick: () => navigateToThread(threadRef),
