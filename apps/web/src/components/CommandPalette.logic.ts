@@ -282,9 +282,12 @@ export function buildProjectActionItems(input: {
   renderDescription?: (project: CommandPaletteProject) => ReactNode;
   projectAccentColor?: (project: CommandPaletteProject) => SidebarProjectAccentColor | null;
   shortcutCommand?: KeybindingCommand;
+  /** Reason a project cannot be picked; it replaces the description and disables the row. */
+  disabledReason?: (project: CommandPaletteProject) => string | null;
 }): CommandPaletteActionItem[] {
   return input.projects.map((project) => {
     const projectAccentColor = input.projectAccentColor?.(project) ?? null;
+    const disabledReason = input.disabledReason?.(project) ?? null;
     return {
       kind: "action",
       value: `${input.valuePrefix}:${project.environmentId}:${project.id}`,
@@ -298,6 +301,7 @@ export function buildProjectActionItems(input: {
       description: input.renderDescription?.(project) ?? project.workspaceRoot,
       icon: input.icon(project),
       ...(projectAccentColor !== null ? { projectAccentColor } : {}),
+      ...(disabledReason !== null ? { disabled: true, description: disabledReason } : {}),
       ...(input.shortcutCommand !== undefined ? { shortcutCommand: input.shortcutCommand } : {}),
       run: async () => {
         await input.runProject(project);

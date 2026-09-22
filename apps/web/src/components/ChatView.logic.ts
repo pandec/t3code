@@ -455,10 +455,14 @@ export function hasEnvironmentReconnectWarningGraceElapsed(
 
 export function startNewThreadForProject(
   projectRef: ScopedProjectRef | null,
-  handleNewThread: (projectRef: ScopedProjectRef) => Promise<unknown>,
+  handleNewThread: (
+    projectRef: ScopedProjectRef,
+    options: { customGroupId: null },
+  ) => Promise<unknown>,
 ): boolean {
   if (projectRef === null) return false;
-  void handleNewThread(projectRef);
+  // An explicit New thread starts in Active.
+  void handleNewThread(projectRef, { customGroupId: null });
 
   return true;
 }

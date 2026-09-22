@@ -2,7 +2,7 @@ import { newThreadGroupOrderKey, planThreadGroupMove } from "./ThreadGroupsDialo
 import { threadGroupSections } from "@t3tools/shared/threadGroups";
 import { randomUUID } from "~/lib/utils";
 import { cn } from "~/lib/utils";
-import { useMemo, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import type { ThreadGroup } from "@t3tools/contracts";
 import {
   DndContext,
@@ -10,6 +10,7 @@ import {
   closestCenter,
   useSensor,
   useSensors,
+  type Active,
   type DragEndEvent,
 } from "@dnd-kit/core";
 import { restrictToParentElement, restrictToVerticalAxis } from "@dnd-kit/modifiers";
@@ -32,6 +33,20 @@ import {
 type GroupEdit = Omit<ThreadGroup, "revision">;
 
 const ACTIVE_DIVIDER_ID = "active-divider";
+
+// The handle is pointer-only; the arrow buttons are the keyboard path, so the
+// sortable's default "press space to pick up" instructions would mislead.
+const DRAG_ACCESSIBILITY = {
+  screenReaderInstructions: {
+    draggable: "Drag with a pointer to reorder, or use the Move up and Move down buttons.",
+  },
+};
+
+/** Attached to each group row's sortable so a drop is applied by the row
+ * that owns the name input, letting it fold an unsaved rename into the move. */
+interface GroupRowDragData {
+  readonly reorder: (planned: ThreadGroup) => void;
+}
 
 /** Mounted once at the app root; opened through `openThreadGroupsDialog`. */
 export function ThreadGroupsDialogHost() {
@@ -64,21 +79,23 @@ export function ThreadGroupsDialog(props: {
   const [name, setName] = useState("");
   const newGroupInputRef = useRef<HTMLInputElement>(null);
   const popupRef = useRef<HTMLDivElement>(null);
-  const [saving, setSaving] = useState(false);
+  // Outstanding save count: a drop can be saving while a rename still is.
+  const [pendingSaves, setPendingSaves] = useState(0);
+  const saving = pendingSaves > 0;
   const save = async (entries: readonly GroupEdit[]) => {
-    setSaving(true);
+    setPendingSaves((count) => count + 1);
     try {
       return await props.update(entries);
     } finally {
-      setSaving(false);
+      setPendingSaves((count) => count - 1);
     }
   };
   const editsDisabled = props.disabled || saving;
-  const move = (index: number, delta: number) => {
-    if (editsDisabled) return;
-    const group = planThreadGroupMove(props.groups, index, delta);
-    if (group) void save([group]);
-  };
+  // Only a read-only catalog blocks a move. A drop can land while another
+  // row's rename is still saving; each save writes its own group record, so
+  // the two never overwrite each other.
+  const planMove = (index: number, delta: number) =>
+    props.disabled ? null : planThreadGroupMove(props.groups, index, delta);
   // Groups render around a fixed Active divider; arrows and drags move across it.
   const sections = useMemo(() => threadGroupSections(props.groups), [props.groups]);
   const rowIds = useMemo(
@@ -94,12 +111,12 @@ export function ThreadGroupsDialog(props: {
     const from = rowIds.indexOf(String(active.id));
     const to = rowIds.indexOf(String(over.id));
     if (from === -1 || to === -1) return;
-    move(from, to - from);
+    const planned = planMove(from, to - from);
+    if (planned) rowDragData(active)?.reorder(planned);
   };
   return (
     <Dialog open={props.open} onOpenChange={props.onOpenChange}>
-      {/* "none" focuses the popup itself so Tab starts at the first group's name;
-          the default would land in that input and select its text. */}
+      {/* Focus the popup so Tab starts at the first group control instead of selecting a name. */}
       <DialogPopup
         ref={popupRef}
         initialFocus={props.initialFocus === "new-group" ? newGroupInputRef : popupRef}
@@ -113,6 +130,7 @@ export function ThreadGroupsDialog(props: {
         </DialogHeader>
         <DialogPanel className="space-y-3">
           <DndContext
+            accessibility={DRAG_ACCESSIBILITY}
             sensors={sensors}
             collisionDetection={closestCenter}
             modifiers={[restrictToVerticalAxis, restrictToParentElement]}
@@ -130,9 +148,8 @@ export function ThreadGroupsDialog(props: {
                       disabled={editsDisabled}
                       canMoveUp={index > 0}
                       canMoveDown={index < sections.length - 1}
-                      onMove={(delta) => move(index, delta)}
-                      onRename={(next) => save([{ ...group, name: next }])}
-                      onRemove={() => void save([{ ...group, deleted: true }])}
+                      planMove={(delta) => planMove(index, delta)}
+                      save={save}
                     />
                   ),
                 )}
@@ -197,16 +214,35 @@ function ActiveDividerRow() {
   );
 }
 
+function rowDragData(active: Active): GroupRowDragData | undefined {
+  return active.data.current as GroupRowDragData | undefined;
+}
+
 function GroupRow(props: {
   group: ThreadGroup;
   disabled: boolean;
   canMoveUp: boolean;
   canMoveDown: boolean;
-  onMove: (delta: number) => void;
-  onRename: (name: string) => Promise<boolean>;
-  onRemove: () => void;
+  planMove: (delta: number) => ThreadGroup | null;
+  save: (entries: readonly GroupEdit[]) => Promise<boolean>;
 }) {
   const { group, disabled } = props;
+  const inputRef = useRef<HTMLInputElement>(null);
+  // A rename folded into a reorder. The name input keeps that text until the
+  // catalog catches up, so its blur must not resend it on the pre-move record
+  // and undo the reorder.
+  const submittedName = useRef<string | null>(null);
+  useEffect(() => {
+    if (submittedName.current === group.name) submittedName.current = null;
+  }, [group.name]);
+  const reorder = (planned: ThreadGroup) => {
+    const next = inputRef.current?.value.trim() ?? "";
+    const name = next && next !== group.name ? next : null;
+    submittedName.current = name;
+    void props.save([name === null ? planned : { ...planned, name }]).then((success) => {
+      if (!success && submittedName.current === name) submittedName.current = null;
+    });
+  };
   const {
     attributes,
     listeners,
@@ -215,7 +251,11 @@ function GroupRow(props: {
     transform,
     transition,
     isDragging,
-  } = useSortable({ id: group.id, disabled: { draggable: disabled } });
+  } = useSortable({
+    id: group.id,
+    disabled: { draggable: disabled },
+    data: { reorder } satisfies GroupRowDragData,
+  });
   return (
     <div
       ref={setNodeRef}
@@ -230,16 +270,18 @@ function GroupRow(props: {
         className="flex size-8 shrink-0 cursor-grab touch-none items-center justify-center rounded-md text-muted-foreground hover:text-foreground disabled:cursor-default disabled:opacity-50 active:cursor-grabbing"
         {...attributes}
         {...listeners}
-        // Keep focus where it is: a blur on a just-edited name would save the
-        // rename and race the reorder that this press starts.
+        // dnd-kit ignores an already-prevented pointerdown, so it sees the
+        // event first. A name being edited in this row then keeps focus and
+        // rides along with the move instead of saving separately and racing it.
         onPointerDown={(event) => {
-          event.preventDefault();
           listeners?.onPointerDown?.(event);
+          if (document.activeElement === inputRef.current) event.preventDefault();
         }}
       >
         <GripVerticalIcon className="size-4" />
       </button>
       <Input
+        ref={inputRef}
         // Remount on external rename so the uncontrolled value follows the server.
         key={group.name}
         aria-label={`Rename ${group.name}`}
@@ -247,13 +289,14 @@ function GroupRow(props: {
         maxLength={80}
         disabled={disabled}
         onBlur={(event) => {
-          const next = event.target.value.trim();
+          const input = event.target;
+          const next = input.value.trim();
+          if (next === submittedName.current) return;
           if (next && next !== group.name) {
-            const input = event.target;
-            void props.onRename(next).then((success) => {
+            void props.save([{ ...group, name: next }]).then((success) => {
               if (!success) input.value = group.name;
             });
-          } else event.target.value = group.name;
+          } else input.value = group.name;
         }}
       />
       <Button
@@ -261,7 +304,10 @@ function GroupRow(props: {
         size="icon"
         aria-label={`Move ${group.name} up`}
         disabled={disabled || !props.canMoveUp}
-        onClick={() => props.onMove(-1)}
+        onClick={() => {
+          const planned = props.planMove(-1);
+          if (planned) reorder(planned);
+        }}
       >
         <ArrowUpIcon />
       </Button>
@@ -270,7 +316,10 @@ function GroupRow(props: {
         size="icon"
         aria-label={`Move ${group.name} down`}
         disabled={disabled || !props.canMoveDown}
-        onClick={() => props.onMove(1)}
+        onClick={() => {
+          const planned = props.planMove(1);
+          if (planned) reorder(planned);
+        }}
       >
         <ArrowDownIcon />
       </Button>
@@ -279,7 +328,7 @@ function GroupRow(props: {
         size="icon"
         aria-label={`Remove ${group.name}`}
         disabled={disabled}
-        onClick={props.onRemove}
+        onClick={() => void props.save([{ ...group, deleted: true }])}
       >
         <TrashIcon />
       </Button>

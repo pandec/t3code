@@ -5328,6 +5328,7 @@ export default function Sidebar() {
                 worktreePath: thread.worktreePath,
                 envMode: thread.worktreePath ? "worktree" : "local",
                 startFromOrigin: false,
+                customGroupId: null,
               }),
             );
             if (result._tag === "Failure") {

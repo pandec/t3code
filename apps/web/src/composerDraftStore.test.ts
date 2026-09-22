@@ -1972,7 +1972,7 @@ describe("composerDraftStore project draft thread mapping", () => {
     useComposerDraftStore.setState(options.merge!(saved, useComposerDraftStore.getState()));
     expect(useComposerDraftStore.getState().getDraftThread(draftId)?.customGroupId).toBe("group-1");
 
-    // An ordinary new-thread request states Active explicitly and wins.
+    // An explicit Active pick replaces it.
     useComposerDraftStore
       .getState()
       .setProjectDraftThreadId(projectRef, draftId, { threadId, customGroupId: null });

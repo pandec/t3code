@@ -1527,24 +1527,19 @@ function OpenCommandPaletteDialog(props: {
           projectAccentColorByTargetKey.get(`${project.environmentId}:${project.id}`) ?? null,
         icon: projectFavicon,
         runProject: async (project) => {
-          await handleNewThread(
-            resolveTargetRef(project),
-            customGroupId === null ? undefined : { customGroupId },
-          );
+          await handleNewThread(resolveTargetRef(project), { customGroupId });
         },
+        ...(customGroupId === null
+          ? {}
+          : {
+              disabledReason: (project) =>
+                serverConfigs.get(resolveTargetRef(project).environmentId)?.environment.capabilities
+                  .threadCustomGroupCreation === true
+                  ? null
+                  : "Environment cannot create grouped threads",
+            }),
       });
-      if (customGroupId === null) return enumerateCommandPaletteItems(items);
-      return enumerateCommandPaletteItems(
-        items.map((item, index) => {
-          const project = pickerProjects[index]!;
-          const supported =
-            serverConfigs.get(resolveTargetRef(project).environmentId)?.environment.capabilities
-              .threadCustomGroupCreation === true;
-          return supported
-            ? item
-            : { ...item, disabled: true, description: "Environment cannot create grouped threads" };
-        }),
-      );
+      return enumerateCommandPaletteItems(items);
     },
     [
       contextualProjectRef,

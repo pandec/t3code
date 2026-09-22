@@ -1984,16 +1984,16 @@ describe("shouldWriteThreadErrorToCurrentServerThread", () => {
 
 describe("startNewThreadForProject", () => {
   it("starts a thread through the supplied shared handler for the active project", () => {
-    const calls: Array<{ environmentId: EnvironmentId; projectId: ProjectId }> = [];
+    const calls: Array<[{ environmentId: EnvironmentId; projectId: ProjectId }, unknown]> = [];
     const projectRef = { environmentId, projectId };
 
     expect(
-      startNewThreadForProject(projectRef, (nextProjectRef) => {
-        calls.push(nextProjectRef);
+      startNewThreadForProject(projectRef, (nextProjectRef, options) => {
+        calls.push([nextProjectRef, options]);
         return Promise.resolve();
       }),
     ).toBe(true);
-    expect(calls).toEqual([projectRef]);
+    expect(calls).toEqual([[projectRef, { customGroupId: null }]]);
   });
 
   it("does nothing when the active project is unavailable", () => {
