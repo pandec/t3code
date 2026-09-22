@@ -160,12 +160,21 @@ const decodeHistoryFork = Schema.decodeSync(
 const decodeSessionMessages = Schema.decodeSync(
   Schema.fromJsonString(
     Schema.Array(
-      Schema.Struct({
-        type: Schema.Literals(["user", "assistant", "system"]),
-        uuid: Schema.String,
-        parent_tool_use_id: Schema.NullOr(Schema.String),
-        message: Schema.Unknown,
-      }),
+      Schema.Union([
+        Schema.Struct({
+          type: Schema.Literals(["user", "assistant"]),
+          uuid: Schema.String,
+          parent_tool_use_id: Schema.NullOr(Schema.String),
+          message: Schema.Unknown,
+        }),
+        Schema.Struct({
+          type: Schema.Literal("system"),
+          uuid: Schema.String,
+          parent_tool_use_id: Schema.NullOr(Schema.String),
+          // SDK system records such as stop_hook_summary have no message body.
+          message: Schema.optionalKey(Schema.Unknown),
+        }),
+      ]),
     ),
   ),
 );
@@ -174,7 +183,7 @@ type ClaudeHistoryMessage = {
   readonly type: string;
   readonly uuid: string;
   readonly parent_tool_use_id: string | null;
-  readonly message: unknown;
+  readonly message?: unknown;
 };
 
 const isClaudeConversationMessage = (message: ClaudeHistoryMessage): boolean =>
@@ -255,7 +264,10 @@ const remapClaudeForkTurnBoundaries = (
       ? forkMessage.uuid
       : null;
   });
-  return remapped.some((id) => id === null) ? undefined : remapped;
+  // Preserve already-unknown boundaries, but reject losing a known turn start.
+  return remapped.some((id, index) => id === null && retainedBoundaries[index] !== null)
+    ? undefined
+    : remapped;
 };
 
 const PROVIDER = ProviderDriverKind.make("claudeAgent");
