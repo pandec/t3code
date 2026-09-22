@@ -9,6 +9,8 @@ This is a personal fork of [pingdotgg/t3code](https://github.com/pingdotgg/t3cod
 
 ## What the fork adds
 
+- **Switch back to the previous thread.** In the desktop app, Ctrl+Tab toggles between the current and previously viewed thread, including across projects and environments. It works while typing in the composer or terminal and follows the focused pane in split view. The pair lasts for the current app session.
+
 - **Move a thread to the top.** The command palette can move the current thread to the top of Pinned, Active, or its custom group, including members hidden by filters or collapsed groups. It preserves group membership and excludes drafts, archived, snoozed, and settled threads. New or reopened threads still follow the sidebar's usual placement rules.
 
 - **Custom thread groups.** Create named sidebar groups across projects and environments, drag threads between them, and arrange the same groups on mobile. Pinning, snoozing, and settlement retain group membership. New groups start below Active; in the Thread groups dialog, move a group up or down across the Active divider to place each one above or below, and mobile follows the same placement. Settings → Extras can show a Thread groups toolbar button; the command palette always offers New thread group, Manage thread groups, and Move current thread to group.

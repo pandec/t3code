@@ -1,8 +1,12 @@
 import { Outlet, createFileRoute, redirect, useParams, useRouter } from "@tanstack/react-router";
 import { useAtomValue } from "@effect/atom-react";
-import { useEffect, useMemo } from "react";
+import { useEffect, useMemo, useRef } from "react";
+import type { ScopedThreadRef } from "@t3tools/contracts";
 
 import { isCommandPaletteOpen } from "../commandPaletteBus";
+import { environmentCatalog } from "../connection/catalog";
+import { isElectron } from "../env";
+import { appAtomRegistry } from "../rpc/atomRegistry";
 import { ThreadRouteView } from "../components/ThreadRouteView";
 import { useClientSettings, useLegacySidebarEnabled } from "../hooks/useSettings";
 import { openCommandPalette } from "../commandPaletteBus";
@@ -19,6 +23,12 @@ import { isEditableFocused } from "../lib/editableFocus";
 import { isModelPickerOpen } from "../modelPickerVisibility";
 import { undoLatestThreadAction } from "../hooks/showThreadUndoNotice";
 import { resolveShortcutCommand } from "../keybindings";
+import {
+  createLastVisitedThreadShortcut,
+  type LastVisitedPendingRelease,
+  type LastVisitedShortcutEvent,
+  threadVisitHistory,
+} from "../threadLastVisited";
 import { selectThreadTerminalUiState, useTerminalUiStateStore } from "../terminalUiStateStore";
 import { isPreviewSupportedInRuntime } from "../previewStateStore";
 import { selectActiveRightPanel, useRightPanelStore } from "../rightPanelStore";
@@ -30,10 +40,25 @@ import {
   focusOtherThreadPane,
   useThreadSplitStore,
 } from "~/components/thread-split/threadSplitStore";
+import { openThreadInActivePane } from "~/components/thread-split/threadOpenTarget";
 import { primaryServerKeybindingsAtom } from "~/state/server";
 import { hasOpenArchiveUndoBlockingLayer } from "../archiveUndo";
 import { useThreadActions } from "../hooks/useThreadActions";
 import { buildThreadRouteParams, resolveThreadRouteTarget } from "../threadRoutes";
+
+// A stale pair entry must not open: the thread may be gone or archived, and
+// point shell reads still serve cached snapshots for a removed or disabled
+// environment, so the catalog is checked explicitly.
+function isThreadOpenable(ref: ScopedThreadRef): boolean {
+  if (
+    appAtomRegistry.get(environmentCatalog.catalogValueAtom).entries.get(ref.environmentId)
+      ?.enabled !== true
+  ) {
+    return false;
+  }
+  const shell = readThreadShell(ref);
+  return shell !== null && shell.archivedAt === null;
+}
 
 function ChatRouteGlobalShortcuts() {
   const clearSelection = useThreadSelectionStore((state) => state.clearSelection);
@@ -79,9 +104,12 @@ function ChatRouteGlobalShortcuts() {
       : false,
   );
   useEffect(() => {
-    const onWindowKeyDown = (event: KeyboardEvent) => {
-      if (event.defaultPrevented) return;
-      const command = resolveShortcutCommand(event, keybindings, {
+    if (isElectron) threadVisitHistory.record(shortcutThreadRef);
+  }, [shortcutThreadRef]);
+  const lastVisitedPendingRelease = useRef<LastVisitedPendingRelease>({ key: null });
+  useEffect(() => {
+    const resolveCommand = (event: LastVisitedShortcutEvent) =>
+      resolveShortcutCommand(event, keybindings, {
         context: {
           terminalFocus: isTerminalFocused(),
           terminalOpen,
@@ -91,6 +119,49 @@ function ChatRouteGlobalShortcuts() {
           modelPickerOpen: isModelPickerOpen(),
         },
       });
+
+    // Capture phase: the composer and the terminal both consume Tab before a
+    // bubbling window listener would see it.
+    const lastVisitedShortcut = createLastVisitedThreadShortcut({
+      isDesktop: isElectron,
+      pendingRelease: lastVisitedPendingRelease.current,
+      // The settings recorder must see the chord to let the user rebind it.
+      resolveCommand: (event) =>
+        event.target instanceof HTMLElement && event.target.closest("[data-keybinding-capture]")
+          ? null
+          : resolveCommand(event),
+      isBlocked: () =>
+        isCommandPaletteOpen() || isModelPickerOpen() || hasOpenArchiveUndoBlockingLayer(),
+      resolveTarget: () => {
+        const target = threadVisitHistory.resolveTarget(shortcutThreadRef);
+        return target !== null && isThreadOpenable(target) ? target : null;
+      },
+      openThread: (targetRef) => {
+        clearSelection();
+        const { completion } = openThreadInActivePane({
+          targetRef,
+          routeThreadRef,
+          navigateToPrimary: () =>
+            router.navigate({
+              to: "/$environmentId/$threadId",
+              params: buildThreadRouteParams(targetRef),
+            }),
+        });
+        completion?.catch(() => {
+          toastManager.add(
+            stackedThreadToast({
+              type: "error",
+              title: "Could not open the previous thread",
+              description: "Navigation to the thread failed.",
+            }),
+          );
+        });
+      },
+    });
+
+    const onWindowKeyDown = (event: KeyboardEvent) => {
+      if (event.defaultPrevented) return;
+      const command = resolveCommand(event);
 
       if (isCommandPaletteOpen()) {
         return;
@@ -235,8 +306,12 @@ function ChatRouteGlobalShortcuts() {
       }
     };
 
+    window.addEventListener("keydown", lastVisitedShortcut.onKeyDown, true);
+    window.addEventListener("keyup", lastVisitedShortcut.onKeyUp, true);
     window.addEventListener("keydown", onWindowKeyDown);
     return () => {
+      window.removeEventListener("keydown", lastVisitedShortcut.onKeyDown, true);
+      window.removeEventListener("keyup", lastVisitedShortcut.onKeyUp, true);
       window.removeEventListener("keydown", onWindowKeyDown);
     };
   }, [

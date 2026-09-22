@@ -60,6 +60,9 @@ export const DEFAULT_KEYBINDINGS: ReadonlyArray<KeybindingRule> = [
   { key: "mod+shift+\\", command: "threadPane.swap", when: "!terminalFocus" },
   { key: "mod+shift+[", command: "thread.previous" },
   { key: "mod+shift+]", command: "thread.next" },
+  // Control on every platform: the desktop app has no browser tabs, so the
+  // browser-style chord is free, and Cmd+Tab is the macOS app switcher.
+  { key: "ctrl+tab", command: "thread.lastVisited", when: "isDesktop" },
   { key: "mod+shift+c", command: "thread.copyReference", when: "!terminalFocus" },
   { key: "mod+shift+s", command: "thread.settle", when: "!terminalFocus" },
   { key: "mod+shift+p", command: "thread.pin", when: "!terminalFocus" },
