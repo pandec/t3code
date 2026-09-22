@@ -6,12 +6,11 @@ import type { ShortcutEventLike } from "./keybindings";
 
 export interface ThreadVisitHistory {
   record(ref: ScopedThreadRef | null): void;
-  /**
-   * The most recent visited thread that is not the focused one. From a
-   * tracked thread that is the previous thread; from a draft (or nothing
-   * focused) it is the thread the user came from.
-   */
-  resolveTarget(focusedRef: ScopedThreadRef | null): ScopedThreadRef | null;
+  /** Most recent available entry other than the focused thread; drafts have no focused ref. */
+  resolveTarget(
+    focusedRef: ScopedThreadRef | null,
+    isOpenable?: (ref: ScopedThreadRef) => boolean,
+  ): ScopedThreadRef | null;
 }
 
 export function createThreadVisitHistory(): ThreadVisitHistory {
@@ -24,10 +23,14 @@ export function createThreadVisitHistory(): ThreadVisitHistory {
       previous = current;
       current = ref;
     },
-    resolveTarget(focusedRef) {
+    resolveTarget(focusedRef, isOpenable = () => true) {
       const focusedKey = focusedRef === null ? null : scopedThreadKey(focusedRef);
       for (const candidate of [current, previous]) {
-        if (candidate !== null && scopedThreadKey(candidate) !== focusedKey) {
+        if (
+          candidate !== null &&
+          scopedThreadKey(candidate) !== focusedKey &&
+          isOpenable(candidate)
+        ) {
           return candidate;
         }
       }

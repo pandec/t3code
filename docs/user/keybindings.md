@@ -61,7 +61,7 @@ desktop app. Use Control on macOS too. Opening a third thread replaces the older
 thread in the pair; restarting the app clears the pair.
 
 An unsent draft does not enter the pair. From a new-thread screen, the shortcut
-returns to the last thread you viewed. Change the shortcut under
+returns to the most recent available thread in the pair. Change the shortcut under
 **Settings → Keybindings → Thread: Last Visited**.
 
 The shortcut works from the composer and terminal. In split view, it follows the

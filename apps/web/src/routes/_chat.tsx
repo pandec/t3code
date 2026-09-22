@@ -132,10 +132,7 @@ function ChatRouteGlobalShortcuts() {
           : resolveCommand(event),
       isBlocked: () =>
         isCommandPaletteOpen() || isModelPickerOpen() || hasOpenArchiveUndoBlockingLayer(),
-      resolveTarget: () => {
-        const target = threadVisitHistory.resolveTarget(shortcutThreadRef);
-        return target !== null && isThreadOpenable(target) ? target : null;
-      },
+      resolveTarget: () => threadVisitHistory.resolveTarget(shortcutThreadRef, isThreadOpenable),
       openThread: (targetRef) => {
         clearSelection();
         const { completion } = openThreadInActivePane({

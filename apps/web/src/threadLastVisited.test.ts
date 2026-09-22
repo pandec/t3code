@@ -42,6 +42,17 @@ describe("createThreadVisitHistory", () => {
     history.record(null);
     expect(history.resolveTarget(null)).toEqual(B);
   });
+
+  it("tries the other remembered thread when the latest is unavailable from a draft", () => {
+    const history = createThreadVisitHistory();
+    history.record(A);
+    history.record(B);
+    history.record(null);
+    const onlyAIsOpenable = (ref: ScopedThreadRef) => ref === A;
+    expect(history.resolveTarget(null, onlyAIsOpenable)).toEqual(A);
+    expect(history.resolveTarget(A, onlyAIsOpenable)).toBeNull();
+    expect(history.resolveTarget(null, () => false)).toBeNull();
+  });
 });
 
 function keyEvent(overrides: Partial<LastVisitedShortcutEvent> = {}) {
