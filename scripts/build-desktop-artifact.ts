@@ -34,7 +34,11 @@ import {
   selectCliRuntimeExternalDependencies,
 } from "./lib/cli-external-packages.ts";
 import { loadRepoEnv } from "./lib/public-config.ts";
-import { resolveMacDevSigningTeam, verifyMacDevSignature } from "./lib/mac-dev-signing.ts";
+import {
+  resolveMacDevSigningTeam,
+  unlockMacDevKeychain,
+  verifyMacDevSignature,
+} from "./lib/mac-dev-signing.ts";
 import { selectDesktopRuntimeExternalDependencies } from "./lib/desktop-external-packages.ts";
 import { resolveCatalogDependencies } from "./lib/resolve-catalog.ts";
 
@@ -3381,6 +3385,9 @@ const buildDesktopArtifact = Effect.fn("buildDesktopArtifact")(function* (
     options.platform === "mac" && options.flavor === "dev"
       ? yield* resolveMacDevSigningTeam(loadRepoEnv({ repoRoot }))
       : undefined;
+  const macDevKeychain = macDevTeamId
+    ? yield* unlockMacDevKeychain(loadRepoEnv({ repoRoot }))
+    : undefined;
   if (hostPlatform === "linux" && options.platform === "linux") {
     yield* preflightLinuxDesktopBuild(options.arch);
   }
@@ -3795,6 +3802,11 @@ const buildDesktopArtifact = Effect.fn("buildDesktopArtifact")(function* (
   const buildEnv: NodeJS.ProcessEnv = {
     ...process.env,
   };
+  if (macDevKeychain) {
+    buildEnv.CSC_KEYCHAIN = macDevKeychain;
+    delete buildEnv.CSC_LINK;
+    delete buildEnv.CSC_KEY_PASSWORD;
+  }
   buildEnv.npm_config_user_agent = resolvePackageManagerUserAgent(rootPackageJson.packageManager);
   for (const [key, value] of Object.entries(buildEnv)) {
     if (value === "") {

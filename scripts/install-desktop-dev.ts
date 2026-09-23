@@ -17,6 +17,7 @@ import { ChildProcess, ChildProcessSpawner } from "effect/unstable/process";
 import {
   MAC_DEV_APP_ID,
   resolveMacDevSigningTeam,
+  unlockMacDevKeychain,
   verifyMacDevSignature,
 } from "./lib/mac-dev-signing.ts";
 import { loadRepoEnv } from "./lib/public-config.ts";
@@ -396,6 +397,7 @@ const createMacLifecycle = Effect.fn("installDesktopDev.createMacLifecycle")(fun
   const path = yield* Path.Path;
   const releaseDirectory = path.join(repoRoot, "release-dev");
   const teamId = yield* resolveMacDevSigningTeam(loadRepoEnv({ repoRoot }));
+  yield* unlockMacDevKeychain(loadRepoEnv({ repoRoot }));
   // Empty output is the ordinary "not running" answer, so only a genuine
   // failure to reach LaunchServices is an error. Swallowing that would let a
   // running app read as absent and have its bundle replaced underneath it.

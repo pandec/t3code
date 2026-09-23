@@ -1,12 +1,103 @@
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import { assert, it } from "@effect/vitest";
+import { HostProcessPlatform } from "@t3tools/shared/hostProcess";
 import * as Effect from "effect/Effect";
 import * as FileSystem from "effect/FileSystem";
 import * as Path from "effect/Path";
+import * as PlatformError from "effect/PlatformError";
+import * as Stream from "effect/Stream";
 import { ChildProcessSpawner } from "effect/unstable/process";
 
 import { replaceVerifiedMacApp } from "./install-desktop-dev.ts";
-import { MacDevSigningError, resolveMacDevSigningTeam } from "./lib/mac-dev-signing.ts";
+import {
+  MacDevSigningError,
+  resolveMacDevSigningTeam,
+  unlockMacDevKeychain,
+} from "./lib/mac-dev-signing.ts";
+
+it.effect("leaves the normal login keychain alone unless unattended signing is configured", () =>
+  Effect.gen(function* () {
+    assert.isUndefined(yield* unlockMacDevKeychain({}));
+  }).pipe(Effect.provide(NodeServices.layer)),
+);
+
+it.effect("rejects incomplete unattended signing configuration", () =>
+  Effect.gen(function* () {
+    for (const env of [
+      { T3CODE_DESKTOP_MAC_KEYCHAIN: "/tmp/build.keychain-db" },
+      { T3CODE_DESKTOP_MAC_KEYCHAIN_PASSWORD_FILE: "/tmp/password" },
+      {
+        T3CODE_DESKTOP_MAC_KEYCHAIN: "~/build.keychain-db",
+        T3CODE_DESKTOP_MAC_KEYCHAIN_PASSWORD_FILE: "/tmp/password",
+      },
+    ]) {
+      assert.instanceOf(yield* unlockMacDevKeychain(env).pipe(Effect.flip), MacDevSigningError);
+    }
+  }).pipe(Effect.provide(NodeServices.layer)),
+);
+
+it.effect.skipIf(HostProcessPlatform.defaultValue() === "win32")(
+  "unlocks the configured keychain and redacts credentials from subprocess errors",
+  () =>
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
+      const path = yield* Path.Path;
+      const spawner = yield* ChildProcessSpawner.ChildProcessSpawner;
+      const root = yield* fs.makeTempDirectoryScoped();
+      const passwordFile = path.join(root, "password");
+      const keychain = path.join(root, "build.keychain-db");
+      const password = "test-signing-password";
+      yield* fs.writeFileString(passwordFile, `${password}\n`);
+      yield* fs.chmod(passwordFile, 0o600);
+      const env = {
+        T3CODE_DESKTOP_MAC_KEYCHAIN: keychain,
+        T3CODE_DESKTOP_MAC_KEYCHAIN_PASSWORD_FILE: passwordFile,
+      };
+      for (const fail of [false, true]) {
+        const operation = unlockMacDevKeychain(env).pipe(
+          Effect.provideService(ChildProcessSpawner.ChildProcessSpawner, {
+            ...spawner,
+            exitCode: (command) =>
+              Effect.gen(function* () {
+                assert.equal(command._tag, "StandardCommand");
+                if (command._tag === "StandardCommand") {
+                  assert.equal(command.command, "/usr/bin/security");
+                  assert.deepStrictEqual(command.args, ["unlock-keychain", keychain]);
+                  assert.isTrue(command.options.detached);
+                  assert.isTrue(Stream.isStream(command.options.stdin));
+                  if (Stream.isStream(command.options.stdin)) {
+                    const input = yield* Stream.runCollect(command.options.stdin);
+                    assert.equal(new TextDecoder().decode(input[0]), `${password}\n`);
+                  }
+                }
+                return yield* fail
+                  ? Effect.fail(
+                      PlatformError.badArgument({
+                        module: "ChildProcess",
+                        method: "spawn",
+                        description: password,
+                      }),
+                    )
+                  : Effect.succeed(ChildProcessSpawner.ExitCode(0));
+              }),
+          }),
+        );
+        if (fail) {
+          const error = yield* operation.pipe(Effect.flip);
+          assert.instanceOf(error, MacDevSigningError);
+          assert.isUndefined(error.cause);
+          assert.notInclude(String(error), password);
+        } else {
+          assert.equal(yield* operation, keychain);
+        }
+      }
+      yield* fs.chmod(passwordFile, 0o644);
+      assert.include((yield* unlockMacDevKeychain(env).pipe(Effect.flip)).message, "chmod 600");
+      yield* fs.chmod(passwordFile, 0o600);
+      yield* fs.writeFileString(passwordFile, "");
+      assert.include((yield* unlockMacDevKeychain(env).pipe(Effect.flip)).message, "empty");
+    }).pipe(Effect.scoped, Effect.provide(NodeServices.layer)),
+);
 
 it.effect("requires an explicit, valid Apple team for Dev signing", () =>
   Effect.gen(function* () {

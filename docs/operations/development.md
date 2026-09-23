@@ -202,11 +202,24 @@ Mac and still depend on which app or service launches the agent.
 
 The fleet updater builds on each Mac over SSH. Each Mac therefore needs the certificate,
 private key, and local team configuration. Its signing key must be usable from that SSH
-session without a Keychain prompt. An unattended setup can use a dedicated build keychain
-with access granted to Apple's signing tools and an automatic unlock step. Keep any unlock
-credential in protected machine-local storage, outside Git and build logs. Test signing
-through the actual fleet SSH session after setup, including after a reboot; success in an
-interactive terminal does not establish unattended access.
+session without a Keychain prompt. For unattended signing, import the identity into a
+dedicated build keychain and grant Apple's signing tools access to its private key.
+Add it to the user's keychain search list, preserving the existing entries; `codesign`
+can otherwise report "no identity found" even when an explicit keychain path is supplied.
+While it is unlocked, run `security set-keychain-settings /absolute/path/to/build.keychain-db`
+without `-t` or `-l` to disable its timeout and lock-on-sleep settings. Otherwise a long build
+can outlast the unlock and fail when signing begins. This applies only to the dedicated
+build keychain; leave the login keychain's settings alone.
+Set `T3CODE_DESKTOP_MAC_KEYCHAIN` and `T3CODE_DESKTOP_MAC_KEYCHAIN_PASSWORD_FILE` in
+`.env.local` to absolute paths on that Mac. The password file must be outside the checkout,
+readable only by its owner, with mode `600`. These files contain private signing material;
+keep them out of Git and build logs.
+
+The installer unlocks the configured keychain before stopping the app, and each macOS Dev
+build unlocks it before building. Electron-builder then uses that keychain explicitly.
+Leave both settings unset to use the existing login-keychain setup. Test signing through
+the actual fleet SSH session after setup, including after a reboot; success in an interactive
+terminal does not establish unattended access.
 
 ### Windows installer prerequisites
 
