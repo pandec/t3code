@@ -130,7 +130,7 @@ const openServer = (
     server.once("error", () => {
       resume(Effect.succeed(null));
     });
-    server.listen(port, "127.0.0.1", () => {
+    server.listen(port, "localhost", () => {
       resume(Effect.succeed(server));
     });
     return Effect.sync(() => {

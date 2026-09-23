@@ -16,14 +16,10 @@ describe("buildHomeListFilterMenu", () => {
       selectedEnvironmentId: null,
       selectedProjectKey: "environment-1:project-1",
       selectedModel: null,
-      projectSortOrder: "updated_at",
-      threadSortOrder: "updated_at",
       onEnvironmentChange: vi.fn(),
       onProjectChange,
       onModelChange: vi.fn(),
       onClearFilters: vi.fn(),
-      onProjectSortOrderChange: vi.fn(),
-      onThreadSortOrderChange: vi.fn(),
     });
 
     const projectMenu = menu.items.find(
@@ -58,14 +54,10 @@ describe("buildHomeListFilterMenu", () => {
       selectedEnvironmentId: null,
       selectedProjectKey: null,
       selectedModel: "claude-opus-4-5",
-      projectSortOrder: "updated_at",
-      threadSortOrder: "updated_at",
       onEnvironmentChange: vi.fn(),
       onProjectChange: vi.fn(),
       onModelChange,
       onClearFilters: vi.fn(),
-      onProjectSortOrderChange: vi.fn(),
-      onThreadSortOrderChange: vi.fn(),
     });
 
     const modelMenu = menu.items.find((item) => item.type === "submenu" && item.title === "Model");
@@ -93,14 +85,10 @@ describe("buildHomeListFilterMenu", () => {
       selectedEnvironmentId: null,
       selectedProjectKey: null,
       selectedModel: null,
-      projectSortOrder: "updated_at",
-      threadSortOrder: "updated_at",
       onEnvironmentChange: vi.fn(),
       onProjectChange: vi.fn(),
       onModelChange: vi.fn(),
       onClearFilters: vi.fn(),
-      onProjectSortOrderChange: vi.fn(),
-      onThreadSortOrderChange: vi.fn(),
     });
 
     expect(menu.items.some((item) => item.title === "Model")).toBe(false);
@@ -115,14 +103,10 @@ describe("buildHomeListFilterMenu", () => {
       selectedEnvironmentId: EnvironmentId.make("environment-1"),
       selectedProjectKey: "environment-1:project-1",
       selectedModel: "gpt-5.6-sol",
-      projectSortOrder: "updated_at",
-      threadSortOrder: "updated_at",
       onEnvironmentChange: vi.fn(),
       onProjectChange: vi.fn(),
       onModelChange: vi.fn(),
       onClearFilters,
-      onProjectSortOrderChange: vi.fn(),
-      onThreadSortOrderChange: vi.fn(),
     });
 
     expect(menu.items[0]).toMatchObject({ type: "action", title: "Clear filters" });
@@ -132,7 +116,7 @@ describe("buildHomeListFilterMenu", () => {
     expect(onClearFilters).toHaveBeenCalledOnce();
   });
 
-  it("omits the clear action when only the sort order is non-default", () => {
+  it("omits the clear action when no filter is selected", () => {
     const menu = buildHomeListFilterMenu({
       environments: [],
       projects: [],
@@ -140,14 +124,10 @@ describe("buildHomeListFilterMenu", () => {
       selectedEnvironmentId: null,
       selectedProjectKey: null,
       selectedModel: null,
-      projectSortOrder: "created_at",
-      threadSortOrder: "created_at",
       onEnvironmentChange: vi.fn(),
       onProjectChange: vi.fn(),
       onModelChange: vi.fn(),
       onClearFilters: vi.fn(),
-      onProjectSortOrderChange: vi.fn(),
-      onThreadSortOrderChange: vi.fn(),
     });
 
     expect(menu.items.some((item) => item.title === "Clear filters")).toBe(false);

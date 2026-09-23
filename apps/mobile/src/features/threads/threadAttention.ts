@@ -5,10 +5,10 @@ import {
   isThreadAttention,
 } from "@t3tools/client-runtime/state/thread-attention";
 import type { EnvironmentThreadShell } from "@t3tools/client-runtime/state/shell";
+import type { OrchestrationLatestTurn, OrchestrationSession } from "@t3tools/contracts";
 import { threadWokeAt } from "@t3tools/client-runtime/state/thread-settled";
 
 import { scopedThreadKey } from "../../lib/scopedEntities";
-import { isLatestTurnSettled } from "./threadPresentation";
 import { resolveThreadListV2Status } from "./threadListV2";
 
 export type ThreadAttentionShell = Pick<
@@ -21,6 +21,14 @@ export type ThreadAttentionShell = Pick<
   | "latestTurn"
   | "session"
 >;
+
+export function isLatestTurnSettled(
+  latestTurn: OrchestrationLatestTurn | null,
+  session: OrchestrationSession | null,
+): boolean {
+  if (!latestTurn?.startedAt || !latestTurn.completedAt) return false;
+  return session?.status !== "running";
+}
 
 // This fork-added helper stays local because upstream's resolveThreadStatusPill
 // now consumes its web copy; with hasUnseenCompletion it remains a known drift

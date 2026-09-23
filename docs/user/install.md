@@ -121,6 +121,12 @@ Paths written as `~` or `~/…` expand against the server user's home directory.
 `~user` are not supported. Cursor's executable is `cursor-agent`, although its login command is
 `agent login`. Antigravity can use its managed runtime without a `PATH` entry.
 
+T3 Code warns when a provider version has known compatibility problems with your
+release. Check **Settings → Providers** on that environment for the recommended
+version or range. When its package manager supports installing a specific version,
+you can install the recommendation there. Otherwise use the provider's installer
+on the environment's machine. An unlisted version is unverified.
+
 When a provider CLI is behind its latest release, its provider card shows the
 available version. **Update now** appears only when T3 Code can tell which
 installer owns the CLI (its own update command, Homebrew, or a global npm, pnpm,

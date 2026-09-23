@@ -23,7 +23,6 @@ import {
 } from "../../state/thread-order";
 import { queuedThreadKeysAtom } from "../../state/use-thread-outbox";
 import { useThreadListActions } from "../home/useThreadListActions";
-import { useThreadListV2State } from "./use-thread-list-v2-enabled";
 import {
   createThreadMovePlanner,
   threadDragAction,
@@ -160,10 +159,7 @@ export function ThreadArrangementSheet(props: { onClose: () => void }) {
   const queuedThreadKeys = useAtomValue(queuedThreadKeysAtom);
   const pendingOrder = useAtomValue(pendingThreadOrderAtom);
   const dropBusy = useAtomValue(threadDropBusyAtom);
-  const threadListV2 = useThreadListV2State();
-  const { moveThread } = useThreadListActions({
-    offlineArchiveEnabled: threadListV2.archiveQueueEnabled,
-  });
+  const { moveThread } = useThreadListActions({ offlineArchiveEnabled: true });
   const [now, setNow] = useState(() => new Date().toISOString());
   const [expanded, setExpanded] = useState({ snoozed: false, settled: false });
   useEffect(() => {

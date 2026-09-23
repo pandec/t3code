@@ -122,6 +122,8 @@ import * as ProviderInstanceHealth from "./provider/Services/ProviderInstanceHea
 import * as ProviderInstanceRegistry from "./provider/Services/ProviderInstanceRegistry.ts";
 import { listProviderSkillsForCwd } from "./provider/providerSkills.ts";
 import * as ProviderUsageRefresh from "./provider/Services/ProviderUsageRefresh.ts";
+import * as ModelManifest from "./provider/ModelManifest.ts";
+import * as ProviderMaintenance from "./provider/providerMaintenance.ts";
 import * as ProviderSessionDirectory from "./provider/Services/ProviderSessionDirectory.ts";
 import * as ProviderService from "./provider/Services/ProviderService.ts";
 import { makeThreadGatewayAccountReader } from "./provider/threadGatewayAccount.ts";
@@ -596,6 +598,8 @@ const makeWsRpcLayer = (
           Effect.provideService(HttpClient.HttpClient, wsHttpClient),
           Effect.provideService(ServerSecretStore.ServerSecretStore, serverSecretStore),
         );
+      const modelManifest = yield* ModelManifest.ModelManifest;
+      const providerVersionCache = yield* ProviderMaintenance.ProviderVersionCache;
       const providerService = yield* ProviderService.ProviderService;
       const providerSessionDirectory = yield* ProviderSessionDirectory.ProviderSessionDirectory;
       const providerMaintenanceRunner = yield* ProviderMaintenanceRunner.ProviderMaintenanceRunner;
@@ -1633,6 +1637,28 @@ const makeWsRpcLayer = (
           observeRpcEffect(
             WS_METHODS.serverRefreshProviders,
             Effect.gen(function* () {
+              // Only explicit catalog refreshes bypass T3's caches. Workspace
+              // discovery and background status checks retain their timers.
+              if (input.refreshModels) {
+                yield* modelManifest.forceRefresh;
+                const instances = yield* providerInstances.listInstances;
+                yield* Effect.forEach(
+                  instances.filter(
+                    (instance) =>
+                      input.instanceId === undefined || input.instanceId === instance.instanceId,
+                  ),
+                  (instance) =>
+                    Effect.gen(function* () {
+                      yield* instance.invalidateCaches ?? Effect.void;
+                      const maintenance = yield* instance.snapshot.resolveMaintenance({
+                        fresh: true,
+                      });
+                      if (maintenance.packageName)
+                        providerVersionCache.delete(maintenance.packageName);
+                    }),
+                  { concurrency: "unbounded", discard: true },
+                );
+              }
               // An untargeted refresh is "re-read everything's status", which
               // includes quota from configured usage-limit sources. Awaited,
               // not forked: the RPC scope closes on return and would
@@ -1832,6 +1858,15 @@ const makeWsRpcLayer = (
             WS_METHODS.providerAuthStart,
             providerAuth.start(input, currentSessionId),
             { "rpc.aggregate": "provider" },
+          ),
+        [WS_METHODS.providerAuthRespond]: (input) =>
+          observeRpcEffect(
+            WS_METHODS.providerAuthRespond,
+            providerAuth.respond(input, currentSessionId),
+            {
+              "rpc.aggregate": "provider",
+              instanceId: input.instanceId,
+            },
           ),
         [WS_METHODS.providerAuthComplete]: (input) =>
           observeRpcEffect(

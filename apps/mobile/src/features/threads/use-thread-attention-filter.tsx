@@ -23,7 +23,6 @@ import {
   createThreadAttentionFilter,
   type ThreadAttentionFilterState,
 } from "./threadAttention";
-import { useThreadListV2Enabled } from "./use-thread-list-v2-enabled";
 
 const THREAD_VISIT_PERSIST_DEBOUNCE_MS = 500;
 
@@ -52,7 +51,6 @@ export function ThreadAttentionFilterProvider({ children }: PropsWithChildren) {
   const visitsDirtyRef = useRef(false);
   const latestVisitsRef = useRef(lastVisitedAtByThreadKey);
   const visitPersistTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
-  const threadListV2Enabled = useThreadListV2Enabled();
   latestVisitsRef.current = lastVisitedAtByThreadKey;
 
   useEffect(() => {
@@ -101,10 +99,6 @@ export function ThreadAttentionFilterProvider({ children }: PropsWithChildren) {
       flushVisits();
     };
   }, [flushVisits]);
-
-  useEffect(() => {
-    if (!threadListV2Enabled) setState(null);
-  }, [threadListV2Enabled]);
 
   const value = useMemo(
     () => ({

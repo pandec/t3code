@@ -454,7 +454,8 @@ export function ContextWindowMeter(props: {
           <Button
             size="icon-sm"
             variant="ghost-muted"
-            className="size-7 rounded-full hover:text-muted-foreground data-pressed:text-muted-foreground"
+            shape="pill"
+            className="size-7"
             aria-label={ariaLabel}
           >
             <span className="relative flex size-6 items-center justify-center">
@@ -496,8 +497,9 @@ export function ContextWindowMeter(props: {
         tooltipStyle
         side="top"
         align="end"
-        viewportClassName="p-0"
-        className="w-80 max-w-none text-left whitespace-normal"
+        padding="none"
+        width="md"
+        className="text-left whitespace-normal"
       >
         {/* The popover viewport clips instead of scrolling, so the content
             bounds itself and scrolls the usage list internally. A pooled gateway

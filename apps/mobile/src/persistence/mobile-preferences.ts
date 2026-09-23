@@ -47,14 +47,9 @@ export interface Preferences {
   readonly sidebarSnoozedShelfExpanded?: boolean;
   readonly sidebarSettledShelfExpanded?: boolean;
   readonly sidebarArchivedShelfExpanded?: boolean;
-  /**
-   * Device-local mirror of the web `legacySidebarEnabled` setting. Mobile has
-   * no client-settings sync, so the legacy grouped thread list is opted into
-   * per device. Deliberately a fresh key (was `threadListV2Enabled`, an
-   * opt-out): sanitizing drops the old key, so every device resets to the
-   * default flat list — see `resolveThreadListV2Enabled`.
-   */
-  readonly legacyThreadListEnabled?: boolean;
+  /** Fresh keys reset the new thread list's settled and snoozed shelves. */
+  readonly threadListSettledShelfExpanded?: boolean;
+  readonly threadListSnoozedShelfExpanded?: boolean;
   /** Device-local counterpart of desktop's `planModeEnabled` legacy flag. */
   readonly planModeEnabled?: boolean;
   /** Model favorites belong to this device, like the web client setting. */
@@ -136,7 +131,8 @@ export function sanitizePreferences(parsed: Preferences): Preferences {
     sidebarSnoozedShelfExpanded?: boolean;
     sidebarSettledShelfExpanded?: boolean;
     sidebarArchivedShelfExpanded?: boolean;
-    legacyThreadListEnabled?: boolean;
+    threadListSettledShelfExpanded?: boolean;
+    threadListSnoozedShelfExpanded?: boolean;
     planModeEnabled?: boolean;
     modelFavorites?: Preferences["modelFavorites"];
     steerGraceWindowMs?: number;
@@ -230,8 +226,11 @@ export function sanitizePreferences(parsed: Preferences): Preferences {
   if (typeof parsed.sidebarArchivedShelfExpanded === "boolean") {
     preferences.sidebarArchivedShelfExpanded = parsed.sidebarArchivedShelfExpanded;
   }
-  if (typeof parsed.legacyThreadListEnabled === "boolean") {
-    preferences.legacyThreadListEnabled = parsed.legacyThreadListEnabled;
+  if (typeof parsed.threadListSettledShelfExpanded === "boolean") {
+    preferences.threadListSettledShelfExpanded = parsed.threadListSettledShelfExpanded;
+  }
+  if (typeof parsed.threadListSnoozedShelfExpanded === "boolean") {
+    preferences.threadListSnoozedShelfExpanded = parsed.threadListSnoozedShelfExpanded;
   }
   if (typeof parsed.planModeEnabled === "boolean") {
     preferences.planModeEnabled = parsed.planModeEnabled;

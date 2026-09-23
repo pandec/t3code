@@ -27,12 +27,28 @@ import { videoMimeType } from "@t3tools/shared/video";
 import {
   composerAttachmentFileReferenceKey,
   isComposerAttachmentFileRetained,
-  retainComposerAttachmentFile,
 } from "../lib/composerAttachmentFiles";
+import {
+  registerComposerAttachmentUnusedHandler,
+  retainComposerAttachmentFileForPreview,
+} from "../lib/composerAttachmentPreviewRetention";
 import type { DraftComposerAttachment, FileBackedComposerAttachment } from "../lib/composerImages";
 import { isServerThreadDraftKey } from "../lib/scopedEntities";
 import { SerializedAsyncQueue } from "../lib/serialized-async-queue";
 import { appAtomRegistry } from "./atom-registry";
+import type {
+  ComposerDraft,
+  ComposerDraftContent,
+  ComposerDraftProject,
+  ComposerDraftSettingsUpdate,
+} from "./composer-draft-types";
+export type {
+  ComposerDraft,
+  ComposerDraftContent,
+  ComposerDraftProject,
+  ComposerDraftSettingsUpdate,
+  ComposerDraftWorkspaceSelection,
+} from "./composer-draft-types";
 import {
   ComposerDraftBatchPersistenceError,
   ComposerDraftPersistenceError,
@@ -306,56 +322,6 @@ function draftWithInsertedContext(
   };
   return withReferencedContextFiles(draft, text, context);
 }
-
-export interface ComposerDraft {
-  readonly text: string;
-  readonly inputOrigin?: MessageInputOrigin;
-  readonly context?: OrchestrationMessageContext;
-  readonly attachments: ReadonlyArray<DraftComposerAttachment>;
-  readonly importedShareIds?: ReadonlyArray<string>;
-  readonly modelSelection?: ModelSelection;
-  readonly runtimeMode?: RuntimeMode;
-  readonly interactionMode?: ProviderInteractionMode;
-  readonly workspaceSelection?: ComposerDraftWorkspaceSelection;
-  /**
-   * Set on new-task drafts only. The project is stored here rather than in
-   * the key so a project can hold any number of drafts and a draft can be
-   * retargeted to another project without changing identity.
-   */
-  readonly project?: ComposerDraftProject;
-}
-
-export interface ComposerDraftProject {
-  readonly environmentId: EnvironmentId;
-  readonly projectId: ProjectId;
-  readonly createdAt: string;
-}
-
-export interface ComposerDraftContent {
-  readonly text: string;
-  readonly inputOrigin?: MessageInputOrigin;
-  readonly context?: OrchestrationMessageContext;
-  readonly attachments: ReadonlyArray<DraftComposerAttachment>;
-  readonly sourceShareId?: string;
-}
-
-export interface ComposerDraftWorkspaceSelection {
-  /**
-   * Only set once the user explicitly picks a mode. Left undefined while the
-   * draft is still following the resolved default (project setting → t3.json
-   * → global), so controls that edit worktree metadata never freeze a
-   * provisional or implicit default into the draft.
-   */
-  readonly mode?: "local" | "worktree";
-  readonly branch: string | null;
-  readonly worktreePath: string | null;
-  readonly startFromOrigin?: boolean;
-}
-
-export type ComposerDraftSettingsUpdate = Pick<
-  ComposerDraft,
-  "modelSelection" | "runtimeMode" | "interactionMode" | "workspaceSelection" | "project"
->;
 
 const EMPTY_DRAFT: ComposerDraft = {
   text: "",
@@ -1062,14 +1028,14 @@ export function scheduleUnusedComposerAttachmentCleanup(
   });
 }
 
-/** Keeps a native preview or share copy readable until it finishes. */
-export function retainComposerAttachmentFileForPreview(
-  attachment: FileBackedComposerAttachment,
-): () => void {
-  return retainComposerAttachmentFile(attachment.fileUri, () => {
-    scheduleUnusedComposerAttachmentCleanup([attachment]);
-  });
-}
+/**
+ * Owner-side cleanup hook for the shared preview-retention helper: releasing
+ * the last preview/upload lease retries the unused-file sweep. Registered here
+ * because this module owns the draft and outbox references the sweep reads.
+ */
+registerComposerAttachmentUnusedHandler((attachment) => {
+  scheduleUnusedComposerAttachmentCleanup([attachment]);
+});
 
 function removePendingDraftKey(draftKey: string): void {
   pendingDraftKeys.delete(draftKey);

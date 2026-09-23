@@ -17,7 +17,6 @@ import {
   CommandShortcut,
 } from "./ui/command";
 import { ThreadSearchMatchExcerpt } from "./ThreadSearchMatch";
-import { cn } from "~/lib/utils";
 
 interface CommandPaletteResultsProps {
   accentTintIntensityPercent: AccentTintIntensityPercent;
@@ -45,8 +44,8 @@ export function CommandPaletteResults(props: CommandPaletteResultsProps) {
     <CommandList>
       {props.groups.map((group) => (
         // space-y keeps adjacent accent-tinted project rows from touching.
-        <CommandGroup className="space-y-0.5" items={group.items} key={group.value}>
-          <CommandGroupLabel className="ps-[9px]">{group.label}</CommandGroupLabel>
+        <CommandGroup items={group.items} key={group.value}>
+          <CommandGroupLabel>{group.label}</CommandGroupLabel>
           <CommandCollection>
             {(item) =>
               item.disabled ? (
@@ -115,10 +114,7 @@ function CommandPaletteResultRow(props: {
   return (
     <CommandItem
       value={props.item.value}
-      className={cn(
-        "cursor-pointer gap-2 hover:bg-transparent hover:text-inherit data-highlighted:bg-transparent data-highlighted:text-inherit data-selected:bg-transparent data-selected:text-inherit [&[data-highlighted][data-selected]]:bg-transparent [&[data-highlighted][data-selected]]:text-inherit",
-        props.isActive && "bg-accent! text-accent-foreground!",
-      )}
+      active={props.isActive}
       style={projectAccentTintStyle(
         props.item.projectAccentColor,
         props.accentTintIntensityPercent,

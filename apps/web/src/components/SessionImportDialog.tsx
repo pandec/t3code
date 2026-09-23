@@ -215,9 +215,9 @@ export function SessionImportDialog(props: {
               : "Import a session created outside T3 Code."}
           </DialogDescription>
         </DialogHeader>
-        <DialogPanel className="space-y-2">
+        <DialogPanel>
           {hasAmbiguousProviders ? (
-            <p className="text-xs text-muted-foreground">
+            <p className="mb-2 text-xs text-muted-foreground">
               More than one instance can import these sessions. Choose the instance to continue
               with.
             </p>

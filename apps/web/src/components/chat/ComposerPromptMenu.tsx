@@ -2,7 +2,6 @@ import type { SavedPrompt } from "@t3tools/contracts/settings";
 import { NotebookPenIcon } from "lucide-react";
 import { memo, useMemo } from "react";
 
-import { cn } from "~/lib/utils";
 import { CommandItem } from "../ui/command";
 import {
   ComposerPickerShell,
@@ -49,10 +48,8 @@ export const ComposerPromptMenu = memo(function ComposerPromptMenu(props: {
         <CommandItem
           key={entry.id}
           value={entry.id}
-          className={cn(
-            "cursor-pointer select-none gap-2 hover:bg-transparent hover:text-inherit data-highlighted:bg-transparent data-highlighted:text-inherit",
-            picker.highlightedEntry?.id === entry.id && "bg-accent! text-accent-foreground!",
-          )}
+          active={picker.highlightedEntry?.id === entry.id}
+          className="cursor-pointer select-none"
           onMouseMove={() => {
             if (picker.highlightedId !== entry.id) picker.setHighlightedId(entry.id);
           }}

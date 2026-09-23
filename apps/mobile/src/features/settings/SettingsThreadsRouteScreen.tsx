@@ -3,7 +3,7 @@ import { ScreenScrollView as ScrollView } from "../../components/ScreenScrollVie
 import { useAtomSet, useAtomValue } from "@effect/atom-react";
 import { AsyncResult } from "effect/unstable/reactivity";
 import { useEffect, useRef, useState } from "react";
-import { Platform, Pressable, View } from "react-native";
+import { Pressable, View } from "react-native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 
 import {
@@ -19,7 +19,6 @@ import {
 } from "@t3tools/contracts/settings";
 import { supportsSharedSettingsSync } from "@t3tools/client-runtime/state/shared-settings";
 import { AppText as Text } from "../../components/AppText";
-import { cn } from "../../lib/cn";
 import { mobilePreferencesAtom, updateMobilePreferencesAtom } from "../../state/preferences";
 import {
   didEnvironmentPrewarmRunsAdvance,
@@ -34,7 +33,6 @@ import {
   useArchivedSectionVisibleCount,
   useSteerGraceWindowMs,
 } from "../../state/use-mobile-preferences";
-import { useThreadListV2Enabled } from "../threads/use-thread-list-v2-enabled";
 import { SettingsActionRow } from "./components/SettingsActionRow";
 import { SettingsSection } from "./components/SettingsSection";
 import { SettingsProjectOverridesSection } from "./components/SettingsProjectOverridesSection";
@@ -251,21 +249,9 @@ function AutoSettleSettingsRows() {
           />
         ) : null}
         {autoSettleEnabled && afterDays !== null ? (
-          <View
-            className={cn(
-              "flex-row items-center gap-4 px-4",
-              Platform.OS === "android" ? "min-h-14 py-3" : "py-4",
-            )}
-          >
-            <View style={{ width: Platform.OS === "android" ? 24 : 22 }} />
-            <Text
-              className={cn(
-                "flex-1 text-foreground",
-                Platform.OS === "android" ? "text-base" : "text-lg",
-              )}
-            >
-              Inactive days
-            </Text>
+          <View className="flex-row items-center gap-4 px-4 py-4 android:min-h-14 android:py-3">
+            <View className="w-[22px] android:w-6" />
+            <Text className="flex-1 text-foreground text-lg android:text-base">Inactive days</Text>
             <AutoSettleDaysField
               value={afterDays}
               disabled={disabled}
@@ -323,7 +309,6 @@ function DeviceThreadSettingsSection() {
   const steerGraceWindowMs = useSteerGraceWindowMs();
   const archivedSectionVisibleCount = useArchivedSectionVisibleCount();
   const alwaysShowPinnedInAttention = useAlwaysShowPinnedInAttention();
-  const threadListV2Enabled = useThreadListV2Enabled();
 
   return (
     <SettingsSection title="This device">
@@ -341,35 +326,31 @@ function DeviceThreadSettingsSection() {
         value={steerGraceWindowMs}
         valueLabel={formatSteerGraceWindowSeconds(steerGraceWindowMs)}
       />
-      {threadListV2Enabled ? (
-        <>
-          <SettingsSwitchRow
-            disabled={!hydrated}
-            icon="pin"
-            label="Always show pinned when filtering by attention"
-            value={alwaysShowPinnedInAttention}
-            onValueChange={(value) =>
-              savePreferences({ sidebarAlwaysShowPinnedInAttention: value })
-            }
-          />
-          <SettingsSliderRow
-            description="How many recently archived threads appear at the end of the thread list."
-            disabled={!hydrated}
-            icon="archivebox"
-            label="Recent archived threads"
-            max={MAX_ARCHIVED_SECTION_VISIBLE_COUNT}
-            min={MIN_ARCHIVED_SECTION_VISIBLE_COUNT}
-            onChange={(value) =>
-              savePreferences({
-                archivedSectionVisibleCount: toStoredArchivedSectionVisibleCount(value),
-              })
-            }
-            step={1}
-            value={archivedSectionVisibleCount}
-            valueLabel={`${archivedSectionVisibleCount}`}
-          />
-        </>
-      ) : null}
+      <>
+        <SettingsSwitchRow
+          disabled={!hydrated}
+          icon="pin"
+          label="Always show pinned when filtering by attention"
+          value={alwaysShowPinnedInAttention}
+          onValueChange={(value) => savePreferences({ sidebarAlwaysShowPinnedInAttention: value })}
+        />
+        <SettingsSliderRow
+          description="How many recently archived threads appear at the end of the thread list."
+          disabled={!hydrated}
+          icon="archivebox"
+          label="Recent archived threads"
+          max={MAX_ARCHIVED_SECTION_VISIBLE_COUNT}
+          min={MIN_ARCHIVED_SECTION_VISIBLE_COUNT}
+          onChange={(value) =>
+            savePreferences({
+              archivedSectionVisibleCount: toStoredArchivedSectionVisibleCount(value),
+            })
+          }
+          step={1}
+          value={archivedSectionVisibleCount}
+          valueLabel={`${archivedSectionVisibleCount}`}
+        />
+      </>
       <ThreadSyncRow />
     </SettingsSection>
   );
@@ -468,19 +449,12 @@ function ThreadSyncRow() {
 function LegacySettingsSection() {
   const savePreferences = useAtomSet(updateMobilePreferencesAtom);
   const preferences = useAtomValue(mobilePreferencesAtom);
-  const threadListV2Enabled = useThreadListV2Enabled();
   const planModeEnabled =
     AsyncResult.isSuccess(preferences) && preferences.value.planModeEnabled === true;
 
   return (
     <View className="gap-3">
       <SettingsSection title="Legacy">
-        <SettingsSwitchRow
-          icon="sidebar.left"
-          label="Legacy Thread List"
-          value={!threadListV2Enabled}
-          onValueChange={(value) => savePreferences({ legacyThreadListEnabled: value })}
-        />
         <SettingsSwitchRow
           icon="hammer"
           label="Plan Mode"

@@ -70,13 +70,13 @@ export function LinearIssueLinkPreview({
   return (
     <PreviewCard open={open} onOpenChange={setOpen}>
       <PreviewCardTrigger render={trigger} delay={350} closeDelay={120} />
-      <PreviewCardPopup align="center" className="w-80 max-w-[calc(100vw-2rem)] p-3">
+      <PreviewCardPopup align="center" className="w-80 max-w-[calc(100vw-2rem)]">
         {issue === null ? (
-          <p className="text-xs leading-relaxed text-muted-foreground wrap-anywhere">
+          <p className="p-3 text-xs leading-relaxed text-muted-foreground wrap-anywhere">
             {issueQuery.isPending ? "Loading issue details…" : (issueQuery.error ?? originalUrl)}
           </p>
         ) : (
-          <div className="min-w-0">
+          <div className="min-w-0 p-3">
             <div className="flex min-w-0 items-center gap-1.5 text-[11px] text-muted-foreground">
               <span className="shrink-0 font-medium">{issue.identifier}</span>
               <span aria-hidden>·</span>

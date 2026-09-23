@@ -60,11 +60,11 @@ export interface SidebarEnvironmentFilterMenuProps {
 
 /** Shared with the project scope menu so both filters sit on the same grid. */
 const MENU_ROW_CLASS_NAME =
-  "h-8 min-h-8 py-0 ps-1 pe-1 text-sm font-medium [&>span:last-child]:flex [&>span:last-child]:min-w-0 [&>span:last-child]:items-center [&>span:last-child]:gap-2";
+  "h-8 min-h-8 [&>span:last-child]:flex [&>span:last-child]:min-w-0 [&>span:last-child]:items-center";
 
 /** Quick actions are plain items; the leading spacer keeps their icon on the
  *  same column as the checkbox rows' icons. */
-const MENU_ACTION_CLASS_NAME = "h-8 min-h-8 py-0 ps-1 pe-1 text-sm font-medium";
+const MENU_ACTION_CLASS_NAME = "h-8 min-h-8";
 
 /** Past this many, the trigger summary counts environments instead of naming them. */
 const MAX_NAMED_ENVIRONMENTS_IN_SUMMARY = 3;
@@ -163,7 +163,7 @@ function SidebarEnvironmentFilterMenuImpl({
                   data-testid="sidebar-v2-environment-filter-trigger"
                   // overflow-visible lets the count badge sit on the corner;
                   // the button clips its children by default.
-                  className="relative shrink-0 overflow-visible focus-visible:ring-offset-2 focus-visible:ring-offset-sidebar"
+                  className="relative shrink-0 overflow-visible"
                 />
               }
             />

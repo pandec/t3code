@@ -271,12 +271,18 @@ import {
 import { useThreadRunningTerminalIds } from "../state/terminalSessions";
 import { toggleLoadedListeningTrack, useThreadListeningState } from "../state/listeningPlayback";
 import { stackedThreadToast, toastManager } from "./ui/toast";
-import { Button } from "./ui/button";
-import { Input } from "./ui/input";
-import { Menu, MenuCheckboxItem, MenuPopup, MenuTrigger } from "./ui/menu";
+import { Button, InlineButton } from "./ui/button";
+import {
+  Menu,
+  MenuCheckboxItem,
+  MenuItem,
+  MenuPopup,
+  MenuSeparator,
+  MenuShortcut,
+  MenuTrigger,
+} from "./ui/menu";
 import { SidebarContent, SidebarGroup, SidebarMenuButton, useSidebar } from "./ui/sidebar";
 import { SidebarChromeFooter, SidebarChromeHeader } from "./sidebar/SidebarChrome";
-import { Popover, PopoverPopup, PopoverTrigger } from "./ui/popover";
 import { Tooltip, TooltipPopup, TooltipProvider, TooltipTrigger } from "./ui/tooltip";
 import { MiddleTruncate } from "./ui/middle-truncate";
 import {
@@ -404,14 +410,9 @@ function SidebarThreadTooltip({
   const driverKind = providerEntry?.driverKind ?? null;
   const supportsMultiplePullRequests = useSupportsMultiplePullRequests(thread.environmentId);
   return (
-    <TooltipPopup
-      side="right"
-      align="start"
-      sideOffset={4}
-      variant="glass"
-      className="max-w-80 text-left whitespace-normal [&_[data-slot=tooltip-viewport]]:p-0"
-    >
-      <div className="flex min-w-0 max-w-80 flex-col gap-2 p-[var(--floating-content-inset)]">
+    <TooltipPopup side="right" align="start" sideOffset={4} variant="glass">
+      {/* The viewport's own inset (py-1 px-2) plus this one make the floating inset. */}
+      <div className="flex min-w-0 max-w-80 flex-col gap-2 px-1 py-2">
         <div className="min-w-0 truncate text-xs leading-tight font-medium text-foreground">
           {thread.title}
         </div>
@@ -432,9 +433,9 @@ function SidebarThreadTooltip({
             </div>
           ) : null}
           {thread.branch ? (
-            <div className="flex min-w-0 items-center gap-2">
+            <div className="flex min-w-0 items-center gap-2 text-foreground/75">
               <GitBranchIcon className="size-3 shrink-0 stroke-muted-foreground" />
-              <MiddleTruncate value={thread.branch} className="flex text-foreground/75" />
+              <MiddleTruncate value={thread.branch} className="flex" />
             </div>
           ) : null}
           {branchMismatch ? (
@@ -499,7 +500,7 @@ function SidebarThreadTooltip({
  * Controlled by the row (which also uses the open state to pin its hover
  * actions while the menu is up).
  */
-function SnoozePopoverButton(props: {
+function SnoozeMenuButton(props: {
   open: boolean;
   onOpenChange: (open: boolean) => void;
   onSnooze: (preset: Pick<SnoozePreset, "snoozedUntil" | "untilDone">) => void;
@@ -522,11 +523,11 @@ function SnoozePopoverButton(props: {
     [open, timestampFormat, untilWokenSupported, untilDoneOffered],
   );
   return (
-    <Popover open={open} onOpenChange={onOpenChange}>
+    <Menu open={open} onOpenChange={onOpenChange}>
       <Tooltip>
         <TooltipTrigger
           render={
-            <PopoverTrigger
+            <MenuTrigger
               render={
                 <button
                   type="button"
@@ -543,39 +544,31 @@ function SnoozePopoverButton(props: {
         </TooltipTrigger>
         <TooltipPopup>Snooze thread</TooltipPopup>
       </Tooltip>
-      <PopoverPopup side="bottom" align="end" className="w-56" viewportClassName="p-1">
+      <MenuPopup side="bottom" align="end">
         {presets.map((preset) => (
-          <button
+          <MenuItem
             key={preset.id}
-            type="button"
             onClick={(event) => {
               event.stopPropagation();
-              onOpenChange(false);
               onSnooze(preset);
             }}
-            className="flex w-full cursor-pointer items-center gap-2 rounded-md px-2 py-1.5 text-left text-xs text-foreground/90 hover:bg-accent hover:text-foreground"
           >
-            <span className="flex-1">{preset.label}</span>
-            <span className="font-mono text-[10px] text-muted-foreground/60 tabular-nums">
-              {preset.whenLabel}
-            </span>
-          </button>
+            {preset.label}
+            <MenuShortcut>{preset.whenLabel}</MenuShortcut>
+          </MenuItem>
         ))}
-        <div className="my-1 border-t border-border/60" />
-        <button
-          type="button"
-          className="flex w-full cursor-pointer rounded-md px-2 py-1.5 text-left text-xs text-foreground/90 hover:bg-accent hover:text-foreground"
+        <MenuSeparator />
+        <MenuItem
           onClick={async (event) => {
             event.stopPropagation();
-            onOpenChange(false);
             const choice = await requestCustomSnooze();
             if (choice) onSnooze(choice);
           }}
         >
           Custom…
-        </button>
-      </PopoverPopup>
-    </Popover>
+        </MenuItem>
+      </MenuPopup>
+    </Menu>
   );
 }
 
@@ -1582,7 +1575,7 @@ const SidebarThreadRow = memo(function SidebarThreadRow(props: {
     if (!showSnoozeButton) setSnoozeMenuOpen(false);
   }, [showSnoozeButton]);
   const handlePrClick = useCallback(
-    (event: ReactMouseEvent<HTMLAnchorElement>) => {
+    (event: ReactMouseEvent<HTMLElement>) => {
       const url = pr?.url ?? currentLinkedPr?.url;
       if (!url) return;
       const openedInRightPanel = openPrLink(
@@ -1737,7 +1730,7 @@ const SidebarThreadRow = memo(function SidebarThreadRow(props: {
   const prBadge =
     prBadgeShape?.kind === "stack" || pr || currentLinkedPr ? (
       <ThreadPullRequestBadgeControl
-        variant="underline"
+        render={<InlineButton />}
         badge={prBadgeShape}
         number={pr?.number ?? currentLinkedPr?.number}
         url={pr?.url ?? currentLinkedPr?.url}
@@ -2253,7 +2246,7 @@ const SidebarThreadRow = memo(function SidebarThreadRow(props: {
                         </Tooltip>
                       ) : null}
                       {showSnoozeButton ? (
-                        <SnoozePopoverButton
+                        <SnoozeMenuButton
                           open={snoozeMenuOpen}
                           onOpenChange={setSnoozeMenuOpen}
                           onSnooze={handleSnoozePreset}
@@ -2335,11 +2328,9 @@ const SidebarThreadRow = memo(function SidebarThreadRow(props: {
                     working, but it truncated to a half-sentence and dropped the
                     branch, so the row lost its most stable identifier. */}
                 {thread.branch ? (
-                  <MiddleTruncate
-                    value={thread.branch}
-                    showTitle={false}
-                    className="flex-1 text-muted-foreground/40"
-                  />
+                  <span className="min-w-0 flex-1 text-muted-foreground/40">
+                    <MiddleTruncate value={thread.branch} showTitle={false} />
+                  </span>
                 ) : (
                   <span className="flex-1" />
                 )}
@@ -5613,7 +5604,7 @@ export default function Sidebar() {
           <SidebarMenuButton
             size="icon"
             type="button"
-            className="relative shrink-0 focus-visible:ring-offset-2 focus-visible:ring-offset-sidebar"
+            className="relative shrink-0"
             onClick={handleNewThreadClick}
             disabled={projects.length === 0}
             aria-label="New thread"
@@ -5649,18 +5640,16 @@ export default function Sidebar() {
     <>
       <SidebarChromeHeader isElectron={isElectron} />
       <SidebarContent
-        className="gap-0 min-h-full"
+        className="min-h-full"
         fixedHeader={
           // Lifted above the stage backdrop, whose fade bleeds below the
           // header and would otherwise paint across the search row's outline.
-          <SidebarGroup className="relative z-[1] gap-1 p-[var(--sidebar-content-inset)]">
+          <SidebarGroup className="z-[1]">
             <div className="flex items-center gap-1">
               <div className="flex h-8 min-w-0 flex-1 items-center gap-2 rounded-md px-2 py-1.5 text-sm font-medium text-sidebar-muted-foreground hover:bg-sidebar-row-hover hover:text-sidebar-foreground">
                 <SearchIcon className="size-4 shrink-0 text-sidebar-muted-foreground/80" />
-                <Input
+                <input
                   ref={threadSearchInputRef}
-                  nativeInput
-                  unstyled
                   type="search"
                   value={threadSearchQuery}
                   onChange={(event) => {
@@ -5683,14 +5672,14 @@ export default function Sidebar() {
                       ? `sidebar-thread-search-result-${activeSearchResultIndex}`
                       : undefined
                   }
-                  className="min-w-0 flex-1 [&_[data-slot=input]]:h-auto [&_[data-slot=input]]:p-0 [&_[data-slot=input]]:leading-normal [&_[data-slot=input]]:text-sm [&_[data-slot=input]]:font-medium [&_[data-slot=input]]:text-sidebar-foreground [&_[data-slot=input]]:placeholder:text-sidebar-muted-foreground"
+                  className="min-w-0 flex-1 bg-transparent text-sm font-medium text-sidebar-foreground outline-none placeholder:text-sidebar-muted-foreground"
                 />
                 {isSearchingThreads ? (
                   <Button
                     type="button"
                     size="icon-micro"
                     variant="ghost"
-                    className="shrink-0 text-sidebar-muted-foreground hover:bg-sidebar-control-surface hover:text-sidebar-foreground"
+                    className="shrink-0"
                     aria-label="Clear thread search"
                     onClick={() => {
                       clearThreadSearch();
@@ -5722,7 +5711,7 @@ export default function Sidebar() {
                       aria-label="Threads needing attention"
                       disabled={!allEnvironmentShellsBootstrapped && !attentionFilterEnabled}
                       data-testid="sidebar-v2-attention-filter-toggle"
-                      className="relative shrink-0 focus-visible:ring-offset-2 focus-visible:ring-offset-sidebar"
+                      className="relative shrink-0"
                       onClick={toggleAttentionFilter}
                     />
                   }
@@ -5746,7 +5735,7 @@ export default function Sidebar() {
                   render={
                     <SidebarMenuButton
                       size="icon"
-                      className="relative shrink-0 focus-visible:ring-offset-2 focus-visible:ring-offset-sidebar"
+                      className="relative shrink-0"
                       onClick={openAddProjectCommandPalette}
                       type="button"
                       aria-label="New project"
@@ -5767,7 +5756,7 @@ export default function Sidebar() {
                     render={
                       <SidebarMenuButton
                         size="icon"
-                        className="shrink-0 focus-visible:ring-offset-2 focus-visible:ring-offset-sidebar"
+                        className="shrink-0"
                         type="button"
                         aria-label="Manage thread groups"
                         disabled={!customGroups.canEdit}
@@ -5792,7 +5781,7 @@ export default function Sidebar() {
                         <SidebarMenuButton
                           aria-label={`Filter threads by project — ${projectScopeDetail}`}
                           title={projectScopeDetail}
-                          className="min-w-0 flex-1 ps-[calc(var(--sidebar-row-content-inset)-1px)] focus-visible:ring-offset-2 focus-visible:ring-offset-sidebar"
+                          className="min-w-0 flex-1"
                         />
                       }
                     >
@@ -5822,7 +5811,7 @@ export default function Sidebar() {
                         checked={resolvedProjectScopeKeys === null && hiddenProjectKeys.size === 0}
                         closeOnClick
                         onCheckedChange={clearProjectFilters}
-                        className="h-8 min-h-8 py-0 ps-1 pe-1 text-sm font-medium [&>span:last-child]:flex [&>span:last-child]:min-w-0 [&>span:last-child]:items-center [&>span:last-child]:gap-2"
+                        className="h-8 min-h-8 [&>span:last-child]:flex [&>span:last-child]:min-w-0 [&>span:last-child]:items-center"
                       >
                         <FolderIcon className="size-4 shrink-0" />
                         <span className="min-w-0 truncate text-sm">All projects</span>
@@ -5855,8 +5844,7 @@ export default function Sidebar() {
                               void handleProjectSettings(event, project);
                             }}
                             className={cn(
-                              "h-8 min-h-8 py-0 ps-1 pe-1 text-sm font-medium [&>span:last-child]:flex [&>span:last-child]:min-w-0 [&>span:last-child]:items-center [&>span:last-child]:gap-2",
-                              isHidden && "text-muted-foreground",
+                              "h-8 min-h-8 [&>span:last-child]:flex [&>span:last-child]:min-w-0 [&>span:last-child]:items-center",
                             )}
                           >
                             <ProjectFavicon project={project} className="size-4 shrink-0" />
@@ -5924,7 +5912,7 @@ export default function Sidebar() {
                               // No `ml-auto` here: the hide/show button ahead of
                               // it already claims the free space, so adding one
                               // would only split the pair apart.
-                              className="size-6 shrink-0 [--control-icon-color:currentColor] text-icon-muted focus-visible:bg-accent focus-visible:text-foreground"
+                              className="size-6 shrink-0"
                               onPointerDown={(event) => event.stopPropagation()}
                               // Menu items synthesize a click on mouseup once the
                               // trigger's press-drag-release window opens, so a
@@ -5967,7 +5955,7 @@ export default function Sidebar() {
           </SidebarGroup>
         }
       >
-        <SidebarGroup className="ps-[calc(var(--sidebar-content-inset)+1px)] pe-[var(--sidebar-content-inset)] pb-1 pt-0 flex-1">
+        <SidebarGroup className="flex-1">
           {isSearchingThreads ? (
             threadSearchResults.length > 0 ? (
               <TooltipProvider

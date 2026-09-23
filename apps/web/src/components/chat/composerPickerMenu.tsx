@@ -167,9 +167,11 @@ export function ComposerPickerShell(props: {
         </div>
         <CommandList className="max-h-72">
           <CommandGroup>
-            <CommandGroupLabel className="flex items-center gap-1.5 px-3 pt-2 pb-1 text-[10px] font-semibold uppercase tracking-[0.08em] text-secondary-label">
-              {props.groupIcon}
-              {props.groupLabel}
+            <CommandGroupLabel>
+              <span className="flex items-center gap-1.5 text-[10px] font-semibold uppercase tracking-[0.08em] text-secondary-label">
+                {props.groupIcon}
+                {props.groupLabel}
+              </span>
             </CommandGroupLabel>
             {props.emptyState ?? props.children}
           </CommandGroup>

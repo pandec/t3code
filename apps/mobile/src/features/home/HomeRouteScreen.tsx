@@ -25,23 +25,17 @@ import { usePendingTaskListActions } from "./usePendingTaskListActions";
 import { useArchivedThreadListActions, useThreadListActions } from "./useThreadListActions";
 import { getConnectionAwareBrandHeaderOptions } from "./WorkspaceConnectionTitle";
 import { useThreadAttentionFilter } from "../threads/use-thread-attention-filter";
-import { useThreadListV2State } from "../threads/use-thread-list-v2-enabled";
 import { pendingTaskAttentionKey } from "../threads/threadAttention";
 
 /* ─── Route screen ───────────────────────────────────────────────────── */
-
-const EMPTY_THREAD_KEYS: ReadonlySet<string> = new Set();
 
 export function HomeRouteScreen() {
   const { width: windowWidth } = useWindowDimensions();
   const { layout, panes } = useAdaptiveWorkspaceLayout();
   const projects = useProjects();
   const canonicalThreads = useThreadShells();
-  const threadListV2 = useThreadListV2State();
   const threadLifecyclePresentation = useThreadLifecyclePresentation(canonicalThreads);
-  const threads = threadListV2.enabled
-    ? threadLifecyclePresentation.activeThreads
-    : canonicalThreads;
+  const threads = threadLifecyclePresentation.activeThreads;
   const { environments: workspaceEnvironments, state: catalogState } = useWorkspaceState();
   const { savedConnectionsById } = useSavedRemoteConnections();
   const navigation = useNavigation();
@@ -79,7 +73,7 @@ export function HomeRouteScreen() {
     regenerateThreadTitle,
     unsettleThread,
   } = useThreadListActions({
-    offlineArchiveEnabled: threadListV2.archiveQueueEnabled,
+    offlineArchiveEnabled: true,
   });
   const { unarchiveThread, confirmDeleteThread: confirmDeleteArchivedThread } =
     useArchivedThreadListActions();
@@ -109,8 +103,6 @@ export function HomeRouteScreen() {
     options: listOptions,
     setSelectedEnvironmentId,
     setSelectedModel,
-    setProjectSortOrder,
-    setThreadSortOrder,
   } = useHomeListOptions(availableEnvironmentIds, availableModels);
   const selectedEnvironmentId = listOptions.selectedEnvironmentId;
   const selectedModelLabel =
@@ -212,8 +204,6 @@ export function HomeRouteScreen() {
           selectedEnvironmentId={selectedEnvironmentId}
           selectedProjectKey={selectedProjectKey}
           selectedModel={listOptions.selectedModel}
-          projectSortOrder={listOptions.projectSortOrder}
-          threadSortOrder={listOptions.threadSortOrder}
           onEnvironmentChange={setSelectedEnvironmentId}
           onProjectChange={setSelectedProjectKey}
           onModelChange={setSelectedModel}
@@ -229,10 +219,8 @@ export function HomeRouteScreen() {
               params: { screen: "Settings" },
             })
           }
-          onProjectSortOrderChange={setProjectSortOrder}
           onSearchQueryChange={setSearchQuery}
           onStartNewTask={() => navigation.navigate("NewTaskSheet", { screen: "NewTask" })}
-          onThreadSortOrderChange={setThreadSortOrder}
           onToggleAttentionFilter={attentionFilter.toggle}
         />
 
@@ -275,7 +263,6 @@ export function HomeRouteScreen() {
               params: { screen: "SettingsArchive" },
             })
           }
-          onProjectSortOrderChange={setProjectSortOrder}
           onSearchQueryChange={setSearchQuery}
           onSelectThread={(thread) => {
             // Compact drills into the thread and leaves the search field
@@ -311,20 +298,12 @@ export function HomeRouteScreen() {
             });
           }}
           onStartNewTask={() => navigation.navigate("NewTaskSheet", { screen: "NewTask" })}
-          onThreadSortOrderChange={setThreadSortOrder}
           onUnarchiveThread={unarchiveThread}
-          pendingArchivedThreads={
-            threadListV2.enabled ? threadLifecyclePresentation.pendingArchivedThreads : []
-          }
-          pendingArchivedThreadKeys={
-            threadListV2.enabled
-              ? threadLifecyclePresentation.pendingArchivedThreadKeys
-              : EMPTY_THREAD_KEYS
-          }
+          pendingArchivedThreads={threadLifecyclePresentation.pendingArchivedThreads}
+          pendingArchivedThreadKeys={threadLifecyclePresentation.pendingArchivedThreadKeys}
           pendingTasks={pendingTasks}
           projectGroupingMode={listOptions.projectGroupingMode}
           projects={projects}
-          projectSortOrder={listOptions.projectSortOrder}
           savedConnectionsById={savedConnectionsById}
           searchQuery={searchQuery}
           selectedEnvironmentId={selectedEnvironmentId}
@@ -332,7 +311,6 @@ export function HomeRouteScreen() {
           selectedModelLabel={selectedModelLabel}
           selectedProjectKey={selectedProjectKey}
           threads={threads}
-          threadSortOrder={listOptions.threadSortOrder}
         />
       </>
     </AndroidHomeFabLayout>

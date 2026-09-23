@@ -1,12 +1,4 @@
-import type {
-  EnvironmentId,
-  SidebarProjectGroupingMode,
-  SidebarThreadSortOrder,
-} from "@t3tools/contracts";
-import {
-  DEFAULT_SIDEBAR_PROJECT_SORT_ORDER,
-  DEFAULT_SIDEBAR_THREAD_SORT_ORDER,
-} from "@t3tools/contracts";
+import type { EnvironmentId, SidebarProjectGroupingMode } from "@t3tools/contracts";
 import {
   createContext,
   createElement,
@@ -19,45 +11,20 @@ import {
   type SetStateAction,
 } from "react";
 
-import type { HomeProjectSortOrder } from "./homeThreadList";
-
 export interface HomeListOptions {
   readonly selectedEnvironmentId: EnvironmentId | null;
   /** Model slug the list is pinned to (`thread.modelSelection.model`). */
   readonly selectedModel: string | null;
-  readonly projectSortOrder: HomeProjectSortOrder;
-  readonly threadSortOrder: SidebarThreadSortOrder;
 }
 
 export interface ResolvedHomeListOptions extends HomeListOptions {
   readonly projectGroupingMode: SidebarProjectGroupingMode;
 }
 
-export const PROJECT_SORT_OPTIONS: ReadonlyArray<{
-  readonly value: HomeProjectSortOrder;
-  readonly label: string;
-}> = [
-  { value: "updated_at", label: "Last user message" },
-  { value: "created_at", label: "Created at" },
-];
-
-export const THREAD_SORT_OPTIONS: ReadonlyArray<{
-  readonly value: SidebarThreadSortOrder;
-  readonly label: string;
-}> = [
-  { value: "updated_at", label: "Last user message" },
-  { value: "created_at", label: "Created at" },
-];
-
 function defaultHomeListOptions(): HomeListOptions {
   return {
     selectedEnvironmentId: null,
     selectedModel: null,
-    projectSortOrder:
-      DEFAULT_SIDEBAR_PROJECT_SORT_ORDER === "manual"
-        ? "updated_at"
-        : DEFAULT_SIDEBAR_PROJECT_SORT_ORDER,
-    threadSortOrder: DEFAULT_SIDEBAR_THREAD_SORT_ORDER,
   };
 }
 
@@ -84,12 +51,7 @@ export function HomeListOptionsProvider({
   return createElement(HomeListOptionsContext, { value }, children);
 }
 
-/**
- * True when a structured scope filter narrows the list. Sort/group choices are
- * deliberately excluded: they reorder the list rather than hide threads, and
- * "Clear filters" does not reset them — gating that action on sort order would
- * offer a menu item that does nothing.
- */
+/** True when an environment, project, or model narrows the list. */
 export function hasActiveHomeListFilters(filters: {
   readonly selectedEnvironmentId: EnvironmentId | null;
   readonly selectedModel: string | null;
@@ -99,22 +61,6 @@ export function hasActiveHomeListFilters(filters: {
     filters.selectedEnvironmentId !== null ||
     filters.selectedModel !== null ||
     (filters.selectedProjectKey !== null && filters.selectedProjectKey !== undefined)
-  );
-}
-
-export function hasCustomHomeListOptions(
-  options: HomeListOptions & {
-    readonly selectedProjectKey?: string | null;
-  },
-): boolean {
-  const defaultProjectSortOrder =
-    DEFAULT_SIDEBAR_PROJECT_SORT_ORDER === "manual"
-      ? "updated_at"
-      : DEFAULT_SIDEBAR_PROJECT_SORT_ORDER;
-  return (
-    hasActiveHomeListFilters(options) ||
-    options.projectSortOrder !== defaultProjectSortOrder ||
-    options.threadSortOrder !== DEFAULT_SIDEBAR_THREAD_SORT_ORDER
   );
 }
 
@@ -160,17 +106,9 @@ export function useHomeListOptions(
   const setSelectedModel = useCallback((value: string | null) => {
     setOptions((current) => ({ ...current, selectedModel: value }));
   }, []);
-  const setProjectSortOrder = useCallback((value: HomeProjectSortOrder) => {
-    setOptions((current) => ({ ...current, projectSortOrder: value }));
-  }, []);
-  const setThreadSortOrder = useCallback((value: SidebarThreadSortOrder) => {
-    setOptions((current) => ({ ...current, threadSortOrder: value }));
-  }, []);
   return {
     options: resolvedOptions,
     setSelectedEnvironmentId,
     setSelectedModel,
-    setProjectSortOrder,
-    setThreadSortOrder,
   } as const;
 }

@@ -27,7 +27,7 @@ import {
   encodeQueuedThreadMessage,
   type QueuedThreadMessage,
 } from "./thread-outbox-model";
-import type { ComposerDraft } from "./use-composer-drafts";
+import type { ComposerDraft } from "./composer-draft-types";
 import { parseLegacyNewTaskDraftKey } from "./new-task-draft-key";
 
 const LEGACY_SCHEMA_VERSION = 1;

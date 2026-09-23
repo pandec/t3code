@@ -162,8 +162,8 @@ export function SavedPromptRow({
           </Button>
           <Button
             size="icon-xs"
-            variant="ghost"
-            className="shrink-0 text-muted-foreground opacity-0 group-focus-within:opacity-100 group-hover:opacity-100"
+            variant="ghost-muted"
+            className="shrink-0"
             aria-label={`Edit ${prompt.title}`}
             disabled={!canEdit}
             onClick={onEdit}
@@ -273,7 +273,7 @@ function SavedPromptEditorDialog({
               {validationError && <p className="text-sm text-destructive">{validationError}</p>}
             </form>
           </DialogPanel>
-          <DialogFooter className="dark:border-transparent dark:bg-transparent">
+          <DialogFooter variant="bare">
             {isEditing && (
               <Button
                 type="button"

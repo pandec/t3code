@@ -24,7 +24,7 @@ import {
   resolveSnoozePresets,
   type SnoozePreset,
 } from "@t3tools/client-runtime/state/thread-settled";
-import { resolveSettledThreadTimestamp } from "@t3tools/client-runtime/state/thread-sort";
+
 import type { MenuAction } from "@react-native-menu/menu";
 import { memo, useCallback, useEffect, useMemo, useState, type ComponentProps } from "react";
 import { Alert, Pressable, StyleSheet, useWindowDimensions, View } from "react-native";
@@ -39,8 +39,8 @@ import { resolveRowAccentTintAlpha, withAccentAlpha } from "../../lib/accentTint
 import { ProviderIcon, ProviderInstanceIcon } from "../../components/ProviderIcon";
 import type { ThreadRowProviderInstance } from "./thread-provider-instance";
 import { cn } from "../../lib/cn";
-import { copyTextWithHaptic } from "../../lib/copyTextWithHaptic";
 import { relativeTime } from "../../lib/time";
+import { copyTextWithHaptic } from "../../lib/copyTextWithHaptic";
 import { useUniwindTheme } from "../../lib/useUniwindTheme";
 import { useThreadListeningState } from "../../state/listeningPlayback";
 import { toggleLoadedListeningTrack } from "../../state/listeningPlayer";
@@ -63,13 +63,12 @@ import { QueuedMessageIcon } from "./queued-message-icon";
 import { ThreadSearchMatchExcerpt } from "./thread-search-match";
 
 /**
- * Thread List v2 renders one flat native list: rich edge-to-edge rows for
- * active work and a receded settled tail, all with native swipe and
- * long-press actions. State reads through colored status labels and text
- * hierarchy rather than card fills.
+ * Thread List v2 renders active work and lifecycle shelves with native swipe
+ * and long-press actions. State reads through colored status labels and text
+ * hierarchy.
  */
 
-// Status hues follow the system-wide convention set by sidebar v1 and the
+// Status hues follow the system-wide convention set by the
 // Live Activity/widgets (amber approval, indigo input, sky working) so a
 // thread reads the same color everywhere it surfaces.
 const STATUS_LABEL_BY_STATUS: Partial<
@@ -81,10 +80,6 @@ const STATUS_LABEL_BY_STATUS: Partial<
   monitoring: { label: "Monitoring", className: "text-foreground-secondary" },
   failed: { label: "Failed", className: "text-danger-foreground" },
 };
-
-function threadTimeLabel(thread: EnvironmentThreadShell): string {
-  return relativeTime(thread.latestUserMessageAt ?? thread.updatedAt ?? thread.createdAt);
-}
 
 export function resolveThreadListV2WorkingTimeLabel(
   thread: Pick<EnvironmentThreadShell, "latestTurn" | "session">,
@@ -133,7 +128,7 @@ const SNOOZED_MENU_ACTIONS: MenuAction[] = [
   { id: "delete", title: "Delete", image: "trash", attributes: { destructive: true } },
 ];
 
-/** Rounded-row radius shared with the v1 sidebar rows. */
+/** Rounded-row radius for the sidebar rows. */
 const SIDEBAR_V2_ROW_RADIUS = 12;
 
 /**
@@ -578,8 +573,15 @@ export const ThreadListV2Row = memo(function ThreadListV2Row(props: {
   /** Preformatted against the parent minute tick so this memoized row's
       countdown keeps moving. */
   readonly snoozeWakeLabelText?: string;
-  /** Parent minute tick passed as a prop so this memoized row refreshes its
-      native snooze menu while mounted. */
+  /** Preformatted against the parent clock (row order timestamp: settle stamp
+      on settled rows, latest activity otherwise). Blank while a status label
+      or the wake countdown owns that slot. Precomputed per row — not via the
+      list's extraData — so the minute tick re-renders only rows whose
+      displayed text moved. */
+  readonly timeLabel: string;
+  /** Parent minute tick carried on the row's list item, present only when the
+      row's menu offers snooze presets, so those menus refresh while mounted
+      without invalidating every other row. */
   readonly snoozePresetMinute: string;
   readonly project: EnvironmentProject | null;
   readonly projectTitle?: string;
@@ -601,7 +603,7 @@ export const ThreadListV2Row = memo(function ThreadListV2Row(props: {
       flat edge-to-edge rows on the screen background with inset hairlines.
       "sidebar" renders the iPad split-view idiom: rounded rows blending
       into the drawer surface, selection filled with the accent color —
-      matching the v1 sidebar rows. */
+      matching the sidebar rows. */
   readonly pane?: "screen" | "sidebar";
   /** Keeps row hairlines inside a section; section headers draw their own rule. */
   readonly showTrailingDivider?: boolean;
@@ -692,13 +694,7 @@ export const ThreadListV2Row = memo(function ThreadListV2Row(props: {
   const accentColor = props.projectAccentColor ?? null;
   const status = resolveThreadListV2Status(thread);
   const statusLabel = STATUS_LABEL_BY_STATUS[status];
-  // Settled rows label by the same stamp they sort by, so order and label
-  // can't disagree. updatedAt is always present, so the resolver never
-  // returns null here.
-  const settledTimestamp =
-    variant === "slim" && !snoozedRow ? resolveSettledThreadTimestamp(thread) : null;
-  const timeLabel =
-    settledTimestamp !== null ? relativeTime(settledTimestamp) : threadTimeLabel(thread);
+  const timeLabel = props.timeLabel;
   const workingLabel = resolveThreadListV2WorkingTimeLabel(thread, status);
   // Set while this thread's recording is playing or paused mid-way, so
   // pausing from the list keeps a way back in. A finished recording clears
@@ -751,6 +747,19 @@ export const ThreadListV2Row = memo(function ThreadListV2Row(props: {
   );
   const handleSettle = useCallback(() => onSettleThread(thread), [onSettleThread, thread]);
   const [customSnoozeOpen, setCustomSnoozeOpen] = useState(false);
+  // A recycled cell reassigns this mounted row to a different thread without
+  // remounting it, and the render closure stops running while list equality
+  // says the item is unchanged — so any row-local UI state must be dismissed
+  // when the identity under it changes. Without this, a custom snooze sheet
+  // opened for one thread survives the thread's removal/reorder and its
+  // submit snoozes whichever thread the cell was reassigned to. (ThreadSwipeable
+  // enforces the same contract on the swipe layer with its resetKey.)
+  const rowIdentity = `${thread.environmentId}:${thread.id}`;
+  const [boundIdentity, setBoundIdentity] = useState(rowIdentity);
+  if (boundIdentity !== rowIdentity) {
+    setBoundIdentity(rowIdentity);
+    setCustomSnoozeOpen(false);
+  }
   const handleSnooze = useCallback(
     (preset: Pick<SnoozePreset, "snoozedUntil" | "untilDone">) => onSnoozeThread(thread, preset),
     [onSnoozeThread, thread],
@@ -970,6 +979,7 @@ export const ThreadListV2Row = memo(function ThreadListV2Row(props: {
       handleUnsettle,
       handleUnsnooze,
       snoozePresets,
+      setCustomSnoozeOpen,
     ],
   );
   const primaryAction = useMemo(() => {

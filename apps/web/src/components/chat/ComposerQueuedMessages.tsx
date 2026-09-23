@@ -106,9 +106,9 @@ export function ComposerQueuedMessages({
                     <TooltipTrigger
                       render={
                         <Button
-                          size="icon-sm"
-                          variant="ghost"
-                          className="size-6 rounded-full text-muted-foreground hover:text-foreground"
+                          size="icon-xs"
+                          shape="pill"
+                          variant="ghost-muted"
                           aria-label="Send into the running turn now"
                           disabled={!canSteer}
                           onClick={() => onSteerNow(message)}
@@ -124,9 +124,9 @@ export function ComposerQueuedMessages({
                   <TooltipTrigger
                     render={
                       <Button
-                        size="icon-sm"
-                        variant="ghost"
-                        className="size-6 rounded-full text-muted-foreground hover:text-foreground"
+                        size="icon-xs"
+                        shape="pill"
+                        variant="ghost-muted"
                         aria-label="Edit queued message"
                         disabled={dispatchingMessageId === message.messageId}
                         onClick={() => onEdit(message)}
@@ -141,9 +141,9 @@ export function ComposerQueuedMessages({
                   <TooltipTrigger
                     render={
                       <Button
-                        size="icon-sm"
-                        variant="ghost"
-                        className="size-6 rounded-full text-muted-foreground hover:text-destructive"
+                        size="icon-xs"
+                        shape="pill"
+                        variant="ghost-destructive"
                         aria-label="Delete queued message"
                         disabled={dispatchingMessageId === message.messageId}
                         onClick={() => onDelete(message)}

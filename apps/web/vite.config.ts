@@ -164,7 +164,6 @@ const ISOLATED_TEST_FILES = [
   "src/components/settings/ThemeEditorHost.test.tsx",
   "src/components/sidebar/SidebarUpdateReleaseNotes.test.tsx",
   "src/components/thread-split/threadSplitStore.test.ts",
-  "src/components/usage/UsagePage.test.tsx",
   "src/composerDraftStore.test.ts",
   "src/hooks/useEnvironmentThemeSync.test.ts",
   "src/hooks/useHandleNewThread.test.ts",

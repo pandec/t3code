@@ -22,7 +22,7 @@ import * as Result from "effect/Result";
 import { type ReactNode } from "react";
 import { parseSnoozeQuery } from "./CommandPalette.snooze";
 import { snoozeWakeDescription, type SnoozePreset } from "./Sidebar.snooze";
-import { sortThreads } from "../lib/threadSort";
+import { getThreadSortTimestamp, sortThreads } from "../lib/threadSort";
 import { normalizeSearchText } from "../lib/utils";
 import { formatRelativeTimeLabel } from "../timestampFormat";
 import { type Project, type SidebarThreadSummary } from "../types";
@@ -199,6 +199,7 @@ export interface CommandPaletteItem {
   readonly description?: ReactNode;
   readonly threadContentMatch?: CommandPaletteThreadContentMatch;
   readonly timestamp?: string;
+  readonly searchRecency?: number;
   readonly icon: ReactNode;
   /** Optional project accent washed over this result row. */
   readonly projectAccentColor?: SidebarProjectAccentColor;
@@ -754,6 +755,7 @@ export function buildThreadActionItems<TThread extends BuildThreadActionItemsThr
         timestamp: formatRelativeTimeLabel(
           thread.latestUserMessageAt ?? thread.updatedAt ?? thread.createdAt,
         ),
+        searchRecency: getThreadSortTimestamp(thread, "updated_at"),
         icon: input.icon,
       },
       leadingContent ? { titleLeadingContent: leadingContent } : {},
@@ -805,6 +807,10 @@ function rankCommandPaletteItemMatch(
   for (const [index, field] of terms.entries()) {
     const fieldRank = rankSearchFieldMatch(field, normalizedQuery, queryTokens);
     if (fieldRank !== Number.NEGATIVE_INFINITY) {
+      if (index === 0 && item.searchRecency !== undefined) {
+        // All non-exact thread title matches share a tier so recency breaks the tie.
+        return 1_000 + Number(fieldRank === 3);
+      }
       return 1_000 - index * 100 + fieldRank;
     }
   }
@@ -881,6 +887,7 @@ export function filterCommandPaletteGroups(input: {
         (left, right) =>
           Number(left.item.secondary ?? false) - Number(right.item.secondary ?? false) ||
           right.rank - left.rank ||
+          (right.item.searchRecency ?? 0) - (left.item.searchRecency ?? 0) ||
           left.index - right.index,
       )
       .map((entry) => entry.item);

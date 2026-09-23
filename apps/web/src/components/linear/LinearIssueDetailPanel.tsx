@@ -97,7 +97,7 @@ function LinearUnavailable({
   identifier: string;
 }) {
   return (
-    <Empty className="px-4 py-16 md:px-4">
+    <Empty>
       <EmptyMedia variant="icon">
         <LinearIcon />
       </EmptyMedia>
@@ -136,7 +136,7 @@ function Chip({
     <Badge
       size="control"
       variant="outline"
-      className={cn("max-w-full min-w-0 justify-start gap-1.5 font-normal", className)}
+      className={cn("max-w-full min-w-0 justify-start", className)}
       {...(open ? { render: <button type="button" aria-label={label} onClick={open} /> } : {})}
     >
       {children}

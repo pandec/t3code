@@ -2,7 +2,6 @@ import { NativeHeaderToolbar, NativeStackScreenOptions } from "../../native/Stac
 import { useCallback, useRef } from "react";
 import type { SearchBarCommands } from "react-native-screens";
 import { useUniwindTheme } from "../../lib/useUniwindTheme";
-import { useThreadListV2Enabled } from "../threads/use-thread-list-v2-enabled";
 import { useHardwareKeyboardCommand } from "../keyboard/hardwareKeyboardCommands";
 import {
   createNativeAttentionFilterHeaderItem,
@@ -14,12 +13,7 @@ import {
   NATIVE_MAIL_SEARCH_TOOLBAR_SUPPORTED,
 } from "../layout/native-mail-search-toolbar";
 import { buildHomeListFilterMenu } from "./home-list-filter-menu";
-import {
-  hasActiveHomeListFilters,
-  hasCustomHomeListOptions,
-  PROJECT_SORT_OPTIONS,
-  THREAD_SORT_OPTIONS,
-} from "./home-list-options";
+import { hasActiveHomeListFilters } from "./home-list-options";
 import type { HomeHeaderProps } from "./HomeHeader.types";
 
 export type { HomeHeaderEnvironment } from "./HomeHeader.types";
@@ -29,14 +23,8 @@ export function HomeHeader(props: HomeHeaderProps) {
   const theme = useUniwindTheme();
   const iconColor = theme["--color-icon"];
   const primaryColor = theme["--color-primary"];
-  // Thread List v2 lays the list out in fixed creation order, so the
-  // sort/group filter controls would be silently ignored — hide them and
-  // key the "customized" icon state off the environment filter alone.
-  const threadListV2Enabled = useThreadListV2Enabled();
   const hasActiveFilters = hasActiveHomeListFilters(props);
-  const hasCustomListOptions = threadListV2Enabled
-    ? hasActiveFilters
-    : hasCustomHomeListOptions(props);
+  const hasCustomListOptions = hasActiveFilters;
   const focusSearch = useCallback(() => {
     searchBarRef.current?.focus();
     return searchBarRef.current !== null;
@@ -49,7 +37,6 @@ export function HomeHeader(props: HomeHeaderProps) {
       props.onProjectChange(null);
       props.onModelChange(null);
     },
-    listOrganization: !threadListV2Enabled,
   });
   return (
     <>
@@ -73,17 +60,13 @@ export function HomeHeader(props: HomeHeaderProps) {
               onPress: props.onOpenSettings,
               type: "button",
             }),
-            ...(threadListV2Enabled
-              ? [
-                  createNativeAttentionFilterHeaderItem({
-                    enabled: props.attentionFilterEnabled,
-                    gated: !props.attentionFilterReady && !props.attentionFilterEnabled,
-                    activeTintColor: primaryColor,
-                    identifier: "home-attention-filter",
-                    onToggle: props.onToggleAttentionFilter,
-                  }),
-                ]
-              : []),
+            createNativeAttentionFilterHeaderItem({
+              enabled: props.attentionFilterEnabled,
+              gated: !props.attentionFilterReady && !props.attentionFilterEnabled,
+              activeTintColor: primaryColor,
+              identifier: "home-attention-filter",
+              onToggle: props.onToggleAttentionFilter,
+            }),
             createNativeFilterMenuHeaderItem({
               filterIcon: hasCustomListOptions
                 ? "line.3.horizontal.decrease.circle.fill"
@@ -109,7 +92,7 @@ export function HomeHeader(props: HomeHeaderProps) {
               }
             : {
                 // Pre-Liquid-Glass iOS: standard pull-down search in the nav
-                // bar; create + sort live in the plain bottom toolbar below.
+                // bar; create and filters live in the bottom toolbar below.
                 headerSearchBarOptions: {
                   ref: searchBarRef,
                   autoCapitalize: "none" as const,
@@ -129,7 +112,7 @@ export function HomeHeader(props: HomeHeaderProps) {
       {NATIVE_MAIL_SEARCH_TOOLBAR_SUPPORTED ? null : (
         <NativeHeaderToolbar placement="bottom">
           <NativeHeaderToolbar.Menu
-            accessibilityLabel="Filter and sort threads"
+            accessibilityLabel="Filter threads"
             icon={
               hasCustomListOptions
                 ? "line.3.horizontal.decrease.circle.fill"
@@ -212,56 +195,24 @@ export function HomeHeader(props: HomeHeaderProps) {
                 ))}
               </NativeHeaderToolbar.Menu>
             )}
-
-            {threadListV2Enabled ? null : (
-              <NativeHeaderToolbar.Menu title="Sort projects">
-                <NativeHeaderToolbar.Label>Sort projects</NativeHeaderToolbar.Label>
-                {PROJECT_SORT_OPTIONS.map((option) => (
-                  <NativeHeaderToolbar.MenuAction
-                    key={option.value}
-                    isOn={props.projectSortOrder === option.value}
-                    onPress={() => props.onProjectSortOrderChange(option.value)}
-                  >
-                    <NativeHeaderToolbar.Label>{option.label}</NativeHeaderToolbar.Label>
-                  </NativeHeaderToolbar.MenuAction>
-                ))}
-              </NativeHeaderToolbar.Menu>
-            )}
-
-            {threadListV2Enabled ? null : (
-              <NativeHeaderToolbar.Menu title="Sort threads">
-                <NativeHeaderToolbar.Label>Sort threads</NativeHeaderToolbar.Label>
-                {THREAD_SORT_OPTIONS.map((option) => (
-                  <NativeHeaderToolbar.MenuAction
-                    key={option.value}
-                    isOn={props.threadSortOrder === option.value}
-                    onPress={() => props.onThreadSortOrderChange(option.value)}
-                  >
-                    <NativeHeaderToolbar.Label>{option.label}</NativeHeaderToolbar.Label>
-                  </NativeHeaderToolbar.MenuAction>
-                ))}
-              </NativeHeaderToolbar.Menu>
-            )}
           </NativeHeaderToolbar.Menu>
-          {threadListV2Enabled ? (
-            <NativeHeaderToolbar.Button
-              accessibilityLabel={
-                props.attentionFilterEnabled
-                  ? "Clear attention filter"
-                  : props.attentionFilterReady
-                    ? "Show only threads needing attention"
-                    : "Loading threads"
-              }
-              disabled={!props.attentionFilterReady && !props.attentionFilterEnabled}
-              icon={
-                props.attentionFilterEnabled
-                  ? "exclamationmark.circle.fill"
-                  : "exclamationmark.circle"
-              }
-              onPress={props.onToggleAttentionFilter}
-              tintColor={props.attentionFilterEnabled ? primaryColor : undefined}
-            />
-          ) : null}
+          <NativeHeaderToolbar.Button
+            accessibilityLabel={
+              props.attentionFilterEnabled
+                ? "Clear attention filter"
+                : props.attentionFilterReady
+                  ? "Show only threads needing attention"
+                  : "Loading threads"
+            }
+            disabled={!props.attentionFilterReady && !props.attentionFilterEnabled}
+            icon={
+              props.attentionFilterEnabled
+                ? "exclamationmark.circle.fill"
+                : "exclamationmark.circle"
+            }
+            onPress={props.onToggleAttentionFilter}
+            tintColor={props.attentionFilterEnabled ? primaryColor : undefined}
+          />
           <NativeHeaderToolbar.Spacer flexible />
           <NativeHeaderToolbar.Button
             accessibilityLabel="New task"

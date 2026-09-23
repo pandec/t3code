@@ -72,10 +72,8 @@ export const ComposerThreadWaitMenu = memo(function ComposerThreadWaitMenu(props
         <CommandItem
           key={entry.id}
           value={entry.id}
-          className={cn(
-            "cursor-pointer select-none gap-2 hover:bg-transparent hover:text-inherit data-highlighted:bg-transparent data-highlighted:text-inherit",
-            picker.highlightedEntry?.id === entry.id && "bg-accent! text-accent-foreground!",
-          )}
+          active={picker.highlightedEntry?.id === entry.id}
+          className="cursor-pointer select-none"
           onMouseMove={() => {
             if (picker.highlightedId !== entry.id) picker.setHighlightedId(entry.id);
           }}

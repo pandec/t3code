@@ -128,7 +128,7 @@ export function ThreadGroupsDialog(props: {
             show before Active in the sidebar. Removing a group keeps its threads.
           </DialogDescription>
         </DialogHeader>
-        <DialogPanel className="space-y-3">
+        <DialogPanel>
           <DndContext
             accessibility={DRAG_ACCESSIBILITY}
             sensors={sensors}
