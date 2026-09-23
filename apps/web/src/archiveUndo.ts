@@ -63,7 +63,14 @@ const ARCHIVE_UNDO_BLOCKING_LAYER_SELECTOR = [
 /** Thread archive and undo shortcuts stay inert while a floating layer owns
  *  the interaction, so a chord meant for a dialog never flips a thread. */
 export function hasOpenArchiveUndoBlockingLayer(
-  root: Pick<Document, "querySelector"> | null = typeof document === "undefined" ? null : document,
+  root: Pick<Document, "querySelectorAll"> | null = typeof document === "undefined"
+    ? null
+    : document,
 ): boolean {
-  return root !== null && root.querySelector(ARCHIVE_UNDO_BLOCKING_LAYER_SELECTOR) !== null;
+  if (root === null) return false;
+  // Header menus and some panels stay mounted while closed. Their DOM
+  // presence alone must not disable thread shortcuts.
+  return Array.from(root.querySelectorAll(ARCHIVE_UNDO_BLOCKING_LAYER_SELECTOR)).some(
+    (layer) => layer.closest("[data-closed], [hidden], [inert]") === null,
+  );
 }

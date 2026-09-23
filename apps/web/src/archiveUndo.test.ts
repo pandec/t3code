@@ -14,22 +14,38 @@ describe("archive undo guards", () => {
   });
 
   it("blocks archive undo while a floating interaction layer is open", () => {
-    const openRoot = { querySelector: () => ({}) } as unknown as Pick<Document, "querySelector">;
-    const closedRoot = { querySelector: () => null } as unknown as Pick<Document, "querySelector">;
+    const openRoot = {
+      querySelectorAll: () => [{ closest: () => null }],
+    } as unknown as Pick<Document, "querySelectorAll">;
+    const closedRoot = {
+      querySelectorAll: () => [],
+    } as unknown as Pick<Document, "querySelectorAll">;
 
     expect(hasOpenArchiveUndoBlockingLayer(openRoot)).toBe(true);
     expect(hasOpenArchiveUndoBlockingLayer(closedRoot)).toBe(false);
     expect(hasOpenArchiveUndoBlockingLayer(null)).toBe(false);
   });
 
+  it("ignores retained closed layers but still blocks on another open layer", () => {
+    const closedLayer = { closest: (): object | null => ({}) };
+    const layers = [closedLayer];
+    const root = {
+      querySelectorAll: () => layers,
+    } as unknown as Pick<Document, "querySelectorAll">;
+
+    expect(hasOpenArchiveUndoBlockingLayer(root)).toBe(false);
+    layers.push({ closest: () => null });
+    expect(hasOpenArchiveUndoBlockingLayer(root)).toBe(true);
+  });
+
   it("blocks generic aria-modal dialogs", () => {
     let queriedSelector = "";
     const root = {
-      querySelector: (selector: string) => {
+      querySelectorAll: (selector: string) => {
         queriedSelector = selector;
-        return null;
+        return [];
       },
-    } as unknown as Pick<Document, "querySelector">;
+    } as unknown as Pick<Document, "querySelectorAll">;
 
     hasOpenArchiveUndoBlockingLayer(root);
 
