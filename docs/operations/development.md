@@ -132,7 +132,8 @@ Runtime-discovered entrypoints and dependency exceptions belong in [knip.jsonc](
 
 ## Desktop artifacts
 
-Local artifact builds are unsigned by default and write to `release/`:
+Local release artifact builds are unsigned by default and write to `release/`.
+Packaged macOS Dev builds require signing and write to `release-dev/`:
 
 ```sh
 vp run dist:desktop:dmg
@@ -178,6 +179,34 @@ For a cross-architecture or universal build, add the requested Rust targets:
 ```sh
 rustup target add aarch64-apple-darwin x86_64-apple-darwin
 ```
+
+### Signed macOS Dev builds
+
+Set `T3CODE_DESKTOP_MAC_TEAM_ID` to your 10-character Apple Developer team ID in
+the checkout's gitignored `.env.local`. Install that team's **Developer ID Application**
+certificate and its private key in Keychain. An Apple Development or Apple Distribution
+certificate is not a substitute. `security find-identity -v -p codesigning` should list it.
+
+`t3-build`, `t3-install-desktop`, and the fleet updater all use this configuration.
+macOS Dev builds always sign, even if `T3CODE_DESKTOP_SIGNED` is false. They fail if signing
+is unavailable and verify the complete app against the configured team and
+`com.t3tools.t3code.dev` before exporting artifacts. The installer verifies the copied app
+before replacing the installed bundle. Dev builds skip notarization; Linux and iOS keep
+their existing build paths.
+
+After moving from an unsigned build, install the signed app at
+`/Applications/T3 Code (Dev).app`, remove its old Full Disk Access entry in System Settings,
+add the installed app again, and restart it. Renew other affected permissions if needed.
+Future builds must keep the same bundle ID and signing team. Permissions are local to each
+Mac and still depend on which app or service launches the agent.
+
+The fleet updater builds on each Mac over SSH. Each Mac therefore needs the certificate,
+private key, and local team configuration. Its signing key must be usable from that SSH
+session without a Keychain prompt. An unattended setup can use a dedicated build keychain
+with access granted to Apple's signing tools and an automatic unlock step. Keep any unlock
+credential in protected machine-local storage, outside Git and build logs. Test signing
+through the actual fleet SSH session after setup, including after a reboot; success in an
+interactive terminal does not establish unattended access.
 
 ### Windows installer prerequisites
 

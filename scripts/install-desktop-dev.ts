@@ -14,11 +14,17 @@ import * as FileSystem from "effect/FileSystem";
 import * as Option from "effect/Option";
 import * as Path from "effect/Path";
 import { ChildProcess, ChildProcessSpawner } from "effect/unstable/process";
+import {
+  MAC_DEV_APP_ID,
+  resolveMacDevSigningTeam,
+  verifyMacDevSignature,
+} from "./lib/mac-dev-signing.ts";
+import { loadRepoEnv } from "./lib/public-config.ts";
 
 const MAC_APP_PATH = "/Applications/T3 Code (Dev).app";
 const MAC_APP_PROCESS = "T3 Code (Dev)";
 const MAC_APP_PROCESS_PATTERN = escapeProcessNameForExactMatch(MAC_APP_PROCESS);
-const MAC_APP_ID = "com.t3tools.t3code.dev";
+const MAC_APP_ID = MAC_DEV_APP_ID;
 const LINUX_APP_PROCESS = "t3code-dev";
 const LINUX_SERVICE = "t3code.service";
 const PROCESS_STATE_ATTEMPTS = 20;
@@ -314,12 +320,22 @@ const stopMacApp = Effect.fn("installDesktopDev.stopMacApp")(function* (
   yield* terminateProcess(spawner, MAC_APP_PROCESS, MAC_APP_PROCESS_PATTERN);
 });
 
+export const replaceVerifiedMacApp = Effect.fn("installDesktopDev.replaceVerifiedMacApp")(
+  function* (temporaryAppPath: string, installedAppPath: string, teamId: string) {
+    const fs = yield* FileSystem.FileSystem;
+    yield* verifyMacDevSignature(temporaryAppPath, teamId);
+    yield* fs.remove(installedAppPath, { recursive: true, force: true });
+    yield* fs.rename(temporaryAppPath, installedAppPath);
+  },
+);
+
 const installMacArtifact = Effect.fn("installDesktopDev.installMacArtifact")(
   function* (
     spawner: ChildProcessSpawner.ChildProcessSpawner["Service"],
     fs: FileSystem.FileSystem,
     path: Path.Path,
     releaseDirectory: string,
+    teamId: string,
   ) {
     const dmgPath = yield* findLatestArtifact(fs, path, releaseDirectory, "T3-Code-Dev-", ".dmg");
     let mountPoint: string | undefined;
@@ -348,8 +364,10 @@ const installMacArtifact = Effect.fn("installDesktopDev.installMacArtifact")(
       temporaryAppPath = `/Applications/.T3 Code (Dev).app.installing.${String(process.pid)}`;
       yield* fs.remove(temporaryAppPath, { recursive: true, force: true });
       yield* runCommand(spawner, "ditto", [sourceAppPath, temporaryAppPath]);
-      yield* fs.remove(MAC_APP_PATH, { recursive: true, force: true });
-      yield* fs.rename(temporaryAppPath, MAC_APP_PATH);
+      yield* replaceVerifiedMacApp(temporaryAppPath, MAC_APP_PATH, teamId).pipe(
+        Effect.provideService(FileSystem.FileSystem, fs),
+        Effect.provideService(ChildProcessSpawner.ChildProcessSpawner, spawner),
+      );
       temporaryAppPath = undefined;
     });
 
@@ -377,6 +395,7 @@ const createMacLifecycle = Effect.fn("installDesktopDev.createMacLifecycle")(fun
   const fs = yield* FileSystem.FileSystem;
   const path = yield* Path.Path;
   const releaseDirectory = path.join(repoRoot, "release-dev");
+  const teamId = yield* resolveMacDevSigningTeam(loadRepoEnv({ repoRoot }));
   // Empty output is the ordinary "not running" answer, so only a genuine
   // failure to reach LaunchServices is an error. Swallowing that would let a
   // running app read as absent and have its bundle replaced underneath it.
@@ -388,7 +407,7 @@ const createMacLifecycle = Effect.fn("installDesktopDev.createMacLifecycle")(fun
     isRunning,
     stop: stopMacApp(spawner),
     build: runCommand(spawner, "vp", ["run", "dist:desktop:dev"], { cwd: repoRoot }),
-    install: installMacArtifact(spawner, fs, path, releaseDirectory),
+    install: installMacArtifact(spawner, fs, path, releaseDirectory, teamId),
     start: startAppWithVerification(
       MAC_APP_PROCESS,
       start,

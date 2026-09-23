@@ -34,6 +34,7 @@ import {
   selectCliRuntimeExternalDependencies,
 } from "./lib/cli-external-packages.ts";
 import { loadRepoEnv } from "./lib/public-config.ts";
+import { resolveMacDevSigningTeam, verifyMacDevSignature } from "./lib/mac-dev-signing.ts";
 import { selectDesktopRuntimeExternalDependencies } from "./lib/desktop-external-packages.ts";
 import { resolveCatalogDependencies } from "./lib/resolve-catalog.ts";
 
@@ -1646,7 +1647,8 @@ export const resolveBuildOptions = Effect.fn("resolveBuildOptions")(function* (
 
   const skipBuild = resolveBooleanFlag(input.skipBuild, env.skipBuild);
   const keepStage = resolveBooleanFlag(input.keepStage, env.keepStage);
-  const signed = resolveBooleanFlag(input.signed, env.signed);
+  const signed =
+    (platform === "mac" && flavor === "dev") || resolveBooleanFlag(input.signed, env.signed);
   const verbose = resolveBooleanFlag(input.verbose, env.verbose);
 
   const mockUpdates = resolveBooleanFlag(input.mockUpdates, env.mockUpdates);
@@ -2664,6 +2666,7 @@ export const createBuildConfig = Effect.fn("createBuildConfig")(function* (
   // source file was never written fails the electron-builder step.
   wslRuntimeBundled = false,
   arch?: typeof BuildArch.Type,
+  macDevTeamId?: string,
 ) {
   const isDevFlavor = flavor === "dev";
   const buildConfig: Record<string, unknown> = {
@@ -2724,6 +2727,11 @@ export const createBuildConfig = Effect.fn("createBuildConfig")(function* (
         NSMicrophoneUsageDescription: "Allow T3 Code to record voice prompts for transcription.",
         NSScreenCaptureUsageDescription:
           "T3 Code captures the active window when you use the window capture shortcut.",
+        ...(isDevFlavor
+          ? {
+              NSAppleEventsUsageDescription: "Allow T3 Code agents to automate apps you authorize.",
+            }
+          : {}),
       },
       protocols: [
         {
@@ -2731,7 +2739,17 @@ export const createBuildConfig = Effect.fn("createBuildConfig")(function* (
           schemes: isDevFlavor ? ["t3code-dev"] : ["t3code", "t3code-dev"],
         },
       ],
-      ...(signed ? { sign: path.join(repoRoot, "scripts/sign-macos.ts") } : {}),
+      ...(signed || isDevFlavor ? { sign: path.join(repoRoot, "scripts/sign-macos.ts") } : {}),
+      ...(isDevFlavor
+        ? {
+            identity: yield* resolveMacDevSigningTeam({
+              T3CODE_DESKTOP_MAC_TEAM_ID: macDevTeamId,
+            }),
+            entitlements: path.join(repoRoot, "apps/desktop/resources/entitlements.dev.mac.plist"),
+            // Local rebuilds need a stable signature; Apple notarization is a separate release step.
+            notarize: false,
+          }
+        : {}),
       ...(macPasskeySigning
         ? {
             entitlements: macPasskeySigning.entitlementsPath,
@@ -2739,6 +2757,7 @@ export const createBuildConfig = Effect.fn("createBuildConfig")(function* (
           }
         : {}),
     };
+    if (isDevFlavor) buildConfig.forceCodeSigning = true;
   }
 
   if (platform === "mac" && target === "dmg") {
@@ -3358,6 +3377,10 @@ const buildDesktopArtifact = Effect.fn("buildDesktopArtifact")(function* (
   const path = yield* Path.Path;
   const fs = yield* FileSystem.FileSystem;
   const hostPlatform = yield* HostProcessPlatform;
+  const macDevTeamId =
+    options.platform === "mac" && options.flavor === "dev"
+      ? yield* resolveMacDevSigningTeam(loadRepoEnv({ repoRoot }))
+      : undefined;
   if (hostPlatform === "linux" && options.platform === "linux") {
     yield* preflightLinuxDesktopBuild(options.arch);
   }
@@ -3697,6 +3720,7 @@ const buildDesktopArtifact = Effect.fn("buildDesktopArtifact")(function* (
       options.flavor,
       bundlesWslRuntime({ platform: options.platform, runtimeArchivePath: options.wslRuntime }),
       options.arch,
+      macDevTeamId,
     ),
     dependencies: stageDependencies,
     devDependencies: {
@@ -3834,6 +3858,16 @@ const buildDesktopArtifact = Effect.fn("buildDesktopArtifact")(function* (
   );
 
   const stageDistDir = path.join(stageAppDir, "dist");
+  if (macDevTeamId) {
+    yield* verifyMacDevSignature(
+      path.join(
+        stageDistDir,
+        options.arch === "x64" ? "mac" : `mac-${options.arch}`,
+        "T3 Code (Dev).app",
+      ),
+      macDevTeamId,
+    );
+  }
   if (!(yield* fs.exists(stageDistDir))) {
     return yield* new DesktopBuildDistDirectoryMissingError({
       distPath: stageDistDir,
@@ -3938,7 +3972,7 @@ const buildDesktopArtifactCli = Command.make("build-desktop-artifact", {
   ),
   signed: Flag.Boolean("signed").pipe(
     Flag.withDescription(
-      "Enable signing/notarization discovery; Windows uses Azure Trusted Signing (env: T3CODE_DESKTOP_SIGNED).",
+      "Enable signing/notarization discovery; macOS Dev builds always require signing. Windows uses Azure Trusted Signing (env: T3CODE_DESKTOP_SIGNED).",
     ),
     Flag.optional,
   ),

@@ -294,15 +294,24 @@ it.layer(NodeServices.layer)("build-desktop-artifact", (it) => {
         undefined,
         undefined,
         "dev",
+        false,
+        "arm64",
+        "ABC1234567",
       );
 
       const mac = config.mac as Record<string, unknown>;
       assert.equal(config.appId, "com.t3tools.t3code.dev");
+      assert.equal(config.forceCodeSigning, true);
+      assert.equal(mac.identity, "ABC1234567");
+      assert.equal(mac.notarize, false);
+      assert.isString(mac.sign);
+      assert.match(String(mac.entitlements), /entitlements\.dev\.mac\.plist$/u);
       assert.equal(config.productName, "T3 Code (Dev)");
       assert.equal(config.artifactName, "T3-Code-Dev-${version}-${arch}.${ext}");
       assert.notProperty(config, "publish");
       assert.deepStrictEqual(mac.protocols, [{ name: "T3 Code Dev", schemes: ["t3code-dev"] }]);
       assert.deepStrictEqual(mac.extendInfo, {
+        NSAppleEventsUsageDescription: "Allow T3 Code agents to automate apps you authorize.",
         NSMicrophoneUsageDescription: "Allow T3 Code to record voice prompts for transcription.",
         NSScreenCaptureUsageDescription:
           "T3 Code captures the active window when you use the window capture shortcut.",
@@ -441,6 +450,9 @@ it.layer(NodeServices.layer)("build-desktop-artifact", (it) => {
         undefined,
         undefined,
         "dev",
+        false,
+        "arm64",
+        "ABC1234567",
       );
       const devWithMockUpdates = yield* createBuildConfig(
         "mac",
@@ -451,6 +463,9 @@ it.layer(NodeServices.layer)("build-desktop-artifact", (it) => {
         4001,
         undefined,
         "dev",
+        false,
+        "arm64",
+        "ABC1234567",
       );
       const release = yield* createBuildConfig(
         "mac",
@@ -2285,6 +2300,31 @@ it.layer(NodeServices.layer)("build-desktop-artifact", (it) => {
         assert.deepStrictEqual(error.supportedArchitectures, ["x64", "arm64"]);
       }
     }),
+  );
+
+  it.effect(
+    "requires signing for macOS Dev builds even when disabled, without changing Linux",
+    () =>
+      Effect.gen(function* () {
+        for (const platform of ["mac", "linux"] as const) {
+          const resolved = yield* resolveBuildOptions({
+            platform: Option.some(platform),
+            flavor: Option.some("dev"),
+            target: Option.none(),
+            arch: Option.some("arm64"),
+            buildVersion: Option.none(),
+            outputDir: Option.none(),
+            skipBuild: Option.none(),
+            keepStage: Option.none(),
+            signed: Option.some(false),
+            verbose: Option.none(),
+            mockUpdates: Option.none(),
+            mockUpdateServerPort: Option.none(),
+            wslRuntime: Option.none(),
+          });
+          assert.equal(resolved.signed, platform === "mac");
+        }
+      }).pipe(Effect.provide(ConfigProvider.layer(ConfigProvider.fromEnv({ env: {} })))),
   );
 
   it.effect("preserves explicit false boolean flags over true env defaults", () =>
