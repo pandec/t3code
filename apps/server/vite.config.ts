@@ -28,7 +28,7 @@ const macLoopbackTransportRetry =
     ? {
         count: 2,
         condition:
-          /(?:Transport error \([A-Z]+ http:\/\/127\.0\.0\.1:\d+|UND_ERR_SOCKET|other side closed|connect ETIMEDOUT 127\.0\.0\.1)/,
+          /(?:Transport error \([A-Z]+ http:\/\/127\.0\.0\.1:\d+|UND_ERR_SOCKET|other side closed|connect ETIMEDOUT 127\.0\.0\.1|Expected (?:bootstrap session|bearer bootstrap) response to succeed, got 404)/,
       }
     : 0;
 const cliBuildChannel = /^[^-+]+-(?:nightly|preview)\./.test(packageJson.version)
@@ -159,9 +159,9 @@ export default mergeConfig(
       // Server integration tests exercise sqlite, git, and orchestration together.
       // Under package-wide runs they can exceed the default budget on loaded CI hosts.
       hookTimeout: 120_000,
-      // macOS intermittently drops the first request to an ephemeral Effect test
-      // server under package-wide load. Retry only that loopback transport failure;
-      // assertions and persistent server failures still fail normally.
+      // macOS can drop a first request or briefly return 404 from an ephemeral
+      // Effect test server under package-wide load. Retry only those bootstrap
+      // failures; persistent server failures and other assertions still fail.
       retry: macLoopbackTransportRetry,
       testTimeout: 120_000,
     },

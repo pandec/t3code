@@ -105,6 +105,8 @@ const ISOLATED_TEST_FILES = [
   "src/components/files/AttachmentFilePreview.test.tsx",
 
   "src/components/device/DeviceStreamView.test.tsx",
+  "src/components/device/phoneTrackpad.test.ts",
+  "src/components/device/useDeviceControls.test.tsx",
   "src/components/permissions/usePermissionStatus.test.ts",
   "src/components/projectScriptEditor.test.tsx",
   "src/components/settings/SourceControlWritingSettings.test.tsx",
