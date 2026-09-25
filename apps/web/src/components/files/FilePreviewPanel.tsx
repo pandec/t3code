@@ -1136,7 +1136,7 @@ export default function FilePreviewPanel({
               keybindings={keybindings}
               availableEditors={availableEditors}
               openInCwd={absolutePath}
-              file={{ relativePath }}
+              fileRelativePath={relativePath}
               compact
               enableShortcut={false}
             />

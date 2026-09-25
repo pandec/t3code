@@ -107,7 +107,7 @@ import { MediaActions, type MediaActionSource } from "./media/MediaActions";
 import { resolveProtocolRelativeMediaUrl } from "./media/mediaContent";
 import { FileTagChipContent } from "./chat/FileTagChip";
 import { PierreEntryIcon } from "./chat/PierreEntryIcon";
-import { useRevealInFileManagerLabel } from "../fileContextMenu";
+import { revealInFileManagerLabel as resolveRevealInFileManagerLabel } from "../fileContextMenu";
 import {
   resolveExternalWebLinkHost,
   showExternalLinkContextMenu,
@@ -2339,7 +2339,12 @@ function useChatMarkdownState({
   const openInEditor = useAtomCommand(shellEnvironment.openInEditor, {
     reportFailure: false,
   });
-  const revealInFileManagerLabel = useRevealInFileManagerLabel(environmentId);
+  const revealInFileManagerLabel = resolveRevealInFileManagerLabel({
+    environmentId,
+    serverConfig,
+    remoteOpenMode: remoteOpen.state.mode,
+    remoteOpenResolved: remoteOpen.isResolved,
+  });
   const revealFileInFileManager = useCallback(
     (filePath: string) => {
       if (environmentId === null) {

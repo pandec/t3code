@@ -232,6 +232,12 @@ describe("revealInFileManagerLabel", () => {
     ).toBeUndefined();
   });
 
+  it("hides reveal without an environment to run it on", () => {
+    expect(
+      revealInFileManagerLabel({ ...onHost, serverConfig, environmentId: null }),
+    ).toBeUndefined();
+  });
+
   it("hides reveal when the server does not advertise it", () => {
     expect(
       revealInFileManagerLabel({

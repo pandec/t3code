@@ -3,9 +3,10 @@
  * file manager, open it in an editor, and copy its path. Reuse the chat
  * file-chip menu's machinery: reveal rides `shell.openInEditor` with
  * `reveal: true`, which the server only honors when its
- * `shellRevealInFileManager` config flag is set, so both actions work for
- * every client. Reveal is offered only while the viewing machine is the
- * environment host; revealing a folder on another computer helps nobody.
+ * `shellRevealInFileManager` config flag is set. Every launch action runs on
+ * the environment host, so they are offered only while the viewing machine is
+ * that host, like the chip menu; opening an app on another computer helps
+ * nobody. Copying needs only the path and is offered everywhere.
  */
 import {
   EDITORS,
@@ -211,17 +212,6 @@ export function revealInFileManagerLabel(input: {
     : revealInFileExplorerLabelForKind(serverConfig.shellRevealInFileManagerKind);
 }
 
-export function useRevealInFileManagerLabel(environmentId: EnvironmentId | null) {
-  const serverConfig = useAtomValue(serverEnvironment.configValueAtom(environmentId));
-  const remoteOpen = useRemoteOpenResolution(environmentId);
-  return revealInFileManagerLabel({
-    environmentId,
-    serverConfig,
-    remoteOpenMode: remoteOpen.state.mode,
-    remoteOpenResolved: remoteOpen.isResolved,
-  });
-}
-
 /**
  * Builds and dispatches the file context menu for one environment's files.
  * The environment id is fixed per component (a thread's environment, a file
@@ -230,12 +220,21 @@ export function useRevealInFileManagerLabel(environmentId: EnvironmentId | null)
 export function useFileContextMenu(environmentId: EnvironmentId | null) {
   const openInEditor = useAtomCommand(shellEnvironment.openInEditor, { reportFailure: false });
   const serverConfig = useAtomValue(serverEnvironment.configValueAtom(environmentId));
-  const revealLabel = useRevealInFileManagerLabel(environmentId);
+  const remoteOpen = useRemoteOpenResolution(environmentId);
 
   return useMemo(() => {
-    const availableEditors = serverConfig?.availableEditors ?? [];
+    const remoteOpenMode = remoteOpen.state.mode;
+    const remoteOpenResolved = remoteOpen.isResolved;
+    // Open and open-with launch on the host too, so they share reveal's gate.
+    const onHost = environmentId !== null && remoteOpenResolved && remoteOpenMode === "local-exec";
+    const availableEditors = onHost ? (serverConfig?.availableEditors ?? []) : [];
     const capabilities: FileContextMenuCapabilities = {
-      revealLabel,
+      revealLabel: revealInFileManagerLabel({
+        environmentId,
+        serverConfig,
+        remoteOpenMode,
+        remoteOpenResolved,
+      }),
       canOpenDefault: availableEditors.includes("file-manager"),
       editorIds: availableEditors,
     };
@@ -251,8 +250,9 @@ export function useFileContextMenu(environmentId: EnvironmentId | null) {
       target: FileContextMenuTarget,
     ): Promise<void> => {
       const absolutePath = resolveFileContextMenuAbsolutePath(target);
-      if (absolutePath === null || environmentId === null) return;
+      if (absolutePath === null) return;
 
+      // Copying needs only the path, so it runs without an environment.
       if (action === "copy-relative-path") {
         const relativePath = resolveFileContextMenuRelativePath(target);
         if (relativePath === null) return;
@@ -263,6 +263,7 @@ export function useFileContextMenu(environmentId: EnvironmentId | null) {
         await copyFilePathToClipboard(absolutePath, "full");
         return;
       }
+      if (environmentId === null) return;
 
       const reveal = action === "reveal-in-folder";
       const editor =
@@ -301,7 +302,7 @@ export function useFileContextMenu(environmentId: EnvironmentId | null) {
     };
 
     return { buildItems, capabilities, activate, show };
-  }, [environmentId, openInEditor, revealLabel, serverConfig]);
+  }, [environmentId, openInEditor, remoteOpen, serverConfig]);
 }
 
 /** Returns an onContextMenu callback that shows the menu at the pointer. */
