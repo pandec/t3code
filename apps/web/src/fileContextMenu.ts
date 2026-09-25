@@ -23,7 +23,7 @@ import {
 } from "~/components/preview/fileExplorerLabel";
 import { writeTextToClipboard } from "./hooks/useCopyToClipboard";
 import { readLocalApi } from "./localApi";
-import { type RemoteOpenMode, useRemoteOpenState } from "./remoteOpen";
+import { type RemoteOpenMode, useRemoteOpenResolution } from "./remoteOpen";
 import { serverEnvironment } from "./state/server";
 import { shellEnvironment } from "./state/shell";
 import { useAtomCommand } from "./state/use-atom-command";
@@ -149,32 +149,42 @@ export async function copyFilePathToClipboard(
   kind: FilePathCopyKind,
 ): Promise<void> {
   const noun = kind === "relative" ? "Relative path" : "Full path";
+  let failure: string | null = null;
   try {
-    await writeTextToClipboard(value, noun.toLowerCase());
-    toastManager.add({ type: "success", title: `${noun} copied`, description: value });
+    // The clipboard helper returns false, rather than throwing, for an empty value.
+    if (!(await writeTextToClipboard(value, noun.toLowerCase()))) failure = "The path is empty.";
   } catch (error) {
+    failure = error instanceof Error ? error.message : "An error occurred.";
+  }
+  if (failure !== null) {
     toastManager.add({
       type: "error",
       title: `Failed to copy ${noun.toLowerCase()}`,
-      description: error instanceof Error ? error.message : "An error occurred.",
+      description: failure,
     });
+    return;
   }
+  toastManager.add({ type: "success", title: `${noun} copied`, description: value });
 }
 
 /**
  * Wording for the reveal action, or undefined when it must stay hidden: the
- * server does not advertise it, or the viewer is not on the host machine. The
- * wording comes from the server because on WSL the reveal can run through
- * Windows File Explorer even though the host reports Linux.
+ * server does not advertise it, the viewer is not on the host machine, or that
+ * is not yet known (the unresolved remote-open state defaults to local, so a
+ * remote environment would briefly offer reveal). The wording comes from the
+ * server because on WSL the reveal can run through Windows File Explorer even
+ * though the host reports Linux.
  */
 export function revealInFileManagerLabel(input: {
   readonly environmentId: EnvironmentId | null;
   readonly serverConfig: ServerConfig | null;
   readonly remoteOpenMode: RemoteOpenMode;
+  readonly remoteOpenResolved: boolean;
 }): string | undefined {
   const { serverConfig } = input;
   if (
     input.environmentId === null ||
+    !input.remoteOpenResolved ||
     input.remoteOpenMode !== "local-exec" ||
     serverConfig?.shellRevealInFileManager !== true ||
     !serverConfig.availableEditors.includes("file-manager")
@@ -188,8 +198,13 @@ export function revealInFileManagerLabel(input: {
 
 export function useRevealInFileManagerLabel(environmentId: EnvironmentId | null) {
   const serverConfig = useAtomValue(serverEnvironment.configValueAtom(environmentId));
-  const remoteOpenMode = useRemoteOpenState(environmentId).mode;
-  return revealInFileManagerLabel({ environmentId, serverConfig, remoteOpenMode });
+  const remoteOpen = useRemoteOpenResolution(environmentId);
+  return revealInFileManagerLabel({
+    environmentId,
+    serverConfig,
+    remoteOpenMode: remoteOpen.state.mode,
+    remoteOpenResolved: remoteOpen.isResolved,
+  });
 }
 
 /**

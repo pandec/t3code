@@ -161,22 +161,21 @@ describe("revealInFileManagerLabel", () => {
     environment: { platform: { os: "darwin" } },
   } as unknown as ServerConfig;
 
+  const onHost = {
+    environmentId: BASE_TARGET.environmentId,
+    remoteOpenMode: "local-exec",
+    remoteOpenResolved: true,
+  } as const;
+
   it("uses the host OS wording while the viewer is on the host machine", () => {
-    expect(
-      revealInFileManagerLabel({
-        environmentId: BASE_TARGET.environmentId,
-        serverConfig,
-        remoteOpenMode: "local-exec",
-      }),
-    ).toBe("Reveal in Finder");
+    expect(revealInFileManagerLabel({ ...onHost, serverConfig })).toBe("Reveal in Finder");
   });
 
   it("prefers the server's reveal kind over the host OS", () => {
     expect(
       revealInFileManagerLabel({
-        environmentId: BASE_TARGET.environmentId,
+        ...onHost,
         serverConfig: { ...serverConfig, shellRevealInFileManagerKind: "file-explorer" },
-        remoteOpenMode: "local-exec",
       }),
     ).toBe("Reveal in File Explorer");
   });
@@ -184,30 +183,23 @@ describe("revealInFileManagerLabel", () => {
   it.each(["remote-links", "remote-unavailable"] as const)(
     "hides reveal for a remote environment (%s): it would open on another machine",
     (remoteOpenMode) => {
-      expect(
-        revealInFileManagerLabel({
-          environmentId: BASE_TARGET.environmentId,
-          serverConfig,
-          remoteOpenMode,
-        }),
-      ).toBeUndefined();
+      expect(revealInFileManagerLabel({ ...onHost, serverConfig, remoteOpenMode })).toBeUndefined();
     },
   );
+
+  it("hides reveal until the remote-open state resolves, since the default reads as local", () => {
+    expect(
+      revealInFileManagerLabel({ ...onHost, serverConfig, remoteOpenResolved: false }),
+    ).toBeUndefined();
+  });
 
   it("hides reveal when the server does not advertise it", () => {
     expect(
       revealInFileManagerLabel({
-        environmentId: BASE_TARGET.environmentId,
+        ...onHost,
         serverConfig: { ...serverConfig, shellRevealInFileManager: false },
-        remoteOpenMode: "local-exec",
       }),
     ).toBeUndefined();
-    expect(
-      revealInFileManagerLabel({
-        environmentId: BASE_TARGET.environmentId,
-        serverConfig: null,
-        remoteOpenMode: "local-exec",
-      }),
-    ).toBeUndefined();
+    expect(revealInFileManagerLabel({ ...onHost, serverConfig: null })).toBeUndefined();
   });
 });
