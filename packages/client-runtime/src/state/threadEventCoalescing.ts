@@ -276,6 +276,7 @@ export function isStructuralThreadStreamItem(item: OrchestrationThreadStreamItem
     case "thread.pinned":
     case "thread.unpinned":
     case "thread.pin-reordered":
+    case "thread.auto-settle-set":
     case "thread.turn-start-requested":
     case "thread.turn-interrupt-requested":
     case "thread.reverted":

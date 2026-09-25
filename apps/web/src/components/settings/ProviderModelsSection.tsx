@@ -494,19 +494,19 @@ export function ProviderModelsSection({
         <span className="flex min-w-0 items-baseline gap-2">
           <span className={cn(nameClassName, "truncate")}>{model.name}</span>
           {model.name !== model.slug ? (
-            <code className="truncate font-mono text-[11px] text-muted-foreground/70">
+            <code className="truncate font-mono text-2xs text-muted-foreground/70">
               {model.slug}
             </code>
           ) : null}
           {model.isCustom ? (
-            <span className="text-[11px] text-muted-foreground/70">custom</span>
+            <span className="text-2xs text-muted-foreground/70">custom</span>
           ) : null}
         </span>
         {/*
           Always a grid item so the columns line up across rows; the text
           itself drops out on phone widths where it would starve the name.
         */}
-        <span className="text-[11px] text-muted-foreground/70">
+        <span className="text-2xs text-muted-foreground/70">
           {capLabels.length > 0 ? (
             <span className="hidden sm:inline">{capLabels.join(" · ")}</span>
           ) : null}
@@ -518,7 +518,7 @@ export function ProviderModelsSection({
   };
 
   const groupLabel = (label: string, isFirst: boolean) => (
-    <div className={cn("px-2 pb-1.5 text-[11px] text-muted-foreground", isFirst ? "pt-1" : "pt-5")}>
+    <div className={cn("px-2 pb-1.5 text-2xs text-muted-foreground", isFirst ? "pt-1" : "pt-5")}>
       {label}
     </div>
   );
@@ -687,14 +687,6 @@ function CustomModelIconPicker({
     setOpen(false);
   };
 
-  const optionClassName = (selected: boolean) =>
-    cn(
-      "size-6 rounded-sm p-0",
-      selected
-        ? "bg-primary/10 text-foreground ring-1 ring-inset ring-primary/40"
-        : "text-muted-foreground hover:text-foreground",
-    );
-
   return (
     <Popover open={open} onOpenChange={setOpen}>
       <Tooltip>
@@ -723,11 +715,11 @@ function CustomModelIconPicker({
         <div className="flex items-center gap-0.5">
           <Button
             size="icon-xs"
-            variant="ghost"
-            className={optionClassName(SelectedIcon === null)}
+            variant={SelectedIcon === null ? "secondary" : "ghost"}
             title="Provider default"
             aria-label={`Use the provider default icon for ${modelName}`}
             aria-pressed={SelectedIcon === null}
+            data-pressed={SelectedIcon === null ? "" : undefined}
             onClick={() => selectIcon(null)}
           >
             {DriverIcon ? (
@@ -741,11 +733,11 @@ function CustomModelIconPicker({
             <Button
               key={option.id}
               size="icon-xs"
-              variant="ghost"
-              className={optionClassName(icon === option.id)}
+              variant={icon === option.id ? "secondary" : "ghost"}
               title={option.label}
               aria-label={`Use the ${option.label} icon for ${modelName}`}
               aria-pressed={icon === option.id}
+              data-pressed={icon === option.id ? "" : undefined}
               onClick={() => selectIcon(option.id)}
             >
               <option.Icon className="size-3.5" aria-hidden />

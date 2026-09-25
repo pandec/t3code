@@ -1986,16 +1986,7 @@ export const makeWithOptions = Effect.fn("TerminalManager.makeWithOptions")(func
     terminalId: string,
   ): Effect.fn.Return<TerminalSessionState, TerminalSessionLookupError> {
     return yield* Effect.flatMap(getSession(threadId, terminalId), (session) =>
-      Option.match(session, {
-        onNone: () =>
-          Effect.fail(
-            new TerminalSessionLookupError({
-              threadId,
-              terminalId,
-            }),
-          ),
-        onSome: Effect.succeed,
-      }),
+      Effect.fromOption(session, () => new TerminalSessionLookupError({ threadId, terminalId })),
     );
   });
 
@@ -2427,7 +2418,7 @@ export const makeWithOptions = Effect.fn("TerminalManager.makeWithOptions")(func
     }
 
     const inspectorOption = yield* acquireSubprocessInspector.pipe(
-      Effect.map(Option.some),
+      Effect.asSome,
       Effect.catch((reason) =>
         Effect.logWarning("failed to snapshot processes for terminal subprocess polling", {
           reason,
@@ -2453,7 +2444,7 @@ export const makeWithOptions = Effect.fn("TerminalManager.makeWithOptions")(func
     ) {
       const terminalPid = session.pid;
       const inspectResult = yield* subprocessInspector(terminalPid).pipe(
-        Effect.map(Option.some),
+        Effect.asSome,
         Effect.catch((reason) =>
           Effect.logWarning("failed to check terminal subprocess activity", {
             threadId: session.threadId,

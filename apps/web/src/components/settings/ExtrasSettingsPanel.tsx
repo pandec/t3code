@@ -640,7 +640,7 @@ function ProviderUsageExtrasSection() {
               />
             }
           />
-          <div className="flex max-w-xl flex-col gap-1 px-3 text-[13px] leading-[1.45] sm:px-4">
+          <div className="flex max-w-xl flex-col gap-1 px-3 text-xs leading-normal sm:px-4">
             {environments.map((environment) => (
               <OpenRouterCreditsEnvironmentStatus
                 key={environment.environmentId}
@@ -821,7 +821,7 @@ function LinearExtrasSection() {
           />
         }
       />
-      <div className="flex max-w-xl flex-col gap-1 px-3 text-[13px] leading-[1.45] sm:px-4">
+      <div className="flex max-w-xl flex-col gap-1 px-3 text-xs leading-normal sm:px-4">
         {environments.map((environment) => (
           <LinearEnvironmentStatus
             key={environment.environmentId}

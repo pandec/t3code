@@ -34,9 +34,7 @@ it.effect.each(["recovery", "read", "dispatch"] as const)(
           attempts[operation]++;
           if (scenario === operation && attempts[operation] === 1) {
             yield* Deferred.succeed(failed, undefined);
-            return yield* Effect.fail(
-              new PersistenceSqlError({ operation, detail: "Transient failure" }),
-            );
+            return yield* new PersistenceSqlError({ operation, detail: "Transient failure" });
           }
         });
         const row: ProjectionThread = {

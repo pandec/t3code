@@ -466,7 +466,7 @@ const runProjectList = Effect.fn("runProjectList")(function* (
       ),
     );
     if (liveAttempt._tag === "Failure") {
-      return yield* Effect.fail(liveAttempt.failure);
+      return yield* liveAttempt.failure;
     }
     if (Option.isSome(liveAttempt.success)) {
       return {

@@ -96,6 +96,8 @@ import Migration0066 from "./Migrations/066_ProjectionThreadTitleState.ts";
 import Migration0067 from "./Migrations/067_ProjectionThreadCustomGroup.ts";
 import Migration0068 from "./Migrations/068_ProjectionMessageSpeechDuration.ts";
 import Migration0069 from "./Migrations/069_PullRequestFilesViewed.ts";
+// Upstream shipped this as 054; renumbered after the fork's migration history.
+import Migration0070 from "./Migrations/070_ProjectionThreadsAutoSettleDisabledAt.ts";
 
 /**
  * Migration loader with all migrations defined inline.
@@ -177,6 +179,7 @@ const migrationEntries = [
   [67, "ProjectionThreadCustomGroup", Migration0067],
   [68, "ProjectionMessageSpeechDuration", Migration0068],
   [69, "PullRequestFilesViewed", Migration0069],
+  [70, "ProjectionThreadsAutoSettleDisabledAt", Migration0070],
 ] as const;
 
 export const migrationManifest = migrationEntries.map(([id, name]) => [id, name] as const);

@@ -234,7 +234,7 @@ it.layer(NodeServices.layer)("AgentSessionImporter", (it) => {
           upsert: (binding) => Effect.sync(() => void bindings.push(binding)),
           getProvider: () => Effect.die("unused"),
           recordImportedTranscript: () => Effect.void,
-          getBinding: () => Effect.succeed(Option.none()),
+          getBinding: () => Effect.succeedNone,
           refreshIfUnchanged: () => Effect.die("unused"),
           listThreadIds: () => Effect.die("unused"),
           listBindings: () => Effect.die("unused"),
@@ -529,7 +529,7 @@ it.layer(NodeServices.layer)("AgentSessionImporter", (it) => {
           upsert: () => Effect.die("must not bind malformed or wrong-project sessions"),
           getProvider: () => Effect.die("unused"),
           recordImportedTranscript: () => Effect.die("unused"),
-          getBinding: () => Effect.succeed(Option.none()),
+          getBinding: () => Effect.succeedNone,
           refreshIfUnchanged: () => Effect.die("unused"),
           listThreadIds: () => Effect.die("unused"),
           listBindings: () => Effect.die("unused"),
@@ -675,9 +675,11 @@ it.layer(integrationLayer)("AgentSessionImporter integration", (it) => {
         const path = yield* Path.Path;
         const nowMs = Date.parse("2026-08-24T12:00:00.000Z");
         yield* TestClock.setTime(nowMs);
-        const fixtureDir = yield* fileSystem.makeTempDirectoryScoped({
-          prefix: "t3-import-retry-",
-        });
+        const fixtureDir = yield* fileSystem
+          .makeTempDirectoryScoped({
+            prefix: "t3-import-retry-",
+          })
+          .pipe(Effect.flatMap((directory) => fileSystem.realPath(directory)));
         const workspaceRoot = path.join(fixtureDir, "workspace");
         const claudeHomePath = path.join(fixtureDir, "claude");
         const codexHomePath = path.join(fixtureDir, "codex");
@@ -885,7 +887,9 @@ it.layer(integrationLayer)("AgentSessionImporter integration", (it) => {
         const snapshots = yield* ProjectionSnapshotQuery.ProjectionSnapshotQuery;
         const directory = yield* ProviderSessionDirectory.ProviderSessionDirectory;
         const fileSystem = yield* FileSystem.FileSystem;
-        const workspaceRoot = yield* fileSystem.makeTempDirectoryScoped();
+        const workspaceRoot = yield* fileSystem
+          .makeTempDirectoryScoped()
+          .pipe(Effect.flatMap((directory) => fileSystem.realPath(directory)));
         const projectId = ProjectId.make(`project-import-resume-${source}`);
         const sourceThread = {
           ...makeThread(source),

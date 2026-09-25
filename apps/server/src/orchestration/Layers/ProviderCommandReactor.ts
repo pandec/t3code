@@ -1379,15 +1379,14 @@ const make = Effect.gen(function* () {
         return;
       }
       const result = yield* regenerateThreadTitle(event, requestId).pipe(
-        Effect.catchCause((cause) => {
-          if (Cause.hasInterruptsOnly(cause)) {
-            return Effect.failCause(cause);
-          }
-          return Effect.logWarning("provider command reactor failed to regenerate thread title", {
-            threadId: event.payload.threadId,
-            cause: Cause.pretty(cause),
-          }).pipe(Effect.as({ _tag: "Completed", title: undefined } as const));
-        }),
+        Effect.catchCauseIf(
+          (cause) => !Cause.hasInterruptsOnly(cause),
+          (cause) =>
+            Effect.logWarning("provider command reactor failed to regenerate thread title", {
+              threadId: event.payload.threadId,
+              cause: Cause.pretty(cause),
+            }).pipe(Effect.as({ _tag: "Completed", title: undefined } as const)),
+        ),
       );
       if (result._tag === "Superseded") {
         return;
@@ -1399,34 +1398,26 @@ const make = Effect.gen(function* () {
         ...(result.title !== undefined ? { title: result.title } : {}),
       };
       yield* dispatchThreadTitleRegenerationCompletion(completion).pipe(
-        Effect.catchCause((cause) => {
-          if (Cause.hasInterruptsOnly(cause)) {
-            return Effect.failCause(cause);
-          }
-          return Effect.logWarning(
-            "provider command reactor retrying title regeneration completion",
-            {
+        Effect.catchCauseIf(
+          (cause) => !Cause.hasInterruptsOnly(cause),
+          (cause) =>
+            Effect.logWarning("provider command reactor retrying title regeneration completion", {
               threadId: event.payload.threadId,
               cause: Cause.pretty(cause),
-            },
-          ).pipe(Effect.andThen(dispatchThreadTitleRegenerationCompletion(completion)));
-        }),
+            }).pipe(Effect.andThen(dispatchThreadTitleRegenerationCompletion(completion))),
+        ),
       );
     },
     (effect, event) =>
       effect.pipe(
-        Effect.catchCause((cause) => {
-          if (Cause.hasInterruptsOnly(cause)) {
-            return Effect.failCause(cause);
-          }
-          return Effect.logWarning(
-            "provider command reactor failed to complete title regeneration",
-            {
+        Effect.catchCauseIf(
+          (cause) => !Cause.hasInterruptsOnly(cause),
+          (cause) =>
+            Effect.logWarning("provider command reactor failed to complete title regeneration", {
               threadId: event.payload.threadId,
               cause: Cause.pretty(cause),
-            },
-          );
-        }),
+            }),
+        ),
       ),
   );
   const threadTitleRegenerationWorker = yield* makeDrainableWorker(
@@ -1733,7 +1724,7 @@ const make = Effect.gen(function* () {
       interactionMode: event.payload.interactionMode,
       createdAt: event.payload.createdAt,
     }).pipe(
-      Effect.map(Option.some),
+      Effect.asSome,
       Effect.catchCause((cause) => handleTurnStartFailure(cause).pipe(Effect.as(Option.none()))),
     );
 

@@ -630,6 +630,7 @@ export const ThreadListV2Row = memo(function ThreadListV2Row(props: {
   readonly onForkThread: (thread: EnvironmentThreadShell) => void;
   readonly onPinThread: (thread: EnvironmentThreadShell) => void;
   readonly onUnpinThread: (thread: EnvironmentThreadShell) => void;
+  readonly onSetThreadAutoSettle: (thread: EnvironmentThreadShell, enabled: boolean) => void;
   /** False on environments whose server predates thread.settle/unsettle:
       swipe + menu fall back to Archive instead of failing on use. */
   readonly settlementSupported: boolean;
@@ -640,6 +641,8 @@ export const ThreadListV2Row = memo(function ThreadListV2Row(props: {
   readonly snoozeUntilDoneSupported: boolean;
   /** False on servers that predate thread.pin/unpin. */
   readonly pinningSupported: boolean;
+  /** False on servers that predate thread.auto-settle.set. */
+  readonly autoSettleOptOutSupported: boolean;
   /** False on servers that predate thread title regeneration. */
   readonly titleRegenerationSupported: boolean;
   /** Server supports reordering this card's section. */
@@ -677,6 +680,7 @@ export const ThreadListV2Row = memo(function ThreadListV2Row(props: {
     onForkThread,
     onPinThread,
     onUnpinThread,
+    onSetThreadAutoSettle,
     onMoveThread,
   } = props;
   const snoozedRow = props.snoozed === true;
@@ -768,6 +772,10 @@ export const ThreadListV2Row = memo(function ThreadListV2Row(props: {
   const handleUnsettle = useCallback(() => onUnsettleThread(thread), [onUnsettleThread, thread]);
   const handlePin = useCallback(() => onPinThread(thread), [onPinThread, thread]);
   const handleUnpin = useCallback(() => onUnpinThread(thread), [onUnpinThread, thread]);
+  const handleSetAutoSettle = useCallback(
+    (enabled: boolean) => onSetThreadAutoSettle(thread, enabled),
+    [onSetThreadAutoSettle, thread],
+  );
   const handleMoveUp = useCallback(() => onMoveThread?.(thread, "up"), [onMoveThread, thread]);
   const handleMoveDown = useCallback(() => onMoveThread?.(thread, "down"), [onMoveThread, thread]);
   const handleArchive = useCallback(() => onArchiveThread(thread), [onArchiveThread, thread]);
@@ -862,6 +870,33 @@ export const ThreadListV2Row = memo(function ThreadListV2Row(props: {
       forkable ? [{ id: "fork", title: "Fork conversation", image: "arrow.triangle.branch" }] : [],
     [forkable],
   );
+  // A submenu with the current option checked, matching web. This is a
+  // per-thread setting, not a lifecycle verb.
+  const autoSettleMenuItems = useMemo<MenuAction[]>(
+    () =>
+      props.autoSettleOptOutSupported
+        ? [
+            {
+              id: "auto-settle",
+              title: "Auto-settle behavior",
+              image: "timer",
+              subactions: [
+                {
+                  id: "auto-settle:enabled",
+                  title: "Enabled",
+                  state: thread.autoSettleDisabledAt == null ? "on" : "off",
+                },
+                {
+                  id: "auto-settle:disabled",
+                  title: "Disabled",
+                  state: thread.autoSettleDisabledAt == null ? "off" : "on",
+                },
+              ],
+            } satisfies MenuAction,
+          ]
+        : [],
+    [props.autoSettleOptOutSupported, thread.autoSettleDisabledAt],
+  );
   const titleMenuItems = useMemo<MenuAction[]>(
     () => [
       { id: "rename", title: "Rename", image: "square.and.pencil" },
@@ -885,9 +920,10 @@ export const ThreadListV2Row = memo(function ThreadListV2Row(props: {
       ...arrangementMenuItems,
       ...forkMenuItem,
       ...titleMenuItems,
+      ...autoSettleMenuItems,
       MENU_ACTION_BY_ID.delete,
     ],
-    [forkMenuItem, arrangementMenuItems, snoozePresetActions, titleMenuItems],
+    [forkMenuItem, arrangementMenuItems, autoSettleMenuItems, snoozePresetActions, titleMenuItems],
   );
   const cardMenuActions = useMemo<MenuAction[]>(
     () => [
@@ -895,10 +931,13 @@ export const ThreadListV2Row = memo(function ThreadListV2Row(props: {
       ...arrangementMenuItems,
       ...forkMenuItem,
       ...titleMenuItems,
+      ...autoSettleMenuItems,
       CARD_MENU_ACTIONS[CARD_MENU_ACTIONS.length - 1]!,
     ],
-    [forkMenuItem, arrangementMenuItems, titleMenuItems],
+    [forkMenuItem, arrangementMenuItems, autoSettleMenuItems, titleMenuItems],
   );
+  // Settled and snoozed rows keep the setting too, matching web where every
+  // row shares one menu builder.
   const slimMenuActions = useMemo<MenuAction[]>(
     () => [
       ...SLIM_MENU_ACTIONS.slice(0, -1),
@@ -907,17 +946,19 @@ export const ThreadListV2Row = memo(function ThreadListV2Row(props: {
       ),
       ...forkMenuItem,
       ...titleMenuItems,
+      ...autoSettleMenuItems,
       SLIM_MENU_ACTIONS[SLIM_MENU_ACTIONS.length - 1]!,
     ],
-    [forkMenuItem, arrangementMenuItems, titleMenuItems],
+    [forkMenuItem, arrangementMenuItems, autoSettleMenuItems, titleMenuItems],
   );
   const snoozedMenuActions = useMemo<MenuAction[]>(
     () => [
       ...SNOOZED_MENU_ACTIONS.slice(0, -1),
       ...titleMenuItems,
+      ...autoSettleMenuItems,
       SNOOZED_MENU_ACTIONS[SNOOZED_MENU_ACTIONS.length - 1]!,
     ],
-    [titleMenuItems],
+    [autoSettleMenuItems, titleMenuItems],
   );
   const legacyMenuActions = useMemo<MenuAction[]>(
     () => [
@@ -936,6 +977,8 @@ export const ThreadListV2Row = memo(function ThreadListV2Row(props: {
       if (nativeEvent.event === "unsnooze") handleUnsnooze();
       if (nativeEvent.event === "pin") handlePin();
       if (nativeEvent.event === "unpin") handleUnpin();
+      if (nativeEvent.event === "auto-settle:enabled") handleSetAutoSettle(true);
+      if (nativeEvent.event === "auto-settle:disabled") handleSetAutoSettle(false);
       if (nativeEvent.event === "arrange") appAtomRegistry.set(threadArrangementOpenAtom, true);
       if (nativeEvent.event === "move-up") handleMoveUp();
       if (nativeEvent.event === "move-down") handleMoveDown();
@@ -975,6 +1018,7 @@ export const ThreadListV2Row = memo(function ThreadListV2Row(props: {
       handlePin,
       handleSettle,
       handleSnooze,
+      handleSetAutoSettle,
       handleUnpin,
       handleUnsettle,
       handleUnsnooze,

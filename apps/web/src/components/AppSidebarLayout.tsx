@@ -35,10 +35,8 @@ import LegacyThreadSidebar from "./LegacySidebar";
 import ThreadSidebar from "./Sidebar";
 import { SettingsSidebarNav } from "./settings/SettingsSidebarNav";
 import { SidebarChromeHeader } from "./sidebar/SidebarChrome";
-import {
-  resolveSidebarStageFocusRingOffsetClass,
-  useSidebarStageBackdropVariant,
-} from "./SidebarStageBackdrop";
+import { MainAppLocationTracker } from "./sidebar/mainAppLocation";
+import { useSidebarStageBackdropVariant } from "./SidebarStageBackdrop";
 import { useProjects } from "../state/entities";
 import {
   resolveInitialThreadSidebarWidth,
@@ -137,9 +135,6 @@ function SidebarControl() {
               className={cn(
                 "pointer-events-auto",
                 isSidebarVisible && stageBackdropVariant && "relative top-auto translate-y-0",
-                isSidebarVisible &&
-                  stageBackdropVariant &&
-                  resolveSidebarStageFocusRingOffsetClass(stageBackdropVariant),
               )}
               aria-label="Toggle main sidebar"
             />
@@ -328,6 +323,7 @@ export function AppSidebarLayout({ children }: { children: ReactNode }) {
         {children}
         <SidebarControl />
         <NavigationHistoryShortcuts />
+        <MainAppLocationTracker />
       </SidebarProvider>
     </PanelAnimationSuppressionProvider>
   );

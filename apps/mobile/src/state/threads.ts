@@ -76,6 +76,7 @@ export function threadDetailToShell(
     settledOverride: thread.settledOverride,
     settledAt: thread.settledAt,
     unsettledAt: thread.unsettledAt ?? null,
+    autoSettleDisabledAt: thread.autoSettleDisabledAt ?? null,
     snoozedUntil: thread.snoozedUntil ?? null,
     snoozedAt: thread.snoozedAt ?? null,
     snoozedUntilTurnId: thread.snoozedUntilTurnId ?? null,

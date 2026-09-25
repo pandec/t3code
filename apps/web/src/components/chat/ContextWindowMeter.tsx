@@ -46,7 +46,6 @@ import { composerFloatingLayerProps } from "./composerEventScope";
  */
 
 const MUTED_RING = "color-mix(in oklab, var(--color-muted-foreground) 72%, transparent)";
-const RING_TRACK = "color-mix(in oklab, var(--color-muted-foreground) 24%, transparent)";
 
 const QUOTA_RING_COLOR: Record<ProviderUsageStatus, string> = {
   ok: MUTED_RING,
@@ -68,7 +67,14 @@ function MeterRing(props: {
   const circumference = 2 * Math.PI * props.radius;
   return (
     <>
-      <circle cx="12" cy="12" r={props.radius} fill="none" stroke={RING_TRACK} strokeWidth="2.5" />
+      <circle
+        cx="12"
+        cy="12"
+        r={props.radius}
+        fill="none"
+        className="stroke-muted-foreground/24"
+        strokeWidth="2.5"
+      />
       <circle
         cx="12"
         cy="12"
@@ -93,7 +99,7 @@ function MeterPie(props: { readonly percentage: number; readonly color: string }
 
   return (
     <>
-      <circle cx="12" cy="12" r={radius} fill={RING_TRACK} />
+      <circle cx="12" cy="12" r={radius} className="fill-muted-foreground/24" />
       {props.percentage >= 100 ? (
         <circle cx="12" cy="12" r={radius} fill={props.color} />
       ) : props.percentage > 0 ? (
@@ -117,13 +123,13 @@ function QuotaWindowRow(props: { window: ProviderUsageWindow; nowMs: number }) {
       {/* Label and reset share a line so an account costs two lines per window
           rather than three — the popover has to hold every pooled account. */}
       <div className="flex items-baseline justify-between gap-3">
-        <span className="min-w-0 truncate text-[11px] text-muted-foreground/80">
+        <span className="min-w-0 truncate text-2xs text-muted-foreground/80">
           {window.label}
           {resetTime ? (
             <span className="text-muted-foreground/55"> · resets {resetTime}</span>
           ) : null}
         </span>
-        <span className={cn("shrink-0 text-[11px] tabular-nums", QUOTA_TEXT_CLASS[window.status])}>
+        <span className={cn("shrink-0 text-2xs tabular-nums", QUOTA_TEXT_CLASS[window.status])}>
           {describeProviderUsageWindowValue(window)}
         </span>
       </div>
@@ -163,11 +169,11 @@ function OpenRouterCreditsRow(props: {
           how old they are; the status line below stays legible because it
           is what explains the dimming. */}
       <div className={cn("flex flex-col gap-2", dimmed && "opacity-55")}>
-        <div className="flex items-baseline justify-between gap-3 text-[11px]">
+        <div className="flex items-baseline justify-between gap-3 text-2xs">
           <span className="flex min-w-0 items-baseline gap-1.5">
             <span className="font-semibold text-muted-foreground/90">OpenRouter credits</span>
             {dimmed && !refreshing && credits.balanceUsd !== null ? (
-              <span className="shrink-0 text-[10px] tabular-nums text-muted-foreground/60">
+              <span className="shrink-0 text-3xs tabular-nums text-muted-foreground/60">
                 {formatProviderUsageAge(credits.observedAt, nowMs)}
               </span>
             ) : null}
@@ -184,13 +190,11 @@ function OpenRouterCreditsRow(props: {
           also reports unconfigured, and "add your key" would be the wrong
           remedy for it. */}
       {credits.unavailable ? (
-        <div className="text-[11px] text-muted-foreground/60">
-          Couldn't load the latest balance.
-        </div>
+        <div className="text-2xs text-muted-foreground/60">Couldn't load the latest balance.</div>
       ) : credits.error !== null ? (
-        <div className="text-[11px] text-destructive/90">{credits.error}</div>
+        <div className="text-2xs text-destructive/90">{credits.error}</div>
       ) : !credits.configured ? (
-        <div className="text-[11px] text-muted-foreground/60">
+        <div className="text-2xs text-muted-foreground/60">
           Add your OpenRouter management key in Settings → Extras.
         </div>
       ) : null}
@@ -518,7 +522,7 @@ export function ContextWindowMeter(props: {
             inner cap is the smaller of the two, so the panel uses the room that
             actually exists instead of scrolling a list that would have fit. */}
         <div className="flex max-h-[85vh] flex-col overflow-y-auto overscroll-contain">
-          <div className="flex max-h-(--available-height) min-h-0 flex-col gap-3 p-[var(--floating-content-inset)]">
+          <div className="flex max-h-(--available-height) min-h-0 flex-col gap-3 p-(--floating-content-inset)">
             {providerUsageAccounts.length > 0 ? (
               <div className="flex shrink-0 items-center justify-between gap-3">
                 <div className="font-medium text-muted-foreground text-xs">
@@ -528,7 +532,7 @@ export function ContextWindowMeter(props: {
                   {/* One freshness line for the whole read replaces the identical
                     per-account timestamps, and reports the oldest of them so a
                     freshly-read sibling can't vouch for a lagging account. */}
-                  <span className="text-[10px] tabular-nums text-muted-foreground/60">
+                  <span className="text-3xs tabular-nums text-muted-foreground/60">
                     {props.providerUsageRefreshing
                       ? "updating…"
                       : formatProviderUsageAge(panelObservedAt, nowMs)}
@@ -562,7 +566,7 @@ export function ContextWindowMeter(props: {
             ) : null}
 
             {providerUsageAccounts.length > 0 && fableUsage && fableAccountName ? (
-              <div className="flex shrink-0 items-center justify-between gap-3 text-[11px]">
+              <div className="flex shrink-0 items-center justify-between gap-3 text-2xs">
                 <span className="text-muted-foreground/70">Fable next</span>
                 <span className="truncate font-medium text-muted-foreground/90">
                   {fableAccountName}
@@ -609,7 +613,7 @@ export function ContextWindowMeter(props: {
                           {/* Name, email, and metadata share one line: the pool
                               easily reaches six accounts, and three lines each
                               pushed the context window off screen. */}
-                          <span className="flex min-w-0 items-baseline gap-1.5 text-[11px]">
+                          <span className="flex min-w-0 items-baseline gap-1.5 text-2xs">
                             {/* A pooled account's name is short ("Claude"), but
                                 a direct instance's is a user-chosen string that
                                 would otherwise squeeze out everything after it. */}
@@ -631,7 +635,7 @@ export function ContextWindowMeter(props: {
                             ) : null}
                             {(account.isCurrent || account.isNext === true) &&
                             providerUsageAccounts.length > 1 ? (
-                              <span className="shrink-0 self-center rounded-full border border-border/60 px-1.5 py-px text-[9px] font-medium uppercase tracking-wide text-muted-foreground/70">
+                              <span className="shrink-0 self-center rounded-full border border-border/60 px-1.5 py-px text-3xs font-medium uppercase tracking-wide text-muted-foreground/70">
                                 {/* One badge per row: a current account is next
                                     for its own session by definition. */}
                                 {account.isCurrent ? "current" : "next"}
@@ -639,20 +643,20 @@ export function ContextWindowMeter(props: {
                             ) : null}
                           </span>
                           {stale && !props.providerUsageRefreshing ? (
-                            <span className="shrink-0 text-[10px] tabular-nums text-muted-foreground/60">
+                            <span className="shrink-0 text-3xs tabular-nums text-muted-foreground/60">
                               {formatProviderUsageAge(account.observedAt, nowMs)}
                             </span>
                           ) : null}
                         </div>
                         {account.error ? (
-                          <div className="text-[11px] text-destructive/90">{account.error}</div>
+                          <div className="text-2xs text-destructive/90">{account.error}</div>
                         ) : null}
                         {account.usage && account.usage.windows.length > 0 ? (
                           account.usage.windows.map((window) => (
                             <QuotaWindowRow key={window.id} window={window} nowMs={nowMs} />
                           ))
                         ) : (
-                          <div className="text-[11px] text-muted-foreground/60">
+                          <div className="text-2xs text-muted-foreground/60">
                             {props.providerUsageUnavailable
                               ? "Couldn't load usage"
                               : "No usage data available"}
@@ -692,7 +696,7 @@ export function ContextWindowMeter(props: {
                 <div className="flex items-center justify-between gap-3">
                   <div className="font-medium text-muted-foreground text-xs">Context Window</div>
                   {usage.maxTokens !== null && usedPercentage !== null ? (
-                    <div className="text-secondary-label text-[11px] tabular-nums">
+                    <div className="text-secondary-label text-2xs tabular-nums">
                       <span>{usedPercentage}</span>
                       <span className="mx-1">·</span>
                       <span>
@@ -701,7 +705,7 @@ export function ContextWindowMeter(props: {
                       </span>
                     </div>
                   ) : (
-                    <div className="text-secondary-label text-[11px] tabular-nums">
+                    <div className="text-secondary-label text-2xs tabular-nums">
                       {formatContextWindowTokens(usage.usedTokens)}
                     </div>
                   )}
@@ -722,7 +726,7 @@ export function ContextWindowMeter(props: {
                   </div>
                 ) : null}
                 {showTotalProcessed ? (
-                  <div className="flex items-center justify-between gap-3 text-[11px] leading-4">
+                  <div className="flex items-center justify-between gap-3 text-2xs leading-4">
                     <span className="text-secondary-label">Total processed</span>
                     <span className="font-medium tabular-nums text-secondary-label">
                       {formatContextWindowTokens(totalProcessedTokens)}
@@ -730,7 +734,7 @@ export function ContextWindowMeter(props: {
                   </div>
                 ) : null}
                 {usage.compactsAutomatically ? (
-                  <div className="mt-1 text-pretty text-secondary-label text-[11px] font-medium">
+                  <div className="mt-1 text-pretty text-secondary-label text-2xs font-medium">
                     {formatContextWindowCompactionMessage(
                       modelDisplayName,
                       usage.autoCompactThreshold,
@@ -750,7 +754,7 @@ export function ContextWindowMeter(props: {
                       Compact context
                     </Button>
                     {compactDisabled && compactDisabledReason ? (
-                      <div className="text-pretty text-secondary-label text-[11px]">
+                      <div className="text-pretty text-secondary-label text-2xs">
                         {compactDisabledReason}
                       </div>
                     ) : null}

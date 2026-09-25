@@ -170,6 +170,10 @@ sending an answer or restarting the agent.
 automatic settlement while keeping manual settlement available. **Settings → General** controls
 settlement after inactivity and pull request merges.
 
+To disable automatic settlement for one thread, open its menu, choose **Auto-settle behavior**,
+and pick **Disabled**. Pick **Enabled** to use the environment and project rules again.
+Manual settle, snooze, and archive still work while automatic settlement is disabled.
+
 By default, environments settle inactive threads after three days and settle threads whose pull
 request merged. A closed pull request can also settle an idle thread. Work in progress, pending
 questions or approvals, and live background work prevent automatic settlement. A linked pull

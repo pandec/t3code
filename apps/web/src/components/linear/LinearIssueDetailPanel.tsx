@@ -180,7 +180,7 @@ function PropertyChips({ issue }: { issue: LinearIssue }) {
         <Chip href={issue.project.url} label={`Open project ${issue.project.name} in Linear`}>
           <span
             aria-hidden
-            className="size-2.5 shrink-0 rounded-[3px]"
+            className="size-2.5 shrink-0 rounded-xs"
             style={{ backgroundColor: issue.project.color ?? "currentColor" }}
           />
           <ChipText>{issue.project.name}</ChipText>
@@ -191,7 +191,7 @@ function PropertyChips({ issue }: { issue: LinearIssue }) {
       ) : null}
       <Chip href={teamHref} label={`Open team ${issue.team.name} in Linear`}>
         {issue.team.key ? (
-          <span className="shrink-0 rounded-xs bg-muted px-1 font-mono text-[10px] leading-4 text-muted-foreground">
+          <span className="shrink-0 rounded-xs bg-muted px-1 font-mono text-3xs leading-4 text-muted-foreground">
             {issue.team.key}
           </span>
         ) : null}
@@ -328,7 +328,7 @@ function IssueDetails({ issue }: { issue: LinearIssue }) {
       {issue.branchName ? (
         <div className="mt-2.5 flex min-w-0 items-center gap-1.5">
           <GitBranchIcon aria-hidden className="size-3.5 shrink-0 text-muted-foreground" />
-          <code className="min-w-0 truncate font-mono text-[11px] text-foreground/90">
+          <code className="min-w-0 truncate font-mono text-2xs text-foreground/90">
             {issue.branchName}
           </code>
           <CopyButton value={issue.branchName} label="Copy branch name" />

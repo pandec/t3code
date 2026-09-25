@@ -61,7 +61,7 @@ export function ComposerQueuedMessages({
 
   return (
     <div className={cn("mx-auto w-full max-w-3xl px-1 pb-1.5", className)}>
-      <div className="text-[11px] font-medium tracking-wide text-muted-foreground/80 uppercase">
+      <div className="text-2xs font-medium tracking-wide text-muted-foreground/80 uppercase">
         {steeringCount > 0
           ? `${steeringCount === messages.length ? "" : `${steeringCount} of ${messages.length} `}steering`
           : messages.length === 1
@@ -79,7 +79,7 @@ export function ComposerQueuedMessages({
             <li key={message.messageId} className="group flex min-w-0 items-center gap-1.5 py-0.5">
               <span
                 className={cn(
-                  "min-w-0 flex-1 truncate text-[13px]",
+                  "min-w-0 flex-1 truncate text-sm",
                   isSteering ? "text-foreground/80" : "text-muted-foreground",
                 )}
               >

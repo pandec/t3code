@@ -691,6 +691,7 @@ projectionSnapshotLayer("ProjectionSnapshotQuery", (it) => {
           pinOrderKey: "gm",
           activeOrderKey: "hq",
           customGroupId: "research",
+          autoSettleDisabledAt: null,
           titleRegeneration: null,
           titleState: null,
           deletedAt: null,
@@ -842,6 +843,7 @@ projectionSnapshotLayer("ProjectionSnapshotQuery", (it) => {
           pinOrderKey: "gm",
           activeOrderKey: "hq",
           customGroupId: "research",
+          autoSettleDisabledAt: null,
           titleRegeneration: null,
           titleState: null,
           session: {
@@ -1420,6 +1422,7 @@ projectionSnapshotLayer("ProjectionSnapshotQuery", (it) => {
         SET branch_pull_request_json = ${encodeThreadLinkedPullRequest(branchPullRequest)},
             active_order_key = 'm',
             pin_order_key = 'n',
+            auto_settle_disabled_at = '2026-04-06T00:00:05.000Z',
             title_state_json = ${'{"source":"generated","version":"cmd-title-archived","needsRefinement":true}'}
         WHERE thread_id = 'thread-archived'
       `;
@@ -1430,6 +1433,10 @@ projectionSnapshotLayer("ProjectionSnapshotQuery", (it) => {
         [ThreadId.make("thread-archived")],
       );
       assert.equal(archivedShellSnapshot.threads[0]?.archivedAt, "2026-04-06T00:00:06.000Z");
+      assert.equal(
+        archivedShellSnapshot.threads[0]?.autoSettleDisabledAt,
+        "2026-04-06T00:00:05.000Z",
+      );
 
       const archivedShell = yield* snapshotQuery.getThreadShellById(
         ThreadId.make("thread-archived"),
@@ -1442,6 +1449,7 @@ projectionSnapshotLayer("ProjectionSnapshotQuery", (it) => {
       assert.equal(archivedDetail._tag, "Some");
       if (archivedDetail._tag === "Some") {
         assert.equal(archivedDetail.value.archivedAt, "2026-04-06T00:00:06.000Z");
+        assert.equal(archivedDetail.value.autoSettleDisabledAt, "2026-04-06T00:00:05.000Z");
       }
 
       // A persisted link row must reach the fork-only archive shelf exactly as it
@@ -1468,6 +1476,7 @@ projectionSnapshotLayer("ProjectionSnapshotQuery", (it) => {
       );
       const recentArchived = yield* snapshotQuery.getRecentArchivedThreads({ limit: 1 });
       assert.equal(recentArchived.totalArchivedCount, 1);
+      assert.equal(recentArchived.threads[0]?.autoSettleDisabledAt, "2026-04-06T00:00:05.000Z");
       assert.deepEqual(
         recentArchived.threads.map((thread) => thread.id),
         [ThreadId.make("thread-archived")],

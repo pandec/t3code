@@ -199,6 +199,7 @@ const ANDROID_ICON_BY_SF_SYMBOL = {
   circle: IconCircle,
   "circle.dashed": IconCircleDashed,
   clock: IconClock,
+  timer: IconClock,
   ticket: IconTicket,
   cloud: IconCloud,
   cube: IconBox,

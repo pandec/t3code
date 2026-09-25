@@ -85,8 +85,9 @@ export function LinearPriorityIcon({
         <rect x="1" y="1" width="14" height="14" rx="3" fill={URGENT_COLOR} />
         <path
           d="M8 4.25v4.5M8 11.5v.25"
+          className="text-white"
           fill="none"
-          stroke="#fff"
+          stroke="currentColor"
           strokeWidth="1.75"
           strokeLinecap="round"
         />
@@ -135,7 +136,7 @@ export function LinearStateBadge({
   return (
     <span
       className={cn(
-        "inline-flex min-w-0 shrink-0 items-center gap-1.5 text-[11px] font-medium text-foreground/80",
+        "inline-flex min-w-0 shrink-0 items-center gap-1.5 text-2xs font-medium text-foreground/80",
         className,
       )}
     >
@@ -181,7 +182,7 @@ export function LinearUserAvatar({
     <span
       aria-hidden
       className={cn(
-        "flex size-4 shrink-0 items-center justify-center rounded-full bg-muted text-[8px] font-medium text-muted-foreground",
+        "flex size-4 shrink-0 items-center justify-center rounded-full bg-muted text-3xs font-medium text-muted-foreground",
         className,
       )}
     >

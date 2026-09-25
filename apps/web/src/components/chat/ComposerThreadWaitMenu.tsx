@@ -92,7 +92,7 @@ export const ComposerThreadWaitMenu = memo(function ComposerThreadWaitMenu(props
             {entry.title.trim().length > 0 ? entry.title : "Untitled thread"}
           </span>
           {ACTIVITY_LABEL[entry.activity] ? (
-            <span className="shrink-0 text-[10px] text-secondary-label">
+            <span className="shrink-0 text-3xs text-secondary-label">
               {ACTIVITY_LABEL[entry.activity]}
             </span>
           ) : null}

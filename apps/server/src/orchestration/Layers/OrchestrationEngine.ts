@@ -616,7 +616,7 @@ const makeOrchestrationEngine = Effect.gen(function* () {
                         })
                       : error.message,
                 })
-                .pipe(Effect.catch(() => Effect.void));
+                .pipe(Effect.ignore);
             }
           }
 

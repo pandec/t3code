@@ -41,9 +41,10 @@ export const readWorkflowScript = Effect.fn("orchestration.readWorkflowScript")(
   const requested = input.scriptPath;
 
   if (!NodePath.isAbsolute(requested) || NodePath.extname(requested) !== ".js") {
-    return yield* Effect.fail(
-      new OrchestrationGetWorkflowScriptError({ reason: "invalid-path", scriptPath: requested }),
-    );
+    return yield* new OrchestrationGetWorkflowScriptError({
+      reason: "invalid-path",
+      scriptPath: requested,
+    });
   }
 
   const rootCandidates =
@@ -59,12 +60,10 @@ export const readWorkflowScript = Effect.fn("orchestration.readWorkflowScript")(
     ),
   ).pipe(Effect.map((resolvedRoots) => resolvedRoots.filter((r): r is string => r !== undefined)));
   if (roots.length === 0) {
-    return yield* Effect.fail(
-      new OrchestrationGetWorkflowScriptError({
-        reason: "root-unavailable",
-        scriptPath: requested,
-      }),
-    );
+    return yield* new OrchestrationGetWorkflowScriptError({
+      reason: "root-unavailable",
+      scriptPath: requested,
+    });
   }
 
   // Realpath the FILE itself (not just its directory): a symlink named
@@ -83,14 +82,16 @@ export const readWorkflowScript = Effect.fn("orchestration.readWorkflowScript")(
     (root) => resolved === root || resolved.startsWith(`${root}${NodePath.sep}`),
   );
   if (!contained) {
-    return yield* Effect.fail(
-      new OrchestrationGetWorkflowScriptError({ reason: "outside-root", scriptPath: resolved }),
-    );
+    return yield* new OrchestrationGetWorkflowScriptError({
+      reason: "outside-root",
+      scriptPath: resolved,
+    });
   }
   if (NodePath.extname(resolved) !== ".js") {
-    return yield* Effect.fail(
-      new OrchestrationGetWorkflowScriptError({ reason: "not-js", scriptPath: resolved }),
-    );
+    return yield* new OrchestrationGetWorkflowScriptError({
+      reason: "not-js",
+      scriptPath: resolved,
+    });
   }
 
   // TOCTOU-safe read (review finding): open FIRST, then verify what was

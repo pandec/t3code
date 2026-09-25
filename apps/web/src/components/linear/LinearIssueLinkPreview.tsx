@@ -77,7 +77,7 @@ export function LinearIssueLinkPreview({
           </p>
         ) : (
           <div className="min-w-0 p-3">
-            <div className="flex min-w-0 items-center gap-1.5 text-[11px] text-muted-foreground">
+            <div className="flex min-w-0 items-center gap-1.5 text-2xs text-muted-foreground">
               <span className="shrink-0 font-medium">{issue.identifier}</span>
               <span aria-hidden>·</span>
               <LinearStateBadge state={issue.state} />

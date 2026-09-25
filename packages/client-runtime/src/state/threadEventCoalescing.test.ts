@@ -110,6 +110,7 @@ const STRUCTURAL_EVENT_TYPES = {
   "thread.unsnoozed": true,
   "thread.pinned": true,
   "thread.unpinned": true,
+  "thread.auto-settle-set": true,
   "thread.pin-reordered": true,
   "thread.meta-updated": true,
   "thread.runtime-mode-set": true,

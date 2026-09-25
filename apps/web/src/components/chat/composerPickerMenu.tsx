@@ -152,7 +152,7 @@ export function ComposerPickerShell(props: {
     <Command autoHighlight={false} mode="none">
       <div
         ref={props.menuRef}
-        className="dropdown-glass relative w-full overflow-hidden rounded-[20px]"
+        className="dropdown-glass relative w-full overflow-hidden rounded-3xl"
       >
         <div className="flex items-center gap-2 border-b border-border/60 px-4 py-2.5">
           <SearchIcon className="size-3.5 shrink-0 text-icon-muted" aria-hidden="true" />
@@ -168,7 +168,7 @@ export function ComposerPickerShell(props: {
         <CommandList className="max-h-72">
           <CommandGroup>
             <CommandGroupLabel>
-              <span className="flex items-center gap-1.5 text-[10px] font-semibold uppercase tracking-[0.08em] text-secondary-label">
+              <span className="flex items-center gap-1.5 text-3xs font-semibold uppercase tracking-widest text-secondary-label">
                 {props.groupIcon}
                 {props.groupLabel}
               </span>

@@ -138,7 +138,7 @@ export function SavedPromptRow({
   return (
     <div className="group rounded-xl px-3 py-2 sm:px-4">
       <div className="flex flex-col gap-1 sm:flex-row sm:items-center sm:gap-2">
-        <h3 className="flex min-h-5 min-w-0 flex-1 items-baseline gap-2 text-sm font-medium tracking-[-0.005em] text-foreground">
+        <h3 className="flex min-h-5 min-w-0 flex-1 items-baseline gap-2 text-sm font-medium text-foreground">
           <span className="max-w-60 shrink-0 truncate">{prompt.title}</span>
           {!isExpanded && (
             <span className="min-w-0 flex-1 truncate font-normal text-muted-foreground">
@@ -174,7 +174,7 @@ export function SavedPromptRow({
       </div>
       <Collapsible open={isExpanded} onOpenChange={setIsExpanded}>
         <CollapsibleContent id={contentId} keepMounted>
-          <p className="pt-1.5 pb-1 text-[13px] leading-[1.45] break-words whitespace-pre-wrap text-muted-foreground">
+          <p className="pt-1.5 pb-1 text-xs leading-normal break-words whitespace-pre-wrap text-muted-foreground">
             {prompt.content}
           </p>
         </CollapsibleContent>

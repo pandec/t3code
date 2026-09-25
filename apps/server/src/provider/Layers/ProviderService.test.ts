@@ -88,7 +88,9 @@ const serverConfigTestLayer = ServerConfig.layerTest(process.cwd(), {
 
 // startSession verifies the workspace folder exists before dispatching to an
 // adapter, so session cwd fixtures must be real directories.
-const fixtureCwdRoot = NodeFS.mkdtempSync(NodePath.join(NodeOS.tmpdir(), "provider-service-test-"));
+const fixtureCwdRoot = NodeFS.realpathSync(
+  NodeFS.mkdtempSync(NodePath.join(NodeOS.tmpdir(), "provider-service-test-")),
+);
 afterAll(() => NodeFS.rmSync(fixtureCwdRoot, { recursive: true, force: true }));
 function fixtureCwd(name: string): string {
   const dir = NodePath.join(fixtureCwdRoot, name);
@@ -2416,7 +2418,7 @@ routing.layer("ProviderServiceLive routing", (it) => {
 
       const fileAttachment = {
         type: "file" as const,
-        id: "thread-attach-12345678-1234-1234-1234-123456789abc-pdf",
+        id: "thread-attach-12345678-1234-1234-1234-123456789abd",
         name: "report.pdf",
         mimeType: "application/pdf",
         sizeBytes: 456,
@@ -2443,7 +2445,7 @@ routing.layer("ProviderServiceLive routing", (it) => {
 
       const pastedTextAttachment = {
         type: "file" as const,
-        id: "thread-attach-12345678-1234-1234-1234-123456789abc-txt",
+        id: "thread-attach-12345678-1234-1234-1234-123456789abe",
         name: "pasted-text.txt",
         mimeType: "text/plain;charset=utf-8",
         sizeBytes: 32_768,
@@ -3179,7 +3181,9 @@ routing.layer("ProviderServiceLive routing", (it) => {
       const provider = yield* ProviderService.ProviderService;
       const directory = yield* ProviderSessionDirectory.ProviderSessionDirectory;
       const threadId = asThreadId("thread-runtime-observed-cwd");
-      const movedCwd = NodeFS.mkdtempSync(NodePath.join(NodeOS.tmpdir(), "t3-moved-worktree-"));
+      const movedCwd = NodeFS.realpathSync(
+        NodeFS.mkdtempSync(NodePath.join(NodeOS.tmpdir(), "t3-moved-worktree-")),
+      );
       // A session that entered a worktree mid-run keeps using that directory
       // while it exists, even when its caller still names the project root.
       yield* directory.upsert({
@@ -6060,7 +6064,7 @@ validation.layer("ProviderServiceLive validation", (it) => {
       const provider = yield* ProviderService.ProviderService;
       const attachment = {
         type: "file" as const,
-        id: "thread-pasted-text-context-limit-12345678-1234-1234-1234-123456789abc-txt",
+        id: "thread-pasted-text-context-limit-12345678-1234-1234-1234-123456789abe",
         name: "pasted-text.txt",
         mimeType: "text/plain;charset=utf-8",
         sizeBytes: 32_768,

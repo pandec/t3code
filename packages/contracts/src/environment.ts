@@ -189,6 +189,9 @@ export const ExecutionEnvironmentCapabilities = Schema.Struct({
   /** Server preserves each group's placement around Active. Older group servers
       strip it on decode, so clients must not replicate catalogs to them. */
   threadGroupPlacement: Schema.optionalKey(Schema.Boolean),
+  /** Server understands thread.auto-settle.set (per-thread auto-settle off).
+      Same version-skew contract as threadSettlement. */
+  threadAutoSettleOptOut: Schema.optionalKey(Schema.Boolean),
   /** Server understands regenerateTitle on thread.meta.update. Absent on
       older servers, so clients hide the action instead of sending it. */
   threadTitleRegeneration: Schema.optionalKey(Schema.Boolean),

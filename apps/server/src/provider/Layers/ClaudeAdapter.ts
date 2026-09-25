@@ -6216,7 +6216,7 @@ export const makeClaudeAdapter = Effect.fn("makeClaudeAdapter")(function* (
 
     for (const result of results) {
       if (result._tag === "Failure") {
-        return yield* Effect.fail(result.failure);
+        return yield* result.failure;
       }
     }
   });
@@ -6544,7 +6544,7 @@ export const makeClaudeAdapter = Effect.fn("makeClaudeAdapter")(function* (
     }).pipe(
       Effect.timeoutOption("15 seconds"),
       Effect.catchCause((cause) =>
-        Cause.hasInterruptsOnly(cause) ? Effect.failCause(cause) : Effect.succeed(Option.none()),
+        Cause.hasInterruptsOnly(cause) ? Effect.failCause(cause) : Effect.succeedNone,
       ),
     );
     return Option.getOrUndefined(result);
