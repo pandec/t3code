@@ -30,6 +30,7 @@ import { useAssetUrlRefresh, useAssetUrlState } from "~/assets/assetUrls";
 import { OpenInPicker } from "~/components/chat/OpenInPicker";
 import { MediaVideoPlayer } from "~/components/media/MediaVideoPlayer";
 import { MediaActions, type MediaActionSource } from "~/components/media/MediaActions";
+import { useFileContextMenuHandler } from "~/fileContextMenu";
 import { useRemoteOpenState } from "~/remoteOpen";
 import { useClientSettings, useUpdateClientSettings } from "~/hooks/useSettings";
 import { useTheme } from "~/hooks/useTheme";
@@ -927,6 +928,7 @@ export default function FilePreviewPanel({
   const wordWrap = useClientSettings((settings) => settings.wordWrap);
   const primaryEnvironmentId = usePrimaryEnvironmentId();
   const remoteOpenState = useRemoteOpenState(environmentId);
+  const onFileContextMenu = useFileContextMenuHandler(environmentId);
   const environmentHttpBaseUrl = useEnvironmentHttpBaseUrl(environmentId);
   const createAssetUrl = useAtomQueryRunner(assetEnvironment.createUrl, {
     reportFailure: false,
@@ -1105,6 +1107,22 @@ export default function FilePreviewPanel({
                 cwd={cwd}
                 environmentId={environmentId}
                 onOpenFile={onOpenFile}
+                onFileContextMenu={
+                  absolutePath
+                    ? (event) => {
+                        event.preventDefault();
+                        onFileContextMenu(
+                          {
+                            environmentId,
+                            filePath: relativePath,
+                            workspaceRoot: cwd,
+                            absolutePath,
+                          },
+                          event,
+                        );
+                      }
+                    : undefined
+                }
                 projectName={projectName}
                 relativePath={relativePath}
                 workspaceMutationId={workspaceMutationId}
@@ -1118,6 +1136,7 @@ export default function FilePreviewPanel({
               keybindings={keybindings}
               availableEditors={availableEditors}
               openInCwd={absolutePath}
+              file={{ relativePath }}
               compact
               enableShortcut={false}
             />

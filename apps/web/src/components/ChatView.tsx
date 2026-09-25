@@ -227,7 +227,9 @@ import { RightPanelTabs } from "./RightPanelTabs";
 import { AgentsPanel } from "./AgentsPanel";
 import { LinkPullRequestDialogHost } from "./pullRequest/LinkPullRequestDialog";
 import { ThreadPullRequestsPanel } from "./pullRequest/ThreadPullRequestsPanel";
+import { copyFilePathToClipboard, type FilePathCopyKind } from "~/fileContextMenu";
 import { useDeviceState } from "~/state/device";
+import { resolvePathLinkTarget } from "~/terminal-links";
 import { DeviceSetup } from "./device/DeviceSetup";
 import { Dialog } from "./ui/dialog";
 import { WizardPopup } from "./ui/wizard";
@@ -5351,37 +5353,17 @@ export default function ChatView(props: ChatViewProps) {
     finishRightPanelSurfaceClose,
     rightPanelState.surfaces,
   ]);
-  const copyRightPanelFilePath = useCallback((relativePath: string) => {
-    if (typeof window === "undefined" || !navigator.clipboard?.writeText) {
-      toastManager.add(
-        stackedThreadToast({
-          type: "error",
-          title: "Failed to copy path",
-          description: "Clipboard API unavailable.",
-        }),
+  const copyRightPanelFilePath = useCallback(
+    (relativePath: string, kind: FilePathCopyKind) => {
+      void copyFilePathToClipboard(
+        kind === "relative"
+          ? relativePath
+          : resolvePathLinkTarget(relativePath, activeWorkspaceRoot ?? ""),
+        kind,
       );
-      return;
-    }
-
-    void navigator.clipboard.writeText(relativePath).then(
-      () => {
-        toastManager.add({
-          type: "success",
-          title: "Path copied",
-          description: relativePath,
-        });
-      },
-      (error) => {
-        toastManager.add(
-          stackedThreadToast({
-            type: "error",
-            title: "Failed to copy path",
-            description: error instanceof Error ? error.message : "An error occurred.",
-          }),
-        );
-      },
-    );
-  }, []);
+    },
+    [activeWorkspaceRoot],
+  );
   useEffect(
     () =>
       subscribePreviewAction((action) => {

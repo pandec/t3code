@@ -2,7 +2,7 @@ import { RefreshIcon } from "~/components/ui/refresh-icon";
 import { Spinner } from "~/components/ui/spinner";
 import type { EnvironmentId } from "@t3tools/contracts";
 import { ArrowLeftIcon, ChevronRightIcon } from "lucide-react";
-import { useEffect, useMemo, useState } from "react";
+import { type MouseEvent, useEffect, useMemo, useState } from "react";
 
 import { PierreEntryIcon } from "~/components/chat/PierreEntryIcon";
 import {
@@ -33,6 +33,8 @@ interface FileBreadcrumbsProps {
   readonly cwd: string;
   readonly environmentId: EnvironmentId;
   readonly onOpenFile: (relativePath: string) => void;
+  /** Right-click on the file crumb; the file surface owns the menu. */
+  readonly onFileContextMenu?: ((event: MouseEvent<HTMLElement>) => void) | undefined;
   readonly projectName: string;
   readonly relativePath: string;
   readonly workspaceMutationId: string | null;
@@ -282,7 +284,7 @@ export function FileBreadcrumbs(props: FileBreadcrumbsProps) {
         <ChevronRightIcon className="mx-1 size-3.5 shrink-0 text-muted-foreground/60" />
       ) : null}
       {crumb.kind === "file" ? (
-        <span aria-current="page">
+        <span aria-current="page" onContextMenu={props.onFileContextMenu}>
           <BreadcrumbLabel current label={crumb.label} pathLabel={crumb.path} />
         </span>
       ) : hostPath ? (
