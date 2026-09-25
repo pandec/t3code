@@ -15,7 +15,13 @@ import {
   useRemoteOpenState,
 } from "../../remoteOpen";
 import { useEnvironment } from "../../state/environments";
-import { ChevronDownIcon, FolderClosedIcon, SquareArrowOutUpRightIcon } from "lucide-react";
+import {
+  AppWindowIcon,
+  ChevronDownIcon,
+  CopyIcon,
+  FolderClosedIcon,
+  SquareArrowOutUpRightIcon,
+} from "lucide-react";
 import { Button } from "../ui/button";
 import { Group, GroupSeparator } from "../ui/group";
 import {
@@ -23,6 +29,7 @@ import {
   MenuItem,
   MenuItemLabel,
   MenuPopup,
+  MenuSeparator,
   MenuShortcut,
   MenuSub,
   MenuSubTrigger,
@@ -56,6 +63,11 @@ import {
   RustRoverIcon,
   WebStormIcon,
 } from "../JetBrainsIcons";
+import {
+  type FileContextMenuAction,
+  type FileContextMenuTarget,
+  useFileContextMenu,
+} from "../../fileContextMenu";
 import { cn, isMacPlatform, isWindowsPlatform } from "~/lib/utils";
 import { shellEnvironment } from "~/state/shell";
 import { useAtomCommand } from "~/state/use-atom-command";
@@ -69,9 +81,29 @@ type OpenInOption = {
   kind: "brand" | "generic";
 };
 
+/** The file context menu's actions the picker shows; open and open-with are the editor list. */
+const FILE_PICKER_ACTIONS: ReadonlySet<FileContextMenuAction> = new Set<FileContextMenuAction>([
+  "reveal-in-folder",
+  "copy-relative-path",
+  "copy-full-path",
+]);
+
+const fileManagerIconForPlatform = (platform: string) =>
+  isMacPlatform(platform)
+    ? FinderIcon
+    : isWindowsPlatform(platform)
+      ? FileExplorerIcon
+      : FolderClosedIcon;
+
+/**
+ * The file-manager editor opens its target with the OS: a folder lands in
+ * Finder, a file in whatever app owns its type. The option is labelled for
+ * what the user gets, so a file surface calls it "Default app".
+ */
 export const resolveOpenInOptions = (
   platform: string,
   availableEditors: ReadonlyArray<EditorId>,
+  target: "directory" | "file" = "directory",
 ) => {
   const baseOptions: ReadonlyArray<Omit<OpenInOption, "label">> = [
     {
@@ -174,20 +206,24 @@ export const resolveOpenInOptions = (
       value: "webstorm",
       kind: "brand",
     },
-    {
-      Icon: isMacPlatform(platform)
-        ? FinderIcon
-        : isWindowsPlatform(platform)
-          ? FileExplorerIcon
-          : FolderClosedIcon,
-      value: "file-manager",
-      kind: isMacPlatform(platform) || isWindowsPlatform(platform) ? "brand" : "generic",
-    },
+    target === "file"
+      ? { Icon: AppWindowIcon, value: "file-manager", kind: "generic" }
+      : {
+          Icon: fileManagerIconForPlatform(platform),
+          value: "file-manager",
+          kind: isMacPlatform(platform) || isWindowsPlatform(platform) ? "brand" : "generic",
+        },
   ];
   const availableEditorSet = new Set(availableEditors);
   return baseOptions
     .filter((option) => availableEditorSet.has(option.value))
-    .map((option) => ({ ...option, label: editorLabelForPlatform(option.value, platform) }));
+    .map((option) => ({
+      ...option,
+      label:
+        target === "file" && option.value === "file-manager"
+          ? "Default app"
+          : editorLabelForPlatform(option.value, platform),
+    }));
 };
 
 function getOpenInIconClass(kind: OpenInOption["kind"]) {
@@ -199,6 +235,7 @@ export const OpenInPicker = memo(function OpenInPicker({
   keybindings,
   availableEditors,
   openInCwd,
+  fileRelativePath,
   presentation = "toolbar",
   compact = false,
   enableShortcut = true,
@@ -207,6 +244,12 @@ export const OpenInPicker = memo(function OpenInPicker({
   keybindings: ResolvedKeybindingsConfig;
   availableEditors: ReadonlyArray<EditorId>;
   openInCwd: string | null;
+  /**
+   * Set when `openInCwd` is a file rather than a folder: relabels the
+   * file-manager entry and appends reveal and copy-path actions for it. A
+   * string, so the memoized picker still skips renders with unchanged props.
+   */
+  fileRelativePath?: string | undefined;
   presentation?: "toolbar" | "menu";
   compact?: boolean;
   enableShortcut?: boolean;
@@ -220,10 +263,23 @@ export const OpenInPicker = memo(function OpenInPicker({
   // the viewing machine, which only the desktop app can probe.
   const effectiveEditors = remote.mode === "local-exec" ? availableEditors : remoteCapableEditors;
   const [preferredEditor, setPreferredEditor] = usePreferredEditor(effectiveEditors);
+  const isFile = fileRelativePath !== undefined;
   const options = useMemo(
-    () => resolveOpenInOptions(navigator.platform, effectiveEditors),
-    [effectiveEditors],
+    () => resolveOpenInOptions(navigator.platform, effectiveEditors, isFile ? "file" : "directory"),
+    [effectiveEditors, isFile],
   );
+  // Reveal and copy act on the environment host, so they take the file's
+  // resolved path as is; the picker never guesses it from a workspace root.
+  const fileContextMenu = useFileContextMenu(isFile ? environmentId : null);
+  const fileTarget: FileContextMenuTarget | null =
+    fileRelativePath !== undefined && openInCwd
+      ? {
+          environmentId,
+          filePath: fileRelativePath,
+          workspaceRoot: undefined,
+          absolutePath: openInCwd,
+        }
+      : null;
   const primaryOption = options.find(({ value }) => value === preferredEditor) ?? null;
 
   const openInEditor = useCallback(
@@ -327,6 +383,41 @@ export const OpenInPicker = memo(function OpenInPicker({
       )}
     </>
   );
+  const density = presentation === "menu" ? "touch" : "default";
+  // Chosen once like `options`: the compiler lint rejects a component picked in render.
+  const revealIcon = useMemo(() => {
+    const platform = navigator.platform;
+    return {
+      Icon: fileManagerIconForPlatform(platform),
+      kind: isMacPlatform(platform) || isWindowsPlatform(platform) ? "brand" : "generic",
+    } as const;
+  }, []);
+  // The shared builder decides which file actions apply (reveal only on the
+  // host, no relative path for a host file); the picker only adds icons.
+  const fileMenuItems = fileTarget
+    ? fileContextMenu.buildItems(fileTarget).filter((item) => FILE_PICKER_ACTIONS.has(item.id))
+    : [];
+  const fileItems =
+    fileTarget && fileMenuItems.length > 0 ? (
+      <>
+        <MenuSeparator />
+        {fileMenuItems.map((item) => (
+          <MenuItem
+            key={item.id}
+            density={density}
+            onClick={() => void fileContextMenu.activate(item.id, fileTarget)}
+          >
+            {item.id === "reveal-in-folder" ? (
+              <revealIcon.Icon aria-hidden="true" className={getOpenInIconClass(revealIcon.kind)} />
+            ) : (
+              <CopyIcon aria-hidden="true" className={getOpenInIconClass("generic")} />
+            )}
+            <MenuItemLabel>{item.label}</MenuItemLabel>
+          </MenuItem>
+        ))}
+      </>
+    ) : null;
+
   if (presentation === "menu") {
     return (
       <>
@@ -351,6 +442,7 @@ export const OpenInPicker = memo(function OpenInPicker({
           </MenuSubTrigger>
           <MenuSubPopup>{editorItems}</MenuSubPopup>
         </MenuSub>
+        {fileItems}
       </>
     );
   }
@@ -387,7 +479,10 @@ export const OpenInPicker = memo(function OpenInPicker({
         >
           <ChevronDownIcon aria-hidden="true" className="size-4" />
         </MenuTrigger>
-        <MenuPopup align="end">{editorItems}</MenuPopup>
+        <MenuPopup align="end">
+          {editorItems}
+          {fileItems}
+        </MenuPopup>
       </Menu>
     </Group>
   );

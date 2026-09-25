@@ -43,7 +43,9 @@ import { isElectron } from "~/env";
 import type { DesktopPreviewOverlay } from "~/previewStateStore";
 import type { RightPanelSurface } from "~/rightPanelStore";
 import { cn } from "~/lib/utils";
+import { type FilePathCopyKind, filePathCopyLabel } from "~/fileContextMenu";
 import { readLocalApi } from "~/localApi";
+import { isAbsolutePath } from "~/terminal-links";
 import { Button } from "~/components/ui/button";
 import { AndroidIcon, AppleIcon } from "~/components/Icons";
 import { Tooltip, TooltipPopup, TooltipTrigger } from "~/components/ui/tooltip";
@@ -111,7 +113,7 @@ interface RightPanelTabsProps {
   onCloseOtherSurfaces: (surface: RightPanelSurface) => void;
   onCloseSurfacesToRight: (surface: RightPanelSurface) => void;
   onCloseAllSurfaces: () => void;
-  onCopyFilePath: (relativePath: string) => void;
+  onCopyFilePath: (relativePath: string, kind: FilePathCopyKind) => void;
   onAddBrowser: () => void;
   /**
    * Separate from `onAddBrowser` on purpose: that one is passed directly as a
@@ -193,7 +195,8 @@ const SURFACE_UNAVAILABLE_HINTS = {
 
 type TabContextMenuAction =
   | "rename"
-  | "copy-path"
+  | "copy-relative-path"
+  | "copy-full-path"
   | "toggle-mute"
   | "close"
   | "close-others"
@@ -969,7 +972,11 @@ export function RightPanelTabs(props: RightPanelTabsProps) {
       if (surface.kind === "device" && props.onRenameDevice)
         items.push({ id: "rename", label: "Rename" });
       if (surface.kind === "file" && surface.attachment === undefined) {
-        items.push({ id: "copy-path", label: "Copy path" });
+        // A host file's only path is the full one.
+        if (!isAbsolutePath(surface.relativePath)) {
+          items.push({ id: "copy-relative-path", label: filePathCopyLabel("relative") });
+        }
+        items.push({ id: "copy-full-path", label: filePathCopyLabel("full") });
       }
       const menuPreviewTabId = previewTabIdOf(surface, props.previewSessions);
       // Desktop overlay state only arrives once the preview manager has created
@@ -1014,9 +1021,13 @@ export function RightPanelTabs(props: RightPanelTabsProps) {
         case "rename":
           setRenamingDevice(surface.id);
           break;
-        case "copy-path":
+        case "copy-relative-path":
+        case "copy-full-path":
           if (surface.kind === "file" && surface.attachment === undefined) {
-            props.onCopyFilePath(surface.relativePath);
+            props.onCopyFilePath(
+              surface.relativePath,
+              action === "copy-relative-path" ? "relative" : "full",
+            );
           }
           break;
         case "toggle-mute": {
