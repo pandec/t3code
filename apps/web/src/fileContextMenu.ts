@@ -78,6 +78,21 @@ export function resolveFileContextMenuAbsolutePath(target: FileContextMenuTarget
   return resolvePathLinkTarget(workspaceFilePath, target.workspaceRoot);
 }
 
+/**
+ * Workspace-relative path for the target, the form the file tab and tree
+ * show. A diff in a nested repository names files from the repository root,
+ * so the workspace prefix comes off; a file surface already has the
+ * workspace form. Null when the file lies outside the workspace.
+ */
+export function resolveFileContextMenuRelativePath(target: FileContextMenuTarget): string | null {
+  if (target.absolutePath !== undefined) return target.filePath;
+  return resolveDiffPathForWorkspace({
+    filePath: target.filePath,
+    workspaceRoot: target.workspaceRoot,
+    repositoryRoot: target.repositoryRoot,
+  });
+}
+
 const EDITOR_LABEL_BY_ID = new Map(EDITORS.map((editor) => [editor.id, editor.label]));
 
 export interface FileContextMenuCapabilities {
@@ -239,7 +254,9 @@ export function useFileContextMenu(environmentId: EnvironmentId | null) {
       if (absolutePath === null || environmentId === null) return;
 
       if (action === "copy-relative-path") {
-        await copyFilePathToClipboard(target.filePath, "relative");
+        const relativePath = resolveFileContextMenuRelativePath(target);
+        if (relativePath === null) return;
+        await copyFilePathToClipboard(relativePath, "relative");
         return;
       }
       if (action === "copy-full-path") {

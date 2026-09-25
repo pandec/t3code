@@ -5,6 +5,7 @@ import { describe, expect, it } from "vite-plus/test";
 import {
   buildFileContextMenuItems,
   resolveFileContextMenuAbsolutePath,
+  resolveFileContextMenuRelativePath,
   revealInFileManagerLabel,
 } from "./fileContextMenu";
 
@@ -65,6 +66,44 @@ describe("resolveFileContextMenuAbsolutePath", () => {
         absolutePath: "/tmp/outside/report.md",
       }),
     ).toBe("/tmp/outside/report.md");
+  });
+});
+
+describe("resolveFileContextMenuRelativePath", () => {
+  it("keeps a workspace-relative diff path as is", () => {
+    expect(resolveFileContextMenuRelativePath(BASE_TARGET)).toBe("src/index.ts");
+  });
+
+  it("strips the repository prefix so the copy matches the file tab, not the diff header", () => {
+    expect(
+      resolveFileContextMenuRelativePath({
+        ...BASE_TARGET,
+        workspaceRoot: "/workspace/project/packages/app",
+        repositoryRoot: "/workspace/project",
+        filePath: "packages/app/src/index.ts",
+      }),
+    ).toBe("src/index.ts");
+  });
+
+  it("returns null for a diff path outside the workspace", () => {
+    expect(
+      resolveFileContextMenuRelativePath({
+        ...BASE_TARGET,
+        workspaceRoot: "/workspace/project/packages/app",
+        repositoryRoot: "/workspace/project",
+        filePath: "other/src/index.ts",
+      }),
+    ).toBeNull();
+  });
+
+  it("trusts a file surface's path, which is already in workspace form", () => {
+    expect(
+      resolveFileContextMenuRelativePath({
+        ...BASE_TARGET,
+        filePath: "docs/README.md",
+        absolutePath: "/workspace/project/docs/README.md",
+      }),
+    ).toBe("docs/README.md");
   });
 });
 

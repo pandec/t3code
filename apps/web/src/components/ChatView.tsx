@@ -229,7 +229,7 @@ import { LinkPullRequestDialogHost } from "./pullRequest/LinkPullRequestDialog";
 import { ThreadPullRequestsPanel } from "./pullRequest/ThreadPullRequestsPanel";
 import { copyFilePathToClipboard, type FilePathCopyKind } from "~/fileContextMenu";
 import { useDeviceState } from "~/state/device";
-import { resolvePathLinkTarget } from "~/terminal-links";
+import { isAbsolutePath, resolvePathLinkTarget } from "~/terminal-links";
 import { DeviceSetup } from "./device/DeviceSetup";
 import { Dialog } from "./ui/dialog";
 import { WizardPopup } from "./ui/wizard";
@@ -5355,12 +5355,21 @@ export default function ChatView(props: ChatViewProps) {
   ]);
   const copyRightPanelFilePath = useCallback(
     (relativePath: string, kind: FilePathCopyKind) => {
-      void copyFilePathToClipboard(
-        kind === "relative"
-          ? relativePath
-          : resolvePathLinkTarget(relativePath, activeWorkspaceRoot ?? ""),
-        kind,
-      );
+      // A host file's path is already full. Anything else needs the workspace
+      // root; joining onto an empty root would fabricate a path from `/`.
+      if (kind === "relative" || isAbsolutePath(relativePath)) {
+        void copyFilePathToClipboard(relativePath, kind);
+        return;
+      }
+      if (activeWorkspaceRoot === undefined) {
+        toastManager.add({
+          type: "error",
+          title: "Failed to copy full path",
+          description: "The project root is not loaded yet.",
+        });
+        return;
+      }
+      void copyFilePathToClipboard(resolvePathLinkTarget(relativePath, activeWorkspaceRoot), kind);
     },
     [activeWorkspaceRoot],
   );
