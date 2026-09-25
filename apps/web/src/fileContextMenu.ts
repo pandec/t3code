@@ -1,15 +1,19 @@
 /**
  * Right-click actions for a workspace file: reveal it in the environment's
- * file manager and open it in an editor. Reuse the chat file-chip menu's
- * machinery: reveal rides `shell.openInEditor` with `reveal: true`, which the
- * server only honors when its `shellRevealInFileManager` config flag is set,
- * so both actions work for every client and connection mode.
+ * file manager, open it in an editor, and copy its path. Reuse the chat
+ * file-chip menu's machinery: reveal rides `shell.openInEditor` with
+ * `reveal: true`, which the server only honors when its
+ * `shellRevealInFileManager` config flag is set. Every launch action runs on
+ * the environment host, so they are offered only while the viewing machine is
+ * that host, like the chip menu; opening an app on another computer helps
+ * nobody. Copying needs only the path and is offered everywhere.
  */
 import {
   EDITORS,
   type ContextMenuItem,
   type EditorId,
   type EnvironmentId,
+  type ServerConfig,
 } from "@t3tools/contracts";
 import { useCallback, useMemo } from "react";
 
@@ -18,11 +22,13 @@ import {
   revealInFileExplorerLabelForKind,
   revealInFileExplorerLabelForOs,
 } from "~/components/preview/fileExplorerLabel";
+import { writeTextToClipboard } from "./hooks/useCopyToClipboard";
 import { readLocalApi } from "./localApi";
+import { type RemoteOpenMode, useRemoteOpenResolution } from "./remoteOpen";
 import { serverEnvironment } from "./state/server";
 import { shellEnvironment } from "./state/shell";
 import { useAtomCommand } from "./state/use-atom-command";
-import { resolvePathLinkTarget } from "./terminal-links";
+import { isAbsolutePath, resolvePathLinkTarget } from "./terminal-links";
 import { toastManager } from "./components/ui/toast";
 import { useAtomValue } from "@effect/atom-react";
 
@@ -31,7 +37,11 @@ export type FileContextMenuAction =
   | "open"
   /** Submenu parent; never the activated id. */
   | "open-with"
-  | `editor:${EditorId}`;
+  | `editor:${EditorId}`
+  | "copy-relative-path"
+  | "copy-full-path";
+
+export type FilePathCopyKind = "relative" | "full";
 
 export interface FileContextMenuTarget {
   readonly environmentId: EnvironmentId | null;
@@ -39,9 +49,14 @@ export interface FileContextMenuTarget {
   readonly filePath: string;
   readonly workspaceRoot: string | undefined;
   readonly repositoryRoot?: string | undefined;
+  /**
+   * Already-resolved path on the environment host. File surfaces know it (a
+   * host file's `filePath` is itself absolute, which diff-style resolution
+   * rejects), so they pass it instead of resolving again.
+   */
+  readonly absolutePath?: string | undefined;
 }
 
-/** Absolute path on the environment host, or null when it cannot be resolved. */
 /**
  * Absolute path on the environment host for a diff-style target, resolving
  * repo-relative paths through the workspace root like every other diff
@@ -49,6 +64,7 @@ export interface FileContextMenuTarget {
  * treat as "no file actions available".
  */
 export function resolveFileContextMenuAbsolutePath(target: FileContextMenuTarget): string | null {
+  if (target.absolutePath !== undefined) return target.absolutePath;
   const workspaceFilePath = resolveDiffPathForWorkspace({
     filePath: target.filePath,
     workspaceRoot: target.workspaceRoot,
@@ -63,6 +79,21 @@ export function resolveFileContextMenuAbsolutePath(target: FileContextMenuTarget
   return resolvePathLinkTarget(workspaceFilePath, target.workspaceRoot);
 }
 
+/**
+ * Workspace-relative path for the target, the form the file tab and tree
+ * show. A diff in a nested repository names files from the repository root,
+ * so the workspace prefix comes off; a file surface already has the
+ * workspace form. Null when the file lies outside the workspace.
+ */
+export function resolveFileContextMenuRelativePath(target: FileContextMenuTarget): string | null {
+  if (target.absolutePath !== undefined) return target.filePath;
+  return resolveDiffPathForWorkspace({
+    filePath: target.filePath,
+    workspaceRoot: target.workspaceRoot,
+    repositoryRoot: target.repositoryRoot,
+  });
+}
+
 const EDITOR_LABEL_BY_ID = new Map(EDITORS.map((editor) => [editor.id, editor.label]));
 
 export interface FileContextMenuCapabilities {
@@ -72,15 +103,17 @@ export interface FileContextMenuCapabilities {
 }
 
 /**
- * Menu items for a resolved file, offering only what the environment's config
- * advertises: default-app open, reveal (with server-provided wording), and an
- * "Open with" submenu of detected editors. Empty when nothing can act.
+ * Menu items for a resolved file: default-app open, reveal (with
+ * server-provided wording), and an "Open with" submenu, each offered only when
+ * the environment's config advertises it, then the copy-path pair. Empty
+ * without an absolute path, since nothing here can act on the file.
  */
 export function buildFileContextMenuItems(input: {
   readonly hasAbsolutePath: boolean;
+  /** False for a host file, whose only path is the full one. */
+  readonly hasRelativePath: boolean;
   readonly capabilities: FileContextMenuCapabilities;
 }): readonly ContextMenuItem<FileContextMenuAction>[] {
-  // Without a resolvable absolute path nothing here can act on the file.
   if (!input.hasAbsolutePath) return [];
   const items: ContextMenuItem<FileContextMenuAction>[] = [];
   if (input.capabilities.canOpenDefault) {
@@ -104,42 +137,133 @@ export function buildFileContextMenuItems(input: {
       })),
     });
   }
+  const separatorBefore = items.length > 0;
+  if (input.hasRelativePath) {
+    items.push({
+      id: "copy-relative-path",
+      label: filePathCopyLabel("relative"),
+      icon: "copy",
+      separatorBefore,
+    });
+  }
+  items.push({
+    id: "copy-full-path",
+    label: filePathCopyLabel("full"),
+    icon: "copy",
+    separatorBefore: separatorBefore && !input.hasRelativePath,
+  });
   return items;
 }
 
+export function filePathCopyLabel(kind: FilePathCopyKind): string {
+  return kind === "relative" ? "Copy relative path" : "Copy full path";
+}
+
+/** Copies a file path and reports the outcome with the same toasts everywhere. */
+export async function copyFilePathToClipboard(
+  value: string,
+  kind: FilePathCopyKind,
+): Promise<void> {
+  const noun = kind === "relative" ? "Relative path" : "Full path";
+  let failure: string | null = null;
+  try {
+    // The clipboard helper returns false, rather than throwing, for an empty value.
+    if (!(await writeTextToClipboard(value, noun.toLowerCase()))) failure = "The path is empty.";
+  } catch (error) {
+    failure = error instanceof Error ? error.message : "An error occurred.";
+  }
+  if (failure !== null) {
+    toastManager.add({
+      type: "error",
+      title: `Failed to copy ${noun.toLowerCase()}`,
+      description: failure,
+    });
+    return;
+  }
+  toastManager.add({ type: "success", title: `${noun} copied`, description: value });
+}
+
 /**
- * Context-menu actions for files. The environment id is fixed per component
- * (a thread's environment, a file browser's environment), so capabilities
- * resolve once per hook call.
+ * Wording for the reveal action, or undefined when it must stay hidden: the
+ * server does not advertise it, the viewer is not on the host machine, or that
+ * is not yet known (the unresolved remote-open state defaults to local, so a
+ * remote environment would briefly offer reveal). The wording comes from the
+ * server because on WSL the reveal can run through Windows File Explorer even
+ * though the host reports Linux.
  */
-/** Builds and dispatches the file context menu for one environment's files. */
+export function revealInFileManagerLabel(input: {
+  readonly environmentId: EnvironmentId | null;
+  readonly serverConfig: ServerConfig | null;
+  readonly remoteOpenMode: RemoteOpenMode;
+  readonly remoteOpenResolved: boolean;
+}): string | undefined {
+  const { serverConfig } = input;
+  if (
+    input.environmentId === null ||
+    !input.remoteOpenResolved ||
+    input.remoteOpenMode !== "local-exec" ||
+    serverConfig?.shellRevealInFileManager !== true ||
+    !serverConfig.availableEditors.includes("file-manager")
+  ) {
+    return undefined;
+  }
+  return serverConfig.shellRevealInFileManagerKind === undefined
+    ? revealInFileExplorerLabelForOs(serverConfig.environment.platform.os)
+    : revealInFileExplorerLabelForKind(serverConfig.shellRevealInFileManagerKind);
+}
+
+/**
+ * Builds and dispatches the file context menu for one environment's files.
+ * The environment id is fixed per component (a thread's environment, a file
+ * browser's environment), so capabilities resolve once per hook call.
+ */
 export function useFileContextMenu(environmentId: EnvironmentId | null) {
   const openInEditor = useAtomCommand(shellEnvironment.openInEditor, { reportFailure: false });
   const serverConfig = useAtomValue(serverEnvironment.configValueAtom(environmentId));
+  const remoteOpen = useRemoteOpenResolution(environmentId);
 
   return useMemo(() => {
-    const availableEditors = serverConfig?.availableEditors ?? [];
+    const remoteOpenMode = remoteOpen.state.mode;
+    const remoteOpenResolved = remoteOpen.isResolved;
+    // Open and open-with launch on the host too, so they share reveal's gate.
+    const onHost = environmentId !== null && remoteOpenResolved && remoteOpenMode === "local-exec";
+    const availableEditors = onHost ? (serverConfig?.availableEditors ?? []) : [];
     const capabilities: FileContextMenuCapabilities = {
-      // The reveal wording comes from the server because on WSL the reveal can
-      // run through Windows File Explorer even though the host reports Linux.
-      revealLabel:
-        environmentId !== null &&
-        serverConfig?.shellRevealInFileManager === true &&
-        serverConfig.availableEditors.includes("file-manager")
-          ? serverConfig.shellRevealInFileManagerKind === undefined
-            ? revealInFileExplorerLabelForOs(serverConfig.environment.platform.os)
-            : revealInFileExplorerLabelForKind(serverConfig.shellRevealInFileManagerKind)
-          : undefined,
+      revealLabel: revealInFileManagerLabel({
+        environmentId,
+        serverConfig,
+        remoteOpenMode,
+        remoteOpenResolved,
+      }),
       canOpenDefault: availableEditors.includes("file-manager"),
       editorIds: availableEditors,
     };
+    const buildItems = (target: FileContextMenuTarget) =>
+      buildFileContextMenuItems({
+        hasAbsolutePath: resolveFileContextMenuAbsolutePath(target) !== null,
+        hasRelativePath: !isAbsolutePath(target.filePath),
+        capabilities,
+      });
 
     const activate = async (
       action: FileContextMenuAction,
       target: FileContextMenuTarget,
     ): Promise<void> => {
       const absolutePath = resolveFileContextMenuAbsolutePath(target);
-      if (absolutePath === null || environmentId === null) return;
+      if (absolutePath === null) return;
+
+      // Copying needs only the path, so it runs without an environment.
+      if (action === "copy-relative-path") {
+        const relativePath = resolveFileContextMenuRelativePath(target);
+        if (relativePath === null) return;
+        await copyFilePathToClipboard(relativePath, "relative");
+        return;
+      }
+      if (action === "copy-full-path") {
+        await copyFilePathToClipboard(absolutePath, "full");
+        return;
+      }
+      if (environmentId === null) return;
 
       const reveal = action === "reveal-in-folder";
       const editor =
@@ -170,30 +294,17 @@ export function useFileContextMenu(environmentId: EnvironmentId | null) {
       position?: { x: number; y: number },
     ): Promise<void> => {
       const api = readLocalApi();
-      const items = buildFileContextMenuItems({
-        hasAbsolutePath: resolveFileContextMenuAbsolutePath(target) !== null,
-        capabilities,
-      });
+      const items = buildItems(target);
       if (items.length === 0 || api === undefined) return;
       const clicked = await api.contextMenu.show(items, position);
       if (clicked === null) return;
       await activate(clicked as FileContextMenuAction, target);
     };
 
-    return {
-      buildItems: (target: FileContextMenuTarget) =>
-        buildFileContextMenuItems({
-          hasAbsolutePath: resolveFileContextMenuAbsolutePath(target) !== null,
-          capabilities,
-        }),
-      capabilities,
-      activate,
-      show,
-    };
-  }, [environmentId, openInEditor, serverConfig]);
+    return { buildItems, capabilities, activate, show };
+  }, [environmentId, openInEditor, remoteOpen, serverConfig]);
 }
 
-/** Convenience callback for onContextMenu handlers. */
 /** Returns an onContextMenu callback that shows the menu at the pointer. */
 export function useFileContextMenuHandler(environmentId: EnvironmentId | null) {
   const contextMenu = useFileContextMenu(environmentId);
