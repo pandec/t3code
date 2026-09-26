@@ -5031,6 +5031,103 @@ describe("ClaudeAdapterLive", () => {
     );
   });
 
+  it.effect("opens the follow-up turn when an idle background task notifies the main agent", () => {
+    const harness = makeHarness();
+    return Effect.gen(function* () {
+      const adapter = yield* ClaudeAdapter;
+      const lifecycleFiber = yield* adapter.streamEvents.pipe(
+        Stream.filter(
+          (event) =>
+            event.type === "turn.started" ||
+            event.type === "turn.completed" ||
+            event.type === "task.completed",
+        ),
+        Stream.take(7),
+        Stream.runCollect,
+        Effect.forkChild,
+      );
+
+      const session = yield* adapter.startSession({
+        threadId: THREAD_ID,
+        provider: ProviderDriverKind.make("claudeAgent"),
+        runtimeMode: "full-access",
+      });
+      yield* adapter.sendTurn({
+        threadId: session.threadId,
+        input: "spawn a background agent",
+        attachments: [],
+      });
+      const emitResult = (uuid: string) =>
+        harness.query.emit({
+          type: "result",
+          subtype: "success",
+          is_error: false,
+          errors: [],
+          session_id: "sdk-session",
+          uuid,
+        } as unknown as SDKMessage);
+      const emitNotification = (taskId: string, extra: Record<string, unknown> = {}) =>
+        harness.query.emit({
+          type: "system",
+          subtype: "task_notification",
+          task_id: taskId,
+          status: "completed",
+          output_file: "",
+          summary: "done",
+          uuid: `${taskId}-done`,
+          session_id: "sdk-session",
+          ...extra,
+        } as unknown as SDKMessage);
+      const emitAssistant = (uuid: string) =>
+        harness.query.emit({
+          type: "assistant",
+          session_id: "sdk-session",
+          uuid,
+          parent_tool_use_id: null,
+          message: { id: `${uuid}-message`, content: [{ type: "text", text: "Results in" }] },
+        } as unknown as SDKMessage);
+
+      harness.query.emit({
+        type: "system",
+        subtype: "task_started",
+        task_id: "task-bg",
+        description: "Background agent",
+        task_type: "local_agent",
+        uuid: "task-bg-uuid",
+        session_id: "sdk-session",
+      } as unknown as SDKMessage);
+      emitResult("result-user-turn");
+      // The main agent answers the finished agent: one turn, opened by the
+      // notification before the task completes, and kept by the answer.
+      emitNotification("task-bg");
+      emitAssistant("assistant-follow-up");
+      emitResult("result-follow-up");
+      // Ambient work never reaches the main agent: no turn until output.
+      emitNotification("task-ambient", { ambient: true });
+      emitAssistant("assistant-unprompted");
+
+      const events = Array.from(yield* Fiber.join(lifecycleFiber));
+      assert.deepEqual(
+        events.map((event) => event.type),
+        [
+          "turn.started",
+          "turn.completed",
+          "turn.started",
+          "task.completed",
+          "turn.completed",
+          "task.completed",
+          "turn.started",
+        ],
+      );
+      const followUp = events[2];
+      assert.equal(followUp?.raw?.method, "claude/synthetic-turn-start");
+      assert.equal(events[4]?.turnId, followUp?.turnId);
+    }).pipe(
+      Effect.provideService(Random.Random, makeDeterministicRandomService()),
+      Effect.provide(harness.layer),
+    );
+  });
+
   it.effect("keeps the session available when process close fails", () => {
     const harness = makeHarness();
     return Effect.gen(function* () {

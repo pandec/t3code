@@ -7,7 +7,7 @@ import {
 } from "@t3tools/contracts";
 
 import { createOptimisticThreadLifecycle } from "./threadLifecycle.ts";
-import { canSnooze, effectiveSnoozed } from "./threadSettled.ts";
+import { canSnooze, canSnoozeUntilDone, effectiveSnoozed } from "./threadSettled.ts";
 
 import {
   createAtomCommandScheduler,
@@ -346,7 +346,7 @@ export function createThreadEnvironmentAtoms<R, E>(
     })),
     snooze: optimistic.wrap(commands.snooze, (thread, input, now, accepted) => {
       const untilDoneTurnId =
-        input.untilDone === true && thread.latestTurn?.state === "running"
+        input.untilDone === true && thread.latestTurn !== null && canSnoozeUntilDone(thread)
           ? thread.latestTurn.turnId
           : null;
       if (

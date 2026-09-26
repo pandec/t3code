@@ -10,6 +10,7 @@ import {
   type OrchestrationEvent,
   type OrchestrationReadModel,
   type OrchestrationThread,
+  type OrchestrationThreadShell,
   type ThreadPullRequestKey,
   type ThreadPullRequestLink,
   type OrchestrationThreadActivity,
@@ -238,12 +239,13 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
   command,
   readModel,
   userInputActivity,
-  hasLiveBackgroundWork = false,
+  backgroundLiveness = null,
 }: {
   readonly command: OrchestrationCommand;
   readonly readModel: OrchestrationReadModel;
   readonly userInputActivity?: OrchestrationThreadActivity;
-  readonly hasLiveBackgroundWork?: boolean;
+  /** The command thread's live background work (engine state, not read model). */
+  readonly backgroundLiveness?: OrchestrationThreadShell["backgroundLiveness"];
 }): Effect.fn.Return<
   DecideOrchestrationCommandResult,
   OrchestrationCommandRejection | PlatformError.PlatformError,
@@ -797,7 +799,7 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
           requestedAt: occurredAt,
           status: "pending",
         });
-        if (turnId !== null || hasLiveBackgroundWork) return request;
+        if (turnId !== null || backgroundLiveness != null) return request;
         return [
           request,
           {
@@ -1156,13 +1158,15 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
           detail: `thread ${command.threadId} has a queued turn start and cannot be snoozed`,
         });
       }
-      // "Until it's done" waits on the running turn. Without one there is
-      // nothing to finish and the snooze would never wake, so reject rather
-      // than silently parking the thread indefinitely. Background work that
-      // outlives a settled turn does not count: the wake rule reads
-      // latestTurn, and that turn has already ended.
+      // "Until it's done" waits on the running turn, or on the subagents a
+      // settled turn left working. With neither there is nothing to finish
+      // and the snooze would never wake, so reject rather than silently
+      // parking the thread indefinitely. Watch loops alone ("monitoring")
+      // don't count: a dev server can outlive the session.
       const untilDoneTurnId =
-        command.untilDone === true && thread.latestTurn?.state === "running"
+        command.untilDone === true &&
+        thread.latestTurn !== null &&
+        (thread.latestTurn.state === "running" || backgroundLiveness === "working")
           ? thread.latestTurn.turnId
           : null;
       if (command.untilDone === true && command.snoozedUntil !== null) {
@@ -1174,7 +1178,7 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
       if (command.untilDone === true && untilDoneTurnId === null) {
         return yield* new OrchestrationCommandInvariantError({
           commandType: command.type,
-          detail: `thread ${command.threadId} has no running turn to wait for`,
+          detail: `thread ${command.threadId} has no running turn or working subagents to wait for`,
         });
       }
       // Re-snoozing an already-snoozed thread to the SAME wake condition is
@@ -1195,6 +1199,7 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
             snoozedUntilTurnId: thread.snoozedUntilTurnId,
             session: thread.session,
             latestTurn: thread.latestTurn,
+            backgroundLiveness,
             // Open requests were already rejected above.
             hasPendingApprovals: false,
             hasPendingUserInput: false,
@@ -2643,6 +2648,48 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
         },
       };
       const sessionEvents = [sessionSetEvent];
+      // A turn the agent starts on its own (its answer to finished subagents)
+      // continues the work an "until it's done" snooze waits on: move the
+      // snooze onto it while that work is still live. A user's turn start
+      // unsnoozes first, and a turn arriving after the work went quiet finds
+      // the thread already awake, so both stay out.
+      const followUpTurnId = command.session.activeTurnId;
+      if (
+        followUpTurnId !== null &&
+        thread.snoozedUntilTurnId != null &&
+        thread.snoozedAt != null &&
+        followUpTurnId !== thread.snoozedUntilTurnId &&
+        isThreadSnoozed(
+          {
+            snoozedUntil: thread.snoozedUntil,
+            snoozedAt: thread.snoozedAt,
+            snoozedUntilTurnId: thread.snoozedUntilTurnId,
+            session: thread.session,
+            latestTurn: thread.latestTurn,
+            backgroundLiveness,
+            hasPendingApprovals: openRequests(thread).size > 0,
+            hasPendingUserInput: false,
+          },
+          command.createdAt,
+        )
+      ) {
+        sessionEvents.push({
+          ...(yield* withEventBase({
+            aggregateKind: "thread",
+            aggregateId: command.threadId,
+            occurredAt: command.createdAt,
+            commandId: command.commandId,
+          })),
+          type: "thread.snoozed",
+          payload: {
+            threadId: command.threadId,
+            snoozedUntil: null,
+            snoozedAt: thread.snoozedAt,
+            snoozedUntilTurnId: followUpTurnId,
+            updatedAt: command.createdAt,
+          },
+        });
+      }
       // An idle archive has no selected turn to compare at execution. A new
       // provider turn must cancel it even when no user turn-start was sent.
       if (

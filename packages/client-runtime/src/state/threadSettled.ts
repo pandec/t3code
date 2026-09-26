@@ -59,7 +59,26 @@ export type ThreadSnoozeShell = Pick<
   | "hasPendingUserInput"
   | "session"
   | "latestTurn"
+  | "backgroundLiveness"
 >;
+
+/**
+ * Whether the work an "until it's done" snooze waits on is still going: the
+ * awaited turn is running, or it ended while its subagents work on. The
+ * server moves the snooze onto a follow-up turn the agent starts for them,
+ * so the awaited turn stays the latest one until the work goes quiet.
+ * Watch loops alone ("monitoring") don't count: a dev server can outlive
+ * the session. Mirrored by the server's untilDoneWorkContinues.
+ */
+export function untilDoneWorkContinues(
+  shell: Pick<ThreadSnoozeShell, "snoozedUntilTurnId" | "latestTurn" | "backgroundLiveness">,
+): boolean {
+  return (
+    shell.snoozedUntilTurnId != null &&
+    shell.latestTurn?.turnId === shell.snoozedUntilTurnId &&
+    (shell.latestTurn.state === "running" || shell.backgroundLiveness === "working")
+  );
+}
 
 /**
  * A snoozed thread "raises its hand" when something happens that outranks
@@ -83,12 +102,15 @@ export function threadRaisedHandWhileSnoozed(shell: ThreadSnoozeShell): boolean 
   ) {
     return true;
   }
+  // An ended turn is not news while an "until it's done" snooze still sees
+  // its subagents working.
   if (
     shell.snoozedAt != null &&
     shell.latestTurn != null &&
     shell.latestTurn.state !== "running" &&
     shell.latestTurn.completedAt != null &&
-    Date.parse(shell.latestTurn.completedAt) > Date.parse(shell.snoozedAt)
+    Date.parse(shell.latestTurn.completedAt) > Date.parse(shell.snoozedAt) &&
+    !untilDoneWorkContinues(shell)
   ) {
     return true;
   }
@@ -97,10 +119,16 @@ export function threadRaisedHandWhileSnoozed(shell: ThreadSnoozeShell): boolean 
 
 /**
  * Whether an "until it's done" snooze may be offered: the server rejects it
- * unless a turn is running, so the client hides the preset on quiet threads.
+ * unless a turn is running or its subagents are still working, so the
+ * client hides the preset on quiet threads.
  */
-export function canSnoozeUntilDone(shell: Pick<OrchestrationThreadShell, "latestTurn">): boolean {
-  return shell.latestTurn?.state === "running";
+export function canSnoozeUntilDone(
+  shell: Pick<OrchestrationThreadShell, "latestTurn" | "backgroundLiveness">,
+): boolean {
+  return (
+    shell.latestTurn?.state === "running" ||
+    (shell.latestTurn != null && shell.backgroundLiveness === "working")
+  );
 }
 
 /**
@@ -139,15 +167,9 @@ export function effectiveSnoozed(
     // fields clear together on wake, so a lone snoozedAt is never stale —
     // but malformed data never hides a thread, same as the timed branch.
     if (shell.snoozedAt == null || Number.isNaN(Date.parse(shell.snoozedAt))) return false;
-    // "Until it's done": snoozed only while the awaited turn is still the
-    // running latest turn. Any other shape (ended, replaced, dropped)
-    // wakes — the raised-hand rule below reports the same for an ended
-    // turn, but a replaced or missing turn needs this check.
-    if (
-      shell.snoozedUntilTurnId != null &&
-      (shell.latestTurn?.turnId !== shell.snoozedUntilTurnId ||
-        shell.latestTurn.state !== "running")
-    ) {
+    // "Until it's done": snoozed only while the awaited work continues.
+    // Any other shape (ended and quiet, replaced, dropped) wakes.
+    if (shell.snoozedUntilTurnId != null && !untilDoneWorkContinues(shell)) {
       return false;
     }
     return !threadRaisedHandWhileSnoozed(shell);
@@ -206,10 +228,10 @@ export function threadWokeAt(
   // placeholder stamp from before the snooze). Either way the thread is
   // awake and the Woke pill needs a time.
   if (shell.snoozedUntilTurnId != null) {
+    if (untilDoneWorkContinues(shell)) return null;
     if (shell.latestTurn?.turnId !== shell.snoozedUntilTurnId) {
       return shell.latestTurn?.requestedAt ?? shell.snoozedAt ?? null;
     }
-    if (shell.latestTurn.state === "running") return null;
     return shell.session?.updatedAt ?? shell.snoozedAt ?? null;
   }
   // No raised hand: an indefinite snooze is simply still snoozed; a timed
@@ -238,20 +260,20 @@ export interface SnoozePreset {
   readonly whenLabel: string;
   /** ISO wake time, or null for a condition-based preset. */
   readonly snoozedUntil: string | null;
-  /** "Until it's done": wake when the running turn ends. */
+  /** "Until it's done": wake when the running turn and its subagents finish. */
   readonly untilDone?: true;
 }
 
 /**
  * The "until it's done" preset: hides a working thread until its running
- * turn ends. Listed first because it is the one choice that is about the
+ * turn and the subagents it started finish. Listed first because it is the one choice that is about the
  * thread rather than the clock. Callers gate it on canSnoozeUntilDone and
  * the threadSnoozeUntilDone capability.
  */
 export const SNOOZE_UNTIL_DONE_PRESET: SnoozePreset = {
   id: "until-done",
   label: "Until it's done",
-  whenLabel: "when the turn ends",
+  whenLabel: "when the work ends",
   snoozedUntil: null,
   untilDone: true,
 };

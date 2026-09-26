@@ -433,10 +433,10 @@ const makeOrchestrationEngine = Effect.gen(function* () {
             : Option.none();
         const eventBase = yield* decideOrchestrationCommand({
           command: envelope.command,
-          hasLiveBackgroundWork:
-            "threadId" in envelope.command &&
-            threadBackgroundLiveness.getThreadBackgroundLiveness(envelope.command.threadId) !==
-              null,
+          backgroundLiveness:
+            "threadId" in envelope.command
+              ? threadBackgroundLiveness.getThreadBackgroundLiveness(envelope.command.threadId)
+              : null,
           readModel: Option.isSome(completionCheckpoints)
             ? {
                 ...commandReadModel,

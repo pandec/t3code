@@ -153,9 +153,11 @@ Mobile shows the same groups. Use **Arrange threads** to drag between groups or 
 ## Snooze active work
 
 Choose **Snooze** to hide a thread until a preset time. **Until it's done** appears while the agent
-is mid-turn and hides the thread until that turn ends. **Until I wake it** snoozes without a timer.
-Both need a server that supports them. A snoozed thread returns when its timer expires, its turn
-ends, you wake it, or it needs attention. Threads snoozed until done sit at the top of the Snoozed
+is mid-turn or its subagents are still working, and hides the thread until that work finishes,
+including the agent's follow-up on the subagents' results. Watch loops such as a running dev server
+don't hold it. **Until I wake it** snoozes without a timer. Both need a server that supports them.
+A snoozed thread returns when its timer expires, its work finishes, you wake it, or it needs
+attention. Threads snoozed until done sit at the top of the Snoozed
 section.
 
 ## Settle finished work

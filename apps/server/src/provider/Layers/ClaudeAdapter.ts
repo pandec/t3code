@@ -313,6 +313,9 @@ interface ClaudeTurnState {
    * steered instead (the queued message continues the same turn).
    */
   readonly synthetic?: boolean;
+  /** Synthetic turn opened before its first assistant message, whose
+   * rollback boundary is still unknown. */
+  syntheticBoundaryPending?: boolean;
   readonly assistantTextBlocks: Map<number, AssistantTextBlockState>;
   readonly assistantTextBlockOrder: Array<AssistantTextBlockState>;
   readonly capturedProposedPlanKeys: Set<string>;
@@ -3766,6 +3769,64 @@ export const makeClaudeAdapter = Effect.fn("makeClaudeAdapter")(function* (
     }
   });
 
+  /**
+   * Opens a synthetic turn for main-agent work that no user prompt started.
+   * A null boundary is filled from the turn's first assistant message.
+   */
+  const startSyntheticTurn = Effect.fn("startSyntheticTurn")(function* (
+    context: ClaudeSessionContext,
+    boundaryMessageId: string | null,
+  ) {
+    context.pendingWorkState.hasPendingWork = undefined;
+    const turnId = TurnId.make(yield* randomUUIDv4);
+    const startedAt = yield* nowIso;
+    context.turnStartMessageIds.push(boundaryMessageId);
+    context.turnState = {
+      turnId,
+      startedAt,
+      synthetic: true,
+      syntheticBoundaryPending: boundaryMessageId === null,
+      assistantTextBlocks: new Map(),
+      assistantTextBlockOrder: [],
+      capturedProposedPlanKeys: new Set(),
+      latestAssistantUsage: undefined,
+      compactedSinceLatestAssistantUsage: false,
+      hasSubagents: false,
+      nextSyntheticAssistantBlockIndex: -1,
+      authenticationFailureMessage: undefined,
+      rejectedRateLimitTypes: new Set(),
+      latestAssistantRateLimited: false,
+      emittedThinkingText: false,
+      thinkingSnapshotIds: new Set(),
+    };
+    context.session = {
+      ...context.session,
+      status: "running",
+      activeTurnId: turnId,
+      updatedAt: startedAt,
+    };
+    yield* updateResumeCursor(context);
+    const turnStartedStamp = yield* makeEventStamp();
+    yield* offerRuntimeEvent({
+      type: "turn.started",
+      eventId: turnStartedStamp.eventId,
+      provider: PROVIDER,
+      createdAt: turnStartedStamp.createdAt,
+      threadId: context.session.threadId,
+      turnId,
+      payload: {},
+      providerRefs: {
+        ...nativeProviderRefs(context),
+        providerTurnId: turnId,
+      },
+      raw: {
+        source: "claude.sdk.message",
+        method: "claude/synthetic-turn-start",
+        payload: {},
+      },
+    });
+  });
+
   const handleAssistantMessage = Effect.fn("handleAssistantMessage")(function* (
     context: ClaudeSessionContext,
     message: SDKMessage,
@@ -3808,53 +3869,13 @@ export const makeClaudeAdapter = Effect.fn("makeClaudeAdapter")(function* (
     // Auto-start a synthetic turn for assistant messages that arrive without
     // an active turn (e.g., background agent/subagent responses between user prompts).
     if (!context.turnState) {
-      context.pendingWorkState.hasPendingWork = undefined;
-      const turnId = TurnId.make(yield* randomUUIDv4);
-      const startedAt = yield* nowIso;
-      context.turnStartMessageIds.push(message.uuid);
-      context.turnState = {
-        turnId,
-        startedAt,
-        synthetic: true,
-        assistantTextBlocks: new Map(),
-        assistantTextBlockOrder: [],
-        capturedProposedPlanKeys: new Set(),
-        latestAssistantUsage: undefined,
-        compactedSinceLatestAssistantUsage: false,
-        hasSubagents: false,
-        nextSyntheticAssistantBlockIndex: -1,
-        authenticationFailureMessage: undefined,
-        rejectedRateLimitTypes: new Set(),
-        latestAssistantRateLimited: false,
-        emittedThinkingText: false,
-        thinkingSnapshotIds: new Set(),
-      };
-      context.session = {
-        ...context.session,
-        status: "running",
-        activeTurnId: turnId,
-        updatedAt: startedAt,
-      };
+      yield* startSyntheticTurn(context, message.uuid);
+    } else if (context.turnState.syntheticBoundaryPending === true) {
+      // A turn opened by a task notification takes its rollback boundary
+      // from the first assistant message, like any other synthetic turn.
+      context.turnState.syntheticBoundaryPending = false;
+      context.turnStartMessageIds[context.turnStartMessageIds.length - 1] = message.uuid;
       yield* updateResumeCursor(context);
-      const turnStartedStamp = yield* makeEventStamp();
-      yield* offerRuntimeEvent({
-        type: "turn.started",
-        eventId: turnStartedStamp.eventId,
-        provider: PROVIDER,
-        createdAt: turnStartedStamp.createdAt,
-        threadId: context.session.threadId,
-        turnId,
-        payload: {},
-        providerRefs: {
-          ...nativeProviderRefs(context),
-          providerTurnId: turnId,
-        },
-        raw: {
-          source: "claude.sdk.message",
-          method: "claude/synthetic-turn-start",
-          payload: {},
-        },
-      });
     }
 
     const content = message.message?.content;
@@ -4295,6 +4316,21 @@ export const makeClaudeAdapter = Effect.fn("makeClaudeAdapter")(function* (
         return;
       }
       case "task_notification": {
+        // Between prompts, the CLI feeds a finished background task back to
+        // the main agent, which then answers. Open that turn now rather than
+        // at its first assistant message, and before task.completed, so the
+        // thread never looks idle between the work ending and the answer:
+        // an "until it's done" snooze follows the work across that edge.
+        // Transcript-skipped (ambient) tasks and tasks owned by a subagent
+        // never reach the main agent.
+        if (
+          !context.turnState &&
+          message.skip_transcript !== true &&
+          message.ambient !== true &&
+          context.taskAgents.get(message.task_id)?.owningAgentId === undefined
+        ) {
+          yield* startSyntheticTurn(context, null);
+        }
         context.liveTaskIds.delete(message.task_id);
         yield* emitThreadTokenUsage(
           context,

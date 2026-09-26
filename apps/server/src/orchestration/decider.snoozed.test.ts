@@ -30,6 +30,12 @@ const RUNNING_TURN: NonNullable<OrchestrationThread["latestTurn"]> = {
   completedAt: null,
   assistantMessageId: null,
 };
+// Settled after the snooze was set, with subagents possibly still working.
+const SETTLED_TURN: NonNullable<OrchestrationThread["latestTurn"]> = {
+  ...RUNNING_TURN,
+  state: "completed",
+  completedAt: "1969-12-31T00:00:00.000Z",
+};
 
 function makeReadModel(input: {
   readonly snoozedUntil?: string | null;
@@ -442,6 +448,89 @@ it.layer(NodeServices.layer)("snoozed thread decider", (it) => {
         expect(error._tag).toBe("OrchestrationCommandInvariantError");
       }
     }),
+  );
+
+  it.effect("snoozes until done on a settled turn while its subagents work, not watch loops", () =>
+    Effect.gen(function* () {
+      const command = {
+        type: "thread.snooze",
+        commandId: CommandId.make("cmd-snooze-until-done-background"),
+        threadId: ThreadId.make("thread-1"),
+        snoozedUntil: null,
+        untilDone: true,
+      } as const;
+      const readModel = makeReadModel({ latestTurn: SETTLED_TURN });
+      const event = yield* decideOrchestrationCommand({
+        command,
+        readModel,
+        backgroundLiveness: "working",
+      });
+      const events = Array.isArray(event) ? event : [event];
+      expect(events[0]?.type === "thread.snoozed" && events[0].payload.snoozedUntilTurnId).toBe(
+        SETTLED_TURN.turnId,
+      );
+      const error = yield* decideOrchestrationCommand({
+        command,
+        readModel,
+        backgroundLiveness: "monitoring",
+      }).pipe(Effect.flip);
+      expect(error._tag).toBe("OrchestrationCommandInvariantError");
+    }),
+  );
+
+  it.effect(
+    "moves an until-done snooze onto the agent's follow-up turn only while work is live",
+    () =>
+      Effect.gen(function* () {
+        const followUpTurnId = TurnId.make("turn-2");
+        const command = {
+          type: "thread.session.set",
+          commandId: CommandId.make("cmd-session-follow-up"),
+          threadId: ThreadId.make("thread-1"),
+          session: {
+            threadId: ThreadId.make("thread-1"),
+            status: "running",
+            providerName: "claudeAgent",
+            runtimeMode: "full-access",
+            activeTurnId: followUpTurnId,
+            lastError: null,
+            updatedAt: NOW_EPOCH,
+          },
+          createdAt: NOW_EPOCH,
+        } as const;
+        const readModel = makeReadModel({
+          snoozedAt: SNOOZED_AT,
+          snoozedUntilTurnId: "turn-1",
+          latestTurn: SETTLED_TURN,
+        });
+
+        const live = yield* decideOrchestrationCommand({
+          command,
+          readModel,
+          backgroundLiveness: "working",
+        });
+        const liveEvents = Array.isArray(live) ? live : [live];
+        expect(liveEvents.map((event) => event.type)).toEqual([
+          "thread.session-set",
+          "thread.snoozed",
+        ]);
+        const moved = liveEvents[1];
+        if (moved?.type !== "thread.snoozed") throw new Error("expected thread.snoozed");
+        expect(moved.payload.snoozedUntilTurnId).toBe(followUpTurnId);
+        expect(moved.payload.snoozedAt).toBe(SNOOZED_AT);
+
+        // The work went quiet before this turn: the thread already woke.
+        for (const backgroundLiveness of [null, "monitoring"] as const) {
+          const quiet = yield* decideOrchestrationCommand({
+            command,
+            readModel,
+            backgroundLiveness,
+          });
+          expect((Array.isArray(quiet) ? quiet : [quiet]).map((event) => event.type)).toEqual([
+            "thread.session-set",
+          ]);
+        }
+      }),
   );
 
   it.effect("rejects until-done combined with a wake time", () =>

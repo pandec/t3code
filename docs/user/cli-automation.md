@@ -152,9 +152,10 @@ the provider supports steering. It does not resolve a user-input request. Use `t
 for that request. Thread list and status JSON summaries include the stored snooze request:
 `snoozedUntil`, `snoozedAt`, and `snoozedUntilTurnId`, all `null` when nothing was requested. An
 indefinite snooze ("until I wake it") carries a `snoozedAt` with a `null` `snoozedUntil`, and a
-snooze until the turn ends ("until it's done") also carries the awaited turn in
-`snoozedUntilTurnId`. These fields stay set after a snooze wakes on its own (the timer passed or
-the turn ended); the `thread status` text line reports whether the thread is currently snoozed.
+snooze until the work finishes ("until it's done") also carries the awaited turn in
+`snoozedUntilTurnId`; when the agent starts a follow-up turn for its subagents' results, the field
+moves to that turn. These fields stay set after a snooze wakes on its own (the timer passed or the
+work finished); the `thread status` text line reports whether the thread is currently snoozed.
 Snooze is an inbox overlay and does not change the thread's turn `state`.
 
 Passing `--title` records a manual title, so automatic title generation does not replace it. Without
