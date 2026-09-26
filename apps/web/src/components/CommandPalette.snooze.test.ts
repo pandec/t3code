@@ -32,14 +32,14 @@ describe("parseSnoozeQuery", () => {
     expect(parseSnoozeQuery("13pm", now)).toBeNull();
   });
 
-  it("parses day names with a default wake (6:00 tomorrow, 9:00 weekdays) and optional time", () => {
+  it("parses day names with a default 6:00 wake and optional time", () => {
     expect(wake("tomorrow").getTime()).toBe(new Date(2026, 8, 17, 6, 0).getTime());
     expect(wake("tomorrow 8").getTime()).toBe(new Date(2026, 8, 17, 8, 0).getTime());
     expect(wake("tmr at 6pm").getTime()).toBe(new Date(2026, 8, 17, 18, 0).getTime());
     expect(wake("fri 9am").getTime()).toBe(new Date(2026, 8, 18, 9, 0).getTime());
-    expect(wake("Monday").getTime()).toBe(new Date(2026, 8, 21, 9, 0).getTime());
-    // Wednesday 9:00 has passed, so "wed" means next week.
-    expect(wake("wed").getTime()).toBe(new Date(2026, 8, 23, 9, 0).getTime());
+    expect(wake("Monday").getTime()).toBe(new Date(2026, 8, 21, 6, 0).getTime());
+    // Wednesday 6:00 has passed, so "wed" means next week.
+    expect(wake("wed").getTime()).toBe(new Date(2026, 8, 23, 6, 0).getTime());
     expect(wake("wed 11").getTime()).toBe(new Date(2026, 8, 16, 11, 0).getTime());
     expect(wake("today 17:30").getTime()).toBe(new Date(2026, 8, 16, 17, 30).getTime());
     expect(parseSnoozeQuery("today", now)).toBeNull();

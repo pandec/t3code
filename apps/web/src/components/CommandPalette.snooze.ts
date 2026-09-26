@@ -11,9 +11,8 @@ export interface ParsedSnoozeQuery {
 }
 
 const MINUTE_MS = 60_000;
-const DEFAULT_WAKE_HOUR = 9;
-// Matches the shared "Tomorrow" preset.
-const TOMORROW_WAKE_HOUR = 6;
+// Matches the shared "Tomorrow" and "Next week" presets.
+const DEFAULT_WAKE_HOUR = 6;
 
 const WEEKDAYS = ["sun", "mon", "tue", "wed", "thu", "fri", "sat"] as const;
 const WEEKDAY_ALIASES: Record<string, number> = {
@@ -107,18 +106,17 @@ export function parseSnoozeQuery(query: string, now: Date): ParsedSnoozeQuery | 
   const [, dayWord, timeText] = dayMatch;
   const time = timeText === undefined ? null : parseClock(timeText, { allowBareHour: true });
   if (timeText !== undefined && time === null) return null;
+  const hour = time?.hour ?? DEFAULT_WAKE_HOUR;
   const minute = time?.minute ?? 0;
 
   if (dayWord === "today") {
     if (time === null) return null;
-    const wake = atTime(now, time.hour, minute);
+    const wake = atTime(now, hour, minute);
     return wake.getTime() > now.getTime() ? { snoozedUntil: wake.toISOString() } : null;
   }
   if (dayWord === "tomorrow" || dayWord === "tmr" || dayWord === "tmrw") {
-    const hour = time?.hour ?? TOMORROW_WAKE_HOUR;
     return { snoozedUntil: atTime(now, hour, minute, 1).toISOString() };
   }
-  const hour = time?.hour ?? DEFAULT_WAKE_HOUR;
   if (!Object.hasOwn(WEEKDAY_ALIASES, dayWord!)) return null;
   const weekday = WEEKDAY_ALIASES[dayWord!];
   if (weekday === undefined) return null;
