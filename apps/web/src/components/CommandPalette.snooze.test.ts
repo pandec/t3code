@@ -32,8 +32,8 @@ describe("parseSnoozeQuery", () => {
     expect(parseSnoozeQuery("13pm", now)).toBeNull();
   });
 
-  it("parses day names with a default 9:00 wake and optional time", () => {
-    expect(wake("tomorrow").getTime()).toBe(new Date(2026, 8, 17, 9, 0).getTime());
+  it("parses day names with a default wake (6:00 tomorrow, 9:00 weekdays) and optional time", () => {
+    expect(wake("tomorrow").getTime()).toBe(new Date(2026, 8, 17, 6, 0).getTime());
     expect(wake("tomorrow 8").getTime()).toBe(new Date(2026, 8, 17, 8, 0).getTime());
     expect(wake("tmr at 6pm").getTime()).toBe(new Date(2026, 8, 17, 18, 0).getTime());
     expect(wake("fri 9am").getTime()).toBe(new Date(2026, 8, 18, 9, 0).getTime());
@@ -62,9 +62,9 @@ describe("parseSnoozeQuery", () => {
     vi.stubEnv("TZ", "America/New_York");
     try {
       const cases = [
-        [new Date(2026, 2, 7, 23, 30), "tomorrow", new Date(2026, 2, 8, 9)],
-        [new Date(2026, 9, 31, 23, 30), "tomorrow", new Date(2026, 10, 1, 9)],
-        [new Date(2026, 10, 1, 0, 30), "tomorrow", new Date(2026, 10, 2, 9)],
+        [new Date(2026, 2, 7, 23, 30), "tomorrow", new Date(2026, 2, 8, 6)],
+        [new Date(2026, 9, 31, 23, 30), "tomorrow", new Date(2026, 10, 1, 6)],
+        [new Date(2026, 10, 1, 0, 30), "tomorrow", new Date(2026, 10, 2, 6)],
         [new Date(2026, 2, 7, 23), "9am", new Date(2026, 2, 8, 9)],
         [new Date(2026, 9, 31, 23), "9am", new Date(2026, 10, 1, 9)],
         [new Date(2026, 2, 7, 23), "mon 9am", new Date(2026, 2, 9, 9)],

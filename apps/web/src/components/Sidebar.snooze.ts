@@ -14,7 +14,7 @@ export interface SnoozePreset {
   readonly id: SnoozePresetId;
   readonly label: string;
   /** Menu-row time column. Complements the label instead of repeating it:
-      "Tomorrow" pairs with "9:00 AM", not "tomorrow 9:00 AM". */
+      "Tomorrow" pairs with "6:00 AM", not "tomorrow 6:00 AM". */
   readonly whenLabel: string;
   /** ISO wake time, or null for the indefinite "until I wake it" and the
       "until it's done" snoozes. */

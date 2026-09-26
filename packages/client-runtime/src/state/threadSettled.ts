@@ -242,7 +242,8 @@ export function threadWokeAt(
 
 const HOUR_MS = 60 * 60 * 1_000;
 const EVENING_HOUR = 18;
-const MORNING_HOUR = 9;
+const TOMORROW_HOUR = 6;
+const NEXT_WEEK_HOUR = 9;
 
 export type SnoozePresetId =
   | "until-done"
@@ -256,7 +257,7 @@ export interface SnoozePreset {
   readonly id: SnoozePresetId;
   readonly label: string;
   /** Menu-row time column. Complements the label instead of repeating it:
-      "Tomorrow" pairs with "9:00 AM", not "tomorrow 9:00 AM". */
+      "Tomorrow" pairs with "6:00 AM", not "tomorrow 6:00 AM". */
   readonly whenLabel: string;
   /** ISO wake time, or null for a condition-based preset. */
   readonly snoozedUntil: string | null;
@@ -300,9 +301,9 @@ function addSnoozeDays(base: Date, days: number): Date {
 /**
  * Shared "snooze until" choices for every client. "This evening" only
  * appears while it is meaningfully before evening; after that the calendar
- * choices start at "Tomorrow". Calendar presets that land on the same
- * instant collapse: on Sundays "Tomorrow" and "Next week" are both Monday
- * morning, so only "Tomorrow" is offered.
+ * choices start at "Tomorrow". Calendar presets that land on the same day
+ * collapse: on Sundays "Tomorrow" and "Next week" are both Monday morning,
+ * so only "Tomorrow" is offered.
  */
 export function resolveSnoozePresets(
   now: Date,
@@ -336,7 +337,7 @@ export function resolveSnoozePresets(
     });
   }
 
-  const tomorrow = snoozeAtHour(addSnoozeDays(now, 1), MORNING_HOUR);
+  const tomorrow = snoozeAtHour(addSnoozeDays(now, 1), TOMORROW_HOUR);
   presets.push({
     id: "tomorrow",
     label: "Tomorrow",
@@ -345,8 +346,8 @@ export function resolveSnoozePresets(
   });
 
   const daysUntilMonday = (1 - now.getDay() + 7) % 7 || 7;
-  const nextWeek = snoozeAtHour(addSnoozeDays(now, daysUntilMonday), MORNING_HOUR);
-  if (nextWeek.getTime() !== tomorrow.getTime()) {
+  const nextWeek = snoozeAtHour(addSnoozeDays(now, daysUntilMonday), NEXT_WEEK_HOUR);
+  if (daysUntilMonday !== 1) {
     presets.push({
       id: "next-week",
       label: "Next week",
