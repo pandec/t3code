@@ -86,6 +86,7 @@ import * as Cause from "effect/Cause";
 import * as Crypto from "effect/Crypto";
 import * as DateTime from "effect/DateTime";
 import * as Deferred from "effect/Deferred";
+import * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";
 import * as Exit from "effect/Exit";
 import * as FileSystem from "effect/FileSystem";
@@ -499,6 +500,11 @@ interface ClaudeSessionContext {
   readonly workflowMemberFingerprints: Map<string, string>;
   /** Task ids that have started and not yet reached a terminal state. */
   readonly liveTaskIds: Set<string>;
+  /** Terminal statuses of idle-time main-agent tasks, held until their
+   * task_notification (or a short fallback) settles them. */
+  readonly heldTerminalTaskStatuses: Map<string, "completed" | "failed" | "cancelled">;
+  /** Runs a detached effect in the session's runtime. */
+  readonly forkDetached: (effect: Effect.Effect<void>) => void;
   turnState: ClaudeTurnState | undefined;
   lastKnownContextWindow: number | undefined;
   lastKnownTokenUsage: ThreadTokenUsageSnapshot | undefined;
@@ -1493,6 +1499,9 @@ function taskLinkageFor(
     ...(agent.runHandles ? { runHandles: agent.runHandles } : {}),
   };
 }
+
+/** How long an idle-time terminal task patch waits for its task_notification. */
+const HELD_TERMINAL_TASK_GRACE = Duration.seconds(2);
 
 const WORKFLOW_PHASE_CAP = 64;
 const WORKFLOW_AGENT_CAP = 100;
@@ -3769,6 +3778,34 @@ export const makeClaudeAdapter = Effect.fn("makeClaudeAdapter")(function* (
     }
   });
 
+  /** Emits a held terminal task status whose task_notification never came. */
+  const releaseHeldTerminalTask = Effect.fn("releaseHeldTerminalTask")(function* (
+    context: ClaudeSessionContext,
+    taskId: string,
+  ) {
+    const status = context.heldTerminalTaskStatuses.get(taskId);
+    if (context.stopped || status === undefined) {
+      return;
+    }
+    context.heldTerminalTaskStatuses.delete(taskId);
+    context.liveTaskIds.delete(taskId);
+    const stamp = yield* makeEventStamp();
+    yield* offerRuntimeEvent({
+      type: "task.updated",
+      eventId: stamp.eventId,
+      provider: PROVIDER,
+      createdAt: stamp.createdAt,
+      threadId: context.session.threadId,
+      ...(context.turnState ? { turnId: asCanonicalTurnId(context.turnState.turnId) } : {}),
+      providerRefs: nativeProviderRefs(context),
+      payload: {
+        taskId: RuntimeTaskId.make(taskId),
+        status,
+        ...taskLinkageFor(context.taskAgents, taskId),
+      },
+    });
+  });
+
   /**
    * Opens a synthetic turn for main-agent work that no user prompt started.
    * A null boundary is filled from the turn's first assistant message.
@@ -4291,10 +4328,32 @@ export const makeClaudeAdapter = Effect.fn("makeClaudeAdapter")(function* (
         const patch = message.patch;
         const status =
           patch.status !== undefined ? CLAUDE_TASK_PATCH_STATUS[patch.status] : undefined;
-        // The CLI emits terminal patches immediately before task_notification.
-        // Let the notification own terminal status so background liveness stays
-        // live until that handler opens the main agent's follow-up turn.
-        const terminal = status === "completed" || status === "failed" || status === "cancelled";
+        const terminalStatus =
+          status === "completed" || status === "failed" || status === "cancelled"
+            ? status
+            : undefined;
+        // Between prompts, the CLI sends a main-agent task's terminal patch
+        // right before the task_notification that opens the follow-up turn.
+        // Hold the terminal status back so liveness stays live across that
+        // edge. The notification settles it; a patch that never gets one is
+        // released after a short grace.
+        const holdTerminal =
+          terminalStatus !== undefined &&
+          !context.turnState &&
+          context.taskAgents.get(message.task_id)?.owningAgentId === undefined;
+        if (holdTerminal) {
+          context.heldTerminalTaskStatuses.set(message.task_id, terminalStatus);
+          context.forkDetached(
+            Effect.sleep(HELD_TERMINAL_TASK_GRACE).pipe(
+              Effect.andThen(releaseHeldTerminalTask(context, message.task_id)),
+              Effect.catch((cause) =>
+                Effect.logWarning("Failed to release a held Claude task status.", { cause }),
+              ),
+            ),
+          );
+        } else if (terminalStatus !== undefined) {
+          context.liveTaskIds.delete(message.task_id);
+        }
         const endedAt =
           typeof patch.end_time === "number" && Number.isFinite(patch.end_time)
             ? DateTime.formatIso(DateTime.makeUnsafe(patch.end_time))
@@ -4304,7 +4363,7 @@ export const makeClaudeAdapter = Effect.fn("makeClaudeAdapter")(function* (
           type: "task.updated",
           payload: {
             taskId: RuntimeTaskId.make(message.task_id),
-            ...(status && !terminal ? { status } : {}),
+            ...(status && !holdTerminal ? { status } : {}),
             ...(patch.description ? { description: patch.description } : {}),
             ...(patch.error ? { error: patch.error } : {}),
             ...(endedAt ? { endedAt } : {}),
@@ -4333,6 +4392,7 @@ export const makeClaudeAdapter = Effect.fn("makeClaudeAdapter")(function* (
         ) {
           yield* startSyntheticTurn(context, null);
         }
+        context.heldTerminalTaskStatuses.delete(message.task_id);
         context.liveTaskIds.delete(message.task_id);
         yield* emitThreadTokenUsage(
           context,
@@ -5600,6 +5660,10 @@ export const makeClaudeAdapter = Effect.fn("makeClaudeAdapter")(function* (
         pendingTaskModels,
         workflowMemberFingerprints,
         liveTaskIds,
+        heldTerminalTaskStatuses: new Map(),
+        forkDetached: (effect) => {
+          runFork(effect);
+        },
         turnState: undefined,
         lastKnownContextWindow: initialContextWindow,
         lastKnownTokenUsage: undefined,

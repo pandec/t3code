@@ -5156,6 +5156,68 @@ describe("ClaudeAdapterLive", () => {
     );
   });
 
+  it.effect("releases a held terminal task status when no notification follows", () => {
+    const harness = makeHarness();
+    return Effect.gen(function* () {
+      const adapter = yield* ClaudeAdapter;
+      const taskUpdates = () =>
+        adapter.streamEvents.pipe(
+          Stream.filter((event) => event.type === "task.updated"),
+          Stream.take(1),
+          Stream.runCollect,
+          Effect.forkChild,
+        );
+      const heldFiber = yield* taskUpdates();
+
+      const session = yield* adapter.startSession({
+        threadId: THREAD_ID,
+        provider: ProviderDriverKind.make("claudeAgent"),
+        runtimeMode: "full-access",
+      });
+      yield* adapter.sendTurn({ threadId: session.threadId, input: "go", attachments: [] });
+      harness.query.emit({
+        type: "system",
+        subtype: "task_started",
+        task_id: "task-bg",
+        description: "Background agent",
+        task_type: "local_agent",
+        uuid: "task-bg-uuid",
+        session_id: "sdk-session",
+      } as unknown as SDKMessage);
+      harness.query.emit({
+        type: "result",
+        subtype: "success",
+        is_error: false,
+        errors: [],
+        session_id: "sdk-session",
+        uuid: "result-user-turn",
+      } as unknown as SDKMessage);
+      harness.query.emit({
+        type: "system",
+        subtype: "task_updated",
+        task_id: "task-bg",
+        patch: { status: "failed" },
+        uuid: "task-bg-updated",
+        session_id: "sdk-session",
+      } as unknown as SDKMessage);
+
+      const held = Array.from(yield* Fiber.join(heldFiber))[0];
+      assert.equal(held?.type === "task.updated" ? held.payload.status : "missing", undefined);
+
+      const releasedFiber = yield* taskUpdates();
+      yield* Effect.yieldNow;
+      yield* TestClock.adjust("2 seconds");
+      const released = Array.from(yield* Fiber.join(releasedFiber))[0];
+      assert.equal(
+        released?.type === "task.updated" ? released.payload.status : "missing",
+        "failed",
+      );
+    }).pipe(
+      Effect.provideService(Random.Random, makeDeterministicRandomService()),
+      Effect.provide(harness.layer),
+    );
+  });
+
   it.effect("keeps the session available when process close fails", () => {
     const harness = makeHarness();
     return Effect.gen(function* () {
