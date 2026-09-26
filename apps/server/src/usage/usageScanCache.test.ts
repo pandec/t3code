@@ -8,6 +8,7 @@ import {
   type CachedFile,
   type ScanCache,
 } from "./usageScanCache.ts";
+import { cacheSavingsUsd, parseRateTable, priceUsage } from "./usagePricing.ts";
 import type { UsageRecord } from "./usageTranscripts.ts";
 
 function record(overrides: Partial<UsageRecord> = {}): UsageRecord {
@@ -24,6 +25,7 @@ function record(overrides: Partial<UsageRecord> = {}): UsageRecord {
       reasoningTokens: 0,
     },
     reportedCostUsd: null,
+    fast: false,
     dedupeKey: "msg_1:",
     ...overrides,
   };
@@ -65,9 +67,63 @@ function cacheWith(
 }
 
 describe("scan cache round trip", () => {
+  it("migrates fork v4 rows without losing completed or tail history", () => {
+    const original = cacheWith([["/deleted/session.jsonl", 100, [record()], 2, 3]]);
+    const entry = original.get("/deleted/session.jsonl")!;
+    original.set("/deleted/session.jsonl", {
+      ...entry,
+      tailRecords: [record({ dedupeKey: "tail" })],
+    });
+    const encoded = encodeScanCache(original);
+    const files = Object.fromEntries(
+      Object.entries(encoded.files).map(([path, file]) => [
+        path,
+        {
+          ...file,
+          r: file.r.map((row) => row.slice(0, 10)),
+          t: file.t.map((row) => row.slice(0, 10)),
+        },
+      ]),
+    );
+    const migrated = decodeScanCache({ ...encoded, version: 4, files });
+    const expected = new Map(
+      [...original].map(([path, file]) => [path, { ...file, requiresReparse: true }]),
+    );
+    expect(migrated).toEqual(expected);
+    expect(migrated.get("/deleted/session.jsonl")?.records[0]?.fast).toBe(false);
+    expect(encodeScanCache(migrated).version).toBe(5);
+    expect(decodeScanCache(encodeScanCache(migrated))).toEqual(expected);
+  });
+
+  it("preserves Cursor tier pricing and cache savings after serialization", () => {
+    const cursor = record({ provider: "cursor", model: "display-name", rateModel: "tiered-rate" });
+    const original = cacheWith([["cursor-account:one", 100, [cursor]]]);
+    original.set("cursor-account:one", {
+      ...original.get("cursor-account:one")!,
+      provider: "cursor",
+    });
+    const restored = decodeScanCache(encodeScanCache(original)).get("cursor-account:one")!
+      .records[0]!;
+    const rates = parseRateTable({
+      "tiered-rate": {
+        input_cost_per_token: 0.001,
+        output_cost_per_token: 0.002,
+        cache_read_input_token_cost: 0.0001,
+      },
+    });
+    expect(restored).toEqual(cursor);
+    expect(priceUsage(rates, restored)).toEqual(priceUsage(rates, cursor));
+    expect(cacheSavingsUsd(rates, restored)).toBeGreaterThan(0);
+    expect(cacheSavingsUsd(rates, restored)).toBe(cacheSavingsUsd(rates, cursor));
+  });
+
   it("restores records unchanged", () => {
     const original = cacheWith([
-      ["/a.jsonl", 100, [record(), record({ dedupeKey: "msg_2:", model: "claude-opus-5" })]],
+      [
+        "/a.jsonl",
+        100,
+        [record(), record({ dedupeKey: "msg_2:", model: "claude-opus-5-5", fast: true })],
+      ],
       ["/b.jsonl", 200, [record({ sessionId: "session-b", reportedCostUsd: 1.5 })]],
     ]);
     original.set("/grok.jsonl", {
@@ -133,6 +189,17 @@ describe("scan cache round trip", () => {
     const poisoned = {
       ...encoded,
       files: { "/a.jsonl": { ...encoded.files["/a.jsonl"]!, gl: 1e20 } },
+    };
+
+    expect(decodeScanCache(JSON.parse(JSON.stringify(poisoned))).has("/a.jsonl")).toBe(false);
+  });
+
+  it("drops an entry whose fast flag is not 0 or 1", () => {
+    const encoded = encodeScanCache(cacheWith([["/a.jsonl", 100, [record({ fast: true })]]]));
+    const row = encoded.files["/a.jsonl"]!.r[0]!;
+    const poisoned = {
+      ...encoded,
+      files: { "/a.jsonl": { ...encoded.files["/a.jsonl"]!, r: [[...row.slice(0, 10), true]] } },
     };
 
     expect(decodeScanCache(JSON.parse(JSON.stringify(poisoned))).has("/a.jsonl")).toBe(false);

@@ -12,6 +12,8 @@ import * as Scope from "effect/Scope";
 
 import * as Electron from "electron";
 
+import { isPackagedDevBuild } from "../app/DesktopBuildFlavor.ts";
+
 export const DESKTOP_HOST = "app";
 const DESKTOP_PRODUCTION_SCHEME = "t3code";
 const DESKTOP_DEVELOPMENT_SCHEME = "t3code-dev";
@@ -129,6 +131,9 @@ function registerDesktopSchemePrivilegesSync(): void {
         supportFetchAPI: true,
         corsEnabled: true,
         stream: true,
+        // Custom schemes skip Chromium's V8 code cache unless they opt in.
+        // Dev stays off: Vite serves changing code at stable URLs.
+        codeCache: true,
       },
     },
     {
@@ -139,6 +144,8 @@ function registerDesktopSchemePrivilegesSync(): void {
         supportFetchAPI: true,
         corsEnabled: true,
         stream: true,
+        // Packaged Dev serves its bundled renderer here; Vite dev must stay uncached.
+        codeCache: isPackagedDevBuild(Electron.app.isPackaged),
       },
     },
   ]);

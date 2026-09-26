@@ -164,7 +164,9 @@ Choose **Settle thread** from its menu to move finished work out of the active l
 without deleting the conversation. **Un-settle thread** restores it to active work
 and prevents automatic settlement until new activity resumes the usual rules.
 Manually settling an idle thread dismisses unanswered async questions without
-sending an answer or restarting the agent.
+sending an answer or restarting the agent. Settling also closes the thread's
+terminals that wait at an idle prompt, and keeps their output. A terminal that
+runs a command, such as a dev server, stays open.
 
 **Settings → Extras → Sidebar → Auto-settle threads** is the master switch. Turn it off to stop
 automatic settlement while keeping manual settlement available. **Settings → General** controls

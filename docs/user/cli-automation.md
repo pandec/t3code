@@ -471,6 +471,14 @@ version. Use `t3 update` to fetch a newer release.
 keeping projects, threads, and settings. `t3 service uninstall` removes only the service.
 These commands print human-readable output and do not support `--json`.
 
+## Trace summary — not an automation command
+
+`t3 trace summary [--since 30m] [--limit 25] [--base-dir <path>]` prints per-span counts, rates, and
+latency from the local server trace file and its rotated backups. It reads the files directly, so it
+works while the server is stalled or stopped. Output is a human-readable table with no `--json` mode.
+`T3CODE_TRACE_FILE` overrides the file; otherwise it reads the `userdata` trace for `--base-dir` or
+`T3CODE_HOME`.
+
 ## Triage — not an automation command
 
 `t3 triage` investigates a broken installation by handing a written problem report to a coding agent

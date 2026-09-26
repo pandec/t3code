@@ -68,6 +68,12 @@ export interface ProjectionFullThreadDiffContext {
   readonly toCheckpointRef: CheckpointRef | null;
 }
 
+/** The thread fields pull request sync reads, for a thread with at least one link. */
+export type ProjectionThreadPullRequests = Pick<
+  OrchestrationThreadShell,
+  "id" | "projectId" | "settledOverride" | "settledAt" | "pullRequests"
+>;
+
 export interface ProjectionThreadDetailQuery {
   /**
    * Limit activities before SQLite returns and decodes their payloads.
@@ -138,6 +144,16 @@ export interface ProjectionSnapshotQueryShape {
   readonly getRecentArchivedThreads: (
     input: OrchestrationGetRecentArchivedThreadsInput,
   ) => Effect.Effect<OrchestrationGetRecentArchivedThreadsResult, ProjectionRepositoryError>;
+  /**
+   * Read active (not deleted, not archived) threads that have at least one pull
+   * request link, in shell snapshot order. Skips repository identity, so no
+   * legacy `linkedPullRequest` is derived.
+   */
+  readonly listThreadsWithPullRequests: () => Effect.Effect<
+    ReadonlyArray<ProjectionThreadPullRequests>,
+    ProjectionRepositoryError
+  >;
+
   /** Durable worktree ownership retained after thread deletion, including across restarts. */
   readonly getDeletedWorktreeThreads: () => Effect.Effect<
     ReadonlyArray<{

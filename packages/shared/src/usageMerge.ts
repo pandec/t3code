@@ -181,9 +181,12 @@ function ownedContribution(
   ownerByFingerprint: ReadonlyMap<string, EnvironmentId>,
 ): {
   readonly buckets: readonly UsageBucket[];
+  readonly unattributedProviders: ReadonlySet<UsageProviderKind>;
   readonly sessionsByProvider: ReadonlyMap<UsageProviderKind, number>;
 } {
+  const unownedProviders = new Set<UsageProviderKind>();
   const ownedProviders = new Set<UsageProviderKind>();
+  const ownedSources = new Set<string>();
   const sessionsByProvider = new Map<UsageProviderKind, number>();
   for (const source of environment.summary.sources) {
     if (source.status === "missing") continue;
@@ -191,16 +194,35 @@ function ownedContribution(
     if (ownerByFingerprint.get(key) === environment.environmentId) {
       const provider = source.fingerprint.provider;
       ownedProviders.add(provider);
+      ownedSources.add(`${provider}\u0000${source.fingerprint.resolvedHomePath}`);
       // Distinct within a directory. Summing per-bucket session counts instead
       // would count a session once per day and model it spans.
       sessionsByProvider.set(
         provider,
         (sessionsByProvider.get(provider) ?? 0) + source.distinctSessions,
       );
+    } else {
+      unownedProviders.add(source.fingerprint.provider);
     }
   }
+  // A legacy provider-wide bucket cannot be divided between directory owners.
+  const unattributedProviders = new Set(
+    environment.summary.buckets
+      .filter(
+        (bucket) =>
+          bucket.sourcePath === undefined &&
+          ownedProviders.has(bucket.provider) &&
+          unownedProviders.has(bucket.provider),
+      )
+      .map((bucket) => bucket.provider),
+  );
   return {
-    buckets: environment.summary.buckets.filter((bucket) => ownedProviders.has(bucket.provider)),
+    unattributedProviders,
+    buckets: environment.summary.buckets.filter((bucket) =>
+      bucket.sourcePath === undefined
+        ? ownedProviders.has(bucket.provider) && !unattributedProviders.has(bucket.provider)
+        : ownedSources.has(`${bucket.provider}\u0000${bucket.sourcePath}`),
+    ),
     sessionsByProvider,
   };
 }
@@ -341,10 +363,34 @@ export function mergeUsage(
   const contributingEnvironments: EnvironmentId[] = [];
 
   for (const environment of current) {
-    const { buckets: ownedBuckets, sessionsByProvider } = ownedContribution(
-      environment,
-      ownerByFingerprint,
-    );
+    const {
+      buckets: ownedBuckets,
+      sessionsByProvider,
+      unattributedProviders,
+    } = ownedContribution(environment, ownerByFingerprint);
+    for (const source of environment.summary.sources) {
+      if (
+        !unattributedProviders.has(source.fingerprint.provider) ||
+        ownerByFingerprint.get(fingerprintKey(source.fingerprint)) !== environment.environmentId
+      )
+        continue;
+      const message =
+        "This server combines usage across directories owned by different environments. Its overlapping totals are excluded; update the server for complete coverage.";
+      const existing = partialSources.find(
+        (entry) =>
+          entry.environmentId === environment.environmentId &&
+          entry.provider === source.fingerprint.provider &&
+          entry.resolvedHomePath === source.fingerprint.resolvedHomePath,
+      );
+      if (existing !== undefined) continue;
+      partialSources.push({
+        environmentId: environment.environmentId,
+        label: environment.label,
+        provider: source.fingerprint.provider,
+        resolvedHomePath: source.fingerprint.resolvedHomePath,
+        message,
+      });
+    }
     // Ownership is settled against the provider each bucket was scanned under,
     // and only then is a gateway-routed bucket credited to the pool it really
     // spends. Correcting earlier would break the claim that decides whether

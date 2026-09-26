@@ -24,7 +24,8 @@ import type { CodexScanState, UsageRecord } from "./usageTranscripts.ts";
 // v3 was independently used by the fork for malformed-record counts and by
 // upstream for incremental parse positions, so neither v3 shape is compatible.
 // v4 carries both incremental state and completed/tail malformed counts.
-const USAGE_SCAN_CACHE_VERSION = 4 as const;
+// v5 adds Claude fast mode while retaining the fork v4 malformed counts.
+const USAGE_SCAN_CACHE_VERSION = 5 as const;
 
 export interface CachedFile {
   readonly size: number;
@@ -43,6 +44,8 @@ export interface CachedFile {
   /** Malformed usage-bearing content in the unconsumed trailing segment. */
   readonly tailMalformedRecords: number;
   readonly position: TranscriptParsePosition;
+  /** Migrated history is a fallback until its transcript can be parsed in full. */
+  readonly requiresReparse?: true;
 }
 
 export type ScanCache = Map<string, CachedFile>;
@@ -63,9 +66,12 @@ type SerializedRecord = readonly [
   reasoningTokens: number,
   dedupeKey: string | null,
   reportedCostUsd: number | null,
+  fast: 0 | 1,
+  rateModelIndex: number | null,
 ];
 
 interface SerializedFile {
+  readonly reparse?: true;
   readonly s: number;
   readonly m: number;
   readonly p: UsageProviderKind;
@@ -117,11 +123,14 @@ export function encodeScanCache(cache: ScanCache): SerializedCache {
     record.totals.reasoningTokens,
     record.dedupeKey,
     record.reportedCostUsd,
+    record.fast ? 1 : 0,
+    record.rateModel === undefined ? null : intern(models, modelIndex, record.rateModel),
   ];
 
   const files: Record<string, SerializedFile> = {};
   for (const [path, entry] of cache) {
     files[path] = {
+      ...(entry.requiresReparse ? { reparse: true as const } : {}),
       s: entry.size,
       m: entry.mtimeMs,
       p: entry.provider,
@@ -154,7 +163,7 @@ export function decodeScanCache(document: unknown): ScanCache {
   if (typeof document !== "object" || document === null) return cache;
 
   const root = document as Partial<SerializedCache>;
-  if (root.version !== USAGE_SCAN_CACHE_VERSION) return cache;
+  if (root.version !== USAGE_SCAN_CACHE_VERSION && root.version !== 4) return cache;
   if (!isRecordArray(root.models) || !isRecordArray(root.sessions)) return cache;
   if (typeof root.files !== "object" || root.files === null) return cache;
 
@@ -175,7 +184,7 @@ export function decodeScanCache(document: unknown): ScanCache {
   ): UsageRecord[] | null => {
     const records: UsageRecord[] = [];
     for (const row of rows) {
-      if (!isRecordArray(row) || row.length < 10) return null;
+      if (!isRecordArray(row) || row.length < (root.version === 4 ? 10 : 12)) return null;
       const [
         timestampMs,
         modelIndex,
@@ -187,8 +196,13 @@ export function decodeScanCache(document: unknown): ScanCache {
         reasoning,
         dedupeKey,
         reportedCostUsd,
+        storedFast,
+        rateModelIndex,
       ] = row as SerializedRecord;
 
+      const fast = root.version === 4 ? 0 : storedFast;
+      const rateModel = typeof rateModelIndex === "number" ? models[rateModelIndex] : undefined;
+      if (root.version !== 4 && rateModelIndex !== null && rateModel === undefined) return null;
       const model = typeof modelIndex === "number" ? models[modelIndex] : undefined;
       if (
         typeof timestampMs !== "number" ||
@@ -198,7 +212,8 @@ export function decodeScanCache(document: unknown): ScanCache {
         !Number.isFinite(cached) ||
         !Number.isFinite(cacheCreation) ||
         !Number.isFinite(output) ||
-        !Number.isFinite(reasoning)
+        !Number.isFinite(reasoning) ||
+        (fast !== 0 && fast !== 1)
       ) {
         return null;
       }
@@ -207,6 +222,7 @@ export function decodeScanCache(document: unknown): ScanCache {
         provider,
         timestampMs,
         model,
+        ...(rateModel === undefined ? {} : { rateModel }),
         sessionId: (typeof sessionIndex === "number" ? sessions[sessionIndex] : undefined) ?? "",
         totals: {
           uncachedInputTokens: uncached,
@@ -216,6 +232,7 @@ export function decodeScanCache(document: unknown): ScanCache {
           reasoningTokens: reasoning,
         },
         reportedCostUsd: typeof reportedCostUsd === "number" ? reportedCostUsd : null,
+        fast: fast === 1,
         dedupeKey: typeof dedupeKey === "string" ? dedupeKey : null,
       });
     }
@@ -226,7 +243,15 @@ export function decodeScanCache(document: unknown): ScanCache {
     if (typeof raw !== "object" || raw === null) continue;
     const entry = raw as Partial<SerializedFile>;
     if (typeof entry.s !== "number" || typeof entry.m !== "number") continue;
-    if (entry.p !== "claude" && entry.p !== "codex" && entry.p !== "grok") continue;
+    if (
+      entry.p !== "claude" &&
+      entry.p !== "codex" &&
+      entry.p !== "grok" &&
+      entry.p !== "opencode" &&
+      entry.p !== "antigravity" &&
+      entry.p !== "cursor"
+    )
+      continue;
     if (!isRecordArray(entry.r) || !isRecordArray(entry.t)) continue;
     if (
       typeof entry.x !== "number" ||
@@ -265,6 +290,7 @@ export function decodeScanCache(document: unknown): ScanCache {
     if (records === null || tailRecords === null) continue;
 
     cache.set(path, {
+      ...(root.version === 4 || entry.reparse === true ? { requiresReparse: true as const } : {}),
       size: entry.s,
       mtimeMs: entry.m,
       provider,

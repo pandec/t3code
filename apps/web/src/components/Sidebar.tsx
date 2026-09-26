@@ -603,7 +603,7 @@ function SidebarProviderIcon(props: {
         // saturation so the account stays identifiable at rest.
         showBadge={props.showBadge === true && props.accentColor !== undefined}
         iconClassName="size-3.5"
-        badgeClassName="right-[-0.1875rem] bottom-[-0.1875rem] h-3 min-w-3 px-0.5 text-3xs"
+        badgeClassName="right-[-0.1875rem] bottom-[-0.1875rem] h-3 min-w-3 px-0.5 text-5xs"
       />
     </span>
   );

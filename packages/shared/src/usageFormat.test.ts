@@ -6,6 +6,7 @@ import {
   enumerateHourStarts,
   formatDateTimeShort,
   formatHourShort,
+  formatPercent,
   formatRelativeHourShort,
   makeWindow,
   refreshWindow,
@@ -48,6 +49,17 @@ describe("refreshWindow", () => {
     expect(next.resolution).toBe("hour");
     expect(next.sinceTime).toBe("2026-08-10T12:37:00.000Z");
     expect(next.untilTime).toBe("2026-08-11T12:37:00.000Z");
+  });
+});
+
+describe("formatPercent", () => {
+  it("distinguishes a small positive share from zero", () => {
+    expect(formatPercent(0)).toBe("0.0%");
+    expect(formatPercent(0.0004)).toBe("<0.1%");
+    expect(formatPercent(0.0009)).toBe("<0.1%");
+    expect(formatPercent(0.001)).toBe("0.1%");
+    expect(formatPercent(0.023)).toBe("2.3%");
+    expect(formatPercent(0.00004, 2)).toBe("<0.01%");
   });
 });
 

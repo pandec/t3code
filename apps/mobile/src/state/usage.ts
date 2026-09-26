@@ -16,7 +16,7 @@ import {
   type UsageSummaryInput,
 } from "@t3tools/contracts";
 import { runAtomCommand } from "@t3tools/client-runtime/state/runtime";
-import { refreshUsage } from "@t3tools/client-runtime/state/usage";
+import { needsCursorKeychainAccess, refreshUsage } from "@t3tools/client-runtime/state/usage";
 import { mergeUsage, type EnvironmentUsage, type MergedUsage } from "@t3tools/shared/usageMerge";
 import * as Option from "effect/Option";
 import { AsyncResult, Atom } from "effect/unstable/reactivity";
@@ -36,6 +36,7 @@ export interface EnvironmentUsageStatus {
   readonly label: string;
   readonly queryPending: boolean;
   readonly state: EnvironmentUsageState;
+  readonly needsCursorKeychainAccess: boolean;
 }
 
 /**
@@ -53,15 +54,21 @@ const usageByWindowAtom = Atom.family((windowKey: string) =>
     const statuses: EnvironmentUsageStatus[] = [];
     for (const [environmentId, presentation] of presentations) {
       const result = get(serverEnvironment.usageSummary({ environmentId, input }));
+      const summary = Option.getOrNull(AsyncResult.value(result));
+      const state = classifyEnvironmentUsage({
+        phase: presentation.connection.phase,
+        failed: result._tag === "Failure",
+        summary,
+      });
       statuses.push({
         environmentId,
         label: presentation.entry.target.label,
         queryPending: result.waiting,
-        state: classifyEnvironmentUsage({
-          phase: presentation.connection.phase,
-          failed: result._tag === "Failure",
-          summary: Option.getOrNull(AsyncResult.value(result)),
-        }),
+        state,
+        needsCursorKeychainAccess: needsCursorKeychainAccess(
+          state.kind === "reported" ? state.summary : null,
+          get(serverEnvironment.providersValueAtom(environmentId)),
+        ),
       });
     }
     return statuses;

@@ -7,7 +7,7 @@
  * @module state/usage
  */
 import { useAtomValue } from "@effect/atom-react";
-import { refreshUsage } from "@t3tools/client-runtime/state/usage";
+import { needsCursorKeychainAccess, refreshUsage } from "@t3tools/client-runtime/state/usage";
 import {
   USAGE_CONTRACT_VERSION,
   type EnvironmentId,
@@ -41,6 +41,7 @@ export interface EnvironmentUsageStatus {
   readonly summary: UsageSummary | null;
   /** Rich coverage classification layered over upstream's progressive status fields. */
   readonly state?: EnvironmentUsageState;
+  readonly needsCursorKeychainAccess?: boolean;
 }
 
 function environmentUsageState(environment: EnvironmentUsageStatus): EnvironmentUsageState {
@@ -82,6 +83,10 @@ const usageByWindowAtom = Atom.family((windowKey: string) =>
         error: state.kind === "failed" ? "This environment could not report usage." : null,
         summary,
         state,
+        needsCursorKeychainAccess: needsCursorKeychainAccess(
+          state.kind === "reported" ? state.summary : null,
+          get(serverEnvironment.providersValueAtom(environmentId)),
+        ),
       });
     }
     return statuses;
