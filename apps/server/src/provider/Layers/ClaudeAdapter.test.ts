@@ -5040,9 +5040,10 @@ describe("ClaudeAdapterLive", () => {
           (event) =>
             event.type === "turn.started" ||
             event.type === "turn.completed" ||
+            event.type === "task.updated" ||
             event.type === "task.completed",
         ),
-        Stream.take(7),
+        Stream.take(9),
         Stream.runCollect,
         Effect.forkChild,
       );
@@ -5097,13 +5098,24 @@ describe("ClaudeAdapterLive", () => {
         session_id: "sdk-session",
       } as unknown as SDKMessage);
       emitResult("result-user-turn");
-      // The main agent answers the finished agent: one turn, opened by the
-      // notification before the task completes, and kept by the answer.
+      // The CLI sends a terminal patch before its notification. It must not
+      // clear liveness before the follow-up turn can inherit the snooze.
+      harness.query.emit({
+        type: "system",
+        subtype: "task_updated",
+        task_id: "task-bg",
+        patch: { status: "completed", end_time: 1234 },
+        uuid: "task-bg-updated",
+        session_id: "sdk-session",
+      } as unknown as SDKMessage);
       emitNotification("task-bg");
       emitAssistant("assistant-follow-up");
       emitResult("result-follow-up");
       // Ambient work never reaches the main agent: no turn until output.
       emitNotification("task-ambient", { ambient: true });
+      // Restart orphan notifications report old work; they do not run the
+      // main agent. Opening a turn here would leave it running without output.
+      emitNotification("task-orphan", { status: "stopped", reason: "worker_restart" });
       emitAssistant("assistant-unprompted");
 
       const events = Array.from(yield* Fiber.join(lifecycleFiber));
@@ -5112,16 +5124,32 @@ describe("ClaudeAdapterLive", () => {
         [
           "turn.started",
           "turn.completed",
+          "task.updated",
           "turn.started",
           "task.completed",
           "turn.completed",
           "task.completed",
+          "task.completed",
           "turn.started",
         ],
       );
-      const followUp = events[2];
+      const terminalPatch = events[2];
+      assert.equal(terminalPatch?.type, "task.updated");
+      if (terminalPatch?.type === "task.updated") {
+        assert.equal(terminalPatch.payload.status, undefined);
+        assert.equal(terminalPatch.payload.endedAt, "1970-01-01T00:00:01.234Z");
+      }
+      const followUp = events[3];
       assert.equal(followUp?.raw?.method, "claude/synthetic-turn-start");
-      assert.equal(events[4]?.turnId, followUp?.turnId);
+      assert.equal(events[5]?.turnId, followUp?.turnId);
+      const sessions = yield* adapter.listSessions();
+      assert.deepEqual(sessions[0]?.resumeCursor, {
+        threadId: THREAD_ID,
+        resume: "sdk-session",
+        resumeSessionAt: "assistant-unprompted",
+        turnCount: 3,
+        turnStartMessageIds: [events[0]?.turnId, "assistant-follow-up", "assistant-unprompted"],
+      });
     }).pipe(
       Effect.provideService(Random.Random, makeDeterministicRandomService()),
       Effect.provide(harness.layer),

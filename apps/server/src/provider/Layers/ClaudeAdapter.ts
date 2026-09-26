@@ -4291,9 +4291,10 @@ export const makeClaudeAdapter = Effect.fn("makeClaudeAdapter")(function* (
         const patch = message.patch;
         const status =
           patch.status !== undefined ? CLAUDE_TASK_PATCH_STATUS[patch.status] : undefined;
-        if (status === "completed" || status === "failed" || status === "cancelled") {
-          context.liveTaskIds.delete(message.task_id);
-        }
+        // The CLI emits terminal patches immediately before task_notification.
+        // Let the notification own terminal status so background liveness stays
+        // live until that handler opens the main agent's follow-up turn.
+        const terminal = status === "completed" || status === "failed" || status === "cancelled";
         const endedAt =
           typeof patch.end_time === "number" && Number.isFinite(patch.end_time)
             ? DateTime.formatIso(DateTime.makeUnsafe(patch.end_time))
@@ -4303,7 +4304,7 @@ export const makeClaudeAdapter = Effect.fn("makeClaudeAdapter")(function* (
           type: "task.updated",
           payload: {
             taskId: RuntimeTaskId.make(message.task_id),
-            ...(status ? { status } : {}),
+            ...(status && !terminal ? { status } : {}),
             ...(patch.description ? { description: patch.description } : {}),
             ...(patch.error ? { error: patch.error } : {}),
             ...(endedAt ? { endedAt } : {}),
@@ -4321,10 +4322,11 @@ export const makeClaudeAdapter = Effect.fn("makeClaudeAdapter")(function* (
         // at its first assistant message, and before task.completed, so the
         // thread never looks idle between the work ending and the answer:
         // an "until it's done" snooze follows the work across that edge.
-        // Transcript-skipped (ambient) tasks and tasks owned by a subagent
-        // never reach the main agent.
+        // Ambient tasks, subagent-owned tasks, and restart orphan reports
+        // do not trigger a main-agent turn.
         if (
           !context.turnState &&
+          message.reason !== "worker_restart" &&
           message.skip_transcript !== true &&
           message.ambient !== true &&
           context.taskAgents.get(message.task_id)?.owningAgentId === undefined
