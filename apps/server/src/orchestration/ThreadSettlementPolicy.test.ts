@@ -302,6 +302,28 @@ describe("resolveAutoSettlementAt", () => {
       ),
     ).toBe(false);
     expect(isThreadSnoozed(makeThread({ ...untilDone, latestTurn: null }), NOW)).toBe(false);
+    // An ended turn whose subagents still work stays snoozed; watch loops
+    // alone don't hold it.
+    const endedTurn = {
+      turnId: TurnId.make("turn-done"),
+      state: "completed" as const,
+      requestedAt: "2026-08-18T00:00:00.000Z",
+      startedAt: "2026-08-18T00:01:00.000Z",
+      completedAt: "2026-08-20T00:00:00.000Z",
+      assistantMessageId: null,
+    };
+    expect(
+      isThreadSnoozed(
+        makeThread({ ...untilDone, latestTurn: endedTurn, backgroundLiveness: "working" }),
+        NOW,
+      ),
+    ).toBe(true);
+    expect(
+      isThreadSnoozed(
+        makeThread({ ...untilDone, latestTurn: endedTurn, backgroundLiveness: "monitoring" }),
+        NOW,
+      ),
+    ).toBe(false);
   });
 
   it("allows a fresh completion to wake snooze before settlement", () => {

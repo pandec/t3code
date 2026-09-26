@@ -133,6 +133,24 @@ export function isAutoSettlementCandidate(thread: OrchestrationThreadShell, now:
 }
 
 /**
+ * Server twin of client-runtime's untilDoneWorkContinues: the awaited turn
+ * is running, or it ended while its subagents work on. Watch loops alone
+ * ("monitoring") don't count. Keep the two in step.
+ */
+export function untilDoneWorkContinues(
+  thread: Pick<
+    OrchestrationThreadShell,
+    "snoozedUntilTurnId" | "latestTurn" | "backgroundLiveness"
+  >,
+): boolean {
+  return (
+    thread.snoozedUntilTurnId != null &&
+    thread.latestTurn?.turnId === thread.snoozedUntilTurnId &&
+    (thread.latestTurn.state === "running" || thread.backgroundLiveness === "working")
+  );
+}
+
+/**
  * Server twin of client-runtime's effectiveSnoozed: hidden while the wake
  * condition holds and the thread has not raised its hand. A raised hand is
  * blocked-on-you work, a fresh failure, or a turn that ended after the
@@ -148,6 +166,7 @@ export function isThreadSnoozed(
     | "hasPendingUserInput"
     | "session"
     | "latestTurn"
+    | "backgroundLiveness"
   >,
   now: string,
 ): boolean {
@@ -159,6 +178,10 @@ export function isThreadSnoozed(
   ) {
     return false;
   }
+  // "Until it's done": snoozed only while the awaited work continues. An
+  // ended turn is not news while its subagents still work; any other shape
+  // (ended and quiet, replaced, dropped) wakes.
+  if (thread.snoozedUntilTurnId != null) return untilDoneWorkContinues(thread);
   if (
     thread.snoozedAt != null &&
     thread.latestTurn != null &&
@@ -167,14 +190,6 @@ export function isThreadSnoozed(
     Date.parse(thread.latestTurn.completedAt) > Date.parse(thread.snoozedAt)
   ) {
     return false;
-  }
-  // "Until it's done": snoozed only while the awaited turn is still the
-  // running latest turn. Any other shape (ended, replaced, dropped) wakes.
-  if (thread.snoozedUntilTurnId != null) {
-    return (
-      thread.latestTurn?.turnId === thread.snoozedUntilTurnId &&
-      thread.latestTurn.state === "running"
-    );
   }
   if (thread.snoozedUntil == null) return thread.snoozedAt != null;
   return Date.parse(thread.snoozedUntil) > Date.parse(now);

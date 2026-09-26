@@ -34,6 +34,7 @@ function makeShell(input: {
   readonly turnCompletedAt?: string | null;
   readonly turnId?: string;
   readonly turnState?: "running" | "interrupted" | "completed" | "error";
+  readonly backgroundLiveness?: "working" | "monitoring";
 }): ThreadSnoozeShell {
   const threadId = ThreadId.make("thread-1");
   return {
@@ -66,6 +67,7 @@ function makeShell(input: {
             completedAt: input.turnCompletedAt ?? null,
             assistantMessageId: null,
           },
+    backgroundLiveness: input.backgroundLiveness ?? null,
   };
 }
 
@@ -220,6 +222,30 @@ describe("effectiveSnoozed", () => {
     expect(effectiveSnoozed(makeShell({ ...UNTIL_DONE }), { now: NOW })).toBe(false);
   });
 
+  it("keeps an until-done snooze hidden while subagents outlive the ended turn", () => {
+    const ended = { ...UNTIL_DONE, turnCompletedAt: "2026-04-10T10:30:00.000Z" } as const;
+    const working = makeShell({ ...ended, backgroundLiveness: "working" });
+    expect(effectiveSnoozed(working, { now: NOW })).toBe(true);
+    expect(threadRaisedHandWhileSnoozed(working)).toBe(false);
+    expect(threadWokeAt(working, { now: NOW })).toBeNull();
+
+    // Watch loops alone (a dev server) don't hold it; quiet work wakes it.
+    for (const backgroundLiveness of ["monitoring", undefined] as const) {
+      const quiet = makeShell({ ...ended, ...(backgroundLiveness ? { backgroundLiveness } : {}) });
+      expect(effectiveSnoozed(quiet, { now: NOW })).toBe(false);
+      expect(threadWokeAt(quiet, { now: NOW })).toBe("2026-04-10T10:30:00.000Z");
+    }
+    // Blocked-on-you work still wakes it.
+    expect(
+      effectiveSnoozed(
+        makeShell({ ...ended, backgroundLiveness: "working", pending: "approval" }),
+        {
+          now: NOW,
+        },
+      ),
+    ).toBe(false);
+  });
+
   it("ignores runs that completed before the snooze — the user saw that result", () => {
     expect(
       effectiveSnoozed(
@@ -292,10 +318,16 @@ describe("canSnooze", () => {
 });
 
 describe("canSnoozeUntilDone", () => {
-  it("requires a running turn", () => {
+  it("requires a running turn or working subagents", () => {
     expect(canSnoozeUntilDone(makeShell({ turnState: "running" }))).toBe(true);
     expect(canSnoozeUntilDone(makeShell({}))).toBe(false);
     expect(canSnoozeUntilDone(makeShell({ turnCompletedAt: NOW }))).toBe(false);
+    expect(
+      canSnoozeUntilDone(makeShell({ turnCompletedAt: NOW, backgroundLiveness: "working" })),
+    ).toBe(true);
+    expect(
+      canSnoozeUntilDone(makeShell({ turnCompletedAt: NOW, backgroundLiveness: "monitoring" })),
+    ).toBe(false);
   });
 });
 

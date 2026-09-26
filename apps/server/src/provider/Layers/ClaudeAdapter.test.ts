@@ -5031,6 +5031,198 @@ describe("ClaudeAdapterLive", () => {
     );
   });
 
+  it.effect("opens the follow-up turn when an idle background task notifies the main agent", () => {
+    const harness = makeHarness();
+    return Effect.gen(function* () {
+      const adapter = yield* ClaudeAdapter;
+      const lifecycleFiber = yield* adapter.streamEvents.pipe(
+        Stream.filter(
+          (event) =>
+            event.type === "turn.started" ||
+            event.type === "turn.completed" ||
+            event.type === "task.updated" ||
+            event.type === "task.completed",
+        ),
+        Stream.take(9),
+        Stream.runCollect,
+        Effect.forkChild,
+      );
+
+      const session = yield* adapter.startSession({
+        threadId: THREAD_ID,
+        provider: ProviderDriverKind.make("claudeAgent"),
+        runtimeMode: "full-access",
+      });
+      yield* adapter.sendTurn({
+        threadId: session.threadId,
+        input: "spawn a background agent",
+        attachments: [],
+      });
+      const emitResult = (uuid: string) =>
+        harness.query.emit({
+          type: "result",
+          subtype: "success",
+          is_error: false,
+          errors: [],
+          session_id: "sdk-session",
+          uuid,
+        } as unknown as SDKMessage);
+      const emitNotification = (taskId: string, extra: Record<string, unknown> = {}) =>
+        harness.query.emit({
+          type: "system",
+          subtype: "task_notification",
+          task_id: taskId,
+          status: "completed",
+          output_file: "",
+          summary: "done",
+          uuid: `${taskId}-done`,
+          session_id: "sdk-session",
+          ...extra,
+        } as unknown as SDKMessage);
+      const emitAssistant = (uuid: string) =>
+        harness.query.emit({
+          type: "assistant",
+          session_id: "sdk-session",
+          uuid,
+          parent_tool_use_id: null,
+          message: { id: `${uuid}-message`, content: [{ type: "text", text: "Results in" }] },
+        } as unknown as SDKMessage);
+
+      harness.query.emit({
+        type: "system",
+        subtype: "task_started",
+        task_id: "task-bg",
+        description: "Background agent",
+        task_type: "local_agent",
+        uuid: "task-bg-uuid",
+        session_id: "sdk-session",
+      } as unknown as SDKMessage);
+      emitResult("result-user-turn");
+      // The CLI sends a terminal patch before its notification. It must not
+      // clear liveness before the follow-up turn can inherit the snooze.
+      harness.query.emit({
+        type: "system",
+        subtype: "task_updated",
+        task_id: "task-bg",
+        patch: { status: "completed", end_time: 1234 },
+        uuid: "task-bg-updated",
+        session_id: "sdk-session",
+      } as unknown as SDKMessage);
+      emitNotification("task-bg");
+      emitAssistant("assistant-follow-up");
+      emitResult("result-follow-up");
+      // Ambient work never reaches the main agent: no turn until output.
+      emitNotification("task-ambient", { ambient: true });
+      // Restart orphan notifications report old work; they do not run the
+      // main agent. Opening a turn here would leave it running without output.
+      emitNotification("task-orphan", { status: "stopped", reason: "worker_restart" });
+      emitAssistant("assistant-unprompted");
+
+      const events = Array.from(yield* Fiber.join(lifecycleFiber));
+      assert.deepEqual(
+        events.map((event) => event.type),
+        [
+          "turn.started",
+          "turn.completed",
+          "task.updated",
+          "turn.started",
+          "task.completed",
+          "turn.completed",
+          "task.completed",
+          "task.completed",
+          "turn.started",
+        ],
+      );
+      const terminalPatch = events[2];
+      assert.equal(terminalPatch?.type, "task.updated");
+      if (terminalPatch?.type === "task.updated") {
+        assert.equal(terminalPatch.payload.status, undefined);
+        assert.equal(terminalPatch.payload.endedAt, "1970-01-01T00:00:01.234Z");
+      }
+      const followUp = events[3];
+      assert.equal(followUp?.raw?.method, "claude/synthetic-turn-start");
+      assert.equal(events[5]?.turnId, followUp?.turnId);
+      const sessions = yield* adapter.listSessions();
+      assert.deepEqual(sessions[0]?.resumeCursor, {
+        threadId: THREAD_ID,
+        resume: "sdk-session",
+        resumeSessionAt: "assistant-unprompted",
+        turnCount: 3,
+        turnStartMessageIds: [events[0]?.turnId, "assistant-follow-up", "assistant-unprompted"],
+      });
+    }).pipe(
+      Effect.provideService(Random.Random, makeDeterministicRandomService()),
+      Effect.provide(harness.layer),
+    );
+  });
+
+  it.effect("releases a held terminal task status when no notification follows", () => {
+    const harness = makeHarness();
+    return Effect.gen(function* () {
+      const adapter = yield* ClaudeAdapter;
+      const taskUpdates = () =>
+        adapter.streamEvents.pipe(
+          Stream.filter((event) => event.type === "task.updated"),
+          Stream.take(1),
+          Stream.runCollect,
+          Effect.forkChild,
+        );
+      const heldFiber = yield* taskUpdates();
+
+      const session = yield* adapter.startSession({
+        threadId: THREAD_ID,
+        provider: ProviderDriverKind.make("claudeAgent"),
+        runtimeMode: "full-access",
+      });
+      yield* adapter.sendTurn({ threadId: session.threadId, input: "go", attachments: [] });
+      harness.query.emit({
+        type: "system",
+        subtype: "task_started",
+        task_id: "task-bg",
+        description: "Background agent",
+        task_type: "local_agent",
+        uuid: "task-bg-uuid",
+        session_id: "sdk-session",
+      } as unknown as SDKMessage);
+      harness.query.emit({
+        type: "result",
+        subtype: "success",
+        is_error: false,
+        errors: [],
+        session_id: "sdk-session",
+        uuid: "result-user-turn",
+      } as unknown as SDKMessage);
+      harness.query.emit({
+        type: "system",
+        subtype: "task_updated",
+        task_id: "task-bg",
+        patch: { status: "failed", end_time: 1234 },
+        uuid: "task-bg-updated",
+        session_id: "sdk-session",
+      } as unknown as SDKMessage);
+
+      const held = Array.from(yield* Fiber.join(heldFiber))[0];
+      assert.equal(held?.type === "task.updated" ? held.payload.status : "missing", undefined);
+
+      const releasedFiber = yield* taskUpdates();
+      yield* Effect.yieldNow;
+      yield* TestClock.adjust("2 seconds");
+      const released = Array.from(yield* Fiber.join(releasedFiber))[0];
+      assert.equal(
+        released?.type === "task.updated" ? released.payload.status : "missing",
+        "failed",
+      );
+      // The provider's end time travels with the released status.
+      assert.equal(
+        released?.type === "task.updated" ? released.payload.endedAt : "missing",
+        "1970-01-01T00:00:01.234Z",
+      );
+    }).pipe(
+      Effect.provideService(Random.Random, makeDeterministicRandomService()),
+      Effect.provide(harness.layer),
+    );
+  });
+
   it.effect("keeps the session available when process close fails", () => {
     const harness = makeHarness();
     return Effect.gen(function* () {
