@@ -5196,7 +5196,7 @@ describe("ClaudeAdapterLive", () => {
         type: "system",
         subtype: "task_updated",
         task_id: "task-bg",
-        patch: { status: "failed" },
+        patch: { status: "failed", end_time: 1234 },
         uuid: "task-bg-updated",
         session_id: "sdk-session",
       } as unknown as SDKMessage);
@@ -5211,6 +5211,11 @@ describe("ClaudeAdapterLive", () => {
       assert.equal(
         released?.type === "task.updated" ? released.payload.status : "missing",
         "failed",
+      );
+      // The provider's end time travels with the released status.
+      assert.equal(
+        released?.type === "task.updated" ? released.payload.endedAt : "missing",
+        "1970-01-01T00:00:01.234Z",
       );
     }).pipe(
       Effect.provideService(Random.Random, makeDeterministicRandomService()),

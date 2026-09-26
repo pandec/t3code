@@ -502,7 +502,10 @@ interface ClaudeSessionContext {
   readonly liveTaskIds: Set<string>;
   /** Terminal statuses of idle-time main-agent tasks, held until their
    * task_notification (or a short fallback) settles them. */
-  readonly heldTerminalTaskStatuses: Map<string, "completed" | "failed" | "cancelled">;
+  readonly heldTerminalTaskStatuses: Map<
+    string,
+    { readonly status: "completed" | "failed" | "cancelled"; readonly endedAt?: string }
+  >;
   /** Runs a detached effect in the session's runtime. */
   readonly forkDetached: (effect: Effect.Effect<void>) => void;
   turnState: ClaudeTurnState | undefined;
@@ -3783,8 +3786,8 @@ export const makeClaudeAdapter = Effect.fn("makeClaudeAdapter")(function* (
     context: ClaudeSessionContext,
     taskId: string,
   ) {
-    const status = context.heldTerminalTaskStatuses.get(taskId);
-    if (context.stopped || status === undefined) {
+    const held = context.heldTerminalTaskStatuses.get(taskId);
+    if (context.stopped || held === undefined) {
       return;
     }
     context.heldTerminalTaskStatuses.delete(taskId);
@@ -3800,7 +3803,8 @@ export const makeClaudeAdapter = Effect.fn("makeClaudeAdapter")(function* (
       providerRefs: nativeProviderRefs(context),
       payload: {
         taskId: RuntimeTaskId.make(taskId),
-        status,
+        status: held.status,
+        ...(held.endedAt ? { endedAt: held.endedAt } : {}),
         ...taskLinkageFor(context.taskAgents, taskId),
       },
     });
@@ -4337,12 +4341,19 @@ export const makeClaudeAdapter = Effect.fn("makeClaudeAdapter")(function* (
         // Hold the terminal status back so liveness stays live across that
         // edge. The notification settles it; a patch that never gets one is
         // released after a short grace.
+        const endedAt =
+          typeof patch.end_time === "number" && Number.isFinite(patch.end_time)
+            ? DateTime.formatIso(DateTime.makeUnsafe(patch.end_time))
+            : undefined;
         const holdTerminal =
           terminalStatus !== undefined &&
           !context.turnState &&
           context.taskAgents.get(message.task_id)?.owningAgentId === undefined;
         if (holdTerminal) {
-          context.heldTerminalTaskStatuses.set(message.task_id, terminalStatus);
+          context.heldTerminalTaskStatuses.set(message.task_id, {
+            status: terminalStatus,
+            ...(endedAt ? { endedAt } : {}),
+          });
           context.forkDetached(
             Effect.sleep(HELD_TERMINAL_TASK_GRACE).pipe(
               Effect.andThen(releaseHeldTerminalTask(context, message.task_id)),
@@ -4354,10 +4365,6 @@ export const makeClaudeAdapter = Effect.fn("makeClaudeAdapter")(function* (
         } else if (terminalStatus !== undefined) {
           context.liveTaskIds.delete(message.task_id);
         }
-        const endedAt =
-          typeof patch.end_time === "number" && Number.isFinite(patch.end_time)
-            ? DateTime.formatIso(DateTime.makeUnsafe(patch.end_time))
-            : undefined;
         yield* offerRuntimeEvent({
           ...base,
           type: "task.updated",
