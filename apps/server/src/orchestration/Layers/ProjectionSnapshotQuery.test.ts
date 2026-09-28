@@ -1444,6 +1444,16 @@ projectionSnapshotLayer("ProjectionSnapshotQuery", (it) => {
       );
       assert.equal(archivedShell._tag, "None");
 
+      const includedArchivedShell = yield* snapshotQuery.getThreadShellById(
+        ThreadId.make("thread-archived"),
+        { includeArchived: true },
+      );
+      assert.equal(includedArchivedShell._tag, "Some");
+      assert.equal(
+        Option.getOrThrow(includedArchivedShell).archivedAt,
+        archivedShellSnapshot.threads[0]?.archivedAt,
+      );
+
       const archivedDetail = yield* snapshotQuery.getThreadDetailById(
         ThreadId.make("thread-archived"),
       );

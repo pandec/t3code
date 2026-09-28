@@ -74,6 +74,37 @@ const WorktreeTestLayer = McpHttpServer.WorktreeToolkitRegistrationLive.pipe(
   ),
 );
 
+const ArchiveTestLayer = McpHttpServer.ArchiveToolkitRegistrationLive.pipe(
+  Layer.provideMerge(McpServer.McpServer.layer),
+  Layer.provide(
+    Layer.mergeAll(
+      Layer.mock(ProjectionSnapshotQuery)({ getThreadShellById: () => Effect.succeedNone }),
+      Layer.mock(OrchestrationEngineService)({}),
+      NodeServices.layer,
+    ),
+  ),
+);
+
+it.effect("exposes archive tools with destructive metadata and reports missing threads", () =>
+  Effect.gen(function* () {
+    const server = yield* McpServer.McpServer;
+    expect(server.tools.map(({ tool }) => tool.name)).toEqual(
+      expect.arrayContaining(["archive_thread", "archive_thread_status", "cancel_thread_archive"]),
+    );
+    expect(server.tools.find(({ tool }) => tool.name === "archive_thread")?.tool).toMatchObject({
+      annotations: { readOnlyHint: false, destructiveHint: true },
+    });
+    const result = yield* server
+      .callTool({ name: "archive_thread", arguments: {} })
+      .pipe(
+        Effect.provideService(McpInvocationContext.McpInvocationContext, invocation),
+        Effect.provideService(McpSchema.McpServerClient, client),
+      );
+    expect(result.isError).toBe(true);
+    expect(result.content).toEqual([{ type: "text", text: "This thread no longer exists." }]);
+  }).pipe(Effect.provide(ArchiveTestLayer)),
+);
+
 it.effect("exposes worktree tools and rejects a credential whose thread is gone", () =>
   Effect.gen(function* () {
     const server = yield* McpServer.McpServer;

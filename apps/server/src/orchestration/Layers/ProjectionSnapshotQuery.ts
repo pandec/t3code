@@ -3978,10 +3978,13 @@ pending_approval_requests AS (
       });
     });
 
-  const getThreadShellById: ProjectionSnapshotQueryShape["getThreadShellById"] = (threadId) =>
+  const getThreadShellById: ProjectionSnapshotQueryShape["getThreadShellById"] = (
+    threadId,
+    options,
+  ) =>
     Effect.gen(function* () {
       const [threadRow, latestTurnRow, sessionRow, pullRequestRows] = yield* Effect.all([
-        getThreadRowById({ threadId, includeArchived: 0 }).pipe(
+        getThreadRowById({ threadId, includeArchived: options?.includeArchived ? 1 : 0 }).pipe(
           Effect.mapError(
             toPersistenceSqlOrDecodeError(
               "ProjectionSnapshotQuery.getThreadShellById:getThread:query",

@@ -238,7 +238,13 @@ concluding they are missing.
 
 ### Archiving after a turn
 
-To have an agent archive its thread when it finishes, use:
+Ask an agent to archive its thread when it finishes. Agents with T3's MCP tools can use
+`archive_thread`, optionally setting `removeWorktree: true` when you also request cleanup.
+`archive_thread_status` inspects the request and `cancel_thread_archive` cancels it before
+archiving starts. A pending request means the archive is scheduled; the agent must finish its
+response before it can run.
+
+The CLI supports the same workflow:
 
 ```bash
 t3 thread archive self --after-turn --remove-worktree --json
