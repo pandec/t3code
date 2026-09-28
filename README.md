@@ -19,7 +19,7 @@ This is a personal fork of [pingdotgg/t3code](https://github.com/pingdotgg/t3cod
 
 - **Agent-requested worktree switches.** Codex can use `switch_worktree` after creating a worktree. T3 waits for the turn and final checkpoint, then updates the thread’s checkout and resumes the same conversation there on the next message. Agents can inspect or cancel pending moves with `worktree_switch_status` and `cancel_worktree_switch`, and return to the project checkout with the same switch tool.
 
-- **Archive after a turn.** Agents can run `t3 thread archive self --after-turn --remove-worktree` to archive after successful completion and background work finishes, then remove a clean worktree. Cleanup preserves project roots and checkouts used by other threads or reserved as a pending move destination. Explicit thread IDs work for other running threads. Requests survive restarts and can be inspected or cancelled through the CLI. [Usage and cleanup limits](docs/user/cli-automation.md#archiving-after-a-turn).
+- **Archive after a turn.** Ask an agent to archive its thread when done, optionally removing its clean worktree. The `archive_thread` tool schedules this after successful completion, the final checkpoint, and background work; `archive_thread_status` and `cancel_thread_archive` inspect or cancel the request. The CLI also supports `t3 thread archive self --after-turn --remove-worktree` and explicit thread IDs. Requests survive restarts, and cleanup preserves branches, project roots, and checkouts used by other threads. [Usage and cleanup limits](docs/user/cli-automation.md#archiving-after-a-turn).
 
 ### Conversations & threads
 

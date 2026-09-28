@@ -1419,8 +1419,19 @@ projectionSnapshotLayer("ProjectionSnapshotQuery", (it) => {
       assert.equal(shellSnapshot.threads[0]?.branchPullRequest, null);
 
       yield* sql`
+        INSERT INTO projection_turns (
+          thread_id, turn_id, state, requested_at, started_at, completed_at, checkpoint_files_json
+        ) VALUES (
+          'thread-archived', 'turn-archived', 'completed',
+          '2026-04-06T00:00:04.000Z', '2026-04-06T00:00:04.000Z',
+          '2026-04-06T00:00:05.000Z', '[]'
+        )
+      `;
+
+      yield* sql`
         UPDATE projection_threads
         SET branch_pull_request_json = ${encodeThreadLinkedPullRequest(branchPullRequest)},
+            latest_turn_id = 'turn-archived',
             active_order_key = 'm',
             pin_order_key = 'n',
             auto_settle_disabled_at = '2026-04-06T00:00:05.000Z',
@@ -1444,6 +1455,19 @@ projectionSnapshotLayer("ProjectionSnapshotQuery", (it) => {
       );
       assert.equal(archivedShell._tag, "None");
 
+      const includedArchivedShell = yield* snapshotQuery.getThreadShellById(
+        ThreadId.make("thread-archived"),
+        { includeArchived: true },
+      );
+      assert.equal(includedArchivedShell._tag, "Some");
+      assert.equal(
+        Option.getOrThrow(includedArchivedShell).archivedAt,
+        archivedShellSnapshot.threads[0]?.archivedAt,
+      );
+      const archivedLatestTurn = Option.getOrThrow(includedArchivedShell).latestTurn;
+      assert.equal(archivedLatestTurn?.turnId, asTurnId("turn-archived"));
+      assert.equal(archivedLatestTurn?.state, "completed");
+
       const archivedDetail = yield* snapshotQuery.getThreadDetailById(
         ThreadId.make("thread-archived"),
       );
@@ -1451,6 +1475,7 @@ projectionSnapshotLayer("ProjectionSnapshotQuery", (it) => {
       if (archivedDetail._tag === "Some") {
         assert.equal(archivedDetail.value.archivedAt, "2026-04-06T00:00:06.000Z");
         assert.equal(archivedDetail.value.autoSettleDisabledAt, "2026-04-06T00:00:05.000Z");
+        assert.deepEqual(archivedDetail.value.latestTurn, archivedLatestTurn);
       }
 
       // A persisted link row must reach the fork-only archive shelf exactly as it
@@ -1477,6 +1502,7 @@ projectionSnapshotLayer("ProjectionSnapshotQuery", (it) => {
       );
       const recentArchived = yield* snapshotQuery.getRecentArchivedThreads({ limit: 1 });
       assert.equal(recentArchived.totalArchivedCount, 1);
+      assert.deepEqual(recentArchived.threads[0]?.latestTurn, archivedLatestTurn);
       assert.equal(recentArchived.threads[0]?.autoSettleDisabledAt, "2026-04-06T00:00:05.000Z");
       assert.deepEqual(
         recentArchived.threads.map((thread) => thread.id),

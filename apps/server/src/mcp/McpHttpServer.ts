@@ -1,5 +1,7 @@
 import { WorktreeToolkitHandlersLive } from "./toolkits/worktree/handlers.ts";
 import { WorktreeToolkit } from "./toolkits/worktree/tools.ts";
+import { ArchiveToolkitHandlersLive } from "./toolkits/archive/handlers.ts";
+import { ArchiveToolkit } from "./toolkits/archive/tools.ts";
 import * as NodeCrypto from "node:crypto";
 import * as Cause from "effect/Cause";
 import * as Clock from "effect/Clock";
@@ -680,13 +682,17 @@ export const WorktreeToolkitRegistrationLive = McpServer.toolkit(WorktreeToolkit
   Layer.provide(WorktreeToolkitHandlersLive),
 );
 
+export const ArchiveToolkitRegistrationLive = McpServer.toolkit(ArchiveToolkit).pipe(
+  Layer.provide(ArchiveToolkitHandlersLive),
+);
+
 /**
  * Tool registration is per McpServer instance and tools/list has no per-token
  * filter, so each capability combination gets its own server island at its
  * own path — a session's credential (whose endpoint McpSessionRegistry picks
  * from its capabilities) then only ever sees the tools it can call. The pull
  * request toolkit is on every island because every credential carries it. The
- * worktree toolkit is also shared and only operates on the authenticated thread.
+ * worktree and archive toolkits are also shared and only operate on the authenticated thread.
  * Layer boundaries: Layer.fresh un-memoizes the McpServer inside each island
  * while the handlers' dependencies (broker, voice staging, session registry)
  * stay requirements satisfied by the shared runtime, so all islands share one
@@ -694,9 +700,11 @@ export const WorktreeToolkitRegistrationLive = McpServer.toolkit(WorktreeToolkit
  */
 const mcpToolkitIsland = <E, R>(path: `/${string}`, registrations: Layer.Layer<never, E, R>) =>
   Layer.fresh(
-    Layer.merge(registrations, WorktreeToolkitRegistrationLive).pipe(
-      Layer.provideMerge(makeMcpTransport(path)),
-    ),
+    Layer.mergeAll(
+      registrations,
+      WorktreeToolkitRegistrationLive,
+      ArchiveToolkitRegistrationLive,
+    ).pipe(Layer.provideMerge(makeMcpTransport(path))),
   );
 
 export const layer = Layer.mergeAll(
