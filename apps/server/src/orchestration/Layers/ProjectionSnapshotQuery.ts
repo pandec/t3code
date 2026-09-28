@@ -2152,6 +2152,7 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
       `,
   });
 
+  // The parent thread lookup controls archive visibility, including detail and recent archives.
   const getLatestTurnRowByThread = SqlSchema.findOneOption({
     Request: ThreadIdLookupInput,
     Result: ProjectionLatestTurnDbRowSchema,
@@ -2173,7 +2174,6 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
           AND turns.turn_id = threads.latest_turn_id
         WHERE threads.thread_id = ${threadId}
           AND threads.deleted_at IS NULL
-          AND threads.archived_at IS NULL
         LIMIT 1
       `,
   });
