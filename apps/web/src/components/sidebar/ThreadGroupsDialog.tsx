@@ -293,6 +293,13 @@ function GroupRow(props: {
         defaultValue={group.name}
         maxLength={80}
         disabled={disabled}
+        // Enter commits through the blur save below.
+        onKeyDown={(event) => {
+          if (event.key === "Enter" && !event.nativeEvent.isComposing) {
+            event.preventDefault();
+            event.currentTarget.blur();
+          }
+        }}
         onBlur={(event) => {
           const input = event.target;
           const next = input.value.trim();
