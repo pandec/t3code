@@ -1,6 +1,7 @@
 import { ScreenScrollView as ScrollView } from "../../components/ScreenScrollView";
 import { EnvironmentId, USAGE_CONTRACT_VERSION } from "@t3tools/contracts";
 import { type RouteProp, useIsFocused, useNavigation, useRoute } from "@react-navigation/native";
+import { cursorKeychainAccessEnvironments } from "@t3tools/client-runtime/state/usage";
 import {
   isCompatibleUsageContractVersion,
   isModelCostUnknown,
@@ -15,6 +16,7 @@ import {
   formatHourShort,
   formatPercent,
   formatTokens,
+  formatUsageContractMismatch,
   formatUsd,
   makeWindow,
   refreshWindow as refreshUsageWindow,
@@ -102,8 +104,12 @@ export function UsageRouteScreen() {
   );
   const isFocused = useIsFocused();
   const limits = useRefreshLimits(selectedEnvironmentIds, isFocused && tab === "limits");
-  const cursorAccessEnvironments = selectedEnvironments.filter(
-    (environment) => environment.needsCursorKeychainAccess,
+  // The fork's mobile status carries the summary inside its coverage state.
+  const cursorAccessEnvironments = cursorKeychainAccessEnvironments(
+    selectedEnvironments.map((environment) => ({
+      ...environment,
+      summary: environment.state.kind === "reported" ? environment.state.summary : null,
+    })),
   );
   const refreshAfterCursorEnable = () => {
     void refresh();
@@ -751,9 +757,13 @@ function UsageCoverageNotice(props: {
   const unreachable = props.environments.filter(
     (environment) => environment.state.kind === "unreachable",
   );
-  const stale = props.environments.filter((environment) =>
-    props.merged.staleEnvironments.includes(environment.environmentId),
+  const mismatchByEnvironment = new Map(
+    props.merged.contractMismatches.map((mismatch) => [mismatch.environmentId, mismatch]),
   );
+  const incompatible = props.environments.flatMap((environment) => {
+    const mismatch = mismatchByEnvironment.get(environment.environmentId);
+    return mismatch === undefined ? [] : [{ environment, mismatch }];
+  });
   const duplicateSources = props.merged.duplicateSources;
   // Sources that answered but could only read part of their transcripts. Web
   // has always said so; without this the phone silently understates the totals.
@@ -761,7 +771,7 @@ function UsageCoverageNotice(props: {
   if (
     failed.length === 0 &&
     unreachable.length === 0 &&
-    stale.length === 0 &&
+    incompatible.length === 0 &&
     partialSources.length === 0 &&
     duplicateSources.length === 0 &&
     !props.isPartial
@@ -786,9 +796,9 @@ function UsageCoverageNotice(props: {
           {environment.label} is not connected and could not report usage.
         </Text>
       ))}
-      {stale.map((environment) => (
+      {incompatible.map(({ environment, mismatch }) => (
         <Text key={environment.environmentId} className="text-sm text-foreground-muted">
-          {environment.label} runs an older server version and is excluded from totals.
+          {formatUsageContractMismatch(environment.label, mismatch)}
         </Text>
       ))}
       {partialSources.map((source) => (
@@ -821,7 +831,9 @@ function usageEnvironmentStatus(environment: EnvironmentUsageStatus): string {
     summary &&
     !isCompatibleUsageContractVersion(summary.contractVersion, USAGE_CONTRACT_VERSION)
   ) {
-    return "Older server · excluded from usage totals";
+    return formatUsageContractMismatch(environment.label, {
+      direction: summary.contractVersion < USAGE_CONTRACT_VERSION ? "serverBehind" : "clientBehind",
+    });
   }
   if (environment.state.kind === "unreachable") return "Waiting for connection…";
   if (environment.state.kind === "failed") return "Usage unavailable";

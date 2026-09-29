@@ -787,6 +787,8 @@ export const make = Effect.gen(function* () {
             }),
           ),
         );
+    // No saved login means there is no account source to report, not a setup error.
+    if (account.missing && account.error === null) return scanned;
     const cursorSourceKey = `cursor\0${cursorAuthPath}`;
     const accountKey =
       account.accountKey ??

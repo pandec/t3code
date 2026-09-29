@@ -111,6 +111,9 @@ const ISOLATED_TEST_FILES = [
   "src/components/projectScriptEditor.test.tsx",
   "src/components/settings/SourceControlWritingSettings.test.tsx",
   "src/components/usage/UsagePage.refresh.test.tsx",
+  "src/components/usage/UsagePage.test.tsx",
+  "src/components/onboarding/WelcomeWizard.test.tsx",
+  "src/components/Sidebar.logic.test.ts",
 
   "src/hooks/useLocalStorage.test.ts",
   "src/browser/HostedBrowserWebview.test.tsx",

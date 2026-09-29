@@ -41,7 +41,7 @@ export interface EnvironmentUsageStatus {
   readonly summary: UsageSummary | null;
   /** Rich coverage classification layered over upstream's progressive status fields. */
   readonly state?: EnvironmentUsageState;
-  readonly needsCursorKeychainAccess?: boolean;
+  readonly needsCursorKeychainAccess: boolean;
 }
 
 function environmentUsageState(environment: EnvironmentUsageStatus): EnvironmentUsageState {

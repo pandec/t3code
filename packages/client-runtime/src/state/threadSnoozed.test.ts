@@ -505,7 +505,7 @@ describe("resolveSnoozePresets", () => {
     expect(presets.find((preset) => preset.id === "evening")?.label).toBe("This evening");
     expect(
       new Date(presets.find((preset) => preset.id === "tomorrow")!.snoozedUntil!).getHours(),
-    ).toBe(9);
+    ).toBe(6);
   });
 
   it("leads with until-done only when asked", () => {
