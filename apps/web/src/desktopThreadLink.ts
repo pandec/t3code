@@ -18,7 +18,7 @@ export type DesktopThreadLinkResolution =
 export interface DesktopThreadLinkDependencies {
   readonly isKnownEnvironment: (environmentId: EnvironmentId) => boolean;
   readonly primaryEnvironmentId: () => EnvironmentId | null;
-  /** Resolves false when the environment's thread list does not load in time. */
+  /** Resolves false when the environment's thread list does not go live in time. */
   readonly waitForThreadList: (environmentId: EnvironmentId) => Promise<boolean>;
   readonly hasActiveThread: (threadRef: ScopedThreadRef) => boolean;
   /** Resolves null when the environment's archive cannot be read. */
@@ -50,5 +50,8 @@ export async function resolveDesktopThreadLink(
   // Archived threads have no shell, so only the archive knows about them.
   const archived = await dependencies.hasArchivedThread(threadRef);
   if (archived === null) return { kind: "environment-unavailable" };
-  return archived ? { kind: "open", threadRef } : { kind: "thread-not-found" };
+  // The thread may have been unarchived while the archive was loading.
+  return archived || dependencies.hasActiveThread(threadRef)
+    ? { kind: "open", threadRef }
+    : { kind: "thread-not-found" };
 }

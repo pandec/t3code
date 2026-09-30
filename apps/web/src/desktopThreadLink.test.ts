@@ -51,6 +51,22 @@ describe("resolveDesktopThreadLink", () => {
     ).resolves.toEqual({ kind: "open", threadRef: archivedRef });
   });
 
+  it("opens a thread that became active while the archive loaded", async () => {
+    let active = false;
+    await expect(
+      resolveDesktopThreadLink(
+        { environmentId: primaryEnvironmentId, threadId: archivedRef.threadId },
+        dependencies({
+          hasActiveThread: () => active,
+          hasArchivedThread: async () => {
+            active = true;
+            return false;
+          },
+        }),
+      ),
+    ).resolves.toEqual({ kind: "open", threadRef: archivedRef });
+  });
+
   it("resolves the primary alias to the primary environment", async () => {
     await expect(
       resolveDesktopThreadLink(

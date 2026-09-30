@@ -1,3 +1,4 @@
+import { useAtomValue } from "@effect/atom-react";
 import { executeAtomQuery } from "@t3tools/client-runtime/state/runtime";
 import type { DesktopThreadLink, EnvironmentId, ScopedThreadRef } from "@t3tools/contracts";
 import { useRouter } from "@tanstack/react-router";
@@ -18,10 +19,11 @@ import { openThreadInActivePane } from "../thread-split/threadOpenTarget";
 import { toastManager } from "../ui/toast";
 
 // Generous enough for a cold start, where the link waits for the backend and
-// its first shell snapshot.
+// the environment's first synchronization.
 const THREAD_LIST_TIMEOUT_MS = 30_000;
 const ARCHIVE_TIMEOUT_MS = 10_000;
 
+// A cached snapshot can predate threads created or unarchived elsewhere, so wait until it is live.
 function waitForThreadList(environmentId: EnvironmentId): Promise<boolean> {
   const atom = environmentShell.stateValueAtom(environmentId);
   return new Promise((resolve) => {
@@ -33,9 +35,9 @@ function waitForThreadList(environmentId: EnvironmentId): Promise<boolean> {
     };
     const timeout = setTimeout(() => finish(false), THREAD_LIST_TIMEOUT_MS);
     unsubscribe = appAtomRegistry.subscribe(atom, (state) => {
-      if (state.snapshot._tag === "Some") finish(true);
+      if (state.status === "live") finish(true);
     });
-    if (appAtomRegistry.get(atom).snapshot._tag === "Some") finish(true);
+    if (appAtomRegistry.get(atom).status === "live") finish(true);
   });
 }
 
@@ -67,6 +69,8 @@ const FAILURE_DESCRIPTIONS: Record<Exclude<DesktopThreadLinkResolution["kind"], 
 export function DesktopThreadLinkCoordinator() {
   const router = useRouter();
   const threadLinks = window.desktopBridge?.threadLinks;
+  // Until the catalog loads, every environment (and the primary alias) reads as unknown.
+  const catalogReady = useAtomValue(environmentCatalog.catalogValueAtom).isReady;
   const latestLinkRef = useRef(0);
 
   const openLink = useEffectEvent(async (link: DesktopThreadLink) => {
@@ -80,7 +84,7 @@ export function DesktopThreadLinkCoordinator() {
       hasActiveThread: (threadRef) => readThreadShell(threadRef) !== null,
       hasArchivedThread,
     });
-    // A newer link supersedes this one while it was still resolving.
+    // A newer link, or unmounting, supersedes this one while it was still resolving.
     if (linkId !== latestLinkRef.current) return;
     if (resolution.kind !== "open") {
       toastManager.add({
@@ -104,14 +108,15 @@ export function DesktopThreadLinkCoordinator() {
   });
 
   useEffect(() => {
-    if (threadLinks === undefined) return;
+    if (threadLinks === undefined || !catalogReady) return;
     const unsubscribe = threadLinks.onOpen((link) => void openLink(link));
     void threadLinks.setReady(true).catch(() => undefined);
     return () => {
+      latestLinkRef.current += 1;
       void threadLinks.setReady(false).catch(() => undefined);
       unsubscribe();
     };
-  }, [threadLinks]);
+  }, [catalogReady, threadLinks]);
 
   return null;
 }

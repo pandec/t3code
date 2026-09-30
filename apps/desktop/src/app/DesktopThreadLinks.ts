@@ -14,11 +14,27 @@ import * as DesktopWindow from "../window/DesktopWindow.ts";
 import * as DesktopEnvironment from "./DesktopEnvironment.ts";
 import { makeComponentLogger } from "./DesktopObservability.ts";
 
-const LINK_SEGMENT = /^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/;
+// Whitespace, control characters, and path separators cannot be in an id.
+const INVALID_SEGMENT_CHARACTER = /[\p{C}\s/\\]/u;
 const DESKTOP_SCHEMES = [
   ElectronProtocol.getDesktopScheme(false),
   ElectronProtocol.getDesktopScheme(true),
 ];
+
+// Ids are not one charset: imported threads use `import:<instance>:<session>`.
+// So each segment is decoded and rejected only for what cannot be an id.
+function decodeLinkSegment(segment: string): string | null {
+  let decoded: string;
+  try {
+    decoded = decodeURIComponent(segment);
+  } catch {
+    return null;
+  }
+  if (decoded.length === 0 || decoded.length > 256 || decoded === "." || decoded === "..") {
+    return null;
+  }
+  return INVALID_SEGMENT_CHARACTER.test(decoded) ? null : decoded;
+}
 
 /**
  * Parses `<scheme>://app/<environmentId>/<threadId>`. Everything else is not a
@@ -35,11 +51,11 @@ export function parseDesktopThreadLink(rawUrl: string, scheme: string): DesktopT
   if (url.username !== "" || url.password !== "" || url.search !== "" || url.hash !== "") {
     return null;
   }
-  const [leading, environmentId, threadId, ...rest] = url.pathname.split("/");
-  if (leading !== "" || rest.length > 0 || environmentId === undefined || threadId === undefined) {
-    return null;
-  }
-  if (!LINK_SEGMENT.test(environmentId) || !LINK_SEGMENT.test(threadId)) return null;
+  const [leading, rawEnvironmentId, rawThreadId, ...rest] = url.pathname.split("/");
+  if (leading !== "" || rest.length > 0) return null;
+  const environmentId = rawEnvironmentId === undefined ? null : decodeLinkSegment(rawEnvironmentId);
+  const threadId = rawThreadId === undefined ? null : decodeLinkSegment(rawThreadId);
+  if (environmentId === null || threadId === null) return null;
   return { environmentId, threadId };
 }
 
@@ -149,6 +165,8 @@ export const make = (inbox: DesktopThreadLinkInbox) =>
     const scheme = ElectronProtocol.getDesktopScheme(environment.usesDevelopmentIdentity);
     const queue = new DesktopThreadLinkQueue();
     let detachRenderer: (() => void) | null = null;
+    // Concurrent activations can each find no window and create one.
+    let revealing = false;
 
     const clearRenderer = () => {
       detachRenderer?.();
@@ -160,11 +178,18 @@ export const make = (inbox: DesktopThreadLinkInbox) =>
       const link = parseDesktopThreadLink(url, scheme);
       if (link === null) return;
       queue.enqueue(link);
+      if (revealing) return;
+      revealing = true;
       void runPromise(
         logInfo("opening thread link", { ...link }).pipe(
           Effect.andThen(desktopWindow.activate),
           Effect.catchCause((cause) =>
             logWarning("failed to reveal the window for a thread link", { cause }),
+          ),
+          Effect.ensuring(
+            Effect.sync(() => {
+              revealing = false;
+            }),
           ),
         ),
       );
@@ -188,15 +213,18 @@ export const make = (inbox: DesktopThreadLinkInbox) =>
         if (webContents.isDestroyed()) return;
 
         // A reload or crash drops the renderer's listener without a setReady(false).
+        // A crashed renderer keeps its webContents, and send() to it fails silently.
         const onNavigation = (
           event: Electron.Event<Electron.WebContentsDidStartNavigationEventParams>,
         ) => {
           if (event.isMainFrame && !event.isSameDocument) clearRenderer();
         };
         webContents.on("did-start-navigation", onNavigation);
+        webContents.on("render-process-gone", clearRenderer);
         webContents.once("destroyed", clearRenderer);
         detachRenderer = () => {
           webContents.removeListener("did-start-navigation", onNavigation);
+          webContents.removeListener("render-process-gone", clearRenderer);
           webContents.removeListener("destroyed", clearRenderer);
         };
         queue.setRenderer((link) => webContents.send(DESKTOP_THREAD_LINK_OPEN_CHANNEL, link));

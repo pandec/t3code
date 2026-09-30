@@ -5,7 +5,6 @@ import type { DesktopThreadLink } from "@t3tools/contracts";
 import { assert, describe, it } from "@effect/vitest";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
-import * as Option from "effect/Option";
 import { vi } from "vite-plus/test";
 
 import * as ElectronWindow from "../electron/ElectronWindow.ts";
@@ -35,6 +34,16 @@ describe("parseDesktopThreadLink", () => {
     );
   });
 
+  it("accepts imported thread ids, literal or percent-encoded", () => {
+    const expected = { environmentId: "primary", threadId: "import:codex:0199-abc" };
+    for (const url of [
+      "t3code-dev://app/primary/import:codex:0199-abc",
+      "t3code-dev://app/primary/import%3Acodex%3A0199-abc",
+    ]) {
+      assert.deepEqual(DesktopThreadLinks.parseDesktopThreadLink(url, "t3code-dev"), expected);
+    }
+  });
+
   it("rejects everything else", () => {
     for (const url of [
       DEV_LINK.replace("t3code-dev:", "t3code:"),
@@ -49,7 +58,9 @@ describe("parseDesktopThreadLink", () => {
       `${DEV_LINK}#fragment`,
       "t3code-dev://app/primary/%2E%2E",
       "t3code-dev://app/prim%20ary/thread",
-      "t3code-dev://app/primary/-thread",
+      "t3code-dev://app/primary/a%2Fb",
+      "t3code-dev://app/primary/a%5Cb",
+      "t3code-dev://app/primary/%E0%A4%A",
       `https://app/primary/${THREAD_ID}`,
       "not a url",
     ]) {
@@ -150,7 +161,7 @@ describe("DesktopThreadLinks", () => {
             activate: Effect.sync(activate),
           } as unknown as DesktopWindow.DesktopWindow["Service"]),
           Layer.succeed(ElectronWindow.ElectronWindow, {
-            main: Effect.succeed(Option.some({ webContents })),
+            main: Effect.succeedSome({ webContents }),
           } as unknown as ElectronWindow.ElectronWindow["Service"]),
         ),
       ),
@@ -172,15 +183,55 @@ describe("DesktopThreadLinks", () => {
         [DESKTOP_THREAD_LINK_OPEN_CHANNEL, { environmentId: "primary", threadId: THREAD_ID }],
       ]);
 
-      // A reload drops the renderer; the next link waits for it to be ready again.
-      webContents.emit("did-start-navigation", { isMainFrame: true, isSameDocument: false });
-      app.emit("second-instance", {}, ["t3code", "t3code-dev://app/env-2/thread-2"]);
-      assert.strictEqual(webContents.send.mock.calls.length, 1);
-      yield* threadLinks.setRendererReady(true);
-      assert.deepEqual(webContents.send.mock.calls[1], [
-        DESKTOP_THREAD_LINK_OPEN_CHANNEL,
-        { environmentId: "env-2", threadId: "thread-2" },
-      ]);
+      // A reload or crash drops the renderer; the next link waits for it to be ready again.
+      for (const [event, payload] of [
+        ["did-start-navigation", { isMainFrame: true, isSameDocument: false }],
+        ["render-process-gone", { reason: "crashed" }],
+      ] as const) {
+        const sentBefore = webContents.send.mock.calls.length;
+        webContents.emit(event, payload);
+        app.emit("second-instance", {}, ["t3code", `t3code-dev://app/env-2/${event}`]);
+        assert.strictEqual(webContents.send.mock.calls.length, sentBefore);
+        yield* threadLinks.setRendererReady(true);
+        assert.deepEqual(webContents.send.mock.calls[sentBefore], [
+          DESKTOP_THREAD_LINK_OPEN_CHANNEL,
+          { environmentId: "env-2", threadId: event },
+        ]);
+      }
+    }).pipe(Effect.scoped, Effect.provide(layer));
+  });
+
+  it.effect("reveals the window once while an activation is still running", () => {
+    const app = new NodeEvents.EventEmitter();
+    const inbox = new DesktopThreadLinks.DesktopThreadLinkInbox(app, []);
+    const activate = vi.fn();
+    const layer = DesktopThreadLinks.layer(inbox).pipe(
+      Layer.provide(
+        Layer.mergeAll(
+          Layer.succeed(DesktopEnvironment.DesktopEnvironment, {
+            usesDevelopmentIdentity: true,
+          } as unknown as DesktopEnvironment.DesktopEnvironment["Service"]),
+          Layer.succeed(DesktopWindow.DesktopWindow, {
+            activate: Effect.suspend(() => {
+              activate();
+              return Effect.never;
+            }),
+          } as unknown as DesktopWindow.DesktopWindow["Service"]),
+          Layer.succeed(ElectronWindow.ElectronWindow, {
+            main: Effect.succeedNone,
+          } as unknown as ElectronWindow.ElectronWindow["Service"]),
+        ),
+      ),
+    );
+
+    return Effect.gen(function* () {
+      const threadLinks = yield* DesktopThreadLinks.DesktopThreadLinks;
+      yield* threadLinks.start;
+      openUrl(app, "t3code-dev://app/env-1/thread-1");
+      yield* Effect.yieldNow;
+      openUrl(app, DEV_LINK);
+      yield* Effect.yieldNow;
+      assert.strictEqual(activate.mock.calls.length, 1);
     }).pipe(Effect.scoped, Effect.provide(layer));
   });
 });
