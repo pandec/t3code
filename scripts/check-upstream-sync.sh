@@ -13,7 +13,6 @@ UPSTREAM_REMOTE="upstream-sync"
 UPSTREAM_REF="${UPSTREAM_REMOTE}/main"
 ORIGIN_MAIN="origin/main"
 ORIGIN_DEV="origin/dev"
-MAX_LISTED_COMMITS=15
 
 fetch=true
 for arg in "$@"; do
@@ -98,29 +97,9 @@ if [ "$upstream_missing_from_dev" -eq 0 ] && [ "$upstream_ahead_of_main" -eq 0 ]
   exit 0
 fi
 
-if [ "$upstream_ahead_of_main" -gt 0 ]; then
-  echo "  ${yellow}${upstream_ahead_of_main}${reset} upstream commit(s) not yet mirrored to ${ORIGIN_MAIN}."
-fi
 if [ "$upstream_missing_from_dev" -gt 0 ]; then
-  echo "  ${yellow}${upstream_missing_from_dev}${reset} upstream commit(s) not yet merged into ${ORIGIN_DEV}."
-fi
-
-if [ "$upstream_missing_from_dev" -gt 0 ]; then
-  echo
-  echo "  ${bold}Pending upstream commits${reset} ${dim}(newest first)${reset}"
-  git log --format="    %h  %ad  %s" --date=short --max-count="$MAX_LISTED_COMMITS" \
-    "${ORIGIN_DEV}..${UPSTREAM_REF}"
-  if [ "$upstream_missing_from_dev" -gt "$MAX_LISTED_COMMITS" ]; then
-    echo "    ${dim}... and $((upstream_missing_from_dev - MAX_LISTED_COMMITS)) more${reset}"
-  fi
-
-  echo
-  echo "  ${bold}Files they touch${reset} ${dim}(top 10 by change count)${reset}"
-  git diff --numstat "${ORIGIN_DEV}...${UPSTREAM_REF}" |
-    awk '{ print $1 + $2, $3 }' |
-    sort -rn |
-    head -10 |
-    awk '{ printf "    %6s  %s\n", $1, $2 }'
+  files_touched=$(git diff --name-only "${ORIGIN_DEV}...${UPSTREAM_REF}" | { grep -c . || true; })
+  echo "  ${yellow}${upstream_missing_from_dev}${reset} upstream commit(s) not yet merged into ${ORIGIN_DEV}, touching ${yellow}${files_touched}${reset} file(s)."
 
   merge_base=$(git merge-base "$ORIGIN_DEV" "$UPSTREAM_REF")
   overlap_count=$(comm -12 \
@@ -139,8 +118,7 @@ if [ "$upstream_missing_from_dev" -gt 0 ]; then
   elif [ "$merge_status" -eq 1 ]; then
     conflict_paths=$(printf '%s\n' "$merge_output" | tail -n +2 | sort -u)
     conflict_count=$(printf '%s\n' "$conflict_paths" | { grep -c . || true; })
-    echo "    ${yellow}${conflict_count}${reset} path(s) predicted to conflict:"
-    printf '%s\n' "$conflict_paths" | sed 's/^/      /'
+    echo "    ${yellow}${conflict_count}${reset} path(s) predicted to conflict."
     if [ "$conflict_count" -ge 15 ]; then
       echo
       echo "    ${yellow}Broad merge${reset} ${dim}— expect a long resolution phase; plan the sync accordingly.${reset}"
@@ -150,6 +128,4 @@ if [ "$upstream_missing_from_dev" -gt 0 ]; then
   fi
 fi
 
-echo
-echo "  ${bold}Sync needed.${reset} Start a thread on ${ORIGIN_DEV} and run the ${bold}/sync-upstream${reset} skill."
 echo
