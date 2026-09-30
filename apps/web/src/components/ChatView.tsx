@@ -243,6 +243,7 @@ import { isEditableFocused } from "../lib/editableFocus";
 import ThreadTerminalDrawer from "./ThreadTerminalDrawer";
 import {
   AlarmClockIcon,
+  ArchiveIcon,
   CheckCircle2Icon,
   ChevronDownIcon,
   DownloadIcon,
@@ -1542,7 +1543,7 @@ export default function ChatView(props: ChatViewProps) {
   const threadSyncPhase = routeKind === "server" ? (props.threadSyncPhase ?? null) : null;
   const threadDetailLoading = threadSyncPhase === "loading";
   const handleNewThread = useNewThreadHandler();
-  const { settleThread, pinThread, confirmAndUnpinThread } = useThreadActions();
+  const { settleThread, pinThread, confirmAndUnpinThread, unarchiveThread } = useThreadActions();
   const routeThreadRef = useMemo(
     () => scopeThreadRef(environmentId, threadId),
     [environmentId, threadId],
@@ -6620,6 +6621,49 @@ export default function ChatView(props: ChatViewProps) {
     isUnsnoozing,
     isUnsettling,
   ]);
+  const activeThreadArchived = isServerThread && activeThread?.archivedAt != null;
+  const [unarchivingThreadKey, setUnarchivingThreadKey] = useState<string | null>(null);
+  const isUnarchiving = unarchivingThreadKey !== null && unarchivingThreadKey === activeThreadKey;
+  const handleUnarchiveActiveThread = useCallback(async () => {
+    if (!activeThreadRef) return;
+    const threadKey = scopedThreadKey(activeThreadRef);
+    setUnarchivingThreadKey(threadKey);
+    try {
+      const result = await unarchiveThread(activeThreadRef);
+      if (result._tag === "Failure" && !isAtomCommandInterrupted(result)) {
+        const error = squashAtomCommandFailure(result);
+        toastManager.add(
+          stackedThreadToast({
+            type: "error",
+            title: "Failed to unarchive thread",
+            description: error instanceof Error ? error.message : "An error occurred.",
+          }),
+        );
+      }
+    } finally {
+      setUnarchivingThreadKey((current) => (current === threadKey ? null : current));
+    }
+  }, [activeThreadRef, unarchiveThread]);
+  // Archived threads open from the sidebar's archive shelf and from desktop thread links.
+  const archivedThreadBannerItem = useMemo<ComposerBannerStackItem | null>(() => {
+    if (!activeThreadArchived) return null;
+    return {
+      id: `thread-archived:${activeThreadKey ?? "unknown"}`,
+      variant: "info",
+      icon: <ArchiveIcon />,
+      title: "This thread is archived",
+      actions: (
+        <Button
+          size="xs"
+          variant="ghost"
+          disabled={isUnarchiving}
+          onClick={() => void handleUnarchiveActiveThread()}
+        >
+          {isUnarchiving ? "Unarchiving..." : "Unarchive"}
+        </Button>
+      ),
+    };
+  }, [activeThreadArchived, activeThreadKey, handleUnarchiveActiveThread, isUnarchiving]);
   // Session-scoped dismissals, one key per (thread, snapshot). A set rather
   // than a single slot so dismissing the banner on one thread does not
   // resurface it on another thread dismissed earlier.
@@ -6752,6 +6796,7 @@ export default function ChatView(props: ChatViewProps) {
       resumeCompactionBannerItem === null ? [] : [resumeCompactionBannerItem];
     const wokeThreadItems = wokeThreadBannerItem === null ? [] : [wokeThreadBannerItem];
     const parkedThreadItems = parkedThreadBannerItem === null ? [] : [parkedThreadBannerItem];
+    const archivedThreadItems = archivedThreadBannerItem === null ? [] : [archivedThreadBannerItem];
     // The user asked for this one, so it leads the notice tier instead of trailing it.
     const usageLimitsItems = usageLimitsBanner === null ? [] : [usageLimitsBanner];
     const projectCloneItems = projectCloneBannerItem === null ? [] : [projectCloneBannerItem];
@@ -6765,6 +6810,7 @@ export default function ChatView(props: ChatViewProps) {
         ...resumeCompactionItems,
         ...wokeThreadItems,
         ...parkedThreadItems,
+        ...archivedThreadItems,
       ];
     }
     return [
@@ -6814,9 +6860,11 @@ export default function ChatView(props: ChatViewProps) {
         },
       },
       ...parkedThreadItems,
+      ...archivedThreadItems,
     ];
   }, [
     activeBranchMismatchKey,
+    archivedThreadBannerItem,
     backgroundLivenessBannerItem,
     feedbackBannerItems,
     handleRestoreThreadBranch,
