@@ -57,6 +57,7 @@ import * as DesktopPreReadyPlatform from "./app/DesktopPreReadyPlatform.ts";
 import * as DesktopShellEnvironment from "./shell/DesktopShellEnvironment.ts";
 import * as DesktopSshEnvironment from "./ssh/DesktopSshEnvironment.ts";
 import * as DesktopSshPasswordPrompts from "./ssh/DesktopSshPasswordPrompts.ts";
+import * as DesktopThreadLinks from "./app/DesktopThreadLinks.ts";
 import * as DesktopState from "./app/DesktopState.ts";
 import * as DesktopTelemetryPublisher from "./telemetry/DesktopTelemetryPublisher.ts";
 import * as DesktopUpdates from "./updates/DesktopUpdates.ts";
@@ -68,6 +69,10 @@ import * as DesktopWindow from "./window/DesktopWindow.ts";
 import * as DesktopWslBackend from "./wsl/DesktopWslBackend.ts";
 import * as DesktopWslEnvironment from "./wsl/DesktopWslEnvironment.ts";
 import * as DesktopWslServerTree from "./wsl/DesktopWslServerTree.ts";
+
+// Listens synchronously, before the runtime builds any layer, so a macOS
+// cold-start `open-url` cannot fire ahead of its listener.
+const threadLinkInbox = new DesktopThreadLinks.DesktopThreadLinkInbox(Electron.app, process.argv);
 
 const desktopEnvironmentLayer = Layer.unwrap(
   Effect.gen(function* () {
@@ -166,6 +171,9 @@ const desktopSnapShotLayer = DesktopSnapShot.layer.pipe(
 const desktopAppActivationLayer = DesktopAppActivation.layer.pipe(
   Layer.provide(desktopWindowLayer),
 );
+const desktopThreadLinksLayer = DesktopThreadLinks.layer(threadLinkInbox).pipe(
+  Layer.provide(desktopWindowLayer),
+);
 
 // Pool layer instantiates the backend factory once for the Windows
 // primary instance and exposes it via pool.primary. Consumers go through
@@ -195,6 +203,7 @@ const desktopLocalEnvironmentAuthLayer = DesktopLocalEnvironmentAuth.layer.pipe(
 const desktopApplicationLayer = Layer.mergeAll(
   DesktopLifecycle.layer,
   desktopAppActivationLayer,
+  desktopThreadLinksLayer,
   DesktopApplicationMenu.layer,
   DesktopLinuxUrlHandler.layer,
   DesktopShellEnvironment.layer,

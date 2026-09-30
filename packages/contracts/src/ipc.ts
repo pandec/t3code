@@ -29,6 +29,13 @@ import type {
   DesktopAppActivationResponse,
 } from "./desktopAppActivation.ts";
 
+/** A `<scheme>://app/<environmentId>/<threadId>` link the desktop shell forwards to the renderer. */
+export interface DesktopThreadLink {
+  /** An environment id, or `primary` for the desktop's primary environment. */
+  readonly environmentId: string;
+  readonly threadId: string;
+}
+
 export interface ContextMenuItem<T extends string = string> {
   id: T;
   label: string;
@@ -1261,6 +1268,11 @@ export interface DesktopBridge {
     setReady: (ready: boolean) => Promise<void>;
     complete: (response: DesktopAppActivationResponse) => Promise<void>;
     onRequest: (listener: (request: DesktopAppActivationRequest) => void) => () => void;
+  };
+  /** Present when the desktop shell forwards thread links opened from other apps. */
+  threadLinks?: {
+    setReady: (ready: boolean) => Promise<void>;
+    onOpen: (listener: (link: DesktopThreadLink) => void) => () => void;
   };
   /**
    * OS-level notifications routed through the Electron main process.
