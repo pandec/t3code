@@ -7,6 +7,11 @@ import * as Option from "effect/Option";
 import * as Schema from "effect/Schema";
 import * as Scope from "effect/Scope";
 
+import { codexAuthDeliveryUrl, readCodexAuthHandoff } from "@t3tools/shared/codexAuthHandoff";
+import { receiveCodexAuthCallback, CodexAuthCallbackError } from "./CodexAuthCallback.ts";
+import * as ElectronShell from "../electron/ElectronShell.ts";
+import { providerAuthReturnUrl } from "@t3tools/shared/providerAuthReturnUrl";
+import { HostProcessArguments } from "@t3tools/shared/hostProcess";
 import { clerkFrontendApiHostnameFromPublishableKey } from "@t3tools/shared/relayAuth";
 import * as ElectronApp from "../electron/ElectronApp.ts";
 import * as ElectronProtocol from "../electron/ElectronProtocol.ts";
@@ -87,6 +92,7 @@ function createDesktopClerkBridge(stateDir: string, isDevelopment: boolean) {
 export const make = Effect.gen(function* () {
   const environment = yield* DesktopEnvironment.DesktopEnvironment;
   const electronApp = yield* ElectronApp.ElectronApp;
+  const shell = yield* ElectronShell.ElectronShell;
 
   // Electron scopes the single-instance lock to the userData directory and
   // creates that directory when the lock is acquired. The SDK bridge takes
@@ -137,13 +143,63 @@ export const make = Effect.gen(function* () {
         return yield* Effect.interrupt;
       }
 
-      yield* electronApp.on("second-instance", () => {
+      const startProviderAuthHandoff = (value: string | undefined) => {
+        if (!value) return false;
+        // A packaged Dev build registers the dev scheme without a Vite server.
+        const request = readCodexAuthHandoff(value, environment.usesDevelopmentIdentity);
+        if (!request) return false;
+        void runPromise(
+          Effect.gen(function* () {
+            yield* electronApp.whenReady;
+            yield* Effect.tryPromise({
+              try: () =>
+                receiveCodexAuthCallback(
+                  request.authorizationUrl,
+                  (url) => runPromise(shell.openExternal(url)),
+                  (callbackUrl) => codexAuthDeliveryUrl(request, callbackUrl),
+                ),
+              catch: () =>
+                new CodexAuthCallbackError({
+                  detail:
+                    "Could not receive hosted web ChatGPT sign-in. Retry or use the redirect URL in the web app.",
+                }),
+            });
+          }).pipe(
+            Effect.catch(() => Effect.logWarning("Could not complete ChatGPT desktop handoff.")),
+          ),
+        );
+        return true;
+      };
+      const resumeProviderAuth = (value: string | undefined) => {
+        const destination = providerAuthReturnUrl(value);
+        const scheme = ElectronProtocol.getDesktopScheme(environment.usesDevelopmentIdentity);
+        if (!destination?.startsWith(`${scheme}://app/`)) return false;
         void runPromise(
           Effect.gen(function* () {
             const mainWindow = yield* electronWindow.currentMainOrFirst;
-            if (Option.isSome(mainWindow)) {
-              yield* electronWindow.reveal(mainWindow.value);
-            }
+            if (Option.isNone(mainWindow)) return;
+            yield* Effect.promise(() => mainWindow.value.loadURL(destination));
+            yield* electronWindow.reveal(mainWindow.value);
+          }).pipe(
+            Effect.catchCause((cause) =>
+              Effect.logWarning("Could not return to provider setup", cause),
+            ),
+          ),
+        );
+        return true;
+      };
+      const args = yield* HostProcessArguments;
+      args.some((value) => startProviderAuthHandoff(value));
+      yield* electronApp.on("open-url", (event: { preventDefault: () => void }, url: string) => {
+        if (startProviderAuthHandoff(url) || resumeProviderAuth(url)) event.preventDefault();
+      });
+      yield* electronApp.on("second-instance", (_event: unknown, argv: readonly string[]) => {
+        if (argv?.some((value) => startProviderAuthHandoff(value) || resumeProviderAuth(value)))
+          return;
+        void runPromise(
+          Effect.gen(function* () {
+            const mainWindow = yield* electronWindow.currentMainOrFirst;
+            if (Option.isSome(mainWindow)) yield* electronWindow.reveal(mainWindow.value);
           }),
         );
       });

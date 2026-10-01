@@ -719,6 +719,12 @@ const program = Effect.gen(function* () {
       const requestedSessionId = String(request.sessionId ?? sessionId);
       promptCount += 1;
       const currentPromptCount = promptCount;
+      if (
+        process.env.T3_ACP_CRASH_PROMPT === "1" &&
+        request.prompt.some((part) => part.type === "text" && part.text === "crash now")
+      ) {
+        return yield* Effect.sync(() => process.exit(23));
+      }
 
       if (
         currentPromptCount === 1 &&

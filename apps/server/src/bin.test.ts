@@ -27,6 +27,7 @@ import { assert, it } from "@effect/vitest";
 import * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
+import * as Option from "effect/Option";
 import * as Stream from "effect/Stream";
 import * as HttpRouter from "effect/unstable/http/HttpRouter";
 import { FetchHttpClient, HttpServer } from "effect/unstable/http";
@@ -78,6 +79,7 @@ import {
 } from "./cli/orchestration.ts";
 import { ProjectActionServerUnsupportedError } from "./cli/project.ts";
 import { ProjectNotFoundError } from "./cli/projectTarget.ts";
+import { GitWorkflowService } from "./git/GitWorkflowService.ts";
 
 import packageJson from "../package.json" with { type: "json" };
 
@@ -275,6 +277,7 @@ const withLiveProjectCliServer = <A, E, R>(
         }),
       ),
       Layer.provideMerge(NodeServices.layer),
+      Layer.provide(Layer.mock(GitWorkflowService)({ isRepository: () => Effect.succeed(false) })),
       Layer.provide(ServerConfig.layer(config)),
     );
 
@@ -857,6 +860,88 @@ it.layer(NodeServices.layer)("bin cli parsing", (it) => {
           assert.isTrue(addedProject !== undefined);
           assert.equal(addedProject?.title, "Live Project");
         }),
+      );
+    }),
+  );
+
+  it.effect("allocates Scratch folders through HTTP create and bootstrap dispatch", () =>
+    Effect.gen(function* () {
+      const baseDir = NodeFS.realpathSync.native(
+        NodeFS.mkdtempSync(NodePath.join(NodeOS.tmpdir(), "t3-cli-scratch-test-")),
+      );
+      const workspaceRoot = NodePath.join(baseDir, "scratch");
+      NodeFS.mkdirSync(workspaceRoot);
+      let bootstrapFolder: string | null = null;
+      yield* withLiveProjectCliServer(
+        baseDir,
+        (origin) =>
+          Effect.gen(function* () {
+            yield* runCliWithRuntime(["project", "add", workspaceRoot, "--base-dir", baseDir]);
+            const query = yield* ProjectionSnapshotQuery.ProjectionSnapshotQuery;
+            const snapshot = yield* query.getSnapshot();
+            const project = snapshot.projects.find(
+              (candidate) => candidate.workspaceRoot === workspaceRoot,
+            );
+            if (!project) return assert.fail("Scratch project was not created");
+            const modelSelection = {
+              instanceId: ProviderInstanceId.make("codex"),
+              model: "gpt-5-codex",
+            };
+            const createdAt = "2026-10-01T00:00:00.000Z";
+            const threadId = ThreadId.make("thread-cli-scratch-create");
+            const createThread = {
+              projectId: project.id,
+              title: "Keep these files",
+              modelSelection,
+              runtimeMode: "full-access" as const,
+              interactionMode: "default" as const,
+              branch: null,
+              worktreePath: null,
+              createdAt,
+            };
+            const auth = yield* EnvironmentAuth.EnvironmentAuth;
+            yield* withCliOrchestrationSession(auth, "Scratch HTTP test", (token) =>
+              Effect.gen(function* () {
+                yield* dispatchLiveOrchestrationCommand(origin, token, {
+                  type: "thread.create",
+                  commandId: CommandId.make("scratch-create"),
+                  threadId,
+                  ...createThread,
+                });
+                yield* dispatchLiveOrchestrationCommand(origin, token, {
+                  type: "thread.turn.start",
+                  commandId: CommandId.make("scratch-bootstrap"),
+                  threadId: ThreadId.make("thread-cli-scratch-bootstrap"),
+                  message: {
+                    messageId: MessageId.make("scratch-message"),
+                    role: "user",
+                    text: "Resize the images",
+                    attachments: [],
+                  },
+                  modelSelection,
+                  runtimeMode: "full-access",
+                  interactionMode: "default",
+                  bootstrap: { createThread },
+                  createdAt,
+                });
+              }),
+            ).pipe(Effect.provide(FetchHttpClient.layer));
+            const created = yield* query.getThreadShellById(threadId);
+            if (Option.isNone(created) || created.value.worktreePath === null)
+              return assert.fail("Missing Scratch folder");
+            assert.equal(NodePath.dirname(created.value.worktreePath), workspaceRoot);
+            assert.isTrue(NodeFS.existsSync(created.value.worktreePath));
+            assert.isString(bootstrapFolder);
+            assert.notEqual(bootstrapFolder, created.value.worktreePath);
+            assert.isTrue(NodeFS.existsSync(bootstrapFolder!));
+          }),
+        {
+          dispatchTurnStart: (command) =>
+            Effect.sync(() => {
+              bootstrapFolder = command.bootstrap?.createThread?.worktreePath ?? null;
+              return { sequence: 999 };
+            }),
+        },
       );
     }),
   );

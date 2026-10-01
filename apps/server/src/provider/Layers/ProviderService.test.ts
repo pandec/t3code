@@ -81,6 +81,9 @@ import { makeAdapterRegistryMock } from "../testUtils/providerAdapterRegistryMoc
 import * as ProjectionSnapshotQuery from "../../orchestration/Services/ProjectionSnapshotQuery.ts";
 
 const encodeJson = Schema.encodeSync(Schema.fromJsonString(Schema.Unknown));
+const decodeSessionGeneration = Schema.decodeUnknownSync(
+  Schema.Struct({ sessionGenerationId: Schema.String }),
+);
 const defaultServerSettingsLayer = ServerSettings.ServerSettingsService.layerTest();
 const serverConfigTestLayer = ServerConfig.layerTest(process.cwd(), {
   prefix: "t3-provider-service-test-",
@@ -221,6 +224,13 @@ function makeFakeCodexAdapter(
     }),
   );
 
+  const prepareTurn = vi.fn(
+    (
+      _threadId: ThreadId,
+    ): Effect.Effect<ProviderSessionStartInput | undefined, ProviderAdapterError> =>
+      Effect.succeed(undefined),
+  );
+
   const sendTurn = vi.fn(
     (
       input: ProviderSendTurnInput,
@@ -333,6 +343,7 @@ function makeFakeCodexAdapter(
       ...(provider === CODEX_DRIVER ? { promptlessTurnContinuation: true } : {}),
     },
     startSession,
+    prepareTurn,
     ...(provider === CODEX_DRIVER || provider === CLAUDE_AGENT_DRIVER ? { forkSession } : {}),
     sendTurn,
     ...(provider === CODEX_DRIVER
@@ -383,6 +394,7 @@ function makeFakeCodexAdapter(
     },
     startSession,
     forkSession,
+    prepareTurn,
     sendTurn,
     compactThread,
     interruptTurn,
@@ -480,6 +492,7 @@ function makeProviderServiceLayer(
     readonly directory?: ProviderSessionDirectory.ProviderSessionDirectory["Service"];
     readonly supportsConversationRollback?: boolean;
     readonly analyticsLayer?: Layer.Layer<AnalyticsService.AnalyticsService>;
+    readonly settingsLayer?: typeof defaultServerSettingsLayer;
     readonly registry?: ProviderAdapterRegistry.ProviderAdapterRegistry["Service"];
   } = {},
 ) {
@@ -512,7 +525,7 @@ function makeProviderServiceLayer(
         Layer.provide(NodeServices.layer),
         Layer.provide(providerAdapterLayer),
         Layer.provide(directoryLayer),
-        Layer.provide(defaultServerSettingsLayer),
+        Layer.provide(input.settingsLayer ?? defaultServerSettingsLayer),
         Layer.provide(serverConfigTestLayer),
         Layer.provideMerge(input.analyticsLayer ?? AnalyticsService.layerTest),
         Layer.provide(
@@ -4331,6 +4344,108 @@ fanout.layer("ProviderServiceLive fanout", (it) => {
     }),
   );
 
+  it.effect(
+    "replaces refreshed credentials before sending and fences runtime errors until generation persistence",
+    () =>
+      Effect.gen(function* () {
+        const provider = yield* ProviderService.ProviderService;
+        const directory = yield* ProviderSessionDirectory.ProviderSessionDirectory;
+        const readGenerationForTest = (payload: unknown) =>
+          decodeSessionGeneration(payload).sessionGenerationId;
+        const threadId = asThreadId("thread-managed-refresh");
+        const cwd = fixtureCwd("managed-refresh-worktree");
+        const cursor = { threadId: "native-managed", strictResume: true };
+        const initial = yield* provider.startSession(threadId, {
+          provider: CODEX_DRIVER,
+          providerInstanceId: codexInstanceId,
+          threadId,
+          runtimeMode: "full-access",
+          cwd,
+          resumeCursor: cursor,
+        });
+        const delivered = yield* Deferred.make<void>();
+        const observed: ProviderRuntimeEvent[] = [];
+        const currentErrorId = asEventId("managed-refresh-current-error");
+        const consumer = yield* provider.streamEvents.pipe(
+          Stream.filter((event) => event.threadId === threadId),
+          Stream.runForEach((event) =>
+            Effect.gen(function* () {
+              observed.push(event);
+              if (event.eventId !== currentErrorId) return;
+              const binding = Option.getOrThrow(yield* directory.getBinding(threadId));
+              assert.equal(
+                readGenerationForTest(binding.runtimePayload),
+                event.type === "runtime.error" ? event.payload.sessionGenerationId : undefined,
+              );
+              yield* Deferred.succeed(delivered, undefined);
+            }),
+          ),
+          Effect.forkChild,
+        );
+        yield* Effect.yieldNow;
+        fanout.codex.prepareTurn.mockImplementationOnce(() =>
+          Effect.succeed({
+            threadId,
+            provider: CODEX_DRIVER,
+            runtimeMode: "full-access",
+            cwd,
+            resumeCursor: cursor,
+          }),
+        );
+        fanout.codex.setBeforeSessionStored((replacement) =>
+          Effect.sync(() => {
+            fanout.codex.emit({
+              type: "runtime.error",
+              eventId: asEventId("managed-refresh-stale-error"),
+              provider: CODEX_DRIVER,
+              threadId,
+              createdAt: "2026-01-01T00:00:01.000Z",
+              payload: {
+                message: "old credentials",
+                sessionGenerationId: initial.sessionGenerationId,
+              },
+            });
+            fanout.codex.emit({
+              type: "runtime.error",
+              eventId: currentErrorId,
+              provider: CODEX_DRIVER,
+              threadId,
+              createdAt: "2026-01-01T00:00:02.000Z",
+              payload: {
+                message: "current credentials",
+                sessionGenerationId: replacement.sessionGenerationId,
+              },
+            });
+          }).pipe(Effect.andThen(Effect.yieldNow)),
+        );
+        fanout.codex.sendTurn.mockImplementationOnce((input) =>
+          Effect.gen(function* () {
+            const binding = Option.getOrThrow(
+              yield* directory.getBinding(threadId).pipe(Effect.orDie),
+            );
+            assert.notEqual(
+              readGenerationForTest(binding.runtimePayload),
+              initial.sessionGenerationId,
+            );
+            assert.deepEqual(binding.resumeCursor, cursor);
+            return { threadId: input.threadId, turnId: asTurnId("managed-refresh-turn") };
+          }),
+        );
+        yield* provider
+          .sendTurn({ threadId, input: "continue after refresh" })
+          .pipe(Effect.ensuring(Effect.sync(() => fanout.codex.setBeforeSessionStored(undefined))));
+        yield* Deferred.await(delivered);
+        yield* Fiber.interrupt(consumer);
+        assert.deepEqual(
+          observed.map((event) => event.eventId),
+          [currentErrorId],
+        );
+        const lastStart = fanout.codex.startSession.mock.calls.at(-1)?.[0];
+        assert.equal(lastStart?.cwd, cwd);
+        assert.deepEqual(lastStart?.resumeCursor, cursor);
+      }),
+  );
+
   it.effect("clears the pending replacement marker when startup is interrupted", () =>
     Effect.gen(function* () {
       const provider = yield* ProviderService.ProviderService;
@@ -6438,6 +6553,7 @@ describe("agent browser access", () => {
     projectOverride?: boolean | { readonly browser?: boolean; readonly device?: boolean },
     options?: {
       readonly withoutOrchestration?: boolean;
+      readonly refreshBeforeTurn?: boolean;
       readonly available?: boolean;
       readonly enabled?: boolean;
     },
@@ -6560,12 +6676,21 @@ describe("agent browser access", () => {
 
       yield* Effect.gen(function* () {
         const provider = yield* ProviderService.ProviderService;
-        return yield* provider.startSession(threadId, {
+        yield* provider.startSession(threadId, {
           provider: CODEX_DRIVER,
           providerInstanceId: codexInstanceId,
           threadId,
           runtimeMode: "full-access",
         });
+        if (options?.refreshBeforeTurn) {
+          codex.prepareTurn.mockImplementationOnce(() =>
+            Effect.succeed({
+              threadId,
+              runtimeMode: "full-access",
+            }),
+          );
+          yield* provider.sendTurn({ threadId, input: "continue with refreshed credentials" });
+        }
       }).pipe(Effect.provide(providerLayer));
 
       return issued;
@@ -6591,6 +6716,22 @@ describe("agent browser access", () => {
         }),
         [{ threadId: disabledThread, capabilities: ["pull-requests"] }],
       );
+    }).pipe(Effect.provide(NodeServices.layer)),
+  );
+
+  it.effect("revalidates project MCP capabilities when credentials require a replacement", () =>
+    Effect.gen(function* () {
+      const threadId = asThreadId("thread-managed-refresh-mcp");
+      const issued = yield* startSessionWith(
+        { browser: true, device: true },
+        threadId,
+        { browser: false, device: false },
+        { refreshBeforeTurn: true },
+      );
+      assert.deepEqual(issued, [
+        { threadId, capabilities: ["pull-requests"] },
+        { threadId, capabilities: ["pull-requests"] },
+      ]);
     }).pipe(Effect.provide(NodeServices.layer)),
   );
 
@@ -6689,5 +6830,91 @@ describe("agent browser access", () => {
       );
       assert.deepEqual(issued, [{ threadId, capabilities: ["preview", "pull-requests"] }]);
     }).pipe(Effect.provide(NodeServices.layer)),
+  );
+});
+
+const chatGptAnalytics = makeRecordingAnalytics();
+const chatGptAdapter = makeFakeCodexAdapter();
+const chatGptTelemetry = makeProviderServiceLayer({
+  analyticsLayer: chatGptAnalytics.layer,
+  settingsLayer: ServerSettings.ServerSettingsService.layerTest({
+    providerInstances: {
+      [secondaryCodexInstanceId]: { driver: CODEX_DRIVER, config: { setupMode: "managed" } },
+    },
+  }),
+  registry: makeStaticInstanceRegistry([[secondaryCodexInstanceId, chatGptAdapter.adapter]]),
+});
+chatGptTelemetry.layer("ChatGPT connector turn analytics", (it) => {
+  it.effect("tags attempts, sends, and one terminal outcome without recording the prompt", () =>
+    Effect.gen(function* () {
+      chatGptAnalytics.reset();
+      const provider = yield* ProviderService.ProviderService;
+      const threadId = asThreadId("chatgpt-analytics-success");
+      yield* provider.startSession(threadId, {
+        provider: CODEX_DRIVER,
+        providerInstanceId: secondaryCodexInstanceId,
+        threadId,
+        runtimeMode: "full-access",
+      });
+      const turn = yield* provider.sendTurn({ threadId, input: "private test prompt" });
+      const drain = yield* Stream.take(provider.streamEvents, 2).pipe(
+        Stream.runDrain,
+        Effect.forkChild,
+      );
+      yield* Effect.yieldNow;
+      const completion: LegacyProviderRuntimeEvent = {
+        type: "turn.completed",
+        eventId: asEventId("chatgpt-completed"),
+        provider: CODEX_DRIVER,
+        createdAt: "2026-01-01T00:00:00.000Z",
+        threadId,
+        turnId: turn.turnId,
+        payload: { state: "completed" },
+      };
+      chatGptAdapter.emit(completion);
+      chatGptAdapter.emit({ ...completion, eventId: asEventId("chatgpt-completed-duplicate") });
+      yield* Fiber.join(drain);
+      for (const event of [
+        "provider.turn.attempted",
+        "provider.turn.sent",
+        "provider.turn.completed",
+      ]) {
+        const events = chatGptAnalytics.eventsByName(event);
+        assert.equal(events.length, 1);
+        assert.equal(events[0]?.properties?.subscriptionSharing, true);
+        assert.notProperty(events[0]?.properties ?? {}, "input");
+        assert.notProperty(events[0]?.properties ?? {}, "threadId");
+        assert.notProperty(events[0]?.properties ?? {}, "providerInstanceId");
+      }
+    }),
+  );
+  it.effect("records rejected sends as failures without an accepted-turn event", () =>
+    Effect.gen(function* () {
+      chatGptAnalytics.reset();
+      const provider = yield* ProviderService.ProviderService;
+      const threadId = asThreadId("chatgpt-analytics-rejection");
+      yield* provider.startSession(threadId, {
+        provider: CODEX_DRIVER,
+        providerInstanceId: secondaryCodexInstanceId,
+        threadId,
+        runtimeMode: "full-access",
+      });
+      chatGptAdapter.sendTurn.mockImplementationOnce(() =>
+        Effect.fail(new ProviderAdapterSessionNotFoundError({ provider: CODEX_DRIVER, threadId })),
+      );
+      const result = yield* provider
+        .sendTurn({ threadId, input: "private rejected prompt" })
+        .pipe(Effect.result);
+      assert.equal(result._tag, "Failure");
+      assert.equal(chatGptAnalytics.eventsByName("provider.turn.attempted").length, 1);
+      assert.equal(chatGptAnalytics.eventsByName("provider.turn.sent").length, 0);
+      const rejected = chatGptAnalytics.eventsByName("provider.turn.rejected");
+      assert.equal(rejected.length, 1);
+      assert.deepStrictEqual(rejected[0]?.properties, {
+        provider: CODEX_DRIVER,
+        subscriptionSharing: true,
+        errorType: "ProviderAdapterSessionNotFoundError",
+      });
+    }),
   );
 });

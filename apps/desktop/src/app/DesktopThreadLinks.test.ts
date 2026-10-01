@@ -48,6 +48,10 @@ describe("parseDesktopThreadLink", () => {
     for (const url of [
       DEV_LINK.replace("t3code-dev:", "t3code:"),
       "t3code-dev://app/",
+      // Provider sign-in returns, routed by DesktopClerk.
+      "t3code-dev://app/settings/providers",
+      "t3code-dev://app/settings/providers?instanceId=work",
+      "t3code-dev://app/welcome",
       "t3code-dev://app/primary",
       `t3code-dev://app/primary/${THREAD_ID}/`,
       `t3code-dev://app/primary/${THREAD_ID}/extra`,

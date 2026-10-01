@@ -4,9 +4,9 @@
  *
  * Provider catalogs and legacy classification live in `model-manifest.json`.
  * The bundled copy ships with every release; at runtime the service refreshes
- * it from the same file on `main`. Preference order is remote, then the last
- * successful on-disk copy, then the bundle. A failed fetch never fails a
- * provider check.
+ * it from the same file on `main`. Remote and cached copies older than the
+ * bundle are rejected; an eligible remote copy takes precedence over the cache
+ * and bundle. A failed fetch never fails a provider check.
  *
  * Providers with authoritative discovery can use only the classification
  * overlay. Providers with static catalogs can resolve presentation and
@@ -402,7 +402,11 @@ export const make = Effect.gen(function* () {
       Effect.timeout(FETCH_TIMEOUT_MS),
       Effect.catchCause(() => Effect.succeed(null)),
     );
-    if (fetched === null) return manifest;
+    // A CDN can still serve an earlier edit after a release. Apply the same
+    // freshness rule as the disk cache so it cannot undo bundled version gates.
+    if (fetched === null || manifestUpdatedAtMs(fetched) < manifestUpdatedAtMs(manifest)) {
+      return manifest;
+    }
 
     manifest = fetched;
     fetchedAtMs = now;

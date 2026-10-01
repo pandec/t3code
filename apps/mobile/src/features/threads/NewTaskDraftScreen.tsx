@@ -1227,7 +1227,11 @@ export function NewTaskDraftScreen(props: {
         selectedEnvironmentServerConfig,
         draft.modelSelection ?? null,
       ) ?? flow.selectedModel;
-    const workspaceMode = draft.workspaceSelection?.mode ?? flow.workspaceMode;
+    // A scratch draft may still hold a worktree pick saved while it had a
+    // project; the flow already resolved it to local, so do not re-read it.
+    const workspaceMode = flow.canChooseWorkspace
+      ? (draft.workspaceSelection?.mode ?? flow.workspaceMode)
+      : flow.workspaceMode;
     const selectedBranchName = draft.workspaceSelection?.branch ?? flow.selectedBranchName;
     const initialMessageText = draft.text.trim();
 
@@ -1634,7 +1638,7 @@ export function NewTaskDraftScreen(props: {
           />
         </View>
       ) : null}
-      <View className="pb-1">{workspaceControls}</View>
+      {flow.canChooseWorkspace ? <View className="pb-1">{workspaceControls}</View> : null}
 
       {modelUnavailable ? (
         <Pressable

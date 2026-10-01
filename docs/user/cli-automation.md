@@ -411,6 +411,11 @@ commit, bootstrap starts in the project checkout. A failed setup script is repor
 turn continues in the created worktree. Check the returned `workspace.mode` and
 `workspace.worktreePath` before relying on isolation.
 
+For an existing **No project** project, use its workspace root with `--project` and
+`--checkout`. The server assigns each thread a separate plain folder; JSON reports
+`workspace.mode: "scratch"`, a null branch, and the folder in `worktreePath`. It is not a Git
+worktree, and archiving or deleting the thread keeps its files. The CLI still requires `--project`.
+
 `thread new --json` always includes a `workspace` object (`mode` plus `branch`/`worktreePath`,
 both `null` for the plain checkout mode). In new-worktree mode — whether from the explicit flag or
 the configured default — the server creates the thread as part of the turn start, so

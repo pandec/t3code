@@ -63,6 +63,7 @@ import {
   FolderPlusIcon,
   GitForkIcon,
   GroupIcon,
+  MessageSquareDashedIcon,
   LinkIcon,
   MessageSquareIcon,
   MonitorIcon,
@@ -132,6 +133,8 @@ import { useEnvironmentQuery } from "../state/query";
 import { sourceControlEnvironment } from "../state/sourceControl";
 import { useAtomCommand } from "../state/use-atom-command";
 import { useAtomQueryRunner } from "../state/use-atom-query-runner";
+import { useScratchProject } from "../hooks/useScratchProject";
+import { isScratchProject } from "@t3tools/client-runtime/state/projects";
 import { useEnvironments, usePrimaryEnvironmentId } from "../state/environments";
 import {
   readEnvironmentSupportsActiveReorder,
@@ -849,6 +852,7 @@ function OpenCommandPaletteDialog(props: {
   const createProject = useAtomCommand(projectEnvironment.create, {
     reportFailure: false,
   });
+  const { scratchEnvironmentId, scratchWorkspaceRootFor, startScratchThread } = useScratchProject();
   const lookupRepository = useAtomQueryRunner(sourceControlEnvironment.repository, {
     reportFailure: false,
   });
@@ -1145,21 +1149,23 @@ function OpenCommandPaletteDialog(props: {
   );
 
   const addProjectEnvironmentOptions = useMemo(() => {
-    const options = environments.map((environment): AddProjectEnvironmentOption => {
-      const isPrimary = environment.entry.target._tag === "PrimaryConnectionTarget";
-      return {
-        environmentId: environment.environmentId,
-        label: resolveEnvironmentOptionLabel({
-          isPrimary,
+    const options = environments
+      .filter((environment) => canCreateProjectInEnvironment(environment.connection.phase))
+      .map((environment): AddProjectEnvironmentOption => {
+        const isPrimary = environment.entry.target._tag === "PrimaryConnectionTarget";
+        return {
           environmentId: environment.environmentId,
-          runtimeLabel: environment.label,
-        }),
-        isPrimary,
-        machine: resolveEnvironmentMachineKind(environment.serverConfig),
-        isConnected: canCreateProjectInEnvironment(environment.connection.phase),
-        status: connectionStatusText(environment.connection),
-      };
-    });
+          label: resolveEnvironmentOptionLabel({
+            isPrimary,
+            environmentId: environment.environmentId,
+            runtimeLabel: environment.label,
+          }),
+          isPrimary,
+          machine: resolveEnvironmentMachineKind(environment.serverConfig),
+          isConnected: canCreateProjectInEnvironment(environment.connection.phase),
+          status: connectionStatusText(environment.connection),
+        };
+      });
 
     options.sort((left, right) => {
       if (left.isPrimary !== right.isPrimary) {
@@ -1303,6 +1309,11 @@ function OpenCommandPaletteDialog(props: {
   const currentProjectEnvironmentId =
     activeThread?.environmentId ?? activeDraftThread?.environmentId ?? null;
   const currentProjectId = activeThread?.projectId ?? activeDraftThread?.projectId ?? null;
+  // Where "without a project" threads start: the current environment when it
+  // offers them, otherwise the first connected one that does.
+  const scratchTargetEnvironmentId = scratchEnvironmentId(
+    currentProjectEnvironmentId ?? primaryEnvironmentId,
+  );
   const currentProjectKey =
     currentProjectEnvironmentId !== null && currentProjectId !== null
       ? `${currentProjectEnvironmentId}:${currentProjectId}`
@@ -1498,7 +1509,10 @@ function OpenCommandPaletteDialog(props: {
           : scopeProjectRef(project.environmentId, project.id);
       };
       const items = buildProjectActionItems({
-        projects: pickerProjects,
+        // The no-project home shows once, as the "No project" item below.
+        projects: pickerProjects.filter(
+          (project) => !isScratchProject(project, scratchWorkspaceRootFor(project.environmentId)),
+        ),
         valuePrefix:
           customGroupId === null ? "new-thread-in" : `new-thread-in-group:${customGroupId}`,
         searchTerms: (project) => {
@@ -1549,7 +1563,24 @@ function OpenCommandPaletteDialog(props: {
                   : "Environment cannot create grouped threads",
             }),
       });
-      return enumerateCommandPaletteItems(items);
+      // The no-project home is only offered on the ungrouped list: starting a
+      // scratch thread does not take a group.
+      return enumerateCommandPaletteItems([
+        ...items,
+        ...(customGroupId !== null || scratchTargetEnvironmentId === null
+          ? []
+          : [
+              {
+                kind: "action" as const,
+                value: "new-thread-in:no-project",
+                searchTerms: ["no project", "without project", "none"],
+                title: "No project",
+                icon: <MessageSquareDashedIcon className={ITEM_ICON_CLASS} />,
+                shortcutCommand: "chat.newWithoutProject" as const,
+                run: () => startScratchThread(scratchTargetEnvironmentId),
+              },
+            ]),
+      ]);
     },
     [
       contextualProjectRef,
@@ -1558,7 +1589,10 @@ function OpenCommandPaletteDialog(props: {
       projectAccentColorByTargetKey,
       projectEnvironmentLocationById,
       projectGroupByTargetKey,
+      scratchTargetEnvironmentId,
+      scratchWorkspaceRootFor,
       serverConfigs,
+      startScratchThread,
     ],
   );
   const projectThreadItems = useMemo(
@@ -1951,7 +1985,7 @@ function OpenCommandPaletteDialog(props: {
   );
 
   const openAddProjectFlow = useCallback(() => {
-    // With no environment at all there is nothing to browse, so the only
+    // With no connected environment there is nothing to browse, so the only
     // useful next step is connecting one.
     if (addProjectEnvironmentOptions.length === 0) {
       setOpen(false);
@@ -2154,6 +2188,18 @@ function OpenCommandPaletteDialog(props: {
         ],
       });
     }
+  }
+
+  if (scratchTargetEnvironmentId !== null) {
+    actionItems.push({
+      kind: "action",
+      value: "action:new-thread-without-project",
+      searchTerms: ["new thread", "no project", "without project", "none", "chat"],
+      title: "New thread without a project",
+      icon: <MessageSquareDashedIcon className={ITEM_ICON_CLASS} />,
+      shortcutCommand: "chat.newWithoutProject",
+      run: () => startScratchThread(scratchTargetEnvironmentId),
+    });
   }
 
   const savedPromptsSubmenu = buildSavedPromptsSubmenu({

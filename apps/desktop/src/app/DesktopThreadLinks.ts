@@ -1,4 +1,5 @@
 import type { DesktopThreadLink } from "@t3tools/contracts";
+import { providerAuthReturnUrl } from "@t3tools/shared/providerAuthReturnUrl";
 import * as Context from "effect/Context";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
@@ -38,7 +39,8 @@ function decodeLinkSegment(segment: string): string | null {
 
 /**
  * Parses `<scheme>://app/<environmentId>/<threadId>`. Everything else is not a
- * thread link, including the Clerk OAuth callback at `<scheme>://app/`.
+ * thread link, including the Clerk OAuth callback at `<scheme>://app/` and the
+ * provider sign-in returns under `/settings`, which DesktopClerk routes.
  */
 export function parseDesktopThreadLink(rawUrl: string, scheme: string): DesktopThreadLink | null {
   let url: URL;
@@ -48,6 +50,7 @@ export function parseDesktopThreadLink(rawUrl: string, scheme: string): DesktopT
     return null;
   }
   if (url.protocol !== `${scheme}:` || url.host !== ElectronProtocol.DESKTOP_HOST) return null;
+  if (providerAuthReturnUrl(rawUrl) !== undefined) return null;
   if (url.username !== "" || url.password !== "" || url.search !== "" || url.hash !== "") {
     return null;
   }

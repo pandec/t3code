@@ -11,6 +11,7 @@ import { describe, expect, it } from "vite-plus/test";
 import {
   archivedThreadMatchesSearch,
   backgroundActivitySharedPolicySettings,
+  buildCodexSetupModeInstance,
   buildProviderInstanceUpdatePatch,
   formatDiagnosticsDescription,
   getChangedBrowserSettingLabels,
@@ -274,6 +275,45 @@ describe("buildProviderInstanceUpdatePatch", () => {
 
     expect(patch.providerInstances?.[instanceId]).toEqual(nextInstance);
     expect(patch.providers).toBeUndefined();
+  });
+});
+
+describe("buildCodexSetupModeInstance", () => {
+  it("builds the mode switch on the pending instance so an unacknowledged write survives", () => {
+    const instanceId = ProviderInstanceId.make("codex");
+    // The row still shows the acknowledged instance; the overlay holds a
+    // binary path written moments ago that the server has not echoed yet.
+    const acknowledged = {
+      driver: ProviderDriverKind.make("codex"),
+      enabled: false,
+      config: { setupMode: "existing" },
+    } satisfies ProviderInstanceConfig;
+    const pending = new Map<ProviderInstanceId, ProviderInstanceConfig>([
+      [
+        instanceId,
+        {
+          ...acknowledged,
+          config: { ...acknowledged.config, binaryPath: "/opt/t3/codex" },
+        },
+      ],
+    ]);
+
+    const next = buildCodexSetupModeInstance(pending.get(instanceId) ?? acknowledged, "managed");
+
+    expect(next).toEqual({
+      driver: "codex",
+      enabled: true,
+      config: { setupMode: "managed", binaryPath: "/opt/t3/codex", enabled: true },
+    });
+  });
+
+  it("starts from an empty config when the instance has none", () => {
+    const next = buildCodexSetupModeInstance(
+      { driver: ProviderDriverKind.make("codex"), enabled: true, config: null },
+      "existing",
+    );
+
+    expect(next.config).toEqual({ enabled: true, setupMode: "existing" });
   });
 });
 

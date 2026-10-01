@@ -67,6 +67,7 @@ import { ProviderInstanceHealthLive } from "./provider/Layers/ProviderInstanceHe
 import { ProviderUsageRefreshLive } from "./provider/Layers/ProviderUsageRefreshLive.ts";
 import { ProviderServiceLive } from "./provider/Layers/ProviderService.ts";
 import { ProviderAuthServiceLive } from "./provider/Layers/ProviderAuthService.ts";
+import { CodexInstallation } from "./provider/CodexInstallation.ts";
 import { AntigravityInstallation } from "./provider/AntigravityInstallation.ts";
 import { ProviderInstanceRegistry } from "./provider/Services/ProviderInstanceRegistry.ts";
 import { ProviderRegistry } from "./provider/Services/ProviderRegistry.ts";
@@ -530,22 +531,27 @@ const ProviderRuntimeLayerLive = ProviderSessionReaperLive.pipe(
   Layer.provideMerge(OrchestrationLayerLive),
 );
 
-const AntigravityInstallationRefreshLive = Layer.effectDiscard(
+const ProviderInstallationRefreshLive = Layer.effectDiscard(
   Effect.gen(function* () {
-    const installation = yield* AntigravityInstallation;
+    const antigravity = yield* AntigravityInstallation;
+    const codex = yield* CodexInstallation;
     const instances = yield* ProviderInstanceRegistry;
     const providers = yield* ProviderRegistry;
-    yield* installation.changes.pipe(
-      Stream.map((state) => state.installedVersion),
-      Stream.changes,
-      Stream.drop(1),
-      Stream.runForEach(() =>
+    yield* Stream.merge(
+      antigravity.changes.pipe(
+        Stream.changesWith((a, b) => a.installedVersion === b.installedVersion),
+        Stream.drop(1),
+      ),
+      codex.changes.pipe(
+        Stream.changesWith((a, b) => a.installedVersion === b.installedVersion),
+        Stream.drop(1),
+      ),
+    ).pipe(
+      Stream.runForEach((state) =>
         instances.listInstances.pipe(
           Effect.flatMap((entries) =>
             Effect.forEach(
-              entries.filter(
-                (instance) => instance.driverKind === ProviderDriverKind.make("antigravity"),
-              ),
+              entries.filter((instance) => instance.driverKind === state.driver),
               (instance) => providers.refreshInstance(instance.instanceId),
               { discard: true },
             ),
@@ -573,7 +579,7 @@ const RuntimeCoreDependenciesLive = Layer.mergeAll(
         // provider-runtime ingestion (attaches them at turn completion), so it
         // must be one instance below both.
         AgentVoiceReply.layer,
-        AntigravityInstallationRefreshLive,
+        ProviderInstallationRefreshLive,
         ProviderAuthServiceLive,
         ReplayMarkers.layer,
       ),
@@ -625,17 +631,17 @@ const RuntimeCoreDependenciesLive = Layer.mergeAll(
     // `ProviderService` (canonical stream, written after event normalization).
     // Provided once at the runtime level so every consumer sees the same
     // logger instances.
-    // `ModelManifest.layer` is the legacy-model classification data, refreshed
-    // from the repo's `model-manifest.json` on `main` and applied by the
-    // Codex/Claude drivers.
     Layer.provideMerge(
       Layer.mergeAll(
         AntigravityInstallation.layer,
+        CodexInstallation.layer,
         ProviderEventLoggers.layer,
-        ModelManifest.layer,
         ResetCreditCoordinator.layer,
       ),
     ),
+    // Installation version selection and driver model classification share the
+    // manifest; it must sit below installation rather than beside it.
+    Layer.provideMerge(ModelManifest.layer),
     // `OpenCodeDriver.create()` yields `OpenCodeRuntime`; previously the old
     // `ProviderRegistryLive` pulled `OpenCodeRuntimeLive` in for itself, but
     // the rewritten registry reads snapshots off the instance registry and

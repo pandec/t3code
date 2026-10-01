@@ -27,6 +27,7 @@ import * as ProjectCloneTracker from "../project/ProjectCloneTracker.ts";
 import { OrchestrationEngineService } from "./Services/OrchestrationEngine.ts";
 import { ProjectionSnapshotQuery } from "./Services/ProjectionSnapshotQuery.ts";
 import { TurnStartBootstrap } from "./Services/TurnStartBootstrap.ts";
+import { makeScratchWorkspace } from "./scratchWorkspace.ts";
 
 const isOrchestrationCommandInvariantError = Schema.is(OrchestrationCommandInvariantError);
 const cliDispatchOptions = { origin: { surface: "cli" } } as const;
@@ -80,6 +81,7 @@ export const orchestrationHttpApiLayer = HttpApiBuilder.group(
     const projectionThreadMessageRepository = yield* ProjectionThreadMessageRepository;
     const orchestrationEngine = yield* OrchestrationEngineService;
     const turnStartBootstrap = yield* TurnStartBootstrap;
+    const scratchWorkspace = yield* makeScratchWorkspace;
     const projectCloneTracker = yield* ProjectCloneTracker.ProjectCloneTracker;
 
     return handlers
@@ -167,8 +169,14 @@ export const orchestrationHttpApiLayer = HttpApiBuilder.group(
               failEnvironmentInternal("orchestration_dispatch_failed", cause),
             ),
           );
-          const normalizedCommand = yield* normalizeDispatchCommand(args.payload).pipe(
+          const normalizedInput = yield* normalizeDispatchCommand(args.payload).pipe(
             Effect.catch(() => failEnvironmentInvalidRequest("invalid_command")),
+          );
+          const normalizedCommand = yield* scratchWorkspace.prepareCommand(normalizedInput).pipe(
+            Effect.tapError(() => cleanupFailedUploadedAttachments(args.payload, normalizedInput)),
+            Effect.catch((cause) =>
+              failEnvironmentInternal("orchestration_dispatch_failed", cause),
+            ),
           );
           // This mutation route is the CLI transport; web, desktop, and mobile
           // dispatch over WebSocket with their connection metadata instead.

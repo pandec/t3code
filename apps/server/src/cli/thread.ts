@@ -385,6 +385,21 @@ export const decideThreadCliWorkspace = (input: {
   return input.fromDefaults ? { kind: "fallback-checkout" } : { kind: "unsupported" };
 };
 
+/** Report the persisted workspace without mistaking a plain Scratch folder for a Git worktree. */
+export const createdThreadWorkspace = (
+  existingWorktree: { readonly branch: string | null; readonly worktreePath: string } | null,
+  startedThread: Pick<OrchestrationThreadShell, "branch" | "worktreePath"> | null,
+) => ({
+  mode:
+    existingWorktree !== null
+      ? "existing-worktree"
+      : startedThread?.worktreePath
+        ? "scratch"
+        : "checkout",
+  branch: startedThread?.branch ?? existingWorktree?.branch ?? null,
+  worktreePath: startedThread?.worktreePath ?? existingWorktree?.worktreePath ?? null,
+});
+
 // The bootstrap payload for --new-worktree: the server creates the thread,
 // prepares the worktree (defaulting the base to the project's current branch
 // when omitted), runs the setup script, and starts the turn — deleting the
@@ -1126,6 +1141,15 @@ const threadNewCommand = Command.make("new", {
             );
           }),
         );
+        const startedThread = yield* fetchLiveOrchestrationShell(
+          input.live.origin,
+          input.token,
+          input.timeouts,
+        ).pipe(
+          Effect.map((shell) => shell.threads.find((thread) => thread.id === threadId) ?? null),
+          Effect.orElseSucceed(() => null),
+        );
+        const workspaceReport = createdThreadWorkspace(existingWorktree, startedThread);
         yield* Console.log(
           flags.json
             ? jsonOutput({
@@ -1135,20 +1159,13 @@ const threadNewCommand = Command.make("new", {
                 commandId,
                 messageId,
                 sequence: result.sequence,
-                workspace:
-                  existingWorktree !== null
-                    ? {
-                        mode: "existing-worktree",
-                        branch: existingWorktree.branch,
-                        worktreePath: existingWorktree.worktreePath,
-                      }
-                    : { mode: "checkout", branch: null, worktreePath: null },
+                workspace: workspaceReport,
               })
             : existingWorktree !== null
               ? `Created thread ${threadId} (${title}) in worktree ${existingWorktree.worktreePath}${
                   existingWorktree.branch ? ` on branch ${existingWorktree.branch}` : ""
                 } and started its first turn.`
-              : `Created thread ${threadId} (${title}) and started its first turn.`,
+              : `Created thread ${threadId} (${title})${workspaceReport.worktreePath ? ` in folder ${workspaceReport.worktreePath}` : ""} and started its first turn.`,
         );
       }),
     ),

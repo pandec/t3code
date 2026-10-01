@@ -41,6 +41,7 @@ import {
   collectThreadMessages,
   compensateFailedThreadStart,
   decideThreadCliWorkspace,
+  createdThreadWorkspace,
   decodeThreadInputAnswersJson,
   renderThreadMessagesText,
   resolveThreadCliDefaultWorkspace,
@@ -161,6 +162,30 @@ const threadWith = (input: Partial<OrchestrationThreadShell>): OrchestrationThre
     updatedAt: "2026-07-25T00:00:00.000Z",
     ...input,
   }) as OrchestrationThreadShell;
+
+it("reports a server-assigned Scratch folder without labeling it a Git worktree", () => {
+  assert.deepEqual(
+    createdThreadWorkspace(null, { branch: null, worktreePath: "/data/scratch/thread" }),
+    {
+      mode: "scratch",
+      branch: null,
+      worktreePath: "/data/scratch/thread",
+    },
+  );
+  assert.deepEqual(
+    createdThreadWorkspace({ branch: "dev", worktreePath: "/repo/worktree" }, null),
+    {
+      mode: "existing-worktree",
+      branch: "dev",
+      worktreePath: "/repo/worktree",
+    },
+  );
+  assert.deepEqual(createdThreadWorkspace(null, null), {
+    mode: "checkout",
+    branch: null,
+    worktreePath: null,
+  });
+});
 
 it("includes snooze timestamps in thread summaries", () => {
   const summary = threadSummary(

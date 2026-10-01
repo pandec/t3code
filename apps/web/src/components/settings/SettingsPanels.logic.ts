@@ -325,6 +325,27 @@ export function buildProviderInstanceUpdatePatch(input: {
 }
 
 /**
+ * The instance a Codex setup-mode switch writes. Enables the instance and
+ * keeps the rest of its config. Callers pass the pending (overlay) instance
+ * when one exists so a switch following an unacknowledged write does not
+ * revert that write.
+ */
+export function buildCodexSetupModeInstance(
+  instance: ProviderInstanceConfig,
+  setupMode: "managed" | "existing",
+): ProviderInstanceConfig {
+  return {
+    ...instance,
+    enabled: true,
+    config: {
+      ...(instance.config !== null && typeof instance.config === "object" ? instance.config : {}),
+      enabled: true,
+      setupMode,
+    },
+  };
+}
+
+/**
  * Whether the server would actually route to this failover target. Mirrors the
  * turn-start preconditions in `resolveFailoverTarget`
  * (`apps/server/src/provider/rateLimitFailoverRouting.ts`) — enabled, same

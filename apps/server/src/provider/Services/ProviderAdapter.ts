@@ -163,6 +163,11 @@ export interface ProviderAdapterShape<TError> {
     input: ProviderReadImportableSessionInput,
   ) => Effect.Effect<ProviderImportSessionHistory, TError>;
 
+  /** Request a service-owned replacement before a turn when credentials changed. */
+  readonly prepareTurn?: (
+    threadId: ThreadId,
+  ) => Effect.Effect<ProviderSessionStartInput | undefined, TError>;
+
   /**
    * Send a turn to an active provider session.
    */
