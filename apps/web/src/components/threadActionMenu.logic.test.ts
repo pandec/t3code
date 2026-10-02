@@ -11,7 +11,7 @@ const baseState: ThreadActionMenuState = {
   isSnoozed: false,
   canSnoozeNow: true,
   isRegeneratingTitle: false,
-  isRunning: false,
+  archiveAction: "archive",
   supports: {
     settlement: true,
     autoSettleOptOut: true,
@@ -196,10 +196,15 @@ describe("buildThreadActionMenuItems", () => {
     ).toContain("archive");
   });
 
-  it("disables archive while the thread is running", () => {
-    const archiveItem = buildThreadActionMenuItems({ ...baseState, isRunning: true }).find(
-      (item) => item.id === "archive",
-    );
-    expect(archiveItem?.disabled).toBe(true);
+  it("offers archive after turn and cancel instead of disabling archive", () => {
+    const archiveLabel = (archiveAction: "archive" | "schedule" | "cancel") => {
+      const item = buildThreadActionMenuItems({ ...baseState, archiveAction }).find(
+        (entry) => entry.id === "archive",
+      );
+      expect(item?.disabled).toBeFalsy();
+      return item?.label;
+    };
+    expect(archiveLabel("schedule")).toBe("Archive after turn");
+    expect(archiveLabel("cancel")).toBe("Cancel pending archive");
   });
 });

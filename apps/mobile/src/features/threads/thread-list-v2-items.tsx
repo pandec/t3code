@@ -17,6 +17,7 @@ import type {
 } from "@t3tools/client-runtime/state/shell";
 import type { EnvironmentThreadSearchMatch } from "@t3tools/client-runtime/state/thread-search";
 import { canForkConversation } from "@t3tools/client-runtime/state/thread-fork";
+import { hasPendingArchive } from "@t3tools/client-runtime/state/thread-settled";
 import type { EnvironmentMachineKind } from "@t3tools/contracts";
 import {
   canSnooze,
@@ -1186,6 +1187,17 @@ export const ThreadListV2Row = memo(function ThreadListV2Row(props: {
           {statusLabel?.label ?? timeLabel}
           {workingLabel === null ? null : ` ${workingLabel}`}
         </Text>
+        {/* A scheduled archive (`/t3-archive` or an after-turn archive) stays
+            visible at a glance until it runs or is cancelled. */}
+        {hasPendingArchive(thread) ? (
+          <SymbolView
+            name="archivebox"
+            size={11}
+            tintColorClassName="accent-warning-foreground"
+            type="monochrome"
+            accessibilityLabel="Archives after this turn"
+          />
+        ) : null}
       </View>
       <Text
         className={cn(

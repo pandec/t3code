@@ -475,6 +475,9 @@ function applyThreadDetailEventUnretained(
           ...(event.payload.worktreeSwitch !== undefined
             ? { worktreeSwitch: event.payload.worktreeSwitch }
             : {}),
+          ...(event.payload.archiveRequest !== undefined
+            ? { archiveRequest: event.payload.archiveRequest }
+            : {}),
           ...(event.payload.titleState !== undefined
             ? { titleState: event.payload.titleState }
             : {}),

@@ -99,8 +99,8 @@ describe("applyThreadStatusEmoji", () => {
 });
 
 describe("parseComposerArchiveCommand", () => {
-  it.each(["/t3-archive", "  /T3-ARCHIVE \n"])("schedules %s", (text) => {
-    expect(parseComposerArchiveCommand(text)).toEqual({ action: "schedule" });
+  it.each(["/t3-archive", "  /T3-ARCHIVE \n"])("toggles %s", (text) => {
+    expect(parseComposerArchiveCommand(text)).toEqual({ action: "toggle" });
   });
 
   it("accepts cancellation and rejects unsupported arguments", () => {

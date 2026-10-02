@@ -18,6 +18,7 @@ import type { AsyncResult } from "effect/unstable/reactivity";
 import { planPinnedReorder } from "@t3tools/client-runtime/state/thread-sort";
 import {
   effectiveSnoozed,
+  hasPendingArchive,
   type ThreadSnoozeShell,
 } from "@t3tools/client-runtime/state/thread-settled";
 import {
@@ -643,6 +644,18 @@ export type ThreadTraversalDirection = "previous" | "next";
 export function canArchiveThreadNow(thread: Pick<SidebarThreadSummary, "session">): boolean {
   const session = thread.session;
   return !(session?.status === "running" && session.activeTurnId != null);
+}
+
+/**
+ * What the archive control does for a thread: a pending archive is cancelled,
+ * a running thread schedules one for after its turn, and anything else
+ * archives now. Shared by the sidebar button, keybinding, and palette.
+ */
+export function resolveArchiveToggleAction(
+  thread: Pick<SidebarThreadSummary, "session" | "archiveRequest">,
+): "archive" | "schedule" | "cancel" {
+  if (hasPendingArchive(thread)) return "cancel";
+  return canArchiveThreadNow(thread) ? "archive" : "schedule";
 }
 
 /**

@@ -358,6 +358,8 @@ export function buildSavedPromptsSubmenu(input: {
 
 export function buildArchiveCurrentThreadAction(input: {
   threadRef: ScopedThreadRef | null;
+  /** See `resolveArchiveToggleAction`; omitted means archive now. */
+  archiveAction?: "archive" | "schedule" | "cancel";
   icon: ReactNode;
   runThread: (threadRef: ScopedThreadRef) => Promise<void>;
 }): CommandPaletteActionItem | null {
@@ -368,8 +370,13 @@ export function buildArchiveCurrentThreadAction(input: {
   return {
     kind: "action",
     value: "action:archive-current-thread",
-    searchTerms: ["archive", "close", "done", "finish", "current thread"],
-    title: "Archive current thread",
+    searchTerms: ["archive", "close", "done", "finish", "current thread", "after turn", "cancel"],
+    title:
+      input.archiveAction === "cancel"
+        ? "Cancel pending archive"
+        : input.archiveAction === "schedule"
+          ? "Archive current thread after turn"
+          : "Archive current thread",
     icon: input.icon,
     shortcutCommand: "thread.archive",
     run: async () => {

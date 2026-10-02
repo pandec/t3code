@@ -18,6 +18,7 @@ import {
   filterSidebarProjectScopeItems,
   getSidebarThreadIdsToPrewarm,
   resolveAdjacentThreadId,
+  resolveArchiveToggleAction,
   reduceSidebarProjectScopeMenuState,
   getFallbackThreadIdAfterDelete,
   getProjectSortTimestamp,
@@ -68,6 +69,7 @@ import {
 import { threadSearchMatchKey } from "@t3tools/client-runtime/state/thread-search";
 import { sortSettledThreads } from "@t3tools/client-runtime/state/thread-sort";
 import {
+  CommandId,
   EnvironmentId,
   OrchestrationLatestTurn,
   ProjectId,
@@ -352,6 +354,42 @@ describe("canArchiveThreadNow", () => {
     expect(
       canArchiveThreadNow({ session: { ...session, activeTurnId: TurnId.make("turn-1") } }),
     ).toBe(true);
+  });
+});
+
+describe("resolveArchiveToggleAction", () => {
+  const session = {
+    providerName: "codex",
+    status: "running",
+    activeTurnId: TurnId.make("turn-1"),
+    lastError: null,
+  } as NonNullable<Pick<import("../types").SidebarThreadSummary, "session">["session"]>;
+  const pendingRequest = {
+    requestId: CommandId.make("archive-1"),
+    turnId: TurnId.make("turn-1"),
+    removeWorktree: false,
+    worktreePath: null,
+    requestedAt: "2026-10-02T08:00:00.000Z",
+    status: "pending",
+  } as const;
+
+  it("archives idle threads now and schedules running ones for after the turn", () => {
+    expect(resolveArchiveToggleAction({ session: null })).toBe("archive");
+    expect(resolveArchiveToggleAction({ session, archiveRequest: null })).toBe("schedule");
+    // A settled request no longer blocks scheduling again.
+    expect(
+      resolveArchiveToggleAction({
+        session,
+        archiveRequest: { ...pendingRequest, status: "cancelled" },
+      }),
+    ).toBe("schedule");
+  });
+
+  it("cancels a pending archive, whether or not the turn is still running", () => {
+    expect(resolveArchiveToggleAction({ session, archiveRequest: pendingRequest })).toBe("cancel");
+    expect(resolveArchiveToggleAction({ session: null, archiveRequest: pendingRequest })).toBe(
+      "cancel",
+    );
   });
 });
 

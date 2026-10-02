@@ -159,7 +159,10 @@ wait for the turn to complete successfully, its checkpoint, and any background w
 The request survives closing the app or restarting the server, and keeps the worktree.
 A failed or interrupted turn, or starting new work, cancels the request.
 
-Send `/t3-archive cancel` before archiving starts to cancel a pending request.
+Send `/t3-archive` again before archiving starts to cancel a pending request.
+A pending archive shows an archive icon next to the thread's status in the thread list.
+On web and desktop, the sidebar archive button, the archive keybinding, and the
+thread menus do the same on a running thread: schedule the archive, or cancel a pending one.
 Archived threads can be restored from **Settings → Archived threads**.
 
 ## Context in your message

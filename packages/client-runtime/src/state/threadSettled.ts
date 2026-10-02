@@ -152,6 +152,16 @@ export function canSnooze(
 }
 
 /**
+ * An archive scheduled to run once the current turn and background work
+ * finish. Clients mark the row and offer the same control to cancel it.
+ */
+export function hasPendingArchive(
+  shell: Pick<OrchestrationThreadShell, "archiveRequest">,
+): boolean {
+  return shell.archiveRequest?.status === "pending";
+}
+
+/**
  * Snoozed resolution: hidden from the inbox while the wake time is in the
  * future and the thread has not raised its hand. Timer wakes are derived —
  * no server event fires when snoozedUntil passes; the stale fields simply
