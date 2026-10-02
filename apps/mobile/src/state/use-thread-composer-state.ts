@@ -19,6 +19,7 @@ import {
 } from "@t3tools/contracts";
 import { safeErrorLogAttributes } from "@t3tools/client-runtime/errors";
 import { clampFileAttachmentUploadBytes } from "@t3tools/client-runtime/state/attachments";
+import { hasPendingArchive } from "@t3tools/client-runtime/state/thread-settled";
 import { nextPastedTextFileName, pastedTextDisposition } from "@t3tools/client-runtime/text-paste";
 import {
   parseCodexFeedbackCommand,
@@ -483,7 +484,10 @@ export function useThreadComposerState() {
           : null;
       if (renameCommand || statusCommand || archiveCommand) {
         if (archiveCommand?.action === null) {
-          Alert.alert("Unable to archive thread", "Usage: /t3-archive or /t3-archive cancel");
+          Alert.alert(
+            "Unable to archive thread",
+            "Usage: /t3-archive (send again to cancel a pending archive)",
+          );
           return null;
         }
         if (renameCommand && renameCommand.title === null) {
@@ -501,7 +505,10 @@ export function useThreadComposerState() {
         if (archiveCommand) {
           const environmentId = selectedThreadShell.environmentId;
           const threadId = selectedThreadShell.id;
-          const result = await (archiveCommand.action === "cancel"
+          // The bare command toggles: a pending archive is cancelled.
+          const cancelArchive =
+            archiveCommand.action === "cancel" || hasPendingArchive(selectedThreadShell);
+          const result = await (cancelArchive
             ? cancelThreadArchive({ environmentId, input: { threadId } })
             : scheduleThreadArchive({
                 environmentId,
@@ -518,10 +525,10 @@ export function useThreadComposerState() {
             return null;
           }
           Alert.alert(
-            archiveCommand.action === "cancel" ? "Archive cancelled" : "Archive requested",
-            archiveCommand.action === "cancel"
+            cancelArchive ? "Archive cancelled" : "Archive requested",
+            cancelArchive
               ? "This thread will stay open."
-              : "Archives when the current turn and background work finish. Use /t3-archive cancel to cancel while pending.",
+              : "Archives when the current turn and background work finish. Send /t3-archive again to cancel.",
           );
         } else if (nextTitle !== selectedThreadShell.title) {
           const result = await updateThreadMetadata({

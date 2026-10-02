@@ -54,7 +54,11 @@ import {
 import { readPastedComposerContext } from "./composerInlineTokenPaste";
 import { isPasteAsTextShortcut } from "@t3tools/client-runtime/text-paste";
 import { type CodexArtifactTemplate } from "@t3tools/client-runtime/codex-artifact-templates";
-import { effectiveSnoozed, threadWokeAt } from "@t3tools/client-runtime/state/thread-settled";
+import {
+  effectiveSnoozed,
+  hasPendingArchive,
+  threadWokeAt,
+} from "@t3tools/client-runtime/state/thread-settled";
 import {
   parseCodexFeedbackCommand,
   submitCodexFeedback,
@@ -7827,7 +7831,7 @@ export default function ChatView(props: ChatViewProps) {
         toastManager.add({
           type: "error",
           title: "Unable to archive thread",
-          description: "Usage: /t3-archive or /t3-archive cancel",
+          description: "Usage: /t3-archive (send again to cancel a pending archive)",
         });
         return;
       }
@@ -7865,9 +7869,11 @@ export default function ChatView(props: ChatViewProps) {
         ? applyThreadStatusEmoji(activeThread.title, statusCommand.emoji)
         : (renameCommand?.title ?? activeThread.title);
       if (archiveCommand) {
+        // The bare command toggles: a pending archive is cancelled.
+        const cancelArchive = archiveCommand.action === "cancel" || hasPendingArchive(activeThread);
         sendInFlightRef.current = true;
         try {
-          const result = await (archiveCommand.action === "cancel"
+          const result = await (cancelArchive
             ? cancelThreadArchive({ environmentId, input: { threadId: activeThread.id } })
             : scheduleThreadArchive({
                 environmentId,
@@ -7889,11 +7895,10 @@ export default function ChatView(props: ChatViewProps) {
           toastManager.add(
             stackedThreadToast({
               type: "success",
-              title: archiveCommand.action === "cancel" ? "Archive cancelled" : "Archive requested",
-              description:
-                archiveCommand.action === "cancel"
-                  ? "This thread will stay open."
-                  : "Archives when the current turn and background work finish. Use /t3-archive cancel to cancel while pending.",
+              title: cancelArchive ? "Archive cancelled" : "Archive requested",
+              description: cancelArchive
+                ? "This thread will stay open."
+                : "Archives when the current turn and background work finish. Send /t3-archive again to cancel.",
             }),
           );
         } finally {

@@ -235,7 +235,11 @@ import {
   reduceCommandPaletteUiState,
   type SearchOverlayMode,
 } from "./CommandPalette.logic";
-import { orderItemsByPreferredIds, sortLogicalProjectsForSidebar } from "./Sidebar.logic";
+import {
+  orderItemsByPreferredIds,
+  resolveArchiveToggleAction,
+  sortLogicalProjectsForSidebar,
+} from "./Sidebar.logic";
 import { resolveEnvironmentOptionLabel } from "./BranchToolbar.logic";
 import { CommandPaletteContent } from "./CommandPaletteContent";
 import { CommandPaletteResults } from "./CommandPaletteResults";
@@ -2416,10 +2420,14 @@ function OpenCommandPaletteDialog(props: {
       },
     });
   }
+  const openThreadArchiveAction =
+    openUnarchivedThread === null ? "archive" : resolveArchiveToggleAction(openUnarchivedThread);
   const archiveCurrentThreadAction = buildArchiveCurrentThreadAction({
     threadRef: openUnarchivedThreadRef,
+    archiveAction: openThreadArchiveAction,
     icon: <ArchiveIcon className={ITEM_ICON_CLASS} />,
-    runThread: attemptArchiveThread,
+    runThread: (threadRef) =>
+      attemptArchiveThread(threadRef, { expectedAction: openThreadArchiveAction }),
   });
   if (archiveCurrentThreadAction) {
     actionItems.push(archiveCurrentThreadAction);

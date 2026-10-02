@@ -130,14 +130,17 @@ export function detectComposerTrigger(
   };
 }
 
-/** Matches standalone archive commands so ordinary prompts remain provider input. */
+/**
+ * Matches standalone archive commands so ordinary prompts remain provider input.
+ * The bare command toggles a pending archive; `cancel` is kept as an explicit alias.
+ */
 export function parseComposerArchiveCommand(
   text: string,
-): { action: "schedule" | "cancel" | null } | null {
+): { action: "toggle" | "cancel" | null } | null {
   const match = /^\/t3-archive(?:\s+([\s\S]*))?$/i.exec(text.trim());
   if (!match) return null;
   const argument = match[1]?.trim().toLowerCase() ?? "";
-  return { action: argument === "" ? "schedule" : argument === "cancel" ? "cancel" : null };
+  return { action: argument === "" ? "toggle" : argument === "cancel" ? "cancel" : null };
 }
 
 export function parseComposerRenameCommand(text: string): { title: string | null } | null {

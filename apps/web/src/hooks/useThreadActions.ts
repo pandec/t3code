@@ -23,6 +23,8 @@ import {
   canArchiveThreadNow,
   getFallbackThreadIdAfterDelete,
   pinOrderKeyBetween,
+  type ArchiveToggleAction,
+  resolveArchiveToggleAction,
 } from "../components/Sidebar.logic";
 import { useComposerDraftStore } from "../composerDraftStore";
 import { pauseListeningForThread, stopListeningForThread } from "../state/listeningPlayback";
@@ -248,6 +250,12 @@ export function useThreadActions() {
   const unarchiveThreadMutation = useAtomCommand(threadEnvironment.unarchive, {
     reportFailure: false,
   });
+  const scheduleThreadArchiveMutation = useAtomCommand(threadEnvironment.scheduleArchive, {
+    reportFailure: false,
+  });
+  const cancelThreadArchiveMutation = useAtomCommand(threadEnvironment.cancelArchive, {
+    reportFailure: false,
+  });
   const deleteThreadMutation = useAtomCommand(threadEnvironment.delete, {
     reportFailure: false,
   });
@@ -417,13 +425,54 @@ export function useThreadActions() {
     ],
   );
   const attemptArchiveThread = useCallback(
-    async (target: ScopedThreadRef) => {
+    /** `expectedAction` is the action a menu showed when it opened. */
+    async (target: ScopedThreadRef, opts: { expectedAction?: ArchiveToggleAction } = {}) => {
       const threadKey = scopedThreadKey(target);
       if (archivingThreadKeys.has(threadKey)) return;
       const resolved = resolveThreadTarget(target);
       if (!resolved) return;
       archivingThreadKeys.add(threadKey);
       try {
+        // Running threads cannot archive now, so the same control schedules
+        // an archive for after the turn and toggles a pending one off. Both
+        // are reversible, so they skip the confirmation.
+        const toggleAction = resolveArchiveToggleAction(resolved.thread);
+        // A request that settled while the menu was open must not turn
+        // "Cancel pending archive" into an archive; the label refreshes instead.
+        if (opts.expectedAction !== undefined && opts.expectedAction !== toggleAction) return;
+        if (toggleAction !== "archive") {
+          const input = { threadId: target.threadId };
+          const result = await (toggleAction === "cancel"
+            ? cancelThreadArchiveMutation({ environmentId: target.environmentId, input })
+            : scheduleThreadArchiveMutation({
+                environmentId: target.environmentId,
+                input: { ...input, afterTurn: true, removeWorktree: false },
+              }));
+          if (result._tag === "Failure") {
+            if (!isAtomCommandInterrupted(result)) {
+              const error = squashAtomCommandFailure(result);
+              toastManager.add(
+                stackedThreadToast({
+                  type: "error",
+                  title: "Unable to update thread archive",
+                  description: error instanceof Error ? error.message : "An error occurred.",
+                }),
+              );
+            }
+            return;
+          }
+          toastManager.add(
+            stackedThreadToast({
+              type: "success",
+              title: toggleAction === "cancel" ? "Archive cancelled" : "Archive after turn",
+              description:
+                toggleAction === "cancel"
+                  ? "This thread will stay open."
+                  : "Archives when the current turn and background work finish.",
+            }),
+          );
+          return;
+        }
         if (confirmThreadArchive) {
           const localApi = readLocalApi();
           if (!localApi) return;
@@ -455,7 +504,13 @@ export function useThreadActions() {
         archivingThreadKeys.delete(threadKey);
       }
     },
-    [archiveThread, confirmThreadArchive, resolveThreadTarget],
+    [
+      archiveThread,
+      cancelThreadArchiveMutation,
+      confirmThreadArchive,
+      resolveThreadTarget,
+      scheduleThreadArchiveMutation,
+    ],
   );
 
   const forkThread = useCallback(

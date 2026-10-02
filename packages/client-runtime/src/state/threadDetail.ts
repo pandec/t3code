@@ -75,6 +75,8 @@ export function mergeEnvironmentThread(
     pinnedAt: shell.pinnedAt,
     pinOrderKey: shell.pinOrderKey,
     session: shell.session,
+    // The shell stream carries archive scheduling live; detail can lag it.
+    ...(shell.archiveRequest !== undefined ? { archiveRequest: shell.archiveRequest } : {}),
   };
 }
 

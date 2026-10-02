@@ -193,7 +193,6 @@ import { SidebarEnvironmentFilterMenu } from "./sidebar/SidebarEnvironmentFilter
 import { resolveSidebarEmptyStateCause } from "./sidebar/sidebarEmptyState";
 import { useSidebarEnvironmentFilter } from "./sidebar/useSidebarEnvironmentFilter";
 import {
-  canArchiveThreadNow,
   admitNewSidebarV2AttentionThreads,
   createSidebarV2AttentionFilter,
   animateSidebarLayoutChanges,
@@ -215,6 +214,8 @@ import {
   resolveSidebarProjectScopePhysicalKeys,
   planSidebarThreadDrop,
   resolveAdjacentThreadId,
+  type ArchiveToggleAction,
+  resolveArchiveToggleAction,
   resolveSidebarDropTarget,
   resolveSidebarDropVerb,
   resolveSidebarRowAccessibility,
@@ -1232,7 +1233,7 @@ const SidebarThreadRow = memo(function SidebarThreadRow(props: {
   isRenaming: boolean;
   renamingTitle: string;
   onContextMenu: (threadRef: ScopedThreadRef, position: { x: number; y: number }) => void;
-  onArchive: (threadRef: ScopedThreadRef) => void;
+  onArchive: (threadRef: ScopedThreadRef, opts: { expectedAction: ArchiveToggleAction }) => void;
   onFork: (threadRef: ScopedThreadRef) => void;
   onSettle: (threadRef: ScopedThreadRef) => void;
   onUnsettle: (threadRef: ScopedThreadRef) => void;
@@ -1556,13 +1557,26 @@ const SidebarThreadRow = memo(function SidebarThreadRow(props: {
     },
     [onSettle, threadRef],
   );
+  const archiveAction = resolveArchiveToggleAction(thread);
+  const archivePending = archiveAction === "cancel";
+  // Always visible so a scheduled archive reads at a glance in both row
+  // variants; the hover archive button shows it active and cancels it.
+  const archivePendingIcon = archivePending ? (
+    <ArchiveIcon aria-hidden className="size-3.5 shrink-0 text-warning-foreground" />
+  ) : null;
+  const archiveLabel =
+    archiveAction === "cancel"
+      ? "Cancel archive after turn"
+      : archiveAction === "schedule"
+        ? "Archive after turn"
+        : "Archive";
   const handleArchiveClick = useCallback(
     (event: ReactMouseEvent) => {
       event.preventDefault();
       event.stopPropagation();
-      onArchive(threadRef);
+      onArchive(threadRef, { expectedAction: archiveAction });
     },
-    [onArchive, threadRef],
+    [archiveAction, onArchive, threadRef],
   );
   const handleForkClick = useCallback(
     (event: ReactMouseEvent) => {
@@ -1619,7 +1633,6 @@ const SidebarThreadRow = memo(function SidebarThreadRow(props: {
   // on blocked-on-you work or queued turns (the server rejects both).
   const showSnoozeButton =
     props.snoozeSupported && canSnooze(thread, { now: new Date().toISOString() });
-  const showArchiveButton = canArchiveThreadNow(thread);
   const showForkButton = canForkConversation(thread);
   // If the thread becomes blocked while the popover is open, the button
   // unmounts without firing onOpenChange(false). Deriving the flag keeps a
@@ -1735,7 +1748,10 @@ const SidebarThreadRow = memo(function SidebarThreadRow(props: {
 
   const accessibility = resolveSidebarRowAccessibility({
     title: thread.title,
-    statusLabel: topStatus?.label ?? null,
+    // The row's aria-label replaces its content, so the marker is announced here.
+    statusLabel:
+      [topStatus?.label, archivePending && "archives after this turn"].filter(Boolean).join(", ") ||
+      null,
     projectDisplayName: props.projectDisplayName,
     isActive: props.isActive,
   });
@@ -2018,6 +2034,7 @@ const SidebarThreadRow = memo(function SidebarThreadRow(props: {
               remain visible AND clickable while the row is hovered. Only
               the time/jump label yields to the settle affordance. */}
             {prBadge}
+            {archivePendingIcon}
             {sortable?.isDragging ? (
               dragDestination
             ) : (
@@ -2269,127 +2286,125 @@ const SidebarThreadRow = memo(function SidebarThreadRow(props: {
                     ) : (
                       threadTimeLabel(thread)
                     )}
+                    {archivePendingIcon ? (
+                      <span className="ml-1.5 inline-flex items-center">{archivePendingIcon}</span>
+                    ) : null}
                   </span>
-                  {props.settlementSupported ||
-                  props.pinningSupported ||
-                  showSnoozeButton ||
-                  showForkButton ||
-                  showArchiveButton ||
-                  hasUnsentDraft ? (
-                    <span
-                      className={cn(
-                        // focus-visible, not focus-within: a mouse click leaves
-                        // the Settle button focused, and a plain focus-within
-                        // would keep the controls pinned over the status label
-                        // once the pointer moves away (e.g. after a failed
-                        // settle) instead of cross-fading back.
-                        "pointer-events-none absolute inset-y-0 right-0 flex items-stretch opacity-0 transition-opacity has-[:focus-visible]:pointer-events-auto has-[:focus-visible]:static has-[:focus-visible]:opacity-100 group-hover/sidebar-row:pointer-events-auto group-hover/sidebar-row:static group-hover/sidebar-row:opacity-100",
-                        snoozeMenuOpen && "pointer-events-auto static opacity-100",
-                      )}
-                    >
-                      {hasUnsentDraft ? (
-                        <Tooltip>
-                          <TooltipTrigger
-                            render={
-                              <button
-                                type="button"
-                                aria-label="Discard draft"
-                                onClick={handleDiscardDraftClick}
-                                className="inline-flex cursor-pointer items-center rounded-md bg-transparent px-1.5 text-xs text-muted-foreground hover:text-foreground"
-                              />
-                            }
-                          >
-                            <XIcon className="size-3.5" />
-                          </TooltipTrigger>
-                          <TooltipPopup side="top">Discard draft</TooltipPopup>
-                        </Tooltip>
-                      ) : null}
-                      {props.pinningSupported ? (
-                        <Tooltip>
-                          <TooltipTrigger
-                            render={
-                              <button
-                                type="button"
-                                aria-label={props.isPinned ? "Unpin thread" : "Pin thread"}
-                                onClick={handlePinToggleClick}
-                                className="inline-flex cursor-pointer items-center rounded-md bg-transparent px-1.5 text-muted-foreground hover:text-foreground"
-                              >
-                                <PinIcon
-                                  className={cn("size-3.5", props.isPinned && "fill-current")}
-                                />
-                              </button>
-                            }
-                          />
-                          <TooltipPopup>
-                            {props.isPinned ? "Unpin thread" : "Pin thread"}
-                          </TooltipPopup>
-                        </Tooltip>
-                      ) : null}
-                      {showSnoozeButton ? (
-                        <SnoozeMenuButton
-                          open={snoozeMenuOpen}
-                          onOpenChange={setSnoozeMenuOpen}
-                          onSnooze={handleSnoozePreset}
-                          untilWokenSupported={props.snoozeUntilWokenSupported}
-                          untilDoneOffered={
-                            props.snoozeUntilDoneSupported && canSnoozeUntilDone(thread)
+                  <span
+                    className={cn(
+                      // focus-visible, not focus-within: a mouse click leaves
+                      // the Settle button focused, and a plain focus-within
+                      // would keep the controls pinned over the status label
+                      // once the pointer moves away (e.g. after a failed
+                      // settle) instead of cross-fading back.
+                      "pointer-events-none absolute inset-y-0 right-0 flex items-stretch opacity-0 transition-opacity has-[:focus-visible]:pointer-events-auto has-[:focus-visible]:static has-[:focus-visible]:opacity-100 group-hover/sidebar-row:pointer-events-auto group-hover/sidebar-row:static group-hover/sidebar-row:opacity-100",
+                      snoozeMenuOpen && "pointer-events-auto static opacity-100",
+                    )}
+                  >
+                    {hasUnsentDraft ? (
+                      <Tooltip>
+                        <TooltipTrigger
+                          render={
+                            <button
+                              type="button"
+                              aria-label="Discard draft"
+                              onClick={handleDiscardDraftClick}
+                              className="inline-flex cursor-pointer items-center rounded-md bg-transparent px-1.5 text-xs text-muted-foreground hover:text-foreground"
+                            />
                           }
-                          timestampFormat={props.timestampFormat}
-                        />
-                      ) : null}
-                      {props.settlementSupported ? (
-                        <Tooltip>
-                          <TooltipTrigger
-                            render={
-                              <button
-                                type="button"
-                                aria-label="Settle thread"
-                                onClick={handleSettleClick}
-                                className="-mr-1 inline-flex cursor-pointer items-center rounded-md bg-transparent px-1.5 text-muted-foreground hover:text-foreground"
+                        >
+                          <XIcon className="size-3.5" />
+                        </TooltipTrigger>
+                        <TooltipPopup side="top">Discard draft</TooltipPopup>
+                      </Tooltip>
+                    ) : null}
+                    {props.pinningSupported ? (
+                      <Tooltip>
+                        <TooltipTrigger
+                          render={
+                            <button
+                              type="button"
+                              aria-label={props.isPinned ? "Unpin thread" : "Pin thread"}
+                              onClick={handlePinToggleClick}
+                              className="inline-flex cursor-pointer items-center rounded-md bg-transparent px-1.5 text-muted-foreground hover:text-foreground"
+                            >
+                              <PinIcon
+                                className={cn("size-3.5", props.isPinned && "fill-current")}
                               />
-                            }
+                            </button>
+                          }
+                        />
+                        <TooltipPopup>
+                          {props.isPinned ? "Unpin thread" : "Pin thread"}
+                        </TooltipPopup>
+                      </Tooltip>
+                    ) : null}
+                    {showSnoozeButton ? (
+                      <SnoozeMenuButton
+                        open={snoozeMenuOpen}
+                        onOpenChange={setSnoozeMenuOpen}
+                        onSnooze={handleSnoozePreset}
+                        untilWokenSupported={props.snoozeUntilWokenSupported}
+                        untilDoneOffered={
+                          props.snoozeUntilDoneSupported && canSnoozeUntilDone(thread)
+                        }
+                        timestampFormat={props.timestampFormat}
+                      />
+                    ) : null}
+                    {props.settlementSupported ? (
+                      <Tooltip>
+                        <TooltipTrigger
+                          render={
+                            <button
+                              type="button"
+                              aria-label="Settle thread"
+                              onClick={handleSettleClick}
+                              className="-mr-1 inline-flex cursor-pointer items-center rounded-md bg-transparent px-1.5 text-muted-foreground hover:text-foreground"
+                            />
+                          }
+                        >
+                          <CheckIcon className="size-3.5" />
+                        </TooltipTrigger>
+                        <TooltipPopup>Settle thread</TooltipPopup>
+                      </Tooltip>
+                    ) : null}
+                    {showForkButton ? (
+                      <Tooltip>
+                        <TooltipTrigger
+                          render={
+                            <button
+                              type="button"
+                              aria-label="Fork conversation"
+                              onClick={handleForkClick}
+                              className="-mr-1 inline-flex cursor-pointer items-center rounded-md bg-transparent px-1.5 text-muted-foreground hover:text-foreground"
+                            >
+                              <GitBranchIcon className="size-3" />
+                            </button>
+                          }
+                        />
+                        <TooltipPopup>Fork conversation</TooltipPopup>
+                      </Tooltip>
+                    ) : null}
+                    <Tooltip>
+                      <TooltipTrigger
+                        render={
+                          <button
+                            type="button"
+                            aria-label={archiveLabel}
+                            aria-pressed={archivePending}
+                            onClick={handleArchiveClick}
+                            className={cn(
+                              "-mr-1 inline-flex h-full cursor-pointer items-center rounded-md bg-transparent px-1.5 text-muted-foreground hover:text-foreground",
+                              archivePending && "text-warning-foreground",
+                            )}
                           >
-                            <CheckIcon className="size-3.5" />
-                          </TooltipTrigger>
-                          <TooltipPopup>Settle thread</TooltipPopup>
-                        </Tooltip>
-                      ) : null}
-                      {showForkButton ? (
-                        <Tooltip>
-                          <TooltipTrigger
-                            render={
-                              <button
-                                type="button"
-                                aria-label="Fork conversation"
-                                onClick={handleForkClick}
-                                className="-mr-1 inline-flex cursor-pointer items-center rounded-md bg-transparent px-1.5 text-muted-foreground hover:text-foreground"
-                              >
-                                <GitBranchIcon className="size-3" />
-                              </button>
-                            }
-                          />
-                          <TooltipPopup>Fork conversation</TooltipPopup>
-                        </Tooltip>
-                      ) : null}
-                      {showArchiveButton ? (
-                        <Tooltip>
-                          <TooltipTrigger
-                            render={
-                              <button
-                                type="button"
-                                aria-label="Archive thread"
-                                onClick={handleArchiveClick}
-                                className="-mr-1 inline-flex h-full cursor-pointer items-center rounded-md bg-transparent px-1.5 text-muted-foreground hover:text-foreground"
-                              >
-                                <ArchiveIcon className="size-3" />
-                              </button>
-                            }
-                          />
-                          <TooltipPopup>Archive</TooltipPopup>
-                        </Tooltip>
-                      ) : null}
-                    </span>
-                  ) : null}
+                            <ArchiveIcon className="size-3" />
+                          </button>
+                        }
+                      />
+                      <TooltipPopup>{archiveLabel}</TooltipPopup>
+                    </Tooltip>
+                  </span>
                 </span>
               )}
             </div>
@@ -4123,8 +4138,8 @@ export default function Sidebar() {
   );
 
   const attemptArchive = useCallback(
-    (threadRef: ScopedThreadRef) => {
-      void attemptArchiveThread(threadRef);
+    (threadRef: ScopedThreadRef, opts?: { expectedAction?: ArchiveToggleAction }) => {
+      void attemptArchiveThread(threadRef, opts);
     },
     [attemptArchiveThread],
   );
@@ -5369,6 +5384,7 @@ export default function Sidebar() {
         const isSettled = settledThreadKeysRef.current.has(threadKey);
         const isSnoozed = snoozedThreadKeysRef.current.has(threadKey);
         const isPinned = thread.pinnedAt != null;
+        const archiveAction = resolveArchiveToggleAction(thread);
         // Presets resolve at menu-open time (same as the popover).
         const snoozePresets = resolveSnoozePresets(new Date(), timestampFormat, {
           untilWoken:
@@ -5407,8 +5423,7 @@ export default function Sidebar() {
                 isSnoozed,
                 canSnoozeNow: canSnooze(thread, { now: new Date().toISOString() }),
                 isRegeneratingTitle,
-                isRunning:
-                  thread.session?.status === "running" && thread.session.activeTurnId != null,
+                archiveAction,
                 supports: {
                   settlement: supportsSettlement,
                   autoSettleOptOut: supportsAutoSettleOptOut,
@@ -5565,7 +5580,7 @@ export default function Sidebar() {
             return;
           }
           case "archive": {
-            attemptArchive(threadRef);
+            attemptArchive(threadRef, { expectedAction: archiveAction });
             return;
           }
           case "copy-path":

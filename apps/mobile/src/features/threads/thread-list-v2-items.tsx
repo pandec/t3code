@@ -17,6 +17,7 @@ import type {
 } from "@t3tools/client-runtime/state/shell";
 import type { EnvironmentThreadSearchMatch } from "@t3tools/client-runtime/state/thread-search";
 import { canForkConversation } from "@t3tools/client-runtime/state/thread-fork";
+import { hasPendingArchive } from "@t3tools/client-runtime/state/thread-settled";
 import type { EnvironmentMachineKind } from "@t3tools/contracts";
 import {
   canSnooze,
@@ -703,6 +704,26 @@ export const ThreadListV2Row = memo(function ThreadListV2Row(props: {
   const statusLabel = STATUS_LABEL_BY_STATUS[status];
   const timeLabel = props.timeLabel;
   const workingLabel = resolveThreadListV2WorkingTimeLabel(thread, status);
+  const archivePending = hasPendingArchive(thread);
+  // The row's accessibilityLabel collapses its subtree, so row-level markers
+  // are announced here rather than on their icons.
+  const rowAccessibilityLabel = [
+    thread.title,
+    props.hasQueuedMessages && "messages queued to send",
+    archivePending && "archives after this turn",
+  ]
+    .filter(Boolean)
+    .join(", ");
+  // A scheduled archive (`/t3-archive` or an after-turn archive) stays visible
+  // at a glance in both row variants until it runs or is cancelled.
+  const archivePendingIcon = archivePending ? (
+    <SymbolView
+      name="archivebox"
+      size={11}
+      tintColorClassName="accent-warning-foreground"
+      type="monochrome"
+    />
+  ) : null;
   // Set while this thread's recording is playing or paused mid-way, so
   // pausing from the list keeps a way back in. A finished recording clears
   // it. Re-renders only when the state flips, never on the progress tick.
@@ -1186,6 +1207,7 @@ export const ThreadListV2Row = memo(function ThreadListV2Row(props: {
           {statusLabel?.label ?? timeLabel}
           {workingLabel === null ? null : ` ${workingLabel}`}
         </Text>
+        {archivePendingIcon}
       </View>
       <Text
         className={cn(
@@ -1359,9 +1381,7 @@ export const ThreadListV2Row = memo(function ThreadListV2Row(props: {
         interactionOpacity={rowAppearance.interactionOpacity}
         className={rowAppearance.className}
         accessibilityHint={swipeAccessibilityHint}
-        accessibilityLabel={
-          props.hasQueuedMessages ? `${thread.title}, messages queued to send` : thread.title
-        }
+        accessibilityLabel={rowAccessibilityLabel}
         accessibilityRole="button"
         accessibilityState={{ selected }}
         onAccessibilityAction={onListeningAccessibilityAction}
@@ -1401,9 +1421,7 @@ export const ThreadListV2Row = memo(function ThreadListV2Row(props: {
         interactionClassName={rowAppearance.interactionClassName}
         interactionOpacity={rowAppearance.interactionOpacity}
         accessibilityHint={swipeAccessibilityHint}
-        accessibilityLabel={
-          props.hasQueuedMessages ? `${thread.title}, messages queued to send` : thread.title
-        }
+        accessibilityLabel={rowAccessibilityLabel}
         accessibilityRole="button"
         accessibilityState={{ selected }}
         className={rowAppearance.className}
@@ -1465,6 +1483,7 @@ export const ThreadListV2Row = memo(function ThreadListV2Row(props: {
           {listeningIndicator}
           {slimPinIndicator}
           {props.hasQueuedMessages ? <QueuedMessageIcon selected={selected} /> : null}
+          {archivePendingIcon}
           <Text
             className={cn(
               "text-sm tabular-nums",
