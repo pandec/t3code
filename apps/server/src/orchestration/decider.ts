@@ -2293,15 +2293,18 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
           createdAt: command.createdAt,
         },
       };
-      // Stopping the turn a deferred archive waits on cancels the archive in
-      // the same decision. Later provider session updates can revive or
-      // settle the turn as completed, so the turn state alone is not durable.
+      // Stopping the running turn a deferred archive waits on cancels the
+      // archive in the same decision. Later provider session updates can
+      // revive or settle the turn as completed, so the turn state alone is not
+      // durable. A late stop never cancels an archive whose cleanup started.
       const archiveRequest = thread.archiveRequest;
-      const stoppedTurnId = command.turnId ?? thread.latestTurn?.turnId;
       if (
+        thread.archivedAt !== null ||
         archiveRequest?.status !== "pending" ||
         archiveRequest.turnId === null ||
-        archiveRequest.turnId !== stoppedTurnId
+        thread.latestTurn?.state !== "running" ||
+        thread.latestTurn.turnId !== archiveRequest.turnId ||
+        (command.turnId !== undefined && command.turnId !== archiveRequest.turnId)
       ) {
         return interrupt;
       }

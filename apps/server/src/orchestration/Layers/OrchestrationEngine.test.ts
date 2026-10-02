@@ -1308,6 +1308,20 @@ describe("OrchestrationEngine", () => {
       const thread = (await system.readModel()).threads[0];
       if (outcome === "completed") {
         expect(thread?.archivedAt).not.toBeNull();
+        // A late stop, with or without its turn id, never cancels started cleanup.
+        for (const [id, stoppedTurnId] of [
+          ["late-stop", turnId],
+          ["late-stop-latest", undefined],
+        ] as const) {
+          await dispatch({
+            type: "thread.turn.interrupt",
+            commandId: CommandId.make(id),
+            threadId,
+            ...(stoppedTurnId === undefined ? {} : { turnId: stoppedTurnId }),
+            createdAt: now(),
+          });
+        }
+        expect((await system.readModel()).threads[0]?.archiveRequest?.status).toBe("pending");
         await expect(
           dispatch({
             type: "thread.unarchive",
