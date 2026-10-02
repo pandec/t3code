@@ -23,6 +23,7 @@ import {
   canArchiveThreadNow,
   getFallbackThreadIdAfterDelete,
   pinOrderKeyBetween,
+  type ArchiveToggleAction,
   resolveArchiveToggleAction,
 } from "../components/Sidebar.logic";
 import { useComposerDraftStore } from "../composerDraftStore";
@@ -424,7 +425,8 @@ export function useThreadActions() {
     ],
   );
   const attemptArchiveThread = useCallback(
-    async (target: ScopedThreadRef) => {
+    /** `expectedAction` is the action a menu showed when it opened. */
+    async (target: ScopedThreadRef, opts: { expectedAction?: ArchiveToggleAction } = {}) => {
       const threadKey = scopedThreadKey(target);
       if (archivingThreadKeys.has(threadKey)) return;
       const resolved = resolveThreadTarget(target);
@@ -435,6 +437,9 @@ export function useThreadActions() {
         // an archive for after the turn and toggles a pending one off. Both
         // are reversible, so they skip the confirmation.
         const toggleAction = resolveArchiveToggleAction(resolved.thread);
+        // A request that settled while the menu was open must not turn
+        // "Cancel pending archive" into an archive; the label refreshes instead.
+        if (opts.expectedAction !== undefined && opts.expectedAction !== toggleAction) return;
         if (toggleAction !== "archive") {
           const input = { threadId: target.threadId };
           const result = await (toggleAction === "cancel"

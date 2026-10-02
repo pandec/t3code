@@ -2420,12 +2420,14 @@ function OpenCommandPaletteDialog(props: {
       },
     });
   }
+  const openThreadArchiveAction =
+    openUnarchivedThread === null ? "archive" : resolveArchiveToggleAction(openUnarchivedThread);
   const archiveCurrentThreadAction = buildArchiveCurrentThreadAction({
     threadRef: openUnarchivedThreadRef,
-    archiveAction:
-      openUnarchivedThread === null ? "archive" : resolveArchiveToggleAction(openUnarchivedThread),
+    archiveAction: openThreadArchiveAction,
     icon: <ArchiveIcon className={ITEM_ICON_CLASS} />,
-    runThread: attemptArchiveThread,
+    runThread: (threadRef) =>
+      attemptArchiveThread(threadRef, { expectedAction: openThreadArchiveAction }),
   });
   if (archiveCurrentThreadAction) {
     actionItems.push(archiveCurrentThreadAction);

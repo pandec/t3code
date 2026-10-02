@@ -651,9 +651,11 @@ export function canArchiveThreadNow(thread: Pick<SidebarThreadSummary, "session"
  * a running thread schedules one for after its turn, and anything else
  * archives now. Shared by the sidebar button, keybinding, and palette.
  */
+export type ArchiveToggleAction = "archive" | "schedule" | "cancel";
+
 export function resolveArchiveToggleAction(
   thread: Pick<SidebarThreadSummary, "session" | "archiveRequest">,
-): "archive" | "schedule" | "cancel" {
+): ArchiveToggleAction {
   if (hasPendingArchive(thread)) return "cancel";
   return canArchiveThreadNow(thread) ? "archive" : "schedule";
 }

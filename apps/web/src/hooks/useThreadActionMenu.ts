@@ -155,6 +155,7 @@ export function useThreadActionMenu(input: {
             canSnoozeUntilDone(thread) &&
             readEnvironmentSupportsSnoozeUntilDone(threadRef.environmentId),
         });
+        const archiveAction = resolveArchiveToggleAction(thread);
         const items = buildThreadActionMenuItems({
           branch: thread.branch ?? null,
           // The chat header has no project-scoped thread list behind the
@@ -167,7 +168,7 @@ export function useThreadActionMenu(input: {
           isSnoozed: supports.snooze && effectiveSnoozed(thread, { now: now.toISOString() }),
           canSnoozeNow: canSnooze(thread, { now: now.toISOString() }),
           isRegeneratingTitle,
-          archiveAction: resolveArchiveToggleAction(thread),
+          archiveAction,
           supports,
           snoozePresets,
           forkExtras: {
@@ -271,7 +272,7 @@ export function useThreadActionMenu(input: {
           case "archive":
             // Owns its own confirmation and forward navigation, and toasts its
             // own failures — hence no reportFailure wrapper.
-            await attemptArchiveThread(threadRef);
+            await attemptArchiveThread(threadRef, { expectedAction: archiveAction });
             return;
           case "copy-path": {
             const workspacePath = thread.worktreePath ?? projectCwd;

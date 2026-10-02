@@ -214,6 +214,7 @@ import {
   resolveSidebarProjectScopePhysicalKeys,
   planSidebarThreadDrop,
   resolveAdjacentThreadId,
+  type ArchiveToggleAction,
   resolveArchiveToggleAction,
   resolveSidebarDropTarget,
   resolveSidebarDropVerb,
@@ -1232,7 +1233,7 @@ const SidebarThreadRow = memo(function SidebarThreadRow(props: {
   isRenaming: boolean;
   renamingTitle: string;
   onContextMenu: (threadRef: ScopedThreadRef, position: { x: number; y: number }) => void;
-  onArchive: (threadRef: ScopedThreadRef) => void;
+  onArchive: (threadRef: ScopedThreadRef, opts: { expectedAction: ArchiveToggleAction }) => void;
   onFork: (threadRef: ScopedThreadRef) => void;
   onSettle: (threadRef: ScopedThreadRef) => void;
   onUnsettle: (threadRef: ScopedThreadRef) => void;
@@ -1556,13 +1557,21 @@ const SidebarThreadRow = memo(function SidebarThreadRow(props: {
     },
     [onSettle, threadRef],
   );
+  const archiveAction = resolveArchiveToggleAction(thread);
+  const archivePending = archiveAction === "cancel";
+  const archiveLabel =
+    archiveAction === "cancel"
+      ? "Cancel archive after turn"
+      : archiveAction === "schedule"
+        ? "Archive after turn"
+        : "Archive";
   const handleArchiveClick = useCallback(
     (event: ReactMouseEvent) => {
       event.preventDefault();
       event.stopPropagation();
-      onArchive(threadRef);
+      onArchive(threadRef, { expectedAction: archiveAction });
     },
-    [onArchive, threadRef],
+    [archiveAction, onArchive, threadRef],
   );
   const handleForkClick = useCallback(
     (event: ReactMouseEvent) => {
@@ -1619,14 +1628,6 @@ const SidebarThreadRow = memo(function SidebarThreadRow(props: {
   // on blocked-on-you work or queued turns (the server rejects both).
   const showSnoozeButton =
     props.snoozeSupported && canSnooze(thread, { now: new Date().toISOString() });
-  const archiveAction = resolveArchiveToggleAction(thread);
-  const archivePending = archiveAction === "cancel";
-  const archiveLabel =
-    archiveAction === "cancel"
-      ? "Cancel archive after turn"
-      : archiveAction === "schedule"
-        ? "Archive after turn"
-        : "Archive";
   const showForkButton = canForkConversation(thread);
   // If the thread becomes blocked while the popover is open, the button
   // unmounts without firing onOpenChange(false). Deriving the flag keeps a
@@ -1742,7 +1743,10 @@ const SidebarThreadRow = memo(function SidebarThreadRow(props: {
 
   const accessibility = resolveSidebarRowAccessibility({
     title: thread.title,
-    statusLabel: topStatus?.label ?? null,
+    // The row's aria-label replaces its content, so the marker is announced here.
+    statusLabel:
+      [topStatus?.label, archivePending && "archives after this turn"].filter(Boolean).join(", ") ||
+      null,
     projectDisplayName: props.projectDisplayName,
     isActive: props.isActive,
   });
@@ -2281,7 +2285,6 @@ const SidebarThreadRow = memo(function SidebarThreadRow(props: {
                     {archivePending ? (
                       <span className="ml-1.5 inline-flex items-center text-warning-foreground">
                         <ArchiveIcon aria-hidden className="size-3.5 shrink-0" />
-                        <span className="sr-only">Archives after this turn</span>
                       </span>
                     ) : null}
                   </span>
@@ -4133,8 +4136,8 @@ export default function Sidebar() {
   );
 
   const attemptArchive = useCallback(
-    (threadRef: ScopedThreadRef) => {
-      void attemptArchiveThread(threadRef);
+    (threadRef: ScopedThreadRef, opts?: { expectedAction?: ArchiveToggleAction }) => {
+      void attemptArchiveThread(threadRef, opts);
     },
     [attemptArchiveThread],
   );
@@ -5379,6 +5382,7 @@ export default function Sidebar() {
         const isSettled = settledThreadKeysRef.current.has(threadKey);
         const isSnoozed = snoozedThreadKeysRef.current.has(threadKey);
         const isPinned = thread.pinnedAt != null;
+        const archiveAction = resolveArchiveToggleAction(thread);
         // Presets resolve at menu-open time (same as the popover).
         const snoozePresets = resolveSnoozePresets(new Date(), timestampFormat, {
           untilWoken:
@@ -5417,7 +5421,7 @@ export default function Sidebar() {
                 isSnoozed,
                 canSnoozeNow: canSnooze(thread, { now: new Date().toISOString() }),
                 isRegeneratingTitle,
-                archiveAction: resolveArchiveToggleAction(thread),
+                archiveAction,
                 supports: {
                   settlement: supportsSettlement,
                   autoSettleOptOut: supportsAutoSettleOptOut,
@@ -5574,7 +5578,7 @@ export default function Sidebar() {
             return;
           }
           case "archive": {
-            attemptArchive(threadRef);
+            attemptArchive(threadRef, { expectedAction: archiveAction });
             return;
           }
           case "copy-path":

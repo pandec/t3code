@@ -704,6 +704,16 @@ export const ThreadListV2Row = memo(function ThreadListV2Row(props: {
   const statusLabel = STATUS_LABEL_BY_STATUS[status];
   const timeLabel = props.timeLabel;
   const workingLabel = resolveThreadListV2WorkingTimeLabel(thread, status);
+  const archivePending = hasPendingArchive(thread);
+  // The row's accessibilityLabel collapses its subtree, so row-level markers
+  // are announced here rather than on their icons.
+  const rowAccessibilityLabel = [
+    thread.title,
+    props.hasQueuedMessages && "messages queued to send",
+    archivePending && "archives after this turn",
+  ]
+    .filter(Boolean)
+    .join(", ");
   // Set while this thread's recording is playing or paused mid-way, so
   // pausing from the list keeps a way back in. A finished recording clears
   // it. Re-renders only when the state flips, never on the progress tick.
@@ -1189,13 +1199,12 @@ export const ThreadListV2Row = memo(function ThreadListV2Row(props: {
         </Text>
         {/* A scheduled archive (`/t3-archive` or an after-turn archive) stays
             visible at a glance until it runs or is cancelled. */}
-        {hasPendingArchive(thread) ? (
+        {archivePending ? (
           <SymbolView
             name="archivebox"
             size={11}
             tintColorClassName="accent-warning-foreground"
             type="monochrome"
-            accessibilityLabel="Archives after this turn"
           />
         ) : null}
       </View>
@@ -1371,9 +1380,7 @@ export const ThreadListV2Row = memo(function ThreadListV2Row(props: {
         interactionOpacity={rowAppearance.interactionOpacity}
         className={rowAppearance.className}
         accessibilityHint={swipeAccessibilityHint}
-        accessibilityLabel={
-          props.hasQueuedMessages ? `${thread.title}, messages queued to send` : thread.title
-        }
+        accessibilityLabel={rowAccessibilityLabel}
         accessibilityRole="button"
         accessibilityState={{ selected }}
         onAccessibilityAction={onListeningAccessibilityAction}
@@ -1413,9 +1420,7 @@ export const ThreadListV2Row = memo(function ThreadListV2Row(props: {
         interactionClassName={rowAppearance.interactionClassName}
         interactionOpacity={rowAppearance.interactionOpacity}
         accessibilityHint={swipeAccessibilityHint}
-        accessibilityLabel={
-          props.hasQueuedMessages ? `${thread.title}, messages queued to send` : thread.title
-        }
+        accessibilityLabel={rowAccessibilityLabel}
         accessibilityRole="button"
         accessibilityState={{ selected }}
         className={rowAppearance.className}
