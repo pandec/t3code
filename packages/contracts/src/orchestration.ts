@@ -439,14 +439,15 @@ export const ProjectScript = Schema.Struct({
    */
   async: Schema.optional(Schema.Boolean),
   /**
-   * URL to open in the in-app browser preview when this script runs (or
-   * when the user explicitly requests a preview). Optional; only honored on
-   * the desktop build.
+   * URL to open in the in-app browser preview. With `autoOpenPreview`, its
+   * path is opened on the dev server detected in the workspace, whatever port
+   * that server uses. Optional; only honored on the desktop build.
    */
   previewUrl: Schema.optional(TrimmedNonEmptyString),
   /**
-   * When true, automatically open the preview panel pointed at `previewUrl`
-   * the moment this script starts. Ignored without `previewUrl` or on web.
+   * When true, running this script reuses a dev server already running in the
+   * workspace, or starts one, then opens `previewUrl` in the in-app browser.
+   * Ignored without `previewUrl` or on web.
    */
   autoOpenPreview: Schema.optional(Schema.Boolean),
 });

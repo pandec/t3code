@@ -90,14 +90,18 @@ const LSOF_TEST_PORT = 43_123;
 const makeLsofScannerLayer = (input: {
   readonly pid: () => number;
   readonly fetch: typeof globalThis.fetch;
+  /** Process cwd reported by `lsof -d cwd`. */
+  readonly cwd?: string;
 }) =>
   PortScanner.layer.pipe(
     Layer.provide(
       Layer.mergeAll(
         Layer.succeed(ProcessRunner.ProcessRunner, {
-          run: () =>
+          run: (run) =>
             Effect.succeed({
-              stdout: `p${input.pid()}\ncnode\nn*:${LSOF_TEST_PORT}\n`,
+              stdout: run.args.includes("cwd")
+                ? `p${input.pid()}\nfcwd\nn${input.cwd ?? "/"}\n`
+                : `p${input.pid()}\ncnode\nn*:${LSOF_TEST_PORT}\n`,
               stderr: "",
               code: null,
               timedOut: false,
@@ -270,6 +274,29 @@ effectIt.effect("revalidates a successful HTML probe after its cache entry expir
       `http://localhost:${LSOF_TEST_PORT}/`,
       `https://localhost:${LSOF_TEST_PORT}/`,
     ]);
+  }).pipe(Effect.provide(layer));
+});
+
+effectIt.effect("finds a web server by its process working directory", () => {
+  const fetchFn = (() =>
+    Promise.resolve(
+      new Response("ok", { headers: { "content-type": "text/html" } }),
+    )) as typeof globalThis.fetch;
+  const layer = makeLsofScannerLayer({
+    pid: () => 1234,
+    fetch: fetchFn,
+    cwd: "/work/dashboard/apps/web",
+  });
+
+  return Effect.gen(function* () {
+    const scanner = yield* PortScanner.PortDiscovery;
+    const match = yield* scanner.findWorkspaceServer({ cwd: "/work/dashboard", waitMs: 0 });
+    expect(match?.port).toBe(LSOF_TEST_PORT);
+    expect(match?.pid).toBe(1234);
+    expect(
+      yield* scanner.findWorkspaceServer({ cwd: "/work/dashboard/apps/api", waitMs: 0 }),
+    ).toBeNull();
+    expect(yield* scanner.findWorkspaceServer({ cwd: "/work/dash", waitMs: 0 })).toBeNull();
   }).pipe(Effect.provide(layer));
 });
 

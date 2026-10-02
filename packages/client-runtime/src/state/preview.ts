@@ -45,6 +45,10 @@ export function createPreviewEnvironmentAtoms<R, E>(
       // unmounted projects stop contributing probe candidates on the server.
       idleTtlMs: 0,
     }),
+    findWorkspaceServer: createEnvironmentRpcCommand(runtime, {
+      label: "environment-data:preview:find-workspace-server",
+      tag: WS_METHODS.previewFindWorkspaceServer,
+    }),
     automationRequests: createEnvironmentRpcSubscriptionAtomFamily(runtime, {
       label: "environment-data:preview:automation-requests",
       tag: WS_METHODS.previewAutomationConnect,

@@ -23,6 +23,8 @@ This is a personal fork of [pingdotgg/t3code](https://github.com/pingdotgg/t3cod
 
 - **Archive after a turn.** Ask an agent to archive its thread when done, optionally removing its clean worktree. The `archive_thread` tool schedules this after successful completion, the final checkpoint, and background work; `archive_thread_status` and `cancel_thread_archive` inspect or cancel the request. The CLI also supports `t3 thread archive self --after-turn --remove-worktree` and explicit thread IDs. Requests survive restarts, and cleanup preserves branches, project roots, and checkouts used by other threads. [Usage and cleanup limits](docs/user/cli-automation.md#archiving-after-a-turn).
 
+- **Open a project's dev server from an action.** In the desktop app, give an action a Preview URL and turn on **Open in browser, reusing a running dev server**. If a web server is already running from the project or worktree directory, clicking the action opens it in the in-app browser without running the command again. Otherwise it runs the command, waits up to a minute for the server, and opens it. Only the URL's path matters, so Vite moving to another port is fine. Detection uses `lsof` on macOS and Linux; on Windows, or for servers in Docker, the action runs the command and opens the configured URL.
+
 ### Conversations & threads
 
 - **CLI title ownership and setup control.** Explicit `t3 thread new --title` values stay protected from automatic renaming. Worktree setup runs alongside the agent by default; mark a setup action `async: false` when it must finish first. CLI action edits preserve this choice.

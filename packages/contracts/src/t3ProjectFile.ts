@@ -52,13 +52,13 @@ export const T3ProjectFileScript = Schema.Struct({
   previewUrl: Schema.optionalKey(
     trimmedNonEmpty({
       description:
-        "URL opened in the in-app browser preview when this script runs. Only honored on the desktop build.",
+        "URL opened in the in-app browser preview. With autoOpenPreview, its path is opened on the dev server detected in the workspace, whatever its port. Only honored on the desktop build.",
     }),
   ),
   autoOpenPreview: Schema.optionalKey(
     Schema.Boolean.annotate({
       description:
-        "When true, automatically open the preview panel at `previewUrl` the moment the script starts.",
+        "When true, running the script reuses a dev server already running in the workspace, or starts one, then opens `previewUrl` in the in-app browser.",
     }),
   ),
 }).annotate({

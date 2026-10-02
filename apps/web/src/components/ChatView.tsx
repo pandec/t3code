@@ -202,7 +202,12 @@ import {
   useThreadPreviewState,
 } from "../previewStateStore";
 import { previewRuntimeTabId } from "../browser/previewRuntimeTabId";
-import { BrowserSettingsReadError } from "../browser/openFileInPreview";
+import { BrowserSettingsReadError, openUrlInPreview } from "../browser/openFileInPreview";
+import { resolveDiscoveredServerUrl } from "../browser/browserTargetResolver";
+import {
+  PROJECT_SCRIPT_PREVIEW_WAIT_MS,
+  workspaceServerPreviewUrl,
+} from "./preview/projectScriptPreview";
 import { addBrowserSurface } from "./preview/addBrowserSurface";
 import { closePreviewSession } from "./preview/closePreviewSession";
 import { ThreadPreviewMiniPlayer } from "./preview/ThreadPreviewMiniPlayer";
@@ -1626,6 +1631,9 @@ export default function ChatView(props: ChatViewProps) {
     reportFailure: false,
   });
   const openPreview = useAtomCommand(previewEnvironment.open, { reportFailure: false });
+  const findWorkspaceServer = useAtomCommand(previewEnvironment.findWorkspaceServer, {
+    reportFailure: false,
+  });
   const closePreview = useAtomCommand(previewEnvironment.close, "preview close");
   const { environments } = useEnvironments();
   const serverConfigs = useServerConfigs();
@@ -4378,6 +4386,39 @@ export default function ChatView(props: ChatViewProps) {
         });
       }
       const targetCwd = options?.cwd ?? gitCwd ?? activeProject.workspaceRoot;
+      // Opted-in actions reuse a dev server already running in this workspace
+      // and open it in the in-app browser instead of starting another one.
+      const previewUrl =
+        script.autoOpenPreview && isPreviewSupportedInRuntime()
+          ? (script.previewUrl ?? null)
+          : null;
+      const findScriptServerUrl = async (waitMs: number) => {
+        const result = await findWorkspaceServer({
+          environmentId,
+          input: { cwd: targetCwd, waitMs },
+        });
+        return result._tag === "Success" ? (result.value.server?.url ?? null) : null;
+      };
+      const openScriptPreview = async (serverUrl: string | null) => {
+        if (previewUrl === null || !activeThreadRef) return;
+        const url =
+          serverUrl === null ? previewUrl : workspaceServerPreviewUrl(serverUrl, previewUrl);
+        const result = await openUrlInPreview({
+          threadRef: activeThreadRef,
+          url: resolveDiscoveredServerUrl(environmentId, url),
+          openPreview,
+        });
+        if (result._tag === "Failure" && !isAtomCommandInterrupted(result)) {
+          setThreadError(activeThreadId, `Failed to open preview for "${script.name}".`);
+        }
+      };
+      if (previewUrl !== null) {
+        const runningServerUrl = await findScriptServerUrl(0);
+        if (runningServerUrl !== null) {
+          await openScriptPreview(runningServerUrl);
+          return;
+        }
+      }
       const baseTerminalId =
         terminalUiState.activeTerminalId || activeKnownTerminalIds[0] || DEFAULT_THREAD_TERMINAL_ID;
       const isBaseTerminalBusy = runningTerminalIds.includes(baseTerminalId);
@@ -4450,12 +4491,19 @@ export default function ChatView(props: ChatViewProps) {
           data: `${script.command}\r`,
         },
       });
-      if (writeResult._tag === "Failure" && !isAtomCommandInterrupted(writeResult)) {
-        const error = squashAtomCommandFailure(writeResult);
-        setThreadError(
-          activeThreadId,
-          error instanceof Error ? error.message : `Failed to run script "${script.name}".`,
-        );
+      if (writeResult._tag === "Failure") {
+        if (!isAtomCommandInterrupted(writeResult)) {
+          const error = squashAtomCommandFailure(writeResult);
+          setThreadError(
+            activeThreadId,
+            error instanceof Error ? error.message : `Failed to run script "${script.name}".`,
+          );
+        }
+        return;
+      }
+      if (previewUrl !== null) {
+        // Without a detected server (e.g. Windows or Docker), fall back to the configured URL.
+        await openScriptPreview(await findScriptServerUrl(PROJECT_SCRIPT_PREVIEW_WAIT_MS));
       }
     },
     [
@@ -4470,6 +4518,8 @@ export default function ChatView(props: ChatViewProps) {
       storeSetActiveTerminal,
       setLastInvokedScriptByProjectId,
       environmentId,
+      findWorkspaceServer,
+      openPreview,
       openTerminal,
       activeKnownTerminalIds,
       allocatableActiveTerminalIds,

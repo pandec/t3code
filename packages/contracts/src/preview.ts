@@ -323,6 +323,26 @@ export const DiscoveredLocalServerList = Schema.Struct({
 });
 export type DiscoveredLocalServerList = typeof DiscoveredLocalServerList.Type;
 
+export const PREVIEW_FIND_WORKSPACE_SERVER_MAX_WAIT_MS = 120_000;
+
+/**
+ * Finds a discovered web server whose process runs inside `cwd`, so a dev
+ * server can be reused without pinning its port.
+ */
+export const PreviewFindWorkspaceServerInput = Schema.Struct({
+  cwd: TrimmedNonEmptyString,
+  /** Keep scanning up to this long for a matching server to start. */
+  waitMs: Schema.optional(
+    NonNegativeInt.check(Schema.isLessThanOrEqualTo(PREVIEW_FIND_WORKSPACE_SERVER_MAX_WAIT_MS)),
+  ),
+});
+export type PreviewFindWorkspaceServerInput = typeof PreviewFindWorkspaceServerInput.Type;
+
+export const PreviewFindWorkspaceServerResult = Schema.Struct({
+  server: Schema.NullOr(DiscoveredLocalServer),
+});
+export type PreviewFindWorkspaceServerResult = typeof PreviewFindWorkspaceServerResult.Type;
+
 export class PreviewSessionLookupError extends Schema.TaggedError<PreviewSessionLookupError>()(
   "PreviewSessionLookupError",
   {

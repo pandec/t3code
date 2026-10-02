@@ -54,6 +54,14 @@ export class PortDiscovery extends Context.Service<
       listener: (servers: ReadonlyArray<DiscoveredLocalServer>) => Effect.Effect<void>,
     ) => Effect.Effect<void, never, Scope.Scope>;
     readonly retain: Effect.Effect<void, never, Scope.Scope>;
+    /**
+     * Returns the first discovered web server whose process cwd is `cwd` or
+     * inside it, rescanning for up to `waitMs`. Always null on Windows.
+     */
+    readonly findWorkspaceServer: (input: {
+      readonly cwd: string;
+      readonly waitMs: number;
+    }) => Effect.Effect<DiscoveredLocalServer | null>;
     readonly registerTerminalProcesses: (input: {
       readonly threadId: string;
       readonly terminalId: string;
@@ -76,6 +84,7 @@ const WINDOWS_LISTENER_TIMEOUT_MS = 5_000;
 const WEB_PROBE_TIMEOUT = Duration.seconds(1);
 const WEB_PROBE_CACHE_TTL_MS = Duration.toMillis(Duration.seconds(15));
 const WEB_PROBE_CONCURRENCY = 16;
+const WORKSPACE_SERVER_POLL_INTERVAL = Duration.seconds(1);
 const NAVIGATION_REDIRECT_STATUSES = new Set([301, 302, 303, 307, 308]);
 
 type Listener = (servers: ReadonlyArray<DiscoveredLocalServer>) => Effect.Effect<void>;
@@ -222,6 +231,28 @@ const parseLsofOutput = (
   }
 
   return Array.from(seen.values()).toSorted((a, b) => a.port - b.port);
+};
+
+/** Parses `lsof -a -p <pids> -d cwd -F pn` output into a pid → cwd map. */
+const parseLsofCwdOutput = (raw: string): ReadonlyMap<number, string> => {
+  const cwdByPid = new Map<number, string>();
+  let pid: number | null = null;
+  for (const line of raw.split("\n")) {
+    const tag = line.charAt(0);
+    const value = line.slice(1);
+    if (tag === "p") {
+      const parsed = Number.parseInt(value, 10);
+      pid = Number.isFinite(parsed) && parsed > 0 ? parsed : null;
+    } else if (tag === "n" && pid !== null && value.length > 0) {
+      cwdByPid.set(pid, value);
+    }
+  }
+  return cwdByPid;
+};
+
+const isPathWithin = (root: string, path: string): boolean => {
+  const normalizedRoot = root.length > 1 && root.endsWith("/") ? root.slice(0, -1) : root;
+  return path === normalizedRoot || path.startsWith(`${normalizedRoot}/`);
 };
 
 const parsePortFromLsofName = (name: string): number | null => {
@@ -548,6 +579,57 @@ export const make = Effect.gen(function* PortDiscoveryMake() {
     );
   };
 
+  const recoverCwdProbeFailure = (error: ProcessRunner.ProcessRunError) =>
+    Effect.logDebug("preview workspace server cwd probe failed", { cause: error }).pipe(
+      Effect.as(new Map<number, string>()),
+    );
+
+  const findWorkspaceServerOnce = Effect.fn("PortDiscovery.findWorkspaceServerOnce")(function* (
+    cwd: string,
+  ) {
+    const servers = yield* scanOnce();
+    const pids = [
+      ...new Set(servers.flatMap((server) => (server.pid === null ? [] : [server.pid]))),
+    ];
+    if (pids.length === 0) return null;
+    const cwdByPid = yield* processRunner
+      .run({
+        command: "lsof",
+        args: ["-a", "-p", pids.join(","), "-d", "cwd", "-F", "pn"],
+        timeout: Duration.millis(LSOF_TIMEOUT_MS),
+        maxOutputBytes: 256 * 1024,
+        outputMode: "truncate",
+      })
+      .pipe(
+        Effect.map((result) => parseLsofCwdOutput(result.stdout)),
+        Effect.catchTags({
+          ProcessSpawnError: recoverCwdProbeFailure,
+          ProcessStdinError: recoverCwdProbeFailure,
+          ProcessOutputLimitError: recoverCwdProbeFailure,
+          ProcessReadError: recoverCwdProbeFailure,
+          ProcessTimeoutError: recoverCwdProbeFailure,
+        }),
+      );
+    return (
+      servers.find((server) => {
+        const serverCwd = server.pid === null ? undefined : cwdByPid.get(server.pid);
+        return serverCwd !== undefined && isPathWithin(cwd, serverCwd);
+      }) ?? null
+    );
+  });
+
+  const findWorkspaceServer: PortDiscovery["Service"]["findWorkspaceServer"] = Effect.fn(
+    "PortDiscovery.findWorkspaceServer",
+  )(function* (input) {
+    if (hostPlatform === "win32") return null;
+    const deadline = (yield* Clock.currentTimeMillis) + input.waitMs;
+    while (true) {
+      const server = yield* findWorkspaceServerOnce(input.cwd);
+      if (server !== null || (yield* Clock.currentTimeMillis) >= deadline) return server;
+      yield* Effect.sleep(WORKSPACE_SERVER_POLL_INTERVAL);
+    }
+  });
+
   const pollTick = Effect.fn("PortDiscovery.pollTick")(
     function* () {
       const configuredUrls = [
@@ -659,6 +741,7 @@ export const make = Effect.gen(function* PortDiscoveryMake() {
     scan: scanOnce,
     subscribe,
     retain,
+    findWorkspaceServer,
     registerTerminalProcesses,
     unregisterTerminal,
   });

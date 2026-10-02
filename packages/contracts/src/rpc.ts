@@ -234,6 +234,8 @@ import {
   PreviewCloseInput,
   PreviewError,
   PreviewEvent,
+  PreviewFindWorkspaceServerInput,
+  PreviewFindWorkspaceServerResult,
   PreviewListInput,
   PreviewListResult,
   PreviewNavigateInput,
@@ -408,6 +410,7 @@ export const WS_METHODS = {
   previewRefresh: "preview.refresh",
   previewClose: "preview.close",
   previewList: "preview.list",
+  previewFindWorkspaceServer: "preview.findWorkspaceServer",
   previewReportStatus: "preview.reportStatus",
   previewAutomationConnect: "previewAutomation.connect",
   previewAutomationRespond: "previewAutomation.respond",
@@ -1400,6 +1403,12 @@ const WsPreviewListRpc = Rpc.make(WS_METHODS.previewList, {
   error: EnvironmentAuthorizationError,
 });
 
+const WsPreviewFindWorkspaceServerRpc = Rpc.make(WS_METHODS.previewFindWorkspaceServer, {
+  payload: PreviewFindWorkspaceServerInput,
+  success: PreviewFindWorkspaceServerResult,
+  error: EnvironmentAuthorizationError,
+});
+
 const WsPreviewReportStatusRpc = Rpc.make(WS_METHODS.previewReportStatus, {
   payload: PreviewReportStatusInput,
   error: Schema.Union([PreviewError, EnvironmentAuthorizationError]),
@@ -1756,6 +1765,7 @@ export const WsRpcGroup = RpcGroup.make(
   WsPreviewRefreshRpc,
   WsPreviewCloseRpc,
   WsPreviewListRpc,
+  WsPreviewFindWorkspaceServerRpc,
   WsPreviewReportStatusRpc,
   WsPreviewAutomationConnectRpc,
   WsPreviewAutomationRespondRpc,

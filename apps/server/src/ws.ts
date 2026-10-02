@@ -3002,6 +3002,22 @@ const makeWsRpcLayer = (
           observeRpcEffect(WS_METHODS.previewList, previewManager.list(input), {
             "rpc.aggregate": "preview",
           }),
+        [WS_METHODS.previewFindWorkspaceServer]: (input) =>
+          observeRpcEffect(
+            WS_METHODS.previewFindWorkspaceServer,
+            Effect.gen(function* () {
+              // lsof reports canonical paths, so compare against the canonical root.
+              const cwd = yield* fileSystem
+                .realPath(input.cwd)
+                .pipe(Effect.orElseSucceed(() => input.cwd));
+              const server = yield* portDiscovery.findWorkspaceServer({
+                cwd,
+                waitMs: input.waitMs ?? 0,
+              });
+              return { server };
+            }),
+            { "rpc.aggregate": "preview" },
+          ),
         [WS_METHODS.previewReportStatus]: (input) =>
           observeRpcEffect(WS_METHODS.previewReportStatus, previewManager.reportStatus(input), {
             "rpc.aggregate": "preview",
