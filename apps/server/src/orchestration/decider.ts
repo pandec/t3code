@@ -2274,25 +2274,58 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
     }
 
     case "thread.turn.interrupt": {
-      yield* requireThread({
+      const thread = yield* requireThread({
         readModel,
         command,
         threadId: command.threadId,
       });
-      return {
+      const interrupt = {
         ...(yield* withEventBase({
           aggregateKind: "thread",
           aggregateId: command.threadId,
           occurredAt: command.createdAt,
           commandId: command.commandId,
         })),
-        type: "thread.turn-interrupt-requested",
+        type: "thread.turn-interrupt-requested" as const,
         payload: {
           threadId: command.threadId,
           ...(command.turnId !== undefined ? { turnId: command.turnId } : {}),
           createdAt: command.createdAt,
         },
       };
+      // Stopping the turn a deferred archive waits on cancels the archive in
+      // the same decision. Later provider session updates can revive or
+      // settle the turn as completed, so the turn state alone is not durable.
+      const archiveRequest = thread.archiveRequest;
+      const stoppedTurnId = command.turnId ?? thread.latestTurn?.turnId;
+      if (
+        archiveRequest?.status !== "pending" ||
+        archiveRequest.turnId === null ||
+        archiveRequest.turnId !== stoppedTurnId
+      ) {
+        return interrupt;
+      }
+      return [
+        interrupt,
+        {
+          ...(yield* withEventBase({
+            aggregateKind: "thread",
+            aggregateId: command.threadId,
+            occurredAt: command.createdAt,
+            commandId: command.commandId,
+          })),
+          type: "thread.meta-updated" as const,
+          payload: {
+            threadId: command.threadId,
+            archiveRequest: {
+              ...archiveRequest,
+              status: "cancelled" as const,
+              detail: "The turn was stopped.",
+            },
+            updatedAt: command.createdAt,
+          },
+        },
+      ];
     }
 
     case "thread.approval.respond": {

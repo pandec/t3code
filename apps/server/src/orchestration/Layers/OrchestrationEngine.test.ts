@@ -1235,7 +1235,8 @@ describe("OrchestrationEngine", () => {
           threadId,
         });
       } else if (outcome === "stopped") {
-        // A user stop is final even when the provider then reports a plain
+        // A user stop cancels the archive at once and stays final, even when
+        // the provider briefly reports the turn running again and then a plain
         // "ready" session, which alone would read as a completed turn.
         await dispatch({
           type: "thread.turn.interrupt",
@@ -1244,19 +1245,22 @@ describe("OrchestrationEngine", () => {
           turnId,
           createdAt: now(),
         });
-        await dispatch({
-          type: "thread.session.set",
-          commandId: CommandId.make("finish"),
-          threadId,
-          session: session("ready", null),
-          createdAt: now(),
+        expect((await system.readModel()).threads[0]?.archiveRequest).toMatchObject({
+          status: "cancelled",
+          detail: "The turn was stopped.",
         });
-        await dispatch({
-          type: "thread.archive.execute",
-          commandId: CommandId.make("execute"),
-          threadId,
-          requestId,
-        });
+        for (const [id, status, activeTurnId] of [
+          ["still-running", "running", turnId],
+          ["finish", "ready", null],
+        ] as const) {
+          await dispatch({
+            type: "thread.session.set",
+            commandId: CommandId.make(id),
+            threadId,
+            session: session(status, activeTurnId),
+            createdAt: now(),
+          });
+        }
       } else {
         await dispatch({
           type: "thread.session.set",

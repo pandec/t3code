@@ -176,7 +176,6 @@ export const make = Effect.gen(function* () {
           case "thread.archived":
           case "thread.session-set":
           case "thread.turn-diff-completed":
-          case "thread.turn-interrupt-requested":
           case "thread.turn-start-requested":
             return worker.enqueue(event.payload.threadId);
           case "thread.activity-appended":
