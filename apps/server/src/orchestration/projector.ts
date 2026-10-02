@@ -61,6 +61,7 @@ import {
   ThreadRevertedPayload,
   ThreadSessionSetPayload,
   ThreadTurnDiffCompletedPayload,
+  ThreadTurnInterruptRequestedPayload,
 } from "./Schemas.ts";
 
 type ThreadPatch = Partial<Omit<OrchestrationThread, "id" | "projectId">>;
@@ -1141,6 +1142,41 @@ export function projectEvent(
           }),
         };
       });
+
+    case "thread.turn-interrupt-requested":
+      return decodeForEvent(
+        ThreadTurnInterruptRequestedPayload,
+        event.payload,
+        event.type,
+        "payload",
+      ).pipe(
+        Effect.map((payload) => {
+          const thread = nextBase.threads.find((entry) => entry.id === payload.threadId);
+          // Mirrors the SQL projection: a user stop ends the running turn as
+          // interrupted even when the provider then reports a plain "ready"
+          // session, so turn-scoped requests (deferred archive, worktree
+          // switch) cancel instead of waiting for a checkpoint that never lands.
+          if (
+            !thread ||
+            payload.turnId === undefined ||
+            thread.latestTurn?.turnId !== payload.turnId ||
+            thread.latestTurn.state !== "running"
+          ) {
+            return nextBase;
+          }
+          return {
+            ...nextBase,
+            threads: updateThread(nextBase.threads, payload.threadId, {
+              latestTurn: {
+                ...thread.latestTurn,
+                state: "interrupted",
+                completedAt: payload.createdAt,
+              },
+              updatedAt: event.occurredAt,
+            }),
+          };
+        }),
+      );
 
     case "thread.turn-diff-completed":
       return Effect.gen(function* () {

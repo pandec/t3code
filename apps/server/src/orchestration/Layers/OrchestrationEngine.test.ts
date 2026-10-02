@@ -1129,6 +1129,7 @@ describe("OrchestrationEngine", () => {
   it.each([
     "completed",
     "interrupted",
+    "stopped",
     "error",
     "new-turn",
     "cancel",
@@ -1232,6 +1233,29 @@ describe("OrchestrationEngine", () => {
           type: "thread.archive.cancel",
           commandId: CommandId.make("cancel"),
           threadId,
+        });
+      } else if (outcome === "stopped") {
+        // A user stop is final even when the provider then reports a plain
+        // "ready" session, which alone would read as a completed turn.
+        await dispatch({
+          type: "thread.turn.interrupt",
+          commandId: CommandId.make("stop"),
+          threadId,
+          turnId,
+          createdAt: now(),
+        });
+        await dispatch({
+          type: "thread.session.set",
+          commandId: CommandId.make("finish"),
+          threadId,
+          session: session("ready", null),
+          createdAt: now(),
+        });
+        await dispatch({
+          type: "thread.archive.execute",
+          commandId: CommandId.make("execute"),
+          threadId,
+          requestId,
         });
       } else {
         await dispatch({
