@@ -433,9 +433,9 @@ export function useThreadActions() {
       if (!resolved) return;
       archivingThreadKeys.add(threadKey);
       try {
-        // Running threads cannot archive now, so the same control schedules
-        // an archive for after the turn and toggles a pending one off. Both
-        // are reversible, so they skip the confirmation.
+        // Busy threads (running turn or background work) archive when done,
+        // so the same control schedules that and toggles a pending one off.
+        // Both are reversible, so they skip the confirmation.
         const toggleAction = resolveArchiveToggleAction(resolved.thread);
         // A request that settled while the menu was open must not turn
         // "Cancel pending archive" into an archive; the label refreshes instead.
@@ -464,7 +464,7 @@ export function useThreadActions() {
           toastManager.add(
             stackedThreadToast({
               type: "success",
-              title: toggleAction === "cancel" ? "Archive cancelled" : "Archive after turn",
+              title: toggleAction === "cancel" ? "Archive cancelled" : "Archive when done",
               description:
                 toggleAction === "cancel"
                   ? "This thread will stay open."

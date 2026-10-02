@@ -196,7 +196,7 @@ describe("buildThreadActionMenuItems", () => {
     ).toContain("archive");
   });
 
-  it("offers archive after turn and cancel instead of disabling archive", () => {
+  it("offers archive when done and cancel instead of disabling archive", () => {
     const archiveLabel = (archiveAction: "archive" | "schedule" | "cancel") => {
       const item = buildThreadActionMenuItems({ ...baseState, archiveAction }).find(
         (entry) => entry.id === "archive",
@@ -204,7 +204,7 @@ describe("buildThreadActionMenuItems", () => {
       expect(item?.disabled).toBeFalsy();
       return item?.label;
     };
-    expect(archiveLabel("schedule")).toBe("Archive after turn");
+    expect(archiveLabel("schedule")).toBe("Archive when done");
     expect(archiveLabel("cancel")).toBe("Cancel pending archive");
   });
 });

@@ -3005,7 +3005,7 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
                 type: "slash-command" as const,
                 command: "t3-archive" as const,
                 label: "/t3-archive",
-                description: "Archive now or after this turn; add cancel to cancel",
+                description: "Archive now or when done; send again to cancel",
               },
               {
                 id: "slash:t3-status",

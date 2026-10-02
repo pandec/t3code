@@ -107,7 +107,7 @@ export function buildComposerSlashCommandItems(input: {
             type: "slash-command" as const,
             command: "t3-archive",
             label: "/t3-archive",
-            description: "Archive now or after this turn; add cancel to cancel",
+            description: "Archive now or when done; send again to cancel",
           },
           {
             id: "cmd:t3-status",

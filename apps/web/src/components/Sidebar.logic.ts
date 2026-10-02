@@ -646,18 +646,19 @@ export function canArchiveThreadNow(thread: Pick<SidebarThreadSummary, "session"
   return !(session?.status === "running" && session.activeTurnId != null);
 }
 
-/**
- * What the archive control does for a thread: a pending archive is cancelled,
- * a running thread schedules one for after its turn, and anything else
- * archives now. Shared by the sidebar button, keybinding, and palette.
- */
 export type ArchiveToggleAction = "archive" | "schedule" | "cancel";
 
+/**
+ * What the archive control does for a thread: a pending archive is cancelled,
+ * a running turn or live background work (Working/Monitoring) schedules one
+ * for when the thread is done, and anything else archives now. Shared by the
+ * sidebar button, keybinding, menus, and palette.
+ */
 export function resolveArchiveToggleAction(
-  thread: Pick<SidebarThreadSummary, "session" | "archiveRequest">,
+  thread: Pick<SidebarThreadSummary, "session" | "archiveRequest" | "backgroundLiveness">,
 ): ArchiveToggleAction {
   if (hasPendingArchive(thread)) return "cancel";
-  return canArchiveThreadNow(thread) ? "archive" : "schedule";
+  return canArchiveThreadNow(thread) && thread.backgroundLiveness == null ? "archive" : "schedule";
 }
 
 /**
