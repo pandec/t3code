@@ -1129,6 +1129,7 @@ describe("OrchestrationEngine", () => {
   it.each([
     "completed",
     "interrupted",
+    "stopped",
     "error",
     "new-turn",
     "cancel",
@@ -1233,6 +1234,33 @@ describe("OrchestrationEngine", () => {
           commandId: CommandId.make("cancel"),
           threadId,
         });
+      } else if (outcome === "stopped") {
+        // A user stop cancels the archive at once and stays final, even when
+        // the provider briefly reports the turn running again and then a plain
+        // "ready" session, which alone would read as a completed turn.
+        await dispatch({
+          type: "thread.turn.interrupt",
+          commandId: CommandId.make("stop"),
+          threadId,
+          turnId,
+          createdAt: now(),
+        });
+        expect((await system.readModel()).threads[0]?.archiveRequest).toMatchObject({
+          status: "cancelled",
+          detail: "The turn was stopped.",
+        });
+        for (const [id, status, activeTurnId] of [
+          ["still-running", "running", turnId],
+          ["finish", "ready", null],
+        ] as const) {
+          await dispatch({
+            type: "thread.session.set",
+            commandId: CommandId.make(id),
+            threadId,
+            session: session(status, activeTurnId),
+            createdAt: now(),
+          });
+        }
       } else {
         await dispatch({
           type: "thread.session.set",
@@ -1280,6 +1308,20 @@ describe("OrchestrationEngine", () => {
       const thread = (await system.readModel()).threads[0];
       if (outcome === "completed") {
         expect(thread?.archivedAt).not.toBeNull();
+        // A late stop, with or without its turn id, never cancels started cleanup.
+        for (const [id, stoppedTurnId] of [
+          ["late-stop", turnId],
+          ["late-stop-latest", undefined],
+        ] as const) {
+          await dispatch({
+            type: "thread.turn.interrupt",
+            commandId: CommandId.make(id),
+            threadId,
+            ...(stoppedTurnId === undefined ? {} : { turnId: stoppedTurnId }),
+            createdAt: now(),
+          });
+        }
+        expect((await system.readModel()).threads[0]?.archiveRequest?.status).toBe("pending");
         await expect(
           dispatch({
             type: "thread.unarchive",
