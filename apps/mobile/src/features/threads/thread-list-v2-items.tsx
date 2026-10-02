@@ -710,11 +710,11 @@ export const ThreadListV2Row = memo(function ThreadListV2Row(props: {
   const rowAccessibilityLabel = [
     thread.title,
     props.hasQueuedMessages && "messages queued to send",
-    archivePending && "archives after this turn",
+    archivePending && "archives when done",
   ]
     .filter(Boolean)
     .join(", ");
-  // A scheduled archive (`/t3-archive` or an after-turn archive) stays visible
+  // A scheduled archive (`/t3-archive` or a deferred archive) stays visible
   // at a glance in both row variants until it runs or is cancelled.
   const archivePendingIcon = archivePending ? (
     <SymbolView

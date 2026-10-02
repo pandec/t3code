@@ -1566,9 +1566,9 @@ const SidebarThreadRow = memo(function SidebarThreadRow(props: {
   ) : null;
   const archiveLabel =
     archiveAction === "cancel"
-      ? "Cancel archive after turn"
+      ? "Cancel pending archive"
       : archiveAction === "schedule"
-        ? "Archive after turn"
+        ? "Archive when done"
         : "Archive";
   const handleArchiveClick = useCallback(
     (event: ReactMouseEvent) => {
@@ -1750,8 +1750,7 @@ const SidebarThreadRow = memo(function SidebarThreadRow(props: {
     title: thread.title,
     // The row's aria-label replaces its content, so the marker is announced here.
     statusLabel:
-      [topStatus?.label, archivePending && "archives after this turn"].filter(Boolean).join(", ") ||
-      null,
+      [topStatus?.label, archivePending && "archives when done"].filter(Boolean).join(", ") || null,
     projectDisplayName: props.projectDisplayName,
     isActive: props.isActive,
   });

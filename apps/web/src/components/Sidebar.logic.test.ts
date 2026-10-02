@@ -373,8 +373,15 @@ describe("resolveArchiveToggleAction", () => {
     status: "pending",
   } as const;
 
-  it("archives idle threads now and schedules running ones for after the turn", () => {
+  it("archives idle threads now and schedules busy ones for when they are done", () => {
     expect(resolveArchiveToggleAction({ session: null })).toBe("archive");
+    // Background work (Working/Monitoring with no turn) waits like a turn does.
+    expect(resolveArchiveToggleAction({ session: null, backgroundLiveness: "monitoring" })).toBe(
+      "schedule",
+    );
+    expect(resolveArchiveToggleAction({ session: null, backgroundLiveness: "working" })).toBe(
+      "schedule",
+    );
     expect(resolveArchiveToggleAction({ session, archiveRequest: null })).toBe("schedule");
     // A settled request no longer blocks scheduling again.
     expect(

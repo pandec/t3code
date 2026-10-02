@@ -370,12 +370,12 @@ export function buildArchiveCurrentThreadAction(input: {
   return {
     kind: "action",
     value: "action:archive-current-thread",
-    searchTerms: ["archive", "close", "done", "finish", "current thread", "after turn", "cancel"],
+    searchTerms: ["archive", "close", "done", "finish", "current thread", "when done", "cancel"],
     title:
       input.archiveAction === "cancel"
         ? "Cancel pending archive"
         : input.archiveAction === "schedule"
-          ? "Archive current thread after turn"
+          ? "Archive current thread when done"
           : "Archive current thread",
     icon: input.icon,
     shortcutCommand: "thread.archive",

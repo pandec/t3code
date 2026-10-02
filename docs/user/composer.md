@@ -154,15 +154,17 @@ Send `/compact` in an existing conversation to reduce context usage when the
 provider supports it. Web and desktop also offer compaction from the context meter.
 
 Send `/t3-archive` by itself, without attachments or context, to archive the current
-thread on web, desktop, or mobile. Idle threads archive immediately; running threads
-wait for the turn to complete successfully, its checkpoint, and any background work.
+thread on web, desktop, or mobile. Idle threads archive immediately. A running turn or
+background work makes the archive wait for the turn to complete successfully, its
+checkpoint, and the background work.
 The request survives closing the app or restarting the server, and keeps the worktree.
 A failed or interrupted turn, or starting new work, cancels the request.
 
 Send `/t3-archive` again before archiving starts to cancel a pending request.
 A pending archive shows an archive icon next to the thread's status in the thread list.
 On web and desktop, the sidebar archive button, the archive keybinding, and the
-thread menus schedule the archive on a running thread and cancel a pending one.
+thread menus do the same for a thread that is working or monitoring background work, and
+cancel a pending archive.
 Archived threads can be restored from **Settings → Archived threads**.
 
 ## Context in your message
