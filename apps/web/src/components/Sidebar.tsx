@@ -1559,6 +1559,11 @@ const SidebarThreadRow = memo(function SidebarThreadRow(props: {
   );
   const archiveAction = resolveArchiveToggleAction(thread);
   const archivePending = archiveAction === "cancel";
+  // Always visible so a scheduled archive reads at a glance in both row
+  // variants; the hover archive button shows it active and cancels it.
+  const archivePendingIcon = archivePending ? (
+    <ArchiveIcon aria-hidden className="size-3.5 shrink-0 text-warning-foreground" />
+  ) : null;
   const archiveLabel =
     archiveAction === "cancel"
       ? "Cancel archive after turn"
@@ -2029,6 +2034,7 @@ const SidebarThreadRow = memo(function SidebarThreadRow(props: {
               remain visible AND clickable while the row is hovered. Only
               the time/jump label yields to the settle affordance. */}
             {prBadge}
+            {archivePendingIcon}
             {sortable?.isDragging ? (
               dragDestination
             ) : (
@@ -2280,12 +2286,8 @@ const SidebarThreadRow = memo(function SidebarThreadRow(props: {
                     ) : (
                       threadTimeLabel(thread)
                     )}
-                    {/* Always visible so a scheduled archive reads at a glance;
-                        the hover archive button shows it active and cancels it. */}
-                    {archivePending ? (
-                      <span className="ml-1.5 inline-flex items-center text-warning-foreground">
-                        <ArchiveIcon aria-hidden className="size-3.5 shrink-0" />
-                      </span>
+                    {archivePendingIcon ? (
+                      <span className="ml-1.5 inline-flex items-center">{archivePendingIcon}</span>
                     ) : null}
                   </span>
                   <span

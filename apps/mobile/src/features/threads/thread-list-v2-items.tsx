@@ -714,6 +714,16 @@ export const ThreadListV2Row = memo(function ThreadListV2Row(props: {
   ]
     .filter(Boolean)
     .join(", ");
+  // A scheduled archive (`/t3-archive` or an after-turn archive) stays visible
+  // at a glance in both row variants until it runs or is cancelled.
+  const archivePendingIcon = archivePending ? (
+    <SymbolView
+      name="archivebox"
+      size={11}
+      tintColorClassName="accent-warning-foreground"
+      type="monochrome"
+    />
+  ) : null;
   // Set while this thread's recording is playing or paused mid-way, so
   // pausing from the list keeps a way back in. A finished recording clears
   // it. Re-renders only when the state flips, never on the progress tick.
@@ -1197,16 +1207,7 @@ export const ThreadListV2Row = memo(function ThreadListV2Row(props: {
           {statusLabel?.label ?? timeLabel}
           {workingLabel === null ? null : ` ${workingLabel}`}
         </Text>
-        {/* A scheduled archive (`/t3-archive` or an after-turn archive) stays
-            visible at a glance until it runs or is cancelled. */}
-        {archivePending ? (
-          <SymbolView
-            name="archivebox"
-            size={11}
-            tintColorClassName="accent-warning-foreground"
-            type="monochrome"
-          />
-        ) : null}
+        {archivePendingIcon}
       </View>
       <Text
         className={cn(
@@ -1482,6 +1483,7 @@ export const ThreadListV2Row = memo(function ThreadListV2Row(props: {
           {listeningIndicator}
           {slimPinIndicator}
           {props.hasQueuedMessages ? <QueuedMessageIcon selected={selected} /> : null}
+          {archivePendingIcon}
           <Text
             className={cn(
               "text-sm tabular-nums",
