@@ -1892,6 +1892,10 @@ export default function ChatView(props: ChatViewProps) {
   const composerRestingRef = useRef(false);
   // The last overlay height the composer published for its settled layout.
   const composerOverlayHeightRef = useRef(0);
+  // Height of the banner stack above the composer input at the last publish,
+  // and whether that publish grew it (see the timeline re-pin below).
+  const composerBannerHeightRef = useRef(0);
+  const composerBannerGrewRef = useRef(false);
   const [scrollToEndClearance, setScrollToEndClearance] = useState(0);
   const isAtEndRef = useRef(true);
   const isTimelineAtLogicalEnd = useCallback(
@@ -6197,13 +6201,26 @@ export default function ChatView(props: ChatViewProps) {
         overlayHeight: nextHeight,
         isResting: composerRestingRef.current,
       });
+      const mainSurface = composerOverlayElement?.querySelector<HTMLElement>(
+        '[data-chat-composer-main-surface="true"]',
+      );
+      const bannerHeight =
+        composerOverlayElement && mainSurface
+          ? mainSurface.getBoundingClientRect().top -
+            composerOverlayElement.getBoundingClientRect().top
+          : 0;
+      // Only consumed when the inset state changes, so never leave it set otherwise.
+      composerBannerGrewRef.current =
+        nextInset > composerTimelineInsetRef.current &&
+        bannerHeight > composerBannerHeightRef.current + 0.5;
+      composerBannerHeightRef.current = bannerHeight;
       if (composerTimelineInsetRef.current !== nextInset) {
         composerTimelineInsetRef.current = nextInset;
         setComposerTimelineInset(nextInset);
       }
       publishScrollToEndClearance(nextHeight);
     },
-    [publishScrollToEndClearance],
+    [composerOverlayElement, publishScrollToEndClearance],
   );
   // The composer reports its resting flag from a layout effect, which runs
   // before this component's own layout effects and before any resize
@@ -6219,8 +6236,20 @@ export default function ChatView(props: ChatViewProps) {
   useLayoutEffect(() => {
     if (!composerOverlayElement) return;
     composerTimelineInsetRef.current = 0;
+    composerBannerHeightRef.current = 0;
     publishComposerOverlayHeight(composerOverlayElement.getBoundingClientRect().height);
   }, [activeThreadKey, composerOverlayElement, publishComposerOverlayHeight]);
+  // The timeline deliberately does not follow composer inset changes
+  // (footerLayout: false in MessagesTimeline), so a banner mounting above the
+  // input (e.g. Monitoring) would cover the latest message. Re-pin the end
+  // once the taller footer has committed, only while following the end.
+  useLayoutEffect(() => {
+    if (!composerBannerGrewRef.current) return;
+    composerBannerGrewRef.current = false;
+    if (timelineScrollModeRef.current !== "following-end") return;
+    const scrollNode = legendListRef.current?.getScrollableNode();
+    if (scrollNode) scrollNode.scrollTop = scrollNode.scrollHeight;
+  }, [composerTimelineInset]);
 
   useLayoutEffect(() => {
     if (!composerOverlayElement) return;
