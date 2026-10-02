@@ -179,7 +179,7 @@ Run Metro from `apps/mobile`. `vp exec` resolves binaries from the current packa
    In PowerShell, set `$env:APP_VARIANT = "development"` first and then run the `vp exec expo start ...` command without the leading assignment.
 
 4. Wait for Metro to report a completed bundle for the target platform before asserting on UI. A partially bundled app can render an error screen that mimics a native or data failure.
-5. Open the development-client URL for the selected device. Its form is `t3code-dev://expo-development-client/?url=<url-encoded-metro-origin>`; take the origin from Metro's own output. `--lan` embeds the host's current LAN address, which changes between sessions and leaves stale look-alike entries in the dev client's recent-servers list — always re-read the URL Metro prints for the current run. Confirm the loaded bundle belongs to this worktree and Metro port.
+5. Open the development-client URL for the selected device. Its form is `t3code-dev://expo-development-client/?url=<url-encoded-metro-origin>`; take the origin from Metro's own output. `--lan` embeds the host's current LAN address, which changes between sessions and leaves stale look-alike entries in the dev client's recent-servers list — always re-read the URL Metro prints for the current run. Confirm the loaded bundle belongs to this worktree and Metro port. Append `&disableAutoLaunch=1&disableFab=1` to the URL query when developer chrome would obscure screenshots or taps; the SDK 58 dev client applies these preferences before the app loads.
 
 ### iOS launch
 

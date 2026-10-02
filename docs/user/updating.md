@@ -61,6 +61,13 @@ on the server machine using the [installer](install.md), then run
 `t3 service install` from that updated CLI. This replaces the legacy launcher
 and restarts the service while preserving its data.
 
+## Update providers
+
+**Settings → Providers** shows provider updates for the selected environment.
+**Update all** updates every outdated provider on every connected environment
+at once. Hover it to see which providers it will update. Providers that only
+offer a manual update command are not included.
+
 ## Mobile updates
 
 To update an environment from your phone, open **Settings → Environments** and

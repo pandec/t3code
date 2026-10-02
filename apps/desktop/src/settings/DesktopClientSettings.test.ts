@@ -89,6 +89,7 @@ const clientSettings: ClientSettings = {
   sidebarV2NewThreadButtonInProjectRow: true,
   sidebarThreadGroupsButton: true,
   steerGraceWindowMs: 5_000,
+  sidebarWorkingShelfEnabled: false,
   loadBalancingEnabled: false,
   loadBalancingWeights: { "environment-1": 75, "environment-2": 0 },
   pullRequestMergeMethodOverrides: {},

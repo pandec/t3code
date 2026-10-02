@@ -79,7 +79,7 @@ function EnabledMobileDiagnosticsCoordinator() {
     let currentAppState = AppState.currentState;
     let expectedStallProbeAt =
       (globalThis.performance?.now?.() ?? Date.now()) + MOBILE_DIAGNOSTIC_STALL_INTERVAL_MS;
-    recordMobileDiagnostic("app", { state: currentAppState });
+    recordMobileDiagnostic("app", { state: currentAppState ?? null });
     void Network.getNetworkStateAsync().then(recordNetworkState, () => undefined);
 
     const appStateSubscription = AppState.addEventListener("change", (state) => {
