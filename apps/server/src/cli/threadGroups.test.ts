@@ -19,7 +19,9 @@ const matchedId = (catalog: ReadonlyArray<ThreadGroup>, query: string) => {
 describe("normalizeThreadGroupName", () => {
   it("drops emoji and collapses spacing", () => {
     assert.equal(normalizeThreadGroupName("🔥 Release  &  🪜 Marketing"), "release & marketing");
-    assert.equal(normalizeThreadGroupName("👩🏽‍💻 Dev 1️⃣"), "dev 1");
+    assert.equal(normalizeThreadGroupName("👩🏽‍💻 Dev 1️⃣"), "dev");
+    assert.equal(normalizeThreadGroupName("1️⃣Research"), "research");
+    assert.equal(normalizeThreadGroupName("🏴󠁧󠁢󠁥󠁮󠁧󠁿 England 🇵🇱"), "england");
     assert.equal(normalizeThreadGroupName("Q4 #launch *"), "q4 #launch *");
   });
 });

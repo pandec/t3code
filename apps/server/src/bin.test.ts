@@ -1883,10 +1883,12 @@ it.layer(NodeServices.layer)("bin cli parsing", (it) => {
       // The CLI JSON documents are presentation DTOs; only asserted fields are typed.
       interface CliJsonOutput {
         readonly threadId: string;
+        readonly projectId: string;
         readonly action: string;
         readonly group: unknown;
         readonly previousGroup: unknown;
         readonly pinnedAt: string | null;
+        readonly snoozedAt: string | null;
         readonly customGroupId: string | null;
         readonly threads: ReadonlyArray<{ readonly id: string }>;
         readonly groups: ReadonlyArray<unknown>;
@@ -1970,6 +1972,38 @@ it.layer(NodeServices.layer)("bin cli parsing", (it) => {
             assert.equal((yield* cliJson(["thread", "pin", first.threadId])).action, "pinned");
             assert.equal((yield* cliJson(["thread", "pin", second.threadId])).action, "pinned");
             assert.equal((yield* cliJson(["thread", "pin", second.threadId])).action, "unchanged");
+            // Re-pinning a snoozed pinned thread still dispatches, so the
+            // server's pin promotion wakes it.
+            const engine = yield* OrchestrationEngine.OrchestrationEngineService;
+            const idleThreadId = ThreadId.make("thread-cli-groups-idle");
+            yield* engine.dispatch({
+              type: "thread.create",
+              commandId: CommandId.make("cmd-cli-groups-idle-create"),
+              threadId: idleThreadId,
+              projectId: ProjectId.make(first.projectId),
+              title: "Idle",
+              modelSelection: {
+                instanceId: ProviderInstanceId.make("codex"),
+                model: "gpt-5-codex",
+              },
+              interactionMode: "default",
+              runtimeMode: "approval-required",
+              branch: null,
+              worktreePath: null,
+              createdAt: DateTime.formatIso(yield* DateTime.now),
+            });
+            assert.equal((yield* cliJson(["thread", "pin", idleThreadId])).action, "pinned");
+            yield* engine.dispatch({
+              type: "thread.snooze",
+              commandId: CommandId.make("cmd-cli-groups-idle-snooze"),
+              threadId: idleThreadId,
+              snoozedUntil: null,
+            });
+            assert.equal((yield* cliJson(["thread", "pin", idleThreadId])).action, "pinned");
+            assert.deepInclude(yield* cliJson(["thread", "status", idleThreadId]), {
+              snoozedAt: null,
+            });
+            assert.equal((yield* cliJson(["thread", "unpin", idleThreadId])).action, "unpinned");
             // Each CLI pin lands at the top of the pinned run.
             const pinned = yield* cliJson(["thread", "list", "--pinned"]);
             assert.deepEqual(

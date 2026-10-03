@@ -28,6 +28,8 @@ import {
   type ThreadTurnStartBootstrap,
   UserInputQuestion,
 } from "@t3tools/contracts";
+// Pure pin-order key math shared with the clients; bundled into the CLI like
+// every workspace package, so keep this module free of browser-only imports.
 import {
   pinOrderKeyBetween,
   sortPinnedThreadsByOrderKey,
@@ -835,14 +837,17 @@ const requireServerCapability = Effect.fn("requireServerCapability")(function* (
   return descriptor;
 });
 
-const fetchThreadGroupCatalog = (input: {
+// A server without groups would decode an empty catalog and every lookup
+// would read as "no such group", so reads are gated like the mutations.
+const fetchThreadGroupCatalog = Effect.fn("fetchThreadGroupCatalog")(function* (input: {
   readonly live: CliLiveOrchestrationServer;
   readonly token: string;
   readonly timeouts: CliLiveServerReadTimeouts;
-}) =>
-  fetchLiveServerSettings(input.live.origin, input.token, input.timeouts).pipe(
-    Effect.map((settings) => settings.threadGroups),
-  );
+}) {
+  yield* requireServerCapability(input, "threadCustomGroups");
+  const settings = yield* fetchLiveServerSettings(input.live.origin, input.token, input.timeouts);
+  return settings.threadGroups;
+});
 
 const groupReport = (group: { readonly id: string; readonly name: string } | null) =>
   group === null ? null : { id: group.id, name: group.name };
@@ -850,14 +855,12 @@ const groupReport = (group: { readonly id: string; readonly name: string } | nul
 /** Key that sorts before every arranged pinned thread, so a CLI pin lands at
     the top of the run like every client pin path. Undefined (keyless) when
     key math can't produce one — pinning must never fail on placement. */
-export function topOfPinnedRunOrderKey(
-  threads: ReadonlyArray<Pick<OrchestrationThreadShell, "archivedAt" | "pinnedAt" | "pinOrderKey">>,
+function topOfPinnedRunOrderKey(
+  threads: ReadonlyArray<Pick<OrchestrationThreadShell, "pinnedAt" | "pinOrderKey">>,
 ): string | undefined {
   let firstKey: string | null = null;
   for (const thread of threads) {
-    if (thread.archivedAt !== null || thread.pinnedAt == null || thread.pinOrderKey == null) {
-      continue;
-    }
+    if (thread.pinnedAt == null || thread.pinOrderKey == null) continue;
     if (firstKey === null || thread.pinOrderKey < firstKey) firstKey = thread.pinOrderKey;
   }
   return pinOrderKeyBetween(null, firstKey) ?? undefined;
@@ -1384,7 +1387,6 @@ const threadMoveCommand = Command.make("move", {
           });
         }
         const thread = yield* resolveThread(input.live, flags.threadId);
-        yield* requireServerCapability(input, "threadCustomGroups");
         const catalog = yield* fetchThreadGroupCatalog(input);
         const target = Option.isSome(flags.group)
           ? yield* resolveThreadGroup(catalog, flags.group.value)
@@ -1437,7 +1439,14 @@ const makeThreadPinCommand = (pin: boolean) =>
         Effect.gen(function* () {
           const thread = yield* resolveThread(input.live, flags.threadId);
           const descriptor = yield* requireServerCapability(input, "threadPinning");
-          if ((thread.pinnedAt != null) === pin) {
+          // Pinning also un-settles and un-snoozes, so an already pinned
+          // thread is only unchanged when there is nothing to promote.
+          const promotes =
+            pin &&
+            (thread.settledOverride === "settled" ||
+              thread.snoozedUntil != null ||
+              thread.snoozedAt != null);
+          if ((thread.pinnedAt != null) === pin && !promotes) {
             yield* Console.log(
               flags.json
                 ? jsonOutput({ threadId: thread.id, action: "unchanged" })

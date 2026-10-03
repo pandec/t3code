@@ -3,12 +3,13 @@ import { visibleThreadGroups } from "@t3tools/shared/threadGroups";
 import * as Effect from "effect/Effect";
 import * as Schema from "effect/Schema";
 
-// Emoji code points plus the joiners, variation selectors, and keycap mark
-// that glue them together. Digits, `#`, and `*` are Emoji-property code points
-// too, so the broad \p{Emoji} class would eat real name characters. The
-// combining marks sit outside the class so each is matched on its own.
+// Whole keycaps (1️⃣, #️⃣) first, so their base character goes with them; then
+// emoji code points plus the joiners, variation selectors, and flag tag
+// characters that glue them together. Digits, `#`, and `*` are Emoji-property
+// code points too, so the broad \p{Emoji} class would eat real name characters.
+// The combining marks sit outside the class so each is matched on its own.
 const EMOJI_PATTERN =
-  /[\p{Extended_Pictographic}\p{Emoji_Modifier}\p{Regional_Indicator}\u{200D}]|\u{20E3}|\u{FE0E}|\u{FE0F}/gu;
+  /[0-9#*]\u{FE0F}?\u{20E3}|[\p{Extended_Pictographic}\p{Emoji_Modifier}\p{Regional_Indicator}\u{200D}\u{E0020}-\u{E007F}]|\u{20E3}|\u{FE0E}|\u{FE0F}/gu;
 
 /** Loose comparison form of a group name: emoji dropped, whitespace runs
     collapsed, case folded. "🔥 Release  &  🪜 Marketing" -> "release & marketing". */

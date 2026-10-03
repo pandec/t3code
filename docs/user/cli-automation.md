@@ -195,7 +195,8 @@ may leave out emoji and differ in spacing or case, so `Release & Marketing` find
 both `📨 Inbox` and `📬 Inbox`, the command fails and lists every candidate with its id.
 
 `thread pin` places the thread at the top of the pinned threads, like pinning in the app, and
-`thread unpin` removes it. Both report `unchanged` when there is nothing to do. `thread list --pinned`
+`thread unpin` removes it. Like pinning in the app, `thread pin` also brings a settled or snoozed
+thread back. Both report `unchanged` when there is nothing to do. `thread list --pinned`
 lists pinned threads in their pinned order. Thread summaries include `pinnedAt` and the raw
 `customGroupId`; a `customGroupId` naming a deleted group shows in Active.
 
