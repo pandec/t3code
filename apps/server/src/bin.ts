@@ -18,7 +18,7 @@ import { isEntrypoint } from "./entrypoint.ts";
 import { projectCommand } from "./cli/project.ts";
 import { runServerCommand, serveCommand, startCommand } from "./cli/server.ts";
 import { statusCommand } from "./cli/status.ts";
-import { threadCommand } from "./cli/thread.ts";
+import { groupCommand, threadCommand } from "./cli/thread.ts";
 import { serviceCommand } from "./cli/service.ts";
 import { sessionCommand } from "./cli/session.ts";
 import { uninstallCommand } from "./cli/uninstall.ts";
@@ -69,6 +69,7 @@ export const makeCli = ({ cloudEnabled = hasCloudPublicConfig } = {}) =>
       authCommand,
       projectCommand,
       threadCommand,
+      groupCommand,
       sessionCommand,
       statusCommand,
       serviceCommand,

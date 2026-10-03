@@ -28,8 +28,19 @@ import {
   type ThreadTurnStartBootstrap,
   UserInputQuestion,
 } from "@t3tools/contracts";
+// Pure pin-order key math shared with the clients; bundled into the CLI like
+// every workspace package, so keep this module free of browser-only imports.
+import {
+  pinOrderKeyBetween,
+  sortPinnedThreadsByOrderKey,
+} from "@t3tools/client-runtime/state/thread-sort";
 import { resolveProjectSettings } from "@t3tools/shared/projectSettings";
 import { buildTemporaryWorktreeBranchName } from "@t3tools/shared/git";
+import {
+  threadGroupId,
+  threadGroupSections,
+  visibleThreadGroups,
+} from "@t3tools/shared/threadGroups";
 import { fromLenientJson } from "@t3tools/shared/schemaJson";
 import { parseT3ProjectFile } from "@t3tools/shared/t3ProjectFile";
 import * as Console from "effect/Console";
@@ -88,6 +99,7 @@ import {
   SessionCliError,
   SessionCliServerUnsupportedError,
 } from "./session.ts";
+import { resolveThreadGroup } from "./threadGroups.ts";
 import { threadCliState, threadHasActiveTurn } from "./threadState.ts";
 import {
   THREAD_WAIT_DRAIN_STALE_MS,
@@ -414,8 +426,10 @@ export const buildNewWorktreeBootstrap = (input: {
   readonly workspace: Extract<ThreadCliWorkspaceSelection, { mode: "new-worktree" }>;
   readonly worktreeBranch: string;
   readonly createdAt: string;
+  readonly customGroupId?: string;
 }): ThreadTurnStartBootstrap => ({
   createThread: {
+    ...(input.customGroupId !== undefined ? { customGroupId: input.customGroupId } : {}),
     projectId: input.project.id,
     title: input.title,
     ...(input.titleSource ? { titleSource: input.titleSource } : {}),
@@ -683,6 +697,8 @@ export const threadSummary = (thread: OrchestrationThreadShell) => ({
   snoozedUntil: thread.snoozedUntil ?? null,
   snoozedAt: thread.snoozedAt ?? null,
   snoozedUntilTurnId: thread.snoozedUntilTurnId ?? null,
+  pinnedAt: thread.pinnedAt ?? null,
+  customGroupId: thread.customGroupId ?? null,
   settled: thread.settledOverride === "settled",
   settledAt: thread.settledAt ?? null,
   hasPendingApprovals: thread.hasPendingApprovals,
@@ -801,6 +817,62 @@ export const compensateFailedThreadStart = Effect.fn("compensateFailedThreadStar
   );
 });
 
+type ThreadCliCapability = "threadCustomGroups" | "threadCustomGroupCreation" | "threadPinning";
+
+// Version skew: never send a command to a server that does not advertise it.
+const requireServerCapability = Effect.fn("requireServerCapability")(function* (
+  input: {
+    readonly live: CliLiveOrchestrationServer;
+    readonly timeouts: CliLiveServerReadTimeouts;
+  },
+  capability: ThreadCliCapability,
+) {
+  const descriptor = yield* fetchLiveEnvironmentDescriptor(input.live.origin, input.timeouts);
+  if (descriptor.capabilities[capability] !== true) {
+    return yield* new SessionCliServerUnsupportedError({
+      serverVersion: descriptor.serverVersion,
+      capability,
+    });
+  }
+  return descriptor;
+});
+
+// A server without groups would decode an empty catalog and every lookup
+// would read as "no such group", so reads are gated like the mutations.
+const fetchThreadGroupCatalog = Effect.fn("fetchThreadGroupCatalog")(function* (input: {
+  readonly live: CliLiveOrchestrationServer;
+  readonly token: string;
+  readonly timeouts: CliLiveServerReadTimeouts;
+}) {
+  yield* requireServerCapability(input, "threadCustomGroups");
+  const settings = yield* fetchLiveServerSettings(input.live.origin, input.token, input.timeouts);
+  return settings.threadGroups;
+});
+
+const groupReport = (group: { readonly id: string; readonly name: string } | null) =>
+  group === null ? null : { id: group.id, name: group.name };
+
+/** Key that sorts before every arranged pinned thread, so a CLI pin lands at
+    the top of the run like every client pin path. Undefined (keyless) when
+    key math can't produce one — pinning must never fail on placement. */
+function topOfPinnedRunOrderKey(
+  threads: ReadonlyArray<Pick<OrchestrationThreadShell, "pinnedAt" | "pinOrderKey">>,
+): string | undefined {
+  let firstKey: string | null = null;
+  for (const thread of threads) {
+    if (thread.pinnedAt == null || thread.pinOrderKey == null) continue;
+    if (firstKey === null || thread.pinOrderKey < firstKey) firstKey = thread.pinOrderKey;
+  }
+  return pinOrderKeyBetween(null, firstKey) ?? undefined;
+}
+
+const threadGroupFlag = Flag.String("group").pipe(
+  Flag.withDescription(
+    "Group id or name. An exact name wins; otherwise the name may skip emoji and differ in spacing or case when only one group fits.",
+  ),
+  Flag.optional,
+);
+
 const threadListCommand = Command.make("list", {
   ...projectLocationFlags,
   project: Flag.String("project").pipe(
@@ -811,12 +883,18 @@ const threadListCommand = Command.make("list", {
     Flag.withDescription("Filter by latest turn state."),
     Flag.optional,
   ),
+  pinned: Flag.Boolean("pinned").pipe(
+    Flag.withDescription("Only pinned threads, in their pinned order."),
+    Flag.withDefault(false),
+  ),
+  group: threadGroupFlag,
   json: jsonFlag,
 }).pipe(
   Command.withDescription("List active threads."),
   Command.withHandler((flags) =>
-    runThreadCli(flags, flags.json, ({ live }) =>
+    runThreadCli(flags, flags.json, (input) =>
       Effect.gen(function* () {
+        const { live } = input;
         const project = Option.isSome(flags.project)
           ? yield* findActiveProjectTarget({
               projects: live.shell.projects,
@@ -824,11 +902,28 @@ const threadListCommand = Command.make("list", {
             })
           : null;
         const requestedState = Option.getOrNull(flags.state);
-        const threads = live.shell.threads
+        const groupQuery = Option.getOrNull(flags.group);
+        const groupFilter =
+          groupQuery === null
+            ? null
+            : yield* Effect.gen(function* () {
+                const catalog = yield* fetchThreadGroupCatalog(input);
+                const group = yield* resolveThreadGroup(catalog, groupQuery);
+                return { catalog, groupId: group.id };
+              });
+        const matching = live.shell.threads
           .filter((thread) => thread.archivedAt === null)
           .filter((thread) => project === null || thread.projectId === project.id)
           .filter((thread) => requestedState === null || threadCliState(thread) === requestedState)
-          .map(threadSummary);
+          .filter((thread) => !flags.pinned || thread.pinnedAt != null)
+          .filter(
+            (thread) =>
+              groupFilter === null ||
+              threadGroupId(thread, groupFilter.catalog) === groupFilter.groupId,
+          );
+        const threads = (flags.pinned ? sortPinnedThreadsByOrderKey(matching) : matching).map(
+          threadSummary,
+        );
         yield* Console.log(
           flags.json
             ? jsonOutput({ threads })
@@ -896,6 +991,7 @@ const threadNewCommand = Command.make("new", {
     Flag.withDescription("Base the new worktree on origin/<base> instead of the local ref."),
     Flag.withDefault(false),
   ),
+  group: threadGroupFlag,
   json: jsonFlag,
 }).pipe(
   Command.withDescription("Create a thread and start its first turn."),
@@ -972,9 +1068,24 @@ const threadNewCommand = Command.make("new", {
         // the checkout; the explicit --new-worktree flag keeps failing
         // loudly either way.
         const descriptor =
-          hasModelFlags || requestedWorkspace.mode === "new-worktree"
+          hasModelFlags || requestedWorkspace.mode === "new-worktree" || Option.isSome(flags.group)
             ? yield* fetchLiveEnvironmentDescriptor(input.live.origin, input.timeouts)
             : null;
+        // Gate before resolving: a server without groups has an empty catalog,
+        // which would misreport the missing capability as an unknown group.
+        if (
+          Option.isSome(flags.group) &&
+          descriptor?.capabilities.threadCustomGroupCreation !== true
+        ) {
+          return yield* new SessionCliServerUnsupportedError({
+            serverVersion: descriptor?.serverVersion ?? "unknown",
+            capability: "threadCustomGroupCreation",
+          });
+        }
+        const group = Option.isSome(flags.group)
+          ? yield* resolveThreadGroup(liveSettings.threadGroups, flags.group.value)
+          : null;
+        const groupFields = group === null ? {} : { customGroupId: group.id };
         const decision = decideThreadCliWorkspace({
           requested: requestedWorkspace,
           fromDefaults: workspaceFromDefaults,
@@ -1058,6 +1169,7 @@ const threadNewCommand = Command.make("new", {
                 workspace,
                 worktreeBranch,
                 createdAt,
+                ...groupFields,
               }),
               createdAt,
             },
@@ -1082,6 +1194,7 @@ const threadNewCommand = Command.make("new", {
                   commandId,
                   messageId,
                   sequence: result.sequence,
+                  group: groupReport(group),
                   workspace: {
                     mode:
                       startedThread && !startedThread.worktreePath ? "checkout" : "new-worktree",
@@ -1101,6 +1214,7 @@ const threadNewCommand = Command.make("new", {
         const createCommandId = CommandId.make(yield* randomUuid);
         yield* dispatchThreadCommand(input, {
           type: "thread.create",
+          ...groupFields,
           commandId: createCommandId,
           threadId,
           projectId: project.id,
@@ -1159,6 +1273,7 @@ const threadNewCommand = Command.make("new", {
                 commandId,
                 messageId,
                 sequence: result.sequence,
+                group: groupReport(group),
                 workspace: workspaceReport,
               })
             : existingWorktree !== null
@@ -1255,6 +1370,123 @@ const threadRenameCommand = Command.make("rename", {
     ),
   ),
 );
+
+const threadMoveCommand = Command.make("move", {
+  ...projectLocationFlags,
+  threadId: Argument.String("thread-id").pipe(Argument.withDescription("Thread id, or self.")),
+  group: threadGroupFlag,
+  active: Flag.Boolean("active").pipe(
+    Flag.withDescription("Move the thread out of its custom group into Active."),
+    Flag.withDefault(false),
+  ),
+  json: jsonFlag,
+}).pipe(
+  Command.withDescription("Move a thread to a custom group, or back to Active."),
+  Command.withHandler((flags) =>
+    runThreadCli(flags, flags.json, (input) =>
+      Effect.gen(function* () {
+        if (Option.isSome(flags.group) === flags.active) {
+          return yield* new SessionCliError({
+            operation: "thread.move",
+            detail: "Pass exactly one of --group or --active.",
+          });
+        }
+        const thread = yield* resolveThread(input.live, flags.threadId);
+        const catalog = yield* fetchThreadGroupCatalog(input);
+        const target = Option.isSome(flags.group)
+          ? yield* resolveThreadGroup(catalog, flags.group.value)
+          : null;
+        const currentGroupId = threadGroupId(thread, catalog);
+        const previous = catalog.find((group) => group.id === currentGroupId) ?? null;
+        if (currentGroupId === (target?.id ?? null)) {
+          yield* Console.log(
+            flags.json
+              ? jsonOutput({ threadId: thread.id, group: groupReport(target), action: "unchanged" })
+              : `Thread ${thread.id} is already in ${target?.name ?? "Active"}.`,
+          );
+          return;
+        }
+        const commandId = CommandId.make(yield* randomUuid);
+        const result = yield* dispatchThreadCommand(input, {
+          type: "thread.meta.update",
+          commandId,
+          threadId: thread.id,
+          customGroupId: target?.id ?? null,
+        });
+        yield* Console.log(
+          flags.json
+            ? jsonOutput({
+                threadId: thread.id,
+                group: groupReport(target),
+                previousGroup: groupReport(previous),
+                commandId,
+                sequence: result.sequence,
+                action: "moved",
+              })
+            : `Moved thread ${thread.id} to ${target?.name ?? "Active"}.`,
+        );
+      }),
+    ),
+  ),
+);
+
+const makeThreadPinCommand = (pin: boolean) =>
+  Command.make(pin ? "pin" : "unpin", {
+    ...projectLocationFlags,
+    threadId: Argument.String("thread-id").pipe(Argument.withDescription("Thread id, or self.")),
+    json: jsonFlag,
+  }).pipe(
+    Command.withDescription(
+      pin ? "Pin a thread at the top of the pinned threads." : "Unpin a thread.",
+    ),
+    Command.withHandler((flags) =>
+      runThreadCli(flags, flags.json, (input) =>
+        Effect.gen(function* () {
+          const thread = yield* resolveThread(input.live, flags.threadId);
+          const descriptor = yield* requireServerCapability(input, "threadPinning");
+          // Pinning also un-settles and un-snoozes, so an already pinned
+          // thread is only unchanged when there is nothing to promote.
+          const promotes =
+            pin &&
+            (thread.settledOverride === "settled" ||
+              thread.snoozedUntil != null ||
+              thread.snoozedAt != null);
+          if ((thread.pinnedAt != null) === pin && !promotes) {
+            yield* Console.log(
+              flags.json
+                ? jsonOutput({ threadId: thread.id, action: "unchanged" })
+                : `Thread ${thread.id} is already ${pin ? "pinned" : "unpinned"}.`,
+            );
+            return;
+          }
+          const commandId = CommandId.make(yield* randomUuid);
+          // orderKey rides only to servers that decode it; older servers get
+          // the bare pin they understand and the thread stays keyless.
+          const orderKey =
+            pin && descriptor.capabilities.threadPinReorder === true
+              ? topOfPinnedRunOrderKey(input.live.shell.threads)
+              : undefined;
+          const result = yield* dispatchThreadCommand(
+            input,
+            pin
+              ? {
+                  type: "thread.pin",
+                  commandId,
+                  threadId: thread.id,
+                  ...(orderKey !== undefined ? { orderKey } : {}),
+                }
+              : { type: "thread.unpin", commandId, threadId: thread.id },
+          );
+          const action = pin ? "pinned" : "unpinned";
+          yield* Console.log(
+            flags.json
+              ? jsonOutput({ threadId: thread.id, commandId, sequence: result.sequence, action })
+              : `${pin ? "Pinned" : "Unpinned"} thread ${thread.id}.`,
+          );
+        }),
+      ),
+    ),
+  );
 
 const threadInterruptCommand = Command.make("interrupt", {
   ...projectLocationFlags,
@@ -2041,6 +2273,9 @@ export const threadCommand = Command.make("thread").pipe(
     threadNewCommand,
     threadSendCommand,
     threadRenameCommand,
+    threadMoveCommand,
+    makeThreadPinCommand(true),
+    makeThreadPinCommand(false),
     threadInterruptCommand,
     threadStatusCommand,
     threadMessagesCommand,
@@ -2049,4 +2284,45 @@ export const threadCommand = Command.make("thread").pipe(
     threadArchiveCommand,
     threadContextCommand,
   ]),
+);
+
+const groupListCommand = Command.make("list", {
+  ...projectLocationFlags,
+  json: jsonFlag,
+}).pipe(
+  Command.withDescription(
+    "List thread groups in sidebar order, including where Active sits, with active thread counts.",
+  ),
+  Command.withHandler((flags) =>
+    runThreadCli(flags, flags.json, (input) =>
+      Effect.gen(function* () {
+        const catalog = yield* fetchThreadGroupCatalog(input);
+        const counts = new Map<string | null, number>();
+        for (const thread of input.live.shell.threads) {
+          if (thread.archivedAt !== null) continue;
+          const groupId = threadGroupId(thread, catalog);
+          counts.set(groupId, (counts.get(groupId) ?? 0) + 1);
+        }
+        // Active is the null section: it has no id and holds every thread
+        // without a live custom group.
+        const groups = threadGroupSections(visibleThreadGroups(catalog)).map((group) => ({
+          id: group?.id ?? null,
+          name: group?.name ?? "Active",
+          threadCount: counts.get(group?.id ?? null) ?? 0,
+        }));
+        yield* Console.log(
+          flags.json
+            ? jsonOutput({ groups })
+            : groups
+                .map((group) => `${group.id ?? "-"}\t${group.name}\t${group.threadCount}`)
+                .join("\n"),
+        );
+      }),
+    ),
+  ),
+);
+
+export const groupCommand = Command.make("group").pipe(
+  Command.withDescription("Inspect thread groups."),
+  Command.withSubcommands([groupListCommand]),
 );

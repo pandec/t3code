@@ -86,16 +86,25 @@ export class SessionCliServerUnsupportedError extends Schema.TaggedError<Session
   "SessionCliServerUnsupportedError",
   {
     serverVersion: Schema.String,
-    capability: Schema.Literals(["sessionImport", "providerCatalog", "turnStartBootstrap"]),
+    capability: Schema.Literals([
+      "sessionImport",
+      "providerCatalog",
+      "turnStartBootstrap",
+      "threadCustomGroups",
+      "threadCustomGroupCreation",
+      "threadPinning",
+    ]),
   },
 ) {
   override get message(): string {
-    const capabilityLabel =
-      this.capability === "sessionImport"
-        ? "session import"
-        : this.capability === "providerCatalog"
-          ? "the provider catalog"
-          : "creating threads in a new worktree";
+    const capabilityLabel = {
+      sessionImport: "session import",
+      providerCatalog: "the provider catalog",
+      turnStartBootstrap: "creating threads in a new worktree",
+      threadCustomGroups: "thread groups",
+      threadCustomGroupCreation: "creating threads in a group",
+      threadPinning: "pinning threads",
+    }[this.capability];
     return `The running T3 Code server (${this.serverVersion}) does not support ${capabilityLabel}. Update and restart T3 Code, then retry.`;
   }
 }
