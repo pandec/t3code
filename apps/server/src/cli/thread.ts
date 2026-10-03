@@ -1011,9 +1011,6 @@ const threadNewCommand = Command.make("new", {
           input.timeouts,
         );
         const resolved = resolveProjectSettings(liveSettings, project.id, projectShell);
-        const group = Option.isSome(flags.group)
-          ? yield* resolveThreadGroup(liveSettings.threadGroups, flags.group.value)
-          : null;
         const runtimeMode = Option.getOrElse(
           flags.runtimeMode,
           () => resolved.settings.defaultRuntimeMode,
@@ -1071,15 +1068,23 @@ const threadNewCommand = Command.make("new", {
         // the checkout; the explicit --new-worktree flag keeps failing
         // loudly either way.
         const descriptor =
-          hasModelFlags || requestedWorkspace.mode === "new-worktree" || group !== null
+          hasModelFlags || requestedWorkspace.mode === "new-worktree" || Option.isSome(flags.group)
             ? yield* fetchLiveEnvironmentDescriptor(input.live.origin, input.timeouts)
             : null;
-        if (group !== null && descriptor?.capabilities.threadCustomGroupCreation !== true) {
+        // Gate before resolving: a server without groups has an empty catalog,
+        // which would misreport the missing capability as an unknown group.
+        if (
+          Option.isSome(flags.group) &&
+          descriptor?.capabilities.threadCustomGroupCreation !== true
+        ) {
           return yield* new SessionCliServerUnsupportedError({
             serverVersion: descriptor?.serverVersion ?? "unknown",
             capability: "threadCustomGroupCreation",
           });
         }
+        const group = Option.isSome(flags.group)
+          ? yield* resolveThreadGroup(liveSettings.threadGroups, flags.group.value)
+          : null;
         const groupFields = group === null ? {} : { customGroupId: group.id };
         const decision = decideThreadCliWorkspace({
           requested: requestedWorkspace,

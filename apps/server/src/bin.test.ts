@@ -2031,6 +2031,31 @@ it.layer(NodeServices.layer)("bin cli parsing", (it) => {
     }),
   );
 
+  it.effect("rejects group commands on servers without thread groups", () =>
+    Effect.gen(function* () {
+      const baseDir = NodeFS.mkdtempSync(
+        NodePath.join(NodeOS.tmpdir(), "t3-cli-thread-groups-unsupported-test-"),
+      );
+      const workspaceRoot = NodeFS.mkdtempSync(
+        NodePath.join(NodeOS.tmpdir(), "t3-cli-thread-groups-unsupported-workspace-"),
+      );
+      yield* withLiveProjectCliServer(baseDir, () =>
+        Effect.gen(function* () {
+          yield* runCliWithRuntime(["project", "add", workspaceRoot, "--base-dir", baseDir]);
+          for (const args of [
+            ["thread", "new", "--project", workspaceRoot, "--message", "Hi", "--group", "Inbox"],
+            ["group", "list"],
+          ]) {
+            const captured = yield* captureStdout(
+              runCli([...args, "--base-dir", baseDir, "--json"]),
+            );
+            assert.include(captured.output, '"code": "SessionCliServerUnsupportedError"');
+          }
+        }),
+      );
+    }),
+  );
+
   it.effect("rejects dev-url on project commands", () =>
     Effect.gen(function* () {
       const workspaceRoot = NodeFS.mkdtempSync(
