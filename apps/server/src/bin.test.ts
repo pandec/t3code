@@ -17,6 +17,7 @@ import {
   MessageId,
   ProjectId,
   ProviderInstanceId,
+  type ThreadGroup,
   ThreadId,
 } from "@t3tools/contracts";
 import * as NetService from "@t3tools/shared/Net";
@@ -198,6 +199,8 @@ const withLiveProjectCliServer = <A, E, R>(
   options?: {
     readonly conditionalProjectScriptUpdates?: boolean;
     readonly dispatchTurnStart?: TurnStartBootstrap.TurnStartBootstrap["Service"]["dispatchTurnStart"];
+    readonly capabilities?: Partial<ExecutionEnvironmentDescriptor["capabilities"]>;
+    readonly threadGroups?: ReadonlyArray<ThreadGroup>;
   },
 ) =>
   Effect.gen(function* () {
@@ -239,6 +242,7 @@ const withLiveProjectCliServer = <A, E, R>(
               conditionalProjectScriptUpdates: true,
               conditionalProjectSettingsScriptUpdates: true,
             }),
+        ...options?.capabilities,
       },
     };
     const appLayer = HttpRouter.serve(routesLayer, {
@@ -259,7 +263,12 @@ const withLiveProjectCliServer = <A, E, R>(
           Layer.provide(ServerSecretStore.layer),
         ),
       ),
-      Layer.provideMerge(ServerSettingsModule.layerTest({ projectSettingsFolded: true })),
+      Layer.provideMerge(
+        ServerSettingsModule.layerTest({
+          projectSettingsFolded: true,
+          ...(options?.threadGroups ? { threadGroups: options.threadGroups } : {}),
+        }),
+      ),
       Layer.provideMerge(makeProjectPersistenceLayer(config)),
       Layer.provideMerge(
         Layer.succeed(
@@ -1852,6 +1861,138 @@ it.layer(NodeServices.layer)("bin cli parsing", (it) => {
           };
           assert.deepInclude(overall, { running: true, projectCount: 1, threadCount: 1 });
         }),
+      );
+    }),
+  );
+
+  it.effect("moves threads between groups and pins them through a running server", () =>
+    Effect.gen(function* () {
+      const baseDir = NodeFS.mkdtempSync(
+        NodePath.join(NodeOS.tmpdir(), "t3-cli-thread-groups-test-"),
+      );
+      const workspaceRoot = NodeFS.mkdtempSync(
+        NodePath.join(NodeOS.tmpdir(), "t3-cli-thread-groups-workspace-"),
+      );
+      const group = (id: string, name: string): ThreadGroup => ({
+        id,
+        name,
+        orderKey: id,
+        revision: `0000000000000001:${id}`,
+        deleted: false,
+      });
+      // The CLI JSON documents are presentation DTOs; only asserted fields are typed.
+      interface CliJsonOutput {
+        readonly threadId: string;
+        readonly action: string;
+        readonly group: unknown;
+        readonly previousGroup: unknown;
+        readonly pinnedAt: string | null;
+        readonly customGroupId: string | null;
+        readonly threads: ReadonlyArray<{ readonly id: string }>;
+        readonly groups: ReadonlyArray<unknown>;
+        readonly error: {
+          readonly code: string;
+          readonly message: string;
+          readonly detail: Readonly<Record<string, unknown>>;
+        };
+      }
+      const cliJson = (args: ReadonlyArray<string>) =>
+        captureStdout(runCli([...args, "--base-dir", baseDir, "--json"])).pipe(
+          Effect.map((captured) => JSON.parse(captured.output) as CliJsonOutput),
+        );
+
+      yield* withLiveProjectCliServer(
+        baseDir,
+        () =>
+          Effect.gen(function* () {
+            yield* runCliWithRuntime(["project", "add", workspaceRoot, "--base-dir", baseDir]);
+            const newThread = (message: string, extra: ReadonlyArray<string> = []) =>
+              cliJson([
+                "thread",
+                "new",
+                "--project",
+                workspaceRoot,
+                "--message",
+                message,
+                ...extra,
+              ]);
+
+            const first = yield* newThread("First", ["--group", "release & marketing"]);
+            assert.deepEqual(first.group, {
+              id: "g-release",
+              name: "🔥 Release  &  🪜 Marketing",
+            });
+            const second = yield* newThread("Second");
+
+            const ambiguous = yield* cliJson([
+              "thread",
+              "move",
+              second.threadId,
+              "--group",
+              "inbox",
+            ]);
+            assert.equal(ambiguous.error.code, "ThreadCliGroupError");
+            assert.equal(ambiguous.error.detail.reason, "ambiguous");
+            assert.include(ambiguous.error.message, "📨 Inbox (g-inbox)");
+            assert.include(ambiguous.error.message, "📬 Inbox (g-mailbox)");
+
+            const moved = yield* cliJson([
+              "thread",
+              "move",
+              second.threadId,
+              "--group",
+              "📬 Inbox",
+            ]);
+            assert.deepInclude(moved, {
+              action: "moved",
+              group: { id: "g-mailbox", name: "📬 Inbox" },
+            });
+            const inGroup = yield* cliJson(["thread", "list", "--group", "g-mailbox"]);
+            assert.deepEqual(
+              inGroup.threads.map((thread) => thread.id),
+              [second.threadId],
+            );
+            const toActive = yield* cliJson(["thread", "move", first.threadId, "--active"]);
+            assert.deepInclude(toActive, {
+              action: "moved",
+              group: null,
+              previousGroup: { id: "g-release", name: "🔥 Release  &  🪜 Marketing" },
+            });
+
+            const groups = yield* cliJson(["group", "list"]);
+            assert.deepEqual(groups.groups, [
+              { id: "g-inbox", name: "📨 Inbox", threadCount: 0 },
+              { id: null, name: "Active", threadCount: 1 },
+              { id: "g-mailbox", name: "📬 Inbox", threadCount: 1 },
+              { id: "g-release", name: "🔥 Release  &  🪜 Marketing", threadCount: 0 },
+            ]);
+
+            assert.equal((yield* cliJson(["thread", "pin", first.threadId])).action, "pinned");
+            assert.equal((yield* cliJson(["thread", "pin", second.threadId])).action, "pinned");
+            assert.equal((yield* cliJson(["thread", "pin", second.threadId])).action, "unchanged");
+            // Each CLI pin lands at the top of the pinned run.
+            const pinned = yield* cliJson(["thread", "list", "--pinned"]);
+            assert.deepEqual(
+              pinned.threads.map((thread) => thread.id),
+              [second.threadId, first.threadId],
+            );
+            assert.equal((yield* cliJson(["thread", "unpin", second.threadId])).action, "unpinned");
+            const status = yield* cliJson(["thread", "status", second.threadId]);
+            assert.deepInclude(status, { pinnedAt: null, customGroupId: "g-mailbox" });
+          }),
+        {
+          capabilities: {
+            threadCustomGroups: true,
+            threadCustomGroupCreation: true,
+            threadPinning: true,
+            threadPinReorder: true,
+          },
+          threadGroups: [
+            { ...group("g-inbox", "📨 Inbox"), aboveActive: true },
+            group("g-mailbox", "📬 Inbox"),
+            group("g-release", "🔥 Release  &  🪜 Marketing"),
+          ],
+        },
       );
     }),
   );

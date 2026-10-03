@@ -137,6 +137,13 @@ t3 thread new --project /absolute/path/to/repository --message "Fix the flaky te
 t3 thread new --project /absolute/path/to/repository --message "Continue the refactor" --worktree /absolute/path/to/worktree --json
 t3 thread send <thread-id> --message "Also check the logs" --json
 t3 thread rename <thread-id> "Investigate test failures" --json
+t3 thread move <thread-id> --group "Inbox" --json
+t3 thread move <thread-id> --active --json
+t3 thread pin <thread-id> --json
+t3 thread unpin <thread-id> --json
+t3 thread list --pinned --json
+t3 thread list --group "Inbox" --json
+t3 group list --json
 t3 thread status <thread-id> --json
 t3 thread messages <thread-id> --json
 t3 thread input list <thread-id> --json
@@ -176,6 +183,21 @@ Summaries include `worktreeSwitch`, the latest agent-requested move or `null`. I
 While pending, `worktreePath` still names the current checkout. Read status again before acting
 on the destination. See [moving a Codex thread](thread-sidebar.md#move-a-codex-thread-to-a-worktree)
 for requesting and cancelling moves.
+
+### Groups and pins
+
+`t3 group list` prints the custom thread groups in sidebar order, with Active's position marked by
+an entry whose `id` is `null`, plus each group's count of unarchived threads. `thread new --group`
+starts the thread in a group, `thread move --group` moves an existing one, and `thread move --active`
+returns it to Active. `--group` takes a group id or name. An exact name wins; otherwise the name
+may leave out emoji and differ in spacing or case, so `Release & Marketing` finds
+`🔥 Release  &  🪜 Marketing`. When that looser match fits more than one group, such as `Inbox` for
+both `📨 Inbox` and `📬 Inbox`, the command fails and lists every candidate with its id.
+
+`thread pin` places the thread at the top of the pinned threads, like pinning in the app, and
+`thread unpin` removes it. Both report `unchanged` when there is nothing to do. `thread list --pinned`
+lists pinned threads in their pinned order. Thread summaries include `pinnedAt` and the raw
+`customGroupId`; a `customGroupId` naming a deleted group shows in Active.
 
 ### Answering user input
 
