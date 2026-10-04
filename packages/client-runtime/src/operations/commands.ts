@@ -178,6 +178,8 @@ export interface StartThreadTurnInput extends ThreadCommandInput {
   readonly bootstrap?: StartThreadBootstrap;
   readonly sourceProposedPlan?: { readonly threadId: ThreadId; readonly planId: PlanId };
   readonly dispatchMode?: "auto" | "queue" | "steer" | "restart" | "start";
+  /** Fork steer recall window: how long the server holds this message if it steers. */
+  readonly steerGraceWindowMs?: number;
 }
 
 export interface InterruptThreadTurnInput extends ThreadCommandInput {
@@ -762,6 +764,12 @@ export const startThreadTurn = Effect.fn("EnvironmentCommands.startThreadTurn")(
     ...(input.sourceProposedPlan === undefined ? {} : { sourcePlanRef: input.sourceProposedPlan }),
     ...(serverResolvesCommandContext && requestedMode !== "queue"
       ? { deliveryIntent: requestedMode }
+      : {}),
+    ...(serverResolvesCommandContext &&
+    (requestedMode === "auto" || requestedMode === "steer") &&
+    input.steerGraceWindowMs !== undefined &&
+    input.steerGraceWindowMs >= 1
+      ? { steerGraceWindowMs: Math.round(input.steerGraceWindowMs) }
       : {}),
     dispatchMode,
   });

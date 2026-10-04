@@ -437,6 +437,36 @@ describe("V2 environment commands", () => {
     }).pipe(Effect.provide(TEST_CRYPTO_LAYER)),
   );
 
+  it.effect("sends the steer recall window only with deliveries that may steer", () =>
+    Effect.gen(function* () {
+      const commands: OrchestrationV2Command[] = [];
+      const supervisor = yield* makeSupervisor({ commands, projects: [] });
+
+      for (const mode of ["queue", "auto", "steer", "restart"] as const) {
+        yield* startThreadTurn({
+          commandId: CommandId.make(`command-grace-${mode}`),
+          threadId: v2ThreadId,
+          message: {
+            messageId: MessageId.make(`message-grace-${mode}`),
+            role: "user",
+            text: mode,
+            attachments: [],
+          },
+          runtimeMode: "full-access",
+          interactionMode: "default",
+          dispatchMode: mode,
+          steerGraceWindowMs: 5_000,
+        }).pipe(Effect.provideService(EnvironmentSupervisor.EnvironmentSupervisor, supervisor));
+
+        if (mode === "auto" || mode === "steer") {
+          expect(commands.at(-1)).toMatchObject({ steerGraceWindowMs: 5_000 });
+        } else {
+          expect(commands.at(-1)).not.toHaveProperty("steerGraceWindowMs");
+        }
+      }
+    }).pipe(Effect.provide(TEST_CRYPTO_LAYER)),
+  );
+
   it.effect("retains projection-shaped delivery for servers without command context support", () =>
     Effect.gen(function* () {
       const activeRunId = RunId.make("legacy-active-run");

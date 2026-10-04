@@ -5,6 +5,7 @@ import {
   canDetachThreadProviderSession,
   canForkProjectedAssistantItem,
   deriveThreadQueueWorkflowState,
+  remainingSteerGraceWindowMs,
   resolveLatestMergeBackRun,
   threadSupportsProviderHandoff,
 } from "./threadWorkflows.ts";
@@ -421,4 +422,18 @@ describe("thread workflows", () => {
       expect(resolveLatestMergeBackRun(projection)).toBeNull();
     },
   );
+});
+
+describe("remainingSteerGraceWindowMs", () => {
+  const createdAt = "2026-10-04T12:00:00.000Z";
+  const createdAtMs = Date.parse(createdAt);
+
+  it("keeps only the part of the window not yet spent", () => {
+    expect(remainingSteerGraceWindowMs(createdAt, 5_000, createdAtMs + 1_500)).toBe(3_500);
+    expect(remainingSteerGraceWindowMs(createdAt, 5_000, createdAtMs + 9_000)).toBe(0);
+  });
+
+  it("never extends the window for a clock behind the message", () => {
+    expect(remainingSteerGraceWindowMs(createdAt, 5_000, createdAtMs - 60_000)).toBe(5_000);
+  });
 });

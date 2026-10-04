@@ -322,6 +322,7 @@ import {
   useClientSettings,
   useClientSettingsHydrated,
   useEnvironmentSettings,
+  useSteerGraceWindowMs,
 } from "../hooks/useSettings";
 import { useNowMinute } from "../hooks/useNowMinute";
 import { usePanelAnimationSettings, usePanelPresence } from "../panelAnimations";
@@ -1732,6 +1733,7 @@ export default function ChatView(props: ChatViewProps) {
   const lastVisitDispatchAtRef = useRef(0);
   const settings = useEnvironmentSettings(environmentId);
   const clientSettingsHydrated = useClientSettingsHydrated();
+  const steerGraceWindowMs = useSteerGraceWindowMs();
   const setStickyComposerModelSelection = useComposerDraftStore(
     (store) => store.setStickyModelSelection,
   );
@@ -8837,7 +8839,11 @@ export default function ChatView(props: ChatViewProps) {
     );
     const messageIdForSend = newMessageId();
     const messageCreatedAt = new Date().toISOString();
-    const shouldQueueBehindActiveRun = phase === "running" && dispatchMode === "queue";
+    // A steer with a recall window waits in the queue until it is sent.
+    const shouldQueueBehindActiveRun =
+      phase === "running" &&
+      (dispatchMode === "queue" ||
+        (steerGraceWindowMs > 0 && (dispatchMode === "auto" || dispatchMode === "steer")));
     const outgoingMessageText = formatOutgoingPrompt({
       provider: ctxSelectedProvider,
       model: ctxSelectedModel,
@@ -9530,6 +9536,7 @@ export default function ChatView(props: ChatViewProps) {
           runtimeMode,
           interactionMode: sendInteractionMode,
           dispatchMode,
+          steerGraceWindowMs,
           ...(bootstrap ? { bootstrap } : {}),
           createdAt: messageCreatedAt,
         },

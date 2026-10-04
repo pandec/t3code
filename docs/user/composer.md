@@ -176,6 +176,12 @@ has started waits for the next turn. A message queued with a different model sta
 own, and the messages behind it go in with that turn instead. If the agent can't steer a running
 turn, queued messages run one turn each.
 
+A steer waits in the queue for a few seconds before it reaches the agent, showing how long it has
+left. Until then you can edit it, remove it, or press **Steer** to send it at once. If the turn ends
+first, it starts the next turn when its time is up. The wait is five seconds by default; change it
+under **Settings → Extras** on web and desktop or **Settings → Thread behavior** on mobile (set per
+device). Set it to 0 to steer immediately.
+
 If the server restarts, saved queued messages keep their order and are held. Press
 **Resume** in an empty composer on web or desktop, or **Resume queue** in the queue
 sheet on mobile, to continue. You can edit, reorder, or remove held messages without starting them.

@@ -554,6 +554,12 @@ export const OrchestrationV2Run = Schema.Struct({
    * runs queued later never join.
    */
   queueBatchLeaderRunId: Schema.optional(RunId),
+  /**
+   * Fork steer recall window: a steer waits as a queued run until this time,
+   * so it can still be edited, removed or sent early. Then the server steers
+   * it into the running turn, or starts it as a turn when nothing is running.
+   */
+  steerDeadlineAt: Schema.optional(Schema.DateTimeUtc),
 });
 export type OrchestrationV2Run = typeof OrchestrationV2Run.Type;
 
@@ -1869,6 +1875,7 @@ export const OrchestrationV2RunJson = OrchestrationV2Run.mapFields((fields) => (
   startedAt: Schema.NullOr(Schema.DateTimeUtcFromString),
   completedAt: Schema.NullOr(Schema.DateTimeUtcFromString),
   workStartedAt: Schema.optional(Schema.DateTimeUtcFromString),
+  steerDeadlineAt: Schema.optional(Schema.DateTimeUtcFromString),
 }));
 export type OrchestrationV2RunJson = typeof OrchestrationV2RunJson.Type;
 
@@ -2676,6 +2683,8 @@ export const OrchestrationV2Command = Schema.Union([
     usageLimitRecoveryRequestId: Schema.optional(CommandId),
     /** Resolve untargeted delivery against the server's serialized thread state. */
     deliveryIntent: Schema.optional(Schema.Literals(["auto", "steer", "restart"])),
+    /** Fork steer recall window: hold a user steer this long before it reaches the turn. */
+    steerGraceWindowMs: Schema.optional(NonNegativeInt),
     delegatedCompletion: Schema.optional(
       Schema.Struct({
         parentRunId: RunId,

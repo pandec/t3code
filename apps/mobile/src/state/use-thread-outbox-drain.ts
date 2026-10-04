@@ -6,6 +6,7 @@ import {
 } from "@t3tools/client-runtime/state/shell";
 import type { AtomCommandResult } from "@t3tools/client-runtime/state/runtime";
 import { deriveThreadTitleSeed } from "@t3tools/client-runtime/operations";
+import { remainingSteerGraceWindowMs } from "@t3tools/client-runtime/state/thread-workflows";
 import {
   CommandId,
   DEFAULT_PROVIDER_INTERACTION_MODE,
@@ -74,6 +75,7 @@ import {
   waitForComposerDraftsLoaded,
 } from "./use-composer-drafts";
 import { useAtomCommand } from "./use-atom-command";
+import { useSteerGraceWindowMs } from "./use-mobile-preferences";
 import {
   dispatchingQueuedMessageIdAtom,
   editingQueuedMessageIdsAtom,
@@ -647,6 +649,7 @@ export function useThreadOutboxDrain(): void {
   const projects = useProjects();
   const serverConfigs = useServerConfigs();
   const { connectedEnvironments } = useRemoteConnectionStatus();
+  const steerGraceWindowMs = useSteerGraceWindowMs();
   const [retryTick, setRetryTick] = useState(0);
   const retryAttemptRef = useRef(new Map<MessageId, number>());
   const retryNotBeforeRef = useRef(new Map<MessageId, number>());
@@ -899,6 +902,12 @@ export function useThreadOutboxDrain(): void {
           // delivery, which the server turns into a queued run when a turn is
           // already active.
           dispatchMode: queuedMessage.dispatchMode ?? "start",
+          // The recall window started when the message was sent, not on resend.
+          steerGraceWindowMs: remainingSteerGraceWindowMs(
+            queuedMessage.createdAt,
+            steerGraceWindowMs,
+            Date.now(),
+          ),
         },
       });
       const failure = reportFailure(deliveryResult, "start-turn");
@@ -922,6 +931,7 @@ export function useThreadOutboxDrain(): void {
       setThreadRuntimeMode,
       startTurn,
       restoreQueuedMessage,
+      steerGraceWindowMs,
     ],
   );
 

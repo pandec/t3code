@@ -53,6 +53,7 @@ import {
 } from "@t3tools/shared/orchestrationV2PendingBackgroundWork";
 import * as Context from "effect/Context";
 import * as DateTime from "effect/DateTime";
+import * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";
 import * as FileSystem from "effect/FileSystem";
 import * as Path from "effect/Path";
@@ -101,6 +102,12 @@ import { ProviderSessionManagerV2 } from "./ProviderSessionManager.ts";
 import { ProviderSwitchServiceV2 } from "./ProviderSwitchService.ts";
 import { isAutomaticCompletionRun, queuedRunsInDeliveryOrder } from "./QueuedRunOrder.ts";
 import { RuntimePolicyV2 } from "./RuntimePolicy.ts";
+import {
+  isSteerDue,
+  isSteerInRecallWindow,
+  steerRecallDeadline,
+  withoutSteerDeadline,
+} from "./SteerRecallWindow.ts";
 import {
   makeSubagentChildThread,
   subagentResultForRun,
@@ -482,8 +489,10 @@ function delegatedTaskTerminalStatus(
 
 function nextQueuedRun(
   projection: Pick<OrchestrationV2ThreadProjection, "runs" | "messages">,
+  now: DateTime.Utc,
 ): OrchestrationV2Run | undefined {
-  return queuedRunsInDeliveryOrder(projection)[0];
+  // A steer still in its recall window waits; the runs behind it may start.
+  return queuedRunsInDeliveryOrder(projection).find((run) => !isSteerInRecallWindow(run, now));
 }
 
 /**
@@ -512,7 +521,8 @@ function queueBatchFollowers(
   if (!batchable(leader)) return [];
   const followers: Array<OrchestrationV2Run> = [];
   for (const run of queuedRunsInDeliveryOrder(projection)) {
-    if (run.id === leader.id) continue;
+    // Steers deliver themselves once their recall window ends.
+    if (run.id === leader.id || run.steerDeadlineAt !== undefined) continue;
     if (!batchable(run) || !modelSelectionsEqual(run.modelSelection, leader.modelSelection)) break;
     followers.push(run);
   }
@@ -1079,7 +1089,7 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
         ["runs", "nodes", "attempts", "providerThreads", "turnItems", "messages"],
         { turnItemTypes: [], messageRoles: ["user"] },
       );
-      const queuedRun = nextQueuedRun(projection);
+      const queuedRun = nextQueuedRun(projection, yield* DateTime.now);
       if (queuedRun === undefined) return;
       const now = yield* DateTime.now;
       const rootNode = projection.nodes.find((node) => node.id === queuedRun.rootNodeId);
@@ -1204,7 +1214,7 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
       if (usageLimitBlockedRun(projection.runs, projection.turnItems, sessionError) !== null) {
         return;
       }
-      const queuedRun = nextQueuedRun(projection);
+      const queuedRun = nextQueuedRun(projection, yield* DateTime.now);
       if (queuedRun === undefined) {
         return;
       }
@@ -1518,7 +1528,11 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
         ),
         updatedAt: now,
       };
-      const { queueBatchLeaderRunId: _previousBatchLeader, ...unbatchedQueuedRun } = queuedRun;
+      const {
+        queueBatchLeaderRunId: _previousBatchLeader,
+        steerDeadlineAt: _steerDeadlineAt,
+        ...unbatchedQueuedRun
+      } = queuedRun;
       const startingRun: OrchestrationV2Run = {
         ...unbatchedQueuedRun,
         status: "starting",
@@ -4380,6 +4394,15 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
           dispatchMode = { type: "start_immediately" };
         }
       }
+      // Fork steer recall window: the steer waits as a queued run until its
+      // deadline, then releaseDueSteers sends it into the running turn.
+      const steerDeadlineAt =
+        dispatchMode.type === "steer_active"
+          ? steerRecallDeadline(command, yield* DateTime.now, isNativeMaintenanceCommand(command))
+          : undefined;
+      if (steerDeadlineAt !== undefined) {
+        dispatchMode = { type: "queue_after_active" };
+      }
       if (
         command.notification !== undefined &&
         (command.createdBy !== "agent" ||
@@ -4692,6 +4715,7 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
           ...(command.restartContinuationOfRunId === undefined
             ? {}
             : { restartContinuationOfRunId: command.restartContinuationOfRunId }),
+          ...(steerDeadlineAt === undefined ? {} : { steerDeadlineAt }),
         };
         const attempt: OrchestrationV2RunAttempt = {
           id: attemptId,
@@ -9612,7 +9636,9 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
             return;
           }
           for (const run of queuedRunsInDeliveryOrder(projection)) {
-            if (isAutomaticCompletionRun(projection, run)) continue;
+            if (isAutomaticCompletionRun(projection, run) || run.steerDeadlineAt !== undefined) {
+              continue;
+            }
             if (run.queueBatchLeaderRunId !== leader.id || run.queueHeld === true) return;
             yield* dispatchWithReceiptEffect({
               type: "queued-message.promote-to-steer",
@@ -9631,6 +9657,109 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
         Effect.logWarning("Failed to release a queued V2 batch", { threadId, cause }),
       ),
     );
+
+  // Fork steer recall window: steers past their deadline go into the running
+  // turn. With nothing running the first one starts a turn. A turn that is
+  // still starting keeps them waiting until it runs. One the turn cannot take
+  // loses its deadline and stays queued as an ordinary message.
+  const releaseDueSteers = (threadId: ThreadId) =>
+    Effect.gen(function* () {
+      const records = yield* projectionStore.getThreadRecords(threadId, ["runs"]);
+      const now = yield* DateTime.now;
+      if (!records.runs.some((run) => isSteerDue(run, now))) return;
+      yield* threadDispatch.withLock(
+        threadId,
+        Effect.gen(function* () {
+          const projection = yield* projectionStore.getThreadRecords(
+            threadId,
+            ["runs", "messages", "providerTurns"],
+            { messageRoles: ["user"] },
+          );
+          const lockedNow = yield* DateTime.now;
+          const due = queuedRunsInDeliveryOrder(projection).filter(
+            (run) => run.queueHeld !== true && isSteerDue(run, lockedNow),
+          );
+          if (due.length === 0) return;
+          const active = projection.runs.find(isBlockingRun);
+          if (active === undefined) {
+            yield* startNextQueuedRun(threadId);
+            return;
+          }
+          if (
+            active.status !== "running" ||
+            !projection.providerTurns.some(
+              (turn) => turn.runAttemptId === active.activeAttemptId && turn.status === "running",
+            )
+          ) {
+            return;
+          }
+          for (const run of due) {
+            // Promotion steers with the thread's selection; a changed one would restart the turn.
+            const steered =
+              modelSelectionsEqual(projection.thread.modelSelection, active.modelSelection) &&
+              modelSelectionsEqual(run.modelSelection, active.modelSelection)
+                ? yield* dispatchWithReceiptEffect({
+                    type: "queued-message.promote-to-steer",
+                    commandId: CommandId.make(
+                      `command:system:steer-deadline:${run.id}:${active.id}`,
+                    ),
+                    threadId,
+                    queuedRunId: run.id,
+                    targetRunId: active.id,
+                  }).pipe(
+                    Effect.as(true),
+                    Effect.orElseSucceed(() => false),
+                  )
+                : false;
+            if (!steered) {
+              yield* writeSystemEvents([
+                {
+                  type: "run.updated",
+                  threadId,
+                  runId: run.id,
+                  ...(run.rootNodeId === null ? {} : { nodeId: run.rootNodeId }),
+                  providerInstanceId: run.providerInstanceId,
+                  occurredAt: lockedNow,
+                  payload: withoutSteerDeadline(run),
+                },
+              ]);
+            }
+          }
+        }),
+      );
+    }).pipe(
+      Effect.catchCause((cause) =>
+        Effect.logWarning("Failed to release a V2 steer after its recall window", {
+          threadId,
+          cause,
+        }),
+      ),
+    );
+
+  // Wakes releaseDueSteers when a held steer's deadline passes (set on create,
+  // and again when a held queue resumes) and whenever a run starts running.
+  const watchSteerDeadlines = (stored: OrchestrationV2StoredEvent) => {
+    const event = stored.event;
+    if (event.type !== "run.created" && event.type !== "run.updated") return Effect.void;
+    const run = event.payload;
+    if (run.status === "running") return releaseDueSteers(event.threadId);
+    const deadline = run.steerDeadlineAt;
+    if (run.status !== "queued" || deadline === undefined || run.queueHeld === true) {
+      return Effect.void;
+    }
+    return DateTime.now.pipe(
+      Effect.flatMap((now) =>
+        Effect.sleep(
+          Duration.millis(
+            Math.max(0, DateTime.toEpochMillis(deadline) - DateTime.toEpochMillis(now)),
+          ),
+        ),
+      ),
+      Effect.andThen(releaseDueSteers(event.threadId)),
+      Effect.forkDetach,
+      Effect.asVoid,
+    );
+  };
 
   // Historical terminal events are already represented by the projections
   // below. Replaying the full event table on every server start delays live
@@ -9661,11 +9790,18 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
         stored.event.type === "provider-turn.updated" &&
         stored.event.payload.status === "running" &&
         stored.event.payload.runAttemptId !== null
-          ? releaseQueueBatch(stored.event.threadId, stored.event.payload.runAttemptId)
+          ? releaseQueueBatch(stored.event.threadId, stored.event.payload.runAttemptId).pipe(
+              Effect.andThen(releaseDueSteers(stored.event.threadId)),
+            )
           : Effect.void,
       ),
       Effect.forkDetach,
     );
+  for (const eventType of ["run.created", "run.updated"] as const) {
+    yield* eventSink
+      .stream({ afterSequence: terminalEventsAfterSequence, eventType })
+      .pipe(Stream.runForEach(watchSteerDeadlines), Effect.forkDetach);
+  }
 
   // Recover child results from projections. Queue recovery instead holds
   // unstarted runs until an explicit queue.resume command arrives.

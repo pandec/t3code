@@ -1,4 +1,5 @@
 import { threadSubmissionRetryDelayMs } from "@t3tools/client-runtime/state/thread-submission-outbox";
+import { remainingSteerGraceWindowMs } from "@t3tools/client-runtime/state/thread-workflows";
 import {
   CommandId,
   DEFAULT_PROVIDER_INTERACTION_MODE,
@@ -7,6 +8,7 @@ import {
 } from "@t3tools/contracts";
 import { useEffect, useEffectEvent, useMemo, useRef, useState } from "react";
 
+import { useSteerGraceWindowMs } from "../hooks/useSettings";
 import { useConnectedEnvironmentIds } from "../state/environments";
 import {
   claimThreadSubmission,
@@ -38,6 +40,7 @@ export function ThreadOutboxDrainHost() {
   const setInteractionMode = useAtomCommand(threadEnvironment.setInteractionMode, {
     reportFailure: false,
   });
+  const steerGraceWindowMs = useSteerGraceWindowMs();
   const attemptsRef = useRef(new Map<MessageId, number>());
   const retryAtRef = useRef(new Map<MessageId, number>());
   // Advanced by backoff timers so rows whose retry time has passed are picked up.
@@ -99,6 +102,12 @@ export function ThreadOutboxDrainHost() {
           interactionMode:
             submission.settings?.interactionMode ?? DEFAULT_PROVIDER_INTERACTION_MODE,
           dispatchMode: submission.dispatchMode,
+          // The recall window started when the message was sent, not on resend.
+          steerGraceWindowMs: remainingSteerGraceWindowMs(
+            submission.createdAt,
+            steerGraceWindowMs,
+            Date.now(),
+          ),
           createdAt: submission.createdAt,
         },
       }),

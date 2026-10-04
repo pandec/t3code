@@ -5,6 +5,7 @@ import type {
   OrchestrationV2ThreadProjection,
 } from "@t3tools/contracts";
 import { copySorted } from "@t3tools/shared/Array";
+import * as DateTime from "effect/DateTime";
 
 type Projection = OrchestrationV2ThreadProjection;
 type Run = Projection["runs"][number];
@@ -34,6 +35,36 @@ export interface ThreadQueueWorkflowState {
   readonly isHeld: boolean;
   readonly canReorder: boolean;
   readonly canPromoteToSteer: boolean;
+}
+
+/**
+ * Fork steer recall window: milliseconds until a queued steer is sent, 0 once
+ * it is only waiting for a running turn, or null when the run is an ordinary
+ * queued message.
+ */
+export function steerRecallRemainingMs(run: Run, nowMs: number): number | null {
+  if (run.status !== "queued" || run.steerDeadlineAt === undefined) return null;
+  return Math.max(0, DateTime.toEpochMillis(run.steerDeadlineAt) - nowMs);
+}
+
+/** Row label for a queued steer, or null for an ordinary queued message. */
+export function formatSteerRecallLabel(remainingMs: number | null): string | null {
+  if (remainingMs === null) return null;
+  return remainingMs > 0 ? `Steers in ${Math.ceil(remainingMs / 1000)}s` : "Steering";
+}
+
+/**
+ * The part of a steer recall window still left for a message composed at
+ * `createdAt`, so a resend from an outbox does not restart the window.
+ */
+export function remainingSteerGraceWindowMs(
+  createdAt: string,
+  windowMs: number,
+  nowMs: number,
+): number {
+  const createdAtMs = Date.parse(createdAt);
+  if (Number.isNaN(createdAtMs)) return 0;
+  return Math.max(0, Math.min(windowMs, createdAtMs + windowMs - nowMs));
 }
 
 export function resolveActiveThreadRun(projection: Pick<Projection, "runs">): Run | null {

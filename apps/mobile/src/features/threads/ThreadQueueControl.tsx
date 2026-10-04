@@ -1,5 +1,9 @@
 import { type StaticScreenProps, useNavigation } from "@react-navigation/native";
 import { useAtomValue } from "@effect/atom-react";
+import {
+  formatSteerRecallLabel,
+  steerRecallRemainingMs,
+} from "@t3tools/client-runtime/state/thread-workflows";
 import type { ChatAttachment, EnvironmentId, RunId, ThreadId } from "@t3tools/contracts";
 import { Image } from "expo-image";
 import * as Haptics from "expo-haptics";
@@ -77,6 +81,15 @@ export function ThreadQueueSheet({ route }: StaticScreenProps<QueueTarget>) {
   const [translation] = useState(() => new Animated.Value(0));
   const queuedRuns = workflow?.queuedRuns ?? [];
   const order = queuedRuns.map(({ run }) => run.id).join(",");
+  // Held steers count down their recall window; the clock only ticks while one is held.
+  const hasHeldSteer = queuedRuns.some(({ run }) => run.steerDeadlineAt !== undefined);
+  const [nowMs, setNowMs] = useState(() => Date.now());
+  useEffect(() => {
+    if (!hasHeldSteer) return;
+    setNowMs(Date.now());
+    const interval = setInterval(() => setNowMs(Date.now()), 1_000);
+    return () => clearInterval(interval);
+  }, [hasHeldSteer]);
 
   useEffect(() => {
     if (drag.current && drag.current.order !== order) {
@@ -228,6 +241,7 @@ export function ThreadQueueSheet({ route }: StaticScreenProps<QueueTarget>) {
         });
         const title =
           controls.displayText || (attachments.length > 0 ? "Attachments" : "Queued message");
+        const steerLabel = formatSteerRecallLabel(steerRecallRemainingMs(run, nowMs));
         return (
           <QueueShiftedRow
             key={run.id}
@@ -384,6 +398,8 @@ export function ThreadQueueSheet({ route }: StaticScreenProps<QueueTarget>) {
                       <Text className="shrink-0 text-2xs uppercase tracking-wide text-primary">
                         Editing
                       </Text>
+                    ) : steerLabel !== null ? (
+                      <Text className="shrink-0 text-xs text-foreground-muted">{steerLabel}</Text>
                     ) : null}
                     {workflow?.canPromoteToSteer ? (
                       <Pressable
