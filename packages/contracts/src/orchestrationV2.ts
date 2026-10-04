@@ -2577,6 +2577,12 @@ export const OrchestrationV2Command = Schema.Union([
     limitRecovery: Schema.optional(Schema.NullOr(OrchestrationV2LimitRecoveryUpdate)),
     /** Link (object) or unlink (null) a pull request (#8160); absent leaves it unchanged. */
     linkedPullRequest: Schema.optional(Schema.NullOr(ThreadLinkedPullRequest)),
+    /**
+     * Fork: the workspace change mirrors where this live provider session moved
+     * itself, so it keeps running there instead of being detached. Rejected
+     * unless that session is still live on the thread.
+     */
+    followsProviderSessionId: Schema.optional(ProviderSessionId),
   }),
   Schema.Struct({
     type: Schema.Literal("thread.pull-request.link"),

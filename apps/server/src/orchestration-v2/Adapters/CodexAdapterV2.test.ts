@@ -612,7 +612,7 @@ describe("CodexAdapterV2 runtime policy", () => {
 });
 
 describe("CodexAdapterV2 process spawning", () => {
-  it("injects cwd, model, and MCP authorization into thread-scoped params", () => {
+  it("injects cwd, model, thread environment, and MCP authorization into thread-scoped params", () => {
     const threadId = ThreadId.make("thread-codex-mcp");
     McpProviderSession.setMcpProviderSession({
       environmentId: EnvironmentId.make("environment-codex-mcp"),
@@ -634,12 +634,18 @@ describe("CodexAdapterV2 process spawning", () => {
             interactionMode: "default",
             cwd: "/workspace/thread-codex-mcp",
           },
+          t3Paths: { baseDir: "/t3", stateDir: "/t3/userdata" },
         }),
         {
           cwd: "/workspace/thread-codex-mcp",
           model: "gpt-5.4",
           config: {
             "tools.update_plan.enabled": true,
+            // Fork (DECISIONS 5.9): commands Codex runs for this thread know it.
+            "shell_environment_policy.set.T3CODE_THREAD_ID": "thread-codex-mcp",
+            "shell_environment_policy.set.T3CODE_HOME": "/t3",
+            "shell_environment_policy.set.T3CODE_STATE_DIR": "/t3/userdata",
+            "shell_environment_policy.set.T3CODE_WORKTREE_PATH": "/workspace/thread-codex-mcp",
             mcp_servers: {
               "t3-code": {
                 url: "http://127.0.0.1:43123/mcp",

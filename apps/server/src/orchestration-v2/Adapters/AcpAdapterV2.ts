@@ -96,6 +96,7 @@ import {
   type T3AcpInstructionState,
 } from "../../provider/T3OrchestrationInstructions.ts";
 import { buildRuntimeInstructions } from "../../provider/RuntimeInstructions.ts";
+import type { ProviderThreadPaths } from "../../provider/ProviderThreadEnvironment.ts";
 import * as IdAllocator from "../IdAllocator.ts";
 import { type ProviderContinuationRequest } from "../ProviderContinuationRequests.ts";
 import {
@@ -149,6 +150,9 @@ export interface AcpAdapterV2RuntimeInput {
   readonly onTermination: NonNullable<AcpSessionRuntime.AcpSessionRuntimeOptions["onTermination"]>;
   readonly onOutgoingResponseFailure?: AcpSessionRuntime.AcpSessionRuntimeOptions["onOutgoingResponseFailure"];
   readonly onOutgoingResponse?: AcpSessionRuntime.AcpSessionRuntimeOptions["onOutgoingResponse"];
+  /** Fork (DECISIONS 5.9): the app thread this process serves, for its thread-aware environment. */
+  readonly threadId?: ThreadId;
+  readonly t3Paths?: ProviderThreadPaths;
 }
 
 export type AcpAdapterV2NativeLogging = Pick<
@@ -2015,6 +2019,8 @@ export function makeAcpAdapterV2(
           return {
             cwd: input.runtimePolicy.cwd ?? process.cwd(),
             runtimePolicy: input.runtimePolicy,
+            ...(threadId === null ? {} : { threadId }),
+            t3Paths: { baseDir: serverConfig.baseDir, stateDir: serverConfig.stateDir },
             mcpServers: mcpContext.servers,
             acpMcpServers: mcpContext.acpServers,
             ...(mcpContext.processEnvironment === undefined

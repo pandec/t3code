@@ -1668,6 +1668,12 @@ describe("AcpAdapterV2", () => {
         runtimePolicy,
       });
       assert.equal(runtimeOrdinalSeen, 1);
+      // Fork (DECISIONS 5.9): flavors build the thread-aware process environment from these.
+      assert.equal(runtimeInputs[0]!.threadId, threadId);
+      assert.deepEqual(runtimeInputs[0]!.t3Paths, {
+        baseDir: serverConfig.baseDir,
+        stateDir: serverConfig.stateDir,
+      });
       yield* runtimeInputs[0]!.onTermination!(
         new EffectAcpErrors.AcpTransportError({
           detail: "Injected unexpected writer termination",

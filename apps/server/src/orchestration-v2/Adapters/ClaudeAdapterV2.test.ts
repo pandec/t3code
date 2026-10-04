@@ -64,6 +64,7 @@ import {
   type ProviderAdapterV2TurnInput,
 } from "../ProviderAdapter.ts";
 import type { ProviderContinuationRequest } from "../ProviderContinuationRequests.ts";
+import type { ProviderSessionCwdObservation } from "../ProviderSessionCwdObservations.ts";
 import { makeProviderFailure } from "../ProviderFailure.ts";
 import * as ClaudeAdapterV2 from "./ClaudeAdapterV2.ts";
 import * as IdAllocator from "../IdAllocator.ts";
@@ -2117,6 +2118,8 @@ describe("ClaudeAdapterV2 background wake turns", () => {
     readonly close?: (sdkMessages: Queue.Queue<SDKMessage>) => Effect.Effect<void>;
     readonly interrupt?: Effect.Effect<void>;
     readonly environment?: NodeJS.ProcessEnv;
+    readonly nativeSessionId?: string;
+    readonly t3Paths?: { readonly baseDir: string; readonly stateDir: string };
   }) =>
     Effect.gen(function* () {
       const fileSystem = yield* FileSystem.FileSystem;
@@ -2134,6 +2137,7 @@ describe("ClaudeAdapterV2 background wake turns", () => {
       });
       const offeredMessages: Array<SDKUserMessage> = [];
       const continuationRequests: Array<ProviderContinuationRequest> = [];
+      const sessionCwdObservations: Array<ProviderSessionCwdObservation> = [];
       const terminalReceipts =
         yield* Queue.unbounded<Extract<ProviderAdapterV2Event, { type: "turn.terminal" }>>();
       const systemNoticeReceipts =
@@ -2153,8 +2157,15 @@ describe("ClaudeAdapterV2 background wake turns", () => {
               continuationRequests.push(request);
             }),
         },
+        sessionCwdObservations: {
+          offer: (observation) =>
+            Effect.sync(() => {
+              sessionCwdObservations.push(observation);
+            }),
+        },
+        ...(options?.t3Paths === undefined ? {} : { t3Paths: options.t3Paths }),
         queryRunner: {
-          allocateSessionId: Effect.succeed(WAKE_NATIVE_SESSION),
+          allocateSessionId: Effect.succeed(options?.nativeSessionId ?? WAKE_NATIVE_SESSION),
           open: (input) =>
             Effect.sync(() => {
               openedOptions = input.options;
@@ -2234,6 +2245,7 @@ describe("ClaudeAdapterV2 background wake turns", () => {
         offerAndWait,
         offeredMessages,
         continuationRequests,
+        sessionCwdObservations,
         events,
         terminalReceipts,
         systemNoticeReceipts,
@@ -5432,6 +5444,135 @@ describe("ClaudeAdapterV2 background wake turns", () => {
         assert.equal(rolledBack.providerThread.nativeConversationHeadRef?.nativeId, parentUuid);
       }).pipe(Effect.provide(Layer.merge(IdAllocator.layer, NodeServices.layer))),
     ),
+  );
+
+  // Fork (DECISIONS 5.8, 5.9): a session that enters a worktree itself is
+  // followed (the thread is told, and a replacement process starts there), and
+  // every process carries its thread identity.
+  it.effect(
+    "follows a session into the worktree it entered and launches with thread identity",
+    () =>
+      Effect.scoped(
+        Effect.gen(function* () {
+          const fileSystem = yield* FileSystem.FileSystem;
+          const path = yield* Path.Path;
+          const configDir = yield* fileSystem.makeTempDirectoryScoped({
+            prefix: "t3-claude-cwd-config-",
+          });
+          const worktree = yield* fileSystem.makeTempDirectoryScoped({
+            prefix: "t3-claude-cwd-worktree-",
+          });
+          const sessionId = "00000000-0000-4000-8000-0000000005d8";
+          const harness = yield* makeWakeHarnessWithOptions({
+            environment: { CLAUDE_CONFIG_DIR: configDir },
+            nativeSessionId: sessionId,
+            t3Paths: { baseDir: "/t3", stateDir: "/t3/userdata" },
+          });
+          const now = yield* DateTime.now;
+          yield* harness.runtime.startTurn(
+            makeClaudeTestTurnInput({
+              threadId: harness.threadId,
+              providerThread: harness.providerThread,
+              now,
+              attemptId: RunAttemptId.make("attempt-claude-enter-worktree"),
+              text: "Work in a worktree.",
+              attachments: [],
+            }),
+          );
+          const firstEnv = harness.getOpenedOptions()?.env;
+          assert.equal(firstEnv?.T3CODE_THREAD_ID, harness.threadId);
+          assert.equal(firstEnv?.T3CODE_HOME, "/t3");
+          assert.equal(firstEnv?.T3CODE_STATE_DIR, "/t3/userdata");
+          assert.equal(firstEnv?.T3CODE_WORKTREE_PATH, "/workspace");
+          assert.equal(firstEnv?.CLAUDE_CONFIG_DIR, configDir);
+
+          // The CLI records the move in the transcript, not on the SDK stream.
+          const projectDir = path.join(configDir, "projects", "-workspace");
+          yield* fileSystem.makeDirectory(projectDir, { recursive: true });
+          yield* fileSystem.writeFileString(
+            path.join(projectDir, `${sessionId}.jsonl`),
+            `{"type":"user","cwd":"/workspace"}\n{"type":"user","cwd":"${worktree}"}\n`,
+          );
+          const toolUseId = "toolu_enter_worktree";
+          yield* harness.offerAndWait(
+            claudeSdkFrame({
+              type: "assistant",
+              uuid: "00000000-0000-4000-8000-0000000005d9",
+              session_id: sessionId,
+              parent_tool_use_id: null,
+              message: {
+                id: "msg_enter_worktree",
+                model: "claude-sonnet-4-6",
+                type: "message",
+                role: "assistant",
+                content: [
+                  { type: "tool_use", id: toolUseId, name: "EnterWorktree", input: { name: "x" } },
+                ],
+                stop_reason: "tool_use",
+                stop_sequence: null,
+                usage: {
+                  input_tokens: 1,
+                  output_tokens: 1,
+                  cache_creation_input_tokens: 0,
+                  cache_read_input_tokens: 0,
+                },
+              },
+            }),
+          );
+          assert.deepEqual(harness.sessionCwdObservations, []);
+          yield* harness.offerAndWait(
+            claudeSdkFrame({
+              type: "user",
+              uuid: "00000000-0000-4000-8000-0000000005da",
+              session_id: sessionId,
+              parent_tool_use_id: null,
+              message: {
+                role: "user",
+                content: [{ type: "tool_result", tool_use_id: toolUseId, content: "Entered." }],
+              },
+            }),
+          );
+          assert.deepEqual(
+            harness.sessionCwdObservations.map(({ threadId, providerSessionId, cwd }) => ({
+              threadId,
+              providerSessionId,
+              cwd,
+            })),
+            [
+              {
+                threadId: harness.threadId,
+                providerSessionId: ProviderSessionId.make("provider-session-claude-wake"),
+                cwd: worktree,
+              },
+            ],
+          );
+          yield* Queue.offer(
+            harness.sdkMessages,
+            makeResultFrame({ uuid: "00000000-0000-4000-8000-0000000005db", result: "Moved." }),
+          );
+          yield* awaitUntil(() => harness.terminalEvents().length === 1, "turn terminal");
+          // The turn-boundary re-read finds the same directory: no second report.
+          assert.lengthOf(harness.sessionCwdObservations, 1);
+
+          // A new selection replaces the process; it starts where the session is.
+          yield* harness.runtime.startTurn(
+            makeClaudeTestTurnInput({
+              threadId: harness.threadId,
+              providerThread: harness.providerThread,
+              now: yield* DateTime.now,
+              attemptId: RunAttemptId.make("attempt-claude-after-worktree"),
+              text: "Continue.",
+              attachments: [],
+              providerTurnOrdinal: 2,
+              modelSelection: { ...CLAUDE_TEST_MODEL_SELECTION, model: "claude-haiku-4-5" },
+            }),
+          );
+          const reopened = harness.getOpenedOptions();
+          assert.equal(reopened?.model, "claude-haiku-4-5");
+          assert.equal(reopened?.cwd, worktree);
+          assert.equal(reopened?.env?.T3CODE_WORKTREE_PATH, worktree);
+        }).pipe(Effect.provide(Layer.merge(IdAllocator.layer, NodeServices.layer))),
+      ),
   );
 
   it.effect("fails a positive task-notification error result", () =>

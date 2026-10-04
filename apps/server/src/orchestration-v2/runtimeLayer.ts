@@ -34,6 +34,8 @@ import * as ProjectStore from "./ProjectStore.ts";
 import { layerFromProviderInstanceRegistry as providerAdapterRegistryLayerFromProviderInstances } from "./ProviderAdapterRegistry.ts";
 import { layer as providerContinuationRequestsLayer } from "./ProviderContinuationRequests.ts";
 import { workerLive as providerContinuationWorkerLive } from "./ProviderContinuationService.ts";
+import { layer as providerSessionCwdObservationsLayer } from "./ProviderSessionCwdObservations.ts";
+import { workerLive as sessionWorkspaceFollowWorkerLive } from "./SessionWorkspaceFollow.ts";
 import { layer as threadTitleRegenerationServiceLayer } from "./ThreadTitleRegenerationService.ts";
 import { layer as providerEventIngestorLayer } from "./ProviderEventIngestor.ts";
 import * as ThreadCommandExecutor from "./ThreadCommandExecutor.ts";
@@ -271,6 +273,18 @@ const providerContinuationWorkerProvided = providerContinuationWorkerLive.pipe(
     Layer.mergeAll(providerContinuationRequestsLayer, threadManagementProvided, idAllocatorLayer),
   ),
 );
+// fork (DECISIONS 5.8): threads follow worktree moves a provider session made
+// itself. Same observations layer reference as the adapter infrastructure.
+const sessionWorkspaceFollowWorkerProvided = sessionWorkspaceFollowWorkerLive.pipe(
+  Layer.provide(
+    Layer.mergeAll(
+      providerSessionCwdObservationsLayer,
+      orchestratorProvided,
+      ProjectStore.layer,
+      idAllocatorLayer,
+    ),
+  ),
+);
 const threadTitleRegenerationProvided = threadTitleRegenerationServiceLayer.pipe(
   Layer.provide(Layer.mergeAll(threadManagementProvided, ProjectStore.layer, TextGeneration.layer)),
 );
@@ -325,6 +339,7 @@ export const OrchestrationV2ProductionLayerLive = Layer.mergeAll(
     Layer.provide(Layer.mergeAll(projectionStoreLayer, threadManagementProvided)),
   ),
   providerContinuationWorkerProvided,
+  sessionWorkspaceFollowWorkerProvided,
   agentSessionImporterProvided,
 ).pipe(
   Layer.provide(Scheduler.layer),

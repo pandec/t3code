@@ -54,6 +54,7 @@ import {
   XAiExitPlanModeRequest,
 } from "../../provider/acp/XAiAcpExtension.ts";
 import { mergeProviderInstanceEnvironment } from "../../provider/ProviderInstanceEnvironment.ts";
+import { providerThreadEnvironment } from "../../provider/ProviderThreadEnvironment.ts";
 import { acpPermissionDisposition } from "../../provider/acp/AcpClientPolicy.ts";
 import * as AcpSessionRuntime from "../../provider/acp/AcpSessionRuntime.ts";
 import * as ProviderEventLoggers from "../../provider/Layers/ProviderEventLoggers.ts";
@@ -279,7 +280,15 @@ export function makeGrokAcpAdapterFlavor(options: GrokAdapterV2Options): AcpAdap
           ...input,
           interruptPromptOnCancel: input.interruptPromptOnCancel ?? false,
           grokSettings: options.settings,
-          environment: options.environment,
+          // Fork (DECISIONS 5.9): commands Grok runs know their thread and T3 install.
+          environment:
+            input.threadId === undefined
+              ? options.environment
+              : providerThreadEnvironment(
+                  { threadId: input.threadId, cwd: input.cwd },
+                  options.environment,
+                  input.t3Paths,
+                ),
           childProcessSpawner: options.childProcessSpawner,
           runtimeMode: grokLaunchRuntimeMode(runtimePolicy),
         })),

@@ -2459,6 +2459,25 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
           )
           .pipe(mapDispatchError(command))
       : null;
+    // Fork (DECISIONS 5.8): a followed move is valid only while the session
+    // that made it still runs this thread; a stale observation must not move it.
+    if (
+      command.type === "thread.metadata.update" &&
+      command.followsProviderSessionId !== undefined &&
+      providerContext !== null &&
+      !providerContext.providerSessions.some(
+        (session) =>
+          session.id === command.followsProviderSessionId &&
+          session.status !== "stopped" &&
+          session.status !== "error",
+      )
+    ) {
+      return yield* new OrchestratorDispatchError({
+        commandId: command.commandId,
+        commandType: command.type,
+        cause: `Provider session ${command.followsProviderSessionId} no longer runs thread ${command.threadId}.`,
+      });
+    }
     const providerSwitchPlan =
       command.type === "thread.model-selection.set" || command.type === "provider.switch"
         ? yield* Effect.gen(function* () {
@@ -3059,7 +3078,10 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
         : command.type === "thread.metadata.update" &&
             command.worktreePath !== undefined &&
             command.worktreePath !== thread.worktreePath
-          ? (providerContext?.providerSessions ?? []).map((session) => session.id)
+          ? (providerContext?.providerSessions ?? [])
+              // Fork (DECISIONS 5.8): the session that moved itself is already there.
+              .filter((session) => session.id !== command.followsProviderSessionId)
+              .map((session) => session.id)
           : command.type === "thread.runtime-mode.set"
             ? (providerContext?.providerSessions ?? [])
                 .filter(

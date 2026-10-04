@@ -91,11 +91,17 @@ import { planClaudeSkillDispatch } from "../../provider/Drivers/ClaudeSkillDispa
 import { discoverClaudeSkills } from "../../provider/Drivers/ClaudeSkills.ts";
 import { compileClaudeModelSelection } from "../../claudeModelOptions.ts";
 import * as ServerConfig from "../../config.ts";
-import { expandHomePath } from "../../pathExpansion.ts";
+import { expandHomePath, isExistingDirectory } from "../../pathExpansion.ts";
 import {
   claudeSignedOutMessage,
   makeClaudeEnvironment,
+  resolveClaudeConfigDirPath,
 } from "../../provider/Drivers/ClaudeHome.ts";
+import { findClaudeSessionCwd } from "../../provider/Drivers/ClaudeSessionImport.ts";
+import {
+  providerThreadEnvironment,
+  type ProviderThreadPaths,
+} from "../../provider/ProviderThreadEnvironment.ts";
 import {
   BUNDLED_CLAUDE_MODEL_CATALOG,
   type ClaudeModelCatalog,
@@ -131,6 +137,7 @@ import {
 } from "../ProviderAdapterDriver.ts";
 import { type BackgroundWorkReport, backgroundWorkNotification } from "../Notification.ts";
 import * as ProviderContinuationRequests from "../ProviderContinuationRequests.ts";
+import * as ProviderSessionCwdObservations from "../ProviderSessionCwdObservations.ts";
 import {
   makeSubagentChildThread,
   makeSubagentConversationArtifacts,
@@ -1085,6 +1092,10 @@ const getNativeThreadId = Effect.fnUntraced(function* (
 });
 
 const isSyntheticClaudeTurnId = (nativeTurnId: string): boolean => nativeTurnId.startsWith("turn:");
+
+/** Fork (DECISIONS 5.8): tools that move the session itself to another directory. */
+const isClaudeWorktreeMoveTool = (toolName: string): boolean =>
+  toolName === "EnterWorktree" || toolName === "ExitWorktree";
 
 const isTerminalProviderTurn = (turn: OrchestrationV2ProviderTurn): boolean =>
   turn.status === "completed" ||
@@ -2697,6 +2708,8 @@ interface ClaudeLiveQueryContext {
   readonly query: ClaudeAgentSdkQuerySession;
   readonly queryPolicyKey: string;
   readonly selectionKey: string;
+  // Fork (DECISIONS 5.8): the directory this process was started in.
+  readonly cwd: string | null;
   readonly closed: Deferred.Deferred<void, never>;
   // Whether this CLI process echoes a prompt's uuid on the first frame of
   // the turn answering it ("early") or only on its result. Learned from the
@@ -2917,6 +2930,14 @@ export interface ClaudeAdapterV2Options {
       request: ProviderContinuationRequests.ProviderContinuationRequest,
     ) => Effect.Effect<void>;
   };
+  /** Fork (DECISIONS 5.8): sink for worktree moves the session made itself; defaults to dropping them. */
+  readonly sessionCwdObservations?: {
+    readonly offer: (
+      observation: ProviderSessionCwdObservations.ProviderSessionCwdObservation,
+    ) => Effect.Effect<void>;
+  };
+  /** Fork (DECISIONS 5.9): T3 install paths exported to the CLI with its thread identity. */
+  readonly t3Paths?: ProviderThreadPaths;
 }
 
 export function makeClaudeAdapterV2(
@@ -2925,6 +2946,9 @@ export function makeClaudeAdapterV2(
   const { attachmentsDir, fileSystem, path, idAllocator, queryRunner } = adapterOptions;
   const modelCatalog = claudeModelCatalogForSettings(adapterOptions.settings);
   const continuationRequests = adapterOptions.continuationRequests ?? {
+    offer: () => Effect.void,
+  };
+  const sessionCwdObservations = adapterOptions.sessionCwdObservations ?? {
     offer: () => Effect.void,
   };
 
@@ -3215,6 +3239,75 @@ export function makeClaudeAdapterV2(
 
         const emitProviderEvent = (event: ProviderAdapter.ProviderAdapterV2Event) =>
           Queue.offer(events, event).pipe(Effect.asVoid);
+
+        // Fork (DECISIONS 5.8): where each native session moved itself with
+        // EnterWorktree/ExitWorktree. A replacement process for that session
+        // starts there while the directory exists, as the live one runs there.
+        const observedCwdByNativeThread = yield* Ref.make(new Map<string, string>());
+        // Native sessions that ran a worktree tool this turn; the turn
+        // boundary re-reads their cwd.
+        const pendingCwdReconciles = yield* Ref.make(new Set<string>());
+        const queryCwdFor = (nativeThreadId: string, requestedCwd: string | null) =>
+          Ref.get(observedCwdByNativeThread).pipe(
+            Effect.map((observed) => {
+              const cwd = observed.get(nativeThreadId);
+              return cwd !== undefined && isExistingDirectory(cwd) ? cwd : requestedCwd;
+            }),
+          );
+        /**
+         * Bring the recorded cwd in line with the session transcript. The SDK
+         * stream carries a cwd only in `system/init`, and the CLI fires no
+         * CwdChanged hook for these tools, so the move is read from disk. Runs
+         * when the worktree tool completes and again at the turn boundary: the
+         * transcript entry with the new cwd can land just after the tool
+         * result, so the first read may still see the old directory.
+         */
+        const reconcileSessionCwd = Effect.fnUntraced(
+          function* (reconcile: {
+            readonly nativeThreadId: string;
+            readonly threadId: ThreadId;
+            readonly trigger: "worktree-tool" | "turn-completed";
+          }) {
+            const configDirPath = yield* resolveClaudeConfigDirPath(
+              { homePath: "" },
+              adapterOptions.environment,
+            );
+            const observedCwd = yield* findClaudeSessionCwd({
+              configDirPath,
+              sessionId: reconcile.nativeThreadId,
+            }).pipe(Effect.orElseSucceed(() => null));
+            if (observedCwd === null) {
+              yield* reconcile.trigger === "turn-completed"
+                ? Effect.logWarning("claude.session.cwd-unresolved-after-worktree-tool", reconcile)
+                : Effect.logDebug("claude.session.cwd-unresolved", reconcile);
+              return;
+            }
+            const liveQuery = yield* Ref.get(queryContext);
+            const previousCwd =
+              (yield* Ref.get(observedCwdByNativeThread)).get(reconcile.nativeThreadId) ??
+              (liveQuery?.nativeThreadId === reconcile.nativeThreadId ? liveQuery.cwd : null);
+            if (previousCwd === observedCwd) return;
+            yield* Ref.update(observedCwdByNativeThread, (current) =>
+              new Map(current).set(reconcile.nativeThreadId, observedCwd),
+            );
+            yield* Effect.logInfo("claude.session.cwd-changed", {
+              ...reconcile,
+              previousCwd,
+              cwd: observedCwd,
+            });
+            yield* sessionCwdObservations.offer({
+              threadId: reconcile.threadId,
+              providerSessionId: input.providerSessionId,
+              providerSessionCreatedAt: session.createdAt,
+              cwd: observedCwd,
+            });
+          },
+          (effect) =>
+            effect.pipe(
+              Effect.provideService(FileSystem.FileSystem, fileSystem),
+              Effect.provideService(Path.Path, path),
+            ),
+        );
 
         // Claude emits retry progress but no recovered frame; the next
         // assistant message is the first reliable evidence of recovery.
@@ -4961,6 +5054,22 @@ export function makeClaudeAdapterV2(
           if (settlement !== undefined) {
             yield* Deferred.succeed(settlement, undefined);
           }
+          const turnNativeThreadId = input.context.input.providerThread.nativeThreadRef?.nativeId;
+          if (
+            turnNativeThreadId != null &&
+            (yield* Ref.modify(pendingCwdReconciles, (current) => {
+              if (!current.has(turnNativeThreadId)) return [false, current] as const;
+              const next = new Set(current);
+              next.delete(turnNativeThreadId);
+              return [true, next] as const;
+            }))
+          ) {
+            yield* reconcileSessionCwd({
+              nativeThreadId: turnNativeThreadId,
+              threadId: input.context.input.threadId,
+              trigger: "turn-completed",
+            });
+          }
         });
 
         const emitAssistantTextArtifacts = Effect.fnUntraced(function* (input: {
@@ -5989,6 +6098,15 @@ export function makeClaudeAdapterV2(
               );
               continue;
             }
+            if (
+              isClaudeWorktreeMoveTool(toolUse.name) &&
+              parentToolUseIdFromSdkMessage(message) === null
+            ) {
+              // Marked at the start: a turn interrupted before the result still moved.
+              yield* Ref.update(pendingCwdReconciles, (current) =>
+                new Set(current).add(liveQuery.nativeThreadId),
+              );
+            }
             if (toolUse.name === "TodoWrite" && parentToolUseIdFromSdkMessage(message) === null) {
               yield* emitClaudePlanProjection({
                 context,
@@ -6071,6 +6189,13 @@ export function makeClaudeAdapterV2(
             });
             yield* emitToolCallArtifacts(artifacts);
             context.toolCalls.delete(toolCall.nativeItemId);
+            if (parentToolUseId === null && isClaudeWorktreeMoveTool(toolCall.toolName)) {
+              yield* reconcileSessionCwd({
+                nativeThreadId: liveQuery.nativeThreadId,
+                threadId: context.input.threadId,
+                trigger: "worktree-tool",
+              });
+            }
           }
 
           const assistantParentToolUseId = parentToolUseIdFromSdkMessage(message);
@@ -6916,6 +7041,7 @@ export function makeClaudeAdapterV2(
           const hasPersistedProviderTurn = turnInput.providerTurnOrdinal > 1;
           const shouldResume =
             resumeSessionAt !== undefined || openedWithResume || hasPersistedProviderTurn;
+          const queryCwd = yield* queryCwdFor(nativeThreadId, turnInput.runtimePolicy.cwd);
           const querySession = yield* queryRunner
             .open({
               threadId: turnInput.threadId,
@@ -6925,10 +7051,15 @@ export function makeClaudeAdapterV2(
                 nativeThreadId,
                 resume: shouldResume,
                 ...(resumeSessionAt === undefined ? {} : { resumeSessionAt }),
-                cwd: turnInput.runtimePolicy.cwd,
+                cwd: queryCwd,
                 attachmentsDir,
                 settings: adapterOptions.settings,
-                environment: adapterOptions.environment,
+                // Fork (DECISIONS 5.9): commands the CLI runs know their thread and T3 install.
+                environment: providerThreadEnvironment(
+                  { threadId: turnInput.threadId, cwd: queryCwd },
+                  adapterOptions.environment,
+                  adapterOptions.t3Paths,
+                ),
                 tools: queryPolicy.tools ?? CLAUDE_CODE_PRESET_TOOLS,
                 ...mcpOverrides,
                 permissionMode: queryPolicy.permissionMode,
@@ -6985,6 +7116,7 @@ export function makeClaudeAdapterV2(
             query: querySession,
             queryPolicyKey,
             selectionKey: compiledSelection.queryIdentity,
+            cwd: queryCwd,
             closed,
             promptEchoMode: "unknown",
             stopping: false,
@@ -7735,6 +7867,8 @@ export const createClaudeAdapterV2 = Effect.fn("ClaudeAdapterV2Driver.create")(
     const queryRunner = yield* ClaudeAgentSdkQueryRunner;
     const serverConfig = yield* ServerConfig.ServerConfig;
     const continuationRequests = yield* ProviderContinuationRequests.ProviderContinuationRequests;
+    const sessionCwdObservations =
+      yield* ProviderSessionCwdObservations.ProviderSessionCwdObservations;
     const baseEnvironment = mergeProviderInstanceEnvironment(environment, hostEnvironment);
     const claudeEnvironment = yield* makeClaudeEnvironment(config, baseEnvironment);
     const path = yield* Path.Path;
@@ -7748,6 +7882,8 @@ export const createClaudeAdapterV2 = Effect.fn("ClaudeAdapterV2Driver.create")(
       idAllocator,
       queryRunner,
       continuationRequests,
+      sessionCwdObservations,
+      t3Paths: { baseDir: serverConfig.baseDir, stateDir: serverConfig.stateDir },
       ...hooks,
     });
   },
@@ -7783,6 +7919,8 @@ const makeDefaultClaudeAdapterV2 = Effect.fn("ClaudeAdapterV2.layer")(function* 
   const queryRunner = yield* ClaudeAgentSdkQueryRunner;
   const serverConfig = yield* ServerConfig.ServerConfig;
   const continuationRequests = yield* ProviderContinuationRequests.ProviderContinuationRequests;
+  const sessionCwdObservations =
+    yield* ProviderSessionCwdObservations.ProviderSessionCwdObservations;
 
   return makeClaudeAdapterV2({
     instanceId: CLAUDE_DEFAULT_INSTANCE_ID,
@@ -7794,6 +7932,8 @@ const makeDefaultClaudeAdapterV2 = Effect.fn("ClaudeAdapterV2.layer")(function* 
     idAllocator,
     queryRunner,
     continuationRequests,
+    sessionCwdObservations,
+    t3Paths: { baseDir: serverConfig.baseDir, stateDir: serverConfig.stateDir },
   });
 });
 
