@@ -36,6 +36,7 @@ import { isPreviewSupportedInRuntime } from "../previewStateStore";
 import { selectActiveRightPanel, useRightPanelStore } from "../rightPanelStore";
 import { useThreadSelectionStore } from "../threadSelectionStore";
 import { stackedThreadToast, toastManager } from "~/components/ui/toast";
+import { SplitThreadLayout } from "~/components/thread-split/SplitThreadLayout";
 import { canSwapThreadPanes, swapThreadPanes } from "~/components/thread-split/swapThreadPanes";
 import {
   focusOtherThreadPane,
@@ -358,7 +359,9 @@ function ChatRouteLayout() {
   return (
     <>
       <ChatRouteGlobalShortcuts />
-      {threadTarget ? <ThreadRouteView target={threadTarget} /> : <Outlet />}
+      <SplitThreadLayout>
+        {threadTarget ? <ThreadRouteView target={threadTarget} /> : <Outlet />}
+      </SplitThreadLayout>
     </>
   );
 }
