@@ -250,7 +250,7 @@ describe("buildProviderInstanceUpdatePatch", () => {
     });
 
     expect(patch.providerInstances?.[instanceId]).toEqual(nextInstance);
-    expect(patch.providers?.codex).toEqual(DEFAULT_SERVER_SETTINGS.providers.codex);
+    expect(patch.providers).toEqual({ codex: DEFAULT_SERVER_SETTINGS.providers.codex });
   });
 
   it("updates custom instances without touching legacy provider settings", () => {
