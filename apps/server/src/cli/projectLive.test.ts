@@ -153,7 +153,11 @@ const withLiveServer = <A, E, R>(
     readonly origin: string;
     readonly mutationCount: Ref.Ref<number>;
   }) => Effect.Effect<A, E, R>,
-  options?: { readonly conditionalProjectSettingsScriptUpdates?: boolean },
+  options?: {
+    readonly conditionalProjectSettingsScriptUpdates?: boolean;
+    /** Mutations commit, then fail as a declared internal error (HTTP 500). */
+    readonly failAfterCommit?: boolean;
+  },
 ) =>
   Effect.gen(function* () {
     const config = yield* makeConfig(baseDir);
@@ -177,7 +181,21 @@ const withLiveServer = <A, E, R>(
       awaitCommandReady: Effect.void,
       markHttpListening: Effect.void,
       enqueueCommand: (effect) =>
-        Ref.update(mutationCount, (count) => count + 1).pipe(Effect.andThen(effect)),
+        Ref.update(mutationCount, (count) => count + 1).pipe(
+          Effect.andThen(effect),
+          Effect.tap(() =>
+            options?.failAfterCommit === true
+              ? Effect.fail(
+                  new ServerRuntimeStartup.ServerRuntimeStartupError({
+                    mode: "web",
+                    host: null,
+                    port: 0,
+                    cause: "read after commit failed",
+                  }),
+                )
+              : Effect.void,
+          ),
+        ),
     });
     const projectServiceLayer = ProjectServiceLayerLive.pipe(
       Layer.provideMerge(ProjectEnrichmentService.layer),
@@ -415,6 +433,37 @@ it.layer(NodeServices.layer)("project CLI against a running server", (it) => {
             assert.equal(error.serverVersion, "0.0.0-test");
           }),
         { conditionalProjectSettingsScriptUpdates: false },
+      );
+    }),
+  );
+
+  it.effect("marks a declared internal error after the mutation as an unknown outcome", () =>
+    Effect.gen(function* () {
+      const { baseDir, workspaceRoot } = makeDirs("internal-error");
+      yield* withLiveServer(
+        baseDir,
+        ({ mutationCount }) =>
+          Effect.gen(function* () {
+            const output = parseJson<{
+              readonly error: { readonly code: string; readonly outcome?: string };
+            }>(
+              yield* captureStdout([
+                "project",
+                "add",
+                workspaceRoot,
+                "--json",
+                "--base-dir",
+                baseDir,
+              ]),
+            );
+            assert.deepEqual(output.error, {
+              ...output.error,
+              code: "CliOrchestrationOutcomeUnknownError",
+              outcome: "unknown",
+            });
+            assert.equal(yield* Ref.get(mutationCount), 1);
+          }),
+        { failAfterCommit: true },
       );
     }),
   );

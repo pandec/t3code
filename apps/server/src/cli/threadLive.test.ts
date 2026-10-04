@@ -132,6 +132,8 @@ interface ServerRecord {
 
 /** The archive scheduler refuses a worktree removal for this thread. */
 const blockedWorktreeThreadId = unpinnedThreadId;
+/** The archive scheduler commits, then fails its status read (an undeclared defect). */
+const archiveReadFailsThreadId = ThreadId.make("thread-archive-read-fails");
 const archivedRunId = RunId.make("run-archived");
 
 /**
@@ -317,6 +319,9 @@ const withThreadServer = <A, E, R>(
             ...current,
             archiveSchedules: [...current.archiveSchedules, schedule],
           }));
+          if (schedule.threadId === archiveReadFailsThreadId) {
+            return yield* Effect.die(new Error("status read failed after dispatch"));
+          }
           if (schedule.removeWorktree === true && schedule.threadId === blockedWorktreeThreadId) {
             return yield* new OrchestrationV2ThreadArchiveError({
               threadId: schedule.threadId,
@@ -637,49 +642,100 @@ it.layer(NodeServices.layer)("thread CLI against a running server", (it) => {
   it.effect("schedules archives through the archive scheduler and surfaces its refusal", () =>
     Effect.gen(function* () {
       const { baseDir, workspaceRoot } = makeDirs("archive");
-      yield* withThreadServer(baseDir, { project: makeProject(workspaceRoot) }, (record) =>
-        Effect.gen(function* () {
-          const archive = (threadId: string, ...flags: ReadonlyArray<string>) =>
-            captureStdout([
-              "thread",
-              "archive",
-              threadId,
-              ...flags,
-              "--json",
-              "--base-dir",
-              baseDir,
-            ]).pipe(Effect.map((output) => parseJson<Record<string, unknown>>(output)));
-          const refused = yield* archive(blockedWorktreeThreadId, "--remove-worktree");
-          const refusal = refused.error as { readonly code: string; readonly message: string };
-          assert.deepEqual(
-            { code: refusal.code, message: refusal.message },
-            {
-              code: "CliOrchestrationCommandRejectedError",
-              message: "The thread's worktree is detached.",
-            },
-          );
-          assert.notProperty(refusal, "outcome");
-          const archived = yield* archive(activeThreadId, "--after-turn");
-          const [refusedSchedule, schedule] = (yield* Ref.get(record)).archiveSchedules;
-          assert.deepEqual(
-            {
-              threadId: refusedSchedule?.threadId,
-              removeWorktree: refusedSchedule?.removeWorktree,
-            },
-            { threadId: blockedWorktreeThreadId, removeWorktree: true },
-          );
-          assert.deepEqual(archived, {
-            threadId: activeThreadId,
-            action: "archived",
-            requestId: schedule?.commandId,
-          });
-          assert.deepEqual(
-            { afterTurn: schedule?.afterTurn, removeWorktree: schedule?.removeWorktree },
-            { afterTurn: true, removeWorktree: undefined },
-          );
-          // Neither went through a raw thread.archive.schedule command.
-          assert.lengthOf((yield* Ref.get(record)).commands, 0);
-        }),
+      yield* withThreadServer(
+        baseDir,
+        {
+          project: makeProject(workspaceRoot),
+          extraThreads: [makeTestThreadShell(archiveReadFailsThreadId)],
+        },
+        (record) =>
+          Effect.gen(function* () {
+            const archive = (threadId: string, ...flags: ReadonlyArray<string>) =>
+              captureStdout([
+                "thread",
+                "archive",
+                threadId,
+                ...flags,
+                "--json",
+                "--base-dir",
+                baseDir,
+              ]).pipe(Effect.map((output) => parseJson<Record<string, unknown>>(output)));
+            const refused = yield* archive(blockedWorktreeThreadId, "--remove-worktree");
+            const refusal = refused.error as { readonly code: string; readonly message: string };
+            assert.deepEqual(
+              { code: refusal.code, message: refusal.message },
+              {
+                code: "CliOrchestrationCommandRejectedError",
+                message: "The thread's worktree is detached.",
+              },
+            );
+            assert.notProperty(refusal, "outcome");
+            const unknown = (yield* archive(archiveReadFailsThreadId, "--after-turn")).error as {
+              readonly code: string;
+              readonly outcome?: string;
+            };
+            assert.deepEqual(
+              { code: unknown.code, outcome: unknown.outcome },
+              { code: "CliOrchestrationOutcomeUnknownError", outcome: "unknown" },
+            );
+            const archived = yield* archive(activeThreadId, "--after-turn");
+            const [refusedSchedule, , schedule] = (yield* Ref.get(record)).archiveSchedules;
+            assert.deepEqual(
+              {
+                threadId: refusedSchedule?.threadId,
+                removeWorktree: refusedSchedule?.removeWorktree,
+              },
+              { threadId: blockedWorktreeThreadId, removeWorktree: true },
+            );
+            assert.deepEqual(archived, {
+              threadId: activeThreadId,
+              action: "archived",
+              requestId: schedule?.commandId,
+            });
+            assert.deepEqual(
+              { afterTurn: schedule?.afterTurn, removeWorktree: schedule?.removeWorktree },
+              { afterTurn: true, removeWorktree: undefined },
+            );
+            // Neither went through a raw thread.archive.schedule command.
+            assert.lengthOf((yield* Ref.get(record)).commands, 0);
+          }),
+      );
+    }),
+  );
+
+  it.effect("interrupts the active run and holds its queued follow-ups", () =>
+    Effect.gen(function* () {
+      const { baseDir, workspaceRoot } = makeDirs("interrupt");
+      const runningThread = makeTestThreadShell(waitThreadId, {
+        status: "running",
+        activeRunId: waitRunId,
+        latestRunId: waitRunId,
+        activityRunStatus: "running",
+      });
+      yield* withThreadServer(
+        baseDir,
+        { project: makeProject(workspaceRoot), extraThreads: [runningThread] },
+        (record) =>
+          Effect.gen(function* () {
+            const output = parseJson<{ readonly action: string }>(
+              yield* captureStdout([
+                "thread",
+                "interrupt",
+                waitThreadId,
+                "--json",
+                "--base-dir",
+                baseDir,
+              ]),
+            );
+            assert.strictEqual(output.action, "interrupt-requested");
+            const [command] = (yield* Ref.get(record)).commands;
+            assert.strictEqual(command?.type, "run.interrupt");
+            if (command?.type !== "run.interrupt") return;
+            assert.deepEqual(
+              { threadId: command.threadId, runId: command.runId, holdQueue: command.holdQueue },
+              { threadId: waitThreadId, runId: waitRunId, holdQueue: true },
+            );
+          }),
       );
     }),
   );

@@ -1113,12 +1113,16 @@ export const subscribeOrchestrationV2Shell = Effect.fn("ws.orchestrationV2.subsc
   },
 );
 
-// Fork: archive scheduler refusals keep their reason for the caller.
+// Fork: archive scheduler refusals keep their reason for the caller. Failures
+// after dispatch (the "status" read) are deliberately undeclared, so callers
+// treat the outcome as unknown rather than refused.
 const threadArchiveRpcError = (error: ThreadArchiveScheduler.ThreadArchiveSchedulerError) =>
   new OrchestrationV2ThreadArchiveError({
     threadId: ThreadId.make(error.threadId),
     message: error.detail,
   });
+const failThreadArchiveRpc = (error: ThreadArchiveScheduler.ThreadArchiveSchedulerError) =>
+  error.operation === "status" ? Effect.die(error) : Effect.fail(threadArchiveRpcError(error));
 
 const makeWsRpcLayer = (
   currentSession: EnvironmentAuth.AuthenticatedSession,
@@ -1961,13 +1965,13 @@ const makeWsRpcLayer = (
         [ORCHESTRATION_V2_WS_METHODS.scheduleThreadArchive]: (input) =>
           observeRpcEffect(
             ORCHESTRATION_V2_WS_METHODS.scheduleThreadArchive,
-            threadArchiveScheduler.schedule(input).pipe(Effect.mapError(threadArchiveRpcError)),
+            threadArchiveScheduler.schedule(input).pipe(Effect.catch(failThreadArchiveRpc)),
             { "rpc.aggregate": "orchestration" },
           ),
         [ORCHESTRATION_V2_WS_METHODS.cancelThreadArchive]: (input) =>
           observeRpcEffect(
             ORCHESTRATION_V2_WS_METHODS.cancelThreadArchive,
-            threadArchiveScheduler.cancel(input).pipe(Effect.mapError(threadArchiveRpcError)),
+            threadArchiveScheduler.cancel(input).pipe(Effect.catch(failThreadArchiveRpc)),
             { "rpc.aggregate": "orchestration" },
           ),
         [ORCHESTRATION_V2_WS_METHODS.getThreadProjection]: (input) =>

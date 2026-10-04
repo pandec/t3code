@@ -709,7 +709,7 @@ export function sessionImportError(cause: unknown) {
   if (isEnvironmentSessionImportError(cause)) return cause;
   if (
     isEnvironmentHttpConflictError(cause) ||
-    isEnvironmentHttpCommonError(cause) ||
+    (isEnvironmentHttpCommonError(cause) && cause._tag !== "EnvironmentInternalError") ||
     (HttpClientError.isHttpClientError(cause) &&
       cause.response !== undefined &&
       cause.response.status >= 400 &&

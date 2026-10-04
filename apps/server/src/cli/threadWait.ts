@@ -169,8 +169,10 @@ export class ThreadCliWaitConnectionError extends Schema.TaggedError<ThreadCliWa
 }
 
 export interface ThreadWaitDependencies<E, R> {
-  /** One connection's shell stream, starting with a full snapshot; rerunning it reconnects. */
-  readonly shellStream: Stream.Stream<OrchestrationV2ShellStreamItem, E, R>;
+  /** One connection's shell stream, resuming after the given sequence; rerunning it reconnects. */
+  readonly shellStream: (
+    afterSequence: number,
+  ) => Stream.Stream<OrchestrationV2ShellStreamItem, E, R>;
   /** How a pending question is answered; null once it is no longer pending. */
   readonly userInputResponseMode: (
     requestId: RuntimeRequestId,
@@ -203,7 +205,8 @@ const isCommandRejected = Schema.is(CliOrchestrationCommandRejectedError);
 
 /**
  * Follows the live shell stream until the thread reaches an outcome. A lost
- * connection is restored with a fresh snapshot; the wait fails only when the
+ * connection is restored by resuming after the last observed sequence; the
+ * wait fails only when the
  * server process is gone (outcome unknown), the server rejects the
  * subscription, or reconnecting keeps failing past the grace period.
  */
@@ -253,14 +256,14 @@ export const waitForThread = Effect.fn("waitForThread")(function* <E, R>(
     const remainingMs = input.options.timeoutMs - ((yield* Clock.currentTimeMillis) - startedAt);
     if (remainingMs <= 0) return yield* finish("timeout");
 
-    const connection = yield* deps.shellStream.pipe(
+    const connection = yield* deps.shellStream(observation.sequence).pipe(
       Stream.mapEffect((item) =>
         Effect.gen(function* () {
           observation = observeShellItem(observation, item, threadId);
           if (observation.thread !== null) lastThread = observation.thread;
+          yield* classifyPendingQuestion;
           failureStartedAt = null;
           attempt = 0;
-          yield* classifyPendingQuestion;
           return evaluate();
         }),
       ),

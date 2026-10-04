@@ -270,7 +270,8 @@ export const make = Effect.gen(function* () {
           afterTurn: input.afterTurn,
           ...(input.removeWorktree === true ? { removeWorktree: true } : {}),
         });
-        return yield* status(input.threadId, "schedule");
+        // After dispatch: a failed read leaves the outcome unknown, not refused.
+        return yield* status(input.threadId, "status");
       }),
     status: (threadId) => status(threadId, "status"),
     cancel: (input) =>
@@ -282,7 +283,7 @@ export const make = Effect.gen(function* () {
           commandId: input.commandId ?? (yield* newCommandId("archive-cancel", input.threadId)),
           threadId: input.threadId,
         });
-        return yield* status(input.threadId, "cancel");
+        return yield* status(input.threadId, "status");
       }),
     start: Effect.fn("ThreadArchiveScheduler.start")(function* () {
       yield* forkParked(

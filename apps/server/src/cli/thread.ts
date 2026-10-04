@@ -1158,6 +1158,7 @@ const threadNewCommand = Command.make("new", {
               threadId,
               awaitWorktree: workspace.mode === "new-worktree",
               timeout: WORKTREE_PREPARATION_TIMEOUT,
+              afterSequence: input.live.shell.snapshotSequence,
             });
           }),
         );
@@ -1444,6 +1445,7 @@ const threadInterruptCommand = Command.make("interrupt", {
             commandId,
             threadId: thread.id,
             runId,
+            holdQueue: true,
           }),
         );
         yield* Console.log(
@@ -1610,7 +1612,7 @@ const fetchPendingQuestionTimeline = Effect.fn("fetchPendingQuestionTimeline")(f
 const liveThreadWaitDependencies = (input: ThreadCliInput, threadId: ThreadId) => {
   const connection = { origin: input.live.origin, token: input.token, timeouts: input.timeouts };
   return {
-    shellStream: subscribeLiveShell(connection),
+    shellStream: (afterSequence: number) => subscribeLiveShell(connection, afterSequence),
     userInputResponseMode: (requestId: RuntimeRequestId) =>
       withLiveOrchestrationRpc(connection, (client) =>
         fetchUserInputResponseMode(client, input, threadId, requestId),

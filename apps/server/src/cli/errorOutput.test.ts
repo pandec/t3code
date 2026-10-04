@@ -7,6 +7,8 @@ import {
   CliOrchestrationWaitOutcomeUnknownError,
 } from "./orchestration.ts";
 import { isCliJsonOutputRequested, serializeCliError } from "./errorOutput.ts";
+import { ThreadCliLaunchError } from "./thread.ts";
+import { ThreadCliWaitConnectionError } from "./threadWait.ts";
 
 it("serializes tagged errors with their code, message, and primitive fields", () => {
   const serialized = serializeCliError(
@@ -48,6 +50,32 @@ it("marks a lost acknowledgement as an unknown outcome", () => {
 
   assert.strictEqual(serialized.code, "CliOrchestrationOutcomeUnknownError");
   assert.strictEqual(serialized.outcome, "unknown");
+});
+
+it("marks a wait that could not reconnect as an unknown outcome", () => {
+  const serialized = serializeCliError(
+    new ThreadCliWaitConnectionError({ operation: "waitLiveServer", cause: new Error("x") }),
+  );
+
+  assert.strictEqual(serialized.code, "ThreadCliWaitConnectionError");
+  assert.strictEqual(serialized.outcome, "unknown");
+});
+
+it("marks a created thread whose launch did not complete as an unknown outcome", () => {
+  for (const reason of ["preparation-pending", "preparation-failed"] as const) {
+    const serialized = serializeCliError(
+      new ThreadCliLaunchError({
+        operation: "launchThread",
+        threadId: "thread-launched",
+        reason,
+        detail: "180s",
+      }),
+    );
+
+    assert.strictEqual(serialized.outcome, "unknown");
+    assert.strictEqual(serialized.detail?.threadId, "thread-launched");
+    assert.strictEqual(serialized.detail?.reason, reason);
+  }
 });
 
 it("marks a server death during wait as an unknown outcome", () => {

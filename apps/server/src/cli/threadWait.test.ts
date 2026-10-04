@@ -101,7 +101,7 @@ const deps = (
   shellStream: Stream.Stream<OrchestrationV2ShellStreamItem, StreamError>,
   overrides: Partial<ThreadWaitDependencies<StreamError, never>> = {},
 ): ThreadWaitDependencies<StreamError, never> => ({
-  shellStream,
+  shellStream: () => shellStream,
   userInputResponseMode: () => Effect.succeed("blocking"),
   serverAlive: Effect.succeed(true),
   ...overrides,
@@ -334,26 +334,45 @@ describe("waitForThread", () => {
     }),
   );
 
-  it.effect("reconnects after a dropped stream and resumes from a fresh snapshot", () =>
+  it.effect("reconnects after a dropped stream, resuming after the last observed sequence", () =>
     Effect.gen(function* () {
-      const connections = yield* Ref.make(0);
-      const stream = Stream.unwrap(
-        Ref.updateAndGet(connections, (count) => count + 1).pipe(
-          Effect.map((count) =>
-            count === 1
-              ? Stream.concat(Stream.make(snapshot(running, 12)), Stream.fail(dropped))
-              : Stream.make(snapshot(settled(), 15)),
+      const resumedAfter = yield* Ref.make<ReadonlyArray<number>>([]);
+      const shellStream = (afterSequence: number) =>
+        Stream.unwrap(
+          Ref.updateAndGet(resumedAfter, (sequences) => [...sequences, afterSequence]).pipe(
+            Effect.map((sequences) =>
+              sequences.length === 1
+                ? Stream.concat(Stream.make(updated(running, 12)), Stream.fail(dropped))
+                : Stream.make(updated(settled(), 15)),
+            ),
           ),
-        ),
-      );
-      const fiber = yield* waitForThread(waitInput(running), deps(stream)).pipe(Effect.forkChild);
+        );
+      const fiber = yield* waitForThread(
+        waitInput(running),
+        deps(Stream.empty, { shellStream }),
+      ).pipe(Effect.forkChild);
       yield* TestClock.adjust("1 second");
       const result = yield* Fiber.join(fiber);
       assert.deepEqual(
         { outcome: result.outcome, sequence: result.observedSequence },
         { outcome: "completed", sequence: 15 },
       );
-      assert.strictEqual(yield* Ref.get(connections), 2);
+      assert.deepEqual(yield* Ref.get(resumedAfter), [10, 12]);
+    }),
+  );
+
+  it.effect("gives up after the grace period when a pending question cannot be classified", () =>
+    Effect.gen(function* () {
+      const fiber = yield* waitForThread(
+        waitInput(withQuestion(running)),
+        deps(Stream.make(snapshot(withQuestion(running), 12)), {
+          userInputResponseMode: () => Effect.fail(dropped),
+        }),
+      ).pipe(Effect.flip, Effect.forkChild);
+      // Step past the grace period and the 60-second timeout; only the grace ends it with an error.
+      for (let second = 0; second < 61; second += 1) yield* TestClock.adjust("1 second");
+      const error = yield* Fiber.join(fiber);
+      assert.strictEqual(error._tag, "ThreadCliWaitConnectionError");
     }),
   );
 

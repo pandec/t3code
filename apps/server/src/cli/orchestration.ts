@@ -454,24 +454,24 @@ export const fetchLiveEnvironmentDescriptor = (
   );
 
 /**
- * Maps a rejected dispatch acknowledgement. An undeclared 5xx can occur after
- * the command committed, so its outcome is unknown; sub-5xx statuses prove the
- * command was rejected.
+ * Maps a rejected dispatch acknowledgement. Any 5xx, declared internal errors
+ * included, can occur after the command committed, so its outcome is unknown;
+ * sub-5xx statuses prove the command was rejected.
  */
 const rejectedDispatchError = (response: Response, payload: unknown) => {
   const conflict = decodeEnvironmentHttpConflictError(payload);
   if (Option.isSome(conflict)) {
     return cliOrchestrationErrorFromRequest(conflict.value);
   }
-  const declared = decodeEnvironmentHttpCommonError(payload);
-  if (Option.isSome(declared)) {
-    return cliOrchestrationErrorFromRequest(declared.value);
-  }
   if (response.status >= 500) {
     return new CliOrchestrationOutcomeUnknownError({
       operation: "dispatchLiveServer",
       cause: payload,
     });
+  }
+  const declared = decodeEnvironmentHttpCommonError(payload);
+  if (Option.isSome(declared)) {
+    return cliOrchestrationErrorFromRequest(declared.value);
   }
   return new CliOrchestrationUndeclaredStatusError({
     operation: "callLiveServer",

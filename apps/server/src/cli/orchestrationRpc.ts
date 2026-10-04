@@ -92,6 +92,22 @@ export const liveRpcCommandError =
   };
 
 /**
+ * Maps a command RPC's failures. A server defect (an undeclared failure, such
+ * as a read after the command was applied) also leaves the outcome unknown.
+ */
+const mapLiveRpcCommandFailure =
+  (commandType: string) =>
+  <A, E, R>(effect: Effect.Effect<A, E, R>) =>
+    effect.pipe(
+      Effect.mapError(liveRpcCommandError(commandType)),
+      Effect.catchDefect((cause) =>
+        Effect.fail(
+          new CliOrchestrationOutcomeUnknownError({ operation: "dispatchLiveServer", cause }),
+        ),
+      ),
+    );
+
+/**
  * Reads change nothing, so a failed read is an ordinary request error, never
  * an unknown outcome. Authorization stays a declared rejection, which the
  * wait does not retry.
@@ -163,13 +179,15 @@ export const withLiveOrchestrationRpc = <A, E, R>(
 ) => Effect.scoped(Effect.flatMap(makeScopedLiveRpcClient(input), use));
 
 /**
- * The live shell stream over its own connection, starting with a full
- * snapshot. Each run opens a fresh connection, so rerunning it reconnects.
+ * The live shell stream over its own connection, resuming after
+ * `afterSequence`; the server falls back to a full snapshot only when the gap
+ * is too large to replay. Each run opens a fresh connection, so rerunning it
+ * reconnects.
  */
-export const subscribeLiveShell = (input: CliLiveRpcConnectionInput) =>
+export const subscribeLiveShell = (input: CliLiveRpcConnectionInput, afterSequence: number) =>
   Stream.unwrap(
     Effect.map(makeScopedLiveRpcClient(input), (client) =>
-      client["orchestration.subscribeShell"]({}),
+      client["orchestration.subscribeShell"]({ afterSequence }),
     ),
   ).pipe(Stream.mapError(liveRpcReadError("orchestration.subscribeShell")));
 
@@ -189,7 +207,7 @@ export const dispatchLiveThreadCommand = (
   command: OrchestrationV2Command,
 ) =>
   client["orchestration.dispatchCommand"](command).pipe(
-    Effect.mapError(liveRpcCommandError(command.type)),
+    mapLiveRpcCommandFailure(command.type),
     withAcknowledgementTimeout(CLI_LIVE_RPC_ACKNOWLEDGEMENT_TIMEOUT),
   );
 
@@ -198,7 +216,7 @@ export const launchLiveThread = (
   input: OrchestrationV2ThreadLaunchInput,
 ) =>
   client["orchestration.launchThread"](input).pipe(
-    Effect.mapError(liveRpcCommandError("thread.launch")),
+    mapLiveRpcCommandFailure("thread.launch"),
     withAcknowledgementTimeout(CLI_LIVE_RPC_ACKNOWLEDGEMENT_TIMEOUT),
   );
 
@@ -209,7 +227,7 @@ export const scheduleLiveThreadArchive = (
   input: OrchestrationV2ScheduleThreadArchiveInput,
 ) =>
   client["orchestration.scheduleThreadArchive"](input).pipe(
-    Effect.mapError(liveRpcCommandError("thread.archive.schedule")),
+    mapLiveRpcCommandFailure("thread.archive.schedule"),
     withAcknowledgementTimeout(CLI_LIVE_RPC_ACKNOWLEDGEMENT_TIMEOUT),
   );
 
@@ -219,7 +237,7 @@ export const cancelLiveThreadArchive = (
   input: OrchestrationV2CancelThreadArchiveInput,
 ) =>
   client["orchestration.cancelThreadArchive"](input).pipe(
-    Effect.mapError(liveRpcCommandError("thread.archive.cancel")),
+    mapLiveRpcCommandFailure("thread.archive.cancel"),
     withAcknowledgementTimeout(CLI_LIVE_RPC_ACKNOWLEDGEMENT_TIMEOUT),
   );
 
@@ -265,9 +283,11 @@ export const awaitLaunchedThread = (
     readonly threadId: ThreadId;
     readonly awaitWorktree: boolean;
     readonly timeout: Duration.Duration;
+    /** Sequence of the shell the CLI already holds; the stream resumes after it. */
+    readonly afterSequence: number;
   },
 ) =>
-  client["orchestration.subscribeShell"]({}).pipe(
+  client["orchestration.subscribeShell"]({ afterSequence: input.afterSequence }).pipe(
     Stream.map((item) => observeLaunchedThread(item, input.threadId)),
     Stream.filter(
       (observation): observation is LaunchedThreadObservation =>

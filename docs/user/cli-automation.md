@@ -20,8 +20,9 @@ document. On failure it exits non-zero and stdout holds one error document inste
 `code` is the stable error tag and `detail` carries the error's primitive fields (never the cause
 chain). Usage errors, such as a missing flag, follow the same contract when `--json` is present. When
 an outcome is ambiguous — a mutation acknowledgement was lost or could not be decoded, the server
-answered an undeclared 5xx during dispatch, a multi-step command could not confirm its compensation,
-or the server stopped during a thread wait — the error additionally carries `"outcome": "unknown"`;
+answered a 5xx during dispatch, a multi-step command could not confirm its compensation, a thread
+was created but its worktree launch did not complete (`ThreadCliLaunchError`), or a thread wait lost
+the server or its connection — the error additionally carries `"outcome": "unknown"`;
 reconcile current state before retrying. For mutation errors without that marker, the mutation was
 not applied or any earlier step was successfully compensated.
 
@@ -371,7 +372,7 @@ Terminal outcomes use these exit codes:
 `--exit-zero` collapses observed terminal outcomes 2–6 to exit code 0; it does not hide transport,
 authentication, or parsing failures. If the server stops during the wait, the command fails with
 `"outcome": "unknown"`; if reconnecting keeps failing for 30 seconds, it fails with
-`ThreadCliWaitConnectionError`. JSON extends the normal thread summary with `outcome`, `waited`,
+`ThreadCliWaitConnectionError`, also marked `"outcome": "unknown"`. JSON extends the normal thread summary with `outcome`, `waited`,
 `waitedMs`, `observedSequence`, and `turn` (`turnId`, `state`, `requestedAt`, `startedAt`,
 `completedAt`) for the latest turn. A timeout retains the last observed thread state and background
 liveness so callers can distinguish active work from stale or wedged state.
