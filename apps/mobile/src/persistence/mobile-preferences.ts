@@ -71,9 +71,6 @@ export interface Preferences {
   readonly steerGraceWindowMs?: number;
   readonly accentTintsEnabled?: boolean;
   readonly accentTintIntensityPercent?: number;
-  readonly sidebarAlwaysShowPinnedInAttention?: boolean;
-  /** Device-local visit markers used by the sticky attention filter. */
-  readonly threadLastVisitedAtById?: Readonly<Record<string, string>>;
 }
 
 export class MobilePreferencesLoadError extends Schema.TaggedError<MobilePreferencesLoadError>()(
@@ -145,8 +142,6 @@ export function sanitizePreferences(parsed: Preferences): Preferences {
     steerGraceWindowMs?: number;
     accentTintsEnabled?: boolean;
     accentTintIntensityPercent?: number;
-    sidebarAlwaysShowPinnedInAttention?: boolean;
-    threadLastVisitedAtById?: Readonly<Record<string, string>>;
   } = {};
 
   if (typeof parsed.archivedSectionVisibleCount === "number") {
@@ -264,21 +259,6 @@ export function sanitizePreferences(parsed: Preferences): Preferences {
   }
   if (typeof parsed.accentTintIntensityPercent === "number") {
     preferences.accentTintIntensityPercent = parsed.accentTintIntensityPercent;
-  }
-  if (typeof parsed.sidebarAlwaysShowPinnedInAttention === "boolean") {
-    preferences.sidebarAlwaysShowPinnedInAttention = parsed.sidebarAlwaysShowPinnedInAttention;
-  }
-  if (
-    typeof parsed.threadLastVisitedAtById === "object" &&
-    parsed.threadLastVisitedAtById !== null &&
-    !Array.isArray(parsed.threadLastVisitedAtById)
-  ) {
-    preferences.threadLastVisitedAtById = Object.fromEntries(
-      Object.entries(parsed.threadLastVisitedAtById).filter(
-        ([key, value]) =>
-          key.length > 0 && typeof value === "string" && !Number.isNaN(Date.parse(value)),
-      ),
-    );
   }
   return preferences;
 }

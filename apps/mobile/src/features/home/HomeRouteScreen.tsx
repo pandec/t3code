@@ -192,8 +192,6 @@ export function HomeRouteScreen() {
           }}
         />
         <HomeHeader
-          attentionFilterEnabled={false}
-          attentionFilterReady={false}
           environments={environments}
           projects={projectFilterOptions}
           models={modelFilterOptions}
@@ -218,7 +216,6 @@ export function HomeRouteScreen() {
           }
           onSearchQueryChange={setSearchQuery}
           onStartNewTask={() => navigation.navigate("NewTaskSheet", { screen: "NewTask" })}
-          onToggleAttentionFilter={() => {}}
         />
 
         <HomeScreen

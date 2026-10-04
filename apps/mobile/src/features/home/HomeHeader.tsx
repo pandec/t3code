@@ -3,10 +3,7 @@ import { useCallback, useRef } from "react";
 import type { SearchBarCommands } from "react-native-screens";
 import { useUniwindTheme } from "../../lib/useUniwindTheme";
 import { useHardwareKeyboardCommand } from "../keyboard/hardwareKeyboardCommands";
-import {
-  createNativeAttentionFilterHeaderItem,
-  createNativeFilterMenuHeaderItem,
-} from "../layout/native-filter-menu-items";
+import { createNativeFilterMenuHeaderItem } from "../layout/native-filter-menu-items";
 import { withNativeGlassHeaderItem } from "../layout/native-glass-header-items";
 import {
   createNativeMailSearchToolbarItem,
@@ -20,9 +17,7 @@ export type { HomeHeaderEnvironment } from "./HomeHeader.types";
 
 export function HomeHeader(props: HomeHeaderProps) {
   const searchBarRef = useRef<SearchBarCommands>(null);
-  const theme = useUniwindTheme();
-  const iconColor = theme["--color-icon"];
-  const primaryColor = theme["--color-primary"];
+  const iconColor = useUniwindTheme()["--color-icon"];
   const hasActiveFilters = hasActiveHomeListFilters(props);
   const hasCustomListOptions = hasActiveFilters;
   const focusSearch = useCallback(() => {
@@ -41,11 +36,7 @@ export function HomeHeader(props: HomeHeaderProps) {
   return (
     <>
       <NativeStackScreenOptions
-        optionsVersion={[
-          filterMenu.items,
-          props.attentionFilterEnabled,
-          props.attentionFilterReady,
-        ]}
+        optionsVersion={filterMenu.items}
         options={{
           // Static header config (glass, title, fonts) lives in Stack.tsx
           // (GLASS_HEADER_OPTIONS). Only dynamic values are set here.
@@ -59,13 +50,6 @@ export function HomeHeader(props: HomeHeaderProps) {
               label: "",
               onPress: props.onOpenSettings,
               type: "button",
-            }),
-            createNativeAttentionFilterHeaderItem({
-              enabled: props.attentionFilterEnabled,
-              gated: !props.attentionFilterReady && !props.attentionFilterEnabled,
-              activeTintColor: primaryColor,
-              identifier: "home-attention-filter",
-              onToggle: props.onToggleAttentionFilter,
             }),
             createNativeFilterMenuHeaderItem({
               filterIcon: hasCustomListOptions
@@ -196,23 +180,6 @@ export function HomeHeader(props: HomeHeaderProps) {
               </NativeHeaderToolbar.Menu>
             )}
           </NativeHeaderToolbar.Menu>
-          <NativeHeaderToolbar.Button
-            accessibilityLabel={
-              props.attentionFilterEnabled
-                ? "Clear attention filter"
-                : props.attentionFilterReady
-                  ? "Show only threads needing attention"
-                  : "Loading threads"
-            }
-            disabled={!props.attentionFilterReady && !props.attentionFilterEnabled}
-            icon={
-              props.attentionFilterEnabled
-                ? "exclamationmark.circle.fill"
-                : "exclamationmark.circle"
-            }
-            onPress={props.onToggleAttentionFilter}
-            tintColor={props.attentionFilterEnabled ? primaryColor : undefined}
-          />
           <NativeHeaderToolbar.Spacer flexible />
           <NativeHeaderToolbar.Button
             accessibilityLabel="New task"

@@ -15,10 +15,6 @@ export interface HomeHeaderProps {
   readonly selectedEnvironmentId: EnvironmentId | null;
   readonly selectedProjectKey: string | null;
   readonly selectedModel: string | null;
-  readonly attentionFilterEnabled: boolean;
-  /** False while thread shells are still loading; gates enabling the filter. */
-  readonly attentionFilterReady: boolean;
-  readonly onToggleAttentionFilter: () => void;
   readonly onSearchQueryChange: (query: string) => void;
   readonly onEnvironmentChange: (environmentId: EnvironmentId | null) => void;
   readonly onProjectChange: (projectKey: string | null) => void;

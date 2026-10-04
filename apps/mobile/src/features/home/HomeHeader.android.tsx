@@ -12,7 +12,6 @@ function checkedMenuState(checked: boolean) {
 }
 
 export function HomeHeader(props: HomeHeaderProps) {
-  const attentionFilterGated = !props.attentionFilterReady && !props.attentionFilterEnabled;
   const hasActiveFilters = hasActiveHomeListFilters(props);
   const hasCustomListOptions = hasActiveFilters;
   const menuActions = useMemo<MenuAction[]>(
@@ -162,11 +161,6 @@ export function HomeHeader(props: HomeHeaderProps) {
         onFilterAction={handleMenuAction}
         onOpenSettings={props.onOpenSettings}
         onOpenEnvironments={props.onOpenEnvironments}
-        attentionFilter={{
-          enabled: props.attentionFilterEnabled,
-          gated: attentionFilterGated,
-          onToggle: props.onToggleAttentionFilter,
-        }}
       />
     </>
   );

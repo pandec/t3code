@@ -55,11 +55,6 @@ export function useSteerGraceWindowMs(): SteerGraceWindowMs {
   return useMemo(() => clampSteerGraceWindowMs(value ?? DEFAULT_STEER_GRACE_WINDOW_MS), [value]);
 }
 
-export function useAlwaysShowPinnedInAttention(): boolean {
-  const { preferences } = useMobilePreferences();
-  return preferences.sidebarAlwaysShowPinnedInAttention ?? false;
-}
-
 /**
  * One shelf's fold state, remembered per device.
  *

@@ -1,4 +1,3 @@
-import { passesAttentionFilter } from "@t3tools/client-runtime/state/thread-attention";
 import type { ThreadGroup } from "@t3tools/contracts";
 import { threadGroupId, threadGroupSections } from "@t3tools/shared/threadGroups";
 import { threadPullRequestSearchTerms } from "@t3tools/shared/threadPullRequests";
@@ -340,9 +339,8 @@ export interface ThreadListV2Layout {
   /** Whether the pinned shelf header should render. Unlike the other
       shelves, pinned is structurally always the leading block, so it needs a
       visibility flag rather than a header index. The header steps aside (and
-      the collapse stops applying) while the Attention filter or a search is
-      active — folding rows those modes asked for would answer a different
-      question. */
+      the collapse stops applying) while a search is active — folding rows the
+      search asked for would answer a different question. */
   readonly pinnedShelfHeaderVisible: boolean;
   /** Snoozed threads matching the current filters. */
   readonly snoozedCount: number;
@@ -437,8 +435,8 @@ export interface ThreadListV2SettledShelfListItem {
   readonly disabled: boolean;
 }
 
-/** Fork: a custom group's header, or the Active header once groups exist
-    (`groupId` null). Every group folds the same way. */
+/** Fork: a custom group's header, or the built-in Active header (`groupId`
+    null). Every group folds the same way. */
 export interface ThreadListV2CustomGroupListItem {
   readonly type: "v2-custom-group";
   readonly key: string;
@@ -575,17 +573,18 @@ function resolveThreadListV2ItemTimeLabel(
 export function buildThreadListV2ListItems(input: {
   readonly items: ReadonlyArray<ThreadListV2Item>;
   readonly pendingTasks: ReadonlyArray<PendingNewTask>;
-  /** Fork: visible custom groups. With any, Active splits into group sections. */
+  /** Fork: visible custom groups, laid out on the side of Active chosen on
+      web or desktop. */
   readonly customGroups?: ReadonlyArray<ThreadGroup>;
   readonly collapsedGroupIds?: ReadonlySet<string>;
-  /** False folds the built-in Active group (only while custom groups exist). */
+  /** False folds the built-in Active group; absent or true keeps it open. */
   readonly activeShelfExpanded?: boolean;
   /** `environmentId:threadId` of the open thread, which a folded group keeps. */
   readonly selectedThreadKey?: string | null;
   readonly pinnedCount?: number;
   readonly pinnedShelfExpanded?: boolean;
-  /** False hides the pinned shelf header (Attention filter or search active)
-      while its rows still render. Absent = header whenever anything is
+  /** False hides the pinned shelf header (search active) while its rows
+      still render. Absent = header whenever anything is
       pinned; callers building from a real layout should always pass the
       layout's flag, or a collapsed shelf leaks into those modes. */
   readonly pinnedShelfHeaderVisible?: boolean;
@@ -671,8 +670,8 @@ export function buildThreadListV2ListItems(input: {
   // close them with the same rule the web sidebar draws, so the inbox reads
   // as its own block. While the header shows, the count is the whole
   // footprint when collapsed and rows render only when expanded (or for the
-  // thread currently open); under the Attention filter or a search the
-  // layout hides the header and the rows render unconditionally.
+  // thread currently open); during a search the layout hides the header and
+  // the rows render unconditionally.
   let pinnedEnd = 0;
   while (pinnedEnd < activeEnd) {
     const item = threadItems[pinnedEnd];
@@ -696,34 +695,36 @@ export function buildThreadListV2ListItems(input: {
   }
   const activeItems = threadItems.slice(pinnedEnd, activeEnd);
   const customGroups = input.customGroups ?? [];
-  if (customGroups.length === 0) {
-    result.push(...activeItems, ...pendingItems);
-  } else {
-    // Fork: groups sit on the side of Active chosen on web or desktop. A
-    // folded group hides its rows except the open thread.
-    const isSelected = (row: ThreadListV2ListItem) =>
-      row.type === "v2-thread" &&
-      `${row.item.thread.environmentId}:${row.item.thread.id}` === input.selectedThreadKey;
-    for (const group of threadGroupSections(customGroups)) {
-      const id = group?.id ?? null;
-      const rows = activeItems.filter(
-        (item) => item.type === "v2-thread" && threadGroupId(item.item.thread, customGroups) === id,
-      );
-      const expanded =
-        group === null
-          ? input.activeShelfExpanded !== false
-          : input.collapsedGroupIds?.has(group.id) !== true;
-      result.push({
-        type: "v2-custom-group",
-        key: group === null ? "v2-active-header" : `v2-custom-group:${group.id}`,
-        groupId: id,
-        name: group?.name ?? "Active",
-        count: rows.length,
-        expanded,
-      });
-      result.push(...(expanded ? rows : rows.filter(isSelected)));
-      if (group === null) result.push(...pendingItems);
+  const isSelected = (row: ThreadListV2ListItem) =>
+    row.type === "v2-thread" &&
+    `${row.item.thread.environmentId}:${row.item.thread.id}` === input.selectedThreadKey;
+  // Fork: groups sit on the side of Active chosen on web or desktop. Every
+  // group, Active included, folds the same way: rows hide while collapsed,
+  // except the open thread. Without custom groups the Active header appears
+  // only when it has rows, so an empty list still reads as empty.
+  for (const group of threadGroupSections(customGroups)) {
+    const id = group?.id ?? null;
+    const rows = activeItems.filter(
+      (item) => item.type === "v2-thread" && threadGroupId(item.item.thread, customGroups) === id,
+    );
+    if (group === null && rows.length === 0 && customGroups.length === 0) {
+      result.push(...pendingItems);
+      continue;
     }
+    const expanded =
+      group === null
+        ? input.activeShelfExpanded !== false
+        : input.collapsedGroupIds?.has(group.id) !== true;
+    result.push({
+      type: "v2-custom-group",
+      key: group === null ? "v2-active-header" : `v2-custom-group:${group.id}`,
+      groupId: id,
+      name: group?.name ?? "Active",
+      count: rows.length,
+      expanded,
+    });
+    result.push(...(expanded ? rows : rows.filter(isSelected)));
+    if (group === null) result.push(...pendingItems);
   }
   const shelfDisabled = input.shelfPreferencesLoading === true;
   if (snoozedShelfHeaderIndex !== null && snoozedCount > 0) {
@@ -766,10 +767,6 @@ export function buildThreadListV2ListItems(input: {
 export function buildThreadListV2Items(input: {
   readonly pendingOrder?: PendingThreadOrder | null;
   readonly threads: ReadonlyArray<EnvironmentThreadShell>;
-  /** Sticky "needs attention" membership ("environmentId:threadId" keys).
-      Null/absent leaves the list unfiltered. */
-  readonly attentionMemberThreadKeys?: ReadonlySet<string> | null;
-  readonly alwaysShowPinnedInAttention?: boolean;
   readonly environmentId: EnvironmentId | null;
   /** Model slug filter; null shows every model. */
   readonly model?: string | null;
@@ -829,16 +826,6 @@ export function buildThreadListV2Items(input: {
   for (const thread of input.threads) {
     if (thread.archivedAt !== null || thread.lineage.relationshipToParent === "subagent") continue;
     // The server stamps settledOverride for the tail.
-    if (
-      !passesAttentionFilter({
-        memberKeys: input.attentionMemberThreadKeys ?? null,
-        threadKey: `${thread.environmentId}:${thread.id}`,
-        pinned: thread.pinnedAt != null,
-        alwaysShowPinned: input.alwaysShowPinnedInAttention === true,
-      })
-    ) {
-      continue;
-    }
     if (input.environmentId !== null && thread.environmentId !== input.environmentId) continue;
     if (input.model != null && thread.modelSelection.model !== input.model) continue;
     if (projectKeys !== null && !projectKeys.has(`${thread.environmentId}:${thread.projectId}`)) {
@@ -916,10 +903,9 @@ export function buildThreadListV2Items(input: {
     "pinned",
     pending,
   );
-  // The collapse must never hide rows the Attention filter or a search asked
-  // for, so the shelf only folds (and only draws its header) outside those
-  // modes.
-  const pinnedShelfCollapsible = input.attentionMemberThreadKeys == null && query.length === 0;
+  // The collapse must never hide rows a search asked for, so the shelf only
+  // folds (and only draws its header) outside a search.
+  const pinnedShelfCollapsible = query.length === 0;
   const visiblePinned =
     !pinnedShelfCollapsible || input.pinnedShelfExpanded !== false
       ? orderedPinned
