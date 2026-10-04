@@ -97,8 +97,9 @@ export function useComposerProviderUsage(input: {
     setRefreshingEnvironmentId(environmentId);
     void (async () => {
       try {
-        // Direct accounts re-probe through their provider snapshot; gateway
-        // pools re-read the server's latest pool snapshot.
+        // Direct accounts re-probe through their provider snapshot. Gateway
+        // pools are not probed yet: on-demand gateway probing is pending the
+        // `providerUsage.refresh` RPC, so they only re-read the latest pool snapshot.
         await Promise.all(
           directInstanceIds.map((instanceId) =>
             refreshProviders({ environmentId, input: { instanceId } }),
