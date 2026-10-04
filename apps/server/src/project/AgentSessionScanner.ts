@@ -51,6 +51,7 @@ import * as ServerConfig from "../config.ts";
 import * as ProjectStore from "../orchestration-v2/ProjectStore.ts";
 import { resolveCodexHomeLayout } from "../provider/Drivers/CodexHomeLayout.ts";
 import { expandHomePath } from "../pathExpansion.ts";
+import { mergeProviderInstanceEnvironment } from "../provider/ProviderInstanceEnvironment.ts";
 import * as ServerSettings from "../serverSettings.ts";
 import {
   createTranscriptJsonReader,
@@ -1125,28 +1126,24 @@ export const make = Effect.gen(function* () {
       const homes: Array<{ homePath: string; providerInstanceId: ProviderInstanceId }> = [];
       const seenHomes = new Set<string>();
       for (const { instanceId, config: instance } of instances) {
-        const homeVariable = source === "claudeAgent" ? "CLAUDE_CONFIG_DIR" : "CODEX_HOME";
-        const environmentHome =
-          instance.environment?.findLast((variable) => variable.name === homeVariable)?.value ??
-          hostEnvironment[homeVariable];
-
         let homePath: string;
         if (source === "claudeAgent") {
+          const environmentHome =
+            instance.environment?.findLast((variable) => variable.name === "CLAUDE_CONFIG_DIR")
+              ?.value ?? hostEnvironment.CLAUDE_CONFIG_DIR;
           const config = decodeClaudeSettings(instance.config ?? {});
           if (Option.isNone(config)) continue;
           homePath = resolveClaudeConfigDir(config.value.homePath, environmentHome);
         } else {
           const config = decodeCodexSettings(instance.config ?? {});
           if (Option.isNone(config)) continue;
-          const codexSettings =
-            config.value.homePath.trim().length === 0 &&
-            config.value.shadowHomePath.trim().length === 0 &&
-            environmentHome?.trim()
-              ? { ...config.value, homePath: environmentHome }
-              : config.value;
-          const layout = yield* resolveCodexHomeLayout(codexSettings).pipe(
-            Effect.provideService(Path.Path, path),
-          );
+          // Same home the Codex driver runs with: configured home, then the
+          // instance's CODEX_HOME, then the instance's HOME/.codex. Shadow
+          // overlays share their sessions with that home.
+          const layout = yield* resolveCodexHomeLayout(
+            config.value,
+            mergeProviderInstanceEnvironment(instance.environment, hostEnvironment),
+          ).pipe(Effect.provideService(Path.Path, path));
           homePath = layout.sharedHomePath;
         }
 

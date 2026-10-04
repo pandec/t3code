@@ -71,7 +71,8 @@ Codex instances that share the thread's **CODEX_HOME path**. Changing accounts d
 not move the conversation into a separate Codex home.
 
 If the account is missing from the picker, compare the home paths in provider
-settings. If two instances show the same unexpected account or models, check their
+settings. An empty **CODEX_HOME path** means the instance's `CODEX_HOME`
+environment variable, or `.codex` under its `HOME` when that is unset. If two instances show the same unexpected account or models, check their
 reported accounts, refresh provider status, and confirm the second instance has
 its own shadow path and login. A shadow-home conflict usually means the directory
 contains a copied Codex setup. Use a fresh shadow directory and sign in again.

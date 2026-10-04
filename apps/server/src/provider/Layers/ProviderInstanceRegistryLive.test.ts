@@ -38,7 +38,12 @@ import {
   type ProviderInstanceConfigMap,
   ProviderInstanceId,
 } from "@t3tools/contracts";
-import { HostProcessPlatform, isHostWindows } from "@t3tools/shared/hostProcess";
+import {
+  HostProcessEnvironment,
+  HostProcessPlatform,
+  isHostWindows,
+} from "@t3tools/shared/hostProcess";
+import { symlinksSupported } from "@t3tools/shared/testing/symlinks";
 import * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
 import * as FileSystem from "effect/FileSystem";
@@ -604,6 +609,76 @@ describe("ProviderInstanceRegistryLive — multi-instance codex slice", () => {
         expect(ghost.availability).toBe("unavailable");
         expect(ghost.unavailableReason).toMatch(/ghostDriver/);
       }).pipe(Effect.provide(testLayer)),
+  );
+
+  it.live.skipIf(!symlinksSupported)(
+    "derives Codex continuation identity from the instance environment home",
+    () =>
+      Effect.gen(function* () {
+        const fileSystem = yield* FileSystem.FileSystem;
+        const path = yield* Path.Path;
+        const root = yield* fileSystem.makeTempDirectoryScoped({
+          prefix: "provider-instance-registry-codex-env-home-",
+        });
+        const sharedHome = path.join(root, "codex-shared");
+        const shadowHome = path.join(root, "codex-shadow");
+        const userHome = path.join(root, "user");
+        const plainId = ProviderInstanceId.make("codex_env_plain");
+        const shadowId = ProviderInstanceId.make("codex_env_shadow");
+        const userHomeId = ProviderInstanceId.make("codex_user_home");
+        const codexDriverKind = ProviderDriverKind.make("codex");
+        const codexHomeEnvironment = [
+          { name: "CODEX_HOME", value: sharedHome, sensitive: false },
+        ] as const;
+
+        const { registry } = yield* makeProviderInstanceRegistry<CodexDriverEnv>({
+          drivers: [CodexDriver],
+          configMap: {
+            [plainId]: {
+              driver: codexDriverKind,
+              enabled: false,
+              environment: [...codexHomeEnvironment],
+              config: makeCodexConfig({}),
+            },
+            [shadowId]: {
+              driver: codexDriverKind,
+              enabled: false,
+              environment: [...codexHomeEnvironment],
+              config: makeCodexConfig({ shadowHomePath: shadowHome }),
+            },
+            [userHomeId]: {
+              driver: codexDriverKind,
+              enabled: false,
+              environment: [{ name: "HOME", value: userHome, sensitive: false }],
+              config: makeCodexConfig({}),
+            },
+          },
+        });
+
+        expect(yield* registry.listUnavailable).toEqual([]);
+        const plain = yield* registry.getInstance(plainId);
+        const shadow = yield* registry.getInstance(shadowId);
+        const fromUserHome = yield* registry.getInstance(userHomeId);
+
+        // A shadow overlay on an environment-only home groups with the plain
+        // instance on that home, and its overlay links back to it.
+        expect(shadow?.continuationIdentity).toEqual(plain?.continuationIdentity);
+        expect(plain?.continuationIdentity.continuationKey).toBe(`codex:home:${sharedHome}`);
+        expect(shadow?.orchestrationAdapter).not.toBe(plain?.orchestrationAdapter);
+        expect(yield* fileSystem.readLink(path.join(shadowHome, "sessions"))).toBe(
+          path.join(sharedHome, "sessions"),
+        );
+        expect(fromUserHome?.continuationIdentity.continuationKey).toBe(
+          `codex:home:${path.join(userHome, ".codex")}`,
+        );
+        expect((yield* fromUserHome!.snapshot.getSnapshot).continuation?.groupKey).toBe(
+          `codex:home:${path.join(userHome, ".codex")}`,
+        );
+      }).pipe(
+        // An ambient CODEX_HOME would outrank the instance HOME fallback.
+        Effect.provideService(HostProcessEnvironment, {}),
+        Effect.provide(testLayer),
+      ),
   );
 });
 

@@ -8,6 +8,7 @@ import {
   ProviderInstanceId,
   type ServerSettings as ContractServerSettings,
 } from "@t3tools/contracts";
+import { HostProcessEnvironment } from "@t3tools/shared/hostProcess";
 import { symlinksSupported } from "@t3tools/shared/testing/symlinks";
 import * as Effect from "effect/Effect";
 import * as FileSystem from "effect/FileSystem";
@@ -52,10 +53,17 @@ interface ScannerTestInput {
   /** Base dir for the test ServerConfig; worktreesDir derives from it. */
   readonly configBaseDir?: string;
   readonly providerInstances?: ContractServerSettings["providerInstances"];
+  /** Host environment the scanner sees; defaults to `process.env`. */
+  readonly hostEnvironment?: NodeJS.ProcessEnv;
 }
 
 const makeScannerTestLayer = (input: ScannerTestInput) =>
   AgentSessionScanner.layer.pipe(
+    Layer.provide(
+      input.hostEnvironment === undefined
+        ? Layer.empty
+        : Layer.succeed(HostProcessEnvironment, input.hostEnvironment),
+    ),
     Layer.provide(
       Layer.mergeAll(
         ServerSettings.layerTest({
@@ -686,6 +694,55 @@ it.layer(NodeServices.layer)("AgentSessionScanner", (it) => {
           codexWorkspace,
           claudeWorkspace,
         ]);
+      }),
+    );
+
+    it.effect("scans the Codex home selected from the instance CODEX_HOME or HOME", () =>
+      Effect.gen(function* () {
+        const path = yield* Path.Path;
+        const claudeHomePath = yield* makeTempDir("t3code-claude-legacy-");
+        const codexHomePath = yield* makeTempDir("t3code-codex-legacy-");
+        const sharedHome = yield* makeTempDir("t3code-codex-env-shared-");
+        const shadowRoot = yield* makeTempDir("t3code-codex-env-shadow-");
+        const userHome = yield* makeTempDir("t3code-codex-user-home-");
+        const sharedWorkspace = yield* makeTempDir("t3code-workspace-shared-");
+        const userWorkspace = yield* makeTempDir("t3code-workspace-user-");
+
+        for (const [home, cwd] of [
+          [sharedHome, sharedWorkspace],
+          [path.join(userHome, ".codex"), userWorkspace],
+        ] as const) {
+          yield* writeTranscript({
+            filePath: path.join(home, "sessions", "2026", "01", "01", "rollout-session.jsonl"),
+            contents: codexRolloutLine(cwd),
+            mtimeMs: Date.parse("2026-01-01T00:00:00.000Z"),
+          });
+        }
+
+        const result = yield* runScan({
+          claudeHomePath,
+          codexHomePath,
+          // An ambient CODEX_HOME would outrank the instance HOME fallback.
+          hostEnvironment: {},
+          providerInstances: {
+            // Only the shadow account reaches the shared home: its sessions
+            // live in the instance CODEX_HOME, not the overlay.
+            [ProviderInstanceId.make("codex")]: {
+              driver: ProviderDriverKind.make("codex"),
+              environment: [{ name: "CODEX_HOME", value: sharedHome, sensitive: false }],
+              config: { shadowHomePath: path.join(shadowRoot, "shadow") },
+            },
+            [ProviderInstanceId.make("codex-user")]: {
+              driver: ProviderDriverKind.make("codex"),
+              environment: [{ name: "HOME", value: userHome, sensitive: false }],
+              config: {},
+            },
+          },
+        });
+
+        expect(result.candidates.map((candidate) => candidate.path).sort()).toEqual(
+          [sharedWorkspace, userWorkspace].sort(),
+        );
       }),
     );
 
