@@ -12,6 +12,10 @@ import * as Ref from "effect/Ref";
 import * as Stream from "effect/Stream";
 import * as TestClock from "effect/testing/TestClock";
 
+import {
+  shellStreamItemFromEnrichmentRefresh,
+  shellStreamItemsFromInitialSnapshot,
+} from "../orchestration-v2/ShellStream.ts";
 import { makeTestThreadShell, testShellTime } from "./liveServerTestKit.ts";
 import { CliOrchestrationOutcomeUnknownError } from "./orchestration.ts";
 import { CliOrchestrationCommandRejectedError } from "./orchestrationRpc.ts";
@@ -20,6 +24,7 @@ import {
   observeShellItem,
   type ThreadInputResponseMode,
   type ThreadWaitDependencies,
+  type ThreadWaitObservation,
   type ThreadWaitOptions,
   threadWaitExitCode,
   waitForThread,
@@ -199,6 +204,38 @@ describe("thread wait outcomes", () => {
       threadId,
     );
     assert.deepEqual(otherThread, { thread: running, sequence: 13 });
+  });
+
+  it("keeps the thread and sequence on metadata-only enrichment frames", () => {
+    const shell = {
+      schemaVersion: 1,
+      snapshotSequence: 20,
+      projects: [],
+      threads: [running],
+      archivedThreads: [],
+    };
+    const [authoritative, enrichment] = shellStreamItemsFromInitialSnapshot({
+      snapshot: shell,
+      resolvedRepositoryIdentityRoots: ["/repo"],
+    });
+    const refresh = shellStreamItemFromEnrichmentRefresh({
+      snapshot: { ...shell, snapshotSequence: 25 },
+      changes: [{ workspaceRoot: "/repo" }],
+    });
+    let observed: ThreadWaitObservation = { thread: running, sequence: 10 };
+    for (const item of [authoritative!, enrichment!, refresh]) {
+      observed = observeShellItem(observed, item, threadId);
+    }
+    assert.deepEqual(observed, { thread: running, sequence: 20 });
+    assert.strictEqual(
+      evaluateThreadWait({
+        observation: observed,
+        options: options({ afterSequence: 21 }),
+        responseMode: () => undefined,
+      }),
+      null,
+    );
+    assert.strictEqual(evaluate(observed.thread), null);
   });
 
   it("drains agent work by default and monitors only with --drain=all", () => {

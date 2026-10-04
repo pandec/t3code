@@ -3,6 +3,8 @@ import * as NodePath from "node:path";
 
 import {
   EnvironmentHttpApi,
+  EnvironmentHttpCommonError,
+  EnvironmentHttpConflictError,
   EnvironmentSessionImportError,
   type ModelSelection,
   type OrchestrationV2ShellSnapshot,
@@ -24,7 +26,7 @@ import * as Path from "effect/Path";
 import * as References from "effect/References";
 import * as Schema from "effect/Schema";
 import { Command, Flag, GlobalFlag } from "effect/unstable/cli";
-import { FetchHttpClient } from "effect/unstable/http";
+import { FetchHttpClient, HttpClientError } from "effect/unstable/http";
 import * as HttpApiClient from "effect/unstable/httpapi/HttpApiClient";
 
 import * as EnvironmentAuth from "../auth/EnvironmentAuth.ts";
@@ -41,6 +43,7 @@ import { withCliJsonErrorOutput } from "./errorOutput.ts";
 import {
   type CliLiveOrchestrationServer,
   type CliLiveServerReadTimeouts,
+  CliOrchestrationOutcomeUnknownError,
   CliOrchestrationServerUnavailableError,
   cliOrchestrationErrorFromRequest,
   dispatchLiveProjectMutation,
@@ -70,6 +73,8 @@ const jsonFlag = Flag.Boolean("json").pipe(
 const jsonOutput = (value: unknown) => JSON.stringify(value, null, 2);
 const isProjectNotFoundError = Schema.is(ProjectNotFoundError);
 const isEnvironmentSessionImportError = Schema.is(EnvironmentSessionImportError);
+const isEnvironmentHttpCommonError = Schema.is(EnvironmentHttpCommonError);
+const isEnvironmentHttpConflictError = Schema.is(EnvironmentHttpConflictError);
 
 export class SessionCliError extends Schema.TaggedError<SessionCliError>()("SessionCliError", {
   operation: Schema.String,
@@ -695,6 +700,26 @@ const fetchSessionCandidates = (
     Effect.mapError((cause) => sessionHttpError("session candidate listing", cause)),
   );
 
+/**
+ * Import is a mutation: only a declared rejection or an undeclared 4xx proves
+ * it was not applied. A timeout, a lost connection, an undecodable reply or an
+ * undeclared 5xx may follow a committed import, so its outcome is unknown.
+ */
+export function sessionImportError(cause: unknown) {
+  if (isEnvironmentSessionImportError(cause)) return cause;
+  if (
+    isEnvironmentHttpConflictError(cause) ||
+    isEnvironmentHttpCommonError(cause) ||
+    (HttpClientError.isHttpClientError(cause) &&
+      cause.response !== undefined &&
+      cause.response.status >= 400 &&
+      cause.response.status < 500)
+  ) {
+    return cliOrchestrationErrorFromRequest(cause);
+  }
+  return new CliOrchestrationOutcomeUnknownError({ operation: "dispatchLiveServer", cause });
+}
+
 const importSession = (origin: string, bearerToken: string, payload: SessionImportPayload) =>
   Effect.gen(function* () {
     const client = yield* makeHttpClient(origin);
@@ -702,10 +727,7 @@ const importSession = (origin: string, bearerToken: string, payload: SessionImpo
       headers: { authorization: `Bearer ${bearerToken}` },
       payload,
     });
-  }).pipe(
-    Effect.timeout(SESSION_HTTP_IMPORT_TIMEOUT),
-    Effect.mapError((cause) => sessionHttpError("session import", cause)),
-  );
+  }).pipe(Effect.timeout(SESSION_HTTP_IMPORT_TIMEOUT), Effect.mapError(sessionImportError));
 
 interface GitCommandResult {
   readonly stdout: string;

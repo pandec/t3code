@@ -6,6 +6,9 @@ import {
   type OrchestrationV2Command,
   OrchestrationV2DispatchCommandError,
   type OrchestrationV2ThreadLaunchInput,
+  OrchestrationV2ThreadArchiveError,
+  type OrchestrationV2CancelThreadArchiveInput,
+  type OrchestrationV2ScheduleThreadArchiveInput,
   OrchestrationV2ThreadLaunchError,
   type OrchestrationV2ThreadShell,
   type OrchestrationV2ShellStreamItem,
@@ -23,8 +26,10 @@ import * as Socket from "effect/unstable/socket/Socket";
 
 import {
   CliOrchestrationOutcomeUnknownError,
+  CliOrchestrationRequestError,
   type CliLiveServerReadTimeouts,
   issueLiveWebSocketTicket,
+  withLiveServerReadTimeout,
 } from "./orchestration.ts";
 
 // Thread commands have no HTTP route on orchestration v2; the CLI dispatches
@@ -53,6 +58,7 @@ export class CliOrchestrationCommandRejectedError extends Schema.TaggedError<Cli
 
 const isDispatchCommandError = Schema.is(OrchestrationV2DispatchCommandError);
 const isThreadLaunchError = Schema.is(OrchestrationV2ThreadLaunchError);
+const isThreadArchiveError = Schema.is(OrchestrationV2ThreadArchiveError);
 const isEnvironmentAuthorizationError = Schema.is(EnvironmentAuthorizationError);
 
 /**
@@ -70,7 +76,11 @@ export const liveRpcCommandError =
         cause,
       });
     }
-    if (isThreadLaunchError(cause) || isEnvironmentAuthorizationError(cause)) {
+    if (
+      isThreadLaunchError(cause) ||
+      isThreadArchiveError(cause) ||
+      isEnvironmentAuthorizationError(cause)
+    ) {
       return new CliOrchestrationCommandRejectedError({
         operation: "dispatchLiveServer",
         commandType,
@@ -80,6 +90,23 @@ export const liveRpcCommandError =
     }
     return new CliOrchestrationOutcomeUnknownError({ operation: "dispatchLiveServer", cause });
   };
+
+/**
+ * Reads change nothing, so a failed read is an ordinary request error, never
+ * an unknown outcome. Authorization stays a declared rejection, which the
+ * wait does not retry.
+ */
+const liveRpcReadError =
+  (method: string) =>
+  (cause: unknown): CliOrchestrationCommandRejectedError | CliOrchestrationRequestError =>
+    isEnvironmentAuthorizationError(cause)
+      ? new CliOrchestrationCommandRejectedError({
+          operation: "dispatchLiveServer",
+          commandType: method,
+          detail: cause.message,
+          cause,
+        })
+      : new CliOrchestrationRequestError({ operation: "callLiveServer", cause });
 
 const withAcknowledgementTimeout =
   (timeout: Duration.Duration) =>
@@ -144,7 +171,7 @@ export const subscribeLiveShell = (input: CliLiveRpcConnectionInput) =>
     Effect.map(makeScopedLiveRpcClient(input), (client) =>
       client["orchestration.subscribeShell"]({}),
     ),
-  ).pipe(Stream.mapError(liveRpcCommandError("orchestration.subscribeShell")));
+  ).pipe(Stream.mapError(liveRpcReadError("orchestration.subscribeShell")));
 
 /** Reads a thread's projection: full request entities plus a recent timeline window. */
 export const fetchLiveThreadProjection = (
@@ -153,8 +180,8 @@ export const fetchLiveThreadProjection = (
   timeouts: CliLiveServerReadTimeouts,
 ) =>
   client["orchestration.getThreadProjection"]({ threadId }).pipe(
-    Effect.mapError(liveRpcCommandError("orchestration.getThreadProjection")),
-    withAcknowledgementTimeout(timeouts.read),
+    Effect.mapError(liveRpcReadError("orchestration.getThreadProjection")),
+    withLiveServerReadTimeout("snapshot", timeouts.read),
   );
 
 export const dispatchLiveThreadCommand = (
@@ -175,15 +202,25 @@ export const launchLiveThread = (
     withAcknowledgementTimeout(CLI_LIVE_RPC_ACKNOWLEDGEMENT_TIMEOUT),
   );
 
-/** Reads archived thread shells, which the HTTP shell snapshot omits. */
-export const fetchLiveArchivedThreads = (
+/** Archives now or after the current run through the server's archive
+    scheduler, which refuses a worktree removal that cannot qualify. */
+export const scheduleLiveThreadArchive = (
   client: CliLiveRpcClient,
-  timeouts: CliLiveServerReadTimeouts,
+  input: OrchestrationV2ScheduleThreadArchiveInput,
 ) =>
-  client["orchestration.getArchivedShellSnapshot"]({}).pipe(
-    Effect.map((snapshot) => snapshot.threads),
-    Effect.mapError(liveRpcCommandError("orchestration.getArchivedShellSnapshot")),
-    withAcknowledgementTimeout(timeouts.read),
+  client["orchestration.scheduleThreadArchive"](input).pipe(
+    Effect.mapError(liveRpcCommandError("thread.archive.schedule")),
+    withAcknowledgementTimeout(CLI_LIVE_RPC_ACKNOWLEDGEMENT_TIMEOUT),
+  );
+
+/** Cancels a pending deferred archive through the server's archive scheduler. */
+export const cancelLiveThreadArchive = (
+  client: CliLiveRpcClient,
+  input: OrchestrationV2CancelThreadArchiveInput,
+) =>
+  client["orchestration.cancelThreadArchive"](input).pipe(
+    Effect.mapError(liveRpcCommandError("thread.archive.cancel")),
+    withAcknowledgementTimeout(CLI_LIVE_RPC_ACKNOWLEDGEMENT_TIMEOUT),
   );
 
 export interface LaunchedThreadObservation {

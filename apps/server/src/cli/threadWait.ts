@@ -58,6 +58,8 @@ export const observeShellItem = (
     case "synchronized":
       return observation;
     case "snapshot":
+      // A marked enrichment frame carries project metadata only (no threads).
+      if (item.resolvedRepositoryIdentityRoots !== undefined) return observation;
       return {
         thread:
           item.snapshot.threads.find(

@@ -56,6 +56,7 @@ import {
   ORCHESTRATION_PROTOCOL_VERSION,
   OrchestrationV2DispatchCommandError,
   OrchestrationV2GetShellSnapshotError,
+  OrchestrationV2ThreadArchiveError,
   OrchestrationV2GetThreadProjectionError,
   OrchestrationV2ThreadLaunchError,
   type OrchestrationProjectShell,
@@ -155,6 +156,7 @@ import {
 import * as ProjectStore from "./orchestration-v2/ProjectStore.ts";
 import * as ThreadSearch from "./orchestration-v2/ThreadSearch.ts";
 import * as RecentArchivedThreads from "./orchestration-v2/RecentArchivedThreads.ts";
+import * as ThreadArchiveScheduler from "./orchestration-v2/ThreadArchiveScheduler.ts";
 import * as OrchestrationEventStore from "./persistence/Services/OrchestrationEventStore.ts";
 import { userFacingDispatchErrorMessage } from "./orchestration-v2/UserFacingErrors.ts";
 import {
@@ -1111,6 +1113,13 @@ export const subscribeOrchestrationV2Shell = Effect.fn("ws.orchestrationV2.subsc
   },
 );
 
+// Fork: archive scheduler refusals keep their reason for the caller.
+const threadArchiveRpcError = (error: ThreadArchiveScheduler.ThreadArchiveSchedulerError) =>
+  new OrchestrationV2ThreadArchiveError({
+    threadId: ThreadId.make(error.threadId),
+    message: error.detail,
+  });
+
 const makeWsRpcLayer = (
   currentSession: EnvironmentAuth.AuthenticatedSession,
   clientOrigin: OrchestrationClientOrigin,
@@ -1134,6 +1143,7 @@ const makeWsRpcLayer = (
       const managedFolders = yield* ManagedProjectFolders.ManagedProjectFolders;
       const threadSearch = yield* ThreadSearch.ThreadSearch;
       const recentArchivedThreads = yield* RecentArchivedThreads.RecentArchivedThreads;
+      const threadArchiveScheduler = yield* ThreadArchiveScheduler.ThreadArchiveScheduler;
 
       const providerSessionsV2 = yield* ProviderSessionManager.ProviderSessionManagerV2;
       const analytics = yield* AnalyticsService.AnalyticsService;
@@ -1946,6 +1956,18 @@ const makeWsRpcLayer = (
           observeRpcEffect(
             ORCHESTRATION_V2_WS_METHODS.getRecentArchivedThreads,
             recentArchivedThreads.get(input),
+            { "rpc.aggregate": "orchestration" },
+          ),
+        [ORCHESTRATION_V2_WS_METHODS.scheduleThreadArchive]: (input) =>
+          observeRpcEffect(
+            ORCHESTRATION_V2_WS_METHODS.scheduleThreadArchive,
+            threadArchiveScheduler.schedule(input).pipe(Effect.mapError(threadArchiveRpcError)),
+            { "rpc.aggregate": "orchestration" },
+          ),
+        [ORCHESTRATION_V2_WS_METHODS.cancelThreadArchive]: (input) =>
+          observeRpcEffect(
+            ORCHESTRATION_V2_WS_METHODS.cancelThreadArchive,
+            threadArchiveScheduler.cancel(input).pipe(Effect.mapError(threadArchiveRpcError)),
             { "rpc.aggregate": "orchestration" },
           ),
         [ORCHESTRATION_V2_WS_METHODS.getThreadProjection]: (input) =>

@@ -68,6 +68,34 @@ export const parseThreadMessagesCursor = (
   }
 };
 
+/**
+ * Whether a `--before` cursor can belong to `threadId`: its anchor row comes
+ * from the thread itself or from a thread it was forked from (inherited
+ * history). True when the fork chain leaves `threads`, since lineage beyond
+ * the known threads cannot be judged.
+ */
+export const threadMessagesCursorMayBelongTo = (
+  cursor: string,
+  threadId: string,
+  threads: ReadonlyArray<Pick<OrchestrationV2ThreadShell, "id" | "forkedFrom">>,
+): boolean => {
+  const source = decodeThreadHistoryCursor(cursor).st;
+  const byId = new Map(threads.map((thread) => [String(thread.id), thread]));
+  const visited = new Set<string>();
+  let current = threadId;
+  for (;;) {
+    if (current === source) return true;
+    const thread = byId.get(current);
+    if (thread === undefined) return true;
+    const fork = thread.forkedFrom;
+    if (fork === null) return false;
+    if (fork.type !== "run") return true;
+    visited.add(current);
+    current = fork.threadId;
+    if (visited.has(current)) return false;
+  }
+};
+
 export const THREAD_MESSAGE_ROLES = ["user", "assistant", "system", "reasoning"] as const;
 export type ThreadMessageRole = (typeof THREAD_MESSAGE_ROLES)[number];
 
@@ -200,13 +228,17 @@ export const collectThreadMessages = Effect.fn("collectThreadMessages")(function
       const kept = entries.slice(entries.length - remaining);
       slicesNewestFirst.push(kept.map((entry) => entry.message));
       const oldest = kept[0]!.row;
+      // Slice rows are renumbered from 0; the server's cursors carry the
+      // absolute timeline position, which the slice's own older cursor holds
+      // for its first row.
+      const base = slice.olderCursor === null ? 0 : decodeThreadHistoryCursor(slice.olderCursor).p;
       return finish(
         true,
         encodeThreadHistoryCursor({
           snapshotSequence: slice.snapshotSequence,
           sourceThreadId: oldest.sourceThreadId,
           sourceItemId: oldest.sourceItemId,
-          position: oldest.position,
+          position: base + oldest.position,
         }),
       );
     }

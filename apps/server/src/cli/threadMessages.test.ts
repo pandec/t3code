@@ -11,6 +11,8 @@ import * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
 
 import {
+  decodeThreadHistoryCursor,
+  encodeThreadHistoryCursor,
   selectHistoryPageFromCursor,
   selectRecentTimelineWindow,
   type ThreadHistoryPagePolicy,
@@ -19,6 +21,7 @@ import { makeTestThreadShell } from "./liveServerTestKit.ts";
 import {
   collectThreadMessages,
   parseThreadMessagesCursor,
+  threadMessagesCursorMayBelongTo,
   type ThreadMessagesFetchDeps,
   threadMessagesReport,
   type ThreadMessagesWindow,
@@ -176,6 +179,19 @@ describe("collectThreadMessages", () => {
     }),
   );
 
+  it.effect("encodes the absolute timeline position in a cursor cut inside a page", () =>
+    Effect.gen(function* () {
+      // The newest page holds turns 4-5 (absolute rows 12-19, renumbered 0-7);
+      // a limit of 4 keeps answer 4 onward, absolute row 15.
+      const window = yield* collectThreadMessages(
+        { threadId, before: null, limit: 4 },
+        fakeServer(timeline(5)).deps,
+      );
+      assert.deepStrictEqual(texts(window), ["answer 4", "question 5", "thinking 5", "answer 5"]);
+      assert.strictEqual(decodeThreadHistoryCursor(window.nextBefore!).p, 15);
+    }),
+  );
+
   it.effect("fails instead of looping when the server repeats a cursor", () =>
     Effect.gen(function* () {
       const items = timeline(3);
@@ -205,6 +221,34 @@ describe("parseThreadMessagesCursor", () => {
       assert.strictEqual(foreign.reason, "not-found");
     }),
   );
+});
+
+describe("threadMessagesCursorMayBelongTo", () => {
+  it("accepts the thread's own and inherited cursors and rejects another thread's", () => {
+    const parentId = ThreadId.make("thread-parent");
+    const forkId = ThreadId.make("thread-fork");
+    const otherId = ThreadId.make("thread-other");
+    const threads = [
+      makeTestThreadShell(parentId),
+      makeTestThreadShell(forkId, {
+        forkedFrom: { type: "run", threadId: parentId, runId: RunId.make("run-1") },
+      }),
+      makeTestThreadShell(otherId),
+    ];
+    const cursorFrom = (sourceThreadId: ThreadId) =>
+      encodeThreadHistoryCursor({
+        snapshotSequence: 7,
+        sourceThreadId,
+        sourceItemId: "item-1",
+        position: 3,
+      });
+    assert.isTrue(threadMessagesCursorMayBelongTo(cursorFrom(forkId), forkId, threads));
+    assert.isTrue(threadMessagesCursorMayBelongTo(cursorFrom(parentId), forkId, threads));
+    assert.isFalse(threadMessagesCursorMayBelongTo(cursorFrom(otherId), forkId, threads));
+    assert.isFalse(threadMessagesCursorMayBelongTo(cursorFrom(forkId), parentId, threads));
+    // A fork of a thread outside the known set cannot be judged.
+    assert.isTrue(threadMessagesCursorMayBelongTo(cursorFrom(otherId), forkId, threads.slice(1)));
+  });
 });
 
 describe("threadMessagesReport", () => {

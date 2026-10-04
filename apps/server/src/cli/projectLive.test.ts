@@ -1,4 +1,5 @@
 // @effect-diagnostics nodeBuiltinImport:off - CLI integration exercises Node HTTP and filesystem boundaries.
+import * as NodeChildProcess from "node:child_process";
 import * as NodeHttp from "node:http";
 import * as NodeFS from "node:fs";
 import * as NodeOS from "node:os";
@@ -52,6 +53,59 @@ import {
   runCli,
 } from "./liveServerTestKit.ts";
 import { ProjectActionServerUnsupportedError } from "./project.ts";
+
+/** Persists a runtime-state file for `baseDir` naming `port` and `pid`. */
+const persistRuntimeState = (baseDir: string, port: number, pid?: number) =>
+  Effect.gen(function* () {
+    const config = yield* makeConfig(baseDir);
+    const state = yield* makePersistedServerRuntimeState({ config, port });
+    yield* persistServerRuntimeState({
+      path: config.serverRuntimeStatePath,
+      state: pid === undefined ? state : { ...state, pid },
+    });
+    return config;
+  });
+
+/** The projects the offline project service sees for `config`. */
+const offlineProjects = (config: ServerConfig.ServerConfig["Service"]) =>
+  Effect.gen(function* () {
+    const projects = yield* ProjectService.ProjectService;
+    return (yield* projects.snapshot).projects.filter((project) => project.deletedAt === null);
+  }).pipe(
+    Effect.provide(
+      ProjectServiceLayerLive.pipe(
+        Layer.provideMerge(ProjectEnrichmentService.layer),
+        Layer.provideMerge(RepositoryIdentityResolver.layer),
+        Layer.provideMerge(ProjectFaviconResolver.layer),
+        Layer.provideMerge(T3ProjectFileLoader.layer),
+        Layer.provideMerge(WorkspacePaths.layer),
+        Layer.provideMerge(SqlitePersistence.layerConfig),
+        Layer.provide(ServerConfig.layer(config)),
+        Layer.provide(Layer.succeed(References.MinimumLogLevel, "None")),
+      ),
+    ),
+  );
+
+/** A server that answers every request with 503: alive, but unresponsive. */
+const withUnavailableServer = <A, E, R>(run: (port: number) => Effect.Effect<A, E, R>) =>
+  Effect.acquireUseRelease(
+    Effect.callback<NodeHttp.Server>((resume) => {
+      const server = NodeHttp.createServer((_request, response) => {
+        response.writeHead(503).end();
+      });
+      server.listen(0, "127.0.0.1", () => resume(Effect.succeed(server)));
+    }),
+    (server) => {
+      const address = server.address();
+      return typeof address === "object" && address !== null
+        ? run(address.port)
+        : Effect.die("Expected a TCP address");
+    },
+    (server) =>
+      Effect.callback<void>((resume) => {
+        server.close(() => resume(Effect.void));
+      }),
+  );
 
 const testAuthLayer = makeTestAuthLayer("project-cli-live-test");
 
@@ -397,6 +451,46 @@ it.layer(NodeServices.layer)("project CLI without a running server", (it) => {
       const { baseDir } = makeDirs("offline");
       const error = yield* runCli([...args, "--base-dir", baseDir]).pipe(Effect.flip);
       assert.instanceOf(error, CliOrchestrationServerUnavailableError);
+    }),
+  );
+
+  it.effect("fails instead of writing offline behind an alive but unresponsive server", () =>
+    Effect.gen(function* () {
+      const { baseDir, workspaceRoot } = makeDirs("unresponsive");
+      yield* withUnavailableServer((port) =>
+        Effect.gen(function* () {
+          // The runtime state names this test process, which is alive.
+          const config = yield* persistRuntimeState(baseDir, port);
+          const error = yield* runCli([
+            "project",
+            "add",
+            workspaceRoot,
+            "--base-dir",
+            baseDir,
+          ]).pipe(Effect.flip);
+          assert.notInstanceOf(error, CliOrchestrationServerUnavailableError);
+          assert.isTrue(NodeFS.existsSync(config.serverRuntimeStatePath));
+          assert.deepEqual(yield* offlineProjects(config), []);
+        }),
+      );
+    }),
+  );
+
+  it.effect("clears a dead server's runtime state and adds the project offline", () =>
+    Effect.gen(function* () {
+      const { baseDir, workspaceRoot } = makeDirs("dead-pid");
+      const closedPort = yield* withUnavailableServer((port) => Effect.succeed(port));
+      const exited = NodeChildProcess.spawnSync(process.execPath, ["-e", ""]);
+      const config = yield* persistRuntimeState(baseDir, closedPort, exited.pid);
+      const added = parseJson<{ readonly projectId: string; readonly action: string }>(
+        yield* captureStdout(["project", "add", workspaceRoot, "--json", "--base-dir", baseDir]),
+      );
+      assert.equal(added.action, "added");
+      assert.isFalse(NodeFS.existsSync(config.serverRuntimeStatePath));
+      assert.deepEqual(
+        (yield* offlineProjects(config)).map((project) => project.id),
+        [ProjectId.make(added.projectId)],
+      );
     }),
   );
 

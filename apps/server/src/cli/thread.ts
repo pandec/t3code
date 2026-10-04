@@ -81,11 +81,12 @@ import {
 } from "./orchestration.ts";
 import {
   awaitLaunchedThread,
+  cancelLiveThreadArchive,
   type CliLiveRpcClient,
   dispatchLiveThreadCommand,
-  fetchLiveArchivedThreads,
   fetchLiveThreadProjection,
   launchLiveThread,
+  scheduleLiveThreadArchive,
   subscribeLiveShell,
   withLiveOrchestrationRpc,
 } from "./orchestrationRpc.ts";
@@ -106,6 +107,8 @@ import {
   renderThreadMessagesText,
   stripTerminalControlCharacters,
   THREAD_MESSAGE_ROLES,
+  ThreadCliMessageCursorError,
+  threadMessagesCursorMayBelongTo,
   threadMessagesReport,
 } from "./threadMessages.ts";
 import { THREAD_CLI_STATES, threadCliState, threadHasActiveTurn } from "./threadState.ts";
@@ -537,32 +540,77 @@ const resolveThread = (
   return thread ? Effect.succeed(thread) : Effect.fail(threadNotFound(rawThreadId));
 };
 
-/** Like resolveThread, but also finds archived threads (read over the RPC). */
+type ThreadArchiveTarget = Pick<
+  OrchestrationV2ThreadShell,
+  "id" | "archivedAt" | "archiveRequest" | "activeRunId" | "status"
+>;
+
+/** Like resolveThread, but also finds archived threads (one bounded thread read). */
 const resolveThreadIncludingArchived = Effect.fn("resolveThreadIncludingArchived")(function* (
   input: ThreadCliInput,
-  client: CliLiveRpcClient,
   rawThreadId: string,
 ) {
-  const active = findThread(
+  const active: ThreadArchiveTarget | undefined = findThread(
     input.live.shell.threads.filter((candidate) => candidate.archivedAt === null),
     rawThreadId,
   );
   if (active) return active;
-  const archived = findThread(yield* fetchLiveArchivedThreads(client, input.timeouts), rawThreadId);
-  if (archived) return archived;
-  return yield* threadNotFound(rawThreadId);
+  const threadId = requestedThreadId(rawThreadId);
+  if (threadId.length === 0) return yield* threadNotFound(rawThreadId);
+  const snapshot = yield* fetchLiveThreadBoundedSnapshot(
+    input.live.origin,
+    input.token,
+    ThreadId.make(threadId),
+    input.timeouts,
+  ).pipe(
+    Effect.catchTag("CliOrchestrationThreadNotFoundError", () =>
+      Effect.fail(threadNotFound(rawThreadId)),
+    ),
+  );
+  const thread = snapshot.projection.thread;
+  if (thread.deletedAt != null) return yield* threadNotFound(rawThreadId);
+  // Only archived threads reach here; they have no active run to steer, and
+  // the server resolves the send against its own thread state anyway.
+  const target: ThreadArchiveTarget = {
+    id: thread.id,
+    archivedAt: thread.archivedAt,
+    archiveRequest: thread.archiveRequest,
+    activeRunId: null,
+    status: "idle",
+  };
+  return target;
 });
 
 const isoOrNull = (value: DateTime.Utc | null | undefined): string | null =>
   value == null ? null : DateTime.formatIso(value);
 
+/** The fork's nested archive request JSON: `turnId` names the awaited run and
+    `removeWorktree` is always present. */
+export const cliArchiveRequest = (request: OrchestrationV2ThreadShell["archiveRequest"]) => {
+  if (!request) return null;
+  const { runId, removeWorktree, ...rest } = request;
+  return { ...rest, turnId: runId, removeWorktree: removeWorktree === true };
+};
+
+/** The fork's nested worktree switch JSON, with `turnId` for the awaited run. */
+export const cliWorktreeSwitch = (worktreeSwitch: OrchestrationV2ThreadShell["worktreeSwitch"]) => {
+  if (!worktreeSwitch) return null;
+  const { runId, ...rest } = worktreeSwitch;
+  return { ...rest, turnId: runId };
+};
+
 /** The fork's thread summary JSON, read from the v2 shell. Run ids fill the
-    fields the fork named after turns (`activeTurnId`, `snoozedUntilTurnId`). */
-export const threadSummary = (thread: OrchestrationV2ThreadShell) => {
+    fields the fork named after turns (`activeTurnId`, `snoozedUntilTurnId`).
+    `responseMode` is the pending question's mode when known; an unknown mode
+    counts as blocking. */
+export const threadSummary = (
+  thread: OrchestrationV2ThreadShell,
+  responseMode?: ThreadInputResponseMode | null,
+) => {
   const presented = presentThreadShell(CLI_ENVIRONMENT_ID, thread);
   return {
-    archiveRequest: thread.archiveRequest ?? null,
-    worktreeSwitch: thread.worktreeSwitch ?? null,
+    archiveRequest: cliArchiveRequest(thread.archiveRequest),
+    worktreeSwitch: cliWorktreeSwitch(thread.worktreeSwitch),
     id: thread.id,
     projectId: thread.projectId,
     title: thread.title,
@@ -581,9 +629,8 @@ export const threadSummary = (thread: OrchestrationV2ThreadShell) => {
     settledAt: presented.settledAt,
     hasPendingApprovals: presented.hasPendingApprovals,
     hasPendingUserInput: presented.hasPendingUserInput,
-    // The shell does not say whether a question is message-mode, so a pending
-    // question counts as blocking here; `thread wait` reads the request to tell.
-    hasPendingBlockingUserInput: presented.hasPendingUserInput,
+    hasPendingBlockingUserInput:
+      thread.pendingRuntimeRequest?.kind === "user_input" && responseMode !== "message",
     latestUserMessageAt: presented.latestUserMessageAt,
     updatedAt: presented.updatedAt,
   };
@@ -662,6 +709,58 @@ const withRpc = <A, E, R>(
   );
 
 const newCommandId = randomUuid.pipe(Effect.map(CommandId.make));
+
+/** How a pending question is answered, from its request entity (which every
+    projection carries in full, unlike the windowed timeline items); null
+    once it is no longer pending. */
+export const userInputResponseMode = (
+  projection: Pick<OrchestrationV2ThreadProjection, "runtimeRequests">,
+  requestId: RuntimeRequestId,
+): ThreadInputResponseMode | null => {
+  const request = projection.runtimeRequests.find((candidate) => candidate.id === requestId);
+  if (request?.kind !== "user_input" || request.status !== "pending") return null;
+  return request.responseCapability.type === "message" ? "message" : "blocking";
+};
+
+const fetchUserInputResponseMode = (
+  client: CliLiveRpcClient,
+  input: ThreadCliInput,
+  threadId: ThreadId,
+  requestId: RuntimeRequestId,
+) =>
+  fetchLiveThreadProjection(client, threadId, input.timeouts).pipe(
+    Effect.map((projection) => userInputResponseMode(projection, requestId)),
+  );
+
+/** Response modes of the threads' pending questions, read only for threads
+    that have one. A mode that cannot be read stays unknown (blocking). */
+const fetchPendingQuestionModes = (
+  input: ThreadCliInput,
+  threads: ReadonlyArray<OrchestrationV2ThreadShell>,
+) => {
+  const asking = threads.flatMap((thread) =>
+    thread.pendingRuntimeRequest?.kind === "user_input"
+      ? [{ threadId: thread.id, requestId: thread.pendingRuntimeRequest.id }]
+      : [],
+  );
+  if (asking.length === 0) {
+    return Effect.succeed(new Map<ThreadId, ThreadInputResponseMode | null>());
+  }
+  return withRpc(input, (client) =>
+    Effect.forEach(
+      asking,
+      ({ threadId, requestId }) =>
+        fetchUserInputResponseMode(client, input, threadId, requestId).pipe(
+          Effect.orElseSucceed(() => null),
+          Effect.map((mode) => [threadId, mode] as const),
+        ),
+      { concurrency: 4 },
+    ),
+  ).pipe(
+    Effect.map((entries) => new Map(entries)),
+    Effect.orElseSucceed(() => new Map<ThreadId, ThreadInputResponseMode | null>()),
+  );
+};
 
 type ThreadCliCapability = "threadCustomGroups" | "threadCustomGroupCreation" | "threadPinning";
 
@@ -766,7 +865,9 @@ const threadListCommand = Command.make("list", {
               groupFilter === null ||
               threadGroupId(thread, groupFilter.catalog) === groupFilter.groupId,
           );
-        const threads = (flags.pinned ? sortPinnedThreads(matching) : matching).map(threadSummary);
+        const ordered = flags.pinned ? sortPinnedThreads(matching) : matching;
+        const modes = yield* fetchPendingQuestionModes(input, ordered);
+        const threads = ordered.map((thread) => threadSummary(thread, modes.get(thread.id)));
         yield* Console.log(
           flags.json
             ? jsonOutput({ threads })
@@ -1118,26 +1219,23 @@ const threadSendCommand = Command.make("send", {
         const message = yield* requireTrimmedMessage(flags.message);
         const commandId = yield* newCommandId;
         const messageId = MessageId.make(yield* randomUuid);
-        const { thread, result } = yield* withRpc(input, (client) =>
-          Effect.gen(function* () {
-            const thread = yield* resolveThreadIncludingArchived(input, client, flags.threadId);
-            // The server resolves "auto" against its serialized thread state
-            // (steer, queue, or start) and unarchives an archived thread.
-            const result = yield* dispatchLiveThreadCommand(client, {
-              type: "message.dispatch",
-              commandId,
-              threadId: thread.id,
-              messageId,
-              text: message,
-              attachments: [],
-              createdBy: "user",
-              creationSource: "web",
-              deliveryIntent: "auto",
-              dispatchMode: threadHasActiveTurn(thread)
-                ? { type: "queue_after_active" }
-                : { type: "start_immediately" },
-            });
-            return { thread, result };
+        const thread = yield* resolveThreadIncludingArchived(input, flags.threadId);
+        // The server resolves "auto" against its serialized thread state
+        // (steer, queue, or start) and unarchives an archived thread.
+        const result = yield* withRpc(input, (client) =>
+          dispatchLiveThreadCommand(client, {
+            type: "message.dispatch",
+            commandId,
+            threadId: thread.id,
+            messageId,
+            text: message,
+            attachments: [],
+            createdBy: "user",
+            creationSource: "web",
+            deliveryIntent: "auto",
+            dispatchMode: threadHasActiveTurn(thread)
+              ? { type: "queue_after_active" }
+              : { type: "start_immediately" },
           }),
         );
         const action = threadHasActiveTurn(thread) ? "steered" : "started";
@@ -1370,10 +1468,11 @@ const threadStatusCommand = Command.make("status", {
 }).pipe(
   Command.withDescription("Show thread status."),
   Command.withHandler((flags) =>
-    runThreadCli(flags, flags.json, ({ live }) =>
+    runThreadCli(flags, flags.json, (input) =>
       Effect.gen(function* () {
-        const thread = yield* resolveThread(live, flags.threadId);
-        const summary = threadSummary(thread);
+        const thread = yield* resolveThread(input.live, flags.threadId);
+        const modes = yield* fetchPendingQuestionModes(input, [thread]);
+        const summary = threadSummary(thread, modes.get(thread.id));
         const snoozed = threadSnoozeText(thread, DateTime.formatIso(yield* DateTime.now));
         yield* Console.log(
           flags.json
@@ -1463,19 +1562,58 @@ export const pendingThreadInputRequests = (
         left.createdAt.localeCompare(right.createdAt) || left.id.localeCompare(right.id),
     );
 
+/**
+ * The thread's request entities plus the timeline item of every pending
+ * question. A question asked before the newest timeline window is found by
+ * paging older history, so it never silently drops out of the list.
+ */
+const fetchPendingQuestionTimeline = Effect.fn("fetchPendingQuestionTimeline")(function* (
+  input: ThreadCliInput,
+  threadId: ThreadId,
+) {
+  const snapshot = yield* fetchLiveThreadBoundedSnapshot(
+    input.live.origin,
+    input.token,
+    threadId,
+    input.timeouts,
+  );
+  const { runtimeRequests } = snapshot.projection;
+  const turnItems = [...snapshot.projection.turnItems];
+  const missing = new Set<string>(
+    runtimeRequests
+      .filter((request) => request.kind === "user_input" && request.status === "pending")
+      .map((request) => request.id),
+  );
+  for (const item of turnItems) {
+    if (item.type === "user_input_request") missing.delete(item.requestId);
+  }
+  const requestedCursors = new Set<string>();
+  let cursor = snapshot.hasMoreHistory ? snapshot.historyCursor : null;
+  while (missing.size > 0 && cursor !== null && !requestedCursors.has(cursor)) {
+    requestedCursors.add(cursor);
+    const page = yield* fetchLiveThreadHistoryPage(
+      input.live.origin,
+      input.token,
+      { threadId, cursor },
+      input.timeouts,
+    );
+    for (const row of page.items) {
+      if (row.item.type === "user_input_request" && missing.delete(row.item.requestId)) {
+        turnItems.push(row.item);
+      }
+    }
+    cursor = page.hasMoreHistory ? page.nextCursor : null;
+  }
+  return { runtimeRequests, turnItems };
+});
+
 const liveThreadWaitDependencies = (input: ThreadCliInput, threadId: ThreadId) => {
   const connection = { origin: input.live.origin, token: input.token, timeouts: input.timeouts };
   return {
     shellStream: subscribeLiveShell(connection),
     userInputResponseMode: (requestId: RuntimeRequestId) =>
       withLiveOrchestrationRpc(connection, (client) =>
-        fetchLiveThreadProjection(client, threadId, input.timeouts),
-      ).pipe(
-        Effect.map(
-          (projection) =>
-            pendingThreadInputRequests(projection).find((request) => request.id === requestId)
-              ?.responseMode ?? null,
-        ),
+        fetchUserInputResponseMode(client, input, threadId, requestId),
       ),
     serverAlive: isProcessAlive(input.live.pid),
   };
@@ -1557,10 +1695,9 @@ const threadInputListCommand = Command.make("list", {
     runThreadCli(flags, flags.json, (input) =>
       Effect.gen(function* () {
         const thread = yield* resolveThread(input.live, flags.threadId);
-        const projection = yield* withRpc(input, (client) =>
-          fetchLiveThreadProjection(client, thread.id, input.timeouts),
+        const requests = pendingThreadInputRequests(
+          yield* fetchPendingQuestionTimeline(input, thread.id),
         );
-        const requests = pendingThreadInputRequests(projection);
         yield* Console.log(
           flags.json
             ? jsonOutput({ threadId: thread.id, requests })
@@ -1703,7 +1840,7 @@ export const threadContextCommand = Command.make("context", {
 export function archiveStatusText(
   threadId: string,
   archivedAt: string | null,
-  archiveRequest: OrchestrationV2ThreadShell["archiveRequest"] | null,
+  archiveRequest: ReturnType<typeof cliArchiveRequest>,
 ): string {
   const lines = [
     `thread: ${threadId}`,
@@ -1749,11 +1886,9 @@ export const threadArchiveCommand = Command.make("archive", {
               operation: "thread.archive",
               detail: "--status cannot be combined with archive actions.",
             });
-          const thread = yield* withRpc(input, (client) =>
-            resolveThreadIncludingArchived(input, client, flags.threadId),
-          );
+          const thread = yield* resolveThreadIncludingArchived(input, flags.threadId);
           const archivedAt = isoOrNull(thread.archivedAt);
-          const archiveRequest = thread.archiveRequest ?? null;
+          const archiveRequest = cliArchiveRequest(thread.archiveRequest);
           yield* Console.log(
             flags.json
               ? jsonOutput({ threadId: thread.id, archivedAt, archiveRequest })
@@ -1770,33 +1905,37 @@ export const threadArchiveCommand = Command.make("archive", {
         const thread = yield* resolveThread(input.live, flags.threadId);
         const commandId = yield* newCommandId;
         const scheduled = flags.afterTurn || flags.removeWorktree;
-        yield* withRpc(input, (client) =>
-          dispatchLiveThreadCommand(
-            client,
-            flags.cancel
-              ? { type: "thread.archive.cancel", commandId, threadId: thread.id }
-              : scheduled
-                ? {
-                    type: "thread.archive.schedule",
-                    commandId,
-                    threadId: thread.id,
-                    afterTurn: flags.afterTurn,
-                    removeWorktree: flags.removeWorktree,
-                  }
-                : { type: "thread.archive", commandId, threadId: thread.id },
-          ),
+        // Scheduling and cancelling go through the server's archive scheduler,
+        // like the agent tools, so an unqualified worktree removal is refused
+        // up front instead of only being recorded on the request.
+        const status = yield* withRpc(input, (client) =>
+          flags.cancel
+            ? cancelLiveThreadArchive(client, { threadId: thread.id, commandId })
+            : scheduled
+              ? scheduleLiveThreadArchive(client, {
+                  threadId: thread.id,
+                  afterTurn: flags.afterTurn,
+                  ...(flags.removeWorktree ? { removeWorktree: true } : {}),
+                  commandId,
+                })
+              : dispatchLiveThreadCommand(client, {
+                  type: "thread.archive",
+                  commandId,
+                  threadId: thread.id,
+                }).pipe(Effect.as(null)),
         );
         const action = flags.cancel
           ? "archive-cancelled"
-          : scheduled
+          : scheduled && status?.archivedAt == null
             ? "archive-requested"
             : "archived";
+        const requestId = scheduled ? (status?.request?.requestId ?? commandId) : null;
         yield* Console.log(
           flags.json
             ? jsonOutput({
                 threadId: thread.id,
                 action,
-                ...(scheduled ? { requestId: commandId } : {}),
+                ...(requestId === null ? {} : { requestId }),
               })
             : `${action}: ${thread.id}.`,
         );
@@ -1861,6 +2000,23 @@ const threadMessagesCommand = Command.make("messages", {
         const before = Option.isSome(flags.before)
           ? yield* parseThreadMessagesCursor(rawThreadId, flags.before.value)
           : null;
+        // Another thread's cursor would page an unrelated window. Archived
+        // threads are not in the shell, so their lineage cannot be checked.
+        const activeThread = input.live.shell.threads.some(
+          (candidate) => candidate.id === threadId && candidate.archivedAt === null,
+        );
+        if (
+          before !== null &&
+          activeThread &&
+          !threadMessagesCursorMayBelongTo(before, threadId, input.live.shell.threads)
+        ) {
+          return yield* new ThreadCliMessageCursorError({
+            operation: "fetchThreadMessages",
+            threadId: rawThreadId,
+            cursor: before,
+            reason: "not-found",
+          });
+        }
         // Best effort: the transcript does not depend on environment identity.
         const descriptor = yield* Effect.option(
           fetchLiveEnvironmentDescriptor(input.live.origin, input.timeouts),

@@ -240,7 +240,7 @@ export const resolveCliLiveServerReadTimeouts = Effect.fn("resolveCliLiveServerR
   },
 );
 
-const withLiveServerReadTimeout =
+export const withLiveServerReadTimeout =
   (phase: CliLiveServerReadPhase, duration: Duration.Duration) =>
   <A, E, R>(effect: Effect.Effect<A, E, R>) =>
     effect.pipe(

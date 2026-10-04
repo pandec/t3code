@@ -16,13 +16,14 @@ import {
   ProviderDriverKind,
   ProviderInstanceId,
   type SessionImportPayload,
+  type SessionImportResult,
   ThreadId,
 } from "@t3tools/contracts";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import * as Ref from "effect/Ref";
 import * as References from "effect/References";
-import { HttpServer } from "effect/unstable/http";
+import { HttpServer, HttpServerResponse } from "effect/unstable/http";
 import * as HttpRouter from "effect/unstable/http/HttpRouter";
 import * as HttpApi from "effect/unstable/httpapi/HttpApi";
 import * as HttpApiBuilder from "effect/unstable/httpapi/HttpApiBuilder";
@@ -101,7 +102,11 @@ const withLiveServer = <A, E, R>(
   run: (server: {
     readonly imports: Ref.Ref<ReadonlyArray<SessionImportPayload>>;
   }) => Effect.Effect<A, E, R>,
-  options?: { readonly sessionImport?: boolean },
+  options?: {
+    readonly sessionImport?: boolean;
+    /** The first import commits, but its reply cannot be decoded. */
+    readonly undecodableFirstReply?: boolean;
+  },
 ) =>
   Effect.gen(function* () {
     const config = yield* makeConfig(input.baseDir);
@@ -163,7 +168,11 @@ const withLiveServer = <A, E, R>(
             Ref.getAndUpdate(imports, (previous) => [...previous, args.payload]).pipe(
               Effect.flatMap((previous) =>
                 previous.length === 0
-                  ? Effect.succeed({ threadId: importedThreadId })
+                  ? Effect.succeed<HttpServerResponse.HttpServerResponse | SessionImportResult>(
+                      options?.undecodableFirstReply === true
+                        ? HttpServerResponse.text("{}", { contentType: "application/json" })
+                        : { threadId: importedThreadId },
+                    )
                   : Effect.fail(
                       new EnvironmentSessionImportError({
                         code: "session_import_error",
@@ -370,6 +379,38 @@ it.layer(NodeServices.layer)("session CLI against a running server", (it) => {
           }),
         );
       }),
+  );
+
+  it.effect("reports a committed import with a lost reply as an unknown outcome", () =>
+    Effect.gen(function* () {
+      const fixture = makeFixture("lost-reply");
+      yield* withLiveServer(
+        fixture,
+        ({ imports }) =>
+          Effect.gen(function* () {
+            const args = [
+              "session",
+              "import",
+              "--file",
+              fixture.transcript,
+              "--project",
+              fixture.repo,
+              "--json",
+              "--base-dir",
+              fixture.baseDir,
+            ];
+            const lost = parseJson<{
+              readonly error: { readonly code: string; readonly outcome?: string };
+            }>(yield* captureStdout(args));
+            assert.deepEqual(lost.error.outcome, "unknown");
+            assert.equal((yield* Ref.get(imports)).length, 1);
+            // The rerun the unknown outcome calls for finds the committed import.
+            const retried = parseJson(yield* captureStdout(args));
+            assert.deepEqual(retried, { threadId: importedThreadId, action: "already-imported" });
+          }),
+        { undecodableFirstReply: true },
+      );
+    }),
   );
 
   it.effect("refuses to import on a server without session import", () =>

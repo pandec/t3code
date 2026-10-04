@@ -2,6 +2,8 @@ import { assert, describe, it } from "@effect/vitest";
 import {
   OrchestrationV2DispatchCommandError,
   CommandId,
+  NodeId,
+  ProviderSessionId,
   RunId,
   RuntimeRequestId,
   ThreadId,
@@ -22,6 +24,7 @@ import {
   threadContextEnvironment,
   threadSnoozeText,
   threadSummary,
+  userInputResponseMode,
 } from "./thread.ts";
 import { threadCliState } from "./threadState.ts";
 
@@ -101,6 +104,94 @@ describe("thread CLI on orchestration v2", () => {
         hasPendingBlockingUserInput: true,
       },
     );
+  });
+
+  it("counts a message-mode question as not blocking and an unknown one as blocking", () => {
+    const asking = makeTestThreadShell(threadId, {
+      status: "completed",
+      latestRunId: runId,
+      pendingRuntimeRequest: {
+        id: RuntimeRequestId.make("request-1"),
+        kind: "user_input",
+        createdAt: testShellTime,
+      },
+    });
+    assert.isFalse(threadSummary(asking, "message").hasPendingBlockingUserInput);
+    assert.isTrue(threadSummary(asking, "blocking").hasPendingBlockingUserInput);
+    assert.isTrue(threadSummary(asking, null).hasPendingBlockingUserInput);
+    assert.isFalse(threadSummary(makeTestThreadShell(threadId)).hasPendingBlockingUserInput);
+
+    const request = (
+      id: string,
+      responseCapability: Parameters<
+        typeof userInputResponseMode
+      >[0]["runtimeRequests"][number]["responseCapability"],
+      status: "pending" | "resolved" = "pending",
+    ) => ({
+      id: RuntimeRequestId.make(id),
+      nodeId: NodeId.make(`node-${id}`),
+      providerTurnId: null,
+      nativeRequestRef: null,
+      kind: "user_input" as const,
+      status,
+      responseCapability,
+      createdAt: testShellTime,
+      resolvedAt: null,
+    });
+    const projection = {
+      runtimeRequests: [
+        request("message", { type: "message" }),
+        request("live", { type: "live", providerSessionId: ProviderSessionId.make("session") }),
+        request("answered", { type: "message" }, "resolved"),
+      ],
+    };
+    assert.deepEqual(
+      ["message", "live", "answered", "missing"].map((id) =>
+        userInputResponseMode(projection, RuntimeRequestId.make(id)),
+      ),
+      ["message", "blocking", null, null],
+    );
+  });
+
+  it("presents archive and worktree switch requests with the fork's turnId keys", () => {
+    const requestedAt = "2026-10-04T10:00:00.000Z";
+    const summary = threadSummary(
+      makeTestThreadShell(threadId, {
+        archiveRequest: {
+          requestId: CommandId.make("archive-1"),
+          runId,
+          worktreePath: null,
+          requestedAt,
+          status: "pending",
+        },
+        worktreeSwitch: {
+          requestId: CommandId.make("switch-1"),
+          runId,
+          sourceWorktreePath: null,
+          sourceBranch: null,
+          targetPath: "/repo-wt",
+          requestedAt,
+          status: "pending",
+        },
+      }),
+    );
+    assert.deepEqual(summary.archiveRequest, {
+      requestId: CommandId.make("archive-1"),
+      turnId: runId,
+      worktreePath: null,
+      removeWorktree: false,
+      requestedAt,
+      status: "pending",
+    });
+    assert.deepEqual(summary.worktreeSwitch, {
+      requestId: CommandId.make("switch-1"),
+      turnId: runId,
+      sourceWorktreePath: null,
+      sourceBranch: null,
+      targetPath: "/repo-wt",
+      requestedAt,
+      status: "pending",
+    });
   });
 
   it("reports what the clients show for each snooze mode", () => {

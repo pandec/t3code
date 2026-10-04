@@ -18,6 +18,7 @@ import {
   type OrchestrationProjectShell,
   type OrchestrationV2Command,
   type OrchestrationV2ProjectedTurnItem,
+  type OrchestrationV2ScheduleThreadArchiveInput,
   OrchestrationV2DispatchCommandError,
   OrchestrationV2GetShellSnapshotError,
   OrchestrationV2GetThreadProjectionError,
@@ -25,8 +26,10 @@ import {
   type OrchestrationV2ShellStreamItem,
   type OrchestrationV2ThreadProjection,
   type OrchestrationV2ThreadLaunchInput,
+  OrchestrationV2ThreadArchiveError,
   OrchestrationV2ThreadLaunchError,
   type OrchestrationV2ThreadShell,
+  CommandId,
   NodeId,
   ProjectId,
   ProviderSessionId,
@@ -74,6 +77,8 @@ const archivedThreadId = ThreadId.make("thread-archived");
 const unpinnedThreadId = ThreadId.make("thread-unpinned");
 const waitThreadId = ThreadId.make("thread-wait");
 const waitRunId = RunId.make("run-wait");
+/** The bounded snapshot read of this thread fails with an undeclared error. */
+const brokenThreadId = ThreadId.make("thread-broken");
 const questionRequestId = RuntimeRequestId.make("request-question");
 const approvalRequestId = RuntimeRequestId.make("request-approval");
 
@@ -90,10 +95,15 @@ const ThreadCliRpcGroup = RpcGroup.make(
     success: OrchestrationV2RpcSchemas.launchThread.output,
     error: Schema.Union([OrchestrationV2ThreadLaunchError, EnvironmentAuthorizationError]),
   }),
-  Rpc.make(ORCHESTRATION_V2_WS_METHODS.getArchivedShellSnapshot, {
-    payload: OrchestrationV2RpcSchemas.getArchivedShellSnapshot.input,
-    success: OrchestrationV2RpcSchemas.getArchivedShellSnapshot.output,
-    error: Schema.Union([OrchestrationV2GetShellSnapshotError, EnvironmentAuthorizationError]),
+  Rpc.make(ORCHESTRATION_V2_WS_METHODS.scheduleThreadArchive, {
+    payload: OrchestrationV2RpcSchemas.scheduleThreadArchive.input,
+    success: OrchestrationV2RpcSchemas.scheduleThreadArchive.output,
+    error: Schema.Union([OrchestrationV2ThreadArchiveError, EnvironmentAuthorizationError]),
+  }),
+  Rpc.make(ORCHESTRATION_V2_WS_METHODS.cancelThreadArchive, {
+    payload: OrchestrationV2RpcSchemas.cancelThreadArchive.input,
+    success: OrchestrationV2RpcSchemas.cancelThreadArchive.output,
+    error: Schema.Union([OrchestrationV2ThreadArchiveError, EnvironmentAuthorizationError]),
   }),
   Rpc.make(ORCHESTRATION_V2_WS_METHODS.getThreadProjection, {
     payload: OrchestrationV2RpcSchemas.getThreadProjection.input,
@@ -117,7 +127,12 @@ class ThreadCliHttpApi extends HttpApi.make("environment")
 interface ServerRecord {
   readonly commands: Array<OrchestrationV2Command>;
   readonly launches: Array<OrchestrationV2ThreadLaunchInput>;
+  readonly archiveSchedules: Array<OrchestrationV2ScheduleThreadArchiveInput>;
 }
+
+/** The archive scheduler refuses a worktree removal for this thread. */
+const blockedWorktreeThreadId = unpinnedThreadId;
+const archivedRunId = RunId.make("run-archived");
 
 /**
  * Runs `run` against a minimal live server: HTTP shell, descriptor, settings
@@ -140,7 +155,11 @@ const withThreadServer = <A, E, R>(
 ) =>
   Effect.gen(function* () {
     const config = yield* makeConfig(baseDir);
-    const record = yield* Ref.make<ServerRecord>({ commands: [], launches: [] });
+    const record = yield* Ref.make<ServerRecord>({
+      commands: [],
+      launches: [],
+      archiveSchedules: [],
+    });
     const descriptor: ExecutionEnvironmentDescriptor = {
       environmentId: EnvironmentId.make("thread-cli-live-test"),
       label: "Thread CLI test",
@@ -188,13 +207,37 @@ const withThreadServer = <A, E, R>(
           .handle("shellSnapshot", () => Effect.succeed(shellFor(activeThreads)))
           .handle("threadSnapshot", () => unused)
           .handle("threadBoundedSnapshot", ({ params }) => {
+            const projection = input.projection;
+            if (projection !== undefined && params.threadId === projection.thread.id) {
+              // The questions sit before the newest window: only paging finds them.
+              return Effect.succeed({
+                snapshotSequence: 11,
+                projection: { ...projection, turnItems: [], visibleTurnItems: [] },
+                historyCursor: "cursor-before-window",
+                hasMoreHistory: true,
+                latestLocalTurnOrdinal: null,
+              });
+            }
+            if (params.threadId === brokenThreadId) return unused;
             const items = timelineFor(params.threadId);
             if (items === null) return threadNotFound;
             const window = selectRecentTimelineWindow({ items, snapshotSequence: 11 });
+            const archived = emptyProjection(params.threadId, "Archived");
             return Effect.succeed({
               snapshotSequence: 11,
               projection: {
-                ...emptyProjection(params.threadId, "Archived"),
+                ...archived,
+                thread: {
+                  ...archived.thread,
+                  archivedAt: now,
+                  archiveRequest: {
+                    requestId: CommandId.make("archive-request"),
+                    runId: archivedRunId,
+                    worktreePath: null,
+                    requestedAt: "2026-10-04T09:30:00.000Z",
+                    status: "completed" as const,
+                  },
+                },
                 visibleTurnItems: window.items,
               },
               historyCursor: window.nextCursor,
@@ -203,6 +246,21 @@ const withThreadServer = <A, E, R>(
             });
           })
           .handle("threadHistoryPage", ({ params, query }) => {
+            const projection = input.projection;
+            if (projection !== undefined && params.threadId === projection.thread.id) {
+              return Effect.succeed({
+                snapshotSequence: 11,
+                items: projection.turnItems.map((item, position) => ({
+                  position,
+                  visibility: "local" as const,
+                  sourceThreadId: item.threadId,
+                  sourceItemId: item.id,
+                  item,
+                })),
+                nextCursor: null,
+                hasMoreHistory: false,
+              });
+            }
             const items = timelineFor(params.threadId);
             if (items === null) return threadNotFound;
             return Effect.succeed({
@@ -253,15 +311,41 @@ const withThreadServer = <A, E, R>(
           }));
           return launchResult(launch);
         }),
-      [ORCHESTRATION_V2_WS_METHODS.getArchivedShellSnapshot]: () =>
-        Effect.succeed({
-          schemaVersion: 1,
-          snapshotSequence: 11,
-          projects: [],
-          threads: [makeTestThreadShell(archivedThreadId, { archivedAt: now })],
+      [ORCHESTRATION_V2_WS_METHODS.scheduleThreadArchive]: (schedule) =>
+        Effect.gen(function* () {
+          yield* Ref.update(record, (current) => ({
+            ...current,
+            archiveSchedules: [...current.archiveSchedules, schedule],
+          }));
+          if (schedule.removeWorktree === true && schedule.threadId === blockedWorktreeThreadId) {
+            return yield* new OrchestrationV2ThreadArchiveError({
+              threadId: schedule.threadId,
+              message: "The thread's worktree is detached.",
+            });
+          }
+          // Idle test threads archive at once.
+          return {
+            archivedAt: now,
+            request: {
+              requestId: schedule.commandId ?? CommandId.make("server-archive"),
+              runId: null,
+              worktreePath: null,
+              requestedAt: "2026-10-04T10:00:00.000Z",
+              status: "completed" as const,
+            },
+          };
         }),
-      [ORCHESTRATION_V2_WS_METHODS.getThreadProjection]: () =>
-        input.projection === undefined ? unused : Effect.succeed(input.projection),
+      [ORCHESTRATION_V2_WS_METHODS.cancelThreadArchive]: () =>
+        Effect.succeed({ archivedAt: null, request: null }),
+      [ORCHESTRATION_V2_WS_METHODS.getThreadProjection]: ({ threadId }) =>
+        input.projection === undefined
+          ? Effect.fail(
+              new OrchestrationV2GetThreadProjectionError({
+                threadId,
+                message: "Failed to load the thread projection.",
+              }),
+            )
+          : Effect.succeed(input.projection),
       [ORCHESTRATION_V2_WS_METHODS.subscribeShell]: () =>
         Stream.fromEffect(
           Ref.get(record).pipe(
@@ -482,6 +566,203 @@ it.layer(NodeServices.layer)("thread CLI against a running server", (it) => {
               dispatchMode: { type: "start_immediately" },
             },
           );
+        }),
+      );
+    }),
+  );
+
+  it.effect(
+    "reads one archived thread, not the archive, and never dispatches on a failed read",
+    () =>
+      Effect.gen(function* () {
+        const { baseDir, workspaceRoot } = makeDirs("archived-read");
+        yield* withThreadServer(baseDir, { project: makeProject(workspaceRoot) }, (record) =>
+          Effect.gen(function* () {
+            const status = parseJson<{
+              readonly archivedAt: string | null;
+              readonly archiveRequest: {
+                readonly turnId: string | null;
+                readonly removeWorktree: boolean;
+                readonly status: string;
+              } | null;
+            }>(
+              yield* captureStdout([
+                "thread",
+                "archive",
+                archivedThreadId,
+                "--status",
+                "--json",
+                "--base-dir",
+                baseDir,
+              ]),
+            );
+            assert.strictEqual(status.archivedAt, "2026-10-04T10:00:00.000Z");
+            assert.deepEqual(
+              status.archiveRequest && {
+                turnId: status.archiveRequest.turnId,
+                removeWorktree: status.archiveRequest.removeWorktree,
+                status: status.archiveRequest.status,
+              },
+              { turnId: archivedRunId, removeWorktree: false, status: "completed" },
+            );
+
+            const send = (threadId: string) =>
+              captureStdout([
+                "thread",
+                "send",
+                threadId,
+                "--message",
+                "hello",
+                "--json",
+                "--base-dir",
+                baseDir,
+              ]).pipe(
+                Effect.map((output) =>
+                  parseJson<{
+                    readonly error: { readonly code: string; readonly outcome?: string };
+                  }>(output),
+                ),
+              );
+            const missing = yield* send("thread-missing");
+            assert.strictEqual(missing.error.code, "ThreadCliNotFoundError");
+            const broken = yield* send(brokenThreadId);
+            assert.notStrictEqual(broken.error.code, "CliOrchestrationOutcomeUnknownError");
+            assert.notProperty(broken.error, "outcome");
+            assert.lengthOf((yield* Ref.get(record)).commands, 0);
+          }),
+        );
+      }),
+  );
+
+  it.effect("schedules archives through the archive scheduler and surfaces its refusal", () =>
+    Effect.gen(function* () {
+      const { baseDir, workspaceRoot } = makeDirs("archive");
+      yield* withThreadServer(baseDir, { project: makeProject(workspaceRoot) }, (record) =>
+        Effect.gen(function* () {
+          const archive = (threadId: string, ...flags: ReadonlyArray<string>) =>
+            captureStdout([
+              "thread",
+              "archive",
+              threadId,
+              ...flags,
+              "--json",
+              "--base-dir",
+              baseDir,
+            ]).pipe(Effect.map((output) => parseJson<Record<string, unknown>>(output)));
+          const refused = yield* archive(blockedWorktreeThreadId, "--remove-worktree");
+          const refusal = refused.error as { readonly code: string; readonly message: string };
+          assert.deepEqual(
+            { code: refusal.code, message: refusal.message },
+            {
+              code: "CliOrchestrationCommandRejectedError",
+              message: "The thread's worktree is detached.",
+            },
+          );
+          assert.notProperty(refusal, "outcome");
+          const archived = yield* archive(activeThreadId, "--after-turn");
+          const [refusedSchedule, schedule] = (yield* Ref.get(record)).archiveSchedules;
+          assert.deepEqual(
+            {
+              threadId: refusedSchedule?.threadId,
+              removeWorktree: refusedSchedule?.removeWorktree,
+            },
+            { threadId: blockedWorktreeThreadId, removeWorktree: true },
+          );
+          assert.deepEqual(archived, {
+            threadId: activeThreadId,
+            action: "archived",
+            requestId: schedule?.commandId,
+          });
+          assert.deepEqual(
+            { afterTurn: schedule?.afterTurn, removeWorktree: schedule?.removeWorktree },
+            { afterTurn: true, removeWorktree: undefined },
+          );
+          // Neither went through a raw thread.archive.schedule command.
+          assert.lengthOf((yield* Ref.get(record)).commands, 0);
+        }),
+      );
+    }),
+  );
+
+  it.effect("reports a message-mode question as not blocking in status and list", () =>
+    Effect.gen(function* () {
+      const { baseDir, workspaceRoot } = makeDirs("message-mode");
+      const asking = makeTestThreadShell(waitThreadId, {
+        status: "completed",
+        latestRunId: waitRunId,
+        pendingRuntimeRequest: { id: questionRequestId, kind: "user_input", createdAt: now },
+      });
+      const projection = questionProjection(waitThreadId);
+      yield* withThreadServer(
+        baseDir,
+        {
+          project: makeProject(workspaceRoot),
+          extraThreads: [asking],
+          projection: {
+            ...projection,
+            runtimeRequests: projection.runtimeRequests.map((request) => ({
+              ...request,
+              responseCapability: { type: "message" as const },
+            })),
+          },
+        },
+        () =>
+          Effect.gen(function* () {
+            const status = parseJson<{ readonly hasPendingBlockingUserInput: boolean }>(
+              yield* captureStdout([
+                "thread",
+                "status",
+                waitThreadId,
+                "--json",
+                "--base-dir",
+                baseDir,
+              ]),
+            );
+            assert.isFalse(status.hasPendingBlockingUserInput);
+            const listed = parseJson<{
+              readonly threads: ReadonlyArray<{
+                readonly id: string;
+                readonly hasPendingUserInput: boolean;
+                readonly hasPendingBlockingUserInput: boolean;
+              }>;
+            }>(yield* captureStdout(["thread", "list", "--json", "--base-dir", baseDir]));
+            const entry = listed.threads.find((thread) => thread.id === waitThreadId);
+            assert.deepEqual(
+              entry && {
+                pending: entry.hasPendingUserInput,
+                blocking: entry.hasPendingBlockingUserInput,
+              },
+              { pending: true, blocking: false },
+            );
+          }),
+      );
+    }),
+  );
+
+  it.effect("reports a failed projection read as a request error, not an unknown outcome", () =>
+    Effect.gen(function* () {
+      const { baseDir, workspaceRoot } = makeDirs("read-error");
+      yield* withThreadServer(baseDir, { project: makeProject(workspaceRoot) }, (record) =>
+        Effect.gen(function* () {
+          const output = parseJson<{
+            readonly error: { readonly code: string; readonly outcome?: string };
+          }>(
+            yield* captureStdout([
+              "thread",
+              "input",
+              "respond",
+              activeThreadId,
+              questionRequestId,
+              "--answers-json",
+              '{"ship":"yes"}',
+              "--json",
+              "--base-dir",
+              baseDir,
+            ]),
+          );
+          assert.strictEqual(output.error.code, "CliOrchestrationRequestError");
+          assert.notProperty(output.error, "outcome");
+          assert.lengthOf((yield* Ref.get(record)).commands, 0);
         }),
       );
     }),
