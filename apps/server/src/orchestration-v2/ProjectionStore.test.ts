@@ -35,6 +35,7 @@ import {
   buildBoundedThreadProjection,
   decodeThreadHistoryCursor,
   selectHistoryPageFromCursor,
+  selectHistoryPageRunStatuses,
   THREAD_HISTORY_PAGE_POLICY,
 } from "./threadHistoryPaging.ts";
 
@@ -746,6 +747,158 @@ it.layer(TestLayer)("ProjectionStoreV2", (it) => {
       }
       assert.isNull(cursor);
       assert.deepEqual(loaded, allIds);
+    }),
+  );
+
+  // Fork: history pages carry the statuses of their older runs, which the
+  // bounded cold-open window leaves out of `runs`.
+  it.effect("history pages carry run statuses missing from the bounded window", () =>
+    Effect.gen(function* () {
+      const projectionStore = yield* ProjectionStore.ProjectionStoreV2;
+      const sql = yield* SqlClient.SqlClient;
+      const now = yield* DateTime.now;
+      const nowIso = DateTime.formatIso(now);
+      const prefix = "history-page-run-statuses";
+      const threadId = ThreadId.make(`thread:${prefix}`);
+      yield* projectionStore.apply({
+        id: EventId.make(`event:${prefix}:thread`),
+        type: "thread.created",
+        threadId,
+        occurredAt: now,
+        payload: {
+          createdBy: "user",
+          creationSource: "web",
+          id: threadId,
+          projectId: ProjectId.make(`project:${prefix}`),
+          title: "History page run statuses",
+          providerInstanceId,
+          modelSelection,
+          runtimeMode: "full-access",
+          interactionMode: "default",
+          branch: null,
+          worktreePath: null,
+          activeProviderThreadId: null,
+          lineage: { parentThreadId: null, relationshipToParent: null, rootThreadId: threadId },
+          forkedFrom: null,
+          createdAt: now,
+          updatedAt: now,
+          archivedAt: null,
+          settledOverride: null,
+          settledAt: null,
+          lastVisitedAt: null,
+          deletedAt: null,
+        },
+      });
+      const runIdForTurn = (turn: number) => RunId.make(`run:${prefix}:${turn}`);
+      for (let turn = 1; turn <= 15; turn += 1) {
+        const runId = runIdForTurn(turn);
+        const nodeId = NodeId.make(`node:${prefix}:${turn}`);
+        yield* projectionStore.apply({
+          id: EventId.make(`event:${prefix}:run-${turn}`),
+          type: "run.created",
+          threadId,
+          runId,
+          nodeId,
+          driver,
+          occurredAt: now,
+          payload: {
+            id: runId,
+            threadId,
+            ordinal: turn,
+            providerInstanceId,
+            modelSelection,
+            providerThreadId: ProviderThreadId.make(`provider-thread:${prefix}`),
+            userMessageId: MessageId.make(`message:${prefix}:${turn}`),
+            rootNodeId: nodeId,
+            activeAttemptId: null,
+            status: turn === 1 ? "interrupted" : "completed",
+            requestedAt: now,
+            startedAt: now,
+            completedAt: now,
+            checkpointId: null,
+            contextHandoffId: null,
+          },
+        });
+        const rows = [0, 1].map((offset) => {
+          const ordinal = (turn - 1) * 2 + offset + 1;
+          const id = `item:${prefix}:${ordinal}`;
+          const itemRunId = offset === 0 ? null : runId;
+          const base = {
+            id,
+            threadId,
+            runId: itemRunId,
+            nodeId: null,
+            providerThreadId: null,
+            providerTurnId: null,
+            nativeItemRef: null,
+            parentItemId: null,
+            ordinal,
+            status: "completed",
+            title: null,
+            startedAt: nowIso,
+            completedAt: nowIso,
+            updatedAt: nowIso,
+          };
+          const item =
+            offset === 0
+              ? {
+                  ...base,
+                  type: "user_message",
+                  createdBy: "user",
+                  creationSource: "web",
+                  messageId: `message:${prefix}:${turn}`,
+                  inputIntent: "turn_start",
+                  text: `Turn ${turn}`,
+                  attachments: [],
+                }
+              : { ...base, type: "command_execution", input: "command", output: "ok", exitCode: 0 };
+          return {
+            turn_item_id: id,
+            thread_id: threadId,
+            run_id: itemRunId,
+            node_id: null,
+            provider_thread_id: null,
+            provider_turn_id: null,
+            parent_item_id: null,
+            ordinal,
+            type: item.type,
+            status: "completed",
+            updated_at: nowIso,
+            payload_json: encodeUnknownJsonString(item),
+          };
+        });
+        yield* sql`INSERT INTO orchestration_v2_projection_turn_items ${sql.insert(rows)}`;
+      }
+
+      const initial = yield* projectionStore.getThreadSnapshotWindow(threadId, {
+        rowLimit: 77,
+        userTurnLimit: 10,
+      });
+      const bounded = buildBoundedThreadProjection({
+        projection: initial.projection,
+        snapshotSequence: 0,
+      });
+      const boundedRunIds = new Set(bounded.projection.runs.map((run) => run.id));
+      assert.isFalse(boundedRunIds.has(runIdForTurn(1)));
+      assert.isFalse(boundedRunIds.has(runIdForTurn(2)));
+      assert.isNotNull(bounded.historyCursor);
+      const anchor = decodeThreadHistoryCursor(bounded.historyCursor!);
+      const older = yield* projectionStore.getThreadSnapshotWindow(threadId, {
+        rowLimit: 77,
+        userTurnLimit: 20,
+        anchorItemId: TurnItemId.make(anchor.si),
+        anchorThreadId: ThreadId.make(anchor.st),
+      });
+      const page = selectHistoryPageFromCursor({
+        items: older.projection.visibleTurnItems,
+        cursor: bounded.historyCursor!,
+        snapshotSequence: 0,
+      });
+      const runStatuses = selectHistoryPageRunStatuses(older.projection, page.items);
+      const pageRunIds = new Set(page.items.flatMap((row) => row.item.runId ?? []));
+      assert.deepEqual(runStatuses.map((run) => run.id).toSorted(), [...pageRunIds].toSorted());
+      assert.deepInclude(runStatuses, { id: runIdForTurn(1), status: "interrupted" });
+      assert.deepInclude(runStatuses, { id: runIdForTurn(2), status: "completed" });
     }),
   );
 

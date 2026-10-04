@@ -168,7 +168,7 @@ import {
   useState,
 } from "react";
 import { flushSync } from "react-dom";
-import { useLocation, useNavigate, useParams } from "@tanstack/react-router";
+import { useLocation, useNavigate } from "@tanstack/react-router";
 import { assistantCitationFromLocation } from "../lib/assistantCitationNavigation";
 import { isMacPlatform } from "../lib/utils";
 import type { AssistantCitationSourceAnchor } from "~/lib/assistantTextSelection";
@@ -363,11 +363,7 @@ import {
   deriveLogicalProjectKeyFromSettings,
   selectProjectGroupingSettings,
 } from "../logicalProject";
-import {
-  buildDraftThreadRouteParams,
-  buildThreadRouteParams,
-  resolveThreadRouteRef,
-} from "../threadRoutes";
+import { buildDraftThreadRouteParams, buildThreadRouteParams } from "../threadRoutes";
 import {
   isSameSidebarThreadRef,
   useSidebarPendingFileDropStore,
@@ -462,7 +458,11 @@ import type { AssistantCitationRequest } from "./chat/AssistantCitationSource";
 import { MessagesTimeline, type MessagesTimelineHistoryControls } from "./chat/MessagesTimeline";
 import { ProviderSubagentBar } from "./chat/ProviderSubagentBar";
 import { getTriggerDisplayModelName } from "./chat/providerIconUtils";
-import { resolveTimelineIsAtEnd, worktreeSetupAgentStarted } from "./chat/MessagesTimeline.logic";
+import {
+  deriveFinalResponseRunIdsKey,
+  resolveTimelineIsAtEnd,
+  worktreeSetupAgentStarted,
+} from "./chat/MessagesTimeline.logic";
 import {
   overlayComposerIsResting,
   resolveComposerTimelineInset,
@@ -576,7 +576,7 @@ import { useLocalStorage } from "~/hooks/useLocalStorage";
 import { useThreadGroupCatalog } from "../hooks/useThreadGroups";
 import { useComposerHandleContext } from "../composerHandleContext";
 import { useThreadPaneId } from "./thread-split/threadPaneContext";
-import { openThreadInActivePane } from "./thread-split/threadOpenTarget";
+import { useOpenThreadInPane } from "./thread-split/useOpenThreadInPane";
 import { isThreadPaneActive, useThreadSplitStore } from "./thread-split/threadSplitStore";
 import {
   awaitAttachmentUploads,
@@ -1585,6 +1585,7 @@ export default function ChatView(props: ChatViewProps) {
   // active pane so shortcuts never fire in both panes at once.
   const threadPaneId = useThreadPaneId();
   const isSecondaryPane = threadPaneId === "secondary";
+  const openThreadInPane = useOpenThreadInPane();
   const splitSecondaryThreadKey = useThreadSplitStore((state) =>
     state.splitMounted && state.secondaryRef !== null ? scopedThreadKey(state.secondaryRef) : null,
   );
@@ -1787,14 +1788,6 @@ export default function ChatView(props: ChatViewProps) {
   );
   const timestampFormat = settings.timestampFormat;
   const navigate = useNavigate();
-  // The router's (primary) thread; pane-local routeThreadRef is the pane's own.
-  const { environmentId: routerEnvironmentId, threadId: routerThreadId } = useParams({
-    strict: false,
-  });
-  const routerThreadRef = useMemo(
-    () => resolveThreadRouteRef({ environmentId: routerEnvironmentId, threadId: routerThreadId }),
-    [routerEnvironmentId, routerThreadId],
-  );
   const citationLocation = useLocation({
     select: (location) => ({
       href: location.href,
@@ -2146,16 +2139,11 @@ export default function ChatView(props: ChatViewProps) {
     () => (serverProjection === null ? null : deriveThreadActivityRun(serverProjection)),
     [serverProjection],
   );
-  // Fork: completed runs, including those a run-fork inherits, feed the
-  // final-response rail. Keyed by content so the set (and the timeline rows)
-  // only change when a run completes, not per event. Runless v1-imported
+  // Fork: final-answer runs feed the final-response rail. Runless v1-imported
   // messages carry no terminal state and are deliberately left unclassified.
   const completedRunIdsKey = useMemo(
-    () =>
-      [...(serverProjection?.inheritedRuns ?? []), ...(serverProjection?.runs ?? [])]
-        .flatMap((run) => (run.status === "completed" ? [run.id] : []))
-        .join("\n"),
-    [serverProjection?.inheritedRuns, serverProjection?.runs],
+    () => deriveFinalResponseRunIdsKey(serverProjection),
+    [serverProjection],
   );
   const completedRunIds = useMemo<ReadonlySet<RunId>>(
     () =>
@@ -7236,16 +7224,9 @@ export default function ChatView(props: ChatViewProps) {
   // link to the other pane's thread focuses it instead of folding the split.
   const onOpenRelatedThread = useCallback(
     (threadId: ThreadId) => {
-      const targetRef = scopeThreadRef(environmentId, threadId);
-      openThreadInActivePane({
-        targetRef,
-        routeThreadRef: routerThreadRef,
-        paneOverride: threadPaneId,
-        navigateToPrimary: () =>
-          navigate({ to: "/$environmentId/$threadId", params: buildThreadRouteParams(targetRef) }),
-      });
+      openThreadInPane(scopeThreadRef(environmentId, threadId));
     },
-    [environmentId, navigate, routerThreadRef, threadPaneId],
+    [environmentId, openThreadInPane],
   );
 
   const backgroundWorkBannerItem = useMemo<ComposerBannerStackItem | null>(() => {
@@ -8354,6 +8335,7 @@ export default function ChatView(props: ChatViewProps) {
   const onForkFromRun = useCallback(
     async (input: { readonly sourceThreadId: ThreadId; readonly runId: RunId }) => {
       if (!activeThread || activeEnvironmentUnavailable) return;
+      const paneThreadKey = routeThreadKey;
       const targetThreadId = newThreadId();
       const targetThreadRef = scopeThreadRef(environmentId, targetThreadId);
       const result = await forkThreadFromRun({
@@ -8383,17 +8365,22 @@ export default function ChatView(props: ChatViewProps) {
         );
         return;
       }
-      await navigate({
-        to: "/$environmentId/$threadId",
-        params: buildThreadRouteParams(targetThreadRef),
-      });
+      // Split view: the secondary pane was closed or retargeted while the fork
+      // was pending, so leave the fork in the sidebar instead of opening it.
+      if (isSecondaryPane) {
+        const secondaryRef = useThreadSplitStore.getState().secondaryRef;
+        if (secondaryRef === null || scopedThreadKey(secondaryRef) !== paneThreadKey) return;
+      }
+      await openThreadInPane(targetThreadRef).completion;
     },
     [
       activeEnvironmentUnavailable,
       activeThread,
       environmentId,
       forkThreadFromRun,
-      navigate,
+      isSecondaryPane,
+      openThreadInPane,
+      routeThreadKey,
       setThreadError,
     ],
   );

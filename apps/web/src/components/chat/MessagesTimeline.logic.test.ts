@@ -34,6 +34,7 @@ import {
   workEntryDisplayLabel,
   workEntryReadOutput,
   workEntryIsVisibleInGroup,
+  deriveFinalResponseRunIdsKey,
 } from "./MessagesTimeline.logic";
 import type { WorkLogEntry } from "../../session-logic";
 import { deriveTimelineMinimapItems } from "./MessagesTimeline.minimap";
@@ -2934,6 +2935,30 @@ describe("deriveMessagesTimelineRows", () => {
         ["user-2-entry", "Still working."],
         ["user-3-entry", "Third answer."],
       ]);
+    });
+
+    it("treats an inherited fork-point run still waiting as final", () => {
+      // A run-fork snapshot taken while the source run awaited checkpoint
+      // capture: inherited statuses are never updated live, so `waiting`
+      // must already count. A local `waiting` run is not final yet.
+      const key = deriveFinalResponseRunIdsKey({
+        inheritedRuns: [
+          { id: RunId.make("run-1"), status: "waiting" },
+          { id: RunId.make("run-2"), status: "interrupted" },
+        ],
+        runs: [{ id: RunId.make("run-3"), status: "waiting" }],
+      });
+      const rows = deriveMessagesTimelineRows({
+        timelineEntries,
+        completedRunIds: new Set(key.split("\n").map((id) => RunId.make(id))),
+        latestRun: null,
+        isWorking: false,
+        activeTurnStartedAt: null,
+        turnDiffSummaries: [],
+        supportsConversationRollback: false,
+      });
+
+      expect(finalIds(rows)).toEqual(["final-1"]);
     });
 
     it("withholds the final marker while the run is still in progress", () => {

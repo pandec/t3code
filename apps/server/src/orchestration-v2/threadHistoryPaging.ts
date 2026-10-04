@@ -1,5 +1,6 @@
 import type {
   OrchestrationV2ProjectedTurnItem,
+  OrchestrationV2ThreadHistoryPage,
   OrchestrationV2ThreadProjection,
   OrchestrationV2TurnItem,
   ThreadId,
@@ -529,4 +530,20 @@ export function buildBoundedThreadProjection(input: {
     latestLocalTurnOrdinal,
     payloadBudgetExceeded: bytesOfJson(projection) > policy.maxEncodedBytes,
   };
+}
+
+/**
+ * Fork: statuses of the runs a history page's items belong to, read from the
+ * anchored window the page was cut from (its cohort runs cover local items,
+ * its inherited runs cover ancestor items).
+ */
+export function selectHistoryPageRunStatuses(
+  projection: OrchestrationV2ThreadProjection,
+  items: ReadonlyArray<OrchestrationV2ProjectedTurnItem>,
+): NonNullable<OrchestrationV2ThreadHistoryPage["runStatuses"]> {
+  const runIds = new Set(items.flatMap((row) => (row.item.runId === null ? [] : [row.item.runId])));
+  if (runIds.size === 0) return [];
+  return [...(projection.inheritedRuns ?? []), ...projection.runs]
+    .filter((run) => runIds.has(run.id))
+    .map(({ id, status }) => ({ id, status }));
 }

@@ -38,6 +38,7 @@ import {
   type MessageId,
   type WorktreeSetupSnapshot,
   type OrchestrationV2ProjectedTurnItem,
+  type OrchestrationV2ThreadProjection,
   type RunAttemptId,
   RunId,
 } from "@t3tools/contracts";
@@ -1177,6 +1178,30 @@ function settleSupersededReasoning(entries: ReadonlyArray<TimelineEntry>) {
     }
     return settled;
   });
+}
+
+/**
+ * Fork: newline-joined ids of the runs whose terminal assistant message is a
+ * final answer (final-response rail). Content-keyed so callers only rebuild
+ * rows when the set changes. Local runs count once `completed`; their status
+ * arrives live. Runs held in `inheritedRuns` (fork ancestors, older history
+ * pages) are a read-time snapshot, so a fork-point run still `waiting`
+ * (provider-finished, output already copied into the fork) counts as final.
+ */
+type RunStatusEntry = NonNullable<OrchestrationV2ThreadProjection["inheritedRuns"]>[number];
+export function deriveFinalResponseRunIdsKey(
+  projection: {
+    readonly runs: ReadonlyArray<RunStatusEntry>;
+    readonly inheritedRuns?: ReadonlyArray<RunStatusEntry> | undefined;
+  } | null,
+): string {
+  if (projection === null) return "";
+  return [
+    ...(projection.inheritedRuns ?? []).flatMap((run) =>
+      run.status === "completed" || run.status === "waiting" ? [run.id] : [],
+    ),
+    ...projection.runs.flatMap((run) => (run.status === "completed" ? [run.id] : [])),
+  ].join("\n");
 }
 
 export function deriveMessagesTimelineRows(input: {

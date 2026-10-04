@@ -1749,8 +1749,11 @@ export const OrchestrationV2ThreadProjection = Schema.Struct({
   contextTransfers: Schema.Array(OrchestrationV2ContextTransfer),
   visibleTurnItems: Schema.Array(OrchestrationV2ProjectedTurnItem),
   updatedAt: Schema.DateTimeUtc,
-  // Fork: statuses of ancestor runs whose items a run-fork inherits, so clients
-  // can classify inherited final answers. Settled before the fork, never stale.
+  // Fork: statuses of runs whose items the client holds outside `runs`: the
+  // ancestor runs a run-fork inherits, plus runs folded in from older history
+  // pages. Taken when the snapshot or page is read and not updated live; a
+  // fork-point run may still be `waiting` (provider-finished), which clients
+  // treat as final.
   inheritedRuns: Schema.optional(
     Schema.Array(Schema.Struct({ id: RunId, status: OrchestrationV2RunStatus })),
   ),
@@ -3327,6 +3330,11 @@ export const OrchestrationV2ThreadHistoryPage = Schema.Struct({
   items: Schema.Array(OrchestrationV2ProjectedTurnItem),
   nextCursor: Schema.NullOr(TrimmedNonEmptyString),
   hasMoreHistory: Schema.Boolean,
+  // Fork: statuses of the runs the page's items belong to, so clients can
+  // classify older final answers that fall outside the bounded snapshot.
+  runStatuses: Schema.optional(
+    Schema.Array(Schema.Struct({ id: RunId, status: OrchestrationV2RunStatus })),
+  ),
 });
 export type OrchestrationV2ThreadHistoryPage = typeof OrchestrationV2ThreadHistoryPage.Type;
 
