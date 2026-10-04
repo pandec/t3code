@@ -75,7 +75,7 @@ import {
   type ScopedThreadRef,
   type ThreadId,
   type ThreadLinkedPullRequest,
-  type RunId,
+  RunId,
   type RuntimeRequestId,
   type KeybindingCommand,
   PROVIDER_SEND_TURN_MAX_ATTACHMENTS,
@@ -2132,6 +2132,24 @@ export default function ChatView(props: ChatViewProps) {
   const serverActivityRun = useMemo(
     () => (serverProjection === null ? null : deriveThreadActivityRun(serverProjection)),
     [serverProjection],
+  );
+  // Fork: completed runs feed the final-response rail. Keyed by content so the
+  // set (and the timeline rows) only change when a run completes, not per event.
+  const completedRunIdsKey = useMemo(
+    () =>
+      (serverProjection?.runs ?? [])
+        .flatMap((run) => (run.status === "completed" ? [run.id] : []))
+        .join("\n"),
+    [serverProjection?.runs],
+  );
+  const completedRunIds = useMemo<ReadonlySet<RunId>>(
+    () =>
+      new Set(
+        completedRunIdsKey.length > 0
+          ? completedRunIdsKey.split("\n").map((id) => RunId.make(id))
+          : [],
+      ),
+    [completedRunIdsKey],
   );
   const serverRuntime = useMemo(
     () => (serverProjection === null ? null : deriveThreadRuntime(serverProjection)),
@@ -11375,6 +11393,7 @@ export default function ChatView(props: ChatViewProps) {
                 runs={paintOnlyDisplayedTimeline ? [] : (serverProjection?.runs ?? [])}
                 latestRun={paintOnlyDisplayedTimeline ? null : activeActivityRun}
                 runningRunId={paintOnlyDisplayedTimeline ? null : activeRunningTurnId}
+                {...(!paintOnlyDisplayedTimeline ? { completedRunIds } : {})}
                 {...(!paintOnlyDisplayedTimeline ? { steerPendingMessageIds } : {})}
                 turnDiffSummaries={
                   paintOnlyDisplayedTimeline ? EMPTY_HELD_TURN_DIFF_SUMMARIES : turnDiffSummaries

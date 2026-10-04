@@ -557,6 +557,8 @@ type MessagesTimelineRowContent =
       projectedItem?: OrchestrationV2ProjectedTurnItem;
       durationStart: string;
       showAssistantMeta: boolean;
+      /** Fork: terminal assistant message of a completed run (final-response rail). */
+      isFinalAssistantResponse: boolean;
       showAssistantCopyButton: boolean;
       assistantCopyStreaming: boolean;
       assistantTurnDiffSummary?: TurnDiffSummary | undefined;
@@ -1191,6 +1193,11 @@ export function deriveMessagesTimelineRows(input: {
    */
   runlessWorkActive?: boolean;
   activeTurnStartedAt?: string | null;
+  /**
+   * Fork: runs that ended with status `completed`. Their terminal assistant
+   * message is the final answer; interrupted, failed or cancelled runs never are.
+   */
+  completedRunIds?: ReadonlySet<RunId>;
   turnDiffSummaries: ReadonlyArray<TurnDiffSummary>;
   supportsConversationRollback: boolean;
   /** Task ids of subagents still working, used by the active tool indicator. */
@@ -1647,6 +1654,10 @@ export function deriveMessagesTimelineRows(input: {
         : { projectedItem: timelineEntry.projectedItem }),
       durationStart,
       showAssistantMeta,
+      isFinalAssistantResponse:
+        showAssistantMeta &&
+        timelineEntry.message.runId != null &&
+        input.completedRunIds?.has(timelineEntry.message.runId) === true,
       showAssistantCopyButton: showAssistantMeta,
       assistantCopyStreaming: timelineEntry.message.streaming || assistantResponseStillInProgress,
       assistantTurnDiffSummary:
@@ -2028,6 +2039,7 @@ function isRowUnchanged(a: MessagesTimelineRow, b: MessagesTimelineRow): boolean
         a.projectedItem === bm.projectedItem &&
         a.durationStart === bm.durationStart &&
         a.showAssistantMeta === bm.showAssistantMeta &&
+        a.isFinalAssistantResponse === bm.isFinalAssistantResponse &&
         a.showAssistantCopyButton === bm.showAssistantCopyButton &&
         a.assistantCopyStreaming === bm.assistantCopyStreaming &&
         a.assistantTurnDiffSummary === bm.assistantTurnDiffSummary &&
