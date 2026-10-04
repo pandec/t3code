@@ -51,7 +51,9 @@ import * as References from "effect/References";
 import * as Schema from "effect/Schema";
 import { Argument, Command, Flag, GlobalFlag, Param, Primitive } from "effect/unstable/cli";
 import { FetchHttpClient } from "effect/unstable/http";
+import * as NodeOS from "node:os";
 
+import { resolveAttachmentPath } from "../attachmentStore.ts";
 import * as EnvironmentAuth from "../auth/EnvironmentAuth.ts";
 import * as ServerConfig from "../config.ts";
 import { expandHomePath } from "../pathExpansion.ts";
@@ -71,6 +73,8 @@ import {
   fetchLiveEnvironmentDescriptor,
   fetchLiveOrchestrationShell,
   fetchLiveServerSettings,
+  fetchLiveThreadBoundedSnapshot,
+  fetchLiveThreadHistoryPage,
   isProcessAlive,
   resolveCliLiveServerReadTimeouts,
   withResolvedLiveOrchestrationServer,
@@ -96,6 +100,14 @@ import {
   SessionCliServerUnsupportedError,
 } from "./session.ts";
 import { resolveThreadGroup } from "./threadGroups.ts";
+import {
+  collectThreadMessages,
+  parseThreadMessagesCursor,
+  renderThreadMessagesText,
+  stripTerminalControlCharacters,
+  THREAD_MESSAGE_ROLES,
+  threadMessagesReport,
+} from "./threadMessages.ts";
 import { THREAD_CLI_STATES, threadCliState, threadHasActiveTurn } from "./threadState.ts";
 import {
   type ThreadInputResponseMode,
@@ -165,27 +177,6 @@ export class ThreadCliInputRequestNotPendingError extends Schema.TaggedError<Thr
 ) {
   override get message(): string {
     return `Thread '${this.threadId}' has no unanswered question '${this.requestId}'. List them with \`t3 thread input list ${this.threadId}\`.`;
-  }
-}
-
-export class ThreadCliMessageCursorError extends Schema.TaggedError<ThreadCliMessageCursorError>()(
-  "ThreadCliMessageCursorError",
-  {
-    operation: Schema.Literal("fetchThreadMessages"),
-    threadId: Schema.String,
-    cursor: Schema.String,
-    reason: Schema.Literals(["empty", "not-found", "changed"]),
-  },
-) {
-  override get message(): string {
-    switch (this.reason) {
-      case "empty":
-        return "The --before cursor must not be empty.";
-      case "not-found":
-        return `No message '${this.cursor}' exists in thread '${this.threadId}' to page from. The cursor may be stale; rerun without --before.`;
-      case "changed":
-        return `The history of thread '${this.threadId}' changed while reading it. Rerun the command.`;
-    }
   }
 }
 
@@ -500,25 +491,6 @@ const threadGroupFlag = Flag.String("group").pipe(
   Flag.optional,
 );
 
-// One server request returns at most 500 messages; older history pages via
-// the `before` cursor.
-const THREAD_MESSAGES_PAGE_LIMIT = 500;
-
-export interface ThreadMessagesMachine {
-  readonly hostname: string;
-  readonly environmentId: string | null;
-  readonly environmentLabel: string | null;
-  readonly platform: string | null;
-}
-
-// Transcript text carries untrusted content (assistant output, titles,
-// attachment names) straight to a terminal, so strip control characters that
-// could smuggle escape sequences; newlines and tabs stay. JSON mode needs no
-// such pass because JSON.stringify escapes them.
-const stripTerminalControlCharacters = (text: string): string =>
-  // eslint-disable-next-line no-control-regex
-  text.replace(/[\u0000-\u0008\u000B-\u001F\u007F-\u009F]/g, "");
-
 export class ThreadCliLaunchError extends Schema.TaggedError<ThreadCliLaunchError>()(
   "ThreadCliLaunchError",
   {
@@ -631,6 +603,7 @@ interface ThreadCliInput {
   readonly token: string;
   readonly timeouts: CliLiveServerReadTimeouts;
   readonly settingsPath: string;
+  readonly attachmentsDir: string;
 }
 
 const runThreadCli = Effect.fn("runThreadCli")(function* <A, E, R>(
@@ -650,7 +623,14 @@ const runThreadCli = Effect.fn("runThreadCli")(function* <A, E, R>(
       const timeouts = yield* resolveCliLiveServerReadTimeouts(flags.timeoutMs ?? Option.none());
       const outcome = yield* withResolvedLiveOrchestrationServer(
         { environmentAuth, config, label: "t3 thread cli", timeouts },
-        (live, token) => run({ live, token, timeouts, settingsPath: config.settingsPath }),
+        (live, token) =>
+          run({
+            live,
+            token,
+            timeouts,
+            settingsPath: config.settingsPath,
+            attachmentsDir: config.attachmentsDir,
+          }),
       );
       if (Option.isNone(outcome)) {
         return yield* new CliOrchestrationServerUnavailableError({
@@ -1825,6 +1805,107 @@ export const threadArchiveCommand = Command.make("archive", {
   ),
 );
 
+const liveThreadMessagesFetchDeps = (input: ThreadCliInput) => ({
+  fetchLatest: (threadId: ThreadId) =>
+    fetchLiveThreadBoundedSnapshot(input.live.origin, input.token, threadId, input.timeouts).pipe(
+      Effect.map((snapshot) => ({
+        rows: snapshot.projection.visibleTurnItems,
+        snapshotSequence: snapshot.snapshotSequence,
+        olderCursor: snapshot.hasMoreHistory ? snapshot.historyCursor : null,
+      })),
+    ),
+  fetchOlder: (threadId: ThreadId, cursor: string) =>
+    fetchLiveThreadHistoryPage(
+      input.live.origin,
+      input.token,
+      { threadId, cursor },
+      input.timeouts,
+    ).pipe(
+      Effect.map((page) => ({
+        rows: page.items,
+        snapshotSequence: page.snapshotSequence,
+        olderCursor: page.hasMoreHistory ? page.nextCursor : null,
+      })),
+    ),
+});
+
+const threadMessagesCommand = Command.make("messages", {
+  ...projectLocationFlags,
+  threadId: threadIdArgument,
+  limit: Flag.Int("limit").pipe(
+    Flag.withSchema(Schema.Int.check(Schema.isGreaterThan(0))),
+    Flag.withDescription("Only the newest N messages (counted before role filtering)."),
+    Flag.optional,
+  ),
+  before: Flag.String("before").pipe(
+    Flag.withDescription("Only messages older than this cursor (nextBefore of an earlier call)."),
+    Flag.optional,
+  ),
+  role: Flag.Literals("role", THREAD_MESSAGE_ROLES).pipe(
+    Flag.withDescription(
+      "Only messages with this role; reasoning is the agent's thinking. Default: user and assistant.",
+    ),
+    Flag.optional,
+  ),
+  json: jsonFlag,
+}).pipe(
+  Command.withDescription(
+    "Print a thread's conversation messages, without tool calls. Includes archived threads.",
+  ),
+  Command.withHandler((flags) =>
+    runThreadCli(flags, flags.json, (input) =>
+      Effect.gen(function* () {
+        const rawThreadId = requestedThreadId(flags.threadId);
+        if (rawThreadId.length === 0) return yield* threadNotFound(flags.threadId);
+        const threadId = ThreadId.make(rawThreadId);
+        const before = Option.isSome(flags.before)
+          ? yield* parseThreadMessagesCursor(rawThreadId, flags.before.value)
+          : null;
+        // Best effort: the transcript does not depend on environment identity.
+        const descriptor = yield* Effect.option(
+          fetchLiveEnvironmentDescriptor(input.live.origin, input.timeouts),
+        );
+        const window = yield* collectThreadMessages(
+          { threadId, before, limit: Option.getOrNull(flags.limit) },
+          liveThreadMessagesFetchDeps(input),
+        );
+        const thread =
+          input.live.shell.threads.find(
+            (candidate) => candidate.id === threadId && candidate.archivedAt === null,
+          ) ?? null;
+        const fileSystem = yield* FileSystem.FileSystem;
+        const existingAttachmentPaths = new Set<string>();
+        for (const message of window.messages) {
+          for (const attachment of message.attachments) {
+            const path = resolveAttachmentPath({
+              attachmentsDir: input.attachmentsDir,
+              attachment,
+            });
+            if (path === null || existingAttachmentPaths.has(path)) continue;
+            const exists = yield* fileSystem.exists(path).pipe(Effect.orElseSucceed(() => false));
+            if (exists) existingAttachmentPaths.add(path);
+          }
+        }
+        const report = threadMessagesReport({
+          threadId,
+          thread,
+          window,
+          role: Option.getOrNull(flags.role),
+          machine: {
+            hostname: NodeOS.hostname(),
+            environmentId: Option.isSome(descriptor) ? descriptor.value.environmentId : null,
+            environmentLabel: Option.isSome(descriptor) ? descriptor.value.label : null,
+            platform: Option.isSome(descriptor) ? descriptor.value.platform.os : null,
+          },
+          attachmentsDir: input.attachmentsDir,
+          attachmentFileExists: (path) => existingAttachmentPaths.has(path),
+        });
+        yield* Console.log(flags.json ? jsonOutput(report) : renderThreadMessagesText(report));
+      }),
+    ),
+  ),
+);
+
 export const threadCommand = Command.make("thread").pipe(
   Command.withDescription("Manage threads and agent turns."),
   Command.withSubcommands([
@@ -1837,6 +1918,7 @@ export const threadCommand = Command.make("thread").pipe(
     makeThreadPinCommand(false),
     threadInterruptCommand,
     threadStatusCommand,
+    threadMessagesCommand,
     threadWaitCommand,
     threadInputCommand,
     threadArchiveCommand,

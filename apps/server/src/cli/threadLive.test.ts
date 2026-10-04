@@ -11,10 +11,13 @@ import {
   EnvironmentAuthorizationError,
   EnvironmentHttpApi,
   EnvironmentId,
+  EnvironmentResourceNotFoundError,
   type ExecutionEnvironmentDescriptor,
+  MessageId,
   ORCHESTRATION_V2_WS_METHODS,
   type OrchestrationProjectShell,
   type OrchestrationV2Command,
+  type OrchestrationV2ProjectedTurnItem,
   OrchestrationV2DispatchCommandError,
   OrchestrationV2GetShellSnapshotError,
   OrchestrationV2GetThreadProjectionError,
@@ -46,6 +49,10 @@ import * as HttpApiBuilder from "effect/unstable/httpapi/HttpApiBuilder";
 import { Rpc, RpcGroup, RpcSerialization, RpcServer } from "effect/unstable/rpc";
 
 import * as ServerConfig from "../config.ts";
+import {
+  selectHistoryPageFromCursor,
+  selectRecentTimelineWindow,
+} from "../orchestration-v2/threadHistoryPaging.ts";
 import {
   makePersistedServerRuntimeState,
   persistServerRuntimeState,
@@ -126,6 +133,8 @@ const withThreadServer = <A, E, R>(
     /** Streamed after the shell subscription's snapshot. */
     readonly shellUpdates?: ReadonlyArray<OrchestrationV2ShellStreamItem>;
     readonly projection?: OrchestrationV2ThreadProjection;
+    /** Timeline served for `archivedThreadId` by the bounded snapshot and history routes. */
+    readonly timeline?: ReadonlyArray<OrchestrationV2ProjectedTurnItem>;
   },
   run: (record: Ref.Ref<ServerRecord>) => Effect.Effect<A, E, R>,
 ) =>
@@ -161,6 +170,15 @@ const withThreadServer = <A, E, R>(
       archivedThreads: [],
     });
     const unused = Effect.die("unused");
+    const timelineFor = (threadId: ThreadId) =>
+      threadId === archivedThreadId ? (input.timeline ?? []) : null;
+    const threadNotFound = Effect.fail(
+      new EnvironmentResourceNotFoundError({
+        code: "not_found",
+        reason: "thread_not_found",
+        traceId: "thread-cli-live-test",
+      }),
+    );
     const httpLayer = Layer.mergeAll(
       HttpApiBuilder.group(EnvironmentHttpApi, "metadata", (handlers) =>
         handlers.handle("descriptor", () => Effect.succeed(descriptor)),
@@ -169,8 +187,29 @@ const withThreadServer = <A, E, R>(
         handlers
           .handle("shellSnapshot", () => Effect.succeed(shellFor(activeThreads)))
           .handle("threadSnapshot", () => unused)
-          .handle("threadBoundedSnapshot", () => unused)
-          .handle("threadHistoryPage", () => unused),
+          .handle("threadBoundedSnapshot", ({ params }) => {
+            const items = timelineFor(params.threadId);
+            if (items === null) return threadNotFound;
+            const window = selectRecentTimelineWindow({ items, snapshotSequence: 11 });
+            return Effect.succeed({
+              snapshotSequence: 11,
+              projection: {
+                ...emptyProjection(params.threadId, "Archived"),
+                visibleTurnItems: window.items,
+              },
+              historyCursor: window.nextCursor,
+              hasMoreHistory: window.hasMoreHistory,
+              latestLocalTurnOrdinal: null,
+            });
+          })
+          .handle("threadHistoryPage", ({ params, query }) => {
+            const items = timelineFor(params.threadId);
+            if (items === null) return threadNotFound;
+            return Effect.succeed({
+              snapshotSequence: 11,
+              ...selectHistoryPageFromCursor({ items, cursor: query.cursor, snapshotSequence: 11 }),
+            });
+          }),
       ),
       HttpApiBuilder.group(EnvironmentHttpApi, "auth", (handlers) =>
         handlers
@@ -443,6 +482,99 @@ it.layer(NodeServices.layer)("thread CLI against a running server", (it) => {
               dispatchMode: { type: "start_immediately" },
             },
           );
+        }),
+      );
+    }),
+  );
+
+  it.effect("pages an archived thread's transcript with reasoning over the history routes", () =>
+    Effect.gen(function* () {
+      const { baseDir, workspaceRoot } = makeDirs("messages");
+      // 12 turns exceed the 10-turn bounded window, so the read pages once.
+      const timeline = Array.from({ length: 12 }, (_, index) => {
+        const turn = index + 1;
+        const base = {
+          threadId: archivedThreadId,
+          runId: RunId.make(`run-${turn}`),
+          nodeId: null,
+          providerThreadId: null,
+          providerTurnId: null,
+          nativeItemRef: null,
+          parentItemId: null,
+          ordinal: 0,
+          status: "completed" as const,
+          title: null,
+          startedAt: now,
+          completedAt: now,
+          updatedAt: now,
+        };
+        return [
+          {
+            ...base,
+            id: TurnItemId.make(`user-${turn}`),
+            type: "user_message" as const,
+            createdBy: "user" as const,
+            creationSource: "web" as const,
+            messageId: MessageId.make(`message-${turn}`),
+            inputIntent: "turn_start" as const,
+            text: `question ${turn}`,
+            attachments: [],
+          },
+          {
+            ...base,
+            id: TurnItemId.make(`reasoning-${turn}`),
+            type: "reasoning" as const,
+            text: `thinking ${turn}`,
+            streaming: false,
+          },
+        ];
+      })
+        .flat()
+        .map((item, position) => ({
+          position,
+          visibility: "local" as const,
+          sourceThreadId: archivedThreadId,
+          sourceItemId: item.id,
+          item,
+        }));
+      yield* withThreadServer(baseDir, { project: makeProject(workspaceRoot), timeline }, () =>
+        Effect.gen(function* () {
+          const output = parseJson<{
+            readonly archived: boolean;
+            readonly machine: { readonly environmentLabel: string | null };
+            readonly messages: ReadonlyArray<{ readonly role: string; readonly text: string }>;
+            readonly hasMoreOlder: boolean;
+          }>(
+            yield* captureStdout([
+              "thread",
+              "messages",
+              archivedThreadId,
+              "--role",
+              "reasoning",
+              "--json",
+              "--base-dir",
+              baseDir,
+            ]),
+          );
+          assert.isTrue(output.archived);
+          assert.strictEqual(output.machine.environmentLabel, "Thread CLI test");
+          assert.deepEqual(
+            output.messages.map((message) => message.text),
+            Array.from({ length: 12 }, (_, index) => `thinking ${index + 1}`),
+          );
+          assert.isFalse(output.hasMoreOlder);
+
+          const missing = parseJson<{ readonly error: { readonly code: string } }>(
+            yield* captureStdout([
+              "thread",
+              "messages",
+              "thread-missing",
+              "--json",
+              "--base-dir",
+              baseDir,
+            ]),
+          );
+          assert.strictEqual(missing.error.code, "CliOrchestrationThreadNotFoundError");
         }),
       );
     }),

@@ -11,6 +11,7 @@ import {
   type OrchestrationV2ShellSnapshot,
   Project,
   ProjectMutation,
+  type ThreadId,
 } from "@t3tools/contracts";
 import * as Config from "effect/Config";
 import * as Console from "effect/Console";
@@ -567,6 +568,55 @@ export const fetchLiveOrchestrationShell = (
       options?.phase ?? "discovery",
       options?.timeout ?? timeouts.discovery,
     ),
+  );
+
+const mapThreadReadError = (threadId: ThreadId) => (cause: unknown) =>
+  isEnvironmentResourceNotFoundError(cause)
+    ? new CliOrchestrationThreadNotFoundError({ operation: "fetchThreadMessages", threadId })
+    : cliOrchestrationErrorFromRequest(cause);
+
+/** Newest timeline window of a thread (active or archived), with the opaque
+    cursor that pages further back through `fetchLiveThreadHistoryPage`. */
+export const fetchLiveThreadBoundedSnapshot = (
+  origin: string,
+  bearerToken: string,
+  threadId: ThreadId,
+  timeouts: CliLiveServerReadTimeouts,
+) =>
+  Effect.gen(function* () {
+    const client = yield* makeLiveServerClient(origin);
+    return yield* client.orchestration.threadBoundedSnapshot({
+      params: { threadId },
+      headers: {
+        authorization: `Bearer ${bearerToken}`,
+        [ORCHESTRATION_PROTOCOL_HEADER]: ORCHESTRATION_PROTOCOL_VERSION_TEXT,
+      },
+    });
+  }).pipe(
+    Effect.mapError(mapThreadReadError(threadId)),
+    withLiveServerReadTimeout("messages", timeouts.read),
+  );
+
+/** Timeline rows older than `cursor`, chronological. */
+export const fetchLiveThreadHistoryPage = (
+  origin: string,
+  bearerToken: string,
+  input: { readonly threadId: ThreadId; readonly cursor: string },
+  timeouts: CliLiveServerReadTimeouts,
+) =>
+  Effect.gen(function* () {
+    const client = yield* makeLiveServerClient(origin);
+    return yield* client.orchestration.threadHistoryPage({
+      params: { threadId: input.threadId },
+      query: { cursor: input.cursor },
+      headers: {
+        authorization: `Bearer ${bearerToken}`,
+        [ORCHESTRATION_PROTOCOL_HEADER]: ORCHESTRATION_PROTOCOL_VERSION_TEXT,
+      },
+    });
+  }).pipe(
+    Effect.mapError(mapThreadReadError(input.threadId)),
+    withLiveServerReadTimeout("messages", timeouts.read),
   );
 
 /** Issues a one-shot ticket that authenticates the CLI's WebSocket RPC upgrade. */
