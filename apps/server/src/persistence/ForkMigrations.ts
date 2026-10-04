@@ -11,9 +11,11 @@ import * as Effect from "effect/Effect";
 import * as Migrator from "effect/unstable/sql/Migrator";
 
 import ForkMigration0001 from "./ForkMigrations/001_ForkThreadGroupsAndRepositoryIdentity.ts";
+import ForkMigration0080 from "./ForkMigrations/080_ForkMessageArtifacts.ts";
 
 export const forkMigrationEntries = [
   [1, "ForkThreadGroupsAndRepositoryIdentity", ForkMigration0001],
+  [80, "ForkMessageArtifacts", ForkMigration0080],
 ] as const;
 
 export const forkMigrationManifest = forkMigrationEntries.map(([id, name]) => [id, name] as const);

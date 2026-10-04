@@ -171,6 +171,11 @@ import {
   timelineContentOverflowsViewport,
 } from "./timelineScrollAnchoring";
 import { MessageCopyButton } from "./MessageCopyButton";
+import {
+  AssistantMessageSummaryButton,
+  AssistantMessageSummaryPanel,
+  useAssistantMessageSummary,
+} from "./AssistantMessageSummary";
 import { PierreEntryIcon } from "./PierreEntryIcon";
 import { inferEntryKindFromPath } from "../../pierre-icons";
 import { AssistantSelectionToolbar } from "./AssistantSelectionToolbar";
@@ -300,6 +305,8 @@ interface TimelineRowSharedState {
   /** Projection runs, for recovering handoff models on legacy items. */
   runs: ReadonlyArray<HandoffTimelineRun>;
   activeThreadEnvironmentId: EnvironmentId;
+  /** The environment serves on-demand message summaries. */
+  messageSummariesAvailable: boolean;
   onRevertToTurnCount: (targetTurnCount: number, messageId: MessageId) => void;
   onUseArtifactTemplate: (template: CodexArtifactTemplate) => void;
   onRunShellCommand: ((command: string) => void) | undefined;
@@ -449,6 +456,7 @@ interface MessagesTimelineProps {
   onFileOpen?: (attachment: ChatFileAttachment) => void;
   onFileDownload?: (attachment: ChatFileAttachment) => void;
   activeThreadEnvironmentId: EnvironmentId;
+  messageSummariesAvailable?: boolean;
   markdownCwd: string | undefined;
   resolvedTheme: "light" | "dark";
   timestampFormat: TimestampFormat;
@@ -522,6 +530,7 @@ export const MessagesTimeline = memo(function MessagesTimeline({
   onFileOpen = NOOP_OPEN_ATTACHMENT,
   onFileDownload = NOOP_OPEN_ATTACHMENT,
   activeThreadEnvironmentId,
+  messageSummariesAvailable = false,
   markdownCwd,
   resolvedTheme,
   timestampFormat,
@@ -1146,6 +1155,7 @@ export const MessagesTimeline = memo(function MessagesTimeline({
       providerStatuses,
       runs,
       activeThreadEnvironmentId,
+      messageSummariesAvailable,
       onRevertToTurnCount,
       onRunShellCommand,
       onImageExpand,
@@ -1179,6 +1189,7 @@ export const MessagesTimeline = memo(function MessagesTimeline({
       providerStatuses,
       runs,
       activeThreadEnvironmentId,
+      messageSummariesAvailable,
       onRevertToTurnCount,
       onRunShellCommand,
       onImageExpand,
@@ -2605,41 +2616,61 @@ function AssistantMessageMeta({
   alwaysVisible?: boolean;
 }) {
   const ctx = use(TimelineRowCtx);
+  const summary = useAssistantMessageSummary({
+    environmentId: ctx.activeThreadEnvironmentId,
+    messageId: message.id,
+    text: message.text,
+    streaming: message.streaming,
+    available: ctx.messageSummariesAvailable,
+  });
 
   return (
-    <div
-      className={cn(
-        "flex items-center gap-2 text-xs tabular-nums transition-opacity duration-200",
-        alwaysVisible
-          ? "opacity-100"
-          : "opacity-0 pointer-coarse:opacity-100 focus-within:opacity-100 group-hover/assistant:opacity-100",
-        className,
-      )}
-    >
-      {projectedItem?.item.type === "assistant_message" ? (
-        <AssistantForkButton projectedItem={projectedItem} />
+    <>
+      <div
+        className={cn(
+          "flex items-center gap-2 text-xs tabular-nums transition-opacity duration-200",
+          alwaysVisible || summary.expanded
+            ? "opacity-100"
+            : "opacity-0 pointer-coarse:opacity-100 focus-within:opacity-100 group-hover/assistant:opacity-100",
+          className,
+        )}
+      >
+        {projectedItem?.item.type === "assistant_message" ? (
+          <AssistantForkButton projectedItem={projectedItem} />
+        ) : null}
+        {projectedItem && projectedItem.item.status !== "completed" ? (
+          <span className="rounded-full border border-border/70 px-1.5 py-0.5 font-mono text-3xs text-muted-foreground">
+            {projectedItem.item.status}
+          </span>
+        ) : null}
+        <AssistantCopyButton
+          message={message}
+          showCopyButton={showCopyButton}
+          streaming={copyStreaming}
+        />
+        <AssistantMessageSummaryButton state={summary} />
+        {!message.streaming && (
+          <Tooltip>
+            <TooltipTrigger render={<p className="text-muted-foreground text-xs tabular-nums" />}>
+              {formatDayAwareTimestamp(message.updatedAt, ctx.timestampFormat)}
+            </TooltipTrigger>
+            <TooltipPopup>
+              {formatChatTimestampTooltip(message.updatedAt, ctx.timestampFormat)}
+            </TooltipPopup>
+          </Tooltip>
+        )}
+      </div>
+      {summary.expanded && summary.summary !== null ? (
+        <AssistantMessageSummaryPanel>
+          <ChatMarkdown
+            text={summary.summary.summary}
+            cwd={ctx.markdownCwd}
+            threadRef={ctx.threadRef ?? undefined}
+            skills={ctx.skills}
+          />
+        </AssistantMessageSummaryPanel>
       ) : null}
-      {projectedItem && projectedItem.item.status !== "completed" ? (
-        <span className="rounded-full border border-border/70 px-1.5 py-0.5 font-mono text-3xs text-muted-foreground">
-          {projectedItem.item.status}
-        </span>
-      ) : null}
-      <AssistantCopyButton
-        message={message}
-        showCopyButton={showCopyButton}
-        streaming={copyStreaming}
-      />
-      {!message.streaming && (
-        <Tooltip>
-          <TooltipTrigger render={<p className="text-muted-foreground text-xs tabular-nums" />}>
-            {formatDayAwareTimestamp(message.updatedAt, ctx.timestampFormat)}
-          </TooltipTrigger>
-          <TooltipPopup>
-            {formatChatTimestampTooltip(message.updatedAt, ctx.timestampFormat)}
-          </TooltipPopup>
-        </Tooltip>
-      )}
-    </div>
+    </>
   );
 }
 

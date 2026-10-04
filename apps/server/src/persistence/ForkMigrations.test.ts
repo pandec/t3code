@@ -47,9 +47,7 @@ describe("fork migrations", () => {
         INSERT INTO projection_projects (project_id, repository_identity_json)
         VALUES ('project-a', '{"remote":"github.com/a/b"}'), ('project-b', NULL)
       `;
-      assert.deepStrictEqual(yield* runForkMigrations(), [
-        [1, "ForkThreadGroupsAndRepositoryIdentity"],
-      ]);
+      assert.deepStrictEqual(yield* runForkMigrations(), forkMigrationManifest);
       assert.deepStrictEqual(yield* sql`SELECT * FROM fork_thread_custom_groups`, [
         { thread_id: "thread-a", custom_group_id: "group-1" },
       ]);
@@ -78,9 +76,7 @@ describe("fork migrations", () => {
   it.effect("migration 1 succeeds without legacy tables", () =>
     Effect.gen(function* () {
       const sql = yield* SqlClient.SqlClient;
-      assert.deepStrictEqual(yield* runForkMigrations(), [
-        [1, "ForkThreadGroupsAndRepositoryIdentity"],
-      ]);
+      assert.deepStrictEqual(yield* runForkMigrations(), forkMigrationManifest);
       assert.deepStrictEqual(yield* sql`SELECT * FROM fork_thread_custom_groups`, []);
     }).pipe(Effect.provide(NodeSqliteClient.layer({ filename: ":memory:" }))),
   );

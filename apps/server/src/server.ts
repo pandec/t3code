@@ -185,6 +185,8 @@ import { projectHttpApiLayer } from "./project/http.ts";
 import * as VoiceTranscription from "./voice/VoiceTranscription.ts";
 import * as TtsService from "./voice/TtsService.ts";
 import { voiceHttpApiLayer } from "./voice/http.ts";
+import * as MessageSummary from "./messageArtifacts/MessageSummary.ts";
+import { messageArtifactsHttpApiLayer } from "./messageArtifacts/http.ts";
 import * as NetService from "@t3tools/shared/Net";
 import * as RelayClient from "@t3tools/shared/relayClient";
 import { disableTailscaleServe, ensureTailscaleServe } from "@t3tools/tailscale";
@@ -674,6 +676,7 @@ const makeRoutesLayer = Layer.mergeAll(
       Layer.provide(connectHttpApiLayer),
       Layer.provide(orchestrationHttpApiLayer),
       Layer.provide(voiceHttpApiLayer.pipe(Layer.provide(VoiceTranscription.layer))),
+      Layer.provide(messageArtifactsHttpApiLayer.pipe(Layer.provide(MessageSummary.layer))),
       Layer.provide(pullRequestHttpApiLayer),
       Layer.provide(projectHttpApiLayer),
       Layer.provide(serverEnvironmentHttpApiLayer),

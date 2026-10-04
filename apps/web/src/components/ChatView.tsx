@@ -10880,6 +10880,9 @@ export default function ChatView(props: ChatViewProps) {
                 activeThreadEnvironmentId={
                   displayedThreadRef?.environmentId ?? activeThread.environmentId
                 }
+                messageSummariesAvailable={
+                  serverConfig?.environment.capabilities.messageSummaries === true
+                }
                 routeThreadKey={displayedTimelineKey}
                 displayThreadKey={displayedTimelineKey}
                 onOpenTurnDiff={paintOnlyDisplayedTimeline ? noopHeldTurnDiff : onOpenTurnDiff}

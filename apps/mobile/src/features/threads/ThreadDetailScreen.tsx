@@ -1197,6 +1197,9 @@ export const ThreadDetailScreen = memo(function ThreadDetailScreen(props: Thread
               contentPresentation={props.contentPresentation}
               agentLabel={agentLabel}
               threadTitle={props.selectedThread.title}
+              messageSummariesAvailable={
+                props.serverConfig?.environment.capabilities.messageSummaries === true
+              }
               latestRun={props.activityRun}
               activeWorkStartedAt={props.activeWorkStartedAt}
               runlessWorkActive={props.runlessWorkActive ?? false}

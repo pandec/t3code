@@ -64,6 +64,7 @@ import {
   useRef,
   useState,
   useId,
+  useSyncExternalStore,
   type ReactNode,
   type RefObject,
 } from "react";
@@ -201,6 +202,13 @@ import * as Option from "effect/Option";
 import { appAtomRegistry } from "../../state/atom-registry";
 import { environmentThreadShells, threadEnvironment } from "../../state/threads";
 import { useAtomCommand } from "../../state/use-atom-command";
+import { summarizeMessage } from "../../state/messageArtifacts";
+import {
+  beginMessageArtifactRequest,
+  getMessageArtifactSessionSnapshot,
+  rememberMessageSummary,
+  subscribeMessageArtifactSession,
+} from "@t3tools/client-runtime/state/messageArtifacts";
 import { useV2ItemSupport } from "../../state/v2-item-support";
 import {
   basename,
@@ -277,6 +285,8 @@ export interface ThreadFeedProps {
   readonly environmentId: EnvironmentId;
   readonly threadId: ThreadId;
   readonly threadTitle: string;
+  /** The environment serves on-demand message summaries. */
+  readonly messageSummariesAvailable?: boolean;
   readonly workspaceRoot?: string | null;
   readonly feed: ReadonlyArray<ThreadFeedEntry>;
   readonly contentPresentation: ThreadContentPresentation;
@@ -1533,6 +1543,7 @@ function renderFeedEntry(
     /** Width assistant markdown lays out in, so images can size their frame before layout. */
     readonly markdownContentWidth: number;
     readonly threadTitle: string;
+    readonly messageSummariesAvailable: boolean;
   },
 ) {
   const entry = info.item;
@@ -1897,7 +1908,19 @@ function renderFeedEntry(
           );
         })}
         {showAssistantMeta ? (
-          <View className="mt-1 flex-row items-center gap-1">
+          <AssistantMessageMeta
+            environmentId={props.environmentId}
+            messageId={message.id}
+            messageText={message.text}
+            summariesAvailable={props.messageSummariesAvailable}
+            timestampLabel={timestampLabel}
+            iconSubtleColor={iconSubtleColor}
+            markdownStyles={styles}
+            markdownLinkHandlers={props.markdownLinkHandlers}
+            onUseArtifactTemplate={props.onUseArtifactTemplate}
+            renderImage={props.renderMarkdownImage}
+            skills={props.skills}
+          >
             {message.projectedItem ? (
               <AssistantForkButton
                 environmentId={props.environmentId}
@@ -1913,10 +1936,7 @@ function renderFeedEntry(
               buttonSize={28}
               iconSize={13}
             />
-            <Text className="font-t3-medium text-xs tabular-nums text-foreground-secondary">
-              {timestampLabel}
-            </Text>
-          </View>
+          </AssistantMessageMeta>
         ) : null}
       </Animated.View>
     );
@@ -1943,6 +1963,124 @@ function renderFeedEntry(
       renderImage={props.renderViewedImage}
       renderReasoning={props.renderReasoning}
     />
+  );
+}
+
+/** Meta row under a finished assistant message, with its on-demand summary. */
+function AssistantMessageMeta(props: {
+  readonly environmentId: EnvironmentId;
+  readonly messageId: MessageId;
+  readonly messageText: string;
+  readonly summariesAvailable: boolean;
+  readonly timestampLabel: string;
+  readonly iconSubtleColor: ColorValue;
+  readonly markdownStyles: MarkdownStyleSet;
+  readonly markdownLinkHandlers: MarkdownLinkHandlers;
+  readonly onUseArtifactTemplate?: ((template: CodexArtifactTemplate) => void) | undefined;
+  readonly renderImage: MarkdownImageRenderer;
+  readonly skills?: ReadonlyArray<SelectableMarkdownSkill> | undefined;
+  readonly children: ReactNode;
+}) {
+  const { environmentId, messageId, messageText } = props;
+  const summarize = useAtomCommand(summarizeMessage, { reportFailure: false });
+  const [preparing, setPreparing] = useState(false);
+  const [expanded, setExpanded] = useState(false);
+  const readSession = useCallback(
+    () => getMessageArtifactSessionSnapshot(environmentId, messageId, messageText),
+    [environmentId, messageId, messageText],
+  );
+  const session = useSyncExternalStore(
+    useCallback(
+      (listener) => subscribeMessageArtifactSession(environmentId, messageId, listener),
+      [environmentId, messageId],
+    ),
+    readSession,
+    readSession,
+  );
+  const summary = session.summary;
+  const showSummary = (summary !== null || props.summariesAvailable) && messageText.trim() !== "";
+
+  const onPressSummary = useCallback(() => {
+    if (summary !== null) {
+      setExpanded((current) => !current);
+      return;
+    }
+    if (preparing) return;
+    setPreparing(true);
+    const endRequest = beginMessageArtifactRequest(environmentId, messageId);
+    void summarize({ environmentId, input: { messageId } })
+      .then((result) => {
+        if (result._tag === "Success") {
+          rememberMessageSummary(environmentId, messageText, result.value);
+          setExpanded(true);
+          return;
+        }
+        Alert.alert(
+          "Summary unavailable",
+          "T3 Code could not summarize this message. Try again in a moment.",
+        );
+      })
+      .finally(() => {
+        setPreparing(false);
+        endRequest();
+      });
+  }, [environmentId, messageId, messageText, preparing, summarize, summary]);
+
+  return (
+    <View>
+      <View className="mt-1 flex-row items-center gap-1">
+        {props.children}
+        {showSummary ? (
+          <Pressable
+            accessibilityRole="button"
+            accessibilityLabel={summary === null ? "Create summary" : "Toggle summary"}
+            accessibilityState={{
+              expanded: summary === null ? undefined : expanded,
+              busy: preparing,
+            }}
+            className="size-7 items-center justify-center rounded-lg active:bg-subtle-strong"
+            disabled={preparing}
+            hitSlop={8}
+            onPress={onPressSummary}
+          >
+            {preparing ? (
+              <ActivityIndicator size="small" color={props.iconSubtleColor} />
+            ) : (
+              <SymbolView
+                name="doc.text"
+                size={14}
+                tintColor={props.iconSubtleColor}
+                type="monochrome"
+              />
+            )}
+          </Pressable>
+        ) : null}
+        <Text className="font-t3-medium text-xs tabular-nums text-foreground-secondary">
+          {props.timestampLabel}
+        </Text>
+      </View>
+      {summary !== null && expanded ? (
+        <View className="mt-2 gap-2 rounded-2xl border border-border bg-subtle p-3">
+          <View className="flex-row items-center gap-2">
+            <SymbolView
+              name="doc.text"
+              size={14}
+              tintColor={props.iconSubtleColor}
+              type="monochrome"
+            />
+            <Text className="font-t3-bold text-xs text-foreground">Summary</Text>
+          </View>
+          <AssistantMarkdownContent
+            markdown={summary.summary}
+            markdownStyles={props.markdownStyles}
+            linkHandlers={props.markdownLinkHandlers}
+            onUseArtifactTemplate={props.onUseArtifactTemplate}
+            renderImage={props.renderImage}
+            skills={props.skills}
+          />
+        </View>
+      ) : null}
+    </View>
   );
 }
 
@@ -2485,6 +2623,7 @@ export const ThreadFeed = memo(function ThreadFeed(props: ThreadFeedProps) {
       themeAppearance,
       userBubbleColor,
       viewportWidth,
+      messageSummariesAvailable: props.messageSummariesAvailable,
     }),
     [
       props.worktreeSetup,
@@ -2501,6 +2640,7 @@ export const ThreadFeed = memo(function ThreadFeed(props: ThreadFeedProps) {
       themeAppearance,
       userBubbleColor,
       viewportWidth,
+      props.messageSummariesAvailable,
     ],
   );
   const reportHeaderMaterialVisibility = useCallback(
@@ -3005,6 +3145,7 @@ export const ThreadFeed = memo(function ThreadFeed(props: ThreadFeedProps) {
             userBubbleMaxWidth,
             markdownContentWidth,
             threadTitle: props.threadTitle,
+            messageSummariesAvailable: props.messageSummariesAvailable === true,
             skills: props.skills,
             workspaceRoot: props.workspaceRoot,
           })}
@@ -3051,6 +3192,7 @@ export const ThreadFeed = memo(function ThreadFeed(props: ThreadFeedProps) {
       props.onUseArtifactTemplate,
       props.threadId,
       props.threadTitle,
+      props.messageSummariesAvailable,
       props.skills,
       props.workspaceRoot,
       renderMarkdownImage,

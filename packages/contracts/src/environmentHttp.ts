@@ -58,7 +58,12 @@ import {
   RelayEnvironmentMintResponse,
   RelayLinkProofRequest,
 } from "./relay.ts";
-import { VoiceTranscriptionRequest, VoiceTranscriptionResult } from "./voice.ts";
+import {
+  MessageSummaryRequest,
+  MessageSummaryResult,
+  VoiceTranscriptionRequest,
+  VoiceTranscriptionResult,
+} from "./voice.ts";
 
 const OptionalBearerHeaders = Schema.Struct({
   authorization: Schema.optionalKey(Schema.String),
@@ -633,6 +638,15 @@ export class EnvironmentVoiceHttpApi extends HttpApiGroup.make("voice").add(
   }).middleware(EnvironmentAuthenticatedAuth),
 ) {}
 
+export class EnvironmentMessageArtifactsHttpApi extends HttpApiGroup.make("messageArtifacts").add(
+  HttpApiEndpoint.post("summarizeMessage", "/api/messages/summaries", {
+    headers: OptionalBearerHeaders,
+    payload: MessageSummaryRequest,
+    success: MessageSummaryResult,
+    error: EnvironmentVoiceTranscriptionErrors,
+  }).middleware(EnvironmentAuthenticatedAuth),
+) {}
+
 /** Large, compressible pull-request payloads travel over HTTP rather than the RPC socket. */
 class EnvironmentPullRequestsHttpApi extends HttpApiGroup.make("pullRequests").add(
   HttpApiEndpoint.post("diff", "/api/pull-requests/diff", {
@@ -733,6 +747,7 @@ export class EnvironmentHttpApi extends HttpApi.make("environment")
   .add(EnvironmentAuthHttpApi)
   .add(EnvironmentOrchestrationHttpApi)
   .add(EnvironmentVoiceHttpApi)
+  .add(EnvironmentMessageArtifactsHttpApi)
   .add(EnvironmentPullRequestsHttpApi)
   .add(EnvironmentProjectsHttpApi)
   .add(EnvironmentConnectHttpApi) {}
