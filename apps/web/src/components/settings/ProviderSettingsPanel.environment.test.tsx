@@ -8,6 +8,7 @@ import {
   type ServerProvider,
   type UnifiedSettings,
 } from "@t3tools/contracts";
+import * as Cause from "effect/Cause";
 import { beforeEach, describe, expect, it, vi } from "vite-plus/test";
 
 import { visitElements } from "../../test/reactElementTree";
@@ -131,6 +132,7 @@ import { EnvironmentProviderSettings } from "./ProviderSettingsPanel";
 const environmentId = EnvironmentId.make("remote-device");
 const codexId = ProviderInstanceId.make("codex");
 const customId = ProviderInstanceId.make("codex_work");
+const antigravityId = ProviderInstanceId.make("antigravity");
 
 function provider(): ServerProvider {
   return {
@@ -198,6 +200,58 @@ function isRefreshButton(element: ReactElement<Record<string, unknown>>): boolea
 
 function isAddProviderButton(element: ReactElement<Record<string, unknown>>): boolean {
   return element.props["aria-label"] === "Add provider";
+}
+
+function findCard(
+  panel: ReactElement<Record<string, unknown>>,
+  instanceId: ProviderInstanceId,
+  mode: "list" | "editor",
+): ReactElement<Record<string, unknown>> | null {
+  return visitElements(
+    panel,
+    (element) => element.props.instanceId === instanceId && element.props.mode === mode,
+  );
+}
+
+function commitDisplayName(
+  card: ReactElement<Record<string, unknown>>,
+  instanceId: ProviderInstanceId,
+  value: string,
+): void {
+  const input = visitElements(
+    renderProviderCard(card),
+    (element) => element.props.id === `provider-instance-${instanceId}-display-name`,
+  );
+  expect(input).not.toBeNull();
+  (input?.props.onCommit as (value: string) => void)(value);
+}
+
+function enableAntigravity(card: ReactElement<Record<string, unknown>>): void {
+  const setup = visitElements(
+    card.props.setup,
+    (element) => typeof element.props.onEnable === "function",
+  );
+  expect(setup).not.toBeNull();
+  (setup?.props.onEnable as () => void)();
+}
+
+function antigravitySettings(): UnifiedSettings {
+  return {
+    ...DEFAULT_UNIFIED_SETTINGS,
+    providerInstances: {
+      [antigravityId]: {
+        driver: ProviderDriverKind.make("antigravity"),
+        enabled: false,
+        config: { authMethod: "oauth-personal" },
+      },
+    },
+  };
+}
+
+function lastUpsertedInstance(): unknown {
+  const [mutation] = settingsState.mutateProviderInstance.mock.lastCall ?? [];
+  expect(mutation).toMatchObject({ operation: "upsert" });
+  return (mutation as { readonly instance?: unknown } | undefined)?.instance;
 }
 
 async function flushPromises(): Promise<void> {
@@ -493,6 +547,182 @@ describe("EnvironmentProviderSettings routing", () => {
           Array.isArray(element.props.customModels) || element.props.usageSource !== undefined,
       ),
     ).toBeNull();
+  });
+
+  it("shares pending envelopes between editor and list writes", async () => {
+    settingsState.value = {
+      ...DEFAULT_UNIFIED_SETTINGS,
+      providerInstances: {
+        [codexId]: {
+          driver: ProviderDriverKind.make("codex"),
+          enabled: true,
+          config: { approvalPolicy: "on-request" },
+        },
+      },
+    };
+    atoms.providers = [provider()];
+    const panel = renderPanel();
+    const listCard = findCard(panel, codexId, "list");
+    const editorCard = findCard(panel, codexId, "editor");
+    expect(listCard?.props.pendingInstancesRef).toBe(editorCard?.props.pendingInstancesRef);
+
+    commitDisplayName(editorCard!, codexId, "Work");
+    const list = renderProviderCard(listCard!);
+    const enabledSwitch = visitElements(
+      list,
+      (element) => element.props["aria-label"] === "Enable Codex",
+    );
+    (enabledSwitch?.props.onCheckedChange as ((checked: boolean) => void) | undefined)?.(false);
+    await flushPromises();
+
+    expect(lastUpsertedInstance()).toEqual({
+      driver: ProviderDriverKind.make("codex"),
+      enabled: false,
+      displayName: "Work",
+      config: { approvalPolicy: "on-request" },
+    });
+  });
+
+  it("keeps an editor change when Antigravity setup enables the instance", async () => {
+    settingsState.value = antigravitySettings();
+    const panel = renderPanel({ targetInstanceId: antigravityId });
+    const editorCard = findCard(panel, antigravityId, "editor");
+
+    commitDisplayName(editorCard!, antigravityId, "Work");
+    enableAntigravity(editorCard!);
+    await flushPromises();
+
+    expect(lastUpsertedInstance()).toEqual({
+      driver: ProviderDriverKind.make("antigravity"),
+      enabled: true,
+      displayName: "Work",
+      config: { authMethod: "oauth-personal" },
+    });
+  });
+
+  it("keeps setup enablement when the Antigravity editor changes next", async () => {
+    settingsState.value = antigravitySettings();
+    const panel = renderPanel({ targetInstanceId: antigravityId });
+    const editorCard = findCard(panel, antigravityId, "editor");
+
+    enableAntigravity(editorCard!);
+    commitDisplayName(editorCard!, antigravityId, "Work");
+    await flushPromises();
+
+    expect(lastUpsertedInstance()).toEqual({
+      driver: ProviderDriverKind.make("antigravity"),
+      enabled: true,
+      displayName: "Work",
+      config: { authMethod: "oauth-personal" },
+    });
+  });
+
+  it("does not let a rejected write resurface in the next edit", async () => {
+    settingsState.value = {
+      ...DEFAULT_UNIFIED_SETTINGS,
+      providerInstances: {
+        [customId]: { driver: ProviderDriverKind.make("codex"), enabled: true },
+      },
+    };
+    const panel = renderPanel({ targetInstanceId: customId });
+    const editorCard = findCard(panel, customId, "editor");
+    settingsState.mutateProviderInstance.mockResolvedValueOnce({
+      _tag: "Failure",
+      cause: Cause.fail(new Error("Rejected")),
+    });
+
+    commitDisplayName(editorCard!, customId, "Rejected");
+    await flushPromises();
+    const list = renderProviderCard(findCard(panel, customId, "list")!);
+    const enabledSwitch = visitElements(
+      list,
+      (element) => typeof element.props.onCheckedChange === "function",
+    );
+    (enabledSwitch?.props.onCheckedChange as ((checked: boolean) => void) | undefined)?.(false);
+    await flushPromises();
+
+    expect(lastUpsertedInstance()).toEqual({
+      driver: ProviderDriverKind.make("codex"),
+      enabled: false,
+    });
+  });
+
+  it("bases an edit made right after a reset on the provider defaults", async () => {
+    settingsState.value = {
+      ...DEFAULT_UNIFIED_SETTINGS,
+      providerInstances: {
+        [codexId]: {
+          driver: ProviderDriverKind.make("codex"),
+          enabled: true,
+          displayName: "Old",
+          config: { binaryPath: "/opt/old/codex" },
+        },
+      },
+    };
+    const panel = renderPanel({ targetInstanceId: codexId });
+    const editorCard = findCard(panel, codexId, "editor");
+    const resetButton = visitElements(
+      editorCard?.props.headerAction,
+      (element) => typeof element.props.onClick === "function",
+    );
+    (resetButton?.props.onClick as (() => void) | undefined)?.();
+    await flushPromises();
+
+    const [, resetPatch] = settingsState.mutateProviderInstance.mock.lastCall ?? [];
+    expect(resetPatch).toEqual({
+      providers: { codex: DEFAULT_UNIFIED_SETTINGS.providers.codex },
+    });
+
+    // The server has not echoed the reset yet, so the card still renders the
+    // old envelope; the edit must not resurrect it.
+    commitDisplayName(editorCard!, codexId, "Fresh");
+    await flushPromises();
+
+    const { enabled, ...config } = DEFAULT_UNIFIED_SETTINGS.providers.codex;
+    expect(lastUpsertedInstance()).toEqual({
+      driver: ProviderDriverKind.make("codex"),
+      enabled,
+      displayName: "Fresh",
+      config,
+    });
+  });
+
+  it("drops a reset's pending envelope once its row is gone", async () => {
+    const grokId = ProviderInstanceId.make("grok");
+    const grok = ProviderDriverKind.make("grok");
+    settingsState.value = {
+      ...DEFAULT_UNIFIED_SETTINGS,
+      providerInstances: { [grokId]: { driver: grok, enabled: true, displayName: "Old" } },
+    };
+    const resetButton = visitElements(
+      findCard(renderPanel({ targetInstanceId: grokId }), grokId, "editor")?.props.headerAction,
+      (element) => typeof element.props.onClick === "function",
+    );
+    (resetButton?.props.onClick as (() => void) | undefined)?.();
+    await flushPromises();
+
+    // The reset echoes: the default-off slot is hidden, so no card acknowledges it.
+    settingsState.value = DEFAULT_UNIFIED_SETTINGS;
+    settingsSearchState.effects = [];
+    expect(findCard(renderPanel(), grokId, "list")).toBeNull();
+    for (const effect of settingsSearchState.effects) effect();
+
+    // Re-added through Add provider, then edited.
+    settingsState.value = {
+      ...DEFAULT_UNIFIED_SETTINGS,
+      providerInstances: {
+        [grokId]: { driver: grok, enabled: true, config: { binaryPath: "/opt/grok" } },
+      },
+    };
+    commitDisplayName(findCard(renderPanel(), grokId, "editor")!, grokId, "Grok");
+    await flushPromises();
+
+    expect(lastUpsertedInstance()).toEqual({
+      driver: grok,
+      enabled: true,
+      displayName: "Grok",
+      config: { binaryPath: "/opt/grok" },
+    });
   });
 
   it("keeps Advanced visible when search targets the provider health interval", () => {

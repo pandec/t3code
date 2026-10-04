@@ -620,6 +620,8 @@ export const OrchestrationV2Run = Schema.Struct({
   editHeldUntil: Schema.optional(Schema.DateTimeUtc),
   /** Fork: the live edit-hold leases, one per editing client session. */
   editHolds: Schema.optional(Schema.Array(QueuedRunEditHoldLease)),
+  /** Fork (PR #47): restart recovery sets this on a run it cancelled mid-turn. */
+  strandedByRestart: Schema.optional(Schema.Literal(true)),
 });
 export type OrchestrationV2Run = typeof OrchestrationV2Run.Type;
 

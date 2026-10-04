@@ -18,7 +18,7 @@ import {
   resolveEnvironmentMachineKind,
   resolveProviderInstanceEnabled,
 } from "@t3tools/contracts";
-import { DEFAULT_UNIFIED_SETTINGS } from "@t3tools/contracts/settings";
+import { DEFAULT_UNIFIED_SETTINGS, type ServerSettingsPatch } from "@t3tools/contracts/settings";
 import {
   getBackgroundActivityPresetSettings,
   resolveServerBackgroundActivitySettings,
@@ -877,6 +877,24 @@ export function EnvironmentProviderSettings({
     rows.find((row) => row.instanceId === selectedInstanceId) ??
     (targetInstanceMissing ? null : (rows[0] ?? null));
 
+  // A pending envelope is only acknowledged by its card; once its row is gone
+  // (e.g. a reset hides a default-off slot), drop it so a later re-create of
+  // the same id cannot build on it.
+  useEffect(() => {
+    for (const id of pendingInstancesRef.current.keys()) {
+      if (!rows.some((row) => row.instanceId === id)) pendingInstancesRef.current.delete(id);
+    }
+  });
+
+  // A rejected write never echoes, so its pending envelope would otherwise
+  // make every later edit of the card resurrect it. A newer pending write
+  // for the same instance stays.
+  const dropPendingInstance = (instanceId: ProviderInstanceId, written: ProviderInstanceConfig) => {
+    if (pendingInstancesRef.current.get(instanceId) === written) {
+      pendingInstancesRef.current.delete(instanceId);
+    }
+  };
+
   const updateProviderInstance = async (
     row: InstanceRow,
     next: ProviderInstanceConfig,
@@ -898,6 +916,9 @@ export function EnvironmentProviderSettings({
       { operation: "upsert", instanceId: row.instanceId, instance: next },
       patch,
     );
+    if (result._tag === "Failure") {
+      dropPendingInstance(row.instanceId, next);
+    }
     if (result._tag === "Failure" && !isAtomCommandInterrupted(result)) {
       const error = squashAtomCommandFailure(result);
       toastManager.add({
@@ -909,6 +930,7 @@ export function EnvironmentProviderSettings({
   };
 
   const deleteProviderInstance = async (row: InstanceRow) => {
+    pendingInstancesRef.current.delete(row.instanceId);
     const updateResult = await persistProviderInstance({
       operation: "remove",
       instanceId: row.instanceId,
@@ -997,15 +1019,24 @@ export function EnvironmentProviderSettings({
     const defaultInstanceId = defaultInstanceIdForDriver(driverKind);
     const defaultLegacyProvider = defaultLegacyProviders[driverKind];
     if (defaultLegacyProvider === undefined) return;
+    // Until the reset echoes back, the card's next edit must build on the
+    // defaults the slot falls back to, not on the envelope being reset.
+    const { enabled, ...config } = defaultLegacyProvider;
+    const resetInstance: ProviderInstanceConfig = { driver: driverKind, enabled, config };
+    pendingInstancesRef.current.set(defaultInstanceId, resetInstance);
     const result = await persistProviderInstance(
       { operation: "remove", instanceId: defaultInstanceId },
+      // Only this driver's legacy entry: a stale copy of the others would
+      // undo another card's in-flight reset.
       {
-        providers: {
-          ...settings.providers,
-          [driverKind]: defaultLegacyProvider,
-        } as typeof settings.providers,
+        providers: { [driverKind]: defaultLegacyProvider } as NonNullable<
+          ServerSettingsPatch["providers"]
+        >,
       },
     );
+    if (result._tag === "Failure") {
+      dropPendingInstance(defaultInstanceId, resetInstance);
+    }
     if (result._tag === "Failure" && !isAtomCommandInterrupted(result)) {
       const error = squashAtomCommandFailure(result);
       toastManager.add({

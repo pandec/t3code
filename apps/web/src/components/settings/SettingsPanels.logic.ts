@@ -9,7 +9,7 @@ import type {
   SidebarProjectGroupingMode,
   UnifiedSettings,
 } from "@t3tools/contracts";
-import { DEFAULT_UNIFIED_SETTINGS } from "@t3tools/contracts/settings";
+import { DEFAULT_UNIFIED_SETTINGS, type ServerSettingsPatch } from "@t3tools/contracts/settings";
 import {
   getBackgroundActivityBaseProfile,
   normalizeBackgroundActivitySettings,
@@ -298,7 +298,7 @@ export function buildProviderInstanceUpdatePatch(input: {
   readonly textGenerationModelSelection?:
     | ServerSettings["textGenerationModelSelection"]
     | undefined;
-}): Partial<UnifiedSettings> {
+}): ServerSettingsPatch {
   type LegacyProviderSettings = ServerSettings["providers"][keyof ServerSettings["providers"]];
   const legacyProviderDefaults = DEFAULT_UNIFIED_SETTINGS.providers as Record<
     string,
@@ -308,10 +308,11 @@ export function buildProviderInstanceUpdatePatch(input: {
   return {
     ...(legacyProviderDefault !== undefined
       ? {
+          // Only this driver's entry: a stale copy of the other drivers
+          // would undo another provider card's in-flight reset.
           providers: {
-            ...input.settings.providers,
             [input.driver]: legacyProviderDefault,
-          } as ServerSettings["providers"],
+          } as NonNullable<ServerSettingsPatch["providers"]>,
         }
       : {}),
     providerInstances: {
