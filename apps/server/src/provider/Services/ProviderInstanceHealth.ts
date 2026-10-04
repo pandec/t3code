@@ -30,14 +30,8 @@ export type UsageObservationToken = number & {
 
 /**
  * Which class of source owns an instance's usage slot: the provider driver's
- * own account-usage stream, or a configured external usage source.
- *
- * Two values suffice. Distinguishing one gateway target from another is the
- * observation token's job — a target change is always observed at reconcile,
- * which allocates a newer token than any probe still running against the old
- * target. Only the driver-versus-gateway distinction needs to be enforced at
- * the write edge, because passive driver events arrive from a different fiber
- * with no reconcile of their own to order them.
+ * own account-usage stream, or a configured external usage source. One gateway
+ * pool is told from another by the optional source key passed beside it.
  */
 export type UsageSourceKind = "driver" | "gateway";
 
@@ -47,17 +41,20 @@ export interface ProviderInstanceHealthShape {
 
   /**
    * Declare which source currently owns an instance's usage slot. Newer
-   * declarations win; changing the source drops a snapshot from the old one.
+   * declarations win; changing the source (its kind or its key, e.g. another
+   * gateway pool; the key defaults to the kind) drops the old one's snapshot.
    */
   readonly setUsageSource: (
     instanceId: ProviderInstanceId,
     sourceKind: UsageSourceKind,
     observationToken: UsageObservationToken,
+    sourceKey?: string,
   ) => Effect.Effect<void>;
 
   /**
-   * Store the latest opaque provider usage payload for one instance.
-   * Returns whether this observation won the token comparison and was stored.
+   * Store the latest opaque provider usage payload for one instance. Returns
+   * whether it was stored: it must come from the active source (kind and key,
+   * the key defaulting to the kind) and win the token comparison.
    */
   readonly reportUsageSnapshot: (
     instanceId: ProviderInstanceId,
@@ -66,6 +63,7 @@ export interface ProviderInstanceHealthShape {
     observedAt: number,
     observationToken: UsageObservationToken,
     sourceKind: UsageSourceKind,
+    sourceKey?: string,
   ) => Effect.Effect<boolean>;
 
   readonly listUsageSnapshots: () => Effect.Effect<ReadonlyArray<ProviderInstanceUsageSnapshot>>;

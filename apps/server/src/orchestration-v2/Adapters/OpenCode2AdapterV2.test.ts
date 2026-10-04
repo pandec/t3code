@@ -1653,6 +1653,64 @@ describe("OpenCode2 adapter", () => {
     }).pipe(Effect.scoped),
   );
 
+  // The session environment replaces the shell's whole environment.
+  it.effect("keeps a spawned server's environment in its sessions' shells", () =>
+    Effect.gen(function* () {
+      const sessionEnvironments: Array<ReplayedSessionEnvironment> = [];
+      const runtime = yield* openCode2ReplayRuntime(
+        [
+          ...opening,
+          out("session.create", {
+            location: { directory: WORK },
+            model: { providerID: "opencode", id: "big-pickle" },
+            permissions: t3Rules,
+          }),
+          replyData("session.create", sessionInfo()),
+        ],
+        {
+          sessionEnvironments,
+          shellEnvironment: {
+            PATH: "/opt/tools/bin:/usr/bin",
+            INSTANCE_SENTINEL: "kept",
+            T3CODE_TURN_ID: "stale",
+          },
+        },
+      );
+      yield* runtime.ensureThread({ threadId, modelSelection: bigPickle, runtimePolicy: policy() });
+      const variables = sessionEnvironments.map(
+        (entry) =>
+          Schema.decodeUnknownSync(
+            Schema.Struct({ variables: Schema.Record(Schema.String, Schema.String) }),
+          )(entry.body).variables,
+      );
+      assert.lengthOf(variables, 1);
+      assert.equal(variables[0]?.PATH, "/opt/tools/bin:/usr/bin");
+      assert.equal(variables[0]?.INSTANCE_SENTINEL, "kept");
+      assert.equal(variables[0]?.T3CODE_THREAD_ID, threadId);
+      assert.isUndefined(variables[0]?.T3CODE_TURN_ID);
+    }).pipe(Effect.scoped),
+  );
+
+  it.effect("leaves an external server's shell environment alone", () =>
+    Effect.gen(function* () {
+      const sessionEnvironments: Array<ReplayedSessionEnvironment> = [];
+      const runtime = yield* openCode2ReplayRuntime(
+        [
+          ...opening,
+          out("session.create", {
+            location: { directory: WORK },
+            model: { providerID: "opencode", id: "big-pickle" },
+            permissions: t3Rules,
+          }),
+          replyData("session.create", sessionInfo()),
+        ],
+        { external: true, sessionEnvironments },
+      );
+      yield* runtime.ensureThread({ threadId, modelSelection: bigPickle, runtimePolicy: policy() });
+      assert.deepEqual(sessionEnvironments, []);
+    }).pipe(Effect.scoped),
+  );
+
   it.effect("breaks the thread and forgets it when the session was deleted outside T3", () =>
     Effect.gen(function* () {
       const { runtime, thread } = yield* resumed([

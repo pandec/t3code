@@ -58,6 +58,12 @@ export interface UsageRefreshProviderInstance {
   readonly adapter: UsageProbeAdapter;
   readonly usageSourceKind: UsageSourceKind;
   /**
+   * Which source of that kind owns the slot (a gateway pool's management URL);
+   * defaults to the kind. A probe reports under the key captured when it was
+   * scheduled, so a late result from a replaced pool is rejected.
+   */
+  readonly usageSourceKey?: string;
+  /**
    * Set when the instance declares a usage source that could not be resolved
    * into a probe target (missing key, missing or unparseable management URL).
    * The slot stays gateway-owned — the driver's probe would report the wrong
@@ -119,9 +125,10 @@ export const makeProviderUsageRefresh = Effect.fn("makeProviderUsageRefresh")(fu
     probeGate
       .withPermits(1)(
         Effect.gen(function* () {
-          // Allocate before revalidating: the token must predate any source
-          // declaration this probe could race, so a reconcile that lands
-          // afterward always outranks whatever this probe goes on to report.
+          // Allocate before revalidating, so the token predates any source
+          // declaration this probe could race. The health store rejects the
+          // result if a reconcile meanwhile moved the slot to another source
+          // (kind or pool) or a newer observation already landed.
           const observationToken = yield* dependencies.health.beginUsageObservation();
           // The adapter was selected before this probe entered the bounded
           // gate. Re-resolve after acquiring a permit so an adapter whose
@@ -150,6 +157,7 @@ export const makeProviderUsageRefresh = Effect.fn("makeProviderUsageRefresh")(fu
               observedAt,
               observationToken,
               instance.usageSourceKind,
+              instance.usageSourceKey,
             );
             if (stored) {
               yield* Ref.set(outcome, { refreshed: true });
@@ -342,13 +350,21 @@ export const ProviderUsageRefreshLive = Layer.effect(
         if (target) {
           activeGatewayProbeIds.add(instance.instanceId);
         }
-        yield* health.setUsageSource(instance.instanceId, "gateway", sourceObservationToken);
+        // The pool is the management URL; rotating a key keeps its snapshot.
+        const usageSourceKey = `gateway:${target?.managementUrl ?? "unresolved"}`;
+        yield* health.setUsageSource(
+          instance.instanceId,
+          "gateway",
+          sourceObservationToken,
+          usageSourceKey,
+        );
         resolved.push({
           instanceId: instance.instanceId,
           driverKind: instance.driverKind,
           enabled: instance.enabled,
           adapter: target ? gatewayAdapterFor(instance.instanceId, target) : {},
           usageSourceKind: "gateway",
+          usageSourceKey,
           ...(target
             ? {}
             : {
@@ -370,10 +386,11 @@ export const ProviderUsageRefreshLive = Layer.effect(
     });
 
     // A gateway snapshot outlives its source: once the usage source is turned
-    // off nothing would ever overwrite the pooled payload. Watch registry reconciles and drop the snapshot the moment an
-    // instance's resolved gateway target disappears or changes. The clear
-    // is source-aware, so a delayed reconcile preserves a snapshot already
-    // reported by the new source while rejecting writes from the old one.
+    // off or pointed at another pool, nothing would ever overwrite the pooled
+    // payload. Watch registry reconciles and re-declare each instance's source
+    // (kind plus pool), which drops the snapshot the moment the pool
+    // disappears or changes and rejects late writes from the old pool, while
+    // re-declaring an unchanged pool keeps its snapshot.
     // Subscribe before the initial read so a reconcile landing in between
     // still produces an event that re-declares the current sources.
     const registryChanges = yield* registry.subscribeChanges;

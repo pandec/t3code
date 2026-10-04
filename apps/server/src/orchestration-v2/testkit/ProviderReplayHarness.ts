@@ -342,7 +342,7 @@ export function makeOrchestratorV2ReplayLayerWithRegistry<Error>(
   );
   // fork: production records native continuation groups (runtimeLayer.ts).
   const nativeContinuationStoreProvided = NativeContinuationStore.layer.pipe(
-    Layer.provide(Layer.merge(providedRegistryLayer, databaseLayer)),
+    Layer.provide(databaseLayer),
   );
   const providerSessionManagerProvided = ProviderSessionManager.layerWithOptions({
     configureMcp: false,

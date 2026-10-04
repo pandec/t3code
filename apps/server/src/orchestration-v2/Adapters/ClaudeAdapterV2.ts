@@ -3254,6 +3254,16 @@ export function makeClaudeAdapterV2(
               return cwd !== undefined && isExistingDirectory(cwd) ? cwd : requestedCwd;
             }),
           );
+        // The session record follows the process, so plans comparing it with
+        // the thread workspace see where the process runs.
+        const emitSessionCwd = (cwd: string) =>
+          Effect.gen(function* () {
+            yield* emitProviderEvent({
+              type: "provider_session.updated",
+              driver: CLAUDE_PROVIDER,
+              providerSession: { ...session, cwd, updatedAt: yield* DateTime.now },
+            });
+          });
         /**
          * Bring the recorded cwd in line with the session transcript. The SDK
          * stream carries a cwd only in `system/init`, and the CLI fires no
@@ -3268,9 +3278,16 @@ export function makeClaudeAdapterV2(
             readonly threadId: ThreadId;
             readonly trigger: "worktree-tool" | "turn-completed";
           }) {
+            // A relative CLAUDE_CONFIG_DIR/HOME resolves against the start cwd
+            // of the CLI process writing the transcript; without a live query
+            // the SDK spawns it in the server's cwd.
+            const liveQuery = yield* Ref.get(queryContext);
+            const processCwd =
+              liveQuery?.nativeThreadId === reconcile.nativeThreadId ? liveQuery.cwd : null;
             const configDirPath = yield* resolveClaudeConfigDirPath(
               { homePath: "" },
               adapterOptions.environment,
+              processCwd ?? undefined,
             );
             const observedCwd = yield* findClaudeSessionCwd({
               configDirPath,
@@ -3282,21 +3299,14 @@ export function makeClaudeAdapterV2(
                 : Effect.logDebug("claude.session.cwd-unresolved", reconcile);
               return;
             }
-            const liveQuery = yield* Ref.get(queryContext);
             const previousCwd =
               (yield* Ref.get(observedCwdByNativeThread)).get(reconcile.nativeThreadId) ??
-              (liveQuery?.nativeThreadId === reconcile.nativeThreadId ? liveQuery.cwd : null);
+              processCwd;
             if (previousCwd === observedCwd) return;
             yield* Ref.update(observedCwdByNativeThread, (current) =>
               new Map(current).set(reconcile.nativeThreadId, observedCwd),
             );
-            // The session record follows too, so plans comparing it with the
-            // thread workspace see where the process runs.
-            yield* emitProviderEvent({
-              type: "provider_session.updated",
-              driver: CLAUDE_PROVIDER,
-              providerSession: { ...session, cwd: observedCwd, updatedAt: yield* DateTime.now },
-            });
+            yield* emitSessionCwd(observedCwd);
             yield* Effect.logInfo("claude.session.cwd-changed", {
               ...reconcile,
               previousCwd,
@@ -7251,6 +7261,13 @@ export function makeClaudeAdapterV2(
                   uuid: claudePromptUuid(turnInput.attemptId),
                 });
             const querySession = yield* openQuery(turnInput, nativeThreadId);
+            // Fork (DECISIONS 5.8): every turn start re-persists the opening
+            // session record; restate where the process runs after a followed
+            // move (a reused process moved itself, a replacement started there).
+            const processCwd = yield* queryCwdFor(nativeThreadId, querySession.cwd);
+            if (processCwd !== null && processCwd !== session.cwd) {
+              yield* emitSessionCwd(processCwd);
+            }
             yield* Ref.set(activeTurn, context);
             yield* emitProviderEvent({
               type: "provider_turn.updated",

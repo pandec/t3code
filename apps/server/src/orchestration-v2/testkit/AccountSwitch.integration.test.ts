@@ -1,8 +1,11 @@
 // fork: continuation-compatible account switches (durable continuation groups)
 // and their races with Stop, sends, feedback, native compaction and the
 // replaced session's late exit.
+import type { SDKMessage } from "@anthropic-ai/claude-agent-sdk";
+import * as NodeServices from "@effect/platform-node/NodeServices";
 import { assert, describe, it } from "@effect/vitest";
 import {
+  ClaudeSettings,
   CommandId,
   MessageId,
   type ModelSelection,
@@ -23,16 +26,21 @@ import * as Cause from "effect/Cause";
 import * as DateTime from "effect/DateTime";
 import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
+import * as FileSystem from "effect/FileSystem";
 import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
 import * as Queue from "effect/Queue";
+import * as Path from "effect/Path";
 import * as Ref from "effect/Ref";
+import * as Schema from "effect/Schema";
 import * as Stream from "effect/Stream";
 import * as SqlClient from "effect/unstable/sql/SqlClient";
 
 import { SqlitePersistenceMemory } from "../../persistence/Layers/Sqlite.ts";
+import * as ClaudeAdapterV2 from "../Adapters/ClaudeAdapterV2.ts";
 import { ClaudeProviderCapabilitiesV2 } from "../Adapters/ClaudeAdapterV2.ts";
 import * as EffectWorker from "../EffectWorker.ts";
+import * as IdAllocator from "../IdAllocator.ts";
 import * as Orchestrator from "../Orchestrator.ts";
 import {
   ProviderAdapterProtocolError,
@@ -167,7 +175,11 @@ interface HeldTurn {
   readonly announce?: boolean;
 }
 
-const makeHarness = (options: { readonly holds: ReadonlyArray<HeldTurn> }) =>
+const makeHarness = (options: {
+  readonly holds: ReadonlyArray<HeldTurn>;
+  /** Reconfigures an instance while its thread start is still pending. */
+  readonly rekeyDuringEnsure?: { readonly instanceId: ProviderInstanceId; readonly key: string };
+}) =>
   Effect.gen(function* () {
     const log = yield* Ref.make<AdapterLog>({
       opened: [],
@@ -286,6 +298,12 @@ const makeHarness = (options: { readonly holds: ReadonlyArray<HeldTurn> }) =>
                   ...current,
                   ensured: append(current.ensured, [instanceId, nativeId] as const),
                 }));
+                const rekey = options.rekeyDuringEnsure;
+                if (rekey?.instanceId === instanceId) {
+                  yield* Ref.update(instances, (current) =>
+                    new Map(current).set(rekey.instanceId, rekey.key),
+                  );
+                }
                 return {
                   id: ProviderThreadId.make(
                     `provider-thread:${threadInput.threadId}:${instanceId}`,
@@ -384,7 +402,7 @@ const makeHarness = (options: { readonly holds: ReadonlyArray<HeldTurn> }) =>
 
 const runWithOrchestrator = <A, E>(
   name: string,
-  harness: Harness,
+  harness: Pick<Harness, "registryLayer">,
   body: Effect.Effect<
     A,
     E,
@@ -621,6 +639,50 @@ describe("account switches keep native continuation only when provably compatibl
             [ACCOUNT_B.instanceId, `native:${threadId}:${ACCOUNT_B.instanceId}`],
           ],
         );
+      }),
+    ),
+  );
+
+  it.live("records the key the owner's session opened with, not a later reconfiguration", () =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        // A is moved onto B's account while its thread start is still pending;
+        // the conversation was created in A's old config dir.
+        const harness = yield* makeHarness({
+          holds: [],
+          rekeyDuringEnsure: { instanceId: ACCOUNT_A.instanceId, key: SHARED_KEY },
+        });
+        const threadId = ThreadId.make("thread:account-switch:rekeyed-during-attach");
+        const result = yield* runWithOrchestrator(
+          "account-switch-rekeyed-during-attach",
+          harness,
+          Effect.gen(function* () {
+            const orchestrator = yield* Orchestrator.OrchestratorV2;
+            const sql = yield* SqlClient.SqlClient;
+            yield* Ref.update(harness.instances, (current) =>
+              new Map(current).set(ACCOUNT_A.instanceId, "claudeAgent:home:/old/.claude"),
+            );
+            const nativeA = yield* firstTurnOnA(threadId);
+            yield* send(threadId, "second", ACCOUNT_B, { type: "start_immediately" });
+            yield* runSettled(threadId, 2);
+            return {
+              nativeA,
+              projection: yield* orchestrator.getThreadProjection(threadId),
+              recorded: yield* sql<{ readonly continuation_key: string }>`
+                SELECT continuation_key FROM fork_native_continuation
+                WHERE provider_instance_id = ${ACCOUNT_A.instanceId}
+                  AND native_thread_id = ${nativeA}
+              `,
+            };
+          }),
+        );
+        const log = yield* Ref.get(harness.log);
+        assert.deepEqual(
+          result.recorded.map((row) => row.continuation_key),
+          ["claudeAgent:home:/old/.claude"],
+        );
+        assert.lengthOf(result.projection.contextHandoffs, 1);
+        assert.deepEqual(log.resumed, []);
       }),
     ),
   );
@@ -988,6 +1050,170 @@ describe("account switch races (generation fencing, per-thread ownership, compac
           [[ACCOUNT_B.instanceId, "ready"]],
         );
       }),
+    ),
+  );
+});
+
+/**
+ * Real Claude adapters for both accounts over a fake SDK. The first prompt is
+ * held until the test answers it; later prompts are answered at once.
+ */
+const CLAUDE_SETTINGS = Schema.decodeSync(ClaudeSettings)({});
+
+const makeClaudeRegistry = Effect.gen(function* () {
+  const fileSystem = yield* FileSystem.FileSystem;
+  const path = yield* Path.Path;
+  const idAllocator = yield* IdAllocator.IdAllocatorV2;
+  const opened: Array<{
+    readonly instanceId: ProviderInstanceId;
+    readonly options: ClaudeAdapterV2.ClaudeAgentSdkQueryOptions;
+  }> = [];
+  const firstPrompt = yield* Deferred.make<Queue.Queue<SDKMessage>>();
+  let prompts = 0;
+  let sessions = 0;
+  const result = (uuid: string) =>
+    ({
+      type: "result",
+      subtype: "success",
+      duration_ms: 1,
+      duration_api_ms: 1,
+      is_error: false,
+      num_turns: 1,
+      result: "Done.",
+      stop_reason: "end_turn",
+      total_cost_usd: 0,
+      usage: {
+        input_tokens: 1,
+        output_tokens: 1,
+        cache_creation_input_tokens: 0,
+        cache_read_input_tokens: 0,
+      },
+      modelUsage: {},
+      permission_denials: [],
+      terminal_reason: "completed",
+      uuid,
+      session_id: "unused",
+    }) as unknown as SDKMessage;
+  const makeAdapter = (instanceId: ProviderInstanceId) =>
+    Effect.gen(function* () {
+      const attachmentsDir = yield* fileSystem.makeTempDirectoryScoped({
+        prefix: "t3-account-switch-claude-",
+      });
+      return ClaudeAdapterV2.makeClaudeAdapterV2({
+        instanceId,
+        settings: CLAUDE_SETTINGS,
+        environment: {},
+        attachmentsDir,
+        fileSystem,
+        path,
+        idAllocator,
+        queryRunner: {
+          allocateSessionId: Effect.sync(
+            () => `00000000-0000-4000-8000-${String(++sessions).padStart(12, "0")}`,
+          ),
+          open: (input) =>
+            Effect.gen(function* () {
+              opened.push({ instanceId, options: input.options });
+              const messages = yield* Queue.unbounded<SDKMessage>();
+              return {
+                messages: Stream.fromQueue(messages),
+                offer: () =>
+                  ++prompts === 1
+                    ? Deferred.succeed(firstPrompt, messages).pipe(Effect.asVoid)
+                    : Queue.offer(messages, result(`result-${prompts}`)).pipe(Effect.asVoid),
+                setModel: () => Effect.void,
+                interrupt: Effect.void,
+                close: Queue.shutdown(messages),
+              };
+            }),
+          forkSession: () => Effect.die("unused forkSession"),
+          subagentLaunchToolUseId: () => Effect.succeed(null),
+          assertComplete: Effect.void,
+        },
+      });
+    });
+  const adapters = [
+    yield* makeAdapter(ACCOUNT_A.instanceId),
+    yield* makeAdapter(ACCOUNT_B.instanceId),
+  ];
+  const lookup = (
+    instanceId: ProviderInstanceId,
+  ): Effect.Effect<
+    ProviderAdapterV2Shape,
+    ProviderAdapterRegistry.ProviderAdapterRegistryLookupError
+  > => {
+    const adapter = adapters.find((candidate) => candidate.instanceId === instanceId);
+    return adapter === undefined
+      ? Effect.fail(new ProviderAdapterRegistry.ProviderAdapterRegistryLookupError({ instanceId }))
+      : Effect.succeed(adapter);
+  };
+  const registryLayer = Layer.succeed(
+    ProviderAdapterRegistry.ProviderAdapterRegistryV2,
+    ProviderAdapterRegistry.ProviderAdapterRegistryV2.of({
+      get: lookup,
+      list: () => Effect.succeed(adapters.map((adapter) => adapter.instanceId)),
+      getMetadata: (instanceId) =>
+        lookup(instanceId).pipe(
+          Effect.map(() => ({
+            driver: DRIVER,
+            continuationKey: SHARED_KEY,
+            enabled: true,
+            capabilities: ClaudeProviderCapabilitiesV2,
+          })),
+        ),
+    }),
+  );
+  return {
+    registryLayer,
+    opened,
+    answerFirstPrompt: Deferred.await(firstPrompt).pipe(
+      Effect.flatMap((messages) => Queue.offer(messages, result("result-1"))),
+    ),
+  };
+});
+
+describe("queued account switch through the Claude adapter", () => {
+  it.live("resumes the adopted conversation instead of creating it again", () =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        const claude = yield* makeClaudeRegistry;
+        const threadId = ThreadId.make("thread:account-switch:claude-queued");
+        const nativeA = yield* runWithOrchestrator(
+          "account-switch-claude-queued",
+          claude,
+          Effect.gen(function* () {
+            const orchestrator = yield* Orchestrator.OrchestratorV2;
+            yield* createThread(threadId);
+            yield* send(threadId, "first", ACCOUNT_A, { type: "start_immediately" });
+            yield* runRunning(threadId, 1);
+            yield* send(threadId, "follow-up", ACCOUNT_B, { type: "queue_after_active" });
+            yield* claude.answerFirstPrompt;
+            yield* runSettled(threadId, 2);
+            const projection = yield* orchestrator.getThreadProjection(threadId);
+            assert.deepEqual(
+              projection.runs.map((run) => [run.providerInstanceId, run.status]),
+              [
+                [ACCOUNT_A.instanceId, "completed"],
+                [ACCOUNT_B.instanceId, "completed"],
+              ],
+            );
+            assert.lengthOf(projection.contextHandoffs, 0);
+            return nativeIdOf(projection, projection.runs[0]?.providerThreadId);
+          }),
+        );
+        assert.isNotNull(nativeA);
+        assert.deepEqual(
+          claude.opened.map(({ instanceId, options }) => [
+            instanceId,
+            options.resume,
+            options.sessionId,
+          ]),
+          [
+            [ACCOUNT_A.instanceId, undefined, nativeA],
+            [ACCOUNT_B.instanceId, nativeA, undefined],
+          ],
+        );
+      }).pipe(Effect.provide(Layer.merge(IdAllocator.layer, NodeServices.layer))),
     ),
   );
 });

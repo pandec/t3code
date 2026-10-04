@@ -253,7 +253,7 @@ it.effect("reconciles usage-source transitions before refreshes and registry eve
 
         // Rotating the client key must not disturb the pooled snapshot: the
         // key gates only the model-catalog fetch, and the slot keeps the same
-        // owning source class.
+        // owning source (the same pool).
         const rotationObserved = yield* Deferred.make<void>();
         yield* Ref.set(nextConfigRead, rotationObserved);
         yield* Ref.set(config, {
@@ -321,6 +321,113 @@ it.effect("reconciles usage-source transitions before refreshes and registry eve
         yield* Deferred.await(additionObserved);
         yield* refresh.refresh([target]);
         expect(yield* health.listUsageSnapshots()).toHaveLength(1);
+      }).pipe(Effect.provide(layer));
+    }),
+  ),
+);
+
+const POOL_A_FILES = JSON.stringify({
+  files: [{ auth_index: "pool-a", name: "pool-a.json", provider: "unknown" }],
+});
+
+it.effect("drops a pool's snapshot and its late result when the gateway moves", () =>
+  Effect.scoped(
+    Effect.gen(function* () {
+      const target = ProviderInstanceId.make("claude_gateway");
+      const gatewayConfig = (origin: string): ProviderInstanceConfig => ({
+        driver,
+        environment: [{ name: "ANTHROPIC_BASE_URL", value: `${origin}/v1`, sensitive: false }],
+        usageSource: { kind: "cliproxyapi", managementKey: "management-key" },
+        config: {},
+      });
+      const config = yield* Ref.make(gatewayConfig("https://pool-a.example.test"));
+      const nextConfigRead = yield* Ref.make<Deferred.Deferred<void> | undefined>(undefined);
+      const changes = yield* PubSub.unbounded<void>();
+      const gatewayInstance = {
+        instanceId: target,
+        driverKind: driver,
+        enabled: true,
+      } as unknown as ProviderInstance;
+      const registryLayer = Layer.succeed(ProviderInstanceRegistry, {
+        getInstance: (instanceId) =>
+          Effect.succeed(instanceId === target ? gatewayInstance : undefined),
+        getInstanceConfig: (instanceId) =>
+          instanceId === target
+            ? Ref.get(config).pipe(
+                Effect.tap(() =>
+                  Ref.getAndSet(nextConfigRead, undefined).pipe(
+                    Effect.flatMap((waiter) =>
+                      waiter === undefined ? Effect.void : Deferred.succeed(waiter, undefined),
+                    ),
+                  ),
+                ),
+              )
+            : Effect.succeed<ProviderInstanceConfig | undefined>(undefined),
+        listInstances: Effect.succeed([gatewayInstance]),
+        listUnavailable: Effect.succeed([]),
+        streamChanges: Stream.fromPubSub(changes),
+        subscribeChanges: PubSub.subscribe(changes),
+      });
+      // Pool A answers; once gated, its next answer waits for the test. Pool B fails.
+      const poolAGate = yield* Ref.make<Deferred.Deferred<void> | undefined>(undefined);
+      const poolARequested = yield* Deferred.make<void>();
+      const httpLayer = Layer.succeed(
+        HttpClient.HttpClient,
+        HttpClient.make((request, url) =>
+          Effect.gen(function* () {
+            if (url.hostname !== "pool-a.example.test") {
+              return HttpClientResponse.fromWeb(request, new Response(null, { status: 500 }));
+            }
+            const gate = yield* Ref.get(poolAGate);
+            if (gate !== undefined) {
+              yield* Deferred.succeed(poolARequested, undefined);
+              yield* Deferred.await(gate);
+            }
+            return HttpClientResponse.fromWeb(
+              request,
+              new Response(POOL_A_FILES, {
+                status: 200,
+                headers: { "content-type": "application/json" },
+              }),
+            );
+          }),
+        ),
+      );
+      const layer = ProviderUsageRefreshLive.pipe(
+        Layer.provide(registryLayer),
+        Layer.provideMerge(Layer.effect(ProviderInstanceHealth, makeProviderInstanceHealth)),
+        Layer.provide(httpLayer),
+        Layer.provide(projectionStoreLayerMemory),
+      );
+
+      yield* Effect.gen(function* () {
+        const refresh = yield* ProviderUsageRefresh;
+        const health = yield* ProviderInstanceHealth;
+        expect((yield* refresh.refresh([target])).refreshedInstanceIds).toEqual([target]);
+        expect(yield* health.listUsageSnapshots()).toHaveLength(1);
+
+        const releasePoolA = yield* Deferred.make<void>();
+        yield* Ref.set(poolAGate, releasePoolA);
+        const lateRefresh = yield* refresh.refresh([target]).pipe(Effect.forkScoped);
+        yield* Deferred.await(poolARequested);
+
+        const moveObserved = yield* Deferred.make<void>();
+        yield* Ref.set(nextConfigRead, moveObserved);
+        yield* Ref.set(config, gatewayConfig("https://pool-b.example.test"));
+        yield* PubSub.publish(changes, undefined);
+        yield* Deferred.await(moveObserved);
+        // Queues behind the watcher's reconcile: a receipt that it finished.
+        yield* refresh.refresh([ProviderInstanceId.make("unrelated")]);
+        expect(yield* health.listUsageSnapshots()).toEqual([]);
+
+        yield* Deferred.succeed(releasePoolA, undefined);
+        expect((yield* Fiber.join(lateRefresh)).refreshedInstanceIds).toEqual([]);
+        expect(yield* health.listUsageSnapshots()).toEqual([]);
+
+        const poolB = yield* refresh.refresh([target]);
+        expect(poolB.refreshedInstanceIds).toEqual([]);
+        expect(poolB.failures).toHaveLength(1);
+        expect(yield* health.listUsageSnapshots()).toEqual([]);
       }).pipe(Effect.provide(layer));
     }),
   ),

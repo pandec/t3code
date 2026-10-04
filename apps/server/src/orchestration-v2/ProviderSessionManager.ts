@@ -5,6 +5,7 @@ import {
   OrchestrationV2ProviderSession,
   type OrchestrationV2ProviderThread,
   OrchestrationV2RuntimeRequest,
+  type ProviderDriverKind,
   ProviderInstanceId,
   ProviderSessionId,
   ThreadId,
@@ -28,6 +29,7 @@ import * as Semaphore from "effect/Semaphore";
 import * as Stream from "effect/Stream";
 
 import { ProviderWorkspaceMissingError } from "../provider/Errors.ts";
+import { defaultProviderContinuationIdentity } from "../provider/ProviderDriver.ts";
 import * as ProjectService from "../project/ProjectService.ts";
 import * as McpProviderSession from "../mcp/McpProviderSession.ts";
 import * as ServerSettings from "../serverSettings.ts";
@@ -185,6 +187,12 @@ export class ProviderSessionManagerV2 extends Context.Service<
   ProviderSessionManagerV2Shape
 >()("t3/orchestration-v2/ProviderSessionManager/ProviderSessionManagerV2") {}
 
+/** fork: see NativeContinuationStore. */
+interface SessionContinuationIdentity {
+  readonly driver: ProviderDriverKind;
+  readonly continuationKey: string;
+}
+
 interface LiveSessionEntry {
   readonly attachedThreadIds: ReadonlySet<ThreadId>;
   readonly loadedProviderThreadKeyByThread: ReadonlyMap<ThreadId, string>;
@@ -329,10 +337,37 @@ export const layerWithOptions = (
       const recordNativeContinuation = (
         providerInstanceId: ProviderInstanceId,
         providerThread: OrchestrationV2ProviderThread,
+        continuation: SessionContinuationIdentity | null,
       ) =>
-        Option.isNone(nativeContinuationStore)
+        Option.isNone(nativeContinuationStore) || continuation === null
           ? Effect.void
-          : nativeContinuationStore.value.recordAttached({ providerInstanceId, providerThread });
+          : nativeContinuationStore.value.recordAttached({
+              providerInstanceId,
+              providerThread,
+              continuation,
+            });
+      // The continuation identity a session is opened with; recorded for the
+      // native conversations it attaches even if the instance is reconfigured
+      // meanwhile. Null (record nothing) when the instance can't report one.
+      const sessionContinuationIdentity = (instanceId: ProviderInstanceId) =>
+        registry.getMetadata !== undefined
+          ? registry.getMetadata(instanceId).pipe(
+              Effect.map(({ driver, continuationKey }): SessionContinuationIdentity | null => ({
+                driver,
+                continuationKey,
+              })),
+              Effect.orElseSucceed(() => null),
+            )
+          : registry.get(instanceId).pipe(
+              Effect.map((adapter): SessionContinuationIdentity | null => ({
+                driver: adapter.driver,
+                continuationKey: defaultProviderContinuationIdentity({
+                  driverKind: adapter.driver,
+                  instanceId,
+                }).continuationKey,
+              })),
+              Effect.orElseSucceed(() => null),
+            );
       const agentAccessSettings = Effect.fn("ProviderSessionManagerV2.agentAccessSettings")(
         function* (threadId: ThreadId) {
           if (Option.isNone(serverSettings)) return { browser: true, device: false };
@@ -1276,6 +1311,7 @@ export const layerWithOptions = (
         eventSubscribers: Ref.Ref<
           ReadonlyMap<number, Queue.Queue<ProviderSessionEventSignal, Cause.Done>>
         >,
+        continuation: SessionContinuationIdentity | null,
       ): ProviderAdapterV2SessionRuntime => {
         const providerSessionId = runtime.providerSessionId;
         const subscribeEvents = makeEventSubscription(eventSubscribers);
@@ -1296,7 +1332,7 @@ export const layerWithOptions = (
             ).pipe(
               Effect.andThen(runtime.ensureThread(input)),
               Effect.tap((providerThread) =>
-                recordNativeContinuation(runtime.instanceId, providerThread),
+                recordNativeContinuation(runtime.instanceId, providerThread, continuation),
               ),
               Effect.tap((providerThread) =>
                 markProviderThreadLoaded({
@@ -1337,7 +1373,7 @@ export const layerWithOptions = (
                 loaded ? Effect.succeed(input.providerThread) : runtime.resumeThread(input),
               ),
               Effect.tap((providerThread) =>
-                recordNativeContinuation(runtime.instanceId, providerThread),
+                recordNativeContinuation(runtime.instanceId, providerThread, continuation),
               ),
               Effect.tap((providerThread) =>
                 markProviderThreadLoaded({
@@ -1367,7 +1403,7 @@ export const layerWithOptions = (
             ).pipe(
               Effect.andThen(runtime.forkThread(input)),
               Effect.tap((providerThread) =>
-                recordNativeContinuation(runtime.instanceId, providerThread),
+                recordNativeContinuation(runtime.instanceId, providerThread, continuation),
               ),
               Effect.tap((providerThread) =>
                 markProviderThreadLoaded({
@@ -1606,6 +1642,9 @@ export const layerWithOptions = (
                 return existing.exposedRuntime;
               }
 
+              const continuation = yield* sessionContinuationIdentity(
+                input.modelSelection.instanceId,
+              );
               const adapter = yield* registry.get(input.modelSelection.instanceId).pipe(
                 Effect.mapError(
                   (cause) =>
@@ -1681,7 +1720,7 @@ export const layerWithOptions = (
               const eventSubscribers = yield* Ref.make<
                 ReadonlyMap<number, Queue.Queue<ProviderSessionEventSignal, Cause.Done>>
               >(new Map());
-              const exposedRuntime = decorateRuntime(runtime, eventSubscribers);
+              const exposedRuntime = decorateRuntime(runtime, eventSubscribers, continuation);
               const now = yield* Clock.currentTimeMillis;
               const entry: LiveSessionEntry = {
                 attachedThreadIds: new Set([input.threadId]),

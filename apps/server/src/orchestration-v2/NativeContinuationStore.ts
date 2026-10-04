@@ -5,8 +5,10 @@
  * shared config dir, Codex instances on one home) can resume each other's
  * native conversations, so an account switch keeps native context. The live
  * key only describes an instance's current config, though; a conversation
- * stays where it was created. `ProviderSessionManager` records the owner's key
- * when a session first attaches a native conversation, and
+ * stays where it was created. `ProviderSessionManager` captures the owner's key
+ * when it opens a session and records that key when the session first attaches
+ * a native conversation (a reconfiguration while the attach is pending doesn't
+ * change where the conversation was created), and
  * `ProviderSwitchService` compares that recorded key, not the owner's live
  * one, when a switch moves the conversation to another instance. A
  * reconfigured owner therefore can't hand a conversation to an instance that
@@ -29,9 +31,6 @@ import * as Option from "effect/Option";
 import * as Schema from "effect/Schema";
 import * as SqlClient from "effect/unstable/sql/SqlClient";
 
-import { defaultProviderContinuationIdentity } from "../provider/ProviderDriver.ts";
-import * as ProviderAdapterRegistry from "./ProviderAdapterRegistry.ts";
-
 export class NativeContinuationReadError extends Schema.TaggedError<NativeContinuationReadError>()(
   "NativeContinuationReadError",
   { providerInstanceId: ProviderInstanceId, cause: Schema.Defect() },
@@ -45,13 +44,17 @@ export interface NativeConversationRef {
 
 export interface NativeContinuationStoreShape {
   /**
-   * Records the attaching instance's live continuation key for the provider
-   * thread's native conversation. The first record wins; failures are logged,
-   * never raised, so recording can't break a session start.
+   * Records the continuation identity the attaching runtime was opened with
+   * for the provider thread's native conversation. The first record wins;
+   * failures are logged, never raised, so recording can't break a session start.
    */
   readonly recordAttached: (input: {
     readonly providerInstanceId: ProviderInstanceId;
     readonly providerThread: OrchestrationV2ProviderThread;
+    readonly continuation: {
+      readonly driver: ProviderDriverKind;
+      readonly continuationKey: string;
+    };
   }) => Effect.Effect<void>;
   /** The recorded continuation key of one native conversation, if any. */
   readonly get: (
@@ -67,35 +70,15 @@ export class NativeContinuationStore extends Context.Service<
 const refKey = (ref: NativeConversationRef) =>
   `${ref.providerInstanceId}\u0000${ref.driver}\u0000${ref.nativeThreadId}`;
 
-export const layer: Layer.Layer<
-  NativeContinuationStore,
-  never,
-  SqlClient.SqlClient | ProviderAdapterRegistry.ProviderAdapterRegistryV2
-> = Layer.effect(
+export const layer: Layer.Layer<NativeContinuationStore, never, SqlClient.SqlClient> = Layer.effect(
   NativeContinuationStore,
   Effect.gen(function* () {
     const sql = yield* SqlClient.SqlClient;
-    const registry = yield* ProviderAdapterRegistry.ProviderAdapterRegistryV2;
     // Conversations already recorded by this process; skips a write per turn.
     const recorded = new Set<string>();
 
-    const liveContinuationKey = (providerInstanceId: ProviderInstanceId) =>
-      registry.getMetadata !== undefined
-        ? registry
-            .getMetadata(providerInstanceId)
-            .pipe(Effect.map(({ driver, continuationKey }) => ({ driver, continuationKey })))
-        : registry.get(providerInstanceId).pipe(
-            Effect.map((adapter) => ({
-              driver: adapter.driver,
-              continuationKey: defaultProviderContinuationIdentity({
-                driverKind: adapter.driver,
-                instanceId: providerInstanceId,
-              }).continuationKey,
-            })),
-          );
-
     return NativeContinuationStore.of({
-      recordAttached: ({ providerInstanceId, providerThread }) =>
+      recordAttached: ({ providerInstanceId, providerThread, continuation }) =>
         Effect.gen(function* () {
           const nativeThreadId = providerThread.nativeThreadRef?.nativeId ?? null;
           if (nativeThreadId === null) return;
@@ -106,17 +89,16 @@ export const layer: Layer.Layer<
           };
           const key = refKey(ref);
           if (recorded.has(key)) return;
-          const live = yield* liveContinuationKey(providerInstanceId);
           // An instance id can be recreated on another driver; never vouch
-          // for a conversation the live owner's driver didn't produce.
-          if (live.driver !== providerThread.driver) return;
+          // for a conversation the attaching runtime's driver didn't produce.
+          if (continuation.driver !== providerThread.driver) return;
           const now = DateTime.formatIso(yield* DateTime.now);
           yield* sql`
             INSERT INTO fork_native_continuation (
               provider_instance_id, driver, native_thread_id, continuation_key, recorded_at
             ) VALUES (
               ${ref.providerInstanceId}, ${ref.driver}, ${ref.nativeThreadId},
-              ${live.continuationKey}, ${now}
+              ${continuation.continuationKey}, ${now}
             )
             ON CONFLICT DO NOTHING
           `;

@@ -231,6 +231,8 @@ export const replayServer = (
     /** Counts the connections currently lent out, as the server owner's borrowers. */
     readonly borrowers?: { current: number };
     readonly sessionEnvironments?: Array<ReplayedSessionEnvironment>;
+    /** A spawned server's shell environment; external servers have none. */
+    readonly shellEnvironment?: NodeJS.ProcessEnv;
   },
 ) =>
   Effect.gen(function* () {
@@ -252,6 +254,7 @@ export const replayServer = (
       url: BASE_URL,
       version: transcript.version,
       external: options?.external ?? false,
+      shellEnvironment: options?.external ? undefined : (options?.shellEnvironment ?? {}),
     };
     const borrowers = options?.borrowers;
     return OpenCode2Server.OpenCode2Server.of({
@@ -280,6 +283,8 @@ const makeReplayAdapter = (
     /** Counts the connections currently lent out, as the server owner's borrowers. */
     readonly borrowers?: { current: number };
     readonly sessionEnvironments?: Array<ReplayedSessionEnvironment>;
+    /** A spawned server's shell environment; external servers have none. */
+    readonly shellEnvironment?: NodeJS.ProcessEnv;
   },
 ) =>
   Effect.gen(function* () {
@@ -315,6 +320,8 @@ export const openCode2ReplayRuntime = (
     readonly external?: boolean;
     readonly borrowers?: { current: number };
     readonly sessionEnvironments?: Array<ReplayedSessionEnvironment>;
+    /** A spawned server's shell environment; external servers have none. */
+    readonly shellEnvironment?: NodeJS.ProcessEnv;
   },
 ) =>
   Effect.gen(function* () {

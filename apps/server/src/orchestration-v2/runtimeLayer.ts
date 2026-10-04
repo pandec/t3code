@@ -119,9 +119,7 @@ const contextHandoffServiceProvided = contextHandoffServiceLayer.pipe(
 
 const providerAdapterRegistryProvided = providerAdapterRegistryLayerFromProviderInstances;
 // fork: durable continuation groups for account switches (NativeContinuationStore.ts).
-const nativeContinuationStoreProvided = nativeContinuationStoreLayer.pipe(
-  Layer.provide(providerAdapterRegistryProvided),
-);
+const nativeContinuationStoreProvided = nativeContinuationStoreLayer;
 const providerSwitchServiceProvided = providerSwitchServiceLayer.pipe(
   Layer.provide(providerAdapterRegistryProvided),
   Layer.provide(nativeContinuationStoreProvided),

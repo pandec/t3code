@@ -5561,6 +5561,31 @@ describe("ClaudeAdapterV2 background wake turns", () => {
             [worktree],
           );
 
+          // The next turn reuses the moved process; its start re-persists the
+          // opening session record, so the adapter restates the moved cwd.
+          yield* harness.runtime.startTurn(
+            makeClaudeTestTurnInput({
+              threadId: harness.threadId,
+              providerThread: harness.providerThread,
+              now: yield* DateTime.now,
+              attemptId: RunAttemptId.make("attempt-claude-in-worktree"),
+              text: "Keep going.",
+              attachments: [],
+              providerTurnOrdinal: 2,
+            }),
+          );
+          const sessionCwds = () =>
+            harness.events.flatMap((event) =>
+              event.type === "provider_session.updated" ? [event.providerSession.cwd] : [],
+            );
+          yield* awaitUntil(() => sessionCwds().length === 2, "restated session cwd");
+          assert.deepEqual(sessionCwds(), [worktree, worktree]);
+          yield* Queue.offer(
+            harness.sdkMessages,
+            makeResultFrame({ uuid: "00000000-0000-4000-8000-0000000005dc", result: "Done." }),
+          );
+          yield* awaitUntil(() => harness.terminalEvents().length === 2, "second turn terminal");
+
           // A new selection replaces the process; it starts where the session is.
           yield* harness.runtime.startTurn(
             makeClaudeTestTurnInput({
@@ -5570,7 +5595,7 @@ describe("ClaudeAdapterV2 background wake turns", () => {
               attemptId: RunAttemptId.make("attempt-claude-after-worktree"),
               text: "Continue.",
               attachments: [],
-              providerTurnOrdinal: 2,
+              providerTurnOrdinal: 3,
               modelSelection: { ...CLAUDE_TEST_MODEL_SELECTION, model: "claude-haiku-4-5" },
             }),
           );
@@ -5580,6 +5605,88 @@ describe("ClaudeAdapterV2 background wake turns", () => {
           assert.equal(reopened?.env?.T3CODE_WORKTREE_PATH, worktree);
         }).pipe(Effect.provide(Layer.merge(IdAllocator.layer, NodeServices.layer))),
       ),
+  );
+
+  // Fork (DECISIONS 5.8): a relative CLAUDE_CONFIG_DIR is read where the CLI
+  // process started, not in the server's cwd.
+  it.effect("finds the transcript under a relative config dir in the query's cwd", () =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        const fileSystem = yield* FileSystem.FileSystem;
+        const path = yield* Path.Path;
+        const startDir = yield* fileSystem.makeTempDirectoryScoped({
+          prefix: "t3-claude-cwd-start-",
+        });
+        const worktree = yield* fileSystem.makeTempDirectoryScoped({
+          prefix: "t3-claude-cwd-worktree-",
+        });
+        assert.notEqual(startDir, process.cwd());
+        const sessionId = "00000000-0000-4000-8000-0000000005e8";
+        const harness = yield* makeWakeHarnessWithOptions({
+          environment: { CLAUDE_CONFIG_DIR: ".claude-account" },
+          nativeSessionId: sessionId,
+        });
+        const projectDir = path.join(startDir, ".claude-account", "projects", "-start");
+        yield* fileSystem.makeDirectory(projectDir, { recursive: true });
+        yield* fileSystem.writeFileString(
+          path.join(projectDir, `${sessionId}.jsonl`),
+          `{"type":"user","cwd":"${startDir}"}\n{"type":"user","cwd":"${worktree}"}\n`,
+        );
+        yield* harness.runtime.startTurn(
+          makeClaudeTestTurnInput({
+            threadId: harness.threadId,
+            providerThread: harness.providerThread,
+            now: yield* DateTime.now,
+            attemptId: RunAttemptId.make("attempt-claude-relative-config"),
+            text: "Work in a worktree.",
+            attachments: [],
+            runtimePolicy: { ...CLAUDE_TEST_RUNTIME_POLICY, cwd: startDir },
+          }),
+        );
+        const toolUseId = "toolu_enter_worktree_relative";
+        yield* harness.offerAndWait(
+          claudeSdkFrame({
+            type: "assistant",
+            uuid: "00000000-0000-4000-8000-0000000005e9",
+            session_id: sessionId,
+            parent_tool_use_id: null,
+            message: {
+              id: "msg_enter_worktree_relative",
+              model: "claude-sonnet-4-6",
+              type: "message",
+              role: "assistant",
+              content: [
+                { type: "tool_use", id: toolUseId, name: "EnterWorktree", input: { name: "x" } },
+              ],
+              stop_reason: "tool_use",
+              stop_sequence: null,
+              usage: {
+                input_tokens: 1,
+                output_tokens: 1,
+                cache_creation_input_tokens: 0,
+                cache_read_input_tokens: 0,
+              },
+            },
+          }),
+        );
+        yield* harness.offerAndWait(
+          claudeSdkFrame({
+            type: "user",
+            uuid: "00000000-0000-4000-8000-0000000005ea",
+            session_id: sessionId,
+            parent_tool_use_id: null,
+            message: {
+              role: "user",
+              content: [{ type: "tool_result", tool_use_id: toolUseId, content: "Entered." }],
+            },
+          }),
+        );
+        assert.deepEqual(
+          harness.sessionCwdObservations.map(({ cwd }) => cwd),
+          [worktree],
+        );
+      }).pipe(Effect.provide(Layer.merge(IdAllocator.layer, NodeServices.layer))),
+    ),
   );
 
   it.effect("fails a positive task-notification error result", () =>
