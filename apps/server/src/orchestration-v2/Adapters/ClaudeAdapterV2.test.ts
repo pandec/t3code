@@ -1130,6 +1130,79 @@ describe("ClaudeAdapterV2 executable path", () => {
       }),
     ).pipe(Effect.provide(Layer.merge(IdAllocator.layer, NodeServices.layer))),
   );
+
+  it.effect("runs a shadow-account instance with its shadow dir as CLAUDE_CONFIG_DIR", () =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        const path = yield* Path.Path;
+        const configDirs: Array<string | undefined> = [];
+        const adapter = yield* ClaudeAdapterV2.createClaudeAdapterV2(
+          {
+            instanceId: ClaudeAdapterV2.CLAUDE_DEFAULT_INSTANCE_ID,
+            displayName: undefined,
+            // The shadow dir also wins over an inherited instance variable.
+            environment: [
+              { name: "CLAUDE_CONFIG_DIR", value: "/inherited/claude", sensitive: false },
+            ],
+            enabled: true,
+            config: {
+              ...DEFAULT_CLAUDE_SETTINGS,
+              homePath: "/shared/claude",
+              shadowHomePath: "~/.claude-t3/personal",
+            },
+          },
+          {},
+        ).pipe(
+          Effect.provide(
+            ServerConfig.layerTest(process.cwd(), {
+              prefix: "t3-claude-shadow-home-",
+            }),
+          ),
+          Effect.provideService(ClaudeAdapterV2.ClaudeAgentSdkQueryRunner, {
+            allocateSessionId: Effect.succeed("native-thread-claude-shadow-home"),
+            open: (input) =>
+              Effect.sync(() => {
+                configDirs.push(input.options.env?.CLAUDE_CONFIG_DIR);
+                return {
+                  messages: Stream.never,
+                  offer: () => Effect.void,
+                  setModel: () => Effect.void,
+                  interrupt: Effect.void,
+                  close: Effect.void,
+                };
+              }),
+            forkSession: () => Effect.die("unused"),
+            subagentLaunchToolUseId: () => Effect.succeed(null),
+            assertComplete: Effect.void,
+          }),
+        );
+        const threadId = ThreadId.make("thread-claude-shadow-home");
+        const runtime = yield* adapter.openSession({
+          threadId,
+          providerSessionId: ProviderSessionId.make("provider-session-claude-shadow-home"),
+          modelSelection: CLAUDE_TEST_MODEL_SELECTION,
+          runtimePolicy: CLAUDE_TEST_RUNTIME_POLICY,
+        });
+        const providerThread = yield* runtime.ensureThread({
+          threadId,
+          modelSelection: CLAUDE_TEST_MODEL_SELECTION,
+          runtimePolicy: CLAUDE_TEST_RUNTIME_POLICY,
+        });
+        yield* runtime.startTurn(
+          makeClaudeTestTurnInput({
+            threadId,
+            providerThread,
+            now: yield* DateTime.now,
+            attemptId: RunAttemptId.make("attempt-claude-shadow-home"),
+            text: "hello",
+            attachments: [],
+          }),
+        );
+
+        assert.deepEqual(configDirs, [path.join(NodeOS.homedir(), ".claude-t3", "personal")]);
+      }),
+    ).pipe(Effect.provide(Layer.merge(IdAllocator.layer, NodeServices.layer))),
+  );
 });
 
 describe("ClaudeAdapterV2 resume compaction", () => {
