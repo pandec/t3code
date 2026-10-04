@@ -77,7 +77,7 @@ import { isUndeliveredMailboxSteer } from "./NotificationMailbox.ts";
 import { EventSinkV2 } from "./EventSink.ts";
 import type { OrchestrationEffectRequestV2, PendingOrchestrationEffectV2 } from "./EffectOutbox.ts";
 import { IdAllocatorV2 } from "./IdAllocator.ts";
-import { indefiniteSnoozeWokeByRun, isIndefinitelySnoozed } from "./IndefiniteSnooze.ts";
+import { indefiniteSnoozeWoke, isIndefinitelySnoozed } from "./IndefiniteSnooze.ts";
 import {
   clearedSnoozeUntilDone,
   delegatedCompletionContinuesUntilDone,
@@ -2618,7 +2618,7 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
       indefiniteSnoozeHolds =
         isIndefinitelySnoozed(thread) &&
         previousSnoozedAt !== null &&
-        !indefiniteSnoozeWokeByRun(projection.runs, previousSnoozedAt);
+        !indefiniteSnoozeWoke(projection.runs, { ...thread, snoozedAt: previousSnoozedAt });
     }
     let markUnreadVisitedAt: DateTime.Utc | null = null;
     if (command.type === "thread.mark-unread") {
@@ -3231,6 +3231,44 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
           }),
         { concurrency: 1, discard: true },
       );
+      // Fork: the detach stops the agent's background work, but no process
+      // will report it ending, so end it in the projection here (as Stop's
+      // settle does). Settle already rejects active runs; on archive an
+      // active run's teardown owns its work.
+      if (
+        liveSessions.length > 0 &&
+        (command.type === "thread.settle" || command.type === "thread.archive")
+      ) {
+        const stored = yield* loadProjectionForCommand(command, ["turnItems", "providerThreads"], {
+          turnItemTypes: ["command_execution", "dynamic_tool", "subagent"],
+          turnItemStatuses: ["pending", "running", "waiting"],
+        });
+        // Runs as this command leaves them (queued automatic runs cancelled).
+        const { runs } = yield* getProjectionWithPendingEvents(command.threadId, events);
+        const projection = { ...stored, runs };
+        if (
+          !runs.some((run) =>
+            ["preparing", "queued", "starting", "running", "waiting"].includes(run.status),
+          )
+        ) {
+          yield* settleBackgroundWork({
+            command,
+            events,
+            projection,
+            endedProviderThreadIds: new Set(
+              projection.providerThreads
+                .filter(
+                  (providerThread) =>
+                    providerThread.providerSessionId != null &&
+                    detachSessionIds.has(providerThread.providerSessionId),
+                )
+                .map((providerThread) => providerThread.id),
+            ),
+            throughRunOrdinal: Number.POSITIVE_INFINITY,
+            now,
+          });
+        }
+      }
     }
 
     if (command.type === "thread.archive") {
@@ -7766,23 +7804,30 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
 
   /**
    * Ends the background work a settled thread still shows that no provider
-   * process will report on: work on the provider thread whose interrupt just
-   * returned (`stoppedProviderThreadId`), and work on provider threads with no
-   * live session at all. Only the stopped run's work and older runs' is ended
-   * (`throughRunOrdinal`); a later run's work is its own. A dead process's
-   * roster goes too, as on restart.
+   * process will report on: work on provider threads whose process was just
+   * stopped (`endedProviderThreadIds`: an interrupt that returned, or a settle
+   * or archive detach), and work on provider threads with no live session at
+   * all. Only the stopped run's work and older runs' is ended
+   * (`throughRunOrdinal`); a later run's work is its own. A dead or stopped
+   * process's roster goes too, as on restart.
    */
   const settleBackgroundWork = (input: {
     readonly command: Extract<
       OrchestrationV2ServerCommand,
-      { readonly type: "run.interrupt" | "thread.background-work.settle" }
+      {
+        readonly type:
+          | "run.interrupt"
+          | "thread.background-work.settle"
+          | "thread.settle"
+          | "thread.archive";
+      }
     >;
     readonly events: Ref.Ref<Array<OrchestrationV2DomainEvent>>;
     readonly projection: Pick<
       OrchestrationV2ThreadProjection,
       "runs" | "turnItems" | "providerThreads"
     >;
-    readonly stoppedProviderThreadId: OrchestrationV2ProviderThread["id"] | null;
+    readonly endedProviderThreadIds: ReadonlySet<OrchestrationV2ProviderThread["id"]>;
     readonly throughRunOrdinal: number;
     readonly now: DateTime.Utc;
   }) =>
@@ -7818,7 +7863,7 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
         const providerThreadId = item.providerThreadId ?? null;
         if (
           providerThreadId !== null &&
-          providerThreadId !== input.stoppedProviderThreadId &&
+          !input.endedProviderThreadIds.has(providerThreadId) &&
           (yield* hasLiveSession(providerThreadId))
         ) {
           continue;
@@ -7843,7 +7888,8 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
         // A live process owns its roster and reports clearing it.
         if (
           (providerThread.pendingBackgroundTasks?.length ?? 0) === 0 ||
-          (yield* hasLiveSession(providerThread.id))
+          (!input.endedProviderThreadIds.has(providerThread.id) &&
+            (yield* hasLiveSession(providerThread.id)))
         ) {
           continue;
         }
@@ -7902,7 +7948,7 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
         command,
         events,
         projection,
-        stoppedProviderThreadId: command.providerThreadId,
+        endedProviderThreadIds: new Set([command.providerThreadId]),
         throughRunOrdinal: stoppedRun.ordinal,
         now: yield* DateTime.now,
       });
@@ -8173,7 +8219,7 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
           command,
           events,
           projection,
-          stoppedProviderThreadId: providerThread.id,
+          endedProviderThreadIds: new Set([providerThread.id]),
           throughRunOrdinal: run.ordinal,
           now,
         });

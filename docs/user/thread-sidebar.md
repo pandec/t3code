@@ -53,8 +53,8 @@ matching threads even when their section was folded.
 On web and desktop, unpinning, settling, snoozing, and archiving a thread each show
 a notification with **Undo** for five seconds. Undo restores the thread's previous
 state, including its pinned position and any snooze that settling cleared ("until I
-wake it" and "until it's done" included; an "until it's done" snooze whose work has
-since ended stays awake). If archiving left you on an empty new-thread screen, undo
+wake it" included). Settling stops the work an "until it's done" snooze waits on, so
+Undo leaves that thread awake. If archiving left you on an empty new-thread screen, undo
 can reopen the restored thread. It keeps another active conversation in place.
 `mod+z` triggers the most recent Undo when no text field is focused; see
 [Keybindings](./keybindings.md#commands-with-special-behavior). With **Archive

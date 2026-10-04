@@ -301,48 +301,17 @@ describe("settle and snooze Undo", () => {
     });
   });
 
-  it("restores an until-done snooze while its work still goes on", async () => {
-    threadShell.snoozedAt = "2026-01-01T00:00:00.000Z";
-    threadShell.snoozedUntilRunId = "run-1";
-    threadShell.latestRun = { runId: "run-1", status: "running", completedAt: null };
-    const actions = useThreadActions();
-    await actions.settleThread(target);
-    await currentUndo()();
-    expect(commands.snooze).toHaveBeenCalledExactlyOnceWith({
-      environmentId: target.environmentId,
-      input: { threadId: target.threadId, snoozedUntil: null, untilDone: true },
-    });
-  });
-
-  it("leaves the thread awake when the until-done work ended before Undo", async () => {
-    threadShell.snoozedAt = "2026-01-01T00:00:00.000Z";
-    threadShell.snoozedUntilRunId = "run-1";
-    threadShell.latestRun = { runId: "run-1", status: "running", completedAt: null };
-    const actions = useThreadActions();
-    await actions.settleThread(target);
-    threadShell.latestRun = {
-      runId: "run-1",
-      status: "interrupted",
-      completedAt: "2026-01-01T00:05:00.000Z",
-    };
-    await currentUndo()();
-    expect(commands.unsettle).toHaveBeenCalledOnce();
-    expect(commands.snooze).not.toHaveBeenCalled();
-  });
-
-  it("leaves the thread awake when unrelated new work replaced the awaited run", async () => {
+  it("leaves an until-done snooze awake, since settling stopped its work", async () => {
     threadShell.snoozedAt = "2026-01-01T00:00:00.000Z";
     threadShell.snoozedUntilRunId = "run-1";
     threadShell.latestRun = {
       runId: "run-1",
       status: "completed",
-      completedAt: "2026-01-01T00:05:00.000Z",
+      completedAt: "2025-12-31T23:55:00.000Z",
     };
     threadShell.pendingBackgroundTasks = [{ taskId: "task-1", kind: "subagent" }];
     const actions = useThreadActions();
     await actions.settleThread(target);
-    threadShell.latestRun = { runId: "run-2", status: "running", completedAt: null };
-    threadShell.pendingBackgroundTasks = [];
     await currentUndo()();
     expect(commands.unsettle).toHaveBeenCalledOnce();
     expect(commands.snooze).not.toHaveBeenCalled();

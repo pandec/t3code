@@ -51,3 +51,21 @@ export function indefiniteSnoozeWokeByRun(
       DateTime.toEpochMillis(run.completedAt) > snoozedAtMs,
   );
 }
+
+/**
+ * Whether an indefinite snooze has woken by the rules clients derive: a run
+ * ended after it, or the latest run failed and the thread changed since.
+ * Mirrors client-runtime's threadRaisedHandWhileSnoozed, which reads a failed
+ * runtime stamped with `thread.updatedAt` newer than `snoozedAt` as a fresh
+ * failure.
+ */
+export function indefiniteSnoozeWoke(
+  runs: ReadonlyArray<Pick<OrchestrationV2Run, "status" | "completedAt">>,
+  thread: Pick<OrchestrationV2AppThread, "updatedAt"> & { readonly snoozedAt: DateTime.Utc },
+): boolean {
+  return (
+    indefiniteSnoozeWokeByRun(runs, thread.snoozedAt) ||
+    (runs.at(-1)?.status === "failed" &&
+      DateTime.toEpochMillis(thread.updatedAt) > DateTime.toEpochMillis(thread.snoozedAt))
+  );
+}

@@ -13,7 +13,6 @@ import {
   canSnooze,
   effectiveSnoozed,
   threadWokeAt,
-  untilDoneWorkContinues,
 } from "@t3tools/client-runtime/state/thread-settled";
 import { threadRuntimeCanArchive } from "@t3tools/client-runtime/state/models";
 import { EnvironmentId, type ScopedThreadRef, ThreadId } from "@t3tools/contracts";
@@ -865,17 +864,16 @@ export function useThreadActions() {
       // has to put those back as well.
       const pinOrderKey = resolved?.thread.pinnedAt != null ? resolved.thread.pinOrderKey : null;
       const wasPinned = resolved?.thread.pinnedAt != null;
-      // Fork: restore only a snooze that still held (an expired, raised-hand
-      // or finished until-done one had already woken), in all three modes:
-      // timed, indefinite (null wake time) and until-done.
+      // Fork: restore only a timed or indefinite (null wake time) snooze
+      // that still held; an expired or raised-hand one had already woken.
+      // Settling stops the work an "until it's done" snooze waits on
+      // (DECISIONS Q3.1), so that snooze would have woken: never restore it.
       const restoreSnooze =
-        resolved !== null && effectiveSnoozed(resolved.thread, { now: new Date().toISOString() })
-          ? {
-              snoozedUntil: resolved.thread.snoozedUntil ?? null,
-              ...(resolved.thread.snoozedUntilRunId != null ? { untilDone: true } : {}),
-            }
+        resolved !== null &&
+        resolved.thread.snoozedUntilRunId == null &&
+        effectiveSnoozed(resolved.thread, { now: new Date().toISOString() })
+          ? { snoozedUntil: resolved.thread.snoozedUntil ?? null }
           : null;
-      const awaitedRunId = resolved?.thread.snoozedUntilRunId ?? null;
       // An older unpin/snooze Undo would re-pin or re-snooze, and the server
       // treats either as a promotion that un-settles; settling supersedes them.
       ThreadUndo.invalidate("pin", scopedThreadKey(target));
@@ -905,22 +903,7 @@ export function useThreadActions() {
             );
             if (pinned._tag !== "Success") return pinned;
           }
-          // Settling detaches the provider session, so the work an
-          // until-done snooze waited on may be gone: that snooze would have
-          // woken by now. Only the original awaited work counts; unrelated
-          // new work (a message from another client) would have woken it.
-          const untilDoneStillApplies = (): boolean => {
-            const current = readThreadShell(target);
-            return (
-              current !== null &&
-              awaitedRunId !== null &&
-              untilDoneWorkContinues({ ...current, snoozedUntilRunId: awaitedRunId })
-            );
-          };
-          if (
-            restoreSnooze !== null &&
-            (restoreSnooze.untilDone !== true || untilDoneStillApplies())
-          ) {
+          if (restoreSnooze !== null) {
             return snoozeThreadMutation({
               environmentId: target.environmentId,
               input: { threadId: target.threadId, ...restoreSnooze },
