@@ -231,6 +231,7 @@ import {
   OrchestrationV2GetShellSnapshotError,
   OrchestrationV2GetThreadProjectionError,
   OrchestrationV2RpcSchemas,
+  OrchestrationV2ThreadArchiveError,
   OrchestrationV2ThreadLaunchError,
 } from "./orchestrationV2.ts";
 import {
@@ -1732,6 +1733,25 @@ const WsOrchestrationV2GetRecentArchivedThreadsRpc = Rpc.make(
   },
 );
 
+// Fork: deferred archive through the archive scheduler (CLI).
+const WsOrchestrationV2ScheduleThreadArchiveRpc = Rpc.make(
+  ORCHESTRATION_V2_WS_METHODS.scheduleThreadArchive,
+  {
+    payload: OrchestrationV2RpcSchemas.scheduleThreadArchive.input,
+    success: OrchestrationV2RpcSchemas.scheduleThreadArchive.output,
+    error: Schema.Union([OrchestrationV2ThreadArchiveError, EnvironmentAuthorizationError]),
+  },
+);
+
+const WsOrchestrationV2CancelThreadArchiveRpc = Rpc.make(
+  ORCHESTRATION_V2_WS_METHODS.cancelThreadArchive,
+  {
+    payload: OrchestrationV2RpcSchemas.cancelThreadArchive.input,
+    success: OrchestrationV2RpcSchemas.cancelThreadArchive.output,
+    error: Schema.Union([OrchestrationV2ThreadArchiveError, EnvironmentAuthorizationError]),
+  },
+);
+
 const WsOrchestrationV2GetThreadProjectionRpc = Rpc.make(
   ORCHESTRATION_V2_WS_METHODS.getThreadProjection,
   {
@@ -2070,6 +2090,8 @@ export const WsRpcGroup = RpcGroup.make(
   WsOrchestrationV2SearchThreadsRpc,
   WsOrchestrationV2GetArchivedShellSnapshotRpc,
   WsOrchestrationV2GetRecentArchivedThreadsRpc,
+  WsOrchestrationV2ScheduleThreadArchiveRpc,
+  WsOrchestrationV2CancelThreadArchiveRpc,
   WsOrchestrationV2GetThreadProjectionRpc,
   WsOrchestrationV2LaunchThreadRpc,
   WsOrchestrationV2SubscribeArchivedShellRpc,

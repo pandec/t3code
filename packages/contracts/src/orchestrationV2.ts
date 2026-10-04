@@ -3142,6 +3142,11 @@ export const ORCHESTRATION_V2_WS_METHODS = {
   subscribeThread: "orchestration.subscribeThread",
   /** Fork: bounded recent-archive window for always-mounted archive shelves. */
   getRecentArchivedThreads: "orchestration.getRecentArchivedThreads",
+  /** Fork: deferred archive through the archive scheduler, which refuses a
+      worktree removal that can never qualify up front. */
+  scheduleThreadArchive: "orchestration.scheduleThreadArchive",
+  /** Fork: cancels a pending deferred archive through the archive scheduler. */
+  cancelThreadArchive: "orchestration.cancelThreadArchive",
 } as const;
 
 export const OrchestrationV2ArchivedShellSnapshot = Schema.Struct({
@@ -3192,6 +3197,31 @@ export const OrchestrationV2RecentArchivedThreads = Schema.Struct({
   totalArchivedCount: NonNegativeInt,
 });
 export type OrchestrationV2RecentArchivedThreads = typeof OrchestrationV2RecentArchivedThreads.Type;
+
+/** Fork: input of a deferred archive through the archive scheduler. */
+export const OrchestrationV2ScheduleThreadArchiveInput = Schema.Struct({
+  threadId: ThreadId,
+  afterTurn: Schema.Boolean,
+  removeWorktree: Schema.optionalKey(Schema.Boolean),
+  commandId: Schema.optionalKey(CommandId),
+});
+export type OrchestrationV2ScheduleThreadArchiveInput =
+  typeof OrchestrationV2ScheduleThreadArchiveInput.Type;
+
+/** Fork: input of a deferred archive cancellation. */
+export const OrchestrationV2CancelThreadArchiveInput = Schema.Struct({
+  threadId: ThreadId,
+  commandId: Schema.optionalKey(CommandId),
+});
+export type OrchestrationV2CancelThreadArchiveInput =
+  typeof OrchestrationV2CancelThreadArchiveInput.Type;
+
+/** Fork: a thread's archive state and its latest archive request. */
+export const OrchestrationV2ThreadArchiveStatus = Schema.Struct({
+  archivedAt: Schema.NullOr(Schema.DateTimeUtc),
+  request: Schema.NullOr(OrchestrationV2ThreadArchiveRequest),
+});
+export type OrchestrationV2ThreadArchiveStatus = typeof OrchestrationV2ThreadArchiveStatus.Type;
 
 export const OrchestrationV2ThreadLaunchWorkspaceStrategy = Schema.Union([
   Schema.Struct({
@@ -3439,6 +3469,15 @@ export class OrchestrationV2GetShellSnapshotError extends Schema.TaggedError<Orc
   },
 ) {}
 
+/** Fork: the archive scheduler refused the request; `message` says why. */
+export class OrchestrationV2ThreadArchiveError extends Schema.TaggedError<OrchestrationV2ThreadArchiveError>()(
+  "OrchestrationV2ThreadArchiveError",
+  {
+    threadId: ThreadId,
+    message: Schema.String,
+  },
+) {}
+
 export class OrchestrationV2ThreadLaunchError extends Schema.TaggedError<OrchestrationV2ThreadLaunchError>()(
   "OrchestrationV2ThreadLaunchError",
   {
@@ -3551,6 +3590,14 @@ export const OrchestrationV2RpcSchemas = {
   getRecentArchivedThreads: {
     input: OrchestrationV2GetRecentArchivedThreadsInput,
     output: OrchestrationV2RecentArchivedThreads,
+  },
+  scheduleThreadArchive: {
+    input: OrchestrationV2ScheduleThreadArchiveInput,
+    output: OrchestrationV2ThreadArchiveStatus,
+  },
+  cancelThreadArchive: {
+    input: OrchestrationV2CancelThreadArchiveInput,
+    output: OrchestrationV2ThreadArchiveStatus,
   },
 } as const;
 

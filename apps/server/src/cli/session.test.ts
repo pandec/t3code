@@ -6,6 +6,8 @@ import * as NodePath from "node:path";
 
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import {
+  EnvironmentInternalError,
+  EnvironmentRequestInvalidError,
   ProviderDriverKind,
   ProviderInstanceId,
   type ProviderCatalogInstance,
@@ -34,6 +36,7 @@ import {
   resolveImportInstance,
   SessionCliError,
   sessionHttpError,
+  sessionImportError,
   rewriteCodexTranscriptCwd,
   sniffSessionTranscript,
 } from "./session.ts";
@@ -54,6 +57,26 @@ const providerInstance = (
   importCapable: input.importCapable ?? true,
   ...(input.home === undefined ? {} : { home: input.home }),
   models: input.models ?? [],
+});
+
+it("treats a declared internal import error as an unknown outcome, not a rejection", () => {
+  const traceId = "session-import-test";
+  assert.strictEqual(
+    sessionImportError(
+      new EnvironmentInternalError({ code: "internal_error", reason: "internal_error", traceId }),
+    )._tag,
+    "CliOrchestrationOutcomeUnknownError",
+  );
+  assert.notStrictEqual(
+    sessionImportError(
+      new EnvironmentRequestInvalidError({
+        code: "invalid_request",
+        reason: "invalid_command",
+        traceId,
+      }),
+    )._tag,
+    "CliOrchestrationOutcomeUnknownError",
+  );
 });
 
 it.effect("sniffs Codex rollout metadata and the last advertised model", () =>

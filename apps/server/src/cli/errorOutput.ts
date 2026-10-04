@@ -9,11 +9,13 @@ import {
   CliOrchestrationOutcomeUnknownError,
   CliOrchestrationWaitOutcomeUnknownError,
 } from "./orchestration.ts";
+import { ThreadCliWaitConnectionError } from "./threadWait.ts";
 
 const isCliOrchestrationOutcomeUnknownError = Schema.is(CliOrchestrationOutcomeUnknownError);
 const isCliOrchestrationWaitOutcomeUnknownError = Schema.is(
   CliOrchestrationWaitOutcomeUnknownError,
 );
+const isThreadCliWaitConnectionError = Schema.is(ThreadCliWaitConnectionError);
 
 export interface CliJsonError {
   readonly code: string;
@@ -44,10 +46,14 @@ export const serializeCliError = (error: unknown): CliJsonError => {
     return {
       code: error["_tag"],
       message: typeof message === "string" ? message : String(error),
-      // A lost acknowledgement or unconfirmed multi-step compensation leaves
-      // the mutation outcome ambiguous.
+      // A lost acknowledgement, unconfirmed multi-step compensation, an
+      // unobserved wait, or a created thread whose launch did not complete
+      // leaves the outcome ambiguous. The launch error is matched by tag:
+      // thread.ts imports this module.
       ...(isCliOrchestrationOutcomeUnknownError(error) ||
-      isCliOrchestrationWaitOutcomeUnknownError(error)
+      isCliOrchestrationWaitOutcomeUnknownError(error) ||
+      isThreadCliWaitConnectionError(error) ||
+      error["_tag"] === "ThreadCliLaunchError"
         ? { outcome: "unknown" as const }
         : {}),
       ...(Object.keys(detail).length > 0 ? { detail } : {}),

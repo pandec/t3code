@@ -56,11 +56,13 @@ import * as EffectOutbox from "./EffectOutbox.ts";
 import * as EffectWorker from "./EffectWorker.ts";
 import * as EventSink from "./EventSink.ts";
 import * as Orchestrator from "./Orchestrator.ts";
+import { OrchestratorProjectionError } from "./Orchestrator.ts";
 import * as ProjectStore from "./ProjectStore.ts";
 import type { ProviderAdapterV2Shape } from "./ProviderAdapter.ts";
 import { OrchestrationV2EventSinkLayerLive, OrchestrationV2LayerLive } from "./runtimeLayer.ts";
 import * as ThreadArchiveScheduler from "./ThreadArchiveScheduler.ts";
 import * as ThreadCommandExecutor from "./ThreadCommandExecutor.ts";
+import * as ThreadManagement from "./ThreadManagementService.ts";
 
 const at = (iso: string) => DateTime.makeUnsafe(iso);
 const run = (
@@ -1147,6 +1149,34 @@ it.layer(TestLayer)("deferred archive on the orchestrator", (it) => {
       const status = yield* scheduler.status(threadId);
       assert.isNull(status.archivedAt);
       assert.isNull(status.request);
+    }),
+  );
+
+  it.effect("marks a failed read after dispatch apart from an up-front refusal", () =>
+    Effect.gen(function* () {
+      yield* resetRemoval();
+      const threads = yield* ThreadManagement.ThreadManagementService;
+      // The archive dispatch commits; the status read that follows fails.
+      const scheduler = yield* ThreadArchiveScheduler.make.pipe(
+        Effect.provideService(ThreadManagement.ThreadManagementService, {
+          ...threads,
+          getThreadRecords: (threadId) =>
+            Effect.fail(new OrchestratorProjectionError({ threadId })),
+        }),
+        Effect.provide(NodeServices.layer),
+      );
+      const threadId = yield* createThread("status-read-fails");
+      const failed = yield* scheduler.schedule({ threadId, afterTurn: false }).pipe(Effect.flip);
+      assert.equal(failed.operation, "status");
+      assert.isNotNull((yield* threadState(threadId)).archivedAt);
+
+      yield* resetRemoval({ blocker: ArchiveWorktreeRemoval.WORKTREE_KEPT_DETAIL.shared });
+      const refusedThreadId = yield* createThread("status-read-refused");
+      const refused = yield* scheduler
+        .schedule({ threadId: refusedThreadId, afterTurn: false, removeWorktree: true })
+        .pipe(Effect.flip);
+      assert.equal(refused.operation, "schedule");
+      yield* resetRemoval();
     }),
   );
 

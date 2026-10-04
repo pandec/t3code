@@ -6,6 +6,12 @@ import {
   EnvironmentHttpCommonError,
   EnvironmentHttpConflictError,
   EnvironmentResourceNotFoundError,
+  ORCHESTRATION_PROTOCOL_HEADER,
+  ORCHESTRATION_PROTOCOL_VERSION_TEXT,
+  type OrchestrationV2ShellSnapshot,
+  Project,
+  ProjectMutation,
+  type ThreadId,
 } from "@t3tools/contracts";
 import * as Config from "effect/Config";
 import * as Console from "effect/Console";
@@ -19,11 +25,17 @@ import * as HttpApiClient from "effect/unstable/httpapi/HttpApiClient";
 
 import * as EnvironmentAuth from "../auth/EnvironmentAuth.ts";
 import type * as ServerConfig from "../config.ts";
+import {
+  clearPersistedServerRuntimeState,
+  readPersistedServerRuntimeState,
+} from "../serverRuntimeState.ts";
 
 const decodeServerSettings = Schema.decodeUnknownEffect(ServerSettings);
 const encodeSettingsPatchJson = Schema.encodeSync(
   Schema.fromJsonString(Schema.Struct({ patch: ServerSettingsPatch })),
 );
+const decodeProject = Schema.decodeUnknownEffect(Project);
+const encodeProjectMutationJson = Schema.encodeSync(Schema.fromJsonString(ProjectMutation));
 
 const isEnvironmentHttpCommonError = Schema.is(EnvironmentHttpCommonError);
 const isEnvironmentHttpConflictError = Schema.is(EnvironmentHttpConflictError);
@@ -125,6 +137,7 @@ export const CliLiveServerReadPhase = Schema.Literals([
   "snapshot",
   "messages",
   "wait",
+  "connect",
 ]);
 export type CliLiveServerReadPhase = typeof CliLiveServerReadPhase.Type;
 
@@ -227,7 +240,7 @@ export const resolveCliLiveServerReadTimeouts = Effect.fn("resolveCliLiveServerR
   },
 );
 
-const withLiveServerReadTimeout =
+export const withLiveServerReadTimeout =
   (phase: CliLiveServerReadPhase, duration: Duration.Duration) =>
   <A, E, R>(effect: Effect.Effect<A, E, R>) =>
     effect.pipe(
@@ -440,47 +453,51 @@ export const fetchLiveEnvironmentDescriptor = (
     withLiveServerReadTimeout("descriptor", timeouts.read),
   );
 
-export const updateLiveServerSettings = (
+/**
+ * Maps a rejected dispatch acknowledgement. Any 5xx, declared internal errors
+ * included, can occur after the command committed, so its outcome is unknown;
+ * sub-5xx statuses prove the command was rejected.
+ */
+const rejectedDispatchError = (response: Response, payload: unknown) => {
+  const conflict = decodeEnvironmentHttpConflictError(payload);
+  if (Option.isSome(conflict)) {
+    return cliOrchestrationErrorFromRequest(conflict.value);
+  }
+  if (response.status >= 500) {
+    return new CliOrchestrationOutcomeUnknownError({
+      operation: "dispatchLiveServer",
+      cause: payload,
+    });
+  }
+  const declared = decodeEnvironmentHttpCommonError(payload);
+  if (Option.isSome(declared)) {
+    return cliOrchestrationErrorFromRequest(declared.value);
+  }
+  return new CliOrchestrationUndeclaredStatusError({
+    operation: "callLiveServer",
+    status: response.status,
+    cause: payload,
+  });
+};
+
+const dispatchToLiveServer = <A, E>(
   origin: string,
   bearerToken: string,
-  patch: ServerSettingsPatch,
-  options?: {
-    readonly timeoutMilliseconds?: number;
-  },
+  request: { readonly path: string; readonly method: "POST" | "PATCH"; readonly body: string },
+  decode: (payload: unknown) => Effect.Effect<A, E>,
+  timeoutMilliseconds: number | undefined,
 ) =>
   Effect.gen(function* () {
-    const { response, payload: responsePayload } = yield* fetchDispatchAcknowledgement(
+    const { response, payload } = yield* fetchDispatchAcknowledgement(
       origin,
       bearerToken,
-      { path: "/api/settings", method: "PATCH", body: encodeSettingsPatchJson({ patch }) },
-      options?.timeoutMilliseconds === undefined
-        ? CLI_LIVE_SERVER_DISPATCH_TIMEOUT_MS
-        : options.timeoutMilliseconds,
+      request,
+      timeoutMilliseconds ?? CLI_LIVE_SERVER_DISPATCH_TIMEOUT_MS,
     );
     if (!response.ok) {
-      const conflict = decodeEnvironmentHttpConflictError(responsePayload);
-      if (Option.isSome(conflict)) {
-        return yield* cliOrchestrationErrorFromRequest(conflict.value);
-      }
-      const declared = decodeEnvironmentHttpCommonError(responsePayload);
-      if (Option.isSome(declared)) {
-        return yield* cliOrchestrationErrorFromRequest(declared.value);
-      }
-      // An undeclared 5xx can occur after the command committed, so the
-      // outcome is unknown; sub-5xx statuses prove the command was rejected.
-      if (response.status >= 500) {
-        return yield* new CliOrchestrationOutcomeUnknownError({
-          operation: "dispatchLiveServer",
-          cause: responsePayload,
-        });
-      }
-      return yield* new CliOrchestrationUndeclaredStatusError({
-        operation: "callLiveServer",
-        status: response.status,
-        cause: responsePayload,
-      });
+      return yield* rejectedDispatchError(response, payload);
     }
-    return yield* decodeServerSettings(responsePayload).pipe(
+    return yield* decode(payload).pipe(
       Effect.mapError(
         (cause) =>
           new CliOrchestrationOutcomeUnknownError({
@@ -490,6 +507,141 @@ export const updateLiveServerSettings = (
       ),
     );
   });
+
+export const updateLiveServerSettings = (
+  origin: string,
+  bearerToken: string,
+  patch: ServerSettingsPatch,
+  options?: {
+    readonly timeoutMilliseconds?: number;
+  },
+) =>
+  dispatchToLiveServer(
+    origin,
+    bearerToken,
+    { path: "/api/settings", method: "PATCH", body: encodeSettingsPatchJson({ patch }) },
+    decodeServerSettings,
+    options?.timeoutMilliseconds,
+  );
+
+/** Applies a project mutation through the running server's project service. */
+export const dispatchLiveProjectMutation = (
+  origin: string,
+  bearerToken: string,
+  mutation: ProjectMutation,
+  options?: {
+    readonly timeoutMilliseconds?: number;
+  },
+) =>
+  dispatchToLiveServer(
+    origin,
+    bearerToken,
+    {
+      path: "/api/projects/mutate",
+      method: "POST",
+      body: encodeProjectMutationJson(mutation),
+    },
+    decodeProject,
+    options?.timeoutMilliseconds,
+  );
+
+export const fetchLiveOrchestrationShell = (
+  origin: string,
+  bearerToken: string,
+  timeouts: CliLiveServerReadTimeouts,
+  options?: {
+    readonly phase?: CliLiveServerReadPhase;
+    readonly timeout?: Duration.Duration;
+  },
+) =>
+  Effect.gen(function* () {
+    const client = yield* makeLiveServerClient(origin);
+    return yield* client.orchestration.shellSnapshot({
+      headers: {
+        authorization: `Bearer ${bearerToken}`,
+        [ORCHESTRATION_PROTOCOL_HEADER]: ORCHESTRATION_PROTOCOL_VERSION_TEXT,
+      },
+    });
+  }).pipe(
+    Effect.mapError(cliOrchestrationErrorFromRequest),
+    withLiveServerReadTimeout(
+      options?.phase ?? "discovery",
+      options?.timeout ?? timeouts.discovery,
+    ),
+  );
+
+const mapThreadReadError = (threadId: ThreadId) => (cause: unknown) =>
+  isEnvironmentResourceNotFoundError(cause)
+    ? new CliOrchestrationThreadNotFoundError({ operation: "fetchThreadMessages", threadId })
+    : cliOrchestrationErrorFromRequest(cause);
+
+/** Newest timeline window of a thread (active or archived), with the opaque
+    cursor that pages further back through `fetchLiveThreadHistoryPage`. */
+export const fetchLiveThreadBoundedSnapshot = (
+  origin: string,
+  bearerToken: string,
+  threadId: ThreadId,
+  timeouts: CliLiveServerReadTimeouts,
+) =>
+  Effect.gen(function* () {
+    const client = yield* makeLiveServerClient(origin);
+    return yield* client.orchestration.threadBoundedSnapshot({
+      params: { threadId },
+      headers: {
+        authorization: `Bearer ${bearerToken}`,
+        [ORCHESTRATION_PROTOCOL_HEADER]: ORCHESTRATION_PROTOCOL_VERSION_TEXT,
+      },
+    });
+  }).pipe(
+    Effect.mapError(mapThreadReadError(threadId)),
+    withLiveServerReadTimeout("messages", timeouts.read),
+  );
+
+/** Timeline rows older than `cursor`, chronological. */
+export const fetchLiveThreadHistoryPage = (
+  origin: string,
+  bearerToken: string,
+  input: { readonly threadId: ThreadId; readonly cursor: string },
+  timeouts: CliLiveServerReadTimeouts,
+) =>
+  Effect.gen(function* () {
+    const client = yield* makeLiveServerClient(origin);
+    return yield* client.orchestration.threadHistoryPage({
+      params: { threadId: input.threadId },
+      query: { cursor: input.cursor },
+      headers: {
+        authorization: `Bearer ${bearerToken}`,
+        [ORCHESTRATION_PROTOCOL_HEADER]: ORCHESTRATION_PROTOCOL_VERSION_TEXT,
+      },
+    });
+  }).pipe(
+    Effect.mapError(mapThreadReadError(input.threadId)),
+    withLiveServerReadTimeout("messages", timeouts.read),
+  );
+
+/** Issues a one-shot ticket that authenticates the CLI's WebSocket RPC upgrade. */
+export const issueLiveWebSocketTicket = (
+  origin: string,
+  bearerToken: string,
+  timeouts: CliLiveServerReadTimeouts,
+) =>
+  Effect.gen(function* () {
+    const client = yield* makeLiveServerClient(origin);
+    const issued = yield* client.auth.webSocketTicket({
+      headers: { authorization: `Bearer ${bearerToken}` },
+    });
+    return issued.ticket;
+  }).pipe(
+    Effect.mapError(cliOrchestrationErrorFromRequest),
+    withLiveServerReadTimeout("connect", timeouts.read),
+  );
+
+export interface CliLiveOrchestrationServer {
+  readonly origin: string;
+  readonly pid: number;
+  readonly startedAt: string;
+  readonly shell: OrchestrationV2ShellSnapshot;
+}
 
 export const isProcessAlive = (pid: number) =>
   Effect.sync(() => {
@@ -522,3 +674,54 @@ export interface CliResolvedLiveOrchestrationInput {
   readonly label: string;
   readonly timeouts: CliLiveServerReadTimeouts;
 }
+
+/**
+ * Resolves the persisted live server and runs `use` against it inside a single
+ * auth session, so discovery and the actual operation share one issue/revoke
+ * cycle. Returns `Option.none` when no live server exists for this data
+ * directory; a server that is alive but unresponsive fails with the discovery
+ * error instead of being treated as absent.
+ */
+export const withResolvedLiveOrchestrationServer = Effect.fn("withResolvedLiveOrchestrationServer")(
+  function* <A, E, R>(
+    input: CliResolvedLiveOrchestrationInput,
+    use: (live: CliLiveOrchestrationServer, token: string) => Effect.Effect<A, E, R>,
+  ) {
+    const runtimeState = yield* readPersistedServerRuntimeState(
+      input.config.serverRuntimeStatePath,
+    );
+    if (Option.isNone(runtimeState)) {
+      return Option.none<A>();
+    }
+
+    return yield* withCliOrchestrationSession(input.environmentAuth, input.label, (token) =>
+      Effect.gen(function* () {
+        const attempted = yield* Effect.result(
+          fetchLiveOrchestrationShell(runtimeState.value.origin, token, input.timeouts),
+        );
+        if (attempted._tag === "Failure") {
+          yield* Effect.logDebug("Failed to connect to the persisted T3 CLI server.", {
+            origin: runtimeState.value.origin,
+            cause: attempted.failure,
+          });
+          if (
+            !(yield* isProcessAlive(runtimeState.value.pid)) ||
+            isConnectionRefused(attempted.failure)
+          ) {
+            yield* clearPersistedServerRuntimeState(input.config.serverRuntimeStatePath);
+            return Option.none<A>();
+          }
+          return yield* attempted.failure;
+        }
+
+        const live: CliLiveOrchestrationServer = {
+          origin: runtimeState.value.origin,
+          pid: runtimeState.value.pid,
+          startedAt: runtimeState.value.startedAt,
+          shell: attempted.success,
+        };
+        return Option.some(yield* use(live, token));
+      }),
+    );
+  },
+);
