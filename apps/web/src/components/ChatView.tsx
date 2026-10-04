@@ -374,6 +374,7 @@ import {
   stripInlineContextReferences,
 } from "../lib/composerContextReferences";
 import { serializeLegacyContextMessage } from "@t3tools/shared/composerContextLegacySend";
+import { formatForkedThreadTitle } from "@t3tools/shared/composerTrigger";
 import {
   buildMessageContext,
   previewAnnotationContextLabel,
@@ -8049,7 +8050,7 @@ export default function ChatView(props: ChatViewProps) {
           sourceThreadId: input.sourceThreadId,
           targetThreadId,
           runId: input.runId,
-          title: `${activeThread.title} fork`,
+          title: formatForkedThreadTitle(activeThread.title),
         },
       });
       if (result._tag === "Failure") {

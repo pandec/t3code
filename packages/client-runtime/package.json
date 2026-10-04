@@ -319,6 +319,10 @@
       "types": "./src/state/threadSettled.ts",
       "default": "./src/state/threadSettled.ts"
     },
+    "./state/thread-fork": {
+      "types": "./src/state/threadFork.ts",
+      "default": "./src/state/threadFork.ts"
+    },
     "./state/thread-attention": {
       "types": "./src/state/threadAttention.ts",
       "default": "./src/state/threadAttention.ts"

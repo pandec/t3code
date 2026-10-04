@@ -159,6 +159,7 @@ function ThreadNavigationSidebarPane(
     moveThread,
     renameThread,
     regenerateThreadTitle,
+    forkThread,
   } = useThreadListActions();
   const pendingTasks = usePendingNewTasks();
   const queuedThreadKeys = useQueuedThreadKeys();
@@ -830,6 +831,7 @@ function ThreadNavigationSidebarPane(
               onUnsettleThread={unsettleThread}
               onPinThread={pinThread}
               onUnpinThread={unpinThread}
+              onForkThread={forkThread}
               onSetThreadAutoSettle={setThreadAutoSettle}
               onMoveThread={moveThread}
               onSwipeableClose={handleSwipeableClose}
@@ -884,6 +886,7 @@ function ThreadNavigationSidebarPane(
       activeReorderEnvironmentIds,
       confirmDeletePendingTask,
       confirmDeleteThread,
+      forkThread,
       handleSelectThread,
       handleSwipeableClose,
       handleSwipeableWillOpen,

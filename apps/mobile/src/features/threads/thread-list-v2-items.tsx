@@ -18,6 +18,7 @@ import type {
 } from "@t3tools/client-runtime/state/shell";
 import type { EnvironmentThreadSearchMatch } from "@t3tools/client-runtime/state/thread-search";
 import type { EnvironmentMachineKind } from "@t3tools/contracts";
+import { canForkConversation } from "@t3tools/client-runtime/state/thread-fork";
 import { canSnooze, resolveSnoozePresets } from "@t3tools/client-runtime/state/thread-settled";
 import type { MenuAction } from "@react-native-menu/menu";
 import { memo, useCallback, useEffect, useMemo, useState, type ComponentProps } from "react";
@@ -596,6 +597,9 @@ export const ThreadListV2Row = memo(function ThreadListV2Row(props: {
   readonly onArchiveThread: (thread: EnvironmentThreadShell) => void;
   readonly onPinThread: (thread: EnvironmentThreadShell) => void;
   readonly onUnpinThread: (thread: EnvironmentThreadShell) => void;
+  /** Forks the conversation and opens the copy. Offered only where
+      {@link canForkConversation} allows it. */
+  readonly onForkThread: (thread: EnvironmentThreadShell) => void;
   readonly onSetThreadAutoSettle: (thread: EnvironmentThreadShell, enabled: boolean) => void;
   /** False on environments whose server predates thread.settle/unsettle:
       swipe + menu fall back to Archive instead of failing on use. */
@@ -642,6 +646,7 @@ export const ThreadListV2Row = memo(function ThreadListV2Row(props: {
     onArchiveThread,
     onPinThread,
     onUnpinThread,
+    onForkThread,
     onSetThreadAutoSettle,
     onMoveThread,
   } = props;
@@ -762,6 +767,8 @@ export const ThreadListV2Row = memo(function ThreadListV2Row(props: {
   const handleMoveUp = useCallback(() => onMoveThread?.(thread, "up"), [onMoveThread, thread]);
   const handleMoveDown = useCallback(() => onMoveThread?.(thread, "down"), [onMoveThread, thread]);
   const handleArchive = useCallback(() => onArchiveThread(thread), [onArchiveThread, thread]);
+  const handleFork = useCallback(() => onForkThread(thread), [onForkThread, thread]);
+  const forkable = canForkConversation(thread);
 
   // Swipe: the v2 primary action is the lifecycle transition. Un-settling a
   // settled row keeps it active until new activity clears the user override.
@@ -782,6 +789,7 @@ export const ThreadListV2Row = memo(function ThreadListV2Row(props: {
     snoozeSupported: props.snoozeSupported,
     snoozable: canSnooze(thread, { now: new Date().toISOString() }),
     snoozed: snoozedRow,
+    forkable,
   });
   const snoozePresets = useMemo(
     () => (swipeActions.secondary === "snooze" ? resolveSnoozePresets(new Date()) : ([] as const)),
@@ -837,6 +845,13 @@ export const ThreadListV2Row = memo(function ThreadListV2Row(props: {
       variant,
     ],
   );
+  // Menu twin for the swipe-right Fork action, so the gesture keeps a
+  // long-press (and VoiceOver) equivalent wherever it is offered.
+  const forkMenuItem = useMemo<MenuAction[]>(
+    () =>
+      forkable ? [{ id: "fork", title: "Fork conversation", image: "arrow.triangle.branch" }] : [],
+    [forkable],
+  );
   // A submenu with the current option checked, matching web. This is a
   // per-thread setting, not a lifecycle verb.
   const autoSettleMenuItems = useMemo<MenuAction[]>(
@@ -884,21 +899,23 @@ export const ThreadListV2Row = memo(function ThreadListV2Row(props: {
         subactions: snoozePresetActions,
       },
       ...arrangementMenuItems,
+      ...forkMenuItem,
       ...titleMenuItems,
       ...autoSettleMenuItems,
       { id: "delete", title: "Delete", image: "trash", attributes: { destructive: true } },
     ],
-    [arrangementMenuItems, autoSettleMenuItems, snoozePresetActions, titleMenuItems],
+    [arrangementMenuItems, autoSettleMenuItems, forkMenuItem, snoozePresetActions, titleMenuItems],
   );
   const cardMenuActions = useMemo<MenuAction[]>(
     () => [
       CARD_MENU_ACTIONS[0]!,
       ...arrangementMenuItems,
+      ...forkMenuItem,
       ...titleMenuItems,
       ...autoSettleMenuItems,
       ...CARD_MENU_ACTIONS.slice(1),
     ],
-    [arrangementMenuItems, autoSettleMenuItems, titleMenuItems],
+    [arrangementMenuItems, autoSettleMenuItems, forkMenuItem, titleMenuItems],
   );
   // Settled and snoozed rows keep the setting too, matching web where every
   // row shares one menu builder.
@@ -908,11 +925,12 @@ export const ThreadListV2Row = memo(function ThreadListV2Row(props: {
       ...arrangementMenuItems.filter(
         (action) => action.id !== "move-up" && action.id !== "move-down",
       ),
+      ...forkMenuItem,
       ...titleMenuItems,
       ...autoSettleMenuItems,
       SLIM_MENU_ACTIONS[1]!,
     ],
-    [arrangementMenuItems, autoSettleMenuItems, titleMenuItems],
+    [arrangementMenuItems, autoSettleMenuItems, forkMenuItem, titleMenuItems],
   );
   const snoozedMenuActions = useMemo<MenuAction[]>(
     () => [
@@ -946,6 +964,7 @@ export const ThreadListV2Row = memo(function ThreadListV2Row(props: {
       if (nativeEvent.event === "move-up") handleMoveUp();
       if (nativeEvent.event === "move-down") handleMoveDown();
       if (nativeEvent.event === "archive") handleArchive();
+      if (nativeEvent.event === "fork") handleFork();
       if (nativeEvent.event === "rename") handleRename();
       if (nativeEvent.event === "regenerate-title") handleRegenerateTitle();
       if (nativeEvent.event === "copy-thread-id") {
@@ -972,6 +991,7 @@ export const ThreadListV2Row = memo(function ThreadListV2Row(props: {
       thread,
       handleArchive,
       handleDelete,
+      handleFork,
       handleRegenerateTitle,
       handleRename,
       handleMoveDown,
@@ -1045,10 +1065,36 @@ export const ThreadListV2Row = memo(function ThreadListV2Row(props: {
         : null,
     [handleMenuAction, snoozePresetActions, swipeActions.secondary, thread.title],
   );
-  const swipeAccessibilityHint =
+  // Leading panel, ordered from the screen edge inward. Archive stays last so
+  // it remains what a full swipe right commits.
+  const leftActions = swipeActions.left.map((action) =>
+    action === "fork"
+      ? {
+          accessibilityLabel: `Fork ${thread.title}`,
+          tone: "secondary" as const,
+          icon: "arrow.triangle.branch" as const,
+          label: "Fork",
+          onPress: handleFork,
+        }
+      : {
+          accessibilityLabel: `Archive ${thread.title}`,
+          icon: "archivebox" as const,
+          label: "Archive",
+          onPress: handleArchive,
+        },
+  );
+  const swipeAccessibilityHint = [
     secondaryAction === null
       ? `Opens the thread. Swipe left to ${primaryAction.label.toLowerCase()}.`
-      : `Opens the thread. Swipe left for ${primaryAction.label.toLowerCase()} and snooze actions.`;
+      : `Opens the thread. Swipe left for ${primaryAction.label.toLowerCase()} and snooze actions.`,
+    ...(leftActions.length === 0
+      ? []
+      : leftActions.length === 1
+        ? [`Swipe right to ${leftActions[0]!.label.toLowerCase()}.`]
+        : [
+            `Swipe right for ${leftActions.map((action) => action.label.toLowerCase()).join(", ")}; a full swipe archives.`,
+          ]),
+  ].join(" ");
 
   // Sidebar rows use navigation foregrounds on their active and idle surfaces.
   const cardContent = (
@@ -1390,6 +1436,7 @@ export const ThreadListV2Row = memo(function ThreadListV2Row(props: {
         // Un-settle), never the secondary snooze action.
         fullSwipeAction="primary"
         fullSwipeWidth={props.fullSwipeWidth ?? windowWidth - 32}
+        leftActions={leftActions}
         onDelete={handleDelete}
         onSwipeableClose={props.onSwipeableClose}
         onSwipeableWillOpen={props.onSwipeableWillOpen}

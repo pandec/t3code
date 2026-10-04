@@ -1,7 +1,9 @@
 import type { ProviderAdapterV2HistoricalContext } from "./ProviderAdapter.ts";
 import { assert, describe, it } from "@effect/vitest";
 import {
+  ComposerContextId,
   ContextHandoffId,
+  MessageId,
   PROVIDER_SEND_TURN_MAX_ATTACHMENTS,
   ProviderDriverKind,
   ProviderInstanceId,
@@ -146,6 +148,61 @@ describe("handoff budget", () => {
       }),
     );
     assert.equal(historyResponseItems([command!], "Activity")[1]?.type, "message");
+  });
+
+  it("expands inline context into portable user text and drops attachments", () => {
+    const user = historicalMessage({
+      id: TurnItemId.make("item:user-context"),
+      threadId,
+      runId: RunId.make("run:source"),
+      nodeId: null,
+      providerThreadId: providerThread.id,
+      providerTurnId: null,
+      nativeItemRef: null,
+      parentItemId: null,
+      ordinal: 1,
+      status: "completed",
+      title: null,
+      startedAt: now,
+      completedAt: now,
+      updatedAt: now,
+      createdBy: "user",
+      creationSource: "web",
+      type: "user_message",
+      messageId: MessageId.make("message:user-context"),
+      inputIntent: "turn_start",
+      text: "Why does [log](t3-context://v1/terminal/ctx_log) fail?",
+      context: {
+        version: 1,
+        records: [
+          {
+            version: 1,
+            contextId: ComposerContextId.make("ctx_log"),
+            kind: "terminal",
+            label: "Terminal 1 line 3",
+            terminalId: "term-1",
+            terminalLabel: "Terminal 1",
+            lineStart: 3,
+            lineEnd: 3,
+            text: "boom: missing module",
+          },
+        ],
+      },
+      attachments: [
+        {
+          type: "image",
+          id: "attachment-1",
+          name: "shot.png",
+          mimeType: "image/png",
+          sizeBytes: 1,
+        },
+      ],
+    });
+    assert.equal(user?.role, "user");
+    assert.include(user!.text, "[Terminal: log; ref=ctx_log]");
+    assert.include(user!.text, "boom: missing module");
+    assert.notInclude(user!.text, "t3-context://");
+    assert.notInclude(user!.text, "shot.png");
   });
 
   it("retains short conversations verbatim in role and order", () => {

@@ -7,6 +7,7 @@ import {
 import { settlePromise, squashAtomCommandFailure } from "@t3tools/client-runtime/state/runtime";
 import { canSnooze, threadWokeAt } from "@t3tools/client-runtime/state/thread-settled";
 import { threadRuntimeCanArchive } from "@t3tools/client-runtime/state/models";
+import { conversationForkRunId } from "@t3tools/client-runtime/state/thread-fork";
 import { EnvironmentId, type ScopedThreadRef, ThreadId } from "@t3tools/contracts";
 import { resolveWorktreeCleanup } from "@t3tools/shared/projectSettings";
 import * as Cause from "effect/Cause";
@@ -40,6 +41,7 @@ import {
   readProject,
   readThreadShell,
   readThreadShells,
+  waitForThreadShell,
 } from "../state/entities";
 import { useUiStateStore } from "../uiStateStore";
 import { useTerminalUiStateStore } from "../terminalUiStateStore";
@@ -51,6 +53,7 @@ import * as ThreadUndo from "./threadUndo";
 import { showThreadUndoNotice } from "./showThreadUndoNotice";
 import { useAtomCommand } from "../state/use-atom-command";
 import { readEmptyNewThreadDraftId } from "../archiveUndo";
+import { newThreadId } from "../lib/utils";
 
 export class ThreadArchiveBlockedError extends Schema.TaggedError<ThreadArchiveBlockedError>()(
   "ThreadArchiveBlockedError",
@@ -63,6 +66,34 @@ export class ThreadArchiveBlockedError extends Schema.TaggedError<ThreadArchiveB
     return "Cannot archive while the provider is active.";
   }
 }
+
+export class ThreadForkUnavailableError extends Schema.TaggedError<ThreadForkUnavailableError>()(
+  "ThreadForkUnavailableError",
+  {
+    environmentId: EnvironmentId,
+    threadId: ThreadId,
+  },
+) {
+  override get message(): string {
+    return "This conversation cannot be forked right now. Wait for its turn to finish.";
+  }
+}
+
+export class ThreadForkNotSyncedError extends Schema.TaggedError<ThreadForkNotSyncedError>()(
+  "ThreadForkNotSyncedError",
+  {
+    environmentId: EnvironmentId,
+    threadId: ThreadId,
+  },
+) {
+  override get message(): string {
+    return "The fork was created, but its thread data did not reach this client. Reconnect and open it from the sidebar.";
+  }
+}
+
+// One fork per source thread at a time, so a double click on any surface
+// (hover action, menus, palette) cannot create two copies.
+const forkingThreadKeys = new Set<string>();
 
 /** Deleting a thread expires every pending Undo that would try to revive it. */
 function invalidateThreadUndos(target: ScopedThreadRef) {
@@ -310,6 +341,9 @@ export function useThreadActions() {
     reportFailure: false,
   });
   const unsnoozeThreadMutation = useAtomCommand(threadEnvironment.unsnooze, {
+    reportFailure: false,
+  });
+  const forkThreadMutation = useAtomCommand(threadEnvironment.forkFromRun, {
     reportFailure: false,
   });
   const markThreadUnread = useMarkThreadUnread();
@@ -1003,6 +1037,58 @@ export function useThreadActions() {
     [confirmThreadDelete, deleteThread, resolveThreadTarget],
   );
 
+  /** Forks the whole conversation into a new thread and opens it. */
+  const forkThread = useCallback(
+    async (target: ScopedThreadRef) => {
+      const threadKey = scopedThreadKey(target);
+      // Interrupted, not a plain failure: callers treat interrupts as silent
+      // no-ops, which is right for a duplicate click.
+      if (forkingThreadKeys.has(threadKey)) return AsyncResult.failure(Cause.interrupt());
+      const thread = readThreadShell(target);
+      const runId = thread === null ? null : conversationForkRunId(thread);
+      if (runId === null) {
+        return AsyncResult.failure(
+          Cause.fail(
+            new ThreadForkUnavailableError({
+              environmentId: target.environmentId,
+              threadId: target.threadId,
+            }),
+          ),
+        );
+      }
+      forkingThreadKeys.add(threadKey);
+      try {
+        const targetThreadId = newThreadId();
+        const result = await forkThreadMutation({
+          environmentId: target.environmentId,
+          input: { sourceThreadId: target.threadId, targetThreadId, runId },
+        });
+        if (result._tag === "Failure") return result;
+        const targetThreadRef = scopeThreadRef(target.environmentId, targetThreadId);
+        if (!(await waitForThreadShell(targetThreadRef))) {
+          return AsyncResult.failure(
+            Cause.fail(
+              new ThreadForkNotSyncedError({
+                environmentId: target.environmentId,
+                threadId: targetThreadId,
+              }),
+            ),
+          );
+        }
+        const navigation = await settlePromise(() =>
+          router.navigate({
+            to: "/$environmentId/$threadId",
+            params: buildThreadRouteParams(targetThreadRef),
+          }),
+        );
+        return navigation._tag === "Failure" ? navigation : result;
+      } finally {
+        forkingThreadKeys.delete(threadKey);
+      }
+    },
+    [forkThreadMutation, router],
+  );
+
   return useMemo(
     () => ({
       archiveThread,
@@ -1020,12 +1106,14 @@ export function useThreadActions() {
       reorderActiveThread,
       markThreadUnread,
       setThreadAutoSettle,
+      forkThread,
     }),
     [
       archiveThread,
       confirmAndDeleteThread,
       confirmAndUnpinThread,
       deleteThread,
+      forkThread,
       markThreadUnread,
       pinThread,
       reorderPinnedThread,

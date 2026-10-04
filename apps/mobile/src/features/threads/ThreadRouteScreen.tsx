@@ -2,10 +2,12 @@ import { makeTurnCommandMetadata } from "../../lib/commandMetadata";
 import { buildProjectThreadStartTurnInput } from "../../lib/projectThreadStartTurn";
 import { useWorktreeSetup } from "./use-worktree-setup";
 import { worktreeSetupAgentStarted } from "@t3tools/client-runtime/worktree-setup";
+import { canForkConversation } from "@t3tools/client-runtime/state/thread-fork";
 import { ScreenHeader } from "../../components/ScreenHeader";
 import { ScreenHeaderButton } from "../../components/ScreenHeaderButton";
 import type { ScreenHeaderAction } from "../../components/ScreenHeader.types";
 import { useThreadHeaderOptions } from "./useThreadHeaderOptions";
+import { useForkConversation } from "./useForkConversation";
 import {
   StackActions,
   useFocusEffect,
@@ -136,6 +138,13 @@ function ThreadHeader(
         onPress: onMergeBack,
       });
     }
+    if (props.onForkThread) {
+      actions.push({
+        accessibilityLabel: "Fork conversation",
+        icon: "arrow.triangle.branch",
+        onPress: props.onForkThread,
+      });
+    }
     return actions;
   }, [
     props.inspectorMode,
@@ -146,6 +155,7 @@ function ThreadHeader(
     props.onOpenGitInspector,
     toggleAuxiliaryPane,
     props.onReturnToThread,
+    props.onForkThread,
     props.hasThreadCwd,
     props.hasWorkspaceRoot,
   ]);
@@ -342,6 +352,14 @@ function ThreadRouteContent(
   const gitActions = useSelectedThreadGitActions();
   const requests = useSelectedThreadRequests();
   const interruptThreadTurn = useAtomCommand(threadEnvironment.interruptTurn, "thread interrupt");
+  const forkConversation = useForkConversation();
+  const handleForkThread = useMemo(
+    () =>
+      selectedThread !== null && canForkConversation(selectedThread)
+        ? () => forkConversation(selectedThread)
+        : undefined,
+    [forkConversation, selectedThread],
+  );
   const loadEarlierHistory = useAtomCommand(threadEnvironment.loadEarlierHistory, {
     label: "load earlier thread history",
     reportFailure: false,
@@ -1099,6 +1117,7 @@ function ThreadRouteContent(
         onOpenGitInspector={handleOpenGitInspector}
         onOpenFilesInspector={handleOpenFilesInspector}
         onReturnToThread={props.onReturnToThread}
+        onForkThread={handleForkThread}
       />
 
       {renderThreadRouteBody()}

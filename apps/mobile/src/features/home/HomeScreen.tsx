@@ -104,6 +104,7 @@ interface HomeScreenProps {
   readonly onUnsettleThread: (thread: EnvironmentThreadShell) => void;
   readonly onPinThread: (thread: EnvironmentThreadShell) => Promise<boolean>;
   readonly onUnpinThread: (thread: EnvironmentThreadShell) => Promise<boolean>;
+  readonly onForkThread: (thread: EnvironmentThreadShell) => void;
   readonly onSetThreadAutoSettle: (
     thread: EnvironmentThreadShell,
     enabled: boolean,
@@ -793,6 +794,7 @@ export function HomeScreen(props: HomeScreenProps) {
           onUnsettleThread={handleUnsettleThread}
           onPinThread={handlePinThread}
           onUnpinThread={handleUnpinThread}
+          onForkThread={props.onForkThread}
           onSetThreadAutoSettle={handleSetThreadAutoSettle}
           onMoveThread={handleMoveThread}
           onSwipeableClose={handleSwipeableClose}
@@ -823,6 +825,7 @@ export function HomeScreen(props: HomeScreenProps) {
       pinReorderEnvironmentIds,
       projectByKey,
       props.onArchiveThread,
+      props.onForkThread,
       props.onDeletePendingTask,
       props.onSelectPendingTask,
       props.onSelectThread,
