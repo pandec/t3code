@@ -353,6 +353,42 @@ export const OrchestrationV2LimitRecoveryUpdate = Schema.Struct({
 );
 export type OrchestrationV2LimitRecoveryUpdate = typeof OrchestrationV2LimitRecoveryUpdate.Type;
 
+/**
+ * Fork: a deferred archive. Pending until the run it waits on completes (which
+ * includes its final checkpoint) and background work that holds completion
+ * ends; `runId` is null when it waits only on background work. With
+ * `removeWorktree`, it stays pending after the thread archives until the
+ * guarded worktree removal finishes or is refused (`error` with the reason).
+ */
+export const OrchestrationV2ThreadArchiveRequest = Schema.Struct({
+  requestId: CommandId,
+  runId: Schema.NullOr(RunId),
+  worktreePath: Schema.NullOr(TrimmedNonEmptyString),
+  removeWorktree: Schema.optional(Schema.Boolean),
+  requestedAt: IsoDateTime,
+  status: Schema.Literals(["pending", "completed", "cancelled", "error"]),
+  detail: Schema.optional(TrimmedNonEmptyString),
+});
+export type OrchestrationV2ThreadArchiveRequest = typeof OrchestrationV2ThreadArchiveRequest.Type;
+
+/**
+ * Fork: an agent-requested move to another checkout of the thread's
+ * repository (`targetPath` is canonical; the project root returns to the main
+ * checkout). Pending until run `runId` completes, which includes its final
+ * checkpoint, and background work that holds completion ends.
+ */
+export const OrchestrationV2ThreadWorktreeSwitch = Schema.Struct({
+  requestId: CommandId,
+  runId: RunId,
+  sourceWorktreePath: Schema.NullOr(TrimmedNonEmptyString),
+  sourceBranch: Schema.NullOr(TrimmedNonEmptyString),
+  targetPath: TrimmedNonEmptyString,
+  requestedAt: IsoDateTime,
+  status: Schema.Literals(["pending", "completed", "cancelled", "error"]),
+  detail: Schema.optional(TrimmedNonEmptyString),
+});
+export type OrchestrationV2ThreadWorktreeSwitch = typeof OrchestrationV2ThreadWorktreeSwitch.Type;
+
 export const OrchestrationV2AppThread = Schema.Struct({
   ...OrchestrationV2CreationFields,
   id: ThreadId,
@@ -429,6 +465,10 @@ export const OrchestrationV2AppThread = Schema.Struct({
       }),
     ),
   ),
+  /** Fork: latest deferred archive request; omitted when none was made. */
+  archiveRequest: Schema.optional(Schema.NullOr(OrchestrationV2ThreadArchiveRequest)),
+  /** Fork: latest agent-requested worktree switch; omitted when none was made. */
+  worktreeSwitch: Schema.optional(Schema.NullOr(OrchestrationV2ThreadWorktreeSwitch)),
   deletedAt: Schema.NullOr(Schema.DateTimeUtc),
 });
 export type OrchestrationV2AppThread = typeof OrchestrationV2AppThread.Type;
@@ -1823,6 +1863,10 @@ export const OrchestrationV2ThreadShell = Schema.Struct({
       }),
     ),
   ),
+  /** Fork: latest deferred archive request; omitted by servers without it. */
+  archiveRequest: Schema.optional(Schema.NullOr(OrchestrationV2ThreadArchiveRequest)),
+  /** Fork: latest agent-requested worktree switch; omitted by servers without it. */
+  worktreeSwitch: Schema.optional(Schema.NullOr(OrchestrationV2ThreadWorktreeSwitch)),
   deletedAt: Schema.NullOr(Schema.DateTimeUtc),
 });
 export type OrchestrationV2ThreadShell = typeof OrchestrationV2ThreadShell.Type;
@@ -2544,6 +2588,22 @@ export const OrchestrationV2Command = Schema.Union([
     commandId: CommandId,
     threadId: ThreadId,
   }),
+  /** Fork: archive once the current run and background work finish. */
+  Schema.Struct({
+    type: Schema.Literal("thread.archive.schedule"),
+    commandId: CommandId,
+    threadId: ThreadId,
+    /** Required to schedule while a run is active; otherwise only idle threads qualify. */
+    afterTurn: Schema.Boolean,
+    /** Remove the thread's clean, unshared worktree after archiving; its branch is kept. */
+    removeWorktree: Schema.optional(Schema.Boolean),
+  }),
+  /** Fork: cancel the pending deferred archive. */
+  Schema.Struct({
+    type: Schema.Literal("thread.archive.cancel"),
+    commandId: CommandId,
+    threadId: ThreadId,
+  }),
   Schema.Struct({
     type: Schema.Literal("thread.delete"),
     commandId: CommandId,
@@ -2966,6 +3026,53 @@ export type OrchestrationV2Command = typeof OrchestrationV2Command.Type;
  * send them.
  */
 const OrchestrationV2InternalCommand = Schema.Union([
+  /** Fork: runs the pending deferred archive `requestId` once it is ready. */
+  Schema.Struct({
+    type: Schema.Literal("thread.archive.execute"),
+    commandId: CommandId,
+    threadId: ThreadId,
+    requestId: CommandId,
+  }),
+  /** Fork: records the worktree removal outcome of archived request `requestId`. */
+  Schema.Struct({
+    type: Schema.Literal("thread.archive.complete"),
+    commandId: CommandId,
+    threadId: ThreadId,
+    requestId: CommandId,
+    /** Why the worktree was kept; omitted when it was removed. */
+    error: Schema.optional(TrimmedNonEmptyString),
+  }),
+  /** Fork: switch to checkout `targetPath` after the caller's running run completes. */
+  Schema.Struct({
+    type: Schema.Literal("thread.worktree-switch.schedule"),
+    commandId: CommandId,
+    threadId: ThreadId,
+    targetPath: TrimmedNonEmptyString,
+  }),
+  /** Fork: cancel the pending worktree switch. */
+  Schema.Struct({
+    type: Schema.Literal("thread.worktree-switch.cancel"),
+    commandId: CommandId,
+    threadId: ThreadId,
+  }),
+  /**
+   * Fork: applies, or records why it cannot apply, the pending worktree
+   * switch `requestId`. `target` is the resolved checkout, `error` why it
+   * could not be resolved; a request that is no longer valid is cancelled.
+   */
+  Schema.Struct({
+    type: Schema.Literal("thread.worktree-switch.execute"),
+    commandId: CommandId,
+    threadId: ThreadId,
+    requestId: CommandId,
+    target: Schema.optional(
+      Schema.Struct({
+        worktreePath: Schema.NullOr(TrimmedNonEmptyString),
+        branch: Schema.NullOr(TrimmedNonEmptyString),
+      }),
+    ),
+    error: Schema.optional(TrimmedNonEmptyString),
+  }),
   /** Records that the provider rollback `requestId` failed for good. */
   Schema.Struct({
     type: Schema.Literal("checkpoint.rollback.fail"),
@@ -3021,6 +3128,8 @@ export const ORCHESTRATION_V2_WS_METHODS = {
   subscribeArchivedShell: "orchestration.subscribeArchivedShell",
   subscribeShell: "orchestration.subscribeShell",
   subscribeThread: "orchestration.subscribeThread",
+  /** Fork: bounded recent-archive window for always-mounted archive shelves. */
+  getRecentArchivedThreads: "orchestration.getRecentArchivedThreads",
 } as const;
 
 export const OrchestrationV2ArchivedShellSnapshot = Schema.Struct({
@@ -3049,6 +3158,28 @@ export const OrchestrationV2ArchivedShellStreamItem = Schema.Union([
 ]);
 export type OrchestrationV2ArchivedShellStreamItem =
   typeof OrchestrationV2ArchivedShellStreamItem.Type;
+
+/** Fork: input of the bounded recent-archive query. */
+export const OrchestrationV2GetRecentArchivedThreadsInput = Schema.Struct({
+  limit: Schema.Int.check(Schema.isBetween({ minimum: 1, maximum: 50 })),
+  /** Restrict the window and its total to these projects. Absent means every
+      project; an empty list matches nothing. */
+  projectIds: Schema.optional(Schema.Array(ProjectId)),
+});
+export type OrchestrationV2GetRecentArchivedThreadsInput =
+  typeof OrchestrationV2GetRecentArchivedThreadsInput.Type;
+
+/**
+ * Fork: the newest archived root threads (subagents excluded), newest first,
+ * with the unclipped total the window was cut from.
+ */
+export const OrchestrationV2RecentArchivedThreads = Schema.Struct({
+  schemaVersion: PositiveInt,
+  snapshotSequence: NonNegativeInt,
+  threads: Schema.Array(OrchestrationV2ThreadShell),
+  totalArchivedCount: NonNegativeInt,
+});
+export type OrchestrationV2RecentArchivedThreads = typeof OrchestrationV2RecentArchivedThreads.Type;
 
 export const OrchestrationV2ThreadLaunchWorkspaceStrategy = Schema.Union([
   Schema.Struct({
@@ -3399,6 +3530,10 @@ export const OrchestrationV2RpcSchemas = {
   subscribeThread: {
     input: OrchestrationV2SubscribeThreadInput,
     output: OrchestrationV2ThreadStreamItem,
+  },
+  getRecentArchivedThreads: {
+    input: OrchestrationV2GetRecentArchivedThreadsInput,
+    output: OrchestrationV2RecentArchivedThreads,
   },
 } as const;
 

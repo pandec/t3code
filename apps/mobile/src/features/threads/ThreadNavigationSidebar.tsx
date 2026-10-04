@@ -30,6 +30,7 @@ import { scopedProjectKey, scopedThreadKey } from "../../lib/scopedEntities";
 import { useProjects, useNavigationThreadShells } from "../../state/entities";
 import { useThreadSearch } from "../../state/queries";
 import {
+  useArchivedSectionVisibleCount,
   useCollapsedThreadGroups,
   useThreadShelfExpansion,
 } from "../../state/use-mobile-preferences";
@@ -49,7 +50,10 @@ import { useHomeModelFilterOptions } from "../home/use-home-model-filter-options
 import { buildHomeProjectScopes } from "../home/homeThreadList";
 import { SwipeableScrollGateProvider, useSwipeableScrollGate } from "../home/thread-swipe-actions";
 import { usePendingTaskListActions } from "../home/usePendingTaskListActions";
-import { useThreadListActions } from "../home/useThreadListActions";
+import { useArchivedThreadListActions, useThreadListActions } from "../home/useThreadListActions";
+import { selectRecentArchivedThreads } from "@t3tools/client-runtime/state/threads";
+import { useRecentArchivedThreadSnapshots } from "../archive/useArchivedThreadSnapshots";
+import { RecentArchivedThreadSection } from "./RecentArchivedThreadSection";
 import {
   getConnectionAwareBrandHeaderOptions,
   WorkspaceConnectionTitle,
@@ -100,6 +104,8 @@ interface ThreadNavigationSidebarProps {
   readonly selectedThreadKey: string | null;
   readonly onOpenSettings: () => void;
   readonly onOpenEnvironmentSettings: () => void;
+  /** Fork: the archive shelf's "View all archived threads". */
+  readonly onOpenArchivedThreads: () => void;
   readonly onNewThreadOnBranch: (thread: EnvironmentThreadShell) => void;
   readonly onNewThreadInProject: (project: EnvironmentProject) => void;
   readonly onSearchQueryChange: (query: string) => void;
@@ -184,6 +190,27 @@ function ThreadNavigationSidebarPane(
   );
   const availableEnvironmentIds = useMemo(
     () => new Set(environments.map((environment) => environment.environmentId)),
+    [environments],
+  );
+  // Fork: the recent-archive shelf below the live list.
+  const { unarchiveThread, confirmDeleteThread: confirmDeleteArchivedThread } =
+    useArchivedThreadListActions();
+  const archivedSectionVisibleCount = useArchivedSectionVisibleCount();
+  const { expanded: archivedShelfExpanded, toggle: toggleArchivedShelf } =
+    useThreadShelfExpansion("archived");
+  const archivedEnvironmentIds = useMemo(
+    () => environments.map((environment) => environment.environmentId),
+    [environments],
+  );
+  const { snapshots: archivedSnapshots } = useRecentArchivedThreadSnapshots(
+    archivedEnvironmentIds,
+    archivedSectionVisibleCount,
+  );
+  const archivedEnvironmentLabels = useMemo(
+    () =>
+      Object.fromEntries(
+        environments.map((environment) => [environment.environmentId, environment.label]),
+      ),
     [environments],
   );
   const { modelFilterOptions, availableModels } = useHomeModelFilterOptions(threads);
@@ -291,6 +318,23 @@ function ThreadNavigationSidebarPane(
       setSelectedProjectKey(null);
     }
   }, [projectFilterOptions, selectedProjectKey]);
+  // The shelf is unfiltered, so any active filter or search hides it.
+  const archiveShelfVisible =
+    props.searchQuery.trim().length === 0 &&
+    options.selectedEnvironmentId === null &&
+    options.selectedModel === null &&
+    selectedProjectScope === null;
+  const recentArchive = useMemo(
+    () =>
+      archiveShelfVisible
+        ? selectRecentArchivedThreads(
+            archivedSnapshots,
+            archivedSectionVisibleCount,
+            props.selectedThreadKey,
+          )
+        : { threads: [], totalCount: 0 },
+    [archiveShelfVisible, archivedSectionVisibleCount, archivedSnapshots, props.selectedThreadKey],
+  );
   const selectedProjectRefs = useMemo(
     () =>
       selectedProjectScope === null
@@ -686,6 +730,23 @@ function ThreadNavigationSidebarPane(
     },
     [props.onSelectThread],
   );
+  const archivedSectionFooter =
+    recentArchive.threads.length > 0 ? (
+      <RecentArchivedThreadSection
+        environmentLabels={archivedEnvironmentLabels}
+        projects={projects}
+        threads={recentArchive.threads}
+        totalCount={recentArchive.totalCount}
+        expanded={archivedShelfExpanded}
+        onToggle={toggleArchivedShelf}
+        onDelete={confirmDeleteArchivedThread}
+        onOpen={handleSelectThread}
+        onOpenAll={props.onOpenArchivedThreads}
+        onUnarchive={unarchiveThread}
+        pane="sidebar"
+        selectedThreadKey={props.selectedThreadKey}
+      />
+    ) : null;
   const handleScrollBeginDrag = useCallback(() => {
     openSwipeableRef.current?.close();
   }, []);
@@ -1037,6 +1098,8 @@ function ThreadNavigationSidebarPane(
                 : "No threads yet"}
     </Text>
   );
+  // Fork: with archived rows below, "No threads yet" would read as data loss.
+  const listEmptyOrArchive = recentArchive.threads.length > 0 ? null : listEmpty;
 
   if (props.nativeChrome) {
     return (
@@ -1105,7 +1168,8 @@ function ThreadNavigationSidebarPane(
                 scrollEventThrottle={16}
                 showsVerticalScrollIndicator={false}
                 style={styles.threadList}
-                ListEmptyComponent={listEmpty}
+                ListEmptyComponent={listEmptyOrArchive}
+                ListFooterComponent={archivedSectionFooter}
               />
             </GestureDetector>
           </SwipeableScrollGateProvider>
@@ -1138,7 +1202,7 @@ function ThreadNavigationSidebarPane(
             : { paddingBottom: insets.bottom }
         }
       >
-        {Platform.OS === "android" && listItems.length === 0 ? (
+        {Platform.OS === "android" && listItems.length === 0 && archivedSectionFooter === null ? (
           <View className="flex-1 items-center justify-center">{listEmpty}</View>
         ) : (
           <SwipeableScrollGateProvider enabled={swipeEnabled}>
@@ -1170,7 +1234,8 @@ function ThreadNavigationSidebarPane(
                 scrollEventThrottle={16}
                 showsVerticalScrollIndicator={false}
                 style={styles.threadList}
-                ListEmptyComponent={listEmpty}
+                ListEmptyComponent={listEmptyOrArchive}
+                ListFooterComponent={archivedSectionFooter}
               />
             </GestureDetector>
           </SwipeableScrollGateProvider>

@@ -141,6 +141,8 @@ export interface EnvironmentThreadShell {
   readonly lastVisitedAt?: string | null;
   /** Pending title regeneration marker; null when no request is in flight. */
   readonly titleRegeneration?: { readonly requestId: string; readonly startedAt: string } | null;
+  /** Fork: latest deferred archive request; null when none was made. */
+  readonly archiveRequest?: import("@t3tools/contracts").OrchestrationV2ThreadArchiveRequest | null;
   readonly deletedAt: string | null;
   readonly source: OrchestrationV2ThreadShell;
 }
@@ -275,6 +277,7 @@ export function presentThreadShell(
             requestId: thread.titleRegeneration.requestId,
             startedAt: iso(thread.titleRegeneration.startedAt),
           },
+    archiveRequest: thread.archiveRequest ?? null,
     deletedAt: nullableIso(thread.deletedAt),
     source: thread,
   };

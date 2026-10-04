@@ -2,9 +2,11 @@ import { useAtomValue } from "@effect/atom-react";
 import {
   threadRuntimeIsActive,
   type EnvironmentProject,
+  type EnvironmentShellStatus,
   type EnvironmentThreadShell,
 } from "@t3tools/client-runtime/state/shell";
 import type { AtomCommandResult } from "@t3tools/client-runtime/state/runtime";
+import { presentThreadShellFromProjection } from "@t3tools/client-runtime/state/thread-execution";
 import { deriveThreadTitleSeed } from "@t3tools/client-runtime/operations";
 import { remainingSteerGraceWindowMs } from "@t3tools/client-runtime/state/thread-workflows";
 import {
@@ -16,6 +18,7 @@ import {
 } from "@t3tools/contracts";
 import { buildTemporaryWorktreeBranchName } from "@t3tools/shared/git";
 import * as Cause from "effect/Cause";
+import * as Option from "effect/Option";
 import { AsyncResult } from "effect/unstable/reactivity";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { Alert } from "react-native";
@@ -58,9 +61,10 @@ import {
   type QueuedThreadCreation,
   type QueuedThreadMessage,
   type ThreadOutboxCommandStage,
+  type ThreadOutboxDeliveryAction,
   type ThreadOutboxFailureAction,
 } from "./thread-outbox-model";
-import { environmentThreadShells, threadEnvironment } from "./threads";
+import { environmentThreadShells, environmentThreads, threadEnvironment } from "./threads";
 import {
   appendComposerDraftAttachments,
   composerDraftsAtom,
@@ -190,6 +194,57 @@ function findThread(
     (candidate) =>
       candidate.environmentId === message.environmentId && candidate.id === message.threadId,
   );
+}
+
+export type QueuedMessageThread =
+  | { readonly kind: "found"; readonly thread: EnvironmentThreadShell }
+  | { readonly kind: "loading" }
+  | { readonly kind: "missing" };
+
+/**
+ * The queued message's thread: its active shell, else its thread detail. An
+ * archived thread is missing from the active shells, and a user's message
+ * unarchives it on the server, so it must send, not drop. Only a detail that
+ * reports the thread deleted makes it missing; until the detail loads (the
+ * drain keeps it mounted) the thread is still loading.
+ */
+export function resolveQueuedMessageThread(
+  threads: ReadonlyArray<EnvironmentThreadShell>,
+  message: QueuedThreadMessage,
+): QueuedMessageThread {
+  const shell = findThread(threads, message);
+  if (shell !== undefined) return { kind: "found", thread: shell };
+  const state = Option.getOrUndefined(
+    AsyncResult.value(
+      appAtomRegistry.get(environmentThreads.stateAtom(message.environmentId, message.threadId)),
+    ),
+  );
+  const detail = state === undefined ? undefined : Option.getOrUndefined(state.data);
+  if (detail !== undefined) {
+    return {
+      kind: "found",
+      thread: presentThreadShellFromProjection(message.environmentId, detail),
+    };
+  }
+  return state?.status === "deleted" ? { kind: "missing" } : { kind: "loading" };
+}
+
+/** Delivery policy for a queued message given its resolved thread. */
+export function resolveQueuedMessageDeliveryAction(input: {
+  readonly isCreation: boolean;
+  readonly thread: QueuedMessageThread;
+  readonly shellStatus: EnvironmentShellStatus;
+  readonly environmentConnected: boolean;
+}): ThreadOutboxDeliveryAction {
+  // A loading detail is not a missing thread; a creation creates its own.
+  if (!input.isCreation && input.thread.kind === "loading") return "wait";
+  return resolveThreadOutboxDeliveryAction({
+    isCreation: input.isCreation,
+    threadExists: input.thread.kind === "found",
+    shellStatus: input.shellStatus,
+    environmentConnected: input.environmentConnected,
+    threadBusy: input.thread.kind === "found" && threadRuntimeIsActive(input.thread.thread.runtime),
+  });
 }
 
 function findCreationProject(
@@ -657,6 +712,10 @@ export function useThreadOutboxDrain(): void {
   const retryNotBeforeRef = useRef(new Map<MessageId, number>());
   const retryTimersRef = useRef(new Map<MessageId, ReturnType<typeof setTimeout>>());
   const acknowledgedExistingThreadMessageIdsRef = useRef(new Set<MessageId>());
+  // Thread details held mounted for queued messages whose thread has no
+  // active shell (e.g. archived), so the drain can tell a loading detail from
+  // a deleted thread. Subscribing mounts the atom and re-runs the drain.
+  const detailSubscriptionsRef = useRef(new Map<MessageId, () => void>());
   const blockedRecoverySubscriptionsRef = useRef(
     new Map<
       MessageId,
@@ -1098,6 +1157,14 @@ export function useThreadOutboxDrain(): void {
     }
   }, [creationOutcomes, threads]);
 
+  useEffect(
+    () => () => {
+      for (const unsubscribe of detailSubscriptionsRef.current.values()) unsubscribe();
+      detailSubscriptionsRef.current.clear();
+    },
+    [],
+  );
+
   useEffect(() => {
     if (dispatchingQueuedMessageId !== null) {
       return;
@@ -1111,6 +1178,12 @@ export function useThreadOutboxDrain(): void {
     for (const messageId of acknowledgedExistingThreadMessageIdsRef.current) {
       if (!queuedMessageIds.has(messageId)) {
         acknowledgedExistingThreadMessageIdsRef.current.delete(messageId);
+      }
+    }
+    for (const [messageId, unsubscribe] of detailSubscriptionsRef.current) {
+      if (!queuedMessageIds.has(messageId)) {
+        unsubscribe();
+        detailSubscriptionsRef.current.delete(messageId);
       }
     }
 
@@ -1147,6 +1220,22 @@ export function useThreadOutboxDrain(): void {
           .finally(() => finishDispatchingQueuedMessage(nextQueuedMessage.messageId));
         return;
       }
+      if (
+        nextQueuedMessage.creation === undefined &&
+        findThread(threads, nextQueuedMessage) === undefined &&
+        !detailSubscriptionsRef.current.has(nextQueuedMessage.messageId)
+      ) {
+        detailSubscriptionsRef.current.set(
+          nextQueuedMessage.messageId,
+          appAtomRegistry.subscribe(
+            environmentThreads.stateAtom(
+              nextQueuedMessage.environmentId,
+              nextQueuedMessage.threadId,
+            ),
+            () => setRetryTick((current) => current + 1),
+          ),
+        );
+      }
       if (editingQueuedMessageIds[nextQueuedMessage.messageId]) {
         continue;
       }
@@ -1164,22 +1253,22 @@ export function useThreadOutboxDrain(): void {
         continue;
       }
 
-      const thread = findThread(threads, nextQueuedMessage);
+      const creation = nextQueuedMessage.creation;
+      const threadLookup = resolveQueuedMessageThread(threads, nextQueuedMessage);
+      const thread = threadLookup.kind === "found" ? threadLookup.thread : undefined;
       if (thread && scopedThreadKey(thread.environmentId, thread.id) !== threadKey) {
         continue;
       }
 
-      const creation = nextQueuedMessage.creation;
       const environment = connectedEnvironments.find(
         (candidate) => candidate.environmentId === nextQueuedMessage.environmentId,
       );
       const shellStatus = shellStatuses.get(nextQueuedMessage.environmentId) ?? "empty";
-      const deliveryAction = resolveThreadOutboxDeliveryAction({
+      const deliveryAction = resolveQueuedMessageDeliveryAction({
         isCreation: creation !== undefined,
-        threadExists: thread !== undefined,
+        thread: threadLookup,
         shellStatus,
         environmentConnected: environment?.connectionState === "connected",
-        threadBusy: threadRuntimeIsActive(thread?.runtime),
       });
       // The delivery action resolves first; capability checks apply only to
       // a message that will send. Checking earlier would restore a
@@ -1281,17 +1370,14 @@ export function useThreadOutboxDrain(): void {
         // against the live thread snapshot so a vanished thread or newly
         // created target defers, while busy existing threads can still steer.
         if (deliveryAction === "send") {
-          const liveThread = findThread(
-            appAtomRegistry.get(environmentThreadShells.threadShellsAtom),
-            nextQueuedMessage,
-          );
-          const liveThreadBusy = threadRuntimeIsActive(liveThread?.runtime);
-          const liveDeliveryAction = resolveThreadOutboxDeliveryAction({
+          const liveDeliveryAction = resolveQueuedMessageDeliveryAction({
             isCreation: creation !== undefined,
-            threadExists: liveThread !== undefined,
+            thread: resolveQueuedMessageThread(
+              appAtomRegistry.get(environmentThreadShells.threadShellsAtom),
+              nextQueuedMessage,
+            ),
             shellStatus,
             environmentConnected: environment?.connectionState === "connected",
-            threadBusy: liveThreadBusy,
           });
           if (liveDeliveryAction !== "send") {
             return true;

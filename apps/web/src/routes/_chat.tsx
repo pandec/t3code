@@ -267,6 +267,7 @@ function ChatRouteGlobalShortcuts() {
         event.preventDefault();
         event.stopPropagation();
         if (readThreadShell(shortcutThreadRef)?.archivedAt !== null) return;
+        // Same toggle as the menus: archive, archive when done, or cancel.
         void attemptArchiveThread(shortcutThreadRef);
         return;
       }

@@ -7,6 +7,7 @@ import {
   buildDraftThreadRouteParams,
   buildThreadRouteParams,
   resolveActiveThreadRouteRef,
+  resolveArchivedThreadRouteState,
   resolveThreadRouteRenderState,
   resolveThreadRouteRef,
   resolveThreadRouteTarget,
@@ -151,6 +152,54 @@ describe("threadRoutes", () => {
         serverThreadDeleted: true,
         draftThreadExists: false,
       }),
+    ).toBe("missing");
+  });
+});
+
+describe("archived thread routes", () => {
+  const route = (archivedThread: ReturnType<typeof resolveArchivedThreadRouteState>) =>
+    resolveThreadRouteRenderState({
+      bootstrapComplete: true,
+      serverThreadExists: false,
+      serverThreadDeleted: false,
+      draftThreadExists: false,
+      archivedThread,
+    });
+
+  it("opens an archived thread from its detail and waits while the detail loads", () => {
+    expect(
+      route(
+        resolveArchivedThreadRouteState({
+          detail: { archived: true, deleted: false },
+          status: "live",
+        }),
+      ),
+    ).toBe("ready");
+    expect(route(resolveArchivedThreadRouteState({ detail: null, status: "synchronizing" }))).toBe(
+      "loading",
+    );
+    // Unarchived but not yet in the active shell: the shell is about to carry it.
+    expect(
+      route(
+        resolveArchivedThreadRouteState({
+          detail: { archived: false, deleted: false },
+          status: "live",
+        }),
+      ),
+    ).toBe("loading");
+  });
+
+  it("treats a deleted or unknown thread as missing", () => {
+    expect(route(resolveArchivedThreadRouteState({ detail: null, status: "deleted" }))).toBe(
+      "missing",
+    );
+    expect(
+      route(
+        resolveArchivedThreadRouteState({
+          detail: { archived: true, deleted: true },
+          status: "live",
+        }),
+      ),
     ).toBe("missing");
   });
 });

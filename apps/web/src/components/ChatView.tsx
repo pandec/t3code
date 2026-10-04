@@ -94,7 +94,11 @@ import {
 } from "@t3tools/client-runtime/errors";
 import { readPastedComposerContext } from "./composerInlineTokenPaste";
 import { isPasteAsTextShortcut } from "@t3tools/client-runtime/text-paste";
-import { effectiveSnoozed, threadWokeAt } from "@t3tools/client-runtime/state/thread-settled";
+import {
+  effectiveSnoozed,
+  hasPendingArchive,
+  threadWokeAt,
+} from "@t3tools/client-runtime/state/thread-settled";
 import { useAcknowledgeThreadWoke, useThreadActions } from "../hooks/useThreadActions";
 import {
   deriveProviderSubagentStatus,
@@ -105,6 +109,7 @@ import {
   deriveLatestThreadRun,
   deriveThreadRuntime,
   presentPendingBackgroundWork,
+  presentThreadShellFromProjection,
 } from "@t3tools/client-runtime/state/thread-execution";
 import { threadSupportsProviderHandoff } from "@t3tools/client-runtime/state/thread-workflows";
 import {
@@ -183,6 +188,7 @@ import { useDiffPanelStore } from "../diffPanelStore";
 import {
   type ComposerSubmissionIntent,
   collapseExpandedComposerCursor,
+  parseComposerArchiveCommand,
   parseStandaloneComposerSlashCommand,
 } from "../composer-logic";
 import {
@@ -300,6 +306,7 @@ import { isEditableFocused } from "../lib/editableFocus";
 import ThreadTerminalDrawer from "./ThreadTerminalDrawer";
 import {
   AlarmClockIcon,
+  ArchiveIcon,
   CheckCircle2Icon,
   PaperclipIcon,
   ChevronDownIcon,
@@ -559,6 +566,7 @@ import {
   codexArtifactTemplatePromptToAppend,
   waitForStartedServerThread,
   shouldRefocusComposerOnWindowFocus,
+  hasStandaloneComposerCommandContext,
 } from "./ChatView.logic";
 import { useLocalStorage } from "~/hooks/useLocalStorage";
 import { useThreadGroupCatalog } from "../hooks/useThreadGroups";
@@ -1553,7 +1561,8 @@ export default function ChatView(props: ChatViewProps) {
   } = props;
   const draftId = routeKind === "draft" ? props.draftId : null;
   const handleNewThread = useNewThreadHandler();
-  const { settleThread, pinThread, confirmAndUnpinThread } = useThreadActions();
+  const { settleThread, pinThread, confirmAndUnpinThread, unarchiveThread, attemptArchiveThread } =
+    useThreadActions();
   const routeThreadRef = useMemo(
     () => scopeThreadRef(environmentId, threadId),
     [environmentId, threadId],
@@ -1683,13 +1692,26 @@ export default function ChatView(props: ChatViewProps) {
         : null,
   );
   const customGroupCatalog = useThreadGroupCatalog();
-  const serverThread = useThreadShell(routeThreadRef);
+  const activeServerThread = useThreadShell(routeThreadRef);
   const routeThreadDetailRef = resolveThreadDetailRef(routeThreadRef, {
-    shellExists: serverThread !== null,
+    shellExists: activeServerThread !== null,
     waitForShell: draftThread !== null,
   });
   const serverThreadProjection = useThreadProjection(routeThreadDetailRef);
   const serverProjection = serverThreadProjection?.projection ?? null;
+  // Fork: an archived thread (opened from the archive shelf or a thread link)
+  // has no active shell, so its detail stands in for one.
+  const archivedServerThread = useMemo(
+    () =>
+      activeServerThread === null &&
+      serverProjection !== null &&
+      serverProjection.thread.archivedAt !== null &&
+      serverProjection.thread.deletedAt === null
+        ? presentThreadShellFromProjection(routeThreadRef.environmentId, serverProjection)
+        : null,
+    [activeServerThread, routeThreadRef.environmentId, serverProjection],
+  );
+  const serverThread = activeServerThread ?? archivedServerThread;
   const reportedModelSelection = serverProjection
     ? deriveReportedModelSelection(serverProjection)
     : null;
@@ -7261,8 +7283,53 @@ export default function ChatView(props: ChatViewProps) {
       onDismiss: acknowledgeActiveThreadWoke,
     };
   }, [acknowledgeActiveThreadWoke, activeThread?.id, activeThreadWokeVisible]);
+  const activeThreadArchived = isServerThread && activeThread?.archivedAt != null;
+  const [unarchivingThreadKey, setUnarchivingThreadKey] = useState<string | null>(null);
+  const isUnarchiving = unarchivingThreadKey !== null && unarchivingThreadKey === activeThreadKey;
+  const handleUnarchiveActiveThread = useCallback(async () => {
+    if (!activeThreadRef) return;
+    const threadKey = scopedThreadKey(activeThreadRef);
+    setUnarchivingThreadKey(threadKey);
+    try {
+      const result = await unarchiveThread(activeThreadRef);
+      if (result._tag === "Failure" && !isAtomCommandInterrupted(result)) {
+        const error = squashAtomCommandFailure(result);
+        toastManager.add(
+          stackedThreadToast({
+            type: "error",
+            title: "Failed to unarchive thread",
+            description: error instanceof Error ? error.message : "An error occurred.",
+          }),
+        );
+      }
+    } finally {
+      setUnarchivingThreadKey((current) => (current === threadKey ? null : current));
+    }
+  }, [activeThreadRef, unarchiveThread]);
+  // Fork: archived threads open from the sidebar's archive shelf and thread links.
+  const archivedThreadBannerItem = useMemo<ComposerBannerStackItem | null>(() => {
+    if (!activeThreadArchived) return null;
+    return {
+      id: `thread-archived:${activeThreadKey ?? "unknown"}`,
+      variant: "info",
+      icon: <ArchiveIcon />,
+      title: "This thread is archived",
+      description: "Send a message to unarchive",
+      actions: (
+        <Button
+          size="xs"
+          variant="ghost"
+          disabled={isUnarchiving}
+          onClick={() => void handleUnarchiveActiveThread()}
+        >
+          {isUnarchiving ? "Unarchiving..." : "Unarchive"}
+        </Button>
+      ),
+    };
+  }, [activeThreadArchived, activeThreadKey, handleUnarchiveActiveThread, isUnarchiving]);
   const parkedThreadBannerItem = useMemo<ComposerBannerStackItem | null>(() => {
-    if (!activeThreadSnoozed && !activeThreadSettled) {
+    // Fork: the archived banner already covers an archived thread.
+    if (activeThreadArchived || (!activeThreadSnoozed && !activeThreadSettled)) {
       return null;
     }
     const isSnoozed = activeThreadSnoozed;
@@ -7293,6 +7360,7 @@ export default function ChatView(props: ChatViewProps) {
     };
   }, [
     activeThread?.id,
+    activeThreadArchived,
     activeThreadSettled,
     activeThreadSnoozed,
     handleUnsnoozeActiveThread,
@@ -7456,6 +7524,7 @@ export default function ChatView(props: ChatViewProps) {
       resumeCompactionBannerItem === null ? [] : [resumeCompactionBannerItem];
     const wokeThreadItems = wokeThreadBannerItem === null ? [] : [wokeThreadBannerItem];
     const parkedThreadItems = parkedThreadBannerItem === null ? [] : [parkedThreadBannerItem];
+    const archivedThreadItems = archivedThreadBannerItem === null ? [] : [archivedThreadBannerItem];
     // The user asked for this one, so it leads the notice tier instead of trailing it.
     const usageLimitsItems = usageLimitsBanner === null ? [] : [usageLimitsBanner];
     const projectCloneItems = projectCloneBannerItem === null ? [] : [projectCloneBannerItem];
@@ -7470,6 +7539,7 @@ export default function ChatView(props: ChatViewProps) {
         ...resumeCompactionItems,
         ...wokeThreadItems,
         ...parkedThreadItems,
+        ...archivedThreadItems,
       ];
     }
     return [
@@ -7520,9 +7590,11 @@ export default function ChatView(props: ChatViewProps) {
         },
       },
       ...parkedThreadItems,
+      ...archivedThreadItems,
     ];
   }, [
     activeBranchMismatchKey,
+    archivedThreadBannerItem,
     activeThreadShell,
     serverRuntime?.usageLimitResetAt,
     feedbackBannerItems,
@@ -8532,6 +8604,65 @@ export default function ChatView(props: ChatViewProps) {
       return;
     }
     const sendCtx = composerRef.current?.getSendContext();
+    // Fork: `/t3-archive` archives now or when done; sent again, it cancels.
+    // Attachments or contexts mean a real prompt, which goes to the provider.
+    const archiveCommand =
+      !directAnnotation &&
+      editingQueuedRun === null &&
+      sendCtx !== undefined &&
+      sendCtx.threadContexts.length === 0 &&
+      hasStandaloneComposerCommandContext({
+        imageCount: sendCtx.images.length,
+        fileCount: sendCtx.files.length,
+        terminalContextCount: sendCtx.terminalContexts.length,
+        previewAnnotationCount: sendCtx.previewAnnotations.length,
+        reviewCommentCount: sendCtx.reviewComments.length,
+      })
+        ? parseComposerArchiveCommand(promptRef.current)
+        : null;
+    if (archiveCommand) {
+      if (archiveCommand.action === null) {
+        toastManager.add({
+          type: "error",
+          title: "Unable to archive thread",
+          description: "Usage: /t3-archive (send again to cancel a pending archive)",
+        });
+        return;
+      }
+      if (serverThread === null) {
+        toastManager.add({ type: "error", title: "No thread to archive yet" });
+        return;
+      }
+      if (serverThread.archivedAt !== null) {
+        toastManager.add({ type: "error", title: "This thread is already archived" });
+        return;
+      }
+      if (archiveCommand.action === "cancel" && !hasPendingArchive(serverThread)) {
+        toastManager.add({ type: "error", title: "No archive is pending for this thread" });
+        return;
+      }
+      // The shared archive path: archive now (with its confirmation and
+      // Undo), archive when done, or cancel a pending archive.
+      const promptForArchive = promptRef.current;
+      const draftTargetForArchive = composerDraftTarget;
+      sendInFlightRef.current = true;
+      try {
+        await attemptArchiveThread(scopeThreadRef(environmentId, serverThread.id), {
+          ...(archiveCommand.action === "cancel" ? { expectedAction: "cancel" as const } : {}),
+          scheduledHint: "Send /t3-archive again to cancel.",
+          // Clear only an unchanged draft: the user may have typed on meanwhile.
+          onApplied: () => {
+            if (promptRef.current !== promptForArchive) return;
+            promptRef.current = "";
+            clearComposerDraftContent(draftTargetForArchive);
+            composerRef.current?.resetCursorState();
+          },
+        });
+      } finally {
+        sendInFlightRef.current = false;
+      }
+      return;
+    }
     if (!sendCtx?.providerAvailable) {
       notifyDirectAnnotationAttached();
       return;

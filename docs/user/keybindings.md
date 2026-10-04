@@ -149,6 +149,10 @@ actions of the same kind undo together. The notice remains available for five
 seconds after the latest action. The default shortcut skips text fields and
 terminals so native undo keeps working there.
 
+`thread.archive` archives the focused thread. While the thread is working it
+[archives when done](./thread-sidebar.md#archive-when-done), and pressing it again cancels
+the pending archive. It has no default shortcut.
+
 `navigation.back` (`mod+[` by default) and `navigation.forward` (`mod+]`) move
 through the pages you have visited, like a browser's back and forward buttons.
 

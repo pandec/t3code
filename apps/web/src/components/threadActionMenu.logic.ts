@@ -28,6 +28,8 @@ export type ThreadActionMenuId =
   | "copy-branch"
   | "copy-thread-id"
   | "archive"
+  | "archive-when-done"
+  | "cancel-archive"
   | "delete";
 
 /**
@@ -59,6 +61,11 @@ export interface ThreadActionMenuState {
   readonly isRegeneratingTitle: boolean;
   /** Archive rejects a thread with an attached provider, so disable it here rather than let the action fail. */
   readonly isRunning: boolean;
+  /**
+   * Fork: see `resolveArchiveToggleAction`. A busy thread archives when done and
+   * a pending archive can be cancelled; omitted means archive now.
+   */
+  readonly archiveAction?: "archive" | "schedule" | "cancel";
   readonly supports: {
     readonly settlement: boolean;
     /** Server understands thread.auto-settle.set. */
@@ -202,13 +209,27 @@ export function buildThreadActionMenuItems(
     // (stays visible in the Settled shelf) and Delete (clears history for
     // good), so it sits beside Delete without borrowing its destructive
     // styling.
-    {
-      id: "archive",
-      label: "Archive thread",
-      icon: "archive",
-      disabled: state.isRunning,
-      separatorBefore: true,
-    },
+    state.archiveAction === "cancel"
+      ? {
+          id: "cancel-archive" as const,
+          label: "Cancel pending archive",
+          icon: "archive",
+          separatorBefore: true,
+        }
+      : state.archiveAction === "schedule"
+        ? {
+            id: "archive-when-done" as const,
+            label: "Archive when done",
+            icon: "archive",
+            separatorBefore: true,
+          }
+        : {
+            id: "archive" as const,
+            label: "Archive thread",
+            icon: "archive",
+            disabled: state.isRunning,
+            separatorBefore: true,
+          },
     {
       id: "delete",
       label: "Delete",

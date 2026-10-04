@@ -2750,6 +2750,17 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
               },
             ] as const)
           : []),
+        ...(isServerThread
+          ? ([
+              {
+                id: "slash:t3-archive",
+                type: "slash-command",
+                command: "t3-archive",
+                label: "/t3-archive",
+                description: "Archive now or when done; send again to cancel",
+              },
+            ] as const)
+          : []),
       ] satisfies ReadonlyArray<Extract<ComposerCommandItem, { type: "slash-command" }>>;
       const slashMenuSkills = getProviderSkillsForSlashMenu(
         selectedProviderSkills,

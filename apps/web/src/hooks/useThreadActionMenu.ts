@@ -10,6 +10,7 @@ import {
   canSnooze,
   canSnoozeUntilDone,
   effectiveSnoozed,
+  resolveArchiveToggleAction,
 } from "@t3tools/client-runtime/state/thread-settled";
 import { canForkConversation } from "@t3tools/client-runtime/state/thread-fork";
 import type { ScopedThreadRef, ThreadId } from "@t3tools/contracts";
@@ -165,6 +166,7 @@ export function useThreadActionMenu(input: {
           canSnoozeNow: canSnooze(thread, { now: now.toISOString() }),
           isRegeneratingTitle,
           isRunning: !threadRuntimeCanArchive(thread.runtime),
+          archiveAction: resolveArchiveToggleAction(thread),
           supports,
           snoozePresets,
           forkExtras: { fork: canForkConversation(thread, readConversationForkOptions(thread)) },
@@ -293,7 +295,16 @@ export function useThreadActionMenu(input: {
             copyThreadIdToClipboard(thread.id, { threadId: thread.id });
             return;
           case "archive":
-            await attemptArchiveThread(threadRef);
+          case "archive-when-done":
+          case "cancel-archive":
+            await attemptArchiveThread(threadRef, {
+              expectedAction:
+                action === "archive"
+                  ? "archive"
+                  : action === "archive-when-done"
+                    ? "schedule"
+                    : "cancel",
+            });
             return;
           case "delete": {
             if (confirmThreadDelete) {

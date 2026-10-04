@@ -30,6 +30,7 @@ import type {
   RunAttemptId,
   RuntimeRequestId,
   MessageId,
+  ProjectId,
 } from "@t3tools/contracts";
 import {
   OrchestrationV2AppThreadJson as OrchestrationV2AppThreadJsonSchema,
@@ -155,6 +156,27 @@ export type ProjectionLimitRecoveryCandidate = Pick<
   | "snoozedAt"
   | "snoozedUntilRunId"
 >;
+
+/** Fork: the bounded recent-archive window (see getShellSnapshot `archiveWindow`). */
+export interface ProjectionArchiveWindow {
+  readonly limit: number;
+  /** Absent means every project; callers short-circuit an empty list. */
+  readonly projectIds?: ReadonlyArray<ProjectId>;
+}
+
+/**
+ * Fork: archived root threads (subagents excluded) as `w`, optionally within
+ * `projectIds`; shared by the archive window and its total count.
+ */
+export const archivedRootThreadCondition = (
+  sql: SqlClient.SqlClient,
+  projectIds?: ReadonlyArray<ProjectId>,
+) =>
+  sql`w.deleted_at IS NULL
+    AND json_extract(w.payload_json, '$.archivedAt') IS NOT NULL
+    AND json_extract(w.payload_json, '$.lineage.relationshipToParent') IS NOT 'subagent'${
+      projectIds === undefined ? sql`` : sql` AND w.project_id IN ${sql.in(projectIds)}`
+    }`;
 
 /** The thread fields pull request sync reads, for a thread with at least one link. */
 export type ProjectionThreadPullRequests = Pick<
@@ -335,6 +357,11 @@ export interface ProjectionStoreV2Shape {
   readonly getShellSnapshot: (options?: {
     readonly location?: "active" | "archive";
     readonly unsettledOnly?: boolean;
+    /**
+     * Fork: read only the newest archived root threads (subagents excluded),
+     * by archive time, optionally within `projectIds`. Implies the archive.
+     */
+    readonly archiveWindow?: ProjectionArchiveWindow;
   }) => Effect.Effect<OrchestrationV2ThreadShellSnapshot, ProjectionStoreV2Error>;
   readonly getThreadShell: (
     threadId: ThreadId,
@@ -1441,6 +1468,12 @@ export function threadShellFromProjection(
     pinOrderKey: projection.thread.pinOrderKey ?? null,
     lastVisitedAt: projection.thread.lastVisitedAt,
     titleRegeneration: projection.thread.titleRegeneration ?? null,
+    ...(projection.thread.archiveRequest == null
+      ? {}
+      : { archiveRequest: projection.thread.archiveRequest }),
+    ...(projection.thread.worktreeSwitch == null
+      ? {}
+      : { worktreeSwitch: projection.thread.worktreeSwitch }),
     limitRecovery: projection.thread.limitRecovery ?? null,
     deletedAt: projection.thread.deletedAt,
   };
@@ -1668,6 +1701,12 @@ function shellFromState(input: {
     pinOrderKey: input.state.thread.pinOrderKey ?? null,
     lastVisitedAt: input.state.thread.lastVisitedAt,
     titleRegeneration: input.state.thread.titleRegeneration ?? null,
+    ...(input.state.thread.archiveRequest == null
+      ? {}
+      : { archiveRequest: input.state.thread.archiveRequest }),
+    ...(input.state.thread.worktreeSwitch == null
+      ? {}
+      : { worktreeSwitch: input.state.thread.worktreeSwitch }),
     limitRecovery: input.state.thread.limitRecovery ?? null,
     deletedAt: input.state.thread.deletedAt,
   };
@@ -4835,6 +4874,7 @@ export const layer: Layer.Layer<ProjectionStoreV2, never, SqlClient.SqlClient> =
       threadId?: ThreadId,
       location?: "active" | "archive",
       unsettledOnly = false,
+      archiveWindow?: ProjectionArchiveWindow,
     ) =>
       sql<ShellThreadRow>`
             SELECT
@@ -4988,6 +5028,17 @@ export const layer: Layer.Layer<ProjectionStoreV2, never, SqlClient.SqlClient> =
               unsettledOnly
                 ? sql` AND json_extract(t.payload_json, '$.settledAt') IS NULL AND json_extract(t.payload_json, '$.settledOverride') IS NOT 'settled'`
                 : sql``
+            }${
+              // Fork: bounded before the per-row subqueries above run.
+              archiveWindow === undefined
+                ? sql``
+                : sql` AND t.thread_id IN (
+                    SELECT w.thread_id
+                    FROM orchestration_v2_projection_threads w
+                    WHERE ${archivedRootThreadCondition(sql, archiveWindow.projectIds)}
+                    ORDER BY json_extract(w.payload_json, '$.archivedAt') DESC, w.thread_id DESC
+                    LIMIT ${archiveWindow.limit}
+                  )`
             }
             ORDER BY t.updated_at ASC, t.thread_id ASC
           `;
@@ -5383,6 +5434,7 @@ export const layer: Layer.Layer<ProjectionStoreV2, never, SqlClient.SqlClient> =
               undefined,
               options?.location,
               options?.unsettledOnly ?? false,
+              options?.archiveWindow,
             );
             const targetThreadIds = new Set(
               targetThreadRows.map((row) => ThreadId.make(row.thread_id)),
@@ -5583,6 +5635,26 @@ export const layer: Layer.Layer<ProjectionStoreV2, never, SqlClient.SqlClient> =
   }),
 );
 
+// Fork: in-memory mirror of the SQL archive window, newest archive first.
+const memoryArchiveWindow = (
+  projections: ReadonlyMap<ThreadId, OrchestrationV2ThreadProjection>,
+  window: ProjectionArchiveWindow,
+): ReadonlyArray<ThreadId> =>
+  [...projections.values()]
+    .flatMap(({ thread }) =>
+      thread.deletedAt === null &&
+      thread.archivedAt !== null &&
+      thread.lineage.relationshipToParent !== "subagent" &&
+      (window.projectIds === undefined || window.projectIds.includes(thread.projectId))
+        ? [{ id: thread.id, archivedAt: DateTime.toEpochMillis(thread.archivedAt) }]
+        : [],
+    )
+    .toSorted(
+      (left, right) => right.archivedAt - left.archivedAt || right.id.localeCompare(left.id),
+    )
+    .slice(0, window.limit)
+    .map((thread) => thread.id);
+
 export const layerMemory: Layer.Layer<ProjectionStoreV2> = Layer.effect(
   ProjectionStoreV2,
   Effect.gen(function* () {
@@ -5630,8 +5702,14 @@ export const layerMemory: Layer.Layer<ProjectionStoreV2> = Layer.effect(
             })
             .map(([threadId]) => threadId);
           const customGroupIds = (yield* Ref.get(replayState)).customGroupIds;
+          const windowThreadIds =
+            options?.archiveWindow === undefined
+              ? null
+              : new Set(memoryArchiveWindow(existing, options.archiveWindow));
           const shells = yield* Effect.forEach(
-            selectedThreadIds.toSorted((left, right) => String(left).localeCompare(String(right))),
+            selectedThreadIds
+              .filter((threadId) => windowThreadIds === null || windowThreadIds.has(threadId))
+              .toSorted((left, right) => String(left).localeCompare(String(right))),
             (threadId) =>
               service
                 .getThreadProjection(threadId)

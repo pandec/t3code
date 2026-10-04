@@ -51,6 +51,9 @@ vi.mock("../archiveUndo", () => ({
 }));
 const threadShell = vi.hoisted(() => ({
   title: "Thread",
+  archivedAt: null as string | null,
+  archiveRequest: null,
+  runtime: null,
   pinOrderKey: "a0",
   pinnedAt: null as string | null,
   snoozedAt: null as string | null,
@@ -173,6 +176,42 @@ describe("attemptArchiveThread", () => {
     expect(commands.archive).toHaveBeenCalledOnce();
     await sidebar.attemptArchiveThread(target);
     expect(commands.archive).toHaveBeenCalledTimes(2);
+  });
+
+  it("confirms an idle composer archive, reports it applied and offers Undo", async () => {
+    clientSettings.confirmThreadArchive = true;
+    dialogs.confirm.mockResolvedValue(true);
+    const onApplied = vi.fn();
+    await useThreadActions().attemptArchiveThread(target, { onApplied });
+    expect(dialogs.confirm).toHaveBeenCalledOnce();
+    expect(commands.archive).toHaveBeenCalledOnce();
+    expect(onApplied).toHaveBeenCalledOnce();
+    expect(useThreadUndoNotice.getState().notice).toMatchObject({ action: "Archived" });
+  });
+
+  it("runs a composer archive once while a menu archive of the thread is pending", async () => {
+    clientSettings.confirmThreadArchive = true;
+    let confirm: (confirmed: boolean) => void = () => {};
+    dialogs.confirm.mockReturnValue(
+      new Promise((resolve) => {
+        confirm = resolve;
+      }),
+    );
+    const onApplied = vi.fn();
+    const menu = useThreadActions().attemptArchiveThread(target);
+    await useThreadActions().attemptArchiveThread(target, { onApplied });
+    confirm(true);
+    await menu;
+    expect(commands.archive).toHaveBeenCalledOnce();
+    expect(onApplied).not.toHaveBeenCalled();
+  });
+
+  it("does not report a declined composer archive as applied", async () => {
+    clientSettings.confirmThreadArchive = true;
+    dialogs.confirm.mockResolvedValue(false);
+    const onApplied = vi.fn();
+    await useThreadActions().attemptArchiveThread(target, { onApplied });
+    expect(onApplied).not.toHaveBeenCalled();
   });
 
   it("keeps the thread when the confirmation is declined", async () => {

@@ -1,6 +1,11 @@
 // @effect-diagnostics globalDate:off -- UI snooze presets use local calendar boundaries and Intl labels.
 import * as DateTime from "effect/DateTime";
-import { snoozeUntilDoneWorkContinues } from "@t3tools/shared/orchestrationV2PendingBackgroundWork";
+import {
+  backgroundWorkHoldsCompletion,
+  snoozeUntilDoneWorkContinues,
+} from "@t3tools/shared/orchestrationV2PendingBackgroundWork";
+
+import { type EnvironmentThreadShell, threadRuntimeCanArchive } from "./models.ts";
 
 interface SettlementRunLike {
   readonly runId?: unknown;
@@ -29,6 +34,42 @@ interface QueuedThreadShell {
   readonly latestRun?: SettlementRunLike | null;
   readonly session?: SettlementRuntimeLike | null;
   readonly runtime?: SettlementRuntimeLike | null;
+}
+
+/**
+ * Fork: an archive scheduled to run once the current turn and background work
+ * finish. Clients mark the row and offer a control to cancel it.
+ */
+export function hasPendingArchive(shell: {
+  readonly archivedAt: string | null;
+  readonly archiveRequest?: { readonly status: string } | null;
+}): boolean {
+  return shell.archivedAt === null && shell.archiveRequest?.status === "pending";
+}
+
+export type ArchiveToggleAction = "archive" | "schedule" | "cancel";
+
+/**
+ * Fork: what an archive control does for a thread. A pending archive is
+ * cancelled; an active or checkpointing run, or background work that holds
+ * completion, schedules one for when the thread is done; anything else
+ * archives now. Every archive surface (menus, shortcut, palette) resolves
+ * through this.
+ */
+export function resolveArchiveToggleAction(
+  shell: Pick<
+    EnvironmentThreadShell,
+    "archivedAt" | "archiveRequest" | "runtime" | "pendingBackgroundTasks"
+  >,
+): ArchiveToggleAction {
+  if (hasPendingArchive(shell)) return "cancel";
+  // A `waiting` run is capturing its final checkpoint; the server's deferred
+  // archive treats it as active, so archive after it completes.
+  return shell.runtime?.status !== "waiting" &&
+    threadRuntimeCanArchive(shell.runtime) &&
+    !backgroundWorkHoldsCompletion(shell.pendingBackgroundTasks)
+    ? "archive"
+    : "schedule";
 }
 
 /**

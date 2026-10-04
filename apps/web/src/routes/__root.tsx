@@ -1,4 +1,4 @@
-import { type ServerLifecycleWelcomePayload } from "@t3tools/contracts";
+import { EnvironmentId, type ServerLifecycleWelcomePayload } from "@t3tools/contracts";
 import { scopedProjectKey, scopeProjectRef } from "@t3tools/client-runtime/environment";
 import { squashAtomCommandFailure } from "@t3tools/client-runtime/state/runtime";
 import {
@@ -65,7 +65,10 @@ import { configureClientTracing } from "../observability/clientTracing";
 import { resolveInitialServerAuthGateState } from "../environments/primary";
 import { hasHostedPairingRequest, isHostedStaticApp } from "../hostedPairing";
 import { isLocalEnvironmentDisabled } from "../localEnvironment";
-import { shellEnvironment } from "../state/shell";
+import { environmentShell, shellEnvironment } from "../state/shell";
+import { listeningPlayback, pauseListeningForThread } from "../state/listeningPlayback";
+import { watchListeningThreadRemoval } from "../state/listeningThreadRemoval";
+import { appAtomRegistry } from "../rpc/atomRegistry";
 import { useAtomValue } from "@effect/atom-react";
 import { useAtomCommand } from "../state/use-atom-command";
 import { useEnvironments, usePrimaryEnvironment } from "../state/environments";
@@ -244,6 +247,7 @@ function RootRouteView() {
           <SshPasswordPromptDialog />
           <SnapShotCoordinator />
           <ThreadNotificationCoordinator />
+          <ListeningThreadRemovalPause />
           <ConfirmDialogHost />
           <CustomSnoozeDialogHost />
           <ThreadGroupsDialogHost />
@@ -497,6 +501,25 @@ function errorReport(error: unknown, pathname: string): string {
     cause = cause instanceof Error ? cause.cause : undefined;
   }
   return lines.join("\n");
+}
+
+/** Fork: pauses a recording whose thread the server archived or deleted. */
+function ListeningThreadRemovalPause() {
+  useEffect(
+    () =>
+      watchListeningThreadRemoval({
+        playback: listeningPlayback,
+        subscribeShell: (environmentId, listener) =>
+          appAtomRegistry.subscribe(
+            environmentShell.stateValueAtom(EnvironmentId.make(environmentId)),
+            listener,
+            { immediate: true },
+          ),
+        pause: pauseListeningForThread,
+      }),
+    [],
+  );
+  return null;
 }
 
 function AuthenticatedTracingBootstrap() {

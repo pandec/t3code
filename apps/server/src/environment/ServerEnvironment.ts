@@ -269,6 +269,9 @@ export const make = Effect.gen(function* () {
       serverResolvedCommandContext: true,
       environmentIcon: true,
       projectCloneTracking: true,
+      // Fork: bounded recent-archive query, project-filtered.
+      recentArchivedThreads: true,
+      recentArchivedThreadsProjectFilter: true,
       ...(advertisedServerSelfUpdate === null
         ? {}
         : { serverSelfUpdate: advertisedServerSelfUpdate }),

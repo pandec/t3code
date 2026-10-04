@@ -53,6 +53,10 @@ import { layer as runtimeRequestServiceLayer } from "./RuntimeRequestService.ts"
 import { layerWithLegacyImporter as threadManagementServiceLayer } from "./ThreadManagementService.ts";
 import { layer as threadLaunchServiceLayer } from "./ThreadLaunchService.ts";
 import { layer as threadLifecycleServiceLayer } from "./ThreadLifecycleService.ts";
+import * as RecentArchivedThreads from "./RecentArchivedThreads.ts";
+import * as ThreadArchiveScheduler from "./ThreadArchiveScheduler.ts";
+import * as ArchiveWorktreeRemoval from "./ArchiveWorktreeRemoval.ts";
+import * as ThreadWorktreeSwitchScheduler from "./ThreadWorktreeSwitchScheduler.ts";
 import { layer as threadForkServiceLayer } from "./ThreadForkService.ts";
 import { layer as turnItemPositionStoreLayer } from "./TurnItemPositionStore.ts";
 import { layer as scheduledTaskServiceLayer } from "../scheduledTasks/ScheduledTaskService.ts";
@@ -355,6 +359,29 @@ export const OrchestrationV2ProductionLayerLive = Layer.mergeAll(
   sessionWorkspaceFollowWorkerProvided,
   agentSessionImporterProvided,
   sessionImportServiceProvided,
+  // Fork: deferred archive service and its worker, with guarded worktree removal.
+  ThreadArchiveScheduler.workerLive.pipe(
+    Layer.provideMerge(ThreadArchiveScheduler.layer),
+    Layer.provide(
+      ArchiveWorktreeRemoval.layer.pipe(
+        Layer.provide(
+          Layer.mergeAll(
+            threadManagementProvided,
+            ProjectStore.layer,
+            providerSessionManagerProvided,
+          ),
+        ),
+      ),
+    ),
+    Layer.provide(threadManagementProvided),
+  ),
+  // Fork: deferred agent-requested worktree switch service and its worker.
+  ThreadWorktreeSwitchScheduler.workerLive.pipe(
+    Layer.provideMerge(ThreadWorktreeSwitchScheduler.layer),
+    Layer.provide(Layer.mergeAll(threadManagementProvided, ProjectStore.layer)),
+  ),
+  // Fork: bounded recent-archive window for the archive shelves.
+  RecentArchivedThreads.layer.pipe(Layer.provide(projectionStoreLayer)),
 ).pipe(
   Layer.provide(Scheduler.layer),
   Layer.provideMerge(OrchestrationEventInfrastructureLayerLive),

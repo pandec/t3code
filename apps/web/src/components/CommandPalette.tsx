@@ -107,6 +107,7 @@ import { useHandleNewThread } from "../hooks/useHandleNewThread";
 import { useSavedPromptList } from "../hooks/useSavedPrompts";
 import { savedPromptPreview } from "./chat/composerPromptPicker";
 import { useThreadActions } from "../hooks/useThreadActions";
+import { resolveArchiveToggleAction } from "@t3tools/client-runtime/state/thread-settled";
 import { useProjectAccentColors } from "../hooks/useProjectAccentColors";
 import { useAccentTintSettings, useClientSettings } from "../hooks/useSettings";
 import { useOpenPanelPullRequestUrl } from "../hooks/useOpenPanelPullRequestUrl";
@@ -2303,11 +2304,15 @@ function OpenCommandPaletteDialog(props: {
         ) ?? null);
   const openUnarchivedThread = currentThread?.archivedAt === null ? currentThread : null;
   const openUnarchivedThreadRef = openUnarchivedThread === null ? null : currentThreadRef;
-  // Fork: archive goes through the shared confirmation and in-flight guard.
+  // Fork: archive goes through the shared toggle, confirmation and in-flight guard.
+  const openThreadArchiveAction =
+    openUnarchivedThread === null ? "archive" : resolveArchiveToggleAction(openUnarchivedThread);
   const archiveCurrentThreadAction = buildArchiveCurrentThreadAction({
     threadRef: openUnarchivedThreadRef,
+    archiveAction: openThreadArchiveAction,
     icon: <ArchiveIcon className={ITEM_ICON_CLASS} />,
-    runThread: attemptArchiveThread,
+    runThread: (threadRef) =>
+      attemptArchiveThread(threadRef, { expectedAction: openThreadArchiveAction }),
   });
   if (archiveCurrentThreadAction) {
     actionItems.push(archiveCurrentThreadAction);

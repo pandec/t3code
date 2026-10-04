@@ -10,8 +10,10 @@ import {
   squashAtomCommandFailure,
 } from "@t3tools/client-runtime/state/runtime";
 import {
+  type ArchiveToggleAction,
   canSnooze,
   effectiveSnoozed,
+  resolveArchiveToggleAction,
   threadWokeAt,
 } from "@t3tools/client-runtime/state/thread-settled";
 import { threadRuntimeCanArchive } from "@t3tools/client-runtime/state/models";
@@ -108,8 +110,9 @@ export class ThreadForkNotSyncedError extends Schema.TaggedError<ThreadForkNotSy
 // (hover action, menus, palette) cannot create two copies.
 const forkingThreadKeys = new Set<string>();
 
-/** Fork: archives in flight (including an open confirmation), so the same
- * thread archived from two surfaces at once (menu plus shortcut) runs once. */
+/** Fork: archive attempts in flight (including an open confirmation), shared
+ * by every surface, so the same thread archived from two surfaces at once
+ * (menu plus shortcut) runs once. */
 const archivingThreadKeys = new Set<string>();
 
 /** Deleting a thread expires every pending Undo that would try to revive it. */
@@ -342,6 +345,12 @@ export function useThreadActions() {
   const unarchiveThreadMutation = useAtomCommand(threadEnvironment.unarchive, {
     reportFailure: false,
   });
+  const cancelThreadArchiveMutation = useAtomCommand(threadEnvironment.cancelArchive, {
+    reportFailure: false,
+  });
+  const scheduleThreadArchiveMutation = useAtomCommand(threadEnvironment.scheduleArchive, {
+    reportFailure: false,
+  });
   const deleteThreadMutation = useAtomCommand(threadEnvironment.delete, {
     reportFailure: false,
   });
@@ -516,50 +525,6 @@ export function useThreadActions() {
       resolveThreadTarget,
       unarchiveThread,
     ],
-  );
-
-  /** Fork: the one user-facing archive path (menus, palette, shortcut): asks
-   * for confirmation when the setting is on, runs once per thread at a time,
-   * and reports failures as a toast. */
-  const attemptArchiveThread = useCallback(
-    async (target: ScopedThreadRef) => {
-      const threadKey = scopedThreadKey(target);
-      if (archivingThreadKeys.has(threadKey)) return;
-      const resolved = resolveThreadTarget(target);
-      if (!resolved) return;
-      archivingThreadKeys.add(threadKey);
-      try {
-        if (confirmThreadArchive) {
-          const localApi = readLocalApi();
-          if (!localApi) return;
-          const confirmed = await settlePromise(() =>
-            localApi.dialogs.confirm(`Archive thread "${resolved.thread.title}"?`),
-          );
-          if (confirmed._tag === "Failure" || !confirmed.value) return;
-        }
-        let didArchive = false;
-        const result = await archiveThread(target, {
-          onArchived: () => {
-            didArchive = true;
-          },
-        });
-        if (result._tag === "Failure" && !isAtomCommandInterrupted(result)) {
-          const error = squashAtomCommandFailure(result);
-          toastManager.add(
-            stackedThreadToast({
-              type: "error",
-              title: didArchive
-                ? "Thread archived, but navigation failed"
-                : "Failed to archive thread",
-              description: error instanceof Error ? error.message : "An error occurred.",
-            }),
-          );
-        }
-      } finally {
-        archivingThreadKeys.delete(threadKey);
-      }
-    },
-    [archiveThread, confirmThreadArchive, resolveThreadTarget],
   );
 
   const deleteThread = useCallback(
@@ -790,6 +755,113 @@ export function useThreadActions() {
       });
     },
     [unsettleThreadMutation],
+  );
+
+  /**
+   * Fork: the one user-facing archive path behind menus, the palette and the
+   * shortcut. It archives now, schedules an archive for when a busy thread is
+   * done, or cancels a pending one (`resolveArchiveToggleAction`).
+   * `expectedAction` is what the surface showed; a request that changed
+   * meanwhile does nothing. Archiving now asks for confirmation when the
+   * setting is on and goes through `archiveThread` (undo notice, listening
+   * pause); failures surface as toasts. Concurrent attempts on one thread
+   * from any surface collapse into one. `onApplied` runs once the request
+   * lands (before an archive's navigation), e.g. so the composer's
+   * `/t3-archive` clears its draft only on success.
+   */
+  const attemptArchiveThread = useCallback(
+    async (
+      target: ScopedThreadRef,
+      opts: {
+        expectedAction?: ArchiveToggleAction;
+        onApplied?: () => void;
+        /** Appended to the "Archive when done" notice. */
+        scheduledHint?: string;
+      } = {},
+    ) => {
+      const threadKey = scopedThreadKey(target);
+      if (archivingThreadKeys.has(threadKey)) return;
+      const resolved = resolveThreadTarget(target);
+      if (!resolved || resolved.thread.archivedAt !== null) return;
+      archivingThreadKeys.add(threadKey);
+      try {
+        const toggleAction = resolveArchiveToggleAction(resolved.thread);
+        if (opts.expectedAction !== undefined && opts.expectedAction !== toggleAction) return;
+        if (toggleAction !== "archive") {
+          // Scheduling and cancelling are reversible, so they skip the confirmation.
+          const input = { threadId: target.threadId };
+          const result = await (toggleAction === "cancel"
+            ? cancelThreadArchiveMutation({ environmentId: target.environmentId, input })
+            : scheduleThreadArchiveMutation({
+                environmentId: target.environmentId,
+                input: { ...input, afterTurn: true },
+              }));
+          if (result._tag === "Failure") {
+            if (!isAtomCommandInterrupted(result)) {
+              const error = squashAtomCommandFailure(result);
+              toastManager.add(
+                stackedThreadToast({
+                  type: "error",
+                  title: "Unable to update thread archive",
+                  description: error instanceof Error ? error.message : "An error occurred.",
+                }),
+              );
+            }
+            return;
+          }
+          opts.onApplied?.();
+          toastManager.add(
+            stackedThreadToast({
+              type: "success",
+              title: toggleAction === "cancel" ? "Archive cancelled" : "Archive when done",
+              description:
+                toggleAction === "cancel"
+                  ? "This thread will stay open."
+                  : `Archives when the current turn and background work finish.${
+                      opts.scheduledHint === undefined ? "" : ` ${opts.scheduledHint}`
+                    }`,
+            }),
+          );
+          return;
+        }
+        if (confirmThreadArchive) {
+          const localApi = readLocalApi();
+          if (!localApi) return;
+          const confirmed = await settlePromise(() =>
+            localApi.dialogs.confirm(`Archive thread "${resolved.thread.title}"?`),
+          );
+          if (confirmed._tag === "Failure" || !confirmed.value) return;
+        }
+        let didArchive = false;
+        const result = await archiveThread(target, {
+          onArchived: () => {
+            didArchive = true;
+            opts.onApplied?.();
+          },
+        });
+        if (result._tag === "Failure" && !isAtomCommandInterrupted(result)) {
+          const error = squashAtomCommandFailure(result);
+          toastManager.add(
+            stackedThreadToast({
+              type: "error",
+              title: didArchive
+                ? "Thread archived, but navigation failed"
+                : "Failed to archive thread",
+              description: error instanceof Error ? error.message : "An error occurred.",
+            }),
+          );
+        }
+      } finally {
+        archivingThreadKeys.delete(threadKey);
+      }
+    },
+    [
+      archiveThread,
+      cancelThreadArchiveMutation,
+      confirmThreadArchive,
+      resolveThreadTarget,
+      scheduleThreadArchiveMutation,
+    ],
   );
 
   /** Turns automatic settlement (inactivity, merged PR) on or off for one thread. */

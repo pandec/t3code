@@ -25,7 +25,11 @@ import { runCachePersistence } from "./cachePersistence.ts";
 import { subscribeDynamic } from "../rpc/client.ts";
 import type { RpcSession } from "../rpc/session.ts";
 import * as ShellSnapshotLoader from "./shellSnapshotHttp.ts";
-import { applyShellStreamEvent, mergeShellSnapshotProjects } from "./shellReducer.ts";
+import {
+  applyShellStreamEvent,
+  mergeShellSnapshotProjects,
+  shellEventInvalidatesArchivedThreads,
+} from "./shellReducer.ts";
 import { type EnvironmentCatalogState, enabledEnvironmentIds } from "./connections.ts";
 import { followStreamInEnvironment } from "./runtime.ts";
 
@@ -35,6 +39,11 @@ export interface EnvironmentShellState {
   readonly snapshot: Option.Option<OrchestrationV2ShellSnapshot>;
   readonly status: EnvironmentShellStatus;
   readonly error: Option.Option<string>;
+  /**
+   * Fork: sequence of the last shell delta that changed archive membership;
+   * the recent-archive shelf refetches when it moves. Absent means 0.
+   */
+  readonly archiveInvalidationSequence?: number;
 }
 
 const EMPTY_SHELL_STATE: EnvironmentShellState = {
@@ -193,10 +202,21 @@ export const makeEnvironmentShellState = Effect.fn("EnvironmentShellState.make")
             });
       if (nextSnapshot === null) continue;
       receivedSnapshot ||= item.kind === "snapshot";
+      // Judged against the snapshot this event lands on, not the batch's
+      // first one, so a later delta for a thread an earlier one re-added
+      // does not invalidate again.
+      const archiveInvalidationSequence =
+        item.kind !== "snapshot" &&
+        Option.isSome(next.snapshot) &&
+        item.sequence > next.snapshot.value.snapshotSequence &&
+        shellEventInvalidatesArchivedThreads(next.snapshot.value, item)
+          ? item.sequence
+          : next.archiveInvalidationSequence;
       next = {
         snapshot: Option.some(nextSnapshot),
         status: waiting ? "synchronizing" : "live",
         error: Option.none(),
+        ...(archiveInvalidationSequence === undefined ? {} : { archiveInvalidationSequence }),
       };
     }
     yield* Ref.set(awaitingCompletion, waiting);

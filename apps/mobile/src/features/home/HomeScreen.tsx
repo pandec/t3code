@@ -35,11 +35,16 @@ import { NATIVE_LIQUID_GLASS_SUPPORTED } from "../../native/native-glass";
 import { useThreadSearch } from "../../state/queries";
 import { useThreadJumpShortcuts } from "../keyboard/threadKeyboardShortcuts";
 import {
+  useArchivedSectionVisibleCount,
   useCollapsedThreadGroups,
   useThreadShelfExpansion,
 } from "../../state/use-mobile-preferences";
 import { useThreadGroups } from "../../state/use-thread-groups";
 import { ThreadCustomGroupHeader } from "../threads/ThreadCustomGroupHeader";
+import { selectRecentArchivedThreads } from "@t3tools/client-runtime/state/threads";
+import { useRecentArchivedThreadSnapshots } from "../archive/useArchivedThreadSnapshots";
+import { RecentArchivedThreadSection } from "../threads/RecentArchivedThreadSection";
+import { useArchivedThreadListActions } from "./useThreadListActions";
 import { usePendingThreadOrder } from "../../state/thread-order";
 import { threadListEnvironmentsAtom } from "../../state/server";
 import { useProjectAccentColors } from "../../state/use-project-accent-colors";
@@ -95,6 +100,8 @@ interface HomeScreenProps {
   readonly onProjectChange: (projectKey: string | null) => void;
   readonly onAddConnection: () => void;
   readonly onOpenSettings: () => void;
+  /** Fork: the archive shelf's "View all archived threads". */
+  readonly onOpenArchivedThreads: () => void;
   readonly onStartNewTask: () => void;
   readonly onSelectThread: (thread: EnvironmentThreadShell) => void;
   readonly onArchiveThread: (thread: EnvironmentThreadShell) => void;
@@ -922,13 +929,65 @@ export function HomeScreen(props: HomeScreenProps) {
     ],
   );
 
+  // Fork: the recent-archive shelf below the live list. It is unfiltered, so
+  // any active filter or search hides it.
+  const { unarchiveThread, confirmDeleteThread: confirmDeleteArchivedThread } =
+    useArchivedThreadListActions();
+  const archivedSectionVisibleCount = useArchivedSectionVisibleCount();
+  const { expanded: archivedShelfExpanded, toggle: toggleArchivedShelf } =
+    useThreadShelfExpansion("archived");
+  const archivedEnvironmentIds = useMemo(
+    () => props.environments.map((environment) => environment.environmentId),
+    [props.environments],
+  );
+  const { snapshots: archivedSnapshots } = useRecentArchivedThreadSnapshots(
+    archivedEnvironmentIds,
+    archivedSectionVisibleCount,
+  );
+  const archiveShelfVisible =
+    !hasSearchQuery &&
+    props.selectedEnvironmentId === null &&
+    props.selectedModel === null &&
+    v2ScopedProjectGroup === null;
+  const recentArchive = useMemo(
+    () =>
+      archiveShelfVisible
+        ? selectRecentArchivedThreads(archivedSnapshots, archivedSectionVisibleCount)
+        : { threads: [], totalCount: 0 },
+    [archiveShelfVisible, archivedSectionVisibleCount, archivedSnapshots],
+  );
+  const archivedEnvironmentLabels = useMemo(
+    () =>
+      Object.fromEntries(
+        props.environments.map((environment) => [environment.environmentId, environment.label]),
+      ),
+    [props.environments],
+  );
+  const archivedSectionFooter =
+    recentArchive.threads.length > 0 ? (
+      <RecentArchivedThreadSection
+        environmentLabels={archivedEnvironmentLabels}
+        projects={props.projects}
+        threads={recentArchive.threads}
+        totalCount={recentArchive.totalCount}
+        expanded={archivedShelfExpanded}
+        onToggle={toggleArchivedShelf}
+        onDelete={confirmDeleteArchivedThread}
+        onOpen={props.onSelectThread}
+        onOpenAll={props.onOpenArchivedThreads}
+        onUnarchive={unarchiveThread}
+      />
+    ) : null;
+
   /* Empty states */
   // The signal must ignore the search/environment filters: an active query
   // that matches nothing needs the in-list "No results" state, not the
   // full-page "No threads yet". Settled threads are unarchived live shells,
   // so the archived-at check already covers the settled shelf.
   const hasAnyThreads =
-    props.threads.some((thread) => thread.archivedAt === null) || props.pendingTasks.length > 0;
+    props.threads.some((thread) => thread.archivedAt === null) ||
+    props.pendingTasks.length > 0 ||
+    recentArchive.totalCount > 0;
   const selectedEnvironmentLabel =
     props.selectedEnvironmentId === null
       ? null
@@ -1026,7 +1085,11 @@ export function HomeScreen(props: HomeScreenProps) {
       />
     );
 
-  if (Platform.OS === "android" && threadListV2Items.length === 0) {
+  if (
+    Platform.OS === "android" &&
+    threadListV2Items.length === 0 &&
+    archivedSectionFooter === null
+  ) {
     return (
       <View className="flex-1 bg-header">
         <View
@@ -1069,14 +1132,18 @@ export function HomeScreen(props: HomeScreenProps) {
             extraData={v2ExtraData}
             ListHeaderComponent={v2ListHeader}
             ListFooterComponent={
-              settledShelfExpanded && threadListV2Layout.hiddenSettledCount > 0 ? (
-                <ThreadListV2ShowMoreRow
-                  hiddenCount={threadListV2Layout.hiddenSettledCount}
-                  onPress={showMoreSettled}
-                />
-              ) : null
+              <>
+                {settledShelfExpanded && threadListV2Layout.hiddenSettledCount > 0 ? (
+                  <ThreadListV2ShowMoreRow
+                    hiddenCount={threadListV2Layout.hiddenSettledCount}
+                    onPress={showMoreSettled}
+                  />
+                ) : null}
+                {archivedSectionFooter}
+              </>
             }
-            ListEmptyComponent={v2ListEmpty}
+            // With archived rows below, "No threads yet" would read as data loss.
+            ListEmptyComponent={archivedSectionFooter === null ? v2ListEmpty : null}
             style={{ flex: 1 }}
             automaticallyAdjustsScrollIndicatorInsets={Platform.OS === "ios"}
             contentInsetAdjustmentBehavior={Platform.OS === "ios" ? "automatic" : "never"}

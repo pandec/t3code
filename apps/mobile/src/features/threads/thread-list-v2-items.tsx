@@ -11,6 +11,8 @@ import { RowPressable } from "../../components/RowPressable";
 import { CustomSnoozeSheet } from "./CustomSnoozeSheet";
 import { appAtomRegistry } from "../../state/atom-registry";
 import { threadArrangementOpenAtom } from "../../state/thread-order";
+import { threadEnvironment } from "../../state/threads";
+import { useAtomCommand } from "../../state/use-atom-command";
 import type { ThreadMoveDestination } from "./threadOrder";
 import type {
   EnvironmentProject,
@@ -25,9 +27,12 @@ import {
 import {
   canSnooze,
   canSnoozeUntilDone,
+  hasPendingArchive,
+  resolveArchiveToggleAction,
   resolveSnoozePresets,
   SNOOZE_UNTIL_DONE_PRESET,
 } from "@t3tools/client-runtime/state/thread-settled";
+import { squashAtomCommandFailure } from "@t3tools/client-runtime/state/runtime";
 import type { MenuAction } from "@react-native-menu/menu";
 import { memo, useCallback, useEffect, useMemo, useState, type ComponentProps } from "react";
 import { Alert, Pressable, StyleSheet, useWindowDimensions, View } from "react-native";
@@ -54,12 +59,14 @@ import { ThreadSwipeable } from "../home/thread-swipe-actions";
 import { buildThreadTitleRegenerationMenuItems } from "./thread-title-regeneration-menu";
 import {
   THREAD_LIST_V2_SETTLED_PAGE_COUNT,
+  resolveThreadListV2MenuActionIds,
   resolveThreadListV2SnoozeGateExpiryMs,
   resolveThreadListV2SnoozeMenuSelection,
   threadHasUnseenCompletion,
   resolveThreadListV2Status,
   resolveThreadListV2ProviderDrivers,
   resolveThreadListV2SwipeActions,
+  type ThreadListV2MenuActionId,
   type ThreadListV2Status,
 } from "./threadListV2";
 import { QueuedMessageIcon } from "./queued-message-icon";
@@ -85,27 +92,31 @@ const STATUS_LABEL_BY_STATUS: Partial<
   limited: { label: "Limited", className: "text-warning-foreground" },
 };
 
-// Menus keep lifecycle and title regeneration together. Archive keeps its
-// own surface (thread screen / settings) rather than crowding v2 rows.
-const CARD_MENU_ACTIONS: MenuAction[] = [
-  { id: "settle", title: "Settle", image: "checkmark" },
-  { id: "delete", title: "Delete", image: "trash", attributes: { destructive: true } },
-];
+// The archive item's title follows the row's archive toggle (see archiveMenuItem).
+const MENU_ACTION_BY_ID: Readonly<Record<ThreadListV2MenuActionId, MenuAction>> = {
+  settle: { id: "settle", title: "Settle", image: "checkmark" },
+  unsettle: { id: "unsettle", title: "Un-settle", image: "arrow.uturn.backward" },
+  archive: { id: "archive", title: "Archive", image: "archivebox" },
+  delete: { id: "delete", title: "Delete", image: "trash", attributes: { destructive: true } },
+};
 
-const SLIM_MENU_ACTIONS: MenuAction[] = [
-  { id: "unsettle", title: "Un-settle", image: "arrow.uturn.backward" },
-  { id: "delete", title: "Delete", image: "trash", attributes: { destructive: true } },
-];
+function menuActionsForRow(input: {
+  readonly settlementSupported: boolean;
+  readonly variant: "card" | "slim";
+}): MenuAction[] {
+  return resolveThreadListV2MenuActionIds(input).map((id) => MENU_ACTION_BY_ID[id]);
+}
 
+// Each list ends with Delete; rows splice their own items in before it.
+const CARD_MENU_ACTIONS = menuActionsForRow({ settlementSupported: true, variant: "card" });
+const SLIM_MENU_ACTIONS = menuActionsForRow({ settlementSupported: true, variant: "slim" });
+const LEGACY_MENU_ACTIONS = menuActionsForRow({ settlementSupported: false, variant: "card" });
+// Archive rides along so the swipe-right gesture keeps a menu (and
+// VoiceOver) twin on the snoozed shelf.
 const SNOOZED_MENU_ACTIONS: MenuAction[] = [
   { id: "unsnooze", title: "Wake thread", image: "clock" },
-  { id: "delete", title: "Delete", image: "trash", attributes: { destructive: true } },
-];
-
-// Pre-settlement servers: no lifecycle items, archive fills the gap.
-const LEGACY_MENU_ACTIONS: MenuAction[] = [
-  { id: "archive", title: "Archive", image: "archivebox" },
-  { id: "delete", title: "Delete", image: "trash", attributes: { destructive: true } },
+  MENU_ACTION_BY_ID.archive,
+  MENU_ACTION_BY_ID.delete,
 ];
 
 /** Rounded-row radius for the sidebar rows. */
@@ -703,6 +714,60 @@ export const ThreadListV2Row = memo(function ThreadListV2Row(props: {
   // The timestamp is precomputed on the list item (same stamps the settled
   // tail sorts by) so a minute tick only re-renders rows that draw it.
   const timeLabel = props.timeLabel;
+  // Fork: a scheduled (deferred) archive stays visible at a glance in both
+  // row variants until it runs or is cancelled from the row menu. The row's
+  // accessibilityLabel collapses its subtree, so it is announced there.
+  const archivePending = hasPendingArchive(thread);
+  const rowAccessibilityLabel = [
+    thread.title,
+    props.hasQueuedMessages && "messages queued to send",
+    archivePending && "archives when done",
+  ]
+    .filter(Boolean)
+    .join(", ");
+  const archivePendingIcon = archivePending ? (
+    <SymbolView
+      name="archivebox"
+      size={11}
+      tintColorClassName="accent-warning-foreground"
+      type="monochrome"
+    />
+  ) : null;
+  const cancelArchiveMutation = useAtomCommand(threadEnvironment.cancelArchive, {
+    reportFailure: false,
+  });
+  const handleCancelArchive = useCallback(() => {
+    void cancelArchiveMutation({
+      environmentId: thread.environmentId,
+      input: { threadId: thread.id },
+    }).then((result) => {
+      if (result._tag !== "Failure") return;
+      const error = squashAtomCommandFailure(result);
+      Alert.alert(
+        "Could not cancel pending archive",
+        error instanceof Error ? error.message : "The archive could not be cancelled.",
+      );
+    });
+  }, [cancelArchiveMutation, thread.environmentId, thread.id]);
+  const scheduleArchiveMutation = useAtomCommand(threadEnvironment.scheduleArchive, {
+    reportFailure: false,
+  });
+  const handleScheduleArchive = useCallback(() => {
+    void scheduleArchiveMutation({
+      environmentId: thread.environmentId,
+      input: { threadId: thread.id, afterTurn: true },
+    }).then((result) => {
+      if (result._tag !== "Failure") return;
+      const error = squashAtomCommandFailure(result);
+      Alert.alert(
+        "Could not schedule archive",
+        error instanceof Error ? error.message : "The archive could not be scheduled.",
+      );
+    });
+  }, [scheduleArchiveMutation, thread.environmentId, thread.id]);
+  // One archive behavior on every surface: a busy thread archives when done
+  // and a pending archive can be cancelled from the same item.
+  const archiveToggle = resolveArchiveToggleAction(thread);
   // Set while this thread's recording is playing or paused mid-way, so
   // pausing from the list keeps a way back in. A finished recording clears
   // it. Re-renders only when the state flips, never on the progress tick.
@@ -781,7 +846,29 @@ export const ThreadListV2Row = memo(function ThreadListV2Row(props: {
   );
   const handleMoveUp = useCallback(() => onMoveThread?.(thread, "up"), [onMoveThread, thread]);
   const handleMoveDown = useCallback(() => onMoveThread?.(thread, "down"), [onMoveThread, thread]);
-  const handleArchive = useCallback(() => onArchiveThread(thread), [onArchiveThread, thread]);
+  const handleArchive = useCallback(() => {
+    if (archiveToggle === "cancel") handleCancelArchive();
+    else if (archiveToggle === "schedule") handleScheduleArchive();
+    else onArchiveThread(thread);
+  }, [archiveToggle, handleCancelArchive, handleScheduleArchive, onArchiveThread, thread]);
+  const archiveMenuItem = useMemo<MenuAction>(
+    () => ({
+      ...MENU_ACTION_BY_ID.archive,
+      title:
+        archiveToggle === "cancel"
+          ? "Cancel pending archive"
+          : archiveToggle === "schedule"
+            ? "Archive when done"
+            : "Archive",
+    }),
+    [archiveToggle],
+  );
+  /** Replaces the static archive entry of a base menu list with the toggle-aware one. */
+  const withArchiveToggle = useCallback(
+    (actions: ReadonlyArray<MenuAction>) =>
+      actions.map((action) => (action.id === "archive" ? archiveMenuItem : action)),
+    [archiveMenuItem],
+  );
   const handleFork = useCallback(() => onForkThread(thread), [onForkThread, thread]);
   const forkable = canForkConversation(thread, {
     canForkImportedSession: canForkImportedSessionWith(thread.providerInstanceId, props.providers),
@@ -930,57 +1017,65 @@ export const ThreadListV2Row = memo(function ThreadListV2Row(props: {
         image: "clock",
         subactions: snoozePresetActions,
       },
+      archiveMenuItem,
       ...arrangementMenuItems,
       ...forkMenuItem,
       ...titleMenuItems,
       ...autoSettleMenuItems,
-      { id: "delete", title: "Delete", image: "trash", attributes: { destructive: true } },
+      MENU_ACTION_BY_ID.delete,
     ],
-    [arrangementMenuItems, autoSettleMenuItems, forkMenuItem, snoozePresetActions, titleMenuItems],
+    [
+      archiveMenuItem,
+      arrangementMenuItems,
+      autoSettleMenuItems,
+      forkMenuItem,
+      snoozePresetActions,
+      titleMenuItems,
+    ],
   );
   const cardMenuActions = useMemo<MenuAction[]>(
     () => [
-      CARD_MENU_ACTIONS[0]!,
+      ...withArchiveToggle(CARD_MENU_ACTIONS.slice(0, -1)),
       ...arrangementMenuItems,
       ...forkMenuItem,
       ...titleMenuItems,
       ...autoSettleMenuItems,
-      ...CARD_MENU_ACTIONS.slice(1),
+      CARD_MENU_ACTIONS.at(-1)!,
     ],
-    [arrangementMenuItems, autoSettleMenuItems, forkMenuItem, titleMenuItems],
+    [arrangementMenuItems, autoSettleMenuItems, forkMenuItem, titleMenuItems, withArchiveToggle],
   );
   // Settled and snoozed rows keep the setting too, matching web where every
   // row shares one menu builder.
   const slimMenuActions = useMemo<MenuAction[]>(
     () => [
-      SLIM_MENU_ACTIONS[0]!,
+      ...withArchiveToggle(SLIM_MENU_ACTIONS.slice(0, -1)),
       ...arrangementMenuItems.filter(
         (action) => action.id !== "move-up" && action.id !== "move-down",
       ),
       ...forkMenuItem,
       ...titleMenuItems,
       ...autoSettleMenuItems,
-      SLIM_MENU_ACTIONS[1]!,
+      SLIM_MENU_ACTIONS.at(-1)!,
     ],
-    [arrangementMenuItems, autoSettleMenuItems, forkMenuItem, titleMenuItems],
+    [arrangementMenuItems, autoSettleMenuItems, forkMenuItem, titleMenuItems, withArchiveToggle],
   );
   const snoozedMenuActions = useMemo<MenuAction[]>(
     () => [
-      SNOOZED_MENU_ACTIONS[0]!,
+      ...withArchiveToggle(SNOOZED_MENU_ACTIONS.slice(0, -1)),
       ...titleMenuItems,
       ...autoSettleMenuItems,
-      SNOOZED_MENU_ACTIONS[1]!,
+      SNOOZED_MENU_ACTIONS.at(-1)!,
     ],
-    [autoSettleMenuItems, titleMenuItems],
+    [autoSettleMenuItems, titleMenuItems, withArchiveToggle],
   );
   const legacyMenuActions = useMemo<MenuAction[]>(
     () => [
-      LEGACY_MENU_ACTIONS[0]!,
+      ...withArchiveToggle(LEGACY_MENU_ACTIONS.slice(0, -1)),
       ...arrangementMenuItems,
       ...titleMenuItems,
-      LEGACY_MENU_ACTIONS[1]!,
+      LEGACY_MENU_ACTIONS.at(-1)!,
     ],
-    [arrangementMenuItems, titleMenuItems],
+    [arrangementMenuItems, titleMenuItems, withArchiveToggle],
   );
   const handleMenuAction = useCallback(
     ({ nativeEvent }: { readonly nativeEvent: { readonly event: string } }) => {
@@ -1103,8 +1198,9 @@ export const ThreadListV2Row = memo(function ThreadListV2Row(props: {
         : null,
     [handleMenuAction, snoozePresetActions, swipeActions.secondary, thread.title],
   );
-  // Leading panel, ordered from the screen edge inward. Archive stays last so
-  // it remains what a full swipe right commits.
+  // Leading panel, ordered from the screen edge inward. Archive (through the
+  // row's archive toggle) stays last so it remains what a full swipe right
+  // commits.
   const leftActions = swipeActions.left.map((action) =>
     action === "fork"
       ? {
@@ -1115,12 +1211,28 @@ export const ThreadListV2Row = memo(function ThreadListV2Row(props: {
           onPress: handleFork,
         }
       : {
-          accessibilityLabel: `Archive ${thread.title}`,
+          accessibilityLabel:
+            archiveToggle === "cancel"
+              ? `Cancel pending archive of ${thread.title}`
+              : archiveToggle === "schedule"
+                ? `Archive ${thread.title} when done`
+                : `Archive ${thread.title}`,
           icon: "archivebox" as const,
-          label: "Archive",
+          label: archiveToggle === "cancel" ? "Keep" : "Archive",
           onPress: handleArchive,
         },
   );
+  // What a full swipe right commits: the last leading action, following the
+  // archive toggle (a pending archive is cancelled, a busy thread deferred).
+  const lastLeftAction = swipeActions.left.at(-1);
+  const fullSwipeHint =
+    lastLeftAction === "fork"
+      ? "forks the thread"
+      : archiveToggle === "cancel"
+        ? "cancels the pending archive"
+        : archiveToggle === "schedule"
+          ? "archives when the thread is done"
+          : "archives";
   const swipeAccessibilityHint = [
     secondaryAction === null
       ? `Opens the thread. Swipe left to ${primaryAction.label.toLowerCase()}.`
@@ -1130,7 +1242,7 @@ export const ThreadListV2Row = memo(function ThreadListV2Row(props: {
       : leftActions.length === 1
         ? [`Swipe right to ${leftActions[0]!.label.toLowerCase()}.`]
         : [
-            `Swipe right for ${leftActions.map((action) => action.label.toLowerCase()).join(", ")}; a full swipe archives.`,
+            `Swipe right for ${leftActions.map((action) => action.label.toLowerCase()).join(", ")}; a full swipe ${fullSwipeHint}.`,
           ]),
   ].join(" ");
 
@@ -1160,6 +1272,7 @@ export const ThreadListV2Row = memo(function ThreadListV2Row(props: {
           {props.projectTitle ?? props.project?.title ?? ""}
         </Text>
         {listeningIndicator}
+        {archivePendingIcon}
         {props.hasQueuedMessages ? <QueuedMessageIcon selected={selected} /> : null}
         {pinnedRow ? (
           <SymbolView
@@ -1337,9 +1450,7 @@ export const ThreadListV2Row = memo(function ThreadListV2Row(props: {
         interactionOpacity={rowAppearance.interactionOpacity}
         className={rowAppearance.className}
         accessibilityHint={swipeAccessibilityHint}
-        accessibilityLabel={
-          props.hasQueuedMessages ? `${thread.title}, messages queued to send` : thread.title
-        }
+        accessibilityLabel={rowAccessibilityLabel}
         accessibilityRole="button"
         accessibilityState={{ selected }}
         onAccessibilityAction={onListeningAccessibilityAction}
@@ -1379,9 +1490,7 @@ export const ThreadListV2Row = memo(function ThreadListV2Row(props: {
         interactionClassName={rowAppearance.interactionClassName}
         interactionOpacity={rowAppearance.interactionOpacity}
         accessibilityHint={swipeAccessibilityHint}
-        accessibilityLabel={
-          props.hasQueuedMessages ? `${thread.title}, messages queued to send` : thread.title
-        }
+        accessibilityLabel={rowAccessibilityLabel}
         accessibilityRole="button"
         accessibilityState={{ selected }}
         className={rowAppearance.className}
@@ -1441,6 +1550,7 @@ export const ThreadListV2Row = memo(function ThreadListV2Row(props: {
             ) : null}
           </View>
           {listeningIndicator}
+          {archivePendingIcon}
           {props.hasQueuedMessages ? <QueuedMessageIcon selected={selected} /> : null}
           <Text
             className={cn(
@@ -1483,7 +1593,7 @@ export const ThreadListV2Row = memo(function ThreadListV2Row(props: {
         onSwipeableWillOpen={props.onSwipeableWillOpen}
         primaryAction={primaryAction}
         secondaryAction={secondaryAction}
-        resetKey={`${thread.environmentId}:${thread.id}:${variant}:${snoozedRow}:${thread.settledAt}:${thread.unsettledAt}:${thread.snoozedUntil}`}
+        resetKey={`${thread.environmentId}:${thread.id}:${variant}:${snoozedRow}:${thread.settledAt}:${thread.unsettledAt}:${thread.snoozedUntil}:${leftActions.length}`}
         simultaneousWith={props.simultaneousSwipeGesture}
         threadTitle={thread.title}
       >

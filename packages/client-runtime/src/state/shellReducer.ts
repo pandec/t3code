@@ -92,6 +92,32 @@ export function mergeShellSnapshotProjects(
   };
 }
 
+/**
+ * Fork: whether a shell delta can change the recent-archive shelf. The active
+ * stream reports an archive, a delete and any change to an archived thread as
+ * `thread.removed`, and an unarchive as an update for a thread it did not
+ * hold (as is a brand-new thread; refetching for one is harmless).
+ */
+export function shellEventInvalidatesArchivedThreads(
+  snapshot: OrchestrationV2ShellSnapshot,
+  event: Exclude<
+    OrchestrationV2ShellStreamItem,
+    { readonly kind: "snapshot" } | { readonly kind: "synchronized" }
+  >,
+): boolean {
+  switch (event.kind) {
+    case "thread.removed":
+      return true;
+    case "thread.updated":
+      return (
+        event.location === "archive" ||
+        !snapshot.threads.some((thread) => thread.id === event.thread.id)
+      );
+    default:
+      return false;
+  }
+}
+
 /** Applies one committed V2 shell delta while preserving active/archive exclusivity. */
 export function applyShellStreamEvent(
   snapshot: OrchestrationV2ShellSnapshot,

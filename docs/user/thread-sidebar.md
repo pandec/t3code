@@ -41,6 +41,21 @@ in a new thread's model picker to add or remove them. A regular click returns to
 single model. Choose a base branch and send. Each selection starts a separate thread
 and worktree while you stay in the new thread composer. This requires a Git project.
 
+### Move a Codex thread to a worktree
+
+Ask Codex to create a worktree and switch this thread to it. The agent requests the move with
+`switch_worktree`. T3 Code waits for the current turn and its checkpoint, and for subagents or
+monitors it left running, then updates the thread's checkout. Your next message continues the
+same conversation in that directory.
+
+The move stays pending during the current turn and survives a server restart. Ask the agent to
+inspect or cancel it with `worktree_switch_status` or `cancel_worktree_switch`. A failed or
+stopped turn cancels the move, as do a new message, archiving the thread, or changing its
+checkout before the move applies. The target must be an existing checkout of the same
+repository on the connected server; if it is gone when the move applies, the thread stays where
+it is and the status explains why. To move back, ask the agent to switch to the project
+checkout.
+
 ## Pin and reorder threads
 
 Pin a thread from its menu or use the pin button that appears when you hover its row on web and
@@ -198,6 +213,48 @@ Mixed values show where the selected environments disagree. Mobile applies these
 rules to connected environments that support shared settings. Offline environments
 and older servers keep their previous values. Changing a rule does not reopen
 already settled threads.
+
+## Archive when done
+
+Archiving a thread that is still working schedules the archive for when it is done. The thread
+menus (and swipe-right on mobile), plus the command palette and the archive keybinding on web and
+desktop, offer **Archive when done** while a turn runs. On any client, send
+[`/t3-archive`](./composer.md#commands-and-skills) in the thread. An agent can also schedule
+its own thread, for example when you ask it to "archive this thread when you're done". The
+archive waits for the turn and its checkpoint, and for subagents or monitors it left running;
+background commands such as dev servers do not hold it and stop when the thread archives. An
+idle thread archives right away.
+
+A thread with a pending archive shows an archive icon in its row. Choose **Cancel pending
+archive** from its menu, use the archive keybinding again, or send `/t3-archive` again to keep
+it. Sending a new message, stopping the turn it waits on, a
+failed turn, or a workspace change also cancels it. If the turn's final checkpoint fails, the
+thread stays unarchived and the archive status shows the error. A pending archive survives a
+server restart.
+
+You can also ask the agent to remove the thread's worktree when it archives. The branch is
+always kept. Removal only happens when the worktree has no uncommitted or untracked changes, is
+on a branch, is not a project's checkout, no other unarchived thread uses it, and no thread is
+waiting to switch into it. If the
+worktree can never qualify, the agent is told right away. If it is dirty when the thread
+archives, the thread still archives, the worktree stays, and the agent can read the reason from
+the archive status. Unarchiving the thread, or sending it a message, before removal finishes
+keeps the worktree.
+
+Sending a message to an archived thread unarchives it, then delivers the message.
+
+## Find recently archived threads
+
+The thread list ends with an **Archived** shelf of your most recently archived threads, folded
+to a count by default. Expand it to open one: the thread shows that it is archived, and sending
+a message or choosing **Unarchive** restores it. Unarchive a row directly, or delete it from its
+context menu (long-press on mobile). **View all archived threads** opens the full archive in
+Settings.
+
+On web and desktop the shelf follows the sidebar's environment and project filters. On mobile it
+hides while a search or filter is active. Set how many threads it shows with **Recent archived
+threads** in **Settings → Extras** on web and desktop, or **Settings → Thread behavior** on
+mobile.
 
 ## Link a pull request
 
