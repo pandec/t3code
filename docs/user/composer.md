@@ -55,12 +55,18 @@ running the send button shows which action it will take. Long-press it to use th
 other action for a single message, or hold `Cmd` while sending from a hardware
 keyboard. The button only offers Steer when the running agent supports it.
 
-## Queue messages offline on mobile
+## Queue messages offline
 
 Mobile keeps local copies of draft attachments, so you can preview them and queue
 messages while disconnected. Uploads resume when you reconnect. Drafts and queued
 messages survive app restarts. Signing out of T3 Connect keeps that work on your
 device until you sign back into the same account.
+
+On web and desktop, a text message sent to an existing thread while its server is
+offline waits in the browser and sends when the server reconnects. The same applies
+to a message in flight when the page reloads or the connection drops. A notice above
+the composer counts unsent messages and can discard them. Messages with attachments
+still need a connection.
 
 ## Custom models
 

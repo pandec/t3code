@@ -309,7 +309,7 @@ import {
   normalizeProjectSetupScript,
   projectScriptIdFromCommand,
 } from "~/projectScripts";
-import { newDraftId, newMessageId, newThreadId } from "~/lib/utils";
+import { newCommandId, newDraftId, newMessageId, newThreadId } from "~/lib/utils";
 import { registerFaviconProjectForThread } from "~/browserFaviconStore";
 import { getProviderModelCapabilities } from "../providerModels";
 import {
@@ -395,6 +395,14 @@ import {
 } from "../state/server";
 import { terminalEnvironment } from "../state/terminal";
 import { threadEnvironment } from "../state/threads";
+import {
+  enqueueThreadSubmission,
+  pendingSubmissionToChatMessage,
+  settleClaimedThreadSubmission,
+  useThreadOutboxStore,
+  type PendingThreadSubmission,
+} from "../state/threadOutbox";
+import { useThreadOutboxBannerItem } from "./chat/useThreadOutboxBannerItem";
 import { resolveProviderSkillsForCwd } from "@t3tools/client-runtime/providerSkills";
 import { vcsEnvironment } from "../state/vcs";
 import { sourceControlEnvironment } from "../state/sourceControl";
@@ -3008,6 +3016,21 @@ export default function ChatView(props: ChatViewProps) {
   const serverUpdateFailureDismissed =
     serverUpdateState === dismissedServerUpdateState ||
     isServerUpdateFailureDismissed(serverUpdateState);
+  const discardOptimisticMessages = useCallback((messageIds: ReadonlyArray<MessageId>) => {
+    setOptimisticUserMessages((existing) => {
+      const removed = existing.filter((message) => messageIds.includes(message.id));
+      for (const message of removed) revokeUserMessagePreviewUrls(message);
+      return removed.length === 0
+        ? existing
+        : existing.filter((message) => !messageIds.includes(message.id));
+    });
+  }, []);
+  const threadOutboxBannerItem = useThreadOutboxBannerItem({
+    environmentId: activeThread?.environmentId ?? null,
+    threadId: activeThread?.id ?? null,
+    environmentConnected: !activeEnvironmentUnavailable,
+    onDiscarded: discardOptimisticMessages,
+  });
   const systemComposerBannerItems = useMemo<ComposerBannerStackItem[]>(() => {
     const items: ComposerBannerStackItem[] = [];
     const updateRunning = serverUpdateState.status === "running";
@@ -3141,10 +3164,12 @@ export default function ChatView(props: ChatViewProps) {
       });
     }
     if (autoBalanceUpdateBanner) items.push(autoBalanceUpdateBanner);
+    if (threadOutboxBannerItem) items.push(threadOutboxBannerItem);
     return items;
   }, [
     automaticEnvironment,
     autoBalanceUpdateBanner,
+    threadOutboxBannerItem,
     activeEnvironmentUnavailableState,
     handleReconnectActiveEnvironment,
     canDisconnectActiveEnvironment,
@@ -3814,6 +3839,26 @@ export default function ChatView(props: ChatViewProps) {
       ),
     [feedbackSubmissions],
   );
+  const pendingOutboxSubmissions = useThreadOutboxStore(
+    useShallow((state) =>
+      state.submissions.filter(
+        (submission) =>
+          submission.environmentId === activeThread?.environmentId &&
+          submission.threadId === activeThread?.id,
+      ),
+    ),
+  );
+  // Unaccepted outbox rows render like optimistic sends, also after a reload.
+  const timelineOptimisticMessages = useMemo(() => {
+    if (pendingOutboxSubmissions.length === 0) return optimisticUserMessages;
+    const optimisticIds = new Set(optimisticUserMessages.map((message) => message.id));
+    return [
+      ...optimisticUserMessages,
+      ...pendingOutboxSubmissions
+        .filter((submission) => !optimisticIds.has(submission.messageId))
+        .map(pendingSubmissionToChatMessage),
+    ];
+  }, [optimisticUserMessages, pendingOutboxSubmissions]);
   const timelineProjectionRef = useRef<{
     readonly threadKey: string | null;
     readonly projection: TimelineEntriesProjection;
@@ -3823,7 +3868,7 @@ export default function ChatView(props: ChatViewProps) {
     const projection = deriveTimelineEntriesFromVisibleTurnItemsWithState(
       {
         visibleTurnItems: serverVisibleTurnItems,
-        optimisticMessages: optimisticUserMessages,
+        optimisticMessages: timelineOptimisticMessages,
         anchoredMessages: anchoredTimelineMessages,
         attachmentUrlById: timelineAttachmentUrlById,
         ...(serverProjection === null
@@ -3841,7 +3886,7 @@ export default function ChatView(props: ChatViewProps) {
   }, [
     activeThreadKey,
     anchoredTimelineMessages,
-    optimisticUserMessages,
+    timelineOptimisticMessages,
     serverVisibleTurnItems,
     serverProjection,
     timelineAttachmentUrlById,
@@ -8294,7 +8339,7 @@ export default function ChatView(props: ChatViewProps) {
       });
       return;
     }
-    if (activeEnvironmentUnavailable) {
+    const notifyEnvironmentUnavailable = () => {
       const toastSlot = environmentUnavailableSendToastSlotRef.current;
       environmentUnavailableSendToastSlotRef.current =
         (toastSlot + 1) % ENVIRONMENT_UNAVAILABLE_SEND_TOAST_TRAIL_SIZE;
@@ -8306,9 +8351,23 @@ export default function ChatView(props: ChatViewProps) {
         }),
         id: `chat-send-environment-unavailable:${toastSlot}`,
       });
+    };
+    // A plain prompt to a server thread waits in the durable outbox while offline;
+    // anything that needs the server right away still refuses.
+    const sendOffline =
+      activeEnvironmentUnavailable &&
+      isServerThread &&
+      editingQueuedRun === null &&
+      !directAnnotation;
+    if (activeEnvironmentUnavailable && !sendOffline) {
+      notifyEnvironmentUnavailable();
       return;
     }
     if (activePendingProgress) {
+      if (sendOffline) {
+        notifyEnvironmentUnavailable();
+        return;
+      }
       if (directAnnotation) {
         notifyDirectAnnotationAttached();
         return;
@@ -8400,6 +8459,13 @@ export default function ChatView(props: ChatViewProps) {
           previewAnnotationContextReference(directAnnotation.annotation),
         ])
       : promptRef.current;
+    if (
+      sendOffline &&
+      (multipleModelSelections !== null || composerImages.length > 0 || composerFiles.length > 0)
+    ) {
+      notifyEnvironmentUnavailable();
+      return;
+    }
     if (editingQueuedRun !== null) {
       // Edit mode repurposes the composer: sending saves the queued message
       // in place instead of dispatching a new turn.
@@ -8551,6 +8617,10 @@ export default function ChatView(props: ChatViewProps) {
         ? parseCodexFeedbackCommand(trimmed)
         : null;
     if (feedbackCommand && multipleModelSelections === null) {
+      if (sendOffline) {
+        notifyEnvironmentUnavailable();
+        return;
+      }
       if (!isServerThread || activeThread.activeProviderThreadId === null) {
         toastManager.add(
           stackedThreadToast({
@@ -8604,6 +8674,10 @@ export default function ChatView(props: ChatViewProps) {
       composerImages.length === 0 &&
       composerFiles.length === 0
     ) {
+      if (sendOffline) {
+        notifyEnvironmentUnavailable();
+        return;
+      }
       const followUp = resolvePlanFollowUpSubmission({
         draftText: promptForSend,
         planMarkdown: activeProposedPlan.planMarkdown,
@@ -8676,6 +8750,10 @@ export default function ChatView(props: ChatViewProps) {
         ? parseStandaloneComposerSlashCommand(trimmed)
         : null;
     if (standaloneSlashCommand && multipleModelSelections === null) {
+      if (sendOffline) {
+        notifyEnvironmentUnavailable();
+        return;
+      }
       handleInteractionModeChange(standaloneSlashCommand);
       promptRef.current = "";
       clearComposerDraftContent(composerDraftTarget);
@@ -8832,6 +8910,32 @@ export default function ChatView(props: ChatViewProps) {
       });
     }
 
+    if (sendOffline) {
+      const queuedOffline =
+        !baseBranchForWorktree &&
+        enqueueThreadSubmission({
+          environmentId,
+          threadId: threadIdForSend,
+          commandId: newCommandId(),
+          messageId: messageIdForSend,
+          text: outgoingMessageText,
+          ...(outgoingMessageContext === undefined ? {} : { context: outgoingMessageContext }),
+          attachments: [],
+          modelSelection: ctxSelectedModelSelection,
+          dispatchMode,
+          settings: { runtimeMode, interactionMode: sendInteractionMode },
+          createdAt: messageCreatedAt,
+        });
+      if (!queuedOffline) {
+        notifyEnvironmentUnavailable();
+        return;
+      }
+      setThreadError(threadIdForSend, null);
+      promptRef.current = "";
+      clearComposerDraftContent(composerDraftTarget);
+      composerRef.current?.resetCursorState();
+      return;
+    }
     sendInFlightRef.current = true;
     const sendGeneration = ++composerSendGenerationRef.current;
     const attachmentCapabilitiesBeforeUpload = readLiveAttachmentCapabilities();
@@ -9360,42 +9464,67 @@ export default function ChatView(props: ChatViewProps) {
           ? scopeThreadRef(environmentId, threadIdForSend)
           : null;
       if (backgroundThreadRef) beginBackgroundDraftSubmissionByRef(backgroundThreadRef);
+      const turnMessage = {
+        messageId: messageIdForSend,
+        role: "user" as const,
+        text: outgoingMessageText,
+        attachments: turnAttachmentsResult.value,
+        ...(() => {
+          const context = buildOutgoingMessageContext(
+            turnAttachmentsResult.value.map((attachment, index) =>
+              "id" in attachment && attachment.id !== undefined
+                ? attachment.id
+                : composerAttachmentsSnapshot[index]!.id,
+            ),
+          );
+          if (context === undefined) return {};
+          // Read the capability at dispatch time: the upload and persistence
+          // awaits above can span a server reconnect that changes it. Servers
+          // from before inline context drop the records and forward the links
+          // as literal text, so their turns carry the payload the legacy way.
+          const supportsInlineMessageContext =
+            appAtomRegistry.get(environmentServerConfigsAtom).get(environmentId)?.environment
+              .capabilities.inlineMessageContext === true;
+          if (!supportsInlineMessageContext) {
+            return {
+              text: serializeLegacyContextMessage({
+                text: outgoingMessageText,
+                records: context.records,
+              }),
+            };
+          }
+          return { context };
+        })(),
+      };
+      // An existing thread's send stays durable until the server accepts it: a
+      // reload or dropped socket leaves the row for the outbox drain, which
+      // resends with the same commandId so a delivered send is not repeated.
+      const outboxSubmission: PendingThreadSubmission | null =
+        bootstrap === undefined && isServerThread
+          ? {
+              environmentId,
+              threadId: threadIdForSend,
+              commandId: newCommandId(),
+              messageId: messageIdForSend,
+              text: turnMessage.text,
+              ...("context" in turnMessage && turnMessage.context !== undefined
+                ? { context: turnMessage.context }
+                : {}),
+              attachments: turnMessage.attachments,
+              modelSelection: ctxSelectedModelSelection,
+              titleSeed: title,
+              dispatchMode,
+              createdAt: messageCreatedAt,
+            }
+          : null;
+      const sentFromOutbox =
+        outboxSubmission !== null && enqueueThreadSubmission(outboxSubmission, { claim: true });
       const startPromise = startThreadTurn({
         environmentId,
         input: {
           threadId: threadIdForSend,
-          message: {
-            messageId: messageIdForSend,
-            role: "user",
-            text: outgoingMessageText,
-            attachments: turnAttachmentsResult.value,
-            ...(() => {
-              const context = buildOutgoingMessageContext(
-                turnAttachmentsResult.value.map((attachment, index) =>
-                  "id" in attachment && attachment.id !== undefined
-                    ? attachment.id
-                    : composerAttachmentsSnapshot[index]!.id,
-                ),
-              );
-              if (context === undefined) return {};
-              // Read the capability at dispatch time: the upload and persistence
-              // awaits above can span a server reconnect that changes it. Servers
-              // from before inline context drop the records and forward the links
-              // as literal text, so their turns carry the payload the legacy way.
-              const supportsInlineMessageContext =
-                appAtomRegistry.get(environmentServerConfigsAtom).get(environmentId)?.environment
-                  .capabilities.inlineMessageContext === true;
-              if (!supportsInlineMessageContext) {
-                return {
-                  text: serializeLegacyContextMessage({
-                    text: outgoingMessageText,
-                    records: context.records,
-                  }),
-                };
-              }
-              return { context };
-            })(),
-          },
+          ...(sentFromOutbox ? { commandId: outboxSubmission.commandId } : {}),
+          message: turnMessage,
           modelSelection: ctxSelectedModelSelection,
           titleSeed: title,
           runtimeMode,
@@ -9430,7 +9559,9 @@ export default function ChatView(props: ChatViewProps) {
         }
       }
       const startResult = await startPromise;
-      if (startResult._tag === "Failure") {
+      if (sentFromOutbox && settleClaimedThreadSubmission(messageIdForSend, startResult)) {
+        // Not accepted yet: the outbox drain sends it once the connection recovers.
+      } else if (startResult._tag === "Failure") {
         failure = startResult;
       } else {
         turnStartSucceeded = true;

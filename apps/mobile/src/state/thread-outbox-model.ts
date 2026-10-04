@@ -25,6 +25,7 @@ import * as Schema from "effect/Schema";
 
 import { DraftComposerAttachmentSchema } from "../lib/composer-image-schema";
 import type { ComposerDispatchMode } from "@t3tools/client-runtime/state/composer-dispatch";
+import { LegacyMessageInputOrigin } from "@t3tools/client-runtime/state/thread-submission-outbox";
 import type { DraftComposerAttachment } from "../lib/composerImages";
 import { scopedThreadKey } from "../lib/scopedEntities";
 import { resolveProviderInteractionMode } from "./legacy-plan-mode";
@@ -52,6 +53,8 @@ export const QueuedThreadMessageSchema = Schema.Struct({
   messageId: MessageId,
   commandId: CommandId,
   text: Schema.String,
+  // Carried over from fork outbox rows so voice provenance survives migration.
+  inputOrigin: Schema.optional(LegacyMessageInputOrigin),
   context: Schema.optional(OrchestrationMessageContext),
   attachments: Schema.Array(DraftComposerAttachmentSchema),
   modelSelection: Schema.optional(ModelSelection),
@@ -83,6 +86,7 @@ export interface QueuedThreadMessage {
   readonly messageId: MessageId;
   readonly commandId: CommandId;
   readonly text: string;
+  readonly inputOrigin?: LegacyMessageInputOrigin;
   readonly context?: OrchestrationMessageContext;
   readonly attachments: ReadonlyArray<DraftComposerAttachment>;
   readonly modelSelection?: ModelSelectionType;
