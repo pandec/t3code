@@ -1015,6 +1015,7 @@ export const layer: Layer.Layer<
         compactionMessageIds,
         run,
         runAttemptIds,
+        interruptRequests: projection.interruptRequests,
       })
         ? STRANDED_PRIOR_TURN_NOTICE
         : "";
@@ -1166,8 +1167,10 @@ export const layer: Layer.Layer<
               return handoffBudget({
                 tokenCap,
                 modelContextWindow,
-                // The note is sent with the user text, so it spends the same allowance.
-                userText: restartNote === "" ? userText : `${restartNote}\n\n${userText}`,
+                // The notes are sent with the user text, so they spend the same allowance.
+                userText: [restartNote, strandedNotice, userText]
+                  .filter((part) => part !== "")
+                  .join("\n\n"),
                 attachments: message.attachments,
                 providerThread: budgetProviderThread,
                 nativeContextEstimate:
@@ -1247,6 +1250,7 @@ export const layer: Layer.Layer<
         effectiveHandoffs.length === 0 &&
         missedItems.length === 0 &&
         restartNote === "" &&
+        strandedNotice === "" &&
         !noteContinuation
           ? session
           : makeDeliverySession(session, startWithHandoffs);

@@ -409,7 +409,11 @@ export interface ProjectionStoreV2Shape {
       | "contextHandoffs"
       | "contextTransfers"
       | "turnItems"
-    > & { readonly hasConversation: boolean },
+    > & {
+      readonly hasConversation: boolean;
+      /** Fork: cancelled runs' `run_interrupt_request` items (`turnItems` holds only this run's). */
+      readonly interruptRequests: ReadonlyArray<OrchestrationV2TurnItem>;
+    },
     ProjectionStoreV2Error
   >;
   readonly getTurnStartHistory: (
@@ -3797,6 +3801,13 @@ export const layer: Layer.Layer<ProjectionStoreV2, never, SqlClient.SqlClient> =
               SELECT payload_json FROM orchestration_v2_projection_turn_items
               WHERE thread_id = ${threadId} AND run_id = ${runId} ORDER BY ordinal ASC, turn_item_id ASC
             `.pipe(Effect.flatMap(decodeRows(decodeTurnItemPayload, threadId)));
+            const interruptRequests = yield* sql<PayloadRow>`
+              SELECT payload_json FROM orchestration_v2_projection_turn_items
+              WHERE thread_id = ${threadId} AND type = 'run_interrupt_request' AND run_id IN (
+                SELECT run_id FROM orchestration_v2_projection_runs
+                WHERE thread_id = ${threadId} AND status = 'cancelled'
+              ) ORDER BY ordinal ASC, turn_item_id ASC
+            `.pipe(Effect.flatMap(decodeRows(decodeTurnItemPayload, threadId)));
             const providerSessions = yield* sql<PayloadRow>`
               SELECT sessions.payload_json FROM orchestration_v2_projection_provider_sessions AS sessions
               INNER JOIN orchestration_v2_projection_provider_session_bindings AS bindings
@@ -3836,6 +3847,7 @@ export const layer: Layer.Layer<ProjectionStoreV2, never, SqlClient.SqlClient> =
               contextHandoffs,
               contextTransfers,
               turnItems,
+              interruptRequests,
             };
           }),
         )
@@ -6178,6 +6190,11 @@ export const layerMemory: Layer.Layer<ProjectionStoreV2> = Layer.effect(
                   message.attachments.length > 0),
             ),
             turnItems: projection.turnItems.filter((item) => item.runId === runId),
+            interruptRequests: projection.turnItems.filter(
+              (item) =>
+                item.type === "run_interrupt_request" &&
+                projection.runs.some((run) => run.id === item.runId && run.status === "cancelled"),
+            ),
           })),
         ),
       getTurnStartHistory: (threadId, runIds) =>

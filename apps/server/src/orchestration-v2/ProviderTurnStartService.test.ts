@@ -118,6 +118,7 @@ it("does not commit running state when inherited background routing cannot be re
                   m.role === "user" &&
                   (m.text.trim().toLowerCase() !== "/compact" || m.attachments.length > 0),
               ),
+              interruptRequests: [],
             });
           },
           getRuntimeRecoveryProjection: () => {
@@ -478,6 +479,7 @@ function makeLocalCommandHarness(input: {
                   m.role === "user" &&
                   (m.text.trim().toLowerCase() !== "/compact" || m.attachments.length > 0),
               ),
+              interruptRequests: [],
             }),
           getRuntimeRecoveryProjection: () =>
             Effect.succeed({

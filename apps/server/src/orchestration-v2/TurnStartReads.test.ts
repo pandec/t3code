@@ -359,6 +359,28 @@ it.effect.each(["sqlite", "memory"] as const)(
         yield* store.getTurnStartContext(ThreadId.make("missing"), runId).pipe(Effect.flip),
         ProjectionStore.ProjectionStoreThreadNotFoundError,
       );
+      // Fork: a Stop request on an earlier run is read only once that run is cancelled.
+      const { input: _input, output: _output, ...itemBase } = item;
+      const stop = {
+        ...itemBase,
+        id: TurnItemId.make("item:stop"),
+        type: "run_interrupt_request" as const,
+        message: "Interrupt requested",
+      };
+      yield* store.apply({
+        id: EventId.make("stop-event"),
+        type: "turn-item.updated",
+        threadId,
+        runId: oldRunId,
+        occurredAt: now,
+        payload: stop,
+      });
+      assert.deepEqual((yield* store.getTurnStartContext(threadId, runId)).interruptRequests, []);
+      yield* putRun({ ...run, id: oldRunId, ordinal: 1, status: "cancelled" });
+      assert.deepEqual(
+        (yield* store.getTurnStartContext(threadId, runId)).interruptRequests.map((i) => i.id),
+        [stop.id],
+      );
     }).pipe(
       Effect.provide(
         storage === "sqlite"

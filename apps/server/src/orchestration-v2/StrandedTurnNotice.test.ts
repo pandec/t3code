@@ -155,7 +155,11 @@ const stranded = (
   runs: ReadonlyArray<Run>,
   providerTurns: ReadonlyArray<ProviderTurn>,
   next: Run,
-  options: { compaction?: ReadonlyArray<number>; attemptIds?: ReadonlyArray<string> } = {},
+  options: {
+    compaction?: ReadonlyArray<number>;
+    attemptIds?: ReadonlyArray<string>;
+    interruptRequests?: ReadonlyArray<{ runId: RunId; providerTurnId: ProviderTurnId | null }>;
+  } = {},
 ) =>
   priorTurnStrandedByRestart({
     runs: [...runs, next],
@@ -165,6 +169,7 @@ const stranded = (
     ),
     run: next,
     runAttemptIds: options.attemptIds ?? [next.activeAttemptId!],
+    interruptRequests: options.interruptRequests ?? [],
   });
 
 it.effect("tells the turn after a restart cut a live turn, once", () =>
@@ -197,6 +202,28 @@ it.effect("does not tell a turn whose predecessor had settled before the restart
 it("does not tell a turn after the user stopped the previous one", () => {
   assert.isFalse(
     stranded([run(1, "interrupted")], [providerTurn(1, "interrupted")], run(2, "starting")),
+  );
+});
+
+it("does not tell a turn whose predecessor's Stop the restart overtook", () => {
+  // Stop was committed, then the server exited before the turn settled; recovery cancels it.
+  const strandedRuns = [run(1, "cancelled")];
+  const strandedTurns = [providerTurn(1, "cancelled")];
+  const stop = (providerTurnId: ProviderTurnId | null) => ({
+    interruptRequests: [{ runId: RunId.make("run:1"), providerTurnId }],
+  });
+  assert.isFalse(stranded(strandedRuns, strandedTurns, run(2, "starting"), stop(null)));
+  assert.isFalse(
+    stranded(strandedRuns, strandedTurns, run(2, "starting"), stop(ProviderTurnId.make("turn:1"))),
+  );
+  // A steer's request names the turn it replaced, not the one the restart cut.
+  assert.isTrue(
+    stranded(
+      strandedRuns,
+      strandedTurns,
+      run(2, "starting"),
+      stop(ProviderTurnId.make("turn:1-steered")),
+    ),
   );
 });
 
