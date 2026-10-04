@@ -98,8 +98,11 @@ import {
 } from "../../provider/Drivers/ClaudeHome.ts";
 import {
   BUNDLED_CLAUDE_MODEL_CATALOG,
+  type ClaudeModelCatalog,
+  isCustomClaudeCatalogModel,
   resolveClaudeCatalogContextWindow,
   resolveClaudeCatalogContextWindowTokens,
+  scopeClaudeModelCatalog,
 } from "../../provider/ClaudeModelCatalog.ts";
 import {
   boundProviderEventForLogging,
@@ -772,6 +775,16 @@ export const claudeAgentSdkQueryRunnerLiveLayer: Layer.Layer<
   }),
 );
 
+/**
+ * The instance's custom (gateway-served) models carry the gateway effort
+ * ladder, which compiles to a `slug(effort)` model id instead of native effort.
+ */
+function claudeModelCatalogForSettings(settings: ClaudeSettings | undefined): ClaudeModelCatalog {
+  return settings === undefined
+    ? BUNDLED_CLAUDE_MODEL_CATALOG
+    : scopeClaudeModelCatalog(BUNDLED_CLAUDE_MODEL_CATALOG, settings.customModels);
+}
+
 export function makeClaudeQueryOptions(input: {
   readonly modelSelection: ModelSelection;
   readonly nativeThreadId: string;
@@ -798,12 +811,19 @@ export function makeClaudeQueryOptions(input: {
   readonly supportedDialogKinds?: ClaudeQueryOptions["supportedDialogKinds"];
   readonly allowDangerouslySkipPermissions?: boolean;
 }): ClaudeAgentSdkQueryOptions {
-  const compiledSelection = compileClaudeModelSelection(input.modelSelection);
+  const modelCatalog = claudeModelCatalogForSettings(input.settings);
+  const compiledSelection = compileClaudeModelSelection(input.modelSelection, modelCatalog);
   const {
     "permission-mode": launchArgPermissionMode,
     "dangerously-skip-permissions": launchArgSkipPermissions,
     ...extraArgs
   } = input.settings === undefined ? {} : parseCliArgs(input.settings.launchArgs).flags;
+  if (isCustomClaudeCatalogModel(modelCatalog, input.modelSelection.model)) {
+    // Configured native flags must not override the custom model's resolved
+    // `slug(effort)` id; some gateways mistranslate Claude-native effort.
+    delete extraArgs.model;
+    delete extraArgs.effort;
+  }
   const requestThinkingSummaries =
     compiledSelection.settings.alwaysThinkingEnabled !== false &&
     extraArgs["thinking-display"] !== "omitted";
@@ -2899,6 +2919,7 @@ export function makeClaudeAdapterV2(
   adapterOptions: ClaudeAdapterV2Options,
 ): ProviderAdapter.ProviderAdapterV2Shape {
   const { attachmentsDir, fileSystem, path, idAllocator, queryRunner } = adapterOptions;
+  const modelCatalog = claudeModelCatalogForSettings(adapterOptions.settings);
   const continuationRequests = adapterOptions.continuationRequests ?? {
     offer: () => Effect.void,
   };
@@ -6820,7 +6841,10 @@ export function makeClaudeAdapterV2(
               : { allowedTools: queryPolicy.allowedTools }),
           });
           const queryPolicyKey = claudeEffectiveQueryPolicyKey(queryPolicy, mcpOverrides);
-          const compiledSelection = compileClaudeModelSelection(turnInput.modelSelection);
+          const compiledSelection = compileClaudeModelSelection(
+            turnInput.modelSelection,
+            modelCatalog,
+          );
           const resumeSessionAt = yield* getNativeConversationHeadId(turnInput.providerThread);
           const existing = yield* Ref.get(queryContext);
           // A continuation prompts nothing: it drains output the live process
@@ -7060,7 +7084,8 @@ export function makeClaudeAdapterV2(
               : yield* makeClaudeUserMessageWithAttachments({
                   text: applyClaudePromptEffortPrefix(
                     turnInput.message.text,
-                    compileClaudeModelSelection(turnInput.modelSelection).promptEffort,
+                    compileClaudeModelSelection(turnInput.modelSelection, modelCatalog)
+                      .promptEffort,
                   ),
                   attachments: turnInput.message.attachments,
                   attachmentsDir,
@@ -7264,7 +7289,8 @@ export function makeClaudeAdapterV2(
             const userMessage = yield* makeClaudeUserMessageWithAttachments({
               text: applyClaudePromptEffortPrefix(
                 turnInput.message.text,
-                compileClaudeModelSelection(currentTurn.input.modelSelection).promptEffort,
+                compileClaudeModelSelection(currentTurn.input.modelSelection, modelCatalog)
+                  .promptEffort,
               ),
               attachments: turnInput.message.attachments,
               priority: "now",

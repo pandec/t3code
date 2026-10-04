@@ -209,6 +209,41 @@ describe("ClaudeAdapterV2 runtime query policy", () => {
     assert.isUndefined(options.extraArgs?.["dangerously-skip-permissions"]);
   });
 
+  it("routes gateway custom-model effort through slug(effort), never native effort", () => {
+    const settings = {
+      ...DEFAULT_CLAUDE_SETTINGS,
+      customModels: ["gpt-5.6-sol", { slug: "glm-5", name: "GLM 5" }, "kimi(fast)"],
+      launchArgs: "--model claude-opus-4-1 --effort max --thinking-display omitted",
+    };
+    const queryOptions = (model: string, effort?: string) =>
+      ClaudeAdapterV2.makeClaudeQueryOptions({
+        modelSelection: {
+          ...CLAUDE_TEST_MODEL_SELECTION,
+          model,
+          ...(effort === undefined ? {} : { options: [{ id: "effort", value: effort }] }),
+        },
+        nativeThreadId: "gateway-effort-thread",
+        resume: false,
+        cwd: "/workspace",
+        settings,
+      });
+
+    const selected = queryOptions("gpt-5.6-sol", "xhigh");
+    assert.equal(selected.model, "gpt-5.6-sol(xhigh)");
+    assert.isUndefined(selected.effort);
+    assert.isUndefined(selected.extraArgs?.model);
+    assert.isUndefined(selected.extraArgs?.effort);
+    assert.equal(selected.extraArgs?.["thinking-display"], "omitted");
+
+    assert.equal(queryOptions("glm-5").model, "glm-5(high)");
+    assert.equal(queryOptions("kimi(fast)", "low").model, "kimi(fast)");
+
+    // Built-in models keep native effort and the configured launch flags.
+    const builtIn = queryOptions(CLAUDE_TEST_MODEL_SELECTION.model);
+    assert.equal(builtIn.extraArgs?.effort, "max");
+    assert.equal(builtIn.extraArgs?.model, "claude-opus-4-1");
+  });
+
   it("passes automatic compaction and resume-dialog controls to the SDK", () => {
     const onUserDialog = async () => ({
       behavior: "completed" as const,
