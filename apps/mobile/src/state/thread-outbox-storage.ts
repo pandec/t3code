@@ -2,11 +2,8 @@ import { EnvironmentId, MessageId, ThreadId } from "@t3tools/contracts";
 import * as Schema from "effect/Schema";
 
 import { writeFileAtomically } from "../lib/atomic-file";
-import {
-  decodeQueuedThreadMessage,
-  encodeQueuedThreadMessage,
-  type QueuedThreadMessage,
-} from "./thread-outbox-model";
+import { decodeStoredOrLegacyQueuedThreadMessage } from "./thread-outbox-legacy";
+import { encodeQueuedThreadMessage, type QueuedThreadMessage } from "./thread-outbox-model";
 
 const THREAD_OUTBOX_DIRECTORY = "thread-outbox";
 
@@ -84,7 +81,17 @@ export const expoThreadOutboxStorage: ThreadOutboxStorage = {
           continue;
         }
         try {
-          messages.push(decodeQueuedThreadMessage(JSON.parse(await entry.text()) as unknown));
+          const { message, migrated } = decodeStoredOrLegacyQueuedThreadMessage(
+            JSON.parse(await entry.text()) as unknown,
+          );
+          messages.push(message);
+          if (migrated) {
+            // One-time rewrite of a fork outbox row; a failed rewrite just
+            // migrates again on the next load.
+            await trackInFlightWrite(
+              writeFileAtomically(entry, JSON.stringify(encodeQueuedThreadMessage(message))),
+            ).catch(() => undefined);
+          }
         } catch (cause) {
           // Recover readable messages without treating their attachment
           // owners as the complete inventory needed for cleanup.

@@ -274,6 +274,14 @@ it.effect("carries voice origin through send, steer, queue and queued edits, and
             yield* worker.drain();
             yield* Fiber.join(nextRunning);
           });
+        // Batch release: "retyped" was queued right behind "queued", so it joins
+        // that turn as a steer once the turn runs instead of starting its own.
+        const retypedReleased = yield* watch(
+          (event) =>
+            event.type === "turn-item.updated" &&
+            event.payload.type === "user_message" &&
+            event.payload.messageId === "message:retyped",
+        );
         yield* completeTurn(first);
 
         assert.equal(started.length, 2);
@@ -283,9 +291,11 @@ it.effect("carries voice origin through send, steer, queue and queued edits, and
         assert.equal(queuedMessage?.text, "then run all tests");
         assert.equal(queuedMessage?.inputOrigin, "voice-transcription");
 
-        yield* completeTurn(started[1]!);
-        assert.equal(started.length, 3);
-        assert.equal(started[2]!.message.text, "and the README");
+        yield* Fiber.join(retypedReleased);
+        yield* worker.drain();
+        assert.equal(started.length, 2);
+        assert.equal(steered.length, 2);
+        assert.equal(steered[1]!.message.text, "and the README");
         const retypedItem = (yield* orchestrator.getThreadProjection(threadId)).turnItems.find(
           (item) => item.type === "user_message" && item.messageId === "message:retyped",
         );

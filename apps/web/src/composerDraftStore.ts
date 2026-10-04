@@ -653,14 +653,15 @@ interface ComposerDraftStoreState {
   addImages: (
     threadRef: ComposerThreadTarget,
     images: ComposerImageAttachment[],
-    options?: { allowDuplicates?: boolean },
+    /** `allowOverflow` keeps attachments past the per-message limit (rescues; send still enforces it). */
+    options?: { allowDuplicates?: boolean; allowOverflow?: boolean },
   ) => string[];
   removeImage: (threadRef: ComposerThreadTarget, imageId: string) => void;
   /** Returns the ids of files appended; a re-pick that replaces a marker is not listed. */
   addFiles: (
     threadRef: ComposerThreadTarget,
     files: ComposerFileAttachment[],
-    options?: { allowDuplicates?: boolean; appendReference?: boolean },
+    options?: { allowDuplicates?: boolean; appendReference?: boolean; allowOverflow?: boolean },
   ) => string[];
   removeFile: (threadRef: ComposerThreadTarget, fileId: string) => void;
   setFileUpload: (
@@ -742,7 +743,11 @@ interface ComposerDraftStoreState {
    * another environment stay in the source draft. Terminal and element
    * context, preview annotations, and review comments also stay in the source.
    */
-  moveComposerPromptAndImages: (from: ComposerThreadTarget, to: ComposerThreadTarget) => void;
+  moveComposerPromptAndImages: (
+    from: ComposerThreadTarget,
+    to: ComposerThreadTarget,
+    options?: { allowOverflow?: boolean },
+  ) => void;
 }
 
 export interface EffectiveComposerModelState {
@@ -3493,8 +3498,9 @@ const composerDraftStore = create<ComposerDraftStoreState>()(
                 continue;
               }
               if (
+                !options?.allowOverflow &&
                 existing.images.length + existing.files.length + dedupedIncoming.length >=
-                PROVIDER_SEND_TURN_MAX_ATTACHMENTS
+                  PROVIDER_SEND_TURN_MAX_ATTACHMENTS
               ) {
                 if (!acceptedPreviewUrls.has(image.previewUrl)) {
                   revokeObjectPreviewUrl(image.previewUrl);
@@ -3602,8 +3608,9 @@ const composerDraftStore = create<ComposerDraftStoreState>()(
                 continue;
               }
               if (
+                !options?.allowOverflow &&
                 existing.images.length + existing.files.length + accepted.length >=
-                PROVIDER_SEND_TURN_MAX_ATTACHMENTS
+                  PROVIDER_SEND_TURN_MAX_ATTACHMENTS
               ) {
                 break;
               }
@@ -4284,7 +4291,7 @@ const composerDraftStore = create<ComposerDraftStoreState>()(
             return { draftsByThreadKey: nextDraftsByThreadKey };
           });
         },
-        moveComposerPromptAndImages: (from, to) => {
+        moveComposerPromptAndImages: (from, to, options) => {
           const fromKey = resolveComposerDraftKey(get(), from) ?? "";
           const toKey = resolveComposerDraftKey(get(), to) ?? "";
           if (fromKey.length === 0 || toKey.length === 0 || fromKey === toKey) {
@@ -4312,12 +4319,14 @@ const composerDraftStore = create<ComposerDraftStoreState>()(
                 !destinationFileIds.has(file.id) &&
                 !destinationFileKeys.has(composerFileDedupKey(file)),
             );
-            const remainingAttachmentSlots = Math.max(
-              0,
-              PROVIDER_SEND_TURN_MAX_ATTACHMENTS -
-                destination.images.length -
-                destination.files.length,
-            );
+            const remainingAttachmentSlots = options?.allowOverflow
+              ? Number.POSITIVE_INFINITY
+              : Math.max(
+                  0,
+                  PROVIDER_SEND_TURN_MAX_ATTACHMENTS -
+                    destination.images.length -
+                    destination.files.length,
+                );
             const movedImages = source.images.slice(0, remainingAttachmentSlots);
             const movedImageIds = new Set(movedImages.map((image) => image.id));
             const retainedImages = source.images.filter((image) => !movedImageIds.has(image.id));

@@ -10,7 +10,12 @@ import {
 
 import { composerDraftEnvironmentId } from "../lib/composerAttachmentUploadQueue";
 import { isQueuedEditDraftKey, queuedEditDraftKey } from "./queued-edit-draft-key";
-import { resolveQueuedEditPayload, type QueuedRunEdit } from "./queued-run-edit";
+import {
+  queuedRunEditHasChanges,
+  rebindQueuedEditContext,
+  resolveQueuedEditPayload,
+  type QueuedRunEdit,
+} from "./queued-run-edit";
 
 const image = (id: string): ChatAttachment => ({
   type: "image",
@@ -103,5 +108,37 @@ describe("resolveQueuedEditPayload", () => {
 
     expect(payload.attachments).toEqual([]);
     expect(payload.context).toBeUndefined();
+  });
+});
+
+describe("queuedRunEditHasChanges", () => {
+  const begun = { ...edit([image("kept")]), originalAttachmentCount: 1 };
+
+  it("closes an untouched edit without rescuing it", () => {
+    expect(queuedRunEditHasChanges(begun, { text: "original", attachments: [] })).toBe(false);
+  });
+
+  it("rescues new text, new attachments, or a removed saved attachment", () => {
+    expect(queuedRunEditHasChanges(begun, { text: "changed", attachments: [] })).toBe(true);
+    expect(queuedRunEditHasChanges(begun, { text: "original", attachments: [{}] })).toBe(true);
+    expect(
+      queuedRunEditHasChanges(
+        { ...begun, existingAttachments: [] },
+        { text: "original", attachments: [] },
+      ),
+    ).toBe(true);
+  });
+});
+
+describe("rebindQueuedEditContext", () => {
+  it("points saved-attachment chips at the rescued copies and leaves the rest alone", () => {
+    const rebound = rebindQueuedEditContext(
+      context(["saved-1", "new-draft"]),
+      new Map([["saved-1", "local-1"]]),
+    );
+    expect(
+      rebound?.records.map((record) => ("attachmentId" in record ? record.attachmentId : null)),
+    ).toEqual(["local-1", "new-draft"]);
+    expect(rebindQueuedEditContext(undefined, new Map([["saved-1", "local-1"]]))).toBeUndefined();
   });
 });

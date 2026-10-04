@@ -193,6 +193,8 @@ export interface StartThreadTurnInput extends ThreadCommandInput {
   readonly bootstrap?: StartThreadBootstrap;
   readonly sourceProposedPlan?: { readonly threadId: ThreadId; readonly planId: PlanId };
   readonly dispatchMode?: "auto" | "queue" | "steer" | "restart" | "start";
+  /** Fork steer recall window: how long the server holds this message if it steers. */
+  readonly steerGraceWindowMs?: number;
 }
 
 export interface InterruptThreadTurnInput extends ThreadCommandInput {
@@ -250,6 +252,13 @@ export interface PromoteQueuedRunInput extends ThreadCommandInput {
 
 export interface CancelQueuedRunInput extends ThreadCommandInput {
   readonly runId: RunId;
+}
+
+export interface HoldQueuedRunForEditInput extends ThreadCommandInput {
+  readonly runId: RunId;
+  readonly held: boolean;
+  /** One id per edit session; hold, renew and release must share it. */
+  readonly holderId: string;
 }
 
 export interface EditQueuedRunInput extends ThreadCommandInput {
@@ -797,6 +806,12 @@ export const startThreadTurn = Effect.fn("EnvironmentCommands.startThreadTurn")(
     ...(serverResolvesCommandContext && requestedMode !== "queue"
       ? { deliveryIntent: requestedMode }
       : {}),
+    ...(serverResolvesCommandContext &&
+    (requestedMode === "auto" || requestedMode === "steer") &&
+    input.steerGraceWindowMs !== undefined &&
+    input.steerGraceWindowMs >= 1
+      ? { steerGraceWindowMs: Math.round(input.steerGraceWindowMs) }
+      : {}),
     dispatchMode,
   });
 });
@@ -1015,6 +1030,20 @@ export const cancelQueuedRun = Effect.fn("EnvironmentCommands.cancelQueuedRun")(
     runId: input.runId,
   });
 });
+
+/** Fork: keeps a queued message from starting while a client edits it (renewed lease). */
+export const holdQueuedRunForEdit = Effect.fn("EnvironmentCommands.holdQueuedRunForEdit")(
+  function* (input: HoldQueuedRunForEditInput) {
+    return yield* dispatch({
+      type: "queued-run.edit-hold",
+      commandId: yield* allocateCommandId(input),
+      threadId: input.threadId,
+      runId: input.runId,
+      held: input.held,
+      holderId: input.holderId,
+    });
+  },
+);
 
 export const editQueuedRun = Effect.fn("EnvironmentCommands.editQueuedRun")(function* (
   input: EditQueuedRunInput,

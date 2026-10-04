@@ -34,7 +34,15 @@ import {
   useState,
   type RefObject,
 } from "react";
-import { Alert, Keyboard, Platform, Pressable, View, type ViewStyle } from "react-native";
+import {
+  type AccessibilityActionEvent,
+  Alert,
+  Keyboard,
+  Platform,
+  Pressable,
+  View,
+  type ViewStyle,
+} from "react-native";
 import { FilePreviewModal, type FilePreviewSource } from "../../components/FilePreviewModal";
 import {
   composerAttachmentUploadBlockReason,
@@ -269,7 +277,7 @@ const COMPOSER_ATTACHMENT_ENTERING =
 const AnimatedGlassSurface = Animated.createAnimatedComponent(GlassSurface);
 
 const FOLLOW_UP_ACTION_LABEL = {
-  queue: "Queue",
+  queue: "Queue for later",
   steer: "Steer now",
   restart: "Restart turn",
 } as const;
@@ -292,16 +300,29 @@ function SendActionButton(props: {
   readonly onSend: (followUp?: ActiveTurnComposerAction) => void;
 }) {
   const { presentation } = props;
+  const offersChoice =
+    presentation.offersFollowUpChoice && presentation.action !== null && !props.disabled;
+  const alternate = offersChoice ? presentation.alternate : null;
+  // The long-press menu is invisible to assistive tech, so the other follow-up
+  // is also exposed as an accessibility action.
   const button = (
     <ComposerActionButton
       accessibilityLabel={props.accessibilityLabel}
+      {...(alternate === null
+        ? {}
+        : {
+            accessibilityActions: [{ name: alternate, label: FOLLOW_UP_ACTION_LABEL[alternate] }],
+            onAccessibilityAction: (event: AccessibilityActionEvent) => {
+              if (event.nativeEvent.actionName === alternate) props.onSend(alternate);
+            },
+          })}
       icon={presentation.icon}
       variant="primary"
       disabled={props.disabled}
       onPress={() => props.onSend()}
     />
   );
-  if (!presentation.offersFollowUpChoice || presentation.action === null || props.disabled) {
+  if (!offersChoice || presentation.action === null) {
     return button;
   }
   const actions = [presentation.action, presentation.alternate].filter(

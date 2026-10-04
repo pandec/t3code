@@ -53,6 +53,9 @@ interface ComposerPrimaryActionsProps {
   onResume?: () => void;
   onPreviousPendingQuestion: () => void;
   onInterrupt: () => void;
+  /** With both handlers, a running turn with a draft shows Queue for later and Steer beside Stop. */
+  onQueue?: () => void;
+  onSteer?: () => void;
   onImplementPlanInNewThread: () => void;
 }
 
@@ -105,6 +108,8 @@ export const ComposerPrimaryActions = memo(function ComposerPrimaryActions({
   onResume,
   onPreviousPendingQuestion,
   onInterrupt,
+  onQueue,
+  onSteer,
   onImplementPlanInNewThread,
 }: ComposerPrimaryActionsProps) {
   const pointerFocusProps = preserveComposerFocusOnPointerDown
@@ -194,6 +199,60 @@ export const ComposerPrimaryActions = memo(function ComposerPrimaryActions({
             questionIndex: pendingAction.questionIndex,
           })}
         </button>
+      </div>
+    );
+  }
+
+  if (isRunning && hasSendableContent && !isEditingQueuedMessage && onQueue && onSteer) {
+    const sendBlocked = isSendBusy || isSendDisabled || isConnecting || isEnvironmentUnavailable;
+    const shortcutSuffix = (action: "queue" | "steer") =>
+      action === followUpBehavior
+        ? " (Enter)"
+        : alternateShortcutLabel
+          ? ` (${alternateShortcutLabel})`
+          : "";
+    // Both deliveries stay one click away on every viewport; the configured
+    // follow-up behavior only decides which one Enter takes, and that one is filled.
+    return (
+      <div className={cn("flex items-center justify-end", compact ? "gap-1.5" : "gap-2")}>
+        <Tooltip key="queue">
+          <TooltipTrigger
+            render={
+              <Button
+                type="button"
+                size="sm"
+                variant={followUpBehavior === "queue" ? "default" : "outline"}
+                shape="pill"
+                {...pointerFocusProps}
+                disabled={sendBlocked}
+                onClick={onQueue}
+              />
+            }
+          >
+            {compact ? "Queue" : "Queue for later"}
+          </TooltipTrigger>
+          <TooltipPopup>{`Run after the current turn${shortcutSuffix("queue")}`}</TooltipPopup>
+        </Tooltip>
+        <Tooltip key="steer">
+          <TooltipTrigger
+            render={
+              <Button
+                type="button"
+                size="sm"
+                variant={followUpBehavior === "steer" ? "default" : "outline"}
+                shape="pill"
+                {...pointerFocusProps}
+                disabled={sendBlocked}
+                onClick={onSteer}
+                aria-label="Steer the running turn"
+              />
+            }
+          >
+            {isConnecting || isSendBusy ? "Sending..." : "Steer"}
+          </TooltipTrigger>
+          <TooltipPopup>{`Send into the running turn${shortcutSuffix("steer")}`}</TooltipPopup>
+        </Tooltip>
+        {canInterrupt ? renderStopGenerationButton(false) : null}
       </div>
     );
   }

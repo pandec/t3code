@@ -1,5 +1,10 @@
 import { scopeThreadRef } from "@t3tools/client-runtime/environment";
-import { deriveThreadQueueWorkflowState } from "@t3tools/client-runtime/state/thread-workflows";
+import {
+  deriveThreadQueueWorkflowState,
+  formatSteerRecallLabel,
+  newestHeldSteerRun,
+  steerRecallRemainingMs,
+} from "@t3tools/client-runtime/state/thread-workflows";
 import { replaceComposerContextReferences } from "@t3tools/shared/composerContextReferences";
 import type {
   ChatAttachment as ContractChatAttachment,
@@ -15,7 +20,7 @@ import {
   ListOrderedIcon,
   PencilIcon,
 } from "lucide-react";
-import { useId, useImperativeHandle, useMemo, useRef, useState, type Ref } from "react";
+import { useEffect, useId, useImperativeHandle, useMemo, useRef, useState, type Ref } from "react";
 
 import { useAssetUrls } from "../../assets/assetUrls";
 import { threadEnvironment } from "../../state/threads";
@@ -44,6 +49,8 @@ const QUEUED_RUN_DRAG_TYPE = "application/x-t3code-queued-run";
 
 export interface QueuedRunsControlHandle {
   steerNext: (repeat: boolean) => boolean;
+  /** Releases the newest steer still in its recall window into the running turn. */
+  steerNewestHeld: () => boolean;
   editLatest: (repeat: boolean) => boolean;
 }
 
@@ -88,6 +95,15 @@ export function QueuedRunsControl({
   );
   const queued = workflow?.queuedRuns ?? [];
   const activeRun = workflow?.activeRun ?? null;
+  // Held steers count down their recall window; the clock only ticks while one is held.
+  const hasHeldSteer = queued.some(({ run }) => run.steerDeadlineAt !== undefined);
+  const [nowMs, setNowMs] = useState(() => Date.now());
+  useEffect(() => {
+    if (!hasHeldSteer) return;
+    setNowMs(Date.now());
+    const interval = window.setInterval(() => setNowMs(Date.now()), 1_000);
+    return () => window.clearInterval(interval);
+  }, [hasHeldSteer]);
   const canReorder = workflow?.canReorder === true;
   const queuedImageAttachmentIds = useMemo(() => {
     const ids: string[] = [];
@@ -146,6 +162,7 @@ export function QueuedRunsControl({
           url: queuedImageUrlById.get(attachment.id) ?? null,
         })),
       pending: false,
+      steerLabel: formatSteerRecallLabel(steerRecallRemainingMs(run, nowMs)),
     })),
     ...optimisticQueued.map((message) => ({
       key: message.id,
@@ -162,6 +179,7 @@ export function QueuedRunsControl({
           url: attachment.previewUrl ?? null,
         })),
       pending: true,
+      steerLabel: null,
     })),
   ];
 
@@ -209,6 +227,13 @@ export function QueuedRunsControl({
       const next = queued[0];
       if (!next || !workflow?.canPromoteToSteer) return false;
       if (!repeat && busyRunId === null) void steer(next.run.id);
+      return true;
+    },
+    steerNewestHeld() {
+      const held = newestHeldSteerRun(queued);
+      if (!held || !workflow?.canPromoteToSteer || busyRunId !== null) return false;
+      if (props.editingRunId === held.run.id) return false;
+      void steer(held.run.id);
       return true;
     },
     // Declines while a queued message is already being edited so the key keeps
@@ -402,6 +427,11 @@ export function QueuedRunsControl({
                         {previewText}
                       </TooltipPopup>
                     </Tooltip>
+                    {item.steerLabel !== null ? (
+                      <span className="shrink-0 text-muted-foreground text-xs tabular-nums">
+                        {item.steerLabel}
+                      </span>
+                    ) : null}
                   </ComposerBanner.Content>
                   <ComposerBanner.Actions>
                     {isEditing ? (
@@ -465,7 +495,7 @@ export function QueuedRunsControl({
                           <TooltipPopup>
                             {activeRun === null
                               ? "There is no active run to steer"
-                              : `Send as a steer instead${item.serverIndex === 0 && props.steerShortcutLabel ? ` (${props.steerShortcutLabel})` : ""}`}
+                              : `${item.steerLabel !== null ? "Steer now" : "Send as a steer instead"}${item.serverIndex === 0 && props.steerShortcutLabel ? ` (${props.steerShortcutLabel})` : ""}`}
                           </TooltipPopup>
                         </Tooltip>
                         <Tooltip>

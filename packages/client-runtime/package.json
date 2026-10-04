@@ -319,6 +319,14 @@
       "types": "./src/state/composerDispatch.ts",
       "default": "./src/state/composerDispatch.ts"
     },
+    "./state/thread-submission-outbox": {
+      "types": "./src/state/threadSubmissionOutbox.ts",
+      "default": "./src/state/threadSubmissionOutbox.ts"
+    },
+    "./state/thread-steer-pending": {
+      "types": "./src/state/threadSteerPending.ts",
+      "default": "./src/state/threadSteerPending.ts"
+    },
     "./state/thread-subagents": {
       "types": "./src/state/threadSubagents.ts",
       "default": "./src/state/threadSubagents.ts"

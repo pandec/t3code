@@ -119,6 +119,7 @@ import {
   ChevronRightIcon,
   ChevronUpIcon,
   CircleAlertIcon,
+  CircleDashedIcon,
   DownloadIcon,
   EyeIcon,
   GitForkIcon,
@@ -353,6 +354,8 @@ interface TimelineRowActivityState {
   activeTurnInProgress: boolean;
   isPreparingWorktree: boolean;
   latestRunId: RunId | null;
+  /** User messages steered into the running turn that the agent has not read yet. */
+  steerPendingMessageIds: ReadonlySet<MessageId>;
   /**
    * A worktree setup whose script is still running after the agent took
    * over. The working header shows it as a chip with a popover; the stage
@@ -386,6 +389,7 @@ function TimelineListFooter({ composerInset }: { readonly composerInset: number 
   );
 }
 const EMPTY_TIMELINE_SKILLS: ReadonlyArray<Pick<ServerProviderSkill, "name" | "displayName">> = [];
+const EMPTY_STEER_PENDING_MESSAGE_IDS: ReadonlySet<MessageId> = new Set();
 const TIMELINE_MAINTAIN_SCROLL_AT_END = {
   animated: false,
   on: {
@@ -442,6 +446,12 @@ interface MessagesTimelineProps {
   latestRun: TimelineLatestRun | null;
   runningRunId?: RunId | null;
   turnDiffSummaries: ReadonlyArray<TurnDiffSummary>;
+  /**
+   * User messages that were steered into the running turn and that the agent
+   * has not read yet. Their bubbles say so, because "sent" and "read" can be
+   * minutes apart behind a long tool call.
+   */
+  steerPendingMessageIds?: ReadonlySet<MessageId>;
   routeThreadKey: string;
   displayThreadKey?: string;
   onOpenTurnDiff: (runId: RunId, filePath?: string) => void;
@@ -528,6 +538,7 @@ export const MessagesTimeline = memo(function MessagesTimeline({
   latestRun,
   runningRunId = null,
   turnDiffSummaries,
+  steerPendingMessageIds = EMPTY_STEER_PENDING_MESSAGE_IDS,
   routeThreadKey,
   displayThreadKey,
   onOpenTurnDiff,
@@ -1257,6 +1268,7 @@ export const MessagesTimeline = memo(function MessagesTimeline({
       activeTurnInProgress,
       isPreparingWorktree,
       latestRunId: latestRun?.runId ?? null,
+      steerPendingMessageIds,
     }),
     [
       compactionAwaitingRow,
@@ -1266,6 +1278,7 @@ export const MessagesTimeline = memo(function MessagesTimeline({
       isRevertingCheckpoint,
       isWorking,
       latestRun?.runId,
+      steerPendingMessageIds,
     ],
   );
   const listHeader = useMemo(() => {
@@ -1966,6 +1979,7 @@ function MessageAuthorHeading({ children }: { children: string }) {
 
 function UserTimelineRow({ row }: { row: Extract<TimelineRow, { kind: "message" }> }) {
   const ctx = use(TimelineRowCtx);
+  const steerPending = use(TimelineRowActivityCtx).steerPendingMessageIds.has(row.message.id);
   const { onImageExpand, onFileOpen } = ctx;
   const senderThreadId = row.message.senderThreadId;
   const resources = useMemo(
@@ -2162,7 +2176,12 @@ function UserTimelineRow({ row }: { row: Extract<TimelineRow, { kind: "message" 
       {row.message.inputIntent && row.message.inputIntent !== "turn_start" ? (
         <UserMessageIntentMarker intent={row.message.inputIntent} />
       ) : null}
-      <div className="relative max-w-[80%] rounded-2xl bg-message p-3 text-message-foreground">
+      <div
+        className={cn(
+          "relative max-w-[80%] rounded-2xl bg-message p-3 text-message-foreground",
+          steerPending && "opacity-75",
+        )}
+      >
         <MessageAuthorHeading>You</MessageAuthorHeading>
         {row.message.inputOrigin === "voice-transcription" ? (
           <div className="mb-1.5 flex items-center justify-end gap-1 text-2xs text-muted-foreground">
@@ -2291,6 +2310,7 @@ function UserTimelineRow({ row }: { row: Extract<TimelineRow, { kind: "message" 
           </span>
         </div>
       ) : null}
+      {steerPending ? <SteerPendingMarker /> : null}
       <div className="flex w-full max-w-[80%] items-center justify-end pe-1 text-xs tabular-nums opacity-0 transition-opacity duration-200 pointer-coarse:opacity-100 focus-within:opacity-100 group-hover:opacity-100">
         <div className="flex shrink-0 items-center gap-2">
           <Tooltip>
@@ -2327,6 +2347,23 @@ function UserTimelineRow({ row }: { row: Extract<TimelineRow, { kind: "message" 
           </div>
         </div>
       </div>
+    </div>
+  );
+}
+
+/**
+ * Shown under a steer the agent has not read yet: "sent" and "read" can stand
+ * minutes apart behind a long subagent or shell call. Deliberately quiet and
+ * static; it reports a wait, it does not ask for anything.
+ */
+function SteerPendingMarker() {
+  return (
+    <div
+      className="flex items-center gap-1 pe-1 text-2xs text-muted-foreground"
+      data-steer-pending="true"
+    >
+      <CircleDashedIcon className="size-3 shrink-0" />
+      <span>Waiting for the agent to pick this up</span>
     </div>
   );
 }

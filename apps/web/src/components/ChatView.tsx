@@ -10,7 +10,17 @@ import {
 import * as DateTime from "effect/DateTime";
 import { restorePlanFollowUpComposer } from "./ChatView.logic";
 import { assistantCitationsToPlainText } from "@t3tools/shared/assistantCitations";
-import { prepareQueuedEditAttachments, recoverQueuedMessageEdit } from "./chat/queuedMessageEdit";
+import {
+  prepareQueuedEditAttachments,
+  recoverQueuedMessageEdit,
+  restoreQueuedEditAttachments,
+} from "./chat/queuedMessageEdit";
+import {
+  applyMessageContextRestore,
+  planMessageContextRestore,
+} from "./chat/messageContextRestore";
+import { useQueuedRunEditHold } from "./chat/useQueuedRunEditHold";
+import { pendingDraftWork } from "./chat/pendingDraftWork";
 import {
   isPaintOnlyThreadTimeline,
   peekHeldThreadTimeline,
@@ -309,7 +319,7 @@ import {
   normalizeProjectSetupScript,
   projectScriptIdFromCommand,
 } from "~/projectScripts";
-import { newDraftId, newMessageId, newThreadId } from "~/lib/utils";
+import { newCommandId, newDraftId, newMessageId, newThreadId } from "~/lib/utils";
 import { registerFaviconProjectForThread } from "~/browserFaviconStore";
 import { getProviderModelCapabilities } from "../providerModels";
 import {
@@ -322,6 +332,7 @@ import {
   useClientSettings,
   useClientSettingsHydrated,
   useEnvironmentSettings,
+  useSteerGraceWindowMs,
 } from "../hooks/useSettings";
 import { useNowMinute } from "../hooks/useNowMinute";
 import { usePanelAnimationSettings, usePanelPresence } from "../panelAnimations";
@@ -362,6 +373,7 @@ import {
   type DraftThreadEnvMode,
   useComposerDraftStore,
   DraftId,
+  composerTargetKey,
 } from "../composerDraftStore";
 import { draftSubmissionTracker } from "../draftSubmissionState";
 import {
@@ -380,6 +392,7 @@ import {
   buildMessageContext,
   previewAnnotationContextLabel,
   previewAnnotationContextReference,
+  resolveUserMessageContext,
   reviewCommentContextLabel,
   terminalContextReference,
 } from "../lib/composerContextRecords";
@@ -397,6 +410,17 @@ import {
 } from "../state/server";
 import { terminalEnvironment } from "../state/terminal";
 import { threadEnvironment } from "../state/threads";
+import { useSteerPendingMessageIds } from "../state/threadSteerPending";
+import {
+  enqueueThreadSubmission,
+  hasPendingThreadSubmission,
+  pendingSubmissionToChatMessage,
+  settleClaimedThreadSubmission,
+  subscribeThreadSubmissionRejections,
+  useThreadOutboxStore,
+  type PendingThreadSubmission,
+} from "../state/threadOutbox";
+import { useThreadOutboxBannerItem } from "./chat/useThreadOutboxBannerItem";
 import { resolveProviderSkillsForCwd } from "@t3tools/client-runtime/providerSkills";
 import { vcsEnvironment } from "../state/vcs";
 import { sourceControlEnvironment } from "../state/sourceControl";
@@ -1637,6 +1661,7 @@ export default function ChatView(props: ChatViewProps) {
     readonly runId: RunId;
     readonly messageId: MessageId;
     readonly originalText: string;
+    readonly originalAttachmentCount: number;
     readonly existingAttachments: ReadonlyArray<ContractChatAttachment>;
     readonly context?: import("@t3tools/contracts").OrchestrationMessageContext | undefined;
   } | null>(null);
@@ -1729,6 +1754,7 @@ export default function ChatView(props: ChatViewProps) {
   const lastVisitDispatchAtRef = useRef(0);
   const settings = useEnvironmentSettings(environmentId);
   const clientSettingsHydrated = useClientSettingsHydrated();
+  const steerGraceWindowMs = useSteerGraceWindowMs();
   const setStickyComposerModelSelection = useComposerDraftStore(
     (store) => store.setStickyModelSelection,
   );
@@ -2106,6 +2132,7 @@ export default function ChatView(props: ChatViewProps) {
   const activeLatestRun = isServerThread ? serverLatestRun : (activeThread?.latestRun ?? null);
   const activeActivityRun = isServerThread ? serverActivityRun : (activeThread?.latestRun ?? null);
   const activeRuntime = isServerThread ? serverRuntime : (activeThread?.runtime ?? null);
+  const steerPendingMessageIds = useSteerPendingMessageIds(serverProjection);
   const hasHeldQueuedRuns =
     isServerThread &&
     serverProjection?.runs.some((run) => run.status === "queued" && run.queueHeld === true) ===
@@ -3020,6 +3047,26 @@ export default function ChatView(props: ChatViewProps) {
   const serverUpdateFailureDismissed =
     serverUpdateState === dismissedServerUpdateState ||
     isServerUpdateFailureDismissed(serverUpdateState);
+  const discardOptimisticMessages = useCallback((messageIds: ReadonlyArray<MessageId>) => {
+    setOptimisticUserMessages((existing) => {
+      const removed = existing.filter((message) => messageIds.includes(message.id));
+      for (const message of removed) revokeUserMessagePreviewUrls(message);
+      return removed.length === 0
+        ? existing
+        : existing.filter((message) => !messageIds.includes(message.id));
+    });
+  }, []);
+  // A send the outbox drain retried and the server then rejected leaves no stale bubble.
+  useEffect(
+    () => subscribeThreadSubmissionRejections((id) => discardOptimisticMessages([id])),
+    [discardOptimisticMessages],
+  );
+  const threadOutboxBannerItem = useThreadOutboxBannerItem({
+    environmentId: activeThread?.environmentId ?? null,
+    threadId: activeThread?.id ?? null,
+    environmentConnected: !activeEnvironmentUnavailable,
+    onDiscarded: discardOptimisticMessages,
+  });
   const systemComposerBannerItems = useMemo<ComposerBannerStackItem[]>(() => {
     const items: ComposerBannerStackItem[] = [];
     const updateRunning = serverUpdateState.status === "running";
@@ -3153,10 +3200,12 @@ export default function ChatView(props: ChatViewProps) {
       });
     }
     if (autoBalanceUpdateBanner) items.push(autoBalanceUpdateBanner);
+    if (threadOutboxBannerItem) items.push(threadOutboxBannerItem);
     return items;
   }, [
     automaticEnvironment,
     autoBalanceUpdateBanner,
+    threadOutboxBannerItem,
     activeEnvironmentUnavailableState,
     handleReconnectActiveEnvironment,
     canDisconnectActiveEnvironment,
@@ -3826,6 +3875,26 @@ export default function ChatView(props: ChatViewProps) {
       ),
     [feedbackSubmissions],
   );
+  const pendingOutboxSubmissions = useThreadOutboxStore(
+    useShallow((state) =>
+      state.submissions.filter(
+        (submission) =>
+          submission.environmentId === activeThread?.environmentId &&
+          submission.threadId === activeThread?.id,
+      ),
+    ),
+  );
+  // Unaccepted outbox rows render like optimistic sends, also after a reload.
+  const timelineOptimisticMessages = useMemo(() => {
+    if (pendingOutboxSubmissions.length === 0) return optimisticUserMessages;
+    const optimisticIds = new Set(optimisticUserMessages.map((message) => message.id));
+    return [
+      ...optimisticUserMessages,
+      ...pendingOutboxSubmissions
+        .filter((submission) => !optimisticIds.has(submission.messageId))
+        .map(pendingSubmissionToChatMessage),
+    ];
+  }, [optimisticUserMessages, pendingOutboxSubmissions]);
   const timelineProjectionRef = useRef<{
     readonly threadKey: string | null;
     readonly projection: TimelineEntriesProjection;
@@ -3835,7 +3904,7 @@ export default function ChatView(props: ChatViewProps) {
     const projection = deriveTimelineEntriesFromVisibleTurnItemsWithState(
       {
         visibleTurnItems: serverVisibleTurnItems,
-        optimisticMessages: optimisticUserMessages,
+        optimisticMessages: timelineOptimisticMessages,
         anchoredMessages: anchoredTimelineMessages,
         attachmentUrlById: timelineAttachmentUrlById,
         ...(serverProjection === null
@@ -3853,7 +3922,7 @@ export default function ChatView(props: ChatViewProps) {
   }, [
     activeThreadKey,
     anchoredTimelineMessages,
-    optimisticUserMessages,
+    timelineOptimisticMessages,
     serverVisibleTurnItems,
     serverProjection,
     timelineAttachmentUrlById,
@@ -4443,6 +4512,14 @@ export default function ChatView(props: ChatViewProps) {
   const queuedRunsControlRef = useRef<QueuedRunsControlHandle>(null);
   const queuedEditSaveInFlightRef = useRef(false);
   const [isSavingQueuedEdit, setIsSavingQueuedEdit] = useState(false);
+  // Thread keys whose rescued queued edit is still moving attachments into the thread draft.
+  const [queuedEditRescueThreadKeys, setQueuedEditRescueThreadKeys] = useState<
+    ReadonlyArray<string>
+  >([]);
+  // Sending now would leave the still-downloading attachments for the next draft.
+  const queuedEditRescueActive = queuedEditRescueThreadKeys.includes(routeThreadKey);
+  // An open, saving or rescuing queued edit owns composer content, so rewind and compaction wait.
+  const queuedEditTransferActive = editingQueuedRun !== null || queuedEditRescueActive;
   const queuedEditImageResources = useMemo(
     () =>
       (editingQueuedRun?.existingAttachments ?? [])
@@ -4467,6 +4544,8 @@ export default function ChatView(props: ChatViewProps) {
   const beginEditingQueuedRun = useCallback(
     (request: EditQueuedRunRequest) => {
       if (!activeThread) return;
+      // A rewind is about to replace the composer contents.
+      if (useComposerDraftStore.getState().rewindingThreadKeys.has(routeThreadKey)) return;
       if (editingQueuedRun !== null && editingQueuedRun.runId !== request.runId) {
         clearComposerDraftContent(queuedEditDraftTargetFor(editingQueuedRun.runId));
       }
@@ -4481,6 +4560,7 @@ export default function ChatView(props: ChatViewProps) {
         runId: request.runId,
         messageId: request.messageId,
         originalText: request.text,
+        originalAttachmentCount: request.attachments.length,
         existingAttachments: request.attachments,
         context: queuedMessage?.context,
       });
@@ -4491,10 +4571,15 @@ export default function ChatView(props: ChatViewProps) {
       clearComposerDraftContent,
       editingQueuedRun,
       queuedEditDraftTargetFor,
+      routeThreadKey,
       serverProjection,
       scheduleComposerFocus,
       setComposerDraftPrompt,
     ],
+  );
+  const recallLatestQueuedRun = useCallback(
+    (repeat: boolean) => queuedRunsControlRef.current?.editLatest(repeat) ?? false,
+    [],
   );
   const cancelEditingQueuedRun = useCallback(() => {
     if (editingQueuedRun === null) return;
@@ -4519,9 +4604,15 @@ export default function ChatView(props: ChatViewProps) {
           },
     );
   }, []);
-  // Exit edit mode when the edited run leaves the queue (it started, or was
-  // cancelled from another client). A dirty edit moves into the thread's own
-  // draft when that draft is empty; otherwise it is dropped with a toast.
+  // The server keeps the edited message from starting until the edit ends.
+  useQueuedRunEditHold(
+    environmentId,
+    editingQueuedRun?.threadId ?? null,
+    editingQueuedRun?.runId ?? null,
+  );
+  // Exit edit mode when the edited run leaves the queue (cancelled from another
+  // client, or started after its edit hold lapsed). A dirty edit is appended to
+  // the thread's own draft with its attachments, contexts and model.
   useEffect(() => {
     if (editingQueuedRun === null) return;
     if (activeThread?.id !== editingQueuedRun.threadId) {
@@ -4531,34 +4622,96 @@ export default function ChatView(props: ChatViewProps) {
     if (serverProjection === null) return;
     const run = serverProjection.runs.find((candidate) => candidate.id === editingQueuedRun.runId);
     if (run !== undefined && run.status === "queued") return;
+    const savedAttachmentLocalIds = new Map(
+      editingQueuedRun.existingAttachments.map((attachment) => [attachment.id, randomUUID()]),
+    );
     const recovery = recoverQueuedMessageEdit({
       editTarget: queuedEditDraftTargetFor(editingQueuedRun.runId),
       threadTarget: baseComposerDraftTarget,
       originalText: editingQueuedRun.originalText,
+      removedSavedAttachments:
+        editingQueuedRun.existingAttachments.length < editingQueuedRun.originalAttachmentCount,
+      ...(run === undefined ? {} : { modelSelection: run.modelSelection }),
+      original: {
+        context: editingQueuedRun.context,
+        savedAttachmentLocalIds,
+        threadId: editingQueuedRun.threadId,
+        environmentId,
+      },
     });
-    if (recovery === "kept") {
-      toastManager.add(
-        stackedThreadToast({
-          type: "info",
-          title: "Queued message is no longer queued",
-          description: "Your unsaved edit was kept in the composer.",
-        }),
-      );
-    } else if (recovery === "discarded") {
-      toastManager.add(
-        stackedThreadToast({
-          type: "warning",
-          title: "Queued message is no longer queued",
-          description: "Your unsaved edit was discarded.",
-        }),
-      );
-    }
     setEditingQueuedRun(null);
+    if (recovery.outcome === "clean") return;
+    const reportRecovered = (skippedAttachmentCount: number) => {
+      // The rescue keeps every attachment even past the per-message limit.
+      const draft = useComposerDraftStore.getState().getComposerDraft(baseComposerDraftTarget);
+      const overLimit =
+        (draft?.images.length ?? 0) + (draft?.files.length ?? 0) >
+        PROVIDER_SEND_TURN_MAX_ATTACHMENTS;
+      const notes = [
+        ...(skippedAttachmentCount === 0
+          ? []
+          : [
+              `${skippedAttachmentCount} attachment${skippedAttachmentCount === 1 ? "" : "s"} could not be added.`,
+            ]),
+        ...(overLimit
+          ? [
+              `The composer is over the ${PROVIDER_SEND_TURN_MAX_ATTACHMENTS}-attachment limit; remove some before sending.`,
+            ]
+          : []),
+      ];
+      toastManager.add(
+        stackedThreadToast({
+          type: notes.length === 0 ? "info" : "warning",
+          title: "Queued message is no longer queued",
+          description: ["Your unsaved edit was moved to the composer.", ...notes].join(" "),
+        }),
+      );
+    };
+    const savedAttachments = editingQueuedRun.existingAttachments;
+    if (savedAttachments.length === 0) {
+      reportRecovered(recovery.skippedAttachmentCount);
+      return;
+    }
+    const connection = readPreparedConnection(environmentId);
+    const rescueThreadKey = routeThreadKey;
+    setQueuedEditRescueThreadKeys((keys) => [...keys, rescueThreadKey]);
+    // Also blocks stashing, which would empty the draft the downloads land in.
+    const rescueDraftKey = composerTargetKey(baseComposerDraftTarget);
+    pendingDraftWork.begin(rescueDraftKey);
+    void restoreQueuedEditAttachments({
+      attachments: savedAttachments,
+      target: baseComposerDraftTarget,
+      localIds: savedAttachmentLocalIds,
+      download: (attachments) => {
+        if (!connection) return Promise.reject(new Error("The environment is not connected."));
+        return prepareRevertedMessageAttachments({
+          message: { attachments },
+          environmentId,
+          httpBaseUrl: connection.httpBaseUrl,
+          createAssetUrl: createAttachmentAssetUrl,
+        });
+      },
+    })
+      .then(
+        (restored) =>
+          reportRecovered(recovery.skippedAttachmentCount + restored.skippedAttachmentCount),
+        () => reportRecovered(recovery.skippedAttachmentCount + savedAttachments.length),
+      )
+      .finally(() => {
+        pendingDraftWork.end(rescueDraftKey);
+        setQueuedEditRescueThreadKeys((keys) => {
+          const index = keys.indexOf(rescueThreadKey);
+          return index === -1 ? keys : keys.toSpliced(index, 1);
+        });
+      });
   }, [
     activeThread?.id,
     baseComposerDraftTarget,
+    createAttachmentAssetUrl,
     editingQueuedRun,
+    environmentId,
     queuedEditDraftTargetFor,
+    routeThreadKey,
     serverProjection,
   ]);
   const addTerminalContextToDraft = useCallback(
@@ -7170,6 +7323,7 @@ export default function ChatView(props: ChatViewProps) {
     !manualCompactionProviderAvailable ||
     isWorking ||
     isRevertingCheckpoint ||
+    queuedEditTransferActive ||
     threadDetailLoading ||
     isPreparingWorktree ||
     activeEnvironmentUnavailable ||
@@ -7183,7 +7337,9 @@ export default function ChatView(props: ChatViewProps) {
       ? "Choose a project before compacting"
       : !manualCompactionProviderAvailable
         ? "Compaction is unavailable for this provider"
-        : "Compacting is unavailable right now"
+        : queuedEditTransferActive
+          ? "Finish editing the queued message before compacting"
+          : "Compacting is unavailable right now"
     : null;
   const resumeCompactionBannerItem = useMemo<ComposerBannerStackItem | null>(() => {
     if (
@@ -7882,6 +8038,14 @@ export default function ChatView(props: ChatViewProps) {
         setThreadError(activeThread.id, "Interrupt the current turn before reverting checkpoints.");
         return;
       }
+      // The rewound prompt would land in, or race, a queued-message edit.
+      if (queuedEditTransferActive) {
+        setThreadError(
+          activeThread.id,
+          "Finish editing the queued message before reverting checkpoints.",
+        );
+        return;
+      }
       if (restoreFiles === undefined) {
         setPendingRevert({ turnCount, messageId, routeThreadKey });
         return;
@@ -7921,8 +8085,25 @@ export default function ChatView(props: ChatViewProps) {
           });
           if (result._tag === "Failure") throw squashAtomCommandFailure(result);
         });
-        const currentPrompt = store.getComposerDraft(composerDraftTarget)?.prompt ?? "";
-        const restoredPrompt = recallableComposerPrompt(message.text);
+        const attachmentLocalIds = new Map(
+          (message.attachments ?? []).map((attachment) => [attachment.id, randomUUID()]),
+        );
+        const currentDraft = store.getComposerDraft(composerDraftTarget);
+        const currentPrompt = currentDraft?.prompt ?? "";
+        // Chips come back with their context; anything that cannot is kept as its label.
+        const resolvedContext = resolveUserMessageContext(message);
+        const restoredContext = planMessageContextRestore({
+          text: resolvedContext.text,
+          records: resolvedContext.records,
+          threadId: activeThread.id,
+          environmentId,
+          attachmentLocalIds,
+          existingTerminalContexts: currentDraft?.terminalContexts ?? [],
+          labelUnmatchedReferences: true,
+        });
+        const restoredPrompt = recallableComposerPrompt(restoredContext.text, {
+          keepContextReferences: true,
+        });
         const nextPrompt =
           restoredPrompt.length === 0
             ? currentPrompt
@@ -7930,17 +8111,21 @@ export default function ChatView(props: ChatViewProps) {
               ? `${currentPrompt}\n\n${restoredPrompt}`
               : restoredPrompt;
         store.setPrompt(composerDraftTarget, nextPrompt);
+        if (restoredPrompt.length > 0) {
+          applyMessageContextRestore(composerDraftTarget, restoredContext);
+        }
         const images: ComposerImageAttachment[] = [];
         const restoredFiles: ComposerFileAttachment[] = [];
         files.forEach((file, index) => {
+          const source = message.attachments?.[index];
           const attachment = {
-            id: randomUUID(),
+            id: (source && attachmentLocalIds.get(source.id)) ?? randomUUID(),
             name: file.name,
             mimeType: file.type,
             sizeBytes: file.size,
             file,
           };
-          if (message.attachments?.[index]?.type === "image") {
+          if (source?.type === "image") {
             images.push({ ...attachment, type: "image", previewUrl: URL.createObjectURL(file) });
           } else {
             restoredFiles.push({ ...attachment, type: "file" });
@@ -7981,6 +8166,7 @@ export default function ChatView(props: ChatViewProps) {
       isRevertingCheckpoint,
       isSendBusy,
       phase,
+      queuedEditTransferActive,
       revertThreadCheckpoint,
       routeThreadKey,
       routeThreadRef,
@@ -8288,6 +8474,7 @@ export default function ChatView(props: ChatViewProps) {
       isSendBusy ||
       isConnecting ||
       isRevertingCheckpoint ||
+      queuedEditRescueActive ||
       !clientSettingsHydrated ||
       threadDetailLoading ||
       sendInFlightRef.current ||
@@ -8308,7 +8495,7 @@ export default function ChatView(props: ChatViewProps) {
       });
       return;
     }
-    if (activeEnvironmentUnavailable) {
+    const notifyEnvironmentUnavailable = () => {
       const toastSlot = environmentUnavailableSendToastSlotRef.current;
       environmentUnavailableSendToastSlotRef.current =
         (toastSlot + 1) % ENVIRONMENT_UNAVAILABLE_SEND_TOAST_TRAIL_SIZE;
@@ -8320,9 +8507,23 @@ export default function ChatView(props: ChatViewProps) {
         }),
         id: `chat-send-environment-unavailable:${toastSlot}`,
       });
+    };
+    // A plain prompt to a server thread waits in the durable outbox while offline;
+    // anything that needs the server right away still refuses.
+    const sendOffline =
+      activeEnvironmentUnavailable &&
+      isServerThread &&
+      editingQueuedRun === null &&
+      !directAnnotation;
+    if (activeEnvironmentUnavailable && !sendOffline) {
+      notifyEnvironmentUnavailable();
       return;
     }
     if (activePendingProgress) {
+      if (sendOffline) {
+        notifyEnvironmentUnavailable();
+        return;
+      }
       if (directAnnotation) {
         notifyDirectAnnotationAttached();
         return;
@@ -8414,6 +8615,13 @@ export default function ChatView(props: ChatViewProps) {
           previewAnnotationContextReference(directAnnotation.annotation),
         ])
       : promptRef.current;
+    if (
+      sendOffline &&
+      (multipleModelSelections !== null || composerImages.length > 0 || composerFiles.length > 0)
+    ) {
+      notifyEnvironmentUnavailable();
+      return;
+    }
     if (editingQueuedRun !== null) {
       // Edit mode repurposes the composer: sending saves the queued message
       // in place instead of dispatching a new turn.
@@ -8569,6 +8777,10 @@ export default function ChatView(props: ChatViewProps) {
         ? parseCodexFeedbackCommand(trimmed)
         : null;
     if (feedbackCommand && multipleModelSelections === null) {
+      if (sendOffline) {
+        notifyEnvironmentUnavailable();
+        return;
+      }
       if (!isServerThread || activeThread.activeProviderThreadId === null) {
         toastManager.add(
           stackedThreadToast({
@@ -8622,6 +8834,10 @@ export default function ChatView(props: ChatViewProps) {
       composerImages.length === 0 &&
       composerFiles.length === 0
     ) {
+      if (sendOffline) {
+        notifyEnvironmentUnavailable();
+        return;
+      }
       const followUp = resolvePlanFollowUpSubmission({
         draftText: promptForSend,
         planMarkdown: activeProposedPlan.planMarkdown,
@@ -8694,6 +8910,10 @@ export default function ChatView(props: ChatViewProps) {
         ? parseStandaloneComposerSlashCommand(trimmed)
         : null;
     if (standaloneSlashCommand && multipleModelSelections === null) {
+      if (sendOffline) {
+        notifyEnvironmentUnavailable();
+        return;
+      }
       handleInteractionModeChange(standaloneSlashCommand);
       promptRef.current = "";
       clearComposerDraftContent(composerDraftTarget);
@@ -8713,7 +8933,10 @@ export default function ChatView(props: ChatViewProps) {
             description: toastCopy.description,
           }),
         );
+        return;
       }
+      // Sending an empty composer skips the wait on the steer just sent.
+      if (!sendOffline) queuedRunsControlRef.current?.steerNewestHeld();
       return;
     }
     if (!activeProject) {
@@ -8798,7 +9021,11 @@ export default function ChatView(props: ChatViewProps) {
     );
     const messageIdForSend = newMessageId();
     const messageCreatedAt = new Date().toISOString();
-    const shouldQueueBehindActiveRun = phase === "running" && dispatchMode === "queue";
+    // A steer with a recall window waits in the queue until it is sent.
+    const shouldQueueBehindActiveRun =
+      phase === "running" &&
+      (dispatchMode === "queue" ||
+        (steerGraceWindowMs > 0 && (dispatchMode === "auto" || dispatchMode === "steer")));
     const outgoingMessageText = formatOutgoingPrompt({
       provider: ctxSelectedProvider,
       model: ctxSelectedModel,
@@ -8871,6 +9098,33 @@ export default function ChatView(props: ChatViewProps) {
       });
     }
 
+    if (sendOffline) {
+      const queuedOffline =
+        !baseBranchForWorktree &&
+        enqueueThreadSubmission({
+          environmentId,
+          threadId: threadIdForSend,
+          commandId: newCommandId(),
+          messageId: messageIdForSend,
+          text: outgoingMessageText,
+          ...(outgoingMessageContext === undefined ? {} : { context: outgoingMessageContext }),
+          ...(inputOriginForSend ? { inputOrigin: inputOriginForSend } : {}),
+          attachments: [],
+          modelSelection: ctxSelectedModelSelection,
+          dispatchMode,
+          settings: { runtimeMode, interactionMode: sendInteractionMode },
+          createdAt: messageCreatedAt,
+        });
+      if (!queuedOffline) {
+        notifyEnvironmentUnavailable();
+        return;
+      }
+      setThreadError(threadIdForSend, null);
+      promptRef.current = "";
+      clearComposerDraftContent(composerDraftTarget);
+      composerRef.current?.resetCursorState();
+      return;
+    }
     sendInFlightRef.current = true;
     const sendGeneration = ++composerSendGenerationRef.current;
     const attachmentCapabilitiesBeforeUpload = readLiveAttachmentCapabilities();
@@ -9350,8 +9604,8 @@ export default function ChatView(props: ChatViewProps) {
 
     let failure: AtomCommandResult<unknown, unknown> | null = null;
 
-    if (failure === null && isServerThread) {
-      const settingsResult = await persistThreadSettingsForNextTurn({
+    const persistSettingsForSend = () =>
+      persistThreadSettingsForNextTurn({
         threadId: threadIdForSend,
         createdAt: messageCreatedAt,
         ...(localCheckoutBranchMismatch
@@ -9360,6 +9614,11 @@ export default function ChatView(props: ChatViewProps) {
         runtimeMode,
         interactionMode: sendInteractionMode,
       });
+    // An existing server thread's send records its settings in its outbox row
+    // before applying them (below), so a reload in between still resends both.
+    const settingsGoThroughOutbox = isServerThread && !isLocalDraftThread && !baseBranchForWorktree;
+    if (failure === null && isServerThread && !settingsGoThroughOutbox) {
+      const settingsResult = await persistSettingsForSend();
       if (settingsResult._tag === "Failure") {
         failure = settingsResult;
       }
@@ -9415,52 +9674,111 @@ export default function ChatView(props: ChatViewProps) {
           ? scopeThreadRef(environmentId, threadIdForSend)
           : null;
       if (backgroundThreadRef) beginBackgroundDraftSubmissionByRef(backgroundThreadRef);
-      const startPromise = startThreadTurn({
-        environmentId,
-        input: {
-          threadId: threadIdForSend,
-          message: {
-            messageId: messageIdForSend,
-            role: "user",
-            text: outgoingMessageText,
-            attachments: turnAttachmentsResult.value,
-            ...(inputOriginForSend ? { inputOrigin: inputOriginForSend } : {}),
-            ...(() => {
-              const context = buildOutgoingMessageContext(
-                turnAttachmentsResult.value.map((attachment, index) =>
-                  "id" in attachment && attachment.id !== undefined
-                    ? attachment.id
-                    : composerAttachmentsSnapshot[index]!.id,
-                ),
-              );
-              if (context === undefined) return {};
-              // Read the capability at dispatch time: the upload and persistence
-              // awaits above can span a server reconnect that changes it. Servers
-              // from before inline context drop the records and forward the links
-              // as literal text, so their turns carry the payload the legacy way.
-              const supportsInlineMessageContext =
-                appAtomRegistry.get(environmentServerConfigsAtom).get(environmentId)?.environment
-                  .capabilities.inlineMessageContext === true;
-              if (!supportsInlineMessageContext) {
-                return {
-                  text: serializeLegacyContextMessage({
-                    text: outgoingMessageText,
-                    records: context.records,
-                  }),
-                };
-              }
-              return { context };
-            })(),
-          },
-          modelSelection: ctxSelectedModelSelection,
-          titleSeed: title,
-          runtimeMode,
-          interactionMode: sendInteractionMode,
-          dispatchMode,
-          ...(bootstrap ? { bootstrap } : {}),
-          createdAt: messageCreatedAt,
-        },
-      });
+      const turnMessage = {
+        messageId: messageIdForSend,
+        role: "user" as const,
+        text: outgoingMessageText,
+        attachments: turnAttachmentsResult.value,
+        ...(inputOriginForSend ? { inputOrigin: inputOriginForSend } : {}),
+        ...(() => {
+          const context = buildOutgoingMessageContext(
+            turnAttachmentsResult.value.map((attachment, index) =>
+              "id" in attachment && attachment.id !== undefined
+                ? attachment.id
+                : composerAttachmentsSnapshot[index]!.id,
+            ),
+          );
+          if (context === undefined) return {};
+          // Read the capability at dispatch time: the upload and persistence
+          // awaits above can span a server reconnect that changes it. Servers
+          // from before inline context drop the records and forward the links
+          // as literal text, so their turns carry the payload the legacy way.
+          const supportsInlineMessageContext =
+            appAtomRegistry.get(environmentServerConfigsAtom).get(environmentId)?.environment
+              .capabilities.inlineMessageContext === true;
+          if (!supportsInlineMessageContext) {
+            return {
+              text: serializeLegacyContextMessage({
+                text: outgoingMessageText,
+                records: context.records,
+              }),
+            };
+          }
+          return { context };
+        })(),
+      };
+      // An existing thread's send stays durable until the server accepts it: a
+      // reload or dropped socket leaves the row for the outbox drain, which
+      // resends with the same commandId so a delivered send is not repeated.
+      const outboxSubmission: PendingThreadSubmission | null =
+        bootstrap === undefined && isServerThread
+          ? {
+              environmentId,
+              threadId: threadIdForSend,
+              commandId: newCommandId(),
+              messageId: messageIdForSend,
+              text: turnMessage.text,
+              ...(inputOriginForSend ? { inputOrigin: inputOriginForSend } : {}),
+              ...("context" in turnMessage && turnMessage.context !== undefined
+                ? { context: turnMessage.context }
+                : {}),
+              attachments: turnMessage.attachments,
+              modelSelection: ctxSelectedModelSelection,
+              titleSeed: title,
+              dispatchMode,
+              settings: { runtimeMode, interactionMode: sendInteractionMode },
+              createdAt: messageCreatedAt,
+            }
+          : null;
+      // An older unaccepted row for this thread goes first: this one waits
+      // behind it in the drain instead of overtaking it.
+      const queuedBehindOutbox =
+        outboxSubmission !== null &&
+        hasPendingThreadSubmission(
+          useThreadOutboxStore.getState().submissions,
+          environmentId,
+          threadIdForSend,
+        ) &&
+        enqueueThreadSubmission(outboxSubmission);
+      const sentFromOutbox =
+        !queuedBehindOutbox &&
+        outboxSubmission !== null &&
+        enqueueThreadSubmission(outboxSubmission, { claim: true });
+      let settingsLeftForDrain = false;
+      if (outboxSubmission !== null && !queuedBehindOutbox) {
+        const settingsResult = await persistSettingsForSend();
+        if (sentFromOutbox && settingsResult._tag === "Success") {
+          // Applied: a resend must not re-apply modes the user may change meanwhile.
+          const { settings: _appliedSettings, ...submissionWithoutSettings } = outboxSubmission;
+          enqueueThreadSubmission(submissionWithoutSettings, { claim: true });
+        } else if (
+          sentFromOutbox &&
+          settleClaimedThreadSubmission(messageIdForSend, settingsResult)
+        ) {
+          settingsLeftForDrain = true;
+        } else if (settingsResult._tag === "Failure") {
+          failure = settingsResult;
+        }
+      }
+      const startPromise =
+        failure !== null || queuedBehindOutbox || settingsLeftForDrain
+          ? null
+          : startThreadTurn({
+              environmentId,
+              input: {
+                threadId: threadIdForSend,
+                ...(sentFromOutbox ? { commandId: outboxSubmission.commandId } : {}),
+                message: turnMessage,
+                modelSelection: ctxSelectedModelSelection,
+                titleSeed: title,
+                runtimeMode,
+                interactionMode: sendInteractionMode,
+                dispatchMode,
+                steerGraceWindowMs,
+                ...(bootstrap ? { bootstrap } : {}),
+                createdAt: messageCreatedAt,
+              },
+            });
       if (backgroundThreadRef) {
         markPromotedDraftThreadByRef(backgroundThreadRef);
         try {
@@ -9485,8 +9803,12 @@ export default function ChatView(props: ChatViewProps) {
           );
         }
       }
-      const startResult = await startPromise;
-      if (startResult._tag === "Failure") {
+      const startResult = startPromise === null ? null : await startPromise;
+      if (startResult === null) {
+        // Handed to the outbox drain (or settings failed, reported below).
+      } else if (sentFromOutbox && settleClaimedThreadSubmission(messageIdForSend, startResult)) {
+        // Not accepted yet: the outbox drain sends it once the connection recovers.
+      } else if (startResult._tag === "Failure") {
         failure = startResult;
       } else {
         turnStartSucceeded = true;
@@ -10922,6 +11244,7 @@ export default function ChatView(props: ChatViewProps) {
                 runs={paintOnlyDisplayedTimeline ? [] : (serverProjection?.runs ?? [])}
                 latestRun={paintOnlyDisplayedTimeline ? null : activeActivityRun}
                 runningRunId={paintOnlyDisplayedTimeline ? null : activeRunningTurnId}
+                {...(!paintOnlyDisplayedTimeline ? { steerPendingMessageIds } : {})}
                 turnDiffSummaries={
                   paintOnlyDisplayedTimeline ? EMPTY_HELD_TURN_DIFF_SUMMARIES : turnDiffSummaries
                 }
@@ -11141,7 +11464,10 @@ export default function ChatView(props: ChatViewProps) {
                                       ? "Messages loading"
                                       : worktreeSetupBlocksSend
                                         ? "Preparing worktree"
-                                        : projectCloneSendBlockReason
+                                        : (projectCloneSendBlockReason ??
+                                          (queuedEditRescueActive
+                                            ? "Restoring the queued message's attachments"
+                                            : null))
                               }
                               isPreparingWorktree={isPreparingWorktree}
                               queuedRunsControl={
@@ -11243,6 +11569,7 @@ export default function ChatView(props: ChatViewProps) {
                               onCompactContext={onCompactContext}
                               onSend={onSend}
                               onResume={onResume}
+                              onRecallQueuedMessage={recallLatestQueuedRun}
                               onInterrupt={onInterrupt}
                               onImplementPlanInNewThread={onImplementPlanInNewThread}
                               onRespondToApproval={onRespondToApproval}

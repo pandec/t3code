@@ -34,10 +34,12 @@ See [images and videos](#images-and-videos-in-messages) for previewing and savin
 
 ## Send while the agent is working
 
-On web and desktop, choose **Settings → General → Follow-up behavior** to queue
-new messages for a later turn or steer the running turn immediately. The setting
-applies to this client; already queued messages keep their place. Queued messages
-are saved on the server and can be edited, reordered, or removed above the composer.
+On web and desktop, a draft written while a turn runs shows **Queue for later**,
+**Steer**, and **Stop** together. Queue for later holds the message for a later turn;
+Steer sends it into the running turn. **Settings → General → Follow-up behavior**
+picks which of the two `Enter` uses (it is the filled button). The setting applies
+to this client; already queued messages keep their place. Queued messages are saved
+on the server and can be edited, reordered, or removed above the composer.
 `Cmd+Enter` on macOS or `Ctrl+Enter` on Windows and Linux uses the opposite action:
 it steers when your default is Queue and queues when your default is Steer.
 
@@ -48,19 +50,27 @@ requires an active turn that supports steering. Change
 
 Press `Option+Up` on macOS or `Alt+Up` on Windows and Linux with the cursor at the
 start of the composer to edit the most recently queued message. Change
-`thread.editQueuedMessage` to use another shortcut.
+`thread.editQueuedMessage` to use another shortcut. In an empty composer, plain
+`ArrowUp` does the same.
 
 Mobile has the same choice under **Settings → Follow-ups**. While a turn is
 running the send button shows which action it will take. Long-press it to use the
 other action for a single message, or hold `Cmd` while sending from a hardware
-keyboard. The button only offers Steer when the running agent supports it.
+keyboard. VoiceOver and TalkBack offer the other action as an accessibility
+action. The button only offers Steer when the running agent supports it.
 
-## Queue messages offline on mobile
+## Queue messages offline
 
 Mobile keeps local copies of draft attachments, so you can preview them and queue
 messages while disconnected. Uploads resume when you reconnect. Drafts and queued
 messages survive app restarts. Signing out of T3 Connect keeps that work on your
 device until you sign back into the same account.
+
+On web and desktop, a text message sent to an existing thread while its server is
+offline waits in the browser and sends when the server reconnects. The same applies
+to a message in flight when the page reloads or the connection drops. A notice above
+the composer counts unsent messages and can discard them. Messages with attachments
+still need a connection.
 
 ## Custom models
 
@@ -99,7 +109,8 @@ navigate to their sources.
 
 Press `ArrowUp` in an empty composer to bring back the last prompt you sent in this thread. Press
 `ArrowUp` again to go further back, and `ArrowDown` to come forward. Moving forward past the newest
-prompt clears the composer. Recall walks the prompts loaded in the thread. Attachments, terminal
+prompt clears the composer. While messages are queued, `ArrowUp` in an empty composer edits the
+newest queued message instead. Recall walks the prompts loaded in the thread. Attachments, terminal
 context, and other extras from the original message are not restored, only the text you typed. A
 composer that holds an attachment or a picked element does not count as empty.
 
@@ -119,12 +130,15 @@ File restore is only offered for threads running in a worktree, and it is
 refused when another thread or agent session also uses that directory, a folder
 inside it, or a folder that contains it, since
 restoring would erase their changes. A thread that works in the project directory
-rewinds the conversation only. The selected prompt and its attachments return to the composer for editing and
-resending. Any unsent draft stays above the restored prompt.
+rewinds the conversation only. The selected prompt returns to the composer for editing and resending,
+with its attachments and its context chips such as terminal output, review comments, annotations and
+attached threads. Any unsent draft stays above the restored prompt.
 
 This removes the selected message and later conversation from the active thread
 and provider history. It does not undo external actions or separate provider
 memory. The action is available only when the provider supports rewind.
+Finish or cancel any queued-message edit first: rewind and **Compact** wait for it, and queued
+messages can't be opened for editing while a rewind is in progress.
 
 ## Prompt stash
 
@@ -158,14 +172,31 @@ is told it came from speech, so it asks about implausible words instead of guess
 ## Queued messages
 
 On web and desktop, the composer shows **Interrupt** while the agent is working and the draft is
-empty. Adding text or attachments replaces it with a steer arrow. Click it to send a message into
-the active turn, or press `Enter` on desktop. Hold `Cmd` on macOS or `Ctrl` on Windows and Linux to
-switch the button to a queue icon. Click while holding that key, or press `Cmd+Enter` or
-`Ctrl+Enter` on desktop, to queue the message for after the active turn.
+empty. Adding text or attachments shows **Queue for later**, **Steer**, and **Stop**; see
+[Send while the agent is working](#send-while-the-agent-is-working) for which one `Enter` uses.
 
 Queued messages appear above the composer. Rows show a thumbnail of any attached image alongside
 the text. Drag a row by its handle to reorder it, use the handle's arrow keys, promote the message
 to a steer, or remove it.
+
+When the active turn ends, the waiting messages go in together: the first one starts the next turn
+and the rest join it as steers, in order, once it is running. Anything you queue after that turn
+has started waits for the next turn. A message queued with a different model starts a turn of its
+own, and the messages behind it go in with that turn instead. If the agent can't steer a running
+turn, queued messages run one turn each.
+
+A steer waits in the queue for a few seconds before it reaches the agent, showing how long it has
+left. Until then you can edit it, remove it, or press **Steer** to send it at once. On web and
+desktop, pressing `Enter` in an empty composer sends the newest waiting steer at once. If the turn ends
+first, it starts the next turn when its time is up. The wait is five seconds by default; change it
+under **Settings → Extras** on web and desktop or **Settings → Thread behavior** on mobile (set per
+device). Set it to 0 to steer immediately.
+
+The agent doesn't always read a steer straight away. Most agents only check for new input between
+steps, so a steer sent during a long shell command or subagent can wait until that step finishes.
+Until the agent moves on, the message is dimmed with **Waiting for the agent to pick this up** under
+it. The note clears when the agent produces new output, or when the turn ends. It shows on every
+device and survives a reload.
 
 If the server restarts, saved queued messages keep their order and are held. Press
 **Resume** in an empty composer on web or desktop, or **Resume queue** in the queue
@@ -175,9 +206,14 @@ The pencil on a queued row opens that message in the composer for editing. The o
 stays in the queue until you save, and its row is highlighted while you edit. The message's
 attachments appear above the text with a remove control, and new images can be added the usual way.
 The checkmark saves the queued message in place; **Cancel** on its row leaves it unchanged. Whatever
-you had typed in the composer before starting the edit is restored afterwards. If the queued
-message starts or is removed while you are editing, the edit ends: changed content moves into the
-composer when it is empty, and is discarded otherwise.
+you had typed in the composer before starting the edit is restored afterwards.
+
+A message you are editing doesn't start or get steered in, and the messages behind it wait too, until
+you save or cancel. If you leave an edit open on a device that goes to sleep or loses its connection,
+the queue continues after about two minutes. If the message is removed from another device, or starts
+after that, the edit ends and your changes are added to the end of the composer, together with the
+message's model, attachments and context, even when the composer already has text. A pending task on mobile isn't sent while
+you're confirming whether to delete it.
 
 ## Commands and skills
 

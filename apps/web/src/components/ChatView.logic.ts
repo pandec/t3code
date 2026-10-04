@@ -792,7 +792,16 @@ export async function resolveFileAttachmentUrl(input: {
 }
 
 export async function prepareRevertedMessageAttachments(input: {
-  message: ChatMessage;
+  message: {
+    readonly attachments?:
+      | ReadonlyArray<{
+          readonly type: string;
+          readonly id: string;
+          readonly name: string;
+          readonly mimeType: string;
+        }>
+      | undefined;
+  };
   environmentId: EnvironmentId;
   httpBaseUrl: string;
   createAssetUrl: Parameters<typeof resolveFileAttachmentUrl>[0]["createAssetUrl"];

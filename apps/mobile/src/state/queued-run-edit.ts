@@ -41,6 +41,8 @@ export interface QueuedRunEdit {
   readonly existingAttachments: ReadonlyArray<ChatAttachment>;
   readonly context?: OrchestrationMessageContext;
   readonly inputOrigin?: MessageInputOrigin;
+  /** How many attachments the message had when the edit began (set on begin). */
+  readonly originalAttachmentCount?: number;
 }
 
 export const queuedRunEditsAtom = Atom.make<Readonly<Record<string, QueuedRunEdit>>>({}).pipe(
@@ -82,7 +84,44 @@ export function beginQueuedRunEdit(threadKey: string, edit: QueuedRunEdit): void
   clearComposerDraft(draftKey);
   setComposerDraftText(draftKey, edit.originalText, edit.inputOrigin);
   setComposerDraftContext(draftKey, edit.context);
-  setQueuedRunEdit(threadKey, edit);
+  setQueuedRunEdit(threadKey, {
+    ...edit,
+    originalAttachmentCount: edit.existingAttachments.length,
+  });
+}
+
+/**
+ * Whether an edit holds unsaved changes worth rescuing into the thread's draft
+ * when its run leaves the queue: new text, new attachments, or a removed
+ * saved attachment. An untouched edit is simply closed.
+ */
+export function queuedRunEditHasChanges(
+  edit: QueuedRunEdit,
+  draft: { readonly text: string; readonly attachments: ReadonlyArray<unknown> },
+): boolean {
+  return (
+    draft.text !== edit.originalText ||
+    draft.attachments.length > 0 ||
+    edit.existingAttachments.length < (edit.originalAttachmentCount ?? 0)
+  );
+}
+
+/**
+ * The edit's context with records for saved attachments rebound to the draft
+ * ids their downloaded copies take when a rescue brings them back.
+ */
+export function rebindQueuedEditContext(
+  context: OrchestrationMessageContext | undefined,
+  localIds: ReadonlyMap<string, string>,
+): OrchestrationMessageContext | undefined {
+  if (context === undefined || localIds.size === 0) return context;
+  return {
+    ...context,
+    records: context.records.map((record) => {
+      const localId = "attachmentId" in record ? localIds.get(record.attachmentId) : undefined;
+      return localId === undefined ? record : { ...record, attachmentId: localId };
+    }),
+  };
 }
 
 export function removeQueuedRunEditAttachment(threadKey: string, attachmentId: string): void {

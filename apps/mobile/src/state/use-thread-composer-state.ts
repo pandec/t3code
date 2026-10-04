@@ -36,6 +36,8 @@ import { resolveThreadWorkingStartedAt } from "@t3tools/client-runtime/state/mod
 import { upgradeLegacyContextMessage } from "@t3tools/shared/composerContextLegacy";
 import { composerContextSendBlockReason, reidentifyComposerContext } from "../lib/composerContext";
 import { uuidv4 } from "../lib/uuid";
+import { downloadServerAttachmentToDraft } from "../lib/composerContextClipboard";
+import { parseScopedThreadKey } from "@t3tools/client-runtime/environment";
 
 import { makeQueuedMessageMetadata } from "../lib/commandMetadata";
 import { isModelSelectionUnavailable } from "../lib/modelOptions";
@@ -69,6 +71,7 @@ import {
   clearComposerDraftContent,
   composerDraftsAtom,
   composerContextImportsAtom,
+  setComposerContextImporting,
   ensureComposerDraftsLoaded,
   getComposerDraftSnapshot,
   mergeComposerDraftContent,
@@ -92,6 +95,8 @@ import {
   endQueuedRunEdit,
   getQueuedRunEdit,
   queuedEditDraftKey,
+  queuedRunEditHasChanges,
+  rebindQueuedEditContext,
   removeQueuedRunEditAttachment,
   resolveQueuedEditPayload,
   useQueuedRunEdit,
@@ -424,9 +429,11 @@ export function useThreadComposerState() {
     [selectedThreadProjection],
   );
 
-  // The run can start, or be cancelled from another client, while its message
-  // is open in the composer. Leave edit mode rather than saving into a run the
-  // server will refuse, and keep whatever was typed if there is room for it.
+  // The server holds a message while it is open here, but it can still be
+  // removed from another client, or start once an abandoned hold lapses. Leave
+  // edit mode rather than saving into a run the server will refuse, and append
+  // an unsaved edit to the thread's draft with its attachments, context and
+  // model instead of dropping it.
   const selectedThreadRuns = selectedThreadProjection?.projection.runs;
   const editedRunId = queuedRunEdit?.runId ?? null;
   useEffect(() => {
@@ -434,31 +441,88 @@ export function useThreadComposerState() {
       return;
     }
     if (savingQueuedEditRef.current) return;
-    const stillQueued = selectedThreadRuns.some(
-      (run) => run.id === editedRunId && run.status === "queued",
-    );
-    if (stillQueued) return;
-    const editDraftKey = queuedEditDraftKey(selectedThreadKey, editedRunId);
-    const editDraft = getComposerDraftSnapshot(editDraftKey);
-    const threadDraft = getComposerDraftSnapshot(selectedThreadKey);
-    const keepable =
-      editDraft.text.trim().length > 0 &&
-      threadDraft.text.trim().length === 0 &&
-      threadDraft.attachments.length === 0;
-    if (keepable) {
-      void mergeComposerDraftContent(selectedThreadKey, {
-        text: editDraft.text,
-        attachments: editDraft.attachments,
-        ...(editDraft.context ? { context: editDraft.context } : {}),
-        ...(editDraft.inputOrigin ? { inputOrigin: editDraft.inputOrigin } : {}),
+    const editedRun = selectedThreadRuns.find((run) => run.id === editedRunId);
+    if (editedRun?.status === "queued") return;
+    const edit = getQueuedRunEdit(selectedThreadKey);
+    const editDraft = getComposerDraftSnapshot(queuedEditDraftKey(selectedThreadKey, editedRunId));
+    const dirty = edit !== null && queuedRunEditHasChanges(edit, editDraft);
+    endQueuedRunEdit(selectedThreadKey, { deferAttachmentCleanup: dirty });
+    if (!dirty) return;
+    const threadKey = selectedThreadKey;
+    const environmentId = parseScopedThreadKey(threadKey)?.environmentId;
+    // Saved attachments are downloaded back into the draft. Their ids are
+    // chosen up front so the edit's chips bind to the copies; a failed
+    // download takes its chip with it.
+    const saved = environmentId === undefined ? [] : edit.existingAttachments;
+    const savedLocalIds = new Map(saved.map((attachment) => [attachment.id, uuidv4()] as const));
+    const context = rebindQueuedEditContext(editDraft.context, savedLocalIds);
+    // Attachments may go past the per-message limit here (sending still
+    // enforces it) so a rescue never drops one.
+    const report = (failedCount: number) => {
+      const overLimit =
+        getComposerDraftSnapshot(threadKey).attachments.length > PROVIDER_SEND_TURN_MAX_ATTACHMENTS;
+      setPendingConnectionError(
+        [
+          failedCount === 0
+            ? "That message is no longer queued. Your edit is back in the composer."
+            : `That message is no longer queued. Your edit is back in the composer without ${failedCount} saved attachment${failedCount === 1 ? "" : "s"} that could not be downloaded.`,
+          ...(overLimit
+            ? [
+                `Remove attachments until there are at most ${PROVIDER_SEND_TURN_MAX_ATTACHMENTS} before sending.`,
+              ]
+            : []),
+        ].join(" "),
+      );
+    };
+    const restoreSaved = async () => {
+      appendComposerDraftAttachments(threadKey, editDraft.attachments, { allowOverflow: true });
+      if (environmentId === undefined || saved.length === 0) return 0;
+      const signal = new AbortController().signal;
+      const results = await Promise.allSettled(
+        saved.map((attachment) =>
+          downloadServerAttachmentToDraft(
+            {
+              attachmentId: attachment.id,
+              name: attachment.name,
+              mimeType: attachment.mimeType,
+              kind: attachment.type === "image" ? "image" : "file",
+            },
+            environmentId,
+            signal,
+            savedLocalIds.get(attachment.id),
+          ),
+        ),
+      );
+      const downloaded = results.flatMap((result) =>
+        result.status === "fulfilled" ? [result.value] : [],
+      );
+      appendComposerDraftAttachments(threadKey, downloaded, { allowOverflow: true });
+      saved.forEach((attachment, index) => {
+        const localId = savedLocalIds.get(attachment.id);
+        if (results[index]?.status === "rejected" && localId !== undefined) {
+          removeComposerDraftAttachment(threadKey, localId);
+        }
       });
+      return saved.length - downloaded.length;
+    };
+    // Sending before the downloads land would leave them for the next draft;
+    // the import flag holds the send button and onSendMessage until then.
+    const restoring = saved.length > 0;
+    if (restoring) setComposerContextImporting(threadKey, true);
+    void mergeComposerDraftContent(threadKey, {
+      text: editDraft.text,
+      attachments: [],
+      ...(context ? { context } : {}),
+      ...(editDraft.inputOrigin ? { inputOrigin: editDraft.inputOrigin } : {}),
+    })
+      .then(restoreSaved, restoreSaved)
+      .then(report, () => report(saved.length))
+      .finally(() => {
+        if (restoring) setComposerContextImporting(threadKey, false);
+      });
+    if (editedRun !== undefined) {
+      updateComposerDraftSettings(threadKey, { modelSelection: editedRun.modelSelection });
     }
-    endQueuedRunEdit(selectedThreadKey, { deferAttachmentCleanup: keepable });
-    setPendingConnectionError(
-      keepable
-        ? "That message already started. Your edit is back in the composer."
-        : "That message already started, so the edit was discarded.",
-    );
   }, [editedRunId, selectedThreadKey, selectedThreadRuns]);
 
   const activeThreadBusy = threadRuntimeIsActive(selectedThreadRuntime);

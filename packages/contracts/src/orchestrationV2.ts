@@ -509,6 +509,13 @@ export const OrchestrationV2RunBackgroundWorkCancelled = Schema.Struct({
 export type OrchestrationV2RunBackgroundWorkCancelled =
   typeof OrchestrationV2RunBackgroundWorkCancelled.Type;
 
+/** Fork: one editing client's lease on a queued message (see `editHolds`). */
+export const QueuedRunEditHoldLease = Schema.Struct({
+  holderId: TrimmedNonEmptyString,
+  until: Schema.DateTimeUtc,
+});
+export type QueuedRunEditHoldLease = typeof QueuedRunEditHoldLease.Type;
+
 export const OrchestrationV2Run = Schema.Struct({
   id: RunId,
   threadId: ThreadId,
@@ -550,8 +557,34 @@ export const OrchestrationV2Run = Schema.Struct({
     }),
   ),
   delegatedCompletion: Schema.optional(OrchestrationV2DelegatedCompletionCohort),
+  /**
+   * Fork batch release: set on queued runs that were waiting when this run
+   * started from the queue. They join its turn as steers once it is running;
+   * runs queued later never join.
+   */
+  queueBatchLeaderRunId: Schema.optional(RunId),
+  /**
+   * Fork steer recall window: a steer waits as a queued run until this time,
+   * so it can still be edited, removed or sent early. Then the server steers
+   * it into the running turn, or starts it as a turn when nothing is running.
+   */
+  steerDeadlineAt: Schema.optional(Schema.DateTimeUtc),
+  /**
+   * Fork queued-message edit hold: while a client has this message open for
+   * editing it neither starts nor is steered. The editing client renews the
+   * lease; an abandoned edit stops holding the queue once it lapses.
+   * The latest `until` across `editHolds`.
+   */
+  editHeldUntil: Schema.optional(Schema.DateTimeUtc),
+  /** Fork: the live edit-hold leases, one per editing client session. */
+  editHolds: Schema.optional(Schema.Array(QueuedRunEditHoldLease)),
 });
 export type OrchestrationV2Run = typeof OrchestrationV2Run.Type;
+
+/** How long one `queued-run.edit-hold` keeps a queued message from starting. */
+export const QUEUED_RUN_EDIT_HOLD_LEASE_MS = 120_000;
+/** How often an editing client renews its hold, well inside the lease. */
+export const QUEUED_RUN_EDIT_HOLD_RENEW_MS = 30_000;
 
 /**
  * When the work a run belongs to started. A wake does not start new work, so
@@ -1888,6 +1921,16 @@ export const OrchestrationV2RunJson = OrchestrationV2Run.mapFields((fields) => (
   startedAt: Schema.NullOr(Schema.DateTimeUtcFromString),
   completedAt: Schema.NullOr(Schema.DateTimeUtcFromString),
   workStartedAt: Schema.optional(Schema.DateTimeUtcFromString),
+  steerDeadlineAt: Schema.optional(Schema.DateTimeUtcFromString),
+  editHeldUntil: Schema.optional(Schema.DateTimeUtcFromString),
+  editHolds: Schema.optional(
+    Schema.Array(
+      QueuedRunEditHoldLease.mapFields((lease) => ({
+        ...lease,
+        until: Schema.DateTimeUtcFromString,
+      })),
+    ),
+  ),
 }));
 export type OrchestrationV2RunJson = typeof OrchestrationV2RunJson.Type;
 
@@ -2720,6 +2763,8 @@ export const OrchestrationV2Command = Schema.Union([
     usageLimitRecoveryRequestId: Schema.optional(CommandId),
     /** Resolve untargeted delivery against the server's serialized thread state. */
     deliveryIntent: Schema.optional(Schema.Literals(["auto", "steer", "restart"])),
+    /** Fork steer recall window: hold a user steer this long before it reaches the turn. */
+    steerGraceWindowMs: Schema.optional(NonNegativeInt),
     delegatedCompletion: Schema.optional(
       Schema.Struct({
         parentRunId: RunId,
@@ -2807,6 +2852,16 @@ export const OrchestrationV2Command = Schema.Union([
     // Full replacement list. Absent = leave the message's attachments as-is,
     // so pre-attachment clients editing text keep the original attachments.
     attachments: Schema.optional(Schema.Array(ChatAttachment)),
+  }),
+  /** Fork: hold (or release) a queued message while a client edits it. */
+  Schema.Struct({
+    type: Schema.Literal("queued-run.edit-hold"),
+    commandId: CommandId,
+    threadId: ThreadId,
+    runId: RunId,
+    held: Schema.Boolean,
+    /** One id per client edit session; a release only drops that session's lease. */
+    holderId: TrimmedNonEmptyString,
   }),
   Schema.Struct({
     type: Schema.Literal("runtime-request.respond"),

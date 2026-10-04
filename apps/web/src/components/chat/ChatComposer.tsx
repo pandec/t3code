@@ -87,6 +87,7 @@ import { listContinuationForEnter, listIndentForTab } from "../../composer-list-
 import {
   deriveComposerSendState,
   getAntigravitySendBlockReason,
+  isComposerEmptyForQueuedMessageRecall,
   readFileAsDataUrl,
   resolveComposerInteractionMode,
   resolveComposerProviderSelection,
@@ -1409,6 +1410,8 @@ const ComposerFooterPrimaryActions = memo(function ComposerFooterPrimaryActions(
   onResume: () => void;
   onPreviousPendingQuestion: () => void;
   onInterrupt: () => void;
+  onQueue: () => void;
+  onSteer: () => void;
   onImplementPlanInNewThread: () => void;
   onCompactContext?: (() => void) | undefined;
   compactDisabled: boolean;
@@ -1465,6 +1468,8 @@ const ComposerFooterPrimaryActions = memo(function ComposerFooterPrimaryActions(
         onResume={props.onResume}
         onPreviousPendingQuestion={props.onPreviousPendingQuestion}
         onInterrupt={props.onInterrupt}
+        onQueue={props.onQueue}
+        onSteer={props.onSteer}
         onImplementPlanInNewThread={props.onImplementPlanInNewThread}
       />
     </>
@@ -1692,6 +1697,8 @@ export interface ChatComposerProps {
     submissionIntent?: ComposerSubmissionIntent,
   ) => void;
   onResume: () => void;
+  /** ArrowUp in an empty composer: opens the newest queued message, reporting whether it did. */
+  onRecallQueuedMessage?: ((repeat: boolean) => boolean) | undefined;
   onInterrupt: () => void;
   onImplementPlanInNewThread: () => void;
   onRespondToApproval: (
@@ -1815,6 +1822,7 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
     onCompactContext,
     onSend,
     onResume,
+    onRecallQueuedMessage,
     onInterrupt,
     onImplementPlanInNewThread,
     onRespondToApproval,
@@ -2925,7 +2933,9 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
     Number(showComposerAttachAction) +
     Number(voiceTranscriptionAvailable) +
     Number(showComposerMeter || reserveContextWindowMeter);
-  const composerFooterHasWideActions = showPlanFollowUpPrompt || activePendingProgress !== null;
+  // A running turn offers Queue for later and Steer beside Stop, so it needs the wide footer.
+  const composerFooterHasWideActions =
+    showPlanFollowUpPrompt || activePendingProgress !== null || phase === "running";
   const composerFooterActionLayoutKey = useMemo(() => {
     if (activePendingProgress) {
       return `pending:${activePendingProgress.questionIndex}:${activePendingProgress.isLastQuestion}:${activePendingIsResponding}`;
@@ -3077,6 +3087,18 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
   );
   const showResumeAction =
     canResume && !composerDraftHasUserContent(composerDraft) && !isEditingQueuedMessage;
+  // A plain prompt to an existing thread waits in the durable outbox while
+  // offline (ChatView's onSend refuses everything else), so its send controls
+  // stay usable.
+  const offlineSendable =
+    environmentUnavailable !== null &&
+    routeKind === "server" &&
+    activeThreadId !== null &&
+    !isEditingQueuedMessage &&
+    activePendingProgress === null &&
+    !showPlanFollowUpPrompt &&
+    composerImages.length + composerFiles.length === 0 &&
+    composerSendState.hasSendableContent;
   const collapsedComposerPrimaryActionDisabled =
     phase === "running" ||
     isSendBusy ||
@@ -3084,7 +3106,7 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
     isConnecting ||
     noProviderAvailable ||
     projectSelectionRequired ||
-    environmentUnavailable !== null ||
+    (environmentUnavailable !== null && !offlineSendable) ||
     (!composerSendState.hasSendableContent && !showResumeAction);
   const collapsedComposerPrimaryActionLabel = showResumeAction ? "Resume thread" : "Send message";
   const showMobilePendingAnswerActions =
@@ -4284,7 +4306,7 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
       isSendDisabled ||
       isConnecting ||
       noProviderAvailable ||
-      environmentUnavailable !== null ||
+      (environmentUnavailable !== null && !offlineSendable) ||
       phase === "running"
     ) {
       return false;
@@ -4303,6 +4325,7 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
     isSendBusy,
     isSendDisabled,
     noProviderAvailable,
+    offlineSendable,
     phase,
     showPlanFollowUpPrompt,
   ]);
@@ -4399,6 +4422,12 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
     },
     [phase, settings.followUpBehavior, submitComposer],
   );
+  const handleQueuePrimaryAction = useCallback(() => {
+    submitComposer(undefined, "queue");
+  }, [submitComposer]);
+  const handleSteerPrimaryAction = useCallback(() => {
+    submitComposer(undefined, "steer");
+  }, [submitComposer]);
   const submitCitationAndSend = useCallback(() => {
     submitComposer(
       undefined,
@@ -4577,6 +4606,29 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
         onSelectComposerItem(selectedItem);
         return true;
       }
+    }
+    // ArrowUp in an empty composer reaches the newest queued message first;
+    // prompt-history recall is the fallback when nothing is queued.
+    if (
+      key === "ArrowUp" &&
+      submissionIntent === null &&
+      onRecallQueuedMessage !== undefined &&
+      !event.shiftKey &&
+      !event.altKey &&
+      !event.metaKey &&
+      !event.ctrlKey &&
+      !event.isComposing &&
+      isComposerEmptyForQueuedMessageRecall({
+        prompt: promptRef.current,
+        imageCount: composerImagesRef.current.length + composerFilesRef.current.length,
+        terminalContextCount: composerTerminalContextsRef.current.length,
+        previewAnnotationCount: composerPreviewAnnotations.length,
+        reviewCommentCount: composerReviewComments.length,
+        hasPendingComposerRequest: isComposerApprovalState || pendingUserInputs.length > 0,
+      }) &&
+      onRecallQueuedMessage(event.repeat)
+    ) {
+      return true;
     }
     if ((key === "ArrowUp" || key === "ArrowDown") && submissionIntent === null) {
       return navigatePromptHistory(key === "ArrowUp" ? "backward" : "forward", event);
@@ -5276,6 +5328,8 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
     composerMenuOpen ||
     insertionPicker !== null ||
     isStashMenuOpen ||
+    // Stop, Steer and Queue for later need the full actions row.
+    (phase === "running" && composerSendState.hasSendableContent) ||
     isDesktopVoiceRecorderActive ||
     isDragOverComposer ||
     isPreparingWorktree ||
@@ -7784,7 +7838,7 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
                     sendDisabledReason={sendDisabledReason}
                     isConnecting={isConnecting}
                     isEnvironmentUnavailable={
-                      environmentUnavailable !== null ||
+                      (environmentUnavailable !== null && !offlineSendable) ||
                       noProviderAvailable ||
                       projectSelectionRequired
                     }
@@ -7797,6 +7851,8 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
                     onResume={onResume}
                     onPreviousPendingQuestion={onPreviousActivePendingUserInputQuestion}
                     onInterrupt={handleInterruptPrimaryAction}
+                    onQueue={handleQueuePrimaryAction}
+                    onSteer={handleSteerPrimaryAction}
                     onImplementPlanInNewThread={handleImplementPlanInNewThreadPrimaryAction}
                     compactDisabled={
                       compactDisabled || noProviderAvailable || isSendBusy || isConnecting
