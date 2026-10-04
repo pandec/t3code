@@ -193,6 +193,7 @@ import {
   stickyComposerModelSelectionAtom,
   undoComposerDraftMerge,
   undoComposerDraftMergeState,
+  updateComposerDraftSettings,
 } from "./use-composer-drafts";
 import { retainComposerAttachmentFileForPreview } from "../lib/composerAttachmentPreviewRetention";
 
@@ -1760,6 +1761,51 @@ describe("mobile composer drafts", () => {
         },
       }),
     ).toThrow();
+  });
+
+  it("drops model and mode picks persisted on existing-thread drafts by older builds", () => {
+    const settings = {
+      modelSelection: { instanceId: "codex", model: "gpt-5.4" },
+      runtimeMode: "full-access",
+      interactionMode: "plan",
+    } as const;
+    const decoded = decodePersistedComposerState({
+      schemaVersion: 1,
+      drafts: {
+        "environment-1:thread-1": { ...DRAFT, ...settings },
+        "environment-1:thread-2": { text: "", attachments: [], ...settings },
+        "pending-task:message-1": { ...DRAFT, ...settings },
+      },
+      cloudAccountId: "account-1",
+      signedOutDrafts: {
+        "account-1": {
+          drafts: { "environment-1:thread-3": { ...DRAFT, ...settings } },
+          queuedMessages: [],
+        },
+      },
+    });
+    // A settings-only thread draft is empty once stripped and is dropped.
+    expect(decoded.drafts).toEqual({
+      "environment-1:thread-1": DRAFT,
+      "pending-task:message-1": { ...DRAFT, ...settings },
+    });
+    expect(decoded.cloudDrafts.signedOut["account-1"]?.drafts).toEqual({
+      "environment-1:thread-3": DRAFT,
+    });
+  });
+
+  it("keeps model picks out of existing-thread drafts but not new-task drafts", () => {
+    const modelSelection = { instanceId: ProviderInstanceId.make("codex"), model: "gpt-5.4" };
+    setComposerDraftText("environment-1:thread-1", "hello");
+    updateComposerDraftSettings("environment-1:thread-1", { modelSelection });
+    const newTaskKey = createNewTaskDraft({
+      environmentId: EnvironmentId.make("environment-1"),
+      projectId: ProjectId.make("project-1"),
+    });
+    updateComposerDraftSettings(newTaskKey, { modelSelection });
+
+    expect(getComposerDraftSnapshot("environment-1:thread-1").modelSelection).toBeUndefined();
+    expect(getComposerDraftSnapshot(newTaskKey).modelSelection).toEqual(modelSelection);
   });
 
   it("keeps share-import receipts on otherwise contentless new-task drafts", () => {

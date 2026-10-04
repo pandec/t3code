@@ -8,10 +8,6 @@ export function scopedThreadKey(environmentId: EnvironmentId, threadId: ThreadId
   return `${environmentId}:${threadId}`;
 }
 
-export function isServerThreadDraftKey(draftKey: string): boolean {
-  return !draftKey.startsWith("new-task:") && !draftKey.startsWith("pending-task:");
-}
-
 export function scopedRequestKey(
   environmentId: EnvironmentId,
   requestId: RuntimeRequestId,

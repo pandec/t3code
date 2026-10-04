@@ -374,6 +374,42 @@ describe("resolveThreadListV2SwipeActions", () => {
     ).toEqual(["archive"]);
   });
 
+  it("leads the panel with pin on card rows, flipping to unpin on pinned rows", () => {
+    const input = {
+      variant: "card",
+      settlementSupported: true,
+      snoozeSupported: true,
+      snoozable: true,
+      pinnable: true,
+      forkable: true,
+    } as const;
+    expect(resolveThreadListV2SwipeActions(input).left).toEqual(["pin", "fork", "archive"]);
+    expect(resolveThreadListV2SwipeActions({ ...input, pinned: true }).left).toEqual([
+      "unpin",
+      "fork",
+      "archive",
+    ]);
+    expect(resolveThreadListV2SwipeActions({ ...input, forkable: false }).left).toEqual([
+      "pin",
+      "archive",
+    ]);
+  });
+
+  it("drops pin where the row menu has none: unsupported servers and settled rows", () => {
+    const input = {
+      settlementSupported: true,
+      snoozeSupported: true,
+      snoozable: true,
+      forkable: true,
+    } as const;
+    expect(
+      resolveThreadListV2SwipeActions({ ...input, variant: "card", pinnable: false }).left,
+    ).toEqual(["fork", "archive"]);
+    expect(
+      resolveThreadListV2SwipeActions({ ...input, variant: "slim", pinnable: true }).left,
+    ).toEqual(["fork", "archive"]);
+  });
+
   it("keeps the snoozed shelf on archive alone", () => {
     expect(
       resolveThreadListV2SwipeActions({
@@ -382,6 +418,8 @@ describe("resolveThreadListV2SwipeActions", () => {
         snoozeSupported: true,
         snoozable: true,
         snoozed: true,
+        pinnable: true,
+        pinned: true,
         forkable: true,
       }).left,
     ).toEqual(["archive"]);
@@ -491,53 +529,6 @@ describe("getThreadListV2OrderedSection", () => {
 });
 
 describe("buildThreadListV2Items", () => {
-  it("composes sticky attention membership with the existing list filters", () => {
-    const included = makeThread({ id: ThreadId.make("included"), title: "Fix login" });
-    const wrongTitle = makeThread({ id: ThreadId.make("wrong-title"), title: "Greeting" });
-    const notMember = makeThread({ id: ThreadId.make("not-member"), title: "Fix logout" });
-
-    const layout = buildThreadListV2Items({
-      threads: [included, wrongTitle, notMember],
-      attentionMemberThreadKeys: new Set([
-        `${environmentId}:${included.id}`,
-        `${environmentId}:${wrongTitle.id}`,
-      ]),
-      environmentId: null,
-      searchQuery: "login",
-      now: NOW,
-    });
-
-    expect(layout.items.map((item) => item.thread.id)).toEqual(["included"]);
-  });
-
-  it("optionally keeps pinned non-members in the attention-filtered list", () => {
-    const pinned = makeThread({
-      id: ThreadId.make("pinned"),
-      title: "Pinned",
-      pinnedAt: NOW,
-    });
-    const regular = makeThread({ id: ThreadId.make("regular"), title: "Regular" });
-
-    const hidden = buildThreadListV2Items({
-      threads: [pinned, regular],
-      attentionMemberThreadKeys: new Set(),
-      environmentId: null,
-      searchQuery: "",
-      now: NOW,
-    });
-    expect(hidden.items).toEqual([]);
-
-    const visible = buildThreadListV2Items({
-      threads: [pinned, regular],
-      attentionMemberThreadKeys: new Set(),
-      alwaysShowPinnedInAttention: true,
-      environmentId: null,
-      searchQuery: "",
-      now: NOW,
-    });
-    expect(visible.items.map((item) => item.thread.id)).toEqual(["pinned"]);
-  });
-
   it("places a persisted settled thread in the settled shelf", () => {
     const thread = makeThread({
       id: ThreadId.make("linked-merged"),
@@ -764,6 +755,19 @@ describe("buildThreadListV2Items", () => {
     const whileSnoozed = buildThreadListV2Items({ ...snoozedInput, now: NOW });
     expect(whileSnoozed.items.map((item) => item.thread.id)).toEqual(["active"]);
     expect(whileSnoozed.snoozedCount).toBe(1);
+
+    // On the snoozed shelf the row keeps its pin glyph (and Unpin).
+    const expandedSnoozed = buildThreadListV2Items({
+      ...snoozedInput,
+      now: NOW,
+      snoozedShelfExpanded: true,
+    });
+    expect(expandedSnoozed.items[1]).toMatchObject({
+      thread: { id: "pinned-snoozed" },
+      variant: "slim",
+      snoozed: true,
+      pinned: true,
+    });
 
     // After the wake time: the thread returns pinned, back on top.
     const afterWake = buildThreadListV2Items({ ...snoozedInput, now: "2026-06-03T10:00:00.000Z" });
@@ -1262,9 +1266,11 @@ describe("buildThreadListV2ListItems", () => {
             ? item.item.thread.id
             : item.type === "v2-snoozed-shelf"
               ? "snoozed-shelf"
-              : "settled-shelf",
+              : item.type === "v2-custom-group"
+                ? "active-header"
+                : "settled-shelf",
       ),
-    ).toEqual(["active", "queued-1", "queued-2", "settled-shelf", "settled"]);
+    ).toEqual(["active-header", "active", "queued-1", "queued-2", "settled-shelf", "settled"]);
     // Only the leading queued row labels the section, exactly like Settled.
     expect(
       items.filter((item) => item.type === "v2-pending" && item.showPendingDivider),
@@ -1292,6 +1298,7 @@ describe("buildThreadListV2ListItems", () => {
       settledShelfHeaderIndex: layout.settledShelfHeaderIndex,
     });
     expect(items.map((item) => item.key)).toEqual([
+      "v2-active-header",
       `v2-thread:${environmentId}:active`,
       "v2-pending-task:queued",
       "v2-draft-task:draft-1",
@@ -1315,7 +1322,7 @@ describe("buildThreadListV2ListItems", () => {
       pendingTasks: [makePendingTask("queued-1")],
     });
 
-    expect(items.map((item) => item.type)).toEqual(["v2-thread", "v2-pending"]);
+    expect(items.map((item) => item.type)).toEqual(["v2-custom-group", "v2-thread", "v2-pending"]);
   });
 
   it("opens the pinned block with a shelf header and closes it with a divider", () => {
@@ -1343,6 +1350,7 @@ describe("buildThreadListV2ListItems", () => {
       "v2-pinned-shelf",
       `v2-thread:${environmentId}:pinned`,
       "v2-pinned-divider",
+      "v2-active-header",
       `v2-thread:${environmentId}:active`,
       "v2-pending-task:queued",
     ]);
@@ -1382,6 +1390,7 @@ describe("buildThreadListV2ListItems", () => {
       "v2-pinned-shelf",
       `v2-thread:${environmentId}:pinned-a`,
       "v2-pinned-divider",
+      "v2-active-header",
       `v2-thread:${environmentId}:active`,
     ]);
     const header = items[0];
@@ -1389,7 +1398,7 @@ describe("buildThreadListV2ListItems", () => {
     expect(header?.type === "v2-pinned-shelf" && header.count).toBe(2);
   });
 
-  it("ignores the pinned collapse while searching or the Attention filter is on", () => {
+  it("ignores the pinned collapse while searching", () => {
     const threads = [
       makeThread({
         id: ThreadId.make("pinned"),
@@ -1406,17 +1415,6 @@ describe("buildThreadListV2ListItems", () => {
     });
     expect(searched.items.map((item) => item.thread.id)).toEqual(["pinned"]);
     expect(searched.pinnedShelfHeaderVisible).toBe(false);
-
-    const attention = buildThreadListV2Items({
-      threads,
-      environmentId: null,
-      searchQuery: "",
-      now: NOW,
-      pinnedShelfExpanded: false,
-      attentionMemberThreadKeys: new Set([`${environmentId}:pinned`]),
-    });
-    expect(attention.items.map((item) => item.thread.id)).toEqual(["pinned"]);
-    expect(attention.pinnedShelfHeaderVisible).toBe(false);
 
     const items = buildThreadListV2ListItems({
       items: searched.items,
@@ -1451,6 +1449,7 @@ describe("buildThreadListV2ListItems", () => {
     });
 
     expect(items.map((item) => item.key)).toEqual([
+      "v2-active-header",
       `v2-thread:${environmentId}:active`,
       "v2-settled-shelf",
       `v2-thread:${environmentId}:settled`,
@@ -1489,6 +1488,7 @@ describe("buildThreadListV2ListItems", () => {
     });
 
     expect(items.map((item) => item.type)).toEqual([
+      "v2-custom-group",
       "v2-thread",
       "v2-pending",
       "v2-snoozed-shelf",
@@ -1529,7 +1529,7 @@ describe("buildThreadListV2Items quiet active threads", () => {
     expect(layout.items.map((item) => item.variant)).toEqual(["card", "card"]);
     expect(
       buildThreadListV2ListItems({ ...layout, pendingTasks: [] }).map((item) => item.type),
-    ).toEqual(["v2-thread", "v2-thread"]);
+    ).toEqual(["v2-custom-group", "v2-thread", "v2-thread"]);
   });
 
   it("lets server-projected settlement park a quiet thread", () => {
@@ -2234,8 +2234,9 @@ describe("threadListV2ListItemsAreEqual", () => {
       settledShelfHeaderIndex: 1,
       snoozeLabelNow: NOW,
     });
-    const firstA = bare[0]!;
-    const secondA = withSettled[0]!;
+    // Index 0 is the Active header.
+    const firstA = bare[1]!;
+    const secondA = withSettled[1]!;
     expect(firstA.type === "v2-thread" && firstA.showTrailingDivider).toBe(true);
     expect(secondA.type === "v2-thread" && secondA.showTrailingDivider).toBe(false);
     expect(threadListV2ListItemsAreEqual(firstA, secondA)).toBe(false);
@@ -2372,8 +2373,9 @@ describe("thread list v2 minute tick invalidation", () => {
       },
     });
     const options = { snoozeEnvironmentIds: new Set<EnvironmentId>() };
-    const first = buildTickList([unread], BASE_MS, [], options)[0]!;
-    const next = buildTickList([unread], BASE_MS + MINUTE_MS, [], options)[0]!;
+    // Index 0 is the Active header.
+    const first = buildTickList([unread], BASE_MS, [], options)[1]!;
+    const next = buildTickList([unread], BASE_MS + MINUTE_MS, [], options)[1]!;
     expect(first.type === "v2-thread" && first.timeLabel).toBe("");
     expect(threadListV2ListItemsAreEqual(first, next)).toBe(true);
   });
@@ -2450,10 +2452,10 @@ describe("buildThreadListV2ListItems trailing dividers", () => {
     const dividers = items.map((item) =>
       item.type === "v2-thread" || item.type === "v2-pending" ? item.showTrailingDivider : "n/a",
     );
-    // thread A | thread B | queued 1 | queued 2: consecutive threads keep
+    // Active header | thread A | thread B | queued 1 | queued 2: consecutive threads keep
     // their hairlines, the row before the Unsent section rule loses its own,
     // queued rows divide each other, and the last row has nothing under it.
-    expect(dividers).toEqual([true, false, true, false]);
+    expect(dividers).toEqual(["n/a", true, false, true, false]);
   });
 });
 
@@ -2640,9 +2642,33 @@ describe("custom thread groups", () => {
     expect(header?.type === "v2-custom-group" && header.expanded).toBe(false);
   });
 
-  it("keeps the plain list without groups", () => {
-    const items = buildThreadListV2ListItems({ items: layout.items, pendingTasks: [] });
-    expect(items.every((item) => item.type === "v2-thread")).toBe(true);
+  it("folds the built-in Active group without custom groups, keeping the open thread", () => {
+    const open = makeThread({ id: ThreadId.make("open"), title: "Open" });
+    const other = makeThread({ id: ThreadId.make("other"), title: "Other" });
+    const plain = buildThreadListV2Items({
+      threads: [open, other],
+      environmentId: null,
+      searchQuery: "",
+      now: NOW,
+    });
+    const expanded = buildThreadListV2ListItems({ ...plain, pendingTasks: [] });
+    expect(keysOf(expanded)).toEqual(["v2-active-header", "open", "other"]);
+    expect(expanded[0]).toMatchObject({ type: "v2-custom-group", groupId: null, name: "Active" });
+    const folded = buildThreadListV2ListItems({
+      ...plain,
+      pendingTasks: [makePendingTask("queued")],
+      activeShelfExpanded: false,
+      selectedThreadKey: `${environmentId}:open`,
+    });
+    // Unsent tasks stay visible under a folded Active header.
+    expect(keysOf(folded)).toEqual(["v2-active-header", "open", "v2-pending-task:queued"]);
+    expect(folded[0]).toMatchObject({ count: 2, expanded: false });
+    // No active rows and no custom groups: no header, so an empty list reads as empty.
+    const emptyActive = buildThreadListV2ListItems({
+      ...buildThreadListV2Items({ threads: [], environmentId: null, searchQuery: "", now: NOW }),
+      pendingTasks: [makePendingTask("queued")],
+    });
+    expect(keysOf(emptyActive)).toEqual(["v2-pending-task:queued"]);
   });
 
   it("plans Move up/down inside each group only", () => {

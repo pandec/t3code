@@ -59,6 +59,7 @@ import {
   type QueuedThreadMessage,
 } from "./thread-outbox-model";
 import { flushThreadOutbox, threadOutboxManager } from "./thread-outbox";
+import { removeStagedThreadSettingsForEnvironment } from "./use-thread-staged-settings";
 import { composerDraftEnvironmentId } from "../lib/composerAttachmentUploadQueue";
 
 const COMPOSER_DRAFTS_SCHEMA_VERSION = 1;
@@ -629,6 +630,36 @@ export function migrateLegacyNewTaskDraft(
   ];
 }
 
+/**
+ * Fork: an existing thread's composer follows the thread's live settings, and
+ * a pick lives only in the session's staged settings. Drafts for existing
+ * threads therefore never carry model or mode choices; older builds persisted
+ * them, so they are stripped on load and ignored on write.
+ */
+function isServerThreadDraftKey(draftKey: string): boolean {
+  return (
+    !isNewTaskDraftKey(draftKey) &&
+    !draftKey.startsWith("pending-task:") &&
+    !isQueuedEditDraftKey(draftKey)
+  );
+}
+
+function withoutThreadDraftSettings<T extends Partial<ComposerDraftSettingsUpdate>>(
+  draftKey: string,
+  draft: T,
+): Omit<T, "modelSelection" | "runtimeMode" | "interactionMode"> {
+  if (!isServerThreadDraftKey(draftKey)) {
+    return draft;
+  }
+  const {
+    modelSelection: _modelSelection,
+    runtimeMode: _runtimeMode,
+    interactionMode: _interactionMode,
+    ...rest
+  } = draft;
+  return rest;
+}
+
 export function decodePersistedComposerState(value: unknown): {
   readonly drafts: Record<string, ComposerDraft>;
   readonly stickyModelSelection: ModelSelection | null;
@@ -661,6 +692,7 @@ export function decodePersistedComposerState(value: unknown): {
             now,
           ),
         )
+        .map(([key, draft]) => [key, withoutThreadDraftSettings(key, draft)] as const)
         // importedShareIds are share-import receipts: a contentless draft
         // carrying one is not empty, or the same native share would be
         // re-imported after restart.
@@ -682,7 +714,7 @@ export function decodePersistedComposerState(value: unknown): {
             // without another decode, so they get the same key migration.
             drafts: Object.fromEntries(
               Object.entries(saved.drafts).map(([key, draft]) =>
-                migrateLegacyNewTaskDraft(key, draft, now),
+                migrateLegacyNewTaskDraft(key, withoutThreadDraftSettings(key, draft), now),
               ),
             ),
             queuedMessages: saved.queuedMessages.map(decodeQueuedThreadMessage),
@@ -1524,7 +1556,7 @@ export function updateComposerDraftSettings(
   updateComposerDrafts((current) => {
     const draft = {
       ...normalizeDraft(current[draftKey]),
-      ...settings,
+      ...withoutThreadDraftSettings(draftKey, settings),
     };
     return withComposerDraft(current, draftKey, draft);
   });
@@ -1973,6 +2005,7 @@ export async function clearComposerDraftsEnvironment(environmentId: EnvironmentI
     await loadPromise;
   }
 
+  removeStagedThreadSettingsForEnvironment(environmentId);
   const current = appAtomRegistry.get(composerDraftsAtom);
   const next = removeComposerDraftsForEnvironment(current, environmentId);
   const removedAttachments = Object.entries(current)

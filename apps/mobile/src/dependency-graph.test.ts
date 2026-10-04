@@ -262,7 +262,8 @@ describe("mobile dependency graph", () => {
       // the incoming-share store, the connection controller hook, the
       // terminal launch context, and the pending message feed.
       // (legacy-plan-mode was pure model logic and moved into state/.)
-      ["state", "features", 6, "state must not add imports from features"],
+      // The fork's lifecycle outbox drain refreshes archived-thread snapshots.
+      ["state", "features", 7, "state must not add imports from features"],
       // lib -> features: lib/runtime.ts is the app composition root and
       // legitimately wires cloud/observability features; the appearance
       // helpers and terminal preferences still need untangling.

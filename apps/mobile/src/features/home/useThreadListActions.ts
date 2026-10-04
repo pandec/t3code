@@ -2,6 +2,7 @@ import type { ThreadMoveDestination } from "../threads/threadOrder";
 import type { EnvironmentThreadShell } from "@t3tools/client-runtime/state/shell";
 import { canSnooze, effectiveSnoozed } from "@t3tools/client-runtime/state/thread-settled";
 import { mergeThreadGroups, threadGroupId } from "@t3tools/shared/threadGroups";
+import { CommandId } from "@t3tools/contracts";
 import * as Cause from "effect/Cause";
 import * as Haptics from "expo-haptics";
 import { useCallback, useRef } from "react";
@@ -10,12 +11,22 @@ import { Alert, Platform } from "react-native";
 import { withThreadDismissal } from "./thread-dismissal";
 import { showConfirmDialog, showTextInputDialog } from "../../components/ConfirmDialogHost";
 import { scopedThreadKey } from "../../lib/scopedEntities";
+import { uuidv4 } from "../../lib/uuid";
 import { refreshArchivedThreadsForEnvironment } from "../archive/useArchivedThreadSnapshots";
 import { pinOrderKeyBetween } from "@t3tools/client-runtime/state/thread-sort";
 import { appAtomRegistry } from "../../state/atom-registry";
 import { pauseListeningForThread, stopListeningForThread } from "../../state/listeningPlayer";
 import { environmentServerConfigsAtom } from "../../state/server";
+import {
+  enqueueThreadLifecycleIntent,
+  threadLifecycleOutboxManager,
+} from "../../state/thread-lifecycle-outbox";
+import {
+  threadLifecycleActionUsesOutbox,
+  threadLifecycleRevisionRequiresDispatch,
+} from "../../state/thread-lifecycle-outbox-model";
 import { environmentThreadShells, threadEnvironment } from "../../state/threads";
+import { useRemoteConnectionStatus } from "../../state/use-remote-environment-registry";
 import { queuedThreadKeysAtom } from "../../state/use-thread-outbox";
 import { useAtomCommand } from "../../state/use-atom-command";
 import {
@@ -120,7 +131,7 @@ function actionFailureTitle(action: ThreadListAction): string {
   return "Could not delete thread";
 }
 
-/** Resolves to true iff the action was dispatched and succeeded. */
+/** Resolves to true iff the action succeeded or was queued for reconnect. */
 function useThreadActionExecutor(
   onCompleted?: (action: ThreadListAction, thread: EnvironmentThreadShell) => void,
 ) {
@@ -129,6 +140,7 @@ function useThreadActionExecutor(
   const deleteMutation = useAtomCommand(threadEnvironment.delete, { reportFailure: false });
   const settleMutation = useAtomCommand(threadEnvironment.settle, { reportFailure: false });
   const unsettleMutation = useAtomCommand(threadEnvironment.unsettle, { reportFailure: false });
+  const { connectedEnvironments } = useRemoteConnectionStatus();
   const inFlightThreadKeys = useRef(new Set<string>());
 
   const executeAction = useCallback(
@@ -160,6 +172,61 @@ function useThreadActionExecutor(
           );
           return false;
         }
+
+        // Fork: archive while disconnected queues a durable intent applied on
+        // reconnect. Archive/unarchive revise any existing intent (Undo),
+        // whatever the connection state, so a direct command never races it.
+        const existingIntent = appAtomRegistry.get(
+          threadLifecycleOutboxManager.intentsByThreadKeyAtom,
+        )[key];
+        const environmentConnected = connectedEnvironments.some(
+          (environment) =>
+            environment.environmentId === thread.environmentId &&
+            environment.connectionState === "connected",
+        );
+        if (
+          threadLifecycleActionUsesOutbox({
+            action,
+            environmentConnected,
+            hasIntent: existingIntent !== undefined,
+          })
+        ) {
+          const desiredArchived = action === "archive";
+          if (existingIntent?.desiredArchived === desiredArchived) return true;
+          try {
+            await withThreadDismissal(
+              key,
+              async () => {
+                await enqueueThreadLifecycleIntent({
+                  environmentId: thread.environmentId,
+                  threadId: thread.id,
+                  desiredArchived,
+                  requiresDispatch: threadLifecycleRevisionRequiresDispatch(existingIntent),
+                  dispatchAttempted: false,
+                  dispatchedAction: null,
+                  commandId: CommandId.make(uuidv4()),
+                  createdAt: new Date().toISOString(),
+                  thread: existingIntent?.thread ?? thread.source,
+                });
+                return true;
+              },
+              (result) => result,
+            );
+          } catch (error) {
+            Alert.alert(
+              actionFailureTitle(action),
+              error instanceof Error && error.message.trim().length > 0
+                ? error.message
+                : `The thread could not be ${ACTION_VERBS[action]}.`,
+            );
+            return false;
+          }
+          // A queued archive hides the row just like a direct one.
+          if (action === "archive") pauseListeningForThread(thread.environmentId, thread.id);
+          onCompleted?.(action, thread);
+          return true;
+        }
+
         const result = await withThreadDismissal(
           key,
           async () =>
@@ -210,6 +277,7 @@ function useThreadActionExecutor(
     },
     [
       archiveMutation,
+      connectedEnvironments,
       deleteMutation,
       onCompleted,
       settleMutation,

@@ -30,13 +30,6 @@ export function MaterialThreadListToolbar(props: {
   readonly onFilterAction: NonNullable<ComponentProps<typeof ControlPillMenu>["onPressAction"]>;
   readonly onOpenSettings: () => void;
   readonly onOpenEnvironments: () => void;
-  /** Fork attention filter; absent when the legacy grouped list ignores it. */
-  readonly attentionFilter?: {
-    readonly enabled: boolean;
-    /** True while thread shells are still loading and the filter cannot turn on. */
-    readonly gated: boolean;
-    readonly onToggle: () => void;
-  };
   readonly sidebar?: boolean;
   readonly onLayout?: (event: LayoutChangeEvent) => void;
   readonly onRequestVisibility?: () => void;
@@ -120,25 +113,6 @@ export function MaterialThreadListToolbar(props: {
                 icon="magnifyingglass"
                 onPress={openSearch}
               />
-              {props.attentionFilter === undefined ? null : (
-                <AndroidHeaderIconButton
-                  accessibilityLabel={
-                    props.attentionFilter.gated
-                      ? "Loading threads"
-                      : props.attentionFilter.enabled
-                        ? "Clear attention filter"
-                        : "Show only threads needing attention"
-                  }
-                  icon={
-                    props.attentionFilter.enabled
-                      ? "exclamationmark.circle.fill"
-                      : "exclamationmark.circle"
-                  }
-                  disabled={props.attentionFilter.gated}
-                  selected={props.attentionFilter.enabled}
-                  onPress={props.attentionFilter.onToggle}
-                />
-              )}
               <AndroidHeaderIconButton
                 accessibilityLabel="Open settings"
                 icon="gearshape"

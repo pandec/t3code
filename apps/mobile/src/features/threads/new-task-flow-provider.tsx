@@ -747,6 +747,9 @@ export function NewTaskFlowProvider(props: React.PropsWithChildren) {
   // user. A pending-task edit owns its own key and is untouched here.
   const carryDraftContentTo = useCallback(
     (project: EnvironmentProject) => {
+      // Fork: while a pending task is open, the bound new-task draft is not on
+      // screen; retargeting it would move it into a project the user never chose.
+      if (editingPendingTaskRef.current) return;
       const target = { environmentId: project.environmentId, projectId: project.id };
       if (activeDraftKey !== null && isNewTaskDraftKey(activeDraftKey)) {
         retargetNewTaskDraft(activeDraftKey, target);

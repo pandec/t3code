@@ -12,7 +12,6 @@ import {
   getComposerDraftSnapshot,
   mergeComposerDraftContent,
   undoComposerDraftMerge,
-  updateComposerDraftSettings,
   waitForComposerDraftsLoaded,
 } from "./use-composer-drafts";
 import {
@@ -21,9 +20,17 @@ import {
   holdEditingQueuedMessage,
   releaseEditingQueuedMessage,
 } from "./use-thread-outbox";
+import { stageThreadSettings, type ThreadSettings } from "./use-thread-staged-settings";
 
-/** Take delivery ownership before any await; the durable draft then takes ownership of the files. */
-export async function editPendingThreadMessage(message: QueuedThreadMessage): Promise<boolean> {
+/**
+ * Take delivery ownership before any await; the durable draft then takes ownership of the files.
+ * The message's model and modes return as staged picks against `thread`, the thread's live
+ * settings, so they hold only while the thread has not moved on.
+ */
+export async function editPendingThreadMessage(
+  message: QueuedThreadMessage,
+  thread: ThreadSettings | null,
+): Promise<boolean> {
   if (
     message.creation ||
     appAtomRegistry.get(dispatchingQueuedMessageIdAtom) === message.messageId ||
@@ -52,15 +59,20 @@ export async function editPendingThreadMessage(message: QueuedThreadMessage): Pr
     } finally {
       rollback = { snapshot, merged: getComposerDraftSnapshot(draftKey) };
     }
-    updateComposerDraftSettings(draftKey, {
-      ...(message.modelSelection ? { modelSelection: message.modelSelection } : {}),
-      ...(message.runtimeMode ? { runtimeMode: message.runtimeMode } : {}),
-      ...(message.interactionMode ? { interactionMode: message.interactionMode } : {}),
-    });
-    rollback = { snapshot, merged: getComposerDraftSnapshot(draftKey) };
     await flushComposerDrafts();
     if (!(await removeThreadOutboxMessage(message, revision))) return false;
     rollback = null;
+    if (thread) {
+      stageThreadSettings(
+        draftKey,
+        {
+          ...(message.modelSelection ? { modelSelection: message.modelSelection } : {}),
+          ...(message.runtimeMode ? { runtimeMode: message.runtimeMode } : {}),
+          ...(message.interactionMode ? { interactionMode: message.interactionMode } : {}),
+        },
+        thread,
+      );
+    }
     return true;
   } finally {
     try {

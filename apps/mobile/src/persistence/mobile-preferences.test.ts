@@ -25,17 +25,6 @@ import {
 import * as MobileSecureStorage from "./mobile-secure-storage";
 
 describe("mobile preferences persistence", () => {
-  it("keeps valid pinned visibility preferences", () => {
-    expect(
-      sanitizePreferences({ sidebarAlwaysShowPinnedInAttention: true })
-        .sidebarAlwaysShowPinnedInAttention,
-    ).toBe(true);
-    expect(
-      sanitizePreferences({ sidebarAlwaysShowPinnedInAttention: "yes" as unknown as boolean })
-        .sidebarAlwaysShowPinnedInAttention,
-    ).toBeUndefined();
-  });
-
   it("drops retired Older section keys saved by earlier builds", () => {
     // Preferences persisted before the Older shelf was removed still carry
     // its keys; they must fall away without disturbing their siblings.
@@ -70,17 +59,13 @@ describe("mobile preferences persistence", () => {
     ).toEqual({});
   });
 
-  it("keeps only valid persisted thread visit timestamps", () => {
-    expect(
-      sanitizePreferences({
-        threadLastVisitedAtById: {
-          "environment-1:valid": "2026-06-01T10:00:00.000Z",
-          "environment-1:invalid": "not-a-date",
-        },
-      }).threadLastVisitedAtById,
-    ).toEqual({
-      "environment-1:valid": "2026-06-01T10:00:00.000Z",
-    });
+  it("drops retired Attention filter keys saved by earlier builds", () => {
+    const legacyPreferences = {
+      sidebarAlwaysShowPinnedInAttention: true,
+      threadLastVisitedAtById: { "environment-1:thread-1": "2026-06-01T10:00:00.000Z" },
+      sidebarActiveShelfExpanded: false,
+    };
+    expect(sanitizePreferences(legacyPreferences)).toEqual({ sidebarActiveShelfExpanded: false });
   });
 
   it.effect("releases the update lock after a timed-out preference read", () =>
