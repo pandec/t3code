@@ -4,12 +4,15 @@ import {
   rememberMessageSummary,
   subscribeMessageArtifactSession,
 } from "@t3tools/client-runtime/state/messageArtifacts";
-import type { EnvironmentId, MessageId, MessageSummaryResult } from "@t3tools/contracts";
+import { currentThreadMessageSummary } from "@t3tools/client-runtime/state/voice";
+import type { EnvironmentId, MessageId, MessageSummaryResult, ThreadId } from "@t3tools/contracts";
 import { FileTextIcon } from "lucide-react";
-import { type ReactNode, useCallback, useState, useSyncExternalStore } from "react";
+import { type ReactNode, useCallback, useMemo, useState, useSyncExternalStore } from "react";
 
 import { summarizeMessage } from "../../state/messageArtifacts";
+import { useEnvironmentQuery } from "../../state/query";
 import { useAtomCommand } from "../../state/use-atom-command";
+import { messageSpeechThread } from "../../state/voice";
 import { Button } from "../ui/button";
 import { Spinner } from "../ui/spinner";
 import { toastManager } from "../ui/toast";
@@ -24,18 +27,28 @@ export interface AssistantMessageSummaryState {
 }
 
 /**
- * On-demand summary of a finished assistant message. The server caches it per
- * message text, so asking again after a reload returns the stored summary.
+ * On-demand summary of a finished assistant message. Stored summaries come
+ * with the thread's listening state, so they show after a reload without
+ * asking again (and to read-only clients); this client's own request only
+ * adds its result.
  */
 export function useAssistantMessageSummary(input: {
   readonly environmentId: EnvironmentId;
+  readonly threadId: ThreadId | null;
   readonly messageId: MessageId;
   readonly text: string;
   readonly streaming: boolean;
   readonly available: boolean;
+  /** The environment streams its listening state, stored summaries included. */
+  readonly persistentJobs: boolean;
 }): AssistantMessageSummaryState {
-  const { environmentId, messageId, text } = input;
+  const { environmentId, messageId, text, threadId } = input;
   const summarize = useAtomCommand(summarizeMessage, { reportFailure: false });
+  const threadState = useEnvironmentQuery(
+    input.persistentJobs && threadId !== null
+      ? messageSpeechThread({ environmentId, input: { threadId } })
+      : null,
+  ).data;
   const [preparing, setPreparing] = useState(false);
   const [expanded, setExpanded] = useState(false);
   const readSession = useCallback(
@@ -50,7 +63,11 @@ export function useAssistantMessageSummary(input: {
     readSession,
     readSession,
   );
-  const summary = session.summary;
+  const storedSummary = useMemo(
+    () => currentThreadMessageSummary(threadState, messageId, text),
+    [threadState, messageId, text],
+  );
+  const summary = session.summary ?? storedSummary;
 
   const toggle = useCallback(() => {
     if (summary !== null) {

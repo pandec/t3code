@@ -2756,8 +2756,8 @@ export const OrchestrationV2Command = Schema.Union([
   Schema.Struct({
     type: Schema.Literal("queued-run.edit"),
     context: Schema.optional(OrchestrationMessageContext),
-    // Absent = keep the message's origin; edits never clear a voice origin.
-    inputOrigin: Schema.optional(MessageInputOrigin),
+    // Absent = keep the message's origin; null = typed (clears a voice origin).
+    inputOrigin: Schema.optional(Schema.NullOr(MessageInputOrigin)),
     commandId: CommandId,
     threadId: ThreadId,
     runId: RunId,

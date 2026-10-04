@@ -1,10 +1,12 @@
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import { assert, it } from "@effect/vitest";
 import {
+  EventId,
   type MessageSpeechThreadState,
   type OrchestrationV2ConversationMessage,
   ProviderInstanceId,
 } from "@t3tools/contracts";
+import * as DateTime from "effect/DateTime";
 import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
 import * as FileSystem from "effect/FileSystem";
@@ -137,6 +139,7 @@ it.layer(TestLayer)("message listening", (it) => {
         threadId: message.threadId,
         recordings: [],
         pendingMessageIds: [],
+        summaries: [],
       });
 
       const first = yield* Effect.forkChild(service.synthesize({ messageId: message.id }));
@@ -232,7 +235,64 @@ it.layer(TestLayer)("message listening", (it) => {
         threadId: message.threadId,
         recordings: [],
         pendingMessageIds: [],
+        summaries: [],
       });
+    }),
+  );
+
+  it.effect("purges a deleted thread's recordings, scripts and summaries, files included", () =>
+    Effect.gen(function* () {
+      const sql = yield* SqlClient.SqlClient;
+      const store = yield* ProjectionStore.ProjectionStoreV2;
+      const deleted = yield* seed("speech-deleted", "Deleted answer.");
+      const live = yield* seed("speech-live", "Live answer.");
+      const { service } = yield* makeSpeech((text) =>
+        Effect.succeed(new TextEncoder().encode(text)),
+      );
+      const deletedRecording = yield* service.synthesize({ messageId: deleted.id });
+      const liveRecording = yield* service.synthesize({ messageId: live.id });
+      for (const message of [deleted, live]) {
+        yield* sql`
+          INSERT INTO fork_message_summaries (
+            message_id, thread_id, summary, source_text_hash, recipe_hash,
+            model_selection_json, model_selection_hash, created_at
+          ) VALUES (
+            ${message.id}, ${message.threadId}, 'Summary.', 'hash', 'recipe', '{}', 'model',
+            '2026-01-01T00:00:00.000Z'
+          )
+        `;
+      }
+      const thread = (yield* store.getThreadProjection(deleted.threadId)).thread;
+      const now = yield* DateTime.now;
+      yield* store.apply({
+        id: EventId.make("event:speech-deleted:deleted"),
+        type: "thread.deleted",
+        threadId: deleted.threadId,
+        providerInstanceId: thread.providerInstanceId,
+        occurredAt: now,
+        payload: { ...thread, deletedAt: now, updatedAt: now },
+      });
+      // A deleted thread shows nothing even before the purge ran.
+      const deletedStates = yield* watchThread(service.streamThread(deleted.threadId));
+      assert.deepEqual((yield* Queue.take(deletedStates)).recordings, []);
+
+      yield* service.purgeDeletedThreads;
+
+      const rowCounts = (threadId: string) =>
+        Effect.forEach(
+          ["fork_message_speech", "fork_message_speech_scripts", "fork_message_summaries"],
+          (table) =>
+            sql<{ readonly count: number }>`
+              SELECT COUNT(*) AS count FROM ${sql(table)} WHERE thread_id = ${threadId}
+            `.pipe(Effect.map((rows) => rows[0]?.count ?? 0)),
+        );
+      assert.deepEqual(yield* rowCounts(deleted.threadId), [0, 0, 0]);
+      assert.deepEqual(yield* rowCounts(live.threadId), [1, 1, 1]);
+      const files = yield* speechFiles;
+      assert.notInclude(files, `${deletedRecording.speechId}.mp3`);
+      assert.include(files, `${liveRecording.speechId}.mp3`);
+      const liveStates = yield* watchThread(service.streamThread(live.threadId));
+      assert.deepEqual((yield* Queue.take(liveStates)).recordings, [liveRecording]);
     }),
   );
 });

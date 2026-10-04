@@ -45,6 +45,21 @@ interface StagedAgentVoiceReply extends RunAttemptOwner {
 }
 
 /**
+ * Staged recordings per thread, plus each thread's recently finalized
+ * attempts: a stage call still running when its attempt was finalized must
+ * not park (or replace) anything afterwards.
+ */
+interface StagingState {
+  readonly entries: ReadonlyMap<ThreadId, StagedAgentVoiceReply>;
+  readonly closed: ReadonlyMap<ThreadId, ReadonlyArray<string>>;
+}
+
+// Finalization closes attempts in order, so only the last few can still race a stage call.
+const MAX_CLOSED_ATTEMPTS_PER_THREAD = 8;
+
+const attemptKey = (owner: RunAttemptOwner) => `${owner.runId}:${owner.attemptId}`;
+
+/**
  * What run finalization does with the attempt's staged recording. `events`
  * go into the run's final event batch; exactly one of `committed` (the batch
  * was written) or `abandoned` (it was not) must run afterwards.
@@ -112,9 +127,10 @@ export const make = Effect.gen(function* () {
   const serverConfig = yield* ServerConfig.ServerConfig;
   const serverSettings = yield* ServerSettingsService;
   const messageSpeech = yield* MessageSpeech;
-  const staged = yield* SynchronizedRef.make<ReadonlyMap<ThreadId, StagedAgentVoiceReply>>(
-    new Map(),
-  );
+  const staged = yield* SynchronizedRef.make<StagingState>({
+    entries: new Map(),
+    closed: new Map(),
+  });
 
   const resolveSpeechPath = (speechId: string, mimeType: SpeechAudioMimeType) =>
     resolveAttachmentRelativePath({
@@ -154,14 +170,24 @@ export const make = Effect.gen(function* () {
 
   // Atomic take: the entry leaves the map before anyone uses it, so a
   // concurrent re-stage can neither be consumed by mistake nor delete the file
-  // the taker is about to reference.
+  // the taker is about to reference. The attempt is closed in the same update,
+  // whether or not it had staged anything.
   const takeForAttempt = (threadId: ThreadId, owner: RunAttemptOwner) =>
-    SynchronizedRef.modify(staged, (entries) => {
-      const current = entries.get(threadId);
-      if (!current || !sameAttempt(current, owner)) return [undefined, entries] as const;
-      const next = new Map(entries);
-      next.delete(threadId);
-      return [current, next] as const;
+    SynchronizedRef.modify(staged, (state) => {
+      const closed = new Map(state.closed);
+      closed.set(
+        threadId,
+        [...(state.closed.get(threadId) ?? []), attemptKey(owner)].slice(
+          -MAX_CLOSED_ATTEMPTS_PER_THREAD,
+        ),
+      );
+      const current = state.entries.get(threadId);
+      if (!current || !sameAttempt(current, owner)) {
+        return [undefined, { entries: state.entries, closed }] as const;
+      }
+      const entries = new Map(state.entries);
+      entries.delete(threadId);
+      return [current, { entries, closed }] as const;
     });
 
   const stage: AgentVoiceReplyShape["stage"] = Effect.fn("AgentVoiceReply.stage")(
@@ -228,9 +254,14 @@ export const make = Effect.gen(function* () {
       // The superseded file is deleted only after the new entry is in place:
       // an interrupt can at worst orphan a file, never leave the map pointing
       // at a deleted one.
-      const result = yield* SynchronizedRef.modifyEffect(staged, (entries) =>
+      const result = yield* SynchronizedRef.modifyEffect(staged, (state) =>
         Effect.gen(function* () {
-          const previous = entries.get(input.threadId);
+          // Finalized while synthesizing or waiting for the lock: nothing is
+          // written yet, so refusing leaves nothing behind.
+          if (state.closed.get(input.threadId)?.includes(attemptKey(owner))) {
+            return yield* new AgentVoiceReplyError({ reason: "turn_unavailable" });
+          }
+          const previous = state.entries.get(input.threadId);
           const appending = previous !== undefined && sameAttempt(previous, owner);
           let recording: AgentSpeechRecording;
           if (appending) {
@@ -275,9 +306,12 @@ export const make = Effect.gen(function* () {
               createdAt: DateTime.formatIso(yield* DateTime.now),
             };
           }
-          const next = new Map(entries);
-          next.set(input.threadId, { ...owner, recording });
-          return [{ recording, superseded: previous?.recording }, next] as const;
+          const entries = new Map(state.entries);
+          entries.set(input.threadId, { ...owner, recording });
+          return [
+            { recording, superseded: previous?.recording },
+            { entries, closed: state.closed },
+          ] as const;
         }),
       );
       if (result.superseded !== undefined) {
@@ -329,13 +363,26 @@ export const make = Effect.gen(function* () {
         yield* discard;
         return NO_FINALIZATION;
       }
+      // Fails closed: an unreadable projection must never be taken for "the
+      // run wrote nothing", which would add a duplicate voice-only reply.
       const existing = yield* findFinalAssistantMessageId(threadId, input.run.id).pipe(
-        Effect.orElseSucceed(() => undefined),
+        Effect.map((messageId) => ({ ok: true as const, messageId })),
+        Effect.catch((error) =>
+          Effect.logWarning("agent voice reply dropped: final reply lookup failed", {
+            threadId,
+            runId: input.run.id,
+            error,
+          }).pipe(Effect.as({ ok: false as const })),
+        ),
       );
-      if (existing !== undefined) {
+      if (!existing.ok) {
+        yield* discard;
+        return NO_FINALIZATION;
+      }
+      if (existing.messageId !== undefined) {
         return {
           events: [],
-          committed: publish(threadId, MessageId.make(existing), entry.recording),
+          committed: publish(threadId, MessageId.make(existing.messageId), entry.recording),
           abandoned: discard,
         };
       }

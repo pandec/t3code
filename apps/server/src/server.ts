@@ -189,6 +189,7 @@ import * as MessageSummary from "./messageArtifacts/MessageSummary.ts";
 import * as MessageSpeechScript from "./messageArtifacts/MessageSpeechScript.ts";
 import * as MessageSpeech from "./voice/MessageSpeech.ts";
 import * as AgentVoiceReply from "./voice/AgentVoiceReply.ts";
+import * as OrchestratorV2 from "./orchestration-v2/Orchestrator.ts";
 import { messageArtifactsHttpApiLayer } from "./messageArtifacts/http.ts";
 import * as NetService from "@t3tools/shared/Net";
 import * as RelayClient from "@t3tools/shared/relayClient";
@@ -513,6 +514,29 @@ const ThreadPullRequestWorkerLive = Layer.effectDiscard(
   ThreadPullRequestService.make.pipe(Effect.flatMap((service) => service.start())),
 ).pipe(Layer.provide(PullRequestServiceLive));
 
+// Deleting a thread leaves its listening/voice-reply audio and fork artifact
+// rows to this purge: once at startup (catching up after a crash), then after
+// every deletion.
+const MessageSpeechPurgeLive = Layer.effectDiscard(
+  Effect.gen(function* () {
+    const messageSpeech = yield* MessageSpeech.MessageSpeech;
+    const orchestrator = yield* OrchestratorV2.OrchestratorV2;
+    const purge = messageSpeech.purgeDeletedThreads.pipe(
+      Effect.catch((error) =>
+        Effect.logWarning("message speech purge failed", { reason: error.reason }),
+      ),
+    );
+    yield* ServerActivation.forkParked(
+      Stream.merge(
+        Stream.make(undefined),
+        orchestrator.streamDomainEvents.pipe(
+          Stream.filter((event) => event.type === "thread.deleted"),
+        ),
+      ).pipe(Stream.runForEach(() => purge)),
+    );
+  }),
+);
+
 const ProviderInstallationRefreshLive = Layer.effectDiscard(
   Effect.gen(function* () {
     const antigravity = yield* AntigravityInstallation.AntigravityInstallation;
@@ -552,6 +576,7 @@ const RuntimeCoreDependenciesBaseLive = Layer.mergeAll(
     Layer.provide(ProjectionStoreV2.layer),
   ),
   ThreadPullRequestWorkerLive,
+  MessageSpeechPurgeLive,
   Layer.effectDiscard(
     Effect.gen(function* () {
       const service = yield* PullRequestSyncReactor.PullRequestSyncReactor;

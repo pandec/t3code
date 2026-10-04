@@ -1,8 +1,9 @@
 import {
   MESSAGE_SUMMARY_MAX_SOURCE_CHARS,
   MESSAGE_SUMMARY_MAX_TEXT_CHARS,
-  ModelSelection,
+  type ModelSelection,
   ProviderDriverKind,
+  ThreadId,
   type MessageSummaryRequest,
   type MessageSummaryResult,
 } from "@t3tools/contracts";
@@ -11,11 +12,13 @@ import * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
 import * as FileSystem from "effect/FileSystem";
 import * as Layer from "effect/Layer";
+import * as Option from "effect/Option";
 import * as Schema from "effect/Schema";
 import * as SqlClient from "effect/unstable/sql/SqlClient";
 
 import { ProviderInstanceRegistry } from "../provider/Services/ProviderInstanceRegistry.ts";
 import { TextGeneration } from "../textGeneration/TextGeneration.ts";
+import { MessageSpeech } from "../voice/MessageSpeech.ts";
 import { MESSAGE_SUMMARY_RECIPE_HASH, messageArtifactTextHash } from "./identity.ts";
 import { makeMessageArtifactLockCoordinator } from "./lock.ts";
 import {
@@ -23,6 +26,7 @@ import {
   findMessageArtifactSource,
   isUsableArtifactSource,
 } from "./source.ts";
+import { isStoredSummaryCurrent, resolveSummaryProvenance } from "./threadSummaries.ts";
 
 interface SummaryRow {
   readonly summary: string;
@@ -82,7 +86,6 @@ export class MessageSummary extends Context.Service<MessageSummary, MessageSumma
 ) {}
 
 const storageError = () => new MessageSummaryError({ reason: "storage_failed" });
-const decodeModelSelection = Schema.decodeUnknownEffect(Schema.fromJsonString(ModelSelection));
 
 export const make = Effect.gen(function* () {
   const sql = yield* SqlClient.SqlClient;
@@ -90,6 +93,8 @@ export const make = Effect.gen(function* () {
   const textGeneration = yield* TextGeneration;
   const providerInstances = yield* ProviderInstanceRegistry;
   const locks = yield* makeMessageArtifactLockCoordinator();
+  // Pushes stored summaries to the thread's live state; absent in isolated tests.
+  const messageSpeech = yield* Effect.serviceOption(MessageSpeech);
 
   const summarizeUnlocked = Effect.fn("MessageSummary.summarizeUnlocked")(function* (
     request: MessageSummaryRequest,
@@ -117,25 +122,18 @@ export const make = Effect.gen(function* () {
       WHERE message_id = ${message.messageId}
     `.pipe(Effect.mapError(storageError)))[0];
 
-    // The producing run is the provenance. A runless (imported) message falls
-    // back to the thread model once; the summary row pins that choice so later
-    // thread model changes neither invalidate nor reinterpret it.
-    const provenanceJson =
-      message.runModelSelection ?? cached?.modelSelectionJson ?? message.threadModelSelection;
-    if (provenanceJson === null) {
+    const provenance = yield* resolveSummaryProvenance(
+      message,
+      cached?.modelSelectionJson ?? null,
+    ).pipe(Effect.mapError(storageError));
+    if (provenance === null) {
       return yield* new MessageSummaryError({ reason: "provider_unavailable" });
     }
-    const modelSelection = yield* decodeModelSelection(provenanceJson).pipe(
-      Effect.mapError(storageError),
-    );
-    // @effect-diagnostics-next-line preferSchemaOverJson:off
-    const modelSelectionJson = JSON.stringify(modelSelection);
+    const { modelSelection, modelSelectionJson, modelSelectionHash } = provenance;
     const sourceTextHash = messageArtifactTextHash(sourceText);
-    const modelSelectionHash = messageArtifactTextHash(modelSelectionJson);
     if (
-      cached?.sourceTextHash === sourceTextHash &&
-      cached.recipeHash === MESSAGE_SUMMARY_RECIPE_HASH &&
-      cached.modelSelectionHash === modelSelectionHash
+      cached !== undefined &&
+      isStoredSummaryCurrent(cached, { sourceTextHash, modelSelectionHash })
     ) {
       return {
         messageId: request.messageId,
@@ -202,6 +200,9 @@ export const make = Effect.gen(function* () {
     `.pipe(Effect.mapError(storageError));
     if (stored.length === 0) {
       return yield* new MessageSummaryError({ reason: "message_unavailable" });
+    }
+    if (Option.isSome(messageSpeech)) {
+      yield* messageSpeech.value.refreshThread(ThreadId.make(message.threadId));
     }
 
     return {

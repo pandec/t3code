@@ -22,6 +22,7 @@ import {
 } from "../textGeneration/TextGeneration.ts";
 import { make, withLowSummaryEffort } from "./MessageSummary.ts";
 import { seedMessage, setMessageText } from "./testFixtures.ts";
+import { readThreadSummaries } from "./threadSummaries.ts";
 
 describe("message summary model selection", () => {
   it("uses the same Codex instance and model with low reasoning effort", () => {
@@ -300,6 +301,46 @@ effectIt.layer(TestLayer)("message summary persistence", (it) => {
       ]);
       assert.equal((yield* Ref.get(calls)).length, 1);
       assert.deepEqual(yield* storedSummaries(failing.id), []);
+    }),
+  );
+
+  it.effect("lists only the thread summaries the cache would still serve", () =>
+    Effect.gen(function* () {
+      const sql = yield* SqlClient.SqlClient;
+      const { service } = yield* makeSummaryService((input) =>
+        Effect.succeed({ summary: `Summary of ${input.message}` }),
+      );
+      const seedSummarized = (suffix: string) =>
+        Effect.gen(function* () {
+          const message = yield* seedMessage({
+            suffix,
+            text: "  Stored answer.  ",
+            threadModelSelection: threadModel,
+            runModelSelection: runModel,
+            worktreePath: null,
+          });
+          yield* service.summarize({ messageId: message.id });
+          return message;
+        });
+      const current = yield* seedSummarized("summary-list-current");
+      const changedText = yield* seedSummarized("summary-list-text");
+      const oldRecipe = yield* seedSummarized("summary-list-recipe");
+      const otherModel = yield* seedSummarized("summary-list-model");
+      yield* setMessageText(changedText, "Edited answer.");
+      yield* sql`UPDATE fork_message_summaries SET recipe_hash = 'old' WHERE message_id = ${oldRecipe.id}`;
+      yield* sql`
+        UPDATE fork_message_summaries SET model_selection_hash = 'other'
+        WHERE message_id = ${otherModel.id}
+      `;
+
+      const listed = yield* readThreadSummaries(sql, current.threadId);
+      assert.deepEqual(
+        listed.map(({ messageId, summary }) => ({ messageId, summary })),
+        [{ messageId: current.id, summary: "Summary of Stored answer." }],
+      );
+      for (const stale of [changedText, oldRecipe, otherModel]) {
+        assert.deepEqual(yield* readThreadSummaries(sql, stale.threadId), []);
+      }
     }),
   );
 });

@@ -4,9 +4,12 @@ import {
   type MessageSpeechSynthesisRequest,
   type MessageSpeechSynthesisResult,
   type MessageSpeechThreadState,
+  type MessageSummaryResult,
+  type MessageSummaryThreadEntry,
   type VoiceTranscriptionRequest,
   WS_METHODS,
 } from "@t3tools/contracts";
+import { messageArtifactTextHash } from "@t3tools/shared/messageArtifactIdentity";
 import * as Effect from "effect/Effect";
 import * as Option from "effect/Option";
 import * as Stream from "effect/Stream";
@@ -150,6 +153,7 @@ export function createMessageSpeechSynthesisEnvironmentCommand<R, E>(
 export interface MessageSpeechThreadView {
   readonly recordings: ReadonlyMap<MessageId, MessageSpeechSynthesisResult>;
   readonly pending: ReadonlySet<MessageId>;
+  readonly summaries: ReadonlyMap<MessageId, MessageSummaryThreadEntry>;
 }
 
 export const toMessageSpeechThreadView = (
@@ -157,7 +161,24 @@ export const toMessageSpeechThreadView = (
 ): MessageSpeechThreadView => ({
   recordings: new Map(state.recordings.map((recording) => [recording.messageId, recording])),
   pending: new Set(state.pendingMessageIds),
+  summaries: new Map(state.summaries.map((summary) => [summary.messageId, summary])),
 });
+
+/**
+ * The message's stored summary from the thread state, only while it still
+ * summarizes `text` (the message text the client shows now).
+ */
+export const currentThreadMessageSummary = (
+  view: MessageSpeechThreadView | null | undefined,
+  messageId: MessageId,
+  text: string,
+): MessageSummaryResult | null => {
+  const entry = view?.summaries.get(messageId);
+  if (entry === undefined || entry.sourceTextHash !== messageArtifactTextHash(text.trim())) {
+    return null;
+  }
+  return { messageId: entry.messageId, summary: entry.summary, createdAt: entry.createdAt };
+};
 
 /**
  * Live listening state per thread, shared by every row of the thread: one

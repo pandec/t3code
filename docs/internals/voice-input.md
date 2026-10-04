@@ -12,8 +12,9 @@ text, and revision are captured before recording and checked before insertion, s
 a late transcript cannot overwrite a draft that was edited or replaced.
 
 A draft that receives a transcript carries `inputOrigin: "voice-transcription"`
-until its text is emptied; sends, queued edits and failure restores keep it with
-the message. The provider caution is added only at the provider boundary
+until its text is emptied; sends and failure restores keep it with the message,
+and a queued edit sends the draft's origin (null when retyped), so a dictated
+message that was emptied and retyped becomes typed. The provider caution is added only at the provider boundary
 ([InputOriginNotice](../../apps/server/src/orchestration-v2/InputOriginNotice.ts)),
 so stored and displayed text stays exactly what the user dictated.
 

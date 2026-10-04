@@ -7285,6 +7285,11 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
       const emitEvent = emit(events, command);
       const editedAttachments =
         command.attachments === undefined ? {} : { attachments: command.attachments };
+      // A null origin marks the edited text as typed, clearing a voice origin.
+      const withoutInputOrigin = <T extends { readonly inputOrigin?: unknown }>({
+        inputOrigin: _cleared,
+        ...rest
+      }: T) => rest;
       yield* emitEvent({
         type: "message.updated",
         threadId: command.threadId,
@@ -7293,7 +7298,7 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
         providerInstanceId: queuedRun.providerInstanceId,
         occurredAt: now,
         payload: {
-          ...queuedMessage,
+          ...(command.inputOrigin === null ? withoutInputOrigin(queuedMessage) : queuedMessage),
           text: command.text,
           ...editedAttachments,
           ...(command.context ? { context: command.context } : {}),
@@ -7310,7 +7315,7 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
           providerInstanceId: queuedRun.providerInstanceId,
           occurredAt: now,
           payload: {
-            ...queuedTurnItem,
+            ...(command.inputOrigin === null ? withoutInputOrigin(queuedTurnItem) : queuedTurnItem),
             text: command.text,
             ...editedAttachments,
             ...(command.context ? { context: command.context } : {}),

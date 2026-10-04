@@ -203,6 +203,8 @@ import { appAtomRegistry } from "../../state/atom-registry";
 import { environmentThreadShells, threadEnvironment } from "../../state/threads";
 import { useAtomCommand } from "../../state/use-atom-command";
 import { summarizeMessage } from "../../state/messageArtifacts";
+import { useEnvironmentQuery } from "../../state/query";
+import { messageSpeechThread } from "../../state/voice";
 import {
   AssistantMessageSpeechButton,
   AssistantSpeechPlayer,
@@ -214,6 +216,7 @@ import {
   rememberMessageSummary,
   subscribeMessageArtifactSession,
 } from "@t3tools/client-runtime/state/messageArtifacts";
+import { currentThreadMessageSummary } from "@t3tools/client-runtime/state/voice";
 import { useV2ItemSupport } from "../../state/v2-item-support";
 import {
   basename,
@@ -2016,7 +2019,17 @@ function AssistantMessageMeta(props: {
     readSession,
     readSession,
   );
-  const summary = session.summary;
+  // Stored summaries arrive with the thread's listening state.
+  const threadState = useEnvironmentQuery(
+    props.textToSpeechPersistentJobs
+      ? messageSpeechThread({ environmentId, input: { threadId: props.threadId } })
+      : null,
+  ).data;
+  const storedSummary = useMemo(
+    () => currentThreadMessageSummary(threadState, messageId, messageText),
+    [threadState, messageId, messageText],
+  );
+  const summary = session.summary ?? storedSummary;
   const showSummary = (summary !== null || props.summariesAvailable) && messageText.trim() !== "";
   const speech = useAssistantMessageSpeech({
     environmentId,

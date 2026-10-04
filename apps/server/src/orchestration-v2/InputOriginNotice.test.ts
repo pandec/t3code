@@ -46,7 +46,7 @@ const driver = ProviderDriverKind.make("codex");
 const instanceId = ProviderInstanceId.make("codex");
 const modelSelection = { instanceId, model: "test-model" };
 
-it.effect("carries voice origin through send, steer, queue and queued edits", () =>
+it.effect("carries voice origin through send, steer, queue and queued edits, and clears it", () =>
   Effect.scoped(
     Effect.gen(function* () {
       const cwd = yield* checkpointWorkspace("voice-origin");
@@ -205,12 +205,15 @@ it.effect("carries voice origin through send, steer, queue and queued edits", ()
           targetRunId: first.runId,
         });
         yield* sendVoice("queued", "then run tests", { type: "queue_after_active" });
+        yield* sendVoice("retyped", "and the docs", { type: "queue_after_active" });
         yield* worker.drain();
         assert.isTrue(steered[0]?.message.text.startsWith("also the lexer\n\n" + NOTICE_TAG));
 
         const queued = yield* orchestrator.getThreadProjection(threadId);
-        const queuedRun = queued.runs.find((run) => run.status === "queued");
+        const queuedRun = queued.runs.find((run) => run.userMessageId === "message:queued");
+        const retypedRun = queued.runs.find((run) => run.userMessageId === "message:retyped");
         assert.isDefined(queuedRun);
+        assert.isDefined(retypedRun);
         // An edit that does not name an origin keeps the dictated one.
         yield* orchestrator.dispatch({
           type: "queued-run.edit",
@@ -219,34 +222,59 @@ it.effect("carries voice origin through send, steer, queue and queued edits", ()
           runId: queuedRun.id,
           text: "then run all tests",
         });
+        // An edit with a null origin marks the retyped text as typed.
+        yield* orchestrator.dispatch({
+          type: "queued-run.edit",
+          commandId: CommandId.make("command:retype"),
+          threadId,
+          runId: retypedRun.id,
+          text: "and the README",
+          inputOrigin: null,
+        });
+        const retyped = yield* orchestrator.getThreadProjection(threadId);
+        assert.isUndefined(retyped.messages.find((m) => m.id === "message:retyped")?.inputOrigin);
 
-        const completed = yield* watch(
-          (event) =>
-            event.type === "run.updated" &&
-            event.payload.id === first.runId &&
-            event.payload.status === "waiting",
-        );
-        const projection = yield* orchestrator.getThreadProjection(threadId);
-        const turn = projection.providerTurns[0]!;
-        yield* Queue.offer(events, {
-          type: "provider_turn.updated",
-          driver,
-          providerTurn: { ...turn, status: "completed", completedAt: yield* DateTime.now },
-        });
-        yield* Queue.offer(events, {
-          type: "turn.terminal",
-          driver,
-          providerThreadId: turn.providerThreadId,
-          providerTurnId: turn.id,
-          runOrdinal: first.runOrdinal,
-          status: "completed",
-          failure: null,
-          threadDisposition: "reusable",
-        });
-        yield* Fiber.join(completed);
-        yield* worker.drain();
-        yield* orchestrator.resumeQueuedRuns;
-        yield* worker.drain();
+        /** Completes `turnInput`'s provider turn, then starts the next queued run and waits for it. */
+        const completeTurn = (turnInput: ProviderAdapterV2TurnInput) =>
+          Effect.gen(function* () {
+            const completed = yield* watch(
+              (event) =>
+                event.type === "run.updated" &&
+                event.payload.id === turnInput.runId &&
+                event.payload.status === "waiting",
+            );
+            const projection = yield* orchestrator.getThreadProjection(threadId);
+            const turn = projection.providerTurns.find(
+              (candidate) => candidate.runAttemptId === turnInput.attemptId,
+            )!;
+            yield* Queue.offer(events, {
+              type: "provider_turn.updated",
+              driver,
+              providerTurn: { ...turn, status: "completed", completedAt: yield* DateTime.now },
+            });
+            yield* Queue.offer(events, {
+              type: "turn.terminal",
+              driver,
+              providerThreadId: turn.providerThreadId,
+              providerTurnId: turn.id,
+              runOrdinal: turnInput.runOrdinal,
+              status: "completed",
+              failure: null,
+              threadDisposition: "reusable",
+            });
+            yield* Fiber.join(completed);
+            yield* worker.drain();
+            const nextRunning = yield* watch(
+              (event) =>
+                event.type === "provider-turn.updated" &&
+                event.payload.status === "running" &&
+                event.payload.runAttemptId !== turnInput.attemptId,
+            );
+            yield* orchestrator.resumeQueuedRuns;
+            yield* worker.drain();
+            yield* Fiber.join(nextRunning);
+          });
+        yield* completeTurn(first);
 
         assert.equal(started.length, 2);
         assert.isTrue(started[1]!.message.text.startsWith("then run all tests\n\n" + NOTICE_TAG));
@@ -254,6 +282,16 @@ it.effect("carries voice origin through send, steer, queue and queued edits", ()
         const queuedMessage = final.messages.find((m) => m.id === "message:queued");
         assert.equal(queuedMessage?.text, "then run all tests");
         assert.equal(queuedMessage?.inputOrigin, "voice-transcription");
+
+        yield* completeTurn(started[1]!);
+        assert.equal(started.length, 3);
+        assert.equal(started[2]!.message.text, "and the README");
+        const retypedItem = (yield* orchestrator.getThreadProjection(threadId)).turnItems.find(
+          (item) => item.type === "user_message" && item.messageId === "message:retyped",
+        );
+        assert.isTrue(
+          retypedItem?.type === "user_message" && retypedItem.inputOrigin === undefined,
+        );
       }).pipe(
         Effect.provide(
           makeOrchestratorV2ReplayLayerWithRegistry(

@@ -8473,12 +8473,10 @@ export default function ChatView(props: ChatViewProps) {
             edit: {
               messageId: editingQueuedRun.messageId,
               attachments: uploads,
-              ...(() => {
-                const inputOrigin = useComposerDraftStore
-                  .getState()
-                  .getComposerDraft(composerDraftTarget)?.inputOrigin;
-                return inputOrigin ? { inputOrigin } : {};
-              })(),
+              // null = typed: clears a voice origin the edit removed.
+              inputOrigin:
+                useComposerDraftStore.getState().getComposerDraft(composerDraftTarget)
+                  ?.inputOrigin ?? null,
               context: {
                 version: 1,
                 records: [

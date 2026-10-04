@@ -528,7 +528,8 @@ export function useThreadComposerState() {
             messageId: edit.messageId,
             attachments: payload.attachments,
             ...(payload.context ? { context: payload.context } : {}),
-            ...(draft.inputOrigin ? { inputOrigin: draft.inputOrigin } : {}),
+            // null = typed: clears a voice origin the edit removed.
+            inputOrigin: draft.inputOrigin ?? null,
           },
         },
       });

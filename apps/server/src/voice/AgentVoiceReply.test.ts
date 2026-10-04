@@ -336,6 +336,25 @@ it.layer(TestLayer)("agent voice replies", (it) => {
     }),
   );
 
+  it.effect("refuses to stage for an attempt that was already finalized", () =>
+    Effect.gen(function* () {
+      const seeded = yield* seedRunningThread("voice-closed");
+      // The projection still shows the attempt running, as it does while
+      // finalization races a stage call that is synthesizing.
+      yield* setRunningAttempt(seeded, "attempt-1");
+      const { voice } = yield* makeServices();
+      yield* finalize(voice, seeded, "attempt-1", false);
+
+      const late = yield* Effect.flip(
+        voice.stage({ threadId: seeded.threadId, script: "Too late." }),
+      );
+
+      assert.equal(late.reason, "turn_unavailable");
+      assert.deepEqual(yield* threadSpeechFiles("voice-closed"), []);
+      assert.deepEqual((yield* finalize(voice, seeded, "attempt-1", true)).events, []);
+    }),
+  );
+
   it.effect("refuses to stage without a running attempt or when it changes mid-synthesis", () =>
     Effect.gen(function* () {
       const store = yield* ProjectionStore.ProjectionStoreV2;

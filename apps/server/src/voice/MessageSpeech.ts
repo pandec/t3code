@@ -37,6 +37,7 @@ import {
   currentArtifactSourceCondition,
   findMessageArtifactSource,
 } from "../messageArtifacts/source.ts";
+import { readThreadSummaries } from "../messageArtifacts/threadSummaries.ts";
 import { ServerSettingsService } from "../serverSettings.ts";
 import { estimateSpeechDurationMs } from "./speechDuration.ts";
 import { getTtsCharacterLimit, resolveListeningTtsProfile } from "./ttsProfile.ts";
@@ -175,6 +176,14 @@ export interface MessageSpeechShape {
   ) => Effect.Effect<MessageSpeechSynthesisResult, MessageSpeechError>;
   /** The thread's listening state now, then again after every change to it. */
   readonly streamThread: (threadId: ThreadId) => Stream.Stream<MessageSpeechThreadState>;
+  /** Re-sends the thread's state to its subscribers, e.g. after a summary was stored. */
+  readonly refreshThread: (threadId: ThreadId) => Effect.Effect<void>;
+  /**
+   * Removes the recordings (audio files included), speech scripts and
+   * summaries of every deleted thread. Idempotent; keyed on the projection's
+   * deletion mark, so it also catches up after a crash.
+   */
+  readonly purgeDeletedThreads: Effect.Effect<void, MessageSpeechError>;
   /**
    * Stores the agent's own recording as the message's speech. It replaces a
    * listening version (whose audio is deleted) and is never replaced by one.
@@ -531,6 +540,9 @@ export const make = Effect.gen(function* () {
       FROM fork_message_speech AS speech
       INNER JOIN orchestration_v2_projection_messages AS message
         ON message.message_id = speech.message_id
+      INNER JOIN orchestration_v2_projection_threads AS thread
+        ON thread.thread_id = speech.thread_id
+        AND thread.deleted_at IS NULL
       WHERE speech.thread_id = ${threadId}
       ORDER BY speech.created_at, speech.message_id
     `;
@@ -545,7 +557,13 @@ export const make = Effect.gen(function* () {
     const pendingMessageIds = [...jobs]
       .filter(([, job]) => job.threadId === threadId)
       .map(([messageId]) => MessageId.make(messageId));
-    const state: MessageSpeechThreadState = { threadId, recordings, pendingMessageIds };
+    const summaries = yield* readThreadSummaries(sql, threadId);
+    const state: MessageSpeechThreadState = {
+      threadId,
+      recordings,
+      pendingMessageIds,
+      summaries,
+    };
     return state;
   });
 
@@ -640,7 +658,41 @@ export const make = Effect.gen(function* () {
     yield* publishChange(threadId);
   });
 
-  return MessageSpeech.of({ available, synthesize, streamThread, attachAgentRecording });
+  const purgeDeletedThreads = Effect.gen(function* () {
+    const speechIds = yield* sql<{ readonly speechId: string }>`
+      SELECT speech.speech_id AS "speechId"
+      FROM fork_message_speech AS speech
+      INNER JOIN orchestration_v2_projection_threads AS thread
+        ON thread.thread_id = speech.thread_id
+      WHERE thread.deleted_at IS NOT NULL
+    `;
+    // Files first: a crash in between leaves rows that the next pass retries.
+    yield* Effect.forEach(speechIds, (row) => deleteSpeechFile(row.speechId), { discard: true });
+    yield* sql`
+      DELETE FROM fork_message_speech WHERE thread_id IN (
+        SELECT thread_id FROM orchestration_v2_projection_threads WHERE deleted_at IS NOT NULL
+      )
+    `;
+    yield* sql`
+      DELETE FROM fork_message_speech_scripts WHERE thread_id IN (
+        SELECT thread_id FROM orchestration_v2_projection_threads WHERE deleted_at IS NOT NULL
+      )
+    `;
+    yield* sql`
+      DELETE FROM fork_message_summaries WHERE thread_id IN (
+        SELECT thread_id FROM orchestration_v2_projection_threads WHERE deleted_at IS NOT NULL
+      )
+    `;
+  }).pipe(Effect.mapError(storageError), Effect.withSpan("MessageSpeech.purgeDeletedThreads"));
+
+  return MessageSpeech.of({
+    available,
+    synthesize,
+    streamThread,
+    refreshThread: publishChange,
+    purgeDeletedThreads,
+    attachAgentRecording,
+  });
 });
 
 export const layer = Layer.effect(MessageSpeech, make);

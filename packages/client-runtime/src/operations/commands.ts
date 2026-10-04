@@ -251,8 +251,8 @@ export interface EditQueuedRunInput extends ThreadCommandInput {
     readonly messageId: MessageId;
     readonly attachments: ReadonlyArray<ChatAttachment | UploadChatAttachment>;
     readonly context?: import("@t3tools/contracts").OrchestrationMessageContext;
-    /** Omitted = keep the queued message's origin. */
-    readonly inputOrigin?: import("@t3tools/contracts").MessageInputOrigin;
+    /** Omitted = keep the queued message's origin; null = typed (clears it). */
+    readonly inputOrigin?: import("@t3tools/contracts").MessageInputOrigin | null;
   };
 }
 
@@ -1002,7 +1002,7 @@ export const editQueuedRun = Effect.fn("EnvironmentCommands.editQueuedRun")(func
     runId: input.runId,
     text: input.text,
     ...(attachments === undefined ? {} : { attachments }),
-    ...(input.edit?.inputOrigin ? { inputOrigin: input.edit.inputOrigin } : {}),
+    ...(input.edit?.inputOrigin !== undefined ? { inputOrigin: input.edit.inputOrigin } : {}),
     ...(input.edit?.context && attachments
       ? {
           context: remapComposerContextAttachments(

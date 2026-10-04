@@ -20,9 +20,11 @@ export interface MessageArtifactSource {
   readonly cwd: string | null;
 }
 
-export const isUsableArtifactSource = (
-  source: MessageArtifactSource | undefined,
-): source is MessageArtifactSource =>
+export const isUsableArtifactSource = <
+  Source extends Pick<MessageArtifactSource, "role" | "streaming" | "text">,
+>(
+  source: Source | undefined,
+): source is Source =>
   source !== undefined &&
   source.role === "assistant" &&
   source.streaming === 0 &&

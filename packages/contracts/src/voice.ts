@@ -254,24 +254,6 @@ export const MessageSpeechSynthesisResult = Schema.Struct({
 });
 export type MessageSpeechSynthesisResult = typeof MessageSpeechSynthesisResult.Type;
 
-export const MessageSpeechThreadInput = Schema.Struct({
-  threadId: ThreadId,
-});
-export type MessageSpeechThreadInput = typeof MessageSpeechThreadInput.Type;
-
-/**
- * A thread's listening state as the server owns it: every current recording
- * (stale ones, whose message text changed since, are left out) and the
- * messages whose listening version is being prepared right now. Streamed
- * whole after every change, so each connected client shows the same state.
- */
-export const MessageSpeechThreadState = Schema.Struct({
-  threadId: ThreadId,
-  recordings: Schema.Array(MessageSpeechSynthesisResult),
-  pendingMessageIds: Schema.Array(MessageId),
-});
-export type MessageSpeechThreadState = typeof MessageSpeechThreadState.Type;
-
 export const AGENT_VOICE_REPLY_MAX_SCRIPT_CHARS = 10_000;
 
 /**
@@ -371,3 +353,34 @@ export const MessageSummaryResult = Schema.Struct({
   createdAt: IsoDateTime,
 });
 export type MessageSummaryResult = typeof MessageSummaryResult.Type;
+
+/**
+ * A stored summary as thread state carries it. `sourceTextHash` is the
+ * messageArtifactTextHash of the trimmed text it summarizes, so a client can
+ * drop it as soon as the message text it shows differs.
+ */
+export const MessageSummaryThreadEntry = Schema.Struct({
+  ...MessageSummaryResult.fields,
+  sourceTextHash: TrimmedNonEmptyString,
+});
+export type MessageSummaryThreadEntry = typeof MessageSummaryThreadEntry.Type;
+
+export const MessageSpeechThreadInput = Schema.Struct({
+  threadId: ThreadId,
+});
+export type MessageSpeechThreadInput = typeof MessageSpeechThreadInput.Type;
+
+/**
+ * A thread's listening state as the server owns it: every current recording
+ * and stored summary (stale ones, whose message text changed since, are left
+ * out) and the messages whose listening version is being prepared right now.
+ * Streamed whole after every change, so each connected client shows the same
+ * state.
+ */
+export const MessageSpeechThreadState = Schema.Struct({
+  threadId: ThreadId,
+  recordings: Schema.Array(MessageSpeechSynthesisResult),
+  pendingMessageIds: Schema.Array(MessageId),
+  summaries: Schema.Array(MessageSummaryThreadEntry),
+});
+export type MessageSpeechThreadState = typeof MessageSpeechThreadState.Type;

@@ -2646,10 +2646,12 @@ function AssistantMessageMeta({
   const ctx = use(TimelineRowCtx);
   const summary = useAssistantMessageSummary({
     environmentId: ctx.activeThreadEnvironmentId,
+    threadId: ctx.threadRef?.threadId ?? null,
     messageId: message.id,
     text: message.text,
     streaming: message.streaming,
     available: ctx.messageSummariesAvailable,
+    persistentJobs: ctx.textToSpeechPersistentJobs,
   });
   const speech = useAssistantMessageSpeech({
     environmentId: ctx.activeThreadEnvironmentId,
