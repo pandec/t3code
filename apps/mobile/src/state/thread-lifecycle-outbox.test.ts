@@ -24,6 +24,7 @@ import {
   encodeThreadLifecycleIntent,
   mergePendingArchivedThreads,
   resolveThreadLifecycleOutboxAction,
+  threadLifecycleActionUsesOutbox,
   threadLifecycleIntentKey,
   threadLifecycleRevisionRequiresDispatch,
   type ThreadLifecycleIntent,
@@ -41,6 +42,7 @@ function intent(overrides: Partial<ThreadLifecycleIntent> = {}): ThreadLifecycle
     desiredArchived: true,
     requiresDispatch: false,
     dispatchAttempted: false,
+    dispatchedAction: null,
     commandId: CommandId.make("command-archive"),
     createdAt: "2026-08-20T10:02:00.000Z",
     thread: makeRawThreadShell({ id: threadId, title: "Queued lifecycle thread" }),
@@ -135,15 +137,46 @@ describe("thread lifecycle outbox model", () => {
   it("reverses a sent archive by unarchiving or cancelling the deferred request", () => {
     const base = { ...live, desiredArchived: false };
     expect(resolveThreadLifecycleOutboxAction({ ...base, thread: undefined })).toBe("unarchive");
-    expect(resolveThreadLifecycleOutboxAction({ ...base, thread: pendingArchive })).toBe(
-      "cancel-archive",
-    );
+    expect(
+      resolveThreadLifecycleOutboxAction({
+        ...base,
+        thread: pendingArchive,
+        requiresDispatch: true,
+      }),
+    ).toBe("cancel-archive");
+    // A pending archive none of our revisions sent (e.g. "Archive when done") stays.
+    expect(resolveThreadLifecycleOutboxAction({ ...base, thread: pendingArchive })).toBe("remove");
     // Undo before the archive was ever sent: nothing to do.
     expect(resolveThreadLifecycleOutboxAction({ ...base, thread: idle })).toBe("remove");
     // The archive may have landed without the shell showing it yet.
     expect(
       resolveThreadLifecycleOutboxAction({ ...base, thread: idle, requiresDispatch: true }),
     ).toBe("unarchive");
+  });
+
+  it("routes archive through a pending intent even while connected", () => {
+    const route = (action: string, environmentConnected: boolean, hasIntent: boolean) =>
+      threadLifecycleActionUsesOutbox({ action, environmentConnected, hasIntent });
+    expect(route("archive", false, false)).toBe(true);
+    expect(route("archive", true, false)).toBe(false);
+    expect(route("archive", true, true)).toBe(true);
+    expect(route("unarchive", true, true)).toBe(true);
+    expect(route("unarchive", true, false)).toBe(false);
+    expect(route("delete", false, true)).toBe(false);
+
+    // The revised pending Undo now archives instead of unarchiving.
+    const undo = intent({
+      desiredArchived: false,
+      requiresDispatch: true,
+      dispatchAttempted: true,
+    });
+    const revised = intent({
+      requiresDispatch: threadLifecycleRevisionRequiresDispatch(undo),
+      commandId: CommandId.make("command-rearchive"),
+    });
+    expect(resolveThreadLifecycleOutboxAction({ ...live, ...revised, thread: idle })).toBe(
+      "archive",
+    );
   });
 
   it("requires a reversal dispatch only after the prior revision may have been sent", () => {
@@ -228,7 +261,7 @@ describe("thread lifecycle outbox manager", () => {
 });
 
 describe("thread lifecycle delivery", () => {
-  function harness(actions: ReadonlyArray<ThreadLifecycleOutboxAction>) {
+  function harness(initialActions: ReadonlyArray<ThreadLifecycleOutboxAction>) {
     const registry = AtomRegistry.make();
     const manager = createThreadLifecycleOutboxManager({ registry, storage: memoryStorage() });
     const dispatched: Array<{
@@ -236,7 +269,10 @@ describe("thread lifecycle delivery", () => {
       readonly intent: ThreadLifecycleIntent;
     }> = [];
     const settled: ThreadLifecycleIntent[] = [];
+    let actions = initialActions;
     let readCount = 0;
+    let threadActive = false;
+    let nextCommandId = 0;
     let result: AsyncResult.Success<unknown, unknown> | AsyncResult.Failure<unknown, unknown> =
       AsyncResult.success(undefined);
     return {
@@ -247,6 +283,14 @@ describe("thread lifecycle delivery", () => {
       setResult: (next: typeof result) => {
         result = next;
       },
+      setActions: (next: ReadonlyArray<ThreadLifecycleOutboxAction>) => {
+        actions = next;
+        readCount = 0;
+      },
+      setThreadActive: (next: boolean) => {
+        threadActive = next;
+      },
+      current: () => registry.get(manager.intentsByThreadKeyAtom)[key],
       deps: {
         manager,
         loadMessageOutbox: async () => true,
@@ -261,6 +305,8 @@ describe("thread lifecycle delivery", () => {
         onSettled: (candidate: ThreadLifecycleIntent) => {
           settled.push(candidate);
         },
+        threadActive: () => threadActive,
+        newCommandId: () => CommandId.make(`command-rotated-${++nextCommandId}`),
       },
     };
   }
@@ -330,5 +376,99 @@ describe("thread lifecycle delivery", () => {
     expect(test.registry.get(test.manager.intentsByThreadKeyAtom)[key]?.dispatchAttempted).toBe(
       true,
     );
+  });
+
+  const rejected = (message: string) =>
+    AsyncResult.failure(Cause.fail(new OrchestrationDispatchCommandError({ message })));
+
+  it("retries an archive rejected while the thread has queued work, under a fresh id", async () => {
+    const test = harness(["archive"]);
+    const queued = intent();
+    await test.manager.enqueue(queued);
+    test.setResult(rejected("Queued messages are waiting to run."));
+    test.setThreadActive(true);
+
+    expect(await deliverThreadLifecycleIntent(queued, test.deps)).toBe(false);
+    const retained = test.current();
+    expect(retained).toMatchObject({ desiredArchived: true, dispatchedAction: null });
+    expect(retained?.commandId).not.toBe(queued.commandId);
+    expect(test.settled).toEqual([]);
+
+    // Once the thread is no longer active, a rejection makes the intent moot.
+    test.setThreadActive(false);
+    test.setActions(["archive"]);
+    expect(await deliverThreadLifecycleIntent(retained!, test.deps)).toBe(true);
+    expect(test.current()).toBeUndefined();
+  });
+
+  it("unarchives under a fresh id when a cancel is rejected because the archive landed", async () => {
+    const test = harness(["cancel-archive"]);
+    const undo = intent({ desiredArchived: false, requiresDispatch: true });
+    await test.manager.enqueue(undo);
+    test.setResult(rejected("No archive is pending."));
+
+    expect(await deliverThreadLifecycleIntent(undo, test.deps)).toBe(false);
+    const rotated = test.current();
+    expect(rotated?.desiredArchived).toBe(false);
+    expect(rotated?.commandId).not.toBe(undo.commandId);
+
+    // The shell now shows the thread archived.
+    test.setActions(["unarchive"]);
+    test.setResult(AsyncResult.success(undefined));
+    expect(await deliverThreadLifecycleIntent(rotated!, test.deps)).toBe(true);
+    expect(test.dispatched.map(({ action, intent }) => [action, intent.commandId])).toEqual([
+      ["cancel-archive", undo.commandId],
+      ["unarchive", rotated?.commandId],
+    ]);
+    expect(test.current()).toBeUndefined();
+  });
+
+  it("rotates the id before sending a different action after an unobserved cancel", async () => {
+    const test = harness(["cancel-archive"]);
+    const undo = intent({ desiredArchived: false, requiresDispatch: true });
+    await test.manager.enqueue(undo);
+    test.setResult(
+      AsyncResult.failure(Cause.fail(new EnvironmentNotRegisteredError({ environmentId }))),
+    );
+    expect(await deliverThreadLifecycleIntent(undo, test.deps)).toBe(false);
+    const attempted = test.current();
+    expect(attempted).toMatchObject({
+      commandId: undo.commandId,
+      dispatchedAction: "cancel-archive",
+    });
+
+    // Reconnected: the archive landed meanwhile, so the action is now unarchive.
+    test.setActions(["unarchive"]);
+    test.setResult(AsyncResult.success(undefined));
+    expect(await deliverThreadLifecycleIntent(attempted!, test.deps)).toBe(false);
+    expect(test.dispatched).toHaveLength(1);
+    const rotated = test.current();
+    expect(rotated?.commandId).not.toBe(undo.commandId);
+
+    expect(await deliverThreadLifecycleIntent(rotated!, test.deps)).toBe(true);
+    expect(test.dispatched.at(-1)).toMatchObject({
+      action: "unarchive",
+      intent: { commandId: rotated?.commandId },
+    });
+    expect(test.current()).toBeUndefined();
+  });
+
+  it("drops a superseded Undo when the user archives again", async () => {
+    const test = harness(["unarchive"]);
+    const undo = intent({
+      desiredArchived: false,
+      requiresDispatch: true,
+      dispatchAttempted: true,
+    });
+    await test.manager.enqueue(undo);
+    const rearchive = intent({
+      requiresDispatch: threadLifecycleRevisionRequiresDispatch(undo),
+      commandId: CommandId.make("command-rearchive"),
+    });
+    await test.manager.enqueue(rearchive);
+
+    expect(await deliverThreadLifecycleIntent(undo, test.deps)).toBe(true);
+    expect(test.dispatched).toEqual([]);
+    expect(test.current()).toBe(rearchive);
   });
 });

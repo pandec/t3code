@@ -21,7 +21,10 @@ import {
   enqueueThreadLifecycleIntent,
   threadLifecycleOutboxManager,
 } from "../../state/thread-lifecycle-outbox";
-import { threadLifecycleRevisionRequiresDispatch } from "../../state/thread-lifecycle-outbox-model";
+import {
+  threadLifecycleActionUsesOutbox,
+  threadLifecycleRevisionRequiresDispatch,
+} from "../../state/thread-lifecycle-outbox-model";
 import { environmentThreadShells, threadEnvironment } from "../../state/threads";
 import { useRemoteConnectionStatus } from "../../state/use-remote-environment-registry";
 import { queuedThreadKeysAtom } from "../../state/use-thread-outbox";
@@ -171,7 +174,8 @@ function useThreadActionExecutor(
         }
 
         // Fork: archive while disconnected queues a durable intent applied on
-        // reconnect; unarchiving a still-pending one revises it (Undo).
+        // reconnect. Archive/unarchive revise any existing intent (Undo),
+        // whatever the connection state, so a direct command never races it.
         const existingIntent = appAtomRegistry.get(
           threadLifecycleOutboxManager.intentsByThreadKeyAtom,
         )[key];
@@ -181,8 +185,11 @@ function useThreadActionExecutor(
             environment.connectionState === "connected",
         );
         if (
-          (action === "archive" && !environmentConnected) ||
-          (action === "unarchive" && existingIntent !== undefined)
+          threadLifecycleActionUsesOutbox({
+            action,
+            environmentConnected,
+            hasIntent: existingIntent !== undefined,
+          })
         ) {
           const desiredArchived = action === "archive";
           if (existingIntent?.desiredArchived === desiredArchived) return true;
@@ -196,6 +203,7 @@ function useThreadActionExecutor(
                   desiredArchived,
                   requiresDispatch: threadLifecycleRevisionRequiresDispatch(existingIntent),
                   dispatchAttempted: false,
+                  dispatchedAction: null,
                   commandId: CommandId.make(uuidv4()),
                   createdAt: new Date().toISOString(),
                   thread: existingIntent?.thread ?? thread.source,

@@ -1,20 +1,22 @@
 import type { AtomCommandResult } from "@t3tools/client-runtime/state/runtime";
+import type { CommandId } from "@t3tools/contracts";
 import * as Cause from "effect/Cause";
 import { AsyncResult } from "effect/unstable/reactivity";
 
 import type { ThreadLifecycleOutboxManager } from "./thread-lifecycle-outbox-manager";
 import {
   resolveThreadLifecycleOutboxFailureAction,
+  type ThreadLifecycleDispatchAction,
   type ThreadLifecycleIntent,
   type ThreadLifecycleOutboxAction,
 } from "./thread-lifecycle-outbox-model";
 
-export type ThreadLifecycleDispatchAction = Exclude<ThreadLifecycleOutboxAction, "wait" | "remove">;
+export type { ThreadLifecycleDispatchAction };
 
 export interface ThreadLifecycleDeliveryDeps {
   readonly manager: Pick<
     ThreadLifecycleOutboxManager,
-    "confirmCurrent" | "markDispatchAttempted" | "removeIfCurrent"
+    "confirmCurrent" | "markDispatchAttempted" | "rotateCommandId" | "removeIfCurrent"
   >;
   /** Same-thread messages queued earlier must be visible before deciding. */
   readonly loadMessageOutbox: () => Promise<boolean>;
@@ -25,6 +27,9 @@ export interface ThreadLifecycleDeliveryDeps {
     intent: ThreadLifecycleIntent,
   ) => Promise<AtomCommandResult<unknown, unknown>>;
   readonly onSettled: (intent: ThreadLifecycleIntent) => void;
+  /** Whether the thread's live shell shows queued or running work. */
+  readonly threadActive: (intent: ThreadLifecycleIntent) => boolean;
+  readonly newCommandId: () => CommandId;
 }
 
 /**
@@ -51,6 +56,21 @@ export async function deliverThreadLifecycleIntent(
     }
   };
 
+  // Resolves false so the retry backs off and re-reads state under the new id.
+  const rotate = async (candidate: ThreadLifecycleIntent): Promise<boolean> => {
+    try {
+      await deps.manager.rotateCommandId(candidate, deps.newCommandId());
+    } catch (error) {
+      console.warn("[thread-lifecycle-outbox] failed to rotate command id", {
+        environmentId: candidate.environmentId,
+        threadId: candidate.threadId,
+        commandId: candidate.commandId,
+        error,
+      });
+    }
+    return false;
+  };
+
   if (!(await deps.loadMessageOutbox())) return false;
   if (!(await deps.manager.confirmCurrent(intent))) return true;
   const action = deps.readAction(intent);
@@ -61,7 +81,7 @@ export async function deliverThreadLifecycleIntent(
   // this command's outcome is never observed.
   let attempted: ThreadLifecycleIntent | null;
   try {
-    attempted = await deps.manager.markDispatchAttempted(intent);
+    attempted = await deps.manager.markDispatchAttempted(intent, action);
     if (attempted !== null && !(await deps.manager.confirmCurrent(attempted))) attempted = null;
   } catch (error) {
     console.warn("[thread-lifecycle-outbox] failed to persist dispatch attempt", {
@@ -77,6 +97,11 @@ export async function deliverThreadLifecycleIntent(
   const finalAction = deps.readAction(attempted);
   if (finalAction === "wait") return true;
   if (finalAction === "remove") return removeCurrent(attempted);
+  // This id is bound to the action it was first sent as (e.g. a cancel whose
+  // response was lost, now an unarchive); the server would answer from its receipt.
+  if (attempted.dispatchedAction !== null && attempted.dispatchedAction !== finalAction) {
+    return rotate(attempted);
+  }
 
   const result = await deps.dispatch(finalAction, attempted);
   if (AsyncResult.isSuccess(result)) {
@@ -86,6 +111,8 @@ export async function deliverThreadLifecycleIntent(
   const failureAction = resolveThreadLifecycleOutboxFailureAction({
     error: Cause.squash(result.cause),
     interrupted: Cause.hasInterruptsOnly(result.cause),
+    action: finalAction,
+    threadActive: deps.threadActive(attempted),
   });
   console.warn("[thread-lifecycle-outbox] lifecycle delivery failed", {
     environmentId: attempted.environmentId,
@@ -96,6 +123,7 @@ export async function deliverThreadLifecycleIntent(
     cause: result.cause,
   });
   if (failureAction === "retry") return false;
+  if (failureAction === "rotate") return rotate(attempted);
   deps.onSettled(attempted);
   return removeCurrent(attempted);
 }

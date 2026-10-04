@@ -1,10 +1,11 @@
-import { EnvironmentId, ThreadId } from "@t3tools/contracts";
+import { type CommandId, EnvironmentId, ThreadId } from "@t3tools/contracts";
 import * as Schema from "effect/Schema";
 import { Atom, type AtomRegistry } from "effect/unstable/reactivity";
 
 import {
   groupThreadLifecycleIntents,
   threadLifecycleIntentKey,
+  type ThreadLifecycleDispatchAction,
   type ThreadLifecycleIntent,
 } from "./thread-lifecycle-outbox-model";
 
@@ -21,6 +22,7 @@ export class ThreadLifecycleOutboxManagerError extends Schema.TaggedError<Thread
       "load",
       "enqueue",
       "mark-dispatch-attempted",
+      "rotate-command-id",
       "remove",
       "clear-environment-load",
       "clear-environment-remove",
@@ -137,13 +139,14 @@ export function createThreadLifecycleOutboxManager(options: ThreadLifecycleOutbo
 
   const markDispatchAttempted = (
     intent: ThreadLifecycleIntent,
+    action: ThreadLifecycleDispatchAction,
   ): Promise<ThreadLifecycleIntent | null> =>
     serialize(async () => {
       const key = threadLifecycleIntentKey(intent.environmentId, intent.threadId);
       const current = currentIntents()[key];
       if (current?.commandId !== intent.commandId) return null;
-      if (current.dispatchAttempted) return current;
-      const attempted = { ...current, dispatchAttempted: true };
+      if (current.dispatchAttempted && current.dispatchedAction !== null) return current;
+      const attempted = { ...current, dispatchAttempted: true, dispatchedAction: action };
       try {
         await options.storage.write(attempted);
       } catch (cause) {
@@ -157,6 +160,41 @@ export function createThreadLifecycleOutboxManager(options: ThreadLifecycleOutbo
       if (currentIntents()[key]?.commandId !== intent.commandId) return null;
       setIntents({ ...currentIntents(), [key]: attempted });
       return attempted;
+    });
+
+  /**
+   * Gives the current revision a never-used command id, so a different action
+   * (or a retry after a rejection) is not answered by the old id's receipt.
+   * The revision stays attempted: its earlier command may have run.
+   */
+  const rotateCommandId = (
+    intent: ThreadLifecycleIntent,
+    commandId: CommandId,
+  ): Promise<ThreadLifecycleIntent | null> =>
+    serialize(async () => {
+      const key = threadLifecycleIntentKey(intent.environmentId, intent.threadId);
+      const current = currentIntents()[key];
+      if (current?.commandId !== intent.commandId) return null;
+      const rotated: ThreadLifecycleIntent = {
+        ...current,
+        commandId,
+        requiresDispatch: true,
+        dispatchAttempted: true,
+        dispatchedAction: null,
+      };
+      try {
+        await options.storage.write(rotated);
+      } catch (cause) {
+        throw new ThreadLifecycleOutboxManagerError({
+          operation: "rotate-command-id",
+          environmentId: intent.environmentId,
+          threadId: intent.threadId,
+          cause,
+        });
+      }
+      if (currentIntents()[key]?.commandId !== intent.commandId) return null;
+      setIntents({ ...currentIntents(), [key]: rotated });
+      return rotated;
     });
 
   const removeIfCurrent = (intent: ThreadLifecycleIntent): Promise<boolean> =>
@@ -239,6 +277,7 @@ export function createThreadLifecycleOutboxManager(options: ThreadLifecycleOutbo
     enqueue,
     confirmCurrent,
     markDispatchAttempted,
+    rotateCommandId,
     removeIfCurrent,
     clearEnvironment,
   };

@@ -1,14 +1,16 @@
 import { useAtomValue } from "@effect/atom-react";
 import type { EnvironmentPresentation } from "@t3tools/client-runtime/connection";
+import { threadRuntimeIsActive } from "@t3tools/client-runtime/state/models";
 import type {
   EnvironmentShellStatus,
   EnvironmentThreadShell,
 } from "@t3tools/client-runtime/state/shell";
-import type { CommandId, EnvironmentId } from "@t3tools/contracts";
+import { CommandId, type EnvironmentId } from "@t3tools/contracts";
 import { Atom } from "effect/unstable/reactivity";
 import { useEffect, useRef, useState } from "react";
 
 import { refreshArchivedThreadsForEnvironment } from "../features/archive/useArchivedThreadSnapshots";
+import { uuidv4 } from "../lib/uuid";
 import { appAtomRegistry } from "./atom-registry";
 import { environmentPresentations } from "./presentation";
 import { environmentShell } from "./shell";
@@ -66,6 +68,17 @@ const threadLifecycleOutboxInputsAtom = Atom.make((get) => {
 
 type ThreadLifecycleOutboxInputs = Atom.Type<typeof threadLifecycleOutboxInputsAtom>;
 
+function liveThread(inputs: ThreadLifecycleOutboxInputs, intent: ThreadLifecycleIntent) {
+  return inputs.threads.find(
+    (thread) => thread.environmentId === intent.environmentId && thread.id === intent.threadId,
+  );
+}
+
+/** Backoff follows the user's revision across command-id rotations. */
+function retryKey(threadKey: string, intent: ThreadLifecycleIntent): string {
+  return `${threadKey}@${intent.createdAt}`;
+}
+
 function resolveIntentAction(
   inputs: ThreadLifecycleOutboxInputs,
   intent: ThreadLifecycleIntent,
@@ -76,9 +89,7 @@ function resolveIntentAction(
       inputs.presentations.get(intent.environmentId)?.connection.phase === "connected",
     shellStatus: inputs.shellStatuses.get(intent.environmentId) ?? "empty",
     hasQueuedMessages: inputs.queuedThreadKeys.has(threadKey),
-    thread: inputs.threads.find(
-      (thread) => thread.environmentId === intent.environmentId && thread.id === intent.threadId,
-    ),
+    thread: liveThread(inputs, intent),
     desiredArchived: intent.desiredArchived,
     requiresDispatch: intent.requiresDispatch,
   });
@@ -99,9 +110,9 @@ export function useThreadLifecycleOutboxDrain(): void {
   const inputs = useAtomValue(threadLifecycleOutboxInputsAtom);
   const dispatchingCommandId = useAtomValue(dispatchingThreadLifecycleIntentCommandIdAtom);
   const [retryTick, setRetryTick] = useState(0);
-  const retryAttemptRef = useRef(new Map<CommandId, number>());
-  const retryNotBeforeRef = useRef(new Map<CommandId, number>());
-  const retryTimersRef = useRef(new Map<CommandId, ReturnType<typeof setTimeout>>());
+  const retryAttemptRef = useRef(new Map<string, number>());
+  const retryNotBeforeRef = useRef(new Map<string, number>());
+  const retryTimersRef = useRef(new Map<string, ReturnType<typeof setTimeout>>());
   const hydrationRetryAttemptRef = useRef(0);
 
   const { loadState } = inputs;
@@ -135,7 +146,8 @@ export function useThreadLifecycleOutboxDrain(): void {
     if (dispatchingCommandId !== null) return;
 
     for (const [threadKey, intent] of Object.entries(inputs.intents)) {
-      if ((retryNotBeforeRef.current.get(intent.commandId) ?? 0) > Date.now()) continue;
+      const intentRetryKey = retryKey(threadKey, intent);
+      if ((retryNotBeforeRef.current.get(intentRetryKey) ?? 0) > Date.now()) continue;
       if (resolveIntentAction(inputs, intent, threadKey) === "wait") continue;
 
       appAtomRegistry.set(dispatchingThreadLifecycleIntentCommandIdAtom, intent.commandId);
@@ -157,25 +169,29 @@ export function useThreadLifecycleOutboxDrain(): void {
           return (action === "unarchive" ? unarchive : cancelArchive)({ environmentId, input });
         },
         onSettled: (candidate) => refreshArchivedThreadsForEnvironment(candidate.environmentId),
+        threadActive: (candidate) =>
+          threadRuntimeIsActive(
+            liveThread(appAtomRegistry.get(threadLifecycleOutboxInputsAtom), candidate)?.runtime,
+          ),
+        newCommandId: () => CommandId.make(uuidv4()),
       })
         .then((handled) => {
-          const { commandId } = intent;
-          const previousTimer = retryTimersRef.current.get(commandId);
+          const previousTimer = retryTimersRef.current.get(intentRetryKey);
           if (previousTimer !== undefined) clearTimeout(previousTimer);
-          retryTimersRef.current.delete(commandId);
+          retryTimersRef.current.delete(intentRetryKey);
           if (handled) {
-            retryAttemptRef.current.delete(commandId);
-            retryNotBeforeRef.current.delete(commandId);
+            retryAttemptRef.current.delete(intentRetryKey);
+            retryNotBeforeRef.current.delete(intentRetryKey);
             return;
           }
-          const attempt = (retryAttemptRef.current.get(commandId) ?? 0) + 1;
-          retryAttemptRef.current.set(commandId, attempt);
+          const attempt = (retryAttemptRef.current.get(intentRetryKey) ?? 0) + 1;
+          retryAttemptRef.current.set(intentRetryKey, attempt);
           const delay = threadOutboxRetryDelayMs(attempt);
-          retryNotBeforeRef.current.set(commandId, Date.now() + delay);
+          retryNotBeforeRef.current.set(intentRetryKey, Date.now() + delay);
           retryTimersRef.current.set(
-            commandId,
+            intentRetryKey,
             setTimeout(() => {
-              retryTimersRef.current.delete(commandId);
+              retryTimersRef.current.delete(intentRetryKey);
               setRetryTick((current) => current + 1);
             }, delay),
           );

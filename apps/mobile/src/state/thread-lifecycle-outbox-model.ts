@@ -30,6 +30,9 @@ const ThreadLifecycleIntentSchema = Schema.Struct({
   desiredArchived: Schema.Boolean,
   requiresDispatch: Schema.Boolean,
   dispatchAttempted: Schema.Boolean.pipe(Schema.withDecodingDefault(Effect.succeed(false))),
+  dispatchedAction: Schema.NullOr(Schema.Literals(["archive", "unarchive", "cancel-archive"])).pipe(
+    Schema.withDecodingDefault(Effect.succeed(null)),
+  ),
   commandId: CommandId,
   createdAt: IsoDateTime,
   /** v2 shell source captured at enqueue, so the row renders while it is out of the shell. */
@@ -47,6 +50,8 @@ export interface ThreadLifecycleIntent {
   readonly requiresDispatch: boolean;
   /** Persisted before this revision's command may be sent. */
   readonly dispatchAttempted: boolean;
+  /** The action the attempt was persisted for; this command id is bound to it. */
+  readonly dispatchedAction: ThreadLifecycleDispatchAction | null;
   readonly commandId: CommandId;
   readonly createdAt: string;
   readonly thread: OrchestrationV2ThreadShell | null;
@@ -77,6 +82,20 @@ export function decodeThreadLifecycleIntent(value: unknown): ThreadLifecycleInte
 
 export const threadLifecycleIntentKey = scopedThreadKey;
 
+/**
+ * Archive/unarchive revise an existing intent whatever the connection state,
+ * so a direct command never races a pending reversal; with no intent, only a
+ * disconnected archive queues one.
+ */
+export function threadLifecycleActionUsesOutbox(input: {
+  readonly action: string;
+  readonly environmentConnected: boolean;
+  readonly hasIntent: boolean;
+}): boolean {
+  if (input.action === "archive") return !input.environmentConnected || input.hasIntent;
+  return input.action === "unarchive" && input.hasIntent;
+}
+
 export function threadLifecycleRevisionRequiresDispatch(
   previous: ThreadLifecycleIntent | undefined,
 ): boolean {
@@ -106,6 +125,8 @@ export type ThreadLifecycleOutboxAction =
   | "unarchive"
   | "cancel-archive";
 
+export type ThreadLifecycleDispatchAction = Exclude<ThreadLifecycleOutboxAction, "wait" | "remove">;
+
 export function resolveThreadLifecycleOutboxAction(input: {
   readonly environmentConnected: boolean;
   readonly shellStatus: EnvironmentShellStatus;
@@ -127,18 +148,30 @@ export function resolveThreadLifecycleOutboxAction(input: {
     if (archivePending) return "remove";
     return archived && !input.requiresDispatch ? "remove" : "archive";
   }
-  if (archivePending) return "cancel-archive";
+  // Only cancel a pending archive one of our earlier revisions may have created.
+  if (archivePending) return input.requiresDispatch ? "cancel-archive" : "remove";
   return !archived && !input.requiresDispatch ? "remove" : "unarchive";
 }
 
-export type ThreadLifecycleOutboxFailureAction = "retry" | "remove";
+export type ThreadLifecycleOutboxFailureAction = "retry" | "rotate" | "remove";
 
-/** Transport failures retry; a server rejection means the intent is moot. */
+/**
+ * Transport failures retry the same command. A rejected command id never runs
+ * again, so state-dependent rejections retry under a fresh id ("rotate"): a
+ * schedule is rejected while runs are queued, and a cancel once the archive
+ * has landed (the retry then unarchives). Other rejections make the intent moot.
+ */
 export function resolveThreadLifecycleOutboxFailureAction(input: {
   readonly error: unknown;
   readonly interrupted: boolean;
+  readonly action: ThreadLifecycleDispatchAction;
+  readonly threadActive: boolean;
 }): ThreadLifecycleOutboxFailureAction {
-  return input.interrupted || shouldRetryThreadOutboxDelivery(input.error) ? "retry" : "remove";
+  if (input.interrupted || shouldRetryThreadOutboxDelivery(input.error)) return "retry";
+  if (input.action === "cancel-archive" || (input.action === "archive" && input.threadActive)) {
+    return "rotate";
+  }
+  return "remove";
 }
 
 export interface ThreadLifecyclePresentation {
