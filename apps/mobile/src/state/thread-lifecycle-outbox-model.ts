@@ -46,7 +46,10 @@ export interface ThreadLifecycleIntent {
   readonly environmentId: EnvironmentId;
   readonly threadId: ThreadId;
   readonly desiredArchived: boolean;
-  /** Reversals dispatch when an earlier revision may have reached the server. */
+  /**
+   * An earlier revision in this chain may have reached the server, so its
+   * reversal must be sent; carries over until the intent is removed.
+   */
   readonly requiresDispatch: boolean;
   /** Persisted before this revision's command may be sent. */
   readonly dispatchAttempted: boolean;
@@ -99,7 +102,7 @@ export function threadLifecycleActionUsesOutbox(input: {
 export function threadLifecycleRevisionRequiresDispatch(
   previous: ThreadLifecycleIntent | undefined,
 ): boolean {
-  return previous?.dispatchAttempted === true;
+  return previous?.requiresDispatch === true || previous?.dispatchAttempted === true;
 }
 
 export function groupThreadLifecycleIntents(
@@ -141,16 +144,39 @@ export function resolveThreadLifecycleOutboxAction(input: {
   }
   const { thread } = input;
   // Live shells omit archived (and deleted) threads.
-  if (thread === undefined) return input.desiredArchived ? "remove" : "unarchive";
+  if (thread === undefined) {
+    if (!input.desiredArchived) return "unarchive";
+    // An earlier reversal may have landed without the shell showing it yet.
+    return input.requiresDispatch ? "archive" : "remove";
+  }
   const archived = thread.archivedAt !== null;
   const archivePending = !archived && thread.archiveRequest?.status === "pending";
   if (input.desiredArchived) {
-    if (archivePending) return "remove";
-    return archived && !input.requiresDispatch ? "remove" : "archive";
+    return (archived || archivePending) && !input.requiresDispatch ? "remove" : "archive";
   }
   // Only cancel a pending archive one of our earlier revisions may have created.
   if (archivePending) return input.requiresDispatch ? "cancel-archive" : "remove";
   return !archived && !input.requiresDispatch ? "remove" : "unarchive";
+}
+
+/**
+ * Holds an environment's intents back after one of our commands succeeds
+ * until the live shell has applied that command's events: the shell stream
+ * lags dispatch responses, and the next revision must decide against state
+ * that includes the command (e.g. Undo seeing the deferred archive it cancels).
+ */
+export function createThreadLifecycleDispatchFence() {
+  const sequences = new Map<EnvironmentId, number>();
+  return {
+    record: (environmentId: EnvironmentId, sequence: number): void => {
+      sequences.set(environmentId, Math.max(sequences.get(environmentId) ?? 0, sequence));
+    },
+    /** Whether the shell has not yet applied our last dispatched command. */
+    holds: (environmentId: EnvironmentId, shellSequence: number | null): boolean => {
+      const sequence = sequences.get(environmentId);
+      return sequence !== undefined && (shellSequence === null || shellSequence < sequence);
+    },
+  };
 }
 
 export type ThreadLifecycleOutboxFailureAction = "retry" | "rotate" | "remove";

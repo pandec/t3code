@@ -6,6 +6,7 @@ import type {
   EnvironmentThreadShell,
 } from "@t3tools/client-runtime/state/shell";
 import { CommandId, type EnvironmentId } from "@t3tools/contracts";
+import * as Option from "effect/Option";
 import { Atom } from "effect/unstable/reactivity";
 import { useEffect, useRef, useState } from "react";
 
@@ -17,6 +18,7 @@ import { environmentShell } from "./shell";
 import { threadLifecycleOutboxManager } from "./thread-lifecycle-outbox";
 import { deliverThreadLifecycleIntent } from "./thread-lifecycle-outbox-delivery";
 import {
+  createThreadLifecycleDispatchFence,
   resolveThreadLifecycleOutboxAction,
   type ThreadLifecycleIntent,
   type ThreadLifecycleOutboxAction,
@@ -27,6 +29,7 @@ import { useAtomCommand } from "./use-atom-command";
 import { queuedThreadKeysAtom } from "./use-thread-outbox";
 
 const EMPTY_SHELL_STATUSES: ReadonlyMap<EnvironmentId, EnvironmentShellStatus> = new Map();
+const EMPTY_SHELL_SEQUENCES: ReadonlyMap<EnvironmentId, number> = new Map();
 const EMPTY_PRESENTATIONS: ReadonlyMap<EnvironmentId, EnvironmentPresentation> = new Map();
 const EMPTY_THREADS: ReadonlyArray<EnvironmentThreadShell> = [];
 const EMPTY_THREAD_KEYS: ReadonlySet<string> = new Set();
@@ -42,24 +45,28 @@ const threadLifecycleOutboxInputsAtom = Atom.make((get) => {
       intents,
       loadState,
       shellStatuses: EMPTY_SHELL_STATUSES,
+      shellSequences: EMPTY_SHELL_SEQUENCES,
       presentations: EMPTY_PRESENTATIONS,
       threads: EMPTY_THREADS,
       queuedThreadKeys: EMPTY_THREAD_KEYS,
     };
   }
   const shellStatuses: Map<EnvironmentId, EnvironmentShellStatus> = new Map();
+  const shellSequences: Map<EnvironmentId, number> = new Map();
   for (const intent of Object.values(intents)) {
     if (!shellStatuses.has(intent.environmentId)) {
-      shellStatuses.set(
-        intent.environmentId,
-        get(environmentShell.stateValueAtom(intent.environmentId)).status,
-      );
+      const shell = get(environmentShell.stateValueAtom(intent.environmentId));
+      shellStatuses.set(intent.environmentId, shell.status);
+      if (Option.isSome(shell.snapshot)) {
+        shellSequences.set(intent.environmentId, shell.snapshot.value.snapshotSequence);
+      }
     }
   }
   return {
     intents,
     loadState,
     shellStatuses,
+    shellSequences,
     presentations: get(environmentPresentations.presentationsAtom),
     threads: get(environmentThreadShells.threadShellsAtom),
     queuedThreadKeys: get(queuedThreadKeysAtom),
@@ -79,11 +86,23 @@ function retryKey(threadKey: string, intent: ThreadLifecycleIntent): string {
   return `${threadKey}@${intent.createdAt}`;
 }
 
+/** Our last successful command per environment; in memory, as a reload resnapshots the shell. */
+const dispatchFence = createThreadLifecycleDispatchFence();
+
 function resolveIntentAction(
   inputs: ThreadLifecycleOutboxInputs,
   intent: ThreadLifecycleIntent,
   threadKey: string,
 ): ThreadLifecycleOutboxAction {
+  // The inputs atom re-runs the drain once the shell catches up.
+  if (
+    dispatchFence.holds(
+      intent.environmentId,
+      inputs.shellSequences.get(intent.environmentId) ?? null,
+    )
+  ) {
+    return "wait";
+  }
   return resolveThreadLifecycleOutboxAction({
     environmentConnected:
       inputs.presentations.get(intent.environmentId)?.connection.phase === "connected",
@@ -168,7 +187,10 @@ export function useThreadLifecycleOutboxDrain(): void {
           }
           return (action === "unarchive" ? unarchive : cancelArchive)({ environmentId, input });
         },
-        onSettled: (candidate) => refreshArchivedThreadsForEnvironment(candidate.environmentId),
+        onSettled: (candidate, sequence) => {
+          if (sequence !== null) dispatchFence.record(candidate.environmentId, sequence);
+          refreshArchivedThreadsForEnvironment(candidate.environmentId);
+        },
         threadActive: (candidate) =>
           threadRuntimeIsActive(
             liveThread(appAtomRegistry.get(threadLifecycleOutboxInputsAtom), candidate)?.runtime,

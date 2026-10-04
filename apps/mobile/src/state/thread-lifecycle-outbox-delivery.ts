@@ -1,5 +1,5 @@
 import type { AtomCommandResult } from "@t3tools/client-runtime/state/runtime";
-import type { CommandId } from "@t3tools/contracts";
+import type { CommandId, OrchestrationV2DispatchCommandResult } from "@t3tools/contracts";
 import * as Cause from "effect/Cause";
 import { AsyncResult } from "effect/unstable/reactivity";
 
@@ -25,8 +25,9 @@ export interface ThreadLifecycleDeliveryDeps {
   readonly dispatch: (
     action: ThreadLifecycleDispatchAction,
     intent: ThreadLifecycleIntent,
-  ) => Promise<AtomCommandResult<unknown, unknown>>;
-  readonly onSettled: (intent: ThreadLifecycleIntent) => void;
+  ) => Promise<AtomCommandResult<OrchestrationV2DispatchCommandResult, unknown>>;
+  /** `sequence` is the dispatched command's event sequence; null when it was rejected. */
+  readonly onSettled: (intent: ThreadLifecycleIntent, sequence: number | null) => void;
   /** Whether the thread's live shell shows queued or running work. */
   readonly threadActive: (intent: ThreadLifecycleIntent) => boolean;
   readonly newCommandId: () => CommandId;
@@ -105,7 +106,7 @@ export async function deliverThreadLifecycleIntent(
 
   const result = await deps.dispatch(finalAction, attempted);
   if (AsyncResult.isSuccess(result)) {
-    deps.onSettled(attempted);
+    deps.onSettled(attempted, result.value.sequence);
     return removeCurrent(attempted);
   }
   const failureAction = resolveThreadLifecycleOutboxFailureAction({
@@ -124,6 +125,6 @@ export async function deliverThreadLifecycleIntent(
   });
   if (failureAction === "retry") return false;
   if (failureAction === "rotate") return rotate(attempted);
-  deps.onSettled(attempted);
+  deps.onSettled(attempted, null);
   return removeCurrent(attempted);
 }

@@ -4,6 +4,7 @@ import {
   CommandId,
   EnvironmentId,
   OrchestrationDispatchCommandError,
+  type OrchestrationV2DispatchCommandResult,
   ThreadId,
 } from "@t3tools/contracts";
 import * as Cause from "effect/Cause";
@@ -19,6 +20,7 @@ import {
   type ThreadLifecycleOutboxStorage,
 } from "./thread-lifecycle-outbox-manager";
 import {
+  createThreadLifecycleDispatchFence,
   decodeThreadLifecycleIntent,
   deriveThreadLifecyclePresentation,
   encodeThreadLifecycleIntent,
@@ -134,6 +136,14 @@ describe("thread lifecycle outbox model", () => {
     expect(resolveThreadLifecycleOutboxAction({ ...base, thread: pendingArchive })).toBe("remove");
   });
 
+  it("re-sends an archive whose earlier reversal the shell does not show yet", () => {
+    const base = { ...live, desiredArchived: true, requiresDispatch: true };
+    // The unarchive landed; the shell still omits the thread.
+    expect(resolveThreadLifecycleOutboxAction({ ...base, thread: undefined })).toBe("archive");
+    // The cancel landed; the shell still shows the request pending.
+    expect(resolveThreadLifecycleOutboxAction({ ...base, thread: pendingArchive })).toBe("archive");
+  });
+
   it("reverses a sent archive by unarchiving or cancelling the deferred request", () => {
     const base = { ...live, desiredArchived: false };
     expect(resolveThreadLifecycleOutboxAction({ ...base, thread: undefined })).toBe("unarchive");
@@ -183,6 +193,27 @@ describe("thread lifecycle outbox model", () => {
     expect(threadLifecycleRevisionRequiresDispatch(undefined)).toBe(false);
     expect(threadLifecycleRevisionRequiresDispatch(intent())).toBe(false);
     expect(threadLifecycleRevisionRequiresDispatch(intent({ dispatchAttempted: true }))).toBe(true);
+    expect(
+      threadLifecycleRevisionRequiresDispatch(
+        intent({ requiresDispatch: true, dispatchAttempted: false }),
+      ),
+    ).toBe(true);
+  });
+
+  it("keeps a sent archive's reversal obligation across unsent revisions", () => {
+    // Archive sent, then Undo, Archive, Undo before its outcome is observed.
+    const revise = (previous: ThreadLifecycleIntent, desiredArchived: boolean) =>
+      intent({
+        desiredArchived,
+        requiresDispatch: threadLifecycleRevisionRequiresDispatch(previous),
+      });
+    const sent = intent({ dispatchAttempted: true, dispatchedAction: "archive" });
+    const finalUndo = revise(revise(revise(sent, false), true), false);
+    expect(finalUndo.requiresDispatch).toBe(true);
+    const resolve = (thread: typeof idle | typeof pendingArchive) =>
+      resolveThreadLifecycleOutboxAction({ ...live, ...finalUndo, thread });
+    expect(resolve(pendingArchive)).toBe("cancel-archive");
+    expect(resolve(idle)).toBe("unarchive");
   });
 
   it("moves pending archives to the shelf and pending unarchives back to the list", () => {
@@ -273,8 +304,11 @@ describe("thread lifecycle delivery", () => {
     let readCount = 0;
     let threadActive = false;
     let nextCommandId = 0;
-    let result: AsyncResult.Success<unknown, unknown> | AsyncResult.Failure<unknown, unknown> =
-      AsyncResult.success(undefined);
+    let result:
+      | AsyncResult.Success<OrchestrationV2DispatchCommandResult, unknown>
+      | AsyncResult.Failure<OrchestrationV2DispatchCommandResult, unknown> = AsyncResult.success({
+      sequence: 1,
+    });
     return {
       registry,
       manager,
@@ -379,7 +413,9 @@ describe("thread lifecycle delivery", () => {
   });
 
   const rejected = (message: string) =>
-    AsyncResult.failure(Cause.fail(new OrchestrationDispatchCommandError({ message })));
+    AsyncResult.failure<OrchestrationV2DispatchCommandResult, OrchestrationDispatchCommandError>(
+      Cause.fail(new OrchestrationDispatchCommandError({ message })),
+    );
 
   it("retries an archive rejected while the thread has queued work, under a fresh id", async () => {
     const test = harness(["archive"]);
@@ -414,7 +450,7 @@ describe("thread lifecycle delivery", () => {
 
     // The shell now shows the thread archived.
     test.setActions(["unarchive"]);
-    test.setResult(AsyncResult.success(undefined));
+    test.setResult(AsyncResult.success({ sequence: 1 }));
     expect(await deliverThreadLifecycleIntent(rotated!, test.deps)).toBe(true);
     expect(test.dispatched.map(({ action, intent }) => [action, intent.commandId])).toEqual([
       ["cancel-archive", undo.commandId],
@@ -439,7 +475,7 @@ describe("thread lifecycle delivery", () => {
 
     // Reconnected: the archive landed meanwhile, so the action is now unarchive.
     test.setActions(["unarchive"]);
-    test.setResult(AsyncResult.success(undefined));
+    test.setResult(AsyncResult.success({ sequence: 1 }));
     expect(await deliverThreadLifecycleIntent(attempted!, test.deps)).toBe(false);
     expect(test.dispatched).toHaveLength(1);
     const rotated = test.current();
@@ -471,4 +507,74 @@ describe("thread lifecycle delivery", () => {
     expect(test.dispatched).toEqual([]);
     expect(test.current()).toBe(rearchive);
   });
+
+  it("holds an Undo until the shell shows the archive it sent", async () => {
+    const registry = AtomRegistry.make();
+    const manager = createThreadLifecycleOutboxManager({ registry, storage: memoryStorage() });
+    const fence = createThreadLifecycleDispatchFence();
+    let shell: { sequence: number; thread: typeof idle | typeof pendingArchive } = {
+      sequence: 1,
+      thread: idle,
+    };
+    const dispatched: Array<{ action: ThreadLifecycleDispatchAction; commandId: CommandId }> = [];
+    let dispatchStarted = deferred<void>();
+    let response = deferred<AsyncResult.Success<OrchestrationV2DispatchCommandResult, unknown>>();
+    const current = () => registry.get(manager.intentsByThreadKeyAtom)[key];
+    const deps = {
+      manager,
+      loadMessageOutbox: async () => true,
+      readAction: (candidate: ThreadLifecycleIntent): ThreadLifecycleOutboxAction =>
+        fence.holds(environmentId, shell.sequence)
+          ? "wait"
+          : resolveThreadLifecycleOutboxAction({ ...live, ...candidate, thread: shell.thread }),
+      dispatch: (action: ThreadLifecycleDispatchAction, candidate: ThreadLifecycleIntent) => {
+        dispatched.push({ action, commandId: candidate.commandId });
+        dispatchStarted.resolve();
+        return response.promise;
+      },
+      onSettled: (_candidate: ThreadLifecycleIntent, sequence: number | null) => {
+        if (sequence !== null) fence.record(environmentId, sequence);
+      },
+      threadActive: () => true,
+      newCommandId: () => CommandId.make("command-rotated"),
+    };
+
+    const archive = intent();
+    await manager.enqueue(archive);
+    const archiveDelivery = deliverThreadLifecycleIntent(archive, deps);
+    await dispatchStarted.promise;
+    // Undo while the archive's response is in flight.
+    const undo = intent({
+      desiredArchived: false,
+      requiresDispatch: threadLifecycleRevisionRequiresDispatch(current()),
+      commandId: CommandId.make("command-undo"),
+    });
+    await manager.enqueue(undo);
+    response.resolve(AsyncResult.success({ sequence: 7 }));
+    expect(await archiveDelivery).toBe(true);
+    expect(current()).toBe(undo);
+
+    // The shell has not applied the deferred archive yet: nothing is sent.
+    expect(await deliverThreadLifecycleIntent(undo, deps)).toBe(true);
+    expect(dispatched).toHaveLength(1);
+
+    shell = { sequence: 7, thread: pendingArchive };
+    dispatchStarted = deferred<void>();
+    response = deferred();
+    const undoDelivery = deliverThreadLifecycleIntent(current()!, deps);
+    await dispatchStarted.promise;
+    expect(dispatched.at(-1)).toEqual({ action: "cancel-archive", commandId: undo.commandId });
+    expect(current()?.commandId).toBe(undo.commandId);
+    response.resolve(AsyncResult.success({ sequence: 8 }));
+    expect(await undoDelivery).toBe(true);
+    expect(current()).toBeUndefined();
+  });
 });
+
+function deferred<A>() {
+  let resolve!: (value: A) => void;
+  const promise = new Promise<A>((onResolve) => {
+    resolve = onResolve;
+  });
+  return { promise, resolve };
+}
