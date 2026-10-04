@@ -6,11 +6,9 @@ import { AsyncResult } from "effect/unstable/reactivity";
 import {
   animateSidebarLayoutChanges,
   archiveSelectedThreadEntries,
-  admitNewSidebarV2AttentionThreads,
   buildBulkTitleRegenerationContextMenuItem,
   buildBulkUnpinContextMenuItem,
   buildMultiSelectThreadContextMenuItems,
-  createSidebarV2AttentionFilter,
   createThreadJumpHintVisibilityController,
   deleteSelectedThreadEntries,
   filterSidebarProjectScopeItems,
@@ -21,7 +19,6 @@ import {
   getSidebarForkParentThreadId,
   getSidebarThreadIdsToPrewarm,
   hasUnseenCompletion,
-  hasUnseenWake,
   isContextMenuPointerDown,
   isSidebarSubagentThread,
   isSidebarThreadWorking,
@@ -721,83 +718,6 @@ describe("hasUnseenCompletion", () => {
         runtime: null,
       }),
     ).toBe(false);
-  });
-});
-
-describe("Sidebar V2 attention filter", () => {
-  it("uses the same unseen-wake semantics as the row indicator", () => {
-    expect(hasUnseenWake({ wokeAt: null })).toBe(false);
-    expect(hasUnseenWake({ wokeAt: "not-a-date" })).toBe(false);
-    expect(hasUnseenWake({ wokeAt: "2026-03-09T10:05:00.000Z" })).toBe(true);
-    expect(
-      hasUnseenWake({
-        wokeAt: "2026-03-09T10:05:00.000Z",
-        lastVisitedAt: "invalid",
-      }),
-    ).toBe(true);
-  });
-
-  it("captures attention members while remembering every known shell", () => {
-    const state = createSidebarV2AttentionFilter({
-      initialMemberThreadKeys: ["environment-a:working"],
-      threads: [
-        { threadKey: "environment-a:working" },
-        { threadKey: "environment-b:out-of-scope" },
-      ],
-    });
-
-    expect(state.memberThreadKeys).toEqual(new Set(["environment-a:working"]));
-    expect(state.knownThreadKeys).toEqual(
-      new Set(["environment-a:working", "environment-b:out-of-scope"]),
-    );
-  });
-
-  it("admits a newly created shell regardless of how it appeared", () => {
-    const state = createSidebarV2AttentionFilter({
-      initialMemberThreadKeys: [],
-      threads: [{ threadKey: "environment-a:known" }],
-    });
-    const next = admitNewSidebarV2AttentionThreads(state, [
-      { threadKey: "environment-a:known" },
-      { threadKey: "environment-b:cli-created" },
-    ]);
-
-    expect(next.memberThreadKeys).toEqual(new Set(["environment-b:cli-created"]));
-    expect(next.knownThreadKeys).toContain("environment-b:cli-created");
-  });
-
-  it("keeps captured membership sticky when statuses and shell availability change", () => {
-    const state = createSidebarV2AttentionFilter({
-      initialMemberThreadKeys: ["environment-a:done"],
-      threads: [{ threadKey: "environment-a:done" }, { threadKey: "environment-a:ready" }],
-    });
-
-    expect(admitNewSidebarV2AttentionThreads(state, [])).toBe(state);
-    expect(state.memberThreadKeys).toEqual(new Set(["environment-a:done"]));
-  });
-
-  it("admits every shell key first seen after the captured baseline", () => {
-    const state = createSidebarV2AttentionFilter({
-      initialMemberThreadKeys: [],
-      threads: [],
-    });
-    const next = admitNewSidebarV2AttentionThreads(state, [
-      { threadKey: "environment-a:remote-clock-behind" },
-      { threadKey: "environment-a:remote-clock-ahead" },
-    ]);
-
-    expect(next.memberThreadKeys).toEqual(
-      new Set(["environment-a:remote-clock-behind", "environment-a:remote-clock-ahead"]),
-    );
-    expect(next.knownThreadKeys).toEqual(
-      new Set(["environment-a:remote-clock-behind", "environment-a:remote-clock-ahead"]),
-    );
-    expect(
-      admitNewSidebarV2AttentionThreads(next, [
-        { threadKey: "environment-a:remote-clock-behind" },
-        { threadKey: "environment-a:remote-clock-ahead" },
-      ]),
-    ).toBe(next);
   });
 });
 

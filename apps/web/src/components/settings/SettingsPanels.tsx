@@ -609,10 +609,6 @@ export function useSettingsRestore(onRestored?: () => void) {
       ...(settings.sidebarV2CompactCards !== DEFAULT_UNIFIED_SETTINGS.sidebarV2CompactCards
         ? ["Compact thread cards"]
         : []),
-      ...(settings.sidebarAlwaysShowPinnedInAttention !==
-      DEFAULT_UNIFIED_SETTINGS.sidebarAlwaysShowPinnedInAttention
-        ? ["Pinned threads in Attention"]
-        : []),
       ...(settings.sidebarV2NewThreadButtonInProjectRow !==
       DEFAULT_UNIFIED_SETTINGS.sidebarV2NewThreadButtonInProjectRow
         ? ["New thread button position"]
@@ -796,7 +792,6 @@ export function useSettingsRestore(onRestored?: () => void) {
       settings.sidebarWorkingShelfEnabled,
       settings.sidebarThreadPreviewCount,
       settings.sidebarV2CompactCards,
-      settings.sidebarAlwaysShowPinnedInAttention,
       settings.sidebarV2NewThreadButtonInProjectRow,
       settings.sidebarThreadGroupsButton,
       settings.showSkillsInSlashMenu,
@@ -909,8 +904,6 @@ export function useSettingsRestore(onRestored?: () => void) {
       sidebarThreadProviderIconVisibility:
         DEFAULT_UNIFIED_SETTINGS.sidebarThreadProviderIconVisibility,
       sidebarV2CompactCards: DEFAULT_UNIFIED_SETTINGS.sidebarV2CompactCards,
-      sidebarAlwaysShowPinnedInAttention:
-        DEFAULT_UNIFIED_SETTINGS.sidebarAlwaysShowPinnedInAttention,
       sidebarV2NewThreadButtonInProjectRow:
         DEFAULT_UNIFIED_SETTINGS.sidebarV2NewThreadButtonInProjectRow,
       sidebarThreadGroupsButton: DEFAULT_UNIFIED_SETTINGS.sidebarThreadGroupsButton,

@@ -3478,10 +3478,8 @@ export default function Sidebar() {
       emptyStateCause: resolveSidebarEmptyStateCause({
         environmentScopeActive: environmentFilter.scope !== null,
         projectFiltersActive: scopedProjectKeys !== null || hiddenPhysicalProjectKeys.size > 0,
-        attentionFilterActive: false,
         admittedWithoutEnvironment,
         admittedWithoutProjects,
-        admittedWithoutAttention: 0,
       }),
     };
   }, [

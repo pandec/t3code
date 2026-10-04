@@ -83,7 +83,6 @@ const clientSettings: ClientSettings = {
   sidebarThreadPreviewCount: 6,
   legacySidebarEnabled: false,
   sidebarV2CompactCards: true,
-  sidebarAlwaysShowPinnedInAttention: true,
   sidebarV2NewThreadButtonInProjectRow: true,
   sidebarThreadGroupsButton: true,
   steerGraceWindowMs: 5_000,

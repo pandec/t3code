@@ -894,7 +894,11 @@ describe("ClientSettings extras", () => {
     expect(settings.openRouterCreditsBudgetUsd).toBeNull();
     expect(settings.accentTintsEnabled).toBe(true);
     expect(settings.accentTintIntensityPercent).toBe(12);
-    expect(settings.sidebarAlwaysShowPinnedInAttention).toBe(false);
+  });
+
+  it("drops the removed Attention filter key from stored settings", () => {
+    const settings = decodeClientSettings({ sidebarAlwaysShowPinnedInAttention: true });
+    expect(settings).not.toHaveProperty("sidebarAlwaysShowPinnedInAttention");
   });
 
   it("accepts in-range values in patches", () => {
@@ -907,7 +911,6 @@ describe("ClientSettings extras", () => {
         openRouterCreditsBudgetUsd: 50,
         accentTintsEnabled: false,
         accentTintIntensityPercent: 30,
-        sidebarAlwaysShowPinnedInAttention: true,
       }),
     ).toEqual({
       steerGraceWindowMs: 0,
@@ -917,7 +920,6 @@ describe("ClientSettings extras", () => {
       openRouterCreditsBudgetUsd: 50,
       accentTintsEnabled: false,
       accentTintIntensityPercent: 30,
-      sidebarAlwaysShowPinnedInAttention: true,
     });
   });
 
