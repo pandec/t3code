@@ -3849,9 +3849,14 @@ it.layer(SharedApplicationDataPlaneTestLayer)("custom thread groups", (it) => {
     }),
   );
 
-  it.effect("forks into the source's group", () =>
+  it.effect("forks into the source's group without its pin or order", () =>
     Effect.gen(function* () {
       const { orchestrator, threadId } = yield* setup("custom-groups-fork", "research");
+      yield* orchestrator.dispatch({
+        type: "thread.pin",
+        commandId: CommandId.make("custom-groups-fork-pin"),
+        threadId,
+      });
       const eventSink = yield* EventSink.EventSinkV2;
       const now = yield* DateTime.now;
       const runId = RunId.make("custom-groups-fork-run");
@@ -3896,6 +3901,12 @@ it.layer(SharedApplicationDataPlaneTestLayer)("custom thread groups", (it) => {
       });
       const fork = yield* orchestrator.getThreadShell(forkId);
       assert.equal(fork?.customGroupId, "research");
+      assert.isNull(fork?.pinnedAt ?? null);
+      assert.isNull(fork?.pinOrderKey ?? null);
+      assert.isNull(fork?.activeOrderKey ?? null);
+      const source = yield* orchestrator.getThreadShell(threadId);
+      assert.isNotNull(source?.pinnedAt ?? null);
+      assert.equal(source?.customGroupId, "research");
     }),
   );
 });
