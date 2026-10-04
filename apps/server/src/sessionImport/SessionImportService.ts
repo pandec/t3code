@@ -24,6 +24,8 @@ import {
   type ProjectId,
   ProviderDriverKind,
   type ProviderInstanceId,
+  type ProviderInteractionMode,
+  type RuntimeMode,
   type SessionImportCandidate,
   SessionImportError,
   type SessionImportForkThreadPayload,
@@ -138,6 +140,8 @@ interface NativeSessionOwner {
   readonly nativeId: string;
   readonly continuationKey: string;
   readonly active: boolean;
+  /** Deleted owners are only listed while their provider session is still detaching. */
+  readonly deleted: boolean;
 }
 
 export const make = Effect.gen(function* () {
@@ -273,8 +277,10 @@ export const make = Effect.gen(function* () {
   });
 
   /**
-   * Live threads whose root provider thread holds a native session of `driver`.
-   * A thread keeps owning a session after switching away from it, since
+   * Threads whose root provider thread holds a native session of `driver`:
+   * live ones, plus deleted ones whose provider session teardown is still
+   * queued, since that provider can still write the native transcript. A
+   * thread keeps owning a session after switching away from it, since
    * switching back resumes it.
    */
   const readNativeSessionOwners = Effect.fn("SessionImportService.readNativeSessionOwners")(
@@ -284,17 +290,27 @@ export const make = Effect.gen(function* () {
         readonly native_id: string;
         readonly provider_instance_id: string;
         readonly active: number;
+        readonly deleted: number;
       }>`
         SELECT
           p.thread_id,
           json_extract(p.payload_json, '$.nativeThreadRef.nativeId') AS native_id,
           p.provider_instance_id,
-          CASE WHEN t.active_provider_thread_id = p.provider_thread_id THEN 1 ELSE 0 END AS active
+          CASE WHEN t.active_provider_thread_id = p.provider_thread_id THEN 1 ELSE 0 END AS active,
+          t.deleted_at IS NOT NULL AS deleted
         FROM orchestration_v2_projection_provider_threads p
         JOIN orchestration_v2_projection_threads t ON t.thread_id = p.thread_id
         WHERE p.driver = ${driver}
           AND p.owner_node_id IS NULL
-          AND t.deleted_at IS NULL
+          AND (
+            t.deleted_at IS NULL
+            OR EXISTS (
+              SELECT 1 FROM orchestration_v2_effect_outbox o
+              WHERE o.thread_id = p.thread_id
+                AND o.effect_type = 'provider-session.detach'
+                AND o.status IN ('pending', 'running')
+            )
+          )
           AND json_extract(p.payload_json, '$.nativeThreadRef.nativeId') IS NOT NULL
       `.pipe(
         Effect.mapError((cause) =>
@@ -306,20 +322,23 @@ export const make = Effect.gen(function* () {
         nativeId: row.native_id,
         continuationKey: continuationKeyOf(instances, driver, row.provider_instance_id),
         active: row.active === 1,
+        deleted: row.deleted === 1,
       }));
     },
   );
 
-  /** The thread that continues `nativeId` in `instance`'s session home, if any. */
+  const ownsSession = (owner: NativeSessionOwner, instance: ProviderInstance, nativeId: string) =>
+    owner.nativeId === nativeId &&
+    owner.continuationKey === instance.continuationIdentity.continuationKey;
+
+  /** The live thread that continues `nativeId` in `instance`'s session home, if any. */
   const findOwnerThread = (
     owners: ReadonlyArray<NativeSessionOwner>,
     instance: ProviderInstance,
     nativeId: string,
   ): ThreadId | undefined => {
     const matching = owners.filter(
-      (owner) =>
-        owner.nativeId === nativeId &&
-        owner.continuationKey === instance.continuationIdentity.continuationKey,
+      (owner) => !owner.deleted && ownsSession(owner, instance, nativeId),
     );
     return (matching.find((owner) => owner.active) ?? matching[0])?.threadId;
   };
@@ -503,14 +522,20 @@ export const make = Effect.gen(function* () {
       );
     }
     const instances = yield* instanceRegistry.listInstances;
-    const ownerThreadId =
+    const owners =
       forkSource === undefined
-        ? findOwnerThread(
-            yield* readNativeSessionOwners(instances, instance.driverKind),
-            instance,
-            input.nativeSessionId,
-          )
-        : undefined;
+        ? yield* readNativeSessionOwners(instances, instance.driverKind)
+        : [];
+    const ownerThreadId = findOwnerThread(owners, instance, input.nativeSessionId);
+    if (
+      ownerThreadId === undefined &&
+      owners.some((candidate) => ownsSession(candidate, instance, input.nativeSessionId))
+    ) {
+      return yield* failure(
+        "import-failed",
+        "The thread previously attached to this session is still shutting down. Retry in a moment.",
+      );
+    }
     const owner =
       forkSource ?? (ownerThreadId === undefined ? null : yield* readLinkedThread(ownerThreadId));
     if (owner !== null && input.fork !== true) {
@@ -572,6 +597,8 @@ export const make = Effect.gen(function* () {
 
     let nativeId = history.nativeSessionId;
     let defaultTitle = titleForImport(history.name, importedMessages);
+    let runtimeMode: RuntimeMode = DEFAULT_RUNTIME_MODE;
+    let interactionMode: ProviderInteractionMode = DEFAULT_PROVIDER_INTERACTION_MODE;
     if (owner !== null) {
       if (sessionImport.forkSession === undefined) {
         return yield* new SessionImportError({
@@ -588,6 +615,11 @@ export const make = Effect.gen(function* () {
           "import-failed",
           `Cannot import this session as a fork while thread '${current?.title ?? owner.title}' is running. Retry when it finishes.`,
         );
+      }
+      // Forking a thread keeps its permission and interaction modes, like `thread.fork`.
+      if (forkSource !== undefined) {
+        runtimeMode = current.runtimeMode;
+        interactionMode = current.interactionMode;
       }
       nativeId = yield* sessionImport
         .forkSession({ nativeSessionId: input.nativeSessionId, cwd })
@@ -622,8 +654,8 @@ export const make = Effect.gen(function* () {
       title: input.title?.trim() || defaultTitle,
       providerInstanceId: instance.instanceId,
       modelSelection,
-      runtimeMode: DEFAULT_RUNTIME_MODE,
-      interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
+      runtimeMode,
+      interactionMode,
       branch: worktree?.branch ?? null,
       worktreePath: worktree?.worktreePath ?? null,
       linkedPullRequest: null,

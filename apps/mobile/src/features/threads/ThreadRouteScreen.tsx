@@ -50,6 +50,7 @@ import {
 import { useKnownTerminalSessions } from "../../state/use-terminal-session";
 import { useSelectedThreadDetailState } from "../../state/use-thread-detail";
 import { useThreadSelection } from "../../state/use-thread-selection";
+import { useCanForkImportedSession } from "../../state/entities";
 import { GitActionProgressOverlay } from "./GitActionProgressOverlay";
 import {
   buildTerminalMenuSessions,
@@ -353,12 +354,13 @@ function ThreadRouteContent(
   const requests = useSelectedThreadRequests();
   const interruptThreadTurn = useAtomCommand(threadEnvironment.interruptTurn, "thread interrupt");
   const forkConversation = useForkConversation();
+  const canForkImportedSession = useCanForkImportedSession(selectedThread);
   const handleForkThread = useMemo(
     () =>
-      selectedThread !== null && canForkConversation(selectedThread)
+      selectedThread !== null && canForkConversation(selectedThread, { canForkImportedSession })
         ? () => forkConversation(selectedThread)
         : undefined,
-    [forkConversation, selectedThread],
+    [canForkImportedSession, forkConversation, selectedThread],
   );
   const loadEarlierHistory = useAtomCommand(threadEnvironment.loadEarlierHistory, {
     label: "load earlier thread history",

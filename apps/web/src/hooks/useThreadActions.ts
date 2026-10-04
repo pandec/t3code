@@ -31,6 +31,7 @@ import { refreshArchivedThreadsForEnvironment } from "../lib/archivedThreadsStat
 import { releaseComposerDraftUploads } from "../lib/composerDraftUploads";
 import { readLocalApi } from "../localApi";
 import {
+  readConversationForkOptions,
   readEnvironmentSupportsAutoSettleOptOut,
   readEnvironmentSupportsPinning,
   readEnvironmentSupportsPinReorder,
@@ -1049,7 +1050,10 @@ export function useThreadActions() {
       // no-ops, which is right for a duplicate click.
       if (forkingThreadKeys.has(threadKey)) return AsyncResult.failure(Cause.interrupt());
       const thread = readThreadShell(target);
-      const forkTarget = thread === null ? null : conversationForkTarget(thread);
+      const forkTarget =
+        thread === null
+          ? null
+          : conversationForkTarget(thread, readConversationForkOptions(thread));
       if (forkTarget === null) {
         return AsyncResult.failure(
           Cause.fail(

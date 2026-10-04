@@ -1,9 +1,16 @@
-import { ProviderInstanceId, ProviderThreadId, RunId, ThreadId } from "@t3tools/contracts";
+import {
+  ProviderDriverKind,
+  ProviderInstanceId,
+  ProviderThreadId,
+  RunId,
+  ThreadId,
+} from "@t3tools/contracts";
 import { describe, expect, it } from "vite-plus/test";
 
 import type { ThreadRunSummary, ThreadRuntimeSummary } from "./models.ts";
 import {
   canForkConversation,
+  canForkImportedSessionWith,
   conversationForkRunId,
   conversationForkTarget,
 } from "./threadFork.ts";
@@ -59,19 +66,44 @@ describe("conversationForkRunId", () => {
   });
 
   it("forks a runless imported session natively, but not runless legacy history", () => {
-    expect(conversationForkTarget(thread({ latestRun: null, runtime: null }))).toEqual({
+    const importable = { canForkImportedSession: true };
+    expect(conversationForkTarget(thread({ latestRun: null, runtime: null }), importable)).toEqual({
       type: "imported-session",
     });
+    // Providers that cannot fork a native session (e.g. ACP imports) hide the action.
+    expect(conversationForkTarget(thread({ latestRun: null, runtime: null }))).toBeNull();
     expect(conversationForkRunId(thread({ latestRun: null }))).toBeNull();
     // Legacy threads migrated at the v2 upgrade have no provider thread.
     expect(
-      canForkConversation(thread({ latestRun: null, runtime: null, activeProviderThreadId: null })),
+      canForkConversation(
+        thread({ latestRun: null, runtime: null, activeProviderThreadId: null }),
+        importable,
+      ),
     ).toBe(false);
     expect(
       canForkConversation(
         thread({ latestRun: null, archivedAt: "2026-10-04T11:00:00.000Z", runtime: null }),
+        importable,
       ),
     ).toBe(false);
+  });
+
+  it("resolves imported-session fork support from the thread's provider driver", () => {
+    const providers = [
+      {
+        instanceId: ProviderInstanceId.make("claude_work"),
+        driver: ProviderDriverKind.make("claudeAgent"),
+      },
+      { instanceId: ProviderInstanceId.make("gemini"), driver: ProviderDriverKind.make("acp") },
+    ];
+    expect(canForkImportedSessionWith(ProviderInstanceId.make("claude_work"), providers)).toBe(
+      true,
+    );
+    expect(canForkImportedSessionWith(ProviderInstanceId.make("gemini"), providers)).toBe(false);
+    expect(canForkImportedSessionWith(ProviderInstanceId.make("missing"), providers)).toBe(false);
+    expect(canForkImportedSessionWith(ProviderInstanceId.make("claude_work"), undefined)).toBe(
+      false,
+    );
   });
 
   it("withholds the fork for archived, deleted and subagent threads", () => {

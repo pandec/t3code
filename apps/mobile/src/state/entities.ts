@@ -1,5 +1,7 @@
 import { useAtomValue } from "@effect/atom-react";
 import { deriveReportedModelSelection } from "@t3tools/client-runtime/state/thread-execution";
+import { canForkImportedSessionWith } from "@t3tools/client-runtime/state/thread-fork";
+import { useCallback } from "react";
 
 import { appAtomRegistry } from "./atom-registry";
 import type {
@@ -83,6 +85,33 @@ export function useEnvironmentServerConfig(
     environmentId === null
       ? EMPTY_SERVER_CONFIG_ATOM
       : serverEnvironment.configValueAtom(environmentId),
+  );
+}
+
+type ForkProviderThread = Pick<EnvironmentThreadShell, "environmentId" | "providerInstanceId">;
+
+/** Whether the thread's provider can fork an imported session, read at call time. */
+export function readCanForkImportedSession(thread: ForkProviderThread): boolean {
+  return canForkImportedSessionWith(
+    thread.providerInstanceId,
+    appAtomRegistry.get(serverEnvironment.configValueAtom(thread.environmentId))?.providers,
+  );
+}
+
+/** Whether the thread's provider can fork an imported session; re-renders only when that changes. */
+export function useCanForkImportedSession(thread: ForkProviderThread | null): boolean {
+  const providerInstanceId = thread?.providerInstanceId ?? null;
+  const select = useCallback(
+    (config: ServerConfig | null) =>
+      providerInstanceId !== null &&
+      canForkImportedSessionWith(providerInstanceId, config?.providers),
+    [providerInstanceId],
+  );
+  return useAtomValue(
+    thread === null
+      ? EMPTY_SERVER_CONFIG_ATOM
+      : serverEnvironment.configValueAtom(thread.environmentId),
+    select,
   );
 }
 

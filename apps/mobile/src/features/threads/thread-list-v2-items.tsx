@@ -18,7 +18,10 @@ import type {
 } from "@t3tools/client-runtime/state/shell";
 import type { EnvironmentThreadSearchMatch } from "@t3tools/client-runtime/state/thread-search";
 import type { EnvironmentMachineKind } from "@t3tools/contracts";
-import { canForkConversation } from "@t3tools/client-runtime/state/thread-fork";
+import {
+  canForkConversation,
+  canForkImportedSessionWith,
+} from "@t3tools/client-runtime/state/thread-fork";
 import { canSnooze, resolveSnoozePresets } from "@t3tools/client-runtime/state/thread-settled";
 import type { MenuAction } from "@react-native-menu/menu";
 import { memo, useCallback, useEffect, useMemo, useState, type ComponentProps } from "react";
@@ -768,7 +771,9 @@ export const ThreadListV2Row = memo(function ThreadListV2Row(props: {
   const handleMoveDown = useCallback(() => onMoveThread?.(thread, "down"), [onMoveThread, thread]);
   const handleArchive = useCallback(() => onArchiveThread(thread), [onArchiveThread, thread]);
   const handleFork = useCallback(() => onForkThread(thread), [onForkThread, thread]);
-  const forkable = canForkConversation(thread);
+  const forkable = canForkConversation(thread, {
+    canForkImportedSession: canForkImportedSessionWith(thread.providerInstanceId, props.providers),
+  });
 
   // Swipe: the v2 primary action is the lifecycle transition. Un-settling a
   // settled row keeps it active until new activity clears the user override.

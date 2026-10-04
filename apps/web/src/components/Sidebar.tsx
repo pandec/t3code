@@ -44,7 +44,11 @@ import {
   threadRuntimeCanArchive,
   type EnvironmentThreadShell,
 } from "@t3tools/client-runtime/state/models";
-import { canForkConversation } from "@t3tools/client-runtime/state/thread-fork";
+import {
+  canForkConversation,
+  canForkImportedSessionDriver,
+  canForkImportedSessionWith,
+} from "@t3tools/client-runtime/state/thread-fork";
 import {
   parseScopedThreadKey,
   scopeProjectRef,
@@ -1592,7 +1596,11 @@ const SidebarThreadRow = memo(function SidebarThreadRow(props: {
     },
     [onFork, threadRef],
   );
-  const showForkButton = canForkConversation(thread);
+  const showForkButton = canForkConversation(thread, {
+    canForkImportedSession: canForkImportedSessionDriver(
+      props.providerEntryByInstanceId.get(thread.providerInstanceId)?.driverKind,
+    ),
+  });
   const handleUnsnoozeClick = useCallback(
     (event: ReactMouseEvent) => {
       event.preventDefault();
@@ -4885,7 +4893,14 @@ export default function Sidebar() {
                 titleRegeneration: supportsTitleRegeneration,
               },
               snoozePresets,
-              forkExtras: { fork: canForkConversation(thread) },
+              forkExtras: {
+                fork: canForkConversation(thread, {
+                  canForkImportedSession: canForkImportedSessionWith(
+                    thread.providerInstanceId,
+                    serverConfigs.get(thread.environmentId)?.providers,
+                  ),
+                }),
+              },
             }),
             position,
           ),

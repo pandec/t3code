@@ -17,7 +17,10 @@ import {
 } from "@t3tools/client-runtime/operations/projects";
 import { connectionStatusText } from "@t3tools/client-runtime/connection";
 import { threadSearchMatchKey } from "@t3tools/client-runtime/state/thread-search";
-import { canForkConversation } from "@t3tools/client-runtime/state/thread-fork";
+import {
+  canForkConversation,
+  canForkImportedSessionWith,
+} from "@t3tools/client-runtime/state/thread-fork";
 import { resolveThreadReferenceCopyTarget } from "@t3tools/shared/threadReference";
 import {
   canPreloadBrowsePath,
@@ -2213,7 +2216,14 @@ function OpenCommandPaletteDialog(props: {
         openUnarchivedThread?.settledOverride === "settled",
       // The server owns settle eligibility and returns the authoritative error.
       canSettleNow: true,
-      canFork: openUnarchivedThread !== null && canForkConversation(openUnarchivedThread),
+      canFork:
+        openUnarchivedThread !== null &&
+        canForkConversation(openUnarchivedThread, {
+          canForkImportedSession: canForkImportedSessionWith(
+            openUnarchivedThread.providerInstanceId,
+            serverConfigs.get(openUnarchivedThread.environmentId)?.providers,
+          ),
+        }),
       supports: {
         settlement: openThreadCapabilities?.threadSettlement === true,
         // Not gated on the sidebar variant: pinning is server-side state the

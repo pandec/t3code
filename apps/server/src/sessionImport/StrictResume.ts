@@ -16,7 +16,7 @@ export interface StrictResumeShape {
   readonly markStrict: (
     providerThreadId: ProviderThreadId,
   ) => Effect.Effect<void, SqlError.SqlError>;
-  /** A failed read counts as not strict, which keeps v2's default fallback. */
+  /** A failed read counts as strict, so the run fails visibly instead of replacing a possibly imported session. */
   readonly isStrict: (providerThreadId: ProviderThreadId) => Effect.Effect<boolean>;
 }
 
@@ -42,7 +42,7 @@ export const make = Effect.gen(function* () {
         Effect.map((rows) => rows.length > 0),
         Effect.catch((cause) =>
           Effect.logWarning("Failed to read strict-resume state", { providerThreadId, cause }).pipe(
-            Effect.as(false),
+            Effect.as(true),
           ),
         ),
       ),

@@ -4896,7 +4896,11 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
         const legacyImportHandoff = shouldPrepareLegacyImportHandoff({
           historyOrigin: projection.thread.historyOrigin,
           hasCompletedRun: latestCompletedRun !== undefined,
-          legacyImportItemCount: legacyImportItems.length,
+          // fork: a native-backed import resumes its session, which already holds this
+          // history; only a thread without native state needs the legacy handoff,
+          // matching the queued and provider-switch paths.
+          legacyImportItemCount:
+            (activeProviderThread?.nativeThreadRef ?? null) === null ? legacyImportItems.length : 0,
         })
           ? yield* contextHandoffService
               .prepareLegacyImport({

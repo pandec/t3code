@@ -92,6 +92,7 @@ import { isMacPlatform } from "../lib/utils";
 import { useSidebarPendingFileDropStore } from "../sidebarPendingFileDropStore";
 import { makeWorkspaceFileDropHandlers } from "./chat/workspaceFileDrop";
 import {
+  readConversationForkOptions,
   readThreadShell,
   useProjects,
   useThreadShells,
@@ -2375,7 +2376,9 @@ const SidebarProjectItem = memo(function SidebarProjectItem(props: SidebarProjec
           { id: "mark-unread", label: "Mark unread" },
           { id: "copy-path", label: "Copy Path" },
           { id: "copy-thread-id", label: "Copy Thread ID" },
-          ...(canForkConversation(thread) ? [{ id: "fork", label: "Fork conversation" }] : []),
+          ...(canForkConversation(thread, readConversationForkOptions(thread))
+            ? [{ id: "fork", label: "Fork conversation" }]
+            : []),
           { id: "project-settings", label: "Project settings" },
           { id: "delete", label: "Delete", destructive: true, icon: "trash" },
         ],

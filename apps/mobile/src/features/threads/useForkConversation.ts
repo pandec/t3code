@@ -11,6 +11,7 @@ import { Alert } from "react-native";
 import { uuidv4 } from "../../lib/uuid";
 import { scopedThreadKey } from "../../lib/scopedEntities";
 import { appAtomRegistry } from "../../state/atom-registry";
+import { readCanForkImportedSession } from "../../state/entities";
 import { sessionImportEnvironment } from "../../state/sessionImport";
 import { environmentThreadShells, threadEnvironment } from "../../state/threads";
 import { useAtomCommand } from "../../state/use-atom-command";
@@ -38,7 +39,9 @@ export function useForkConversation(
     (thread: EnvironmentThreadShell) => {
       const key = scopedThreadKey(thread.environmentId, thread.id);
       if (forkInFlightThreadKeys.has(key)) return;
-      const forkTarget = conversationForkTarget(thread);
+      const forkTarget = conversationForkTarget(thread, {
+        canForkImportedSession: readCanForkImportedSession(thread),
+      });
       if (forkTarget === null) {
         Alert.alert(
           "Could not fork conversation",

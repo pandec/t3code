@@ -15,6 +15,7 @@ import * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
+import * as SqlClient from "effect/unstable/sql/SqlClient";
 
 import * as EventSink from "../orchestration-v2/EventSink.ts";
 import * as IdAllocator from "../orchestration-v2/IdAllocator.ts";
@@ -341,6 +342,103 @@ it.layer(runlessFork.layer)("SessionImportService runless fork", (it) => {
       );
       // The source keeps continuing its own native session.
       assert.equal((yield* activeNativeId(imported.threadId)).nativeId, sessionId);
+    }),
+  );
+});
+
+it.layer(makeHarness().layer)("SessionImportService runless fork modes", (it) => {
+  it.effect("keeps the source thread's runtime and interaction modes", () =>
+    Effect.gen(function* () {
+      yield* createProject;
+      const service = yield* SessionImportService.SessionImportService;
+      const eventSink = yield* EventSink.EventSinkV2;
+      const imported = yield* service.importSession({
+        projectId,
+        instanceId,
+        nativeSessionId: sessionId,
+      });
+      const source = (yield* activeNativeId(imported.threadId)).records.thread;
+      // Explicit imports start with the defaults.
+      assert.equal(source.runtimeMode, "full-access");
+      assert.equal(source.interactionMode, "default");
+      yield* eventSink.write({
+        events: [
+          {
+            id: EventId.make("test:runtime-mode"),
+            type: "thread.runtime-mode-updated",
+            threadId: imported.threadId,
+            occurredAt: source.updatedAt,
+            payload: { ...source, runtimeMode: "approval-required" },
+          },
+          {
+            id: EventId.make("test:interaction-mode"),
+            type: "thread.interaction-mode-updated",
+            threadId: imported.threadId,
+            occurredAt: source.updatedAt,
+            payload: { ...source, runtimeMode: "approval-required", interactionMode: "plan" },
+          },
+        ],
+      });
+
+      const forked = yield* service.forkImportedThread({ threadId: imported.threadId });
+      const fork = (yield* activeNativeId(forked.threadId)).records.thread;
+      assert.equal(fork.runtimeMode, "approval-required");
+      assert.equal(fork.interactionMode, "plan");
+    }),
+  );
+});
+
+it.layer(makeHarness().layer)("SessionImportService deleted owner", (it) => {
+  it.effect("refuses a session whose deleted thread is still detaching its provider", () =>
+    Effect.gen(function* () {
+      yield* createProject;
+      const service = yield* SessionImportService.SessionImportService;
+      const eventSink = yield* EventSink.EventSinkV2;
+      const sql = yield* SqlClient.SqlClient;
+      const imported = yield* service.importSession({
+        projectId,
+        instanceId,
+        nativeSessionId: sessionId,
+      });
+      const thread = (yield* activeNativeId(imported.threadId)).records.thread;
+      yield* eventSink.write({
+        events: [
+          {
+            id: EventId.make("test:thread-deleted"),
+            type: "thread.deleted",
+            threadId: imported.threadId,
+            occurredAt: thread.updatedAt,
+            payload: { ...thread, deletedAt: thread.updatedAt },
+          },
+        ],
+      });
+      const at = DateTime.formatIso(thread.updatedAt);
+      yield* sql`
+        INSERT INTO orchestration_v2_effect_outbox (
+          effect_id, command_id, thread_id, effect_type, payload_json, status,
+          attempt_count, available_at, created_at, updated_at
+        ) VALUES (
+          'effect:test:detach', 'command:test:delete', ${imported.threadId},
+          'provider-session.detach', '{}', 'pending', 0, ${at}, ${at}, ${at}
+        )
+      `;
+      const error = yield* service
+        .importSession({ projectId, instanceId, nativeSessionId: sessionId })
+        .pipe(Effect.flip);
+      assert.equal(error.reason, "import-failed");
+      assert.include(error.detail, "still shutting down");
+
+      yield* sql`
+        UPDATE orchestration_v2_effect_outbox SET status = 'succeeded'
+        WHERE effect_id = 'effect:test:detach'
+      `;
+      const reimported = yield* service.importSession({
+        projectId,
+        instanceId,
+        nativeSessionId: sessionId,
+      });
+      assert.notEqual(reimported.threadId, imported.threadId);
+      assert.equal((yield* activeNativeId(reimported.threadId)).nativeId, sessionId);
     }),
   );
 });
