@@ -1,3 +1,4 @@
+import type { ThreadRowProviderInstance } from "./thread-provider-instance";
 import {
   THREAD_LIST_V2_MONO_FONT as MONO_FONT,
   THREAD_LIST_V2_ROW_CONTENT_CLASS_NAME,
@@ -16,21 +17,14 @@ import type {
   EnvironmentThreadShell,
 } from "@t3tools/client-runtime/state/shell";
 import type { EnvironmentThreadSearchMatch } from "@t3tools/client-runtime/state/thread-search";
-import { canForkConversation } from "@t3tools/client-runtime/state/thread-fork";
-import { hasPendingArchive } from "@t3tools/client-runtime/state/thread-settled";
 import type { EnvironmentMachineKind } from "@t3tools/contracts";
-import {
-  canSnooze,
-  canSnoozeUntilDone,
-  resolveSnoozePresets,
-  type SnoozePreset,
-} from "@t3tools/client-runtime/state/thread-settled";
-
+import { canSnooze, resolveSnoozePresets } from "@t3tools/client-runtime/state/thread-settled";
 import type { MenuAction } from "@react-native-menu/menu";
 import { memo, useCallback, useEffect, useMemo, useState, type ComponentProps } from "react";
 import { Alert, Pressable, StyleSheet, useWindowDimensions, View } from "react-native";
 import type { SwipeableMethods } from "react-native-gesture-handler/ReanimatedSwipeable";
 
+import type { ThreadListProvider } from "../../state/thread-list-environments";
 import { SymbolView } from "../../components/AppSymbol";
 import { AppText as Text } from "../../components/AppText";
 import { ControlPillMenu } from "../../components/ControlPill";
@@ -38,9 +32,7 @@ import { EnvironmentMachineSymbol } from "../../components/EnvironmentMachineSym
 import { ProjectFavicon } from "../../components/ProjectFavicon";
 import { resolveRowAccentTintAlpha, withAccentAlpha } from "../../lib/accentTint";
 import { ProviderIcon, ProviderInstanceIcon } from "../../components/ProviderIcon";
-import type { ThreadRowProviderInstance } from "./thread-provider-instance";
 import { cn } from "../../lib/cn";
-import { relativeTime } from "../../lib/time";
 import { copyTextWithHaptic } from "../../lib/copyTextWithHaptic";
 import { useUniwindTheme } from "../../lib/useUniwindTheme";
 import { useThreadListeningState } from "../../state/listeningPlayback";
@@ -52,12 +44,12 @@ import { useSwipeRowDormant } from "../home/swipe-row-activation";
 import { ThreadSwipeable } from "../home/thread-swipe-actions";
 import { buildThreadTitleRegenerationMenuItems } from "./thread-title-regeneration-menu";
 import {
-  resolveThreadListV2MenuActionIds,
   THREAD_LIST_V2_SETTLED_PAGE_COUNT,
-  type ThreadListV2MenuActionId,
-  resolveThreadListV2SnoozeMenuSelection,
   resolveThreadListV2SnoozeGateExpiryMs,
+  resolveThreadListV2SnoozeMenuSelection,
+  threadHasUnseenCompletion,
   resolveThreadListV2Status,
+  resolveThreadListV2ProviderDrivers,
   resolveThreadListV2SwipeActions,
   type ThreadListV2Status,
 } from "./threadListV2";
@@ -79,54 +71,30 @@ const STATUS_LABEL_BY_STATUS: Partial<
   approval: { label: "Approval", className: "text-warning-foreground" },
   input: { label: "Input", className: "text-adaptive-indigo-600-300" },
   working: { label: "Working", className: "text-adaptive-sky-600-400" },
-  monitoring: { label: "Monitoring", className: "text-foreground-secondary" },
   failed: { label: "Failed", className: "text-danger-foreground" },
+  limited: { label: "Limited", className: "text-warning-foreground" },
 };
 
-export function resolveThreadListV2WorkingTimeLabel(
-  thread: Pick<EnvironmentThreadShell, "latestTurn" | "session">,
-  status: ThreadListV2Status,
-): string | null {
-  if (status !== "working") return null;
-  const turn = thread.latestTurn;
-  const candidates =
-    turn?.completedAt === null
-      ? [turn.startedAt, turn.requestedAt, thread.session?.updatedAt]
-      : [thread.session?.updatedAt];
-  const startedAt = candidates.find(
-    (candidate): candidate is string => candidate != null && !Number.isNaN(Date.parse(candidate)),
-  );
-  // Coarse relative time stays truthful without a per-row ticker; seconds would quickly go stale.
-  return startedAt === undefined ? null : relativeTime(startedAt);
-}
+// Menus keep lifecycle and title regeneration together. Archive keeps its
+// own surface (thread screen / settings) rather than crowding v2 rows.
+const CARD_MENU_ACTIONS: MenuAction[] = [
+  { id: "settle", title: "Settle", image: "checkmark" },
+  { id: "delete", title: "Delete", image: "trash", attributes: { destructive: true } },
+];
 
-const MENU_ACTION_BY_ID: Readonly<Record<ThreadListV2MenuActionId, MenuAction>> = {
-  settle: { id: "settle", title: "Settle", image: "checkmark" },
-  unsettle: { id: "unsettle", title: "Un-settle", image: "arrow.uturn.backward" },
-  archive: { id: "archive", title: "Archive", image: "archivebox" },
-  delete: {
-    id: "delete",
-    title: "Delete",
-    image: "trash",
-    attributes: { destructive: true },
-  },
-};
+const SLIM_MENU_ACTIONS: MenuAction[] = [
+  { id: "unsettle", title: "Un-settle", image: "arrow.uturn.backward" },
+  { id: "delete", title: "Delete", image: "trash", attributes: { destructive: true } },
+];
 
-function menuActionsForRow(input: {
-  readonly settlementSupported: boolean;
-  readonly variant: "card" | "slim";
-}): MenuAction[] {
-  return resolveThreadListV2MenuActionIds(input).map((id) => MENU_ACTION_BY_ID[id]);
-}
-
-const CARD_MENU_ACTIONS = menuActionsForRow({ settlementSupported: true, variant: "card" });
-const SLIM_MENU_ACTIONS = menuActionsForRow({ settlementSupported: true, variant: "slim" });
-const LEGACY_MENU_ACTIONS = menuActionsForRow({ settlementSupported: false, variant: "card" });
-// Archive rides along so the swipe-right gesture keeps a menu (and
-// VoiceOver) twin on the snoozed shelf.
 const SNOOZED_MENU_ACTIONS: MenuAction[] = [
   { id: "unsnooze", title: "Wake thread", image: "clock" },
-  MENU_ACTION_BY_ID.archive,
+  { id: "delete", title: "Delete", image: "trash", attributes: { destructive: true } },
+];
+
+// Pre-settlement servers: no lifecycle items, archive fills the gap.
+const LEGACY_MENU_ACTIONS: MenuAction[] = [
+  { id: "archive", title: "Archive", image: "archivebox" },
   { id: "delete", title: "Delete", image: "trash", attributes: { destructive: true } },
 ];
 
@@ -592,7 +560,8 @@ export const ThreadListV2Row = memo(function ThreadListV2Row(props: {
       Rendered as a flat tint so a row is recognizable by project at a
       glance, exactly as in the web sidebar. */
   readonly projectAccentColor?: string | null;
-  readonly providerDriver: string | null;
+  /** Keep the environment's provider array stable across unrelated list updates. */
+  readonly providers: ReadonlyArray<ThreadListProvider> | undefined;
   readonly providerInstance: ThreadRowProviderInstance | null;
   /** Which machine hosts the thread. Null when only one environment is
       connected — repeating the same label on every row is noise. Mirrors
@@ -621,16 +590,10 @@ export const ThreadListV2Row = memo(function ThreadListV2Row(props: {
   readonly onRenameThread: (thread: EnvironmentThreadShell) => void;
   readonly onRegenerateThreadTitle: (thread: EnvironmentThreadShell) => void;
   readonly onSettleThread: (thread: EnvironmentThreadShell) => Promise<boolean>;
-  readonly onSnoozeThread: (
-    thread: EnvironmentThreadShell,
-    preset: Pick<SnoozePreset, "snoozedUntil" | "untilDone">,
-  ) => void;
+  readonly onSnoozeThread: (thread: EnvironmentThreadShell, snoozedUntil: string) => void;
   readonly onUnsnoozeThread: (thread: EnvironmentThreadShell) => void;
   readonly onUnsettleThread: (thread: EnvironmentThreadShell) => void;
   readonly onArchiveThread: (thread: EnvironmentThreadShell) => void;
-  /** Forks the conversation and opens the copy. Offered only where
-      {@link canForkConversation} allows it. */
-  readonly onForkThread: (thread: EnvironmentThreadShell) => void;
   readonly onPinThread: (thread: EnvironmentThreadShell) => void;
   readonly onUnpinThread: (thread: EnvironmentThreadShell) => void;
   readonly onSetThreadAutoSettle: (thread: EnvironmentThreadShell, enabled: boolean) => void;
@@ -639,9 +602,6 @@ export const ThreadListV2Row = memo(function ThreadListV2Row(props: {
   readonly settlementSupported: boolean;
   /** False on servers that predate thread.snooze/unsnooze. */
   readonly snoozeSupported: boolean;
-  /** Server accepts an "until it's done" snooze; the row also requires a
-      running turn before offering it. */
-  readonly snoozeUntilDoneSupported: boolean;
   /** False on servers that predate thread.pin/unpin. */
   readonly pinningSupported: boolean;
   /** False on servers that predate thread.auto-settle.set. */
@@ -680,7 +640,6 @@ export const ThreadListV2Row = memo(function ThreadListV2Row(props: {
     onUnsnoozeThread,
     onUnsettleThread,
     onArchiveThread,
-    onForkThread,
     onPinThread,
     onUnpinThread,
     onSetThreadAutoSettle,
@@ -690,6 +649,19 @@ export const ThreadListV2Row = memo(function ThreadListV2Row(props: {
   const pinnedRow = props.pinned === true;
   const dormant = useSwipeRowDormant(props.activationKey);
 
+  const { providerDrivers, providerIconUrl } = useMemo(() => {
+    const provider = props.providers?.find(
+      (candidate) =>
+        candidate.instanceId ===
+        (thread.runtime?.providerInstanceId ?? thread.modelSelection.instanceId),
+    );
+    return {
+      providerDrivers: resolveThreadListV2ProviderDrivers(thread, props.providers),
+      providerIconUrl: provider?.iconUrl,
+    };
+  }, [thread, props.providers]);
+
+  const providerInstance = props.providerInstance;
   const pr = useThreadPr(thread);
 
   const theme = useUniwindTheme();
@@ -701,29 +673,16 @@ export const ThreadListV2Row = memo(function ThreadListV2Row(props: {
 
   const accentColor = props.projectAccentColor ?? null;
   const status = resolveThreadListV2Status(thread);
-  const statusLabel = STATUS_LABEL_BY_STATUS[status];
+  // "Done" marks a completion the user has not opened yet — same emerald
+  // label as the web sidebar, sourced from the server-side visited watermark
+  // so checking a thread on any device clears it everywhere.
+  const isUnread = status === "ready" && threadHasUnseenCompletion(thread);
+  const statusLabel =
+    STATUS_LABEL_BY_STATUS[status] ??
+    (isUnread ? { label: "Done", className: "text-adaptive-emerald-700-300" } : undefined);
+  // The timestamp is precomputed on the list item (same stamps the settled
+  // tail sorts by) so a minute tick only re-renders rows that draw it.
   const timeLabel = props.timeLabel;
-  const workingLabel = resolveThreadListV2WorkingTimeLabel(thread, status);
-  const archivePending = hasPendingArchive(thread);
-  // The row's accessibilityLabel collapses its subtree, so row-level markers
-  // are announced here rather than on their icons.
-  const rowAccessibilityLabel = [
-    thread.title,
-    props.hasQueuedMessages && "messages queued to send",
-    archivePending && "archives when done",
-  ]
-    .filter(Boolean)
-    .join(", ");
-  // A scheduled archive (`/t3-archive` or a deferred archive) stays visible
-  // at a glance in both row variants until it runs or is cancelled.
-  const archivePendingIcon = archivePending ? (
-    <SymbolView
-      name="archivebox"
-      size={11}
-      tintColorClassName="accent-warning-foreground"
-      type="monochrome"
-    />
-  ) : null;
   // Set while this thread's recording is playing or paused mid-way, so
   // pausing from the list keeps a way back in. A finished recording clears
   // it. Re-renders only when the state flips, never on the progress tick.
@@ -789,7 +748,7 @@ export const ThreadListV2Row = memo(function ThreadListV2Row(props: {
     setCustomSnoozeOpen(false);
   }
   const handleSnooze = useCallback(
-    (preset: Pick<SnoozePreset, "snoozedUntil" | "untilDone">) => onSnoozeThread(thread, preset),
+    (snoozedUntil: string) => onSnoozeThread(thread, snoozedUntil),
     [onSnoozeThread, thread],
   );
   const handleUnsnooze = useCallback(() => onUnsnoozeThread(thread), [onUnsnoozeThread, thread]);
@@ -803,7 +762,6 @@ export const ThreadListV2Row = memo(function ThreadListV2Row(props: {
   const handleMoveUp = useCallback(() => onMoveThread?.(thread, "up"), [onMoveThread, thread]);
   const handleMoveDown = useCallback(() => onMoveThread?.(thread, "down"), [onMoveThread, thread]);
   const handleArchive = useCallback(() => onArchiveThread(thread), [onArchiveThread, thread]);
-  const handleFork = useCallback(() => onForkThread(thread), [onForkThread, thread]);
 
   // Swipe: the v2 primary action is the lifecycle transition. Un-settling a
   // settled row keeps it active until new activity clears the user override.
@@ -818,24 +776,16 @@ export const ThreadListV2Row = memo(function ThreadListV2Row(props: {
     const id = setTimeout(() => bumpSnoozeGateTick((tick) => tick + 1), delayMs);
     return () => clearTimeout(id);
   }, [snoozeGateExpiryMs, snoozeGateTick]);
-  const forkable = canForkConversation(thread);
   const swipeActions = resolveThreadListV2SwipeActions({
     variant,
     settlementSupported: props.settlementSupported,
     snoozeSupported: props.snoozeSupported,
     snoozable: canSnooze(thread, { now: new Date().toISOString() }),
     snoozed: snoozedRow,
-    pinnable: props.pinningSupported,
-    pinned: pinnedRow,
-    forkable,
   });
-  const untilDoneOffered = props.snoozeUntilDoneSupported && canSnoozeUntilDone(thread);
   const snoozePresets = useMemo(
-    () =>
-      swipeActions.secondary === "snooze"
-        ? resolveSnoozePresets(new Date(), { untilDone: untilDoneOffered })
-        : ([] as const),
-    [props.snoozePresetMinute, swipeActions.secondary, untilDoneOffered],
+    () => (swipeActions.secondary === "snooze" ? resolveSnoozePresets(new Date()) : ([] as const)),
+    [props.snoozePresetMinute, swipeActions.secondary],
   );
   const snoozePresetActions = useMemo<MenuAction[]>(
     () => [
@@ -887,13 +837,6 @@ export const ThreadListV2Row = memo(function ThreadListV2Row(props: {
       variant,
     ],
   );
-  // Menu twin for the swipe-right Fork action, so the gesture keeps a
-  // long-press (and VoiceOver) equivalent wherever it is offered.
-  const forkMenuItem = useMemo<MenuAction[]>(
-    () =>
-      forkable ? [{ id: "fork", title: "Fork conversation", image: "arrow.triangle.branch" }] : [],
-    [forkable],
-  );
   // A submenu with the current option checked, matching web. This is a
   // per-thread setting, not a lifecycle verb.
   const autoSettleMenuItems = useMemo<MenuAction[]>(
@@ -933,63 +876,59 @@ export const ThreadListV2Row = memo(function ThreadListV2Row(props: {
   );
   const snoozableCardMenuActions = useMemo<MenuAction[]>(
     () => [
-      MENU_ACTION_BY_ID.settle,
+      { id: "settle", title: "Settle", image: "checkmark" },
       {
         id: "snooze",
         title: "Snooze",
         image: "clock",
         subactions: snoozePresetActions,
       },
-      MENU_ACTION_BY_ID.archive,
       ...arrangementMenuItems,
-      ...forkMenuItem,
       ...titleMenuItems,
       ...autoSettleMenuItems,
-      MENU_ACTION_BY_ID.delete,
+      { id: "delete", title: "Delete", image: "trash", attributes: { destructive: true } },
     ],
-    [forkMenuItem, arrangementMenuItems, autoSettleMenuItems, snoozePresetActions, titleMenuItems],
+    [arrangementMenuItems, autoSettleMenuItems, snoozePresetActions, titleMenuItems],
   );
   const cardMenuActions = useMemo<MenuAction[]>(
     () => [
-      ...CARD_MENU_ACTIONS.slice(0, -1),
+      CARD_MENU_ACTIONS[0]!,
       ...arrangementMenuItems,
-      ...forkMenuItem,
       ...titleMenuItems,
       ...autoSettleMenuItems,
-      CARD_MENU_ACTIONS[CARD_MENU_ACTIONS.length - 1]!,
+      ...CARD_MENU_ACTIONS.slice(1),
     ],
-    [forkMenuItem, arrangementMenuItems, autoSettleMenuItems, titleMenuItems],
+    [arrangementMenuItems, autoSettleMenuItems, titleMenuItems],
   );
   // Settled and snoozed rows keep the setting too, matching web where every
   // row shares one menu builder.
   const slimMenuActions = useMemo<MenuAction[]>(
     () => [
-      ...SLIM_MENU_ACTIONS.slice(0, -1),
+      SLIM_MENU_ACTIONS[0]!,
       ...arrangementMenuItems.filter(
         (action) => action.id !== "move-up" && action.id !== "move-down",
       ),
-      ...forkMenuItem,
       ...titleMenuItems,
       ...autoSettleMenuItems,
-      SLIM_MENU_ACTIONS[SLIM_MENU_ACTIONS.length - 1]!,
+      SLIM_MENU_ACTIONS[1]!,
     ],
-    [forkMenuItem, arrangementMenuItems, autoSettleMenuItems, titleMenuItems],
+    [arrangementMenuItems, autoSettleMenuItems, titleMenuItems],
   );
   const snoozedMenuActions = useMemo<MenuAction[]>(
     () => [
-      ...SNOOZED_MENU_ACTIONS.slice(0, -1),
+      SNOOZED_MENU_ACTIONS[0]!,
       ...titleMenuItems,
       ...autoSettleMenuItems,
-      SNOOZED_MENU_ACTIONS[SNOOZED_MENU_ACTIONS.length - 1]!,
+      SNOOZED_MENU_ACTIONS[1]!,
     ],
     [autoSettleMenuItems, titleMenuItems],
   );
   const legacyMenuActions = useMemo<MenuAction[]>(
     () => [
-      ...LEGACY_MENU_ACTIONS.slice(0, -1),
+      LEGACY_MENU_ACTIONS[0]!,
       ...arrangementMenuItems,
       ...titleMenuItems,
-      LEGACY_MENU_ACTIONS[LEGACY_MENU_ACTIONS.length - 1]!,
+      LEGACY_MENU_ACTIONS[1]!,
     ],
     [arrangementMenuItems, titleMenuItems],
   );
@@ -1007,7 +946,6 @@ export const ThreadListV2Row = memo(function ThreadListV2Row(props: {
       if (nativeEvent.event === "move-up") handleMoveUp();
       if (nativeEvent.event === "move-down") handleMoveDown();
       if (nativeEvent.event === "archive") handleArchive();
-      if (nativeEvent.event === "fork") handleFork();
       if (nativeEvent.event === "rename") handleRename();
       if (nativeEvent.event === "regenerate-title") handleRegenerateTitle();
       if (nativeEvent.event === "copy-thread-id") {
@@ -1024,7 +962,7 @@ export const ThreadListV2Row = memo(function ThreadListV2Row(props: {
         now: new Date(),
       });
       if (snoozeSelection._tag === "selected") {
-        handleSnooze(snoozeSelection.preset);
+        handleSnooze(snoozeSelection.preset.snoozedUntil);
       } else if (snoozeSelection._tag === "expired") {
         Alert.alert("Could not snooze thread", "That snooze time has passed. Choose another time.");
       }
@@ -1034,7 +972,6 @@ export const ThreadListV2Row = memo(function ThreadListV2Row(props: {
       thread,
       handleArchive,
       handleDelete,
-      handleFork,
       handleRegenerateTitle,
       handleRename,
       handleMoveDown,
@@ -1046,8 +983,8 @@ export const ThreadListV2Row = memo(function ThreadListV2Row(props: {
       handleUnpin,
       handleUnsettle,
       handleUnsnooze,
-      snoozePresets,
       setCustomSnoozeOpen,
+      snoozePresets,
     ],
   );
   const primaryAction = useMemo(() => {
@@ -1108,57 +1045,10 @@ export const ThreadListV2Row = memo(function ThreadListV2Row(props: {
         : null,
     [handleMenuAction, snoozePresetActions, swipeActions.secondary, thread.title],
   );
-  // Leading panel, ordered from the screen edge inward. Archive stays last so
-  // it remains what a full swipe right commits, as it always has. Tones keep
-  // each action distinct: pin is warning, fork is secondary, archive is the
-  // panel's primary default (the trailing panel owns danger for Delete).
-  const leftActions = swipeActions.left.map((action) => {
-    if (action === "pin") {
-      return {
-        accessibilityLabel: `Pin ${thread.title}`,
-        tone: "warning" as const,
-        icon: "pin" as const,
-        label: "Pin",
-        onPress: handlePin,
-      };
-    }
-    if (action === "unpin") {
-      return {
-        accessibilityLabel: `Unpin ${thread.title}`,
-        tone: "warning" as const,
-        icon: "pin.slash" as const,
-        label: "Unpin",
-        onPress: handleUnpin,
-      };
-    }
-    if (action === "fork") {
-      return {
-        accessibilityLabel: `Fork ${thread.title}`,
-        tone: "secondary" as const,
-        icon: "arrow.triangle.branch" as const,
-        label: "Fork",
-        onPress: handleFork,
-      };
-    }
-    return {
-      accessibilityLabel: `Archive ${thread.title}`,
-      icon: "archivebox" as const,
-      label: "Archive",
-      onPress: handleArchive,
-    };
-  });
-  const swipeAccessibilityHint = [
+  const swipeAccessibilityHint =
     secondaryAction === null
       ? `Opens the thread. Swipe left to ${primaryAction.label.toLowerCase()}.`
-      : `Opens the thread. Swipe left for ${primaryAction.label.toLowerCase()} and snooze actions.`,
-    ...(leftActions.length === 0
-      ? []
-      : leftActions.length === 1
-        ? [`Swipe right to ${leftActions[0]!.label.toLowerCase()}.`]
-        : [
-            `Swipe right for ${leftActions.map((action) => action.label.toLowerCase()).join(", ")}; a full swipe archives.`,
-          ]),
-  ].join(" ");
+      : `Opens the thread. Swipe left for ${primaryAction.label.toLowerCase()} and snooze actions.`;
 
   // Sidebar rows use navigation foregrounds on their active and idle surfaces.
   const cardContent = (
@@ -1205,9 +1095,7 @@ export const ThreadListV2Row = memo(function ThreadListV2Row(props: {
           )}
         >
           {statusLabel?.label ?? timeLabel}
-          {workingLabel === null ? null : ` ${workingLabel}`}
         </Text>
-        {archivePendingIcon}
       </View>
       <Text
         className={cn(
@@ -1231,17 +1119,19 @@ export const ThreadListV2Row = memo(function ThreadListV2Row(props: {
         </View>
       ) : null}
       <View className="mt-1 flex-row items-center gap-2">
-        {status === "failed" && thread.session?.lastError ? (
+        {(status === "failed" || status === "limited") && thread.runtime?.lastError ? (
           <Text
             className={cn(
               "flex-1 text-xs",
               selected
                 ? selectedThreadRowColors.mutedForegroundClassName
-                : "text-danger-foreground",
+                : status === "limited"
+                  ? "text-warning-foreground"
+                  : "text-danger-foreground",
             )}
             numberOfLines={1}
           >
-            {thread.session.lastError}
+            {thread.runtime.lastError}
           </Text>
         ) : thread.branch || props.environmentLabel ? (
           /* "branch · machine" share one truncating line. The machine sits
@@ -1326,50 +1216,29 @@ export const ThreadListV2Row = memo(function ThreadListV2Row(props: {
             </Text>
           </View>
         ) : null}
-        {props.providerInstance ? (
-          <ProviderInstanceIcon
-            provider={props.providerInstance.driverKind}
-            size={14}
-            displayName={props.providerInstance.displayName}
-            accentColor={props.providerInstance.accentColor}
-            showBadge={props.providerInstance.showBadge}
-            surfaceColor={rowAppearance.providerIconSurfaceColor}
-          />
-        ) : props.providerDriver ? (
-          // Legacy or partially loaded threads know only the driver.
-          <View className="opacity-60">
-            <ProviderIcon provider={props.providerDriver} size={14} />
+        {providerInstance ? (
+          // Earlier owners peek out behind the current provider so a
+          // handed-off thread shows where it has been. The current owner
+          // keeps its account badge so same-driver instances stay distinct.
+          <View className="flex-row items-center">
+            {providerDrivers.slice(0, -1).map((driver, index) => (
+              <View key={`${driver}:${index}`} className="-mr-1 opacity-30">
+                <ProviderIcon provider={driver} size={12} />
+              </View>
+            ))}
+            <ProviderInstanceIcon
+              iconUrl={providerIconUrl}
+              provider={providerInstance.driverKind}
+              size={14}
+              displayName={providerInstance.displayName}
+              accentColor={providerInstance.accentColor}
+              showBadge={providerInstance.showBadge}
+              surfaceColor={rowAppearance.providerIconSurfaceColor}
+            />
           </View>
         ) : null}
       </View>
     </>
-  );
-
-  const slimPinIndicator = !pinnedRow ? null : props.pinningSupported ? (
-    <Pressable
-      accessibilityLabel={`Unpin ${thread.title}`}
-      accessibilityRole="button"
-      hitSlop={8}
-      onPress={(event) => {
-        event.stopPropagation();
-        handleUnpin();
-      }}
-      style={({ pressed }) => ({ opacity: pressed ? 0.5 : 1 })}
-    >
-      <SymbolView
-        name="pin"
-        size={12}
-        tintColor={selected ? selectedForegroundColor : pinTintColor}
-        type="monochrome"
-      />
-    </Pressable>
-  ) : (
-    <SymbolView
-      name="pin"
-      size={12}
-      tintColor={selected ? selectedForegroundColor : pinTintColor}
-      type="monochrome"
-    />
   );
 
   const rowContent = (close: () => void) =>
@@ -1381,7 +1250,9 @@ export const ThreadListV2Row = memo(function ThreadListV2Row(props: {
         interactionOpacity={rowAppearance.interactionOpacity}
         className={rowAppearance.className}
         accessibilityHint={swipeAccessibilityHint}
-        accessibilityLabel={rowAccessibilityLabel}
+        accessibilityLabel={
+          props.hasQueuedMessages ? `${thread.title}, messages queued to send` : thread.title
+        }
         accessibilityRole="button"
         accessibilityState={{ selected }}
         onAccessibilityAction={onListeningAccessibilityAction}
@@ -1421,7 +1292,9 @@ export const ThreadListV2Row = memo(function ThreadListV2Row(props: {
         interactionClassName={rowAppearance.interactionClassName}
         interactionOpacity={rowAppearance.interactionOpacity}
         accessibilityHint={swipeAccessibilityHint}
-        accessibilityLabel={rowAccessibilityLabel}
+        accessibilityLabel={
+          props.hasQueuedMessages ? `${thread.title}, messages queued to send` : thread.title
+        }
         accessibilityRole="button"
         accessibilityState={{ selected }}
         className={rowAppearance.className}
@@ -1481,9 +1354,7 @@ export const ThreadListV2Row = memo(function ThreadListV2Row(props: {
             ) : null}
           </View>
           {listeningIndicator}
-          {slimPinIndicator}
           {props.hasQueuedMessages ? <QueuedMessageIcon selected={selected} /> : null}
-          {archivePendingIcon}
           <Text
             className={cn(
               "text-sm tabular-nums",
@@ -1506,10 +1377,7 @@ export const ThreadListV2Row = memo(function ThreadListV2Row(props: {
   return (
     <View collapsable={false}>
       {customSnoozeOpen && (
-        <CustomSnoozeSheet
-          onClose={() => setCustomSnoozeOpen(false)}
-          onSnooze={(snoozedUntil) => handleSnooze({ snoozedUntil })}
-        />
+        <CustomSnoozeSheet onClose={() => setCustomSnoozeOpen(false)} onSnooze={handleSnooze} />
       )}
       <ThreadSwipeable
         dormant={dormant}
@@ -1522,13 +1390,12 @@ export const ThreadListV2Row = memo(function ThreadListV2Row(props: {
         // Un-settle), never the secondary snooze action.
         fullSwipeAction="primary"
         fullSwipeWidth={props.fullSwipeWidth ?? windowWidth - 32}
-        leftActions={leftActions}
         onDelete={handleDelete}
         onSwipeableClose={props.onSwipeableClose}
         onSwipeableWillOpen={props.onSwipeableWillOpen}
         primaryAction={primaryAction}
         secondaryAction={secondaryAction}
-        resetKey={`${thread.environmentId}:${thread.id}:${variant}:${snoozedRow}:${thread.settledAt}:${thread.unsettledAt}:${thread.snoozedUntil}:${swipeActions.left.length}`}
+        resetKey={`${thread.environmentId}:${thread.id}:${variant}:${snoozedRow}:${thread.settledAt}:${thread.unsettledAt}:${thread.snoozedUntil}`}
         simultaneousWith={props.simultaneousSwipeGesture}
         threadTitle={thread.title}
       >

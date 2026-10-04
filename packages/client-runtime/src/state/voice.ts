@@ -1,8 +1,4 @@
-import type {
-  MessageSpeechFailureReason,
-  MessageSpeechSynthesisRequest,
-  VoiceTranscriptionRequest,
-} from "@t3tools/contracts";
+import type { MessageSpeechFailureReason, VoiceTranscriptionRequest } from "@t3tools/contracts";
 import * as Effect from "effect/Effect";
 import * as Option from "effect/Option";
 import * as SubscriptionRef from "effect/SubscriptionRef";
@@ -19,7 +15,6 @@ import { executeAuthenticatedEnvironmentHttpRequest } from "./environmentHttpAut
 import { createEnvironmentCommand } from "./runtime.ts";
 
 const VOICE_TRANSCRIPTION_TIMEOUT_MS = 75_000;
-const MESSAGE_SPEECH_SYNTHESIS_TIMEOUT_MS = 330_000;
 
 export const messageSpeechFailureDescription = (
   reason: MessageSpeechFailureReason | undefined,
@@ -68,42 +63,6 @@ export function createVoiceTranscriptionEnvironmentCommand<R, E>(
   return createEnvironmentCommand(runtime, {
     label: "environment-data:commands:voice:transcribe",
     execute: (input: VoiceTranscriptionRequest) => transcribeVoiceRecording(input),
-    concurrency: { mode: "parallel" },
-  });
-}
-
-export const synthesizeMessageSpeech = Effect.fn("clientRuntime.voice.synthesizeMessageSpeech")(
-  function* (request: MessageSpeechSynthesisRequest) {
-    const supervisor = yield* EnvironmentSupervisor;
-    const prepared = yield* SubscriptionRef.get(supervisor.prepared);
-    if (Option.isNone(prepared)) {
-      return yield* new RemoteEnvironmentAuthFetchError({
-        message: "The selected environment is not connected.",
-        cause: "environment_not_connected",
-      });
-    }
-
-    const signer = yield* Effect.serviceOption(ManagedRelayDpopSigner);
-    const remoteAuthorization = yield* Effect.serviceOption(RemoteEnvironmentAuthorization);
-    return yield* executeAuthenticatedEnvironmentHttpRequest({
-      group: "voice",
-      prepared: prepared.value,
-      signer,
-      remoteAuthorization,
-      method: "POST",
-      url: (httpBaseUrl) => environmentEndpointUrl(httpBaseUrl, "/api/voice/message-speech"),
-      timeoutMs: MESSAGE_SPEECH_SYNTHESIS_TIMEOUT_MS,
-      request: ({ client, headers }) => client.synthesizeMessage({ payload: request, headers }),
-    });
-  },
-);
-
-export function createMessageSpeechSynthesisEnvironmentCommand<R, E>(
-  runtime: Atom.AtomRuntime<EnvironmentRegistry | HttpClient.HttpClient | R, E>,
-) {
-  return createEnvironmentCommand(runtime, {
-    label: "environment-data:commands:voice:synthesize-message",
-    execute: (input: MessageSpeechSynthesisRequest) => synthesizeMessageSpeech(input),
     concurrency: { mode: "parallel" },
   });
 }

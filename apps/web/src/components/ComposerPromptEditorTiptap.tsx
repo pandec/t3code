@@ -143,11 +143,7 @@ export interface ComposerPromptEditorProps {
     contextIds: string[],
   ) => void;
   onVisibleSelectionChange?: () => void;
-  onCommandKeyDown?: (
-    key: "ArrowDown" | "ArrowUp" | "Enter" | "Tab" | "Escape",
-    event: KeyboardEvent,
-    isTaskItem?: boolean,
-  ) => boolean;
+  onCommandKeyDown?: (key: string, event: KeyboardEvent, isTaskItem?: boolean) => boolean;
   onPageScrollKeyDown?: (key: "PageUp" | "PageDown") => void;
   onPageScrollKeyUp?: (key: string) => void;
   onPageScrollRelease?: () => void;
@@ -288,8 +284,6 @@ function ComposerSkillNodeView({ node }: NodeViewProps) {
   const skillLabel = (node.attrs.skillLabel as string) || skillName;
   const skillDescription = (node.attrs.skillDescription as string | null) ?? null;
   const skill = skills.find((candidate) => candidate.name === skillName);
-  // Optional: provider-native discovery can report a skill without a path.
-  const skillPath = skill?.path;
   return (
     <NodeViewWrapper as="span" className={CHIP_NODE_SELECTION_CLASS_NAME}>
       <ContextChipPopover
@@ -305,8 +299,8 @@ function ComposerSkillNodeView({ node }: NodeViewProps) {
               skillDescription ??
               "No description is available for this skill."}
           </p>
-          {skillPath ? (
-            <Button variant="outline" size="sm" onClick={() => actions.openMention(skillPath)}>
+          {skill?.path ? (
+            <Button variant="outline" size="sm" onClick={() => actions.openMention(skill.path)}>
               View instructions
             </Button>
           ) : null}
@@ -1003,18 +997,7 @@ function ComposerPromptEditorTiptapInner(props: ComposerPromptEditorProps) {
             });
           }
           if (!handler) return false;
-          const key =
-            event.key === "Tab"
-              ? ("Tab" as const)
-              : event.key === "ArrowDown"
-                ? ("ArrowDown" as const)
-                : event.key === "ArrowUp"
-                  ? ("ArrowUp" as const)
-                  : event.key === "Escape"
-                    ? ("Escape" as const)
-                    : null;
-          if (!key) return false;
-          const handled = handler(key, event);
+          const handled = handler(event.key, event);
           if (handled) {
             event.preventDefault();
             event.stopPropagation();

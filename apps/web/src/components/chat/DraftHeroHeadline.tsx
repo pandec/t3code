@@ -14,7 +14,6 @@ import { primaryServerKeybindingsAtom } from "~/state/server";
 import { useProjectAccentColors } from "~/hooks/useProjectAccentColors";
 import { useScratchProject } from "~/hooks/useScratchProject";
 import { useAccentTintSettings, useClientSettings } from "~/hooks/useSettings";
-import { useThreadGroupCatalog } from "~/hooks/useThreadGroups";
 import { hasExplicitComposerModelSelection } from "~/lib/chatThreadActions";
 import {
   deriveLogicalProjectKeyFromSettings,
@@ -74,11 +73,6 @@ export function DraftHeroHeadline({
   const getComposerDraft = useComposerDraftStore((store) => store.getComposerDraft);
   const applyStickyState = useComposerDraftStore((store) => store.applyStickyState);
   const setModelSelection = useComposerDraftStore((store) => store.setModelSelection);
-  const setDraftThreadContext = useComposerDraftStore((store) => store.setDraftThreadContext);
-  const draftCustomGroupId = useComposerDraftStore((store) =>
-    draftId ? (store.getDraftSession(draftId)?.customGroupId ?? null) : null,
-  );
-  const customGroups = useThreadGroupCatalog();
   const openAddProject = useCallback(() => openCommandPalette({ open: "add-project" }), []);
   const { scratchEnvironmentId, scratchWorkspaceRootFor, openScratchProject } = useScratchProject();
   const keybindings = useAtomValue(primaryServerKeybindingsAtom);
@@ -212,7 +206,9 @@ export function DraftHeroHeadline({
             .defaultModelSelection
         : project.defaultModelSelection;
       if (defaultModelSelection) {
-        setModelSelection(draftId, defaultModelSelection);
+        setModelSelection(draftId, defaultModelSelection, {
+          replaceOptions: true,
+        });
       }
     }
   };
@@ -376,69 +372,6 @@ export function DraftHeroHeadline({
       </Tooltip>
     ) : null;
 
-  // The group line appears when the draft's environment can create the
-  // thread inside a group, and stays while the draft holds a group on an
-  // environment that cannot, so the user can switch back to Active. A group
-  // deleted since the pick reads as Active, matching what the send will do.
-  const supportsGroupCreation =
-    activeProjectRef !== null &&
-    environments.find((environment) => environment.environmentId === activeProjectRef.environmentId)
-      ?.serverConfig?.environment.capabilities.threadCustomGroupCreation === true;
-  const selectedCustomGroup = customGroups.catalog.find((group) => group.id === draftCustomGroupId);
-  const activeCustomGroup = selectedCustomGroup?.deleted ? null : selectedCustomGroup;
-  const missingCustomGroup = draftCustomGroupId !== null && selectedCustomGroup === undefined;
-  const showGroupLine =
-    draftId !== null &&
-    hasResolvedProject &&
-    (supportsGroupCreation || draftCustomGroupId !== null);
-  const groupSelector = (
-    <Menu>
-      <MenuTrigger
-        disabled={customGroups.groups.length === 0 && !missingCustomGroup}
-        render={
-          <InlineButton tone="picker" className="pointer-events-auto max-w-48 align-baseline" />
-        }
-      >
-        <span className="truncate">
-          {activeCustomGroup?.name ?? (missingCustomGroup ? "Unavailable" : "Active")}
-        </span>
-      </MenuTrigger>
-      <MenuPopup align="center" className="max-h-80 min-w-40! w-max max-w-64 overflow-y-auto">
-        <MenuRadioGroup
-          value={missingCustomGroup ? draftCustomGroupId : (activeCustomGroup?.id ?? "")}
-          onValueChange={(value) => {
-            if (!draftId) return;
-            setDraftThreadContext(draftId, {
-              customGroupId: typeof value === "string" && value.length > 0 ? value : null,
-            });
-          }}
-        >
-          <MenuRadioItem value="" closeOnClick>
-            Active
-          </MenuRadioItem>
-          {customGroups.groups.map((group) => (
-            <MenuRadioItem
-              key={group.id}
-              value={group.id}
-              closeOnClick
-              disabled={!supportsGroupCreation}
-            >
-              <span className="block min-w-0 truncate">{group.name}</span>
-            </MenuRadioItem>
-          ))}
-        </MenuRadioGroup>
-        {supportsGroupCreation ? null : (
-          <>
-            <MenuSeparator />
-            <div className="px-2 py-1 text-muted-foreground text-xs">
-              This environment cannot create threads in a group.
-            </div>
-          </>
-        )}
-      </MenuPopup>
-    </Menu>
-  );
-
   return (
     <div className="mx-auto flex w-full max-w-5xl flex-col items-center">
       <h1
@@ -462,11 +395,6 @@ export function DraftHeroHeadline({
           {isScratchDraft ? projectSelector : orStartWithoutProject}
         </p>
       )}
-      {showGroupLine ? (
-        <p className="mt-2 w-full text-center text-muted-foreground text-sm">
-          New thread in {groupSelector} group
-        </p>
-      ) : null}
     </div>
   );
 }

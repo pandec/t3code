@@ -1,7 +1,6 @@
 import {
   AVAILABLE_CONNECTION_STATE,
   connectionProjectionPhase,
-  type SupervisorConnectionState,
 } from "@t3tools/client-runtime/connection";
 import {
   createEnvironmentShellAtoms,
@@ -9,39 +8,21 @@ import {
   createShellEnvironmentAtoms,
   type EnvironmentShellState,
 } from "@t3tools/client-runtime/state/shell";
-import { enabledEnvironmentIds } from "@t3tools/client-runtime/state/connections";
+import {
+  type EnvironmentCatalogState,
+  enabledEnvironmentIds,
+} from "@t3tools/client-runtime/state/connections";
 import type { EnvironmentId } from "@t3tools/contracts";
 import * as Option from "effect/Option";
 import { AsyncResult, Atom } from "effect/unstable/reactivity";
 
 import { environmentCatalog } from "../connection/catalog";
 import { connectionAtomRuntime } from "../connection/runtime";
+import { isHostedStaticApp } from "../hostedPairing";
 
 export const shellEnvironment = createShellEnvironmentAtoms(connectionAtomRuntime);
 export const environmentShell = createEnvironmentShellAtoms(connectionAtomRuntime);
 export const environmentSnapshotAtom = createEnvironmentSnapshotAtom(environmentShell.stateAtom);
-
-function disconnectedEnvironmentIsSettled(connection: SupervisorConnectionState): boolean {
-  if (connectionProjectionPhase(connection) !== "disconnected") {
-    return false;
-  }
-  // A retrying environment is only transiently disconnected; give it its
-  // first retries before treating its current shell as settled.
-  return !(connection.phase === "backoff" && connection.desired && connection.attempt <= 2);
-}
-
-export function isEnvironmentShellReadyForTurnCompletion(
-  shell: EnvironmentShellState,
-  connection: Option.Option<SupervisorConnectionState>,
-): boolean {
-  if (Option.isNone(connection)) {
-    return false;
-  }
-  if (connectionProjectionPhase(connection.value) === "ready") {
-    return shell.status === "live";
-  }
-  return disconnectedEnvironmentIsSettled(connection.value);
-}
 
 export const allEnvironmentShellsBootstrappedAtom = Atom.make((get) => {
   const catalog = AsyncResult.value(get(environmentCatalog.catalogAtom));
@@ -56,25 +37,48 @@ export const allEnvironmentShellsBootstrappedAtom = Atom.make((get) => {
       AsyncResult.value(get(environmentCatalog.stateAtom(environmentId))),
       () => AVAILABLE_CONNECTION_STATE,
     );
-    if (!disconnectedEnvironmentIsSettled(connection)) {
+    if (connectionProjectionPhase(connection) !== "disconnected") {
+      return false;
+    }
+    // A retrying environment is only transiently disconnected; give it its
+    // first retries before letting the landing settle without its snapshot.
+    if (connection.phase === "backoff" && connection.desired && connection.attempt <= 2) {
       return false;
     }
   }
   return true;
 }).pipe(Atom.withLabel("web-all-environment-shells-bootstrapped"));
 
-export const environmentIdsReadyForTurnCompletionAtom = Atom.make((get) => {
-  const readyEnvironmentIds = new Set<EnvironmentId>();
-  const catalog = AsyncResult.value(get(environmentCatalog.catalogAtom));
-  if (Option.isNone(catalog)) {
-    return readyEnvironmentIds;
-  }
-  for (const environmentId of enabledEnvironmentIds(catalog.value)) {
-    const shell = get(environmentShell.stateValueAtom(environmentId));
-    const connection = AsyncResult.value(get(environmentCatalog.stateAtom(environmentId)));
-    if (isEnvironmentShellReadyForTurnCompletion(shell, connection)) {
-      readyEnvironmentIds.add(environmentId);
+/** Cached or missing snapshots cannot establish that a saved project no longer exists. */
+export function createAllEnvironmentProjectSnapshotsReadyAtom(input: {
+  readonly catalogValueAtom: Atom.Atom<EnvironmentCatalogState>;
+  readonly shellStateValueAtom: (environmentId: EnvironmentId) => Atom.Atom<EnvironmentShellState>;
+  readonly requiresPrimaryEnvironment: boolean;
+}) {
+  return Atom.make((get) => {
+    const catalog = get(input.catalogValueAtom);
+    // The persisted catalog can emit before platform discovery registers the
+    // primary environment. Neither that gap nor an empty catalog proves absence.
+    if (!catalog.isReady || catalog.entries.size === 0) return false;
+    if (
+      input.requiresPrimaryEnvironment &&
+      !Array.from(catalog.entries.values()).some(
+        (entry) => entry.target._tag === "PrimaryConnectionTarget",
+      )
+    ) {
+      return false;
     }
-  }
-  return readyEnvironmentIds;
-}).pipe(Atom.withLabel("web-environment-ids-ready-for-turn-completion"));
+    for (const environmentId of enabledEnvironmentIds(catalog)) {
+      const shell = get(input.shellStateValueAtom(environmentId));
+      if (shell.status !== "live" || Option.isNone(shell.snapshot)) return false;
+    }
+    return true;
+  }).pipe(Atom.withLabel("web-all-environment-project-snapshots-ready"));
+}
+
+export const allEnvironmentProjectSnapshotsReadyAtom =
+  createAllEnvironmentProjectSnapshotsReadyAtom({
+    catalogValueAtom: environmentCatalog.catalogValueAtom,
+    shellStateValueAtom: environmentShell.stateValueAtom,
+    requiresPrimaryEnvironment: !isHostedStaticApp(),
+  });

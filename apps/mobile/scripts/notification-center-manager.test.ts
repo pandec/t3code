@@ -25,9 +25,12 @@ describe.skipIf(NodeOS.platform() !== "darwin")(
         "utf8",
       );
       // The manager guards its registry with ExpoModulesCore's Mutex backport.
+      // Resolve from the real pnpm store path; the workspace symlink has no sibling deps.
       const notificationsRequire = NodeModule.createRequire(
-        NodeURL.fileURLToPath(
-          new URL("../node_modules/expo-notifications/package.json", import.meta.url),
+        NodeFS.realpathSync(
+          NodeURL.fileURLToPath(
+            new URL("../node_modules/expo-notifications/package.json", import.meta.url),
+          ),
         ),
       );
       const mutex = NodePath.join(

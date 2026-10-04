@@ -66,9 +66,6 @@ const makeServerConfig = Effect.fn(function* (baseDir: string) {
     mode: "web",
     autoBootstrapProjectFromCwd: false,
     logWebSocketEvents: false,
-    providerSessionReaperInactivityThresholdMs: 30 * 60 * 1000,
-    providerSessionReaperSweepIntervalMs: 5 * 60 * 1000,
-    providerSessionReaperMaxPendingExtensionMs: 24 * 60 * 60 * 1000,
     tailscaleServeEnabled: false,
     tailscaleServePort: 443,
     port: 0,
@@ -174,7 +171,6 @@ it.layer(NodeServices.layer)("ServerEnvironmentLive", (it) => {
       expect(first.orchestrationProtocolVersion).toBe(ORCHESTRATION_PROTOCOL_VERSION);
       expect(second.capabilities.repositoryIdentity).toBe(true);
       expect(second.capabilities.connectionProbe).toBe(true);
-      expect(second.capabilities.conditionalProjectScriptUpdates).toBe(true);
       expect(second.capabilities.projectAccentColors).toBe(true);
       expect(second.capabilities.projectAccentColorsFill).toBe(true);
       expect(second.capabilities.savedPrompts).toBe(true);
@@ -183,15 +179,12 @@ it.layer(NodeServices.layer)("ServerEnvironmentLive", (it) => {
       expect(second.capabilities.pullRequests).toBe(true);
       expect(second.capabilities.linearIssues).toBe(true);
       expect(second.capabilities.requiredWorktreeBootstrap).toBe(true);
-      expect(second.capabilities.reasoningMessages).toBe(true);
       expect(second.capabilities.usagePriceOverrides).toBe(true);
       expect(second.capabilities.threadActiveReorder).toBe(true);
-      expect(second.capabilities.threadCustomGroups).toBe(true);
-      expect(second.capabilities.threadCustomGroupCreation).toBe(true);
-      expect(second.capabilities.threadGroupPlacement).toBe(true);
       expect(second.capabilities.threadTitleRegeneration).toBe(true);
       expect(second.capabilities.threadPullRequests).toBe(true);
       expect(second.capabilities.threadPullRequestLinking).toBe(true);
+      expect(second.capabilities.serverResolvedCommandContext).toBe(true);
       expect(second.capabilities.agentActivityPublishing).toBe(false);
     }),
   );
@@ -272,13 +265,15 @@ it.layer(NodeServices.layer)("ServerEnvironmentLive", (it) => {
       expect(withFd.capabilities.serverSelfUpdate).toBe("desktop-managed");
       expect(withFd.capabilities.desktopAppUpdate).toBe(true);
       expect(withFd.capabilities.serverSelfUpdateProgress).toBe(true);
-      expect(withFd.capabilities.serverUpdateThreadContinuation).toBe(true);
+      // v2 recovery terminalizes running runs on restart, so continuation
+      // stays unadvertised until the v2 runtime carries the markers.
+      expect(withFd.capabilities.serverUpdateThreadContinuation).toBeUndefined();
 
       const withoutFd = yield* describeWith({ mode: "desktop" });
       expect(withoutFd.capabilities.serverSelfUpdate).toBe("desktop-managed");
       expect(withoutFd.capabilities.desktopAppUpdate).toBeUndefined();
       expect(withoutFd.capabilities.serverSelfUpdateProgress).toBeUndefined();
-      expect(withoutFd.capabilities.serverUpdateThreadContinuation).toBe(true);
+      expect(withoutFd.capabilities.serverUpdateThreadContinuation).toBeUndefined();
 
       const developmentIdentity = yield* describeWith(
         { mode: "desktop", desktopTelemetryControlFd: 5 },
@@ -287,11 +282,9 @@ it.layer(NodeServices.layer)("ServerEnvironmentLive", (it) => {
       expect(developmentIdentity.capabilities.serverSelfUpdate).toBeUndefined();
       expect(developmentIdentity.capabilities.desktopAppUpdate).toBeUndefined();
       expect(developmentIdentity.capabilities.serverSelfUpdateProgress).toBeUndefined();
-      expect(developmentIdentity.capabilities.serverUpdateThreadContinuation).toBe(true);
 
       const web = yield* describeWith({ mode: "web", desktopTelemetryControlFd: 5 });
       expect(web.capabilities.desktopAppUpdate).toBeUndefined();
-      expect(web.capabilities.serverUpdateThreadContinuation).toBe(true);
     }),
   );
 

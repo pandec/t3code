@@ -1,18 +1,11 @@
-import {
-  ProviderDriverKind,
-  ProviderInstanceId,
-  type ServerProvider,
-  type ServerProviderSkill,
-} from "@t3tools/contracts";
+import { ProviderDriverKind, ProviderInstanceId, type ServerProvider } from "@t3tools/contracts";
 import { describe, expect, it } from "vite-plus/test";
 
 import {
   dedupeProviderSkillsByName,
   formatProviderSkillDisplayName,
-  getProviderSkillsForSlashMenu,
   getProviderSlashCommandsForSlashMenu,
-  isProviderSkillManualOnly,
-  resolveEffectiveProviderSkills,
+  getProviderSkillsForSlashMenu,
   resolveProviderSkillsForCwd,
   resolveProviderSlashCommandsForCwd,
   resolveProviderSkillSourceKind,
@@ -193,11 +186,6 @@ describe("getProviderSlashCommandsForSlashMenu", () => {
 });
 
 describe("resolveProviderSkillSourceKind", () => {
-  it("classifies a skill that reports no path by its scope alone", () => {
-    expect(resolveProviderSkillSourceKind({ scope: "user" })).toBe("personal");
-    expect(resolveProviderSkillSourceKind({})).toBe("other");
-  });
-
   it("marks plugin-backed skills as app installs", () => {
     expect(
       resolveProviderSkillSourceKind({
@@ -246,42 +234,6 @@ describe("resolveProviderSkillSourceKind", () => {
         path: "/opt/skills/team-review/SKILL.md",
       }),
     ).toBe("other");
-  });
-});
-
-describe("isProviderSkillManualOnly", () => {
-  it("flags only skills the provider reported as not model-invocable", () => {
-    expect(isProviderSkillManualOnly({ modelInvocable: false })).toBe(true);
-    expect(isProviderSkillManualOnly({ modelInvocable: true })).toBe(false);
-    // Providers that report nothing must not be labelled either way.
-    expect(isProviderSkillManualOnly({})).toBe(false);
-  });
-});
-
-describe("resolveEffectiveProviderSkills", () => {
-  const workspaceSkill: ServerProviderSkill = { name: "deploy", enabled: true };
-  const snapshotSkill: ServerProviderSkill = { name: "review", enabled: true };
-
-  it("prefers the workspace lookup when it returned skills", () => {
-    expect(resolveEffectiveProviderSkills([workspaceSkill], [snapshotSkill])).toEqual([
-      workspaceSkill,
-    ]);
-  });
-
-  it("keeps snapshot skills when the workspace lookup has not answered", () => {
-    expect(resolveEffectiveProviderSkills(undefined, [snapshotSkill])).toEqual([snapshotSkill]);
-  });
-
-  it("honours an authoritative empty workspace answer over snapshot skills", () => {
-    // The server already substitutes snapshot skills when a lookup fails, so
-    // an empty array on the wire means this workspace really has no skills.
-    // Keeping another workspace's snapshot skills here would offer skills the
-    // provider cannot dispatch in this cwd.
-    expect(resolveEffectiveProviderSkills([], [snapshotSkill])).toEqual([]);
-  });
-
-  it("returns an empty list when neither source has skills", () => {
-    expect(resolveEffectiveProviderSkills([], undefined)).toEqual([]);
   });
 });
 

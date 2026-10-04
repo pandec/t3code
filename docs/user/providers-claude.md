@@ -3,60 +3,38 @@
 T3 Code uses Claude Code's login and configuration. Start with the default provider for one
 account. [Provider setup](./install.md#providers) covers installation and shared provider settings.
 
-## Use multiple accounts with shared configuration
+## Separate accounts or configurations
 
-Use one shared Claude config directory and a shadow config directory for each additional account.
-This keeps sessions and configuration shared while each account retains its own login.
+Use a separate Claude config directory for each account. This also works for named
+presets that need different Claude settings or a router connection.
 
-Keep the first account in `~/.claude`. Log in with that path set explicitly:
-
-```bash
-CLAUDE_CONFIG_DIR=~/.claude claude auth login
-```
-
-The explicit path matters on macOS. Claude Code keys credentials by the exact
-`CLAUDE_CONFIG_DIR` value, so an unset variable and an explicit `~/.claude` use different
-keychain slots.
-
-Sign the second account into a separate directory:
+Keep your existing account in the default directory. On the environment's machine,
+create the second login:
 
 ```bash
-mkdir -p ~/.claude-t3/personal
-CLAUDE_CONFIG_DIR=~/.claude-t3/personal claude auth login
+mkdir -p ~/.claude_personal
+CLAUDE_CONFIG_DIR=~/.claude_personal claude auth login
 ```
 
-Use `CLAUDE_CONFIG_DIR`, not `HOME`. Then add the accounts in **Settings → Providers**:
+Add another Claude instance in **Settings > Providers**:
 
-| Instance        | CLAUDE_CONFIG_DIR path | Shadow config dir path  |
-| --------------- | ---------------------- | ----------------------- |
-| Claude Work     | `~/.claude`            | Leave empty             |
-| Claude Personal | `~/.claude`            | `~/.claude-t3/personal` |
+| Instance        | Binary path | CLAUDE_CONFIG_DIR path |
+| --------------- | ----------- | ---------------------- |
+| Claude Work     | `claude`    | Leave empty            |
+| Claude Personal | `claude`    | `~/.claude_personal`   |
 
-Both instances must use the same **CLAUDE_CONFIG_DIR path**. T3 Code prepares the shadow directory
-so both accounts share sessions, skills, agents, commands, global settings, and `CLAUDE.md` while
-keeping credentials separate.
+An empty config-directory setting uses Claude Code's normal configuration. The
+custom setting changes `CLAUDE_CONFIG_DIR`, leaving `HOME` and the system keychain
+location intact. Use the same variable for the login command. Setting `HOME`
+instead can put credentials where this provider will not find them.
 
-Some state remains private to each account. MCP server registrations and per-project prompt history
-live in that account's `.claude.json`, so changes made with `claude mcp add` do not carry across
-accounts.
+Check the account reported in provider settings after signing in. Existing
+threads can switch only between Claude instances with the same config directory.
+Separate account directories stay isolated, including their local conversation
+state. Claude does not have Codex's shared-home and shadow-home arrangement.
 
-Check the account shown in provider settings after signing in. Existing threads can switch between
-Claude instances that share their **CLAUDE_CONFIG_DIR path**. A provider with a different config
-path and no shadow directory is isolated and cannot continue those threads.
-
-For named presets that only change API keys or endpoints, use the instance's **Environment
-variables**. Variable assignments do not belong in **Launch arguments**.
-
-## Switch accounts automatically
-
-Set **Failover instance** on each provider to the other account. When an instance reports a usage
-limit or a turn fails with a rate-limit error, new turns use the failover account until the limit
-lifts, then return to the preferred account. The thread work log records both switches.
-
-Automatic failover requires shared session state. Both providers must use the same
-**CLAUDE_CONFIG_DIR path**, with additional accounts configured through shadow directories. T3 Code
-does not move a thread to an account that cannot resume its conversation, so failover stays
-disabled for isolated config directories.
+For presets that differ only in API keys or endpoints, use the instance's
+**Environment variables**. Variable assignments do not belong in **Launch arguments**.
 
 Claude Code's verbose mode can stay enabled when you use Claude for text generation, including
 thread titles, branch names, commit messages, and pull request descriptions. On a remote connection,

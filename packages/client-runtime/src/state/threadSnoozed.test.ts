@@ -5,7 +5,6 @@ import { describe, expect, it } from "vite-plus/test";
 
 import {
   canSnooze,
-  canSnoozeUntilDone,
   effectiveSnoozed,
   hasQueuedTurnStart,
   resolveSnoozePresets,
@@ -14,7 +13,6 @@ import {
   threadWokeAt,
   type ThreadSnoozeShell,
 } from "./threadSettled.ts";
-import type { OrchestrationThreadShell } from "@t3tools/contracts";
 
 const NOW = "2026-04-10T12:00:00.000Z";
 const SNOOZED_AT = "2026-04-10T09:00:00.000Z";
@@ -28,20 +26,14 @@ function localDate(year: number, month: number, day: number, hour: number, minut
 function makeShell(input: {
   readonly snoozedUntil?: string | null;
   readonly snoozedAt?: string | null;
-  readonly snoozedUntilTurnId?: string | null;
   readonly sessionStatus?: "starting" | "running" | "ready" | "error";
   readonly pending?: "approval" | "user-input";
   readonly turnCompletedAt?: string | null;
-  readonly turnId?: string;
-  readonly turnState?: "running" | "interrupted" | "completed" | "error";
-  readonly backgroundLiveness?: "working" | "monitoring";
 }): ThreadSnoozeShell {
   const threadId = ThreadId.make("thread-1");
   return {
     snoozedUntil: input.snoozedUntil ?? null,
     snoozedAt: input.snoozedAt ?? (input.snoozedUntil != null ? SNOOZED_AT : null),
-    snoozedUntilTurnId:
-      input.snoozedUntilTurnId == null ? null : TurnId.make(input.snoozedUntilTurnId),
     hasPendingApprovals: input.pending === "approval",
     hasPendingUserInput: input.pending === "user-input",
     session:
@@ -57,26 +49,20 @@ function makeShell(input: {
             updatedAt: "2026-04-10T11:00:00.000Z",
           },
     latestTurn:
-      input.turnCompletedAt === undefined && input.turnState === undefined
+      input.turnCompletedAt === undefined
         ? null
         : {
-            turnId: TurnId.make(input.turnId ?? "turn-1"),
-            state: input.turnState ?? "completed",
+            turnId: TurnId.make("turn-1"),
+            state: "completed",
             requestedAt: SNOOZED_AT,
             startedAt: null,
-            completedAt: input.turnCompletedAt ?? null,
+            completedAt: input.turnCompletedAt,
             assistantMessageId: null,
           },
-    backgroundLiveness: input.backgroundLiveness ?? null,
   };
 }
 
-const UNTIL_DONE = { snoozedAt: SNOOZED_AT, snoozedUntilTurnId: "turn-1" } as const;
-
-type QueuedTurnShell = Pick<
-  OrchestrationThreadShell,
-  "latestUserMessageAt" | "latestTurn" | "session"
->;
+type QueuedTurnShell = Parameters<typeof hasQueuedTurnStart>[0];
 
 function makeQueuedTurnShell(overrides: Partial<QueuedTurnShell> = {}): QueuedTurnShell {
   return { latestUserMessageAt: null, latestTurn: null, session: null, ...overrides };
@@ -97,27 +83,6 @@ describe("effectiveSnoozed", () => {
 
   it("never hides on malformed wake data", () => {
     expect(effectiveSnoozed(makeShell({ snoozedUntil: "not-a-date" }), { now: NOW })).toBe(false);
-  });
-
-  it("hides an indefinitely snoozed thread (snoozedAt without a wake time)", () => {
-    expect(effectiveSnoozed(makeShell({ snoozedAt: SNOOZED_AT }), { now: NOW })).toBe(true);
-  });
-
-  it("never hides on a malformed lone snoozedAt marker", () => {
-    expect(effectiveSnoozed(makeShell({ snoozedAt: "not-a-date" }), { now: NOW })).toBe(false);
-    expect(threadWokeAt(makeShell({ snoozedAt: "not-a-date" }), { now: NOW })).toBe(null);
-  });
-
-  it("wakes an indefinite snooze early on a raised hand", () => {
-    expect(
-      effectiveSnoozed(makeShell({ snoozedAt: SNOOZED_AT, pending: "approval" }), { now: NOW }),
-    ).toBe(false);
-    expect(
-      effectiveSnoozed(
-        makeShell({ snoozedAt: SNOOZED_AT, turnCompletedAt: "2026-04-10T10:30:00.000Z" }),
-        { now: NOW },
-      ),
-    ).toBe(false);
   });
 
   it("wakes early when the agent is blocked on the user", () => {
@@ -169,79 +134,6 @@ describe("effectiveSnoozed", () => {
       effectiveSnoozed(
         makeShell({ snoozedUntil: FUTURE_WAKE, turnCompletedAt: "2026-04-10T10:30:00.000Z" }),
         { now: NOW },
-      ),
-    ).toBe(false);
-  });
-
-  it("wakes early when the turn was interrupted after the snooze — the agent stopped", () => {
-    expect(
-      effectiveSnoozed(
-        makeShell({
-          snoozedUntil: FUTURE_WAKE,
-          turnState: "interrupted",
-          turnCompletedAt: "2026-04-10T10:30:00.000Z",
-        }),
-        { now: NOW },
-      ),
-    ).toBe(false);
-    expect(
-      effectiveSnoozed(
-        makeShell({
-          snoozedAt: SNOOZED_AT,
-          turnState: "interrupted",
-          turnCompletedAt: "2026-04-10T10:30:00.000Z",
-        }),
-        { now: NOW },
-      ),
-    ).toBe(false);
-  });
-
-  it("hides an until-done snooze while its turn is still running", () => {
-    expect(effectiveSnoozed(makeShell({ ...UNTIL_DONE, turnState: "running" }), { now: NOW })).toBe(
-      true,
-    );
-  });
-
-  it("wakes an until-done snooze when its turn ends, however it ends", () => {
-    for (const turnState of ["completed", "interrupted", "error"] as const) {
-      expect(
-        effectiveSnoozed(
-          makeShell({ ...UNTIL_DONE, turnState, turnCompletedAt: "2026-04-10T10:30:00.000Z" }),
-          { now: NOW },
-        ),
-      ).toBe(false);
-    }
-  });
-
-  it("wakes an until-done snooze when a different turn replaced the awaited one", () => {
-    expect(
-      effectiveSnoozed(makeShell({ ...UNTIL_DONE, turnId: "turn-2", turnState: "running" }), {
-        now: NOW,
-      }),
-    ).toBe(false);
-    expect(effectiveSnoozed(makeShell({ ...UNTIL_DONE }), { now: NOW })).toBe(false);
-  });
-
-  it("keeps an until-done snooze hidden while subagents outlive the ended turn", () => {
-    const ended = { ...UNTIL_DONE, turnCompletedAt: "2026-04-10T10:30:00.000Z" } as const;
-    const working = makeShell({ ...ended, backgroundLiveness: "working" });
-    expect(effectiveSnoozed(working, { now: NOW })).toBe(true);
-    expect(threadRaisedHandWhileSnoozed(working)).toBe(false);
-    expect(threadWokeAt(working, { now: NOW })).toBeNull();
-
-    // Watch loops alone (a dev server) don't hold it; quiet work wakes it.
-    for (const backgroundLiveness of ["monitoring", undefined] as const) {
-      const quiet = makeShell({ ...ended, ...(backgroundLiveness ? { backgroundLiveness } : {}) });
-      expect(effectiveSnoozed(quiet, { now: NOW })).toBe(false);
-      expect(threadWokeAt(quiet, { now: NOW })).toBe("2026-04-10T10:30:00.000Z");
-    }
-    // Blocked-on-you work still wakes it.
-    expect(
-      effectiveSnoozed(
-        makeShell({ ...ended, backgroundLiveness: "working", pending: "approval" }),
-        {
-          now: NOW,
-        },
       ),
     ).toBe(false);
   });
@@ -317,20 +209,6 @@ describe("canSnooze", () => {
   });
 });
 
-describe("canSnoozeUntilDone", () => {
-  it("requires a running turn or working subagents", () => {
-    expect(canSnoozeUntilDone(makeShell({ turnState: "running" }))).toBe(true);
-    expect(canSnoozeUntilDone(makeShell({}))).toBe(false);
-    expect(canSnoozeUntilDone(makeShell({ turnCompletedAt: NOW }))).toBe(false);
-    expect(
-      canSnoozeUntilDone(makeShell({ turnCompletedAt: NOW, backgroundLiveness: "working" })),
-    ).toBe(true);
-    expect(
-      canSnoozeUntilDone(makeShell({ turnCompletedAt: NOW, backgroundLiveness: "monitoring" })),
-    ).toBe(false);
-  });
-});
-
 describe("hasQueuedTurnStart", () => {
   it("expires queued state after two minutes", () => {
     const thread = makeQueuedTurnShell({
@@ -386,19 +264,6 @@ describe("threadWokeAt", () => {
     expect(threadWokeAt(makeShell({ snoozedUntil: FUTURE_WAKE }), { now: NOW })).toBe(null);
   });
 
-  it("never reports a timer wake for an indefinite snooze — there is no timer", () => {
-    expect(threadWokeAt(makeShell({ snoozedAt: SNOOZED_AT }), { now: NOW })).toBe(null);
-  });
-
-  it("reports raised-hand wakes for an indefinite snooze", () => {
-    expect(
-      threadWokeAt(
-        makeShell({ snoozedAt: SNOOZED_AT, turnCompletedAt: "2026-04-10T10:30:00.000Z" }),
-        { now: NOW },
-      ),
-    ).toBe("2026-04-10T10:30:00.000Z");
-  });
-
   it("reports the wake time for a timer wake", () => {
     expect(threadWokeAt(makeShell({ snoozedUntil: PAST_WAKE }), { now: NOW })).toBe(PAST_WAKE);
   });
@@ -418,43 +283,6 @@ describe("threadWokeAt", () => {
         now: NOW,
       }),
     ).toBe("2026-04-10T11:00:00.000Z");
-  });
-
-  it("reports the turn end for an until-done wake, including interruption", () => {
-    expect(threadWokeAt(makeShell({ ...UNTIL_DONE, turnState: "running" }), { now: NOW })).toBe(
-      null,
-    );
-    expect(
-      threadWokeAt(
-        makeShell({
-          ...UNTIL_DONE,
-          turnState: "interrupted",
-          turnCompletedAt: "2026-04-10T10:30:00.000Z",
-        }),
-        { now: NOW },
-      ),
-    ).toBe("2026-04-10T10:30:00.000Z");
-  });
-
-  it("reports a wake when the awaited turn ended with a stale completedAt", () => {
-    // An interrupt keeps a placeholder completedAt from before the snooze.
-    // Still awake (the turn is over), and the Woke pill needs a time.
-    const shell = makeShell({
-      ...UNTIL_DONE,
-      turnState: "interrupted",
-      turnCompletedAt: "2026-04-10T08:00:00.000Z",
-      sessionStatus: "ready",
-    });
-    expect(effectiveSnoozed(shell, { now: NOW })).toBe(false);
-    expect(threadWokeAt(shell, { now: NOW })).toBe("2026-04-10T11:00:00.000Z");
-  });
-
-  it("reports the replacement turn's request time when the awaited turn was superseded", () => {
-    expect(
-      threadWokeAt(makeShell({ ...UNTIL_DONE, turnId: "turn-2", turnState: "running" }), {
-        now: NOW,
-      }),
-    ).toBe(SNOOZED_AT);
   });
 
   it("keeps the early wake authoritative after the scheduled time passes", () => {
@@ -504,23 +332,8 @@ describe("resolveSnoozePresets", () => {
     expect(presets.find((preset) => preset.id === "three-hours")?.label).toBe("In 3 hours");
     expect(presets.find((preset) => preset.id === "evening")?.label).toBe("This evening");
     expect(
-      new Date(presets.find((preset) => preset.id === "tomorrow")!.snoozedUntil!).getHours(),
-    ).toBe(6);
-  });
-
-  it("leads with until-done only when asked", () => {
-    expect(resolveSnoozePresets(localDate(2026, 4, 8, 10)).some((p) => p.id === "until-done")).toBe(
-      false,
-    );
-    const presets = resolveSnoozePresets(localDate(2026, 4, 8, 10), { untilDone: true });
-    expect(presets[0]).toMatchObject({ id: "until-done", snoozedUntil: null, untilDone: true });
-    expect(presets.map((preset) => preset.id).slice(1)).toEqual([
-      "hour",
-      "three-hours",
-      "evening",
-      "tomorrow",
-      "next-week",
-    ]);
+      new Date(presets.find((preset) => preset.id === "tomorrow")!.snoozedUntil).getHours(),
+    ).toBe(9);
   });
 
   it("drops the evening choice once evening is near or past", () => {
@@ -535,7 +348,7 @@ describe("resolveSnoozePresets", () => {
   it("puts next week on the following Monday", () => {
     const nextWeek = new Date(
       resolveSnoozePresets(localDate(2026, 4, 6, 10)).find((preset) => preset.id === "next-week")!
-        .snoozedUntil!,
+        .snoozedUntil,
     );
     expect(nextWeek.getDay()).toBe(1);
     expect(nextWeek.getDate()).toBe(13);
@@ -550,7 +363,7 @@ describe("resolveSnoozePresets", () => {
       "evening",
       "tomorrow",
     ]);
-    const tomorrow = new Date(presets.find((preset) => preset.id === "tomorrow")!.snoozedUntil!);
+    const tomorrow = new Date(presets.find((preset) => preset.id === "tomorrow")!.snoozedUntil);
     expect(tomorrow.getDay()).toBe(1);
   });
 });

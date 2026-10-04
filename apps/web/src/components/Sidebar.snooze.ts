@@ -1,27 +1,13 @@
+import type { TimestampFormat } from "@t3tools/contracts/settings";
 import {
   resolveSnoozePresets as resolveSharedSnoozePresets,
-  type SnoozePreset as SharedSnoozePreset,
+  snoozeWakeLabel,
+  type SnoozePreset,
 } from "@t3tools/client-runtime/state/thread-settled";
-
-export { snoozeWakeLabel } from "@t3tools/client-runtime/state/thread-settled";
-import type { TimestampFormat } from "@t3tools/contracts/settings";
 
 import { formatShortTimestamp, parseTimestampDate } from "../timestampFormat";
 
-type SnoozePresetId = SharedSnoozePreset["id"] | "until-woken";
-
-export interface SnoozePreset {
-  readonly id: SnoozePresetId;
-  readonly label: string;
-  /** Menu-row time column. Complements the label instead of repeating it:
-      "Tomorrow" pairs with "6:00 AM", not "tomorrow 6:00 AM". */
-  readonly whenLabel: string;
-  /** ISO wake time, or null for the indefinite "until I wake it" and the
-      "until it's done" snoozes. */
-  readonly snoozedUntil: string | null;
-  /** "Until it's done": wake when the running turn ends. */
-  readonly untilDone?: true;
-}
+export { snoozeWakeLabel, type SnoozePreset };
 
 const DAY_MS = 24 * 60 * 60 * 1_000;
 
@@ -29,21 +15,11 @@ function timeOfDayLabel(date: Date, timestampFormat: TimestampFormat): string {
   return formatShortTimestamp(date.toISOString(), timestampFormat);
 }
 
-/**
- * Presets for "snooze until", computed against local time. "Until it's
- * done" leads when the thread has a running turn and the server supports
- * it; the indefinite "Until I wake it" preset is opt-in because it requires
- * the threadSnoozeIndefinite server capability.
- */
 export function resolveSnoozePresets(
   now: Date,
   timestampFormat: TimestampFormat,
-  options?: { readonly untilWoken?: boolean; readonly untilDone?: boolean },
 ): ReadonlyArray<SnoozePreset> {
-  const presets: SnoozePreset[] = resolveSharedSnoozePresets(now, {
-    untilDone: options?.untilDone === true,
-  }).map((preset) => {
-    if (preset.snoozedUntil === null) return preset;
+  return resolveSharedSnoozePresets(now).map((preset) => {
     const wake = parseTimestampDate(preset.snoozedUntil);
     if (wake === null) return preset;
     const time = timeOfDayLabel(wake, timestampFormat);
@@ -55,17 +31,6 @@ export function resolveSnoozePresets(
           : time,
     };
   });
-
-  if (options?.untilWoken === true) {
-    presets.push({
-      id: "until-woken",
-      label: "Until I wake it",
-      whenLabel: "no timer",
-      snoozedUntil: null,
-    });
-  }
-
-  return presets;
 }
 
 /**

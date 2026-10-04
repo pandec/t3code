@@ -10,8 +10,7 @@ import {
   createNativeStackScreen,
   type NativeStackNavigationOptions,
 } from "@react-navigation/native-stack";
-import type { ScopedThreadRef } from "@t3tools/contracts";
-import { useEffect, useMemo, useRef, type ReactNode } from "react";
+import { useEffect, useRef, type ReactNode } from "react";
 import {
   Platform,
   Pressable,
@@ -48,6 +47,8 @@ import { GitBranchesSheet } from "./features/threads/git/GitBranchesSheet";
 import { GitCommitSheet } from "./features/threads/git/GitCommitSheet";
 import { GitConfirmSheet } from "./features/threads/git/GitConfirmSheet";
 import { GitOverviewSheet } from "./features/threads/git/GitOverviewSheet";
+import { ThreadAgentsSheet } from "./features/threads/ThreadAgentsSheet";
+import { ThreadQueueSheet } from "./features/threads/ThreadQueueControl";
 import { ThreadRouteScreen } from "./features/threads/ThreadRouteScreen";
 import { ThreadArrangementHost } from "./features/threads/ThreadArrangementSheet";
 import { ConnectionsRouteScreen } from "./features/connection/ConnectionsRouteScreen";
@@ -64,10 +65,6 @@ import {
   NewTaskEnvironmentPickerRouteScreen,
 } from "./features/threads/NewTaskContextPickerScreens";
 import {
-  ProviderUsageRouteProvider,
-  ProviderUsageRouteScreen,
-} from "./features/threads/ProviderUsageSheet";
-import {
   ExistingThreadSettingsRouteProvider,
   ExistingThreadSettingsRouteScreen,
   NewTaskThreadSettingsRouteScreen,
@@ -77,15 +74,27 @@ import { NewTaskRouteScreen } from "./features/threads/NewTaskRouteScreen";
 import { SettingsAppearanceRouteScreen } from "./features/settings/SettingsAppearanceRouteScreen";
 import { SettingsClientStorageRouteScreen } from "./features/settings/SettingsClientStorageRouteScreen";
 import { SettingsDiagnosticsRouteScreen } from "./features/diagnostics/SettingsDiagnosticsRouteScreen";
+import { SettingsProviderAccountsRouteScreen } from "./features/settings/SettingsProviderAccountsRouteScreen";
 import { SettingsAuthRouteScreen } from "./features/settings/SettingsAuthRouteScreen";
 import { SettingsEnvironmentDetailRouteScreen } from "./features/settings/SettingsEnvironmentDetailRouteScreen";
 import { SettingsEnvironmentsRouteScreen } from "./features/settings/SettingsEnvironmentsRouteScreen";
+import { SettingsFollowUpRouteScreen } from "./features/settings/SettingsFollowUpRouteScreen";
 import {
   SettingsEnvironmentAgentBehaviorRouteScreen,
   SettingsEnvironmentMaintenanceRouteScreen,
   SettingsEnvironmentNewThreadsRouteScreen,
   SettingsEnvironmentSourceControlRouteScreen,
 } from "./features/settings/SettingsServerControlsRouteScreen";
+import {
+  SettingsScheduledTasksRouteScreen,
+  SettingsScheduledTaskNewRouteScreen,
+  SettingsScheduledTaskEditRouteScreen,
+} from "./features/settings/SettingsScheduledTasksRouteScreen";
+import {
+  ScheduledTaskModelPickerRouteScreen,
+  ScheduledTaskBranchPickerRouteScreen,
+} from "./features/settings/ScheduledTaskPickerScreens";
+import { ScheduledTaskEditorProvider } from "./features/settings/scheduled-task-editor";
 import { SettingsKeyboardRouteScreen } from "./features/settings/SettingsKeyboardRouteScreen";
 import { SettingsLegalRouteScreen } from "./features/settings/SettingsLegalRouteScreen";
 import {
@@ -112,13 +121,10 @@ import {
   EMPTY_INCOMING_SHARE_PRESENTATION_STATE,
   transitionIncomingSharePresentation,
 } from "./features/sharing/incoming-share-presentation";
-import { selectedWorkspaceThreadRef, WORKSPACE_OVERLAY_ROUTES } from "./lib/selected-thread-ref";
 import { NATIVE_LIQUID_GLASS_SUPPORTED } from "./native/native-glass";
 import { deriveLayout } from "./lib/layout";
 import { nativeHeaderScrollEdgeEffects } from "./native/StackHeader";
 import { FORM_SHEET_PRESENTATION_OPTIONS } from "./native/sheet-surface";
-import { useForegroundThreadEventPriority } from "./state/thread-event-priority";
-import { useThreadLifecycleOutboxDrain } from "./state/use-thread-lifecycle-outbox-drain";
 import { useThreadOutboxDrain } from "./state/use-thread-outbox-drain";
 import { useComposerAttachmentUploadWorker } from "./state/composer-attachment-uploads";
 
@@ -224,6 +230,11 @@ const SettingsContentStack = createNativeStackNavigator({
       linking: "agent-behavior",
       options: { title: "Agent behavior" },
     }),
+    SettingsProviderAccounts: createNativeStackScreen({
+      screen: SettingsProviderAccountsRouteScreen,
+      linking: "provider-accounts",
+      options: { title: "Provider accounts" },
+    }),
     SettingsEnvironmentMaintenance: createNativeStackScreen({
       screen: SettingsEnvironmentMaintenanceRouteScreen,
       linking: "maintenance",
@@ -291,6 +302,48 @@ const SettingsContentStack = createNativeStackNavigator({
         title: "Keyboard",
       },
     }),
+    SettingsFollowUp: createNativeStackScreen({
+      screen: SettingsFollowUpRouteScreen,
+      linking: "follow-ups",
+      options: {
+        title: "Follow-ups",
+      },
+    }),
+    SettingsScheduledTasks: createNativeStackScreen({
+      screen: SettingsScheduledTasksRouteScreen,
+      linking: "scheduled-tasks",
+      options: {
+        title: "Scheduled Tasks",
+        // Leave room to center UIKit's title beside the two trailing actions.
+        headerTitleStyle: { fontSize: 16, fontWeight: "800" },
+      },
+    }),
+    SettingsScheduledTaskNew: createNativeStackScreen({
+      screen: SettingsScheduledTaskNewRouteScreen,
+      linking: "scheduled-tasks/new",
+      options: { title: "New scheduled task" },
+    }),
+    SettingsScheduledTaskEdit: createNativeStackScreen({
+      screen: SettingsScheduledTaskEditRouteScreen,
+      options: { title: "Edit scheduled task" },
+    }),
+    SettingsScheduledTaskBranch: createNativeStackScreen({
+      screen: ScheduledTaskBranchPickerRouteScreen,
+      options: { title: "Base branch" },
+    }),
+    SettingsScheduledTaskModel: createNativeStackScreen({
+      screen: ScheduledTaskModelPickerRouteScreen,
+      options: {
+        headerShown: false,
+        ...(Platform.OS === "android"
+          ? { presentation: "card" as const }
+          : {
+              ...FORM_SHEET_PRESENTATION_OPTIONS,
+              sheetAllowedDetents: [1],
+              sheetGrabberVisible: true,
+            }),
+      },
+    }),
     SettingsClientStorage: createNativeStackScreen({
       screen: SettingsClientStorageRouteScreen,
       linking: "client-storage",
@@ -355,7 +408,9 @@ const SettingsSheetStack = createNativeStackNavigator({
       screen: SettingsContentStack,
       linking: "",
       layout: ({ children }) => (
-        <SettingsEnvironmentFilterProvider>{children}</SettingsEnvironmentFilterProvider>
+        <SettingsEnvironmentFilterProvider>
+          <ScheduledTaskEditorProvider>{children}</ScheduledTaskEditorProvider>
+        </SettingsEnvironmentFilterProvider>
       ),
     }),
     SettingsAuth: createNativeStackScreen({
@@ -476,10 +531,24 @@ const NewTaskSheetStack = createNativeStackNavigator({
   },
 });
 
-// Native sheet routes leave the underlying workspace selected.
-const ROOT_WORKSPACE_OVERLAY_ROUTES = new Set([
-  ...WORKSPACE_OVERLAY_ROUTES,
-  "ProviderUsageSheet",
+// Routes presented as sheets/overlays ON TOP of the workspace. They must not
+// influence the adaptive workspace layout: opening Settings over Home should
+// not flip the sidebar in or change the active thread.
+const WORKSPACE_OVERLAY_ROUTES = new Set([
+  "ConnectOnboarding",
+  "Connections",
+  "ConnectionsNew",
+  "GitBranches",
+  "GitCommit",
+  "GitConfirm",
+  "GitOverview",
+  "NewTaskSheet",
+  "SettingsLegal",
+  "SettingsSheet",
+  "ThreadAgents",
+  "ThreadQueue",
+  "ThreadReviewComment",
+  "ThreadDevicePreview",
   "ThreadSettingsSheet",
 ]);
 
@@ -488,7 +557,7 @@ const ROOT_WORKSPACE_OVERLAY_ROUTES = new Set([
  * selection can dismiss sheets without replacing the wrong destination.
  */
 function workspaceLocationFromState(state: NavigationState) {
-  const routes = state.routes.filter((route) => !ROOT_WORKSPACE_OVERLAY_ROUTES.has(route.name));
+  const routes = state.routes.filter((route) => !WORKSPACE_OVERLAY_ROUTES.has(route.name));
   const effectiveState =
     routes.length > 0 && routes.length !== state.routes.length
       ? ({ ...state, routes, index: routes.length - 1 } as NavigationState)
@@ -500,11 +569,6 @@ function workspaceLocationFromState(state: NavigationState) {
   };
 }
 
-function ThreadEventPriorityCoordinator(props: { readonly threadRef: ScopedThreadRef | null }) {
-  useForegroundThreadEventPriority(props.threadRef);
-  return null;
-}
-
 // The drain hook subscribes to the outbox, all thread shells, projects, and
 // connection statuses. Hosting it in a null-rendering leaf keeps those
 // updates from re-rendering RootStackLayout (and with it every screen) on
@@ -512,11 +576,6 @@ function ThreadEventPriorityCoordinator(props: { readonly threadRef: ScopedThrea
 function ThreadOutboxDrainWorker() {
   useThreadOutboxDrain();
   useComposerAttachmentUploadWorker();
-  return null;
-}
-
-function ThreadLifecycleOutboxDrainWorker() {
-  useThreadLifecycleOutboxDrain();
   return null;
 }
 
@@ -552,33 +611,19 @@ function RootStackLayout(props: {
       params: { incomingShareId: transition.shareIdToPresent },
     });
   }, [navigation, pendingShare, props.state]);
-  const selectedThreadRef = useMemo(() => {
-    const routes = props.state.routes.filter(
-      (route) => route.name !== "ProviderUsageSheet" && route.name !== "ThreadSettingsSheet",
-    );
-    const state =
-      routes.length === props.state.routes.length
-        ? props.state
-        : ({ ...props.state, routes, index: Math.max(0, routes.length - 1) } as NavigationState);
-    return selectedWorkspaceThreadRef(state);
-  }, [props.state]);
 
   return (
     <HardwareKeyboardCommandProvider pathname={pathname}>
-      <ThreadEventPriorityCoordinator threadRef={selectedThreadRef} />
       <ThreadOutboxDrainWorker />
-      <ThreadLifecycleOutboxDrainWorker />
       <ShowcaseCaptureCoordinator pathname={pathname} />
       <ExistingThreadSettingsRouteProvider>
-        <ProviderUsageRouteProvider>
-          <AdaptiveWorkspaceLayout
-            pathname={workspaceLocation.pathname}
-            workspaceRouteKey={workspaceLocation.routeKey}
-          >
-            {props.children}
-            <HardwareKeyboardCommandOverlay />
-          </AdaptiveWorkspaceLayout>
-        </ProviderUsageRouteProvider>
+        <AdaptiveWorkspaceLayout
+          pathname={workspaceLocation.pathname}
+          workspaceRouteKey={workspaceLocation.routeKey}
+        >
+          {props.children}
+          <HardwareKeyboardCommandOverlay />
+        </AdaptiveWorkspaceLayout>
       </ExistingThreadSettingsRouteProvider>
       <ThreadArrangementHost />
     </HardwareKeyboardCommandProvider>
@@ -718,18 +763,22 @@ const RootStackConfig = createNativeStackNavigator({
             }),
       },
     }),
-    ProviderUsageSheet: createNativeStackScreen({
-      screen: ProviderUsageRouteScreen,
+    ThreadQueue: createNativeStackScreen({
+      screen: ThreadQueueSheet,
       options: {
-        gestureEnabled: true,
+        ...FORM_SHEET_PRESENTATION_OPTIONS,
         headerShown: false,
-        ...(Platform.OS === "android"
-          ? { presentation: "card" as const }
-          : {
-              ...FORM_SHEET_PRESENTATION_OPTIONS,
-              sheetAllowedDetents: [0.55, 0.92],
-              sheetGrabberVisible: true,
-            }),
+        sheetAllowedDetents: [0.65, 0.95],
+        sheetGrabberVisible: true,
+      },
+    }),
+    ThreadAgents: createNativeStackScreen({
+      screen: ThreadAgentsSheet,
+      options: {
+        ...FORM_SHEET_PRESENTATION_OPTIONS,
+        headerShown: false,
+        sheetAllowedDetents: [0.5, 0.9],
+        sheetGrabberVisible: true,
       },
     }),
     GitOverview: createNativeStackScreen({

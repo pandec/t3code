@@ -9,10 +9,16 @@ In **Settings → General → Send shortcut**, choose whether Enter sends, requi
 `mod+Enter` for multiline prompts, or always requires `mod+Enter`. `Shift+Enter`
 inserts a new line. This applies to the web and desktop composer at desktop widths.
 
-Sending while the agent runs steers the current turn. Use `mod+Enter` to queue
-a message until the turn finishes. When sending requires `mod+Enter`, use
-`mod+Shift+Enter` to queue instead. In a new thread, `mod+Enter` starts the thread
-in the background.
+**Follow-up behavior** chooses Queue or Steer while the agent runs. Use
+`mod+Enter` to do the opposite for one message, even when the send shortcut
+requires a modifier. In a new thread, `mod+Alt+Enter` starts the thread in the
+background and opens a fresh composer. Change either shortcut in
+**Settings → Keybindings** under **Composer: Opposite Queue or Steer Action** or
+**Composer: Start in Background**. These bindings take priority over the send
+shortcut. Click the send button to use the configured follow-up behavior.
+
+When an active turn has queued messages, `mod+Shift+Enter` sends the first as a
+steer. Change it under **Queue: Send First Queued Message as Steer** in Keybindings.
 
 Use `mod+shift+m` to choose a model and `mod+shift+h` to choose a host.
 Use `mod+shift+e` for effort, `mod+shift+a` for access mode, `mod+shift+x` for the
@@ -43,16 +49,6 @@ choose Add binding, and select “Thread: Copy ID”. It has no default shortcut
 To use `mod+shift+c`, clear that binding from “Copy Link or Thread ID” first,
 then assign it to “Thread: Copy ID” with `!terminalFocus` as its condition.
 The combined command still copies a PR URL when available and otherwise the thread ID.
-
-## Rename and snooze threads
-
-On web and desktop, open the command palette with `mod+k` and choose **Rename current thread**
-or **Snooze current thread**. Rename edits the title in the palette input. Snooze offers presets
-and accepts a typed wake time such as `45m`, `2pm`, or `fri 9am`.
-
-To open either step directly, assign a shortcut to "Thread: Rename" or "Thread: Snooze" in
-Settings → Keybindings. Neither has a default binding. The snooze shortcut wakes an already
-snoozed thread.
 
 ## Previous thread on desktop
 
@@ -116,7 +112,8 @@ Join modifiers and a key with `+`, such as `mod+shift+d` or `ctrl+l`.
 ## When conditions
 
 Available context keys are `terminalFocus`, `terminalOpen`, `previewFocus`,
-`previewOpen`, `modelPickerOpen`, `usagePageOpen`, `editableFocus`, `isWeb`, and `isDesktop`.
+`previewOpen`, `modelPickerOpen`, `usagePageOpen`, `composerFocus`, `composerDraft`,
+`turnRunning`, `editableFocus`, `isWeb`, and `isDesktop`.
 `editableFocus` is true while a text field, the composer, or another editor has
 the keyboard. `isWeb` is true in a browser tab. `isDesktop` is true in the
 desktop app. Unknown keys evaluate to `false`.
@@ -142,10 +139,6 @@ a shortcut.
 
 `thread.stop` interrupts the running turn in the focused thread. It has no default
 shortcut; assign one in **Settings → Keybindings**.
-
-`thread.archive` archives the focused thread. While the thread is working or monitoring
-background work, it schedules the archive for when the thread is done instead, and
-pressing it again cancels the pending archive.
 
 `thread.undo` (`mod+z` by default) reverses the actions shown in the notice at the
 bottom of the sidebar, such as unpin, settle, snooze, or archive. Consecutive

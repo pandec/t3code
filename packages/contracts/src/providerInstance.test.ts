@@ -21,39 +21,37 @@ describe("provider slug validation (shared by driver + instance ids)", () => {
     { schemaName: "ProviderDriverKind", decode: decodeProviderDriverKind },
   ] as const;
 
-  for (const { schemaName, decode } of cases) {
-    describe(schemaName, () => {
-      it.each(["codex", "codex_personal", "codex-work", "claudeAgent", "x", "abc123", "ollama"])(
-        "accepts %s",
-        (id) => {
-          expect(decode(id)).toBe(id);
-        },
-      );
+  describe.each(cases)("$schemaName", ({ decode }) => {
+    it.each(["codex", "codex_personal", "codex-work", "claudeAgent", "x", "abc123", "ollama"])(
+      "accepts %s",
+      (id) => {
+        expect(decode(id)).toBe(id);
+      },
+    );
 
-      it.each([
-        ["empty string", ""],
-        ["leading digit", "1codex"],
-        ["leading dash", "-codex"],
-        ["leading underscore", "_codex"],
-        ["whitespace inside", "codex personal"],
-        ["dot inside", "codex.personal"],
-        ["slash inside", "codex/personal"],
-      ])("rejects %s", (_label, value) => {
-        expect(() => decode(value)).toThrow();
-      });
-
-      it("trims surrounding whitespace before validating", () => {
-        expect(decode("  codex_work  ")).toBe("codex_work");
-      });
-
-      it("rejects ids longer than 64 characters", () => {
-        const tooLong = "a".repeat(65);
-        expect(() => decode(tooLong)).toThrow();
-        const justRight = "a".repeat(64);
-        expect(decode(justRight)).toBe(justRight);
-      });
+    it.each([
+      ["empty string", ""],
+      ["leading digit", "1codex"],
+      ["leading dash", "-codex"],
+      ["leading underscore", "_codex"],
+      ["whitespace inside", "codex personal"],
+      ["dot inside", "codex.personal"],
+      ["slash inside", "codex/personal"],
+    ])("rejects %s", (_label, value) => {
+      expect(() => decode(value)).toThrow();
     });
-  }
+
+    it("trims surrounding whitespace before validating", () => {
+      expect(decode("  codex_work  ")).toBe("codex_work");
+    });
+
+    it("rejects ids longer than 64 characters", () => {
+      const tooLong = "a".repeat(65);
+      expect(() => decode(tooLong)).toThrow();
+      const justRight = "a".repeat(64);
+      expect(decode(justRight)).toBe(justRight);
+    });
+  });
 });
 
 describe("ProviderInstanceRef", () => {
@@ -107,20 +105,6 @@ describe("ProviderInstanceConfig", () => {
     expect(decoded.accentColor).toBe("#dc2626");
     expect(decoded.enabled).toBe(true);
     expect(decoded.config).toEqual(opaqueConfig);
-  });
-
-  it("round-trips the failover target and rejects malformed ids", () => {
-    const decoded = decodeProviderInstanceConfig({
-      driver: "claudeAgent",
-      failoverInstanceId: "claude_second",
-    });
-    expect(decoded.failoverInstanceId).toBe("claude_second");
-    expect(
-      decodeProviderInstanceConfig({ driver: "claudeAgent" }).failoverInstanceId,
-    ).toBeUndefined();
-    expect(() =>
-      decodeProviderInstanceConfig({ driver: "claudeAgent", failoverInstanceId: "9-bad" }),
-    ).toThrow();
   });
 
   it("trims provider instance envelope fields", () => {

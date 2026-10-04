@@ -38,9 +38,16 @@ output/input ratios should divide the summed totals. Averaging per-turn ratios
 lets small-input turns dominate.
 
 Unknown counts stay absent. Partial usage contains valid observed counts but
-cannot establish a whole-turn total. Cursor, Grok, Hermes, and Antigravity usage remains
+cannot establish a whole-turn total. Cursor, Grok, and Antigravity usage remains
 unavailable until verified ACP token semantics exist. Keep these distinctions when changing
 token normalization or building reports.
+
+## Delivery
+
+A send can fail after PostHog has stored the batch, so every retry is a copy.
+[Delivery](../../apps/server/src/telemetry/AnalyticsService.ts) gives each event a
+uuid when it is recorded, backs off after a failed send, and drops a batch after a
+few tries. Without these limits, one stuck batch was sent every second for days.
 
 ## Collection boundary
 

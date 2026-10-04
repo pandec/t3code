@@ -344,9 +344,6 @@ const makePairServerConfig = Effect.fn(function* (input: {
     resourceMonitorPath: undefined,
     autoBootstrapProjectFromCwd: false,
     logWebSocketEvents: false,
-    providerSessionReaperInactivityThresholdMs: 30 * 60 * 1000,
-    providerSessionReaperSweepIntervalMs: 5 * 60 * 1000,
-    providerSessionReaperMaxPendingExtensionMs: 24 * 60 * 60 * 1000,
     tailscaleServeEnabled: false,
     tailscaleServePort: DEFAULT_TAILSCALE_SERVE_PORT,
   });

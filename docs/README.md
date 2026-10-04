@@ -4,7 +4,6 @@
 
 - [Install T3 Code](./user/install.md)
 - [Messages and context](./user/composer.md)
-- [Sending while the agent is working](./user/message-queueing.md)
 - [Working with threads](./user/thread-sidebar.md)
 - [Permission modes](./user/permission-modes.md)
 - [Terminal history](./user/terminal.md)
@@ -21,7 +20,7 @@
 - [Running in the background](./user/background-service.md)
 - [CLI Automation](./user/cli-automation.md)
 - [Updating T3 Code](./user/updating.md)
-- Provider guides: [Codex](./user/providers-codex.md) · [Claude](./user/providers-claude.md) · [OpenCode](./user/providers-opencode.md) · [Antigravity](./user/providers-antigravity.md) · [Hermes](./user/hermes.md)
+- Provider guides: [Codex](./user/providers-codex.md) · [Claude](./user/providers-claude.md) · [OpenCode](./user/providers-opencode.md) · [Antigravity](./user/providers-antigravity.md) · [Pi](./user/providers-pi.md)
 
 ---
 

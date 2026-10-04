@@ -14,7 +14,7 @@ import {
 } from "@t3tools/contracts";
 import { useLocation, useNavigate } from "@tanstack/react-router";
 import * as Cause from "effect/Cause";
-import { ArchiveIcon, ImportIcon, InfoIcon, Trash2Icon } from "lucide-react";
+import { ArchiveIcon, InfoIcon, Trash2Icon } from "lucide-react";
 import { lazy, Suspense, useCallback, useEffect, useMemo, useRef, useState } from "react";
 
 import { useComposerDraftStore } from "../../composerDraftStore";
@@ -31,7 +31,6 @@ import { projectEnvironment } from "../../state/projects";
 import { useAtomCommand } from "../../state/use-atom-command";
 import { useUiStateStore } from "../../uiStateStore";
 import { ProjectFavicon } from "../ProjectFavicon";
-import { SessionImportDialog } from "../SessionImportDialog";
 import { Alert, AlertDescription } from "../ui/alert";
 import { Button } from "../ui/button";
 import { Input } from "../ui/input";
@@ -311,11 +310,6 @@ function ProjectDetail({
     [group.memberProjects, projectAccentColors],
   );
 
-  // ----- session import -----
-  const [sessionImportTarget, setSessionImportTarget] = useState<SidebarProjectGroupMember | null>(
-    null,
-  );
-
   // ----- archived threads -----
   // Keeps the current scope so the archive shows the same project, checkout,
   // and environment the settings page is already narrowed to.
@@ -442,25 +436,14 @@ function ProjectDetail({
           title={member.environmentLabel ?? "Environment"}
           description={member.workspaceRoot}
           control={
-            <div className="flex items-center gap-2">
-              <Button
-                size="sm"
-                variant="outline"
-                onClick={() => setSessionImportTarget(member)}
-                aria-label={`Import CLI session into ${member.workspaceRoot}`}
-              >
-                <ImportIcon className="size-3.5" />
-                Import CLI session
-              </Button>
-              <Button
-                size="sm"
-                variant="outline"
-                onClick={() => void removeMembers([member])}
-                aria-label={`Remove checkout ${member.workspaceRoot}`}
-              >
-                Remove
-              </Button>
-            </div>
+            <Button
+              size="sm"
+              variant="outline"
+              onClick={() => void removeMembers([member])}
+              aria-label={`Remove checkout ${member.workspaceRoot}`}
+            >
+              Remove
+            </Button>
           }
         />
       ))}
@@ -570,22 +553,6 @@ function ProjectDetail({
         <ProjectActionsSettings />
         {hasMultipleCheckouts ? checkoutChoices : null}
         <SettingsSection title="Threads">
-          {hasMultipleCheckouts ? null : (
-            <SettingsRow
-              title="Import CLI session"
-              description="Continue an existing Claude Code or Codex CLI session as a thread in this checkout."
-              control={
-                <Button
-                  size="sm"
-                  variant="outline"
-                  onClick={() => setSessionImportTarget(representative)}
-                >
-                  <ImportIcon className="size-3.5" />
-                  Import CLI session
-                </Button>
-              }
-            />
-          )}
           <SettingsRow
             title="Archived threads"
             description="Browse and restore this project's archived threads."
@@ -631,10 +598,6 @@ function ProjectDetail({
         </SettingsSection>
       </SettingsPageContainer>
 
-      <SessionImportDialog
-        member={sessionImportTarget}
-        onClose={() => setSessionImportTarget(null)}
-      />
       <ProjectFaviconPickerDialog
         key={`${representative.environmentId}:${representative.workspaceRoot}:${faviconPickerOpen}`}
         cwd={representative.workspaceRoot}

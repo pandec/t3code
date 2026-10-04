@@ -35,7 +35,6 @@ import { isPreviewSupportedInRuntime } from "../previewStateStore";
 import { selectActiveRightPanel, useRightPanelStore } from "../rightPanelStore";
 import { useThreadSelectionStore } from "../threadSelectionStore";
 import { stackedThreadToast, toastManager } from "~/components/ui/toast";
-import { SplitThreadLayout } from "~/components/thread-split/SplitThreadLayout";
 import { canSwapThreadPanes, swapThreadPanes } from "~/components/thread-split/swapThreadPanes";
 import {
   focusOtherThreadPane,
@@ -44,7 +43,6 @@ import {
 import { openThreadInActivePane } from "~/components/thread-split/threadOpenTarget";
 import { primaryServerKeybindingsAtom } from "~/state/server";
 import { hasOpenArchiveUndoBlockingLayer } from "../archiveUndo";
-import { useThreadActions } from "../hooks/useThreadActions";
 import { buildThreadRouteParams, resolveThreadRouteTarget } from "../threadRoutes";
 
 // A stale pair entry must not open: the thread may be gone or archived, and
@@ -72,7 +70,6 @@ function ChatRouteGlobalShortcuts() {
   const projects = useProjects();
   const primaryEnvironmentId = usePrimaryEnvironmentId();
   const router = useRouter();
-  const { attemptArchiveThread } = useThreadActions();
   const { scratchEnvironmentId, startScratchThread } = useScratchProject();
   const projectGroupCount = useMemo(
     () =>
@@ -262,16 +259,6 @@ function ChatRouteGlobalShortcuts() {
         return;
       }
 
-      if (command === "thread.archive") {
-        if (!shortcutThreadRef) return;
-        if (hasOpenArchiveUndoBlockingLayer()) return;
-        event.preventDefault();
-        event.stopPropagation();
-        if (readThreadShell(shortcutThreadRef)?.archivedAt !== null) return;
-        void attemptArchiveThread(shortcutThreadRef);
-        return;
-      }
-
       if (command === "preview.toggle") {
         event.preventDefault();
         event.stopPropagation();
@@ -327,7 +314,6 @@ function ChatRouteGlobalShortcuts() {
   }, [
     activeDraftThread,
     activeThread,
-    attemptArchiveThread,
     clearSelection,
     handleNewThread,
     keybindings,
@@ -358,9 +344,7 @@ function ChatRouteLayout() {
   return (
     <>
       <ChatRouteGlobalShortcuts />
-      <SplitThreadLayout>
-        {threadTarget ? <ThreadRouteView target={threadTarget} /> : <Outlet />}
-      </SplitThreadLayout>
+      {threadTarget ? <ThreadRouteView target={threadTarget} /> : <Outlet />}
     </>
   );
 }

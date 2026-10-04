@@ -38,6 +38,31 @@ Settings that are environment-wide stay read-only while a project is selected. W
 targets disagree, a control shows **Mixed** until you choose one value. Appearance, keyboard,
 and other phone-only settings ignore the filter.
 
+## Worktree branch names
+
+In **Settings → Source Control → Worktree branch naming**, choose a static prefix,
+a model-selected semantic prefix such as `feat/` or `fix/`, or custom instructions
+for the complete name. The static prefix defaults to `t3code/`; a trailing slash is
+optional, and an empty prefix adds nothing. Invalid characters in a static prefix
+are replaced with hyphens. Custom instructions are appended to
+the naming prompt and can specify issue IDs, namespaces, and casing.
+
+These settings apply to automatically named new worktree branches. Select a project
+to override its environment defaults. Worktree directories keep their original names.
+If generation fails, or a custom name is invalid or already taken, the temporary
+branch name remains.
+
+## Scheduled tasks on mobile
+
+Open **Settings → Scheduled tasks** to create recurring tasks or manage existing
+ones across your connected environments. Use the settings filter to narrow the
+list by environment or project. Each task runs on the environment you choose,
+using its project, model, and workspace settings. Fixed-time schedules use that
+environment's time zone, which may differ from your phone's.
+
+You can edit, pause, resume, run immediately, or delete a task from the list.
+Leaving an edited form asks before discarding unsaved changes.
+
 ## Defaults and inheritance
 
 General contains the model and workspace for new threads. Integrations controls agent browser
@@ -46,10 +71,9 @@ generation. The same rows edit environment defaults or project overrides dependi
 project crumb.
 
 The Project category, shown while a project is selected, holds the project's name, icon, thread
-accent, actions, checkouts and removal. It also opens the project's archived threads and imports an
-existing Claude Code or Codex CLI session as a thread in a checkout. Actions belong to a project:
-editing them creates the project's own list on each selected environment, and reset returns to the
-environment's shared list. A project's `t3.json` actions can be imported there.
+accent, actions, checkouts and removal. It also opens the project's archived threads. Actions belong
+to a project: editing them creates the project's own list on each selected environment, and reset
+returns to the environment's shared list. A project's `t3.json` actions can be imported there.
 
 Settings a repository can also declare in `t3.json`, such as the workspace for new threads,
 resolve in one order: a project override, then the environment setting, then `t3.json`, then the
@@ -76,11 +100,8 @@ captures and log retention remain machine-wide.
 
 Worktrees can be removed after a chosen number of inactive days, after merging, or when they
 have no commits beyond the default branch. Only T3-managed worktrees are eligible. Active
-sessions, background work, pending worktree moves, shared worktrees, uncommitted changes, and
-ignored files other than `node_modules` prevent removal. Branches and thread history stay.
-Starting another turn follows the removed-worktree recovery setting: by default, the thread
-continues in the main project checkout. Turn off **Skip recreating removed worktrees** to try
-recreating the worktree first.
+sessions, shared worktrees, uncommitted changes, and ignored files other than `node_modules`
+prevent removal. Branches and thread history stay; starting another turn recreates the checkout.
 Merge cleanup requires the commits to be included in the remote default branch, so squash merges
 may need the inactivity rule instead.
 

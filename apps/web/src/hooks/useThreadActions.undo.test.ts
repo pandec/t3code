@@ -44,9 +44,7 @@ const threadShell = vi.hoisted(() => ({
   title: "Thread",
   pinOrderKey: "a0",
   pinnedAt: null as string | null,
-  snoozedAt: null as string | null,
   snoozedUntil: null as string | null,
-  snoozedUntilTurnId: null as string | null,
   projectId: "project",
   environmentId: "undo-env",
   session: null,
@@ -107,9 +105,7 @@ beforeEach(() => {
   emptyDraft.ids = [];
   shellLookup.missing = false;
   threadShell.pinnedAt = null;
-  threadShell.snoozedAt = null;
   threadShell.snoozedUntil = null;
-  threadShell.snoozedUntilTurnId = null;
 });
 afterEach(() => {
   vi.runAllTimers();
@@ -231,7 +227,6 @@ describe("settle and snooze Undo", () => {
   it("re-pins and re-snoozes a thread that settling had cleared", async () => {
     const snoozedUntil = "2030-01-01T09:00:00.000Z";
     threadShell.pinnedAt = "2026-01-01T00:00:00.000Z";
-    threadShell.snoozedAt = "2026-01-01T00:00:00.000Z";
     threadShell.snoozedUntil = snoozedUntil;
     const actions = useThreadActions();
     await actions.settleThread(target);
@@ -244,29 +239,6 @@ describe("settle and snooze Undo", () => {
     expect(commands.snooze).toHaveBeenCalledExactlyOnceWith({
       environmentId: target.environmentId,
       input: { threadId: target.threadId, snoozedUntil },
-    });
-  });
-
-  it("restores an indefinite snooze that settling had cleared", async () => {
-    threadShell.snoozedAt = "2026-01-01T00:00:00.000Z";
-    const actions = useThreadActions();
-    await actions.settleThread(target);
-    await currentUndo()();
-    expect(commands.snooze).toHaveBeenCalledExactlyOnceWith({
-      environmentId: target.environmentId,
-      input: { threadId: target.threadId, snoozedUntil: null },
-    });
-  });
-
-  it("restores an until-done snooze that settling had cleared", async () => {
-    threadShell.snoozedAt = "2026-01-01T00:00:00.000Z";
-    threadShell.snoozedUntilTurnId = "turn-1";
-    const actions = useThreadActions();
-    await actions.settleThread(target);
-    await currentUndo()();
-    expect(commands.snooze).toHaveBeenCalledExactlyOnceWith({
-      environmentId: target.environmentId,
-      input: { threadId: target.threadId, snoozedUntil: null, untilDone: true },
     });
   });
 

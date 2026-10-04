@@ -464,19 +464,8 @@ async function defaultFlushPendingWrites(): Promise<void> {
   // Attempt every flush before surfacing the first failure, so one broken
   // store cannot keep the others from landing.
   const results = await Promise.allSettled([
-    import("../../state/use-composer-drafts").then(async (drafts) => {
-      // Draft persistence is best-effort and swallows its own write failures
-      // to keep retrying, so ask afterwards whether anything is still unwritten
-      // rather than relying on the flush to reject.
-      await drafts.flushComposerDrafts();
-      if (drafts.hasUnpersistedComposerDrafts()) {
-        throw new Error("Composer drafts are still unwritten after a flush.");
-      }
-    }),
+    import("../../state/use-composer-drafts").then((drafts) => drafts.flushComposerDrafts()),
     import("../../state/thread-outbox").then((outbox) => outbox.flushThreadOutbox()),
-    import("../../state/thread-lifecycle-outbox").then((outbox) =>
-      outbox.flushThreadLifecycleOutbox(),
-    ),
   ]);
   const failed = results.find(
     (result): result is PromiseRejectedResult => result.status === "rejected",

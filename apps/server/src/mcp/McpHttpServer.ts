@@ -1,7 +1,3 @@
-import { WorktreeToolkitHandlersLive } from "./toolkits/worktree/handlers.ts";
-import { WorktreeToolkit } from "./toolkits/worktree/tools.ts";
-import { ArchiveToolkitHandlersLive } from "./toolkits/archive/handlers.ts";
-import { ArchiveToolkit } from "./toolkits/archive/tools.ts";
 import * as NodeCrypto from "node:crypto";
 import * as Cause from "effect/Cause";
 import * as Clock from "effect/Clock";
@@ -23,8 +19,22 @@ import packageJson from "../../package.json" with { type: "json" };
 import * as ServerConfig from "../config.ts";
 import * as DeviceService from "../device/DeviceService.ts";
 import * as McpInvocationContext from "./McpInvocationContext.ts";
+import * as OrchestratorMcpService from "./OrchestratorMcpService.ts";
+import { PreviewControlsToolkit } from "./toolkits/previewControls/tools.ts";
+import { PreviewControlsHandlersLive } from "./toolkits/previewControls/handlers.ts";
+import { EnvironmentToolkit } from "./toolkits/environment/tools.ts";
+import { EnvironmentHandlersLive } from "./toolkits/environment/handlers.ts";
+import { ProjectToolkit } from "./toolkits/project/tools.ts";
+import { ProjectHandlersLive } from "./toolkits/project/handlers.ts";
+import { AttachmentToolkit } from "./toolkits/attachment/tools.ts";
+import { AttachmentHandlersLive } from "./toolkits/attachment/handlers.ts";
+import { ThreadToolkit } from "./toolkits/thread/tools.ts";
+import { ThreadToolkitHandlersLive } from "./toolkits/thread/handlers.ts";
+import * as ThreadMetadataMcpService from "./ThreadMetadataMcpService.ts";
 import * as McpSessionRegistry from "./McpSessionRegistry.ts";
 import * as PreviewAutomationBroker from "./PreviewAutomationBroker.ts";
+import { OrchestratorToolkitHandlersLive } from "./toolkits/orchestrator/handlers.ts";
+import { OrchestratorToolkit } from "./toolkits/orchestrator/tools.ts";
 import {
   PreviewSnapshotToolkitHandlersLive,
   PreviewStandardToolkitHandlersLive,
@@ -34,8 +44,9 @@ import {
   PreviewSnapshotToolkit,
   PreviewStandardToolkit,
 } from "./toolkits/preview/tools.ts";
-import { VoiceToolkitHandlersLive } from "./toolkits/voice/handlers.ts";
-import { VoiceToolkit } from "./toolkits/voice/tools.ts";
+import { WorktreeToolkitHandlersLive } from "./toolkits/worktree/handlers.ts";
+import { WorktreeToolkit } from "./toolkits/worktree/tools.ts";
+import * as WorktreeMcpService from "./WorktreeMcpService.ts";
 import { PullRequestsToolkitHandlersLive } from "./toolkits/pullRequests/handlers.ts";
 import { PullRequestsToolkit } from "./toolkits/pullRequests/tools.ts";
 import {
@@ -649,8 +660,34 @@ export const PreviewToolkitRegistrationLive = Layer.mergeAll(
   PreviewSnapshotRegistrationLive,
 );
 
-const VoiceToolkitRegistrationLive = McpServer.toolkit(VoiceToolkit).pipe(
-  Layer.provide(VoiceToolkitHandlersLive),
+export const OrchestratorToolkitRegistrationLive = McpServer.toolkit(OrchestratorToolkit).pipe(
+  Layer.provide(OrchestratorToolkitHandlersLive),
+  Layer.provide(OrchestratorMcpService.layer),
+  Layer.provide(ThreadMetadataMcpService.layer),
+);
+
+export const ThreadToolkitRegistrationLive = McpServer.toolkit(ThreadToolkit).pipe(
+  Layer.provide(ThreadToolkitHandlersLive),
+);
+
+const WorktreeToolkitRegistrationLive = McpServer.toolkit(WorktreeToolkit).pipe(
+  Layer.provide(WorktreeToolkitHandlersLive),
+);
+
+const PreviewControlsRegistrationLive = McpServer.toolkit(PreviewControlsToolkit).pipe(
+  Layer.provide(PreviewControlsHandlersLive),
+);
+
+const EnvironmentRegistrationLive = McpServer.toolkit(EnvironmentToolkit).pipe(
+  Layer.provide(EnvironmentHandlersLive),
+);
+
+const ProjectRegistrationLive = McpServer.toolkit(ProjectToolkit).pipe(
+  Layer.provide(ProjectHandlersLive),
+);
+
+const AttachmentRegistrationLive = McpServer.toolkit(AttachmentToolkit).pipe(
+  Layer.provide(AttachmentHandlersLive),
 );
 
 export const PullRequestsToolkitRegistrationLive = McpServer.toolkit(PullRequestsToolkit).pipe(
@@ -678,80 +715,55 @@ const makeMcpTransport = (path: `/${string}`) =>
     protocols: [McpProtocol.v2025_06_18],
   }).pipe(Layer.provide(McpAuthMiddlewareLive));
 
-export const WorktreeToolkitRegistrationLive = McpServer.toolkit(WorktreeToolkit).pipe(
-  Layer.provide(WorktreeToolkitHandlersLive),
-);
-
-export const ArchiveToolkitRegistrationLive = McpServer.toolkit(ArchiveToolkit).pipe(
-  Layer.provide(ArchiveToolkitHandlersLive),
+/** Preview controls require the preview capability, so they ride with the preview toolkit. */
+const PreviewIslandRegistrationLive = Layer.mergeAll(
+  PreviewToolkitRegistrationLive,
+  PreviewControlsRegistrationLive,
 );
 
 /**
  * Tool registration is per McpServer instance and tools/list has no per-token
  * filter, so each capability combination gets its own server island at its
  * own path — a session's credential (whose endpoint McpSessionRegistry picks
- * from its capabilities) then only ever sees the tools it can call. The pull
- * request toolkit is on every island because every credential carries it. The
- * worktree and archive toolkits are also shared and only operate on the authenticated thread.
- * Layer boundaries: Layer.fresh un-memoizes the McpServer inside each island
- * while the handlers' dependencies (broker, voice staging, session registry)
- * stay requirements satisfied by the shared runtime, so all islands share one
- * instance of each.
+ * from its capabilities) then only ever sees the tools it can call. The
+ * orchestration, thread, attachment, project, environment, worktree and pull
+ * request toolkits are on every island because every credential carries
+ * their capabilities; they only operate on what the credential's thread can reach.
+ * Layer boundaries: Layer.fresh un-memoizes the McpServer inside each island,
+ * so the MCP service layers provided inside a registration (orchestrator,
+ * thread metadata) are built once per island; they hold no cross-call state.
+ * Requirements left unmet inside an island are satisfied by the outer,
+ * memoized build, so all islands share one instance of each: the handlers'
+ * runtime dependencies (broker, session registry) and the worktree service,
+ * which holds the per-thread handoff guard.
  */
 const mcpToolkitIsland = <E, R>(path: `/${string}`, registrations: Layer.Layer<never, E, R>) =>
   Layer.fresh(
     Layer.mergeAll(
       registrations,
+      OrchestratorToolkitRegistrationLive,
+      ThreadToolkitRegistrationLive,
+      AttachmentRegistrationLive,
+      ProjectRegistrationLive,
+      EnvironmentRegistrationLive,
       WorktreeToolkitRegistrationLive,
-      ArchiveToolkitRegistrationLive,
+      PullRequestsToolkitRegistrationLive,
     ).pipe(Layer.provideMerge(makeMcpTransport(path))),
   );
 
 export const layer = Layer.mergeAll(
-  mcpToolkitIsland(
-    "/mcp",
-    Layer.mergeAll(
-      PreviewToolkitRegistrationLive,
-      VoiceToolkitRegistrationLive,
-      PullRequestsToolkitRegistrationLive,
-    ),
-  ),
-  mcpToolkitIsland(
-    "/mcp/preview",
-    Layer.mergeAll(PreviewToolkitRegistrationLive, PullRequestsToolkitRegistrationLive),
-  ),
-  mcpToolkitIsland(
-    "/mcp/voice",
-    Layer.mergeAll(VoiceToolkitRegistrationLive, PullRequestsToolkitRegistrationLive),
-  ),
-  mcpToolkitIsland("/mcp/pull-requests", PullRequestsToolkitRegistrationLive),
-  mcpToolkitIsland(
-    "/mcp/device",
-    Layer.mergeAll(DeviceToolkitRegistrationLive, PullRequestsToolkitRegistrationLive),
-  ),
+  mcpToolkitIsland("/mcp", PreviewIslandRegistrationLive),
+  mcpToolkitIsland("/mcp/preview", PreviewIslandRegistrationLive),
+  mcpToolkitIsland("/mcp/voice", Layer.empty),
+  mcpToolkitIsland("/mcp/pull-requests", Layer.empty),
+  mcpToolkitIsland("/mcp/device", DeviceToolkitRegistrationLive),
   mcpToolkitIsland(
     "/mcp/device/preview",
-    Layer.mergeAll(
-      DeviceToolkitRegistrationLive,
-      PreviewToolkitRegistrationLive,
-      PullRequestsToolkitRegistrationLive,
-    ),
+    Layer.mergeAll(DeviceToolkitRegistrationLive, PreviewIslandRegistrationLive),
   ),
-  mcpToolkitIsland(
-    "/mcp/device/voice",
-    Layer.mergeAll(
-      DeviceToolkitRegistrationLive,
-      VoiceToolkitRegistrationLive,
-      PullRequestsToolkitRegistrationLive,
-    ),
-  ),
+  mcpToolkitIsland("/mcp/device/voice", DeviceToolkitRegistrationLive),
   mcpToolkitIsland(
     "/mcp/device/all",
-    Layer.mergeAll(
-      DeviceToolkitRegistrationLive,
-      PreviewToolkitRegistrationLive,
-      VoiceToolkitRegistrationLive,
-      PullRequestsToolkitRegistrationLive,
-    ),
+    Layer.mergeAll(DeviceToolkitRegistrationLive, PreviewIslandRegistrationLive),
   ),
-);
+).pipe(Layer.provide(WorktreeMcpService.layer));

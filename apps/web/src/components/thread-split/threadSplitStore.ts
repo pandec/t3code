@@ -16,6 +16,12 @@ export type ThreadPaneId = "primary" | "secondary";
 /** Split is only offered when both panes get a workable column. */
 export const THREAD_SPLIT_MEDIA_QUERY = "(min-width: 64rem)";
 
+/**
+ * Gates every "open split" entry point. False while no layout renders the
+ * secondary pane; P2 flips this when the split host is rebuilt on v2.
+ */
+export const THREAD_SPLIT_HOST_AVAILABLE: boolean = false;
+
 export const MIN_SPLIT_RATIO = 0.25;
 export const MAX_SPLIT_RATIO = 0.75;
 const DEFAULT_SPLIT_RATIO = 0.5;

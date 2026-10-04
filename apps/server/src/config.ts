@@ -100,9 +100,6 @@ export class ServerConfig extends Context.Service<
     readonly resourceMonitorPath?: string | undefined;
     readonly autoBootstrapProjectFromCwd: boolean;
     readonly logWebSocketEvents: boolean;
-    readonly providerSessionReaperInactivityThresholdMs: number;
-    readonly providerSessionReaperSweepIntervalMs: number;
-    readonly providerSessionReaperMaxPendingExtensionMs: number;
     readonly tailscaleServeEnabled: boolean;
     readonly tailscaleServePort: number;
   }
@@ -140,7 +137,7 @@ export const deriveServerPaths = Effect.fn(function* (
   const stateDir =
     options.stateDir ??
     join(baseDir, devUrl !== undefined && !options.baseDirIsExplicit ? "dev" : "userdata");
-  const dbPath = join(stateDir, "state.sqlite");
+  const dbPath = join(stateDir, "statev2.sqlite");
   const attachmentsDir = join(stateDir, "attachments");
   const logsDir = join(stateDir, "logs");
   const providerLogsDir = join(logsDir, "provider");
@@ -230,9 +227,6 @@ const makeTest = Effect.fn("ServerConfig.makeTest")(function* (
     mode: "web",
     autoBootstrapProjectFromCwd: false,
     logWebSocketEvents: false,
-    providerSessionReaperInactivityThresholdMs: 30 * 60 * 1000,
-    providerSessionReaperSweepIntervalMs: 5 * 60 * 1000,
-    providerSessionReaperMaxPendingExtensionMs: 24 * 60 * 60 * 1000,
     tailscaleServeEnabled: false,
     tailscaleServePort: 443,
     port: 0,

@@ -34,29 +34,9 @@ describe("auto-settle settings sync", () => {
 
     expect(plan.mismatches).toEqual([]);
     expect(plan.patch).toEqual({
-      threadAutoSettleEnabled: reference.settings.threadAutoSettleEnabled,
-      skipMissingWorktreeRecreation: reference.settings.skipMissingWorktreeRecreation,
       sidebarAutoSettleAfterDays: 7,
       sidebarAutoSettleOnMerge: true,
     });
-  });
-
-  it("reports a target whose master gate differs", () => {
-    const target = {
-      environmentId: EnvironmentId.make("remote"),
-      label: "Remote",
-      settings: {
-        ...reference.settings,
-        threadAutoSettleEnabled: !reference.settings.threadAutoSettleEnabled,
-      },
-    };
-
-    const plan = planAutoSettleSettingsSync(reference, [target]);
-
-    expect(plan.mismatches).toEqual([target]);
-    expect({ ...target.settings, ...plan.patch }.threadAutoSettleEnabled).toBe(
-      reference.settings.threadAutoSettleEnabled,
-    );
   });
 
   it("applies only auto-settle defaults when another environment differs", () => {

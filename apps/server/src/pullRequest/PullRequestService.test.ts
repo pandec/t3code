@@ -2,6 +2,7 @@ import * as NodeServices from "@effect/platform-node/NodeServices";
 import * as ChildProcessSpawner from "effect/unstable/process/ChildProcessSpawner";
 import * as KeyValueStore from "effect/unstable/persistence/KeyValueStore";
 import { assert, it } from "@effect/vitest";
+import * as Clock from "effect/Clock";
 import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
 import * as Fiber from "effect/Fiber";
@@ -18,20 +19,20 @@ import type {
 } from "@t3tools/contracts";
 import { PullRequestOperationError } from "@t3tools/contracts";
 
-import * as ProjectionSnapshotQuery from "../orchestration/Services/ProjectionSnapshotQuery.ts";
-import * as RepositoryIdentityResolver from "../project/RepositoryIdentityResolver.ts";
+import * as ProjectService from "../project/ProjectService.ts";
 import { SqlitePersistenceMemory } from "../persistence/Layers/Sqlite.ts";
 import * as PullRequestFilesViewed from "../persistence/PullRequestFilesViewed.ts";
+import * as RepositoryIdentityResolver from "../project/RepositoryIdentityResolver.ts";
 import * as SourceControlProviderRegistry from "../sourceControl/SourceControlProviderRegistry.ts";
 import * as SourceControlRateLimit from "../sourceControl/SourceControlRateLimit.ts";
-import { ForgejoCli } from "../sourceControl/ForgejoCli.ts";
+import * as ForgejoCli from "../sourceControl/ForgejoCli.ts";
 import * as ForgejoPullRequestProvider from "./ForgejoPullRequestProvider.ts";
 import {
   PullRequestProviderError,
   type ProviderChangeRequest,
   type PullRequestProviderApi,
 } from "./PullRequestProvider.ts";
-import { PullRequestProviderRegistry, fromProviders } from "./PullRequestProviderRegistry.ts";
+import * as PullRequestProviderRegistry from "./PullRequestProviderRegistry.ts";
 import * as PullRequestService from "./PullRequestService.ts";
 import * as PullRequestReadCache from "./PullRequestReadCache.ts";
 import {
@@ -401,37 +402,33 @@ function fakeProvider(
 function makeService(input: {
   readonly projects: ReadonlyArray<OrchestrationProjectShell>;
   readonly providers: ReadonlyArray<PullRequestProviderApi>;
-  readonly resolveRepositoryIdentity?: RepositoryIdentityResolver.RepositoryIdentityResolver["Service"]["resolve"];
   readonly resolveHandle?: SourceControlProviderRegistry.SourceControlProviderRegistry["Service"]["resolveHandle"];
+  readonly resolveRepositoryIdentity?: RepositoryIdentityResolver.RepositoryIdentityResolver["Service"]["resolve"];
 }) {
-  const resolveRepositoryIdentity =
-    input.resolveRepositoryIdentity ??
-    ((cwd: string) =>
-      Effect.succeed(
-        input.projects.find((candidate) => candidate.workspaceRoot === cwd)?.repositoryIdentity ??
-          null,
-      ));
   // Built into the test's own scope rather than provided call by call: the marks store owns a
   // database, and `Effect.provide` would close it the moment the service was handed back.
   return Effect.flatMap(
     Layer.build(
       Layer.mergeAll(
-        Layer.succeed(PullRequestProviderRegistry, fromProviders(input.providers)),
-        Layer.mock(RepositoryIdentityResolver.RepositoryIdentityResolver)({
-          resolve: resolveRepositoryIdentity,
-        }),
+        Layer.succeed(
+          PullRequestProviderRegistry.PullRequestProviderRegistry,
+          PullRequestProviderRegistry.fromProviders(input.providers),
+        ),
         Layer.mock(SourceControlProviderRegistry.SourceControlProviderRegistry)({
           resolveLink: () => undefined,
           resolveHandle:
             input.resolveHandle ?? (() => Effect.die("Unexpected provider refinement")),
         }),
-        Layer.mock(ProjectionSnapshotQuery.ProjectionSnapshotQuery)({
-          getProjectShells: (projectIds) =>
+        Layer.mock(ProjectService.ProjectService)({
+          listShells: (options) =>
             Effect.succeed(
-              input.projects.filter((project) => projectIds?.includes(project.id) ?? true),
+              input.projects.filter((project) => options?.projectIds?.includes(project.id) ?? true),
             ),
-          getProjectShellById: (projectId) =>
+          getShell: (projectId) =>
             Effect.succeed(Option.fromNullishOr(input.projects.find((p) => p.id === projectId))),
+        }),
+        Layer.mock(RepositoryIdentityResolver.RepositoryIdentityResolver)({
+          resolve: input.resolveRepositoryIdentity ?? (() => Effect.succeed(null)),
         }),
         SourceControlRateLimit.layer,
         // The real store over a database of its own, so the environment-kept marks are exercised
@@ -1210,280 +1207,9 @@ it.effect("tries another workspace on the same host for the viewer", () =>
   }),
 );
 
-it.effect("keeps persisted-identity reads but blocks writes when live identity differs", () =>
-  Effect.gen(function* () {
-    const freshOptions: unknown[] = [];
-    const service = yield* makeService({
-      projects: [project({ id: "p1", title: "web", workspaceRoot: "/a", repository: "acme/web" })],
-      providers: [
-        fakeProvider("github", {
-          getViewerPermissions: () => Effect.die("must not be called"),
-          getChangeRequestPreview: () => Effect.succeed(changeRequest(1, "2026-07-02T00:00:00Z")),
-          listChangeRequests: () =>
-            Effect.succeed({
-              items: [changeRequest(1, "2026-07-02T00:00:00Z")],
-              truncated: false,
-              continues: true,
-            }),
-          runAction: () => Effect.die("must not be called"),
-          updateChangeRequest: () => Effect.die("must not be called"),
-          comment: () => Effect.die("must not be called"),
-          updateComment: () => Effect.die("must not be called"),
-          submitReview: () => Effect.die("must not be called"),
-          replyToThread: () => Effect.die("must not be called"),
-          setThreadResolution: () => Effect.die("must not be called"),
-          setReaction: () => Effect.die("must not be called"),
-          setReviewerRequest: () => Effect.die("must not be called"),
-          setLabels: () => Effect.die("must not be called"),
-          setFilesViewed: () => Effect.die("must not be called"),
-        }),
-      ],
-      resolveRepositoryIdentity: (_cwd, options) => {
-        freshOptions.push(options);
-        return Effect.succeed(
-          project({
-            id: "live",
-            title: "other",
-            workspaceRoot: "/a",
-            repository: "acme/other",
-          }).repositoryIdentity ?? null,
-        );
-      },
-    });
-    const reference = { projectId: "p1" as ProjectId, repository: "acme/web", number: 1 };
-
-    const listed = yield* service.list({ state: "open" });
-    assert.strictEqual(listed.entries.length, 1);
-    const preview = yield* service.preview(reference);
-    assert.strictEqual(preview.title, "Change request 1");
-    assert.strictEqual(preview.repository, "acme/web");
-
-    const writes = [
-      service.runAction({ ...reference, action: "close" }),
-      service.update({ ...reference, title: "Updated" }),
-      service.comment({ ...reference, body: "hello" }),
-      service.updateComment({
-        ...reference,
-        commentId: "comment-1",
-        kind: "issue-comment",
-        body: "updated",
-      }),
-      service.submitReview({ ...reference, verdict: "approve", body: "", comments: [] }),
-      service.replyToThread({ ...reference, threadId: "thread-1", body: "hello" }),
-      service.setThreadResolution({ ...reference, threadId: "thread-1", resolved: true }),
-      service.setReaction({ ...reference, content: "heart", reacted: true }),
-      service.requestReviewers({
-        ...reference,
-        reviewers: [{ id: "octocat", kind: "user" }],
-        requested: true,
-      }),
-      service.setLabels({ ...reference, labels: ["bug"], applied: true }),
-      service.setFilesViewed({ ...reference, files: [{ path: "a.ts", viewed: true }] }),
-    ];
-    for (const write of writes) {
-      const error = yield* Effect.flip(write);
-      assert.strictEqual(error._tag, "PullRequestOperationError");
-      if (error._tag === "PullRequestOperationError") {
-        assert.strictEqual(error.operation, "resolveRepository");
-      }
-    }
-    assert.deepStrictEqual(
-      freshOptions,
-      Array.from({ length: writes.length }, () => ({ fresh: true })),
-    );
-  }),
-);
-
-it.effect("uses a healthy sibling checkout to verify a mutation", () =>
-  Effect.gen(function* () {
-    const resolutionRoots: string[] = [];
-    const permissionRoots: string[] = [];
-    const actionRoots: string[] = [];
-    const service = yield* makeService({
-      projects: [
-        project({
-          id: "p2",
-          title: "web healthy",
-          workspaceRoot: "/healthy",
-          repository: "acme/web",
-        }),
-        project({ id: "p1", title: "web gone", workspaceRoot: "/gone", repository: "acme/web" }),
-      ],
-      providers: [
-        fakeProvider("github", {
-          getViewerPermissions: (input) => {
-            permissionRoots.push(input.cwd);
-            return Effect.succeed({
-              actions: ["merge", "ready", "draft", "close", "reopen"],
-              comment: true,
-              resolve: true,
-              verdicts: ["comment", "approve", "request-changes"],
-              requestReviewers: true,
-            });
-          },
-          runAction: (input) => {
-            actionRoots.push(input.cwd);
-            return Effect.void;
-          },
-        }),
-      ],
-      resolveRepositoryIdentity: (cwd) => {
-        resolutionRoots.push(cwd);
-        return Effect.succeed(
-          cwd === "/healthy"
-            ? (project({
-                id: "live",
-                title: "web",
-                workspaceRoot: cwd,
-                repository: "acme/web",
-              }).repositoryIdentity ?? null)
-            : null,
-        );
-      },
-    });
-
-    yield* service.runAction({
-      projectId: "p1" as ProjectId,
-      repository: "acme/web",
-      number: 1,
-      action: "close",
-    });
-
-    assert.deepStrictEqual(resolutionRoots, ["/gone", "/healthy"]);
-    assert.deepStrictEqual(permissionRoots, ["/healthy"]);
-    assert.deepStrictEqual(actionRoots, ["/healthy"]);
-  }),
-);
-
-it.effect("spends the shared host budget when a mutation falls back to a sibling checkout", () =>
-  Effect.gen(function* () {
-    // Sibling checkouts are recorded before project filtering, so they are built from a
-    // different code path than the listing's own entries. Both must carry the rate-limit
-    // wrapper: an unwrapped fallback would spend provider budget without recording it, and
-    // the host would never pause.
-    let listCalls = 0;
-    const actionRoots: string[] = [];
-    const service = yield* makeService({
-      projects: [
-        project({
-          id: "p2",
-          title: "web healthy",
-          workspaceRoot: "/healthy",
-          repository: "acme/web",
-        }),
-        project({ id: "p1", title: "web gone", workspaceRoot: "/gone", repository: "acme/web" }),
-      ],
-      providers: [
-        fakeProvider("github", {
-          runAction: (input) => {
-            actionRoots.push(input.cwd);
-            return Effect.fail(
-              new PullRequestProviderError({
-                provider: "github",
-                operation: "runAction",
-                reason: "rate-limited",
-                detail: "API rate limit exceeded.",
-              }),
-            );
-          },
-          listChangeRequests: () => {
-            listCalls += 1;
-            return Effect.succeed({ items: [], truncated: false, continues: false });
-          },
-        }),
-      ],
-      resolveRepositoryIdentity: (cwd) =>
-        Effect.succeed(
-          cwd === "/healthy"
-            ? (project({
-                id: "live",
-                title: "web",
-                workspaceRoot: cwd,
-                repository: "acme/web",
-              }).repositoryIdentity ?? null)
-            : null,
-        ),
-    });
-
-    yield* Effect.flip(
-      service.runAction({
-        projectId: "p1" as ProjectId,
-        repository: "acme/web",
-        number: 1,
-        action: "close",
-      }),
-    );
-    assert.deepStrictEqual(actionRoots, ["/healthy"]);
-
-    // The rate limit the sibling hit pauses github.com for every later non-interactive
-    // call, so the listing is refused before it reaches the provider.
-    const listError = yield* Effect.flip(service.list({ state: "open" }));
-    assert.strictEqual(listError._tag, "PullRequestOperationError");
-    assert.strictEqual(listCalls, 0);
-  }),
-);
-
-it.effect(
-  "refines unknown self-hosted GitLab and Forgejo siblings before verifying a mutation",
-  () =>
-    Effect.gen(function* () {
-      for (const kind of ["gitlab", "forgejo"] as const) {
-        const refinementRoots: string[] = [];
-        const resolutionRoots: string[] = [];
-        const actionRoots: string[] = [];
-        const selected = project({
-          id: "p1",
-          title: "selected gone",
-          workspaceRoot: "/gone",
-          repository: "group/project",
-          provider: "unknown",
-          host: "code.example.test",
-        });
-        const healthy = { ...selected, id: "p2" as ProjectId, workspaceRoot: "/healthy" };
-        const service = yield* makeService({
-          projects: [selected, healthy],
-          providers: [
-            fakeProvider(kind, {
-              runAction: (input) => {
-                actionRoots.push(input.cwd);
-                return Effect.void;
-              },
-            }),
-          ],
-          resolveHandle: ({ cwd, context }) => {
-            refinementRoots.push(cwd);
-            return cwd === "/gone"
-              ? Effect.succeed({ context: context!, provider: undefined as never })
-              : Effect.succeed({
-                  context: { ...context!, provider: { ...context!.provider, kind } },
-                  provider: undefined as never,
-                });
-          },
-          resolveRepositoryIdentity: (cwd) => {
-            resolutionRoots.push(cwd);
-            return Effect.succeed(cwd === "/healthy" ? (healthy.repositoryIdentity ?? null) : null);
-          },
-        });
-
-        yield* service.runAction({
-          projectId: "p1" as ProjectId,
-          repository: "group/project",
-          number: 1,
-          action: "close",
-        });
-
-        // Cache canonicalization and live mutation routing both refine through the sibling.
-        assert.deepStrictEqual(refinementRoots, ["/gone", "/healthy", "/gone", "/healthy"]);
-        assert.deepStrictEqual(resolutionRoots, ["/gone", "/healthy"]);
-        assert.deepStrictEqual(actionRoots, ["/healthy"]);
-      }
-    }),
-);
-
 it.effect("routing verifies the current account on the requested host without caching it", () =>
   Effect.gen(function* () {
     let viewer = "first-account";
-    const resolutions: Array<{ readonly cwd: string; readonly options: unknown }> = [];
     const service = yield* makeService({
       projects: [
         project({
@@ -1505,18 +1231,6 @@ it.effect("routing verifies the current account on the requested host without ca
           },
         }),
       ],
-      resolveRepositoryIdentity: (cwd, options) => {
-        resolutions.push({ cwd, options });
-        return Effect.succeed(
-          project({
-            id: "live",
-            title: "web",
-            workspaceRoot: cwd,
-            repository: "acme/web",
-            host: "github.example.test",
-          }).repositoryIdentity ?? null,
-        );
-      },
     });
     const ref = { projectId: "p1" as ProjectId, repository: "acme/web", number: 1 };
     assert.deepStrictEqual(yield* service.routing(ref), {
@@ -1527,7 +1241,6 @@ it.effect("routing verifies the current account on the requested host without ca
       projectTitle: "web",
       workspaceRoot: "/a",
     });
-    assert.deepStrictEqual(resolutions, [{ cwd: "/a", options: { fresh: true } }]);
     viewer = "second-account";
     assert.strictEqual((yield* service.routing(ref)).viewer, "second-account");
     viewer = " ";
@@ -1536,51 +1249,6 @@ it.effect("routing verifies the current account on the requested host without ca
     if (failure._tag === "PullRequestOperationError") {
       assert.strictEqual(failure.operation, "routeIdentity");
     }
-    assert.deepStrictEqual(
-      resolutions,
-      Array.from({ length: 3 }, () => ({ cwd: "/a", options: { fresh: true } })),
-    );
-  }),
-);
-
-it.effect("shares routing rate-limit backoff with later host reads", () =>
-  Effect.gen(function* () {
-    let routingCalls = 0;
-    let listCalls = 0;
-    const service = yield* makeService({
-      projects: [project({ id: "p1", title: "web", workspaceRoot: "/a", repository: "acme/web" })],
-      providers: [
-        fakeProvider("github", {
-          getRoutingIdentity: () => {
-            routingCalls += 1;
-            return Effect.fail(
-              new PullRequestProviderError({
-                provider: "github",
-                operation: "getRoutingIdentity",
-                reason: "rate-limited",
-                detail: "API rate limit exceeded.",
-              }),
-            );
-          },
-          listChangeRequests: () => {
-            listCalls += 1;
-            return Effect.succeed({ items: [], truncated: false, continues: false });
-          },
-        }),
-      ],
-    });
-    const reference = { projectId: "p1" as ProjectId, repository: "acme/web", number: 1 };
-
-    assert.strictEqual(
-      (yield* Effect.flip(service.routing(reference)))._tag,
-      "PullRequestOperationError",
-    );
-    assert.strictEqual(routingCalls, 1);
-    assert.strictEqual(
-      (yield* Effect.flip(service.list({ state: "open" })))._tag,
-      "PullRequestOperationError",
-    );
-    assert.strictEqual(listCalls, 0);
   }),
 );
 
@@ -2141,6 +1809,90 @@ it.effect("stops new reads after a rate limit while leaving manual actions avail
   }),
 );
 
+for (const [provider, host] of [
+  ["github", "github.com"],
+  ["gitlab", "gitlab.com"],
+  ["forgejo", "code.example.test"],
+  ["bitbucket", "bitbucket.org"],
+  ["azure-devops", "dev.azure.com"],
+] as const) {
+  it.effect.each(["detail", "checks"] as const)(
+    `shares fresh ${provider} %s reads and respects rate-limit resets`,
+    (read) =>
+      Effect.gen(function* () {
+        let calls = 0;
+        let limited = false;
+        const repository = provider === "azure-devops" ? "web" : "acme/web";
+        const service = yield* makeService({
+          projects: [
+            project({ id: "p1", title: "web", workspaceRoot: "/repo", repository, provider, host }),
+          ],
+          providers: [
+            fakeProvider(provider, {
+              [read === "detail" ? "getChangeRequest" : "getChangeRequestChecks"]: () =>
+                Effect.gen(function* () {
+                  calls += 1;
+                  if (limited) {
+                    return yield* new PullRequestProviderError({
+                      provider,
+                      operation: "getChangeRequest",
+                      reason: "rate-limited",
+                      detail: "Retry after the reset.",
+                      retryAt: (yield* Clock.currentTimeMillis) + 120_000,
+                    });
+                  }
+                  return hostedChangeRequest("current details");
+                }),
+            }),
+          ],
+        });
+        const reference = {
+          projectId: "p1" as ProjectId,
+          repository,
+          number: 1,
+          allowStale: false,
+        };
+        const request: Effect.Effect<unknown, PullRequestService.PullRequestError> =
+          service[read](reference);
+        yield* Effect.all([request, request], { concurrency: 2 });
+        assert.strictEqual(calls, 1);
+        yield* TestClock.adjust("45 seconds");
+        limited = true;
+        assert.strictEqual((yield* Effect.exit(request))._tag, "Failure");
+        assert.strictEqual(calls, 2);
+        yield* TestClock.adjust("45 seconds");
+        assert.strictEqual((yield* Effect.exit(request))._tag, "Failure");
+        assert.strictEqual(calls, 2);
+        yield* TestClock.adjust("75 seconds");
+        limited = false;
+        const recovered = yield* service[read](reference);
+        assert.strictEqual(recovered?.state, "open");
+        assert.strictEqual(calls, 3);
+        yield* service.invalidate({ reference });
+        yield* service[read](reference);
+        assert.strictEqual(calls, 4);
+      }),
+  );
+}
+
+it.effect("does not fall back to full detail when checks are unsupported", () =>
+  Effect.gen(function* () {
+    const service = yield* makeService({
+      projects: [
+        project({ id: "p1", title: "web", workspaceRoot: "/repo", repository: "acme/web" }),
+      ],
+      providers: [
+        fakeProvider("github", {
+          getChangeRequest: () => Effect.die("Unexpected full detail read"),
+        }),
+      ],
+    });
+    assert.isNull(
+      yield* service.checks({ projectId: "p1" as ProjectId, repository: "acme/web", number: 1 }),
+    );
+  }),
+);
+
 it.effect("uses a manual rate limit to pause later reads", () =>
   Effect.gen(function* () {
     let listCalls = 0;
@@ -2440,6 +2192,33 @@ it.effect("rejects a different Forgejo HTTP port for an HTTP checkout", () =>
   }),
 );
 
+it.effect("resolves a project's repository identity when its shell has none cached", () =>
+  Effect.gen(function* () {
+    const resolved = project({
+      id: "web",
+      title: "web",
+      workspaceRoot: "/web",
+      repository: "acme/web",
+    });
+    const service = yield* makeService({
+      projects: [{ ...resolved, repositoryIdentity: null }],
+      providers: [
+        fakeProvider("github", {
+          getChangeRequestSummary: () => Effect.succeed(changeRequest(7, "2026-07-02T00:00:00Z")),
+        }),
+      ],
+      resolveRepositoryIdentity: () => Effect.succeed(resolved.repositoryIdentity ?? null),
+    });
+
+    const summary = yield* service.summary(
+      { projectId: "web" as ProjectId, host: "github.com", repository: "acme/web", number: 7 },
+      { recoverTransientFailure: false },
+    );
+
+    assert.strictEqual(summary.number, 7);
+  }),
+);
+
 it.effect("routes a hosted reference to another repository through a project on that host", () =>
   Effect.gen(function* () {
     const seen: Array<{ cwd: string; repository: string; host: string }> = [];
@@ -2508,7 +2287,7 @@ it.effect("routes Azure reads and writes through the requested organization's ch
   }),
 );
 
-for (const checkout of [
+it.effect.each([
   {
     host: "ssh.dev.azure.com",
     repository: "v3/org-b/project/web",
@@ -2524,57 +2303,55 @@ for (const checkout of [
     repository: "DefaultCollection/project/_git/web",
     remoteUrl: "https://org-b.visualstudio.com/DefaultCollection/project/_git/web",
   },
-]) {
-  it.effect(`routes Azure URL reads and writes through a ${checkout.host} checkout`, () =>
-    Effect.gen(function* () {
-      const seen: string[] = [];
-      const target = project({
-        id: "target",
-        title: "target",
-        workspaceRoot: "/target",
-        provider: "azure-devops",
-        ...checkout,
-      });
-      const service = yield* makeService({
-        projects: [
-          ...["org-a/project/_git/web", "org-b/other-project/_git/web"].map((repository) =>
-            project({
-              id: repository,
-              title: repository,
-              workspaceRoot: `/${repository}`,
-              provider: "azure-devops",
-              host: "dev.azure.com",
-              repository,
-            }),
-          ),
-          target,
-        ],
-        providers: [
-          fakeProvider("azure-devops", {
-            getChangeRequestSummary: (input) =>
-              Effect.sync(() => {
-                seen.push(`read ${input.cwd} ${input.repository}`);
-                return changeRequest(7, "2026-07-02T00:00:00Z");
-              }),
-            runAction: (input) =>
-              Effect.sync(() => {
-                seen.push(`write ${input.cwd} ${input.repository}`);
-              }),
+])("routes Azure URL reads and writes through a $host checkout", (checkout) =>
+  Effect.gen(function* () {
+    const seen: string[] = [];
+    const target = project({
+      id: "target",
+      title: "target",
+      workspaceRoot: "/target",
+      provider: "azure-devops",
+      ...checkout,
+    });
+    const service = yield* makeService({
+      projects: [
+        ...["org-a/project/_git/web", "org-b/other-project/_git/web"].map((repository) =>
+          project({
+            id: repository,
+            title: repository,
+            workspaceRoot: `/${repository}`,
+            provider: "azure-devops",
+            host: "dev.azure.com",
+            repository,
           }),
-        ],
-      });
-      const reference = {
-        projectId: "org-a/project/_git/web" as ProjectId,
-        host: "dev.azure.com",
-        repository: "org-b/project/_git/web",
-        number: 7,
-      };
-      yield* service.summary(reference, { recoverTransientFailure: false });
-      yield* service.runAction({ ...reference, action: "merge" });
-      assert.deepStrictEqual(seen, ["read /target web", "write /target web", "read /target web"]);
-    }),
-  );
-}
+        ),
+        target,
+      ],
+      providers: [
+        fakeProvider("azure-devops", {
+          getChangeRequestSummary: (input) =>
+            Effect.sync(() => {
+              seen.push(`read ${input.cwd} ${input.repository}`);
+              return changeRequest(7, "2026-07-02T00:00:00Z");
+            }),
+          runAction: (input) =>
+            Effect.sync(() => {
+              seen.push(`write ${input.cwd} ${input.repository}`);
+            }),
+        }),
+      ],
+    });
+    const reference = {
+      projectId: "org-a/project/_git/web" as ProjectId,
+      host: "dev.azure.com",
+      repository: "org-b/project/_git/web",
+      number: 7,
+    };
+    yield* service.summary(reference, { recoverTransientFailure: false });
+    yield* service.runAction({ ...reference, action: "merge" });
+    assert.deepStrictEqual(seen, ["read /target web", "write /target web", "read /target web"]);
+  }),
+);
 
 it.effect("refuses Azure cross-organization reads and writes without its checkout", () =>
   Effect.gen(function* () {
@@ -4635,7 +4412,7 @@ it.effect("shares linked summaries and reuses them for display without asking th
 
 it.effect("keeps routed reads separate when the GitHub account changes", () =>
   Effect.gen(function* () {
-    for (const operation of ["summary", "detail", "diff", "filesViewed"] as const) {
+    for (const operation of ["summary", "detail", "checks", "diff", "filesViewed"] as const) {
       let failing = false;
       let calls = 0;
       const read = () =>
@@ -4660,6 +4437,7 @@ it.effect("keeps routed reads separate when the GitHub account changes", () =>
                 }),
               ),
             getChangeRequestSummary: read,
+            getChangeRequestChecks: read,
             getChangeRequest: read,
             getDiff: () =>
               read().pipe(
@@ -4690,7 +4468,14 @@ it.effect("keeps routed reads separate when the GitHub account changes", () =>
 
 it.effect("isolates routed caches for two credentials belonging to the same account", () =>
   Effect.gen(function* () {
-    for (const operation of ["summary", "detail", "diff", "preview", "filesViewed"] as const) {
+    for (const operation of [
+      "summary",
+      "detail",
+      "checks",
+      "diff",
+      "preview",
+      "filesViewed",
+    ] as const) {
       let credential = "broad";
       let calls = 0;
       const read = () =>
@@ -4723,6 +4508,7 @@ it.effect("isolates routed caches for two credentials belonging to the same acco
                 }),
               ),
             getChangeRequest: read,
+            getChangeRequestChecks: read,
             getChangeRequestSummary: read,
             getDiff: () =>
               read().pipe(
@@ -5254,104 +5040,102 @@ it.effect('resolves an author filter of "me" to the viewer before narrowing a ho
   }),
 );
 
-for (const crossHost of [false, true]) {
-  it.effect(
-    `authorizes stack rebases and refreshes sibling layers (cross-host: ${crossHost})`,
-    () =>
-      Effect.gen(function* () {
-        let taken = 0;
-        let summaryReads = 0;
-        let mutationFails = false;
-        let stackRebase = true;
-        let stackActions = true;
-        const capabilities = {
-          diff: true,
-          comment: true,
-          actions: ["update-branch"] as const,
-          mergeMethods: ["merge"] as const,
-          updateMethods: ["rebase"] as const,
-          get stackActions() {
-            return stackActions;
-          },
-          search: true,
-          reactions: true,
-          review: FULL_REVIEW,
-          reviewers: FULL_REVIEWERS,
-        };
-        const service = yield* makeService({
-          projects: [
-            project({ id: "p1", title: "web", workspaceRoot: "/a", repository: "acme/web" }),
-            project({
-              id: "p2",
-              title: "enterprise",
-              workspaceRoot: "/b",
-              repository: "acme/web",
-              host: "enterprise.test",
-            }),
-          ],
-          providers: [
-            fakeProvider("github", {
-              capabilities,
-              getViewerPermissions: () =>
-                Effect.succeed({
-                  actions: [],
-                  stackRebase,
-                  comment: true,
-                  resolve: false,
-                  verdicts: [],
-                  requestReviewers: false,
-                }),
-              getChangeRequestSummary: () =>
-                Effect.sync(() => {
-                  summaryReads++;
-                  return changeRequest(8, "2026-07-01T00:00:00Z");
-                }),
-              runAction: () =>
-                Effect.gen(function* () {
-                  taken++;
-                  if (mutationFails) return yield* requestFailed;
-                }),
-            }),
-          ],
-        });
-        const input = {
-          ...(crossHost ? { host: "enterprise.test" } : {}),
-          projectId: "p1" as ProjectId,
-          repository: "acme/web",
-          number: 3,
-          action: "update-branch" as const,
-          updateMethod: "rebase" as const,
-          stackNumber: 50,
-          expectedStackHeads: [{ number: 3, headSha: "ccc" }],
-        };
-        yield* service.runAction(input);
-        assert.strictEqual(taken, 1);
-        const unrelated = { ...input, number: 8 };
-        yield* service.summary(unrelated);
-        assert.strictEqual(summaryReads, 1);
-        stackRebase = false;
-        assert.strictEqual(
-          (yield* Effect.flip(service.runAction(input)))._tag,
-          "PullRequestOperationError",
-        );
-        stackRebase = true;
-        stackActions = false;
-        assert.strictEqual(
-          (yield* Effect.flip(service.runAction(input)))._tag,
-          "PullRequestOperationError",
-        );
-        assert.strictEqual(taken, 1);
-        yield* service.summary(unrelated);
-        assert.strictEqual(summaryReads, 1);
-        stackActions = true;
-        mutationFails = true;
-        yield* Effect.flip(service.runAction(input));
-        assert.strictEqual(taken, 2);
-        yield* service.summary(unrelated);
-        assert.strictEqual(summaryReads, 2);
-      }),
-  );
-}
+it.effect.each([false, true])(
+  "authorizes stack rebases and refreshes sibling layers (cross-host: %s)",
+  (crossHost) =>
+    Effect.gen(function* () {
+      let taken = 0;
+      let summaryReads = 0;
+      let mutationFails = false;
+      let stackRebase = true;
+      let stackActions = true;
+      const capabilities = {
+        diff: true,
+        comment: true,
+        actions: ["update-branch"] as const,
+        mergeMethods: ["merge"] as const,
+        updateMethods: ["rebase"] as const,
+        get stackActions() {
+          return stackActions;
+        },
+        search: true,
+        reactions: true,
+        review: FULL_REVIEW,
+        reviewers: FULL_REVIEWERS,
+      };
+      const service = yield* makeService({
+        projects: [
+          project({ id: "p1", title: "web", workspaceRoot: "/a", repository: "acme/web" }),
+          project({
+            id: "p2",
+            title: "enterprise",
+            workspaceRoot: "/b",
+            repository: "acme/web",
+            host: "enterprise.test",
+          }),
+        ],
+        providers: [
+          fakeProvider("github", {
+            capabilities,
+            getViewerPermissions: () =>
+              Effect.succeed({
+                actions: [],
+                stackRebase,
+                comment: true,
+                resolve: false,
+                verdicts: [],
+                requestReviewers: false,
+              }),
+            getChangeRequestSummary: () =>
+              Effect.sync(() => {
+                summaryReads++;
+                return changeRequest(8, "2026-07-01T00:00:00Z");
+              }),
+            runAction: () =>
+              Effect.gen(function* () {
+                taken++;
+                if (mutationFails) return yield* requestFailed;
+              }),
+          }),
+        ],
+      });
+      const input = {
+        ...(crossHost ? { host: "enterprise.test" } : {}),
+        projectId: "p1" as ProjectId,
+        repository: "acme/web",
+        number: 3,
+        action: "update-branch" as const,
+        updateMethod: "rebase" as const,
+        stackNumber: 50,
+        expectedStackHeads: [{ number: 3, headSha: "ccc" }],
+      };
+      yield* service.runAction(input);
+      assert.strictEqual(taken, 1);
+      const unrelated = { ...input, number: 8 };
+      yield* service.summary(unrelated);
+      assert.strictEqual(summaryReads, 1);
+      stackRebase = false;
+      assert.strictEqual(
+        (yield* Effect.flip(service.runAction(input)))._tag,
+        "PullRequestOperationError",
+      );
+      stackRebase = true;
+      stackActions = false;
+      assert.strictEqual(
+        (yield* Effect.flip(service.runAction(input)))._tag,
+        "PullRequestOperationError",
+      );
+      assert.strictEqual(taken, 1);
+      yield* service.summary(unrelated);
+      assert.strictEqual(summaryReads, 1);
+      stackActions = true;
+      mutationFails = true;
+      yield* Effect.flip(service.runAction(input));
+      assert.strictEqual(taken, 2);
+      yield* service.summary(unrelated);
+      assert.strictEqual(summaryReads, 2);
+    }),
+);
 
 it.effect("refuses a way of updating a branch that the host or the viewer does not allow", () =>
   Effect.gen(function* () {
@@ -5933,7 +5717,7 @@ it.effect("tracks Forgejo viewed files through its diff and refuses truncated ba
     let diffReads = 0;
     const provider = yield* ForgejoPullRequestProvider.make.pipe(
       Effect.provide(
-        Layer.mock(ForgejoCli)({
+        Layer.mock(ForgejoCli.ForgejoCli)({
           api: (input) => {
             assert.strictEqual(input.host, "forge.example:3000");
             const viewer = input.path === "user";
@@ -6070,8 +5854,12 @@ it.effect("keeps hosted Forgejo marks with their repository instead of the servi
     const files = [{ path: "same.ts", viewed: true }];
     yield* service.setFilesViewed({ ...first, files });
     assert.deepStrictEqual((yield* service.filesViewed(second)).files, []);
-    const missingCheckout = yield* Effect.flip(service.setFilesViewed({ ...second, files }));
-    assert.strictEqual(missingCheckout._tag, "PullRequestUnavailableError");
+    yield* service.setFilesViewed({ ...second, files });
+    yield* service.setFilesViewed({ ...first, files: [{ path: "same.ts", viewed: false }] });
+    assert.deepStrictEqual((yield* service.filesViewed(second)).files, [
+      { path: "same.ts", state: "viewed" },
+    ]);
+
     projects.push(
       project({
         id: "p2",
@@ -6083,12 +5871,6 @@ it.effect("keeps hosted Forgejo marks with their repository instead of the servi
         remoteUrl: "https://forge.example:3000/reviewer/second.git",
       }),
     );
-    yield* service.setFilesViewed({ ...second, files });
-    yield* service.setFilesViewed({ ...first, files: [{ path: "same.ts", viewed: false }] });
-    assert.deepStrictEqual((yield* service.filesViewed(second)).files, [
-      { path: "same.ts", state: "viewed" },
-    ]);
-
     assert.deepStrictEqual(
       (yield* service.filesViewed({ ...second, projectId: "p2" as ProjectId })).files,
       [{ path: "same.ts", state: "viewed" }],
@@ -7230,78 +7012,5 @@ it.effect("keeps Azure continuation cursors separate for repositories with the s
     seen.length = 0;
     yield* service.list({ state: "open", cursors: { [key]: first.nextCursors[key]! } });
     assert.deepStrictEqual(seen, ["/org-b"]);
-  }),
-);
-
-it.effect(
-  "reads viewed files with persisted identity but rejects writes without a live checkout",
-  () =>
-    Effect.gen(function* () {
-      const provider = fakeProvider("github", {
-        getFilesViewed: () =>
-          Effect.succeed({ files: [{ path: "a.ts", state: "viewed" as const }], truncated: false }),
-        setFilesViewed: () => Effect.die("must not write through a missing checkout"),
-      });
-      const service = yield* makeService({
-        projects: [
-          project({ id: "p1", title: "web", workspaceRoot: "/gone", repository: "acme/web" }),
-        ],
-        providers: [
-          { ...provider, capabilities: { ...provider.capabilities, viewedFiles: "host" } },
-        ],
-        resolveRepositoryIdentity: () => Effect.succeed(null),
-      });
-      const reference = { projectId: "p1" as ProjectId, repository: "acme/web", number: 1 };
-      assert.deepStrictEqual((yield* service.filesViewed(reference)).files, [
-        { path: "a.ts", state: "viewed" },
-      ]);
-      const error = yield* Effect.flip(
-        service.setFilesViewed({ ...reference, files: [{ path: "a.ts", viewed: true }] }),
-      );
-      assert.strictEqual(error._tag, "PullRequestOperationError");
-      if (error._tag === "PullRequestOperationError")
-        assert.strictEqual(error.operation, "resolveRepository");
-    }),
-);
-
-it.effect("routes viewed-file writes through a healthy self-hosted sibling checkout", () =>
-  Effect.gen(function* () {
-    const selected = project({
-      id: "p1",
-      title: "gone",
-      workspaceRoot: "/gone",
-      repository: "group/project",
-      provider: "unknown",
-      host: "code.example.test",
-    });
-    const healthy = { ...selected, id: "p2" as ProjectId, workspaceRoot: "/healthy" };
-    const writeRoots: string[] = [];
-    const provider = fakeProvider("gitlab", {
-      setFilesViewed: ({ cwd }) =>
-        Effect.sync(() => {
-          writeRoots.push(cwd);
-        }),
-    });
-    const service = yield* makeService({
-      projects: [selected, healthy],
-      providers: [{ ...provider, capabilities: { ...provider.capabilities, viewedFiles: "host" } }],
-      resolveHandle: ({ cwd, context }) =>
-        Effect.succeed({
-          context:
-            cwd === "/gone"
-              ? context!
-              : { ...context!, provider: { ...context!.provider, kind: "gitlab" } },
-          provider: undefined as never,
-        }),
-      resolveRepositoryIdentity: (cwd) =>
-        Effect.succeed(cwd === "/healthy" ? (healthy.repositoryIdentity ?? null) : null),
-    });
-    yield* service.setFilesViewed({
-      projectId: "p1" as ProjectId,
-      repository: "group/project",
-      number: 1,
-      files: [{ path: "a.ts", viewed: true }],
-    });
-    assert.deepStrictEqual(writeRoots, ["/healthy"]);
   }),
 );

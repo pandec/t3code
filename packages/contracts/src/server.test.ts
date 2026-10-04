@@ -8,14 +8,12 @@ import {
   ServerObservability,
   ServerProvider,
   ServerProviders,
-  ServerProviderSkill,
   ServerUpsertKeybindingResult,
 } from "./server.ts";
 import { ServerSettings } from "./settings.ts";
 
 const decodeServerProvider = Schema.decodeUnknownSync(ServerProvider);
 const decodeServerProviders = Schema.decodeUnknownSync(ServerProviders);
-const decodeServerProviderSkill = Schema.decodeUnknownSync(ServerProviderSkill);
 const decodeServerObservability = Schema.decodeUnknownSync(ServerObservability);
 const decodeUpsertKeybindingResult = Schema.decodeUnknownSync(ServerUpsertKeybindingResult);
 const decodeAvailableEditors = Schema.decodeUnknownSync(ServerConfig.fields.availableEditors);
@@ -46,22 +44,6 @@ describe("ServerConfig text-to-speech capability", () => {
   });
 });
 
-describe("ServerProviderSkill", () => {
-  it("accepts provider-native skills without filesystem metadata", () => {
-    expect(
-      decodeServerProviderSkill({
-        name: "project-review",
-        description: "Review this project",
-        enabled: true,
-      }),
-    ).toEqual({
-      name: "project-review",
-      description: "Review this project",
-      enabled: true,
-    });
-  });
-});
-
 describe("ServerProvider", () => {
   it("defaults capability arrays when decoding provider snapshots", () => {
     const parsed = decodeServerProvider({
@@ -75,11 +57,13 @@ describe("ServerProvider", () => {
         status: "authenticated",
       },
       checkedAt: "2026-04-10T00:00:00.000Z",
+      supportedRuntimeModes: ["approval-required", "future-mode", "full-access"],
       models: [],
     });
 
     expect(parsed.slashCommands).toEqual([]);
     expect(parsed.skills).toEqual([]);
+    expect(parsed.supportedRuntimeModes).toEqual(["approval-required", "full-access"]);
     expect(parsed.versionAdvisory).toBeUndefined();
     expect(parsed.updateState).toBeUndefined();
   });

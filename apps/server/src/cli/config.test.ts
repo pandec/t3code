@@ -75,7 +75,7 @@ it.layer(NodeServices.layer)("cli config resolution", (it) => {
             ),
           );
           assert.equal(resolved.stateDir, explicit ? path.join(baseDir, "userdata") : stateDir);
-          assert.equal(resolved.dbPath, path.join(resolved.stateDir, "state.sqlite"));
+          assert.equal(resolved.dbPath, path.join(resolved.stateDir, "statev2.sqlite"));
           assert.equal(resolved.secretsDir, path.join(resolved.stateDir, "secrets"));
           assert.equal(resolved.serverTracePath, path.join(baseDir, "custom.trace.ndjson"));
         }),
@@ -94,9 +94,6 @@ it.layer(NodeServices.layer)("cli config resolution", (it) => {
     otlpTracesExport: DEFAULT_SIGNAL_EXPORT,
     otlpMetricsExport: DEFAULT_SIGNAL_EXPORT,
     otlpLogsExport: DEFAULT_SIGNAL_EXPORT,
-    providerSessionReaperInactivityThresholdMs: 30 * 60 * 1000,
-    providerSessionReaperSweepIntervalMs: 5 * 60 * 1000,
-    providerSessionReaperMaxPendingExtensionMs: 24 * 60 * 60 * 1000,
     otelEnvironment: OtelEnvironment.none,
     devAllowedOrigins: [],
   } as const;
@@ -249,9 +246,6 @@ it.layer(NodeServices.layer)("cli config resolution", (it) => {
                   T3CODE_NO_BROWSER: "true",
                   T3CODE_AUTO_BOOTSTRAP_PROJECT_FROM_CWD: "false",
                   T3CODE_LOG_WS_EVENTS: "true",
-                  T3CODE_PROVIDER_SESSION_REAPER_INACTIVITY_THRESHOLD_MS: "1200",
-                  T3CODE_PROVIDER_SESSION_REAPER_SWEEP_INTERVAL_MS: "300",
-                  T3CODE_PROVIDER_SESSION_REAPER_MAX_PENDING_EXTENSION_MS: "7200",
                 },
               }),
             ),
@@ -277,9 +271,6 @@ it.layer(NodeServices.layer)("cli config resolution", (it) => {
         desktopBootstrapToken: undefined,
         autoBootstrapProjectFromCwd: false,
         logWebSocketEvents: true,
-        providerSessionReaperInactivityThresholdMs: 1200,
-        providerSessionReaperSweepIntervalMs: 300,
-        providerSessionReaperMaxPendingExtensionMs: 7200,
         tailscaleServeEnabled: false,
         tailscaleServePort: 443,
       });
@@ -353,7 +344,7 @@ it.layer(NodeServices.layer)("cli config resolution", (it) => {
         tailscaleServeEnabled: true,
         tailscaleServePort: 8443,
       });
-      assert.equal(resolved.dbPath, join(baseDir, "userdata", "state.sqlite"));
+      assert.equal(resolved.dbPath, join(baseDir, "userdata", "statev2.sqlite"));
     }),
   );
 

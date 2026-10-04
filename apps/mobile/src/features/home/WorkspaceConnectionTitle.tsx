@@ -10,8 +10,6 @@ import {
   CompactBrandTitle,
   getCompactBrandHeaderOptions,
 } from "../../components/CompactBrandTitle";
-import { useMinimumVisibleFlag } from "../../lib/useMinimumVisibleFlag";
-import { useThreadPrewarmSummary } from "../../state/prewarm";
 import { useWorkspaceState } from "../../state/workspace";
 import {
   workspaceConnectionStatusPresentation,
@@ -24,11 +22,6 @@ import {
  */
 const STATUS_SHOW_DELAY_MS = 800;
 const FADE_IN_MS = 250;
-/**
- * A fully cached prewarm sweep can finish inside a frame or two, so hold its
- * indicator long enough to be read rather than flashing it.
- */
-const THREAD_SYNC_INDICATOR_MIN_VISIBLE_MS = 700;
 
 /**
  * Connection status presentation, debounced for display: null until the
@@ -108,41 +101,20 @@ export function WorkspaceConnectionTitle(props: {
   readonly size?: "navbar" | "pageTitle";
   /** Horizontal correction so the status aligns with the brand in native title slots. */
   readonly statusOffset?: number;
-  /**
-   * Surface background conversation prewarming next to the brand. Only shown
-   * while connected: an offline or reconnecting state matters more and already
-   * carries its own spinner, so the two indicators never compete for the slot.
-   */
-  readonly showThreadSync?: boolean;
   /** Space available beside the native header actions. */
   readonly maxWidth?: number;
 }) {
   const status = useDelayedConnectionStatus();
   const size = props.size ?? "navbar";
-  const syncingThreads = useMinimumVisibleFlag(
-    useThreadPrewarmSummary().syncing,
-    THREAD_SYNC_INDICATOR_MIN_VISIBLE_MS,
-  );
   const { scale } = useAndroidControlSizing();
 
   if (status === null) {
-    const brand =
-      props.showThreadSync === true && syncingThreads ? (
-        <View style={{ alignItems: "center", flexDirection: "row" }}>
-          {props.brand}
-          <View className="w-5 items-center">
-            <ActivityIndicator colorClassName={"accent-icon-muted"} size="small" />
-          </View>
-        </View>
-      ) : (
-        props.brand
-      );
     return props.grow ? (
       <View style={{ alignItems: "center", flex: 1, flexDirection: "row", minWidth: 0 }}>
-        {brand}
+        {props.brand}
       </View>
     ) : (
-      <>{brand}</>
+      <>{props.brand}</>
     );
   }
 
@@ -196,8 +168,6 @@ export function getConnectionAwareBrandHeaderOptions(opts: {
   readonly trailingItemCount?: number;
   readonly onOpenEnvironments: () => void;
   readonly fallbackTitleStyle?: NativeStackNavigationOptions["headerTitleStyle"];
-  /** Show the background prewarm indicator beside the brand (thread list only). */
-  readonly showThreadSync?: boolean;
 }): NativeStackNavigationOptions {
   // Leave room for bar margins, title spacing and the 44-point native actions.
   // Long status labels must not push Settings into UIKit's overflow menu.
@@ -210,7 +180,6 @@ export function getConnectionAwareBrandHeaderOptions(opts: {
         brand={<CompactBrandTitle />}
         maxWidth={maxWidth}
         onPress={opts.onOpenEnvironments}
-        showThreadSync={opts.showThreadSync}
         statusOffset={brandTitleOffset()}
       />
     ),

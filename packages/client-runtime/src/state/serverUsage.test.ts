@@ -28,9 +28,9 @@ import {
   type SupervisorConnectionState,
 } from "../connection/model.ts";
 import type { ConnectionCatalogEntry } from "../connection/catalog.ts";
-import { EnvironmentRegistry } from "../connection/registry.ts";
-import { EnvironmentSupervisor } from "../connection/supervisor.ts";
-import { EnvironmentCacheStore } from "../platform/persistence.ts";
+import * as EnvironmentRegistry from "../connection/registry.ts";
+import * as EnvironmentSupervisor from "../connection/supervisor.ts";
+import * as Persistence from "../platform/persistence.ts";
 import type { WsRpcProtocolClient } from "../rpc/protocol.ts";
 import type { RpcSession } from "../rpc/session.ts";
 import { createServerEnvironmentAtoms } from "./server.ts";
@@ -121,7 +121,7 @@ const makeHarness = Effect.fn("ServerUsageTest.makeHarness")(function* (
     probe: Effect.void,
     closed: Effect.never,
   };
-  const supervisor = EnvironmentSupervisor.of({
+  const supervisor = EnvironmentSupervisor.EnvironmentSupervisor.of({
     target: TARGET,
     state: yield* SubscriptionRef.make<SupervisorConnectionState>({
       ...AVAILABLE_CONNECTION_STATE,
@@ -136,16 +136,16 @@ const makeHarness = Effect.fn("ServerUsageTest.makeHarness")(function* (
   // The fork's server-config state fences cache persistence on the catalog
   // entry it started with, so the stub needs `entries` or the config atom
   // never settles and the usage atoms below wait forever.
-  const environments = EnvironmentRegistry.of({
+  const environments = EnvironmentRegistry.EnvironmentRegistry.of({
     entries: yield* SubscriptionRef.make<ReadonlyMap<EnvironmentId, ConnectionCatalogEntry>>(
       new Map(),
     ),
     run: (_environmentId, effect) =>
-      Effect.provideService(effect, EnvironmentSupervisor, supervisor),
+      Effect.provideService(effect, EnvironmentSupervisor.EnvironmentSupervisor, supervisor),
     followStream: (_environmentId, stream) =>
-      Stream.provideService(stream, EnvironmentSupervisor, supervisor),
-  } as EnvironmentRegistry["Service"]);
-  const cache = EnvironmentCacheStore.of({
+      Stream.provideService(stream, EnvironmentSupervisor.EnvironmentSupervisor, supervisor),
+  } as EnvironmentRegistry.EnvironmentRegistry["Service"]);
+  const cache = Persistence.EnvironmentCacheStore.of({
     loadShell: () => Effect.succeedNone,
     saveShell: () => Effect.void,
     loadThread: () => Effect.succeedNone,
@@ -161,8 +161,8 @@ const makeHarness = Effect.fn("ServerUsageTest.makeHarness")(function* (
   });
   const runtime = Atom.runtime(
     Layer.merge(
-      Layer.succeed(EnvironmentRegistry, environments),
-      Layer.succeed(EnvironmentCacheStore, cache),
+      Layer.succeed(EnvironmentRegistry.EnvironmentRegistry, environments),
+      Layer.succeed(Persistence.EnvironmentCacheStore, cache),
     ),
   );
   const initialConfigValueAtom = Atom.make(CONFIG);

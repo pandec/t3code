@@ -138,7 +138,6 @@ describe("DesktopEnvironment", () => {
       assert.equal(environment.usesDevelopmentIdentity, true);
       assert.equal(environment.displayName, "T3 Code (Dev)");
       assert.equal(environment.stateDir, "/tmp/t3/dev-packaged");
-      assert.equal(environment.userDataDirName, "t3code-dev-packaged");
       assert.equal(environment.appUserModelId, "com.t3tools.t3code.dev");
     }),
   );

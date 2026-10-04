@@ -9,7 +9,6 @@ import {
   type ThreadMoveAvailability,
 } from "./threadOrder";
 import type { EnvironmentThreadShell } from "@t3tools/client-runtime/state/shell";
-import { THREAD_STATUS_PARITY_CASES } from "@t3tools/client-runtime/testing/thread-status-parity";
 import { threadSearchMatchKey } from "@t3tools/client-runtime/state/thread-search";
 import { resolveSnoozePresets } from "@t3tools/client-runtime/state/thread-settled";
 import {
@@ -18,12 +17,13 @@ import {
   MessageId,
   ProjectId,
   ProviderInstanceId,
+  RunId,
   ThreadId,
-  TurnId,
 } from "@t3tools/contracts";
 import { describe, expect, it, vi } from "vite-plus/test";
 
 import type { PendingNewTask } from "../../state/use-pending-new-tasks";
+import { makeThreadShellFixture } from "../../test-fixtures";
 import { threadJumpTarget } from "../keyboard/threadKeyboardShortcuts";
 import {
   buildThreadListV2Items,
@@ -45,31 +45,20 @@ const environmentId = EnvironmentId.make("environment-1");
 function makeThread(
   input: Partial<EnvironmentThreadShell> & Pick<EnvironmentThreadShell, "id" | "title">,
 ): EnvironmentThreadShell {
-  return {
+  return makeThreadShellFixture({
     environmentId,
-    projectId: ProjectId.make("project-1"),
-    modelSelection: { instanceId: ProviderInstanceId.make("codex"), model: "gpt-5.4" },
-    runtimeMode: "full-access",
-    interactionMode: "default",
-    branch: null,
-    worktreePath: null,
-    pullRequests: [],
-    latestTurn: null,
-    createdAt: "2026-06-01T00:00:00.000Z",
-    updatedAt: "2026-06-01T00:00:00.000Z",
-    archivedAt: null,
-    settledOverride: null,
-    settledAt: null,
-    session: null,
-    latestUserMessageAt: null,
-    hasPendingApprovals: false,
-    hasPendingUserInput: false,
-    hasActionableProposedPlan: false,
     ...input,
-  };
+  });
 }
 
 const NOW = "2026-06-02T00:00:00.000Z";
+
+const linkedPullRequest = {
+  projectId: ProjectId.make("project-1"),
+  repository: "pingdotgg/t3code",
+  number: 42,
+  url: "https://github.com/pingdotgg/t3code/pull/42",
+};
 
 describe("resolveThreadListV2MenuActionIds", () => {
   it("keeps archive available across active, settled, and legacy rows", () => {
@@ -84,6 +73,7 @@ describe("resolveThreadListV2MenuActionIds", () => {
     ).toEqual(["archive", "delete"]);
   });
 });
+
 describe("resolveThreadListV2SnoozeMenuSelection", () => {
   it("accepts a displayed evening preset while its wake time is still future", () => {
     const menuOpenedAt = new Date(2026, 4, 8, 16, 59, 30);
@@ -114,23 +104,6 @@ describe("resolveThreadListV2SnoozeMenuSelection", () => {
     ).toEqual({ _tag: "expired" });
   });
 
-  it("selects a displayed until-done preset without a clock check", () => {
-    const displayedPresets = resolveSnoozePresets(new Date(2026, 4, 8, 10), { untilDone: true });
-    const selection = resolveThreadListV2SnoozeMenuSelection({
-      event: "snooze:until-done",
-      displayedPresets,
-      now: new Date(2026, 4, 9, 10),
-    });
-    expect(selection).toEqual({ _tag: "selected", preset: displayedPresets[0] });
-    expect(
-      resolveThreadListV2SnoozeMenuSelection({
-        event: "snooze:until-done",
-        displayedPresets: resolveSnoozePresets(new Date(2026, 4, 8, 10)),
-        now: new Date(2026, 4, 8, 10),
-      }),
-    ).toEqual({ _tag: "expired" });
-  });
-
   it("recomputes presets that remain available instead of using old timestamps", () => {
     const displayedPresets = resolveSnoozePresets(new Date(2026, 4, 8, 10));
     const selectedAt = new Date(2026, 4, 8, 10, 30);
@@ -150,12 +123,79 @@ describe("resolveThreadListV2SnoozeMenuSelection", () => {
 });
 
 describe("resolveThreadListV2Status", () => {
-  it.each(THREAD_STATUS_PARITY_CASES)(
-    "matches the canonical ladder: $name",
-    ({ thread, expected }) => {
-      expect(resolveThreadListV2Status(thread)).toBe(expected);
-    },
-  );
+  it("distinguishes usage limits from ordinary failures and clears the label after recovery", () => {
+    const thread = makeThread({
+      id: ThreadId.make("limited"),
+      title: "Limited",
+      runtime: {
+        status: "failed",
+        activeRunId: null,
+        providerInstanceId: ProviderInstanceId.make("codex"),
+        providerName: "Codex",
+        lastError: "Plan limit reached",
+        lastErrorClass: "usage_limit",
+        updatedAt: NOW,
+      },
+    });
+    expect(resolveThreadListV2Status(thread)).toBe("limited");
+    expect(
+      resolveThreadListV2Status({
+        ...thread,
+        runtime: { ...thread.runtime!, lastErrorClass: null },
+      }),
+    ).toBe("failed");
+    expect(
+      resolveThreadListV2Status({
+        ...thread,
+        runtime: { ...thread.runtime!, status: "completed" },
+      }),
+    ).toBe("ready");
+  });
+
+  it("prioritizes approval over a running runtime", () => {
+    const thread = makeThread({
+      id: ThreadId.make("t"),
+      title: "t",
+      hasPendingApprovals: true,
+      runtime: {
+        status: "running",
+        activeRunId: RunId.make("run-t"),
+        providerName: "Codex",
+        providerInstanceId: ProviderInstanceId.make("codex"),
+        lastError: null,
+        updatedAt: NOW,
+      },
+    });
+    expect(resolveThreadListV2Status(thread)).toBe("approval");
+  });
+
+  it("reports waiting when presentation parks runtime idle for background tasks", () => {
+    expect(
+      resolveThreadListV2Status(
+        makeThread({
+          id: ThreadId.make("t"),
+          title: "t",
+          pendingBackgroundTasks: [
+            { taskId: "bg-1", description: "Run Codex review", kind: "command" },
+          ],
+          runtime: {
+            status: "idle",
+            activeRunId: null,
+            providerInstanceId: ProviderInstanceId.make("codex"),
+            providerName: "Codex",
+            lastError: null,
+            updatedAt: NOW,
+          },
+        }),
+      ),
+    ).toBe("waiting");
+  });
+
+  it("resolves ready for quiescent threads", () => {
+    expect(resolveThreadListV2Status(makeThread({ id: ThreadId.make("t"), title: "t" }))).toBe(
+      "ready",
+    );
+  });
 });
 
 describe("queued messages keep a settled thread active", () => {
@@ -265,54 +305,18 @@ describe("resolveThreadListV2SwipeActions", () => {
     ).toEqual({ primary: "unsnooze", secondary: null, left: ["archive"] });
   });
 
-  it("orders the leading panel pin, fork, archive so a full swipe still archives", () => {
-    expect(
-      resolveThreadListV2SwipeActions({
-        variant: "card",
-        settlementSupported: true,
-        snoozeSupported: true,
-        snoozable: true,
-        pinnable: true,
-        forkable: true,
-      }).left,
-    ).toEqual(["pin", "fork", "archive"]);
-  });
-
-  it("flips the leading pin action on a pinned row", () => {
-    expect(
-      resolveThreadListV2SwipeActions({
-        variant: "card",
-        settlementSupported: true,
-        snoozeSupported: true,
-        snoozable: true,
-        pinnable: true,
-        pinned: true,
-        forkable: true,
-      }).left,
-    ).toEqual(["unpin", "fork", "archive"]);
-  });
-
-  it("drops pin where the row menu has none: unsupported servers and settled rows", () => {
-    expect(
-      resolveThreadListV2SwipeActions({
-        variant: "card",
-        settlementSupported: true,
-        snoozeSupported: true,
-        snoozable: true,
-        pinnable: false,
-        forkable: true,
-      }).left,
-    ).toEqual(["fork", "archive"]);
-    expect(
-      resolveThreadListV2SwipeActions({
-        variant: "slim",
-        settlementSupported: true,
-        snoozeSupported: true,
-        snoozable: true,
-        pinnable: true,
-        forkable: true,
-      }).left,
-    ).toEqual(["fork", "archive"]);
+  it("orders the leading panel fork, archive so a full swipe still archives", () => {
+    for (const variant of ["card", "slim"] as const) {
+      expect(
+        resolveThreadListV2SwipeActions({
+          variant,
+          settlementSupported: true,
+          snoozeSupported: true,
+          snoozable: true,
+          forkable: true,
+        }).left,
+      ).toEqual(["fork", "archive"]);
+    }
   });
 
   it("drops fork for threads that cannot be forked", () => {
@@ -322,10 +326,9 @@ describe("resolveThreadListV2SwipeActions", () => {
         settlementSupported: true,
         snoozeSupported: true,
         snoozable: true,
-        pinnable: true,
         forkable: false,
       }).left,
-    ).toEqual(["pin", "archive"]);
+    ).toEqual(["archive"]);
   });
 
   it("keeps the snoozed shelf on archive alone", () => {
@@ -336,7 +339,6 @@ describe("resolveThreadListV2SwipeActions", () => {
         snoozeSupported: true,
         snoozable: true,
         snoozed: true,
-        pinnable: true,
         forkable: true,
       }).left,
     ).toEqual(["archive"]);
@@ -394,19 +396,6 @@ describe("sortThreadsForListV2", () => {
     ]);
     expect(sorted.map((thread) => thread.id)).toEqual(["newest", "middle", "oldest"]);
   });
-
-  it("surfaces an un-settled thread at the top via its re-entry stamp", () => {
-    const sorted = sortThreadsForListV2([
-      {
-        id: "old-unsettled",
-        createdAt: "2026-06-01T08:00:00.000Z",
-        unsettledAt: "2026-06-01T13:00:00.000Z",
-      },
-      { id: "newest", createdAt: "2026-06-01T12:00:00.000Z" },
-      { id: "middle", createdAt: "2026-06-01T10:00:00.000Z" },
-    ]);
-    expect(sorted.map((thread) => thread.id)).toEqual(["old-unsettled", "newest", "middle"]);
-  });
 });
 
 describe("getThreadListV2OrderedSection", () => {
@@ -459,28 +448,6 @@ describe("getThreadListV2OrderedSection", () => {
 });
 
 describe("buildThreadListV2Items", () => {
-  it("places settled pinned threads in the settled shelf", () => {
-    const layout = buildThreadListV2Items({
-      threads: [
-        makeThread({ id: ThreadId.make("active"), title: "Active" }),
-        makeThread({
-          id: ThreadId.make("pinned-settled"),
-          title: "Pinned while settled",
-          pinnedAt: "2026-06-01T12:00:00.000Z",
-          settledOverride: "settled",
-          settledAt: "2026-06-01T12:00:00.000Z",
-        }),
-      ],
-      environmentId: null,
-      searchQuery: "",
-      now: NOW,
-    });
-
-    expect(layout.items.map((item) => item.thread.id)).toEqual(["active", "pinned-settled"]);
-    expect(layout.items.map((item) => item.pinned)).toEqual([false, false]);
-    expect(layout.settledCount).toBe(1);
-  });
-
   it("composes sticky attention membership with the existing list filters", () => {
     const included = makeThread({ id: ThreadId.make("included"), title: "Fix login" });
     const wrongTitle = makeThread({ id: ThreadId.make("wrong-title"), title: "Greeting" });
@@ -530,8 +497,9 @@ describe("buildThreadListV2Items", () => {
 
   it("places a persisted settled thread in the settled shelf", () => {
     const thread = makeThread({
-      id: ThreadId.make("server-settled"),
-      title: "Server-settled thread",
+      id: ThreadId.make("linked-merged"),
+      title: "Linked merged pull request",
+      linkedPullRequest,
       settledOverride: "settled",
       settledAt: NOW,
     });
@@ -575,6 +543,28 @@ describe("buildThreadListV2Items", () => {
     expect(layout.snoozedCount).toBe(1);
   });
 
+  it("places settled pinned threads in the settled shelf", () => {
+    const layout = buildThreadListV2Items({
+      threads: [
+        makeThread({ id: ThreadId.make("active"), title: "Active" }),
+        makeThread({
+          id: ThreadId.make("pinned-settled"),
+          title: "Pinned while settled",
+          pinnedAt: "2026-06-01T12:00:00.000Z",
+          settledOverride: "settled",
+          settledAt: "2026-06-01T12:00:00.000Z",
+        }),
+      ],
+      environmentId: null,
+      searchQuery: "",
+      now: NOW,
+    });
+
+    expect(layout.items.map((item) => item.thread.id)).toEqual(["active", "pinned-settled"]);
+    expect(layout.items.map((item) => item.pinned)).toEqual([false, false]);
+    expect(layout.settledCount).toBe(1);
+  });
+
   it("keeps active pinned threads in the pinned block", () => {
     const pinned = makeThread({
       id: ThreadId.make("pinned"),
@@ -594,6 +584,60 @@ describe("buildThreadListV2Items", () => {
       pinned: true,
     });
     expect(layout.settledCount).toBe(0);
+  });
+
+  it("hides snoozed threads and counts them — visibility parity with web", () => {
+    const layout = buildThreadListV2Items({
+      threads: [
+        makeThread({ id: ThreadId.make("active"), title: "Active" }),
+        makeThread({
+          id: ThreadId.make("snoozed"),
+          title: "Snoozed",
+          snoozedUntil: "2026-06-03T09:00:00.000Z",
+          snoozedAt: "2026-06-01T12:00:00.000Z",
+        }),
+        makeThread({
+          id: ThreadId.make("woken"),
+          title: "Woken",
+          // Wake time already passed: back in the active list.
+          snoozedUntil: "2026-06-01T18:00:00.000Z",
+          snoozedAt: "2026-06-01T12:00:00.000Z",
+        }),
+      ],
+      environmentId: null,
+      searchQuery: "",
+      now: NOW,
+    });
+
+    // Same createdAt → static sort tiebreaks by id; the point is the woken
+    // thread is BACK in the card block and the snoozed one is gone.
+    expect(layout.items.map((item) => item.thread.id)).toEqual(["active", "woken"]);
+    expect(layout.snoozedCount).toBe(1);
+  });
+
+  it("moves a settled pinned thread into the settled shelf — parity with web (#7969)", () => {
+    const layout = buildThreadListV2Items({
+      threads: [
+        makeThread({ id: ThreadId.make("active"), title: "Active" }),
+        makeThread({
+          id: ThreadId.make("pinned-settled"),
+          title: "Pinned while settled",
+          pinnedAt: "2026-06-01T12:00:00.000Z",
+          // Stale settled state (the decider clears it on pin): the pin wins.
+          settledOverride: "settled",
+          settledAt: "2026-06-01T12:00:00.000Z",
+        }),
+      ],
+      environmentId: null,
+      searchQuery: "",
+      now: NOW,
+    });
+
+    // Since #7969 a settled thread leaves the active block even while pinned;
+    // the pin re-applies when the thread is un-settled.
+    expect(layout.items.map((item) => item.thread.id)).toEqual(["active", "pinned-settled"]);
+    expect(layout.items.map((item) => item.pinned)).toEqual([false, false]);
+    expect(layout.settledCount).toBe(1);
   });
 
   it("snooze hides a pinned thread and wake restores it to the pinned block", () => {
@@ -616,18 +660,6 @@ describe("buildThreadListV2Items", () => {
     const whileSnoozed = buildThreadListV2Items({ ...snoozedInput, now: NOW });
     expect(whileSnoozed.items.map((item) => item.thread.id)).toEqual(["active"]);
     expect(whileSnoozed.snoozedCount).toBe(1);
-
-    const expandedSnoozed = buildThreadListV2Items({
-      ...snoozedInput,
-      now: NOW,
-      snoozedShelfExpanded: true,
-    });
-    expect(expandedSnoozed.items[1]).toMatchObject({
-      thread: { id: "pinned-snoozed" },
-      variant: "slim",
-      snoozed: true,
-      pinned: true,
-    });
 
     // After the wake time: the thread returns pinned, back on top.
     const afterWake = buildThreadListV2Items({ ...snoozedInput, now: "2026-06-03T10:00:00.000Z" });
@@ -782,7 +814,11 @@ describe("buildThreadListV2Items", () => {
             model: "claude-opus-4-5",
           },
         }),
-        makeThread({ id: ThreadId.make("codex"), title: "Codex" }),
+        makeThread({
+          id: ThreadId.make("codex"),
+          title: "Codex",
+          modelSelection: { instanceId: ProviderInstanceId.make("codex"), model: "gpt-5.4" },
+        }),
       ],
       environmentId: null,
       model: "claude-opus-4-5",
@@ -969,10 +1005,11 @@ describe("buildThreadListV2Items", () => {
   });
 
   it("scopes the flat list to one project", () => {
+    const projectId = ProjectId.make("project-1");
     const otherProjectId = ProjectId.make("project-2");
     const { items } = buildThreadListV2Items({
       threads: [
-        makeThread({ id: ThreadId.make("included"), title: "Included" }),
+        makeThread({ id: ThreadId.make("included"), projectId, title: "Included" }),
         makeThread({
           id: ThreadId.make("excluded"),
           projectId: otherProjectId,
@@ -980,7 +1017,7 @@ describe("buildThreadListV2Items", () => {
         }),
       ],
       environmentId: null,
-      projectRefs: [{ environmentId, projectId: ProjectId.make("project-1") }],
+      projectRefs: [{ environmentId, projectId }],
       searchQuery: "",
       now: NOW,
     });
@@ -990,19 +1027,21 @@ describe("buildThreadListV2Items", () => {
 
   it("scopes the flat list to every environment member of a logical project", () => {
     const remoteEnvironmentId = EnvironmentId.make("environment-remote");
+    const projectId = ProjectId.make("project-1");
     const { items } = buildThreadListV2Items({
       threads: [
-        makeThread({ id: ThreadId.make("local"), title: "Local" }),
+        makeThread({ id: ThreadId.make("local"), projectId, title: "Local" }),
         makeThread({
           environmentId: remoteEnvironmentId,
           id: ThreadId.make("remote"),
+          projectId,
           title: "Remote",
         }),
       ],
       environmentId: null,
       projectRefs: [
-        { environmentId, projectId: ProjectId.make("project-1") },
-        { environmentId: remoteEnvironmentId, projectId: ProjectId.make("project-1") },
+        { environmentId, projectId },
+        { environmentId: remoteEnvironmentId, projectId },
       ],
       searchQuery: "",
       now: NOW,
@@ -1025,9 +1064,9 @@ describe("buildThreadListV2Items settled paging", () => {
           latestUserMessageAt: `2026-06-01T0${index}:00:00.000Z`,
           // A turn adopted the message (same requestedAt): without it the
           // thread reads as a queued turn start, which never settles.
-          latestTurn: {
-            turnId: TurnId.make(`turn-${index}`),
-            state: "completed",
+          latestRun: {
+            runId: RunId.make(`run-${index}`),
+            status: "completed",
             requestedAt: `2026-06-01T0${index}:00:00.000Z`,
             startedAt: `2026-06-01T0${index}:00:00.000Z`,
             completedAt: `2026-06-01T0${index}:10:00.000Z`,
@@ -1119,11 +1158,9 @@ describe("buildThreadListV2ListItems", () => {
             ? item.item.thread.id
             : item.type === "v2-snoozed-shelf"
               ? "snoozed-shelf"
-              : item.type === "v2-custom-group"
-                ? "active-header"
-                : "settled-shelf",
+              : "settled-shelf",
       ),
-    ).toEqual(["active-header", "active", "queued-1", "queued-2", "settled-shelf", "settled"]);
+    ).toEqual(["active", "queued-1", "queued-2", "settled-shelf", "settled"]);
     // Only the leading queued row labels the section, exactly like Settled.
     expect(
       items.filter((item) => item.type === "v2-pending" && item.showPendingDivider),
@@ -1151,7 +1188,6 @@ describe("buildThreadListV2ListItems", () => {
       settledShelfHeaderIndex: layout.settledShelfHeaderIndex,
     });
     expect(items.map((item) => item.key)).toEqual([
-      "v2-active-header",
       `v2-thread:${environmentId}:active`,
       "v2-pending-task:queued",
       "v2-draft-task:draft-1",
@@ -1175,7 +1211,7 @@ describe("buildThreadListV2ListItems", () => {
       pendingTasks: [makePendingTask("queued-1")],
     });
 
-    expect(items.map((item) => item.type)).toEqual(["v2-custom-group", "v2-thread", "v2-pending"]);
+    expect(items.map((item) => item.type)).toEqual(["v2-thread", "v2-pending"]);
   });
 
   it("opens the pinned block with a shelf header and closes it with a divider", () => {
@@ -1203,7 +1239,6 @@ describe("buildThreadListV2ListItems", () => {
       "v2-pinned-shelf",
       `v2-thread:${environmentId}:pinned`,
       "v2-pinned-divider",
-      "v2-active-header",
       `v2-thread:${environmentId}:active`,
       "v2-pending-task:queued",
     ]);
@@ -1243,7 +1278,6 @@ describe("buildThreadListV2ListItems", () => {
       "v2-pinned-shelf",
       `v2-thread:${environmentId}:pinned-a`,
       "v2-pinned-divider",
-      "v2-active-header",
       `v2-thread:${environmentId}:active`,
     ]);
     const header = items[0];
@@ -1313,7 +1347,6 @@ describe("buildThreadListV2ListItems", () => {
     });
 
     expect(items.map((item) => item.key)).toEqual([
-      "v2-active-header",
       `v2-thread:${environmentId}:active`,
       "v2-settled-shelf",
       `v2-thread:${environmentId}:settled`,
@@ -1352,7 +1385,6 @@ describe("buildThreadListV2ListItems", () => {
     });
 
     expect(items.map((item) => item.type)).toEqual([
-      "v2-custom-group",
       "v2-thread",
       "v2-pending",
       "v2-snoozed-shelf",
@@ -1393,7 +1425,7 @@ describe("buildThreadListV2Items quiet active threads", () => {
     expect(layout.items.map((item) => item.variant)).toEqual(["card", "card"]);
     expect(
       buildThreadListV2ListItems({ ...layout, pendingTasks: [] }).map((item) => item.type),
-    ).toEqual(["v2-custom-group", "v2-thread", "v2-thread"]);
+    ).toEqual(["v2-thread", "v2-thread"]);
   });
 
   it("lets server-projected settlement park a quiet thread", () => {
@@ -1834,20 +1866,47 @@ describe("cross-section thread drops", () => {
   });
 });
 
+it("excludes subagents from navigation, search and ordering while retaining user forks", () => {
+  const root = makeThread({ id: ThreadId.make("root"), title: "Root" });
+  const child = makeThread({
+    id: ThreadId.make("child"),
+    title: "Child",
+    lineage: { parentThreadId: root.id, rootThreadId: root.id, relationshipToParent: "subagent" },
+  });
+  const fork = makeThread({
+    id: ThreadId.make("fork"),
+    title: "Fork",
+    lineage: { parentThreadId: root.id, rootThreadId: root.id, relationshipToParent: "fork" },
+  });
+  const threads = [root, child, fork];
+  expect(
+    buildThreadListV2Items({ threads, environmentId: null, searchQuery: "", now: NOW }).items.map(
+      (item) => item.thread.id,
+    ),
+  ).toEqual([fork.id, root.id]);
+  expect(
+    buildThreadListV2Items({ threads, environmentId: null, searchQuery: "Child", now: NOW }).items,
+  ).toEqual([]);
+  expect(
+    getThreadListV2OrderedSection({ threads, section: "active", now: NOW }).map(
+      (thread) => thread.id,
+    ),
+  ).toEqual([fork.id, root.id]);
+});
+
 /* ─── Recycled-list equality + per-row clock scoping ─────────────────── */
 
 const BASE_MS = Date.parse(NOW);
 const isoAt = (ms: number) => new Date(ms).toISOString();
 const MINUTE_MS = 60_000;
 
-function runningSession(threadId: string) {
+function runningRuntime() {
   return {
-    threadId: ThreadId.make(threadId),
     status: "running" as const,
     providerName: "Codex",
     providerInstanceId: ProviderInstanceId.make("codex"),
     runtimeMode: "full-access" as const,
-    activeTurnId: null,
+    activeRunId: null,
     lastError: null,
     updatedAt: NOW,
   };
@@ -1934,7 +1993,6 @@ describe("threadListV2ListItemsAreEqual", () => {
   });
   const layout = buildThreadListV2Items({
     threads: [thread],
-
     environmentId: null,
     searchQuery: "",
     now: NOW,
@@ -2072,8 +2130,8 @@ describe("threadListV2ListItemsAreEqual", () => {
       settledShelfHeaderIndex: 1,
       snoozeLabelNow: NOW,
     });
-    const firstA = bare.find((item) => item.key === `v2-thread:${environmentId}:flip-a`)!;
-    const secondA = withSettled.find((item) => item.key === `v2-thread:${environmentId}:flip-a`)!;
+    const firstA = bare[0]!;
+    const secondA = withSettled[0]!;
     expect(firstA.type === "v2-thread" && firstA.showTrailingDivider).toBe(true);
     expect(secondA.type === "v2-thread" && secondA.showTrailingDivider).toBe(false);
     expect(threadListV2ListItemsAreEqual(firstA, secondA)).toBe(false);
@@ -2131,7 +2189,7 @@ describe("buildThreadListV2ListItems clock scoping", () => {
         id: ThreadId.make("tick-working"),
         title: "tick working",
         latestUserMessageAt: isoAt(BASE_MS - 5 * MINUTE_MS),
-        session: runningSession("tick-working"),
+        runtime: runningRuntime(),
       });
       const threads = buildTickThreads();
       const items = buildTickList(
@@ -2195,6 +2253,27 @@ describe("thread list v2 minute tick invalidation", () => {
     }
   });
 
+  it("keeps unread completion labels stable across a minute tick", () => {
+    const unread = makeThread({
+      id: ThreadId.make("tick-unread"),
+      title: "Unread completion",
+      lastVisitedAt: isoAt(BASE_MS - 10 * MINUTE_MS),
+      latestRun: {
+        runId: RunId.make("tick-unread-run"),
+        status: "completed",
+        requestedAt: isoAt(BASE_MS - 6 * MINUTE_MS),
+        startedAt: isoAt(BASE_MS - 6 * MINUTE_MS),
+        completedAt: isoAt(BASE_MS - 5 * MINUTE_MS),
+        assistantMessageId: null,
+      },
+    });
+    const options = { snoozeEnvironmentIds: new Set<EnvironmentId>() };
+    const first = buildTickList([unread], BASE_MS, [], options)[0]!;
+    const next = buildTickList([unread], BASE_MS + MINUTE_MS, [], options)[0]!;
+    expect(first.type === "v2-thread" && first.timeLabel).toBe("");
+    expect(threadListV2ListItemsAreEqual(first, next)).toBe(true);
+  });
+
   it("keeps hour-granularity rows stable across a minute tick when they carry no snooze menu", () => {
     vi.useFakeTimers();
     try {
@@ -2211,7 +2290,7 @@ describe("thread list v2 minute tick invalidation", () => {
       const atNextMinute = buildTickList([staleReady], BASE_MS + MINUTE_MS, [], {
         snoozeEnvironmentIds: new Set<EnvironmentId>(),
       });
-      expect(threadListV2ListItemsAreEqual(atStart[1]!, atNextMinute[1]!)).toBe(true);
+      expect(threadListV2ListItemsAreEqual(atStart[0]!, atNextMinute[0]!)).toBe(true);
     } finally {
       vi.useRealTimers();
     }
@@ -2264,8 +2343,8 @@ describe("buildThreadListV2ListItems trailing dividers", () => {
       pendingTasks: [makePendingTask("div-q1"), makePendingTask("div-q2")],
       snoozeLabelNow: NOW,
     });
-    const dividers = items.flatMap((item) =>
-      item.type === "v2-thread" || item.type === "v2-pending" ? [item.showTrailingDivider] : [],
+    const dividers = items.map((item) =>
+      item.type === "v2-thread" || item.type === "v2-pending" ? item.showTrailingDivider : "n/a",
     );
     // thread A | thread B | queued 1 | queued 2: consecutive threads keep
     // their hairlines, the row before the Unsent section rule loses its own,

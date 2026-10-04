@@ -9,10 +9,12 @@ import {
   TurnId,
 } from "./baseSchemas.ts";
 import {
-  ChatAttachment,
-  ModelSelection,
   getProviderAttachmentLimitError,
   PROVIDER_SEND_TURN_MAX_INPUT_CHARS,
+  ChatAttachment,
+} from "./chatAttachment.ts";
+import { ModelSelection } from "./modelSelection.ts";
+import {
   ProviderApprovalDecision,
   ProviderApprovalPolicy,
   ProviderInteractionMode,
@@ -21,7 +23,7 @@ import {
   ProviderUserInputAnswers,
   UserInputAttachments,
   RuntimeMode,
-} from "./orchestration.ts";
+} from "./providerPolicy.ts";
 import { ProviderInstanceId, ProviderDriverKind } from "./providerInstance.ts";
 
 const ProviderSessionStatus = Schema.Literals([
@@ -41,26 +43,10 @@ export const ProviderSession = Schema.Struct({
   status: ProviderSessionStatus,
   runtimeMode: RuntimeMode,
   cwd: Schema.optional(TrimmedNonEmptyString),
-  /**
-   * MUST echo the client-visible `ModelSelection.model` for this session —
-   * including sentinel slugs such as Hermes's `"default"`. Never a
-   * provider-internal resolved id.
-   *
-   * Orchestration compares this field directly against the selection the client
-   * sends with each turn (see `ProviderCommandReactor`:
-   * `rejectStartedThreadModelChangeIfRequired` and the `modelChanged` restart
-   * check). An adapter that stores a resolved id here makes every turn look
-   * like a mid-thread model switch, which can silently reject the turn after
-   * the user's message has already been persisted. Adapters that talk to a
-   * provider using a different id space must keep that id in adapter-local
-   * state and map back to the selection before writing it here.
-   */
   model: Schema.optional(TrimmedNonEmptyString),
   threadId: ThreadId,
   resumeCursor: Schema.optional(Schema.Unknown),
   activeTurnId: Schema.optional(TurnId),
-  /** Unique identity for one live provider subprocess/session generation. */
-  sessionGenerationId: Schema.optional(TrimmedNonEmptyString),
   createdAt: IsoDateTime,
   updatedAt: IsoDateTime,
   lastError: Schema.optional(TrimmedNonEmptyString),
@@ -97,13 +83,6 @@ export const ProviderSendTurnInput = Schema.Struct({
   ),
   modelSelection: Schema.optional(ModelSelection),
   interactionMode: Schema.optional(ProviderInteractionMode),
-  /**
-   * The turn this one follows was still running when a shutdown took its
-   * session away, rather than ending on its own or on a stop the user asked
-   * for. Adapters tell the agent, so it reads a tool call that shutdown
-   * cancelled as the harness interrupting it rather than the user refusing.
-   */
-  priorTurnEndedUnrequested: Schema.optional(Schema.Boolean),
 });
 export type ProviderSendTurnInput = typeof ProviderSendTurnInput.Type;
 

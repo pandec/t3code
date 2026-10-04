@@ -183,7 +183,6 @@ describe("searchSettings", () => {
       "t3-connect",
       "tailscale-https",
       "wsl-backend",
-      "auto-settle-threads",
       "auto-settle-inactive-threads",
       "auto-settle-merged-threads",
       "days-before-auto-settle",
@@ -247,7 +246,6 @@ describe("searchSettings", () => {
     expect(searchSettings("auto-settle", available).map((item) => item.id)).toEqual([
       "auto-settle-inactive-threads",
       "auto-settle-merged-threads",
-      "auto-settle-threads",
       "days-before-auto-settle",
     ]);
   });
@@ -297,6 +295,10 @@ describe("searchSettings", () => {
       id: "word-wrap",
       to: "/settings/appearance",
     });
+    expect(searchSettings("composer context")[0]).toMatchObject({
+      id: "composer-context",
+      to: "/settings/appearance",
+    });
     expect(searchSettings("environment identification")[0]).toMatchObject({
       id: "environment-identification",
       to: "/settings/appearance",
@@ -319,10 +321,6 @@ describe("searchSettings", () => {
   });
 
   it("includes fork-only Extras settings", () => {
-    expect(searchSettings("notifications")[0]).toMatchObject({
-      id: "extras-notifications",
-      to: "/settings/extras",
-    });
     expect(searchSettings("voice")[0]).toMatchObject({
       id: "extras-voice-listening",
       to: "/settings/extras",
@@ -397,7 +395,7 @@ describe("searchSettings", () => {
       hasThreadAutoSettlement: true,
     });
     expect(searchSettings("writing style", available)[0]?.id).toBe("source-control-writing-style");
-    expect(searchSettings("auto-settle", available)).toHaveLength(4);
+    expect(searchSettings("auto-settle", available)).toHaveLength(3);
   });
 });
 
@@ -494,7 +492,6 @@ describe("auto-settlement search availability", () => {
     expect(searchSettings("auto-settle", items).map((item) => item.id)).toEqual([
       "auto-settle-inactive-threads",
       "auto-settle-merged-threads",
-      "auto-settle-threads",
       "days-before-auto-settle",
     ]);
   });

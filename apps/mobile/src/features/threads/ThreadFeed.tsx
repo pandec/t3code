@@ -1,3 +1,5 @@
+import { ThreadContextDivider } from "./thread-context-divider";
+import { ThreadHandoffRow } from "./thread-handoff-row";
 import {
   WorktreeWorkingHeader,
   WorktreeSetupCard,
@@ -6,21 +8,20 @@ import {
 import * as Haptics from "expo-haptics";
 import { KeyboardAwareLegendList } from "@legendapp/list/keyboard";
 import { useViewabilityAmount, type LegendListRef } from "@legendapp/list/react-native";
-import type {
-  ChatAttachment,
-  ChatFileAttachment,
-  ChatImageAttachment,
-  EnvironmentId,
-  MessageId,
-  MessageSpeechFailureReason,
-  MessageSpeechRequest,
-  MessageSpeechSynthesisResult,
-  MessageSummaryResult,
-  OrchestrationMessageContext,
+import { scopeThreadRef } from "@t3tools/client-runtime/environment";
+import { resolveUserMessagePresentation } from "@t3tools/client-runtime/user-message";
+import { canForkProjectedAssistantItem } from "@t3tools/client-runtime/state/thread-workflows";
+import {
+  type OrchestrationMessageContext,
   ThreadId,
-  TurnId,
+  type ChatAttachment,
+  type ChatFileAttachment,
+  type ChatImageAttachment,
+  type EnvironmentId,
+  type MessageId,
+  type OrchestrationV2ProjectedTurnItem,
+  type RunId,
 } from "@t3tools/contracts";
-import { speechAudioFileExtension } from "@t3tools/contracts";
 import { renderAssistantCitationsAsText } from "@t3tools/shared/assistantCitations";
 import { encodeComposerContextFragment } from "@t3tools/shared/composerContextClipboard";
 import {
@@ -34,34 +35,22 @@ import {
   codexArtifactTemplatePresentationLabel,
   type CodexArtifactTemplate,
 } from "@t3tools/client-runtime/codex-artifact-templates";
-import {
-  renderCodexFileCitationsAsMarkdown,
-  splitCodexArtifactTemplateMarkdown,
-} from "@t3tools/client-runtime/codex-markdown-directives";
+import { resolveAssetUrl } from "@t3tools/client-runtime/state/assets";
+import { formatAttachmentSize } from "@t3tools/client-runtime/state/attachments";
+import { squashAtomCommandFailure } from "@t3tools/client-runtime/state/runtime";
 import {
   classifyMarkdownImageSource,
   markdownImageSourceFragment,
 } from "@t3tools/client-runtime/markdown-images";
 import { resolveViewedImageAsset } from "@t3tools/client-runtime/work-log/presentation";
-import { consumeOwnedMessageSpeechRequest } from "@t3tools/client-runtime/operations";
-import { resolveAssetUrl } from "@t3tools/client-runtime/state/assets";
-import { formatAttachmentSize } from "@t3tools/client-runtime/state/attachments";
-import { squashAtomCommandFailure } from "@t3tools/client-runtime/state/runtime";
+import {
+  renderCodexFileCitationsAsMarkdown,
+  splitCodexArtifactTemplateMarkdown,
+} from "@t3tools/client-runtime/codex-markdown-directives";
 import { CHAT_LIST_ANCHOR_OFFSET, resolveChatListAnchoredEndSpace } from "@t3tools/shared/chatList";
 import { imageMimeType } from "@t3tools/shared/image";
-import {
-  formatIdleListeningClock,
-  formatListeningClock,
-  formatListeningSpeed,
-  LISTENING_SPEED_MAX,
-  LISTENING_SPEED_MIN,
-  LISTENING_SPEED_PRESETS,
-  listeningSpeedSpokenLabel,
-  type ListeningTrackRef,
-} from "@t3tools/shared/listeningPlayback";
 import { videoMimeType } from "@t3tools/shared/video";
 import { SymbolView, type AppSymbolName } from "../../components/AppSymbol";
-import { ControlPillMenu } from "../../components/ControlPill";
 import { HeaderHeightContext } from "@react-navigation/elements";
 import { useFocusEffect, useNavigation } from "@react-navigation/native";
 import {
@@ -75,7 +64,6 @@ import {
   useRef,
   useState,
   useId,
-  useSyncExternalStore,
   type ReactNode,
   type RefObject,
 } from "react";
@@ -106,9 +94,8 @@ import { isPdfFile } from "../../lib/filePreview";
 import { flattenThemeColor } from "../../lib/mobileTheme";
 import { PresentationSource } from "../../components/NativePresentation";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
-import Animated, { FadeIn, FadeOut, type SharedValue } from "react-native-reanimated";
+import Animated, { FadeIn, FadeInUp, type SharedValue } from "react-native-reanimated";
 import { useUniwindTheme } from "../../lib/useUniwindTheme";
-import { listeningPlayerChrome } from "./listeningPlayerChrome";
 import { IOS_NAV_BAR_HEIGHT } from "../../lib/layoutMetrics";
 import { useFontFamily } from "../../lib/useFontFamily";
 import { scopedThreadKey } from "../../lib/scopedEntities";
@@ -152,6 +139,7 @@ import {
   deriveThreadWorkLogSizing,
   type LayoutVariant,
 } from "../../lib/layout";
+import { uuidv4 } from "../../lib/uuid";
 import {
   resolveMarkdownFontSizes,
   resolveNativeMarkdownTypography,
@@ -167,11 +155,13 @@ import {
   resolveMarkdownLinkPresentation,
 } from "@t3tools/mobile-markdown-text/links";
 import {
-  deriveThreadFeedPresentationState,
-  deriveUnsettledTurnId,
+  failedFeedRunIds,
+  deriveThreadFeedPresentation,
+  threadFeedRunIsUnsettled,
   isContextCompactionActivityGroup,
+  isContextHandoffActivityGroup,
   type ThreadFeedEntry,
-  type ThreadFeedLatestTurn,
+  type ThreadFeedLatestRun,
 } from "../../lib/threadActivity";
 import type { ThreadContentPresentation } from "./threadContentPresentation";
 import {
@@ -180,76 +170,46 @@ import {
   type ThreadFeedInsetReport,
 } from "./threadFeedInsets";
 import {
-  decideThreadUnderfilledHistoryEffectAction,
-  distanceFromFeedTop,
-  shouldReleaseOlderMessagesRequest,
-  shouldRequestOlderMessages,
-  shouldRequestOlderMessagesForUnderfilledFeed,
-  type ThreadHistoryWindowState,
-} from "./threadHistoryLoadMore";
-import {
   resolveThreadFeedLiveFollow,
   type ThreadFeedLiveFollowEvent,
   type ThreadWorkGroupScrollPosition,
 } from "./thread-feed-live-follow";
 import {
   collapsedWorkLogHeight,
-  ThreadAgentSpawnCard,
   ThreadDisclosureChevron,
-  ThreadReasoningRow,
+  THREAD_DISCLOSURE_TRANSITION_MS,
   ThreadWorkGroupToggle,
   ThreadThinkingRow,
   ThreadWorkLog,
-  THREAD_DISCLOSURE_TRANSITION_MS,
   WORK_GROUP_TOGGLE_HEIGHT,
 } from "./thread-work-log";
 import { appendPendingThreadMessages, type PendingThreadFeedEntry } from "./pending-thread-feed";
-import {
-  queuedThreadMessageIntent,
-  type QueuedThreadMessage,
-} from "../../state/thread-outbox-model";
-import {
-  confirmDeleteQueuedMessage,
-  queueSteeredMessageForLater,
-  steerQueuedMessageNow,
-} from "../../state/use-thread-outbox-actions";
+import type { QueuedThreadMessage } from "../../state/thread-outbox-model";
+import { resolveThreadFeedFixedItemSize } from "./thread-feed-item-size";
 import { useMarkdownCodeHighlight } from "./markdownCodeHighlightState";
 import {
   assetEnvironment,
   useAssetUrl,
   useAssetUrlState,
   useRefreshAssetUrl,
-  watchAssetUrl,
 } from "../../state/assets";
 import { useAtomQueryRunner } from "../../state/use-atom-query-runner";
 import { usePreparedConnection } from "../../state/session";
 import { useThreadSelection } from "../../state/use-thread-selection";
 import { composerDocumentAttachmentRecord } from "../../lib/composerContext";
 import * as Option from "effect/Option";
+import { appAtomRegistry } from "../../state/atom-registry";
+import { environmentThreadShells, threadEnvironment } from "../../state/threads";
+import { useAtomCommand } from "../../state/use-atom-command";
+import { useV2ItemSupport } from "../../state/v2-item-support";
 import {
   basename,
   fileRoutePathSegments,
   isAbsolutePath,
   resolveWorkspaceRelativeFilePath,
 } from "../files/filePath";
-import { messageSpeechFailureDescription, synthesizeMessageSpeech } from "../../state/voice";
-import { summarizeMessage } from "../../state/messageArtifacts";
-import { threadEnvironment } from "../../state/threads";
-import {
-  beginMessageArtifactRequest,
-  getMessageArtifactSessionSnapshot,
-  rememberMessageSpeech,
-  rememberMessageSummary,
-  subscribeMessageArtifactSession,
-} from "@t3tools/client-runtime/state/messageArtifacts";
-import { useAtomCommand } from "../../state/use-atom-command";
-import {
-  listeningPlayback,
-  useListeningPlaybackProgress,
-  useListeningPlaybackSnapshot,
-} from "../../state/listeningPlayback";
-import { requestListeningTrack, usePendingListeningSpeechId } from "../../state/listeningPlayer";
-import { MARKDOWN_IMAGE_MAX_WIDTH, resolveMarkdownImageDisplaySize } from "./markdownImageSize";
+import { waitForThreadShellReady } from "./threadForkNavigation";
+import { resolveUserMessageIntentBadge } from "./userMessageIntentBadge";
 import { fileChipMenu, resolveFileChipTarget, type FileChipAction } from "./fileChipMenu";
 import { useFileChipShare } from "./useFileChipShare";
 import {
@@ -258,9 +218,6 @@ import {
   ThreadMarkdownImageUnavailable,
   ThreadMarkdownImageView,
 } from "./ThreadMarkdownImage";
-
-/** `ml-7` gutter plus the `px-3` padding of the expanded reasoning container. */
-const REASONING_CONTENT_INSET = 52;
 
 const WIDE_MARKDOWN_BLOCK_OPTIONS = {
   // Native iOS blockquotes and adjacent selectable text are separate layout
@@ -293,8 +250,6 @@ const ASSISTANT_ROW_HORIZONTAL_PADDING = 3.5;
 const THREAD_FEED_DISCLOSURE_ENTER_TRANSITION = FadeIn.delay(
   THREAD_DISCLOSURE_TRANSITION_MS,
 ).duration(140);
-const THREAD_FEED_DISCLOSURE_EXIT_TRANSITION = FadeOut.duration(120);
-const EMPTY_DISCLOSURE_ENTRY_IDS: ReadonlySet<string> = new Set();
 
 // Entering animations must only play for rows born just now — LegendList
 // remounts rows when they scroll back into view, and replaying an entrance for
@@ -305,16 +260,11 @@ function isFreshTimestamp(input: string): boolean {
   return Number.isFinite(timestamp) && Date.now() - timestamp < FRESH_ENTRY_WINDOW_MS;
 }
 
-function haveSameStringSet(left: ReadonlySet<string>, right: ReadonlySet<string>): boolean {
-  if (left.size !== right.size) {
-    return false;
-  }
-  for (const value of left) {
-    if (!right.has(value)) {
-      return false;
-    }
-  }
-  return true;
+export interface ThreadFeedHistoryControls {
+  readonly hasMoreHistory: boolean;
+  readonly loading: boolean;
+  readonly error: string | null;
+  readonly onLoadEarlier: () => void;
 }
 
 export interface ThreadFeedProps {
@@ -322,23 +272,18 @@ export interface ThreadFeedProps {
   readonly setupWorkingStartedAt?: string | null;
   readonly queuedMessages: ReadonlyArray<QueuedThreadMessage>;
   readonly dispatchingMessageId: MessageId | null;
-  readonly onEditPendingMessage: (message: QueuedThreadMessage) => void;
+  /** Null where a pending message cannot be edited (no composer to edit it in). */
+  readonly onEditPendingMessage: ((message: QueuedThreadMessage) => void) | null;
   readonly environmentId: EnvironmentId;
   readonly threadId: ThreadId;
   readonly threadTitle: string;
   readonly workspaceRoot?: string | null;
   readonly feed: ReadonlyArray<ThreadFeedEntry>;
-  /**
-   * User messages steered into the running turn that the agent has not read
-   * yet. Empty where the caller does not track them (tests, previews).
-   */
-  readonly steerPendingMessageIds?: ReadonlySet<MessageId>;
-  /** Older-message paging state. Omitted where history is fully loaded (tests, previews). */
-  readonly historyWindow?: ThreadHistoryWindowState;
   readonly contentPresentation: ThreadContentPresentation;
   readonly agentLabel: string;
-  readonly latestTurn: ThreadFeedLatestTurn | null;
+  readonly latestRun: ThreadFeedLatestRun | null;
   readonly activeWorkStartedAt: string | null;
+  readonly runlessWorkActive?: boolean;
   readonly listRef: RefObject<LegendListRef | null>;
   readonly freeze: SharedValue<boolean>;
   readonly anchorMessageId: MessageId | null;
@@ -349,32 +294,97 @@ export interface ThreadFeedProps {
   readonly keyboardVisible: boolean;
   readonly contentTopInset?: number;
   readonly contentBottomInset?: number;
+  readonly historyControls?: ThreadFeedHistoryControls;
   readonly contentMaxWidth?: number;
   readonly layoutVariant?: LayoutVariant;
   readonly usesAutomaticContentInsets?: boolean;
   readonly onHeaderMaterialVisibilityChange?: (visible: boolean) => void;
   readonly onEndFollowEnabledChange?: (enabled: boolean) => void;
   readonly skills?: ReadonlyArray<SelectableMarkdownSkill>;
-  readonly textToSpeechAvailable?: boolean;
-  readonly textToSpeechPersistentJobs?: boolean;
-  readonly messageSummariesAvailable?: boolean;
   readonly onUseArtifactTemplate?: (template: CodexArtifactTemplate) => void;
 }
 
-/**
- * Ambient note on a steer the agent has not read yet. Claude Code only takes a
- * mid-turn message between a tool result and the next model request, so this
- * can stand for minutes behind a long subagent or shell call. Deliberately
- * quiet and static — it reports a wait, it does not ask for anything.
- */
-function SteerPendingMarker({ tintColor }: { readonly tintColor: ColorValue }) {
+async function waitForThreadShell(
+  environmentId: EnvironmentId,
+  threadId: ThreadId,
+): Promise<boolean> {
+  const atom = environmentThreadShells.threadShellAtom(scopeThreadRef(environmentId, threadId));
+  return waitForThreadShellReady({
+    read: () => appAtomRegistry.get(atom) !== null,
+  });
+}
+
+function AssistantForkButton(props: {
+  readonly environmentId: EnvironmentId;
+  readonly iconColor: ColorValue;
+  readonly projectedItem: OrchestrationV2ProjectedTurnItem;
+  readonly sourceTitle: string;
+}) {
+  const support = useV2ItemSupport({
+    environmentId: props.environmentId,
+    sourceThreadId: props.projectedItem.sourceThreadId,
+    sourceItemId: props.projectedItem.sourceItemId,
+  });
+  const forkFromRun = useAtomCommand(threadEnvironment.forkFromRun, "fork from response");
+  const navigation = useNavigation();
+  const [busy, setBusy] = useState(false);
+  const canFork = canForkProjectedAssistantItem({
+    projectedItem: props.projectedItem,
+    capabilities: support.providerSession?.capabilities,
+  });
+  const runId = props.projectedItem.item.runId;
+
+  if (!canFork || runId === null) return null;
+
   return (
-    <View className="mt-1 flex-row items-center justify-end gap-1 pr-0.5">
-      <SymbolView name="circle.dashed" size={11} tintColor={tintColor} type="monochrome" />
-      <Text className="font-t3-medium text-xs text-foreground-secondary">
-        Waiting for the agent to pick this up
-      </Text>
-    </View>
+    <Pressable
+      accessibilityRole="button"
+      accessibilityLabel="Fork from this response"
+      disabled={busy}
+      onPress={() => {
+        const targetThreadId = ThreadId.make(uuidv4());
+        setBusy(true);
+        void Haptics.selectionAsync();
+        void forkFromRun({
+          environmentId: props.environmentId,
+          input: {
+            sourceThreadId: props.projectedItem.sourceThreadId,
+            targetThreadId,
+            runId,
+            title: `${props.sourceTitle} fork`,
+            creationSource: "mobile",
+          },
+        })
+          .then(async (result) => {
+            if (result._tag !== "Success") return;
+            const targetThreadReady = await waitForThreadShell(props.environmentId, targetThreadId);
+            if (!targetThreadReady) {
+              Alert.alert(
+                "Fork created",
+                "Its thread data did not reach this client. Reconnect and try opening it from the thread list.",
+              );
+              return;
+            }
+            navigation.navigate("Thread", {
+              environmentId: props.environmentId,
+              threadId: targetThreadId,
+            });
+          })
+          .finally(() => setBusy(false));
+      }}
+      className="h-7 w-7 items-center justify-center disabled:opacity-40"
+    >
+      {busy ? (
+        <ActivityIndicator size="small" />
+      ) : (
+        <SymbolView
+          name="arrow.triangle.branch"
+          size={13}
+          tintColor={props.iconColor}
+          type="monochrome"
+        />
+      )}
+    </Pressable>
   );
 }
 
@@ -1445,12 +1455,42 @@ function useMarkdownStyles(
     markdownUserInlineCodeText,
     nativeMarkdownTypography,
     onLinkPress,
-    regularFontFamily,
     renderImage,
+    regularFontFamily,
     themeMode,
     userBubbleForegroundMuted,
     userBubbleSkillForeground,
   ]);
+}
+
+function AgentMessageAttribution(props: {
+  readonly environmentId: EnvironmentId;
+  readonly senderThreadId?: ThreadId;
+}) {
+  const navigation = useNavigation();
+  const senderThreadId = props.senderThreadId;
+  const label = (
+    <Text className="mb-1 pr-1 font-t3-medium text-2xs text-foreground-muted opacity-60">
+      Sent by another agent
+    </Text>
+  );
+  return senderThreadId ? (
+    <Pressable
+      accessibilityRole="button"
+      accessibilityLabel="Open sending thread"
+      hitSlop={4}
+      onPress={() =>
+        navigation.navigate("Thread", {
+          environmentId: String(props.environmentId),
+          threadId: String(senderThreadId),
+        })
+      }
+    >
+      {label}
+    </Pressable>
+  ) : (
+    label
+  );
 }
 
 function renderFeedEntry(
@@ -1458,36 +1498,30 @@ function renderFeedEntry(
   props: Pick<
     ThreadFeedProps,
     | "environmentId"
-    | "threadId"
-    | "skills"
-    | "textToSpeechAvailable"
-    | "textToSpeechPersistentJobs"
-    | "messageSummariesAvailable"
-    | "steerPendingMessageIds"
     | "onUseArtifactTemplate"
+    | "skills"
     | "dispatchingMessageId"
     | "onEditPendingMessage"
+    | "threadId"
+    | "workspaceRoot"
   > & {
-    readonly getThreadTitle: () => string;
     readonly copiedRowId: string | null;
     readonly expandedWorkRows: Record<string, boolean>;
-    readonly settledTurnOpeningAssistantMessageIds: ReadonlySet<string>;
-    readonly expandedReasoningMessageIds: ReadonlySet<string>;
     readonly workRowSizing: ReturnType<typeof deriveThreadWorkLogSizing>;
     readonly workGroupScrollPositions: Map<string, ThreadWorkGroupScrollPosition>;
     readonly terminalAssistantMessageIds: ReadonlySet<string>;
-    readonly unsettledTurnId: TurnId | null;
-    readonly isWorking: boolean;
+    readonly unsettledTurnId: RunId | null;
+    readonly failedRunIds: ReadonlySet<RunId>;
     readonly onCopyWorkRow: (rowId: string, value: string) => void;
-    readonly onToggleWorkGroup: (groupId: string, anchorKey: string) => void;
-    readonly onToggleWorkRow: (rowId: string, anchorKey: string) => void;
-    readonly onToggleTurnFold: (turnId: TurnId) => void;
-    readonly onToggleReasoning: (messageId: string) => void;
+    readonly onToggleWorkGroup: (groupId: string, anchorKey?: string) => void;
+    readonly onToggleWorkRow: (rowId: string, anchorKey?: string) => void;
+    readonly onToggleTurnFold: (runId: RunId) => void;
     readonly onPressPreview: (source: FilePreviewSource) => void;
     readonly onPressVideo: (attachment: ChatFileAttachment, sourceIdentifier: string) => void;
     readonly markdownLinkHandlers: MarkdownLinkHandlers;
     readonly renderMarkdownImage: MarkdownImageRenderer;
     readonly renderViewedImage: MarkdownImageRenderer;
+    readonly renderReasoning: (text: string) => ReactNode;
     readonly iconSubtleColor: string | import("react-native").ColorValue;
     readonly screenColor: string;
     readonly userBubbleColor: string | import("react-native").ColorValue;
@@ -1498,17 +1532,18 @@ function renderFeedEntry(
     readonly userBubbleMaxWidth: number;
     /** Width assistant markdown lays out in, so images can size their frame before layout. */
     readonly markdownContentWidth: number;
+    readonly threadTitle: string;
   },
 ) {
   const entry = info.item;
   const { markdownStyles, iconSubtleColor, userBubbleColor } = props;
 
-  if (entry.type === "turn-fold") {
+  if (entry.type === "run-fold") {
     return (
       <Pressable
         accessibilityRole="button"
         accessibilityState={{ expanded: entry.expanded }}
-        onPress={() => props.onToggleTurnFold(entry.turnId)}
+        onPress={() => props.onToggleTurnFold(entry.runId)}
         hitSlop={4}
         className="mb-1 min-h-11 flex-row items-center gap-2 border-b border-border-subtle px-2"
         style={{
@@ -1535,19 +1570,6 @@ function renderFeedEntry(
     return <ThreadThinkingRow rowSizing={props.workRowSizing} iconSubtleColor={iconSubtleColor} />;
   }
 
-  if (entry.type === "agent-spawn") {
-    return (
-      <ThreadAgentSpawnCard
-        summary={entry.summary}
-        expanded={entry.expanded}
-        iconSubtleColor={iconSubtleColor}
-        rowSizing={props.workRowSizing}
-        onToggle={() => props.onToggleWorkGroup(entry.id, entry.id)}
-        onCopy={() => props.onCopyWorkRow(entry.activity.id, entry.activity.getCopyText())}
-      />
-    );
-  }
-
   if (entry.type === "work-toggle") {
     return (
       <ThreadWorkGroupToggle
@@ -1569,67 +1591,41 @@ function renderFeedEntry(
     );
   }
 
+  if (entry.type === "activity-group" && isContextHandoffActivityGroup(entry)) {
+    return (
+      <ThreadHandoffRow
+        environmentId={props.environmentId}
+        projectedItem={entry.activities[0]!.projectedItem}
+        iconColor={iconSubtleColor}
+      />
+    );
+  }
+
   if (entry.type === "activity-group" && isContextCompactionActivityGroup(entry)) {
     const label = entry.activities[0]!.summary;
+    const active =
+      props.unsettledTurnId !== null &&
+      entry.runId === props.unsettledTurnId &&
+      entry.activities[0]!.projectedItem.item.status === "running";
     return (
-      <View
-        accessible
-        accessibilityLabel={label}
-        className="mb-3 flex-row items-center gap-3 px-1 py-1"
-      >
-        <View className="h-px flex-1 bg-subtle" />
-        <View className="shrink-0 flex-row items-center gap-1.5">
-          <SymbolView
-            name="arrow.down.right.and.arrow.up.left"
-            size={12}
-            tintColor={iconSubtleColor}
-            type="monochrome"
-          />
-          <Text className="font-t3-medium text-xs text-foreground-muted">{label}</Text>
-        </View>
-        <View className="h-px flex-1 bg-subtle" />
-      </View>
+      <ThreadContextDivider
+        label={label}
+        icon="arrow.down.right.and.arrow.up.left"
+        iconColor={iconSubtleColor}
+        active={active}
+      />
     );
   }
 
   if (entry.type === "message") {
     const { message } = entry;
-    if (message.role === "reasoning") {
-      const messages = entry.reasoningMessages ?? [message];
-      return (
-        <ThreadReasoningRow
-          rowSizing={props.workRowSizing}
-          iconSubtleColor={iconSubtleColor}
-          expanded={props.expandedReasoningMessageIds.has(entry.id)}
-          label={`Thought${messages.length > 1 ? ` (×${messages.length})` : ""}`}
-          streaming={false}
-          onToggle={() => props.onToggleReasoning(entry.id)}
-        >
-          <MarkdownImageAvailableWidthContext
-            value={props.markdownContentWidth - REASONING_CONTENT_INSET}
-          >
-            <View className="gap-3">
-              {messages.map((reasoningMessage) => (
-                <AssistantMarkdownContent
-                  key={reasoningMessage.id}
-                  markdown={reasoningMessage.text}
-                  markdownStyles={markdownStyles.assistant}
-                  linkHandlers={props.markdownLinkHandlers}
-                  renderImage={props.renderMarkdownImage}
-                  skills={props.skills}
-                />
-              ))}
-            </View>
-          </MarkdownImageAvailableWidthContext>
-        </ThreadReasoningRow>
-      );
-    }
     const isUser = message.role === "user";
-    const renderedText = renderAssistantCitationsAsText(message.text);
+    const presentation = resolveUserMessagePresentation(message);
+    const renderedText = renderAssistantCitationsAsText(presentation.text);
     const styles = isUser ? markdownStyles.user : markdownStyles.assistant;
     const timestampLabel = formatMessageTime(isUser ? message.createdAt : message.updatedAt);
     const attachments = message.attachments ?? [];
-    const hasReviewCommentContext = message.text.includes("<review_comment");
+    const hasReviewCommentContext = presentation.text.includes("<review_comment");
     // A bubble that sizes itself from its content cannot lay out a block whose
     // intrinsic width overflows `maxWidth`: Android positions the bubble's
     // children during the unclamped pass and never moves them once the width
@@ -1639,16 +1635,16 @@ function renderFeedEntry(
     const assistantTurnStillInProgress =
       message.role === "assistant" &&
       props.unsettledTurnId !== null &&
-      message.turnId === props.unsettledTurnId;
+      message.runId === props.unsettledTurnId;
     const showAssistantMeta =
       message.role === "assistant" &&
-      (props.terminalAssistantMessageIds.has(message.id) ||
-        props.settledTurnOpeningAssistantMessageIds.has(message.id)) &&
+      props.terminalAssistantMessageIds.has(message.id) &&
       !assistantTurnStillInProgress &&
       !message.streaming;
 
     if (isUser) {
-      const steerPending = props.steerPendingMessageIds?.has(message.id) === true;
+      const enterAnimated = isFreshTimestamp(message.createdAt);
+      const intentBadge = resolveUserMessageIntentBadge(message.inputIntent);
       const referenceIds = new Set(
         collectComposerContextReferences(message.text).map((reference) => reference.contextId),
       );
@@ -1663,13 +1659,25 @@ function renderFeedEntry(
         (attachment) => isImageAttachment(attachment) || !inlineAttachmentIds.has(attachment.id),
       );
       return (
-        <View className="mb-5 items-end">
+        <Animated.View
+          className="mb-5 items-end"
+          {...(enterAnimated ? { entering: FadeInUp.duration(220) } : {})}
+        >
+          {presentation.isAutomation ? (
+            <Text className="mb-1 pr-1 font-t3-medium text-2xs text-foreground-muted opacity-60">
+              Sent by automation
+            </Text>
+          ) : message.createdBy === "agent" ? (
+            <AgentMessageAttribution
+              environmentId={props.environmentId}
+              senderThreadId={message.senderThreadId}
+            />
+          ) : null}
           <View
             className="min-w-0 gap-2 rounded-[20px] px-3.5 py-2.5"
             style={{
               backgroundColor: userBubbleColor,
               maxWidth: props.userBubbleMaxWidth,
-              ...(steerPending ? { opacity: 0.75 } : null),
               ...(hasReviewCommentContext
                 ? { width: props.reviewCommentBubbleWidth }
                 : hasWideBlock
@@ -1748,75 +1756,57 @@ function renderFeedEntry(
               </MarkdownImageAvailableWidthContext>
             ) : null}
           </View>
-          {steerPending ? <SteerPendingMarker tintColor={iconSubtleColor} /> : null}
           <View className="mt-1 flex-row items-center justify-end gap-1 pr-0.5">
-            {message.inputOrigin === "voice-transcription" ? (
-              <View className="flex-row items-center gap-1 pr-1">
-                <SymbolView
-                  name="mic.fill"
-                  size={11}
-                  tintColor={iconSubtleColor}
-                  type="monochrome"
-                />
-                <Text className="font-t3-medium text-xs text-foreground-secondary">
-                  Transcribed
+            {intentBadge ? (
+              <View
+                accessible
+                accessibilityRole="text"
+                accessibilityLabel={intentBadge.accessibilityLabel}
+                className={cn(
+                  "rounded-full border px-1.5 py-0.5",
+                  intentBadge.tone === "queued"
+                    ? "border-adaptive-amber-500-a25-400-a25 bg-adaptive-amber-500-a10-400-a10"
+                    : "border-adaptive-sky-500-a25-400-a25 bg-adaptive-sky-500-a10-400-a10",
+                )}
+              >
+                <Text
+                  className={cn(
+                    "font-t3-medium text-2xs tracking-wide",
+                    intentBadge.tone === "queued"
+                      ? "text-adaptive-amber-700-300"
+                      : "text-adaptive-sky-700-300",
+                  )}
+                >
+                  {intentBadge.label}
                 </Text>
               </View>
             ) : null}
             <Text className="font-t3-medium text-xs tabular-nums text-foreground-secondary">
               {entry.pendingMessage && !entry.acknowledged ? "Pending" : timestampLabel}
             </Text>
-            {entry.pendingMessage &&
+            {props.onEditPendingMessage !== null &&
+            entry.pendingMessage &&
             !entry.acknowledged &&
             !entry.pendingMessage.creation &&
             entry.pendingMessage.messageId !== props.dispatchingMessageId ? (
-              <ControlPillMenu
-                accessibilityLabel="Pending message actions"
-                actions={[
-                  { id: "edit", title: "Edit" },
-                  { id: "steer", title: "Send now" },
-                  {
-                    id: "queue",
-                    title: "Queue for later",
-                    attributes: {
-                      disabled: queuedThreadMessageIntent(entry.pendingMessage) !== "steer",
-                    },
-                  },
-                  { id: "delete", title: "Delete", attributes: { destructive: true } },
-                ]}
-                onPressAction={({ nativeEvent }) => {
-                  const pending = entry.pendingMessage;
-                  if (!pending) return;
-                  switch (nativeEvent.event) {
-                    case "edit":
-                      props.onEditPendingMessage(pending);
-                      break;
-                    case "steer":
-                      void steerQueuedMessageNow(pending);
-                      break;
-                    case "queue":
-                      void queueSteeredMessageForLater(pending);
-                      break;
-                    case "delete":
-                      confirmDeleteQueuedMessage(pending);
-                      break;
+              <Pressable
+                accessibilityRole="button"
+                accessibilityLabel="Edit pending message"
+                hitSlop={8}
+                className="size-7 items-center justify-center"
+                onPress={() => {
+                  if (entry.pendingMessage && props.onEditPendingMessage) {
+                    props.onEditPendingMessage(entry.pendingMessage);
                   }
                 }}
               >
-                <Pressable
-                  accessibilityRole="button"
-                  accessibilityLabel="Pending message actions"
-                  hitSlop={8}
-                  className="size-7 items-center justify-center"
-                >
-                  <SymbolView name="ellipsis" size={14} tintColor={iconSubtleColor} />
-                </Pressable>
-              </ControlPillMenu>
+                <SymbolView name="pencil" size={14} tintColor={iconSubtleColor} />
+              </Pressable>
             ) : null}
-            {message.text.trim().length > 0 ? (
+            {presentation.text.trim().length > 0 ? (
               <CopyTextButton
                 accessibilityLabel="Copy message"
-                text={message.text}
+                text={presentation.text}
                 onCopy={
                   message.context
                     ? () =>
@@ -1833,15 +1823,13 @@ function renderFeedEntry(
               />
             ) : null}
           </View>
-        </View>
+        </Animated.View>
       );
     }
 
-    const agentVoiceReply = message.speech?.origin === "agent" ? message.speech : null;
-    // Skip empty assistant messages (no text, no attachments, no voice
-    // reply) — they would render as an orphaned timestamp and break adjacent
-    // activity-group merging.
-    if (renderedText.trim().length === 0 && attachments.length === 0 && agentVoiceReply === null) {
+    // Skip empty assistant messages (no text, no attachments) — they would
+    // render as an orphaned timestamp and break adjacent activity-group merging.
+    if (renderedText.trim().length === 0 && attachments.length === 0) {
       return null;
     }
 
@@ -1850,41 +1838,28 @@ function renderFeedEntry(
     // intrinsic width before the container is clamped, overlapping the
     // timestamp/copy button row. Pinning the width removes that pass.
     const enterAnimated = isFreshTimestamp(message.createdAt);
-    const writtenReply =
-      renderedText.trim().length > 0 ? (
-        <MarkdownImageAvailableWidthContext value={props.markdownContentWidth}>
-          <AssistantMarkdownContent
-            markdown={renderedText}
-            markdownStyles={styles}
-            linkHandlers={props.markdownLinkHandlers}
-            onUseArtifactTemplate={props.onUseArtifactTemplate}
-            renderImage={props.renderMarkdownImage}
-            skills={props.skills}
-          />
-        </MarkdownImageAvailableWidthContext>
-      ) : null;
     return (
       <Animated.View
-        className={cn(showAssistantMeta ? "mb-5 px-1" : "mb-1 px-1", hasWideBlock && "w-full")}
+        className={cn(
+          showAssistantMeta && !(message.runId && props.failedRunIds.has(message.runId))
+            ? "mb-5 px-1"
+            : "mb-1 px-1",
+          hasWideBlock && "w-full",
+        )}
         {...(enterAnimated ? { entering: FadeIn.duration(220) } : {})}
       >
-        {agentVoiceReply !== null ? (
-          <AssistantAgentVoiceReply
-            environmentId={props.environmentId}
-            threadId={props.threadId}
-            getThreadTitle={props.getThreadTitle}
-            messageId={message.id}
-            speech={agentVoiceReply}
-            iconSubtleColor={iconSubtleColor}
-            writtenReplyDuplicatesTranscript={
-              renderedText.trim() === agentVoiceReply.transcript.trim()
-            }
-          >
-            {writtenReply}
-          </AssistantAgentVoiceReply>
-        ) : (
-          writtenReply
-        )}
+        {renderedText.trim().length > 0 ? (
+          <MarkdownImageAvailableWidthContext value={props.markdownContentWidth}>
+            <AssistantMarkdownContent
+              markdown={renderedText}
+              markdownStyles={styles}
+              linkHandlers={props.markdownLinkHandlers}
+              onUseArtifactTemplate={props.onUseArtifactTemplate}
+              renderImage={props.renderMarkdownImage}
+              skills={props.skills}
+            />
+          </MarkdownImageAvailableWidthContext>
+        ) : null}
         {attachments.map((attachment) => {
           return isImageAttachment(attachment) ? (
             <MessageAttachmentImage
@@ -1909,27 +1884,26 @@ function renderFeedEntry(
           );
         })}
         {showAssistantMeta ? (
-          <AssistantMessageMetaAndArtifacts
-            environmentId={props.environmentId}
-            threadId={props.threadId}
-            getThreadTitle={props.getThreadTitle}
-            messageId={message.id}
-            messageText={renderedText}
-            speechRequest={message.speechRequest ?? null}
-            speechFailureReason={message.speechFailureReason}
-            persistedSummary={message.generatedSummary ?? null}
-            persistedSpeech={message.speech ?? null}
-            timestampLabel={timestampLabel}
-            iconSubtleColor={iconSubtleColor}
-            textToSpeechAvailable={props.textToSpeechAvailable === true}
-            textToSpeechPersistentJobs={props.textToSpeechPersistentJobs === true}
-            messageSummariesAvailable={props.messageSummariesAvailable === true}
-            markdownStyles={styles}
-            skills={props.skills}
-            markdownLinkHandlers={props.markdownLinkHandlers}
-            onUseArtifactTemplate={props.onUseArtifactTemplate}
-            renderImage={props.renderMarkdownImage}
-          />
+          <View className="mt-1 flex-row items-center gap-1">
+            {message.projectedItem ? (
+              <AssistantForkButton
+                environmentId={props.environmentId}
+                iconColor={iconSubtleColor}
+                projectedItem={message.projectedItem}
+                sourceTitle={props.threadTitle}
+              />
+            ) : null}
+            <CopyTextButton
+              accessibilityLabel="Copy message"
+              text={renderedText}
+              tintColor={iconSubtleColor}
+              buttonSize={28}
+              iconSize={13}
+            />
+            <Text className="font-t3-medium text-xs tabular-nums text-foreground-secondary">
+              {timestampLabel}
+            </Text>
+          </View>
         ) : null}
       </Animated.View>
     );
@@ -1941,6 +1915,7 @@ function renderFeedEntry(
       // Anchors/details live in ThreadFeed and survive this group-only remount.
       key={`${entry.id}:${props.workRowSizing.textSizeKey}`}
       activities={entry.activities}
+      continuesWorkLog={entry.continuesWorkLog}
       environmentId={props.environmentId}
       anchorKey={entry.id}
       copiedRowId={props.copiedRowId}
@@ -1953,628 +1928,11 @@ function renderFeedEntry(
       onCopyRow={props.onCopyWorkRow}
       onToggleRow={props.onToggleWorkRow}
       renderImage={props.renderViewedImage}
+      renderReasoning={props.renderReasoning}
     />
   );
 }
 
-/**
- * An agent-staged voice recording rendered below the written reply.
- */
-function AssistantAgentVoiceReply(props: {
-  readonly environmentId: EnvironmentId;
-  readonly threadId: ThreadId;
-  readonly getThreadTitle: () => string;
-  readonly messageId: MessageId;
-  readonly speech: MessageSpeechSynthesisResult;
-  readonly iconSubtleColor: ColorValue;
-  /**
-   * A voice-only turn's text is the transcript itself and stays hidden (the
-   * player's "View transcript" already covers it), but a dead recording still
-   * forces the text visible — it is the message then.
-   */
-  readonly writtenReplyDuplicatesTranscript: boolean;
-  readonly children: ReactNode;
-}) {
-  const [transcriptExpanded, setTranscriptExpanded] = useState(false);
-  const [audioUnavailable, setAudioUnavailable] = useState(false);
-  const showWrittenReply =
-    props.children !== null && (!props.writtenReplyDuplicatesTranscript || audioUnavailable);
-
-  return (
-    // gap, not player margin, so a voice-only turn's player sits flush.
-    <View className="gap-1.5">
-      {showWrittenReply ? props.children : null}
-      <AssistantSpeechPlayer
-        environmentId={props.environmentId}
-        threadId={props.threadId}
-        getThreadTitle={props.getThreadTitle}
-        messageId={props.messageId}
-        speech={props.speech}
-        iconSubtleColor={props.iconSubtleColor}
-        transcriptExpanded={transcriptExpanded}
-        onToggleTranscript={() => setTranscriptExpanded((current) => !current)}
-        onRetry={null}
-        onAudioUnavailable={setAudioUnavailable}
-        primary
-      />
-    </View>
-  );
-}
-
-function AssistantMessageMetaAndArtifacts(props: {
-  readonly environmentId: EnvironmentId;
-  readonly threadId: ThreadId;
-  readonly getThreadTitle: () => string;
-  readonly messageId: MessageId;
-  readonly messageText: string;
-  readonly speechRequest: MessageSpeechRequest | null;
-  readonly speechFailureReason: MessageSpeechFailureReason | undefined;
-  readonly persistedSummary: MessageSummaryResult | null;
-  readonly persistedSpeech: MessageSpeechSynthesisResult | null;
-  readonly timestampLabel: string;
-  readonly iconSubtleColor: ColorValue;
-  readonly textToSpeechAvailable: boolean;
-  readonly textToSpeechPersistentJobs: boolean;
-  readonly messageSummariesAvailable: boolean;
-  readonly markdownStyles: MarkdownStyleSet;
-  readonly skills?: ReadonlyArray<SelectableMarkdownSkill>;
-  readonly markdownLinkHandlers: MarkdownLinkHandlers;
-  readonly onUseArtifactTemplate?: ((template: CodexArtifactTemplate) => void) | undefined;
-  readonly renderImage: MarkdownImageRenderer;
-}) {
-  const synthesize = useAtomCommand(synthesizeMessageSpeech, { reportFailure: false });
-  const requestPersistentSpeech = useAtomCommand(threadEnvironment.requestMessageSpeech, {
-    reportFailure: false,
-  });
-  const summarize = useAtomCommand(summarizeMessage, { reportFailure: false });
-  const [legacyPreparing, setLegacyPreparing] = useState(false);
-  // null = untouched: a row that already owns a recording starts expanded,
-  // so returning to a thread still shows which messages have one.
-  const [expandedState, setExpandedState] = useState<boolean | null>(null);
-  const [transcriptExpanded, setTranscriptExpanded] = useState(false);
-  const [summaryPreparing, setSummaryPreparing] = useState(false);
-  const [summaryExpanded, setSummaryExpanded] = useState(false);
-  const readSessionArtifacts = useCallback(
-    () =>
-      getMessageArtifactSessionSnapshot(props.environmentId, props.messageId, props.messageText),
-    [props.environmentId, props.messageId, props.messageText],
-  );
-  const sessionArtifacts = useSyncExternalStore(
-    useCallback(
-      (listener) => subscribeMessageArtifactSession(props.environmentId, props.messageId, listener),
-      [props.environmentId, props.messageId],
-    ),
-    readSessionArtifacts,
-    readSessionArtifacts,
-  );
-  const speech = props.textToSpeechPersistentJobs
-    ? props.persistedSpeech
-    : (sessionArtifacts.speech ?? props.persistedSpeech);
-  const preparing = props.textToSpeechPersistentJobs
-    ? props.speechRequest !== null
-    : legacyPreparing;
-  const summary = sessionArtifacts.summary ?? props.persistedSummary;
-  // Agent voice replies render their own player above the message; the meta
-  // row must not offer a second one (or a regeneration that would replace the
-  // agent's recording with a synthesized listening version).
-  const isAgentVoiceReply = speech !== null && speech.origin === "agent";
-  const expanded = expandedState ?? speech !== null;
-  const previousSpeechRequestId = useRef(props.speechRequest?.requestId);
-  useEffect(() => {
-    if (!props.textToSpeechPersistentJobs) return;
-    const previousRequestId = previousSpeechRequestId.current;
-    const currentRequestId = props.speechRequest?.requestId;
-    previousSpeechRequestId.current = currentRequestId;
-    if (previousRequestId === undefined || currentRequestId !== undefined) return;
-    if (!consumeOwnedMessageSpeechRequest(previousRequestId)) return;
-    if (speech !== null) {
-      setExpandedState(true);
-      return;
-    }
-    Alert.alert(
-      "Listening version unavailable",
-      messageSpeechFailureDescription(props.speechFailureReason),
-    );
-  }, [
-    props.speechFailureReason,
-    props.speechRequest?.requestId,
-    props.textToSpeechPersistentJobs,
-    speech,
-  ]);
-
-  const prepareSpeech = useCallback(async () => {
-    if (preparing) return;
-    if (props.textToSpeechPersistentJobs) {
-      const result = await requestPersistentSpeech({
-        environmentId: props.environmentId,
-        input: {
-          threadId: props.threadId,
-          messageId: props.messageId,
-        },
-      });
-      if (result._tag === "Success") return;
-      Alert.alert(
-        "Listening version unavailable",
-        "T3 Code could not start audio preparation for this message. Try again.",
-      );
-      return;
-    }
-
-    setLegacyPreparing(true);
-    const endRequest = beginMessageArtifactRequest(props.environmentId, props.messageId);
-    try {
-      const result = await synthesize({
-        environmentId: props.environmentId,
-        input: { messageId: props.messageId },
-      });
-      if (result._tag === "Success") {
-        rememberMessageSpeech(props.environmentId, props.messageText, result.value);
-        setExpandedState(true);
-        return;
-      }
-      Alert.alert(
-        "Listening version unavailable",
-        "T3 Code could not prepare audio for this message. Try again in a moment.",
-      );
-    } finally {
-      setLegacyPreparing(false);
-      endRequest();
-    }
-  }, [
-    preparing,
-    props.environmentId,
-    props.messageId,
-    props.messageText,
-    props.textToSpeechPersistentJobs,
-    props.threadId,
-    requestPersistentSpeech,
-    synthesize,
-  ]);
-
-  const onPressSpeech = useCallback(async () => {
-    if (speech !== null) {
-      setExpandedState(!expanded);
-      return;
-    }
-    await prepareSpeech();
-  }, [expanded, prepareSpeech, speech]);
-
-  const onPressSummary = useCallback(async () => {
-    if (summary !== null) {
-      setSummaryExpanded((current) => !current);
-      return;
-    }
-    if (summaryPreparing) return;
-    setSummaryPreparing(true);
-    const endRequest = beginMessageArtifactRequest(props.environmentId, props.messageId);
-    try {
-      const result = await summarize({
-        environmentId: props.environmentId,
-        input: { messageId: props.messageId },
-      });
-      setSummaryPreparing(false);
-      if (result._tag === "Success") {
-        rememberMessageSummary(props.environmentId, props.messageText, result.value);
-        setSummaryExpanded(true);
-        return;
-      }
-      Alert.alert(
-        "Summary unavailable",
-        "T3 Code could not summarize this message. Try again in a moment.",
-      );
-    } finally {
-      endRequest();
-    }
-  }, [
-    props.environmentId,
-    props.messageId,
-    props.messageText,
-    summarize,
-    summary,
-    summaryPreparing,
-  ]);
-
-  return (
-    <View>
-      <View className="mt-1 flex-row items-center gap-1">
-        <CopyTextButton
-          accessibilityLabel="Copy message"
-          text={props.messageText}
-          tintColor={props.iconSubtleColor}
-          buttonSize={28}
-          iconSize={13}
-        />
-        {(summary !== null || props.messageSummariesAvailable) &&
-        props.messageText.trim().length > 0 ? (
-          <Pressable
-            accessibilityRole="button"
-            accessibilityLabel={summary === null ? "Create summary" : "Toggle summary"}
-            accessibilityState={{
-              expanded: summary === null ? undefined : summaryExpanded,
-              busy: summaryPreparing,
-            }}
-            className="size-7 items-center justify-center rounded-lg active:bg-subtle-strong"
-            disabled={summaryPreparing}
-            hitSlop={8}
-            onPress={() => void onPressSummary()}
-          >
-            {summaryPreparing ? (
-              <ActivityIndicator size="small" color={props.iconSubtleColor} />
-            ) : (
-              <SymbolView
-                name="doc.text"
-                size={14}
-                tintColor={props.iconSubtleColor}
-                type="monochrome"
-              />
-            )}
-          </Pressable>
-        ) : null}
-        {(props.textToSpeechAvailable || speech !== null) && !isAgentVoiceReply ? (
-          <Pressable
-            accessibilityRole="button"
-            accessibilityLabel={
-              speech === null ? "Create listening version" : "Toggle listening version"
-            }
-            accessibilityState={{
-              expanded: speech === null ? undefined : expanded,
-              busy: preparing,
-            }}
-            className="size-7 items-center justify-center rounded-lg active:bg-subtle-strong"
-            disabled={preparing}
-            hitSlop={8}
-            onPress={() => void onPressSpeech()}
-          >
-            {preparing ? (
-              <ActivityIndicator size="small" color={props.iconSubtleColor} />
-            ) : (
-              <SymbolView
-                name="headphones"
-                size={14}
-                tintColor={props.iconSubtleColor}
-                type="monochrome"
-              />
-            )}
-          </Pressable>
-        ) : null}
-        <Text className="font-t3-medium text-xs tabular-nums text-foreground-secondary">
-          {props.timestampLabel}
-        </Text>
-      </View>
-      {summary !== null && summaryExpanded ? (
-        <View className="mt-2 gap-2 rounded-2xl border border-border bg-subtle p-3">
-          <View className="flex-row items-center gap-2">
-            <SymbolView
-              name="doc.text"
-              size={14}
-              tintColor={props.iconSubtleColor}
-              type="monochrome"
-            />
-            <Text className="font-t3-bold text-xs text-foreground">Summary</Text>
-          </View>
-          <AssistantMarkdownContent
-            markdown={summary.summary}
-            markdownStyles={props.markdownStyles}
-            linkHandlers={props.markdownLinkHandlers}
-            onUseArtifactTemplate={props.onUseArtifactTemplate}
-            renderImage={props.renderImage}
-            skills={props.skills}
-          />
-        </View>
-      ) : null}
-      {speech !== null && expanded && !isAgentVoiceReply ? (
-        <AssistantSpeechPlayer
-          environmentId={props.environmentId}
-          threadId={props.threadId}
-          getThreadTitle={props.getThreadTitle}
-          messageId={props.messageId}
-          speech={speech}
-          iconSubtleColor={props.iconSubtleColor}
-          transcriptExpanded={transcriptExpanded}
-          onToggleTranscript={() => setTranscriptExpanded((current) => !current)}
-          onRetry={() => void prepareSpeech()}
-        />
-      ) : null}
-    </View>
-  );
-}
-
-function AssistantSpeechPlayer(props: {
-  readonly environmentId: EnvironmentId;
-  readonly threadId: ThreadId;
-  readonly getThreadTitle: () => string;
-  readonly messageId: MessageId;
-  readonly speech: MessageSpeechSynthesisResult;
-  readonly iconSubtleColor: ColorValue;
-  readonly transcriptExpanded: boolean;
-  readonly onToggleTranscript: () => void;
-  /** null hides the regenerate action (agent recordings cannot be re-made client-side). */
-  readonly onRetry: (() => void) | null;
-  /** Mirrors availability so the row can fall back to the written reply
-      while the audio is gone — and stop once it resolves again. */
-  readonly onAudioUnavailable?: (unavailable: boolean) => void;
-  /** Agent voice replies render the player as the message's main content. */
-  readonly primary?: boolean;
-}) {
-  const { blocked, speed, track } = useListeningPlaybackSnapshot();
-  // The transport sits on `bg-foreground`, so its glyph has to come from the
-  // background family to stay legible. A literal white disappears on the light
-  // `--color-foreground` that dark appearances and several built-in themes use.
-  const playerTheme = useUniwindTheme();
-  const onForegroundColor = playerTheme["--color-sheet"];
-  const accentColor = playerTheme["--color-accent"];
-  const foregroundColor = String(playerTheme["--color-foreground"]);
-  const { trackColor, outlineColor } = listeningPlayerChrome(foregroundColor);
-  const audioUrlState = useAssetUrlState(props.environmentId, {
-    _tag: "attachment",
-    attachmentId: props.speech.speechId,
-    fileName: `${props.speech.speechId}${speechAudioFileExtension(props.speech.mimeType)}`,
-    mimeType: props.speech.mimeType,
-  });
-  const audioUrl = audioUrlState._tag === "Success" ? audioUrlState.url : null;
-  // This row is a view over the app-scoped player: the recording keeps
-  // playing when the row unmounts (thread switches, virtualization), and
-  // remounting binds back to it. The audio is only fetched when the user
-  // presses play — a thread can hold many recordings and the app may be on
-  // a remote or cellular link.
-  const isActiveTrack = track !== null && track.speechId === props.speech.speechId;
-  const isPlaying = isActiveTrack && track.playing;
-  // The play-before-URL intent lives in the controller, not this row: it
-  // survives the row unmounting and starts once the signed URL lands. The
-  // row only mirrors it for the loading spinner.
-  const pendingSpeechId = usePendingListeningSpeechId();
-  const audioUnavailable = audioUrlState._tag === "Failure";
-  const onAudioUnavailableProp = props.onAudioUnavailable;
-  useEffect(() => {
-    onAudioUnavailableProp?.(audioUnavailable);
-  }, [audioUnavailable, onAudioUnavailableProp]);
-
-  const trackRef = useMemo<ListeningTrackRef>(
-    () => ({
-      environmentId: props.environmentId,
-      threadId: props.threadId,
-      messageId: props.messageId,
-      speechId: props.speech.speechId,
-    }),
-    [props.environmentId, props.threadId, props.messageId, props.speech.speechId],
-  );
-
-  const speechId = props.speech.speechId;
-  const speechMimeType = props.speech.mimeType;
-  const environmentId = props.environmentId;
-  const onTogglePlayback = useCallback(() => {
-    if (isPlaying) {
-      listeningPlayback.pauseActive();
-      return;
-    }
-    if (blocked) return;
-    requestListeningTrack({
-      track: trackRef,
-      metadata: { title: props.getThreadTitle() },
-      url: audioUrl,
-      watchUrl: (onResolved) =>
-        watchAssetUrl(
-          environmentId,
-          {
-            _tag: "attachment",
-            attachmentId: speechId,
-            fileName: `${speechId}${speechAudioFileExtension(speechMimeType)}`,
-            mimeType: speechMimeType,
-          },
-          onResolved,
-        ),
-    });
-  }, [
-    audioUrl,
-    blocked,
-    environmentId,
-    isPlaying,
-    props.getThreadTitle,
-    speechId,
-    speechMimeType,
-    trackRef,
-  ]);
-
-  return (
-    <View
-      className={cn(
-        "gap-2 rounded-2xl border p-3",
-        // The accent marks the agent's own recording apart from the neutral
-        // listening-version card.
-        props.primary ? "border-accent/30 bg-accent/10" : "mt-2 border-border bg-subtle",
-      )}
-    >
-      <View className="flex-row items-center gap-2">
-        <SymbolView
-          name={props.primary ? "waveform" : "headphones"}
-          size={14}
-          tintColor={props.primary ? accentColor : props.iconSubtleColor}
-          type="monochrome"
-        />
-        <Text className="font-t3-bold text-xs text-foreground">
-          {props.primary ? "Voice reply" : "Listening version"}
-        </Text>
-      </View>
-      {audioUrlState._tag === "Failure" ? (
-        <View className="gap-2 py-1">
-          <Text className="text-xs text-foreground-muted">
-            {props.onRetry === null
-              ? "The audio file is unavailable."
-              : "The audio file is unavailable. Regenerate it to listen again."}
-          </Text>
-          {props.onRetry !== null ? (
-            <Pressable accessibilityRole="button" className="min-h-8" onPress={props.onRetry}>
-              <Text className="font-t3-medium text-xs text-foreground">Regenerate</Text>
-            </Pressable>
-          ) : null}
-        </View>
-      ) : audioUrl === null && pendingSpeechId === props.speech.speechId ? (
-        <View className="flex-row items-center gap-2 py-1">
-          <ActivityIndicator size="small" color={props.iconSubtleColor} />
-          <Text className="text-xs text-foreground-muted">Loading audio…</Text>
-        </View>
-      ) : (
-        <View className="gap-2">
-          <View className="flex-row items-center gap-3">
-            <Pressable
-              accessibilityRole="button"
-              accessibilityLabel={
-                blocked
-                  ? `Play ${props.primary ? "voice reply" : "listening version"} unavailable while recording`
-                  : isPlaying
-                    ? `Pause ${props.primary ? "voice reply" : "listening version"}`
-                    : `Play ${props.primary ? "voice reply" : "listening version"}`
-              }
-              accessibilityState={{ disabled: blocked }}
-              className={cn(
-                "size-9 items-center justify-center rounded-full bg-foreground active:opacity-75",
-                blocked && "opacity-50",
-              )}
-              disabled={blocked}
-              onPress={onTogglePlayback}
-            >
-              <SymbolView
-                name={isPlaying ? "pause.fill" : "play"}
-                size={15}
-                tintColor={onForegroundColor}
-                type="monochrome"
-              />
-            </Pressable>
-            {isActiveTrack ? (
-              <ListeningTransportProgress trackColor={trackColor} />
-            ) : (
-              // Same footprint as the live transport so first play causes no
-              // layout shift.
-              <View className="flex-1 gap-1.5">
-                <View
-                  className="h-1.5 overflow-hidden rounded-full"
-                  style={{ backgroundColor: trackColor }}
-                />
-                <Text className="font-t3-medium text-[11px] tabular-nums text-foreground-muted">
-                  {formatIdleListeningClock(props.speech.durationMs)}
-                </Text>
-              </View>
-            )}
-          </View>
-          {blocked ? (
-            <Text className="text-xs text-foreground-muted">Finish recording to listen.</Text>
-          ) : null}
-          <ListeningSpeedControl outlineColor={outlineColor} speed={speed} />
-        </View>
-      )}
-      <Pressable
-        accessibilityRole="button"
-        accessibilityState={{ expanded: props.transcriptExpanded }}
-        className="min-h-8 flex-row items-center gap-1"
-        onPress={props.onToggleTranscript}
-      >
-        <Text className="font-t3-medium text-xs text-foreground-muted">
-          {props.primary ? "View transcript" : "View listening transcript"}
-        </Text>
-        <SymbolView
-          name={props.transcriptExpanded ? "chevron.up" : "chevron.down"}
-          size={13}
-          tintColor={props.iconSubtleColor}
-          type="monochrome"
-        />
-      </Pressable>
-      {props.transcriptExpanded ? (
-        <Text className="text-sm leading-5 text-foreground-muted">{props.speech.transcript}</Text>
-      ) : null}
-    </View>
-  );
-}
-
-/**
- * Live position for the loaded recording. Mounted only in the active row so
- * the player's 250ms progress tick never re-renders inactive players or the
- * feed around them.
- */
-function ListeningTransportProgress(props: { readonly trackColor: string }) {
-  const { currentTime, duration } = useListeningPlaybackProgress();
-  const progress = duration > 0 ? Math.min(1, currentTime / duration) : 0;
-
-  return (
-    <View className="flex-1 gap-1.5">
-      <View
-        className="h-1.5 overflow-hidden rounded-full"
-        style={{ backgroundColor: props.trackColor }}
-      >
-        <View
-          className="h-full rounded-full bg-foreground"
-          style={{ width: `${progress * 100}%` }}
-        />
-      </View>
-      <Text className="font-t3-medium text-[11px] tabular-nums text-foreground-muted">
-        {formatListeningClock(currentTime)} / {formatListeningClock(duration)}
-      </Text>
-    </View>
-  );
-}
-
-function ListeningSpeedControl(props: { readonly speed: number; readonly outlineColor: string }) {
-  const speedActions = useMemo(
-    () =>
-      LISTENING_SPEED_PRESETS.map((preset) => ({
-        id: String(preset),
-        title: formatListeningSpeed(preset),
-        state: preset === props.speed ? ("on" as const) : ("off" as const),
-      })),
-    [props.speed],
-  );
-  const spokenSpeed = listeningSpeedSpokenLabel(props.speed);
-
-  return (
-    <View
-      accessibilityLabel="Playback speed"
-      accessibilityRole="none"
-      className="flex-row items-center justify-between gap-3"
-    >
-      <Text className="text-xs text-foreground-muted">Playback speed</Text>
-      <View className="flex-row items-center gap-1">
-        <Pressable
-          accessibilityLabel="Decrease playback speed"
-          accessibilityRole="button"
-          accessibilityState={{ disabled: props.speed <= LISTENING_SPEED_MIN }}
-          className="size-8 items-center justify-center rounded-lg active:bg-foreground/10 disabled:opacity-40"
-          disabled={props.speed <= LISTENING_SPEED_MIN}
-          hitSlop={6}
-          onPress={() => listeningPlayback.nudgeSpeed(-1)}
-        >
-          <Text className="text-lg leading-5 text-foreground">−</Text>
-        </Pressable>
-        <ControlPillMenu
-          accessibilityLabel={`Playback speed, ${spokenSpeed}. Choose preset.`}
-          androidActionAccessibilityRole="radio"
-          actions={speedActions}
-          onPressAction={({ nativeEvent }) => listeningPlayback.setSpeed(Number(nativeEvent.event))}
-        >
-          <Pressable
-            accessibilityLabel={`Playback speed, ${spokenSpeed}. Choose preset.`}
-            accessibilityRole="button"
-            className="h-8 min-w-16 items-center justify-center rounded-lg border px-2 active:bg-foreground/10"
-            style={{ borderColor: props.outlineColor }}
-          >
-            <Text className="font-t3-bold text-xs tabular-nums text-foreground">
-              {formatListeningSpeed(props.speed)}
-            </Text>
-          </Pressable>
-        </ControlPillMenu>
-        <Pressable
-          accessibilityLabel="Increase playback speed"
-          accessibilityRole="button"
-          accessibilityState={{ disabled: props.speed >= LISTENING_SPEED_MAX }}
-          className="size-8 items-center justify-center rounded-lg active:bg-foreground/10 disabled:opacity-40"
-          disabled={props.speed >= LISTENING_SPEED_MAX}
-          hitSlop={6}
-          onPress={() => listeningPlayback.nudgeSpeed(1)}
-        >
-          <Text className="text-lg leading-5 text-foreground">+</Text>
-        </Pressable>
-      </View>
-    </View>
-  );
-}
 type UserMessageContentProps = {
   readonly text: string;
   readonly environmentId: EnvironmentId;
@@ -2602,6 +1960,13 @@ function UserMessageContent(props: UserMessageContentProps) {
     );
     if (record?.kind === "mention" && "path" in record) {
       props.linkHandlers.onLinkPress?.(record.path);
+      return;
+    }
+    if (record?.kind === "thread" && "threadId" in record) {
+      navigation.navigate("Thread", {
+        environmentId: String(record.environmentId),
+        threadId: String(record.threadId),
+      });
       return;
     }
     // Documents open in the file screen; pictures, video and PDF keep their native viewers.
@@ -2759,17 +2124,10 @@ export const ThreadFeed = memo(function ThreadFeed(props: ThreadFeedProps) {
   const disclosureSettleFrameRef = useRef<number | null>(null);
   const disclosureSettleSecondFrameRef = useRef<number | null>(null);
   const disclosureAnchorKeyRef = useRef<string | null>(null);
-  const previousPresentedFeedRef = useRef<ReadonlyArray<ThreadFeedEntry> | null>(null);
+  const previousLatestTurnRef = useRef(props.latestRun);
+  const userScrollSettleTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const headerMaterialVisibleRef = useRef(false);
   const lastContentInsetReportRef = useRef<ThreadFeedInsetReport | null>(null);
-  const previousLatestTurnRef = useRef(props.latestTurn);
-  const settledTurnOpeningAssistantMessageIdsRef = useRef<ReadonlySet<string>>(new Set());
-  const userScrollSettleTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
-  const threadTitleRef = useRef(props.threadTitle);
-  useEffect(() => {
-    threadTitleRef.current = props.threadTitle;
-  }, [props.threadTitle]);
-  const getThreadTitle = useCallback(() => threadTitleRef.current, []);
   const { width: windowWidth, fontScale } = useWindowDimensions();
   const { appearance } = useAppearancePreferences();
   const workRowSizing = useMemo(
@@ -2791,11 +2149,11 @@ export const ThreadFeed = memo(function ThreadFeed(props: ThreadFeedProps) {
   );
   const [viewportHeight, setViewportHeight] = useState(0);
   const [disclosureToggleSettling, setDisclosureToggleSettling] = useState(false);
-  // Live-follow latch. LegendList's maintainScrollAtEnd alone re-pins the feed
-  // whenever the viewport drifts back inside its geometric threshold, which
-  // yanked users off history they were reading every time a stream chunk grew
-  // a row. Scrolling away or expanding a disclosure above the end breaks
-  // follow; reaching the end (or sending / switching threads) re-arms it.
+  // Live-follow latch (#5566). LegendList's maintainScrollAtEnd alone re-pins
+  // the feed whenever the viewport drifts back inside its geometric threshold,
+  // which yanked users off history they were reading every time a stream chunk
+  // grew a row. Follow breaks when the user scrolls up and away, and re-arms
+  // only when the list actually returns to the end (or on send / thread switch).
   const [endFollowEnabled, setEndFollowEnabled] = useState(true);
   const endFollowEnabledRef = useRef(true);
   // A "user scroll session" spans from drag start through the end of its
@@ -2823,22 +2181,14 @@ export const ThreadFeed = memo(function ThreadFeed(props: ThreadFeedProps) {
     readonly copiedRowId: string | null;
     readonly expandedWorkGroups: Record<string, boolean>;
     readonly expandedWorkRows: Record<string, boolean>;
-    readonly expandedTurnIds: ReadonlySet<TurnId>;
-    readonly expandedReasoningMessageIds: ReadonlySet<string>;
+    readonly expandedTurnIds: ReadonlySet<RunId>;
   }>({
     copiedRowId: null,
     expandedWorkGroups: {},
     expandedWorkRows: {},
     expandedTurnIds: new Set(),
-    expandedReasoningMessageIds: new Set(),
   });
-  const {
-    copiedRowId,
-    expandedWorkGroups,
-    expandedWorkRows,
-    expandedTurnIds,
-    expandedReasoningMessageIds,
-  } = interactionState;
+  const { copiedRowId, expandedWorkGroups, expandedWorkRows, expandedTurnIds } = interactionState;
   const [expandedFile, setExpandedFile] = useState<FilePreviewSource | null>(null);
   const [expandedVideo, setExpandedVideo] = useState<VideoPreviewSource | null>(null);
   const fileShareSourceIdentifier = useId();
@@ -3089,10 +2439,20 @@ export const ThreadFeed = memo(function ThreadFeed(props: ThreadFeedProps) {
     [props.environmentId, props.threadId, props.workspaceRoot],
   );
   const markdownStyles = useMarkdownStyles(onMarkdownLinkPress, renderMarkdownImage);
+  const renderReasoning = useCallback(
+    (text: string) => (
+      <AssistantMarkdownContent
+        markdown={text}
+        markdownStyles={markdownStyles.assistant}
+        linkHandlers={markdownLinkHandlers}
+        renderImage={renderMarkdownImage}
+        skills={props.skills}
+      />
+    ),
+    [markdownStyles.assistant, markdownLinkHandlers, renderMarkdownImage, props.skills],
+  );
   const reviewCommentColors = useReviewCommentColors();
-  // One definition of "still live", shared with the fold derivation: two
-  // copies of this test are what let a row and the fold beside it disagree.
-  const unsettledTurnId = deriveUnsettledTurnId(props.latestTurn ?? null);
+  const unsettledTurnId = threadFeedRunIsUnsettled(props.latestRun) ? props.latestRun.runId : null;
   // LegendList does not invalidate visible rows when only the renderItem closure changes.
   // Include turn completion so unchanged message rows reveal their footer and spacing
   // even when the final message update arrives before the turn settles.
@@ -3103,15 +2463,12 @@ export const ThreadFeed = memo(function ThreadFeed(props: ThreadFeedProps) {
       dispatchingMessageId: props.dispatchingMessageId,
       unsettledTurnId,
       copiedRowId,
+      expandedWorkGroups,
       expandedWorkRows,
-      expandedReasoningMessageIds,
       workRowSizing,
       iconSubtleColor,
       markdownStyles,
       reviewCommentColors,
-      messageSummariesAvailable: props.messageSummariesAvailable,
-      textToSpeechAvailable: props.textToSpeechAvailable,
-      textToSpeechPersistentJobs: props.textToSpeechPersistentJobs,
       themeAppearance,
       userBubbleColor,
       viewportWidth,
@@ -3122,15 +2479,12 @@ export const ThreadFeed = memo(function ThreadFeed(props: ThreadFeedProps) {
       props.dispatchingMessageId,
       unsettledTurnId,
       copiedRowId,
+      expandedWorkGroups,
       expandedWorkRows,
-      expandedReasoningMessageIds,
       workRowSizing,
       iconSubtleColor,
       markdownStyles,
       reviewCommentColors,
-      props.messageSummariesAvailable,
-      props.textToSpeechAvailable,
-      props.textToSpeechPersistentJobs,
       themeAppearance,
       userBubbleColor,
       viewportWidth,
@@ -3146,110 +2500,6 @@ export const ThreadFeed = memo(function ThreadFeed(props: ThreadFeedProps) {
     },
     [props.onHeaderMaterialVisibilityChange],
   );
-  // Older-message paging. The latch stops a burst of scroll events from asking
-  // for the same page repeatedly: `loadingOlderMessages` only turns true once
-  // the request has been accepted, a frame or more later.
-  const historyWindow = props.historyWindow;
-  const olderPageRequestedRef = useRef(false);
-  const contentHeightRef = useRef(Number.POSITIVE_INFINITY);
-  const previousUnderfilledHistoryEffectRef = useRef({
-    threadId: props.threadId,
-    error: historyWindow?.error ?? null,
-    viewportHeight,
-  });
-  const oldestFeedEntryId = props.feed[0]?.id ?? null;
-  const previousRequestSignalsRef = useRef({
-    oldestFeedEntryId,
-    loadingOlderMessages: historyWindow?.loadingOlderMessages ?? false,
-    settledCount: historyWindow?.settledCount ?? 0,
-  });
-  useEffect(() => {
-    // Release once a page lands, loading changes, or any request attempt
-    // settles. `settledCount` advances even for a disconnected rejection that
-    // React batches into a single commit, so repeated failures and a later
-    // warm resume cannot leave this mount's request latch stuck.
-    const current = {
-      oldestFeedEntryId,
-      loadingOlderMessages: historyWindow?.loadingOlderMessages ?? false,
-      settledCount: historyWindow?.settledCount ?? 0,
-    };
-    if (shouldReleaseOlderMessagesRequest(previousRequestSignalsRef.current, current)) {
-      olderPageRequestedRef.current = false;
-    }
-    previousRequestSignalsRef.current = current;
-  }, [oldestFeedEntryId, historyWindow?.loadingOlderMessages, historyWindow?.settledCount]);
-
-  const requestOlderMessagesIfNeeded = useCallback(
-    (distanceFromTop: number) => {
-      if (
-        historyWindow &&
-        shouldRequestOlderMessages({
-          distanceFromTop,
-          hasOlderMessages: historyWindow.hasOlderMessages,
-          loadingOlderMessages: historyWindow.loadingOlderMessages,
-          requestInFlight: olderPageRequestedRef.current,
-        })
-      ) {
-        olderPageRequestedRef.current = true;
-        historyWindow.onLoadOlderMessages();
-      }
-    },
-    [historyWindow],
-  );
-  const requestOlderMessagesForUnderfilledFeed = useCallback(
-    (contentHeight: number) => {
-      if (
-        historyWindow &&
-        shouldRequestOlderMessagesForUnderfilledFeed({
-          contentHeight,
-          viewportHeight,
-          error: historyWindow.error,
-          hasOlderMessages: historyWindow.hasOlderMessages,
-          loadingOlderMessages: historyWindow.loadingOlderMessages,
-          requestInFlight: olderPageRequestedRef.current,
-        })
-      ) {
-        olderPageRequestedRef.current = true;
-        // Underfill recovery is the app paging on the user's behalf, so it
-        // observes the resident-message ceiling.
-        historyWindow.onLoadOlderMessages({ automatic: true });
-      }
-    },
-    [historyWindow, viewportHeight],
-  );
-  useEffect(() => {
-    const previous = previousUnderfilledHistoryEffectRef.current;
-    const current = {
-      threadId: props.threadId,
-      contentHeight: contentHeightRef.current,
-      viewportHeight,
-      error: historyWindow?.error ?? null,
-      hasOlderMessages: historyWindow?.hasOlderMessages ?? false,
-      loadingOlderMessages: historyWindow?.loadingOlderMessages ?? false,
-      requestInFlight: olderPageRequestedRef.current,
-    };
-    previousUnderfilledHistoryEffectRef.current = {
-      threadId: current.threadId,
-      error: current.error,
-      viewportHeight: current.viewportHeight,
-    };
-
-    const action = decideThreadUnderfilledHistoryEffectAction(previous, current);
-    if (action === "reset-content-height") {
-      contentHeightRef.current = Number.POSITIVE_INFINITY;
-      olderPageRequestedRef.current = false;
-      return;
-    }
-    if (action === "request-older-messages" && historyWindow) {
-      // A short feed may not emit another content-size event after its parent
-      // first becomes measurable or readiness clears a disconnected error.
-      // Other settlements wait for user input or a measured size change.
-      olderPageRequestedRef.current = true;
-      // Automatic for the same reason as the callback above.
-      historyWindow.onLoadOlderMessages({ automatic: true });
-    }
-  }, [historyWindow, props.threadId, viewportHeight]);
-
   const handleScroll = useCallback(
     (event: NativeSyntheticEvent<NativeScrollEvent>) => {
       // anchorTopInset, not topContentInset: under automatic insets the list
@@ -3257,17 +2507,12 @@ export const ThreadFeed = memo(function ThreadFeed(props: ThreadFeedProps) {
       // UIKit's adjustedContentInset, so topContentInset is 0 here). Add the
       // header height back or the material toggles a full header too late.
       reportHeaderMaterialVisibility(event.nativeEvent.contentOffset.y + anchorTopInset > 6);
-      const { contentOffset } = event.nativeEvent;
-      requestOlderMessagesIfNeeded(
-        distanceFromFeedTop({
-          contentOffsetY: contentOffset.y,
-          topInset: anchorTopInset,
-        }),
-      );
-
       // LegendList recomputes its inset-aware end distance before invoking
-      // this handler. Only the actual end re-arms follow; a live user-scroll
-      // session still wins while automatic paging continues near the top.
+      // this handler, so getState() is current. Only the actual end re-arms
+      // follow: its broader maintain-scroll threshold is large enough for a
+      // streaming chunk to pull a user back before their upward drag escapes.
+      // A live user-scroll session still wins even if the first scroll event
+      // remains inside LegendList's at-end tolerance.
       const listState = props.listRef.current?.getState();
       if (listState) {
         transitionEndFollow({
@@ -3277,20 +2522,7 @@ export const ThreadFeed = memo(function ThreadFeed(props: ThreadFeedProps) {
         });
       }
     },
-    [
-      anchorTopInset,
-      props.listRef,
-      reportHeaderMaterialVisibility,
-      requestOlderMessagesIfNeeded,
-      transitionEndFollow,
-    ],
-  );
-  const handleContentSizeChange = useCallback(
-    (_width: number, height: number) => {
-      contentHeightRef.current = height;
-      requestOlderMessagesForUnderfilledFeed(height);
-    },
-    [requestOlderMessagesForUnderfilledFeed],
+    [reportHeaderMaterialVisibility, anchorTopInset, props.listRef, transitionEndFollow],
   );
   const clearUserScrollSettle = useCallback(() => {
     if (userScrollSettleTimerRef.current !== null) {
@@ -3342,13 +2574,6 @@ export const ThreadFeed = memo(function ThreadFeed(props: ThreadFeedProps) {
 
   useEffect(() => clearUserScrollSettle, [clearUserScrollSettle]);
 
-  const handleViewportLayout = useCallback((event: LayoutChangeEvent) => {
-    const nextWidth = Math.round(event.nativeEvent.layout.width);
-    const nextHeight = Math.round(event.nativeEvent.layout.height);
-    setViewportWidth((current) => (Math.abs(current - nextWidth) > 1 ? nextWidth : current));
-    setViewportHeight((current) => (Math.abs(current - nextHeight) > 1 ? nextHeight : current));
-  }, []);
-
   // Thread identity is env-scoped: two environments can hold the same
   // ThreadId, and keying resets (or the list mount) on the bare id would
   // carry stale scroll/follow state across an environment switch.
@@ -3359,11 +2584,6 @@ export const ThreadFeed = memo(function ThreadFeed(props: ThreadFeedProps) {
     () => new Map<string, ThreadWorkGroupScrollPosition>(),
     [feedThreadKey],
   );
-
-  useEffect(() => {
-    reportHeaderMaterialVisibility(false);
-  }, [feedThreadKey, reportHeaderMaterialVisibility]);
-
   // A thread switch opens pinned to the end; a send explicitly returns to the
   // live edge (ThreadDetailScreen scrolls the new message into place). Both
   // re-arm follow regardless of where the user had scrolled before.
@@ -3380,79 +2600,45 @@ export const ThreadFeed = memo(function ThreadFeed(props: ThreadFeedProps) {
     }
   }, [clearUserScrollSettle, props.submittedMessageId, transitionEndFollow]);
 
-  const expandedWorkGroupIds = useMemo(() => {
-    const ids = new Set<string>();
-    for (const [groupId, expanded] of Object.entries(expandedWorkGroups)) {
-      if (expanded) {
-        ids.add(groupId);
-      }
-    }
-    return ids;
-  }, [expandedWorkGroups]);
-  const presentationState = useMemo(() => {
-    const presentation = deriveThreadFeedPresentationState(
-      props.feed,
-      props.latestTurn,
+  const handleViewportLayout = useCallback((event: LayoutChangeEvent) => {
+    const nextWidth = Math.round(event.nativeEvent.layout.width);
+    const nextHeight = Math.round(event.nativeEvent.layout.height);
+    setViewportWidth((current) => (Math.abs(current - nextWidth) > 1 ? nextWidth : current));
+    setViewportHeight((current) => (Math.abs(current - nextHeight) > 1 ? nextHeight : current));
+  }, []);
+
+  useEffect(() => {
+    reportHeaderMaterialVisibility(false);
+  }, [feedThreadKey, reportHeaderMaterialVisibility]);
+
+  const presentedFeed = useMemo(
+    () =>
+      appendPendingThreadMessages(
+        deriveThreadFeedPresentation(
+          props.feed,
+          props.latestRun,
+          expandedTurnIds,
+          new Set(
+            Object.entries(expandedWorkGroups)
+              .filter(([, expanded]) => expanded)
+              .map(([groupId]) => groupId),
+          ),
+          props.activeWorkStartedAt,
+          props.runlessWorkActive ?? false,
+        ),
+        props.feed,
+        props.queuedMessages,
+      ),
+    [
+      props.queuedMessages,
       expandedTurnIds,
-      expandedWorkGroupIds,
+      expandedWorkGroups,
       props.activeWorkStartedAt,
-    );
-    return {
-      ...presentation,
-      entries: appendPendingThreadMessages(presentation.entries, props.feed, props.queuedMessages),
-    };
-  }, [
-    props.queuedMessages,
-    expandedTurnIds,
-    expandedWorkGroupIds,
-    props.activeWorkStartedAt,
-    props.feed,
-    props.latestTurn,
-  ]);
-  const {
-    entries: presentedFeed,
-    settledTurnOpeningAssistantMessageIds: derivedSettledTurnOpeningAssistantMessageIds,
-  } = presentationState;
-  if (
-    !haveSameStringSet(
-      settledTurnOpeningAssistantMessageIdsRef.current,
-      derivedSettledTurnOpeningAssistantMessageIds,
-    )
-  ) {
-    settledTurnOpeningAssistantMessageIdsRef.current = derivedSettledTurnOpeningAssistantMessageIds;
-  }
-  const settledTurnOpeningAssistantMessageIds = settledTurnOpeningAssistantMessageIdsRef.current;
-  const feedAppearanceData = useMemo(
-    () => ({ listAppearanceData, settledTurnOpeningAssistantMessageIds }),
-    [listAppearanceData, settledTurnOpeningAssistantMessageIds],
+      props.runlessWorkActive,
+      props.feed,
+      props.latestRun,
+    ],
   );
-  const disclosureEnteringEntryIds = useMemo(() => {
-    const anchorKey = disclosureAnchorKeyRef.current;
-    const previousPresentedFeed = previousPresentedFeedRef.current;
-    if (!disclosureToggleSettling || anchorKey === null || previousPresentedFeed === null) {
-      return EMPTY_DISCLOSURE_ENTRY_IDS;
-    }
-
-    const previousIds = new Set(previousPresentedFeed.map((entry) => entry.id));
-    const anchorIndex = presentedFeed.findIndex((entry) => entry.id === anchorKey);
-    const enteringIds = new Set<string>();
-    if (anchorIndex < 0) {
-      return enteringIds;
-    }
-    for (let index = anchorIndex + 1; index < presentedFeed.length; index += 1) {
-      const entryId = presentedFeed[index]!.id;
-      if (previousIds.has(entryId)) {
-        break;
-      }
-      enteringIds.add(entryId);
-    }
-    return enteringIds;
-  }, [disclosureToggleSettling, presentedFeed]);
-
-  useLayoutEffect(() => {
-    previousPresentedFeedRef.current = presentedFeed;
-  }, [presentedFeed]);
-
   const setupAnchorIndex = presentedFeed.findIndex(
     (entry) => entry.type === "message" && entry.message.role === "user",
   );
@@ -3475,7 +2661,7 @@ export const ThreadFeed = memo(function ThreadFeed(props: ThreadFeedProps) {
     const resolved = resolveChatListAnchoredEndSpace(
       presentedFeed,
       props.anchorMessageId,
-      (entry) => (entry.type === "message" && entry.message.role === "user" ? entry.id : null),
+      (entry) => (entry.type === "message" ? entry.id : null),
       { anchorOffset: anchorTopInset + CHAT_LIST_ANCHOR_OFFSET },
     );
     const anchorMessageId = props.anchorMessageId;
@@ -3529,24 +2715,28 @@ export const ThreadFeed = memo(function ThreadFeed(props: ThreadFeedProps) {
     props.keyboardVisible,
     props.listRef,
   ]);
+  const failedRunIds = useMemo(
+    () => failedFeedRunIds(props.feed, props.latestRun),
+    [props.feed, props.latestRun],
+  );
   const terminalAssistantMessageIds = useMemo(() => {
-    const terminalIdsByTurn = new Map<TurnId, string>();
+    const terminalIdsByTurn = new Map<RunId, string>();
     for (const entry of props.feed) {
-      if (entry.type === "message" && entry.message.role === "assistant" && entry.message.turnId) {
-        terminalIdsByTurn.set(entry.message.turnId, entry.message.id);
+      if (entry.type === "message" && entry.message.role === "assistant" && entry.message.runId) {
+        terminalIdsByTurn.set(entry.message.runId, entry.message.id);
       }
     }
     return new Set(terminalIdsByTurn.values());
   }, [props.feed]);
   useEffect(() => {
     const previous = previousLatestTurnRef.current;
-    previousLatestTurnRef.current = props.latestTurn;
-    if (!props.latestTurn || !previous) {
+    previousLatestTurnRef.current = props.latestRun;
+    if (!props.latestRun || !previous) {
       return;
     }
-    if (props.latestTurn.turnId === previous.turnId) {
-      if (previous.state === "running" && props.latestTurn.state === "interrupted") {
-        const interruptedTurnId = props.latestTurn.turnId;
+    if (props.latestRun.runId === previous.runId) {
+      if (previous.status === "running" && props.latestRun.status === "interrupted") {
+        const interruptedTurnId = props.latestRun.runId;
         setInteractionState((current) => ({
           ...current,
           expandedTurnIds: new Set(current.expandedTurnIds).add(interruptedTurnId),
@@ -3555,14 +2745,14 @@ export const ThreadFeed = memo(function ThreadFeed(props: ThreadFeedProps) {
       return;
     }
     setInteractionState((current) => {
-      if (!current.expandedTurnIds.has(previous.turnId)) {
+      if (!current.expandedTurnIds.has(previous.runId)) {
         return current;
       }
       const next = new Set(current.expandedTurnIds);
-      next.delete(previous.turnId);
+      next.delete(previous.runId);
       return { ...current, expandedTurnIds: next };
     });
-  }, [props.latestTurn]);
+  }, [props.latestRun]);
 
   useEffect(() => {
     return () => {
@@ -3617,13 +2807,7 @@ export const ThreadFeed = memo(function ThreadFeed(props: ThreadFeedProps) {
     if (disclosureAnchorKeyRef.current !== null) {
       settleDisclosureAfterLayout();
     }
-  }, [
-    expandedTurnIds,
-    expandedWorkGroups,
-    expandedWorkRows,
-    expandedReasoningMessageIds,
-    settleDisclosureAfterLayout,
-  ]);
+  }, [expandedTurnIds, expandedWorkGroups, expandedWorkRows, settleDisclosureAfterLayout]);
 
   const handleItemSizeChanged = useCallback(() => {
     if (disclosureAnchorKeyRef.current !== null) {
@@ -3663,8 +2847,8 @@ export const ThreadFeed = memo(function ThreadFeed(props: ThreadFeedProps) {
   }, []);
 
   const onToggleWorkGroup = useCallback(
-    (groupId: string, anchorKey: string) => {
-      suspendEndScrollMaintenanceForDisclosure(anchorKey);
+    (groupId: string, anchorKey?: string) => {
+      suspendEndScrollMaintenanceForDisclosure(anchorKey ?? `work-toggle:${groupId}`);
       setInteractionState((current) => ({
         ...current,
         expandedWorkGroups: {
@@ -3677,8 +2861,8 @@ export const ThreadFeed = memo(function ThreadFeed(props: ThreadFeedProps) {
   );
 
   const onToggleWorkRow = useCallback(
-    (rowId: string, anchorKey: string) => {
-      suspendEndScrollMaintenanceForDisclosure(anchorKey);
+    (rowId: string, anchorKey?: string) => {
+      suspendEndScrollMaintenanceForDisclosure(anchorKey ?? null);
       setInteractionState((current) => ({
         ...current,
         expandedWorkRows: {
@@ -3691,33 +2875,16 @@ export const ThreadFeed = memo(function ThreadFeed(props: ThreadFeedProps) {
   );
 
   const onToggleTurnFold = useCallback(
-    (turnId: TurnId) => {
-      suspendEndScrollMaintenanceForDisclosure(`turn-fold:${turnId}`);
+    (runId: RunId) => {
+      suspendEndScrollMaintenanceForDisclosure(`run-fold:${runId}`);
       setInteractionState((current) => {
         const next = new Set(current.expandedTurnIds);
-        if (next.has(turnId)) {
-          next.delete(turnId);
+        if (next.has(runId)) {
+          next.delete(runId);
         } else {
-          next.add(turnId);
+          next.add(runId);
         }
         return { ...current, expandedTurnIds: next };
-      });
-    },
-    [suspendEndScrollMaintenanceForDisclosure],
-  );
-
-  const onToggleReasoning = useCallback(
-    (messageId: string) => {
-      // Reasoning details use their own row within the expanded activity history.
-      suspendEndScrollMaintenanceForDisclosure(messageId);
-      setInteractionState((current) => {
-        const next = new Set(current.expandedReasoningMessageIds);
-        if (next.has(messageId)) {
-          next.delete(messageId);
-        } else {
-          next.add(messageId);
-        }
-        return { ...current, expandedReasoningMessageIds: next };
       });
     },
     [suspendEndScrollMaintenanceForDisclosure],
@@ -3742,37 +2909,45 @@ export const ThreadFeed = memo(function ThreadFeed(props: ThreadFeedProps) {
   // scrolling up through unmeasured content corrects each row's height as it
   // mounts — the feed visibly jumps. Fixed sizes make the small chrome rows
   // exact; message rows stay undefined and use LegendList's per-type running
-  // average once one of their type has been measured.
+  // average once one of their type has been measured. Prominent v2 items,
+  // expanded details, and compaction rows retain native measurement; their
+  // cards and related-thread links can exceed the compact row height.
   const getFixedItemSize = useCallback(
     (entry: ThreadFeedEntry) => {
       if (workRowSizing.fixedRowHeight === undefined) {
         return undefined;
       }
       switch (entry.type) {
-        case "message":
-          // A collapsed reasoning row is the same chrome as a work toggle.
-          return entry.message.role === "reasoning" && !expandedReasoningMessageIds.has(entry.id)
-            ? WORK_GROUP_TOGGLE_HEIGHT
-            : undefined;
-        case "turn-fold":
-          return TURN_FOLD_HEIGHT;
+        case "run-fold":
+          return resolveThreadFeedFixedItemSize(entry.type);
         case "work-toggle":
         case "thinking":
           return WORK_GROUP_TOGGLE_HEIGHT;
         case "activity-group":
-          if (isContextCompactionActivityGroup(entry)) {
+          if (entry.activities[0]?.projectedItem.item.type === "subagent") {
+            return undefined;
+          }
+          if (isContextCompactionActivityGroup(entry) || isContextHandoffActivityGroup(entry)) {
+            return undefined;
+          }
+          if (
+            entry.activities[0]?.groupedToolDetail &&
+            entry.activities.every((activity) => activity.workEntry.itemType === "reasoning")
+          ) {
             return undefined;
           }
           // Expanded rows append a variable detail block — fall back to
           // measurement for those groups.
-          return entry.activities.some((activity) => expandedWorkRows[activity.id])
+          return entry.activities.some(
+            (activity) => activity.prominent || expandedWorkRows[activity.id],
+          )
             ? undefined
-            : collapsedWorkLogHeight(entry.activities);
+            : collapsedWorkLogHeight(entry.activities, entry.continuesWorkLog);
         default:
           return undefined;
       }
     },
-    [expandedReasoningMessageIds, expandedWorkRows, workRowSizing.fixedRowHeight],
+    [expandedWorkRows, workRowSizing.fixedRowHeight],
   );
 
   // Disclosures can mount existing offscreen rows as well as new work rows.
@@ -3781,43 +2956,32 @@ export const ThreadFeed = memo(function ThreadFeed(props: ThreadFeedProps) {
     (info: { item: PendingThreadFeedEntry; index: number }) => (
       <Animated.View
         key={info.item.id}
-        entering={
-          disclosureEnteringEntryIds.has(info.item.id)
-            ? THREAD_FEED_DISCLOSURE_ENTER_TRANSITION
-            : undefined
-        }
-        exiting={THREAD_FEED_DISCLOSURE_EXIT_TRANSITION}
+        entering={disclosureToggleSettling ? THREAD_FEED_DISCLOSURE_ENTER_TRANSITION : undefined}
       >
         <ThreadMediaVisibility>
           {renderFeedEntry(info, {
             environmentId: props.environmentId,
-            threadId: props.threadId,
-            getThreadTitle,
-            messageSummariesAvailable: props.messageSummariesAvailable,
-            textToSpeechAvailable: props.textToSpeechAvailable,
-            textToSpeechPersistentJobs: props.textToSpeechPersistentJobs,
-            steerPendingMessageIds: props.steerPendingMessageIds,
             dispatchingMessageId: props.dispatchingMessageId,
             onEditPendingMessage: props.onEditPendingMessage,
+            onUseArtifactTemplate: props.onUseArtifactTemplate,
+            threadId: props.threadId,
             copiedRowId,
             expandedWorkRows,
-            settledTurnOpeningAssistantMessageIds,
-            expandedReasoningMessageIds,
             workRowSizing,
             workGroupScrollPositions,
             terminalAssistantMessageIds,
             unsettledTurnId,
-            isWorking: props.activeWorkStartedAt !== null,
+            failedRunIds,
             onCopyWorkRow,
             onToggleWorkGroup,
             onToggleWorkRow,
             onToggleTurnFold,
-            onToggleReasoning,
             onPressPreview,
             onPressVideo,
             markdownLinkHandlers,
             renderMarkdownImage,
             renderViewedImage,
+            renderReasoning,
             iconSubtleColor,
             screenColor,
             userBubbleColor,
@@ -3827,8 +2991,9 @@ export const ThreadFeed = memo(function ThreadFeed(props: ThreadFeedProps) {
             themeAppearance,
             userBubbleMaxWidth,
             markdownContentWidth,
+            threadTitle: props.threadTitle,
             skills: props.skills,
-            onUseArtifactTemplate: props.onUseArtifactTemplate,
+            workspaceRoot: props.workspaceRoot,
           })}
           {props.worktreeSetup && info.index === setupAnchorIndex ? (
             <WorktreeSetupCard key={props.threadId} {...props.worktreeSetup} />
@@ -3846,15 +3011,13 @@ export const ThreadFeed = memo(function ThreadFeed(props: ThreadFeedProps) {
       props.dispatchingMessageId,
       props.onEditPendingMessage,
       copiedRowId,
-      disclosureEnteringEntryIds,
+      disclosureToggleSettling,
       expandedWorkRows,
-      settledTurnOpeningAssistantMessageIds,
-      expandedReasoningMessageIds,
       workRowSizing,
       workGroupScrollPositions,
       terminalAssistantMessageIds,
       unsettledTurnId,
-      props.activeWorkStartedAt,
+      failedRunIds,
       iconSubtleColor,
       screenColor,
       userBubbleColor,
@@ -3863,26 +3026,23 @@ export const ThreadFeed = memo(function ThreadFeed(props: ThreadFeedProps) {
       reviewCommentBubbleWidth,
       themeAppearance,
       userBubbleMaxWidth,
-      getThreadTitle,
       markdownContentWidth,
       onCopyWorkRow,
       markdownLinkHandlers,
       onPressPreview,
       onPressVideo,
-      onToggleReasoning,
       onToggleTurnFold,
       onToggleWorkGroup,
       onToggleWorkRow,
       props.environmentId,
-      props.messageSummariesAvailable,
       props.onUseArtifactTemplate,
-      props.textToSpeechAvailable,
-      props.textToSpeechPersistentJobs,
       props.threadId,
-      props.steerPendingMessageIds,
+      props.threadTitle,
       props.skills,
+      props.workspaceRoot,
       renderMarkdownImage,
       renderViewedImage,
+      renderReasoning,
     ],
   );
 
@@ -3931,7 +3091,7 @@ export const ThreadFeed = memo(function ThreadFeed(props: ThreadFeedProps) {
                 }
               : { scrollIndicatorInsets: { top: topContentInset, bottom: 0 } })}
             {...(anchoredEndSpace ? { anchoredEndSpace } : {})}
-            // Patched LegendList prop (patches/@legendapp__list@3.3.5.patch):
+            // Patched LegendList prop (patches/@legendapp__list@3.2.0.patch):
             // lets its scroll math clamp programmatic scrolls to -headerInset
             // instead of 0, so initialScrollAtEnd/maintainScrollAtEnd on short
             // content rest below the transparent header rather than at frame top.
@@ -3943,16 +3103,9 @@ export const ThreadFeed = memo(function ThreadFeed(props: ThreadFeedProps) {
             // ThreadDetailScreen); this tells LegendList's scroll math about the
             // extra so programmatic end scrolls land at the true resting offset.
             contentInsetEndStaticAdjustment={usesNativeAutomaticInsets ? insets.bottom : 0}
-            // Android: the composer overlay only exists as the keyboard
-            // integration's animated bottom padding, which the list's scroll
-            // math cannot see until the inset reports above land — and those
-            // arrive via runOnJS, racing the remounted list's one-shot initial
-            // scroll-at-end. Seed the estimated overlay height as a declarative
-            // contentInset floor: LegendList consumes it in JS math only
-            // (Android's ScrollView has no native contentInset prop) and the
-            // first reported override REPLACES it instead of adding to it.
-            // Not on iOS: there the prop would reach UIKit and inset natively
-            // on top of the animated padding.
+            // Android's initial end scroll can run before the keyboard integration
+            // reports the composer height. Seed that estimate for LegendList's
+            // scroll math until the first reported inset replaces it.
             {...(initialContentInset ? { contentInset: initialContentInset } : {})}
             // The keyboard integration's offset math (end pinning, max scroll)
             // must add the same UIKit-added extra, or its keyboard-open end
@@ -3977,7 +3130,7 @@ export const ThreadFeed = memo(function ThreadFeed(props: ThreadFeedProps) {
               endFollowEnabled && !disclosureToggleSettling ? false : maintainVisibleContentPosition
             }
             data={presentedFeed}
-            extraData={feedAppearanceData}
+            extraData={listAppearanceData}
             renderItem={renderItem}
             viewabilityConfig={THREAD_MEDIA_VIEWABILITY_CONFIG}
             keyExtractor={(entry) => entry.id}
@@ -4017,23 +3170,19 @@ export const ThreadFeed = memo(function ThreadFeed(props: ThreadFeedProps) {
             alignItemsAtEnd
             initialScrollAtEnd
             onScroll={handleScroll}
-            onContentSizeChange={handleContentSizeChange}
             onScrollBeginDrag={handleScrollBeginDrag}
             onScrollEndDrag={handleScrollEndDrag}
             onMomentumScrollBegin={handleMomentumScrollBegin}
             onMomentumScrollEnd={handleMomentumScrollEnd}
             scrollEventThrottle={16}
-            // No "load earlier" header row: older pages are requested
-            // automatically as the feed nears the top (see
-            // threadHistoryLoadMore) and progress is shown by the absolute
-            // overlay spinner below. A header row would add and remove content
-            // exactly while maintainVisibleContentPosition is absorbing the
-            // prepended page, which visibly jumps the feed.
             ListHeaderComponent={
               <>
                 {usesNativeAutomaticInsets ? null : <View style={{ height: topContentInset }} />}
                 {setupAnchorIndex < 0 && props.worktreeSetup ? (
                   <WorktreeSetupCard key={props.threadId} {...props.worktreeSetup} />
+                ) : null}
+                {props.historyControls ? (
+                  <ThreadFeedLoadEarlierControl {...props.historyControls} />
                 ) : null}
               </>
             }
@@ -4043,23 +3192,6 @@ export const ThreadFeed = memo(function ThreadFeed(props: ThreadFeedProps) {
             }}
           />
         </View>
-        {/*
-          Older-page spinner. Deliberately an absolute overlay rather than a list
-          header: a header would add content the moment a load starts and remove
-          it the moment the page lands, and maintainVisibleContentPosition would
-          have to absorb both shifts on top of the prepended page. An overlay
-          contributes no layout, so the viewport stays exactly where the user
-          left it.
-        */}
-        {historyWindow?.loadingOlderMessages === true ? (
-          <View
-            pointerEvents="none"
-            className="absolute left-0 right-0 items-center"
-            style={{ top: anchorTopInset + 8 }}
-          >
-            <ActivityIndicator size="small" color={iconSubtleColor} />
-          </View>
-        ) : null}
         {presentedFeed.length === 0 &&
         !props.worktreeSetup &&
         props.activeWorkStartedAt === null &&
@@ -4080,3 +3212,39 @@ export const ThreadFeed = memo(function ThreadFeed(props: ThreadFeedProps) {
     </PresentationSource>
   );
 });
+
+function ThreadFeedLoadEarlierControl(props: ThreadFeedHistoryControls) {
+  const theme = useUniwindTheme();
+  const mutedColor = theme["--color-icon-subtle"];
+  const accentColor = theme["--color-primary"];
+  if (!props.hasMoreHistory && props.error === null) {
+    return null;
+  }
+  return (
+    <View className="mb-3 items-center gap-1.5 px-2">
+      {props.hasMoreHistory ? (
+        <Pressable
+          accessibilityRole="button"
+          accessibilityLabel="Load earlier activity"
+          disabled={props.loading}
+          onPress={props.onLoadEarlier}
+          className="min-h-9 flex-row items-center justify-center gap-2 rounded-full border border-border/60 bg-surface/80 px-4 py-2 disabled:opacity-50"
+        >
+          {props.loading ? (
+            <ActivityIndicator size="small" color={accentColor} />
+          ) : (
+            <SymbolView name="chevron.up" size={12} tintColor={accentColor} type="monochrome" />
+          )}
+          <Text className="text-sm font-medium text-foreground">
+            {props.loading ? "Loading earlier activity…" : "Load earlier activity"}
+          </Text>
+        </Pressable>
+      ) : null}
+      {props.error !== null ? (
+        <Text className="text-center text-xs" style={{ color: mutedColor }}>
+          {props.error}
+        </Text>
+      ) : null}
+    </View>
+  );
+}

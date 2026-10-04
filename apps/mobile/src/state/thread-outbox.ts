@@ -1,31 +1,13 @@
 import { appAtomRegistry } from "./atom-registry";
 import { createThreadOutboxManager } from "./thread-outbox-manager";
-import { queuedThreadMessageIntent, type QueuedThreadMessage } from "./thread-outbox-model";
+import type { QueuedThreadMessage } from "./thread-outbox-model";
 import { expoThreadOutboxStorage, flushThreadOutboxWrites } from "./thread-outbox-storage";
 
 export * from "./thread-outbox-model";
 
-/**
- * Holds a steer until device preferences have loaded. The grace window is one
- * of them, so dispatching before they arrive would deliver with the default
- * window — including for a device that set the window longer, or to zero.
- * Queued messages are unaffected: their hold is the running turn.
- */
-export function isThreadOutboxMessageWaitingForPreferences(
-  message: Pick<QueuedThreadMessage, "deliveryIntent">,
-  preferencesHydrated: boolean,
-  expedited: boolean,
-): boolean {
-  return !preferencesHydrated && !expedited && queuedThreadMessageIntent(message) === "steer";
-}
-
 export const threadOutboxManager = createThreadOutboxManager({
   registry: appAtomRegistry,
   storage: expoThreadOutboxStorage,
-  atomLabel: "mobile:thread-outbox:queued-messages",
-  warn: (message, error) => {
-    console.warn(message, error);
-  },
 });
 
 /**
@@ -37,10 +19,6 @@ export const threadOutboxManager = createThreadOutboxManager({
 export async function flushThreadOutbox(): Promise<void> {
   await threadOutboxManager.serialize(async () => {});
   await flushThreadOutboxWrites();
-}
-
-export async function ensureThreadOutboxLoaded(): Promise<void> {
-  await threadOutboxManager.load();
 }
 
 export function enqueueThreadOutboxMessage(message: QueuedThreadMessage): Promise<void> {

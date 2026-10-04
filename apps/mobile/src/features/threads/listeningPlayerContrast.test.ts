@@ -75,27 +75,25 @@ function cardColor(variables: Record<string, string>): RGB {
 describe("listening player chrome contrast", () => {
   // Measured floors sit just under the worst real pair, so a palette that
   // regresses toward the ramp trips them while normal retuning does not.
-  for (const [label, part, floor] of [
+  it.each([
     ["scrubber track", "trackColor", 1.3],
     ["speed pill outline", "outlineColor", 1.4],
-  ] as const) {
-    it(`keeps the ${label} visible on its card in every theme`, () => {
-      for (const themeId of MOBILE_THEME_IDS) {
-        for (const appearance of APPEARANCES) {
-          const variables = getMobileThemeRuntimeVariables(themeId, appearance, "ios") as Record<
-            string,
-            string
-          >;
-          const card = cardColor(variables);
-          const chrome = listeningPlayerChrome(variables["--color-foreground"]!)[part];
-          expect(
-            contrastRatio(compositeOver(chrome, card), card),
-            `${label} on ${themeId}/${appearance}`,
-          ).toBeGreaterThan(floor);
-        }
+  ] as const)("keeps the %s visible on its card in every theme", (label, part, floor) => {
+    for (const themeId of MOBILE_THEME_IDS) {
+      for (const appearance of APPEARANCES) {
+        const variables = getMobileThemeRuntimeVariables(themeId, appearance, "ios") as Record<
+          string,
+          string
+        >;
+        const card = cardColor(variables);
+        const chrome = listeningPlayerChrome(variables["--color-foreground"]!)[part];
+        expect(
+          contrastRatio(compositeOver(chrome, card), card),
+          `${label} on ${themeId}/${appearance}`,
+        ).toBeGreaterThan(floor);
       }
-    });
-  }
+    }
+  });
 
   it("beats the surface-ramp tier it replaced on every theme", () => {
     for (const themeId of MOBILE_THEME_IDS) {

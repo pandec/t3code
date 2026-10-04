@@ -1,3 +1,4 @@
+import { resolveComposerDispatchMode } from "@t3tools/client-runtime/state/composer-dispatch";
 import { filterComposerPullRequestMatches } from "@t3tools/shared/composerPullRequestMatches";
 import { EnvironmentId, MessageId, ThreadId, type AssistantCitation } from "@t3tools/contracts";
 import {
@@ -5,20 +6,22 @@ import {
   expandAssistantCitationsForProvider,
   serializeAssistantCitation,
 } from "@t3tools/shared/assistantCitations";
+import {
+  DEFAULT_RESOLVED_KEYBINDINGS,
+  compileResolvedKeybindingsConfig,
+  mergeWithDefaultKeybindings,
+} from "@t3tools/shared/keybindings";
 import { describe, expect, it } from "vite-plus/test";
 
 import {
   clampCollapsedComposerCursor,
   collapseExpandedComposerCursor,
+  composerSubmissionIntentForKey,
   composerStateAtPromptEnd,
-  composerSubmissionIntentForEnter,
   detectComposerTrigger,
   expandCollapsedComposerCursor,
   formatAssistantCitationForComposer,
   isCollapsedCursorAdjacentToInlineToken,
-  applyThreadStatusEmoji,
-  parseComposerRenameCommand,
-  parseComposerStatusCommand,
   parseStandaloneComposerSlashCommand,
   replaceTextRange,
 } from "./composer-logic";
@@ -65,7 +68,15 @@ describe("formatAssistantCitationForComposer", () => {
   });
 });
 
-describe("composerSubmissionIntentForEnter", () => {
+describe("composerSubmissionIntentForKey", () => {
+  const input = {
+    keybindings: DEFAULT_RESOLVED_KEYBINDINGS,
+    platform: "Linux",
+    isMobileViewport: false,
+    isDraftThread: false,
+  };
+  const enter = { key: "Enter", metaKey: false, ctrlKey: false, altKey: false, shiftKey: false };
+
   it.each([
     ["enter", "one line", false, "foreground"],
     ["enter", "two\nlines", false, "foreground"],
@@ -74,96 +85,155 @@ describe("composerSubmissionIntentForEnter", () => {
     ["mod-enter-multiline", "two\nlines", true, "foreground"],
     ["mod-enter", "one line", false, null],
     ["mod-enter", "one line", true, "foreground"],
-  ] as const)("uses %s for %j with modifier=%s", (sendShortcut, prompt, modifierKey, expected) => {
+  ] as const)("honors %s for %j", (sendShortcut, prompt, ctrlKey, expected) => {
     expect(
-      composerSubmissionIntentForEnter({
-        isMobileViewport: false,
-        shiftKey: false,
-        modifierKey,
-        isDraftThread: false,
+      composerSubmissionIntentForKey({
+        ...input,
+        event: { ...enter, ctrlKey },
         sendShortcut,
         prompt,
       }),
     ).toBe(expected);
   });
 
-  it.each([
-    ["enter", false, "alternate"],
-    ["enter", true, null],
-    ["mod-enter-multiline", false, "foreground"],
-    ["mod-enter-multiline", true, "alternate"],
-    ["mod-enter", false, "foreground"],
-    ["mod-enter", true, "alternate"],
-  ] as const)(
-    "resolves running follow-ups with %s and shift=%s",
-    (sendShortcut, shiftKey, expected) => {
+  it.each(["MacIntel", "Win32", "Linux"])("uses the configured actions on %s", (platform) => {
+    const modEnter = {
+      ...enter,
+      metaKey: platform === "MacIntel",
+      ctrlKey: platform !== "MacIntel",
+    };
+    for (const sendShortcut of ["enter", "mod-enter", "mod-enter-multiline"] as const) {
+      const running = { ...input, platform, sendShortcut, prompt: "two\nlines", isRunning: true };
+      const intent = composerSubmissionIntentForKey({ ...running, event: modEnter });
+      expect(intent).toBe("alternate");
+      for (const activeTurnDefault of ["queue", "steer"] as const) {
+        expect(
+          resolveComposerDispatchMode({
+            running: true,
+            alternateModifier: intent === "alternate",
+            activeTurnDefault,
+          }),
+        ).toBe(activeTurnDefault === "queue" ? "steer" : "queue");
+      }
       expect(
-        composerSubmissionIntentForEnter({
-          isMobileViewport: false,
-          shiftKey,
-          modifierKey: true,
-          isDraftThread: false,
-          isRunning: true,
+        composerSubmissionIntentForKey({
+          ...input,
+          platform,
           sendShortcut,
-          prompt: "two\nlines",
+          isDraftThread: true,
+          event: { ...modEnter, altKey: true },
         }),
-      ).toBe(expected);
-    },
-  );
-
-  it("submits plain Enter on desktop", () => {
-    expect(
-      composerSubmissionIntentForEnter({
-        isMobileViewport: false,
-        shiftKey: false,
-        modifierKey: false,
-        isDraftThread: true,
-      }),
-    ).toBe("foreground");
+      ).toBe("background");
+      expect(
+        composerSubmissionIntentForKey({
+          ...input,
+          platform,
+          sendShortcut,
+          isDraftThread: true,
+          event: modEnter,
+        }),
+      ).toBe("foreground");
+      expect(
+        composerSubmissionIntentForKey({ ...running, event: { ...enter, shiftKey: true } }),
+      ).toBeNull();
+    }
   });
 
-  it("inserts a newline for plain Enter on mobile", () => {
+  it("leaves queued-message steering on Mod+Shift+Enter outside a draft", () => {
     expect(
-      composerSubmissionIntentForEnter({
-        isMobileViewport: true,
-        shiftKey: false,
-        modifierKey: false,
-        isDraftThread: true,
-      }),
-    ).toBeNull();
-  });
-
-  it("inserts a newline for Shift+Enter", () => {
-    expect(
-      composerSubmissionIntentForEnter({
-        isMobileViewport: false,
-        shiftKey: true,
-        modifierKey: false,
-        isDraftThread: true,
+      composerSubmissionIntentForKey({
+        ...input,
+        isRunning: true,
+        event: { ...enter, ctrlKey: true, shiftKey: true },
       }),
     ).toBeNull();
   });
 
-  it("submits a new thread in the background with Mod+Enter", () => {
+  it("does not start a background thread with the queued-message shortcut", () => {
     expect(
-      composerSubmissionIntentForEnter({
-        isMobileViewport: false,
-        shiftKey: false,
-        modifierKey: true,
+      composerSubmissionIntentForKey({
+        ...input,
         isDraftThread: true,
+        event: { ...enter, ctrlKey: true, shiftKey: true },
+      }),
+    ).toBeNull();
+  });
+
+  it.each([
+    ["mod+arrowup", { key: "ArrowUp", ctrlKey: true }],
+    ["shift+tab", { key: "Tab", shiftKey: true }],
+  ] as const)("accepts a remapped %s action", (key, event) => {
+    const keybindings = mergeWithDefaultKeybindings(
+      compileResolvedKeybindingsConfig([
+        { key, command: "composer.sendBackground", when: "composerFocus && draftThreadRoute" },
+      ]),
+    );
+    expect(
+      composerSubmissionIntentForKey({
+        ...input,
+        keybindings,
+        isDraftThread: true,
+        event: { ...enter, ...event },
       }),
     ).toBe("background");
   });
 
-  it("keeps Mod+Enter in the foreground for an active thread", () => {
+  it("uses remapped keys and removes the old action bindings", () => {
+    const keybindings = mergeWithDefaultKeybindings(
+      compileResolvedKeybindingsConfig([
+        {
+          key: "alt+q",
+          command: "composer.sendAlternate",
+          when: "composerFocus && turnRunning",
+        },
+        {
+          key: "alt+b",
+          command: "composer.sendBackground",
+          when: "composerFocus && draftThreadRoute",
+        },
+      ]),
+    );
+    const custom = { ...input, keybindings };
     expect(
-      composerSubmissionIntentForEnter({
-        isMobileViewport: false,
-        shiftKey: false,
-        modifierKey: true,
-        isDraftThread: false,
+      composerSubmissionIntentForKey({
+        ...custom,
+        isRunning: true,
+        event: { ...enter, key: "q", altKey: true },
+      }),
+    ).toBe("alternate");
+    expect(
+      composerSubmissionIntentForKey({
+        ...custom,
+        isDraftThread: true,
+        event: { ...enter, key: "b", altKey: true },
+      }),
+    ).toBe("background");
+    expect(
+      composerSubmissionIntentForKey({
+        ...custom,
+        isRunning: true,
+        event: { ...enter, ctrlKey: true },
       }),
     ).toBe("foreground");
+    expect(
+      composerSubmissionIntentForKey({
+        ...custom,
+        isDraftThread: true,
+        event: { ...enter, ctrlKey: true, shiftKey: true },
+      }),
+    ).toBeNull();
+    expect(
+      composerSubmissionIntentForKey({ ...custom, event: { ...enter, key: "b", altKey: true } }),
+    ).toBeNull();
+  });
+
+  it.each([
+    { isMobileViewport: true },
+    { event: { ...enter, isComposing: true } },
+    { event: { ...enter, keyCode: 229 } },
+    { event: { ...enter, repeat: true } },
+  ])("does not submit with %j", (override) => {
+    expect(composerSubmissionIntentForKey({ ...input, event: enter, ...override })).toBeNull();
   });
 });
 
@@ -737,125 +807,5 @@ describe("parseStandaloneComposerSlashCommand", () => {
 
   it("ignores slash commands with extra message text", () => {
     expect(parseStandaloneComposerSlashCommand("/plan explain this")).toBeNull();
-  });
-});
-
-describe("parseComposerRenameCommand", () => {
-  it("parses a thread title", () => {
-    expect(parseComposerRenameCommand("/t3-rename My new thread")).toEqual({
-      title: "My new thread",
-    });
-  });
-
-  it("parses an emoji title", () => {
-    expect(parseComposerRenameCommand("/t3-rename ❓ Can I rename T3 Chats?")).toEqual({
-      title: "❓ Can I rename T3 Chats?",
-    });
-  });
-
-  it("parses /t3-name with the same rename semantics", () => {
-    expect(parseComposerRenameCommand("/t3-name Existing title edited")).toEqual({
-      title: "Existing title edited",
-    });
-  });
-
-  it("recognizes a bare command with no title", () => {
-    expect(parseComposerRenameCommand("/t3-rename")).toEqual({ title: null });
-  });
-
-  it("trims surrounding whitespace and the title", () => {
-    expect(parseComposerRenameCommand("  /t3-rename   Padded title   ")).toEqual({
-      title: "Padded title",
-    });
-  });
-
-  it("matches the command case-insensitively", () => {
-    expect(parseComposerRenameCommand("/T3-ReNaMe Mixed case command")).toEqual({
-      title: "Mixed case command",
-    });
-  });
-
-  it("ignores non-matching messages and slash commands", () => {
-    expect(parseComposerRenameCommand("rename this thread")).toBeNull();
-    expect(parseComposerRenameCommand("/t3-renamex Almost a command")).toBeNull();
-    expect(parseComposerRenameCommand("/t3-namex Almost a command")).toBeNull();
-    expect(parseComposerRenameCommand("/plan")).toBeNull();
-  });
-
-  it("accepts multiline titles when the whole message is the rename command", () => {
-    expect(parseComposerRenameCommand("/t3-rename First line\nSecond line")).toEqual({
-      title: "First line\nSecond line",
-    });
-  });
-});
-
-describe("parseComposerStatusCommand", () => {
-  it("parses a single emoji", () => {
-    expect(parseComposerStatusCommand("/t3-status 💡")).toEqual({ emoji: "💡" });
-  });
-
-  it("parses composed emoji graphemes", () => {
-    const englandFlag = "\u{1F3F4}\u{E0067}\u{E0062}\u{E0065}\u{E006E}\u{E0067}\u{E007F}";
-
-    expect(parseComposerStatusCommand("/t3-status 👍🏽")).toEqual({ emoji: "👍🏽" });
-    expect(parseComposerStatusCommand("/t3-status 👨‍👩‍👧")).toEqual({ emoji: "👨‍👩‍👧" });
-    expect(parseComposerStatusCommand("/t3-status 🇵🇱")).toEqual({ emoji: "🇵🇱" });
-    expect(parseComposerStatusCommand(`/t3-status ${englandFlag}`)).toEqual({
-      emoji: englandFlag,
-    });
-    expect(parseComposerStatusCommand("/t3-status 1️⃣")).toEqual({ emoji: "1️⃣" });
-    expect(parseComposerStatusCommand("/t3-status ❤️")).toEqual({ emoji: "❤️" });
-    expect(parseComposerStatusCommand("/t3-status ❤")).toEqual({ emoji: "❤" });
-  });
-
-  it("matches the command case-insensitively and trims whitespace", () => {
-    expect(parseComposerStatusCommand("  /T3-StAtUs   ✅  ")).toEqual({ emoji: "✅" });
-  });
-
-  it("rejects missing or invalid values", () => {
-    expect(parseComposerStatusCommand("/t3-status")).toEqual({ emoji: null });
-    expect(parseComposerStatusCommand("/t3-status done")).toEqual({ emoji: null });
-    expect(parseComposerStatusCommand("/t3-status 💡💡")).toEqual({ emoji: null });
-    expect(parseComposerStatusCommand("/t3-status 💡 done")).toEqual({ emoji: null });
-    expect(parseComposerStatusCommand("/t3-status x💡")).toEqual({ emoji: null });
-    expect(parseComposerStatusCommand("/t3-status 1")).toEqual({ emoji: null });
-    expect(parseComposerStatusCommand("/t3-status 🇵")).toEqual({ emoji: null });
-    expect(parseComposerStatusCommand("/t3-status 💡🏽")).toEqual({ emoji: null });
-    expect(parseComposerStatusCommand("/t3-status 👍🏽🏾")).toEqual({ emoji: null });
-    expect(parseComposerStatusCommand("/t3-status ❤\uFE0F\uFE0F")).toEqual({ emoji: null });
-  });
-
-  it("ignores non-matching messages and slash commands", () => {
-    expect(parseComposerStatusCommand("set status 💡")).toBeNull();
-    expect(parseComposerStatusCommand("/t3-statusx 💡")).toBeNull();
-    expect(parseComposerStatusCommand("/t3-rename 💡")).toBeNull();
-  });
-});
-
-describe("applyThreadStatusEmoji", () => {
-  it("prepends the emoji when the title has none", () => {
-    expect(applyThreadStatusEmoji("Status setup test", "💡")).toBe("💡 Status setup test");
-  });
-
-  it("replaces an existing leading emoji", () => {
-    expect(applyThreadStatusEmoji("💡 Status setup test", "👍")).toBe("👍 Status setup test");
-  });
-
-  it("replaces composed leading emoji graphemes", () => {
-    const englandFlag = "\u{1F3F4}\u{E0067}\u{E0062}\u{E0065}\u{E006E}\u{E0067}\u{E007F}";
-
-    expect(applyThreadStatusEmoji("👍🏽 Skin tone", "💡")).toBe("💡 Skin tone");
-    expect(applyThreadStatusEmoji("👨‍👩‍👧 Family", "💡")).toBe("💡 Family");
-    expect(applyThreadStatusEmoji(`${englandFlag} England`, "💡")).toBe("💡 England");
-    expect(applyThreadStatusEmoji("(🔱) Forked thread", "💡")).toBe("💡 (🔱) Forked thread");
-    expect(applyThreadStatusEmoji("🔱 Forked thread", "💡")).toBe("💡 (🔱) Forked thread");
-  });
-
-  it("keeps non-emoji leading characters", () => {
-    expect(applyThreadStatusEmoji("1. Numbered title", "💡")).toBe("💡 1. Numbered title");
-  });
-
-  it("handles emoji-only titles", () => {
-    expect(applyThreadStatusEmoji("💡", "👍")).toBe("👍");
   });
 });

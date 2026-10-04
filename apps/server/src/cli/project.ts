@@ -1,20 +1,18 @@
 import {
+  AuthAdministrativeScopes,
   CommandId,
+  EnvironmentHttpApi,
   type OrchestrationProjectShell,
-  type OrchestrationReadModel,
+  type ProjectMutation,
+  type ProjectSnapshot,
   ProjectId,
-  ProjectScriptIcon,
   type ServerSettings,
-  type ServerSettingsPatch,
-  type ClientOrchestrationCommand,
 } from "@t3tools/contracts";
-import { resolveProjectScripts } from "@t3tools/shared/projectScripts";
 import { resolveProjectSettings } from "@t3tools/shared/projectSettings";
 import * as Console from "effect/Console";
 import * as Crypto from "effect/Crypto";
-import * as DateTime from "effect/DateTime";
+import * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";
-import * as Equal from "effect/Equal";
 import * as FileSystem from "effect/FileSystem";
 import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
@@ -23,13 +21,25 @@ import * as References from "effect/References";
 import * as Schema from "effect/Schema";
 import { Argument, Command, Flag, GlobalFlag } from "effect/unstable/cli";
 import { FetchHttpClient, HttpClient } from "effect/unstable/http";
+import * as HttpApiClient from "effect/unstable/httpapi/HttpApiClient";
 
 import * as EnvironmentAuth from "../auth/EnvironmentAuth.ts";
 
 import * as ServerConfig from "../config.ts";
+import * as SqlitePersistence from "../persistence/Layers/Sqlite.ts";
+import { ProjectServiceLayerLive } from "../orchestration-v2/runtimeLayer.ts";
+import * as ProjectEnrichmentService from "../project/ProjectEnrichmentService.ts";
+import * as ProjectFaviconResolver from "../project/ProjectFaviconResolver.ts";
+import * as RepositoryIdentityResolver from "../project/RepositoryIdentityResolver.ts";
+import * as ProjectService from "../project/ProjectService.ts";
+import { projectMutationOperation } from "../project/ProjectMutation.ts";
+import * as T3ProjectFileLoader from "../project/T3ProjectFileLoader.ts";
+import {
+  clearPersistedServerRuntimeState,
+  readPersistedServerRuntimeState,
+} from "../serverRuntimeState.ts";
 import * as WorkspacePaths from "../workspace/WorkspacePaths.ts";
 import { type CliAuthLocationFlags, projectLocationFlags, resolveCliAuthConfig } from "./config.ts";
-import { withCliJsonErrorOutput } from "./errorOutput.ts";
 import {
   CliOrchestrationConflictError,
   CliOrchestrationDeclaredResponseError,
@@ -39,21 +49,11 @@ import {
   CliOrchestrationServerUnavailableError,
   CliOrchestrationUndeclaredStatusError,
   cliOrchestrationErrorFromRequest,
-  dispatchLiveOrchestrationCommand,
-  fetchLiveEnvironmentDescriptor,
-  fetchLiveOrchestrationSnapshot,
-  fetchLiveServerSettings,
-  updateLiveServerSettings,
-  resolveCliLiveServerReadTimeouts,
-  withResolvedLiveOrchestrationServer,
 } from "./orchestration.ts";
 import {
-  addProjectAction,
   ProjectActionAlreadyExistsError,
   ProjectActionNotFoundError,
   ProjectActionValidationError,
-  removeProjectAction,
-  updateProjectAction,
 } from "./projectActions.ts";
 import {
   findActiveProjectTarget,
@@ -62,18 +62,8 @@ import {
   ProjectNotFoundError,
 } from "./projectTarget.ts";
 
-type ProjectCommandExecutionMode = "live";
-type ProjectCliDispatchCommand = Extract<
-  ClientOrchestrationCommand,
-  { type: "project.create" | "project.meta.update" | "project.delete" }
->;
-
-const jsonFlag = Flag.Boolean("json").pipe(
-  Flag.withDescription("Emit JSON instead of human-readable output."),
-  Flag.withDefault(false),
-);
-
-const jsonOutput = (value: unknown) => JSON.stringify(value, null, 2);
+type ProjectCommandExecutionMode = "live" | "offline";
+type ProjectCliDispatchCommand = ProjectMutation;
 
 export class ProjectCommandIdGenerationError extends Schema.TaggedError<ProjectCommandIdGenerationError>()(
   "ProjectCommandIdGenerationError",
@@ -159,6 +149,41 @@ const projectCommandUuid = Crypto.Crypto.pipe(
   ),
 );
 
+const ProjectCliRuntimeLive = ProjectServiceLayerLive.pipe(
+  Layer.provideMerge(ProjectEnrichmentService.layer),
+  Layer.provideMerge(RepositoryIdentityResolver.layer),
+  Layer.provideMerge(
+    ProjectFaviconResolver.layer.pipe(
+      Layer.provide(WorkspacePaths.layer),
+      Layer.provide(T3ProjectFileLoader.layer),
+    ),
+  ),
+  Layer.provideMerge(WorkspacePaths.layer),
+  Layer.provideMerge(SqlitePersistence.layerConfig),
+);
+
+const PROJECT_CLI_LIVE_SERVER_TIMEOUT = Duration.seconds(1);
+const withProjectCliSessionToken = <A, E, R>(
+  environmentAuth: EnvironmentAuth.EnvironmentAuth["Service"],
+  run: (token: string) => Effect.Effect<A, E, R>,
+) =>
+  Effect.acquireUseRelease(
+    environmentAuth.issueSession({
+      scopes: AuthAdministrativeScopes,
+      label: "t3 project cli",
+    }),
+    (issued) => run(issued.token),
+    (issued) => environmentAuth.revokeSession(issued.sessionId).pipe(Effect.ignore({ log: true })),
+  );
+
+const withProjectCliLiveServerTimeout = <A, E, R>(effect: Effect.Effect<A, E, R>) =>
+  effect.pipe(Effect.timeout(PROJECT_CLI_LIVE_SERVER_TIMEOUT));
+
+const makeLiveServerClient = (origin: string) =>
+  HttpApiClient.make(EnvironmentHttpApi, {
+    baseUrl: origin,
+  });
+
 const resolveProjectTitle = Effect.fn("resolveProjectTitle")(function* (
   workspaceRoot: string,
   explicitTitle?: string,
@@ -179,53 +204,74 @@ const resolveProjectTitle = Effect.fn("resolveProjectTitle")(function* (
   return basename.length > 0 ? basename : "project";
 });
 
-export const addProjectToOrchestration = Effect.fn("addProjectToOrchestration")(function* (input: {
-  readonly projects: ReadonlyArray<{
-    readonly id: ProjectId;
-    readonly title: string;
-    readonly workspaceRoot: string;
-    readonly deletedAt?: string | null;
-  }>;
-  readonly workspaceRoot: string;
-  readonly title?: string;
-  readonly dispatch: (
-    command: Extract<ClientOrchestrationCommand, { type: "project.create" }>,
-  ) => Effect.Effect<unknown, Error, FileSystem.FileSystem | HttpClient.HttpClient | Path.Path>;
-}) {
-  const workspaceRoot = yield* normalizeWorkspaceRootForProjectCommand(input.workspaceRoot);
-  const existingProject = input.projects.find(
-    (project) => project.deletedAt == null && project.workspaceRoot === workspaceRoot,
-  );
-  if (existingProject) {
-    return yield* new ProjectAlreadyExistsError({
-      operation: "addProject",
-      projectId: existingProject.id,
-      workspaceRoot,
+const fetchLiveOrchestrationSnapshot = (origin: string, bearerToken: string) =>
+  Effect.gen(function* () {
+    const client = yield* makeLiveServerClient(origin);
+    return yield* client.projects.snapshot({
+      headers: { authorization: `Bearer ${bearerToken}` },
     });
-  }
+  }).pipe(
+    withProjectCliLiveServerTimeout,
+    Effect.mapError(projectCommandErrorFromLiveServerRequest),
+  );
 
-  const title = yield* resolveProjectTitle(workspaceRoot, input.title);
-  const projectId = ProjectId.make(yield* projectCommandUuid);
-  yield* input.dispatch({
-    type: "project.create",
-    commandId: CommandId.make(yield* projectCommandUuid),
-    projectId,
-    title,
-    workspaceRoot,
-    createdAt: DateTime.formatIso(yield* DateTime.now),
-  });
-  return { projectId, title, workspaceRoot };
+const dispatchLiveOrchestrationCommand = (
+  origin: string,
+  bearerToken: string,
+  command: ProjectCliDispatchCommand,
+) =>
+  Effect.gen(function* () {
+    const client = yield* makeLiveServerClient(origin);
+    yield* client.projects.mutate({
+      headers: { authorization: `Bearer ${bearerToken}` },
+      payload: command,
+    } as Parameters<typeof client.projects.mutate>[0]);
+  }).pipe(
+    withProjectCliLiveServerTimeout,
+    Effect.mapError(projectCommandErrorFromLiveServerRequest),
+  );
+
+const getOfflineSnapshot = Effect.fn("getOfflineSnapshot")(function* () {
+  const projects = yield* ProjectService.ProjectService;
+  return yield* projects.snapshot;
 });
+
+const tryResolveLiveProjectExecutionMode = Effect.fn("tryResolveLiveProjectExecutionMode")(
+  function* (
+    environmentAuth: EnvironmentAuth.EnvironmentAuth["Service"],
+    config: ServerConfig.ServerConfig["Service"],
+  ) {
+    const runtimeState = yield* readPersistedServerRuntimeState(config.serverRuntimeStatePath);
+    if (Option.isNone(runtimeState)) {
+      return Option.none<{ readonly origin: string }>();
+    }
+
+    const attempt = withProjectCliSessionToken(environmentAuth, (token) =>
+      fetchLiveOrchestrationSnapshot(runtimeState.value.origin, token).pipe(
+        Effect.as({
+          origin: runtimeState.value.origin,
+        }),
+      ),
+    );
+
+    const attempted = yield* Effect.result(attempt);
+    if (attempted._tag === "Success") {
+      return Option.some(attempted.success);
+    }
+
+    yield* Effect.logDebug("Failed to connect to the persisted project CLI server.", {
+      origin: runtimeState.value.origin,
+      cause: attempted.failure,
+    });
+    yield* clearPersistedServerRuntimeState(config.serverRuntimeStatePath);
+    return Option.none<{ readonly origin: string }>();
+  },
+);
 
 const runProjectMutation = Effect.fn("runProjectMutation")(function* (
   flags: CliAuthLocationFlags,
-  json: boolean,
   run: (input: {
-    readonly snapshot: OrchestrationReadModel;
-    readonly getSettings: Effect.Effect<ServerSettings, Error, HttpClient.HttpClient>;
-    readonly updateSettings: (
-      patch: ServerSettingsPatch,
-    ) => Effect.Effect<ServerSettings, Error, HttpClient.HttpClient>;
+    readonly snapshot: ProjectSnapshot;
     readonly dispatch: (
       command: ProjectCliDispatchCommand,
     ) => Effect.Effect<void, Error, FileSystem.FileSystem | HttpClient.HttpClient | Path.Path>;
@@ -239,69 +285,54 @@ const runProjectMutation = Effect.fn("runProjectMutation")(function* (
     | Path.Path
     | WorkspacePaths.WorkspacePaths
   >,
-  options?: {
-    readonly requireConditionalProjectScriptUpdates?: boolean;
-  },
 ) {
   const logLevel = yield* GlobalFlag.LogLevel;
+  const config = yield* resolveCliAuthConfig(flags, logLevel);
+  const minimumLogLevel = config.logLevel;
 
   return yield* Effect.gen(function* () {
-    const config = yield* resolveCliAuthConfig(flags, logLevel);
-    const minimumLogLevel = json ? "None" : config.logLevel;
+    const environmentAuth = yield* EnvironmentAuth.EnvironmentAuth;
+    const liveMode = yield* tryResolveLiveProjectExecutionMode(environmentAuth, config);
+
+    if (Option.isSome(liveMode)) {
+      return yield* withProjectCliSessionToken(environmentAuth, (token) =>
+        Effect.gen(function* () {
+          const snapshot = yield* fetchLiveOrchestrationSnapshot(liveMode.value.origin, token);
+          const output = yield* run({
+            snapshot,
+            dispatch: (command) =>
+              dispatchLiveOrchestrationCommand(liveMode.value.origin, token, command),
+            mode: "live",
+          });
+          yield* Console.log(output);
+        }),
+      );
+    }
+
+    const offlineRuntimeLayer = ProjectCliRuntimeLive.pipe(
+      Layer.provide(ServerConfig.layer(config)),
+      Layer.provide(Layer.succeed(References.MinimumLogLevel, minimumLogLevel)),
+    );
 
     return yield* Effect.gen(function* () {
-      const environmentAuth = yield* EnvironmentAuth.EnvironmentAuth;
-      const timeouts = yield* resolveCliLiveServerReadTimeouts(flags.timeoutMs ?? Option.none());
-
-      const liveAttempt = yield* Effect.result(
-        withResolvedLiveOrchestrationServer(
-          { environmentAuth, config, label: "t3 project cli", timeouts },
-          (live, token) =>
-            Effect.gen(function* () {
-              if (options?.requireConditionalProjectScriptUpdates) {
-                const descriptor = yield* fetchLiveEnvironmentDescriptor(live.origin, timeouts);
-                if (descriptor.capabilities.conditionalProjectSettingsScriptUpdates !== true) {
-                  return yield* new ProjectActionServerUnsupportedError({
-                    operation: "validateProjectActionServerCapability",
-                    serverVersion: descriptor.serverVersion,
-                  });
-                }
-              }
-              const snapshot = yield* fetchLiveOrchestrationSnapshot(live.origin, token, timeouts);
-              const output = yield* run({
-                snapshot,
-                getSettings: fetchLiveServerSettings(live.origin, token, timeouts),
-                updateSettings: (patch) => updateLiveServerSettings(live.origin, token, patch),
-                dispatch: (command) =>
-                  dispatchLiveOrchestrationCommand(live.origin, token, command).pipe(Effect.asVoid),
-                mode: "live",
-              });
-              yield* Console.log(output);
-            }),
-        ),
-      );
-
-      if (liveAttempt._tag === "Failure") {
-        return yield* Effect.fail(liveAttempt.failure);
-      }
-      if (Option.isSome(liveAttempt.success)) {
-        return;
-      }
-      return yield* new CliOrchestrationServerUnavailableError({
-        operation: "resolveLiveServer",
-        statePath: config.serverRuntimeStatePath,
+      const snapshot = yield* getOfflineSnapshot();
+      const projects = yield* ProjectService.ProjectService;
+      const output = yield* run({
+        snapshot,
+        dispatch: (command) => projectMutationOperation(projects, command).pipe(Effect.asVoid),
+        mode: "offline",
       });
-    }).pipe(
-      Effect.provide(
-        Layer.mergeAll(EnvironmentAuth.runtimeLayer, WorkspacePaths.layer).pipe(
-          Layer.provideMerge(FetchHttpClient.layer),
-          Layer.provide(ServerConfig.layer(config)),
-          Layer.provide(Layer.succeed(References.MinimumLogLevel, minimumLogLevel)),
-        ),
+      yield* Console.log(output);
+    }).pipe(Effect.provide(offlineRuntimeLayer));
+  }).pipe(
+    Effect.provide(
+      Layer.mergeAll(EnvironmentAuth.runtimeLayer, WorkspacePaths.layer).pipe(
+        Layer.provideMerge(FetchHttpClient.layer),
+        Layer.provide(ServerConfig.layer(config)),
+        Layer.provide(Layer.succeed(References.MinimumLogLevel, minimumLogLevel)),
       ),
-      Effect.provideService(References.MinimumLogLevel, minimumLogLevel),
-    );
-  }).pipe(withCliJsonErrorOutput(json));
+    ),
+  );
 });
 
 const projectAddCommand = Command.make("add", {
@@ -310,31 +341,42 @@ const projectAddCommand = Command.make("add", {
     Argument.withDescription("Workspace root to add as a project."),
   ),
   title: Flag.String("title").pipe(Flag.withDescription("Optional project title."), Flag.optional),
-  json: jsonFlag,
 }).pipe(
   Command.withDescription("Add a project."),
   Command.withHandler((flags) =>
     runProjectMutation(
       flags,
-      flags.json,
       Effect.fn("projectAddMutation")(function* ({
         snapshot,
         dispatch,
       }: {
-        readonly snapshot: OrchestrationReadModel;
+        readonly snapshot: ProjectSnapshot;
         readonly dispatch: (
           command: ProjectCliDispatchCommand,
         ) => Effect.Effect<void, Error, FileSystem.FileSystem | HttpClient.HttpClient | Path.Path>;
       }) {
-        const { projectId, title, workspaceRoot } = yield* addProjectToOrchestration({
-          projects: snapshot.projects,
-          workspaceRoot: flags.workspaceRoot,
-          ...(Option.isSome(flags.title) ? { title: flags.title.value } : {}),
-          dispatch,
+        const workspaceRoot = yield* normalizeWorkspaceRootForProjectCommand(flags.workspaceRoot);
+        const existingProject = snapshot.projects.find(
+          (project) => project.deletedAt === null && project.workspaceRoot === workspaceRoot,
+        );
+        if (existingProject) {
+          return yield* new ProjectAlreadyExistsError({
+            operation: "addProject",
+            projectId: existingProject.id,
+            workspaceRoot,
+          });
+        }
+
+        const title = yield* resolveProjectTitle(workspaceRoot, Option.getOrUndefined(flags.title));
+        const projectId = ProjectId.make(yield* projectCommandUuid);
+        yield* dispatch({
+          type: "project.create",
+          commandId: CommandId.make(yield* projectCommandUuid),
+          projectId,
+          title,
+          workspaceRoot,
         });
-        return flags.json
-          ? jsonOutput({ projectId, title, workspaceRoot, action: "added" })
-          : `Added project ${projectId} (${title}) at ${workspaceRoot}.`;
+        return `Added project ${projectId} (${title}) at ${workspaceRoot}.`;
       }),
     ),
   ),
@@ -345,7 +387,6 @@ const projectRemoveCommand = Command.make("remove", {
   project: Argument.String("project").pipe(
     Argument.withDescription("Project id or workspace root to remove."),
   ),
-  json: jsonFlag,
   force: Flag.Boolean("force").pipe(
     Flag.withDescription("Delete the project and all of its threads."),
     Flag.withDefault(false),
@@ -355,12 +396,11 @@ const projectRemoveCommand = Command.make("remove", {
   Command.withHandler((flags) =>
     runProjectMutation(
       flags,
-      flags.json,
       Effect.fn("projectRemoveMutation")(function* ({
         snapshot,
         dispatch,
       }: {
-        readonly snapshot: OrchestrationReadModel;
+        readonly snapshot: ProjectSnapshot;
         readonly dispatch: (
           command: ProjectCliDispatchCommand,
         ) => Effect.Effect<void, Error, FileSystem.FileSystem | HttpClient.HttpClient | Path.Path>;
@@ -375,9 +415,7 @@ const projectRemoveCommand = Command.make("remove", {
           projectId: project.id,
           force: flags.force,
         });
-        return flags.json
-          ? jsonOutput({ projectId: project.id, title: project.title, action: "removed" })
-          : `Removed project ${project.id} (${project.title}).`;
+        return `Removed project ${project.id} (${project.title}).`;
       }),
     ),
   ),
@@ -389,18 +427,16 @@ const projectRenameCommand = Command.make("rename", {
     Argument.withDescription("Project id or workspace root to rename."),
   ),
   title: Argument.String("title").pipe(Argument.withDescription("New project title.")),
-  json: jsonFlag,
 }).pipe(
   Command.withDescription("Rename a project."),
   Command.withHandler((flags) =>
     runProjectMutation(
       flags,
-      flags.json,
       Effect.fn("projectRenameMutation")(function* ({
         snapshot,
         dispatch,
       }: {
-        readonly snapshot: OrchestrationReadModel;
+        readonly snapshot: ProjectSnapshot;
         readonly dispatch: (
           command: ProjectCliDispatchCommand,
         ) => Effect.Effect<void, Error, FileSystem.FileSystem | HttpClient.HttpClient | Path.Path>;
@@ -411,84 +447,20 @@ const projectRenameCommand = Command.make("rename", {
         });
         const nextTitle = yield* resolveProjectTitle(project.workspaceRoot, flags.title);
         if (nextTitle === project.title) {
-          return flags.json
-            ? jsonOutput({
-                projectId: project.id,
-                title: nextTitle,
-                previousTitle: project.title,
-                action: "unchanged",
-              })
-            : `Project ${project.id} is already named ${nextTitle}.`;
+          return `Project ${project.id} is already named ${nextTitle}.`;
         }
 
         yield* dispatch({
-          type: "project.meta.update",
+          type: "project.update",
           commandId: CommandId.make(yield* projectCommandUuid),
           projectId: project.id,
           title: nextTitle,
         });
-        return flags.json
-          ? jsonOutput({
-              projectId: project.id,
-              title: nextTitle,
-              previousTitle: project.title,
-              action: "renamed",
-            })
-          : `Renamed project ${project.id} to ${nextTitle}.`;
+        return `Renamed project ${project.id} to ${nextTitle}.`;
       }),
     ),
   ),
 );
-
-const runProjectList = Effect.fn("runProjectList")(function* (
-  flags: CliAuthLocationFlags,
-  json: boolean,
-) {
-  const logLevel = yield* GlobalFlag.LogLevel;
-  const config = yield* resolveCliAuthConfig(flags, logLevel);
-  const minimumLogLevel = json ? "None" : config.logLevel;
-
-  return yield* Effect.gen(function* () {
-    const environmentAuth = yield* EnvironmentAuth.EnvironmentAuth;
-    const timeouts = yield* resolveCliLiveServerReadTimeouts(flags.timeoutMs ?? Option.none());
-    const liveAttempt = yield* Effect.result(
-      withResolvedLiveOrchestrationServer(
-        { environmentAuth, config, label: "t3 project cli", timeouts },
-        (live, token) =>
-          fetchLiveServerSettings(live.origin, token, timeouts).pipe(
-            Effect.map((settings) =>
-              live.shell.projects.map((project) => ({
-                ...project,
-                ...projectListSummary(project, settings),
-              })),
-            ),
-          ),
-      ),
-    );
-    if (liveAttempt._tag === "Failure") {
-      return yield* liveAttempt.failure;
-    }
-    if (Option.isSome(liveAttempt.success)) {
-      return {
-        mode: "live" as const,
-        projects: liveAttempt.success.value,
-      };
-    }
-    return yield* new CliOrchestrationServerUnavailableError({
-      operation: "resolveLiveServer",
-      statePath: config.serverRuntimeStatePath,
-    });
-  }).pipe(
-    Effect.provide(
-      Layer.mergeAll(EnvironmentAuth.runtimeLayer, WorkspacePaths.layer).pipe(
-        Layer.provideMerge(FetchHttpClient.layer),
-        Layer.provide(ServerConfig.layer(config)),
-        Layer.provide(Layer.succeed(References.MinimumLogLevel, minimumLogLevel)),
-      ),
-    ),
-    Effect.provideService(References.MinimumLogLevel, minimumLogLevel),
-  );
-});
 
 export const projectListSummary = (
   project: OrchestrationProjectShell,
@@ -516,313 +488,7 @@ export const projectListSummary = (
   };
 };
 
-const projectListCommand = Command.make("list", {
-  ...projectLocationFlags,
-  json: jsonFlag,
-}).pipe(
-  Command.withDescription("List active projects."),
-  Command.withHandler((flags) =>
-    Effect.gen(function* () {
-      const { mode, projects: projectShells } = yield* runProjectList(flags, flags.json);
-      const projects = projectShells.map((project) => projectListSummary(project));
-      yield* Console.log(
-        flags.json
-          ? jsonOutput({ mode, projects })
-          : projects.length === 0
-            ? "No active projects."
-            : projects
-                .map((project) => `${project.id}\t${project.title}\t${project.workspaceRoot}`)
-                .join("\n"),
-      );
-    }).pipe(withCliJsonErrorOutput(flags.json)),
-  ),
-);
-
-const projectActionTargetArgument = Argument.String("project").pipe(
-  Argument.withDescription("Project id or workspace root."),
-);
-
-const projectActionIdArgument = Argument.String("action").pipe(
-  Argument.withDescription("Exact project action id."),
-);
-
-const projectActionIconFlag = Flag.Literals("icon", ProjectScriptIcon.literals).pipe(
-  Flag.withDescription("Action icon."),
-);
-
-const clearedSetupActionMessage = (actionIds: ReadonlyArray<string>) =>
-  actionIds.length === 0 ? "" : ` Cleared automatic worktree setup from: ${actionIds.join(", ")}.`;
-
-const findProjectForAction = Effect.fn("findProjectForAction")(function* (
-  snapshot: OrchestrationReadModel,
-  identifier: string,
-) {
-  const target = yield* findActiveProjectTarget({
-    projects: snapshot.projects,
-    identifier,
-  });
-  return snapshot.projects.find((project) => project.id === target.id)!;
-});
-
-const projectActionListCommand = Command.make("list", {
-  ...projectLocationFlags,
-  project: projectActionTargetArgument,
-  json: jsonFlag,
-}).pipe(
-  Command.withDescription("List a project's actions."),
-  Command.withHandler((flags) =>
-    runProjectMutation(flags, flags.json, ({ snapshot, mode, getSettings }) =>
-      Effect.gen(function* () {
-        const project = yield* findProjectForAction(snapshot, flags.project);
-        const scripts = resolveProjectScripts(yield* getSettings, project);
-        return flags.json
-          ? jsonOutput({
-              mode,
-              projectId: project.id,
-              title: project.title,
-              workspaceRoot: project.workspaceRoot,
-              actions: scripts,
-            })
-          : scripts.length === 0
-            ? `Project ${project.id} has no actions.`
-            : scripts
-                .map((action) => `${action.id}\t${action.name}\t${action.icon}\t${action.command}`)
-                .join("\n");
-      }),
-    ),
-  ),
-);
-
-const projectActionAddCommand = Command.make("add", {
-  ...projectLocationFlags,
-  project: projectActionTargetArgument,
-  id: Flag.String("id").pipe(Flag.withDescription("Optional stable action id."), Flag.optional),
-  name: Flag.String("name").pipe(Flag.withDescription("Action display name.")),
-  command: Flag.String("command").pipe(Flag.withDescription("Shell command to run.")),
-  icon: projectActionIconFlag.pipe(Flag.withDefault("play")),
-  runOnWorktreeCreate: Flag.Boolean("run-on-worktree-create").pipe(
-    Flag.withDescription("Run automatically after creating a worktree."),
-    Flag.withDefault(false),
-  ),
-  async: Flag.Boolean("async").pipe(
-    Flag.withDescription("Let a setup action continue while the agent starts."),
-    Flag.optional,
-  ),
-  previewUrl: Flag.String("preview-url").pipe(
-    Flag.withDescription("Optional desktop preview URL."),
-    Flag.optional,
-  ),
-  autoOpenPreview: Flag.Boolean("auto-open-preview").pipe(
-    Flag.withDescription("Open the configured preview automatically."),
-    Flag.withDefault(false),
-  ),
-  json: jsonFlag,
-}).pipe(
-  Command.withDescription("Add a project action."),
-  Command.withHandler((flags) =>
-    runProjectMutation(
-      flags,
-      flags.json,
-      Effect.fn("projectActionAddMutation")(function* ({ snapshot, getSettings, updateSettings }) {
-        const project = yield* findProjectForAction(snapshot, flags.project);
-        const scripts = resolveProjectScripts(yield* getSettings, project);
-        const result = addProjectAction({
-          projectId: project.id,
-          scripts: scripts,
-          action: {
-            ...(Option.isSome(flags.id) ? { id: flags.id.value } : {}),
-            name: flags.name,
-            command: flags.command,
-            icon: flags.icon,
-            runOnWorktreeCreate: flags.runOnWorktreeCreate,
-            ...(Option.isSome(flags.async) ? { async: flags.async.value } : {}),
-            ...(Option.isSome(flags.previewUrl) ? { previewUrl: flags.previewUrl.value } : {}),
-            autoOpenPreview: flags.autoOpenPreview,
-          },
-        });
-        if ("_tag" in result) {
-          return yield* result;
-        }
-        yield* updateSettings({
-          projectScriptUpdate: {
-            projectId: project.id,
-            expectedScripts: Array.from(scripts),
-            scripts: Array.from(result.scripts),
-          },
-        });
-        return flags.json
-          ? jsonOutput({
-              projectId: project.id,
-              action: "added",
-              projectAction: result.action,
-              clearedRunOnWorktreeCreate: result.clearedRunOnWorktreeCreate,
-            })
-          : `Added action ${result.action.id} (${result.action.name}) to project ${project.id}.${clearedSetupActionMessage(result.clearedRunOnWorktreeCreate)}`;
-      }),
-      { requireConditionalProjectScriptUpdates: true },
-    ),
-  ),
-);
-
-const projectActionUpdateCommand = Command.make("update", {
-  ...projectLocationFlags,
-  project: projectActionTargetArgument,
-  actionId: projectActionIdArgument,
-  name: Flag.String("name").pipe(Flag.withDescription("New action display name."), Flag.optional),
-  command: Flag.String("command").pipe(Flag.withDescription("New shell command."), Flag.optional),
-  icon: projectActionIconFlag.pipe(Flag.optional),
-  runOnWorktreeCreate: Flag.Boolean("run-on-worktree-create").pipe(
-    Flag.withDescription("Enable or disable automatic worktree setup."),
-    Flag.optional,
-  ),
-  async: Flag.Boolean("async").pipe(
-    Flag.withDescription("Enable or disable asynchronous setup."),
-    Flag.optional,
-  ),
-  previewUrl: Flag.String("preview-url").pipe(
-    Flag.withDescription("New desktop preview URL."),
-    Flag.optional,
-  ),
-  clearPreviewUrl: Flag.Boolean("clear-preview-url").pipe(
-    Flag.withDescription("Remove the preview URL and automatic preview setting."),
-    Flag.withDefault(false),
-  ),
-  autoOpenPreview: Flag.Boolean("auto-open-preview").pipe(
-    Flag.withDescription("Enable or disable automatic preview opening."),
-    Flag.optional,
-  ),
-  json: jsonFlag,
-}).pipe(
-  Command.withDescription("Update a project action."),
-  Command.withHandler((flags) =>
-    runProjectMutation(
-      flags,
-      flags.json,
-      Effect.fn("projectActionUpdateMutation")(function* ({
-        snapshot,
-        getSettings,
-        updateSettings,
-      }) {
-        const project = yield* findProjectForAction(snapshot, flags.project);
-        const scripts = resolveProjectScripts(yield* getSettings, project);
-        if (flags.clearPreviewUrl && Option.isSome(flags.previewUrl)) {
-          return yield* new ProjectActionValidationError({
-            field: "previewUrl",
-            detail: "cannot be set and cleared in the same command",
-          });
-        }
-        const result = updateProjectAction({
-          projectId: project.id,
-          scripts: scripts,
-          actionId: flags.actionId,
-          updates: {
-            ...(Option.isSome(flags.name) ? { name: flags.name.value } : {}),
-            ...(Option.isSome(flags.command) ? { command: flags.command.value } : {}),
-            ...(Option.isSome(flags.icon) ? { icon: flags.icon.value } : {}),
-            ...(Option.isSome(flags.runOnWorktreeCreate)
-              ? { runOnWorktreeCreate: flags.runOnWorktreeCreate.value }
-              : {}),
-            ...(Option.isSome(flags.async) ? { async: flags.async.value } : {}),
-            ...(flags.clearPreviewUrl
-              ? { previewUrl: null }
-              : Option.isSome(flags.previewUrl)
-                ? { previewUrl: flags.previewUrl.value }
-                : {}),
-            ...(Option.isSome(flags.autoOpenPreview)
-              ? { autoOpenPreview: flags.autoOpenPreview.value }
-              : {}),
-          },
-        });
-        if ("_tag" in result) {
-          return yield* result;
-        }
-        const changed = !Equal.equals(result.scripts, scripts);
-        yield* updateSettings({
-          projectScriptUpdate: {
-            projectId: project.id,
-            expectedScripts: Array.from(scripts),
-            scripts: Array.from(result.scripts),
-          },
-        });
-        return flags.json
-          ? jsonOutput({
-              projectId: project.id,
-              action: changed ? "updated" : "unchanged",
-              projectAction: result.action,
-              clearedRunOnWorktreeCreate: result.clearedRunOnWorktreeCreate,
-            })
-          : changed
-            ? `Updated action ${result.action.id} (${result.action.name}) in project ${project.id}.${clearedSetupActionMessage(result.clearedRunOnWorktreeCreate)}`
-            : `Action ${result.action.id} is unchanged.`;
-      }),
-      { requireConditionalProjectScriptUpdates: true },
-    ),
-  ),
-);
-
-const projectActionRemoveCommand = Command.make("remove", {
-  ...projectLocationFlags,
-  project: projectActionTargetArgument,
-  actionId: projectActionIdArgument,
-  json: jsonFlag,
-}).pipe(
-  Command.withDescription("Remove a project action."),
-  Command.withHandler((flags) =>
-    runProjectMutation(
-      flags,
-      flags.json,
-      Effect.fn("projectActionRemoveMutation")(function* ({
-        snapshot,
-        getSettings,
-        updateSettings,
-      }) {
-        const project = yield* findProjectForAction(snapshot, flags.project);
-        const scripts = resolveProjectScripts(yield* getSettings, project);
-        const result = removeProjectAction({
-          projectId: project.id,
-          scripts: scripts,
-          actionId: flags.actionId,
-        });
-        if ("_tag" in result) {
-          return yield* result;
-        }
-        yield* updateSettings({
-          projectScriptUpdate: {
-            projectId: project.id,
-            expectedScripts: Array.from(scripts),
-            scripts: Array.from(result.scripts),
-          },
-        });
-        return flags.json
-          ? jsonOutput({
-              projectId: project.id,
-              action: "removed",
-              projectAction: result.action,
-            })
-          : `Removed action ${result.action.id} (${result.action.name}) from project ${project.id}.`;
-      }),
-      { requireConditionalProjectScriptUpdates: true },
-    ),
-  ),
-);
-
-const projectActionCommand = Command.make("action").pipe(
-  Command.withDescription("Manage project actions."),
-  Command.withSubcommands([
-    projectActionListCommand,
-    projectActionAddCommand,
-    projectActionUpdateCommand,
-    projectActionRemoveCommand,
-  ]),
-);
-
 export const projectCommand = Command.make("project").pipe(
   Command.withDescription("Manage projects."),
-  Command.withSubcommands([
-    projectListCommand,
-    projectAddCommand,
-    projectRemoveCommand,
-    projectRenameCommand,
-    projectActionCommand,
-  ]),
+  Command.withSubcommands([projectAddCommand, projectRemoveCommand, projectRenameCommand]),
 );

@@ -3,11 +3,7 @@
 import { threadPullRequestLinkMode } from "@t3tools/client-runtime/thread-pull-request-compatibility";
 import { visibleThreadPullRequests } from "@t3tools/shared/threadPullRequests";
 
-import {
-  parseScopedThreadKey,
-  scopeProjectRef,
-  scopeThreadRef,
-} from "@t3tools/client-runtime/environment";
+import { scopeProjectRef, scopeThreadRef } from "@t3tools/client-runtime/environment";
 import {
   canCreateProjectInEnvironment,
   getCloneDestinationBrowsePath,
@@ -34,7 +30,6 @@ import {
   settlePromise,
   squashAtomCommandFailure,
 } from "@t3tools/client-runtime/state/runtime";
-import { canForkConversation } from "@t3tools/client-runtime/state/thread-fork";
 import {
   type DesktopWslState,
   type EnvironmentId,
@@ -49,12 +44,7 @@ import {
 import { useLocation, useNavigate, useParams } from "@tanstack/react-router";
 import * as Option from "effect/Option";
 import {
-  AlarmClockIcon,
-  AlarmClockOffIcon,
-  ArchiveIcon,
   ArrowLeftIcon,
-  ArrowUpToLineIcon,
-  CalendarIcon,
   CircleCheckIcon,
   CircleDotIcon,
   ArrowLeftRightIcon,
@@ -68,7 +58,6 @@ import {
   FolderIcon,
   FolderPlusIcon,
   GitForkIcon,
-  GroupIcon,
   MessageSquareDashedIcon,
   LinkIcon,
   MessageSquareIcon,
@@ -107,18 +96,6 @@ import { useHandleNewThread } from "../hooks/useHandleNewThread";
 import { useSavedPromptList } from "../hooks/useSavedPrompts";
 import { savedPromptPreview } from "./chat/composerPromptPicker";
 import { useThreadActions } from "../hooks/useThreadActions";
-import { useThreadGroupCatalog } from "../hooks/useThreadGroups";
-import { groupMovableThreads, moveThreadsToGroup } from "../lib/threadGroupMove";
-import { useThreadSelectionStore } from "../threadSelectionStore";
-import { requestCustomSnooze } from "./CustomSnoozeDialog";
-import { openThreadGroupsDialog } from "./sidebar/threadGroupsDialogStore";
-import { resolveSnoozePresets } from "./Sidebar.snooze";
-import { threadGroupId } from "@t3tools/shared/threadGroups";
-import {
-  canSnooze,
-  canSnoozeUntilDone,
-  effectiveSnoozed,
-} from "@t3tools/client-runtime/state/thread-settled";
 import { useProjectAccentColors } from "../hooks/useProjectAccentColors";
 import { useAccentTintSettings, useClientSettings } from "../hooks/useSettings";
 import { useOpenPanelPullRequestUrl } from "../hooks/useOpenPanelPullRequestUrl";
@@ -138,7 +115,6 @@ import { filesystemEnvironment } from "../state/filesystem";
 import { projectEnvironment } from "../state/projects";
 import { useEnvironmentQuery } from "../state/query";
 import { serverEnvironment } from "../state/server";
-import { appAtomRegistry } from "../rpc/atomRegistry";
 import { threadEnvironment } from "../state/threads";
 import { sourceControlEnvironment } from "../state/sourceControl";
 import { useAtomCommand } from "../state/use-atom-command";
@@ -147,17 +123,7 @@ import { useScratchProject } from "../hooks/useScratchProject";
 import { useNewProject } from "../hooks/useNewProject";
 import { isScratchProject } from "@t3tools/client-runtime/state/projects";
 import { useEnvironments, usePrimaryEnvironmentId } from "../state/environments";
-import {
-  readEnvironmentSupportsActiveReorder,
-  readEnvironmentSupportsPinReorder,
-  readEnvironmentSupportsSnoozeIndefinite,
-  readEnvironmentSupportsSnoozeUntilDone,
-  readThreadShells,
-  useProjects,
-  useServerConfigs,
-  useThreadShells,
-  waitForProject,
-} from "../state/entities";
+import { useProjects, useServerConfigs, useThreadShells, waitForProject } from "../state/entities";
 import { useThreadSearch } from "../state/queries";
 import { resolveThreadActionProjectRef, startNewThreadFromContext } from "../lib/chatThreadActions";
 import {
@@ -180,7 +146,6 @@ import {
   useRightPanelStore,
 } from "../rightPanelStore";
 import { getLatestThreadForProject, sortThreads } from "../lib/threadSort";
-import { planThreadMoveToTop } from "../lib/threadMoveToTop";
 import {
   cn,
   getLocalFileManagerName,
@@ -200,11 +165,9 @@ import {
 import {
   ADDON_ICON_CLASS,
   browseInputEndPaddingClass,
-  buildArchiveCurrentThreadAction,
   buildSavedPromptsSubmenu,
   SAVED_PROMPTS_GROUP_VALUE,
   savedPromptItemValue,
-  buildArchivedThreadsActionItems,
   buildCurrentThreadActionItems,
   buildThreadCopyActionItems,
   buildBrowseGroups,
@@ -213,17 +176,13 @@ import {
   buildRootGroups,
   buildThreadActionItems,
   buildLinkedThreadActionItems,
-  buildMoveToGroupItems,
   buildRenameThreadViewItems,
-  buildSnoozeThreadViewItems,
   resolveThreadUtilityOpenTarget,
   enumerateCommandPaletteItems,
   RENAME_THREAD_VIEW_VALUE,
-  SNOOZE_THREAD_VIEW_VALUE,
   type CommandPaletteActionItem,
   type CommandPaletteThreadActionId,
   type CommandPaletteOpenIntent,
-  type CommandPaletteProject,
   type CommandPaletteSubmenuItem,
   type CommandPaletteView,
   filterCommandPaletteGroups,
@@ -235,11 +194,7 @@ import {
   reduceCommandPaletteUiState,
   type SearchOverlayMode,
 } from "./CommandPalette.logic";
-import {
-  orderItemsByPreferredIds,
-  resolveArchiveToggleAction,
-  sortLogicalProjectsForSidebar,
-} from "./Sidebar.logic";
+import { orderItemsByPreferredIds, sortLogicalProjectsForSidebar } from "./Sidebar.logic";
 import { resolveEnvironmentOptionLabel } from "./BranchToolbar.logic";
 import { CommandPaletteContent } from "./CommandPaletteContent";
 import { CommandPaletteResults } from "./CommandPaletteResults";
@@ -259,7 +214,11 @@ import {
 } from "./ThreadCommandSubtitle";
 import { ThreadRowLeadingStatus, ThreadRowTrailingStatus } from "./ThreadStatusIndicators";
 import { primaryServerKeybindingsAtom, primaryServerProvidersAtom } from "../state/server";
-import { deriveProviderInstanceEntries, type ProviderInstanceEntry } from "../providerInstances";
+import {
+  applyProviderInstanceSettings,
+  deriveProviderInstanceEntries,
+  type ProviderInstanceEntry,
+} from "../providerInstances";
 import { resolveShortcutCommand, threadJumpIndexFromCommand } from "../keybindings";
 import { CommandDialog, CommandDialogPopup, CommandFooterAction } from "./ui/command";
 import { Button } from "./ui/button";
@@ -278,6 +237,7 @@ import {
   focusOtherThreadPane,
   paletteOwnerPane,
   requestThreadPaneFocus,
+  THREAD_SPLIT_HOST_AVAILABLE,
   THREAD_SPLIT_MEDIA_QUERY,
   useThreadSplitStore,
 } from "./thread-split/threadSplitStore";
@@ -293,58 +253,6 @@ import { PullRequestGlyph } from "~/components/pullRequest/pullRequestIcons";
 import { readPullRequestListPreferences } from "~/components/pullRequest/pullRequestListPreferences";
 
 const EMPTY_BROWSE_ENTRIES: FilesystemBrowseResult["entries"] = [];
-
-const APPEARANCE_OPTIONS = [
-  { mode: "system", label: "System", icon: MonitorIcon },
-  { mode: "light", label: "Light", icon: SunIcon },
-  { mode: "dark", label: "Dark", icon: MoonIcon },
-] as const;
-
-function notifyThemeSaveFailure(): void {
-  toastManager.add(
-    stackedThreadToast({
-      type: "error",
-      title: "Couldn't save theme selection",
-      description: "Try again.",
-    }),
-  );
-}
-
-function projectFavicon(project: Project) {
-  return <ProjectFavicon project={project} className="size-4" />;
-}
-
-function ProjectSearchDescription(props: {
-  readonly environmentLabels: ReadonlyArray<string>;
-  readonly grouped: boolean;
-  readonly location: {
-    readonly kind: "local" | "remote";
-    readonly label: string;
-    readonly machine: EnvironmentMachineKind;
-  };
-  readonly workspaceRoot: string;
-}) {
-  if (!props.grouped) {
-    return (
-      <span className="flex min-w-0 items-center gap-1">
-        <span className="inline-flex min-w-0 items-center gap-1">
-          {props.location.kind === "remote" ? (
-            <EnvironmentMachineIcon
-              aria-hidden
-              kind={props.location.machine}
-              className={COMMAND_PALETTE_META_ICON_CLASS}
-            />
-          ) : null}
-          <span className="truncate">{props.location.label}</span>
-        </span>
-        <CommandPaletteMetaDot />
-        <span className="truncate">{props.workspaceRoot}</span>
-      </span>
-    );
-  }
-
-  return <span className="truncate">{props.environmentLabels.join(" · ")}</span>;
-}
 
 function getEnvironmentBrowsePlatform(os: string | null | undefined): string {
   if (os === "windows") {
@@ -461,6 +369,10 @@ function remoteProjectSourceIcon(source: AddProjectRemoteSource, className: stri
   }
 }
 
+function projectFaviconIcon(project: Project): ReactNode {
+  return <ProjectFavicon project={project} className={ITEM_ICON_CLASS} />;
+}
+
 function remoteProjectInputPlaceholder(flow: AddProjectCloneFlow | null): string | null {
   if (!flow) return null;
   if (flow.step === "confirm") return null;
@@ -572,9 +484,6 @@ function threadActionIcon(id: CommandPaletteThreadActionId): ReactNode {
   }
 }
 
-// The dialog unmounts between invocations; keep an unfinished reorder across openings.
-const pendingMovesToTop = new Set<string>();
-
 async function reportThreadActionFailure(
   title: string,
   run: () => Promise<AtomCommandResult<unknown, unknown>>,
@@ -597,6 +506,26 @@ function overlayModeForCommand(command: string | null): SearchOverlayMode | null
   return command in OVERLAY_MODE_BY_COMMAND
     ? OVERLAY_MODE_BY_COMMAND[command as keyof typeof OVERLAY_MODE_BY_COMMAND]
     : null;
+}
+
+const APPEARANCE_OPTIONS = [
+  { mode: "system", label: "System", icon: MonitorIcon },
+  { mode: "light", label: "Light", icon: SunIcon },
+  { mode: "dark", label: "Dark", icon: MoonIcon },
+] as const;
+
+function notifyThemeSaveFailure(): void {
+  toastManager.add(
+    stackedThreadToast({
+      type: "error",
+      title: "Couldn't save theme selection",
+      description: "Try again.",
+    }),
+  );
+}
+
+function projectFavicon(project: Project) {
+  return <ProjectFavicon project={project} className="size-4" />;
 }
 
 export function CommandPalette({ children }: { children: ReactNode }) {
@@ -735,7 +664,8 @@ export function CommandPalette({ children }: { children: ReactNode }) {
         } else if (detail.open === "add-project") {
           openAddProject();
         } else if (detail.open === "open-in-split") {
-          openInSplit();
+          // Inert until a layout can render the secondary pane.
+          if (THREAD_SPLIT_HOST_AVAILABLE) openInSplit();
         } else if (detail.open === "rename-thread") {
           openRenameThread();
         } else if (detail.open === "snooze-thread") {
@@ -893,24 +823,10 @@ function OpenCommandPaletteDialog(props: {
   const availableSettingsSearchItems = useAvailableSettingsSearchItems();
   const { activeDraftThread, activeThread, defaultProjectRef, handleNewThread, routeThreadRef } =
     useHandleNewThread();
-  const {
-    attemptArchiveThread,
-    forkThread,
-    pinThread,
-    settleThread,
-    snoozeThreadWithToast,
-    confirmAndUnpinThread,
-    unsettleThread,
-    unsnoozeThread,
-    reorderPinnedThread,
-    reorderActiveThread,
-  } = useThreadActions();
+  const { pinThread, settleThread, confirmAndUnpinThread, unsettleThread } = useThreadActions();
   const updateThreadMetadata = useAtomCommand(threadEnvironment.updateMetadata, {
     reportFailure: false,
   });
-  const customGroupCatalog = useThreadGroupCatalog();
-  const selectedThreadKeys = useThreadSelectionStore((state) => state.selectedThreadKeys);
-  const timestampFormat = useClientSettings((s) => s.timestampFormat);
   const projects = useProjects();
   const projectAccentColors = useProjectAccentColors();
   const accentTint = useAccentTintSettings();
@@ -994,10 +910,17 @@ function OpenCommandPaletteDialog(props: {
   const providerEntryByEnvironmentAndInstanceId = useMemo(() => {
     const map = new Map<string, ProviderInstanceEntry>();
     for (const environment of environments) {
+      const serverConfig = environment.serverConfig;
       const environmentProviders =
-        environment.serverConfig?.providers ??
+        serverConfig?.providers ??
         (environment.environmentId === primaryEnvironmentId ? providers : []);
-      for (const entry of deriveProviderInstanceEntries(environmentProviders)) {
+      const derived = deriveProviderInstanceEntries(environmentProviders);
+      // Settings fill the ACP registry identity (agent id, icon URL) the
+      // derived entries alone do not carry.
+      const entries = serverConfig
+        ? applyProviderInstanceSettings(derived, serverConfig.settings)
+        : derived;
+      for (const entry of entries) {
         map.set(`${environment.environmentId}:${entry.instanceId}`, entry);
       }
     }
@@ -1006,7 +929,6 @@ function OpenCommandPaletteDialog(props: {
   const [viewStack, setViewStack] = useState<CommandPaletteView[]>([]);
   const currentView = viewStack.at(-1) ?? null;
   const isRenameThreadView = currentView?.groups[0]?.value === RENAME_THREAD_VIEW_VALUE;
-  const isSnoozeThreadView = currentView?.groups[0]?.value === SNOOZE_THREAD_VIEW_VALUE;
   const consumedThreadIntent = useRef<CommandPaletteOpenIntent | null>(null);
   const [threadActionPane] = useState(() => useThreadSplitStore.getState().activePaneId);
   const environmentIds = useMemo(
@@ -1281,7 +1203,6 @@ function OpenCommandPaletteDialog(props: {
         browseEnvironmentId !== null &&
           !isRemoteProjectRepositoryStep &&
           !isRenameThreadView &&
-          !isSnoozeThreadView &&
           newProjectFlow === null,
       ),
     [
@@ -1289,7 +1210,6 @@ function OpenCommandPaletteDialog(props: {
       browseEnvironmentPlatform,
       isRemoteProjectRepositoryStep,
       isRenameThreadView,
-      isSnoozeThreadView,
       newProjectFlow,
       query,
     ],
@@ -1511,7 +1431,7 @@ function OpenCommandPaletteDialog(props: {
         },
         projectAccentColor: (project) =>
           projectAccentColorByTargetKey.get(`${project.environmentId}:${project.id}`) ?? null,
-        icon: projectFavicon,
+        icon: projectFaviconIcon,
         runProject: openProjectFromSearch,
       }),
     [
@@ -1523,85 +1443,69 @@ function OpenCommandPaletteDialog(props: {
     ],
   );
 
-  // One project list serves "New thread in..." and each group of "New
-  // thread in group...": the group only changes the draft the pick lands in.
-  // A grouped pick lands on the contextual member when the project is part
-  // of the viewed logical project, so capability is checked on that target.
-  const buildNewThreadProjectItems = useCallback(
-    (customGroupId: string | null) => {
-      const resolveTargetRef = (project: CommandPaletteProject) => {
-        const group = projectGroupByTargetKey.get(`${project.environmentId}:${project.id}`);
-        const contextualRefBelongsToGroup =
-          contextualProjectRef !== null &&
-          group?.memberProjectRefs.some(
-            (projectRef) =>
-              projectRef.environmentId === contextualProjectRef.environmentId &&
-              projectRef.projectId === contextualProjectRef.projectId,
-          );
-        return contextualRefBelongsToGroup
-          ? contextualProjectRef
-          : scopeProjectRef(project.environmentId, project.id);
-      };
-      const items = buildProjectActionItems({
-        // The no-project home shows once, as the "No project" item below.
-        projects: pickerProjects.filter(
-          (project) => !isScratchProject(project, scratchWorkspaceRootFor(project.environmentId)),
-        ),
-        valuePrefix:
-          customGroupId === null ? "new-thread-in" : `new-thread-in-group:${customGroupId}`,
-        searchTerms: (project) => {
-          const group = projectGroupByTargetKey.get(`${project.environmentId}:${project.id}`);
-          const location = projectEnvironmentLocationById.get(project.environmentId);
-          return [
-            ...(group?.memberProjects.flatMap((member) => [member.title, member.workspaceRoot]) ??
-              []),
-            ...(location ? [location.label] : []),
-          ];
-        },
-        renderDescription: (project) => {
-          const location = projectEnvironmentLocationById.get(project.environmentId) ?? {
-            kind: "remote",
-            label: "Remote",
-            machine: "server" as const,
-          };
-          return (
-            <span className="flex min-w-0 items-center gap-1">
-              <span className="inline-flex min-w-0 items-center gap-1">
-                {location.kind === "remote" ? (
-                  <EnvironmentMachineIcon
-                    aria-hidden
-                    kind={location.machine}
-                    className={COMMAND_PALETTE_META_ICON_CLASS}
-                  />
-                ) : null}
-                <span className="truncate">{location.label}</span>
+  const projectThreadItems = useMemo(
+    () =>
+      enumerateCommandPaletteItems([
+        ...buildProjectActionItems({
+          // The no-project home shows once, as the "No project" item below.
+          projects: pickerProjects.filter(
+            (project) => !isScratchProject(project, scratchWorkspaceRootFor(project.environmentId)),
+          ),
+          valuePrefix: "new-thread-in",
+          searchTerms: (project) => {
+            const group = projectGroupByTargetKey.get(`${project.environmentId}:${project.id}`);
+            const location = projectEnvironmentLocationById.get(project.environmentId);
+            return [
+              ...(group?.memberProjects.flatMap((member) => [member.title, member.workspaceRoot]) ??
+                []),
+              ...(location ? [location.label] : []),
+            ];
+          },
+          renderDescription: (project) => {
+            const location = projectEnvironmentLocationById.get(project.environmentId) ?? {
+              kind: "remote",
+              label: "Remote",
+              machine: "server" as const,
+            };
+            return (
+              <span className="flex min-w-0 items-center gap-1">
+                <span className="inline-flex min-w-0 items-center gap-1">
+                  {location.kind === "remote" ? (
+                    <EnvironmentMachineIcon
+                      aria-hidden
+                      kind={location.machine}
+                      className={COMMAND_PALETTE_META_ICON_CLASS}
+                    />
+                  ) : null}
+                  <span className="truncate">{location.label}</span>
+                </span>
+                <CommandPaletteMetaDot />
+                <span className="truncate">{project.workspaceRoot}</span>
               </span>
-              <CommandPaletteMetaDot />
-              <span className="truncate">{project.workspaceRoot}</span>
-            </span>
-          );
-        },
-        projectAccentColor: (project) =>
-          projectAccentColorByTargetKey.get(`${project.environmentId}:${project.id}`) ?? null,
-        icon: projectFavicon,
-        runProject: async (project) => {
-          await handleNewThread(resolveTargetRef(project), { customGroupId });
-        },
-        ...(customGroupId === null
-          ? {}
-          : {
-              disabledReason: (project) =>
-                serverConfigs.get(resolveTargetRef(project).environmentId)?.environment.capabilities
-                  .threadCustomGroupCreation === true
-                  ? null
-                  : "Environment cannot create grouped threads",
-            }),
-      });
-      // The no-project home is only offered on the ungrouped list: starting a
-      // scratch thread does not take a group.
-      return enumerateCommandPaletteItems([
-        ...items,
-        ...(customGroupId !== null || scratchTargetEnvironmentId === null
+            );
+          },
+          projectAccentColor: (project) =>
+            projectAccentColorByTargetKey.get(`${project.environmentId}:${project.id}`) ?? null,
+          icon: projectFaviconIcon,
+          runProject: async (project) => {
+            const group = projectGroupByTargetKey.get(`${project.environmentId}:${project.id}`);
+            const contextualRefBelongsToGroup =
+              contextualProjectRef !== null &&
+              group?.memberProjectRefs.some(
+                (projectRef) =>
+                  projectRef.environmentId === contextualProjectRef.environmentId &&
+                  projectRef.projectId === contextualProjectRef.projectId,
+              );
+            await handleNewThread(
+              contextualRefBelongsToGroup
+                ? contextualProjectRef
+                : scopeProjectRef(project.environmentId, project.id),
+              // An explicit New thread starts in Active.
+              { customGroupId: null },
+            );
+          },
+        }),
+        ...(scratchTargetEnvironmentId === null
           ? []
           : [
               {
@@ -1614,8 +1518,7 @@ function OpenCommandPaletteDialog(props: {
                 run: () => startScratchThread(scratchTargetEnvironmentId),
               },
             ]),
-      ]);
-    },
+      ]),
     [
       contextualProjectRef,
       handleNewThread,
@@ -1625,21 +1528,8 @@ function OpenCommandPaletteDialog(props: {
       projectGroupByTargetKey,
       scratchTargetEnvironmentId,
       scratchWorkspaceRootFor,
-      serverConfigs,
       startScratchThread,
     ],
-  );
-  const projectThreadItems = useMemo(
-    () => buildNewThreadProjectItems(null),
-    [buildNewThreadProjectItems],
-  );
-  const groupedProjectThreadItems = useMemo(
-    () =>
-      customGroupCatalog.groups.map((group) => ({
-        group,
-        items: buildNewThreadProjectItems(group.id),
-      })),
-    [buildNewThreadProjectItems, customGroupCatalog.groups],
   );
 
   const allThreadItems = useMemo(
@@ -1654,7 +1544,7 @@ function OpenCommandPaletteDialog(props: {
         renderTrailingContent: (thread) => <ThreadRowTrailingStatus thread={thread} />,
         renderDescription: (thread, { projectTitle }) => {
           const modelInstanceId =
-            thread.session?.providerInstanceId ?? thread.modelSelection.instanceId;
+            thread.runtime?.providerInstanceId ?? thread.modelSelection.instanceId;
           const providerEntry =
             providerEntryByEnvironmentAndInstanceId.get(
               `${thread.environmentId}:${modelInstanceId}`,
@@ -1671,8 +1561,10 @@ function OpenCommandPaletteDialog(props: {
               isCurrent={`${thread.environmentId}:${thread.id}` === activeThreadKey}
               driverKind={providerEntry?.driverKind ?? null}
               providerDisplayName={
-                thread.session?.providerName ?? providerEntry?.displayName ?? modelInstanceId
+                thread.runtime?.providerName ?? providerEntry?.displayName ?? modelInstanceId
               }
+              acpRegistryAgentId={providerEntry?.acpRegistryAgentId}
+              acpRegistryIconUrl={providerEntry?.acpRegistryIconUrl}
             />
           );
         },
@@ -1718,6 +1610,7 @@ function OpenCommandPaletteDialog(props: {
       routeThreadRef,
       clientSettings.sidebarThreadSortOrder,
       navigate,
+      projectCwdByKey,
       projectByKey,
       projectEnvironmentLocationById,
       projectTitleByKey,
@@ -1737,7 +1630,7 @@ function OpenCommandPaletteDialog(props: {
     splitMounted && paletteOwnerPane() === "secondary"
       ? (splitSecondaryRef?.threadId ?? null)
       : (activeThread?.id ?? null);
-  const splitSupported = useMediaQuery(THREAD_SPLIT_MEDIA_QUERY);
+  const splitSupported = useMediaQuery(THREAD_SPLIT_MEDIA_QUERY) && THREAD_SPLIT_HOST_AVAILABLE;
   const openInSplitItems = useMemo(
     () =>
       buildOpenInSplitThreadItems({
@@ -2262,34 +2155,6 @@ function OpenCommandPaletteDialog(props: {
       addonIcon: <SquarePenIcon className={ADDON_ICON_CLASS} />,
       groups: [{ value: "projects", label: "Projects", items: projectThreadItems }],
     });
-    // Group first, then project: the group is the rarer, more deliberate
-    // choice. Projects on servers without creation support are listed but
-    // disabled, so the pick cannot land where the send would be blocked.
-    if (customGroupCatalog.groups.length > 0) {
-      actionItems.push({
-        kind: "submenu",
-        value: "action:new-thread-in-group",
-        searchTerms: ["new thread", "group", "thread group", "new thread in group"],
-        title: "New thread in group...",
-        icon: <GroupIcon className={ITEM_ICON_CLASS} />,
-        addonIcon: <GroupIcon className={ADDON_ICON_CLASS} />,
-        groups: [
-          {
-            value: "thread-groups",
-            label: "Groups",
-            items: groupedProjectThreadItems.map(({ group, items }) => ({
-              kind: "submenu",
-              value: `new-thread-in-group:${group.id}`,
-              searchTerms: [group.name],
-              title: group.name,
-              icon: <GroupIcon className={ITEM_ICON_CLASS} />,
-              addonIcon: <SquarePenIcon className={ADDON_ICON_CLASS} />,
-              groups: [{ value: "projects", label: "Projects", items }],
-            })),
-          },
-        ],
-      });
-    }
   }
 
   if (scratchTargetEnvironmentId !== null) {
@@ -2321,32 +2186,6 @@ function OpenCommandPaletteDialog(props: {
     actionItems.push(savedPromptsSubmenu);
   }
 
-  // Selection keys can outlive their threads; only loaded shells count.
-  const selectedThreads = useMemo(
-    () =>
-      [...selectedThreadKeys].flatMap((threadKey) => {
-        const threadRef = parseScopedThreadKey(threadKey);
-        const thread =
-          threadRef === null
-            ? undefined
-            : threads.find(
-                (candidate) =>
-                  candidate.environmentId === threadRef.environmentId &&
-                  candidate.id === threadRef.threadId,
-              );
-        return thread ? [thread] : [];
-      }),
-    [selectedThreadKeys, threads],
-  );
-  const groupMovableSelectedThreads = useMemo(
-    () =>
-      groupMovableThreads(
-        selectedThreads,
-        (environmentId) =>
-          serverConfigs.get(environmentId)?.environment.capabilities.threadCustomGroups === true,
-      ),
-    [selectedThreads, serverConfigs],
-  );
   const currentThread =
     currentThreadRef === null
       ? null
@@ -2357,81 +2196,6 @@ function OpenCommandPaletteDialog(props: {
         ) ?? null);
   const openUnarchivedThread = currentThread?.archivedAt === null ? currentThread : null;
   const openUnarchivedThreadRef = openUnarchivedThread === null ? null : currentThreadRef;
-  const moveToTopPlan = useMemo(
-    () =>
-      planThreadMoveToTop({
-        threads,
-        threadRef: currentThreadRef,
-        groups: customGroupCatalog.groups,
-        now: new Date().toISOString(),
-        canReorder: (environmentId, section) => {
-          const capabilities = serverConfigs.get(environmentId)?.environment.capabilities;
-          return section === "pinned"
-            ? capabilities?.threadPinReorder === true
-            : capabilities?.threadActiveReorder === true;
-        },
-      }),
-    [threads, currentThreadRef, customGroupCatalog.groups, serverConfigs],
-  );
-  if (moveToTopPlan !== null && currentThreadRef !== null) {
-    const threadRef = currentThreadRef;
-    actionItems.push({
-      kind: "action",
-      value: "action:thread:move-to-top",
-      title: "Move current thread to top",
-      searchTerms: ["move", "top", "reorder", "group", "current thread"],
-      icon: <ArrowUpToLineIcon className={ITEM_ICON_CLASS} />,
-      ...(moveToTopPlan.disabledReason
-        ? { disabled: true, description: moveToTopPlan.disabledReason }
-        : {}),
-      run: async () => {
-        if (pendingMovesToTop.size > 0) return;
-        // Re-read shells at execution: a snooze or another client's reorder may
-        // have landed while the palette was open.
-        const plan = planThreadMoveToTop({
-          threads: readThreadShells(),
-          threadRef,
-          groups: customGroupCatalog.groups,
-          now: new Date().toISOString(),
-          canReorder: (environmentId, section) =>
-            section === "pinned"
-              ? readEnvironmentSupportsPinReorder(environmentId)
-              : readEnvironmentSupportsActiveReorder(environmentId),
-        });
-        if (plan === null || plan.disabledReason) return;
-        const moveKey = `${threadRef.environmentId}:${threadRef.threadId}`;
-        pendingMovesToTop.add(moveKey);
-        try {
-          const reorder = plan.section === "pinned" ? reorderPinnedThread : reorderActiveThread;
-          // Stop on failure; each successful key write remains a valid placement,
-          // as in sidebar drags. Keys live per thread on its own server, so
-          // there is no transaction to roll back.
-          for (const assignment of plan.assignments) {
-            if (
-              !(await reportThreadActionFailure("Failed to move thread to top", () =>
-                reorder(assignment.threadRef, assignment.orderKey),
-              ))
-            )
-              break;
-          }
-        } finally {
-          pendingMovesToTop.delete(moveKey);
-        }
-      },
-    });
-  }
-  const openThreadArchiveAction =
-    openUnarchivedThread === null ? "archive" : resolveArchiveToggleAction(openUnarchivedThread);
-  const archiveCurrentThreadAction = buildArchiveCurrentThreadAction({
-    threadRef: openUnarchivedThreadRef,
-    archiveAction: openThreadArchiveAction,
-    icon: <ArchiveIcon className={ITEM_ICON_CLASS} />,
-    runThread: (threadRef) =>
-      attemptArchiveThread(threadRef, { expectedAction: openThreadArchiveAction }),
-  });
-  if (archiveCurrentThreadAction) {
-    actionItems.push(archiveCurrentThreadAction);
-  }
 
   const openThreadCapabilities =
     openUnarchivedThreadRef === null
@@ -2447,7 +2211,7 @@ function OpenCommandPaletteDialog(props: {
         openUnarchivedThread?.settledOverride === "settled",
       // The server owns settle eligibility and returns the authoritative error.
       canSettleNow: true,
-      canFork: openUnarchivedThread !== null && canForkConversation(openUnarchivedThread),
+      canFork: false,
       supports: {
         settlement: openThreadCapabilities?.threadSettlement === true,
         // Not gated on the sidebar variant: pinning is server-side state the
@@ -2476,18 +2240,12 @@ function OpenCommandPaletteDialog(props: {
               confirmAndUnpinThread(threadRef),
             );
             return;
-          case "fork":
-            await reportThreadActionFailure("Failed to fork conversation", () =>
-              forkThread(threadRef),
-            );
-            return;
         }
       },
     }),
   );
 
   if (openUnarchivedThread !== null && openUnarchivedThreadRef !== null) {
-    const threadRef = openUnarchivedThreadRef;
     const thread = openUnarchivedThread;
     actionItems.push({
       kind: "submenu",
@@ -2500,151 +2258,6 @@ function OpenCommandPaletteDialog(props: {
       groups: [{ value: RENAME_THREAD_VIEW_VALUE, label: "Rename", items: [] }],
       initialQuery: thread.title,
     });
-    if (openThreadCapabilities?.threadSnooze === true) {
-      const now = new Date();
-      if (effectiveSnoozed(thread, { now: now.toISOString() })) {
-        actionItems.push({
-          kind: "action",
-          value: "action:thread:unsnooze",
-          searchTerms: ["wake", "unsnooze", "snooze", "resume", "current thread"],
-          title: "Wake current thread",
-          icon: <AlarmClockOffIcon className={ITEM_ICON_CLASS} />,
-          shortcutCommand: "thread.snooze",
-          run: async () => {
-            await reportThreadActionFailure("Failed to wake thread", () =>
-              unsnoozeThread(threadRef),
-            );
-          },
-        });
-      } else {
-        const canSnoozeNow = canSnooze(thread, { now: now.toISOString() });
-        actionItems.push({
-          kind: "submenu",
-          value: `action:${SNOOZE_THREAD_VIEW_VALUE}`,
-          searchTerms: ["snooze", "snooze thread", "hide", "later", "remind", "current thread"],
-          title: "Snooze current thread...",
-          icon: <AlarmClockIcon className={ITEM_ICON_CLASS} />,
-          shortcutCommand: "thread.snooze",
-          ...(canSnoozeNow
-            ? {}
-            : { disabled: true, description: "Thread is waiting on you or has queued work" }),
-          addonIcon: <AlarmClockIcon className={ADDON_ICON_CLASS} />,
-          groups: [{ value: SNOOZE_THREAD_VIEW_VALUE, label: "Snooze until", items: [] }],
-        });
-      }
-    }
-  }
-
-  // A sidebar multi-selection takes over the group move; rows on servers
-  // without group support are left out of the count and the move. A
-  // selection with nothing movable offers no move at all: falling back to
-  // the current thread would move something the user did not select.
-  if (groupMovableSelectedThreads.length > 0) {
-    const selectionCount = groupMovableSelectedThreads.length;
-    const sharedGroupIds = new Set(
-      groupMovableSelectedThreads.map((thread) => threadGroupId(thread, customGroupCatalog.groups)),
-    );
-    actionItems.push({
-      kind: "submenu",
-      value: "action:move-selected-to-group",
-      searchTerms: ["move", "group", "move to group", "thread group", "selected threads"],
-      title: `Move ${selectionCount} selected thread${selectionCount === 1 ? "" : "s"} to group...`,
-      icon: <GroupIcon className={ITEM_ICON_CLASS} />,
-      addonIcon: <GroupIcon className={ADDON_ICON_CLASS} />,
-      groups: [
-        {
-          value: "move-to-group",
-          label: "Groups",
-          items: enumerateCommandPaletteItems(
-            buildMoveToGroupItems({
-              groups: customGroupCatalog.groups,
-              currentGroupId: sharedGroupIds.size === 1 ? [...sharedGroupIds][0] : undefined,
-              icon: <GroupIcon className={ITEM_ICON_CLASS} />,
-              move: async (groupId) => {
-                const outcome = await moveThreadsToGroup({
-                  threads: groupMovableSelectedThreads,
-                  customGroupId: groupId,
-                  move: (threadRef, customGroupId) =>
-                    updateThreadMetadata({
-                      environmentId: threadRef.environmentId,
-                      input: { threadId: threadRef.threadId, customGroupId },
-                    }),
-                });
-                useThreadSelectionStore.getState().removeFromSelection(outcome.movedThreadKeys);
-                if (outcome.failedCount > 0) {
-                  toastManager.add(
-                    stackedThreadToast({
-                      type: "error",
-                      title: `Failed to move ${outcome.failedCount} thread${outcome.failedCount === 1 ? "" : "s"} to group`,
-                      description: errorMessage(outcome.firstError),
-                    }),
-                  );
-                }
-              },
-            }),
-          ),
-        },
-      ],
-    });
-  } else if (
-    selectedThreadKeys.size === 0 &&
-    openThreadCapabilities?.threadCustomGroups === true &&
-    openUnarchivedThreadRef !== null
-  ) {
-    const threadRef = openUnarchivedThreadRef;
-    actionItems.push({
-      kind: "submenu",
-      value: "action:move-to-group",
-      searchTerms: ["move", "group", "move to group", "thread group", "current thread"],
-      title: "Move current thread to group...",
-      icon: <GroupIcon className={ITEM_ICON_CLASS} />,
-      addonIcon: <GroupIcon className={ADDON_ICON_CLASS} />,
-      groups: [
-        {
-          value: "move-to-group",
-          label: "Groups",
-          items: enumerateCommandPaletteItems(
-            buildMoveToGroupItems({
-              groups: customGroupCatalog.groups,
-              currentGroupId: threadGroupId(openUnarchivedThread ?? {}, customGroupCatalog.groups),
-              icon: <GroupIcon className={ITEM_ICON_CLASS} />,
-              move: async (groupId) => {
-                await reportThreadActionFailure("Failed to move thread to group", () =>
-                  updateThreadMetadata({
-                    environmentId: threadRef.environmentId,
-                    input: { threadId: threadRef.threadId, customGroupId: groupId },
-                  }),
-                );
-              },
-            }),
-          ),
-        },
-      ],
-    });
-  }
-  if (customGroupCatalog.canEdit) {
-    actionItems.push(
-      {
-        kind: "action",
-        value: "action:new-thread-group",
-        searchTerms: ["new group", "create group", "thread group", "add group"],
-        title: "New thread group",
-        icon: <GroupIcon className={ITEM_ICON_CLASS} />,
-        run: async () => {
-          openThreadGroupsDialog("new-group");
-        },
-      },
-      {
-        kind: "action",
-        value: "action:manage-thread-groups",
-        searchTerms: ["manage groups", "thread groups", "rename group", "reorder", "delete group"],
-        title: "Manage thread groups",
-        icon: <GroupIcon className={ITEM_ICON_CLASS} />,
-        run: async () => {
-          openThreadGroupsDialog();
-        },
-      },
-    );
   }
 
   if (splitSupported && openInSplitItems.length > 0) {
@@ -2765,7 +2378,7 @@ function OpenCommandPaletteDialog(props: {
       // Failures throw into executeItem's error toast.
       run: async () => {
         const { environmentId } = thread;
-        if (thread.session && thread.session.status !== "stopped") {
+        if (thread.runtime !== null) {
           const stopped = await stopThreadSession({
             environmentId,
             input: { threadId: thread.id },
@@ -2781,18 +2394,15 @@ function OpenCommandPaletteDialog(props: {
         });
         const project = projectByKey.get(`${environmentId}:${thread.projectId}`);
         if (!project) return;
-        const instanceId = thread.session?.providerInstanceId ?? thread.modelSelection.instanceId;
-        const cwd = thread.worktreePath ?? project.workspaceRoot;
         const refreshed = await refreshProviders({
           environmentId,
-          input: { instanceId, cwd, fresh: true },
+          input: {
+            instanceId: thread.runtime?.providerInstanceId ?? thread.modelSelection.instanceId,
+            cwd: thread.worktreePath ?? project.workspaceRoot,
+            fresh: true,
+          },
         });
         if (refreshed._tag === "Failure") throw squashAtomCommandFailure(refreshed);
-        // The composer prefers the per-cwd skill query over provider snapshots,
-        // so refetch it too or the slash menu keeps the pre-restart skills.
-        appAtomRegistry.refresh(
-          serverEnvironment.providerSkills({ environmentId, input: { instanceId, cwd } }),
-        );
       },
     });
   }
@@ -3033,36 +2643,6 @@ function OpenCommandPaletteDialog(props: {
     },
   });
 
-  actionItems.push(
-    ...buildArchivedThreadsActionItems({
-      projectFilterKey:
-        currentProjectEnvironmentId !== null && currentProjectId !== null
-          ? (projectGroups.find((group) =>
-              group.memberProjectRefs.some(
-                (projectRef) =>
-                  projectRef.environmentId === currentProjectEnvironmentId &&
-                  projectRef.projectId === currentProjectId,
-              ),
-            )?.projectKey ?? null)
-          : null,
-      projectTitle:
-        currentProjectKey !== null ? (projectTitleByKey.get(currentProjectKey) ?? null) : null,
-      icon: <ArchiveIcon className={ITEM_ICON_CLASS} />,
-      openArchived: async (projectFilterKey) => {
-        // Explicit keys: the settings layout keeps the previous scope when a
-        // navigation names none, and the unfiltered action must show everything.
-        await navigate({
-          to: "/settings/archived",
-          search: {
-            project: projectFilterKey ?? undefined,
-            machine: undefined,
-            checkout: undefined,
-          },
-        });
-      },
-    }),
-  );
-
   // Target the active thread or draft's project, falling back to the first sidebar group.
   const contextualProjectGroup =
     (contextualProjectRef
@@ -3168,8 +2748,7 @@ function OpenCommandPaletteDialog(props: {
           ? changeAppearanceItem.groups
           : (currentView?.groups ?? rootGroups);
 
-  // Both views derive rows from the query. Only rename bypasses filtering;
-  // snooze keeps matching presets alongside the parsed time.
+  // The rename view derives its rows from the query and bypasses filtering.
   const liveThreadViewGroups: CommandPaletteView["groups"] | null =
     openUnarchivedThread === null || openUnarchivedThreadRef === null
       ? null
@@ -3204,46 +2783,7 @@ function OpenCommandPaletteDialog(props: {
               }),
             },
           ]
-        : isSnoozeThreadView
-          ? (() => {
-              const now = new Date();
-              return [
-                {
-                  value: SNOOZE_THREAD_VIEW_VALUE,
-                  label: "Snooze until",
-                  items: buildSnoozeThreadViewItems({
-                    query: deferredQuery,
-                    now,
-                    presets: resolveSnoozePresets(now, timestampFormat, {
-                      untilWoken: readEnvironmentSupportsSnoozeIndefinite(
-                        openUnarchivedThreadRef.environmentId,
-                      ),
-                      untilDone:
-                        canSnoozeUntilDone(openUnarchivedThread) &&
-                        readEnvironmentSupportsSnoozeUntilDone(
-                          openUnarchivedThreadRef.environmentId,
-                        ),
-                    }),
-                    timestampFormat,
-                    icon: <AlarmClockIcon className={ITEM_ICON_CLASS} />,
-                    customIcon: <CalendarIcon className={ITEM_ICON_CLASS} />,
-                    renderWhen: (whenLabel) => (
-                      <span className="ms-auto shrink-0 text-xs tabular-nums text-muted-foreground/70">
-                        {whenLabel}
-                      </span>
-                    ),
-                    snooze: async (preset) => {
-                      await snoozeThreadWithToast(openUnarchivedThreadRef, preset);
-                    },
-                    custom: async () => {
-                      const choice = await requestCustomSnooze();
-                      if (choice) await snoozeThreadWithToast(openUnarchivedThreadRef, choice);
-                    },
-                  }),
-                },
-              ];
-            })()
-          : null;
+        : null;
 
   const filteredGroups = filterCommandPaletteGroups({
     activeGroups: liveThreadViewGroups ?? activeGroups,
@@ -3873,12 +3413,10 @@ function OpenCommandPaletteDialog(props: {
 
   const inputPlaceholder = isRenameThreadView
     ? "New thread title"
-    : isSnoozeThreadView
-      ? "Search presets, or type 45m, 2pm, fri 9am..."
-      : newProjectFlow !== null
-        ? "Project name"
-        : (remoteProjectInputPlaceholder(addProjectCloneFlow) ??
-          getCommandPaletteInputPlaceholder(paletteMode));
+    : newProjectFlow !== null
+      ? "Project name"
+      : (remoteProjectInputPlaceholder(addProjectCloneFlow) ??
+        getCommandPaletteInputPlaceholder(paletteMode));
   const isSubmenu = paletteMode === "submenu" || paletteMode === "submenu-browse";
   const isSavedPromptsView = currentView?.groups[0]?.value === SAVED_PROMPTS_GROUP_VALUE;
   const hasHighlightedBrowseItem = highlightedItemValue?.startsWith("browse:") ?? false;
@@ -4281,19 +3819,17 @@ function OpenCommandPaletteDialog(props: {
     ? "Insert"
     : isRenameThreadView
       ? "Rename"
-      : isSnoozeThreadView
-        ? "Snooze"
-        : newProjectFlow !== null
-          ? highlightedItemValue === null
-            ? "Create"
-            : highlightedItemValue === newProjectGitHubToggleValue
-              ? "Toggle"
-              : "Select"
-          : addProjectCloneFlow?.step === "repository"
-            ? (remoteProjectButtonLabel ?? "Continue")
-            : !canSubmitBrowsePath || hasHighlightedBrowseItem
-              ? "Select"
-              : undefined;
+      : newProjectFlow !== null
+        ? highlightedItemValue === null
+          ? "Create"
+          : highlightedItemValue === newProjectGitHubToggleValue
+            ? "Toggle"
+            : "Select"
+        : addProjectCloneFlow?.step === "repository"
+          ? (remoteProjectButtonLabel ?? "Continue")
+          : !canSubmitBrowsePath || hasHighlightedBrowseItem
+            ? "Select"
+            : undefined;
 
   const footerTrailing = isSavedPromptsView ? (
     <KbdGroup className="shrink-0 items-center whitespace-nowrap">
@@ -4421,4 +3957,36 @@ function OpenCommandPaletteDialog(props: {
       />
     </CommandPaletteContent>
   );
+}
+
+function ProjectSearchDescription(props: {
+  readonly environmentLabels: ReadonlyArray<string>;
+  readonly grouped: boolean;
+  readonly location: {
+    readonly kind: "local" | "remote";
+    readonly label: string;
+    readonly machine: EnvironmentMachineKind;
+  };
+  readonly workspaceRoot: string;
+}) {
+  if (!props.grouped) {
+    return (
+      <span className="flex min-w-0 items-center gap-1">
+        <span className="inline-flex min-w-0 items-center gap-1">
+          {props.location.kind === "remote" ? (
+            <EnvironmentMachineIcon
+              aria-hidden
+              kind={props.location.machine}
+              className={COMMAND_PALETTE_META_ICON_CLASS}
+            />
+          ) : null}
+          <span className="truncate">{props.location.label}</span>
+        </span>
+        <CommandPaletteMetaDot />
+        <span className="truncate">{props.workspaceRoot}</span>
+      </span>
+    );
+  }
+
+  return <span className="truncate">{props.environmentLabels.join(" · ")}</span>;
 }

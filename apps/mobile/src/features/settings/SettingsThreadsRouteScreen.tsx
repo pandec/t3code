@@ -2,15 +2,11 @@ import { AutoSettleDaysField } from "./components/AutoSettleDaysField";
 import { ScreenScrollView as ScrollView } from "../../components/ScreenScrollView";
 import { useAtomSet, useAtomValue } from "@effect/atom-react";
 import { AsyncResult } from "effect/unstable/reactivity";
-import { useEffect, useRef, useState } from "react";
+import { useRef, useState } from "react";
 import { Pressable, View } from "react-native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 
-import {
-  DEFAULT_SERVER_SETTINGS,
-  type EnvironmentId,
-  type ServerSettingsPatch,
-} from "@t3tools/contracts";
+import { DEFAULT_SERVER_SETTINGS } from "@t3tools/contracts";
 import {
   MAX_ARCHIVED_SECTION_VISIBLE_COUNT,
   MAX_STEER_GRACE_WINDOW_MS,
@@ -20,12 +16,6 @@ import {
 import { supportsSharedSettingsSync } from "@t3tools/client-runtime/state/shared-settings";
 import { AppText as Text } from "../../components/AppText";
 import { mobilePreferencesAtom, updateMobilePreferencesAtom } from "../../state/preferences";
-import {
-  didEnvironmentPrewarmRunsAdvance,
-  threadPrewarmTriggerCommand,
-  type ThreadPrewarmSummary,
-  useThreadPrewarmSummary,
-} from "../../state/prewarm";
 import { serverEnvironment } from "../../state/server";
 import { useAtomCommand } from "../../state/use-atom-command";
 import {
@@ -33,7 +23,6 @@ import {
   useArchivedSectionVisibleCount,
   useSteerGraceWindowMs,
 } from "../../state/use-mobile-preferences";
-import { SettingsActionRow } from "./components/SettingsActionRow";
 import { SettingsSection } from "./components/SettingsSection";
 import { SettingsProjectOverridesSection } from "./components/SettingsProjectOverridesSection";
 import { SettingsSliderRow } from "./components/SettingsSliderRow";
@@ -55,6 +44,7 @@ import {
   planMobileScopedSettingsClear,
   planMobileScopedSettingsPatch,
   resolveMobileSettingsTargets,
+  uniformMobileSetting,
   type ScopedMobileSettingsTarget,
 } from "./settings-scoped-server";
 
@@ -114,24 +104,14 @@ function AutoSettleSettingsRows() {
     return null;
   }
 
-  // The fork's master gate and worktree-recreation preference are environment
-  // settings without project overrides, so they always write at the
-  // environment level even while a project is selected.
-  const writeToAll = (patch: Partial<AutoSettleSettings>) => {
+  const writeToAll = (
+    patch: Partial<AutoSettleSettings> & {
+      autoResumeLimitedThreads?: boolean;
+      snoozeLimitedThreads?: boolean;
+    },
+  ) => {
     if (writeInFlight.current) return;
-    const { threadAutoSettleEnabled, skipMissingWorktreeRecreation, ...scoped } = patch;
-    const environmentPatch: ServerSettingsPatch = {
-      ...(threadAutoSettleEnabled === undefined ? {} : { threadAutoSettleEnabled }),
-      ...(skipMissingWorktreeRecreation === undefined ? {} : { skipMissingWorktreeRecreation }),
-    };
-    const writes = mergeSettingsWrites([
-      ...(Object.keys(environmentPatch).length > 0
-        ? planMobileScopedSettingsPatch(syncTargets, false, environmentPatch)
-        : []),
-      ...(Object.keys(scoped).length > 0
-        ? planMobileScopedSettingsPatch(syncTargets, projectSelected, scoped)
-        : []),
-    ]);
+    const writes = planMobileScopedSettingsPatch(syncTargets, projectSelected, patch);
     if (writes.length === 0) return;
     writeInFlight.current = true;
     setPendingTargets(syncTargets);
@@ -195,8 +175,6 @@ function AutoSettleSettingsRows() {
   };
 
   const afterDays = referenceSettings.sidebarAutoSettleAfterDays;
-  const autoSettleEnabled = referenceSettings.threadAutoSettleEnabled;
-  const environmentDisabled = pendingWrites > 0;
 
   return (
     <View className="gap-6">
@@ -209,46 +187,42 @@ function AutoSettleSettingsRows() {
           onClear={clearProjectOverrides}
         />
       ) : null}
-      <SettingsSection title="Worktrees">
-        <SettingsSwitchRow
-          icon="arrow.triangle.branch"
-          label="Skip recreating removed worktrees"
-          subtitle="Continue in the main project checkout when a worktree is gone. Turn off to try recreating it first, with the main checkout as a fallback."
-          value={referenceSettings.skipMissingWorktreeRecreation}
-          disabled={environmentDisabled}
-          onValueChange={(value) => writeToAll({ skipMissingWorktreeRecreation: value })}
-        />
-      </SettingsSection>
-      <SettingsSection title="Auto-settle">
-        <SettingsSwitchRow
-          icon="checkmark.circle"
-          label="Settle threads automatically"
-          subtitle="Settle threads after inactivity or when their pull request is merged or closed. Settling by hand still works when this is off."
-          value={autoSettleEnabled}
-          disabled={environmentDisabled}
-          onValueChange={(value) => writeToAll({ threadAutoSettleEnabled: value })}
-        />
-        {autoSettleEnabled ? (
-          <SettingsSwitchRow
-            icon="arrow.triangle.branch"
-            label="Auto-settle merged threads"
-            value={referenceSettings.sidebarAutoSettleOnMerge}
-            disabled={disabled}
-            onValueChange={(value) => writeToAll({ sidebarAutoSettleOnMerge: value })}
-          />
-        ) : null}
-        {autoSettleEnabled ? (
+      {!projectSelected ? (
+        <SettingsSection title="Usage limits">
           <SettingsSwitchRow
             icon="clock"
-            label="Auto-settle inactive threads"
-            value={afterDays !== null}
+            label="Auto-resume limited threads"
+            value={uniformMobileSetting(displayTargets, "autoResumeLimitedThreads")}
             disabled={disabled}
-            onValueChange={(value) =>
-              writeToAll({ sidebarAutoSettleAfterDays: value ? AUTO_SETTLE_DEFAULT_DAYS : null })
-            }
+            onValueChange={(value) => writeToAll({ autoResumeLimitedThreads: value })}
           />
-        ) : null}
-        {autoSettleEnabled && afterDays !== null ? (
+          <SettingsSwitchRow
+            icon="clock"
+            label="Snooze limited threads"
+            value={uniformMobileSetting(displayTargets, "snoozeLimitedThreads")}
+            disabled={disabled}
+            onValueChange={(value) => writeToAll({ snoozeLimitedThreads: value })}
+          />
+        </SettingsSection>
+      ) : null}
+      <SettingsSection title="Auto-settle">
+        <SettingsSwitchRow
+          icon="arrow.triangle.branch"
+          label="Auto-settle merged threads"
+          value={referenceSettings.sidebarAutoSettleOnMerge}
+          disabled={disabled}
+          onValueChange={(value) => writeToAll({ sidebarAutoSettleOnMerge: value })}
+        />
+        <SettingsSwitchRow
+          icon="clock"
+          label="Auto-settle inactive threads"
+          value={afterDays !== null}
+          disabled={disabled}
+          onValueChange={(value) =>
+            writeToAll({ sidebarAutoSettleAfterDays: value ? AUTO_SETTLE_DEFAULT_DAYS : null })
+          }
+        />
+        {afterDays !== null ? (
           <View className="flex-row items-center gap-4 px-4 py-4 android:min-h-14 android:py-3">
             <View className="w-[22px] android:w-6" />
             <Text className="flex-1 text-foreground text-lg android:text-base">Inactive days</Text>
@@ -284,24 +258,7 @@ function AutoSettleSettingsRows() {
   );
 }
 
-/** One update per environment: a merged patch cannot be partially applied. */
-function mergeSettingsWrites(
-  writes: ReadonlyArray<{
-    readonly environmentId: EnvironmentId;
-    readonly patch: ServerSettingsPatch;
-  }>,
-) {
-  const merged = new Map<EnvironmentId, ServerSettingsPatch>();
-  for (const write of writes) {
-    merged.set(write.environmentId, { ...merged.get(write.environmentId), ...write.patch });
-  }
-  return [...merged].map(([environmentId, patch]) => ({ environmentId, patch }));
-}
-
-/**
- * Device-local mirror of the web fork's Extras thread settings, plus the
- * manual counterpart of thread prewarming.
- */
+/** Device-local mirror of the web fork's Extras thread settings. */
 function DeviceThreadSettingsSection() {
   const preferencesResult = useAtomValue(mobilePreferencesAtom);
   const savePreferences = useAtomSet(updateMobilePreferencesAtom);
@@ -351,93 +308,7 @@ function DeviceThreadSettingsSection() {
           valueLabel={`${archivedSectionVisibleCount}`}
         />
       </>
-      <ThreadSyncRow />
     </SettingsSection>
-  );
-}
-
-function formatLastSyncedLabel(lastRunAt: number | null, now: number): string {
-  if (lastRunAt === null) return "Not synced yet";
-  const elapsedMs = Math.max(0, now - lastRunAt);
-  if (elapsedMs < 60_000) return "Synced just now";
-  const minutes = Math.floor(elapsedMs / 60_000);
-  if (minutes < 60) return `Synced ${minutes}m ago`;
-  const hours = Math.floor(minutes / 60);
-  if (hours < 24) return `Synced ${hours}h ago`;
-  return `Synced ${new Date(lastRunAt).toLocaleDateString()}`;
-}
-
-function useMinuteClockMs(): number {
-  const [nowMs, setNowMs] = useState(() => Date.now());
-  useEffect(() => {
-    const timer = setInterval(() => setNowMs(Date.now()), 60_000);
-    return () => clearInterval(timer);
-  }, []);
-  return nowMs;
-}
-
-/**
- * Manual counterpart of the automatic thread prewarming: fires the same
- * engine on demand (bypassing its cooldown) and shows when any environment
- * last completed a full sweep, excluding targeted settle runs. The engine
- * debounces briefly before running, so the row tracks a separate
- * manual-completion cursor until that request reaches a terminal outcome
- * without treating unavailable attempts as successful syncs.
- */
-const THREAD_SYNC_PENDING_TIMEOUT_MS = 45_000;
-
-function ThreadSyncRow() {
-  const summary = useThreadPrewarmSummary();
-  const fireTrigger = useAtomCommand(threadPrewarmTriggerCommand);
-  const nowMs = useMinuteClockMs();
-  const syncInFlight = useRef(false);
-  const [requestedFrom, setRequestedFrom] = useState<
-    ThreadPrewarmSummary["environmentLastManualRequestCompletedAt"] | null
-  >(null);
-
-  // Manual requests are tracked separately from the engine's own in-flight
-  // flag: the engine debounces before it starts, so only the request cursor
-  // covers the gap between the tap and the run.
-  const manualSyncing =
-    requestedFrom !== null &&
-    !didEnvironmentPrewarmRunsAdvance(
-      summary.environmentLastManualRequestCompletedAt,
-      requestedFrom,
-    );
-  const syncing = manualSyncing || summary.syncing;
-
-  useEffect(() => {
-    if (requestedFrom === null) return;
-    if (!manualSyncing) {
-      syncInFlight.current = false;
-      setRequestedFrom(null);
-      return;
-    }
-    const timer = setTimeout(() => {
-      syncInFlight.current = false;
-      setRequestedFrom(null);
-    }, THREAD_SYNC_PENDING_TIMEOUT_MS);
-    return () => clearTimeout(timer);
-  }, [manualSyncing, requestedFrom]);
-
-  const statusLabel = syncing ? "Syncing…" : formatLastSyncedLabel(summary.lastRunAt, nowMs);
-
-  // Only a manual request blocks the action. A background run reports itself
-  // in the label, but making "sync now" untappable for the duration would
-  // strand anyone who opened Settings to force a sweep.
-  return (
-    <SettingsActionRow
-      icon="arrow.triangle.2.circlepath"
-      label={`Sync Threads · ${statusLabel}`}
-      disabled={manualSyncing}
-      loading={syncing}
-      onPress={() => {
-        if (syncInFlight.current) return;
-        syncInFlight.current = true;
-        setRequestedFrom(new Map(summary.environmentLastManualRequestCompletedAt));
-        void fireTrigger({ reason: "manual" });
-      }}
-    />
   );
 }
 

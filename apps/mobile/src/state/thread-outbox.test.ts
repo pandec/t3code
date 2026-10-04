@@ -1,5 +1,4 @@
 import { describe, expect, it } from "@effect/vitest";
-import { resolveThreadLifecycleOutboxAction } from "@t3tools/client-runtime/state/thread-lifecycle-outbox-model";
 import { EnvironmentNotRegisteredError } from "@t3tools/client-runtime/connection";
 import { isTransportConnectionErrorMessage } from "@t3tools/client-runtime/errors";
 import { EnvironmentRpcUnavailableError } from "@t3tools/client-runtime/rpc";
@@ -82,21 +81,14 @@ import {
   groupQueuedThreadMessages,
   isQueuedThreadCreationSendable,
   modelSelectionsEqual,
-  queuedThreadMessageIntent,
   resolveThreadOutboxDeliveryAction,
   resolveThreadOutboxDispatchStep,
   resolveThreadOutboxFailureAction,
   resolveQueuedThreadSettings,
-  selectNextQueuedThreadDispatch,
   shouldRetryThreadOutboxDelivery,
   threadOutboxRetryDelayMs,
   type QueuedThreadMessage,
 } from "./thread-outbox-model";
-import { isThreadOutboxMessageWaitingForPreferences } from "./thread-outbox";
-import {
-  resolveThreadOutboxHydrationAction,
-  THREAD_OUTBOX_HYDRATION_MAX_RETRIES,
-} from "./thread-outbox-hydration";
 import { createThreadOutboxManager, ThreadOutboxManagerError } from "./thread-outbox-manager";
 import {
   expoThreadOutboxStorage,
@@ -123,25 +115,6 @@ function queuedMessage(input: {
 }
 
 describe("thread outbox", () => {
-  it("holds only non-expedited steers while preferences hydrate", () => {
-    const steer = {
-      ...queuedMessage({
-        messageId: "steer",
-        createdAt: "2026-06-08T10:00:01.000Z",
-      }),
-      deliveryIntent: "steer" as const,
-    };
-    const queued = {
-      ...steer,
-      deliveryIntent: "queue" as const,
-    };
-
-    expect(isThreadOutboxMessageWaitingForPreferences(steer, false, false)).toBe(true);
-    expect(isThreadOutboxMessageWaitingForPreferences(steer, false, true)).toBe(false);
-    expect(isThreadOutboxMessageWaitingForPreferences(steer, true, false)).toBe(false);
-    expect(isThreadOutboxMessageWaitingForPreferences(queued, false, false)).toBe(false);
-  });
-
   it("retains structured context through a persisted offline queue round trip", () => {
     const message: QueuedThreadMessage = {
       ...queuedMessage({ messageId: "context-message", createdAt: "2026-09-06T12:00:00.000Z" }),
@@ -162,6 +135,15 @@ describe("thread outbox", () => {
           },
         ],
       },
+    };
+    expect(
+      decodeQueuedThreadMessage(JSON.parse(JSON.stringify(encodeQueuedThreadMessage(message)))),
+    ).toEqual(message);
+  });
+  it("retains queue mode when a queued provider switch reloads from storage", () => {
+    const message: QueuedThreadMessage = {
+      ...queuedMessage({ messageId: "queued-switch", createdAt: "2026-09-17T09:00:00.000Z" }),
+      dispatchMode: "queue",
     };
     expect(
       decodeQueuedThreadMessage(JSON.parse(JSON.stringify(encodeQueuedThreadMessage(message)))),
@@ -360,15 +342,6 @@ describe("thread outbox", () => {
     ).toThrow();
   });
 
-  it.each([1, 2, 3, 4, 5, 6, 7, 8])("keeps the v%s outbox reader", (schemaVersion) => {
-    const message = queuedMessage({
-      messageId: `message-v${schemaVersion}`,
-      createdAt: "2026-06-08T10:00:01.000Z",
-    });
-
-    expect(decodeQueuedThreadMessage({ ...message, schemaVersion })).toEqual(message);
-  });
-
   it("persists generic attachment paths without embedding their contents", () => {
     const message = {
       ...queuedMessage({
@@ -416,37 +389,6 @@ describe("thread outbox", () => {
     expect(decodeQueuedThreadMessage({ ...message, schemaVersion: 4 })).toEqual(message);
   });
 
-  it("writes v9 file-backed images and preserves their preview on decode", () => {
-    const message = {
-      ...queuedMessage({
-        messageId: "message-image-v8",
-        createdAt: "2026-09-04T10:00:01.000Z",
-      }),
-      attachments: [
-        {
-          id: "image-v8",
-          type: "image" as const,
-          name: "photo.png",
-          mimeType: "image/png",
-          sizeBytes: 3,
-          fileUri: "file:///documents/t3-composer-attachments/photo.png",
-          previewUri: "file:///documents/t3-composer-attachments/photo-preview.png",
-        },
-      ],
-    } satisfies QueuedThreadMessage;
-
-    const encoded = encodeQueuedThreadMessage(message) as {
-      readonly schemaVersion: number;
-      readonly attachments: ReadonlyArray<Record<string, unknown>>;
-    };
-    expect(encoded.schemaVersion).toBe(9);
-    expect(encoded.attachments[0]).toMatchObject({
-      fileUri: message.attachments[0]!.fileUri,
-      previewUri: message.attachments[0]!.previewUri,
-    });
-    expect(decodeQueuedThreadMessage(encoded)).toEqual(message);
-  });
-
   it("persists the exact selector snapshot while remaining compatible with v1 messages", () => {
     const legacyMessage = queuedMessage({
       messageId: "message-1",
@@ -461,7 +403,6 @@ describe("thread outbox", () => {
       },
       runtimeMode: "approval-required",
       interactionMode: "plan",
-      localCheckoutBranch: "feature/queued-message",
     } satisfies QueuedThreadMessage;
 
     expect(decodeQueuedThreadMessage(encodeQueuedThreadMessage(selectedMessage))).toEqual(
@@ -470,45 +411,14 @@ describe("thread outbox", () => {
     expect(
       resolveQueuedThreadSettings(legacyMessage, {
         modelSelection: selectedMessage.modelSelection,
-        branch: "dev",
         runtimeMode: selectedMessage.runtimeMode,
         interactionMode: selectedMessage.interactionMode,
       }),
     ).toEqual({
       modelSelection: selectedMessage.modelSelection,
-      branch: "dev",
       runtimeMode: selectedMessage.runtimeMode,
       interactionMode: selectedMessage.interactionMode,
     });
-  });
-
-  it("persists image payloads once and rebuilds a durable preview on decode", () => {
-    const message = {
-      ...queuedMessage({
-        messageId: "message-with-image",
-        createdAt: "2026-06-08T10:00:01.000Z",
-      }),
-      attachments: [
-        {
-          id: "image-1",
-          type: "image",
-          name: "image.png",
-          mimeType: "image/png",
-          sizeBytes: 3,
-          dataUrl: "data:image/png;base64,YWJj",
-          previewUri: "file:///tmp/ephemeral-preview.png",
-        },
-      ],
-    } satisfies QueuedThreadMessage;
-
-    const encoded = encodeQueuedThreadMessage(message);
-    expect(JSON.stringify(encoded)).not.toContain("ephemeral-preview");
-    expect(decodeQueuedThreadMessage(encoded).attachments).toEqual([
-      {
-        ...message.attachments[0],
-        previewUri: message.attachments[0]!.dataUrl,
-      },
-    ]);
   });
 
   it("compares model options as part of the queued settings change", () => {
@@ -548,17 +458,11 @@ describe("thread outbox", () => {
     expect(
       resolveQueuedThreadSettings(
         message,
-        {
-          modelSelection: codex,
-          branch: "dev",
-          runtimeMode: "approval-required",
-          interactionMode: "plan",
-        },
+        { modelSelection: codex, runtimeMode: "approval-required", interactionMode: "plan" },
         providers,
       ),
     ).toEqual({
       modelSelection: antigravity,
-      branch: "dev",
       runtimeMode: "approval-required",
       interactionMode: "default",
     });
@@ -567,7 +471,6 @@ describe("thread outbox", () => {
         { ...message, modelSelection: codex },
         {
           modelSelection: antigravity,
-          branch: "dev",
           runtimeMode: "approval-required",
           interactionMode: "default",
         },
@@ -584,12 +487,7 @@ describe("thread outbox", () => {
     expect(
       resolveQueuedThreadSettings(
         queuedMessage({ messageId: "legacy-plan", createdAt: "2026-09-02T10:00:00.000Z" }),
-        {
-          modelSelection,
-          branch: null,
-          runtimeMode: "approval-required",
-          interactionMode: "plan",
-        },
+        { modelSelection, runtimeMode: "approval-required", interactionMode: "plan" },
         [{ instanceId: modelSelection.instanceId, showInteractionModeToggle: false }],
       ).interactionMode,
     ).toBe("default");
@@ -610,7 +508,6 @@ describe("thread outbox", () => {
         write: async () => undefined,
         remove: async () => undefined,
       },
-      warn: () => undefined,
     });
     const order: string[] = [];
     let releaseFirst!: () => void;
@@ -662,7 +559,7 @@ describe("thread outbox", () => {
         stored.delete(candidate.messageId);
       },
     };
-    const manager = createThreadOutboxManager({ registry, storage, warn: () => undefined });
+    const manager = createThreadOutboxManager({ registry, storage });
 
     const loading = manager.load();
     await Promise.resolve();
@@ -672,87 +569,10 @@ describe("thread outbox", () => {
 
     expect(loadCalls).toBe(1);
     expect(removeCalls).toBe(0);
-    expect(registry.get(manager.loadStateAtom)).toEqual({ status: "loading" });
 
     releaseInitialLoad();
     await Promise.all([loading, clearing]);
-    expect(registry.get(manager.loadStateAtom)).toEqual({ status: "ready" });
     expect(registry.get(manager.queuedMessagesByThreadKeyAtom)).toEqual({});
-    registry.dispose();
-  });
-
-  it("degrades to in-memory delivery while keeping recovery armed", () => {
-    const failure = {
-      status: "failed" as const,
-      error: new ThreadOutboxManagerError({
-        operation: "load",
-        environmentId: null,
-        threadId: null,
-        messageId: null,
-        cause: new Error("storage unavailable"),
-      }),
-    };
-
-    expect(resolveThreadOutboxHydrationAction({ status: "idle" }, 0)).toBe("load");
-    expect(resolveThreadOutboxHydrationAction({ status: "loading" }, 0)).toBe("wait");
-    expect(resolveThreadOutboxHydrationAction(failure, 0)).toBe("retry");
-    expect(resolveThreadOutboxHydrationAction(failure, THREAD_OUTBOX_HYDRATION_MAX_RETRIES)).toBe(
-      "recover",
-    );
-    expect(resolveThreadOutboxHydrationAction({ status: "ready" }, 0)).toBe("deliver");
-  });
-
-  it("hydrates persisted rows after degraded storage recovers", async () => {
-    const registry = AtomRegistry.make();
-    const persisted = queuedMessage({
-      messageId: "persisted-message",
-      createdAt: "2026-06-08T10:00:01.000Z",
-    });
-    let storageRecovered = false;
-    const manager = createThreadOutboxManager({
-      registry,
-      storage: {
-        load: async () => {
-          if (!storageRecovered) throw new Error("storage unavailable");
-          return { messages: [persisted], errors: [] };
-        },
-        write: async () => undefined,
-        remove: async () => undefined,
-      },
-    });
-
-    await manager.load();
-    expect(
-      resolveThreadOutboxHydrationAction(
-        registry.get(manager.loadStateAtom),
-        THREAD_OUTBOX_HYDRATION_MAX_RETRIES,
-      ),
-    ).toBe("recover");
-
-    storageRecovered = true;
-    await manager.load();
-    expect(registry.get(manager.loadStateAtom)).toEqual({ status: "ready" });
-    expect(registry.get(manager.queuedMessagesByThreadKeyAtom)).toEqual({
-      "environment-1:thread-1": [persisted],
-    });
-
-    const lifecycleInput = {
-      environmentConnected: true,
-      shellStatus: "live" as const,
-      messageOutboxReady: registry.get(manager.loadStateAtom).status === "ready",
-      threadExists: true,
-      threadArchived: false,
-      desiredArchived: true,
-      requiresDispatch: false,
-      hasQueuedMessages: true,
-      messageDispatching: false,
-      messageProjectionPending: false,
-      threadBusy: false,
-    };
-    expect(resolveThreadLifecycleOutboxAction(lifecycleInput)).toBe("wait");
-    expect(
-      resolveThreadLifecycleOutboxAction({ ...lifecycleInput, hasQueuedMessages: false }),
-    ).toBe("archive");
     registry.dispose();
   });
 
@@ -775,18 +595,7 @@ describe("thread outbox", () => {
       warn: (message, error) => warnings.push({ message, error }),
     });
 
-    expect(registry.get(manager.loadStateAtom)).toEqual({ status: "idle" });
     await manager.load();
-    expect(registry.get(manager.loadStateAtom)).toEqual({
-      status: "failed",
-      error: new ThreadOutboxManagerError({
-        operation: "load",
-        environmentId: null,
-        threadId: null,
-        messageId: null,
-        cause: loadCause,
-      }),
-    });
     expect(warnings).toEqual([
       {
         message: "[thread-outbox] failed to load persisted messages",
@@ -802,7 +611,6 @@ describe("thread outbox", () => {
 
     await manager.load();
     expect(loadCalls).toBe(2);
-    expect(registry.get(manager.loadStateAtom)).toEqual({ status: "ready" });
     registry.dispose();
   });
 
@@ -823,7 +631,7 @@ describe("thread outbox", () => {
         stored.delete(message.messageId);
       },
     };
-    const manager = createThreadOutboxManager({ registry, storage, warn: () => undefined });
+    const manager = createThreadOutboxManager({ registry, storage });
     const message = queuedMessage({
       messageId: "message-1",
       createdAt: "2026-06-08T10:00:01.000Z",
@@ -848,8 +656,7 @@ describe("thread outbox", () => {
     });
 
     failRemoval = false;
-    await expect(manager.remove(message)).resolves.toEqual(message);
-    await expect(manager.remove(message)).resolves.toBeNull();
+    await manager.remove(message);
     expect(registry.get(manager.queuedMessagesByThreadKeyAtom)).toEqual({});
     registry.dispose();
   });
@@ -996,7 +803,6 @@ describe("thread outbox", () => {
         write: async () => undefined,
         remove: async () => undefined,
       },
-      warn: () => undefined,
     });
     const message = queuedMessage({
       messageId: "message-1",
@@ -1025,7 +831,7 @@ describe("thread outbox", () => {
         stored.delete(message.messageId);
       },
     };
-    const manager = createThreadOutboxManager({ registry, storage, warn: () => undefined });
+    const manager = createThreadOutboxManager({ registry, storage });
     const message = queuedMessage({
       messageId: "message-1",
       createdAt: "2026-06-08T10:00:01.000Z",
@@ -1499,8 +1305,7 @@ describe("thread outbox", () => {
         threadExists: false,
         shellStatus: "synchronizing",
         environmentConnected: true,
-        threadStatus: null,
-        deliveryIntent: "steer",
+        threadBusy: false,
       }),
     ).toBe("wait");
     expect(
@@ -1509,8 +1314,7 @@ describe("thread outbox", () => {
         threadExists: false,
         shellStatus: "live",
         environmentConnected: true,
-        threadStatus: null,
-        deliveryIntent: "steer",
+        threadBusy: false,
       }),
     ).toBe("remove");
     expect(
@@ -1519,21 +1323,19 @@ describe("thread outbox", () => {
         threadExists: true,
         shellStatus: "live",
         environmentConnected: true,
-        threadStatus: null,
-        deliveryIntent: "steer",
+        threadBusy: false,
       }),
     ).toBe("send");
   });
 
-  it("sends existing-thread messages into a running turn so they steer it", () => {
+  it("sends existing-thread messages whenever connected so queued messages can steer", () => {
     expect(
       resolveThreadOutboxDeliveryAction({
         isCreation: false,
         threadExists: true,
         shellStatus: "live",
         environmentConnected: true,
-        threadStatus: "running",
-        deliveryIntent: "steer",
+        threadBusy: true,
       }),
     ).toBe("send");
     expect(
@@ -1542,8 +1344,7 @@ describe("thread outbox", () => {
         threadExists: true,
         shellStatus: "live",
         environmentConnected: false,
-        threadStatus: "running",
-        deliveryIntent: "steer",
+        threadBusy: true,
       }),
     ).toBe("wait");
   });
@@ -1555,8 +1356,7 @@ describe("thread outbox", () => {
         threadExists: false,
         shellStatus: "cached",
         environmentConnected: false,
-        threadStatus: null,
-        deliveryIntent: "steer",
+        threadBusy: false,
       }),
     ).toBe("wait");
     // Connected but not yet synchronized: a previously delivered creation may
@@ -1567,8 +1367,7 @@ describe("thread outbox", () => {
         threadExists: false,
         shellStatus: "synchronizing",
         environmentConnected: true,
-        threadStatus: null,
-        deliveryIntent: "steer",
+        threadBusy: false,
       }),
     ).toBe("wait");
     expect(
@@ -1577,8 +1376,7 @@ describe("thread outbox", () => {
         threadExists: false,
         shellStatus: "live",
         environmentConnected: true,
-        threadStatus: null,
-        deliveryIntent: "steer",
+        threadBusy: false,
       }),
     ).toBe("send");
     expect(
@@ -1587,42 +1385,9 @@ describe("thread outbox", () => {
         threadExists: true,
         shellStatus: "live",
         environmentConnected: true,
-        threadStatus: "starting",
-        deliveryIntent: "steer",
+        threadBusy: true,
       }),
     ).toBe("remove");
-  });
-
-  it("delivers steering messages while a thread is running but waits for session startup", () => {
-    for (const threadStatus of [
-      "idle",
-      "running",
-      "ready",
-      "interrupted",
-      "stopped",
-      "error",
-    ] as const) {
-      expect(
-        resolveThreadOutboxDeliveryAction({
-          isCreation: false,
-          threadExists: true,
-          shellStatus: "live",
-          environmentConnected: true,
-          threadStatus,
-          deliveryIntent: "steer",
-        }),
-      ).toBe("send");
-    }
-    expect(
-      resolveThreadOutboxDeliveryAction({
-        isCreation: false,
-        threadExists: true,
-        shellStatus: "live",
-        environmentConnected: true,
-        threadStatus: "starting",
-        deliveryIntent: "steer",
-      }),
-    ).toBe("wait");
   });
 
   it("round-trips queued creations and gates incomplete ones from sending", () => {
@@ -1676,12 +1441,6 @@ describe("thread outbox", () => {
       }),
     ).toBe(true);
     expect(shouldRetryThreadOutboxDelivery(new Error("Thread no longer exists"))).toBe(false);
-    expect(
-      shouldRetryThreadOutboxDelivery({
-        message: "Permission denied",
-        cause: { message: "Socket is not connected" },
-      }),
-    ).toBe(false);
     expect(
       shouldRetryThreadOutboxDelivery(
         new OrchestrationDispatchCommandError({ message: "Thread no longer exists" }),
@@ -1757,117 +1516,5 @@ describe("thread outbox", () => {
         interrupted: false,
       }),
     ).toBe("restore");
-  });
-
-  it("holds queue-intent messages while a turn is running and releases them after", () => {
-    const base = {
-      isCreation: false,
-      threadExists: true,
-      shellStatus: "live",
-      environmentConnected: true,
-    } as const;
-
-    expect(
-      resolveThreadOutboxDeliveryAction({
-        ...base,
-        threadStatus: "running",
-        deliveryIntent: "queue",
-      }),
-    ).toBe("wait");
-    expect(
-      resolveThreadOutboxDeliveryAction({
-        ...base,
-        threadStatus: "running",
-        deliveryIntent: "steer",
-      }),
-    ).toBe("send");
-    for (const threadStatus of ["idle", "ready", "interrupted", "stopped", "error"] as const) {
-      expect(
-        resolveThreadOutboxDeliveryAction({
-          ...base,
-          threadStatus,
-          deliveryIntent: "queue",
-        }),
-      ).toBe("send");
-    }
-    expect(
-      resolveThreadOutboxDeliveryAction({
-        ...base,
-        threadStatus: "starting",
-        deliveryIntent: "queue",
-      }),
-    ).toBe("wait");
-  });
-
-  it("round-trips the delivery intent and defaults legacy payloads to queue", () => {
-    const base = queuedMessage({
-      messageId: "message-1",
-      createdAt: "2026-06-08T10:00:01.000Z",
-    });
-    const steered = {
-      ...base,
-      deliveryIntent: "steer",
-      graceStartedAt: "2026-06-08T10:00:05.000Z",
-    } satisfies QueuedThreadMessage;
-
-    expect(decodeQueuedThreadMessage(encodeQueuedThreadMessage(steered))).toEqual(steered);
-    // Payloads persisted before schema version 5 carry no intent.
-    const legacy = decodeQueuedThreadMessage({ schemaVersion: 4, ...base });
-    expect(legacy.deliveryIntent).toBeUndefined();
-    expect(queuedThreadMessageIntent(legacy)).toBe("queue");
-    expect(queuedThreadMessageIntent(steered)).toBe("steer");
-  });
-
-  it("lets a steer message overtake held messages but never a backoff or edit", () => {
-    const held = queuedMessage({ messageId: "message-1", createdAt: "2026-06-08T10:00:01.000Z" });
-    const alsoHeld = {
-      ...queuedMessage({ messageId: "message-2", createdAt: "2026-06-08T10:00:02.000Z" }),
-      deliveryIntent: "queue",
-    } satisfies QueuedThreadMessage;
-    const steered = {
-      ...queuedMessage({ messageId: "message-3", createdAt: "2026-06-08T10:00:03.000Z" }),
-      deliveryIntent: "steer",
-    } satisfies QueuedThreadMessage;
-    const queue = [held, alsoHeld, steered];
-    const whileRunning = (message: QueuedThreadMessage) =>
-      resolveThreadOutboxDeliveryAction({
-        isCreation: false,
-        threadExists: true,
-        shellStatus: "live",
-        environmentConnected: true,
-        threadStatus: "running",
-        deliveryIntent: queuedThreadMessageIntent(message),
-      });
-
-    expect(
-      selectNextQueuedThreadDispatch(queue, {
-        isHeld: () => false,
-        resolveAction: whileRunning,
-      }),
-    ).toEqual({ message: steered, action: "send" });
-
-    // A message in retry backoff or being edited blocks everything behind it.
-    expect(
-      selectNextQueuedThreadDispatch(queue, {
-        isHeld: (message) => message.messageId === held.messageId,
-        resolveAction: whileRunning,
-      }),
-    ).toBeNull();
-
-    // Once the turn completes, delivery resumes in FIFO order.
-    expect(
-      selectNextQueuedThreadDispatch(queue, {
-        isHeld: () => false,
-        resolveAction: () => "send",
-      }),
-    ).toEqual({ message: held, action: "send" });
-
-    // A queue-intent message never overtakes another held message.
-    expect(
-      selectNextQueuedThreadDispatch([held, alsoHeld], {
-        isHeld: () => false,
-        resolveAction: whileRunning,
-      }),
-    ).toBeNull();
   });
 });

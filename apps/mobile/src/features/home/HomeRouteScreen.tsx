@@ -1,12 +1,13 @@
 import * as Arr from "effect/Array";
 import * as Order from "effect/Order";
 import { useNavigation } from "@react-navigation/native";
-import { useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import { Platform, useWindowDimensions } from "react-native";
 
+import type { EnvironmentThreadShell } from "@t3tools/client-runtime/state/shell";
+
 import { NativeHeaderToolbar, NativeStackScreenOptions } from "../../native/StackHeader";
-import { useProjects, useThreadShells } from "../../state/entities";
-import { useThreadLifecyclePresentation } from "../../state/thread-lifecycle-outbox";
+import { useProjects, useNavigationThreadShells } from "../../state/entities";
 import { usePendingNewTasks } from "../../state/use-pending-new-tasks";
 import { useWorkspaceState } from "../../state/workspace";
 import { useSavedRemoteConnections } from "../../state/use-remote-environment-registry";
@@ -22,10 +23,8 @@ import { useHomeModelFilterOptions } from "./use-home-model-filter-options";
 import { useHomeThreadSelection } from "./home-thread-navigation";
 import { buildHomeProjectScopes } from "./homeThreadList";
 import { usePendingTaskListActions } from "./usePendingTaskListActions";
-import { useArchivedThreadListActions, useThreadListActions } from "./useThreadListActions";
+import { useThreadListActions } from "./useThreadListActions";
 import { getConnectionAwareBrandHeaderOptions } from "./WorkspaceConnectionTitle";
-import { useThreadAttentionFilter } from "../threads/use-thread-attention-filter";
-import { pendingTaskAttentionKey } from "../threads/threadAttention";
 
 /* ─── Route screen ───────────────────────────────────────────────────── */
 
@@ -33,26 +32,26 @@ export function HomeRouteScreen() {
   const { width: windowWidth } = useWindowDimensions();
   const { layout, panes } = useAdaptiveWorkspaceLayout();
   const projects = useProjects();
-  const canonicalThreads = useThreadShells();
-  const threadLifecyclePresentation = useThreadLifecyclePresentation(canonicalThreads);
-  const threads = threadLifecyclePresentation.activeThreads;
+  const threads = useNavigationThreadShells();
   const { environments: workspaceEnvironments, state: catalogState } = useWorkspaceState();
   const { savedConnectionsById } = useSavedRemoteConnections();
   const navigation = useNavigation();
   const [searchQuery, setSearchQuery] = useState("");
-  const pendingTasks = usePendingNewTasks();
-  const pendingTaskKeys = useMemo(
-    () =>
-      pendingTasks.map((task) =>
-        pendingTaskAttentionKey({
-          environmentId: task.environmentId,
-          messageId: task.kind === "pending" ? task.message.messageId : task.draftKey,
-        }),
-      ),
-    [pendingTasks],
-  );
-  const attentionFilter = useThreadAttentionFilter(threads, pendingTaskKeys);
   const handleSelectThread = useHomeThreadSelection();
+  const handleNewThreadOnBranch = useCallback(
+    (thread: EnvironmentThreadShell) => {
+      navigation.navigate("NewTaskSheet", {
+        screen: "NewTaskDraft",
+        params: {
+          environmentId: String(thread.environmentId),
+          projectId: String(thread.projectId),
+          branch: thread.branch,
+          worktreePath: thread.worktreePath,
+        },
+      });
+    },
+    [navigation],
+  );
 
   useEffect(() => {
     void checkForAppUpdateOnLaunch();
@@ -61,7 +60,6 @@ export function HomeRouteScreen() {
 
   const {
     archiveThread,
-    forkThread,
     confirmDeleteThread,
     settleThread,
     snoozeThread,
@@ -73,11 +71,8 @@ export function HomeRouteScreen() {
     renameThread,
     regenerateThreadTitle,
     unsettleThread,
-  } = useThreadListActions({
-    offlineArchiveEnabled: true,
-  });
-  const { unarchiveThread, confirmDeleteThread: confirmDeleteArchivedThread } =
-    useArchivedThreadListActions();
+  } = useThreadListActions();
+  const pendingTasks = usePendingNewTasks();
   const { openPendingTask, confirmDeletePendingTask } = usePendingTaskListActions();
   const environments = useMemo(() => {
     const connectionStateByEnvironmentId = new Map(
@@ -190,14 +185,13 @@ export function HomeRouteScreen() {
                   screen: "SettingsContent",
                   params: { screen: "SettingsEnvironments" },
                 }),
-              showThreadSync: true,
             }),
             headerShown: true,
           }}
         />
         <HomeHeader
-          attentionFilterEnabled={attentionFilter.enabled}
-          attentionFilterReady={attentionFilter.ready}
+          attentionFilterEnabled={false}
+          attentionFilterReady={false}
           environments={environments}
           projects={projectFilterOptions}
           models={modelFilterOptions}
@@ -222,12 +216,10 @@ export function HomeRouteScreen() {
           }
           onSearchQueryChange={setSearchQuery}
           onStartNewTask={() => navigation.navigate("NewTaskSheet", { screen: "NewTask" })}
-          onToggleAttentionFilter={attentionFilter.toggle}
+          onToggleAttentionFilter={() => {}}
         />
 
         <HomeScreen
-          attentionMemberPendingTaskKeys={attentionFilter.memberPendingTaskKeys}
-          attentionMemberThreadKeys={attentionFilter.memberThreadKeys}
           catalogState={catalogState}
           environments={environments}
           onAddConnection={() =>
@@ -237,9 +229,6 @@ export function HomeRouteScreen() {
             })
           }
           onArchiveThread={archiveThread}
-          onForkThread={forkThread}
-          onDeleteArchivedThread={confirmDeleteArchivedThread}
-          onClearAttentionFilter={attentionFilter.clear}
           onDeleteThread={confirmDeleteThread}
           onSettleThread={settleThread}
           onSnoozeThread={snoozeThread}
@@ -259,12 +248,6 @@ export function HomeRouteScreen() {
               params: { screen: "Settings" },
             })
           }
-          onOpenAllArchivedThreads={() =>
-            navigation.navigate("SettingsSheet", {
-              screen: "SettingsContent",
-              params: { screen: "SettingsArchive" },
-            })
-          }
           onSearchQueryChange={setSearchQuery}
           onSelectThread={(thread) => {
             // Compact drills into the thread and leaves the search field
@@ -272,23 +255,11 @@ export function HomeRouteScreen() {
             // would silently filter the list on the way back. Split view is
             // unaffected — its sidebar and search bar stay on screen.
             setSearchQuery("");
-            // Settled threads are live shells: opening one is plain
-            // navigation, and sending a message un-settles server-side.
             handleSelectThread(thread);
           }}
           onSelectPendingTask={openPendingTask}
           onDeletePendingTask={confirmDeletePendingTask}
-          onNewThreadOnBranch={(thread) => {
-            navigation.navigate("NewTaskSheet", {
-              screen: "NewTaskDraft",
-              params: {
-                environmentId: String(thread.environmentId),
-                projectId: String(thread.projectId),
-                branch: thread.branch,
-                worktreePath: thread.worktreePath,
-              },
-            });
-          }}
+          onNewThreadOnBranch={handleNewThreadOnBranch}
           onNewThreadInProject={(project) => {
             navigation.navigate("NewTaskSheet", {
               screen: "NewTaskDraft",
@@ -300,9 +271,6 @@ export function HomeRouteScreen() {
             });
           }}
           onStartNewTask={() => navigation.navigate("NewTaskSheet", { screen: "NewTask" })}
-          onUnarchiveThread={unarchiveThread}
-          pendingArchivedThreads={threadLifecyclePresentation.pendingArchivedThreads}
-          pendingArchivedThreadKeys={threadLifecyclePresentation.pendingArchivedThreadKeys}
           pendingTasks={pendingTasks}
           projectGroupingMode={listOptions.projectGroupingMode}
           projects={projects}

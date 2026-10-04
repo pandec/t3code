@@ -1,6 +1,5 @@
 import {
   formatProviderSkillDisplayName,
-  isProviderSkillManualOnly,
   resolveProviderSkillSourceKind,
   type ProviderSkillSourceKind,
 } from "@t3tools/client-runtime/providerSkills";
@@ -8,12 +7,14 @@ import {
   type ProjectEntry,
   type ProviderDriverKind,
   type PullRequestContextMetadata,
+  type ScopedThreadRef,
   type ServerProviderSkill,
   type ServerProviderSlashCommand,
 } from "@t3tools/contracts";
 import {
   BlocksIcon,
   FolderIcon,
+  MessagesSquareIcon,
   PackageIcon,
   SettingsIcon,
   UserRoundIcon,
@@ -65,6 +66,13 @@ export type ComposerCommandItem =
       id: string;
       type: "pull-request";
       pullRequest: PullRequestContextMetadata;
+      label: string;
+      description: string;
+    }
+  | {
+      id: string;
+      type: "thread";
+      thread: ScopedThreadRef;
       label: string;
       description: string;
     };
@@ -160,9 +168,6 @@ const ComposerCommandMenuItem = memo(function ComposerCommandMenuItem(props: {
 }) {
   const skillSourceKind =
     props.item.type === "skill" ? resolveProviderSkillSourceKind(props.item.skill) : null;
-  // "Manual" flags a skill the agent cannot invoke on its own, so the
-  // inserted reference is a pointer for the user rather than a trigger.
-  const isManualSkill = props.item.type === "skill" && isProviderSkillManualOnly(props.item.skill);
   const isSlashSkill =
     props.triggerKind === "slash-command" && props.item.type === "skill" ? props.item.skill : null;
   const pullRequestPresentation =
@@ -192,6 +197,9 @@ const ComposerCommandMenuItem = memo(function ComposerCommandMenuItem(props: {
           theme={props.resolvedTheme}
         />
       ) : null}
+      {props.item.type === "thread" ? (
+        <MessagesSquareIcon aria-hidden="true" className="size-4 shrink-0 text-secondary-label" />
+      ) : null}
       {pullRequestPresentation ? (
         <pullRequestPresentation.Icon
           role="img"
@@ -220,9 +228,6 @@ const ComposerCommandMenuItem = memo(function ComposerCommandMenuItem(props: {
           />
         ) : null}
       </span>
-      {isManualSkill ? (
-        <span className="shrink-0 pl-2 text-secondary-label text-xs">Manual</span>
-      ) : null}
     </CommandItem>
   );
 });

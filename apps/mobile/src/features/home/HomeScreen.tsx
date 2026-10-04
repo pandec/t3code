@@ -1,6 +1,3 @@
-import { useThreadGroups } from "../../state/use-thread-groups";
-import { useCollapsedThreadGroups } from "../../state/use-mobile-preferences";
-import { ThreadCustomGroupHeader } from "../threads/ThreadCustomGroupHeader";
 import { useAndroidControlSizing } from "../../components/useAndroidControlSizing";
 import type { ThreadMoveDestination } from "../threads/threadOrder";
 import { computeThreadMoveAvailability } from "../threads/threadOrder";
@@ -9,17 +6,11 @@ import {
   type EnvironmentProject,
   type EnvironmentThreadShell,
 } from "@t3tools/client-runtime/state/shell";
-import type { SnoozePreset } from "@t3tools/client-runtime/state/thread-settled";
-import { selectRecentArchivedThreads } from "@t3tools/client-runtime/state/threads";
 import {
   threadSearchMatchKey,
   type EnvironmentThreadSearchMatch,
 } from "@t3tools/client-runtime/state/thread-search";
-import {
-  type EnvironmentId,
-  resolveEnvironmentMachineKind,
-  type SidebarProjectGroupingMode,
-} from "@t3tools/contracts";
+import { type EnvironmentId, type SidebarProjectGroupingMode } from "@t3tools/contracts";
 import { useAtomValue } from "@effect/atom-react";
 import { useFocusEffect } from "@react-navigation/native";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
@@ -42,17 +33,10 @@ import type { SavedRemoteConnection } from "../../lib/connection";
 import { scopedProjectKey } from "../../lib/scopedEntities";
 import { NATIVE_LIQUID_GLASS_SUPPORTED } from "../../native/native-glass";
 import { useThreadSearch } from "../../state/queries";
-import { mergePendingArchivedThreads } from "../../state/thread-lifecycle-outbox";
 import { useThreadJumpShortcuts } from "../keyboard/threadKeyboardShortcuts";
-import {
-  useAlwaysShowPinnedInAttention,
-  useArchivedSectionVisibleCount,
-  useThreadShelfExpansion,
-} from "../../state/use-mobile-preferences";
-import { useRecentArchivedThreadSnapshots } from "../archive/useArchivedThreadSnapshots";
-import { RecentArchivedThreadSection } from "../threads/RecentArchivedThreadSection";
+import { useThreadShelfExpansion } from "../../state/use-mobile-preferences";
 import { usePendingThreadOrder } from "../../state/thread-order";
-import { environmentServerConfigsAtom } from "../../state/server";
+import { threadListEnvironmentsAtom } from "../../state/server";
 import { useProjectAccentColors } from "../../state/use-project-accent-colors";
 import type { PendingNewTask } from "../../state/use-pending-new-tasks";
 import { useQueuedThreadKeys } from "../../state/use-thread-outbox";
@@ -66,8 +50,6 @@ import {
   ThreadListV2SnoozedShelfHeader,
 } from "../threads/thread-list-v2-items";
 import { useThreadRowProviderInstanceResolver } from "../threads/thread-provider-instance";
-import { resolveThreadProviderDriver } from "../threads/thread-provider";
-import { pendingTaskAttentionKey } from "../threads/threadAttention";
 import {
   buildThreadListV2Items,
   getThreadListV2OrderedSection,
@@ -88,10 +70,6 @@ import { useMaterialFabScroll } from "./MaterialFabScrollContext";
 interface HomeScreenProps {
   readonly projects: ReadonlyArray<EnvironmentProject>;
   readonly threads: ReadonlyArray<EnvironmentThreadShell>;
-  readonly pendingArchivedThreads: ReadonlyArray<EnvironmentThreadShell>;
-  readonly pendingArchivedThreadKeys: ReadonlySet<string>;
-  readonly attentionMemberPendingTaskKeys: ReadonlySet<string> | null;
-  readonly attentionMemberThreadKeys: ReadonlySet<string> | null;
   readonly pendingTasks: ReadonlyArray<PendingNewTask>;
   readonly catalogState: WorkspaceState;
   readonly savedConnectionsById: Readonly<Record<string, SavedRemoteConnection>>;
@@ -115,17 +93,12 @@ interface HomeScreenProps {
   readonly onStartNewTask: () => void;
   readonly onSelectThread: (thread: EnvironmentThreadShell) => void;
   readonly onArchiveThread: (thread: EnvironmentThreadShell) => void;
-  readonly onForkThread: (thread: EnvironmentThreadShell) => void;
-  readonly onDeleteArchivedThread: (thread: EnvironmentThreadShell) => void;
-  readonly onUnarchiveThread: (thread: EnvironmentThreadShell) => void;
-  readonly onOpenAllArchivedThreads: () => void;
-  readonly onClearAttentionFilter: () => void;
   readonly onDeleteThread: (thread: EnvironmentThreadShell) => void;
   /** Resolves true iff the settle was dispatched and succeeded. */
   readonly onSettleThread: (thread: EnvironmentThreadShell) => Promise<boolean>;
   readonly onSnoozeThread: (
     thread: EnvironmentThreadShell,
-    preset: Pick<SnoozePreset, "snoozedUntil" | "untilDone">,
+    snoozedUntil: string,
   ) => Promise<boolean>;
   readonly onUnsnoozeThread: (thread: EnvironmentThreadShell) => Promise<boolean>;
   readonly onUnsettleThread: (thread: EnvironmentThreadShell) => void;
@@ -238,7 +211,7 @@ function deriveEmptyState(props: {
 
   return {
     title: "No threads yet",
-    detail: "Create a task to start a new coding session in one of your connected projects.",
+    detail: "Create a task to start a new coding runtime in one of your connected projects.",
     loading: false,
   };
 }
@@ -250,60 +223,9 @@ function HomeTopContentSpacer() {
 /* ─── Main screen ────────────────────────────────────────────────────── */
 
 export function HomeScreen(props: HomeScreenProps) {
-  const customGroups = useThreadGroups();
-  const { ids: collapsedGroupIds, toggle: toggleCustomGroup } = useCollapsedThreadGroups();
-  const archivedSectionVisibleCount = useArchivedSectionVisibleCount();
-  const alwaysShowPinnedInAttention = useAlwaysShowPinnedInAttention();
-  const { expanded: archivedShelfExpanded, toggle: toggleArchivedShelf } =
-    useThreadShelfExpansion("archived");
   const queuedThreadKeys = useQueuedThreadKeys();
   const openSwipeableRef = useRef<SwipeableMethods | null>(null);
   const insets = useSafeAreaInsets();
-  const archivedEnvironmentIds = useMemo(
-    () => props.environments.map((environment) => environment.environmentId),
-    [props.environments],
-  );
-  const { snapshots: archivedSnapshots } = useRecentArchivedThreadSnapshots(
-    archivedEnvironmentIds,
-    archivedSectionVisibleCount,
-  );
-  const recentArchive = useMemo(
-    () => selectRecentArchivedThreads(archivedSnapshots, archivedSectionVisibleCount),
-    [archivedSectionVisibleCount, archivedSnapshots],
-  );
-  const archiveShelfVisible =
-    props.searchQuery.trim().length === 0 &&
-    props.attentionMemberThreadKeys === null &&
-    props.selectedEnvironmentId === null &&
-    props.selectedProjectKey === null &&
-    props.selectedModel === null;
-  const displayedServerArchive = archiveShelfVisible
-    ? recentArchive
-    : { threads: [], totalCount: 0 };
-  const displayedRecentArchive = useMemo(
-    () =>
-      mergePendingArchivedThreads(
-        displayedServerArchive,
-        archiveShelfVisible ? props.pendingArchivedThreads : [],
-        archivedSectionVisibleCount,
-      ),
-    [
-      archiveShelfVisible,
-      archivedSectionVisibleCount,
-      displayedServerArchive,
-      props.pendingArchivedThreads,
-    ],
-  );
-  const archivedEnvironmentLabels = useMemo(
-    () =>
-      Object.fromEntries(
-        Object.values(props.savedConnectionsById).map((connection) => [
-          connection.environmentId,
-          connection.environmentLabel,
-        ]),
-      ),
-    [props.savedConnectionsById],
-  );
   const { fabClearance } = useAndroidControlSizing();
   const iosBottomToolbarClearance =
     Platform.OS === "ios" && !NATIVE_LIQUID_GLASS_SUPPORTED
@@ -486,8 +408,8 @@ export function HomeScreen(props: HomeScreenProps) {
   // optimistic holds.
   const handleSettleThread = props.onSettleThread;
   const handleSnoozeThread = useCallback(
-    (thread: EnvironmentThreadShell, preset: Pick<SnoozePreset, "snoozedUntil" | "untilDone">) => {
-      void props.onSnoozeThread(thread, preset);
+    (thread: EnvironmentThreadShell, snoozedUntil: string) => {
+      void props.onSnoozeThread(thread, snoozedUntil);
     },
     [props.onSnoozeThread],
   );
@@ -546,7 +468,6 @@ export function HomeScreen(props: HomeScreenProps) {
     v2ProjectScopeKey,
     props.selectedModel,
     props.searchQuery.trim(),
-    props.attentionMemberThreadKeys !== null,
   ]);
   const lastSettledResetKeyRef = useRef(settledResetKey);
   if (lastSettledResetKeyRef.current !== settledResetKey) {
@@ -566,8 +487,6 @@ export function HomeScreen(props: HomeScreenProps) {
     useThreadShelfExpansion("settled");
   const { expanded: pinnedShelfExpanded, toggle: togglePinnedShelf } =
     useThreadShelfExpansion("pinned");
-  const { expanded: activeShelfExpanded, toggle: toggleActiveShelf } =
-    useThreadShelfExpansion("active");
   // Queued-start and snooze helpers need a clock while the list stays open.
   const [nowMinute, setNowMinute] = useState(() => new Date().toISOString().slice(0, 16));
   // Snooze wake times are second-precise; a counter bumped exactly at the
@@ -584,92 +503,19 @@ export function HomeScreen(props: HomeScreenProps) {
   );
   // Threads on servers without the settlement capability never classify as
   // settled (the user could neither un-settle nor pin them).
-  const serverConfigs = useAtomValue(environmentServerConfigsAtom);
-  const settlementEnvironmentIds = useMemo(() => {
-    const supported = new Set<EnvironmentId>();
-    for (const [environmentId, config] of serverConfigs) {
-      if (config.environment.capabilities.threadSettlement === true) {
-        supported.add(environmentId);
-      }
-    }
-    return supported;
-  }, [serverConfigs]);
-  const snoozeEnvironmentIds = useMemo(() => {
-    const supported = new Set<EnvironmentId>();
-    for (const [environmentId, config] of serverConfigs) {
-      if (config.environment.capabilities.threadSnooze === true) {
-        supported.add(environmentId);
-      }
-    }
-    return supported;
-  }, [serverConfigs]);
-  const snoozeUntilDoneEnvironmentIds = useMemo(() => {
-    const supported = new Set<EnvironmentId>();
-    for (const [environmentId, config] of serverConfigs) {
-      if (config.environment.capabilities.threadSnoozeUntilDone === true) {
-        supported.add(environmentId);
-      }
-    }
-    return supported;
-  }, [serverConfigs]);
-  const pinningEnvironmentIds = useMemo(() => {
-    const supported = new Set<EnvironmentId>();
-    for (const [environmentId, config] of serverConfigs) {
-      if (config.environment.capabilities.threadPinning === true) {
-        supported.add(environmentId);
-      }
-    }
-    return supported;
-  }, [serverConfigs]);
-  const autoSettleOptOutEnvironmentIds = useMemo(() => {
-    const supported = new Set<EnvironmentId>();
-    for (const [environmentId, config] of serverConfigs) {
-      if (config.environment.capabilities.threadAutoSettleOptOut === true) {
-        supported.add(environmentId);
-      }
-    }
-    return supported;
-  }, [serverConfigs]);
-  const pinReorderEnvironmentIds = useMemo(() => {
-    const supported = new Set<EnvironmentId>();
-    for (const [environmentId, config] of serverConfigs) {
-      if (config.environment.capabilities.threadPinReorder === true) {
-        supported.add(environmentId);
-      }
-    }
-    return supported;
-  }, [serverConfigs]);
-  const activeReorderEnvironmentIds = useMemo(() => {
-    const supported = new Set<EnvironmentId>();
-    for (const [environmentId, config] of serverConfigs) {
-      if (config.environment.capabilities.threadActiveReorder === true) {
-        supported.add(environmentId);
-      }
-    }
-    return supported;
-  }, [serverConfigs]);
-  const titleRegenerationEnvironmentIds = useMemo(() => {
-    const supported = new Set<EnvironmentId>();
-    for (const [environmentId, config] of serverConfigs) {
-      if (config.environment.capabilities.threadTitleRegeneration === true) {
-        supported.add(environmentId);
-      }
-    }
-    return supported;
-  }, [serverConfigs]);
-  const machineByEnvironmentId = useMemo(
-    () =>
-      new Map(
-        [...serverConfigs].map(
-          ([environmentId, config]) =>
-            [environmentId, resolveEnvironmentMachineKind(config)] as const,
-        ),
-      ),
-    [serverConfigs],
-  );
-  // Reference-stable provider glyphs: a fresh object per render would break
-  // the memoized rows' props comparison on every parent render.
-  const resolveProviderInstance = useThreadRowProviderInstanceResolver(serverConfigs);
+  const listEnvironments = useAtomValue(threadListEnvironmentsAtom);
+  const {
+    providersByEnvironmentId,
+    machineByEnvironmentId,
+    settlementEnvironmentIds,
+    snoozeEnvironmentIds,
+    pinningEnvironmentIds,
+    autoSettleOptOutEnvironmentIds,
+    pinReorderEnvironmentIds,
+    activeReorderEnvironmentIds,
+    titleRegenerationEnvironmentIds,
+  } = listEnvironments;
+  const resolveProviderInstance = useThreadRowProviderInstanceResolver(providersByEnvironmentId);
   const pendingOrder = usePendingThreadOrder(nowMinute, snoozeWakeTick);
   // Up/down menu availability for every card, computed once per section per
   // rebuild (see computeThreadMoveAvailability): per-thread planner calls made
@@ -680,15 +526,8 @@ export function HomeScreen(props: HomeScreenProps) {
         allThreads: props.threads,
         section,
         pendingOrder,
-        reorderableEnvironmentIds: new Set(
-          [...serverConfigs].flatMap(([id, config]) =>
-            (section === "pinned"
-              ? config.environment.capabilities.threadPinReorder
-              : config.environment.capabilities.threadActiveReorder) === true
-              ? [id]
-              : [],
-          ),
-        ),
+        reorderableEnvironmentIds:
+          section === "pinned" ? pinReorderEnvironmentIds : activeReorderEnvironmentIds,
         ordered: getThreadListV2OrderedSection({
           threads: props.threads,
           section,
@@ -701,7 +540,8 @@ export function HomeScreen(props: HomeScreenProps) {
       });
     return new Map([...sectionAvailability("pinned"), ...sectionAvailability("active")]);
   }, [
-    serverConfigs,
+    pinReorderEnvironmentIds,
+    activeReorderEnvironmentIds,
     props.threads,
     pendingOrder,
     queuedThreadKeys,
@@ -716,8 +556,6 @@ export function HomeScreen(props: HomeScreenProps) {
     return buildThreadListV2Items({
       pendingOrder,
       threads: props.threads.filter((thread) => thread.archivedAt === null),
-      attentionMemberThreadKeys: props.attentionMemberThreadKeys,
-      alwaysShowPinnedInAttention,
       environmentId: props.selectedEnvironmentId,
       model: props.selectedModel,
       projectRefs: v2ScopedProjectGroup === null ? null : v2ScopedProjectGroup.projectRefs,
@@ -734,7 +572,6 @@ export function HomeScreen(props: HomeScreenProps) {
       selectedThreadKey: null,
     });
   }, [
-    alwaysShowPinnedInAttention,
     pendingOrder,
     queuedThreadKeys,
     nowMinute,
@@ -746,7 +583,6 @@ export function HomeScreen(props: HomeScreenProps) {
     settlementEnvironmentIds,
     snoozeEnvironmentIds,
     props.searchQuery,
-    props.attentionMemberThreadKeys,
     props.selectedEnvironmentId,
     props.selectedModel,
     props.threads,
@@ -771,24 +607,11 @@ export function HomeScreen(props: HomeScreenProps) {
   // they are spliced in below the active block and stay visible and deletable
   // while their environment is offline. Same environment, model, project,
   // and search filters as the list itself.
-  //
-  // Queued work is unresolved, so it belongs in the attention snapshot; tasks
-  // queued afterward are admitted by the same sticky rule as new shells.
   const v2SearchQuery = props.searchQuery.trim().toLocaleLowerCase();
   const v2PendingTasks = useMemo(
     () =>
       props.pendingTasks.filter(
         (pendingTask) =>
-          (props.attentionMemberPendingTaskKeys === null ||
-            props.attentionMemberPendingTaskKeys.has(
-              pendingTaskAttentionKey({
-                environmentId: pendingTask.environmentId,
-                messageId:
-                  pendingTask.kind === "pending"
-                    ? pendingTask.message.messageId
-                    : pendingTask.draftKey,
-              }),
-            )) &&
           (props.selectedEnvironmentId === null ||
             pendingTask.environmentId === props.selectedEnvironmentId) &&
           (props.selectedModel === null ||
@@ -803,7 +626,6 @@ export function HomeScreen(props: HomeScreenProps) {
             pendingTask.title.toLocaleLowerCase().includes(v2SearchQuery)),
       ),
     [
-      props.attentionMemberPendingTaskKeys,
       props.pendingTasks,
       props.selectedEnvironmentId,
       props.selectedModel,
@@ -814,15 +636,6 @@ export function HomeScreen(props: HomeScreenProps) {
   const threadListV2Items = useMemo(
     () =>
       buildThreadListV2ListItems({
-        customGroups: customGroups.groups,
-        collapsedGroupIds:
-          props.searchQuery.trim() || props.attentionMemberThreadKeys != null
-            ? new Set()
-            : collapsedGroupIds,
-        activeShelfExpanded:
-          activeShelfExpanded ||
-          props.searchQuery.trim().length > 0 ||
-          props.attentionMemberThreadKeys != null,
         items: threadListV2Layout.items,
         pendingTasks: v2PendingTasks,
         pinnedCount: threadListV2Layout.pinnedCount,
@@ -841,11 +654,6 @@ export function HomeScreen(props: HomeScreenProps) {
         shelfPreferencesLoading: !shelfPreferencesLoaded,
       }),
     [
-      customGroups.groups,
-      collapsedGroupIds,
-      activeShelfExpanded,
-      props.searchQuery,
-      props.attentionMemberThreadKeys,
       nowMinute,
       pinnedShelfExpanded,
       settledShelfExpanded,
@@ -891,16 +699,6 @@ export function HomeScreen(props: HomeScreenProps) {
           />
         );
       }
-      if (item.type === "v2-custom-group")
-        return (
-          <ThreadCustomGroupHeader
-            name={item.name}
-            count={item.count}
-            expanded={item.expanded}
-            builtIn={item.groupId === null}
-            onToggle={item.groupId ? () => toggleCustomGroup(item.groupId!) : toggleActiveShelf}
-          />
-        );
       if (item.type === "v2-pinned-shelf") {
         return (
           <ThreadListV2PinnedShelfHeader
@@ -957,8 +755,8 @@ export function HomeScreen(props: HomeScreenProps) {
               scopedProjectKey(thread.environmentId, thread.projectId),
             ) ?? null
           }
-          providerDriver={resolveThreadProviderDriver(serverConfigs, thread)}
           providerInstance={resolveProviderInstance(thread)}
+          providers={providersByEnvironmentId.get(thread.environmentId)}
           environmentLabel={
             Object.keys(props.savedConnectionsById).length > 1
               ? (props.savedConnectionsById[thread.environmentId]?.environmentLabel ?? null)
@@ -975,14 +773,12 @@ export function HomeScreen(props: HomeScreenProps) {
           onSelectThread={props.onSelectThread}
           onDeleteThread={handleDeleteThread}
           onArchiveThread={props.onArchiveThread}
-          onForkThread={props.onForkThread}
           onRenameThread={handleRenameThread}
           onRegenerateThreadTitle={handleRegenerateThreadTitle}
           titleRegenerationSupported={titleRegenerationEnvironmentIds.has(thread.environmentId)}
           settlementSupported={settlementEnvironmentIds.has(thread.environmentId)}
           onSettleThread={handleSettleThread}
           snoozeSupported={snoozeEnvironmentIds.has(thread.environmentId)}
-          snoozeUntilDoneSupported={snoozeUntilDoneEnvironmentIds.has(thread.environmentId)}
           pinningSupported={pinningEnvironmentIds.has(thread.environmentId)}
           autoSettleOptOutSupported={autoSettleOptOutEnvironmentIds.has(thread.environmentId)}
           reorderSupported={
@@ -1006,8 +802,6 @@ export function HomeScreen(props: HomeScreenProps) {
       );
     },
     [
-      toggleCustomGroup,
-      toggleActiveShelf,
       handleDeleteThread,
       activeReorderEnvironmentIds,
       handleMoveThread,
@@ -1024,17 +818,18 @@ export function HomeScreen(props: HomeScreenProps) {
       handleSetThreadAutoSettle,
       autoSettleOptOutEnvironmentIds,
       pinningEnvironmentIds,
+      autoSettleOptOutEnvironmentIds,
       machineByEnvironmentId,
       pinReorderEnvironmentIds,
       projectByKey,
       props.onArchiveThread,
-      props.onForkThread,
       props.onDeletePendingTask,
       props.onSelectPendingTask,
       props.onSelectThread,
       props.onNewThreadOnBranch,
       props.savedConnectionsById,
       resolveProviderInstance,
+      providersByEnvironmentId,
       settlementEnvironmentIds,
       v2ProjectAccentByProjectKey,
       snoozeEnvironmentIds,
@@ -1060,7 +855,7 @@ export function HomeScreen(props: HomeScreenProps) {
       queuedThreadKeys,
       pendingOrder,
       projectTitleByProjectKey: v2ProjectTitleByProjectKey,
-      serverConfigs,
+      listEnvironments,
       savedConnectionsById: props.savedConnectionsById,
       searchQuery: props.searchQuery,
       threadSearchMatchByKey,
@@ -1072,7 +867,7 @@ export function HomeScreen(props: HomeScreenProps) {
       pendingOrder,
       props.searchQuery,
       props.savedConnectionsById,
-      serverConfigs,
+      listEnvironments,
       threadSearchMatchByKey,
       v2ProjectTitleByProjectKey,
     ],
@@ -1084,10 +879,7 @@ export function HomeScreen(props: HomeScreenProps) {
   // full-page "No threads yet". Settled threads are unarchived live shells,
   // so the archived-at check already covers the settled shelf.
   const hasAnyThreads =
-    recentArchive.totalCount > 0 ||
-    props.pendingArchivedThreads.length > 0 ||
-    props.threads.some((thread) => thread.archivedAt === null) ||
-    props.pendingTasks.length > 0;
+    props.threads.some((thread) => thread.archivedAt === null) || props.pendingTasks.length > 0;
   const selectedEnvironmentLabel =
     props.selectedEnvironmentId === null
       ? null
@@ -1144,9 +936,6 @@ export function HomeScreen(props: HomeScreenProps) {
     );
   }
 
-  // Connection status lives in the header title slot (WorkspaceConnectionTitle),
-  // so transient connection work never shifts the list. Empty states retain
-  // their in-content status card above.
   const listHeader = Platform.OS === "ios" ? undefined : <HomeTopContentSpacer />;
 
   // Project scoping lives in the header filter menu (no inline chip row on
@@ -1160,14 +949,6 @@ export function HomeScreen(props: HomeScreenProps) {
       <EmptyState
         title="No results"
         detail={`No threads matching "${props.searchQuery}".`}
-        variant={Platform.OS === "android" ? "plain" : undefined}
-      />
-    ) : props.attentionMemberThreadKeys !== null ? (
-      <EmptyState
-        title="No threads need attention"
-        detail="Turn off the attention filter to show every thread."
-        actionLabel="Clear attention filter"
-        onAction={props.onClearAttentionFilter}
         variant={Platform.OS === "android" ? "plain" : undefined}
       />
     ) : v2ScopedProjectGroup !== null ? (
@@ -1188,7 +969,7 @@ export function HomeScreen(props: HomeScreenProps) {
         detail="Choose another environment or create a new task."
         variant={Platform.OS === "android" ? "plain" : undefined}
       />
-    ) : displayedRecentArchive.totalCount > 0 ? null : (
+    ) : (
       <EmptyState
         title="No threads yet"
         detail="Create a task to start a new coding session."
@@ -1196,11 +977,7 @@ export function HomeScreen(props: HomeScreenProps) {
       />
     );
 
-  if (
-    Platform.OS === "android" &&
-    threadListV2Items.length === 0 &&
-    displayedRecentArchive.totalCount === 0
-  ) {
+  if (Platform.OS === "android" && threadListV2Items.length === 0) {
     return (
       <View className="flex-1 bg-header">
         <View
@@ -1243,27 +1020,12 @@ export function HomeScreen(props: HomeScreenProps) {
             extraData={v2ExtraData}
             ListHeaderComponent={v2ListHeader}
             ListFooterComponent={
-              <View>
-                {settledShelfExpanded && threadListV2Layout.hiddenSettledCount > 0 ? (
-                  <ThreadListV2ShowMoreRow
-                    hiddenCount={threadListV2Layout.hiddenSettledCount}
-                    onPress={showMoreSettled}
-                  />
-                ) : null}
-                <RecentArchivedThreadSection
-                  environmentLabels={archivedEnvironmentLabels}
-                  projects={props.projects}
-                  threads={displayedRecentArchive.threads}
-                  totalCount={displayedRecentArchive.totalCount}
-                  expanded={archivedShelfExpanded}
-                  onToggle={toggleArchivedShelf}
-                  onDelete={props.onDeleteArchivedThread}
-                  onOpen={props.onSelectThread}
-                  onOpenAll={props.onOpenAllArchivedThreads}
-                  onUnarchive={props.onUnarchiveThread}
-                  pendingThreadKeys={props.pendingArchivedThreadKeys}
+              settledShelfExpanded && threadListV2Layout.hiddenSettledCount > 0 ? (
+                <ThreadListV2ShowMoreRow
+                  hiddenCount={threadListV2Layout.hiddenSettledCount}
+                  onPress={showMoreSettled}
                 />
-              </View>
+              ) : null
             }
             ListEmptyComponent={v2ListEmpty}
             style={{ flex: 1 }}

@@ -2,7 +2,6 @@ import {
   type ClaudeSettings,
   type ModelCapabilities,
   type ModelSelection,
-  type ServerProviderSkill,
   type ServerProviderSlashCommand,
   type ServerProviderResetCredits,
 } from "@t3tools/contracts";
@@ -231,7 +230,7 @@ function apiProviderAuthMetadata(
 // Bedrock backend and runs the `awsAuthRefresh` credential hook before returning
 // account info. The previous 8s budget expired mid-init, so the probe returned
 // `undefined` and left the provider unverified and unselectable in the picker.
-export const CLAUDE_SDK_INITIALIZATION_TIMEOUT_MS = 25_000;
+const CAPABILITIES_PROBE_TIMEOUT_MS = 25_000;
 
 /**
  * Keep workspace-scoped command discovery intact while isolating the periodic
@@ -329,96 +328,6 @@ function parseClaudeInitializationCommands(
   );
 }
 
-export function parseClaudeSkills(
-  skills: ReadonlyArray<ClaudeSlashCommand>,
-): ReadonlyArray<ServerProviderSkill> {
-  const skillsByName = new Map<string, ServerProviderSkill>();
-
-  for (const skill of skills) {
-    const name = nonEmptyProbeString(skill.name);
-    if (!name) continue;
-
-    const key = name.toLowerCase();
-    if (skillsByName.has(key)) continue;
-
-    const description = nonEmptyProbeString(skill.description);
-    skillsByName.set(key, {
-      name,
-      enabled: true,
-      // `skills/reload` reports exactly the skills the model may invoke.
-      modelInvocable: true,
-      ...(description ? { description } : {}),
-    });
-  }
-
-  return [...skillsByName.values()];
-}
-
-/**
- * Combine the SDK's skill list with a filesystem scan of the same workspace.
- *
- * `skills/reload` omits skills carrying `disable-model-invocation: true`, so
- * on its own it hides skills the user can still run by hand — precisely the
- * ones they reach for from the composer picker. The disk scan supplies those,
- * plus the `path`/`scope` metadata the SDK never reports. The SDK in turn
- * contributes plugin- and bundle-provided skills that live outside the two
- * directories the scan walks, so neither source is a superset of the other.
- *
- * The initialization command list is the authority on user invocation. It
- * removes model-only skills (`user-invocable: false`) and effective `off`
- * overrides even when `skills/reload` reports them to the model.
- *
- * Anything the scan found but the SDK did not is, by construction, invisible
- * to the model — that outranks whatever the frontmatter claimed.
- */
-export function mergeClaudeSkills(
-  nativeSkills: ReadonlyArray<ServerProviderSkill>,
-  discoveredSkills: ReadonlyArray<ServerProviderSkill>,
-  userInvocableSkillNames?: ReadonlySet<string>,
-): ReadonlyArray<ServerProviderSkill> {
-  const skillsByName = new Map<string, ServerProviderSkill>();
-
-  for (const skill of gateClaudeSkillsByUserInvocation(discoveredSkills, userInvocableSkillNames)) {
-    skillsByName.set(skill.name.toLowerCase(), { ...skill, modelInvocable: false });
-  }
-
-  for (const skill of gateClaudeSkillsByUserInvocation(nativeSkills, userInvocableSkillNames)) {
-    const key = skill.name.toLowerCase();
-    const discovered = skillsByName.get(key);
-    skillsByName.set(key, {
-      ...skill,
-      ...(discovered?.path ? { path: discovered.path } : {}),
-      ...(discovered?.scope ? { scope: discovered.scope } : {}),
-      modelInvocable: true,
-    });
-  }
-
-  return [...skillsByName.values()].sort((left, right) => left.name.localeCompare(right.name));
-}
-
-/**
- * Drop skills the CLI does not report as user-invocable.
- *
- * Used on its own when `skills/reload` failed but the initialization handshake
- * succeeded: the command list is still the authority on what `/name` resolves,
- * so serving the raw scan would surface skills disabled through
- * `skillOverrides` or conditional `paths:` skills that never activated.
- * Unlike the merged path this preserves each skill's frontmatter-derived
- * `modelInvocable`, because without the SDK list there is no evidence about
- * what the model can reach.
- *
- * An absent or empty name set carries no information and gates nothing.
- */
-export function gateClaudeSkillsByUserInvocation(
-  skills: ReadonlyArray<ServerProviderSkill>,
-  userInvocableSkillNames: ReadonlySet<string> | undefined,
-): ReadonlyArray<ServerProviderSkill> {
-  if (userInvocableSkillNames === undefined || userInvocableSkillNames.size === 0) {
-    return skills;
-  }
-  return skills.filter((skill) => userInvocableSkillNames.has(skill.name.toLowerCase()));
-}
-
 function dedupeSlashCommands(
   commands: ReadonlyArray<ServerProviderSlashCommand>,
 ): ReadonlyArray<ServerProviderSlashCommand> {
@@ -511,7 +420,7 @@ const probeClaudeCapabilities = (
       return { q, init };
     });
   }).pipe(
-    Effect.timeout(CLAUDE_SDK_INITIALIZATION_TIMEOUT_MS),
+    Effect.timeout(CAPABILITIES_PROBE_TIMEOUT_MS),
     Effect.flatMap(({ q, init }) =>
       Effect.gen(function* () {
         // Usage has its own deadline so a slow optional request cannot discard initialization.

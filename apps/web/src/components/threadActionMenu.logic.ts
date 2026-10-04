@@ -57,8 +57,8 @@ export interface ThreadActionMenuState {
   readonly isSnoozed: boolean;
   readonly canSnoozeNow: boolean;
   readonly isRegeneratingTitle: boolean;
-  /** See `resolveArchiveToggleAction`: busy threads archive when done. */
-  readonly archiveAction: "archive" | "schedule" | "cancel";
+  /** Archive rejects a thread with an attached provider, so disable it here rather than let the action fail. */
+  readonly isRunning: boolean;
   readonly supports: {
     readonly settlement: boolean;
     /** Server understands thread.auto-settle.set. */
@@ -204,13 +204,9 @@ export function buildThreadActionMenuItems(
     // styling.
     {
       id: "archive",
-      label:
-        state.archiveAction === "cancel"
-          ? "Cancel pending archive"
-          : state.archiveAction === "schedule"
-            ? "Archive when done"
-            : "Archive thread",
+      label: "Archive thread",
       icon: "archive",
+      disabled: state.isRunning,
       separatorBefore: true,
     },
     {

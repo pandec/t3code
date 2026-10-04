@@ -5,7 +5,11 @@ import { Tooltip, TooltipPopup, TooltipTrigger } from "../ui/tooltip";
 import { openCommandPalette } from "../../commandPaletteBus";
 import { useMediaQuery } from "../../hooks/useMediaQuery";
 import { useThreadPaneId } from "./threadPaneContext";
-import { THREAD_SPLIT_MEDIA_QUERY, useThreadSplitStore } from "./threadSplitStore";
+import {
+  THREAD_SPLIT_HOST_AVAILABLE,
+  THREAD_SPLIT_MEDIA_QUERY,
+  useThreadSplitStore,
+} from "./threadSplitStore";
 
 /**
  * "Open split view" for the chat header's action row. Fully self-gated so
@@ -18,7 +22,12 @@ export function OpenSplitViewControl() {
   const splitActive = useThreadSplitStore((state) => state.secondaryRef !== null);
   const isWideEnoughForSplit = useMediaQuery(THREAD_SPLIT_MEDIA_QUERY);
 
-  if (paneId === "secondary" || splitActive || !isWideEnoughForSplit) {
+  if (
+    !THREAD_SPLIT_HOST_AVAILABLE ||
+    paneId === "secondary" ||
+    splitActive ||
+    !isWideEnoughForSplit
+  ) {
     return null;
   }
 

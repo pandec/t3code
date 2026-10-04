@@ -1,6 +1,6 @@
 ---
 name: test-t3-app
-description: Launch, retain, and test the T3 Code web app in isolated development environments, including first-try browser authentication with one-time pairing URLs, pairing-token recovery, worktree-safe state directories, cross-turn dev server lifecycle, and direct SQLite inspection or fixture seeding. Use when an agent needs to run T3 locally, iteratively test UI behavior with a human, recover from an expired or consumed pairing token, isolate dev state, or prepare test data in state.sqlite.
+description: Launch, retain, and test the T3 Code web app in isolated development environments, including first-try browser authentication with one-time pairing URLs, pairing-token recovery, worktree-safe state directories, cross-turn dev server lifecycle, and direct SQLite inspection or fixture seeding. Use when an agent needs to run T3 locally, iteratively test UI behavior with a human, recover from an expired or consumed pairing token, isolate dev state, or prepare SQLite test data.
 ---
 
 # Test T3 App
@@ -77,9 +77,6 @@ Read [references/sqlite-fixtures.md](references/sqlite-fixtures.md) before chang
 - Reload the page after a direct write. Table edits emit no events, so a live tab keeps rendering the pre-write projection.
 - Seed projection tables only for disposable UI fixtures. Use application commands and APIs when testing business behavior or projection correctness.
 - Use the auth CLI, not direct `auth_*` table edits, for pairing and sessions.
-- Give every seeded thread a real `model_selection_json`; the row schema decodes it non-nullable, so a null there fails the whole `/api/orchestration/shell` response and the UI reports no projects.
-- Name a provider the local catalog actually installs in both the thread's model selection and the session's `provider_name`/`provider_instance_id`; the composer locks to the session's provider and otherwise offers no model and disables sending.
-- Drive pending approvals and questions from `projection_thread_activities` rows — that is where the composer reads them, not `projection_pending_approvals`. Update the denormalized `pending_approval_count` and `pending_user_input_count` on `projection_threads` to match, since the sidebar and settled-state logic read those instead.
 
 The helper refuses to write to the shared `~/.t3` directory by default and creates a database backup before each mutation.
 

@@ -1,6 +1,5 @@
 import type {
   DesktopBridge,
-  DesktopNotificationThreadRef,
   DesktopPreviewPointerEvent,
   DesktopPreviewRecordingInputEvent,
   DesktopPreviewRecordingFrame,
@@ -30,27 +29,6 @@ function isSnapShotEvent(value: unknown): value is DesktopSnapShotEvent {
 }
 
 exposeClerkBridge({ passkeys: true });
-
-const notificationClickListeners = new Set<(threadRef: DesktopNotificationThreadRef) => void>();
-const pendingNotificationClicks: DesktopNotificationThreadRef[] = [];
-const MAX_PENDING_NOTIFICATION_CLICKS = 20;
-
-ipcRenderer.on(IpcChannels.NOTIFICATION_CLICKED_CHANNEL, (_event, threadRef: unknown) => {
-  if (typeof threadRef !== "object" || threadRef === null) {
-    return;
-  }
-  const typedThreadRef = threadRef as DesktopNotificationThreadRef;
-  if (notificationClickListeners.size === 0) {
-    pendingNotificationClicks.push(typedThreadRef);
-    if (pendingNotificationClicks.length > MAX_PENDING_NOTIFICATION_CLICKS) {
-      pendingNotificationClicks.shift();
-    }
-    return;
-  }
-  for (const listener of notificationClickListeners) {
-    listener(typedThreadRef);
-  }
-});
 
 // oxlint-disable-next-line t3code/no-global-process-runtime -- Electron exposes the client platform in its sandboxed preload process.
 const clientPlatform = process.platform;
@@ -270,18 +248,6 @@ contextBridge.exposeInMainWorld("desktopBridge", {
     return () => {
       ipcRenderer.removeListener(IpcChannels.WINDOW_FULLSCREEN_STATE_CHANNEL, wrappedListener);
     };
-  },
-  notifications: {
-    show: (input) => ipcRenderer.invoke(IpcChannels.NOTIFICATIONS_SHOW_CHANNEL, input),
-    onNotificationClicked: (listener) => {
-      notificationClickListeners.add(listener);
-      for (const threadRef of pendingNotificationClicks.splice(0)) {
-        listener(threadRef);
-      }
-      return () => {
-        notificationClickListeners.delete(listener);
-      };
-    },
   },
   getUpdateState: () => ipcRenderer.invoke(IpcChannels.UPDATE_GET_STATE_CHANNEL),
   setUpdateChannel: (channel) =>

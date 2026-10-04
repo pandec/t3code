@@ -254,6 +254,42 @@ describe("sidebar collision detection", () => {
 
 describe("sidebar drag projection", () => {
   it.each([
+    ["a2", "a1"],
+    ["p", "a1"],
+    ["s", sidebarMarkerId("pinned-header")],
+    ["z", sidebarMarkerId("settled-header")],
+  ])("restores every row and marker when dragging %s out after hovering %s", (active, over) => {
+    const items = [
+      pinnedHeader,
+      thread("p", "pinned"),
+      divider,
+      marker("active-placeholder"),
+      thread("a1", "active"),
+      thread("a2", "active"),
+      marker("snoozed-header"),
+      thread("z", "snoozed"),
+      settledHeader,
+      marker("settled-placeholder"),
+      thread("s", "settled"),
+    ];
+    const input = {
+      items,
+      settledOrder: ["z", "s"],
+      settledExpanded: true,
+      boundaryLabelHeight: 24,
+      snoozedThreadCount: 1,
+    };
+    const reordered = preview(input, active, over);
+    expect([...reordered.values()].some((transform) => transform?.y !== 0)).toBe(true);
+
+    const restored = preview({ ...input, enabled: false }, active, over);
+    for (const transform of restored.values()) expect(transform).toEqual(stationary);
+
+    // Returning to the sidebar resumes the same live reorder preview.
+    expect(preview({ ...input, enabled: true }, active, over)).toEqual(reordered);
+  });
+
+  it.each([
     ["a1", "a2"],
     ["a1", sidebarMarkerId("settled-header")],
     ["z", "a2"],
@@ -856,63 +892,4 @@ describe("lifted card clearance", () => {
     expect(511 + apply(511, 36, -500, 96).y).toBe(128);
     expect(511 + apply(511, 36, -500, 136, 114).y).toBe(250);
   });
-});
-
-it("retains the Active header and its space while dragging without custom groups", () => {
-  const items = [
-    pinnedHeader,
-    divider,
-    marker("active-header"),
-    thread("a1", "active"),
-    thread("a2", "active"),
-    settledHeader,
-  ];
-  const result = preview({ items, settledOrder: [], settledExpanded: false }, "a1", "a2");
-  expect(result.get(sidebarMarkerId("active-header"))).toEqual(stationary);
-  expect(result.get("a2")).toEqual({ ...stationary, y: -83 });
-});
-
-it("retains all custom group headers while previewing a cross-group drop", () => {
-  const items: SidebarListItem[] = [
-    pinnedHeader,
-    divider,
-    marker("custom-group:research"),
-    { kind: "thread", key: "a", section: "active", customGroupId: "research" },
-    marker("custom-group:parked"),
-    marker("active-header"),
-    thread("b", "active"),
-    settledHeader,
-  ];
-  const result = preview(
-    { items, settledOrder: [], settledExpanded: false },
-    "a",
-    sidebarMarkerId("custom-group:parked"),
-  );
-  for (const name of ["custom-group:research", "custom-group:parked", "active-header"] as const)
-    expect(result.get(sidebarMarkerId(name))?.scaleY).toBe(1);
-});
-
-it("previews a drop below a later group's row without jumping to its top", () => {
-  const items: SidebarListItem[] = [
-    pinnedHeader,
-    divider,
-    marker("active-header"),
-    thread("source", "active"),
-    marker("custom-group:a"),
-    { kind: "thread", key: "a1", section: "active", customGroupId: "a" },
-    marker("custom-group:b"),
-    { kind: "thread", key: "b1", section: "active", customGroupId: "b" },
-    { kind: "thread", key: "b2", section: "active", customGroupId: "b" },
-    settledHeader,
-  ];
-  const result = preview({ items, settledOrder: [], settledExpanded: false }, "source", "b2");
-  const { rects } = layout(items, "source", "b2");
-  const top = (key: string) => {
-    const index = items.findIndex((item) => sidebarListItemId(item) === key);
-    return rects[index]!.top + (result.get(key)?.y ?? 0);
-  };
-  // The lifted row follows the pointer; the other rows reveal its insertion gap.
-  expect(result.get("b1")?.y).toBe(-46);
-  expect(result.get("b2")?.y).toBe(-46);
-  expect(top("b2")).toBeGreaterThan(top("b1"));
 });

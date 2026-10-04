@@ -4,8 +4,6 @@ import type {
   ServerProviderSlashCommand,
 } from "@t3tools/contracts";
 
-export { isProviderSkillManualOnly, resolveEffectiveProviderSkills } from "./state/server.ts";
-
 export type ProviderSkillSourceKind = "app" | "repo" | "project" | "personal" | "system" | "other";
 
 function titleCaseWords(value: string): string {
@@ -78,9 +76,7 @@ export function getProviderSlashCommandsForSlashMenu(
 export function resolveProviderSkillSourceKind(
   skill: Pick<ServerProviderSkill, "path" | "scope">,
 ): ProviderSkillSourceKind {
-  // The contract leaves `path` optional: a provider that reports no location
-  // still gets classified by scope rather than crashing the picker.
-  const normalizedPath = skill.path ? normalizePathSeparators(skill.path) : "";
+  const normalizedPath = normalizePathSeparators(skill.path);
   if (normalizedPath.includes("/.codex/plugins/") || normalizedPath.includes("/.agents/plugins/")) {
     return "app";
   }

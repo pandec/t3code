@@ -1,17 +1,8 @@
 import { SettingsGroup } from "./SettingsGroup";
 import { Spinner } from "~/components/ui/spinner";
-import {
-  ArchiveIcon,
-  ArchiveX,
-  BotIcon,
-  CheckIcon,
-  ChevronRightIcon,
-  SearchIcon,
-  SettingsIcon,
-  XIcon,
-} from "lucide-react";
+import { NotificationSettings } from "./NotificationSettings";
+import { ArchiveIcon, ArchiveX, CheckIcon, ChevronRightIcon, SettingsIcon } from "lucide-react";
 import { Link, useNavigate } from "@tanstack/react-router";
-import { useAtomValue } from "@effect/atom-react";
 import type { CSSProperties, ReactNode } from "react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
@@ -23,7 +14,7 @@ import {
   type SidebarProjectGroupingMode,
 } from "@t3tools/contracts";
 import { scopeThreadRef } from "@t3tools/client-runtime/environment";
-import type { EnvironmentThreadShell } from "@t3tools/client-runtime/state/shell";
+import { presentThreadShell } from "@t3tools/client-runtime/state/shell";
 import {
   isAtomCommandInterrupted,
   settlePromise,
@@ -55,6 +46,7 @@ import {
   type ResponseStreamingMode,
   MIN_TERMINAL_FONT_SIZE,
   type QuitConfirmationMode,
+  SidebarProjectSortOrder,
 } from "@t3tools/contracts/settings";
 import { resolveServerBackgroundActivitySettings } from "@t3tools/shared/backgroundActivitySettings";
 import { createModelSelection } from "@t3tools/shared/model";
@@ -85,7 +77,6 @@ import {
   useTheme,
 } from "../../hooks/useTheme";
 import { useProjectAccentColors } from "../../hooks/useProjectAccentColors";
-import { useClientSettings } from "../../hooks/useSettings";
 import { useLocalStorage } from "../../hooks/useLocalStorage";
 import {
   useScopedSettings,
@@ -100,29 +91,18 @@ import { useDesktopUpdateState } from "../../state/desktopUpdate";
 import {
   getCustomModelOptionsByInstance,
   resolveAppModelSelectionState,
+  selectsPlanAgent,
 } from "../../modelSelection";
 import {
   applyProviderInstanceSettings,
   deriveProviderInstanceEntries,
-  getProviderInstanceEntry,
   sortProviderInstanceEntries,
 } from "../../providerInstances";
 import { ensureLocalApi, readLocalApi } from "../../localApi";
 import { isMacPlatform } from "../../lib/utils";
-import { EMPTY_SERVER_PROVIDERS, serverEnvironment } from "../../state/server";
-import { useEnvironments, usePrimaryEnvironment } from "../../state/environments";
-import { useAllEnvironmentShellsBootstrapped, useProjects } from "../../state/entities";
+import { EMPTY_SERVER_PROVIDERS } from "../../state/server";
 import { useArchivedThreadSnapshots } from "../../lib/archivedThreadsState";
 import { formatRelativeTimeLabel } from "../../timestampFormat";
-import {
-  AlertDialog,
-  AlertDialogClose,
-  AlertDialogDescription,
-  AlertDialogFooter,
-  AlertDialogHeader,
-  AlertDialogPopup,
-  AlertDialogTitle,
-} from "../ui/alert-dialog";
 import { Button } from "../ui/button";
 import { Collapsible, CollapsiblePanel, CollapsibleTrigger } from "../ui/collapsible";
 import {
@@ -167,7 +147,6 @@ import { stackedThreadToast, toastManager } from "../ui/toast";
 import { Tooltip, TooltipPopup, TooltipTrigger } from "../ui/tooltip";
 import { ThemeLibrary } from "./ThemeSettings";
 import {
-  archivedThreadMatchesSearch,
   backgroundActivityOverrideSettings,
   backgroundActivitySharedPolicySettings,
   durationToSeconds,
@@ -194,15 +173,6 @@ import {
 } from "./settingsLayout";
 import { searchableSetting } from "./settingsSearch";
 import { ProjectFavicon } from "../ProjectFavicon";
-import { ProviderInstanceIcon } from "../chat/ProviderInstanceIcon";
-import { buildArchivedThreadGroups } from "../../archivedThreadGrouping";
-import { selectProjectGroupingSettings } from "../../logicalProject";
-import {
-  archivedThreadGroupMatchesScope,
-  archivedThreadMatchesScope,
-  resolveArchivedThreadScopeFilter,
-  shouldDeferArchivedEmptyState,
-} from "../../archivedProjectFilter";
 import { PanelAnimationsPreview } from "./PanelAnimationsPreview";
 
 const ENVIRONMENT_IDENTIFICATION_LABELS: Record<EnvironmentIdentificationMode, string> = {
@@ -214,15 +184,19 @@ const ENVIRONMENT_IDENTIFICATION_LABELS: Record<EnvironmentIdentificationMode, s
 const RESPONSE_STREAMING_MODE_LABELS: Record<ResponseStreamingMode, string> = {
   turn: "Wait for the full response",
   paragraph: "Show finished paragraphs",
-  token: "Token by token (legacy)",
 };
 
 const RESPONSE_STREAMING_MODE_DESCRIPTIONS: Record<ResponseStreamingMode, string> = {
   turn: "Text appears once the agent finishes its turn.",
   paragraph: "Each paragraph or code block appears as soon as it is complete.",
-  token:
-    "Every token repaints the answer as it arrives. Slower and harder to read. Thinking traces still arrive a paragraph at a time.",
 };
+
+const SIDEBAR_PROJECT_SORT_ORDER_LABELS: Record<SidebarProjectSortOrder, string> = {
+  updated_at: "Last user message",
+  created_at: "Created at",
+  manual: "Manual",
+};
+const isSidebarProjectSortOrder = Schema.is(SidebarProjectSortOrder);
 
 const TIMESTAMP_FORMAT_LABELS = {
   locale: "System default",
@@ -593,6 +567,12 @@ export function useSettingsRestore(onRestored?: () => void) {
       ...(settings.timestampFormat !== DEFAULT_UNIFIED_SETTINGS.timestampFormat
         ? ["Time format"]
         : []),
+      ...(settings.notificationMode !== DEFAULT_UNIFIED_SETTINGS.notificationMode
+        ? ["Thread notifications"]
+        : []),
+      ...(settings.inAppNotificationsEnabled !== DEFAULT_UNIFIED_SETTINGS.inAppNotificationsEnabled
+        ? ["In-app notifications"]
+        : []),
       ...(settings.sidebarThreadPreviewCount !== DEFAULT_UNIFIED_SETTINGS.sidebarThreadPreviewCount
         ? ["Visible threads"]
         : []),
@@ -603,6 +583,9 @@ export function useSettingsRestore(onRestored?: () => void) {
       ...(settings.sidebarProjectGroupingMode !==
       DEFAULT_UNIFIED_SETTINGS.sidebarProjectGroupingMode
         ? ["Project Grouping"]
+        : []),
+      ...(settings.sidebarProjectSortOrder !== DEFAULT_UNIFIED_SETTINGS.sidebarProjectSortOrder
+        ? ["Project order"]
         : []),
       ...(settings.sidebarWorkingShelfEnabled !==
       DEFAULT_UNIFIED_SETTINGS.sidebarWorkingShelfEnabled
@@ -618,9 +601,6 @@ export function useSettingsRestore(onRestored?: () => void) {
       ...(projectAccentColors.hasAnyServerAccentColors ||
       Object.keys(settings.sidebarProjectAccentColors).length > 0
         ? ["Project accent colors"]
-        : []),
-      ...(settings.threadAutoSettleEnabled !== DEFAULT_UNIFIED_SETTINGS.threadAutoSettleEnabled
-        ? ["Automatic thread settling"]
         : []),
       ...(settings.sidebarThreadProviderIconVisibility !==
       DEFAULT_UNIFIED_SETTINGS.sidebarThreadProviderIconVisibility
@@ -640,7 +620,17 @@ export function useSettingsRestore(onRestored?: () => void) {
       ...(settings.sidebarThreadGroupsButton !== DEFAULT_UNIFIED_SETTINGS.sidebarThreadGroupsButton
         ? ["Thread groups button"]
         : []),
+      ...(settings.autoResumeLimitedThreads !== DEFAULT_UNIFIED_SETTINGS.autoResumeLimitedThreads
+        ? ["Auto-resume limited threads"]
+        : []),
+      ...(settings.snoozeLimitedThreads !== DEFAULT_UNIFIED_SETTINGS.snoozeLimitedThreads
+        ? ["Snooze limited threads"]
+        : []),
       ...(settings.wordWrap !== DEFAULT_UNIFIED_SETTINGS.wordWrap ? ["Word wrap"] : []),
+      ...(settings.persistComposerContextStrip !==
+      DEFAULT_UNIFIED_SETTINGS.persistComposerContextStrip
+        ? ["Composer context"]
+        : []),
       ...getChangedTypographySettingLabels(settings),
       ...(settings.diffFilesCollapsed !== DEFAULT_UNIFIED_SETTINGS.diffFilesCollapsed
         ? ["Default diff file state"]
@@ -662,6 +652,9 @@ export function useSettingsRestore(onRestored?: () => void) {
         ? ["Rich text composer"]
         : []),
       ...(settings.sendShortcut !== DEFAULT_UNIFIED_SETTINGS.sendShortcut ? ["Send shortcut"] : []),
+      ...(settings.followUpBehavior !== DEFAULT_UNIFIED_SETTINGS.followUpBehavior
+        ? ["Follow-up behavior"]
+        : []),
       ...(settings.contextWindowMeterEnabled !== DEFAULT_UNIFIED_SETTINGS.contextWindowMeterEnabled
         ? ["Context window indicator"]
         : []),
@@ -698,28 +691,6 @@ export function useSettingsRestore(onRestored?: () => void) {
         : []),
       ...(settings.confirmTerminalClose !== DEFAULT_UNIFIED_SETTINGS.confirmTerminalClose
         ? ["Terminal close confirmation"]
-        : []),
-      ...(settings.enableTurnCompletionToasts !==
-      DEFAULT_UNIFIED_SETTINGS.enableTurnCompletionToasts
-        ? ["Completion toasts"]
-        : []),
-      ...(settings.enableTurnCompletionSystemNotifications !==
-      DEFAULT_UNIFIED_SETTINGS.enableTurnCompletionSystemNotifications
-        ? ["System notifications"]
-        : []),
-      ...(settings.enableInputRequestNotifications !==
-      DEFAULT_UNIFIED_SETTINGS.enableInputRequestNotifications
-        ? ["Input and approval alerts"]
-        : []),
-      ...(settings.enableNotificationSounds !== DEFAULT_UNIFIED_SETTINGS.enableNotificationSounds
-        ? ["Notification sounds"]
-        : []),
-      ...(settings.enableRateLimitAlerts !== DEFAULT_UNIFIED_SETTINGS.enableRateLimitAlerts
-        ? ["Rate limit alerts"]
-        : []),
-      ...(settings.turnCompletionMinDurationSeconds !==
-      DEFAULT_UNIFIED_SETTINGS.turnCompletionMinDurationSeconds
-        ? ["Minimum turn duration"]
         : []),
       ...(settings.providerUsageWarningPercent !==
       DEFAULT_UNIFIED_SETTINGS.providerUsageWarningPercent
@@ -764,7 +735,6 @@ export function useSettingsRestore(onRestored?: () => void) {
       settings.providerUsageWarningPercent,
       settings.providerUsageCriticalPercent,
       settings.steerGraceWindowMs,
-      settings.turnCompletionMinDurationSeconds,
       settings.voice.tts,
       settings.voice.agentReplyTts,
       projectAccentColors.hasAnyServerAccentColors,
@@ -784,15 +754,11 @@ export function useSettingsRestore(onRestored?: () => void) {
       settings.confirmTerminalClose,
       settings.confirmThreadArchive,
       settings.confirmThreadDelete,
-      settings.enableTurnCompletionToasts,
-      settings.enableTurnCompletionSystemNotifications,
-      settings.enableInputRequestNotifications,
-      settings.enableNotificationSounds,
-      settings.enableRateLimitAlerts,
       settings.confirmThreadUnpin,
       settings.composerCollapseOnScroll,
       settings.composerRichTextEnabled,
       settings.sendShortcut,
+      settings.followUpBehavior,
       settings.addProjectBaseDirectory,
       settings.defaultThreadEnvMode,
       settings.newWorktreesStartFromOrigin,
@@ -815,23 +781,28 @@ export function useSettingsRestore(onRestored?: () => void) {
       settings.glassOpacity,
       settings.panelAnimationDurationMs,
       settings.responseStreamingMode,
+      settings.persistComposerContextStrip,
       settings.enableProviderUpdateChecks,
       settings.sidebarProjectAccentColors,
       settings.archivedSectionVisibleCount,
       settings.continueThreadsAfterServerUpdate,
       settings.sidebarAutoSettleAfterDays,
       settings.sidebarAutoSettleOnMerge,
+      settings.autoResumeLimitedThreads,
+      settings.snoozeLimitedThreads,
       settings.sidebarProjectGroupingMode,
       settings.sidebarThreadProviderIconVisibility,
+      settings.sidebarProjectSortOrder,
       settings.sidebarWorkingShelfEnabled,
       settings.sidebarThreadPreviewCount,
-      settings.threadAutoSettleEnabled,
       settings.sidebarV2CompactCards,
       settings.sidebarAlwaysShowPinnedInAttention,
       settings.sidebarV2NewThreadButtonInProjectRow,
       settings.sidebarThreadGroupsButton,
       settings.showSkillsInSlashMenu,
       settings.timestampFormat,
+      settings.notificationMode,
+      settings.inAppNotificationsEnabled,
       settings.wordWrap,
       followSystem,
       theme,
@@ -907,7 +878,10 @@ export function useSettingsRestore(onRestored?: () => void) {
       diffColorScheme: DEFAULT_UNIFIED_SETTINGS.diffColorScheme,
       chatWidth: DEFAULT_UNIFIED_SETTINGS.chatWidth,
       timestampFormat: DEFAULT_UNIFIED_SETTINGS.timestampFormat,
+      notificationMode: DEFAULT_UNIFIED_SETTINGS.notificationMode,
+      inAppNotificationsEnabled: DEFAULT_UNIFIED_SETTINGS.inAppNotificationsEnabled,
       wordWrap: DEFAULT_UNIFIED_SETTINGS.wordWrap,
+      persistComposerContextStrip: DEFAULT_UNIFIED_SETTINGS.persistComposerContextStrip,
       diffFilesCollapsed: DEFAULT_UNIFIED_SETTINGS.diffFilesCollapsed,
       diffIgnoreWhitespace: DEFAULT_UNIFIED_SETTINGS.diffIgnoreWhitespace,
       diffLayout: DEFAULT_UNIFIED_SETTINGS.diffLayout,
@@ -916,6 +890,7 @@ export function useSettingsRestore(onRestored?: () => void) {
       composerCollapseOnScroll: DEFAULT_UNIFIED_SETTINGS.composerCollapseOnScroll,
       composerRichTextEnabled: DEFAULT_UNIFIED_SETTINGS.composerRichTextEnabled,
       sendShortcut: DEFAULT_UNIFIED_SETTINGS.sendShortcut,
+      followUpBehavior: DEFAULT_UNIFIED_SETTINGS.followUpBehavior,
       contextWindowMeterEnabled: DEFAULT_UNIFIED_SETTINGS.contextWindowMeterEnabled,
       environmentIdentificationMode: DEFAULT_UNIFIED_SETTINGS.environmentIdentificationMode,
       glassOpacity: DEFAULT_UNIFIED_SETTINGS.glassOpacity,
@@ -926,11 +901,11 @@ export function useSettingsRestore(onRestored?: () => void) {
       sidebarThreadPreviewCount: DEFAULT_UNIFIED_SETTINGS.sidebarThreadPreviewCount,
       archivedSectionVisibleCount: DEFAULT_UNIFIED_SETTINGS.archivedSectionVisibleCount,
       sidebarProjectGroupingMode: DEFAULT_UNIFIED_SETTINGS.sidebarProjectGroupingMode,
+      sidebarProjectSortOrder: DEFAULT_UNIFIED_SETTINGS.sidebarProjectSortOrder,
       sidebarWorkingShelfEnabled: DEFAULT_UNIFIED_SETTINGS.sidebarWorkingShelfEnabled,
       sidebarAutoSettleAfterDays: DEFAULT_UNIFIED_SETTINGS.sidebarAutoSettleAfterDays,
       sidebarAutoSettleOnMerge: DEFAULT_UNIFIED_SETTINGS.sidebarAutoSettleOnMerge,
       sidebarProjectAccentColors: {},
-      threadAutoSettleEnabled: DEFAULT_UNIFIED_SETTINGS.threadAutoSettleEnabled,
       sidebarThreadProviderIconVisibility:
         DEFAULT_UNIFIED_SETTINGS.sidebarThreadProviderIconVisibility,
       sidebarV2CompactCards: DEFAULT_UNIFIED_SETTINGS.sidebarV2CompactCards,
@@ -939,6 +914,8 @@ export function useSettingsRestore(onRestored?: () => void) {
       sidebarV2NewThreadButtonInProjectRow:
         DEFAULT_UNIFIED_SETTINGS.sidebarV2NewThreadButtonInProjectRow,
       sidebarThreadGroupsButton: DEFAULT_UNIFIED_SETTINGS.sidebarThreadGroupsButton,
+      autoResumeLimitedThreads: DEFAULT_UNIFIED_SETTINGS.autoResumeLimitedThreads,
+      snoozeLimitedThreads: DEFAULT_UNIFIED_SETTINGS.snoozeLimitedThreads,
       responseStreamingMode: DEFAULT_UNIFIED_SETTINGS.responseStreamingMode,
       enableProviderUpdateChecks: DEFAULT_UNIFIED_SETTINGS.enableProviderUpdateChecks,
       continueThreadsAfterServerUpdate: DEFAULT_UNIFIED_SETTINGS.continueThreadsAfterServerUpdate,
@@ -952,13 +929,6 @@ export function useSettingsRestore(onRestored?: () => void) {
       confirmTerminalClose: DEFAULT_UNIFIED_SETTINGS.confirmTerminalClose,
       confirmThreadArchive: DEFAULT_UNIFIED_SETTINGS.confirmThreadArchive,
       confirmThreadDelete: DEFAULT_UNIFIED_SETTINGS.confirmThreadDelete,
-      enableTurnCompletionToasts: DEFAULT_UNIFIED_SETTINGS.enableTurnCompletionToasts,
-      enableTurnCompletionSystemNotifications:
-        DEFAULT_UNIFIED_SETTINGS.enableTurnCompletionSystemNotifications,
-      enableInputRequestNotifications: DEFAULT_UNIFIED_SETTINGS.enableInputRequestNotifications,
-      enableNotificationSounds: DEFAULT_UNIFIED_SETTINGS.enableNotificationSounds,
-      enableRateLimitAlerts: DEFAULT_UNIFIED_SETTINGS.enableRateLimitAlerts,
-      turnCompletionMinDurationSeconds: DEFAULT_UNIFIED_SETTINGS.turnCompletionMinDurationSeconds,
       providerUsageWarningPercent: DEFAULT_UNIFIED_SETTINGS.providerUsageWarningPercent,
       providerUsageCriticalPercent: DEFAULT_UNIFIED_SETTINGS.providerUsageCriticalPercent,
       steerGraceWindowMs: DEFAULT_UNIFIED_SETTINGS.steerGraceWindowMs,
@@ -1017,44 +987,6 @@ export function useSettingsRestore(onRestored?: () => void) {
     changedSettingLabels,
     restoreDefaults,
   };
-}
-
-/**
- * Gate in front of the legacy token-by-token mode. The primary action steers
- * the user to paragraph streaming; the legacy path is the quiet option.
- */
-function TokenStreamingWarningDialog({
-  open,
-  onOpenChange,
-  onConfirm,
-  onUseParagraphs,
-}: {
-  open: boolean;
-  onOpenChange: (open: boolean) => void;
-  onConfirm: () => void;
-  onUseParagraphs: () => void;
-}) {
-  return (
-    <AlertDialog open={open} onOpenChange={onOpenChange}>
-      <AlertDialogPopup>
-        <AlertDialogHeader>
-          <AlertDialogTitle>Token by token is a worse experience</AlertDialogTitle>
-          <AlertDialogDescription>
-            Token streaming repaints the message on every delta. It is slower, harder to read, and
-            costs more CPU on every connected device. This mode stays only for backwards
-            compatibility. Use paragraph streaming instead.
-          </AlertDialogDescription>
-        </AlertDialogHeader>
-        <AlertDialogFooter>
-          <Button variant="ghost-muted" className="sm:mr-auto" onClick={onConfirm}>
-            Use token by token
-          </Button>
-          <AlertDialogClose render={<Button variant="outline" />}>Cancel</AlertDialogClose>
-          <Button onClick={onUseParagraphs}>Use paragraphs</Button>
-        </AlertDialogFooter>
-      </AlertDialogPopup>
-    </AlertDialog>
-  );
 }
 
 function BackgroundActivityAdvancedDialog({
@@ -1528,6 +1460,7 @@ export function AppearanceSettingsPanel() {
             }
           />
         ) : null}
+
         <SettingsRow
           {...searchableSetting("diff-color-scheme")}
           description="Choose colors for additions and deletions, including change counts."
@@ -1574,6 +1507,35 @@ export function AppearanceSettingsPanel() {
             </div>
           }
         />
+
+        <SettingsRow
+          {...searchableSetting("composer-context")}
+          description="Keep branch and worktree controls below the composer after a thread starts."
+          resetAction={
+            settings.persistComposerContextStrip !==
+            DEFAULT_UNIFIED_SETTINGS.persistComposerContextStrip ? (
+              <SettingResetButton
+                label="composer context"
+                onClick={() =>
+                  updateSettings({
+                    persistComposerContextStrip:
+                      DEFAULT_UNIFIED_SETTINGS.persistComposerContextStrip,
+                  })
+                }
+              />
+            ) : null
+          }
+          control={
+            <Switch
+              checked={settings.persistComposerContextStrip}
+              onCheckedChange={(checked) =>
+                updateSettings({ persistComposerContextStrip: Boolean(checked) })
+              }
+              aria-label="Keep composer context visible in active threads"
+            />
+          }
+        />
+
         <SettingsRow
           {...searchableSetting("chat-width")}
           description="Set how wide messages and the composer can grow on large screens."
@@ -2374,7 +2336,6 @@ export function GeneralSettingsPanel() {
   const isEnvironmentScope = scope.environmentIds.length === 1 && environmentId !== null;
   const hasServerTargets = connectedEnvironments.length > 0;
   const [backgroundActivityDialogOpen, setBackgroundActivityDialogOpen] = useState(false);
-  const [tokenStreamingWarningOpen, setTokenStreamingWarningOpen] = useState(false);
   const mixedResponseStreamingMode = useScopedSettingsMixed(["responseStreamingMode"]);
   const lastEnabledProjectGroupingMode = useRef<SidebarProjectGroupingMode>(
     readLastEnabledProjectGroupingMode(),
@@ -2482,6 +2443,106 @@ export function GeneralSettingsPanel() {
             />
           }
         />
+        <SettingsRow
+          {...searchableSetting("project-order")}
+          description="Order of projects in the sidebar project picker and command palette."
+          resetAction={
+            settings.sidebarProjectSortOrder !==
+            DEFAULT_UNIFIED_SETTINGS.sidebarProjectSortOrder ? (
+              <SettingResetButton
+                label="project order"
+                onClick={() =>
+                  updateSettings({
+                    sidebarProjectSortOrder: DEFAULT_UNIFIED_SETTINGS.sidebarProjectSortOrder,
+                  })
+                }
+              />
+            ) : null
+          }
+          control={
+            <Select
+              value={settings.sidebarProjectSortOrder}
+              onValueChange={(value) => {
+                if (isSidebarProjectSortOrder(value)) {
+                  updateSettings({ sidebarProjectSortOrder: value });
+                }
+              }}
+            >
+              <SelectTrigger size="sm" className="w-full sm:w-44" aria-label="Project order">
+                <SelectValue>
+                  {SIDEBAR_PROJECT_SORT_ORDER_LABELS[settings.sidebarProjectSortOrder]}
+                </SelectValue>
+              </SelectTrigger>
+              <SelectPopup align="end" alignItemWithTrigger={false}>
+                {SidebarProjectSortOrder.literals.map((sortOrder) => (
+                  <SelectItem hideIndicator key={sortOrder} value={sortOrder}>
+                    {SIDEBAR_PROJECT_SORT_ORDER_LABELS[sortOrder]}
+                  </SelectItem>
+                ))}
+              </SelectPopup>
+            </Select>
+          }
+        />
+
+        <SettingsRow
+          serverScoped
+          {...searchableSetting("auto-resume-limited-threads")}
+          description="Resume usage-limit stops at the reported reset time. Each thread can cancel its scheduled continuation."
+          settingKeys={["autoResumeLimitedThreads"]}
+          control={
+            <ScopedSwitch
+              settingKeys={["autoResumeLimitedThreads"]}
+              checked={settings.autoResumeLimitedThreads}
+              onCheckedChange={(checked) =>
+                updateSettings({ autoResumeLimitedThreads: Boolean(checked) })
+              }
+              aria-label="Auto-resume limited threads"
+            />
+          }
+        />
+        <SettingsRow
+          serverScoped
+          {...searchableSetting("snooze-limited-threads")}
+          description="Snooze usage-limit stops until the reported reset time. Combine with auto-resume to continue when they wake."
+          settingKeys={["snoozeLimitedThreads"]}
+          control={
+            <ScopedSwitch
+              settingKeys={["snoozeLimitedThreads"]}
+              checked={settings.snoozeLimitedThreads}
+              onCheckedChange={(checked) =>
+                updateSettings({ snoozeLimitedThreads: Boolean(checked) })
+              }
+              aria-label="Snooze limited threads"
+            />
+          }
+        />
+
+        <SettingsRow
+          {...searchableSetting("working-shelf")}
+          description="Fold working and monitoring threads into a Working section. They return to the top of the inbox when they need you."
+          resetAction={
+            settings.sidebarWorkingShelfEnabled !==
+            DEFAULT_UNIFIED_SETTINGS.sidebarWorkingShelfEnabled ? (
+              <SettingResetButton
+                label="working section"
+                onClick={() =>
+                  updateSettings({
+                    sidebarWorkingShelfEnabled: DEFAULT_UNIFIED_SETTINGS.sidebarWorkingShelfEnabled,
+                  })
+                }
+              />
+            ) : null
+          }
+          control={
+            <Switch
+              checked={settings.sidebarWorkingShelfEnabled}
+              onCheckedChange={(checked) =>
+                updateSettings({ sidebarWorkingShelfEnabled: Boolean(checked) })
+              }
+              aria-label="Working section (beta)"
+            />
+          }
+        />
 
         {supportsAutoSettlement ? (
           <>
@@ -2489,11 +2550,7 @@ export function GeneralSettingsPanel() {
               serverScoped
               settingKeys={["sidebarAutoSettleOnMerge"]}
               {...searchableSetting("auto-settle-merged-threads")}
-              description={
-                settings.threadAutoSettleEnabled
-                  ? "Settle a thread when its pull request merges. Closed pull requests still settle automatically."
-                  : "Automatic thread settling is disabled in Extras."
-              }
+              description="Settle a thread when its pull request merges. Closed pull requests still settle automatically."
               resetAction={
                 settings.sidebarAutoSettleOnMerge !==
                 DEFAULT_UNIFIED_SETTINGS.sidebarAutoSettleOnMerge ? (
@@ -2511,7 +2568,6 @@ export function GeneralSettingsPanel() {
                 <ScopedSwitch
                   settingKeys={["sidebarAutoSettleOnMerge"]}
                   checked={settings.sidebarAutoSettleOnMerge}
-                  disabled={!settings.threadAutoSettleEnabled}
                   onCheckedChange={(checked) =>
                     updateSettings({ sidebarAutoSettleOnMerge: Boolean(checked) })
                   }
@@ -2524,13 +2580,7 @@ export function GeneralSettingsPanel() {
               serverScoped
               settingKeys={["sidebarAutoSettleAfterDays"]}
               {...searchableSetting("auto-settle-inactive-threads")}
-              description={
-                !settings.threadAutoSettleEnabled
-                  ? "Automatic thread settling is disabled in Extras."
-                  : settings.sidebarAutoSettleOnMerge
-                    ? "Sidebar threads with no activity for this long settle automatically. Threads on merged or closed pull requests always settle."
-                    : "Sidebar threads with no activity for this long settle automatically. Threads on closed pull requests always settle."
-              }
+              description="Sidebar threads with no activity for this long settle automatically."
               resetAction={
                 settings.sidebarAutoSettleAfterDays !==
                 DEFAULT_UNIFIED_SETTINGS.sidebarAutoSettleAfterDays ? (
@@ -2549,7 +2599,6 @@ export function GeneralSettingsPanel() {
                 <ScopedSwitch
                   settingKeys={["sidebarAutoSettleAfterDays"]}
                   checked={settings.sidebarAutoSettleAfterDays !== null}
-                  disabled={!settings.threadAutoSettleEnabled}
                   onCheckedChange={(checked) =>
                     updateSettings({
                       sidebarAutoSettleAfterDays: checked ? AUTO_SETTLE_DEFAULT_DAYS : null,
@@ -2559,7 +2608,7 @@ export function GeneralSettingsPanel() {
                 />
               }
             />
-            {settings.threadAutoSettleEnabled && settings.sidebarAutoSettleAfterDays !== null ? (
+            {settings.sidebarAutoSettleAfterDays !== null ? (
               <SettingsRow
                 serverScoped
                 settingKeys={["sidebarAutoSettleAfterDays"]}
@@ -2578,6 +2627,18 @@ export function GeneralSettingsPanel() {
       </SettingsSection>
 
       <SettingsSection id="behavior" title="Behavior">
+        <NotificationSettings />
+        <SettingsRow
+          {...searchableSetting("in-app-notifications")}
+          description="Show a toast when another thread finishes, fails, or needs input or approval while this app has focus."
+          control={
+            <Switch
+              checked={settings.inAppNotificationsEnabled}
+              onCheckedChange={(checked) => updateSettings({ inAppNotificationsEnabled: checked })}
+              aria-label="In-app notifications"
+            />
+          }
+        />
         <SettingsRow
           {...searchableSetting("time-format")}
           description="System default follows your browser or OS clock preference."
@@ -2641,52 +2702,30 @@ export function GeneralSettingsPanel() {
             ) : null
           }
           control={
-            <>
-              <Select
-                value={mixedResponseStreamingMode ? null : settings.responseStreamingMode}
-                onValueChange={(value) => {
-                  if (value === "token") {
-                    // The legacy path needs an explicit confirmation.
-                    setTokenStreamingWarningOpen(true);
-                    return;
+            <Select
+              value={mixedResponseStreamingMode ? null : settings.responseStreamingMode}
+              onValueChange={(value) => {
+                if (value === "turn" || value === "paragraph") {
+                  updateSettings({ responseStreamingMode: value });
+                }
+              }}
+            >
+              <SelectTrigger size="sm" className="w-full sm:w-56" aria-label="Response streaming">
+                <SelectValue>
+                  {(value: ResponseStreamingMode | null) =>
+                    value === null ? "Mixed" : RESPONSE_STREAMING_MODE_LABELS[value]
                   }
-                  if (value === "turn" || value === "paragraph") {
-                    updateSettings({ responseStreamingMode: value });
-                  }
-                }}
-              >
-                <SelectTrigger size="sm" className="w-full sm:w-56" aria-label="Response streaming">
-                  <SelectValue>
-                    {(value: ResponseStreamingMode | null) =>
-                      value === null ? "Mixed" : RESPONSE_STREAMING_MODE_LABELS[value]
-                    }
-                  </SelectValue>
-                </SelectTrigger>
-                <SelectPopup align="end" alignItemWithTrigger={false}>
-                  <SelectItem hideIndicator value="turn">
-                    {RESPONSE_STREAMING_MODE_LABELS.turn}
-                  </SelectItem>
-                  <SelectItem hideIndicator value="paragraph">
-                    {RESPONSE_STREAMING_MODE_LABELS.paragraph}
-                  </SelectItem>
-                  <SelectItem hideIndicator value="token">
-                    {RESPONSE_STREAMING_MODE_LABELS.token}
-                  </SelectItem>
-                </SelectPopup>
-              </Select>
-              <TokenStreamingWarningDialog
-                open={tokenStreamingWarningOpen}
-                onOpenChange={setTokenStreamingWarningOpen}
-                onConfirm={() => {
-                  updateSettings({ responseStreamingMode: "token" });
-                  setTokenStreamingWarningOpen(false);
-                }}
-                onUseParagraphs={() => {
-                  updateSettings({ responseStreamingMode: "paragraph" });
-                  setTokenStreamingWarningOpen(false);
-                }}
-              />
-            </>
+                </SelectValue>
+              </SelectTrigger>
+              <SelectPopup align="end" alignItemWithTrigger={false}>
+                <SelectItem hideIndicator value="turn">
+                  {RESPONSE_STREAMING_MODE_LABELS.turn}
+                </SelectItem>
+                <SelectItem hideIndicator value="paragraph">
+                  {RESPONSE_STREAMING_MODE_LABELS.paragraph}
+                </SelectItem>
+              </SelectPopup>
+            </Select>
           }
         />
         <SettingsRow
@@ -2939,6 +2978,48 @@ export function GeneralSettingsPanel() {
                     </span>
                   </SelectItem>
                 ))}
+              </SelectPopup>
+            </Select>
+          }
+        />
+
+        <SettingsRow
+          {...searchableSetting("follow-up-behavior")}
+          description={
+            "Queue follow-ups while the agent runs or steer the current run. " +
+            (settings.sendShortcut === "mod-enter-multiline"
+              ? `Press ${modifierLabel} + Enter for single-line prompts or ${modifierLabel} + Shift + Enter for multiline prompts to do the opposite for one message.`
+              : `Press ${modifierLabel}${settings.sendShortcut === "mod-enter" ? " + Shift" : ""} + Enter to do the opposite for one message.`)
+          }
+          resetAction={
+            settings.followUpBehavior !== DEFAULT_UNIFIED_SETTINGS.followUpBehavior ? (
+              <SettingResetButton
+                label="follow-up behavior"
+                onClick={() =>
+                  updateSettings({
+                    followUpBehavior: DEFAULT_UNIFIED_SETTINGS.followUpBehavior,
+                  })
+                }
+              />
+            ) : null
+          }
+          control={
+            <Select
+              value={settings.followUpBehavior}
+              onValueChange={(value) => {
+                if (value === "queue" || value === "steer") {
+                  updateSettings({ followUpBehavior: value });
+                }
+              }}
+            >
+              <SelectTrigger size="sm" className="w-auto min-w-0" aria-label="Follow-up behavior">
+                <SelectValue>
+                  {settings.followUpBehavior === "queue" ? "Queue" : "Steer"}
+                </SelectValue>
+              </SelectTrigger>
+              <SelectPopup align="end" alignItemWithTrigger={false}>
+                <SelectItem value="queue">Queue</SelectItem>
+                <SelectItem value="steer">Steer</SelectItem>
               </SelectPopup>
             </Select>
           }
@@ -3402,7 +3483,9 @@ export function GeneralSettingsPanel() {
                     onPromptChange={() => {}}
                     modelOptions={textGenModelOptions}
                     allowPromptInjectedEffort={false}
-                    planModeEnabled={settings.planModeEnabled}
+                    planModeEnabled={
+                      settings.planModeEnabled || selectsPlanAgent(textGenModelOptions)
+                    }
                     triggerClassName={SETTINGS_PICKER_TRIGGER_CLASSNAME}
                     onModelOptionsChange={(nextOptions) => {
                       updateSettings({
@@ -3477,163 +3560,63 @@ export function GeneralSettingsPanel() {
   );
 }
 
-function ArchivedThreadModelIcon({ thread }: { readonly thread: EnvironmentThreadShell }) {
-  const serverConfig = useAtomValue(serverEnvironment.configValueAtom(thread.environmentId));
-  const providerInstance = getProviderInstanceEntry(
-    serverConfig?.providers ?? [],
-    thread.modelSelection.instanceId,
-  );
-  const label = providerInstance
-    ? `${providerInstance.displayName}, ${thread.modelSelection.model}`
-    : `Model ${thread.modelSelection.model}`;
-
-  return (
-    <Tooltip>
-      <TooltipTrigger
-        render={
-          <span
-            role="img"
-            tabIndex={0}
-            aria-label={label}
-            className="inline-flex size-5 shrink-0 items-center justify-center rounded-sm text-muted-foreground outline-hidden focus-visible:ring-1 focus-visible:ring-ring"
-          />
-        }
-      >
-        {providerInstance ? (
-          <ProviderInstanceIcon
-            driverKind={providerInstance.driverKind}
-            displayName={providerInstance.displayName}
-            accentColor={providerInstance.accentColor}
-            iconClassName="size-3.5"
-          />
-        ) : (
-          <BotIcon className="size-3.5" aria-hidden />
-        )}
-      </TooltipTrigger>
-      <TooltipPopup side="top">{label}</TooltipPopup>
-    </Tooltip>
-  );
-}
-
 export function ArchivedThreadsPanel() {
   const { scope } = useSettingsScope();
-  const { environments, isReady: environmentsReady } = useEnvironments();
-  const environmentShellsBootstrapped = useAllEnvironmentShellsBootstrapped();
-  const primaryEnvironment = usePrimaryEnvironment();
-  const projects = useProjects();
-  const groupingSettings = useClientSettings(selectProjectGroupingSettings);
   const { unarchiveThread, confirmAndDeleteThread } = useThreadActions();
-  const [searchQuery, setSearchQuery] = useState("");
-  const [collapsedProjectKeys, setCollapsedProjectKeys] = useState<ReadonlySet<string>>(
-    () => new Set(),
-  );
-  const searchInputRef = useRef<HTMLInputElement>(null);
-  const scopeFilter = useMemo(() => resolveArchivedThreadScopeFilter(scope), [scope]);
-  const selectedProjectLabel = scopeFilter?.label ?? "selected project";
-  // A scope pinned to one environment only asks that environment, so another
-  // machine's outage or slow load cannot mark this view failed or pending.
-  const scopedEnvironmentId = scopeFilter?.environmentId ?? null;
-  const environmentIds = useMemo(
-    () =>
-      scopedEnvironmentId === null
-        ? environments.map((environment) => environment.environmentId)
-        : [scopedEnvironmentId],
-    [environments, scopedEnvironmentId],
-  );
-  const environmentLabelById = useMemo(
-    () =>
-      new Map(
-        environments.map((environment) => [environment.environmentId, environment.label] as const),
-      ),
-    [environments],
-  );
   const {
     snapshots: archivedSnapshots,
     error: archiveError,
     isLoading: isLoadingArchive,
     refresh: refreshArchivedThreads,
-  } = useArchivedThreadSnapshots(environmentIds);
+  } = useArchivedThreadSnapshots(scope.environmentIds);
 
-  const archivedGroups = useMemo(
-    () =>
-      buildArchivedThreadGroups({
-        groupingSettings,
-        primaryEnvironmentId: primaryEnvironment?.environmentId ?? null,
-        projects,
-        resolveEnvironmentLabel: (environmentId) =>
-          environmentLabelById.get(environmentId) ??
-          (environmentId === primaryEnvironment?.environmentId ? "Local" : "Remote"),
-        snapshots: archivedSnapshots,
-      }),
-    [
-      archivedSnapshots,
-      environmentLabelById,
-      groupingSettings,
-      primaryEnvironment?.environmentId,
-      projects,
-    ],
-  );
-  const filteredArchivedGroups = useMemo(() => {
-    return archivedGroups.flatMap((group) => {
-      if (!archivedThreadGroupMatchesScope(group, scopeFilter)) {
-        return [];
-      }
-      const matchingThreads = group.threads.filter(
-        ({ environmentLabel, project, thread }) =>
-          archivedThreadMatchesScope({ project, thread }, scopeFilter) &&
-          archivedThreadMatchesSearch(
-            {
-              environmentLabel,
-              modelName: thread.modelSelection.model,
-              projectName: `${group.displayName} ${project.title}`,
-              projectCwd: project.workspaceRoot,
-              threadTitle: thread.title,
-            },
-            searchQuery,
+  const archivedGroups = useMemo(() => {
+    const selectedProjectKeys =
+      scope.kind === "project" || scope.kind === "checkout"
+        ? new Set(scope.members.map((member) => `${member.environmentId}:${member.id}`))
+        : null;
+    const projectsByEnvironmentAndId = new Map(
+      archivedSnapshots.flatMap(({ environmentId, snapshot }) =>
+        snapshot.projects
+          .filter(
+            (project) =>
+              selectedProjectKeys === null ||
+              selectedProjectKeys.has(`${environmentId}:${project.id}`),
+          )
+          .map(
+            (project) => [`${environmentId}:${project.id}`, { ...project, environmentId }] as const,
           ),
-      );
-      return matchingThreads.length > 0 ? [{ ...group, threads: matchingThreads }] : [];
-    });
-  }, [archivedGroups, scopeFilter, searchQuery]);
-  const matchingThreadCount = useMemo(
-    () => filteredArchivedGroups.reduce((count, group) => count + group.threads.length, 0),
-    [filteredArchivedGroups],
-  );
-  const hasSearchQuery = searchQuery.trim().length > 0;
-  const hasProjectFilter = scopeFilter !== null;
-  const hasActiveFilter = hasSearchQuery || hasProjectFilter;
-  const archiveSourcesReady = environmentsReady && environmentShellsBootstrapped;
-  const isLoadingArchiveSources = !archiveSourcesReady || isLoadingArchive;
-  const shouldDeferEmptyState = shouldDeferArchivedEmptyState({
-    hasMatchingGroups: filteredArchivedGroups.length > 0,
-    isLoading: isLoadingArchiveSources,
-    hasError: archiveError !== null,
-  });
+      ),
+    );
+    const threads = archivedSnapshots.flatMap(({ environmentId, snapshot }) =>
+      snapshot.threads.map((thread) => presentThreadShell(environmentId, thread)),
+    );
 
-  useEffect(() => {
-    const handleKeyDown = (event: KeyboardEvent) => {
-      const isMod = event.metaKey || event.ctrlKey;
-      if (event.defaultPrevented || !isMod || event.altKey || event.key.toLowerCase() !== "f") {
-        return;
+    const archivedProjects = Array.from(projectsByEnvironmentAndId.values());
+    const groups: Array<{
+      readonly project: (typeof archivedProjects)[number];
+      readonly threads: Array<(typeof threads)[number]>;
+    }> = [];
+    for (const project of archivedProjects) {
+      const projectThreads: Array<(typeof threads)[number]> = [];
+      for (const thread of threads) {
+        if (thread.projectId === project.id && thread.environmentId === project.environmentId) {
+          projectThreads.push(thread);
+        }
       }
-
-      const target = event.target;
-      if (
-        target !== searchInputRef.current &&
-        target instanceof HTMLElement &&
-        (target.tagName === "INPUT" || target.tagName === "TEXTAREA" || target.isContentEditable)
-      ) {
-        return;
+      if (projectThreads.length > 0) {
+        groups.push({
+          project,
+          threads: projectThreads.toSorted((left, right) => {
+            const leftKey = left.archivedAt ?? left.createdAt;
+            const rightKey = right.archivedAt ?? right.createdAt;
+            return rightKey.localeCompare(leftKey) || right.id.localeCompare(left.id);
+          }),
+        });
       }
-
-      event.preventDefault();
-      searchInputRef.current?.focus();
-      searchInputRef.current?.select();
-    };
-
-    window.addEventListener("keydown", handleKeyDown);
-    return () => window.removeEventListener("keydown", handleKeyDown);
-  }, []);
+    }
+    return groups;
+  }, [archivedSnapshots, scope]);
 
   const handleArchivedThreadContextMenu = useCallback(
     async (threadRef: ScopedThreadRef, position: { x: number; y: number }) => {
@@ -3685,86 +3668,20 @@ export function ArchivedThreadsPanel() {
 
   return (
     <SettingsPageContainer>
-      <div className="space-y-1.5">
-        <div className="relative">
-          <SearchIcon
-            className="pointer-events-none absolute top-1/2 left-3 size-3.5 -translate-y-1/2 text-muted-foreground"
-            aria-hidden
-          />
-          <input
-            ref={searchInputRef}
-            type="search"
-            value={searchQuery}
-            onChange={(event) => setSearchQuery(event.currentTarget.value)}
-            onKeyDown={(event) => {
-              if (event.key === "Escape" && searchQuery.length > 0) {
-                event.preventDefault();
-                event.stopPropagation();
-                setSearchQuery("");
-              }
-            }}
-            placeholder="Search archived threads"
-            aria-label="Search archived threads"
-            aria-describedby="archived-thread-search-status"
-            className="h-9 w-full rounded-lg border border-input bg-background pr-9 pl-9 text-sm text-foreground shadow-xs/5 outline-none placeholder:text-muted-foreground/72 focus-visible:border-ring focus-visible:ring-3 focus-visible:ring-ring/24 [&::-webkit-search-cancel-button]:appearance-none [&::-webkit-search-decoration]:appearance-none"
-          />
-          {searchQuery.length > 0 ? (
-            <Button
-              type="button"
-              size="icon-xs"
-              variant="ghost"
-              className="absolute top-1/2 right-2 size-6 -translate-y-1/2"
-              onClick={() => {
-                setSearchQuery("");
-                searchInputRef.current?.focus({ preventScroll: true });
-              }}
-              aria-label="Clear archived thread search"
-            >
-              <XIcon className="size-3.5" />
-            </Button>
-          ) : null}
-        </div>
-        <p
-          id="archived-thread-search-status"
-          className="min-h-4 px-1 text-2xs text-muted-foreground"
-          aria-live={isLoadingArchiveSources || archiveError !== null ? "off" : "polite"}
-        >
-          {isLoadingArchiveSources
-            ? `Loading archived threads${hasProjectFilter ? ` in ${selectedProjectLabel}` : ""}…`
-            : archiveError !== null && filteredArchivedGroups.length === 0
-              ? `Archived thread results${hasProjectFilter ? ` in ${selectedProjectLabel}` : ""} may be incomplete`
-              : hasActiveFilter
-                ? `${matchingThreadCount} ${matchingThreadCount === 1 ? "thread" : "threads"}${
-                    hasSearchQuery ? " found" : ""
-                  }${hasProjectFilter ? ` in ${selectedProjectLabel}` : ""}`
-                : "Press Command+F or Ctrl+F to focus search."}
-        </p>
-      </div>
-
-      {archiveError && archivedGroups.length > 0 ? (
-        <SettingsSection title="Archive availability" role="status">
-          <SettingsRow
-            title="Some archived threads could not be loaded"
-            description="One or more environments are unavailable. The results below may be incomplete."
-          />
-        </SettingsSection>
-      ) : null}
-
       {archivedGroups.length === 0 ? (
         <SettingsSection
           id={isLoadingArchive ? undefined : searchableSetting("archive").id}
           title={searchableSetting("archive").title}
-          role={archiveError ? "alert" : "status"}
         >
           <SettingsRow
             title={
               <span className="inline-flex items-center gap-2">
-                {isLoadingArchiveSources ? (
+                {isLoadingArchive ? (
                   <Spinner size="sm" tone="muted" />
                 ) : (
                   <ArchiveIcon className="size-3.5 text-muted-foreground" />
                 )}
-                {isLoadingArchiveSources
+                {isLoadingArchive
                   ? "Loading archived threads"
                   : archiveError
                     ? "Could not load archived threads"
@@ -3772,98 +3689,77 @@ export function ArchivedThreadsPanel() {
               </span>
             }
             description={
-              isLoadingArchiveSources
+              isLoadingArchive
                 ? "Checking connected environments."
                 : (archiveError ?? "Archived threads will appear here.")
             }
           />
         </SettingsSection>
-      ) : shouldDeferEmptyState ? (
-        <SettingsSection
-          title="Archived threads"
-          role={archiveError === null ? "status" : undefined}
-        >
-          <SettingsRow
-            title={
-              <span className="inline-flex items-center gap-2">
-                {isLoadingArchiveSources ? (
-                  <Spinner size="sm" tone="muted" />
-                ) : (
-                  <ArchiveIcon className="size-3.5 text-muted-foreground" />
-                )}
-                {isLoadingArchiveSources
-                  ? `Loading archived threads${hasProjectFilter ? ` in ${selectedProjectLabel}` : ""}`
-                  : `Archived threads${hasProjectFilter ? ` in ${selectedProjectLabel}` : ""} may be unavailable`}
-              </span>
-            }
-            description={
-              isLoadingArchiveSources
-                ? "Checking connected environments."
-                : "One or more environments could not be loaded, so this result may be incomplete."
-            }
-          />
-        </SettingsSection>
-      ) : filteredArchivedGroups.length === 0 ? (
-        <SettingsSection title="Archived threads">
-          <SettingsRow
-            title={
-              hasProjectFilter
-                ? `No archived threads in ${selectedProjectLabel}`
-                : "No matching archived threads"
-            }
-            description={
-              hasProjectFilter && !hasSearchQuery
-                ? "Widen the scope above or choose another project or environment."
-                : "Try a different thread title, project, or workspace path."
-            }
-          />
-        </SettingsSection>
       ) : (
-        filteredArchivedGroups.map((group, index) => {
-          const isCollapsed = !hasActiveFilter && collapsedProjectKeys.has(group.key);
-          return (
-            <SettingsSection
-              key={group.key}
-              id={index === 0 ? searchableSetting("archive").id : undefined}
-              title={group.displayName}
-              collapsed={isCollapsed}
-              onToggleCollapsed={
-                hasActiveFilter
-                  ? undefined
-                  : () => {
-                      setCollapsedProjectKeys((current) => {
-                        const next = new Set(current);
-                        if (next.has(group.key)) {
-                          next.delete(group.key);
-                        } else {
-                          next.add(group.key);
-                        }
-                        return next;
-                      });
+        archivedGroups.map(({ project, threads: projectThreads }, index) => (
+          <SettingsSection
+            key={`${project.environmentId}:${project.id}`}
+            id={index === 0 ? searchableSetting("archive").id : undefined}
+            title={project.title}
+            icon={<ProjectFavicon project={project} />}
+          >
+            {projectThreads.map((thread) => (
+              <SettingsRow
+                key={thread.id}
+                onContextMenu={(event) => {
+                  event.preventDefault();
+                  void (async () => {
+                    const result = await settlePromise(() =>
+                      handleArchivedThreadContextMenu(
+                        scopeThreadRef(thread.environmentId, thread.id),
+                        {
+                          x: event.clientX,
+                          y: event.clientY,
+                        },
+                      ),
+                    );
+                    if (result._tag === "Failure") {
+                      const error = squashAtomCommandFailure(result);
+                      toastManager.add(
+                        stackedThreadToast({
+                          type: "error",
+                          title: "Archived thread action failed",
+                          description:
+                            error instanceof Error ? error.message : "An error occurred.",
+                        }),
+                      );
                     }
-              }
-              icon={<ProjectFavicon project={group.representativeProject} />}
-            >
-              {group.threads.map(({ environmentLabel, thread }) => {
-                const threadRef = scopeThreadRef(thread.environmentId, thread.id);
-                return (
-                  <SettingsRow
-                    key={`${thread.environmentId}:${thread.id}`}
-                    onContextMenu={(event) => {
-                      event.preventDefault();
+                  })();
+                }}
+                title={thread.title}
+                description={
+                  <>
+                    Archived {formatRelativeTimeLabel(thread.archivedAt ?? thread.createdAt)}
+                    {" \u00b7 Created "}
+                    {formatRelativeTimeLabel(thread.createdAt)}
+                  </>
+                }
+                control={
+                  <Button
+                    type="button"
+                    variant="outline"
+                    size="xs"
+                    className="shrink-0"
+                    onClick={() => {
                       void (async () => {
-                        const result = await settlePromise(() =>
-                          handleArchivedThreadContextMenu(threadRef, {
-                            x: event.clientX,
-                            y: event.clientY,
-                          }),
+                        const result = await unarchiveThread(
+                          scopeThreadRef(thread.environmentId, thread.id),
                         );
-                        if (result._tag === "Failure") {
+                        if (result._tag === "Success") {
+                          refreshArchivedThreads();
+                          return;
+                        }
+                        if (!isAtomCommandInterrupted(result)) {
                           const error = squashAtomCommandFailure(result);
                           toastManager.add(
                             stackedThreadToast({
                               type: "error",
-                              title: "Archived thread action failed",
+                              title: "Failed to unarchive thread",
                               description:
                                 error instanceof Error ? error.message : "An error occurred.",
                             }),
@@ -3871,60 +3767,15 @@ export function ArchivedThreadsPanel() {
                         }
                       })();
                     }}
-                    title={
-                      <span className="inline-flex min-w-0 items-center gap-2">
-                        <ArchivedThreadModelIcon thread={thread} />
-                        <span className="truncate">{thread.title}</span>
-                      </span>
-                    }
-                    description={
-                      <>
-                        {environmentLabel}
-                        {" \u00b7 "}
-                        {thread.modelSelection.model}
-                        {" \u00b7 Archived "}
-                        {formatRelativeTimeLabel(thread.archivedAt ?? thread.createdAt)}
-                        {" \u00b7 Created "}
-                        {formatRelativeTimeLabel(thread.createdAt)}
-                      </>
-                    }
-                    control={
-                      <Button
-                        type="button"
-                        variant="outline"
-                        size="sm"
-                        className="shrink-0 cursor-pointer"
-                        onClick={() => {
-                          void (async () => {
-                            const result = await unarchiveThread(threadRef);
-                            if (result._tag === "Success") {
-                              refreshArchivedThreads();
-                              return;
-                            }
-                            if (!isAtomCommandInterrupted(result)) {
-                              const error = squashAtomCommandFailure(result);
-                              toastManager.add(
-                                stackedThreadToast({
-                                  type: "error",
-                                  title: "Failed to unarchive thread",
-                                  description:
-                                    error instanceof Error ? error.message : "An error occurred.",
-                                }),
-                              );
-                            }
-                          })();
-                        }}
-                      >
-                        <ArchiveX className="size-3.5" />
-                        <span>Unarchive</span>
-                      </Button>
-                    }
-                  />
-                );
-              })}
-            </SettingsSection>
-          );
-        })
+                  >
+                    <ArchiveX className="size-3.5" />
+                    <span>Unarchive</span>
+                  </Button>
+                }
+              />
+            ))}
+          </SettingsSection>
+        ))
       )}
     </SettingsPageContainer>
   );

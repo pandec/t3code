@@ -1,9 +1,5 @@
 import { acknowledgedThreadMessagesAtom } from "./acknowledged-thread-messages";
 import {
-  threadOutboxFlushBatchIds,
-  type ThreadOutboxDispatchResult,
-} from "@t3tools/client-runtime/state/thread-outbox-delivery";
-import {
   CommandId,
   ComposerContextId,
   EnvironmentId,
@@ -15,10 +11,6 @@ import {
 import { afterEach, beforeEach, describe, expect, it, vi } from "vite-plus/test";
 
 import type { PreparedTurnAttachments } from "../lib/attachmentUpload";
-import {
-  resolveThreadOutboxDeliveryAction,
-  selectNextQueuedThreadDispatch,
-} from "./thread-outbox-model";
 
 const harness = vi.hoisted(() => ({
   manager: null as unknown as ReturnType<
@@ -29,79 +21,37 @@ const harness = vi.hoisted(() => ({
   prepareTurnAttachments: vi.fn<typeof import("../lib/attachmentUpload").prepareTurnAttachments>(),
   setPendingConnectionError: vi.fn(),
   draftFile: (() => {
-    const files = new Map<string, string>();
+    let document = "";
     let writeError: Error | null = null;
-
-    class Directory {
-      readonly uri: string;
-
-      constructor(base: string | { readonly uri: string }, name: string) {
-        this.uri = `${typeof base === "string" ? base : base.uri}/${name}`;
-      }
-
-      create() {}
-
-      list(): ReadonlyArray<File> {
-        const prefix = `${this.uri}/`;
-        return [...files.keys()]
-          .filter((uri) => uri.startsWith(prefix) && !uri.slice(prefix.length).includes("/"))
-          .map((uri) => new File(this, uri.slice(prefix.length)));
-      }
-    }
-
-    class File {
-      uri: string;
-      parentDirectory = null;
-
-      constructor(directory: { readonly uri: string }, name: string) {
-        this.uri = `${directory.uri}/${name}`;
-      }
-
-      get exists(): boolean {
-        return files.has(this.uri);
-      }
-
-      get name(): string {
-        return this.uri.slice(this.uri.lastIndexOf("/") + 1);
-      }
-
-      create() {
-        files.set(this.uri, "");
-      }
-
-      delete() {
-        files.delete(this.uri);
-      }
-
-      moveSync(destination: { readonly uri: string }) {
-        const value = files.get(this.uri) ?? "";
-        files.delete(this.uri);
-        files.set(destination.uri, value);
-        this.uri = destination.uri;
-      }
-
-      async text() {
-        return files.get(this.uri) ?? "";
-      }
-
-      write(value: string) {
-        if (writeError) {
-          throw writeError;
-        }
-        files.set(this.uri, value);
-      }
-    }
-
     return {
       setDocument(value: unknown) {
-        files.clear();
-        files.set("/documents/composer-drafts/drafts.json", JSON.stringify(value));
+        document = JSON.stringify(value);
       },
       setWriteError(error: Error | null) {
         writeError = error;
       },
-      Directory,
-      File,
+      Directory: class {
+        create() {}
+      },
+      File: class {
+        exists = true;
+        parentDirectory = null;
+
+        create() {}
+
+        moveSync() {}
+
+        async text() {
+          return document;
+        }
+
+        write(value: string) {
+          if (writeError) {
+            throw writeError;
+          }
+          document = value;
+        }
+      },
     };
   })(),
 }));
@@ -114,10 +64,8 @@ vi.mock("expo-file-system", () => ({
   Paths: { document: "/documents" },
 }));
 
-vi.mock("../lib/composerImages", async (importOriginal) => ({
-  ...(await importOriginal<typeof import("../lib/composerImages")>()),
+vi.mock("../lib/composerImages", () => ({
   removePersistedComposerAttachmentFile: harness.removePersistedFile,
-  toUploadChatImageAttachments: () => [],
 }));
 
 vi.mock("../lib/uuid", () => ({
@@ -129,20 +77,11 @@ vi.mock("../lib/attachmentUpload", () => ({
   prepareTurnAttachments: harness.prepareTurnAttachments,
 }));
 
-vi.mock("../features/archive/useArchivedThreadSnapshots", () => ({
-  refreshArchivedThreadsForEnvironment: vi.fn(),
-}));
-
 vi.mock("./entities", () => ({
   useProjects: () => [],
   useServerConfigs: () => new Map(),
   useThreadShells: () => [],
 }));
-
-vi.mock("../connection/catalog", async () => {
-  const { Atom } = await import("effect/unstable/reactivity");
-  return { environmentCatalog: { catalogValueAtom: Atom.make({ entries: new Map() }) } };
-});
 
 vi.mock("./server", async () => {
   const { Atom } = await import("effect/unstable/reactivity");
@@ -155,11 +94,6 @@ vi.mock("./threads", () => ({
 
 vi.mock("./use-atom-command", () => ({
   useAtomCommand: () => async () => undefined,
-}));
-
-vi.mock("./use-mobile-preferences", () => ({
-  useMobilePreferencesHydrated: () => true,
-  useSteerGraceWindowMs: () => 0,
 }));
 
 vi.mock("./use-thread-outbox", async () => {
@@ -191,7 +125,6 @@ vi.mock("./thread-outbox", async () => {
   return {
     threadOutboxManager: manager,
     flushThreadOutbox: async () => undefined,
-    ensureThreadOutboxLoaded: () => undefined,
     confirmThreadOutboxMessageQueued: (message: never) => manager.confirmQueued(message),
     updateThreadOutboxMessage: (message: never, expectedRevision?: number) =>
       manager.update(message, expectedRevision),
@@ -271,8 +204,6 @@ beforeEach(() => {
 });
 
 afterEach(() => {
-  composerDrafts.resetComposerDraftPersistenceForTests();
-  composerDrafts.resetComposerDraftsLoadState();
   appAtomRegistry.set(harness.manager.queuedMessagesByThreadKeyAtom, {});
   appAtomRegistry.set(composerDrafts.composerDraftsAtom, {});
   appAtomRegistry.set(composerDrafts.composerCloudDraftsAtom, { accountId: null, signedOut: {} });
@@ -316,7 +247,7 @@ describe("thread outbox attachment preparation", () => {
       pendingAttachmentIds: ["pending-reused-upload"],
     });
 
-    await expect(preparation).resolves.toEqual({ status: "deferred" });
+    await expect(preparation).resolves.toEqual({ status: "abandoned" });
     expect(remainingMessages()).toEqual([edited]);
   });
 
@@ -343,42 +274,6 @@ describe("thread outbox attachment preparation", () => {
       status: "ready",
       persistedMessage: message,
       deliveryRevision: revision,
-    });
-  });
-
-  it("reuses an uploaded image when image uploads are supported", async () => {
-    const environmentId = EnvironmentId.make("environment-1");
-    const image = {
-      id: "image-reused-upload",
-      type: "image" as const,
-      name: "photo.png",
-      mimeType: "image/png",
-      sizeBytes: 3,
-      dataUrl: "data:image/png;base64,YWJj",
-      previewUri: "file:///documents/photo.png",
-      uploadedAttachmentId: "pending-image-upload",
-      uploadEnvironmentId: environmentId,
-    };
-    const message: QueuedThreadMessage = {
-      ...queuedMessage({ messageId: "message-reused-image", text: "send this photo" }),
-      environmentId,
-      attachments: [image],
-    };
-    harness.prepareTurnAttachments.mockImplementationOnce(async (input) => {
-      expect(input.supportsImageUploads).toBe(true);
-      expect(input.attachments).toEqual([image]);
-      return {
-        status: "ready",
-        attachments: [],
-        draftAttachments: [image],
-        pendingAttachmentIds: ["pending-image-upload"],
-      };
-    });
-    await harness.manager.enqueue(message);
-
-    await expect(prepareQueuedMessageAttachments(message, true)).resolves.toMatchObject({
-      status: "ready",
-      persistedMessage: message,
     });
   });
 
@@ -426,7 +321,7 @@ describe("thread outbox attachment preparation", () => {
     await harness.manager.update(edited);
 
     await expect(prepareQueuedMessageAttachments(message)).resolves.toEqual({
-      status: "removed",
+      status: "abandoned",
     });
     expect(harness.prepareTurnAttachments).not.toHaveBeenCalled();
     expect(remainingMessages()).toEqual([edited]);
@@ -500,55 +395,23 @@ describe("thread outbox drain delivery cleanup", () => {
     expect(remainingMessages()).toEqual([edited]);
   });
 
-  it("skips acknowledged cleanup while an editor owns the row", async () => {
-    const message = queuedMessage({ messageId: "message-acknowledged-held", text: "delivered" });
-    await harness.manager.enqueue(message);
-    const deliveryRevision = harness.manager.revisionOf(message.messageId);
-    const acknowledged = new Map([[message.messageId, deliveryRevision]]);
-    appAtomRegistry.set(editingQueuedMessageIdsAtom, { [message.messageId]: true });
-
-    await expect(removeAcknowledgedExistingThreadMessage(message, acknowledged)).resolves.toBe(
-      "held",
-    );
-    expect(remainingMessages()).toEqual([message]);
-    expect(acknowledged).toEqual(new Map([[message.messageId, deliveryRevision]]));
-    expect(harness.removeOutboxMessage).not.toHaveBeenCalled();
-  });
-
-  it("drops the acknowledgement instead of removing a revised row", async () => {
-    const message = queuedMessage({ messageId: "message-acknowledged-edited", text: "delivered" });
-    await harness.manager.enqueue(message);
-    const deliveryRevision = harness.manager.revisionOf(message.messageId);
-    const acknowledged = new Map([[message.messageId, deliveryRevision]]);
-    const edited = { ...message, text: "not delivered" };
-    await harness.manager.update(edited);
-
-    await expect(removeAcknowledgedExistingThreadMessage(edited, acknowledged)).resolves.toBe(
-      "edited",
-    );
-    expect(remainingMessages()).toEqual([edited]);
-    expect(acknowledged).toEqual(new Map());
-    expect(harness.removeOutboxMessage).not.toHaveBeenCalled();
-  });
-
-  it("retries revision-checked cleanup for an unchanged acknowledged row", async () => {
+  it("retries only cleanup after an acknowledged send removal fails", async () => {
     const message = queuedMessage({ messageId: "message-acknowledged", text: "delivered" });
+    const acknowledged = new Set([message.messageId]);
     harness.removeOutboxMessage.mockRejectedValueOnce(new Error("storage unavailable"));
     await harness.manager.enqueue(message);
-    const deliveryRevision = harness.manager.revisionOf(message.messageId);
-    const acknowledged = new Map([[message.messageId, deliveryRevision]]);
 
     await expect(removeAcknowledgedExistingThreadMessage(message, acknowledged)).resolves.toBe(
-      "failed",
+      false,
     );
     expect(remainingMessages()).toEqual([message]);
-    expect(acknowledged).toEqual(new Map([[message.messageId, deliveryRevision]]));
+    expect(acknowledged).toEqual(new Set([message.messageId]));
 
     await expect(removeAcknowledgedExistingThreadMessage(message, acknowledged)).resolves.toBe(
-      "removed",
+      true,
     );
     expect(remainingMessages()).toEqual([]);
-    expect(acknowledged).toEqual(new Map());
+    expect(acknowledged).toEqual(new Set());
   });
 
   it("keeps an edited message and its files when delivery cleanup loses the revision race", async () => {
@@ -633,7 +496,7 @@ describe("thread outbox delivered creation recovery", () => {
       await harness.manager.update(newer);
 
       releaseRecovery.resolve();
-      await expect(recovery).resolves.toBe("deferred");
+      await expect(recovery).resolves.toBe(false);
 
       expect(remainingMessages()).toEqual([newer]);
       expect(
@@ -671,7 +534,7 @@ describe("thread outbox delivered creation recovery", () => {
       appAtomRegistry.set(editingQueuedMessageIdsAtom, { [message.messageId]: true });
 
       releaseRecovery.resolve();
-      await expect(recovery).resolves.toBe("deferred");
+      await expect(recovery).resolves.toBe(true);
 
       expect(remainingMessages()).toEqual([message]);
       expect(
@@ -698,10 +561,10 @@ describe("thread outbox delivered creation recovery", () => {
     try {
       await harness.manager.enqueue(message);
 
-      await expect(recoverEditedCreationAfterDelivery(message)).resolves.toBe("failed");
+      await expect(recoverEditedCreationAfterDelivery(message)).resolves.toBe(false);
       expect(remainingMessages()).toEqual([message]);
 
-      await expect(recoverEditedCreationAfterDelivery(message)).resolves.toBe("removed");
+      await expect(recoverEditedCreationAfterDelivery(message)).resolves.toBe(true);
 
       const draft = composerDrafts.getComposerDraftSnapshot(draftKey);
       expect(draft.text).toBe(message.text);
@@ -721,7 +584,7 @@ describe("thread outbox delivered creation recovery", () => {
     await harness.manager.enqueue(message);
     harness.draftFile.setWriteError(new Error("disk full"));
 
-    await expect(recoverEditedCreationAfterDelivery(message)).resolves.toBe("failed");
+    await expect(recoverEditedCreationAfterDelivery(message)).resolves.toBe(false);
 
     expect(remainingMessages()).toEqual([message]);
   });
@@ -793,8 +656,7 @@ describe("thread outbox recovery rollback", () => {
       [sourceKey]: { text: "Follow-up", attachments: [] },
     });
     harness.draftFile.setWriteError(new Error("disk full"));
-    // Two drafts flush together here, so the batch wrapper is what surfaces.
-    await expect(recoverFailedThreadDraft(message)).rejects.toThrow("Failed to persist");
+    await expect(recoverFailedThreadDraft(message)).rejects.toThrow("Composer draft persistence");
     expect(composerDrafts.getComposerDraftSnapshot(sourceKey).text).toBe("Follow-up");
     harness.draftFile.setWriteError(null);
     await recoverFailedThreadDraft(message);
@@ -898,51 +760,5 @@ describe("thread outbox recovery rollback", () => {
     );
     expect(remainingMessages()).toEqual([]);
     expect(harness.setPendingConnectionError).toHaveBeenCalledWith("too large");
-  });
-});
-
-describe("mobile thread outbox flush batches", () => {
-  it("keeps later rows behind a leader deferred after confirmation", () => {
-    const leader = queuedMessage({ messageId: "mobile-race-leader", text: "leader" });
-    const follower = queuedMessage({ messageId: "mobile-race-follower", text: "follower" });
-    const queue = [leader, follower];
-    const resolveAction = (threadStatus: "idle" | "running") =>
-      resolveThreadOutboxDeliveryAction({
-        isCreation: false,
-        threadExists: true,
-        shellStatus: "live",
-        environmentConnected: true,
-        threadStatus,
-        deliveryIntent: "queue",
-      });
-    const selected = selectNextQueuedThreadDispatch(queue, {
-      isHeld: () => false,
-      resolveAction: () => resolveAction("idle"),
-    });
-    expect(selected).toEqual({ message: leader, action: "send" });
-
-    // Another client starts a turn while confirmQueued is pending.
-    const freshAction = resolveAction("running");
-    const result: ThreadOutboxDispatchResult =
-      freshAction === selected?.action
-        ? {
-            outcome: "delivered",
-            context: {
-              sessionBaselineKnown: true,
-              sessionStatus: "running",
-              sessionUpdatedAt: null,
-              latestTurnId: null,
-            },
-          }
-        : { outcome: "deferred" };
-
-    expect(result).toEqual({ outcome: "deferred" });
-    expect(threadOutboxFlushBatchIds(queue, leader, { result, action: "send" }).size).toBe(0);
-    expect(
-      selectNextQueuedThreadDispatch(queue, {
-        isHeld: () => false,
-        resolveAction: () => freshAction,
-      }),
-    ).toBeNull();
   });
 });

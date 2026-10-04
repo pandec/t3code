@@ -30,6 +30,7 @@ import { formatProviderUsageEmail } from "~/providerUsageEmail";
 import { Popover, PopoverPopup, PopoverTrigger } from "../ui/popover";
 import {
   formatContextWindowCompactionMessage,
+  formatContextWindowCost,
   openRouterCreditsBudgetWindow,
 } from "./ContextWindowMeter.logic";
 import { composerFloatingLayerProps } from "./composerEventScope";
@@ -730,6 +731,14 @@ export function ContextWindowMeter(props: {
                     <span className="text-secondary-label">Total processed</span>
                     <span className="font-medium tabular-nums text-secondary-label">
                       {formatContextWindowTokens(totalProcessedTokens)}
+                    </span>
+                  </div>
+                ) : null}
+                {usage.cost != null ? (
+                  <div className="flex items-center justify-between gap-3 text-2xs leading-4">
+                    <span className="text-secondary-label">Cost</span>
+                    <span className="font-medium tabular-nums text-secondary-label">
+                      {formatContextWindowCost(usage.cost)}
                     </span>
                   </div>
                 ) : null}

@@ -1,4 +1,3 @@
-import { mergeThreadGroups } from "@t3tools/shared/threadGroups";
 import { useAtomValue } from "@effect/atom-react";
 import { useEffect } from "react";
 import { Atom } from "effect/unstable/reactivity";
@@ -69,11 +68,7 @@ export function beginPendingThreadOrder(pending: PendingThreadOrder) {
         ),
       ),
     });
-    const next = reconcilePendingThreadOrder(
-      current,
-      ordered,
-      mergeThreadGroups(...[...configs.values()].map((config) => config.settings.threadGroups)),
-    );
+    const next = reconcilePendingThreadOrder(current, ordered);
     if (next === null) cancel();
     else if (next !== current) appAtomRegistry.set(pendingThreadOrderAtom, next);
   };

@@ -154,18 +154,31 @@ export const ProviderInstanceConfig = Schema.Struct({
   accentColor: Schema.optional(TrimmedNonEmptyString),
   environment: Schema.optionalKey(ProviderInstanceEnvironment),
   enabled: Schema.optionalKey(Schema.Boolean),
-  // When this instance is rate-limited at turn start, route the turn to this
-  // sibling instead. Honored only when the sibling shares the driver kind and
-  // continuation group (so the session can resume across the switch); a
-  // reference that fails those checks is ignored at routing time rather than
-  // rejected here, keeping envelopes portable across builds.
-  failoverInstanceId: Schema.optionalKey(ProviderInstanceId),
   // Where the usage meter should read subscription quota from, when the
   // driver's own account probe cannot see it (gateway instances).
   usageSource: Schema.optionalKey(ProviderInstanceUsageSource),
   config: Schema.optionalKey(Schema.Unknown),
 });
 export type ProviderInstanceConfig = typeof ProviderInstanceConfig.Type;
+
+/** Atomic mutation for one provider-instance map entry. */
+export const ProviderInstanceMutation = Schema.Union([
+  Schema.Struct({
+    operation: Schema.Literal("create"),
+    instanceId: ProviderInstanceId,
+    instance: ProviderInstanceConfig,
+  }),
+  Schema.Struct({
+    operation: Schema.Literal("upsert"),
+    instanceId: ProviderInstanceId,
+    instance: ProviderInstanceConfig,
+  }),
+  Schema.Struct({
+    operation: Schema.Literal("remove"),
+    instanceId: ProviderInstanceId,
+  }),
+]);
+export type ProviderInstanceMutation = typeof ProviderInstanceMutation.Type;
 
 /**
  * Map shape for `ServerSettings.providerInstances`. Keyed by

@@ -1,7 +1,7 @@
 import * as Linking from "expo-linking";
 import * as SplashScreen from "expo-splash-screen";
 import { useEffect } from "react";
-import { AppState, StatusBar, View } from "react-native";
+import { StatusBar, View } from "react-native";
 import { GestureHandlerRootView } from "react-native-gesture-handler";
 import { KeyboardProvider } from "react-native-keyboard-controller";
 import { SafeAreaProvider } from "react-native-safe-area-context";
@@ -19,8 +19,6 @@ import {
 } from "./features/settings/appearance/AppearancePreferencesProvider";
 import { RootStack } from "./Stack";
 import { appAtomRegistry } from "./state/atom-registry";
-import { useThreadPrewarm } from "./state/prewarm";
-import { ensureComposerDraftsLoaded, flushComposerDrafts } from "./state/use-composer-drafts";
 import { OverlayPortalHost } from "./components/OverlayPortal";
 import { shouldHandleAppLink } from "./lib/appLinking";
 import { useMobileNavigationTheme } from "./lib/useMobileNavigationTheme";
@@ -56,24 +54,6 @@ function SplashScreenCoordinator() {
   return null;
 }
 
-function ThreadPrewarmCoordinator() {
-  useThreadPrewarm();
-  return null;
-}
-
-function ComposerDraftPersistenceCoordinator() {
-  useEffect(() => {
-    ensureComposerDraftsLoaded();
-    const subscription = AppState.addEventListener("change", (state) => {
-      if (state !== "active") {
-        void flushComposerDrafts();
-      }
-    });
-    return () => subscription.remove();
-  }, []);
-  return null;
-}
-
 export default function App() {
   return (
     <RegistryContext.Provider value={appAtomRegistry}>
@@ -93,8 +73,6 @@ function AppContent() {
   return (
     <>
       <SplashScreenCoordinator />
-      <ThreadPrewarmCoordinator />
-      <ComposerDraftPersistenceCoordinator />
       <MobileDiagnosticsCoordinator />
       <SubscriptionUsageCoordinator />
       <GestureHandlerRootView className="flex-1">

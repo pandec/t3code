@@ -76,16 +76,6 @@ reported accounts, refresh provider status, and confirm the second instance has
 its own shadow path and login. A shadow-home conflict usually means the directory
 contains a copied Codex setup. Use a fresh shadow directory and sign in again.
 
-## Switch accounts automatically
-
-Set **Failover instance** on each provider to the other account. When Codex reports a
-rate-limit failure, new turns use the failover account until the limit lifts, then return
-to the preferred account.
-
-Automatic failover requires both providers to use the same **CODEX_HOME path**, with the
-second account configured as a shadow home. T3 Code does not move a thread to an account
-that cannot resume its conversation, so failover stays disabled for separate Codex homes.
-
 ## Answer questions while Codex works
 
 Codex can ask a question and keep working. Answer it in the thread's question

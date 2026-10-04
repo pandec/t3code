@@ -25,9 +25,11 @@ import * as Stream from "effect/Stream";
  * Tracks the live stages of a bootstrap worktree setup per thread so clients
  * can render a progress card while the first turn is still being prepared.
  *
- * Live progress stays in memory, with a short grace window after completion.
- * TurnStartBootstrap persists the initial, handoff, and final snapshots as a
- * thread activity so clients retain the outcome after reload or restart.
+ * State is memory only. It exists from the first `begin` until the turn starts
+ * or the setup fails, plus a short grace window so a client that subscribes
+ * late still sees the final state. Nothing here is persisted or event-sourced:
+ * the durable record of a setup is the thread's worktree path and the setup
+ * script activities, both of which already exist.
  */
 export class WorktreeSetupTracker extends Context.Service<
   WorktreeSetupTracker,

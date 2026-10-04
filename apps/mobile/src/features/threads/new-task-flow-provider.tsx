@@ -8,7 +8,6 @@ import type {
   ProviderOptionSelection,
   RuntimeMode,
   ServerProvider,
-  ServerProviderSkill,
 } from "@t3tools/contracts";
 import {
   CommandId,
@@ -69,8 +68,11 @@ import {
   capturePendingTaskEditorWriteBaseline,
   flushPendingTaskEditorWrite,
 } from "../../state/pending-task-editor-writes";
+import {
+  rememberModelOptions,
+  withRememberedModelOptions,
+} from "../../state/use-model-option-memory";
 import { useDebouncedValue, usePaginatedBranches } from "../../state/queries";
-import { serverEnvironment } from "../../state/server";
 import { vcsEnvironment } from "../../state/vcs";
 import {
   flattenQueuedThreadMessages,
@@ -78,7 +80,7 @@ import {
   type QueuedThreadMessage,
 } from "../../state/thread-outbox";
 import {
-  ensureEditingQueuedMessageHeld,
+  holdEditingQueuedMessage,
   releaseEditingQueuedMessage,
   useThreadOutboxMessages,
 } from "../../state/use-thread-outbox";
@@ -91,8 +93,6 @@ import {
 import { canCreateProjectInEnvironment } from "@t3tools/client-runtime/operations/projects";
 import { isScratchProject } from "@t3tools/client-runtime/state/projects";
 import { EnvironmentProject } from "@t3tools/client-runtime/state/shell";
-import { resolveProviderSkillsForCwd } from "@t3tools/client-runtime/providerSkills";
-import { resolveEffectiveProviderSkills } from "@t3tools/client-runtime/state/server";
 import { type VcsRef } from "@t3tools/client-runtime/state/vcs";
 import {
   buildHomeProjectScopes,
@@ -191,7 +191,6 @@ type NewTaskFlowContextValue = {
   readonly selectedModel: ModelSelection | null;
   readonly selectedModelOption: ModelOption | null;
   readonly selectedProviderStatus: ServerProvider | null;
-  readonly selectedProviderSkills: ReadonlyArray<ServerProviderSkill>;
   readonly providerGroups: ReadonlyArray<ProviderGroup>;
   readonly filteredBranches: ReadonlyArray<VcsRef>;
   readonly reset: () => void;
@@ -220,7 +219,7 @@ type NewTaskFlowContextValue = {
       readonly currentCheckoutBranch?: string | null;
     },
   ) => QueuedThreadMessage | null;
-  readonly setPrompt: (value: string, inputOrigin?: "voice-transcription") => void;
+  readonly setPrompt: (value: string) => void;
   readonly replaceAttachments: (attachments: ReadonlyArray<DraftComposerAttachment>) => void;
   /** Appends draft attachments; returns how many the live cap rejected. */
   readonly appendAttachments: (
@@ -250,6 +249,7 @@ export function NewTaskFlowProvider(props: React.PropsWithChildren) {
   const groupingSettings = useMobileProjectGroupingSettings();
   const { enabled: legacyPlanModeEnabled, loaded: planModePreferenceLoaded } =
     useLegacyPlanModeState();
+
   const projectScopes = useMemo(
     () =>
       sortHomeProjectScopes({
@@ -515,8 +515,8 @@ export function NewTaskFlowProvider(props: React.PropsWithChildren) {
     : "local";
   const selectedBranchName = selectedProjectDraft.workspaceSelection?.branch ?? null;
   // A draft saved while it had a project can still carry a worktree path; a
-  // scratch thread runs in its own folder, so the per-cwd skills and composer
-  // must not resolve against that stale path.
+  // scratch thread runs in its own folder, so the composer must not resolve
+  // against that stale path.
   const selectedWorktreePath = canChooseWorkspace
     ? (selectedProjectDraft.workspaceSelection?.worktreePath ?? null)
     : null;
@@ -587,27 +587,6 @@ export function NewTaskFlowProvider(props: React.PropsWithChildren) {
       ) ?? null,
     [selectedEnvironmentServerConfig, selectedModel?.instanceId],
   );
-  const selectedProviderCwd = selectedProject
-    ? (selectedWorktreePath ?? selectedProject.workspaceRoot)
-    : null;
-  const selectedProviderSnapshotSkills = selectedProviderStatus
-    ? resolveProviderSkillsForCwd(selectedProviderStatus, selectedProviderCwd)
-    : [];
-  const selectedProviderSkillsQuery = useEnvironmentQuery(
-    selectedProject !== null && selectedModel !== null && selectedProviderCwd !== null
-      ? serverEnvironment.providerSkills({
-          environmentId: selectedProject.environmentId,
-          input: {
-            instanceId: selectedModel.instanceId,
-            cwd: selectedProviderCwd,
-          },
-        })
-      : null,
-  );
-  const selectedProviderSkills = resolveEffectiveProviderSkills(
-    selectedProviderSkillsQuery.data?.skills,
-    selectedProviderSnapshotSkills,
-  );
   const planModeEnabled =
     legacyPlanModeEnabled && selectedProviderStatus?.showInteractionModeToggle !== false;
   const interactionMode = planModeEnabled
@@ -624,7 +603,9 @@ export function NewTaskFlowProvider(props: React.PropsWithChildren) {
       if (!option) {
         return;
       }
-      const selection = options ? { ...option.selection, options } : option.selection;
+      const selection = withRememberedModelOptions(
+        options ? { ...option.selection, options } : option.selection,
+      );
       const provider = selectedEnvironmentServerConfig?.providers.find(
         (candidate) => candidate.instanceId === selection.instanceId,
       );
@@ -643,6 +624,7 @@ export function NewTaskFlowProvider(props: React.PropsWithChildren) {
       if (!selectedModel || !selectedProjectDraftKey) {
         return;
       }
+      rememberModelOptions(selectedModel.instanceId, selectedModel.model, options ?? []);
       const nextSelection: ModelSelection = options
         ? { ...selectedModel, options }
         : {
@@ -659,11 +641,11 @@ export function NewTaskFlowProvider(props: React.PropsWithChildren) {
 
   const providerGroups = useMemo(() => groupByProvider(modelOptions), [modelOptions]);
   const setPrompt = useCallback(
-    (value: string, inputOrigin?: "voice-transcription") => {
+    (value: string) => {
       if (!selectedProjectDraftKey) {
         return;
       }
-      setComposerDraftText(selectedProjectDraftKey, value, inputOrigin);
+      setComposerDraftText(selectedProjectDraftKey, value);
     },
     [selectedProjectDraftKey],
   );
@@ -762,7 +744,6 @@ export function NewTaskFlowProvider(props: React.PropsWithChildren) {
   // user. A pending-task edit owns its own key and is untouched here.
   const carryDraftContentTo = useCallback(
     (project: EnvironmentProject) => {
-      if (editingPendingTaskRef.current) return;
       const target = { environmentId: project.environmentId, projectId: project.id };
       if (activeDraftKey !== null && isNewTaskDraftKey(activeDraftKey)) {
         retargetNewTaskDraft(activeDraftKey, target);
@@ -1010,7 +991,7 @@ export function NewTaskFlowProvider(props: React.PropsWithChildren) {
     const draftKey = pendingTaskDraftKey(message.messageId);
     // Only hydrate a fresh editing draft; reopening mid-edit keeps newer edits.
     if (isComposerDraftEmpty(getComposerDraftSnapshot(draftKey))) {
-      setComposerDraftText(draftKey, message.text, message.inputOrigin);
+      setComposerDraftText(draftKey, message.text);
       setComposerDraftContext(draftKey, message.context);
       replaceComposerDraftAttachments(draftKey, message.attachments);
       updateComposerDraftSettings(draftKey, {
@@ -1032,7 +1013,7 @@ export function NewTaskFlowProvider(props: React.PropsWithChildren) {
     editingRevisionRef.current = capturePendingTaskEditorWriteBaseline(message.messageId);
     setEditingPendingTask(message);
     // Hold the outbox drain off this task while it is open in the editor.
-    ensureEditingQueuedMessageHeld(message.messageId);
+    holdEditingQueuedMessage(message.messageId);
     return true;
   }, []);
 
@@ -1079,7 +1060,6 @@ export function NewTaskFlowProvider(props: React.PropsWithChildren) {
         messageId: MessageId.make(metadata.messageId),
         commandId: CommandId.make(metadata.commandId),
         text,
-        ...(draft.inputOrigin !== undefined ? { inputOrigin: draft.inputOrigin } : {}),
         attachments: draft.attachments,
         context: draft.context,
         modelSelection: draftModelSelection,
@@ -1270,7 +1250,6 @@ export function NewTaskFlowProvider(props: React.PropsWithChildren) {
       selectedModel,
       selectedModelOption,
       selectedProviderStatus,
-      selectedProviderSkills,
       providerGroups,
       filteredBranches,
       reset,
@@ -1335,7 +1314,6 @@ export function NewTaskFlowProvider(props: React.PropsWithChildren) {
       selectedModelOption,
       selectedProjectDraftKey,
       selectedProviderStatus,
-      selectedProviderSkills,
       setSelectedModelOptions,
       selectedProject,
       selectedProjectKey,

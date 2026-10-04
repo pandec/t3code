@@ -12,14 +12,7 @@ const openDatabaseAsync = vi.hoisted(() => vi.fn());
 
 vi.mock("expo-sqlite", () => ({ openDatabaseAsync }));
 
-import {
-  decodeLegacyCacheRecord,
-  loadCacheRecord,
-  make,
-  runStartupCacheMaintenance,
-  saveBoundedCacheRecord,
-  utf8ByteLength,
-} from "./mobile-database";
+import * as MobileDatabase from "./mobile-database";
 
 function sqliteValue(value: unknown): NodeSqlite.SQLInputValue {
   if (value === null || typeof value === "string" || typeof value === "number") return value;
@@ -161,21 +154,21 @@ describe("mobile database cache budgets", () => {
   const environmentId = EnvironmentId.make("environment-1");
 
   it("counts UTF-8 bytes without allocating an encoded copy", () => {
-    expect(utf8ByteLength("cache")).toBe(5);
-    expect(utf8ByteLength("é😀")).toBe(6);
+    expect(MobileDatabase.utf8ByteLength("cache")).toBe(5);
+    expect(MobileDatabase.utf8ByteLength("é😀")).toBe(6);
   });
 
   it("skips oversized rows and removes the superseded snapshot", async () => {
     const cache = makeCacheDatabase();
     try {
       const identity = { environmentId, kind: "thread", cacheKey: "thread-1" } as const;
-      await saveBoundedCacheRecord(
+      await MobileDatabase.saveBoundedCacheRecord(
         cache.database,
         { ...identity, schemaVersion: 1, payload: "old" },
         { maxRowBytes: 4, maxTotalBytes: 16, now: 1 },
       );
 
-      const result = await saveBoundedCacheRecord(
+      const result = await MobileDatabase.saveBoundedCacheRecord(
         cache.database,
         { ...identity, schemaVersion: 2, payload: "oversized" },
         { maxRowBytes: 4, maxTotalBytes: 16, now: 2 },
@@ -183,7 +176,7 @@ describe("mobile database cache budgets", () => {
 
       expect(result.skipped).toBe(true);
       expect(cache.rows()).toEqual([]);
-      expect(await loadCacheRecord(cache.database, identity, 3)).toBeNull();
+      expect(await MobileDatabase.loadCacheRecord(cache.database, identity, 3)).toBeNull();
     } finally {
       cache.close();
     }
@@ -193,7 +186,7 @@ describe("mobile database cache budgets", () => {
     const cache = makeCacheDatabase();
     try {
       const save = (cacheKey: string, payload: string, now: number) =>
-        saveBoundedCacheRecord(
+        MobileDatabase.saveBoundedCacheRecord(
           cache.database,
           { environmentId, kind: "thread", cacheKey, schemaVersion: 1, payload },
           { maxRowBytes: 8, maxTotalBytes: 8, now },
@@ -201,7 +194,7 @@ describe("mobile database cache budgets", () => {
 
       await save("thread-1", "1111", 1);
       await save("thread-2", "2222", 2);
-      await loadCacheRecord(
+      await MobileDatabase.loadCacheRecord(
         cache.database,
         { environmentId, kind: "thread", cacheKey: "thread-1" },
         400_000,
@@ -228,14 +221,14 @@ describe("mobile database cache budgets", () => {
     const cache = makeCacheDatabase({ incrementalAutoVacuum: false });
     try {
       for (const [index, cacheKey] of ["thread-1", "thread-2", "thread-3"].entries()) {
-        await saveBoundedCacheRecord(
+        await MobileDatabase.saveBoundedCacheRecord(
           cache.database,
           { environmentId, kind: "thread", cacheKey, schemaVersion: 1, payload: "data" },
           { maxRowBytes: 8, maxTotalBytes: 100, now: index + 1 },
         );
       }
 
-      await runStartupCacheMaintenance(cache.database, {
+      await MobileDatabase.runStartupCacheMaintenance(cache.database, {
         maxTotalBytes: 8,
         vacuumPasses: 2,
         autoVacuumMinAllocatedBytes: 0,
@@ -257,8 +250,8 @@ describe("mobile database cache budgets", () => {
     const warn = vi.spyOn(console, "warn").mockImplementation(() => undefined);
     try {
       const options = { vacuumPasses: 2, autoVacuumMinAllocatedBytes: 0 } as const;
-      await runStartupCacheMaintenance(cache.database, options);
-      await runStartupCacheMaintenance(cache.database, options);
+      await MobileDatabase.runStartupCacheMaintenance(cache.database, options);
+      await MobileDatabase.runStartupCacheMaintenance(cache.database, options);
 
       expect(cache.autoVacuumOutcome()).toBe("failed");
       expect(cache.executedSql.filter((sql) => sql === "VACUUM;")).toHaveLength(1);
@@ -284,7 +277,7 @@ describe("mobile database cache budgets", () => {
     });
     const warn = vi.spyOn(console, "warn").mockImplementation(() => undefined);
     try {
-      await runStartupCacheMaintenance(cache.database, {
+      await MobileDatabase.runStartupCacheMaintenance(cache.database, {
         vacuumPasses: 0,
         autoVacuumMinAllocatedBytes: 0,
       });
@@ -309,7 +302,7 @@ describe("mobile database cache budgets", () => {
   it("defers auto-vacuum conversion until the database reaches the physical size threshold", async () => {
     const cache = makeCacheDatabase({ incrementalAutoVacuum: false });
     try {
-      await runStartupCacheMaintenance(cache.database, {
+      await MobileDatabase.runStartupCacheMaintenance(cache.database, {
         vacuumPasses: 0,
         autoVacuumMinAllocatedBytes: Number.MAX_SAFE_INTEGER,
       });
@@ -317,7 +310,7 @@ describe("mobile database cache budgets", () => {
       expect(cache.autoVacuumOutcome()).toBeNull();
       expect(cache.executedSql).not.toContain("VACUUM;");
 
-      await runStartupCacheMaintenance(cache.database, {
+      await MobileDatabase.runStartupCacheMaintenance(cache.database, {
         vacuumPasses: 0,
         autoVacuumMinAllocatedBytes: 0,
       });
@@ -352,7 +345,7 @@ describe("mobile database operation ordering", () => {
       const scope = yield* Scope.make();
 
       yield* Effect.gen(function* () {
-        const database = yield* make.pipe(Effect.provideService(Scope.Scope, scope));
+        const database = yield* MobileDatabase.make.pipe(Effect.provideService(Scope.Scope, scope));
         const saveFiber = yield* database.savePreferencesJson("{}", 1).pipe(Effect.forkChild);
         yield* Effect.promise(() => writeStarted.promise);
 
@@ -378,7 +371,7 @@ describe("mobile database legacy cache migration", () => {
       Effect.gen(function* () {
         openDatabaseAsync.mockRejectedValueOnce(new Error("SQLite unavailable"));
 
-        const database = yield* make;
+        const database = yield* MobileDatabase.make;
         const result = yield* Effect.result(database.loadPreferencesJson);
 
         expect(result).toMatchObject({
@@ -397,7 +390,7 @@ describe("mobile database legacy cache migration", () => {
       snapshot: {},
     });
 
-    expect(decodeLegacyCacheRecord("connection-thread-snapshots", payload)).toEqual({
+    expect(MobileDatabase.decodeLegacyCacheRecord("connection-thread-snapshots", payload)).toEqual({
       environmentId: "environment-1",
       kind: "thread",
       cacheKey: "thread-1",
@@ -414,7 +407,7 @@ describe("mobile database legacy cache migration", () => {
       snapshot: {},
     });
 
-    expect(decodeLegacyCacheRecord("shell-snapshots", payload)).toEqual({
+    expect(MobileDatabase.decodeLegacyCacheRecord("shell-snapshots", payload)).toEqual({
       environmentId: "environment-1",
       kind: "shell",
       cacheKey: "snapshot",
@@ -424,9 +417,9 @@ describe("mobile database legacy cache migration", () => {
   });
 
   it("skips malformed legacy records", () => {
-    expect(decodeLegacyCacheRecord("connection-vcs-refs", "{not-json")).toBeNull();
+    expect(MobileDatabase.decodeLegacyCacheRecord("connection-vcs-refs", "{not-json")).toBeNull();
     expect(
-      decodeLegacyCacheRecord(
+      MobileDatabase.decodeLegacyCacheRecord(
         "connection-vcs-refs",
         JSON.stringify({ schemaVersion: 1, environmentId: "environment-1" }),
       ),

@@ -6,12 +6,10 @@ import {
   clampAccentTintIntensityPercent,
   clampProviderUsageAlertPercent,
   clampSteerGraceWindowMs,
-  clampTurnCompletionMinDurationSeconds,
   ClientSettingsSchema,
   ClientSettingsPatch,
   ClaudeSettings,
   DEFAULT_SERVER_SETTINGS,
-  HermesSettings,
   resolveProviderInstanceEnabled,
   ServerSettings,
   ServerSettingsPatch,
@@ -22,9 +20,36 @@ const decodeClientSettingsPatch = Schema.decodeUnknownSync(ClientSettingsPatch);
 const encodeClientSettings = Schema.encodeSync(ClientSettingsSchema);
 const decodeServerSettings = Schema.decodeUnknownSync(ServerSettings);
 const decodeServerSettingsPatch = Schema.decodeUnknownSync(ServerSettingsPatch);
-const decodeHermesSettings = Schema.decodeUnknownSync(HermesSettings);
 const encodeServerSettings = Schema.encodeSync(ServerSettings);
 const decodeClaudeSettings = Schema.decodeUnknownSync(ClaudeSettings);
+
+describe("ServerSettings response streaming", () => {
+  it("defaults to paragraph buffering", () => {
+    expect(decodeServerSettings({}).responseStreamingMode).toBe("paragraph");
+  });
+
+  it.each(["turn", "paragraph"])(
+    "round-trips %s as an environment setting and project override",
+    (responseStreamingMode) => {
+      const input = {
+        responseStreamingMode,
+        projectSettingsOverrides: { project: { responseStreamingMode } },
+      };
+      expect(encodeServerSettings(decodeServerSettings(input))).toMatchObject(input);
+      expect(decodeServerSettingsPatch(input)).toEqual(input);
+    },
+  );
+
+  it.each(["token", "unsupported"])("rejects %s in settings snapshots and writes", (mode) => {
+    for (const input of [
+      { responseStreamingMode: mode },
+      { projectSettingsOverrides: { project: { responseStreamingMode: mode } } },
+    ]) {
+      expect(() => decodeServerSettings(input)).toThrow();
+      expect(() => decodeServerSettingsPatch(input)).toThrow();
+    }
+  });
+});
 
 describe("storage cleanup settings", () => {
   it("keeps cleanup disabled for existing installations", () => {
@@ -228,23 +253,50 @@ describe("ClaudeSettings auto-compaction", () => {
 });
 
 describe("ClientSettings notifications", () => {
-  it("preserves completion preferences while new alerts and sounds require opt-in", () => {
-    const settings = decodeClientSettings({
-      enableTurnCompletionToasts: true,
-      enableTurnCompletionSystemNotifications: true,
-    });
-    expect(settings.enableTurnCompletionToasts).toBe(true);
-    expect(settings.enableTurnCompletionSystemNotifications).toBe(true);
-    expect(settings.enableInputRequestNotifications).toBe(false);
-    expect(settings.enableNotificationSounds).toBe(false);
+  it("requires opt-in when existing settings omit notification preferences", () => {
+    expect(decodeClientSettings({}).notificationMode).toBe("off");
+    expect(decodeClientSettings({}).inAppNotificationsEnabled).toBe(false);
+    expect(decodeClientSettingsPatch({})).not.toHaveProperty("inAppNotificationsEnabled");
+    expect(decodeClientSettingsPatch({})).not.toHaveProperty("notificationMode");
   });
 
-  it.each(["enableInputRequestNotifications", "enableNotificationSounds"] as const)(
-    "round-trips %s",
-    (key) => {
-      expect(encodeClientSettings(decodeClientSettings({ [key]: true }))[key]).toBe(true);
-      expect(decodeClientSettingsPatch({ [key]: true })[key]).toBe(true);
-      expect(decodeClientSettingsPatch({})).not.toHaveProperty(key);
+  it.each([true, false])(
+    "round-trips in-app notifications set to %s",
+    (inAppNotificationsEnabled) => {
+      const settings = decodeClientSettings({ inAppNotificationsEnabled });
+      expect(encodeClientSettings(settings).inAppNotificationsEnabled).toBe(
+        inAppNotificationsEnabled,
+      );
+      expect(
+        decodeClientSettingsPatch({ inAppNotificationsEnabled }).inAppNotificationsEnabled,
+      ).toBe(inAppNotificationsEnabled);
+    },
+  );
+
+  it.each(["true", 1, null])(
+    "rejects an invalid in-app notification preference %s",
+    (inAppNotificationsEnabled) => {
+      expect(() => decodeClientSettings({ inAppNotificationsEnabled })).toThrow();
+      expect(() => decodeClientSettingsPatch({ inAppNotificationsEnabled })).toThrow();
+    },
+  );
+
+  it.each(["off", "notifications", "sound", "notifications-and-sound"])(
+    "round-trips the %s mode",
+    (notificationMode) => {
+      const settings = decodeClientSettings({ notificationMode });
+      expect(encodeClientSettings(settings).notificationMode).toBe(notificationMode);
+      expect(decodeClientSettingsPatch({ notificationMode }).notificationMode).toBe(
+        notificationMode,
+      );
+    },
+  );
+
+  it.each(["always", true, null])(
+    "rejects unsupported notification mode %s",
+    (notificationMode) => {
+      expect(() => decodeClientSettings({ notificationMode })).toThrow();
+      expect(() => decodeClientSettingsPatch({ notificationMode })).toThrow();
     },
   );
 });
@@ -312,6 +364,15 @@ describe("ClientSettings load balancing", () => {
   });
 });
 
+describe("ClientSettings composer context strip", () => {
+  it("defaults to draft-only and accepts a persistent strip preference", () => {
+    expect(decodeClientSettings({}).persistComposerContextStrip).toBe(false);
+    expect(
+      decodeClientSettingsPatch({ persistComposerContextStrip: true }).persistComposerContextStrip,
+    ).toBe(true);
+  });
+});
+
 describe("ClientSettings word wrap", () => {
   it("defaults word wrap on", () => {
     expect(decodeClientSettings({}).wordWrap).toBe(true);
@@ -326,26 +387,6 @@ describe("ClientSettings word wrap", () => {
     expect(decoded.wordWrap).toBe(true);
     expect(decoded).not.toHaveProperty("chatWordWrap");
     expect(decoded).not.toHaveProperty("diffWordWrap");
-  });
-});
-
-describe("ClientSettings turn completion notifications", () => {
-  it("defaults both independent notification settings off", () => {
-    const settings = decodeClientSettings({});
-    expect(settings.enableTurnCompletionToasts).toBe(false);
-    expect(settings.enableTurnCompletionSystemNotifications).toBe(false);
-  });
-
-  it("accepts each notification setting independently in patches", () => {
-    expect(
-      decodeClientSettingsPatch({
-        enableTurnCompletionToasts: true,
-        enableTurnCompletionSystemNotifications: false,
-      }),
-    ).toEqual({
-      enableTurnCompletionToasts: true,
-      enableTurnCompletionSystemNotifications: false,
-    });
   });
 });
 
@@ -654,6 +695,19 @@ describe("ClientSettings send shortcut", () => {
   });
 });
 
+describe("ClientSettings follow-up behavior", () => {
+  it("defaults to queue and accepts either behavior", () => {
+    expect(decodeClientSettings({}).followUpBehavior).toBe("queue");
+    for (const followUpBehavior of ["queue", "steer"]) {
+      expect(decodeClientSettings({ followUpBehavior }).followUpBehavior).toBe(followUpBehavior);
+      expect(decodeClientSettingsPatch({ followUpBehavior }).followUpBehavior).toBe(
+        followUpBehavior,
+      );
+    }
+    expect(() => decodeClientSettingsPatch({ followUpBehavior: "invalid" })).toThrow();
+  });
+});
+
 describe("ClientSettings composer collapse", () => {
   it("collapses on scroll by default and accepts opting out", () => {
     expect(decodeClientSettings({}).composerCollapseOnScroll).toBe(true);
@@ -672,18 +726,8 @@ describe("ClientSettings composer collapse", () => {
 describe("ServerSettings thread settlement", () => {
   it("defaults merge settlement on and inactivity settlement to three days", () => {
     const settings = decodeServerSettings({});
-    expect(settings.threadAutoSettleEnabled).toBe(true);
     expect(settings.sidebarAutoSettleAfterDays).toBe(3);
     expect(settings.sidebarAutoSettleOnMerge).toBe(true);
-  });
-
-  it("accepts turning the master auto-settle gate off", () => {
-    expect(decodeServerSettings({ threadAutoSettleEnabled: false }).threadAutoSettleEnabled).toBe(
-      false,
-    );
-    expect(
-      decodeServerSettingsPatch({ threadAutoSettleEnabled: false }).threadAutoSettleEnabled,
-    ).toBe(false);
   });
 
   it("allows both automatic rules to be disabled", () => {
@@ -840,19 +884,6 @@ describe("ClientSettings pull request merge methods", () => {
   });
 });
 
-describe("removed worktree recovery setting", () => {
-  it("skips recreation by default and accepts an explicit opt-out", () => {
-    expect(decodeServerSettings({}).skipMissingWorktreeRecreation).toBe(true);
-    expect(
-      decodeServerSettings({ skipMissingWorktreeRecreation: false }).skipMissingWorktreeRecreation,
-    ).toBe(false);
-    expect(
-      decodeServerSettingsPatch({ skipMissingWorktreeRecreation: false })
-        .skipMissingWorktreeRecreation,
-    ).toBe(false);
-  });
-});
-
 describe("ClientSettings extras", () => {
   it("keeps prior behaviour by default", () => {
     const settings = decodeClientSettings({});
@@ -864,7 +895,6 @@ describe("ClientSettings extras", () => {
     expect(settings.accentTintsEnabled).toBe(true);
     expect(settings.accentTintIntensityPercent).toBe(12);
     expect(settings.sidebarAlwaysShowPinnedInAttention).toBe(false);
-    expect(settings.turnCompletionMinDurationSeconds).toBe(0);
   });
 
   it("accepts in-range values in patches", () => {
@@ -878,7 +908,6 @@ describe("ClientSettings extras", () => {
         accentTintsEnabled: false,
         accentTintIntensityPercent: 30,
         sidebarAlwaysShowPinnedInAttention: true,
-        turnCompletionMinDurationSeconds: 3_600,
       }),
     ).toEqual({
       steerGraceWindowMs: 0,
@@ -889,7 +918,6 @@ describe("ClientSettings extras", () => {
       accentTintsEnabled: false,
       accentTintIntensityPercent: 30,
       sidebarAlwaysShowPinnedInAttention: true,
-      turnCompletionMinDurationSeconds: 3_600,
     });
   });
 
@@ -915,8 +943,6 @@ describe("ClientSettings extras", () => {
     { openRouterCreditsBudgetUsd: 1_000_001 },
     { accentTintIntensityPercent: 3 },
     { accentTintIntensityPercent: 31 },
-    { turnCompletionMinDurationSeconds: -1 },
-    { turnCompletionMinDurationSeconds: 3_601 },
   ])("rejects out-of-range %o", (patch) => {
     expect(() => decodeClientSettingsPatch(patch)).toThrow();
   });
@@ -928,8 +954,6 @@ describe("ClientSettings extras", () => {
     expect(clampProviderUsageAlertPercent(Number.NaN, 80)).toBe(80);
     expect(clampAccentTintIntensityPercent(1)).toBe(4);
     expect(clampAccentTintIntensityPercent(99)).toBe(30);
-    expect(clampTurnCompletionMinDurationSeconds(-5)).toBe(0);
-    expect(clampTurnCompletionMinDurationSeconds(10_000)).toBe(3_600);
   });
 });
 
@@ -1045,40 +1069,6 @@ describe("ServerSettings.providerInstances (slice-2 invariant)", () => {
   });
 });
 
-describe("HermesSettings", () => {
-  it("defaults to a disabled machine-local Hermes ACP configuration", () => {
-    expect(decodeHermesSettings({})).toEqual({
-      enabled: false,
-      binaryPath: "hermes",
-      requireGateway: false,
-      customModels: [],
-    });
-    expect(decodeServerSettings({}).providers.hermes).toEqual(decodeHermesSettings({}));
-  });
-
-  it("round-trips Hermes provider patches", () => {
-    expect(
-      decodeServerSettingsPatch({
-        providers: {
-          hermes: {
-            enabled: true,
-            binaryPath: "  /opt/homebrew/bin/hermes  ",
-            authMethodId: "  openai-codex  ",
-            requireGateway: false,
-            customModels: ["openai-codex:gpt-5.6-sol"],
-          },
-        },
-      }).providers?.hermes,
-    ).toEqual({
-      enabled: true,
-      binaryPath: "/opt/homebrew/bin/hermes",
-      authMethodId: "openai-codex",
-      requireGateway: false,
-      customModels: ["openai-codex:gpt-5.6-sol"],
-    });
-  });
-});
-
 describe("provider enabled defaults", () => {
   it("enables only the stable bindings by default", () => {
     const decoded = decodeServerSettings({});
@@ -1087,14 +1077,6 @@ describe("provider enabled defaults", () => {
     expect(decoded.providers.cursor.enabled).toBe(false);
     expect(decoded.providers.grok.enabled).toBe(false);
     expect(decoded.providers.opencode.enabled).toBe(false);
-  });
-
-  it("keeps the fork Hermes driver disabled by default", () => {
-    // Hermes is a fork driver the settings schema knows, so it takes its own
-    // disabled-by-default value rather than the unknown-driver fallback.
-    expect(
-      resolveProviderInstanceEnabled({ driver: ProviderDriverKind.make("hermes"), config: {} }),
-    ).toBe(false);
   });
 
   it("keeps Cursor enabled when an existing user explicitly opted in", () => {
@@ -1177,6 +1159,42 @@ describe("ServerSettings worktree defaults", () => {
     );
     expect(decodeServerSettings({ worktreeSubmodules: "shallow" }).worktreeSubmodules).toBeNull();
     expect(decodeServerSettingsPatch({ worktreeSubmodules: null }).worktreeSubmodules).toBeNull();
+  });
+});
+
+describe("ServerSettings Cursor legacy settings", () => {
+  it("preserves V1 Cursor CLI settings when reading and writing shared settings", () => {
+    const decoded = decodeServerSettings({
+      providers: {
+        cursor: {
+          enabled: true,
+          binaryPath: "cursor-agent",
+          apiEndpoint: "http://127.0.0.1:3774",
+        },
+      },
+    });
+
+    expect(decoded.providers.cursor.enabled).toBe(true);
+    expect(encodeServerSettings(decoded).providers?.cursor).toMatchObject({
+      binaryPath: "cursor-agent",
+      apiEndpoint: "http://127.0.0.1:3774",
+    });
+  });
+
+  it("ignores obsolete Cursor CLI settings in patches", () => {
+    const patch = decodeServerSettingsPatch({
+      providers: {
+        cursor: {
+          enabled: true,
+          binaryPath: "cursor-agent",
+          apiEndpoint: "http://127.0.0.1:3774",
+        },
+      },
+    });
+
+    expect(patch.providers?.cursor?.enabled).toBe(true);
+    expect(patch.providers?.cursor).not.toHaveProperty("binaryPath");
+    expect(patch.providers?.cursor).not.toHaveProperty("apiEndpoint");
   });
 });
 
@@ -1333,4 +1351,27 @@ it("validates remote device hosts and rejects ambiguous host ids", () => {
     decodeDeviceHostSettings({ deviceHosts: [{ ...host, target: "-oProxyCommand=bad" }] }),
   ).toThrow();
   expect(() => decodeDeviceHostSettings({ deviceHosts: [{ ...host, port: 0 }] })).toThrow();
+});
+
+describe("branch naming settings", () => {
+  it("defaults existing settings to the t3code static prefix", () => {
+    expect(decodeServerSettings({})).toMatchObject({
+      branchNamingMode: "static",
+      branchNamePrefix: "t3code",
+      branchNameInstructions: "",
+    });
+  });
+  it.each(["static", "semantic", "custom"])(
+    "round-trips %s and project overrides",
+    (branchNamingMode) => {
+      const naming = {
+        branchNamingMode,
+        branchNamePrefix: "team/",
+        branchNameInstructions: "Include the issue ID.",
+      };
+      const input = { ...naming, projectSettingsOverrides: { project: naming } };
+      expect(encodeServerSettings(decodeServerSettings(input))).toMatchObject(input);
+      expect(decodeServerSettingsPatch(input)).toEqual(input);
+    },
+  );
 });

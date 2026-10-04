@@ -3,9 +3,9 @@ import * as Schema from "effect/Schema";
 import { IsoDateTime, NonNegativeInt, ThreadId, TrimmedNonEmptyString } from "./baseSchemas.ts";
 
 /**
- * Progress for a thread whose first turn is creating a worktree. Live updates
- * come from the setup stream; the thread activity retains lifecycle snapshots
- * for reloads and server restart recovery.
+ * Live progress for a thread whose first turn is creating a worktree. The
+ * server keeps this in memory only; a client that reconnects mid-setup gets a
+ * fresh snapshot, and a finished setup is dropped once its turn starts.
  */
 /** Producers clamp free text to these before publishing so encoding never fails. */
 export const WORKTREE_SETUP_DETAIL_MAX_LENGTH = 200;
@@ -80,7 +80,6 @@ export type WorktreeSetupSnapshot = typeof WorktreeSetupSnapshot.Type;
  * after a reload.
  */
 export const WORKTREE_SETUP_ACTIVITY_KIND = "worktree-setup";
-export const worktreeSetupActivityId = (threadId: ThreadId) => `worktree-setup:${threadId}`;
 
 export const WorktreeSetupSubscribeInput = Schema.Struct({
   threadId: ThreadId,

@@ -23,10 +23,20 @@ export interface CollectComposerInlineTokensOptions {
  * numeric expressions like "$20", "$20k", "$100M", and "$1e6" must stay prose:
  * the composer chips any matched `$name` token, known or not. Tokens beginning
  * with digits must not match numbers with currency/exponent suffixes, and must
- * contain at least one letter.
+ * contain at least one letter. Any currency symbol is accepted as the sigil.
  */
-const SKILL_TOKEN_REGEX =
-  /(^|\s)\p{Sc}(?![0-9][0-9_]*(?:[kKmMbBtT]|[eE][0-9]+)?(?:\s|$))(?=[a-zA-Z0-9:_-]*[a-zA-Z])([a-zA-Z0-9][a-zA-Z0-9:_-]*)(?=\s)/gu;
+const SKILL_MENTION_SOURCE =
+  /(^|\s)\p{Sc}(?![0-9][0-9_]*(?:[kKmMbBtT]|[eE][0-9]+)?(?:\s|$))(?=[a-zA-Z0-9:_-]*[a-zA-Z])([a-zA-Z0-9][a-zA-Z0-9:_-]*)/u
+    .source;
+// While typing, a token only becomes a chip once a delimiter follows it, so a
+// half-typed name at the end of the text stays plain.
+const SKILL_TOKEN_REGEX = new RegExp(`${SKILL_MENTION_SOURCE}(?=\\s)`, "gu");
+/**
+ * Skill mentions in a sent prompt, which may also end at the end of the text.
+ * Group 1 is the leading delimiter and group 2 the skill name. The pattern is
+ * global, so use it with `matchAll` or `replace`, not `test` or `exec`.
+ */
+export const SKILL_MENTION_PATTERN = new RegExp(`${SKILL_MENTION_SOURCE}(?=\\s|$)`, "gu");
 const MENTION_TOKEN_REGEX = /(^|\s)@(?:"((?:\\.|[^"\\])*)"|([^\s@"]+))(?=\s)/g;
 /**
  * The label body is bounded rather than `*`. Unbounded, every whitespace in
@@ -140,33 +150,4 @@ export function collectComposerInlineTokens(
   }
 
   return [...matches].sort((left, right) => left.start - right.start);
-}
-
-/**
- * Skill tokens in `text`, in order, with overlaps resolved the way the editor
- * splits the same text into segments: the earliest token claims its span.
- *
- * That rule matters because a `$name` can sit inside a file mention's label —
- * a link for `my $review notes.md` serialises to `[my $review notes.md](...)`,
- * whose label matches the skill pattern. The composer renders that whole span
- * as one file chip, so the nested reference is not a skill reference, and any
- * provider that rewrites `$name` in an outgoing prompt must not touch it.
- *
- * The token pattern requires trailing whitespace, so a reference that ends the
- * text only matches once a newline follows it. Offsets stay valid for the
- * original text because a token never extends into that suffix.
- */
-export function collectComposerSkillTokens(text: string): ReadonlyArray<ComposerInlineToken> {
-  const skillTokens: ComposerInlineToken[] = [];
-  let claimedUntil = 0;
-  for (const token of collectComposerInlineTokens(`${text}\n`)) {
-    if (token.start < claimedUntil) {
-      continue;
-    }
-    claimedUntil = token.end;
-    if (token.type === "skill") {
-      skillTokens.push(token);
-    }
-  }
-  return skillTokens;
 }

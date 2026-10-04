@@ -22,13 +22,11 @@ import type { EnvironmentConnectionPhase } from "../connection/presentation.ts";
 
 /** Server keys that hold a user preference rather than machine config. */
 const SHARED_SERVER_SETTING_KEYS = [
-  // The fork's auto-settle master gate replicates with the per-reason toggles
-  // it governs, so one flip disables automatic settlement everywhere.
-  "threadAutoSettleEnabled",
   "continueThreadsAfterServerUpdate",
-  "skipMissingWorktreeRecreation",
   "sidebarAutoSettleAfterDays",
   "sidebarAutoSettleOnMerge",
+  "autoResumeLimitedThreads",
+  "snoozeLimitedThreads",
   "newWorktreesStartFromOrigin",
   "sourceControlWritingStyle",
   "textGenerationModelSelection",

@@ -5,7 +5,6 @@ export type ComposerTriggerKind =
   | "slash-model"
   | "skill";
 export type ComposerSlashCommand = "model" | "plan" | "default";
-export type ThreadTitleComposerCommand = "t3-name" | "t3-rename";
 
 export interface ComposerTrigger {
   kind: ComposerTriggerKind;
@@ -143,15 +142,6 @@ export function parseComposerArchiveCommand(
   return { action: argument === "" ? "toggle" : argument === "cancel" ? "cancel" : null };
 }
 
-export function parseComposerRenameCommand(text: string): { title: string | null } | null {
-  const match = /^\/t3-(?:name|rename)(?:\s+([\s\S]*))?$/i.exec(text.trim());
-  if (!match) {
-    return null;
-  }
-  const title = match[1]?.trim() ?? "";
-  return { title: title.length > 0 ? title : null };
-}
-
 // The three RGI subdivision flags: England, Scotland, and Wales.
 const SUBDIVISION_FLAG_PATTERN =
   "\\u{1F3F4}\\u{E0067}\\u{E0062}(?:\\u{E0065}\\u{E006E}\\u{E0067}|\\u{E0073}\\u{E0063}\\u{E0074}|\\u{E0077}\\u{E006C}\\u{E0073})\\u{E007F}";
@@ -163,18 +153,9 @@ const PICTOGRAPH_COMPONENT_PATTERN =
 // optionally chained into a ZWJ sequence (e.g. 👨‍👩‍👧). Kept as a `u`-flag
 // pattern because Hermes lacks the `v` flag and Intl.Segmenter.
 const EMOJI_GRAPHEME_PATTERN = `(?:\\p{Regional_Indicator}{2}|[0-9#*]\\uFE0F?\\u20E3|${SUBDIVISION_FLAG_PATTERN}|${PICTOGRAPH_COMPONENT_PATTERN}(?:\\u200D${PICTOGRAPH_COMPONENT_PATTERN})*)`;
-const SINGLE_EMOJI_REGEX = new RegExp(`^${EMOJI_GRAPHEME_PATTERN}$`, "u");
 const LEADING_EMOJI_REGEX = new RegExp(`^${EMOJI_GRAPHEME_PATTERN}[ \\t]*`, "u");
 const FORK_MARKER = "(🔱)";
 const LEGACY_FORK_MARKER = "🔱";
-
-export function buildThreadTitleComposerText(
-  command: ThreadTitleComposerCommand,
-  currentTitle: string | null | undefined,
-): string {
-  const title = currentTitle?.trim() ?? "";
-  return command === "t3-name" && title.length > 0 ? `/t3-name ${title}` : `/${command} `;
-}
 
 function hasForkMarker(title: string): boolean {
   return title === FORK_MARKER || title.startsWith(`${FORK_MARKER} `);
@@ -214,28 +195,6 @@ export function formatForkedThreadTitle(title: string): string {
   return normalizedRest.length > 0
     ? `${statusEmoji} ${FORK_MARKER} ${normalizedRest}`
     : `${statusEmoji} ${FORK_MARKER}`;
-}
-
-export function parseComposerStatusCommand(text: string): { emoji: string | null } | null {
-  const match = /^\/t3-status(?:\s+([\s\S]*))?$/i.exec(text.trim());
-  if (!match) {
-    return null;
-  }
-  const value = match[1]?.trim() ?? "";
-  return { emoji: SINGLE_EMOJI_REGEX.test(value) ? value : null };
-}
-
-export function applyThreadStatusEmoji(title: string, emoji: string): string {
-  const trimmed = title.trim();
-  const leadingEmoji = LEADING_EMOJI_REGEX.exec(trimmed);
-  if (leadingEmoji?.[0].trimEnd() === LEGACY_FORK_MARKER) {
-    const rest = trimmed.slice(leadingEmoji[0].length);
-    return rest.length > 0 ? `${emoji} ${FORK_MARKER} ${rest}` : `${emoji} ${FORK_MARKER}`;
-  }
-  const rest = normalizeLegacyForkMarker(
-    leadingEmoji ? trimmed.slice(leadingEmoji[0].length) : trimmed,
-  );
-  return rest.length > 0 ? `${emoji} ${rest}` : emoji;
 }
 
 export function replaceTextRange(

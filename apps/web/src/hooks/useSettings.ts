@@ -14,6 +14,7 @@ import { useAtomValue } from "@effect/atom-react";
 import {
   DEFAULT_SERVER_SETTINGS,
   type EnvironmentId,
+  type ProviderInstanceMutation,
   type ServerSettings,
   ServerSettingsPatch,
 } from "@t3tools/contracts";
@@ -22,7 +23,6 @@ import {
   clampAccentTintIntensityPercent,
   clampProviderUsageAlertPercent,
   clampSteerGraceWindowMs,
-  clampTurnCompletionMinDurationSeconds,
   type ClientSettingsPatch,
   type ClientSettings,
   DEFAULT_CLIENT_SETTINGS,
@@ -30,7 +30,6 @@ import {
   DEFAULT_PROVIDER_USAGE_WARNING_PERCENT,
   type EnvironmentIdentificationMode,
   type SteerGraceWindowMs,
-  type TurnCompletionMinDurationSeconds,
   type UnifiedSettings,
 } from "@t3tools/contracts/settings";
 import {
@@ -355,7 +354,7 @@ export function useSteerGraceWindowMs(): SteerGraceWindowMs {
   return useMemo(() => clampSteerGraceWindowMs(value), [value]);
 }
 
-/** Warning/critical usage thresholds for the provider quota meter and alerts. */
+/** Warning/critical usage thresholds for the provider quota meter. */
 export function useProviderUsageThresholds(): ProviderUsageThresholds {
   const settings = useClientSettingsValue();
   const warningPercent = settings.providerUsageWarningPercent;
@@ -390,12 +389,6 @@ export function useAccentTintSettings(): AccentTintSettings {
     () => ({ enabled, intensityPercent: clampAccentTintIntensityPercent(intensity) }),
     [enabled, intensity],
   );
-}
-
-/** Minimum turn duration, in seconds, before a completion is announced. */
-export function useTurnCompletionMinDurationSeconds(): TurnCompletionMinDurationSeconds {
-  const value = useClientSettingsValue().turnCompletionMinDurationSeconds;
-  return useMemo(() => clampTurnCompletionMinDurationSeconds(value), [value]);
 }
 
 export function resolveEnvironmentIdentificationMode(input: {
@@ -454,6 +447,21 @@ export function useEnvironmentSettings<T = UnifiedSettings>(
 ): T {
   const serverSettings = useAtomValue(serverEnvironment.settingsValueAtom(environmentId));
   return useMergedSettings(serverSettings ?? DEFAULT_SERVER_SETTINGS, selector);
+}
+
+/** Atomically mutate one provider instance against the server's latest settings snapshot. */
+export function usePersistEnvironmentProviderInstanceMutation(environmentId: EnvironmentId) {
+  const mutateProviderInstance = useAtomCommand(serverEnvironment.mutateProviderInstance, {
+    reportFailure: false,
+  });
+  return useCallback(
+    (providerInstanceMutation: ProviderInstanceMutation, patch: ServerSettingsPatch = {}) =>
+      mutateProviderInstance({
+        environmentId,
+        input: { patch, providerInstanceMutation },
+      }),
+    [environmentId, mutateProviderInstance],
+  );
 }
 
 /** Primary-only settings access for the settings UI and other explicitly global surfaces. */

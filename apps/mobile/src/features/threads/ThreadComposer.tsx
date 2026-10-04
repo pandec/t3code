@@ -1,21 +1,19 @@
-import { ChatGptUsageLimitNotice } from "./ChatGptUsageLimitNotice";
 import type { ComposerTextPaste } from "../../native/T3ComposerEditor.types";
 import { useAppearancePreferences } from "../settings/appearance/AppearancePreferencesProvider";
+import type { EnvironmentThreadShell } from "@t3tools/client-runtime/state/shell";
 import { useAtomValue } from "@effect/atom-react";
-import type { MenuAction } from "@react-native-menu/menu";
 import { clampFileAttachmentUploadBytes } from "@t3tools/client-runtime/state/attachments";
 import { pastedTextDisposition, replaceTextSelection } from "@t3tools/client-runtime/text-paste";
 import {
   PROVIDER_SEND_TURN_MAX_ATTACHMENTS,
   PROVIDER_SEND_TURN_MAX_INPUT_CHARS,
+  type ChatAttachment,
   type EnvironmentId,
   type MessageId,
   type ModelSelection,
-  type OrchestrationThreadShell,
   type ProviderInteractionMode,
   type RuntimeMode,
   type ServerConfig as T3ServerConfig,
-  type ServerProviderSkill,
   type UsageLimitsReport,
 } from "@t3tools/contracts";
 import {
@@ -35,16 +33,7 @@ import {
   useState,
   type RefObject,
 } from "react";
-import {
-  ActivityIndicator,
-  Alert,
-  Keyboard,
-  Platform,
-  Pressable,
-  View,
-  type AccessibilityActionEvent,
-  type ViewStyle,
-} from "react-native";
+import { Alert, Keyboard, Platform, Pressable, View, type ViewStyle } from "react-native";
 import { FilePreviewModal, type FilePreviewSource } from "../../components/FilePreviewModal";
 import {
   composerAttachmentUploadBlockReason,
@@ -69,7 +58,7 @@ import {
   countComposerDraftAttachmentsAfterSelection,
 } from "../../state/use-composer-drafts";
 import type { ComposerDocumentAttachment } from "../../lib/composerContext";
-import { useProject } from "../../state/entities";
+import { useProject, useThreadShells } from "../../state/entities";
 import { scopeProjectRef } from "@t3tools/client-runtime/environment";
 
 import { AppText as Text } from "../../components/AppText";
@@ -85,27 +74,9 @@ import { fileRoutePathSegments } from "../files/filePath";
 import {
   ComposerActionButton,
   ComposerInlineControl,
-  ComposerToolbarButton,
   ComposerToolbarRow,
 } from "../../components/ComposerToolbar";
-import { ControlPillMenu } from "../../components/ControlPill";
 import { ProviderIcon } from "../../components/ProviderIcon";
-import {
-  deriveLatestProviderUsageSnapshot,
-  deriveProviderUsageAccountsFromServerSnapshot,
-  deriveProviderUsageSnapshotFromServerSnapshot,
-  featuredProviderUsageAccount,
-  listProviderUsageAccountsForDisplay,
-  presentProviderUsageAccount,
-  providerUsageLabelForDriver,
-  primaryProviderUsageWindow,
-  providerUsageRingStatus,
-  resolveProviderUsageFableRing,
-  resolveProviderUsageInstanceId,
-  resolveProviderUsageModel,
-  resolveProviderUsageUpstreamProvider,
-} from "@t3tools/client-runtime/state/provider-usage";
-import { cn } from "../../lib/cn";
 import {
   composerStripAttachments,
   type DraftComposerAttachment,
@@ -116,38 +87,23 @@ import {
   groupByProvider,
   isModelSelectionUnavailable,
 } from "../../lib/modelOptions";
-import {
-  canStartProviderUsageRefresh,
-  providerUsageTriggerLabel,
-} from "../../lib/providerUsagePill";
-import {
-  oldestProviderUsageObservedAt,
-  resolveProviderUsageBoundAuthIndex,
-  shouldProbeProviderUsageThreadAccount,
-  shouldRefreshProviderUsageOnOpen,
-  type ProviderUsageThreadAccountProbe,
-  type ProviderUsageThreadAccountState,
-} from "@t3tools/client-runtime/state/provider-usage-presentation";
-import { flushComposerDrafts } from "../../state/use-composer-drafts";
-import type { SendMessageOptions } from "../../state/use-thread-composer-state";
-import { useSelectedThreadDetail } from "../../state/use-thread-detail";
-import { useAtomCommand } from "../../state/use-atom-command";
-import { useEnvironmentQuery } from "../../state/query";
-import { serverEnvironment } from "../../state/server";
 import { useScaledTextRole } from "../settings/appearance/useScaledTextRole";
 import type { RemoteClientConnectionState } from "../../lib/connection";
 import {
   providerOptionValueLabels,
   resolveProviderOptionDescriptors,
 } from "../../lib/providerOptions";
-import { ComposerCommandPopover } from "./ComposerCommandPopover";
-import { useComposerCommandMenu } from "./use-composer-command-menu";
 import { RUNTIME_MODE_CHOICES } from "./thread-settings-options";
-import { threadComposerSendLabel } from "./threadComposerSendLabel";
+import { ControlPillMenu } from "../../components/ControlPill";
+import type { ActiveTurnComposerAction } from "@t3tools/client-runtime/state/composer-dispatch";
+import type { FollowUpBehavior } from "../../lib/followUpBehavior";
 import {
-  type ProviderUsageRouteSession,
-  useProviderUsageRoutePresentation,
-} from "./ProviderUsageSheet";
+  resolveComposerSendPresentation,
+  type ComposerSendPresentation,
+} from "./composerSendPresentation";
+import { ComposerCommandPopover } from "./ComposerCommandPopover";
+import { ComposerQueuedEditAttachments } from "./ComposerQueuedEdit";
+import { useComposerCommandMenu } from "./use-composer-command-menu";
 import {
   ComposerDictationCancelAction,
   ComposerDictationDraftContent,
@@ -158,6 +114,10 @@ import {
 } from "../voice-input/ComposerDictationControl";
 import { useVoiceInputController } from "../voice-input/useVoiceInputController";
 import { resolveVoiceComposerPresentation } from "../voice-input/voiceInputPresentation";
+import {
+  rememberModelOptions,
+  withRememberedModelOptions,
+} from "../../state/use-model-option-memory";
 import {
   type ExistingThreadSettingsRouteSession,
   useExistingThreadSettingsRoutePresentation,
@@ -179,18 +139,6 @@ export const COMPOSER_COLLAPSED_CHROME = 60;
  */
 export const COMPOSER_EXPANDED_CHROME = 156;
 
-/** Long-press menu on the send button while a turn is running. */
-const SEND_MENU_ACTIONS: MenuAction[] = [{ id: "queue", title: "Queue for later", image: "clock" }];
-
-function useMinuteClockMs(): number {
-  const [nowMs, setNowMs] = useState(() => Date.now());
-  useEffect(() => {
-    const timer = setInterval(() => setNowMs(Date.now()), 60_000);
-    return () => clearInterval(timer);
-  }, []);
-  return nowMs;
-}
-
 export interface ThreadComposerProps {
   readonly draftMessage: string;
   readonly draftAttachments: ReadonlyArray<DraftComposerAttachment>;
@@ -199,33 +147,55 @@ export interface ThreadComposerProps {
   readonly bottomInset?: number;
   readonly connectionState: RemoteClientConnectionState;
   readonly environmentLabel: string | null;
-  readonly selectedThread: OrchestrationThreadShell;
-  readonly persistedModel: string;
+  /**
+   * Message sync phase for the selected thread (drives the status pill):
+   * "loading" = first fetch, nothing to show yet; "syncing" = cached messages
+   * are on screen while they reconcile with the server.
+   */
+  readonly threadSyncPhase?: "loading" | "syncing" | null;
+  readonly selectedThread: EnvironmentThreadShell;
+  readonly reportedModelSelection?: ModelSelection | null;
   readonly hasCompactableConversation: boolean;
   readonly serverConfig: T3ServerConfig | null;
   readonly queueCount: number;
+  readonly activeThreadBusy: boolean;
+  readonly canStopThread: boolean;
   readonly environmentId: EnvironmentId;
   readonly projectCwd: string | null;
-  /**
-   * Skills discovered for the thread's own working directory (worktree-aware),
-   * resolved by the parent so the `$` menu and the feed's skill chips always
-   * agree and only one discovery request is issued per thread.
-   */
-  readonly providerSkills: ReadonlyArray<ServerProviderSkill>;
   /** Why sending is blocked right now (shown as the send button's label), or null. */
   readonly sendBlockedReason?: string | null;
+  /** Where the composer's content lives. Defaults to this thread's own draft. */
+  readonly draftKey?: string;
+  /**
+   * Set while a queued message is open for editing: the send button saves the
+   * edit instead of sending, and the message's server attachments stay visible
+   * above the composer so they can be removed.
+   */
+  readonly queuedEdit?: {
+    readonly existingAttachments: ReadonlyArray<ChatAttachment>;
+    readonly saving: boolean;
+    readonly onRemoveExistingAttachment: (attachmentId: string) => void;
+  } | null;
+  /** The user's configured behavior for a message sent during a running turn. */
+  readonly followUpBehavior: FollowUpBehavior;
+  /** Whether the live turn can actually be steered by this provider. */
+  readonly canSteerActiveTurn: boolean;
   readonly editorRef?: RefObject<ComposerEditorHandle | null>;
   readonly onChangeDraftMessage: (value: string) => void;
-  readonly onVoiceTranscript: (text: string) => void;
   readonly onPickDraftMedia: () => Promise<void>;
   readonly onPickDraftFiles: () => Promise<void>;
   readonly onNativePasteImages: (uris: ReadonlyArray<string>) => Promise<void>;
   readonly onNativePasteText: (paste: ComposerTextPaste) => Promise<void>;
   readonly onRemoveDraftImage: (imageId: string) => void;
   readonly onStopThread: () => void;
-  readonly onSendMessage: (options?: SendMessageOptions) => Promise<MessageId | null>;
+  readonly onSendMessage: (followUp?: ActiveTurnComposerAction) => Promise<MessageId | null>;
   /** `/usage-limits` resolves locally; the host decides where the report shows. Null clears it. */
   readonly onShowUsageLimits: (report: UsageLimitsReport | null) => void;
+  /**
+   * Whether the model picker may offer providers other than this thread's.
+   * False keeps the catalog on the instance the thread's session runs on.
+   */
+  readonly canSwitchProvider: boolean;
   readonly onUpdateModelSelection: (modelSelection: ModelSelection) => void;
   readonly onUpdateRuntimeMode: (runtimeMode: RuntimeMode) => void;
   readonly onUpdateInteractionMode: (interactionMode: ProviderInteractionMode) => void;
@@ -279,6 +249,64 @@ const COMPOSER_ATTACHMENT_ENTERING =
     : FadeIn.delay(COMPOSER_TRANSITION_DURATION_MS).duration(160).reduceMotion(ReduceMotion.System);
 
 const AnimatedGlassSurface = Animated.createAnimatedComponent(GlassSurface);
+
+const FOLLOW_UP_ACTION_LABEL = {
+  queue: "Queue",
+  steer: "Steer now",
+  restart: "Restart turn",
+} as const;
+
+const FOLLOW_UP_ACTION_SUBTITLE = {
+  queue: "Run after the current turn",
+  steer: "Interrupt what the agent is doing",
+  restart: "Start the turn over with this message",
+} as const;
+
+/**
+ * The composer's primary button. While a turn is running it also long-presses
+ * into the two follow-up behaviors, which is mobile's stand-in for the Command
+ * modifier a hardware keyboard has.
+ */
+function SendActionButton(props: {
+  readonly accessibilityLabel: string;
+  readonly presentation: ComposerSendPresentation;
+  readonly disabled: boolean;
+  readonly onSend: (followUp?: ActiveTurnComposerAction) => void;
+}) {
+  const { presentation } = props;
+  const button = (
+    <ComposerActionButton
+      accessibilityLabel={props.accessibilityLabel}
+      icon={presentation.icon}
+      variant="primary"
+      disabled={props.disabled}
+      onPress={() => props.onSend()}
+    />
+  );
+  if (!presentation.offersFollowUpChoice || presentation.action === null || props.disabled) {
+    return button;
+  }
+  const actions = [presentation.action, presentation.alternate].filter(
+    (action): action is ActiveTurnComposerAction => action !== null,
+  );
+  return (
+    <ControlPillMenu
+      accessibilityLabel="Choose how to send this message"
+      shouldOpenOnLongPress
+      actions={actions.map((action) => ({
+        id: action,
+        title: FOLLOW_UP_ACTION_LABEL[action],
+        subtitle: FOLLOW_UP_ACTION_SUBTITLE[action],
+        state: action === presentation.action ? ("on" as const) : ("off" as const),
+      }))}
+      onPressAction={({ nativeEvent }) =>
+        props.onSend(nativeEvent.event as ActiveTurnComposerAction)
+      }
+    >
+      {button}
+    </ControlPillMenu>
+  );
+}
 
 export function ComposerSurface(props: {
   readonly children: ReactNode;
@@ -362,39 +390,33 @@ export const ThreadComposer = memo(function ThreadComposer(props: ThreadComposer
   });
   const settingsRoutePresentation = useExistingThreadSettingsRoutePresentation();
   const settingsRoutePresentedRef = useRef(false);
-  const usageSheetPresentation = useThreadSettingsSheetPresentation({
-    editorRef: inputRef,
-    isEditorFocused: isFocused,
-  });
-  const usageRoutePresentation = useProviderUsageRoutePresentation();
-  const usageRoutePresentedRef = useRef(false);
   /**
-   * One composer overlay at a time. Settings and provider usage are separate
-   * native routes now, and each pushes its own; the navigator does not
-   * arbitrate between them, so two opens landing in the same frame would stack
-   * two form sheets in a single transition and leave the second one revealed
-   * when the first is dismissed. A ref, not state: both taps can arrive before
-   * React re-renders, so `isActive` would still read false for both.
+   * One composer overlay at a time. Settings, attachment pickers, previews and
+   * the inline context sheet each present their own surface; nothing else
+   * arbitrates between them, so two opens landing in the same frame would
+   * stack. A ref, not state: both taps can arrive before React re-renders.
    */
-  const overlaySheetOwnerRef = useRef<
-    "settings" | "usage" | "attachment" | "preview" | "context" | null
-  >(null);
+  const overlaySheetOwnerRef = useRef<"settings" | "attachment" | "preview" | "context" | null>(
+    null,
+  );
   const wasExpandedBeforePreviewRef = useRef(false);
   const inFlightThreadIdsRef = useRef(new Set<string>());
   const { onExpandedChange } = props;
 
   const [previewFile, setPreviewFile] = useState<FilePreviewSource | null>(null);
   const [previewVideo, setPreviewVideo] = useState<VideoPreviewSource | null>(null);
-  const hasContent = props.draftMessage.trim().length > 0 || props.draftAttachments.length > 0;
-  const threadIsBusy =
-    props.selectedThread.session?.status === "running" ||
-    props.selectedThread.session?.status === "starting";
-  const showStopAction = !hasContent && threadIsBusy;
+  const queuedEdit = props.queuedEdit ?? null;
+  const hasContent =
+    props.draftMessage.trim().length > 0 ||
+    props.draftAttachments.length > 0 ||
+    (queuedEdit?.existingAttachments.length ?? 0) > 0;
   // Only media belongs above the composer; every other file reads as its inline chip.
   const stripAttachments = useMemo(
     () => composerStripAttachments(props.draftAttachments),
     [props.draftAttachments],
   );
+  // Stopping the agent is not what the send button means in edit mode.
+  const showStopAction = !hasContent && props.canStopThread && queuedEdit === null;
 
   const uploadStates = useAtomValue(composerAttachmentUploadsAtom);
   const attachmentsUploading =
@@ -405,27 +427,34 @@ export const ThreadComposer = memo(function ThreadComposer(props: ThreadComposer
       serverConfig: props.serverConfig,
       states: uploadStates,
     });
-  const sendLabel = threadComposerSendLabel({
-    connectionState: props.connectionState,
-    queueCount: props.queueCount + (attachmentsUploading ? 1 : 0),
-    sessionStatus: props.selectedThread.session?.status ?? null,
+  // Every send goes through the outbox; the label says whether it leaves now
+  // or waits (for the connection, an earlier queued message, or an upload).
+  const sendPresentation = resolveComposerSendPresentation({
+    editingQueuedMessage: queuedEdit !== null,
+    running: props.activeThreadBusy,
+    canSteer: props.canSteerActiveTurn,
+    followUpBehavior: props.followUpBehavior,
+    deliveryDeferred:
+      props.connectionState !== "connected" || props.queueCount > 0 || attachmentsUploading,
   });
+  const sendLabel = sendPresentation.label;
   const currentModelSelection = props.selectedThread.modelSelection;
   const currentRuntimeMode = props.selectedThread.runtimeMode;
   const modelUnavailable =
     props.connectionState === "connected" &&
     isModelSelectionUnavailable(props.serverConfig, currentModelSelection);
-  const providerUsageInstanceId = resolveProviderUsageInstanceId({
-    liveSessionInstanceId: props.selectedThread.session?.providerInstanceId,
-    modelSelectionInstanceId: props.selectedThread.modelSelection.instanceId,
-  });
   const selectedProviderStatus = useMemo(() => {
     if (!props.serverConfig) return null;
     return (
-      props.serverConfig.providers.find((p) => p.instanceId === providerUsageInstanceId) ?? null
+      props.serverConfig.providers.find(
+        (p) => p.instanceId === props.selectedThread.modelSelection.instanceId,
+      ) ?? null
     );
-  }, [props.serverConfig, providerUsageInstanceId]);
+  }, [props.serverConfig, props.selectedThread.modelSelection.instanceId]);
   const composerOwnerKey = scopedThreadKey(props.environmentId, props.selectedThread.id);
+  // Content lives under the edit's own draft while a queued message is open;
+  // the owner key still identifies this composer for settings and dictation.
+  const composerDraftKey = props.draftKey ?? composerOwnerKey;
   const openDraftDocument = (attachment: ComposerDocumentAttachment) => {
     Keyboard.dismiss();
     navigation.navigate("ThreadAttachment", {
@@ -435,7 +464,7 @@ export const ThreadComposer = memo(function ThreadComposer(props: ThreadComposer
       name: attachment.name,
       mimeType: attachment.mimeType,
       sizeBytes: String(attachment.sizeBytes),
-      draftKey: composerOwnerKey,
+      draftKey: composerDraftKey,
     });
   };
   const { onSendMessage, onChangeDraftMessage, onShowUsageLimits } = props;
@@ -467,15 +496,15 @@ export const ThreadComposer = memo(function ThreadComposer(props: ThreadComposer
     draftMessage: props.draftMessage,
     ownerKey: composerOwnerKey,
     environmentId: props.environmentId,
+    threadShells: useThreadShells(),
+    currentThreadId: props.selectedThread.id,
     projectCwd: props.projectCwd,
     pullRequestProjectId: props.serverConfig?.environment.capabilities.pullRequests
       ? (project?.id ?? null)
       : null,
     pullRequestRepository: project?.repositoryIdentity?.displayName ?? null,
     selectedProviderStatus,
-    providerSkills: props.providerSkills,
     hasThread: true,
-    threadTitle: props.selectedThread.title,
     hasCompactableConversation: props.hasCompactableConversation,
     onChangeDraftMessage: props.onChangeDraftMessage,
     onUpdateInteractionMode:
@@ -494,7 +523,7 @@ export const ThreadComposer = memo(function ThreadComposer(props: ThreadComposer
       props.connectionState === "connected" && props.serverConfig?.speechToText.available === true,
     draftMessage: props.draftMessage,
     selection: composerMenu.selection,
-    onCommitVoiceDraftMessage: props.onVoiceTranscript,
+    onCommitVoiceDraftMessage: props.onChangeDraftMessage,
     onChangeSelection: composerMenu.onSelectionChange,
   });
   const voicePresentation = resolveVoiceComposerPresentation(
@@ -502,14 +531,8 @@ export const ThreadComposer = memo(function ThreadComposer(props: ThreadComposer
     voiceInput.elapsedSeconds,
   );
   const isVoiceInputPresented = voicePresentation.statusLabel !== null;
-  // Opening, presentation, and the focus handoff back count as active so focus
-  // can move from the editor into either native sheet without collapsing the
-  // composer underneath it. An open draft stays visible; only a collapsed
-  // composer becomes a voice strip.
-  const isExpanded =
-    isFocused ||
-    settingsSheetPresentation.keepsComposerExpanded ||
-    usageSheetPresentation.keepsComposerExpanded;
+  // An open draft stays visible; only a collapsed composer becomes a voice strip.
+  const isExpanded = isFocused || settingsSheetPresentation.keepsComposerExpanded;
   const showsCompactDictation = isVoiceInputPresented && !isExpanded;
   const isToolbarVisible = isExpanded || isVoiceInputPresented;
   const attachmentBlockReason = composerAttachmentUploadBlockReason({
@@ -521,16 +544,16 @@ export const ThreadComposer = memo(function ThreadComposer(props: ThreadComposer
   });
   const contextImports = useAtomValue(composerContextImportsAtom);
   const sendBlockedReason =
+    (queuedEdit?.saving === true ? "Saving…" : null) ??
     props.sendBlockedReason ??
     (pendingPastedTextAttachmentCount > 0 ? "Attaching pasted text" : null) ??
     attachmentBlockReason;
   const canSend =
     hasContent &&
-    !contextImports[composerOwnerKey] &&
+    !contextImports[composerDraftKey] &&
     !voiceInput.blocksSubmission &&
     sendBlockedReason === null &&
     !modelUnavailable;
-  const canQueueForLater = threadIsBusy && canSend;
 
   // Keep the feed inset aligned with the card or compact dictation strip.
   useEffect(() => {
@@ -571,10 +594,9 @@ export const ThreadComposer = memo(function ThreadComposer(props: ThreadComposer
     },
     [isFocused],
   );
-
   // The inline context sheet (and the media preview it can present directly)
   // is one more composer overlay: it takes the same synchronous owner as the
-  // settings, usage and strip previews, and hands it back on every close.
+  // settings and strip previews, and hands it back on every close.
   const acquireContextOverlay = useCallback(() => {
     if (overlaySheetOwnerRef.current !== null) return false;
     overlaySheetOwnerRef.current = "context";
@@ -595,429 +617,13 @@ export const ThreadComposer = memo(function ThreadComposer(props: ThreadComposer
 
   const handleBlur = useCallback(() => {
     setIsFocused(false);
-    if (
-      !settingsSheetPresentation.keepsComposerExpanded &&
-      !usageSheetPresentation.keepsComposerExpanded
-    ) {
+    if (!settingsSheetPresentation.keepsComposerExpanded) {
       onExpandedChange?.(false);
     }
     onEditorFocusChange?.(false);
-    void flushComposerDrafts();
-  }, [
-    onEditorFocusChange,
-    onExpandedChange,
-    settingsSheetPresentation.keepsComposerExpanded,
-    usageSheetPresentation.keepsComposerExpanded,
-  ]);
-  const selectedThreadDetail = useSelectedThreadDetail();
-  const providerUsageQuery = useEnvironmentQuery(
-    serverEnvironment.providerUsage({
-      environmentId: props.environmentId,
-      input: {},
-    }),
-  );
-  const providerUsageNowMs = useMinuteClockMs();
-  const providerUsageSnapshotByInstance = useMemo(
-    () =>
-      new Map(
-        (providerUsageQuery.data?.snapshots ?? []).map((snapshot) => [
-          snapshot.instanceId,
-          snapshot,
-        ]),
-      ),
-    [providerUsageQuery.data?.snapshots],
-  );
-  const activityProviderUsage = useMemo(
-    () =>
-      deriveLatestProviderUsageSnapshot(selectedThreadDetail?.activities ?? [], {
-        provider: selectedProviderStatus?.driver ?? null,
-        providerInstanceId: providerUsageInstanceId,
-        now: providerUsageNowMs,
-      }),
-    [
-      providerUsageInstanceId,
-      providerUsageNowMs,
-      selectedProviderStatus?.driver,
-      selectedThreadDetail,
-    ],
-  );
-  // Gateway-backed instances (CLIProxyAPI) report a pool of upstream accounts
-  // in one snapshot. Mobile has no settings mirror, so gateway-ness is
-  // detected from the snapshot payload itself.
-  const gatewayUsageByInstance = useMemo(() => {
-    const pools = new Map<
-      string,
-      NonNullable<ReturnType<typeof deriveProviderUsageAccountsFromServerSnapshot>>
-    >();
-    for (const [instanceId, snapshot] of providerUsageSnapshotByInstance) {
-      const pool = deriveProviderUsageAccountsFromServerSnapshot(snapshot, {
-        now: providerUsageNowMs,
-      });
-      if (pool !== null) pools.set(instanceId, pool);
-    }
-    return pools;
-  }, [providerUsageNowMs, providerUsageSnapshotByInstance]);
-  const activeGatewayPool = useMemo(
-    () =>
-      providerUsageInstanceId !== null
-        ? (gatewayUsageByInstance.get(providerUsageInstanceId) ?? null)
-        : null,
-    [gatewayUsageByInstance, providerUsageInstanceId],
-  );
-  const activeProviderUsageModel = resolveProviderUsageModel({
-    liveSessionInstanceId: props.selectedThread.session?.providerInstanceId,
-    persistedModel: props.persistedModel,
-    selectedModel: props.selectedThread.modelSelection.model,
-  });
-  /** Which upstream of a gateway pool serves this thread's active model. */
-  const activeUpstreamProvider = useMemo<string | null>(() => {
-    const model = activeProviderUsageModel;
-    return resolveProviderUsageUpstreamProvider({
-      payload:
-        providerUsageInstanceId === null
-          ? undefined
-          : providerUsageSnapshotByInstance.get(providerUsageInstanceId)?.payload,
-      model,
-      isCustom:
-        selectedProviderStatus?.models.find((entry) => entry.slug === model)?.isCustom === true,
-      driver: selectedProviderStatus?.driver ?? null,
-    });
-  }, [
-    activeProviderUsageModel,
-    providerUsageInstanceId,
-    providerUsageSnapshotByInstance,
-    selectedProviderStatus,
-  ]);
-  const serverProviderUsage = useMemo(() => {
-    if (providerUsageInstanceId === null) return null;
-    const snapshot = providerUsageSnapshotByInstance.get(providerUsageInstanceId);
-    return snapshot
-      ? deriveProviderUsageSnapshotFromServerSnapshot(snapshot, {
-          provider: selectedProviderStatus?.driver ?? null,
-          now: providerUsageNowMs,
-          preferredUpstreamProvider: activeUpstreamProvider,
-        })
-      : null;
-  }, [
-    activeUpstreamProvider,
-    providerUsageInstanceId,
-    providerUsageNowMs,
-    providerUsageSnapshotByInstance,
-    selectedProviderStatus?.driver,
-  ]);
-  const providerUsage =
-    serverProviderUsage ?? (activeGatewayPool === null ? activityProviderUsage : null);
-  const readThreadGatewayAccountCommand = useAtomCommand(
-    serverEnvironment.readProviderUsageThreadAccount,
-    // Best-effort marker: a failed probe just leaves the badge off.
-    { reportFailure: false },
-  );
-  // The pooled account the thread's live session is bound to, read from the
-  // gateway when the usage sheet opens. Kept with the thread and model it was
-  // probed for, so an answer landing after a switch cannot mislabel the new
-  // context; a mismatch just means "unknown", which renders as no badge.
-  const [threadGatewayAccount, setThreadGatewayAccount] =
-    useState<ProviderUsageThreadAccountState | null>(null);
-  const lastThreadAccountProbeRef = useRef<ProviderUsageThreadAccountProbe>({
-    key: "",
-    askedAtMs: 0,
-  });
-  const probeThreadGatewayAccount = useCallback(
-    (options?: { readonly force?: boolean }) => {
-      const threadId = props.selectedThread.id;
-      // Only a Claude session has a binding the server can read. Mobile has
-      // no settings mirror to tell a gateway instance from a direct one, so a
-      // direct-instance thread costs one RPC the server answers null — that
-      // beats gating on the usage snapshot, which would skip the probe on the
-      // first open after a launch, before any snapshot has arrived.
-      if (
-        selectedProviderStatus?.driver !== "claudeAgent" ||
-        props.selectedThread.session == null
-      ) {
-        return;
-      }
-      const model = activeProviderUsageModel;
-      const probeKey = `${threadId}:${model}`;
-      const nowMs = Date.now();
-      if (
-        !shouldProbeProviderUsageThreadAccount(
-          lastThreadAccountProbeRef.current,
-          probeKey,
-          nowMs,
-          options?.force === true,
-        )
-      ) {
-        return;
-      }
-      lastThreadAccountProbeRef.current = { key: probeKey, askedAtMs: nowMs };
-      void (async () => {
-        const result = await readThreadGatewayAccountCommand({
-          environmentId: props.environmentId,
-          input: { threadId, model },
-        });
-        if (result._tag === "Failure") return;
-        // A newer thread or model claimed the slot while this probe was in
-        // flight; its answer must not be evicted by this stale one.
-        if (lastThreadAccountProbeRef.current.key !== probeKey) return;
-        const authIndex = result.value.authIndex;
-        setThreadGatewayAccount(authIndex === null ? null : { threadId, model, authIndex });
-      })();
-    },
-    [
-      activeProviderUsageModel,
-      props.environmentId,
-      props.selectedThread.id,
-      props.selectedThread.session,
-      readThreadGatewayAccountCommand,
-      selectedProviderStatus?.driver,
-    ],
-  );
-  const providerUsageAccounts = useMemo(() => {
-    if (activeGatewayPool !== null && providerUsageInstanceId !== null) {
-      const featuredId =
-        featuredProviderUsageAccount(activeGatewayPool.accounts, activeUpstreamProvider)?.id ??
-        null;
-      // The verified-binding badges only apply where the server can read a
-      // binding (Claude sessions). Elsewhere the featured account keeps the
-      // legacy "current" so e.g. a Codex thread does not lose its badge.
-      const bindingSupported = selectedProviderStatus?.driver === "claudeAgent";
-      const boundAuthIndex = bindingSupported
-        ? resolveProviderUsageBoundAuthIndex(
-            threadGatewayAccount,
-            props.selectedThread.id,
-            activeProviderUsageModel,
-          )
-        : null;
-      const displayAccounts = listProviderUsageAccountsForDisplay(activeGatewayPool.accounts);
-      // A binding to an account no row shows (disabled since the session
-      // bound) would leave "next" pointing at an account that is not in
-      // play; better to show nothing than the wrong badge.
-      const boundRowVisible =
-        boundAuthIndex !== null &&
-        displayAccounts.some(
-          (account) => account.authIndex !== null && account.authIndex === boundAuthIndex,
-        );
-      const observedAt =
-        providerUsageSnapshotByInstance.get(providerUsageInstanceId)?.observedAt ?? null;
-      return displayAccounts.map((account) => ({
-        instanceId: providerUsageInstanceId,
-        accountKey: `${providerUsageInstanceId}:${account.id}`,
-        ...presentProviderUsageAccount(account),
-        isCurrent: bindingSupported
-          ? boundRowVisible && account.authIndex === boundAuthIndex
-          : account.id === featuredId,
-        ...(bindingSupported
-          ? {
-              isNext: (boundAuthIndex === null || boundRowVisible) && account.id === featuredId,
-            }
-          : {}),
-        snapshot: account.usage,
-        observedAt,
-      }));
-    }
-    return (props.serverConfig?.providers ?? [])
-      .filter(
-        (provider) =>
-          provider.enabled &&
-          selectedProviderStatus !== null &&
-          providerUsageLabelForDriver(selectedProviderStatus.driver) !== null &&
-          provider.driver === selectedProviderStatus.driver &&
-          // A gateway sibling meters its own pool; it renders when a thread
-          // actually runs on it.
-          !gatewayUsageByInstance.has(provider.instanceId),
-      )
-      .sort((left, right) => {
-        if (left.instanceId === providerUsageInstanceId) return -1;
-        if (right.instanceId === providerUsageInstanceId) return 1;
-        return 0;
-      })
-      .map((provider) => {
-        const snapshot = providerUsageSnapshotByInstance.get(provider.instanceId);
-        return {
-          instanceId: provider.instanceId,
-          displayName: provider.displayName ?? provider.instanceId,
-          email: provider.auth.email,
-          isCurrent: provider.instanceId === providerUsageInstanceId,
-          snapshot: snapshot
-            ? deriveProviderUsageSnapshotFromServerSnapshot(snapshot, {
-                provider: provider.driver,
-                now: providerUsageNowMs,
-              })
-            : null,
-          observedAt: snapshot?.observedAt ?? null,
-        };
-      });
-  }, [
-    activeGatewayPool,
-    activeProviderUsageModel,
-    activeUpstreamProvider,
-    gatewayUsageByInstance,
-    props.selectedThread.id,
-    props.serverConfig?.providers,
-    providerUsageInstanceId,
-    providerUsageNowMs,
-    providerUsageSnapshotByInstance,
-    selectedProviderStatus,
-    threadGatewayAccount,
-  ]);
-  const fableUsageSelection = useMemo(
-    () =>
-      resolveProviderUsageFableRing({
-        upstreamProvider: activeUpstreamProvider,
-        accounts: activeGatewayPool?.accounts ?? null,
-        snapshot: providerUsage,
-      }),
-    [activeGatewayPool, activeUpstreamProvider, providerUsage],
-  );
-  const [isRefreshingProviderUsage, setIsRefreshingProviderUsage] = useState(false);
-  const refreshProviderUsageCommand = useAtomCommand(serverEnvironment.refreshProviderUsage, {
-    reportFailure: false,
-  });
-  const lastProviderUsageRefreshAtRef = useRef(0);
-  // Identifies the in-flight refresh. The composer outlives an environment
-  // switch, so a refresh started for the previous environment must not clear
-  // the pending state — or report progress — for the current one.
-  const providerUsageRefreshTokenRef = useRef(0);
-  useEffect(() => {
-    providerUsageRefreshTokenRef.current += 1;
-    lastProviderUsageRefreshAtRef.current = 0;
-    setIsRefreshingProviderUsage(false);
-  }, [props.environmentId]);
-  useEffect(
-    // Unmount invalidates any in-flight token so its completion is a no-op.
-    () => () => {
-      providerUsageRefreshTokenRef.current += 1;
-    },
-    [],
-  );
-  const handleRefreshProviderUsage = useCallback(() => {
-    // An explicit refresh ask re-reads the binding past its cadence cap; a
-    // concurrent identical ask joins the same RPC via single-flight.
-    probeThreadGatewayAccount({ force: true });
-    const instanceIds = providerUsageAccounts.map((account) => account.instanceId);
-    if (instanceIds.length === 0) return;
-    // Same 5s debounce the web meter uses: each refresh can spawn a CLI
-    // probe per account, so a double-tap must not double-spawn.
-    if (!canStartProviderUsageRefresh(lastProviderUsageRefreshAtRef.current, Date.now())) {
-      return;
-    }
-    lastProviderUsageRefreshAtRef.current = Date.now();
-    providerUsageRefreshTokenRef.current += 1;
-    const token = providerUsageRefreshTokenRef.current;
-    setIsRefreshingProviderUsage(true);
-    void (async () => {
-      try {
-        await refreshProviderUsageCommand({
-          environmentId: props.environmentId,
-          input: { instanceIds },
-        });
-        if (providerUsageRefreshTokenRef.current !== token) return;
-        providerUsageQuery.refresh();
-      } finally {
-        if (providerUsageRefreshTokenRef.current === token) {
-          setIsRefreshingProviderUsage(false);
-        }
-      }
-    })();
-    // `providerUsageQuery` itself is a fresh view object every render — listing
-    // it here would churn this callback's identity, and with it the sheet
-    // session memoized from it. The session feeds an effect that re-presents
-    // the sheet from a provider above the navigator, so that churn is a render
-    // loop that starves the sheet's own presentation frame: the panel never
-    // opens. `refresh` alone is atom-keyed and stable, so it is safe to depend on.
-  }, [
-    probeThreadGatewayAccount,
-    props.environmentId,
-    providerUsageAccounts,
-    providerUsageQuery.refresh,
-    refreshProviderUsageCommand,
-  ]);
-  const providerUsagePanelObservedAt = useMemo(
-    () => oldestProviderUsageObservedAt(providerUsageAccounts),
-    [providerUsageAccounts],
-  );
-  const providerUsageLabel =
-    providerUsage?.providerLabel ??
-    providerUsageLabelForDriver(selectedProviderStatus?.driver) ??
-    "Provider";
-  const providerUsagePrimaryWindow = providerUsage
-    ? primaryProviderUsageWindow(providerUsage)
-    : null;
-  // Fable has its own row, so it must not repaint the primary dot.
-  const providerUsageStatus = providerUsageRingStatus(
-    providerUsage,
-    fableUsageSelection?.window.id ?? null,
-  );
-  const composerOwnerId = scopedThreadKey(props.environmentId, props.selectedThread.id);
-  const usageRouteSession = useMemo<ProviderUsageRouteSession>(
-    () => ({
-      ownerId: composerOwnerId,
-      providerLabel: providerUsageLabel,
-      accounts: providerUsageAccounts,
-      fableUsage: fableUsageSelection,
-      nowMs: providerUsageNowMs,
-      panelObservedAt: providerUsagePanelObservedAt,
-      refreshing: isRefreshingProviderUsage,
-      onRefresh: handleRefreshProviderUsage,
-      unavailable: providerUsageQuery.error !== null,
-    }),
-    [
-      composerOwnerId,
-      fableUsageSelection,
-      handleRefreshProviderUsage,
-      isRefreshingProviderUsage,
-      providerUsageAccounts,
-      providerUsageLabel,
-      providerUsageNowMs,
-      providerUsagePanelObservedAt,
-      providerUsageQuery.error,
-    ],
-  );
-  const openProviderUsageSheet = useCallback(() => {
-    if (overlaySheetOwnerRef.current !== null) return;
-    overlaySheetOwnerRef.current = "usage";
-    usageRoutePresentation.present(usageRouteSession);
-    usageSheetPresentation.open();
-    // Unlike the staleness-gated pool refresh below, the thread-account probe
-    // runs on every open: the binding is one cheap request and can change
-    // independently of the pool's quota data. It throttles itself.
-    probeThreadGatewayAccount();
-    // Opening the sheet is the read: refresh a snapshot older than a minute so
-    // it can't show yesterday's quota, exactly as the web popover does. The
-    // last attempt caps the cadence — an account that never reports would
-    // otherwise re-probe the whole pool on every open.
-    if (
-      shouldRefreshProviderUsageOnOpen(
-        providerUsageAccounts,
-        Date.now(),
-        lastProviderUsageRefreshAtRef.current,
-      )
-    ) {
-      handleRefreshProviderUsage();
-    }
-  }, [
-    handleRefreshProviderUsage,
-    probeThreadGatewayAccount,
-    providerUsageAccounts,
-    usageRoutePresentation.present,
-    usageRouteSession,
-    usageSheetPresentation.open,
-  ]);
-  useEffect(() => {
-    if (usageSheetPresentation.isActive) {
-      usageRoutePresentation.present(usageRouteSession);
-    }
-  }, [usageRoutePresentation.present, usageRouteSession, usageSheetPresentation.isActive]);
-  useEffect(() => {
-    if (!usageSheetPresentation.isVisible || usageRoutePresentedRef.current) {
-      return;
-    }
-
-    usageRoutePresentedRef.current = true;
-    navigation.dispatch(StackActions.push("ProviderUsageSheet"));
-  }, [navigation, usageSheetPresentation.isVisible]);
+  }, [onEditorFocusChange, onExpandedChange, settingsSheetPresentation.keepsComposerExpanded]);
   const handleSend = useCallback(
-    async (options?: SendMessageOptions) => {
+    async (followUp?: ActiveTurnComposerAction) => {
       if (voiceInput.blocksSubmission || pendingPastedTextAttachmentCountRef.current > 0) return;
       // Typed out in full rather than picked from the menu. Attachments mean the
       // user is sending a prompt, so those go through as usual.
@@ -1029,64 +635,53 @@ export const ThreadComposer = memo(function ThreadComposer(props: ThreadComposer
         if (openUsageLimits()) onChangeDraftMessage("");
         return;
       }
-      if (sendBlockedReason !== null) return;
       const threadKey = scopedThreadKey(props.environmentId, props.selectedThread.id);
       if (inFlightThreadIdsRef.current.has(threadKey)) return;
       inFlightThreadIdsRef.current.add(threadKey);
       try {
-        const messageId = await onSendMessage(options);
-        if (messageId !== null) {
-          // Classification happens in the state hook first, so local composer
-          // commands never arm. Waiting for the optimistic enqueue keeps native
-          // activity work off the initiating tap frame.
-          armAgentAwarenessLiveActivityForLocalWork({
-            environmentId: props.environmentId,
-            threadTitle: props.selectedThread.title,
-            projectTitle: props.environmentLabel ?? "T3 Code",
-          });
+        const messageId = await onSendMessage(followUp);
+        if (messageId === null) {
+          return;
         }
+        // Sending a prompt starts agent work: arm the lock-screen card while the
+        // app is foregrounded and the activity token can be registered. Armed
+        // after the send so its preference read and native Activity start don't
+        // contend with the queued-message feedback on the tap frame.
+        armAgentAwarenessLiveActivityForLocalWork({
+          environmentId: props.environmentId,
+          threadTitle: props.selectedThread.title,
+          projectTitle: props.environmentLabel ?? "T3 Code",
+        });
       } finally {
         inFlightThreadIdsRef.current.delete(threadKey);
       }
     },
     [
-      sendBlockedReason,
-      onChangeDraftMessage,
-      onSendMessage,
-      openUsageLimits,
-      props.draftAttachments.length,
       props.draftMessage,
+      props.draftAttachments.length,
+      onChangeDraftMessage,
+      openUsageLimits,
+      usageLimitsOffered,
+      onSendMessage,
       props.environmentId,
       props.environmentLabel,
       props.selectedThread.id,
       props.selectedThread.title,
-      usageLimitsOffered,
       voiceInput.blocksSubmission,
     ],
   );
 
-  // Press/submit handlers receive their own event argument, so they can never
-  // be wired straight to `handleSend` without it being read as send options.
-  const handleSendDefault = useCallback(() => {
-    void handleSend();
-  }, [handleSend]);
-
-  const handleQueueForLater = useCallback(() => {
-    void handleSend({ deliveryIntent: "queue" });
-  }, [handleSend]);
-
   // ── Model menu ───────────────────────────────────────────
+  // A session that hands the conversation to another provider lets the picker
+  // offer the whole catalog; one that can't stays on its own instance.
+  const lockedProviderInstanceId = props.canSwitchProvider
+    ? undefined
+    : currentModelSelection.instanceId;
   const modelOptions = useMemo(
-    () => buildModelOptions(props.serverConfig, currentModelSelection),
-    [props.serverConfig, currentModelSelection],
+    () => buildModelOptions(props.serverConfig, currentModelSelection, lockedProviderInstanceId),
+    [props.serverConfig, currentModelSelection, lockedProviderInstanceId],
   );
-  const providerGroups = useMemo(() => groupByProvider(modelOptions), [modelOptions]);
-  // An existing thread is bound to its harness: sessions can't move between
-  // provider instances, so the picker only offers the thread's own group.
-  const threadProviderGroups = useMemo(
-    () => providerGroups.filter((group) => group.providerKey === currentModelSelection.instanceId),
-    [providerGroups, currentModelSelection.instanceId],
-  );
+  const threadProviderGroups = useMemo(() => groupByProvider(modelOptions), [modelOptions]);
   const currentModelOption =
     modelOptions.find(
       (option) =>
@@ -1117,27 +712,37 @@ export const ThreadComposer = memo(function ThreadComposer(props: ThreadComposer
       providerOptionDescriptors,
     ],
   );
+  const settingsOwnerId = composerOwnerKey;
   const settingsRouteSession = useMemo<ExistingThreadSettingsRouteSession>(
     () => ({
-      ownerId: composerOwnerId,
+      ownerId: settingsOwnerId,
       environmentId: props.environmentId,
       providerInstanceId: currentModelSelection.instanceId,
       providerGroups: threadProviderGroups,
       selectedModel: currentModelSelection,
-      onSelectModel: (option) => props.onUpdateModelSelection(option.selection),
+      reportedModelSelection: props.reportedModelSelection,
+      onSelectModel: (option) =>
+        props.onUpdateModelSelection(withRememberedModelOptions(option.selection)),
       optionDescriptors: providerOptionDescriptors,
-      onUpdateOptionSelections: (options) =>
-        props.onUpdateModelSelection({ ...currentModelSelection, options }),
+      onUpdateOptionSelections: (options) => {
+        rememberModelOptions(
+          currentModelSelection.instanceId,
+          currentModelSelection.model,
+          options ?? [],
+        );
+        props.onUpdateModelSelection({ ...currentModelSelection, options });
+      },
       runtimeMode: currentRuntimeMode,
       onUpdateRuntimeMode: props.onUpdateRuntimeMode,
     }),
     [
-      composerOwnerId,
       currentModelSelection,
+      props.reportedModelSelection,
       currentRuntimeMode,
       props.onUpdateModelSelection,
       props.onUpdateRuntimeMode,
       providerOptionDescriptors,
+      settingsOwnerId,
       threadProviderGroups,
     ],
   );
@@ -1179,77 +784,24 @@ export const ThreadComposer = memo(function ThreadComposer(props: ThreadComposer
       if (settingsRoutePresentedRef.current) {
         settingsRoutePresentedRef.current = false;
         settingsSheetPresentation.onDismissed();
-        settingsRoutePresentation.clear(composerOwnerId);
-      }
-      if (usageRoutePresentedRef.current) {
-        usageRoutePresentedRef.current = false;
-        usageSheetPresentation.onDismissed();
-        usageRoutePresentation.clear(composerOwnerId);
+        settingsRoutePresentation.clear(settingsOwnerId);
       }
       // The composer regaining focus means no overlay route is above it, so
       // release the owner even if an open never reached its presented ref
       // (a tap that blurred the editor but was dismissed before presenting).
       overlaySheetOwnerRef.current = null;
-    }, [
-      composerOwnerId,
-      settingsRoutePresentation.clear,
-      settingsSheetPresentation.onDismissed,
-      usageRoutePresentation.clear,
-      usageSheetPresentation.onDismissed,
-    ]),
+    }, [settingsOwnerId, settingsRoutePresentation.clear, settingsSheetPresentation.onDismissed]),
   );
 
   useEffect(
     () =>
-      // UIKit's completion callback for sheet dismissal, surfaced by the
-      // native-stack patch. This is when any queued keyboard restore runs.
+      // UIKit's completion callback for the sheet dismissal, surfaced by the
+      // native-stack patch. This is when the queued keyboard restore runs.
       (navigation as unknown as NavigationWithFinishTransitioning).addListener(
         "finishTransitioning",
-        () => {
-          settingsSheetPresentation.onStackTransitionsFinished();
-          usageSheetPresentation.onStackTransitionsFinished();
-        },
+        settingsSheetPresentation.onStackTransitionsFinished,
       ),
-    [
-      navigation,
-      settingsSheetPresentation.onStackTransitionsFinished,
-      usageSheetPresentation.onStackTransitionsFinished,
-    ],
-  );
-
-  // The long-press menu is invisible to assistive tech, so while queueing is
-  // available the same choice is also exposed as an accessibility action.
-  const sendActionButton = (
-    <ComposerActionButton
-      accessibilityLabel={sendBlockedReason ?? sendLabel}
-      {...(canQueueForLater
-        ? {
-            accessibilityActions: [{ name: "queue", label: "Queue for later" }],
-            onAccessibilityAction: (event: AccessibilityActionEvent) => {
-              if (event.nativeEvent.actionName === "queue") {
-                handleQueueForLater();
-              }
-            },
-          }
-        : {})}
-      icon="arrow.up"
-      variant="primary"
-      disabled={!canSend}
-      onPress={handleSendDefault}
-    />
-  );
-  const sendAction = canQueueForLater ? (
-    <ControlPillMenu
-      actions={SEND_MENU_ACTIONS}
-      shouldOpenOnLongPress
-      onPressAction={({ nativeEvent }) => {
-        if (nativeEvent.event === "queue") handleQueueForLater();
-      }}
-    >
-      {sendActionButton}
-    </ControlPillMenu>
-  ) : (
-    sendActionButton
+    [navigation, settingsSheetPresentation.onStackTransitionsFinished],
   );
 
   return (
@@ -1277,10 +829,6 @@ export const ThreadComposer = memo(function ThreadComposer(props: ThreadComposer
         className="relative w-full self-center"
         style={{ maxWidth: props.contentMaxWidth }}
       >
-        <ChatGptUsageLimitNotice
-          environmentId={props.environmentId}
-          thread={props.selectedThread}
-        />
         {!voiceInput.isBusy &&
         composerMenu.trigger &&
         (composerMenu.items.length > 0 || composerMenu.trigger.kind === "pull-request") ? (
@@ -1356,6 +904,20 @@ export const ThreadComposer = memo(function ThreadComposer(props: ThreadComposer
                 onOverlayVisibilityChange={handleAttachmentOverlayVisibilityChange}
               />
             ) : null}
+            {isExpanded && queuedEdit !== null && queuedEdit.existingAttachments.length > 0 ? (
+              <Animated.View
+                className="px-[14px] pb-2.5"
+                entering={COMPOSER_ATTACHMENT_ENTERING}
+                exiting={FadeOut.duration(120)}
+              >
+                <ComposerQueuedEditAttachments
+                  environmentId={props.environmentId}
+                  attachments={queuedEdit.existingAttachments}
+                  disabled={queuedEdit.saving || voiceInput.isBusy}
+                  onRemove={queuedEdit.onRemoveExistingAttachment}
+                />
+              </Animated.View>
+            ) : null}
             {isExpanded && stripAttachments.length > 0 ? (
               <Animated.View
                 className="px-[14px] pb-2.5"
@@ -1387,7 +949,7 @@ export const ThreadComposer = memo(function ThreadComposer(props: ThreadComposer
               layout={COMPOSER_LAYOUT_TRANSITION}
             >
               <ComposerEditor
-                draftKey={composerOwnerKey}
+                draftKey={composerDraftKey}
                 environmentId={props.environmentId}
                 onOpenMention={(path) => {
                   Keyboard.dismiss();
@@ -1408,7 +970,7 @@ export const ThreadComposer = memo(function ThreadComposer(props: ThreadComposer
                 multiline
                 value={props.draftMessage}
                 readOnly={voiceInput.freezesEditor}
-                skills={props.providerSkills}
+                skills={composerMenu.skills}
                 selection={composerMenu.selection}
                 onChangeText={props.onChangeDraftMessage}
                 onSelectionChange={composerMenu.onSelectionChange}
@@ -1440,7 +1002,7 @@ export const ThreadComposer = memo(function ThreadComposer(props: ThreadComposer
                     PROVIDER_SEND_TURN_MAX_INPUT_CHARS;
                   const canAttach =
                     maxBytes !== null &&
-                    countComposerDraftAttachmentsAfterSelection(composerOwnerKey, {
+                    countComposerDraftAttachmentsAfterSelection(composerDraftKey, {
                       text: paste.value,
                       ...paste.selection,
                     }) < PROVIDER_SEND_TURN_MAX_ATTACHMENTS &&
@@ -1486,7 +1048,20 @@ export const ThreadComposer = memo(function ThreadComposer(props: ThreadComposer
                 placeholder={props.placeholder}
                 onFocus={handleFocus}
                 onBlur={handleBlur}
-                onSubmit={handleSendDefault}
+                // Command-Return sends the other way, matching web's Mod+Enter.
+                onSubmit={(alternate) =>
+                  void handleSend(
+                    alternate && sendPresentation.alternate !== null
+                      ? sendPresentation.alternate
+                      : undefined,
+                  )
+                }
+                submitTitle={sendPresentation.label}
+                alternateSubmitTitle={
+                  sendPresentation.alternate === null
+                    ? sendPresentation.label
+                    : FOLLOW_UP_ACTION_LABEL[sendPresentation.alternate]
+                }
                 scrollEnabled={isExpanded}
                 // Android: collapsed single line centers natively (gravity) in
                 // a pill-height box matching the send button; iOS keeps insets.
@@ -1540,25 +1115,6 @@ export const ThreadComposer = memo(function ThreadComposer(props: ThreadComposer
                   onStart={voiceInput.start}
                   onCancel={voiceInput.cancel}
                 />
-                {providerUsageAccounts.length > 0 ? (
-                  <ComposerToolbarButton
-                    accessibilityLabel={`${providerUsageLabel} usage`}
-                    iconNode={
-                      <View
-                        className={cn(
-                          "h-2 w-2 rounded-full",
-                          providerUsageStatus === "critical"
-                            ? "bg-rose-500"
-                            : providerUsageStatus === "warning"
-                              ? "bg-amber-500"
-                              : "bg-foreground-muted",
-                        )}
-                      />
-                    }
-                    label={providerUsageTriggerLabel(providerUsagePrimaryWindow)}
-                    onPress={openProviderUsageSheet}
-                  />
-                ) : null}
                 {showStopAction ? (
                   <ComposerActionButton
                     accessibilityLabel="Stop agent"
@@ -1567,7 +1123,12 @@ export const ThreadComposer = memo(function ThreadComposer(props: ThreadComposer
                     onPress={props.onStopThread}
                   />
                 ) : (
-                  sendAction
+                  <SendActionButton
+                    accessibilityLabel={sendBlockedReason ?? sendLabel}
+                    presentation={sendPresentation}
+                    disabled={!canSend}
+                    onSend={handleSend}
+                  />
                 )}
               </View>
             ) : null}
@@ -1622,39 +1183,22 @@ export const ThreadComposer = memo(function ThreadComposer(props: ThreadComposer
                       onPickFiles={props.onPickDraftFiles}
                       onOverlayVisibilityChange={handleAttachmentOverlayVisibilityChange}
                     />
-                    <View className="min-w-0 shrink flex-row items-center">
+                    <View className="min-w-0 shrink">
                       <ComposerInlineControl
                         accessibilityLabel="Model and reasoning settings"
                         accessibilityValue={{ text: settingsAccessibilityValue }}
                         emphasized
                         renderIcon={(size) => (
-                          <ProviderIcon provider={currentModelOption?.providerDriver} size={size} />
+                          <ProviderIcon
+                            iconUrl={currentModelOption?.providerIconUrl}
+                            provider={currentModelOption?.providerDriver}
+                            size={size}
+                          />
                         )}
                         label={currentModelOption?.label ?? currentModelSelection.model}
                         maxWidth="100%"
                         onPress={openSettings}
                       />
-                      {providerUsageAccounts.length > 0 ? (
-                        <ComposerToolbarButton
-                          accessibilityLabel={`${providerUsageLabel} usage`}
-                          iconNode={
-                            <View
-                              className={cn(
-                                "h-2 w-2 rounded-full",
-                                providerUsageStatus === "critical"
-                                  ? "bg-rose-500"
-                                  : providerUsageStatus === "warning"
-                                    ? "bg-amber-500"
-                                    : "bg-foreground-muted",
-                              )}
-                            />
-                          }
-                          label={providerUsageTriggerLabel(providerUsagePrimaryWindow)}
-                          maxWidth={112}
-                          onPress={openProviderUsageSheet}
-                          showChevron={false}
-                        />
-                      ) : null}
                     </View>
                   </View>
                 )}
@@ -1675,7 +1219,12 @@ export const ThreadComposer = memo(function ThreadComposer(props: ThreadComposer
                       onPress={props.onStopThread}
                     />
                   ) : voicePresentation.showsSend && isToolbarVisible ? (
-                    sendAction
+                    <SendActionButton
+                      accessibilityLabel={sendBlockedReason ?? sendLabel}
+                      presentation={sendPresentation}
+                      disabled={!canSend}
+                      onSend={handleSend}
+                    />
                   ) : null}
                 </View>
               </ComposerToolbarRow>

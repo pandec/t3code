@@ -29,14 +29,14 @@ export function appendPendingThreadMessages(
           id: pendingMessage.messageId,
           role: "user",
           text: pendingMessage.text,
+          attachments: [],
           context: pendingMessage.context,
           createdAt: pendingMessage.createdAt,
           updatedAt: pendingMessage.createdAt,
-          turnId: null,
+          runId: null,
           streaming: false,
-          // The virtual row carries voice provenance so the timeline styles it
-          // the way the server echo will.
-          ...(pendingMessage.inputOrigin ? { inputOrigin: pendingMessage.inputOrigin } : {}),
+          visibility: "local",
+          sourceThreadId: pendingMessage.threadId,
         },
       })),
   ];

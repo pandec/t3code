@@ -2,17 +2,14 @@
  * ClaudeSkills — filesystem discovery of Claude Code skills for the `$` picker.
  *
  * Claude Code loads skills from `<config dir>/skills` (user scope) and
- * `<cwd>/.agents/skills` and `<cwd>/.claude/skills` (project scope), one
- * directory per skill with a `SKILL.md` carrying YAML frontmatter. Project
- * roots override the user root, and `.claude/skills` has highest precedence.
+ * `<cwd>/.claude/skills` (project scope), one directory per skill with a
+ * `SKILL.md` carrying YAML frontmatter. The user root wins on name collisions,
+ * matching the CLI. `.agents/skills` is a Codex location: verified against the
+ * CLI, a skill that lives only there is answered with `Unknown command`, so it
+ * is not scanned here.
  * The Agent SDK init handshake surfaces skills only as slash commands without
  * their filesystem paths, so the provider snapshot scans the same locations
  * directly, mirroring how the Codex app-server reports its skills.
- *
- * The scan is also merged into the live `skills/reload` result, because that
- * list covers only skills the *model* may invoke. Skills marked
- * `disable-model-invocation: true` are absent from it while remaining
- * perfectly runnable by hand — see `mergeClaudeSkills`.
  *
  * @module provider/Drivers/ClaudeSkills
  */
@@ -30,95 +27,40 @@ import { resolveClaudeConfigDirPath } from "./ClaudeHome.ts";
 type ClaudeSkillScope = "user" | "project";
 
 const FRONTMATTER_PATTERN = /^---\r?\n([\s\S]*?)\r?\n---(?:\r?\n|$)/;
-const SKILL_NAME_PATTERN = /^[A-Za-z0-9][A-Za-z0-9:_-]*$/;
-const BLOCK_SCALAR_HEADER_PATTERN = /^[>|](?:[+-]?\d*|\d+[+-]?)$/;
 
 type SkillFrontmatter =
   | { readonly kind: "missing" }
+  | { readonly kind: "malformed" }
   | {
       readonly kind: "parsed";
-      readonly name?: string;
       readonly description?: string;
       readonly userInvocationOnly?: boolean;
       readonly userInvocable?: boolean;
-      readonly modelInvocable?: boolean;
     };
 
-/** Drop a trailing `# comment`, honouring quoted spans that may contain `#`. */
-function stripRawYamlComment(value: string): string {
-  let quote: '"' | "'" | undefined;
-  for (let index = 0; index < value.length; index += 1) {
-    const character = value.charAt(index);
-    if (quote === '"') {
-      if (character === "\\") {
-        index += 1;
-      } else if (character === quote) {
-        quote = undefined;
-      }
-      continue;
-    }
-    if (quote === "'") {
-      if (character === quote && value.charAt(index + 1) === quote) {
-        index += 1;
-      } else if (character === quote) {
-        quote = undefined;
-      }
-      continue;
-    }
-    if (character === '"' || character === "'") {
-      quote = character;
-      continue;
-    }
-    if (character === "#" && (index === 0 || /\s/.test(value.charAt(index - 1)))) {
-      return value.slice(0, index).trimEnd();
-    }
-  }
-  return value;
-}
-
-function readRawFrontmatterField(frontmatter: string, field: string): string | undefined {
-  const escapedField = field.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-  const pattern = new RegExp(`^${escapedField}[ \\t]*:[ \\t]*(.*)$`, "gm");
-  let match: RegExpExecArray | null;
-  let matchedValue: string | undefined;
-  while ((match = pattern.exec(frontmatter)) !== null) {
-    matchedValue = match[1] ?? "";
-  }
-  if (matchedValue === undefined) return undefined;
-
-  const raw = stripRawYamlComment(matchedValue).trim();
-  if (BLOCK_SCALAR_HEADER_PATTERN.test(raw)) return undefined;
-  if (raw.length >= 2) {
-    const first = raw.charAt(0);
-    if ((first === '"' || first === "'") && raw.endsWith(first)) {
-      try {
-        const decoded = parseYamlDocument(raw);
-        if (typeof decoded === "string") return decoded.trim();
-      } catch {
-        // Keep the tolerant fallback for malformed quoted scalars.
-      }
-      return raw.slice(1, -1).trim();
-    }
-  }
-  return raw;
-}
-
+/**
+ * Claude Code accepts the YAML 1.1 boolean spellings (`yes`/`no`, `on`/`off`,
+ * `1`/`0`), which the 1.2 core schema this parser uses leaves as strings and
+ * numbers. Verified against the CLI: a skill carrying `user-invocable: no` is
+ * absent from its published slash commands, so a strict `=== false` here would
+ * offer a command the CLI rejects.
+ */
 function parseFrontmatterBoolean(value: unknown): boolean | undefined {
   if (typeof value === "boolean") return value;
-  if (typeof value === "number") return value === 1 ? true : value === 0 ? false : undefined;
+  if (typeof value === "number") {
+    return value === 1 ? true : value === 0 ? false : undefined;
+  }
   if (typeof value !== "string") return undefined;
   switch (value.trim().toLowerCase()) {
     case "true":
     case "yes":
     case "on":
     case "y":
-    case "1":
       return true;
     case "false":
     case "no":
     case "off":
     case "n":
-    case "0":
       return false;
     default:
       return undefined;
@@ -131,51 +73,27 @@ function parseSkillFrontmatter(contents: string): SkillFrontmatter {
     return { kind: "missing" };
   }
 
-  const frontmatter = match[1] ?? "";
-  let record: Record<string, unknown> = {};
+  let parsed: unknown;
   try {
-    const parsed = parseYamlDocument(frontmatter);
-    if (typeof parsed === "object" && parsed !== null) {
-      record = parsed as Record<string, unknown>;
-    }
+    parsed = parseYamlDocument(match[1] ?? "");
   } catch {
-    // Leave `record` empty and fall through to the raw line scan below.
+    return { kind: "malformed" };
+  }
+  if (typeof parsed !== "object" || parsed === null) {
+    return { kind: "malformed" };
   }
 
-  const readString = (field: string): string => {
-    const parsed = record[field];
-    return (
-      (typeof parsed === "string" && parsed.trim() ? parsed.trim() : undefined) ??
-      readRawFrontmatterField(frontmatter, field)?.trim() ??
-      ""
-    );
-  };
-  const readBoolean = (field: string): boolean | undefined =>
-    parseFrontmatterBoolean(record[field]) ??
-    parseFrontmatterBoolean(readRawFrontmatterField(frontmatter, field));
-
-  const parsedNameValue = record.name;
-  const parsedName =
-    typeof parsedNameValue === "string" && parsedNameValue.trim()
-      ? parsedNameValue.trim()
-      : undefined;
-  const recoveredName = parsedName ?? readRawFrontmatterField(frontmatter, "name")?.trim() ?? "";
-  const name =
-    parsedName !== undefined || SKILL_NAME_PATTERN.test(recoveredName) ? recoveredName : undefined;
-  const description = readString("description");
-  const userInvocable = readBoolean("user-invocable");
-  const disableModelInvocation = readBoolean("disable-model-invocation");
+  const record = parsed as Record<string, unknown>;
+  const description = typeof record.description === "string" ? record.description.trim() : "";
   return {
     kind: "parsed",
-    ...(name ? { name } : {}),
     ...(description ? { description } : {}),
-    ...(userInvocable === undefined ? {} : { userInvocable }),
-    ...(disableModelInvocation === undefined
-      ? {}
-      : {
-          modelInvocable: !disableModelInvocation,
-          ...(disableModelInvocation ? { userInvocationOnly: true } : {}),
-        }),
+    ...(parseFrontmatterBoolean(record["disable-model-invocation"]) === true
+      ? { userInvocationOnly: true }
+      : {}),
+    ...(parseFrontmatterBoolean(record["user-invocable"]) === false
+      ? { userInvocable: false }
+      : {}),
   };
 }
 
@@ -348,11 +266,14 @@ const readSkillOverrides = Effect.fn("readSkillOverrides")(function* (
 });
 
 /**
- * Enumerate Claude Code skills from the user config dir, workspace
- * `.agents/skills`, and workspace `.claude/skills`. Discovery is best-effort:
- * unreadable roots are skipped and tolerant frontmatter recovery keeps runnable
- * skills visible. Parsed frontmatter names match the CLI command verbatim;
- * directory names are the fallback. Later roots win on command-name collisions.
+ * Enumerate Claude Code skills from the user config dir and the workspace
+ * `.claude/skills`. Discovery is best-effort: unreadable roots and malformed
+ * skill entries are skipped so a broken skill never degrades the provider
+ * snapshot. Roots are listed highest precedence first and the first hit for a
+ * name wins, matching Claude Code: verified against the CLI with the same
+ * skill name in both scopes, the user copy is the one that runs. Reporting the
+ * project copy instead would attach its invocation metadata to a command
+ * Claude Code resolves elsewhere.
  */
 export const discoverClaudeSkills = Effect.fn("discoverClaudeSkills")(function* (
   config: Pick<ClaudeSettings, "homePath">,
@@ -366,12 +287,7 @@ export const discoverClaudeSkills = Effect.fn("discoverClaudeSkills")(function* 
 
   const roots: ReadonlyArray<{ directory: string; scope: ClaudeSkillScope }> = [
     { directory: path.join(configDirPath, "skills"), scope: "user" },
-    ...(cwd
-      ? [
-          { directory: path.join(cwd, ".agents", "skills"), scope: "project" as const },
-          { directory: path.join(cwd, ".claude", "skills"), scope: "project" as const },
-        ]
-      : []),
+    ...(cwd ? [{ directory: path.join(cwd, ".claude", "skills"), scope: "project" as const }] : []),
   ];
 
   const skillsByName = new Map<string, ServerProviderSkill>();
@@ -390,31 +306,46 @@ export const discoverClaudeSkills = Effect.fn("discoverClaudeSkills")(function* 
       }
 
       const frontmatter = parseSkillFrontmatter(contents);
-      const name = (frontmatter.kind === "parsed" ? frontmatter.name : undefined) ?? entry.trim();
+      // Malformed frontmatter means the skill won't load in Claude Code
+      // either — skip it rather than surfacing a broken entry under its
+      // directory name.
+      if (frontmatter.kind === "malformed") {
+        continue;
+      }
+
+      // Claude Code identifies a skill by its directory, not by the
+      // frontmatter `name`: verified against the CLI, a skill in `probe-alias/`
+      // declaring `name: probe-alias-frontmatter` is published as
+      // `probe-alias`, and only `skillOverrides["probe-alias"]` switches it
+      // off. Keying off the frontmatter name would report a command that does
+      // not exist and miss the override that disables it.
+      const name = entry.trim();
       if (!name) {
         continue;
       }
 
-      const key = name.toLowerCase();
+      // First root wins, so a later root never displaces a higher-precedence
+      // skill of the same name.
+      if (skillsByName.has(name)) {
+        continue;
+      }
+
       const override = skillOverrides.get(name);
-      const description = frontmatter.kind === "parsed" ? frontmatter.description : undefined;
-      const userInvocable = frontmatter.kind === "parsed" ? frontmatter.userInvocable : undefined;
-      const frontmatterModelInvocable =
-        frontmatter.kind === "parsed" ? frontmatter.modelInvocable : undefined;
       const userInvocationOnly =
         (frontmatter.kind === "parsed" && frontmatter.userInvocationOnly === true) ||
         override?.userInvocationOnly === true;
-      const modelInvocable = userInvocationOnly ? false : frontmatterModelInvocable;
-
-      skillsByName.set(key, {
+      skillsByName.set(name, {
         name,
         path: skillPath,
         enabled: override?.enabled ?? true,
         scope: root.scope,
-        ...(description ? { description } : {}),
-        ...(modelInvocable === undefined ? {} : { modelInvocable }),
+        ...(frontmatter.kind === "parsed" && frontmatter.description
+          ? { description: frontmatter.description }
+          : {}),
         ...(userInvocationOnly ? { userInvocationOnly: true } : {}),
-        ...(userInvocable === undefined ? {} : { userInvocable }),
+        ...(frontmatter.kind === "parsed" && frontmatter.userInvocable === false
+          ? { userInvocable: false }
+          : {}),
       });
     }
   }

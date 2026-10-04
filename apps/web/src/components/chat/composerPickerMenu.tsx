@@ -25,7 +25,7 @@ export function useComposerPickerQuery(): {
 
 /**
  * Shared interaction contract for the composer's slash-command pickers
- * (`/t3-wait`, `/prompt`): arrows to navigate, Enter to pick, Escape to
+ * (e.g. `/prompt`): arrows to navigate, Enter to pick, Escape to
  * dismiss, capture-phase on window so it wins over the editor. Typing goes
  * to the picker's own filter input, which holds focus while open.
  */

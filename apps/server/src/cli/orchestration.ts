@@ -2,15 +2,10 @@ import {
   AuthAdministrativeScopes,
   ServerSettings,
   ServerSettingsPatch,
-  ClientOrchestrationCommand,
-  DispatchResult,
   EnvironmentHttpApi,
   EnvironmentHttpCommonError,
   EnvironmentHttpConflictError,
   EnvironmentResourceNotFoundError,
-  type MessageId,
-  type OrchestrationShellSnapshot,
-  type ThreadId,
 } from "@t3tools/contracts";
 import * as Config from "effect/Config";
 import * as Console from "effect/Console";
@@ -24,10 +19,6 @@ import * as HttpApiClient from "effect/unstable/httpapi/HttpApiClient";
 
 import * as EnvironmentAuth from "../auth/EnvironmentAuth.ts";
 import type * as ServerConfig from "../config.ts";
-import {
-  clearPersistedServerRuntimeState,
-  readPersistedServerRuntimeState,
-} from "../serverRuntimeState.ts";
 
 const decodeServerSettings = Schema.decodeUnknownEffect(ServerSettings);
 const encodeSettingsPatchJson = Schema.encodeSync(
@@ -38,10 +29,6 @@ const isEnvironmentHttpCommonError = Schema.is(EnvironmentHttpCommonError);
 const isEnvironmentHttpConflictError = Schema.is(EnvironmentHttpConflictError);
 const decodeEnvironmentHttpCommonError = Schema.decodeUnknownOption(EnvironmentHttpCommonError);
 const decodeEnvironmentHttpConflictError = Schema.decodeUnknownOption(EnvironmentHttpConflictError);
-const decodeDispatchResult = Schema.decodeUnknownEffect(DispatchResult);
-const encodeClientOrchestrationCommandJson = Schema.encodeSync(
-  Schema.fromJsonString(ClientOrchestrationCommand),
-);
 
 export class CliOrchestrationDeclaredResponseError extends Schema.TaggedError<CliOrchestrationDeclaredResponseError>()(
   "CliOrchestrationDeclaredResponseError",
@@ -427,43 +414,6 @@ export const fetchLiveServerSettings = (
     withLiveServerReadTimeout("snapshot", timeouts.read),
   );
 
-export const fetchLiveOrchestrationSnapshot = (
-  origin: string,
-  bearerToken: string,
-  timeouts: CliLiveServerReadTimeouts,
-) =>
-  Effect.gen(function* () {
-    const client = yield* makeLiveServerClient(origin);
-    return yield* client.orchestration.snapshot({
-      headers: { authorization: `Bearer ${bearerToken}` },
-    });
-  }).pipe(
-    Effect.mapError(cliOrchestrationErrorFromRequest),
-    withLiveServerReadTimeout("snapshot", timeouts.read),
-  );
-
-export const fetchLiveOrchestrationShell = (
-  origin: string,
-  bearerToken: string,
-  timeouts: CliLiveServerReadTimeouts,
-  options?: {
-    readonly phase?: CliLiveServerReadPhase;
-    readonly timeout?: Duration.Duration;
-  },
-) =>
-  Effect.gen(function* () {
-    const client = yield* makeLiveServerClient(origin);
-    return yield* client.orchestration.shellSnapshot({
-      headers: { authorization: `Bearer ${bearerToken}` },
-    });
-  }).pipe(
-    Effect.mapError(cliOrchestrationErrorFromRequest),
-    withLiveServerReadTimeout(
-      options?.phase ?? "discovery",
-      options?.timeout ?? timeouts.discovery,
-    ),
-  );
-
 const isEnvironmentResourceNotFoundError = Schema.is(EnvironmentResourceNotFoundError);
 
 export class CliOrchestrationThreadNotFoundError extends Schema.TaggedError<CliOrchestrationThreadNotFoundError>()(
@@ -478,73 +428,6 @@ export class CliOrchestrationThreadNotFoundError extends Schema.TaggedError<CliO
   }
 }
 
-export const fetchLiveOrchestrationThreadMessages = (
-  origin: string,
-  bearerToken: string,
-  input: {
-    readonly threadId: ThreadId;
-    readonly before?: MessageId;
-    readonly limit?: number;
-    readonly reasoningMessages?: boolean;
-  },
-  timeouts: CliLiveServerReadTimeouts,
-) =>
-  Effect.gen(function* () {
-    const client = yield* makeLiveServerClient(origin);
-    return yield* client.orchestration.threadMessages({
-      params: { threadId: input.threadId },
-      query: {
-        ...(input.reasoningMessages === true ? { reasoningMessages: "true" as const } : {}),
-        ...(input.before === undefined ? {} : { before: input.before }),
-        ...(input.limit === undefined ? {} : { limit: input.limit }),
-      },
-      headers: { authorization: `Bearer ${bearerToken}` },
-    });
-  }).pipe(
-    Effect.mapError((cause) =>
-      isEnvironmentResourceNotFoundError(cause)
-        ? new CliOrchestrationThreadNotFoundError({
-            operation: "fetchThreadMessages",
-            threadId: input.threadId,
-          })
-        : cliOrchestrationErrorFromRequest(cause),
-    ),
-    withLiveServerReadTimeout("messages", timeouts.read),
-  );
-
-// A matched thread route always answers a missing thread with a typed
-// not-found body, so a bare 404 means the server predates the route itself.
-export const isLiveServerRouteMissing = (error: unknown): boolean =>
-  isCliOrchestrationUndeclaredStatusError(error) && error.status === 404;
-
-/** Full-history thread detail read, the fallback for servers that predate the
-    dedicated `/messages` route (including upstream ones). */
-export const fetchLiveOrchestrationThreadDetail = (
-  origin: string,
-  bearerToken: string,
-  threadId: ThreadId,
-  timeouts: CliLiveServerReadTimeouts,
-  reasoningMessages = false,
-) =>
-  Effect.gen(function* () {
-    const client = yield* makeLiveServerClient(origin);
-    return yield* client.orchestration.threadSnapshot({
-      params: { threadId },
-      query: reasoningMessages ? { reasoningMessages: "true" } : {},
-      headers: { authorization: `Bearer ${bearerToken}` },
-    });
-  }).pipe(
-    Effect.mapError((cause) =>
-      isEnvironmentResourceNotFoundError(cause)
-        ? new CliOrchestrationThreadNotFoundError({
-            operation: "fetchThreadMessages",
-            threadId,
-          })
-        : cliOrchestrationErrorFromRequest(cause),
-    ),
-    withLiveServerReadTimeout("messages", timeouts.read),
-  );
-
 export const fetchLiveEnvironmentDescriptor = (
   origin: string,
   timeouts: CliLiveServerReadTimeouts,
@@ -556,61 +439,6 @@ export const fetchLiveEnvironmentDescriptor = (
     Effect.mapError(cliOrchestrationErrorFromRequest),
     withLiveServerReadTimeout("descriptor", timeouts.read),
   );
-
-export const dispatchLiveOrchestrationCommand = (
-  origin: string,
-  bearerToken: string,
-  command: ClientOrchestrationCommand,
-  options?: {
-    readonly timeoutMilliseconds?: number;
-  },
-) =>
-  Effect.gen(function* () {
-    const { response, payload: responsePayload } = yield* fetchDispatchAcknowledgement(
-      origin,
-      bearerToken,
-      {
-        path: "/api/orchestration/dispatch",
-        method: "POST",
-        body: encodeClientOrchestrationCommandJson(command),
-      },
-      options?.timeoutMilliseconds === undefined
-        ? CLI_LIVE_SERVER_DISPATCH_TIMEOUT_MS
-        : options.timeoutMilliseconds,
-    );
-    if (!response.ok) {
-      const conflict = decodeEnvironmentHttpConflictError(responsePayload);
-      if (Option.isSome(conflict)) {
-        return yield* cliOrchestrationErrorFromRequest(conflict.value);
-      }
-      const declared = decodeEnvironmentHttpCommonError(responsePayload);
-      if (Option.isSome(declared)) {
-        return yield* cliOrchestrationErrorFromRequest(declared.value);
-      }
-      // An undeclared 5xx can occur after the command committed, so the
-      // outcome is unknown; sub-5xx statuses prove the command was rejected.
-      if (response.status >= 500) {
-        return yield* new CliOrchestrationOutcomeUnknownError({
-          operation: "dispatchLiveServer",
-          cause: responsePayload,
-        });
-      }
-      return yield* new CliOrchestrationUndeclaredStatusError({
-        operation: "callLiveServer",
-        status: response.status,
-        cause: responsePayload,
-      });
-    }
-    return yield* decodeDispatchResult(responsePayload).pipe(
-      Effect.mapError(
-        (cause) =>
-          new CliOrchestrationOutcomeUnknownError({
-            operation: "dispatchLiveServer",
-            cause,
-          }),
-      ),
-    );
-  });
 
 export const updateLiveServerSettings = (
   origin: string,
@@ -663,13 +491,6 @@ export const updateLiveServerSettings = (
     );
   });
 
-export interface CliLiveOrchestrationServer {
-  readonly origin: string;
-  readonly pid: number;
-  readonly startedAt: string;
-  readonly shell: OrchestrationShellSnapshot;
-}
-
 export const isProcessAlive = (pid: number) =>
   Effect.sync(() => {
     try {
@@ -701,54 +522,3 @@ export interface CliResolvedLiveOrchestrationInput {
   readonly label: string;
   readonly timeouts: CliLiveServerReadTimeouts;
 }
-
-/**
- * Resolves the persisted live server and runs `use` against it inside a single
- * auth session, so discovery and the actual operation share one issue/revoke
- * cycle. Returns `Option.none` when no live server exists for this data
- * directory; a server that is alive but unresponsive fails with the discovery
- * error instead of being treated as absent.
- */
-export const withResolvedLiveOrchestrationServer = Effect.fn("withResolvedLiveOrchestrationServer")(
-  function* <A, E, R>(
-    input: CliResolvedLiveOrchestrationInput,
-    use: (live: CliLiveOrchestrationServer, token: string) => Effect.Effect<A, E, R>,
-  ) {
-    const runtimeState = yield* readPersistedServerRuntimeState(
-      input.config.serverRuntimeStatePath,
-    );
-    if (Option.isNone(runtimeState)) {
-      return Option.none<A>();
-    }
-
-    return yield* withCliOrchestrationSession(input.environmentAuth, input.label, (token) =>
-      Effect.gen(function* () {
-        const attempted = yield* Effect.result(
-          fetchLiveOrchestrationShell(runtimeState.value.origin, token, input.timeouts),
-        );
-        if (attempted._tag === "Failure") {
-          yield* Effect.logDebug("Failed to connect to the persisted T3 CLI server.", {
-            origin: runtimeState.value.origin,
-            cause: attempted.failure,
-          });
-          if (
-            !(yield* isProcessAlive(runtimeState.value.pid)) ||
-            isConnectionRefused(attempted.failure)
-          ) {
-            yield* clearPersistedServerRuntimeState(input.config.serverRuntimeStatePath);
-            return Option.none<A>();
-          }
-          return yield* attempted.failure;
-        }
-
-        const live: CliLiveOrchestrationServer = {
-          origin: runtimeState.value.origin,
-          pid: runtimeState.value.pid,
-          startedAt: runtimeState.value.startedAt,
-          shell: attempted.success,
-        };
-        return Option.some(yield* use(live, token));
-      }),
-    );
-  },
-);

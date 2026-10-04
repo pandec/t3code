@@ -116,14 +116,6 @@ describe("splitSharedServerPatch", () => {
       defaultThreadEnvMode: "worktree",
     });
   });
-
-  it("replicates the auto-settle master gate", () => {
-    const { sharedPatch, localPatch } = splitSharedServerPatch({
-      threadAutoSettleEnabled: false,
-    });
-    expect(sharedPatch).toEqual({ threadAutoSettleEnabled: false });
-    expect(localPatch).toEqual({});
-  });
 });
 
 describe("pickSharedServerSettings", () => {
@@ -131,14 +123,14 @@ describe("pickSharedServerSettings", () => {
     expect(
       Object.keys(pickSharedServerSettings(DEFAULT_SERVER_SETTINGS, restartCapabilities)).sort(),
     ).toEqual([
+      "autoResumeLimitedThreads",
       "continueThreadsAfterServerUpdate",
       "newWorktreesStartFromOrigin",
       "sidebarAutoSettleAfterDays",
       "sidebarAutoSettleOnMerge",
-      "skipMissingWorktreeRecreation",
+      "snoozeLimitedThreads",
       "sourceControlWritingStyle",
       "textGenerationModelSelection",
-      "threadAutoSettleEnabled",
     ]);
   });
 });

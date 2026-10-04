@@ -1,50 +1,37 @@
-import { useCallback, useRef, useState, type CSSProperties } from "react";
-import { useAtomValue } from "@effect/atom-react";
+import { useCallback, useRef, type CSSProperties } from "react";
 import {
   clampArchivedSectionVisibleCount,
   clampAccentTintIntensityPercent,
   clampSteerGraceWindowMs,
-  clampTurnCompletionMinDurationSeconds,
   DEFAULT_UNIFIED_SETTINGS,
   MAX_ARCHIVED_SECTION_VISIBLE_COUNT,
   MAX_ACCENT_TINT_INTENSITY_PERCENT,
   MAX_OPENROUTER_CREDITS_BUDGET_USD,
   MAX_PROVIDER_USAGE_ALERT_PERCENT,
   MAX_STEER_GRACE_WINDOW_MS,
-  MAX_TURN_COMPLETION_MIN_DURATION_SECONDS,
   MIN_ACCENT_TINT_INTENSITY_PERCENT,
   MIN_ARCHIVED_SECTION_VISIBLE_COUNT,
   MIN_OPENROUTER_CREDITS_BUDGET_USD,
   MIN_PROVIDER_USAGE_ALERT_PERCENT,
   MIN_STEER_GRACE_WINDOW_MS,
-  MIN_TURN_COMPLETION_MIN_DURATION_SECONDS,
   type SidebarThreadProviderIconVisibility,
 } from "@t3tools/contracts/settings";
 import type { EnvironmentId } from "@t3tools/contracts";
 import { normalizeLinearTeamKeys } from "@t3tools/contracts/settings";
 import { formatUsd } from "@t3tools/shared/usageFormat";
 
-import { isElectron } from "../../env";
 import { useEnvironments } from "../../state/environments";
 import { useServerConfigs } from "../../state/entities";
 import { environmentReadsLinearIssues } from "../../lib/openLinearLink";
 import { formatEnvironmentQueryError, useEnvironmentQuery } from "../../state/query";
 import { linearEnvironment } from "../../state/linear";
-import { primaryServerConfigAtom, serverEnvironment } from "../../state/server";
+import { serverEnvironment } from "../../state/server";
 import { useAtomCommand } from "../../state/use-atom-command";
 import {
   usePrimarySettings,
   useLegacySidebarEnabled,
   useUpdatePrimarySettings,
 } from "../../hooks/useSettings";
-import {
-  buildNotificationSettingsSupportText,
-  readBrowserNotificationPermissionState,
-  requestBrowserNotificationPermission,
-  showSystemNotification,
-} from "../../notifications/turnCompletion";
-import { unlockNotificationAudio } from "../../threadNotifications";
-import { Button } from "../ui/button";
 import { DraftInput } from "../ui/draft-input";
 import {
   NumberField,
@@ -138,316 +125,6 @@ function SettingsNumberField({
   );
 }
 
-function NotificationsExtrasSection() {
-  const settings = usePrimarySettings();
-  const updateSettings = useUpdatePrimarySettings();
-  const [browserPermissionState, setBrowserPermissionState] = useState(
-    readBrowserNotificationPermissionState,
-  );
-
-  const handleSystemNotificationsChange = useCallback(
-    async (checked: boolean) => {
-      if (!checked || isElectron) {
-        updateSettings({ enableTurnCompletionSystemNotifications: checked });
-        return;
-      }
-      const permissionState = await requestBrowserNotificationPermission();
-      setBrowserPermissionState(permissionState);
-      if (permissionState === "granted") {
-        updateSettings({ enableTurnCompletionSystemNotifications: true });
-        return;
-      }
-      updateSettings({ enableTurnCompletionSystemNotifications: false });
-      toastManager.add({
-        type: "warning",
-        title: "System notifications unavailable",
-        description: buildNotificationSettingsSupportText(permissionState),
-      });
-    },
-    [updateSettings],
-  );
-
-  const handleTestNotification = useCallback(async () => {
-    const shown = await showSystemNotification({
-      title: "Test notification",
-      body: "This is how a finished agent turn will be announced.",
-    });
-    if (!shown) {
-      toastManager.add({
-        type: "warning",
-        title: "Could not show a test notification",
-        description: buildNotificationSettingsSupportText(readBrowserNotificationPermissionState()),
-      });
-    }
-  }, []);
-
-  const minDurationSeconds = clampTurnCompletionMinDurationSeconds(
-    settings.turnCompletionMinDurationSeconds,
-  );
-  const thresholds = {
-    providerUsageWarningPercent: settings.providerUsageWarningPercent,
-    providerUsageCriticalPercent: settings.providerUsageCriticalPercent,
-  };
-
-  return (
-    <SettingsSection {...searchableSetting("extras-notifications")}>
-      <SettingsRow
-        title="Completion toasts"
-        description="Show an in-app toast when an agent turn finishes or a thread needs you."
-        resetAction={
-          settings.enableTurnCompletionToasts !==
-          DEFAULT_UNIFIED_SETTINGS.enableTurnCompletionToasts ? (
-            <SettingResetButton
-              label="completion toasts"
-              onClick={() =>
-                updateSettings({
-                  enableTurnCompletionToasts: DEFAULT_UNIFIED_SETTINGS.enableTurnCompletionToasts,
-                })
-              }
-            />
-          ) : null
-        }
-        control={
-          <Switch
-            checked={settings.enableTurnCompletionToasts}
-            onCheckedChange={(checked) =>
-              updateSettings({ enableTurnCompletionToasts: Boolean(checked) })
-            }
-            aria-label="Show completion toasts"
-          />
-        }
-      />
-
-      <SettingsRow
-        title="System notifications"
-        description={`Notify through the operating system while the app is in the background. ${buildNotificationSettingsSupportText(browserPermissionState)}`}
-        resetAction={
-          settings.enableTurnCompletionSystemNotifications !==
-          DEFAULT_UNIFIED_SETTINGS.enableTurnCompletionSystemNotifications ? (
-            <SettingResetButton
-              label="system notifications"
-              onClick={() =>
-                updateSettings({
-                  enableTurnCompletionSystemNotifications:
-                    DEFAULT_UNIFIED_SETTINGS.enableTurnCompletionSystemNotifications,
-                })
-              }
-            />
-          ) : null
-        }
-        control={
-          <div className="flex items-center gap-3">
-            <Button size="xs" variant="outline" onClick={() => void handleTestNotification()}>
-              Test
-            </Button>
-            <Switch
-              checked={settings.enableTurnCompletionSystemNotifications}
-              onCheckedChange={(checked) => void handleSystemNotificationsChange(Boolean(checked))}
-              aria-label="Show system notifications"
-            />
-          </div>
-        }
-      />
-
-      <SettingsRow
-        title="Input, approval and failure alerts"
-        description="Use the enabled toast, system notification and sound settings when a thread fails or needs input or approval."
-        resetAction={
-          settings.enableInputRequestNotifications !==
-          DEFAULT_UNIFIED_SETTINGS.enableInputRequestNotifications ? (
-            <SettingResetButton
-              label="input and approval alerts"
-              onClick={() =>
-                updateSettings({
-                  enableInputRequestNotifications:
-                    DEFAULT_UNIFIED_SETTINGS.enableInputRequestNotifications,
-                })
-              }
-            />
-          ) : null
-        }
-        control={
-          <Switch
-            checked={settings.enableInputRequestNotifications}
-            onCheckedChange={(checked) =>
-              updateSettings({ enableInputRequestNotifications: Boolean(checked) })
-            }
-            aria-label="Announce input and approval requests"
-          />
-        }
-      />
-
-      <SettingsRow
-        title="Notification sounds"
-        description="Play a distinct sound for completions and for input requests. System notifications go silent so nothing plays twice."
-        resetAction={
-          settings.enableNotificationSounds !==
-          DEFAULT_UNIFIED_SETTINGS.enableNotificationSounds ? (
-            <SettingResetButton
-              label="notification sounds"
-              onClick={() =>
-                updateSettings({
-                  enableNotificationSounds: DEFAULT_UNIFIED_SETTINGS.enableNotificationSounds,
-                })
-              }
-            />
-          ) : null
-        }
-        control={
-          <Switch
-            checked={settings.enableNotificationSounds}
-            onCheckedChange={(checked) => {
-              // Enabling happens inside a gesture, the one place audio can be armed.
-              if (checked) unlockNotificationAudio();
-              updateSettings({ enableNotificationSounds: Boolean(checked) });
-            }}
-            aria-label="Play notification sounds"
-          />
-        }
-      />
-
-      <SettingsRow
-        title="Minimum turn duration"
-        description="Skip every completion announcement for turns that finish faster than this. 0 announces every completed turn. Input, approval and failure alerts are not affected."
-        resetAction={
-          minDurationSeconds !== DEFAULT_UNIFIED_SETTINGS.turnCompletionMinDurationSeconds ? (
-            <SettingResetButton
-              label="minimum turn duration"
-              onClick={() =>
-                updateSettings({
-                  turnCompletionMinDurationSeconds:
-                    DEFAULT_UNIFIED_SETTINGS.turnCompletionMinDurationSeconds,
-                })
-              }
-            />
-          ) : null
-        }
-        control={
-          <SettingsNumberField
-            ariaLabel="Minimum turn duration in seconds"
-            max={MAX_TURN_COMPLETION_MIN_DURATION_SECONDS}
-            min={MIN_TURN_COMPLETION_MIN_DURATION_SECONDS}
-            onCommit={(next) => {
-              if (next === null) return;
-              updateSettings({
-                turnCompletionMinDurationSeconds: clampTurnCompletionMinDurationSeconds(next),
-              });
-            }}
-            suffix="seconds"
-            value={minDurationSeconds}
-          />
-        }
-      />
-
-      <SettingsRow
-        title="Rate limit alerts"
-        description="Warn once per rate-limit window when subscription usage crosses the warning or critical threshold."
-        resetAction={
-          settings.enableRateLimitAlerts !== DEFAULT_UNIFIED_SETTINGS.enableRateLimitAlerts ? (
-            <SettingResetButton
-              label="rate limit alerts"
-              onClick={() =>
-                updateSettings({
-                  enableRateLimitAlerts: DEFAULT_UNIFIED_SETTINGS.enableRateLimitAlerts,
-                })
-              }
-            />
-          ) : null
-        }
-        control={
-          <Switch
-            checked={settings.enableRateLimitAlerts}
-            onCheckedChange={(checked) =>
-              updateSettings({ enableRateLimitAlerts: Boolean(checked) })
-            }
-            aria-label="Warn about rate limit usage"
-          />
-        }
-      />
-
-      <SettingsRow
-        title="Warning threshold"
-        description="Usage at which the quota ring turns amber and the first rate limit alert fires. Never exceeds the critical threshold."
-        resetAction={
-          settings.providerUsageWarningPercent !==
-          DEFAULT_UNIFIED_SETTINGS.providerUsageWarningPercent ? (
-            <SettingResetButton
-              label="warning threshold"
-              onClick={() =>
-                updateSettings(
-                  resolveProviderUsageThresholdCommit({
-                    field: "warning",
-                    value: DEFAULT_UNIFIED_SETTINGS.providerUsageWarningPercent,
-                    current: thresholds,
-                  }),
-                )
-              }
-            />
-          ) : null
-        }
-        control={
-          <SettingsNumberField
-            ariaLabel="Usage warning threshold"
-            max={MAX_PROVIDER_USAGE_ALERT_PERCENT}
-            min={MIN_PROVIDER_USAGE_ALERT_PERCENT}
-            onCommit={(next) =>
-              updateSettings(
-                resolveProviderUsageThresholdCommit({
-                  field: "warning",
-                  value: next,
-                  current: thresholds,
-                }),
-              )
-            }
-            suffix="%"
-            value={settings.providerUsageWarningPercent}
-          />
-        }
-      />
-
-      <SettingsRow
-        title="Critical threshold"
-        description="Usage at which the quota ring turns red and a second alert fires. Lowering it past the warning threshold pulls that one down too."
-        resetAction={
-          settings.providerUsageCriticalPercent !==
-          DEFAULT_UNIFIED_SETTINGS.providerUsageCriticalPercent ? (
-            <SettingResetButton
-              label="critical threshold"
-              onClick={() =>
-                updateSettings(
-                  resolveProviderUsageThresholdCommit({
-                    field: "critical",
-                    value: DEFAULT_UNIFIED_SETTINGS.providerUsageCriticalPercent,
-                    current: thresholds,
-                  }),
-                )
-              }
-            />
-          ) : null
-        }
-        control={
-          <SettingsNumberField
-            ariaLabel="Usage critical threshold"
-            max={MAX_PROVIDER_USAGE_ALERT_PERCENT}
-            min={MIN_PROVIDER_USAGE_ALERT_PERCENT}
-            onCommit={(next) =>
-              updateSettings(
-                resolveProviderUsageThresholdCommit({
-                  field: "critical",
-                  value: next,
-                  current: thresholds,
-                }),
-              )
-            }
-            suffix="%"
-            value={settings.providerUsageCriticalPercent}
-          />
-        }
-      />
-    </SettingsSection>
-  );
-}
-
 /** One environment's stored-key state and balance under the key field. */
 function OpenRouterCreditsEnvironmentStatus({
   environmentId,
@@ -497,6 +174,10 @@ function ProviderUsageExtrasSection() {
   const updateSettings = useUpdatePrimarySettings();
   const { environments } = useEnvironments();
   const configureOpenRouterCredits = useAtomCommand(serverEnvironment.configureOpenRouterCredits);
+  const thresholds = {
+    providerUsageWarningPercent: settings.providerUsageWarningPercent,
+    providerUsageCriticalPercent: settings.providerUsageCriticalPercent,
+  };
 
   // The balance is account-wide and the meter reads it from whichever
   // environment the active thread runs on, so a save applies the key to
@@ -587,6 +268,85 @@ function ProviderUsageExtrasSection() {
       />
 
       <SettingsRow
+        title="Warning threshold"
+        description="Usage at which the quota ring turns amber. Never exceeds the critical threshold."
+        resetAction={
+          settings.providerUsageWarningPercent !==
+          DEFAULT_UNIFIED_SETTINGS.providerUsageWarningPercent ? (
+            <SettingResetButton
+              label="warning threshold"
+              onClick={() =>
+                updateSettings(
+                  resolveProviderUsageThresholdCommit({
+                    field: "warning",
+                    value: DEFAULT_UNIFIED_SETTINGS.providerUsageWarningPercent,
+                    current: thresholds,
+                  }),
+                )
+              }
+            />
+          ) : null
+        }
+        control={
+          <SettingsNumberField
+            ariaLabel="Usage warning threshold"
+            max={MAX_PROVIDER_USAGE_ALERT_PERCENT}
+            min={MIN_PROVIDER_USAGE_ALERT_PERCENT}
+            onCommit={(next) =>
+              updateSettings(
+                resolveProviderUsageThresholdCommit({
+                  field: "warning",
+                  value: next,
+                  current: thresholds,
+                }),
+              )
+            }
+            suffix="%"
+            value={settings.providerUsageWarningPercent}
+          />
+        }
+      />
+
+      <SettingsRow
+        title="Critical threshold"
+        description="Usage at which the quota ring turns red. Lowering it past the warning threshold pulls that one down too."
+        resetAction={
+          settings.providerUsageCriticalPercent !==
+          DEFAULT_UNIFIED_SETTINGS.providerUsageCriticalPercent ? (
+            <SettingResetButton
+              label="critical threshold"
+              onClick={() =>
+                updateSettings(
+                  resolveProviderUsageThresholdCommit({
+                    field: "critical",
+                    value: DEFAULT_UNIFIED_SETTINGS.providerUsageCriticalPercent,
+                    current: thresholds,
+                  }),
+                )
+              }
+            />
+          ) : null
+        }
+        control={
+          <SettingsNumberField
+            ariaLabel="Usage critical threshold"
+            max={MAX_PROVIDER_USAGE_ALERT_PERCENT}
+            min={MIN_PROVIDER_USAGE_ALERT_PERCENT}
+            onCommit={(next) =>
+              updateSettings(
+                resolveProviderUsageThresholdCommit({
+                  field: "critical",
+                  value: next,
+                  current: thresholds,
+                }),
+              )
+            }
+            suffix="%"
+            value={settings.providerUsageCriticalPercent}
+          />
+        }
+      />
+      <SettingsRow
         {...searchableSetting("openrouter-credits")}
         title="OpenRouter credits"
         description="Show your OpenRouter credit balance in the usage meter popover."
@@ -651,7 +411,7 @@ function ProviderUsageExtrasSection() {
           </div>
           <SettingsRow
             title="OpenRouter budget"
-            description="The starting balance to measure spend against. With a budget set, the usage meter shows how much of it you have spent, coloured by the warning and critical thresholds under Notifications. Leave empty or enter 0 to show the dollar amount only; budgets under $1 count as none."
+            description="The starting balance to measure spend against. With a budget set, the usage meter shows how much of it you have spent, coloured by the warning and critical thresholds above. Leave empty or enter 0 to show the dollar amount only; budgets under $1 count as none."
             resetAction={
               settings.openRouterCreditsBudgetUsd !==
               DEFAULT_UNIFIED_SETTINGS.openRouterCreditsBudgetUsd ? (
@@ -864,41 +624,8 @@ function SidebarExtrasSection() {
     settings.archivedSectionVisibleCount,
   );
 
-  const supportsAutoSettlement =
-    useAtomValue(primaryServerConfigAtom)?.environment.capabilities.threadAutoSettlement === true;
-
   return (
     <SettingsSection {...searchableSetting("extras-sidebar")}>
-      {supportsAutoSettlement ? (
-        <SettingsRow
-          serverScoped
-          {...searchableSetting("auto-settle-threads")}
-          description="Automatically settle threads after inactivity or when their pull request is merged or closed. Manual settling remains available when disabled."
-          resetAction={
-            settings.threadAutoSettleEnabled !==
-            DEFAULT_UNIFIED_SETTINGS.threadAutoSettleEnabled ? (
-              <SettingResetButton
-                label="automatic thread settling"
-                onClick={() =>
-                  updateSettings({
-                    threadAutoSettleEnabled: DEFAULT_UNIFIED_SETTINGS.threadAutoSettleEnabled,
-                  })
-                }
-              />
-            ) : null
-          }
-          control={
-            <Switch
-              checked={settings.threadAutoSettleEnabled}
-              onCheckedChange={(checked) =>
-                updateSettings({ threadAutoSettleEnabled: Boolean(checked) })
-              }
-              aria-label="Automatically settle threads"
-            />
-          }
-        />
-      ) : null}
-
       <SettingsRow
         title="Thread provider icon"
         description="Choose whether thread rows show their provider only on hover, at all times, or never."
@@ -1096,35 +823,6 @@ function ComposerExtrasSection() {
   return (
     <SettingsSection {...searchableSetting("extras-composer")}>
       <SettingsRow
-        serverScoped
-        {...searchableSetting("skip-missing-worktree-recreation")}
-        title="Skip recreating removed worktrees"
-        description="Continue in the main project checkout when a thread's worktree is gone. Turn this off to try recreating the worktree first; if that fails, continue in the main checkout."
-        resetAction={
-          settings.skipMissingWorktreeRecreation !==
-          DEFAULT_UNIFIED_SETTINGS.skipMissingWorktreeRecreation ? (
-            <SettingResetButton
-              label="removed worktree recovery"
-              onClick={() =>
-                updateSettings({
-                  skipMissingWorktreeRecreation:
-                    DEFAULT_UNIFIED_SETTINGS.skipMissingWorktreeRecreation,
-                })
-              }
-            />
-          ) : null
-        }
-        control={
-          <Switch
-            checked={settings.skipMissingWorktreeRecreation}
-            onCheckedChange={(checked) =>
-              updateSettings({ skipMissingWorktreeRecreation: Boolean(checked) })
-            }
-            aria-label="Skip recreating removed worktrees"
-          />
-        }
-      />
-      <SettingsRow
         title="Steer grace window"
         description="How long a steered message waits in the composer before it is sent to the running agent. Until the window elapses the message can still be edited or recalled; 0s locks it in immediately."
         resetAction={
@@ -1263,7 +961,6 @@ function AccentTintsExtrasSection() {
 export function ExtrasSettingsPanel() {
   return (
     <SettingsPageContainer>
-      <NotificationsExtrasSection />
       <ProviderUsageExtrasSection />
       <LinearExtrasSection />
       <SidebarExtrasSection />

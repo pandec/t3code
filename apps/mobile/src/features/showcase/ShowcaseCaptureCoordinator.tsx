@@ -14,7 +14,7 @@ import { useAppearancePreferences } from "../settings/appearance/AppearancePrefe
 import type { MobileThemeId } from "../../lib/mobileTheme";
 import { useProjects, useThreadShells } from "../../state/entities";
 import { enqueueThreadOutboxMessage } from "../../state/thread-outbox";
-import { ensureEditingQueuedMessageHeld } from "../../state/use-thread-outbox";
+import { holdEditingQueuedMessage } from "../../state/use-thread-outbox";
 import { useWorkspaceState } from "../../state/workspace";
 import {
   applyNativeShowcaseOrientation,
@@ -207,7 +207,7 @@ export function ShowcaseCaptureCoordinator(props: { readonly pathname: string })
     if (pendingTasks.length !== SHOWCASE_PENDING_TASK_DEFINITIONS.length) return;
 
     let cancelled = false;
-    for (const task of pendingTasks) ensureEditingQueuedMessageHeld(task.messageId);
+    for (const task of pendingTasks) holdEditingQueuedMessage(task.messageId);
     void (async () => {
       const results = await Promise.all(
         pendingTasks.map(async (task) => {

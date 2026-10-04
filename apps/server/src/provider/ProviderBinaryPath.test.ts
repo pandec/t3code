@@ -5,9 +5,7 @@ import { describe, expect, it } from "vite-plus/test";
 
 import { ClaudeDriver } from "./Drivers/ClaudeDriver.ts";
 import { CodexDriver } from "./Drivers/CodexDriver.ts";
-import { CursorDriver } from "./Drivers/CursorDriver.ts";
 import { GrokDriver } from "./Drivers/GrokDriver.ts";
-import { HermesDriver } from "./Drivers/HermesDriver.ts";
 import { OpenCodeDriver } from "./Drivers/OpenCodeDriver.ts";
 import { withExpandedProviderBinaryPath } from "./ProviderBinaryPath.ts";
 
@@ -16,9 +14,7 @@ const defaultConfigFactories: ReadonlyArray<
 > = [
   ["Codex", CodexDriver.defaultConfig],
   ["Claude", ClaudeDriver.defaultConfig],
-  ["Cursor", CursorDriver.defaultConfig],
   ["Grok", GrokDriver.defaultConfig],
-  ["Hermes", HermesDriver.defaultConfig],
   ["OpenCode", OpenCodeDriver.defaultConfig],
 ];
 

@@ -2,25 +2,8 @@ import type {
   EnvironmentId,
   MessageId,
   MessageSpeechSynthesisResult,
-  MessageSummaryRequest,
   MessageSummaryResult,
 } from "@t3tools/contracts";
-import * as Effect from "effect/Effect";
-import * as Option from "effect/Option";
-import * as SubscriptionRef from "effect/SubscriptionRef";
-import type { HttpClient } from "effect/unstable/http";
-import type { Atom } from "effect/unstable/reactivity";
-
-import { RemoteEnvironmentAuthorization } from "../authorization/service.ts";
-import type { EnvironmentRegistry } from "../connection/registry.ts";
-import { EnvironmentSupervisor } from "../connection/supervisor.ts";
-import { environmentEndpointUrl } from "../environment/endpoint.ts";
-import { ManagedRelayDpopSigner } from "../relay/managedRelay.ts";
-import { RemoteEnvironmentAuthFetchError } from "../rpc/http.ts";
-import { executeAuthenticatedEnvironmentHttpRequest } from "./environmentHttpAuth.ts";
-import { createEnvironmentCommand } from "./runtime.ts";
-
-const MESSAGE_SUMMARY_TIMEOUT_MS = 240_000;
 
 export interface MessageArtifactSessionSnapshot {
   readonly summary: MessageSummaryResult | null;
@@ -138,39 +121,3 @@ export const rememberMessageSpeech = (
   sourceText: string,
   speech: MessageSpeechSynthesisResult,
 ) => updateMessageArtifactSession(environmentId, speech.messageId, sourceText, { speech });
-
-export const summarizeMessage = Effect.fn("clientRuntime.messageArtifacts.summarizeMessage")(
-  function* (request: MessageSummaryRequest) {
-    const supervisor = yield* EnvironmentSupervisor;
-    const prepared = yield* SubscriptionRef.get(supervisor.prepared);
-    if (Option.isNone(prepared)) {
-      return yield* new RemoteEnvironmentAuthFetchError({
-        message: "The selected environment is not connected.",
-        cause: "environment_not_connected",
-      });
-    }
-
-    const signer = yield* Effect.serviceOption(ManagedRelayDpopSigner);
-    const remoteAuthorization = yield* Effect.serviceOption(RemoteEnvironmentAuthorization);
-    return yield* executeAuthenticatedEnvironmentHttpRequest({
-      group: "messageArtifacts",
-      prepared: prepared.value,
-      signer,
-      remoteAuthorization,
-      method: "POST",
-      url: (httpBaseUrl) => environmentEndpointUrl(httpBaseUrl, "/api/messages/summaries"),
-      timeoutMs: MESSAGE_SUMMARY_TIMEOUT_MS,
-      request: ({ client, headers }) => client.summarizeMessage({ payload: request, headers }),
-    });
-  },
-);
-
-export function createMessageSummaryEnvironmentCommand<R, E>(
-  runtime: Atom.AtomRuntime<EnvironmentRegistry | HttpClient.HttpClient | R, E>,
-) {
-  return createEnvironmentCommand(runtime, {
-    label: "environment-data:commands:message-artifacts:summarize",
-    execute: (input: MessageSummaryRequest) => summarizeMessage(input),
-    concurrency: { mode: "parallel" },
-  });
-}

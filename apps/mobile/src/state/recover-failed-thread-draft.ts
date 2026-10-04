@@ -20,8 +20,6 @@ export async function recoverFailedThreadDraft(message: QueuedThreadMessage): Pr
     text: source.text,
     context: source.context,
     attachments: [],
-    // Keep the voice provenance the failed send carried.
-    ...(source.inputOrigin ? { inputOrigin: source.inputOrigin } : {}),
   });
   const existingIds = new Set(
     getComposerDraftSnapshot(targetKey).attachments.map((attachment) => attachment.id),

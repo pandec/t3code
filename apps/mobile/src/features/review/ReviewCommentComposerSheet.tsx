@@ -16,7 +16,7 @@ import type { DraftComposerImageAttachment } from "../../lib/composerImages";
 import { convertPastedImagesToAttachments, pickComposerImages } from "../../lib/composerImages";
 import { useNativePaste } from "../../lib/useNativePaste";
 import { setPendingConnectionError } from "../../state/use-remote-environment-registry";
-import { appendContentToThreadDraft } from "../../state/use-thread-composer-state";
+import { appendReviewCommentToDraft } from "../../state/use-thread-composer-state";
 import {
   clearReviewCommentTarget,
   formatReviewCommentContext,
@@ -159,7 +159,7 @@ export function ReviewCommentComposerSheet(props: ReviewCommentComposerSheetProp
       return;
     }
 
-    appendContentToThreadDraft({
+    appendReviewCommentToDraft({
       environmentId,
       threadId,
       text: formatReviewCommentContext(target, commentText),

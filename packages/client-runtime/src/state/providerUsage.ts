@@ -1,13 +1,9 @@
-import type {
-  OrchestrationThreadActivity,
-  ProviderDriverKind,
-  ProviderInstanceUsageSnapshot,
-} from "@t3tools/contracts";
+import type { ProviderDriverKind, ProviderInstanceUsageSnapshot } from "@t3tools/contracts";
 import * as DateTime from "effect/DateTime";
 
 /**
- * Subscription rate-limit usage derived from `account.rate-limits.updated`
- * thread activities. Providers report usage in undocumented, provider-specific
+ * Subscription rate-limit usage derived from server-owned usage snapshots
+ * (gateway account pools). Providers report usage in undocumented, provider-specific
  * shapes that have already drifted between CLI releases, so everything here is
  * defensive: unknown window taxonomies fall back to readable labels instead of
  * being dropped, and payloads that carry no usable data yield no snapshot —
@@ -77,7 +73,7 @@ export type ProviderUsageStatus = "ok" | "warning" | "critical";
 export type ProviderUsageWindowGroup = "session" | "weekly" | "other";
 
 export type ProviderUsageWindow = {
-  /** Stable identity for merging events and de-duping alerts, e.g. "five_hour". */
+  /** Stable identity for merging windows, e.g. "five_hour". */
   readonly id: string;
   readonly group: ProviderUsageWindowGroup;
   /** Popover row label, e.g. "Session (5h)" or "Weekly (Fable)". */
@@ -100,7 +96,7 @@ export type ProviderUsageWindow = {
 
 export type ProviderUsageSnapshot = {
   readonly providerLabel: string;
-  /** Provider account/instance that emitted the contributing activities. */
+  /** Provider account/instance that reported the contributing usage payloads. */
   readonly providerInstanceId: string | null;
   readonly windows: ReadonlyArray<ProviderUsageWindow>;
   readonly status: ProviderUsageStatus;
@@ -121,11 +117,6 @@ function asString(value: unknown): string | null {
 
 function clampPercent(value: number): number {
   return Math.min(100, Math.max(0, value));
-}
-
-/** Providers report utilization either as a 0-1 ratio or a 0-100 percent. */
-function normalizeRatioOrPercent(value: number): number {
-  return clampPercent(value <= 1 ? value * 100 : value);
 }
 
 function statusForPercent(
@@ -161,15 +152,8 @@ function titleCase(value: string): string {
 // ---------------------------------------------------------------------------
 // Claude
 //
-// The Agent SDK emits one `rate_limit_event` per constrained window:
-//   { type: "rate_limit_event", rate_limit_info: {
-//       status: "allowed" | "allowed_warning" | "rejected",
-//       resetsAt: 1784970000,          // camelCase, unix seconds
-//       rateLimitType: "five_hour",
-//       utilization?: number,          // 0-1; absent at low usage (verified live)
-//       surpassedThreshold?: number,   // crossed threshold, not utilization
-//       overageStatus?, isUsingOverage?, ... } }
-// The rateLimitType taxonomy drifts between releases (the SDK type still lists
+// Window ids follow Claude's rateLimitType taxonomy ("five_hour", "seven_day", ...).
+// The taxonomy drifts between releases (the SDK type still lists
 // an Opus/Sonnet split that no longer exists, and a Fable weekly window exists
 // that predates the type), so unknown values are labelled heuristically, never
 // dropped.
@@ -205,59 +189,6 @@ function claudeWindowLabels(rateLimitType: string): { label: string; shortLabel:
   }
   const humanized = titleCase(rateLimitType);
   return { label: humanized, shortLabel: humanized };
-}
-
-function normalizeClaudeRateLimitEvent(payload: Record<string, unknown>): {
-  providerLabel: "Claude";
-  windows: ProviderUsageWindow[];
-  clearedWindowIds: string[];
-} | null {
-  const info = asRecord(payload.rate_limit_info) ?? payload;
-
-  // Tolerate both camelCase (current SDK) and snake_case (older releases).
-  const reportedRateLimitType = asString(info.rateLimitType) ?? asString(info.rate_limit_type);
-  const rateLimitType = reportedRateLimitType ?? "unknown";
-  const status = asString(info.status);
-  const resetsAt = asFiniteNumber(info.resetsAt) ?? asFiniteNumber(info.resets_at);
-  const utilization = asFiniteNumber(info.utilization);
-  const usedPercent = utilization !== null ? normalizeRatioOrPercent(utilization) : null;
-
-  // "allowed" with no number carries no information worth rendering; a
-  // non-allowed status without a number still deserves a (numberless) row.
-  // When the window id is known, retain a tombstone so this newest event clears
-  // an older warning for the same window without fabricating a percentage.
-  if (usedPercent === null && (status === null || status === "allowed")) {
-    if (status === "allowed" && reportedRateLimitType !== null) {
-      return {
-        providerLabel: "Claude",
-        windows: [],
-        clearedWindowIds: [reportedRateLimitType],
-      };
-    }
-    return null;
-  }
-
-  const { label, shortLabel } = claudeWindowLabels(rateLimitType);
-  const reportedStatus: ProviderUsageStatus =
-    status === "rejected" ? "critical" : status === "allowed_warning" ? "warning" : "ok";
-  const windowStatus = maxProviderUsageStatus(statusForPercent(usedPercent), reportedStatus);
-
-  return {
-    providerLabel: "Claude",
-    clearedWindowIds: [],
-    windows: [
-      {
-        id: rateLimitType,
-        group: claudeWindowGroup(rateLimitType),
-        label,
-        shortLabel,
-        usedPercent,
-        resetsAt,
-        status: windowStatus,
-        reportedStatus,
-      },
-    ],
-  };
 }
 
 // ---------------------------------------------------------------------------
@@ -448,7 +379,7 @@ function normalizeClaudeUsageApiPayload(payload: Record<string, unknown>): {
 //
 // The app-server notification is `{ rateLimits: { limitId?, limitName?,
 // primary?, secondary?, rateLimitReachedType?, ... } }`, and the adapter wraps
-// the whole notification once more, so the activity payload can nest one or
+// the whole notification once more, so a gateway usage payload can nest one or
 // two levels deep. Windows are `{ usedPercent, windowDurationMins?, resetsAt? }`
 // (camelCase, validated against the generated protocol schema server-side).
 // The 5h window is often absent — only render windows actually reported.
@@ -580,8 +511,8 @@ function normalizeRateLimitPayload(
   if (!record) return null;
 
   // Two shapes reach here: a server-owned refresh snapshot, which IS the
-  // provider payload, and a thread activity, which wraps that same payload in
-  // `{ rateLimits: <provider event> }`. A payload that names its own `source`
+  // provider payload, and a wrapped gateway usage payload, which nests that
+  // same payload in `{ rateLimits: <provider event> }`. A payload that names its own `source`
   // is already unwrapped — unwrapping it again would hand the Claude branch
   // the inner `rate_limits` object and normalize to null. Codex refresh
   // payloads carry no top-level `source`, so they still unwrap as before.
@@ -593,10 +524,6 @@ function normalizeRateLimitPayload(
     const normalized = normalizeClaudeUsageApiPayload(event);
     return normalized ? { ...normalized, authoritative: true } : null;
   }
-  if (event.rate_limit_info || event.type === "rate_limit_event") {
-    const normalized = normalizeClaudeRateLimitEvent(event);
-    return normalized ? { ...normalized, providerLabel: "Claude" } : null;
-  }
   if (
     event.primary ||
     event.secondary ||
@@ -604,14 +531,6 @@ function normalizeRateLimitPayload(
     asString(event.rateLimitReachedType) !== null
   ) {
     return normalizeCodexRateLimits(event, inheritedCodexIdentity);
-  }
-  if (
-    asString(event.rateLimitType) !== null ||
-    asString(event.rate_limit_type) !== null ||
-    asFiniteNumber(event.utilization) !== null
-  ) {
-    const normalized = normalizeClaudeRateLimitEvent(event);
-    return normalized ? { ...normalized, providerLabel: "Claude" } : null;
   }
   return null;
 }
@@ -671,7 +590,7 @@ type ProviderUsagePayloadSource = {
  *
  * A gateway snapshot (`cliproxyapi.management`) carries a pool of upstream
  * accounts rather than one; here it collapses to the featured account so
- * single-account surfaces (the ring, alerts) keep working — the full pool is
+ * single-account surfaces (the ring) keep working — the full pool is
  * available through `deriveProviderUsageAccountsFromServerSnapshot`. Pass
  * `preferredUpstreamProvider` when the caller knows which upstream serves the
  * thread; see `featuredProviderUsageAccount`.
@@ -683,27 +602,14 @@ export function deriveProviderUsageSnapshotFromServerSnapshot(
   } = {},
 ): ProviderUsageSnapshot | null {
   const accounts = deriveProviderUsageAccountsFromServerSnapshot(snapshot, options);
-  if (accounts !== null) {
-    return (
-      featuredProviderUsageAccount(
-        accounts.accounts,
-        options.preferredUpstreamProvider === undefined
-          ? "claude"
-          : options.preferredUpstreamProvider,
-      )?.usage ?? null
-    );
-  }
-  return deriveProviderUsageSnapshotFromSources(
-    [
-      {
-        payload: snapshot.payload,
-        createdAt: DateTime.formatIso(DateTime.makeUnsafe(snapshot.observedAt)),
-      },
-    ],
-    {
-      ...options,
-      providerInstanceId: snapshot.instanceId,
-    },
+  if (accounts === null) return null;
+  return (
+    featuredProviderUsageAccount(
+      accounts.accounts,
+      options.preferredUpstreamProvider === undefined
+        ? "claude"
+        : options.preferredUpstreamProvider,
+    )?.usage ?? null
   );
 }
 
@@ -841,7 +747,7 @@ export function listProviderUsageAccountsForDisplay(
 }
 
 /**
- * The pooled account a compact single-account surface (ring, alerts) should
+ * The pooled account a compact single-account surface (the ring) should
  * represent: the highest-priority account of `preferredUpstreamProvider` that
  * the gateway can still serve — the one a *new* session's first turn would
  * bind to. An existing session can be spending a different account: the
@@ -1020,28 +926,6 @@ export function presentProviderUsageAccount(account: ProviderUsageAccount): {
     error: account.usage === null ? account.error : null,
     provider: account.provider,
   };
-}
-
-/**
- * Derives the latest usage snapshot from a thread's activity stream.
- *
- * Claude emits one event per window, so the most recent event for each window
- * id is merged into a single snapshot; Codex reports all windows in one event.
- * Windows whose reset time has already passed are dropped rather than shown
- * with a pre-reset percentage.
- */
-export function deriveLatestProviderUsageSnapshot(
-  activities: ReadonlyArray<OrchestrationThreadActivity>,
-  options: DeriveProviderUsageOptions = {},
-): ProviderUsageSnapshot | null {
-  return deriveProviderUsageSnapshotFromSources(
-    activities.flatMap((activity) =>
-      activity?.kind === "account.rate-limits.updated"
-        ? [{ payload: activity.payload, createdAt: activity.createdAt }]
-        : [],
-    ),
-    options,
-  );
 }
 
 function deriveProviderUsageSnapshotFromSources(
@@ -1234,7 +1118,8 @@ export function applyProviderUsageWindowThresholds(
  * provider itself reported is a floor and survives untouched, as does the
  * severity of a window that carries a state but no percentage.
  *
- * Lets a surface honour user thresholds without re-deriving from activities.
+ * Lets a surface honour user thresholds by reapplying them to an existing
+ * snapshot instead of re-normalizing the gateway usage payload.
  */
 export function applyProviderUsageThresholds(
   snapshot: ProviderUsageSnapshot,
@@ -1277,60 +1162,4 @@ export function primaryProviderUsageWindow(
     snapshot.windows[0] ??
     null
   );
-}
-
-// ---------------------------------------------------------------------------
-// Threshold alerts
-// ---------------------------------------------------------------------------
-
-export type ProviderUsageAlert = {
-  readonly key: string;
-  readonly providerLabel: string;
-  readonly window: ProviderUsageWindow;
-};
-
-/**
- * Computes warning notifications, de-duplicated against `firedKeys`. Critical
- * states stay visible in the meter but do not toast: once the limit is reached
- * there is no remaining action for a threshold notification to prompt.
- */
-export function collectProviderUsageAlerts(
-  snapshot: ProviderUsageSnapshot | null,
-  firedKeys: ReadonlySet<string>,
-  alertScope?: string | null,
-): ProviderUsageAlert[] {
-  if (!snapshot) return [];
-
-  const alerts: ProviderUsageAlert[] = [];
-  for (const window of snapshot.windows) {
-    if (
-      window.status === "ok" ||
-      window.reportedStatus === "critical" ||
-      (window.usedPercent !== null && window.usedPercent >= 100)
-    ) {
-      continue;
-    }
-    const key = providerUsageAlertKey(
-      snapshot.providerLabel,
-      window,
-      snapshot.providerInstanceId,
-      alertScope,
-    );
-    if (firedKeys.has(key)) continue;
-    alerts.push({ key, providerLabel: snapshot.providerLabel, window });
-  }
-  return alerts;
-}
-
-export function providerUsageAlertKey(
-  providerLabel: string,
-  window: ProviderUsageWindow,
-  providerInstanceId?: string | null,
-  alertScope?: string | null,
-): string {
-  const providerScope = providerInstanceId
-    ? `${providerLabel}@${providerInstanceId}`
-    : providerLabel;
-  const scope = alertScope ? `${alertScope}:${providerScope}` : providerScope;
-  return `${scope}:${window.id}:warning:${window.resetsAt ?? "unknown"}`;
 }

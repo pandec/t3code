@@ -3,8 +3,6 @@ import { describe, expect, it } from "vite-plus/test";
 import {
   detectComposerTrigger,
   parseComposerArchiveCommand,
-  applyThreadStatusEmoji,
-  buildThreadTitleComposerText,
   formatForkedThreadTitle,
   serializeComposerFileLink,
 } from "./composerTrigger.ts";
@@ -50,22 +48,6 @@ describe("serializeComposerFileLink", () => {
   });
 });
 
-describe("buildThreadTitleComposerText", () => {
-  it("prefills /t3-name with the current title", () => {
-    expect(buildThreadTitleComposerText("t3-name", "  Current title  ")).toBe(
-      "/t3-name Current title",
-    );
-  });
-
-  it("leaves /t3-rename empty for a replacement title", () => {
-    expect(buildThreadTitleComposerText("t3-rename", "Current title")).toBe("/t3-rename ");
-  });
-
-  it("leaves /t3-name empty when the current title is blank", () => {
-    expect(buildThreadTitleComposerText("t3-name", "  ")).toBe("/t3-name ");
-  });
-});
-
 describe("formatForkedThreadTitle", () => {
   it("adds the parenthesized fork marker before an unstyled title", () => {
     expect(formatForkedThreadTitle("Source")).toBe("(🔱) Source");
@@ -84,17 +66,6 @@ describe("formatForkedThreadTitle", () => {
   it("normalizes the legacy fork prefix", () => {
     expect(formatForkedThreadTitle("🔱 Source")).toBe("(🔱) Source");
     expect(formatForkedThreadTitle("💡 🔱 Source")).toBe("💡 (🔱) Source");
-  });
-});
-
-describe("applyThreadStatusEmoji", () => {
-  it("keeps current and legacy fork markers when setting status", () => {
-    expect(applyThreadStatusEmoji("(🔱) Source", "💡")).toBe("💡 (🔱) Source");
-    expect(applyThreadStatusEmoji("🔱 Source", "💡")).toBe("💡 (🔱) Source");
-  });
-
-  it("normalizes a legacy fork marker that follows the replaced status emoji", () => {
-    expect(applyThreadStatusEmoji("💡 🔱 Source", "🎯")).toBe("🎯 (🔱) Source");
   });
 });
 

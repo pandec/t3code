@@ -4,10 +4,10 @@ import {
   ClaudeAI,
   CursorIcon,
   GrokIcon,
-  HermesIcon,
   Icon,
   OpenAI,
   OpenCodeIcon,
+  PiAgentIcon,
   ZaiIcon,
 } from "../Icons";
 
@@ -41,12 +41,6 @@ export const PROVIDER_OPTIONS: Array<{
     pickerSidebarBadge: "new",
   },
   {
-    value: ProviderDriverKind.make("hermes"),
-    label: "Hermes",
-    available: true,
-    pickerSidebarBadge: "new",
-  },
-  {
     value: ProviderDriverKind.make("antigravity"),
     label: "Antigravity",
     available: true,
@@ -60,8 +54,8 @@ export const PROVIDER_ICON_BY_PROVIDER: Partial<Record<ProviderDriverKind, Icon>
   [ProviderDriverKind.make("opencode")]: OpenCodeIcon,
   [ProviderDriverKind.make("cursor")]: CursorIcon,
   [ProviderDriverKind.make("grok")]: GrokIcon,
-  [ProviderDriverKind.make("hermes")]: HermesIcon,
   [ProviderDriverKind.make("antigravity")]: AntigravityIcon,
+  [ProviderDriverKind.make("pi")]: PiAgentIcon,
 };
 
 /**

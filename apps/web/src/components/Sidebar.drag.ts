@@ -99,6 +99,8 @@ export function createSidebarCollisionDetection(
  * A zero scaleY marks rows/markers to hide while retaining their measured nodes. */
 export function createSidebarSortingStrategy(input: {
   items: readonly SidebarListItem[];
+  /** Suspend the reorder preview while the thread is dragged out as context. */
+  enabled?: boolean;
   settledOrder: readonly string[];
   /** Time-ordered inbox (Working beta): where the lifted row would land. */
   activeOrder?: readonly string[];
@@ -112,6 +114,7 @@ export function createSidebarSortingStrategy(input: {
    * zero-height boundaries reserve nothing until pickup. */
   boundaryLabelHeight?: number;
 }): SortingStrategy {
+  if (input.enabled === false) return () => stationary;
   const { items } = input;
   const indices = new Map(items.map((item, index) => [sidebarListItemId(item), index]));
   let previous: Pick<Layout, "rects" | "activeIndex" | "overIndex"> | undefined;
@@ -162,16 +165,9 @@ export function createSidebarSortingStrategy(input: {
     const ranks = new Map(order.map((key, index) => [key, index]));
     const rank = ranks.get(active.key) ?? Number.POSITIVE_INFINITY;
     const index = group.findIndex(
-      (item) =>
-        (target.section !== "active" ||
-          (item.customGroupId ?? null) === (target.customGroupId ?? null)) &&
-        (ranks.get(item.key) ?? Number.POSITIVE_INFINITY) > rank,
+      (item) => (ranks.get(item.key) ?? Number.POSITIVE_INFINITY) > rank,
     );
-    group.splice(index < 0 ? group.length : index, 0, {
-      ...active,
-      section: target.section,
-      customGroupId: target.customGroupId,
-    });
+    group.splice(index < 0 ? group.length : index, 0, { ...active, section: target.section });
     const settledOrder = (
       input.settledOrder.length > 0 ? input.settledOrder : groups.settled.map((item) => item.key)
     ).filter((key) => key !== active.key || target.section === "settled");
@@ -192,27 +188,7 @@ export function createSidebarSortingStrategy(input: {
     marker("pinned-header");
     projected.push(...groups.pinned);
     marker("pinned-divider");
-    if (
-      items.some(
-        (item) =>
-          item.kind === "marker" &&
-          (item.marker === "active-header" || item.marker.startsWith("custom-group:")),
-      )
-    ) {
-      for (const item of items) {
-        if (
-          item.kind !== "marker" ||
-          (item.marker !== "active-header" && !item.marker.startsWith("custom-group:"))
-        )
-          continue;
-        marker(item.marker);
-        const id =
-          item.marker === "active-header" ? null : item.marker.slice("custom-group:".length);
-        const rows = groups.active.filter((row) => (row.customGroupId ?? null) === id);
-        if (rows.length) projected.push(...rows);
-        else if (id === null) marker("active-placeholder");
-      }
-    } else section("active");
+    section("active");
     if (items.some((item) => item.kind === "marker" && item.marker === "working-header")) {
       marker("working-header");
       projected.push(...groups.working);

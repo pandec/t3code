@@ -241,7 +241,7 @@ diff --git a/ios/Shared/MenuViewImplementation.swift b/ios/Shared/MenuViewImplem
  
      func setup () {
          let menu = UIMenu(title: _title,
-@@ -86,8 +127,98 @@
+@@ -86,8 +127,102 @@
              }
          }
  
@@ -328,19 +328,23 @@ diff --git a/ios/Shared/MenuViewImplementation.swift b/ios/Shared/MenuViewImplem
 +            if let existing = longPressInteraction {
 +                existing.view?.removeInteraction(existing)
 +            }
-+            let interaction = UIContextMenuInteraction(delegate: self)
++            // UIControl's built-in interaction presents a compact menu that
++            // preserves the keyboard; a separate view interaction presents a
++            // rich context menu and temporarily hides it.
++            guard let interaction = self.contextMenuInteraction else { return }
 +            host.addInteraction(interaction)
 +            longPressInteraction = interaction
 +            return
 +        }
 +        if let existing = longPressInteraction {
 +            existing.view?.removeInteraction(existing)
++            self.addInteraction(existing)
 +            longPressInteraction = nil
 +        }
      }
  
      public override func reactSetFrame(_ frame: CGRect) {
-@@ -124,4 +255,8 @@
+@@ -124,4 +259,8 @@
      @objc func sendMenuOpen() {
          // NO-OP (should be overriden by parent)
      }

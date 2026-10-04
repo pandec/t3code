@@ -15,7 +15,7 @@ import {
 } from "./baseSchemas.ts";
 import { ProviderInstanceId, ProviderDriverKind } from "./providerInstance.ts";
 import { ProviderUsageLimitsUpdate } from "./providerUsageLimits.ts";
-import { ProviderApprovalOption } from "./orchestration.ts";
+import { ProviderApprovalOption } from "./providerPolicy.ts";
 
 const TrimmedNonEmptyStringSchema = TrimmedNonEmptyString;
 const UnknownRecordSchema = Schema.Record(Schema.String, Schema.Unknown);
@@ -152,7 +152,6 @@ export type CanonicalRequestType = typeof CanonicalRequestType.Type;
 const SessionStartedType = Schema.Literal("session.started");
 const SessionConfiguredType = Schema.Literal("session.configured");
 const SessionStateChangedType = Schema.Literal("session.state.changed");
-const SessionCwdChangedType = Schema.Literal("session.cwd.changed");
 const SessionExitedType = Schema.Literal("session.exited");
 const ThreadStartedType = Schema.Literal("thread.started");
 const ThreadStateChangedType = Schema.Literal("thread.state.changed");
@@ -235,22 +234,10 @@ const SessionStateChangedPayload = Schema.Struct({
 });
 export type SessionStateChangedPayload = typeof SessionStateChangedPayload.Type;
 
-/**
- * The provider runtime reported that the live session changed its working
- * directory (for example, the agent entered or left a worktree). `cwd` is the
- * directory the session is running in now.
- */
-const SessionCwdChangedPayload = Schema.Struct({
-  cwd: TrimmedNonEmptyStringSchema,
-  sessionGenerationId: Schema.optional(TrimmedNonEmptyStringSchema),
-});
-export type SessionCwdChangedPayload = typeof SessionCwdChangedPayload.Type;
-
 const SessionExitedPayload = Schema.Struct({
   reason: Schema.optional(TrimmedNonEmptyStringSchema),
   recoverable: Schema.optional(Schema.Boolean),
   exitKind: Schema.optional(RuntimeSessionExitKind),
-  sessionGenerationId: Schema.optional(TrimmedNonEmptyStringSchema),
 });
 export type SessionExitedPayload = typeof SessionExitedPayload.Type;
 
@@ -290,6 +277,12 @@ export const ThreadTokenUsageSnapshot = Schema.Struct({
   durationMs: Schema.optional(NonNegativeInt),
   compactsAutomatically: Schema.optional(Schema.Boolean),
   autoCompactThreshold: Schema.optional(PositiveInt),
+  cost: Schema.optional(
+    Schema.Struct({
+      amount: Schema.Number.check(Schema.isFinite()),
+      currency: TrimmedNonEmptyStringSchema.check(Schema.isMaxLength(32)),
+    }),
+  ),
 });
 export type ThreadTokenUsageSnapshot = typeof ThreadTokenUsageSnapshot.Type;
 
@@ -360,8 +353,6 @@ export type TurnTokenUsage = typeof TurnTokenUsage.Type;
 
 const TurnCompletedPayload = Schema.Struct({
   state: RuntimeTurnState,
-  hasPendingWork: Schema.optional(Schema.Boolean),
-  sessionGenerationId: Schema.optional(TrimmedNonEmptyStringSchema),
   stopReason: Schema.optional(Schema.NullOr(TrimmedNonEmptyStringSchema)),
   usage: Schema.optional(Schema.Unknown),
   modelUsage: Schema.optional(UnknownRecordSchema),
@@ -373,7 +364,6 @@ export type TurnCompletedPayload = typeof TurnCompletedPayload.Type;
 
 const TurnAbortedPayload = Schema.Struct({
   reason: TrimmedNonEmptyStringSchema,
-  sessionGenerationId: Schema.optional(TrimmedNonEmptyStringSchema),
   tokenUsage: Schema.optional(TurnTokenUsage),
 });
 export type TurnAbortedPayload = typeof TurnAbortedPayload.Type;
@@ -551,43 +541,6 @@ export const TaskRunHandles = Schema.Struct({
 export type TaskRunHandles = typeof TaskRunHandles.Type;
 
 /**
- * Watch-loop task types: Monitor-tool tasks plus background shells (a shell
- * that outlives its turn is in practice a watch loop). Canonical single copy —
- * the server liveness registry, ingestion's agentKind stamp, and the client
- * fold's legacy fallback all classify with these sets.
- */
-export const MONITOR_TASK_TYPES: ReadonlySet<string> = new Set([
-  "monitor",
-  "monitor_mcp",
-  "local_bash",
-  "shell",
-]);
-/** Task types that are neither agents nor watch loops (plan-mode bookkeeping). */
-export const INERT_TASK_TYPES: ReadonlySet<string> = new Set(["plan", "dream"]);
-
-/**
- * Agent-vs-background classification, stamped by ingestion as `agentKind` so
- * persisted rows are self-describing. A deliberate denylist: the SDK's
- * agent-flavored type names drift (subagent, local_agent, local_workflow, …)
- * and an allowlist silently dropped real subagents when "local_agent"
- * appeared. A task launched from inside a subagent (agentId set) is
- * agent-internal background work UNLESS it is itself agent-flavored — a
- * nested agent can outlive its parent and stays in the roster.
- */
-export function classifyTaskAgentKind(input: {
-  readonly taskType?: string | undefined;
-  readonly agentId?: string | undefined;
-}): "agent" | "background" {
-  const { taskType, agentId } = input;
-  const nonAgentType =
-    taskType !== undefined && (MONITOR_TASK_TYPES.has(taskType) || INERT_TASK_TYPES.has(taskType));
-  if (agentId !== undefined && agentId.trim().length > 0) {
-    return taskType === undefined || nonAgentType ? "background" : "agent";
-  }
-  return nonAgentType ? "background" : "agent";
-}
-
-/**
  * Optional agent-identity linkage carried on every task lifecycle payload.
  * Repeated on progress and terminal rows (not just start) so client folds can
  * reconstruct an agent even when its start row aged out of activity retention.
@@ -598,7 +551,7 @@ const taskAgentLinkageFields = {
    * every row so folds can classify without the start row. */
   taskType: Schema.optional(TrimmedNonEmptyStringSchema),
   /**
-   * Server-stamped classification (classifyTaskAgentKind at ingestion).
+   * Server-stamped classification, set at ingestion.
    * Clients trust this stamp outright; rows without it (legacy, pre-stamp)
    * fall back to client-side heuristics.
    */
@@ -752,18 +705,9 @@ export type AccountUpdatedPayload = typeof AccountUpdatedPayload.Type;
 /**
  * Adapters normalise their native rate-limit payload at the boundary so the
  * consumer that folds it into the provider snapshot never sees driver shapes.
- *
- * Upstream requires `limits`. The fork widens it on purpose: the raw provider
- * payload rides beside the typed windows because gateway pool attribution and
- * rate-limit failover read the native `rate_limit_info` verdict, which typed
- * utilization cannot express. Either half may be absent (typed normalisation
- * can fail on an unfamiliar payload; a raw-only event must still reach
- * failover), so consumers read only the half they own and skip `undefined`.
- * Keep both optional; making `limits` required would drop raw-only events.
  */
 const AccountRateLimitsUpdatedPayload = Schema.Struct({
-  limits: Schema.optional(ProviderUsageLimitsUpdate),
-  rateLimits: Schema.optional(Schema.Unknown),
+  limits: ProviderUsageLimitsUpdate,
 });
 export type AccountRateLimitsUpdatedPayload = typeof AccountRateLimitsUpdatedPayload.Type;
 
@@ -837,7 +781,6 @@ const RuntimeErrorPayload = Schema.Struct({
   code: Schema.optional(TrimmedNonEmptyStringSchema),
   class: Schema.optional(RuntimeErrorClass),
   detail: Schema.optional(Schema.Unknown),
-  sessionGenerationId: Schema.optional(TrimmedNonEmptyStringSchema),
 });
 export type RuntimeErrorPayload = typeof RuntimeErrorPayload.Type;
 
@@ -863,14 +806,6 @@ const ProviderRuntimeSessionStateChangedEvent = Schema.Struct({
 });
 export type ProviderRuntimeSessionStateChangedEvent =
   typeof ProviderRuntimeSessionStateChangedEvent.Type;
-
-const ProviderRuntimeSessionCwdChangedEvent = Schema.Struct({
-  ...ProviderRuntimeEventBase.fields,
-  type: SessionCwdChangedType,
-  payload: SessionCwdChangedPayload,
-});
-export type ProviderRuntimeSessionCwdChangedEvent =
-  typeof ProviderRuntimeSessionCwdChangedEvent.Type;
 
 const ProviderRuntimeSessionExitedEvent = Schema.Struct({
   ...ProviderRuntimeEventBase.fields,
@@ -1213,7 +1148,6 @@ export const ProviderRuntimeEventV2 = Schema.Union([
   ProviderRuntimeSessionStartedEvent,
   ProviderRuntimeSessionConfiguredEvent,
   ProviderRuntimeSessionStateChangedEvent,
-  ProviderRuntimeSessionCwdChangedEvent,
   ProviderRuntimeSessionExitedEvent,
   ProviderRuntimeThreadStartedEvent,
   ProviderRuntimeThreadStateChangedEvent,

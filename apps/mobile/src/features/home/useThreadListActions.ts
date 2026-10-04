@@ -1,19 +1,6 @@
-import { mergeThreadGroups, threadGroupId } from "@t3tools/shared/threadGroups";
-import {
-  unScopeThreadShell,
-  type EnvironmentThreadShell,
-} from "@t3tools/client-runtime/state/shell";
-import { canForkConversation } from "@t3tools/client-runtime/state/thread-fork";
-import { threadLifecycleRevisionRequiresDispatch } from "@t3tools/client-runtime/state/thread-lifecycle-outbox-model";
-import {
-  canSnooze,
-  canSnoozeUntilDone,
-  effectiveSnoozed,
-  type SnoozePreset,
-} from "@t3tools/client-runtime/state/thread-settled";
-import { CommandId } from "@t3tools/contracts";
-import { useNavigation } from "@react-navigation/native";
 import type { ThreadMoveDestination } from "../threads/threadOrder";
+import type { EnvironmentThreadShell } from "@t3tools/client-runtime/state/shell";
+import { canSnooze, effectiveSnoozed } from "@t3tools/client-runtime/state/thread-settled";
 import * as Cause from "effect/Cause";
 import * as Haptics from "expo-haptics";
 import { useCallback, useRef } from "react";
@@ -22,20 +9,14 @@ import { Alert, Platform } from "react-native";
 import { withThreadDismissal } from "./thread-dismissal";
 import { showConfirmDialog, showTextInputDialog } from "../../components/ConfirmDialogHost";
 import { scopedThreadKey } from "../../lib/scopedEntities";
-import { uuidv4 } from "../../lib/uuid";
 import { refreshArchivedThreadsForEnvironment } from "../archive/useArchivedThreadSnapshots";
 import { pinOrderKeyBetween } from "@t3tools/client-runtime/state/thread-sort";
 import { appAtomRegistry } from "../../state/atom-registry";
 import { pauseListeningForThread, stopListeningForThread } from "../../state/listeningPlayer";
 import { environmentServerConfigsAtom } from "../../state/server";
-import {
-  enqueueThreadLifecycleIntent,
-  threadLifecycleOutboxManager,
-} from "../../state/thread-lifecycle-outbox";
 import { environmentThreadShells, threadEnvironment } from "../../state/threads";
 import { queuedThreadKeysAtom } from "../../state/use-thread-outbox";
 import { useAtomCommand } from "../../state/use-atom-command";
-import { useRemoteConnectionStatus } from "../../state/use-remote-environment-registry";
 import {
   beginPendingThreadOrder,
   getPendingThreadOrder,
@@ -47,6 +28,7 @@ import {
   threadDropLifecycle,
 } from "../threads/threadOrder";
 import { getThreadListV2OrderedSection } from "../threads/threadListV2";
+import { threadCanArchive } from "./threadArchive";
 import { resolveThreadTitleRename } from "../threads/thread-title-rename";
 
 /** Version skew: never send settle/unsettle to a server that predates them
@@ -55,15 +37,6 @@ function environmentSupportsSettlement(environmentId: EnvironmentThreadShell["en
   return (
     appAtomRegistry.get(environmentServerConfigsAtom).get(environmentId)?.environment.capabilities
       .threadSettlement === true
-  );
-}
-
-function environmentSupportsSnoozeUntilDone(
-  environmentId: EnvironmentThreadShell["environmentId"],
-) {
-  return (
-    appAtomRegistry.get(environmentServerConfigsAtom).get(environmentId)?.environment.capabilities
-      .threadSnoozeUntilDone === true
   );
 }
 
@@ -136,9 +109,8 @@ function actionFailureTitle(action: ThreadListAction): string {
   return "Could not delete thread";
 }
 
-/** Reports whether the action was dispatched and succeeded. */
+/** Resolves to true iff the action was dispatched and succeeded. */
 function useThreadActionExecutor(
-  offlineArchiveEnabled: boolean,
   onCompleted?: (action: ThreadListAction, thread: EnvironmentThreadShell) => void,
 ) {
   const archiveMutation = useAtomCommand(threadEnvironment.archive, { reportFailure: false });
@@ -146,7 +118,6 @@ function useThreadActionExecutor(
   const deleteMutation = useAtomCommand(threadEnvironment.delete, { reportFailure: false });
   const settleMutation = useAtomCommand(threadEnvironment.settle, { reportFailure: false });
   const unsettleMutation = useAtomCommand(threadEnvironment.unsettle, { reportFailure: false });
-  const { connectedEnvironments } = useRemoteConnectionStatus();
   const inFlightThreadKeys = useRef(new Set<string>());
 
   const executeAction = useCallback(
@@ -171,69 +142,13 @@ function useThreadActionExecutor(
         }
         // Archive keeps its original, narrower guard: never interrupt a
         // thread mid-turn.
-        if (
-          action === "archive" &&
-          (thread.session?.status === "starting" ||
-            (thread.session?.status === "running" && thread.session.activeTurnId != null))
-        ) {
+        if (action === "archive" && !threadCanArchive(thread.runtime)) {
           Alert.alert(
             actionFailureTitle(action),
             "This thread is working. Interrupt it first, then try again.",
           );
           return false;
         }
-
-        const existingIntent = appAtomRegistry.get(
-          threadLifecycleOutboxManager.intentsByThreadKeyAtom,
-        )[key];
-        const environmentConnected = connectedEnvironments.some(
-          (environment) =>
-            environment.environmentId === thread.environmentId &&
-            environment.connectionState === "connected",
-        );
-        const desiredArchived = action === "archive";
-        const shouldQueueLifecycleIntent =
-          (action === "archive" && !environmentConnected && offlineArchiveEnabled) ||
-          (action === "unarchive" && existingIntent !== undefined);
-        if (shouldQueueLifecycleIntent) {
-          if (existingIntent?.desiredArchived === desiredArchived) return true;
-          const threadSnapshot = unScopeThreadShell(thread);
-          try {
-            await withThreadDismissal(
-              key,
-              async () => {
-                await enqueueThreadLifecycleIntent({
-                  environmentId: thread.environmentId,
-                  threadId: thread.id,
-                  desiredArchived,
-                  requiresDispatch: threadLifecycleRevisionRequiresDispatch(existingIntent),
-                  dispatchAttempted: false,
-                  commandId: CommandId.make(uuidv4()),
-                  createdAt: new Date().toISOString(),
-                  baselineArchivedAt: existingIntent?.baselineArchivedAt ?? thread.archivedAt,
-                  thread: existingIntent?.thread ?? threadSnapshot,
-                });
-                return true;
-              },
-              (result) => result,
-            );
-          } catch (error) {
-            Alert.alert(
-              actionFailureTitle(action),
-              error instanceof Error && error.message.trim().length > 0
-                ? error.message
-                : `The thread could not be ${ACTION_VERBS[action]}.`,
-            );
-            return false;
-          }
-          // The queued-offline archive hides the row just like a direct one.
-          if (action === "archive") {
-            pauseListeningForThread(thread.environmentId, thread.id);
-          }
-          onCompleted?.(action, thread);
-          return true;
-        }
-
         const result = await withThreadDismissal(
           key,
           async () =>
@@ -284,9 +199,7 @@ function useThreadActionExecutor(
     },
     [
       archiveMutation,
-      connectedEnvironments,
       deleteMutation,
-      offlineArchiveEnabled,
       onCompleted,
       settleMutation,
       unarchiveMutation,
@@ -336,19 +249,16 @@ function useConfirmDeleteThread(
   );
 }
 
-export function useThreadListActions(options: {
-  readonly offlineArchiveEnabled: boolean;
-  readonly selectedThreadKey?: string | null;
-  readonly onSelectedThreadRemoved?: () => void;
-}): {
+export function useThreadListActions(
+  options: {
+    readonly selectedThreadKey?: string | null;
+    readonly onSelectedThreadRemoved?: () => void;
+  } = {},
+): {
   readonly archiveThread: (thread: EnvironmentThreadShell) => void;
-  readonly forkThread: (thread: EnvironmentThreadShell) => void;
   readonly confirmDeleteThread: (thread: EnvironmentThreadShell) => void;
   readonly settleThread: (thread: EnvironmentThreadShell) => Promise<boolean>;
-  readonly snoozeThread: (
-    thread: EnvironmentThreadShell,
-    preset: Pick<SnoozePreset, "snoozedUntil" | "untilDone">,
-  ) => Promise<boolean>;
+  readonly snoozeThread: (thread: EnvironmentThreadShell, snoozedUntil: string) => Promise<boolean>;
   readonly unsnoozeThread: (thread: EnvironmentThreadShell) => Promise<boolean>;
   readonly unsettleThread: (thread: EnvironmentThreadShell) => Promise<boolean>;
   readonly pinThread: (thread: EnvironmentThreadShell) => Promise<boolean>;
@@ -365,10 +275,7 @@ export function useThreadListActions(options: {
   readonly renameThread: (thread: EnvironmentThreadShell) => void;
   readonly regenerateThreadTitle: (thread: EnvironmentThreadShell) => Promise<boolean>;
 } {
-  const executeAction = useThreadActionExecutor(options.offlineArchiveEnabled);
-  const navigation = useNavigation();
-  const forkMutation = useAtomCommand(threadEnvironment.fork, { reportFailure: false });
-  const forkInFlightThreadKeys = useRef(new Set<string>());
+  const executeAction = useThreadActionExecutor();
   const snoozeMutation = useAtomCommand(threadEnvironment.snooze, { reportFailure: false });
   const unsnoozeMutation = useAtomCommand(threadEnvironment.unsnooze, { reportFailure: false });
   const pinMutation = useAtomCommand(threadEnvironment.pin, { reportFailure: false });
@@ -398,64 +305,12 @@ export function useThreadListActions(options: {
     },
     [executeAction, handleSelectedThreadRemoved],
   );
-  // Forking replays the provider conversation into a new thread and opens it,
-  // matching the thread screen's fork button.
-  const forkThread = useCallback(
-    (thread: EnvironmentThreadShell) => {
-      const key = scopedThreadKey(thread.environmentId, thread.id);
-      if (forkInFlightThreadKeys.current.has(key)) return;
-      if (!canForkConversation(thread)) {
-        Alert.alert(
-          "Could not fork conversation",
-          "This thread cannot be forked right now. Wait for its turn to finish, or use a Codex or Claude thread.",
-        );
-        return;
-      }
-      forkInFlightThreadKeys.current.add(key);
-      selectionHaptic();
-      void (async () => {
-        try {
-          const result = await forkMutation({
-            environmentId: thread.environmentId,
-            input: { sourceThreadId: thread.id },
-          });
-          if (result._tag === "Failure") {
-            const error = Cause.squash(result.cause);
-            Alert.alert(
-              "Could not fork conversation",
-              error instanceof Error && error.message.trim().length > 0
-                ? error.message
-                : "The fork could not be created.",
-            );
-            return;
-          }
-          navigation.navigate("Thread", {
-            environmentId: String(thread.environmentId),
-            threadId: String(result.value.threadId),
-          });
-        } catch {
-          // forkMutation resolves to a Result even on defects, so only the
-          // navigate above can land here: the fork exists but did not open.
-          Alert.alert(
-            "Could not open the fork",
-            "The conversation was forked, but the copy could not be opened. It is in the thread list.",
-          );
-        } finally {
-          forkInFlightThreadKeys.current.delete(key);
-        }
-      })();
-    },
-    [forkMutation, navigation],
-  );
   const settleThread = useCallback(
-    async (thread: EnvironmentThreadShell) => executeAction("settle", thread),
+    async (thread: EnvironmentThreadShell) => (await executeAction("settle", thread)) === true,
     [executeAction],
   );
   const snoozeThread = useCallback(
-    async (
-      thread: EnvironmentThreadShell,
-      preset: Pick<SnoozePreset, "snoozedUntil" | "untilDone">,
-    ) => {
+    async (thread: EnvironmentThreadShell, snoozedUntil: string) => {
       const key = scopedThreadKey(thread.environmentId, thread.id);
       if (snoozeInFlightThreadKeys.current.has(key)) {
         return false;
@@ -467,18 +322,6 @@ export function useThreadListActions(options: {
             "Could not snooze thread",
             "This environment's server does not support snoozing yet. Update the server to use Snooze.",
           );
-          return false;
-        }
-        const untilDone = preset.untilDone === true;
-        if (untilDone && !environmentSupportsSnoozeUntilDone(thread.environmentId)) {
-          Alert.alert(
-            "Could not snooze thread",
-            "This environment's server does not support snoozing until the turn ends. Update the server to use it.",
-          );
-          return false;
-        }
-        if (untilDone && !canSnoozeUntilDone(thread)) {
-          Alert.alert("Could not snooze thread", "This thread is not running a turn right now.");
           return false;
         }
         if (!canSnooze(thread, { now: new Date().toISOString() })) {
@@ -499,8 +342,7 @@ export function useThreadListActions(options: {
               environmentId: thread.environmentId,
               input: {
                 threadId: thread.id,
-                snoozedUntil: preset.snoozedUntil,
-                ...(untilDone ? { untilDone: true } : {}),
+                snoozedUntil,
               },
             }),
           (result) => result._tag === "Success",
@@ -566,7 +408,7 @@ export function useThreadListActions(options: {
     [unsnoozeMutation],
   );
   const unsettleThread = useCallback(
-    async (thread: EnvironmentThreadShell) => executeAction("unsettle", thread),
+    async (thread: EnvironmentThreadShell) => (await executeAction("unsettle", thread)) === true,
     [executeAction],
   );
   const pinThread = useCallback(
@@ -796,19 +638,6 @@ export function useThreadListActions(options: {
         );
         return false;
       }
-      const groups = mergeThreadGroups(
-        ...[...configs.values()].map((config) => config.settings.threadGroups),
-      );
-      const customGroupId =
-        typeof direction === "object"
-          ? (direction.customGroupId ?? null)
-          : threadGroupId(thread, groups);
-      if (
-        section === "active" &&
-        customGroupId !== threadGroupId(thread, groups) &&
-        configs.get(thread.environmentId)?.environment.capabilities.threadCustomGroups !== true
-      )
-        return false;
       const ordered = getThreadListV2OrderedSection({
         threads: shells,
         section,
@@ -825,19 +654,15 @@ export function useThreadListActions(options: {
           ),
         ),
       });
-      const groupOrdered = ordered.filter(
-        (row) => section !== "active" || threadGroupId(row, groups) === customGroupId,
-      );
       const assignments = createThreadMovePlanner({
-        groups,
         allThreads: shells,
-        ordered: groupOrdered,
+        ordered,
         section,
         reorderableEnvironmentIds: new Set([...configs.keys()].filter(supportsReorder)),
       })(scopedThreadKey(thread.environmentId, thread.id), direction);
       if (assignments === null) return false;
       const lifecycle = threadDropLifecycle(thread, section, new Date().toISOString());
-      const crossSection = !groupOrdered.some(
+      const crossSection = !ordered.some(
         (row) => row.id === thread.id && row.environmentId === thread.environmentId,
       );
       if (
@@ -859,9 +684,8 @@ export function useThreadListActions(options: {
         ? null
         : beginPendingThreadOrder(
             createPendingThreadOrder({
-              ...(section === "active" ? { customGroupId } : {}),
               section,
-              ordered: groupOrdered,
+              ordered,
               movedId: scopedThreadKey(thread.environmentId, thread.id),
               direction,
               assignments,
@@ -870,16 +694,6 @@ export function useThreadListActions(options: {
       let succeeded = false;
       const reorder = section === "pinned" ? reorderPinnedMutation : reorderActiveMutation;
       try {
-        if (section === "active" && (thread.customGroupId ?? null) !== customGroupId) {
-          const result = await updateThreadMetadata({
-            environmentId: thread.environmentId,
-            input: { threadId: thread.id, customGroupId },
-          });
-          if (result._tag === "Failure") {
-            Alert.alert("Could not move thread to group", String(Cause.squash(result.cause)));
-            return false;
-          }
-        }
         if (crossSection) {
           if (section === "pinned") {
             const orderKey = assignments.find(
@@ -935,7 +749,6 @@ export function useThreadListActions(options: {
       }
     },
     [
-      updateThreadMetadata,
       settleThread,
       reorderActiveMutation,
       reorderPinnedMutation,
@@ -950,7 +763,6 @@ export function useThreadListActions(options: {
 
   return {
     archiveThread,
-    forkThread,
     confirmDeleteThread,
     settleThread,
     snoozeThread,
@@ -977,7 +789,7 @@ export function useArchivedThreadListActions(
     },
     [onCompleted],
   );
-  const executeAction = useThreadActionExecutor(true, handleCompleted);
+  const executeAction = useThreadActionExecutor(handleCompleted);
   const unarchiveThread = useCallback(
     (thread: EnvironmentThreadShell) => {
       void executeAction("unarchive", thread);
