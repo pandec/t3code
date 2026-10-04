@@ -2550,7 +2550,7 @@ function AssistantTimelineRow({ row }: { row: Extract<TimelineRow, { kind: "mess
           onOpenTurnDiff={ctx.onOpenTurnDiff}
         />
         {row.showAssistantMeta ? (
-          <AssistantMessageMeta
+          <AssistantMessageMetaWithArtifacts
             className="mt-1.5"
             projectedItem={row.projectedItem}
             message={row.message}
@@ -2616,7 +2616,7 @@ function AssistantMetaTimelineRow({
 }) {
   return (
     <div className="px-1">
-      <AssistantMessageMeta
+      <AssistantMessageMetaWithArtifacts
         className="mt-0.5"
         projectedItem={row.projectedItem}
         message={row.message}
@@ -2635,6 +2635,7 @@ function AssistantMessageMeta({
   showCopyButton,
   copyStreaming,
   alwaysVisible = false,
+  children,
 }: {
   className?: string;
   projectedItem?: Extract<TimelineRow, { kind: "message" }>["projectedItem"];
@@ -2642,8 +2643,52 @@ function AssistantMessageMeta({
   showCopyButton: boolean;
   copyStreaming: boolean;
   alwaysVisible?: boolean;
+  children?: ReactNode;
 }) {
   const ctx = use(TimelineRowCtx);
+
+  return (
+    <div
+      className={cn(
+        "flex items-center gap-2 text-xs tabular-nums transition-opacity duration-200",
+        alwaysVisible
+          ? "opacity-100"
+          : "opacity-0 pointer-coarse:opacity-100 focus-within:opacity-100 group-hover/assistant:opacity-100",
+        className,
+      )}
+    >
+      {projectedItem?.item.type === "assistant_message" ? (
+        <AssistantForkButton projectedItem={projectedItem} />
+      ) : null}
+      {projectedItem && projectedItem.item.status !== "completed" ? (
+        <span className="rounded-full border border-border/70 px-1.5 py-0.5 font-mono text-3xs text-muted-foreground">
+          {projectedItem.item.status}
+        </span>
+      ) : null}
+      <AssistantCopyButton
+        message={message}
+        showCopyButton={showCopyButton}
+        streaming={copyStreaming}
+      />
+      {children}
+      {!message.streaming && (
+        <Tooltip>
+          <TooltipTrigger render={<p className="text-muted-foreground text-xs tabular-nums" />}>
+            {formatDayAwareTimestamp(message.updatedAt, ctx.timestampFormat)}
+          </TooltipTrigger>
+          <TooltipPopup>
+            {formatChatTimestampTooltip(message.updatedAt, ctx.timestampFormat)}
+          </TooltipPopup>
+        </Tooltip>
+      )}
+    </div>
+  );
+}
+
+/** `AssistantMessageMeta` with the message's summary and listening controls and panels. */
+function AssistantMessageMetaWithArtifacts(props: Parameters<typeof AssistantMessageMeta>[0]) {
+  const ctx = use(TimelineRowCtx);
+  const { message } = props;
   const summary = useAssistantMessageSummary({
     environmentId: ctx.activeThreadEnvironmentId,
     threadId: ctx.threadRef?.threadId ?? null,
@@ -2665,41 +2710,15 @@ function AssistantMessageMeta({
 
   return (
     <>
-      <div
-        className={cn(
-          "flex items-center gap-2 text-xs tabular-nums transition-opacity duration-200",
-          alwaysVisible || summary.expanded || speech.expanded || speech.preparing
-            ? "opacity-100"
-            : "opacity-0 pointer-coarse:opacity-100 focus-within:opacity-100 group-hover/assistant:opacity-100",
-          className,
-        )}
+      <AssistantMessageMeta
+        {...props}
+        alwaysVisible={
+          props.alwaysVisible || summary.expanded || speech.expanded || speech.preparing
+        }
       >
-        {projectedItem?.item.type === "assistant_message" ? (
-          <AssistantForkButton projectedItem={projectedItem} />
-        ) : null}
-        {projectedItem && projectedItem.item.status !== "completed" ? (
-          <span className="rounded-full border border-border/70 px-1.5 py-0.5 font-mono text-3xs text-muted-foreground">
-            {projectedItem.item.status}
-          </span>
-        ) : null}
-        <AssistantCopyButton
-          message={message}
-          showCopyButton={showCopyButton}
-          streaming={copyStreaming}
-        />
         <AssistantMessageSummaryButton state={summary} />
         <AssistantMessageSpeechButton state={speech} />
-        {!message.streaming && (
-          <Tooltip>
-            <TooltipTrigger render={<p className="text-muted-foreground text-xs tabular-nums" />}>
-              {formatDayAwareTimestamp(message.updatedAt, ctx.timestampFormat)}
-            </TooltipTrigger>
-            <TooltipPopup>
-              {formatChatTimestampTooltip(message.updatedAt, ctx.timestampFormat)}
-            </TooltipPopup>
-          </Tooltip>
-        )}
-      </div>
+      </AssistantMessageMeta>
       {summary.expanded && summary.summary !== null ? (
         <AssistantMessageSummaryPanel>
           <ChatMarkdown

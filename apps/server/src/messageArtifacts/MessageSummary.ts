@@ -202,7 +202,7 @@ export const make = Effect.gen(function* () {
       return yield* new MessageSummaryError({ reason: "message_unavailable" });
     }
     if (Option.isSome(messageSpeech)) {
-      yield* messageSpeech.value.refreshThread(ThreadId.make(message.threadId));
+      yield* messageSpeech.value.refreshThread(ThreadId.make(message.threadId), request.messageId);
     }
 
     return {

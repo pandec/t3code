@@ -1,16 +1,26 @@
-import { ModelSelection, type MessageSummaryThreadEntry, type ThreadId } from "@t3tools/contracts";
+import {
+  type MessageId,
+  ModelSelection,
+  type MessageSummaryThreadEntry,
+  type ThreadId,
+} from "@t3tools/contracts";
 import * as Effect from "effect/Effect";
 import * as Schema from "effect/Schema";
 import * as SqlClient from "effect/unstable/sql/SqlClient";
 
 import { MESSAGE_SUMMARY_RECIPE_HASH, messageArtifactTextHash } from "./identity.ts";
-import { type MessageArtifactSource, isUsableArtifactSource } from "./source.ts";
+import {
+  type MessageArtifactSource,
+  isUsableArtifactSource,
+  producingRunModelJoin,
+  producingRunModelSelection,
+} from "./source.ts";
 
 const decodeModelSelection = Schema.decodeUnknownEffect(Schema.fromJsonString(ModelSelection));
 
 /**
- * The model a message's summary is generated with. The producing run is the
- * provenance; a runless (imported) message falls back to the model its stored
+ * The model a message's summary is generated with. The producing run attempt
+ * is the provenance; a runless (imported) message falls back to the model its stored
  * summary pinned, then to the thread model, so later thread model changes
  * neither invalidate nor reinterpret a stored summary. Null: no model at all.
  */
@@ -58,11 +68,16 @@ interface ThreadSummaryRow extends Pick<
 }
 
 /**
- * The thread's stored summaries that the summarize request would serve from
- * its cache right now; stale ones (changed text, recipe or model) and those of
- * deleted threads are left out.
+ * The stored summaries of the threads' messages that the summarize request
+ * would serve from its cache right now; stale ones (changed text, recipe or
+ * model) and those of deleted threads are left out. `messageId` narrows it to
+ * one message.
  */
-export const readThreadSummaries = (sql: SqlClient.SqlClient, threadId: ThreadId) =>
+export const readThreadSummaries = (
+  sql: SqlClient.SqlClient,
+  threadIds: ReadonlyArray<ThreadId>,
+  messageId?: MessageId,
+) =>
   sql<ThreadSummaryRow>`
     SELECT
       summary.message_id AS "messageId",
@@ -75,7 +90,7 @@ export const readThreadSummaries = (sql: SqlClient.SqlClient, threadId: ThreadId
       message.role,
       message.streaming,
       COALESCE(json_extract(message.payload_json, '$.text'), '') AS text,
-      json_extract(run.payload_json, '$.modelSelection') AS "runModelSelection",
+      ${producingRunModelSelection(sql)} AS "runModelSelection",
       json_extract(thread.payload_json, '$.modelSelection') AS "threadModelSelection"
     FROM fork_message_summaries AS summary
     INNER JOIN orchestration_v2_projection_messages AS message
@@ -83,9 +98,9 @@ export const readThreadSummaries = (sql: SqlClient.SqlClient, threadId: ThreadId
     INNER JOIN orchestration_v2_projection_threads AS thread
       ON thread.thread_id = message.thread_id
       AND thread.deleted_at IS NULL
-    LEFT JOIN orchestration_v2_projection_runs AS run
-      ON run.run_id = message.run_id
-    WHERE summary.thread_id = ${threadId}
+    ${producingRunModelJoin(sql, sql`${sql.in(threadIds)}`)}
+    WHERE summary.thread_id IN ${sql.in(threadIds)}
+      ${messageId === undefined ? sql`` : sql`AND summary.message_id = ${messageId}`}
     ORDER BY summary.created_at, summary.message_id
   `.pipe(
     Effect.flatMap((rows) =>

@@ -7285,11 +7285,6 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
       const emitEvent = emit(events, command);
       const editedAttachments =
         command.attachments === undefined ? {} : { attachments: command.attachments };
-      // A null origin marks the edited text as typed, clearing a voice origin.
-      const withoutInputOrigin = <T extends { readonly inputOrigin?: unknown }>({
-        inputOrigin: _cleared,
-        ...rest
-      }: T) => rest;
       yield* emitEvent({
         type: "message.updated",
         threadId: command.threadId,
@@ -7298,11 +7293,15 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
         providerInstanceId: queuedRun.providerInstanceId,
         occurredAt: now,
         payload: {
-          ...(command.inputOrigin === null ? withoutInputOrigin(queuedMessage) : queuedMessage),
+          ...queuedMessage,
           text: command.text,
           ...editedAttachments,
           ...(command.context ? { context: command.context } : {}),
-          ...(command.inputOrigin ? { inputOrigin: command.inputOrigin } : {}),
+          ...(command.inputOrigin === null
+            ? { inputOrigin: undefined }
+            : command.inputOrigin
+              ? { inputOrigin: command.inputOrigin }
+              : {}),
           updatedAt: now,
         },
       });
@@ -7315,11 +7314,15 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
           providerInstanceId: queuedRun.providerInstanceId,
           occurredAt: now,
           payload: {
-            ...(command.inputOrigin === null ? withoutInputOrigin(queuedTurnItem) : queuedTurnItem),
+            ...queuedTurnItem,
             text: command.text,
             ...editedAttachments,
             ...(command.context ? { context: command.context } : {}),
-            ...(command.inputOrigin ? { inputOrigin: command.inputOrigin } : {}),
+            ...(command.inputOrigin === null
+              ? { inputOrigin: undefined }
+              : command.inputOrigin
+                ? { inputOrigin: command.inputOrigin }
+                : {}),
             updatedAt: now,
           },
         });

@@ -2,9 +2,13 @@ import * as NodeServices from "@effect/platform-node/NodeServices";
 import { assert, it } from "@effect/vitest";
 import {
   EventId,
+  MessageId,
   type MessageSpeechThreadState,
+  type MessageSpeechThreadUpdate,
   type OrchestrationV2ConversationMessage,
   ProviderInstanceId,
+  RunId,
+  ThreadId,
 } from "@t3tools/contracts";
 import * as DateTime from "effect/DateTime";
 import * as Deferred from "effect/Deferred";
@@ -18,8 +22,13 @@ import * as Stream from "effect/Stream";
 import * as SqlClient from "effect/unstable/sql/SqlClient";
 
 import * as ServerConfig from "../config.ts";
+import {
+  MESSAGE_SUMMARY_RECIPE_HASH,
+  messageArtifactTextHash,
+} from "../messageArtifacts/identity.ts";
 import * as MessageSpeechScript from "../messageArtifacts/MessageSpeechScript.ts";
 import { seedMessage, setMessageText } from "../messageArtifacts/testFixtures.ts";
+import { resolveSummaryProvenance } from "../messageArtifacts/threadSummaries.ts";
 import * as ProjectionStore from "../orchestration-v2/ProjectionStore.ts";
 import { SqlitePersistenceMemory } from "../persistence/Layers/Sqlite.ts";
 import * as ServerSettings from "../serverSettings.ts";
@@ -83,17 +92,28 @@ const makeSpeech = Effect.fn("makeSpeech")(function* (
   return { service, ttsCalls };
 });
 
-/** Collects a thread's listening states as they stream, starting with the current one. */
+/** Collects a thread's listening updates as they stream, starting with the whole state. */
 const watchThread = Effect.fn("watchThread")(function* (
-  stream: Stream.Stream<MessageSpeechThreadState>,
+  stream: Stream.Stream<MessageSpeechThreadUpdate>,
 ) {
-  const states = yield* Queue.unbounded<MessageSpeechThreadState>();
+  const updates = yield* Queue.unbounded<MessageSpeechThreadUpdate>();
   yield* stream.pipe(
-    Stream.runForEach((state) => Queue.offer(states, state)),
+    Stream.runForEach((update) => Queue.offer(updates, update)),
     Effect.forkScoped,
   );
-  return states;
+  return updates;
 });
+
+type ThreadUpdates = Effect.Success<ReturnType<typeof watchThread>>;
+
+const takeSnapshot = (updates: ThreadUpdates) =>
+  Queue.take(updates).pipe(
+    Effect.flatMap((update): Effect.Effect<MessageSpeechThreadState> =>
+      update.type === "snapshot"
+        ? Effect.succeed(update.state)
+        : Effect.die(`expected a snapshot, got ${update.type}`),
+    ),
+  );
 
 const speechFiles = Effect.gen(function* () {
   const { attachmentsDir } = yield* ServerConfig.ServerConfig;
@@ -135,7 +155,7 @@ it.layer(TestLayer)("message listening", (it) => {
         ),
       );
       const states = yield* watchThread(service.streamThread(message.threadId));
-      assert.deepEqual(yield* Queue.take(states), {
+      assert.deepEqual(yield* takeSnapshot(states), {
         threadId: message.threadId,
         recordings: [],
         pendingMessageIds: [],
@@ -143,7 +163,13 @@ it.layer(TestLayer)("message listening", (it) => {
       });
 
       const first = yield* Effect.forkChild(service.synthesize({ messageId: message.id }));
-      assert.deepEqual((yield* Queue.take(states)).pendingMessageIds, [message.id]);
+      // After the whole state, each change carries only the changed message.
+      assert.deepEqual(yield* Queue.take(states), {
+        type: "message",
+        threadId: message.threadId,
+        messageId: message.id,
+        pending: true,
+      });
       yield* Deferred.await(entered);
       // A second client joins the running job instead of starting another.
       const second = yield* Effect.forkChild(service.synthesize({ messageId: message.id }));
@@ -154,9 +180,13 @@ it.layer(TestLayer)("message listening", (it) => {
 
       assert.equal(result.transcript, "Spoken: The **build** passed.");
       assert.equal(result.origin, "user");
-      const finished = yield* Queue.take(states);
-      assert.deepEqual(finished.pendingMessageIds, []);
-      assert.deepEqual(finished.recordings, [result]);
+      assert.deepEqual(yield* Queue.take(states), {
+        type: "message",
+        threadId: message.threadId,
+        messageId: message.id,
+        recording: result,
+        pending: false,
+      });
       assert.deepEqual(yield* speechFiles, [`${result.speechId}.mp3`]);
 
       // Asking again reuses the stored recording.
@@ -186,7 +216,7 @@ it.layer(TestLayer)("message listening", (it) => {
 
       yield* setMessageText(message, "Second answer.");
       const states = yield* watchThread(service.streamThread(message.threadId));
-      assert.deepEqual((yield* Queue.take(states)).recordings, []);
+      assert.deepEqual((yield* takeSnapshot(states)).recordings, []);
 
       yield* Ref.set(editDuringSynthesis, true);
       const stale = yield* Effect.flip(service.synthesize({ messageId: message.id }));
@@ -213,7 +243,7 @@ it.layer(TestLayer)("message listening", (it) => {
       assert.equal(result.speechId, "agent-speech");
       assert.equal(yield* Ref.get(ttsCalls), 0);
       const states = yield* watchThread(service.streamThread(message.threadId));
-      assert.deepEqual((yield* Queue.take(states)).recordings, [result]);
+      assert.deepEqual((yield* takeSnapshot(states)).recordings, [result]);
     }),
   );
 
@@ -224,18 +254,18 @@ it.layer(TestLayer)("message listening", (it) => {
         Effect.fail(new TtsError({ reason: "quota_exceeded", detail: "out of credits" })),
       );
       const states = yield* watchThread(service.streamThread(message.threadId));
-      yield* Queue.take(states);
+      yield* takeSnapshot(states);
 
       const failure = yield* Effect.flip(service.synthesize({ messageId: message.id }));
 
       assert.equal(failure.reason, "provider_quota_exceeded");
-      // One state per change (job started, job ended); the last one counts.
+      // One update per change (job started, job ended); the last one counts.
       yield* Queue.take(states);
       assert.deepEqual(yield* Queue.take(states), {
+        type: "message",
         threadId: message.threadId,
-        recordings: [],
-        pendingMessageIds: [],
-        summaries: [],
+        messageId: message.id,
+        pending: false,
       });
     }),
   );
@@ -274,7 +304,7 @@ it.layer(TestLayer)("message listening", (it) => {
       });
       // A deleted thread shows nothing even before the purge ran.
       const deletedStates = yield* watchThread(service.streamThread(deleted.threadId));
-      assert.deepEqual((yield* Queue.take(deletedStates)).recordings, []);
+      assert.deepEqual((yield* takeSnapshot(deletedStates)).recordings, []);
 
       yield* service.purgeDeletedThreads;
 
@@ -292,7 +322,95 @@ it.layer(TestLayer)("message listening", (it) => {
       assert.notInclude(files, `${deletedRecording.speechId}.mp3`);
       assert.include(files, `${liveRecording.speechId}.mp3`);
       const liveStates = yield* watchThread(service.streamThread(live.threadId));
-      assert.deepEqual((yield* Queue.take(liveStates)).recordings, [liveRecording]);
+      assert.deepEqual((yield* takeSnapshot(liveStates)).recordings, [liveRecording]);
+    }),
+  );
+
+  it.effect("shows a fork the artifacts of the messages it inherited, live", () =>
+    Effect.gen(function* () {
+      const sql = yield* SqlClient.SqlClient;
+      const store = yield* ProjectionStore.ProjectionStoreV2;
+      const recorded = yield* seed("speech-fork-source", "Inherited answer.");
+      const preparing: OrchestrationV2ConversationMessage = {
+        ...recorded,
+        id: MessageId.make("message:speech-fork-source:2"),
+      };
+      yield* setMessageText(preparing, "Second inherited answer.");
+      yield* insertAgentRecording(recorded);
+      const provenance = yield* resolveSummaryProvenance(
+        // @effect-diagnostics-next-line preferSchemaOverJson:off
+        { runModelSelection: JSON.stringify(model), threadModelSelection: null },
+        null,
+      );
+      assert.isNotNull(provenance);
+      yield* sql`
+        INSERT INTO fork_message_summaries (
+          message_id, thread_id, summary, source_text_hash, recipe_hash,
+          model_selection_json, model_selection_hash, created_at
+        ) VALUES (
+          ${recorded.id}, ${recorded.threadId}, 'Inherited summary.',
+          ${messageArtifactTextHash("Inherited answer.")}, ${MESSAGE_SUMMARY_RECIPE_HASH},
+          ${provenance?.modelSelectionJson ?? ""}, ${provenance?.modelSelectionHash ?? ""},
+          '2026-01-01T00:00:00.000Z'
+        )
+      `;
+      const source = (yield* store.getThreadProjection(recorded.threadId)).thread;
+      const forkId = ThreadId.make("thread:speech-fork");
+      yield* store.apply({
+        id: EventId.make("event:speech-fork:created"),
+        type: "thread.created",
+        threadId: forkId,
+        providerInstanceId: source.providerInstanceId,
+        occurredAt: yield* DateTime.now,
+        payload: {
+          ...source,
+          id: forkId,
+          lineage: {
+            parentThreadId: source.id,
+            relationshipToParent: "fork",
+            rootThreadId: source.lineage.rootThreadId,
+          },
+          forkedFrom: {
+            type: "run",
+            threadId: source.id,
+            runId: recorded.runId ?? RunId.make("run:speech-fork-source"),
+          },
+        },
+      });
+      const release = yield* Deferred.make<void>();
+      const { service } = yield* makeSpeech((text) =>
+        Deferred.await(release).pipe(Effect.as(new TextEncoder().encode(text))),
+      );
+
+      const updates = yield* watchThread(service.streamThread(forkId));
+      const snapshot = yield* takeSnapshot(updates);
+      assert.equal(snapshot.threadId, forkId);
+      assert.deepEqual(
+        snapshot.recordings.map((recording) => recording.messageId),
+        [recorded.id],
+      );
+      assert.deepEqual(
+        snapshot.summaries.map((summary) => summary.summary),
+        ["Inherited summary."],
+      );
+
+      // A job on the source thread reaches the fork's subscribers.
+      const job = yield* Effect.forkChild(service.synthesize({ messageId: preparing.id }));
+      assert.deepEqual(yield* Queue.take(updates), {
+        type: "message",
+        threadId: forkId,
+        messageId: preparing.id,
+        pending: true,
+      });
+      yield* Deferred.succeed(release, undefined);
+      const result = yield* Fiber.join(job);
+      assert.deepEqual(yield* Queue.take(updates), {
+        type: "message",
+        threadId: forkId,
+        messageId: preparing.id,
+        recording: result,
+        pending: false,
+      });
     }),
   );
 });

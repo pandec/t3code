@@ -1,17 +1,22 @@
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import { assert, it as effectIt } from "@effect/vitest";
 import {
+  EventId,
   type ModelSelection,
+  NodeId,
+  type OrchestrationV2DomainEvent,
   ProviderDriverKind,
   ProviderInstanceId,
   TextGenerationError,
 } from "@t3tools/contracts";
+import * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import * as Ref from "effect/Ref";
 import * as SqlClient from "effect/unstable/sql/SqlClient";
 import { describe, expect, it } from "vite-plus/test";
 
+import * as EventStore from "../orchestration-v2/EventStore.ts";
 import * as ProjectionStore from "../orchestration-v2/ProjectionStore.ts";
 import { SqlitePersistenceMemory } from "../persistence/Layers/Sqlite.ts";
 import type { ProviderInstance } from "../provider/ProviderDriver.ts";
@@ -152,9 +157,9 @@ const storedSummaries = (messageId: string) =>
       `,
   );
 
-const TestLayer = Layer.mergeAll(
-  ProjectionStore.layer.pipe(Layer.provideMerge(SqlitePersistenceMemory)),
-  NodeServices.layer,
+const TestLayer = Layer.mergeAll(ProjectionStore.layer, EventStore.layer).pipe(
+  Layer.provideMerge(SqlitePersistenceMemory),
+  Layer.provideMerge(NodeServices.layer),
 );
 
 effectIt.layer(TestLayer)("message summary persistence", (it) => {
@@ -224,6 +229,63 @@ effectIt.layer(TestLayer)("message summary persistence", (it) => {
         { summary: "Summary of Edited answer." },
       ]);
       assert.equal((yield* Ref.get(calls)).length, 2);
+    }),
+  );
+
+  it.effect("keeps the producing attempt's model after a steering restart changes it", () =>
+    Effect.gen(function* () {
+      const sql = yield* SqlClient.SqlClient;
+      const store = yield* ProjectionStore.ProjectionStoreV2;
+      const eventStore = yield* EventStore.EventStoreV2;
+      const message = yield* seedMessage({
+        suffix: "summary-restart",
+        text: "Attempt one answer.",
+        threadModelSelection: threadModel,
+        runModelSelection: runModel,
+        worktreePath: null,
+      });
+      const [run] = (yield* store.getThreadProjection(message.threadId)).runs;
+      assert.isDefined(run);
+      if (run === undefined) return;
+      const now = yield* DateTime.now;
+      const runEvent = (
+        suffix: string,
+        type: "run.created" | "run.updated",
+        payload: typeof run,
+      ): OrchestrationV2DomainEvent => ({
+        id: EventId.make(`event:summary-restart:${suffix}`),
+        type,
+        threadId: run.threadId,
+        runId: run.id,
+        providerInstanceId: payload.providerInstanceId,
+        occurredAt: now,
+        payload,
+      });
+      // The seeded run, as the orchestrator logged it.
+      yield* eventStore.append({ events: [runEvent("created", "run.created", run)] });
+      const { service, calls } = yield* makeSummaryService((input) =>
+        Effect.succeed({ summary: `Summary of ${input.message}` }),
+      );
+      yield* service.summarize({ messageId: message.id });
+
+      // A model-changing steer restarts the run under a new root node.
+      const restarted = runEvent("restarted", "run.updated", {
+        ...run,
+        providerInstanceId: threadModel.instanceId,
+        modelSelection: threadModel,
+        rootNodeId: NodeId.make("node:summary-restart:2"),
+      });
+      yield* eventStore.append({ events: [restarted] });
+      yield* store.apply(restarted);
+
+      const listed = yield* readThreadSummaries(sql, [message.threadId]);
+      assert.deepEqual(
+        listed.map((entry) => entry.messageId),
+        [message.id],
+      );
+      yield* service.summarize({ messageId: message.id });
+      assert.equal((yield* Ref.get(calls)).length, 1);
+      assert.equal((yield* Ref.get(calls))[0]?.modelSelection.instanceId, runModel.instanceId);
     }),
   );
 
@@ -333,13 +395,13 @@ effectIt.layer(TestLayer)("message summary persistence", (it) => {
         WHERE message_id = ${otherModel.id}
       `;
 
-      const listed = yield* readThreadSummaries(sql, current.threadId);
+      const listed = yield* readThreadSummaries(sql, [current.threadId]);
       assert.deepEqual(
         listed.map(({ messageId, summary }) => ({ messageId, summary })),
         [{ messageId: current.id, summary: "Summary of Stored answer." }],
       );
       for (const stale of [changedText, oldRecipe, otherModel]) {
-        assert.deepEqual(yield* readThreadSummaries(sql, stale.threadId), []);
+        assert.deepEqual(yield* readThreadSummaries(sql, [stale.threadId]), []);
       }
     }),
   );

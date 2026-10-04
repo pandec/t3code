@@ -20,6 +20,7 @@ import * as Layer from "effect/Layer";
 import * as Queue from "effect/Queue";
 import * as Ref from "effect/Ref";
 import * as Stream from "effect/Stream";
+import * as SqlClient from "effect/unstable/sql/SqlClient";
 
 import * as ServerConfig from "../config.ts";
 import * as MessageSpeechScript from "../messageArtifacts/MessageSpeechScript.ts";
@@ -93,12 +94,41 @@ const setRunningAttempt = (seeded: Seeded, attemptId: string | null) =>
     });
   });
 
-/** Projects a finished assistant reply of the run, as a provider would. */
+/**
+ * Projects a finished assistant reply of the run's current attempt, as a
+ * provider would: on its own child node of the attempt's root node.
+ */
 const addAssistantReply = (seeded: Seeded, ordinal: number, text: string) =>
   Effect.gen(function* () {
     const store = yield* ProjectionStore.ProjectionStoreV2;
     const now = yield* DateTime.now;
     const messageId = MessageId.make(`assistant:${seeded.suffix}:${ordinal}`);
+    const nodeId = NodeId.make(`node:${seeded.suffix}:reply:${ordinal}`);
+    yield* store.apply({
+      id: nextEventId(),
+      type: "node.updated",
+      threadId: seeded.threadId,
+      runId: seeded.run.id,
+      nodeId,
+      occurredAt: now,
+      payload: {
+        id: nodeId,
+        threadId: seeded.threadId,
+        runId: seeded.run.id,
+        parentNodeId: seeded.run.rootNodeId,
+        rootNodeId: seeded.run.rootNodeId,
+        kind: "assistant_message",
+        status: "completed",
+        countsForRun: false,
+        providerThreadId: null,
+        providerTurnId: null,
+        nativeItemRef: null,
+        runtimeRequestId: null,
+        checkpointScopeId: null,
+        startedAt: now,
+        completedAt: now,
+      },
+    });
     yield* store.apply({
       id: nextEventId(),
       type: "message.updated",
@@ -111,7 +141,7 @@ const addAssistantReply = (seeded: Seeded, ordinal: number, text: string) =>
         id: messageId,
         threadId: seeded.threadId,
         runId: seeded.run.id,
-        nodeId: seeded.run.rootNodeId,
+        nodeId,
         role: "assistant",
         text,
         attachments: [],
@@ -130,7 +160,7 @@ const addAssistantReply = (seeded: Seeded, ordinal: number, text: string) =>
         id: TurnItemId.make(`item:${seeded.suffix}:${ordinal}`),
         threadId: seeded.threadId,
         runId: seeded.run.id,
-        nodeId: seeded.run.rootNodeId,
+        nodeId,
         providerThreadId: null,
         providerTurnId: null,
         nativeItemRef: null,
@@ -219,7 +249,8 @@ const currentRecordings = (speech: MessageSpeech.MessageSpeechShape, threadId: T
       Stream.take(1),
       Stream.runForEach((state) => Queue.offer(states, state)),
     );
-    return (yield* Queue.take(states)).recordings;
+    const first = yield* Queue.take(states);
+    return first.type === "snapshot" ? first.state.recordings : [];
   });
 
 const finalize = (
@@ -298,6 +329,90 @@ it.layer(TestLayer)("agent voice replies", (it) => {
       const recordings = yield* currentRecordings(speech, seeded.threadId);
       assert.equal(recordings[0]?.messageId, reply?.id);
       assert.equal(recordings[0]?.origin, "agent");
+    }),
+  );
+
+  it.effect("never attaches to a reply an earlier attempt of the run wrote", () =>
+    Effect.gen(function* () {
+      const store = yield* ProjectionStore.ProjectionStoreV2;
+      const seeded = yield* seedRunningThread("voice-restarted");
+      yield* setRunningAttempt(seeded, "attempt-1");
+      const interruptedMessageId = yield* addAssistantReply(seeded, 1, "Interrupted answer.");
+      // A steer restarted the run: attempt 2 runs under a new root node.
+      const restartedRootNodeId = NodeId.make("node:voice-restarted:2");
+      const restarted: Seeded = {
+        ...seeded,
+        run: { ...seeded.run, rootNodeId: restartedRootNodeId },
+        rootNode: { ...seeded.rootNode, id: restartedRootNodeId },
+      };
+      yield* setRunningAttempt(restarted, "attempt-2");
+      const { speech, voice } = yield* makeServices();
+      yield* voice.stage({ threadId: seeded.threadId, script: "Spoken final answer." });
+
+      const finalization = yield* finalize(voice, restarted, "attempt-2", true);
+      assert.deepEqual(
+        finalization.events.map((event) => event.type),
+        ["message.updated", "turn-item.updated"],
+      );
+      for (const event of finalization.events) yield* store.apply(event);
+      yield* finalization.committed;
+
+      const recordings = yield* currentRecordings(speech, seeded.threadId);
+      assert.lengthOf(recordings, 1);
+      assert.equal(recordings[0]?.messageId, "assistant:voice-reply:attempt-2");
+      assert.notEqual(recordings[0]?.messageId, interruptedMessageId);
+    }),
+  );
+
+  it.effect("drops a recording whose thread was deleted and purged before it attached", () =>
+    Effect.gen(function* () {
+      const sql = yield* SqlClient.SqlClient;
+      const store = yield* ProjectionStore.ProjectionStoreV2;
+      const seeded = yield* seedRunningThread("voice-deleted");
+      yield* setRunningAttempt(seeded, "attempt-1");
+      const { speech, voice } = yield* makeServices();
+      yield* voice.stage({ threadId: seeded.threadId, script: "Nobody hears this." });
+      const replyId = yield* addAssistantReply(seeded, 1, "Answer.");
+      yield* setRunningAttempt(seeded, null);
+      const finalization = yield* finalize(voice, seeded, "attempt-1", true);
+
+      // The run completed; the thread is deleted and purged before the
+      // finalization callback attaches the audio.
+      const thread = (yield* store.getThreadProjection(seeded.threadId)).thread;
+      const now = yield* DateTime.now;
+      yield* store.apply({
+        id: nextEventId(),
+        type: "thread.deleted",
+        threadId: seeded.threadId,
+        providerInstanceId: thread.providerInstanceId,
+        occurredAt: now,
+        payload: { ...thread, deletedAt: now, updatedAt: now },
+      });
+      yield* speech.purgeDeletedThreads;
+      yield* finalization.committed;
+
+      const rows = yield* sql<{ readonly count: number }>`
+        SELECT COUNT(*) AS count FROM fork_message_speech WHERE thread_id = ${seeded.threadId}
+      `;
+      assert.equal(rows[0]?.count, 0);
+      assert.deepEqual(yield* threadSpeechFiles("voice-deleted"), []);
+      const late = yield* Effect.flip(
+        speech.attachAgentRecording({
+          threadId: seeded.threadId,
+          messageId: replyId,
+          recording: {
+            speechId: "late-speech",
+            transcript: "Too late.",
+            mimeType: "audio/mpeg",
+            sizeBytes: 1,
+            durationMs: null,
+            voiceId: "voice",
+            ttsModel: "openrouter:router",
+            createdAt: DateTime.formatIso(now),
+          },
+        }),
+      );
+      assert.equal(late.reason, "message_unavailable");
     }),
   );
 

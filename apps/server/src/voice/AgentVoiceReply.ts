@@ -5,6 +5,7 @@ import {
   type EventId,
   MESSAGE_SPEECH_MAX_SCRIPT_CHARS,
   MessageId,
+  type NodeId,
   type OrchestrationV2DomainEvent,
   type OrchestrationV2ExecutionNode,
   type OrchestrationV2Run,
@@ -26,6 +27,7 @@ import * as SqlClient from "effect/unstable/sql/SqlClient";
 import { resolveAttachmentRelativePath } from "../attachmentPaths.ts";
 import { createAttachmentId } from "../attachmentStore.ts";
 import * as ServerConfig from "../config.ts";
+import { ProjectionStoreV2 } from "../orchestration-v2/ProjectionStore.ts";
 import { ServerSettingsService } from "../serverSettings.ts";
 import { type AgentSpeechRecording, MessageSpeech } from "./MessageSpeech.ts";
 import { appendSpeechAudio } from "./speechChunks.ts";
@@ -127,6 +129,7 @@ export const make = Effect.gen(function* () {
   const serverConfig = yield* ServerConfig.ServerConfig;
   const serverSettings = yield* ServerSettingsService;
   const messageSpeech = yield* MessageSpeech;
+  const projectionStore = yield* ProjectionStoreV2;
   const staged = yield* SynchronizedRef.make<StagingState>({
     entries: new Map(),
     closed: new Map(),
@@ -148,21 +151,17 @@ export const make = Effect.gen(function* () {
    * because a recording bound to a guessed attempt can attach to the wrong run.
    */
   const resolveRunningAttempt = (threadId: ThreadId) =>
-    sql<{ readonly runId: string; readonly attemptId: string | null }>`
-      SELECT
-        run_id AS "runId",
-        json_extract(payload_json, '$.activeAttemptId') AS "attemptId"
-      FROM orchestration_v2_projection_runs
-      WHERE thread_id = ${threadId} AND status = 'running'
-      ORDER BY ordinal ASC
-      LIMIT 1
-    `.pipe(
-      Effect.map((rows): RunAttemptOwner | null => {
-        const row = rows[0];
-        if (row === undefined || row.attemptId === null) return null;
-        return { runId: row.runId as RunId, attemptId: row.attemptId as RunAttemptId };
-      }),
-      Effect.orElseSucceed((): RunAttemptOwner | null => null),
+    projectionStore.getRunningTurnContext(threadId).pipe(
+      Effect.map(({ run }): RunAttemptOwner | null =>
+        run === undefined || run.activeAttemptId === null
+          ? null
+          : { runId: run.id, attemptId: run.activeAttemptId },
+      ),
+      Effect.catch((error) =>
+        error._tag === "ProjectionStoreThreadNotFoundError"
+          ? Effect.succeed(null)
+          : Effect.fail(new AgentVoiceReplyError({ reason: "storage_failed" })),
+      ),
     );
 
   const sameAttempt = (left: RunAttemptOwner, right: RunAttemptOwner) =>
@@ -325,17 +324,25 @@ export const make = Effect.gen(function* () {
     },
   );
 
-  /** The run's last written assistant reply on the thread itself (not a subagent's). */
-  const findFinalAssistantMessageId = (threadId: ThreadId, runId: RunId) =>
+  /**
+   * The attempt's last written assistant reply on the thread itself (not a
+   * subagent's). Scoped to the attempt's root node, so a reply an interrupted
+   * earlier attempt of the same run wrote never receives this recording.
+   * Replies usually sit on their own child node of that root.
+   */
+  const findFinalAssistantMessageId = (threadId: ThreadId, runId: RunId, rootNodeId: NodeId) =>
     sql<{ readonly messageId: string }>`
-      SELECT json_extract(payload_json, '$.messageId') AS "messageId"
-      FROM orchestration_v2_projection_turn_items
-      WHERE thread_id = ${threadId}
-        AND run_id = ${runId}
-        AND type = 'assistant_message'
-        AND parent_item_id IS NULL
-        AND TRIM(COALESCE(json_extract(payload_json, '$.text'), '')) <> ''
-      ORDER BY ordinal DESC, turn_item_id DESC
+      SELECT json_extract(item.payload_json, '$.messageId') AS "messageId"
+      FROM orchestration_v2_projection_turn_items AS item
+      LEFT JOIN orchestration_v2_projection_nodes AS node
+        ON node.node_id = item.node_id
+      WHERE item.thread_id = ${threadId}
+        AND item.run_id = ${runId}
+        AND (item.node_id = ${rootNodeId} OR node.root_node_id = ${rootNodeId})
+        AND item.type = 'assistant_message'
+        AND item.parent_item_id IS NULL
+        AND TRIM(COALESCE(json_extract(item.payload_json, '$.text'), '')) <> ''
+      ORDER BY item.ordinal DESC, item.turn_item_id DESC
       LIMIT 1
     `.pipe(Effect.map((rows) => rows[0]?.messageId));
 
@@ -365,7 +372,11 @@ export const make = Effect.gen(function* () {
       }
       // Fails closed: an unreadable projection must never be taken for "the
       // run wrote nothing", which would add a duplicate voice-only reply.
-      const existing = yield* findFinalAssistantMessageId(threadId, input.run.id).pipe(
+      const existing = yield* findFinalAssistantMessageId(
+        threadId,
+        input.run.id,
+        input.rootNode.id,
+      ).pipe(
         Effect.map((messageId) => ({ ok: true as const, messageId })),
         Effect.catch((error) =>
           Effect.logWarning("agent voice reply dropped: final reply lookup failed", {

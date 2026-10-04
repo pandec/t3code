@@ -9,6 +9,7 @@ import {
   type MessageSpeechSynthesisRequest,
   type MessageSpeechSynthesisResult,
   type MessageSpeechThreadState,
+  type MessageSpeechThreadUpdate,
   type ModelSelection,
   type ThreadId,
 } from "@t3tools/contracts";
@@ -174,10 +175,14 @@ export interface MessageSpeechShape {
   readonly synthesize: (
     request: MessageSpeechSynthesisRequest,
   ) => Effect.Effect<MessageSpeechSynthesisResult, MessageSpeechError>;
-  /** The thread's listening state now, then again after every change to it. */
-  readonly streamThread: (threadId: ThreadId) => Stream.Stream<MessageSpeechThreadState>;
-  /** Re-sends the thread's state to its subscribers, e.g. after a summary was stored. */
-  readonly refreshThread: (threadId: ThreadId) => Effect.Effect<void>;
+  /**
+   * The thread's listening state now, then each changed message's entries.
+   * A fork also sees the recordings and summaries of the messages it
+   * inherited from the threads it was forked from.
+   */
+  readonly streamThread: (threadId: ThreadId) => Stream.Stream<MessageSpeechThreadUpdate>;
+  /** Re-sends a message's entries to its subscribers, e.g. after its summary was stored. */
+  readonly refreshThread: (threadId: ThreadId, messageId: MessageId) => Effect.Effect<void>;
   /**
    * Removes the recordings (audio files included), speech scripts and
    * summaries of every deleted thread. Idempotent; keyed on the projection's
@@ -224,6 +229,14 @@ const toSynthesisResult = (row: MessageSpeechRow): MessageSpeechSynthesisResult 
   createdAt: row.createdAt as MessageSpeechSynthesisResult["createdAt"],
 });
 
+interface MessageSpeechChange {
+  readonly threadId: string;
+  readonly messageId: string;
+}
+
+// Forks of forks are rare; the bound only guards against a corrupt cycle.
+const MAX_FORK_LINEAGE_DEPTH = 32;
+
 interface MessageSpeechJob {
   readonly threadId: string;
   readonly done: Deferred.Deferred<MessageSpeechSynthesisResult, MessageSpeechError>;
@@ -239,9 +252,10 @@ export const make = Effect.gen(function* () {
   // Jobs outlive the request that started them; they end with the server.
   const jobScope = yield* Scope.Scope;
   const jobs = new Map<string, MessageSpeechJob>();
-  // Thread ids whose listening state changed.
-  const changes = yield* PubSub.unbounded<string>();
-  const publishChange = (threadId: string) => PubSub.publish(changes, threadId).pipe(Effect.asVoid);
+  // Messages (with their owning thread) whose listening state changed.
+  const changes = yield* PubSub.unbounded<MessageSpeechChange>();
+  const publishChange = (threadId: string, messageId: string) =>
+    PubSub.publish(changes, { threadId, messageId }).pipe(Effect.asVoid);
 
   const resolveSpeechPath = (speechId: string, mimeType: SpeechAudioMimeType) =>
     resolveAttachmentRelativePath({
@@ -460,7 +474,7 @@ export const make = Effect.gen(function* () {
   ) {
     const done = yield* Deferred.make<MessageSpeechSynthesisResult, MessageSpeechError>();
     jobs.set(messageId, { threadId, done });
-    yield* publishChange(threadId);
+    yield* publishChange(threadId, messageId);
     yield* runJob(messageId).pipe(
       Effect.timeoutOrElse({
         duration: MESSAGE_SPEECH_JOB_TIMEOUT,
@@ -488,7 +502,7 @@ export const make = Effect.gen(function* () {
       Effect.ensuring(
         Effect.sync(() => {
           if (jobs.get(messageId)?.done === done) jobs.delete(messageId);
-        }).pipe(Effect.andThen(publishChange(threadId))),
+        }).pipe(Effect.andThen(publishChange(threadId, messageId))),
       ),
       Effect.forkIn(jobScope),
     );
@@ -520,8 +534,32 @@ export const make = Effect.gen(function* () {
     return yield* Deferred.await(done);
   });
 
-  const readThread = Effect.fn("MessageSpeech.readThread")(function* (threadId: ThreadId) {
-    const rows = yield* sql<MessageSpeechRow & { readonly messageText: string | null }>`
+  /**
+   * The thread and the threads it was forked from, nearest first. A v2 fork
+   * keeps showing its source's messages under their original ids and owner,
+   * so their artifacts are stored under that owner.
+   */
+  const readLineage = (threadId: ThreadId) =>
+    sql<{ readonly threadId: string }>`
+      WITH RECURSIVE lineage(thread_id, depth) AS (
+        SELECT ${threadId}, 0
+        UNION
+        SELECT json_extract(thread.payload_json, '$.forkedFrom.threadId'), lineage.depth + 1
+        FROM orchestration_v2_projection_threads AS thread
+        INNER JOIN lineage ON thread.thread_id = lineage.thread_id
+        WHERE json_extract(thread.payload_json, '$.forkedFrom.type') = 'run'
+          AND lineage.depth < ${MAX_FORK_LINEAGE_DEPTH}
+      )
+      SELECT thread_id AS "threadId" FROM lineage ORDER BY depth
+    `.pipe(
+      Effect.map((rows) => [
+        ...new Set([threadId, ...rows.map((row) => row.threadId as ThreadId)]),
+      ]),
+    );
+
+  /** Current recordings (stale listening versions left out) of the threads, or of one message. */
+  const readRecordings = (threadIds: ReadonlyArray<ThreadId>, messageId?: MessageId) =>
+    sql<MessageSpeechRow & { readonly messageText: string | null }>`
       SELECT
         speech.message_id AS "messageId",
         speech.thread_id AS "threadId",
@@ -543,21 +581,36 @@ export const make = Effect.gen(function* () {
       INNER JOIN orchestration_v2_projection_threads AS thread
         ON thread.thread_id = speech.thread_id
         AND thread.deleted_at IS NULL
-      WHERE speech.thread_id = ${threadId}
+      WHERE speech.thread_id IN ${sql.in(threadIds)}
+        ${messageId === undefined ? sql`` : sql`AND speech.message_id = ${messageId}`}
       ORDER BY speech.created_at, speech.message_id
-    `;
-    const recordings = rows
-      .filter(
-        (row) =>
-          row.origin === "agent" ||
-          (row.messageText !== null &&
-            row.sourceTextHash === messageArtifactTextHash(row.messageText.trim())),
-      )
-      .map(toSynthesisResult);
-    const pendingMessageIds = [...jobs]
-      .filter(([, job]) => job.threadId === threadId)
-      .map(([messageId]) => MessageId.make(messageId));
-    const summaries = yield* readThreadSummaries(sql, threadId);
+    `.pipe(
+      Effect.map((rows) =>
+        rows
+          .filter(
+            (row) =>
+              row.origin === "agent" ||
+              (row.messageText !== null &&
+                row.sourceTextHash === messageArtifactTextHash(row.messageText.trim())),
+          )
+          .map(toSynthesisResult),
+      ),
+    );
+
+  const isPending = (messageId: string, lineage: ReadonlyArray<string>) => {
+    const job = jobs.get(messageId);
+    return job !== undefined && lineage.includes(job.threadId);
+  };
+
+  const readThread = Effect.fn("MessageSpeech.readThread")(function* (
+    threadId: ThreadId,
+    lineage: ReadonlyArray<ThreadId>,
+  ) {
+    const recordings = yield* readRecordings(lineage);
+    const pendingMessageIds = [...jobs.keys()]
+      .filter((messageId) => isPending(messageId, lineage))
+      .map((messageId) => MessageId.make(messageId));
+    const summaries = yield* readThreadSummaries(sql, lineage);
     const state: MessageSpeechThreadState = {
       threadId,
       recordings,
@@ -567,30 +620,55 @@ export const make = Effect.gen(function* () {
     return state;
   });
 
+  const readMessage = Effect.fn("MessageSpeech.readMessage")(function* (
+    threadId: ThreadId,
+    lineage: ReadonlyArray<ThreadId>,
+    messageId: MessageId,
+  ) {
+    const [recording] = yield* readRecordings(lineage, messageId);
+    const [summary] = yield* readThreadSummaries(sql, lineage, messageId);
+    const update: MessageSpeechThreadUpdate = {
+      type: "message",
+      threadId,
+      messageId,
+      ...(recording === undefined ? {} : { recording }),
+      ...(summary === undefined ? {} : { summary }),
+      pending: isPending(messageId, lineage),
+    };
+    return update;
+  });
+
   const streamThread: MessageSpeechShape["streamThread"] = (threadId) =>
     Stream.unwrap(
       Effect.gen(function* () {
         // Subscribed before the first read, so no change can fall in between.
         const subscription = yield* PubSub.subscribe(changes);
+        const logFailure = (error: unknown) =>
+          Effect.logWarning("message speech state read failed", { threadId, error }).pipe(
+            Effect.as(null),
+          );
+        // Fixed once the fork exists; read once per subscription.
+        const lineage = yield* readLineage(threadId).pipe(
+          Effect.catch((error) => logFailure(error).pipe(Effect.as([threadId]))),
+        );
+        // The whole state first; every later change is one message's entries.
+        // A failed message read is retried by that message's next change, and
+        // a reconnect starts again from a fresh whole state.
+        const snapshot = readThread(threadId, lineage).pipe(
+          Effect.map((state): MessageSpeechThreadUpdate => ({ type: "snapshot", state })),
+          Effect.catch(logFailure),
+        );
         return Stream.concat(
-          Stream.make(threadId),
+          Stream.fromEffect(snapshot),
           Stream.fromSubscription(subscription).pipe(
-            Stream.filter((changed) => changed === threadId),
-          ),
-        ).pipe(
-          // Each emission is a fresh whole state, so skipped or merged
-          // notifications can never leave a subscriber behind.
-          Stream.mapEffect(() =>
-            readThread(threadId).pipe(
-              Effect.catch((error) =>
-                Effect.logWarning("message speech state read failed", { threadId, error }).pipe(
-                  Effect.as(null),
-                ),
+            Stream.filter((change) => lineage.includes(change.threadId as ThreadId)),
+            Stream.mapEffect((change) =>
+              readMessage(threadId, lineage, MessageId.make(change.messageId)).pipe(
+                Effect.catch(logFailure),
               ),
             ),
           ),
-          Stream.filter((state): state is MessageSpeechThreadState => state !== null),
-        );
+        ).pipe(Stream.filter((update): update is MessageSpeechThreadUpdate => update !== null));
       }),
     );
 
@@ -607,7 +685,9 @@ export const make = Effect.gen(function* () {
     "MessageSpeech.attachAgentRecording",
   )(function* ({ threadId, messageId, recording }) {
     const prior = yield* findSpeechRow(messageId);
-    yield* sql`
+    // Gated on the message still living in its thread: a recording attached
+    // after the thread's deletion (and purge) would otherwise outlive it.
+    const stored = yield* sql`
       INSERT INTO fork_message_speech (
         message_id,
         thread_id,
@@ -623,7 +703,7 @@ export const make = Effect.gen(function* () {
         origin,
         created_at
       )
-      VALUES (
+      SELECT
         ${messageId},
         ${threadId},
         ${recording.speechId},
@@ -637,6 +717,14 @@ export const make = Effect.gen(function* () {
         ${recording.ttsModel},
         'agent',
         ${recording.createdAt}
+      WHERE EXISTS (
+        SELECT 1
+        FROM orchestration_v2_projection_messages AS message
+        INNER JOIN orchestration_v2_projection_threads AS thread
+          ON thread.thread_id = message.thread_id
+          AND thread.deleted_at IS NULL
+        WHERE message.message_id = ${messageId}
+          AND message.thread_id = ${threadId}
       )
       ON CONFLICT(message_id) DO UPDATE SET
         thread_id = excluded.thread_id,
@@ -651,11 +739,15 @@ export const make = Effect.gen(function* () {
         tts_model = excluded.tts_model,
         origin = excluded.origin,
         created_at = excluded.created_at
+      RETURNING message_id
     `.pipe(Effect.mapError(storageError));
+    if (stored.length === 0) {
+      return yield* new MessageSpeechError({ reason: "message_unavailable" });
+    }
     if (prior !== undefined && prior.speechId !== recording.speechId) {
       yield* deleteSpeechFile(prior.speechId);
     }
-    yield* publishChange(threadId);
+    yield* publishChange(threadId, messageId);
   });
 
   const purgeDeletedThreads = Effect.gen(function* () {

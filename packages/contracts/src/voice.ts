@@ -374,8 +374,7 @@ export type MessageSpeechThreadInput = typeof MessageSpeechThreadInput.Type;
  * A thread's listening state as the server owns it: every current recording
  * and stored summary (stale ones, whose message text changed since, are left
  * out) and the messages whose listening version is being prepared right now.
- * Streamed whole after every change, so each connected client shows the same
- * state.
+ * Every connected client shows the same state.
  */
 export const MessageSpeechThreadState = Schema.Struct({
   threadId: ThreadId,
@@ -384,3 +383,24 @@ export const MessageSpeechThreadState = Schema.Struct({
   summaries: Schema.Array(MessageSummaryThreadEntry),
 });
 export type MessageSpeechThreadState = typeof MessageSpeechThreadState.Type;
+
+/**
+ * What a listening-state subscription streams: the whole state first (again
+ * after every reconnect), then one message's changed entries at a time. A
+ * missing `recording` or `summary` means the message has none now.
+ */
+export const MessageSpeechThreadUpdate = Schema.Union([
+  Schema.Struct({
+    type: Schema.Literal("snapshot"),
+    state: MessageSpeechThreadState,
+  }),
+  Schema.Struct({
+    type: Schema.Literal("message"),
+    threadId: ThreadId,
+    messageId: MessageId,
+    recording: Schema.optional(MessageSpeechSynthesisResult),
+    summary: Schema.optional(MessageSummaryThreadEntry),
+    pending: Schema.Boolean,
+  }),
+]);
+export type MessageSpeechThreadUpdate = typeof MessageSpeechThreadUpdate.Type;

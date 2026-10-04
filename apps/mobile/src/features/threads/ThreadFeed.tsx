@@ -64,7 +64,6 @@ import {
   useRef,
   useState,
   useId,
-  useSyncExternalStore,
   type ReactNode,
   type RefObject,
 } from "react";
@@ -202,21 +201,7 @@ import * as Option from "effect/Option";
 import { appAtomRegistry } from "../../state/atom-registry";
 import { environmentThreadShells, threadEnvironment } from "../../state/threads";
 import { useAtomCommand } from "../../state/use-atom-command";
-import { summarizeMessage } from "../../state/messageArtifacts";
-import { useEnvironmentQuery } from "../../state/query";
-import { messageSpeechThread } from "../../state/voice";
-import {
-  AssistantMessageSpeechButton,
-  AssistantSpeechPlayer,
-  useAssistantMessageSpeech,
-} from "./AssistantMessageSpeech";
-import {
-  beginMessageArtifactRequest,
-  getMessageArtifactSessionSnapshot,
-  rememberMessageSummary,
-  subscribeMessageArtifactSession,
-} from "@t3tools/client-runtime/state/messageArtifacts";
-import { currentThreadMessageSummary } from "@t3tools/client-runtime/state/voice";
+import { AssistantMessageMeta } from "./AssistantMessageSummary";
 import { useV2ItemSupport } from "../../state/v2-item-support";
 import {
   basename,
@@ -1545,6 +1530,8 @@ function renderFeedEntry(
     readonly renderViewedImage: MarkdownImageRenderer;
     readonly renderReasoning: (text: string) => ReactNode;
     readonly iconSubtleColor: string | import("react-native").ColorValue;
+    readonly foregroundColor: string;
+    readonly onForegroundColor: ColorValue;
     readonly screenColor: string;
     readonly userBubbleColor: string | import("react-native").ColorValue;
     readonly markdownStyles: MarkdownStyleSets;
@@ -1933,11 +1920,18 @@ function renderFeedEntry(
             textToSpeechPersistentJobs={props.textToSpeechPersistentJobs}
             timestampLabel={timestampLabel}
             iconSubtleColor={iconSubtleColor}
-            markdownStyles={styles}
-            markdownLinkHandlers={props.markdownLinkHandlers}
-            onUseArtifactTemplate={props.onUseArtifactTemplate}
-            renderImage={props.renderMarkdownImage}
-            skills={props.skills}
+            foregroundColor={props.foregroundColor}
+            onForegroundColor={props.onForegroundColor}
+            renderSummary={(markdown) => (
+              <AssistantMarkdownContent
+                markdown={markdown}
+                markdownStyles={styles}
+                linkHandlers={props.markdownLinkHandlers}
+                onUseArtifactTemplate={props.onUseArtifactTemplate}
+                renderImage={props.renderMarkdownImage}
+                skills={props.skills}
+              />
+            )}
           >
             {message.projectedItem ? (
               <AssistantForkButton
@@ -1981,162 +1975,6 @@ function renderFeedEntry(
       renderImage={props.renderViewedImage}
       renderReasoning={props.renderReasoning}
     />
-  );
-}
-
-/** Meta row under a finished assistant message, with its on-demand summary. */
-function AssistantMessageMeta(props: {
-  readonly environmentId: EnvironmentId;
-  readonly threadId: ThreadId;
-  readonly threadTitle: string;
-  readonly messageId: MessageId;
-  readonly messageText: string;
-  readonly summariesAvailable: boolean;
-  readonly textToSpeechAvailable: boolean;
-  readonly textToSpeechPersistentJobs: boolean;
-  readonly timestampLabel: string;
-  readonly iconSubtleColor: ColorValue;
-  readonly markdownStyles: MarkdownStyleSet;
-  readonly markdownLinkHandlers: MarkdownLinkHandlers;
-  readonly onUseArtifactTemplate?: ((template: CodexArtifactTemplate) => void) | undefined;
-  readonly renderImage: MarkdownImageRenderer;
-  readonly skills?: ReadonlyArray<SelectableMarkdownSkill> | undefined;
-  readonly children: ReactNode;
-}) {
-  const { environmentId, messageId, messageText } = props;
-  const summarize = useAtomCommand(summarizeMessage, { reportFailure: false });
-  const [preparing, setPreparing] = useState(false);
-  const [expanded, setExpanded] = useState(false);
-  const readSession = useCallback(
-    () => getMessageArtifactSessionSnapshot(environmentId, messageId, messageText),
-    [environmentId, messageId, messageText],
-  );
-  const session = useSyncExternalStore(
-    useCallback(
-      (listener) => subscribeMessageArtifactSession(environmentId, messageId, listener),
-      [environmentId, messageId],
-    ),
-    readSession,
-    readSession,
-  );
-  // Stored summaries arrive with the thread's listening state.
-  const threadState = useEnvironmentQuery(
-    props.textToSpeechPersistentJobs
-      ? messageSpeechThread({ environmentId, input: { threadId: props.threadId } })
-      : null,
-  ).data;
-  const storedSummary = useMemo(
-    () => currentThreadMessageSummary(threadState, messageId, messageText),
-    [threadState, messageId, messageText],
-  );
-  const summary = session.summary ?? storedSummary;
-  const showSummary = (summary !== null || props.summariesAvailable) && messageText.trim() !== "";
-  const speech = useAssistantMessageSpeech({
-    environmentId,
-    threadId: props.threadId,
-    messageId,
-    text: messageText,
-    available: props.textToSpeechAvailable,
-    persistentJobs: props.textToSpeechPersistentJobs,
-  });
-  const theme = useUniwindTheme();
-
-  const onPressSummary = useCallback(() => {
-    if (summary !== null) {
-      setExpanded((current) => !current);
-      return;
-    }
-    if (preparing) return;
-    setPreparing(true);
-    const endRequest = beginMessageArtifactRequest(environmentId, messageId);
-    void summarize({ environmentId, input: { messageId } })
-      .then((result) => {
-        if (result._tag === "Success") {
-          rememberMessageSummary(environmentId, messageText, result.value);
-          setExpanded(true);
-          return;
-        }
-        Alert.alert(
-          "Summary unavailable",
-          "T3 Code could not summarize this message. Try again in a moment.",
-        );
-      })
-      .finally(() => {
-        setPreparing(false);
-        endRequest();
-      });
-  }, [environmentId, messageId, messageText, preparing, summarize, summary]);
-
-  return (
-    <View>
-      <View className="mt-1 flex-row items-center gap-1">
-        {props.children}
-        {showSummary ? (
-          <Pressable
-            accessibilityRole="button"
-            accessibilityLabel={summary === null ? "Create summary" : "Toggle summary"}
-            accessibilityState={{
-              expanded: summary === null ? undefined : expanded,
-              busy: preparing,
-            }}
-            className="size-7 items-center justify-center rounded-lg active:bg-subtle-strong"
-            disabled={preparing}
-            hitSlop={8}
-            onPress={onPressSummary}
-          >
-            {preparing ? (
-              <ActivityIndicator size="small" color={props.iconSubtleColor} />
-            ) : (
-              <SymbolView
-                name="doc.text"
-                size={14}
-                tintColor={props.iconSubtleColor}
-                type="monochrome"
-              />
-            )}
-          </Pressable>
-        ) : null}
-        <AssistantMessageSpeechButton state={speech} iconSubtleColor={props.iconSubtleColor} />
-        <Text className="font-t3-medium text-xs tabular-nums text-foreground-secondary">
-          {props.timestampLabel}
-        </Text>
-      </View>
-      {summary !== null && expanded ? (
-        <View className="mt-2 gap-2 rounded-2xl border border-border bg-subtle p-3">
-          <View className="flex-row items-center gap-2">
-            <SymbolView
-              name="doc.text"
-              size={14}
-              tintColor={props.iconSubtleColor}
-              type="monochrome"
-            />
-            <Text className="font-t3-bold text-xs text-foreground">Summary</Text>
-          </View>
-          <AssistantMarkdownContent
-            markdown={summary.summary}
-            markdownStyles={props.markdownStyles}
-            linkHandlers={props.markdownLinkHandlers}
-            onUseArtifactTemplate={props.onUseArtifactTemplate}
-            renderImage={props.renderImage}
-            skills={props.skills}
-          />
-        </View>
-      ) : null}
-      {speech.expanded && speech.speech !== null ? (
-        <AssistantSpeechPlayer
-          environmentId={environmentId}
-          threadId={props.threadId}
-          threadTitle={props.threadTitle}
-          messageId={messageId}
-          speech={speech.speech}
-          messageText={messageText}
-          iconSubtleColor={props.iconSubtleColor}
-          foregroundColor={String(theme["--color-foreground"])}
-          onForegroundColor={theme["--color-sheet"]}
-          onRetry={speech.speech.origin === "agent" ? null : speech.regenerate}
-        />
-      ) : null}
-    </View>
   );
 }
 
@@ -2442,6 +2280,8 @@ export const ThreadFeed = memo(function ThreadFeed(props: ThreadFeedProps) {
 
   const theme = useUniwindTheme();
   const iconSubtleColor = theme["--color-icon-subtle"];
+  const foregroundColor = String(theme["--color-foreground"]);
+  const onForegroundColor = theme["--color-sheet"];
   const screenColor = theme["--color-screen"];
   const userBubbleColor = theme["--color-user-bubble"];
   const onMarkdownLinkPress = useCallback(
@@ -3196,6 +3036,8 @@ export const ThreadFeed = memo(function ThreadFeed(props: ThreadFeedProps) {
             renderViewedImage,
             renderReasoning,
             iconSubtleColor,
+            foregroundColor,
+            onForegroundColor,
             screenColor,
             userBubbleColor,
             markdownStyles,
@@ -3235,6 +3077,8 @@ export const ThreadFeed = memo(function ThreadFeed(props: ThreadFeedProps) {
       unsettledTurnId,
       failedRunIds,
       iconSubtleColor,
+      foregroundColor,
+      onForegroundColor,
       screenColor,
       userBubbleColor,
       markdownStyles,

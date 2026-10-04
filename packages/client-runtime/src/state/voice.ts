@@ -4,6 +4,7 @@ import {
   type MessageSpeechSynthesisRequest,
   type MessageSpeechSynthesisResult,
   type MessageSpeechThreadState,
+  type MessageSpeechThreadUpdate,
   type MessageSummaryResult,
   type MessageSummaryThreadEntry,
   type VoiceTranscriptionRequest,
@@ -164,6 +165,33 @@ export const toMessageSpeechThreadView = (
   summaries: new Map(state.summaries.map((summary) => [summary.messageId, summary])),
 });
 
+const withEntry = <V>(map: ReadonlyMap<MessageId, V>, messageId: MessageId, value?: V) => {
+  const next = new Map(map);
+  if (value === undefined) next.delete(messageId);
+  else next.set(messageId, value);
+  return next;
+};
+
+/**
+ * Folds one streamed update into the view: a snapshot replaces it, a message
+ * update replaces that message's entries. Null until the first snapshot.
+ */
+export const applyMessageSpeechThreadUpdate = (
+  view: MessageSpeechThreadView | null,
+  update: MessageSpeechThreadUpdate,
+): MessageSpeechThreadView | null => {
+  if (update.type === "snapshot") return toMessageSpeechThreadView(update.state);
+  if (view === null) return null;
+  const pending = new Set(view.pending);
+  if (update.pending) pending.add(update.messageId);
+  else pending.delete(update.messageId);
+  return {
+    recordings: withEntry(view.recordings, update.messageId, update.recording),
+    pending,
+    summaries: withEntry(view.summaries, update.messageId, update.summary),
+  };
+};
+
 /**
  * The message's stored summary from the thread state, only while it still
  * summarizes `text` (the message text the client shows now).
@@ -191,6 +219,16 @@ export function createMessageSpeechThreadAtomFamily<R, E>(
     label: "environment-data:voice:message-speech",
     tag: WS_METHODS.voiceSubscribeMessageSpeech,
     idleTtlMs: MESSAGE_SPEECH_THREAD_IDLE_TTL_MS,
-    transform: (stream) => stream.pipe(Stream.map(toMessageSpeechThreadView)),
+    // Every (re)subscription starts with a snapshot, so the fold cannot fall behind.
+    transform: (stream) =>
+      stream.pipe(
+        Stream.mapAccum(
+          (): MessageSpeechThreadView | null => null,
+          (view, update) => {
+            const next = applyMessageSpeechThreadUpdate(view, update);
+            return next === null ? [view, []] : [next, [next]];
+          },
+        ),
+      ),
   });
 }

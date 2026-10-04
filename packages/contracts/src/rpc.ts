@@ -149,7 +149,7 @@ import {
 } from "./openRouterCredits.ts";
 import {
   MessageSpeechThreadInput,
-  MessageSpeechThreadState,
+  MessageSpeechThreadUpdate,
   TtsCatalogInput,
   TtsCatalogResult,
   TtsConfigureOpenRouterInput,
@@ -815,7 +815,7 @@ const WsTtsTestRpc = Rpc.make(WS_METHODS.ttsTest, {
 /** A thread's listening recordings and pending requests: current state first, then every change. */
 const WsVoiceSubscribeMessageSpeechRpc = Rpc.make(WS_METHODS.voiceSubscribeMessageSpeech, {
   payload: MessageSpeechThreadInput,
-  success: MessageSpeechThreadState,
+  success: MessageSpeechThreadUpdate,
   error: EnvironmentAuthorizationError,
   stream: true,
 });
