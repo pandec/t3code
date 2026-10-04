@@ -9553,6 +9553,13 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
       command: Extract<OrchestrationV2Command, { readonly type: "message.dispatch" }>,
       events: Ref.Ref<Array<OrchestrationV2DomainEvent>>,
     ) {
+      // Most wakes find no archive pending: check the thread row before loading records.
+      const thread = latestThreadState(
+        yield* Ref.get(events),
+        command.threadId,
+        yield* readThreadForArchive(command.threadId),
+      );
+      if (pendingArchiveRequest(thread) === null) return;
       const projection = yield* getProjectionWithPendingEvents(command.threadId, events);
       const request = pendingArchiveRequest(projection.thread);
       if (request === null) return;

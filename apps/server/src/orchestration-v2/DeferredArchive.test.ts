@@ -254,11 +254,11 @@ describe("stopCancelsArchive", () => {
 });
 
 describe("wake runs", () => {
+  // The real queued shape: requested after the archive, no workStartedAt until it starts.
   const wake = (id: string, ordinal: number, status: OrchestrationV2Run["status"]) => ({
-    ...run(id, ordinal, status),
+    ...run(id, ordinal, status, "2026-10-01T00:00:02.000Z"),
     startedAt: null,
-    completedAt: null,
-    workStartedAt: at("2026-10-01T00:00:00.000Z"),
+    completedAt: status === "cancelled" ? at("2026-10-01T00:00:03.000Z") : null,
   });
 
   it("moves a pending archive to the run a wake started, never backwards", () => {
@@ -318,6 +318,81 @@ describe("wake runs", () => {
         { ...wake("run-2", 2, "cancelled"), startedAt: at("2026-10-01T00:00:02.000Z") },
       ]).type,
       "cancel",
+    );
+    // A run cancelled before it started but requested before the archive is no wake.
+    assert.deepEqual(
+      evaluate([
+        run("run-1", 1, "completed"),
+        { ...run("run-2", 2, "cancelled"), startedAt: null, completedAt: null },
+      ]),
+      { type: "cancel", detail: ARCHIVE_CANCEL_DETAIL.failed },
+    );
+  });
+
+  it("a failed final checkpoint of the run before a wake still fails the archive", () => {
+    const checkpointId = CheckpointId.make("cp-1");
+    // Scheduled while run-1 ran; run-1 finished after that, then the wake took over.
+    const parent = {
+      ...run("run-1", 1, "completed"),
+      checkpointId,
+      completedAt: at("2026-10-01T00:00:02.000Z"),
+    };
+    const evaluate = (status: "error" | "ready", wakeStatus: OrchestrationV2Run["status"]) =>
+      evaluateDeferredArchive({
+        thread: { worktreePath: "/work/tree" },
+        request: pendingRequest({ runId: RunId.make("run-2") }),
+        runs: [parent, wake("run-2", 2, wakeStatus)],
+        checkpoints: [{ id: checkpointId, status }],
+        pendingBackgroundTasks: [],
+      });
+    const failed = { type: "fail", detail: ARCHIVE_CANCEL_DETAIL.checkpointFailed } as const;
+    assert.deepEqual(evaluate("error", "queued"), failed);
+    assert.deepEqual(evaluate("error", "completed"), failed);
+    assert.equal(evaluate("ready", "completed").type, "archive");
+  });
+
+  it("a reserved delegated result holds the archive until its wake run finishes", () => {
+    const wakeMessageId = MessageId.make("wake");
+    const parent = {
+      ...run("run-1", 1, "completed"),
+      userMessageId: MessageId.make("prompt"),
+      delegatedCompletion: {
+        disposition: "open" as const,
+        nextGeneration: 2,
+        delivery: { generation: 1, messageId: wakeMessageId, taskIds: [NodeId.make("task")] },
+      },
+    };
+    // An idle thread does not archive at once while the wake is still to come.
+    const plan = schedule({ runs: [parent] });
+    assert.isTrue(plan.type === "pending" && plan.request.runId === null);
+    const evaluate = (
+      request: OrchestrationV2ThreadArchiveRequest,
+      runs: ReadonlyArray<Parameters<typeof evaluateDeferredArchive>[0]["runs"][number]>,
+    ) =>
+      evaluateDeferredArchive({
+        thread: { worktreePath: "/work/tree" },
+        request,
+        runs,
+        checkpoints: [],
+        pendingBackgroundTasks: [],
+      });
+    // The parent finished and the task is terminal, but the wake has not dispatched yet.
+    assert.deepEqual(evaluate(pendingRequest(), [parent]), {
+      type: "wait",
+      detail: "A delegated result is waiting to wake the agent.",
+    });
+    // The wake dispatched and the request moved onto its run.
+    const wakeRun = { ...wake("run-2", 2, "running"), userMessageId: wakeMessageId };
+    const retargeted = wakeRetargetedArchiveRequest(
+      pendingRequest(),
+      [parent, wakeRun],
+      wakeMessageId,
+    );
+    assert.equal(retargeted?.runId, RunId.make("run-2"));
+    assert.equal(evaluate(retargeted!, [parent, wakeRun]).type, "wait");
+    assert.equal(
+      evaluate(retargeted!, [parent, { ...wakeRun, status: "completed" as const }]).type,
+      "archive",
     );
   });
 
@@ -558,6 +633,39 @@ const dispatchCompletionWake = (
           occurredAt: now,
           payload: parent,
         },
+        {
+          id: EventId.make(`${name}-delegate-task`),
+          type: "subagent.updated",
+          threadId,
+          runId: parent.id,
+          nodeId: taskIds[0]!,
+          driver,
+          providerInstanceId: modelSelection.instanceId,
+          occurredAt: now,
+          payload: {
+            id: taskIds[0]!,
+            threadId,
+            runId: parent.id,
+            parentNodeId: NodeId.make(`${name}-root`),
+            origin: "app_owned",
+            createdBy: "agent",
+            driver,
+            providerInstanceId: modelSelection.instanceId,
+            providerThreadId: null,
+            childThreadId: null,
+            nativeTaskRef: null,
+            prompt: "Delegated work.",
+            title: null,
+            model: null,
+            completionWake: "always",
+            completionDelivery: { state: "claimed", observedByRunId: null },
+            status: "completed",
+            result: "done",
+            startedAt: now,
+            completedAt: now,
+            updatedAt: now,
+          },
+        },
       ],
       effects: [],
     });
@@ -579,7 +687,7 @@ const dispatchCompletionWake = (
     );
     assert.isDefined(wakeRun);
     assert.equal(wakeRun!.status, "queued");
-    return { parent, wakeRun: wakeRun! };
+    return { parent, wakeRun: wakeRun!, taskId: taskIds[0]! };
   });
 
 const threadState = (threadId: ThreadId) =>
@@ -691,6 +799,44 @@ it.layer(TestLayer)("deferred archive on the orchestrator", (it) => {
       assert.isNotNull(thread.archivedAt);
       assert.equal(thread.archiveRequest?.status, "completed");
       assert.equal(thread.archiveRequest?.runId, wakeRun.id);
+    }),
+  );
+
+  it.effect("a wake withdrawn while queued leaves the archive waiting on the parent", () =>
+    Effect.gen(function* () {
+      const scheduler = yield* ThreadArchiveScheduler.ThreadArchiveScheduler;
+      const orchestrator = yield* Orchestrator.OrchestratorV2;
+      const threadId = yield* createThread("wake-withdrawn");
+      const { parent, wakeRun, taskId } = yield* dispatchCompletionWake(
+        threadId,
+        "wake-withdrawn",
+        scheduler,
+      );
+      assert.equal((yield* scheduler.status(threadId)).request?.runId, wakeRun.id);
+
+      // The parent reads the result itself, so its queued wake is cancelled.
+      yield* orchestrator.dispatch({
+        type: "delegated_task.completion-delivery.acknowledge",
+        commandId: CommandId.make("wake-withdrawn-ack"),
+        parentThreadId: threadId,
+        taskId,
+        observedByRunId: parent.id,
+      });
+      const cancelled = (yield* orchestrator.getThreadProjection(threadId)).runs.find(
+        (candidate) => candidate.id === wakeRun.id,
+      );
+      assert.equal(cancelled?.status, "cancelled");
+
+      yield* scheduler.reconcilePending;
+      const waiting = yield* scheduler.status(threadId);
+      assert.isNull(waiting.archivedAt);
+      assert.equal(waiting.request?.status, "pending");
+
+      yield* completeRun(threadId, parent, "wake-withdrawn-parent-complete");
+      yield* scheduler.reconcilePending;
+      const thread = yield* threadState(threadId);
+      assert.isNotNull(thread.archivedAt);
+      assert.equal(thread.archiveRequest?.status, "completed");
     }),
   );
 

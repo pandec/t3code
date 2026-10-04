@@ -6,7 +6,9 @@
  * (delegated task result, background notification, restart continuation)
  * carries on that work, so the request moves to the run the wake starts. New
  * work, a failed or stopped run, or a workspace change cancels it; a failed
- * final checkpoint records an error and leaves the thread unarchived. A request with
+ * final checkpoint of any awaited run records an error and leaves the thread
+ * unarchived. A delegated result reserved for a wake that has not dispatched
+ * yet holds the archive like background work. A request with
  * `removeWorktree` stays pending after the archive until the scheduler's
  * guarded removal records its outcome. Pure: the orchestrator and
  * `ThreadArchiveScheduler` share these rules.
@@ -30,7 +32,9 @@ export type ArchiveRun = Pick<
   OrchestrationV2Run,
   "id" | "ordinal" | "status" | "requestedAt" | "checkpointId"
 > &
-  Partial<Pick<OrchestrationV2Run, "startedAt" | "completedAt" | "workStartedAt">>;
+  Partial<
+    Pick<OrchestrationV2Run, "startedAt" | "completedAt" | "userMessageId" | "delegatedCompletion">
+  >;
 export type ArchiveCheckpoint = Pick<OrchestrationV2Checkpoint, "id" | "status">;
 
 /** Whether `run`'s final checkpoint capture failed; `missing` (no Git) still counts as captured. */
@@ -44,6 +48,23 @@ export function finalCheckpointFailed(
       (checkpoint) => checkpoint.id === run.checkpointId && checkpoint.status === "error",
     )
   );
+}
+
+/**
+ * A delegated result is reserved for a wake whose run does not exist yet: the
+ * continuation worker will dispatch it, so archiving now would drop it.
+ */
+function undeliveredCompletionPending(runs: ReadonlyArray<ArchiveRun>): boolean {
+  return runs.some((run) => {
+    const cohort = run.delegatedCompletion;
+    const delivery = cohort?.delivery;
+    return (
+      cohort?.disposition === "open" &&
+      delivery != null &&
+      delivery.taskIds.length > 0 &&
+      !runs.some((candidate) => candidate.userMessageId === delivery.messageId)
+    );
+  });
 }
 
 /** Statuses of a run that is still working toward completion (waiting = capturing its checkpoint). */
@@ -190,7 +211,9 @@ export function planArchiveSchedule(input: {
     requestedAt: DateTime.formatIso(input.now),
     status: "pending",
   };
-  return run === null && !backgroundWorkHoldsCompletion(input.pendingBackgroundTasks)
+  return run === null &&
+    !backgroundWorkHoldsCompletion(input.pendingBackgroundTasks) &&
+    !undeliveredCompletionPending(input.runs)
     ? { type: "archive", request: archivedArchiveRequest(request) }
     : { type: "pending", request };
 }
@@ -225,11 +248,21 @@ export function evaluateDeferredArchive(input: {
       if (STOPPED_RUN_STATUSES.has(awaited.status)) {
         return { type: "cancel", detail: ARCHIVE_CANCEL_DETAIL.failed };
       }
+      // Every awaited run counts, not only the latest wake: the run the archive
+      // was scheduled during, and wakes before the current one.
+      const requestedAtMs = Date.parse(request.requestedAt);
+      const chainCheckpointFailed = input.runs.some(
+        (run) =>
+          run.ordinal <= target.ordinal &&
+          run.completedAt != null &&
+          DateTime.toEpochMillis(run.completedAt) > requestedAtMs &&
+          finalCheckpointFailed(run, input.checkpoints),
+      );
+      if (chainCheckpointFailed || finalCheckpointFailed(awaited, input.checkpoints)) {
+        return { type: "fail", detail: ARCHIVE_CANCEL_DETAIL.checkpointFailed };
+      }
       if (awaited.status !== "completed") {
         return { type: "wait", detail: "The turn has not finished." };
-      }
-      if (finalCheckpointFailed(awaited, input.checkpoints)) {
-        return { type: "fail", detail: ARCHIVE_CANCEL_DETAIL.checkpointFailed };
       }
     }
   } else {
@@ -241,6 +274,9 @@ export function evaluateDeferredArchive(input: {
   if (backgroundWorkHoldsCompletion(input.pendingBackgroundTasks)) {
     return { type: "wait", detail: "Background work is still running." };
   }
+  if (undeliveredCompletionPending(input.runs)) {
+    return { type: "wait", detail: "A delegated result is waiting to wake the agent." };
+  }
   return { type: "archive" };
 }
 
@@ -249,6 +285,9 @@ export function evaluateDeferredArchive(input: {
  * (its delegated tasks were withdrawn, or restart recovery dropped it) never
  * ran, so the request falls back to the run before it; null when that run had
  * already settled before the archive was scheduled (only background work counts).
+ * Only a wake moves a pending request, so a target requested at or after the
+ * archive is a wake; the run the archive was scheduled during was requested
+ * before it (`>=` keeps same-millisecond wakes).
  */
 function awaitedRun(
   target: ArchiveRun,
@@ -257,7 +296,11 @@ function awaitedRun(
 ): ArchiveRun | null {
   const requestedAtMs = Date.parse(request.requestedAt);
   let run = target;
-  while (run.status === "cancelled" && run.startedAt === null && run.workStartedAt !== undefined) {
+  while (
+    run.status === "cancelled" &&
+    run.startedAt == null &&
+    DateTime.toEpochMillis(run.requestedAt) >= requestedAtMs
+  ) {
     const ordinal = run.ordinal;
     const previous = runs
       .filter((candidate) => candidate.ordinal < ordinal)

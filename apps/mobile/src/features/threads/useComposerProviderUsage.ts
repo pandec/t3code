@@ -53,8 +53,12 @@ export function useComposerProviderUsage(input: {
   const snapshots = providerUsageQuery.data?.snapshots;
   // The pooled account the thread's session is bound to, read from the gateway
   // when the usage sheet opens. Kept with the thread and model it was probed
-  // for, so an answer landing after a switch cannot mislabel the new context.
-  const [threadAccount, setThreadAccount] = useState<ProviderUsageThreadAccountState | null>(null);
+  // for, so an answer landing after a switch cannot mislabel the new context,
+  // and with the instance, whose pool its auth index belongs to.
+  const [threadAccount, setThreadAccount] = useState<{
+    readonly instanceId: ProviderInstanceId;
+    readonly account: ProviderUsageThreadAccountState;
+  } | null>(null);
   // Mobile has no settings mirror, so gateway-ness comes from the pool
   // snapshot itself.
   const meter = useMemo(
@@ -65,7 +69,10 @@ export function useComposerProviderUsage(input: {
         activeInstanceId: input.activeInstanceId,
         activeModel: input.activeModel,
         threadId: input.threadId,
-        threadAccount,
+        threadAccount:
+          threadAccount !== null && threadAccount.instanceId === input.activeInstanceId
+            ? threadAccount.account
+            : null,
         now: nowMs,
       }),
     [
@@ -100,7 +107,9 @@ export function useComposerProviderUsage(input: {
       const threadId = input.threadId;
       if (!input.hasProviderSession || activeDriver !== "claudeAgent") return;
       const model = input.activeModel;
-      const probeKey = `${environmentId}:${threadId}:${model}`;
+      const instanceId = input.activeInstanceId;
+      if (instanceId === null) return;
+      const probeKey = `${environmentId}:${instanceId}:${threadId}:${model}`;
       const nowMs = Date.now();
       if (
         !shouldProbeProviderUsageThreadAccount(
@@ -120,12 +129,15 @@ export function useComposerProviderUsage(input: {
         // flight; its answer must not be evicted by this stale one.
         if (lastThreadAccountProbeRef.current.key !== probeKey) return;
         const authIndex = result.value.authIndex;
-        setThreadAccount(authIndex === null ? null : { threadId, model, authIndex });
+        setThreadAccount(
+          authIndex === null ? null : { instanceId, account: { threadId, model, authIndex } },
+        );
       })();
     },
     [
       activeDriver,
       environmentId,
+      input.activeInstanceId,
       input.activeModel,
       input.hasProviderSession,
       input.threadId,
