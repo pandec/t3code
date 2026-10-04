@@ -251,6 +251,11 @@ a message or choosing **Unarchive** restores it. Unarchive a row directly, or de
 context menu (long-press on mobile). **View all archived threads** opens the full archive in
 Settings.
 
+On web and desktop the full archive groups threads the way the sidebar groups projects, so
+checkouts of one repository share a section across environments, and it follows the Settings
+scope: pick a project, checkout, or environment to narrow it. Search by thread title, project,
+path, environment, or model; Command+F or Ctrl+F focuses the search.
+
 On web and desktop the shelf follows the sidebar's environment and project filters. On mobile it
 hides while a search or filter is active. Set how many threads it shows with **Recent archived
 threads** in **Settings → Extras** on web and desktop, or **Settings → Thread behavior** on
