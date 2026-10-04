@@ -199,6 +199,10 @@
       "types": "./src/state/providerUsagePresentation.ts",
       "default": "./src/state/providerUsagePresentation.ts"
     },
+    "./state/provider-usage-meter": {
+      "types": "./src/state/providerUsageMeter.ts",
+      "default": "./src/state/providerUsageMeter.ts"
+    },
     "./state/project-accent-colors": {
       "types": "./src/state/projectAccentColors.ts",
       "default": "./src/state/projectAccentColors.ts"

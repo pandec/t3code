@@ -14,6 +14,7 @@ import {
   type ProviderInteractionMode,
   type RuntimeMode,
   type ServerConfig as T3ServerConfig,
+  type ServerProvider,
   type UsageLimitsReport,
 } from "@t3tools/contracts";
 import {
@@ -74,8 +75,18 @@ import { fileRoutePathSegments } from "../files/filePath";
 import {
   ComposerActionButton,
   ComposerInlineControl,
+  ComposerToolbarButton,
   ComposerToolbarRow,
 } from "../../components/ComposerToolbar";
+import { cn } from "../../lib/cn";
+import { providerUsageTriggerLabel } from "../../lib/providerUsagePill";
+import { shouldRefreshProviderUsageOnOpen } from "@t3tools/client-runtime/state/provider-usage-presentation";
+import { resolveProviderUsageModel } from "@t3tools/client-runtime/state/provider-usage";
+import {
+  type ProviderUsageRouteSession,
+  useProviderUsageRoutePresentation,
+} from "./ProviderUsageSheet";
+import { useComposerProviderUsage } from "./useComposerProviderUsage";
 import { ProviderIcon } from "../../components/ProviderIcon";
 import {
   composerStripAttachments,
@@ -133,6 +144,8 @@ import {
  */
 export const COMPOSER_COLLAPSED_CHROME = 60;
 
+const EMPTY_PROVIDERS: ReadonlyArray<ServerProvider> = [];
+
 /**
  * Height of the expanded composer (card + toolbar + vertical padding, excluding safe-area inset).
  * Used by the parent to compute the larger feed bottom inset when the composer is focused.
@@ -154,6 +167,8 @@ export interface ThreadComposerProps {
    */
   readonly threadSyncPhase?: "loading" | "syncing" | null;
   readonly selectedThread: EnvironmentThreadShell;
+  /** The thread's persisted model; `selectedThread` carries the staged draft model. */
+  readonly persistedModel: string;
   readonly reportedModelSelection?: ModelSelection | null;
   readonly hasCompactableConversation: boolean;
   readonly serverConfig: T3ServerConfig | null;
@@ -390,15 +405,22 @@ export const ThreadComposer = memo(function ThreadComposer(props: ThreadComposer
   });
   const settingsRoutePresentation = useExistingThreadSettingsRoutePresentation();
   const settingsRoutePresentedRef = useRef(false);
+  const usageSheetPresentation = useThreadSettingsSheetPresentation({
+    editorRef: inputRef,
+    isEditorFocused: isFocused,
+  });
+  const usageRoutePresentation = useProviderUsageRoutePresentation();
+  const usageRoutePresentedRef = useRef(false);
   /**
-   * One composer overlay at a time. Settings, attachment pickers, previews and
-   * the inline context sheet each present their own surface; nothing else
-   * arbitrates between them, so two opens landing in the same frame would
-   * stack. A ref, not state: both taps can arrive before React re-renders.
+   * One composer overlay at a time. Settings, provider usage, attachment
+   * pickers, previews and the inline context sheet each present their own
+   * surface; nothing else arbitrates between them, so two opens landing in the
+   * same frame would stack. A ref, not state: both taps can arrive before React
+   * re-renders.
    */
-  const overlaySheetOwnerRef = useRef<"settings" | "attachment" | "preview" | "context" | null>(
-    null,
-  );
+  const overlaySheetOwnerRef = useRef<
+    "settings" | "usage" | "attachment" | "preview" | "context" | null
+  >(null);
   const wasExpandedBeforePreviewRef = useRef(false);
   const inFlightThreadIdsRef = useRef(new Set<string>());
   const { onExpandedChange } = props;
@@ -532,7 +554,10 @@ export const ThreadComposer = memo(function ThreadComposer(props: ThreadComposer
   );
   const isVoiceInputPresented = voicePresentation.statusLabel !== null;
   // An open draft stays visible; only a collapsed composer becomes a voice strip.
-  const isExpanded = isFocused || settingsSheetPresentation.keepsComposerExpanded;
+  const isExpanded =
+    isFocused ||
+    settingsSheetPresentation.keepsComposerExpanded ||
+    usageSheetPresentation.keepsComposerExpanded;
   const showsCompactDictation = isVoiceInputPresented && !isExpanded;
   const isToolbarVisible = isExpanded || isVoiceInputPresented;
   const attachmentBlockReason = composerAttachmentUploadBlockReason({
@@ -617,11 +642,19 @@ export const ThreadComposer = memo(function ThreadComposer(props: ThreadComposer
 
   const handleBlur = useCallback(() => {
     setIsFocused(false);
-    if (!settingsSheetPresentation.keepsComposerExpanded) {
+    if (
+      !settingsSheetPresentation.keepsComposerExpanded &&
+      !usageSheetPresentation.keepsComposerExpanded
+    ) {
       onExpandedChange?.(false);
     }
     onEditorFocusChange?.(false);
-  }, [onEditorFocusChange, onExpandedChange, settingsSheetPresentation.keepsComposerExpanded]);
+  }, [
+    onEditorFocusChange,
+    onExpandedChange,
+    settingsSheetPresentation.keepsComposerExpanded,
+    usageSheetPresentation.keepsComposerExpanded,
+  ]);
   const handleSend = useCallback(
     async (followUp?: ActiveTurnComposerAction) => {
       if (voiceInput.blocksSubmission || pendingPastedTextAttachmentCountRef.current > 0) return;
@@ -770,6 +803,104 @@ export const ThreadComposer = memo(function ThreadComposer(props: ThreadComposer
     }
   }, [settingsRoutePresentation.present, settingsRouteSession, settingsSheetPresentation.isActive]);
 
+  const providerUsage = useComposerProviderUsage({
+    environmentId: props.environmentId,
+    providers: props.serverConfig?.providers ?? EMPTY_PROVIDERS,
+    activeInstanceId:
+      props.selectedThread.runtime?.providerInstanceId ?? currentModelSelection.instanceId,
+    activeModel: resolveProviderUsageModel({
+      liveSessionInstanceId: props.selectedThread.runtime?.providerInstanceId,
+      persistedModel: props.persistedModel,
+      selectedModel: currentModelSelection.model,
+    }),
+    threadId: props.selectedThread.id,
+  });
+  const providerUsageMeter = providerUsage.meter;
+  const providerUsageLabel = providerUsageMeter.label ?? "Provider";
+  const usageRouteSession = useMemo<ProviderUsageRouteSession>(
+    () => ({
+      ownerId: settingsOwnerId,
+      providerLabel: providerUsageLabel,
+      accounts: providerUsageMeter.accounts,
+      fableUsage: providerUsageMeter.fable,
+      nowMs: providerUsage.nowMs,
+      panelObservedAt: providerUsage.panelObservedAt,
+      refreshing: providerUsage.refreshing,
+      onRefresh: providerUsage.refresh,
+      unavailable: providerUsage.unavailable,
+    }),
+    [
+      providerUsage.nowMs,
+      providerUsage.panelObservedAt,
+      providerUsage.refresh,
+      providerUsage.refreshing,
+      providerUsage.unavailable,
+      providerUsageLabel,
+      providerUsageMeter.accounts,
+      providerUsageMeter.fable,
+      settingsOwnerId,
+    ],
+  );
+  const { lastRefreshAtMs: providerUsageLastRefreshAtMs, refresh: refreshProviderUsage } =
+    providerUsage;
+  const openProviderUsageSheet = useCallback(() => {
+    if (overlaySheetOwnerRef.current !== null) return;
+    overlaySheetOwnerRef.current = "usage";
+    usageRoutePresentation.present(usageRouteSession);
+    usageSheetPresentation.open();
+    // Opening the sheet is the read: refresh anything older than a minute, at
+    // most once a minute however long an account stays unread.
+    if (
+      shouldRefreshProviderUsageOnOpen(
+        usageRouteSession.accounts,
+        Date.now(),
+        providerUsageLastRefreshAtMs(),
+      )
+    ) {
+      refreshProviderUsage();
+    }
+  }, [
+    providerUsageLastRefreshAtMs,
+    refreshProviderUsage,
+    usageRoutePresentation.present,
+    usageRouteSession,
+    usageSheetPresentation.open,
+  ]);
+  useEffect(() => {
+    if (usageSheetPresentation.isActive) {
+      usageRoutePresentation.present(usageRouteSession);
+    }
+  }, [usageRoutePresentation.present, usageRouteSession, usageSheetPresentation.isActive]);
+  useEffect(() => {
+    if (!usageSheetPresentation.isVisible || usageRoutePresentedRef.current) {
+      return;
+    }
+    usageRoutePresentedRef.current = true;
+    navigation.dispatch(StackActions.push("ProviderUsageSheet"));
+  }, [navigation, usageSheetPresentation.isVisible]);
+  const providerUsagePill =
+    providerUsageMeter.accounts.length > 0 ? (
+      <ComposerToolbarButton
+        accessibilityLabel={`${providerUsageLabel} usage`}
+        iconNode={
+          <View
+            className={cn(
+              "h-2 w-2 rounded-full",
+              providerUsage.ringStatus === "critical"
+                ? "bg-rose-500"
+                : providerUsage.ringStatus === "warning"
+                  ? "bg-amber-500"
+                  : "bg-foreground-muted",
+            )}
+          />
+        }
+        label={providerUsageTriggerLabel(providerUsage.primaryWindow)}
+        maxWidth={112}
+        onPress={openProviderUsageSheet}
+        showChevron={false}
+      />
+    ) : null;
+
   useEffect(() => {
     if (!settingsSheetPresentation.isVisible || settingsRoutePresentedRef.current) {
       return;
@@ -786,11 +917,22 @@ export const ThreadComposer = memo(function ThreadComposer(props: ThreadComposer
         settingsSheetPresentation.onDismissed();
         settingsRoutePresentation.clear(settingsOwnerId);
       }
+      if (usageRoutePresentedRef.current) {
+        usageRoutePresentedRef.current = false;
+        usageSheetPresentation.onDismissed();
+        usageRoutePresentation.clear(settingsOwnerId);
+      }
       // The composer regaining focus means no overlay route is above it, so
       // release the owner even if an open never reached its presented ref
       // (a tap that blurred the editor but was dismissed before presenting).
       overlaySheetOwnerRef.current = null;
-    }, [settingsOwnerId, settingsRoutePresentation.clear, settingsSheetPresentation.onDismissed]),
+    }, [
+      settingsOwnerId,
+      settingsRoutePresentation.clear,
+      settingsSheetPresentation.onDismissed,
+      usageRoutePresentation.clear,
+      usageSheetPresentation.onDismissed,
+    ]),
   );
 
   useEffect(
@@ -799,9 +941,16 @@ export const ThreadComposer = memo(function ThreadComposer(props: ThreadComposer
       // native-stack patch. This is when the queued keyboard restore runs.
       (navigation as unknown as NavigationWithFinishTransitioning).addListener(
         "finishTransitioning",
-        settingsSheetPresentation.onStackTransitionsFinished,
+        () => {
+          settingsSheetPresentation.onStackTransitionsFinished();
+          usageSheetPresentation.onStackTransitionsFinished();
+        },
       ),
-    [navigation, settingsSheetPresentation.onStackTransitionsFinished],
+    [
+      navigation,
+      settingsSheetPresentation.onStackTransitionsFinished,
+      usageSheetPresentation.onStackTransitionsFinished,
+    ],
   );
 
   return (
@@ -1115,6 +1264,7 @@ export const ThreadComposer = memo(function ThreadComposer(props: ThreadComposer
                   onStart={voiceInput.start}
                   onCancel={voiceInput.cancel}
                 />
+                {providerUsagePill}
                 {showStopAction ? (
                   <ComposerActionButton
                     accessibilityLabel="Stop agent"
@@ -1183,7 +1333,7 @@ export const ThreadComposer = memo(function ThreadComposer(props: ThreadComposer
                       onPickFiles={props.onPickDraftFiles}
                       onOverlayVisibilityChange={handleAttachmentOverlayVisibilityChange}
                     />
-                    <View className="min-w-0 shrink">
+                    <View className="min-w-0 shrink flex-row items-center">
                       <ComposerInlineControl
                         accessibilityLabel="Model and reasoning settings"
                         accessibilityValue={{ text: settingsAccessibilityValue }}
@@ -1199,6 +1349,7 @@ export const ThreadComposer = memo(function ThreadComposer(props: ThreadComposer
                         maxWidth="100%"
                         onPress={openSettings}
                       />
+                      {providerUsagePill}
                     </View>
                   </View>
                 )}

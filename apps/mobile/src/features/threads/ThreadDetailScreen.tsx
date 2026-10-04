@@ -146,6 +146,8 @@ export interface ThreadDetailScreenProps {
   readonly worktreeSetup?: WorktreeSetupCardProps | null;
   readonly setupWorkingStartedAt?: string | null;
   readonly selectedThread: EnvironmentThreadShell;
+  /** The thread's persisted model, before draft settings are overlaid onto `selectedThread`. */
+  readonly persistedModel: string;
   readonly contentPresentation: ThreadContentPresentation;
   readonly screenTone: StatusTone;
   readonly connectionError: string | null;
@@ -1425,6 +1427,7 @@ export const ThreadDetailScreen = memo(function ThreadDetailScreen(props: Thread
                       connectionState={props.connectionStateLabel}
                       environmentLabel={props.environmentLabel}
                       selectedThread={props.selectedThread}
+                      persistedModel={props.persistedModel}
                       hasCompactableConversation={hasCompactableConversation && !props.isCompacting}
                       serverConfig={props.serverConfig}
                       queueCount={props.selectedThreadQueueCount}
