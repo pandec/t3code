@@ -80,7 +80,7 @@ One agent owns the merge state from here through the push: only the owner runs G
    git diff --cached --name-only --diff-filter=ACMR -z |
      xargs -0 awk '/^(<<<<<<<|=======|>>>>>>>)/{print FILENAME ":" FNR}'
    ```
-   Require no output, `.git/MERGE_HEAD` to name the merged `main` tip, no unrelated root `package.json` modification, and unique migration numeric prefixes. The ledger's verification gotchas explain the failure modes.
+   Require no output, `.git/MERGE_HEAD` to name the merged `main` tip, no unrelated root `package.json` modification, and no fork file under `apps/server/src/persistence/Migrations/` (upstream migrations keep their own ids; fork schema goes through the fork ledger, see the ledger's fork-schema standing decision). The ledger's verification gotchas explain the other failure modes.
 
 ## 5. Validate and publish
 
@@ -93,7 +93,7 @@ Complete the applicable local verification before pushing `dev`.
    - `vp run typecheck`
    - focused tests for conflict resolutions, fork-customized areas, and other risky behavioral overlap: `vp test run --root <package-dir> <test-files>` so nested worktrees are not discovered by the root test runner. Use a package's own test script only when it specifically requires one.
 4. With the cheap gates green, audit the complete staged merge — including cleanly merged behavioral overlap — for integration defects. This is a hard barrier: do not start the full suite while the audit or any descendant reviewer is still live. Stop if the audit exposes an unresolved product or architecture choice. Fix confirmed defects and rerun the cheap checks they touch. Completion criterion: every finding is fixed or reported as a concrete unresolved decision, and the audit review tree has zero live descendants.
-5. Only after step 4 is complete, run the full suite exactly once: `env -u CLAUDE_CONFIG_DIR vp run test` (the ledger's verification gotchas explain the cleared variable). If later convergence changes code, its required rerun is separate from this initial validation pass.
+5. Only after step 4 is complete, run the full suite exactly once: `env -u CLAUDE_CONFIG_DIR -u ELECTRON_RUN_AS_NODE -u ELEVENLABS_API_KEY vp run test` (the ledger's verification gotchas explain the cleared variables). If later convergence changes code, its required rerun is separate from this initial validation pass.
 6. Add conditional static, generated-output, or build checks when the merged changes make them relevant:
    - run `vp run lint:mobile` when native mobile code, native configuration, mobile dependencies, or patches changed
    - run the affected build, smoke, or generated-asset check when packaging, preload code, build configuration, release/update behavior, or generated assets changed
@@ -110,7 +110,7 @@ Complete the applicable local verification before pushing `dev`.
 12. Before pushing, enter an `origin/dev` convergence loop. It exists only because a normal push cannot land over a moved `origin/dev`; it never widens the target, so a further upstream advance is out of scope here even if the fetch happens to show one.
     - fetch `origin` with pruning immediately before the push and compare `origin/dev` with the last reviewed tip
     - if `origin/dev` advanced, inspect that exact new range and its behavioral overlap with the synchronized candidate, then merge `origin/dev` with `--no-ff --no-commit` under the same conflict rules
-    - rerun every gate invalidated by the new delta; behavioral or source changes require at least `vp check`, `vp run typecheck`, `env -u CLAUDE_CONFIG_DIR vp run test`, and relevant focused or conditional checks
+    - rerun every gate invalidated by the new delta; behavioral or source changes require at least `vp check`, `vp run typecheck`, `env -u CLAUDE_CONFIG_DIR -u ELECTRON_RUN_AS_NODE -u ELEVENLABS_API_KEY vp run test`, and relevant focused or conditional checks
     - commit the reconciliation, perform the post-commit checks above, fetch again, and repeat until the freshly fetched `origin/dev` is an ancestor of local `dev`
     - push `dev:dev` normally only after that ancestry proof; if the push is rejected because `origin/dev` moved again, repeat the loop. Never force the push.
 13. Fetch `origin` after the push. Verify `dev` equals `origin/dev`, `main` equals `origin/main` at the target, `dev` contains the target, and the worktree is clean.
