@@ -1,4 +1,6 @@
 import { passesAttentionFilter } from "@t3tools/client-runtime/state/thread-attention";
+import type { ThreadGroup } from "@t3tools/contracts";
+import { threadGroupId, threadGroupSections } from "@t3tools/shared/threadGroups";
 import { threadPullRequestSearchTerms } from "@t3tools/shared/threadPullRequests";
 import {
   canSnooze,
@@ -411,9 +413,21 @@ export interface ThreadListV2SettledShelfListItem {
   readonly disabled: boolean;
 }
 
+/** Fork: a custom group's header, or the Active header once groups exist
+    (`groupId` null). Every group folds the same way. */
+export interface ThreadListV2CustomGroupListItem {
+  readonly type: "v2-custom-group";
+  readonly key: string;
+  readonly groupId: string | null;
+  readonly name: string;
+  readonly count: number;
+  readonly expanded: boolean;
+}
+
 export type ThreadListV2ListItem =
   | ThreadListV2ThreadListItem
   | ThreadListV2PendingListItem
+  | ThreadListV2CustomGroupListItem
   | ThreadListV2PinnedShelfListItem
   | ThreadListV2PinnedDividerListItem
   | ThreadListV2SnoozedShelfListItem
@@ -427,6 +441,7 @@ export function isThreadListV2ListItem(value: {
   return (
     value.type === "v2-thread" ||
     value.type === "v2-pending" ||
+    value.type === "v2-custom-group" ||
     value.type === "v2-pinned-shelf" ||
     value.type === "v2-pinned-divider" ||
     value.type === "v2-snoozed-shelf" ||
@@ -478,6 +493,14 @@ export function threadListV2ListItemsAreEqual(
       );
     case "v2-pinned-divider":
       return previous.type === "v2-pinned-divider";
+    case "v2-custom-group":
+      return (
+        previous.type === "v2-custom-group" &&
+        previous.groupId === item.groupId &&
+        previous.name === item.name &&
+        previous.count === item.count &&
+        previous.expanded === item.expanded
+      );
     case "v2-snoozed-shelf":
       return (
         previous.type === "v2-snoozed-shelf" &&
@@ -526,6 +549,13 @@ function resolveThreadListV2ItemTimeLabel(
 export function buildThreadListV2ListItems(input: {
   readonly items: ReadonlyArray<ThreadListV2Item>;
   readonly pendingTasks: ReadonlyArray<PendingNewTask>;
+  /** Fork: visible custom groups. With any, Active splits into group sections. */
+  readonly customGroups?: ReadonlyArray<ThreadGroup>;
+  readonly collapsedGroupIds?: ReadonlySet<string>;
+  /** False folds the built-in Active group (only while custom groups exist). */
+  readonly activeShelfExpanded?: boolean;
+  /** `environmentId:threadId` of the open thread, which a folded group keeps. */
+  readonly selectedThreadKey?: string | null;
   readonly pinnedCount?: number;
   readonly pinnedShelfExpanded?: boolean;
   /** False hides the pinned shelf header (Attention filter or search active)
@@ -638,7 +668,37 @@ export function buildThreadListV2ListItems(input: {
   if (pinnedEnd > 0) {
     result.push({ type: "v2-pinned-divider", key: "v2-pinned-divider" });
   }
-  result.push(...threadItems.slice(pinnedEnd, activeEnd), ...pendingItems);
+  const activeItems = threadItems.slice(pinnedEnd, activeEnd);
+  const customGroups = input.customGroups ?? [];
+  if (customGroups.length === 0) {
+    result.push(...activeItems, ...pendingItems);
+  } else {
+    // Fork: groups sit on the side of Active chosen on web or desktop. A
+    // folded group hides its rows except the open thread.
+    const isSelected = (row: ThreadListV2ListItem) =>
+      row.type === "v2-thread" &&
+      `${row.item.thread.environmentId}:${row.item.thread.id}` === input.selectedThreadKey;
+    for (const group of threadGroupSections(customGroups)) {
+      const id = group?.id ?? null;
+      const rows = activeItems.filter(
+        (item) => item.type === "v2-thread" && threadGroupId(item.item.thread, customGroups) === id,
+      );
+      const expanded =
+        group === null
+          ? input.activeShelfExpanded !== false
+          : input.collapsedGroupIds?.has(group.id) !== true;
+      result.push({
+        type: "v2-custom-group",
+        key: group === null ? "v2-active-header" : `v2-custom-group:${group.id}`,
+        groupId: id,
+        name: group?.name ?? "Active",
+        count: rows.length,
+        expanded,
+      });
+      result.push(...(expanded ? rows : rows.filter(isSelected)));
+      if (group === null) result.push(...pendingItems);
+    }
+  }
   const shelfDisabled = input.shelfPreferencesLoading === true;
   if (snoozedShelfHeaderIndex !== null && snoozedCount > 0) {
     result.push({

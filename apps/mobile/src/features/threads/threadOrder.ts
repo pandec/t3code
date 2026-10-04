@@ -1,3 +1,5 @@
+import { threadGroupId } from "@t3tools/shared/threadGroups";
+import type { ThreadGroup } from "@t3tools/contracts";
 import type { EnvironmentThreadShell } from "@t3tools/client-runtime/state/shell";
 import {
   generateSpreadPinOrderKeys,
@@ -11,6 +13,7 @@ export type ThreadMoveDestination =
   | "up"
   | "down"
   | {
+      readonly customGroupId?: string | null;
       readonly targetId: string | null;
       readonly section?: "pinned" | "active" | "settled";
       readonly placement: "before" | "after";
@@ -55,9 +58,11 @@ export type OrderRow = Pick<
   | "createdAt"
   | "unsettledAt"
   | "pinnedAt"
+  | "customGroupId"
 >;
 
 export interface PendingThreadOrder {
+  readonly customGroupId?: string | null;
   readonly section: "pinned" | "active";
   readonly orderedIds: readonly string[];
   readonly before: ReadonlyMap<string, { readonly key: string | null; readonly anchor: string }>;
@@ -80,12 +85,12 @@ function rowOrder(row: OrderRow, section: PendingThreadOrder["section"]) {
 /** Keep every visible row as an anchor, but only offer plans whose key writes
  * are supported. Menu availability and execution use this same planner. */
 export function createThreadMovePlanner(input: {
+  readonly groups?: readonly ThreadGroup[];
   readonly ordered: readonly OrderRow[];
   readonly allThreads?: readonly OrderRow[];
   readonly section: PendingThreadOrder["section"];
   readonly reorderableEnvironmentIds: ReadonlySet<EnvironmentId>;
 }) {
-  const orderedIds = input.ordered.map(rowId);
   const keysById = new Map(
     (input.allThreads ?? input.ordered).map((row) => [
       rowId(row),
@@ -99,6 +104,18 @@ export function createThreadMovePlanner(input: {
   );
   return (movedId: string, direction: ThreadMoveDestination) => {
     if (!writableIds.has(movedId)) return null;
+    const moved = (input.allThreads ?? input.ordered).find((row) => rowId(row) === movedId);
+    const groupOf = (row: OrderRow) =>
+      input.groups ? threadGroupId(row, input.groups) : (row.customGroupId ?? null);
+    const groupId =
+      typeof direction === "object"
+        ? (direction.customGroupId ?? null)
+        : moved
+          ? groupOf(moved)
+          : null;
+    const orderedIds = input.ordered
+      .filter((row) => input.section !== "active" || groupOf(row) === groupId)
+      .map(rowId);
     const nextIds = threadOrderAfterMove(orderedIds, movedId, direction);
     if (nextIds === null) return null;
     const assignments = planPinnedReorder({ orderedIds: nextIds, keysById, movedId });
@@ -247,7 +264,31 @@ export function computeThreadMoveAvailability(input: {
   return result;
 }
 
+/** Fork: Move up/down availability with each active custom group planned on
+ * its own, so a move never crosses a group boundary. */
+export function computeGroupedThreadMoveAvailability(
+  input: Parameters<typeof computeThreadMoveAvailability>[0] & {
+    readonly groups: readonly ThreadGroup[];
+  },
+): Map<string, ThreadMoveAvailability> {
+  const { groups, ...rest } = input;
+  if (input.section !== "active" || groups.length === 0) return computeThreadMoveAvailability(rest);
+  const byGroup = new Map<string | null, OrderRow[]>();
+  for (const row of input.ordered) {
+    const id = threadGroupId(row, groups);
+    const rows = byGroup.get(id) ?? [];
+    rows.push(row);
+    byGroup.set(id, rows);
+  }
+  return new Map(
+    [...byGroup.values()].flatMap((ordered) => [
+      ...computeThreadMoveAvailability({ ...rest, ordered }),
+    ]),
+  );
+}
+
 export function createPendingThreadOrder(input: {
+  readonly customGroupId?: string | null;
   readonly section: PendingThreadOrder["section"];
   readonly ordered: readonly OrderRow[];
   readonly movedId: string;
@@ -257,6 +298,7 @@ export function createPendingThreadOrder(input: {
   const orderedIds = threadOrderAfterMove(input.ordered.map(rowId), input.movedId, input.direction);
   if (orderedIds === null) throw new Error("Cannot begin an invalid thread move");
   return {
+    ...(input.customGroupId !== undefined ? { customGroupId: input.customGroupId } : {}),
     section: input.section,
     orderedIds,
     before: new Map(input.ordered.map((row) => [rowId(row), rowOrder(row, input.section)])),
@@ -271,7 +313,14 @@ export function createPendingThreadOrder(input: {
 export function reconcilePendingThreadOrder(
   pending: PendingThreadOrder,
   ordered: readonly OrderRow[],
+  groups?: readonly ThreadGroup[],
 ): PendingThreadOrder | null {
+  if (pending.section === "active" && pending.customGroupId !== undefined)
+    ordered = ordered.filter(
+      (row) =>
+        (groups ? threadGroupId(row, groups) : (row.customGroupId ?? null)) ===
+        pending.customGroupId,
+    );
   if (ordered.length !== pending.before.size) return null;
   const confirmed = new Set(pending.confirmed);
   for (const row of ordered) {

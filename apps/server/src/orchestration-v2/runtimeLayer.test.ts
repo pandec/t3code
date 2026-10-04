@@ -3601,6 +3601,172 @@ it.layer(SharedApplicationDataPlaneTestLayer)("snooze projection", (it) => {
   );
 });
 
+// Fork: custom group membership lives in fork_thread_custom_groups and reaches
+// clients on the thread shell.
+it.layer(SharedApplicationDataPlaneTestLayer)("custom thread groups", (it) => {
+  const setup = (prefix: string, customGroupId?: string) =>
+    Effect.gen(function* () {
+      const projects = yield* ProjectService.ProjectService;
+      const orchestrator = yield* Orchestrator.OrchestratorV2;
+      const projectId = ProjectId.make(`${prefix}-project`);
+      const threadId = ThreadId.make(`${prefix}-thread`);
+      yield* projects.create({
+        commandId: CommandId.make(`${prefix}-project-create`),
+        projectId,
+        title: "Custom groups",
+        workspaceRoot: `/tmp/${prefix}-project`,
+      });
+      yield* orchestrator.dispatch({
+        type: "thread.create",
+        createdBy: "user",
+        creationSource: "web",
+        commandId: CommandId.make(`${prefix}-thread-create`),
+        threadId,
+        projectId,
+        title: "Grouped thread",
+        modelSelection,
+        runtimeMode: "full-access",
+        interactionMode: "default",
+        branch: null,
+        worktreePath: null,
+        ...(customGroupId === undefined ? {} : { customGroupId }),
+      });
+      const shell = Effect.gen(function* () {
+        const found = (yield* orchestrator.getShellSnapshot()).threads.find(
+          (candidate) => candidate.id === threadId,
+        );
+        assert.isDefined(found);
+        return found;
+      });
+      return { orchestrator, projectId, threadId, shell };
+    });
+
+  it.effect("creates into a group, moves with placement, and returns to Active", () =>
+    Effect.gen(function* () {
+      const { orchestrator, threadId, shell } = yield* setup("custom-groups-move", "research");
+      const created = yield* shell;
+      assert.equal(created.customGroupId, "research");
+
+      yield* TestClock.adjust("1 minute");
+      yield* orchestrator.dispatch({
+        type: "thread.custom-group.set",
+        commandId: CommandId.make("custom-groups-move-membership"),
+        threadId,
+        customGroupId: "planning",
+      });
+      const regrouped = yield* shell;
+      assert.equal(regrouped.customGroupId, "planning");
+      // Membership alone is not thread activity.
+      assert.deepEqual(regrouped.updatedAt, created.updatedAt);
+
+      yield* orchestrator.dispatch({
+        type: "thread.custom-group.set",
+        commandId: CommandId.make("custom-groups-move-set"),
+        threadId,
+        customGroupId: "review",
+        orderKey: "a0",
+      });
+      const moved = yield* shell;
+      assert.equal(moved.customGroupId, "review");
+      assert.equal(moved.activeOrderKey, "a0");
+      const single = yield* orchestrator.getThreadShell(threadId);
+      assert.equal(single?.customGroupId, "review");
+
+      yield* orchestrator.dispatch({
+        type: "thread.custom-group.set",
+        commandId: CommandId.make("custom-groups-move-clear"),
+        threadId,
+        customGroupId: null,
+      });
+      const cleared = yield* shell;
+      assert.isUndefined(cleared.customGroupId);
+      assert.equal(cleared.activeOrderKey, "a0");
+    }),
+  );
+
+  it.effect("changes a pinned thread's group but refuses to place it", () =>
+    Effect.gen(function* () {
+      const { orchestrator, threadId, shell } = yield* setup("custom-groups-pinned");
+      yield* orchestrator.dispatch({
+        type: "thread.pin",
+        commandId: CommandId.make("custom-groups-pinned-pin"),
+        threadId,
+      });
+      const placed = yield* orchestrator
+        .dispatch({
+          type: "thread.custom-group.set",
+          commandId: CommandId.make("custom-groups-pinned-place"),
+          threadId,
+          customGroupId: "research",
+          orderKey: "a0",
+        })
+        .pipe(Effect.exit);
+      assert.equal(placed._tag, "Failure");
+      assert.isUndefined((yield* shell).customGroupId);
+
+      yield* orchestrator.dispatch({
+        type: "thread.custom-group.set",
+        commandId: CommandId.make("custom-groups-pinned-set"),
+        threadId,
+        customGroupId: "research",
+      });
+      const grouped = yield* shell;
+      assert.equal(grouped.customGroupId, "research");
+      assert.isNotNull(grouped.pinnedAt ?? null);
+    }),
+  );
+
+  it.effect("forks into the source's group", () =>
+    Effect.gen(function* () {
+      const { orchestrator, threadId } = yield* setup("custom-groups-fork", "research");
+      const eventSink = yield* EventSink.EventSinkV2;
+      const now = yield* DateTime.now;
+      const runId = RunId.make("custom-groups-fork-run");
+      yield* eventSink.write({
+        events: [
+          {
+            id: EventId.make("custom-groups-fork-run-created"),
+            type: "run.created",
+            threadId,
+            runId,
+            occurredAt: now,
+            payload: {
+              id: runId,
+              threadId,
+              ordinal: 1,
+              providerInstanceId: modelSelection.instanceId,
+              modelSelection,
+              providerThreadId: null,
+              userMessageId: MessageId.make("custom-groups-fork-message"),
+              rootNodeId: null,
+              activeAttemptId: null,
+              status: "completed",
+              queuePosition: null,
+              requestedAt: now,
+              startedAt: now,
+              completedAt: now,
+              checkpointId: null,
+              contextHandoffId: null,
+            },
+          },
+        ],
+      });
+      const forkId = ThreadId.make("custom-groups-fork-target");
+      yield* orchestrator.dispatch({
+        type: "thread.fork",
+        commandId: CommandId.make("custom-groups-fork-fork"),
+        sourceThreadId: threadId,
+        targetThreadId: forkId,
+        sourcePoint: { type: "run", runId },
+        createdBy: "user",
+        creationSource: "web",
+      });
+      const fork = yield* orchestrator.getThreadShell(forkId);
+      assert.equal(fork?.customGroupId, "research");
+    }),
+  );
+});
+
 // Fork: indefinite snooze ("until I wake it") is a null wake time with snoozedAt set.
 it.layer(SharedApplicationDataPlaneTestLayer)("indefinite snooze", (it) => {
   const setup = (prefix: string) =>

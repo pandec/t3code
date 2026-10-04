@@ -69,6 +69,8 @@ export function existingThreadIdsForCommand(
     // while a thread is open, so keeping them off the import path matters.
     case "thread.visit":
     case "thread.mark-unread":
+    // Fork: group membership is metadata outside the thread row.
+    case "thread.custom-group.set":
       return [];
     case "thread.fork":
       return [command.sourceThreadId];

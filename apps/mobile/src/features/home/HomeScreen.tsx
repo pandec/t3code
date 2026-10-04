@@ -1,6 +1,6 @@
 import { useAndroidControlSizing } from "../../components/useAndroidControlSizing";
 import type { ThreadMoveDestination } from "../threads/threadOrder";
-import { computeThreadMoveAvailability } from "../threads/threadOrder";
+import { computeGroupedThreadMoveAvailability } from "../threads/threadOrder";
 import { LegendList, type LegendListRef } from "@legendapp/list/react-native";
 import {
   type EnvironmentProject,
@@ -34,7 +34,12 @@ import { scopedProjectKey } from "../../lib/scopedEntities";
 import { NATIVE_LIQUID_GLASS_SUPPORTED } from "../../native/native-glass";
 import { useThreadSearch } from "../../state/queries";
 import { useThreadJumpShortcuts } from "../keyboard/threadKeyboardShortcuts";
-import { useThreadShelfExpansion } from "../../state/use-mobile-preferences";
+import {
+  useCollapsedThreadGroups,
+  useThreadShelfExpansion,
+} from "../../state/use-mobile-preferences";
+import { useThreadGroups } from "../../state/use-thread-groups";
+import { ThreadCustomGroupHeader } from "../threads/ThreadCustomGroupHeader";
 import { usePendingThreadOrder } from "../../state/thread-order";
 import { threadListEnvironmentsAtom } from "../../state/server";
 import { useProjectAccentColors } from "../../state/use-project-accent-colors";
@@ -492,6 +497,11 @@ export function HomeScreen(props: HomeScreenProps) {
     useThreadShelfExpansion("settled");
   const { expanded: pinnedShelfExpanded, toggle: togglePinnedShelf } =
     useThreadShelfExpansion("pinned");
+  // Fork: custom thread groups split Active into folding sections.
+  const { groups: customGroups } = useThreadGroups();
+  const collapsedThreadGroups = useCollapsedThreadGroups();
+  const { expanded: activeShelfExpanded, toggle: toggleActiveShelf } =
+    useThreadShelfExpansion("active");
   // Queued-start and snooze helpers need a clock while the list stays open.
   const [nowMinute, setNowMinute] = useState(() => new Date().toISOString().slice(0, 16));
   // Snooze wake times are second-precise; a counter bumped exactly at the
@@ -528,7 +538,8 @@ export function HomeScreen(props: HomeScreenProps) {
   // list construction quadratic, and this list rebuilds on every minute tick.
   const threadMoveAvailability = useMemo(() => {
     const sectionAvailability = (section: "pinned" | "active") =>
-      computeThreadMoveAvailability({
+      computeGroupedThreadMoveAvailability({
+        groups: customGroups,
         allThreads: props.threads,
         section,
         pendingOrder,
@@ -546,6 +557,7 @@ export function HomeScreen(props: HomeScreenProps) {
       });
     return new Map([...sectionAvailability("pinned"), ...sectionAvailability("active")]);
   }, [
+    customGroups,
     pinReorderEnvironmentIds,
     activeReorderEnvironmentIds,
     props.threads,
@@ -644,6 +656,9 @@ export function HomeScreen(props: HomeScreenProps) {
       buildThreadListV2ListItems({
         items: threadListV2Layout.items,
         pendingTasks: v2PendingTasks,
+        customGroups,
+        collapsedGroupIds: collapsedThreadGroups.ids,
+        activeShelfExpanded,
         pinnedCount: threadListV2Layout.pinnedCount,
         pinnedShelfExpanded,
         pinnedShelfHeaderVisible: threadListV2Layout.pinnedShelfHeaderVisible,
@@ -661,6 +676,9 @@ export function HomeScreen(props: HomeScreenProps) {
       }),
     [
       nowMinute,
+      customGroups,
+      collapsedThreadGroups.ids,
+      activeShelfExpanded,
       pinnedShelfExpanded,
       settledShelfExpanded,
       snoozedShelfExpanded,
@@ -716,6 +734,20 @@ export function HomeScreen(props: HomeScreenProps) {
       }
       if (item.type === "v2-pinned-divider") {
         return <ThreadListV2PinnedDivider />;
+      }
+      if (item.type === "v2-custom-group") {
+        const groupId = item.groupId;
+        return (
+          <ThreadCustomGroupHeader
+            name={item.name}
+            count={item.count}
+            expanded={item.expanded}
+            builtIn={groupId === null}
+            onToggle={
+              groupId === null ? toggleActiveShelf : () => collapsedThreadGroups.toggle(groupId)
+            }
+          />
+        );
       }
       if (item.type === "v2-snoozed-shelf") {
         return (
@@ -809,6 +841,8 @@ export function HomeScreen(props: HomeScreenProps) {
       );
     },
     [
+      collapsedThreadGroups,
+      toggleActiveShelf,
       handleDeleteThread,
       activeReorderEnvironmentIds,
       handleMoveThread,

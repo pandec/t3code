@@ -3,7 +3,11 @@
 import { threadPullRequestLinkMode } from "@t3tools/client-runtime/thread-pull-request-compatibility";
 import { visibleThreadPullRequests } from "@t3tools/shared/threadPullRequests";
 
-import { scopeProjectRef, scopeThreadRef } from "@t3tools/client-runtime/environment";
+import {
+  scopeProjectRef,
+  scopeThreadRef,
+  scopedThreadKey,
+} from "@t3tools/client-runtime/environment";
 import {
   canCreateProjectInEnvironment,
   getCloneDestinationBrowsePath,
@@ -59,6 +63,8 @@ import {
   FolderPlusIcon,
   GitForkIcon,
   MessageSquareDashedIcon,
+  GroupIcon,
+  ArrowUpToLineIcon,
   LinkIcon,
   MessageSquareIcon,
   MonitorIcon,
@@ -123,7 +129,15 @@ import { useScratchProject } from "../hooks/useScratchProject";
 import { useNewProject } from "../hooks/useNewProject";
 import { isScratchProject } from "@t3tools/client-runtime/state/projects";
 import { useEnvironments, usePrimaryEnvironmentId } from "../state/environments";
-import { useProjects, useServerConfigs, useThreadShells, waitForProject } from "../state/entities";
+import {
+  readEnvironmentSupportsActiveReorder,
+  readEnvironmentSupportsPinReorder,
+  readThreadShells,
+  useProjects,
+  useServerConfigs,
+  useThreadShells,
+  waitForProject,
+} from "../state/entities";
 import { useThreadSearch } from "../state/queries";
 import { resolveThreadActionProjectRef, startNewThreadFromContext } from "../lib/chatThreadActions";
 import {
@@ -169,6 +183,7 @@ import {
   SAVED_PROMPTS_GROUP_VALUE,
   savedPromptItemValue,
   buildCurrentThreadActionItems,
+  buildMoveToGroupItems,
   buildThreadCopyActionItems,
   buildBrowseGroups,
   buildCommandPaletteProjectMetadata,
@@ -181,6 +196,7 @@ import {
   enumerateCommandPaletteItems,
   RENAME_THREAD_VIEW_VALUE,
   type CommandPaletteActionItem,
+  type CommandPaletteProject,
   type CommandPaletteThreadActionId,
   type CommandPaletteOpenIntent,
   type CommandPaletteSubmenuItem,
@@ -194,6 +210,12 @@ import {
   reduceCommandPaletteUiState,
   type SearchOverlayMode,
 } from "./CommandPalette.logic";
+import { useThreadGroupCatalog } from "../hooks/useThreadGroups";
+import { groupMovableThreads, moveThreadsToGroup } from "../lib/threadGroupMove";
+import { planThreadMoveToTop } from "../lib/threadMoveToTop";
+import { useThreadSelectionStore } from "../threadSelectionStore";
+import { openThreadGroupsDialog } from "./sidebar/threadGroupsDialogStore";
+import { threadGroupId } from "@t3tools/shared/threadGroups";
 import { orderItemsByPreferredIds, sortLogicalProjectsForSidebar } from "./Sidebar.logic";
 import { resolveEnvironmentOptionLabel } from "./BranchToolbar.logic";
 import { CommandPaletteContent } from "./CommandPaletteContent";
@@ -483,6 +505,10 @@ function threadActionIcon(id: CommandPaletteThreadActionId): ReactNode {
       return <GitForkIcon className={ITEM_ICON_CLASS} />;
   }
 }
+
+// Fork: the dialog unmounts between invocations; keep an unfinished reorder
+// across openings.
+const pendingMovesToTop = new Set<string>();
 
 async function reportThreadActionFailure(
   title: string,
@@ -823,7 +849,18 @@ function OpenCommandPaletteDialog(props: {
   const availableSettingsSearchItems = useAvailableSettingsSearchItems();
   const { activeDraftThread, activeThread, defaultProjectRef, handleNewThread, routeThreadRef } =
     useHandleNewThread();
-  const { pinThread, settleThread, confirmAndUnpinThread, unsettleThread } = useThreadActions();
+  const {
+    pinThread,
+    settleThread,
+    confirmAndUnpinThread,
+    unsettleThread,
+    setThreadCustomGroup,
+    reorderActiveThread,
+    reorderPinnedThread,
+  } = useThreadActions();
+  // Fork: custom thread groups.
+  const customGroupCatalog = useThreadGroupCatalog();
+  const selectedThreadKeys = useThreadSelectionStore((state) => state.selectedThreadKeys);
   const updateThreadMetadata = useAtomCommand(threadEnvironment.updateMetadata, {
     reportFailure: false,
   });
@@ -1443,15 +1480,36 @@ function OpenCommandPaletteDialog(props: {
     ],
   );
 
-  const projectThreadItems = useMemo(
-    () =>
+  // A pick lands on the contextual member when the project is part of the
+  // viewed logical project.
+  const resolveNewThreadTargetRef = useCallback(
+    (project: CommandPaletteProject) => {
+      const group = projectGroupByTargetKey.get(`${project.environmentId}:${project.id}`);
+      const contextualRefBelongsToGroup =
+        contextualProjectRef !== null &&
+        group?.memberProjectRefs.some(
+          (projectRef) =>
+            projectRef.environmentId === contextualProjectRef.environmentId &&
+            projectRef.projectId === contextualProjectRef.projectId,
+        );
+      return contextualRefBelongsToGroup
+        ? contextualProjectRef
+        : scopeProjectRef(project.environmentId, project.id);
+    },
+    [contextualProjectRef, projectGroupByTargetKey],
+  );
+  // Fork: one project list serves "New thread in..." and each group of "New
+  // thread in group...": the group only changes the draft the pick lands in.
+  const buildNewThreadProjectItems = useCallback(
+    (customGroupId: string | null) =>
       enumerateCommandPaletteItems([
         ...buildProjectActionItems({
           // The no-project home shows once, as the "No project" item below.
           projects: pickerProjects.filter(
             (project) => !isScratchProject(project, scratchWorkspaceRootFor(project.environmentId)),
           ),
-          valuePrefix: "new-thread-in",
+          valuePrefix:
+            customGroupId === null ? "new-thread-in" : `new-thread-in-group:${customGroupId}`,
           searchTerms: (project) => {
             const group = projectGroupByTargetKey.get(`${project.environmentId}:${project.id}`);
             const location = projectEnvironmentLocationById.get(project.environmentId);
@@ -1488,24 +1546,24 @@ function OpenCommandPaletteDialog(props: {
             projectAccentColorByTargetKey.get(`${project.environmentId}:${project.id}`) ?? null,
           icon: projectFaviconIcon,
           runProject: async (project) => {
-            const group = projectGroupByTargetKey.get(`${project.environmentId}:${project.id}`);
-            const contextualRefBelongsToGroup =
-              contextualProjectRef !== null &&
-              group?.memberProjectRefs.some(
-                (projectRef) =>
-                  projectRef.environmentId === contextualProjectRef.environmentId &&
-                  projectRef.projectId === contextualProjectRef.projectId,
-              );
             await handleNewThread(
-              contextualRefBelongsToGroup
-                ? contextualProjectRef
-                : scopeProjectRef(project.environmentId, project.id),
-              // An explicit New thread starts in Active.
-              { customGroupId: null },
+              resolveNewThreadTargetRef(project),
+              // An explicit New thread starts in Active unless a group was picked.
+              { customGroupId },
             );
           },
+          ...(customGroupId === null
+            ? {}
+            : {
+                disabledReason: (project: CommandPaletteProject) =>
+                  serverConfigs.get(resolveNewThreadTargetRef(project).environmentId)?.environment
+                    .capabilities.threadCustomGroupCreation === true
+                    ? null
+                    : "Environment cannot create grouped threads",
+              }),
         }),
-        ...(scratchTargetEnvironmentId === null
+        // Starting a thread without a project does not take a group.
+        ...(customGroupId !== null || scratchTargetEnvironmentId === null
           ? []
           : [
               {
@@ -1520,7 +1578,7 @@ function OpenCommandPaletteDialog(props: {
             ]),
       ]),
     [
-      contextualProjectRef,
+      resolveNewThreadTargetRef,
       handleNewThread,
       pickerProjects,
       projectAccentColorByTargetKey,
@@ -1528,8 +1586,21 @@ function OpenCommandPaletteDialog(props: {
       projectGroupByTargetKey,
       scratchTargetEnvironmentId,
       scratchWorkspaceRootFor,
+      serverConfigs,
       startScratchThread,
     ],
+  );
+  const projectThreadItems = useMemo(
+    () => buildNewThreadProjectItems(null),
+    [buildNewThreadProjectItems],
+  );
+  const groupedProjectThreadItems = useMemo(
+    () =>
+      customGroupCatalog.groups.map((group) => ({
+        group,
+        items: buildNewThreadProjectItems(group.id),
+      })),
+    [buildNewThreadProjectItems, customGroupCatalog.groups],
   );
 
   const allThreadItems = useMemo(
@@ -2155,6 +2226,34 @@ function OpenCommandPaletteDialog(props: {
       addonIcon: <SquarePenIcon className={ADDON_ICON_CLASS} />,
       groups: [{ value: "projects", label: "Projects", items: projectThreadItems }],
     });
+    // Fork: group first, then project. Projects on servers without grouped
+    // creation are listed but disabled, so the pick cannot land where the
+    // send would be blocked.
+    if (customGroupCatalog.groups.length > 0) {
+      actionItems.push({
+        kind: "submenu",
+        value: "action:new-thread-in-group",
+        searchTerms: ["new thread", "group", "thread group", "new thread in group"],
+        title: "New thread in group...",
+        icon: <GroupIcon className={ITEM_ICON_CLASS} />,
+        addonIcon: <GroupIcon className={ADDON_ICON_CLASS} />,
+        groups: [
+          {
+            value: "thread-groups",
+            label: "Groups",
+            items: groupedProjectThreadItems.map(({ group, items }) => ({
+              kind: "submenu" as const,
+              value: `new-thread-in-group:${group.id}`,
+              searchTerms: [group.name],
+              title: group.name,
+              icon: <GroupIcon className={ITEM_ICON_CLASS} />,
+              addonIcon: <SquarePenIcon className={ADDON_ICON_CLASS} />,
+              groups: [{ value: "projects", label: "Projects", items }],
+            })),
+          },
+        ],
+      });
+    }
   }
 
   if (scratchTargetEnvironmentId !== null) {
@@ -2258,6 +2357,186 @@ function OpenCommandPaletteDialog(props: {
       groups: [{ value: RENAME_THREAD_VIEW_VALUE, label: "Rename", items: [] }],
       initialQuery: thread.title,
     });
+  }
+
+  // Fork: group-aware "Move to top", planned against the full group or pinned
+  // shelf so search, filters and folded groups cannot change what "top" is.
+  const canReorderSection = (environmentId: EnvironmentId, section: "pinned" | "active") => {
+    const capabilities = serverConfigs.get(environmentId)?.environment.capabilities;
+    return section === "pinned"
+      ? capabilities?.threadPinReorder === true
+      : capabilities?.threadActiveReorder === true;
+  };
+  const moveToTopPlan = planThreadMoveToTop({
+    threads,
+    threadRef: currentThreadRef,
+    groups: customGroupCatalog.groups,
+    now: new Date().toISOString(),
+    canReorder: canReorderSection,
+  });
+  if (moveToTopPlan !== null && currentThreadRef !== null) {
+    const threadRef = currentThreadRef;
+    actionItems.push({
+      kind: "action",
+      value: "action:thread:move-to-top",
+      title: "Move current thread to top",
+      searchTerms: ["move", "top", "reorder", "group", "current thread"],
+      icon: <ArrowUpToLineIcon className={ITEM_ICON_CLASS} />,
+      ...(moveToTopPlan.disabledReason
+        ? { disabled: true, description: moveToTopPlan.disabledReason }
+        : {}),
+      run: async () => {
+        if (pendingMovesToTop.size > 0) return;
+        // Re-read shells at execution: a snooze or another client's reorder
+        // may have landed while the palette was open.
+        const plan = planThreadMoveToTop({
+          threads: readThreadShells(),
+          threadRef,
+          groups: customGroupCatalog.groups,
+          now: new Date().toISOString(),
+          canReorder: (environmentId, section) =>
+            section === "pinned"
+              ? readEnvironmentSupportsPinReorder(environmentId)
+              : readEnvironmentSupportsActiveReorder(environmentId),
+        });
+        if (plan === null || plan.disabledReason) return;
+        const moveKey = `${threadRef.environmentId}:${threadRef.threadId}`;
+        pendingMovesToTop.add(moveKey);
+        try {
+          const reorder = plan.section === "pinned" ? reorderPinnedThread : reorderActiveThread;
+          // Stop on failure; each successful key write remains a valid placement.
+          for (const assignment of plan.assignments) {
+            if (
+              !(await reportThreadActionFailure("Failed to move thread to top", () =>
+                reorder(assignment.threadRef, assignment.orderKey),
+              ))
+            )
+              break;
+          }
+        } finally {
+          pendingMovesToTop.delete(moveKey);
+        }
+      },
+    });
+  }
+
+  // Fork: a sidebar multi-selection takes over the group move; rows on
+  // servers without group support are left out of the count and the move.
+  const selectedThreads =
+    selectedThreadKeys.size === 0
+      ? []
+      : threads.filter((thread) =>
+          selectedThreadKeys.has(scopedThreadKey(scopeThreadRef(thread.environmentId, thread.id))),
+        );
+  const groupMovableSelectedThreads =
+    customGroupCatalog.groups.length === 0
+      ? []
+      : groupMovableThreads(
+          selectedThreads,
+          (environmentId) =>
+            serverConfigs.get(environmentId)?.environment.capabilities.threadCustomGroups === true,
+        );
+  if (groupMovableSelectedThreads.length > 0) {
+    const selectionCount = groupMovableSelectedThreads.length;
+    const sharedGroupIds = new Set(
+      groupMovableSelectedThreads.map((thread) => threadGroupId(thread, customGroupCatalog.groups)),
+    );
+    actionItems.push({
+      kind: "submenu",
+      value: "action:move-selected-to-group",
+      searchTerms: ["move", "group", "move to group", "thread group", "selected threads"],
+      title: `Move ${selectionCount} selected thread${selectionCount === 1 ? "" : "s"} to group...`,
+      icon: <GroupIcon className={ITEM_ICON_CLASS} />,
+      addonIcon: <GroupIcon className={ADDON_ICON_CLASS} />,
+      groups: [
+        {
+          value: "move-to-group",
+          label: "Groups",
+          items: enumerateCommandPaletteItems(
+            buildMoveToGroupItems({
+              groups: customGroupCatalog.groups,
+              currentGroupId: sharedGroupIds.size === 1 ? [...sharedGroupIds][0] : undefined,
+              icon: <GroupIcon className={ITEM_ICON_CLASS} />,
+              move: async (groupId) => {
+                const outcome = await moveThreadsToGroup({
+                  threads: groupMovableSelectedThreads,
+                  customGroupId: groupId,
+                  move: (threadRef, customGroupId) =>
+                    setThreadCustomGroup(threadRef, customGroupId),
+                });
+                useThreadSelectionStore.getState().removeFromSelection(outcome.movedThreadKeys);
+                if (outcome.failedCount > 0) {
+                  toastManager.add(
+                    stackedThreadToast({
+                      type: "error",
+                      title: `Failed to move ${outcome.failedCount} thread${outcome.failedCount === 1 ? "" : "s"} to group`,
+                      description: errorMessage(outcome.firstError),
+                    }),
+                  );
+                }
+              },
+            }),
+          ),
+        },
+      ],
+    });
+  } else if (
+    selectedThreadKeys.size === 0 &&
+    customGroupCatalog.groups.length > 0 &&
+    openThreadCapabilities?.threadCustomGroups === true &&
+    openUnarchivedThreadRef !== null
+  ) {
+    const threadRef = openUnarchivedThreadRef;
+    actionItems.push({
+      kind: "submenu",
+      value: "action:move-to-group",
+      searchTerms: ["move", "group", "move to group", "thread group", "current thread"],
+      title: "Move current thread to group...",
+      icon: <GroupIcon className={ITEM_ICON_CLASS} />,
+      addonIcon: <GroupIcon className={ADDON_ICON_CLASS} />,
+      groups: [
+        {
+          value: "move-to-group",
+          label: "Groups",
+          items: enumerateCommandPaletteItems(
+            buildMoveToGroupItems({
+              groups: customGroupCatalog.groups,
+              currentGroupId: threadGroupId(openUnarchivedThread ?? {}, customGroupCatalog.groups),
+              icon: <GroupIcon className={ITEM_ICON_CLASS} />,
+              move: async (groupId) => {
+                await reportThreadActionFailure("Failed to move thread to group", () =>
+                  setThreadCustomGroup(threadRef, groupId),
+                );
+              },
+            }),
+          ),
+        },
+      ],
+    });
+  }
+  if (customGroupCatalog.canEdit) {
+    actionItems.push(
+      {
+        kind: "action",
+        value: "action:new-thread-group",
+        searchTerms: ["new group", "create group", "thread group", "add group"],
+        title: "New thread group",
+        icon: <GroupIcon className={ITEM_ICON_CLASS} />,
+        run: async () => {
+          openThreadGroupsDialog("new-group");
+        },
+      },
+      {
+        kind: "action",
+        value: "action:manage-thread-groups",
+        searchTerms: ["manage groups", "thread groups", "rename group", "reorder", "delete group"],
+        title: "Manage thread groups",
+        icon: <GroupIcon className={ITEM_ICON_CLASS} />,
+        run: async () => {
+          openThreadGroupsDialog();
+        },
+      },
+    );
   }
 
   if (splitSupported && openInSplitItems.length > 0) {

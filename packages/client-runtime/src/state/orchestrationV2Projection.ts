@@ -282,5 +282,8 @@ export function applyOrchestrationV2ProjectionEvent(
     case "context-transfer.created":
     case "context-transfer.updated":
       return { ...base, contextTransfers: upsertEntity(base.contextTransfers, event.payload) };
+    // Fork: group membership reaches clients on the shell, not the projection.
+    case "thread.custom-group-set":
+      return projection;
   }
 }

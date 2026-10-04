@@ -1,6 +1,7 @@
 import type { ThreadMoveDestination } from "../threads/threadOrder";
 import type { EnvironmentThreadShell } from "@t3tools/client-runtime/state/shell";
 import { canSnooze, effectiveSnoozed } from "@t3tools/client-runtime/state/thread-settled";
+import { mergeThreadGroups, threadGroupId } from "@t3tools/shared/threadGroups";
 import * as Cause from "effect/Cause";
 import * as Haptics from "expo-haptics";
 import { useCallback, useRef } from "react";
@@ -631,6 +632,9 @@ export function useThreadListActions(
   const reorderActiveMutation = useAtomCommand(threadEnvironment.reorderActive, {
     reportFailure: false,
   });
+  const setCustomGroupMutation = useAtomCommand(threadEnvironment.setCustomGroup, {
+    reportFailure: false,
+  });
   const moveThread = useCallback(
     async (thread: EnvironmentThreadShell, direction: ThreadMoveDestination) => {
       if (getPendingThreadOrder() !== null || appAtomRegistry.get(threadDropBusyAtom)) return false;
@@ -669,7 +673,21 @@ export function useThreadListActions(
         );
         return false;
       }
-      const ordered = getThreadListV2OrderedSection({
+      // Fork: active moves stay inside the source or requested custom group.
+      const groups = mergeThreadGroups(
+        ...[...configs.values()].map((config) => config.settings.threadGroups),
+      );
+      const customGroupId =
+        typeof direction === "object" && direction.customGroupId !== undefined
+          ? direction.customGroupId
+          : threadGroupId(thread, groups);
+      const changesGroup = section === "active" && customGroupId !== threadGroupId(thread, groups);
+      if (
+        changesGroup &&
+        configs.get(thread.environmentId)?.environment.capabilities.threadCustomGroups !== true
+      )
+        return false;
+      const sectionOrdered = getThreadListV2OrderedSection({
         threads: shells,
         section,
         now: new Date().toISOString(),
@@ -685,7 +703,11 @@ export function useThreadListActions(
           ),
         ),
       });
+      const ordered = sectionOrdered.filter(
+        (row) => section !== "active" || threadGroupId(row, groups) === customGroupId,
+      );
       const assignments = createThreadMovePlanner({
+        groups,
         allThreads: shells,
         ordered,
         section,
@@ -715,6 +737,7 @@ export function useThreadListActions(
         ? null
         : beginPendingThreadOrder(
             createPendingThreadOrder({
+              ...(section === "active" ? { customGroupId } : {}),
               section,
               ordered,
               movedId: scopedThreadKey(thread.environmentId, thread.id),
@@ -725,6 +748,17 @@ export function useThreadListActions(
       let succeeded = false;
       const reorder = section === "pinned" ? reorderPinnedMutation : reorderActiveMutation;
       try {
+        // Fork: a move into another group changes membership first.
+        if (changesGroup) {
+          const result = await setCustomGroupMutation({
+            environmentId: thread.environmentId,
+            input: { threadId: thread.id, customGroupId },
+          });
+          if (result._tag === "Failure") {
+            Alert.alert("Could not move thread to group", String(Cause.squash(result.cause)));
+            return false;
+          }
+        }
         if (crossSection) {
           if (section === "pinned") {
             const orderKey = assignments.find(
@@ -781,6 +815,7 @@ export function useThreadListActions(
     },
     [
       settleThread,
+      setCustomGroupMutation,
       reorderActiveMutation,
       reorderPinnedMutation,
       pinMutation,

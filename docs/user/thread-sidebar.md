@@ -100,6 +100,11 @@ position, so using **Un-settle** returns it to the top. Pinning and snoozing pre
 position until you move it again. Thread activity does not change the order. The settled shelf
 continues to use settlement time.
 
+On web and desktop, **Move current thread to top** in the command palette moves the open thread to
+the top of Pinned, Active, or its custom group without dragging. It counts group members hidden by
+a filter or a collapsed group, so the thread lands above all of them. The action is unavailable for
+drafts and for archived, snoozed, or settled threads.
+
 If dragging is unavailable for one environment, update the T3 Code server running in that
 environment. Pinned and active reordering require server support. Threads from older servers keep
 their default order until the server is updated.
@@ -122,6 +127,43 @@ answer. Pinned threads stay in the pinned section.
 
 While this is on, the active list is ordered by when each thread last came back to you, so you
 cannot drag to reorder it. Your saved order returns when you turn it off.
+
+## Organize threads into custom groups
+
+On web and desktop, open the command palette (`Cmd/Ctrl+K`) and choose **New thread group** or
+**Manage thread groups** to create, rename, reorder, or remove groups. Settings → Extras → Sidebar
+can add a **Thread groups** button to the sidebar toolbar for the same dialog. Once a group exists,
+the sidebar shows a header for each group and for **Active**; each folds on its own and keeps the
+open thread visible.
+
+Drag a thread onto a group header or between its rows, use **Move current thread to group** in the
+palette, or use **Move to group** from the thread menu. Cmd/Ctrl-click multiple threads, then use
+**Move to group** from their context menu or **Move selected threads to group** in the palette to
+move them together. Failed threads stay selected so you can retry. Each thread belongs to one
+group. Removing a group keeps its threads and returns its active threads to Active.
+
+New threads start in Active. Choose a group below the new-thread heading, or use **New thread in
+group…** in the palette to pick the group and then the project. The choice is saved with the draft
+until its first send. Forked threads join the source thread's group.
+
+Groups can hold threads from any project or connected environment. Group definitions sync when a
+web or mobile client is connected to the environments together. Each thread's group is saved on the
+server that owns the conversation, so every device connected to it sees the same assignment.
+Grouping threads requires an updated server.
+
+A drag into a group saves the group, the thread state, and the order as separate steps. If the
+connection drops partway, the finished steps stay saved; arrange the thread again to finish.
+
+Pinned, snoozed, settled, and archived threads stay in their usual sections and remember their
+group, so unpinning, waking, or reopening returns them to it. Grouped threads still auto-settle.
+
+New groups start below Active. In the Thread groups dialog, drag a group across the Active divider,
+or use the arrows, to place it above or below Active. Every connected client shows the same
+arrangement.
+
+Mobile shows the same groups. Use **Arrange threads** to drag between groups or back to Active.
+**Move up** and **Move down** stay within the current group. Create and manage groups on web or
+desktop.
 
 ## Settle finished work
 

@@ -1,5 +1,6 @@
 import { planPinnedMove } from "@t3tools/client-runtime/state/thread-sort";
 import {
+  computeGroupedThreadMoveAvailability,
   createPendingThreadOrder,
   createThreadMovePlanner,
   threadOrderAfterMove,
@@ -2520,5 +2521,121 @@ describe("buildThreadListV2ListItems row-state stamps", () => {
     expect(shelfLoading.type === "v2-settled-shelf" && shelfLoading.disabled).toBe(true);
     expect(shelfLoaded.type === "v2-settled-shelf" && shelfLoaded.disabled).toBe(false);
     expect(threadListV2ListItemsAreEqual(shelfLoading, shelfLoaded)).toBe(false);
+  });
+});
+
+// Fork: custom thread groups split Active and bound its moves.
+describe("custom thread groups", () => {
+  const groups = [
+    {
+      id: "research",
+      name: "Research",
+      orderKey: "a",
+      aboveActive: true,
+      revision: "0000000000000001:edit",
+      deleted: false,
+    },
+    {
+      id: "later",
+      name: "Later",
+      orderKey: "b",
+      revision: "0000000000000001:edit",
+      deleted: false,
+    },
+  ];
+  const grouped = [
+    makeThread({ id: ThreadId.make("plain"), title: "plain", activeOrderKey: "a" }),
+    makeThread({
+      id: ThreadId.make("r1"),
+      title: "r1",
+      activeOrderKey: "b",
+      customGroupId: "research",
+    }),
+    makeThread({
+      id: ThreadId.make("r2"),
+      title: "r2",
+      activeOrderKey: "c",
+      customGroupId: "research",
+    }),
+  ];
+  const layout = buildThreadListV2Items({
+    threads: grouped,
+    environmentId: null,
+    searchQuery: "",
+    now: NOW,
+  });
+  const keysOf = (items: ReadonlyArray<ThreadListV2ListItem>) =>
+    items.map((item) => (item.type === "v2-thread" ? item.item.thread.id : item.key));
+
+  it("puts groups around Active in placement order, with empty groups shown", () => {
+    const items = buildThreadListV2ListItems({
+      items: layout.items,
+      pendingTasks: [makePendingTask("queued")],
+      customGroups: groups,
+    });
+    expect(keysOf(items)).toEqual([
+      "v2-custom-group:research",
+      "r1",
+      "r2",
+      "v2-active-header",
+      "plain",
+      "v2-pending-task:queued",
+      "v2-custom-group:later",
+    ]);
+  });
+
+  it("folds a group but keeps the open thread", () => {
+    const items = buildThreadListV2ListItems({
+      items: layout.items,
+      pendingTasks: [],
+      customGroups: groups,
+      collapsedGroupIds: new Set(["research"]),
+      selectedThreadKey: `${environmentId}:r2`,
+    });
+    expect(keysOf(items).slice(0, 2)).toEqual(["v2-custom-group:research", "r2"]);
+    const header = items[0];
+    expect(header?.type === "v2-custom-group" && header.count).toBe(2);
+    expect(header?.type === "v2-custom-group" && header.expanded).toBe(false);
+  });
+
+  it("keeps the plain list without groups", () => {
+    const items = buildThreadListV2ListItems({ items: layout.items, pendingTasks: [] });
+    expect(items.every((item) => item.type === "v2-thread")).toBe(true);
+  });
+
+  it("plans Move up/down inside each group only", () => {
+    const ordered = getThreadListV2OrderedSection({
+      threads: grouped,
+      section: "active",
+      now: NOW,
+    });
+    const availability = computeGroupedThreadMoveAvailability({
+      groups,
+      ordered,
+      section: "active",
+      reorderableEnvironmentIds: new Set([environmentId]),
+    });
+    expect(availability.get(`${environmentId}:plain`)).toEqual({
+      canMoveUp: false,
+      canMoveDown: false,
+    });
+    expect(availability.get(`${environmentId}:r1`)).toEqual({
+      canMoveUp: false,
+      canMoveDown: true,
+    });
+    const plan = createThreadMovePlanner({
+      groups,
+      ordered,
+      section: "active",
+      reorderableEnvironmentIds: new Set([environmentId]),
+    });
+    // Moving into Research targets its rows, not the ungrouped thread.
+    const assignments = plan(`${environmentId}:plain`, {
+      section: "active",
+      customGroupId: "research",
+      targetId: `${environmentId}:r1`,
+      placement: "before",
+    });
+    expect(assignments?.find(({ id }) => id === `${environmentId}:plain`)?.orderKey).toBeDefined();
   });
 });

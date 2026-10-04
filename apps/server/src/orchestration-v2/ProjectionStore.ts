@@ -339,6 +339,10 @@ export interface ProjectionStoreV2Shape {
   readonly getThread: (
     threadId: ThreadId,
   ) => Effect.Effect<OrchestrationV2AppThread, ProjectionStoreV2Error>;
+  /** Fork: the thread's custom group (fork_thread_custom_groups), or null. */
+  readonly getThreadCustomGroupId: (
+    threadId: ThreadId,
+  ) => Effect.Effect<string | null, ProjectionStoreV2Error>;
   readonly getLimitRecoveryCandidates: (options: {
     readonly now: DateTime.Utc;
     readonly autoResume: boolean;
@@ -790,7 +794,18 @@ export function applyToProjection(
         ...base,
         contextTransfers: upsertById(base.contextTransfers, event.payload),
       };
+    // Fork: membership lives outside the thread projection and is not activity.
+    case "thread.custom-group-set":
+      return projection;
   }
+}
+
+/** Fork: attach custom group membership to a shell; omitted when ungrouped. */
+function withCustomGroupId(
+  shell: OrchestrationV2ThreadShell,
+  customGroupId: string | null | undefined,
+): OrchestrationV2ThreadShell {
+  return customGroupId == null ? shell : { ...shell, customGroupId };
 }
 
 /**
@@ -805,12 +820,15 @@ export function applyToProjection(
 export interface ProjectionReplayState {
   readonly projections: Map<ThreadId, OrchestrationV2ThreadProjection>;
   readonly providerSessionThreadIds: Map<ProviderSessionId, ReadonlySet<ThreadId>>;
+  /** Fork: the in-memory fork_thread_custom_groups. */
+  readonly customGroupIds: Map<ThreadId, string>;
 }
 
 function makeProjectionReplayState(): ProjectionReplayState {
   return {
     projections: new Map(),
     providerSessionThreadIds: new Map(),
+    customGroupIds: new Map(),
   };
 }
 
@@ -828,6 +846,10 @@ function applyToProjectionReplayState(
     return false;
   }
 
+  if (event.type === "thread.custom-group-set") {
+    if (event.payload.customGroupId === null) state.customGroupIds.delete(event.threadId);
+    else state.customGroupIds.set(event.threadId, event.payload.customGroupId);
+  }
   let next = applyToProjection(current, event);
   if (event.type === "provider-session.updated") {
     const boundThreadIds = state.providerSessionThreadIds.get(event.payload.id);
@@ -2450,6 +2472,21 @@ export const layer: Layer.Layer<ProjectionStoreV2, never, SqlClient.SqlClient> =
             `;
             break;
           }
+          case "thread.custom-group-set": {
+            if (event.payload.customGroupId === null) {
+              yield* sql`
+                DELETE FROM fork_thread_custom_groups WHERE thread_id = ${event.threadId}
+              `;
+            } else {
+              yield* sql`
+                INSERT INTO fork_thread_custom_groups (thread_id, custom_group_id)
+                VALUES (${event.threadId}, ${event.payload.customGroupId})
+                ON CONFLICT(thread_id)
+                DO UPDATE SET custom_group_id = excluded.custom_group_id
+              `;
+            }
+            break;
+          }
           case "context-transfer.created":
           case "context-transfer.updated": {
             const payloadJson = yield* encodeContextTransferPayload(event.payload);
@@ -2520,7 +2557,9 @@ export const layer: Layer.Layer<ProjectionStoreV2, never, SqlClient.SqlClient> =
           event.type !== "thread.runtime-mode-updated" &&
           event.type !== "thread.interaction-mode-updated" &&
           event.type !== "thread.model-selection-updated" &&
-          event.type !== "thread.provider-switched"
+          event.type !== "thread.provider-switched" &&
+          // Fork: group membership is not thread activity.
+          event.type !== "thread.custom-group-set"
         ) {
           const rows = yield* sql<PayloadRow>`
             SELECT payload_json
@@ -4046,6 +4085,29 @@ export const layer: Layer.Layer<ProjectionStoreV2, never, SqlClient.SqlClient> =
         ),
       );
 
+    const getThreadCustomGroupId: ProjectionStoreV2Shape["getThreadCustomGroupId"] = (threadId) =>
+      sql<{ readonly custom_group_id: string }>`
+        SELECT custom_group_id FROM fork_thread_custom_groups WHERE thread_id = ${threadId}
+      `.pipe(
+        Effect.map((rows) => rows[0]?.custom_group_id ?? null),
+        Effect.mapError((cause) => new ProjectionStoreReadError({ threadId, cause })),
+      );
+    // Fork: membership for shells, from the fork table rather than the thread row.
+    const selectCustomGroupIds = (threadIds?: ReadonlyArray<ThreadId>) =>
+      (threadIds === undefined
+        ? sql<{ readonly thread_id: string; readonly custom_group_id: string }>`
+            SELECT thread_id, custom_group_id FROM fork_thread_custom_groups
+          `
+        : sql<{ readonly thread_id: string; readonly custom_group_id: string }>`
+            SELECT thread_id, custom_group_id FROM fork_thread_custom_groups
+            WHERE thread_id IN ${sql.in(threadIds)}
+          `
+      ).pipe(
+        Effect.map(
+          (rows) => new Map(rows.map((row) => [row.thread_id, row.custom_group_id] as const)),
+        ),
+      );
+
     const requireThread = (threadId: ThreadId) =>
       Effect.gen(function* () {
         const rows = yield* sql<{ readonly thread_id: string }>`
@@ -5365,17 +5427,21 @@ export const layer: Layer.Layer<ProjectionStoreV2, never, SqlClient.SqlClient> =
               }),
             );
             const statesByThreadId = new Map(states.map((state) => [state.thread.id, state]));
+            const customGroupIds = yield* selectCustomGroupIds();
 
             const shells = states
               .filter((state) => targetThreadIds.has(state.thread.id))
               .map((state) =>
-                shellFromState({
-                  state,
-                  visibleItemCount: visibleItemCountForShell({
-                    threadId: state.thread.id,
-                    statesByThreadId,
+                withCustomGroupId(
+                  shellFromState({
+                    state,
+                    visibleItemCount: visibleItemCountForShell({
+                      threadId: state.thread.id,
+                      statesByThreadId,
+                    }),
                   }),
-                }),
+                  customGroupIds.get(state.thread.id),
+                ),
               );
 
             return {
@@ -5453,10 +5519,14 @@ export const layer: Layer.Layer<ProjectionStoreV2, never, SqlClient.SqlClient> =
             if (state === undefined) {
               return null;
             }
-            return shellFromState({
-              state,
-              visibleItemCount: visibleItemCountForShell({ threadId, statesByThreadId }),
-            });
+            const customGroupIds = yield* selectCustomGroupIds([threadId]);
+            return withCustomGroupId(
+              shellFromState({
+                state,
+                visibleItemCount: visibleItemCountForShell({ threadId, statesByThreadId }),
+              }),
+              customGroupIds.get(threadId),
+            );
           }),
         )
         .pipe(Effect.mapError((cause) => new ProjectionStoreReadError({ threadId, cause })));
@@ -5466,6 +5536,7 @@ export const layer: Layer.Layer<ProjectionStoreV2, never, SqlClient.SqlClient> =
       getShellSnapshot,
       getThreadShell,
       getThread,
+      getThreadCustomGroupId,
       getSettlementCandidates,
       getThreadsWithPullRequests,
       getThreadProjection,
@@ -5511,6 +5582,7 @@ export const layerMemory: Layer.Layer<ProjectionStoreV2> = Layer.effect(
             const next: ProjectionReplayState = {
               projections: new Map(existing.projections),
               providerSessionThreadIds: new Map(existing.providerSessionThreadIds),
+              customGroupIds: new Map(existing.customGroupIds),
             };
             if (!applyToProjectionReplayState(next, event)) {
               return [
@@ -5543,10 +5615,20 @@ export const layerMemory: Layer.Layer<ProjectionStoreV2> = Layer.effect(
               return true;
             })
             .map(([threadId]) => threadId);
+          const customGroupIds = (yield* Ref.get(replayState)).customGroupIds;
           const shells = yield* Effect.forEach(
             selectedThreadIds.toSorted((left, right) => String(left).localeCompare(String(right))),
             (threadId) =>
-              service.getThreadProjection(threadId).pipe(Effect.map(threadShellFromProjection)),
+              service
+                .getThreadProjection(threadId)
+                .pipe(
+                  Effect.map((projection) =>
+                    withCustomGroupId(
+                      threadShellFromProjection(projection),
+                      customGroupIds.get(threadId),
+                    ),
+                  ),
+                ),
           );
           const visible = shells.filter((thread) => thread.deletedAt === null);
           return {
@@ -5565,8 +5647,13 @@ export const layerMemory: Layer.Layer<ProjectionStoreV2> = Layer.effect(
           const shell = yield* service
             .getThreadProjection(threadId)
             .pipe(Effect.map(threadShellFromProjection));
-          return shell.deletedAt === null ? shell : null;
+          const customGroupId = (yield* Ref.get(replayState)).customGroupIds.get(threadId);
+          return shell.deletedAt === null ? withCustomGroupId(shell, customGroupId) : null;
         }),
+      getThreadCustomGroupId: (threadId) =>
+        Ref.get(replayState).pipe(
+          Effect.map((state) => state.customGroupIds.get(threadId) ?? null),
+        ),
       getThread: (threadId) =>
         Effect.gen(function* () {
           const projection = (yield* Ref.get(replayState)).projections.get(threadId);

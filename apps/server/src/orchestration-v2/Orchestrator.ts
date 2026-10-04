@@ -374,6 +374,7 @@ function commandThreadId(command: OrchestrationV2ServerCommand): ThreadId {
     case "thread.unpin":
     case "thread.pin.reorder":
     case "thread.active.reorder":
+    case "thread.custom-group.set":
     case "thread.visit":
     case "thread.mark-unread":
     case "thread.metadata.update":
@@ -2152,7 +2153,70 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
         },
       });
     }
+    if (command.customGroupId != null) {
+      yield* emitEvent({
+        type: "thread.custom-group-set",
+        threadId: command.threadId,
+        occurredAt: now,
+        payload: { customGroupId: command.customGroupId },
+      });
+    }
   });
+
+  // Fork: custom group membership lives in fork_thread_custom_groups. An
+  // orderKey places the thread among the group's active threads in the same
+  // commit, under thread.active.reorder's rules.
+  const dispatchThreadCustomGroupSet = Effect.fn("orchestrationV2.dispatch.threadCustomGroupSet")(
+    function* (
+      command: Extract<OrchestrationV2Command, { readonly type: "thread.custom-group.set" }>,
+      events: Ref.Ref<Array<OrchestrationV2DomainEvent>>,
+    ) {
+      const thread = yield* projectionStore
+        .getThread(command.threadId)
+        .pipe(
+          Effect.mapError(
+            (cause) => new OrchestratorProjectionError({ threadId: command.threadId, cause }),
+          ),
+        );
+      if (thread.deletedAt !== null) {
+        return yield* new OrchestratorDispatchError({
+          commandId: command.commandId,
+          commandType: command.type,
+          cause: `Thread ${command.threadId} is deleted.`,
+        });
+      }
+      if (
+        command.orderKey !== undefined &&
+        (thread.archivedAt !== null ||
+          thread.pinnedAt != null ||
+          thread.settledOverride === "settled")
+      ) {
+        return yield* new OrchestratorDispatchError({
+          commandId: command.commandId,
+          commandType: command.type,
+          cause: `Thread ${command.threadId} is not active and cannot be placed in a group.`,
+        });
+      }
+      const now = yield* DateTime.now;
+      const emitEvent = emit(events, command);
+      yield* emitEvent({
+        type: "thread.custom-group-set",
+        threadId: command.threadId,
+        occurredAt: now,
+        payload: { customGroupId: command.customGroupId },
+      });
+      if (command.orderKey !== undefined && command.orderKey !== thread.activeOrderKey) {
+        yield* emitEvent({
+          type: "thread.active-reordered",
+          threadId: command.threadId,
+          providerInstanceId: thread.providerInstanceId,
+          occurredAt: now,
+          // Arranging the active list is not thread activity.
+          payload: { ...thread, activeOrderKey: command.orderKey },
+        });
+      }
+    },
+  );
 
   const dispatchThreadVisit = Effect.fn("orchestrationV2.dispatch.threadVisit")(function* (
     command: Extract<OrchestrationV2Command, { readonly type: "thread.visit" }>,
@@ -3335,6 +3399,18 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
       occurredAt: now,
       payload: targetThread,
     });
+    // Fork: a fork joins its source's custom group, but not its pin or order.
+    const sourceCustomGroupId = yield* projectionStore
+      .getThreadCustomGroupId(command.sourceThreadId)
+      .pipe(mapDispatchError(command));
+    if (sourceCustomGroupId !== null) {
+      yield* emitEvent({
+        type: "thread.custom-group-set",
+        threadId: command.targetThreadId,
+        occurredAt: now,
+        payload: { customGroupId: sourceCustomGroupId },
+      });
+    }
     yield* emitEvent({
       type: "context-transfer.created",
       threadId: command.targetThreadId,
@@ -9169,6 +9245,9 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
         break;
       case "thread.visit":
         yield* dispatchThreadVisit(command, events);
+        break;
+      case "thread.custom-group.set":
+        yield* dispatchThreadCustomGroupSet(command, events);
         break;
       case "thread.auto-settle": {
         // Automatic settlement (#8600): the sweep evaluated a shell snapshot,

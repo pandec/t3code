@@ -526,6 +526,7 @@ import {
   resolveProactiveTurnDiffAction,
   resolveThreadMetadataUpdateForNextTurn,
   resolveSendEnvMode,
+  resolveDraftCreationGroup,
   revokeBlobPreviewUrl,
   revokeUserMessagePreviewUrls,
   startNewThreadForProject,
@@ -534,6 +535,7 @@ import {
   shouldRefocusComposerOnWindowFocus,
 } from "./ChatView.logic";
 import { useLocalStorage } from "~/hooks/useLocalStorage";
+import { useThreadGroupCatalog } from "../hooks/useThreadGroups";
 import { useComposerHandleContext } from "../composerHandleContext";
 import { useThreadPaneId } from "./thread-split/threadPaneContext";
 import { isThreadPaneActive, useThreadSplitStore } from "./thread-split/threadSplitStore";
@@ -1653,6 +1655,7 @@ export default function ChatView(props: ChatViewProps) {
         ? store.getDraftSession(draftId)
         : null,
   );
+  const customGroupCatalog = useThreadGroupCatalog();
   const serverThread = useThreadShell(routeThreadRef);
   const routeThreadDetailRef = resolveThreadDetailRef(routeThreadRef, {
     shellExists: serverThread !== null,
@@ -8723,6 +8726,24 @@ export default function ChatView(props: ChatViewProps) {
       setThreadError(threadIdForSend, "Select a base branch before sending in New worktree mode.");
       return;
     }
+    // Fork: the draft's custom group joins the thread this send creates. The
+    // send environment can differ from where the group was picked, so the
+    // capability is read live.
+    const creationGroup = isLocalDraftThread
+      ? resolveDraftCreationGroup({
+          customGroupId: draftThread?.customGroupId,
+          catalog: customGroupCatalog.catalog,
+          supportsGroupCreation:
+            appAtomRegistry.get(environmentServerConfigsAtom).get(activeThread.environmentId)
+              ?.environment.capabilities.threadCustomGroupCreation === true,
+        })
+      : null;
+    if (creationGroup?.blockReason) {
+      setThreadError(threadIdForSend, creationGroup.blockReason);
+      return;
+    }
+    const creationGroupFields =
+      creationGroup?.customGroupId != null ? { customGroupId: creationGroup.customGroupId } : {};
 
     const composerImagesSnapshot = [...composerImages];
     const composerFilesSnapshot = [...composerFiles];
@@ -9016,6 +9037,7 @@ export default function ChatView(props: ChatViewProps) {
                       branch: activeThreadBranch,
                       worktreePath: null,
                       createdAt: messageCreatedAt,
+                      ...creationGroupFields,
                     },
                     prepareWorktree: {
                       projectCwd: activeProject.workspaceRoot,
@@ -9340,6 +9362,7 @@ export default function ChatView(props: ChatViewProps) {
                       branch: activeThreadBranch,
                       worktreePath: activeThread.worktreePath,
                       createdAt: activeThread.createdAt,
+                      ...creationGroupFields,
                     },
                   }
                 : {}),

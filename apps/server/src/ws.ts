@@ -1985,6 +1985,7 @@ const makeWsRpcLayer = (
                   runtimeMode: input.runtimeMode,
                   interactionMode: input.interactionMode,
                   workspaceStrategy: input.workspaceStrategy,
+                  ...(input.customGroupId == null ? {} : { customGroupId: input.customGroupId }),
                   ...(input.initialMessage === undefined
                     ? {}
                     : {

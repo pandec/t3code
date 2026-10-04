@@ -40,6 +40,7 @@ import {
   type PinThreadInput,
   type ReorderPinnedThreadInput,
   type ReorderActiveThreadInput,
+  type SetThreadCustomGroupInput,
   type SetThreadAutoSettleInput,
   type SettleThreadInput,
   type SnoozeThreadInput,
@@ -74,6 +75,7 @@ import {
   pinThread,
   reorderPinnedThread,
   reorderActiveThread,
+  setThreadCustomGroup,
   setThreadAutoSettle,
   settleThread,
   snoozeThread,
@@ -117,6 +119,7 @@ export type {
   PinThreadInput,
   ReorderPinnedThreadInput,
   ReorderActiveThreadInput,
+  SetThreadCustomGroupInput,
   SetThreadAutoSettleInput,
   SettleThreadInput,
   SnoozeThreadInput,
@@ -218,6 +221,12 @@ export function createThreadEnvironmentAtoms<R, E>(
     reorderActive: createEnvironmentCommand(runtime, {
       label: "environment-data:commands:thread:reorder-active",
       execute: (input: ReorderActiveThreadInput) => reorderActiveThread(input),
+      scheduler,
+      concurrency,
+    }),
+    setCustomGroup: createEnvironmentCommand(runtime, {
+      label: "environment-data:commands:thread:set-custom-group",
+      execute: (input: SetThreadCustomGroupInput) => setThreadCustomGroup(input),
       scheduler,
       concurrency,
     }),
@@ -482,5 +491,13 @@ export function createThreadEnvironmentAtoms<R, E>(
       ...thread,
       activeOrderKey: input.orderKey,
     })),
+    setCustomGroup: optimistic.wrap(commands.setCustomGroup, (thread, input) => {
+      const { customGroupId: _previous, ...rest } = thread;
+      return {
+        ...rest,
+        ...(input.customGroupId === null ? {} : { customGroupId: input.customGroupId }),
+        ...(input.orderKey === undefined ? {} : { activeOrderKey: input.orderKey }),
+      };
+    }),
   };
 }
