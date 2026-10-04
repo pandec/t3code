@@ -72,6 +72,15 @@ to a message in flight when the page reloads or the connection drops. A notice a
 the composer counts unsent messages and can discard them. Messages with attachments
 still need a connection.
 
+## Read threads offline on mobile
+
+Mobile caches a few recently active threads it hasn't stored yet, so they open instantly and can be
+read offline. This happens shortly after an environment connects, when the app returns to the
+foreground, and when a running thread finishes. To start it yourself, use **Sync Threads** in
+**Settings → Thread behavior**, which also shows when the last full sync finished. Syncing is
+best-effort and stores a recent window of each thread's history; threads that are already cached
+refresh when you open them online. It does not send queued messages.
+
 ## Custom models
 
 On web and desktop, use Settings → Providers → **Models** to add an unlisted model with a custom
@@ -151,7 +160,15 @@ Stashes containing uploaded files must be restored in their original environment
 Those files are retained for 24 hours. After an upload expires, restore the prompt
 and use **Attach again** or remove the missing file before sending.
 
-## Voice input on iPhone
+## Saved prompts
+
+On web and desktop, keep reusable prompts in **Settings → Prompts**. They are shared by every
+connected environment. Type `/prompt` in the composer to pick one and insert it at the cursor
+without sending, or use **Prompts...** in the command palette, where `Cmd+Enter` on macOS or
+`Ctrl+Enter` on Windows and Linux copies the prompt instead. Unlike a [stash](#prompt-stash), a
+saved prompt holds only text.
+
+## Voice input
 
 On supported iPhones with iOS 26 or later, use the composer's microphone to record,
 then confirm to transcribe. Text is inserted where your selection was when
@@ -166,8 +183,34 @@ awake; it can sleep normally once recording stops.
 Transcription runs on your device. T3 Code deletes the temporary audio after
 transcription or cancellation; only the message text is sent when you submit.
 
+When the environment's server has an ElevenLabs API key in `ELEVENLABS_API_KEY`, the
+recording can be transcribed there instead. Mobile then offers the microphone where
+on-device transcription is unavailable, such as on Android, older iPhones, or an
+unsupported language, and the desktop app adds a microphone to the composer. The audio
+goes to the environment and on to ElevenLabs. Recordings transcribed this way can be up
+to three minutes long. In the desktop app, the text is added at the end of the draft, and
+a failed transcription keeps the recording so you can retry or discard it.
+
 A message that contains dictated text shows a **Transcribed** label, and the agent
 is told it came from speech, so it asks about implausible words instead of guessing.
+
+## Listen to responses
+
+Dictation turns your speech into text. Listening works the other way: select the headphones beneath
+a finished assistant response to get a spoken version written for listening. Recordings are
+prepared on the environment, keep playing while you switch threads, and appear on every connected
+device. **Summarize this response** shows a short text summary instead, without needing a speech
+provider.
+
+Listening needs a speech provider on the environment. On web and desktop, set it up in
+**Settings → Extras → Voice**: paste an OpenRouter key there, or set `ELEVENLABS_API_KEY` on the
+server for ElevenLabs. The same section picks the model and voice and lets you test them.
+
+With a speech provider configured, agents can also answer with a voice reply when you ask to hear
+the answer. The recording appears as a player with the agent's final message. Turn **Agent voice
+replies** off, or give replies their own voice, in the same section. Changes to agent voice replies
+apply to agent sessions started afterwards; use **Restart agent session** to apply them to the
+current thread.
 
 ## Queued messages
 

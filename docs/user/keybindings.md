@@ -53,12 +53,20 @@ The combined command still copies a PR URL when available and otherwise the thre
 ## Rename and snooze threads
 
 On web and desktop, open the command palette with `mod+k` and choose **Rename current thread**
-or **Snooze current thread**. Rename edits the title in the palette input. Snooze offers presets
-and accepts a typed wake time such as `45m`, `2pm`, or `fri 9am`.
+or **Snooze current thread**. Rename edits the title in the palette input and also offers
+**Regenerate title**. Snooze offers the same presets as the thread menu, including
+[Until I wake it and Until it's done](./thread-sidebar.md#snooze-until-later), and accepts a
+typed wake time such as `45m`, `2pm`, or `fri 9am`.
 
 To open either step directly, assign a shortcut to "Thread: Rename" or "Thread: Snooze" in
 Settings → Keybindings. Neither has a default binding. The snooze shortcut wakes an already
 snoozed thread.
+
+## Split view
+
+With [two threads side by side](./thread-sidebar.md#view-two-threads-side-by-side),
+`mod+\` moves focus to the other pane and `mod+shift+\` swaps the threads. Change them
+under **Thread Pane: Focus Other** and **Thread Pane: Swap** in Settings → Keybindings.
 
 ## Previous thread on desktop
 
@@ -150,18 +158,16 @@ a shortcut.
 `thread.stop` interrupts the running turn in the focused thread. It has no default
 shortcut; assign one in **Settings → Keybindings**.
 
-`thread.archive` archives the focused thread. It has no default shortcut. It does
-nothing while a dialog, menu, or popover is open, and neither does `thread.undo`.
+`thread.archive` archives the focused thread. It has no default shortcut. While the
+thread is working it [archives when done](./thread-sidebar.md#archive-when-done), and
+pressing it again cancels the pending archive. It does nothing while a dialog, menu, or
+popover is open, and neither does `thread.undo`.
 
 `thread.undo` (`mod+z` by default) reverses the actions shown in the notice at the
 bottom of the sidebar, such as unpin, settle, snooze, or archive. Consecutive
 actions of the same kind undo together. The notice remains available for five
 seconds after the latest action. The default shortcut skips text fields and
 terminals so native undo keeps working there.
-
-`thread.archive` archives the focused thread. While the thread is working it
-[archives when done](./thread-sidebar.md#archive-when-done), and pressing it again cancels
-the pending archive. It has no default shortcut.
 
 `navigation.back` (`mod+[` by default) and `navigation.forward` (`mod+]`) move
 through the pages you have visited, like a browser's back and forward buttons.

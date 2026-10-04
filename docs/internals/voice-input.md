@@ -2,14 +2,20 @@
 
 Transcription edits a composer draft. It does not submit an agent turn. Audio is
 temporary client input, and only normal message submission sends the resulting
-text. The current implementation transcribes locally on supported iOS devices;
-environment-backed transcription is not implemented.
+text. Supported iOS devices transcribe locally. An environment whose server has
+`ELEVENLABS_API_KEY` also transcribes uploaded recordings
+([VoiceTranscription](../../apps/server/src/voice/VoiceTranscription.ts)); mobile
+falls back to it when local transcription is unavailable or fails to prepare, and
+the desktop composer uses it directly.
 
-The [shared controller](../../packages/client-runtime/src/voice-input/controller.ts)
+On mobile, the [shared controller](../../packages/client-runtime/src/voice-input/controller.ts)
 owns the operation while the client supplies capture and transcription. Preparation
 binds the transcriber and resolved locale for the whole recording. Draft ownership,
 text, and revision are captured before recording and checked before insertion, so
-a late transcript cannot overwrite a draft that was edited or replaced.
+a late transcript cannot overwrite a draft that was edited or replaced. The
+[desktop recorder](../../apps/web/src/components/chat/DesktopVoiceRecorder.tsx) is
+keyed to its draft, so switching drafts discards an in-flight result, and appends
+the transcript to the current text.
 
 A draft that receives a transcript carries `inputOrigin: "voice-transcription"`
 until its text is emptied; sends and failure restores keep it with the message,

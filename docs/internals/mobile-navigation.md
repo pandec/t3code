@@ -7,7 +7,7 @@ continuous transition.
 
 ## UIKit constraints
 
-The [react-native-screens patch](../../patches/react-native-screens@4.26.2.patch)
+The [react-native-screens patch](../../patches/react-native-screens@4.28.0.patch)
 preserves behavior that is easy to break when changing native headers:
 
 - The brand belongs in `headerTitle`. On iOS 26.5, UIKit morphs a background-free

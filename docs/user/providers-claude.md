@@ -53,6 +53,12 @@ Claude Code's verbose mode can stay enabled when you use Claude for text generat
 thread titles, branch names, commit messages, and pull request descriptions. On a remote connection,
 T3 Code uses the Claude configuration on the connected server.
 
+## Worktree moves
+
+When Claude enters or leaves a worktree during a session, the thread follows it: its branch
+and workspace switch to that checkout, and later turns, including after a restart, start there.
+The thread only follows into an existing checkout of the project's repository.
+
 ## Compact long conversations
 
 Set **Auto-compact after** in the Claude provider settings to an integer between `100000` and
@@ -120,7 +126,8 @@ provider instance:
   secret.
 
 The usage meter then lists pooled Claude and Codex accounts, including priority and cooldown state,
-and marks the account the gateway will serve next. Direct-account rows stay hidden for a gateway
+and marks the account serving the thread's current session as **current** and the account the
+gateway will pick for a new session as **next**. Direct-account rows stay hidden for a gateway
 thread because they cannot serve that thread. Gateway rows stay hidden for direct threads.
 
 A rejected management key pauses probes for 10 minutes. CLIProxyAPI bans an IP for 30 minutes after
