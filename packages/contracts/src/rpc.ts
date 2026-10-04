@@ -364,7 +364,14 @@ import {
   SourceControlRepositoryInfo,
   SourceControlRepositoryLookupInput,
 } from "./sourceControl.ts";
-import { SESSION_IMPORT_WS_METHODS } from "./sessionImport.ts";
+import {
+  SESSION_IMPORT_WS_METHODS,
+  SessionImportError,
+  SessionImportListCandidatesPayload,
+  SessionImportListCandidatesResult,
+  SessionImportPayload,
+  SessionImportResult,
+} from "./sessionImport.ts";
 import { VcsError } from "./vcs.ts";
 import { Project, ProjectMutation, ProjectMutationError } from "./project.ts";
 
@@ -917,6 +924,18 @@ const WsServerLogoutAcpRegistryRpc = Rpc.make(WS_METHODS.serverLogoutAcpRegistry
   payload: AcpRegistryLogoutInput,
   success: AcpRegistryLogoutResult,
   error: Schema.Union([AcpRegistryOperationError, EnvironmentAuthorizationError]),
+});
+
+const WsSessionImportListCandidatesRpc = Rpc.make(WS_METHODS.sessionImportListCandidates, {
+  payload: SessionImportListCandidatesPayload,
+  success: SessionImportListCandidatesResult,
+  error: Schema.Union([SessionImportError, EnvironmentAuthorizationError]),
+});
+
+const WsSessionImportImportRpc = Rpc.make(WS_METHODS.sessionImportImport, {
+  payload: SessionImportPayload,
+  success: SessionImportResult,
+  error: Schema.Union([SessionImportError, EnvironmentAuthorizationError]),
 });
 
 const WsServerGetTraceDiagnosticsRpc = Rpc.make(WS_METHODS.serverGetTraceDiagnostics, {
@@ -2004,4 +2023,6 @@ export const WsRpcGroup = RpcGroup.make(
   WsOrchestrationV2SubscribeArchivedShellRpc,
   WsOrchestrationV2SubscribeShellRpc,
   WsOrchestrationV2SubscribeThreadRpc,
+  WsSessionImportListCandidatesRpc,
+  WsSessionImportImportRpc,
 );

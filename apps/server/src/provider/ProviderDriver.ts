@@ -41,6 +41,7 @@ import type { ProviderAdapterV2Shape } from "../orchestration-v2/ProviderAdapter
 import type { ProviderDriverError } from "./Errors.ts";
 import type { ProviderAuthController } from "./Services/ProviderAuthService.ts";
 import type { ServerProviderShape } from "./Services/ServerProvider.ts";
+import type { ProviderSessionImport } from "../sessionImport/ProviderSessionImport.ts";
 
 /**
  * Static metadata advertised by a driver. Used for default presentation
@@ -115,6 +116,8 @@ export interface ProviderInstance {
       readonly providerId: string;
     }) => Effect.Effect<void, AcpRegistryOperationError>;
   };
+  /** Sessions this instance's CLI persisted outside T3 Code, for session import. */
+  readonly sessionImport?: ProviderSessionImport;
 }
 
 export interface ProviderContinuationIdentity {

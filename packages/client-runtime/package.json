@@ -251,6 +251,10 @@
       "types": "./src/state/session.ts",
       "default": "./src/state/session.ts"
     },
+    "./state/sessionImport": {
+      "types": "./src/state/sessionImport.ts",
+      "default": "./src/state/sessionImport.ts"
+    },
     "./state/shared-settings": {
       "types": "./src/state/sharedSettings.ts",
       "default": "./src/state/sharedSettings.ts"

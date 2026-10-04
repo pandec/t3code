@@ -25,6 +25,7 @@ import {
 } from "./ThreadStatusIndicators";
 import { EnvironmentMachineIcon } from "./EnvironmentMachineIcon";
 import { ProjectFavicon } from "./ProjectFavicon";
+import { SessionImportDialog } from "./SessionImportDialog";
 import { ProviderInstanceIcon } from "./chat/ProviderInstanceIcon";
 import { useAtomValue } from "@effect/atom-react";
 import { autoAnimate } from "@formkit/auto-animate";
@@ -1607,6 +1608,10 @@ const SidebarProjectItem = memo(function SidebarProjectItem(props: SidebarProjec
     setProjectRenameTitle(member.title);
   }, []);
 
+  const [sessionImportTarget, setSessionImportTarget] = useState<SidebarProjectGroupMember | null>(
+    null,
+  );
+
   const openProjectGroupingDialog = useCallback(
     (member: SidebarProjectGroupMember) => {
       const overrideKey = deriveProjectGroupingOverrideKey(member);
@@ -1792,7 +1797,7 @@ const SidebarProjectItem = memo(function SidebarProjectItem(props: SidebarProjec
 
         const actionHandlers = new Map<string, () => Promise<void> | void>();
         const makeLeaf = (
-          action: "rename" | "grouping" | "copy-path" | "delete",
+          action: "rename" | "grouping" | "copy-path" | "import-session" | "delete",
           member: SidebarProjectGroupMember,
           options?: {
             destructive?: boolean;
@@ -1811,6 +1816,9 @@ const SidebarProjectItem = memo(function SidebarProjectItem(props: SidebarProjec
               case "copy-path":
                 copyPathToClipboard(member.workspaceRoot, { path: member.workspaceRoot });
                 return;
+              case "import-session":
+                setSessionImportTarget(member);
+                return;
               case "delete":
                 return handleRemoveProject(member);
             }
@@ -1825,7 +1833,7 @@ const SidebarProjectItem = memo(function SidebarProjectItem(props: SidebarProjec
         };
 
         const buildTargetedItem = (
-          action: "rename" | "grouping" | "copy-path" | "delete",
+          action: "rename" | "grouping" | "copy-path" | "import-session" | "delete",
           label: string,
           options?: {
             destructive?: boolean;
@@ -1870,6 +1878,7 @@ const SidebarProjectItem = memo(function SidebarProjectItem(props: SidebarProjec
             buildTargetedItem("rename", "Rename"),
             buildTargetedItem("grouping", "Group into..."),
             buildTargetedItem("copy-path", "Copy Path"),
+            buildTargetedItem("import-session", "Import CLI Session..."),
             { id: "project-settings", label: "Project settings", icon: "settings" },
             buildTargetedItem("delete", "Remove", {
               destructive: true,
@@ -2615,6 +2624,11 @@ const SidebarProjectItem = memo(function SidebarProjectItem(props: SidebarProjec
         openPrLink={openPrLink}
         expandThreadListForProject={expandThreadListForProject}
         collapseThreadListForProject={collapseThreadListForProject}
+      />
+
+      <SessionImportDialog
+        member={sessionImportTarget}
+        onClose={() => setSessionImportTarget(null)}
       />
 
       <Dialog

@@ -255,6 +255,7 @@ import {
 } from "@t3tools/shared/usageLimits";
 import * as AgentSessionScanner from "./project/AgentSessionScanner.ts";
 import * as AgentSessionImporter from "./project/AgentSessionImporter.ts";
+import * as SessionImportService from "./sessionImport/SessionImportService.ts";
 import * as UsageLimitSources from "./usage/UsageLimitSources.ts";
 
 const CONFIG_DISCOVERY_TIMEOUT = Duration.seconds(5);
@@ -1177,6 +1178,7 @@ const makeWsRpcLayer = (
         yield* RepositoryIdentityResolver.RepositoryIdentityResolver;
       const agentSessionScanner = yield* AgentSessionScanner.AgentSessionScanner;
       const agentSessionImporter = yield* AgentSessionImporter.AgentSessionImporter;
+      const sessionImport = yield* SessionImportService.SessionImportService;
       const checkpointDiffQuery = yield* CheckpointDiffQuery.CheckpointDiffQuery;
       const keybindings = yield* Keybindings.Keybindings;
       const environmentTheme = yield* EnvironmentTheme.EnvironmentThemeService;
@@ -3252,6 +3254,18 @@ const makeWsRpcLayer = (
             agentSessionImporter.importRecentAgentThreads(input),
             { "rpc.aggregate": "workspace" },
           ),
+        [WS_METHODS.sessionImportListCandidates]: (input) =>
+          observeRpcEffect(
+            WS_METHODS.sessionImportListCandidates,
+            sessionImport.listCandidates(input).pipe(Effect.map((candidates) => ({ candidates }))),
+            { "rpc.aggregate": "sessionImport" },
+          ),
+        // Forward the decoded payload verbatim: re-listing the contract's
+        // optional fields here silently drops any field added later.
+        [WS_METHODS.sessionImportImport]: (input) =>
+          observeRpcEffect(WS_METHODS.sessionImportImport, sessionImport.importSession(input), {
+            "rpc.aggregate": "sessionImport",
+          }),
         [WS_METHODS.assetsCreateUrl]: (input) =>
           observeRpcEffect(
             WS_METHODS.assetsCreateUrl,
