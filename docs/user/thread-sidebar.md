@@ -31,7 +31,7 @@ directory itself sits inside a Git checkout.
 
 ### Start in the background
 
-In a desktop browser or the desktop app, press `Cmd+Enter` on macOS or `Ctrl+Enter`
+In a desktop browser or the desktop app, press `Cmd+Option+Enter` on macOS or `Ctrl+Alt+Enter`
 on Windows and Linux to start a new thread and immediately open another draft. The
 next draft keeps the workspace mode and base branch you selected. With **New
 worktree**, each background submission creates its own worktree.
@@ -84,7 +84,7 @@ files directly; see [Attach files](./composer.md#attach-files).
 On web and desktop, pinning or unpinning a thread keeps the sidebar at your current
 scroll position instead of following the thread to its new place in the list.
 
-Pinning does not prevent automatic settlement. Settling a thread removes its pin.
+Pinned threads don't settle automatically. Settling a thread removes its pin.
 
 On web and desktop, drag a thread between sections to change its state. Drag a thread up into
 the pinned section to pin it at the spot you drop it; drag a pinned thread down into the active
@@ -137,16 +137,6 @@ Agents connected through T3 Code can use the same server-owned metadata workflow
 rename a thread, regenerate its title, or link and unlink a pull request. These changes
 appear on web, desktop, and mobile without requiring the originating browser to remain
 open.
-
-### Fold working threads (beta)
-
-On web and desktop, turn on **Settings → General → Working section (beta)** to move threads that
-are working or monitoring into a collapsed **Working** section at the bottom of the sidebar. A
-thread returns to the top of the active list when it finishes, fails, or needs an approval or
-answer. Pinned threads stay in the pinned section.
-
-While this is on, the active list is ordered by when each thread last came back to you, so you
-cannot drag to reorder it. Your saved order returns when you turn it off.
 
 ## Organize threads into custom groups
 
@@ -298,6 +288,14 @@ Use **Settings → Keybindings** to find or customize shortcuts for searching fi
 and copying a thread reference. A copied reference uses the thread's pull request
 link when available, otherwise its thread ID. See [keybindings](./keybindings.md)
 for custom configuration.
+
+## View two threads side by side
+
+In a wide web or desktop window, choose **Open split view** in the thread header, or **Open
+thread in split view…** in the command palette, to show a second thread beside the open one.
+Threads you pick from the sidebar or the palette then open in the pane you are working in. Drag
+the divider to resize the panes, or hover it to swap the threads, switch the second thread, or
+close the split. `mod+\` moves focus to the other pane and `mod+shift+\` swaps the threads.
 
 ## Inspect agent work
 
