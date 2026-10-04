@@ -356,12 +356,15 @@ export type OrchestrationV2LimitRecoveryUpdate = typeof OrchestrationV2LimitReco
 /**
  * Fork: a deferred archive. Pending until the run it waits on completes (which
  * includes its final checkpoint) and background work that holds completion
- * ends; `runId` is null when it waits only on background work.
+ * ends; `runId` is null when it waits only on background work. With
+ * `removeWorktree`, it stays pending after the thread archives until the
+ * guarded worktree removal finishes or is refused (`error` with the reason).
  */
 export const OrchestrationV2ThreadArchiveRequest = Schema.Struct({
   requestId: CommandId,
   runId: Schema.NullOr(RunId),
   worktreePath: Schema.NullOr(TrimmedNonEmptyString),
+  removeWorktree: Schema.optional(Schema.Boolean),
   requestedAt: IsoDateTime,
   status: Schema.Literals(["pending", "completed", "cancelled", "error"]),
   detail: Schema.optional(TrimmedNonEmptyString),
@@ -2494,6 +2497,8 @@ export const OrchestrationV2Command = Schema.Union([
     threadId: ThreadId,
     /** Required to schedule while a run is active; otherwise only idle threads qualify. */
     afterTurn: Schema.Boolean,
+    /** Remove the thread's clean, unshared worktree after archiving; its branch is kept. */
+    removeWorktree: Schema.optional(Schema.Boolean),
   }),
   /** Fork: cancel the pending deferred archive. */
   Schema.Struct({
@@ -2898,6 +2903,15 @@ const OrchestrationV2InternalCommand = Schema.Union([
     commandId: CommandId,
     threadId: ThreadId,
     requestId: CommandId,
+  }),
+  /** Fork: records the worktree removal outcome of archived request `requestId`. */
+  Schema.Struct({
+    type: Schema.Literal("thread.archive.complete"),
+    commandId: CommandId,
+    threadId: ThreadId,
+    requestId: CommandId,
+    /** Why the worktree was kept; omitted when it was removed. */
+    error: Schema.optional(TrimmedNonEmptyString),
   }),
   /** Records that the provider rollback `requestId` failed for good. */
   Schema.Struct({

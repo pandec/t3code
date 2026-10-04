@@ -1,0 +1,202 @@
+import * as NodeServices from "@effect/platform-node/NodeServices";
+import { assert, it } from "@effect/vitest";
+import {
+  type OrchestrationProjectShell,
+  type OrchestrationV2ThreadShellSnapshot,
+  ProjectId,
+  ProviderSessionId,
+  ThreadId,
+} from "@t3tools/contracts";
+import * as Effect from "effect/Effect";
+import * as FileSystem from "effect/FileSystem";
+import * as Layer from "effect/Layer";
+import * as Option from "effect/Option";
+import * as Path from "effect/Path";
+
+import * as ServerConfig from "../config.ts";
+import * as GitVcsDriver from "../vcs/GitVcsDriver.ts";
+import {
+  ArchiveWorktreeRemoval,
+  layer as archiveWorktreeRemovalLayer,
+  WORKTREE_KEPT_DETAIL,
+} from "./ArchiveWorktreeRemoval.ts";
+import * as ProjectStore from "./ProjectStore.ts";
+import * as ProviderSessionManager from "./ProviderSessionManager.ts";
+import * as ThreadManagement from "./ThreadManagementService.ts";
+
+const threadId = ThreadId.make("archive-removal");
+const projectId = ProjectId.make("archive-removal-project");
+
+interface Fixture {
+  repository: string;
+  worktreePath: string | null;
+  projects: Array<Pick<OrchestrationProjectShell, "id" | "workspaceRoot">>;
+  otherThreads: Array<{ id: ThreadId; projectId: ProjectId; worktreePath: string | null }>;
+  detached: Array<string>;
+}
+const fixture: Fixture = {
+  repository: "",
+  worktreePath: null,
+  projects: [],
+  otherThreads: [],
+  detached: [],
+};
+
+// Thread and project reads come from the fixture; Git and the file system are real.
+const TestLayer = archiveWorktreeRemovalLayer.pipe(
+  Layer.provide(
+    Layer.mock(ThreadManagement.ThreadManagementService)({
+      getThreadRecords: () =>
+        Effect.sync(
+          () =>
+            ({
+              thread: { id: threadId, projectId, worktreePath: fixture.worktreePath },
+              providerSessions: [
+                { id: ProviderSessionId.make("session-live"), status: "ready" },
+                { id: ProviderSessionId.make("session-stopped"), status: "stopped" },
+              ],
+            }) as never,
+        ),
+      getShellSnapshot: () =>
+        Effect.sync(
+          () =>
+            ({
+              threads: fixture.otherThreads.map((thread) => ({ ...thread, deletedAt: null })),
+            }) as unknown as OrchestrationV2ThreadShellSnapshot,
+        ),
+    }),
+  ),
+  Layer.provide(
+    Layer.mock(ProjectStore.ProjectStoreV2)({
+      listShells: () => Effect.sync(() => fixture.projects as Array<OrchestrationProjectShell>),
+      getShell: () =>
+        Effect.sync(() =>
+          Option.some({
+            id: projectId,
+            workspaceRoot: fixture.repository,
+          } as OrchestrationProjectShell),
+        ),
+    }),
+  ),
+  Layer.provide(
+    Layer.mock(ProviderSessionManager.ProviderSessionManagerV2)({
+      detach: (input) => Effect.sync(() => void fixture.detached.push(input.providerSessionId)),
+    }),
+  ),
+  Layer.provideMerge(GitVcsDriver.layer),
+  Layer.provide(ServerConfig.layerTest(process.cwd(), { prefix: "t3-archive-removal-" })),
+  Layer.provideMerge(NodeServices.layer),
+);
+
+const git = (cwd: string, args: ReadonlyArray<string>) =>
+  Effect.gen(function* () {
+    const driver = yield* GitVcsDriver.GitVcsDriver;
+    const result = yield* driver.execute({
+      operation: "ArchiveWorktreeRemoval.test.git",
+      cwd,
+      args,
+      timeoutMs: 10_000,
+    });
+    return result.stdout.trim();
+  });
+
+/** A repository with one commit and a linked worktree on `branch` (detached when null). */
+const setup = (branch: string | null) =>
+  Effect.gen(function* () {
+    const fs = yield* FileSystem.FileSystem;
+    const path = yield* Path.Path;
+    const root = yield* fs.realPath(
+      yield* fs.makeTempDirectoryScoped({ prefix: "t3-archive-removal-" }),
+    );
+    const repository = path.join(root, "repo");
+    const worktreePath = path.join(root, "worktree");
+    yield* fs.makeDirectory(repository);
+    yield* git(repository, ["init"]);
+    yield* git(repository, ["config", "user.email", "test@test.com"]);
+    yield* git(repository, ["config", "user.name", "Test"]);
+    yield* fs.writeFileString(path.join(repository, "README.md"), "# test\n");
+    yield* git(repository, ["add", "."]);
+    yield* git(repository, ["commit", "-m", "initial"]);
+    yield* git(
+      repository,
+      branch === null
+        ? ["worktree", "add", "--detach", worktreePath]
+        : ["worktree", "add", "-b", branch, worktreePath],
+    );
+    fixture.repository = repository;
+    fixture.worktreePath = worktreePath;
+    fixture.projects = [{ id: projectId, workspaceRoot: repository }];
+    fixture.otherThreads = [];
+    fixture.detached = [];
+    return { repository, worktreePath };
+  });
+
+it.layer(TestLayer)("archive worktree removal", (it) => {
+  it.effect("removes a clean, unshared worktree, keeps its branch, and stops sessions", () =>
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
+      const removal = yield* ArchiveWorktreeRemoval;
+      const { repository, worktreePath } = yield* setup("feature/archive");
+      assert.isNull(yield* removal.blocker(threadId));
+      assert.isNull(yield* removal.remove({ threadId, worktreePath }));
+      assert.isFalse(yield* fs.exists(worktreePath));
+      assert.equal(
+        yield* git(repository, ["branch", "--list", "feature/archive"]),
+        "feature/archive",
+      );
+      assert.deepEqual(fixture.detached, ["session-live"]);
+      // Already gone: nothing left to remove.
+      assert.isNull(yield* removal.remove({ threadId, worktreePath }));
+    }).pipe(Effect.scoped),
+  );
+
+  it.effect("keeps a dirty worktree, though a running turn may still clean it", () =>
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
+      const path = yield* Path.Path;
+      const removal = yield* ArchiveWorktreeRemoval;
+      const { worktreePath } = yield* setup("feature/dirty");
+      yield* fs.writeFileString(path.join(worktreePath, "notes.txt"), "draft\n");
+      assert.isNull(yield* removal.blocker(threadId));
+      assert.equal(yield* removal.remove({ threadId, worktreePath }), WORKTREE_KEPT_DETAIL.dirty);
+      assert.isTrue(yield* fs.exists(worktreePath));
+    }).pipe(Effect.scoped),
+  );
+
+  it.effect("refuses shared, project-owned, detached, and main checkouts", () =>
+    Effect.gen(function* () {
+      const removal = yield* ArchiveWorktreeRemoval;
+      const { repository, worktreePath } = yield* setup("feature/shared");
+      fixture.otherThreads = [{ id: ThreadId.make("other-thread"), projectId, worktreePath }];
+      assert.equal(yield* removal.blocker(threadId), WORKTREE_KEPT_DETAIL.shared);
+      assert.equal(yield* removal.remove({ threadId, worktreePath }), WORKTREE_KEPT_DETAIL.shared);
+
+      fixture.otherThreads = [];
+      fixture.projects.push({ id: ProjectId.make("nested-project"), workspaceRoot: worktreePath });
+      assert.equal(
+        yield* removal.remove({ threadId, worktreePath }),
+        WORKTREE_KEPT_DETAIL.projectCheckout,
+      );
+
+      assert.equal(
+        yield* removal.remove({ threadId, worktreePath: repository }),
+        WORKTREE_KEPT_DETAIL.notWorktree,
+      );
+
+      const detached = yield* setup(null);
+      assert.equal(
+        yield* removal.remove({ threadId, worktreePath: detached.worktreePath }),
+        WORKTREE_KEPT_DETAIL.detached,
+      );
+    }).pipe(Effect.scoped),
+  );
+
+  it.effect("needs a worktree to remove", () =>
+    Effect.gen(function* () {
+      const removal = yield* ArchiveWorktreeRemoval;
+      yield* setup("feature/none");
+      fixture.worktreePath = null;
+      assert.equal(yield* removal.blocker(threadId), WORKTREE_KEPT_DETAIL.noWorktree);
+    }).pipe(Effect.scoped),
+  );
+});

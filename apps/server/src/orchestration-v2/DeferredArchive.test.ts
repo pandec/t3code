@@ -32,11 +32,14 @@ import * as SourceControlProviderRegistry from "../sourceControl/SourceControlPr
 import * as VcsDriverRegistry from "../vcs/VcsDriverRegistry.ts";
 import * as VcsProcess from "../vcs/VcsProcess.ts";
 import { CodexProviderCapabilitiesV2 } from "./Adapters/CodexAdapterV2.ts";
+import * as ArchiveWorktreeRemoval from "./ArchiveWorktreeRemoval.ts";
 import {
   ARCHIVE_CANCEL_DETAIL,
   evaluateDeferredArchive,
+  finishedWorktreeRemoval,
   planArchiveSchedule,
   stopCancelsArchive,
+  worktreeRemovalRequest,
 } from "./DeferredArchive.ts";
 import * as EffectOutbox from "./EffectOutbox.ts";
 import * as EventSink from "./EventSink.ts";
@@ -116,6 +119,48 @@ describe("planArchiveSchedule", () => {
       schedule({ runs: [run("run-1", 1, "running"), run("run-2", 2, "queued")] }).type,
       "reject",
     );
+  });
+});
+
+describe("archive with worktree removal", () => {
+  it("needs a worktree and stays pending after an immediate archive", () => {
+    assert.deepEqual(
+      schedule({ removeWorktree: true, thread: { ...idleThread, worktreePath: null } }),
+      { type: "reject", detail: "This thread has no worktree to remove." },
+    );
+    const plan = schedule({ removeWorktree: true });
+    assert.isTrue(
+      plan.type === "archive" &&
+        plan.request.status === "pending" &&
+        plan.request.removeWorktree === true,
+    );
+    // Without removal the immediate archive completes the request.
+    const plain = schedule();
+    assert.isTrue(plain.type === "archive" && plain.request.status === "completed");
+  });
+
+  it("tracks removal only on an archived, undeleted thread and records its outcome", () => {
+    const request = pendingRequest({ removeWorktree: true });
+    const archivedAt = at("2026-10-01T00:00:02Z");
+    assert.isNull(
+      worktreeRemovalRequest({ archiveRequest: request, archivedAt: null, deletedAt: null }),
+    );
+    assert.equal(
+      worktreeRemovalRequest({ archiveRequest: request, archivedAt, deletedAt: null }),
+      request,
+    );
+    assert.isNull(
+      worktreeRemovalRequest({ archiveRequest: request, archivedAt, deletedAt: archivedAt }),
+    );
+    assert.isNull(
+      worktreeRemovalRequest({ archiveRequest: pendingRequest(), archivedAt, deletedAt: null }),
+    );
+    assert.equal(finishedWorktreeRemoval(request, undefined).status, "completed");
+    assert.deepInclude(finishedWorktreeRemoval(request, "Dirty."), {
+      status: "error",
+      detail: "Dirty.",
+      removeWorktree: true,
+    });
   });
 });
 
@@ -202,7 +247,32 @@ const PlatformTestLayer = Layer.merge(
 const ServerConfigLayer = ServerConfig.layerTest(process.cwd(), {
   prefix: "t3-orchestration-v2-deferred-archive-",
 });
+// The guarded removal itself is covered by ArchiveWorktreeRemoval.test.ts.
+const removal = {
+  blocker: null as string | null,
+  outcome: null as string | null,
+  removed: [] as Array<string>,
+};
+const FakeWorktreeRemoval = Layer.succeed(
+  ArchiveWorktreeRemoval.ArchiveWorktreeRemoval,
+  ArchiveWorktreeRemoval.ArchiveWorktreeRemoval.of({
+    blocker: () => Effect.sync(() => removal.blocker),
+    remove: ({ worktreePath }) =>
+      Effect.sync(() => {
+        removal.removed.push(worktreePath);
+        return removal.outcome;
+      }),
+  }),
+);
+const resetRemoval = (input: Partial<Omit<typeof removal, "removed">> = {}) =>
+  Effect.sync(() => {
+    removal.blocker = input.blocker ?? null;
+    removal.outcome = input.outcome ?? null;
+    removal.removed = [];
+  });
+
 const TestLayer = ThreadArchiveScheduler.layer.pipe(
+  Layer.provideMerge(FakeWorktreeRemoval),
   Layer.provideMerge(
     Layer.mergeAll(
       OrchestrationV2LayerLive,
@@ -213,7 +283,7 @@ const TestLayer = ThreadArchiveScheduler.layer.pipe(
     ),
   ),
   Layer.provide(McpSessionRegistryTestkit.layer),
-  Layer.provide(SqlitePersistenceMemory),
+  Layer.provideMerge(SqlitePersistenceMemory),
   Layer.provide(
     CheckpointStore.layer.pipe(
       Layer.provide(
@@ -431,6 +501,124 @@ it.layer(TestLayer)("deferred archive on the orchestrator", (it) => {
       assert.isNotNull(thread.archivedAt);
       assert.equal(thread.archiveRequest?.status, "cancelled");
       assert.equal(thread.archiveRequest?.detail, ARCHIVE_CANCEL_DETAIL.manual);
+    }),
+  );
+
+  it.effect("removes the worktree after an idle archive and records the outcome", () =>
+    Effect.gen(function* () {
+      yield* resetRemoval();
+      const scheduler = yield* ThreadArchiveScheduler.ThreadArchiveScheduler;
+      const threadId = yield* createThread("remove-idle");
+      const archived = yield* scheduler.schedule({
+        threadId,
+        afterTurn: false,
+        removeWorktree: true,
+      });
+      // Archived right away; the request stays pending until removal finishes.
+      assert.isNotNull(archived.archivedAt);
+      assert.equal(archived.request?.status, "pending");
+      assert.isTrue(archived.request?.removeWorktree);
+
+      yield* scheduler.reconcilePending;
+      assert.deepEqual(removal.removed, ["/tmp/deferred-archive-remove-idle"]);
+      const status = yield* scheduler.status(threadId);
+      assert.equal(status.request?.status, "completed");
+      assert.isNotNull(status.archivedAt);
+    }),
+  );
+
+  it.effect("waits for the turn, then records why the worktree was kept", () =>
+    Effect.gen(function* () {
+      yield* resetRemoval({ outcome: ArchiveWorktreeRemoval.WORKTREE_KEPT_DETAIL.dirty });
+      const scheduler = yield* ThreadArchiveScheduler.ThreadArchiveScheduler;
+      const eventSink = yield* EventSink.EventSinkV2;
+      const threadId = yield* createThread("remove-after-turn");
+      const active = yield* sendMessage(threadId, "remove-after-turn", {
+        type: "start_immediately",
+      });
+      yield* scheduler.schedule({ threadId, afterTurn: true, removeWorktree: true });
+      yield* scheduler.reconcilePending;
+      assert.deepEqual(removal.removed, []);
+
+      const now = yield* DateTime.now;
+      yield* eventSink.commitCommand({
+        commandId: CommandId.make("remove-after-turn-complete"),
+        threadId,
+        commandType: "checkpoint.capture",
+        acceptedAt: now,
+        events: [
+          {
+            id: EventId.make("remove-after-turn-complete-run"),
+            type: "run.updated",
+            threadId,
+            runId: active.id,
+            occurredAt: now,
+            payload: { ...active, status: "completed", startedAt: now, completedAt: now },
+          },
+        ],
+        effects: [],
+      });
+      // One pass archives; the next one (the event stream's job when the
+      // worker runs, or recovery after a restart) removes the worktree.
+      yield* scheduler.reconcilePending;
+      yield* scheduler.reconcilePending;
+      assert.deepEqual(removal.removed, ["/tmp/deferred-archive-remove-after-turn"]);
+      const thread = yield* threadState(threadId);
+      assert.isNotNull(thread.archivedAt);
+      assert.equal(thread.archiveRequest?.status, "error");
+      assert.equal(
+        thread.archiveRequest?.detail,
+        ArchiveWorktreeRemoval.WORKTREE_KEPT_DETAIL.dirty,
+      );
+    }),
+  );
+
+  it.effect("refuses up front a worktree that can never qualify", () =>
+    Effect.gen(function* () {
+      yield* resetRemoval({ blocker: ArchiveWorktreeRemoval.WORKTREE_KEPT_DETAIL.shared });
+      const scheduler = yield* ThreadArchiveScheduler.ThreadArchiveScheduler;
+      const threadId = yield* createThread("remove-shared");
+      const refused = yield* scheduler
+        .schedule({ threadId, afterTurn: false, removeWorktree: true })
+        .pipe(Effect.flip);
+      assert.equal(refused.detail, ArchiveWorktreeRemoval.WORKTREE_KEPT_DETAIL.shared);
+      const status = yield* scheduler.status(threadId);
+      assert.isNull(status.archivedAt);
+      assert.isNull(status.request);
+    }),
+  );
+
+  it.effect("unarchiving before removal keeps the worktree", () =>
+    Effect.gen(function* () {
+      yield* resetRemoval();
+      const scheduler = yield* ThreadArchiveScheduler.ThreadArchiveScheduler;
+      const orchestrator = yield* Orchestrator.OrchestratorV2;
+      const threadId = yield* createThread("remove-unarchive");
+      const archived = yield* scheduler.schedule({
+        threadId,
+        afterTurn: false,
+        removeWorktree: true,
+      });
+      yield* orchestrator.dispatch({
+        type: "thread.unarchive",
+        commandId: CommandId.make("remove-unarchive-unarchive"),
+        threadId,
+      });
+      yield* scheduler.reconcilePending;
+      assert.deepEqual(removal.removed, []);
+      const status = yield* scheduler.status(threadId);
+      assert.isNull(status.archivedAt);
+      assert.equal(status.request?.status, "cancelled");
+      assert.equal(status.request?.detail, ARCHIVE_CANCEL_DETAIL.unarchived);
+      const late = yield* orchestrator
+        .dispatch({
+          type: "thread.archive.complete",
+          commandId: CommandId.make("remove-unarchive-late-complete"),
+          threadId,
+          requestId: archived.request!.requestId,
+        })
+        .pipe(Effect.flip);
+      assert.equal(late._tag, "OrchestratorDispatchError");
     }),
   );
 });

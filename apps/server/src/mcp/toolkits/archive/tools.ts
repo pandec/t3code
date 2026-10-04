@@ -24,7 +24,14 @@ const dependencies = [
 
 const ArchiveThread = Tool.make("archive_thread", {
   description:
-    "When the user asks to archive this thread when you are done, schedule its archive after the current turn succeeds, its final checkpoint lands, and background work such as subagents and monitors finishes. A pending request means scheduled, not archived: finish your response without waiting for your own turn to end. Failed or interrupted turns, a Stop, or newer work cancel the request. Idle threads archive immediately. Use archive_thread_status to inspect or cancel_thread_archive to cancel before archiving starts.",
+    "When the user asks to archive this thread when you are done, schedule its archive after the current turn succeeds, its final checkpoint lands, and background work such as subagents and monitors finishes. Only set removeWorktree=true when the user also asks to remove the worktree. Removal preserves the branch and refuses dirty, locked, detached, shared, or project-checkout worktrees; a refusal after archiving leaves the thread archived and records the reason. A pending request means scheduled, not archived: finish your response without waiting for your own turn to end. Failed or interrupted turns, a Stop, or newer work cancel the request. Idle threads archive immediately. Use archive_thread_status to inspect or cancel_thread_archive to cancel before archiving starts.",
+  parameters: Schema.Struct({
+    removeWorktree: Schema.optional(
+      Schema.Boolean.annotate({
+        description: "Also remove this thread's clean worktree after archiving. Defaults to false.",
+      }),
+    ),
+  }),
   success: ArchiveToolResult,
   failure: OrchestratorMcpFailure,
   failureMode: "return",
@@ -37,7 +44,7 @@ const ArchiveThread = Tool.make("archive_thread", {
 
 const ArchiveThreadStatus = Tool.make("archive_thread_status", {
   description:
-    "Read this thread's archive state and latest archive request, including pending, completed, cancelled, or error status and its detail. A pending request verifies scheduling; finish your turn so it can run. Null means no archive request exists.",
+    "Read this thread's archive state and latest archive request, including pending, completed, cancelled, or error status and its detail. A pending request verifies scheduling; finish your turn so it can run. On an archived thread, pending means its worktree removal is still running, and error carries why the worktree was kept. Null means no archive request exists.",
   success: ArchiveToolResult,
   failure: OrchestratorMcpFailure,
   failureMode: "return",

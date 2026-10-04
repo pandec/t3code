@@ -30,13 +30,17 @@ const failure = (error: ThreadArchiveScheduler.ThreadArchiveSchedulerError) =>
   new OrchestratorMcpFailure({ code: "invalid_request", message: error.detail });
 
 export const ArchiveToolkitHandlersLive = ArchiveToolkit.toLayer({
-  archive_thread: () =>
+  archive_thread: (input) =>
     Effect.gen(function* () {
       const thread = yield* readOwnedThread;
       const scheduler = yield* ThreadArchiveScheduler.ThreadArchiveScheduler;
       return toResult(
         yield* scheduler
-          .schedule({ threadId: thread.id, afterTurn: true })
+          .schedule({
+            threadId: thread.id,
+            afterTurn: true,
+            removeWorktree: input.removeWorktree === true,
+          })
           .pipe(Effect.mapError(failure)),
       );
     }),

@@ -3,7 +3,9 @@
  * when it was scheduled (a v2 run only reaches `completed` after its final
  * checkpoint lands) and on background work that holds completion, then
  * archives through the ordinary `thread.archive` path. New work, a failed or
- * stopped run, or a workspace change cancels it. Pure: the orchestrator and
+ * stopped run, or a workspace change cancels it. A request with
+ * `removeWorktree` stays pending after the archive until the scheduler's
+ * guarded removal records its outcome. Pure: the orchestrator and
  * `ThreadArchiveScheduler` share these rules.
  */
 import type {
@@ -48,6 +50,7 @@ export const ARCHIVE_CANCEL_DETAIL = {
   failed: "The turn failed or was interrupted.",
   workspace: "The thread changed workspace.",
   manual: "The thread was archived manually.",
+  unarchived: "The thread was unarchived before its worktree was removed.",
 } as const;
 
 export function pendingArchiveRequest(
@@ -71,6 +74,39 @@ export function completedArchiveRequest(
 ): OrchestrationV2ThreadArchiveRequest {
   const { detail: _detail, ...rest } = request;
   return { ...rest, status: "completed" };
+}
+
+/** The request as recorded when its thread archives: still pending while a worktree removal follows. */
+export function archivedArchiveRequest(
+  request: OrchestrationV2ThreadArchiveRequest,
+): OrchestrationV2ThreadArchiveRequest {
+  return request.removeWorktree === true && request.worktreePath !== null
+    ? request
+    : completedArchiveRequest(request);
+}
+
+/** An archived thread's request still waiting for its worktree removal. */
+export function worktreeRemovalRequest(
+  thread: Pick<OrchestrationV2AppThread, "archiveRequest" | "archivedAt" | "deletedAt">,
+): OrchestrationV2ThreadArchiveRequest | null {
+  const request = thread.archiveRequest;
+  return request?.status === "pending" &&
+    request.removeWorktree === true &&
+    request.worktreePath !== null &&
+    thread.archivedAt !== null &&
+    thread.deletedAt === null
+    ? request
+    : null;
+}
+
+/** Records the removal outcome: completed, or an error carrying why the worktree was kept. */
+export function finishedWorktreeRemoval(
+  request: OrchestrationV2ThreadArchiveRequest,
+  error: string | undefined,
+): OrchestrationV2ThreadArchiveRequest {
+  return error === undefined
+    ? completedArchiveRequest(request)
+    : { ...request, status: "error", detail: error };
 }
 
 function activeRun(runs: ReadonlyArray<ArchiveRun>): ArchiveRun | null {
@@ -97,6 +133,7 @@ export function planArchiveSchedule(input: {
     Pick<OrchestrationV2PendingBackgroundTask, "kind">
   >;
   readonly afterTurn: boolean;
+  readonly removeWorktree?: boolean;
   readonly requestId: CommandId;
   readonly now: DateTime.Utc;
 }): ArchiveSchedulePlan {
@@ -114,6 +151,9 @@ export function planArchiveSchedule(input: {
       detail: "Queued messages are waiting to run. Archive after they finish or remove them.",
     };
   }
+  if (input.removeWorktree === true && input.thread.worktreePath === null) {
+    return { type: "reject", detail: "This thread has no worktree to remove." };
+  }
   const run = activeRun(input.runs);
   if (run !== null && !input.afterTurn) {
     return { type: "reject", detail: "The thread is running. Archive it after the turn instead." };
@@ -122,11 +162,12 @@ export function planArchiveSchedule(input: {
     requestId: input.requestId,
     runId: run?.id ?? null,
     worktreePath: input.thread.worktreePath,
+    ...(input.removeWorktree === true ? { removeWorktree: true } : {}),
     requestedAt: DateTime.formatIso(input.now),
     status: "pending",
   };
   return run === null && !backgroundWorkHoldsCompletion(input.pendingBackgroundTasks)
-    ? { type: "archive", request: completedArchiveRequest(request) }
+    ? { type: "archive", request: archivedArchiveRequest(request) }
     : { type: "pending", request };
 }
 

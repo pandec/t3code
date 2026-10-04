@@ -3,7 +3,9 @@
  * deferred archive for MCP, CLI and other callers, and runs pending requests
  * once their run and background work finish (rules in DeferredArchive.ts).
  * Requests are thread state in the event log, so `start` re-checks every
- * pending request after a restart.
+ * pending request after a restart. A request with `removeWorktree` stays
+ * pending after the archive until the guarded removal (ArchiveWorktreeRemoval)
+ * records its outcome with `thread.archive.complete`.
  */
 import {
   CommandId,
@@ -22,12 +24,15 @@ import * as Layer from "effect/Layer";
 import * as Schema from "effect/Schema";
 import type * as Scope from "effect/Scope";
 import * as Stream from "effect/Stream";
+import * as SqlClient from "effect/unstable/sql/SqlClient";
 
 import { forkParked } from "../serverActivation.ts";
+import * as ArchiveWorktreeRemoval from "./ArchiveWorktreeRemoval.ts";
 import {
   evaluateDeferredArchive,
   isThreadPayloadEvent,
   pendingArchiveRequest,
+  worktreeRemovalRequest,
 } from "./DeferredArchive.ts";
 import * as ThreadManagement from "./ThreadManagementService.ts";
 
@@ -52,10 +57,16 @@ export class ThreadArchiveSchedulerError extends Schema.TaggedError<ThreadArchiv
 export class ThreadArchiveScheduler extends Context.Service<
   ThreadArchiveScheduler,
   {
-    /** Archive now when idle, otherwise after the active run (requires `afterTurn`). */
+    /**
+     * Archive now when idle, otherwise after the active run (requires
+     * `afterTurn`). `removeWorktree` then removes the thread's clean, unshared
+     * worktree, keeping its branch; a worktree that can never qualify is
+     * refused up front.
+     */
     readonly schedule: (input: {
       readonly threadId: ThreadId;
       readonly afterTurn: boolean;
+      readonly removeWorktree?: boolean;
       readonly commandId?: CommandId;
     }) => Effect.Effect<ThreadArchiveStatus, ThreadArchiveSchedulerError>;
     /** Archive state and the latest request; readable after the thread is archived. */
@@ -105,6 +116,8 @@ function errorDetail(cause: unknown): string {
 
 export const make = Effect.gen(function* () {
   const threads = yield* ThreadManagement.ThreadManagementService;
+  const worktreeRemoval = yield* ArchiveWorktreeRemoval.ArchiveWorktreeRemoval;
+  const sql = yield* SqlClient.SqlClient;
   const crypto = yield* Crypto.Crypto;
   const newCommandId = (prefix: string, threadId: ThreadId) =>
     crypto.randomUUIDv4.pipe(
@@ -145,6 +158,22 @@ export const make = Effect.gen(function* () {
 
   const process = Effect.fn("ThreadArchiveScheduler.process")(function* (threadId: ThreadId) {
     const { thread, runs } = yield* threads.getThreadRecords(threadId, ["runs"]);
+    const removal = worktreeRemovalRequest(thread);
+    if (removal !== null) {
+      tracked.delete(threadId);
+      const error =
+        thread.worktreePath !== removal.worktreePath || removal.worktreePath === null
+          ? "The thread changed workspace before its worktree was removed."
+          : yield* worktreeRemoval.remove({ threadId, worktreePath: removal.worktreePath });
+      yield* threads.dispatch({
+        type: "thread.archive.complete",
+        commandId: yield* newCommandId("archive-complete", threadId),
+        threadId,
+        requestId: removal.requestId,
+        ...(error === null ? {} : { error }),
+      });
+      return;
+    }
     const request = pendingArchiveRequest(thread);
     if (request === null) {
       tracked.delete(threadId);
@@ -189,6 +218,7 @@ export const make = Effect.gen(function* () {
 
   const onEvent = (event: OrchestrationV2DomainEvent) => {
     if (isThreadPayloadEvent(event)) {
+      if (worktreeRemovalRequest(event.payload) !== null) return enqueue(event.threadId);
       if (pendingArchiveRequest(event.payload) === null) {
         tracked.delete(event.threadId);
         return Effect.void;
@@ -201,13 +231,15 @@ export const make = Effect.gen(function* () {
       : Effect.void;
   };
 
-  const reconcilePending = threads.getShellSnapshot({ location: "active" }).pipe(
-    Effect.flatMap((snapshot) =>
-      Effect.forEach(
-        snapshot.threads.filter((thread) => thread.archiveRequest?.status === "pending"),
-        (thread) => enqueue(thread.id),
-        { discard: true },
-      ),
+  // Pending requests, including archived threads still waiting for their
+  // worktree removal; a narrow read instead of two full shell snapshots.
+  const reconcilePending = sql<{ readonly thread_id: ThreadId }>`
+    SELECT thread_id FROM orchestration_v2_projection_threads
+    WHERE deleted_at IS NULL
+      AND json_extract(payload_json, '$.archiveRequest.status') = 'pending'
+  `.pipe(
+    Effect.flatMap((rows) =>
+      Effect.forEach(rows, (row) => enqueue(row.thread_id), { discard: true }),
     ),
     Effect.catch((cause) => Effect.logWarning("deferred archive recovery failed", { cause })),
     Effect.andThen(worker.drain),
@@ -216,11 +248,22 @@ export const make = Effect.gen(function* () {
   return ThreadArchiveScheduler.of({
     schedule: (input) =>
       Effect.gen(function* () {
+        if (input.removeWorktree === true) {
+          const blocker = yield* worktreeRemoval.blocker(input.threadId);
+          if (blocker !== null) {
+            return yield* new ThreadArchiveSchedulerError({
+              operation: "schedule",
+              threadId: input.threadId,
+              detail: blocker,
+            });
+          }
+        }
         yield* dispatch("schedule", input.threadId, {
           type: "thread.archive.schedule",
           commandId: input.commandId ?? (yield* newCommandId("archive-schedule", input.threadId)),
           threadId: input.threadId,
           afterTurn: input.afterTurn,
+          ...(input.removeWorktree === true ? { removeWorktree: true } : {}),
         });
         return yield* status(input.threadId, "schedule");
       }),

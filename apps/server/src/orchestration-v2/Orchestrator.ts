@@ -116,13 +116,15 @@ import {
 import { planThreadDeletion } from "./ThreadDeletion.ts";
 import {
   ARCHIVE_CANCEL_DETAIL,
+  archivedArchiveRequest,
   cancelledArchiveRequest,
-  completedArchiveRequest,
   evaluateDeferredArchive,
+  finishedWorktreeRemoval,
   latestThreadState,
   pendingArchiveRequest,
   planArchiveSchedule,
   stopCancelsArchive,
+  worktreeRemovalRequest,
 } from "./DeferredArchive.ts";
 
 export class OrchestratorDispatchError extends Schema.TaggedError<OrchestratorDispatchError>()(
@@ -408,6 +410,7 @@ function commandThreadId(command: OrchestrationV2ServerCommand): ThreadId {
     case "thread.archive.schedule":
     case "thread.archive.cancel":
     case "thread.archive.execute":
+    case "thread.archive.complete":
       return command.threadId;
     case "delegated_task.request":
     case "delegated_task.wake-policy":
@@ -9088,7 +9091,8 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
           readonly type:
             | "thread.archive.schedule"
             | "thread.archive.cancel"
-            | "thread.archive.execute";
+            | "thread.archive.execute"
+            | "thread.archive.complete";
         }
       >,
       events: Ref.Ref<Array<OrchestrationV2DomainEvent>>,
@@ -9137,6 +9141,18 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
         return;
       }
 
+      if (command.type === "thread.archive.complete") {
+        const request = worktreeRemovalRequest(thread);
+        if (request === null || request.requestId !== command.requestId) {
+          return yield* reject("No worktree removal is pending for this request.");
+        }
+        yield* emitThread({
+          ...thread,
+          archiveRequest: finishedWorktreeRemoval(request, command.error),
+        });
+        return;
+      }
+
       const { runs } = yield* projectionStore
         .getThreadRecords(command.threadId, ["runs"])
         .pipe(mapDispatchError(command));
@@ -9150,6 +9166,9 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
           runs,
           pendingBackgroundTasks,
           afterTurn: command.afterTurn,
+          ...(command.removeWorktree === undefined
+            ? {}
+            : { removeWorktree: command.removeWorktree }),
           requestId: command.commandId,
           now,
         });
@@ -9172,7 +9191,7 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
         });
         return;
       }
-      yield* archiveWith(completedArchiveRequest(request));
+      yield* archiveWith(archivedArchiveRequest(request));
     },
   );
 
@@ -9310,10 +9329,20 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
             ARCHIVE_CANCEL_DETAIL.manual,
           );
         }
+        if (command.type === "thread.unarchive") {
+          // Fork: an unarchived thread keeps its worktree.
+          yield* cancelPendingThreadArchive(
+            command.threadId,
+            command,
+            events,
+            ARCHIVE_CANCEL_DETAIL.unarchived,
+          );
+        }
         break;
       case "thread.archive.schedule":
       case "thread.archive.cancel":
       case "thread.archive.execute":
+      case "thread.archive.complete":
         yield* dispatchThreadArchiveRequest(command, events, effects);
         break;
       case "provider-session.detach":

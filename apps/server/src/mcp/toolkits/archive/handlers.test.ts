@@ -39,7 +39,10 @@ const client = McpSchema.McpServerClient.of({
   getClient: Effect.die("unused"),
 });
 
-const makeLayer = (owner: string, scheduled: Array<boolean>) =>
+const makeLayer = (
+  owner: string,
+  scheduled: Array<{ readonly afterTurn: boolean; readonly removeWorktree: boolean | undefined }>,
+) =>
   McpServer.toolkit(ArchiveToolkit).pipe(
     Layer.provide(ArchiveToolkitHandlersLive),
     Layer.provideMerge(McpServer.McpServer.layer),
@@ -58,7 +61,7 @@ const makeLayer = (owner: string, scheduled: Array<boolean>) =>
     Layer.provideMerge(
       Layer.mock(ThreadArchiveScheduler.ThreadArchiveScheduler)({
         schedule: (input) => {
-          scheduled.push(input.afterTurn);
+          scheduled.push({ afterTurn: input.afterTurn, removeWorktree: input.removeWorktree });
           return Effect.succeed({ archivedAt: null, request: { ...request, status: "pending" } });
         },
         status: () => Effect.succeed({ archivedAt, request }),
@@ -66,10 +69,10 @@ const makeLayer = (owner: string, scheduled: Array<boolean>) =>
     ),
   );
 
-const call = (name: string) =>
+const call = (name: string, args: Record<string, unknown> = {}) =>
   Effect.gen(function* () {
     const server = yield* McpServer.McpServer;
-    return yield* server.callTool({ name, arguments: {} }).pipe(
+    return yield* server.callTool({ name, arguments: args }).pipe(
       Effect.provideService(McpInvocationContext.McpInvocationContext, {
         environmentId: EnvironmentId.make("environment-archive-tools"),
         threadId,
@@ -83,11 +86,18 @@ const call = (name: string) =>
   });
 
 it.effect("schedules after the turn and reports status for an archived thread", () => {
-  const scheduled: Array<boolean> = [];
+  const scheduled: Array<{
+    readonly afterTurn: boolean;
+    readonly removeWorktree: boolean | undefined;
+  }> = [];
   return Effect.gen(function* () {
     const scheduledResult = yield* call("archive_thread");
     expect(scheduledResult.isError).toBe(false);
-    expect(scheduled).toEqual([true]);
+    yield* call("archive_thread", { removeWorktree: true });
+    expect(scheduled).toEqual([
+      { afterTurn: true, removeWorktree: false },
+      { afterTurn: true, removeWorktree: true },
+    ]);
     const status = yield* call("archive_thread_status");
     expect(status.isError).toBe(false);
     expect(status.structuredContent).toEqual({
@@ -98,7 +108,10 @@ it.effect("schedules after the turn and reports status for an archived thread", 
 });
 
 it.effect("rejects a provider that no longer owns the thread", () => {
-  const scheduled: Array<boolean> = [];
+  const scheduled: Array<{
+    readonly afterTurn: boolean;
+    readonly removeWorktree: boolean | undefined;
+  }> = [];
   return Effect.gen(function* () {
     const result = yield* call("archive_thread");
     // failureMode "return": the typed failure is the tool's structured result.
