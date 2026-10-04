@@ -621,4 +621,65 @@ it.layer(TestLayer)("deferred archive on the orchestrator", (it) => {
       assert.equal(late._tag, "OrchestratorDispatchError");
     }),
   );
+
+  it.effect("a user's message unarchives an archived thread, then starts its turn", () =>
+    Effect.gen(function* () {
+      const orchestrator = yield* Orchestrator.OrchestratorV2;
+      const threadId = yield* createThread("message-unarchive");
+      yield* orchestrator.dispatch({
+        type: "thread.archive",
+        commandId: CommandId.make("message-unarchive-archive"),
+        threadId,
+      });
+      const run = yield* sendMessage(threadId, "message-unarchive", {
+        type: "start_immediately",
+      });
+      assert.notEqual(run.status, "queued");
+      assert.isNull((yield* threadState(threadId)).archivedAt);
+      const snapshot = yield* orchestrator.getShellSnapshot();
+      assert.isTrue(snapshot.threads.some((thread) => thread.id === threadId));
+      assert.isFalse(snapshot.archivedThreads.some((thread) => thread.id === threadId));
+    }),
+  );
+
+  it.effect("messaging before removal reopens the thread and keeps the worktree", () =>
+    Effect.gen(function* () {
+      yield* resetRemoval();
+      const scheduler = yield* ThreadArchiveScheduler.ThreadArchiveScheduler;
+      const threadId = yield* createThread("remove-message");
+      yield* scheduler.schedule({ threadId, afterTurn: false, removeWorktree: true });
+      yield* sendMessage(threadId, "remove-message", { type: "start_immediately" });
+      yield* scheduler.reconcilePending;
+      assert.deepEqual(removal.removed, []);
+      const status = yield* scheduler.status(threadId);
+      assert.isNull(status.archivedAt);
+      assert.equal(status.request?.status, "cancelled");
+      assert.equal(status.request?.detail, ARCHIVE_CANCEL_DETAIL.unarchived);
+    }),
+  );
+
+  it.effect("an agent's message leaves the thread archived and its removal pending", () =>
+    Effect.gen(function* () {
+      yield* resetRemoval();
+      const scheduler = yield* ThreadArchiveScheduler.ThreadArchiveScheduler;
+      const orchestrator = yield* Orchestrator.OrchestratorV2;
+      const threadId = yield* createThread("remove-agent-message");
+      yield* scheduler.schedule({ threadId, afterTurn: false, removeWorktree: true });
+      yield* orchestrator.dispatch({
+        type: "message.dispatch",
+        createdBy: "agent",
+        creationSource: "mcp",
+        commandId: CommandId.make("remove-agent-message"),
+        threadId,
+        messageId: MessageId.make("remove-agent-message"),
+        text: "Work",
+        attachments: [],
+        modelSelection,
+        dispatchMode: { type: "queue_after_active" },
+      });
+      const thread = yield* threadState(threadId);
+      assert.isNotNull(thread.archivedAt);
+      assert.equal(thread.archiveRequest?.status, "pending");
+    }),
+  );
 });

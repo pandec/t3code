@@ -33,6 +33,8 @@ interface Fixture {
   projects: Array<Pick<OrchestrationProjectShell, "id" | "workspaceRoot">>;
   otherThreads: Array<{ id: ThreadId; projectId: ProjectId; worktreePath: string | null }>;
   detached: Array<string>;
+  /** False once a message or unarchive reopened the thread. */
+  archived: boolean;
 }
 const fixture: Fixture = {
   repository: "",
@@ -40,6 +42,7 @@ const fixture: Fixture = {
   projects: [],
   otherThreads: [],
   detached: [],
+  archived: true,
 };
 
 // Thread and project reads come from the fixture; Git and the file system are real.
@@ -50,7 +53,18 @@ const TestLayer = archiveWorktreeRemovalLayer.pipe(
         Effect.sync(
           () =>
             ({
-              thread: { id: threadId, projectId, worktreePath: fixture.worktreePath },
+              thread: {
+                id: threadId,
+                projectId,
+                worktreePath: fixture.worktreePath,
+                archivedAt: fixture.archived ? "2026-01-01T00:00:00.000Z" : null,
+                deletedAt: null,
+                archiveRequest: {
+                  status: "pending",
+                  removeWorktree: true,
+                  worktreePath: fixture.worktreePath,
+                },
+              },
               providerSessions: [
                 { id: ProviderSessionId.make("session-live"), status: "ready" },
                 { id: ProviderSessionId.make("session-stopped"), status: "stopped" },
@@ -128,6 +142,7 @@ const setup = (branch: string | null) =>
     fixture.projects = [{ id: projectId, workspaceRoot: repository }];
     fixture.otherThreads = [];
     fixture.detached = [];
+    fixture.archived = true;
     return { repository, worktreePath };
   });
 
@@ -178,6 +193,7 @@ it.layer(TestLayer)("archive worktree removal", (it) => {
         WORKTREE_KEPT_DETAIL.projectCheckout,
       );
 
+      fixture.worktreePath = repository;
       assert.equal(
         yield* removal.remove({ threadId, worktreePath: repository }),
         WORKTREE_KEPT_DETAIL.notWorktree,
@@ -188,6 +204,21 @@ it.layer(TestLayer)("archive worktree removal", (it) => {
         yield* removal.remove({ threadId, worktreePath: detached.worktreePath }),
         WORKTREE_KEPT_DETAIL.detached,
       );
+    }).pipe(Effect.scoped),
+  );
+
+  it.effect("keeps the worktree and its sessions once the thread is reopened", () =>
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
+      const removal = yield* ArchiveWorktreeRemoval;
+      const { worktreePath } = yield* setup("feature/reopened");
+      fixture.archived = false;
+      assert.equal(
+        yield* removal.remove({ threadId, worktreePath }),
+        WORKTREE_KEPT_DETAIL.reopened,
+      );
+      assert.isTrue(yield* fs.exists(worktreePath));
+      assert.deepEqual(fixture.detached, []);
     }).pipe(Effect.scoped),
   );
 

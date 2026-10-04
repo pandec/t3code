@@ -19,6 +19,7 @@ import {
   reserveWorkspace,
   withWorkspaceLease,
 } from "../workspace/workspaceLease.ts";
+import { worktreeRemovalRequest } from "./DeferredArchive.ts";
 import * as ProjectStore from "./ProjectStore.ts";
 import * as ProviderSessionManager from "./ProviderSessionManager.ts";
 import { ResourceCleanupService } from "./ResourceCleanupService.ts";
@@ -35,6 +36,7 @@ export const WORKTREE_KEPT_DETAIL = {
   dirty: "The worktree has uncommitted or untracked changes.",
   busy: "Another operation is using this worktree. Archive again after it finishes.",
   gitRefused: "Git refused to remove the worktree; it may be locked.",
+  reopened: "The thread was unarchived before its worktree was removed; the worktree was kept.",
 } as const;
 
 export class ArchiveWorktreeRemoval extends Context.Service<
@@ -47,8 +49,9 @@ export class ArchiveWorktreeRemoval extends Context.Service<
     readonly blocker: (threadId: ThreadId) => Effect.Effect<string | null>;
     /**
      * Stops the archived thread's terminals and provider sessions, then removes
-     * `worktreePath` if every guard passes. Returns why it was kept, or null
-     * once it is gone.
+     * `worktreePath` if every guard passes and the thread's removal is still
+     * pending (a message or unarchive can reopen it meanwhile). Returns why it
+     * was kept, or null once it is gone.
      */
     readonly remove: (input: {
       readonly threadId: ThreadId;
@@ -139,6 +142,11 @@ export const make = Effect.gen(function* () {
         input.threadId,
         ["providerSessions"],
       );
+      const stillPending = (current: typeof thread) =>
+        current.worktreePath === input.worktreePath &&
+        worktreeRemovalRequest(current)?.worktreePath === input.worktreePath;
+      // Never stop the sessions of a thread that was reopened meanwhile.
+      if (!stillPending(thread)) return WORKTREE_KEPT_DETAIL.reopened;
       // The archive already queued these stops as effects; repeating them
       // (both are idempotent) keeps processes out of the checkout first.
       yield* resourceCleanup.cleanupTerminals(input.threadId);
@@ -161,6 +169,9 @@ export const make = Effect.gen(function* () {
         Effect.gen(function* () {
           if (!(yield* reserveWorkspace(input.worktreePath, "removal"))) {
             return WORKTREE_KEPT_DETAIL.busy;
+          }
+          if (!stillPending((yield* threads.getThreadRecords(input.threadId, [])).thread)) {
+            return WORKTREE_KEPT_DETAIL.reopened;
           }
           if (!(yield* fs.exists(input.worktreePath))) return null;
           const reason = yield* structuralBlocker(input.threadId, input.worktreePath);

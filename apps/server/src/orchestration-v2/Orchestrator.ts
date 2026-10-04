@@ -4245,6 +4245,23 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
         }
       }
 
+      // Fork: a user's message pulls an archived thread back into the live
+      // list, so it unarchives first. Automatic continuations returned above.
+      if (projection.thread.archivedAt !== null && command.createdBy === "user") {
+        const now = yield* DateTime.now;
+        yield* emit(
+          events,
+          command,
+        )({
+          type: "thread.unarchived",
+          threadId: command.threadId,
+          providerInstanceId: projection.thread.providerInstanceId,
+          occurredAt: now,
+          payload: { ...projection.thread, archivedAt: null, updatedAt: now },
+        });
+        projection = yield* getProjectionWithPendingEvents(command.threadId, events);
+      }
+
       if (projection.thread.settledOverride !== null) {
         const now = yield* DateTime.now;
         const thread: OrchestrationV2AppThread = {
@@ -9366,12 +9383,19 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
           });
         }
         yield* dispatchMessage(command, events, effects);
-        yield* cancelPendingThreadArchive(
-          command.threadId,
-          command,
-          events,
-          ARCHIVE_CANCEL_DETAIL.newWork,
-        );
+        // A message that left the thread archived keeps its pending worktree removal.
+        if (
+          latestThreadState(yield* Ref.get(events), command.threadId, thread).archivedAt === null
+        ) {
+          yield* cancelPendingThreadArchive(
+            command.threadId,
+            command,
+            events,
+            thread.archivedAt === null
+              ? ARCHIVE_CANCEL_DETAIL.newWork
+              : ARCHIVE_CANCEL_DETAIL.unarchived,
+          );
+        }
         break;
       }
       case "notification.delivery.accept":

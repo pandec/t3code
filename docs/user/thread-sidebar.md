@@ -174,7 +174,10 @@ always kept. Removal only happens when the worktree has no uncommitted or untrac
 on a branch, is not a project's checkout, and no other unarchived thread uses it. If the
 worktree can never qualify, the agent is told right away. If it is dirty when the thread
 archives, the thread still archives, the worktree stays, and the agent can read the reason from
-the archive status. Unarchiving the thread before removal finishes keeps the worktree.
+the archive status. Unarchiving the thread, or sending it a message, before removal finishes
+keeps the worktree.
+
+Sending a message to an archived thread unarchives it, then delivers the message.
 
 ## Link a pull request
 
