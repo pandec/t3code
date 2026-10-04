@@ -224,7 +224,7 @@ describe("repairForkMigrationHistory", () => {
         {
           project_id: "project-a",
           repository_identity_json: '{"remote":"a"}',
-          // Fork migration 70 scopes the identity to the project's root.
+          // Fork migration 4 scopes the identity to the project's root.
           workspace_root: "/tmp/a",
         },
       ]);

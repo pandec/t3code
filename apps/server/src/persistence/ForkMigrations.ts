@@ -11,19 +11,19 @@ import * as Effect from "effect/Effect";
 import * as Migrator from "effect/unstable/sql/Migrator";
 
 import ForkMigration0001 from "./ForkMigrations/001_ForkThreadGroupsAndRepositoryIdentity.ts";
-import ForkMigration0030 from "./ForkMigrations/030_ForkNativeContinuation.ts";
-import ForkMigration0060 from "./ForkMigrations/060_ForkStrictResumeProviderThreads.ts";
-import ForkMigration0070 from "./ForkMigrations/070_ForkProjectRepositoryIdentityWorkspaceRoot.ts";
-import ForkMigration0080 from "./ForkMigrations/080_ForkMessageArtifacts.ts";
-import ForkMigration0081 from "./ForkMigrations/081_ForkMessageSpeech.ts";
+import ForkMigration0002 from "./ForkMigrations/002_ForkNativeContinuation.ts";
+import ForkMigration0003 from "./ForkMigrations/003_ForkStrictResumeProviderThreads.ts";
+import ForkMigration0004 from "./ForkMigrations/004_ForkProjectRepositoryIdentityWorkspaceRoot.ts";
+import ForkMigration0005 from "./ForkMigrations/005_ForkMessageArtifacts.ts";
+import ForkMigration0006 from "./ForkMigrations/006_ForkMessageSpeech.ts";
 
 export const forkMigrationEntries = [
   [1, "ForkThreadGroupsAndRepositoryIdentity", ForkMigration0001],
-  [30, "ForkNativeContinuation", ForkMigration0030],
-  [60, "ForkStrictResumeProviderThreads", ForkMigration0060],
-  [70, "ForkProjectRepositoryIdentityWorkspaceRoot", ForkMigration0070],
-  [80, "ForkMessageArtifacts", ForkMigration0080],
-  [81, "ForkMessageSpeech", ForkMigration0081],
+  [2, "ForkNativeContinuation", ForkMigration0002],
+  [3, "ForkStrictResumeProviderThreads", ForkMigration0003],
+  [4, "ForkProjectRepositoryIdentityWorkspaceRoot", ForkMigration0004],
+  [5, "ForkMessageArtifacts", ForkMigration0005],
+  [6, "ForkMessageSpeech", ForkMigration0006],
 ] as const;
 
 export const forkMigrationManifest = forkMigrationEntries.map(([id, name]) => [id, name] as const);

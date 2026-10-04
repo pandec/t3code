@@ -59,7 +59,7 @@ describe("fork migrations", () => {
         {
           project_id: "project-a",
           repository_identity_json: '{"remote":"github.com/a/b"}',
-          // Migration 70 scopes the carried identity to the project's root.
+          // Migration 4 scopes the carried identity to the project's root.
           workspace_root: "/repo/a",
         },
       ]);

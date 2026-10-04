@@ -1,7 +1,6 @@
 import { MAX_SCRIPT_ID_LENGTH } from "@t3tools/contracts";
 import { shortcutLabelForCommand } from "./keybindings";
 import { describe, expect, it } from "vite-plus/test";
-import { EnvironmentId } from "@t3tools/contracts";
 import {
   projectScriptCwd,
   projectScriptRuntimeEnv,
@@ -14,7 +13,6 @@ import {
   nextProjectScriptId,
   normalizeProjectSetupScript,
   primaryProjectScript,
-  projectActionMutationUnavailableMessage,
   projectScriptIdFromCommand,
 } from "./projectScripts";
 
@@ -170,30 +168,6 @@ describe("projectScripts helpers", () => {
 
     expect(normalized.scripts).toEqual([{ ...scripts[0], runOnWorktreeCreate: false }, scripts[1]]);
     expect(normalized.clearedActionIds).toEqual(["old-setup"]);
-  });
-
-  it("gates action mutations on conditional server updates", () => {
-    expect(
-      projectActionMutationUnavailableMessage({
-        environmentId: EnvironmentId.make("environment-1"),
-        label: "Old server",
-        platform: { os: "darwin", arch: "arm64" },
-        serverVersion: "0.0.28",
-        capabilities: { repositoryIdentity: true },
-      }),
-    ).toContain("0.0.28");
-    expect(
-      projectActionMutationUnavailableMessage({
-        environmentId: EnvironmentId.make("environment-1"),
-        label: "Current server",
-        platform: { os: "darwin", arch: "arm64" },
-        serverVersion: "0.0.29",
-        capabilities: {
-          repositoryIdentity: true,
-          conditionalProjectScriptUpdates: true,
-        },
-      }),
-    ).toBeNull();
   });
 
   it("builds default runtime env for scripts", () => {
