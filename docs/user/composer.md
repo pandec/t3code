@@ -48,7 +48,8 @@ requires an active turn that supports steering. Change
 
 Press `Option+Up` on macOS or `Alt+Up` on Windows and Linux with the cursor at the
 start of the composer to edit the most recently queued message. Change
-`thread.editQueuedMessage` to use another shortcut.
+`thread.editQueuedMessage` to use another shortcut. In an empty composer, plain
+`ArrowUp` does the same.
 
 Mobile has the same choice under **Settings → Follow-ups**. While a turn is
 running the send button shows which action it will take. Long-press it to use the
@@ -105,7 +106,8 @@ navigate to their sources.
 
 Press `ArrowUp` in an empty composer to bring back the last prompt you sent in this thread. Press
 `ArrowUp` again to go further back, and `ArrowDown` to come forward. Moving forward past the newest
-prompt clears the composer. Recall walks the prompts loaded in the thread. Attachments, terminal
+prompt clears the composer. While messages are queued, `ArrowUp` in an empty composer edits the
+newest queued message instead. Recall walks the prompts loaded in the thread. Attachments, terminal
 context, and other extras from the original message are not restored, only the text you typed. A
 composer that holds an attachment or a picked element does not count as empty.
 
@@ -177,7 +179,8 @@ own, and the messages behind it go in with that turn instead. If the agent can't
 turn, queued messages run one turn each.
 
 A steer waits in the queue for a few seconds before it reaches the agent, showing how long it has
-left. Until then you can edit it, remove it, or press **Steer** to send it at once. If the turn ends
+left. Until then you can edit it, remove it, or press **Steer** to send it at once. On web and
+desktop, pressing `Enter` in an empty composer sends the newest waiting steer at once. If the turn ends
 first, it starts the next turn when its time is up. The wait is five seconds by default; change it
 under **Settings → Extras** on web and desktop or **Settings → Thread behavior** on mobile (set per
 device). Set it to 0 to steer immediately.

@@ -4531,6 +4531,10 @@ export default function ChatView(props: ChatViewProps) {
       setComposerDraftPrompt,
     ],
   );
+  const recallLatestQueuedRun = useCallback(
+    (repeat: boolean) => queuedRunsControlRef.current?.editLatest(repeat) ?? false,
+    [],
+  );
   const cancelEditingQueuedRun = useCallback(() => {
     if (editingQueuedRun === null) return;
     clearComposerDraftContent(queuedEditDraftTargetFor(editingQueuedRun.runId));
@@ -8777,7 +8781,10 @@ export default function ChatView(props: ChatViewProps) {
             description: toastCopy.description,
           }),
         );
+        return;
       }
+      // Sending an empty composer skips the wait on the steer just sent.
+      if (!sendOffline) queuedRunsControlRef.current?.steerNewestHeld();
       return;
     }
     if (!activeProject) {
@@ -11316,6 +11323,7 @@ export default function ChatView(props: ChatViewProps) {
                               onCompactContext={onCompactContext}
                               onSend={onSend}
                               onResume={onResume}
+                              onRecallQueuedMessage={recallLatestQueuedRun}
                               onInterrupt={onInterrupt}
                               onImplementPlanInNewThread={onImplementPlanInNewThread}
                               onRespondToApproval={onRespondToApproval}

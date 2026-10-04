@@ -2,6 +2,7 @@ import { scopeThreadRef } from "@t3tools/client-runtime/environment";
 import {
   deriveThreadQueueWorkflowState,
   formatSteerRecallLabel,
+  newestHeldSteerRun,
   steerRecallRemainingMs,
 } from "@t3tools/client-runtime/state/thread-workflows";
 import { replaceComposerContextReferences } from "@t3tools/shared/composerContextReferences";
@@ -48,6 +49,8 @@ const QUEUED_RUN_DRAG_TYPE = "application/x-t3code-queued-run";
 
 export interface QueuedRunsControlHandle {
   steerNext: (repeat: boolean) => boolean;
+  /** Releases the newest steer still in its recall window into the running turn. */
+  steerNewestHeld: () => boolean;
   editLatest: (repeat: boolean) => boolean;
 }
 
@@ -224,6 +227,13 @@ export function QueuedRunsControl({
       const next = queued[0];
       if (!next || !workflow?.canPromoteToSteer) return false;
       if (!repeat && busyRunId === null) void steer(next.run.id);
+      return true;
+    },
+    steerNewestHeld() {
+      const held = newestHeldSteerRun(queued);
+      if (!held || !workflow?.canPromoteToSteer || busyRunId !== null) return false;
+      if (props.editingRunId === held.run.id) return false;
+      void steer(held.run.id);
       return true;
     },
     // Declines while a queued message is already being edited so the key keeps

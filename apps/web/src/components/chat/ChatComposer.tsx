@@ -87,6 +87,7 @@ import { listContinuationForEnter, listIndentForTab } from "../../composer-list-
 import {
   deriveComposerSendState,
   getAntigravitySendBlockReason,
+  isComposerEmptyForQueuedMessageRecall,
   readFileAsDataUrl,
   resolveComposerInteractionMode,
   resolveComposerProviderSelection,
@@ -1649,6 +1650,8 @@ export interface ChatComposerProps {
     submissionIntent?: ComposerSubmissionIntent,
   ) => void;
   onResume: () => void;
+  /** ArrowUp in an empty composer: opens the newest queued message, reporting whether it did. */
+  onRecallQueuedMessage?: ((repeat: boolean) => boolean) | undefined;
   onInterrupt: () => void;
   onImplementPlanInNewThread: () => void;
   onRespondToApproval: (
@@ -1772,6 +1775,7 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
     onCompactContext,
     onSend,
     onResume,
+    onRecallQueuedMessage,
     onInterrupt,
     onImplementPlanInNewThread,
     onRespondToApproval,
@@ -4490,6 +4494,29 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
         onSelectComposerItem(selectedItem);
         return true;
       }
+    }
+    // ArrowUp in an empty composer reaches the newest queued message first;
+    // prompt-history recall is the fallback when nothing is queued.
+    if (
+      key === "ArrowUp" &&
+      submissionIntent === null &&
+      onRecallQueuedMessage !== undefined &&
+      !event.shiftKey &&
+      !event.altKey &&
+      !event.metaKey &&
+      !event.ctrlKey &&
+      !event.isComposing &&
+      isComposerEmptyForQueuedMessageRecall({
+        prompt: promptRef.current,
+        imageCount: composerImagesRef.current.length + composerFilesRef.current.length,
+        terminalContextCount: composerTerminalContextsRef.current.length,
+        previewAnnotationCount: composerPreviewAnnotations.length,
+        reviewCommentCount: composerReviewComments.length,
+        hasPendingComposerRequest: isComposerApprovalState || pendingUserInputs.length > 0,
+      }) &&
+      onRecallQueuedMessage(event.repeat)
+    ) {
+      return true;
     }
     if ((key === "ArrowUp" || key === "ArrowDown") && submissionIntent === null) {
       return navigatePromptHistory(key === "ArrowUp" ? "backward" : "forward", event);

@@ -54,6 +54,21 @@ export function formatSteerRecallLabel(remainingMs: number | null): string | nul
 }
 
 /**
+ * The most recently sent steer still held in its recall window, which an
+ * empty-composer send releases at once; null when no steer is held.
+ */
+export function newestHeldSteerRun<T extends { readonly run: Run }>(
+  queuedRuns: ReadonlyArray<T>,
+): T | null {
+  let newest: T | null = null;
+  for (const entry of queuedRuns) {
+    if (entry.run.status !== "queued" || entry.run.steerDeadlineAt === undefined) continue;
+    if (newest === null || entry.run.ordinal > newest.run.ordinal) newest = entry;
+  }
+  return newest;
+}
+
+/**
  * The part of a steer recall window still left for a message composed at
  * `createdAt`, so a resend from an outbox does not restart the window.
  */
