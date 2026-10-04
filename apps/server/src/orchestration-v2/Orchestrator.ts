@@ -1515,6 +1515,7 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
           text: queuedMessage.text,
           attachments: queuedMessage.attachments,
           ...(queuedMessage.context ? { context: queuedMessage.context } : {}),
+          ...(queuedMessage.inputOrigin ? { inputOrigin: queuedMessage.inputOrigin } : {}),
           createdBy: queuedMessage.createdBy,
           creationSource: queuedMessage.creationSource,
           ...(queuedMessage.scheduledTaskId === undefined
@@ -3432,6 +3433,7 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
     readonly text: string;
     readonly attachments: ReadonlyArray<ChatAttachment>;
     readonly context?: import("@t3tools/contracts").OrchestrationMessageContext | undefined;
+    readonly inputOrigin?: OrchestrationV2ConversationMessage["inputOrigin"];
     readonly createdBy: OrchestrationV2ConversationMessage["createdBy"];
     readonly creationSource: OrchestrationV2ConversationMessage["creationSource"];
     readonly scheduledTaskId?: OrchestrationV2ConversationMessage["scheduledTaskId"];
@@ -3590,6 +3592,7 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
             text: input.text,
             attachments: input.attachments,
             ...(input.context ? { context: input.context } : {}),
+            ...(input.inputOrigin ? { inputOrigin: input.inputOrigin } : {}),
             streaming: false,
             createdAt: now,
             updatedAt: now,
@@ -3624,6 +3627,7 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
             text: input.text,
             attachments: input.attachments,
             ...(input.context ? { context: input.context } : {}),
+            ...(input.inputOrigin ? { inputOrigin: input.inputOrigin } : {}),
           };
           yield* emitEvent({
             type: "message.updated",
@@ -4494,6 +4498,7 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
           messageId: command.messageId,
           text: dispatchText,
           ...(command.context ? { context: command.context } : {}),
+          ...(command.inputOrigin ? { inputOrigin: command.inputOrigin } : {}),
           attachments: command.attachments,
           createdBy: command.createdBy,
           creationSource: command.creationSource,
@@ -4694,6 +4699,7 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
           role: "user",
           text: dispatchText,
           ...(command.context ? { context: command.context } : {}),
+          ...(command.inputOrigin ? { inputOrigin: command.inputOrigin } : {}),
           attachments: command.attachments,
           streaming: false,
           createdAt: now,
@@ -5034,6 +5040,7 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
           role: "user",
           text: dispatchText,
           ...(command.context ? { context: command.context } : {}),
+          ...(command.inputOrigin ? { inputOrigin: command.inputOrigin } : {}),
           attachments: command.attachments,
           streaming: false,
           createdAt: now,
@@ -5069,6 +5076,7 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
           inputIntent: "turn_start",
           text: dispatchText,
           ...(command.context ? { context: command.context } : {}),
+          ...(command.inputOrigin ? { inputOrigin: command.inputOrigin } : {}),
           attachments: command.attachments,
         };
         const preparationTurnItem: OrchestrationV2TurnItem | null =
@@ -5726,6 +5734,7 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
         role: "user",
         text: dispatchText,
         ...(command.context ? { context: command.context } : {}),
+        ...(command.inputOrigin ? { inputOrigin: command.inputOrigin } : {}),
         attachments: command.attachments,
         streaming: false,
         createdAt: now,
@@ -5759,6 +5768,7 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
         inputIntent: "turn_start",
         text: dispatchText,
         ...(command.context ? { context: command.context } : {}),
+        ...(command.inputOrigin ? { inputOrigin: command.inputOrigin } : {}),
         attachments: command.attachments,
       };
       const activeHandoff = portableForkHandoff ?? mergeBackHandoff ?? providerSwitchHandoff;
@@ -7020,6 +7030,7 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
         text: queuedMessage.text,
         attachments: queuedMessage.attachments,
         ...(queuedMessage.context ? { context: queuedMessage.context } : {}),
+        ...(queuedMessage.inputOrigin ? { inputOrigin: queuedMessage.inputOrigin } : {}),
         createdBy: queuedMessage.createdBy,
         creationSource: queuedMessage.creationSource,
         ...(queuedMessage.scheduledTaskId === undefined
@@ -7286,6 +7297,7 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
           text: command.text,
           ...editedAttachments,
           ...(command.context ? { context: command.context } : {}),
+          ...(command.inputOrigin ? { inputOrigin: command.inputOrigin } : {}),
           updatedAt: now,
         },
       });
@@ -7302,6 +7314,7 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
             text: command.text,
             ...editedAttachments,
             ...(command.context ? { context: command.context } : {}),
+            ...(command.inputOrigin ? { inputOrigin: command.inputOrigin } : {}),
             updatedAt: now,
           },
         });

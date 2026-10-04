@@ -18,6 +18,7 @@ export async function recoverFailedThreadDraft(message: QueuedThreadMessage): Pr
 
   await mergeComposerDraftContent(targetKey, {
     text: source.text,
+    ...(source.inputOrigin ? { inputOrigin: source.inputOrigin } : {}),
     context: source.context,
     attachments: [],
   });

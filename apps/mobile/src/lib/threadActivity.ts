@@ -113,6 +113,7 @@ export interface ThreadFeedMessage {
   readonly runId: RunId | null;
   readonly streaming: boolean;
   readonly inputIntent?: OrchestrationV2UserMessageInputIntent;
+  readonly inputOrigin?: import("@t3tools/contracts").MessageInputOrigin;
   readonly createdBy?: OrchestrationV2Actor;
   readonly creationSource?: OrchestrationV2CreationSource;
   readonly scheduledTaskId?: ScheduledTaskId;
@@ -130,6 +131,7 @@ export interface LocalThreadMessage {
   readonly role: string;
   readonly text: string;
   readonly context?: OrchestrationMessageContext | undefined;
+  readonly inputOrigin?: import("@t3tools/contracts").MessageInputOrigin | undefined;
   readonly attachments?: ReadonlyArray<ChatAttachment> | undefined;
   readonly streaming: boolean;
   readonly createdAt: string;
@@ -1688,6 +1690,9 @@ export function buildThreadFeed(
           role: item.type === "user_message" ? "user" : "assistant",
           text: item.text,
           ...(item.type === "user_message" && item.context ? { context: item.context } : {}),
+          ...(item.type === "user_message" && item.inputOrigin
+            ? { inputOrigin: item.inputOrigin }
+            : {}),
           attachments: item.attachments ?? [],
           runId: item.runId,
           streaming: item.type === "assistant_message" && item.streaming,
@@ -1738,6 +1743,7 @@ export function buildThreadFeed(
         role: message.role === "assistant" ? "assistant" : "user",
         text: message.text,
         ...(message.context ? { context: message.context } : {}),
+        ...(message.inputOrigin ? { inputOrigin: message.inputOrigin } : {}),
         attachments: message.attachments ?? [],
         runId: null,
         streaming: message.streaming,

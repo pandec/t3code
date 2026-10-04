@@ -152,6 +152,9 @@ awake; it can sleep normally once recording stops.
 Transcription runs on your device. T3 Code deletes the temporary audio after
 transcription or cancellation; only the message text is sent when you submit.
 
+A message that contains dictated text shows a **Transcribed** label, and the agent
+is told it came from speech, so it asks about implausible words instead of guessing.
+
 ## Queued messages
 
 On web and desktop, the composer shows **Interrupt** while the agent is working and the draft is

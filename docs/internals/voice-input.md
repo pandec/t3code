@@ -11,6 +11,12 @@ binds the transcriber and resolved locale for the whole recording. Draft ownersh
 text, and revision are captured before recording and checked before insertion, so
 a late transcript cannot overwrite a draft that was edited or replaced.
 
+A draft that receives a transcript carries `inputOrigin: "voice-transcription"`
+until its text is emptied; sends, queued edits and failure restores keep it with
+the message. The provider caution is added only at the provider boundary
+([InputOriginNotice](../../apps/server/src/orchestration-v2/InputOriginNotice.ts)),
+so stored and displayed text stays exactly what the user dictated.
+
 Cancellation invalidates a result immediately, but resources stay owned until the
 underlying work settles. Apple's native transcription call cannot be interrupted
 once started. Releasing the session or deleting its recording when the abort signal

@@ -9,6 +9,7 @@ import {
   EnvironmentId,
   IsoDateTime,
   MessageId,
+  MessageInputOrigin,
   ModelSelection,
   OrchestrationMessageContext,
   ProjectId,
@@ -52,6 +53,7 @@ export const QueuedThreadMessageSchema = Schema.Struct({
   messageId: MessageId,
   commandId: CommandId,
   text: Schema.String,
+  inputOrigin: Schema.optional(MessageInputOrigin),
   context: Schema.optional(OrchestrationMessageContext),
   attachments: Schema.Array(DraftComposerAttachmentSchema),
   modelSelection: Schema.optional(ModelSelection),
@@ -83,6 +85,7 @@ export interface QueuedThreadMessage {
   readonly messageId: MessageId;
   readonly commandId: CommandId;
   readonly text: string;
+  readonly inputOrigin?: MessageInputOrigin;
   readonly context?: OrchestrationMessageContext;
   readonly attachments: ReadonlyArray<DraftComposerAttachment>;
   readonly modelSelection?: ModelSelectionType;

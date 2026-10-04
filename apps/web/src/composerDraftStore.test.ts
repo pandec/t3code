@@ -424,6 +424,50 @@ describe("composerDraftStore clearComposerContent", () => {
   });
 });
 
+describe("composerDraftStore input origin", () => {
+  const threadId = ThreadId.make("thread-input-origin");
+  const threadRef = scopeThreadRef(TEST_ENVIRONMENT_ID, threadId);
+  const otherRef = scopeThreadRef(TEST_ENVIRONMENT_ID, ThreadId.make("thread-input-origin-b"));
+  const origin = () => draftFor(threadId, TEST_ENVIRONMENT_ID)?.inputOrigin;
+
+  beforeEach(resetComposerDraftStore);
+  afterEach(resetComposerDraftStore);
+
+  it("keeps a dictated origin across typing and drops it when the prompt empties", () => {
+    const store = useComposerDraftStore.getState();
+    store.setPrompt(threadRef, "Read this back", "voice-transcription");
+    store.setPrompt(threadRef, "Read this back with more detail");
+    expect(origin()).toBe("voice-transcription");
+
+    store.setPrompt(threadRef, "");
+    store.setPrompt(threadRef, "typed");
+    expect(origin()).toBeUndefined();
+
+    store.setPrompt(threadRef, "Read this back", "voice-transcription");
+    store.clearComposerContent(threadRef);
+    expect(origin()).toBeUndefined();
+  });
+
+  it("persists, hydrates and moves with the prompt", () => {
+    const store = useComposerDraftStore.getState();
+    store.setPrompt(threadRef, "Read this back", "voice-transcription");
+    const merge = useComposerDraftStore.persist.getOptions().merge!;
+    const hydrated = merge(
+      JSON.parse(
+        JSON.stringify(partializeComposerDraftStoreState(useComposerDraftStore.getState())),
+      ),
+      useComposerDraftStore.getInitialState(),
+    );
+    expect(hydrated.draftsByThreadKey[scopedThreadKey(threadRef)]?.inputOrigin).toBe(
+      "voice-transcription",
+    );
+
+    store.moveComposerPromptAndImages(threadRef, otherRef);
+    expect(origin()).toBeUndefined();
+    expect(draftByKey(scopedThreadKey(otherRef))?.inputOrigin).toBe("voice-transcription");
+  });
+});
+
 describe("composerDraftStore unsent draft marker", () => {
   const threadId = ThreadId.make("thread-unsent-marker");
   const threadRef = scopeThreadRef(TEST_ENVIRONMENT_ID, threadId);

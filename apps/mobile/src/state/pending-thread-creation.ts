@@ -121,6 +121,7 @@ export function pendingThreadCreationMessage(message: QueuedThreadMessage): Loca
     role: "user",
     text: message.text,
     context: message.context,
+    ...(message.inputOrigin ? { inputOrigin: message.inputOrigin } : {}),
     // Deliberately no attachments. Their ids are local draft ids the server
     // cannot resolve, so the feed's attachment rows would sit on a spinner
     // that only ends when the real message arrives — and never, if the

@@ -917,6 +917,7 @@ function ThreadRouteContent(
           projectCwd: selectedThreadProject.workspaceRoot,
           text: setupMessage.text,
           ...(setupMessage.context ? { context: setupMessage.context } : {}),
+          ...(setupMessage.inputOrigin ? { inputOrigin: setupMessage.inputOrigin } : {}),
           uploadedAttachments: setupMessage.attachments,
           modelSelection: selectedThread.modelSelection,
           runtimeMode: selectedThread.runtimeMode,

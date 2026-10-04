@@ -203,7 +203,10 @@ export interface ThreadDetailScreenProps {
   readonly usesAutomaticContentInsets?: boolean;
   readonly onHeaderMaterialVisibilityChange?: (visible: boolean) => void;
   readonly onOpenConnectionEditor: () => void;
-  readonly onChangeDraftMessage: (value: string) => void;
+  readonly onChangeDraftMessage: (
+    value: string,
+    inputOrigin?: import("@t3tools/contracts").MessageInputOrigin,
+  ) => void;
   readonly onPickDraftMedia: () => Promise<void>;
   readonly onPickDraftFiles: () => Promise<void>;
   readonly onNativePasteImages: (uris: ReadonlyArray<string>) => Promise<void>;

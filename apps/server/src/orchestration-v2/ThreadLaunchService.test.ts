@@ -1768,6 +1768,7 @@ it.effect("shared intake preserves durable attachment bytes after a lost launch 
       initialMessage: {
         messageId: MessageId.make("intake-first"),
         text: "First [file](t3-context://v1/file/intake-file)",
+        inputOrigin: "voice-transcription" as const,
         context: {
           version: 1 as const,
           records: [
@@ -1819,6 +1820,8 @@ it.effect("shared intake preserves durable attachment bytes after a lost launch 
     );
     assert.ok(userItem?.type === "user_message");
     assert.deepEqual(userItem.context, stored.context);
+    assert.equal(stored.inputOrigin, "voice-transcription");
+    assert.equal(userItem.inputOrigin, "voice-transcription");
     const storedPath = resolveAttachmentPath({
       attachmentsDir: config.attachmentsDir,
       attachment: stored.attachments[0]!,

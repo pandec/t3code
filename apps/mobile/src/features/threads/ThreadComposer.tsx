@@ -181,7 +181,10 @@ export interface ThreadComposerProps {
   /** Whether the live turn can actually be steered by this provider. */
   readonly canSteerActiveTurn: boolean;
   readonly editorRef?: RefObject<ComposerEditorHandle | null>;
-  readonly onChangeDraftMessage: (value: string) => void;
+  readonly onChangeDraftMessage: (
+    value: string,
+    inputOrigin?: import("@t3tools/contracts").MessageInputOrigin,
+  ) => void;
   readonly onPickDraftMedia: () => Promise<void>;
   readonly onPickDraftFiles: () => Promise<void>;
   readonly onNativePasteImages: (uris: ReadonlyArray<string>) => Promise<void>;
@@ -523,7 +526,7 @@ export const ThreadComposer = memo(function ThreadComposer(props: ThreadComposer
       props.connectionState === "connected" && props.serverConfig?.speechToText.available === true,
     draftMessage: props.draftMessage,
     selection: composerMenu.selection,
-    onCommitVoiceDraftMessage: props.onChangeDraftMessage,
+    onCommitVoiceDraftMessage: (value) => props.onChangeDraftMessage(value, "voice-transcription"),
     onChangeSelection: composerMenu.onSelectionChange,
   });
   const voicePresentation = resolveVoiceComposerPresentation(

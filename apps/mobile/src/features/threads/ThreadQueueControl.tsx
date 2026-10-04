@@ -133,6 +133,7 @@ export function ThreadQueueSheet({ route }: StaticScreenProps<QueueTarget>) {
         originalText: entry.text,
         existingAttachments: entry.attachments,
         ...(entry.context ? { context: entry.context } : {}),
+        ...(entry.inputOrigin ? { inputOrigin: entry.inputOrigin } : {}),
       });
       navigation.goBack();
       return;

@@ -1997,6 +1997,9 @@ const makeWsRpcLayer = (
                           ...(input.initialMessage.context === undefined
                             ? {}
                             : { context: input.initialMessage.context }),
+                          ...(input.initialMessage.inputOrigin === undefined
+                            ? {}
+                            : { inputOrigin: input.initialMessage.inputOrigin }),
                         },
                       }),
                   createdBy: "user",

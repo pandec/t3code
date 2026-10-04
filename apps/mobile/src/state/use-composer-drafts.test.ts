@@ -501,6 +501,30 @@ describe("mobile composer drafts", () => {
     expect(reloaded.other).toEqual(DRAFT);
   });
 
+  it("keeps a dictated origin until the text empties, through persistence and recovery merges", () => {
+    appAtomRegistry.set(composerDraftsAtom, {});
+    setComposerDraftText("voice", "Read this back", "voice-transcription");
+    setComposerDraftText("voice", "Read this back slowly");
+    const dictated = getComposerDraftSnapshot("voice");
+    expect(dictated.inputOrigin).toBe("voice-transcription");
+    expect(
+      decodePersistedComposerState({ schemaVersion: 1, drafts: { voice: dictated } }).drafts.voice
+        ?.inputOrigin,
+    ).toBe("voice-transcription");
+
+    setComposerDraftText("voice", "");
+    setComposerDraftText("voice", "typed");
+    expect(getComposerDraftSnapshot("voice").inputOrigin).toBeUndefined();
+
+    const restored = mergeComposerDraftContentState({}, "restored", {
+      text: "Read this back",
+      inputOrigin: "voice-transcription",
+      attachments: [],
+    });
+    expect(restored.restored?.inputOrigin).toBe("voice-transcription");
+    expect(clearComposerDraftContentState(restored, "restored").restored).toBeUndefined();
+  });
+
   it("prunes unreferenced context during a content merge", () => {
     const existing = contextDraft(0, 2);
     const incoming = contextDraft(2, 2);

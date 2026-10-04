@@ -1025,6 +1025,10 @@ export const OrchestrationV2Notification = Schema.Struct({
 });
 export type OrchestrationV2Notification = typeof OrchestrationV2Notification.Type;
 
+/** How the user produced a message's text; absent means typed. */
+export const MessageInputOrigin = Schema.Literal("voice-transcription");
+export type MessageInputOrigin = typeof MessageInputOrigin.Type;
+
 export const OrchestrationV2ConversationMessage = Schema.Struct({
   notification: Schema.optional(OrchestrationV2Notification),
   ...OrchestrationV2CreationFields,
@@ -1038,6 +1042,7 @@ export const OrchestrationV2ConversationMessage = Schema.Struct({
   role: Schema.Literals(["user", "assistant", "system"]),
   text: Schema.String,
   context: Schema.optional(OrchestrationMessageContext),
+  inputOrigin: Schema.optional(MessageInputOrigin),
   attachments: Schema.Array(ChatAttachment),
   streaming: Schema.Boolean,
   createdAt: Schema.DateTimeUtc,
@@ -1277,6 +1282,7 @@ export const OrchestrationV2TurnItem = Schema.Union([
     inputIntent: OrchestrationV2UserMessageInputIntent,
     text: Schema.String,
     context: Schema.optional(OrchestrationMessageContext),
+    inputOrigin: Schema.optional(MessageInputOrigin),
     attachments: Schema.Array(ChatAttachment),
   }),
   Schema.Struct({
@@ -2004,6 +2010,7 @@ export const OrchestrationV2TurnItemJson = Schema.Union([
     inputIntent: OrchestrationV2UserMessageInputIntent,
     text: Schema.String,
     context: Schema.optional(OrchestrationMessageContext),
+    inputOrigin: Schema.optional(MessageInputOrigin),
     attachments: Schema.Array(ChatAttachment),
   }),
   Schema.Struct({
@@ -2659,6 +2666,7 @@ export const OrchestrationV2Command = Schema.Union([
     messageId: MessageId,
     text: Schema.String,
     context: Schema.optional(OrchestrationMessageContext),
+    inputOrigin: Schema.optional(MessageInputOrigin),
     attachments: Schema.Array(ChatAttachment),
     /** Seed the temporary title and generate a durable replacement for the first message. */
     titleSeed: Schema.optional(TrimmedNonEmptyString),
@@ -2748,6 +2756,8 @@ export const OrchestrationV2Command = Schema.Union([
   Schema.Struct({
     type: Schema.Literal("queued-run.edit"),
     context: Schema.optional(OrchestrationMessageContext),
+    // Absent = keep the message's origin; edits never clear a voice origin.
+    inputOrigin: Schema.optional(MessageInputOrigin),
     commandId: CommandId,
     threadId: ThreadId,
     runId: RunId,
@@ -2964,6 +2974,7 @@ export const OrchestrationV2ThreadLaunchInput = Schema.Struct({
       messageId: Schema.optional(MessageId),
       text: Schema.String,
       context: Schema.optional(OrchestrationMessageContext),
+      inputOrigin: Schema.optional(MessageInputOrigin),
       attachments: Schema.Array(ChatAttachment),
     }),
   ),

@@ -31,6 +31,7 @@ export function appendPendingThreadMessages(
           text: pendingMessage.text,
           attachments: [],
           context: pendingMessage.context,
+          ...(pendingMessage.inputOrigin ? { inputOrigin: pendingMessage.inputOrigin } : {}),
           createdAt: pendingMessage.createdAt,
           updatedAt: pendingMessage.createdAt,
           runId: null,

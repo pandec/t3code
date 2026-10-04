@@ -18,6 +18,7 @@ import {
   PROVIDER_SEND_TURN_MAX_ATTACHMENTS,
   PROVIDER_SEND_TURN_MAX_INPUT_CHARS,
   type EnvironmentId,
+  type MessageInputOrigin,
   type ModelSelection,
   type ProviderInteractionMode,
   type RuntimeMode,
@@ -449,6 +450,7 @@ export function useThreadComposerState() {
         text: editDraft.text,
         attachments: editDraft.attachments,
         ...(editDraft.context ? { context: editDraft.context } : {}),
+        ...(editDraft.inputOrigin ? { inputOrigin: editDraft.inputOrigin } : {}),
       });
     }
     endQueuedRunEdit(selectedThreadKey, { deferAttachmentCleanup: keepable });
@@ -526,6 +528,7 @@ export function useThreadComposerState() {
             messageId: edit.messageId,
             attachments: payload.attachments,
             ...(payload.context ? { context: payload.context } : {}),
+            ...(draft.inputOrigin ? { inputOrigin: draft.inputOrigin } : {}),
           },
         },
       });
@@ -681,6 +684,7 @@ export function useThreadComposerState() {
         messageId,
         commandId: CommandId.make(metadata.commandId),
         text,
+        ...(draft.inputOrigin ? { inputOrigin: draft.inputOrigin } : {}),
         attachments,
         context: draft.context,
         modelSelection,
@@ -702,6 +706,7 @@ export function useThreadComposerState() {
           // the user attached new ones while the write was in flight.
           void mergeComposerDraftContent(threadKey, {
             text,
+            ...(draft.inputOrigin ? { inputOrigin: draft.inputOrigin } : {}),
             context: draft.context,
             attachments: [],
           });
@@ -727,13 +732,13 @@ export function useThreadComposerState() {
   );
 
   const onChangeDraftMessage = useCallback(
-    (value: string) => {
+    (value: string, inputOrigin?: MessageInputOrigin) => {
       if (!selectedThreadShell) {
         return;
       }
 
       const threadKey = activeComposerDraftKey(selectedThreadShell);
-      setComposerDraftText(threadKey, value);
+      setComposerDraftText(threadKey, value, inputOrigin);
     },
     [selectedThreadShell],
   );
