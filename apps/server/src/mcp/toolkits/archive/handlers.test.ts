@@ -42,6 +42,10 @@ const client = McpSchema.McpServerClient.of({
 const makeLayer = (
   owner: string,
   scheduled: Array<{ readonly afterTurn: boolean; readonly removeWorktree: boolean | undefined }>,
+  options: {
+    readonly shell?: "missing" | "deleted" | undefined;
+    readonly serviceCalls?: Array<string>;
+  } = {},
 ) =>
   McpServer.toolkit(ArchiveToolkit).pipe(
     Layer.provide(ArchiveToolkitHandlersLive),
@@ -50,21 +54,33 @@ const makeLayer = (
       Layer.mock(ThreadManagementService.ThreadManagementService)({
         // Archived on purpose: status must stay readable after the archive ran.
         getThreadShell: () =>
-          Effect.succeed({
-            id: threadId,
-            providerInstanceId: ProviderInstanceId.make(owner),
-            archivedAt,
-            deletedAt: null,
-          } as unknown as OrchestrationV2ThreadShell),
+          Effect.succeed(
+            options.shell === "missing"
+              ? null
+              : ({
+                  id: threadId,
+                  providerInstanceId: ProviderInstanceId.make(owner),
+                  archivedAt,
+                  deletedAt: options.shell === "deleted" ? archivedAt : null,
+                } as unknown as OrchestrationV2ThreadShell),
+          ),
       }),
     ),
     Layer.provideMerge(
       Layer.mock(ThreadArchiveScheduler.ThreadArchiveScheduler)({
         schedule: (input) => {
+          options.serviceCalls?.push("schedule");
           scheduled.push({ afterTurn: input.afterTurn, removeWorktree: input.removeWorktree });
           return Effect.succeed({ archivedAt: null, request: { ...request, status: "pending" } });
         },
-        status: () => Effect.succeed({ archivedAt, request }),
+        status: () => {
+          options.serviceCalls?.push("status");
+          return Effect.succeed({ archivedAt, request });
+        },
+        cancel: () => {
+          options.serviceCalls?.push("cancel");
+          return Effect.succeed({ archivedAt, request });
+        },
       }),
     ),
   );
@@ -122,3 +138,23 @@ it.effect("rejects a provider that no longer owns the thread", () => {
     expect(scheduled).toEqual([]);
   }).pipe(Effect.scoped, Effect.provide(makeLayer("claude", scheduled)));
 });
+
+const archiveTools = ["archive_thread", "archive_thread_status", "cancel_thread_archive"] as const;
+
+it.effect.each([
+  { owner: "claude", shell: undefined, code: "parent_not_active" },
+  { owner: "codex", shell: "missing" as const, code: "thread_not_found" },
+  { owner: "codex", shell: "deleted" as const, code: "thread_not_found" },
+])(
+  "every archive tool refuses a $code caller before reaching the service",
+  ({ owner, shell, code }) => {
+    const serviceCalls: Array<string> = [];
+    return Effect.gen(function* () {
+      for (const name of archiveTools) {
+        const result = yield* call(name);
+        expect(result.structuredContent).toMatchObject({ _tag: "OrchestratorMcpFailure", code });
+      }
+      expect(serviceCalls).toEqual([]);
+    }).pipe(Effect.scoped, Effect.provide(makeLayer(owner, [], { shell, serviceCalls })));
+  },
+);

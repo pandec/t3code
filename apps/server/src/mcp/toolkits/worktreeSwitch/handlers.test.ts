@@ -7,6 +7,7 @@ import {
   RunId,
   ThreadId,
 } from "@t3tools/contracts";
+import * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import { McpSchema, McpServer } from "effect/unstable/ai";
@@ -41,24 +42,39 @@ const client = McpSchema.McpServerClient.of({
   getClient: Effect.die("unused"),
 });
 
-const makeLayer = (owner: string, requested: Array<{ threadId: ThreadId; targetPath: string }>) =>
+const makeLayer = (
+  owner: string,
+  requested: Array<{ threadId: ThreadId; targetPath: string }>,
+  options: {
+    readonly shell?: "missing" | "deleted" | undefined;
+    readonly serviceCalls?: Array<string>;
+  } = {},
+) =>
   McpServer.toolkit(WorktreeSwitchToolkit).pipe(
     Layer.provide(WorktreeSwitchToolkitHandlersLive),
     Layer.provideMerge(McpServer.McpServer.layer),
     Layer.provideMerge(
       Layer.mock(ThreadManagementService.ThreadManagementService)({
         getThreadShell: () =>
-          Effect.succeed({
-            id: threadId,
-            providerInstanceId: ProviderInstanceId.make(owner),
-            archivedAt: null,
-            deletedAt: null,
-          } as unknown as OrchestrationV2ThreadShell),
+          Effect.succeed(
+            options.shell === "missing"
+              ? null
+              : ({
+                  id: threadId,
+                  providerInstanceId: ProviderInstanceId.make(owner),
+                  archivedAt: null,
+                  deletedAt:
+                    options.shell === "deleted"
+                      ? DateTime.makeUnsafe("2026-10-04T10:00:00.000Z")
+                      : null,
+                } as unknown as OrchestrationV2ThreadShell),
+          ),
       }),
     ),
     Layer.provideMerge(
       Layer.mock(ThreadWorktreeSwitchScheduler.ThreadWorktreeSwitchScheduler)({
         request: (input) => {
+          options.serviceCalls?.push("request");
           requested.push({ threadId: input.threadId, targetPath: input.targetPath });
           return input.targetPath.startsWith("/")
             ? Effect.succeed({ request })
@@ -68,7 +84,14 @@ const makeLayer = (owner: string, requested: Array<{ threadId: ThreadId; targetP
                 }),
               );
         },
-        status: () => Effect.succeed({ request }),
+        status: () => {
+          options.serviceCalls?.push("status");
+          return Effect.succeed({ request });
+        },
+        cancel: () => {
+          options.serviceCalls?.push("cancel");
+          return Effect.succeed({ request });
+        },
       }),
     ),
   );
@@ -118,3 +141,27 @@ it.effect("rejects a provider that no longer owns the thread", () => {
     expect(requested).toEqual([]);
   }).pipe(Effect.scoped, Effect.provide(makeLayer("claude", requested)));
 });
+
+const switchTools = [
+  ["switch_worktree", { path: "/repo-worktree" }],
+  ["worktree_switch_status", {}],
+  ["cancel_worktree_switch", {}],
+] as const;
+
+it.effect.each([
+  { owner: "claude", shell: undefined, code: "parent_not_active" },
+  { owner: "codex", shell: "missing" as const, code: "thread_not_found" },
+  { owner: "codex", shell: "deleted" as const, code: "thread_not_found" },
+])(
+  "every switch tool refuses a $code caller before reaching the service",
+  ({ owner, shell, code }) => {
+    const serviceCalls: Array<string> = [];
+    return Effect.gen(function* () {
+      for (const [name, args] of switchTools) {
+        const result = yield* call(name, args);
+        expect(result.structuredContent).toMatchObject({ _tag: "OrchestratorMcpFailure", code });
+      }
+      expect(serviceCalls).toEqual([]);
+    }).pipe(Effect.scoped, Effect.provide(makeLayer(owner, [], { shell, serviceCalls })));
+  },
+);

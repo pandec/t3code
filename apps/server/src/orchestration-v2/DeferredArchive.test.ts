@@ -2,6 +2,7 @@ import * as NodeServices from "@effect/platform-node/NodeServices";
 import { assert, describe, it } from "@effect/vitest";
 import {
   CommandId,
+  EnvironmentId,
   EventId,
   MessageId,
   type ModelSelection,
@@ -18,11 +19,15 @@ import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
 import * as Stream from "effect/Stream";
+import { McpSchema, McpServer } from "effect/unstable/ai";
 
 import * as CheckpointStore from "../checkpointing/CheckpointStore.ts";
 import * as ServerConfig from "../config.ts";
 import * as GitWorkflow from "../git/GitWorkflowService.ts";
+import * as McpInvocationContext from "../mcp/McpInvocationContext.ts";
 import * as McpSessionRegistryTestkit from "../mcp/McpSessionRegistry.testkit.ts";
+import { ArchiveToolkitHandlersLive } from "../mcp/toolkits/archive/handlers.ts";
+import { ArchiveToolkit } from "../mcp/toolkits/archive/tools.ts";
 import { SqlitePersistenceMemory } from "../persistence/Layers/Sqlite.ts";
 import * as ProjectService from "../project/ProjectService.ts";
 import type { ProviderInstance } from "../provider/ProviderDriver.ts";
@@ -318,6 +323,19 @@ const TestLayer = ThreadArchiveScheduler.layer.pipe(
   ),
   Layer.provide(PlatformTestLayer),
 );
+
+const mcpClient = McpSchema.McpServerClient.of({
+  clientId: 1,
+  clientCapabilities: {},
+  clientInfo: { name: "deferred-archive-test", version: "1.0.0" },
+  protocolVersion: "2025-06-18",
+  initializePayload: {
+    protocolVersion: "2025-06-18",
+    capabilities: {},
+    clientInfo: { name: "deferred-archive-test", version: "1.0.0" },
+  },
+  getClient: Effect.die("unused"),
+});
 
 const createThread = (name: string) =>
   Effect.gen(function* () {
@@ -681,5 +699,52 @@ it.layer(TestLayer)("deferred archive on the orchestrator", (it) => {
       assert.isNotNull(thread.archivedAt);
       assert.equal(thread.archiveRequest?.status, "pending");
     }),
+  );
+
+  it.effect("archive tools read the archived thread for its own provider only", () =>
+    Effect.gen(function* () {
+      const threadId = yield* createThread("mcp-owner");
+      const server = yield* McpServer.McpServer;
+      const callAs = (providerInstanceId: ProviderInstanceId, name: string) =>
+        server.callTool({ name, arguments: {} }).pipe(
+          Effect.provideService(McpInvocationContext.McpInvocationContext, {
+            environmentId: EnvironmentId.make("deferred-archive-mcp"),
+            threadId,
+            providerSessionId: "deferred-archive-mcp-session",
+            providerInstanceId,
+            capabilities: new Set(["orchestration"] as const),
+            issuedAt: 1,
+          }),
+          Effect.provideService(McpSchema.McpServerClient, mcpClient),
+        );
+
+      // Idle, so the request archives the thread right away.
+      const archived = yield* callAs(modelSelection.instanceId, "archive_thread");
+      assert.isFalse(archived.isError);
+      const status = yield* callAs(modelSelection.instanceId, "archive_thread_status");
+      assert.isFalse(status.isError);
+      assert.isNotNull((status.structuredContent as { archivedAt: string | null }).archivedAt);
+      assert.deepInclude(
+        (status.structuredContent as { request: OrchestrationV2ThreadArchiveRequest }).request,
+        { status: "completed" },
+      );
+
+      const stranger = yield* callAs(
+        ProviderInstanceId.make("deferred-archive-other"),
+        "archive_thread_status",
+      );
+      assert.deepInclude(stranger.structuredContent, {
+        _tag: "OrchestratorMcpFailure",
+        code: "parent_not_active",
+      });
+    }).pipe(
+      Effect.provide(
+        McpServer.toolkit(ArchiveToolkit).pipe(
+          Layer.provide(ArchiveToolkitHandlersLive),
+          Layer.provideMerge(McpServer.McpServer.layer),
+        ),
+      ),
+      Effect.scoped,
+    ),
   );
 });
