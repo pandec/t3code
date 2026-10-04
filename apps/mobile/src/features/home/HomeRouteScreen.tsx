@@ -185,6 +185,7 @@ export function HomeRouteScreen() {
                   screen: "SettingsContent",
                   params: { screen: "SettingsEnvironments" },
                 }),
+              showThreadSync: true,
             }),
             headerShown: true,
           }}

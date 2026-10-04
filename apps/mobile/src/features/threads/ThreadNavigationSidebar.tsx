@@ -1008,6 +1008,7 @@ function ThreadNavigationSidebarPane(
               trailingItemCount: nativeHeaderItems.length,
               onOpenEnvironments: props.onOpenEnvironmentSettings,
               fallbackTitleStyle: { fontSize: 18, fontWeight: "800" },
+              showThreadSync: true,
             }),
             headerSearchBarOptions: {
               ref: searchBarRef,
@@ -1160,6 +1161,7 @@ function ThreadNavigationSidebarPane(
             <WorkspaceConnectionTitle
               grow
               onPress={props.onOpenEnvironmentSettings}
+              showThreadSync
               size="pageTitle"
               brand={
                 <View className="h-11 flex-1 justify-center">

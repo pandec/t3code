@@ -25,6 +25,7 @@ import * as EnvironmentRegistry from "../connection/registry.ts";
 import { connectionProjectionPhase } from "../connection/model.ts";
 import * as EnvironmentSupervisor from "../connection/supervisor.ts";
 import * as ConnectionWakeups from "../connection/wakeups.ts";
+import { withEnvironmentCacheMutationLock } from "../platform/environmentCacheMutationLock.ts";
 import * as Persistence from "../platform/persistence.ts";
 import { runCachePersistence } from "./cachePersistence.ts";
 import * as ManagedRelay from "../relay/managedRelay.ts";
@@ -266,7 +267,12 @@ export const makeEnvironmentThreadState = Effect.fn("EnvironmentThreadState.make
       )
     )
       return;
-    yield* cache.saveThread(environmentId, snapshot).pipe(
+    // Serialized with prewarm's populate-only check (`threadPrewarm.ts`).
+    yield* withEnvironmentCacheMutationLock(
+      cache,
+      environmentId,
+      cache.saveThread(environmentId, snapshot),
+    ).pipe(
       Effect.tap(() =>
         Effect.sync(() => {
           if (
@@ -422,7 +428,11 @@ export const makeEnvironmentThreadState = Effect.fn("EnvironmentThreadState.make
     });
     yield* remember;
     if (resumeCache !== undefined && resumeCache.owner !== owner) return;
-    yield* cache.removeThread(environmentId, threadId).pipe(
+    yield* withEnvironmentCacheMutationLock(
+      cache,
+      environmentId,
+      cache.removeThread(environmentId, threadId),
+    ).pipe(
       Effect.catch((error) =>
         Effect.logWarning("Could not remove the cached thread.").pipe(
           Effect.annotateLogs({
@@ -1007,3 +1017,4 @@ export * from "./threadFeedback.ts";
 export * from "./threadDetail.ts";
 export * from "./threadShell.ts";
 export * from "./threadState.ts";
+export * from "./threadPrewarm.ts";

@@ -2,7 +2,7 @@ import { AutoSettleDaysField } from "./components/AutoSettleDaysField";
 import { ScreenScrollView as ScrollView } from "../../components/ScreenScrollView";
 import { useAtomSet, useAtomValue } from "@effect/atom-react";
 import { AsyncResult } from "effect/unstable/reactivity";
-import { useRef, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { Pressable, View } from "react-native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 
@@ -16,6 +16,12 @@ import {
 import { supportsSharedSettingsSync } from "@t3tools/client-runtime/state/shared-settings";
 import { AppText as Text } from "../../components/AppText";
 import { mobilePreferencesAtom, updateMobilePreferencesAtom } from "../../state/preferences";
+import {
+  didEnvironmentPrewarmRunsAdvance,
+  threadPrewarmTriggerCommand,
+  type ThreadPrewarmSummary,
+  useThreadPrewarmSummary,
+} from "../../state/prewarm";
 import { serverEnvironment } from "../../state/server";
 import { useAtomCommand } from "../../state/use-atom-command";
 import {
@@ -23,6 +29,7 @@ import {
   useArchivedSectionVisibleCount,
   useSteerGraceWindowMs,
 } from "../../state/use-mobile-preferences";
+import { SettingsActionRow } from "./components/SettingsActionRow";
 import { SettingsSection } from "./components/SettingsSection";
 import { SettingsProjectOverridesSection } from "./components/SettingsProjectOverridesSection";
 import { SettingsSliderRow } from "./components/SettingsSliderRow";
@@ -258,7 +265,10 @@ function AutoSettleSettingsRows() {
   );
 }
 
-/** Device-local mirror of the web fork's Extras thread settings. */
+/**
+ * Device-local mirror of the web fork's Extras thread settings, plus the
+ * manual counterpart of thread prewarming.
+ */
 function DeviceThreadSettingsSection() {
   const preferencesResult = useAtomValue(mobilePreferencesAtom);
   const savePreferences = useAtomSet(updateMobilePreferencesAtom);
@@ -308,7 +318,80 @@ function DeviceThreadSettingsSection() {
           valueLabel={`${archivedSectionVisibleCount}`}
         />
       </>
+      <ThreadSyncRow />
     </SettingsSection>
+  );
+}
+
+function formatLastSyncedLabel(lastRunAt: number | null, now: number): string {
+  if (lastRunAt === null) return "Not synced yet";
+  const elapsedMs = Math.max(0, now - lastRunAt);
+  if (elapsedMs < 60_000) return "Synced just now";
+  const minutes = Math.floor(elapsedMs / 60_000);
+  if (minutes < 60) return `Synced ${minutes}m ago`;
+  const hours = Math.floor(minutes / 60);
+  if (hours < 24) return `Synced ${hours}h ago`;
+  return `Synced ${new Date(lastRunAt).toLocaleDateString()}`;
+}
+
+function useMinuteClockMs(): number {
+  const [nowMs, setNowMs] = useState(() => Date.now());
+  useEffect(() => {
+    const timer = setInterval(() => setNowMs(Date.now()), 60_000);
+    return () => clearInterval(timer);
+  }, []);
+  return nowMs;
+}
+
+/**
+ * Manual counterpart of the automatic thread prewarming: fires the same
+ * engine on demand (bypassing its cooldown) and shows when any environment
+ * last completed a full sweep. The engine debounces briefly before running,
+ * so the row tracks the manual-completion cursor until the request reaches a
+ * terminal outcome, without treating unavailable attempts as successful syncs.
+ */
+const THREAD_SYNC_PENDING_TIMEOUT_MS = 45_000;
+
+function ThreadSyncRow() {
+  const summary = useThreadPrewarmSummary();
+  const fireTrigger = useAtomCommand(threadPrewarmTriggerCommand);
+  const nowMs = useMinuteClockMs();
+  const [requestedFrom, setRequestedFrom] = useState<
+    ThreadPrewarmSummary["environmentLastManualRequestCompletedAt"] | null
+  >(null);
+
+  const manualSyncing =
+    requestedFrom !== null &&
+    !didEnvironmentPrewarmRunsAdvance(
+      summary.environmentLastManualRequestCompletedAt,
+      requestedFrom,
+    );
+  const syncing = manualSyncing || summary.syncing;
+
+  // Stop waiting on a request the engine never completed (e.g. it was torn down).
+  useEffect(() => {
+    if (!manualSyncing) return;
+    const timer = setTimeout(() => setRequestedFrom(null), THREAD_SYNC_PENDING_TIMEOUT_MS);
+    return () => clearTimeout(timer);
+  }, [manualSyncing]);
+
+  const statusLabel = syncing ? "Syncing…" : formatLastSyncedLabel(summary.lastRunAt, nowMs);
+
+  // Only a manual request blocks the action: a background run reports itself
+  // in the label but must not strand someone who opened Settings to force a sweep.
+  return (
+    <SettingsActionRow
+      icon="arrow.triangle.2.circlepath"
+      label={`Sync Threads · ${statusLabel}`}
+      disabled={manualSyncing}
+      loading={syncing}
+      onPress={() => {
+        // Repeated taps before a re-render collapse into one debounced run.
+        if (manualSyncing) return;
+        setRequestedFrom(new Map(summary.environmentLastManualRequestCompletedAt));
+        void fireTrigger({ reason: "manual" });
+      }}
+    />
   );
 }
 
