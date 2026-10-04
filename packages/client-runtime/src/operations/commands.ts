@@ -110,8 +110,6 @@ export interface ReorderActiveThreadInput extends ThreadCommandInput {
 /** Fork: move a thread into a custom group (null: Active); requires threadCustomGroups. */
 export interface SetThreadCustomGroupInput extends ThreadCommandInput {
   readonly customGroupId: string | null;
-  /** Also place the thread among the group's active threads. */
-  readonly orderKey?: string;
 }
 
 export interface SnoozeThreadInput extends ThreadCommandInput {
@@ -505,7 +503,6 @@ export const setThreadCustomGroup = Effect.fn("EnvironmentCommands.setThreadCust
       commandId: yield* allocateCommandId(input),
       threadId: input.threadId,
       customGroupId: input.customGroupId,
-      ...(input.orderKey === undefined ? {} : { orderKey: input.orderKey }),
     });
   },
 );

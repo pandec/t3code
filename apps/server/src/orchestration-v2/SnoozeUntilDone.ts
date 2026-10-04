@@ -74,6 +74,23 @@ export function snoozeUntilDoneHolds(projection: UntilDoneProjection): boolean {
 }
 
 /**
+ * A delegated-completion wake reporting to the awaited run carries its work
+ * on, even after the last child's turn item went terminal and the reserved
+ * delivery is all that remains of it.
+ */
+export function delegatedCompletionContinuesUntilDone(
+  projection: Pick<OrchestrationV2ThreadProjection, "thread" | "runs" | "runtimeRequests">,
+  command: Extract<OrchestrationV2Command, { readonly type: "message.dispatch" }>,
+): boolean {
+  const parentRunId = command.delegatedCompletion?.parentRunId;
+  if (parentRunId === undefined || !isSnoozedUntilDone(projection.thread)) return false;
+  if (projection.thread.snoozedUntilRunId !== parentRunId) return false;
+  if (projection.runtimeRequests.some((request) => request.status === "pending")) return false;
+  const latestRun = latestUnheldRun(projection.runs);
+  return latestRun?.id === parentRunId && latestRun.status !== "failed";
+}
+
+/**
  * A wake: an automatic message that carries on existing work (background
  * notification, delegated task result, restart continuation) rather than
  * starting new work. Mirrors the Orchestrator's wakeWorkStartedAt triggers.

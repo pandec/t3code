@@ -75,6 +75,7 @@ import {
   isThreadHistoryTurnStart,
   THREAD_HISTORY_MAX_RAW_TURNS,
 } from "./threadHistoryPaging.ts";
+import { indefiniteSnoozeHoldsOverLatestRun } from "./IndefiniteSnooze.ts";
 
 export class ProjectionStoreApplyEventError extends Schema.TaggedError<ProjectionStoreApplyEventError>()(
   "ProjectionStoreApplyEventError",
@@ -151,6 +152,8 @@ export type ProjectionLimitRecoveryCandidate = Pick<
   | "updatedAt"
   | "limitRecovery"
   | "snoozedUntil"
+  | "snoozedAt"
+  | "snoozedUntilRunId"
 >;
 
 /** The thread fields pull request sync reads, for a thread with at least one link. */
@@ -3373,6 +3376,12 @@ export const layer: Layer.Layer<ProjectionStoreV2, never, SqlClient.SqlClient> =
                   json_extract(t.payload_json, '$.snoozedUntil') IS NULL
                   OR julianday(json_extract(t.payload_json, '$.snoozedUntil')) <= julianday(${DateTime.formatIso(options.now)})
                 )
+                AND NOT (
+                  json_extract(t.payload_json, '$.snoozedUntil') IS NULL
+                  AND json_extract(t.payload_json, '$.snoozedAt') IS NOT NULL
+                  AND json_extract(t.payload_json, '$.snoozedUntilRunId') IS NULL
+                  AND (r.completed_at IS NULL OR julianday(r.completed_at) <= julianday(json_extract(t.payload_json, '$.snoozedAt')))
+                )
               )
               OR (
                 (
@@ -3414,6 +3423,11 @@ export const layer: Layer.Layer<ProjectionStoreV2, never, SqlClient.SqlClient> =
             pendingRuntimeRequest: null,
             limitRecovery: thread.limitRecovery ?? null,
             snoozedUntil: thread.snoozedUntil ?? null,
+            // Fork: indefinite-snooze fields, only when set (they defer resume).
+            ...(thread.snoozedAt == null ? {} : { snoozedAt: thread.snoozedAt }),
+            ...(thread.snoozedUntilRunId == null
+              ? {}
+              : { snoozedUntilRunId: thread.snoozedUntilRunId }),
           });
         }
         return candidates;
@@ -5748,7 +5762,8 @@ export const layerMemory: Layer.Layer<ProjectionStoreV2> = Layer.effect(
                   thread.limitRecovery.autoResume &&
                   resetMs <= nowMs &&
                   (thread.snoozedUntil == null ||
-                    DateTime.toEpochMillis(thread.snoozedUntil) <= nowMs)
+                    DateTime.toEpochMillis(thread.snoozedUntil) <= nowMs) &&
+                  !indefiniteSnoozeHoldsOverLatestRun(thread)
                 );
               })
               .toSorted((left, right) => left.id.localeCompare(right.id)),

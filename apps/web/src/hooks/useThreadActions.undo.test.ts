@@ -57,6 +57,7 @@ const threadShell = vi.hoisted(() => ({
   snoozedUntil: null as string | null,
   snoozedUntilRunId: null as string | null,
   latestRun: null as { runId: string; status: string; completedAt: string | null } | null,
+  pendingBackgroundTasks: [] as Array<{ taskId: string; kind: "subagent" }>,
   projectId: "project",
   environmentId: "undo-env",
   session: null,
@@ -121,6 +122,7 @@ beforeEach(() => {
   threadShell.snoozedUntil = null;
   threadShell.snoozedUntilRunId = null;
   threadShell.latestRun = null;
+  threadShell.pendingBackgroundTasks = [];
   clientSettings.confirmThreadArchive = false;
   dialogs.confirm.mockReset();
 });
@@ -323,6 +325,24 @@ describe("settle and snooze Undo", () => {
       status: "interrupted",
       completedAt: "2026-01-01T00:05:00.000Z",
     };
+    await currentUndo()();
+    expect(commands.unsettle).toHaveBeenCalledOnce();
+    expect(commands.snooze).not.toHaveBeenCalled();
+  });
+
+  it("leaves the thread awake when unrelated new work replaced the awaited run", async () => {
+    threadShell.snoozedAt = "2026-01-01T00:00:00.000Z";
+    threadShell.snoozedUntilRunId = "run-1";
+    threadShell.latestRun = {
+      runId: "run-1",
+      status: "completed",
+      completedAt: "2026-01-01T00:05:00.000Z",
+    };
+    threadShell.pendingBackgroundTasks = [{ taskId: "task-1", kind: "subagent" }];
+    const actions = useThreadActions();
+    await actions.settleThread(target);
+    threadShell.latestRun = { runId: "run-2", status: "running", completedAt: null };
+    threadShell.pendingBackgroundTasks = [];
     await currentUndo()();
     expect(commands.unsettle).toHaveBeenCalledOnce();
     expect(commands.snooze).not.toHaveBeenCalled();

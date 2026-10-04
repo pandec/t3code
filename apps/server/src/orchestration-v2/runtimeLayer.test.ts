@@ -3641,7 +3641,7 @@ it.layer(SharedApplicationDataPlaneTestLayer)("custom thread groups", (it) => {
       return { orchestrator, projectId, threadId, shell };
     });
 
-  it.effect("creates into a group, moves with placement, and returns to Active", () =>
+  it.effect("creates into a group, moves, and returns to Active", () =>
     Effect.gen(function* () {
       const { orchestrator, threadId, shell } = yield* setup("custom-groups-move", "research");
       const created = yield* shell;
@@ -3664,11 +3664,9 @@ it.layer(SharedApplicationDataPlaneTestLayer)("custom thread groups", (it) => {
         commandId: CommandId.make("custom-groups-move-set"),
         threadId,
         customGroupId: "review",
-        orderKey: "a0",
       });
       const moved = yield* shell;
       assert.equal(moved.customGroupId, "review");
-      assert.equal(moved.activeOrderKey, "a0");
       const single = yield* orchestrator.getThreadShell(threadId);
       assert.equal(single?.customGroupId, "review");
 
@@ -3680,11 +3678,10 @@ it.layer(SharedApplicationDataPlaneTestLayer)("custom thread groups", (it) => {
       });
       const cleared = yield* shell;
       assert.isUndefined(cleared.customGroupId);
-      assert.equal(cleared.activeOrderKey, "a0");
     }),
   );
 
-  it.effect("changes a pinned thread's group but refuses to place it", () =>
+  it.effect("changes a pinned thread's group", () =>
     Effect.gen(function* () {
       const { orchestrator, threadId, shell } = yield* setup("custom-groups-pinned");
       yield* orchestrator.dispatch({
@@ -3692,18 +3689,6 @@ it.layer(SharedApplicationDataPlaneTestLayer)("custom thread groups", (it) => {
         commandId: CommandId.make("custom-groups-pinned-pin"),
         threadId,
       });
-      const placed = yield* orchestrator
-        .dispatch({
-          type: "thread.custom-group.set",
-          commandId: CommandId.make("custom-groups-pinned-place"),
-          threadId,
-          customGroupId: "research",
-          orderKey: "a0",
-        })
-        .pipe(Effect.exit);
-      assert.equal(placed._tag, "Failure");
-      assert.isUndefined((yield* shell).customGroupId);
-
       yield* orchestrator.dispatch({
         type: "thread.custom-group.set",
         commandId: CommandId.make("custom-groups-pinned-set"),
@@ -4022,6 +4007,146 @@ it.layer(SharedApplicationDataPlaneTestLayer)("snooze until done", (it) => {
       assert.notEqual(wakeRun.id, snoozed.snoozedUntilRunId);
       assert.equal(afterWake.thread.snoozedUntilRunId, wakeRun.id);
       assert.deepEqual(afterWake.thread.snoozedAt, snoozed.snoozedAt);
+
+      yield* sendMessage("user-follow-up", false);
+      const woken = (yield* read()).thread;
+      assert.isNull(woken.snoozedAt ?? null);
+      assert.isNull(woken.snoozedUntilRunId ?? null);
+    }),
+  );
+
+  it.effect("a notification wake keeps the snooze while a subagent turn item runs on", () =>
+    Effect.gen(function* () {
+      const eventSink = yield* EventSink.EventSinkV2;
+      const { threadId, snoozeUntilDone, sendMessage, read } = yield* setup("until-done-subagent");
+      yield* sendMessage("work", false);
+      yield* snoozeUntilDone("snooze");
+      const snoozed = (yield* read()).thread;
+      const run = (yield* read()).runs.at(-1);
+      assert.isDefined(run);
+      const now = yield* DateTime.now;
+      const subagentId = NodeId.make("until-done-subagent-node");
+      yield* eventSink.commitCommand({
+        commandId: CommandId.make("until-done-subagent-complete"),
+        threadId,
+        commandType: "provider-runtime.reconcile",
+        acceptedAt: now,
+        events: [
+          {
+            id: EventId.make("until-done-subagent-complete"),
+            type: "run.updated" as const,
+            threadId,
+            runId: run.id,
+            occurredAt: now,
+            payload: { ...run, status: "completed" as const, completedAt: now },
+          },
+          {
+            id: EventId.make("until-done-subagent-item"),
+            type: "turn-item.updated" as const,
+            threadId,
+            runId: run.id,
+            nodeId: subagentId,
+            occurredAt: now,
+            payload: {
+              id: TurnItemId.make("until-done-subagent-item"),
+              threadId,
+              runId: run.id,
+              nodeId: subagentId,
+              providerThreadId: null,
+              providerTurnId: null,
+              nativeItemRef: null,
+              parentItemId: null,
+              ordinal: 1,
+              type: "subagent" as const,
+              status: "running" as const,
+              title: null,
+              startedAt: now,
+              completedAt: null,
+              updatedAt: now,
+              subagentId,
+              origin: "provider_native" as const,
+              driver: ProviderDriverKind.make("claudeAgent"),
+              providerInstanceId: modelSelection.instanceId,
+              childThreadId: null,
+              prompt: "Audit the adapters",
+              result: null,
+            },
+          },
+        ],
+        effects: [],
+      });
+
+      yield* sendMessage("subagent-notification", true);
+      const afterWake = yield* read();
+      const wakeRun = afterWake.runs.at(-1);
+      assert.isDefined(wakeRun);
+      assert.notEqual(wakeRun.id, run.id);
+      assert.deepEqual(afterWake.thread.snoozedAt, snoozed.snoozedAt);
+      assert.equal(afterWake.thread.snoozedUntilRunId, wakeRun.id);
+    }),
+  );
+
+  it.effect("a delegated-completion wake for the awaited run keeps the snooze", () =>
+    Effect.gen(function* () {
+      const eventSink = yield* EventSink.EventSinkV2;
+      const { orchestrator, threadId, snoozeUntilDone, sendMessage, read } =
+        yield* setup("until-done-delegated");
+      yield* sendMessage("work", false);
+      yield* snoozeUntilDone("snooze");
+      const snoozed = (yield* read()).thread;
+      const run = (yield* read()).runs.at(-1);
+      assert.isDefined(run);
+      const now = yield* DateTime.now;
+      const deliveryMessageId = MessageId.make("until-done-delegated-delivery");
+      const taskId = NodeId.make("until-done-delegated-child");
+      // The last child finished: its turn item is terminal, and only the
+      // reserved completion delivery on the parent run remains.
+      yield* eventSink.commitCommand({
+        commandId: CommandId.make("until-done-delegated-complete"),
+        threadId,
+        commandType: "provider-runtime.reconcile",
+        acceptedAt: now,
+        events: [
+          {
+            id: EventId.make("until-done-delegated-complete"),
+            type: "run.updated" as const,
+            threadId,
+            runId: run.id,
+            occurredAt: now,
+            payload: {
+              ...run,
+              status: "completed" as const,
+              completedAt: now,
+              delegatedCompletion: {
+                disposition: "open" as const,
+                nextGeneration: 2,
+                delivery: { generation: 1, messageId: deliveryMessageId, taskIds: [taskId] },
+              },
+            },
+          },
+        ],
+        effects: [],
+      });
+
+      yield* orchestrator.dispatch({
+        type: "message.dispatch",
+        createdBy: "agent",
+        creationSource: "server",
+        commandId: CommandId.make("until-done-delegated-wake"),
+        threadId,
+        messageId: deliveryMessageId,
+        text: "Delegated task finished.",
+        attachments: [],
+        modelSelection,
+        delegatedCompletion: { parentRunId: run.id, generation: 1, taskIds: [taskId] },
+        dispatchMode: { type: "queue_after_active" },
+      });
+      const afterWake = yield* read();
+      const wakeRun = afterWake.runs.at(-1);
+      assert.isDefined(wakeRun);
+      assert.notEqual(wakeRun.id, run.id);
+      assert.deepEqual(afterWake.thread.snoozedAt, snoozed.snoozedAt);
+      assert.equal(afterWake.thread.snoozedUntilRunId, wakeRun.id);
 
       yield* sendMessage("user-follow-up", false);
       const woken = (yield* read()).thread;

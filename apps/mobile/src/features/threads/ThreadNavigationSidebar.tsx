@@ -90,6 +90,9 @@ type SidebarListItem =
   | { readonly type: "v2-show-more"; readonly key: string; readonly hiddenCount: number };
 
 const SIDEBAR_STICKY_HEADER_HEIGHT = 106;
+// Fork: a search shows matches inside collapsed groups and a collapsed
+// Active shelf without touching the stored collapse preferences.
+const NO_COLLAPSED_GROUPS: ReadonlySet<string> = new Set();
 
 interface ThreadNavigationSidebarProps {
   readonly width: number;
@@ -487,8 +490,8 @@ function ThreadNavigationSidebarPane(
       items: threadListV2Layout.items,
       pendingTasks: v2PendingTasks,
       customGroups,
-      collapsedGroupIds: collapsedThreadGroups.ids,
-      activeShelfExpanded,
+      collapsedGroupIds: v2SearchQuery.length > 0 ? NO_COLLAPSED_GROUPS : collapsedThreadGroups.ids,
+      activeShelfExpanded: activeShelfExpanded || v2SearchQuery.length > 0,
       selectedThreadKey: props.selectedThreadKey,
       pinnedCount: threadListV2Layout.pinnedCount,
       pinnedShelfExpanded,

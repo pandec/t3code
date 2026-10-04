@@ -2579,17 +2579,14 @@ export const OrchestrationV2Command = Schema.Union([
     orderKey: TrimmedNonEmptyString,
   }),
   /**
-   * Fork: move a thread into a custom group (null: back to Active). An
-   * `orderKey` also places it among the group's active threads, as
-   * thread.active.reorder would, in the same commit. Gated by the
-   * threadCustomGroups capability.
+   * Fork: move a thread into a custom group (null: back to Active). Gated by
+   * the threadCustomGroups capability.
    */
   Schema.Struct({
     type: Schema.Literal("thread.custom-group.set"),
     commandId: CommandId,
     threadId: ThreadId,
     customGroupId: Schema.NullOr(TrimmedNonEmptyString),
-    orderKey: Schema.optional(TrimmedNonEmptyString),
   }),
   Schema.Struct({
     type: Schema.Literal("thread.visit"),

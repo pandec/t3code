@@ -11,9 +11,9 @@ import {
 } from "@t3tools/client-runtime/state/runtime";
 import {
   canSnooze,
-  canSnoozeUntilDone,
   effectiveSnoozed,
   threadWokeAt,
+  untilDoneWorkContinues,
 } from "@t3tools/client-runtime/state/thread-settled";
 import { threadRuntimeCanArchive } from "@t3tools/client-runtime/state/models";
 import { EnvironmentId, type ScopedThreadRef, ThreadId } from "@t3tools/contracts";
@@ -875,6 +875,7 @@ export function useThreadActions() {
               ...(resolved.thread.snoozedUntilRunId != null ? { untilDone: true } : {}),
             }
           : null;
+      const awaitedRunId = resolved?.thread.snoozedUntilRunId ?? null;
       // An older unpin/snooze Undo would re-pin or re-snooze, and the server
       // treats either as a promotion that un-settles; settling supersedes them.
       ThreadUndo.invalidate("pin", scopedThreadKey(target));
@@ -906,10 +907,15 @@ export function useThreadActions() {
           }
           // Settling detaches the provider session, so the work an
           // until-done snooze waited on may be gone: that snooze would have
-          // woken by now, and the server rejects one with nothing to wait on.
+          // woken by now. Only the original awaited work counts; unrelated
+          // new work (a message from another client) would have woken it.
           const untilDoneStillApplies = (): boolean => {
             const current = readThreadShell(target);
-            return current !== null && canSnoozeUntilDone(current);
+            return (
+              current !== null &&
+              awaitedRunId !== null &&
+              untilDoneWorkContinues({ ...current, snoozedUntilRunId: awaitedRunId })
+            );
           };
           if (
             restoreSnooze !== null &&
@@ -1000,10 +1006,9 @@ export function useThreadActions() {
     [reorderActiveThreadMutation],
   );
 
-  /** Fork: move a thread into a custom group (null: Active); `orderKey` also
-   * places it among the group's active threads. */
+  /** Fork: move a thread into a custom group (null: Active). */
   const setThreadCustomGroup = useCallback(
-    async (target: ScopedThreadRef, customGroupId: string | null, orderKey?: string) => {
+    async (target: ScopedThreadRef, customGroupId: string | null) => {
       if (!readEnvironmentSupportsCustomGroups(target.environmentId)) {
         return AsyncResult.failure(
           Cause.fail(
@@ -1016,11 +1021,7 @@ export function useThreadActions() {
       }
       return setThreadCustomGroupMutation({
         environmentId: target.environmentId,
-        input: {
-          threadId: target.threadId,
-          customGroupId,
-          ...(orderKey === undefined ? {} : { orderKey }),
-        },
+        input: { threadId: target.threadId, customGroupId },
       });
     },
     [setThreadCustomGroupMutation],

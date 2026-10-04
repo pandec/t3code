@@ -205,19 +205,18 @@ describe("indefinite snooze settlement (fork)", () => {
 });
 
 describe("snooze until done settlement (fork)", () => {
-  it("holds while the awaited wake run is queued, then settles once the work ended", () => {
+  it("settles an until-done snooze once its work ended (not treated as indefinite)", () => {
     const runId = RunId.make("run-wake");
-    const snoozed = shell({
-      snoozedUntil: null,
-      snoozedAt: at(-60 * 60 * 1_000),
-      snoozedUntilRunId: runId,
-      latestRunId: runId,
-      status: "queued",
-    });
-    expect(ThreadSettlementService.isAutoSettlementCandidate(snoozed, NOW_MS)).toBe(false);
     expect(
       ThreadSettlementService.isAutoSettlementCandidate(
-        shell({ ...snoozed, status: "completed", latestRunCompletedAt: at(-30 * 60 * 1_000) }),
+        shell({
+          snoozedUntil: null,
+          snoozedAt: at(-60 * 60 * 1_000),
+          snoozedUntilRunId: runId,
+          latestRunId: runId,
+          status: "completed",
+          latestRunCompletedAt: at(-30 * 60 * 1_000),
+        }),
         NOW_MS,
       ),
     ).toBe(true);

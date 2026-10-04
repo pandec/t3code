@@ -17,6 +17,24 @@ export function isIndefinitelySnoozed(
 }
 
 /**
+ * Whether an indefinite snooze holds over the latest run: none ended after it
+ * was set. Usage-limit auto-resume defers on it, as on a pending wake time.
+ */
+export function indefiniteSnoozeHoldsOverLatestRun(
+  thread: Pick<OrchestrationV2AppThread, "snoozedUntil" | "snoozedAt" | "snoozedUntilRunId"> & {
+    readonly latestRunCompletedAt?: DateTime.Utc | null | undefined;
+  },
+): boolean {
+  return (
+    isIndefinitelySnoozed(thread) &&
+    thread.snoozedAt != null &&
+    (thread.latestRunCompletedAt == null ||
+      DateTime.toEpochMillis(thread.latestRunCompletedAt) <=
+        DateTime.toEpochMillis(thread.snoozedAt))
+  );
+}
+
+/**
  * Whether a run ended after the indefinite snooze was set: the derived wake
  * clients show for it. Unlike timed snoozes, an interrupted or failed run
  * counts as well as a completed one, since the agent stopped either way.

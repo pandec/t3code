@@ -496,7 +496,6 @@ export function createThreadEnvironmentAtoms<R, E>(
       return {
         ...rest,
         ...(input.customGroupId === null ? {} : { customGroupId: input.customGroupId }),
-        ...(input.orderKey === undefined ? {} : { activeOrderKey: input.orderKey }),
       };
     }),
   };

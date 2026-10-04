@@ -80,6 +80,7 @@ import { IdAllocatorV2 } from "./IdAllocator.ts";
 import { indefiniteSnoozeWokeByRun, isIndefinitelySnoozed } from "./IndefiniteSnooze.ts";
 import {
   clearedSnoozeUntilDone,
+  delegatedCompletionContinuesUntilDone,
   isSnoozedUntilDone,
   isWakeMessageDispatch,
   snoozeUntilDoneAwaitedRunId,
@@ -2163,9 +2164,8 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
     }
   });
 
-  // Fork: custom group membership lives in fork_thread_custom_groups. An
-  // orderKey places the thread among the group's active threads in the same
-  // commit, under thread.active.reorder's rules.
+  // Fork: custom group membership lives in fork_thread_custom_groups.
+  // Clients place the thread with a separate thread.active.reorder.
   const dispatchThreadCustomGroupSet = Effect.fn("orchestrationV2.dispatch.threadCustomGroupSet")(
     function* (
       command: Extract<OrchestrationV2Command, { readonly type: "thread.custom-group.set" }>,
@@ -2185,36 +2185,15 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
           cause: `Thread ${command.threadId} is deleted.`,
         });
       }
-      if (
-        command.orderKey !== undefined &&
-        (thread.archivedAt !== null ||
-          thread.pinnedAt != null ||
-          thread.settledOverride === "settled")
-      ) {
-        return yield* new OrchestratorDispatchError({
-          commandId: command.commandId,
-          commandType: command.type,
-          cause: `Thread ${command.threadId} is not active and cannot be placed in a group.`,
-        });
-      }
-      const now = yield* DateTime.now;
-      const emitEvent = emit(events, command);
-      yield* emitEvent({
+      yield* emit(
+        events,
+        command,
+      )({
         type: "thread.custom-group-set",
         threadId: command.threadId,
-        occurredAt: now,
+        occurredAt: yield* DateTime.now,
         payload: { customGroupId: command.customGroupId },
       });
-      if (command.orderKey !== undefined && command.orderKey !== thread.activeOrderKey) {
-        yield* emitEvent({
-          type: "thread.active-reordered",
-          threadId: command.threadId,
-          providerInstanceId: thread.providerInstanceId,
-          occurredAt: now,
-          // Arranging the active list is not thread activity.
-          payload: { ...thread, activeOrderKey: command.orderKey },
-        });
-      }
     },
   );
 
@@ -4291,15 +4270,27 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
   // Fork: a wake carries on the work an "until it's done" snooze waits on,
   // so it keeps the snooze (dispatchMessageCore leaves it in place)
   // and moves it onto the run the wake starts. Other dispatches wake it.
+  // The command projection omits background turn items (Claude subagents
+  // live only there), so they are read like thread.snooze reads them.
   const dispatchMessage = (
     command: Extract<OrchestrationV2Command, { readonly type: "message.dispatch" }>,
     events: Ref.Ref<Array<OrchestrationV2DomainEvent>>,
     effects: Ref.Ref<Array<PendingOrchestrationEffectV2>>,
   ) =>
     Effect.gen(function* () {
-      const keepsSnoozeUntilDone =
-        isWakeMessageDispatch(command) &&
-        snoozeUntilDoneHolds(yield* getProjectionWithPendingEvents(command.threadId, events));
+      let keepsSnoozeUntilDone = false;
+      if (isWakeMessageDispatch(command)) {
+        const current = yield* getProjectionWithPendingEvents(command.threadId, events);
+        if (isSnoozedUntilDone(current.thread)) {
+          const background = yield* loadProjectionForCommand(command, ["turnItems"], {
+            turnItemTypes: ["command_execution", "dynamic_tool", "subagent"],
+            turnItemStatuses: ["pending", "running", "waiting"],
+          });
+          keepsSnoozeUntilDone =
+            snoozeUntilDoneHolds({ ...current, turnItems: background.turnItems }) ||
+            delegatedCompletionContinuesUntilDone(current, command);
+        }
+      }
       yield* dispatchMessageCore(command, events, effects, keepsSnoozeUntilDone);
       if (!keepsSnoozeUntilDone) return;
       const projection = yield* getProjectionWithPendingEvents(command.threadId, events);

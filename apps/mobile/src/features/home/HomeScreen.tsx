@@ -148,6 +148,9 @@ const ESTIMATED_THREAD_LIST_V2_ROW_HEIGHT = 72;
 // rows that are already built instead of rows still being rebuilt.
 const THREAD_LIST_V2_DRAW_DISTANCE = 1_000;
 const PRE_LIQUID_GLASS_BOTTOM_TOOLBAR_HEIGHT = 44;
+// Fork: a search shows matches inside collapsed groups and a collapsed
+// Active shelf without touching the stored collapse preferences.
+const NO_COLLAPSED_GROUPS: ReadonlySet<string> = new Set();
 /**
  * Top spacing between the list and the Android custom header. The Android
  * header is rendered in-flow above this screen and
@@ -657,8 +660,9 @@ export function HomeScreen(props: HomeScreenProps) {
         items: threadListV2Layout.items,
         pendingTasks: v2PendingTasks,
         customGroups,
-        collapsedGroupIds: collapsedThreadGroups.ids,
-        activeShelfExpanded,
+        collapsedGroupIds:
+          v2SearchQuery.length > 0 ? NO_COLLAPSED_GROUPS : collapsedThreadGroups.ids,
+        activeShelfExpanded: activeShelfExpanded || v2SearchQuery.length > 0,
         pinnedCount: threadListV2Layout.pinnedCount,
         pinnedShelfExpanded,
         pinnedShelfHeaderVisible: threadListV2Layout.pinnedShelfHeaderVisible,
@@ -688,6 +692,7 @@ export function HomeScreen(props: HomeScreenProps) {
       snoozeEnvironmentIds,
       threadListV2Layout,
       v2PendingTasks,
+      v2SearchQuery,
     ],
   );
 
