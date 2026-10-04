@@ -170,6 +170,7 @@ export interface StartThreadTurnInput extends ThreadCommandInput {
     readonly text: string;
     readonly attachments: ReadonlyArray<ChatAttachment | UploadChatAttachment>;
     readonly context?: import("@t3tools/contracts").OrchestrationMessageContext;
+    readonly inputOrigin?: import("@t3tools/contracts").MessageInputOrigin;
   };
   readonly modelSelection?: ModelSelection;
   readonly titleSeed?: string;
@@ -250,6 +251,8 @@ export interface EditQueuedRunInput extends ThreadCommandInput {
     readonly messageId: MessageId;
     readonly attachments: ReadonlyArray<ChatAttachment | UploadChatAttachment>;
     readonly context?: import("@t3tools/contracts").OrchestrationMessageContext;
+    /** Omitted = keep the queued message's origin; null = typed (clears it). */
+    readonly inputOrigin?: import("@t3tools/contracts").MessageInputOrigin | null;
   };
 }
 
@@ -676,6 +679,7 @@ export const startThreadTurn = Effect.fn("EnvironmentCommands.startThreadTurn")(
         messageId: input.message.messageId,
         text: input.message.text,
         ...(context ? { context } : {}),
+        ...(input.message.inputOrigin ? { inputOrigin: input.message.inputOrigin } : {}),
         attachments,
       },
     });
@@ -695,6 +699,7 @@ export const startThreadTurn = Effect.fn("EnvironmentCommands.startThreadTurn")(
         : { manualContinuationOfRunId: input.manualContinuationOfRunId }),
       text: input.message.text,
       ...(context ? { context } : {}),
+      ...(input.message.inputOrigin ? { inputOrigin: input.message.inputOrigin } : {}),
       attachments,
       ...(input.modelSelection === undefined ? {} : { modelSelection: input.modelSelection }),
       ...(input.sourceProposedPlan === undefined
@@ -756,6 +761,7 @@ export const startThreadTurn = Effect.fn("EnvironmentCommands.startThreadTurn")(
     messageId: input.message.messageId,
     text: input.message.text,
     ...(context ? { context } : {}),
+    ...(input.message.inputOrigin ? { inputOrigin: input.message.inputOrigin } : {}),
     attachments,
     ...(shouldSendTitleSeed ? { titleSeed: input.titleSeed } : {}),
     ...(input.modelSelection === undefined ? {} : { modelSelection: input.modelSelection }),
@@ -996,6 +1002,7 @@ export const editQueuedRun = Effect.fn("EnvironmentCommands.editQueuedRun")(func
     runId: input.runId,
     text: input.text,
     ...(attachments === undefined ? {} : { attachments }),
+    ...(input.edit?.inputOrigin !== undefined ? { inputOrigin: input.edit.inputOrigin } : {}),
     ...(input.edit?.context && attachments
       ? {
           context: remapComposerContextAttachments(

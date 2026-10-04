@@ -101,6 +101,34 @@ describe("project thread title", () => {
   });
 });
 
+describe("project thread voice origin", () => {
+  it("forwards a dictated origin on the first message only when present", () => {
+    const spec = {
+      projectId: ProjectId.make("project"),
+      projectCwd: "/workspace",
+      threadId: "voice-thread",
+      commandId: "voice-command",
+      messageId: "voice-message",
+      createdAt: "2026-10-04T00:00:00Z",
+      text: "Fix the parser",
+      uploadedAttachments: [],
+      modelSelection: { instanceId: ProviderInstanceId.make("codex"), model: "gpt-5.6-sol" },
+      runtimeMode: "full-access" as const,
+      interactionMode: "default" as const,
+      workspaceMode: "local" as const,
+      branch: null,
+      worktreePath: null,
+      startFromOrigin: false,
+      worktreeBranchName: "unused",
+    };
+    expect(
+      buildProjectThreadStartTurnInput({ ...spec, inputOrigin: "voice-transcription" }).message
+        .inputOrigin,
+    ).toBe("voice-transcription");
+    expect(buildProjectThreadStartTurnInput(spec).message).not.toHaveProperty("inputOrigin");
+  });
+});
+
 describe("new thread on an existing branch", () => {
   it.each([null, "/worktrees/existing"])(
     "reuses the selected workspace %s without preparing a new worktree",

@@ -7725,7 +7725,11 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
                         const nextPrompt =
                           prompt.trim().length > 0 ? `${prompt.trimEnd()}\n\n${text}` : text;
                         promptRef.current = nextPrompt;
-                        setComposerDraftPrompt(composerDraftTarget, nextPrompt);
+                        setComposerDraftPrompt(
+                          composerDraftTarget,
+                          nextPrompt,
+                          "voice-transcription",
+                        );
                         const nextCursor = collapseExpandedComposerCursor(
                           nextPrompt,
                           nextPrompt.length,

@@ -384,6 +384,7 @@ export async function recoverEditedCreationAfterDelivery(
     // state stays recoverable.
     await mergeComposerDraftContent(draftKey, {
       text: kept.text,
+      ...(kept.inputOrigin ? { inputOrigin: kept.inputOrigin } : {}),
       context: kept.context,
       attachments: [],
     });
@@ -478,6 +479,7 @@ export async function restoreRejectedQueuedMessage(
       stampRecoveryDraftProject(queuedMessage, draftKey);
       await mergeComposerDraftContent(draftKey, {
         text: queuedMessage.text,
+        ...(queuedMessage.inputOrigin ? { inputOrigin: queuedMessage.inputOrigin } : {}),
         context: queuedMessage.context,
         attachments: queuedMessage.attachments,
       });
@@ -885,6 +887,7 @@ export function useThreadOutboxDrain(): void {
               ),
               currentConfig.environment.capabilities.inlineMessageContext === true,
             ),
+            ...(queuedMessage.inputOrigin ? { inputOrigin: queuedMessage.inputOrigin } : {}),
             attachments: prepared.attachments,
           },
           modelSelection: sendSettings.modelSelection,
@@ -1021,6 +1024,7 @@ export function useThreadOutboxDrain(): void {
             ),
             currentConfig.environment.capabilities.inlineMessageContext === true,
           ),
+          ...(queuedMessage.inputOrigin ? { inputOrigin: queuedMessage.inputOrigin } : {}),
           uploadedAttachments: prepared.attachments,
           modelSelection: sendSettings.modelSelection,
           runtimeMode: sendSettings.runtimeMode,

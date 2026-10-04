@@ -1221,6 +1221,9 @@ export function codexThreadRuntimeParams(input: {
                 http_headers: {
                   Authorization: mcpSession.authorizationHeader,
                 },
+                // Codex abandons a tool call after 60s by default; voice_reply
+                // synthesis can take longer.
+                tool_timeout_sec: McpProviderSession.MCP_TOOL_CALL_TIMEOUT_MS / 1_000,
               },
             },
           }),

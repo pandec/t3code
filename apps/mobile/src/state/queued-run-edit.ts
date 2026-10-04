@@ -16,6 +16,7 @@
 import type {
   ChatAttachment,
   MessageId,
+  MessageInputOrigin,
   OrchestrationMessageContext,
   RunId,
   UploadChatAttachment,
@@ -39,6 +40,7 @@ export interface QueuedRunEdit {
   /** Server attachments still attached; removing one drops it from this list. */
   readonly existingAttachments: ReadonlyArray<ChatAttachment>;
   readonly context?: OrchestrationMessageContext;
+  readonly inputOrigin?: MessageInputOrigin;
 }
 
 export const queuedRunEditsAtom = Atom.make<Readonly<Record<string, QueuedRunEdit>>>({}).pipe(
@@ -78,7 +80,7 @@ export function beginQueuedRunEdit(threadKey: string, edit: QueuedRunEdit): void
   }
   const draftKey = queuedEditDraftKey(threadKey, edit.runId);
   clearComposerDraft(draftKey);
-  setComposerDraftText(draftKey, edit.originalText);
+  setComposerDraftText(draftKey, edit.originalText, edit.inputOrigin);
   setComposerDraftContext(draftKey, edit.context);
   setQueuedRunEdit(threadKey, edit);
 }

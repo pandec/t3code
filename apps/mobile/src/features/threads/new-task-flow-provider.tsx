@@ -219,7 +219,10 @@ type NewTaskFlowContextValue = {
       readonly currentCheckoutBranch?: string | null;
     },
   ) => QueuedThreadMessage | null;
-  readonly setPrompt: (value: string) => void;
+  readonly setPrompt: (
+    value: string,
+    inputOrigin?: import("@t3tools/contracts").MessageInputOrigin,
+  ) => void;
   readonly replaceAttachments: (attachments: ReadonlyArray<DraftComposerAttachment>) => void;
   /** Appends draft attachments; returns how many the live cap rejected. */
   readonly appendAttachments: (
@@ -641,11 +644,11 @@ export function NewTaskFlowProvider(props: React.PropsWithChildren) {
 
   const providerGroups = useMemo(() => groupByProvider(modelOptions), [modelOptions]);
   const setPrompt = useCallback(
-    (value: string) => {
+    (value: string, inputOrigin?: import("@t3tools/contracts").MessageInputOrigin) => {
       if (!selectedProjectDraftKey) {
         return;
       }
-      setComposerDraftText(selectedProjectDraftKey, value);
+      setComposerDraftText(selectedProjectDraftKey, value, inputOrigin);
     },
     [selectedProjectDraftKey],
   );
@@ -991,7 +994,7 @@ export function NewTaskFlowProvider(props: React.PropsWithChildren) {
     const draftKey = pendingTaskDraftKey(message.messageId);
     // Only hydrate a fresh editing draft; reopening mid-edit keeps newer edits.
     if (isComposerDraftEmpty(getComposerDraftSnapshot(draftKey))) {
-      setComposerDraftText(draftKey, message.text);
+      setComposerDraftText(draftKey, message.text, message.inputOrigin);
       setComposerDraftContext(draftKey, message.context);
       replaceComposerDraftAttachments(draftKey, message.attachments);
       updateComposerDraftSettings(draftKey, {
@@ -1060,6 +1063,7 @@ export function NewTaskFlowProvider(props: React.PropsWithChildren) {
         messageId: MessageId.make(metadata.messageId),
         commandId: CommandId.make(metadata.commandId),
         text,
+        ...(draft.inputOrigin ? { inputOrigin: draft.inputOrigin } : {}),
         attachments: draft.attachments,
         context: draft.context,
         modelSelection: draftModelSelection,

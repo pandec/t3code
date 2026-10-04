@@ -47,6 +47,8 @@ import {
 import { WorktreeToolkitHandlersLive } from "./toolkits/worktree/handlers.ts";
 import { WorktreeToolkit } from "./toolkits/worktree/tools.ts";
 import * as WorktreeMcpService from "./WorktreeMcpService.ts";
+import { VoiceToolkitHandlersLive } from "./toolkits/voice/handlers.ts";
+import { VoiceToolkit } from "./toolkits/voice/tools.ts";
 import { PullRequestsToolkitHandlersLive } from "./toolkits/pullRequests/handlers.ts";
 import { PullRequestsToolkit } from "./toolkits/pullRequests/tools.ts";
 import {
@@ -690,6 +692,10 @@ const AttachmentRegistrationLive = McpServer.toolkit(AttachmentToolkit).pipe(
   Layer.provide(AttachmentHandlersLive),
 );
 
+const VoiceToolkitRegistrationLive = McpServer.toolkit(VoiceToolkit).pipe(
+  Layer.provide(VoiceToolkitHandlersLive),
+);
+
 export const PullRequestsToolkitRegistrationLive = McpServer.toolkit(PullRequestsToolkit).pipe(
   Layer.provide(PullRequestsToolkitHandlersLive),
 );
@@ -734,7 +740,7 @@ const PreviewIslandRegistrationLive = Layer.mergeAll(
  * thread metadata) are built once per island; they hold no cross-call state.
  * Requirements left unmet inside an island are satisfied by the outer,
  * memoized build, so all islands share one instance of each: the handlers'
- * runtime dependencies (broker, session registry) and the worktree service,
+ * runtime dependencies (broker, voice staging, session registry) and the worktree service,
  * which holds the per-thread handoff guard.
  */
 const mcpToolkitIsland = <E, R>(path: `/${string}`, registrations: Layer.Layer<never, E, R>) =>
@@ -752,18 +758,28 @@ const mcpToolkitIsland = <E, R>(path: `/${string}`, registrations: Layer.Layer<n
   );
 
 export const layer = Layer.mergeAll(
-  mcpToolkitIsland("/mcp", PreviewIslandRegistrationLive),
+  mcpToolkitIsland(
+    "/mcp",
+    Layer.mergeAll(PreviewIslandRegistrationLive, VoiceToolkitRegistrationLive),
+  ),
   mcpToolkitIsland("/mcp/preview", PreviewIslandRegistrationLive),
-  mcpToolkitIsland("/mcp/voice", Layer.empty),
+  mcpToolkitIsland("/mcp/voice", VoiceToolkitRegistrationLive),
   mcpToolkitIsland("/mcp/pull-requests", Layer.empty),
   mcpToolkitIsland("/mcp/device", DeviceToolkitRegistrationLive),
   mcpToolkitIsland(
     "/mcp/device/preview",
     Layer.mergeAll(DeviceToolkitRegistrationLive, PreviewIslandRegistrationLive),
   ),
-  mcpToolkitIsland("/mcp/device/voice", DeviceToolkitRegistrationLive),
+  mcpToolkitIsland(
+    "/mcp/device/voice",
+    Layer.mergeAll(DeviceToolkitRegistrationLive, VoiceToolkitRegistrationLive),
+  ),
   mcpToolkitIsland(
     "/mcp/device/all",
-    Layer.mergeAll(DeviceToolkitRegistrationLive, PreviewIslandRegistrationLive),
+    Layer.mergeAll(
+      DeviceToolkitRegistrationLive,
+      PreviewIslandRegistrationLive,
+      VoiceToolkitRegistrationLive,
+    ),
   ),
 ).pipe(Layer.provide(WorktreeMcpService.layer));

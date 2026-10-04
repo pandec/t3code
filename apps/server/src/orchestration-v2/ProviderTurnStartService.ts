@@ -36,6 +36,7 @@ import {
   latestNativeContextUsage,
 } from "./ContextHandoffBudget.ts";
 import { deliverContextHandoffs } from "./ContextHandoffDelivery.ts";
+import { withInputOriginNotice } from "./InputOriginNotice.ts";
 import {
   ProviderAdapterTurnStartError,
   type ProviderAdapterV2Error,
@@ -955,10 +956,13 @@ export const layer: Layer.Layer<
       const routableSubagents = projection.subagents.filter((subagent) =>
         RunExecutionService.canRouteRelatedSubagent(subagent.status),
       );
-      const userText = projectComposerContextForProvider({
-        text: message.text,
-        records: message.context?.records ?? [],
-      });
+      const userText = withInputOriginNotice(
+        projectComposerContextForProvider({
+          text: message.text,
+          records: message.context?.records ?? [],
+        }),
+        message.inputOrigin,
+      );
       // Delivered once: this run's provider turn marks the work as told. A
       // restart continuation is prompted by its own text or resumes natively.
       const noteContinuation = isRestartNoteContinuation(

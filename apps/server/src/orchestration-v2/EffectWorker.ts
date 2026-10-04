@@ -243,6 +243,7 @@ export const executorLayer: Layer.Layer<
                       messageId: message.id,
                       text: message.text,
                       ...(message.context ? { context: message.context } : {}),
+                      ...(message.inputOrigin ? { inputOrigin: message.inputOrigin } : {}),
                       attachments: message.attachments,
                       // A user's follow-up starts on the thread's saved selection,
                       // which already holds the steer's choice. A delegated

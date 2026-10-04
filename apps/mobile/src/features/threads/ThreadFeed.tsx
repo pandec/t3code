@@ -202,6 +202,7 @@ import * as Option from "effect/Option";
 import { appAtomRegistry } from "../../state/atom-registry";
 import { environmentThreadShells, threadEnvironment } from "../../state/threads";
 import { useAtomCommand } from "../../state/use-atom-command";
+import { AssistantMessageMeta } from "./AssistantMessageSummary";
 import { useV2ItemSupport } from "../../state/v2-item-support";
 import {
   basename,
@@ -278,6 +279,12 @@ export interface ThreadFeedProps {
   readonly environmentId: EnvironmentId;
   readonly threadId: ThreadId;
   readonly threadTitle: string;
+  /** The environment serves on-demand message summaries. */
+  readonly messageSummariesAvailable?: boolean;
+  /** The environment can synthesize listening versions now. */
+  readonly textToSpeechAvailable?: boolean;
+  /** The environment streams its server-owned listening state. */
+  readonly textToSpeechPersistentJobs?: boolean;
   readonly workspaceRoot?: string | null;
   readonly feed: ReadonlyArray<ThreadFeedEntry>;
   readonly contentPresentation: ThreadContentPresentation;
@@ -1524,6 +1531,8 @@ function renderFeedEntry(
     readonly renderViewedImage: MarkdownImageRenderer;
     readonly renderReasoning: (text: string) => ReactNode;
     readonly iconSubtleColor: string | import("react-native").ColorValue;
+    readonly foregroundColor: string;
+    readonly onForegroundColor: ColorValue;
     readonly screenColor: string;
     readonly userBubbleColor: string | import("react-native").ColorValue;
     readonly markdownStyles: MarkdownStyleSets;
@@ -1534,6 +1543,9 @@ function renderFeedEntry(
     /** Width assistant markdown lays out in, so images can size their frame before layout. */
     readonly markdownContentWidth: number;
     readonly threadTitle: string;
+    readonly messageSummariesAvailable: boolean;
+    readonly textToSpeechAvailable: boolean;
+    readonly textToSpeechPersistentJobs: boolean;
   },
 ) {
   const entry = info.item;
@@ -1758,6 +1770,19 @@ function renderFeedEntry(
             ) : null}
           </View>
           <View className="mt-1 flex-row items-center justify-end gap-1 pr-0.5">
+            {message.inputOrigin === "voice-transcription" ? (
+              <View className="flex-row items-center gap-1 pr-1">
+                <SymbolView
+                  name="mic.fill"
+                  size={11}
+                  tintColor={iconSubtleColor}
+                  type="monochrome"
+                />
+                <Text className="font-t3-medium text-xs text-foreground-secondary">
+                  Transcribed
+                </Text>
+              </View>
+            ) : null}
             {intentBadge ? (
               <View
                 accessible
@@ -1885,7 +1910,30 @@ function renderFeedEntry(
           );
         })}
         {showAssistantMeta ? (
-          <View className="mt-1 flex-row items-center gap-1">
+          <AssistantMessageMeta
+            environmentId={props.environmentId}
+            threadId={props.threadId}
+            threadTitle={props.threadTitle}
+            messageId={message.id}
+            messageText={message.text}
+            summariesAvailable={props.messageSummariesAvailable}
+            textToSpeechAvailable={props.textToSpeechAvailable}
+            textToSpeechPersistentJobs={props.textToSpeechPersistentJobs}
+            timestampLabel={timestampLabel}
+            iconSubtleColor={iconSubtleColor}
+            foregroundColor={props.foregroundColor}
+            onForegroundColor={props.onForegroundColor}
+            renderSummary={(markdown) => (
+              <AssistantMarkdownContent
+                markdown={markdown}
+                markdownStyles={styles}
+                linkHandlers={props.markdownLinkHandlers}
+                onUseArtifactTemplate={props.onUseArtifactTemplate}
+                renderImage={props.renderMarkdownImage}
+                skills={props.skills}
+              />
+            )}
+          >
             {message.projectedItem ? (
               <AssistantForkButton
                 environmentId={props.environmentId}
@@ -1901,10 +1949,7 @@ function renderFeedEntry(
               buttonSize={28}
               iconSize={13}
             />
-            <Text className="font-t3-medium text-xs tabular-nums text-foreground-secondary">
-              {timestampLabel}
-            </Text>
-          </View>
+          </AssistantMessageMeta>
         ) : null}
       </Animated.View>
     );
@@ -2236,6 +2281,8 @@ export const ThreadFeed = memo(function ThreadFeed(props: ThreadFeedProps) {
 
   const theme = useUniwindTheme();
   const iconSubtleColor = theme["--color-icon-subtle"];
+  const foregroundColor = String(theme["--color-foreground"]);
+  const onForegroundColor = theme["--color-sheet"];
   const screenColor = theme["--color-screen"];
   const userBubbleColor = theme["--color-user-bubble"];
   const onMarkdownLinkPress = useCallback(
@@ -2473,6 +2520,9 @@ export const ThreadFeed = memo(function ThreadFeed(props: ThreadFeedProps) {
       themeAppearance,
       userBubbleColor,
       viewportWidth,
+      messageSummariesAvailable: props.messageSummariesAvailable,
+      textToSpeechAvailable: props.textToSpeechAvailable,
+      textToSpeechPersistentJobs: props.textToSpeechPersistentJobs,
     }),
     [
       props.worktreeSetup,
@@ -2489,6 +2539,9 @@ export const ThreadFeed = memo(function ThreadFeed(props: ThreadFeedProps) {
       themeAppearance,
       userBubbleColor,
       viewportWidth,
+      props.messageSummariesAvailable,
+      props.textToSpeechAvailable,
+      props.textToSpeechPersistentJobs,
     ],
   );
   const reportHeaderMaterialVisibility = useCallback(
@@ -2984,6 +3037,8 @@ export const ThreadFeed = memo(function ThreadFeed(props: ThreadFeedProps) {
             renderViewedImage,
             renderReasoning,
             iconSubtleColor,
+            foregroundColor,
+            onForegroundColor,
             screenColor,
             userBubbleColor,
             markdownStyles,
@@ -2993,6 +3048,9 @@ export const ThreadFeed = memo(function ThreadFeed(props: ThreadFeedProps) {
             userBubbleMaxWidth,
             markdownContentWidth,
             threadTitle: props.threadTitle,
+            messageSummariesAvailable: props.messageSummariesAvailable === true,
+            textToSpeechAvailable: props.textToSpeechAvailable === true,
+            textToSpeechPersistentJobs: props.textToSpeechPersistentJobs === true,
             skills: props.skills,
             workspaceRoot: props.workspaceRoot,
           })}
@@ -3020,6 +3078,8 @@ export const ThreadFeed = memo(function ThreadFeed(props: ThreadFeedProps) {
       unsettledTurnId,
       failedRunIds,
       iconSubtleColor,
+      foregroundColor,
+      onForegroundColor,
       screenColor,
       userBubbleColor,
       markdownStyles,
@@ -3039,6 +3099,9 @@ export const ThreadFeed = memo(function ThreadFeed(props: ThreadFeedProps) {
       props.onUseArtifactTemplate,
       props.threadId,
       props.threadTitle,
+      props.messageSummariesAvailable,
+      props.textToSpeechAvailable,
+      props.textToSpeechPersistentJobs,
       props.skills,
       props.workspaceRoot,
       renderMarkdownImage,

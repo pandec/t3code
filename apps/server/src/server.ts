@@ -188,6 +188,12 @@ import * as TtsService from "./voice/TtsService.ts";
 import { voiceHttpApiLayer } from "./voice/http.ts";
 import { providerCatalogHttpApiLayer } from "./provider/http.ts";
 import { sessionImportHttpApiLayer } from "./sessionImport/http.ts";
+import * as MessageSummary from "./messageArtifacts/MessageSummary.ts";
+import * as MessageSpeechScript from "./messageArtifacts/MessageSpeechScript.ts";
+import * as MessageSpeech from "./voice/MessageSpeech.ts";
+import * as AgentVoiceReply from "./voice/AgentVoiceReply.ts";
+import * as OrchestratorV2 from "./orchestration-v2/Orchestrator.ts";
+import { messageArtifactsHttpApiLayer } from "./messageArtifacts/http.ts";
 import * as NetService from "@t3tools/shared/Net";
 import * as RelayClient from "@t3tools/shared/relayClient";
 import { disableTailscaleServe, ensureTailscaleServe } from "@t3tools/tailscale";
@@ -511,6 +517,29 @@ const ThreadPullRequestWorkerLive = Layer.effectDiscard(
   ThreadPullRequestService.make.pipe(Effect.flatMap((service) => service.start())),
 ).pipe(Layer.provide(PullRequestServiceLive));
 
+// Deleting a thread leaves its listening/voice-reply audio and fork artifact
+// rows to this purge: once at startup (catching up after a crash), then after
+// every deletion.
+const MessageSpeechPurgeLive = Layer.effectDiscard(
+  Effect.gen(function* () {
+    const messageSpeech = yield* MessageSpeech.MessageSpeech;
+    const orchestrator = yield* OrchestratorV2.OrchestratorV2;
+    const purge = messageSpeech.purgeDeletedThreads.pipe(
+      Effect.catch((error) =>
+        Effect.logWarning("message speech purge failed", { reason: error.reason }),
+      ),
+    );
+    yield* ServerActivation.forkParked(
+      Stream.merge(
+        Stream.make(undefined),
+        orchestrator.streamDomainEvents.pipe(
+          Stream.filter((event) => event.type === "thread.deleted"),
+        ),
+      ).pipe(Stream.runForEach(() => purge)),
+    );
+  }),
+);
+
 const ProviderInstallationRefreshLive = Layer.effectDiscard(
   Effect.gen(function* () {
     const antigravity = yield* AntigravityInstallation.AntigravityInstallation;
@@ -550,6 +579,7 @@ const RuntimeCoreDependenciesBaseLive = Layer.mergeAll(
     Layer.provide(ProjectionStoreV2.layer),
   ),
   ThreadPullRequestWorkerLive,
+  MessageSpeechPurgeLive,
   Layer.effectDiscard(
     Effect.gen(function* () {
       const service = yield* PullRequestSyncReactor.PullRequestSyncReactor;
@@ -573,6 +603,12 @@ const RuntimeCoreDependenciesBaseLive = Layer.mergeAll(
   Layer.provideMerge(OrchestrationApplicationLayerLive),
   Layer.provideMerge(OrchestrationEventInfrastructureLayerLive),
   Layer.provideMerge(Layer.merge(ProjectStore.layer, ThreadSearch.layer)),
+  // Shared by the voice_reply MCP handler (stages recordings), run
+  // finalization (attaches them) and MCP session setup (voice-tool gating).
+  Layer.provideMerge(AgentVoiceReply.layer.pipe(Layer.provide(ProjectionStoreV2.layer))),
+  // One listening job registry for the HTTP request path and the WebSocket
+  // state stream, so every client sees the same pending jobs.
+  Layer.provideMerge(MessageSpeech.layer.pipe(Layer.provide(MessageSpeechScript.layer))),
   // Share the speech client across listening, voice replies, and settings RPCs.
   Layer.provideMerge(TtsService.layer.pipe(Layer.provide(ServerSecretStore.layer))),
   Layer.provideMerge(ServerSettingsLayerLive),
@@ -681,6 +717,7 @@ const makeRoutesLayer = Layer.mergeAll(
       Layer.provide(connectHttpApiLayer),
       Layer.provide(orchestrationHttpApiLayer),
       Layer.provide(voiceHttpApiLayer.pipe(Layer.provide(VoiceTranscription.layer))),
+      Layer.provide(messageArtifactsHttpApiLayer.pipe(Layer.provide(MessageSummary.layer))),
       Layer.provide(pullRequestHttpApiLayer),
       Layer.provide(projectHttpApiLayer),
       Layer.provide(serverEnvironmentHttpApiLayer),

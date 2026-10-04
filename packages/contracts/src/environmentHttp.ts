@@ -58,7 +58,14 @@ import {
   RelayEnvironmentMintResponse,
   RelayLinkProofRequest,
 } from "./relay.ts";
-import { VoiceTranscriptionRequest, VoiceTranscriptionResult } from "./voice.ts";
+import {
+  MessageSpeechSynthesisRequest,
+  MessageSpeechSynthesisResult,
+  MessageSummaryRequest,
+  MessageSummaryResult,
+  VoiceTranscriptionRequest,
+  VoiceTranscriptionResult,
+} from "./voice.ts";
 import { ProviderCatalogResult } from "./providerCatalog.ts";
 import {
   SessionImportForkThreadPayload,
@@ -632,11 +639,29 @@ class EnvironmentProjectsHttpApi extends HttpApiGroup.make("projects")
     }).middleware(EnvironmentAuthenticatedAuth),
   ) {}
 
-export class EnvironmentVoiceHttpApi extends HttpApiGroup.make("voice").add(
-  HttpApiEndpoint.post("transcribe", "/api/voice/transcriptions", {
+export class EnvironmentVoiceHttpApi extends HttpApiGroup.make("voice")
+  .add(
+    HttpApiEndpoint.post("transcribe", "/api/voice/transcriptions", {
+      headers: OptionalBearerHeaders,
+      payload: VoiceTranscriptionRequest,
+      success: VoiceTranscriptionResult,
+      error: EnvironmentVoiceTranscriptionErrors,
+    }).middleware(EnvironmentAuthenticatedAuth),
+  )
+  .add(
+    HttpApiEndpoint.post("synthesizeMessage", "/api/voice/message-speech", {
+      headers: OptionalBearerHeaders,
+      payload: MessageSpeechSynthesisRequest,
+      success: MessageSpeechSynthesisResult,
+      error: EnvironmentVoiceTranscriptionErrors,
+    }).middleware(EnvironmentAuthenticatedAuth),
+  ) {}
+
+export class EnvironmentMessageArtifactsHttpApi extends HttpApiGroup.make("messageArtifacts").add(
+  HttpApiEndpoint.post("summarizeMessage", "/api/messages/summaries", {
     headers: OptionalBearerHeaders,
-    payload: VoiceTranscriptionRequest,
-    success: VoiceTranscriptionResult,
+    payload: MessageSummaryRequest,
+    success: MessageSummaryResult,
     error: EnvironmentVoiceTranscriptionErrors,
   }).middleware(EnvironmentAuthenticatedAuth),
 ) {}
@@ -777,6 +802,7 @@ export class EnvironmentHttpApi extends HttpApi.make("environment")
   .add(EnvironmentSessionImportHttpApi)
   .add(EnvironmentProvidersHttpApi)
   .add(EnvironmentVoiceHttpApi)
+  .add(EnvironmentMessageArtifactsHttpApi)
   .add(EnvironmentPullRequestsHttpApi)
   .add(EnvironmentProjectsHttpApi)
   .add(EnvironmentConnectHttpApi) {}

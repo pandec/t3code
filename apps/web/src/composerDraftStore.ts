@@ -6,6 +6,7 @@ import {
   DEFAULT_MODEL_BY_PROVIDER,
   defaultInstanceIdForDriver,
   EnvironmentId,
+  MessageInputOrigin,
   ModelSelection,
   ProjectId,
   ProviderInstanceId,
@@ -233,6 +234,7 @@ type PersistedTerminalContextDraft = typeof PersistedTerminalContextDraft.Type;
 
 const PersistedComposerThreadDraftState = Schema.Struct({
   prompt: Schema.String,
+  inputOrigin: Schema.optionalKey(MessageInputOrigin),
   attachments: Schema.Array(PersistedComposerImageAttachment),
   files: Schema.optionalKey(Schema.Array(PersistedComposerDraftFileAttachment)),
   terminalContexts: Schema.optionalKey(Schema.Array(PersistedTerminalContextDraft)),
@@ -387,6 +389,8 @@ const contextInsertionHandlers = new Map<string, ComposerContextInsertionHandler
 
 export interface ComposerThreadDraftState {
   prompt: string;
+  /** Set when dictation produced the prompt; sticky until the prompt is emptied. */
+  inputOrigin?: MessageInputOrigin;
   images: ComposerImageAttachment[];
   files: ComposerFileAttachment[];
   nonPersistedImageIds: string[];
@@ -597,7 +601,11 @@ interface ComposerDraftStoreState {
   finalizePromotedDraftThread: (threadRef: ComposerThreadTarget) => void;
   clearDraftThread: (threadRef: ComposerThreadTarget) => void;
   setStickyModelSelection: (modelSelection: ModelSelection | null | undefined) => void;
-  setPrompt: (threadRef: ComposerThreadTarget, prompt: string) => void;
+  setPrompt: (
+    threadRef: ComposerThreadTarget,
+    prompt: string,
+    inputOrigin?: MessageInputOrigin,
+  ) => void;
   setTerminalContexts: (threadRef: ComposerThreadTarget, contexts: TerminalContextDraft[]) => void;
   setModelSelection: (
     threadRef: ComposerThreadTarget,
@@ -2117,6 +2125,9 @@ function normalizePersistedDraftsByThreadId(
             })();
     nextDraftsByThreadKey[normalizedThreadKey] = {
       prompt,
+      ...(prompt.length > 0 && draftCandidate.inputOrigin === "voice-transcription"
+        ? { inputOrigin: draftCandidate.inputOrigin }
+        : {}),
       attachments,
       ...(files.length > 0 ? { files } : {}),
       ...(terminalContexts.length > 0 ? { terminalContexts } : {}),
@@ -2240,6 +2251,7 @@ export function partializeComposerDraftStoreState(
     }
     const persistedDraft: DeepMutable<PersistedComposerThreadDraftState> = {
       prompt: draft.prompt,
+      ...(draft.inputOrigin !== undefined ? { inputOrigin: draft.inputOrigin } : {}),
       attachments: draft.persistedAttachments,
       ...(draft.files.length > 0
         ? {
@@ -2558,6 +2570,9 @@ function toHydratedThreadDraft(
       ...(persistedDraft.threadContexts ?? []).map(threadContextReference),
       ...files.map(fileContextReference),
     ]),
+    ...(persistedDraft.inputOrigin !== undefined
+      ? { inputOrigin: persistedDraft.inputOrigin }
+      : {}),
     images: hydrateImagesFromPersisted(persistedDraft.attachments),
     files,
     nonPersistedImageIds: [],
@@ -3103,16 +3118,20 @@ const composerDraftStore = create<ComposerDraftStoreState>()(
             return { draftsByThreadKey: nextDraftsByThreadKey };
           });
         },
-        setPrompt: (threadRef, prompt) => {
+        setPrompt: (threadRef, prompt, inputOrigin) => {
           const threadKey = resolveComposerDraftKey(get(), threadRef) ?? "";
           if (threadKey.length === 0) {
             return;
           }
           set((state) => {
             const existing = state.draftsByThreadKey[threadKey] ?? createEmptyThreadDraft();
+            const { inputOrigin: existingInputOrigin, ...existingWithoutInputOrigin } = existing;
+            const nextInputOrigin =
+              prompt.length === 0 ? undefined : (inputOrigin ?? existingInputOrigin);
             const nextDraft: ComposerThreadDraftState = {
-              ...existing,
+              ...existingWithoutInputOrigin,
               prompt,
+              ...(nextInputOrigin !== undefined ? { inputOrigin: nextInputOrigin } : {}),
             };
             const nextDraftsByThreadKey = { ...state.draftsByThreadKey };
             if (shouldRemoveDraft(nextDraft)) {
@@ -4207,8 +4226,9 @@ const composerDraftStore = create<ComposerDraftStoreState>()(
             if (!current) {
               return state;
             }
+            const { inputOrigin: _inputOrigin, ...currentWithoutInputOrigin } = current;
             const nextDraft: ComposerThreadDraftState = {
-              ...current,
+              ...currentWithoutInputOrigin,
               prompt: "",
               images: [],
               files: [],
@@ -4241,8 +4261,9 @@ const composerDraftStore = create<ComposerDraftStoreState>()(
             for (const image of current.images) {
               revokeObjectPreviewUrl(image.previewUrl);
             }
+            const { inputOrigin: _inputOrigin, ...currentWithoutInputOrigin } = current;
             const nextDraft: ComposerThreadDraftState = {
-              ...current,
+              ...currentWithoutInputOrigin,
               prompt: ensureInlineContextReferences("", [
                 ...current.terminalContexts.map(terminalContextReference),
                 ...current.reviewComments.map(reviewCommentContextReference),
@@ -4329,9 +4350,12 @@ const composerDraftStore = create<ComposerDraftStoreState>()(
               stripInlineContextReferences(source.prompt),
               destination.terminalContexts.map(terminalContextReference),
             );
+            const { inputOrigin: _destinationOrigin, ...destinationWithoutOrigin } = destination;
+            const { inputOrigin: movedInputOrigin, ...sourceWithoutOrigin } = source;
             const nextDestination: ComposerThreadDraftState = {
-              ...destination,
+              ...destinationWithoutOrigin,
               prompt: movedPrompt,
+              ...(movedInputOrigin !== undefined ? { inputOrigin: movedInputOrigin } : {}),
               images: [...destination.images, ...movedImages],
               files: [...destination.files, ...movedFiles],
               nonPersistedImageIds: [
@@ -4349,7 +4373,7 @@ const composerDraftStore = create<ComposerDraftStoreState>()(
             // preview URLs are NOT revoked: the images moved and their blobs
             // are still referenced from the destination.
             const nextSource: ComposerThreadDraftState = {
-              ...source,
+              ...sourceWithoutOrigin,
               prompt: ensureInlineContextReferences(
                 "",
                 source.terminalContexts.map(terminalContextReference),

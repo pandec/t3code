@@ -37,6 +37,7 @@ import * as McpProviderSession from "../mcp/McpProviderSession.ts";
 import * as McpSessionRegistry from "../mcp/McpSessionRegistry.ts";
 import { SqlitePersistenceMemory } from "../persistence/Layers/Sqlite.ts";
 import * as ServerSettings from "../serverSettings.ts";
+import * as AgentVoiceReply from "../voice/AgentVoiceReply.ts";
 import { CodexProviderCapabilitiesV2 } from "./Adapters/CodexAdapterV2.ts";
 import * as EventSink from "./EventSink.ts";
 import * as EventStore from "./EventStore.ts";
@@ -364,6 +365,7 @@ function makeTestLayer(input: {
   readonly beforeUnload?: Effect.Effect<void>;
   readonly serverSettingsLayer?: ReturnType<typeof ServerSettings.layerTest>;
   readonly projectServiceLayer?: Layer.Layer<ProjectService.ProjectService>;
+  readonly agentVoiceReplyLayer?: Layer.Layer<AgentVoiceReply.AgentVoiceReply>;
 }) {
   const configuredEventSinkLayer = input.failReleaseEventWrites
     ? FailingReleaseEventSinkLayer
@@ -412,6 +414,7 @@ function makeTestLayer(input: {
           TestStoresLayer,
           ...(input.serverSettingsLayer === undefined ? [] : [input.serverSettingsLayer]),
           ...(input.projectServiceLayer === undefined ? [] : [input.projectServiceLayer]),
+          ...(input.agentVoiceReplyLayer === undefined ? [] : [input.agentVoiceReplyLayer]),
         ),
       ),
     ),
@@ -1112,6 +1115,79 @@ it.effect(
           }),
         ),
       );
+    }),
+);
+
+function runVoiceAccessScenario(input: {
+  readonly enableAgentVoiceReplies: boolean;
+  readonly voiceAvailable: boolean;
+}) {
+  return Effect.gen(function* () {
+    const state = yield* Ref.make(emptyState);
+    const mcpConfigs = yield* Ref.make<
+      ReadonlyArray<McpProviderSession.McpProviderSessionConfig | undefined>
+    >([]);
+    const threadId = ThreadId.make(
+      `thread-provider-session-manager-voice-${input.enableAgentVoiceReplies}-${input.voiceAvailable}`,
+    );
+    yield* Effect.gen(function* () {
+      const eventSink = yield* EventSink.EventSinkV2;
+      const idAllocator = yield* IdAllocator.IdAllocatorV2;
+      const manager = yield* ProviderSessionManager.ProviderSessionManagerV2;
+      const providerSessionId = yield* idAllocator.allocate.providerSession({
+        providerInstanceId: modelSelection.instanceId,
+        threadId,
+      });
+      yield* eventSink.write({
+        events: [
+          yield* makeThreadCreatedEvent({ idAllocator, threadId, now: yield* DateTime.now }),
+        ],
+      });
+      yield* manager.open({ threadId, providerSessionId, modelSelection, runtimePolicy });
+      yield* manager.close(providerSessionId);
+    }).pipe(
+      Effect.provide(
+        makeTestLayer({
+          state,
+          idleTimeoutMs: 1_000,
+          mcpConfigs,
+          serverSettingsLayer: ServerSettings.layerTest({
+            enableAgentBrowserAccess: false,
+            voice: { enableAgentVoiceReplies: input.enableAgentVoiceReplies },
+          }),
+          agentVoiceReplyLayer: Layer.mock(AgentVoiceReply.AgentVoiceReply)({
+            available: Effect.succeed(input.voiceAvailable),
+          }),
+        }),
+      ),
+    );
+    return (yield* Ref.get(mcpConfigs))[0];
+  });
+}
+
+it.effect(
+  "ProviderSessionManagerV2 grants voice tools only when replies are on and speakable",
+  () =>
+    Effect.gen(function* () {
+      const granted = yield* runVoiceAccessScenario({
+        enableAgentVoiceReplies: true,
+        voiceAvailable: true,
+      });
+      assert.isTrue(granted?.capabilities?.has("voice"));
+      assert.equal(granted?.endpoint, "http://127.0.0.1:43123/mcp/voice");
+
+      const settingOff = yield* runVoiceAccessScenario({
+        enableAgentVoiceReplies: false,
+        voiceAvailable: true,
+      });
+      assert.isFalse(settingOff?.capabilities?.has("voice"));
+      assert.equal(settingOff?.endpoint, "http://127.0.0.1:43123/mcp/pull-requests");
+
+      const noKey = yield* runVoiceAccessScenario({
+        enableAgentVoiceReplies: true,
+        voiceAvailable: false,
+      });
+      assert.isFalse(noKey?.capabilities?.has("voice"));
     }),
 );
 

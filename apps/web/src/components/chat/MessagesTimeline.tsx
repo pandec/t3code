@@ -125,6 +125,7 @@ import {
   GlobeIcon,
   type LucideIcon,
   MessageCircleIcon,
+  MicIcon,
   MousePointerClickIcon,
   PaintbrushIcon,
   MinusIcon,
@@ -170,6 +171,16 @@ import {
   timelineContentOverflowsViewport,
 } from "./timelineScrollAnchoring";
 import { MessageCopyButton } from "./MessageCopyButton";
+import {
+  AssistantMessageSummaryButton,
+  AssistantMessageSummaryPanel,
+  useAssistantMessageSummary,
+} from "./AssistantMessageSummary";
+import {
+  AssistantMessageSpeechButton,
+  AssistantSpeechPlayer,
+  useAssistantMessageSpeech,
+} from "./AssistantMessageSpeech";
 import { PierreEntryIcon } from "./PierreEntryIcon";
 import { inferEntryKindFromPath } from "../../pierre-icons";
 import { AssistantSelectionToolbar } from "./AssistantSelectionToolbar";
@@ -299,6 +310,14 @@ interface TimelineRowSharedState {
   /** Projection runs, for recovering handoff models on legacy items. */
   runs: ReadonlyArray<HandoffTimelineRun>;
   activeThreadEnvironmentId: EnvironmentId;
+  /** The environment serves on-demand message summaries. */
+  messageSummariesAvailable: boolean;
+  /** The environment can synthesize listening versions now. */
+  textToSpeechAvailable: boolean;
+  /** The environment streams its server-owned listening state. */
+  textToSpeechPersistentJobs: boolean;
+  /** Read at play time for the OS media controls, so title edits never re-render rows. */
+  getThreadTitle: () => string;
   onRevertToTurnCount: (targetTurnCount: number, messageId: MessageId) => void;
   onUseArtifactTemplate: (template: CodexArtifactTemplate) => void;
   onRunShellCommand: ((command: string) => void) | undefined;
@@ -448,6 +467,10 @@ interface MessagesTimelineProps {
   onFileOpen?: (attachment: ChatFileAttachment) => void;
   onFileDownload?: (attachment: ChatFileAttachment) => void;
   activeThreadEnvironmentId: EnvironmentId;
+  messageSummariesAvailable?: boolean;
+  textToSpeechAvailable?: boolean;
+  textToSpeechPersistentJobs?: boolean;
+  threadTitle?: string;
   markdownCwd: string | undefined;
   resolvedTheme: "light" | "dark";
   timestampFormat: TimestampFormat;
@@ -521,6 +544,10 @@ export const MessagesTimeline = memo(function MessagesTimeline({
   onFileOpen = NOOP_OPEN_ATTACHMENT,
   onFileDownload = NOOP_OPEN_ATTACHMENT,
   activeThreadEnvironmentId,
+  messageSummariesAvailable = false,
+  textToSpeechAvailable = false,
+  textToSpeechPersistentJobs = false,
+  threadTitle = "",
   markdownCwd,
   resolvedTheme,
   timestampFormat,
@@ -583,6 +610,11 @@ export const MessagesTimeline = memo(function MessagesTimeline({
     setExpandedAttemptIds(paintedExpandedAttemptIds);
   }
   const citationThreadRef = useMemo(() => parseScopedThreadKey(routeThreadKey), [routeThreadKey]);
+  const threadTitleRef = useRef(threadTitle);
+  useEffect(() => {
+    threadTitleRef.current = threadTitle;
+  }, [threadTitle]);
+  const getThreadTitle = useCallback(() => threadTitleRef.current, []);
   const openPullRequest = useOpenPrLink(citationThreadRef ?? undefined);
   const expandCitedRun = useCallback((runId: RunId) => {
     setExpandedRunIds((current) => (current.has(runId) ? current : new Set([...current, runId])));
@@ -1145,6 +1177,10 @@ export const MessagesTimeline = memo(function MessagesTimeline({
       providerStatuses,
       runs,
       activeThreadEnvironmentId,
+      messageSummariesAvailable,
+      textToSpeechAvailable,
+      textToSpeechPersistentJobs,
+      getThreadTitle,
       onRevertToTurnCount,
       onRunShellCommand,
       onImageExpand,
@@ -1178,6 +1214,10 @@ export const MessagesTimeline = memo(function MessagesTimeline({
       providerStatuses,
       runs,
       activeThreadEnvironmentId,
+      messageSummariesAvailable,
+      textToSpeechAvailable,
+      textToSpeechPersistentJobs,
+      getThreadTitle,
       onRevertToTurnCount,
       onRunShellCommand,
       onImageExpand,
@@ -2124,6 +2164,12 @@ function UserTimelineRow({ row }: { row: Extract<TimelineRow, { kind: "message" 
       ) : null}
       <div className="relative max-w-[80%] rounded-2xl bg-message p-3 text-message-foreground">
         <MessageAuthorHeading>You</MessageAuthorHeading>
+        {row.message.inputOrigin === "voice-transcription" ? (
+          <div className="mb-1.5 flex items-center justify-end gap-1 text-2xs text-muted-foreground">
+            <MicIcon className="size-3" />
+            <span>Transcribed</span>
+          </div>
+        ) : null}
         {(regularImages.length > 0 || userVideos.length > 0) && (
           <div className="mb-2 grid max-w-[210px] grid-cols-2 gap-2">
             {regularImages.map((image) => (
@@ -2504,7 +2550,7 @@ function AssistantTimelineRow({ row }: { row: Extract<TimelineRow, { kind: "mess
           onOpenTurnDiff={ctx.onOpenTurnDiff}
         />
         {row.showAssistantMeta ? (
-          <AssistantMessageMeta
+          <AssistantMessageMetaWithArtifacts
             className="mt-1.5"
             projectedItem={row.projectedItem}
             message={row.message}
@@ -2570,7 +2616,7 @@ function AssistantMetaTimelineRow({
 }) {
   return (
     <div className="px-1">
-      <AssistantMessageMeta
+      <AssistantMessageMetaWithArtifacts
         className="mt-0.5"
         projectedItem={row.projectedItem}
         message={row.message}
@@ -2589,6 +2635,7 @@ function AssistantMessageMeta({
   showCopyButton,
   copyStreaming,
   alwaysVisible = false,
+  children,
 }: {
   className?: string;
   projectedItem?: Extract<TimelineRow, { kind: "message" }>["projectedItem"];
@@ -2596,6 +2643,7 @@ function AssistantMessageMeta({
   showCopyButton: boolean;
   copyStreaming: boolean;
   alwaysVisible?: boolean;
+  children?: ReactNode;
 }) {
   const ctx = use(TimelineRowCtx);
 
@@ -2622,6 +2670,7 @@ function AssistantMessageMeta({
         showCopyButton={showCopyButton}
         streaming={copyStreaming}
       />
+      {children}
       {!message.streaming && (
         <Tooltip>
           <TooltipTrigger render={<p className="text-muted-foreground text-xs tabular-nums" />}>
@@ -2633,6 +2682,65 @@ function AssistantMessageMeta({
         </Tooltip>
       )}
     </div>
+  );
+}
+
+/** `AssistantMessageMeta` with the message's summary and listening controls and panels. */
+function AssistantMessageMetaWithArtifacts(props: Parameters<typeof AssistantMessageMeta>[0]) {
+  const ctx = use(TimelineRowCtx);
+  const { message } = props;
+  const summary = useAssistantMessageSummary({
+    environmentId: ctx.activeThreadEnvironmentId,
+    threadId: ctx.threadRef?.threadId ?? null,
+    messageId: message.id,
+    text: message.text,
+    streaming: message.streaming,
+    available: ctx.messageSummariesAvailable,
+    persistentJobs: ctx.textToSpeechPersistentJobs,
+  });
+  const speech = useAssistantMessageSpeech({
+    environmentId: ctx.activeThreadEnvironmentId,
+    threadId: ctx.threadRef?.threadId ?? null,
+    messageId: message.id,
+    text: message.text,
+    streaming: message.streaming,
+    available: ctx.textToSpeechAvailable,
+    persistentJobs: ctx.textToSpeechPersistentJobs,
+  });
+
+  return (
+    <>
+      <AssistantMessageMeta
+        {...props}
+        alwaysVisible={
+          props.alwaysVisible || summary.expanded || speech.expanded || speech.preparing
+        }
+      >
+        <AssistantMessageSummaryButton state={summary} />
+        <AssistantMessageSpeechButton state={speech} />
+      </AssistantMessageMeta>
+      {summary.expanded && summary.summary !== null ? (
+        <AssistantMessageSummaryPanel>
+          <ChatMarkdown
+            text={summary.summary.summary}
+            cwd={ctx.markdownCwd}
+            threadRef={ctx.threadRef ?? undefined}
+            skills={ctx.skills}
+          />
+        </AssistantMessageSummaryPanel>
+      ) : null}
+      {speech.expanded && speech.speech !== null ? (
+        <AssistantSpeechPlayer
+          environmentId={ctx.activeThreadEnvironmentId}
+          threadId={ctx.threadRef?.threadId ?? null}
+          getThreadTitle={ctx.getThreadTitle}
+          messageId={message.id}
+          speech={speech.speech}
+          messageText={message.text}
+          onRetry={speech.speech.origin === "agent" ? null : speech.regenerate}
+        />
+      ) : null}
+    </>
   );
 }
 

@@ -39,6 +39,7 @@ import * as Stream from "effect/Stream";
 
 import * as McpSessionRegistry from "../mcp/McpSessionRegistry.ts";
 import * as ServerSettings from "../serverSettings.ts";
+import * as AgentVoiceReply from "../voice/AgentVoiceReply.ts";
 import * as CheckpointService from "./CheckpointService.ts";
 import type { PendingOrchestrationEffectV2 } from "./EffectOutbox.ts";
 import * as EventSink from "./EventSink.ts";
@@ -3165,6 +3166,107 @@ it.effect.each(["completed", "interrupted", "cancelled", "failed"] as const)(
     }),
 );
 
+/**
+ * A fake voice-reply service whose finalization contributes one fallback
+ * message and records when the run's batch was committed or abandoned.
+ */
+const makeRecordingVoiceReply = Effect.gen(function* () {
+  const calls = yield* Ref.make<ReadonlyArray<string>>([]);
+  const record = (entry: string) => Ref.update(calls, (current) => [...current, entry]);
+  const service: AgentVoiceReply.AgentVoiceReplyShape = {
+    available: Effect.succeed(true),
+    stage: () => Effect.die("unused"),
+    finalizeAttempt: (input) =>
+      Effect.gen(function* () {
+        yield* record(`finalize:${input.attemptId}:${input.completed}`);
+        if (!input.completed) {
+          return { events: [], committed: Effect.void, abandoned: Effect.void };
+        }
+        const messageId = MessageId.make(`voice-reply:${input.attemptId}`);
+        const events: ReadonlyArray<OrchestrationV2DomainEvent> = [
+          {
+            id: yield* input.allocateEventId(),
+            type: "message.updated",
+            threadId: input.run.threadId,
+            runId: input.run.id,
+            occurredAt: input.completedAt,
+            payload: {
+              createdBy: "agent",
+              creationSource: "provider",
+              id: messageId,
+              threadId: input.run.threadId,
+              runId: input.run.id,
+              nodeId: input.rootNode.id,
+              role: "assistant",
+              text: "Spoken reply.",
+              attachments: [],
+              streaming: false,
+              createdAt: input.completedAt,
+              updatedAt: input.completedAt,
+            },
+          },
+        ];
+        return {
+          events,
+          committed: record("committed"),
+          abandoned: record("abandoned"),
+        };
+      }),
+  };
+  return { service, calls };
+});
+
+it.effect("publishes a staged voice reply with the batch of a normally completed run", () =>
+  Effect.gen(function* () {
+    const voice = yield* makeRecordingVoiceReply;
+    const { observed } = yield* captureRootRunTermination({
+      key: "voice-reply-completed",
+      shouldFinalizeRun: () => Effect.succeed(true),
+      events: (ids) => Stream.make(rootTerminalEvent(ids, "completed")),
+      agentVoiceReply: voice.service,
+    });
+    const ids = backgroundScenarioIds("voice-reply-completed");
+    // The fallback message lands in the same batch, ahead of the run update.
+    assert.deepEqual(observed, [
+      `message:voice-reply:${ids.attemptId}`,
+      "run:waiting",
+      "pull-requests-refreshed",
+    ]);
+    assert.deepEqual(yield* Ref.get(voice.calls), [`finalize:${ids.attemptId}:true`, "committed"]);
+  }),
+);
+
+it.effect.each(["interrupted", "failed"] as const)(
+  "discards a staged voice reply when the run is %s",
+  (status) =>
+    Effect.gen(function* () {
+      const voice = yield* makeRecordingVoiceReply;
+      yield* captureRootRunTermination({
+        key: `voice-reply-${status}`,
+        shouldFinalizeRun: () => Effect.succeed(true),
+        events: (ids) => Stream.make(rootTerminalEvent(ids, status)),
+        agentVoiceReply: voice.service,
+      });
+      const ids = backgroundScenarioIds(`voice-reply-${status}`);
+      assert.deepEqual(yield* Ref.get(voice.calls), [`finalize:${ids.attemptId}:false`]);
+    }),
+);
+
+it.effect("discards a staged voice reply when a steer supersedes the attempt", () =>
+  Effect.gen(function* () {
+    const voice = yield* makeRecordingVoiceReply;
+    const { observed } = yield* captureRootRunTermination({
+      key: "voice-reply-superseded",
+      shouldFinalizeRun: () => Effect.succeed(false),
+      events: (ids) => Stream.make(rootTerminalEvent(ids, "completed")),
+      agentVoiceReply: voice.service,
+    });
+    const ids = backgroundScenarioIds("voice-reply-superseded");
+    assert.deepEqual(observed, []);
+    assert.deepEqual(yield* Ref.get(voice.calls), [`finalize:${ids.attemptId}:false`]);
+  }),
+);
+
 it.effect("does not refresh pull requests for auxiliary or stale provider terminals", () =>
   Effect.gen(function* () {
     const { observed } = yield* captureRootRunTermination({
@@ -3262,6 +3364,7 @@ function captureRootRunTermination(input: {
   ) => Stream.Stream<ProviderAdapterV2Event, ProviderAdapterV2Error>;
   readonly startTurn?: ProviderAdapterV2SessionRuntime["startTurn"];
   readonly refreshAfterTurn?: Effect.Effect<void>;
+  readonly agentVoiceReply?: AgentVoiceReply.AgentVoiceReplyShape;
 }) {
   return Effect.gen(function* () {
     const ids = backgroundScenarioIds(input.key);
@@ -3298,6 +3401,12 @@ function captureRootRunTermination(input: {
                   if (event.type === "turn-item.updated") {
                     yield* captureTurnItem(event.payload);
                   }
+                  if (event.type === "message.updated") {
+                    yield* Ref.update(observed, (current) => [
+                      ...current,
+                      `message:${event.payload.id}`,
+                    ]);
+                  }
                   if (event.type === "run.updated") {
                     yield* Ref.update(observed, (current) => [
                       ...current,
@@ -3321,6 +3430,9 @@ function captureRootRunTermination(input: {
                 Effect.andThen(input.refreshAfterTurn ?? Effect.void),
               ),
           }),
+          ...(input.agentVoiceReply === undefined
+            ? []
+            : [Layer.succeed(AgentVoiceReply.AgentVoiceReply, input.agentVoiceReply)]),
         ),
       ),
     );

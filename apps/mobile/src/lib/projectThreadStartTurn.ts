@@ -3,6 +3,7 @@ import {
   MessageId,
   ThreadId,
   type ChatAttachment,
+  type MessageInputOrigin,
   type ModelSelection,
   type OrchestrationMessageContext,
   type ProjectId,
@@ -23,6 +24,7 @@ export interface ProjectThreadStartTurnSpec {
   readonly createdAt: string;
   readonly text: string;
   readonly context?: OrchestrationMessageContext;
+  readonly inputOrigin?: MessageInputOrigin;
   /** New uploads or server-owned attachments from a cancelled setup. */
   readonly uploadedAttachments: ReadonlyArray<UploadedMobileAttachment | ChatAttachment>;
   readonly modelSelection: ModelSelection;
@@ -53,6 +55,7 @@ export function buildProjectThreadStartTurnInput(spec: ProjectThreadStartTurnSpe
       role: "user" as const,
       text: spec.text,
       ...(spec.context ? { context: spec.context } : {}),
+      ...(spec.inputOrigin ? { inputOrigin: spec.inputOrigin } : {}),
       attachments: spec.uploadedAttachments,
     },
     modelSelection: spec.modelSelection,

@@ -646,6 +646,7 @@ describe("CodexAdapterV2 process spawning", () => {
                 http_headers: {
                   Authorization: "Bearer secret-codex-token",
                 },
+                tool_timeout_sec: 240,
               },
             },
           },

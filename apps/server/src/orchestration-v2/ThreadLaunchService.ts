@@ -64,6 +64,7 @@ export interface ThreadLaunchInitialMessage {
   readonly text: string;
   readonly attachments: ReadonlyArray<ChatAttachment>;
   readonly context?: import("@t3tools/contracts").OrchestrationMessageContext | undefined;
+  readonly inputOrigin?: import("@t3tools/contracts").MessageInputOrigin | undefined;
 }
 
 export interface ThreadLaunchInput {
@@ -761,6 +762,9 @@ const make = Effect.gen(function* () {
                 : { senderThreadId: input.initialMessage.senderThreadId }),
               attachments: input.initialMessage.attachments,
               ...(input.initialMessage.context ? { context: input.initialMessage.context } : {}),
+              ...(input.initialMessage.inputOrigin
+                ? { inputOrigin: input.initialMessage.inputOrigin }
+                : {}),
               ...(input.generateTitle === true ? { titleSeed: input.title } : {}),
               modelSelection: input.modelSelection,
               dispatchMode: { type: "defer_start" },

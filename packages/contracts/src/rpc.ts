@@ -148,6 +148,8 @@ import {
   OpenRouterCreditsResult,
 } from "./openRouterCredits.ts";
 import {
+  MessageSpeechThreadInput,
+  MessageSpeechThreadUpdate,
   TtsCatalogInput,
   TtsCatalogResult,
   TtsConfigureOpenRouterInput,
@@ -484,6 +486,7 @@ export const WS_METHODS = {
   ttsCatalog: "tts.catalog",
   ttsConfigureOpenRouter: "tts.configureOpenRouter",
   ttsTest: "tts.test",
+  voiceSubscribeMessageSpeech: "voice.subscribeMessageSpeech",
   linearStatus: "linear.status",
   linearConfigure: "linear.configure",
   linearIssue: "linear.issue",
@@ -816,6 +819,14 @@ const WsTtsTestRpc = Rpc.make(WS_METHODS.ttsTest, {
   payload: TtsTestInput,
   success: TtsTestResult,
   error: TtsRpcErrors,
+});
+
+/** A thread's listening recordings and pending requests: current state first, then every change. */
+const WsVoiceSubscribeMessageSpeechRpc = Rpc.make(WS_METHODS.voiceSubscribeMessageSpeech, {
+  payload: MessageSpeechThreadInput,
+  success: MessageSpeechThreadUpdate,
+  error: EnvironmentAuthorizationError,
+  stream: true,
 });
 
 const LinearRpcErrors = Schema.Union([LinearRpcError, EnvironmentAuthorizationError]);
@@ -1855,6 +1866,7 @@ export const WsRpcGroup = RpcGroup.make(
   WsTtsCatalogRpc,
   WsTtsConfigureOpenRouterRpc,
   WsTtsTestRpc,
+  WsVoiceSubscribeMessageSpeechRpc,
   WsLinearStatusRpc,
   WsLinearConfigureRpc,
   WsLinearIssueRpc,

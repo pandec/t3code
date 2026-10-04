@@ -165,6 +165,7 @@ import * as ProviderRegistry from "./provider/Services/ProviderRegistry.ts";
 import * as ProviderInstanceHealth from "./provider/Services/ProviderInstanceHealth.ts";
 import * as ProviderInstanceRegistry from "./provider/Services/ProviderInstanceRegistry.ts";
 import { configureOpenRouterCredits, readOpenRouterCredits } from "./provider/openRouterCredits.ts";
+import { MessageSpeech } from "./voice/MessageSpeech.ts";
 import { TtsService } from "./voice/TtsService.ts";
 import {
   configureLinear,
@@ -1225,6 +1226,7 @@ const makeWsRpcLayer = (
       const wsHttpClient = yield* HttpClient.HttpClient;
       const serverSecretStore = yield* ServerSecretStore.ServerSecretStore;
       const ttsService = yield* TtsService;
+      const messageSpeech = yield* MessageSpeech;
       const provideSecretHttpServices = <A, E>(
         effect: Effect.Effect<A, E, HttpClient.HttpClient | ServerSecretStore.ServerSecretStore>,
       ): Effect.Effect<A, E> =>
@@ -1728,6 +1730,7 @@ const makeWsRpcLayer = (
             },
             textToSpeech: {
               available: yield* ttsService.isConfigured(settings.voice.tts.provider),
+              persistentJobs: true,
             },
             shellResumeCompletionMarker: true,
             ...(fileManagerRevealKind === undefined
@@ -1999,6 +2002,9 @@ const makeWsRpcLayer = (
                           ...(input.initialMessage.context === undefined
                             ? {}
                             : { context: input.initialMessage.context }),
+                          ...(input.initialMessage.inputOrigin === undefined
+                            ? {}
+                            : { inputOrigin: input.initialMessage.inputOrigin }),
                         },
                       }),
                   createdBy: "user",
@@ -2320,6 +2326,12 @@ const makeWsRpcLayer = (
           observeRpcEffect(WS_METHODS.ttsTest, ttsService.test(input), {
             "rpc.aggregate": "server",
           }),
+        [WS_METHODS.voiceSubscribeMessageSpeech]: (input) =>
+          observeRpcStream(
+            WS_METHODS.voiceSubscribeMessageSpeech,
+            messageSpeech.streamThread(input.threadId),
+            { "rpc.aggregate": "server" },
+          ),
         [WS_METHODS.linearStatus]: (_input) =>
           observeRpcEffect(WS_METHODS.linearStatus, provideSecretHttpServices(readLinearStatus), {
             "rpc.aggregate": "server",
@@ -3800,7 +3812,7 @@ const makeWsRpcLayer = (
                   ttsService.isConfigured(settings.voice.tts.provider).pipe(
                     Effect.map((available) => ({
                       settings: ServerSettings.redactServerSettingsForClient(settings),
-                      textToSpeech: { available },
+                      textToSpeech: { available, persistentJobs: true },
                     })),
                   ),
                 ),

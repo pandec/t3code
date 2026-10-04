@@ -4460,16 +4460,18 @@ export default function ChatView(props: ChatViewProps) {
         clearComposerDraftContent(queuedEditDraftTargetFor(editingQueuedRun.runId));
       }
       const target = queuedEditDraftTargetFor(request.runId);
+      const queuedMessage = serverProjection?.messages.find(
+        (message) => message.id === request.messageId,
+      );
       clearComposerDraftContent(target);
-      setComposerDraftPrompt(target, request.text);
+      setComposerDraftPrompt(target, request.text, queuedMessage?.inputOrigin);
       setEditingQueuedRun({
         threadId: activeThread.id,
         runId: request.runId,
         messageId: request.messageId,
         originalText: request.text,
         existingAttachments: request.attachments,
-        context: serverProjection?.messages.find((message) => message.id === request.messageId)
-          ?.context,
+        context: queuedMessage?.context,
       });
       scheduleComposerFocus();
     },
@@ -8472,6 +8474,10 @@ export default function ChatView(props: ChatViewProps) {
             edit: {
               messageId: editingQueuedRun.messageId,
               attachments: uploads,
+              // null = typed: clears a voice origin the edit removed.
+              inputOrigin:
+                useComposerDraftStore.getState().getComposerDraft(composerDraftTarget)
+                  ?.inputOrigin ?? null,
               context: {
                 version: 1,
                 records: [
@@ -8732,6 +8738,9 @@ export default function ChatView(props: ChatViewProps) {
     const composerPreviewAnnotationsSnapshot = [...composerPreviewAnnotations];
     const composerReviewCommentsSnapshot: ReviewCommentContext[] = [...composerReviewComments];
     const composerThreadContextsSnapshot = [...composerThreadContexts];
+    const inputOriginForSend = useComposerDraftStore
+      .getState()
+      .getComposerDraft(composerDraftTarget)?.inputOrigin;
     // Expired terminal excerpts are not sent; their chips leave the text with them.
     const messageTextForSend = composerTerminalContexts
       .filter((context) => !composerTerminalContextsSnapshot.includes(context))
@@ -9002,6 +9011,7 @@ export default function ChatView(props: ChatViewProps) {
                         : target.text,
                     attachments,
                     ...(context && supportsInlineMessageContext ? { context } : {}),
+                    ...(inputOriginForSend ? { inputOrigin: inputOriginForSend } : {}),
                   },
                   modelSelection: target.selection,
                   titleSeed: title,
@@ -9120,7 +9130,7 @@ export default function ChatView(props: ChatViewProps) {
         const restoreFailedDraft = () => {
           setMultipleModelSelections(failedSelections);
           if (clearedDraft) {
-            setComposerDraftPrompt(composerDraftTarget, messageTextForSend);
+            setComposerDraftPrompt(composerDraftTarget, messageTextForSend, inputOriginForSend);
             addComposerDraftImages(
               composerDraftTarget,
               composerImagesSnapshot.map(cloneComposerImageForRetry),
@@ -9236,6 +9246,7 @@ export default function ChatView(props: ChatViewProps) {
         text: outgoingMessageText,
         ...(optimisticAttachments.length > 0 ? { attachments: optimisticAttachments } : {}),
         ...(outgoingMessageContext !== undefined ? { context: outgoingMessageContext } : {}),
+        ...(inputOriginForSend ? { inputOrigin: inputOriginForSend } : {}),
         runId: null,
         createdAt: messageCreatedAt,
         updatedAt: messageCreatedAt,
@@ -9370,6 +9381,7 @@ export default function ChatView(props: ChatViewProps) {
             role: "user",
             text: outgoingMessageText,
             attachments: turnAttachmentsResult.value,
+            ...(inputOriginForSend ? { inputOrigin: inputOriginForSend } : {}),
             ...(() => {
               const context = buildOutgoingMessageContext(
                 turnAttachmentsResult.value.map((attachment, index) =>
@@ -9511,7 +9523,7 @@ export default function ChatView(props: ChatViewProps) {
         composerImagesRef.current = retryComposerImages;
         composerFilesRef.current = composerFilesSnapshot;
         composerTerminalContextsRef.current = composerTerminalContextsSnapshot;
-        setComposerDraftPrompt(composerDraftTarget, messageTextForSend);
+        setComposerDraftPrompt(composerDraftTarget, messageTextForSend, inputOriginForSend);
         addComposerDraftImages(composerDraftTarget, retryComposerImages);
         addComposerDraftFiles(composerDraftTarget, composerFilesSnapshot);
         setComposerDraftTerminalContexts(composerDraftTarget, composerTerminalContextsSnapshot);
@@ -10867,6 +10879,12 @@ export default function ChatView(props: ChatViewProps) {
                 activeThreadEnvironmentId={
                   displayedThreadRef?.environmentId ?? activeThread.environmentId
                 }
+                messageSummariesAvailable={
+                  serverConfig?.environment.capabilities.messageSummaries === true
+                }
+                textToSpeechAvailable={serverConfig?.textToSpeech.available === true}
+                textToSpeechPersistentJobs={serverConfig?.textToSpeech.persistentJobs === true}
+                threadTitle={activeThread.title}
                 routeThreadKey={displayedTimelineKey}
                 displayThreadKey={displayedTimelineKey}
                 onOpenTurnDiff={paintOnlyDisplayedTimeline ? noopHeldTurnDiff : onOpenTurnDiff}

@@ -1,6 +1,12 @@
 import * as Schema from "effect/Schema";
 
-import { IsoDateTime, MessageId, NonNegativeInt, TrimmedNonEmptyString } from "./baseSchemas.ts";
+import {
+  IsoDateTime,
+  MessageId,
+  NonNegativeInt,
+  ThreadId,
+  TrimmedNonEmptyString,
+} from "./baseSchemas.ts";
 
 export const VOICE_TRANSCRIPTION_MAX_DURATION_MS = 3 * 60 * 1_000;
 export const VOICE_TRANSCRIPTION_MIN_DURATION_MS = 100;
@@ -347,3 +353,54 @@ export const MessageSummaryResult = Schema.Struct({
   createdAt: IsoDateTime,
 });
 export type MessageSummaryResult = typeof MessageSummaryResult.Type;
+
+/**
+ * A stored summary as thread state carries it. `sourceTextHash` is the
+ * messageArtifactTextHash of the trimmed text it summarizes, so a client can
+ * drop it as soon as the message text it shows differs.
+ */
+export const MessageSummaryThreadEntry = Schema.Struct({
+  ...MessageSummaryResult.fields,
+  sourceTextHash: TrimmedNonEmptyString,
+});
+export type MessageSummaryThreadEntry = typeof MessageSummaryThreadEntry.Type;
+
+export const MessageSpeechThreadInput = Schema.Struct({
+  threadId: ThreadId,
+});
+export type MessageSpeechThreadInput = typeof MessageSpeechThreadInput.Type;
+
+/**
+ * A thread's listening state as the server owns it: every current recording
+ * and stored summary (stale ones, whose message text changed since, are left
+ * out) and the messages whose listening version is being prepared right now.
+ * Every connected client shows the same state.
+ */
+export const MessageSpeechThreadState = Schema.Struct({
+  threadId: ThreadId,
+  recordings: Schema.Array(MessageSpeechSynthesisResult),
+  pendingMessageIds: Schema.Array(MessageId),
+  summaries: Schema.Array(MessageSummaryThreadEntry),
+});
+export type MessageSpeechThreadState = typeof MessageSpeechThreadState.Type;
+
+/**
+ * What a listening-state subscription streams: the whole state first (again
+ * after every reconnect), then one message's changed entries at a time. A
+ * missing `recording` or `summary` means the message has none now.
+ */
+export const MessageSpeechThreadUpdate = Schema.Union([
+  Schema.Struct({
+    type: Schema.Literal("snapshot"),
+    state: MessageSpeechThreadState,
+  }),
+  Schema.Struct({
+    type: Schema.Literal("message"),
+    threadId: ThreadId,
+    messageId: MessageId,
+    recording: Schema.optional(MessageSpeechSynthesisResult),
+    summary: Schema.optional(MessageSummaryThreadEntry),
+    pending: Schema.Boolean,
+  }),
+]);
+export type MessageSpeechThreadUpdate = typeof MessageSpeechThreadUpdate.Type;

@@ -1,0 +1,14 @@
+import * as Effect from "effect/Effect";
+
+import { AgentVoiceReply } from "../../../voice/AgentVoiceReply.ts";
+import * as McpInvocationContext from "../../McpInvocationContext.ts";
+import { VoiceToolkit } from "./tools.ts";
+
+export const VoiceToolkitHandlersLive = VoiceToolkit.toLayer({
+  voice_reply: (input) =>
+    Effect.gen(function* () {
+      const scope = yield* McpInvocationContext.requireMcpCapability("voice");
+      const agentVoiceReply = yield* AgentVoiceReply;
+      return yield* agentVoiceReply.stage({ threadId: scope.threadId, script: input.script });
+    }),
+});

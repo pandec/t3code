@@ -103,6 +103,7 @@ export interface ChatMessage {
   readonly createdAt: string;
   readonly updatedAt: string;
   readonly inputIntent?: OrchestrationV2UserMessageInputIntent | undefined;
+  readonly inputOrigin?: import("@t3tools/contracts").MessageInputOrigin | undefined;
 }
 
 export interface ProposedPlan {

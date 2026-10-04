@@ -6,6 +6,7 @@ import {
   ComposerContextRecord,
   COMPOSER_CONTEXT_MAX_RECORDS,
   ForwardCompatibleArray,
+  MessageInputOrigin,
   OrchestrationMessageContext,
   PROVIDER_SEND_TURN_MAX_ATTACHMENTS,
   ProjectId as ProjectIdSchema,
@@ -326,6 +327,8 @@ export class ComposerDraftPersistenceError extends Schema.TaggedError<ComposerDr
 
 export interface ComposerDraft {
   readonly text: string;
+  /** Set when dictation produced the text; sticky until the text is emptied. */
+  readonly inputOrigin?: MessageInputOrigin;
   readonly context?: OrchestrationMessageContext;
   readonly attachments: ReadonlyArray<DraftComposerAttachment>;
   readonly importedShareIds?: ReadonlyArray<string>;
@@ -349,6 +352,7 @@ export interface ComposerDraftProject {
 
 export interface ComposerDraftContent {
   readonly text: string;
+  readonly inputOrigin?: MessageInputOrigin;
   readonly context?: OrchestrationMessageContext;
   readonly attachments: ReadonlyArray<DraftComposerAttachment>;
   readonly sourceShareId?: string;
@@ -389,6 +393,7 @@ const PersistedComposerContextSchema = Schema.Struct({
 
 const ComposerDraftSchema = Schema.Struct({
   text: Schema.String,
+  inputOrigin: Schema.optional(MessageInputOrigin),
   context: Schema.optional(PersistedComposerContextSchema),
   attachments: Schema.Array(DraftComposerAttachmentSchema),
   importedShareIds: Schema.optional(Schema.Array(Schema.String)),
@@ -1292,12 +1297,27 @@ export function setStickyComposerModelSelection(modelSelection: ModelSelection):
   schedulePersistComposerState();
 }
 
-export function setComposerDraftText(draftKey: string, value: string): void {
+function withInputOrigin(
+  draft: ComposerDraft,
+  inputOrigin: MessageInputOrigin | undefined,
+): ComposerDraft {
+  const { inputOrigin: _previous, ...rest } = draft;
+  return inputOrigin === undefined || draft.text.length === 0 ? rest : { ...rest, inputOrigin };
+}
+
+export function setComposerDraftText(
+  draftKey: string,
+  value: string,
+  inputOrigin?: MessageInputOrigin,
+): void {
   let removed: ReadonlyArray<DraftComposerAttachment> = [];
   updateComposerDrafts((current) => {
     const existing = normalizeDraft(current[draftKey]);
     const context = referencedComposerContext(value, existing.context);
-    const draft = withReferencedContextFiles(existing, value, context);
+    const draft = withInputOrigin(
+      withReferencedContextFiles(existing, value, context),
+      inputOrigin ?? existing.inputOrigin,
+    );
     removed = existing.attachments.filter((attachment) => !draft.attachments.includes(attachment));
     return withComposerDraft(current, draftKey, draft);
   });
@@ -1527,6 +1547,7 @@ export function clearComposerDraftContentState(
   // draft leaves the store rather than lingering as a blank row.
   const {
     importedShareIds: _importedShareIds,
+    inputOrigin: _inputOrigin,
     context: _context,
     modelSelection,
     workspaceSelection,
@@ -1622,12 +1643,14 @@ export function mergeComposerDraftContentState(
     PROVIDER_SEND_TURN_MAX_ATTACHMENTS,
   );
   const text = mergeComposerDraftText(existing.text, content.text);
+  const inputOrigin = existing.inputOrigin ?? content.inputOrigin;
   const context = mergeReferencedComposerContext(text, existing.context, content.context);
   const importedShareIds = content.sourceShareId
     ? [...(existing.importedShareIds ?? []), content.sourceShareId]
     : existing.importedShareIds;
   if (
     text === existing.text &&
+    inputOrigin === existing.inputOrigin &&
     attachments.length === existing.attachments.length &&
     content.context === undefined &&
     importedShareIds === existing.importedShareIds
@@ -1636,13 +1659,16 @@ export function mergeComposerDraftContentState(
   }
   return {
     ...current,
-    [draftKey]: {
-      ...existing,
-      text,
-      attachments,
-      context,
-      ...(importedShareIds ? { importedShareIds } : {}),
-    },
+    [draftKey]: withInputOrigin(
+      {
+        ...existing,
+        text,
+        attachments,
+        context,
+        ...(importedShareIds ? { importedShareIds } : {}),
+      },
+      inputOrigin,
+    ),
   };
 }
 
@@ -1713,6 +1739,7 @@ export async function restoreComposerDraftSnapshot(
 export function sameComposerDraftState(a: ComposerDraft, b: ComposerDraft): boolean {
   return (
     a.text === b.text &&
+    a.inputOrigin === b.inputOrigin &&
     a.attachments === b.attachments &&
     a.context === b.context &&
     a.importedShareIds === b.importedShareIds &&

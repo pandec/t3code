@@ -205,7 +205,10 @@ export interface ThreadDetailScreenProps {
   readonly usesAutomaticContentInsets?: boolean;
   readonly onHeaderMaterialVisibilityChange?: (visible: boolean) => void;
   readonly onOpenConnectionEditor: () => void;
-  readonly onChangeDraftMessage: (value: string) => void;
+  readonly onChangeDraftMessage: (
+    value: string,
+    inputOrigin?: import("@t3tools/contracts").MessageInputOrigin,
+  ) => void;
   readonly onPickDraftMedia: () => Promise<void>;
   readonly onPickDraftFiles: () => Promise<void>;
   readonly onNativePasteImages: (uris: ReadonlyArray<string>) => Promise<void>;
@@ -1196,6 +1199,11 @@ export const ThreadDetailScreen = memo(function ThreadDetailScreen(props: Thread
               contentPresentation={props.contentPresentation}
               agentLabel={agentLabel}
               threadTitle={props.selectedThread.title}
+              messageSummariesAvailable={
+                props.serverConfig?.environment.capabilities.messageSummaries === true
+              }
+              textToSpeechAvailable={props.serverConfig?.textToSpeech.available === true}
+              textToSpeechPersistentJobs={props.serverConfig?.textToSpeech.persistentJobs === true}
               latestRun={props.activityRun}
               activeWorkStartedAt={props.activeWorkStartedAt}
               runlessWorkActive={props.runlessWorkActive ?? false}

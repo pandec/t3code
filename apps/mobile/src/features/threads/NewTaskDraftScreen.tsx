@@ -506,7 +506,7 @@ export function NewTaskDraftScreen(props: {
     draftMessage: flow.prompt,
     selection: composerMenu.selection,
     disabled: isIncomingShareTransferPending || isImportingShare || flow.submitting,
-    onCommitVoiceDraftMessage: flow.setPrompt,
+    onCommitVoiceDraftMessage: (text) => flow.setPrompt(text, "voice-transcription"),
     onChangeSelection: composerMenu.onSelectionChange,
   });
   const voicePresentation = resolveVoiceComposerPresentation(
