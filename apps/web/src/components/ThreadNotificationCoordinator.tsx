@@ -127,9 +127,11 @@ function EnvironmentNotifications({
           : null;
       const completedAt = Date.parse(thread.latestRun?.completedAt ?? "");
       // Waiting only on commands (a dev server) is done; subagents and monitors wake the agent.
+      // Agent work reads as working and always holds; watch loops read as monitoring.
       const settled =
         status === "ready" ||
-        (status === "waiting" && !backgroundWorkHoldsCompletion(thread.pendingBackgroundTasks));
+        ((status === "monitoring" || status === "waiting") &&
+          !backgroundWorkHoldsCompletion(thread.pendingBackgroundTasks));
       const completion =
         settled && thread.latestRun?.status === "completed" && Number.isFinite(completedAt)
           ? completedAt

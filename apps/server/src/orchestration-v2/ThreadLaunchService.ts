@@ -87,6 +87,8 @@ export interface ThreadLaunchInput {
     };
     readonly metadata?: OrchestrationV2ProviderThreadNativeMetadata;
   };
+  /** Fork: custom group a newly created thread joins; ignored when reusing a thread. */
+  readonly customGroupId?: string | null;
   readonly createdBy: OrchestrationV2Actor;
   readonly creationSource: OrchestrationV2CreationSource;
 }
@@ -717,6 +719,7 @@ const make = Effect.gen(function* () {
                 ...(input.importedNativeThread === undefined
                   ? {}
                   : { importedNativeThread: input.importedNativeThread }),
+                ...(input.customGroupId == null ? {} : { customGroupId: input.customGroupId }),
                 createdBy: input.createdBy,
                 creationSource: input.creationSource,
               });

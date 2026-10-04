@@ -6,6 +6,7 @@ import {
   type OrchestrationV2Command,
   type OrchestrationV2Run,
   type OrchestrationV2ThreadProjection,
+  type OrchestrationV2ThreadShell,
   ProjectId,
   ProviderInstanceId,
   RunId,
@@ -419,3 +420,80 @@ it.effect.each([
     }
   }),
 );
+
+it.effect("reads background work against a drain scope from the thread shell", () => {
+  const projectId = ProjectId.make("project:thread-management:drain");
+  const threadId = ThreadId.make("thread:thread-management:drain");
+  let shell: OrchestrationV2ThreadShell | null = null;
+  const settledShell = (
+    pendingBackgroundTasks: OrchestrationV2ThreadShell["pendingBackgroundTasks"],
+    run: Partial<OrchestrationV2ThreadShell> = {},
+  ) =>
+    ({
+      id: threadId,
+      projectId,
+      activeRunId: null,
+      activityRunStatus: null,
+      status: "completed",
+      pendingBackgroundTasks,
+      ...run,
+    }) as OrchestrationV2ThreadShell;
+  const testLayer = ThreadManagementService.layer.pipe(
+    Layer.provide(
+      Layer.mock(Orchestrator.OrchestratorV2)({
+        getThreadShell: () => Effect.sync(() => shell),
+      }),
+    ),
+  );
+  const subagent = { taskId: "sub", kind: "subagent" } as const;
+  const monitor = { taskId: "watch", kind: "monitor" } as const;
+  const devServer = { taskId: "dev", kind: "command" } as const;
+
+  return Effect.gen(function* () {
+    const service = yield* ThreadManagementService.ThreadManagementService;
+    const read = (scope: "agents" | "all") =>
+      service.getBackgroundWorkDrain({ projectId, threadId, scope });
+
+    // Watch loops alone: --drain is over, --drain=all still waits.
+    shell = settledShell([devServer, monitor]);
+    expect(yield* read("agents")).toEqual({
+      threadId,
+      scope: "agents",
+      liveness: "monitoring",
+      runActive: false,
+      pendingTasks: [],
+      drained: true,
+    });
+    expect(yield* read("all")).toMatchObject({
+      liveness: "monitoring",
+      pendingTasks: [devServer, monitor],
+      drained: false,
+    });
+
+    // A live agent holds both scopes.
+    shell = settledShell([monitor, subagent]);
+    expect(yield* read("agents")).toMatchObject({
+      liveness: "working",
+      pendingTasks: [subagent],
+      drained: false,
+    });
+
+    // A wake run hides the roster but still keeps the drain open.
+    shell = settledShell([], { activeRunId: RunId.make("run:wake"), activityRunStatus: "running" });
+    expect(yield* read("all")).toMatchObject({ liveness: null, runActive: true, drained: false });
+    shell = settledShell([], { status: "queued" });
+    expect(yield* read("agents")).toMatchObject({ runActive: true, drained: false });
+
+    shell = settledShell([]);
+    expect(yield* read("all")).toMatchObject({ liveness: null, runActive: false, drained: true });
+
+    // A thread in another project, or no thread, is not found.
+    shell = { ...settledShell([]), projectId: ProjectId.make("project:other") };
+    const error = yield* Effect.flip(read("agents"));
+    expect(error).toBeInstanceOf(ThreadManagementService.ThreadManagementThreadNotFoundError);
+    shell = null;
+    expect(yield* Effect.flip(read("agents"))).toBeInstanceOf(
+      ThreadManagementService.ThreadManagementThreadNotFoundError,
+    );
+  }).pipe(Effect.provide(testLayer));
+});

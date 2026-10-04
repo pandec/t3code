@@ -1,6 +1,6 @@
 import { useAndroidControlSizing } from "../../components/useAndroidControlSizing";
 import { useAppearancePreferences } from "../settings/appearance/AppearancePreferencesProvider";
-import { computeThreadMoveAvailability } from "./threadOrder";
+import { computeGroupedThreadMoveAvailability } from "./threadOrder";
 import type {
   EnvironmentProject,
   EnvironmentThreadShell,
@@ -29,7 +29,12 @@ import { NativeStackScreenOptions } from "../../native/StackHeader";
 import { scopedProjectKey, scopedThreadKey } from "../../lib/scopedEntities";
 import { useProjects, useNavigationThreadShells } from "../../state/entities";
 import { useThreadSearch } from "../../state/queries";
-import { useThreadShelfExpansion } from "../../state/use-mobile-preferences";
+import {
+  useCollapsedThreadGroups,
+  useThreadShelfExpansion,
+} from "../../state/use-mobile-preferences";
+import { useThreadGroups } from "../../state/use-thread-groups";
+import { ThreadCustomGroupHeader } from "./ThreadCustomGroupHeader";
 import { usePendingThreadOrder } from "../../state/thread-order";
 import { threadListEnvironmentsAtom } from "../../state/server";
 import { usePendingNewTasks } from "../../state/use-pending-new-tasks";
@@ -85,6 +90,9 @@ type SidebarListItem =
   | { readonly type: "v2-show-more"; readonly key: string; readonly hiddenCount: number };
 
 const SIDEBAR_STICKY_HEADER_HEIGHT = 106;
+// Fork: a search shows matches inside collapsed groups and a collapsed
+// Active shelf without touching the stored collapse preferences.
+const NO_COLLAPSED_GROUPS: ReadonlySet<string> = new Set();
 
 interface ThreadNavigationSidebarProps {
   readonly width: number;
@@ -336,6 +344,11 @@ function ThreadNavigationSidebarPane(
     useThreadShelfExpansion("settled");
   const { expanded: pinnedShelfExpanded, toggle: togglePinnedShelf } =
     useThreadShelfExpansion("pinned");
+  // Fork: custom thread groups split Active into folding sections.
+  const { groups: customGroups } = useThreadGroups();
+  const collapsedThreadGroups = useCollapsedThreadGroups();
+  const { expanded: activeShelfExpanded, toggle: toggleActiveShelf } =
+    useThreadShelfExpansion("active");
   // Queued-start and snooze helpers need a clock while the pane stays open.
   const [nowMinute, setNowMinute] = useState(() => new Date().toISOString().slice(0, 16));
   // Snooze wake times are second-precise; a counter bumped exactly at the
@@ -356,6 +369,7 @@ function ThreadNavigationSidebarPane(
     machineByEnvironmentId,
     settlementEnvironmentIds,
     snoozeEnvironmentIds,
+    snoozeUntilDoneEnvironmentIds,
     pinningEnvironmentIds,
     autoSettleOptOutEnvironmentIds,
     pinReorderEnvironmentIds,
@@ -369,7 +383,8 @@ function ThreadNavigationSidebarPane(
   // list construction quadratic, and this list rebuilds on every minute tick.
   const threadMoveAvailability = useMemo(() => {
     const sectionAvailability = (section: "pinned" | "active") =>
-      computeThreadMoveAvailability({
+      computeGroupedThreadMoveAvailability({
+        groups: customGroups,
         allThreads: threads,
         section,
         pendingOrder,
@@ -387,6 +402,7 @@ function ThreadNavigationSidebarPane(
       });
     return new Map([...sectionAvailability("pinned"), ...sectionAvailability("active")]);
   }, [
+    customGroups,
     pinReorderEnvironmentIds,
     activeReorderEnvironmentIds,
     threads,
@@ -474,6 +490,10 @@ function ThreadNavigationSidebarPane(
     const items: SidebarListItem[] = buildThreadListV2ListItems({
       items: threadListV2Layout.items,
       pendingTasks: v2PendingTasks,
+      customGroups,
+      collapsedGroupIds: v2SearchQuery.length > 0 ? NO_COLLAPSED_GROUPS : collapsedThreadGroups.ids,
+      activeShelfExpanded: activeShelfExpanded || v2SearchQuery.length > 0,
+      selectedThreadKey: props.selectedThreadKey,
       pinnedCount: threadListV2Layout.pinnedCount,
       pinnedShelfExpanded,
       pinnedShelfHeaderVisible: threadListV2Layout.pinnedShelfHeaderVisible,
@@ -498,6 +518,10 @@ function ThreadNavigationSidebarPane(
     }
     return items;
   }, [
+    customGroups,
+    collapsedThreadGroups.ids,
+    activeShelfExpanded,
+    props.selectedThreadKey,
     nowMinute,
     options.selectedEnvironmentId,
     options.selectedModel,
@@ -817,6 +841,7 @@ function ThreadNavigationSidebarPane(
               settlementSupported={settlementEnvironmentIds.has(thread.environmentId)}
               onSettleThread={settleThread}
               snoozeSupported={snoozeEnvironmentIds.has(thread.environmentId)}
+              snoozeUntilDoneSupported={snoozeUntilDoneEnvironmentIds.has(thread.environmentId)}
               pinningSupported={pinningEnvironmentIds.has(thread.environmentId)}
               autoSettleOptOutSupported={autoSettleOptOutEnvironmentIds.has(thread.environmentId)}
               reorderSupported={
@@ -851,6 +876,20 @@ function ThreadNavigationSidebarPane(
           );
         case "v2-pinned-divider":
           return <ThreadListV2PinnedDivider pane="sidebar" />;
+        case "v2-custom-group": {
+          const groupId = item.groupId;
+          return (
+            <ThreadCustomGroupHeader
+              name={item.name}
+              count={item.count}
+              expanded={item.expanded}
+              builtIn={groupId === null}
+              onToggle={
+                groupId === null ? toggleActiveShelf : () => collapsedThreadGroups.toggle(groupId)
+              }
+            />
+          );
+        }
         case "v2-snoozed-shelf":
           return (
             <ThreadListV2SnoozedShelfHeader
@@ -882,6 +921,8 @@ function ThreadNavigationSidebarPane(
       }
     },
     [
+      collapsedThreadGroups,
+      toggleActiveShelf,
       archiveThread,
       activeReorderEnvironmentIds,
       confirmDeletePendingTask,

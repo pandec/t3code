@@ -4,8 +4,16 @@ import {
   scopeThreadRef,
   scopedThreadKey,
 } from "@t3tools/client-runtime/environment";
-import { settlePromise, squashAtomCommandFailure } from "@t3tools/client-runtime/state/runtime";
-import { canSnooze, threadWokeAt } from "@t3tools/client-runtime/state/thread-settled";
+import {
+  isAtomCommandInterrupted,
+  settlePromise,
+  squashAtomCommandFailure,
+} from "@t3tools/client-runtime/state/runtime";
+import {
+  canSnooze,
+  effectiveSnoozed,
+  threadWokeAt,
+} from "@t3tools/client-runtime/state/thread-settled";
 import { threadRuntimeCanArchive } from "@t3tools/client-runtime/state/models";
 import { conversationForkTarget } from "@t3tools/client-runtime/state/thread-fork";
 import { EnvironmentId, type ScopedThreadRef, ThreadId } from "@t3tools/contracts";
@@ -36,8 +44,11 @@ import {
   readEnvironmentSupportsPinning,
   readEnvironmentSupportsPinReorder,
   readEnvironmentSupportsActiveReorder,
+  readEnvironmentSupportsCustomGroups,
   readEnvironmentSupportsSettlement,
   readEnvironmentSupportsSnooze,
+  readEnvironmentSupportsSnoozeIndefinite,
+  readEnvironmentSupportsSnoozeUntilDone,
   readEnvironmentSupportsVisitedTracking,
   readEnvironmentThreadRefs,
   readProject,
@@ -96,6 +107,10 @@ export class ThreadForkNotSyncedError extends Schema.TaggedError<ThreadForkNotSy
 // One fork per source thread at a time, so a double click on any surface
 // (hover action, menus, palette) cannot create two copies.
 const forkingThreadKeys = new Set<string>();
+
+/** Fork: archives in flight (including an open confirmation), so the same
+ * thread archived from two surfaces at once (menu plus shortcut) runs once. */
+const archivingThreadKeys = new Set<string>();
 
 /** Deleting a thread expires every pending Undo that would try to revive it. */
 function invalidateThreadUndos(target: ScopedThreadRef) {
@@ -198,6 +213,18 @@ export class ThreadActiveReorderUnsupportedError extends Schema.TaggedError<Thre
 ) {
   override get message(): string {
     return "Update this environment's server to reorder active threads.";
+  }
+}
+
+export class ThreadCustomGroupsUnsupportedError extends Schema.TaggedError<ThreadCustomGroupsUnsupportedError>()(
+  "ThreadCustomGroupsUnsupportedError",
+  {
+    environmentId: EnvironmentId,
+    threadId: ThreadId,
+  },
+) {
+  override get message(): string {
+    return "Update this environment's server to use thread groups.";
   }
 }
 
@@ -339,6 +366,9 @@ export function useThreadActions() {
   const reorderActiveThreadMutation = useAtomCommand(threadEnvironment.reorderActive, {
     reportFailure: false,
   });
+  const setThreadCustomGroupMutation = useAtomCommand(threadEnvironment.setCustomGroup, {
+    reportFailure: false,
+  });
   const snoozeThreadMutation = useAtomCommand(threadEnvironment.snooze, {
     reportFailure: false,
   });
@@ -360,6 +390,7 @@ export function useThreadActions() {
     reportFailure: false,
   });
   const sidebarThreadSortOrder = useClientSettings((settings) => settings.sidebarThreadSortOrder);
+  const confirmThreadArchive = useClientSettings((settings) => settings.confirmThreadArchive);
   const confirmThreadDelete = useClientSettings((settings) => settings.confirmThreadDelete);
   const confirmThreadUnpin = useClientSettings((settings) => settings.confirmThreadUnpin);
   const clearComposerDraftForThread = useComposerDraftStore((store) => store.clearDraftThread);
@@ -485,6 +516,50 @@ export function useThreadActions() {
       resolveThreadTarget,
       unarchiveThread,
     ],
+  );
+
+  /** Fork: the one user-facing archive path (menus, palette, shortcut): asks
+   * for confirmation when the setting is on, runs once per thread at a time,
+   * and reports failures as a toast. */
+  const attemptArchiveThread = useCallback(
+    async (target: ScopedThreadRef) => {
+      const threadKey = scopedThreadKey(target);
+      if (archivingThreadKeys.has(threadKey)) return;
+      const resolved = resolveThreadTarget(target);
+      if (!resolved) return;
+      archivingThreadKeys.add(threadKey);
+      try {
+        if (confirmThreadArchive) {
+          const localApi = readLocalApi();
+          if (!localApi) return;
+          const confirmed = await settlePromise(() =>
+            localApi.dialogs.confirm(`Archive thread "${resolved.thread.title}"?`),
+          );
+          if (confirmed._tag === "Failure" || !confirmed.value) return;
+        }
+        let didArchive = false;
+        const result = await archiveThread(target, {
+          onArchived: () => {
+            didArchive = true;
+          },
+        });
+        if (result._tag === "Failure" && !isAtomCommandInterrupted(result)) {
+          const error = squashAtomCommandFailure(result);
+          toastManager.add(
+            stackedThreadToast({
+              type: "error",
+              title: didArchive
+                ? "Thread archived, but navigation failed"
+                : "Failed to archive thread",
+              description: error instanceof Error ? error.message : "An error occurred.",
+            }),
+          );
+        }
+      } finally {
+        archivingThreadKeys.delete(threadKey);
+      }
+    },
+    [archiveThread, confirmThreadArchive, resolveThreadTarget],
   );
 
   const deleteThread = useCallback(
@@ -828,7 +903,16 @@ export function useThreadActions() {
       // has to put those back as well.
       const pinOrderKey = resolved?.thread.pinnedAt != null ? resolved.thread.pinOrderKey : null;
       const wasPinned = resolved?.thread.pinnedAt != null;
-      const snoozedUntil = resolved?.thread.snoozedUntil ?? null;
+      // Fork: restore only a timed or indefinite (null wake time) snooze
+      // that still held; an expired or raised-hand one had already woken.
+      // Settling stops the work an "until it's done" snooze waits on
+      // (DECISIONS Q3.1), so that snooze would have woken: never restore it.
+      const restoreSnooze =
+        resolved !== null &&
+        resolved.thread.snoozedUntilRunId == null &&
+        effectiveSnoozed(resolved.thread, { now: new Date().toISOString() })
+          ? { snoozedUntil: resolved.thread.snoozedUntil ?? null }
+          : null;
       // An older unpin/snooze Undo would re-pin or re-snooze, and the server
       // treats either as a promotion that un-settles; settling supersedes them.
       ThreadUndo.invalidate("pin", scopedThreadKey(target));
@@ -858,10 +942,10 @@ export function useThreadActions() {
             );
             if (pinned._tag !== "Success") return pinned;
           }
-          if (snoozedUntil !== null) {
+          if (restoreSnooze !== null) {
             return snoozeThreadMutation({
               environmentId: target.environmentId,
-              input: { threadId: target.threadId, snoozedUntil },
+              input: { threadId: target.threadId, ...restoreSnooze },
             });
           }
           return unsettled;
@@ -944,6 +1028,27 @@ export function useThreadActions() {
     [reorderActiveThreadMutation],
   );
 
+  /** Fork: move a thread into a custom group (null: Active). */
+  const setThreadCustomGroup = useCallback(
+    async (target: ScopedThreadRef, customGroupId: string | null) => {
+      if (!readEnvironmentSupportsCustomGroups(target.environmentId)) {
+        return AsyncResult.failure(
+          Cause.fail(
+            new ThreadCustomGroupsUnsupportedError({
+              environmentId: target.environmentId,
+              threadId: target.threadId,
+            }),
+          ),
+        );
+      }
+      return setThreadCustomGroupMutation({
+        environmentId: target.environmentId,
+        input: { threadId: target.threadId, customGroupId },
+      });
+    },
+    [setThreadCustomGroupMutation],
+  );
+
   const unsnoozeThread = useCallback(
     async (target: ScopedThreadRef) => {
       if (!readEnvironmentSupportsSnooze(target.environmentId)) {
@@ -966,9 +1071,23 @@ export function useThreadActions() {
   );
 
   const snoozeThread = useCallback(
-    async (target: ScopedThreadRef, snoozedUntil: string) => {
+    async (
+      target: ScopedThreadRef,
+      snoozedUntil: string | null,
+      options?: { readonly untilDone?: boolean },
+    ) => {
+      const untilDone = options?.untilDone === true;
       // Version skew: never send the command to a server that predates it.
-      if (!readEnvironmentSupportsSnooze(target.environmentId)) {
+      // Fork: a null wake time (indefinite snooze) also needs the
+      // threadSnoozeIndefinite capability; older servers reject it. "Until
+      // it's done" needs threadSnoozeUntilDone: older servers drop the flag
+      // and would park the thread indefinitely.
+      if (
+        !readEnvironmentSupportsSnooze(target.environmentId) ||
+        (untilDone
+          ? snoozedUntil !== null || !readEnvironmentSupportsSnoozeUntilDone(target.environmentId)
+          : snoozedUntil === null && !readEnvironmentSupportsSnoozeIndefinite(target.environmentId))
+      ) {
         return AsyncResult.failure(
           Cause.fail(
             new ThreadSnoozeUnsupportedError({
@@ -995,7 +1114,7 @@ export function useThreadActions() {
       const action = ThreadUndo.begin("snooze", scopedThreadKey(target));
       const result = await snoozeThreadMutation({
         environmentId: target.environmentId,
-        input: { threadId: target.threadId, snoozedUntil },
+        input: { threadId: target.threadId, snoozedUntil, ...(untilDone ? { untilDone } : {}) },
       });
       if (result._tag !== "Success") {
         action.finish();
@@ -1110,6 +1229,7 @@ export function useThreadActions() {
   return useMemo(
     () => ({
       archiveThread,
+      attemptArchiveThread,
       unarchiveThread,
       deleteThread,
       confirmAndDeleteThread,
@@ -1122,12 +1242,14 @@ export function useThreadActions() {
       confirmAndUnpinThread,
       reorderPinnedThread,
       reorderActiveThread,
+      setThreadCustomGroup,
       markThreadUnread,
       setThreadAutoSettle,
       forkThread,
     }),
     [
       archiveThread,
+      attemptArchiveThread,
       confirmAndDeleteThread,
       confirmAndUnpinThread,
       deleteThread,
@@ -1136,6 +1258,7 @@ export function useThreadActions() {
       pinThread,
       reorderPinnedThread,
       reorderActiveThread,
+      setThreadCustomGroup,
       setThreadAutoSettle,
       settleThread,
       snoozeThread,

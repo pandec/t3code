@@ -1,6 +1,7 @@
 import type { ThreadMoveDestination } from "../threads/threadOrder";
 import type { EnvironmentThreadShell } from "@t3tools/client-runtime/state/shell";
 import { canSnooze, effectiveSnoozed } from "@t3tools/client-runtime/state/thread-settled";
+import { mergeThreadGroups, threadGroupId } from "@t3tools/shared/threadGroups";
 import * as Cause from "effect/Cause";
 import * as Haptics from "expo-haptics";
 import { useCallback, useRef } from "react";
@@ -45,6 +46,15 @@ function environmentSupportsSnooze(environmentId: EnvironmentThreadShell["enviro
   return (
     appAtomRegistry.get(environmentServerConfigsAtom).get(environmentId)?.environment.capabilities
       .threadSnooze === true
+  );
+}
+
+function environmentSupportsSnoozeUntilDone(
+  environmentId: EnvironmentThreadShell["environmentId"],
+) {
+  return (
+    appAtomRegistry.get(environmentServerConfigsAtom).get(environmentId)?.environment.capabilities
+      .threadSnoozeUntilDone === true
   );
 }
 
@@ -261,7 +271,11 @@ export function useThreadListActions(
   readonly archiveThread: (thread: EnvironmentThreadShell) => void;
   readonly confirmDeleteThread: (thread: EnvironmentThreadShell) => void;
   readonly settleThread: (thread: EnvironmentThreadShell) => Promise<boolean>;
-  readonly snoozeThread: (thread: EnvironmentThreadShell, snoozedUntil: string) => Promise<boolean>;
+  readonly snoozeThread: (
+    thread: EnvironmentThreadShell,
+    snoozedUntil: string | null,
+    options?: { readonly untilDone?: boolean },
+  ) => Promise<boolean>;
   readonly unsnoozeThread: (thread: EnvironmentThreadShell) => Promise<boolean>;
   readonly unsettleThread: (thread: EnvironmentThreadShell) => Promise<boolean>;
   readonly pinThread: (thread: EnvironmentThreadShell) => Promise<boolean>;
@@ -316,7 +330,12 @@ export function useThreadListActions(
     [executeAction],
   );
   const snoozeThread = useCallback(
-    async (thread: EnvironmentThreadShell, snoozedUntil: string) => {
+    async (
+      thread: EnvironmentThreadShell,
+      snoozedUntil: string | null,
+      options?: { readonly untilDone?: boolean },
+    ) => {
+      const untilDone = options?.untilDone === true;
       const key = scopedThreadKey(thread.environmentId, thread.id);
       if (snoozeInFlightThreadKeys.current.has(key)) {
         return false;
@@ -327,6 +346,18 @@ export function useThreadListActions(
           Alert.alert(
             "Could not snooze thread",
             "This environment's server does not support snoozing yet. Update the server to use Snooze.",
+          );
+          return false;
+        }
+        // Fork: only "Until it's done" may omit the wake time on mobile, and
+        // older servers drop its flag and would park the thread for good.
+        if (
+          snoozedUntil === null &&
+          (!untilDone || !environmentSupportsSnoozeUntilDone(thread.environmentId))
+        ) {
+          Alert.alert(
+            "Could not snooze thread",
+            "This environment's server does not support snoozing until the work is done. Update the server to use it.",
           );
           return false;
         }
@@ -349,6 +380,7 @@ export function useThreadListActions(
               input: {
                 threadId: thread.id,
                 snoozedUntil,
+                ...(untilDone ? { untilDone } : {}),
               },
             }),
           (result) => result._tag === "Success",
@@ -606,6 +638,9 @@ export function useThreadListActions(
   const reorderActiveMutation = useAtomCommand(threadEnvironment.reorderActive, {
     reportFailure: false,
   });
+  const setCustomGroupMutation = useAtomCommand(threadEnvironment.setCustomGroup, {
+    reportFailure: false,
+  });
   const moveThread = useCallback(
     async (thread: EnvironmentThreadShell, direction: ThreadMoveDestination) => {
       if (getPendingThreadOrder() !== null || appAtomRegistry.get(threadDropBusyAtom)) return false;
@@ -644,7 +679,21 @@ export function useThreadListActions(
         );
         return false;
       }
-      const ordered = getThreadListV2OrderedSection({
+      // Fork: active moves stay inside the source or requested custom group.
+      const groups = mergeThreadGroups(
+        ...[...configs.values()].map((config) => config.settings.threadGroups),
+      );
+      const customGroupId =
+        typeof direction === "object" && direction.customGroupId !== undefined
+          ? direction.customGroupId
+          : threadGroupId(thread, groups);
+      const changesGroup = section === "active" && customGroupId !== threadGroupId(thread, groups);
+      if (
+        changesGroup &&
+        configs.get(thread.environmentId)?.environment.capabilities.threadCustomGroups !== true
+      )
+        return false;
+      const sectionOrdered = getThreadListV2OrderedSection({
         threads: shells,
         section,
         now: new Date().toISOString(),
@@ -660,7 +709,11 @@ export function useThreadListActions(
           ),
         ),
       });
+      const ordered = sectionOrdered.filter(
+        (row) => section !== "active" || threadGroupId(row, groups) === customGroupId,
+      );
       const assignments = createThreadMovePlanner({
+        groups,
         allThreads: shells,
         ordered,
         section,
@@ -690,6 +743,7 @@ export function useThreadListActions(
         ? null
         : beginPendingThreadOrder(
             createPendingThreadOrder({
+              ...(section === "active" ? { customGroupId } : {}),
               section,
               ordered,
               movedId: scopedThreadKey(thread.environmentId, thread.id),
@@ -700,6 +754,17 @@ export function useThreadListActions(
       let succeeded = false;
       const reorder = section === "pinned" ? reorderPinnedMutation : reorderActiveMutation;
       try {
+        // Fork: a move into another group changes membership first.
+        if (changesGroup) {
+          const result = await setCustomGroupMutation({
+            environmentId: thread.environmentId,
+            input: { threadId: thread.id, customGroupId },
+          });
+          if (result._tag === "Failure") {
+            Alert.alert("Could not move thread to group", String(Cause.squash(result.cause)));
+            return false;
+          }
+        }
         if (crossSection) {
           if (section === "pinned") {
             const orderKey = assignments.find(
@@ -756,6 +821,7 @@ export function useThreadListActions(
     },
     [
       settleThread,
+      setCustomGroupMutation,
       reorderActiveMutation,
       reorderPinnedMutation,
       pinMutation,

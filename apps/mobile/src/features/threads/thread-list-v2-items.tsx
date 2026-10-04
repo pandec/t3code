@@ -22,7 +22,12 @@ import {
   canForkConversation,
   canForkImportedSessionWith,
 } from "@t3tools/client-runtime/state/thread-fork";
-import { canSnooze, resolveSnoozePresets } from "@t3tools/client-runtime/state/thread-settled";
+import {
+  canSnooze,
+  canSnoozeUntilDone,
+  resolveSnoozePresets,
+  SNOOZE_UNTIL_DONE_PRESET,
+} from "@t3tools/client-runtime/state/thread-settled";
 import type { MenuAction } from "@react-native-menu/menu";
 import { memo, useCallback, useEffect, useMemo, useState, type ComponentProps } from "react";
 import { Alert, Pressable, StyleSheet, useWindowDimensions, View } from "react-native";
@@ -75,6 +80,7 @@ const STATUS_LABEL_BY_STATUS: Partial<
   approval: { label: "Approval", className: "text-warning-foreground" },
   input: { label: "Input", className: "text-adaptive-indigo-600-300" },
   working: { label: "Working", className: "text-adaptive-sky-600-400" },
+  monitoring: { label: "Monitoring", className: "text-foreground-secondary" },
   failed: { label: "Failed", className: "text-danger-foreground" },
   limited: { label: "Limited", className: "text-warning-foreground" },
 };
@@ -594,7 +600,11 @@ export const ThreadListV2Row = memo(function ThreadListV2Row(props: {
   readonly onRenameThread: (thread: EnvironmentThreadShell) => void;
   readonly onRegenerateThreadTitle: (thread: EnvironmentThreadShell) => void;
   readonly onSettleThread: (thread: EnvironmentThreadShell) => Promise<boolean>;
-  readonly onSnoozeThread: (thread: EnvironmentThreadShell, snoozedUntil: string) => void;
+  readonly onSnoozeThread: (
+    thread: EnvironmentThreadShell,
+    snoozedUntil: string | null,
+    options?: { readonly untilDone?: boolean },
+  ) => void;
   readonly onUnsnoozeThread: (thread: EnvironmentThreadShell) => void;
   readonly onUnsettleThread: (thread: EnvironmentThreadShell) => void;
   readonly onArchiveThread: (thread: EnvironmentThreadShell) => void;
@@ -609,6 +619,8 @@ export const ThreadListV2Row = memo(function ThreadListV2Row(props: {
   readonly settlementSupported: boolean;
   /** False on servers that predate thread.snooze/unsnooze. */
   readonly snoozeSupported: boolean;
+  /** Fork: false on servers that predate "Until it's done" (untilDone). */
+  readonly snoozeUntilDoneSupported?: boolean;
   /** False on servers that predate thread.pin/unpin. */
   readonly pinningSupported: boolean;
   /** False on servers that predate thread.auto-settle.set. */
@@ -800,8 +812,23 @@ export const ThreadListV2Row = memo(function ThreadListV2Row(props: {
     () => (swipeActions.secondary === "snooze" ? resolveSnoozePresets(new Date()) : ([] as const)),
     [props.snoozePresetMinute, swipeActions.secondary],
   );
+  // Fork: "Until it's done" leads while the thread is working; it has no
+  // clock, so it stays outside the timed preset resolution.
+  const untilDoneOffered =
+    swipeActions.secondary === "snooze" &&
+    props.snoozeUntilDoneSupported === true &&
+    canSnoozeUntilDone(thread);
   const snoozePresetActions = useMemo<MenuAction[]>(
     () => [
+      ...(untilDoneOffered
+        ? [
+            {
+              id: `snooze:${SNOOZE_UNTIL_DONE_PRESET.id}`,
+              title: SNOOZE_UNTIL_DONE_PRESET.label,
+              subtitle: SNOOZE_UNTIL_DONE_PRESET.whenLabel,
+            },
+          ]
+        : []),
       ...snoozePresets.map((preset) => ({
         id: `snooze:${preset.id}`,
         title: preset.label,
@@ -809,7 +836,7 @@ export const ThreadListV2Row = memo(function ThreadListV2Row(props: {
       })),
       { id: "snooze:custom", title: "Custom…" },
     ],
-    [snoozePresets],
+    [snoozePresets, untilDoneOffered],
   );
   // Pinned cards keep the full lifecycle menu; only the pin item flips to
   // Unpin. (Settling a pinned thread clears the pin server-side; snoozing
@@ -980,6 +1007,11 @@ export const ThreadListV2Row = memo(function ThreadListV2Row(props: {
         setCustomSnoozeOpen(true);
         return;
       }
+      // The server still rejects it if the work ended meanwhile.
+      if (nativeEvent.event === `snooze:${SNOOZE_UNTIL_DONE_PRESET.id}`) {
+        onSnoozeThread(thread, null, { untilDone: true });
+        return;
+      }
       const snoozeSelection = resolveThreadListV2SnoozeMenuSelection({
         event: nativeEvent.event,
         displayedPresets: snoozePresets,
@@ -1008,6 +1040,7 @@ export const ThreadListV2Row = memo(function ThreadListV2Row(props: {
       handleUnpin,
       handleUnsettle,
       handleUnsnooze,
+      onSnoozeThread,
       setCustomSnoozeOpen,
       snoozePresets,
     ],
@@ -1146,6 +1179,9 @@ export const ThreadListV2Row = memo(function ThreadListV2Row(props: {
           )}
         >
           {statusLabel?.label ?? timeLabel}
+          {statusLabel !== undefined && status === "working" && timeLabel !== ""
+            ? ` ${timeLabel}`
+            : null}
         </Text>
       </View>
       <Text

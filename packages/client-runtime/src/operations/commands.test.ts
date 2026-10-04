@@ -344,12 +344,15 @@ describe("V2 environment commands", () => {
             branch: "feature",
             worktreePath: "/workspace/project-worktrees/feature",
             createdAt: "2026-06-20T00:00:00.000Z",
+            // Fork: the draft's custom group rides on the first-send launch.
+            customGroupId: "research",
           },
         },
       }).pipe(Effect.provideService(EnvironmentSupervisor.EnvironmentSupervisor, supervisor));
 
       expect(launches[0]).toMatchObject({
         threadId: v2ThreadId,
+        customGroupId: "research",
         title: "Continue here",
         generateTitle: true,
         workspaceStrategy: {

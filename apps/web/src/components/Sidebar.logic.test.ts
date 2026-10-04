@@ -802,7 +802,7 @@ describe("Sidebar V2 attention filter", () => {
 });
 
 describe("shouldRecedeSidebarThread", () => {
-  it.each(["working", "waiting"] as const)(
+  it.each(["working", "monitoring", "waiting"] as const)(
     "recedes an inactive %s thread even when it is unread and woke",
     (status) => {
       expect(
@@ -1252,14 +1252,56 @@ describe("resolveSidebarThreadStatus", () => {
     expect(resolveSidebarThreadStatus(idle)).toBe("ready");
   });
 
+  it("reads agents left running after the turn as working and watch loops alone as monitoring", () => {
+    const parked = { ...idle, runtime: { ...runtime, status: "idle" as const } };
+    const subagent = { taskId: "sub", kind: "subagent" as const };
+    const workflow = { taskId: "flow", kind: "background_task" as const };
+    const devServer = { taskId: "dev", kind: "command" as const };
+    const monitor = { taskId: "watch", kind: "monitor" as const };
+
+    expect(resolveSidebarThreadStatus({ ...parked, pendingBackgroundTasks: [subagent] })).toBe(
+      "working",
+    );
+    expect(resolveSidebarThreadStatus({ ...parked, pendingBackgroundTasks: [workflow] })).toBe(
+      "working",
+    );
+    expect(
+      resolveSidebarThreadStatus({ ...parked, pendingBackgroundTasks: [monitor, subagent] }),
+    ).toBe("working");
+    expect(
+      resolveSidebarThreadStatus({ ...parked, pendingBackgroundTasks: [devServer, monitor] }),
+    ).toBe("monitoring");
+    expect(resolveSidebarThreadStatus({ ...parked, pendingBackgroundTasks: [] })).toBe("waiting");
+  });
+
+  it("keeps attention and failure ahead of background work", () => {
+    const parked = {
+      ...idle,
+      runtime: { ...runtime, status: "idle" as const },
+      pendingBackgroundTasks: [{ taskId: "sub", kind: "subagent" as const }],
+    };
+    expect(resolveSidebarThreadStatus({ ...parked, hasPendingApprovals: true })).toBe("approval");
+    expect(resolveSidebarThreadStatus({ ...parked, hasPendingUserInput: true })).toBe("input");
+    expect(
+      resolveSidebarThreadStatus({
+        ...parked,
+        runtime: { ...runtime, status: "failed" as const, lastError: "boom" },
+      }),
+    ).toBe("failed");
+  });
+
   it("keeps a waiting runtime visible ahead of unread and woke presentation", () => {
     expect(resolveSidebarV2TopStatus({ status: "waiting", isUnread: true, isWoke: true })).toBe(
       "waiting",
     );
+    expect(resolveSidebarV2TopStatus({ status: "monitoring", isUnread: true, isWoke: true })).toBe(
+      "monitoring",
+    );
   });
 
-  it("keeps Waiting static while Working shows elapsed duration", () => {
+  it("keeps Waiting and Monitoring static while Working shows elapsed duration", () => {
     expect(shouldShowSidebarV2Duration("waiting")).toBe(false);
+    expect(shouldShowSidebarV2Duration("monitoring")).toBe(false);
     expect(shouldShowSidebarV2Duration("working")).toBe(true);
   });
 });
@@ -1522,12 +1564,15 @@ describe("resolveThreadStatusPill", () => {
     ).toMatchObject({ label: "Working", pulse: true });
   });
 
-  it("shows waiting for an idle thread with pending background tasks", () => {
+  it("shows monitoring for an idle thread with only watch loops left running", () => {
     expect(
       resolveThreadStatusPill({
         thread: {
           ...baseThread,
-          pendingBackgroundTasks: [{ taskId: "bg-1", description: "sleep 20", kind: "command" }],
+          pendingBackgroundTasks: [
+            { taskId: "bg-1", description: "sleep 20", kind: "command" },
+            { taskId: "watch", kind: "monitor" },
+          ],
           runtime: {
             ...baseThread.runtime,
             status: "idle",
@@ -1535,12 +1580,26 @@ describe("resolveThreadStatusPill", () => {
           },
         },
       }),
-    ).toMatchObject({
-      label: "Waiting",
-      colorClass: "text-sidebar-muted-foreground",
-      dotClass: "bg-sidebar-muted-foreground",
-      pulse: false,
-    });
+    ).toMatchObject({ label: "Monitoring", pulse: false });
+  });
+
+  it("shows working for an idle thread whose agents are still running", () => {
+    expect(
+      resolveThreadStatusPill({
+        thread: {
+          ...baseThread,
+          pendingBackgroundTasks: [
+            { taskId: "bg-1", description: "sleep 20", kind: "command" },
+            { taskId: "sub", kind: "subagent" },
+          ],
+          runtime: {
+            ...baseThread.runtime,
+            status: "idle",
+            activeRunId: null,
+          },
+        },
+      }),
+    ).toMatchObject({ label: "Working", pulse: true });
   });
 
   it("keeps an active turn working when background tasks are also present", () => {
@@ -1671,17 +1730,17 @@ describe("resolveProjectStatusIndicator", () => {
     ).toMatchObject({ label: "Plan Ready", dotClass: "bg-violet-500" });
   });
 
-  it("ranks waiting below active work and above plan-ready", () => {
-    const waiting = {
-      label: "Waiting" as const,
-      colorClass: "text-sidebar-muted-foreground",
-      dotClass: "bg-sidebar-muted-foreground",
+  it("ranks monitoring below active work and above plan-ready", () => {
+    const monitoring = {
+      label: "Monitoring" as const,
+      colorClass: "text-sky-600",
+      dotClass: "bg-sky-500",
       pulse: false,
     };
 
     expect(
       resolveProjectStatusIndicator([
-        waiting,
+        monitoring,
         {
           label: "Working",
           colorClass: "text-sky-600",
@@ -1698,9 +1757,9 @@ describe("resolveProjectStatusIndicator", () => {
           dotClass: "bg-violet-500",
           pulse: false,
         },
-        waiting,
+        monitoring,
       ]),
-    ).toMatchObject({ label: "Waiting" });
+    ).toMatchObject({ label: "Monitoring" });
   });
 });
 
@@ -2344,7 +2403,7 @@ describe("Working shelf (beta)", () => {
     latestRun: makeLatestRun(),
     runtime: null,
   };
-  // Stopped with background tasks still open: V2's "waiting" sidebar status.
+  // Stopped with only a watch loop still open: the "monitoring" sidebar status.
   const waiting = {
     ...idle,
     runtime: { ...runtime, status: "idle" as const },

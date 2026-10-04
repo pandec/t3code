@@ -40,6 +40,7 @@ import {
   type PinThreadInput,
   type ReorderPinnedThreadInput,
   type ReorderActiveThreadInput,
+  type SetThreadCustomGroupInput,
   type SetThreadAutoSettleInput,
   type SettleThreadInput,
   type SnoozeThreadInput,
@@ -74,6 +75,7 @@ import {
   pinThread,
   reorderPinnedThread,
   reorderActiveThread,
+  setThreadCustomGroup,
   setThreadAutoSettle,
   settleThread,
   snoozeThread,
@@ -117,6 +119,7 @@ export type {
   PinThreadInput,
   ReorderPinnedThreadInput,
   ReorderActiveThreadInput,
+  SetThreadCustomGroupInput,
   SetThreadAutoSettleInput,
   SettleThreadInput,
   SnoozeThreadInput,
@@ -218,6 +221,12 @@ export function createThreadEnvironmentAtoms<R, E>(
     reorderActive: createEnvironmentCommand(runtime, {
       label: "environment-data:commands:thread:reorder-active",
       execute: (input: ReorderActiveThreadInput) => reorderActiveThread(input),
+      scheduler,
+      concurrency,
+    }),
+    setCustomGroup: createEnvironmentCommand(runtime, {
+      label: "environment-data:commands:thread:set-custom-group",
+      execute: (input: SetThreadCustomGroupInput) => setThreadCustomGroup(input),
       scheduler,
       concurrency,
     }),
@@ -405,6 +414,7 @@ export function createThreadEnvironmentAtoms<R, E>(
             pinOrderKey: null,
             snoozedAt: null,
             snoozedUntil: null,
+            ...(thread.snoozedUntilRunId == null ? {} : { snoozedUntilRunId: null }),
           },
     ),
     unsettle: optimistic.wrap(commands.unsettle, (thread, input, now) => ({
@@ -417,15 +427,28 @@ export function createThreadEnvironmentAtoms<R, E>(
       (!accepted &&
         (thread.pendingRuntimeRequest !== null ||
           ["preparing", "queued", "starting"].includes(thread.status))) ||
-      !(Date.parse(input.snoozedUntil) > DateTime.toEpochMillis(now))
+      // Fork: a null wake time is the indefinite snooze ("until I wake it").
+      (input.snoozedUntil !== null &&
+        !(Date.parse(input.snoozedUntil) > DateTime.toEpochMillis(now))) ||
+      // Fork: "until it's done" waits on the latest run; none, nothing to wait on.
+      (input.untilDone === true && thread.latestRunId === null)
         ? thread
         : {
             ...thread,
             pendingRuntimeRequest: null,
-            snoozedUntil: DateTime.makeUnsafe(input.snoozedUntil),
+            snoozedUntil:
+              input.snoozedUntil === null ? null : DateTime.makeUnsafe(input.snoozedUntil),
+            ...(input.untilDone === true
+              ? { snoozedUntilRunId: thread.latestRunId }
+              : thread.snoozedUntilRunId == null
+                ? {}
+                : { snoozedUntilRunId: null }),
             snoozedAt:
-              thread.snoozedUntil != null &&
-              DateTime.formatIso(thread.snoozedUntil) === input.snoozedUntil
+              (thread.snoozedUntil != null &&
+                DateTime.formatIso(thread.snoozedUntil) === input.snoozedUntil) ||
+              (input.untilDone === true &&
+                thread.snoozedUntilRunId != null &&
+                thread.snoozedUntilRunId === thread.latestRunId)
                 ? (thread.snoozedAt ?? now)
                 : now,
           },
@@ -434,6 +457,7 @@ export function createThreadEnvironmentAtoms<R, E>(
       ...thread,
       snoozedUntil: null,
       snoozedAt: null,
+      ...(thread.snoozedUntilRunId == null ? {} : { snoozedUntilRunId: null }),
     })),
     setAutoSettle: optimistic.wrap(commands.setAutoSettle, (thread, input, now) => ({
       ...thread,
@@ -452,6 +476,7 @@ export function createThreadEnvironmentAtoms<R, E>(
         : {}),
       snoozedUntil: null,
       snoozedAt: null,
+      ...(thread.snoozedUntilRunId == null ? {} : { snoozedUntilRunId: null }),
     })),
     unpin: optimistic.wrap(commands.unpin, (thread) => ({
       ...thread,
@@ -466,5 +491,12 @@ export function createThreadEnvironmentAtoms<R, E>(
       ...thread,
       activeOrderKey: input.orderKey,
     })),
+    setCustomGroup: optimistic.wrap(commands.setCustomGroup, (thread, input) => {
+      const { customGroupId: _previous, ...rest } = thread;
+      return {
+        ...rest,
+        ...(input.customGroupId === null ? {} : { customGroupId: input.customGroupId }),
+      };
+    }),
   };
 }

@@ -396,6 +396,8 @@ export const OrchestrationV2AppThread = Schema.Struct({
   unsettledAt: Schema.optional(Schema.NullOr(Schema.DateTimeUtc)),
   snoozedUntil: Schema.optional(Schema.NullOr(Schema.DateTimeUtc)),
   snoozedAt: Schema.optional(Schema.NullOr(Schema.DateTimeUtc)),
+  /** Fork: the run an "until it's done" snooze waits on (snoozedUntil null). */
+  snoozedUntilRunId: Schema.optional(Schema.NullOr(RunId)),
   limitRecovery: Schema.optional(Schema.NullOr(OrchestrationV2LimitRecovery)),
   pinnedAt: Schema.optional(Schema.NullOr(Schema.DateTimeUtc)),
   autoSettleDisabledAt: Schema.optional(Schema.NullOr(Schema.DateTimeUtc)),
@@ -1502,6 +1504,12 @@ const OrchestrationV2EventBase = Schema.Struct({
   occurredAt: Schema.DateTimeUtc,
 });
 
+/** Fork: a thread's custom group; null leaves every group (Active). */
+export const OrchestrationV2ThreadCustomGroupSet = Schema.Struct({
+  customGroupId: Schema.NullOr(TrimmedNonEmptyString),
+});
+export type OrchestrationV2ThreadCustomGroupSet = typeof OrchestrationV2ThreadCustomGroupSet.Type;
+
 export const OrchestrationV2DomainEvent = Schema.Union([
   Schema.Struct({
     ...OrchestrationV2EventBase.fields,
@@ -1639,6 +1647,13 @@ export const OrchestrationV2DomainEvent = Schema.Union([
     type: Schema.Literal("context-transfer.updated"),
     payload: OrchestrationV2ContextTransfer,
   }),
+  // Fork: custom group membership. The projector writes fork_thread_custom_groups;
+  // the thread row is untouched, so a membership change is not thread activity.
+  Schema.Struct({
+    ...OrchestrationV2EventBase.fields,
+    type: Schema.Literal("thread.custom-group-set"),
+    payload: OrchestrationV2ThreadCustomGroupSet,
+  }),
 ]);
 export type OrchestrationV2DomainEvent = typeof OrchestrationV2DomainEvent.Type;
 
@@ -1749,6 +1764,10 @@ export const OrchestrationV2ThreadShell = Schema.Struct({
   unsettledAt: Schema.optional(Schema.NullOr(Schema.DateTimeUtc)),
   snoozedUntil: Schema.optional(Schema.NullOr(Schema.DateTimeUtc)),
   snoozedAt: Schema.optional(Schema.NullOr(Schema.DateTimeUtc)),
+  /** Fork: the run an "until it's done" snooze waits on (snoozedUntil null). */
+  snoozedUntilRunId: Schema.optional(Schema.NullOr(RunId)),
+  /** Fork: custom thread group membership (fork_thread_custom_groups); absent when ungrouped. */
+  customGroupId: Schema.optional(Schema.NullOr(TrimmedNonEmptyString)),
   limitRecovery: Schema.optional(Schema.NullOr(OrchestrationV2LimitRecovery)),
   /** Omitted by servers that predate thread pinning. */
   pinnedAt: Schema.optional(Schema.NullOr(Schema.DateTimeUtc)),
@@ -2431,6 +2450,11 @@ export const OrchestrationV2DomainEventJson = Schema.Union([
     type: Schema.Literal("context-transfer.updated"),
     payload: OrchestrationV2ContextTransferJson,
   }),
+  Schema.Struct({
+    ...OrchestrationV2JsonEventBaseFields,
+    type: Schema.Literal("thread.custom-group-set"),
+    payload: OrchestrationV2ThreadCustomGroupSet,
+  }),
 ]);
 export type OrchestrationV2DomainEventJson = typeof OrchestrationV2DomainEventJson.Type;
 
@@ -2464,6 +2488,8 @@ export const OrchestrationV2Command = Schema.Union([
         metadata: Schema.optional(OrchestrationV2ProviderThreadNativeMetadata),
       }),
     ),
+    /** Fork: custom group the new thread joins (threadCustomGroupCreation). */
+    customGroupId: Schema.optional(Schema.NullOr(TrimmedNonEmptyString)),
   }),
   Schema.Struct({
     type: Schema.Literal("thread.archive"),
@@ -2509,7 +2535,13 @@ export const OrchestrationV2Command = Schema.Union([
     type: Schema.Literal("thread.snooze"),
     commandId: CommandId,
     threadId: ThreadId,
-    snoozedUntil: IsoDateTime,
+    // Fork: null is the indefinite snooze ("until I wake it"); snoozedAt
+    // alone marks it. Gated by the threadSnoozeIndefinite capability.
+    snoozedUntil: Schema.NullOr(IsoDateTime),
+    // Fork: "until it's done": wake when the latest run and its agent
+    // background work finish. Requires a null snoozedUntil and the
+    // threadSnoozeUntilDone capability.
+    untilDone: Schema.optional(Schema.Boolean),
   }),
   Schema.Struct({
     type: Schema.Literal("thread.unsnooze"),
@@ -2552,6 +2584,16 @@ export const OrchestrationV2Command = Schema.Union([
     commandId: CommandId,
     threadId: ThreadId,
     orderKey: TrimmedNonEmptyString,
+  }),
+  /**
+   * Fork: move a thread into a custom group (null: back to Active). Gated by
+   * the threadCustomGroups capability.
+   */
+  Schema.Struct({
+    type: Schema.Literal("thread.custom-group.set"),
+    commandId: CommandId,
+    threadId: ThreadId,
+    customGroupId: Schema.NullOr(TrimmedNonEmptyString),
   }),
   Schema.Struct({
     type: Schema.Literal("thread.visit"),
@@ -2969,6 +3011,8 @@ export const OrchestrationV2ThreadLaunchInput = Schema.Struct({
   runtimeMode: RuntimeMode,
   interactionMode: ProviderInteractionMode,
   workspaceStrategy: OrchestrationV2ThreadLaunchWorkspaceStrategy,
+  /** Fork: custom group a newly created thread joins (threadCustomGroupCreation). */
+  customGroupId: Schema.optional(Schema.NullOr(TrimmedNonEmptyString)),
   initialMessage: Schema.optional(
     Schema.Struct({
       messageId: Schema.optional(MessageId),

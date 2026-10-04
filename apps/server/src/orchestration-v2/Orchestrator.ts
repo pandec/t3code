@@ -77,6 +77,16 @@ import { isUndeliveredMailboxSteer } from "./NotificationMailbox.ts";
 import { EventSinkV2 } from "./EventSink.ts";
 import type { OrchestrationEffectRequestV2, PendingOrchestrationEffectV2 } from "./EffectOutbox.ts";
 import { IdAllocatorV2 } from "./IdAllocator.ts";
+import { indefiniteSnoozeWoke, isIndefinitelySnoozed } from "./IndefiniteSnooze.ts";
+import {
+  clearedSnoozeUntilDone,
+  delegatedCompletionContinuesUntilDone,
+  isSnoozedUntilDone,
+  isWakeMessageDispatch,
+  snoozeUntilDoneAwaitedRunId,
+  snoozeUntilDoneHolds,
+  snoozeUntilDoneWakeRunId,
+} from "./SnoozeUntilDone.ts";
 import {
   ThreadCommandExecutor,
   layer as threadCommandExecutorLayer,
@@ -365,6 +375,7 @@ function commandThreadId(command: OrchestrationV2ServerCommand): ThreadId {
     case "thread.unpin":
     case "thread.pin.reorder":
     case "thread.active.reorder":
+    case "thread.custom-group.set":
     case "thread.visit":
     case "thread.mark-unread":
     case "thread.metadata.update":
@@ -2144,7 +2155,48 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
         },
       });
     }
+    if (command.customGroupId != null) {
+      yield* emitEvent({
+        type: "thread.custom-group-set",
+        threadId: command.threadId,
+        occurredAt: now,
+        payload: { customGroupId: command.customGroupId },
+      });
+    }
   });
+
+  // Fork: custom group membership lives in fork_thread_custom_groups.
+  // Clients place the thread with a separate thread.active.reorder.
+  const dispatchThreadCustomGroupSet = Effect.fn("orchestrationV2.dispatch.threadCustomGroupSet")(
+    function* (
+      command: Extract<OrchestrationV2Command, { readonly type: "thread.custom-group.set" }>,
+      events: Ref.Ref<Array<OrchestrationV2DomainEvent>>,
+    ) {
+      const thread = yield* projectionStore
+        .getThread(command.threadId)
+        .pipe(
+          Effect.mapError(
+            (cause) => new OrchestratorProjectionError({ threadId: command.threadId, cause }),
+          ),
+        );
+      if (thread.deletedAt !== null) {
+        return yield* new OrchestratorDispatchError({
+          commandId: command.commandId,
+          commandType: command.type,
+          cause: `Thread ${command.threadId} is deleted.`,
+        });
+      }
+      yield* emit(
+        events,
+        command,
+      )({
+        type: "thread.custom-group-set",
+        threadId: command.threadId,
+        occurredAt: yield* DateTime.now,
+        payload: { customGroupId: command.customGroupId },
+      });
+    },
+  );
 
   const dispatchThreadVisit = Effect.fn("orchestrationV2.dispatch.threadVisit")(function* (
     command: Extract<OrchestrationV2Command, { readonly type: "thread.visit" }>,
@@ -2494,14 +2546,32 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
       }
     }
     let snoozedUntil: DateTime.Utc | null = null;
+    // Fork: whether an existing indefinite snooze still holds, so a repeated
+    // indefinite snooze re-emits as a no-op instead of stamping fresh.
+    let indefiniteSnoozeHolds = false;
+    // Fork: the run an "until it's done" snooze waits on, and whether the
+    // thread already waits on that same run (a duplicate).
+    let untilDoneRunId: RunId | null = null;
+    let sameUntilDoneSnooze = false;
     if (command.type === "thread.snooze") {
-      const projection = yield* loadProjectionForCommand(command, ["runs", "runtimeRequests"], {
-        turnItemTypes: [],
-      });
-      const parsedSnoozedUntil = DateTime.make(command.snoozedUntil);
+      const projection = yield* loadProjectionForCommand(
+        command,
+        ["runs", "runtimeRequests", "providerThreads", "turnItems"],
+        command.untilDone === true
+          ? {
+              turnItemTypes: ["command_execution", "dynamic_tool", "subagent"],
+              turnItemStatuses: ["pending", "running", "waiting"],
+            }
+          : { turnItemTypes: [] },
+      );
+      // Fork: a null wake time is the indefinite snooze and has no deadline
+      // to validate.
+      const parsedSnoozedUntil =
+        command.snoozedUntil === null ? Option.some(null) : DateTime.make(command.snoozedUntil);
       if (
         Option.isNone(parsedSnoozedUntil) ||
-        DateTime.toEpochMillis(parsedSnoozedUntil.value) <= DateTime.toEpochMillis(now)
+        (parsedSnoozedUntil.value !== null &&
+          DateTime.toEpochMillis(parsedSnoozedUntil.value) <= DateTime.toEpochMillis(now))
       ) {
         return yield* new OrchestratorDispatchError({
           commandId: command.commandId,
@@ -2524,6 +2594,32 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
         });
       }
       snoozedUntil = parsedSnoozedUntil.value;
+      if (command.untilDone === true) {
+        if (snoozedUntil !== null) {
+          return yield* new OrchestratorDispatchError({
+            commandId: command.commandId,
+            commandType: command.type,
+            cause: `Thread ${command.threadId} cannot snooze until done with a wake time.`,
+          });
+        }
+        // Waiting on nothing would park the thread for good, so reject.
+        // Watch loops alone (commands, monitors) don't count.
+        untilDoneRunId = snoozeUntilDoneAwaitedRunId(projection);
+        if (untilDoneRunId === null) {
+          return yield* new OrchestratorDispatchError({
+            commandId: command.commandId,
+            commandType: command.type,
+            cause: `Thread ${command.threadId} has no running turn or working subagents to wait for.`,
+          });
+        }
+        sameUntilDoneSnooze =
+          isSnoozedUntilDone(thread) && thread.snoozedUntilRunId === untilDoneRunId;
+      }
+      const previousSnoozedAt = thread.snoozedAt ?? null;
+      indefiniteSnoozeHolds =
+        isIndefinitelySnoozed(thread) &&
+        previousSnoozedAt !== null &&
+        !indefiniteSnoozeWoke(projection.runs, { ...thread, snoozedAt: previousSnoozedAt });
     }
     let markUnreadVisitedAt: DateTime.Utc | null = null;
     if (command.type === "thread.mark-unread") {
@@ -2548,10 +2644,20 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
           // Settling is "I'm done with this": it clears a pin the same way it
           // parks the thread (mirrors the v1 decider's settle/pin exclusion).
           const wasPinned = thread.pinnedAt != null;
+          // Fork: an indefinite snooze has no timer to fall back on, so
+          // settling clears it; un-settling must not resurrect it.
+          const clearsIndefiniteSnooze =
+            isIndefinitelySnoozed(thread) || isSnoozedUntilDone(thread);
           const alreadySettled =
-            thread.settledOverride === "settled" && thread.settledAt !== null && !wasPinned;
+            thread.settledOverride === "settled" &&
+            thread.settledAt !== null &&
+            !wasPinned &&
+            !clearsIndefiniteSnooze;
           return {
             ...thread,
+            ...(clearsIndefiniteSnooze
+              ? { snoozedAt: null, ...clearedSnoozeUntilDone(thread) }
+              : {}),
             settledOverride: "settled",
             settledAt: alreadySettled ? thread.settledAt : (command.settledAt ?? now),
             unsettledAt: null,
@@ -2576,21 +2682,34 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
             thread.snoozedUntil != null &&
             snoozedUntil !== null &&
             DateTime.toEpochMillis(thread.snoozedUntil) === DateTime.toEpochMillis(snoozedUntil);
-          const existingSnoozedAt = sameWakeTime ? (thread.snoozedAt ?? null) : null;
+          // Fork: repeating an indefinite snooze that still holds is a
+          // duplicate too. One that already woke (a run ended after it)
+          // stamps fresh so the wake does not outrank the new snooze.
+          const sameIndefinite =
+            snoozedUntil === null && untilDoneRunId === null && indefiniteSnoozeHolds;
+          const existingSnoozedAt =
+            sameWakeTime || sameIndefinite || sameUntilDoneSnooze
+              ? (thread.snoozedAt ?? null)
+              : null;
           return {
             ...thread,
             snoozedUntil,
+            ...(untilDoneRunId === null
+              ? clearedSnoozeUntilDone(thread)
+              : { snoozedUntilRunId: untilDoneRunId }),
             limitRecovery: thread.limitRecovery ? { ...thread.limitRecovery, snooze: false } : null,
             snoozedAt: existingSnoozedAt ?? now,
             updatedAt: existingSnoozedAt === null ? now : thread.updatedAt,
           };
         }
         case "thread.unsnooze": {
-          const alreadyAwake = thread.snoozedUntil == null;
+          // Fork: an indefinite snooze is marked by snoozedAt alone.
+          const alreadyAwake = thread.snoozedUntil == null && thread.snoozedAt == null;
           return {
             ...thread,
             snoozedUntil: null,
             snoozedAt: null,
+            ...clearedSnoozeUntilDone(thread),
             updatedAt: alreadyAwake ? thread.updatedAt : now,
           };
         }
@@ -2607,7 +2726,10 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
           // silently outranking them — an explicit settle is un-settled and a
           // snooze's return ticket is spent (the thread is on top NOW).
           const alreadyPinned = thread.pinnedAt != null;
-          const promotes = thread.settledOverride === "settled" || thread.snoozedUntil != null;
+          const promotes =
+            thread.settledOverride === "settled" ||
+            thread.snoozedUntil != null ||
+            thread.snoozedAt != null;
           return {
             ...thread,
             pinnedAt: alreadyPinned ? thread.pinnedAt : now,
@@ -2622,6 +2744,7 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
             settledAt: thread.settledOverride === "settled" ? null : thread.settledAt,
             snoozedUntil: null,
             snoozedAt: null,
+            ...clearedSnoozeUntilDone(thread),
             updatedAt: alreadyPinned && !promotes ? thread.updatedAt : now,
           };
         }
@@ -2687,6 +2810,7 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
                   // Recovery changes acknowledge the same stopped run; keep its
                   // metadata timestamp from appearing as a fresh failure wake.
                   snoozedAt: now,
+                  ...clearedSnoozeUntilDone(thread),
                 }
               : command.limitRecovery !== undefined &&
                   thread.limitRecovery?.snooze &&
@@ -3108,6 +3232,44 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
           }),
         { concurrency: 1, discard: true },
       );
+      // Fork: the detach stops the agent's background work, but no process
+      // will report it ending, so end it in the projection here (as Stop's
+      // settle does). Settle already rejects active runs; on archive an
+      // active run's teardown owns its work.
+      if (
+        liveSessions.length > 0 &&
+        (command.type === "thread.settle" || command.type === "thread.archive")
+      ) {
+        const stored = yield* loadProjectionForCommand(command, ["turnItems", "providerThreads"], {
+          turnItemTypes: ["command_execution", "dynamic_tool", "subagent"],
+          turnItemStatuses: ["pending", "running", "waiting"],
+        });
+        // Runs as this command leaves them (queued automatic runs cancelled).
+        const { runs } = yield* getProjectionWithPendingEvents(command.threadId, events);
+        const projection = { ...stored, runs };
+        if (
+          !runs.some((run) =>
+            ["preparing", "queued", "starting", "running", "waiting"].includes(run.status),
+          )
+        ) {
+          yield* settleBackgroundWork({
+            command,
+            events,
+            projection,
+            endedProviderThreadIds: new Set(
+              projection.providerThreads
+                .filter(
+                  (providerThread) =>
+                    providerThread.providerSessionId != null &&
+                    detachSessionIds.has(providerThread.providerSessionId),
+                )
+                .map((providerThread) => providerThread.id),
+            ),
+            throughRunOrdinal: Number.POSITIVE_INFINITY,
+            now,
+          });
+        }
+      }
     }
 
     if (command.type === "thread.archive") {
@@ -3255,6 +3417,18 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
       occurredAt: now,
       payload: targetThread,
     });
+    // Fork: a fork joins its source's custom group, but not its pin or order.
+    const sourceCustomGroupId = yield* projectionStore
+      .getThreadCustomGroupId(command.sourceThreadId)
+      .pipe(mapDispatchError(command));
+    if (sourceCustomGroupId !== null) {
+      yield* emitEvent({
+        type: "thread.custom-group-set",
+        threadId: command.targetThreadId,
+        occurredAt: now,
+        payload: { customGroupId: sourceCustomGroupId },
+      });
+    }
     yield* emitEvent({
       type: "context-transfer.created",
       threadId: command.targetThreadId,
@@ -4135,10 +4309,52 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
       ]);
     });
 
+  // Fork: a wake carries on the work an "until it's done" snooze waits on,
+  // so it keeps the snooze (dispatchMessageCore leaves it in place)
+  // and moves it onto the run the wake starts. Other dispatches wake it.
+  // The command projection omits background turn items (Claude subagents
+  // live only there), so they are read like thread.snooze reads them.
   const dispatchMessage = (
     command: Extract<OrchestrationV2Command, { readonly type: "message.dispatch" }>,
     events: Ref.Ref<Array<OrchestrationV2DomainEvent>>,
     effects: Ref.Ref<Array<PendingOrchestrationEffectV2>>,
+  ) =>
+    Effect.gen(function* () {
+      let keepsSnoozeUntilDone = false;
+      if (isWakeMessageDispatch(command)) {
+        const current = yield* getProjectionWithPendingEvents(command.threadId, events);
+        if (isSnoozedUntilDone(current.thread)) {
+          const background = yield* loadProjectionForCommand(command, ["turnItems"], {
+            turnItemTypes: ["command_execution", "dynamic_tool", "subagent"],
+            turnItemStatuses: ["pending", "running", "waiting"],
+          });
+          keepsSnoozeUntilDone =
+            snoozeUntilDoneHolds({ ...current, turnItems: background.turnItems }) ||
+            delegatedCompletionContinuesUntilDone(current, command);
+        }
+      }
+      yield* dispatchMessageCore(command, events, effects, keepsSnoozeUntilDone);
+      if (!keepsSnoozeUntilDone) return;
+      const projection = yield* getProjectionWithPendingEvents(command.threadId, events);
+      const wakeRunId = snoozeUntilDoneWakeRunId(projection);
+      if (wakeRunId === null) return;
+      yield* emit(
+        events,
+        command,
+      )({
+        type: "thread.snoozed",
+        threadId: command.threadId,
+        providerInstanceId: projection.thread.providerInstanceId,
+        occurredAt: yield* DateTime.now,
+        payload: { ...projection.thread, snoozedUntilRunId: wakeRunId },
+      });
+    });
+
+  const dispatchMessageCore = (
+    command: Extract<OrchestrationV2Command, { readonly type: "message.dispatch" }>,
+    events: Ref.Ref<Array<OrchestrationV2DomainEvent>>,
+    effects: Ref.Ref<Array<PendingOrchestrationEffectV2>>,
+    keepsSnoozeUntilDone: boolean,
   ) =>
     Effect.gen(function* () {
       let projection = yield* getProjectionWithPendingEvents(command.threadId, events);
@@ -4256,12 +4472,18 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
         });
         projection = yield* getProjectionWithPendingEvents(command.threadId, events);
       }
-      if (projection.thread.snoozedUntil != null) {
+      // Fork: snoozedAt alone marks an indefinite snooze; a message wakes it
+      // too. A wake that carries on an "until it's done" snooze's work keeps it.
+      if (
+        (projection.thread.snoozedUntil != null || projection.thread.snoozedAt != null) &&
+        !keepsSnoozeUntilDone
+      ) {
         const now = yield* DateTime.now;
         const thread: OrchestrationV2AppThread = {
           ...projection.thread,
           snoozedUntil: null,
           snoozedAt: null,
+          ...clearedSnoozeUntilDone(projection.thread),
           updatedAt: now,
         };
         yield* emit(
@@ -7607,23 +7829,30 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
 
   /**
    * Ends the background work a settled thread still shows that no provider
-   * process will report on: work on the provider thread whose interrupt just
-   * returned (`stoppedProviderThreadId`), and work on provider threads with no
-   * live session at all. Only the stopped run's work and older runs' is ended
-   * (`throughRunOrdinal`); a later run's work is its own. A dead process's
-   * roster goes too, as on restart.
+   * process will report on: work on provider threads whose process was just
+   * stopped (`endedProviderThreadIds`: an interrupt that returned, or a settle
+   * or archive detach), and work on provider threads with no live session at
+   * all. Only the stopped run's work and older runs' is ended
+   * (`throughRunOrdinal`); a later run's work is its own. A dead or stopped
+   * process's roster goes too, as on restart.
    */
   const settleBackgroundWork = (input: {
     readonly command: Extract<
       OrchestrationV2ServerCommand,
-      { readonly type: "run.interrupt" | "thread.background-work.settle" }
+      {
+        readonly type:
+          | "run.interrupt"
+          | "thread.background-work.settle"
+          | "thread.settle"
+          | "thread.archive";
+      }
     >;
     readonly events: Ref.Ref<Array<OrchestrationV2DomainEvent>>;
     readonly projection: Pick<
       OrchestrationV2ThreadProjection,
       "runs" | "turnItems" | "providerThreads"
     >;
-    readonly stoppedProviderThreadId: OrchestrationV2ProviderThread["id"] | null;
+    readonly endedProviderThreadIds: ReadonlySet<OrchestrationV2ProviderThread["id"]>;
     readonly throughRunOrdinal: number;
     readonly now: DateTime.Utc;
   }) =>
@@ -7659,7 +7888,7 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
         const providerThreadId = item.providerThreadId ?? null;
         if (
           providerThreadId !== null &&
-          providerThreadId !== input.stoppedProviderThreadId &&
+          !input.endedProviderThreadIds.has(providerThreadId) &&
           (yield* hasLiveSession(providerThreadId))
         ) {
           continue;
@@ -7684,7 +7913,8 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
         // A live process owns its roster and reports clearing it.
         if (
           (providerThread.pendingBackgroundTasks?.length ?? 0) === 0 ||
-          (yield* hasLiveSession(providerThread.id))
+          (!input.endedProviderThreadIds.has(providerThread.id) &&
+            (yield* hasLiveSession(providerThread.id)))
         ) {
           continue;
         }
@@ -7743,7 +7973,7 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
         command,
         events,
         projection,
-        stoppedProviderThreadId: command.providerThreadId,
+        endedProviderThreadIds: new Set([command.providerThreadId]),
         throughRunOrdinal: stoppedRun.ordinal,
         now: yield* DateTime.now,
       });
@@ -8014,7 +8244,7 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
           command,
           events,
           projection,
-          stoppedProviderThreadId: providerThread.id,
+          endedProviderThreadIds: new Set([providerThread.id]),
           throughRunOrdinal: run.ordinal,
           now,
         });
@@ -9078,6 +9308,9 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
       case "thread.visit":
         yield* dispatchThreadVisit(command, events);
         break;
+      case "thread.custom-group.set":
+        yield* dispatchThreadCustomGroupSet(command, events);
+        break;
       case "thread.auto-settle": {
         // Automatic settlement (#8600): the sweep evaluated a shell snapshot,
         // so re-check against the live thread before settling. Any change
@@ -9098,6 +9331,24 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
             commandId: command.commandId,
             commandType: command.type,
             cause: `Thread ${command.threadId} changed before automatic settlement.`,
+          });
+        }
+        // Fork: an indefinite snooze only wakes by hand, never by settlement.
+        if (isIndefinitelySnoozed(thread)) {
+          return yield* new OrchestratorDispatchError({
+            commandId: command.commandId,
+            commandType: command.type,
+            cause: `Thread ${command.threadId} is indefinitely snoozed.`,
+          });
+        }
+        // Fork: a queued run (a held message or a pending wake) is work, not
+        // staleness. Queuing does not touch updatedAt, so check the runs here.
+        const { runs } = yield* loadProjectionForCommand(command, ["runs"]);
+        if (runs.some((run) => run.status === "queued")) {
+          return yield* new OrchestratorDispatchError({
+            commandId: command.commandId,
+            commandType: command.type,
+            cause: `Thread ${command.threadId} has a queued run.`,
           });
         }
         yield* dispatchThreadMutation(

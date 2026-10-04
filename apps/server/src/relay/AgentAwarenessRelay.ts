@@ -137,6 +137,7 @@ export function shouldPublishAgentAwarenessEvent(
     case "context-handoff.updated":
     case "context-transfer.created":
     case "context-transfer.updated":
+    case "thread.custom-group-set":
       return false;
   }
 }

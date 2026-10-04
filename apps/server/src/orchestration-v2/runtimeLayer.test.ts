@@ -952,6 +952,154 @@ it.layer(TestLayer)("OrchestrationV2LayerLive", (it) => {
     }),
   );
 
+  // Fork: settle detaches the live session, stopping its background work;
+  // the projection must end that work too or it reads "Working" forever.
+  it.effect("settle ends the background work its detach stops", () =>
+    Effect.gen(function* () {
+      const orchestrator = yield* Orchestrator.OrchestratorV2;
+      const eventSink = yield* EventSink.EventSinkV2;
+      const sessions = yield* ProviderSessionManager.ProviderSessionManagerV2;
+      const threadId = ThreadId.make("runtime-settle-background");
+      yield* orchestrator.dispatch({
+        type: "thread.create",
+        createdBy: "user",
+        creationSource: "web",
+        commandId: CommandId.make("runtime-settle-background-create"),
+        threadId,
+        projectId: ProjectId.make("runtime-settle-background-project"),
+        title: "Settle background work",
+        modelSelection,
+        runtimeMode: "full-access",
+        interactionMode: "default",
+        branch: null,
+        worktreePath: process.cwd(),
+      });
+      yield* orchestrator.dispatch({
+        type: "message.dispatch",
+        createdBy: "user",
+        creationSource: "web",
+        commandId: CommandId.make("runtime-settle-background-first"),
+        threadId,
+        messageId: MessageId.make("runtime-settle-background-first"),
+        text: "Start a background subagent.",
+        attachments: [],
+        dispatchMode: { type: "start_immediately" },
+      });
+      const initial = yield* orchestrator.getThreadProjection(threadId);
+      const run = initial.runs[0]!;
+      const providerThread = initial.providerThreads[0]!;
+      const now = yield* DateTime.now;
+      const providerSession = {
+        id: providerThread.providerSessionId!,
+        driver,
+        providerInstanceId: modelSelection.instanceId,
+        status: "running" as const,
+        cwd: process.cwd(),
+        model: modelSelection.model,
+        capabilities: CodexProviderCapabilitiesV2,
+        createdAt: now,
+        updatedAt: now,
+        lastError: null,
+      };
+      const subagentId = NodeId.make("runtime-settle-background-subagent");
+      const itemId = TurnItemId.make("runtime-settle-background-item");
+      yield* eventSink.write({
+        commandId: CommandId.make("runtime-settle-background-state"),
+        events: [
+          {
+            id: EventId.make("runtime-settle-background-session"),
+            type: "provider-session.attached",
+            threadId,
+            occurredAt: now,
+            payload: providerSession,
+          },
+          {
+            id: EventId.make("runtime-settle-background-run"),
+            type: "run.updated",
+            threadId,
+            runId: run.id,
+            occurredAt: now,
+            payload: { ...run, status: "completed", startedAt: now, completedAt: now },
+          },
+          {
+            id: EventId.make("runtime-settle-background-roster"),
+            type: "provider-thread.updated",
+            threadId,
+            driver,
+            providerInstanceId: modelSelection.instanceId,
+            occurredAt: now,
+            payload: {
+              ...providerThread,
+              pendingBackgroundTasks: [
+                { taskId: "task-1", description: "Audit the adapters", kind: "subagent" },
+              ],
+            },
+          },
+          {
+            id: EventId.make("runtime-settle-background-item"),
+            type: "turn-item.updated",
+            threadId,
+            runId: run.id,
+            nodeId: subagentId,
+            occurredAt: now,
+            payload: {
+              id: itemId,
+              threadId,
+              runId: run.id,
+              nodeId: subagentId,
+              providerThreadId: providerThread.id,
+              providerTurnId: null,
+              nativeItemRef: null,
+              parentItemId: null,
+              ordinal: 1,
+              type: "subagent",
+              status: "running",
+              title: null,
+              startedAt: now,
+              completedAt: null,
+              updatedAt: now,
+              subagentId,
+              origin: "provider_native",
+              driver,
+              providerInstanceId: modelSelection.instanceId,
+              childThreadId: null,
+              prompt: "Audit the adapters",
+              result: null,
+            },
+          },
+        ],
+      });
+      const sessionSpy = vi
+        .spyOn(sessions, "get")
+        .mockReturnValue(
+          Effect.succeed(Option.some({ providerSession } as ProviderAdapterV2SessionRuntime)),
+        );
+      yield* Effect.addFinalizer(() => Effect.sync(() => sessionSpy.mockRestore()));
+      const shell = () =>
+        Effect.map(orchestrator.getShellSnapshot(), (snapshot) =>
+          snapshot.threads.find((candidate) => candidate.id === threadId),
+        );
+      assert.isNotEmpty((yield* shell())?.pendingBackgroundTasks ?? []);
+
+      yield* orchestrator.dispatch({
+        type: "thread.settle",
+        commandId: CommandId.make("runtime-settle-background-settle"),
+        threadId,
+      });
+      yield* orchestrator.dispatch({
+        type: "thread.unsettle",
+        commandId: CommandId.make("runtime-settle-background-unsettle"),
+        threadId,
+        reason: "user",
+      });
+      assert.lengthOf((yield* shell())?.pendingBackgroundTasks ?? [], 0);
+      const item = (yield* orchestrator.getThreadProjection(threadId)).turnItems.find(
+        (candidate) => candidate.id === itemId,
+      );
+      assert.equal(item?.status, "interrupted");
+    }),
+  );
+
   it.effect("answers an async question after its provider exits and commits the answer once", () =>
     Effect.gen(function* () {
       const orchestrator = yield* Orchestrator.OrchestratorV2;
@@ -2517,6 +2665,95 @@ it.layer(TestLayer)("OrchestrationV2LayerLive lifecycle", (it) => {
     }),
   );
 
+  // Fork: queued runs block automatic settlement, including a held wake the
+  // manual settle above would cancel.
+  it.effect("rejects automatic settlement while a run is queued", () =>
+    Effect.gen(function* () {
+      const orchestrator = yield* Orchestrator.OrchestratorV2;
+      const eventSink = yield* EventSink.EventSinkV2;
+      const threadId = ThreadId.make("runtime-layer-auto-settle-queued");
+      yield* orchestrator.dispatch({
+        type: "thread.create",
+        createdBy: "user",
+        creationSource: "web",
+        commandId: CommandId.make("auto-settle-queued-create"),
+        threadId,
+        projectId: ProjectId.make("auto-settle-queued-project"),
+        title: "Auto-settle queued",
+        modelSelection,
+        runtimeMode: "full-access",
+        interactionMode: "default",
+        branch: null,
+        worktreePath: "/tmp/runtime-layer-auto-settle-queued",
+      });
+      yield* orchestrator.dispatch({
+        type: "message.dispatch",
+        createdBy: "user",
+        creationSource: "web",
+        commandId: CommandId.make("auto-settle-queued-active"),
+        threadId,
+        messageId: MessageId.make("auto-settle-queued-active"),
+        text: "Active",
+        attachments: [],
+        modelSelection,
+        dispatchMode: { type: "start_immediately" },
+      });
+      yield* orchestrator.dispatch({
+        type: "message.dispatch",
+        createdBy: "agent",
+        creationSource: "provider",
+        notification: {
+          source: { kind: "background_task" },
+          outcome: "updated",
+          summary: "Background activity updated",
+        },
+        commandId: CommandId.make("auto-settle-queued-wake"),
+        threadId,
+        messageId: MessageId.make("auto-settle-queued-wake"),
+        text: "Wake",
+        attachments: [],
+        modelSelection,
+        dispatchMode: { type: "queue_after_active" },
+      });
+      // Simulate a restart: the active run ends and recovery holds the queue.
+      const before = yield* orchestrator.getThreadProjection(threadId);
+      const now = yield* DateTime.now;
+      yield* eventSink.commitCommand({
+        commandId: CommandId.make("auto-settle-queued-restart"),
+        threadId,
+        commandType: "provider-runtime.reconcile",
+        acceptedAt: now,
+        events: before.runs
+          .filter((run) => run.status === "starting" || run.status === "queued")
+          .map((run) => ({
+            id: EventId.make(`auto-settle-queued-restart:${run.id}`),
+            type: "run.updated" as const,
+            threadId,
+            runId: run.id,
+            occurredAt: now,
+            payload:
+              run.status === "queued"
+                ? { ...run, queueHeld: true }
+                : { ...run, status: "cancelled" as const, completedAt: now },
+          })),
+        effects: [],
+      });
+      const held = yield* orchestrator.getThreadProjection(threadId);
+      const error = yield* orchestrator
+        .dispatch({
+          type: "thread.auto-settle",
+          commandId: CommandId.make("auto-settle-queued-auto"),
+          threadId,
+          snapshotAt: held.thread.updatedAt,
+        })
+        .pipe(Effect.flip);
+      assert.equal(error._tag, "OrchestratorDispatchError");
+      const after = yield* orchestrator.getThreadProjection(threadId);
+      assert.isNull(after.thread.settledOverride);
+      assert.isTrue(after.runs.some((run) => run.status === "queued" && run.queueHeld === true));
+    }),
+  );
+
   it.effect("cancels queued work when a thread is archived", () =>
     Effect.gen(function* () {
       const orchestrator = yield* Orchestrator.OrchestratorV2;
@@ -3508,6 +3745,667 @@ it.layer(SharedApplicationDataPlaneTestLayer)("snooze projection", (it) => {
       const awakened = yield* orchestrator.getThreadProjection(threadId);
       assert.isNull(awakened.thread.snoozedUntil);
       assert.isNull(awakened.thread.snoozedAt);
+    }),
+  );
+});
+
+// Fork: custom group membership lives in fork_thread_custom_groups and reaches
+// clients on the thread shell.
+it.layer(SharedApplicationDataPlaneTestLayer)("custom thread groups", (it) => {
+  const setup = (prefix: string, customGroupId?: string) =>
+    Effect.gen(function* () {
+      const projects = yield* ProjectService.ProjectService;
+      const orchestrator = yield* Orchestrator.OrchestratorV2;
+      const projectId = ProjectId.make(`${prefix}-project`);
+      const threadId = ThreadId.make(`${prefix}-thread`);
+      yield* projects.create({
+        commandId: CommandId.make(`${prefix}-project-create`),
+        projectId,
+        title: "Custom groups",
+        workspaceRoot: `/tmp/${prefix}-project`,
+      });
+      yield* orchestrator.dispatch({
+        type: "thread.create",
+        createdBy: "user",
+        creationSource: "web",
+        commandId: CommandId.make(`${prefix}-thread-create`),
+        threadId,
+        projectId,
+        title: "Grouped thread",
+        modelSelection,
+        runtimeMode: "full-access",
+        interactionMode: "default",
+        branch: null,
+        worktreePath: null,
+        ...(customGroupId === undefined ? {} : { customGroupId }),
+      });
+      const shell = Effect.gen(function* () {
+        const found = (yield* orchestrator.getShellSnapshot()).threads.find(
+          (candidate) => candidate.id === threadId,
+        );
+        assert.isDefined(found);
+        return found;
+      });
+      return { orchestrator, projectId, threadId, shell };
+    });
+
+  it.effect("creates into a group, moves, and returns to Active", () =>
+    Effect.gen(function* () {
+      const { orchestrator, threadId, shell } = yield* setup("custom-groups-move", "research");
+      const created = yield* shell;
+      assert.equal(created.customGroupId, "research");
+
+      yield* TestClock.adjust("1 minute");
+      yield* orchestrator.dispatch({
+        type: "thread.custom-group.set",
+        commandId: CommandId.make("custom-groups-move-membership"),
+        threadId,
+        customGroupId: "planning",
+      });
+      const regrouped = yield* shell;
+      assert.equal(regrouped.customGroupId, "planning");
+      // Membership alone is not thread activity.
+      assert.deepEqual(regrouped.updatedAt, created.updatedAt);
+
+      yield* orchestrator.dispatch({
+        type: "thread.custom-group.set",
+        commandId: CommandId.make("custom-groups-move-set"),
+        threadId,
+        customGroupId: "review",
+      });
+      const moved = yield* shell;
+      assert.equal(moved.customGroupId, "review");
+      const single = yield* orchestrator.getThreadShell(threadId);
+      assert.equal(single?.customGroupId, "review");
+
+      yield* orchestrator.dispatch({
+        type: "thread.custom-group.set",
+        commandId: CommandId.make("custom-groups-move-clear"),
+        threadId,
+        customGroupId: null,
+      });
+      const cleared = yield* shell;
+      assert.isUndefined(cleared.customGroupId);
+    }),
+  );
+
+  it.effect("changes a pinned thread's group", () =>
+    Effect.gen(function* () {
+      const { orchestrator, threadId, shell } = yield* setup("custom-groups-pinned");
+      yield* orchestrator.dispatch({
+        type: "thread.pin",
+        commandId: CommandId.make("custom-groups-pinned-pin"),
+        threadId,
+      });
+      yield* orchestrator.dispatch({
+        type: "thread.custom-group.set",
+        commandId: CommandId.make("custom-groups-pinned-set"),
+        threadId,
+        customGroupId: "research",
+      });
+      const grouped = yield* shell;
+      assert.equal(grouped.customGroupId, "research");
+      assert.isNotNull(grouped.pinnedAt ?? null);
+    }),
+  );
+
+  it.effect("forks into the source's group", () =>
+    Effect.gen(function* () {
+      const { orchestrator, threadId } = yield* setup("custom-groups-fork", "research");
+      const eventSink = yield* EventSink.EventSinkV2;
+      const now = yield* DateTime.now;
+      const runId = RunId.make("custom-groups-fork-run");
+      yield* eventSink.write({
+        events: [
+          {
+            id: EventId.make("custom-groups-fork-run-created"),
+            type: "run.created",
+            threadId,
+            runId,
+            occurredAt: now,
+            payload: {
+              id: runId,
+              threadId,
+              ordinal: 1,
+              providerInstanceId: modelSelection.instanceId,
+              modelSelection,
+              providerThreadId: null,
+              userMessageId: MessageId.make("custom-groups-fork-message"),
+              rootNodeId: null,
+              activeAttemptId: null,
+              status: "completed",
+              queuePosition: null,
+              requestedAt: now,
+              startedAt: now,
+              completedAt: now,
+              checkpointId: null,
+              contextHandoffId: null,
+            },
+          },
+        ],
+      });
+      const forkId = ThreadId.make("custom-groups-fork-target");
+      yield* orchestrator.dispatch({
+        type: "thread.fork",
+        commandId: CommandId.make("custom-groups-fork-fork"),
+        sourceThreadId: threadId,
+        targetThreadId: forkId,
+        sourcePoint: { type: "run", runId },
+        createdBy: "user",
+        creationSource: "web",
+      });
+      const fork = yield* orchestrator.getThreadShell(forkId);
+      assert.equal(fork?.customGroupId, "research");
+    }),
+  );
+});
+
+// Fork: indefinite snooze ("until I wake it") is a null wake time with snoozedAt set.
+it.layer(SharedApplicationDataPlaneTestLayer)("indefinite snooze", (it) => {
+  const setup = (prefix: string) =>
+    Effect.gen(function* () {
+      const projects = yield* ProjectService.ProjectService;
+      const orchestrator = yield* Orchestrator.OrchestratorV2;
+      const projectId = ProjectId.make(`${prefix}-project`);
+      const threadId = ThreadId.make(`${prefix}-thread`);
+      yield* projects.create({
+        commandId: CommandId.make(`${prefix}-project-create`),
+        projectId,
+        title: "Indefinite snooze",
+        workspaceRoot: `/tmp/${prefix}-project`,
+      });
+      yield* orchestrator.dispatch({
+        type: "thread.create",
+        createdBy: "user",
+        creationSource: "web",
+        commandId: CommandId.make(`${prefix}-thread-create`),
+        threadId,
+        projectId,
+        title: "Indefinitely snoozed thread",
+        modelSelection,
+        runtimeMode: "full-access",
+        interactionMode: "default",
+        branch: null,
+        worktreePath: null,
+      });
+      yield* orchestrator.dispatch({
+        type: "thread.snooze",
+        commandId: CommandId.make(`${prefix}-snooze`),
+        threadId,
+        snoozedUntil: null,
+      });
+      return { orchestrator, threadId };
+    });
+
+  it.effect("snoozes without a wake time and dedupes a repeat while it holds", () =>
+    Effect.gen(function* () {
+      const { orchestrator, threadId } = yield* setup("indefinite-snooze-dedupe");
+      const first = (yield* orchestrator.getThreadProjection(threadId)).thread;
+      assert.isNull(first.snoozedUntil ?? null);
+      assert.isNotNull(first.snoozedAt ?? null);
+
+      yield* TestClock.adjust("1 minute");
+      yield* orchestrator.dispatch({
+        type: "thread.snooze",
+        commandId: CommandId.make("indefinite-snooze-dedupe-again"),
+        threadId,
+        snoozedUntil: null,
+      });
+      const repeated = (yield* orchestrator.getShellSnapshot()).threads.find(
+        (candidate) => candidate.id === threadId,
+      );
+      assert.isDefined(repeated);
+      assert.deepEqual(repeated.snoozedAt, first.snoozedAt);
+      assert.deepEqual(repeated.updatedAt, first.updatedAt);
+
+      yield* orchestrator.dispatch({
+        type: "thread.unsnooze",
+        commandId: CommandId.make("indefinite-snooze-dedupe-wake"),
+        threadId,
+        reason: "user",
+      });
+      const awake = (yield* orchestrator.getThreadProjection(threadId)).thread;
+      assert.isNull(awake.snoozedAt ?? null);
+      assert.isNull(awake.snoozedUntil ?? null);
+      assert.isAbove(
+        DateTime.toEpochMillis(awake.updatedAt),
+        DateTime.toEpochMillis(first.updatedAt),
+      );
+    }),
+  );
+
+  it.effect("rejects automatic settlement and clears on manual settle", () =>
+    Effect.gen(function* () {
+      const { orchestrator, threadId } = yield* setup("indefinite-snooze-settle");
+      const snoozed = (yield* orchestrator.getThreadProjection(threadId)).thread;
+      const autoSettle = yield* orchestrator
+        .dispatch({
+          type: "thread.auto-settle",
+          commandId: CommandId.make("indefinite-snooze-settle-auto"),
+          threadId,
+          snapshotAt: snoozed.updatedAt,
+        })
+        .pipe(Effect.exit);
+      assert.equal(autoSettle._tag, "Failure");
+      assert.isNull((yield* orchestrator.getThreadProjection(threadId)).thread.settledOverride);
+
+      yield* orchestrator.dispatch({
+        type: "thread.settle",
+        commandId: CommandId.make("indefinite-snooze-settle-manual"),
+        threadId,
+      });
+      const settled = (yield* orchestrator.getThreadProjection(threadId)).thread;
+      assert.equal(settled.settledOverride, "settled");
+      assert.isNull(settled.snoozedAt ?? null);
+    }),
+  );
+
+  it.effect("wakes when pinned or messaged", () =>
+    Effect.gen(function* () {
+      const pinned = yield* setup("indefinite-snooze-pin");
+      yield* pinned.orchestrator.dispatch({
+        type: "thread.pin",
+        commandId: CommandId.make("indefinite-snooze-pin-pin"),
+        threadId: pinned.threadId,
+      });
+      assert.isNull(
+        (yield* pinned.orchestrator.getThreadProjection(pinned.threadId)).thread.snoozedAt ?? null,
+      );
+
+      const messaged = yield* setup("indefinite-snooze-message");
+      yield* messaged.orchestrator.dispatch({
+        type: "message.dispatch",
+        createdBy: "user",
+        creationSource: "web",
+        commandId: CommandId.make("indefinite-snooze-message-send"),
+        threadId: messaged.threadId,
+        messageId: MessageId.make("indefinite-snooze-message-send"),
+        text: "Wake this thread.",
+        attachments: [],
+        modelSelection,
+        dispatchMode: { type: "start_immediately" },
+      });
+      assert.isNull(
+        (yield* messaged.orchestrator.getThreadProjection(messaged.threadId)).thread.snoozedAt ??
+          null,
+      );
+    }),
+  );
+
+  it.effect("a fresh failure wakes it, so a re-snooze stamps fresh", () =>
+    Effect.gen(function* () {
+      const eventSink = yield* EventSink.EventSinkV2;
+      const { orchestrator, threadId } = yield* setup("indefinite-snooze-failed");
+      const snooze = (id: string) =>
+        orchestrator.dispatch({
+          type: "thread.snooze",
+          commandId: CommandId.make(`indefinite-snooze-failed-${id}`),
+          threadId,
+          snoozedUntil: null,
+        });
+      const read = () => orchestrator.getThreadProjection(threadId);
+      yield* orchestrator.dispatch({
+        type: "message.dispatch",
+        createdBy: "user",
+        creationSource: "web",
+        commandId: CommandId.make("indefinite-snooze-failed-send"),
+        threadId,
+        messageId: MessageId.make("indefinite-snooze-failed-send"),
+        text: "Start work.",
+        attachments: [],
+        modelSelection,
+        dispatchMode: { type: "start_immediately" },
+      });
+      const run = (yield* read()).runs.at(-1);
+      assert.isDefined(run);
+      const failedAt = yield* DateTime.now;
+      yield* eventSink.commitCommand({
+        commandId: CommandId.make("indefinite-snooze-failed-run"),
+        threadId,
+        commandType: "provider-runtime.reconcile",
+        acceptedAt: failedAt,
+        events: [
+          {
+            id: EventId.make("indefinite-snooze-failed-run"),
+            type: "run.updated" as const,
+            threadId,
+            runId: run.id,
+            occurredAt: failedAt,
+            payload: { ...run, status: "failed" as const, completedAt: failedAt },
+          },
+        ],
+        effects: [],
+      });
+
+      // Snoozed after the failure: the user saw it, so a repeat is a no-op.
+      yield* TestClock.adjust("1 minute");
+      yield* snooze("first");
+      const snoozed = (yield* read()).thread;
+      yield* TestClock.adjust("1 minute");
+      yield* snooze("repeat");
+      const repeated = (yield* read()).thread;
+      assert.deepEqual(repeated.snoozedAt, snoozed.snoozedAt);
+      assert.deepEqual(repeated.updatedAt, snoozed.updatedAt);
+
+      // A later change makes the failed runtime fresh for clients, which wake.
+      yield* TestClock.adjust("1 minute");
+      yield* orchestrator.dispatch({
+        type: "thread.metadata.update",
+        commandId: CommandId.make("indefinite-snooze-failed-rename"),
+        threadId,
+        title: "Renamed after snooze",
+      });
+      yield* TestClock.adjust("1 minute");
+      yield* snooze("again");
+      const resnoozedAt = yield* DateTime.now;
+      const resnoozed = (yield* read()).thread;
+      assert.deepEqual(resnoozed.snoozedAt, resnoozedAt);
+      assert.deepEqual(resnoozed.updatedAt, resnoozedAt);
+    }),
+  );
+});
+
+// Fork: "until it's done" snooze waits on the latest run's work, follows a
+// wake onto the run it starts, and wakes on anything else.
+it.layer(SharedApplicationDataPlaneTestLayer)("snooze until done", (it) => {
+  const setup = (prefix: string) =>
+    Effect.gen(function* () {
+      const projects = yield* ProjectService.ProjectService;
+      const orchestrator = yield* Orchestrator.OrchestratorV2;
+      const projectId = ProjectId.make(`${prefix}-project`);
+      const threadId = ThreadId.make(`${prefix}-thread`);
+      yield* projects.create({
+        commandId: CommandId.make(`${prefix}-project-create`),
+        projectId,
+        title: "Snooze until done",
+        workspaceRoot: `/tmp/${prefix}-project`,
+      });
+      yield* orchestrator.dispatch({
+        type: "thread.create",
+        createdBy: "user",
+        creationSource: "web",
+        commandId: CommandId.make(`${prefix}-thread-create`),
+        threadId,
+        projectId,
+        title: "Snoozed until done",
+        modelSelection,
+        runtimeMode: "full-access",
+        interactionMode: "default",
+        branch: null,
+        worktreePath: null,
+      });
+      const snoozeUntilDone = (id: string) =>
+        orchestrator.dispatch({
+          type: "thread.snooze",
+          commandId: CommandId.make(`${prefix}-${id}`),
+          threadId,
+          snoozedUntil: null,
+          untilDone: true,
+        });
+      const sendMessage = (id: string, automatic: boolean) =>
+        orchestrator.dispatch({
+          type: "message.dispatch",
+          createdBy: automatic ? "agent" : "user",
+          creationSource: automatic ? "provider" : "web",
+          ...(automatic
+            ? {
+                notification: {
+                  source: { kind: "background_task" as const },
+                  outcome: "updated" as const,
+                  summary: "Background activity updated",
+                },
+              }
+            : {}),
+          commandId: CommandId.make(`${prefix}-${id}`),
+          threadId,
+          messageId: MessageId.make(`${prefix}-${id}`),
+          text: id,
+          attachments: [],
+          modelSelection,
+          dispatchMode: automatic ? { type: "queue_after_active" } : { type: "start_immediately" },
+        });
+      const read = () => orchestrator.getThreadProjection(threadId);
+      return { orchestrator, threadId, snoozeUntilDone, sendMessage, read };
+    });
+
+  it.effect("waits on the live run, dedupes, and rejects with nothing to wait for", () =>
+    Effect.gen(function* () {
+      const { orchestrator, threadId, snoozeUntilDone, sendMessage, read } =
+        yield* setup("until-done-snooze");
+      const idle = yield* snoozeUntilDone("idle").pipe(Effect.exit);
+      assert.equal(idle._tag, "Failure");
+
+      yield* sendMessage("work", false);
+      const run = (yield* read()).runs.at(-1);
+      assert.isDefined(run);
+      yield* snoozeUntilDone("snooze");
+      const snoozed = (yield* read()).thread;
+      assert.equal(snoozed.snoozedUntilRunId, run.id);
+      assert.isNull(snoozed.snoozedUntil ?? null);
+      assert.isNotNull(snoozed.snoozedAt ?? null);
+
+      yield* TestClock.adjust("1 minute");
+      yield* snoozeUntilDone("again");
+      const repeated = (yield* read()).thread;
+      assert.deepEqual(repeated.snoozedAt, snoozed.snoozedAt);
+      assert.deepEqual(repeated.updatedAt, snoozed.updatedAt);
+
+      const timed = yield* orchestrator
+        .dispatch({
+          type: "thread.snooze",
+          commandId: CommandId.make("until-done-snooze-timed"),
+          threadId,
+          snoozedUntil: "2099-01-01T00:00:00.000Z",
+          untilDone: true,
+        })
+        .pipe(Effect.exit);
+      assert.equal(timed._tag, "Failure");
+
+      yield* orchestrator.dispatch({
+        type: "thread.unsnooze",
+        commandId: CommandId.make("until-done-snooze-wake"),
+        threadId,
+        reason: "user",
+      });
+      const awake = (yield* read()).thread;
+      assert.isNull(awake.snoozedAt ?? null);
+      assert.isNull(awake.snoozedUntilRunId ?? null);
+    }),
+  );
+
+  it.effect("follows a wake onto its run, and a user message wakes it", () =>
+    Effect.gen(function* () {
+      const { snoozeUntilDone, sendMessage, read } = yield* setup("until-done-wake");
+      yield* sendMessage("work", false);
+      yield* snoozeUntilDone("snooze");
+      const snoozed = (yield* read()).thread;
+
+      yield* sendMessage("background-wake", true);
+      const afterWake = yield* read();
+      const wakeRun = afterWake.runs.at(-1);
+      assert.isDefined(wakeRun);
+      assert.notEqual(wakeRun.id, snoozed.snoozedUntilRunId);
+      assert.equal(afterWake.thread.snoozedUntilRunId, wakeRun.id);
+      assert.deepEqual(afterWake.thread.snoozedAt, snoozed.snoozedAt);
+
+      yield* sendMessage("user-follow-up", false);
+      const woken = (yield* read()).thread;
+      assert.isNull(woken.snoozedAt ?? null);
+      assert.isNull(woken.snoozedUntilRunId ?? null);
+    }),
+  );
+
+  it.effect("a notification wake keeps the snooze while a subagent turn item runs on", () =>
+    Effect.gen(function* () {
+      const eventSink = yield* EventSink.EventSinkV2;
+      const { threadId, snoozeUntilDone, sendMessage, read } = yield* setup("until-done-subagent");
+      yield* sendMessage("work", false);
+      yield* snoozeUntilDone("snooze");
+      const snoozed = (yield* read()).thread;
+      const run = (yield* read()).runs.at(-1);
+      assert.isDefined(run);
+      const now = yield* DateTime.now;
+      const subagentId = NodeId.make("until-done-subagent-node");
+      yield* eventSink.commitCommand({
+        commandId: CommandId.make("until-done-subagent-complete"),
+        threadId,
+        commandType: "provider-runtime.reconcile",
+        acceptedAt: now,
+        events: [
+          {
+            id: EventId.make("until-done-subagent-complete"),
+            type: "run.updated" as const,
+            threadId,
+            runId: run.id,
+            occurredAt: now,
+            payload: { ...run, status: "completed" as const, completedAt: now },
+          },
+          {
+            id: EventId.make("until-done-subagent-item"),
+            type: "turn-item.updated" as const,
+            threadId,
+            runId: run.id,
+            nodeId: subagentId,
+            occurredAt: now,
+            payload: {
+              id: TurnItemId.make("until-done-subagent-item"),
+              threadId,
+              runId: run.id,
+              nodeId: subagentId,
+              providerThreadId: null,
+              providerTurnId: null,
+              nativeItemRef: null,
+              parentItemId: null,
+              ordinal: 1,
+              type: "subagent" as const,
+              status: "running" as const,
+              title: null,
+              startedAt: now,
+              completedAt: null,
+              updatedAt: now,
+              subagentId,
+              origin: "provider_native" as const,
+              driver: ProviderDriverKind.make("claudeAgent"),
+              providerInstanceId: modelSelection.instanceId,
+              childThreadId: null,
+              prompt: "Audit the adapters",
+              result: null,
+            },
+          },
+        ],
+        effects: [],
+      });
+
+      yield* sendMessage("subagent-notification", true);
+      const afterWake = yield* read();
+      const wakeRun = afterWake.runs.at(-1);
+      assert.isDefined(wakeRun);
+      assert.notEqual(wakeRun.id, run.id);
+      assert.deepEqual(afterWake.thread.snoozedAt, snoozed.snoozedAt);
+      assert.equal(afterWake.thread.snoozedUntilRunId, wakeRun.id);
+    }),
+  );
+
+  it.effect("a delegated-completion wake for the awaited run keeps the snooze", () =>
+    Effect.gen(function* () {
+      const eventSink = yield* EventSink.EventSinkV2;
+      const { orchestrator, threadId, snoozeUntilDone, sendMessage, read } =
+        yield* setup("until-done-delegated");
+      yield* sendMessage("work", false);
+      yield* snoozeUntilDone("snooze");
+      const snoozed = (yield* read()).thread;
+      const run = (yield* read()).runs.at(-1);
+      assert.isDefined(run);
+      const now = yield* DateTime.now;
+      const deliveryMessageId = MessageId.make("until-done-delegated-delivery");
+      const taskId = NodeId.make("until-done-delegated-child");
+      // The last child finished: its turn item is terminal, and only the
+      // reserved completion delivery on the parent run remains.
+      yield* eventSink.commitCommand({
+        commandId: CommandId.make("until-done-delegated-complete"),
+        threadId,
+        commandType: "provider-runtime.reconcile",
+        acceptedAt: now,
+        events: [
+          {
+            id: EventId.make("until-done-delegated-complete"),
+            type: "run.updated" as const,
+            threadId,
+            runId: run.id,
+            occurredAt: now,
+            payload: {
+              ...run,
+              status: "completed" as const,
+              completedAt: now,
+              delegatedCompletion: {
+                disposition: "open" as const,
+                nextGeneration: 2,
+                delivery: { generation: 1, messageId: deliveryMessageId, taskIds: [taskId] },
+              },
+            },
+          },
+        ],
+        effects: [],
+      });
+
+      yield* orchestrator.dispatch({
+        type: "message.dispatch",
+        createdBy: "agent",
+        creationSource: "server",
+        commandId: CommandId.make("until-done-delegated-wake"),
+        threadId,
+        messageId: deliveryMessageId,
+        text: "Delegated task finished.",
+        attachments: [],
+        modelSelection,
+        delegatedCompletion: { parentRunId: run.id, generation: 1, taskIds: [taskId] },
+        dispatchMode: { type: "queue_after_active" },
+      });
+      const afterWake = yield* read();
+      const wakeRun = afterWake.runs.at(-1);
+      assert.isDefined(wakeRun);
+      assert.notEqual(wakeRun.id, run.id);
+      assert.deepEqual(afterWake.thread.snoozedAt, snoozed.snoozedAt);
+      assert.equal(afterWake.thread.snoozedUntilRunId, wakeRun.id);
+
+      yield* sendMessage("user-follow-up", false);
+      const woken = (yield* read()).thread;
+      assert.isNull(woken.snoozedAt ?? null);
+      assert.isNull(woken.snoozedUntilRunId ?? null);
+    }),
+  );
+
+  it.effect("a wake after the work ended spends the snooze", () =>
+    Effect.gen(function* () {
+      const eventSink = yield* EventSink.EventSinkV2;
+      const { threadId, snoozeUntilDone, sendMessage, read } = yield* setup("until-done-ended");
+      yield* sendMessage("work", false);
+      yield* snoozeUntilDone("snooze");
+      const run = (yield* read()).runs.at(-1);
+      assert.isDefined(run);
+      const now = yield* DateTime.now;
+      yield* eventSink.commitCommand({
+        commandId: CommandId.make("until-done-ended-complete"),
+        threadId,
+        commandType: "provider-runtime.reconcile",
+        acceptedAt: now,
+        events: [
+          {
+            id: EventId.make("until-done-ended-complete"),
+            type: "run.updated" as const,
+            threadId,
+            runId: run.id,
+            occurredAt: now,
+            payload: { ...run, status: "completed" as const, completedAt: now },
+          },
+        ],
+        effects: [],
+      });
+
+      yield* sendMessage("late-wake", true);
+      const woken = (yield* read()).thread;
+      assert.isNull(woken.snoozedAt ?? null);
+      assert.isNull(woken.snoozedUntilRunId ?? null);
     }),
   );
 });

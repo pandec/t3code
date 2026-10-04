@@ -6,6 +6,7 @@ import {
   EventId,
   ProviderInstanceId,
   ProviderSessionId,
+  RunId,
   ThreadId,
   type OrchestrationProjectShell,
   type OrchestrationV2AppThread,
@@ -184,6 +185,38 @@ describe("isAutoSettlementCandidate", () => {
     expect(
       ThreadSettlementService.isAutoSettlementCandidate(
         shell({ ...snoozed, snoozedUntil: at(-1) }),
+        NOW_MS,
+      ),
+    ).toBe(true);
+  });
+});
+
+describe("indefinite snooze settlement (fork)", () => {
+  it("never auto-settles an indefinitely snoozed thread, even after it woke", () => {
+    const parked = shell({ snoozedUntil: null, snoozedAt: at(-60 * 60 * 1_000) });
+    expect(ThreadSettlementService.isAutoSettlementCandidate(parked, NOW_MS)).toBe(false);
+    expect(
+      ThreadSettlementService.isAutoSettlementCandidate(
+        shell({ ...parked, latestRunCompletedAt: at(-30 * 60 * 1_000) }),
+        NOW_MS,
+      ),
+    ).toBe(false);
+  });
+});
+
+describe("snooze until done settlement (fork)", () => {
+  it("settles an until-done snooze once its work ended (not treated as indefinite)", () => {
+    const runId = RunId.make("run-wake");
+    expect(
+      ThreadSettlementService.isAutoSettlementCandidate(
+        shell({
+          snoozedUntil: null,
+          snoozedAt: at(-60 * 60 * 1_000),
+          snoozedUntilRunId: runId,
+          latestRunId: runId,
+          status: "completed",
+          latestRunCompletedAt: at(-30 * 60 * 1_000),
+        }),
         NOW_MS,
       ),
     ).toBe(true);

@@ -4,6 +4,7 @@ import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import * as Scheduler from "../scheduling/Scheduler.ts";
 import * as ServerSettings from "../serverSettings.ts";
+import { indefiniteSnoozeHoldsOverLatestRun } from "./IndefiniteSnooze.ts";
 import * as ProjectionStore from "./ProjectionStore.ts";
 import * as ThreadManagement from "./ThreadManagementService.ts";
 
@@ -50,7 +51,9 @@ export function limitRecoveryCommand(
   if (
     !recovery.autoResume ||
     resetMs > nowMs ||
-    (thread.snoozedUntil != null && DateTime.toEpochMillis(thread.snoozedUntil) > nowMs)
+    (thread.snoozedUntil != null && DateTime.toEpochMillis(thread.snoozedUntil) > nowMs) ||
+    // Fork: an indefinite snooze set after the failure only wakes by hand.
+    indefiniteSnoozeHoldsOverLatestRun(thread)
   )
     return null;
   const deliveryIdentity = `${identity}:${recovery.requestId ?? "legacy"}`;

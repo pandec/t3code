@@ -6,7 +6,11 @@ import {
   settlePromise,
   squashAtomCommandFailure,
 } from "@t3tools/client-runtime/state/runtime";
-import { canSnooze, effectiveSnoozed } from "@t3tools/client-runtime/state/thread-settled";
+import {
+  canSnooze,
+  canSnoozeUntilDone,
+  effectiveSnoozed,
+} from "@t3tools/client-runtime/state/thread-settled";
 import { canForkConversation } from "@t3tools/client-runtime/state/thread-fork";
 import type { ScopedThreadRef, ThreadId } from "@t3tools/contracts";
 import { useRouter } from "@tanstack/react-router";
@@ -26,6 +30,8 @@ import {
   readEnvironmentSupportsPinning,
   readEnvironmentSupportsSettlement,
   readEnvironmentSupportsSnooze,
+  readEnvironmentSupportsSnoozeIndefinite,
+  readEnvironmentSupportsSnoozeUntilDone,
   readEnvironmentSupportsTitleRegeneration,
   readThreadShell,
   useProjects,
@@ -92,7 +98,7 @@ export function useThreadActionMenu(input: {
     pinThread,
     confirmAndUnpinThread,
     setThreadAutoSettle,
-    archiveThread,
+    attemptArchiveThread,
     deleteThread,
     markThreadUnread,
     forkThread,
@@ -102,7 +108,6 @@ export function useThreadActionMenu(input: {
   });
   const handleNewThread = useNewThreadHandler();
   const confirmThreadDelete = useClientSettings((s) => s.confirmThreadDelete);
-  const confirmThreadArchive = useClientSettings((s) => s.confirmThreadArchive);
   const timestampFormat = useClientSettings((s) => s.timestampFormat);
   const { copyToClipboard: copyPathToClipboard } = useCopyToClipboard<{ path: string }>({
     onCopy: ({ path }) => {
@@ -144,7 +149,12 @@ export function useThreadActionMenu(input: {
           titleRegeneration: readEnvironmentSupportsTitleRegeneration(threadRef.environmentId),
         };
         const isRegeneratingTitle = thread.titleRegeneration != null;
-        const snoozePresets = resolveSnoozePresets(now, timestampFormat);
+        const snoozePresets = resolveSnoozePresets(now, timestampFormat, {
+          untilWoken: readEnvironmentSupportsSnoozeIndefinite(threadRef.environmentId),
+          untilDone:
+            readEnvironmentSupportsSnoozeUntilDone(threadRef.environmentId) &&
+            canSnoozeUntilDone(thread),
+        });
         const items = buildThreadActionMenuItems({
           branch: thread.branch ?? null,
           projectFilter: null,
@@ -168,7 +178,9 @@ export function useThreadActionMenu(input: {
               ? await requestCustomSnooze()
               : snoozePresets.find((candidate) => `snooze:${candidate.id}` === action);
           if (!preset) return;
-          const result = await snoozeThread(threadRef, preset.snoozedUntil);
+          const result = await snoozeThread(threadRef, preset.snoozedUntil, {
+            untilDone: "untilDone" in preset && preset.untilDone === true,
+          });
           if (result._tag === "Failure" && !isAtomCommandInterrupted(result)) {
             failureToast("Failed to snooze thread", squashAtomCommandFailure(result));
           }
@@ -280,27 +292,9 @@ export function useThreadActionMenu(input: {
           case "copy-thread-id":
             copyThreadIdToClipboard(thread.id, { threadId: thread.id });
             return;
-          case "archive": {
-            if (confirmThreadArchive) {
-              const confirmed = await settlePromise(() =>
-                api.dialogs.confirm(`Archive thread "${thread.title}"?`),
-              );
-              if (confirmed._tag === "Failure" || !confirmed.value) return;
-            }
-            let didArchive = false;
-            const result = await archiveThread(threadRef, {
-              onArchived: () => {
-                didArchive = true;
-              },
-            });
-            if (result._tag === "Failure" && !isAtomCommandInterrupted(result)) {
-              failureToast(
-                didArchive ? "Thread archived, but navigation failed" : "Failed to archive thread",
-                squashAtomCommandFailure(result),
-              );
-            }
+          case "archive":
+            await attemptArchiveThread(threadRef);
             return;
-          }
           case "delete": {
             if (confirmThreadDelete) {
               const confirmed = await settlePromise(() =>
@@ -333,8 +327,7 @@ export function useThreadActionMenu(input: {
       })();
     },
     [
-      archiveThread,
-      confirmThreadArchive,
+      attemptArchiveThread,
       confirmThreadDelete,
       confirmAndUnpinThread,
       copyBranchToClipboard,

@@ -1076,6 +1076,27 @@ it.effect("runs a Scratch thread launched at the root in its own folder", () =>
   }),
 );
 
+// Fork: a draft's custom group joins the thread its first send creates.
+it.effect("creates the launched thread in the requested custom group", () =>
+  Effect.gen(function* () {
+    const harness = makeHarness();
+    yield* Effect.gen(function* () {
+      const launches = yield* ThreadLaunch.ThreadLaunchService;
+      const threads = yield* ThreadManagement.ThreadManagementService;
+      const launched = yield* launches.launch({
+        ...launchInput({
+          command: "command:launch:grouped",
+          thread: "thread:launch:grouped",
+          message: "Start in a group",
+        }),
+        customGroupId: "research",
+      });
+      const shell = yield* threads.getThreadShell(launched.threadId);
+      assert.equal(shell?.customGroupId, "research");
+    }).pipe(Effect.provide(harness.layer));
+  }),
+);
+
 it.effect("names the worktree itself when the client provides no branch", () =>
   Effect.gen(function* () {
     const harness = makeHarness();

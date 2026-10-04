@@ -1,6 +1,6 @@
 import { useAndroidControlSizing } from "../../components/useAndroidControlSizing";
 import type { ThreadMoveDestination } from "../threads/threadOrder";
-import { computeThreadMoveAvailability } from "../threads/threadOrder";
+import { computeGroupedThreadMoveAvailability } from "../threads/threadOrder";
 import { LegendList, type LegendListRef } from "@legendapp/list/react-native";
 import {
   type EnvironmentProject,
@@ -34,7 +34,12 @@ import { scopedProjectKey } from "../../lib/scopedEntities";
 import { NATIVE_LIQUID_GLASS_SUPPORTED } from "../../native/native-glass";
 import { useThreadSearch } from "../../state/queries";
 import { useThreadJumpShortcuts } from "../keyboard/threadKeyboardShortcuts";
-import { useThreadShelfExpansion } from "../../state/use-mobile-preferences";
+import {
+  useCollapsedThreadGroups,
+  useThreadShelfExpansion,
+} from "../../state/use-mobile-preferences";
+import { useThreadGroups } from "../../state/use-thread-groups";
+import { ThreadCustomGroupHeader } from "../threads/ThreadCustomGroupHeader";
 import { usePendingThreadOrder } from "../../state/thread-order";
 import { threadListEnvironmentsAtom } from "../../state/server";
 import { useProjectAccentColors } from "../../state/use-project-accent-colors";
@@ -98,7 +103,8 @@ interface HomeScreenProps {
   readonly onSettleThread: (thread: EnvironmentThreadShell) => Promise<boolean>;
   readonly onSnoozeThread: (
     thread: EnvironmentThreadShell,
-    snoozedUntil: string,
+    snoozedUntil: string | null,
+    options?: { readonly untilDone?: boolean },
   ) => Promise<boolean>;
   readonly onUnsnoozeThread: (thread: EnvironmentThreadShell) => Promise<boolean>;
   readonly onUnsettleThread: (thread: EnvironmentThreadShell) => void;
@@ -143,6 +149,9 @@ const ESTIMATED_THREAD_LIST_V2_ROW_HEIGHT = 72;
 // rows that are already built instead of rows still being rebuilt.
 const THREAD_LIST_V2_DRAW_DISTANCE = 1_000;
 const PRE_LIQUID_GLASS_BOTTOM_TOOLBAR_HEIGHT = 44;
+// Fork: a search shows matches inside collapsed groups and a collapsed
+// Active shelf without touching the stored collapse preferences.
+const NO_COLLAPSED_GROUPS: ReadonlySet<string> = new Set();
 /**
  * Top spacing between the list and the Android custom header. The Android
  * header is rendered in-flow above this screen and
@@ -409,8 +418,12 @@ export function HomeScreen(props: HomeScreenProps) {
   // optimistic holds.
   const handleSettleThread = props.onSettleThread;
   const handleSnoozeThread = useCallback(
-    (thread: EnvironmentThreadShell, snoozedUntil: string) => {
-      void props.onSnoozeThread(thread, snoozedUntil);
+    (
+      thread: EnvironmentThreadShell,
+      snoozedUntil: string | null,
+      options?: { readonly untilDone?: boolean },
+    ) => {
+      void props.onSnoozeThread(thread, snoozedUntil, options);
     },
     [props.onSnoozeThread],
   );
@@ -488,6 +501,11 @@ export function HomeScreen(props: HomeScreenProps) {
     useThreadShelfExpansion("settled");
   const { expanded: pinnedShelfExpanded, toggle: togglePinnedShelf } =
     useThreadShelfExpansion("pinned");
+  // Fork: custom thread groups split Active into folding sections.
+  const { groups: customGroups } = useThreadGroups();
+  const collapsedThreadGroups = useCollapsedThreadGroups();
+  const { expanded: activeShelfExpanded, toggle: toggleActiveShelf } =
+    useThreadShelfExpansion("active");
   // Queued-start and snooze helpers need a clock while the list stays open.
   const [nowMinute, setNowMinute] = useState(() => new Date().toISOString().slice(0, 16));
   // Snooze wake times are second-precise; a counter bumped exactly at the
@@ -510,6 +528,7 @@ export function HomeScreen(props: HomeScreenProps) {
     machineByEnvironmentId,
     settlementEnvironmentIds,
     snoozeEnvironmentIds,
+    snoozeUntilDoneEnvironmentIds,
     pinningEnvironmentIds,
     autoSettleOptOutEnvironmentIds,
     pinReorderEnvironmentIds,
@@ -523,7 +542,8 @@ export function HomeScreen(props: HomeScreenProps) {
   // list construction quadratic, and this list rebuilds on every minute tick.
   const threadMoveAvailability = useMemo(() => {
     const sectionAvailability = (section: "pinned" | "active") =>
-      computeThreadMoveAvailability({
+      computeGroupedThreadMoveAvailability({
+        groups: customGroups,
         allThreads: props.threads,
         section,
         pendingOrder,
@@ -541,6 +561,7 @@ export function HomeScreen(props: HomeScreenProps) {
       });
     return new Map([...sectionAvailability("pinned"), ...sectionAvailability("active")]);
   }, [
+    customGroups,
     pinReorderEnvironmentIds,
     activeReorderEnvironmentIds,
     props.threads,
@@ -639,6 +660,10 @@ export function HomeScreen(props: HomeScreenProps) {
       buildThreadListV2ListItems({
         items: threadListV2Layout.items,
         pendingTasks: v2PendingTasks,
+        customGroups,
+        collapsedGroupIds:
+          v2SearchQuery.length > 0 ? NO_COLLAPSED_GROUPS : collapsedThreadGroups.ids,
+        activeShelfExpanded: activeShelfExpanded || v2SearchQuery.length > 0,
         pinnedCount: threadListV2Layout.pinnedCount,
         pinnedShelfExpanded,
         pinnedShelfHeaderVisible: threadListV2Layout.pinnedShelfHeaderVisible,
@@ -656,6 +681,9 @@ export function HomeScreen(props: HomeScreenProps) {
       }),
     [
       nowMinute,
+      customGroups,
+      collapsedThreadGroups.ids,
+      activeShelfExpanded,
       pinnedShelfExpanded,
       settledShelfExpanded,
       snoozedShelfExpanded,
@@ -665,6 +693,7 @@ export function HomeScreen(props: HomeScreenProps) {
       snoozeEnvironmentIds,
       threadListV2Layout,
       v2PendingTasks,
+      v2SearchQuery,
     ],
   );
 
@@ -711,6 +740,20 @@ export function HomeScreen(props: HomeScreenProps) {
       }
       if (item.type === "v2-pinned-divider") {
         return <ThreadListV2PinnedDivider />;
+      }
+      if (item.type === "v2-custom-group") {
+        const groupId = item.groupId;
+        return (
+          <ThreadCustomGroupHeader
+            name={item.name}
+            count={item.count}
+            expanded={item.expanded}
+            builtIn={groupId === null}
+            onToggle={
+              groupId === null ? toggleActiveShelf : () => collapsedThreadGroups.toggle(groupId)
+            }
+          />
+        );
       }
       if (item.type === "v2-snoozed-shelf") {
         return (
@@ -780,6 +823,7 @@ export function HomeScreen(props: HomeScreenProps) {
           settlementSupported={settlementEnvironmentIds.has(thread.environmentId)}
           onSettleThread={handleSettleThread}
           snoozeSupported={snoozeEnvironmentIds.has(thread.environmentId)}
+          snoozeUntilDoneSupported={snoozeUntilDoneEnvironmentIds.has(thread.environmentId)}
           pinningSupported={pinningEnvironmentIds.has(thread.environmentId)}
           autoSettleOptOutSupported={autoSettleOptOutEnvironmentIds.has(thread.environmentId)}
           reorderSupported={
@@ -804,6 +848,8 @@ export function HomeScreen(props: HomeScreenProps) {
       );
     },
     [
+      collapsedThreadGroups,
+      toggleActiveShelf,
       handleDeleteThread,
       activeReorderEnvironmentIds,
       handleMoveThread,

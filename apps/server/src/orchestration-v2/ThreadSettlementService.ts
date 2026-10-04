@@ -24,6 +24,7 @@ import * as ServerSettings from "../serverSettings.ts";
 import { forkParked } from "../serverActivation.ts";
 import * as TerminalManager from "../terminal/Manager.ts";
 import * as ProjectStore from "./ProjectStore.ts";
+import { isIndefinitelySnoozed } from "./IndefiniteSnooze.ts";
 import * as Orchestrator from "./Orchestrator.ts";
 import * as ProjectionStore from "./ProjectionStore.ts";
 
@@ -142,6 +143,11 @@ export function isAutoSettlementCandidate(
   if (thread.activityRunStatus != null) return false;
   if ((thread.pendingBackgroundTasks?.length ?? 0) > 0) return false;
   if (threadHasQueuedTurnStart(thread, nowMs)) return false;
+  // Fork: a queued run is pending work. Redundant for getSettlementCandidates,
+  // which already excludes queued runs, but keeps shell rows consistent.
+  if (thread.status === "queued") return false;
+  // Fork: an indefinite snooze only wakes by hand, never by settlement.
+  if (isIndefinitelySnoozed(thread)) return false;
   const snoozedUntilMs = toMillis(thread.snoozedUntil);
   if (snoozedUntilMs === null || snoozedUntilMs <= nowMs) return true;
   // A snoozed thread that woke early (error or completed work) can settle;

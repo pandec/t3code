@@ -1,5 +1,6 @@
 import { planPinnedMove } from "@t3tools/client-runtime/state/thread-sort";
 import {
+  computeGroupedThreadMoveAvailability,
   createPendingThreadOrder,
   createThreadMovePlanner,
   threadOrderAfterMove,
@@ -35,6 +36,7 @@ import {
   resolveThreadListV2SnoozeGateExpiryMs,
   resolveThreadListV2Status,
   resolveThreadListV2SwipeActions,
+  resolveThreadListV2WorkingTimeLabel,
   sortThreadsForListV2,
   threadListV2ListItemsAreEqual,
   type ThreadListV2ListItem,
@@ -169,26 +171,67 @@ describe("resolveThreadListV2Status", () => {
     expect(resolveThreadListV2Status(thread)).toBe("approval");
   });
 
-  it("reports waiting when presentation parks runtime idle for background tasks", () => {
-    expect(
-      resolveThreadListV2Status(
-        makeThread({
-          id: ThreadId.make("t"),
-          title: "t",
-          pendingBackgroundTasks: [
-            { taskId: "bg-1", description: "Run Codex review", kind: "command" },
-          ],
-          runtime: {
-            status: "idle",
-            activeRunId: null,
-            providerInstanceId: ProviderInstanceId.make("codex"),
-            providerName: "Codex",
-            lastError: null,
-            updatedAt: NOW,
-          },
-        }),
-      ),
-    ).toBe("waiting");
+  it("reads background work parked after the turn as working or monitoring", () => {
+    const parked = (pendingBackgroundTasks: EnvironmentThreadShell["pendingBackgroundTasks"]) =>
+      makeThread({
+        id: ThreadId.make("t"),
+        title: "t",
+        pendingBackgroundTasks,
+        runtime: {
+          status: "idle",
+          activeRunId: null,
+          providerInstanceId: ProviderInstanceId.make("codex"),
+          providerName: "Codex",
+          lastError: null,
+          updatedAt: NOW,
+        },
+      });
+    const devServer = { taskId: "bg-1", description: "Run dev server", kind: "command" } as const;
+    const monitor = { taskId: "watch", kind: "monitor" } as const;
+    const subagent = { taskId: "sub", kind: "subagent" } as const;
+
+    expect(resolveThreadListV2Status(parked([devServer, monitor]))).toBe("monitoring");
+    expect(resolveThreadListV2Status(parked([devServer, subagent]))).toBe("working");
+    expect(resolveThreadListV2Status(parked([{ taskId: "flow", kind: "background_task" }]))).toBe(
+      "working",
+    );
+    expect(resolveThreadListV2Status(parked([]))).toBe("waiting");
+  });
+
+  it("labels working rows with their elapsed time and nothing else", () => {
+    vi.useFakeTimers();
+    try {
+      vi.setSystemTime(Date.parse(NOW));
+      const runtime = {
+        status: "running" as const,
+        activeRunId: RunId.make("run-1"),
+        activityStartedAt: "2026-06-01T23:48:00.000Z",
+        providerInstanceId: ProviderInstanceId.make("codex"),
+        providerName: "Codex",
+        lastError: null,
+        updatedAt: NOW,
+      };
+      const thread = makeThread({ id: ThreadId.make("t"), title: "t", runtime });
+
+      expect(resolveThreadListV2WorkingTimeLabel(thread, "working")).toBe("12m");
+      expect(resolveThreadListV2WorkingTimeLabel(thread, "monitoring")).toBeNull();
+      expect(resolveThreadListV2WorkingTimeLabel(thread, "approval")).toBeNull();
+      // Agents left running after the turn have no live run to time.
+      expect(
+        resolveThreadListV2WorkingTimeLabel(
+          { ...thread, runtime: { ...runtime, status: "idle", activityStartedAt: null } },
+          "working",
+        ),
+      ).toBeNull();
+      expect(
+        resolveThreadListV2WorkingTimeLabel(
+          { ...thread, runtime: { ...runtime, activityStartedAt: "not a date" } },
+          "working",
+        ),
+      ).toBeNull();
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it("resolves ready for quiescent threads", () => {
@@ -541,6 +584,67 @@ describe("buildThreadListV2Items", () => {
     // thread is BACK in the card block and the snoozed one is gone.
     expect(layout.items.map((item) => item.thread.id)).toEqual(["active", "woken"]);
     expect(layout.snoozedCount).toBe(1);
+  });
+
+  it("sorts indefinite snoozes after timed ones on the snoozed shelf (fork)", () => {
+    const layout = buildThreadListV2Items({
+      threads: [
+        makeThread({
+          id: ThreadId.make("parked"),
+          title: "Parked",
+          snoozedUntil: null,
+          snoozedAt: "2026-06-01T11:00:00.000Z",
+        }),
+        makeThread({
+          id: ThreadId.make("timed"),
+          title: "Timed",
+          snoozedUntil: "2026-06-03T09:00:00.000Z",
+          snoozedAt: "2026-06-01T12:00:00.000Z",
+        }),
+      ],
+      environmentId: null,
+      searchQuery: "",
+      now: NOW,
+      snoozedShelfExpanded: true,
+    });
+
+    expect(layout.snoozedCount).toBe(2);
+    expect(layout.items.map((item) => item.thread.id)).toEqual(["timed", "parked"]);
+  });
+
+  it("leads the snoozed shelf with until-done rows while their run works (fork)", () => {
+    const layout = buildThreadListV2Items({
+      threads: [
+        makeThread({
+          id: ThreadId.make("timed"),
+          title: "Timed",
+          snoozedUntil: "2026-06-03T09:00:00.000Z",
+          snoozedAt: "2026-06-01T12:00:00.000Z",
+        }),
+        makeThread({
+          id: ThreadId.make("until-done"),
+          title: "Until done",
+          snoozedUntil: null,
+          snoozedAt: "2026-06-01T11:00:00.000Z",
+          snoozedUntilRunId: RunId.make("run-1"),
+          latestRun: {
+            runId: RunId.make("run-1"),
+            status: "running",
+            requestedAt: "2026-06-01T10:00:00.000Z",
+            startedAt: "2026-06-01T10:00:00.000Z",
+            completedAt: null,
+            assistantMessageId: null,
+          },
+        }),
+      ],
+      environmentId: null,
+      searchQuery: "",
+      now: NOW,
+      snoozedShelfExpanded: true,
+    });
+
+    expect(layout.snoozedCount).toBe(2);
+    expect(layout.items.map((item) => item.thread.id)).toEqual(["until-done", "timed"]);
   });
 
   it("places settled pinned threads in the settled shelf", () => {
@@ -2459,5 +2563,121 @@ describe("buildThreadListV2ListItems row-state stamps", () => {
     expect(shelfLoading.type === "v2-settled-shelf" && shelfLoading.disabled).toBe(true);
     expect(shelfLoaded.type === "v2-settled-shelf" && shelfLoaded.disabled).toBe(false);
     expect(threadListV2ListItemsAreEqual(shelfLoading, shelfLoaded)).toBe(false);
+  });
+});
+
+// Fork: custom thread groups split Active and bound its moves.
+describe("custom thread groups", () => {
+  const groups = [
+    {
+      id: "research",
+      name: "Research",
+      orderKey: "a",
+      aboveActive: true,
+      revision: "0000000000000001:edit",
+      deleted: false,
+    },
+    {
+      id: "later",
+      name: "Later",
+      orderKey: "b",
+      revision: "0000000000000001:edit",
+      deleted: false,
+    },
+  ];
+  const grouped = [
+    makeThread({ id: ThreadId.make("plain"), title: "plain", activeOrderKey: "a" }),
+    makeThread({
+      id: ThreadId.make("r1"),
+      title: "r1",
+      activeOrderKey: "b",
+      customGroupId: "research",
+    }),
+    makeThread({
+      id: ThreadId.make("r2"),
+      title: "r2",
+      activeOrderKey: "c",
+      customGroupId: "research",
+    }),
+  ];
+  const layout = buildThreadListV2Items({
+    threads: grouped,
+    environmentId: null,
+    searchQuery: "",
+    now: NOW,
+  });
+  const keysOf = (items: ReadonlyArray<ThreadListV2ListItem>) =>
+    items.map((item) => (item.type === "v2-thread" ? item.item.thread.id : item.key));
+
+  it("puts groups around Active in placement order, with empty groups shown", () => {
+    const items = buildThreadListV2ListItems({
+      items: layout.items,
+      pendingTasks: [makePendingTask("queued")],
+      customGroups: groups,
+    });
+    expect(keysOf(items)).toEqual([
+      "v2-custom-group:research",
+      "r1",
+      "r2",
+      "v2-active-header",
+      "plain",
+      "v2-pending-task:queued",
+      "v2-custom-group:later",
+    ]);
+  });
+
+  it("folds a group but keeps the open thread", () => {
+    const items = buildThreadListV2ListItems({
+      items: layout.items,
+      pendingTasks: [],
+      customGroups: groups,
+      collapsedGroupIds: new Set(["research"]),
+      selectedThreadKey: `${environmentId}:r2`,
+    });
+    expect(keysOf(items).slice(0, 2)).toEqual(["v2-custom-group:research", "r2"]);
+    const header = items[0];
+    expect(header?.type === "v2-custom-group" && header.count).toBe(2);
+    expect(header?.type === "v2-custom-group" && header.expanded).toBe(false);
+  });
+
+  it("keeps the plain list without groups", () => {
+    const items = buildThreadListV2ListItems({ items: layout.items, pendingTasks: [] });
+    expect(items.every((item) => item.type === "v2-thread")).toBe(true);
+  });
+
+  it("plans Move up/down inside each group only", () => {
+    const ordered = getThreadListV2OrderedSection({
+      threads: grouped,
+      section: "active",
+      now: NOW,
+    });
+    const availability = computeGroupedThreadMoveAvailability({
+      groups,
+      ordered,
+      section: "active",
+      reorderableEnvironmentIds: new Set([environmentId]),
+    });
+    expect(availability.get(`${environmentId}:plain`)).toEqual({
+      canMoveUp: false,
+      canMoveDown: false,
+    });
+    expect(availability.get(`${environmentId}:r1`)).toEqual({
+      canMoveUp: false,
+      canMoveDown: true,
+    });
+    const plan = createThreadMovePlanner({
+      groups,
+      ordered,
+      section: "active",
+      reorderableEnvironmentIds: new Set([environmentId]),
+    });
+    // Moving into Research targets its rows, not the ungrouped thread.
+    const assignments = plan(`${environmentId}:plain`, {
+      section: "active",
+      customGroupId: "research",
+      targetId: `${environmentId}:r1`,
+      placement: "before",
+    });
+    expect(assignments?.find(({ id }) => id === `${environmentId}:plain`)?.orderKey).toBeDefined();
   });
 });

@@ -1,5 +1,6 @@
 import { resolveThreadWorkingStartedAt } from "@t3tools/client-runtime/state/models";
 import { threadPullRequestSearchTerms } from "@t3tools/shared/threadPullRequests";
+import { backgroundWorkLiveness } from "@t3tools/shared/orchestrationV2PendingBackgroundWork";
 import * as React from "react";
 import {
   isAtomCommandInterrupted,
@@ -48,6 +49,24 @@ export function shouldNavigateAfterThreadPark(input: {
 }
 
 const THREAD_SELECTION_SAFE_SELECTOR = "[data-thread-item], [data-thread-selection-safe]";
+
+/** Fork: whether an optimistic drop into a custom group should be released
+ * because the thread's membership moved somewhere else. */
+export function shouldReleaseSidebarGroupDrop(input: {
+  sourceGroupId: string | null;
+  targetGroupId: string | null;
+  currentGroupId: string | null;
+  targetExists: boolean;
+  /** The shell has shown the target group since the drop. */
+  targetSeen: boolean;
+}): boolean {
+  if (!input.targetExists) return true;
+  if (input.currentGroupId === input.targetGroupId) return false;
+  // A third group is a competing move. The source group is only a lag until
+  // the target has shown; after that, a return to it is another move.
+  return input.currentGroupId !== input.sourceGroupId || input.targetSeen;
+}
+
 export const THREAD_JUMP_HINT_SHOW_DELAY_MS = 200;
 
 export function resolveSidebarRowAccessibility(input: {
@@ -151,10 +170,13 @@ export function resolveSidebarThreadSection(input: {
 }
 
 /** Sortable ids: thread rows use their scoped key; structural items use a
-    colon-free prefix: scoped thread keys always contain a colon. */
+    dedicated prefix so group IDs cannot collide with thread rows. */
 const SIDEBAR_MARKER_PREFIX = "sidebar-marker-";
 
 export type SidebarListMarker =
+  /** Fork: custom group headers and the built-in Active group header. */
+  | `custom-group:${string}`
+  | "active-header"
   /** The top boundary is also a landing target when there are no pins. */
   | "pinned-header"
   /** Stand-in rows so an empty section has somewhere for the gap to open. */
@@ -166,12 +188,24 @@ export type SidebarListMarker =
   | "snoozed-header"
   | "settled-header";
 
+/** Fork: the Active header or a custom group header. */
+export function isSidebarGroupMarker(
+  marker: SidebarListMarker,
+): marker is "active-header" | `custom-group:${string}` {
+  return marker === "active-header" || marker.startsWith("custom-group:");
+}
+
 export function sidebarMarkerId(marker: SidebarListMarker): string {
   return `${SIDEBAR_MARKER_PREFIX}${marker}`;
 }
 
 export type SidebarListItem =
-  | { readonly kind: "thread"; readonly key: string; readonly section: SidebarSection }
+  | {
+      readonly kind: "thread";
+      readonly key: string;
+      readonly section: SidebarSection;
+      readonly customGroupId?: string | null | undefined;
+    }
   | { readonly kind: "marker"; readonly marker: SidebarListMarker };
 
 export function sidebarListItemId(item: SidebarListItem): string {
@@ -188,6 +222,8 @@ function sectionAtSidebarSlot(items: readonly SidebarListItem[], index: number):
     const item = items[i]!;
     if (item.kind !== "marker") continue;
     if (item.marker === "pinned-divider") section = "active";
+    else if (item.marker === "active-header" || item.marker.startsWith("custom-group:"))
+      section = "active";
     else if (item.marker === "working-header") section = "working";
     else if (item.marker === "snoozed-header") section = "snoozed";
     else if (item.marker === "settled-header") section = "settled";
@@ -201,6 +237,8 @@ export type SidebarDropTarget = {
   readonly section: "pinned" | "active" | "settled";
   readonly pinnedOrder: readonly string[];
   readonly activeOrder: readonly string[];
+  /** Fork: destination custom group (null: Active); absent without group headers. */
+  readonly customGroupId?: string | null | undefined;
 };
 
 export function resolveSidebarDropTarget(
@@ -212,25 +250,57 @@ export function resolveSidebarDropTarget(
   const overIndex = items.findIndex((item) => sidebarListItemId(item) === overId);
   if (activeIndex === -1 || overIndex === -1 || items[activeIndex]?.kind !== "thread") return null;
   const moved = items.filter((_, index) => index !== activeIndex);
-  moved.splice(overIndex, 0, items[activeIndex]!);
-  const section = sectionAtSidebarSlot(moved, overIndex);
+  // Fork: group headers own their drop, from either direction, including
+  // collapsed groups.
+  const over = items[overIndex];
+  const headerTarget =
+    over?.kind === "marker" &&
+    (over.marker === "active-header" || over.marker.startsWith("custom-group:"));
+  const insertIndex = headerTarget
+    ? moved.findIndex((item) => sidebarListItemId(item) === overId) + 1
+    : overIndex;
+  moved.splice(insertIndex, 0, items[activeIndex]!);
+  const section = sectionAtSidebarSlot(moved, insertIndex);
   if (section === "working" || section === "snoozed") return null;
+  let customGroupId: string | null = null;
+  for (const item of moved.slice(0, insertIndex)) {
+    if (item.kind === "marker") {
+      if (item.marker.startsWith("custom-group:"))
+        customGroupId = item.marker.slice("custom-group:".length);
+      else if (item.marker === "active-header" || item.marker === "pinned-divider")
+        customGroupId = null;
+    }
+  }
   const pinnedOrder: string[] = [];
   const activeOrder: string[] = [];
   let currentSection: SidebarSection = "pinned";
+  let currentGroupId: string | null = null;
   for (const item of moved) {
     if (item.kind === "marker") {
-      if (item.marker === "pinned-divider") currentSection = "active";
-      else if (
+      if (item.marker === "pinned-divider" || item.marker === "active-header") {
+        currentSection = "active";
+        currentGroupId = null;
+      } else if (item.marker.startsWith("custom-group:")) {
+        currentSection = "active";
+        currentGroupId = item.marker.slice("custom-group:".length);
+      } else if (
         item.marker === "working-header" ||
         item.marker === "snoozed-header" ||
         item.marker === "settled-header"
       )
         break;
     } else if (currentSection === "pinned") pinnedOrder.push(item.key);
-    else activeOrder.push(item.key);
+    // Fork: placement is planned within the destination group only.
+    else if (currentGroupId === customGroupId) activeOrder.push(item.key);
   }
-  return { section, pinnedOrder, activeOrder };
+  return {
+    section,
+    pinnedOrder,
+    activeOrder,
+    ...(items.some((item) => item.kind === "marker" && item.marker.startsWith("custom-group:"))
+      ? { customGroupId: section === "active" ? customGroupId : null }
+      : {}),
+  };
 }
 
 export type SidebarThreadDropPlan =
@@ -281,6 +351,8 @@ export function resolveSidebarDropVerb(
 export function planSidebarThreadDrop(input: {
   readonly activeKey: string;
   readonly activeSection: SidebarSection;
+  /** Fork: the dragged thread's custom group (null: Active). */
+  readonly activeCustomGroupId?: string | null;
   /** Snoozed threads can retain pinning and settlement beneath the shelf. */
   readonly activePinned?: boolean;
   readonly activeSettled?: boolean;
@@ -317,7 +389,8 @@ export function planSidebarThreadDrop(input: {
       // Like the settled tail: threads can enter a time-ordered inbox, but
       // not be arranged inside it.
       if (input.activeTimeOrdered) {
-        return activeSection === "active"
+        return activeSection === "active" &&
+          (input.activeCustomGroupId ?? null) === (target.customGroupId ?? null)
           ? { kind: "none" }
           : {
               kind: "move-active",
@@ -330,6 +403,7 @@ export function planSidebarThreadDrop(input: {
       }
       const order = target.activeOrder;
       if (
+        (input.activeCustomGroupId ?? null) === (target.customGroupId ?? null) &&
         activeSection === "active" &&
         order.length === activeOrder.length &&
         order.every((key, index) => key === activeOrder[index])
@@ -728,11 +802,11 @@ export function buildBulkUnpinContextMenuItem(input: {
 export interface ThreadStatusPill {
   label:
     | "Working"
+    | "Monitoring"
     | "Connecting"
     | "Completed"
     | "Pending Approval"
     | "Awaiting Input"
-    | "Waiting"
     | "Plan Ready";
   colorClass: string;
   dotClass: string;
@@ -744,7 +818,7 @@ const THREAD_STATUS_PRIORITY: Record<ThreadStatusPill["label"], number> = {
   "Awaiting Input": 4,
   Working: 3,
   Connecting: 3,
-  Waiting: 2.5,
+  Monitoring: 2.5,
   "Plan Ready": 2,
   Completed: 1,
 };
@@ -1046,16 +1120,18 @@ export function resolveThreadRowClassName(input: {
 // Six visual states, three colors: color is reserved for "act now"
 // (approval), "in motion" (working), and "broken" (failed). Ready is the
 // unlabeled resting state — the agent stopped and is waiting on the user,
-// whether it finished, asked a question, or proposed a plan. Waiting
-// (runtime status "idle") is the agent stopped with background tasks still
-// open: not the user's turn yet, so it renders grey like working, not as a
-// false Done.
+// whether it finished, asked a question, or proposed a plan. Once the agent
+// stops with background tasks still open (runtime status "idle"), live
+// agents or workflows read as working, and watch loops alone (dev servers,
+// monitors) as monitoring: not the user's turn yet, never a false Done.
+// Waiting is left for an idle runtime with no named work.
 // Unread completion is tracked separately: it describes whether a ready
 // thread needs attention, not what the thread is currently doing.
 export type SidebarThreadStatus =
   | "approval"
   | "input"
   | "working"
+  | "monitoring"
   | "waiting"
   | "failed"
   | "limited"
@@ -1069,7 +1145,9 @@ export function shouldRecedeSidebarThread(input: {
   isSelected: boolean;
 }): boolean {
   if (input.isActive || input.isSelected || input.status === "input") return false;
-  if (input.status === "working" || input.status === "waiting") return true;
+  if (input.status === "working" || input.status === "monitoring" || input.status === "waiting") {
+    return true;
+  }
   if (input.status === "ready" || input.status === "approval") {
     return !input.isUnread && !input.isWoke;
   }
@@ -1079,7 +1157,9 @@ export function shouldRecedeSidebarThread(input: {
 type SidebarThreadStatusInput = Pick<
   SidebarThreadSummary,
   "hasPendingApprovals" | "hasPendingUserInput" | "runtime"
->;
+> & {
+  pendingBackgroundTasks?: SidebarThreadSummary["pendingBackgroundTasks"] | undefined;
+};
 
 export function resolveSidebarThreadStatus(thread: SidebarThreadStatusInput): SidebarThreadStatus {
   if (thread.hasPendingApprovals) {
@@ -1095,7 +1175,7 @@ export function resolveSidebarThreadStatus(thread: SidebarThreadStatusInput): Si
     return "working";
   }
   if (thread.runtime?.status === "idle") {
-    return "waiting";
+    return backgroundWorkLiveness(thread.pendingBackgroundTasks ?? []) ?? "waiting";
   }
   if (thread.runtime?.status === "failed") {
     return thread.runtime.lastErrorClass === "usage_limit" ? "limited" : "failed";
@@ -1109,6 +1189,7 @@ export type SidebarV2TopStatusKind =
   | "failed"
   | "limited"
   | "input"
+  | "monitoring"
   | "waiting"
   | "woke"
   | "working";
@@ -1121,8 +1202,8 @@ export function resolveSidebarV2TopStatus(input: {
   if (input.status === "working") {
     return "working";
   }
-  if (input.status === "waiting") {
-    return "waiting";
+  if (input.status === "monitoring" || input.status === "waiting") {
+    return input.status;
   }
   if (input.status === "approval") {
     return "approval";
@@ -1186,11 +1267,11 @@ export function admitNewSidebarV2AttentionThreads(
 
 /** Working beta: threads busy with work that does not need the user fold into
     the Working shelf: a running run, or one stopped with background tasks
-    still open. Approvals, questions, plan prompts, and failures stay in the
-    inbox. */
+    still open (working or monitoring). Approvals, questions, plan prompts,
+    and failures stay in the inbox. */
 export function isSidebarThreadWorking(thread: ThreadStatusInput): boolean {
   const status = resolveSidebarThreadStatus(thread);
-  if (status !== "working" && status !== "waiting") return false;
+  if (status !== "working" && status !== "monitoring" && status !== "waiting") return false;
   // A plan prompt outranks lingering background work: the user has to act on it.
   return !(
     thread.interactionMode === "plan" &&
@@ -1387,11 +1468,23 @@ export function resolveThreadStatusPill(input: {
     };
   }
 
-  if ((thread.pendingBackgroundTasks?.length ?? 0) > 0) {
+  // The turn ended while background work runs on. Live agents and workflows
+  // read as plain Working; Monitoring is reserved for watch loops (a dev
+  // server, a monitor tailing checks) with no other live work.
+  const liveness = backgroundWorkLiveness(thread.pendingBackgroundTasks ?? []);
+  if (liveness === "working") {
     return {
-      label: "Waiting",
-      colorClass: "text-sidebar-muted-foreground",
-      dotClass: "bg-sidebar-muted-foreground",
+      label: "Working",
+      colorClass: "text-sky-600 dark:text-sky-300/80",
+      dotClass: "bg-sky-500 dark:bg-sky-300/80",
+      pulse: true,
+    };
+  }
+  if (liveness === "monitoring") {
+    return {
+      label: "Monitoring",
+      colorClass: "text-sky-600 dark:text-sky-300/80",
+      dotClass: "bg-sky-500 dark:bg-sky-300/80",
       pulse: false,
     };
   }

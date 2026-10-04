@@ -140,6 +140,9 @@ a shortcut.
 `thread.stop` interrupts the running turn in the focused thread. It has no default
 shortcut; assign one in **Settings → Keybindings**.
 
+`thread.archive` archives the focused thread. It has no default shortcut. It does
+nothing while a dialog, menu, or popover is open, and neither does `thread.undo`.
+
 `thread.undo` (`mod+z` by default) reverses the actions shown in the notice at the
 bottom of the sidebar, such as unpin, settle, snooze, or archive. Consecutive
 actions of the same kind undo together. The notice remains available for five

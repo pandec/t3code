@@ -74,6 +74,8 @@ export interface CreateThreadInput extends CommandMetadata {
   readonly interactionMode: ProviderInteractionMode;
   readonly branch: string | null;
   readonly worktreePath: string | null;
+  /** Fork: custom group the thread joins (threadCustomGroupCreation). */
+  readonly customGroupId?: string | null;
 }
 
 export interface ThreadCommandInput extends CommandMetadata {
@@ -105,8 +107,18 @@ export interface ReorderActiveThreadInput extends ThreadCommandInput {
   readonly orderKey: string;
 }
 
+/** Fork: move a thread into a custom group (null: Active); requires threadCustomGroups. */
+export interface SetThreadCustomGroupInput extends ThreadCommandInput {
+  readonly customGroupId: string | null;
+}
+
 export interface SnoozeThreadInput extends ThreadCommandInput {
-  readonly snoozedUntil: string;
+  /** Fork: null snoozes indefinitely ("until I wake it"); requires the
+      threadSnoozeIndefinite capability. */
+  readonly snoozedUntil: string | null;
+  /** Fork: "until it's done" (with a null snoozedUntil); requires the
+      threadSnoozeUntilDone capability. */
+  readonly untilDone?: boolean;
 }
 
 export interface UnsnoozeThreadInput extends ThreadCommandInput {
@@ -150,6 +162,8 @@ interface StartThreadBootstrap {
     readonly branch: string | null;
     readonly worktreePath: string | null;
     readonly createdAt: string;
+    /** Fork: custom group the created thread joins (threadCustomGroupCreation). */
+    readonly customGroupId?: string | null;
   };
   readonly prepareWorktree?: {
     /** V2 worktree launches always fail rather than falling back to the project checkout. */
@@ -404,6 +418,7 @@ export const createThread = Effect.fn("EnvironmentCommands.createThread")(functi
     interactionMode: input.interactionMode,
     branch: input.branch,
     worktreePath: input.worktreePath,
+    ...(input.customGroupId == null ? {} : { customGroupId: input.customGroupId }),
   });
 });
 
@@ -484,6 +499,17 @@ export const reorderPinnedThread = Effect.fn("EnvironmentCommands.reorderPinnedT
   });
 });
 
+export const setThreadCustomGroup = Effect.fn("EnvironmentCommands.setThreadCustomGroup")(
+  function* (input: SetThreadCustomGroupInput) {
+    return yield* dispatch({
+      type: "thread.custom-group.set",
+      commandId: yield* allocateCommandId(input),
+      threadId: input.threadId,
+      customGroupId: input.customGroupId,
+    });
+  },
+);
+
 export const reorderActiveThread = Effect.fn("EnvironmentCommands.reorderActiveThread")(function* (
   input: ReorderActiveThreadInput,
 ) {
@@ -520,6 +546,7 @@ export const snoozeThread = Effect.fn("EnvironmentCommands.snoozeThread")(functi
     commandId: yield* allocateCommandId(input),
     threadId: input.threadId,
     snoozedUntil: input.snoozedUntil,
+    ...(input.untilDone === true ? { untilDone: true } : {}),
   });
 });
 
@@ -675,6 +702,7 @@ export const startThreadTurn = Effect.fn("EnvironmentCommands.startThreadTurn")(
       runtimeMode: input.runtimeMode,
       interactionMode: input.interactionMode,
       workspaceStrategy,
+      ...(bootstrap?.customGroupId == null ? {} : { customGroupId: bootstrap.customGroupId }),
       initialMessage: {
         messageId: input.message.messageId,
         text: input.message.text,

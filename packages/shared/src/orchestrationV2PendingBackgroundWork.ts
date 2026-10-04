@@ -266,3 +266,84 @@ export function derivePendingBackgroundWork(input: {
 
   return Array.from(byTaskId.values());
 }
+
+/**
+ * Fork: whether background work keeps an "until it's done" snooze asleep.
+ * Only agent work counts (subagents and opaque background tasks such as
+ * workflows). Commands and monitors are watch loops: a dev server or a
+ * Monitor can outlive the work, so they never hold the snooze.
+ */
+export function backgroundWorkKeepsSnoozeUntilDone(
+  tasks: ReadonlyArray<{ readonly kind: string }>,
+): boolean {
+  return tasks.some(isAgentBackgroundWork);
+}
+
+/**
+ * Fork: whether pending work is agent work (a subagent, or an opaque
+ * background task such as a workflow) rather than a watch loop (a command
+ * such as a dev server, or a monitor). Unknown kinds decode as
+ * background_task, so they count as agent work.
+ */
+export function isAgentBackgroundWork(task: { readonly kind: string }): boolean {
+  return task.kind === "subagent" || task.kind === "background_task";
+}
+
+/**
+ * Fork: how work left running after the turn presents. Live agents read as
+ * Working; watch loops alone read as Monitoring. Null when nothing is pending.
+ */
+export type BackgroundWorkLiveness = "working" | "monitoring";
+
+export function backgroundWorkLiveness(
+  tasks: ReadonlyArray<{ readonly kind: string }>,
+): BackgroundWorkLiveness | null {
+  if (tasks.length === 0) return null;
+  return tasks.some(isAgentBackgroundWork) ? "working" : "monitoring";
+}
+
+/**
+ * Fork: which pending work a drain waits for. "agents" (`thread wait --drain`)
+ * waits for agent work and ignores watch loops; "all" (`--drain=all`) waits
+ * for every task, monitors included.
+ */
+export type BackgroundWorkDrainScope = "agents" | "all";
+
+export function backgroundWorkInDrainScope<Task extends { readonly kind: string }>(
+  tasks: ReadonlyArray<Task>,
+  scope: BackgroundWorkDrainScope,
+): ReadonlyArray<Task> {
+  return scope === "all" ? tasks : tasks.filter(isAgentBackgroundWork);
+}
+
+const UNTIL_DONE_LIVE_RUN_STATUSES: ReadonlySet<string> = new Set<OrchestrationV2Run["status"]>([
+  "queued",
+  "preparing",
+  "starting",
+  "running",
+]);
+
+/**
+ * Fork: whether the work an "until it's done" snooze waits on continues: the
+ * awaited run is still the latest one and is live (a run parked at
+ * "waiting" is post-terminal drain, so its agent turn is over), or it ended
+ * while its agent background work runs on. A wake run that continues the work takes
+ * over as the awaited run on the server, so the latest run moving elsewhere
+ * means the work was replaced. A failure always ends it. Shared by the
+ * server (validation, settlement) and clients (snoozed classification).
+ */
+export function snoozeUntilDoneWorkContinues(input: {
+  readonly snoozedUntilRunId: string | null | undefined;
+  readonly latestRunId: string | null | undefined;
+  readonly latestRunStatus: string | null | undefined;
+  readonly pendingBackgroundTasks: ReadonlyArray<{ readonly kind: string }>;
+}): boolean {
+  if (input.snoozedUntilRunId == null || input.latestRunId !== input.snoozedUntilRunId) {
+    return false;
+  }
+  if (input.latestRunStatus == null || input.latestRunStatus === "failed") return false;
+  return (
+    UNTIL_DONE_LIVE_RUN_STATUSES.has(input.latestRunStatus) ||
+    backgroundWorkKeepsSnoozeUntilDone(input.pendingBackgroundTasks)
+  );
+}

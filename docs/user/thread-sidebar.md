@@ -52,9 +52,13 @@ matching threads even when their section was folded.
 
 On web and desktop, unpinning, settling, snoozing, and archiving a thread each show
 a notification with **Undo** for five seconds. Undo restores the thread's previous
-state, including its pinned position, and reopens an archived thread you were
-viewing. `mod+z` triggers the most recent Undo when no text field is focused; see
-[Keybindings](./keybindings.md#commands-with-special-behavior).
+state, including its pinned position and any snooze that settling cleared ("until I
+wake it" included). Settling stops the work an "until it's done" snooze waits on, so
+Undo leaves that thread awake. If archiving left you on an empty new-thread screen, undo
+can reopen the restored thread. It keeps another active conversation in place.
+`mod+z` triggers the most recent Undo when no text field is focused; see
+[Keybindings](./keybindings.md#commands-with-special-behavior). With **Archive
+confirmation** on (Settings), every archive path (menus, command palette, shortcut) asks first.
 
 On web and desktop, you can also drag files from your computer onto any thread row:
 the thread opens and the files are attached in its composer, ready for
@@ -100,6 +104,11 @@ position, so using **Un-settle** returns it to the top. Pinning and snoozing pre
 position until you move it again. Thread activity does not change the order. The settled shelf
 continues to use settlement time.
 
+On web and desktop, **Move current thread to top** in the command palette moves the open thread to
+the top of Pinned, Active, or its custom group without dragging. It counts group members hidden by
+a filter or a collapsed group, so the thread lands above all of them. The action is unavailable for
+drafts and for archived, snoozed, or settled threads.
+
 If dragging is unavailable for one environment, update the T3 Code server running in that
 environment. Pinned and active reordering require server support. Threads from older servers keep
 their default order until the server is updated.
@@ -123,6 +132,43 @@ answer. Pinned threads stay in the pinned section.
 While this is on, the active list is ordered by when each thread last came back to you, so you
 cannot drag to reorder it. Your saved order returns when you turn it off.
 
+## Organize threads into custom groups
+
+On web and desktop, open the command palette (`Cmd/Ctrl+K`) and choose **New thread group** or
+**Manage thread groups** to create, rename, reorder, or remove groups. Settings → Extras → Sidebar
+can add a **Thread groups** button to the sidebar toolbar for the same dialog. Once a group exists,
+the sidebar shows a header for each group and for **Active**; each folds on its own and keeps the
+open thread visible.
+
+Drag a thread onto a group header or between its rows, use **Move current thread to group** in the
+palette, or use **Move to group** from the thread menu. Cmd/Ctrl-click multiple threads, then use
+**Move to group** from their context menu or **Move selected threads to group** in the palette to
+move them together. Failed threads stay selected so you can retry. Each thread belongs to one
+group. Removing a group keeps its threads and returns its active threads to Active.
+
+New threads start in Active. Choose a group below the new-thread heading, or use **New thread in
+group…** in the palette to pick the group and then the project. The choice is saved with the draft
+until its first send. Forked threads join the source thread's group.
+
+Groups can hold threads from any project or connected environment. Group definitions sync when a
+web or mobile client is connected to the environments together. Each thread's group is saved on the
+server that owns the conversation, so every device connected to it sees the same assignment.
+Grouping threads requires an updated server.
+
+A drag into a group saves the group, the thread state, and the order as separate steps. If the
+connection drops partway, the finished steps stay saved; arrange the thread again to finish.
+
+Pinned, snoozed, settled, and archived threads stay in their usual sections and remember their
+group, so unpinning, waking, or reopening returns them to it. Grouped threads still auto-settle.
+
+New groups start below Active. In the Thread groups dialog, drag a group across the Active divider,
+or use the arrows, to place it above or below Active. Every connected client shows the same
+arrangement.
+
+Mobile shows the same groups. Use **Arrange threads** to drag between groups or back to Active.
+**Move up** and **Move down** stay within the current group. Create and manage groups on web or
+desktop.
+
 ## Settle finished work
 
 Choose **Settle thread** from its menu to move finished work out of the active list
@@ -135,8 +181,8 @@ runs a command, such as a dev server, stays open.
 
 By default, environments settle inactive threads after three days and settle
 threads whose pull request merged. A closed pull request can also settle an idle
-thread. Work in progress, pending questions or approvals, and live background work
-prevent automatic settlement. An open pull request does not prevent inactivity
+thread. Work in progress, queued messages, pending questions or approvals, and live
+background work prevent automatic settlement. An open pull request does not prevent inactivity
 settlement, but an old closed or merged pull request does not settle work you
 resumed after it closed.
 
@@ -217,6 +263,11 @@ retry and the normal snooze choices.
 
 On web and desktop, use **Agents** to follow work delegated to subagents.
 
+When a turn ends while work it started keeps running, the thread list shows **Working** for live
+subagents and workflows, and **Monitoring** when only watch loops remain, such as a dev server or a
+monitor tailing checks. The conversation lists that work with a **Stop** button. Settling or
+archiving the thread also stops it.
+
 Subagent threads started by the agent can't take messages; message the parent
 thread instead. When such a subagent needs an approval or an answer, the parent
 thread asks for it.
@@ -238,3 +289,14 @@ Choose **Snooze → Custom…** from a thread's menu to pick a date and time in 
 local time zone, or a duration in minutes, hours, or days. Durations start when
 you confirm; one day means 24 hours. On web and desktop, you can also snooze
 several selected threads together. Choose **Wake thread** to bring a thread back early.
+
+On web and desktop, **Snooze → Until I wake it** snoozes without a timer. The thread stays in the
+Snoozed section, after the timed snoozes, until you wake, pin, settle, or message it, or until it
+needs attention: a question or approval, a failure, or the agent finishing its work. Automatic
+settlement skips these threads.
+
+While the agent is mid-turn or its subagents are still working, **Snooze → Until it's done** hides
+the thread until that work finishes, including the agent's follow-up on the subagents' results. Watch
+loops such as a running dev server or a monitor don't hold it. These threads sit at the top of the
+Snoozed section and come back on their own, or earlier if they need attention. It's available on web,
+desktop, and mobile when the server supports it.
