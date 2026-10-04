@@ -1,4 +1,4 @@
-import type { OrchestrationV2ProjectedTurnItem } from "@t3tools/contracts";
+import { RunId, type OrchestrationV2ProjectedTurnItem } from "@t3tools/contracts";
 import { describe, expect, it } from "@effect/vitest";
 import * as DateTime from "effect/DateTime";
 
@@ -104,6 +104,31 @@ describe("threadHistoryMerge", () => {
     expect(merged).toBe(projection);
     expect(merged.turnItems).toEqual([currentItem]);
     expect(merged.visibleTurnItems).toEqual([]);
+  });
+
+  it("folds older page run statuses into inheritedRuns without overriding known runs", () => {
+    const olderRun = RunId.make("run-older");
+    const inheritedRun = RunId.make("run-inherited");
+    const recent = [row(2)];
+    const projection = {
+      ...v2Projection,
+      turnItems: recent.map((entry) => entry.item),
+      visibleTurnItems: recent.map((entry, position) => ({ ...entry, position })),
+      inheritedRuns: [{ id: inheritedRun, status: "completed" as const }],
+    };
+    const olderRow = row(1);
+    const older = [{ ...olderRow, item: { ...olderRow.item, runId: olderRun } }];
+
+    const merged = mergeOlderHistoryIntoProjection(projection, older, [
+      { id: olderRun, status: "completed" },
+      { id: inheritedRun, status: "interrupted" },
+    ]);
+
+    expect(merged.inheritedRuns).toEqual([
+      { id: inheritedRun, status: "completed" },
+      { id: olderRun, status: "completed" },
+    ]);
+    expect(merged.runs).toBe(projection.runs);
   });
 
   it("marks history expanded after a successful page", () => {

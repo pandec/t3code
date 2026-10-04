@@ -75,7 +75,7 @@ import {
   type ScopedThreadRef,
   type ThreadId,
   type ThreadLinkedPullRequest,
-  type RunId,
+  RunId,
   type RuntimeRequestId,
   type KeybindingCommand,
   PROVIDER_SEND_TURN_MAX_ATTACHMENTS,
@@ -458,7 +458,11 @@ import type { AssistantCitationRequest } from "./chat/AssistantCitationSource";
 import { MessagesTimeline, type MessagesTimelineHistoryControls } from "./chat/MessagesTimeline";
 import { ProviderSubagentBar } from "./chat/ProviderSubagentBar";
 import { getTriggerDisplayModelName } from "./chat/providerIconUtils";
-import { resolveTimelineIsAtEnd, worktreeSetupAgentStarted } from "./chat/MessagesTimeline.logic";
+import {
+  deriveFinalResponseRunIdsKey,
+  resolveTimelineIsAtEnd,
+  worktreeSetupAgentStarted,
+} from "./chat/MessagesTimeline.logic";
 import {
   overlayComposerIsResting,
   resolveComposerTimelineInset,
@@ -572,6 +576,7 @@ import { useLocalStorage } from "~/hooks/useLocalStorage";
 import { useThreadGroupCatalog } from "../hooks/useThreadGroups";
 import { useComposerHandleContext } from "../composerHandleContext";
 import { useThreadPaneId } from "./thread-split/threadPaneContext";
+import { useOpenThreadInPane } from "./thread-split/useOpenThreadInPane";
 import { isThreadPaneActive, useThreadSplitStore } from "./thread-split/threadSplitStore";
 import {
   awaitAttachmentUploads,
@@ -1580,6 +1585,7 @@ export default function ChatView(props: ChatViewProps) {
   // active pane so shortcuts never fire in both panes at once.
   const threadPaneId = useThreadPaneId();
   const isSecondaryPane = threadPaneId === "secondary";
+  const openThreadInPane = useOpenThreadInPane();
   const splitSecondaryThreadKey = useThreadSplitStore((state) =>
     state.splitMounted && state.secondaryRef !== null ? scopedThreadKey(state.secondaryRef) : null,
   );
@@ -2132,6 +2138,21 @@ export default function ChatView(props: ChatViewProps) {
   const serverActivityRun = useMemo(
     () => (serverProjection === null ? null : deriveThreadActivityRun(serverProjection)),
     [serverProjection],
+  );
+  // Fork: final-answer runs feed the final-response rail. Runless v1-imported
+  // messages carry no terminal state and are deliberately left unclassified.
+  const completedRunIdsKey = useMemo(
+    () => deriveFinalResponseRunIdsKey(serverProjection),
+    [serverProjection],
+  );
+  const completedRunIds = useMemo<ReadonlySet<RunId>>(
+    () =>
+      new Set(
+        completedRunIdsKey.length > 0
+          ? completedRunIdsKey.split("\n").map((id) => RunId.make(id))
+          : [],
+      ),
+    [completedRunIdsKey],
   );
   const serverRuntime = useMemo(
     () => (serverProjection === null ? null : deriveThreadRuntime(serverProjection)),
@@ -7199,14 +7220,13 @@ export default function ChatView(props: ChatViewProps) {
       }
     }
   }, [activeThread, environmentId, interruptThreadTurn, setThreadError]);
+  // Related-thread links open in this pane via the split-aware helper, so a
+  // link to the other pane's thread focuses it instead of folding the split.
   const onOpenRelatedThread = useCallback(
     (threadId: ThreadId) => {
-      void navigate({
-        to: "/$environmentId/$threadId",
-        params: buildThreadRouteParams(scopeThreadRef(environmentId, threadId)),
-      });
+      openThreadInPane(scopeThreadRef(environmentId, threadId));
     },
-    [environmentId, navigate],
+    [environmentId, openThreadInPane],
   );
 
   const backgroundWorkBannerItem = useMemo<ComposerBannerStackItem | null>(() => {
@@ -8029,6 +8049,7 @@ export default function ChatView(props: ChatViewProps) {
   // Route it to the composer like a typed key, which also expands it.
   useEffect(() => {
     const keyHandler = (event: KeyboardEvent) => {
+      if (!isThreadPaneActive(threadPaneId)) return;
       if (
         shouldRedirectInputToComposer(event) &&
         isPasteAsTextShortcut(event, isMacPlatform(navigator.platform))
@@ -8037,6 +8058,7 @@ export default function ChatView(props: ChatViewProps) {
       }
     };
     const handler = (event: ClipboardEvent) => {
+      if (!isThreadPaneActive(threadPaneId)) return;
       if (!activeThreadId || isCommandPaletteOpen()) return;
       if (getTerminalFocusOwner() !== null) return;
       if (composerRef.current?.isModelPickerOpen()) return;
@@ -8060,7 +8082,7 @@ export default function ChatView(props: ChatViewProps) {
       window.removeEventListener("keydown", keyHandler, true);
       window.removeEventListener("paste", handler, true);
     };
-  }, [activeThreadId, composerRef]);
+  }, [activeThreadId, composerRef, threadPaneId]);
 
   const [pendingRevert, setPendingRevert] = useState<{
     turnCount: number;
@@ -8313,6 +8335,7 @@ export default function ChatView(props: ChatViewProps) {
   const onForkFromRun = useCallback(
     async (input: { readonly sourceThreadId: ThreadId; readonly runId: RunId }) => {
       if (!activeThread || activeEnvironmentUnavailable) return;
+      const paneThreadKey = routeThreadKey;
       const targetThreadId = newThreadId();
       const targetThreadRef = scopeThreadRef(environmentId, targetThreadId);
       const result = await forkThreadFromRun({
@@ -8342,17 +8365,22 @@ export default function ChatView(props: ChatViewProps) {
         );
         return;
       }
-      await navigate({
-        to: "/$environmentId/$threadId",
-        params: buildThreadRouteParams(targetThreadRef),
-      });
+      // Split view: the secondary pane was closed or retargeted while the fork
+      // was pending, so leave the fork in the sidebar instead of opening it.
+      if (isSecondaryPane) {
+        const secondaryRef = useThreadSplitStore.getState().secondaryRef;
+        if (secondaryRef === null || scopedThreadKey(secondaryRef) !== paneThreadKey) return;
+      }
+      await openThreadInPane(targetThreadRef).completion;
     },
     [
       activeEnvironmentUnavailable,
       activeThread,
       environmentId,
       forkThreadFromRun,
-      navigate,
+      isSecondaryPane,
+      openThreadInPane,
+      routeThreadKey,
       setThreadError,
     ],
   );
@@ -11375,6 +11403,7 @@ export default function ChatView(props: ChatViewProps) {
                 runs={paintOnlyDisplayedTimeline ? [] : (serverProjection?.runs ?? [])}
                 latestRun={paintOnlyDisplayedTimeline ? null : activeActivityRun}
                 runningRunId={paintOnlyDisplayedTimeline ? null : activeRunningTurnId}
+                {...(!paintOnlyDisplayedTimeline ? { completedRunIds } : {})}
                 {...(!paintOnlyDisplayedTimeline ? { steerPendingMessageIds } : {})}
                 turnDiffSummaries={
                   paintOnlyDisplayedTimeline ? EMPTY_HELD_TURN_DIFF_SUMMARIES : turnDiffSummaries

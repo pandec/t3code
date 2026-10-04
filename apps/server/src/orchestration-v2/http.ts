@@ -24,6 +24,7 @@ import {
   decodeThreadHistoryCursor,
   InvalidThreadHistoryCursorError,
   selectHistoryPageFromCursor,
+  selectHistoryPageRunStatuses,
   THREAD_HISTORY_SNAPSHOT_ROW_LIMIT,
   THREAD_HISTORY_PAGE_POLICY,
   OLDER_THREAD_USER_TURN_LIMIT,
@@ -254,6 +255,7 @@ export const orchestrationHttpApiLayer = HttpApiBuilder.group(
             items: pageOrError.page.items,
             nextCursor: pageOrError.page.nextCursor,
             hasMoreHistory: pageOrError.page.hasMoreHistory,
+            runStatuses: selectHistoryPageRunStatuses(snapshot.projection, pageOrError.page.items),
           };
         }),
       );

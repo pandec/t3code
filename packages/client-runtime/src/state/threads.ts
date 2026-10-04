@@ -777,7 +777,11 @@ export const makeEnvironmentThreadState = Effect.fn("EnvironmentThreadState.make
               ];
             }
 
-            const merged = mergeOlderHistoryIntoProjection(latest.data.value, page.items);
+            const merged = mergeOlderHistoryIntoProjection(
+              latest.data.value,
+              page.items,
+              page.runStatuses,
+            );
             const history = applyHistoryPageMeta(latest.history, page);
             return [
               { _tag: "loaded" },

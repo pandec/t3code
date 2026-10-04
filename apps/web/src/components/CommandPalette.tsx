@@ -280,7 +280,6 @@ import {
   focusOtherThreadPane,
   paletteOwnerPane,
   requestThreadPaneFocus,
-  THREAD_SPLIT_HOST_AVAILABLE,
   THREAD_SPLIT_MEDIA_QUERY,
   useThreadSplitStore,
 } from "./thread-split/threadSplitStore";
@@ -711,8 +710,7 @@ export function CommandPalette({ children }: { children: ReactNode }) {
         } else if (detail.open === "add-project") {
           openAddProject();
         } else if (detail.open === "open-in-split") {
-          // Inert until a layout can render the secondary pane.
-          if (THREAD_SPLIT_HOST_AVAILABLE) openInSplit();
+          openInSplit();
         } else if (detail.open === "rename-thread") {
           openRenameThread();
         } else if (detail.open === "snooze-thread") {
@@ -1730,7 +1728,7 @@ function OpenCommandPaletteDialog(props: {
     splitMounted && paletteOwnerPane() === "secondary"
       ? (splitSecondaryRef?.threadId ?? null)
       : (activeThread?.id ?? null);
-  const splitSupported = useMediaQuery(THREAD_SPLIT_MEDIA_QUERY) && THREAD_SPLIT_HOST_AVAILABLE;
+  const splitSupported = useMediaQuery(THREAD_SPLIT_MEDIA_QUERY);
   const openInSplitItems = useMemo(
     () =>
       buildOpenInSplitThreadItems({

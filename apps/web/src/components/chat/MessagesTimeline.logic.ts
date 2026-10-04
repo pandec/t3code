@@ -38,6 +38,7 @@ import {
   type MessageId,
   type WorktreeSetupSnapshot,
   type OrchestrationV2ProjectedTurnItem,
+  type OrchestrationV2ThreadProjection,
   type RunAttemptId,
   RunId,
 } from "@t3tools/contracts";
@@ -557,6 +558,8 @@ type MessagesTimelineRowContent =
       projectedItem?: OrchestrationV2ProjectedTurnItem;
       durationStart: string;
       showAssistantMeta: boolean;
+      /** Fork: terminal assistant message of a completed run (final-response rail). */
+      isFinalAssistantResponse: boolean;
       showAssistantCopyButton: boolean;
       assistantCopyStreaming: boolean;
       assistantTurnDiffSummary?: TurnDiffSummary | undefined;
@@ -1177,6 +1180,30 @@ function settleSupersededReasoning(entries: ReadonlyArray<TimelineEntry>) {
   });
 }
 
+/**
+ * Fork: newline-joined ids of the runs whose terminal assistant message is a
+ * final answer (final-response rail). Content-keyed so callers only rebuild
+ * rows when the set changes. Local runs count once `completed`; their status
+ * arrives live. Runs held in `inheritedRuns` (fork ancestors, older history
+ * pages) are a read-time snapshot, so a fork-point run still `waiting`
+ * (provider-finished, output already copied into the fork) counts as final.
+ */
+type RunStatusEntry = NonNullable<OrchestrationV2ThreadProjection["inheritedRuns"]>[number];
+export function deriveFinalResponseRunIdsKey(
+  projection: {
+    readonly runs: ReadonlyArray<RunStatusEntry>;
+    readonly inheritedRuns?: ReadonlyArray<RunStatusEntry> | undefined;
+  } | null,
+): string {
+  if (projection === null) return "";
+  return [
+    ...(projection.inheritedRuns ?? []).flatMap((run) =>
+      run.status === "completed" || run.status === "waiting" ? [run.id] : [],
+    ),
+    ...projection.runs.flatMap((run) => (run.status === "completed" ? [run.id] : [])),
+  ].join("\n");
+}
+
 export function deriveMessagesTimelineRows(input: {
   timelineEntries: ReadonlyArray<TimelineEntry>;
   latestRun?: TimelineLatestRun | null;
@@ -1191,6 +1218,11 @@ export function deriveMessagesTimelineRows(input: {
    */
   runlessWorkActive?: boolean;
   activeTurnStartedAt?: string | null;
+  /**
+   * Fork: runs that ended with status `completed`. Their terminal assistant
+   * message is the final answer; interrupted, failed or cancelled runs never are.
+   */
+  completedRunIds?: ReadonlySet<RunId>;
   turnDiffSummaries: ReadonlyArray<TurnDiffSummary>;
   supportsConversationRollback: boolean;
   /** Task ids of subagents still working, used by the active tool indicator. */
@@ -1647,6 +1679,10 @@ export function deriveMessagesTimelineRows(input: {
         : { projectedItem: timelineEntry.projectedItem }),
       durationStart,
       showAssistantMeta,
+      isFinalAssistantResponse:
+        showAssistantMeta &&
+        timelineEntry.message.runId != null &&
+        input.completedRunIds?.has(timelineEntry.message.runId) === true,
       showAssistantCopyButton: showAssistantMeta,
       assistantCopyStreaming: timelineEntry.message.streaming || assistantResponseStillInProgress,
       assistantTurnDiffSummary:
@@ -2028,6 +2064,7 @@ function isRowUnchanged(a: MessagesTimelineRow, b: MessagesTimelineRow): boolean
         a.projectedItem === bm.projectedItem &&
         a.durationStart === bm.durationStart &&
         a.showAssistantMeta === bm.showAssistantMeta &&
+        a.isFinalAssistantResponse === bm.isFinalAssistantResponse &&
         a.showAssistantCopyButton === bm.showAssistantCopyButton &&
         a.assistantCopyStreaming === bm.assistantCopyStreaming &&
         a.assistantTurnDiffSummary === bm.assistantTurnDiffSummary &&

@@ -23,7 +23,6 @@ import {
 } from "@t3tools/client-runtime/state/thread-workflows";
 import type { EnvironmentId, OrchestrationV2ThreadShell, ThreadId } from "@t3tools/contracts";
 import { groupBy } from "effect/Array";
-import { useNavigate } from "@tanstack/react-router";
 import {
   ArrowRightIcon,
   BotIcon,
@@ -37,7 +36,7 @@ import {
 import { useMemo, useState, type ReactNode } from "react";
 
 import { useArchivedThreadSnapshots } from "../../lib/archivedThreadsState";
-import { buildThreadRouteParams } from "../../threadRoutes";
+import { useOpenThreadInPane } from "../thread-split/useOpenThreadInPane";
 import {
   useProjects,
   useServerConfigs,
@@ -202,7 +201,7 @@ export function ThreadRelationshipsPanel(props: {
   }, [archivedShells, projection, props.environmentId, threadShells]);
   const currentThread = projection?.thread ?? graph.nodes.get(props.threadId)?.thread;
   const currentProject = projects.find((project) => project.id === currentThread?.projectId);
-  const navigate = useNavigate();
+  const openThreadInPane = useOpenThreadInPane();
   const mergeBack = useAtomCommand(threadEnvironment.mergeBack);
   const stopSession = useAtomCommand(threadEnvironment.stopSession);
   const [busyAction, setBusyAction] = useState<"merge" | "detach" | null>(null);
@@ -248,10 +247,7 @@ export function ThreadRelationshipsPanel(props: {
   }
 
   const openThread = (threadId: ThreadId) => {
-    void navigate({
-      to: "/$environmentId/$threadId",
-      params: buildThreadRouteParams(scopeThreadRef(props.environmentId, threadId)),
-    });
+    openThreadInPane(scopeThreadRef(props.environmentId, threadId));
   };
 
   const merge = async () => {

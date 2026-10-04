@@ -1,5 +1,6 @@
 import type {
   OrchestrationV2ProjectedTurnItem,
+  OrchestrationV2ThreadHistoryPage,
   OrchestrationV2ThreadProjection,
   OrchestrationV2TurnItem,
 } from "@t3tools/contracts";
@@ -61,17 +62,38 @@ function renumberVisible(
 }
 
 /**
+ * Fork: fold an older page's run statuses into `inheritedRuns` (the channel for
+ * settled runs held outside `runs`), so older final answers can be classified
+ * without perturbing run-derived logic. Runs already known are left alone.
+ */
+function mergeHistoryRunStatuses(
+  projection: OrchestrationV2ThreadProjection,
+  runStatuses: OrchestrationV2ThreadHistoryPage["runStatuses"],
+): OrchestrationV2ThreadProjection {
+  if (runStatuses === undefined || runStatuses.length === 0) return projection;
+  const known = new Set([
+    ...projection.runs.map((run) => run.id),
+    ...(projection.inheritedRuns ?? []).map((run) => run.id),
+  ]);
+  const added = runStatuses.filter((run) => !known.has(run.id));
+  if (added.length === 0) return projection;
+  return { ...projection, inheritedRuns: [...(projection.inheritedRuns ?? []), ...added] };
+}
+
+/**
  * Merge an older history page into the live projection. Dedupes by
  * sourceThreadId + sourceItemId, keeps chronological order (older first), and
  * preserves newer live rows already present in state.
  */
 export function mergeOlderHistoryIntoProjection(
-  projection: OrchestrationV2ThreadProjection,
+  current: OrchestrationV2ThreadProjection,
   olderItems: ReadonlyArray<OrchestrationV2ProjectedTurnItem>,
+  runStatuses?: OrchestrationV2ThreadHistoryPage["runStatuses"],
 ): OrchestrationV2ThreadProjection {
   if (olderItems.length === 0) {
-    return projection;
+    return current;
   }
+  const projection = mergeHistoryRunStatuses(current, runStatuses);
 
   const existingKeys = new Set(projection.visibleTurnItems.map(projectedItemKey));
   const turnItemById = new Map<string, OrchestrationV2TurnItem>();

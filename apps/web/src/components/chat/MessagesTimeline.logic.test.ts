@@ -34,8 +34,10 @@ import {
   workEntryDisplayLabel,
   workEntryReadOutput,
   workEntryIsVisibleInGroup,
+  deriveFinalResponseRunIdsKey,
 } from "./MessagesTimeline.logic";
 import type { WorkLogEntry } from "../../session-logic";
+import { deriveTimelineMinimapItems } from "./MessagesTimeline.minimap";
 
 describe("expanded tool group scrolling", () => {
   const entries = [{ id: "first" }, { id: "second" }];
@@ -2818,6 +2820,167 @@ describe("deriveMessagesTimelineRows", () => {
     expect(assistantRow?.showAssistantMeta).toBe(false);
     expect(assistantRow?.showAssistantCopyButton).toBe(false);
     expect(rows.at(-1)).toMatchObject({ kind: "thinking" });
+  });
+
+  describe("final-response navigator", () => {
+    const message = (input: {
+      id: string;
+      role: "user" | "assistant";
+      text: string;
+      runId: string | null;
+      at: string;
+    }): TimelineEntry => ({
+      id: `${input.id}-entry`,
+      kind: "message",
+      createdAt: input.at,
+      message: {
+        id: MessageId.make(input.id),
+        role: input.role,
+        text: input.text,
+        runId: input.runId === null ? null : RunId.make(input.runId),
+        createdAt: input.at,
+        updatedAt: input.at,
+        streaming: false,
+      },
+    });
+    const timelineEntries: TimelineEntry[] = [
+      message({
+        id: "user-1",
+        role: "user",
+        text: "First",
+        runId: null,
+        at: "2026-01-01T00:00:00Z",
+      }),
+      message({
+        id: "commentary-1",
+        role: "assistant",
+        text: "Checking first.",
+        runId: "run-1",
+        at: "2026-01-01T00:00:01Z",
+      }),
+      message({
+        id: "final-1",
+        role: "assistant",
+        text: "Done.",
+        runId: "run-1",
+        at: "2026-01-01T00:00:02Z",
+      }),
+      message({
+        id: "user-2",
+        role: "user",
+        text: "Second",
+        runId: null,
+        at: "2026-01-01T00:00:03Z",
+      }),
+      message({
+        id: "commentary-2",
+        role: "assistant",
+        text: "Still working.",
+        runId: "run-2",
+        at: "2026-01-01T00:00:04Z",
+      }),
+      message({
+        id: "user-3",
+        role: "user",
+        text: "Third",
+        runId: null,
+        at: "2026-01-01T00:00:05Z",
+      }),
+      message({
+        id: "final-3",
+        role: "assistant",
+        text: "Third answer.",
+        runId: "run-3",
+        at: "2026-01-01T00:00:06Z",
+      }),
+    ];
+    const finalIds = (rows: ReadonlyArray<MessagesTimelineRow>) =>
+      rows.flatMap((row) =>
+        row.kind === "message" && row.isFinalAssistantResponse ? [row.message.id] : [],
+      );
+
+    it("marks only the terminal message of completed runs, never interrupted commentary", () => {
+      const rows = deriveMessagesTimelineRows({
+        timelineEntries,
+        // run-2 was interrupted: its terminal commentary is not a final answer.
+        completedRunIds: new Set([RunId.make("run-1"), RunId.make("run-3")]),
+        latestRun: {
+          runId: RunId.make("run-3"),
+          status: "completed",
+          startedAt: "2026-01-01T00:00:05Z",
+          completedAt: "2026-01-01T00:00:07Z",
+        },
+        isWorking: false,
+        activeTurnStartedAt: null,
+        turnDiffSummaries: [],
+        supportsConversationRollback: false,
+      });
+
+      expect(finalIds(rows)).toEqual(["final-1", "final-3"]);
+      expect(
+        deriveTimelineMinimapItems(rows, "final-assistant").map((item) => ({
+          id: item.id,
+          positionIndex: item.positionIndex,
+          positionCount: item.positionCount,
+          primaryText: item.primaryText,
+        })),
+      ).toEqual([
+        { id: "final-1-entry", positionIndex: 0, positionCount: 3, primaryText: "Done." },
+        { id: "final-3-entry", positionIndex: 2, positionCount: 3, primaryText: "Third answer." },
+      ]);
+      expect(
+        deriveTimelineMinimapItems(rows, "user-turn").map((item) => [item.id, item.secondaryText]),
+      ).toEqual([
+        ["user-1-entry", "Done."],
+        ["user-2-entry", "Still working."],
+        ["user-3-entry", "Third answer."],
+      ]);
+    });
+
+    it("treats an inherited fork-point run still waiting as final", () => {
+      // A run-fork snapshot taken while the source run awaited checkpoint
+      // capture: inherited statuses are never updated live, so `waiting`
+      // must already count. A local `waiting` run is not final yet.
+      const key = deriveFinalResponseRunIdsKey({
+        inheritedRuns: [
+          { id: RunId.make("run-1"), status: "waiting" },
+          { id: RunId.make("run-2"), status: "interrupted" },
+        ],
+        runs: [{ id: RunId.make("run-3"), status: "waiting" }],
+      });
+      const rows = deriveMessagesTimelineRows({
+        timelineEntries,
+        completedRunIds: new Set(key.split("\n").map((id) => RunId.make(id))),
+        latestRun: null,
+        isWorking: false,
+        activeTurnStartedAt: null,
+        turnDiffSummaries: [],
+        supportsConversationRollback: false,
+      });
+
+      expect(finalIds(rows)).toEqual(["final-1"]);
+    });
+
+    it("withholds the final marker while the run is still in progress", () => {
+      const rows = deriveMessagesTimelineRows({
+        timelineEntries,
+        // A stale completed set must not mark the live run's provisional answer.
+        completedRunIds: new Set([RunId.make("run-1"), RunId.make("run-3")]),
+        latestRun: {
+          runId: RunId.make("run-3"),
+          status: "running",
+          startedAt: "2026-01-01T00:00:05Z",
+          completedAt: null,
+        },
+        runningRunId: RunId.make("run-3"),
+        isWorking: true,
+        activeTurnStartedAt: "2026-01-01T00:00:05Z",
+        turnDiffSummaries: [],
+        supportsConversationRollback: false,
+      });
+
+      expect(finalIds(rows)).toEqual(["final-1"]);
+    });
   });
 
   it.each([

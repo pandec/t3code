@@ -13,7 +13,10 @@ const state = vi.hoisted(() => ({
   showTooltips: false,
 }));
 
-vi.mock("@tanstack/react-router", () => ({ useNavigate: () => state.navigate }));
+vi.mock("@tanstack/react-router", () => ({
+  useNavigate: () => state.navigate,
+  useParams: () => ({}),
+}));
 vi.mock("../../state/entities", () => ({
   useThreadProjection: () => ({ projection: state.projection }),
   useThreadShells: () => state.shells,
