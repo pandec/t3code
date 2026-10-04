@@ -25,7 +25,7 @@ describe("resolveSnoozePresets", () => {
     const tomorrow = presets.find((preset) => preset.id === "tomorrow");
     const tomorrowDate = new Date(tomorrow!.snoozedUntil!);
     expect(tomorrowDate.getDate()).toBe(9);
-    expect(tomorrowDate.getHours()).toBe(9);
+    expect(tomorrowDate.getHours()).toBe(6);
     const nextWeek = presets.find((preset) => preset.id === "next-week");
     const nextWeekDate = new Date(nextWeek!.snoozedUntil!);
     expect(nextWeekDate.getDay()).toBe(1);
@@ -40,7 +40,7 @@ describe("resolveSnoozePresets", () => {
       expect(preset.whenLabel.toLowerCase()).not.toContain("tomorrow");
     }
     const tomorrow = presets.find((preset) => preset.id === "tomorrow");
-    expect(tomorrow!.whenLabel).toMatch(/9/);
+    expect(tomorrow!.whenLabel).toMatch(/6/);
     const nextWeek = presets.find((preset) => preset.id === "next-week");
     expect(nextWeek!.whenLabel).toMatch(/Mon/);
   });

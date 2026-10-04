@@ -1,4 +1,4 @@
-import type { ProviderUsageWindow } from "./providerUsage.js";
+import type { ProviderUsageWindow } from "./providerUsage.ts";
 
 /**
  * Formatting shared by every surface that renders provider quota: the web

@@ -17,11 +17,11 @@ import {
   type ProviderUsageSnapshot,
   type ProviderUsageThresholds,
   type ProviderUsageWindow,
-} from "./providerUsage.js";
+} from "./providerUsage.ts";
 import {
   resolveProviderUsageBoundAuthIndex,
   type ProviderUsageThreadAccountState,
-} from "./providerUsagePresentation.js";
+} from "./providerUsagePresentation.ts";
 
 /**
  * The composer quota meter (web ring popover, mobile usage sheet) as one pure

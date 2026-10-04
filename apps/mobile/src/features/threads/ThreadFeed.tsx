@@ -1,4 +1,5 @@
 import { ThreadContextDivider } from "./thread-context-divider";
+import { ThreadForkRow } from "./thread-fork-row";
 import { ThreadHandoffRow } from "./thread-handoff-row";
 import {
   WorktreeWorkingHeader,
@@ -161,6 +162,7 @@ import {
   threadFeedRunIsUnsettled,
   isContextCompactionActivityGroup,
   isContextHandoffActivityGroup,
+  isForkActivityGroup,
   type ThreadFeedEntry,
   type ThreadFeedLatestRun,
 } from "../../lib/threadActivity";
@@ -1634,6 +1636,19 @@ function renderFeedEntry(
         iconColor={iconSubtleColor}
       />
     );
+  }
+
+  if (entry.type === "activity-group" && isForkActivityGroup(entry)) {
+    const { item } = entry.activities[0]!.projectedItem;
+    if (item.type === "fork") {
+      return (
+        <ThreadForkRow
+          environmentId={props.environmentId}
+          item={item}
+          iconColor={iconSubtleColor}
+        />
+      );
+    }
   }
 
   if (entry.type === "activity-group" && isContextCompactionActivityGroup(entry)) {

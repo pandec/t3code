@@ -4,11 +4,13 @@ import { assert, describe, it } from "@effect/vitest";
 import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
 import * as Fiber from "effect/Fiber";
+import * as Layer from "effect/Layer";
 import * as FileSystem from "effect/FileSystem";
 import * as Option from "effect/Option";
 import * as Path from "effect/Path";
 import { Command } from "effect/unstable/cli";
 import * as CliError from "effect/unstable/cli/CliError";
+import * as CliOutput from "effect/unstable/cli/CliOutput";
 
 import {
   CliOrchestrationDeclaredResponseError,
@@ -55,6 +57,30 @@ it.effect("rejects the unsupported space-separated drain value", () =>
     if (error._tag === "ShowHelp") {
       assert.strictEqual(error.errors[0]?._tag, "UnexpectedArgument");
     }
+  }),
+);
+
+it.effect("documents the drain flag as a bare flag with inline values", () =>
+  Effect.gen(function* () {
+    let drainDoc:
+      | { readonly type: string; readonly description: Option.Option<string> }
+      | undefined;
+    const formatter = CliOutput.defaultFormatter({ colors: false });
+    const command = Command.make("wait", { drain: threadWaitDrainFlag });
+    const captureHelp = CliOutput.layer({
+      ...formatter,
+      formatHelpDoc: (doc) => {
+        drainDoc = doc.flags.find((flag) => flag.name === "drain");
+        return "";
+      },
+    });
+    yield* Command.runWith(command, { version: "0.0.0" })(["--help"]).pipe(
+      Effect.provide(Layer.merge(captureHelp, NodeServices.layer)),
+    );
+    assert.strictEqual(drainDoc?.type, "boolean");
+    const description = Option.getOrElse(drainDoc?.description ?? Option.none(), () => "");
+    assert.include(description, "--drain=agents");
+    assert.include(description, "--drain=all");
   }),
 );
 

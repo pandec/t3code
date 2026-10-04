@@ -27,6 +27,8 @@ import { describe, expect, it } from "vite-plus/test";
 import {
   workEntryRowLabel,
   isContextHandoffActivityGroup,
+  isForkActivityGroup,
+  resolveForkDivider,
   buildThreadFeed,
   deriveThreadFeedPresentation,
   threadFeedActivityIsVisible,
@@ -742,6 +744,30 @@ describe("buildThreadFeed", () => {
       "synthetic",
     ]);
     expect(activities.at(-1)?.prominent).toBe(true);
+  });
+
+  it("renders a forked thread's boundary as a readable divider linking the source", () => {
+    const { providerThreadId: _providerThreadId, ...forkBase } = base(
+      "item-fork",
+      "2026-06-20T00:00:03.000Z",
+      2,
+    );
+    const fork = {
+      ...forkBase,
+      title: null,
+      type: "fork",
+      source: { type: "run", threadId: sourceThreadId, runId },
+      targetThreadId: threadId,
+    } satisfies OrchestrationV2TurnItem;
+    const [entry] = buildThreadFeed([projected(fork, 0, "synthetic")]);
+    if (entry?.type !== "activity-group") throw new Error("expected an activity group");
+    expect(isForkActivityGroup(entry)).toBe(true);
+    expect(workEntryRowLabel(entry.activities[0]!.workEntry)).toBe("Forked from conversation");
+    expect(resolveForkDivider(fork)).toEqual({
+      label: "Forked from conversation",
+      actionLabel: "Open source conversation",
+      relatedThreadId: sourceThreadId,
+    });
   });
 
   it("keeps orchestration relationship cards visible when a completed run is folded", () => {

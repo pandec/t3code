@@ -130,7 +130,9 @@ const jsonFlag = Flag.Boolean("json").pipe(
 // "true" and never swallows the next positional as its value (a
 // space-separated `--drain agents` stays an unexpected argument). Effect
 // rc.112 registers `Flag.orElse` alternates, so a boolean and a choice flag
-// sharing the name "drain" would now fail as a duplicate flag.
+// sharing the name "drain" would now fail as a duplicate flag. No typeName:
+// help then renders the Boolean tag as a bare `--drain`, and the description
+// names the inline `=all` form.
 const threadWaitDrainPrimitive: Primitive.Primitive<ThreadWaitDrainMode> = Object.assign(
   Object.create(Object.getPrototypeOf(Primitive.Boolean)),
   {
@@ -146,11 +148,10 @@ export const threadWaitDrainFlag = Param.makeSingle({
   kind: Param.flagKind,
   name: "drain",
   primitiveType: threadWaitDrainPrimitive,
-  typeName: "agents | all",
 }).pipe(
   Flag.withDefault(null),
   Flag.withDescription(
-    "After the turn settles, wait for background agents/workflows; use --drain=all to include monitors.",
+    "After the turn settles, wait for background agents/workflows (same as --drain=agents); use --drain=all to include monitors.",
   ),
 );
 

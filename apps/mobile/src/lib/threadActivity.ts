@@ -308,6 +308,29 @@ export function isContextHandoffActivityGroup(entry: ThreadFeedActivityGroup): b
   );
 }
 
+export function isForkActivityGroup(entry: ThreadFeedActivityGroup): boolean {
+  return entry.activities.length === 1 && entry.activities[0]?.projectedItem.item.type === "fork";
+}
+
+/** Fork divider copy and link target; mirrors web's V2LifecycleRow fork row. */
+export function resolveForkDivider(item: Extract<OrchestrationV2TurnItem, { type: "fork" }>): {
+  readonly label: string;
+  readonly actionLabel: string;
+  readonly relatedThreadId: ThreadId;
+} {
+  return item.source.type === "run"
+    ? {
+        label: "Forked from conversation",
+        actionLabel: "Open source conversation",
+        relatedThreadId: item.source.threadId,
+      }
+    : {
+        label: "Conversation fork",
+        actionLabel: "Open fork",
+        relatedThreadId: item.targetThreadId,
+      };
+}
+
 function isUserInputActivityGroup(entry: ThreadFeedActivityGroup): boolean {
   return entry.activities.some((activity) => activity.workEntry.questionAnswer !== undefined);
 }
@@ -574,7 +597,7 @@ function itemSummary(
     case "handoff":
       return "Context handed off";
     case "fork":
-      return "Thread forked";
+      return resolveForkDivider(item).label;
     case "thread_created":
       return "Thread created";
     case "dynamic_tool": {
@@ -632,6 +655,7 @@ function itemPreview(item: OrchestrationV2TurnItem): string | null {
     case "handoff":
       return item.summary ?? null;
     case "fork":
+      return null;
     case "thread_created":
       return item.targetThreadId;
     case "subagent":
