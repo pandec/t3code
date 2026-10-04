@@ -15,6 +15,10 @@ import {
   recoverQueuedMessageEdit,
   restoreQueuedEditAttachments,
 } from "./chat/queuedMessageEdit";
+import {
+  applyMessageContextRestore,
+  planMessageContextRestore,
+} from "./chat/messageContextRestore";
 import { useQueuedRunEditHold } from "./chat/useQueuedRunEditHold";
 import {
   isPaintOnlyThreadTimeline,
@@ -384,6 +388,7 @@ import {
   buildMessageContext,
   previewAnnotationContextLabel,
   previewAnnotationContextReference,
+  resolveUserMessageContext,
   reviewCommentContextLabel,
   terminalContextReference,
 } from "../lib/composerContextRecords";
@@ -4583,6 +4588,9 @@ export default function ChatView(props: ChatViewProps) {
     if (serverProjection === null) return;
     const run = serverProjection.runs.find((candidate) => candidate.id === editingQueuedRun.runId);
     if (run !== undefined && run.status === "queued") return;
+    const savedAttachmentLocalIds = new Map(
+      editingQueuedRun.existingAttachments.map((attachment) => [attachment.id, randomUUID()]),
+    );
     const recovery = recoverQueuedMessageEdit({
       editTarget: queuedEditDraftTargetFor(editingQueuedRun.runId),
       threadTarget: baseComposerDraftTarget,
@@ -4590,6 +4598,12 @@ export default function ChatView(props: ChatViewProps) {
       removedSavedAttachments:
         editingQueuedRun.existingAttachments.length < editingQueuedRun.originalAttachmentCount,
       ...(run === undefined ? {} : { modelSelection: run.modelSelection }),
+      original: {
+        context: editingQueuedRun.context,
+        savedAttachmentLocalIds,
+        threadId: editingQueuedRun.threadId,
+        environmentId,
+      },
     });
     setEditingQueuedRun(null);
     if (recovery.outcome === "clean") return;
@@ -4613,6 +4627,7 @@ export default function ChatView(props: ChatViewProps) {
     void restoreQueuedEditAttachments({
       attachments: savedAttachments,
       target: baseComposerDraftTarget,
+      localIds: savedAttachmentLocalIds,
       download: (attachments) => {
         if (!connection) return Promise.reject(new Error("The environment is not connected."));
         return prepareRevertedMessageAttachments({
@@ -7996,8 +8011,25 @@ export default function ChatView(props: ChatViewProps) {
           });
           if (result._tag === "Failure") throw squashAtomCommandFailure(result);
         });
-        const currentPrompt = store.getComposerDraft(composerDraftTarget)?.prompt ?? "";
-        const restoredPrompt = recallableComposerPrompt(message.text);
+        const attachmentLocalIds = new Map(
+          (message.attachments ?? []).map((attachment) => [attachment.id, randomUUID()]),
+        );
+        const currentDraft = store.getComposerDraft(composerDraftTarget);
+        const currentPrompt = currentDraft?.prompt ?? "";
+        // Chips come back with their context; anything that cannot is kept as its label.
+        const resolvedContext = resolveUserMessageContext(message);
+        const restoredContext = planMessageContextRestore({
+          text: resolvedContext.text,
+          records: resolvedContext.records,
+          threadId: activeThread.id,
+          environmentId,
+          attachmentLocalIds,
+          existingTerminalContexts: currentDraft?.terminalContexts ?? [],
+          labelUnmatchedReferences: true,
+        });
+        const restoredPrompt = recallableComposerPrompt(restoredContext.text, {
+          keepContextReferences: true,
+        });
         const nextPrompt =
           restoredPrompt.length === 0
             ? currentPrompt
@@ -8005,17 +8037,21 @@ export default function ChatView(props: ChatViewProps) {
               ? `${currentPrompt}\n\n${restoredPrompt}`
               : restoredPrompt;
         store.setPrompt(composerDraftTarget, nextPrompt);
+        if (restoredPrompt.length > 0) {
+          applyMessageContextRestore(composerDraftTarget, restoredContext);
+        }
         const images: ComposerImageAttachment[] = [];
         const restoredFiles: ComposerFileAttachment[] = [];
         files.forEach((file, index) => {
+          const source = message.attachments?.[index];
           const attachment = {
-            id: randomUUID(),
+            id: (source && attachmentLocalIds.get(source.id)) ?? randomUUID(),
             name: file.name,
             mimeType: file.type,
             sizeBytes: file.size,
             file,
           };
-          if (message.attachments?.[index]?.type === "image") {
+          if (source?.type === "image") {
             images.push({ ...attachment, type: "image", previewUrl: URL.createObjectURL(file) });
           } else {
             restoredFiles.push({ ...attachment, type: "file" });

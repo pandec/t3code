@@ -1,4 +1,10 @@
-import type { ChatAttachment, ModelSelection } from "@t3tools/contracts";
+import type {
+  ChatAttachment,
+  EnvironmentId,
+  ModelSelection,
+  OrchestrationMessageContext,
+  ThreadId,
+} from "@t3tools/contracts";
 import {
   useComposerDraftStore,
   type ComposerFileAttachment,
@@ -6,6 +12,7 @@ import {
   type ComposerThreadTarget,
 } from "../../composerDraftStore";
 import { randomUUID } from "~/lib/utils";
+import { applyMessageContextRestore, planMessageContextRestore } from "./messageContextRestore";
 
 /**
  * Keep an unsaved edit when its queued run leaves the queue (removed from
@@ -13,7 +20,9 @@ import { randomUUID } from "~/lib/utils";
  * to the thread's draft with its attachments, contexts and the message's
  * model, so nothing typed is lost even when that draft already has content.
  * Saved attachments the edit kept are restored separately because they have
- * to be downloaded (restoreQueuedEditAttachments).
+ * to be downloaded (restoreQueuedEditAttachments, with the same
+ * `savedAttachmentLocalIds`); chips for the message's own context records are
+ * rebuilt on the thread's draft so they keep their payload.
  */
 export function recoverQueuedMessageEdit(input: {
   readonly editTarget: ComposerThreadTarget;
@@ -23,6 +32,14 @@ export function recoverQueuedMessageEdit(input: {
   readonly removedSavedAttachments?: boolean;
   /** The queued message's model, staged so a resend uses it. */
   readonly modelSelection?: ModelSelection;
+  /** The queued message's own context, which the edit's original chips still point at. */
+  readonly original?: {
+    readonly context: OrchestrationMessageContext | undefined;
+    /** Saved attachment id to the draft id its downloaded copy will get. */
+    readonly savedAttachmentLocalIds: ReadonlyMap<string, string>;
+    readonly threadId: ThreadId;
+    readonly environmentId: EnvironmentId;
+  };
 }): { readonly outcome: "kept" | "clean"; readonly skippedAttachmentCount: number } {
   const store = useComposerDraftStore.getState();
   const edit = store.getComposerDraft(input.editTarget);
@@ -41,7 +58,21 @@ export function recoverQueuedMessageEdit(input: {
     return { outcome: "clean", skippedAttachmentCount: 0 };
   }
   const destination = store.getComposerDraft(input.threadTarget);
-  const prompt = [destination?.prompt ?? "", edit.prompt]
+  const restoredContext =
+    input.original === undefined
+      ? null
+      : planMessageContextRestore({
+          text: edit.prompt,
+          records: input.original.context?.records ?? [],
+          threadId: input.original.threadId,
+          environmentId: input.original.environmentId,
+          attachmentLocalIds: input.original.savedAttachmentLocalIds,
+          existingTerminalContexts: [
+            ...(destination?.terminalContexts ?? []),
+            ...edit.terminalContexts,
+          ],
+        });
+  const prompt = [destination?.prompt ?? "", restoredContext?.text ?? edit.prompt]
     .filter((part) => part.trim().length > 0)
     .join("\n\n");
   // Attachments move with their upload state; the prompt keeps its inline
@@ -68,6 +99,7 @@ export function recoverQueuedMessageEdit(input: {
   if (edit.threadContexts.length > 0) {
     store.addThreadContexts(input.threadTarget, edit.threadContexts, { appendReference: false });
   }
+  if (restoredContext !== null) applyMessageContextRestore(input.threadTarget, restoredContext);
   if (input.modelSelection !== undefined) {
     store.setModelSelection(input.threadTarget, input.modelSelection, { replaceOptions: true });
   }
@@ -83,19 +115,22 @@ export async function restoreQueuedEditAttachments(input: {
   readonly attachments: ReadonlyArray<ChatAttachment>;
   readonly target: ComposerThreadTarget;
   readonly download: (attachments: ReadonlyArray<ChatAttachment>) => Promise<ReadonlyArray<File>>;
+  /** Draft ids chosen up front, so chips already in the prompt bind to these copies. */
+  readonly localIds?: ReadonlyMap<string, string>;
 }): Promise<{ readonly skippedAttachmentCount: number }> {
   const downloaded = await input.download(input.attachments);
   const images: ComposerImageAttachment[] = [];
   const files: ComposerFileAttachment[] = [];
   downloaded.forEach((file, index) => {
+    const source = input.attachments[index];
     const attachment = {
-      id: randomUUID(),
+      id: (source && input.localIds?.get(source.id)) ?? randomUUID(),
       name: file.name,
       mimeType: file.type,
       sizeBytes: file.size,
       file,
     };
-    if (input.attachments[index]?.type === "image") {
+    if (source?.type === "image") {
       images.push({ ...attachment, type: "image", previewUrl: URL.createObjectURL(file) });
     } else {
       files.push({ ...attachment, type: "file" });

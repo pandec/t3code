@@ -127,8 +127,9 @@ File restore is only offered for threads running in a worktree, and it is
 refused when another thread or agent session also uses that directory, a folder
 inside it, or a folder that contains it, since
 restoring would erase their changes. A thread that works in the project directory
-rewinds the conversation only. The selected prompt and its attachments return to the composer for editing and
-resending. Any unsent draft stays above the restored prompt.
+rewinds the conversation only. The selected prompt returns to the composer for editing and resending,
+with its attachments and its context chips such as terminal output, review comments, annotations and
+attached threads. Any unsent draft stays above the restored prompt.
 
 This removes the selected message and later conversation from the active thread
 and provider history. It does not undo external actions or separate provider

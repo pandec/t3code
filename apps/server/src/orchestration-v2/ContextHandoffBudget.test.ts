@@ -1,7 +1,10 @@
 import type { ProviderAdapterV2HistoricalContext } from "./ProviderAdapter.ts";
 import { assert, describe, it } from "@effect/vitest";
+import { formatComposerContextHref } from "@t3tools/shared/composerContextReferences";
 import {
+  ComposerContextId,
   ContextHandoffId,
+  MessageId,
   PROVIDER_SEND_TURN_MAX_ATTACHMENTS,
   ProviderDriverKind,
   ProviderInstanceId,
@@ -146,6 +149,53 @@ describe("handoff budget", () => {
       }),
     );
     assert.equal(historyResponseItems([command!], "Activity")[1]?.type, "message");
+  });
+
+  it("expands a user message's inline context into the text-only history copy", () => {
+    const contextId = ComposerContextId.make("terminal_one");
+    const user = historicalMessage({
+      id: TurnItemId.make("item:user"),
+      threadId,
+      runId: RunId.make("run:source"),
+      nodeId: null,
+      providerThreadId: providerThread.id,
+      providerTurnId: null,
+      nativeItemRef: null,
+      parentItemId: null,
+      ordinal: 1,
+      status: "completed",
+      title: null,
+      startedAt: now,
+      completedAt: now,
+      updatedAt: now,
+      createdBy: "user",
+      creationSource: "web",
+      type: "user_message",
+      messageId: MessageId.make("message:user"),
+      inputIntent: "turn_start",
+      text: `Why does [build:2](${formatComposerContextHref("terminal", contextId)}) fail?`,
+      context: {
+        version: 1,
+        records: [
+          {
+            version: 1,
+            kind: "terminal",
+            contextId,
+            label: "build:2",
+            terminalId: "terminal-1",
+            terminalLabel: "build",
+            lineStart: 2,
+            lineEnd: 2,
+            text: "error TS2322: Type 'string' is not assignable",
+          },
+        ],
+      },
+      attachments: [],
+    });
+    assert.equal(user?.role, "user");
+    assert.notInclude(user!.text, "t3-context://");
+    assert.include(user!.text, "[Terminal: build:2; ref=terminal_one]");
+    assert.include(user!.text, "2 | error TS2322: Type 'string' is not assignable");
   });
 
   it("retains short conversations verbatim in role and order", () => {

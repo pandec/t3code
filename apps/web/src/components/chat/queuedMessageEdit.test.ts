@@ -1,4 +1,8 @@
-import { EnvironmentId, ProviderInstanceId, ThreadId } from "@t3tools/contracts";
+import { ComposerContextId, EnvironmentId, ProviderInstanceId, ThreadId } from "@t3tools/contracts";
+import {
+  collectComposerContextReferences,
+  formatComposerContextReference,
+} from "@t3tools/shared/composerContextReferences";
 import { scopeThreadRef } from "@t3tools/client-runtime/environment";
 import { beforeEach, describe, expect, it } from "vite-plus/test";
 import {
@@ -12,6 +16,7 @@ import {
   recoverQueuedMessageEdit,
   restoreQueuedEditAttachments,
 } from "./queuedMessageEdit";
+import { toKindScopedComposerContextId } from "../../lib/composerContextReferences";
 
 const environmentId = EnvironmentId.make("remote-environment");
 const threadTarget = scopeThreadRef(environmentId, ThreadId.make("thread:edit"));
@@ -149,6 +154,75 @@ describe("queued message file edits", () => {
     expect(draft?.reviewComments.map((entry) => entry.id)).toEqual([comment.id]);
     expect(draft?.modelSelectionByProvider[modelSelection.instanceId]?.model).toBe("gpt-edit");
     expect(store.getComposerDraft(editTarget)).toBeNull();
+  });
+
+  it("brings the queued message's own chips into the thread draft with their payload", async () => {
+    const store = useComposerDraftStore.getState();
+    const terminalRecord = {
+      version: 1 as const,
+      kind: "terminal" as const,
+      contextId: ComposerContextId.make("terminal_queued"),
+      label: "build 2",
+      terminalId: "terminal-1",
+      terminalLabel: "build",
+      lineStart: 2,
+      lineEnd: 2,
+      text: "error TS2322",
+    };
+    const imageRecord = {
+      version: 1 as const,
+      kind: "image" as const,
+      contextId: ComposerContextId.make("image_queued"),
+      label: "screen.png",
+      attachmentId: "saved:image",
+      name: "screen.png",
+      mimeType: "image/png",
+      sizeBytes: 5,
+    };
+    const chips = [terminalRecord, imageRecord].map(formatComposerContextReference).join(" ");
+    store.setPrompt(threadTarget, "Separate draft");
+    store.setPrompt(editTarget, `Edited ${chips}`);
+    const savedAttachmentLocalIds = new Map([["saved:image", "local:image"]]);
+    expect(
+      recoverQueuedMessageEdit({
+        editTarget,
+        threadTarget,
+        originalText: `Original ${chips}`,
+        original: {
+          context: { version: 1, records: [terminalRecord, imageRecord] },
+          savedAttachmentLocalIds,
+          threadId: threadTarget.threadId,
+          environmentId,
+        },
+      }).outcome,
+    ).toBe("kept");
+    await restoreQueuedEditAttachments({
+      attachments: [
+        {
+          type: "image",
+          id: "saved:image",
+          name: "screen.png",
+          mimeType: "image/png",
+          sizeBytes: 5,
+        },
+      ],
+      target: threadTarget,
+      localIds: savedAttachmentLocalIds,
+      download: async (attachments) =>
+        attachments.map(
+          (attachment) => new File(["bytes"], attachment.name, { type: attachment.mimeType }),
+        ),
+    });
+    const draft = store.getComposerDraft(threadTarget);
+    expect(draft?.terminalContexts.map((context) => context.text)).toEqual(["error TS2322"]);
+    expect(draft?.images.map((entry) => entry.id)).toEqual(["local:image"]);
+    expect(
+      collectComposerContextReferences(draft?.prompt ?? "").map((ref) => ref.contextId),
+    ).toEqual([
+      toKindScopedComposerContextId("terminal", draft!.terminalContexts[0]!.id),
+      toKindScopedComposerContextId("image", "local:image"),
+    ]);
+    expect(draft?.prompt.startsWith("Separate draft\n\nEdited ")).toBe(true);
   });
 
   it("keeps an edit that only removed a saved attachment", () => {

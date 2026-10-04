@@ -9,6 +9,7 @@ import type {
   OrchestrationV2TurnItem,
 } from "@t3tools/contracts";
 
+import { projectComposerContextForProvider } from "@t3tools/shared/composerContextReferences";
 import * as Config from "effect/Config";
 
 export const DEFAULT_HANDOFF_TOKEN_CAP = 16_000;
@@ -143,6 +144,12 @@ export function historicalMessage(
   let text: string;
   switch (item.type) {
     case "user_message":
+      // A text-only copy has no record channel: expand chips the way the provider first read them.
+      text = projectComposerContextForProvider({
+        text: item.text,
+        records: item.context?.records ?? [],
+      });
+      break;
     case "assistant_message":
       text = item.text;
       break;
