@@ -28,6 +28,7 @@ import * as Ref from "effect/Ref";
 import * as Stream from "effect/Stream";
 import { ChildProcess, ChildProcessSpawner } from "effect/unstable/process";
 
+import { SqlitePersistenceMemory } from "../persistence/Layers/Sqlite.ts";
 import { CodexProviderCapabilitiesV2 } from "./Adapters/CodexAdapterV2.ts";
 import * as EffectWorker from "./EffectWorker.ts";
 import * as EventSink from "./EventSink.ts";
@@ -43,6 +44,8 @@ import {
   workerLive,
 } from "./SessionWorkspaceFollow.ts";
 import { makeOrchestratorV2ReplayLayerWithRegistry } from "./testkit/ProviderReplayHarness.ts";
+import * as ThreadManagement from "./ThreadManagementService.ts";
+import * as ThreadWorktreeSwitchScheduler from "./ThreadWorktreeSwitchScheduler.ts";
 import { checkpointWorkspace } from "./testkit/ReplayFixtureWorkspace.ts";
 
 const driver = ProviderDriverKind.make("claudeAgent");
@@ -64,10 +67,18 @@ interface FollowAdapterState {
   readonly startedCwds: ReadonlyArray<string | null>;
   /** Each opened session's event queue, so a test can speak for the provider. */
   readonly sessionEvents: ReadonlyArray<Queue.Queue<ProviderAdapterV2Event>>;
+  /** Keep the next turn running; its completion waits in `heldTurns`. */
+  readonly holdNextTurn?: boolean;
+  readonly heldTurns?: ReadonlyArray<Effect.Effect<void>>;
 }
 
-/** A Claude-like adapter (one thread per session) whose turns complete at once. */
-function makeFollowAdapter(state: Ref.Ref<FollowAdapterState>): ProviderAdapterV2Shape {
+const claudeFollowAdapter = { driver, providerInstanceId };
+
+/** A Claude-like adapter (one thread per session) whose turns complete at once unless held. */
+function makeFollowAdapter(
+  state: Ref.Ref<FollowAdapterState>,
+  { driver, providerInstanceId } = claudeFollowAdapter,
+): ProviderAdapterV2Shape {
   return {
     instanceId: providerInstanceId,
     driver,
@@ -132,36 +143,51 @@ function makeFollowAdapter(state: Ref.Ref<FollowAdapterState>): ProviderAdapterV
                 startedCwds: [...current.startedCwds, input.runtimePolicy.cwd],
               }));
               const providerTurnId = ProviderTurnId.make(`provider-turn:${input.attemptId}`);
-              const occurredAt = yield* DateTime.now;
-              yield* Queue.offer(events, {
-                type: "provider_turn.updated",
-                driver,
-                providerTurn: {
-                  id: providerTurnId,
-                  providerThreadId: input.providerThread.id,
-                  nodeId: input.rootNodeId,
-                  runAttemptId: input.attemptId,
-                  nativeTurnRef: {
-                    driver,
-                    nativeId: `native:${providerTurnId}`,
-                    strength: "strong",
+              const complete = Effect.gen(function* () {
+                const occurredAt = yield* DateTime.now;
+                yield* Queue.offer(events, {
+                  type: "provider_turn.updated",
+                  driver,
+                  providerTurn: {
+                    id: providerTurnId,
+                    providerThreadId: input.providerThread.id,
+                    nodeId: input.rootNodeId,
+                    runAttemptId: input.attemptId,
+                    nativeTurnRef: {
+                      driver,
+                      nativeId: `native:${providerTurnId}`,
+                      strength: "strong",
+                    },
+                    ordinal: input.providerTurnOrdinal,
+                    status: "completed",
+                    startedAt: occurredAt,
+                    completedAt: occurredAt,
                   },
-                  ordinal: input.providerTurnOrdinal,
+                });
+                yield* Queue.offer(events, {
+                  type: "turn.terminal",
+                  driver,
+                  providerThreadId: input.providerThread.id,
+                  providerTurnId,
+                  runOrdinal: input.runOrdinal,
                   status: "completed",
-                  startedAt: occurredAt,
-                  completedAt: occurredAt,
-                },
+                  failure: null,
+                  threadDisposition: "reusable",
+                });
               });
-              yield* Queue.offer(events, {
-                type: "turn.terminal",
-                driver,
-                providerThreadId: input.providerThread.id,
-                providerTurnId,
-                runOrdinal: input.runOrdinal,
-                status: "completed",
-                failure: null,
-                threadDisposition: "reusable",
-              });
+              const held = yield* Ref.modify(state, (current) =>
+                current.holdNextTurn === true
+                  ? ([
+                      true,
+                      {
+                        ...current,
+                        holdNextTurn: false,
+                        heldTurns: [...(current.heldTurns ?? []), complete],
+                      },
+                    ] as const)
+                  : ([false, current] as const),
+              );
+              if (!held) yield* complete;
             }),
           steerTurn: () => Effect.void,
           interruptTurn: () => Effect.void,
@@ -599,6 +625,171 @@ it.live("the follow worker moves the thread for the live process only", () =>
       }).pipe(Effect.provide(testLayer));
 
       assert.deepEqual((yield* Ref.get(state)).openedCwds, [root]);
+    }),
+  ).pipe(Effect.provide(NodeServices.layer)),
+);
+
+// Fork (DECISIONS 2.5 x 5.8): a completed agent-requested switch is a T3 move,
+// so the live session is detached and the next turn starts in the new checkout.
+it.live("a completed worktree switch restarts the session in the new worktree", () =>
+  Effect.scoped(
+    Effect.gen(function* () {
+      const name = "deferred-worktree-switch-session";
+      const { root, worktree } = yield* makeRepository;
+      const threadId = ThreadId.make(`thread:${name}`);
+      const projectId = ProjectId.make(`project:${name}`);
+      // Scheduling a switch is Codex-only (DeferredWorktreeSwitch.ts).
+      const codexAdapter = {
+        driver: ProviderDriverKind.make("codex"),
+        providerInstanceId: ProviderInstanceId.make("codex-switch-test"),
+      };
+      const codexSelection = {
+        instanceId: codexAdapter.providerInstanceId,
+        model: "switch-model",
+      } satisfies ModelSelection;
+      const state = yield* Ref.make<FollowAdapterState>({
+        openedCwds: [],
+        startedCwds: [],
+        sessionEvents: [],
+        holdNextTurn: true,
+      });
+      const registry = ProviderAdapterRegistry.makeSingleLayer(
+        makeFollowAdapter(state, codexAdapter),
+      );
+      const projects = Layer.mock(ProjectStore.ProjectStoreV2)({
+        getShell: (requested) =>
+          Effect.succeed(
+            requested === projectId
+              ? Option.some({
+                  id: projectId,
+                  title: name,
+                  workspaceRoot: root,
+                  defaultModelSelection: codexSelection,
+                  scripts: [],
+                  createdAt: "2026-10-04T00:00:00.000Z",
+                  updatedAt: "2026-10-04T00:00:00.000Z",
+                })
+              : Option.none(),
+          ),
+      });
+      const threads = Layer.unwrap(
+        Effect.gen(function* () {
+          const orchestrator = yield* Orchestrator.OrchestratorV2;
+          return Layer.mock(ThreadManagement.ThreadManagementService)({
+            dispatch: orchestrator.dispatch,
+            getThreadRecords: orchestrator.getThreadRecords,
+            getThreadShell: orchestrator.getThreadShell,
+            streamDomainEvents: orchestrator.streamDomainEvents,
+          });
+        }),
+      );
+      // The scheduler runs as on the server: driven by domain events.
+      const testLayer = ThreadWorktreeSwitchScheduler.workerLive.pipe(
+        Layer.provideMerge(ThreadWorktreeSwitchScheduler.layer),
+        Layer.provide(Layer.mergeAll(threads, projects, SqlitePersistenceMemory)),
+        Layer.provideMerge(makeOrchestratorV2ReplayLayerWithRegistry({ name }, registry)),
+      );
+
+      yield* Effect.gen(function* () {
+        const orchestrator = yield* Orchestrator.OrchestratorV2;
+        const worker = yield* EffectWorker.OrchestrationEffectWorkerV2;
+        const eventSink = yield* EventSink.EventSinkV2;
+        const scheduler = yield* ThreadWorktreeSwitchScheduler.ThreadWorktreeSwitchScheduler;
+        const send = (step: string) =>
+          orchestrator.dispatch({
+            type: "message.dispatch",
+            createdBy: "user",
+            creationSource: "web",
+            commandId: CommandId.make(`${name}:${step}`),
+            threadId,
+            messageId: MessageId.make(`${name}:${step}`),
+            text: step,
+            attachments: [],
+            modelSelection: codexSelection,
+            dispatchMode: { type: "start_immediately" },
+          });
+
+        yield* orchestrator.dispatch({
+          type: "thread.create",
+          createdBy: "user",
+          creationSource: "web",
+          commandId: CommandId.make(`${name}:create`),
+          threadId,
+          projectId,
+          title: name,
+          modelSelection: codexSelection,
+          runtimeMode: "full-access",
+          interactionMode: "default",
+          branch: null,
+          worktreePath: root,
+        });
+        yield* send("first");
+        yield* worker.drain();
+        const session = (yield* orchestrator.getThreadProjection(threadId)).providerSessions.find(
+          (entry) => entry.status !== "stopped",
+        );
+        if (session === undefined) return yield* Effect.die("No live provider session.");
+
+        // The agent asks from its running turn; the switch waits for the turn.
+        const pending = yield* scheduler.request({ threadId, targetPath: worktree });
+        assert.equal(pending.request?.status, "pending");
+        assert.equal((yield* orchestrator.getThreadProjection(threadId)).thread.worktreePath, root);
+
+        const before = yield* eventSink.latestSequence({ threadId });
+        const switched = yield* eventSink
+          .stream({ threadId, afterSequence: before, eventType: "thread.metadata-updated" })
+          .pipe(
+            Stream.filter(
+              (stored) =>
+                stored.event.type === "thread.metadata-updated" &&
+                stored.event.payload.worktreeSwitch?.status === "completed",
+            ),
+            Stream.take(1),
+            Stream.runHead,
+            Effect.forkScoped,
+          );
+        const [completeFirstTurn] = (yield* Ref.get(state)).heldTurns ?? [];
+        if (completeFirstTurn === undefined) return yield* Effect.die("The turn was not held.");
+        yield* completeFirstTurn;
+        const update = yield* Fiber.join(switched);
+        if (Option.isNone(update) || update.value.commandId === null) {
+          return yield* Effect.die("No completed switch.");
+        }
+        yield* worker.drain();
+
+        const afterSwitch = yield* orchestrator.getThreadProjection(threadId);
+        assert.equal(afterSwitch.thread.worktreePath, worktree);
+        assert.equal(afterSwitch.thread.branch, "feature");
+        assert.equal(afterSwitch.thread.worktreeSwitch?.requestId, pending.request?.requestId);
+        const bySwitch = yield* eventSink
+          .readByCommandId({ commandId: update.value.commandId })
+          .pipe(Stream.runCollect);
+        assert.deepEqual(
+          [...bySwitch].flatMap((stored) =>
+            stored.event.type === "provider-session.detached"
+              ? [stored.event.payload.providerSessionId]
+              : [],
+          ),
+          [session.id],
+        );
+
+        const secondDone = yield* orchestrator.streamDomainEvents.pipe(
+          Stream.filter(
+            (event) => event.type === "run.updated" && event.payload.status === "completed",
+          ),
+          Stream.take(1),
+          Stream.runDrain,
+          Effect.forkScoped,
+        );
+        yield* send("second");
+        yield* worker.drain();
+        yield* Fiber.join(secondDone);
+      }).pipe(Effect.provide(testLayer));
+
+      // The next turn opened a new process in the worktree.
+      const captured = yield* Ref.get(state);
+      assert.deepEqual(captured.openedCwds, [root, worktree]);
+      assert.deepEqual(captured.startedCwds, [root, worktree]);
     }),
   ).pipe(Effect.provide(NodeServices.layer)),
 );
