@@ -105,6 +105,10 @@ vi.mock("./use-thread-outbox", async () => {
   };
 });
 
+vi.mock("./use-mobile-preferences", () => ({
+  useSteerGraceWindowMs: () => 5_000,
+}));
+
 vi.mock("./use-remote-environment-registry", () => ({
   setPendingConnectionError: harness.setPendingConnectionError,
   useRemoteConnectionStatus: () => ({ connectedEnvironments: [] }),
