@@ -405,6 +405,7 @@ export function createThreadEnvironmentAtoms<R, E>(
             pinOrderKey: null,
             snoozedAt: null,
             snoozedUntil: null,
+            ...(thread.snoozedUntilRunId == null ? {} : { snoozedUntilRunId: null }),
           },
     ),
     unsettle: optimistic.wrap(commands.unsettle, (thread, input, now) => ({
@@ -419,16 +420,26 @@ export function createThreadEnvironmentAtoms<R, E>(
           ["preparing", "queued", "starting"].includes(thread.status))) ||
       // Fork: a null wake time is the indefinite snooze ("until I wake it").
       (input.snoozedUntil !== null &&
-        !(Date.parse(input.snoozedUntil) > DateTime.toEpochMillis(now)))
+        !(Date.parse(input.snoozedUntil) > DateTime.toEpochMillis(now))) ||
+      // Fork: "until it's done" waits on the latest run; none, nothing to wait on.
+      (input.untilDone === true && thread.latestRunId === null)
         ? thread
         : {
             ...thread,
             pendingRuntimeRequest: null,
             snoozedUntil:
               input.snoozedUntil === null ? null : DateTime.makeUnsafe(input.snoozedUntil),
+            ...(input.untilDone === true
+              ? { snoozedUntilRunId: thread.latestRunId }
+              : thread.snoozedUntilRunId == null
+                ? {}
+                : { snoozedUntilRunId: null }),
             snoozedAt:
-              thread.snoozedUntil != null &&
-              DateTime.formatIso(thread.snoozedUntil) === input.snoozedUntil
+              (thread.snoozedUntil != null &&
+                DateTime.formatIso(thread.snoozedUntil) === input.snoozedUntil) ||
+              (input.untilDone === true &&
+                thread.snoozedUntilRunId != null &&
+                thread.snoozedUntilRunId === thread.latestRunId)
                 ? (thread.snoozedAt ?? now)
                 : now,
           },
@@ -437,6 +448,7 @@ export function createThreadEnvironmentAtoms<R, E>(
       ...thread,
       snoozedUntil: null,
       snoozedAt: null,
+      ...(thread.snoozedUntilRunId == null ? {} : { snoozedUntilRunId: null }),
     })),
     setAutoSettle: optimistic.wrap(commands.setAutoSettle, (thread, input, now) => ({
       ...thread,
@@ -455,6 +467,7 @@ export function createThreadEnvironmentAtoms<R, E>(
         : {}),
       snoozedUntil: null,
       snoozedAt: null,
+      ...(thread.snoozedUntilRunId == null ? {} : { snoozedUntilRunId: null }),
     })),
     unpin: optimistic.wrap(commands.unpin, (thread) => ({
       ...thread,

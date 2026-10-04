@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vite-plus/test";
 import * as DateTime from "effect/DateTime";
+import { RunId } from "@t3tools/contracts";
 
 import { indefiniteSnoozeWokeByRun, isIndefinitelySnoozed } from "./IndefiniteSnooze.ts";
 
@@ -12,6 +13,14 @@ describe("isIndefinitelySnoozed", () => {
     expect(isIndefinitelySnoozed({ snoozedUntil: null, snoozedAt: SNOOZED_AT })).toBe(true);
     expect(isIndefinitelySnoozed({ snoozedUntil: after, snoozedAt: SNOOZED_AT })).toBe(false);
     expect(isIndefinitelySnoozed({ snoozedUntil: null, snoozedAt: null })).toBe(false);
+    // Fork: an awaited run makes it the "until it's done" snooze instead.
+    expect(
+      isIndefinitelySnoozed({
+        snoozedUntil: null,
+        snoozedAt: SNOOZED_AT,
+        snoozedUntilRunId: RunId.make("run-1"),
+      }),
+    ).toBe(false);
   });
 });
 

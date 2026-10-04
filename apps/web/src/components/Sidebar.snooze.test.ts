@@ -65,6 +65,19 @@ describe("resolveSnoozePresets", () => {
     expect(last?.snoozedUntil).toBe(null);
   });
 
+  it("leads with until-done only when offered (fork)", () => {
+    const withoutOption = resolveSnoozePresets(localDate(2026, 4, 8, 10), "locale", {
+      untilWoken: true,
+    });
+    expect(withoutOption.some((preset) => preset.id === "until-done")).toBe(false);
+    const presets = resolveSnoozePresets(localDate(2026, 4, 8, 10), "locale", {
+      untilWoken: true,
+      untilDone: true,
+    });
+    expect(presets[0]).toMatchObject({ id: "until-done", snoozedUntil: null, untilDone: true });
+    expect(presets.at(-1)?.id).toBe("until-woken");
+  });
+
   it("puts next week a full week out when today is Monday", () => {
     // Monday 2026-04-06.
     const presets = resolveSnoozePresets(localDate(2026, 4, 6, 10), "locale");

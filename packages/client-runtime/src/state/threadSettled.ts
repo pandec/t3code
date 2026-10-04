@@ -1,7 +1,9 @@
 // @effect-diagnostics globalDate:off -- UI snooze presets use local calendar boundaries and Intl labels.
 import * as DateTime from "effect/DateTime";
+import { snoozeUntilDoneWorkContinues } from "@t3tools/shared/orchestrationV2PendingBackgroundWork";
 
 interface SettlementRunLike {
+  readonly runId?: unknown;
   readonly turnId?: unknown;
   readonly assistantMessageId?: unknown;
   readonly status?: string;
@@ -88,15 +90,17 @@ export function hasQueuedTurnStart(
 export interface ThreadSnoozeShell extends QueuedThreadShell {
   readonly snoozedUntil?: string | null;
   readonly snoozedAt?: string | null;
+  /** Fork: the run an "until it's done" snooze waits on. */
+  readonly snoozedUntilRunId?: string | null;
+  readonly pendingBackgroundTasks?: ReadonlyArray<{ readonly kind: string }>;
   readonly hasPendingApprovals: boolean;
   readonly hasPendingUserInput: boolean;
 }
 
-/**
- * Fork: an indefinite snooze ("until I wake it") carries no wake time, so
- * snoozedAt alone marks it. Both fields clear together on wake.
- */
-function isIndefiniteSnooze(shell: Pick<ThreadSnoozeShell, "snoozedUntil" | "snoozedAt">): boolean {
+/** A snooze without a wake time whose marker is usable (malformed never hides). */
+function isWakeTimelessSnooze(
+  shell: Pick<ThreadSnoozeShell, "snoozedUntil" | "snoozedAt">,
+): boolean {
   return (
     shell.snoozedUntil == null &&
     shell.snoozedAt != null &&
@@ -105,10 +109,74 @@ function isIndefiniteSnooze(shell: Pick<ThreadSnoozeShell, "snoozedUntil" | "sno
 }
 
 /**
+ * Fork: an indefinite snooze ("until I wake it") carries no wake time, so
+ * snoozedAt alone marks it. Both fields clear together on wake.
+ */
+function isIndefiniteSnooze(
+  shell: Pick<ThreadSnoozeShell, "snoozedUntil" | "snoozedAt" | "snoozedUntilRunId">,
+): boolean {
+  return isWakeTimelessSnooze(shell) && shell.snoozedUntilRunId == null;
+}
+
+/**
+ * Fork: the "until it's done" snooze: no wake time, waiting on a run's work.
+ */
+function isUntilDoneSnooze(
+  shell: Pick<ThreadSnoozeShell, "snoozedUntil" | "snoozedAt" | "snoozedUntilRunId">,
+): boolean {
+  return isWakeTimelessSnooze(shell) && shell.snoozedUntilRunId != null;
+}
+
+function latestRunOf(shell: QueuedThreadShell): SettlementRunLike | null {
+  return shell.latestRun ?? shell.latestTurn ?? null;
+}
+
+function runIdOf(run: SettlementRunLike | null): string | null {
+  const runId = run?.runId ?? run?.turnId;
+  return typeof runId === "string" ? runId : null;
+}
+
+/**
+ * Fork: whether the work an "until it's done" snooze waits on goes on: the
+ * awaited run is still the latest and live, or it ended while its subagents
+ * work on. The server moves the snooze onto a wake run that carries the
+ * work on. Watch loops alone (commands, monitors) don't count. Mirrors the
+ * server through the shared snoozeUntilDoneWorkContinues.
+ */
+export function untilDoneWorkContinues(
+  shell: Pick<
+    ThreadSnoozeShell,
+    "snoozedUntilRunId" | "latestRun" | "latestTurn" | "pendingBackgroundTasks"
+  >,
+): boolean {
+  const latestRun = latestRunOf(shell);
+  return snoozeUntilDoneWorkContinues({
+    snoozedUntilRunId: shell.snoozedUntilRunId,
+    latestRunId: runIdOf(latestRun),
+    latestRunStatus: latestRun?.status ?? latestRun?.state ?? null,
+    pendingBackgroundTasks: shell.pendingBackgroundTasks ?? [],
+  });
+}
+
+/**
+ * Fork: whether "Until it's done" may be offered. The server rejects it
+ * unless a run is live or its subagents still work, so clients hide the
+ * preset on quiet threads. Callers also gate on threadSnoozeUntilDone.
+ */
+export function canSnoozeUntilDone(
+  shell: Pick<ThreadSnoozeShell, "latestRun" | "latestTurn" | "pendingBackgroundTasks">,
+): boolean {
+  const latestRunId = runIdOf(latestRunOf(shell));
+  return (
+    latestRunId !== null && untilDoneWorkContinues({ ...shell, snoozedUntilRunId: latestRunId })
+  );
+}
+
+/**
  * The latest run's end time when it ended after the snooze was set, else
- * null. Timed snoozes wake on completion only; an indefinite snooze also
- * wakes when the run was interrupted or failed, since the agent stopped
- * either way and nothing else would bring the thread back.
+ * null. Timed snoozes wake on completion only; indefinite and "until it's
+ * done" snoozes also wake when the run was interrupted or failed, since the
+ * agent stopped either way and nothing else would bring the thread back.
  */
 function runEndedAfterSnooze(shell: ThreadSnoozeShell): string | null {
   const latestRun = shell.latestRun ?? shell.latestTurn ?? null;
@@ -116,7 +184,10 @@ function runEndedAfterSnooze(shell: ThreadSnoozeShell): string | null {
   const endedAs = (outcome: string) => latestRun.state === outcome || latestRun.status === outcome;
   const ended =
     endedAs("completed") ||
-    (isIndefiniteSnooze(shell) && (endedAs("interrupted") || endedAs("failed")));
+    ((isIndefiniteSnooze(shell) || isUntilDoneSnooze(shell)) &&
+      (endedAs("interrupted") || endedAs("failed"))) ||
+    // Fork: a cancelled run also ends the work an "until it's done" waits on.
+    (isUntilDoneSnooze(shell) && endedAs("cancelled"));
   return ended && Date.parse(latestRun.completedAt) > Date.parse(shell.snoozedAt)
     ? latestRun.completedAt
     : null;
@@ -144,7 +215,9 @@ export function threadRaisedHandWhileSnoozed(shell: ThreadSnoozeShell): boolean 
   ) {
     return true;
   }
-  return runEndedAfterSnooze(shell) !== null;
+  // Fork: an ended run is not news while an "until it's done" snooze still
+  // sees its subagents working.
+  return runEndedAfterSnooze(shell) !== null && !untilDoneWorkContinues(shell);
 }
 
 /**
@@ -184,6 +257,11 @@ export function effectiveSnoozed(
   shell: ThreadSnoozeShell,
   options: { readonly now: string },
 ): boolean {
+  // Fork: "until it's done" holds only while its work goes on; any other
+  // shape (ended and quiet, replaced, failed) wakes.
+  if (isUntilDoneSnooze(shell)) {
+    return untilDoneWorkContinues(shell) && !threadRaisedHandWhileSnoozed(shell);
+  }
   // Fork: an indefinite snooze holds until the user wakes it or the thread
   // raises its hand. Malformed markers never hide a thread.
   if (isIndefiniteSnooze(shell)) return !threadRaisedHandWhileSnoozed(shell);
@@ -213,9 +291,10 @@ export function threadWokeAt(
   // Fork: an indefinite snooze has no timer, so it only wakes by raising
   // its hand.
   const indefinite = isIndefiniteSnooze(shell);
-  if (shell.snoozedUntil == null && !indefinite) return null;
+  const untilDone = isUntilDoneSnooze(shell);
+  if (shell.snoozedUntil == null && !indefinite && !untilDone) return null;
   const wakeAtMs = shell.snoozedUntil == null ? Number.NaN : Date.parse(shell.snoozedUntil);
-  if (!indefinite && Number.isNaN(wakeAtMs)) return null;
+  if (!indefinite && !untilDone && Number.isNaN(wakeAtMs)) return null;
   // An early hand-raise wake stays authoritative even after the scheduled
   // wake time passes: reporting snoozedUntil then would resurface a Woke
   // indicator the user already cleared by visiting (snoozedUntil is newer
@@ -223,6 +302,15 @@ export function threadWokeAt(
   if (threadRaisedHandWhileSnoozed(shell)) {
     const runtime = shell.runtime ?? shell.session ?? null;
     return runEndedAfterSnooze(shell) ?? runtime?.updatedAt ?? shell.snoozedAt ?? null;
+  }
+  // Fork: "until it's done" that woke without a raised hand: the awaited run
+  // was replaced or dropped, or ended without a stamp newer than the snooze.
+  if (untilDone) {
+    if (untilDoneWorkContinues(shell)) return null;
+    const latestRun = latestRunOf(shell);
+    const replacedAt =
+      runIdOf(latestRun) === shell.snoozedUntilRunId ? null : (latestRun?.requestedAt ?? null);
+    return replacedAt ?? (shell.runtime ?? shell.session)?.updatedAt ?? shell.snoozedAt ?? null;
   }
   // No raised hand: an indefinite snooze is still snoozed; a timed one woke
   // iff the timer elapsed (still-snoozed → null).
@@ -326,7 +414,13 @@ export function resolveSnoozePresets(now: Date): ReadonlyArray<SnoozePreset> {
  * Fork: snoozed-shelf sort key. Timed wakes ascend; indefinite snoozes (no
  * wake time) come back last by definition. Shared by web and mobile.
  */
-export function snoozeWakeSortMs(thread: { readonly snoozedUntil?: string | null }): number {
+export function snoozeWakeSortMs(thread: {
+  readonly snoozedUntil?: string | null;
+  readonly snoozedUntilRunId?: string | null;
+}): number {
+  // Fork: "until it's done" rows lead: they come back soonest, and the agent
+  // is working on them right now.
+  if (thread.snoozedUntilRunId != null) return Number.MIN_SAFE_INTEGER;
   if (thread.snoozedUntil == null) return Number.MAX_SAFE_INTEGER;
   const wakeMs = Date.parse(thread.snoozedUntil);
   return Number.isNaN(wakeMs) ? 0 : wakeMs;
@@ -334,6 +428,25 @@ export function snoozeWakeSortMs(thread: { readonly snoozedUntil?: string | null
 
 /** Fork: snoozed-row label where a timed row shows its wake countdown. */
 export const INDEFINITE_SNOOZE_LABEL = "parked";
+
+/** Fork: snoozed-row label for an "until it's done" snooze. */
+export const UNTIL_DONE_SNOOZE_LABEL = "until done";
+
+/** Fork: snoozed-shelf label for a row without a wake countdown. */
+export function snoozeShelfLabel(thread: { readonly snoozedUntilRunId?: string | null }): string {
+  return thread.snoozedUntilRunId != null ? UNTIL_DONE_SNOOZE_LABEL : INDEFINITE_SNOOZE_LABEL;
+}
+
+/**
+ * Fork: the "until it's done" preset. Listed first because it is the one
+ * choice about the thread rather than the clock. Callers gate it on
+ * canSnoozeUntilDone and the threadSnoozeUntilDone capability.
+ */
+export const SNOOZE_UNTIL_DONE_PRESET = {
+  id: "until-done",
+  label: "Until it's done",
+  whenLabel: "when the work ends",
+} as const;
 
 /**
  * Compact "wakes in" label for snoozed rows: "2h", "18h", "3d". Minutes

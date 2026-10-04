@@ -396,6 +396,8 @@ export const OrchestrationV2AppThread = Schema.Struct({
   unsettledAt: Schema.optional(Schema.NullOr(Schema.DateTimeUtc)),
   snoozedUntil: Schema.optional(Schema.NullOr(Schema.DateTimeUtc)),
   snoozedAt: Schema.optional(Schema.NullOr(Schema.DateTimeUtc)),
+  /** Fork: the run an "until it's done" snooze waits on (snoozedUntil null). */
+  snoozedUntilRunId: Schema.optional(Schema.NullOr(RunId)),
   limitRecovery: Schema.optional(Schema.NullOr(OrchestrationV2LimitRecovery)),
   pinnedAt: Schema.optional(Schema.NullOr(Schema.DateTimeUtc)),
   autoSettleDisabledAt: Schema.optional(Schema.NullOr(Schema.DateTimeUtc)),
@@ -1743,6 +1745,8 @@ export const OrchestrationV2ThreadShell = Schema.Struct({
   unsettledAt: Schema.optional(Schema.NullOr(Schema.DateTimeUtc)),
   snoozedUntil: Schema.optional(Schema.NullOr(Schema.DateTimeUtc)),
   snoozedAt: Schema.optional(Schema.NullOr(Schema.DateTimeUtc)),
+  /** Fork: the run an "until it's done" snooze waits on (snoozedUntil null). */
+  snoozedUntilRunId: Schema.optional(Schema.NullOr(RunId)),
   limitRecovery: Schema.optional(Schema.NullOr(OrchestrationV2LimitRecovery)),
   /** Omitted by servers that predate thread pinning. */
   pinnedAt: Schema.optional(Schema.NullOr(Schema.DateTimeUtc)),
@@ -2505,6 +2509,10 @@ export const OrchestrationV2Command = Schema.Union([
     // Fork: null is the indefinite snooze ("until I wake it"); snoozedAt
     // alone marks it. Gated by the threadSnoozeIndefinite capability.
     snoozedUntil: Schema.NullOr(IsoDateTime),
+    // Fork: "until it's done": wake when the latest run and its agent
+    // background work finish. Requires a null snoozedUntil and the
+    // threadSnoozeUntilDone capability.
+    untilDone: Schema.optional(Schema.Boolean),
   }),
   Schema.Struct({
     type: Schema.Literal("thread.unsnooze"),

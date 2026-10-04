@@ -569,6 +569,41 @@ describe("buildThreadListV2Items", () => {
     expect(layout.items.map((item) => item.thread.id)).toEqual(["timed", "parked"]);
   });
 
+  it("leads the snoozed shelf with until-done rows while their run works (fork)", () => {
+    const layout = buildThreadListV2Items({
+      threads: [
+        makeThread({
+          id: ThreadId.make("timed"),
+          title: "Timed",
+          snoozedUntil: "2026-06-03T09:00:00.000Z",
+          snoozedAt: "2026-06-01T12:00:00.000Z",
+        }),
+        makeThread({
+          id: ThreadId.make("until-done"),
+          title: "Until done",
+          snoozedUntil: null,
+          snoozedAt: "2026-06-01T11:00:00.000Z",
+          snoozedUntilRunId: RunId.make("run-1"),
+          latestRun: {
+            runId: RunId.make("run-1"),
+            status: "running",
+            requestedAt: "2026-06-01T10:00:00.000Z",
+            startedAt: "2026-06-01T10:00:00.000Z",
+            completedAt: null,
+            assistantMessageId: null,
+          },
+        }),
+      ],
+      environmentId: null,
+      searchQuery: "",
+      now: NOW,
+      snoozedShelfExpanded: true,
+    });
+
+    expect(layout.snoozedCount).toBe(2);
+    expect(layout.items.map((item) => item.thread.id)).toEqual(["until-done", "timed"]);
+  });
+
   it("places settled pinned threads in the settled shelf", () => {
     const layout = buildThreadListV2Items({
       threads: [

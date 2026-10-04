@@ -6,7 +6,11 @@ import {
   settlePromise,
   squashAtomCommandFailure,
 } from "@t3tools/client-runtime/state/runtime";
-import { canSnooze, effectiveSnoozed } from "@t3tools/client-runtime/state/thread-settled";
+import {
+  canSnooze,
+  canSnoozeUntilDone,
+  effectiveSnoozed,
+} from "@t3tools/client-runtime/state/thread-settled";
 import type { ScopedThreadRef, ThreadId } from "@t3tools/contracts";
 import { useRouter } from "@tanstack/react-router";
 import { useCallback, useMemo } from "react";
@@ -25,6 +29,7 @@ import {
   readEnvironmentSupportsSettlement,
   readEnvironmentSupportsSnooze,
   readEnvironmentSupportsSnoozeIndefinite,
+  readEnvironmentSupportsSnoozeUntilDone,
   readEnvironmentSupportsTitleRegeneration,
   readThreadShell,
   useProjects,
@@ -144,6 +149,9 @@ export function useThreadActionMenu(input: {
         const isRegeneratingTitle = thread.titleRegeneration != null;
         const snoozePresets = resolveSnoozePresets(now, timestampFormat, {
           untilWoken: readEnvironmentSupportsSnoozeIndefinite(threadRef.environmentId),
+          untilDone:
+            readEnvironmentSupportsSnoozeUntilDone(threadRef.environmentId) &&
+            canSnoozeUntilDone(thread),
         });
         const items = buildThreadActionMenuItems({
           branch: thread.branch ?? null,
@@ -167,7 +175,9 @@ export function useThreadActionMenu(input: {
               ? await requestCustomSnooze()
               : snoozePresets.find((candidate) => `snooze:${candidate.id}` === action);
           if (!preset) return;
-          const result = await snoozeThread(threadRef, preset.snoozedUntil);
+          const result = await snoozeThread(threadRef, preset.snoozedUntil, {
+            untilDone: "untilDone" in preset && preset.untilDone === true,
+          });
           if (result._tag === "Failure" && !isAtomCommandInterrupted(result)) {
             failureToast("Failed to snooze thread", squashAtomCommandFailure(result));
           }

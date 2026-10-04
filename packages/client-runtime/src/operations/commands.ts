@@ -109,6 +109,9 @@ export interface SnoozeThreadInput extends ThreadCommandInput {
   /** Fork: null snoozes indefinitely ("until I wake it"); requires the
       threadSnoozeIndefinite capability. */
   readonly snoozedUntil: string | null;
+  /** Fork: "until it's done" (with a null snoozedUntil); requires the
+      threadSnoozeUntilDone capability. */
+  readonly untilDone?: boolean;
 }
 
 export interface UnsnoozeThreadInput extends ThreadCommandInput {
@@ -519,6 +522,7 @@ export const snoozeThread = Effect.fn("EnvironmentCommands.snoozeThread")(functi
     commandId: yield* allocateCommandId(input),
     threadId: input.threadId,
     snoozedUntil: input.snoozedUntil,
+    ...(input.untilDone === true ? { untilDone: true } : {}),
   });
 });
 

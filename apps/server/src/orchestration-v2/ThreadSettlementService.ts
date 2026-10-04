@@ -7,6 +7,7 @@ import {
   type OrchestrationV2ThreadShell,
 } from "@t3tools/contracts";
 import { makeDrainableWorker } from "@t3tools/shared/DrainableWorker";
+import { snoozeUntilDoneWorkContinues } from "@t3tools/shared/orchestrationV2PendingBackgroundWork";
 import * as Cause from "effect/Cause";
 import * as Context from "effect/Context";
 import * as Crypto from "effect/Crypto";
@@ -145,6 +146,18 @@ export function isAutoSettlementCandidate(
   if (threadHasQueuedTurnStart(thread, nowMs)) return false;
   // Fork: an indefinite snooze only wakes by hand, never by settlement.
   if (isIndefinitelySnoozed(thread)) return false;
+  // Fork: an "until it's done" snooze holds while its work goes on; once
+  // the work ends it has woken and settles like any awake thread.
+  if (
+    snoozeUntilDoneWorkContinues({
+      snoozedUntilRunId: thread.snoozedUntilRunId,
+      latestRunId: thread.latestRunId,
+      latestRunStatus: thread.status,
+      pendingBackgroundTasks: thread.pendingBackgroundTasks ?? [],
+    })
+  ) {
+    return false;
+  }
   const snoozedUntilMs = toMillis(thread.snoozedUntil);
   if (snoozedUntilMs === null || snoozedUntilMs <= nowMs) return true;
   // A snoozed thread that woke early (error or completed work) can settle;

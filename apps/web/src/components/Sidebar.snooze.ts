@@ -1,6 +1,7 @@
 import type { TimestampFormat } from "@t3tools/contracts/settings";
 import {
   resolveSnoozePresets as resolveSharedSnoozePresets,
+  SNOOZE_UNTIL_DONE_PRESET,
   snoozeWakeLabel,
   type SnoozePreset as SharedSnoozePreset,
 } from "@t3tools/client-runtime/state/thread-settled";
@@ -9,11 +10,13 @@ import { formatShortTimestamp, parseTimestampDate } from "../timestampFormat";
 
 export { snoozeWakeLabel };
 
-/** The shared timed presets plus the fork's indefinite "Until I wake it". */
+/** The shared timed presets plus the fork's "Until it's done" and "Until I wake it". */
 export interface SnoozePreset extends Omit<SharedSnoozePreset, "id" | "snoozedUntil"> {
-  readonly id: SharedSnoozePreset["id"] | "until-woken";
-  /** ISO wake time, or null for the indefinite snooze. */
+  readonly id: SharedSnoozePreset["id"] | "until-woken" | "until-done";
+  /** ISO wake time, or null for the indefinite and "until it's done" snoozes. */
   readonly snoozedUntil: string | null;
+  /** "Until it's done": wake when the running work and its subagents end. */
+  readonly untilDone?: true;
 }
 
 const DAY_MS = 24 * 60 * 60 * 1_000;
@@ -23,14 +26,15 @@ function timeOfDayLabel(date: Date, timestampFormat: TimestampFormat): string {
 }
 
 /**
- * Presets for "snooze until", computed against local time. The indefinite
- * "Until I wake it" preset is opt-in because it needs the server's
- * threadSnoozeIndefinite capability.
+ * Presets for "snooze until", computed against local time. "Until it's
+ * done" leads when the caller offers it (a working thread on a server with
+ * threadSnoozeUntilDone); the indefinite "Until I wake it" preset is opt-in
+ * because it needs the server's threadSnoozeIndefinite capability.
  */
 export function resolveSnoozePresets(
   now: Date,
   timestampFormat: TimestampFormat,
-  options?: { readonly untilWoken?: boolean },
+  options?: { readonly untilWoken?: boolean; readonly untilDone?: boolean },
 ): ReadonlyArray<SnoozePreset> {
   const presets: SnoozePreset[] = resolveSharedSnoozePresets(now).map((preset) => {
     const wake = parseTimestampDate(preset.snoozedUntil);
@@ -44,6 +48,9 @@ export function resolveSnoozePresets(
           : time,
     };
   });
+  if (options?.untilDone === true) {
+    presets.unshift({ ...SNOOZE_UNTIL_DONE_PRESET, snoozedUntil: null, untilDone: true });
+  }
   if (options?.untilWoken === true) {
     presets.push({
       id: "until-woken",

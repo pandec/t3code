@@ -243,3 +243,9 @@ On web and desktop, **Snooze → Until I wake it** snoozes without a timer. The 
 Snoozed section, after the timed snoozes, until you wake, pin, settle, or message it, or until it
 needs attention: a question or approval, a failure, or the agent finishing its work. Automatic
 settlement skips these threads.
+
+While the agent is mid-turn or its subagents are still working, **Snooze → Until it's done** hides
+the thread until that work finishes, including the agent's follow-up on the subagents' results. Watch
+loops such as a running dev server or a monitor don't hold it. These threads sit at the top of the
+Snoozed section and come back on their own, or earlier if they need attention. It's available on web,
+desktop, and mobile when the server supports it.

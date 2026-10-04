@@ -4,9 +4,9 @@ import {
   canSnooze,
   effectiveSnoozed,
   hasQueuedTurnStart,
-  INDEFINITE_SNOOZE_LABEL,
   QUEUED_TURN_START_GRACE_MS,
   resolveSnoozePresets,
+  snoozeShelfLabel,
   snoozeWakeLabel,
   snoozeWakeSortMs,
 } from "@t3tools/client-runtime/state/thread-settled";
@@ -562,7 +562,7 @@ export function buildThreadListV2ListItems(input: {
       item.snoozed && item.thread.snoozedUntil != null && input.snoozeLabelNow !== undefined
         ? snoozeWakeLabel(item.thread.snoozedUntil, { now: input.snoozeLabelNow })
         : item.snoozed && item.thread.snoozedUntil == null
-          ? INDEFINITE_SNOOZE_LABEL
+          ? snoozeShelfLabel(item.thread)
           : undefined;
     // The minute clock belongs on the item, not the list's extraData, so the
     // recycler's equality can confine the per-minute re-render to rows whose

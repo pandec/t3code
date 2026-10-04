@@ -36,6 +36,7 @@ import {
   readEnvironmentSupportsSettlement,
   readEnvironmentSupportsSnooze,
   readEnvironmentSupportsSnoozeIndefinite,
+  readEnvironmentSupportsSnoozeUntilDone,
   readEnvironmentSupportsVisitedTracking,
   readEnvironmentThreadRefs,
   readProject,
@@ -928,13 +929,22 @@ export function useThreadActions() {
   );
 
   const snoozeThread = useCallback(
-    async (target: ScopedThreadRef, snoozedUntil: string | null) => {
+    async (
+      target: ScopedThreadRef,
+      snoozedUntil: string | null,
+      options?: { readonly untilDone?: boolean },
+    ) => {
+      const untilDone = options?.untilDone === true;
       // Version skew: never send the command to a server that predates it.
       // Fork: a null wake time (indefinite snooze) also needs the
-      // threadSnoozeIndefinite capability; older servers reject it.
+      // threadSnoozeIndefinite capability; older servers reject it. "Until
+      // it's done" needs threadSnoozeUntilDone: older servers drop the flag
+      // and would park the thread indefinitely.
       if (
         !readEnvironmentSupportsSnooze(target.environmentId) ||
-        (snoozedUntil === null && !readEnvironmentSupportsSnoozeIndefinite(target.environmentId))
+        (untilDone
+          ? snoozedUntil !== null || !readEnvironmentSupportsSnoozeUntilDone(target.environmentId)
+          : snoozedUntil === null && !readEnvironmentSupportsSnoozeIndefinite(target.environmentId))
       ) {
         return AsyncResult.failure(
           Cause.fail(
@@ -962,7 +972,7 @@ export function useThreadActions() {
       const action = ThreadUndo.begin("snooze", scopedThreadKey(target));
       const result = await snoozeThreadMutation({
         environmentId: target.environmentId,
-        input: { threadId: target.threadId, snoozedUntil },
+        input: { threadId: target.threadId, snoozedUntil, ...(untilDone ? { untilDone } : {}) },
       });
       if (result._tag !== "Success") {
         action.finish();

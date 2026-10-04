@@ -3645,6 +3645,171 @@ it.layer(SharedApplicationDataPlaneTestLayer)("indefinite snooze", (it) => {
   );
 });
 
+// Fork: "until it's done" snooze waits on the latest run's work, follows a
+// wake onto the run it starts, and wakes on anything else.
+it.layer(SharedApplicationDataPlaneTestLayer)("snooze until done", (it) => {
+  const setup = (prefix: string) =>
+    Effect.gen(function* () {
+      const projects = yield* ProjectService.ProjectService;
+      const orchestrator = yield* Orchestrator.OrchestratorV2;
+      const projectId = ProjectId.make(`${prefix}-project`);
+      const threadId = ThreadId.make(`${prefix}-thread`);
+      yield* projects.create({
+        commandId: CommandId.make(`${prefix}-project-create`),
+        projectId,
+        title: "Snooze until done",
+        workspaceRoot: `/tmp/${prefix}-project`,
+      });
+      yield* orchestrator.dispatch({
+        type: "thread.create",
+        createdBy: "user",
+        creationSource: "web",
+        commandId: CommandId.make(`${prefix}-thread-create`),
+        threadId,
+        projectId,
+        title: "Snoozed until done",
+        modelSelection,
+        runtimeMode: "full-access",
+        interactionMode: "default",
+        branch: null,
+        worktreePath: null,
+      });
+      const snoozeUntilDone = (id: string) =>
+        orchestrator.dispatch({
+          type: "thread.snooze",
+          commandId: CommandId.make(`${prefix}-${id}`),
+          threadId,
+          snoozedUntil: null,
+          untilDone: true,
+        });
+      const sendMessage = (id: string, automatic: boolean) =>
+        orchestrator.dispatch({
+          type: "message.dispatch",
+          createdBy: automatic ? "agent" : "user",
+          creationSource: automatic ? "provider" : "web",
+          ...(automatic
+            ? {
+                notification: {
+                  source: { kind: "background_task" as const },
+                  outcome: "updated" as const,
+                  summary: "Background activity updated",
+                },
+              }
+            : {}),
+          commandId: CommandId.make(`${prefix}-${id}`),
+          threadId,
+          messageId: MessageId.make(`${prefix}-${id}`),
+          text: id,
+          attachments: [],
+          modelSelection,
+          dispatchMode: automatic ? { type: "queue_after_active" } : { type: "start_immediately" },
+        });
+      const read = () => orchestrator.getThreadProjection(threadId);
+      return { orchestrator, threadId, snoozeUntilDone, sendMessage, read };
+    });
+
+  it.effect("waits on the live run, dedupes, and rejects with nothing to wait for", () =>
+    Effect.gen(function* () {
+      const { orchestrator, threadId, snoozeUntilDone, sendMessage, read } =
+        yield* setup("until-done-snooze");
+      const idle = yield* snoozeUntilDone("idle").pipe(Effect.exit);
+      assert.equal(idle._tag, "Failure");
+
+      yield* sendMessage("work", false);
+      const run = (yield* read()).runs.at(-1);
+      assert.isDefined(run);
+      yield* snoozeUntilDone("snooze");
+      const snoozed = (yield* read()).thread;
+      assert.equal(snoozed.snoozedUntilRunId, run.id);
+      assert.isNull(snoozed.snoozedUntil ?? null);
+      assert.isNotNull(snoozed.snoozedAt ?? null);
+
+      yield* TestClock.adjust("1 minute");
+      yield* snoozeUntilDone("again");
+      const repeated = (yield* read()).thread;
+      assert.deepEqual(repeated.snoozedAt, snoozed.snoozedAt);
+      assert.deepEqual(repeated.updatedAt, snoozed.updatedAt);
+
+      const timed = yield* orchestrator
+        .dispatch({
+          type: "thread.snooze",
+          commandId: CommandId.make("until-done-snooze-timed"),
+          threadId,
+          snoozedUntil: "2099-01-01T00:00:00.000Z",
+          untilDone: true,
+        })
+        .pipe(Effect.exit);
+      assert.equal(timed._tag, "Failure");
+
+      yield* orchestrator.dispatch({
+        type: "thread.unsnooze",
+        commandId: CommandId.make("until-done-snooze-wake"),
+        threadId,
+        reason: "user",
+      });
+      const awake = (yield* read()).thread;
+      assert.isNull(awake.snoozedAt ?? null);
+      assert.isNull(awake.snoozedUntilRunId ?? null);
+    }),
+  );
+
+  it.effect("follows a wake onto its run, and a user message wakes it", () =>
+    Effect.gen(function* () {
+      const { snoozeUntilDone, sendMessage, read } = yield* setup("until-done-wake");
+      yield* sendMessage("work", false);
+      yield* snoozeUntilDone("snooze");
+      const snoozed = (yield* read()).thread;
+
+      yield* sendMessage("background-wake", true);
+      const afterWake = yield* read();
+      const wakeRun = afterWake.runs.at(-1);
+      assert.isDefined(wakeRun);
+      assert.notEqual(wakeRun.id, snoozed.snoozedUntilRunId);
+      assert.equal(afterWake.thread.snoozedUntilRunId, wakeRun.id);
+      assert.deepEqual(afterWake.thread.snoozedAt, snoozed.snoozedAt);
+
+      yield* sendMessage("user-follow-up", false);
+      const woken = (yield* read()).thread;
+      assert.isNull(woken.snoozedAt ?? null);
+      assert.isNull(woken.snoozedUntilRunId ?? null);
+    }),
+  );
+
+  it.effect("a wake after the work ended spends the snooze", () =>
+    Effect.gen(function* () {
+      const eventSink = yield* EventSink.EventSinkV2;
+      const { threadId, snoozeUntilDone, sendMessage, read } = yield* setup("until-done-ended");
+      yield* sendMessage("work", false);
+      yield* snoozeUntilDone("snooze");
+      const run = (yield* read()).runs.at(-1);
+      assert.isDefined(run);
+      const now = yield* DateTime.now;
+      yield* eventSink.commitCommand({
+        commandId: CommandId.make("until-done-ended-complete"),
+        threadId,
+        commandType: "provider-runtime.reconcile",
+        acceptedAt: now,
+        events: [
+          {
+            id: EventId.make("until-done-ended-complete"),
+            type: "run.updated" as const,
+            threadId,
+            runId: run.id,
+            occurredAt: now,
+            payload: { ...run, status: "completed" as const, completedAt: now },
+          },
+        ],
+        effects: [],
+      });
+
+      yield* sendMessage("late-wake", true);
+      const woken = (yield* read()).thread;
+      assert.isNull(woken.snoozedAt ?? null);
+      assert.isNull(woken.snoozedUntilRunId ?? null);
+    }),
+  );
+});
+
 it.layer(SharedApplicationDataPlaneTestLayer)("visited projection", (it) => {
   it.effect("carries the visited watermark through the V2 shell projection", () =>
     Effect.gen(function* () {

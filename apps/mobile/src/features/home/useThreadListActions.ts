@@ -47,6 +47,15 @@ function environmentSupportsSnooze(environmentId: EnvironmentThreadShell["enviro
   );
 }
 
+function environmentSupportsSnoozeUntilDone(
+  environmentId: EnvironmentThreadShell["environmentId"],
+) {
+  return (
+    appAtomRegistry.get(environmentServerConfigsAtom).get(environmentId)?.environment.capabilities
+      .threadSnoozeUntilDone === true
+  );
+}
+
 function environmentSupportsPinning(environmentId: EnvironmentThreadShell["environmentId"]) {
   return (
     appAtomRegistry.get(environmentServerConfigsAtom).get(environmentId)?.environment.capabilities
@@ -258,7 +267,11 @@ export function useThreadListActions(
   readonly archiveThread: (thread: EnvironmentThreadShell) => void;
   readonly confirmDeleteThread: (thread: EnvironmentThreadShell) => void;
   readonly settleThread: (thread: EnvironmentThreadShell) => Promise<boolean>;
-  readonly snoozeThread: (thread: EnvironmentThreadShell, snoozedUntil: string) => Promise<boolean>;
+  readonly snoozeThread: (
+    thread: EnvironmentThreadShell,
+    snoozedUntil: string | null,
+    options?: { readonly untilDone?: boolean },
+  ) => Promise<boolean>;
   readonly unsnoozeThread: (thread: EnvironmentThreadShell) => Promise<boolean>;
   readonly unsettleThread: (thread: EnvironmentThreadShell) => Promise<boolean>;
   readonly pinThread: (thread: EnvironmentThreadShell) => Promise<boolean>;
@@ -310,7 +323,12 @@ export function useThreadListActions(
     [executeAction],
   );
   const snoozeThread = useCallback(
-    async (thread: EnvironmentThreadShell, snoozedUntil: string) => {
+    async (
+      thread: EnvironmentThreadShell,
+      snoozedUntil: string | null,
+      options?: { readonly untilDone?: boolean },
+    ) => {
+      const untilDone = options?.untilDone === true;
       const key = scopedThreadKey(thread.environmentId, thread.id);
       if (snoozeInFlightThreadKeys.current.has(key)) {
         return false;
@@ -321,6 +339,18 @@ export function useThreadListActions(
           Alert.alert(
             "Could not snooze thread",
             "This environment's server does not support snoozing yet. Update the server to use Snooze.",
+          );
+          return false;
+        }
+        // Fork: only "Until it's done" may omit the wake time on mobile, and
+        // older servers drop its flag and would park the thread for good.
+        if (
+          snoozedUntil === null &&
+          (!untilDone || !environmentSupportsSnoozeUntilDone(thread.environmentId))
+        ) {
+          Alert.alert(
+            "Could not snooze thread",
+            "This environment's server does not support snoozing until the work is done. Update the server to use it.",
           );
           return false;
         }
@@ -343,6 +373,7 @@ export function useThreadListActions(
               input: {
                 threadId: thread.id,
                 snoozedUntil,
+                ...(untilDone ? { untilDone } : {}),
               },
             }),
           (result) => result._tag === "Success",

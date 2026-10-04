@@ -5,9 +5,11 @@ import { describe, expect, it } from "vite-plus/test";
 
 import {
   canSnooze,
+  canSnoozeUntilDone,
   effectiveSnoozed,
   hasQueuedTurnStart,
   resolveSnoozePresets,
+  snoozeShelfLabel,
   snoozeWakeLabel,
   snoozeWakeSortMs,
   threadRaisedHandWhileSnoozed,
@@ -188,6 +190,79 @@ describe("indefinite snooze (fork)", () => {
     expect(snoozeWakeSortMs({ snoozedUntil: null })).toBeGreaterThan(
       snoozeWakeSortMs({ snoozedUntil: "2099-01-01T00:00:00.000Z" }),
     );
+  });
+});
+
+describe("snooze until done (fork)", () => {
+  const ENDED_AT = "2026-04-10T11:30:00.000Z";
+  const untilDone = (input: {
+    readonly status: string;
+    readonly runId?: string;
+    readonly completedAt?: string | null;
+    readonly tasks?: ReadonlyArray<{ readonly kind: string }>;
+    readonly pending?: "approval";
+  }): ThreadSnoozeShell => ({
+    ...makeShell({ snoozedAt: SNOOZED_AT, ...(input.pending ? { pending: input.pending } : {}) }),
+    snoozedUntilRunId: "run-1",
+    pendingBackgroundTasks: input.tasks ?? [],
+    latestRun: {
+      runId: input.runId ?? "run-1",
+      status: input.status,
+      requestedAt: "2026-04-10T11:00:00.000Z",
+      startedAt: null,
+      completedAt: input.completedAt ?? null,
+    },
+  });
+
+  it("holds while the awaited run is live, and through its subagents after it ends", () => {
+    for (const shell of [
+      untilDone({ status: "running" }),
+      untilDone({ status: "queued" }),
+      untilDone({ status: "completed", completedAt: ENDED_AT, tasks: [{ kind: "subagent" }] }),
+      untilDone({ status: "interrupted", completedAt: ENDED_AT, tasks: [{ kind: "subagent" }] }),
+    ]) {
+      expect(effectiveSnoozed(shell, { now: NOW })).toBe(true);
+      expect(threadWokeAt(shell, { now: NOW })).toBeNull();
+    }
+  });
+
+  it("wakes when the work ends, even with watch loops left running", () => {
+    for (const tasks of [[], [{ kind: "monitor" }, { kind: "command" }]]) {
+      const ended = untilDone({ status: "completed", completedAt: ENDED_AT, tasks });
+      expect(effectiveSnoozed(ended, { now: NOW })).toBe(false);
+      expect(threadWokeAt(ended, { now: NOW })).toBe(ENDED_AT);
+    }
+    const interrupted = untilDone({ status: "interrupted", completedAt: ENDED_AT });
+    expect(threadWokeAt(interrupted, { now: NOW })).toBe(ENDED_AT);
+  });
+
+  it("wakes when the work is replaced, fails, or needs the user", () => {
+    const replaced = untilDone({ status: "running", runId: "run-2" });
+    expect(effectiveSnoozed(replaced, { now: NOW })).toBe(false);
+    expect(threadWokeAt(replaced, { now: NOW })).toBe("2026-04-10T11:00:00.000Z");
+    const failed = untilDone({ status: "failed", tasks: [{ kind: "subagent" }] });
+    expect(effectiveSnoozed(failed, { now: NOW })).toBe(false);
+    const blocked = untilDone({ status: "running", pending: "approval" });
+    expect(effectiveSnoozed(blocked, { now: NOW })).toBe(false);
+  });
+
+  it("is offered only while a run is live or its subagents work", () => {
+    expect(canSnoozeUntilDone(untilDone({ status: "running" }))).toBe(true);
+    expect(
+      canSnoozeUntilDone(untilDone({ status: "completed", tasks: [{ kind: "subagent" }] })),
+    ).toBe(true);
+    expect(
+      canSnoozeUntilDone(untilDone({ status: "completed", tasks: [{ kind: "monitor" }] })),
+    ).toBe(false);
+    expect(canSnoozeUntilDone({ latestRun: null, latestTurn: null })).toBe(false);
+  });
+
+  it("leads the snoozed shelf and labels its rows", () => {
+    expect(snoozeWakeSortMs({ snoozedUntil: null, snoozedUntilRunId: "run-1" })).toBeLessThan(
+      snoozeWakeSortMs({ snoozedUntil: NOW }),
+    );
+    expect(snoozeShelfLabel({ snoozedUntilRunId: "run-1" })).toBe("until done");
+    expect(snoozeShelfLabel({ snoozedUntilRunId: null })).toBe("parked");
   });
 });
 

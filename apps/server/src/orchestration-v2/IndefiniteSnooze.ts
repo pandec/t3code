@@ -8,9 +8,12 @@ import * as DateTime from "effect/DateTime";
  * attention (see client-runtime's effectiveSnoozed).
  */
 export function isIndefinitelySnoozed(
-  thread: Pick<OrchestrationV2AppThread, "snoozedUntil" | "snoozedAt">,
+  thread: Pick<OrchestrationV2AppThread, "snoozedUntil" | "snoozedAt" | "snoozedUntilRunId">,
 ): boolean {
-  return thread.snoozedUntil == null && thread.snoozedAt != null;
+  // An awaited run makes it the "until it's done" snooze instead.
+  return (
+    thread.snoozedUntil == null && thread.snoozedAt != null && thread.snoozedUntilRunId == null
+  );
 }
 
 /**
