@@ -1009,16 +1009,26 @@ export const layer: Layer.Layer<
           ? ""
           : restartCancelledBackgroundWorkNote(restartCancelledWork);
       // Fork (PR #47): the previous turn was cut off by a restart, not a user stop.
-      const strandedNotice = priorTurnStrandedByRestart({
-        runs: projection.runs,
-        providerTurns: projection.providerTurns,
-        compactionMessageIds,
-        run,
-        runAttemptIds,
-        interruptRequests: projection.interruptRequests,
-      })
-        ? STRANDED_PRIOR_TURN_NOTICE
-        : "";
+      // A slash command must stay the start of the prompt, so it skips the notice.
+      const strandedNotice =
+        !userText.trimStart().startsWith("/") &&
+        (yield* priorTurnStrandedByRestart({
+          runs: projection.runs,
+          providerTurns: projection.providerTurns,
+          compactionMessageIds,
+          run,
+          runAttemptIds,
+          stopRequested: (runId) =>
+            projectionStore
+              .hasUnpairedRunInterruptRequest(
+                projection.thread.id,
+                idAllocator.derive.runSignalTurnItem({ runId, signal: "interrupt-request" }),
+                idAllocator.derive.runSignalTurnItem({ runId, signal: "interrupt-result" }),
+              )
+              .pipe(Effect.catchCause(() => Effect.succeed(false))),
+        }))
+          ? STRANDED_PRIOR_TURN_NOTICE
+          : "";
       const tokenCap = yield* handoffTokenCapConfig.pipe(
         Effect.orElseSucceed(() => DEFAULT_HANDOFF_TOKEN_CAP),
       );

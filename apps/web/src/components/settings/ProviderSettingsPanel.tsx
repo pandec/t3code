@@ -877,6 +877,15 @@ export function EnvironmentProviderSettings({
     rows.find((row) => row.instanceId === selectedInstanceId) ??
     (targetInstanceMissing ? null : (rows[0] ?? null));
 
+  // A pending envelope is only acknowledged by its card; once its row is gone
+  // (e.g. a reset hides a default-off slot), drop it so a later re-create of
+  // the same id cannot build on it.
+  useEffect(() => {
+    for (const id of pendingInstancesRef.current.keys()) {
+      if (!rows.some((row) => row.instanceId === id)) pendingInstancesRef.current.delete(id);
+    }
+  });
+
   // A rejected write never echoes, so its pending envelope would otherwise
   // make every later edit of the card resurrect it. A newer pending write
   // for the same instance stays.

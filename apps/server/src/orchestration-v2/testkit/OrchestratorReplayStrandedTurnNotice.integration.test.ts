@@ -28,6 +28,7 @@ const SCENARIO = "turn_interrupt_restart";
 const SESSION_ID = "fb591f8f-073f-4981-bf67-9b5bffb537d5";
 const FIRST_AFTER_RESTART = "Did that command finish?";
 const SECOND_AFTER_RESTART = "Thanks. Anything else?";
+const SLASH_COMMAND_AFTER_RESTART = "/deploy production";
 
 const frameType = (frame: unknown) =>
   typeof frame === "object" && frame !== null ? Reflect.get(frame, "type") : undefined;
@@ -117,91 +118,104 @@ const readStrandedTranscript = Effect.fn("readStrandedTranscript")(function* (
   });
 });
 
+/**
+ * Strands a turn with a server exit, then sends `firstAfterRestart` and
+ * `SECOND_AFTER_RESTART` after recovery; `firstPrompt` is what the provider
+ * must receive for the first.
+ */
+const runAfterStrandedTurn = (firstAfterRestart: string, firstPrompt: string) =>
+  Effect.scoped(
+    Effect.gen(function* () {
+      const transcript = yield* readStrandedTranscript([firstPrompt, SECOND_AFTER_RESTART]);
+      const workspace = yield* checkpointWorkspace(SCENARIO);
+      const fs = yield* FileSystem.FileSystem;
+      const path = yield* Path.Path;
+      const tempDir = yield* Effect.acquireRelease(
+        fs.makeTempDirectory({ prefix: "t3-orchestration-v2-stranded-turn-" }),
+        (directory) => fs.remove(directory, { recursive: true, force: true }).pipe(Effect.orDie),
+      );
+      const materialized = yield* materializeFixtureInput({
+        scenario: SCENARIO,
+        fixtureInput: {
+          steps: [
+            { type: "message", text: TURN_INTERRUPT_MID_TOOL_PROMPT },
+            // Only its waits are used: the server exits once the tool runs.
+            { type: "interrupt", targetRunIndex: 1, waitForTurnItemType: "command_execution" },
+            { type: "message", text: firstAfterRestart },
+            { type: "message", text: SECOND_AFTER_RESTART },
+          ],
+        },
+        driver: ProviderDriverKind.make("claudeAgent"),
+        modelSelection: CLAUDE_MODEL_SELECTION,
+      });
+      const toolRunning = materialized.steps.findIndex(
+        (step) => step.type === "await_run_turn_item",
+      );
+      const interruptDispatch = materialized.steps.findIndex(
+        (step) => step.type === "dispatch" && step.command.type === "run.interrupt",
+      );
+      const interruptSettled = materialized.steps.findIndex(
+        (step, index) => index > interruptDispatch && step.type === "await_thread_idle",
+      );
+      const phase1Steps = materialized.steps.slice(0, toolRunning + 1);
+      const phase2Steps = materialized.steps.slice(interruptSettled + 1);
+      const { harness, assertComplete } = makeClaudeRestartReplayHarness(transcript);
+      const databaseLayer = makeSqlitePersistenceLive(path.join(tempDir, "state.sqlite")).pipe(
+        Layer.provide(NodeServices.layer),
+      );
+      const scenario = (name: string, steps: typeof materialized.steps) => ({
+        name: `${SCENARIO}:${name}`,
+        transcript,
+        commands: steps.flatMap((step) => (step.type === "dispatch" ? [step.command] : [])),
+        steps,
+        projectionThreadIds: materialized.projectionThreadIds,
+        runtimePolicyOverride: { cwd: workspace },
+      });
+
+      yield* Effect.scoped(
+        runOrchestratorV2ProviderReplayScenario(scenario("before-restart", phase1Steps), harness, {
+          databaseLayer,
+        }),
+      );
+      const after = yield* Effect.scoped(
+        runOrchestratorV2ProviderReplayScenario(scenario("after-restart", phase2Steps), harness, {
+          databaseLayer,
+          recoverOnStartup: true,
+          continueThreadsAfterServerUpdate: false,
+        }),
+      );
+      // The replay runner rejects any prompt frame that differs from the transcript.
+      yield* assertComplete;
+      const projection = projectionFor(after, SCENARIO);
+      assert.deepEqual(
+        projection.runs.map((run) => [run.status, run.strandedByRestart]),
+        [
+          ["cancelled", true],
+          ["completed", undefined],
+          ["completed", undefined],
+        ],
+      );
+      // The notice reaches the provider only; the timeline keeps what the user sent.
+      assert.deepEqual(
+        projection.turnItems.flatMap((item) => (item.type === "user_message" ? [item.text] : [])),
+        [TURN_INTERRUPT_MID_TOOL_PROMPT, firstAfterRestart, SECOND_AFTER_RESTART],
+      );
+    }).pipe(
+      provideDeterministicTestRuntime,
+      Effect.provide(Layer.merge(IdAllocator.layer, NodeServices.layer)),
+    ),
+  );
+
 describe("turn stranded by a restart", () => {
   it.effect("tells the next provider turn once that the restart cut it off", () =>
-    Effect.scoped(
-      Effect.gen(function* () {
-        const transcript = yield* readStrandedTranscript([
-          `${STRANDED_PRIOR_TURN_NOTICE}\n\nUser message:\n${FIRST_AFTER_RESTART}`,
-          SECOND_AFTER_RESTART,
-        ]);
-        const workspace = yield* checkpointWorkspace(SCENARIO);
-        const fs = yield* FileSystem.FileSystem;
-        const path = yield* Path.Path;
-        const tempDir = yield* Effect.acquireRelease(
-          fs.makeTempDirectory({ prefix: "t3-orchestration-v2-stranded-turn-" }),
-          (directory) => fs.remove(directory, { recursive: true, force: true }).pipe(Effect.orDie),
-        );
-        const materialized = yield* materializeFixtureInput({
-          scenario: SCENARIO,
-          fixtureInput: {
-            steps: [
-              { type: "message", text: TURN_INTERRUPT_MID_TOOL_PROMPT },
-              // Only its waits are used: the server exits once the tool runs.
-              { type: "interrupt", targetRunIndex: 1, waitForTurnItemType: "command_execution" },
-              { type: "message", text: FIRST_AFTER_RESTART },
-              { type: "message", text: SECOND_AFTER_RESTART },
-            ],
-          },
-          driver: ProviderDriverKind.make("claudeAgent"),
-          modelSelection: CLAUDE_MODEL_SELECTION,
-        });
-        const toolRunning = materialized.steps.findIndex(
-          (step) => step.type === "await_run_turn_item",
-        );
-        const interruptDispatch = materialized.steps.findIndex(
-          (step) => step.type === "dispatch" && step.command.type === "run.interrupt",
-        );
-        const interruptSettled = materialized.steps.findIndex(
-          (step, index) => index > interruptDispatch && step.type === "await_thread_idle",
-        );
-        const phase1Steps = materialized.steps.slice(0, toolRunning + 1);
-        const phase2Steps = materialized.steps.slice(interruptSettled + 1);
-        const { harness, assertComplete } = makeClaudeRestartReplayHarness(transcript);
-        const databaseLayer = makeSqlitePersistenceLive(path.join(tempDir, "state.sqlite")).pipe(
-          Layer.provide(NodeServices.layer),
-        );
-        const scenario = (name: string, steps: typeof materialized.steps) => ({
-          name: `${SCENARIO}:${name}`,
-          transcript,
-          commands: steps.flatMap((step) => (step.type === "dispatch" ? [step.command] : [])),
-          steps,
-          projectionThreadIds: materialized.projectionThreadIds,
-          runtimePolicyOverride: { cwd: workspace },
-        });
-
-        yield* Effect.scoped(
-          runOrchestratorV2ProviderReplayScenario(
-            scenario("before-restart", phase1Steps),
-            harness,
-            {
-              databaseLayer,
-            },
-          ),
-        );
-        const after = yield* Effect.scoped(
-          runOrchestratorV2ProviderReplayScenario(scenario("after-restart", phase2Steps), harness, {
-            databaseLayer,
-            recoverOnStartup: true,
-            continueThreadsAfterServerUpdate: false,
-          }),
-        );
-        // The replay runner rejects any prompt frame that differs from the transcript.
-        yield* assertComplete;
-        const projection = projectionFor(after, SCENARIO);
-        assert.deepEqual(
-          projection.runs.map((run) => run.status),
-          ["cancelled", "completed", "completed"],
-        );
-        // The notice reaches the provider only; the timeline keeps what the user sent.
-        assert.deepEqual(
-          projection.turnItems.flatMap((item) => (item.type === "user_message" ? [item.text] : [])),
-          [TURN_INTERRUPT_MID_TOOL_PROMPT, FIRST_AFTER_RESTART, SECOND_AFTER_RESTART],
-        );
-      }).pipe(
-        provideDeterministicTestRuntime,
-        Effect.provide(Layer.merge(IdAllocator.layer, NodeServices.layer)),
-      ),
+    runAfterStrandedTurn(
+      FIRST_AFTER_RESTART,
+      `${STRANDED_PRIOR_TURN_NOTICE}\n\nUser message:\n${FIRST_AFTER_RESTART}`,
     ),
+  );
+
+  it.effect("keeps a slash command as the whole prompt", () =>
+    // A notice ahead of it would turn the command into prose; it is dropped, not deferred.
+    runAfterStrandedTurn(SLASH_COMMAND_AFTER_RESTART, SLASH_COMMAND_AFTER_RESTART),
   );
 });

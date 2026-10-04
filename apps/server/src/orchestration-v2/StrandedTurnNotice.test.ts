@@ -158,7 +158,7 @@ const stranded = (
   options: {
     compaction?: ReadonlyArray<number>;
     attemptIds?: ReadonlyArray<string>;
-    interruptRequests?: ReadonlyArray<{ runId: RunId; providerTurnId: ProviderTurnId | null }>;
+    stopRequested?: boolean;
   } = {},
 ) =>
   priorTurnStrandedByRestart({
@@ -169,18 +169,23 @@ const stranded = (
     ),
     run: next,
     runAttemptIds: options.attemptIds ?? [next.activeAttemptId!],
-    interruptRequests: options.interruptRequests ?? [],
+    stopRequested: () => Effect.succeed(options.stopRequested ?? false),
   });
+
+/** A run recovery cancelled mid-turn, and its cancelled provider turn. */
+const strandedRuns = [run(1, "cancelled", { strandedByRestart: true })];
+const strandedTurns = [providerTurn(1, "cancelled")];
 
 it.effect("tells the turn after a restart cut a live turn, once", () =>
   Effect.gen(function* () {
     const recovered = yield* recover(liveProjection("running"));
     assert.equal(recovered.runs[0]?.status, "cancelled");
     assert.equal(recovered.providerTurns[0]?.status, "cancelled");
-    assert.isTrue(stranded(recovered.runs, recovered.providerTurns, run(2, "starting")));
+    assert.equal(recovered.runs[0]?.strandedByRestart, true);
+    assert.isTrue(yield* stranded(recovered.runs, recovered.providerTurns, run(2, "starting")));
     // Once that turn reached the provider, the stranded turn is no longer the previous one.
     assert.isFalse(
-      stranded(
+      yield* stranded(
         [...recovered.runs, run(2, "completed")],
         [...recovered.providerTurns, providerTurn(2, "completed")],
         run(3, "starting"),
@@ -195,72 +200,75 @@ it.effect("does not tell a turn whose predecessor had settled before the restart
     const recovered = yield* recover(liveProjection("waiting"));
     assert.equal(recovered.runs[0]?.status, "cancelled");
     assert.equal(recovered.providerTurns[0]?.status, "completed");
-    assert.isFalse(stranded(recovered.runs, recovered.providerTurns, run(2, "starting")));
+    assert.isFalse(yield* stranded(recovered.runs, recovered.providerTurns, run(2, "starting")));
   }),
 );
 
-it("does not tell a turn after the user stopped the previous one", () => {
-  assert.isFalse(
-    stranded([run(1, "interrupted")], [providerTurn(1, "interrupted")], run(2, "starting")),
-  );
-});
+it.effect("does not tell a turn after the user stopped the previous one", () =>
+  Effect.gen(function* () {
+    assert.isFalse(
+      yield* stranded(
+        [run(1, "interrupted")],
+        [providerTurn(1, "interrupted")],
+        run(2, "starting"),
+      ),
+    );
+  }),
+);
 
-it("does not tell a turn whose predecessor's Stop the restart overtook", () => {
-  // Stop was committed, then the server exited before the turn settled; recovery cancels it.
-  const strandedRuns = [run(1, "cancelled")];
-  const strandedTurns = [providerTurn(1, "cancelled")];
-  const stop = (providerTurnId: ProviderTurnId | null) => ({
-    interruptRequests: [{ runId: RunId.make("run:1"), providerTurnId }],
-  });
-  assert.isFalse(stranded(strandedRuns, strandedTurns, run(2, "starting"), stop(null)));
-  assert.isFalse(
-    stranded(strandedRuns, strandedTurns, run(2, "starting"), stop(ProviderTurnId.make("turn:1"))),
-  );
-  // A steer's request names the turn it replaced, not the one the restart cut.
-  assert.isTrue(
-    stranded(
-      strandedRuns,
-      strandedTurns,
-      run(2, "starting"),
-      stop(ProviderTurnId.make("turn:1-steered")),
-    ),
-  );
-});
+it.effect("does not tell a turn whose predecessor's Stop the restart overtook", () =>
+  Effect.gen(function* () {
+    // Stop was committed, then the server exited before the turn settled; recovery cancels it.
+    assert.isFalse(
+      yield* stranded(strandedRuns, strandedTurns, run(2, "starting"), { stopRequested: true }),
+    );
+  }),
+);
 
-it("skips compactions and steer replacements, and stays on its provider thread", () => {
-  const strandedRuns = [run(1, "cancelled")];
-  const strandedTurns = [providerTurn(1, "cancelled")];
-  // A compaction neither carries the notice nor counts as delivering it.
-  assert.isFalse(stranded(strandedRuns, strandedTurns, run(2, "starting"), { compaction: [2] }));
-  assert.isTrue(
-    stranded(
-      [...strandedRuns, run(2, "completed")],
-      [...strandedTurns, providerTurn(2, "completed")],
-      run(3, "starting"),
-      { compaction: [2] },
-    ),
-  );
-  // An earlier attempt of the same run already delivered it.
-  assert.isFalse(
-    stranded(
-      strandedRuns,
-      [
-        ...strandedTurns,
-        {
-          ...providerTurn(2, "interrupted"),
-          runAttemptId: RunAttemptId.make("attempt:2-first"),
-        },
-      ],
-      run(2, "starting"),
-      { attemptIds: ["attempt:2-first", "attempt:2"] },
-    ),
-  );
-  // After a provider switch the new provider thread never saw the stranded turn.
-  assert.isFalse(
-    stranded(
-      strandedRuns,
-      strandedTurns,
-      run(2, "starting", { providerThreadId: ProviderThreadId.make("provider-thread:other") }),
-    ),
-  );
-});
+it.effect("does not tell a turn whose predecessor the provider cancelled without a restart", () =>
+  Effect.gen(function* () {
+    // Claude classifies a native "Request cancelled" error result as cancelled.
+    assert.isFalse(yield* stranded([run(1, "cancelled")], strandedTurns, run(2, "starting")));
+    assert.isTrue(yield* stranded(strandedRuns, strandedTurns, run(2, "starting")));
+  }),
+);
+
+it.effect("skips compactions and steer replacements, and stays on its provider thread", () =>
+  Effect.gen(function* () {
+    // A compaction neither carries the notice nor counts as delivering it.
+    assert.isFalse(
+      yield* stranded(strandedRuns, strandedTurns, run(2, "starting"), { compaction: [2] }),
+    );
+    assert.isTrue(
+      yield* stranded(
+        [...strandedRuns, run(2, "completed")],
+        [...strandedTurns, providerTurn(2, "completed")],
+        run(3, "starting"),
+        { compaction: [2] },
+      ),
+    );
+    // An earlier attempt of the same run already delivered it.
+    assert.isFalse(
+      yield* stranded(
+        strandedRuns,
+        [
+          ...strandedTurns,
+          {
+            ...providerTurn(2, "interrupted"),
+            runAttemptId: RunAttemptId.make("attempt:2-first"),
+          },
+        ],
+        run(2, "starting"),
+        { attemptIds: ["attempt:2-first", "attempt:2"] },
+      ),
+    );
+    // After a provider switch the new provider thread never saw the stranded turn.
+    assert.isFalse(
+      yield* stranded(
+        strandedRuns,
+        strandedTurns,
+        run(2, "starting", { providerThreadId: ProviderThreadId.make("provider-thread:other") }),
+      ),
+    );
+  }),
+);

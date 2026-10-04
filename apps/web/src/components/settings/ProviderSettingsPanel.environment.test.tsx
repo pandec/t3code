@@ -687,6 +687,44 @@ describe("EnvironmentProviderSettings routing", () => {
     });
   });
 
+  it("drops a reset's pending envelope once its row is gone", async () => {
+    const grokId = ProviderInstanceId.make("grok");
+    const grok = ProviderDriverKind.make("grok");
+    settingsState.value = {
+      ...DEFAULT_UNIFIED_SETTINGS,
+      providerInstances: { [grokId]: { driver: grok, enabled: true, displayName: "Old" } },
+    };
+    const resetButton = visitElements(
+      findCard(renderPanel({ targetInstanceId: grokId }), grokId, "editor")?.props.headerAction,
+      (element) => typeof element.props.onClick === "function",
+    );
+    (resetButton?.props.onClick as (() => void) | undefined)?.();
+    await flushPromises();
+
+    // The reset echoes: the default-off slot is hidden, so no card acknowledges it.
+    settingsState.value = DEFAULT_UNIFIED_SETTINGS;
+    settingsSearchState.effects = [];
+    expect(findCard(renderPanel(), grokId, "list")).toBeNull();
+    for (const effect of settingsSearchState.effects) effect();
+
+    // Re-added through Add provider, then edited.
+    settingsState.value = {
+      ...DEFAULT_UNIFIED_SETTINGS,
+      providerInstances: {
+        [grokId]: { driver: grok, enabled: true, config: { binaryPath: "/opt/grok" } },
+      },
+    };
+    commitDisplayName(findCard(renderPanel(), grokId, "editor")!, grokId, "Grok");
+    await flushPromises();
+
+    expect(lastUpsertedInstance()).toEqual({
+      driver: grok,
+      enabled: true,
+      displayName: "Grok",
+      config: { binaryPath: "/opt/grok" },
+    });
+  });
+
   it("keeps Advanced visible when search targets the provider health interval", () => {
     let panel = renderPanel();
     expect(visitElements(panel, (element) => element.props.title === "Advanced")).not.toBeNull();
