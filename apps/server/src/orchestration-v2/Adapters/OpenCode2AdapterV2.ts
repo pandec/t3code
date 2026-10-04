@@ -53,6 +53,7 @@ import {
   type ProviderInstanceId,
   type RunId,
   type RuntimeRequestId,
+  type ThreadId,
 } from "@t3tools/contracts";
 import type * as Cause from "effect/Cause";
 import * as DateTime from "effect/DateTime";
@@ -75,6 +76,7 @@ import {
   type OpenCodeRuntimeError,
 } from "../../provider/opencodeRuntime.ts";
 import * as McpProviderSession from "../../mcp/McpProviderSession.ts";
+import { providerThreadEnvironment } from "../../provider/ProviderThreadEnvironment.ts";
 import { buildRuntimeInstructions } from "../../provider/RuntimeInstructions.ts";
 import { t3OrchestrationSystemPrompt } from "../../provider/T3OrchestrationInstructions.ts";
 import { SKILL_MENTION_PATTERN } from "@t3tools/shared/composerInlineTokens";
@@ -854,6 +856,29 @@ export const make = Effect.fn("OpenCode2Adapter.make")(function* (instanceId: Pr
     const contextWindows = new Map<string, Map<string, number>>();
     /** A thread without a worktree runs where T3 does, as its session is created. */
     const directoryOf = (cwd: string | null | undefined) => cwd ?? serverConfig.cwd;
+    // Fork (DECISIONS 5.9): commands OpenCode 2 runs know their thread and T3
+    // install. The server is shared across threads, so this is per session; a
+    // PUT, so re-applying it on resume also follows a worktree move. The
+    // session environment replaces the shell's whole environment, so it carries
+    // the spawned server's own; an external server's is unknown, and replacing
+    // it would strip its shells, so external sessions get none.
+    const applyThreadEnvironment = (sessionID: string, threadId: ThreadId, cwd: string) => {
+      const base = connection.shellEnvironment;
+      if (base === undefined) return Effect.void;
+      const variables: Record<string, string> = {};
+      for (const [name, value] of Object.entries(
+        providerThreadEnvironment({ threadId, cwd }, base, serverConfig),
+      )) {
+        if (value !== undefined) variables[name] = value;
+      }
+      return client.session
+        .environment({ sessionID: Session.ID.make(sessionID), variables })
+        .pipe(
+          Effect.catchCause((cause) =>
+            Effect.logWarning("opencode2.session.environment-failed", { sessionID, cause }),
+          ),
+        );
+    };
     const windowOf = (cwd: string | null | undefined, model: string) =>
       contextWindows.get(directoryOf(cwd))?.get(model);
     const now = yield* DateTime.now;
@@ -3595,6 +3620,7 @@ export const make = Effect.fn("OpenCode2Adapter.make")(function* (instanceId: Pr
             model,
             permissions,
           });
+          yield* applyThreadEnvironment(created.id, threadInput.threadId, directory);
           const createdAt = yield* DateTime.now;
           const providerThread: OrchestrationV2ProviderThread = {
             ...(threadInput.existingProviderThread ?? {
@@ -3663,6 +3689,10 @@ export const make = Effect.fn("OpenCode2Adapter.make")(function* (instanceId: Pr
               sessionID: Session.ID.make(sessionId),
               directory: AbsolutePath.make(cwd),
             });
+          }
+          const appThreadId = threadInput.threadId ?? threadInput.providerThread.appThreadId;
+          if (appThreadId !== null) {
+            yield* applyThreadEnvironment(sessionId, appThreadId, cwd ?? native.location.directory);
           }
           return state.providerThread;
         }).pipe(
@@ -4222,6 +4252,11 @@ export const make = Effect.fn("OpenCode2Adapter.make")(function* (instanceId: Pr
               directory: AbsolutePath.make(cwd),
             });
           }
+          yield* applyThreadEnvironment(
+            forked.id,
+            forkInput.targetThreadId,
+            cwd ?? forked.location.directory,
+          );
           return state.providerThread;
         }).pipe(
           exclusive(forkInput.sourceProviderThread),

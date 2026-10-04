@@ -1223,6 +1223,22 @@ export const layer: Layer.Layer<
         !noteContinuation
           ? session
           : makeDeliverySession(session, startWithHandoffs);
+      // fork: number turns per native conversation, not per provider thread, so
+      // a conversation adopted from a sibling account (queued account switch)
+      // is seen as already persisted and resumed rather than created again.
+      const conversationNativeId = runningProviderThread.nativeThreadRef?.nativeId;
+      const conversationProviderThreadIds = new Set([
+        providerThread.id,
+        ...(conversationNativeId === undefined
+          ? []
+          : projection.providerThreads
+              .filter(
+                (candidate) =>
+                  candidate.driver === runningProviderThread.driver &&
+                  candidate.nativeThreadRef?.nativeId === conversationNativeId,
+              )
+              .map((candidate) => candidate.id)),
+      ]);
       yield* runExecution.startRootRun({
         commandId: CommandId.make(`command:effect:provider-turn.start:${run.id}`),
         appThread: projection.thread,
@@ -1245,7 +1261,7 @@ export const layer: Layer.Layer<
           Math.max(
             0,
             ...projection.providerTurns
-              .filter((turn) => turn.providerThreadId === providerThread.id)
+              .filter((turn) => conversationProviderThreadIds.has(turn.providerThreadId))
               .map((turn) => turn.ordinal),
           ) + 1,
         shouldStartProviderTurn: runControls.shouldStartProviderTurn,

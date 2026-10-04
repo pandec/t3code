@@ -123,9 +123,9 @@ computer.
 
 Provider CLIs must be on the server's `PATH`. If T3 Code cannot find one, set its
 **Binary path** in provider settings, especially when using a version manager.
-Paths written as `~` or `~/…` expand against the server user's home directory.
-Paths using `~user` are not supported. Cursor's executable is `cursor-agent`,
-although its login command is `agent login`. Codex connected through ChatGPT and
+For Claude, Codex, Grok Build, OpenCode and Antigravity, paths written as `~` or
+`~/…` expand against the server user's home directory; `~user` is not supported.
+Cursor's executable is `cursor-agent`, although its login command is `agent login`. Codex connected through ChatGPT and
 Antigravity can use their managed runtimes without a `PATH` entry.
 
 T3 Code warns when a provider version has known compatibility problems with your

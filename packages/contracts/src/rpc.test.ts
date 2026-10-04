@@ -66,5 +66,30 @@ describe("WebSocket RPC contracts", () => {
         }),
       ),
     ).toBe(true);
+    // Fork: only the server may vouch that a provider session moved itself.
+    expect(
+      Exit.isFailure(
+        decode({
+          type: "thread.workspace.follow-session",
+          commandId: "forged-follow",
+          threadId: "thread-1",
+          worktreePath: "/repo-b",
+          branch: null,
+          expectedWorktreePath: "/repo-a",
+          providerSessionId: "provider-session-1",
+          providerSessionCreatedAt: "2026-10-04T10:00:00.000Z",
+        }),
+      ),
+    ).toBe(true);
+    // Nor smuggle the session through a client metadata update.
+    const metadataUpdate = decode({
+      type: "thread.metadata.update",
+      commandId: "metadata-1",
+      threadId: "thread-1",
+      worktreePath: "/repo-b",
+      providerSessionId: "provider-session-1",
+    });
+    if (!Exit.isSuccess(metadataUpdate)) throw new Error("metadata update was rejected");
+    expect("providerSessionId" in metadataUpdate.value).toBe(false);
   });
 });

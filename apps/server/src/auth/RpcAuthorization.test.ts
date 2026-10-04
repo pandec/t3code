@@ -40,6 +40,17 @@ describe("RPC authorization scopes", () => {
     );
   });
 
+  it("requires operate scope for gateway usage and thread-account probes", () => {
+    // Both reach the gateway: a read-only token must not spend ban strikes or
+    // create a gateway-side session binding.
+    expect(requiredScopeForRpcMethod(WS_METHODS.providerUsageRefresh)).toBe(
+      AuthOrchestrationOperateScope,
+    );
+    expect(requiredScopeForRpcMethod(WS_METHODS.providerUsageThreadAccount)).toBe(
+      AuthOrchestrationOperateScope,
+    );
+  });
+
   it("reads Linear issues under read scope and writes under operate scope", () => {
     for (const method of [
       WS_METHODS.linearStatus,

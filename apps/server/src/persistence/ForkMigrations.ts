@@ -11,6 +11,7 @@ import * as Effect from "effect/Effect";
 import * as Migrator from "effect/unstable/sql/Migrator";
 
 import ForkMigration0001 from "./ForkMigrations/001_ForkThreadGroupsAndRepositoryIdentity.ts";
+import ForkMigration0030 from "./ForkMigrations/030_ForkNativeContinuation.ts";
 import ForkMigration0060 from "./ForkMigrations/060_ForkStrictResumeProviderThreads.ts";
 import ForkMigration0070 from "./ForkMigrations/070_ForkProjectRepositoryIdentityWorkspaceRoot.ts";
 import ForkMigration0080 from "./ForkMigrations/080_ForkMessageArtifacts.ts";
@@ -18,6 +19,7 @@ import ForkMigration0081 from "./ForkMigrations/081_ForkMessageSpeech.ts";
 
 export const forkMigrationEntries = [
   [1, "ForkThreadGroupsAndRepositoryIdentity", ForkMigration0001],
+  [30, "ForkNativeContinuation", ForkMigration0030],
   [60, "ForkStrictResumeProviderThreads", ForkMigration0060],
   [70, "ForkProjectRepositoryIdentityWorkspaceRoot", ForkMigration0070],
   [80, "ForkMessageArtifacts", ForkMigration0080],

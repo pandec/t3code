@@ -11,6 +11,7 @@ import * as NodeServices from "@effect/platform-node/NodeServices";
 import {
   ChatAttachmentId,
   ChatFileAttachment,
+  CheckpointId,
   ChatImageAttachment,
   ClaudeSettings,
   EnvironmentId,
@@ -43,6 +44,7 @@ import * as Queue from "effect/Queue";
 import * as Schema from "effect/Schema";
 import * as Scope from "effect/Scope";
 import * as Stream from "effect/Stream";
+import * as TestClock from "effect/testing/TestClock";
 import { Tool } from "effect/unstable/ai";
 import { formatClaudeResumeCompactionQuestion } from "@t3tools/shared/claudeCompaction";
 
@@ -62,6 +64,7 @@ import {
   type ProviderAdapterV2TurnInput,
 } from "../ProviderAdapter.ts";
 import type { ProviderContinuationRequest } from "../ProviderContinuationRequests.ts";
+import type { ProviderSessionCwdObservation } from "../ProviderSessionCwdObservations.ts";
 import { makeProviderFailure } from "../ProviderFailure.ts";
 import * as ClaudeAdapterV2 from "./ClaudeAdapterV2.ts";
 import * as IdAllocator from "../IdAllocator.ts";
@@ -207,6 +210,41 @@ describe("ClaudeAdapterV2 runtime query policy", () => {
     assert.equal(options.permissionMode, expected);
     assert.isUndefined(options.extraArgs?.["permission-mode"]);
     assert.isUndefined(options.extraArgs?.["dangerously-skip-permissions"]);
+  });
+
+  it("routes gateway custom-model effort through slug(effort), never native effort", () => {
+    const settings = {
+      ...DEFAULT_CLAUDE_SETTINGS,
+      customModels: ["gpt-5.6-sol", { slug: "glm-5", name: "GLM 5" }, "kimi(fast)"],
+      launchArgs: "--model claude-opus-4-1 --effort max --thinking-display omitted",
+    };
+    const queryOptions = (model: string, effort?: string) =>
+      ClaudeAdapterV2.makeClaudeQueryOptions({
+        modelSelection: {
+          ...CLAUDE_TEST_MODEL_SELECTION,
+          model,
+          ...(effort === undefined ? {} : { options: [{ id: "effort", value: effort }] }),
+        },
+        nativeThreadId: "gateway-effort-thread",
+        resume: false,
+        cwd: "/workspace",
+        settings,
+      });
+
+    const selected = queryOptions("gpt-5.6-sol", "xhigh");
+    assert.equal(selected.model, "gpt-5.6-sol(xhigh)");
+    assert.isUndefined(selected.effort);
+    assert.isUndefined(selected.extraArgs?.model);
+    assert.isUndefined(selected.extraArgs?.effort);
+    assert.equal(selected.extraArgs?.["thinking-display"], "omitted");
+
+    assert.equal(queryOptions("glm-5").model, "glm-5(high)");
+    assert.equal(queryOptions("kimi(fast)", "low").model, "kimi(fast)");
+
+    // Built-in models keep native effort and the configured launch flags.
+    const builtIn = queryOptions(CLAUDE_TEST_MODEL_SELECTION.model);
+    assert.equal(builtIn.extraArgs?.effort, "max");
+    assert.equal(builtIn.extraArgs?.model, "claude-opus-4-1");
   });
 
   it("passes automatic compaction and resume-dialog controls to the SDK", () => {
@@ -1165,6 +1203,79 @@ describe("ClaudeAdapterV2 executable path", () => {
       }),
     ).pipe(Effect.provide(Layer.merge(IdAllocator.layer, NodeServices.layer))),
   );
+
+  it.effect("runs a shadow-account instance with its shadow dir as CLAUDE_CONFIG_DIR", () =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        const path = yield* Path.Path;
+        const configDirs: Array<string | undefined> = [];
+        const adapter = yield* ClaudeAdapterV2.createClaudeAdapterV2(
+          {
+            instanceId: ClaudeAdapterV2.CLAUDE_DEFAULT_INSTANCE_ID,
+            displayName: undefined,
+            // The shadow dir also wins over an inherited instance variable.
+            environment: [
+              { name: "CLAUDE_CONFIG_DIR", value: "/inherited/claude", sensitive: false },
+            ],
+            enabled: true,
+            config: {
+              ...DEFAULT_CLAUDE_SETTINGS,
+              homePath: "/shared/claude",
+              shadowHomePath: "~/.claude-t3/personal",
+            },
+          },
+          {},
+        ).pipe(
+          Effect.provide(
+            ServerConfig.layerTest(process.cwd(), {
+              prefix: "t3-claude-shadow-home-",
+            }),
+          ),
+          Effect.provideService(ClaudeAdapterV2.ClaudeAgentSdkQueryRunner, {
+            allocateSessionId: Effect.succeed("native-thread-claude-shadow-home"),
+            open: (input) =>
+              Effect.sync(() => {
+                configDirs.push(input.options.env?.CLAUDE_CONFIG_DIR);
+                return {
+                  messages: Stream.never,
+                  offer: () => Effect.void,
+                  setModel: () => Effect.void,
+                  interrupt: Effect.void,
+                  close: Effect.void,
+                };
+              }),
+            forkSession: () => Effect.die("unused"),
+            subagentLaunchToolUseId: () => Effect.succeed(null),
+            assertComplete: Effect.void,
+          }),
+        );
+        const threadId = ThreadId.make("thread-claude-shadow-home");
+        const runtime = yield* adapter.openSession({
+          threadId,
+          providerSessionId: ProviderSessionId.make("provider-session-claude-shadow-home"),
+          modelSelection: CLAUDE_TEST_MODEL_SELECTION,
+          runtimePolicy: CLAUDE_TEST_RUNTIME_POLICY,
+        });
+        const providerThread = yield* runtime.ensureThread({
+          threadId,
+          modelSelection: CLAUDE_TEST_MODEL_SELECTION,
+          runtimePolicy: CLAUDE_TEST_RUNTIME_POLICY,
+        });
+        yield* runtime.startTurn(
+          makeClaudeTestTurnInput({
+            threadId,
+            providerThread,
+            now: yield* DateTime.now,
+            attemptId: RunAttemptId.make("attempt-claude-shadow-home"),
+            text: "hello",
+            attachments: [],
+          }),
+        );
+
+        assert.deepEqual(configDirs, [path.join(NodeOS.homedir(), ".claude-t3", "personal")]);
+      }),
+    ).pipe(Effect.provide(Layer.merge(IdAllocator.layer, NodeServices.layer))),
+  );
 });
 
 describe("ClaudeAdapterV2 resume compaction", () => {
@@ -2045,6 +2156,8 @@ describe("ClaudeAdapterV2 background wake turns", () => {
     readonly close?: (sdkMessages: Queue.Queue<SDKMessage>) => Effect.Effect<void>;
     readonly interrupt?: Effect.Effect<void>;
     readonly environment?: NodeJS.ProcessEnv;
+    readonly nativeSessionId?: string;
+    readonly t3Paths?: { readonly baseDir: string; readonly stateDir: string };
   }) =>
     Effect.gen(function* () {
       const fileSystem = yield* FileSystem.FileSystem;
@@ -2062,6 +2175,7 @@ describe("ClaudeAdapterV2 background wake turns", () => {
       });
       const offeredMessages: Array<SDKUserMessage> = [];
       const continuationRequests: Array<ProviderContinuationRequest> = [];
+      const sessionCwdObservations: Array<ProviderSessionCwdObservation> = [];
       const terminalReceipts =
         yield* Queue.unbounded<Extract<ProviderAdapterV2Event, { type: "turn.terminal" }>>();
       const systemNoticeReceipts =
@@ -2081,8 +2195,15 @@ describe("ClaudeAdapterV2 background wake turns", () => {
               continuationRequests.push(request);
             }),
         },
+        sessionCwdObservations: {
+          offer: (observation) =>
+            Effect.sync(() => {
+              sessionCwdObservations.push(observation);
+            }),
+        },
+        ...(options?.t3Paths === undefined ? {} : { t3Paths: options.t3Paths }),
         queryRunner: {
-          allocateSessionId: Effect.succeed(WAKE_NATIVE_SESSION),
+          allocateSessionId: Effect.succeed(options?.nativeSessionId ?? WAKE_NATIVE_SESSION),
           open: (input) =>
             Effect.sync(() => {
               openedOptions = input.options;
@@ -2162,6 +2283,7 @@ describe("ClaudeAdapterV2 background wake turns", () => {
         offerAndWait,
         offeredMessages,
         continuationRequests,
+        sessionCwdObservations,
         events,
         terminalReceipts,
         systemNoticeReceipts,
@@ -5431,6 +5553,8 @@ describe("ClaudeAdapterV2 background wake turns", () => {
         );
         let debrisYields = 0;
         yield* awaitUntil(() => debrisYields++ >= 50, "zero-turn debris consumed");
+        // Debris does not settle the turn, so Stop closes after its grace.
+        yield* TestClock.adjust("3 seconds");
         yield* Deferred.succeed(closeGate, undefined);
         yield* awaitUntil(() => harness.terminalEvents().length === 1, "interrupted terminal");
         assert.lengthOf(harness.terminalEvents(), 1);
@@ -5439,6 +5563,377 @@ describe("ClaudeAdapterV2 background wake turns", () => {
           harness.events.some(
             (event) => event.type === "message.updated" && event.message.text === staleText,
           ),
+        );
+      }).pipe(Effect.provide(Layer.merge(IdAllocator.layer, NodeServices.layer))),
+    ),
+  );
+
+  // Fork (DECISIONS 5.6): Stop lets Claude end the interrupted turn before it
+  // closes the CLI, so the prompt reaches the transcript. Closing first can
+  // leave a first turn Claude never saved, and resuming it fails with "No
+  // conversation found".
+  it.effect("Stop closes the query only after the interrupted turn settles", () =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        const interruptStarted = yield* Deferred.make<void>();
+        let closes = 0;
+        const harness = yield* makeWakeHarnessWithOptions({
+          interrupt: Deferred.succeed(interruptStarted, undefined),
+          close: (sdkMessages) =>
+            Effect.sync(() => {
+              closes++;
+            }).pipe(Effect.andThen(Queue.shutdown(sdkMessages))),
+        });
+        const idAllocator = yield* IdAllocator.IdAllocatorV2;
+        const now = yield* DateTime.now;
+        const attemptId = RunAttemptId.make("attempt-claude-interrupt-settles-before-close");
+        const providerTurnId = idAllocator.derive.providerTurn({
+          driver: ClaudeAdapterV2.CLAUDE_PROVIDER,
+          nativeTurnId: `turn:${attemptId}`,
+        });
+
+        yield* harness.runtime.startTurn(
+          makeClaudeTestTurnInput({
+            threadId: harness.threadId,
+            providerThread: harness.providerThread,
+            now,
+            attemptId,
+            text: "Stop me early.",
+            attachments: [],
+          }),
+        );
+        const stop = yield* harness.runtime
+          .interruptTurn({ providerThread: harness.providerThread, providerTurnId })
+          .pipe(Effect.forkScoped);
+        yield* Deferred.await(interruptStarted);
+        let waitingYields = 0;
+        yield* awaitUntil(() => waitingYields++ >= 50, "Stop waiting for the turn to settle");
+        assert.equal(closes, 0, "Stop must not close before the turn settles");
+
+        // Claude's own result for the interrupted turn.
+        yield* Queue.offer(
+          harness.sdkMessages,
+          makeResultFrame({
+            uuid: "00000000-0000-4000-8000-000000000117",
+            result: "",
+            subtype: "error_during_execution",
+            isError: true,
+            terminalReason: null,
+          }),
+        );
+        // The test clock never reaches the grace, so only the settled turn
+        // can release Stop here.
+        yield* Fiber.join(stop);
+        assert.equal(closes, 1);
+        yield* awaitUntil(() => harness.terminalEvents().length === 1, "interrupted terminal");
+        assert.lengthOf(harness.terminalEvents(), 1);
+        assert.equal(harness.terminalEvents()[0]?.status, "interrupted");
+      }).pipe(Effect.provide(Layer.merge(IdAllocator.layer, NodeServices.layer))),
+    ),
+  );
+
+  // Fork (DECISIONS 5.7): only parent assistant frames advance the turn's
+  // native cursor, which rollback and fork resume at (resumeSessionAt). A
+  // subagent frame that arrives after the parent's last reply is not on the
+  // parent chain.
+  it.effect("a late subagent frame does not move the rollback cursor", () =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        const harness = yield* makeWakeHarnessWithOptions({
+          close: (sdkMessages) => Queue.shutdown(sdkMessages),
+        });
+        const now = yield* DateTime.now;
+        yield* harness.runtime.startTurn(
+          makeClaudeTestTurnInput({
+            threadId: harness.threadId,
+            providerThread: harness.providerThread,
+            now,
+            attemptId: RunAttemptId.make("attempt-claude-late-subagent-cursor"),
+            text: "Delegate and report.",
+            attachments: [],
+          }),
+        );
+        const parentUuid = "00000000-0000-4000-8000-000000000118";
+        yield* harness.offerAndWait(makeAssistantTextFrame({ uuid: parentUuid, text: "Done." }));
+        yield* harness.offerAndWait(
+          claudeSdkFrame({
+            ...makeAssistantTextFrame({
+              uuid: "00000000-0000-4000-8000-000000000119",
+              text: "Subagent still reporting.",
+            }),
+            parent_tool_use_id: "toolu_late_subagent",
+          }),
+        );
+        yield* Queue.offer(
+          harness.sdkMessages,
+          makeResultFrame({ uuid: "00000000-0000-4000-8000-000000000120", result: "Done." }),
+        );
+        yield* awaitUntil(() => harness.terminalEvents().length === 1, "turn terminal");
+        const providerTurn = harness.events
+          .filter(
+            (event): event is Extract<ProviderAdapterV2Event, { type: "provider_turn.updated" }> =>
+              event.type === "provider_turn.updated",
+          )
+          .at(-1)?.providerTurn;
+        if (providerTurn === undefined) {
+          return yield* Effect.die("Claude turn was not reported.");
+        }
+        assert.equal(providerTurn.status, "completed");
+        assert.equal(providerTurn.nativeTurnRef?.nativeId, parentUuid);
+
+        const rolledBack = yield* harness.runtime.rollbackThread({
+          providerThread: harness.providerThread,
+          target: {
+            type: "provider_turn",
+            checkpointId: CheckpointId.make("checkpoint-claude-late-subagent-cursor"),
+            appRunOrdinal: 1,
+            providerTurn,
+          },
+          providerThreadTurns: [providerTurn],
+        });
+        assert.equal(rolledBack.providerThread.nativeConversationHeadRef?.nativeId, parentUuid);
+      }).pipe(Effect.provide(Layer.merge(IdAllocator.layer, NodeServices.layer))),
+    ),
+  );
+
+  // Fork (DECISIONS 5.8, 5.9): a session that enters a worktree itself is
+  // followed (the thread is told, and a replacement process starts there), and
+  // every process carries its thread identity.
+  it.effect(
+    "follows a session into the worktree it entered and launches with thread identity",
+    () =>
+      Effect.scoped(
+        Effect.gen(function* () {
+          const fileSystem = yield* FileSystem.FileSystem;
+          const path = yield* Path.Path;
+          const configDir = yield* fileSystem.makeTempDirectoryScoped({
+            prefix: "t3-claude-cwd-config-",
+          });
+          const worktree = yield* fileSystem.makeTempDirectoryScoped({
+            prefix: "t3-claude-cwd-worktree-",
+          });
+          const sessionId = "00000000-0000-4000-8000-0000000005d8";
+          const harness = yield* makeWakeHarnessWithOptions({
+            environment: { CLAUDE_CONFIG_DIR: configDir },
+            nativeSessionId: sessionId,
+            t3Paths: { baseDir: "/t3", stateDir: "/t3/userdata" },
+          });
+          const now = yield* DateTime.now;
+          yield* harness.runtime.startTurn(
+            makeClaudeTestTurnInput({
+              threadId: harness.threadId,
+              providerThread: harness.providerThread,
+              now,
+              attemptId: RunAttemptId.make("attempt-claude-enter-worktree"),
+              text: "Work in a worktree.",
+              attachments: [],
+            }),
+          );
+          const firstEnv = harness.getOpenedOptions()?.env;
+          assert.equal(firstEnv?.T3CODE_THREAD_ID, harness.threadId);
+          assert.equal(firstEnv?.T3CODE_HOME, "/t3");
+          assert.equal(firstEnv?.T3CODE_STATE_DIR, "/t3/userdata");
+          assert.equal(firstEnv?.T3CODE_WORKTREE_PATH, "/workspace");
+          assert.equal(firstEnv?.CLAUDE_CONFIG_DIR, configDir);
+
+          // The CLI records the move in the transcript, not on the SDK stream.
+          const projectDir = path.join(configDir, "projects", "-workspace");
+          yield* fileSystem.makeDirectory(projectDir, { recursive: true });
+          yield* fileSystem.writeFileString(
+            path.join(projectDir, `${sessionId}.jsonl`),
+            `{"type":"user","cwd":"/workspace"}\n{"type":"user","cwd":"${worktree}"}\n`,
+          );
+          const toolUseId = "toolu_enter_worktree";
+          yield* harness.offerAndWait(
+            claudeSdkFrame({
+              type: "assistant",
+              uuid: "00000000-0000-4000-8000-0000000005d9",
+              session_id: sessionId,
+              parent_tool_use_id: null,
+              message: {
+                id: "msg_enter_worktree",
+                model: "claude-sonnet-4-6",
+                type: "message",
+                role: "assistant",
+                content: [
+                  { type: "tool_use", id: toolUseId, name: "EnterWorktree", input: { name: "x" } },
+                ],
+                stop_reason: "tool_use",
+                stop_sequence: null,
+                usage: {
+                  input_tokens: 1,
+                  output_tokens: 1,
+                  cache_creation_input_tokens: 0,
+                  cache_read_input_tokens: 0,
+                },
+              },
+            }),
+          );
+          assert.deepEqual(harness.sessionCwdObservations, []);
+          yield* harness.offerAndWait(
+            claudeSdkFrame({
+              type: "user",
+              uuid: "00000000-0000-4000-8000-0000000005da",
+              session_id: sessionId,
+              parent_tool_use_id: null,
+              message: {
+                role: "user",
+                content: [{ type: "tool_result", tool_use_id: toolUseId, content: "Entered." }],
+              },
+            }),
+          );
+          assert.deepEqual(
+            harness.sessionCwdObservations.map(({ threadId, providerSessionId, cwd }) => ({
+              threadId,
+              providerSessionId,
+              cwd,
+            })),
+            [
+              {
+                threadId: harness.threadId,
+                providerSessionId: ProviderSessionId.make("provider-session-claude-wake"),
+                cwd: worktree,
+              },
+            ],
+          );
+          yield* Queue.offer(
+            harness.sdkMessages,
+            makeResultFrame({ uuid: "00000000-0000-4000-8000-0000000005db", result: "Moved." }),
+          );
+          yield* awaitUntil(() => harness.terminalEvents().length === 1, "turn terminal");
+          // The turn-boundary re-read finds the same directory: no second report.
+          assert.lengthOf(harness.sessionCwdObservations, 1);
+          // The session record moved with the process.
+          assert.deepEqual(
+            harness.events.flatMap((event) =>
+              event.type === "provider_session.updated" ? [event.providerSession.cwd] : [],
+            ),
+            [worktree],
+          );
+
+          // The next turn reuses the moved process; its start re-persists the
+          // opening session record, so the adapter restates the moved cwd.
+          yield* harness.runtime.startTurn(
+            makeClaudeTestTurnInput({
+              threadId: harness.threadId,
+              providerThread: harness.providerThread,
+              now: yield* DateTime.now,
+              attemptId: RunAttemptId.make("attempt-claude-in-worktree"),
+              text: "Keep going.",
+              attachments: [],
+              providerTurnOrdinal: 2,
+            }),
+          );
+          const sessionCwds = () =>
+            harness.events.flatMap((event) =>
+              event.type === "provider_session.updated" ? [event.providerSession.cwd] : [],
+            );
+          yield* awaitUntil(() => sessionCwds().length === 2, "restated session cwd");
+          assert.deepEqual(sessionCwds(), [worktree, worktree]);
+          yield* Queue.offer(
+            harness.sdkMessages,
+            makeResultFrame({ uuid: "00000000-0000-4000-8000-0000000005dc", result: "Done." }),
+          );
+          yield* awaitUntil(() => harness.terminalEvents().length === 2, "second turn terminal");
+
+          // A new selection replaces the process; it starts where the session is.
+          yield* harness.runtime.startTurn(
+            makeClaudeTestTurnInput({
+              threadId: harness.threadId,
+              providerThread: harness.providerThread,
+              now: yield* DateTime.now,
+              attemptId: RunAttemptId.make("attempt-claude-after-worktree"),
+              text: "Continue.",
+              attachments: [],
+              providerTurnOrdinal: 3,
+              modelSelection: { ...CLAUDE_TEST_MODEL_SELECTION, model: "claude-haiku-4-5" },
+            }),
+          );
+          const reopened = harness.getOpenedOptions();
+          assert.equal(reopened?.model, "claude-haiku-4-5");
+          assert.equal(reopened?.cwd, worktree);
+          assert.equal(reopened?.env?.T3CODE_WORKTREE_PATH, worktree);
+        }).pipe(Effect.provide(Layer.merge(IdAllocator.layer, NodeServices.layer))),
+      ),
+  );
+
+  // Fork (DECISIONS 5.8): a relative CLAUDE_CONFIG_DIR is read where the CLI
+  // process started, not in the server's cwd.
+  it.effect("finds the transcript under a relative config dir in the query's cwd", () =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        const fileSystem = yield* FileSystem.FileSystem;
+        const path = yield* Path.Path;
+        const startDir = yield* fileSystem.makeTempDirectoryScoped({
+          prefix: "t3-claude-cwd-start-",
+        });
+        const worktree = yield* fileSystem.makeTempDirectoryScoped({
+          prefix: "t3-claude-cwd-worktree-",
+        });
+        assert.notEqual(startDir, process.cwd());
+        const sessionId = "00000000-0000-4000-8000-0000000005e8";
+        const harness = yield* makeWakeHarnessWithOptions({
+          environment: { CLAUDE_CONFIG_DIR: ".claude-account" },
+          nativeSessionId: sessionId,
+        });
+        const projectDir = path.join(startDir, ".claude-account", "projects", "-start");
+        yield* fileSystem.makeDirectory(projectDir, { recursive: true });
+        yield* fileSystem.writeFileString(
+          path.join(projectDir, `${sessionId}.jsonl`),
+          `{"type":"user","cwd":"${startDir}"}\n{"type":"user","cwd":"${worktree}"}\n`,
+        );
+        yield* harness.runtime.startTurn(
+          makeClaudeTestTurnInput({
+            threadId: harness.threadId,
+            providerThread: harness.providerThread,
+            now: yield* DateTime.now,
+            attemptId: RunAttemptId.make("attempt-claude-relative-config"),
+            text: "Work in a worktree.",
+            attachments: [],
+            runtimePolicy: { ...CLAUDE_TEST_RUNTIME_POLICY, cwd: startDir },
+          }),
+        );
+        const toolUseId = "toolu_enter_worktree_relative";
+        yield* harness.offerAndWait(
+          claudeSdkFrame({
+            type: "assistant",
+            uuid: "00000000-0000-4000-8000-0000000005e9",
+            session_id: sessionId,
+            parent_tool_use_id: null,
+            message: {
+              id: "msg_enter_worktree_relative",
+              model: "claude-sonnet-4-6",
+              type: "message",
+              role: "assistant",
+              content: [
+                { type: "tool_use", id: toolUseId, name: "EnterWorktree", input: { name: "x" } },
+              ],
+              stop_reason: "tool_use",
+              stop_sequence: null,
+              usage: {
+                input_tokens: 1,
+                output_tokens: 1,
+                cache_creation_input_tokens: 0,
+                cache_read_input_tokens: 0,
+              },
+            },
+          }),
+        );
+        yield* harness.offerAndWait(
+          claudeSdkFrame({
+            type: "user",
+            uuid: "00000000-0000-4000-8000-0000000005ea",
+            session_id: sessionId,
+            parent_tool_use_id: null,
+            message: {
+              role: "user",
+              content: [{ type: "tool_result", tool_use_id: toolUseId, content: "Entered." }],
+            },
+          }),
+        );
+        assert.deepEqual(
+          harness.sessionCwdObservations.map(({ cwd }) => cwd),
+          [worktree],
         );
       }).pipe(Effect.provide(Layer.merge(IdAllocator.layer, NodeServices.layer))),
     ),

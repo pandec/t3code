@@ -404,6 +404,7 @@ function commandThreadId(command: OrchestrationV2ServerCommand): ThreadId {
     case "checkpoint.rollback":
     case "checkpoint.rollback.fail":
     case "thread.background-work.settle":
+    case "thread.workspace.follow-session":
     case "provider.switch":
       return command.threadId;
     case "delegated_task.request":
@@ -1265,9 +1266,32 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
         projection.thread.modelSelection,
         queuedRun.modelSelection,
       );
-      const switchPlan = selectionChanged
+      // fork: a selection command may already have moved the app thread off
+      // the instance that owns the native conversation; classify the switch
+      // against that owner, as message dispatch does.
+      const nativeOwnerInstanceId = projection.providerThreads.find(
+        (candidate) => candidate.id === projection.thread.activeProviderThreadId,
+      )?.providerInstanceId;
+      const switchFromNativeOwner =
+        nativeOwnerInstanceId !== undefined &&
+        nativeOwnerInstanceId !== projection.thread.modelSelection.instanceId &&
+        nativeOwnerInstanceId !== queuedRun.modelSelection.instanceId;
+      const ownerProjection = switchFromNativeOwner
+        ? {
+            ...projection,
+            thread: {
+              ...projection.thread,
+              modelSelection: {
+                ...projection.thread.modelSelection,
+                instanceId: nativeOwnerInstanceId,
+              },
+            },
+          }
+        : projection;
+      const planSwitch = selectionChanged || switchFromNativeOwner;
+      const switchPlan = planSwitch
         ? yield* providerSwitchService
-            .plan({ projection, targetModelSelection: queuedRun.modelSelection })
+            .plan({ projection: ownerProjection, targetModelSelection: queuedRun.modelSelection })
             .pipe(
               Effect.mapError(
                 (cause) =>
@@ -2272,6 +2296,11 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
     >,
     events: Ref.Ref<Array<OrchestrationV2DomainEvent>>,
     effects: Ref.Ref<Array<PendingOrchestrationEffectV2>>,
+    // Fork (DECISIONS 5.8): set only by `thread.workspace.follow-session`.
+    followedSession?: {
+      readonly id: ProviderSessionId;
+      readonly createdAt: DateTime.Utc;
+    },
   ) {
     const thread = yield* projectionStore.getThread(command.threadId).pipe(
       Effect.mapError(
@@ -2471,6 +2500,7 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
     }
 
     const needsProviderState =
+      followedSession !== undefined ||
       command.type === "thread.runtime-mode.set" ||
       command.type === "thread.model-selection.set" ||
       command.type === "provider.switch" ||
@@ -2489,6 +2519,26 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
           )
           .pipe(mapDispatchError(command))
       : null;
+    // Fork (DECISIONS 5.8): a followed move is valid only while the process
+    // that made it still runs this thread; a stale observation, or one from an
+    // earlier process under a reused session id, must not move it.
+    if (
+      followedSession !== undefined &&
+      !(providerContext?.providerSessions ?? []).some(
+        (session) =>
+          session.id === followedSession.id &&
+          session.status !== "stopped" &&
+          session.status !== "error" &&
+          DateTime.toEpochMillis(session.createdAt) ===
+            DateTime.toEpochMillis(followedSession.createdAt),
+      )
+    ) {
+      return yield* new OrchestratorDispatchError({
+        commandId: command.commandId,
+        commandType: "thread.workspace.follow-session",
+        cause: `Provider session ${followedSession.id} no longer runs thread ${command.threadId}.`,
+      });
+    }
     const providerSwitchPlan =
       command.type === "thread.model-selection.set" || command.type === "provider.switch"
         ? yield* Effect.gen(function* () {
@@ -3161,7 +3211,10 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
         : command.type === "thread.metadata.update" &&
             command.worktreePath !== undefined &&
             command.worktreePath !== thread.worktreePath
-          ? (providerContext?.providerSessions ?? []).map((session) => session.id)
+          ? (providerContext?.providerSessions ?? [])
+              // Fork (DECISIONS 5.8): the session that moved itself is already there.
+              .filter((session) => session.id !== followedSession?.id)
+              .map((session) => session.id)
           : command.type === "thread.runtime-mode.set"
             ? (providerContext?.providerSessions ?? [])
                 .filter(
@@ -9535,6 +9588,22 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
         break;
       case "thread.background-work.settle":
         yield* dispatchBackgroundWorkSettle(command, events);
+        break;
+      case "thread.workspace.follow-session":
+        // Fork (DECISIONS 5.8): a metadata update that keeps the moved session.
+        yield* dispatchThreadMutation(
+          {
+            type: "thread.metadata.update",
+            commandId: command.commandId,
+            threadId: command.threadId,
+            worktreePath: command.worktreePath,
+            branch: command.branch,
+            expectedWorktreePath: command.expectedWorktreePath,
+          },
+          events,
+          effects,
+          { id: command.providerSessionId, createdAt: command.providerSessionCreatedAt },
+        );
         break;
       case "thread.fork":
         yield* dispatchThreadFork(command, events);

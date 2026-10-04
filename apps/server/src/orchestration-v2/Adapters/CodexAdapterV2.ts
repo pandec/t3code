@@ -107,6 +107,10 @@ import {
   resolveCodexLaunchArgs,
 } from "../../provider/Layers/codexLaunchArgs.ts";
 import { mergeProviderInstanceEnvironment } from "../../provider/ProviderInstanceEnvironment.ts";
+import {
+  type ProviderThreadPaths,
+  providerThreadEnvironmentVariables,
+} from "../../provider/ProviderThreadEnvironment.ts";
 import * as McpProviderSession from "../../mcp/McpProviderSession.ts";
 import {
   ProviderAdapterDriverCreateError,
@@ -1196,10 +1200,29 @@ export class CodexAppServerClientFactory extends Context.Service<
  */
 export const CODEX_THREAD_CONFIG = { "tools.update_plan.enabled": true } as const;
 
+/**
+ * Fork (DECISIONS 5.9): the app-server process serves many threads, so the
+ * thread identity reaches the commands Codex runs through its per-thread shell
+ * environment policy, one leaf key per variable so `set` entries from the
+ * user's config.toml stay.
+ */
+function codexThreadEnvironmentConfig(
+  threadId: ThreadId,
+  cwd: string | null | undefined,
+  t3Paths: ProviderThreadPaths,
+): Record<string, string> {
+  return Object.fromEntries(
+    Object.entries(providerThreadEnvironmentVariables({ threadId, cwd }, t3Paths)).map(
+      ([name, value]) => [`shell_environment_policy.set.${name}`, value],
+    ),
+  );
+}
+
 export function codexThreadRuntimeParams(input: {
   readonly threadId: ThreadId | null;
   readonly modelSelection?: { readonly model: string };
   readonly runtimePolicy?: ProviderAdapterV2RuntimePolicy;
+  readonly t3Paths?: ProviderThreadPaths | undefined;
 }): {
   readonly cwd?: string;
   readonly model?: string;
@@ -1212,6 +1235,9 @@ export function codexThreadRuntimeParams(input: {
     ...(input.modelSelection === undefined ? {} : { model: input.modelSelection.model }),
     config: {
       ...CODEX_THREAD_CONFIG,
+      ...(input.threadId === null || input.t3Paths === undefined
+        ? {}
+        : codexThreadEnvironmentConfig(input.threadId, input.runtimePolicy?.cwd, input.t3Paths)),
       ...(mcpSession === undefined
         ? {}
         : {
@@ -1446,7 +1472,7 @@ export type CodexAdapterV2DriverEnv =
 
 export const createCodexAdapterV2 = (
   { instanceId, environment, enabled, config }: ProviderAdapterDriverCreateInput<CodexSettings>,
-  hooks: Pick<CodexAdapterV2Options, "onUsageLimits" | "resolveRuntime"> = {},
+  hooks: Pick<CodexAdapterV2Options, "onUsageLimits" | "resolveRuntime" | "t3Paths"> = {},
 ) =>
   Effect.gen(function* () {
     const clientFactory = yield* CodexAppServerClientFactory;
@@ -1526,6 +1552,11 @@ const layer: Layer.Layer<
 
 export interface CodexAdapterV2Options {
   readonly instanceId: ProviderInstanceId;
+  /**
+   * Fork (DECISIONS 5.9): T3 install paths. When set, each thread's commands
+   * get the thread identity environment (see codexThreadRuntimeParams).
+   */
+  readonly t3Paths?: ProviderThreadPaths;
   readonly settings: CodexSettings;
   readonly environment: NodeJS.ProcessEnv;
   readonly clientFactory: CodexAppServerClientFactoryShape;
@@ -5408,6 +5439,7 @@ export function makeCodexAdapterV2(adapterOptions: CodexAdapterV2Options): Provi
                     threadId: threadInput.threadId,
                     modelSelection: threadInput.modelSelection,
                     runtimePolicy: threadInput.runtimePolicy,
+                    t3Paths: adapterOptions.t3Paths,
                   }),
                 ),
               ),
@@ -5441,6 +5473,7 @@ export function makeCodexAdapterV2(adapterOptions: CodexAdapterV2Options): Provi
                     threadId: nativeThreadId,
                     excludeTurns: true,
                     ...codexThreadRuntimeParams({
+                      t3Paths: adapterOptions.t3Paths,
                       threadId: threadInput.threadId ?? threadInput.providerThread.appThreadId,
                       ...(threadInput.modelSelection === undefined
                         ? {}
@@ -6168,6 +6201,7 @@ export function makeCodexAdapterV2(adapterOptions: CodexAdapterV2Options): Provi
                   threadId,
                   excludeTurns: true,
                   ...codexThreadRuntimeParams({
+                    t3Paths: adapterOptions.t3Paths,
                     threadId: threadInput.providerThread.appThreadId,
                     modelSelection: input.modelSelection,
                     runtimePolicy: input.runtimePolicy,
@@ -6217,6 +6251,7 @@ export function makeCodexAdapterV2(adapterOptions: CodexAdapterV2Options): Provi
                       ? {}
                       : { lastTurnId: boundary.lastTurnId }),
                     ...codexThreadRuntimeParams({
+                      t3Paths: adapterOptions.t3Paths,
                       threadId: threadInput.targetThreadId,
                       ...(threadInput.modelSelection === undefined
                         ? {}

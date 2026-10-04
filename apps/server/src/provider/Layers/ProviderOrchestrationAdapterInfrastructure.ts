@@ -5,6 +5,7 @@ import * as CodexAdapterV2 from "../../orchestration-v2/Adapters/CodexAdapterV2.
 import * as CursorAgentSdk from "../../orchestration-v2/Adapters/CursorAgentSdk.ts";
 import * as IdAllocator from "../../orchestration-v2/IdAllocator.ts";
 import * as ProviderContinuationRequests from "../../orchestration-v2/ProviderContinuationRequests.ts";
+import * as ProviderSessionCwdObservations from "../../orchestration-v2/ProviderSessionCwdObservations.ts";
 
 export type ProviderOrchestrationAdapterInfrastructure =
   | ClaudeAdapterV2.ClaudeAgentSdkQueryRunner
@@ -24,4 +25,6 @@ export const ProviderOrchestrationAdapterInfrastructureLive = Layer.mergeAll(
   CursorAgentSdk.cursorAgentSdkRunnerLiveLayer,
   IdAllocator.layer,
   ProviderContinuationRequests.layer,
+  // Fork (DECISIONS 5.8): shared with the runtime's SessionWorkspaceFollow worker, like the queue above.
+  ProviderSessionCwdObservations.layer,
 );

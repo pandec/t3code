@@ -22,6 +22,7 @@
  * @module provider/Drivers/CodexDriver
  */
 import { CodexSettings, ProviderDriverKind } from "@t3tools/contracts";
+import { HostProcessEnvironment } from "@t3tools/shared/hostProcess";
 import * as Crypto from "effect/Crypto";
 import * as Effect from "effect/Effect";
 import * as FileSystem from "effect/FileSystem";
@@ -148,10 +149,16 @@ export const CodexDriver: ProviderDriver<CodexSettings, CodexDriverEnv> = {
       const resetCreditCoordinator = yield* ResetCreditCoordinator.ResetCreditCoordinator;
       const fileSystem = yield* FileSystem.FileSystem;
       const pathService = yield* Path.Path;
+      const serverConfig = yield* ServerConfig.ServerConfig;
       const httpClient = yield* HttpClient.HttpClient;
       const serverSettings = yield* ServerSettings.ServerSettingsService;
       const modelManifest = yield* ModelManifest.ModelManifest;
-      const processEnv = mergeProviderInstanceEnvironment(environment);
+      // Same base environment as the v2 adapter, so the continuation identity
+      // and the home Codex runs with come from one home selection.
+      const processEnv = mergeProviderInstanceEnvironment(
+        environment,
+        yield* HostProcessEnvironment,
+      );
       const homeLayout = yield* resolveCodexHomeLayout(config, processEnv);
       const continuationIdentity = codexContinuationIdentity(homeLayout);
       const stampIdentity = withInstanceIdentity({
@@ -201,7 +208,11 @@ export const CodexDriver: ProviderDriver<CodexSettings, CodexDriverEnv> = {
           enabled,
           config,
         },
-        { onUsageLimits: (update) => snapshot.applyUsageLimits(update) },
+        {
+          onUsageLimits: (update) => snapshot.applyUsageLimits(update),
+          // Fork (DECISIONS 5.9): thread identity in the commands Codex runs.
+          t3Paths: { baseDir: serverConfig.baseDir, stateDir: serverConfig.stateDir },
+        },
       ).pipe(
         Effect.mapError(
           (cause) =>

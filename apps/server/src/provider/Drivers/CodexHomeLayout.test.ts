@@ -110,6 +110,55 @@ it.layer(NodeServices.layer)("CodexHomeLayout", (it) => {
         expect(layout.effectiveHomePath).toBeUndefined();
       }),
     );
+
+    it.effect("falls back to the instance HOME/.codex without CODEX_HOME", () =>
+      Effect.gen(function* () {
+        const path = yield* Path.Path;
+        const userHome = yield* makeTempDir("t3code-codex-user-home-");
+        const homePath = path.join(userHome, ".codex");
+        const layout = yield* resolveCodexHomeLayout(decodeCodexSettings({}), { HOME: userHome });
+
+        expect(layout).toMatchObject({
+          mode: "direct",
+          sharedHomePath: homePath,
+          effectiveHomePath: homePath,
+          continuationKey: `codex:home:${homePath}`,
+        });
+      }),
+    );
+
+    it.effect("prefers the configured home over CODEX_HOME and HOME", () =>
+      Effect.gen(function* () {
+        const homePath = yield* makeTempDir("t3code-codex-configured-home-");
+        const layout = yield* resolveCodexHomeLayout(decodeCodexSettings({ homePath }), {
+          CODEX_HOME: "/ignored-codex-home",
+          HOME: "/ignored-home",
+        });
+
+        expect(layout.sharedHomePath).toBe(homePath);
+        expect(layout.continuationKey).toBe(`codex:home:${homePath}`);
+      }),
+    );
+
+    it.effect("keeps a shadow overlay on the environment-selected shared home", () =>
+      Effect.gen(function* () {
+        const path = yield* Path.Path;
+        const sharedHome = yield* makeTempDir("t3code-codex-environment-shared-");
+        const shadowRoot = yield* makeTempDir("t3code-codex-environment-shadow-");
+        const shadowHome = path.join(shadowRoot, "shadow");
+        const layout = yield* resolveCodexHomeLayout(
+          decodeCodexSettings({ shadowHomePath: shadowHome }),
+          { CODEX_HOME: sharedHome, HOME: "/ignored" },
+        );
+
+        expect(layout).toMatchObject({
+          mode: "authOverlay",
+          sharedHomePath: sharedHome,
+          effectiveHomePath: shadowHome,
+          continuationKey: `codex:home:${sharedHome}`,
+        });
+      }),
+    );
   });
 
   describe("materializeCodexShadowHome", () => {

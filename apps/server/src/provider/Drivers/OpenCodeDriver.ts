@@ -277,7 +277,8 @@ export const OpenCodeDriver: ProviderDriver<OpenCodeSettings, OpenCodeDriverEnv>
         accentColor,
         environment,
         enabled,
-        config,
+        // Turns launch the same `~`-expanded binary as probes and text generation.
+        config: effectiveConfig,
       }).pipe(
         Effect.mapError(
           (cause) =>

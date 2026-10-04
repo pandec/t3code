@@ -31,6 +31,7 @@ import * as Layer from "effect/Layer";
 import * as Logger from "effect/Logger";
 import * as Option from "effect/Option";
 import * as References from "effect/References";
+import * as Schema from "effect/Schema";
 import * as Scope from "effect/Scope";
 import * as Stream from "effect/Stream";
 import * as Exit from "effect/Exit";
@@ -47,7 +48,10 @@ import type { ProviderContinuationRequest } from "../ProviderContinuationRequest
 import * as ProviderContinuationRequests from "../ProviderContinuationRequests.ts";
 import { OPENCODE_PROVIDER } from "./OpenCodeAdapterV2.ts";
 import { OPENCODE_2_STILL_STOPPING } from "./OpenCode2AdapterV2.ts";
-import { openCode2ReplayRuntime } from "./OpenCode2AdapterV2.testkit.ts";
+import {
+  openCode2ReplayRuntime,
+  type ReplayedSessionEnvironment,
+} from "./OpenCode2AdapterV2.testkit.ts";
 
 const SESSION = "ses_f148ca2deffeJcwCnRQtb0YFNX";
 const WORK = "/work/opencode2";
@@ -1595,6 +1599,116 @@ describe("OpenCode2 adapter", () => {
           existingProviderThread: providerThread(yield* DateTime.now),
         });
       }).pipe(Effect.scoped),
+  );
+
+  // Fork (DECISIONS 5.9): commands a session runs know their thread and T3 install.
+  it.effect("gives a session its thread's environment when created and when resumed", () =>
+    Effect.gen(function* () {
+      const sessionEnvironments: Array<ReplayedSessionEnvironment> = [];
+      const runtime = yield* openCode2ReplayRuntime(
+        [
+          ...opening,
+          out("session.create", {
+            location: { directory: WORK },
+            model: { providerID: "opencode", id: "big-pickle" },
+            permissions: t3Rules,
+          }),
+          replyData("session.create", sessionInfo()),
+          ...directoryModels("/work/opencode2-feature"),
+          out("session.get", { sessionID: SESSION }),
+          replyData("session.get", sessionInfo()),
+          out("session.move", { sessionID: SESSION, directory: "/work/opencode2-feature" }),
+          reply("session.move", null),
+        ],
+        { sessionEnvironments },
+      );
+      const created = yield* runtime.ensureThread({
+        threadId,
+        modelSelection: bigPickle,
+        runtimePolicy: policy(),
+      });
+      yield* runtime.resumeThread({
+        providerThread: created,
+        threadId,
+        modelSelection: bigPickle,
+        runtimePolicy: { ...policy(), cwd: "/work/opencode2-feature" },
+      });
+      const variables = sessionEnvironments.map((entry) => {
+        assert.equal(entry.sessionID, SESSION);
+        const body = Schema.decodeUnknownSync(
+          Schema.Struct({ variables: Schema.Record(Schema.String, Schema.String) }),
+        )(entry.body);
+        assert.isNotEmpty(body.variables.T3CODE_HOME);
+        assert.isNotEmpty(body.variables.T3CODE_STATE_DIR);
+        return {
+          T3CODE_THREAD_ID: body.variables.T3CODE_THREAD_ID,
+          T3CODE_WORKTREE_PATH: body.variables.T3CODE_WORKTREE_PATH,
+        };
+      });
+      // The resume follows the thread's move to another worktree.
+      assert.deepEqual(variables, [
+        { T3CODE_THREAD_ID: threadId, T3CODE_WORKTREE_PATH: WORK },
+        { T3CODE_THREAD_ID: threadId, T3CODE_WORKTREE_PATH: "/work/opencode2-feature" },
+      ]);
+    }).pipe(Effect.scoped),
+  );
+
+  // The session environment replaces the shell's whole environment.
+  it.effect("keeps a spawned server's environment in its sessions' shells", () =>
+    Effect.gen(function* () {
+      const sessionEnvironments: Array<ReplayedSessionEnvironment> = [];
+      const runtime = yield* openCode2ReplayRuntime(
+        [
+          ...opening,
+          out("session.create", {
+            location: { directory: WORK },
+            model: { providerID: "opencode", id: "big-pickle" },
+            permissions: t3Rules,
+          }),
+          replyData("session.create", sessionInfo()),
+        ],
+        {
+          sessionEnvironments,
+          shellEnvironment: {
+            PATH: "/opt/tools/bin:/usr/bin",
+            INSTANCE_SENTINEL: "kept",
+            T3CODE_TURN_ID: "stale",
+          },
+        },
+      );
+      yield* runtime.ensureThread({ threadId, modelSelection: bigPickle, runtimePolicy: policy() });
+      const variables = sessionEnvironments.map(
+        (entry) =>
+          Schema.decodeUnknownSync(
+            Schema.Struct({ variables: Schema.Record(Schema.String, Schema.String) }),
+          )(entry.body).variables,
+      );
+      assert.lengthOf(variables, 1);
+      assert.equal(variables[0]?.PATH, "/opt/tools/bin:/usr/bin");
+      assert.equal(variables[0]?.INSTANCE_SENTINEL, "kept");
+      assert.equal(variables[0]?.T3CODE_THREAD_ID, threadId);
+      assert.isUndefined(variables[0]?.T3CODE_TURN_ID);
+    }).pipe(Effect.scoped),
+  );
+
+  it.effect("leaves an external server's shell environment alone", () =>
+    Effect.gen(function* () {
+      const sessionEnvironments: Array<ReplayedSessionEnvironment> = [];
+      const runtime = yield* openCode2ReplayRuntime(
+        [
+          ...opening,
+          out("session.create", {
+            location: { directory: WORK },
+            model: { providerID: "opencode", id: "big-pickle" },
+            permissions: t3Rules,
+          }),
+          replyData("session.create", sessionInfo()),
+        ],
+        { external: true, sessionEnvironments },
+      );
+      yield* runtime.ensureThread({ threadId, modelSelection: bigPickle, runtimePolicy: policy() });
+      assert.deepEqual(sessionEnvironments, []);
+    }).pipe(Effect.scoped),
   );
 
   it.effect("breaks the thread and forgets it when the session was deleted outside T3", () =>

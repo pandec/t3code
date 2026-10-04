@@ -2932,6 +2932,22 @@ const OrchestrationV2InternalCommand = Schema.Union([
     providerThreadId: ProviderThreadId,
     providerTurnId: ProviderTurnId,
   }),
+  /**
+   * Fork: moves the thread's workspace to where its live provider session
+   * moved itself (Claude's EnterWorktree), keeping that session running there
+   * instead of detaching it. Rejected unless the same session process
+   * (`providerSessionId` at `providerSessionCreatedAt`) still runs the thread.
+   */
+  Schema.Struct({
+    type: Schema.Literal("thread.workspace.follow-session"),
+    commandId: CommandId,
+    threadId: ThreadId,
+    worktreePath: Schema.NullOr(TrimmedNonEmptyString),
+    branch: Schema.NullOr(TrimmedNonEmptyString),
+    expectedWorktreePath: Schema.NullOr(TrimmedNonEmptyString),
+    providerSessionId: ProviderSessionId,
+    providerSessionCreatedAt: Schema.DateTimeUtc,
+  }),
 ]);
 export type OrchestrationV2InternalCommand = typeof OrchestrationV2InternalCommand.Type;
 

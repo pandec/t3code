@@ -5,7 +5,12 @@ import * as NodePath from "node:path";
 
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import { assert, it } from "@effect/vitest";
-import { ProviderInstanceId, type OpenCodeSettings } from "@t3tools/contracts";
+import {
+  ProviderInstanceId,
+  ProviderSessionId,
+  ThreadId,
+  type OpenCodeSettings,
+} from "@t3tools/contracts";
 import { HostProcessPlatform } from "@t3tools/shared/hostProcess";
 import * as Effect from "effect/Effect";
 import * as Fiber from "effect/Fiber";
@@ -17,6 +22,7 @@ import { ChildProcessSpawner } from "effect/unstable/process";
 import * as BackgroundPolicy from "../../background/BackgroundPolicy.ts";
 import * as ServerConfig from "../../config.ts";
 import * as IdAllocator from "../../orchestration-v2/IdAllocator.ts";
+import { ProviderAdapterV2RuntimePolicy } from "../../orchestration-v2/ProviderAdapter.ts";
 import * as ServerSettings from "../../serverSettings.ts";
 import * as ProviderEventLoggers from "../Layers/ProviderEventLoggers.ts";
 import * as ProviderMaintenance from "../providerMaintenance.ts";
@@ -275,5 +281,49 @@ it.layer(updateLayer)("OpenCodeDriver updates", (it) => {
         assert.strictEqual(v2.packageName, "@opencode/cli");
         assert.isNull(v2.update);
       }).pipe(Effect.scoped),
+  );
+});
+
+// A 1.x binary whose server launches are recorded and refused.
+const launchedBinaries: Array<string> = [];
+const openCode1Runtime = {
+  runOpenCodeCommand: () => Effect.succeed({ stdout: "1.18.32\n", stderr: "", code: 0 }),
+  connectToOpenCodeServer: ({ binaryPath }: { readonly binaryPath: string }) =>
+    Effect.sync(() => launchedBinaries.push(binaryPath)).pipe(
+      Effect.andThen(reachedServer("connect")),
+    ),
+  startOpenCodeServerProcess: () => reachedServer("start"),
+} as unknown as OpenCodeRuntime.OpenCodeRuntimeShape;
+const openCode1Layer = Layer.mergeAll(
+  ServerConfig.layerTest(process.cwd(), { prefix: "t3-opencode-driver-home-" }),
+  IdAllocator.layer,
+  ServerSettings.layerTest(),
+  Layer.mock(BackgroundPolicy.BackgroundPolicy)({}),
+  Layer.succeed(
+    ProviderEventLoggers.ProviderEventLoggers,
+    ProviderEventLoggers.NoOpProviderEventLoggers,
+  ),
+  Layer.succeed(OpenCodeRuntime.OpenCodeRuntime, openCode1Runtime),
+).pipe(Layer.provideMerge(NodeServices.layer));
+
+it.layer(openCode1Layer)("OpenCodeDriver home-relative Binary path", (it) => {
+  it.effect("opens sessions with the expanded binary", () =>
+    Effect.gen(function* () {
+      launchedBinaries.length = 0;
+      const instance = yield* create({ binaryPath: "~/bin/opencode" }, noHttp);
+      yield* Effect.flip(
+        instance.orchestrationAdapter.openSession({
+          threadId: ThreadId.make("thread-opencode-home"),
+          providerSessionId: ProviderSessionId.make("session-opencode-home"),
+          modelSelection: { instanceId: instance.instanceId, model: "opencode/big-pickle" },
+          runtimePolicy: ProviderAdapterV2RuntimePolicy.make({
+            runtimeMode: "full-access",
+            interactionMode: "default",
+            cwd: null,
+          }),
+        }),
+      );
+      assert.deepStrictEqual(launchedBinaries, [NodePath.join(NodeOS.homedir(), "bin/opencode")]);
+    }).pipe(Effect.scoped),
   );
 });

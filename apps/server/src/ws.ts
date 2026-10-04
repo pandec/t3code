@@ -163,6 +163,7 @@ import {
 } from "./observability/RpcInstrumentation.ts";
 import * as ProviderRegistry from "./provider/Services/ProviderRegistry.ts";
 import * as ProviderInstanceHealth from "./provider/Services/ProviderInstanceHealth.ts";
+import * as ProviderUsageRefresh from "./provider/Services/ProviderUsageRefresh.ts";
 import * as ProviderInstanceRegistry from "./provider/Services/ProviderInstanceRegistry.ts";
 import { configureOpenRouterCredits, readOpenRouterCredits } from "./provider/openRouterCredits.ts";
 import { MessageSpeech } from "./voice/MessageSpeech.ts";
@@ -1197,6 +1198,7 @@ const makeWsRpcLayer = (
       const providerVersionCache = yield* ProviderMaintenance.ProviderVersionCache;
       const providerInstances = yield* ProviderInstanceRegistry.ProviderInstanceRegistry;
       const providerInstanceHealth = yield* ProviderInstanceHealth.ProviderInstanceHealth;
+      const providerUsageRefresh = yield* ProviderUsageRefresh.ProviderUsageRefresh;
       const fileSystem = yield* FileSystem.FileSystem;
       const nodePathService = yield* Path.Path;
       // Workflow scripts live under each Claude instance's config dir, which
@@ -2293,6 +2295,26 @@ const makeWsRpcLayer = (
           observeRpcEffect(WS_METHODS.providerUsageRead, readProviderUsageSnapshots, {
             "rpc.aggregate": "server",
           }),
+        [WS_METHODS.providerUsageRefresh]: (input) =>
+          observeRpcEffect(
+            WS_METHODS.providerUsageRefresh,
+            providerUsageRefresh
+              .refresh(input.instanceIds)
+              .pipe(
+                Effect.flatMap(({ refreshedInstanceIds, failures }) =>
+                  readProviderUsageSnapshots.pipe(
+                    Effect.map((result) => ({ ...result, refreshedInstanceIds, failures })),
+                  ),
+                ),
+              ),
+            { "rpc.aggregate": "server" },
+          ),
+        [WS_METHODS.providerUsageThreadAccount]: (input) =>
+          observeRpcEffect(
+            WS_METHODS.providerUsageThreadAccount,
+            providerUsageRefresh.readThreadAccount(input),
+            { "rpc.aggregate": "server" },
+          ),
         [WS_METHODS.openRouterCreditsRead]: (_input) =>
           observeRpcEffect(
             WS_METHODS.openRouterCreditsRead,

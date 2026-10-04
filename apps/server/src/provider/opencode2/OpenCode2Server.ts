@@ -25,6 +25,13 @@ export interface OpenCode2Connection extends OpenCode2Client.OpenCode2Api {
   readonly url: string;
   readonly version: string;
   readonly external: boolean;
+  /**
+   * Fork (DECISIONS 5.9): the environment shell commands inherit on a spawned
+   * server (its instance environment, without the server password); a
+   * session environment replaces it wholesale. Undefined for an external
+   * server, whose own environment T3 doesn't know.
+   */
+  readonly shellEnvironment: NodeJS.ProcessEnv | undefined;
 }
 
 export class OpenCode2Server extends Context.Service<
@@ -153,7 +160,8 @@ export const make = Effect.fn("OpenCode2Server.make")(function* (input: {
     Effect.gen(function* () {
       const api = yield* opencode.connect({ baseUrl: url, password });
       const version = yield* verifyServer(api.client);
-      return { ...api, url, version, external } satisfies OpenCode2Connection;
+      const shellEnvironment = external ? undefined : input.environment;
+      return { ...api, url, version, external, shellEnvironment } satisfies OpenCode2Connection;
     });
   let latest: OpenCode2Connection | undefined;
   const remember = (connection: OpenCode2Connection) =>

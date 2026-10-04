@@ -1191,6 +1191,18 @@ export function createServerEnvironmentAtoms<R, E>(
           ]),
       },
     }),
+    refreshProviderUsage: createEnvironmentRpcCommand(runtime, {
+      label: "environment-data:server:refresh-provider-usage",
+      tag: WS_METHODS.providerUsageRefresh,
+      concurrency: {
+        mode: "singleFlight",
+        // Keyed by the requested instances too: two callers asking about
+        // different accounts must not be collapsed into one RPC, or the
+        // joiner would read a result that never probed what it asked for.
+        key: ({ environmentId, input }) =>
+          `${environmentId}:${[...(input.instanceIds ?? [])].sort().join(",")}`,
+      },
+    }),
     configureOpenRouterCredits: createEnvironmentRpcCommand(runtime, {
       label: "environment-data:server:configure-openrouter-credits",
       tag: WS_METHODS.openRouterCreditsConfigure,
@@ -1225,6 +1237,16 @@ export function createServerEnvironmentAtoms<R, E>(
       label: "environment-data:server:test-tts",
       tag: WS_METHODS.ttsTest,
       concurrency: { mode: "parallel" },
+    }),
+    readProviderUsageThreadAccount: createEnvironmentRpcCommand(runtime, {
+      label: "environment-data:server:read-provider-usage-thread-account",
+      tag: WS_METHODS.providerUsageThreadAccount,
+      concurrency: {
+        mode: "singleFlight",
+        // The gateway binding is per (session, model), so a model switch must
+        // not join a probe that asked about the previous model.
+        key: ({ environmentId, input }) => `${environmentId}:${input.threadId}:${input.model}`,
+      },
     }),
     updateProvider: createEnvironmentRpcCommand(runtime, {
       label: "environment-data:server:update-provider",

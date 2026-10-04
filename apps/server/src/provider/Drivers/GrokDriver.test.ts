@@ -1,11 +1,16 @@
+// @effect-diagnostics nodeBuiltinImport:off - the home-expansion test compares against the real home directory.
+import * as NodeOS from "node:os";
+import * as NodePath from "node:path";
+
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import { expect, it } from "@effect/vitest";
-import { ProviderInstanceId } from "@t3tools/contracts";
+import { ProviderInstanceId, ProviderSessionId, ThreadId } from "@t3tools/contracts";
 import { HostProcessPlatform } from "@t3tools/shared/hostProcess";
 import * as Effect from "effect/Effect";
 import * as FileSystem from "effect/FileSystem";
 import * as Layer from "effect/Layer";
 import * as Path from "effect/Path";
+import * as PlatformError from "effect/PlatformError";
 import { HttpClient } from "effect/unstable/http";
 import * as ChildProcessSpawner from "effect/unstable/process/ChildProcessSpawner";
 
@@ -16,6 +21,7 @@ import * as ProviderEventLoggers from "../Layers/ProviderEventLoggers.ts";
 import { GrokDriver } from "./GrokDriver.ts";
 
 import * as IdAllocator from "../../orchestration-v2/IdAllocator.ts";
+import { ProviderAdapterV2RuntimePolicy } from "../../orchestration-v2/ProviderAdapter.ts";
 
 const testLayer = ServerConfig.layerTest(process.cwd(), {
   prefix: "t3-grok-driver-update-",
@@ -99,6 +105,48 @@ it.layer(testLayer)("GrokDriver", (it) => {
       expect((yield* instance.snapshot.resolveMaintenance()).update).toBeNull();
     }).pipe(
       Effect.provideService(ChildProcessSpawner.ChildProcessSpawner, noSpawner),
+      Effect.scoped,
+    ),
+  );
+
+  it.effect("launches sessions with the expanded home-relative binary", () =>
+    Effect.gen(function* () {
+      const launched: Array<string> = [];
+      const recordingSpawner = ChildProcessSpawner.make((command) => {
+        if (command._tag === "StandardCommand" && command.args.includes("stdio")) {
+          launched.push(command.command);
+        }
+        return Effect.fail(
+          PlatformError.systemError({
+            _tag: "NotFound",
+            module: "grok-driver-test",
+            method: "spawn",
+          }),
+        );
+      });
+      const instance = yield* GrokDriver.create({
+        instanceId: ProviderInstanceId.make("grok-home"),
+        displayName: "Grok test",
+        enabled: false,
+        environment: [],
+        config: { ...GrokDriver.defaultConfig(), binaryPath: "~/bin/grok" },
+      }).pipe(Effect.provideService(ChildProcessSpawner.ChildProcessSpawner, recordingSpawner));
+      yield* instance.orchestrationAdapter
+        .openSession({
+          threadId: ThreadId.make("grok-home"),
+          providerSessionId: ProviderSessionId.make("grok-home"),
+          modelSelection: { instanceId: instance.instanceId, model: "grok-build" },
+          runtimePolicy: ProviderAdapterV2RuntimePolicy.make({
+            runtimeMode: "full-access",
+            interactionMode: "default",
+            cwd: process.cwd(),
+          }),
+        })
+        .pipe(Effect.scoped, Effect.ignore);
+      expect(launched).toEqual([NodePath.join(NodeOS.homedir(), "bin/grok")]);
+    }).pipe(
+      // Keep the launch command unwrapped by the Linux cgroup shim.
+      Effect.provideService(HostProcessPlatform, "darwin"),
       Effect.scoped,
     ),
   );

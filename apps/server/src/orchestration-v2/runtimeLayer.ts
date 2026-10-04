@@ -27,6 +27,7 @@ import {
 import { layerFromStores as eventSinkLayer } from "./EventSink.ts";
 import { layerFromOrchestrationEventStore as eventStoreLayer } from "./EventStore.ts";
 import { layer as idAllocatorLayer } from "./IdAllocator.ts";
+import { layer as nativeContinuationStoreLayer } from "./NativeContinuationStore.ts";
 import * as LegacyV1ThreadImporter from "./legacy/LegacyV1ThreadImporter.ts";
 import { layer as orchestratorLayer } from "./Orchestrator.ts";
 import { layer as projectionStoreLayer } from "./ProjectionStore.ts";
@@ -35,6 +36,8 @@ import * as ProjectStore from "./ProjectStore.ts";
 import { layerFromProviderInstanceRegistry as providerAdapterRegistryLayerFromProviderInstances } from "./ProviderAdapterRegistry.ts";
 import { layer as providerContinuationRequestsLayer } from "./ProviderContinuationRequests.ts";
 import { workerLive as providerContinuationWorkerLive } from "./ProviderContinuationService.ts";
+import { layer as providerSessionCwdObservationsLayer } from "./ProviderSessionCwdObservations.ts";
+import { workerLive as sessionWorkspaceFollowWorkerLive } from "./SessionWorkspaceFollow.ts";
 import { layer as threadTitleRegenerationServiceLayer } from "./ThreadTitleRegenerationService.ts";
 import { layer as providerEventIngestorLayer } from "./ProviderEventIngestor.ts";
 import * as ThreadCommandExecutor from "./ThreadCommandExecutor.ts";
@@ -117,8 +120,11 @@ const contextHandoffServiceProvided = contextHandoffServiceLayer.pipe(
 );
 
 const providerAdapterRegistryProvided = providerAdapterRegistryLayerFromProviderInstances;
+// fork: durable continuation groups for account switches (NativeContinuationStore.ts).
+const nativeContinuationStoreProvided = nativeContinuationStoreLayer;
 const providerSwitchServiceProvided = providerSwitchServiceLayer.pipe(
   Layer.provide(providerAdapterRegistryProvided),
+  Layer.provide(nativeContinuationStoreProvided),
 );
 
 const providerSessionManagerProvided = providerSessionManagerLayer.pipe(
@@ -131,6 +137,7 @@ const providerSessionManagerProvided = providerSessionManagerLayer.pipe(
       projectionStoreLayer,
     ),
   ),
+  Layer.provide(nativeContinuationStoreProvided),
 );
 
 const providerAuthServiceProvided = ProviderAuthServiceLive.pipe(
@@ -279,6 +286,18 @@ const providerContinuationWorkerProvided = providerContinuationWorkerLive.pipe(
     Layer.mergeAll(providerContinuationRequestsLayer, threadManagementProvided, idAllocatorLayer),
   ),
 );
+// fork (DECISIONS 5.8): threads follow worktree moves a provider session made
+// itself. Same observations layer reference as the adapter infrastructure.
+const sessionWorkspaceFollowWorkerProvided = sessionWorkspaceFollowWorkerLive.pipe(
+  Layer.provide(
+    Layer.mergeAll(
+      providerSessionCwdObservationsLayer,
+      orchestratorProvided,
+      ProjectStore.layer,
+      idAllocatorLayer,
+    ),
+  ),
+);
 const threadTitleRegenerationProvided = threadTitleRegenerationServiceLayer.pipe(
   Layer.provide(Layer.mergeAll(threadManagementProvided, ProjectStore.layer, TextGeneration.layer)),
 );
@@ -333,6 +352,7 @@ export const OrchestrationV2ProductionLayerLive = Layer.mergeAll(
     Layer.provide(Layer.mergeAll(projectionStoreLayer, threadManagementProvided)),
   ),
   providerContinuationWorkerProvided,
+  sessionWorkspaceFollowWorkerProvided,
   agentSessionImporterProvided,
   sessionImportServiceProvided,
 ).pipe(
