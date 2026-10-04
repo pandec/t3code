@@ -87,6 +87,23 @@ export const makeClaudeEnvironment = Effect.fn("makeClaudeEnvironment")(function
   return environment;
 });
 
+/**
+ * The environment for SDK history helpers (fork, transcript reads), with
+ * `CLAUDE_CONFIG_DIR` pinned to the instance's resolved config directory. A
+ * relative inherited value resolves against `cwd`, the directory the session
+ * started in, so later worktree moves don't relocate its history.
+ */
+export const makeClaudeHistoryEnvironment = Effect.fn("makeClaudeHistoryEnvironment")(function* (
+  config: Pick<ClaudeSettings, "homePath">,
+  environment: NodeJS.ProcessEnv,
+  cwd?: string,
+): Effect.fn.Return<NodeJS.ProcessEnv, never, Path.Path> {
+  return {
+    ...environment,
+    CLAUDE_CONFIG_DIR: yield* resolveClaudeConfigDirPath(config, environment, cwd),
+  };
+});
+
 // The continuation key deliberately ignores `shadowHomePath`: a shadow
 // instance shares its session transcripts with the homePath dir (via the
 // materialized `projects` symlink), so instances differing only by shadow dir
