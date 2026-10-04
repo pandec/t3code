@@ -1,4 +1,8 @@
-import type { ProviderInstanceId } from "@t3tools/contracts";
+import type {
+  ProviderInstanceId,
+  ProviderUsageThreadAccountInput,
+  ProviderUsageThreadAccountResult,
+} from "@t3tools/contracts";
 import * as Context from "effect/Context";
 import type * as Effect from "effect/Effect";
 
@@ -28,6 +32,14 @@ export interface ProviderUsageRefreshShape {
   readonly refresh: (
     instanceIds?: ReadonlyArray<ProviderInstanceId>,
   ) => Effect.Effect<ProviderUsageRefreshOutcome>;
+  /**
+   * Which pooled gateway account serves a thread's live Claude session
+   * (`authIndex`), or null when unknown. Not a passive read: the gateway may
+   * create or refresh the session's binding, so call it on demand only.
+   */
+  readonly readThreadAccount: (
+    input: ProviderUsageThreadAccountInput,
+  ) => Effect.Effect<ProviderUsageThreadAccountResult>;
 }
 
 export class ProviderUsageRefresh extends Context.Service<

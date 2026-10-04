@@ -99,6 +99,7 @@ import * as ProviderAdapterRegistry from "./orchestration-v2/ProviderAdapterRegi
 import * as ProviderRegistry from "./provider/Services/ProviderRegistry.ts";
 import { ProviderUsageLimitsIngestionLive } from "./provider/Layers/ProviderUsageLimitsIngestion.ts";
 import { ProviderInstanceHealthLive } from "./provider/Layers/ProviderInstanceHealthLive.ts";
+import { ProviderUsageRefreshLive } from "./provider/Layers/ProviderUsageRefreshLive.ts";
 import * as UsageLimitSources from "./usage/UsageLimitSources.ts";
 import * as ProjectFaviconResolver from "./project/ProjectFaviconResolver.ts";
 import * as T3ProjectFileLoader from "./project/T3ProjectFileLoader.ts";
@@ -563,8 +564,12 @@ const RuntimeCoreDependenciesBaseLive = Layer.mergeAll(
   ProviderInstallationRefreshLive,
   ReplayMarkers.layer,
   // Structurally shared by RPC reads and usage snapshot writers so every
-  // consumer observes the same in-memory health state.
-  ProviderInstanceHealthLive,
+  // consumer observes the same in-memory health state. The gateway pool
+  // refresh (and thread account probe) writes into it.
+  ProviderUsageRefreshLive.pipe(
+    Layer.provide(ProjectionStoreV2.layer),
+    Layer.provideMerge(ProviderInstanceHealthLive),
+  ),
 ).pipe(
   // Core Services
   Layer.provideMerge(OrchestrationApplicationLayerLive),

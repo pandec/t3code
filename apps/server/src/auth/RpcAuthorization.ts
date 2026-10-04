@@ -38,6 +38,10 @@ export const RPC_REQUIRED_SCOPES = {
   [WS_METHODS.serverGetConfig]: AuthOrchestrationReadScope,
   [WS_METHODS.serverRefreshProviders]: AuthOrchestrationOperateScope,
   [WS_METHODS.providerUsageRead]: AuthOrchestrationReadScope,
+  [WS_METHODS.providerUsageRefresh]: AuthOrchestrationOperateScope,
+  // Operate, not read: the probe can create or refresh a gateway-side
+  // session binding, and clients only ask alongside providerUsageRefresh.
+  [WS_METHODS.providerUsageThreadAccount]: AuthOrchestrationOperateScope,
   [WS_METHODS.openRouterCreditsRead]: AuthOrchestrationReadScope,
   [WS_METHODS.openRouterCreditsConfigure]: AuthOrchestrationOperateScope,
   [WS_METHODS.ttsStatus]: AuthOrchestrationReadScope,

@@ -171,7 +171,14 @@ import {
   LinearStatusInput,
 } from "./linear.ts";
 import { ProviderInstanceId, ProviderInstanceMutation } from "./providerInstance.ts";
-import { ProviderUsageReadInput, ProviderUsageSnapshotsResult } from "./providerUsage.ts";
+import {
+  ProviderUsageReadInput,
+  ProviderUsageRefreshInput,
+  ProviderUsageRefreshResult,
+  ProviderUsageSnapshotsResult,
+  ProviderUsageThreadAccountInput,
+  ProviderUsageThreadAccountResult,
+} from "./providerUsage.ts";
 import {
   PullRequestActionInput,
   PullRequestActivity,
@@ -768,6 +775,18 @@ const WsServerUpdateSettingsRpc = Rpc.make(WS_METHODS.serverUpdateSettings, {
 const WsProviderUsageReadRpc = Rpc.make(WS_METHODS.providerUsageRead, {
   payload: ProviderUsageReadInput,
   success: ProviderUsageSnapshotsResult,
+  error: EnvironmentAuthorizationError,
+});
+
+const WsProviderUsageRefreshRpc = Rpc.make(WS_METHODS.providerUsageRefresh, {
+  payload: ProviderUsageRefreshInput,
+  success: ProviderUsageRefreshResult,
+  error: EnvironmentAuthorizationError,
+});
+
+const WsProviderUsageThreadAccountRpc = Rpc.make(WS_METHODS.providerUsageThreadAccount, {
+  payload: ProviderUsageThreadAccountInput,
+  success: ProviderUsageThreadAccountResult,
   error: EnvironmentAuthorizationError,
 });
 
@@ -1822,6 +1841,8 @@ export const WsRpcGroup = RpcGroup.make(
   WsServerGetConfigRpc,
   WsServerRefreshProvidersRpc,
   WsProviderUsageReadRpc,
+  WsProviderUsageRefreshRpc,
+  WsProviderUsageThreadAccountRpc,
   WsOpenRouterCreditsReadRpc,
   WsOpenRouterCreditsConfigureRpc,
   WsTtsStatusRpc,
