@@ -56,6 +56,7 @@ import {
   pendingRestartCancelledBackgroundWork,
   restartCancelledBackgroundWorkNote,
 } from "./RestartBackgroundNote.ts";
+import { priorTurnStrandedByRestart, STRANDED_PRIOR_TURN_NOTICE } from "./StrandedTurnNotice.ts";
 
 export class ProviderTurnStartError extends Schema.TaggedError<ProviderTurnStartError>()(
   "ProviderTurnStartError",
@@ -984,27 +985,39 @@ export const layer: Layer.Layer<
         projection.runs,
         projection.providerTurns,
       );
+      const compactionMessageIds = new Set(
+        projection.messages
+          .filter(
+            (candidate) =>
+              candidate.attachments.length === 0 &&
+              candidate.text.trim().toLowerCase() === "/compact",
+          )
+          .map((candidate) => candidate.id),
+      );
+      const runAttemptIds = projection.attempts
+        .filter((candidate) => candidate.runId === run.id)
+        .map((candidate) => candidate.id);
       const restartCancelledWork = pendingRestartCancelledBackgroundWork({
         runs: projection.runs,
         providerTurns: projection.providerTurns,
-        compactionMessageIds: new Set(
-          projection.messages
-            .filter(
-              (candidate) =>
-                candidate.attachments.length === 0 &&
-                candidate.text.trim().toLowerCase() === "/compact",
-            )
-            .map((candidate) => candidate.id),
-        ),
+        compactionMessageIds,
         run,
-        runAttemptIds: projection.attempts
-          .filter((candidate) => candidate.runId === run.id)
-          .map((candidate) => candidate.id),
+        runAttemptIds,
       });
       const restartNote =
         restartCancelledWork.length === 0
           ? ""
           : restartCancelledBackgroundWorkNote(restartCancelledWork);
+      // Fork (PR #47): the previous turn was cut off by a restart, not a user stop.
+      const strandedNotice = priorTurnStrandedByRestart({
+        runs: projection.runs,
+        providerTurns: projection.providerTurns,
+        compactionMessageIds,
+        run,
+        runAttemptIds,
+      })
+        ? STRANDED_PRIOR_TURN_NOTICE
+        : "";
       const tokenCap = yield* handoffTokenCapConfig.pipe(
         Effect.orElseSucceed(() => DEFAULT_HANDOFF_TOKEN_CAP),
       );
@@ -1195,7 +1208,7 @@ export const layer: Layer.Layer<
           });
           if (!(yield* isCurrentAttemptInStatus("running"))) return;
           const start = compact ? session.compactThread! : session.startTurn;
-          const context = [delivery.context, restartNote]
+          const context = [delivery.context, restartNote, strandedNotice]
             .filter((part) => part !== "")
             .join("\n\n");
           // A note continuation has no turn to resume; its text is the prompt.
