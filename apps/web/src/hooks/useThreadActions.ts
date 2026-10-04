@@ -282,6 +282,9 @@ export function useThreadActions() {
   const unarchiveThreadMutation = useAtomCommand(threadEnvironment.unarchive, {
     reportFailure: false,
   });
+  const cancelThreadArchiveMutation = useAtomCommand(threadEnvironment.cancelArchive, {
+    reportFailure: false,
+  });
   const deleteThreadMutation = useAtomCommand(threadEnvironment.delete, {
     reportFailure: false,
   });
@@ -679,6 +682,16 @@ export function useThreadActions() {
   );
 
   /** Turns automatic settlement (inactivity, merged PR) on or off for one thread. */
+  // Fork: cancels a deferred archive before it runs.
+  const cancelThreadArchive = useCallback(
+    (target: ScopedThreadRef) =>
+      cancelThreadArchiveMutation({
+        environmentId: target.environmentId,
+        input: { threadId: target.threadId },
+      }),
+    [cancelThreadArchiveMutation],
+  );
+
   const setThreadAutoSettle = useCallback(
     async (target: ScopedThreadRef, enabled: boolean) => {
       if (!readEnvironmentSupportsAutoSettleOptOut(target.environmentId)) {
@@ -1006,6 +1019,7 @@ export function useThreadActions() {
   return useMemo(
     () => ({
       archiveThread,
+      cancelThreadArchive,
       unarchiveThread,
       deleteThread,
       confirmAndDeleteThread,
@@ -1023,6 +1037,7 @@ export function useThreadActions() {
     }),
     [
       archiveThread,
+      cancelThreadArchive,
       confirmAndDeleteThread,
       confirmAndUnpinThread,
       deleteThread,

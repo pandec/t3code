@@ -30,6 +30,17 @@ interface QueuedThreadShell {
 }
 
 /**
+ * Fork: an archive scheduled to run once the current turn and background work
+ * finish. Clients mark the row and offer a control to cancel it.
+ */
+export function hasPendingArchive(shell: {
+  readonly archivedAt: string | null;
+  readonly archiveRequest?: { readonly status: string } | null;
+}): boolean {
+  return shell.archivedAt === null && shell.archiveRequest?.status === "pending";
+}
+
+/**
  * A queued turn start lives for at most this long: session adoption takes
  * seconds, so a user message still unadopted after the grace window is a
  * failed start (or stale data — shells from older servers can carry user

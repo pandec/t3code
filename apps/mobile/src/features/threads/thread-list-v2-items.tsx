@@ -11,6 +11,8 @@ import { RowPressable } from "../../components/RowPressable";
 import { CustomSnoozeSheet } from "./CustomSnoozeSheet";
 import { appAtomRegistry } from "../../state/atom-registry";
 import { threadArrangementOpenAtom } from "../../state/thread-order";
+import { threadEnvironment } from "../../state/threads";
+import { useAtomCommand } from "../../state/use-atom-command";
 import type { ThreadMoveDestination } from "./threadOrder";
 import type {
   EnvironmentProject,
@@ -18,7 +20,12 @@ import type {
 } from "@t3tools/client-runtime/state/shell";
 import type { EnvironmentThreadSearchMatch } from "@t3tools/client-runtime/state/thread-search";
 import type { EnvironmentMachineKind } from "@t3tools/contracts";
-import { canSnooze, resolveSnoozePresets } from "@t3tools/client-runtime/state/thread-settled";
+import {
+  canSnooze,
+  hasPendingArchive,
+  resolveSnoozePresets,
+} from "@t3tools/client-runtime/state/thread-settled";
+import { squashAtomCommandFailure } from "@t3tools/client-runtime/state/runtime";
 import type { MenuAction } from "@react-native-menu/menu";
 import { memo, useCallback, useEffect, useMemo, useState, type ComponentProps } from "react";
 import { Alert, Pressable, StyleSheet, useWindowDimensions, View } from "react-native";
@@ -683,6 +690,48 @@ export const ThreadListV2Row = memo(function ThreadListV2Row(props: {
   // The timestamp is precomputed on the list item (same stamps the settled
   // tail sorts by) so a minute tick only re-renders rows that draw it.
   const timeLabel = props.timeLabel;
+  // Fork: a scheduled (deferred) archive stays visible at a glance in both
+  // row variants until it runs or is cancelled from the row menu. The row's
+  // accessibilityLabel collapses its subtree, so it is announced there.
+  const archivePending = hasPendingArchive(thread);
+  const rowAccessibilityLabel = [
+    thread.title,
+    props.hasQueuedMessages && "messages queued to send",
+    archivePending && "archives when done",
+  ]
+    .filter(Boolean)
+    .join(", ");
+  const archivePendingIcon = archivePending ? (
+    <SymbolView
+      name="archivebox"
+      size={11}
+      tintColorClassName="accent-warning-foreground"
+      type="monochrome"
+    />
+  ) : null;
+  const cancelArchiveMutation = useAtomCommand(threadEnvironment.cancelArchive, {
+    reportFailure: false,
+  });
+  const handleCancelArchive = useCallback(() => {
+    void cancelArchiveMutation({
+      environmentId: thread.environmentId,
+      input: { threadId: thread.id },
+    }).then((result) => {
+      if (result._tag !== "Failure") return;
+      const error = squashAtomCommandFailure(result);
+      Alert.alert(
+        "Could not cancel pending archive",
+        error instanceof Error ? error.message : "The archive could not be cancelled.",
+      );
+    });
+  }, [cancelArchiveMutation, thread.environmentId, thread.id]);
+  const cancelArchiveMenuItems = useMemo<MenuAction[]>(
+    () =>
+      archivePending
+        ? [{ id: "cancel-archive", title: "Cancel pending archive", image: "archivebox" }]
+        : [],
+    [archivePending],
+  );
   // Set while this thread's recording is playing or paused mid-way, so
   // pausing from the list keeps a way back in. A finished recording clears
   // it. Re-renders only when the state flips, never on the progress tick.
@@ -886,9 +935,16 @@ export const ThreadListV2Row = memo(function ThreadListV2Row(props: {
       ...arrangementMenuItems,
       ...titleMenuItems,
       ...autoSettleMenuItems,
+      ...cancelArchiveMenuItems,
       { id: "delete", title: "Delete", image: "trash", attributes: { destructive: true } },
     ],
-    [arrangementMenuItems, autoSettleMenuItems, snoozePresetActions, titleMenuItems],
+    [
+      arrangementMenuItems,
+      autoSettleMenuItems,
+      cancelArchiveMenuItems,
+      snoozePresetActions,
+      titleMenuItems,
+    ],
   );
   const cardMenuActions = useMemo<MenuAction[]>(
     () => [
@@ -896,9 +952,10 @@ export const ThreadListV2Row = memo(function ThreadListV2Row(props: {
       ...arrangementMenuItems,
       ...titleMenuItems,
       ...autoSettleMenuItems,
+      ...cancelArchiveMenuItems,
       ...CARD_MENU_ACTIONS.slice(1),
     ],
-    [arrangementMenuItems, autoSettleMenuItems, titleMenuItems],
+    [arrangementMenuItems, autoSettleMenuItems, cancelArchiveMenuItems, titleMenuItems],
   );
   // Settled and snoozed rows keep the setting too, matching web where every
   // row shares one menu builder.
@@ -910,27 +967,30 @@ export const ThreadListV2Row = memo(function ThreadListV2Row(props: {
       ),
       ...titleMenuItems,
       ...autoSettleMenuItems,
+      ...cancelArchiveMenuItems,
       SLIM_MENU_ACTIONS[1]!,
     ],
-    [arrangementMenuItems, autoSettleMenuItems, titleMenuItems],
+    [arrangementMenuItems, autoSettleMenuItems, cancelArchiveMenuItems, titleMenuItems],
   );
   const snoozedMenuActions = useMemo<MenuAction[]>(
     () => [
       SNOOZED_MENU_ACTIONS[0]!,
       ...titleMenuItems,
       ...autoSettleMenuItems,
+      ...cancelArchiveMenuItems,
       SNOOZED_MENU_ACTIONS[1]!,
     ],
-    [autoSettleMenuItems, titleMenuItems],
+    [autoSettleMenuItems, cancelArchiveMenuItems, titleMenuItems],
   );
   const legacyMenuActions = useMemo<MenuAction[]>(
     () => [
       LEGACY_MENU_ACTIONS[0]!,
       ...arrangementMenuItems,
       ...titleMenuItems,
+      ...cancelArchiveMenuItems,
       LEGACY_MENU_ACTIONS[1]!,
     ],
-    [arrangementMenuItems, titleMenuItems],
+    [arrangementMenuItems, cancelArchiveMenuItems, titleMenuItems],
   );
   const handleMenuAction = useCallback(
     ({ nativeEvent }: { readonly nativeEvent: { readonly event: string } }) => {
@@ -946,6 +1006,7 @@ export const ThreadListV2Row = memo(function ThreadListV2Row(props: {
       if (nativeEvent.event === "move-up") handleMoveUp();
       if (nativeEvent.event === "move-down") handleMoveDown();
       if (nativeEvent.event === "archive") handleArchive();
+      if (nativeEvent.event === "cancel-archive") handleCancelArchive();
       if (nativeEvent.event === "rename") handleRename();
       if (nativeEvent.event === "regenerate-title") handleRegenerateTitle();
       if (nativeEvent.event === "copy-thread-id") {
@@ -971,6 +1032,7 @@ export const ThreadListV2Row = memo(function ThreadListV2Row(props: {
       onNewThreadOnBranch,
       thread,
       handleArchive,
+      handleCancelArchive,
       handleDelete,
       handleRegenerateTitle,
       handleRename,
@@ -1076,6 +1138,7 @@ export const ThreadListV2Row = memo(function ThreadListV2Row(props: {
           {props.projectTitle ?? props.project?.title ?? ""}
         </Text>
         {listeningIndicator}
+        {archivePendingIcon}
         {props.hasQueuedMessages ? <QueuedMessageIcon selected={selected} /> : null}
         {pinnedRow ? (
           <SymbolView
@@ -1250,9 +1313,7 @@ export const ThreadListV2Row = memo(function ThreadListV2Row(props: {
         interactionOpacity={rowAppearance.interactionOpacity}
         className={rowAppearance.className}
         accessibilityHint={swipeAccessibilityHint}
-        accessibilityLabel={
-          props.hasQueuedMessages ? `${thread.title}, messages queued to send` : thread.title
-        }
+        accessibilityLabel={rowAccessibilityLabel}
         accessibilityRole="button"
         accessibilityState={{ selected }}
         onAccessibilityAction={onListeningAccessibilityAction}
@@ -1292,9 +1353,7 @@ export const ThreadListV2Row = memo(function ThreadListV2Row(props: {
         interactionClassName={rowAppearance.interactionClassName}
         interactionOpacity={rowAppearance.interactionOpacity}
         accessibilityHint={swipeAccessibilityHint}
-        accessibilityLabel={
-          props.hasQueuedMessages ? `${thread.title}, messages queued to send` : thread.title
-        }
+        accessibilityLabel={rowAccessibilityLabel}
         accessibilityRole="button"
         accessibilityState={{ selected }}
         className={rowAppearance.className}
@@ -1354,6 +1413,7 @@ export const ThreadListV2Row = memo(function ThreadListV2Row(props: {
             ) : null}
           </View>
           {listeningIndicator}
+          {archivePendingIcon}
           {props.hasQueuedMessages ? <QueuedMessageIcon selected={selected} /> : null}
           <Text
             className={cn(

@@ -153,6 +153,17 @@ rules to connected environments that support shared settings. Offline environmen
 and older servers keep their previous values. Changing a rule does not reopen
 already settled threads.
 
+## Archive when done
+
+An agent can schedule its own thread to archive after the current turn finishes, for example
+when you ask it to "archive this thread when you're done". The archive waits for the turn and
+its checkpoint, and for subagents or monitors it left running; background commands such as dev
+servers do not hold it and stop when the thread archives. An idle thread archives right away.
+
+A thread with a pending archive shows an archive icon in its row. Choose **Cancel pending
+archive** from its menu to keep it. Sending a new message, stopping the turn it waits on, a
+failed turn, or a workspace change also cancels it. A pending archive survives a server restart.
+
 ## Link a pull request
 
 The server finds the PR for each unsettled thread's saved branch, even when your

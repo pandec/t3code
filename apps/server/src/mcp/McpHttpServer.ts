@@ -46,6 +46,8 @@ import {
 } from "./toolkits/preview/tools.ts";
 import { WorktreeToolkitHandlersLive } from "./toolkits/worktree/handlers.ts";
 import { WorktreeToolkit } from "./toolkits/worktree/tools.ts";
+import { ArchiveToolkitHandlersLive } from "./toolkits/archive/handlers.ts";
+import { ArchiveToolkit } from "./toolkits/archive/tools.ts";
 import * as WorktreeMcpService from "./WorktreeMcpService.ts";
 import { PullRequestsToolkitHandlersLive } from "./toolkits/pullRequests/handlers.ts";
 import { PullRequestsToolkit } from "./toolkits/pullRequests/tools.ts";
@@ -674,6 +676,11 @@ const WorktreeToolkitRegistrationLive = McpServer.toolkit(WorktreeToolkit).pipe(
   Layer.provide(WorktreeToolkitHandlersLive),
 );
 
+// Fork: deferred archive tools for the credential's own thread.
+const ArchiveToolkitRegistrationLive = McpServer.toolkit(ArchiveToolkit).pipe(
+  Layer.provide(ArchiveToolkitHandlersLive),
+);
+
 const PreviewControlsRegistrationLive = McpServer.toolkit(PreviewControlsToolkit).pipe(
   Layer.provide(PreviewControlsHandlersLive),
 );
@@ -748,6 +755,7 @@ const mcpToolkitIsland = <E, R>(path: `/${string}`, registrations: Layer.Layer<n
       EnvironmentRegistrationLive,
       WorktreeToolkitRegistrationLive,
       PullRequestsToolkitRegistrationLive,
+      ArchiveToolkitRegistrationLive,
     ).pipe(Layer.provideMerge(makeMcpTransport(path))),
   );
 

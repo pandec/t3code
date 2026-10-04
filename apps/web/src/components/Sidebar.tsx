@@ -29,6 +29,7 @@ import { CSS } from "@dnd-kit/utilities";
 import {
   canSnooze,
   effectiveSnoozed,
+  hasPendingArchive,
   threadWokeAt,
 } from "@t3tools/client-runtime/state/thread-settled";
 import {
@@ -64,6 +65,7 @@ import type { TimestampFormat } from "@t3tools/contracts/settings";
 import {
   AlarmClockIcon,
   AlarmClockOffIcon,
+  ArchiveIcon,
   ArrowRightLeftIcon,
   CheckIcon,
   ChevronDownIcon,
@@ -1844,6 +1846,24 @@ const SidebarThreadRow = memo(function SidebarThreadRow(props: {
         <TooltipPopup>{listeningState === "playing" ? "Pause audio" : "Play audio"}</TooltipPopup>
       </Tooltip>
     ) : null;
+  // Fork: a scheduled (deferred) archive stays visible at a glance in both
+  // row variants until it runs or is cancelled from the thread menu.
+  const archivePendingIndicator = hasPendingArchive(thread) ? (
+    <Tooltip>
+      <TooltipTrigger
+        render={
+          <span
+            role="img"
+            aria-label="Archives when done"
+            className="inline-flex items-center text-warning-foreground"
+          />
+        }
+      >
+        <ArchiveIcon aria-hidden className="size-3 shrink-0" />
+      </TooltipTrigger>
+      <TooltipPopup>Archives when the current turn and background work finish</TooltipPopup>
+    </Tooltip>
+  ) : null;
   // Same pen the new-thread draft rows lead with, so both kinds of unsent
   // work read the same way in the list.
   const draftIndicator = hasUnsentDraft ? (
@@ -1938,6 +1958,7 @@ const SidebarThreadRow = memo(function SidebarThreadRow(props: {
             {draftIndicator}
             {title}
             {listeningIndicator}
+            {archivePendingIndicator}
             {pinIndicator}
             {/* A settled or snoozed thread can still occupy a split pane, so
                 the marker rides slim rows too — like the terminal and PR
@@ -2120,6 +2141,7 @@ const SidebarThreadRow = memo(function SidebarThreadRow(props: {
                 <span className="flex-1" />
               )}
               {listeningIndicator}
+              {archivePendingIndicator}
               {showPin ? (
                 <PinIcon
                   aria-label="Pinned"
@@ -2562,6 +2584,7 @@ export default function Sidebar() {
     reorderActiveThread,
     markThreadUnread,
     archiveThread,
+    cancelThreadArchive,
     deleteThread,
   } = useThreadActions();
   const updateThreadMetadata = useAtomCommand(threadEnvironment.updateMetadata, {
@@ -4823,6 +4846,7 @@ export default function Sidebar() {
               canSnoozeNow: canSnooze(thread, { now: new Date().toISOString() }),
               isRegeneratingTitle,
               isRunning: !threadRuntimeCanArchive(thread.runtime),
+              archivePending: hasPendingArchive(thread),
               supports: {
                 settlement: supportsSettlement,
                 autoSettleOptOut: supportsAutoSettleOptOut,
@@ -4983,6 +5007,20 @@ export default function Sidebar() {
             }
             return;
           }
+          case "cancel-archive": {
+            const result = await cancelThreadArchive(threadRef);
+            if (result._tag === "Failure" && !isAtomCommandInterrupted(result)) {
+              const error = squashAtomCommandFailure(result);
+              toastManager.add(
+                stackedThreadToast({
+                  type: "error",
+                  title: "Failed to cancel pending archive",
+                  description: error instanceof Error ? error.message : "An error occurred.",
+                }),
+              );
+            }
+            return;
+          }
           case "delete": {
             if (confirmThreadDelete) {
               const confirmed = await settlePromise(() =>
@@ -5023,6 +5061,7 @@ export default function Sidebar() {
       attemptUnpin,
       attemptUnsettle,
       attemptUnsnooze,
+      cancelThreadArchive,
       confirmThreadArchive,
       confirmThreadDelete,
       copyBranchToClipboard,

@@ -353,6 +353,21 @@ export const OrchestrationV2LimitRecoveryUpdate = Schema.Struct({
 );
 export type OrchestrationV2LimitRecoveryUpdate = typeof OrchestrationV2LimitRecoveryUpdate.Type;
 
+/**
+ * Fork: a deferred archive. Pending until the run it waits on completes (which
+ * includes its final checkpoint) and background work that holds completion
+ * ends; `runId` is null when it waits only on background work.
+ */
+export const OrchestrationV2ThreadArchiveRequest = Schema.Struct({
+  requestId: CommandId,
+  runId: Schema.NullOr(RunId),
+  worktreePath: Schema.NullOr(TrimmedNonEmptyString),
+  requestedAt: IsoDateTime,
+  status: Schema.Literals(["pending", "completed", "cancelled", "error"]),
+  detail: Schema.optional(TrimmedNonEmptyString),
+});
+export type OrchestrationV2ThreadArchiveRequest = typeof OrchestrationV2ThreadArchiveRequest.Type;
+
 export const OrchestrationV2AppThread = Schema.Struct({
   ...OrchestrationV2CreationFields,
   id: ThreadId,
@@ -427,6 +442,8 @@ export const OrchestrationV2AppThread = Schema.Struct({
       }),
     ),
   ),
+  /** Fork: latest deferred archive request; omitted when none was made. */
+  archiveRequest: Schema.optional(Schema.NullOr(OrchestrationV2ThreadArchiveRequest)),
   deletedAt: Schema.NullOr(Schema.DateTimeUtc),
 });
 export type OrchestrationV2AppThread = typeof OrchestrationV2AppThread.Type;
@@ -1765,6 +1782,8 @@ export const OrchestrationV2ThreadShell = Schema.Struct({
       }),
     ),
   ),
+  /** Fork: latest deferred archive request; omitted by servers without it. */
+  archiveRequest: Schema.optional(Schema.NullOr(OrchestrationV2ThreadArchiveRequest)),
   deletedAt: Schema.NullOr(Schema.DateTimeUtc),
 });
 export type OrchestrationV2ThreadShell = typeof OrchestrationV2ThreadShell.Type;
@@ -2468,6 +2487,20 @@ export const OrchestrationV2Command = Schema.Union([
     commandId: CommandId,
     threadId: ThreadId,
   }),
+  /** Fork: archive once the current run and background work finish. */
+  Schema.Struct({
+    type: Schema.Literal("thread.archive.schedule"),
+    commandId: CommandId,
+    threadId: ThreadId,
+    /** Required to schedule while a run is active; otherwise only idle threads qualify. */
+    afterTurn: Schema.Boolean,
+  }),
+  /** Fork: cancel the pending deferred archive. */
+  Schema.Struct({
+    type: Schema.Literal("thread.archive.cancel"),
+    commandId: CommandId,
+    threadId: ThreadId,
+  }),
   Schema.Struct({
     type: Schema.Literal("thread.delete"),
     commandId: CommandId,
@@ -2859,6 +2892,13 @@ export type OrchestrationV2Command = typeof OrchestrationV2Command.Type;
  * send them.
  */
 const OrchestrationV2InternalCommand = Schema.Union([
+  /** Fork: runs the pending deferred archive `requestId` once it is ready. */
+  Schema.Struct({
+    type: Schema.Literal("thread.archive.execute"),
+    commandId: CommandId,
+    threadId: ThreadId,
+    requestId: CommandId,
+  }),
   /** Records that the provider rollback `requestId` failed for good. */
   Schema.Struct({
     type: Schema.Literal("checkpoint.rollback.fail"),

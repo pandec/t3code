@@ -110,6 +110,8 @@ export const layer: Layer.Layer<ThreadForkServiceV2> = Layer.succeed(
           snoozedUntil: null,
           snoozedAt: null,
           lastVisitedAt: null,
+          // Fork: a deferred archive belongs to the source thread only.
+          archiveRequest: null,
           deletedAt: null,
         };
         const transfer: OrchestrationV2ContextTransfer = {

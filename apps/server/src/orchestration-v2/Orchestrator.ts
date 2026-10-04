@@ -28,6 +28,7 @@ import {
   type OrchestrationV2DelegatedCompletionCohort,
   type OrchestrationV2DelegatedCompletionDelivery,
   type OrchestrationV2DomainEvent,
+  type OrchestrationV2ThreadArchiveRequest,
   type OrchestrationV2ExecutionNode,
   type OrchestrationV2ProviderThread,
   type OrchestrationV2ProviderTurn,
@@ -113,6 +114,16 @@ import {
   ThreadForkServiceV2,
 } from "./ThreadForkService.ts";
 import { planThreadDeletion } from "./ThreadDeletion.ts";
+import {
+  ARCHIVE_CANCEL_DETAIL,
+  cancelledArchiveRequest,
+  completedArchiveRequest,
+  evaluateDeferredArchive,
+  latestThreadState,
+  pendingArchiveRequest,
+  planArchiveSchedule,
+  stopCancelsArchive,
+} from "./DeferredArchive.ts";
 
 export class OrchestratorDispatchError extends Schema.TaggedError<OrchestratorDispatchError>()(
   "OrchestratorDispatchError",
@@ -394,6 +405,9 @@ function commandThreadId(command: OrchestrationV2ServerCommand): ThreadId {
     case "checkpoint.rollback.fail":
     case "thread.background-work.settle":
     case "provider.switch":
+    case "thread.archive.schedule":
+    case "thread.archive.cancel":
+    case "thread.archive.execute":
       return command.threadId;
     case "delegated_task.request":
     case "delegated_task.wake-policy":
@@ -9011,6 +9025,157 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
     });
   });
 
+  // Fork: deferred archive (DeferredArchive.ts). Requests live on the thread
+  // payload, so they replay with the event log and survive restarts.
+  const readThreadForArchive = (threadId: ThreadId) =>
+    projectionStore
+      .getThread(threadId)
+      .pipe(Effect.mapError((cause) => new OrchestratorProjectionError({ threadId, cause })));
+
+  /**
+   * Emits the cancellation of a pending archive after this command's other
+   * thread events, so their full-thread payloads cannot resurrect it. Reads
+   * only the thread row when nothing is pending (the common path).
+   */
+  const cancelPendingThreadArchive = Effect.fn("orchestrationV2.dispatch.cancelPendingArchive")(
+    function* (
+      threadId: ThreadId,
+      command: OrchestrationV2ServerCommand,
+      events: Ref.Ref<Array<OrchestrationV2DomainEvent>>,
+      detail: string,
+    ) {
+      const thread = latestThreadState(
+        yield* Ref.get(events),
+        threadId,
+        yield* readThreadForArchive(threadId),
+      );
+      const request = thread.archiveRequest;
+      if (request?.status !== "pending" || thread.deletedAt !== null) return;
+      const now = yield* DateTime.now;
+      yield* emit(
+        events,
+        command,
+      )({
+        type: "thread.metadata-updated",
+        threadId,
+        providerInstanceId: thread.providerInstanceId,
+        occurredAt: now,
+        payload: {
+          ...thread,
+          archiveRequest: cancelledArchiveRequest(request, detail),
+        },
+      });
+    },
+  );
+
+  const cancelArchiveDetailForStop = Effect.fn("orchestrationV2.dispatch.archiveStopDetail")(
+    function* (command: Extract<OrchestrationV2Command, { readonly type: "run.interrupt" }>) {
+      const thread = yield* readThreadForArchive(command.threadId);
+      const request = pendingArchiveRequest(thread);
+      if (request === null || request.runId !== command.runId) return null;
+      const { runs } = yield* loadProjectionForCommand(command, ["runs"]);
+      return stopCancelsArchive(request, runs, command.runId)
+        ? ARCHIVE_CANCEL_DETAIL.stopped
+        : null;
+    },
+  );
+
+  const dispatchThreadArchiveRequest = Effect.fn("orchestrationV2.dispatch.threadArchiveRequest")(
+    function* (
+      command: Extract<
+        OrchestrationV2ServerCommand,
+        {
+          readonly type:
+            | "thread.archive.schedule"
+            | "thread.archive.cancel"
+            | "thread.archive.execute";
+        }
+      >,
+      events: Ref.Ref<Array<OrchestrationV2DomainEvent>>,
+      effects: Ref.Ref<Array<PendingOrchestrationEffectV2>>,
+    ) {
+      const reject = (cause: string) =>
+        new OrchestratorDispatchError({
+          commandId: command.commandId,
+          commandType: command.type,
+          cause,
+        });
+      const thread = yield* readThreadForArchive(command.threadId);
+      if (thread.deletedAt !== null) return yield* reject(`Thread ${command.threadId} is deleted.`);
+      const now = yield* DateTime.now;
+      const emitThread = (payload: OrchestrationV2AppThread) =>
+        emit(
+          events,
+          command,
+        )({
+          type: "thread.metadata-updated",
+          threadId: command.threadId,
+          providerInstanceId: payload.providerInstanceId,
+          occurredAt: now,
+          payload,
+        });
+      // Archive through the ordinary path (queued runs, sessions, terminals),
+      // then record the request's outcome on top of the archived thread.
+      const archiveWith = (request: OrchestrationV2ThreadArchiveRequest) =>
+        Effect.gen(function* () {
+          yield* dispatchThreadMutation(
+            { type: "thread.archive", commandId: command.commandId, threadId: command.threadId },
+            events,
+            effects,
+          );
+          const archived = latestThreadState(yield* Ref.get(events), command.threadId, thread);
+          yield* emitThread({ ...archived, archiveRequest: request });
+        });
+
+      if (command.type === "thread.archive.cancel") {
+        const request = pendingArchiveRequest(thread);
+        if (request === null) return yield* reject("No archive is pending.");
+        yield* emitThread({
+          ...thread,
+          archiveRequest: cancelledArchiveRequest(request, ARCHIVE_CANCEL_DETAIL.user),
+        });
+        return;
+      }
+
+      const { runs } = yield* projectionStore
+        .getThreadRecords(command.threadId, ["runs"])
+        .pipe(mapDispatchError(command));
+      const pendingBackgroundTasks =
+        (yield* projectionStore.getThreadShell(command.threadId).pipe(mapDispatchError(command)))
+          ?.pendingBackgroundTasks ?? [];
+
+      if (command.type === "thread.archive.schedule") {
+        const plan = planArchiveSchedule({
+          thread,
+          runs,
+          pendingBackgroundTasks,
+          afterTurn: command.afterTurn,
+          requestId: command.commandId,
+          now,
+        });
+        if (plan.type === "reject") return yield* reject(plan.detail);
+        if (plan.type === "archive") return yield* archiveWith(plan.request);
+        yield* emitThread({ ...thread, archiveRequest: plan.request });
+        return;
+      }
+
+      const request = pendingArchiveRequest(thread);
+      if (request === null || request.requestId !== command.requestId) {
+        return yield* reject("The archive request is no longer pending.");
+      }
+      const decision = evaluateDeferredArchive({ thread, request, runs, pendingBackgroundTasks });
+      if (decision.type === "wait") return yield* reject(decision.detail);
+      if (decision.type === "cancel") {
+        yield* emitThread({
+          ...thread,
+          archiveRequest: cancelledArchiveRequest(request, decision.detail),
+        });
+        return;
+      }
+      yield* archiveWith(completedArchiveRequest(request));
+    },
+  );
+
   const dispatchUnsupported = (command: OrchestrationV2ServerCommand) =>
     Effect.fail(
       new OrchestratorDispatchError({
@@ -9137,6 +9302,19 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
       case "thread.model-selection.set":
       case "provider.switch":
         yield* dispatchThreadMutation(command, events, effects);
+        if (command.type === "thread.archive") {
+          yield* cancelPendingThreadArchive(
+            command.threadId,
+            command,
+            events,
+            ARCHIVE_CANCEL_DETAIL.manual,
+          );
+        }
+        break;
+      case "thread.archive.schedule":
+      case "thread.archive.cancel":
+      case "thread.archive.execute":
+        yield* dispatchThreadArchiveRequest(command, events, effects);
         break;
       case "provider-session.detach":
         yield* dispatchProviderSessionDetach(command, events, effects);
@@ -9159,6 +9337,12 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
           });
         }
         yield* dispatchMessage(command, events, effects);
+        yield* cancelPendingThreadArchive(
+          command.threadId,
+          command,
+          events,
+          ARCHIVE_CANCEL_DETAIL.newWork,
+        );
         break;
       }
       case "notification.delivery.accept":
@@ -9179,9 +9363,16 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
       case "thread.user-input.dismiss":
         yield* dispatchThreadUserInputDismiss(command, events, effects);
         break;
-      case "run.interrupt":
+      case "run.interrupt": {
+        // Read before the interrupt lands: Stop cancels a pending archive
+        // only while the run it waits on is still running.
+        const stopDetail = yield* cancelArchiveDetailForStop(command);
         cancelUnsettledEffects = yield* dispatchRunInterrupt(command, events, effects);
+        if (stopDetail !== null) {
+          yield* cancelPendingThreadArchive(command.threadId, command, events, stopDetail);
+        }
         break;
+      }
       case "queued-message.promote-to-steer":
         yield* dispatchQueuedMessagePromoteToSteer(command, events, effects);
         break;

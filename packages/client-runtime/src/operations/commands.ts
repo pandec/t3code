@@ -83,6 +83,11 @@ export interface ThreadCommandInput extends CommandMetadata {
 export type DeleteThreadInput = ThreadCommandInput;
 export type ArchiveThreadInput = ThreadCommandInput;
 export type UnarchiveThreadInput = ThreadCommandInput;
+/** Fork: deferred archive. `afterTurn` is required to schedule while a run is active. */
+export interface ScheduleThreadArchiveInput extends ThreadCommandInput {
+  readonly afterTurn: boolean;
+}
+export type CancelThreadArchiveInput = ThreadCommandInput;
 export type SettleThreadInput = ThreadCommandInput;
 
 export interface UnsettleThreadInput extends ThreadCommandInput {
@@ -435,6 +440,27 @@ export const unarchiveThread = Effect.fn("EnvironmentCommands.unarchiveThread")(
   input: UnarchiveThreadInput,
 ) {
   return yield* simpleThreadCommand("thread.unarchive", input);
+});
+
+export const scheduleThreadArchive = Effect.fn("EnvironmentCommands.scheduleThreadArchive")(
+  function* (input: ScheduleThreadArchiveInput) {
+    return yield* dispatch({
+      type: "thread.archive.schedule",
+      commandId: yield* allocateCommandId(input),
+      threadId: input.threadId,
+      afterTurn: input.afterTurn,
+    });
+  },
+);
+
+export const cancelThreadArchive = Effect.fn("EnvironmentCommands.cancelThreadArchive")(function* (
+  input: CancelThreadArchiveInput,
+) {
+  return yield* dispatch({
+    type: "thread.archive.cancel",
+    commandId: yield* allocateCommandId(input),
+    threadId: input.threadId,
+  });
 });
 
 export const settleThread = Effect.fn("EnvironmentCommands.settleThread")(function* (

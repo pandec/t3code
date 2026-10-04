@@ -20,6 +20,8 @@ import {
 import {
   type ThreadCommandInput,
   type ArchiveThreadInput,
+  type CancelThreadArchiveInput,
+  type ScheduleThreadArchiveInput,
   type CancelQueuedRunInput,
   type CreateThreadInput,
   type DeleteThreadInput,
@@ -54,6 +56,8 @@ import {
   type VisitThreadInput,
   archiveThread,
   cancelQueuedRun,
+  cancelThreadArchive,
+  scheduleThreadArchive,
   createThread,
   deleteThread,
   editQueuedRun,
@@ -98,6 +102,8 @@ export type LoadEarlierThreadHistoryInput = {
 export type {
   ArchiveThreadInput,
   CancelQueuedRunInput,
+  CancelThreadArchiveInput,
+  ScheduleThreadArchiveInput,
   CreateThreadInput,
   DeleteThreadInput,
   EditQueuedRunInput,
@@ -164,6 +170,18 @@ export function createThreadEnvironmentAtoms<R, E>(
     unarchive: createEnvironmentCommand(runtime, {
       label: "environment-data:commands:thread:unarchive",
       execute: (input: UnarchiveThreadInput) => unarchiveThread(input),
+      scheduler,
+      concurrency,
+    }),
+    scheduleArchive: createEnvironmentCommand(runtime, {
+      label: "environment-data:commands:thread:schedule-archive",
+      execute: (input: ScheduleThreadArchiveInput) => scheduleThreadArchive(input),
+      scheduler,
+      concurrency,
+    }),
+    cancelArchive: createEnvironmentCommand(runtime, {
+      label: "environment-data:commands:thread:cancel-archive",
+      execute: (input: CancelThreadArchiveInput) => cancelThreadArchive(input),
       scheduler,
       concurrency,
     }),

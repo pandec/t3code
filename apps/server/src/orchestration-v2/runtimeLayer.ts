@@ -48,6 +48,7 @@ import { layer as runtimeRequestServiceLayer } from "./RuntimeRequestService.ts"
 import { layerWithLegacyImporter as threadManagementServiceLayer } from "./ThreadManagementService.ts";
 import { layer as threadLaunchServiceLayer } from "./ThreadLaunchService.ts";
 import { layer as threadLifecycleServiceLayer } from "./ThreadLifecycleService.ts";
+import * as ThreadArchiveScheduler from "./ThreadArchiveScheduler.ts";
 import { layer as threadForkServiceLayer } from "./ThreadForkService.ts";
 import { layer as turnItemPositionStoreLayer } from "./TurnItemPositionStore.ts";
 import { layer as scheduledTaskServiceLayer } from "../scheduledTasks/ScheduledTaskService.ts";
@@ -319,6 +320,11 @@ export const OrchestrationV2ProductionLayerLive = Layer.mergeAll(
   ),
   providerContinuationWorkerProvided,
   agentSessionImporterProvided,
+  // Fork: deferred archive service and its worker.
+  ThreadArchiveScheduler.workerLive.pipe(
+    Layer.provideMerge(ThreadArchiveScheduler.layer),
+    Layer.provide(threadManagementProvided),
+  ),
 ).pipe(
   Layer.provide(Scheduler.layer),
   Layer.provideMerge(OrchestrationEventInfrastructureLayerLive),

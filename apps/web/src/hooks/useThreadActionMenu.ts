@@ -6,7 +6,11 @@ import {
   settlePromise,
   squashAtomCommandFailure,
 } from "@t3tools/client-runtime/state/runtime";
-import { canSnooze, effectiveSnoozed } from "@t3tools/client-runtime/state/thread-settled";
+import {
+  canSnooze,
+  effectiveSnoozed,
+  hasPendingArchive,
+} from "@t3tools/client-runtime/state/thread-settled";
 import type { ScopedThreadRef, ThreadId } from "@t3tools/contracts";
 import { useRouter } from "@tanstack/react-router";
 import { useCallback, useMemo } from "react";
@@ -91,6 +95,7 @@ export function useThreadActionMenu(input: {
     confirmAndUnpinThread,
     setThreadAutoSettle,
     archiveThread,
+    cancelThreadArchive,
     deleteThread,
     markThreadUnread,
   } = useThreadActions();
@@ -152,6 +157,7 @@ export function useThreadActionMenu(input: {
           canSnoozeNow: canSnooze(thread, { now: now.toISOString() }),
           isRegeneratingTitle,
           isRunning: !threadRuntimeCanArchive(thread.runtime),
+          archivePending: hasPendingArchive(thread),
           supports,
           snoozePresets,
         });
@@ -294,6 +300,11 @@ export function useThreadActionMenu(input: {
             }
             return;
           }
+          case "cancel-archive":
+            await reportFailure("Failed to cancel pending archive", () =>
+              cancelThreadArchive(threadRef),
+            );
+            return;
           case "delete": {
             if (confirmThreadDelete) {
               const confirmed = await settlePromise(() =>
@@ -327,6 +338,7 @@ export function useThreadActionMenu(input: {
     },
     [
       archiveThread,
+      cancelThreadArchive,
       confirmThreadArchive,
       confirmThreadDelete,
       confirmAndUnpinThread,
