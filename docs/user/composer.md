@@ -34,10 +34,12 @@ See [images and videos](#images-and-videos-in-messages) for previewing and savin
 
 ## Send while the agent is working
 
-On web and desktop, choose **Settings → General → Follow-up behavior** to queue
-new messages for a later turn or steer the running turn immediately. The setting
-applies to this client; already queued messages keep their place. Queued messages
-are saved on the server and can be edited, reordered, or removed above the composer.
+On web and desktop, a draft written while a turn runs shows **Queue for later**,
+**Steer**, and **Stop** together. Queue for later holds the message for a later turn;
+Steer sends it into the running turn. **Settings → General → Follow-up behavior**
+picks which of the two `Enter` uses (it is the filled button). The setting applies
+to this client; already queued messages keep their place. Queued messages are saved
+on the server and can be edited, reordered, or removed above the composer.
 `Cmd+Enter` on macOS or `Ctrl+Enter` on Windows and Linux uses the opposite action:
 it steers when your default is Queue and queues when your default is Steer.
 
@@ -54,7 +56,8 @@ start of the composer to edit the most recently queued message. Change
 Mobile has the same choice under **Settings → Follow-ups**. While a turn is
 running the send button shows which action it will take. Long-press it to use the
 other action for a single message, or hold `Cmd` while sending from a hardware
-keyboard. The button only offers Steer when the running agent supports it.
+keyboard. VoiceOver and TalkBack offer the other action as an accessibility
+action. The button only offers Steer when the running agent supports it.
 
 ## Queue messages offline
 

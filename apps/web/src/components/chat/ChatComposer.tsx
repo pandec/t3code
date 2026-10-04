@@ -1383,6 +1383,8 @@ const ComposerFooterPrimaryActions = memo(function ComposerFooterPrimaryActions(
   onResume: () => void;
   onPreviousPendingQuestion: () => void;
   onInterrupt: () => void;
+  onQueue: () => void;
+  onSteer: () => void;
   onImplementPlanInNewThread: () => void;
   onCompactContext?: (() => void) | undefined;
   compactDisabled: boolean;
@@ -1423,6 +1425,8 @@ const ComposerFooterPrimaryActions = memo(function ComposerFooterPrimaryActions(
         onResume={props.onResume}
         onPreviousPendingQuestion={props.onPreviousPendingQuestion}
         onInterrupt={props.onInterrupt}
+        onQueue={props.onQueue}
+        onSteer={props.onSteer}
         onImplementPlanInNewThread={props.onImplementPlanInNewThread}
       />
     </>
@@ -2842,7 +2846,9 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
     Number(showComposerAttachAction) +
     Number(voiceTranscriptionAvailable) +
     Number(showComposerMeter || reserveContextWindowMeter);
-  const composerFooterHasWideActions = showPlanFollowUpPrompt || activePendingProgress !== null;
+  // A running turn offers Queue for later and Steer beside Stop, so it needs the wide footer.
+  const composerFooterHasWideActions =
+    showPlanFollowUpPrompt || activePendingProgress !== null || phase === "running";
   const composerFooterActionLayoutKey = useMemo(() => {
     if (activePendingProgress) {
       return `pending:${activePendingProgress.questionIndex}:${activePendingProgress.isLastQuestion}:${activePendingIsResponding}`;
@@ -4316,6 +4322,12 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
     },
     [phase, settings.followUpBehavior, submitComposer],
   );
+  const handleQueuePrimaryAction = useCallback(() => {
+    submitComposer(undefined, "queue");
+  }, [submitComposer]);
+  const handleSteerPrimaryAction = useCallback(() => {
+    submitComposer(undefined, "steer");
+  }, [submitComposer]);
   const submitCitationAndSend = useCallback(() => {
     submitComposer(
       undefined,
@@ -5216,6 +5228,8 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
     composerMenuOpen ||
     insertionPicker !== null ||
     isStashMenuOpen ||
+    // Stop, Steer and Queue for later need the full actions row.
+    (phase === "running" && composerSendState.hasSendableContent) ||
     isDesktopVoiceRecorderActive ||
     isDragOverComposer ||
     isPreparingWorktree ||
@@ -7719,6 +7733,8 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
                     onResume={onResume}
                     onPreviousPendingQuestion={onPreviousActivePendingUserInputQuestion}
                     onInterrupt={handleInterruptPrimaryAction}
+                    onQueue={handleQueuePrimaryAction}
+                    onSteer={handleSteerPrimaryAction}
                     onImplementPlanInNewThread={handleImplementPlanInNewThreadPrimaryAction}
                     compactDisabled={
                       compactDisabled || noProviderAvailable || isSendBusy || isConnecting
