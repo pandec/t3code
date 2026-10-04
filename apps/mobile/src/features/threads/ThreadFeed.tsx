@@ -272,6 +272,11 @@ export interface ThreadFeedProps {
   readonly setupWorkingStartedAt?: string | null;
   readonly queuedMessages: ReadonlyArray<QueuedThreadMessage>;
   readonly dispatchingMessageId: MessageId | null;
+  /**
+   * User messages steered into the running turn that the agent has not read
+   * yet. Empty where the caller does not track them (tests, previews).
+   */
+  readonly steerPendingMessageIds?: ReadonlySet<MessageId>;
   /** Null where a pending message cannot be edited (no composer to edit it in). */
   readonly onEditPendingMessage: ((message: QueuedThreadMessage) => void) | null;
   readonly environmentId: EnvironmentId;
@@ -1463,6 +1468,22 @@ function useMarkdownStyles(
   ]);
 }
 
+/**
+ * Shown under a steer the agent has not read yet: "sent" and "read" can stand
+ * minutes apart behind a long subagent or shell call. Deliberately quiet and
+ * static; it reports a wait, it does not ask for anything.
+ */
+function SteerPendingMarker({ tintColor }: { readonly tintColor: ColorValue }) {
+  return (
+    <View className="mt-1 flex-row items-center justify-end gap-1 pr-0.5">
+      <SymbolView name="circle.dashed" size={11} tintColor={tintColor} type="monochrome" />
+      <Text className="font-t3-medium text-xs text-foreground-secondary">
+        Waiting for the agent to pick this up
+      </Text>
+    </View>
+  );
+}
+
 function AgentMessageAttribution(props: {
   readonly environmentId: EnvironmentId;
   readonly senderThreadId?: ThreadId;
@@ -1501,6 +1522,7 @@ function renderFeedEntry(
     | "onUseArtifactTemplate"
     | "skills"
     | "dispatchingMessageId"
+    | "steerPendingMessageIds"
     | "onEditPendingMessage"
     | "threadId"
     | "workspaceRoot"
@@ -1643,6 +1665,7 @@ function renderFeedEntry(
       !message.streaming;
 
     if (isUser) {
+      const steerPending = props.steerPendingMessageIds?.has(message.id) === true;
       const enterAnimated = isFreshTimestamp(message.createdAt);
       const intentBadge = resolveUserMessageIntentBadge(message.inputIntent);
       const referenceIds = new Set(
@@ -1678,6 +1701,7 @@ function renderFeedEntry(
             style={{
               backgroundColor: userBubbleColor,
               maxWidth: props.userBubbleMaxWidth,
+              ...(steerPending ? { opacity: 0.75 } : null),
               ...(hasReviewCommentContext
                 ? { width: props.reviewCommentBubbleWidth }
                 : hasWideBlock
@@ -1756,6 +1780,7 @@ function renderFeedEntry(
               </MarkdownImageAvailableWidthContext>
             ) : null}
           </View>
+          {steerPending ? <SteerPendingMarker tintColor={iconSubtleColor} /> : null}
           <View className="mt-1 flex-row items-center justify-end gap-1 pr-0.5">
             {intentBadge ? (
               <View
@@ -2461,6 +2486,7 @@ export const ThreadFeed = memo(function ThreadFeed(props: ThreadFeedProps) {
       worktreeSetup: props.worktreeSetup,
       setupWorkingStartedAt: props.setupWorkingStartedAt,
       dispatchingMessageId: props.dispatchingMessageId,
+      steerPendingMessageIds: props.steerPendingMessageIds,
       unsettledTurnId,
       copiedRowId,
       expandedWorkGroups,
@@ -2477,6 +2503,7 @@ export const ThreadFeed = memo(function ThreadFeed(props: ThreadFeedProps) {
       props.worktreeSetup,
       props.setupWorkingStartedAt,
       props.dispatchingMessageId,
+      props.steerPendingMessageIds,
       unsettledTurnId,
       copiedRowId,
       expandedWorkGroups,
@@ -2962,6 +2989,7 @@ export const ThreadFeed = memo(function ThreadFeed(props: ThreadFeedProps) {
           {renderFeedEntry(info, {
             environmentId: props.environmentId,
             dispatchingMessageId: props.dispatchingMessageId,
+            steerPendingMessageIds: props.steerPendingMessageIds,
             onEditPendingMessage: props.onEditPendingMessage,
             onUseArtifactTemplate: props.onUseArtifactTemplate,
             threadId: props.threadId,
@@ -3009,6 +3037,7 @@ export const ThreadFeed = memo(function ThreadFeed(props: ThreadFeedProps) {
       props.threadId,
       setupAnchorIndex,
       props.dispatchingMessageId,
+      props.steerPendingMessageIds,
       props.onEditPendingMessage,
       copiedRowId,
       disclosureToggleSettling,

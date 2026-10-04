@@ -182,6 +182,12 @@ first, it starts the next turn when its time is up. The wait is five seconds by 
 under **Settings → Extras** on web and desktop or **Settings → Thread behavior** on mobile (set per
 device). Set it to 0 to steer immediately.
 
+The agent doesn't always read a steer straight away. Most agents only check for new input between
+steps, so a steer sent during a long shell command or subagent can wait until that step finishes.
+Until the agent moves on, the message is dimmed with **Waiting for the agent to pick this up** under
+it. The note clears when the agent produces new output, or when the turn ends. It shows on every
+device and survives a reload.
+
 If the server restarts, saved queued messages keep their order and are held. Press
 **Resume** in an empty composer on web or desktop, or **Resume queue** in the queue
 sheet on mobile, to continue. You can edit, reorder, or remove held messages without starting them.

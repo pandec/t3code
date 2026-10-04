@@ -396,6 +396,7 @@ import {
 } from "../state/server";
 import { terminalEnvironment } from "../state/terminal";
 import { threadEnvironment } from "../state/threads";
+import { useSteerPendingMessageIds } from "../state/threadSteerPending";
 import {
   enqueueThreadSubmission,
   pendingSubmissionToChatMessage,
@@ -2104,6 +2105,7 @@ export default function ChatView(props: ChatViewProps) {
   const activeLatestRun = isServerThread ? serverLatestRun : (activeThread?.latestRun ?? null);
   const activeActivityRun = isServerThread ? serverActivityRun : (activeThread?.latestRun ?? null);
   const activeRuntime = isServerThread ? serverRuntime : (activeThread?.runtime ?? null);
+  const steerPendingMessageIds = useSteerPendingMessageIds(serverProjection);
   const hasHeldQueuedRuns =
     isServerThread &&
     serverProjection?.runs.some((run) => run.status === "queued" && run.queueHeld === true) ===
@@ -10998,6 +11000,7 @@ export default function ChatView(props: ChatViewProps) {
                 runs={paintOnlyDisplayedTimeline ? [] : (serverProjection?.runs ?? [])}
                 latestRun={paintOnlyDisplayedTimeline ? null : activeActivityRun}
                 runningRunId={paintOnlyDisplayedTimeline ? null : activeRunningTurnId}
+                {...(!paintOnlyDisplayedTimeline ? { steerPendingMessageIds } : {})}
                 turnDiffSummaries={
                   paintOnlyDisplayedTimeline ? EMPTY_HELD_TURN_DIFF_SUMMARIES : turnDiffSummaries
                 }
