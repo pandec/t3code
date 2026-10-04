@@ -136,7 +136,8 @@ export const GrokDriver: ProviderDriver<GrokSettings, GrokDriverEnv> = {
         accentColor,
         environment,
         enabled,
-        config,
+        // Turns launch the same `~`-expanded binary as probes and text generation.
+        config: effectiveConfig,
       }).pipe(
         Effect.mapError(
           (cause) =>
