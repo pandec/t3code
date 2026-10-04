@@ -4491,6 +4491,13 @@ export default function ChatView(props: ChatViewProps) {
   const queuedRunsControlRef = useRef<QueuedRunsControlHandle>(null);
   const queuedEditSaveInFlightRef = useRef(false);
   const [isSavingQueuedEdit, setIsSavingQueuedEdit] = useState(false);
+  // Thread keys whose rescued queued edit is still moving attachments into the thread draft.
+  const [queuedEditRescueThreadKeys, setQueuedEditRescueThreadKeys] = useState<
+    ReadonlyArray<string>
+  >([]);
+  // An open, saving or rescuing queued edit owns composer content, so rewind and compaction wait.
+  const queuedEditTransferActive =
+    editingQueuedRun !== null || queuedEditRescueThreadKeys.includes(routeThreadKey);
   const queuedEditImageResources = useMemo(
     () =>
       (editingQueuedRun?.existingAttachments ?? [])
@@ -4515,6 +4522,8 @@ export default function ChatView(props: ChatViewProps) {
   const beginEditingQueuedRun = useCallback(
     (request: EditQueuedRunRequest) => {
       if (!activeThread) return;
+      // A rewind is about to replace the composer contents.
+      if (useComposerDraftStore.getState().rewindingThreadKeys.has(routeThreadKey)) return;
       if (editingQueuedRun !== null && editingQueuedRun.runId !== request.runId) {
         clearComposerDraftContent(queuedEditDraftTargetFor(editingQueuedRun.runId));
       }
@@ -4538,6 +4547,7 @@ export default function ChatView(props: ChatViewProps) {
       clearComposerDraftContent,
       editingQueuedRun,
       queuedEditDraftTargetFor,
+      routeThreadKey,
       serverProjection,
       scheduleComposerFocus,
       setComposerDraftPrompt,
@@ -4624,6 +4634,8 @@ export default function ChatView(props: ChatViewProps) {
       return;
     }
     const connection = readPreparedConnection(environmentId);
+    const rescueThreadKey = routeThreadKey;
+    setQueuedEditRescueThreadKeys((keys) => [...keys, rescueThreadKey]);
     void restoreQueuedEditAttachments({
       attachments: savedAttachments,
       target: baseComposerDraftTarget,
@@ -4637,11 +4649,18 @@ export default function ChatView(props: ChatViewProps) {
           createAssetUrl: createAttachmentAssetUrl,
         });
       },
-    }).then(
-      (restored) =>
-        reportRecovered(recovery.skippedAttachmentCount + restored.skippedAttachmentCount),
-      () => reportRecovered(recovery.skippedAttachmentCount + savedAttachments.length),
-    );
+    })
+      .then(
+        (restored) =>
+          reportRecovered(recovery.skippedAttachmentCount + restored.skippedAttachmentCount),
+        () => reportRecovered(recovery.skippedAttachmentCount + savedAttachments.length),
+      )
+      .finally(() =>
+        setQueuedEditRescueThreadKeys((keys) => {
+          const index = keys.indexOf(rescueThreadKey);
+          return index === -1 ? keys : keys.toSpliced(index, 1);
+        }),
+      );
   }, [
     activeThread?.id,
     baseComposerDraftTarget,
@@ -4649,6 +4668,7 @@ export default function ChatView(props: ChatViewProps) {
     editingQueuedRun,
     environmentId,
     queuedEditDraftTargetFor,
+    routeThreadKey,
     serverProjection,
   ]);
   const addTerminalContextToDraft = useCallback(
@@ -7260,6 +7280,7 @@ export default function ChatView(props: ChatViewProps) {
     !manualCompactionProviderAvailable ||
     isWorking ||
     isRevertingCheckpoint ||
+    queuedEditTransferActive ||
     threadDetailLoading ||
     isPreparingWorktree ||
     activeEnvironmentUnavailable ||
@@ -7273,7 +7294,9 @@ export default function ChatView(props: ChatViewProps) {
       ? "Choose a project before compacting"
       : !manualCompactionProviderAvailable
         ? "Compaction is unavailable for this provider"
-        : "Compacting is unavailable right now"
+        : queuedEditTransferActive
+          ? "Finish editing the queued message before compacting"
+          : "Compacting is unavailable right now"
     : null;
   const resumeCompactionBannerItem = useMemo<ComposerBannerStackItem | null>(() => {
     if (
@@ -7972,6 +7995,14 @@ export default function ChatView(props: ChatViewProps) {
         setThreadError(activeThread.id, "Interrupt the current turn before reverting checkpoints.");
         return;
       }
+      // The rewound prompt would land in, or race, a queued-message edit.
+      if (queuedEditTransferActive) {
+        setThreadError(
+          activeThread.id,
+          "Finish editing the queued message before reverting checkpoints.",
+        );
+        return;
+      }
       if (restoreFiles === undefined) {
         setPendingRevert({ turnCount, messageId, routeThreadKey });
         return;
@@ -8092,6 +8123,7 @@ export default function ChatView(props: ChatViewProps) {
       isRevertingCheckpoint,
       isSendBusy,
       phase,
+      queuedEditTransferActive,
       revertThreadCheckpoint,
       routeThreadKey,
       routeThreadRef,
