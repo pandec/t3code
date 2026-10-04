@@ -17,7 +17,13 @@ export const resolveClaudeHomePath = Effect.fn("resolveClaudeHomePath")(function
   return path.resolve(homePath.length > 0 ? expandHomePath(homePath) : NodeOS.homedir());
 });
 
-/** Resolve the directory Claude uses for config and persisted project sessions. */
+/**
+ * Resolve the directory Claude uses for config and persisted project sessions:
+ * `homePath`, then the environment's `CLAUDE_CONFIG_DIR` (a shadow dir when
+ * the environment came from `makeClaudeEnvironment`), then `HOME/.claude`,
+ * with relative inherited values resolved against `cwd`. This is the single
+ * owner of that precedence; callers derive from it rather than re-deriving it.
+ */
 export const resolveClaudeConfigDirPath = Effect.fn("resolveClaudeConfigDirPath")(function* (
   config: Pick<ClaudeSettings, "homePath">,
   environment: NodeJS.ProcessEnv = process.env,
