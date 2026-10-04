@@ -24,6 +24,7 @@ import {
   type CreateThreadInput,
   type DeleteThreadInput,
   type EditQueuedRunInput,
+  type HoldQueuedRunForEditInput,
   type InterruptThreadTurnInput,
   type MarkThreadUnreadInput,
   type ForkThreadFromRunInput,
@@ -57,6 +58,7 @@ import {
   createThread,
   deleteThread,
   editQueuedRun,
+  holdQueuedRunForEdit,
   interruptThreadTurn,
   forkThreadFromRun,
   markThreadUnread,
@@ -351,6 +353,12 @@ export function createThreadEnvironmentAtoms<R, E>(
     editQueuedRun: createEnvironmentCommand(runtime, {
       label: "environment-data:commands:thread:edit-queued-run",
       execute: (input: EditQueuedRunInput) => editQueuedRun(input),
+      scheduler,
+      concurrency,
+    }),
+    holdQueuedRunForEdit: createEnvironmentCommand(runtime, {
+      label: "environment-data:commands:thread:hold-queued-run-for-edit",
+      execute: (input: HoldQueuedRunForEditInput) => holdQueuedRunForEdit(input),
       scheduler,
       concurrency,
     }),

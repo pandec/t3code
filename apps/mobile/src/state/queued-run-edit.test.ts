@@ -10,7 +10,11 @@ import {
 
 import { composerDraftEnvironmentId } from "../lib/composerAttachmentUploadQueue";
 import { isQueuedEditDraftKey, queuedEditDraftKey } from "./queued-edit-draft-key";
-import { resolveQueuedEditPayload, type QueuedRunEdit } from "./queued-run-edit";
+import {
+  queuedRunEditHasChanges,
+  resolveQueuedEditPayload,
+  type QueuedRunEdit,
+} from "./queued-run-edit";
 
 const image = (id: string): ChatAttachment => ({
   type: "image",
@@ -103,5 +107,24 @@ describe("resolveQueuedEditPayload", () => {
 
     expect(payload.attachments).toEqual([]);
     expect(payload.context).toBeUndefined();
+  });
+});
+
+describe("queuedRunEditHasChanges", () => {
+  const begun = { ...edit([image("kept")]), originalAttachmentCount: 1 };
+
+  it("closes an untouched edit without rescuing it", () => {
+    expect(queuedRunEditHasChanges(begun, { text: "original", attachments: [] })).toBe(false);
+  });
+
+  it("rescues new text, new attachments, or a removed saved attachment", () => {
+    expect(queuedRunEditHasChanges(begun, { text: "changed", attachments: [] })).toBe(true);
+    expect(queuedRunEditHasChanges(begun, { text: "original", attachments: [{}] })).toBe(true);
+    expect(
+      queuedRunEditHasChanges(
+        { ...begun, existingAttachments: [] },
+        { text: "original", attachments: [] },
+      ),
+    ).toBe(true);
   });
 });

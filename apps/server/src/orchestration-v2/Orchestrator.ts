@@ -100,6 +100,7 @@ import { ProviderContinuationRequests } from "./ProviderContinuationRequests.ts"
 import { makeProviderFailure } from "./ProviderFailure.ts";
 import { ProviderSessionManagerV2 } from "./ProviderSessionManager.ts";
 import { ProviderSwitchServiceV2 } from "./ProviderSwitchService.ts";
+import { isQueuedRunEditHeld, withEditHold } from "./QueuedRunEditHold.ts";
 import { isAutomaticCompletionRun, queuedRunsInDeliveryOrder } from "./QueuedRunOrder.ts";
 import { RuntimePolicyV2 } from "./RuntimePolicy.ts";
 import {
@@ -395,6 +396,7 @@ function commandThreadId(command: OrchestrationV2ServerCommand): ThreadId {
     case "queued-run.reorder":
     case "queued-run.cancel":
     case "queued-run.edit":
+    case "queued-run.edit-hold":
     case "runtime-request.respond":
     case "thread.user-input.dismiss":
     case "checkpoint.rollback":
@@ -492,7 +494,11 @@ function nextQueuedRun(
   now: DateTime.Utc,
 ): OrchestrationV2Run | undefined {
   // A steer still in its recall window waits; the runs behind it may start.
-  return queuedRunsInDeliveryOrder(projection).find((run) => !isSteerInRecallWindow(run, now));
+  const next = queuedRunsInDeliveryOrder(projection).find(
+    (run) => !isSteerInRecallWindow(run, now),
+  );
+  // A message open for editing keeps its place, so the queue waits behind it.
+  return next === undefined || isQueuedRunEditHeld(next, now) ? undefined : next;
 }
 
 /**
@@ -503,6 +509,7 @@ function nextQueuedRun(
 function queueBatchFollowers(
   projection: Pick<OrchestrationV2ThreadProjection, "runs" | "messages">,
   leader: OrchestrationV2Run,
+  now: DateTime.Utc,
 ): ReadonlyArray<OrchestrationV2Run> {
   const batchable = (run: OrchestrationV2Run) => {
     const message = projection.messages.find((candidate) => candidate.id === run.userMessageId);
@@ -515,7 +522,8 @@ function queueBatchFollowers(
       message.senderThreadId === undefined &&
       !isNativeMaintenanceCommand(message) &&
       run.restartContinuationOfRunId === undefined &&
-      run.queueHeld !== true
+      run.queueHeld !== true &&
+      !isQueuedRunEditHeld(run, now)
     );
   };
   if (!batchable(leader)) return [];
@@ -1531,6 +1539,7 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
       const {
         queueBatchLeaderRunId: _previousBatchLeader,
         steerDeadlineAt: _steerDeadlineAt,
+        editHeldUntil: _editHeldUntil,
         ...unbatchedQueuedRun
       } = queuedRun;
       const startingRun: OrchestrationV2Run = {
@@ -1778,7 +1787,7 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
           },
           // Fork batch release: the messages waiting now join this turn once
           // it runs (releaseQueueBatch); anything queued after this does not.
-          ...queueBatchFollowers(projection, queuedRun).map((run) => ({
+          ...queueBatchFollowers(projection, queuedRun, now).map((run) => ({
             type: "run.updated" as const,
             threadId,
             runId: run.id,
@@ -7002,6 +7011,13 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
           cause: `Queued run ${command.queuedRunId} is not queued.`,
         });
       }
+      if (isQueuedRunEditHeld(queuedRun, yield* DateTime.now)) {
+        return yield* new OrchestratorDispatchError({
+          commandId: command.commandId,
+          commandType: command.type,
+          cause: `Queued run ${command.queuedRunId} is being edited.`,
+        });
+      }
       const queuedRootNode =
         queuedRun.rootNodeId === null
           ? undefined
@@ -7375,6 +7391,41 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
           },
         });
       }
+    });
+
+  // Fork queued-message edit hold: the editing client renews the lease while
+  // the message is open and releases it when the edit ends.
+  const dispatchQueuedRunEditHold = (
+    command: Extract<OrchestrationV2Command, { readonly type: "queued-run.edit-hold" }>,
+    events: Ref.Ref<Array<OrchestrationV2DomainEvent>>,
+  ) =>
+    Effect.gen(function* () {
+      const projection = yield* projectionStore
+        .getThreadRecords(command.threadId, ["runs"])
+        .pipe(
+          Effect.mapError(() => new OrchestratorProjectionError({ threadId: command.threadId })),
+        );
+      const queuedRun = projection.runs.find((candidate) => candidate.id === command.runId);
+      if (queuedRun === undefined || queuedRun.status !== "queued") {
+        return yield* new OrchestratorDispatchError({
+          commandId: command.commandId,
+          commandType: command.type,
+          cause: `Run ${command.runId} is not queued.`,
+        });
+      }
+      const now = yield* DateTime.now;
+      yield* emit(
+        events,
+        command,
+      )({
+        type: "run.updated",
+        threadId: command.threadId,
+        runId: queuedRun.id,
+        ...(queuedRun.rootNodeId === null ? {} : { nodeId: queuedRun.rootNodeId }),
+        providerInstanceId: queuedRun.providerInstanceId,
+        occurredAt: now,
+        payload: withEditHold(queuedRun, command.held, now),
+      });
     });
 
   const loadProjectionForCommand = <K extends ProjectionRecordField>(
@@ -9320,6 +9371,9 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
       case "queued-run.edit":
         yield* dispatchQueuedRunEdit(command, events);
         break;
+      case "queued-run.edit-hold":
+        yield* dispatchQueuedRunEditHold(command, events);
+        break;
       case "checkpoint.rollback":
         yield* dispatchCheckpointRollback(command, events, effects);
         break;
@@ -9411,7 +9465,10 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
             }),
         ),
       );
-      if (command.type === "queue.resume") {
+      if (
+        command.type === "queue.resume" ||
+        (command.type === "queued-run.edit-hold" && !command.held)
+      ) {
         yield* mapDispatchError(command)(startNextQueuedRun(command.threadId));
       }
       return {
@@ -9529,7 +9586,10 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
         detail: committed.receipt.error ?? "Previously rejected.",
       });
     }
-    if (command.type === "queue.resume") {
+    if (
+      command.type === "queue.resume" ||
+      (command.type === "queued-run.edit-hold" && !command.held)
+    ) {
       yield* mapDispatchError(command)(startNextQueuedRun(command.threadId));
     }
     if (command.type === "notification.delivery.accept") {
@@ -9635,11 +9695,18 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
           ) {
             return;
           }
+          const lockedNow = yield* DateTime.now;
           for (const run of queuedRunsInDeliveryOrder(projection)) {
             if (isAutomaticCompletionRun(projection, run) || run.steerDeadlineAt !== undefined) {
               continue;
             }
-            if (run.queueBatchLeaderRunId !== leader.id || run.queueHeld === true) return;
+            if (
+              run.queueBatchLeaderRunId !== leader.id ||
+              run.queueHeld === true ||
+              isQueuedRunEditHeld(run, lockedNow)
+            ) {
+              return;
+            }
             yield* dispatchWithReceiptEffect({
               type: "queued-message.promote-to-steer",
               commandId: CommandId.make(
@@ -9677,7 +9744,10 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
           );
           const lockedNow = yield* DateTime.now;
           const due = queuedRunsInDeliveryOrder(projection).filter(
-            (run) => run.queueHeld !== true && isSteerDue(run, lockedNow),
+            (run) =>
+              run.queueHeld !== true &&
+              isSteerDue(run, lockedNow) &&
+              !isQueuedRunEditHeld(run, lockedNow),
           );
           if (due.length === 0) return;
           const active = projection.runs.find(isBlockingRun);
@@ -9761,6 +9831,33 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
     );
   };
 
+  // Fork queued-message edit hold: when a hold lapses without a release (the
+  // editing client went away), the queue resumes where it was waiting.
+  const watchEditHoldLeases = (stored: OrchestrationV2StoredEvent) => {
+    const event = stored.event;
+    if (event.type !== "run.created" && event.type !== "run.updated") return Effect.void;
+    const run = event.payload;
+    const until = run.editHeldUntil;
+    if (run.status !== "queued" || until === undefined) return Effect.void;
+    return DateTime.now.pipe(
+      Effect.flatMap((now) =>
+        Effect.sleep(
+          Duration.millis(Math.max(0, DateTime.toEpochMillis(until) - DateTime.toEpochMillis(now))),
+        ),
+      ),
+      Effect.andThen(threadDispatch.withLock(event.threadId, startNextQueuedRun(event.threadId))),
+      Effect.andThen(releaseDueSteers(event.threadId)),
+      Effect.catchCause((cause) =>
+        Effect.logWarning("Failed to resume a V2 queue after an edit hold lapsed", {
+          threadId: event.threadId,
+          cause,
+        }),
+      ),
+      Effect.forkDetach,
+      Effect.asVoid,
+    );
+  };
+
   // Historical terminal events are already represented by the projections
   // below. Replaying the full event table on every server start delays live
   // queue promotion in proportion to the lifetime size of the database.
@@ -9801,6 +9898,9 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
     yield* eventSink
       .stream({ afterSequence: terminalEventsAfterSequence, eventType })
       .pipe(Stream.runForEach(watchSteerDeadlines), Effect.forkDetach);
+    yield* eventSink
+      .stream({ afterSequence: terminalEventsAfterSequence, eventType })
+      .pipe(Stream.runForEach(watchEditHoldLeases), Effect.forkDetach);
   }
 
   // Recover child results from projections. Queue recovery instead holds

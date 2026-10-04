@@ -10,7 +10,12 @@ import {
 import * as DateTime from "effect/DateTime";
 import { restorePlanFollowUpComposer } from "./ChatView.logic";
 import { assistantCitationsToPlainText } from "@t3tools/shared/assistantCitations";
-import { prepareQueuedEditAttachments, recoverQueuedMessageEdit } from "./chat/queuedMessageEdit";
+import {
+  prepareQueuedEditAttachments,
+  recoverQueuedMessageEdit,
+  restoreQueuedEditAttachments,
+} from "./chat/queuedMessageEdit";
+import { useQueuedRunEditHold } from "./chat/useQueuedRunEditHold";
 import {
   isPaintOnlyThreadTimeline,
   peekHeldThreadTimeline,
@@ -1643,6 +1648,7 @@ export default function ChatView(props: ChatViewProps) {
     readonly runId: RunId;
     readonly messageId: MessageId;
     readonly originalText: string;
+    readonly originalAttachmentCount: number;
     readonly existingAttachments: ReadonlyArray<ContractChatAttachment>;
     readonly context?: import("@t3tools/contracts").OrchestrationMessageContext | undefined;
   } | null>(null);
@@ -4515,6 +4521,7 @@ export default function ChatView(props: ChatViewProps) {
         runId: request.runId,
         messageId: request.messageId,
         originalText: request.text,
+        originalAttachmentCount: request.attachments.length,
         existingAttachments: request.attachments,
         context: serverProjection?.messages.find((message) => message.id === request.messageId)
           ?.context,
@@ -4558,9 +4565,15 @@ export default function ChatView(props: ChatViewProps) {
           },
     );
   }, []);
-  // Exit edit mode when the edited run leaves the queue (it started, or was
-  // cancelled from another client). A dirty edit moves into the thread's own
-  // draft when that draft is empty; otherwise it is dropped with a toast.
+  // The server keeps the edited message from starting until the edit ends.
+  useQueuedRunEditHold(
+    environmentId,
+    editingQueuedRun?.threadId ?? null,
+    editingQueuedRun?.runId ?? null,
+  );
+  // Exit edit mode when the edited run leaves the queue (cancelled from another
+  // client, or started after its edit hold lapsed). A dirty edit is appended to
+  // the thread's own draft with its attachments, contexts and model.
   useEffect(() => {
     if (editingQueuedRun === null) return;
     if (activeThread?.id !== editingQueuedRun.threadId) {
@@ -4574,29 +4587,52 @@ export default function ChatView(props: ChatViewProps) {
       editTarget: queuedEditDraftTargetFor(editingQueuedRun.runId),
       threadTarget: baseComposerDraftTarget,
       originalText: editingQueuedRun.originalText,
+      removedSavedAttachments:
+        editingQueuedRun.existingAttachments.length < editingQueuedRun.originalAttachmentCount,
+      ...(run === undefined ? {} : { modelSelection: run.modelSelection }),
     });
-    if (recovery === "kept") {
-      toastManager.add(
-        stackedThreadToast({
-          type: "info",
-          title: "Queued message is no longer queued",
-          description: "Your unsaved edit was kept in the composer.",
-        }),
-      );
-    } else if (recovery === "discarded") {
-      toastManager.add(
-        stackedThreadToast({
-          type: "warning",
-          title: "Queued message is no longer queued",
-          description: "Your unsaved edit was discarded.",
-        }),
-      );
-    }
     setEditingQueuedRun(null);
+    if (recovery.outcome === "clean") return;
+    const reportRecovered = (skippedAttachmentCount: number) =>
+      toastManager.add(
+        stackedThreadToast({
+          type: skippedAttachmentCount === 0 ? "info" : "warning",
+          title: "Queued message is no longer queued",
+          description:
+            skippedAttachmentCount === 0
+              ? "Your unsaved edit was moved to the composer."
+              : `Your unsaved edit was moved to the composer, but ${skippedAttachmentCount} attachment${skippedAttachmentCount === 1 ? "" : "s"} could not be added.`,
+        }),
+      );
+    const savedAttachments = editingQueuedRun.existingAttachments;
+    if (savedAttachments.length === 0) {
+      reportRecovered(recovery.skippedAttachmentCount);
+      return;
+    }
+    const connection = readPreparedConnection(environmentId);
+    void restoreQueuedEditAttachments({
+      attachments: savedAttachments,
+      target: baseComposerDraftTarget,
+      download: (attachments) => {
+        if (!connection) return Promise.reject(new Error("The environment is not connected."));
+        return prepareRevertedMessageAttachments({
+          message: { attachments },
+          environmentId,
+          httpBaseUrl: connection.httpBaseUrl,
+          createAssetUrl: createAttachmentAssetUrl,
+        });
+      },
+    }).then(
+      (restored) =>
+        reportRecovered(recovery.skippedAttachmentCount + restored.skippedAttachmentCount),
+      () => reportRecovered(recovery.skippedAttachmentCount + savedAttachments.length),
+    );
   }, [
     activeThread?.id,
     baseComposerDraftTarget,
+    createAttachmentAssetUrl,
     editingQueuedRun,
+    environmentId,
     queuedEditDraftTargetFor,
     serverProjection,
   ]);

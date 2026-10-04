@@ -1,4 +1,4 @@
-import { EnvironmentId, ThreadId } from "@t3tools/contracts";
+import { EnvironmentId, ProviderInstanceId, ThreadId } from "@t3tools/contracts";
 import { scopeThreadRef } from "@t3tools/client-runtime/environment";
 import { beforeEach, describe, expect, it } from "vite-plus/test";
 import {
@@ -7,7 +7,11 @@ import {
   type ComposerFileAttachment,
   type ComposerImageAttachment,
 } from "../../composerDraftStore";
-import { prepareQueuedEditAttachments, recoverQueuedMessageEdit } from "./queuedMessageEdit";
+import {
+  prepareQueuedEditAttachments,
+  recoverQueuedMessageEdit,
+  restoreQueuedEditAttachments,
+} from "./queuedMessageEdit";
 
 const environmentId = EnvironmentId.make("remote-environment");
 const threadTarget = scopeThreadRef(environmentId, ThreadId.make("thread:edit"));
@@ -92,7 +96,7 @@ describe("queued message file edits", () => {
     store.addFiles(editTarget, [file]);
     expect(
       recoverQueuedMessageEdit({ editTarget, threadTarget, originalText: "Original message" }),
-    ).toBe("kept");
+    ).toEqual({ outcome: "kept", skippedAttachmentCount: 0 });
     expect(store.getComposerDraft(threadTarget)?.prompt).toBe("Original message");
     expect(store.getComposerDraft(threadTarget)?.files).toEqual([file]);
     expect(store.getComposerDraft(editTarget)).toBeNull();
@@ -107,18 +111,92 @@ describe("queued message file edits", () => {
       uploadEnvironmentId: environmentId,
     };
     store.addFiles(editTarget, [uploaded]);
-    expect(recoverQueuedMessageEdit({ editTarget, threadTarget, originalText: "" })).toBe("kept");
+    expect(recoverQueuedMessageEdit({ editTarget, threadTarget, originalText: "" }).outcome).toBe(
+      "kept",
+    );
     expect(store.getComposerDraft(threadTarget)?.files).toEqual([uploaded]);
   });
 
-  it("does not overwrite a separate draft when the queued run leaves", () => {
+  it("appends the edit to a separate draft, with its contexts and model, instead of dropping it", () => {
+    const store = useComposerDraftStore.getState();
+    const modelSelection = { instanceId: ProviderInstanceId.make("codex"), model: "gpt-edit" };
+    const comment = {
+      id: "review:1",
+      sectionId: "section:1",
+      sectionTitle: "src/a.ts",
+      filePath: "src/a.ts",
+      startIndex: 0,
+      endIndex: 0,
+      rangeLabel: "L1",
+      text: "Rename this",
+      diff: "+const a = 1;",
+    };
+    store.setPrompt(threadTarget, "Separate draft");
+    store.setPrompt(editTarget, "Edited message");
+    store.addFiles(editTarget, [file]);
+    store.setReviewComments(editTarget, [comment]);
+    expect(
+      recoverQueuedMessageEdit({
+        editTarget,
+        threadTarget,
+        originalText: "Original message",
+        modelSelection,
+      }).outcome,
+    ).toBe("kept");
+    const draft = store.getComposerDraft(threadTarget);
+    expect(draft?.prompt.startsWith("Separate draft\n\nEdited message")).toBe(true);
+    expect(draft?.files).toEqual([file]);
+    expect(draft?.reviewComments.map((entry) => entry.id)).toEqual([comment.id]);
+    expect(draft?.modelSelectionByProvider[modelSelection.instanceId]?.model).toBe("gpt-edit");
+    expect(store.getComposerDraft(editTarget)).toBeNull();
+  });
+
+  it("keeps an edit that only removed a saved attachment", () => {
+    const store = useComposerDraftStore.getState();
+    store.setPrompt(editTarget, "Original message");
+    expect(
+      recoverQueuedMessageEdit({
+        editTarget,
+        threadTarget,
+        originalText: "Original message",
+        removedSavedAttachments: true,
+      }).outcome,
+    ).toBe("kept");
+    expect(store.getComposerDraft(threadTarget)?.prompt).toBe("Original message");
+  });
+
+  it("leaves the thread draft alone when the edit had no changes", () => {
     const store = useComposerDraftStore.getState();
     store.setPrompt(threadTarget, "Separate draft");
-    store.addFiles(editTarget, [file]);
-    expect(recoverQueuedMessageEdit({ editTarget, threadTarget, originalText: "" })).toBe(
-      "discarded",
-    );
+    store.setPrompt(editTarget, "Original message");
+    expect(
+      recoverQueuedMessageEdit({ editTarget, threadTarget, originalText: "Original message" })
+        .outcome,
+    ).toBe("clean");
     expect(store.getComposerDraft(threadTarget)?.prompt).toBe("Separate draft");
     expect(store.getComposerDraft(editTarget)).toBeNull();
+  });
+
+  it("restores a rescued edit's saved attachments as draft images and files", async () => {
+    const store = useComposerDraftStore.getState();
+    const savedImage = {
+      type: "image" as const,
+      id: "saved:image",
+      name: "screen.png",
+      mimeType: "image/png",
+      sizeBytes: 5,
+    };
+    const restored = await restoreQueuedEditAttachments({
+      attachments: [savedImage, uploadedFile],
+      target: threadTarget,
+      download: async (attachments) =>
+        attachments.map(
+          (attachment) => new File(["bytes"], attachment.name, { type: attachment.mimeType }),
+        ),
+    });
+    expect(restored.skippedAttachmentCount).toBe(0);
+    const draft = store.getComposerDraft(threadTarget);
+    expect(draft?.images.map((entry) => entry.name)).toEqual(["screen.png"]);
+    expect(draft?.files.map((entry) => entry.name)).toEqual(["report.pdf"]);
   });
 });

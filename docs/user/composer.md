@@ -199,9 +199,15 @@ The pencil on a queued row opens that message in the composer for editing. The o
 stays in the queue until you save, and its row is highlighted while you edit. The message's
 attachments appear above the text with a remove control, and new images can be added the usual way.
 The checkmark saves the queued message in place; **Cancel** on its row leaves it unchanged. Whatever
-you had typed in the composer before starting the edit is restored afterwards. If the queued
-message starts or is removed while you are editing, the edit ends: changed content moves into the
-composer when it is empty, and is discarded otherwise.
+you had typed in the composer before starting the edit is restored afterwards.
+
+A message you are editing doesn't start or get steered in, and the messages behind it wait too, until
+you save or cancel. If you leave an edit open on a device that goes to sleep or loses its connection,
+the queue continues after about two minutes. If the message is removed from another device, or starts
+after that, the edit ends and your changes are added to the end of the composer, together with the
+message's model, attachments and context, even when the composer already has text. On mobile, the
+message's saved attachments stay with the original message. A pending task on mobile isn't sent while
+you're confirming whether to delete it.
 
 ## Commands and skills
 

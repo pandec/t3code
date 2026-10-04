@@ -91,6 +91,7 @@ import {
   endQueuedRunEdit,
   getQueuedRunEdit,
   queuedEditDraftKey,
+  queuedRunEditHasChanges,
   removeQueuedRunEditAttachment,
   resolveQueuedEditPayload,
   useQueuedRunEdit,
@@ -423,9 +424,11 @@ export function useThreadComposerState() {
     [selectedThreadProjection],
   );
 
-  // The run can start, or be cancelled from another client, while its message
-  // is open in the composer. Leave edit mode rather than saving into a run the
-  // server will refuse, and keep whatever was typed if there is room for it.
+  // The server holds a message while it is open here, but it can still be
+  // removed from another client, or start once an abandoned hold lapses. Leave
+  // edit mode rather than saving into a run the server will refuse, and append
+  // an unsaved edit to the thread's draft with its attachments, context and
+  // model instead of dropping it.
   const selectedThreadRuns = selectedThreadProjection?.projection.runs;
   const editedRunId = queuedRunEdit?.runId ?? null;
   useEffect(() => {
@@ -433,30 +436,34 @@ export function useThreadComposerState() {
       return;
     }
     if (savingQueuedEditRef.current) return;
-    const stillQueued = selectedThreadRuns.some(
-      (run) => run.id === editedRunId && run.status === "queued",
-    );
-    if (stillQueued) return;
-    const editDraftKey = queuedEditDraftKey(selectedThreadKey, editedRunId);
-    const editDraft = getComposerDraftSnapshot(editDraftKey);
-    const threadDraft = getComposerDraftSnapshot(selectedThreadKey);
-    const keepable =
-      editDraft.text.trim().length > 0 &&
-      threadDraft.text.trim().length === 0 &&
-      threadDraft.attachments.length === 0;
-    if (keepable) {
+    const editedRun = selectedThreadRuns.find((run) => run.id === editedRunId);
+    if (editedRun?.status === "queued") return;
+    const edit = getQueuedRunEdit(selectedThreadKey);
+    const editDraft = getComposerDraftSnapshot(queuedEditDraftKey(selectedThreadKey, editedRunId));
+    const dirty = edit !== null && queuedRunEditHasChanges(edit, editDraft);
+    if (dirty) {
       void mergeComposerDraftContent(selectedThreadKey, {
         text: editDraft.text,
         attachments: editDraft.attachments,
         ...(editDraft.context ? { context: editDraft.context } : {}),
       });
+      if (editedRun !== undefined) {
+        updateComposerDraftSettings(selectedThreadKey, {
+          modelSelection: editedRun.modelSelection,
+        });
+      }
     }
-    endQueuedRunEdit(selectedThreadKey, { deferAttachmentCleanup: keepable });
-    setPendingConnectionError(
-      keepable
-        ? "That message already started. Your edit is back in the composer."
-        : "That message already started, so the edit was discarded.",
-    );
+    // Saved attachments stay with the original message; they are not
+    // downloaded back into the draft here.
+    const savedAttachmentCount = dirty ? edit.existingAttachments.length : 0;
+    endQueuedRunEdit(selectedThreadKey, { deferAttachmentCleanup: dirty });
+    if (dirty) {
+      setPendingConnectionError(
+        savedAttachmentCount === 0
+          ? "That message is no longer queued. Your edit is back in the composer."
+          : `That message is no longer queued. Your edit is back in the composer without its ${savedAttachmentCount} saved attachment${savedAttachmentCount === 1 ? "" : "s"}.`,
+      );
+    }
   }, [editedRunId, selectedThreadKey, selectedThreadRuns]);
 
   const activeThreadBusy = threadRuntimeIsActive(selectedThreadRuntime);

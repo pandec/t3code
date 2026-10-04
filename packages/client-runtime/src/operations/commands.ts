@@ -239,6 +239,11 @@ export interface CancelQueuedRunInput extends ThreadCommandInput {
   readonly runId: RunId;
 }
 
+export interface HoldQueuedRunForEditInput extends ThreadCommandInput {
+  readonly runId: RunId;
+  readonly held: boolean;
+}
+
 export interface EditQueuedRunInput extends ThreadCommandInput {
   readonly runId: RunId;
   readonly text: string;
@@ -989,6 +994,19 @@ export const cancelQueuedRun = Effect.fn("EnvironmentCommands.cancelQueuedRun")(
     runId: input.runId,
   });
 });
+
+/** Fork: keeps a queued message from starting while a client edits it (renewed lease). */
+export const holdQueuedRunForEdit = Effect.fn("EnvironmentCommands.holdQueuedRunForEdit")(
+  function* (input: HoldQueuedRunForEditInput) {
+    return yield* dispatch({
+      type: "queued-run.edit-hold",
+      commandId: yield* allocateCommandId(input),
+      threadId: input.threadId,
+      runId: input.runId,
+      held: input.held,
+    });
+  },
+);
 
 export const editQueuedRun = Effect.fn("EnvironmentCommands.editQueuedRun")(function* (
   input: EditQueuedRunInput,

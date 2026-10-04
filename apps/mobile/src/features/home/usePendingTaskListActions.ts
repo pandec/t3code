@@ -5,7 +5,12 @@ import { Alert } from "react-native";
 import { removeThreadOutboxMessage } from "../../state/thread-outbox-removal";
 import { clearComposerDraftContent } from "../../state/use-composer-drafts";
 import type { PendingNewTask } from "../../state/use-pending-new-tasks";
-import { releaseEditingQueuedMessage } from "../../state/use-thread-outbox";
+import { appAtomRegistry } from "../../state/atom-registry";
+import {
+  editingQueuedMessageIdsAtom,
+  holdEditingQueuedMessage,
+  releaseEditingQueuedMessage,
+} from "../../state/use-thread-outbox";
 
 export function usePendingTaskListActions(): {
   readonly openPendingTask: (pendingTask: PendingNewTask) => void;
@@ -48,21 +53,33 @@ export function usePendingTaskListActions(): {
       ]);
       return;
     }
+    // The drain must not deliver the task while the confirmation is open. An
+    // open editor may already hold it; then that editor keeps owning the hold.
+    const messageId = pendingTask.message.messageId;
+    const heldForConfirmation = !appAtomRegistry.get(editingQueuedMessageIdsAtom)[messageId];
+    if (heldForConfirmation) holdEditingQueuedMessage(messageId);
+    let deleting = false;
+    const releaseConfirmationHold = () => {
+      if (heldForConfirmation && !deleting) releaseEditingQueuedMessage(messageId);
+    };
     Alert.alert(
       "Delete pending task?",
       `“${pendingTask.title}” has not been sent yet and will be removed from the outbox.`,
       [
-        { text: "Cancel", style: "cancel" },
+        { text: "Cancel", style: "cancel", onPress: releaseConfirmationHold },
         {
           text: "Delete",
           style: "destructive",
           onPress: () => {
+            deleting = true;
             // Release the edit lock only after removal succeeds, and only if
             // it is held for THIS task — clearing it up front (or for another
             // task) would let the drain deliver a mid-edit payload.
             void removeThreadOutboxMessage(pendingTask.message)
-              .then(() => releaseEditingQueuedMessage(pendingTask.message.messageId))
+              .then(() => releaseEditingQueuedMessage(messageId))
               .catch((error) => {
+                deleting = false;
+                releaseConfirmationHold();
                 Alert.alert(
                   "Could not delete pending task",
                   error instanceof Error ? error.message : "The pending task could not be removed.",
@@ -71,6 +88,7 @@ export function usePendingTaskListActions(): {
           },
         },
       ],
+      { cancelable: true, onDismiss: releaseConfirmationHold },
     );
   }, []);
 

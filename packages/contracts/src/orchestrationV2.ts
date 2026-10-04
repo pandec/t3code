@@ -560,8 +560,19 @@ export const OrchestrationV2Run = Schema.Struct({
    * it into the running turn, or starts it as a turn when nothing is running.
    */
   steerDeadlineAt: Schema.optional(Schema.DateTimeUtc),
+  /**
+   * Fork queued-message edit hold: while a client has this message open for
+   * editing it neither starts nor is steered. The editing client renews the
+   * lease; an abandoned edit stops holding the queue once it lapses.
+   */
+  editHeldUntil: Schema.optional(Schema.DateTimeUtc),
 });
 export type OrchestrationV2Run = typeof OrchestrationV2Run.Type;
+
+/** How long one `queued-run.edit-hold` keeps a queued message from starting. */
+export const QUEUED_RUN_EDIT_HOLD_LEASE_MS = 120_000;
+/** How often an editing client renews its hold, well inside the lease. */
+export const QUEUED_RUN_EDIT_HOLD_RENEW_MS = 30_000;
 
 /**
  * When the work a run belongs to started. A wake does not start new work, so
@@ -1876,6 +1887,7 @@ export const OrchestrationV2RunJson = OrchestrationV2Run.mapFields((fields) => (
   completedAt: Schema.NullOr(Schema.DateTimeUtcFromString),
   workStartedAt: Schema.optional(Schema.DateTimeUtcFromString),
   steerDeadlineAt: Schema.optional(Schema.DateTimeUtcFromString),
+  editHeldUntil: Schema.optional(Schema.DateTimeUtcFromString),
 }));
 export type OrchestrationV2RunJson = typeof OrchestrationV2RunJson.Type;
 
@@ -2770,6 +2782,14 @@ export const OrchestrationV2Command = Schema.Union([
     // Full replacement list. Absent = leave the message's attachments as-is,
     // so pre-attachment clients editing text keep the original attachments.
     attachments: Schema.optional(Schema.Array(ChatAttachment)),
+  }),
+  /** Fork: hold (or release) a queued message while a client edits it. */
+  Schema.Struct({
+    type: Schema.Literal("queued-run.edit-hold"),
+    commandId: CommandId,
+    threadId: ThreadId,
+    runId: RunId,
+    held: Schema.Boolean,
   }),
   Schema.Struct({
     type: Schema.Literal("runtime-request.respond"),
