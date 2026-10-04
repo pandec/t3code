@@ -373,7 +373,7 @@ export const OrchestrationV2ProductionLayerLive = Layer.mergeAll(
         ),
       ),
     ),
-    Layer.provide(threadManagementProvided),
+    Layer.provide(Layer.merge(threadManagementProvided, effectOutboxLayer)),
   ),
   // Fork: deferred agent-requested worktree switch service and its worker.
   ThreadWorktreeSwitchScheduler.workerLive.pipe(

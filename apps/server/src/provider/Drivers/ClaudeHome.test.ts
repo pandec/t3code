@@ -10,6 +10,7 @@ import {
   makeClaudeCapabilitiesCacheKey,
   makeClaudeContinuationGroupKey,
   makeClaudeEnvironment,
+  makeClaudeHistoryEnvironment,
   resolveClaudeConfigDirPath,
   resolveClaudeHomePath,
 } from "./ClaudeHome.ts";
@@ -81,6 +82,46 @@ it.layer(NodeServices.layer)("ClaudeHome", (it) => {
         expect(yield* resolveClaudeConfigDirPath({ homePath: "~/.claude-work" }, environment)).toBe(
           explicit,
         );
+      }),
+    );
+
+    it.effect("pins history helpers to the same config dir the resolver picks", () =>
+      Effect.gen(function* () {
+        const path = yield* Path.Path;
+        const shared = path.resolve(NodeOS.homedir(), ".claude-work");
+        const shadow = path.resolve(NodeOS.homedir(), ".claude-t3", "personal");
+        const historyConfigDir = (
+          config: { readonly homePath: string },
+          environment: NodeJS.ProcessEnv,
+          cwd?: string,
+        ) =>
+          makeClaudeHistoryEnvironment(config, environment, cwd).pipe(
+            Effect.map((history) => history.CLAUDE_CONFIG_DIR),
+          );
+
+        // homePath wins over the shadow dir the CLI runs with; the shadow's
+        // `projects` symlink resolves to the same transcripts.
+        const shadowed = { homePath: "~/.claude-work", shadowHomePath: "~/.claude-t3/personal" };
+        const shadowedEnvironment = yield* makeClaudeEnvironment(shadowed, { HOME: "/home/u" });
+        expect(shadowedEnvironment.CLAUDE_CONFIG_DIR).toBe(shadow);
+        const shadowedHistory = yield* makeClaudeHistoryEnvironment(shadowed, shadowedEnvironment);
+        expect(shadowedHistory).toEqual({ HOME: "/home/u", CLAUDE_CONFIG_DIR: shared });
+
+        // Without homePath, the shadow dir in the instance environment is the config dir.
+        const shadowOnly = { homePath: "", shadowHomePath: "~/.claude-t3/personal" };
+        const shadowOnlyEnvironment = yield* makeClaudeEnvironment(shadowOnly, {});
+        expect(yield* historyConfigDir(shadowOnly, shadowOnlyEnvironment, "/repo")).toBe(shadow);
+
+        // Relative inherited values resolve against the session's start cwd.
+        for (const [environment, expected] of [
+          [{ CLAUDE_CONFIG_DIR: ".claude-account" }, path.resolve("/repo", ".claude-account")],
+          [{ HOME: "home" }, path.join(path.resolve("/repo", "home"), ".claude")],
+        ] as const) {
+          expect(yield* historyConfigDir({ homePath: "" }, environment, "/repo")).toBe(expected);
+          expect(yield* historyConfigDir({ homePath: "" }, environment, "/repo")).toBe(
+            yield* resolveClaudeConfigDirPath({ homePath: "" }, environment, "/repo"),
+          );
+        }
       }),
     );
 

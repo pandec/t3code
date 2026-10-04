@@ -210,6 +210,22 @@ it.effect("carries voice origin through send, steer, queue and queued edits, and
         assert.isTrue(steered[0]?.message.text.startsWith("also the lexer\n\n" + NOTICE_TAG));
 
         const queued = yield* orchestrator.getThreadProjection(threadId);
+        // A dictated steer keeps both the voice origin and the steer intent on
+        // one item, so clients show the Transcribed badge and the steer pickup
+        // marker together.
+        const steerItem = queued.turnItems.find(
+          (item) => item.type === "user_message" && item.messageId === "message:steer",
+        );
+        assert.deepStrictEqual(
+          steerItem?.type === "user_message"
+            ? {
+                runId: steerItem.runId,
+                inputIntent: steerItem.inputIntent,
+                inputOrigin: steerItem.inputOrigin,
+              }
+            : null,
+          { runId: first.runId, inputIntent: "steer", inputOrigin: "voice-transcription" },
+        );
         const queuedRun = queued.runs.find((run) => run.userMessageId === "message:queued");
         const retypedRun = queued.runs.find((run) => run.userMessageId === "message:retyped");
         assert.isDefined(queuedRun);

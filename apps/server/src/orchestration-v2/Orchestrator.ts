@@ -78,6 +78,7 @@ import { isRestartNoteSource } from "./RestartBackgroundNote.ts";
 import { isUndeliveredMailboxSteer } from "./NotificationMailbox.ts";
 import { EventSinkV2 } from "./EventSink.ts";
 import type { OrchestrationEffectRequestV2, PendingOrchestrationEffectV2 } from "./EffectOutbox.ts";
+import { EffectOutboxV2 } from "./EffectOutbox.ts";
 import { IdAllocatorV2 } from "./IdAllocator.ts";
 import { indefiniteSnoozeWoke, isIndefinitelySnoozed } from "./IndefiniteSnooze.ts";
 import {
@@ -141,7 +142,9 @@ import {
   latestThreadState,
   pendingArchiveRequest,
   planArchiveSchedule,
+  restartContinuationPending,
   stopCancelsArchive,
+  wakeRetargetedArchiveRequest,
   worktreeRemovalRequest,
 } from "./DeferredArchive.ts";
 import {
@@ -778,6 +781,8 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
   const idAllocator = yield* IdAllocatorV2;
   const projects = yield* ProjectStore.ProjectStoreV2;
   const projectionStore = yield* ProjectionStoreV2;
+  // Fork: a deferred archive waits while a restart continuation is unsettled.
+  const effectOutbox = yield* EffectOutboxV2;
   const nextTurnItemOrdinal = (
     projection: Pick<OrchestrationV2ThreadProjection, "thread"> &
       Partial<Pick<OrchestrationV2ThreadProjection, "turnItems">>,
@@ -9546,11 +9551,42 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
     },
   );
 
+  /** A wake carries on the awaited work: its pending archive moves to the run the wake started. */
+  const retargetPendingThreadArchive = Effect.fn("orchestrationV2.dispatch.retargetPendingArchive")(
+    function* (
+      command: Extract<OrchestrationV2Command, { readonly type: "message.dispatch" }>,
+      events: Ref.Ref<Array<OrchestrationV2DomainEvent>>,
+    ) {
+      // Most wakes find no archive pending: check the thread row before loading records.
+      const thread = latestThreadState(
+        yield* Ref.get(events),
+        command.threadId,
+        yield* readThreadForArchive(command.threadId),
+      );
+      if (pendingArchiveRequest(thread) === null) return;
+      const projection = yield* getProjectionWithPendingEvents(command.threadId, events);
+      const request = pendingArchiveRequest(projection.thread);
+      if (request === null) return;
+      const retargeted = wakeRetargetedArchiveRequest(request, projection.runs, command.messageId);
+      if (retargeted === null) return;
+      yield* emit(
+        events,
+        command,
+      )({
+        type: "thread.metadata-updated",
+        threadId: command.threadId,
+        providerInstanceId: projection.thread.providerInstanceId,
+        occurredAt: yield* DateTime.now,
+        payload: { ...projection.thread, archiveRequest: retargeted },
+      });
+    },
+  );
+
   const cancelArchiveDetailForStop = Effect.fn("orchestrationV2.dispatch.archiveStopDetail")(
     function* (command: Extract<OrchestrationV2Command, { readonly type: "run.interrupt" }>) {
       const thread = yield* readThreadForArchive(command.threadId);
       const request = pendingArchiveRequest(thread);
-      if (request === null || request.runId !== command.runId) return null;
+      if (request === null || request.runId === null) return null;
       const { runs } = yield* loadProjectionForCommand(command, ["runs"]);
       return stopCancelsArchive(request, runs, command.runId)
         ? ARCHIVE_CANCEL_DETAIL.stopped
@@ -9663,6 +9699,9 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
         runs,
         checkpoints,
         pendingBackgroundTasks,
+        restartContinuationPending: yield* restartContinuationPending(effectOutbox, runs).pipe(
+          mapDispatchError(command),
+        ),
       });
       if (decision.type === "wait") return yield* reject(decision.detail);
       if (decision.type === "cancel") {
@@ -10013,7 +10052,10 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
         }
         yield* dispatchMessage(command, events, effects);
         // A message that left the thread archived keeps its pending worktree removal.
-        if (
+        // A wake (DeferredArchive.ts) moves a pending archive instead of cancelling it.
+        if (thread.archivedAt === null && isWakeMessageDispatch(command)) {
+          yield* retargetPendingThreadArchive(command, events);
+        } else if (
           latestThreadState(yield* Ref.get(events), command.threadId, thread).archivedAt === null
         ) {
           yield* cancelPendingThreadArchive(
@@ -10913,6 +10955,7 @@ export const layer: Layer.Layer<
   | CommandPolicyV2
   | CommandReceiptStoreV2
   | ContextHandoffServiceV2
+  | EffectOutboxV2
   | EventSinkV2
   | IdAllocatorV2
   | ProjectStore.ProjectStoreV2

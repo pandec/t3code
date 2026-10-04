@@ -1241,12 +1241,9 @@ export function createServerEnvironmentAtoms<R, E>(
     readProviderUsageThreadAccount: createEnvironmentRpcCommand(runtime, {
       label: "environment-data:server:read-provider-usage-thread-account",
       tag: WS_METHODS.providerUsageThreadAccount,
-      concurrency: {
-        mode: "singleFlight",
-        // The gateway binding is per (session, model), so a model switch must
-        // not join a probe that asked about the previous model.
-        key: ({ environmentId, input }) => `${environmentId}:${input.threadId}:${input.model}`,
-      },
+      // Each probe reads the binding current at its own time; callers fence
+      // stale answers by their own (instance, thread, model) key.
+      concurrency: { mode: "parallel" },
     }),
     updateProvider: createEnvironmentRpcCommand(runtime, {
       label: "environment-data:server:update-provider",

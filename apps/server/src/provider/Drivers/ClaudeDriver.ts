@@ -68,7 +68,6 @@ import {
   makeClaudeCapabilitiesCacheKey,
   makeClaudeContinuationGroupKey,
   makeClaudeEnvironment,
-  resolveClaudeConfigDirPath,
 } from "./ClaudeHome.ts";
 import { makeClaudeSessionImport } from "../../sessionImport/ProviderSessionImport.ts";
 import {
@@ -168,9 +167,7 @@ export const ClaudeDriver: ProviderDriver<ClaudeSettings, ClaudeDriverEnv> = {
         effectiveConfig,
         processEnv,
       );
-      const configDir =
-        homeLayout.shadowConfigDirPath ??
-        (yield* resolveClaudeConfigDirPath(effectiveConfig, processEnv, cwd));
+      const configDir = homeLayout.shadowConfigDirPath ?? homeLayout.sharedConfigDirPath;
       const accountConfigPath =
         homeLayout.shadowConfigDirPath !== undefined ||
         effectiveConfig.homePath.trim() ||

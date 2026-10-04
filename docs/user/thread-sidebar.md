@@ -228,9 +228,10 @@ idle thread archives right away.
 A thread with a pending archive shows an archive icon in its row. Choose **Cancel pending
 archive** from its menu, use the archive keybinding again, or send `/t3-archive` again to keep
 it. Sending a new message, stopping the turn it waits on, a
-failed turn, or a workspace change also cancels it. If the turn's final checkpoint fails, the
+failed turn, or a workspace change also cancels it. Automatic follow-ups, such as subagent results
+or background notifications that wake the thread, don't: the archive waits for them too. If the turn's final checkpoint fails, the
 thread stays unarchived and the archive status shows the error. A pending archive survives a
-server restart.
+server restart, and waits for a turn the server resumes after restarting.
 
 You can also ask the agent to remove the thread's worktree when it archives. The branch is
 always kept. Removal only happens when the worktree has no uncommitted or untracked changes, is

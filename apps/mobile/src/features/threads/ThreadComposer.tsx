@@ -838,6 +838,7 @@ export const ThreadComposer = memo(function ThreadComposer(props: ThreadComposer
       selectedModel: currentModelSelection.model,
     }),
     threadId: props.selectedThread.id,
+    hasProviderSession: props.selectedThread.runtime != null,
   });
   const providerUsageMeter = providerUsage.meter;
   const providerUsageLabel = providerUsageMeter.label ?? "Provider";
@@ -865,13 +866,20 @@ export const ThreadComposer = memo(function ThreadComposer(props: ThreadComposer
       settingsOwnerId,
     ],
   );
-  const { lastRefreshAtMs: providerUsageLastRefreshAtMs, refresh: refreshProviderUsage } =
-    providerUsage;
+  const {
+    lastRefreshAtMs: providerUsageLastRefreshAtMs,
+    refresh: refreshProviderUsage,
+    probeThreadAccount: probeProviderUsageThreadAccount,
+  } = providerUsage;
   const openProviderUsageSheet = useCallback(() => {
     if (overlaySheetOwnerRef.current !== null) return;
     overlaySheetOwnerRef.current = "usage";
     usageRoutePresentation.present(usageRouteSession);
     usageSheetPresentation.open();
+    // Unlike the staleness-gated refresh below, the binding probe runs on every
+    // open: it is one cheap request and can change independently of the pool's
+    // quota data. It throttles itself.
+    probeProviderUsageThreadAccount();
     // Opening the sheet is the read: refresh anything older than a minute, at
     // most once a minute however long an account stays unread.
     if (
@@ -884,6 +892,7 @@ export const ThreadComposer = memo(function ThreadComposer(props: ThreadComposer
       refreshProviderUsage();
     }
   }, [
+    probeProviderUsageThreadAccount,
     providerUsageLastRefreshAtMs,
     refreshProviderUsage,
     usageRoutePresentation.present,

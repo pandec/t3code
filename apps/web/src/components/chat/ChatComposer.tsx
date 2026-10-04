@@ -1382,6 +1382,7 @@ const ComposerFooterPrimaryActions = memo(function ComposerFooterPrimaryActions(
   onRefreshOpenRouterCredits: () => void;
   openRouterCreditsRefreshing: boolean;
   onRefreshProviderUsage: () => Promise<void>;
+  onProbeThreadAccount: (options?: { readonly force?: boolean }) => void;
   reserveContextWindowMeter: boolean;
   activeThreadModelDisplayName: string | null;
   isPreparingWorktree: boolean;
@@ -1438,6 +1439,7 @@ const ComposerFooterPrimaryActions = memo(function ComposerFooterPrimaryActions(
           onRefreshOpenRouterCredits={props.onRefreshOpenRouterCredits}
           openRouterCreditsRefreshing={props.openRouterCreditsRefreshing}
           onRefreshProviderUsage={props.onRefreshProviderUsage}
+          onProbeThreadAccount={props.onProbeThreadAccount}
           modelDisplayName={props.activeThreadModelDisplayName}
           onCompact={props.onCompactContext}
           compactDisabled={props.compactDisabled}
@@ -2422,6 +2424,7 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
       selectedModel,
     }),
     threadId: activeThread?.id,
+    hasProviderSession: activeThread?.runtime != null,
     showOpenRouterCredits: settings.showOpenRouterCredits,
     openRouterCreditsBudgetUsd: settings.openRouterCreditsBudgetUsd,
   });
@@ -7824,6 +7827,7 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
                     onRefreshOpenRouterCredits={providerUsage.refreshOpenRouterCredits}
                     openRouterCreditsRefreshing={providerUsage.openRouterCreditsRefreshing}
                     onRefreshProviderUsage={providerUsage.refresh}
+                    onProbeThreadAccount={providerUsage.probeThreadAccount}
                     reserveContextWindowMeter={reserveContextWindowMeter}
                     activeThreadModelDisplayName={activeThreadModelDisplayName}
                     pendingAction={pendingPrimaryAction}
