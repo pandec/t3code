@@ -94,9 +94,22 @@ export function buildComposerSlashCommandItems(input: {
       label: "/default",
       description: "Switch to default mode",
     },
+    ...(input.hasThread
+      ? [
+          {
+            id: "cmd:t3-archive",
+            type: "slash-command" as const,
+            command: "t3-archive",
+            label: "/t3-archive",
+            description: "Archive now or when done; send again to cancel",
+          },
+        ]
+      : []),
   ] satisfies ComposerCommandItem[];
   const items: ComposerCommandItem[] = builtIn.filter(
-    (item) => item.command.includes(query) && (item.command === "model" || allowInteractionMode),
+    (item) =>
+      item.command.includes(query) &&
+      (item.command === "model" || item.command.startsWith("t3-") || allowInteractionMode),
   );
 
   // Providers expand commands only at the start of a message. T3 commands

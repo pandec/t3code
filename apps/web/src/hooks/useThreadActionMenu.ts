@@ -9,7 +9,7 @@ import {
 import {
   canSnooze,
   effectiveSnoozed,
-  hasPendingArchive,
+  resolveArchiveToggleAction,
 } from "@t3tools/client-runtime/state/thread-settled";
 import type { ScopedThreadRef, ThreadId } from "@t3tools/contracts";
 import { useRouter } from "@tanstack/react-router";
@@ -94,8 +94,7 @@ export function useThreadActionMenu(input: {
     pinThread,
     confirmAndUnpinThread,
     setThreadAutoSettle,
-    archiveThread,
-    cancelThreadArchive,
+    attemptArchiveThread,
     deleteThread,
     markThreadUnread,
   } = useThreadActions();
@@ -104,7 +103,6 @@ export function useThreadActionMenu(input: {
   });
   const handleNewThread = useNewThreadHandler();
   const confirmThreadDelete = useClientSettings((s) => s.confirmThreadDelete);
-  const confirmThreadArchive = useClientSettings((s) => s.confirmThreadArchive);
   const timestampFormat = useClientSettings((s) => s.timestampFormat);
   const { copyToClipboard: copyPathToClipboard } = useCopyToClipboard<{ path: string }>({
     onCopy: ({ path }) => {
@@ -157,7 +155,7 @@ export function useThreadActionMenu(input: {
           canSnoozeNow: canSnooze(thread, { now: now.toISOString() }),
           isRegeneratingTitle,
           isRunning: !threadRuntimeCanArchive(thread.runtime),
-          archivePending: hasPendingArchive(thread),
+          archiveAction: resolveArchiveToggleAction(thread),
           supports,
           snoozePresets,
         });
@@ -279,31 +277,17 @@ export function useThreadActionMenu(input: {
           case "copy-thread-id":
             copyThreadIdToClipboard(thread.id, { threadId: thread.id });
             return;
-          case "archive": {
-            if (confirmThreadArchive) {
-              const confirmed = await settlePromise(() =>
-                api.dialogs.confirm(`Archive thread "${thread.title}"?`),
-              );
-              if (confirmed._tag === "Failure" || !confirmed.value) return;
-            }
-            let didArchive = false;
-            const result = await archiveThread(threadRef, {
-              onArchived: () => {
-                didArchive = true;
-              },
-            });
-            if (result._tag === "Failure" && !isAtomCommandInterrupted(result)) {
-              failureToast(
-                didArchive ? "Thread archived, but navigation failed" : "Failed to archive thread",
-                squashAtomCommandFailure(result),
-              );
-            }
-            return;
-          }
+          case "archive":
+          case "archive-when-done":
           case "cancel-archive":
-            await reportFailure("Failed to cancel pending archive", () =>
-              cancelThreadArchive(threadRef),
-            );
+            await attemptArchiveThread(threadRef, {
+              expectedAction:
+                action === "archive"
+                  ? "archive"
+                  : action === "archive-when-done"
+                    ? "schedule"
+                    : "cancel",
+            });
             return;
           case "delete": {
             if (confirmThreadDelete) {
@@ -337,9 +321,7 @@ export function useThreadActionMenu(input: {
       })();
     },
     [
-      archiveThread,
-      cancelThreadArchive,
-      confirmThreadArchive,
+      attemptArchiveThread,
       confirmThreadDelete,
       confirmAndUnpinThread,
       copyBranchToClipboard,

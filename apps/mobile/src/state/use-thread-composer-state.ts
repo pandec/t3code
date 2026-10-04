@@ -32,6 +32,12 @@ import {
   type CodexFeedbackSubmission,
 } from "@t3tools/client-runtime/state/threads";
 import { resolveThreadWorkingStartedAt } from "@t3tools/client-runtime/state/models";
+import {
+  isAtomCommandInterrupted,
+  squashAtomCommandFailure,
+} from "@t3tools/client-runtime/state/runtime";
+import { hasPendingArchive } from "@t3tools/client-runtime/state/thread-settled";
+import { parseComposerArchiveCommand } from "@t3tools/shared/composerTrigger";
 import { upgradeLegacyContextMessage } from "@t3tools/shared/composerContextLegacy";
 import { composerContextSendBlockReason, reidentifyComposerContext } from "../lib/composerContext";
 import { uuidv4 } from "../lib/uuid";
@@ -72,6 +78,7 @@ import {
   getComposerDraftSnapshot,
   mergeComposerDraftContent,
   removeComposerDraftAttachment,
+  sameComposerDraftState,
   scheduleUnusedComposerAttachmentCleanup,
   setComposerDraftText,
   updateComposerDraftSettings,
@@ -189,6 +196,12 @@ export function useThreadComposerState() {
     Record<string, ReadonlyArray<CodexFeedbackSubmission>>
   >({});
   const uploadThreadFeedback = useAtomCommand(threadEnvironment.uploadFeedback, {
+    reportFailure: false,
+  });
+  const scheduleThreadArchive = useAtomCommand(threadEnvironment.scheduleArchive, {
+    reportFailure: false,
+  });
+  const cancelThreadArchive = useAtomCommand(threadEnvironment.cancelArchive, {
     reportFailure: false,
   });
   const editQueuedRun = useAtomCommand(threadEnvironment.editQueuedRun, {
@@ -602,6 +615,49 @@ export function useThreadComposerState() {
         return null;
       }
 
+      // Fork: `/t3-archive` archives now or when done; sent again, it cancels.
+      // Attachments or context mean a real prompt, which goes to the provider.
+      const archiveCommand =
+        attachments.length === 0 && (draft.context?.records.length ?? 0) === 0
+          ? parseComposerArchiveCommand(text)
+          : null;
+      if (archiveCommand) {
+        if (archiveCommand.action === null) {
+          Alert.alert(
+            "Unable to archive thread",
+            "Usage: /t3-archive (send again to cancel a pending archive)",
+          );
+          return null;
+        }
+        const environmentId = thread.environmentId;
+        const input = { threadId: thread.id };
+        const cancelArchive = archiveCommand.action === "cancel" || hasPendingArchive(thread);
+        const result = await (cancelArchive
+          ? cancelThreadArchive({ environmentId, input })
+          : scheduleThreadArchive({ environmentId, input: { ...input, afterTurn: true } }));
+        if (result._tag === "Failure") {
+          if (!isAtomCommandInterrupted(result)) {
+            const error = squashAtomCommandFailure(result);
+            Alert.alert(
+              "Unable to update thread archive",
+              error instanceof Error ? error.message : "An error occurred.",
+            );
+          }
+          return null;
+        }
+        Alert.alert(
+          cancelArchive ? "Archive cancelled" : "Archive requested",
+          cancelArchive
+            ? "This thread will stay open."
+            : "Archives when the current turn and background work finish. Send /t3-archive again to cancel.",
+        );
+        // Clear only an unchanged draft: the user may have typed on meanwhile.
+        if (sameComposerDraftState(getComposerDraftSnapshot(threadKey), draft)) {
+          clearComposerDraftContent(threadKey);
+        }
+        return null;
+      }
+
       const modelSelection = draft.modelSelection ?? thread.modelSelection;
       const serverConfig = selectedEnvironmentRuntime?.serverConfig;
       if (
@@ -723,6 +779,8 @@ export function useThreadComposerState() {
       selectedThreadCreation,
       selectedThreadShell,
       uploadThreadFeedback,
+      scheduleThreadArchive,
+      cancelThreadArchive,
     ],
   );
 

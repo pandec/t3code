@@ -202,4 +202,17 @@ describe("buildThreadActionMenuItems", () => {
     );
     expect(archiveItem?.disabled).toBe(true);
   });
+
+  it("offers archive when done for a busy thread and cancel for a pending archive", () => {
+    const busy = buildThreadActionMenuItems({
+      ...baseState,
+      isRunning: true,
+      archiveAction: "schedule",
+    });
+    expect(busy.find((item) => item.id === "archive-when-done")?.disabled).toBeUndefined();
+    expect(busy.some((item) => item.id === "archive")).toBe(false);
+    const pending = ids({ ...baseState, archiveAction: "cancel" });
+    expect(pending).toContain("cancel-archive");
+    expect(pending).not.toContain("archive");
+  });
 });

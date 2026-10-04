@@ -4,8 +4,17 @@ import {
   scopeThreadRef,
   scopedThreadKey,
 } from "@t3tools/client-runtime/environment";
-import { settlePromise, squashAtomCommandFailure } from "@t3tools/client-runtime/state/runtime";
-import { canSnooze, threadWokeAt } from "@t3tools/client-runtime/state/thread-settled";
+import {
+  isAtomCommandInterrupted,
+  settlePromise,
+  squashAtomCommandFailure,
+} from "@t3tools/client-runtime/state/runtime";
+import {
+  type ArchiveToggleAction,
+  canSnooze,
+  resolveArchiveToggleAction,
+  threadWokeAt,
+} from "@t3tools/client-runtime/state/thread-settled";
 import { threadRuntimeCanArchive } from "@t3tools/client-runtime/state/models";
 import { EnvironmentId, type ScopedThreadRef, ThreadId } from "@t3tools/contracts";
 import { resolveWorktreeCleanup } from "@t3tools/shared/projectSettings";
@@ -63,6 +72,9 @@ export class ThreadArchiveBlockedError extends Schema.TaggedError<ThreadArchiveB
     return "Cannot archive while the provider is active.";
   }
 }
+
+// Fork: one archive attempt per thread at a time, shared by every surface.
+const archivingThreadKeys = new Set<string>();
 
 /** Deleting a thread expires every pending Undo that would try to revive it. */
 function invalidateThreadUndos(target: ScopedThreadRef) {
@@ -285,6 +297,9 @@ export function useThreadActions() {
   const cancelThreadArchiveMutation = useAtomCommand(threadEnvironment.cancelArchive, {
     reportFailure: false,
   });
+  const scheduleThreadArchiveMutation = useAtomCommand(threadEnvironment.scheduleArchive, {
+    reportFailure: false,
+  });
   const deleteThreadMutation = useAtomCommand(threadEnvironment.delete, {
     reportFailure: false,
   });
@@ -325,6 +340,7 @@ export function useThreadActions() {
   });
   const sidebarThreadSortOrder = useClientSettings((settings) => settings.sidebarThreadSortOrder);
   const confirmThreadDelete = useClientSettings((settings) => settings.confirmThreadDelete);
+  const confirmThreadArchive = useClientSettings((settings) => settings.confirmThreadArchive);
   const confirmThreadUnpin = useClientSettings((settings) => settings.confirmThreadUnpin);
   const clearComposerDraftForThread = useComposerDraftStore((store) => store.clearDraftThread);
   const clearProjectDraftThreadById = useComposerDraftStore(
@@ -681,17 +697,97 @@ export function useThreadActions() {
     [unsettleThreadMutation],
   );
 
-  /** Turns automatic settlement (inactivity, merged PR) on or off for one thread. */
-  // Fork: cancels a deferred archive before it runs.
-  const cancelThreadArchive = useCallback(
-    (target: ScopedThreadRef) =>
-      cancelThreadArchiveMutation({
-        environmentId: target.environmentId,
-        input: { threadId: target.threadId },
-      }),
-    [cancelThreadArchiveMutation],
+  /**
+   * Fork: the one archive control behind menus, the palette and the shortcut.
+   * It archives now, schedules an archive for when a busy thread is done, or
+   * cancels a pending one (`resolveArchiveToggleAction`). `expectedAction` is
+   * what the surface showed; a request that changed meanwhile does nothing.
+   * Concurrent attempts on one thread from any surface collapse into one.
+   */
+  const attemptArchiveThread = useCallback(
+    async (target: ScopedThreadRef, opts: { expectedAction?: ArchiveToggleAction } = {}) => {
+      const threadKey = scopedThreadKey(target);
+      if (archivingThreadKeys.has(threadKey)) return;
+      const resolved = resolveThreadTarget(target);
+      if (!resolved || resolved.thread.archivedAt !== null) return;
+      archivingThreadKeys.add(threadKey);
+      try {
+        const toggleAction = resolveArchiveToggleAction(resolved.thread);
+        if (opts.expectedAction !== undefined && opts.expectedAction !== toggleAction) return;
+        if (toggleAction !== "archive") {
+          // Scheduling and cancelling are reversible, so they skip the confirmation.
+          const input = { threadId: target.threadId };
+          const result = await (toggleAction === "cancel"
+            ? cancelThreadArchiveMutation({ environmentId: target.environmentId, input })
+            : scheduleThreadArchiveMutation({
+                environmentId: target.environmentId,
+                input: { ...input, afterTurn: true },
+              }));
+          if (result._tag === "Failure") {
+            if (!isAtomCommandInterrupted(result)) {
+              const error = squashAtomCommandFailure(result);
+              toastManager.add(
+                stackedThreadToast({
+                  type: "error",
+                  title: "Unable to update thread archive",
+                  description: error instanceof Error ? error.message : "An error occurred.",
+                }),
+              );
+            }
+            return;
+          }
+          toastManager.add(
+            stackedThreadToast({
+              type: "success",
+              title: toggleAction === "cancel" ? "Archive cancelled" : "Archive when done",
+              description:
+                toggleAction === "cancel"
+                  ? "This thread will stay open."
+                  : "Archives when the current turn and background work finish.",
+            }),
+          );
+          return;
+        }
+        if (confirmThreadArchive) {
+          const localApi = readLocalApi();
+          if (!localApi) return;
+          const confirmed = await settlePromise(() =>
+            localApi.dialogs.confirm(`Archive thread "${resolved.thread.title}"?`),
+          );
+          if (confirmed._tag === "Failure" || !confirmed.value) return;
+        }
+        let didArchive = false;
+        const result = await archiveThread(target, {
+          onArchived: () => {
+            didArchive = true;
+          },
+        });
+        if (result._tag === "Failure" && !isAtomCommandInterrupted(result)) {
+          const error = squashAtomCommandFailure(result);
+          toastManager.add(
+            stackedThreadToast({
+              type: "error",
+              title: didArchive
+                ? "Thread archived, but navigation failed"
+                : "Failed to archive thread",
+              description: error instanceof Error ? error.message : "An error occurred.",
+            }),
+          );
+        }
+      } finally {
+        archivingThreadKeys.delete(threadKey);
+      }
+    },
+    [
+      archiveThread,
+      cancelThreadArchiveMutation,
+      confirmThreadArchive,
+      resolveThreadTarget,
+      scheduleThreadArchiveMutation,
+    ],
   );
 
+  /** Turns automatic settlement (inactivity, merged PR) on or off for one thread. */
   const setThreadAutoSettle = useCallback(
     async (target: ScopedThreadRef, enabled: boolean) => {
       if (!readEnvironmentSupportsAutoSettleOptOut(target.environmentId)) {
@@ -1019,7 +1115,7 @@ export function useThreadActions() {
   return useMemo(
     () => ({
       archiveThread,
-      cancelThreadArchive,
+      attemptArchiveThread,
       unarchiveThread,
       deleteThread,
       confirmAndDeleteThread,
@@ -1037,7 +1133,7 @@ export function useThreadActions() {
     }),
     [
       archiveThread,
-      cancelThreadArchive,
+      attemptArchiveThread,
       confirmAndDeleteThread,
       confirmAndUnpinThread,
       deleteThread,

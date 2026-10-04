@@ -44,6 +44,7 @@ import {
 import { useLocation, useNavigate, useParams } from "@tanstack/react-router";
 import * as Option from "effect/Option";
 import {
+  ArchiveIcon,
   ArrowLeftIcon,
   CircleCheckIcon,
   CircleDotIcon,
@@ -96,6 +97,7 @@ import { useHandleNewThread } from "../hooks/useHandleNewThread";
 import { useSavedPromptList } from "../hooks/useSavedPrompts";
 import { savedPromptPreview } from "./chat/composerPromptPicker";
 import { useThreadActions } from "../hooks/useThreadActions";
+import { resolveArchiveToggleAction } from "@t3tools/client-runtime/state/thread-settled";
 import { useProjectAccentColors } from "../hooks/useProjectAccentColors";
 import { useAccentTintSettings, useClientSettings } from "../hooks/useSettings";
 import { useOpenPanelPullRequestUrl } from "../hooks/useOpenPanelPullRequestUrl";
@@ -168,6 +170,7 @@ import {
   buildSavedPromptsSubmenu,
   SAVED_PROMPTS_GROUP_VALUE,
   savedPromptItemValue,
+  buildArchiveCurrentThreadAction,
   buildCurrentThreadActionItems,
   buildThreadCopyActionItems,
   buildBrowseGroups,
@@ -823,7 +826,8 @@ function OpenCommandPaletteDialog(props: {
   const availableSettingsSearchItems = useAvailableSettingsSearchItems();
   const { activeDraftThread, activeThread, defaultProjectRef, handleNewThread, routeThreadRef } =
     useHandleNewThread();
-  const { pinThread, settleThread, confirmAndUnpinThread, unsettleThread } = useThreadActions();
+  const { attemptArchiveThread, pinThread, settleThread, confirmAndUnpinThread, unsettleThread } =
+    useThreadActions();
   const updateThreadMetadata = useAtomCommand(threadEnvironment.updateMetadata, {
     reportFailure: false,
   });
@@ -2196,6 +2200,18 @@ function OpenCommandPaletteDialog(props: {
         ) ?? null);
   const openUnarchivedThread = currentThread?.archivedAt === null ? currentThread : null;
   const openUnarchivedThreadRef = openUnarchivedThread === null ? null : currentThreadRef;
+  const openThreadArchiveAction =
+    openUnarchivedThread === null ? "archive" : resolveArchiveToggleAction(openUnarchivedThread);
+  const archiveCurrentThreadAction = buildArchiveCurrentThreadAction({
+    threadRef: openUnarchivedThreadRef,
+    archiveAction: openThreadArchiveAction,
+    icon: <ArchiveIcon className={ITEM_ICON_CLASS} />,
+    runThread: (threadRef) =>
+      attemptArchiveThread(threadRef, { expectedAction: openThreadArchiveAction }),
+  });
+  if (archiveCurrentThreadAction) {
+    actionItems.push(archiveCurrentThreadAction);
+  }
 
   const openThreadCapabilities =
     openUnarchivedThreadRef === null

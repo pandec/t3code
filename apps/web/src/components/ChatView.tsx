@@ -84,7 +84,11 @@ import {
 } from "@t3tools/client-runtime/errors";
 import { readPastedComposerContext } from "./composerInlineTokenPaste";
 import { isPasteAsTextShortcut } from "@t3tools/client-runtime/text-paste";
-import { effectiveSnoozed, threadWokeAt } from "@t3tools/client-runtime/state/thread-settled";
+import {
+  effectiveSnoozed,
+  hasPendingArchive,
+  threadWokeAt,
+} from "@t3tools/client-runtime/state/thread-settled";
 import { useAcknowledgeThreadWoke, useThreadActions } from "../hooks/useThreadActions";
 import {
   deriveProviderSubagentStatus,
@@ -173,6 +177,7 @@ import { useDiffPanelStore } from "../diffPanelStore";
 import {
   type ComposerSubmissionIntent,
   collapseExpandedComposerCursor,
+  parseComposerArchiveCommand,
   parseStandaloneComposerSlashCommand,
 } from "../composer-logic";
 import {
@@ -532,6 +537,7 @@ import {
   codexArtifactTemplatePromptToAppend,
   waitForStartedServerThread,
   shouldRefocusComposerOnWindowFocus,
+  hasStandaloneComposerCommandContext,
 } from "./ChatView.logic";
 import { useLocalStorage } from "~/hooks/useLocalStorage";
 import { useComposerHandleContext } from "../composerHandleContext";
@@ -1566,6 +1572,12 @@ export default function ChatView(props: ChatViewProps) {
   const createThread = useAtomCommand(threadEnvironment.create, { reportFailure: false });
   const deleteThread = useAtomCommand(threadEnvironment.delete, { reportFailure: false });
   const updateThreadMetadata = useAtomCommand(threadEnvironment.updateMetadata, {
+    reportFailure: false,
+  });
+  const scheduleThreadArchive = useAtomCommand(threadEnvironment.scheduleArchive, {
+    reportFailure: false,
+  });
+  const cancelThreadArchive = useAtomCommand(threadEnvironment.cancelArchive, {
     reportFailure: false,
   });
   const switchGitRef = useAtomCommand(vcsEnvironment.switchRef, { reportFailure: false });
@@ -8317,6 +8329,76 @@ export default function ChatView(props: ChatViewProps) {
       return;
     }
     const sendCtx = composerRef.current?.getSendContext();
+    // Fork: `/t3-archive` archives now or when done; sent again, it cancels.
+    // Attachments or contexts mean a real prompt, which goes to the provider.
+    const archiveCommand =
+      !directAnnotation &&
+      editingQueuedRun === null &&
+      sendCtx !== undefined &&
+      sendCtx.threadContexts.length === 0 &&
+      hasStandaloneComposerCommandContext({
+        imageCount: sendCtx.images.length,
+        fileCount: sendCtx.files.length,
+        terminalContextCount: sendCtx.terminalContexts.length,
+        previewAnnotationCount: sendCtx.previewAnnotations.length,
+        reviewCommentCount: sendCtx.reviewComments.length,
+      })
+        ? parseComposerArchiveCommand(promptRef.current)
+        : null;
+    if (archiveCommand) {
+      if (archiveCommand.action === null) {
+        toastManager.add({
+          type: "error",
+          title: "Unable to archive thread",
+          description: "Usage: /t3-archive (send again to cancel a pending archive)",
+        });
+        return;
+      }
+      if (serverThread === null) {
+        toastManager.add({ type: "error", title: "No thread to archive yet" });
+        return;
+      }
+      const promptForArchive = promptRef.current;
+      const cancelArchive = archiveCommand.action === "cancel" || hasPendingArchive(serverThread);
+      sendInFlightRef.current = true;
+      try {
+        const input = { threadId: serverThread.id };
+        const result = await (cancelArchive
+          ? cancelThreadArchive({ environmentId, input })
+          : scheduleThreadArchive({ environmentId, input: { ...input, afterTurn: true } }));
+        if (result._tag === "Failure") {
+          if (!isAtomCommandInterrupted(result)) {
+            const error = squashAtomCommandFailure(result);
+            toastManager.add(
+              stackedThreadToast({
+                type: "error",
+                title: "Unable to update thread archive",
+                description: error instanceof Error ? error.message : "An error occurred.",
+              }),
+            );
+          }
+          return;
+        }
+        toastManager.add(
+          stackedThreadToast({
+            type: "success",
+            title: cancelArchive ? "Archive cancelled" : "Archive requested",
+            description: cancelArchive
+              ? "This thread will stay open."
+              : "Archives when the current turn and background work finish. Send /t3-archive again to cancel.",
+          }),
+        );
+        // Clear only an unchanged draft: the user may have typed on meanwhile.
+        if (promptRef.current === promptForArchive) {
+          promptRef.current = "";
+          clearComposerDraftContent(composerDraftTarget);
+          composerRef.current?.resetCursorState();
+        }
+      } finally {
+        sendInFlightRef.current = false;
+      }
+      return;
+    }
     if (!sendCtx?.providerAvailable) {
       notifyDirectAnnotationAttached();
       return;

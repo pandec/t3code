@@ -30,6 +30,7 @@ import {
   canSnooze,
   effectiveSnoozed,
   hasPendingArchive,
+  resolveArchiveToggleAction,
   threadWokeAt,
 } from "@t3tools/client-runtime/state/thread-settled";
 import {
@@ -2554,7 +2555,6 @@ export default function Sidebar() {
   const { isMobile, setOpenMobile } = useSidebar();
   const keybindings = useAtomValue(primaryServerKeybindingsAtom);
   const confirmThreadDelete = useClientSettings((s) => s.confirmThreadDelete);
-  const confirmThreadArchive = useClientSettings((s) => s.confirmThreadArchive);
   const confirmThreadUnpin = useClientSettings((s) => s.confirmThreadUnpin);
   const sidebarProjectSortOrder = useClientSettings((s) => s.sidebarProjectSortOrder);
   // Accents are server settings, merged across every connected environment —
@@ -2583,8 +2583,7 @@ export default function Sidebar() {
     reorderPinnedThread,
     reorderActiveThread,
     markThreadUnread,
-    archiveThread,
-    cancelThreadArchive,
+    attemptArchiveThread,
     deleteThread,
   } = useThreadActions();
   const updateThreadMetadata = useAtomCommand(threadEnvironment.updateMetadata, {
@@ -4846,7 +4845,7 @@ export default function Sidebar() {
               canSnoozeNow: canSnooze(thread, { now: new Date().toISOString() }),
               isRegeneratingTitle,
               isRunning: !threadRuntimeCanArchive(thread.runtime),
-              archivePending: hasPendingArchive(thread),
+              archiveAction: resolveArchiveToggleAction(thread),
               supports: {
                 settlement: supportsSettlement,
                 autoSettleOptOut: supportsAutoSettleOptOut,
@@ -4979,48 +4978,18 @@ export default function Sidebar() {
           case "copy-thread-id":
             copyThreadIdToClipboard(thread.id, { threadId: thread.id });
             return;
-          case "archive": {
-            if (confirmThreadArchive) {
-              const confirmed = await settlePromise(() =>
-                api.dialogs.confirm(`Archive thread "${thread.title}"?`),
-              );
-              if (confirmed._tag === "Failure" || !confirmed.value) return;
-            }
-            let didArchive = false;
-            const result = await archiveThread(threadRef, {
-              onArchived: () => {
-                didArchive = true;
-              },
+          case "archive":
+          case "archive-when-done":
+          case "cancel-archive":
+            await attemptArchiveThread(threadRef, {
+              expectedAction:
+                clicked.value === "archive"
+                  ? "archive"
+                  : clicked.value === "archive-when-done"
+                    ? "schedule"
+                    : "cancel",
             });
-            if (result._tag === "Failure" && !isAtomCommandInterrupted(result)) {
-              const error = squashAtomCommandFailure(result);
-              toastManager.add(
-                stackedThreadToast({
-                  type: "error",
-                  title: didArchive
-                    ? "Thread archived, but navigation failed"
-                    : "Failed to archive thread",
-                  description: error instanceof Error ? error.message : "An error occurred.",
-                }),
-              );
-              return;
-            }
             return;
-          }
-          case "cancel-archive": {
-            const result = await cancelThreadArchive(threadRef);
-            if (result._tag === "Failure" && !isAtomCommandInterrupted(result)) {
-              const error = squashAtomCommandFailure(result);
-              toastManager.add(
-                stackedThreadToast({
-                  type: "error",
-                  title: "Failed to cancel pending archive",
-                  description: error instanceof Error ? error.message : "An error occurred.",
-                }),
-              );
-            }
-            return;
-          }
           case "delete": {
             if (confirmThreadDelete) {
               const confirmed = await settlePromise(() =>
@@ -5054,15 +5023,13 @@ export default function Sidebar() {
       })();
     },
     [
-      archiveThread,
+      attemptArchiveThread,
       attemptPin,
       attemptSettle,
       attemptSnooze,
       attemptUnpin,
       attemptUnsettle,
       attemptUnsnooze,
-      cancelThreadArchive,
-      confirmThreadArchive,
       confirmThreadDelete,
       copyBranchToClipboard,
       copyPathToClipboard,

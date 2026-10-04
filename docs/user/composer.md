@@ -195,6 +195,11 @@ Provider commands must start the message to run. T3 Code commands such as
 Send `/compact` in an existing conversation to reduce context usage when the
 provider supports it. Web and desktop also offer compaction from the context meter.
 
+Send `/t3-archive` by itself, without attachments or context, to archive the current
+thread on web, desktop, or mobile. A working thread
+[archives when done](./thread-sidebar.md#archive-when-done); an idle one archives right
+away. Send `/t3-archive` again before it runs to cancel the pending archive.
+
 ## Context in your message
 
 Context you attach lands where your cursor is, as a chip inside your text: a terminal excerpt,

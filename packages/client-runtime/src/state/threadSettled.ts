@@ -1,5 +1,8 @@
 // @effect-diagnostics globalDate:off -- UI snooze presets use local calendar boundaries and Intl labels.
 import * as DateTime from "effect/DateTime";
+import { backgroundWorkHoldsCompletion } from "@t3tools/shared/orchestrationV2PendingBackgroundWork";
+
+import { type EnvironmentThreadShell, threadRuntimeCanArchive } from "./models.ts";
 
 interface SettlementRunLike {
   readonly turnId?: unknown;
@@ -38,6 +41,27 @@ export function hasPendingArchive(shell: {
   readonly archiveRequest?: { readonly status: string } | null;
 }): boolean {
   return shell.archivedAt === null && shell.archiveRequest?.status === "pending";
+}
+
+export type ArchiveToggleAction = "archive" | "schedule" | "cancel";
+
+/**
+ * Fork: what an archive control does for a thread. A pending archive is
+ * cancelled; an active run or background work that holds completion schedules
+ * one for when the thread is done; anything else archives now. Every archive
+ * surface (menus, shortcut, palette) resolves through this.
+ */
+export function resolveArchiveToggleAction(
+  shell: Pick<
+    EnvironmentThreadShell,
+    "archivedAt" | "archiveRequest" | "runtime" | "pendingBackgroundTasks"
+  >,
+): ArchiveToggleAction {
+  if (hasPendingArchive(shell)) return "cancel";
+  return threadRuntimeCanArchive(shell.runtime) &&
+    !backgroundWorkHoldsCompletion(shell.pendingBackgroundTasks)
+    ? "archive"
+    : "schedule";
 }
 
 /**

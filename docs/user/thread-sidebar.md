@@ -155,13 +155,18 @@ already settled threads.
 
 ## Archive when done
 
-An agent can schedule its own thread to archive after the current turn finishes, for example
-when you ask it to "archive this thread when you're done". The archive waits for the turn and
-its checkpoint, and for subagents or monitors it left running; background commands such as dev
-servers do not hold it and stop when the thread archives. An idle thread archives right away.
+Archiving a thread that is still working schedules the archive for when it is done. On web and
+desktop, the thread menus, the command palette, and the archive keybinding offer **Archive when
+done** while a turn runs. On any client, send
+[`/t3-archive`](./composer.md#commands-and-skills) in the thread. An agent can also schedule
+its own thread, for example when you ask it to "archive this thread when you're done". The
+archive waits for the turn and its checkpoint, and for subagents or monitors it left running;
+background commands such as dev servers do not hold it and stop when the thread archives. An
+idle thread archives right away.
 
 A thread with a pending archive shows an archive icon in its row. Choose **Cancel pending
-archive** from its menu to keep it. Sending a new message, stopping the turn it waits on, a
+archive** from its menu, use the archive keybinding again, or send `/t3-archive` again to keep
+it. Sending a new message, stopping the turn it waits on, a
 failed turn, or a workspace change also cancels it. A pending archive survives a server restart.
 
 You can also ask the agent to remove the thread's worktree when it archives. The branch is
