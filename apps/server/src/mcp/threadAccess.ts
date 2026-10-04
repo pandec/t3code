@@ -55,6 +55,21 @@ function assertLiveCaller({
       )
     : Effect.void;
 }
+/**
+ * Fork: the credential's own thread, archived ones included so status tools
+ * stay readable after an archive, rejecting a provider that no longer owns it.
+ */
+export const readOwnedCaller = Effect.fn("mcp.readOwnedCaller")(function* () {
+  const { scope, caller } = yield* readCaller();
+  if (caller.providerInstanceId !== scope.providerInstanceId) {
+    return yield* new OrchestratorMcpFailure({
+      code: "parent_not_active",
+      message: "This provider no longer owns the thread.",
+    });
+  }
+  return caller;
+});
+
 export const readMutationCaller = Effect.fn("mcp.readMutationCaller")(function* () {
   const context = yield* readCaller();
   yield* assertLiveCaller(context);

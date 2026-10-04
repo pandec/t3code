@@ -21,22 +21,22 @@ import type {
 import { backgroundWorkHoldsCompletion } from "@t3tools/shared/orchestrationV2PendingBackgroundWork";
 import * as DateTime from "effect/DateTime";
 
-type ArchiveRun = Pick<OrchestrationV2Run, "id" | "ordinal" | "status" | "requestedAt">;
+export type ArchiveRun = Pick<OrchestrationV2Run, "id" | "ordinal" | "status" | "requestedAt">;
 
 /** Statuses of a run that is still working toward completion (waiting = capturing its checkpoint). */
-const ACTIVE_RUN_STATUSES: ReadonlySet<OrchestrationV2Run["status"]> = new Set([
+export const ACTIVE_RUN_STATUSES: ReadonlySet<OrchestrationV2Run["status"]> = new Set([
   "preparing",
   "starting",
   "running",
   "waiting",
 ]);
 /** Statuses Stop can interrupt; a waiting run's provider turn already finished. */
-const RUNNING_RUN_STATUSES: ReadonlySet<OrchestrationV2Run["status"]> = new Set([
+export const RUNNING_RUN_STATUSES: ReadonlySet<OrchestrationV2Run["status"]> = new Set([
   "preparing",
   "starting",
   "running",
 ]);
-const STOPPED_RUN_STATUSES: ReadonlySet<OrchestrationV2Run["status"]> = new Set([
+export const STOPPED_RUN_STATUSES: ReadonlySet<OrchestrationV2Run["status"]> = new Set([
   "interrupted",
   "failed",
   "cancelled",

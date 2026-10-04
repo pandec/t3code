@@ -1415,6 +1415,9 @@ export function threadShellFromProjection(
     ...(projection.thread.archiveRequest == null
       ? {}
       : { archiveRequest: projection.thread.archiveRequest }),
+    ...(projection.thread.worktreeSwitch == null
+      ? {}
+      : { worktreeSwitch: projection.thread.worktreeSwitch }),
     limitRecovery: projection.thread.limitRecovery ?? null,
     deletedAt: projection.thread.deletedAt,
   };
@@ -1642,6 +1645,9 @@ function shellFromState(input: {
     ...(input.state.thread.archiveRequest == null
       ? {}
       : { archiveRequest: input.state.thread.archiveRequest }),
+    ...(input.state.thread.worktreeSwitch == null
+      ? {}
+      : { worktreeSwitch: input.state.thread.worktreeSwitch }),
     limitRecovery: input.state.thread.limitRecovery ?? null,
     deletedAt: input.state.thread.deletedAt,
   };

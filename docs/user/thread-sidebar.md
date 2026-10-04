@@ -41,6 +41,21 @@ in a new thread's model picker to add or remove them. A regular click returns to
 single model. Choose a base branch and send. Each selection starts a separate thread
 and worktree while you stay in the new thread composer. This requires a Git project.
 
+### Move a Codex thread to a worktree
+
+Ask Codex to create a worktree and switch this thread to it. The agent requests the move with
+`switch_worktree`. T3 Code waits for the current turn and its checkpoint, and for subagents or
+monitors it left running, then updates the thread's checkout. Your next message continues the
+same conversation in that directory.
+
+The move stays pending during the current turn and survives a server restart. Ask the agent to
+inspect or cancel it with `worktree_switch_status` or `cancel_worktree_switch`. A failed or
+stopped turn cancels the move, as do a new message, archiving the thread, or changing its
+checkout before the move applies. The target must be an existing checkout of the same
+repository on the connected server; if it is gone when the move applies, the thread stays where
+it is and the status explains why. To move back, ask the agent to switch to the project
+checkout.
+
 ## Pin and reorder threads
 
 Pin a thread from its menu or use the pin button that appears when you hover its row on web and

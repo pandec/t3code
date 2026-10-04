@@ -371,6 +371,24 @@ export const OrchestrationV2ThreadArchiveRequest = Schema.Struct({
 });
 export type OrchestrationV2ThreadArchiveRequest = typeof OrchestrationV2ThreadArchiveRequest.Type;
 
+/**
+ * Fork: an agent-requested move to another checkout of the thread's
+ * repository (`targetPath` is canonical; the project root returns to the main
+ * checkout). Pending until run `runId` completes, which includes its final
+ * checkpoint, and background work that holds completion ends.
+ */
+export const OrchestrationV2ThreadWorktreeSwitch = Schema.Struct({
+  requestId: CommandId,
+  runId: RunId,
+  sourceWorktreePath: Schema.NullOr(TrimmedNonEmptyString),
+  sourceBranch: Schema.NullOr(TrimmedNonEmptyString),
+  targetPath: TrimmedNonEmptyString,
+  requestedAt: IsoDateTime,
+  status: Schema.Literals(["pending", "completed", "cancelled", "error"]),
+  detail: Schema.optional(TrimmedNonEmptyString),
+});
+export type OrchestrationV2ThreadWorktreeSwitch = typeof OrchestrationV2ThreadWorktreeSwitch.Type;
+
 export const OrchestrationV2AppThread = Schema.Struct({
   ...OrchestrationV2CreationFields,
   id: ThreadId,
@@ -447,6 +465,8 @@ export const OrchestrationV2AppThread = Schema.Struct({
   ),
   /** Fork: latest deferred archive request; omitted when none was made. */
   archiveRequest: Schema.optional(Schema.NullOr(OrchestrationV2ThreadArchiveRequest)),
+  /** Fork: latest agent-requested worktree switch; omitted when none was made. */
+  worktreeSwitch: Schema.optional(Schema.NullOr(OrchestrationV2ThreadWorktreeSwitch)),
   deletedAt: Schema.NullOr(Schema.DateTimeUtc),
 });
 export type OrchestrationV2AppThread = typeof OrchestrationV2AppThread.Type;
@@ -1787,6 +1807,8 @@ export const OrchestrationV2ThreadShell = Schema.Struct({
   ),
   /** Fork: latest deferred archive request; omitted by servers without it. */
   archiveRequest: Schema.optional(Schema.NullOr(OrchestrationV2ThreadArchiveRequest)),
+  /** Fork: latest agent-requested worktree switch; omitted by servers without it. */
+  worktreeSwitch: Schema.optional(Schema.NullOr(OrchestrationV2ThreadWorktreeSwitch)),
   deletedAt: Schema.NullOr(Schema.DateTimeUtc),
 });
 export type OrchestrationV2ThreadShell = typeof OrchestrationV2ThreadShell.Type;
@@ -2911,6 +2933,37 @@ const OrchestrationV2InternalCommand = Schema.Union([
     threadId: ThreadId,
     requestId: CommandId,
     /** Why the worktree was kept; omitted when it was removed. */
+    error: Schema.optional(TrimmedNonEmptyString),
+  }),
+  /** Fork: switch to checkout `targetPath` after the caller's running run completes. */
+  Schema.Struct({
+    type: Schema.Literal("thread.worktree-switch.schedule"),
+    commandId: CommandId,
+    threadId: ThreadId,
+    targetPath: TrimmedNonEmptyString,
+  }),
+  /** Fork: cancel the pending worktree switch. */
+  Schema.Struct({
+    type: Schema.Literal("thread.worktree-switch.cancel"),
+    commandId: CommandId,
+    threadId: ThreadId,
+  }),
+  /**
+   * Fork: applies, or records why it cannot apply, the pending worktree
+   * switch `requestId`. `target` is the resolved checkout, `error` why it
+   * could not be resolved; a request that is no longer valid is cancelled.
+   */
+  Schema.Struct({
+    type: Schema.Literal("thread.worktree-switch.execute"),
+    commandId: CommandId,
+    threadId: ThreadId,
+    requestId: CommandId,
+    target: Schema.optional(
+      Schema.Struct({
+        worktreePath: Schema.NullOr(TrimmedNonEmptyString),
+        branch: Schema.NullOr(TrimmedNonEmptyString),
+      }),
+    ),
     error: Schema.optional(TrimmedNonEmptyString),
   }),
   /** Records that the provider rollback `requestId` failed for good. */

@@ -126,6 +126,15 @@ import {
   stopCancelsArchive,
   worktreeRemovalRequest,
 } from "./DeferredArchive.ts";
+import {
+  cancelledWorktreeSwitch,
+  evaluateWorktreeSwitch,
+  finishedWorktreeSwitch,
+  pendingWorktreeSwitch,
+  planWorktreeSwitchSchedule,
+  requestingRun,
+  WORKTREE_SWITCH_DETAIL,
+} from "./DeferredWorktreeSwitch.ts";
 
 export class OrchestratorDispatchError extends Schema.TaggedError<OrchestratorDispatchError>()(
   "OrchestratorDispatchError",
@@ -411,6 +420,9 @@ function commandThreadId(command: OrchestrationV2ServerCommand): ThreadId {
     case "thread.archive.cancel":
     case "thread.archive.execute":
     case "thread.archive.complete":
+    case "thread.worktree-switch.schedule":
+    case "thread.worktree-switch.cancel":
+    case "thread.worktree-switch.execute":
       return command.threadId;
     case "delegated_task.request":
     case "delegated_task.wake-policy":
@@ -9212,6 +9224,125 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
     },
   );
 
+  // Fork: deferred agent-requested worktree switch (DeferredWorktreeSwitch.ts).
+  // Requests live on the thread payload, so they replay with the event log.
+  const dispatchThreadWorktreeSwitch = Effect.fn("orchestrationV2.dispatch.threadWorktreeSwitch")(
+    function* (
+      command: Extract<
+        OrchestrationV2ServerCommand,
+        {
+          readonly type:
+            | "thread.worktree-switch.schedule"
+            | "thread.worktree-switch.cancel"
+            | "thread.worktree-switch.execute";
+        }
+      >,
+      events: Ref.Ref<Array<OrchestrationV2DomainEvent>>,
+      effects: Ref.Ref<Array<PendingOrchestrationEffectV2>>,
+    ) {
+      const reject = (cause: string) =>
+        new OrchestratorDispatchError({
+          commandId: command.commandId,
+          commandType: command.type,
+          cause,
+        });
+      const thread = yield* readThreadForArchive(command.threadId);
+      if (thread.deletedAt !== null) return yield* reject(`Thread ${command.threadId} is deleted.`);
+      const now = yield* DateTime.now;
+      const emitThread = (payload: OrchestrationV2AppThread) =>
+        emit(
+          events,
+          command,
+        )({
+          type: "thread.metadata-updated",
+          threadId: command.threadId,
+          providerInstanceId: payload.providerInstanceId,
+          occurredAt: now,
+          payload,
+        });
+      const { runs } = yield* projectionStore
+        .getThreadRecords(command.threadId, ["runs"])
+        .pipe(mapDispatchError(command));
+
+      if (command.type === "thread.worktree-switch.schedule") {
+        const run = requestingRun(runs);
+        const driver =
+          run === null
+            ? null
+            : yield* providerAdapters.get(run.providerInstanceId).pipe(
+                Effect.map((adapter) => adapter.driver),
+                Effect.orElseSucceed(() => null),
+              );
+        const plan = planWorktreeSwitchSchedule({
+          thread,
+          run,
+          driver,
+          targetPath: command.targetPath,
+          requestId: command.commandId,
+          now,
+        });
+        if (plan.type === "reject") return yield* reject(plan.detail);
+        yield* emitThread({ ...thread, worktreeSwitch: plan.request });
+        return;
+      }
+
+      const request = pendingWorktreeSwitch(thread);
+      if (command.type === "thread.worktree-switch.cancel") {
+        if (request === null) return yield* reject("No worktree switch is pending.");
+        yield* emitThread({
+          ...thread,
+          worktreeSwitch: cancelledWorktreeSwitch(request, WORKTREE_SWITCH_DETAIL.agent),
+        });
+        return;
+      }
+
+      if (request === null || request.requestId !== command.requestId) {
+        return yield* reject("The worktree switch is no longer pending.");
+      }
+      const pendingBackgroundTasks =
+        (yield* projectionStore.getThreadShell(command.threadId).pipe(mapDispatchError(command)))
+          ?.pendingBackgroundTasks ?? [];
+      const decision = evaluateWorktreeSwitch({ thread, request, runs, pendingBackgroundTasks });
+      if (decision.type === "wait") return yield* reject(decision.detail);
+      if (decision.type === "cancel") {
+        yield* emitThread({
+          ...thread,
+          worktreeSwitch: cancelledWorktreeSwitch(request, decision.detail),
+        });
+        return;
+      }
+      if (command.error !== undefined) {
+        yield* emitThread({
+          ...thread,
+          worktreeSwitch: finishedWorktreeSwitch(request, command.error),
+        });
+        return;
+      }
+      if (command.target === undefined) {
+        return yield* reject("The worktree switch target was not resolved.");
+      }
+      // The ordinary workspace change detaches the thread's provider sessions,
+      // so the next run resumes the conversation in the new checkout.
+      yield* dispatchThreadMutation(
+        {
+          type: "thread.metadata.update",
+          commandId: command.commandId,
+          threadId: command.threadId,
+          branch: command.target.branch,
+          worktreePath: command.target.worktreePath,
+          expectedWorktreePath: request.sourceWorktreePath,
+        },
+        events,
+        effects,
+      );
+      const switched = latestThreadState(yield* Ref.get(events), command.threadId, thread);
+      yield* emitThread({
+        ...switched,
+        worktreeSwitch: finishedWorktreeSwitch(request, undefined),
+      });
+    },
+  );
+
   const dispatchUnsupported = (command: OrchestrationV2ServerCommand) =>
     Effect.fail(
       new OrchestratorDispatchError({
@@ -9361,6 +9492,11 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
       case "thread.archive.execute":
       case "thread.archive.complete":
         yield* dispatchThreadArchiveRequest(command, events, effects);
+        break;
+      case "thread.worktree-switch.schedule":
+      case "thread.worktree-switch.cancel":
+      case "thread.worktree-switch.execute":
+        yield* dispatchThreadWorktreeSwitch(command, events, effects);
         break;
       case "provider-session.detach":
         yield* dispatchProviderSessionDetach(command, events, effects);

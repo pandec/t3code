@@ -112,6 +112,8 @@ export const layer: Layer.Layer<ThreadForkServiceV2> = Layer.succeed(
           lastVisitedAt: null,
           // Fork: a deferred archive belongs to the source thread only.
           archiveRequest: null,
+          // Fork: so does a pending worktree switch.
+          worktreeSwitch: null,
           deletedAt: null,
         };
         const transfer: OrchestrationV2ContextTransfer = {

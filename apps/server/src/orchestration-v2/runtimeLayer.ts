@@ -50,6 +50,7 @@ import { layer as threadLaunchServiceLayer } from "./ThreadLaunchService.ts";
 import { layer as threadLifecycleServiceLayer } from "./ThreadLifecycleService.ts";
 import * as ThreadArchiveScheduler from "./ThreadArchiveScheduler.ts";
 import * as ArchiveWorktreeRemoval from "./ArchiveWorktreeRemoval.ts";
+import * as ThreadWorktreeSwitchScheduler from "./ThreadWorktreeSwitchScheduler.ts";
 import { layer as threadForkServiceLayer } from "./ThreadForkService.ts";
 import { layer as turnItemPositionStoreLayer } from "./TurnItemPositionStore.ts";
 import { layer as scheduledTaskServiceLayer } from "../scheduledTasks/ScheduledTaskService.ts";
@@ -336,6 +337,11 @@ export const OrchestrationV2ProductionLayerLive = Layer.mergeAll(
       ),
     ),
     Layer.provide(threadManagementProvided),
+  ),
+  // Fork: deferred agent-requested worktree switch service and its worker.
+  ThreadWorktreeSwitchScheduler.workerLive.pipe(
+    Layer.provideMerge(ThreadWorktreeSwitchScheduler.layer),
+    Layer.provide(Layer.mergeAll(threadManagementProvided, ProjectStore.layer)),
   ),
 ).pipe(
   Layer.provide(Scheduler.layer),
