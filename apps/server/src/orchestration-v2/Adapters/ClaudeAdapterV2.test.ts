@@ -11,6 +11,7 @@ import * as NodeServices from "@effect/platform-node/NodeServices";
 import {
   ChatAttachmentId,
   ChatFileAttachment,
+  CheckpointId,
   ChatImageAttachment,
   ClaudeSettings,
   EnvironmentId,
@@ -43,6 +44,7 @@ import * as Queue from "effect/Queue";
 import * as Schema from "effect/Schema";
 import * as Scope from "effect/Scope";
 import * as Stream from "effect/Stream";
+import * as TestClock from "effect/testing/TestClock";
 import { Tool } from "effect/unstable/ai";
 import { formatClaudeResumeCompactionQuestion } from "@t3tools/shared/claudeCompaction";
 
@@ -5289,6 +5291,8 @@ describe("ClaudeAdapterV2 background wake turns", () => {
         );
         let debrisYields = 0;
         yield* awaitUntil(() => debrisYields++ >= 50, "zero-turn debris consumed");
+        // Debris does not settle the turn, so Stop closes after its grace.
+        yield* TestClock.adjust("3 seconds");
         yield* Deferred.succeed(closeGate, undefined);
         yield* awaitUntil(() => harness.terminalEvents().length === 1, "interrupted terminal");
         assert.lengthOf(harness.terminalEvents(), 1);
@@ -5298,6 +5302,134 @@ describe("ClaudeAdapterV2 background wake turns", () => {
             (event) => event.type === "message.updated" && event.message.text === staleText,
           ),
         );
+      }).pipe(Effect.provide(Layer.merge(IdAllocator.layer, NodeServices.layer))),
+    ),
+  );
+
+  // Fork (DECISIONS 5.6): Stop lets Claude end the interrupted turn before it
+  // closes the CLI, so the prompt reaches the transcript. Closing first can
+  // leave a first turn Claude never saved, and resuming it fails with "No
+  // conversation found".
+  it.effect("Stop closes the query only after the interrupted turn settles", () =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        const interruptStarted = yield* Deferred.make<void>();
+        let closes = 0;
+        const harness = yield* makeWakeHarnessWithOptions({
+          interrupt: Deferred.succeed(interruptStarted, undefined),
+          close: (sdkMessages) =>
+            Effect.sync(() => {
+              closes++;
+            }).pipe(Effect.andThen(Queue.shutdown(sdkMessages))),
+        });
+        const idAllocator = yield* IdAllocator.IdAllocatorV2;
+        const now = yield* DateTime.now;
+        const attemptId = RunAttemptId.make("attempt-claude-interrupt-settles-before-close");
+        const providerTurnId = idAllocator.derive.providerTurn({
+          driver: ClaudeAdapterV2.CLAUDE_PROVIDER,
+          nativeTurnId: `turn:${attemptId}`,
+        });
+
+        yield* harness.runtime.startTurn(
+          makeClaudeTestTurnInput({
+            threadId: harness.threadId,
+            providerThread: harness.providerThread,
+            now,
+            attemptId,
+            text: "Stop me early.",
+            attachments: [],
+          }),
+        );
+        const stop = yield* harness.runtime
+          .interruptTurn({ providerThread: harness.providerThread, providerTurnId })
+          .pipe(Effect.forkScoped);
+        yield* Deferred.await(interruptStarted);
+        let waitingYields = 0;
+        yield* awaitUntil(() => waitingYields++ >= 50, "Stop waiting for the turn to settle");
+        assert.equal(closes, 0, "Stop must not close before the turn settles");
+
+        // Claude's own result for the interrupted turn.
+        yield* Queue.offer(
+          harness.sdkMessages,
+          makeResultFrame({
+            uuid: "00000000-0000-4000-8000-000000000117",
+            result: "",
+            subtype: "error_during_execution",
+            isError: true,
+            terminalReason: null,
+          }),
+        );
+        // The test clock never reaches the grace, so only the settled turn
+        // can release Stop here.
+        yield* Fiber.join(stop);
+        assert.equal(closes, 1);
+        yield* awaitUntil(() => harness.terminalEvents().length === 1, "interrupted terminal");
+        assert.lengthOf(harness.terminalEvents(), 1);
+        assert.equal(harness.terminalEvents()[0]?.status, "interrupted");
+      }).pipe(Effect.provide(Layer.merge(IdAllocator.layer, NodeServices.layer))),
+    ),
+  );
+
+  // Fork (DECISIONS 5.7): only parent assistant frames advance the turn's
+  // native cursor, which rollback and fork resume at (resumeSessionAt). A
+  // subagent frame that arrives after the parent's last reply is not on the
+  // parent chain.
+  it.effect("a late subagent frame does not move the rollback cursor", () =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        const harness = yield* makeWakeHarnessWithOptions({
+          close: (sdkMessages) => Queue.shutdown(sdkMessages),
+        });
+        const now = yield* DateTime.now;
+        yield* harness.runtime.startTurn(
+          makeClaudeTestTurnInput({
+            threadId: harness.threadId,
+            providerThread: harness.providerThread,
+            now,
+            attemptId: RunAttemptId.make("attempt-claude-late-subagent-cursor"),
+            text: "Delegate and report.",
+            attachments: [],
+          }),
+        );
+        const parentUuid = "00000000-0000-4000-8000-000000000118";
+        yield* harness.offerAndWait(makeAssistantTextFrame({ uuid: parentUuid, text: "Done." }));
+        yield* harness.offerAndWait(
+          claudeSdkFrame({
+            ...makeAssistantTextFrame({
+              uuid: "00000000-0000-4000-8000-000000000119",
+              text: "Subagent still reporting.",
+            }),
+            parent_tool_use_id: "toolu_late_subagent",
+          }),
+        );
+        yield* Queue.offer(
+          harness.sdkMessages,
+          makeResultFrame({ uuid: "00000000-0000-4000-8000-000000000120", result: "Done." }),
+        );
+        yield* awaitUntil(() => harness.terminalEvents().length === 1, "turn terminal");
+        const providerTurn = harness.events
+          .filter(
+            (event): event is Extract<ProviderAdapterV2Event, { type: "provider_turn.updated" }> =>
+              event.type === "provider_turn.updated",
+          )
+          .at(-1)?.providerTurn;
+        if (providerTurn === undefined) {
+          return yield* Effect.die("Claude turn was not reported.");
+        }
+        assert.equal(providerTurn.status, "completed");
+        assert.equal(providerTurn.nativeTurnRef?.nativeId, parentUuid);
+
+        const rolledBack = yield* harness.runtime.rollbackThread({
+          providerThread: harness.providerThread,
+          target: {
+            type: "provider_turn",
+            checkpointId: CheckpointId.make("checkpoint-claude-late-subagent-cursor"),
+            appRunOrdinal: 1,
+            providerTurn,
+          },
+          providerThreadTurns: [providerTurn],
+        });
+        assert.equal(rolledBack.providerThread.nativeConversationHeadRef?.nativeId, parentUuid);
       }).pipe(Effect.provide(Layer.merge(IdAllocator.layer, NodeServices.layer))),
     ),
   );

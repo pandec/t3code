@@ -2572,6 +2572,10 @@ const CLAUDE_USAGE_LIMIT_WINDOWS = {
   overage: "overage",
 } satisfies Record<NonNullable<SDKRateLimitInfo["rateLimitType"]>, string>;
 
+// Fork: how long Stop lets an interrupted turn settle before it closes the
+// query.
+const CLAUDE_INTERRUPT_SETTLE_GRACE = "3 seconds";
+
 /** Beyond this the reset time is not credible, so the row ships without a wait. */
 const CLAUDE_USAGE_LIMIT_MAX_WAIT_MS = 30 * 24 * 60 * 60 * 1000;
 
@@ -2965,6 +2969,11 @@ export function makeClaudeAdapterV2(
         const events = yield* Queue.unbounded<ProviderAdapter.ProviderAdapterV2Event>();
         const activeTurn = yield* Ref.make<ActiveClaudeTurnContext | null>(null);
         const interruptedTurns = yield* Ref.make(new Set<OrchestrationV2ProviderTurn["id"]>());
+        // Fork: Stop waits on these for the interrupted turn to settle before
+        // it closes the query (see CLAUDE_INTERRUPT_SETTLE_GRACE).
+        const interruptSettlements = yield* Ref.make(
+          new Map<OrchestrationV2ProviderTurn["id"], Deferred.Deferred<void>>(),
+        );
         const steeredTurns = yield* Ref.make(new Set<OrchestrationV2ProviderTurn["id"]>());
         const queryContext = yield* Ref.make<ClaudeLiveQueryContext | null>(null);
         const openedNativeThreads = yield* Ref.make(new Set<string>());
@@ -4946,6 +4955,12 @@ export function makeClaudeAdapterV2(
             next.delete(input.context.providerTurnId);
             return next;
           });
+          const settlement = (yield* Ref.get(interruptSettlements)).get(
+            input.context.providerTurnId,
+          );
+          if (settlement !== undefined) {
+            yield* Deferred.succeed(settlement, undefined);
+          }
         });
 
         const emitAssistantTextArtifacts = Effect.fnUntraced(function* (input: {
@@ -5560,8 +5575,11 @@ export function makeClaudeAdapterV2(
           }
 
           if (message.type === "assistant" && input.replayed !== true) {
-            context.nativeMessageCursor = message.uuid;
             if (message.parent_tool_use_id === null) {
+              // Fork: only parent frames advance the cursor. It becomes the
+              // turn's native ref, which rollback and fork resume at
+              // (resumeSessionAt); a subagent frame is not on the parent chain.
+              context.nativeMessageCursor = message.uuid;
               context.latestAssistantRateLimited = message.error === "rate_limit";
               if (message.error === "authentication_failed") {
                 context.authenticationFailureMessage = claudeSignedOutMessage({
@@ -7231,7 +7249,32 @@ export function makeClaudeAdapterV2(
               next.add(turnInput.providerTurnId);
               return next;
             });
-            yield* existing.query.interrupt;
+            const settlement = yield* Deferred.make<void>();
+            yield* Ref.update(interruptSettlements, (current) =>
+              new Map(current).set(turnInput.providerTurnId, settlement),
+            );
+            yield* Effect.gen(function* () {
+              yield* existing.query.interrupt;
+              // Fork: let Claude end the turn through its own path before the
+              // process is closed, so the prompt reaches the transcript.
+              // Closing a first turn before Claude writes it leaves a native
+              // thread Claude never saved, and resuming it fails with "No
+              // conversation found".
+              if ((yield* Ref.get(activeTurn))?.providerTurnId === turnInput.providerTurnId) {
+                yield* Effect.raceFirst(
+                  Deferred.await(settlement),
+                  Deferred.await(existing.closed),
+                ).pipe(Effect.timeoutOption(CLAUDE_INTERRUPT_SETTLE_GRACE));
+              }
+            }).pipe(
+              Effect.ensuring(
+                Ref.update(interruptSettlements, (current) => {
+                  const next = new Map(current);
+                  next.delete(turnInput.providerTurnId);
+                  return next;
+                }),
+              ),
+            );
             yield* existing.query.close.pipe(Effect.ignore);
             const closed = yield* Deferred.await(existing.closed).pipe(
               Effect.timeoutOption("10 seconds"),
@@ -7249,11 +7292,14 @@ export function makeClaudeAdapterV2(
             yield* Ref.update(queryContext, (current) =>
               current?.query === existing.query ? null : current,
             );
-            yield* finalizeActiveTurn({
-              context: currentTurn,
-              status: "interrupted",
-              completedAt,
-            });
+            // Fork: the turn may already have settled during the grace period.
+            if ((yield* Ref.get(activeTurn))?.providerTurnId === turnInput.providerTurnId) {
+              yield* finalizeActiveTurn({
+                context: currentTurn,
+                status: "interrupted",
+                completedAt,
+              });
+            }
             yield* Deferred.succeed(existing.closed, undefined);
           },
           (effect, turnInput) =>
