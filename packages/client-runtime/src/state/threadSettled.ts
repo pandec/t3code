@@ -47,9 +47,10 @@ export type ArchiveToggleAction = "archive" | "schedule" | "cancel";
 
 /**
  * Fork: what an archive control does for a thread. A pending archive is
- * cancelled; an active run or background work that holds completion schedules
- * one for when the thread is done; anything else archives now. Every archive
- * surface (menus, shortcut, palette) resolves through this.
+ * cancelled; an active or checkpointing run, or background work that holds
+ * completion, schedules one for when the thread is done; anything else
+ * archives now. Every archive surface (menus, shortcut, palette) resolves
+ * through this.
  */
 export function resolveArchiveToggleAction(
   shell: Pick<
@@ -58,7 +59,10 @@ export function resolveArchiveToggleAction(
   >,
 ): ArchiveToggleAction {
   if (hasPendingArchive(shell)) return "cancel";
-  return threadRuntimeCanArchive(shell.runtime) &&
+  // A `waiting` run is capturing its final checkpoint; the server's deferred
+  // archive treats it as active, so archive after it completes.
+  return shell.runtime?.status !== "waiting" &&
+    threadRuntimeCanArchive(shell.runtime) &&
     !backgroundWorkHoldsCompletion(shell.pendingBackgroundTasks)
     ? "archive"
     : "schedule";

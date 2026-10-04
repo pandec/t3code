@@ -53,6 +53,7 @@ import type { ProviderAdapterV2Shape } from "./ProviderAdapter.ts";
 import { OrchestrationV2EventSinkLayerLive, OrchestrationV2LayerLive } from "./runtimeLayer.ts";
 import * as ThreadCommandExecutor from "./ThreadCommandExecutor.ts";
 import * as ThreadWorktreeSwitchScheduler from "./ThreadWorktreeSwitchScheduler.ts";
+import { reserveWorkspace } from "../workspace/workspaceLease.ts";
 
 const at = (iso: string) => DateTime.makeUnsafe(iso);
 const run = (id: string, ordinal: number, status: OrchestrationV2Run["status"]) => ({
@@ -515,6 +516,33 @@ it.layer(TestLayer)("deferred worktree switch on the orchestrator", (it) => {
         .pipe(Effect.flip);
       assert.equal(stale._tag, "OrchestratorDispatchError");
       assert.isNull((yield* threadState(cancelled.threadId)).worktreePath);
+    }).pipe(Effect.scoped),
+  );
+
+  it.effect("rejects scheduling onto a checkout being removed until removal ends", () =>
+    Effect.gen(function* () {
+      yield* setupRepository("removing");
+      const orchestrator = yield* Orchestrator.OrchestratorV2;
+      const { threadId } = yield* startThread("removing");
+      const schedule = (name: string) =>
+        orchestrator.dispatch({
+          type: "thread.worktree-switch.schedule",
+          commandId: CommandId.make(name),
+          threadId,
+          targetPath: repo.worktree,
+        });
+
+      const rejected = yield* Effect.scoped(
+        Effect.gen(function* () {
+          assert.isTrue(yield* reserveWorkspace(repo.worktree, "removal"));
+          return yield* schedule("removing-schedule").pipe(Effect.flip);
+        }),
+      );
+      assert.equal(rejected._tag, "OrchestratorDispatchError");
+      assert.isNotOk((yield* threadState(threadId)).worktreeSwitch);
+
+      yield* schedule("removing-schedule");
+      assert.equal((yield* threadState(threadId)).worktreeSwitch?.status, "pending");
     }).pipe(Effect.scoped),
   );
 

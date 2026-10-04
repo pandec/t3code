@@ -55,8 +55,9 @@ export class ArchiveWorktreeRemoval extends Context.Service<
      */
     readonly blocker: (threadId: ThreadId) => Effect.Effect<string | null>;
     /**
-     * Waits for the archive's queued provider-session and terminal stops to
-     * settle, then removes `worktreePath` if every guard passes and the
+     * Waits for the archive's queued provider-session and terminal stops (and
+     * in-flight stops of other archived threads in the checkout) to settle,
+     * then removes `worktreePath` if every guard passes and the
      * thread's removal is still pending (a message or unarchive can reopen it
      * meanwhile). Returns why it was kept, or null once it is gone.
      */
@@ -148,23 +149,45 @@ export const make = Effect.gen(function* () {
       return reason === WORKTREE_KEPT_DETAIL.dirty ? null : reason;
     }).pipe(describeFailure("check"), providePlatform);
 
+  /** Other archived threads in the checkout; their archive stops may still be running there. */
+  const sharingArchivedThreadIds = (threadId: ThreadId, worktreePath: string) =>
+    Effect.gen(function* () {
+      const root = yield* canonicalWorkspacePath(worktreePath);
+      const archived = yield* threads.getShellSnapshot({ location: "archive" });
+      const ids: Array<ThreadId> = [];
+      for (const thread of archived.threads) {
+        if (thread.id === threadId || thread.worktreePath === null) continue;
+        if (contains(root, yield* canonicalWorkspacePath(thread.worktreePath))) ids.push(thread.id);
+      }
+      return ids;
+    });
+
   // The archive stops the thread's provider sessions and terminals through
   // outbox effects (the session bindings are already gone from the
   // projection); no process may still run in the checkout when Git removes it.
-  const unsettledStops = (threadId: ThreadId) =>
+  // Other archived threads in the checkout count only while their stops are
+  // in flight: their failed stops do not block this archive.
+  const unsettledStops = (threadId: ThreadId, sharingThreadIds: ReadonlyArray<ThreadId>) =>
     sql<{ readonly status: string }>`
       SELECT status FROM orchestration_v2_effect_outbox
-      WHERE thread_id = ${threadId}
+      WHERE thread_id IN ${sql.in([threadId, ...sharingThreadIds])}
         AND effect_type IN ('provider-session.detach', 'terminal.cleanup')
-        AND status NOT IN ('succeeded', 'cancelled')
+        AND (
+          (thread_id = ${threadId} AND status NOT IN ('succeeded', 'cancelled'))
+          OR status IN ('pending', 'running')
+        )
     `;
   /** Why the worktree must be kept while those stops are unsettled, or null once they all ran. */
-  const lifecycleStopBlocker = (threadId: ThreadId) =>
-    unsettledStops(threadId).pipe(
-      Effect.repeat({
-        schedule: Schedule.spaced(STOP_POLL_INTERVAL),
-        until: (rows) => rows.every((row) => row.status === "failed"),
-      }),
+  const lifecycleStopBlocker = (threadId: ThreadId, worktreePath: string) =>
+    sharingArchivedThreadIds(threadId, worktreePath).pipe(
+      Effect.flatMap((sharingThreadIds) =>
+        unsettledStops(threadId, sharingThreadIds).pipe(
+          Effect.repeat({
+            schedule: Schedule.spaced(STOP_POLL_INTERVAL),
+            until: (rows) => rows.every((row) => row.status === "failed"),
+          }),
+        ),
+      ),
       Effect.timeoutOption(STOP_WAIT_TIMEOUT),
       Effect.map(
         Option.match({
@@ -181,7 +204,7 @@ export const make = Effect.gen(function* () {
         current.worktreePath === input.worktreePath &&
         worktreeRemovalRequest(current)?.worktreePath === input.worktreePath;
       if (!stillPending(thread)) return WORKTREE_KEPT_DETAIL.reopened;
-      const stopReason = yield* lifecycleStopBlocker(input.threadId);
+      const stopReason = yield* lifecycleStopBlocker(input.threadId, input.worktreePath);
       if (stopReason !== null) return stopReason;
       const project = yield* projects.getShell(thread.projectId);
       if (Option.isNone(project)) return WORKTREE_KEPT_DETAIL.noProject;

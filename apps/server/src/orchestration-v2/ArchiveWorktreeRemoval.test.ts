@@ -38,6 +38,7 @@ interface Fixture {
     projectId: ProjectId;
     worktreePath: string | null;
     worktreeSwitch?: { status: "pending"; targetPath: string };
+    archived?: boolean;
   }>;
   /** False once a message or unarchive reopened the thread. */
   archived: boolean;
@@ -73,11 +74,15 @@ const TestLayer = archiveWorktreeRemovalLayer.pipe(
               },
             }) as never,
         ),
-      getShellSnapshot: () =>
+      getShellSnapshot: (options) =>
         Effect.sync(
           () =>
             ({
-              threads: fixture.otherThreads.map((thread) => ({ ...thread, deletedAt: null })),
+              threads: fixture.otherThreads
+                .filter(
+                  (thread) => (thread.archived === true) === (options?.location === "archive"),
+                )
+                .map((thread) => ({ ...thread, deletedAt: null })),
             }) as unknown as OrchestrationV2ThreadShellSnapshot,
         ),
     }),
@@ -144,8 +149,8 @@ const setup = (branch: string | null) =>
     return { repository, worktreePath };
   });
 
-/** An archive-queued stop of the thread's provider session, in `status`. */
-const seedSessionStop = (status: "pending" | "failed") =>
+/** An archive-queued stop of `stoppedThreadId`'s provider session, in `status`. */
+const seedSessionStop = (status: "pending" | "failed", stoppedThreadId: ThreadId = threadId) =>
   Effect.gen(function* () {
     const sql = yield* SqlClient.SqlClient;
     const now = "2026-01-01T00:00:00.000Z";
@@ -153,8 +158,8 @@ const seedSessionStop = (status: "pending" | "failed") =>
       INSERT INTO orchestration_v2_effect_outbox
         (effect_id, command_id, thread_id, effect_type, payload_json, status,
           available_at, created_at, updated_at)
-      VALUES ('effect:archive:detach', 'archive', ${threadId}, 'provider-session.detach',
-        '{}', ${status}, ${now}, ${now}, ${now})
+      VALUES (${`effect:archive:detach:${stoppedThreadId}`}, 'archive', ${stoppedThreadId},
+        'provider-session.detach', '{}', ${status}, ${now}, ${now}, ${now})
     `;
   });
 
@@ -257,7 +262,6 @@ it.layer(TestLayer)("archive worktree removal", (it) => {
     }).pipe(Effect.scoped),
   );
 
-  // Live clock: removal re-checks the outbox on a short real interval.
   it.effect("waits for the archive's session stop before removing the worktree", () =>
     Effect.gen(function* () {
       const fs = yield* FileSystem.FileSystem;
@@ -265,13 +269,41 @@ it.layer(TestLayer)("archive worktree removal", (it) => {
       const removal = yield* ArchiveWorktreeRemoval;
       const { worktreePath } = yield* setup("feature/stopping");
       yield* seedSessionStop("pending");
+
+      const timingOut = yield* Effect.forkChild(removal.remove({ threadId, worktreePath }));
+      yield* TestClock.adjust("31 seconds");
+      assert.equal(yield* Fiber.join(timingOut), WORKTREE_KEPT_DETAIL.sessionStillStopping);
+      assert.isTrue(yield* fs.exists(worktreePath));
+
       const removing = yield* Effect.forkChild(removal.remove({ threadId, worktreePath }));
-      // The stop is unsettled until this update, so the checkout must still exist.
+      yield* TestClock.adjust("1 second");
       assert.isTrue(yield* fs.exists(worktreePath));
       yield* sql`UPDATE orchestration_v2_effect_outbox SET status = 'succeeded'`;
+      yield* TestClock.adjust("250 millis");
       assert.isNull(yield* Fiber.join(removing));
       assert.isFalse(yield* fs.exists(worktreePath));
-    }).pipe(Effect.scoped, TestClock.withLive),
+    }).pipe(Effect.scoped),
+  );
+
+  it.effect("waits for another archived thread's session stop in the same worktree", () =>
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
+      const sql = yield* SqlClient.SqlClient;
+      const removal = yield* ArchiveWorktreeRemoval;
+      const { worktreePath } = yield* setup("feature/shared-archived");
+      const sharing = ThreadId.make("archived-sharing-thread");
+      fixture.otherThreads = [{ id: sharing, projectId, worktreePath, archived: true }];
+      yield* seedSessionStop("pending", sharing);
+
+      const removing = yield* Effect.forkChild(removal.remove({ threadId, worktreePath }));
+      yield* TestClock.adjust("31 seconds");
+      assert.equal(yield* Fiber.join(removing), WORKTREE_KEPT_DETAIL.sessionStillStopping);
+      assert.isTrue(yield* fs.exists(worktreePath));
+
+      yield* sql`UPDATE orchestration_v2_effect_outbox SET status = 'succeeded'`;
+      assert.isNull(yield* removal.remove({ threadId, worktreePath }));
+      assert.isFalse(yield* fs.exists(worktreePath));
+    }).pipe(Effect.scoped),
   );
 
   it.effect("keeps the worktree when the archive's session stop failed", () =>

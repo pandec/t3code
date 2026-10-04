@@ -9884,26 +9884,30 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
   });
 
   // Fork: a command that reopens an archived thread claims the worktree its
-  // pending archive removal targets until its events commit, so the guarded
-  // removal (which reserves the same path) either sees the reopen or makes
-  // the command retry. No receipt is recorded, so a retry can reuse its id.
+  // pending archive removal targets, and a worktree switch schedule claims its
+  // target, until its events commit. The guarded removal (which reserves the
+  // same path) then either sees the reopen or pending move, or makes the
+  // command retry. No receipt is recorded, so a retry can reuse its id.
   const withArchiveRemovalClaim = (
     command: OrchestrationV2ServerCommand,
     effect: Effect.Effect<OrchestratorV2DispatchResult, OrchestratorV2Error>,
   ): Effect.Effect<OrchestratorV2DispatchResult, OrchestratorV2Error> =>
     Effect.gen(function* () {
+      const schedulesSwitch = command.type === "thread.worktree-switch.schedule";
       const reopens =
         command.type === "thread.unarchive" ||
         (command.type === "message.dispatch" && command.createdBy === "user");
-      if (!reopens) return yield* effect;
-      const thread = yield* projectionStore
-        .getThread(command.threadId)
-        .pipe(Effect.orElseSucceed(() => null));
-      const worktreePath = thread === null ? null : worktreeRemovalRequest(thread)?.worktreePath;
-      if (worktreePath === null || worktreePath === undefined) return yield* effect;
+      if (!schedulesSwitch && !reopens) return yield* effect;
+      const claimPath = schedulesSwitch
+        ? command.targetPath
+        : yield* projectionStore.getThread(command.threadId).pipe(
+            Effect.map((thread) => worktreeRemovalRequest(thread)?.worktreePath),
+            Effect.orElseSucceed(() => null),
+          );
+      if (claimPath === null || claimPath === undefined) return yield* effect;
       return yield* Effect.scoped(
         Effect.gen(function* () {
-          const claimed = yield* reserveWorkspace(worktreePath, "claim").pipe(
+          const claimed = yield* reserveWorkspace(claimPath, "claim").pipe(
             Effect.provideService(FileSystem.FileSystem, fileSystem),
             Effect.provideService(Path.Path, path),
           );
@@ -9911,7 +9915,9 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
             return yield* new OrchestratorDispatchError({
               commandId: command.commandId,
               commandType: command.type,
-              cause: "Thread is finishing archive worktree removal. Retry after it finishes.",
+              cause: schedulesSwitch
+                ? "This workspace is being removed. Retry after cleanup finishes."
+                : "Thread is finishing archive worktree removal. Retry after it finishes.",
             });
           }
           return yield* effect;

@@ -42,6 +42,11 @@ describe("resolveArchiveToggleAction", () => {
     ).toBe("schedule");
   });
 
+  it("schedules while the final checkpoint is captured", () => {
+    expect(resolveArchiveToggleAction({ ...idle, runtime: runtime("waiting") })).toBe("schedule");
+    expect(resolveArchiveToggleAction({ ...idle, runtime: runtime("completed") })).toBe("archive");
+  });
+
   it("does not wait on background commands such as dev servers", () => {
     expect(
       resolveArchiveToggleAction({

@@ -23,6 +23,7 @@ const harness = vi.hoisted(() => ({
   prepareTurnAttachments: vi.fn<typeof import("../lib/attachmentUpload").prepareTurnAttachments>(),
   setPendingConnectionError: vi.fn(),
   loadedDetails: new Map<string, OrchestrationV2ThreadProjection>(),
+  deletedThreads: new Set<string>(),
   draftFile: (() => {
     let document = "";
     let writeError: Error | null = null;
@@ -91,19 +92,28 @@ vi.mock("./server", async () => {
   return { serverEnvironment: { configValueAtom: Atom.family(() => Atom.make(null)) } };
 });
 
-// Loaded thread details, keyed `${environmentId}:${threadId}`.
+// Thread details, keyed `${environmentId}:${threadId}`: loaded, deleted, or
+// (absent from both) still empty.
 vi.mock("./threads", async () => {
   const { Atom, AsyncResult } = await import("effect/unstable/reactivity");
   const Option = await import("effect/Option");
   return {
     threadEnvironment: {},
     environmentThreads: {
-      stateAtom: (environmentId: string, threadId: string) =>
-        Atom.make(
+      stateAtom: (environmentId: string, threadId: string) => {
+        const key = `${environmentId}:${threadId}`;
+        const data = Option.fromNullishOr(harness.loadedDetails.get(key));
+        return Atom.make(
           AsyncResult.success({
-            data: Option.fromNullishOr(harness.loadedDetails.get(`${environmentId}:${threadId}`)),
+            data,
+            status: harness.deletedThreads.has(key)
+              ? "deleted"
+              : Option.isSome(data)
+                ? "live"
+                : "empty",
           }),
-        ),
+        );
+      },
     },
   };
 });
@@ -153,16 +163,17 @@ import {
   clearPendingThreadCreationOutcome,
   pendingThreadCreationOutcomesAtom,
 } from "./pending-thread-creation";
-import { resolveThreadOutboxDeliveryAction, type QueuedThreadMessage } from "./thread-outbox-model";
+import type { QueuedThreadMessage } from "./thread-outbox-model";
 import * as composerDrafts from "./use-composer-drafts";
 import { recoverFailedThreadDraft } from "./recover-failed-thread-draft";
 import { editingQueuedMessageIdsAtom } from "./use-thread-outbox";
 import {
   completeQueuedMessageDelivery,
-  findQueuedMessageThread,
   prepareQueuedMessageAttachments,
   recoverEditedCreationAfterDelivery,
   removeAcknowledgedExistingThreadMessage,
+  resolveQueuedMessageDeliveryAction,
+  resolveQueuedMessageThread,
   restoreRejectedQueuedMessage,
 } from "./use-thread-outbox-drain";
 
@@ -232,6 +243,7 @@ afterEach(() => {
   harness.prepareTurnAttachments.mockReset();
   harness.setPendingConnectionError.mockClear();
   harness.loadedDetails.clear();
+  harness.deletedThreads.clear();
 });
 
 describe("thread outbox attachment preparation", () => {
@@ -828,23 +840,30 @@ describe("thread outbox archived thread delivery", () => {
       updatedAt: now,
     };
   };
+  // No active shells: the archived thread is absent from them.
   const deliveryAction = (message: QueuedThreadMessage) =>
-    resolveThreadOutboxDeliveryAction({
+    resolveQueuedMessageDeliveryAction({
       isCreation: false,
-      threadExists: findQueuedMessageThread([], message) !== undefined,
+      thread: resolveQueuedMessageThread([], message),
       shellStatus: "live",
       environmentConnected: true,
-      threadBusy: false,
     });
 
-  it("sends to an archived thread whose detail is loaded instead of dropping it", () => {
+  it("keeps a message for an unloaded archived thread, sends once it loads", () => {
     const message = queuedMessage({ messageId: "archived", text: "Pick this back up" });
-    expect(deliveryAction(message)).toBe("remove");
+    expect(deliveryAction(message)).toBe("wait");
 
     harness.loadedDetails.set(`${message.environmentId}:${message.threadId}`, archivedDetail());
-    const thread = findQueuedMessageThread([], message);
-    expect(thread?.id).toBe(message.threadId);
-    expect(thread?.archivedAt).not.toBeNull();
+    const lookup = resolveQueuedMessageThread([], message);
+    expect(lookup.kind === "found" ? lookup.thread.archivedAt : null).not.toBeNull();
     expect(deliveryAction(message)).toBe("send");
+  });
+
+  it("removes the message only when the detail reports the thread deleted", () => {
+    const message = queuedMessage({ messageId: "deleted", text: "Too late" });
+    expect(deliveryAction(message)).toBe("wait");
+
+    harness.deletedThreads.add(`${message.environmentId}:${message.threadId}`);
+    expect(deliveryAction(message)).toBe("remove");
   });
 });
