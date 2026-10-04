@@ -4,7 +4,7 @@ import {
   squashAtomCommandFailure,
 } from "@t3tools/client-runtime/state/runtime";
 import type { EnvironmentId, ProviderInstanceId, ServerProvider } from "@t3tools/contracts";
-import { useCallback, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
 import { useNowMinute } from "../../hooks/useNowMinute";
 import { useClientSettingsHydrated, useEnvironmentSettings } from "../../hooks/useSettings";
@@ -77,15 +77,36 @@ export function useComposerProviderUsage(input: {
     // Failures are reported with a user-visible toast below.
     reportFailure: false,
   });
-  const [refreshing, setRefreshing] = useState(false);
-  const lastRefreshAtRef = useRef(0);
+  // Pending state and the debounce are per environment: the composer outlives
+  // an environment switch, and the previous environment's refresh must neither
+  // show as pending nor hold off a refresh here.
+  const [refreshingEnvironmentId, setRefreshingEnvironmentId] = useState<EnvironmentId | null>(
+    null,
+  );
+  const lastRefreshRef = useRef<{ readonly environmentId: EnvironmentId; readonly atMs: number }>(
+    null,
+  );
+  // Identifies the in-flight refresh, so an older one finishing late cannot
+  // clear a newer one's pending state.
+  const refreshTokenRef = useRef(0);
+  useEffect(
+    // Unmount invalidates any in-flight token so its completion is a no-op.
+    () => () => {
+      refreshTokenRef.current += 1;
+    },
+    [],
+  );
   const refreshProviderUsageSnapshots = providerUsageQuery.refresh;
   const directInstanceIds = meter.directInstanceIds;
   const refresh = useCallback(async () => {
     const refreshAt = Date.now();
-    if (refreshAt - lastRefreshAtRef.current < PROVIDER_USAGE_REFRESH_DEBOUNCE_MS) return;
-    lastRefreshAtRef.current = refreshAt;
-    setRefreshing(true);
+    const lastRefreshAt =
+      lastRefreshRef.current?.environmentId === environmentId ? lastRefreshRef.current.atMs : 0;
+    if (refreshAt - lastRefreshAt < PROVIDER_USAGE_REFRESH_DEBOUNCE_MS) return;
+    lastRefreshRef.current = { environmentId, atMs: refreshAt };
+    refreshTokenRef.current += 1;
+    const token = refreshTokenRef.current;
+    setRefreshingEnvironmentId(environmentId);
     try {
       // Direct accounts re-probe through their provider snapshot; gateway
       // pools re-read the server's latest pool snapshot.
@@ -94,6 +115,7 @@ export function useComposerProviderUsage(input: {
           refreshProviders({ environmentId, input: { instanceId } }),
         ),
       );
+      if (refreshTokenRef.current !== token) return;
       refreshProviderUsageSnapshots();
       const failure = results.find(
         (result) => result._tag === "Failure" && !isAtomCommandInterrupted(result),
@@ -107,7 +129,7 @@ export function useComposerProviderUsage(input: {
         });
       }
     } finally {
-      setRefreshing(false);
+      if (refreshTokenRef.current === token) setRefreshingEnvironmentId(null);
     }
   }, [directInstanceIds, environmentId, refreshProviderUsageSnapshots, refreshProviders]);
 
@@ -146,7 +168,7 @@ export function useComposerProviderUsage(input: {
 
   return {
     meter,
-    refreshing,
+    refreshing: refreshingEnvironmentId === environmentId,
     unavailable: providerUsageQuery.error !== null,
     refresh,
     // Fail closed while client settings hydrate: they start at defaults

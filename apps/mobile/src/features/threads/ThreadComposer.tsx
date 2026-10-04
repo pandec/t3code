@@ -81,6 +81,7 @@ import {
 import { cn } from "../../lib/cn";
 import { providerUsageTriggerLabel } from "../../lib/providerUsagePill";
 import { shouldRefreshProviderUsageOnOpen } from "@t3tools/client-runtime/state/provider-usage-presentation";
+import { resolveProviderUsageModel } from "@t3tools/client-runtime/state/provider-usage";
 import {
   type ProviderUsageRouteSession,
   useProviderUsageRoutePresentation,
@@ -166,6 +167,8 @@ export interface ThreadComposerProps {
    */
   readonly threadSyncPhase?: "loading" | "syncing" | null;
   readonly selectedThread: EnvironmentThreadShell;
+  /** The thread's persisted model; `selectedThread` carries the staged draft model. */
+  readonly persistedModel: string;
   readonly reportedModelSelection?: ModelSelection | null;
   readonly hasCompactableConversation: boolean;
   readonly serverConfig: T3ServerConfig | null;
@@ -805,7 +808,11 @@ export const ThreadComposer = memo(function ThreadComposer(props: ThreadComposer
     providers: props.serverConfig?.providers ?? EMPTY_PROVIDERS,
     activeInstanceId:
       props.selectedThread.runtime?.providerInstanceId ?? currentModelSelection.instanceId,
-    activeModel: currentModelSelection.model,
+    activeModel: resolveProviderUsageModel({
+      liveSessionInstanceId: props.selectedThread.runtime?.providerInstanceId,
+      persistedModel: props.persistedModel,
+      selectedModel: currentModelSelection.model,
+    }),
     threadId: props.selectedThread.id,
   });
   const providerUsageMeter = providerUsage.meter;
