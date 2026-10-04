@@ -5,33 +5,70 @@ import {
   EnvironmentHttpApi,
   EnvironmentSessionImportError,
   type ModelSelection,
+  type OrchestrationV2ShellSnapshot,
   type ProviderCatalogInstance,
   type ProviderCatalogResult,
   type SessionImportCandidate,
+  type SessionImportListCandidatesPayload,
+  type SessionImportPayload,
 } from "@t3tools/contracts";
 import { validateProviderOptionSelectionsStrict } from "@t3tools/shared/model";
 import * as Cause from "effect/Cause";
+import * as Console from "effect/Console";
 import * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";
 import * as FileSystem from "effect/FileSystem";
+import * as Layer from "effect/Layer";
+import * as Option from "effect/Option";
 import * as Path from "effect/Path";
+import * as References from "effect/References";
 import * as Schema from "effect/Schema";
+import { Command, Flag, GlobalFlag } from "effect/unstable/cli";
+import { FetchHttpClient } from "effect/unstable/http";
 import * as HttpApiClient from "effect/unstable/httpapi/HttpApiClient";
 
+import * as EnvironmentAuth from "../auth/EnvironmentAuth.ts";
+import * as ServerConfig from "../config.ts";
 import { sanitizeGitRepositoryEnvironment } from "../git/Utils.ts";
 import * as ProcessRunner from "../processRunner.ts";
 import {
   claudeProjectDirectoryName,
   parseClaudeTranscript,
 } from "../provider/Drivers/ClaudeSessionImport.ts";
-import { cliOrchestrationErrorFromRequest } from "./orchestration.ts";
-import { normalizeWorkspaceRootForProjectCommand } from "./projectTarget.ts";
+import * as WorkspacePaths from "../workspace/WorkspacePaths.ts";
+import { type CliAuthLocationFlags, projectLocationFlags, resolveCliAuthConfig } from "./config.ts";
+import { withCliJsonErrorOutput } from "./errorOutput.ts";
+import {
+  type CliLiveOrchestrationServer,
+  type CliLiveServerReadTimeouts,
+  CliOrchestrationServerUnavailableError,
+  cliOrchestrationErrorFromRequest,
+  dispatchLiveProjectMutation,
+  fetchLiveEnvironmentDescriptor,
+  fetchLiveOrchestrationShell,
+  resolveCliLiveServerReadTimeouts,
+  withResolvedLiveOrchestrationServer,
+} from "./orchestration.ts";
+import { addProjectFromCli } from "./project.ts";
+import {
+  findActiveProjectTarget,
+  normalizeWorkspaceRootForProjectCommand,
+  ProjectNotFoundError,
+} from "./projectTarget.ts";
 
 const MAX_SESSION_FILE_BYTES = 256 * 1024 * 1024;
+const SESSION_HTTP_IMPORT_TIMEOUT = Duration.seconds(30);
 const SESSION_GIT_TIMEOUT = Duration.seconds(30);
 const SESSION_GIT_MAX_OUTPUT_BYTES = 1024 * 1024;
 const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 
+const jsonFlag = Flag.Boolean("json").pipe(
+  Flag.withDescription("Emit JSON instead of human-readable output."),
+  Flag.withDefault(false),
+);
+
+const jsonOutput = (value: unknown) => JSON.stringify(value, null, 2);
+const isProjectNotFoundError = Schema.is(ProjectNotFoundError);
 const isEnvironmentSessionImportError = Schema.is(EnvironmentSessionImportError);
 
 export class SessionCliError extends Schema.TaggedError<SessionCliError>()("SessionCliError", {
@@ -627,16 +664,47 @@ export function sessionHttpError(operation: string, cause: unknown) {
 
 const SESSION_HTTP_READ_TIMEOUT = Duration.seconds(5);
 
+const makeHttpClient = (origin: string) =>
+  HttpApiClient.make(EnvironmentHttpApi, { baseUrl: origin });
+
 /** Reads the live server's provider instances and their advertised models. */
 export const fetchProviderCatalog = (origin: string, bearerToken: string) =>
   Effect.gen(function* () {
-    const client = yield* HttpApiClient.make(EnvironmentHttpApi, { baseUrl: origin });
+    const client = yield* makeHttpClient(origin);
     return yield* client.providers.catalog({
       headers: { authorization: `Bearer ${bearerToken}` },
     });
   }).pipe(
     Effect.timeout(SESSION_HTTP_READ_TIMEOUT),
     Effect.mapError((cause) => sessionHttpError("provider catalog", cause)),
+  );
+
+const fetchSessionCandidates = (
+  origin: string,
+  bearerToken: string,
+  payload: SessionImportListCandidatesPayload,
+) =>
+  Effect.gen(function* () {
+    const client = yield* makeHttpClient(origin);
+    return yield* client.sessionImport.candidates({
+      headers: { authorization: `Bearer ${bearerToken}` },
+      payload,
+    });
+  }).pipe(
+    Effect.timeout(SESSION_HTTP_READ_TIMEOUT),
+    Effect.mapError((cause) => sessionHttpError("session candidate listing", cause)),
+  );
+
+const importSession = (origin: string, bearerToken: string, payload: SessionImportPayload) =>
+  Effect.gen(function* () {
+    const client = yield* makeHttpClient(origin);
+    return yield* client.sessionImport.importSession({
+      headers: { authorization: `Bearer ${bearerToken}` },
+      payload,
+    });
+  }).pipe(
+    Effect.timeout(SESSION_HTTP_IMPORT_TIMEOUT),
+    Effect.mapError((cause) => sessionHttpError("session import", cause)),
   );
 
 interface GitCommandResult {
@@ -730,6 +798,38 @@ const resolveExistingGitWorkspaceRoot = Effect.fn("session.resolveExistingGitWor
     return workspaceRoot;
   },
 );
+
+/** Resolves an active project, or adds an existing git repository at that path
+    through the running server. */
+const resolveOrAddProject = Effect.fn("resolveOrAddProject")(function* (input: {
+  readonly origin: string;
+  readonly bearerToken: string;
+  readonly shell: OrchestrationV2ShellSnapshot;
+  readonly identifier: string;
+  readonly timeouts: CliLiveServerReadTimeouts;
+}) {
+  const resolved = yield* findActiveProjectTarget({
+    projects: input.shell.projects,
+    identifier: input.identifier,
+  }).pipe(Effect.result);
+  if (resolved._tag === "Success") return resolved.success;
+  if (!isProjectNotFoundError(resolved.failure)) return yield* resolved.failure;
+
+  const workspaceRoot = yield* resolveExistingGitWorkspaceRoot(input.identifier);
+  const added = yield* addProjectFromCli({
+    projects: input.shell.projects,
+    workspaceRoot,
+    dispatch: (mutation) =>
+      dispatchLiveProjectMutation(input.origin, input.bearerToken, mutation).pipe(Effect.asVoid),
+  });
+  const shell = yield* fetchLiveOrchestrationShell(input.origin, input.bearerToken, input.timeouts);
+  return yield* findActiveProjectTarget({
+    projects: shell.projects,
+    identifier: shell.projects.some((project) => project.id === added.projectId)
+      ? added.projectId
+      : added.workspaceRoot,
+  });
+});
 
 export const resolveGitCommonDirectory = Effect.fn("session.resolveGitCommonDirectory")(function* (
   cwd: string,
@@ -835,3 +935,302 @@ export const ensureWorktree = Effect.fn("ensureWorktree")(function* (input: {
   }
   return { branch, worktreePath: canonicalPath };
 });
+
+type SessionCliCapability = "sessionImport" | "providerCatalog";
+
+/** Runs a session command against the running server after checking the
+    capabilities it relies on; session commands never run offline. */
+const runSessionCli = Effect.fn("runSessionCli")(function* <A, E, R>(
+  flags: CliAuthLocationFlags,
+  json: boolean,
+  capabilities: ReadonlyArray<SessionCliCapability>,
+  run: (input: {
+    readonly live: CliLiveOrchestrationServer;
+    readonly config: ServerConfig.ServerConfig["Service"];
+    readonly token: string;
+    readonly timeouts: CliLiveServerReadTimeouts;
+  }) => Effect.Effect<A, E, R>,
+) {
+  const logLevel = yield* GlobalFlag.LogLevel;
+  return yield* Effect.gen(function* () {
+    const config = yield* resolveCliAuthConfig(flags, logLevel);
+    const minimumLogLevel = json ? "None" : config.logLevel;
+    return yield* Effect.gen(function* () {
+      const environmentAuth = yield* EnvironmentAuth.EnvironmentAuth;
+      const timeouts = yield* resolveCliLiveServerReadTimeouts(flags.timeoutMs ?? Option.none());
+      const outcome = yield* withResolvedLiveOrchestrationServer(
+        { environmentAuth, config, label: "t3 session cli", timeouts },
+        (live, token) =>
+          Effect.gen(function* () {
+            const descriptor = yield* fetchLiveEnvironmentDescriptor(live.origin, timeouts);
+            for (const capability of capabilities) {
+              if (descriptor.capabilities[capability] !== true) {
+                return yield* new SessionCliServerUnsupportedError({
+                  serverVersion: descriptor.serverVersion,
+                  capability,
+                });
+              }
+            }
+            return yield* run({ live, config, token, timeouts });
+          }),
+      );
+      if (Option.isNone(outcome)) {
+        return yield* new CliOrchestrationServerUnavailableError({
+          operation: "resolveLiveServer",
+          statePath: config.serverRuntimeStatePath,
+        });
+      }
+      return outcome.value;
+    }).pipe(
+      Effect.provide(
+        Layer.mergeAll(EnvironmentAuth.runtimeLayer, WorkspacePaths.layer).pipe(
+          Layer.provideMerge(FetchHttpClient.layer),
+          Layer.provide(ServerConfig.layer(config)),
+          Layer.provide(Layer.succeed(References.MinimumLogLevel, minimumLogLevel)),
+        ),
+      ),
+      Effect.provideService(References.MinimumLogLevel, minimumLogLevel),
+    );
+  }).pipe(withCliJsonErrorOutput(json));
+});
+
+const sessionCandidatesCommand = Command.make("candidates", {
+  ...projectLocationFlags,
+  project: Flag.String("project").pipe(Flag.withDescription("Project id or workspace root.")),
+  cwd: Flag.String("cwd").pipe(
+    Flag.withDescription("Optional existing project worktree to inspect."),
+    Flag.optional,
+  ),
+  json: jsonFlag,
+}).pipe(
+  Command.withDescription("List importable provider sessions for a project."),
+  Command.withHandler((flags) =>
+    runSessionCli(flags, flags.json, ["sessionImport"], ({ live, token }) =>
+      Effect.gen(function* () {
+        const project = yield* findActiveProjectTarget({
+          projects: live.shell.projects,
+          identifier: flags.project,
+        });
+        const result = yield* fetchSessionCandidates(live.origin, token, {
+          projectId: project.id,
+          ...(Option.isSome(flags.cwd) ? { cwd: flags.cwd.value } : {}),
+        });
+        yield* Console.log(
+          flags.json
+            ? jsonOutput({ projectId: project.id, candidates: result.candidates })
+            : result.candidates.length === 0
+              ? "No importable sessions."
+              : result.candidates.map(formatSessionCandidateLine).join("\n"),
+        );
+      }),
+    ),
+  ),
+);
+
+const sessionImportCommand = Command.make("import", {
+  ...projectLocationFlags,
+  file: Flag.String("file").pipe(Flag.withDescription("Provider JSONL session transcript.")),
+  project: Flag.String("project").pipe(
+    Flag.withDescription("Project id, workspace root, or existing git repo path to auto-add."),
+  ),
+  worktreeBranch: Flag.String("worktree-branch").pipe(
+    Flag.withDescription(
+      "Use/create the standard worktree for this local branch. Setup scripts and git-status refresh are not run.",
+    ),
+    Flag.optional,
+  ),
+  model: Flag.String("model").pipe(
+    Flag.withDescription("Explicit imported thread model."),
+    Flag.optional,
+  ),
+  effort: Flag.String("effort").pipe(
+    Flag.withDescription("Provider effort/reasoning-effort option."),
+    Flag.optional,
+  ),
+  instance: Flag.String("instance").pipe(
+    Flag.withDescription("Explicit provider instance id."),
+    Flag.optional,
+  ),
+  title: Flag.String("title").pipe(
+    Flag.withDescription("Thread title; defaults to the provider session name."),
+    Flag.optional,
+  ),
+  json: jsonFlag,
+}).pipe(
+  Command.withDescription("Place and import a Claude or Codex CLI session transcript."),
+  Command.withHandler((flags) =>
+    runSessionCli(
+      flags,
+      flags.json,
+      ["sessionImport", "providerCatalog"],
+      ({ live, config, token, timeouts }) =>
+        Effect.gen(function* () {
+          const fileSystem = yield* FileSystem.FileSystem;
+          const sourceInfo = yield* fileSystem.stat(flags.file).pipe(
+            Effect.mapError(
+              (cause) =>
+                new SessionCliError({
+                  operation: "readSessionFile",
+                  detail: `Failed to stat session transcript '${flags.file}'.`,
+                  cause,
+                }),
+            ),
+          );
+          if (sourceInfo.type !== "File") {
+            return yield* new SessionCliError({
+              operation: "readSessionFile",
+              detail: `Session transcript '${flags.file}' is not a file.`,
+            });
+          }
+          if (sourceInfo.size > MAX_SESSION_FILE_BYTES) {
+            return yield* new SessionCliError({
+              operation: "readSessionFile",
+              detail: `Session transcript exceeds the ${MAX_SESSION_FILE_BYTES} byte import limit.`,
+            });
+          }
+          const sourceBytes = yield* fileSystem.readFile(flags.file);
+          const session = yield* sniffSessionTranscript({
+            fileName: flags.file,
+            content: new TextDecoder().decode(sourceBytes),
+          });
+          const catalog = yield* fetchProviderCatalog(live.origin, token);
+          const instance = yield* resolveImportInstance({
+            catalog,
+            provider: session.provider,
+            ...(Option.isSome(flags.instance) ? { explicitInstanceId: flags.instance.value } : {}),
+          });
+          if (instance.home === undefined) {
+            return yield* new SessionCliError({
+              operation: "resolveImportInstance",
+              detail: `Provider instance '${instance.instanceId}' did not advertise an import home.`,
+            });
+          }
+          const modelSelection = yield* resolveCliModelSelection({
+            instance,
+            ...(Option.isSome(flags.model) ? { explicitModel: flags.model.value } : {}),
+            sniffedModel: session.lastSeenModel,
+            ...(Option.isSome(flags.effort) ? { effort: flags.effort.value } : {}),
+          });
+          const existingProject = yield* findActiveProjectTarget({
+            projects: live.shell.projects,
+            identifier: flags.project,
+          }).pipe(Effect.result);
+          if (
+            existingProject._tag === "Failure" &&
+            !isProjectNotFoundError(existingProject.failure)
+          ) {
+            return yield* existingProject.failure;
+          }
+          // A repository that is not a project yet gets its worktree before the
+          // project is added, so a missing branch fails without adding it.
+          const preAddWorktree =
+            Option.isSome(flags.worktreeBranch) && existingProject._tag === "Failure"
+              ? yield* ensureWorktree({
+                  baseDir: config.baseDir,
+                  workspaceRoot: yield* resolveExistingGitWorkspaceRoot(flags.project),
+                  branch: flags.worktreeBranch.value,
+                })
+              : undefined;
+          const project = yield* resolveOrAddProject({
+            origin: live.origin,
+            bearerToken: token,
+            shell: live.shell,
+            identifier: flags.project,
+            timeouts,
+          });
+          const worktree = Option.isSome(flags.worktreeBranch)
+            ? (preAddWorktree ??
+              (yield* ensureWorktree({
+                baseDir: config.baseDir,
+                workspaceRoot: project.workspaceRoot,
+                branch: flags.worktreeBranch.value,
+              })))
+            : undefined;
+          const effectiveCwd =
+            worktree?.worktreePath ??
+            (yield* fileSystem
+              .realPath(project.workspaceRoot)
+              .pipe(Effect.orElseSucceed(() => project.workspaceRoot)));
+          const placedPath = deriveSessionDestination({
+            session,
+            instanceHome: instance.home,
+            effectiveCwd,
+          });
+          // Codex validates a thread's recorded cwd against the workspace it is
+          // imported into, so a transferred rollout is retargeted before placement.
+          const retargeted =
+            session.provider === "codex"
+              ? rewriteCodexTranscriptCwd({
+                  content: new TextDecoder().decode(sourceBytes),
+                  from: session.sourceCwd,
+                  to: effectiveCwd,
+                })
+              : { content: null, rewritten: 0 };
+          const placedBytes =
+            retargeted.content === null || retargeted.rewritten === 0
+              ? sourceBytes
+              : new TextEncoder().encode(retargeted.content);
+          yield* placeSessionFile({ destinationPath: placedPath, bytes: placedBytes });
+          const result = yield* importSession(live.origin, token, {
+            projectId: project.id,
+            instanceId: instance.instanceId,
+            nativeSessionId: session.nativeSessionId,
+            ...(Option.isSome(flags.title) ? { title: flags.title.value } : {}),
+            ...(modelSelection === undefined ? {} : { modelSelection }),
+            ...(worktree === undefined ? {} : { worktree }),
+          }).pipe(Effect.result);
+          if (result._tag === "Failure") {
+            const error = result.failure;
+            if (
+              isEnvironmentSessionImportError(error) &&
+              error.reason === "already-imported" &&
+              error.existingThreadId !== undefined
+            ) {
+              yield* Console.log(
+                flags.json
+                  ? jsonOutput({
+                      threadId: error.existingThreadId,
+                      action: "already-imported",
+                    })
+                  : `Session is already imported as thread ${error.existingThreadId}.`,
+              );
+              return;
+            }
+            if (isEnvironmentSessionImportError(error)) {
+              return yield* new SessionCliError({
+                operation: "importSession",
+                detail: error.detail,
+              });
+            }
+            return yield* error;
+          }
+          const output = {
+            threadId: result.success.threadId,
+            action: "imported" as const,
+            projectId: project.id,
+            instanceId: instance.instanceId,
+            nativeSessionId: session.nativeSessionId,
+            placedPath,
+            ...(retargeted.rewritten === 0 ? {} : { retargetedCwdFields: retargeted.rewritten }),
+            ...(worktree === undefined ? {} : { worktreePath: worktree.worktreePath }),
+            ...(result.success.warnings === undefined ? {} : { warnings: result.success.warnings }),
+          };
+          yield* Console.log(
+            flags.json
+              ? jsonOutput(output)
+              : [
+                  `Imported session ${session.nativeSessionId} as thread ${result.success.threadId}.`,
+                  ...(result.success.warnings ?? []).map(
+                    (warning) => `Warning: ${warning.message}`,
+                  ),
+                ].join("\n"),
+          );
+        }),
+    ),
+  ),
+);
+
+export const sessionCommand = Command.make("session").pipe(
+  Command.withDescription("Inspect and import provider CLI sessions."),
+  Command.withSubcommands([sessionCandidatesCommand, sessionImportCommand]),
+);

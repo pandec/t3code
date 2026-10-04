@@ -19,6 +19,7 @@ import { projectCommand } from "./cli/project.ts";
 import { runServerCommand, serveCommand, startCommand } from "./cli/server.ts";
 import { statusCommand } from "./cli/status.ts";
 import { groupCommand, threadCommand } from "./cli/thread.ts";
+import { sessionCommand } from "./cli/session.ts";
 import { updateCommand } from "./cli/update.ts";
 import { uninstallCommand } from "./cli/uninstall.ts";
 import { serviceLauncherCommand } from "./cli/serviceLauncher.ts";
@@ -71,6 +72,7 @@ export const makeCli = ({ cloudEnabled = hasCloudPublicConfig } = {}) =>
       projectCommand,
       threadCommand,
       groupCommand,
+      sessionCommand,
       statusCommand,
       serviceCommand,
       updateCommand,
