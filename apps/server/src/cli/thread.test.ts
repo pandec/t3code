@@ -17,7 +17,6 @@ import {
 } from "./orchestration.ts";
 import {
   compensateFailedThreadStart,
-  decideThreadCliWorkspace,
   decodeThreadInputAnswersJson,
   resolveThreadCliDefaultWorkspace,
   resolveThreadCliWorkspaceSelection,
@@ -170,76 +169,6 @@ it.effect("rejects combining --checkout with worktree flags", () =>
     assert.include(originError.detail, "--start-from-origin");
   }),
 );
-
-it("decides the workspace against the server's bootstrap capability", () => {
-  const newWorktree = {
-    mode: "new-worktree",
-    base: null,
-    branch: null,
-    startFromOrigin: false,
-  } as const;
-  const existingWorktree = {
-    mode: "existing-worktree",
-    worktreePath: "/tmp/worktrees/feature",
-    branch: null,
-  } as const;
-
-  // Worktree modes proceed unchanged on a capable server.
-  assert.deepEqual(
-    decideThreadCliWorkspace({
-      requested: newWorktree,
-      fromDefaults: false,
-      bootstrapSupported: true,
-    }),
-    { kind: "proceed", workspace: newWorktree },
-  );
-  assert.deepEqual(
-    decideThreadCliWorkspace({
-      requested: newWorktree,
-      fromDefaults: true,
-      bootstrapSupported: true,
-    }),
-    { kind: "proceed", workspace: newWorktree },
-  );
-
-  // Explicit --new-worktree fails hard without the capability.
-  assert.deepEqual(
-    decideThreadCliWorkspace({
-      requested: newWorktree,
-      fromDefaults: false,
-      bootstrapSupported: false,
-    }),
-    { kind: "unsupported" },
-  );
-
-  // A defaults-derived worktree falls back to the checkout instead.
-  assert.deepEqual(
-    decideThreadCliWorkspace({
-      requested: newWorktree,
-      fromDefaults: true,
-      bootstrapSupported: false,
-    }),
-    { kind: "fallback-checkout" },
-  );
-
-  // Checkout and existing worktrees never depend on the capability.
-  assert.deepEqual(
-    decideThreadCliWorkspace({
-      requested: { mode: "checkout" },
-      fromDefaults: true,
-      bootstrapSupported: false,
-    }),
-    { kind: "proceed", workspace: { mode: "checkout" } },
-  );
-  assert.deepEqual(
-    decideThreadCliWorkspace({
-      requested: existingWorktree,
-      fromDefaults: false,
-      bootstrapSupported: false,
-    }),
-    { kind: "proceed", workspace: existingWorktree },
-  );
-});
 
 it.effect("resolves --new-worktree with base, branch, and origin options", () =>
   Effect.gen(function* () {

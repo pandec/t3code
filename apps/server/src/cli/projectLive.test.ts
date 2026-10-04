@@ -8,30 +8,20 @@ import * as NodeHttpServer from "@effect/platform-node/NodeHttpServer";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import { assert, it } from "@effect/vitest";
 import {
-  AuthAdministrativeScopes,
-  AuthSessionId,
-  EnvironmentAuthenticatedAuth,
-  EnvironmentAuthenticatedPrincipal,
   EnvironmentHttpApi,
   EnvironmentId,
   type ExecutionEnvironmentDescriptor,
   ProjectId,
 } from "@t3tools/contracts";
-import { DEFAULT_SIGNAL_EXPORT } from "@t3tools/shared/observability";
-import * as OtelEnvironment from "@t3tools/shared/otelEnvironment";
-import * as NetService from "@t3tools/shared/Net";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import * as Ref from "effect/Ref";
 import * as References from "effect/References";
-import * as TestConsole from "effect/testing/TestConsole";
-import { Command } from "effect/unstable/cli";
 import { HttpServer } from "effect/unstable/http";
 import * as HttpRouter from "effect/unstable/http/HttpRouter";
 import * as HttpApi from "effect/unstable/httpapi/HttpApi";
 import * as HttpApiBuilder from "effect/unstable/httpapi/HttpApiBuilder";
 
-import { cli } from "../binCli.ts";
 import * as ServerConfig from "../config.ts";
 import { ProjectServiceLayerLive } from "../orchestration-v2/runtimeLayer.ts";
 import * as SqlitePersistence from "../persistence/Layers/Sqlite.ts";
@@ -54,74 +44,22 @@ import {
   CliOrchestrationServerUnavailableError,
   updateLiveServerSettings,
 } from "./orchestration.ts";
+import {
+  captureStdout,
+  makeConfig,
+  makeTestAuthLayer,
+  parseJson,
+  runCli,
+} from "./liveServerTestKit.ts";
 import { ProjectActionServerUnsupportedError } from "./project.ts";
 
-const CliRuntimeLayer = Layer.mergeAll(NodeServices.layer, NetService.layer);
-const runCli = (args: ReadonlyArray<string>) =>
-  Command.runWith(cli, { version: "0.0.0" })(args).pipe(Effect.provide(CliRuntimeLayer));
-
-/** Runs a CLI invocation and returns its last stdout line. */
-const captureStdout = (args: ReadonlyArray<string>) =>
-  Effect.gen(function* () {
-    yield* Command.runWith(cli, { version: "0.0.0" })(args);
-    return (
-      (yield* TestConsole.logLines).findLast((line): line is string => typeof line === "string") ??
-      ""
-    );
-  }).pipe(Effect.provide(Layer.mergeAll(CliRuntimeLayer, TestConsole.layer)));
-
-const parseJson = <A>(output: string): A => JSON.parse(output) as A;
-
-const makeConfig = (baseDir: string) =>
-  Effect.gen(function* () {
-    const derivedPaths = yield* ServerConfig.deriveServerPaths(baseDir, undefined);
-    return {
-      logLevel: "Info",
-      traceMinLevel: "Info",
-      traceTimingEnabled: true,
-      traceBatchWindowMs: 200,
-      traceMaxBytes: 10 * 1024 * 1024,
-      traceMaxFiles: 10,
-      otelEnvironment: OtelEnvironment.none,
-      otlpTracesUrl: undefined,
-      otlpMetricsUrl: undefined,
-      otlpLogsUrl: undefined,
-      otlpTracesExport: DEFAULT_SIGNAL_EXPORT,
-      otlpMetricsExport: DEFAULT_SIGNAL_EXPORT,
-      otlpLogsExport: DEFAULT_SIGNAL_EXPORT,
-      mode: "web",
-      port: 0,
-      host: "127.0.0.1",
-      cwd: process.cwd(),
-      baseDir,
-      ...derivedPaths,
-      staticDir: undefined,
-      devUrl: undefined,
-      devAllowedOrigins: [],
-      noBrowser: true,
-      startupPresentation: "browser",
-      desktopBootstrapToken: undefined,
-      autoBootstrapProjectFromCwd: false,
-      logWebSocketEvents: false,
-      tailscaleServeEnabled: false,
-      tailscaleServePort: 443,
-    } satisfies ServerConfig.ServerConfig["Service"];
-  });
+const testAuthLayer = makeTestAuthLayer("project-cli-live-test");
 
 class ProjectCliHttpApi extends HttpApi.make("environment")
   .add(EnvironmentHttpApi.groups.metadata)
   .add(EnvironmentHttpApi.groups.orchestration)
   .add(EnvironmentHttpApi.groups.projects)
   .add(EnvironmentHttpApi.groups.settings) {}
-
-const testAuthLayer = Layer.succeed(EnvironmentAuthenticatedAuth, (httpEffect) =>
-  Effect.provideService(httpEffect, EnvironmentAuthenticatedPrincipal, {
-    sessionId: AuthSessionId.make("project-cli-live-test"),
-    subject: "project-cli-live-test",
-    method: "bearer-access-token",
-    scopes: new Set(AuthAdministrativeScopes),
-  }),
-);
 
 /** Serves the shell from the real project service; threads are irrelevant here. */
 const shellHttpApiLayer = HttpApiBuilder.group(

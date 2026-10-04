@@ -2,6 +2,7 @@
 import * as NodePath from "node:path";
 
 import {
+  EnvironmentHttpApi,
   EnvironmentSessionImportError,
   type ModelSelection,
   type ProviderCatalogInstance,
@@ -15,6 +16,7 @@ import * as Effect from "effect/Effect";
 import * as FileSystem from "effect/FileSystem";
 import * as Path from "effect/Path";
 import * as Schema from "effect/Schema";
+import * as HttpApiClient from "effect/unstable/httpapi/HttpApiClient";
 
 import { sanitizeGitRepositoryEnvironment } from "../git/Utils.ts";
 import * as ProcessRunner from "../processRunner.ts";
@@ -622,6 +624,20 @@ export function sessionHttpError(operation: string, cause: unknown) {
     ? sessionTransportError(operation, cause)
     : cliOrchestrationErrorFromRequest(cause);
 }
+
+const SESSION_HTTP_READ_TIMEOUT = Duration.seconds(5);
+
+/** Reads the live server's provider instances and their advertised models. */
+export const fetchProviderCatalog = (origin: string, bearerToken: string) =>
+  Effect.gen(function* () {
+    const client = yield* HttpApiClient.make(EnvironmentHttpApi, { baseUrl: origin });
+    return yield* client.providers.catalog({
+      headers: { authorization: `Bearer ${bearerToken}` },
+    });
+  }).pipe(
+    Effect.timeout(SESSION_HTTP_READ_TIMEOUT),
+    Effect.mapError((cause) => sessionHttpError("provider catalog", cause)),
+  );
 
 interface GitCommandResult {
   readonly stdout: string;

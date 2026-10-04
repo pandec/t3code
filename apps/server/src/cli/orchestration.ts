@@ -136,6 +136,7 @@ export const CliLiveServerReadPhase = Schema.Literals([
   "snapshot",
   "messages",
   "wait",
+  "connect",
 ]);
 export type CliLiveServerReadPhase = typeof CliLiveServerReadPhase.Type;
 
@@ -566,6 +567,23 @@ export const fetchLiveOrchestrationShell = (
       options?.phase ?? "discovery",
       options?.timeout ?? timeouts.discovery,
     ),
+  );
+
+/** Issues a one-shot ticket that authenticates the CLI's WebSocket RPC upgrade. */
+export const issueLiveWebSocketTicket = (
+  origin: string,
+  bearerToken: string,
+  timeouts: CliLiveServerReadTimeouts,
+) =>
+  Effect.gen(function* () {
+    const client = yield* makeLiveServerClient(origin);
+    const issued = yield* client.auth.webSocketTicket({
+      headers: { authorization: `Bearer ${bearerToken}` },
+    });
+    return issued.ticket;
+  }).pipe(
+    Effect.mapError(cliOrchestrationErrorFromRequest),
+    withLiveServerReadTimeout("connect", timeouts.read),
   );
 
 export interface CliLiveOrchestrationServer {
