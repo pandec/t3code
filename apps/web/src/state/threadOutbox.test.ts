@@ -2,6 +2,7 @@ import { CommandId, EnvironmentId, MessageId, ThreadId } from "@t3tools/contract
 import { describe, expect, it } from "vite-plus/test";
 
 import {
+  hasPendingThreadSubmission,
   loadThreadOutbox,
   resolveThreadSubmissionOutcome,
   selectThreadSubmissionsToSend,
@@ -125,6 +126,29 @@ describe("selectThreadSubmissionsToSend", () => {
     expect(selectThreadSubmissionsToSend({ ...base, connectedEnvironmentIds: new Set() })).toEqual(
       [],
     );
+  });
+});
+
+describe("hasPendingThreadSubmission", () => {
+  it("keeps a new send behind an older row that is backing off", () => {
+    const older = submission("a", "2026-09-01T10:00:00.000Z");
+    const environmentId = EnvironmentId.make("env-1");
+    expect(hasPendingThreadSubmission([older], environmentId, older.threadId)).toBe(true);
+    expect(hasPendingThreadSubmission([older], environmentId, ThreadId.make("thread-2"))).toBe(
+      false,
+    );
+
+    // The new send is enqueued behind it, so the drain sends neither while it backs off.
+    const newer = submission("b", "2026-09-01T10:00:01.000Z");
+    const base = {
+      submissions: [older, newer],
+      inFlight: new Set<MessageId>(),
+      connectedEnvironmentIds: new Set([environmentId]),
+      retryAtByMessageId: new Map([[older.messageId, 2_000]]),
+      nowMs: 1_000,
+    };
+    expect(selectThreadSubmissionsToSend(base)).toEqual([]);
+    expect(selectThreadSubmissionsToSend({ ...base, submissions: [newer] })).toEqual([newer]);
   });
 });
 

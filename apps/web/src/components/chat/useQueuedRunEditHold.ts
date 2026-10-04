@@ -6,6 +6,8 @@ import {
 } from "@t3tools/contracts";
 import { useEffect } from "react";
 
+import { randomUUID } from "~/lib/utils";
+
 import { threadEnvironment } from "../../state/threads";
 import { useAtomCommand } from "../../state/use-atom-command";
 
@@ -26,7 +28,10 @@ export function useQueuedRunEditHold(
   });
   useEffect(() => {
     if (threadId === null || runId === null) return;
-    const send = (held: boolean) => void hold({ environmentId, input: { threadId, runId, held } });
+    // One lease per edit session, so another client's release cannot drop it.
+    const holderId = randomUUID();
+    const send = (held: boolean) =>
+      void hold({ environmentId, input: { threadId, runId, held, holderId } });
     send(true);
     const renew = window.setInterval(() => send(true), QUEUED_RUN_EDIT_HOLD_RENEW_MS);
     return () => {

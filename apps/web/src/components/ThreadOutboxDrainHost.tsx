@@ -12,6 +12,7 @@ import { useSteerGraceWindowMs } from "../hooks/useSettings";
 import { useConnectedEnvironmentIds } from "../state/environments";
 import {
   claimThreadSubmission,
+  notifyThreadSubmissionRejected,
   releaseThreadSubmission,
   removeThreadSubmission,
   resolveThreadSubmissionOutcome,
@@ -126,6 +127,7 @@ export function ThreadOutboxDrainHost() {
     retryAtRef.current.delete(submission.messageId);
     removeThreadSubmission(submission.messageId);
     if (outcome === "rejected") {
+      notifyThreadSubmissionRejected(submission.messageId);
       const error = failure?.error;
       toastManager.add(
         stackedThreadToast({

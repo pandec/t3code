@@ -104,6 +104,24 @@ export function queuedRunEditHasChanges(
   );
 }
 
+/**
+ * The edit's context with records for saved attachments rebound to the draft
+ * ids their downloaded copies take when a rescue brings them back.
+ */
+export function rebindQueuedEditContext(
+  context: OrchestrationMessageContext | undefined,
+  localIds: ReadonlyMap<string, string>,
+): OrchestrationMessageContext | undefined {
+  if (context === undefined || localIds.size === 0) return context;
+  return {
+    ...context,
+    records: context.records.map((record) => {
+      const localId = "attachmentId" in record ? localIds.get(record.attachmentId) : undefined;
+      return localId === undefined ? record : { ...record, attachmentId: localId };
+    }),
+  };
+}
+
 export function removeQueuedRunEditAttachment(threadKey: string, attachmentId: string): void {
   const edit = getQueuedRunEdit(threadKey);
   if (edit === null) return;

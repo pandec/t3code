@@ -142,6 +142,25 @@ async function importAttachment(
       }
     }
   }
+  return downloadServerAttachmentToDraft(record, environmentId, signal);
+}
+
+/** A server attachment to copy into a draft; `kind` other than "image" is kept as a file. */
+type ServerAttachmentRef = Pick<
+  Extract<ComposerContextRecord, { attachmentId: string }>,
+  "attachmentId" | "name" | "mimeType" | "kind"
+>;
+
+/**
+ * Downloads a server-stored attachment into an owned local file and returns it
+ * as a draft attachment with `id` (fresh by default).
+ */
+export async function downloadServerAttachmentToDraft(
+  attachment: ServerAttachmentRef,
+  environmentId: EnvironmentId,
+  signal: AbortSignal,
+  id: string = uuidv4(),
+): Promise<DraftComposerAttachment> {
   const connection = appAtomRegistry.get(
     environmentSession.preparedConnectionValueAtom(environmentId),
   );
@@ -151,7 +170,11 @@ async function importAttachment(
     assetEnvironment.createUrl({
       environmentId,
       input: {
-        resource: { _tag: "attachment", attachmentId: record.attachmentId, fileName: record.name },
+        resource: {
+          _tag: "attachment",
+          attachmentId: attachment.attachmentId,
+          fileName: attachment.name,
+        },
       },
     }),
     { refresh: true, reportFailure: false },
@@ -161,22 +184,23 @@ async function importAttachment(
   const url = resolveAssetUrl(connection.value.httpBaseUrl, result.value.relativeUrl);
   if (!url) throw new Error("Attachment URL unavailable");
   const temporary = await downloadAttachmentForPreview({
-    attachment: { name: record.name, mimeType: record.mimeType },
+    attachment: { name: attachment.name, mimeType: attachment.mimeType },
     url,
     signal,
   });
   if (!temporary) throw new Error("Attachment import cancelled");
   try {
-    return await persistImportedAttachment(record, temporary.uri, signal);
+    return await persistImportedAttachment(attachment, temporary.uri, signal, id);
   } finally {
     temporary.dispose();
   }
 }
 
 async function persistImportedAttachment(
-  record: Extract<ComposerContextRecord, { attachmentId: string }>,
+  record: Omit<ServerAttachmentRef, "attachmentId">,
   uri: string,
   signal: AbortSignal,
+  id: string = uuidv4(),
 ): Promise<DraftComposerAttachment> {
   const fileUri = await persistComposerAttachmentFile(
     uri,
@@ -191,7 +215,7 @@ async function persistImportedAttachment(
   }
   const { File } = await import("expo-file-system");
   const common = {
-    id: uuidv4(),
+    id,
     fileUri,
     name: record.name,
     mimeType: record.mimeType,

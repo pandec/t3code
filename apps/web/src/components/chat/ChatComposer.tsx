@@ -3000,6 +3000,18 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
   );
   const showResumeAction =
     canResume && !composerDraftHasUserContent(composerDraft) && !isEditingQueuedMessage;
+  // A plain prompt to an existing thread waits in the durable outbox while
+  // offline (ChatView's onSend refuses everything else), so its send controls
+  // stay usable.
+  const offlineSendable =
+    environmentUnavailable !== null &&
+    routeKind === "server" &&
+    activeThreadId !== null &&
+    !isEditingQueuedMessage &&
+    activePendingProgress === null &&
+    !showPlanFollowUpPrompt &&
+    composerImages.length + composerFiles.length === 0 &&
+    composerSendState.hasSendableContent;
   const collapsedComposerPrimaryActionDisabled =
     phase === "running" ||
     isSendBusy ||
@@ -3007,7 +3019,7 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
     isConnecting ||
     noProviderAvailable ||
     projectSelectionRequired ||
-    environmentUnavailable !== null ||
+    (environmentUnavailable !== null && !offlineSendable) ||
     (!composerSendState.hasSendableContent && !showResumeAction);
   const collapsedComposerPrimaryActionLabel = showResumeAction ? "Resume thread" : "Send message";
   const showMobilePendingAnswerActions =
@@ -4207,7 +4219,7 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
       isSendDisabled ||
       isConnecting ||
       noProviderAvailable ||
-      environmentUnavailable !== null ||
+      (environmentUnavailable !== null && !offlineSendable) ||
       phase === "running"
     ) {
       return false;
@@ -4226,6 +4238,7 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
     isSendBusy,
     isSendDisabled,
     noProviderAvailable,
+    offlineSendable,
     phase,
     showPlanFollowUpPrompt,
   ]);
@@ -7720,7 +7733,7 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
                     sendDisabledReason={sendDisabledReason}
                     isConnecting={isConnecting}
                     isEnvironmentUnavailable={
-                      environmentUnavailable !== null ||
+                      (environmentUnavailable !== null && !offlineSendable) ||
                       noProviderAvailable ||
                       projectSelectionRequired
                     }

@@ -6,6 +6,7 @@ import type {
   ThreadId,
 } from "@t3tools/contracts";
 import {
+  composerFileDedupKey,
   useComposerDraftStore,
   type ComposerFileAttachment,
   type ComposerImageAttachment,
@@ -75,9 +76,10 @@ export function recoverQueuedMessageEdit(input: {
   const prompt = [destination?.prompt ?? "", restoredContext?.text ?? edit.prompt]
     .filter((part) => part.trim().length > 0)
     .join("\n\n");
-  // Attachments move with their upload state; the prompt keeps its inline
+  // Attachments move with their upload state, past the per-message limit if
+  // need be (sending still enforces it); the prompt keeps its inline
   // references because the contexts they point at move along with it.
-  store.moveComposerPromptAndImages(input.editTarget, input.threadTarget);
+  store.moveComposerPromptAndImages(input.editTarget, input.threadTarget, { allowOverflow: true });
   store.setPrompt(input.threadTarget, prompt);
   if (edit.terminalContexts.length > 0) {
     store.addTerminalContexts(input.threadTarget, [...edit.terminalContexts], {
@@ -103,9 +105,17 @@ export function recoverQueuedMessageEdit(input: {
   if (input.modelSelection !== undefined) {
     store.setModelSelection(input.threadTarget, input.modelSelection, { replaceOptions: true });
   }
-  // Attachments past the per-message limit stay behind in the edit draft.
+  // Files the thread draft already holds stay behind as duplicates; anything
+  // else left (a file that cannot cross environments) is reported.
   const leftover = store.getComposerDraft(input.editTarget);
-  const skippedAttachmentCount = (leftover?.images.length ?? 0) + (leftover?.files.length ?? 0);
+  const destinationFileIds = new Set(destination?.files.map((file) => file.id));
+  const destinationFileKeys = new Set(destination?.files.map(composerFileDedupKey));
+  const skippedAttachmentCount =
+    (leftover?.images.length ?? 0) +
+    (leftover?.files.filter(
+      (file) =>
+        !destinationFileIds.has(file.id) && !destinationFileKeys.has(composerFileDedupKey(file)),
+    ).length ?? 0);
   store.clearComposerContent(input.editTarget);
   return { outcome: "kept", skippedAttachmentCount };
 }
@@ -138,8 +148,8 @@ export async function restoreQueuedEditAttachments(input: {
   });
   const store = useComposerDraftStore.getState();
   const accepted =
-    store.addImages(input.target, images, { allowDuplicates: true }).length +
-    store.addFiles(input.target, files, { allowDuplicates: true }).length;
+    store.addImages(input.target, images, { allowDuplicates: true, allowOverflow: true }).length +
+    store.addFiles(input.target, files, { allowDuplicates: true, allowOverflow: true }).length;
   return { skippedAttachmentCount: downloaded.length - accepted };
 }
 

@@ -10,6 +10,7 @@ import { parseScopedThreadKey } from "@t3tools/client-runtime/environment";
 import { QUEUED_RUN_EDIT_HOLD_RENEW_MS } from "@t3tools/contracts";
 import { useEffect, useRef } from "react";
 
+import { uuidv4 } from "../lib/uuid";
 import { queuedRunEditsAtom } from "./queued-run-edit";
 import { threadEnvironment } from "./threads";
 import { useAtomCommand } from "./use-atom-command";
@@ -28,10 +29,12 @@ export function useQueuedRunEditHolds(): void {
       const thread = parseScopedThreadKey(threadKey);
       if (thread === null) continue;
       wanted.set(`${threadKey}\u0000${edit.runId}`, () => {
+        // One lease per edit, so another client's release cannot drop it.
+        const holderId = uuidv4();
         const send = (held: boolean) =>
           void hold({
             environmentId: thread.environmentId,
-            input: { threadId: thread.threadId, runId: edit.runId, held },
+            input: { threadId: thread.threadId, runId: edit.runId, held, holderId },
           });
         send(true);
         const renew = setInterval(() => send(true), QUEUED_RUN_EDIT_HOLD_RENEW_MS);

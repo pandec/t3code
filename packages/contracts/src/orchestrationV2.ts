@@ -507,6 +507,13 @@ export const OrchestrationV2RunBackgroundWorkCancelled = Schema.Struct({
 export type OrchestrationV2RunBackgroundWorkCancelled =
   typeof OrchestrationV2RunBackgroundWorkCancelled.Type;
 
+/** Fork: one editing client's lease on a queued message (see `editHolds`). */
+export const QueuedRunEditHoldLease = Schema.Struct({
+  holderId: TrimmedNonEmptyString,
+  until: Schema.DateTimeUtc,
+});
+export type QueuedRunEditHoldLease = typeof QueuedRunEditHoldLease.Type;
+
 export const OrchestrationV2Run = Schema.Struct({
   id: RunId,
   threadId: ThreadId,
@@ -564,8 +571,11 @@ export const OrchestrationV2Run = Schema.Struct({
    * Fork queued-message edit hold: while a client has this message open for
    * editing it neither starts nor is steered. The editing client renews the
    * lease; an abandoned edit stops holding the queue once it lapses.
+   * The latest `until` across `editHolds`.
    */
   editHeldUntil: Schema.optional(Schema.DateTimeUtc),
+  /** Fork: the live edit-hold leases, one per editing client session. */
+  editHolds: Schema.optional(Schema.Array(QueuedRunEditHoldLease)),
 });
 export type OrchestrationV2Run = typeof OrchestrationV2Run.Type;
 
@@ -1888,6 +1898,14 @@ export const OrchestrationV2RunJson = OrchestrationV2Run.mapFields((fields) => (
   workStartedAt: Schema.optional(Schema.DateTimeUtcFromString),
   steerDeadlineAt: Schema.optional(Schema.DateTimeUtcFromString),
   editHeldUntil: Schema.optional(Schema.DateTimeUtcFromString),
+  editHolds: Schema.optional(
+    Schema.Array(
+      QueuedRunEditHoldLease.mapFields((lease) => ({
+        ...lease,
+        until: Schema.DateTimeUtcFromString,
+      })),
+    ),
+  ),
 }));
 export type OrchestrationV2RunJson = typeof OrchestrationV2RunJson.Type;
 
@@ -2790,6 +2808,8 @@ export const OrchestrationV2Command = Schema.Union([
     threadId: ThreadId,
     runId: RunId,
     held: Schema.Boolean,
+    /** One id per client edit session; a release only drops that session's lease. */
+    holderId: TrimmedNonEmptyString,
   }),
   Schema.Struct({
     type: Schema.Literal("runtime-request.respond"),

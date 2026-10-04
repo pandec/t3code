@@ -1,4 +1,10 @@
-import { ComposerContextId, EnvironmentId, ProviderInstanceId, ThreadId } from "@t3tools/contracts";
+import {
+  ComposerContextId,
+  EnvironmentId,
+  PROVIDER_SEND_TURN_MAX_ATTACHMENTS,
+  ProviderInstanceId,
+  ThreadId,
+} from "@t3tools/contracts";
 import {
   collectComposerContextReferences,
   formatComposerContextReference,
@@ -105,6 +111,28 @@ describe("queued message file edits", () => {
     expect(store.getComposerDraft(threadTarget)?.prompt).toBe("Original message");
     expect(store.getComposerDraft(threadTarget)?.files).toEqual([file]);
     expect(store.getComposerDraft(editTarget)).toBeNull();
+  });
+
+  it("keeps every new edit attachment when the thread draft is already at its limit", () => {
+    const store = useComposerDraftStore.getState();
+    const atLimit = Array.from({ length: PROVIDER_SEND_TURN_MAX_ATTACHMENTS }, (_, index) => ({
+      ...file,
+      id: `file:existing-${index}`,
+      name: `existing-${index}.pdf`,
+    }));
+    store.addFiles(threadTarget, atLimit);
+    store.addFiles(editTarget, [file]);
+    store.addImages(editTarget, [image]);
+    expect(recoverQueuedMessageEdit({ editTarget, threadTarget, originalText: "" })).toEqual({
+      outcome: "kept",
+      skippedAttachmentCount: 0,
+    });
+    const draft = store.getComposerDraft(threadTarget);
+    expect(draft?.files.map((entry) => entry.id)).toEqual([
+      ...atLimit.map((entry) => entry.id),
+      file.id,
+    ]);
+    expect(draft?.images.map((entry) => entry.id)).toEqual([image.id]);
   });
 
   it("preserves uploaded file references when a remote queue advance interrupts the edit", () => {

@@ -409,8 +409,10 @@ import { threadEnvironment } from "../state/threads";
 import { useSteerPendingMessageIds } from "../state/threadSteerPending";
 import {
   enqueueThreadSubmission,
+  hasPendingThreadSubmission,
   pendingSubmissionToChatMessage,
   settleClaimedThreadSubmission,
+  subscribeThreadSubmissionRejections,
   useThreadOutboxStore,
   type PendingThreadSubmission,
 } from "../state/threadOutbox";
@@ -3040,6 +3042,11 @@ export default function ChatView(props: ChatViewProps) {
         : existing.filter((message) => !messageIds.includes(message.id));
     });
   }, []);
+  // A send the outbox drain retried and the server then rejected leaves no stale bubble.
+  useEffect(
+    () => subscribeThreadSubmissionRejections((id) => discardOptimisticMessages([id])),
+    [discardOptimisticMessages],
+  );
   const threadOutboxBannerItem = useThreadOutboxBannerItem({
     environmentId: activeThread?.environmentId ?? null,
     threadId: activeThread?.id ?? null,
@@ -4617,17 +4624,32 @@ export default function ChatView(props: ChatViewProps) {
     });
     setEditingQueuedRun(null);
     if (recovery.outcome === "clean") return;
-    const reportRecovered = (skippedAttachmentCount: number) =>
+    const reportRecovered = (skippedAttachmentCount: number) => {
+      // The rescue keeps every attachment even past the per-message limit.
+      const draft = useComposerDraftStore.getState().getComposerDraft(baseComposerDraftTarget);
+      const overLimit =
+        (draft?.images.length ?? 0) + (draft?.files.length ?? 0) >
+        PROVIDER_SEND_TURN_MAX_ATTACHMENTS;
+      const notes = [
+        ...(skippedAttachmentCount === 0
+          ? []
+          : [
+              `${skippedAttachmentCount} attachment${skippedAttachmentCount === 1 ? "" : "s"} could not be added.`,
+            ]),
+        ...(overLimit
+          ? [
+              `The composer is over the ${PROVIDER_SEND_TURN_MAX_ATTACHMENTS}-attachment limit; remove some before sending.`,
+            ]
+          : []),
+      ];
       toastManager.add(
         stackedThreadToast({
-          type: skippedAttachmentCount === 0 ? "info" : "warning",
+          type: notes.length === 0 ? "info" : "warning",
           title: "Queued message is no longer queued",
-          description:
-            skippedAttachmentCount === 0
-              ? "Your unsaved edit was moved to the composer."
-              : `Your unsaved edit was moved to the composer, but ${skippedAttachmentCount} attachment${skippedAttachmentCount === 1 ? "" : "s"} could not be added.`,
+          description: ["Your unsaved edit was moved to the composer.", ...notes].join(" "),
         }),
       );
+    };
     const savedAttachments = editingQueuedRun.existingAttachments;
     if (savedAttachments.length === 0) {
       reportRecovered(recovery.skippedAttachmentCount);
@@ -9519,8 +9541,8 @@ export default function ChatView(props: ChatViewProps) {
 
     let failure: AtomCommandResult<unknown, unknown> | null = null;
 
-    if (failure === null && isServerThread) {
-      const settingsResult = await persistThreadSettingsForNextTurn({
+    const persistSettingsForSend = () =>
+      persistThreadSettingsForNextTurn({
         threadId: threadIdForSend,
         createdAt: messageCreatedAt,
         ...(localCheckoutBranchMismatch
@@ -9529,6 +9551,11 @@ export default function ChatView(props: ChatViewProps) {
         runtimeMode,
         interactionMode: sendInteractionMode,
       });
+    // An existing server thread's send records its settings in its outbox row
+    // before applying them (below), so a reload in between still resends both.
+    const settingsGoThroughOutbox = isServerThread && !isLocalDraftThread && !baseBranchForWorktree;
+    if (failure === null && isServerThread && !settingsGoThroughOutbox) {
+      const settingsResult = await persistSettingsForSend();
       if (settingsResult._tag === "Failure") {
         failure = settingsResult;
       }
@@ -9633,27 +9660,59 @@ export default function ChatView(props: ChatViewProps) {
               modelSelection: ctxSelectedModelSelection,
               titleSeed: title,
               dispatchMode,
+              settings: { runtimeMode, interactionMode: sendInteractionMode },
               createdAt: messageCreatedAt,
             }
           : null;
+      // An older unaccepted row for this thread goes first: this one waits
+      // behind it in the drain instead of overtaking it.
+      const queuedBehindOutbox =
+        outboxSubmission !== null &&
+        hasPendingThreadSubmission(
+          useThreadOutboxStore.getState().submissions,
+          environmentId,
+          threadIdForSend,
+        ) &&
+        enqueueThreadSubmission(outboxSubmission);
       const sentFromOutbox =
-        outboxSubmission !== null && enqueueThreadSubmission(outboxSubmission, { claim: true });
-      const startPromise = startThreadTurn({
-        environmentId,
-        input: {
-          threadId: threadIdForSend,
-          ...(sentFromOutbox ? { commandId: outboxSubmission.commandId } : {}),
-          message: turnMessage,
-          modelSelection: ctxSelectedModelSelection,
-          titleSeed: title,
-          runtimeMode,
-          interactionMode: sendInteractionMode,
-          dispatchMode,
-          steerGraceWindowMs,
-          ...(bootstrap ? { bootstrap } : {}),
-          createdAt: messageCreatedAt,
-        },
-      });
+        !queuedBehindOutbox &&
+        outboxSubmission !== null &&
+        enqueueThreadSubmission(outboxSubmission, { claim: true });
+      let settingsLeftForDrain = false;
+      if (outboxSubmission !== null && !queuedBehindOutbox) {
+        const settingsResult = await persistSettingsForSend();
+        if (sentFromOutbox && settingsResult._tag === "Success") {
+          // Applied: a resend must not re-apply modes the user may change meanwhile.
+          const { settings: _appliedSettings, ...submissionWithoutSettings } = outboxSubmission;
+          enqueueThreadSubmission(submissionWithoutSettings, { claim: true });
+        } else if (
+          sentFromOutbox &&
+          settleClaimedThreadSubmission(messageIdForSend, settingsResult)
+        ) {
+          settingsLeftForDrain = true;
+        } else if (settingsResult._tag === "Failure") {
+          failure = settingsResult;
+        }
+      }
+      const startPromise =
+        failure !== null || queuedBehindOutbox || settingsLeftForDrain
+          ? null
+          : startThreadTurn({
+              environmentId,
+              input: {
+                threadId: threadIdForSend,
+                ...(sentFromOutbox ? { commandId: outboxSubmission.commandId } : {}),
+                message: turnMessage,
+                modelSelection: ctxSelectedModelSelection,
+                titleSeed: title,
+                runtimeMode,
+                interactionMode: sendInteractionMode,
+                dispatchMode,
+                steerGraceWindowMs,
+                ...(bootstrap ? { bootstrap } : {}),
+                createdAt: messageCreatedAt,
+              },
+            });
       if (backgroundThreadRef) {
         markPromotedDraftThreadByRef(backgroundThreadRef);
         try {
@@ -9678,8 +9737,10 @@ export default function ChatView(props: ChatViewProps) {
           );
         }
       }
-      const startResult = await startPromise;
-      if (sentFromOutbox && settleClaimedThreadSubmission(messageIdForSend, startResult)) {
+      const startResult = startPromise === null ? null : await startPromise;
+      if (startResult === null) {
+        // Handed to the outbox drain (or settings failed, reported below).
+      } else if (sentFromOutbox && settleClaimedThreadSubmission(messageIdForSend, startResult)) {
         // Not accepted yet: the outbox drain sends it once the connection recovers.
       } else if (startResult._tag === "Failure") {
         failure = startResult;

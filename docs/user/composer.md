@@ -169,10 +169,8 @@ transcription or cancellation; only the message text is sent when you submit.
 ## Queued messages
 
 On web and desktop, the composer shows **Interrupt** while the agent is working and the draft is
-empty. Adding text or attachments replaces it with a steer arrow. Click it to send a message into
-the active turn, or press `Enter` on desktop. Hold `Cmd` on macOS or `Ctrl` on Windows and Linux to
-switch the button to a queue icon. Click while holding that key, or press `Cmd+Enter` or
-`Ctrl+Enter` on desktop, to queue the message for after the active turn.
+empty. Adding text or attachments shows **Queue for later**, **Steer**, and **Stop**; see
+[Send while the agent is working](#send-while-the-agent-is-working) for which one `Enter` uses.
 
 Queued messages appear above the composer. Rows show a thumbnail of any attached image alongside
 the text. Drag a row by its handle to reorder it, use the handle's arrow keys, promote the message
@@ -211,8 +209,7 @@ A message you are editing doesn't start or get steered in, and the messages behi
 you save or cancel. If you leave an edit open on a device that goes to sleep or loses its connection,
 the queue continues after about two minutes. If the message is removed from another device, or starts
 after that, the edit ends and your changes are added to the end of the composer, together with the
-message's model, attachments and context, even when the composer already has text. On mobile, the
-message's saved attachments stay with the original message. A pending task on mobile isn't sent while
+message's model, attachments and context, even when the composer already has text. A pending task on mobile isn't sent while
 you're confirming whether to delete it.
 
 ## Commands and skills

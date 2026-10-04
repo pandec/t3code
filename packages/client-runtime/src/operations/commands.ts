@@ -242,6 +242,8 @@ export interface CancelQueuedRunInput extends ThreadCommandInput {
 export interface HoldQueuedRunForEditInput extends ThreadCommandInput {
   readonly runId: RunId;
   readonly held: boolean;
+  /** One id per edit session; hold, renew and release must share it. */
+  readonly holderId: string;
 }
 
 export interface EditQueuedRunInput extends ThreadCommandInput {
@@ -1004,6 +1006,7 @@ export const holdQueuedRunForEdit = Effect.fn("EnvironmentCommands.holdQueuedRun
       threadId: input.threadId,
       runId: input.runId,
       held: input.held,
+      holderId: input.holderId,
     });
   },
 );

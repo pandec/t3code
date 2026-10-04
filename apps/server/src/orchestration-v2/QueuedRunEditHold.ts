@@ -18,17 +18,28 @@ export function isQueuedRunEditHeld(run: OrchestrationV2Run, now: DateTime.Utc):
   );
 }
 
-/** The run with its edit hold set from now, or released. */
+/**
+ * The run with `holderId`'s lease renewed from now, or released. Leases are
+ * per editing session, so one client ending its edit never releases another
+ * client's hold; lapsed leases are dropped on every change.
+ */
 export function withEditHold(
   run: OrchestrationV2Run,
+  holderId: string,
   held: boolean,
   now: DateTime.Utc,
 ): OrchestrationV2Run {
-  const { editHeldUntil: _editHeldUntil, ...released } = run;
-  return held
-    ? {
-        ...released,
-        editHeldUntil: DateTime.add(now, { milliseconds: QUEUED_RUN_EDIT_HOLD_LEASE_MS }),
-      }
-    : released;
+  const { editHeldUntil: _editHeldUntil, editHolds, ...released } = run;
+  const holds = (editHolds ?? []).filter(
+    (hold) => hold.holderId !== holderId && DateTime.isGreaterThan(hold.until, now),
+  );
+  if (held) {
+    holds.push({
+      holderId,
+      until: DateTime.add(now, { milliseconds: QUEUED_RUN_EDIT_HOLD_LEASE_MS }),
+    });
+  }
+  if (holds.length === 0) return released;
+  const latest = holds.reduce((max, hold) => DateTime.max(max, hold.until), holds[0]!.until);
+  return { ...released, editHeldUntil: latest, editHolds: holds };
 }

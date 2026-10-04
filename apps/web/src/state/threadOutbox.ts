@@ -203,6 +203,22 @@ export function enqueueThreadSubmission(
   return true;
 }
 
+const rejectionListeners = new Set<(messageId: MessageId) => void>();
+
+/** Notifies when the drain drops a row the server rejected, e.g. to prune its optimistic message. */
+export function subscribeThreadSubmissionRejections(
+  listener: (messageId: MessageId) => void,
+): () => void {
+  rejectionListeners.add(listener);
+  return () => {
+    rejectionListeners.delete(listener);
+  };
+}
+
+export function notifyThreadSubmissionRejected(messageId: MessageId): void {
+  for (const listener of rejectionListeners) listener(messageId);
+}
+
 export function removeThreadSubmission(messageId: MessageId): void {
   browserStorage()?.removeItem(storageKey(messageId));
   useThreadOutboxStore.setState((state) => {
@@ -231,6 +247,20 @@ export function releaseThreadSubmission(messageId: MessageId): void {
   const next = new Set(inFlight);
   next.delete(messageId);
   useThreadOutboxStore.setState({ inFlight: next });
+}
+
+/**
+ * Whether the thread already has an unaccepted row. A new send for it then
+ * queues behind that row in the drain rather than overtaking it.
+ */
+export function hasPendingThreadSubmission(
+  submissions: ReadonlyArray<PendingThreadSubmission>,
+  environmentId: EnvironmentId,
+  threadId: ThreadId,
+): boolean {
+  return submissions.some(
+    (entry) => entry.environmentId === environmentId && entry.threadId === threadId,
+  );
 }
 
 /**

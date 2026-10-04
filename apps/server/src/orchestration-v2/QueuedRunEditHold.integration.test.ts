@@ -158,41 +158,47 @@ const scenario = (name: string) =>
           createdBy: "user",
           creationSource: "web",
         });
-      const hold = (id: string, runId: RunId, held: boolean) =>
+      const hold = (id: string, runId: RunId, held: boolean, holderId = "editor") =>
         orchestrator.dispatch({
           type: "queued-run.edit-hold",
           commandId: CommandId.make(id),
           threadId,
           runId,
           held,
+          holderId,
         });
-      // Ends the first (active) turn so the queue would normally start.
-      const endActiveTurn = Effect.gen(function* () {
-        const activeTurn = (yield* orchestrator.getThreadProjection(threadId)).providerTurns[0]!;
-        const activeEnded = yield* watch(
-          (event) =>
-            event.type === "run.updated" &&
-            event.payload.id === harness.started[0]!.runId &&
-            event.payload.status === "waiting",
-        );
-        yield* Queue.offer(harness.events, {
-          type: "provider_turn.updated",
-          driver,
-          providerTurn: { ...activeTurn, status: "completed", completedAt: yield* DateTime.now },
+      // Ends a started turn (the first, active one by default) so the queue would normally start.
+      const endTurn = (index: number) =>
+        Effect.gen(function* () {
+          const turnInput = harness.started[index]!;
+          const activeTurn = (yield* orchestrator.getThreadProjection(threadId)).providerTurns.find(
+            (turn) => turn.runAttemptId === turnInput.attemptId,
+          )!;
+          const activeEnded = yield* watch(
+            (event) =>
+              event.type === "run.updated" &&
+              event.payload.id === turnInput.runId &&
+              event.payload.status === "waiting",
+          );
+          yield* Queue.offer(harness.events, {
+            type: "provider_turn.updated",
+            driver,
+            providerTurn: { ...activeTurn, status: "completed", completedAt: yield* DateTime.now },
+          });
+          yield* Queue.offer(harness.events, {
+            type: "turn.terminal",
+            driver,
+            providerThreadId: activeTurn.providerThreadId,
+            providerTurnId: activeTurn.id,
+            runOrdinal: turnInput.runOrdinal,
+            status: "completed",
+            failure: null,
+            threadDisposition: "reusable",
+          });
+          yield* Fiber.join(activeEnded);
+          yield* worker.drain();
         });
-        yield* Queue.offer(harness.events, {
-          type: "turn.terminal",
-          driver,
-          providerThreadId: activeTurn.providerThreadId,
-          providerTurnId: activeTurn.id,
-          runOrdinal: harness.started[0]!.runOrdinal,
-          status: "completed",
-          failure: null,
-          threadDisposition: "reusable",
-        });
-        yield* Fiber.join(activeEnded);
-        yield* worker.drain();
-      });
+      const endActiveTurn = endTurn(0);
       yield* orchestrator.dispatch({
         type: "thread.create",
         commandId: CommandId.make("create"),
@@ -213,7 +219,7 @@ const scenario = (name: string) =>
       yield* send("active", "start");
       yield* worker.drain();
       yield* Fiber.join(firstRunning);
-      return { orchestrator, worker, watch, send, hold, endActiveTurn };
+      return { orchestrator, worker, watch, send, hold, endTurn, endActiveTurn };
     });
     return { ...harness, threadId, setup };
   });
@@ -324,4 +330,112 @@ it.effect("resumes the queue once an abandoned edit hold lapses", () =>
       }).pipe(Effect.provide(layer));
     }),
   ),
+);
+
+it.effect("keeps a queued message held until every editing client releases it", () =>
+  Effect.scoped(
+    Effect.gen(function* () {
+      const { started, threadId, setup, layer } = yield* scenario("edit-hold-two-holders");
+      yield* Effect.gen(function* () {
+        const { orchestrator, worker, watch, send, hold, endActiveTurn } = yield* setup;
+        yield* send("queued", "queue");
+        const queued = (yield* orchestrator.getThreadProjection(threadId)).runs.find(
+          (run) => run.status === "queued",
+        )!;
+        yield* hold("hold-web", queued.id, true, "web");
+        yield* hold("hold-mobile", queued.id, true, "mobile");
+        yield* endActiveTurn;
+
+        yield* hold("release-web", queued.id, false, "web");
+        yield* worker.drain();
+        // Mobile still edits, so the web release does not start the message.
+        assert.equal(started.length, 1);
+        assert.deepEqual(
+          (yield* orchestrator.getThreadProjection(threadId)).runs
+            .find((run) => run.id === queued.id)
+            ?.editHolds?.map((lease) => lease.holderId),
+          ["mobile"],
+        );
+
+        const queuedStarting = yield* watch(
+          (event) =>
+            event.type === "run.updated" &&
+            event.payload.id === queued.id &&
+            event.payload.status === "starting",
+        );
+        yield* hold("release-mobile", queued.id, false, "mobile");
+        yield* Fiber.join(queuedStarting);
+        yield* worker.drain();
+        assert.equal(started.length, 2);
+        assert.equal(started[1]!.runId, queued.id);
+      }).pipe(Effect.provide(layer));
+    }),
+  ),
+);
+
+it.effect(
+  "releases a batch only on its turn's first running update, not on later usage updates",
+  () =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        const { started, steered, events, threadId, setup, layer } =
+          yield* scenario("edit-hold-batch-usage");
+        yield* Effect.gen(function* () {
+          const { orchestrator, worker, watch, send, hold, endTurn, endActiveTurn } = yield* setup;
+          yield* send("leader", "queue");
+          yield* send("follower", "queue");
+          yield* send("held", "queue");
+          const queued = (yield* orchestrator.getThreadProjection(threadId)).runs
+            .filter((run) => run.status === "queued")
+            .toSorted((left, right) => left.ordinal - right.ordinal);
+          const [leader, follower, held] = queued;
+          yield* hold("hold", held!.id, true);
+
+          // The leader starts and runs: the follower joins its turn, the held
+          // message stops the release.
+          const followerReleased = yield* watch(
+            (event) =>
+              event.type === "turn-item.updated" &&
+              event.payload.type === "user_message" &&
+              event.payload.messageId === follower!.userMessageId,
+          );
+          yield* endActiveTurn;
+          yield* Fiber.join(followerReleased);
+          yield* worker.drain();
+          assert.equal(started[1]!.runId, leader!.id);
+          assert.deepEqual(steered, ["follower"]);
+
+          // The edit ends and the provider reports token usage on the same turn:
+          // the batch was already released, so the message waits for its own turn.
+          yield* hold("release", held!.id, false);
+          const usageNow = yield* DateTime.now;
+          const usageRecorded = yield* watch(
+            (event) =>
+              event.type === "provider-turn.updated" &&
+              event.payload.runAttemptId === started[1]!.attemptId &&
+              event.payload.tokenUsage !== undefined,
+          );
+          yield* Queue.offer(events, {
+            type: "provider_turn.updated",
+            driver,
+            providerTurn: {
+              ...providerTurnFor(started[1]!, usageNow),
+              tokenUsage: { usedTokens: 1_000, updatedAt: DateTime.formatIso(usageNow) },
+            },
+          });
+          yield* Fiber.join(usageRecorded);
+          const heldStarting = yield* watch(
+            (event) =>
+              event.type === "run.updated" &&
+              event.payload.id === held!.id &&
+              event.payload.status === "starting",
+          );
+          yield* endTurn(1);
+          yield* Fiber.join(heldStarting);
+          yield* worker.drain();
+          assert.deepEqual(steered, ["follower"]);
+          assert.equal(started[2]!.runId, held!.id);
+        }).pipe(Effect.provide(layer));
+      }),
+    ),
 );

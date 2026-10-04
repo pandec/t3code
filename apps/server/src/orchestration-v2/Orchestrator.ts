@@ -1090,16 +1090,22 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
       }
     });
 
-  const failQueuedRunStart = (threadId: ThreadId, cause: unknown) =>
+  // `runId` is the run the failed start selected. The fork's recall and edit
+  // holds make `nextQueuedRun` clock-dependent, so re-selecting could blame a
+  // steer whose window lapsed while the start was failing.
+  const failQueuedRunStart = (threadId: ThreadId, cause: unknown, runId?: RunId) =>
     Effect.gen(function* () {
       const projection = yield* projectionStore.getThreadRecords(
         threadId,
         ["runs", "nodes", "attempts", "providerThreads", "turnItems", "messages"],
         { turnItemTypes: [], messageRoles: ["user"] },
       );
-      const queuedRun = nextQueuedRun(projection, yield* DateTime.now);
-      if (queuedRun === undefined) return;
       const now = yield* DateTime.now;
+      const queuedRun =
+        runId === undefined
+          ? nextQueuedRun(projection, now)
+          : projection.runs.find((run) => run.id === runId && run.status === "queued");
+      if (queuedRun === undefined) return;
       const rootNode = projection.nodes.find((node) => node.id === queuedRun.rootNodeId);
       const attempt = projection.attempts.find((entry) => entry.id === queuedRun.activeAttemptId);
       const providerThread = projection.providerThreads.find(
@@ -1195,8 +1201,9 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
       ]);
     });
 
-  const startNextQueuedRun = (threadId: ThreadId, options?: { readonly failedRunId?: RunId }) =>
-    Effect.gen(function* () {
+  const startNextQueuedRun = (threadId: ThreadId, options?: { readonly failedRunId?: RunId }) => {
+    let selectedRunId: RunId | undefined;
+    return Effect.gen(function* () {
       // Every terminal run checks the queue. Only a deliverable queued run
       // needs the transcript for provider handoff and legacy import context.
       if (!(yield* projectionStore.canStartQueuedRun(threadId))) return;
@@ -1226,6 +1233,7 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
       if (queuedRun === undefined) {
         return;
       }
+      selectedRunId = queuedRun.id;
       // A provider that just failed will likely fail the next message too.
       // Hold the queue so the user decides when to resume it. Validation
       // failures (setup, unsupported handoff) belong to that message alone,
@@ -1540,6 +1548,7 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
         queueBatchLeaderRunId: _previousBatchLeader,
         steerDeadlineAt: _steerDeadlineAt,
         editHeldUntil: _editHeldUntil,
+        editHolds: _editHolds,
         ...unbatchedQueuedRun
       } = queuedRun;
       const startingRun: OrchestrationV2Run = {
@@ -1816,7 +1825,8 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
           },
         ],
       );
-    }).pipe(Effect.catch((cause) => failQueuedRunStart(threadId, cause)));
+    }).pipe(Effect.catch((cause) => failQueuedRunStart(threadId, cause, selectedRunId)));
+  };
 
   const resumeQueuedRuns = Effect.gen(function* () {
     const threadIds = yield* projectionStore.getRecoveryThreadIds("queued-runs");
@@ -7424,7 +7434,7 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
         ...(queuedRun.rootNodeId === null ? {} : { nodeId: queuedRun.rootNodeId }),
         providerInstanceId: queuedRun.providerInstanceId,
         occurredAt: now,
-        payload: withEditHold(queuedRun, command.held, now),
+        payload: withEditHold(queuedRun, command.holderId, command.held, now),
       });
     });
 
@@ -9880,18 +9890,30 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
       Stream.runForEach(handleTerminalRun),
       Effect.forkDetach,
     );
+  // Batch release and due steers only need a provider turn's transition to
+  // running; later running updates (token usage) would re-read the thread's
+  // runs for nothing. Only this stream's fiber touches the set.
+  const releasedProviderTurns = new Set<string>();
   yield* eventSink
     .stream({ afterSequence: terminalEventsAfterSequence, eventType: "provider-turn.updated" })
     .pipe(
-      Stream.runForEach((stored) =>
-        stored.event.type === "provider-turn.updated" &&
-        stored.event.payload.status === "running" &&
-        stored.event.payload.runAttemptId !== null
-          ? releaseQueueBatch(stored.event.threadId, stored.event.payload.runAttemptId).pipe(
-              Effect.andThen(releaseDueSteers(stored.event.threadId)),
-            )
-          : Effect.void,
-      ),
+      Stream.runForEach((stored) => {
+        if (stored.event.type !== "provider-turn.updated") return Effect.void;
+        const turn = stored.event.payload;
+        if (turn.status !== "running") {
+          releasedProviderTurns.delete(turn.id);
+          return Effect.void;
+        }
+        if (turn.runAttemptId === null || releasedProviderTurns.has(turn.id)) return Effect.void;
+        releasedProviderTurns.add(turn.id);
+        if (releasedProviderTurns.size > 4096) {
+          const oldest = releasedProviderTurns.values().next().value;
+          if (oldest !== undefined) releasedProviderTurns.delete(oldest);
+        }
+        return releaseQueueBatch(stored.event.threadId, turn.runAttemptId).pipe(
+          Effect.andThen(releaseDueSteers(stored.event.threadId)),
+        );
+      }),
       Effect.forkDetach,
     );
   for (const eventType of ["run.created", "run.updated"] as const) {

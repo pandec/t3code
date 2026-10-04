@@ -35,6 +35,8 @@ import { resolveThreadWorkingStartedAt } from "@t3tools/client-runtime/state/mod
 import { upgradeLegacyContextMessage } from "@t3tools/shared/composerContextLegacy";
 import { composerContextSendBlockReason, reidentifyComposerContext } from "../lib/composerContext";
 import { uuidv4 } from "../lib/uuid";
+import { downloadServerAttachmentToDraft } from "../lib/composerContextClipboard";
+import { parseScopedThreadKey } from "@t3tools/client-runtime/environment";
 
 import { makeQueuedMessageMetadata } from "../lib/commandMetadata";
 import { isModelSelectionUnavailable } from "../lib/modelOptions";
@@ -92,6 +94,7 @@ import {
   getQueuedRunEdit,
   queuedEditDraftKey,
   queuedRunEditHasChanges,
+  rebindQueuedEditContext,
   removeQueuedRunEditAttachment,
   resolveQueuedEditPayload,
   useQueuedRunEdit,
@@ -441,28 +444,74 @@ export function useThreadComposerState() {
     const edit = getQueuedRunEdit(selectedThreadKey);
     const editDraft = getComposerDraftSnapshot(queuedEditDraftKey(selectedThreadKey, editedRunId));
     const dirty = edit !== null && queuedRunEditHasChanges(edit, editDraft);
-    if (dirty) {
-      void mergeComposerDraftContent(selectedThreadKey, {
-        text: editDraft.text,
-        attachments: editDraft.attachments,
-        ...(editDraft.context ? { context: editDraft.context } : {}),
-      });
-      if (editedRun !== undefined) {
-        updateComposerDraftSettings(selectedThreadKey, {
-          modelSelection: editedRun.modelSelection,
-        });
-      }
-    }
-    // Saved attachments stay with the original message; they are not
-    // downloaded back into the draft here.
-    const savedAttachmentCount = dirty ? edit.existingAttachments.length : 0;
     endQueuedRunEdit(selectedThreadKey, { deferAttachmentCleanup: dirty });
-    if (dirty) {
+    if (!dirty) return;
+    const threadKey = selectedThreadKey;
+    const environmentId = parseScopedThreadKey(threadKey)?.environmentId;
+    // Saved attachments are downloaded back into the draft. Their ids are
+    // chosen up front so the edit's chips bind to the copies; a failed
+    // download takes its chip with it.
+    const saved = environmentId === undefined ? [] : edit.existingAttachments;
+    const savedLocalIds = new Map(saved.map((attachment) => [attachment.id, uuidv4()] as const));
+    const context = rebindQueuedEditContext(editDraft.context, savedLocalIds);
+    // Attachments may go past the per-message limit here (sending still
+    // enforces it) so a rescue never drops one.
+    const report = (failedCount: number) => {
+      const overLimit =
+        getComposerDraftSnapshot(threadKey).attachments.length > PROVIDER_SEND_TURN_MAX_ATTACHMENTS;
       setPendingConnectionError(
-        savedAttachmentCount === 0
-          ? "That message is no longer queued. Your edit is back in the composer."
-          : `That message is no longer queued. Your edit is back in the composer without its ${savedAttachmentCount} saved attachment${savedAttachmentCount === 1 ? "" : "s"}.`,
+        [
+          failedCount === 0
+            ? "That message is no longer queued. Your edit is back in the composer."
+            : `That message is no longer queued. Your edit is back in the composer without ${failedCount} saved attachment${failedCount === 1 ? "" : "s"} that could not be downloaded.`,
+          ...(overLimit
+            ? [
+                `Remove attachments until there are at most ${PROVIDER_SEND_TURN_MAX_ATTACHMENTS} before sending.`,
+              ]
+            : []),
+        ].join(" "),
       );
+    };
+    const restoreSaved = async () => {
+      appendComposerDraftAttachments(threadKey, editDraft.attachments, { allowOverflow: true });
+      if (environmentId === undefined || saved.length === 0) return 0;
+      const signal = new AbortController().signal;
+      const results = await Promise.allSettled(
+        saved.map((attachment) =>
+          downloadServerAttachmentToDraft(
+            {
+              attachmentId: attachment.id,
+              name: attachment.name,
+              mimeType: attachment.mimeType,
+              kind: attachment.type === "image" ? "image" : "file",
+            },
+            environmentId,
+            signal,
+            savedLocalIds.get(attachment.id),
+          ),
+        ),
+      );
+      const downloaded = results.flatMap((result) =>
+        result.status === "fulfilled" ? [result.value] : [],
+      );
+      appendComposerDraftAttachments(threadKey, downloaded, { allowOverflow: true });
+      saved.forEach((attachment, index) => {
+        const localId = savedLocalIds.get(attachment.id);
+        if (results[index]?.status === "rejected" && localId !== undefined) {
+          removeComposerDraftAttachment(threadKey, localId);
+        }
+      });
+      return saved.length - downloaded.length;
+    };
+    void mergeComposerDraftContent(threadKey, {
+      text: editDraft.text,
+      attachments: [],
+      ...(context ? { context } : {}),
+    })
+      .then(restoreSaved, restoreSaved)
+      .then(report, () => report(saved.length));
+    if (editedRun !== undefined) {
+      updateComposerDraftSettings(threadKey, { modelSelection: editedRun.modelSelection });
     }
   }, [editedRunId, selectedThreadKey, selectedThreadRuns]);
 

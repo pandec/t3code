@@ -21,10 +21,11 @@ import * as TestClock from "effect/testing/TestClock";
 import { CodexProviderCapabilitiesV2 } from "./Adapters/CodexAdapterV2.ts";
 import * as EffectWorker from "./EffectWorker.ts";
 import * as Orchestrator from "./Orchestrator.ts";
-import type {
-  ProviderAdapterV2Event,
-  ProviderAdapterV2Shape,
-  ProviderAdapterV2TurnInput,
+import {
+  ProviderAdapterCapabilitiesError,
+  type ProviderAdapterV2Event,
+  type ProviderAdapterV2Shape,
+  type ProviderAdapterV2TurnInput,
 } from "./ProviderAdapter.ts";
 import * as ProviderAdapterRegistry from "./ProviderAdapterRegistry.ts";
 import { makeOrchestratorV2ReplayLayerWithRegistry } from "./testkit/ProviderReplayHarness.ts";
@@ -57,10 +58,18 @@ const makeHarness = (name: string) =>
     const events = yield* Queue.unbounded<ProviderAdapterV2Event>();
     const started: Array<ProviderAdapterV2TurnInput> = [];
     const steered: Array<string> = [];
+    // Runs once in place of the next capabilities read, e.g. to fail a queued start.
+    const nextCapabilities: {
+      current: Effect.Effect<void, ProviderAdapterCapabilitiesError> | null;
+    } = { current: null };
     const adapter: ProviderAdapterV2Shape = {
       instanceId,
       driver,
-      getCapabilities: () => Effect.succeed(CodexProviderCapabilitiesV2),
+      getCapabilities: () => {
+        const hook = nextCapabilities.current;
+        nextCapabilities.current = null;
+        return (hook ?? Effect.void).pipe(Effect.as(CodexProviderCapabilitiesV2));
+      },
       planSelectionTransition: () => Effect.succeed({ type: "apply_on_next_turn" }),
       openSession: (input) =>
         Effect.gen(function* () {
@@ -127,7 +136,7 @@ const makeHarness = (name: string) =>
       ProviderAdapterRegistry.makeSingleLayer(adapter),
       { runEffectWorker: false },
     );
-    return { cwd, events, started, steered, layer };
+    return { cwd, events, started, steered, nextCapabilities, layer };
   });
 
 const scenario = (name: string) =>
@@ -396,4 +405,66 @@ it.effect("lets the next queued turn start ahead of a held steer, then steers in
       }).pipe(Effect.provide(layer));
     }),
   ),
+);
+
+it.effect(
+  "fails the queued run whose start failed, not a steer whose window lapsed meanwhile",
+  () =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        const { events, started, nextCapabilities, threadId, setup, layer } = yield* scenario(
+          "steer-recall-start-failure",
+        );
+        yield* Effect.gen(function* () {
+          const { orchestrator, worker, watch, send } = yield* setup;
+          yield* send("held-steer", "steer");
+          yield* send("queued", "queue");
+          const [heldSteer, queued] = (yield* orchestrator.getThreadProjection(threadId)).runs
+            .filter((run) => run.status === "queued")
+            .toSorted((left, right) => left.ordinal - right.ordinal);
+
+          // The queued message's start outlasts the steer's window, then fails.
+          nextCapabilities.current = TestClock.adjust(Duration.millis(GRACE_MS)).pipe(
+            Effect.andThen(Effect.fail(new ProviderAdapterCapabilitiesError({ driver }))),
+          );
+          const firstFailure = yield* watch(
+            (event) => event.type === "run.updated" && event.payload.status === "failed",
+          );
+          const activeEnded = yield* watch(
+            (event) =>
+              event.type === "run.updated" &&
+              event.payload.id === started[0]!.runId &&
+              event.payload.status === "waiting",
+          );
+          const activeTurn = (yield* orchestrator.getThreadProjection(threadId)).providerTurns[0]!;
+          yield* Queue.offer(events, {
+            type: "provider_turn.updated",
+            driver,
+            providerTurn: { ...activeTurn, status: "completed", completedAt: yield* DateTime.now },
+          });
+          yield* Queue.offer(events, {
+            type: "turn.terminal",
+            driver,
+            providerThreadId: activeTurn.providerThreadId,
+            providerTurnId: activeTurn.id,
+            runOrdinal: started[0]!.runOrdinal,
+            status: "completed",
+            failure: null,
+            threadDisposition: "reusable",
+          });
+          yield* Fiber.join(activeEnded);
+          yield* worker.drain();
+          const failed = yield* Fiber.join(firstFailure);
+          yield* worker.drain();
+
+          assert.equal(failed.type === "run.updated" ? failed.payload.id : null, queued!.id);
+          assert.notEqual(
+            (yield* orchestrator.getThreadProjection(threadId)).runs.find(
+              (run) => run.id === heldSteer!.id,
+            )?.status,
+            "failed",
+          );
+        }).pipe(Effect.provide(layer));
+      }),
+    ),
 );
