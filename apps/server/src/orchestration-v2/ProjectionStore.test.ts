@@ -306,6 +306,114 @@ const restartCancelledWorkSurvivesStaleRunUpdate = Effect.gen(function* () {
   assert.deepEqual(updated?.restartCancelledBackgroundWork, work);
 });
 
+// Fork: a run-fork exposes the statuses of the source runs it inherits items
+// from, so clients can classify inherited final answers.
+const forkExposesInheritedRunStatuses = Effect.gen(function* () {
+  const store = yield* ProjectionStore.ProjectionStoreV2;
+  const now = yield* DateTime.now;
+  const prefix = "projection-fork-inherited-runs";
+  const projectId = ProjectId.make(`project:${prefix}`);
+  const sourceThreadId = ThreadId.make(`thread:${prefix}:source`);
+  const targetThreadId = ThreadId.make(`thread:${prefix}:target`);
+  const providerThreadId = ProviderThreadId.make(`provider-thread:${prefix}`);
+  const completedRunId = RunId.make(`run:${prefix}:completed`);
+  const interruptedRunId = RunId.make(`run:${prefix}:interrupted`);
+  const laterRunId = RunId.make(`run:${prefix}:later`);
+  const threadBase = {
+    createdBy: "user" as const,
+    creationSource: "web" as const,
+    projectId,
+    providerInstanceId,
+    modelSelection,
+    runtimeMode: "full-access" as const,
+    interactionMode: "default" as const,
+    branch: null,
+    worktreePath: null,
+    activeProviderThreadId: providerThreadId,
+    createdAt: now,
+    updatedAt: now,
+    archivedAt: null,
+    settledOverride: null,
+    settledAt: null,
+    lastVisitedAt: null,
+    deletedAt: null,
+  };
+  yield* store.apply({
+    id: EventId.make(`event:${prefix}:source-thread`),
+    type: "thread.created",
+    threadId: sourceThreadId,
+    occurredAt: now,
+    payload: {
+      ...threadBase,
+      id: sourceThreadId,
+      title: "Inherited runs source",
+      lineage: { parentThreadId: null, relationshipToParent: null, rootThreadId: sourceThreadId },
+      forkedFrom: null,
+    },
+  });
+  yield* store.apply({
+    id: EventId.make(`event:${prefix}:target-thread`),
+    type: "thread.created",
+    threadId: targetThreadId,
+    occurredAt: now,
+    payload: {
+      ...threadBase,
+      id: targetThreadId,
+      title: "Inherited runs target",
+      lineage: {
+        parentThreadId: sourceThreadId,
+        relationshipToParent: "fork",
+        rootThreadId: sourceThreadId,
+      },
+      forkedFrom: { type: "run", threadId: sourceThreadId, runId: interruptedRunId },
+    },
+  });
+  for (const [ordinal, runId, status] of [
+    [1, completedRunId, "completed"],
+    [2, interruptedRunId, "interrupted"],
+    [3, laterRunId, "completed"],
+  ] as const) {
+    const nodeId = NodeId.make(`node:${prefix}:${ordinal}`);
+    yield* store.apply({
+      id: EventId.make(`event:${prefix}:run-${ordinal}`),
+      type: "run.created",
+      threadId: sourceThreadId,
+      runId,
+      nodeId,
+      driver,
+      occurredAt: now,
+      payload: {
+        id: runId,
+        threadId: sourceThreadId,
+        ordinal,
+        providerInstanceId,
+        modelSelection,
+        providerThreadId,
+        userMessageId: MessageId.make(`message:${prefix}:user:${ordinal}`),
+        rootNodeId: nodeId,
+        activeAttemptId: null,
+        status,
+        requestedAt: now,
+        startedAt: now,
+        completedAt: now,
+        checkpointId: null,
+        contextHandoffId: null,
+      },
+    });
+  }
+
+  const target = yield* store.getThreadProjection(targetThreadId);
+  assert.deepEqual(target.inheritedRuns, [
+    { id: completedRunId, status: "completed" },
+    { id: interruptedRunId, status: "interrupted" },
+  ]);
+  assert.deepEqual(target.runs, []);
+});
+
+it.effect("memory fork projection exposes inherited run statuses", () =>
+  forkExposesInheritedRunStatuses.pipe(Effect.provide(ProjectionStore.layerMemory)),
+);
+
 it.effect("memory projection keeps restart-cancelled work through a stale run.updated", () =>
   restartCancelledWorkSurvivesStaleRunUpdate.pipe(Effect.provide(ProjectionStore.layerMemory)),
 );
@@ -329,6 +437,10 @@ it.effect("memory recovery selection includes unfinished items from missing runs
 );
 
 it.layer(TestLayer)("ProjectionStoreV2", (it) => {
+  it.effect(
+    "fork projection exposes inherited run statuses",
+    () => forkExposesInheritedRunStatuses,
+  );
   it.effect(
     "keeps restart-cancelled work through a stale run.updated",
     () => restartCancelledWorkSurvivesStaleRunUpdate,

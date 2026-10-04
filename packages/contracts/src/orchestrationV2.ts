@@ -1749,6 +1749,11 @@ export const OrchestrationV2ThreadProjection = Schema.Struct({
   contextTransfers: Schema.Array(OrchestrationV2ContextTransfer),
   visibleTurnItems: Schema.Array(OrchestrationV2ProjectedTurnItem),
   updatedAt: Schema.DateTimeUtc,
+  // Fork: statuses of ancestor runs whose items a run-fork inherits, so clients
+  // can classify inherited final answers. Settled before the fork, never stale.
+  inheritedRuns: Schema.optional(
+    Schema.Array(Schema.Struct({ id: RunId, status: OrchestrationV2RunStatus })),
+  ),
 });
 export type OrchestrationV2ThreadProjection = typeof OrchestrationV2ThreadProjection.Type;
 

@@ -168,7 +168,7 @@ import {
   useState,
 } from "react";
 import { flushSync } from "react-dom";
-import { useLocation, useNavigate } from "@tanstack/react-router";
+import { useLocation, useNavigate, useParams } from "@tanstack/react-router";
 import { assistantCitationFromLocation } from "../lib/assistantCitationNavigation";
 import { isMacPlatform } from "../lib/utils";
 import type { AssistantCitationSourceAnchor } from "~/lib/assistantTextSelection";
@@ -363,7 +363,11 @@ import {
   deriveLogicalProjectKeyFromSettings,
   selectProjectGroupingSettings,
 } from "../logicalProject";
-import { buildDraftThreadRouteParams, buildThreadRouteParams } from "../threadRoutes";
+import {
+  buildDraftThreadRouteParams,
+  buildThreadRouteParams,
+  resolveThreadRouteRef,
+} from "../threadRoutes";
 import {
   isSameSidebarThreadRef,
   useSidebarPendingFileDropStore,
@@ -572,6 +576,7 @@ import { useLocalStorage } from "~/hooks/useLocalStorage";
 import { useThreadGroupCatalog } from "../hooks/useThreadGroups";
 import { useComposerHandleContext } from "../composerHandleContext";
 import { useThreadPaneId } from "./thread-split/threadPaneContext";
+import { openThreadInActivePane } from "./thread-split/threadOpenTarget";
 import { isThreadPaneActive, useThreadSplitStore } from "./thread-split/threadSplitStore";
 import {
   awaitAttachmentUploads,
@@ -1782,6 +1787,14 @@ export default function ChatView(props: ChatViewProps) {
   );
   const timestampFormat = settings.timestampFormat;
   const navigate = useNavigate();
+  // The router's (primary) thread; pane-local routeThreadRef is the pane's own.
+  const { environmentId: routerEnvironmentId, threadId: routerThreadId } = useParams({
+    strict: false,
+  });
+  const routerThreadRef = useMemo(
+    () => resolveThreadRouteRef({ environmentId: routerEnvironmentId, threadId: routerThreadId }),
+    [routerEnvironmentId, routerThreadId],
+  );
   const citationLocation = useLocation({
     select: (location) => ({
       href: location.href,
@@ -2133,14 +2146,16 @@ export default function ChatView(props: ChatViewProps) {
     () => (serverProjection === null ? null : deriveThreadActivityRun(serverProjection)),
     [serverProjection],
   );
-  // Fork: completed runs feed the final-response rail. Keyed by content so the
-  // set (and the timeline rows) only change when a run completes, not per event.
+  // Fork: completed runs, including those a run-fork inherits, feed the
+  // final-response rail. Keyed by content so the set (and the timeline rows)
+  // only change when a run completes, not per event. Runless v1-imported
+  // messages carry no terminal state and are deliberately left unclassified.
   const completedRunIdsKey = useMemo(
     () =>
-      (serverProjection?.runs ?? [])
+      [...(serverProjection?.inheritedRuns ?? []), ...(serverProjection?.runs ?? [])]
         .flatMap((run) => (run.status === "completed" ? [run.id] : []))
         .join("\n"),
-    [serverProjection?.runs],
+    [serverProjection?.inheritedRuns, serverProjection?.runs],
   );
   const completedRunIds = useMemo<ReadonlySet<RunId>>(
     () =>
@@ -7217,14 +7232,20 @@ export default function ChatView(props: ChatViewProps) {
       }
     }
   }, [activeThread, environmentId, interruptThreadTurn, setThreadError]);
+  // Related-thread links open in this pane via the split-aware helper, so a
+  // link to the other pane's thread focuses it instead of folding the split.
   const onOpenRelatedThread = useCallback(
     (threadId: ThreadId) => {
-      void navigate({
-        to: "/$environmentId/$threadId",
-        params: buildThreadRouteParams(scopeThreadRef(environmentId, threadId)),
+      const targetRef = scopeThreadRef(environmentId, threadId);
+      openThreadInActivePane({
+        targetRef,
+        routeThreadRef: routerThreadRef,
+        paneOverride: threadPaneId,
+        navigateToPrimary: () =>
+          navigate({ to: "/$environmentId/$threadId", params: buildThreadRouteParams(targetRef) }),
       });
     },
-    [environmentId, navigate],
+    [environmentId, navigate, routerThreadRef, threadPaneId],
   );
 
   const backgroundWorkBannerItem = useMemo<ComposerBannerStackItem | null>(() => {
@@ -8047,6 +8068,7 @@ export default function ChatView(props: ChatViewProps) {
   // Route it to the composer like a typed key, which also expands it.
   useEffect(() => {
     const keyHandler = (event: KeyboardEvent) => {
+      if (!isThreadPaneActive(threadPaneId)) return;
       if (
         shouldRedirectInputToComposer(event) &&
         isPasteAsTextShortcut(event, isMacPlatform(navigator.platform))
@@ -8055,6 +8077,7 @@ export default function ChatView(props: ChatViewProps) {
       }
     };
     const handler = (event: ClipboardEvent) => {
+      if (!isThreadPaneActive(threadPaneId)) return;
       if (!activeThreadId || isCommandPaletteOpen()) return;
       if (getTerminalFocusOwner() !== null) return;
       if (composerRef.current?.isModelPickerOpen()) return;
@@ -8078,7 +8101,7 @@ export default function ChatView(props: ChatViewProps) {
       window.removeEventListener("keydown", keyHandler, true);
       window.removeEventListener("paste", handler, true);
     };
-  }, [activeThreadId, composerRef]);
+  }, [activeThreadId, composerRef, threadPaneId]);
 
   const [pendingRevert, setPendingRevert] = useState<{
     turnCount: number;

@@ -310,7 +310,7 @@ export interface ProjectionRecordFilter {
 }
 export type ProjectionRecordField = Exclude<
   keyof OrchestrationV2ThreadProjection,
-  "thread" | "updatedAt" | "visibleTurnItems"
+  "thread" | "updatedAt" | "visibleTurnItems" | "inheritedRuns"
 >;
 export type ProjectionRecords<K extends ProjectionRecordField> = Pick<
   OrchestrationV2ThreadProjection,
@@ -1304,6 +1304,30 @@ function visibleTurnItemsThroughRun(input: {
   );
 
   return [...inheritedPrefix, ...localPrefix];
+}
+
+/**
+ * Fork: statuses of the runs a run-fork inherits items from (ancestors' own
+ * inherited runs plus the source's runs up to the fork point).
+ */
+function buildInheritedRuns(input: {
+  readonly projection: OrchestrationV2ThreadProjection;
+  readonly sourceProjection: OrchestrationV2ThreadProjection | null;
+}): NonNullable<OrchestrationV2ThreadProjection["inheritedRuns"]> {
+  const forkedFrom = input.projection.thread.forkedFrom;
+  if (forkedFrom?.type !== "run" || input.sourceProjection === null) {
+    return [];
+  }
+  const sourceRun = input.sourceProjection.runs.find((run) => run.id === forkedFrom.runId);
+  if (sourceRun === undefined) {
+    return [];
+  }
+  return [
+    ...(input.sourceProjection.inheritedRuns ?? []),
+    ...input.sourceProjection.runs
+      .filter((run) => run.ordinal <= sourceRun.ordinal)
+      .map(({ id, status }) => ({ id, status })),
+  ];
 }
 
 function buildVisibleTurnItems(input: {
@@ -3348,6 +3372,7 @@ export const layer: Layer.Layer<ProjectionStoreV2, never, SqlClient.SqlClient> =
             projection,
             sourceProjection,
           }),
+          inheritedRuns: buildInheritedRuns({ projection, sourceProjection }),
         };
       }).pipe(
         Effect.mapError((cause) =>
@@ -6159,6 +6184,7 @@ export const layerMemory: Layer.Layer<ProjectionStoreV2> = Layer.effect(
                 projection,
                 sourceProjection,
               }),
+              inheritedRuns: buildInheritedRuns({ projection, sourceProjection }),
             };
           };
           const projection = readProjection(threadId, new Set());
