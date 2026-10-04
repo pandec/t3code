@@ -2077,7 +2077,7 @@ describe("ClaudeAdapterV2 background wake turns", () => {
     readonly errors?: ReadonlyArray<string>;
     readonly apiErrorStatus?: number;
     // null omits the field, as the CLI does on a zero-turn result.
-    readonly terminalReason?: SDKResultMessage["terminal_reason"] | null;
+    readonly terminalReason?: SDKResultMessage["terminal_reason"] | "interrupted" | null;
   }) =>
     claudeSdkFrame({
       type: "result",
@@ -2413,7 +2413,7 @@ describe("ClaudeAdapterV2 background wake turns", () => {
   );
 
   it.effect.each(
-    (["aborted_tools", "aborted_streaming"] as const).flatMap((terminalReason) =>
+    (["interrupted", "aborted_tools", "aborted_streaming"] as const).flatMap((terminalReason) =>
       [true, false].map((steered) => ({ terminalReason, steered })),
     ),
   )("handles $terminalReason with active steering=$steered", ({ terminalReason, steered }) =>

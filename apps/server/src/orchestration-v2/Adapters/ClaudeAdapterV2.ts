@@ -2376,10 +2376,7 @@ function terminalStatusFromResult(
 > {
   // The CLI can label an abort as success with is_error=false. Its explicit
   // terminal reason takes precedence over that envelope.
-  if (
-    message.terminal_reason === "aborted_tools" ||
-    message.terminal_reason === "aborted_streaming"
-  ) {
+  if (isClaudeAbortResult(message)) {
     return "interrupted";
   }
   if (message.subtype === "success") {
@@ -2402,10 +2399,24 @@ function terminalStatusFromResult(
   return "failed";
 }
 
-function isClaudeActiveSteeringAbortResult(message: SDKResultMessage): boolean {
+// Fork: the CLI stamps aborts "aborted_tools" (mid-tool-call) or
+// "aborted_streaming" (mid-stream); some runtime versions emit "interrupted"
+// before the SDK's TerminalReason union includes it.
+const CLAUDE_ABORT_TERMINAL_REASONS: ReadonlySet<string> = new Set([
+  "interrupted",
+  "aborted_tools",
+  "aborted_streaming",
+]);
+
+function isClaudeAbortResult(message: SDKResultMessage): boolean {
   return (
-    message.terminal_reason === "aborted_streaming" || message.terminal_reason === "aborted_tools"
+    message.terminal_reason !== undefined &&
+    CLAUDE_ABORT_TERMINAL_REASONS.has(message.terminal_reason)
   );
+}
+
+function isClaudeActiveSteeringAbortResult(message: SDKResultMessage): boolean {
+  return isClaudeAbortResult(message);
 }
 
 function isClaudeProviderContinuationTurn(
