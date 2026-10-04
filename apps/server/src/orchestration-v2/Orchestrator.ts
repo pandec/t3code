@@ -9200,6 +9200,16 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
             cause: `Thread ${command.threadId} is indefinitely snoozed.`,
           });
         }
+        // Fork: a queued run (a held message or a pending wake) is work, not
+        // staleness. Queuing does not touch updatedAt, so check the runs here.
+        const { runs } = yield* loadProjectionForCommand(command, ["runs"]);
+        if (runs.some((run) => run.status === "queued")) {
+          return yield* new OrchestratorDispatchError({
+            commandId: command.commandId,
+            commandType: command.type,
+            cause: `Thread ${command.threadId} has a queued run.`,
+          });
+        }
         yield* dispatchThreadMutation(
           {
             type: "thread.settle",

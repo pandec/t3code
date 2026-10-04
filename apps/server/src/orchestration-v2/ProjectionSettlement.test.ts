@@ -166,6 +166,10 @@ it.effect.each([
       }
       const queued = yield* createThread("queued");
       yield* createRun(queued, "queued");
+      // Fork: a queued run left behind a finished one (a held queue) still blocks.
+      const heldQueue = yield* createThread("held-queue");
+      yield* createRun(heldQueue);
+      yield* createRun(heldQueue, "queued", 2);
       const blocked = yield* createThread("blocked");
       yield* store.apply({
         id: EventId.make("event:settlement:request"),
@@ -257,7 +261,7 @@ it.effect.each([
       );
       assert.deepEqual(
         new Set(eligible.map((thread) => thread.id)),
-        new Set([idle, completed, queued, woke, background, persistent, rolledBack]),
+        new Set([idle, completed, woke, background, persistent, rolledBack]),
       );
       assert.deepEqual(
         new Set(eligible.map((thread) => thread.id)),

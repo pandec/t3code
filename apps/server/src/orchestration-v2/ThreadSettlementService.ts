@@ -144,6 +144,9 @@ export function isAutoSettlementCandidate(
   if (thread.activityRunStatus != null) return false;
   if ((thread.pendingBackgroundTasks?.length ?? 0) > 0) return false;
   if (threadHasQueuedTurnStart(thread, nowMs)) return false;
+  // Fork: a queued run is pending work. Candidate loading also excludes held
+  // queues the shell reports under a blocking failure.
+  if (thread.status === "queued") return false;
   // Fork: an indefinite snooze only wakes by hand, never by settlement.
   if (isIndefinitelySnoozed(thread)) return false;
   // Fork: an "until it's done" snooze holds while its work goes on; once

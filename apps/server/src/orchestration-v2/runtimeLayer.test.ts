@@ -2517,6 +2517,95 @@ it.layer(TestLayer)("OrchestrationV2LayerLive lifecycle", (it) => {
     }),
   );
 
+  // Fork: queued runs block automatic settlement, including a held wake the
+  // manual settle above would cancel.
+  it.effect("rejects automatic settlement while a run is queued", () =>
+    Effect.gen(function* () {
+      const orchestrator = yield* Orchestrator.OrchestratorV2;
+      const eventSink = yield* EventSink.EventSinkV2;
+      const threadId = ThreadId.make("runtime-layer-auto-settle-queued");
+      yield* orchestrator.dispatch({
+        type: "thread.create",
+        createdBy: "user",
+        creationSource: "web",
+        commandId: CommandId.make("auto-settle-queued-create"),
+        threadId,
+        projectId: ProjectId.make("auto-settle-queued-project"),
+        title: "Auto-settle queued",
+        modelSelection,
+        runtimeMode: "full-access",
+        interactionMode: "default",
+        branch: null,
+        worktreePath: "/tmp/runtime-layer-auto-settle-queued",
+      });
+      yield* orchestrator.dispatch({
+        type: "message.dispatch",
+        createdBy: "user",
+        creationSource: "web",
+        commandId: CommandId.make("auto-settle-queued-active"),
+        threadId,
+        messageId: MessageId.make("auto-settle-queued-active"),
+        text: "Active",
+        attachments: [],
+        modelSelection,
+        dispatchMode: { type: "start_immediately" },
+      });
+      yield* orchestrator.dispatch({
+        type: "message.dispatch",
+        createdBy: "agent",
+        creationSource: "provider",
+        notification: {
+          source: { kind: "background_task" },
+          outcome: "updated",
+          summary: "Background activity updated",
+        },
+        commandId: CommandId.make("auto-settle-queued-wake"),
+        threadId,
+        messageId: MessageId.make("auto-settle-queued-wake"),
+        text: "Wake",
+        attachments: [],
+        modelSelection,
+        dispatchMode: { type: "queue_after_active" },
+      });
+      // Simulate a restart: the active run ends and recovery holds the queue.
+      const before = yield* orchestrator.getThreadProjection(threadId);
+      const now = yield* DateTime.now;
+      yield* eventSink.commitCommand({
+        commandId: CommandId.make("auto-settle-queued-restart"),
+        threadId,
+        commandType: "provider-runtime.reconcile",
+        acceptedAt: now,
+        events: before.runs
+          .filter((run) => run.status === "starting" || run.status === "queued")
+          .map((run) => ({
+            id: EventId.make(`auto-settle-queued-restart:${run.id}`),
+            type: "run.updated" as const,
+            threadId,
+            runId: run.id,
+            occurredAt: now,
+            payload:
+              run.status === "queued"
+                ? { ...run, queueHeld: true }
+                : { ...run, status: "cancelled" as const, completedAt: now },
+          })),
+        effects: [],
+      });
+      const held = yield* orchestrator.getThreadProjection(threadId);
+      const error = yield* orchestrator
+        .dispatch({
+          type: "thread.auto-settle",
+          commandId: CommandId.make("auto-settle-queued-auto"),
+          threadId,
+          snapshotAt: held.thread.updatedAt,
+        })
+        .pipe(Effect.flip);
+      assert.equal(error._tag, "OrchestratorDispatchError");
+      const after = yield* orchestrator.getThreadProjection(threadId);
+      assert.isNull(after.thread.settledOverride);
+      assert.isTrue(after.runs.some((run) => run.status === "queued" && run.queueHeld === true));
+    }),
+  );
+
   it.effect("cancels queued work when a thread is archived", () =>
     Effect.gen(function* () {
       const orchestrator = yield* Orchestrator.OrchestratorV2;

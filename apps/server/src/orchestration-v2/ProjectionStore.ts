@@ -5076,6 +5076,11 @@ export const layer: Layer.Layer<ProjectionStoreV2, never, SqlClient.SqlClient> =
                 WHERE active.thread_id = t.thread_id
                   AND active.status IN ('preparing', 'starting', 'running', 'waiting')
               )
+              -- Fork: a queued run, held or not, is pending work.
+              AND NOT EXISTS (
+                SELECT 1 FROM orchestration_v2_projection_runs queued
+                WHERE queued.thread_id = t.thread_id AND queued.status = 'queued'
+              )
               AND NOT EXISTS (
                 SELECT 1 FROM orchestration_v2_projection_runtime_requests request
                 WHERE request.thread_id = t.thread_id AND request.status = 'pending'
@@ -5583,6 +5588,8 @@ export const layerMemory: Layer.Layer<ProjectionStoreV2> = Layer.effect(
                 thread.pinnedAt == null &&
                 thread.autoSettleDisabledAt == null &&
                 !runs.some(isActivityRunForShell) &&
+                // Fork: a queued run, held or not, is pending work.
+                !runs.some((run) => run.status === "queued") &&
                 !runtimeRequests.some((request) => request.status === "pending"),
             )
             .map(threadShellFromProjection)
