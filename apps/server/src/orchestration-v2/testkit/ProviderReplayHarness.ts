@@ -39,6 +39,7 @@ import * as ProviderContinuationRequests from "../ProviderContinuationRequests.t
 import * as ProviderContinuationService from "../ProviderContinuationService.ts";
 import * as ProviderEventIngestor from "../ProviderEventIngestor.ts";
 import * as ProviderRuntimeRecoveryService from "../ProviderRuntimeRecoveryService.ts";
+import * as NativeContinuationStore from "../NativeContinuationStore.ts";
 import * as ProviderSessionManager from "../ProviderSessionManager.ts";
 import * as ProviderSwitchService from "../ProviderSwitchService.ts";
 import * as ProviderTurnControlService from "../ProviderTurnControlService.ts";
@@ -236,7 +237,10 @@ export function makeOrchestratorV2ProviderReplayLayer<
     readonly replayGate?: ProviderReplayGate;
   } = {},
 ): Layer.Layer<
-  Orchestrator.OrchestratorV2 | EffectWorker.OrchestrationEffectWorkerV2 | EventSink.EventSinkV2,
+  | Orchestrator.OrchestratorV2
+  | EffectWorker.OrchestrationEffectWorkerV2
+  | EventSink.EventSinkV2
+  | ProviderSessionManager.ProviderSessionManagerV2,
   Error | MigrationError | PlatformError.PlatformError | SqlError
 > {
   const registryLayer = harness.makeProviderAdapterRegistryLayer(
@@ -264,7 +268,10 @@ export function makeOrchestratorV2ReplayLayerWithRegistry<Error>(
     readonly continueThreadsAfterServerUpdate?: boolean;
   } = {},
 ): Layer.Layer<
-  Orchestrator.OrchestratorV2 | EffectWorker.OrchestrationEffectWorkerV2 | EventSink.EventSinkV2,
+  | Orchestrator.OrchestratorV2
+  | EffectWorker.OrchestrationEffectWorkerV2
+  | EventSink.EventSinkV2
+  | ProviderSessionManager.ProviderSessionManagerV2,
   Error | MigrationError | PlatformError.PlatformError | SqlError
 > {
   const serverConfigLayer = Layer.effect(
@@ -333,6 +340,10 @@ export function makeOrchestratorV2ReplayLayerWithRegistry<Error>(
     IdAllocator.layer,
     providerEventIngestorProvided,
   );
+  // fork: production records native continuation groups (runtimeLayer.ts).
+  const nativeContinuationStoreProvided = NativeContinuationStore.layer.pipe(
+    Layer.provide(Layer.merge(providedRegistryLayer, databaseLayer)),
+  );
   const providerSessionManagerProvided = ProviderSessionManager.layerWithOptions({
     configureMcp: false,
   }).pipe(
@@ -346,9 +357,11 @@ export function makeOrchestratorV2ReplayLayerWithRegistry<Error>(
         storesLayer,
       ),
     ),
+    Layer.provide(nativeContinuationStoreProvided),
   );
   const providerSwitchServiceProvided = ProviderSwitchService.layer.pipe(
     Layer.provide(providedRegistryLayer),
+    Layer.provide(nativeContinuationStoreProvided),
   );
   const runExecutionServiceProvided = RunExecutionService.layer.pipe(
     Layer.provide(
@@ -467,6 +480,8 @@ export function makeOrchestratorV2ReplayLayerWithRegistry<Error>(
     effectWorkerProvided,
     eventSinkProvided,
     continuationWorkerProvided,
+    // fork: lets tests resolve live runtimes the way RPC handlers do.
+    providerSessionManagerProvided,
   ).pipe(Layer.provide(worktreeRepairDependenciesTestLayer), Layer.provide(NodeServices.layer));
 
   // Build the daemon from the exact worker instance exposed alongside the

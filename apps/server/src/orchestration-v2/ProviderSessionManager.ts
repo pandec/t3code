@@ -46,6 +46,7 @@ import {
 } from "./ProviderAdapter.ts";
 import * as ProviderAdapterRegistry from "./ProviderAdapterRegistry.ts";
 import * as ProjectionStore from "./ProjectionStore.ts";
+import * as NativeContinuationStore from "./NativeContinuationStore.ts";
 
 const DEFAULT_IDLE_TIMEOUT_MS = 30 * 60 * 1000;
 const DEFAULT_MAX_IDLE_PIN_MS = 4 * 60 * 60 * 1000;
@@ -321,6 +322,17 @@ export const layerWithOptions = (
       const idAllocator = yield* IdAllocator.IdAllocatorV2;
       const providerEventIngestor = yield* ProviderEventIngestor.ProviderEventIngestorV2;
       const projectionStore = yield* ProjectionStore.ProjectionStoreV2;
+      // fork: optional like serverSettings above; production provides it (runtimeLayer.ts).
+      const nativeContinuationStore = yield* Effect.serviceOption(
+        NativeContinuationStore.NativeContinuationStore,
+      );
+      const recordNativeContinuation = (
+        providerInstanceId: ProviderInstanceId,
+        providerThread: OrchestrationV2ProviderThread,
+      ) =>
+        Option.isNone(nativeContinuationStore)
+          ? Effect.void
+          : nativeContinuationStore.value.recordAttached({ providerInstanceId, providerThread });
       const agentAccessSettings = Effect.fn("ProviderSessionManagerV2.agentAccessSettings")(
         function* (threadId: ThreadId) {
           if (Option.isNone(serverSettings)) return { browser: true, device: false };
@@ -1284,6 +1296,9 @@ export const layerWithOptions = (
             ).pipe(
               Effect.andThen(runtime.ensureThread(input)),
               Effect.tap((providerThread) =>
+                recordNativeContinuation(runtime.instanceId, providerThread),
+              ),
+              Effect.tap((providerThread) =>
                 markProviderThreadLoaded({
                   providerSessionId,
                   threadId: input.threadId,
@@ -1322,6 +1337,9 @@ export const layerWithOptions = (
                 loaded ? Effect.succeed(input.providerThread) : runtime.resumeThread(input),
               ),
               Effect.tap((providerThread) =>
+                recordNativeContinuation(runtime.instanceId, providerThread),
+              ),
+              Effect.tap((providerThread) =>
                 markProviderThreadLoaded({
                   providerSessionId,
                   threadId,
@@ -1348,6 +1366,9 @@ export const layerWithOptions = (
               }),
             ).pipe(
               Effect.andThen(runtime.forkThread(input)),
+              Effect.tap((providerThread) =>
+                recordNativeContinuation(runtime.instanceId, providerThread),
+              ),
               Effect.tap((providerThread) =>
                 markProviderThreadLoaded({
                   providerSessionId,

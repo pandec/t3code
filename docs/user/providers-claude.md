@@ -41,8 +41,10 @@ live in that account's `.claude.json`, so changes made with `claude mcp add` do 
 accounts.
 
 Check the account shown in provider settings after signing in. Existing threads can switch between
-Claude instances that share their **CLAUDE_CONFIG_DIR path**. A provider with a different config
-path and no shadow directory is isolated and cannot continue those threads.
+Claude instances that share their **CLAUDE_CONFIG_DIR path** and keep the conversation: the next
+turn resumes it on the other account. A provider with a different config path and no shadow
+directory is isolated. Switching to it, or switching a conversation that started before you changed
+its instance's config path, continues the thread from a summary instead.
 
 For named presets that only change API keys or endpoints, use the instance's **Environment
 variables**. Variable assignments do not belong in **Launch arguments**.

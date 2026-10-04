@@ -25,6 +25,7 @@ import {
 import { layerFromStores as eventSinkLayer } from "./EventSink.ts";
 import { layerFromOrchestrationEventStore as eventStoreLayer } from "./EventStore.ts";
 import { layer as idAllocatorLayer } from "./IdAllocator.ts";
+import { layer as nativeContinuationStoreLayer } from "./NativeContinuationStore.ts";
 import * as LegacyV1ThreadImporter from "./legacy/LegacyV1ThreadImporter.ts";
 import { layer as orchestratorLayer } from "./Orchestrator.ts";
 import { layer as projectionStoreLayer } from "./ProjectionStore.ts";
@@ -115,8 +116,13 @@ const contextHandoffServiceProvided = contextHandoffServiceLayer.pipe(
 );
 
 const providerAdapterRegistryProvided = providerAdapterRegistryLayerFromProviderInstances;
+// fork: durable continuation groups for account switches (NativeContinuationStore.ts).
+const nativeContinuationStoreProvided = nativeContinuationStoreLayer.pipe(
+  Layer.provide(providerAdapterRegistryProvided),
+);
 const providerSwitchServiceProvided = providerSwitchServiceLayer.pipe(
   Layer.provide(providerAdapterRegistryProvided),
+  Layer.provide(nativeContinuationStoreProvided),
 );
 
 const providerSessionManagerProvided = providerSessionManagerLayer.pipe(
@@ -129,6 +135,7 @@ const providerSessionManagerProvided = providerSessionManagerLayer.pipe(
       projectionStoreLayer,
     ),
   ),
+  Layer.provide(nativeContinuationStoreProvided),
 );
 
 const providerAuthServiceProvided = ProviderAuthServiceLive.pipe(

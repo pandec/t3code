@@ -13,6 +13,7 @@ import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
 import * as Schema from "effect/Schema";
 
+import * as NativeContinuationStore from "./NativeContinuationStore.ts";
 import * as ProviderAdapterRegistry from "./ProviderAdapterRegistry.ts";
 import {
   decideProviderSessionTransition,
@@ -65,6 +66,11 @@ export const layer: Layer.Layer<
   ProviderSwitchServiceV2,
   Effect.gen(function* () {
     const adapters = yield* ProviderAdapterRegistry.ProviderAdapterRegistryV2;
+    // fork: optional so hand-assembled test layers keep v2's live-key behavior;
+    // production provides it (runtimeLayer.ts).
+    const nativeContinuationStore = yield* Effect.serviceOption(
+      NativeContinuationStore.NativeContinuationStore,
+    );
     return ProviderSwitchServiceV2.of({
       plan: ({ projection, targetModelSelection }) =>
         Effect.gen(function* () {
@@ -108,6 +114,33 @@ export const layer: Layer.Layer<
               thread.providerInstanceId === current.instanceId &&
               thread.nativeThreadRef !== null,
           );
+          // fork: a cross-instance move compares the continuation group the
+          // native conversation was recorded in, which outranks the owner's
+          // live config and outlives its removal. Without a record only a live
+          // owner on the conversation's driver can vouch for it; otherwise
+          // compatibility is unknown and the switch hands context off.
+          const nativeThreadId = currentProviderThread?.nativeThreadRef?.nativeId ?? null;
+          const recordedContinuation =
+            instanceChanged &&
+            currentProviderThread !== undefined &&
+            nativeThreadId !== null &&
+            Option.isSome(nativeContinuationStore)
+              ? Option.map(
+                  yield* nativeContinuationStore.value.get({
+                    providerInstanceId: currentProviderThread.providerInstanceId,
+                    driver: currentProviderThread.driver,
+                    nativeThreadId,
+                  }),
+                  (continuationKey) => ({ driver: currentProviderThread.driver, continuationKey }),
+                )
+              : Option.none();
+          const currentContinuation = Option.isSome(recordedContinuation)
+            ? recordedContinuation.value
+            : Option.isSome(currentInstance) &&
+                (currentProviderThread === undefined ||
+                  currentProviderThread.driver === currentInstance.value.driver)
+              ? currentInstance.value
+              : undefined;
           const selectionTransition =
             current.instanceId === targetModelSelection.instanceId &&
             !modelSelectionsEqual(current, targetModelSelection) &&
@@ -128,14 +161,14 @@ export const layer: Layer.Layer<
                 } as const)
               : decideProviderSessionTransition({
                   current:
-                    Option.isNone(currentInstance) ||
+                    currentContinuation === undefined ||
                     (currentSession === undefined && currentProviderThread === undefined)
                       ? null
                       : {
-                          driver: currentInstance.value.driver,
+                          driver: currentContinuation.driver,
                           continuationIdentity: {
-                            driverKind: currentInstance.value.driver,
-                            continuationKey: currentInstance.value.continuationKey,
+                            driverKind: currentContinuation.driver,
+                            continuationKey: currentContinuation.continuationKey,
                           },
                           modelSelection: current,
                           runtimeMode: projection.thread.runtimeMode,
@@ -145,7 +178,9 @@ export const layer: Layer.Layer<
                             projection.thread.worktreePath ??
                             "<unresolved-workspace>",
                           capabilities:
-                            negotiatedCapabilities ?? currentInstance.value.capabilities,
+                            negotiatedCapabilities ??
+                            Option.getOrUndefined(currentInstance)?.capabilities ??
+                            targetInstance.value.capabilities,
                         },
                   target: {
                     driver: targetInstance.value.driver,

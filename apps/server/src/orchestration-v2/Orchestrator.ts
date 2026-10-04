@@ -1254,9 +1254,32 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
         projection.thread.modelSelection,
         queuedRun.modelSelection,
       );
-      const switchPlan = selectionChanged
+      // fork: a selection command may already have moved the app thread off
+      // the instance that owns the native conversation; classify the switch
+      // against that owner, as message dispatch does.
+      const nativeOwnerInstanceId = projection.providerThreads.find(
+        (candidate) => candidate.id === projection.thread.activeProviderThreadId,
+      )?.providerInstanceId;
+      const switchFromNativeOwner =
+        nativeOwnerInstanceId !== undefined &&
+        nativeOwnerInstanceId !== projection.thread.modelSelection.instanceId &&
+        nativeOwnerInstanceId !== queuedRun.modelSelection.instanceId;
+      const ownerProjection = switchFromNativeOwner
+        ? {
+            ...projection,
+            thread: {
+              ...projection.thread,
+              modelSelection: {
+                ...projection.thread.modelSelection,
+                instanceId: nativeOwnerInstanceId,
+              },
+            },
+          }
+        : projection;
+      const planSwitch = selectionChanged || switchFromNativeOwner;
+      const switchPlan = planSwitch
         ? yield* providerSwitchService
-            .plan({ projection, targetModelSelection: queuedRun.modelSelection })
+            .plan({ projection: ownerProjection, targetModelSelection: queuedRun.modelSelection })
             .pipe(
               Effect.mapError(
                 (cause) =>
