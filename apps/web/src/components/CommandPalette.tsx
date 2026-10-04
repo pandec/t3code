@@ -48,6 +48,7 @@ import {
 import { useLocation, useNavigate, useParams } from "@tanstack/react-router";
 import * as Option from "effect/Option";
 import {
+  ArchiveIcon,
   ArrowLeftIcon,
   CircleCheckIcon,
   CircleDotIcon,
@@ -179,6 +180,7 @@ import {
 import {
   ADDON_ICON_CLASS,
   browseInputEndPaddingClass,
+  buildArchiveCurrentThreadAction,
   buildSavedPromptsSubmenu,
   SAVED_PROMPTS_GROUP_VALUE,
   savedPromptItemValue,
@@ -850,6 +852,7 @@ function OpenCommandPaletteDialog(props: {
   const { activeDraftThread, activeThread, defaultProjectRef, handleNewThread, routeThreadRef } =
     useHandleNewThread();
   const {
+    attemptArchiveThread,
     pinThread,
     settleThread,
     confirmAndUnpinThread,
@@ -2295,6 +2298,15 @@ function OpenCommandPaletteDialog(props: {
         ) ?? null);
   const openUnarchivedThread = currentThread?.archivedAt === null ? currentThread : null;
   const openUnarchivedThreadRef = openUnarchivedThread === null ? null : currentThreadRef;
+  // Fork: archive goes through the shared confirmation and in-flight guard.
+  const archiveCurrentThreadAction = buildArchiveCurrentThreadAction({
+    threadRef: openUnarchivedThreadRef,
+    icon: <ArchiveIcon className={ITEM_ICON_CLASS} />,
+    runThread: attemptArchiveThread,
+  });
+  if (archiveCurrentThreadAction) {
+    actionItems.push(archiveCurrentThreadAction);
+  }
 
   const openThreadCapabilities =
     openUnarchivedThreadRef === null

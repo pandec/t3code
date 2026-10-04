@@ -96,7 +96,7 @@ export function useThreadActionMenu(input: {
     pinThread,
     confirmAndUnpinThread,
     setThreadAutoSettle,
-    archiveThread,
+    attemptArchiveThread,
     deleteThread,
     markThreadUnread,
   } = useThreadActions();
@@ -105,7 +105,6 @@ export function useThreadActionMenu(input: {
   });
   const handleNewThread = useNewThreadHandler();
   const confirmThreadDelete = useClientSettings((s) => s.confirmThreadDelete);
-  const confirmThreadArchive = useClientSettings((s) => s.confirmThreadArchive);
   const timestampFormat = useClientSettings((s) => s.timestampFormat);
   const { copyToClipboard: copyPathToClipboard } = useCopyToClipboard<{ path: string }>({
     onCopy: ({ path }) => {
@@ -286,27 +285,9 @@ export function useThreadActionMenu(input: {
           case "copy-thread-id":
             copyThreadIdToClipboard(thread.id, { threadId: thread.id });
             return;
-          case "archive": {
-            if (confirmThreadArchive) {
-              const confirmed = await settlePromise(() =>
-                api.dialogs.confirm(`Archive thread "${thread.title}"?`),
-              );
-              if (confirmed._tag === "Failure" || !confirmed.value) return;
-            }
-            let didArchive = false;
-            const result = await archiveThread(threadRef, {
-              onArchived: () => {
-                didArchive = true;
-              },
-            });
-            if (result._tag === "Failure" && !isAtomCommandInterrupted(result)) {
-              failureToast(
-                didArchive ? "Thread archived, but navigation failed" : "Failed to archive thread",
-                squashAtomCommandFailure(result),
-              );
-            }
+          case "archive":
+            await attemptArchiveThread(threadRef);
             return;
-          }
           case "delete": {
             if (confirmThreadDelete) {
               const confirmed = await settlePromise(() =>
@@ -339,8 +320,7 @@ export function useThreadActionMenu(input: {
       })();
     },
     [
-      archiveThread,
-      confirmThreadArchive,
+      attemptArchiveThread,
       confirmThreadDelete,
       confirmAndUnpinThread,
       copyBranchToClipboard,

@@ -363,6 +363,7 @@ import {
   useComposerDraftStore,
   DraftId,
 } from "../composerDraftStore";
+import { draftSubmissionTracker } from "../draftSubmissionState";
 import {
   formatTerminalContextLabel,
   type TerminalContextDraft,
@@ -2067,6 +2068,13 @@ export default function ChatView(props: ChatViewProps) {
     [draftThread, fallbackDraftProject, settings, threadId],
   );
   const isServerThread = serverThread !== null;
+  // Fork: a draft whose thread now exists is no longer an archive-undo target
+  // (see archiveUndo.ts), so its submission marker can go.
+  useEffect(() => {
+    if (draftId && isServerThread) {
+      draftSubmissionTracker.clear(draftId);
+    }
+  }, [draftId, isServerThread]);
   const activeThread = isServerThread ? serverThread : localDraftThread;
   const serverLatestRun = useMemo(
     () => (serverProjection === null ? null : deriveLatestThreadRun(serverProjection)),
@@ -8887,6 +8895,11 @@ export default function ChatView(props: ChatViewProps) {
       }
     }
 
+    // Fork: an emptied draft whose send is in flight must not be replaced by
+    // an archive Undo before its thread appears (see archiveUndo.ts).
+    if (draftId) {
+      draftSubmissionTracker.begin(draftId);
+    }
     if (
       multipleModelSelections === null &&
       shouldDockDraftHeroForSubmission({ isDraftHeroState, activeThreadKey, submissionIntent }) &&
@@ -9116,6 +9129,10 @@ export default function ChatView(props: ChatViewProps) {
         );
         // Each request now owns its background thread. The original draft is
         // ready for another prompt while checkout and setup scripts finish.
+        // It is never promoted, so it stays an empty draft for archive Undo.
+        if (draftId) {
+          draftSubmissionTracker.clear(draftId);
+        }
         sendInFlightRef.current = false;
         resetLocalDispatch();
         releasedComposer = true;
@@ -9205,6 +9222,9 @@ export default function ChatView(props: ChatViewProps) {
           }
         }
         if (!releasedComposer) {
+          if (draftId) {
+            draftSubmissionTracker.clear(draftId);
+          }
           sendInFlightRef.current = false;
           resetLocalDispatch();
         }
@@ -9472,6 +9492,9 @@ export default function ChatView(props: ChatViewProps) {
             clearBackgroundDraftSubmissionByRef(backgroundThreadRef);
           }
           if (backgroundDraftOpened) {
+            if (draftId) {
+              draftSubmissionTracker.clear(draftId);
+            }
             toastManager.add(
               stackedThreadToast({
                 type: "success",
@@ -9570,6 +9593,9 @@ export default function ChatView(props: ChatViewProps) {
       }
     }
     sendInFlightRef.current = false;
+    if (draftId) {
+      draftSubmissionTracker.finish(draftId, turnStartSucceeded);
+    }
     if (!turnStartSucceeded) {
       setDockedDraftHeroThreadKey((currentThreadKey) =>
         currentThreadKey === activeThreadKey ? null : currentThreadKey,

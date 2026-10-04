@@ -9,6 +9,7 @@ import { isElectron } from "../env";
 import { appAtomRegistry } from "../rpc/atomRegistry";
 import { ThreadRouteView } from "../components/ThreadRouteView";
 import { useClientSettings, useLegacySidebarEnabled } from "../hooks/useSettings";
+import { useThreadActions } from "../hooks/useThreadActions";
 import { openCommandPalette } from "../commandPaletteBus";
 import { readThreadShell, useProjects } from "../state/entities";
 import { usePrimaryEnvironmentId } from "../state/environments";
@@ -70,6 +71,7 @@ function ChatRouteGlobalShortcuts() {
   const projects = useProjects();
   const primaryEnvironmentId = usePrimaryEnvironmentId();
   const router = useRouter();
+  const { attemptArchiveThread } = useThreadActions();
   const { scratchEnvironmentId, startScratchThread } = useScratchProject();
   const projectGroupCount = useMemo(
     () =>
@@ -259,6 +261,16 @@ function ChatRouteGlobalShortcuts() {
         return;
       }
 
+      if (command === "thread.archive") {
+        if (!shortcutThreadRef) return;
+        if (hasOpenArchiveUndoBlockingLayer()) return;
+        event.preventDefault();
+        event.stopPropagation();
+        if (readThreadShell(shortcutThreadRef)?.archivedAt !== null) return;
+        void attemptArchiveThread(shortcutThreadRef);
+        return;
+      }
+
       if (command === "preview.toggle") {
         event.preventDefault();
         event.stopPropagation();
@@ -314,6 +326,7 @@ function ChatRouteGlobalShortcuts() {
   }, [
     activeDraftThread,
     activeThread,
+    attemptArchiveThread,
     clearSelection,
     handleNewThread,
     keybindings,

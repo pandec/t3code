@@ -4,8 +4,17 @@ import {
   scopeThreadRef,
   scopedThreadKey,
 } from "@t3tools/client-runtime/environment";
-import { settlePromise, squashAtomCommandFailure } from "@t3tools/client-runtime/state/runtime";
-import { canSnooze, threadWokeAt } from "@t3tools/client-runtime/state/thread-settled";
+import {
+  isAtomCommandInterrupted,
+  settlePromise,
+  squashAtomCommandFailure,
+} from "@t3tools/client-runtime/state/runtime";
+import {
+  canSnooze,
+  canSnoozeUntilDone,
+  effectiveSnoozed,
+  threadWokeAt,
+} from "@t3tools/client-runtime/state/thread-settled";
 import { threadRuntimeCanArchive } from "@t3tools/client-runtime/state/models";
 import { EnvironmentId, type ScopedThreadRef, ThreadId } from "@t3tools/contracts";
 import { resolveWorktreeCleanup } from "@t3tools/shared/projectSettings";
@@ -66,6 +75,10 @@ export class ThreadArchiveBlockedError extends Schema.TaggedError<ThreadArchiveB
     return "Cannot archive while the provider is active.";
   }
 }
+
+/** Fork: archives in flight (including an open confirmation), so the same
+ * thread archived from two surfaces at once (menu plus shortcut) runs once. */
+const archivingThreadKeys = new Set<string>();
 
 /** Deleting a thread expires every pending Undo that would try to revive it. */
 function invalidateThreadUndos(target: ScopedThreadRef) {
@@ -339,6 +352,7 @@ export function useThreadActions() {
     reportFailure: false,
   });
   const sidebarThreadSortOrder = useClientSettings((settings) => settings.sidebarThreadSortOrder);
+  const confirmThreadArchive = useClientSettings((settings) => settings.confirmThreadArchive);
   const confirmThreadDelete = useClientSettings((settings) => settings.confirmThreadDelete);
   const confirmThreadUnpin = useClientSettings((settings) => settings.confirmThreadUnpin);
   const clearComposerDraftForThread = useComposerDraftStore((store) => store.clearDraftThread);
@@ -464,6 +478,50 @@ export function useThreadActions() {
       resolveThreadTarget,
       unarchiveThread,
     ],
+  );
+
+  /** Fork: the one user-facing archive path (menus, palette, shortcut): asks
+   * for confirmation when the setting is on, runs once per thread at a time,
+   * and reports failures as a toast. */
+  const attemptArchiveThread = useCallback(
+    async (target: ScopedThreadRef) => {
+      const threadKey = scopedThreadKey(target);
+      if (archivingThreadKeys.has(threadKey)) return;
+      const resolved = resolveThreadTarget(target);
+      if (!resolved) return;
+      archivingThreadKeys.add(threadKey);
+      try {
+        if (confirmThreadArchive) {
+          const localApi = readLocalApi();
+          if (!localApi) return;
+          const confirmed = await settlePromise(() =>
+            localApi.dialogs.confirm(`Archive thread "${resolved.thread.title}"?`),
+          );
+          if (confirmed._tag === "Failure" || !confirmed.value) return;
+        }
+        let didArchive = false;
+        const result = await archiveThread(target, {
+          onArchived: () => {
+            didArchive = true;
+          },
+        });
+        if (result._tag === "Failure" && !isAtomCommandInterrupted(result)) {
+          const error = squashAtomCommandFailure(result);
+          toastManager.add(
+            stackedThreadToast({
+              type: "error",
+              title: didArchive
+                ? "Thread archived, but navigation failed"
+                : "Failed to archive thread",
+              description: error instanceof Error ? error.message : "An error occurred.",
+            }),
+          );
+        }
+      } finally {
+        archivingThreadKeys.delete(threadKey);
+      }
+    },
+    [archiveThread, confirmThreadArchive, resolveThreadTarget],
   );
 
   const deleteThread = useCallback(
@@ -807,7 +865,16 @@ export function useThreadActions() {
       // has to put those back as well.
       const pinOrderKey = resolved?.thread.pinnedAt != null ? resolved.thread.pinOrderKey : null;
       const wasPinned = resolved?.thread.pinnedAt != null;
-      const snoozedUntil = resolved?.thread.snoozedUntil ?? null;
+      // Fork: restore only a snooze that still held (an expired, raised-hand
+      // or finished until-done one had already woken), in all three modes:
+      // timed, indefinite (null wake time) and until-done.
+      const restoreSnooze =
+        resolved !== null && effectiveSnoozed(resolved.thread, { now: new Date().toISOString() })
+          ? {
+              snoozedUntil: resolved.thread.snoozedUntil ?? null,
+              ...(resolved.thread.snoozedUntilRunId != null ? { untilDone: true } : {}),
+            }
+          : null;
       // An older unpin/snooze Undo would re-pin or re-snooze, and the server
       // treats either as a promotion that un-settles; settling supersedes them.
       ThreadUndo.invalidate("pin", scopedThreadKey(target));
@@ -837,10 +904,20 @@ export function useThreadActions() {
             );
             if (pinned._tag !== "Success") return pinned;
           }
-          if (snoozedUntil !== null) {
+          // Settling detaches the provider session, so the work an
+          // until-done snooze waited on may be gone: that snooze would have
+          // woken by now, and the server rejects one with nothing to wait on.
+          const untilDoneStillApplies = (): boolean => {
+            const current = readThreadShell(target);
+            return current !== null && canSnoozeUntilDone(current);
+          };
+          if (
+            restoreSnooze !== null &&
+            (restoreSnooze.untilDone !== true || untilDoneStillApplies())
+          ) {
             return snoozeThreadMutation({
               environmentId: target.environmentId,
-              input: { threadId: target.threadId, snoozedUntil },
+              input: { threadId: target.threadId, ...restoreSnooze },
             });
           }
           return unsettled;
@@ -1064,6 +1141,7 @@ export function useThreadActions() {
   return useMemo(
     () => ({
       archiveThread,
+      attemptArchiveThread,
       unarchiveThread,
       deleteThread,
       confirmAndDeleteThread,
@@ -1082,6 +1160,7 @@ export function useThreadActions() {
     }),
     [
       archiveThread,
+      attemptArchiveThread,
       confirmAndDeleteThread,
       confirmAndUnpinThread,
       deleteThread,

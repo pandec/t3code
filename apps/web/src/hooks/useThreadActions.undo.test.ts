@@ -28,7 +28,16 @@ vi.mock("react", async (original) => ({
   useRef: (value: unknown) => ({ current: value }),
 }));
 vi.mock("@tanstack/react-router", () => ({ useRouter: () => router }));
-vi.mock("./useSettings", () => ({ useClientSettings: () => false }));
+const clientSettings = vi.hoisted(() => ({ confirmThreadArchive: false }));
+vi.mock("./useSettings", () => ({
+  useClientSettings: (select: (settings: Record<string, unknown>) => unknown) =>
+    select(clientSettings) ?? false,
+}));
+const dialogs = vi.hoisted(() => ({ confirm: vi.fn<(message: string) => Promise<boolean>>() }));
+vi.mock("../localApi", async (original) => ({
+  ...(await original<typeof import("../localApi")>()),
+  readLocalApi: () => ({ dialogs }),
+}));
 vi.mock("./useHandleNewThread", () => ({ useNewThreadHandler: () => vi.fn() }));
 vi.mock("../composerDraftStore", () => ({ useComposerDraftStore: () => vi.fn() }));
 vi.mock("../terminalUiStateStore", () => ({ useTerminalUiStateStore: () => vi.fn() }));
@@ -44,7 +53,10 @@ const threadShell = vi.hoisted(() => ({
   title: "Thread",
   pinOrderKey: "a0",
   pinnedAt: null as string | null,
+  snoozedAt: null as string | null,
   snoozedUntil: null as string | null,
+  snoozedUntilRunId: null as string | null,
+  latestRun: null as { runId: string; status: string; completedAt: string | null } | null,
   projectId: "project",
   environmentId: "undo-env",
   session: null,
@@ -105,7 +117,12 @@ beforeEach(() => {
   emptyDraft.ids = [];
   shellLookup.missing = false;
   threadShell.pinnedAt = null;
+  threadShell.snoozedAt = null;
   threadShell.snoozedUntil = null;
+  threadShell.snoozedUntilRunId = null;
+  threadShell.latestRun = null;
+  clientSettings.confirmThreadArchive = false;
+  dialogs.confirm.mockReset();
 });
 afterEach(() => {
   vi.runAllTimers();
@@ -132,6 +149,35 @@ describe("unpin Undo", () => {
     });
     await latestUndo();
     expect(commands.pin).toHaveBeenCalledTimes(2);
+  });
+});
+
+describe("attemptArchiveThread", () => {
+  it("confirms and archives once when two surfaces archive the same thread together", async () => {
+    clientSettings.confirmThreadArchive = true;
+    let confirm: (confirmed: boolean) => void = () => {};
+    dialogs.confirm.mockReturnValue(
+      new Promise((resolve) => {
+        confirm = resolve;
+      }),
+    );
+    const sidebar = useThreadActions();
+    const shortcut = useThreadActions();
+    const first = sidebar.attemptArchiveThread(target);
+    await shortcut.attemptArchiveThread(target);
+    confirm(true);
+    await first;
+    expect(dialogs.confirm).toHaveBeenCalledOnce();
+    expect(commands.archive).toHaveBeenCalledOnce();
+    await sidebar.attemptArchiveThread(target);
+    expect(commands.archive).toHaveBeenCalledTimes(2);
+  });
+
+  it("keeps the thread when the confirmation is declined", async () => {
+    clientSettings.confirmThreadArchive = true;
+    dialogs.confirm.mockResolvedValue(false);
+    await useThreadActions().attemptArchiveThread(target);
+    expect(commands.archive).not.toHaveBeenCalled();
   });
 });
 
@@ -240,6 +286,56 @@ describe("settle and snooze Undo", () => {
       environmentId: target.environmentId,
       input: { threadId: target.threadId, snoozedUntil },
     });
+  });
+
+  it("restores an indefinite snooze that settling had cleared", async () => {
+    threadShell.snoozedAt = "2026-01-01T00:00:00.000Z";
+    const actions = useThreadActions();
+    await actions.settleThread(target);
+    await currentUndo()();
+    expect(commands.snooze).toHaveBeenCalledExactlyOnceWith({
+      environmentId: target.environmentId,
+      input: { threadId: target.threadId, snoozedUntil: null },
+    });
+  });
+
+  it("restores an until-done snooze while its work still goes on", async () => {
+    threadShell.snoozedAt = "2026-01-01T00:00:00.000Z";
+    threadShell.snoozedUntilRunId = "run-1";
+    threadShell.latestRun = { runId: "run-1", status: "running", completedAt: null };
+    const actions = useThreadActions();
+    await actions.settleThread(target);
+    await currentUndo()();
+    expect(commands.snooze).toHaveBeenCalledExactlyOnceWith({
+      environmentId: target.environmentId,
+      input: { threadId: target.threadId, snoozedUntil: null, untilDone: true },
+    });
+  });
+
+  it("leaves the thread awake when the until-done work ended before Undo", async () => {
+    threadShell.snoozedAt = "2026-01-01T00:00:00.000Z";
+    threadShell.snoozedUntilRunId = "run-1";
+    threadShell.latestRun = { runId: "run-1", status: "running", completedAt: null };
+    const actions = useThreadActions();
+    await actions.settleThread(target);
+    threadShell.latestRun = {
+      runId: "run-1",
+      status: "interrupted",
+      completedAt: "2026-01-01T00:05:00.000Z",
+    };
+    await currentUndo()();
+    expect(commands.unsettle).toHaveBeenCalledOnce();
+    expect(commands.snooze).not.toHaveBeenCalled();
+  });
+
+  it("does not restore a snooze that had already woken", async () => {
+    threadShell.snoozedAt = "2026-01-01T00:00:00.000Z";
+    threadShell.snoozedUntil = "2026-01-01T01:00:00.000Z";
+    const actions = useThreadActions();
+    await actions.settleThread(target);
+    await currentUndo()();
+    expect(commands.unsettle).toHaveBeenCalledOnce();
+    expect(commands.snooze).not.toHaveBeenCalled();
   });
 
   it("expires an older unpin Undo when the thread is settled", async () => {
