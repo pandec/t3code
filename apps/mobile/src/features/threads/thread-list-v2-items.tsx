@@ -76,6 +76,7 @@ const STATUS_LABEL_BY_STATUS: Partial<
   approval: { label: "Approval", className: "text-warning-foreground" },
   input: { label: "Input", className: "text-adaptive-indigo-600-300" },
   working: { label: "Working", className: "text-adaptive-sky-600-400" },
+  monitoring: { label: "Monitoring", className: "text-foreground-secondary" },
   failed: { label: "Failed", className: "text-danger-foreground" },
   limited: { label: "Limited", className: "text-warning-foreground" },
 };
@@ -1127,6 +1128,9 @@ export const ThreadListV2Row = memo(function ThreadListV2Row(props: {
           )}
         >
           {statusLabel?.label ?? timeLabel}
+          {statusLabel !== undefined && status === "working" && timeLabel !== ""
+            ? ` ${timeLabel}`
+            : null}
         </Text>
       </View>
       <Text

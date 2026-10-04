@@ -36,6 +36,7 @@ import {
   resolveThreadListV2SnoozeGateExpiryMs,
   resolveThreadListV2Status,
   resolveThreadListV2SwipeActions,
+  resolveThreadListV2WorkingTimeLabel,
   sortThreadsForListV2,
   threadListV2ListItemsAreEqual,
   type ThreadListV2ListItem,
@@ -170,26 +171,67 @@ describe("resolveThreadListV2Status", () => {
     expect(resolveThreadListV2Status(thread)).toBe("approval");
   });
 
-  it("reports waiting when presentation parks runtime idle for background tasks", () => {
-    expect(
-      resolveThreadListV2Status(
-        makeThread({
-          id: ThreadId.make("t"),
-          title: "t",
-          pendingBackgroundTasks: [
-            { taskId: "bg-1", description: "Run Codex review", kind: "command" },
-          ],
-          runtime: {
-            status: "idle",
-            activeRunId: null,
-            providerInstanceId: ProviderInstanceId.make("codex"),
-            providerName: "Codex",
-            lastError: null,
-            updatedAt: NOW,
-          },
-        }),
-      ),
-    ).toBe("waiting");
+  it("reads background work parked after the turn as working or monitoring", () => {
+    const parked = (pendingBackgroundTasks: EnvironmentThreadShell["pendingBackgroundTasks"]) =>
+      makeThread({
+        id: ThreadId.make("t"),
+        title: "t",
+        pendingBackgroundTasks,
+        runtime: {
+          status: "idle",
+          activeRunId: null,
+          providerInstanceId: ProviderInstanceId.make("codex"),
+          providerName: "Codex",
+          lastError: null,
+          updatedAt: NOW,
+        },
+      });
+    const devServer = { taskId: "bg-1", description: "Run dev server", kind: "command" } as const;
+    const monitor = { taskId: "watch", kind: "monitor" } as const;
+    const subagent = { taskId: "sub", kind: "subagent" } as const;
+
+    expect(resolveThreadListV2Status(parked([devServer, monitor]))).toBe("monitoring");
+    expect(resolveThreadListV2Status(parked([devServer, subagent]))).toBe("working");
+    expect(resolveThreadListV2Status(parked([{ taskId: "flow", kind: "background_task" }]))).toBe(
+      "working",
+    );
+    expect(resolveThreadListV2Status(parked([]))).toBe("waiting");
+  });
+
+  it("labels working rows with their elapsed time and nothing else", () => {
+    vi.useFakeTimers();
+    try {
+      vi.setSystemTime(Date.parse(NOW));
+      const runtime = {
+        status: "running" as const,
+        activeRunId: RunId.make("run-1"),
+        activityStartedAt: "2026-06-01T23:48:00.000Z",
+        providerInstanceId: ProviderInstanceId.make("codex"),
+        providerName: "Codex",
+        lastError: null,
+        updatedAt: NOW,
+      };
+      const thread = makeThread({ id: ThreadId.make("t"), title: "t", runtime });
+
+      expect(resolveThreadListV2WorkingTimeLabel(thread, "working")).toBe("12m");
+      expect(resolveThreadListV2WorkingTimeLabel(thread, "monitoring")).toBeNull();
+      expect(resolveThreadListV2WorkingTimeLabel(thread, "approval")).toBeNull();
+      // Agents left running after the turn have no live run to time.
+      expect(
+        resolveThreadListV2WorkingTimeLabel(
+          { ...thread, runtime: { ...runtime, status: "idle", activityStartedAt: null } },
+          "working",
+        ),
+      ).toBeNull();
+      expect(
+        resolveThreadListV2WorkingTimeLabel(
+          { ...thread, runtime: { ...runtime, activityStartedAt: "not a date" } },
+          "working",
+        ),
+      ).toBeNull();
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it("resolves ready for quiescent threads", () => {

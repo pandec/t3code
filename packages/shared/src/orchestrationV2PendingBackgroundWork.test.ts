@@ -2,6 +2,8 @@ import { describe, expect, it } from "vite-plus/test";
 import type { OrchestrationV2PendingBackgroundTask } from "@t3tools/contracts";
 import {
   backgroundWorkHoldsCompletion,
+  backgroundWorkInDrainScope,
+  backgroundWorkLiveness,
   derivePendingBackgroundWork,
   turnItemUpdateCanEndBackgroundWork,
 } from "./orchestrationV2PendingBackgroundWork.ts";
@@ -516,5 +518,31 @@ describe("derivePendingBackgroundWork kinds", () => {
       },
       { taskId: "cmd", description: "npm test", kind: "command" },
     ]);
+  });
+});
+
+describe("background work liveness and drain scope", () => {
+  const subagent: OrchestrationV2PendingBackgroundTask = { taskId: "sub", kind: "subagent" };
+  const workflow: OrchestrationV2PendingBackgroundTask = {
+    taskId: "flow",
+    kind: "background_task",
+  };
+  const devServer: OrchestrationV2PendingBackgroundTask = { taskId: "dev", kind: "command" };
+  const monitor: OrchestrationV2PendingBackgroundTask = { taskId: "watch", kind: "monitor" };
+
+  it("reads live agents as working and watch loops alone as monitoring", () => {
+    expect(backgroundWorkLiveness([])).toBeNull();
+    expect(backgroundWorkLiveness([subagent])).toBe("working");
+    expect(backgroundWorkLiveness([workflow])).toBe("working");
+    expect(backgroundWorkLiveness([devServer, monitor, subagent])).toBe("working");
+    expect(backgroundWorkLiveness([devServer])).toBe("monitoring");
+    expect(backgroundWorkLiveness([devServer, monitor])).toBe("monitoring");
+  });
+
+  it("drains agents only by default and every task with all", () => {
+    const tasks = [devServer, subagent, monitor, workflow];
+    expect(backgroundWorkInDrainScope(tasks, "agents")).toEqual([subagent, workflow]);
+    expect(backgroundWorkInDrainScope([devServer, monitor], "agents")).toEqual([]);
+    expect(backgroundWorkInDrainScope(tasks, "all")).toEqual(tasks);
   });
 });

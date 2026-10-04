@@ -2,6 +2,7 @@ import { passesAttentionFilter } from "@t3tools/client-runtime/state/thread-atte
 import type { ThreadGroup } from "@t3tools/contracts";
 import { threadGroupId, threadGroupSections } from "@t3tools/shared/threadGroups";
 import { threadPullRequestSearchTerms } from "@t3tools/shared/threadPullRequests";
+import { backgroundWorkLiveness } from "@t3tools/shared/orchestrationV2PendingBackgroundWork";
 import {
   canSnooze,
   effectiveSnoozed,
@@ -14,7 +15,10 @@ import {
 } from "@t3tools/client-runtime/state/thread-settled";
 import type { SnoozePreset } from "@t3tools/client-runtime/state/thread-settled";
 import type { EnvironmentThreadShell } from "@t3tools/client-runtime/state/shell";
-import { resolveThreadProviderStack } from "@t3tools/client-runtime/state/models";
+import {
+  resolveThreadProviderStack,
+  resolveThreadWorkingStartedAt,
+} from "@t3tools/client-runtime/state/models";
 import { threadSearchMatchKey } from "@t3tools/client-runtime/state/thread-search";
 import {
   sortActiveThreadsByOrderKey,
@@ -63,16 +67,18 @@ export function resolveThreadListV2ProviderDrivers(
  * Thread List v2 model, ported from the web sidebar v2
  * (apps/web/src/components/Sidebar.logic.ts + SidebarV2.tsx).
  *
- * Six visual states. Color distinguishes approval, input, active work, and
- * failures. Ready is the unlabeled resting state; waiting (runtime status "idle") is the agent
- * parked on open background tasks, grey like working rather than a false Done.
- * The orchestrator v2 presentation bridge parks runtime at idle when the
- * post-settlement background roster is nonempty.
+ * Color distinguishes approval, input, active work, and failures. Ready is
+ * the unlabeled resting state. The orchestrator v2 presentation bridge parks
+ * runtime at idle when the post-settlement background roster is nonempty:
+ * live agents or workflows then read as working, and watch loops alone (dev
+ * servers, monitors) as monitoring, never a false Done. Waiting is left for
+ * an idle runtime with no named work.
  */
 export type ThreadListV2Status =
   | "approval"
   | "input"
   | "working"
+  | "monitoring"
   | "waiting"
   | "failed"
   | "limited"
@@ -213,7 +219,12 @@ export function threadHasUnseenCompletion(
 }
 
 export function resolveThreadListV2Status(
-  thread: Pick<EnvironmentThreadShell, "hasPendingApprovals" | "hasPendingUserInput" | "runtime">,
+  thread: Pick<
+    EnvironmentThreadShell,
+    "hasPendingApprovals" | "hasPendingUserInput" | "runtime"
+  > & {
+    readonly pendingBackgroundTasks?: EnvironmentThreadShell["pendingBackgroundTasks"] | undefined;
+  },
 ): ThreadListV2Status {
   if (thread.hasPendingApprovals) {
     return "approval";
@@ -228,12 +239,25 @@ export function resolveThreadListV2Status(
     return "working";
   }
   if (thread.runtime?.status === "idle") {
-    return "waiting";
+    return backgroundWorkLiveness(thread.pendingBackgroundTasks ?? []) ?? "waiting";
   }
   if (thread.runtime?.status === "failed") {
     return thread.runtime.lastErrorClass === "usage_limit" ? "limited" : "failed";
   }
   return "ready";
+}
+
+/** How long a working row's current work has run, as coarse relative time
+    ("12m") that stays truthful without a per-row ticker. Null for every other
+    status, and when no valid start is known (background agents after the
+    turn ended). */
+export function resolveThreadListV2WorkingTimeLabel(
+  thread: Pick<EnvironmentThreadShell, "latestRun" | "runtime">,
+  status: ThreadListV2Status,
+): string | null {
+  if (status !== "working") return null;
+  const startedAt = resolveThreadWorkingStartedAt(thread);
+  return startedAt === null ? null : relativeTime(startedAt);
 }
 
 /** NaN-safe Date.parse for sort comparators: a malformed timestamp must not
@@ -519,7 +543,8 @@ export function threadListV2ListItemsAreEqual(
 }
 
 /** The timestamp a row renders when it shows no status label: the settle
-    stamp on settled slim rows, otherwise the latest activity. Blank for
+    stamp on settled slim rows, otherwise the latest activity. A working card
+    gets its elapsed time, drawn after the label. Blank for other
     status-labelled cards and snoozed rows with a wake countdown — those
     never draw a time, so their minute tick must not invalidate the cell. */
 function resolveThreadListV2ItemTimeLabel(
@@ -528,11 +553,12 @@ function resolveThreadListV2ItemTimeLabel(
 ): string {
   const { thread, variant, snoozed } = item;
   if (showSnoozeWakeLabel) return "";
-  if (
-    variant === "card" &&
-    (resolveThreadListV2Status(thread) !== "ready" || threadHasUnseenCompletion(thread))
-  )
-    return "";
+  if (variant === "card") {
+    const status = resolveThreadListV2Status(thread);
+    // A working card draws its elapsed time next to the label.
+    if (status === "working") return resolveThreadListV2WorkingTimeLabel(thread, status) ?? "";
+    if (status !== "ready" || threadHasUnseenCompletion(thread)) return "";
+  }
   const settledTimestamp =
     variant === "slim" && !snoozed ? resolveSettledThreadTimestamp(thread) : null;
   return relativeTime(

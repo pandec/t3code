@@ -263,6 +263,11 @@ retry and the normal snooze choices.
 
 On web and desktop, use **Agents** to follow work delegated to subagents.
 
+When a turn ends while work it started keeps running, the thread list shows **Working** for live
+subagents and workflows, and **Monitoring** when only watch loops remain, such as a dev server or a
+monitor tailing checks. The conversation lists that work with a **Stop** button. Settling or
+archiving the thread also stops it.
+
 Subagent threads started by the agent can't take messages; message the parent
 thread instead. When such a subagent needs an approval or an answer, the parent
 thread asks for it.

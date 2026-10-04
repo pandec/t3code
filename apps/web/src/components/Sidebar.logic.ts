@@ -1,5 +1,6 @@
 import { resolveThreadWorkingStartedAt } from "@t3tools/client-runtime/state/models";
 import { threadPullRequestSearchTerms } from "@t3tools/shared/threadPullRequests";
+import { backgroundWorkLiveness } from "@t3tools/shared/orchestrationV2PendingBackgroundWork";
 import * as React from "react";
 import {
   isAtomCommandInterrupted,
@@ -801,11 +802,11 @@ export function buildBulkUnpinContextMenuItem(input: {
 export interface ThreadStatusPill {
   label:
     | "Working"
+    | "Monitoring"
     | "Connecting"
     | "Completed"
     | "Pending Approval"
     | "Awaiting Input"
-    | "Waiting"
     | "Plan Ready";
   colorClass: string;
   dotClass: string;
@@ -817,7 +818,7 @@ const THREAD_STATUS_PRIORITY: Record<ThreadStatusPill["label"], number> = {
   "Awaiting Input": 4,
   Working: 3,
   Connecting: 3,
-  Waiting: 2.5,
+  Monitoring: 2.5,
   "Plan Ready": 2,
   Completed: 1,
 };
@@ -1119,16 +1120,18 @@ export function resolveThreadRowClassName(input: {
 // Six visual states, three colors: color is reserved for "act now"
 // (approval), "in motion" (working), and "broken" (failed). Ready is the
 // unlabeled resting state — the agent stopped and is waiting on the user,
-// whether it finished, asked a question, or proposed a plan. Waiting
-// (runtime status "idle") is the agent stopped with background tasks still
-// open: not the user's turn yet, so it renders grey like working, not as a
-// false Done.
+// whether it finished, asked a question, or proposed a plan. Once the agent
+// stops with background tasks still open (runtime status "idle"), live
+// agents or workflows read as working, and watch loops alone (dev servers,
+// monitors) as monitoring: not the user's turn yet, never a false Done.
+// Waiting is left for an idle runtime with no named work.
 // Unread completion is tracked separately: it describes whether a ready
 // thread needs attention, not what the thread is currently doing.
 export type SidebarThreadStatus =
   | "approval"
   | "input"
   | "working"
+  | "monitoring"
   | "waiting"
   | "failed"
   | "limited"
@@ -1142,7 +1145,9 @@ export function shouldRecedeSidebarThread(input: {
   isSelected: boolean;
 }): boolean {
   if (input.isActive || input.isSelected || input.status === "input") return false;
-  if (input.status === "working" || input.status === "waiting") return true;
+  if (input.status === "working" || input.status === "monitoring" || input.status === "waiting") {
+    return true;
+  }
   if (input.status === "ready" || input.status === "approval") {
     return !input.isUnread && !input.isWoke;
   }
@@ -1152,7 +1157,9 @@ export function shouldRecedeSidebarThread(input: {
 type SidebarThreadStatusInput = Pick<
   SidebarThreadSummary,
   "hasPendingApprovals" | "hasPendingUserInput" | "runtime"
->;
+> & {
+  pendingBackgroundTasks?: SidebarThreadSummary["pendingBackgroundTasks"] | undefined;
+};
 
 export function resolveSidebarThreadStatus(thread: SidebarThreadStatusInput): SidebarThreadStatus {
   if (thread.hasPendingApprovals) {
@@ -1168,7 +1175,7 @@ export function resolveSidebarThreadStatus(thread: SidebarThreadStatusInput): Si
     return "working";
   }
   if (thread.runtime?.status === "idle") {
-    return "waiting";
+    return backgroundWorkLiveness(thread.pendingBackgroundTasks ?? []) ?? "waiting";
   }
   if (thread.runtime?.status === "failed") {
     return thread.runtime.lastErrorClass === "usage_limit" ? "limited" : "failed";
@@ -1182,6 +1189,7 @@ export type SidebarV2TopStatusKind =
   | "failed"
   | "limited"
   | "input"
+  | "monitoring"
   | "waiting"
   | "woke"
   | "working";
@@ -1194,8 +1202,8 @@ export function resolveSidebarV2TopStatus(input: {
   if (input.status === "working") {
     return "working";
   }
-  if (input.status === "waiting") {
-    return "waiting";
+  if (input.status === "monitoring" || input.status === "waiting") {
+    return input.status;
   }
   if (input.status === "approval") {
     return "approval";
@@ -1259,11 +1267,11 @@ export function admitNewSidebarV2AttentionThreads(
 
 /** Working beta: threads busy with work that does not need the user fold into
     the Working shelf: a running run, or one stopped with background tasks
-    still open. Approvals, questions, plan prompts, and failures stay in the
-    inbox. */
+    still open (working or monitoring). Approvals, questions, plan prompts,
+    and failures stay in the inbox. */
 export function isSidebarThreadWorking(thread: ThreadStatusInput): boolean {
   const status = resolveSidebarThreadStatus(thread);
-  if (status !== "working" && status !== "waiting") return false;
+  if (status !== "working" && status !== "monitoring" && status !== "waiting") return false;
   // A plan prompt outranks lingering background work: the user has to act on it.
   return !(
     thread.interactionMode === "plan" &&
@@ -1460,11 +1468,23 @@ export function resolveThreadStatusPill(input: {
     };
   }
 
-  if ((thread.pendingBackgroundTasks?.length ?? 0) > 0) {
+  // The turn ended while background work runs on. Live agents and workflows
+  // read as plain Working; Monitoring is reserved for watch loops (a dev
+  // server, a monitor tailing checks) with no other live work.
+  const liveness = backgroundWorkLiveness(thread.pendingBackgroundTasks ?? []);
+  if (liveness === "working") {
     return {
-      label: "Waiting",
-      colorClass: "text-sidebar-muted-foreground",
-      dotClass: "bg-sidebar-muted-foreground",
+      label: "Working",
+      colorClass: "text-sky-600 dark:text-sky-300/80",
+      dotClass: "bg-sky-500 dark:bg-sky-300/80",
+      pulse: true,
+    };
+  }
+  if (liveness === "monitoring") {
+    return {
+      label: "Monitoring",
+      colorClass: "text-sky-600 dark:text-sky-300/80",
+      dotClass: "bg-sky-500 dark:bg-sky-300/80",
       pulse: false,
     };
   }

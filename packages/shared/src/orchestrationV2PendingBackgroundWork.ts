@@ -276,7 +276,44 @@ export function derivePendingBackgroundWork(input: {
 export function backgroundWorkKeepsSnoozeUntilDone(
   tasks: ReadonlyArray<{ readonly kind: string }>,
 ): boolean {
-  return tasks.some((task) => task.kind === "subagent" || task.kind === "background_task");
+  return tasks.some(isAgentBackgroundWork);
+}
+
+/**
+ * Fork: whether pending work is agent work (a subagent, or an opaque
+ * background task such as a workflow) rather than a watch loop (a command
+ * such as a dev server, or a monitor). Unknown kinds decode as
+ * background_task, so they count as agent work.
+ */
+export function isAgentBackgroundWork(task: { readonly kind: string }): boolean {
+  return task.kind === "subagent" || task.kind === "background_task";
+}
+
+/**
+ * Fork: how work left running after the turn presents. Live agents read as
+ * Working; watch loops alone read as Monitoring. Null when nothing is pending.
+ */
+export type BackgroundWorkLiveness = "working" | "monitoring";
+
+export function backgroundWorkLiveness(
+  tasks: ReadonlyArray<{ readonly kind: string }>,
+): BackgroundWorkLiveness | null {
+  if (tasks.length === 0) return null;
+  return tasks.some(isAgentBackgroundWork) ? "working" : "monitoring";
+}
+
+/**
+ * Fork: which pending work a drain waits for. "agents" (`thread wait --drain`)
+ * waits for agent work and ignores watch loops; "all" (`--drain=all`) waits
+ * for every task, monitors included.
+ */
+export type BackgroundWorkDrainScope = "agents" | "all";
+
+export function backgroundWorkInDrainScope<Task extends { readonly kind: string }>(
+  tasks: ReadonlyArray<Task>,
+  scope: BackgroundWorkDrainScope,
+): ReadonlyArray<Task> {
+  return scope === "all" ? tasks : tasks.filter(isAgentBackgroundWork);
 }
 
 const UNTIL_DONE_LIVE_RUN_STATUSES: ReadonlySet<string> = new Set<OrchestrationV2Run["status"]>([

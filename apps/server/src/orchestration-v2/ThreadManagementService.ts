@@ -13,6 +13,7 @@ import {
   type OrchestrationV2ServerCommand,
   type OrchestrationV2ConversationMessage,
   type OrchestrationV2CreationSource,
+  type OrchestrationV2PendingBackgroundTask,
   type OrchestrationV2Run,
   type OrchestrationV2ThreadShellSnapshot,
   type OrchestrationV2ThreadProjection,
@@ -30,6 +31,12 @@ import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
 import * as Schema from "effect/Schema";
+import {
+  backgroundWorkInDrainScope,
+  backgroundWorkLiveness,
+  type BackgroundWorkDrainScope,
+  type BackgroundWorkLiveness,
+} from "@t3tools/shared/orchestrationV2PendingBackgroundWork";
 
 import * as Orchestrator from "./Orchestrator.ts";
 import * as LegacyV1ThreadImporter from "./legacy/LegacyV1ThreadImporter.ts";
@@ -137,6 +144,28 @@ export interface ThreadManagementWaitResult {
   readonly threadId: ThreadId;
   readonly run: OrchestrationV2Run | null;
   readonly timedOut: boolean;
+}
+
+/** Fork: input for reading what a `thread wait --drain` still waits on. */
+export interface ThreadManagementBackgroundWorkDrainInput {
+  readonly projectId: ProjectId;
+  readonly threadId: ThreadId;
+  /** "agents" (`--drain`) ignores watch loops; "all" (`--drain=all`) includes monitors. */
+  readonly scope: BackgroundWorkDrainScope;
+}
+
+/** Fork: one read of a thread's background work against a drain scope. */
+export interface ThreadManagementBackgroundWorkDrain {
+  readonly threadId: ThreadId;
+  readonly scope: BackgroundWorkDrainScope;
+  /** What clients show: Working for live agents, Monitoring for watch loops alone. */
+  readonly liveness: BackgroundWorkLiveness | null;
+  /** A run is queued, executing, or finalizing, so its roster has not settled yet. */
+  readonly runActive: boolean;
+  /** The pending background work the scope waits for. */
+  readonly pendingTasks: ReadonlyArray<OrchestrationV2PendingBackgroundTask>;
+  /** No active run and nothing pending in scope: the drain is over. */
+  readonly drained: boolean;
 }
 
 export interface ThreadManagementInterruptInput {
@@ -314,6 +343,10 @@ export interface ThreadManagementServiceShape {
   readonly interruptThread: (
     input: ThreadManagementInterruptInput,
   ) => Effect.Effect<ThreadManagementInterruptResult, ThreadManagementFailure>;
+  /** Fork: what a `thread wait --drain` still waits on, read from the thread shell's roster. */
+  readonly getBackgroundWorkDrain: (
+    input: ThreadManagementBackgroundWorkDrainInput,
+  ) => Effect.Effect<ThreadManagementBackgroundWorkDrain, ThreadManagementError>;
   readonly getThreadEventSequence: Orchestrator.OrchestratorV2["Service"]["getThreadEventSequence"];
   readonly streamStoredEvents: Orchestrator.OrchestratorV2["Service"]["streamStoredEvents"];
   readonly streamStoredEventsFrom: Orchestrator.OrchestratorV2["Service"]["streamStoredEventsFrom"];
@@ -710,6 +743,44 @@ const make = Effect.gen(function* () {
       return { type: "interrupt_requested", run: interruptibleRun, dispatch } as const;
     });
 
+  const getBackgroundWorkDrain: ThreadManagementServiceShape["getBackgroundWorkDrain"] = (input) =>
+    orchestrator.getThreadShell(input.threadId).pipe(
+      Effect.mapError(
+        (cause) =>
+          new ThreadManagementProjectionLoadError({
+            projectId: input.projectId,
+            threadId: input.threadId,
+            cause,
+          }),
+      ),
+      Effect.flatMap((shell) => {
+        if (shell === null || shell.projectId !== input.projectId) {
+          return Effect.fail(
+            new ThreadManagementThreadNotFoundError({
+              projectId: input.projectId,
+              threadId: input.threadId,
+            }),
+          );
+        }
+        const tasks = shell.pendingBackgroundTasks ?? [];
+        const pendingTasks = backgroundWorkInDrainScope(tasks, input.scope);
+        // The roster stays empty while a run is live, so a live or queued run
+        // (a wake continuing the work) keeps the drain open on its own.
+        const runActive =
+          shell.activeRunId !== null ||
+          (shell.activityRunStatus ?? null) !== null ||
+          shell.status === "queued";
+        return Effect.succeed({
+          threadId: input.threadId,
+          scope: input.scope,
+          liveness: backgroundWorkLiveness(tasks),
+          runActive,
+          pendingTasks,
+          drained: !runActive && pendingTasks.length === 0,
+        });
+      }),
+    );
+
   return ThreadManagementService.of({
     ensureLegacyTranscript,
     dispatch,
@@ -737,6 +808,7 @@ const make = Effect.gen(function* () {
     sendToThread,
     waitForThread,
     interruptThread,
+    getBackgroundWorkDrain,
     getThreadEventSequence: orchestrator.getThreadEventSequence,
     streamStoredEvents: orchestrator.streamStoredEvents,
     streamStoredEventsFrom: orchestrator.streamStoredEventsFrom,
