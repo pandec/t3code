@@ -19,6 +19,7 @@ import {
 } from "./features/settings/appearance/AppearancePreferencesProvider";
 import { RootStack } from "./Stack";
 import { appAtomRegistry } from "./state/atom-registry";
+import { useThreadPrewarm } from "./state/prewarm";
 import { OverlayPortalHost } from "./components/OverlayPortal";
 import { shouldHandleAppLink } from "./lib/appLinking";
 import { useMobileNavigationTheme } from "./lib/useMobileNavigationTheme";
@@ -54,6 +55,11 @@ function SplashScreenCoordinator() {
   return null;
 }
 
+function ThreadPrewarmCoordinator() {
+  useThreadPrewarm();
+  return null;
+}
+
 export default function App() {
   return (
     <RegistryContext.Provider value={appAtomRegistry}>
@@ -73,6 +79,7 @@ function AppContent() {
   return (
     <>
       <SplashScreenCoordinator />
+      <ThreadPrewarmCoordinator />
       <MobileDiagnosticsCoordinator />
       <SubscriptionUsageCoordinator />
       <GestureHandlerRootView className="flex-1">

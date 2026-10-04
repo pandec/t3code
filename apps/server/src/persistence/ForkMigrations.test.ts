@@ -37,24 +37,31 @@ describe("fork migrations", () => {
       const sql = yield* SqlClient.SqlClient;
       yield* sql`CREATE TABLE projection_threads (thread_id TEXT PRIMARY KEY, custom_group_id TEXT)`;
       yield* sql`
-        CREATE TABLE projection_projects (project_id TEXT PRIMARY KEY, repository_identity_json TEXT)
+        CREATE TABLE projection_projects (
+          project_id TEXT PRIMARY KEY,
+          workspace_root TEXT,
+          repository_identity_json TEXT
+        )
       `;
       yield* sql`
         INSERT INTO projection_threads (thread_id, custom_group_id)
         VALUES ('thread-a', 'group-1'), ('thread-b', NULL)
       `;
       yield* sql`
-        INSERT INTO projection_projects (project_id, repository_identity_json)
-        VALUES ('project-a', '{"remote":"github.com/a/b"}'), ('project-b', NULL)
+        INSERT INTO projection_projects (project_id, workspace_root, repository_identity_json)
+        VALUES ('project-a', '/repo/a', '{"remote":"github.com/a/b"}'), ('project-b', '/b', NULL)
       `;
-      assert.deepStrictEqual(yield* runForkMigrations(), [
-        [1, "ForkThreadGroupsAndRepositoryIdentity"],
-      ]);
+      assert.deepStrictEqual(yield* runForkMigrations(), forkMigrationManifest);
       assert.deepStrictEqual(yield* sql`SELECT * FROM fork_thread_custom_groups`, [
         { thread_id: "thread-a", custom_group_id: "group-1" },
       ]);
       assert.deepStrictEqual(yield* sql`SELECT * FROM fork_project_repository_identity`, [
-        { project_id: "project-a", repository_identity_json: '{"remote":"github.com/a/b"}' },
+        {
+          project_id: "project-a",
+          repository_identity_json: '{"remote":"github.com/a/b"}',
+          // Migration 70 scopes the carried identity to the project's root.
+          workspace_root: "/repo/a",
+        },
       ]);
     }).pipe(Effect.provide(NodeSqliteClient.layer({ filename: ":memory:" }))),
   );
@@ -78,9 +85,7 @@ describe("fork migrations", () => {
   it.effect("migration 1 succeeds without legacy tables", () =>
     Effect.gen(function* () {
       const sql = yield* SqlClient.SqlClient;
-      assert.deepStrictEqual(yield* runForkMigrations(), [
-        [1, "ForkThreadGroupsAndRepositoryIdentity"],
-      ]);
+      assert.deepStrictEqual(yield* runForkMigrations(), forkMigrationManifest);
       assert.deepStrictEqual(yield* sql`SELECT * FROM fork_thread_custom_groups`, []);
     }).pipe(Effect.provide(NodeSqliteClient.layer({ filename: ":memory:" }))),
   );

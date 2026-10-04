@@ -3,6 +3,8 @@ import { ShellSnapshotLoader } from "@t3tools/client-runtime/state/shell";
 import {
   boundedThreadSnapshotLoaderLayer,
   ThreadHistoryController,
+  threadPrewarmRunGateLayer,
+  threadPrewarmTriggersLayer,
 } from "@t3tools/client-runtime/state/threads";
 import * as Layer from "effect/Layer";
 import { Atom } from "effect/unstable/reactivity";
@@ -27,6 +29,8 @@ const snapshotLoaderLayer = Layer.mergeAll(
   boundedThreadSnapshotLoaderLayer,
   ShellSnapshotLoader.layer,
   ThreadHistoryController.layer,
+  threadPrewarmTriggersLayer,
+  threadPrewarmRunGateLayer,
 );
 
 type ConnectionLayerSource =

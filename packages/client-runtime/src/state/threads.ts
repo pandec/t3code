@@ -25,6 +25,7 @@ import * as EnvironmentRegistry from "../connection/registry.ts";
 import { connectionProjectionPhase } from "../connection/model.ts";
 import * as EnvironmentSupervisor from "../connection/supervisor.ts";
 import * as ConnectionWakeups from "../connection/wakeups.ts";
+import { withEnvironmentCacheMutationLock } from "../platform/environmentCacheMutationLock.ts";
 import * as Persistence from "../platform/persistence.ts";
 import { runCachePersistence } from "./cachePersistence.ts";
 import * as ManagedRelay from "../relay/managedRelay.ts";
@@ -266,31 +267,54 @@ export const makeEnvironmentThreadState = Effect.fn("EnvironmentThreadState.make
       )
     )
       return;
-    yield* cache.saveThread(environmentId, snapshot).pipe(
-      Effect.tap(() =>
-        Effect.sync(() => {
-          if (
-            !matchesThreadSnapshot(
-              committed,
-              snapshot.projection,
-              snapshot.snapshotSequence,
-              historyMetaFromCachedSnapshot(snapshot),
-            )
-          )
-            return;
-          committed = { ...committed, persisted: true };
-          if (resumeCache?.owner === owner) resumeCache.snapshot = committed;
-        }),
-      ),
-      Effect.catch((error) =>
-        Effect.logWarning("Could not persist the thread cache.").pipe(
-          Effect.annotateLogs({
-            environmentId,
-            threadId,
-            error: error.message,
-          }),
-        ),
-      ),
+    // Serialized with prewarm's populate-only check (`threadPrewarm.ts`).
+    yield* withEnvironmentCacheMutationLock(
+      cache,
+      environmentId,
+      Effect.gen(function* () {
+        if (resumeCache !== undefined && resumeCache.owner !== owner) return;
+        const stored = yield* cache
+          .loadThread(environmentId, threadId)
+          .pipe(
+            Effect.catch((error) =>
+              Effect.logWarning("Could not inspect the thread cache before persisting.").pipe(
+                Effect.annotateLogs({ environmentId, threadId, error: error.message }),
+                Effect.as(Option.none<OrchestrationV2ThreadDetailSnapshot>()),
+              ),
+            ),
+          );
+        // Never replace a newer entry (e.g. one prewarm populated) with an
+        // older live or teardown snapshot.
+        if (Option.isSome(stored) && stored.value.snapshotSequence > snapshot.snapshotSequence) {
+          return;
+        }
+        yield* cache.saveThread(environmentId, snapshot).pipe(
+          Effect.tap(() =>
+            Effect.sync(() => {
+              if (
+                !matchesThreadSnapshot(
+                  committed,
+                  snapshot.projection,
+                  snapshot.snapshotSequence,
+                  historyMetaFromCachedSnapshot(snapshot),
+                )
+              )
+                return;
+              committed = { ...committed, persisted: true };
+              if (resumeCache?.owner === owner) resumeCache.snapshot = committed;
+            }),
+          ),
+          Effect.catch((error) =>
+            Effect.logWarning("Could not persist the thread cache.").pipe(
+              Effect.annotateLogs({
+                environmentId,
+                threadId,
+                error: error.message,
+              }),
+            ),
+          ),
+        );
+      }),
     );
   });
 
@@ -422,7 +446,11 @@ export const makeEnvironmentThreadState = Effect.fn("EnvironmentThreadState.make
     });
     yield* remember;
     if (resumeCache !== undefined && resumeCache.owner !== owner) return;
-    yield* cache.removeThread(environmentId, threadId).pipe(
+    yield* withEnvironmentCacheMutationLock(
+      cache,
+      environmentId,
+      cache.removeThread(environmentId, threadId),
+    ).pipe(
       Effect.catch((error) =>
         Effect.logWarning("Could not remove the cached thread.").pipe(
           Effect.annotateLogs({
@@ -1007,3 +1035,4 @@ export * from "./threadFeedback.ts";
 export * from "./threadDetail.ts";
 export * from "./threadShell.ts";
 export * from "./threadState.ts";
+export * from "./threadPrewarm.ts";

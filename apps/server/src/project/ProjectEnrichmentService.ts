@@ -13,6 +13,7 @@ import * as Ref from "effect/Ref";
 import type * as Scope from "effect/Scope";
 
 import * as ProjectFaviconResolver from "./ProjectFaviconResolver.ts";
+import * as ProjectRepositoryIdentityStore from "./ProjectRepositoryIdentityStore.ts";
 import * as RepositoryIdentityResolver from "./RepositoryIdentityResolver.ts";
 
 const DEFAULT_CACHE_CAPACITY = 512;
@@ -22,6 +23,7 @@ const DEFAULT_SUCCESS_TTL = Duration.minutes(1);
 const DEFAULT_FAILURE_TTL = Duration.seconds(5);
 
 export interface ProjectEnrichment {
+  /** Live identity, else the stored one when the fork store is provided. */
   readonly repositoryIdentity: RepositoryIdentity | null;
   readonly faviconPath: string | null;
   /** True when identity resolution completed successfully, including cached null. */
@@ -92,6 +94,16 @@ export const make = Effect.fn("ProjectEnrichmentService.make")(function* (
 ) {
   const repositoryIdentityResolver = yield* RepositoryIdentityResolver.RepositoryIdentityResolver;
   const faviconResolver = yield* ProjectFaviconResolver.ProjectFaviconResolver;
+  // Fork: persist successful resolutions and fall back to them when live
+  // resolution yields nothing (e.g. the checkout was deleted). Optional so
+  // runtimes without persistence keep upstream's in-memory behavior.
+  const storedIdentities = yield* Effect.serviceOption(
+    ProjectRepositoryIdentityStore.ProjectRepositoryIdentityStore,
+  );
+  const withStoredIdentity = (workspaceRoot: string, live: RepositoryIdentity | null) =>
+    live !== null || Option.isNone(storedIdentities)
+      ? Effect.succeed(live)
+      : storedIdentities.value.get(workspaceRoot);
   const cacheCapacity = Math.max(1, options.cacheCapacity ?? DEFAULT_CACHE_CAPACITY);
   const maxPending = Math.max(1, options.maxPending ?? DEFAULT_MAX_PENDING);
   const concurrency = Math.max(1, options.concurrency ?? DEFAULT_CONCURRENCY);
@@ -169,11 +181,15 @@ export const make = Effect.fn("ProjectEnrichmentService.make")(function* (
       yield* logFailure(workspaceRoot, "repositoryIdentity", repositoryIdentity);
       const faviconPath = yield* Cache.getSuccess(faviconCache, workspaceRoot);
       const repositoryIdentityResolved = Exit.isSuccess(repositoryIdentity);
+      const liveIdentity = availableValue(Option.some(repositoryIdentity));
+      if (liveIdentity !== null && Option.isSome(storedIdentities)) {
+        yield* storedIdentities.value.record(workspaceRoot, liveIdentity);
+      }
       yield* PubSub.publish(changes, {
         workspaceRoot,
         repositoryIdentityResolved,
         enrichment: {
-          repositoryIdentity: availableValue(Option.some(repositoryIdentity)),
+          repositoryIdentity: yield* withStoredIdentity(workspaceRoot, liveIdentity),
           faviconPath: availableValue(faviconPath),
           repositoryIdentityResolved,
         },
@@ -236,7 +252,10 @@ export const make = Effect.fn("ProjectEnrichmentService.make")(function* (
       { concurrency: "unbounded" },
     );
     return {
-      repositoryIdentity: availableValue(repositoryIdentity),
+      repositoryIdentity: yield* withStoredIdentity(
+        workspaceRoot,
+        availableValue(repositoryIdentity),
+      ),
       faviconPath: availableValue(faviconPath),
       repositoryIdentityResolved: isSuccessfullyResolved(repositoryIdentity),
     };
