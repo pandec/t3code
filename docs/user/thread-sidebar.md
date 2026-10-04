@@ -63,7 +63,8 @@ desktop. The filled button unpins it. `Cmd/Ctrl+Shift+P` toggles the open thread
 
 The **Pinned** and **Active** sections are collapsible and show their thread counts while folded.
 T3 Code remembers the fold state on each device and keeps the open thread visible. Search shows
-matching threads even when their section was folded.
+matching threads even when their section was folded. On web and desktop, unsent drafts appear in
+their own **Drafts** section at the top of the sidebar, which folds the same way.
 
 On web and desktop, unpinning, settling, snoozing, and archiving a thread each show
 a notification with **Undo** for five seconds. Undo restores the thread's previous
@@ -151,9 +152,8 @@ cannot drag to reorder it. Your saved order returns when you turn it off.
 
 On web and desktop, open the command palette (`Cmd/Ctrl+K`) and choose **New thread group** or
 **Manage thread groups** to create, rename, reorder, or remove groups. Settings → Extras → Sidebar
-can add a **Thread groups** button to the sidebar toolbar for the same dialog. Once a group exists,
-the sidebar shows a header for each group and for **Active**; each folds on its own and keeps the
-open thread visible.
+can add a **Thread groups** button to the sidebar toolbar for the same dialog. Each group gets its
+own header next to **Active**; each folds on its own and keeps the open thread visible.
 
 Drag a thread onto a group header or between its rows, use **Move current thread to group** in the
 palette, or use **Move to group** from the thread menu. Cmd/Ctrl-click multiple threads, then use

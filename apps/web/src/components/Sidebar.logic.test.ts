@@ -47,6 +47,7 @@ import {
   sortLogicalProjectsForSidebar,
   sortInboxThreadsByReturn,
   resolveSidebarDropTarget,
+  sidebarMarkerId,
   planSidebarThreadDrop,
   sortPinnedThreadsForSidebar,
   sortProjectsForSidebar,
@@ -2433,6 +2434,30 @@ describe("Working shelf (beta)", () => {
         activeOrder: ["a1", "a2", "p1"],
       });
       expect(resolveSidebarDropVerb("active", "working")).toBeNull();
+    });
+
+    it("lands a drop on the Active header at the top of Active without custom groups", () => {
+      // The Active header shows even without custom groups, so it is a drop
+      // target that must not report a group.
+      const withHeader: readonly SidebarListItem[] = [
+        marker("pinned-header"),
+        row("p1", "pinned"),
+        marker("pinned-divider"),
+        marker("active-header"),
+        marker("active-placeholder"),
+        row("a1", "active"),
+        row("a2", "active"),
+        marker("settled-header"),
+        row("s1", "settled"),
+      ];
+      expect(resolveSidebarDropTarget(withHeader, "p1", sidebarMarkerId("active-header"))).toEqual({
+        section: "active",
+        pinnedOrder: [],
+        activeOrder: ["p1", "a1", "a2"],
+      });
+      expect(
+        resolveSidebarDropTarget(withHeader, "s1", sidebarMarkerId("active-header")),
+      ).toMatchObject({ section: "active", activeOrder: ["s1", "a1", "a2"] });
     });
 
     it("only changes lifecycle when the inbox is time-ordered", () => {
