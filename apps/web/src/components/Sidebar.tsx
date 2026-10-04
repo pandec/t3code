@@ -2036,6 +2036,17 @@ const SidebarThreadRow = memo(function SidebarThreadRow(props: {
     )
   ) : null;
 
+  // Rides every row shape, slim rows included; the visibility setting decides
+  // whether it shows at rest, on hover, or never.
+  const providerIcon = (
+    <SidebarProviderIcon visibility={props.providerIconVisibility}>
+      <SidebarProviderStack
+        thread={thread}
+        providerEntryByInstanceId={props.providerEntryByInstanceId}
+      />
+    </SidebarProviderIcon>
+  );
+
   if (variant === "slim") {
     return (
       <li
@@ -2085,6 +2096,7 @@ const SidebarThreadRow = memo(function SidebarThreadRow(props: {
             {listeningIndicator}
             {archivePendingIndicator}
             {pinIndicator}
+            {providerIcon}
             {/* A settled or snoozed thread can still occupy a split pane, so
                 the marker rides slim rows too — like the terminal and PR
                 icons already do. */}
@@ -2199,6 +2211,29 @@ const SidebarThreadRow = memo(function SidebarThreadRow(props: {
   }
 
   const diff = latestRunDiff(thread);
+  const diffStat = diff ? (
+    <span className="shrink-0 font-mono text-xs">
+      <span className="text-diff-addition-foreground">+{diff.insertions}</span>{" "}
+      <span className="text-diff-deletion-foreground">−{diff.deletions}</span>
+    </span>
+  ) : null;
+  const machineAndProvider = (
+    <span
+      aria-hidden
+      className="pointer-events-none ml-auto inline-flex shrink-0 items-center gap-1"
+    >
+      {isRemote ? (
+        <span className="inline-flex shrink-0 items-center text-sidebar-muted-foreground/70">
+          <EnvironmentMachineIcon
+            aria-hidden
+            kind={props.environmentMachine}
+            className="size-3.5"
+          />
+        </span>
+      ) : null}
+      {providerIcon}
+    </span>
+  );
 
   return (
     <li
@@ -2466,7 +2501,20 @@ const SidebarThreadRow = memo(function SidebarThreadRow(props: {
             </div>
             <div className="mt-1 flex min-w-0 items-center gap-1.5">
               {title}
-              {props.compactCards ? splitPaneIcon : null}
+              {/* Compact cards drop the branch line, so its trailing details
+                  ride the title line instead. The worktree marker is anchored
+                  to the branch on full cards and comes along here. Hidden while
+                  renaming so the input keeps the row. */}
+              {props.compactCards && !isRenaming ? (
+                <>
+                  {splitPaneIcon}
+                  <ThreadWorktreeIndicator thread={thread} />
+                  {terminalStatusIcon}
+                  {prBadge}
+                  {diffStat}
+                  {machineAndProvider}
+                </>
+              ) : null}
               {isRegeneratingTitle ? (
                 <span role="status" className="sr-only">
                   Regenerating title
@@ -2491,32 +2539,8 @@ const SidebarThreadRow = memo(function SidebarThreadRow(props: {
                 {splitPaneIcon}
                 {terminalStatusIcon}
                 {prBadge}
-                {diff ? (
-                  <span className="shrink-0 font-mono">
-                    <span className="text-diff-addition-foreground">+{diff.insertions}</span>{" "}
-                    <span className="text-diff-deletion-foreground">−{diff.deletions}</span>
-                  </span>
-                ) : null}
-                <span
-                  aria-hidden
-                  className="pointer-events-none ml-auto inline-flex shrink-0 items-center gap-1"
-                >
-                  {isRemote ? (
-                    <span className="inline-flex shrink-0 items-center text-sidebar-muted-foreground/70">
-                      <EnvironmentMachineIcon
-                        aria-hidden
-                        kind={props.environmentMachine}
-                        className="size-3.5"
-                      />
-                    </span>
-                  ) : null}
-                  <SidebarProviderIcon visibility={props.providerIconVisibility}>
-                    <SidebarProviderStack
-                      thread={thread}
-                      providerEntryByInstanceId={props.providerEntryByInstanceId}
-                    />
-                  </SidebarProviderIcon>
-                </span>
+                {diffStat}
+                {machineAndProvider}
               </div>
             ) : null}
           </div>
