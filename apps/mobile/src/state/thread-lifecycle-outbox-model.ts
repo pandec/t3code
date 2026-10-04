@@ -1,0 +1,232 @@
+import {
+  scopeThreadShell,
+  type EnvironmentShellStatus,
+  type EnvironmentThreadShell,
+} from "@t3tools/client-runtime/state/shell";
+import {
+  CommandId,
+  EnvironmentId,
+  IsoDateTime,
+  OrchestrationV2ThreadShell,
+  ThreadId,
+} from "@t3tools/contracts";
+import * as Effect from "effect/Effect";
+import * as Schema from "effect/Schema";
+
+import { scopedThreadKey } from "../lib/scopedEntities";
+import { shouldRetryThreadOutboxDelivery } from "./thread-outbox-model";
+
+/**
+ * Fork: archive/unarchive done on the phone while its environment is
+ * disconnected. Each thread keeps at most one durable intent (its latest
+ * revision), presented optimistically and applied on reconnect.
+ */
+const THREAD_LIFECYCLE_OUTBOX_SCHEMA_VERSION = 2;
+
+const ThreadLifecycleIntentSchema = Schema.Struct({
+  schemaVersion: Schema.Literals([1, THREAD_LIFECYCLE_OUTBOX_SCHEMA_VERSION]),
+  environmentId: EnvironmentId,
+  threadId: ThreadId,
+  desiredArchived: Schema.Boolean,
+  requiresDispatch: Schema.Boolean,
+  dispatchAttempted: Schema.Boolean.pipe(Schema.withDecodingDefault(Effect.succeed(false))),
+  commandId: CommandId,
+  createdAt: IsoDateTime,
+  /** v2 shell source captured at enqueue, so the row renders while it is out of the shell. */
+  thread: Schema.NullOr(OrchestrationV2ThreadShell),
+});
+
+const decodeStoredThreadLifecycleIntent = Schema.decodeUnknownSync(ThreadLifecycleIntentSchema);
+const encodeStoredThreadLifecycleIntent = Schema.encodeUnknownSync(ThreadLifecycleIntentSchema);
+
+export interface ThreadLifecycleIntent {
+  readonly environmentId: EnvironmentId;
+  readonly threadId: ThreadId;
+  readonly desiredArchived: boolean;
+  /** Reversals dispatch when an earlier revision may have reached the server. */
+  readonly requiresDispatch: boolean;
+  /** Persisted before this revision's command may be sent. */
+  readonly dispatchAttempted: boolean;
+  readonly commandId: CommandId;
+  readonly createdAt: string;
+  readonly thread: OrchestrationV2ThreadShell | null;
+}
+
+export function encodeThreadLifecycleIntent(intent: ThreadLifecycleIntent): unknown {
+  return encodeStoredThreadLifecycleIntent({
+    schemaVersion: THREAD_LIFECYCLE_OUTBOX_SCHEMA_VERSION,
+    ...intent,
+  });
+}
+
+/**
+ * Version 1 rows (pre-v2 fork) embed a v1 thread shell that no longer
+ * decodes; their intent still applies, only the display snapshot is lost.
+ */
+export function decodeThreadLifecycleIntent(value: unknown): ThreadLifecycleIntent {
+  const stored =
+    typeof value === "object" &&
+    value !== null &&
+    "schemaVersion" in value &&
+    value.schemaVersion === 1
+      ? { ...value, thread: null }
+      : value;
+  const { schemaVersion: _, ...intent } = decodeStoredThreadLifecycleIntent(stored);
+  return intent;
+}
+
+export const threadLifecycleIntentKey = scopedThreadKey;
+
+export function threadLifecycleRevisionRequiresDispatch(
+  previous: ThreadLifecycleIntent | undefined,
+): boolean {
+  return previous?.dispatchAttempted === true;
+}
+
+export function groupThreadLifecycleIntents(
+  intents: ReadonlyArray<ThreadLifecycleIntent>,
+): Readonly<Record<string, ThreadLifecycleIntent>> {
+  return Object.fromEntries(
+    intents.map((intent) => [
+      threadLifecycleIntentKey(intent.environmentId, intent.threadId),
+      intent,
+    ]),
+  );
+}
+
+/**
+ * `archive` is sent as an archive-when-done request, so a thread that became
+ * busy while the phone was offline archives after its turn instead of being
+ * interrupted. `cancel-archive` withdraws such a pending request.
+ */
+export type ThreadLifecycleOutboxAction =
+  | "wait"
+  | "remove"
+  | "archive"
+  | "unarchive"
+  | "cancel-archive";
+
+export function resolveThreadLifecycleOutboxAction(input: {
+  readonly environmentConnected: boolean;
+  readonly shellStatus: EnvironmentShellStatus;
+  /** Messages for this thread still in the local outbox go first. */
+  readonly hasQueuedMessages: boolean;
+  readonly thread: Pick<EnvironmentThreadShell, "archivedAt" | "archiveRequest"> | undefined;
+  readonly desiredArchived: boolean;
+  readonly requiresDispatch: boolean;
+}): ThreadLifecycleOutboxAction {
+  if (!input.environmentConnected || input.shellStatus !== "live" || input.hasQueuedMessages) {
+    return "wait";
+  }
+  const { thread } = input;
+  // Live shells omit archived (and deleted) threads.
+  if (thread === undefined) return input.desiredArchived ? "remove" : "unarchive";
+  const archived = thread.archivedAt !== null;
+  const archivePending = !archived && thread.archiveRequest?.status === "pending";
+  if (input.desiredArchived) {
+    if (archivePending) return "remove";
+    return archived && !input.requiresDispatch ? "remove" : "archive";
+  }
+  if (archivePending) return "cancel-archive";
+  return !archived && !input.requiresDispatch ? "remove" : "unarchive";
+}
+
+export type ThreadLifecycleOutboxFailureAction = "retry" | "remove";
+
+/** Transport failures retry; a server rejection means the intent is moot. */
+export function resolveThreadLifecycleOutboxFailureAction(input: {
+  readonly error: unknown;
+  readonly interrupted: boolean;
+}): ThreadLifecycleOutboxFailureAction {
+  return input.interrupted || shouldRetryThreadOutboxDelivery(input.error) ? "retry" : "remove";
+}
+
+export interface ThreadLifecyclePresentation {
+  readonly activeThreads: ReadonlyArray<EnvironmentThreadShell>;
+  readonly pendingArchivedThreads: ReadonlyArray<EnvironmentThreadShell>;
+  readonly pendingArchivedThreadKeys: ReadonlySet<string>;
+}
+
+/**
+ * Overlays pending intents on the canonical (unarchived) shells: a pending
+ * archive leaves the active list for the archived shelf, a pending unarchive
+ * returns to the active list.
+ */
+export function deriveThreadLifecyclePresentation(
+  canonicalThreads: ReadonlyArray<EnvironmentThreadShell>,
+  intents: Readonly<Record<string, ThreadLifecycleIntent>>,
+): ThreadLifecyclePresentation {
+  if (Object.keys(intents).length === 0) {
+    return {
+      activeThreads: canonicalThreads,
+      pendingArchivedThreads: [],
+      pendingArchivedThreadKeys: new Set(),
+    };
+  }
+  const activeByKey = new Map(
+    canonicalThreads.map((thread) => [
+      threadLifecycleIntentKey(thread.environmentId, thread.id),
+      thread,
+    ]),
+  );
+  const pendingArchivedThreads: EnvironmentThreadShell[] = [];
+  const pendingArchivedThreadKeys = new Set<string>();
+
+  for (const [key, intent] of Object.entries(intents)) {
+    const shell =
+      activeByKey.get(key) ??
+      (intent.thread === null ? undefined : scopeThreadShell(intent.environmentId, intent.thread));
+    if (intent.desiredArchived) {
+      activeByKey.delete(key);
+      pendingArchivedThreadKeys.add(key);
+      if (shell !== undefined)
+        pendingArchivedThreads.push({ ...shell, archivedAt: intent.createdAt });
+      continue;
+    }
+    if (shell !== undefined) activeByKey.set(key, { ...shell, archivedAt: null });
+  }
+
+  pendingArchivedThreads.sort((left, right) =>
+    (right.archivedAt ?? right.updatedAt).localeCompare(left.archivedAt ?? left.updatedAt),
+  );
+  return {
+    activeThreads: [...activeByKey.values()],
+    pendingArchivedThreads,
+    pendingArchivedThreadKeys,
+  };
+}
+
+/** Puts pending archives at the top of the server's recent archived shelf. */
+export function mergePendingArchivedThreads(
+  serverArchive: {
+    readonly threads: ReadonlyArray<EnvironmentThreadShell>;
+    readonly totalCount: number;
+  },
+  pendingThreads: ReadonlyArray<EnvironmentThreadShell>,
+  visibleCount: number,
+  selectedThreadKey: string | null = null,
+): { readonly threads: ReadonlyArray<EnvironmentThreadShell>; readonly totalCount: number } {
+  if (pendingThreads.length === 0) return serverArchive;
+  const keyOf = (thread: EnvironmentThreadShell) =>
+    threadLifecycleIntentKey(thread.environmentId, thread.id);
+  const pendingKeys = new Set(pendingThreads.map(keyOf));
+  const combined = [
+    ...pendingThreads,
+    ...serverArchive.threads.filter((thread) => !pendingKeys.has(keyOf(thread))),
+  ];
+  const clipped = combined.slice(0, Math.max(0, visibleCount));
+  if (
+    selectedThreadKey !== null &&
+    !clipped.some((thread) => keyOf(thread) === selectedThreadKey)
+  ) {
+    const selected = combined.find((thread) => keyOf(thread) === selectedThreadKey);
+    if (selected !== undefined) clipped.push(selected);
+  }
+  const serverPendingOverlap = serverArchive.threads.filter((thread) =>
+    pendingKeys.has(keyOf(thread)),
+  ).length;
+  return {
+    threads: clipped,
+    totalCount: serverArchive.totalCount + pendingThreads.length - serverPendingOverlap,
+  };
+}

@@ -131,6 +131,7 @@ import { nativeHeaderScrollEdgeEffects } from "./native/StackHeader";
 import { FORM_SHEET_PRESENTATION_OPTIONS } from "./native/sheet-surface";
 import { useQueuedRunEditHolds } from "./state/queued-run-edit-hold";
 import { useThreadOutboxDrain } from "./state/use-thread-outbox-drain";
+import { useThreadLifecycleOutboxDrain } from "./state/use-thread-lifecycle-outbox-drain";
 import { useComposerAttachmentUploadWorker } from "./state/composer-attachment-uploads";
 
 const HEADER_SCROLL_EDGE_EFFECTS = nativeHeaderScrollEdgeEffects(Platform.OS, Platform.Version);
@@ -586,6 +587,13 @@ function ThreadOutboxDrainWorker() {
   return null;
 }
 
+// Fork: applies offline archive/unarchive intents; a separate leaf for the
+// same re-render reason as the message drain.
+function ThreadLifecycleOutboxDrainWorker() {
+  useThreadLifecycleOutboxDrain();
+  return null;
+}
+
 function RootStackLayout(props: {
   readonly children: React.ReactNode;
   readonly state: NavigationState;
@@ -622,6 +630,7 @@ function RootStackLayout(props: {
   return (
     <HardwareKeyboardCommandProvider pathname={pathname}>
       <ThreadOutboxDrainWorker />
+      <ThreadLifecycleOutboxDrainWorker />
       <ShowcaseCaptureCoordinator pathname={pathname} />
       <ExistingThreadSettingsRouteProvider>
         <ProviderUsageRouteProvider>

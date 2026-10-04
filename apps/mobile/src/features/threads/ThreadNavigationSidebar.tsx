@@ -54,6 +54,8 @@ import { useArchivedThreadListActions, useThreadListActions } from "../home/useT
 import { selectRecentArchivedThreads } from "@t3tools/client-runtime/state/threads";
 import { useRecentArchivedThreadSnapshots } from "../archive/useArchivedThreadSnapshots";
 import { RecentArchivedThreadSection } from "./RecentArchivedThreadSection";
+import { useThreadLifecyclePresentation } from "../../state/thread-lifecycle-outbox";
+import { mergePendingArchivedThreads } from "../../state/thread-lifecycle-outbox-model";
 import {
   getConnectionAwareBrandHeaderOptions,
   WorkspaceConnectionTitle,
@@ -153,7 +155,9 @@ function ThreadNavigationSidebarPane(
   const insets = useSafeAreaInsets();
   const { fabClearance } = useAndroidControlSizing();
   const projects = useProjects();
-  const threads = useNavigationThreadShells();
+  // Fork: offline archive/unarchive intents overlay the canonical shells.
+  const threadLifecyclePresentation = useThreadLifecyclePresentation(useNavigationThreadShells());
+  const threads = threadLifecyclePresentation.activeThreads;
   const { environments: workspaceEnvironments, state: catalogState } = useWorkspaceState();
   const { savedConnectionsById } = useSavedRemoteConnections();
   const searchInputRef = useRef<TextInputInstance>(null);
@@ -327,13 +331,24 @@ function ThreadNavigationSidebarPane(
   const recentArchive = useMemo(
     () =>
       archiveShelfVisible
-        ? selectRecentArchivedThreads(
-            archivedSnapshots,
+        ? mergePendingArchivedThreads(
+            selectRecentArchivedThreads(
+              archivedSnapshots,
+              archivedSectionVisibleCount,
+              props.selectedThreadKey,
+            ),
+            threadLifecyclePresentation.pendingArchivedThreads,
             archivedSectionVisibleCount,
             props.selectedThreadKey,
           )
         : { threads: [], totalCount: 0 },
-    [archiveShelfVisible, archivedSectionVisibleCount, archivedSnapshots, props.selectedThreadKey],
+    [
+      archiveShelfVisible,
+      archivedSectionVisibleCount,
+      archivedSnapshots,
+      props.selectedThreadKey,
+      threadLifecyclePresentation.pendingArchivedThreads,
+    ],
   );
   const selectedProjectRefs = useMemo(
     () =>
@@ -744,6 +759,7 @@ function ThreadNavigationSidebarPane(
         onOpenAll={props.onOpenArchivedThreads}
         onUnarchive={unarchiveThread}
         pane="sidebar"
+        pendingThreadKeys={threadLifecyclePresentation.pendingArchivedThreadKeys}
         selectedThreadKey={props.selectedThreadKey}
       />
     ) : null;

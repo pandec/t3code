@@ -8,6 +8,7 @@ import type { EnvironmentThreadShell } from "@t3tools/client-runtime/state/shell
 
 import { NativeHeaderToolbar, NativeStackScreenOptions } from "../../native/StackHeader";
 import { useProjects, useNavigationThreadShells } from "../../state/entities";
+import { useThreadLifecyclePresentation } from "../../state/thread-lifecycle-outbox";
 import { usePendingNewTasks } from "../../state/use-pending-new-tasks";
 import { useWorkspaceState } from "../../state/workspace";
 import { useSavedRemoteConnections } from "../../state/use-remote-environment-registry";
@@ -32,7 +33,9 @@ export function HomeRouteScreen() {
   const { width: windowWidth } = useWindowDimensions();
   const { layout, panes } = useAdaptiveWorkspaceLayout();
   const projects = useProjects();
-  const threads = useNavigationThreadShells();
+  // Fork: offline archive/unarchive intents overlay the canonical shells.
+  const threadLifecyclePresentation = useThreadLifecyclePresentation(useNavigationThreadShells());
+  const threads = threadLifecyclePresentation.activeThreads;
   const { environments: workspaceEnvironments, state: catalogState } = useWorkspaceState();
   const { savedConnectionsById } = useSavedRemoteConnections();
   const navigation = useNavigation();
@@ -278,6 +281,8 @@ export function HomeRouteScreen() {
           }}
           onStartNewTask={() => navigation.navigate("NewTaskSheet", { screen: "NewTask" })}
           pendingTasks={pendingTasks}
+          pendingArchivedThreads={threadLifecyclePresentation.pendingArchivedThreads}
+          pendingArchivedThreadKeys={threadLifecyclePresentation.pendingArchivedThreadKeys}
           projectGroupingMode={listOptions.projectGroupingMode}
           projects={projects}
           savedConnectionsById={savedConnectionsById}

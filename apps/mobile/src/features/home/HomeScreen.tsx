@@ -45,6 +45,7 @@ import { selectRecentArchivedThreads } from "@t3tools/client-runtime/state/threa
 import { useRecentArchivedThreadSnapshots } from "../archive/useArchivedThreadSnapshots";
 import { RecentArchivedThreadSection } from "../threads/RecentArchivedThreadSection";
 import { useArchivedThreadListActions } from "./useThreadListActions";
+import { mergePendingArchivedThreads } from "../../state/thread-lifecycle-outbox-model";
 import { usePendingThreadOrder } from "../../state/thread-order";
 import { threadListEnvironmentsAtom } from "../../state/server";
 import { useProjectAccentColors } from "../../state/use-project-accent-colors";
@@ -102,6 +103,9 @@ interface HomeScreenProps {
   readonly onOpenSettings: () => void;
   /** Fork: the archive shelf's "View all archived threads". */
   readonly onOpenArchivedThreads: () => void;
+  /** Fork: archives queued offline, shown at the top of the archive shelf. */
+  readonly pendingArchivedThreads: ReadonlyArray<EnvironmentThreadShell>;
+  readonly pendingArchivedThreadKeys: ReadonlySet<string>;
   readonly onStartNewTask: () => void;
   readonly onSelectThread: (thread: EnvironmentThreadShell) => void;
   readonly onArchiveThread: (thread: EnvironmentThreadShell) => void;
@@ -952,9 +956,18 @@ export function HomeScreen(props: HomeScreenProps) {
   const recentArchive = useMemo(
     () =>
       archiveShelfVisible
-        ? selectRecentArchivedThreads(archivedSnapshots, archivedSectionVisibleCount)
+        ? mergePendingArchivedThreads(
+            selectRecentArchivedThreads(archivedSnapshots, archivedSectionVisibleCount),
+            props.pendingArchivedThreads,
+            archivedSectionVisibleCount,
+          )
         : { threads: [], totalCount: 0 },
-    [archiveShelfVisible, archivedSectionVisibleCount, archivedSnapshots],
+    [
+      archiveShelfVisible,
+      archivedSectionVisibleCount,
+      archivedSnapshots,
+      props.pendingArchivedThreads,
+    ],
   );
   const archivedEnvironmentLabels = useMemo(
     () =>
@@ -976,6 +989,7 @@ export function HomeScreen(props: HomeScreenProps) {
         onOpen={props.onSelectThread}
         onOpenAll={props.onOpenArchivedThreads}
         onUnarchive={unarchiveThread}
+        pendingThreadKeys={props.pendingArchivedThreadKeys}
       />
     ) : null;
 
@@ -987,7 +1001,8 @@ export function HomeScreen(props: HomeScreenProps) {
   const hasAnyThreads =
     props.threads.some((thread) => thread.archivedAt === null) ||
     props.pendingTasks.length > 0 ||
-    recentArchive.totalCount > 0;
+    recentArchive.totalCount > 0 ||
+    props.pendingArchivedThreads.length > 0;
   const selectedEnvironmentLabel =
     props.selectedEnvironmentId === null
       ? null

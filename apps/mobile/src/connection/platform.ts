@@ -25,6 +25,7 @@ import { authClientMetadata } from "../lib/authClientMetadata";
 import * as Runtime from "../lib/runtime";
 import * as MobileStorage from "../persistence/mobile-storage";
 import { appAtomRegistry } from "../state/atom-registry";
+import { clearThreadLifecycleOutboxEnvironment } from "../state/thread-lifecycle-outbox";
 import { clearThreadOutboxEnvironment } from "../state/thread-outbox-removal";
 import { clearComposerDraftsEnvironment } from "../state/use-composer-drafts";
 import { mobileApplicationActiveWakeup } from "./app-state-wakeups";
@@ -218,6 +219,7 @@ const environmentOwnedDataCleanupLayer = Layer.succeed(
         [
           Effect.tryPromise(() => clearThreadOutboxEnvironment(environmentId)),
           Effect.tryPromise(() => clearComposerDraftsEnvironment(environmentId)),
+          Effect.tryPromise(() => clearThreadLifecycleOutboxEnvironment(environmentId)),
         ],
         { concurrency: "unbounded", discard: true },
       ).pipe(
