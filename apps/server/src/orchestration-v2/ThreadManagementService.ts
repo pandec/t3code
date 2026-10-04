@@ -32,8 +32,7 @@ import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
 import * as Schema from "effect/Schema";
 import {
-  backgroundWorkInDrainScope,
-  backgroundWorkLiveness,
+  backgroundWorkDrainState,
   type BackgroundWorkDrainScope,
   type BackgroundWorkLiveness,
 } from "@t3tools/shared/orchestrationV2PendingBackgroundWork";
@@ -762,21 +761,10 @@ const make = Effect.gen(function* () {
             }),
           );
         }
-        const tasks = shell.pendingBackgroundTasks ?? [];
-        const pendingTasks = backgroundWorkInDrainScope(tasks, input.scope);
-        // The roster stays empty while a run is live, so a live or queued run
-        // (a wake continuing the work) keeps the drain open on its own.
-        const runActive =
-          shell.activeRunId !== null ||
-          (shell.activityRunStatus ?? null) !== null ||
-          shell.status === "queued";
         return Effect.succeed({
           threadId: input.threadId,
           scope: input.scope,
-          liveness: backgroundWorkLiveness(tasks),
-          runActive,
-          pendingTasks,
-          drained: !runActive && pendingTasks.length === 0,
+          ...backgroundWorkDrainState(shell, input.scope),
         });
       }),
     );

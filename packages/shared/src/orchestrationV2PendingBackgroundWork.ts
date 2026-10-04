@@ -316,6 +316,48 @@ export function backgroundWorkInDrainScope<Task extends { readonly kind: string 
   return scope === "all" ? tasks : tasks.filter(isAgentBackgroundWork);
 }
 
+/** Fork: one read of a thread's background work against a drain scope. */
+export interface BackgroundWorkDrainState<Task> {
+  /** What clients show: Working for live agents, Monitoring for watch loops alone. */
+  readonly liveness: BackgroundWorkLiveness | null;
+  /** A run is queued, executing, or finalizing, so its roster has not settled yet. */
+  readonly runActive: boolean;
+  /** The pending background work the scope waits for. */
+  readonly pendingTasks: ReadonlyArray<Task>;
+  /** No active run and nothing pending in scope: the drain is over. */
+  readonly drained: boolean;
+}
+
+/**
+ * Fork: what a `thread wait --drain` still waits on, read from a thread shell.
+ * Shared by the server's drain read and the CLI, which evaluates the same
+ * shells it follows over the shell stream.
+ */
+export function backgroundWorkDrainState<Task extends { readonly kind: string }>(
+  shell: {
+    readonly activeRunId: string | null;
+    readonly activityRunStatus?: string | null | undefined;
+    readonly status: string;
+    readonly pendingBackgroundTasks?: ReadonlyArray<Task> | undefined;
+  },
+  scope: BackgroundWorkDrainScope,
+): BackgroundWorkDrainState<Task> {
+  const tasks = shell.pendingBackgroundTasks ?? [];
+  const pendingTasks = backgroundWorkInDrainScope(tasks, scope);
+  // The roster stays empty while a run is live, so a live or queued run
+  // (a wake continuing the work) keeps the drain open on its own.
+  const runActive =
+    shell.activeRunId !== null ||
+    (shell.activityRunStatus ?? null) !== null ||
+    shell.status === "queued";
+  return {
+    liveness: backgroundWorkLiveness(tasks),
+    runActive,
+    pendingTasks,
+    drained: !runActive && pendingTasks.length === 0,
+  };
+}
+
 const UNTIL_DONE_LIVE_RUN_STATUSES: ReadonlySet<string> = new Set<OrchestrationV2Run["status"]>([
   "queued",
   "preparing",

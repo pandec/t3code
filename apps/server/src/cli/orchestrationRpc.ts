@@ -105,28 +105,57 @@ export const liveServerWebSocketUrl = (origin: string, ticket: string): string =
   return url.toString();
 };
 
-/** Opens one WebSocket RPC client to the live server for the duration of `use`. */
-export const withLiveOrchestrationRpc = Effect.fn("withLiveOrchestrationRpc")(function* <A, E, R>(
-  input: {
-    readonly origin: string;
-    readonly token: string;
-    readonly timeouts: CliLiveServerReadTimeouts;
-  },
-  use: (client: CliLiveRpcClient) => Effect.Effect<A, E, R>,
+export interface CliLiveRpcConnectionInput {
+  readonly origin: string;
+  readonly token: string;
+  readonly timeouts: CliLiveServerReadTimeouts;
+}
+
+/** Opens a WebSocket RPC client to the live server that lives as long as the current scope. */
+const makeScopedLiveRpcClient = Effect.fn("makeScopedLiveRpcClient")(function* (
+  input: CliLiveRpcConnectionInput,
 ) {
   const ticket = yield* issueLiveWebSocketTicket(input.origin, input.token, input.timeouts);
-  const protocol = RpcClient.layerProtocolSocket().pipe(
-    Layer.provide(
-      Socket.layerWebSocket(liveServerWebSocketUrl(input.origin, ticket), {
-        openTimeout: CLI_LIVE_RPC_OPEN_TIMEOUT,
-      }).pipe(Layer.provide(NodeSocket.layerWebSocketConstructor)),
+  const protocol = yield* Layer.build(
+    RpcClient.layerProtocolSocket().pipe(
+      Layer.provide(
+        Socket.layerWebSocket(liveServerWebSocketUrl(input.origin, ticket), {
+          openTimeout: CLI_LIVE_RPC_OPEN_TIMEOUT,
+        }).pipe(Layer.provide(NodeSocket.layerWebSocketConstructor)),
+      ),
+      Layer.provide(RpcSerialization.layerJson),
     ),
-    Layer.provide(RpcSerialization.layerJson),
   );
-  return yield* Effect.scoped(Effect.flatMap(makeLiveRpcClient, use)).pipe(
-    Effect.provide(protocol),
-  );
+  return yield* makeLiveRpcClient.pipe(Effect.provideContext(protocol));
 });
+
+/** Opens one WebSocket RPC client to the live server for the duration of `use`. */
+export const withLiveOrchestrationRpc = <A, E, R>(
+  input: CliLiveRpcConnectionInput,
+  use: (client: CliLiveRpcClient) => Effect.Effect<A, E, R>,
+) => Effect.scoped(Effect.flatMap(makeScopedLiveRpcClient(input), use));
+
+/**
+ * The live shell stream over its own connection, starting with a full
+ * snapshot. Each run opens a fresh connection, so rerunning it reconnects.
+ */
+export const subscribeLiveShell = (input: CliLiveRpcConnectionInput) =>
+  Stream.unwrap(
+    Effect.map(makeScopedLiveRpcClient(input), (client) =>
+      client["orchestration.subscribeShell"]({}),
+    ),
+  ).pipe(Stream.mapError(liveRpcCommandError("orchestration.subscribeShell")));
+
+/** Reads a thread's projection: full request entities plus a recent timeline window. */
+export const fetchLiveThreadProjection = (
+  client: CliLiveRpcClient,
+  threadId: ThreadId,
+  timeouts: CliLiveServerReadTimeouts,
+) =>
+  client["orchestration.getThreadProjection"]({ threadId }).pipe(
+    Effect.mapError(liveRpcCommandError("orchestration.getThreadProjection")),
+    withAcknowledgementTimeout(timeouts.read),
+  );
 
 export const dispatchLiveThreadCommand = (
   client: CliLiveRpcClient,

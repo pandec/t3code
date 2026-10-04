@@ -33,3 +33,8 @@ export const threadCliState = (thread: ThreadStateShell): ThreadCliState => {
 /** Whether `thread interrupt` has a run to stop. */
 export const threadHasActiveTurn = (thread: ThreadStateShell): boolean =>
   thread.activeRunId !== null;
+
+/** Whether the latest run has ended and no run is executing or finalizing. */
+export const threadRunSettled = (
+  thread: ThreadStateShell & Pick<OrchestrationV2ThreadShell, "activityRunStatus">,
+): boolean => threadCliState(thread) !== "running" && (thread.activityRunStatus ?? null) === null;

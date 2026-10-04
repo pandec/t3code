@@ -17,12 +17,20 @@ import {
   type OrchestrationV2Command,
   OrchestrationV2DispatchCommandError,
   OrchestrationV2GetShellSnapshotError,
+  OrchestrationV2GetThreadProjectionError,
   OrchestrationV2RpcSchemas,
+  type OrchestrationV2ShellStreamItem,
+  type OrchestrationV2ThreadProjection,
   type OrchestrationV2ThreadLaunchInput,
   OrchestrationV2ThreadLaunchError,
   type OrchestrationV2ThreadShell,
+  NodeId,
   ProjectId,
+  ProviderSessionId,
+  RunId,
+  RuntimeRequestId,
   ThreadId,
+  TurnItemId,
 } from "@t3tools/contracts";
 import * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
@@ -57,8 +65,12 @@ const projectId = ProjectId.make("project-thread-cli");
 const activeThreadId = ThreadId.make("thread-active");
 const archivedThreadId = ThreadId.make("thread-archived");
 const unpinnedThreadId = ThreadId.make("thread-unpinned");
+const waitThreadId = ThreadId.make("thread-wait");
+const waitRunId = RunId.make("run-wait");
+const questionRequestId = RuntimeRequestId.make("request-question");
+const approvalRequestId = RuntimeRequestId.make("request-approval");
 
-// The four orchestration RPCs the thread CLI calls, as the server declares
+// The orchestration RPCs the thread CLI calls, as the server declares
 // them; requests travel by tag, so the CLI's full WsRpcGroup client talks to it.
 const ThreadCliRpcGroup = RpcGroup.make(
   Rpc.make(ORCHESTRATION_V2_WS_METHODS.dispatchCommand, {
@@ -75,6 +87,11 @@ const ThreadCliRpcGroup = RpcGroup.make(
     payload: OrchestrationV2RpcSchemas.getArchivedShellSnapshot.input,
     success: OrchestrationV2RpcSchemas.getArchivedShellSnapshot.output,
     error: Schema.Union([OrchestrationV2GetShellSnapshotError, EnvironmentAuthorizationError]),
+  }),
+  Rpc.make(ORCHESTRATION_V2_WS_METHODS.getThreadProjection, {
+    payload: OrchestrationV2RpcSchemas.getThreadProjection.input,
+    success: OrchestrationV2RpcSchemas.getThreadProjection.output,
+    error: Schema.Union([OrchestrationV2GetThreadProjectionError, EnvironmentAuthorizationError]),
   }),
   Rpc.make(ORCHESTRATION_V2_WS_METHODS.subscribeShell, {
     payload: OrchestrationV2RpcSchemas.subscribeShell.input,
@@ -105,6 +122,10 @@ const withThreadServer = <A, E, R>(
   input: {
     readonly project: OrchestrationProjectShell;
     readonly rejectCommandType?: OrchestrationV2Command["type"];
+    readonly extraThreads?: ReadonlyArray<OrchestrationV2ThreadShell>;
+    /** Streamed after the shell subscription's snapshot. */
+    readonly shellUpdates?: ReadonlyArray<OrchestrationV2ShellStreamItem>;
+    readonly projection?: OrchestrationV2ThreadProjection;
   },
   run: (record: Ref.Ref<ServerRecord>) => Effect.Effect<A, E, R>,
 ) =>
@@ -130,6 +151,7 @@ const withThreadServer = <A, E, R>(
         pinOrderKey: "m",
       }),
       makeTestThreadShell(unpinnedThreadId),
+      ...(input.extraThreads ?? []),
     ];
     const shellFor = (threads: ReadonlyArray<OrchestrationV2ThreadShell>) => ({
       schemaVersion: 1,
@@ -199,6 +221,8 @@ const withThreadServer = <A, E, R>(
           projects: [],
           threads: [makeTestThreadShell(archivedThreadId, { archivedAt: now })],
         }),
+      [ORCHESTRATION_V2_WS_METHODS.getThreadProjection]: () =>
+        input.projection === undefined ? unused : Effect.succeed(input.projection),
       [ORCHESTRATION_V2_WS_METHODS.subscribeShell]: () =>
         Stream.fromEffect(
           Ref.get(record).pipe(
@@ -220,6 +244,10 @@ const withThreadServer = <A, E, R>(
                 snapshotSequence: 12,
               },
             })),
+          ),
+        ).pipe(
+          Stream.concat(
+            Stream.fromIterable<OrchestrationV2ShellStreamItem>(input.shellUpdates ?? []),
           ),
         ),
     });
@@ -272,36 +300,84 @@ const withThreadServer = <A, E, R>(
     }).pipe(Effect.provide(appLayer), Effect.scoped);
   });
 
-const launchResult = (launch: OrchestrationV2ThreadLaunchInput) => {
-  const threadId = launch.threadId ?? ThreadId.make("unknown");
+const emptyProjection = (threadId: ThreadId, title: string): OrchestrationV2ThreadProjection => {
   const { pendingRuntimeRequest: _pending, ...thread } = makeTestThreadShell(threadId);
   return {
-    threadId,
-    resumed: false,
-    projection: {
-      thread: {
-        ...thread,
-        title: launch.title,
-        lastVisitedAt: null,
-      },
-      runs: [],
-      attempts: [],
-      nodes: [],
-      subagents: [],
-      providerSessions: [],
-      providerThreads: [],
-      providerTurns: [],
-      runtimeRequests: [],
-      messages: [],
-      plans: [],
-      turnItems: [],
-      checkpointScopes: [],
-      checkpoints: [],
-      contextHandoffs: [],
-      contextTransfers: [],
-      visibleTurnItems: [],
-      updatedAt: now,
+    thread: { ...thread, title, lastVisitedAt: null },
+    runs: [],
+    attempts: [],
+    nodes: [],
+    subagents: [],
+    providerSessions: [],
+    providerThreads: [],
+    providerTurns: [],
+    runtimeRequests: [],
+    messages: [],
+    plans: [],
+    turnItems: [],
+    checkpointScopes: [],
+    checkpoints: [],
+    contextHandoffs: [],
+    contextTransfers: [],
+    visibleTurnItems: [],
+    updatedAt: now,
+  };
+};
+
+const launchResult = (launch: OrchestrationV2ThreadLaunchInput) => {
+  const threadId = launch.threadId ?? ThreadId.make("unknown");
+  return { threadId, resumed: false, projection: emptyProjection(threadId, launch.title) };
+};
+
+/** A thread projection with one pending question and one pending approval. */
+const questionProjection = (threadId: ThreadId): OrchestrationV2ThreadProjection => {
+  const base = emptyProjection(threadId, "Questions");
+  const questionNodeId = NodeId.make("node-question");
+  const pending = {
+    providerTurnId: null,
+    nativeRequestRef: null,
+    status: "pending" as const,
+    responseCapability: {
+      type: "live" as const,
+      providerSessionId: ProviderSessionId.make("session-live"),
     },
+    createdAt: now,
+    resolvedAt: null,
+  };
+  return {
+    ...base,
+    runtimeRequests: [
+      { ...pending, id: questionRequestId, nodeId: questionNodeId, kind: "user_input" },
+      { ...pending, id: approvalRequestId, nodeId: NodeId.make("node-approval"), kind: "command" },
+    ],
+    turnItems: [
+      {
+        id: TurnItemId.make("item-question"),
+        threadId,
+        runId: null,
+        nodeId: questionNodeId,
+        providerThreadId: null,
+        providerTurnId: null,
+        nativeItemRef: null,
+        parentItemId: null,
+        ordinal: 0,
+        status: "waiting",
+        title: null,
+        startedAt: now,
+        completedAt: null,
+        updatedAt: now,
+        type: "user_input_request",
+        requestId: questionRequestId,
+        questions: [
+          {
+            id: "ship",
+            header: "Ship",
+            question: "Ship it?",
+            options: [{ label: "Yes", description: "Ship now", value: "yes" }],
+          },
+        ],
+      },
+    ],
   };
 };
 
@@ -481,6 +557,184 @@ it.layer(NodeServices.layer)("thread CLI against a running server", (it) => {
           assert.strictEqual(command.threadId, unpinnedThreadId);
           assert.isTrue(command.orderKey !== undefined && command.orderKey < "m");
         }),
+      );
+    }),
+  );
+  it.effect("waits over the live shell stream until the run and its agents finish", () =>
+    Effect.gen(function* () {
+      const { baseDir, workspaceRoot } = makeDirs("wait");
+      const runningThread = makeTestThreadShell(waitThreadId, {
+        status: "running",
+        activeRunId: waitRunId,
+        latestRunId: waitRunId,
+        activityRunStatus: "running",
+      });
+      const settledThread = makeTestThreadShell(waitThreadId, {
+        status: "completed",
+        latestRunId: waitRunId,
+        latestRunCompletedAt: now,
+      });
+      yield* withThreadServer(
+        baseDir,
+        {
+          project: makeProject(workspaceRoot),
+          extraThreads: [runningThread],
+          shellUpdates: [
+            {
+              kind: "thread.updated",
+              sequence: 13,
+              location: "active",
+              thread: {
+                ...settledThread,
+                pendingBackgroundTasks: [{ taskId: "sub", kind: "subagent" }],
+              },
+            },
+            { kind: "thread.updated", sequence: 14, location: "active", thread: settledThread },
+          ],
+        },
+        () =>
+          Effect.gen(function* () {
+            const wait = (...flags: ReadonlyArray<string>) =>
+              captureStdout([
+                "thread",
+                "wait",
+                waitThreadId,
+                ...flags,
+                "--json",
+                "--base-dir",
+                baseDir,
+              ]).pipe(
+                Effect.map((output) =>
+                  parseJson<{
+                    readonly outcome: string;
+                    readonly observedSequence: number;
+                    readonly backgroundLiveness: string | null;
+                    readonly turn?: { readonly turnId: string; readonly state: string };
+                  }>(output),
+                ),
+              );
+            const plain = yield* wait();
+            assert.deepEqual(
+              {
+                outcome: plain.outcome,
+                sequence: plain.observedSequence,
+                liveness: plain.backgroundLiveness,
+                turn: plain.turn && { turnId: plain.turn.turnId, state: plain.turn.state },
+              },
+              {
+                outcome: "completed",
+                sequence: 13,
+                liveness: "working",
+                turn: { turnId: waitRunId, state: "completed" },
+              },
+            );
+            const drained = yield* wait("--drain");
+            assert.deepEqual(
+              { outcome: drained.outcome, sequence: drained.observedSequence },
+              { outcome: "completed", sequence: 14 },
+            );
+          }),
+      );
+    }),
+  );
+
+  it.effect("lists and answers only a pending question", () =>
+    Effect.gen(function* () {
+      const { baseDir, workspaceRoot } = makeDirs("input");
+      yield* withThreadServer(
+        baseDir,
+        { project: makeProject(workspaceRoot), projection: questionProjection(activeThreadId) },
+        (record) =>
+          Effect.gen(function* () {
+            const listed = parseJson<{
+              readonly requests: ReadonlyArray<{
+                readonly id: string;
+                readonly responseMode: string;
+                readonly questions: ReadonlyArray<{
+                  readonly prompt: string;
+                  readonly options: ReadonlyArray<{ readonly id: string }>;
+                  readonly allowCustomAnswer: boolean;
+                  readonly multiSelect: boolean;
+                }>;
+              }>;
+            }>(
+              yield* captureStdout([
+                "thread",
+                "input",
+                "list",
+                activeThreadId,
+                "--json",
+                "--base-dir",
+                baseDir,
+              ]),
+            );
+            // The approval is not a question, so only the question is listed.
+            assert.deepEqual(
+              listed.requests.map((request) => ({
+                id: request.id,
+                responseMode: request.responseMode,
+                questions: request.questions.map((question) => ({
+                  prompt: question.prompt,
+                  optionIds: question.options.map((option) => option.id),
+                  allowCustomAnswer: question.allowCustomAnswer,
+                  multiSelect: question.multiSelect,
+                })),
+              })),
+              [
+                {
+                  id: questionRequestId,
+                  responseMode: "blocking",
+                  questions: [
+                    {
+                      prompt: "Ship it?",
+                      optionIds: ["yes"],
+                      allowCustomAnswer: true,
+                      multiSelect: false,
+                    },
+                  ],
+                },
+              ],
+            );
+
+            const respond = (requestId: string) =>
+              captureStdout([
+                "thread",
+                "input",
+                "respond",
+                activeThreadId,
+                requestId,
+                "--answers-json",
+                '{"ship":"yes"}',
+                "--json",
+                "--base-dir",
+                baseDir,
+              ]);
+            const refused = parseJson<{ readonly error: { readonly code: string } }>(
+              yield* respond(approvalRequestId),
+            );
+            assert.strictEqual(refused.error.code, "ThreadCliInputRequestNotPendingError");
+            assert.lengthOf((yield* Ref.get(record)).commands, 0);
+
+            const answered = parseJson<{ readonly action: string; readonly sequence: number }>(
+              yield* respond(questionRequestId),
+            );
+            assert.deepEqual(
+              { action: answered.action, sequence: answered.sequence },
+              { action: "response-requested", sequence: 42 },
+            );
+            const [command] = (yield* Ref.get(record)).commands;
+            if (command?.type !== "runtime-request.respond") {
+              return assert.fail(`Expected a runtime-request.respond, got ${command?.type}`);
+            }
+            assert.deepEqual(
+              {
+                threadId: command.threadId,
+                requestId: command.requestId,
+                answers: command.answers,
+              },
+              { threadId: activeThreadId, requestId: questionRequestId, answers: { ship: "yes" } },
+            );
+          }),
       );
     }),
   );

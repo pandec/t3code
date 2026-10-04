@@ -7,11 +7,13 @@ import {
   MessageId,
   type ModelSelection,
   type OrchestrationV2ThreadLaunchWorkspaceStrategy,
+  type OrchestrationV2ThreadProjection,
   type OrchestrationV2ThreadShell,
   ProviderInstanceId,
   ProviderInteractionMode,
   ProviderUserInputAnswers,
   RuntimeMode,
+  RuntimeRequestId,
   ServerSettings,
   T3_PROJECT_FILE_NAME,
   ThreadId,
@@ -20,6 +22,7 @@ import {
 // Pure presentation and key math shared with the clients; bundled into the CLI
 // like every workspace package.
 import { presentThreadShell } from "@t3tools/client-runtime/state/models";
+import { derivePendingThreadRequests } from "@t3tools/client-runtime/state/thread-requests";
 import { effectiveSnoozed } from "@t3tools/client-runtime/state/thread-settled";
 import {
   pinOrderKeyBetween,
@@ -53,7 +56,12 @@ import * as EnvironmentAuth from "../auth/EnvironmentAuth.ts";
 import * as ServerConfig from "../config.ts";
 import { expandHomePath } from "../pathExpansion.ts";
 import * as WorkspacePaths from "../workspace/WorkspacePaths.ts";
-import { type CliAuthLocationFlags, projectLocationFlags, resolveCliAuthConfig } from "./config.ts";
+import {
+  type CliAuthLocationFlags,
+  DurationFromString,
+  projectLocationFlags,
+  resolveCliAuthConfig,
+} from "./config.ts";
 import { withCliJsonErrorOutput } from "./errorOutput.ts";
 import {
   CliOrchestrationOutcomeUnknownError,
@@ -63,6 +71,7 @@ import {
   fetchLiveEnvironmentDescriptor,
   fetchLiveOrchestrationShell,
   fetchLiveServerSettings,
+  isProcessAlive,
   resolveCliLiveServerReadTimeouts,
   withResolvedLiveOrchestrationServer,
 } from "./orchestration.ts";
@@ -71,7 +80,9 @@ import {
   type CliLiveRpcClient,
   dispatchLiveThreadCommand,
   fetchLiveArchivedThreads,
+  fetchLiveThreadProjection,
   launchLiveThread,
+  subscribeLiveShell,
   withLiveOrchestrationRpc,
 } from "./orchestrationRpc.ts";
 import { findActiveProjectTarget } from "./projectTarget.ts";
@@ -86,8 +97,13 @@ import {
 } from "./session.ts";
 import { resolveThreadGroup } from "./threadGroups.ts";
 import { THREAD_CLI_STATES, threadCliState, threadHasActiveTurn } from "./threadState.ts";
-
-type ThreadWaitDrainMode = "agents" | "all" | null;
+import {
+  type ThreadInputResponseMode,
+  type ThreadWaitDrainMode,
+  type WaitForThreadResult,
+  threadWaitExitCode,
+  waitForThread,
+} from "./threadWait.ts";
 
 const jsonFlag = Flag.Boolean("json").pipe(
   Flag.withDescription("Emit JSON instead of human-readable output."),
@@ -136,6 +152,19 @@ export class ThreadCliNotFoundError extends Schema.TaggedError<ThreadCliNotFound
     return this.threadId === "self" && !process.env.T3CODE_THREAD_ID?.trim()
       ? "self requires T3CODE_THREAD_ID. Pass an explicit thread id outside a provider session."
       : `No active thread found for '${this.threadId}'.`;
+  }
+}
+
+export class ThreadCliInputRequestNotPendingError extends Schema.TaggedError<ThreadCliInputRequestNotPendingError>()(
+  "ThreadCliInputRequestNotPendingError",
+  {
+    operation: Schema.Literal("respondToInput"),
+    threadId: Schema.String,
+    requestId: Schema.String,
+  },
+) {
+  override get message(): string {
+    return `Thread '${this.threadId}' has no unanswered question '${this.requestId}'. List them with \`t3 thread input list ${this.threadId}\`.`;
   }
 }
 
@@ -580,7 +609,8 @@ export const threadSummary = (thread: OrchestrationV2ThreadShell) => {
     settledAt: presented.settledAt,
     hasPendingApprovals: presented.hasPendingApprovals,
     hasPendingUserInput: presented.hasPendingUserInput,
-    // v2 has no message-mode questions: every pending question blocks the run.
+    // The shell does not say whether a question is message-mode, so a pending
+    // question counts as blocking here; `thread wait` reads the request to tell.
     hasPendingBlockingUserInput: presented.hasPendingUserInput,
     latestUserMessageAt: presented.latestUserMessageAt,
     updatedAt: presented.updatedAt,
@@ -1384,6 +1414,256 @@ const threadStatusCommand = Command.make("status", {
   ),
 );
 
+/** The `thread wait --json` document: the thread summary plus the outcome. */
+export const threadWaitSummary = (result: WaitForThreadResult) => {
+  const thread = result.thread;
+  return {
+    ...threadSummary(thread),
+    hasPendingBlockingUserInput: result.hasPendingBlockingUserInput,
+    outcome: result.outcome,
+    waited: result.waited,
+    waitedMs: result.waitedMs,
+    observedSequence: result.observedSequence,
+    ...(thread.latestRunId === null
+      ? {}
+      : {
+          turn: {
+            turnId: thread.latestRunId,
+            state: threadCliState(thread),
+            requestedAt: isoOrNull(thread.latestRunRequestedAt),
+            startedAt: isoOrNull(thread.latestRunStartedAt),
+            completedAt: isoOrNull(thread.latestRunCompletedAt),
+          },
+        }),
+  };
+};
+
+export interface ThreadInputRequestReport {
+  readonly id: string;
+  readonly responseMode: ThreadInputResponseMode;
+  readonly questions: ReadonlyArray<{
+    readonly id: string;
+    readonly header: string;
+    readonly prompt: string;
+    readonly options: ReadonlyArray<{
+      readonly id: string;
+      readonly label: string;
+      readonly description: string;
+    }>;
+    readonly allowCustomAnswer: boolean;
+    readonly multiSelect: boolean;
+  }>;
+  readonly createdAt: string;
+}
+
+/** Unanswered agent questions, oldest first, as the fork reported them. */
+export const pendingThreadInputRequests = (
+  projection: Pick<OrchestrationV2ThreadProjection, "runtimeRequests" | "turnItems">,
+): ReadonlyArray<ThreadInputRequestReport> =>
+  derivePendingThreadRequests(projection)
+    .userInputs.map((request) => ({
+      id: request.requestId,
+      responseMode: request.responseMode ?? ("blocking" as const),
+      questions: request.questions.map((question) => ({
+        id: question.id,
+        header: question.header,
+        prompt: question.question,
+        options: question.options.map((option) => ({
+          id: option.value ?? option.label,
+          label: option.label,
+          description: option.description,
+        })),
+        allowCustomAnswer: question.allowCustomAnswer !== false,
+        multiSelect: question.multiSelect,
+      })),
+      createdAt: request.createdAt,
+    }))
+    .toSorted(
+      (left, right) =>
+        left.createdAt.localeCompare(right.createdAt) || left.id.localeCompare(right.id),
+    );
+
+const liveThreadWaitDependencies = (input: ThreadCliInput, threadId: ThreadId) => {
+  const connection = { origin: input.live.origin, token: input.token, timeouts: input.timeouts };
+  return {
+    shellStream: subscribeLiveShell(connection),
+    userInputResponseMode: (requestId: RuntimeRequestId) =>
+      withLiveOrchestrationRpc(connection, (client) =>
+        fetchLiveThreadProjection(client, threadId, input.timeouts),
+      ).pipe(
+        Effect.map(
+          (projection) =>
+            pendingThreadInputRequests(projection).find((request) => request.id === requestId)
+              ?.responseMode ?? null,
+        ),
+      ),
+    serverAlive: isProcessAlive(input.live.pid),
+  };
+};
+
+const threadWaitCommand = Command.make("wait", {
+  ...projectLocationFlags,
+  threadId: threadIdArgument,
+  afterSequence: Flag.Int("after-sequence").pipe(
+    Flag.withSchema(Schema.Int.check(Schema.isGreaterThanOrEqualTo(0))),
+    Flag.withDescription(
+      "Wait only after the shell reaches this sequence, such as the `sequence` from `thread send --json`.",
+    ),
+    Flag.optional,
+  ),
+  turn: Flag.String("turn").pipe(
+    Flag.withDescription(
+      "Wait for this run (a summary's `activeTurnId` or `turn.turnId`); a newer run reports `superseded`.",
+    ),
+    Flag.optional,
+  ),
+  timeout: Flag.String("timeout").pipe(
+    Flag.withSchema(DurationFromString),
+    Flag.withDescription("Maximum wait duration, for example `30s`, `5m`, or `1h`."),
+    Flag.withDefault(Duration.minutes(30)),
+  ),
+  drain: threadWaitDrainFlag,
+  onBlocked: Flag.Literals("on-blocked", ["wait", "return"] as const).pipe(
+    Flag.withDescription("Whether approvals or questions that hold the turn keep waiting."),
+    Flag.withDefault("return"),
+  ),
+  exitZero: Flag.Boolean("exit-zero").pipe(
+    Flag.withDescription("Return exit code 0 for every observed terminal outcome."),
+    Flag.withDefault(false),
+  ),
+  json: jsonFlag,
+}).pipe(
+  Command.withDescription("Wait for a thread's turn to settle."),
+  Command.withHandler((flags) =>
+    runThreadCli(flags, flags.json, (input) =>
+      Effect.gen(function* () {
+        const thread = yield* resolveThread(input.live, flags.threadId);
+        const result = yield* waitForThread(
+          {
+            thread,
+            sequence: input.live.shell.snapshotSequence,
+            serverPid: input.live.pid,
+            options: {
+              afterSequence: Option.getOrNull(flags.afterSequence),
+              runId: Option.getOrNull(flags.turn),
+              timeoutMs: Duration.toMillis(flags.timeout),
+              drain: flags.drain,
+              onBlocked: flags.onBlocked,
+            },
+          },
+          liveThreadWaitDependencies(input, thread.id),
+        );
+        const summary = threadWaitSummary(result);
+        yield* Console.log(
+          flags.json
+            ? jsonOutput(summary)
+            : `Thread ${summary.id}: ${summary.outcome} after ${summary.waitedMs}ms (${summary.state}).`,
+        );
+        yield* Effect.sync(() => {
+          process.exitCode = threadWaitExitCode(summary.outcome, flags.exitZero);
+        });
+      }),
+    ),
+  ),
+);
+
+const threadInputListCommand = Command.make("list", {
+  ...projectLocationFlags,
+  threadId: threadIdArgument,
+  json: jsonFlag,
+}).pipe(
+  Command.withDescription("List a thread's unanswered agent questions."),
+  Command.withHandler((flags) =>
+    runThreadCli(flags, flags.json, (input) =>
+      Effect.gen(function* () {
+        const thread = yield* resolveThread(input.live, flags.threadId);
+        const projection = yield* withRpc(input, (client) =>
+          fetchLiveThreadProjection(client, thread.id, input.timeouts),
+        );
+        const requests = pendingThreadInputRequests(projection);
+        yield* Console.log(
+          flags.json
+            ? jsonOutput({ threadId: thread.id, requests })
+            : requests.length === 0
+              ? `Thread ${thread.id} has no unanswered questions.`
+              : stripTerminalControlCharacters(
+                  requests
+                    .map(
+                      (request) =>
+                        `${request.id}\t${request.responseMode}\t${request.questions.map((question) => question.prompt).join(" / ")}`,
+                    )
+                    .join("\n"),
+                ),
+        );
+      }),
+    ),
+  ),
+);
+
+const threadInputRespondCommand = Command.make("respond", {
+  ...projectLocationFlags,
+  threadId: threadIdArgument,
+  requestId: Argument.String("request-id").pipe(
+    Argument.withSchema(RuntimeRequestId),
+    Argument.withDescription("Question request id from `thread input list`."),
+  ),
+  answersJson: Flag.String("answers-json").pipe(
+    Flag.withDescription("Complete JSON answer map keyed by question id."),
+  ),
+  json: jsonFlag,
+}).pipe(
+  Command.withDescription("Answer an unanswered agent question."),
+  Command.withHandler((flags) =>
+    runThreadCli(flags, flags.json, (input) =>
+      Effect.gen(function* () {
+        const thread = yield* resolveThread(input.live, flags.threadId);
+        const answers = yield* decodeThreadInputAnswersJson(flags.answersJson);
+        const commandId = yield* newCommandId;
+        const result = yield* withRpc(input, (client) =>
+          Effect.gen(function* () {
+            // The respond command also resolves approvals, so only answer a
+            // request this command lists.
+            const projection = yield* fetchLiveThreadProjection(client, thread.id, input.timeouts);
+            const request = projection.runtimeRequests.find(
+              (candidate) => candidate.id === flags.requestId,
+            );
+            if (request?.kind !== "user_input" || request.status !== "pending") {
+              return yield* new ThreadCliInputRequestNotPendingError({
+                operation: "respondToInput",
+                threadId: thread.id,
+                requestId: flags.requestId,
+              });
+            }
+            return yield* dispatchLiveThreadCommand(client, {
+              type: "runtime-request.respond",
+              commandId,
+              threadId: thread.id,
+              requestId: flags.requestId,
+              answers,
+            });
+          }),
+        );
+        yield* Console.log(
+          flags.json
+            ? jsonOutput({
+                threadId: thread.id,
+                requestId: flags.requestId,
+                commandId,
+                sequence: result.sequence,
+                action: "response-requested",
+              })
+            : `Submitted answers for question ${flags.requestId} in thread ${thread.id}.`,
+        );
+      }),
+    ),
+  ),
+);
+
+const threadInputCommand = Command.make("input").pipe(
+  Command.withDescription("List and answer a thread's agent questions."),
+  Command.withSubcommands([threadInputListCommand, threadInputRespondCommand]),
+);
+
 export function threadContextEnvironment(
   thread: Pick<OrchestrationV2ThreadShell, "id" | "activeRunId" | "worktreePath">,
   workspaceRoot: string,
@@ -1557,6 +1837,8 @@ export const threadCommand = Command.make("thread").pipe(
     makeThreadPinCommand(false),
     threadInterruptCommand,
     threadStatusCommand,
+    threadWaitCommand,
+    threadInputCommand,
     threadArchiveCommand,
     threadContextCommand,
   ]),
