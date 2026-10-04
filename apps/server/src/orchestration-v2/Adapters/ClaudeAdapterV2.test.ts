@@ -5553,6 +5553,13 @@ describe("ClaudeAdapterV2 background wake turns", () => {
           yield* awaitUntil(() => harness.terminalEvents().length === 1, "turn terminal");
           // The turn-boundary re-read finds the same directory: no second report.
           assert.lengthOf(harness.sessionCwdObservations, 1);
+          // The session record moved with the process.
+          assert.deepEqual(
+            harness.events.flatMap((event) =>
+              event.type === "provider_session.updated" ? [event.providerSession.cwd] : [],
+            ),
+            [worktree],
+          );
 
           // A new selection replaces the process; it starts where the session is.
           yield* harness.runtime.startTurn(

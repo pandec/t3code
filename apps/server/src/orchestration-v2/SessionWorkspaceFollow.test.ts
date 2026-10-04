@@ -20,6 +20,7 @@ import * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
 import * as Fiber from "effect/Fiber";
 import * as FileSystem from "effect/FileSystem";
+import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
 import * as Path from "effect/Path";
 import * as Queue from "effect/Queue";
@@ -30,10 +31,17 @@ import { ChildProcess, ChildProcessSpawner } from "effect/unstable/process";
 import { CodexProviderCapabilitiesV2 } from "./Adapters/CodexAdapterV2.ts";
 import * as EffectWorker from "./EffectWorker.ts";
 import * as EventSink from "./EventSink.ts";
+import * as IdAllocator from "./IdAllocator.ts";
 import * as Orchestrator from "./Orchestrator.ts";
+import * as ProjectStore from "./ProjectStore.ts";
 import type { ProviderAdapterV2Event, ProviderAdapterV2Shape } from "./ProviderAdapter.ts";
 import * as ProviderAdapterRegistry from "./ProviderAdapterRegistry.ts";
-import { planSessionWorkspaceFollow, resolveFollowedWorkspace } from "./SessionWorkspaceFollow.ts";
+import * as ProviderSessionCwdObservations from "./ProviderSessionCwdObservations.ts";
+import {
+  planSessionWorkspaceFollow,
+  resolveFollowedWorkspace,
+  workerLive,
+} from "./SessionWorkspaceFollow.ts";
 import { makeOrchestratorV2ReplayLayerWithRegistry } from "./testkit/ProviderReplayHarness.ts";
 import { checkpointWorkspace } from "./testkit/ReplayFixtureWorkspace.ts";
 
@@ -54,6 +62,8 @@ const capabilities: OrchestrationV2ProviderCapabilities = {
 interface FollowAdapterState {
   readonly openedCwds: ReadonlyArray<string | null>;
   readonly startedCwds: ReadonlyArray<string | null>;
+  /** Each opened session's event queue, so a test can speak for the provider. */
+  readonly sessionEvents: ReadonlyArray<Queue.Queue<ProviderAdapterV2Event>>;
 }
 
 /** A Claude-like adapter (one thread per session) whose turns complete at once. */
@@ -65,11 +75,12 @@ function makeFollowAdapter(state: Ref.Ref<FollowAdapterState>): ProviderAdapterV
     planSelectionTransition: () => Effect.succeed({ type: "apply_on_next_turn" }),
     openSession: (sessionInput) =>
       Effect.gen(function* () {
+        const events = yield* Queue.unbounded<ProviderAdapterV2Event>();
         yield* Ref.update(state, (current) => ({
           ...current,
           openedCwds: [...current.openedCwds, sessionInput.runtimePolicy.cwd],
+          sessionEvents: [...current.sessionEvents, events],
         }));
-        const events = yield* Queue.unbounded<ProviderAdapterV2Event>();
         const now = yield* DateTime.now;
         return {
           instanceId: providerInstanceId,
@@ -174,6 +185,7 @@ it.live("a followed move keeps the session; a T3 move restarts it in the new wor
       const state = yield* Ref.make<FollowAdapterState>({
         openedCwds: [],
         startedCwds: [],
+        sessionEvents: [],
       });
       const registry = ProviderAdapterRegistry.makeSingleLayer(makeFollowAdapter(state));
 
@@ -242,16 +254,45 @@ it.live("a followed move keeps the session; a T3 move restarts it in the new wor
         // session keeps running.
         const followCommandId = CommandId.make(`${name}:follow`);
         yield* orchestrator.dispatch({
-          type: "thread.metadata.update",
+          type: "thread.workspace.follow-session",
           commandId: followCommandId,
           threadId,
           worktreePath: entered,
           branch: "feature",
           expectedWorktreePath: start,
-          followsProviderSessionId: session.id,
+          providerSessionId: session.id,
+          providerSessionCreatedAt: session.createdAt,
         });
         yield* worker.drain();
         assert.deepEqual(yield* detachedBy(followCommandId), []);
+
+        // The adapter reports the session's new cwd, so a same-instance model
+        // change applies in the session instead of restarting it.
+        const sessionMoved = yield* orchestrator.streamDomainEvents.pipe(
+          Stream.filter(
+            (event) => event.type === "provider-session.updated" && event.payload.cwd === entered,
+          ),
+          Stream.take(1),
+          Stream.runDrain,
+          Effect.forkScoped,
+        );
+        const [sessionEvents] = (yield* Ref.get(state)).sessionEvents;
+        if (sessionEvents === undefined) return yield* Effect.die("No session events.");
+        yield* Queue.offer(sessionEvents, {
+          type: "provider_session.updated",
+          driver,
+          providerSession: { ...session, cwd: entered, updatedAt: yield* DateTime.now },
+        });
+        yield* Fiber.join(sessionMoved);
+        const modelCommandId = CommandId.make(`${name}:model`);
+        yield* orchestrator.dispatch({
+          type: "thread.model-selection.set",
+          commandId: modelCommandId,
+          threadId,
+          modelSelection: { ...modelSelection, model: "follow-model-2" },
+        });
+        yield* worker.drain();
+        assert.deepEqual(yield* detachedBy(modelCommandId), []);
         const followed = yield* send("second");
         assert.equal(followed.thread.worktreePath, entered);
         assert.equal(followed.thread.branch, "feature");
@@ -267,19 +308,41 @@ it.live("a followed move keeps the session; a T3 move restarts it in the new wor
         yield* worker.drain();
         assert.deepEqual(yield* detachedBy(moveCommandId), [session.id]);
         // An observation from a session that no longer runs the thread is stale.
-        const stale = yield* orchestrator
-          .dispatch({
-            type: "thread.metadata.update",
-            commandId: CommandId.make(`${name}:stale-follow`),
-            threadId,
-            worktreePath: entered,
-            expectedWorktreePath: moved,
-            followsProviderSessionId: session.id,
-          })
-          .pipe(Effect.flip);
-        assert.instanceOf(stale, Orchestrator.OrchestratorDispatchError);
+        const staleFollow = (step: string) =>
+          orchestrator
+            .dispatch({
+              type: "thread.workspace.follow-session",
+              commandId: CommandId.make(`${name}:${step}`),
+              threadId,
+              worktreePath: entered,
+              branch: "feature",
+              expectedWorktreePath: moved,
+              providerSessionId: session.id,
+              providerSessionCreatedAt: session.createdAt,
+            })
+            .pipe(Effect.flip);
+        assert.instanceOf(
+          yield* staleFollow("stale-follow"),
+          Orchestrator.OrchestratorDispatchError,
+        );
         const third = yield* send("third");
         assert.equal(third.thread.worktreePath, moved);
+
+        // A replacement process reuses the session id; an observation from the
+        // process it replaced still must not move the thread.
+        const replacement = third.providerSessions.find((entry) => entry.status !== "stopped");
+        assert.equal(replacement?.id, session.id);
+        assert.notEqual(
+          replacement === undefined ? null : DateTime.toEpochMillis(replacement.createdAt),
+          DateTime.toEpochMillis(session.createdAt),
+        );
+        assert.instanceOf(
+          yield* staleFollow("replaced-follow"),
+          Orchestrator.OrchestratorDispatchError,
+        );
+        const afterReplaced = yield* orchestrator.getThreadProjection(threadId);
+        assert.equal(afterReplaced.thread.worktreePath, moved);
+        assert.equal(afterReplaced.thread.branch, "feature");
       }).pipe(Effect.provide(makeOrchestratorV2ReplayLayerWithRegistry({ name }, registry)));
 
       // One process served start and entered; only the T3 move opened another.
@@ -397,4 +460,145 @@ it.effect("follows only for the process that moved, while the thread is open", (
       ),
     );
   }).pipe(Effect.scoped, Effect.provide(NodeServices.layer)),
+);
+
+it.live("the follow worker moves the thread for the live process only", () =>
+  Effect.scoped(
+    Effect.gen(function* () {
+      const name = "session-workspace-follow-worker";
+      const { root, worktree } = yield* makeRepository;
+      const threadId = ThreadId.make(`thread:${name}`);
+      const projectId = ProjectId.make(`project:${name}`);
+      const state = yield* Ref.make<FollowAdapterState>({
+        openedCwds: [],
+        startedCwds: [],
+        sessionEvents: [],
+      });
+      const registry = ProviderAdapterRegistry.makeSingleLayer(makeFollowAdapter(state));
+      const projects = Layer.mock(ProjectStore.ProjectStoreV2)({
+        get: (requested) =>
+          Effect.succeed(
+            requested === projectId
+              ? Option.some({
+                  projectId,
+                  title: name,
+                  workspaceRoot: root,
+                  defaultModelSelection: modelSelection,
+                  defaultThreadEnvMode: null,
+                  autoPull: false,
+                  faviconPath: null,
+                  projectIcon: null,
+                  scripts: [],
+                  createdAt: "2026-10-04T00:00:00.000Z",
+                  updatedAt: "2026-10-04T00:00:00.000Z",
+                  deletedAt: null,
+                })
+              : Option.none(),
+          ),
+      });
+      // One observations layer reference for the worker and the offering side,
+      // as runtimeLayer.ts shares it with the adapter infrastructure.
+      const observationsLayer = ProviderSessionCwdObservations.layer;
+      const testLayer = Layer.mergeAll(
+        workerLive.pipe(
+          Layer.provide(Layer.mergeAll(observationsLayer, projects, IdAllocator.layer)),
+        ),
+        observationsLayer,
+      ).pipe(Layer.provideMerge(makeOrchestratorV2ReplayLayerWithRegistry({ name }, registry)));
+
+      yield* Effect.gen(function* () {
+        const orchestrator = yield* Orchestrator.OrchestratorV2;
+        const worker = yield* EffectWorker.OrchestrationEffectWorkerV2;
+        const eventSink = yield* EventSink.EventSinkV2;
+        const observations = yield* ProviderSessionCwdObservations.ProviderSessionCwdObservations;
+
+        yield* orchestrator.dispatch({
+          type: "thread.create",
+          createdBy: "user",
+          creationSource: "web",
+          commandId: CommandId.make(`${name}:create`),
+          threadId,
+          projectId,
+          title: name,
+          modelSelection,
+          runtimeMode: "full-access",
+          interactionMode: "default",
+          branch: null,
+          worktreePath: root,
+        });
+        const terminal = yield* orchestrator.streamDomainEvents.pipe(
+          Stream.filter(
+            (event) => event.type === "run.updated" && event.payload.status === "completed",
+          ),
+          Stream.take(1),
+          Stream.runDrain,
+          Effect.forkScoped,
+        );
+        yield* orchestrator.dispatch({
+          type: "message.dispatch",
+          createdBy: "user",
+          creationSource: "web",
+          commandId: CommandId.make(`${name}:first`),
+          threadId,
+          messageId: MessageId.make(`${name}:first`),
+          text: "first",
+          attachments: [],
+          modelSelection,
+          dispatchMode: { type: "start_immediately" },
+        });
+        yield* worker.drain();
+        yield* Fiber.join(terminal);
+        yield* worker.drain();
+        const session = (yield* orchestrator.getThreadProjection(threadId)).providerSessions.find(
+          (entry) => entry.status !== "stopped",
+        );
+        if (session === undefined) return yield* Effect.die("No live provider session.");
+
+        const before = yield* eventSink.latestSequence({ threadId });
+        const followed = yield* eventSink
+          .stream({ threadId, afterSequence: before, eventType: "thread.metadata-updated" })
+          .pipe(Stream.take(1), Stream.runHead, Effect.forkScoped);
+        // The queue has one consumer, so the stale observation is handled first.
+        // Followed, it would record the root checkout as a second update.
+        yield* observations.offer({
+          threadId,
+          providerSessionId: session.id,
+          providerSessionCreatedAt: DateTime.add(session.createdAt, { milliseconds: 1 }),
+          cwd: root,
+        });
+        yield* observations.offer({
+          threadId,
+          providerSessionId: session.id,
+          providerSessionCreatedAt: session.createdAt,
+          cwd: worktree,
+        });
+        const update = yield* Fiber.join(followed);
+        if (Option.isNone(update) || update.value.commandId === null) {
+          return yield* Effect.die("No follow update.");
+        }
+        yield* worker.drain();
+
+        const projection = yield* orchestrator.getThreadProjection(threadId);
+        assert.equal(projection.thread.worktreePath, worktree);
+        assert.equal(projection.thread.branch, "feature");
+        const latest = yield* eventSink.latestSequence({ threadId });
+        const written = yield* eventSink.stream({ threadId, afterSequence: before }).pipe(
+          Stream.takeUntil((stored) => stored.sequence >= latest),
+          Stream.runCollect,
+        );
+        assert.lengthOf(
+          [...written].filter((stored) => stored.event.type === "thread.metadata-updated"),
+          1,
+        );
+        const byFollow = yield* eventSink
+          .readByCommandId({ commandId: update.value.commandId })
+          .pipe(Stream.runCollect);
+        assert.isFalse(
+          [...byFollow].some((stored) => stored.event.type === "provider-session.detached"),
+        );
+      }).pipe(Effect.provide(testLayer));
+
+      assert.deepEqual((yield* Ref.get(state)).openedCwds, [root]);
+    }),
+  ).pipe(Effect.provide(NodeServices.layer)),
 );

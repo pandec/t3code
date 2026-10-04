@@ -3290,6 +3290,13 @@ export function makeClaudeAdapterV2(
             yield* Ref.update(observedCwdByNativeThread, (current) =>
               new Map(current).set(reconcile.nativeThreadId, observedCwd),
             );
+            // The session record follows too, so plans comparing it with the
+            // thread workspace see where the process runs.
+            yield* emitProviderEvent({
+              type: "provider_session.updated",
+              driver: CLAUDE_PROVIDER,
+              providerSession: { ...session, cwd: observedCwd, updatedAt: yield* DateTime.now },
+            });
             yield* Effect.logInfo("claude.session.cwd-changed", {
               ...reconcile,
               previousCwd,

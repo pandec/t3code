@@ -314,6 +314,10 @@ export function makeCursorAgentOptions(input: {
     name: `T3 Code ${input.threadId}`,
     mode: input.runtimePolicy.interactionMode === "plan" ? "plan" : "agent",
     ...(input.apiKey === undefined ? {} : { apiKey: input.apiKey }),
+    // Fork (DECISIONS 5.9) does not apply here: the in-process SDK has no
+    // per-agent local env, so Cursor's shell tools get no T3CODE_THREAD_ID,
+    // worktree, or state dir. Cursor agents reach their thread through the
+    // thread-scoped t3-code MCP server instead.
     local: {
       ...(input.runtimePolicy.cwd === null ? {} : { cwd: input.runtimePolicy.cwd }),
       autoReview: policy.autoReview,

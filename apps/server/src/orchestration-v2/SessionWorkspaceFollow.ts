@@ -3,9 +3,10 @@
  * into another checkout of the project (Claude's EnterWorktree/ExitWorktree).
  *
  * The adapter notices the move and offers a ProviderSessionCwdObservation; this worker
- * mirrors it onto the thread's branch and worktree with a
- * `thread.metadata.update` that names the session, so the decider keeps that
- * session running instead of detaching it as it does for a T3-driven move.
+ * mirrors it onto the thread's branch and worktree with the internal
+ * `thread.workspace.follow-session` command, which names the session process,
+ * so the decider keeps it running instead of detaching it as it does for a
+ * T3-driven move.
  * Later turns, and any session restart, then start in the directory the
  * session is actually in.
  */
@@ -133,14 +134,15 @@ export const workerLive = Layer.effectDiscard(
         return;
       }
       yield* orchestrator.dispatch({
-        type: "thread.metadata.update",
+        type: "thread.workspace.follow-session",
         commandId: yield* ids.allocate.command({
           fixtureName: "session-workspace-follow",
           commandName: "metadata-update",
         }),
         threadId: observation.threadId,
         ...plan.value,
-        followsProviderSessionId: observation.providerSessionId,
+        providerSessionId: observation.providerSessionId,
+        providerSessionCreatedAt: observation.providerSessionCreatedAt,
       });
     });
 

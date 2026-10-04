@@ -135,6 +135,12 @@ const operationOf = (
   return { type: `${method} ${path}`, input: { ...query, body } };
 };
 
+/** A per-session environment the adapter set (DECISIONS 5.9), with its request body. */
+export interface ReplayedSessionEnvironment {
+  readonly sessionID: string;
+  readonly body: unknown;
+}
+
 /**
  * An `HttpClient` that answers every request from the transcript. A successful
  * `runtime_exit` ends the event stream: the server has stopped. When entries
@@ -145,6 +151,7 @@ const operationOf = (
 const replayHttpClient = (
   controller: OpenCodeReplayController,
   replayGate: ProviderReplayGate | undefined,
+  sessionEnvironments: Array<ReplayedSessionEnvironment> | undefined,
 ) =>
   HttpClient.make((request, url) =>
     Effect.tryPromise({
@@ -156,6 +163,16 @@ const replayHttpClient = (
           request.body._tag === "Uint8Array"
             ? new TextDecoder().decode(request.body.body)
             : undefined;
+        // Fork (DECISIONS 5.9): the recordings predate the per-session thread
+        // environment, so it is answered and recorded beside the transcript.
+        const environment = /^\/api\/session\/([^/]+)\/environment$/.exec(url.pathname);
+        if (request.method === "PUT" && environment !== null) {
+          sessionEnvironments?.push({
+            sessionID: decodeURIComponent(environment[1] ?? ""),
+            body: raw === undefined ? undefined : decodeJson(raw),
+          });
+          return new Response(null, { status: 204 });
+        }
         const query = UrlParams.toRecord(UrlParams.fromInput(url.searchParams));
         const operation = operationOf(
           request.method,
@@ -213,6 +230,7 @@ export const replayServer = (
     readonly replayGate?: ProviderReplayGate;
     /** Counts the connections currently lent out, as the server owner's borrowers. */
     readonly borrowers?: { current: number };
+    readonly sessionEnvironments?: Array<ReplayedSessionEnvironment>;
   },
 ) =>
   Effect.gen(function* () {
@@ -226,7 +244,7 @@ export const replayServer = (
     const opencode = yield* OpenCode2Client.make.pipe(
       Effect.provideService(
         HttpClient.HttpClient,
-        replayHttpClient(controller, options?.replayGate),
+        replayHttpClient(controller, options?.replayGate, options?.sessionEnvironments),
       ),
     );
     const connection = {
@@ -261,6 +279,7 @@ const makeReplayAdapter = (
     readonly replayGate?: ProviderReplayGate;
     /** Counts the connections currently lent out, as the server owner's borrowers. */
     readonly borrowers?: { current: number };
+    readonly sessionEnvironments?: Array<ReplayedSessionEnvironment>;
   },
 ) =>
   Effect.gen(function* () {
@@ -292,7 +311,11 @@ function makeRegistryLayer(
  */
 export const openCode2ReplayRuntime = (
   entries: ReadonlyArray<ProviderReplayEntry>,
-  options?: { readonly external?: boolean; readonly borrowers?: { current: number } },
+  options?: {
+    readonly external?: boolean;
+    readonly borrowers?: { current: number };
+    readonly sessionEnvironments?: Array<ReplayedSessionEnvironment>;
+  },
 ) =>
   Effect.gen(function* () {
     const adapter = yield* makeReplayAdapter(

@@ -393,6 +393,7 @@ function commandThreadId(command: OrchestrationV2ServerCommand): ThreadId {
     case "checkpoint.rollback":
     case "checkpoint.rollback.fail":
     case "thread.background-work.settle":
+    case "thread.workspace.follow-session":
     case "provider.switch":
       return command.threadId;
     case "delegated_task.request":
@@ -2242,6 +2243,11 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
     >,
     events: Ref.Ref<Array<OrchestrationV2DomainEvent>>,
     effects: Ref.Ref<Array<PendingOrchestrationEffectV2>>,
+    // Fork (DECISIONS 5.8): set only by `thread.workspace.follow-session`.
+    followedSession?: {
+      readonly id: ProviderSessionId;
+      readonly createdAt: DateTime.Utc;
+    },
   ) {
     const thread = yield* projectionStore.getThread(command.threadId).pipe(
       Effect.mapError(
@@ -2441,6 +2447,7 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
     }
 
     const needsProviderState =
+      followedSession !== undefined ||
       command.type === "thread.runtime-mode.set" ||
       command.type === "thread.model-selection.set" ||
       command.type === "provider.switch" ||
@@ -2459,23 +2466,24 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
           )
           .pipe(mapDispatchError(command))
       : null;
-    // Fork (DECISIONS 5.8): a followed move is valid only while the session
-    // that made it still runs this thread; a stale observation must not move it.
+    // Fork (DECISIONS 5.8): a followed move is valid only while the process
+    // that made it still runs this thread; a stale observation, or one from an
+    // earlier process under a reused session id, must not move it.
     if (
-      command.type === "thread.metadata.update" &&
-      command.followsProviderSessionId !== undefined &&
-      providerContext !== null &&
-      !providerContext.providerSessions.some(
+      followedSession !== undefined &&
+      !(providerContext?.providerSessions ?? []).some(
         (session) =>
-          session.id === command.followsProviderSessionId &&
+          session.id === followedSession.id &&
           session.status !== "stopped" &&
-          session.status !== "error",
+          session.status !== "error" &&
+          DateTime.toEpochMillis(session.createdAt) ===
+            DateTime.toEpochMillis(followedSession.createdAt),
       )
     ) {
       return yield* new OrchestratorDispatchError({
         commandId: command.commandId,
-        commandType: command.type,
-        cause: `Provider session ${command.followsProviderSessionId} no longer runs thread ${command.threadId}.`,
+        commandType: "thread.workspace.follow-session",
+        cause: `Provider session ${followedSession.id} no longer runs thread ${command.threadId}.`,
       });
     }
     const providerSwitchPlan =
@@ -3080,7 +3088,7 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
             command.worktreePath !== thread.worktreePath
           ? (providerContext?.providerSessions ?? [])
               // Fork (DECISIONS 5.8): the session that moved itself is already there.
-              .filter((session) => session.id !== command.followsProviderSessionId)
+              .filter((session) => session.id !== followedSession?.id)
               .map((session) => session.id)
           : command.type === "thread.runtime-mode.set"
             ? (providerContext?.providerSessions ?? [])
@@ -9304,6 +9312,22 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
         break;
       case "thread.background-work.settle":
         yield* dispatchBackgroundWorkSettle(command, events);
+        break;
+      case "thread.workspace.follow-session":
+        // Fork (DECISIONS 5.8): a metadata update that keeps the moved session.
+        yield* dispatchThreadMutation(
+          {
+            type: "thread.metadata.update",
+            commandId: command.commandId,
+            threadId: command.threadId,
+            worktreePath: command.worktreePath,
+            branch: command.branch,
+            expectedWorktreePath: command.expectedWorktreePath,
+          },
+          events,
+          effects,
+          { id: command.providerSessionId, createdAt: command.providerSessionCreatedAt },
+        );
         break;
       case "thread.fork":
         yield* dispatchThreadFork(command, events);

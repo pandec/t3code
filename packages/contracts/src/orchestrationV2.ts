@@ -2577,12 +2577,6 @@ export const OrchestrationV2Command = Schema.Union([
     limitRecovery: Schema.optional(Schema.NullOr(OrchestrationV2LimitRecoveryUpdate)),
     /** Link (object) or unlink (null) a pull request (#8160); absent leaves it unchanged. */
     linkedPullRequest: Schema.optional(Schema.NullOr(ThreadLinkedPullRequest)),
-    /**
-     * Fork: the workspace change mirrors where this live provider session moved
-     * itself, so it keeps running there instead of being detached. Rejected
-     * unless that session is still live on the thread.
-     */
-    followsProviderSessionId: Schema.optional(ProviderSessionId),
   }),
   Schema.Struct({
     type: Schema.Literal("thread.pull-request.link"),
@@ -2885,6 +2879,22 @@ const OrchestrationV2InternalCommand = Schema.Union([
     threadId: ThreadId,
     providerThreadId: ProviderThreadId,
     providerTurnId: ProviderTurnId,
+  }),
+  /**
+   * Fork: moves the thread's workspace to where its live provider session
+   * moved itself (Claude's EnterWorktree), keeping that session running there
+   * instead of detaching it. Rejected unless the same session process
+   * (`providerSessionId` at `providerSessionCreatedAt`) still runs the thread.
+   */
+  Schema.Struct({
+    type: Schema.Literal("thread.workspace.follow-session"),
+    commandId: CommandId,
+    threadId: ThreadId,
+    worktreePath: Schema.NullOr(TrimmedNonEmptyString),
+    branch: Schema.NullOr(TrimmedNonEmptyString),
+    expectedWorktreePath: Schema.NullOr(TrimmedNonEmptyString),
+    providerSessionId: ProviderSessionId,
+    providerSessionCreatedAt: Schema.DateTimeUtc,
   }),
 ]);
 export type OrchestrationV2InternalCommand = typeof OrchestrationV2InternalCommand.Type;
