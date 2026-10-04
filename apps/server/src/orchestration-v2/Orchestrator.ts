@@ -486,6 +486,39 @@ function nextQueuedRun(
   return queuedRunsInDeliveryOrder(projection)[0];
 }
 
+/**
+ * Fork batch release: the queued runs that join `leader`'s turn as steers.
+ * Only user-typed messages batch, and only the unbroken run of them right
+ * behind the leader with its model selection, so release keeps queue order.
+ */
+function queueBatchFollowers(
+  projection: Pick<OrchestrationV2ThreadProjection, "runs" | "messages">,
+  leader: OrchestrationV2Run,
+): ReadonlyArray<OrchestrationV2Run> {
+  const batchable = (run: OrchestrationV2Run) => {
+    const message = projection.messages.find((candidate) => candidate.id === run.userMessageId);
+    return (
+      message !== undefined &&
+      message.createdBy === "user" &&
+      message.notification === undefined &&
+      message.delegatedCompletion === undefined &&
+      message.scheduledTaskId === undefined &&
+      message.senderThreadId === undefined &&
+      !isNativeMaintenanceCommand(message) &&
+      run.restartContinuationOfRunId === undefined &&
+      run.queueHeld !== true
+    );
+  };
+  if (!batchable(leader)) return [];
+  const followers: Array<OrchestrationV2Run> = [];
+  for (const run of queuedRunsInDeliveryOrder(projection)) {
+    if (run.id === leader.id) continue;
+    if (!batchable(run) || !modelSelectionsEqual(run.modelSelection, leader.modelSelection)) break;
+    followers.push(run);
+  }
+  return followers;
+}
+
 function latestStableRun(
   projection: Pick<OrchestrationV2ThreadProjection, "runs">,
 ): OrchestrationV2Run | null {
@@ -1485,8 +1518,9 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
         ),
         updatedAt: now,
       };
+      const { queueBatchLeaderRunId: _previousBatchLeader, ...unbatchedQueuedRun } = queuedRun;
       const startingRun: OrchestrationV2Run = {
-        ...queuedRun,
+        ...unbatchedQueuedRun,
         status: "starting",
         queuePosition: null,
         startedAt: null,
@@ -1728,6 +1762,17 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
             occurredAt: now,
             payload: startingRun,
           },
+          // Fork batch release: the messages waiting now join this turn once
+          // it runs (releaseQueueBatch); anything queued after this does not.
+          ...queueBatchFollowers(projection, queuedRun).map((run) => ({
+            type: "run.updated" as const,
+            threadId,
+            runId: run.id,
+            ...(run.rootNodeId === null ? {} : { nodeId: run.rootNodeId }),
+            providerInstanceId: run.providerInstanceId,
+            occurredAt: now,
+            payload: { ...run, queueBatchLeaderRunId: queuedRun.id },
+          })),
         ],
         [
           ...sessionsToDetach.map((session) => ({
@@ -9517,6 +9562,76 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
       ),
     );
 
+  // Fork batch release: once a batch leader's provider turn runs, the runs
+  // queued behind it at its start join that turn as steers, in queue order.
+  // The first one that cannot be steered stops the release; it and the rest
+  // stay queued and run as later turns.
+  const releaseQueueBatch = (
+    threadId: ThreadId,
+    runAttemptId: NonNullable<OrchestrationV2Run["activeAttemptId"]>,
+  ) =>
+    Effect.gen(function* () {
+      const records = yield* projectionStore.getThreadRecords(threadId, ["runs"]);
+      const leaderId = records.runs.find((run) => run.activeAttemptId === runAttemptId)?.id;
+      if (
+        leaderId === undefined ||
+        !records.runs.some(
+          (run) => run.status === "queued" && run.queueBatchLeaderRunId === leaderId,
+        )
+      ) {
+        return;
+      }
+      yield* threadDispatch.withLock(
+        threadId,
+        Effect.gen(function* () {
+          const projection = yield* projectionStore.getThreadRecords(
+            threadId,
+            ["runs", "messages", "providerThreads", "providerTurns"],
+            { messageRoles: ["user"] },
+          );
+          const leader = projection.runs.find((run) => run.id === leaderId);
+          const providerSessionId = projection.providerThreads.find(
+            (providerThread) => providerThread.id === leader?.providerThreadId,
+          )?.providerSessionId;
+          if (
+            leader?.status !== "running" ||
+            providerSessionId == null ||
+            // Promotion steers with the thread's selection; a changed one would restart the turn.
+            !modelSelectionsEqual(projection.thread.modelSelection, leader.modelSelection) ||
+            !projection.providerTurns.some(
+              (turn) => turn.runAttemptId === leader.activeAttemptId && turn.status === "running",
+            )
+          ) {
+            return;
+          }
+          const session = yield* providerSessions.get(providerSessionId);
+          if (
+            Option.isNone(session) ||
+            !session.value.providerSession.capabilities.turns.supportsActiveSteering
+          ) {
+            return;
+          }
+          for (const run of queuedRunsInDeliveryOrder(projection)) {
+            if (isAutomaticCompletionRun(projection, run)) continue;
+            if (run.queueBatchLeaderRunId !== leader.id || run.queueHeld === true) return;
+            yield* dispatchWithReceiptEffect({
+              type: "queued-message.promote-to-steer",
+              commandId: CommandId.make(
+                `command:system:queue-batch-release:${leader.id}:${run.id}`,
+              ),
+              threadId,
+              queuedRunId: run.id,
+              targetRunId: leader.id,
+            });
+          }
+        }),
+      );
+    }).pipe(
+      Effect.catchCause((cause) =>
+        Effect.logWarning("Failed to release a queued V2 batch", { threadId, cause }),
+      ),
+    );
+
   // Historical terminal events are already represented by the projections
   // below. Replaying the full event table on every server start delays live
   // queue promotion in proportion to the lifetime size of the database.
@@ -9537,6 +9652,18 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
             stored.event.payload.status === "rolled_back"),
       ),
       Stream.runForEach(handleTerminalRun),
+      Effect.forkDetach,
+    );
+  yield* eventSink
+    .stream({ afterSequence: terminalEventsAfterSequence, eventType: "provider-turn.updated" })
+    .pipe(
+      Stream.runForEach((stored) =>
+        stored.event.type === "provider-turn.updated" &&
+        stored.event.payload.status === "running" &&
+        stored.event.payload.runAttemptId !== null
+          ? releaseQueueBatch(stored.event.threadId, stored.event.payload.runAttemptId)
+          : Effect.void,
+      ),
       Effect.forkDetach,
     );
 

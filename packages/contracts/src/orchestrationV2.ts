@@ -548,6 +548,12 @@ export const OrchestrationV2Run = Schema.Struct({
     }),
   ),
   delegatedCompletion: Schema.optional(OrchestrationV2DelegatedCompletionCohort),
+  /**
+   * Fork batch release: set on queued runs that were waiting when this run
+   * started from the queue. They join its turn as steers once it is running;
+   * runs queued later never join.
+   */
+  queueBatchLeaderRunId: Schema.optional(RunId),
 });
 export type OrchestrationV2Run = typeof OrchestrationV2Run.Type;
 

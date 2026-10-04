@@ -170,6 +170,12 @@ Queued messages appear above the composer. Rows show a thumbnail of any attached
 the text. Drag a row by its handle to reorder it, use the handle's arrow keys, promote the message
 to a steer, or remove it.
 
+When the active turn ends, the waiting messages go in together: the first one starts the next turn
+and the rest join it as steers, in order, once it is running. Anything you queue after that turn
+has started waits for the next turn. A message queued with a different model starts a turn of its
+own, and the messages behind it go in with that turn instead. If the agent can't steer a running
+turn, queued messages run one turn each.
+
 If the server restarts, saved queued messages keep their order and are held. Press
 **Resume** in an empty composer on web or desktop, or **Resume queue** in the queue
 sheet on mobile, to continue. You can edit, reorder, or remove held messages without starting them.
