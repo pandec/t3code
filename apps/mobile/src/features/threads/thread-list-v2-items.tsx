@@ -893,6 +893,8 @@ export const ThreadListV2Row = memo(function ThreadListV2Row(props: {
     snoozeSupported: props.snoozeSupported,
     snoozable: canSnooze(thread, { now: new Date().toISOString() }),
     snoozed: snoozedRow,
+    pinnable: props.pinningSupported,
+    pinned: pinnedRow,
     forkable,
   });
   const snoozePresets = useMemo(
@@ -1200,28 +1202,40 @@ export const ThreadListV2Row = memo(function ThreadListV2Row(props: {
   );
   // Leading panel, ordered from the screen edge inward. Archive (through the
   // row's archive toggle) stays last so it remains what a full swipe right
-  // commits.
-  const leftActions = swipeActions.left.map((action) =>
-    action === "fork"
-      ? {
-          accessibilityLabel: `Fork ${thread.title}`,
-          tone: "secondary" as const,
-          icon: "arrow.triangle.branch" as const,
-          label: "Fork",
-          onPress: handleFork,
-        }
-      : {
-          accessibilityLabel:
-            archiveToggle === "cancel"
-              ? `Cancel pending archive of ${thread.title}`
-              : archiveToggle === "schedule"
-                ? `Archive ${thread.title} when done`
-                : `Archive ${thread.title}`,
-          icon: "archivebox" as const,
-          label: archiveToggle === "cancel" ? "Keep" : "Archive",
-          onPress: handleArchive,
-        },
-  );
+  // commits. Tones keep each action distinct: pin is warning, fork is
+  // secondary, archive is the panel's primary default.
+  const leftActions = swipeActions.left.map((action) => {
+    if (action === "pin" || action === "unpin") {
+      const label = action === "pin" ? "Pin" : "Unpin";
+      return {
+        accessibilityLabel: `${label} ${thread.title}`,
+        tone: "warning" as const,
+        icon: action === "pin" ? ("pin" as const) : ("pin.slash" as const),
+        label,
+        onPress: action === "pin" ? handlePin : handleUnpin,
+      };
+    }
+    if (action === "fork") {
+      return {
+        accessibilityLabel: `Fork ${thread.title}`,
+        tone: "secondary" as const,
+        icon: "arrow.triangle.branch" as const,
+        label: "Fork",
+        onPress: handleFork,
+      };
+    }
+    return {
+      accessibilityLabel:
+        archiveToggle === "cancel"
+          ? `Cancel pending archive of ${thread.title}`
+          : archiveToggle === "schedule"
+            ? `Archive ${thread.title} when done`
+            : `Archive ${thread.title}`,
+      icon: "archivebox" as const,
+      label: archiveToggle === "cancel" ? "Keep" : "Archive",
+      onPress: handleArchive,
+    };
+  });
   // What a full swipe right commits: the last leading action, following the
   // archive toggle (a pending archive is cancelled, a busy thread deferred).
   const lastLeftAction = swipeActions.left.at(-1);
@@ -1441,6 +1455,34 @@ export const ThreadListV2Row = memo(function ThreadListV2Row(props: {
     </>
   );
 
+  // Snoozed rows keep their pin underneath; the glyph doubles as Unpin.
+  const slimPinIndicator = !pinnedRow ? null : props.pinningSupported ? (
+    <Pressable
+      accessibilityLabel={`Unpin ${thread.title}`}
+      accessibilityRole="button"
+      hitSlop={8}
+      onPress={(event) => {
+        event.stopPropagation();
+        handleUnpin();
+      }}
+      style={({ pressed }) => ({ opacity: pressed ? 0.5 : 1 })}
+    >
+      <SymbolView
+        name="pin"
+        size={12}
+        tintColor={selected ? selectedForegroundColor : pinTintColor}
+        type="monochrome"
+      />
+    </Pressable>
+  ) : (
+    <SymbolView
+      name="pin"
+      size={12}
+      tintColor={selected ? selectedForegroundColor : pinTintColor}
+      type="monochrome"
+    />
+  );
+
   const rowContent = (close: () => void) =>
     variant === "card" ? (
       <RowPressable
@@ -1550,6 +1592,7 @@ export const ThreadListV2Row = memo(function ThreadListV2Row(props: {
             ) : null}
           </View>
           {listeningIndicator}
+          {slimPinIndicator}
           {archivePendingIcon}
           {props.hasQueuedMessages ? <QueuedMessageIcon selected={selected} /> : null}
           <Text

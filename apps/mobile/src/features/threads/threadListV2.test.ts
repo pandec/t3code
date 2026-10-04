@@ -374,6 +374,42 @@ describe("resolveThreadListV2SwipeActions", () => {
     ).toEqual(["archive"]);
   });
 
+  it("leads the panel with pin on card rows, flipping to unpin on pinned rows", () => {
+    const input = {
+      variant: "card",
+      settlementSupported: true,
+      snoozeSupported: true,
+      snoozable: true,
+      pinnable: true,
+      forkable: true,
+    } as const;
+    expect(resolveThreadListV2SwipeActions(input).left).toEqual(["pin", "fork", "archive"]);
+    expect(resolveThreadListV2SwipeActions({ ...input, pinned: true }).left).toEqual([
+      "unpin",
+      "fork",
+      "archive",
+    ]);
+    expect(resolveThreadListV2SwipeActions({ ...input, forkable: false }).left).toEqual([
+      "pin",
+      "archive",
+    ]);
+  });
+
+  it("drops pin where the row menu has none: unsupported servers and settled rows", () => {
+    const input = {
+      settlementSupported: true,
+      snoozeSupported: true,
+      snoozable: true,
+      forkable: true,
+    } as const;
+    expect(
+      resolveThreadListV2SwipeActions({ ...input, variant: "card", pinnable: false }).left,
+    ).toEqual(["fork", "archive"]);
+    expect(
+      resolveThreadListV2SwipeActions({ ...input, variant: "slim", pinnable: true }).left,
+    ).toEqual(["fork", "archive"]);
+  });
+
   it("keeps the snoozed shelf on archive alone", () => {
     expect(
       resolveThreadListV2SwipeActions({
@@ -382,6 +418,8 @@ describe("resolveThreadListV2SwipeActions", () => {
         snoozeSupported: true,
         snoozable: true,
         snoozed: true,
+        pinnable: true,
+        pinned: true,
         forkable: true,
       }).left,
     ).toEqual(["archive"]);
@@ -717,6 +755,19 @@ describe("buildThreadListV2Items", () => {
     const whileSnoozed = buildThreadListV2Items({ ...snoozedInput, now: NOW });
     expect(whileSnoozed.items.map((item) => item.thread.id)).toEqual(["active"]);
     expect(whileSnoozed.snoozedCount).toBe(1);
+
+    // On the snoozed shelf the row keeps its pin glyph (and Unpin).
+    const expandedSnoozed = buildThreadListV2Items({
+      ...snoozedInput,
+      now: NOW,
+      snoozedShelfExpanded: true,
+    });
+    expect(expandedSnoozed.items[1]).toMatchObject({
+      thread: { id: "pinned-snoozed" },
+      variant: "slim",
+      snoozed: true,
+      pinned: true,
+    });
 
     // After the wake time: the thread returns pinned, back on top.
     const afterWake = buildThreadListV2Items({ ...snoozedInput, now: "2026-06-03T10:00:00.000Z" });
