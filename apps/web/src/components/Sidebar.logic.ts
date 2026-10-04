@@ -7,11 +7,6 @@ import {
   type AtomCommandResult,
 } from "@t3tools/client-runtime/state/runtime";
 import { defaultAnimateLayoutChanges, type AnimateLayoutChanges } from "@dnd-kit/sortable";
-import {
-  admitNewAttentionKeys,
-  createAttentionFilter,
-  type AttentionFilterState,
-} from "@t3tools/client-runtime/state/thread-attention";
 import { threadSearchMatchKey } from "@t3tools/client-runtime/state/thread-search";
 import type { ContextMenuItem, EnvironmentId, ThreadId } from "@t3tools/contracts";
 import type { SidebarProjectSortOrder, SidebarThreadSortOrder } from "@t3tools/contracts/settings";
@@ -1222,47 +1217,6 @@ export function resolveSidebarV2TopStatus(input: {
 
 export function shouldShowSidebarV2Duration(status: SidebarThreadStatus): boolean {
   return status === "working";
-}
-
-export { hasUnseenWake } from "@t3tools/client-runtime/state/thread-attention";
-
-export interface SidebarV2AttentionFilterThread {
-  readonly threadKey: string;
-}
-
-export interface SidebarV2AttentionFilterState {
-  readonly memberThreadKeys: ReadonlySet<string>;
-  readonly knownThreadKeys: ReadonlySet<string>;
-}
-
-function toSidebarAttentionFilterState(state: AttentionFilterState): SidebarV2AttentionFilterState {
-  return { memberThreadKeys: state.memberKeys, knownThreadKeys: state.knownKeys };
-}
-
-export function createSidebarV2AttentionFilter(input: {
-  readonly initialMemberThreadKeys: readonly string[];
-  readonly threads: readonly SidebarV2AttentionFilterThread[];
-}): SidebarV2AttentionFilterState {
-  return toSidebarAttentionFilterState(
-    createAttentionFilter({
-      initialMemberKeys: input.initialMemberThreadKeys,
-      keys: input.threads.map((thread) => thread.threadKey),
-    }),
-  );
-}
-
-export function admitNewSidebarV2AttentionThreads(
-  state: SidebarV2AttentionFilterState,
-  threads: readonly SidebarV2AttentionFilterThread[],
-): SidebarV2AttentionFilterState {
-  const next = admitNewAttentionKeys(
-    { memberKeys: state.memberThreadKeys, knownKeys: state.knownThreadKeys },
-    threads.map((thread) => thread.threadKey),
-  );
-  if (next.memberKeys === state.memberThreadKeys && next.knownKeys === state.knownThreadKeys) {
-    return state;
-  }
-  return toSidebarAttentionFilterState(next);
 }
 
 /** Working beta: threads busy with work that does not need the user fold into

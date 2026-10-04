@@ -1,7 +1,17 @@
 import { SettingsGroup } from "./SettingsGroup";
 import { Spinner } from "~/components/ui/spinner";
 import { NotificationSettings } from "./NotificationSettings";
-import { ArchiveIcon, ArchiveX, CheckIcon, ChevronRightIcon, SettingsIcon } from "lucide-react";
+import {
+  ArchiveIcon,
+  ArchiveX,
+  BotIcon,
+  CheckIcon,
+  ChevronRightIcon,
+  SearchIcon,
+  SettingsIcon,
+  XIcon,
+} from "lucide-react";
+import { useAtomValue } from "@effect/atom-react";
 import { Link, useNavigate } from "@tanstack/react-router";
 import type { CSSProperties, ReactNode } from "react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
@@ -14,7 +24,7 @@ import {
   type SidebarProjectGroupingMode,
 } from "@t3tools/contracts";
 import { scopeThreadRef } from "@t3tools/client-runtime/environment";
-import { presentThreadShell } from "@t3tools/client-runtime/state/shell";
+import type { EnvironmentThreadShell } from "@t3tools/client-runtime/state/shell";
 import {
   isAtomCommandInterrupted,
   settlePromise,
@@ -96,11 +106,15 @@ import {
 import {
   applyProviderInstanceSettings,
   deriveProviderInstanceEntries,
+  getProviderInstanceEntry,
   sortProviderInstanceEntries,
 } from "../../providerInstances";
 import { ensureLocalApi, readLocalApi } from "../../localApi";
 import { isMacPlatform } from "../../lib/utils";
-import { EMPTY_SERVER_PROVIDERS } from "../../state/server";
+import { EMPTY_SERVER_PROVIDERS, serverEnvironment } from "../../state/server";
+import { useEnvironments, usePrimaryEnvironment } from "../../state/environments";
+import { useAllEnvironmentShellsBootstrapped, useProjects } from "../../state/entities";
+import { useClientSettings } from "../../hooks/useSettings";
 import { useArchivedThreadSnapshots } from "../../lib/archivedThreadsState";
 import { formatRelativeTimeLabel } from "../../timestampFormat";
 import { Button } from "../ui/button";
@@ -147,6 +161,7 @@ import { stackedThreadToast, toastManager } from "../ui/toast";
 import { Tooltip, TooltipPopup, TooltipTrigger } from "../ui/tooltip";
 import { ThemeLibrary } from "./ThemeSettings";
 import {
+  archivedThreadMatchesSearch,
   backgroundActivityOverrideSettings,
   backgroundActivitySharedPolicySettings,
   durationToSeconds,
@@ -173,6 +188,15 @@ import {
 } from "./settingsLayout";
 import { searchableSetting } from "./settingsSearch";
 import { ProjectFavicon } from "../ProjectFavicon";
+import { ProviderInstanceIcon } from "../chat/ProviderInstanceIcon";
+import { buildArchivedThreadGroups } from "../../archivedThreadGrouping";
+import { selectProjectGroupingSettings } from "../../logicalProject";
+import {
+  archivedThreadGroupMatchesScope,
+  archivedThreadMatchesScope,
+  resolveArchivedThreadScopeFilter,
+  shouldDeferArchivedEmptyState,
+} from "../../archivedProjectFilter";
 import { PanelAnimationsPreview } from "./PanelAnimationsPreview";
 
 const ENVIRONMENT_IDENTIFICATION_LABELS: Record<EnvironmentIdentificationMode, string> = {
@@ -609,10 +633,6 @@ export function useSettingsRestore(onRestored?: () => void) {
       ...(settings.sidebarV2CompactCards !== DEFAULT_UNIFIED_SETTINGS.sidebarV2CompactCards
         ? ["Compact thread cards"]
         : []),
-      ...(settings.sidebarAlwaysShowPinnedInAttention !==
-      DEFAULT_UNIFIED_SETTINGS.sidebarAlwaysShowPinnedInAttention
-        ? ["Pinned threads in Attention"]
-        : []),
       ...(settings.sidebarV2NewThreadButtonInProjectRow !==
       DEFAULT_UNIFIED_SETTINGS.sidebarV2NewThreadButtonInProjectRow
         ? ["New thread button position"]
@@ -796,7 +816,6 @@ export function useSettingsRestore(onRestored?: () => void) {
       settings.sidebarWorkingShelfEnabled,
       settings.sidebarThreadPreviewCount,
       settings.sidebarV2CompactCards,
-      settings.sidebarAlwaysShowPinnedInAttention,
       settings.sidebarV2NewThreadButtonInProjectRow,
       settings.sidebarThreadGroupsButton,
       settings.showSkillsInSlashMenu,
@@ -909,8 +928,6 @@ export function useSettingsRestore(onRestored?: () => void) {
       sidebarThreadProviderIconVisibility:
         DEFAULT_UNIFIED_SETTINGS.sidebarThreadProviderIconVisibility,
       sidebarV2CompactCards: DEFAULT_UNIFIED_SETTINGS.sidebarV2CompactCards,
-      sidebarAlwaysShowPinnedInAttention:
-        DEFAULT_UNIFIED_SETTINGS.sidebarAlwaysShowPinnedInAttention,
       sidebarV2NewThreadButtonInProjectRow:
         DEFAULT_UNIFIED_SETTINGS.sidebarV2NewThreadButtonInProjectRow,
       sidebarThreadGroupsButton: DEFAULT_UNIFIED_SETTINGS.sidebarThreadGroupsButton,
@@ -3560,63 +3577,163 @@ export function GeneralSettingsPanel() {
   );
 }
 
+function ArchivedThreadModelIcon({ thread }: { readonly thread: EnvironmentThreadShell }) {
+  const serverConfig = useAtomValue(serverEnvironment.configValueAtom(thread.environmentId));
+  const providerInstance = getProviderInstanceEntry(
+    serverConfig?.providers ?? [],
+    thread.modelSelection.instanceId,
+  );
+  const label = providerInstance
+    ? `${providerInstance.displayName}, ${thread.modelSelection.model}`
+    : `Model ${thread.modelSelection.model}`;
+
+  return (
+    <Tooltip>
+      <TooltipTrigger
+        render={
+          <span
+            role="img"
+            tabIndex={0}
+            aria-label={label}
+            className="inline-flex size-5 shrink-0 items-center justify-center rounded-sm text-muted-foreground outline-hidden focus-visible:ring-1 focus-visible:ring-ring"
+          />
+        }
+      >
+        {providerInstance ? (
+          <ProviderInstanceIcon
+            driverKind={providerInstance.driverKind}
+            displayName={providerInstance.displayName}
+            accentColor={providerInstance.accentColor}
+            iconClassName="size-3.5"
+          />
+        ) : (
+          <BotIcon className="size-3.5" aria-hidden />
+        )}
+      </TooltipTrigger>
+      <TooltipPopup side="top">{label}</TooltipPopup>
+    </Tooltip>
+  );
+}
+
 export function ArchivedThreadsPanel() {
   const { scope } = useSettingsScope();
+  const { environments, isReady: environmentsReady } = useEnvironments();
+  const environmentShellsBootstrapped = useAllEnvironmentShellsBootstrapped();
+  const primaryEnvironment = usePrimaryEnvironment();
+  const projects = useProjects();
+  const groupingSettings = useClientSettings(selectProjectGroupingSettings);
   const { unarchiveThread, confirmAndDeleteThread } = useThreadActions();
+  const [searchQuery, setSearchQuery] = useState("");
+  const [collapsedProjectKeys, setCollapsedProjectKeys] = useState<ReadonlySet<string>>(
+    () => new Set(),
+  );
+  const searchInputRef = useRef<HTMLInputElement>(null);
+  const scopeFilter = useMemo(() => resolveArchivedThreadScopeFilter(scope), [scope]);
+  const selectedProjectLabel = scopeFilter?.label ?? "selected project";
+  // A scope pinned to one environment only asks that environment, so another
+  // machine's outage or slow load cannot mark this view failed or pending.
+  const scopedEnvironmentId = scopeFilter?.environmentId ?? null;
+  const environmentIds = useMemo(
+    () =>
+      scopedEnvironmentId === null
+        ? environments.map((environment) => environment.environmentId)
+        : [scopedEnvironmentId],
+    [environments, scopedEnvironmentId],
+  );
+  const environmentLabelById = useMemo(
+    () =>
+      new Map(
+        environments.map((environment) => [environment.environmentId, environment.label] as const),
+      ),
+    [environments],
+  );
   const {
     snapshots: archivedSnapshots,
     error: archiveError,
     isLoading: isLoadingArchive,
     refresh: refreshArchivedThreads,
-  } = useArchivedThreadSnapshots(scope.environmentIds);
+  } = useArchivedThreadSnapshots(environmentIds);
 
-  const archivedGroups = useMemo(() => {
-    const selectedProjectKeys =
-      scope.kind === "project" || scope.kind === "checkout"
-        ? new Set(scope.members.map((member) => `${member.environmentId}:${member.id}`))
-        : null;
-    const projectsByEnvironmentAndId = new Map(
-      archivedSnapshots.flatMap(({ environmentId, snapshot }) =>
-        snapshot.projects
-          .filter(
-            (project) =>
-              selectedProjectKeys === null ||
-              selectedProjectKeys.has(`${environmentId}:${project.id}`),
-          )
-          .map(
-            (project) => [`${environmentId}:${project.id}`, { ...project, environmentId }] as const,
+  const archivedGroups = useMemo(
+    () =>
+      buildArchivedThreadGroups({
+        groupingSettings,
+        primaryEnvironmentId: primaryEnvironment?.environmentId ?? null,
+        projects,
+        resolveEnvironmentLabel: (environmentId) =>
+          environmentLabelById.get(environmentId) ??
+          (environmentId === primaryEnvironment?.environmentId ? "Local" : "Remote"),
+        snapshots: archivedSnapshots,
+      }),
+    [
+      archivedSnapshots,
+      environmentLabelById,
+      groupingSettings,
+      primaryEnvironment?.environmentId,
+      projects,
+    ],
+  );
+  const filteredArchivedGroups = useMemo(() => {
+    return archivedGroups.flatMap((group) => {
+      if (!archivedThreadGroupMatchesScope(group, scopeFilter)) {
+        return [];
+      }
+      const matchingThreads = group.threads.filter(
+        ({ environmentLabel, project, thread }) =>
+          archivedThreadMatchesScope({ project, thread }, scopeFilter) &&
+          archivedThreadMatchesSearch(
+            {
+              environmentLabel,
+              modelName: thread.modelSelection.model,
+              projectName: `${group.displayName} ${project.title}`,
+              projectCwd: project.workspaceRoot,
+              threadTitle: thread.title,
+            },
+            searchQuery,
           ),
-      ),
-    );
-    const threads = archivedSnapshots.flatMap(({ environmentId, snapshot }) =>
-      snapshot.threads.map((thread) => presentThreadShell(environmentId, thread)),
-    );
+      );
+      return matchingThreads.length > 0 ? [{ ...group, threads: matchingThreads }] : [];
+    });
+  }, [archivedGroups, scopeFilter, searchQuery]);
+  const matchingThreadCount = useMemo(
+    () => filteredArchivedGroups.reduce((count, group) => count + group.threads.length, 0),
+    [filteredArchivedGroups],
+  );
+  const hasSearchQuery = searchQuery.trim().length > 0;
+  const hasProjectFilter = scopeFilter !== null;
+  const hasActiveFilter = hasSearchQuery || hasProjectFilter;
+  const archiveSourcesReady = environmentsReady && environmentShellsBootstrapped;
+  const isLoadingArchiveSources = !archiveSourcesReady || isLoadingArchive;
+  const shouldDeferEmptyState = shouldDeferArchivedEmptyState({
+    hasMatchingGroups: filteredArchivedGroups.length > 0,
+    isLoading: isLoadingArchiveSources,
+    hasError: archiveError !== null,
+  });
 
-    const archivedProjects = Array.from(projectsByEnvironmentAndId.values());
-    const groups: Array<{
-      readonly project: (typeof archivedProjects)[number];
-      readonly threads: Array<(typeof threads)[number]>;
-    }> = [];
-    for (const project of archivedProjects) {
-      const projectThreads: Array<(typeof threads)[number]> = [];
-      for (const thread of threads) {
-        if (thread.projectId === project.id && thread.environmentId === project.environmentId) {
-          projectThreads.push(thread);
-        }
+  useEffect(() => {
+    const handleKeyDown = (event: KeyboardEvent) => {
+      const isMod = event.metaKey || event.ctrlKey;
+      if (event.defaultPrevented || !isMod || event.altKey || event.key.toLowerCase() !== "f") {
+        return;
       }
-      if (projectThreads.length > 0) {
-        groups.push({
-          project,
-          threads: projectThreads.toSorted((left, right) => {
-            const leftKey = left.archivedAt ?? left.createdAt;
-            const rightKey = right.archivedAt ?? right.createdAt;
-            return rightKey.localeCompare(leftKey) || right.id.localeCompare(left.id);
-          }),
-        });
+
+      const target = event.target;
+      if (
+        target !== searchInputRef.current &&
+        target instanceof HTMLElement &&
+        (target.tagName === "INPUT" || target.tagName === "TEXTAREA" || target.isContentEditable)
+      ) {
+        return;
       }
-    }
-    return groups;
-  }, [archivedSnapshots, scope]);
+
+      event.preventDefault();
+      searchInputRef.current?.focus();
+      searchInputRef.current?.select();
+    };
+
+    window.addEventListener("keydown", handleKeyDown);
+    return () => window.removeEventListener("keydown", handleKeyDown);
+  }, []);
 
   const handleArchivedThreadContextMenu = useCallback(
     async (threadRef: ScopedThreadRef, position: { x: number; y: number }) => {
@@ -3668,20 +3785,86 @@ export function ArchivedThreadsPanel() {
 
   return (
     <SettingsPageContainer>
+      <div className="space-y-1.5">
+        <div className="relative">
+          <SearchIcon
+            className="pointer-events-none absolute top-1/2 left-3 size-3.5 -translate-y-1/2 text-muted-foreground"
+            aria-hidden
+          />
+          <input
+            ref={searchInputRef}
+            type="search"
+            value={searchQuery}
+            onChange={(event) => setSearchQuery(event.currentTarget.value)}
+            onKeyDown={(event) => {
+              if (event.key === "Escape" && searchQuery.length > 0) {
+                event.preventDefault();
+                event.stopPropagation();
+                setSearchQuery("");
+              }
+            }}
+            placeholder="Search archived threads"
+            aria-label="Search archived threads"
+            aria-describedby="archived-thread-search-status"
+            className="h-9 w-full rounded-lg border border-input bg-background pr-9 pl-9 text-sm text-foreground shadow-xs/5 outline-none placeholder:text-muted-foreground/72 focus-visible:border-ring focus-visible:ring-3 focus-visible:ring-ring/24 [&::-webkit-search-cancel-button]:appearance-none [&::-webkit-search-decoration]:appearance-none"
+          />
+          {searchQuery.length > 0 ? (
+            <Button
+              type="button"
+              size="icon-xs"
+              variant="ghost"
+              className="absolute top-1/2 right-2 size-6 -translate-y-1/2"
+              onClick={() => {
+                setSearchQuery("");
+                searchInputRef.current?.focus({ preventScroll: true });
+              }}
+              aria-label="Clear archived thread search"
+            >
+              <XIcon className="size-3.5" />
+            </Button>
+          ) : null}
+        </div>
+        <p
+          id="archived-thread-search-status"
+          className="min-h-4 px-1 text-2xs text-muted-foreground"
+          aria-live={isLoadingArchiveSources || archiveError !== null ? "off" : "polite"}
+        >
+          {isLoadingArchiveSources
+            ? `Loading archived threads${hasProjectFilter ? ` in ${selectedProjectLabel}` : ""}…`
+            : archiveError !== null && filteredArchivedGroups.length === 0
+              ? `Archived thread results${hasProjectFilter ? ` in ${selectedProjectLabel}` : ""} may be incomplete`
+              : hasActiveFilter
+                ? `${matchingThreadCount} ${matchingThreadCount === 1 ? "thread" : "threads"}${
+                    hasSearchQuery ? " found" : ""
+                  }${hasProjectFilter ? ` in ${selectedProjectLabel}` : ""}`
+                : "Press Command+F or Ctrl+F to focus search."}
+        </p>
+      </div>
+
+      {archiveError && archivedGroups.length > 0 ? (
+        <SettingsSection title="Archive availability" role="status">
+          <SettingsRow
+            title="Some archived threads could not be loaded"
+            description="One or more environments are unavailable. The results below may be incomplete."
+          />
+        </SettingsSection>
+      ) : null}
+
       {archivedGroups.length === 0 ? (
         <SettingsSection
           id={isLoadingArchive ? undefined : searchableSetting("archive").id}
           title={searchableSetting("archive").title}
+          role={archiveError ? "alert" : "status"}
         >
           <SettingsRow
             title={
               <span className="inline-flex items-center gap-2">
-                {isLoadingArchive ? (
+                {isLoadingArchiveSources ? (
                   <Spinner size="sm" tone="muted" />
                 ) : (
                   <ArchiveIcon className="size-3.5 text-muted-foreground" />
                 )}
-                {isLoadingArchive
+                {isLoadingArchiveSources
                   ? "Loading archived threads"
                   : archiveError
                     ? "Could not load archived threads"
@@ -3689,77 +3872,98 @@ export function ArchivedThreadsPanel() {
               </span>
             }
             description={
-              isLoadingArchive
+              isLoadingArchiveSources
                 ? "Checking connected environments."
                 : (archiveError ?? "Archived threads will appear here.")
             }
           />
         </SettingsSection>
+      ) : shouldDeferEmptyState ? (
+        <SettingsSection
+          title="Archived threads"
+          role={archiveError === null ? "status" : undefined}
+        >
+          <SettingsRow
+            title={
+              <span className="inline-flex items-center gap-2">
+                {isLoadingArchiveSources ? (
+                  <Spinner size="sm" tone="muted" />
+                ) : (
+                  <ArchiveIcon className="size-3.5 text-muted-foreground" />
+                )}
+                {isLoadingArchiveSources
+                  ? `Loading archived threads${hasProjectFilter ? ` in ${selectedProjectLabel}` : ""}`
+                  : `Archived threads${hasProjectFilter ? ` in ${selectedProjectLabel}` : ""} may be unavailable`}
+              </span>
+            }
+            description={
+              isLoadingArchiveSources
+                ? "Checking connected environments."
+                : "One or more environments could not be loaded, so this result may be incomplete."
+            }
+          />
+        </SettingsSection>
+      ) : filteredArchivedGroups.length === 0 ? (
+        <SettingsSection title="Archived threads">
+          <SettingsRow
+            title={
+              hasProjectFilter
+                ? `No archived threads in ${selectedProjectLabel}`
+                : "No matching archived threads"
+            }
+            description={
+              hasProjectFilter && !hasSearchQuery
+                ? "Widen the scope above or choose another project or environment."
+                : "Try a different thread title, project, or workspace path."
+            }
+          />
+        </SettingsSection>
       ) : (
-        archivedGroups.map(({ project, threads: projectThreads }, index) => (
-          <SettingsSection
-            key={`${project.environmentId}:${project.id}`}
-            id={index === 0 ? searchableSetting("archive").id : undefined}
-            title={project.title}
-            icon={<ProjectFavicon project={project} />}
-          >
-            {projectThreads.map((thread) => (
-              <SettingsRow
-                key={thread.id}
-                onContextMenu={(event) => {
-                  event.preventDefault();
-                  void (async () => {
-                    const result = await settlePromise(() =>
-                      handleArchivedThreadContextMenu(
-                        scopeThreadRef(thread.environmentId, thread.id),
-                        {
-                          x: event.clientX,
-                          y: event.clientY,
-                        },
-                      ),
-                    );
-                    if (result._tag === "Failure") {
-                      const error = squashAtomCommandFailure(result);
-                      toastManager.add(
-                        stackedThreadToast({
-                          type: "error",
-                          title: "Archived thread action failed",
-                          description:
-                            error instanceof Error ? error.message : "An error occurred.",
-                        }),
-                      );
-                    }
-                  })();
-                }}
-                title={thread.title}
-                description={
-                  <>
-                    Archived {formatRelativeTimeLabel(thread.archivedAt ?? thread.createdAt)}
-                    {" \u00b7 Created "}
-                    {formatRelativeTimeLabel(thread.createdAt)}
-                  </>
-                }
-                control={
-                  <Button
-                    type="button"
-                    variant="outline"
-                    size="xs"
-                    className="shrink-0"
-                    onClick={() => {
-                      void (async () => {
-                        const result = await unarchiveThread(
-                          scopeThreadRef(thread.environmentId, thread.id),
-                        );
-                        if (result._tag === "Success") {
-                          refreshArchivedThreads();
-                          return;
+        filteredArchivedGroups.map((group, index) => {
+          const isCollapsed = !hasActiveFilter && collapsedProjectKeys.has(group.key);
+          return (
+            <SettingsSection
+              key={group.key}
+              id={index === 0 ? searchableSetting("archive").id : undefined}
+              title={group.displayName}
+              collapsed={isCollapsed}
+              onToggleCollapsed={
+                hasActiveFilter
+                  ? undefined
+                  : () => {
+                      setCollapsedProjectKeys((current) => {
+                        const next = new Set(current);
+                        if (next.has(group.key)) {
+                          next.delete(group.key);
+                        } else {
+                          next.add(group.key);
                         }
-                        if (!isAtomCommandInterrupted(result)) {
+                        return next;
+                      });
+                    }
+              }
+              icon={<ProjectFavicon project={group.representativeProject} />}
+            >
+              {group.threads.map(({ environmentLabel, thread }) => {
+                const threadRef = scopeThreadRef(thread.environmentId, thread.id);
+                return (
+                  <SettingsRow
+                    key={`${thread.environmentId}:${thread.id}`}
+                    onContextMenu={(event) => {
+                      event.preventDefault();
+                      void (async () => {
+                        const result = await settlePromise(() =>
+                          handleArchivedThreadContextMenu(threadRef, {
+                            x: event.clientX,
+                            y: event.clientY,
+                          }),
+                        );
+                        if (result._tag === "Failure") {
                           const error = squashAtomCommandFailure(result);
                           toastManager.add(
                             stackedThreadToast({
                               type: "error",
-                              title: "Failed to unarchive thread",
+                              title: "Archived thread action failed",
                               description:
                                 error instanceof Error ? error.message : "An error occurred.",
                             }),
@@ -3767,15 +3971,60 @@ export function ArchivedThreadsPanel() {
                         }
                       })();
                     }}
-                  >
-                    <ArchiveX className="size-3.5" />
-                    <span>Unarchive</span>
-                  </Button>
-                }
-              />
-            ))}
-          </SettingsSection>
-        ))
+                    title={
+                      <span className="inline-flex min-w-0 items-center gap-2">
+                        <ArchivedThreadModelIcon thread={thread} />
+                        <span className="truncate">{thread.title}</span>
+                      </span>
+                    }
+                    description={
+                      <>
+                        {environmentLabel}
+                        {" \u00b7 "}
+                        {thread.modelSelection.model}
+                        {" \u00b7 Archived "}
+                        {formatRelativeTimeLabel(thread.archivedAt ?? thread.createdAt)}
+                        {" \u00b7 Created "}
+                        {formatRelativeTimeLabel(thread.createdAt)}
+                      </>
+                    }
+                    control={
+                      <Button
+                        type="button"
+                        variant="outline"
+                        size="sm"
+                        className="shrink-0 cursor-pointer"
+                        onClick={() => {
+                          void (async () => {
+                            const result = await unarchiveThread(threadRef);
+                            if (result._tag === "Success") {
+                              refreshArchivedThreads();
+                              return;
+                            }
+                            if (!isAtomCommandInterrupted(result)) {
+                              const error = squashAtomCommandFailure(result);
+                              toastManager.add(
+                                stackedThreadToast({
+                                  type: "error",
+                                  title: "Failed to unarchive thread",
+                                  description:
+                                    error instanceof Error ? error.message : "An error occurred.",
+                                }),
+                              );
+                            }
+                          })();
+                        }}
+                      >
+                        <ArchiveX className="size-3.5" />
+                        <span>Unarchive</span>
+                      </Button>
+                    }
+                  />
+                );
+              })}
+            </SettingsSection>
+          );
+        })
       )}
     </SettingsPageContainer>
   );

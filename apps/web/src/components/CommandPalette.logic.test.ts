@@ -17,6 +17,7 @@ import {
   buildLinkedThreadActionItems,
   buildMoveToGroupItems,
   buildRenameThreadViewItems,
+  buildSnoozeThreadViewItems,
   enumerateCommandPaletteItems,
   filterPinnedBrowseEntries,
   filterCommandPaletteGroups,
@@ -344,6 +345,75 @@ describe("buildRenameThreadViewItems", () => {
     expect(
       buildRenameThreadViewItems({ ...baseInput, draft: "x", canRegenerateTitle: false }),
     ).toHaveLength(1);
+  });
+});
+
+describe("buildSnoozeThreadViewItems", () => {
+  const now = new Date(2026, 8, 16, 10, 30);
+  const presets = [
+    {
+      id: "hour" as const,
+      label: "In an hour",
+      whenLabel: "11:30",
+      snoozedUntil: "2026-09-16T11:30:00.000Z",
+    },
+    {
+      id: "until-woken" as const,
+      label: "Until I wake it",
+      whenLabel: "no timer",
+      snoozedUntil: null,
+    },
+  ];
+  const baseInput = {
+    now,
+    presets,
+    timestampFormat: "24-hour" as const,
+    icon: null,
+    customIcon: null,
+    renderWhen: () => null,
+    snooze: async () => undefined,
+    custom: async () => undefined,
+  };
+
+  it("lists presets then Custom when the query is not a time", () => {
+    expect(
+      buildSnoozeThreadViewItems({ ...baseInput, query: "" }).map((item) => item.value),
+    ).toEqual(["snooze:hour", "snooze:until-woken", "snooze:custom"]);
+  });
+
+  it("prepends a parsed row that snoozes to the typed time and stays searchable", async () => {
+    const snooze = vi.fn(async () => undefined);
+    const items = buildSnoozeThreadViewItems({ ...baseInput, query: "45m", snooze });
+    expect(items[0]?.value).toBe(`snooze:parsed:${new Date(2026, 8, 16, 11, 15).toISOString()}`);
+    expect(items[0]?.title).toBe("Snooze for 45 minutes");
+    expect(items[0]?.searchTerms).toContain("45m");
+    await items[0]!.run();
+    expect(snooze).toHaveBeenCalledWith({
+      snoozedUntil: new Date(2026, 8, 16, 11, 15).toISOString(),
+    });
+  });
+
+  it.each(["in 2 hours", "2:30 pm", "  IN   2 HOURS  ", "fri 9am"])(
+    "keeps the parsed row after token filtering %s",
+    (query) => {
+      const items = buildSnoozeThreadViewItems({ ...baseInput, query });
+      const groups = filterCommandPaletteGroups({
+        activeGroups: [{ value: "snooze-thread", label: "Snooze until", items }],
+        query,
+        isInSubmenu: true,
+        projectSearchItems: [],
+        threadSearchItems: [],
+      });
+      expect(groups[0]?.items[0]?.value).toBe(items[0]?.value);
+      expect(groups[0]?.items[0]?.value).toMatch(/^snooze:parsed:/);
+    },
+  );
+
+  it("passes presets through untouched, including the indefinite one", async () => {
+    const snooze = vi.fn(async () => undefined);
+    const items = buildSnoozeThreadViewItems({ ...baseInput, query: "", snooze });
+    await items[1]!.run();
+    expect(snooze).toHaveBeenCalledWith(presets[1]);
   });
 });
 

@@ -99,6 +99,7 @@ import {
   GitBranchIcon,
   GitForkIcon,
   GroupIcon,
+  InboxIcon,
   MessageCircleQuestionIcon,
   PinIcon,
   PinOffIcon,
@@ -342,7 +343,7 @@ const SETTLED_TAIL_PAGE_COUNT = 25;
 const SETTLED_SHELF_EXPANDED_KEY = "t3code:sidebar-v2:settled-expanded";
 const SNOOZED_SHELF_EXPANDED_KEY = "t3code:sidebar-v2:snoozed-expanded";
 const PINNED_SHELF_EXPANDED_KEY = "t3code:sidebar-v2:pinned-expanded";
-// Fork: the built-in Active group folds like a custom group once groups exist.
+// Fork: the built-in Active group has its own header and folds like Pinned.
 const ACTIVE_SHELF_EXPANDED_KEY = "t3code:sidebar-v2:active-expanded";
 const COLLAPSED_GROUP_IDS_SCHEMA = Schema.Array(Schema.String);
 const DRAFTS_SHELF_EXPANDED_KEY = "t3code:sidebar-v2:drafts-expanded";
@@ -900,8 +901,10 @@ function SidebarSectionHeader(props: {
   );
 }
 
-// Fork: a custom group's header, or the Active header once groups exist. It
-// is a drop target even while folded; a context click opens the group editor.
+// Fork: a custom group's header, or the built-in Active header. It is a drop
+// target even while folded; a context click opens the group editor. Active
+// carries an inbox icon and a stronger neutral tone so it never reads as a
+// custom group.
 function SidebarCustomGroupHeader(props: {
   marker: `custom-group:${string}` | "active-header";
   label: string;
@@ -913,10 +916,11 @@ function SidebarCustomGroupHeader(props: {
   onManage: (() => void) | undefined;
 }) {
   const { onManage } = props;
+  const isActive = props.marker === "active-header";
   return (
     <SortableSidebarMarker
       marker={props.marker}
-      data-testid={props.marker === "active-header" ? "sidebar-active-header" : undefined}
+      data-testid={isActive ? "sidebar-active-header" : undefined}
       className="mx-0.5 h-8"
     >
       <CollapsibleSectionHeader
@@ -930,11 +934,14 @@ function SidebarCustomGroupHeader(props: {
             : undefined
         }
         expanded={props.expanded}
-        tone={props.isDropTarget ? "accent" : props.dragging ? "emphasized" : "muted"}
+        tone={props.isDropTarget ? "accent" : props.dragging || isActive ? "emphasized" : "muted"}
       >
-        <span className="block max-w-48 truncate">
-          {props.label}
-          {props.expanded ? "" : ` (${props.count})`}
+        <span className="flex items-center gap-1.5">
+          {isActive ? <InboxIcon aria-hidden className="size-3 shrink-0" /> : null}
+          <span className="block max-w-48 truncate">
+            {props.label}
+            {props.expanded ? "" : ` (${props.count})`}
+          </span>
         </span>
       </CollapsibleSectionHeader>
     </SortableSidebarMarker>
@@ -2029,6 +2036,17 @@ const SidebarThreadRow = memo(function SidebarThreadRow(props: {
     )
   ) : null;
 
+  // Rides every row shape, slim rows included; the visibility setting decides
+  // whether it shows at rest, on hover, or never.
+  const providerIcon = (
+    <SidebarProviderIcon visibility={props.providerIconVisibility}>
+      <SidebarProviderStack
+        thread={thread}
+        providerEntryByInstanceId={props.providerEntryByInstanceId}
+      />
+    </SidebarProviderIcon>
+  );
+
   if (variant === "slim") {
     return (
       <li
@@ -2078,6 +2096,7 @@ const SidebarThreadRow = memo(function SidebarThreadRow(props: {
             {listeningIndicator}
             {archivePendingIndicator}
             {pinIndicator}
+            {providerIcon}
             {/* A settled or snoozed thread can still occupy a split pane, so
                 the marker rides slim rows too — like the terminal and PR
                 icons already do. */}
@@ -2192,6 +2211,29 @@ const SidebarThreadRow = memo(function SidebarThreadRow(props: {
   }
 
   const diff = latestRunDiff(thread);
+  const diffStat = diff ? (
+    <span className="shrink-0 font-mono text-xs">
+      <span className="text-diff-addition-foreground">+{diff.insertions}</span>{" "}
+      <span className="text-diff-deletion-foreground">−{diff.deletions}</span>
+    </span>
+  ) : null;
+  const machineAndProvider = (
+    <span
+      aria-hidden
+      className="pointer-events-none ml-auto inline-flex shrink-0 items-center gap-1"
+    >
+      {isRemote ? (
+        <span className="inline-flex shrink-0 items-center text-sidebar-muted-foreground/70">
+          <EnvironmentMachineIcon
+            aria-hidden
+            kind={props.environmentMachine}
+            className="size-3.5"
+          />
+        </span>
+      ) : null}
+      {providerIcon}
+    </span>
+  );
 
   return (
     <li
@@ -2459,7 +2501,20 @@ const SidebarThreadRow = memo(function SidebarThreadRow(props: {
             </div>
             <div className="mt-1 flex min-w-0 items-center gap-1.5">
               {title}
-              {props.compactCards ? splitPaneIcon : null}
+              {/* Compact cards drop the branch line, so its trailing details
+                  ride the title line instead. The worktree marker is anchored
+                  to the branch on full cards and comes along here. Hidden while
+                  renaming so the input keeps the row. */}
+              {props.compactCards && !isRenaming ? (
+                <>
+                  {splitPaneIcon}
+                  <ThreadWorktreeIndicator thread={thread} />
+                  {terminalStatusIcon}
+                  {prBadge}
+                  {diffStat}
+                  {machineAndProvider}
+                </>
+              ) : null}
               {isRegeneratingTitle ? (
                 <span role="status" className="sr-only">
                   Regenerating title
@@ -2484,32 +2539,8 @@ const SidebarThreadRow = memo(function SidebarThreadRow(props: {
                 {splitPaneIcon}
                 {terminalStatusIcon}
                 {prBadge}
-                {diff ? (
-                  <span className="shrink-0 font-mono">
-                    <span className="text-diff-addition-foreground">+{diff.insertions}</span>{" "}
-                    <span className="text-diff-deletion-foreground">−{diff.deletions}</span>
-                  </span>
-                ) : null}
-                <span
-                  aria-hidden
-                  className="pointer-events-none ml-auto inline-flex shrink-0 items-center gap-1"
-                >
-                  {isRemote ? (
-                    <span className="inline-flex shrink-0 items-center text-sidebar-muted-foreground/70">
-                      <EnvironmentMachineIcon
-                        aria-hidden
-                        kind={props.environmentMachine}
-                        className="size-3.5"
-                      />
-                    </span>
-                  ) : null}
-                  <SidebarProviderIcon visibility={props.providerIconVisibility}>
-                    <SidebarProviderStack
-                      thread={thread}
-                      providerEntryByInstanceId={props.providerEntryByInstanceId}
-                    />
-                  </SidebarProviderIcon>
-                </span>
+                {diffStat}
+                {machineAndProvider}
               </div>
             ) : null}
           </div>
@@ -3478,10 +3509,8 @@ export default function Sidebar() {
       emptyStateCause: resolveSidebarEmptyStateCause({
         environmentScopeActive: environmentFilter.scope !== null,
         projectFiltersActive: scopedProjectKeys !== null || hiddenPhysicalProjectKeys.size > 0,
-        attentionFilterActive: false,
         admittedWithoutEnvironment,
         admittedWithoutProjects,
-        admittedWithoutAttention: 0,
       }),
     };
   }, [
@@ -3699,10 +3728,9 @@ export default function Sidebar() {
     [setActiveShelfExpanded],
   );
   // Fork: Active split into custom group sections (Active itself is null),
-  // in catalog placement order. A folded section keeps the open thread's row,
-  // and search shows every match.
+  // in catalog placement order; without groups, Active is the only section.
+  // A folded section keeps the open thread's row, and search shows every match.
   const activeGroupSections = useMemo(() => {
-    if (!hasCustomGroups) return [{ id: null, threads: activeThreads }];
     const sections = new Map<string | null, EnvironmentThreadShell[]>([
       [null, []],
       ...customGroups.groups.map((group) => [group.id, [] as EnvironmentThreadShell[]] as const),
@@ -3722,7 +3750,6 @@ export default function Sidebar() {
     }));
   }, [
     activeThreads,
-    hasCustomGroups,
     customGroups.groups,
     collapsedGroups,
     activeShelfExpanded,
@@ -4570,12 +4597,12 @@ export default function Sidebar() {
     const pinnedRows = rowsOf(visiblePinnedThreads, "pinned");
     items.push(...pinnedRows);
     items.push({ kind: "marker", marker: "pinned-divider" });
-    // Fork: with custom groups, each group gets a header (a drop target even
-    // when folded) and Active gets its own.
+    // Fork: Active and each custom group get a header (a drop target even
+    // when folded).
     for (const section of activeGroupSections) {
       if (section.id !== null) items.push({ kind: "marker", marker: `custom-group:${section.id}` });
       else {
-        if (hasCustomGroups) items.push({ kind: "marker", marker: "active-header" });
+        items.push({ kind: "marker", marker: "active-header" });
         items.push({ kind: "marker", marker: "active-placeholder" });
       }
       items.push(...rowsOf(section.threads, "active"));
@@ -4827,7 +4854,7 @@ export default function Sidebar() {
       if (target.customGroupId != null) {
         const destination = target.customGroupId;
         setCollapsedGroupIds((current) => current.filter((id) => id !== destination));
-      } else if (target.section === "active" && hasCustomGroups) setActiveShelfExpanded(true);
+      } else if (target.section === "active") setActiveShelfExpanded(true);
       if (plan.kind === "settle" && settlingThreadKeysRef.current.has(activeKey)) return;
       const assignments =
         plan.kind === "pin"
@@ -6536,12 +6563,12 @@ export default function Sidebar() {
                             break;
                           case "pinned-divider":
                             items.push(
-                              // Fork: with custom groups the Active header carries
-                              // the label; the divider stays as the boundary.
+                              // Fork: the Active header carries the label; the
+                              // divider's rule is the Pinned/Active boundary.
                               <SidebarDragBoundary
                                 key="pinned-divider"
                                 marker="pinned-divider"
-                                label="Active"
+                                label=""
                                 visible={from !== null && !hasCustomGroups}
                                 isDropTarget={dragTargetSection === "active"}
                               />,

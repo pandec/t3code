@@ -697,33 +697,6 @@ function SidebarExtrasSection() {
             }
           />
           <SettingsRow
-            title="Keep pinned threads in Attention"
-            description="Always show pinned threads while the Attention filter is enabled, even when they do not currently need attention."
-            resetAction={
-              settings.sidebarAlwaysShowPinnedInAttention !==
-              DEFAULT_UNIFIED_SETTINGS.sidebarAlwaysShowPinnedInAttention ? (
-                <SettingResetButton
-                  label="pinned threads in Attention"
-                  onClick={() =>
-                    updateSettings({
-                      sidebarAlwaysShowPinnedInAttention:
-                        DEFAULT_UNIFIED_SETTINGS.sidebarAlwaysShowPinnedInAttention,
-                    })
-                  }
-                />
-              ) : null
-            }
-            control={
-              <Switch
-                checked={settings.sidebarAlwaysShowPinnedInAttention}
-                onCheckedChange={(checked) =>
-                  updateSettings({ sidebarAlwaysShowPinnedInAttention: Boolean(checked) })
-                }
-                aria-label="Keep pinned threads visible in Attention"
-              />
-            }
-          />
-          <SettingsRow
             title="New thread button in the project row"
             description="Show the New thread button at the end of the project filter row instead of the search row."
             resetAction={

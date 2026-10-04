@@ -13,7 +13,6 @@ export type SidebarEmptyStateCause =
   /** Exactly one filter is hiding rows; offer its clear action. */
   | "environment"
   | "projects"
-  | "attention"
   /** Several are, so no single clear action fixes it and offering one lies. */
   | "multiple"
   /** Nothing is hidden — the list is genuinely empty. */
@@ -22,13 +21,10 @@ export type SidebarEmptyStateCause =
 export function resolveSidebarEmptyStateCause(input: {
   readonly environmentScopeActive: boolean;
   readonly projectFiltersActive: boolean;
-  readonly attentionFilterActive: boolean;
   /** Threads admitted by every filter EXCEPT the environment scope. */
   readonly admittedWithoutEnvironment: number;
   /** Threads admitted by every filter EXCEPT project scope and hidden projects. */
   readonly admittedWithoutProjects: number;
-  /** Threads admitted by every filter EXCEPT the attention filter. */
-  readonly admittedWithoutAttention: number;
 }): SidebarEmptyStateCause {
   const culprits: SidebarEmptyStateCause[] = [];
   if (input.environmentScopeActive && input.admittedWithoutEnvironment > 0) {
@@ -36,9 +32,6 @@ export function resolveSidebarEmptyStateCause(input: {
   }
   if (input.projectFiltersActive && input.admittedWithoutProjects > 0) {
     culprits.push("projects");
-  }
-  if (input.attentionFilterActive && input.admittedWithoutAttention > 0) {
-    culprits.push("attention");
   }
   const [only] = culprits;
   if (only === undefined) return "none";

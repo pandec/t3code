@@ -716,9 +716,6 @@ export const ClientSettingsSchema = Schema.Struct({
     Schema.withDecodingDefault(Effect.succeed(DEFAULT_SIDEBAR_THREAD_PREVIEW_COUNT)),
   ),
   sidebarV2CompactCards: Schema.Boolean.pipe(Schema.withDecodingDefault(Effect.succeed(false))),
-  sidebarAlwaysShowPinnedInAttention: Schema.Boolean.pipe(
-    Schema.withDecodingDefault(Effect.succeed(false)),
-  ),
   sidebarV2NewThreadButtonInProjectRow: Schema.Boolean.pipe(
     Schema.withDecodingDefault(Effect.succeed(false)),
   ),
@@ -2189,7 +2186,6 @@ export const ClientSettingsPatch = Schema.Struct({
   sidebarThreadProviderIconVisibility: Schema.optionalKey(SidebarThreadProviderIconVisibility),
   sidebarThreadPreviewCount: Schema.optionalKey(SidebarThreadPreviewCount),
   sidebarV2CompactCards: Schema.optionalKey(Schema.Boolean),
-  sidebarAlwaysShowPinnedInAttention: Schema.optionalKey(Schema.Boolean),
   sidebarV2NewThreadButtonInProjectRow: Schema.optionalKey(Schema.Boolean),
   sidebarThreadGroupsButton: Schema.optionalKey(Schema.Boolean),
   steerGraceWindowMs: Schema.optionalKey(SteerGraceWindowMs),

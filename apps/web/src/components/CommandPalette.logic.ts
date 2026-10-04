@@ -20,6 +20,8 @@ import type {
 import * as Arr from "effect/Array";
 import * as Result from "effect/Result";
 import { type ReactNode } from "react";
+import { parseSnoozeQuery } from "./CommandPalette.snooze";
+import { snoozeWakeDescription, type SnoozePreset } from "./Sidebar.snooze";
 import { getThreadSortTimestamp, sortThreads } from "../lib/threadSort";
 import { normalizeSearchText } from "../lib/utils";
 import { formatRelativeTimeLabel } from "../timestampFormat";
@@ -571,6 +573,65 @@ export function buildRenameThreadViewItems(input: {
       run: input.regenerate,
     });
   }
+  return items;
+}
+
+/**
+ * Snooze view rows: presets, "Custom…", and, when the query parses as a time
+ * ("45m", "2pm", "fri 9am"), a synthesized row on top. That row's value
+ * embeds the wake time so highlight state survives re-renders on each key.
+ */
+export function buildSnoozeThreadViewItems(input: {
+  readonly query: string;
+  readonly now: Date;
+  readonly presets: ReadonlyArray<SnoozePreset>;
+  readonly timestampFormat: Parameters<typeof snoozeWakeDescription>[2];
+  readonly icon: ReactNode;
+  readonly customIcon: ReactNode;
+  /** Trailing wake-time column, rendered by the caller (this module is JSX-free). */
+  readonly renderWhen: (whenLabel: string) => ReactNode;
+  readonly snooze: (preset: Pick<SnoozePreset, "snoozedUntil" | "untilDone">) => Promise<void>;
+  readonly custom: () => Promise<void>;
+}): CommandPaletteActionItem[] {
+  const items: CommandPaletteActionItem[] = [];
+  const parsed = parseSnoozeQuery(input.query, input.now);
+  if (parsed) {
+    const wake = snoozeWakeDescription(parsed.snoozedUntil, input.now, input.timestampFormat);
+    items.push({
+      kind: "action",
+      value: `snooze:parsed:${parsed.snoozedUntil}`,
+      // Match whatever produced the parse so the filter keeps the row.
+      searchTerms: [input.query],
+      title: parsed.durationLabel ? `Snooze for ${parsed.durationLabel}` : `Snooze until ${wake}`,
+      ...(parsed.durationLabel ? { description: `Wakes ${wake}` } : {}),
+      icon: input.icon,
+      run: async () => {
+        await input.snooze({ snoozedUntil: parsed.snoozedUntil });
+      },
+    });
+  }
+  for (const preset of input.presets) {
+    items.push({
+      kind: "action",
+      value: `snooze:${preset.id}`,
+      searchTerms: [preset.label, preset.whenLabel],
+      title: preset.label,
+      icon: input.icon,
+      titleTrailingContent: input.renderWhen(preset.whenLabel),
+      run: async () => {
+        await input.snooze(preset);
+      },
+    });
+  }
+  items.push({
+    kind: "action",
+    value: "snooze:custom",
+    searchTerms: ["custom", "pick", "date", "time"],
+    title: "Custom…",
+    description: "Pick a date and time",
+    icon: input.customIcon,
+    run: input.custom,
+  });
   return items;
 }
 
