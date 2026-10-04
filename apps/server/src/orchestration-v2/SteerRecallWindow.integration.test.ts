@@ -239,6 +239,14 @@ it.effect("holds a steer for its recall window, then steers its latest text", ()
         yield* worker.drain();
 
         assert.isFalse(DateTime.isLessThan(deliveredEvent.occurredAt, deadline));
+        // Released by its window, it is still the user's steer, not a promoted queued message.
+        assert.equal(
+          deliveredEvent.type === "turn-item.updated" &&
+            deliveredEvent.payload.type === "user_message"
+            ? deliveredEvent.payload.inputIntent
+            : null,
+          "steer",
+        );
         assert.deepEqual(steered, ["fixed"]);
         assert.equal(started.length, 1);
         const final = yield* orchestrator.getThreadProjection(threadId);
@@ -392,9 +400,16 @@ it.effect("lets the next queued turn start ahead of a held steer, then steers in
             event.payload.messageId === heldSteer!.userMessageId,
         );
         yield* TestClock.adjust(Duration.millis(GRACE_MS));
-        yield* Fiber.join(delivered);
+        const deliveredEvent = yield* Fiber.join(delivered);
         yield* worker.drain();
 
+        assert.equal(
+          deliveredEvent.type === "turn-item.updated" &&
+            deliveredEvent.payload.type === "user_message"
+            ? deliveredEvent.payload.inputIntent
+            : null,
+          "steer",
+        );
         assert.deepEqual(steered, ["held-steer"]);
         assert.equal(started.length, 2);
         const final = yield* orchestrator.getThreadProjection(threadId);
@@ -467,4 +482,92 @@ it.effect(
         }).pipe(Effect.provide(layer));
       }),
     ),
+);
+
+it.effect("steers into a new turn while older queued messages stay held after a stop", () =>
+  Effect.scoped(
+    Effect.gen(function* () {
+      const { events, started, steered, threadId, setup, layer } =
+        yield* scenario("steer-recall-held-queue");
+      yield* Effect.gen(function* () {
+        const { orchestrator, worker, watch, send } = yield* setup;
+        yield* send("old-queued", "queue");
+        const oldQueued = (yield* orchestrator.getThreadProjection(threadId)).runs.find(
+          (run) => run.status === "queued",
+        )!;
+
+        // Stop holds the queue; the stopped turn then ends.
+        yield* orchestrator.dispatch({
+          type: "run.interrupt",
+          commandId: CommandId.make("stop"),
+          threadId,
+          runId: started[0]!.runId,
+          holdQueue: true,
+        });
+        yield* worker.drain();
+        const activeTurn = (yield* orchestrator.getThreadProjection(threadId)).providerTurns[0]!;
+        const activeEnded = yield* watch(
+          (event) =>
+            event.type === "run.updated" &&
+            event.payload.id === started[0]!.runId &&
+            event.payload.status === "interrupted",
+        );
+        yield* Queue.offer(events, {
+          type: "provider_turn.updated",
+          driver,
+          providerTurn: { ...activeTurn, status: "interrupted", completedAt: yield* DateTime.now },
+        });
+        yield* Queue.offer(events, {
+          type: "turn.terminal",
+          driver,
+          providerThreadId: activeTurn.providerThreadId,
+          providerTurnId: activeTurn.id,
+          runOrdinal: started[0]!.runOrdinal,
+          status: "interrupted",
+          failure: null,
+          threadDisposition: "reusable",
+        });
+        yield* Fiber.join(activeEnded);
+        yield* worker.drain();
+
+        const nextRunning = yield* watch(
+          (event) =>
+            event.type === "provider-turn.updated" &&
+            event.payload.status === "running" &&
+            event.payload.runAttemptId !== activeTurn.runAttemptId,
+        );
+        yield* send("next", "start");
+        yield* worker.drain();
+        yield* Fiber.join(nextRunning);
+        assert.equal(started.length, 2);
+
+        yield* send("windowed-steer", "steer");
+        const steer = (yield* orchestrator.getThreadProjection(threadId)).runs.find(
+          (run) => run.status === "queued" && run.steerDeadlineAt !== undefined,
+        );
+        assert.isDefined(steer);
+        assert.notEqual(steer!.queueHeld, true);
+
+        const delivered = yield* watch(
+          (event) =>
+            event.type === "turn-item.updated" &&
+            event.payload.type === "user_message" &&
+            event.payload.messageId === steer!.userMessageId,
+        );
+        yield* TestClock.adjust(Duration.millis(GRACE_MS));
+        yield* Fiber.join(delivered);
+        yield* worker.drain();
+
+        assert.deepEqual(steered, ["windowed-steer"]);
+        const final = yield* orchestrator.getThreadProjection(threadId);
+        assert.equal(
+          final.messages.find((message) => message.id === steer!.userMessageId)?.runId,
+          started[1]!.runId,
+        );
+        const old = final.runs.find((run) => run.id === oldQueued.id);
+        assert.equal(old?.status, "queued");
+        assert.isTrue(old?.queueHeld);
+      }).pipe(Effect.provide(layer));
+    }),
+  ),
 );

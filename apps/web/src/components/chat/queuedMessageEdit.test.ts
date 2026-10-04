@@ -253,6 +253,32 @@ describe("queued message file edits", () => {
     expect(draft?.prompt.startsWith("Separate draft\n\nEdited ")).toBe(true);
   });
 
+  it("keeps the saved attachments that download when another fails", async () => {
+    const saved = (id: string) => ({
+      type: "file" as const,
+      id,
+      name: `${id}.txt`,
+      mimeType: "text/plain",
+      sizeBytes: 5,
+    });
+    const result = await restoreQueuedEditAttachments({
+      attachments: [saved("a"), saved("b"), saved("c")],
+      target: threadTarget,
+      localIds: new Map([
+        ["a", "local:a"],
+        ["b", "local:b"],
+        ["c", "local:c"],
+      ]),
+      download: async ([attachment]) => {
+        if (attachment?.id === "b") throw new Error("404");
+        return [new File(["bytes"], attachment!.name, { type: attachment!.mimeType })];
+      },
+    });
+    const draft = useComposerDraftStore.getState().getComposerDraft(threadTarget);
+    expect(draft?.files.map((entry) => entry.id)).toEqual(["local:a", "local:c"]);
+    expect(result.skippedAttachmentCount).toBe(1);
+  });
+
   it("keeps an edit that only removed a saved attachment", () => {
     const store = useComposerDraftStore.getState();
     store.setPrompt(editTarget, "Original message");

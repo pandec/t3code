@@ -58,6 +58,8 @@ const makeHarness = (name: string) =>
     const events = yield* Queue.unbounded<ProviderAdapterV2Event>();
     const started: Array<ProviderAdapterV2TurnInput> = [];
     const steered: Array<string> = [];
+    // While set, started turns wait for the test to report them running.
+    const deferRunning = { current: false };
     const adapter: ProviderAdapterV2Shape = {
       instanceId,
       driver,
@@ -105,6 +107,7 @@ const makeHarness = (name: string) =>
             startTurn: (turn) =>
               Effect.gen(function* () {
                 started.push(turn);
+                if (deferRunning.current) return;
                 yield* Queue.offer(events, {
                   type: "provider_turn.updated",
                   driver,
@@ -128,7 +131,7 @@ const makeHarness = (name: string) =>
       ProviderAdapterRegistry.makeSingleLayer(adapter),
       { runEffectWorker: false },
     );
-    return { cwd, events, started, steered, layer };
+    return { cwd, events, started, steered, deferRunning, layer };
   });
 
 const scenario = (name: string) =>
@@ -378,10 +381,10 @@ it.effect(
   () =>
     Effect.scoped(
       Effect.gen(function* () {
-        const { started, steered, events, threadId, setup, layer } =
+        const { started, steered, events, deferRunning, threadId, setup, layer } =
           yield* scenario("edit-hold-batch-usage");
         yield* Effect.gen(function* () {
-          const { orchestrator, worker, watch, send, hold, endTurn, endActiveTurn } = yield* setup;
+          const { orchestrator, worker, watch, send, hold, endTurn } = yield* setup;
           yield* send("leader", "queue");
           yield* send("follower", "queue");
           yield* send("held", "queue");
@@ -389,21 +392,47 @@ it.effect(
             .filter((run) => run.status === "queued")
             .toSorted((left, right) => left.ordinal - right.ordinal);
           const [leader, follower, held] = queued;
-          yield* hold("hold", held!.id, true);
 
-          // The leader starts and runs: the follower joins its turn, the held
-          // message stops the release.
+          // The leader starts with the follower and the third message stamped
+          // into its batch; the edit begins before the leader's turn runs.
+          deferRunning.current = true;
+          yield* endTurn(0);
+          assert.equal(started[1]!.runId, leader!.id);
+          yield* hold("hold", held!.id, true);
+          const stamped = (yield* orchestrator.getThreadProjection(threadId)).runs.find(
+            (run) => run.id === held!.id,
+          );
+          assert.equal(stamped?.queueBatchLeaderRunId, leader!.id);
+          assert.isDefined(stamped?.editHeldUntil);
+
+          // The leader's turn runs: the follower joins it, the held message stays queued.
           const followerReleased = yield* watch(
             (event) =>
               event.type === "turn-item.updated" &&
               event.payload.type === "user_message" &&
               event.payload.messageId === follower!.userMessageId,
           );
-          yield* endActiveTurn;
-          yield* Fiber.join(followerReleased);
+          yield* Queue.offer(events, {
+            type: "provider_turn.updated",
+            driver,
+            providerTurn: providerTurnFor(started[1]!, yield* DateTime.now),
+          });
+          const followerEvent = yield* Fiber.join(followerReleased);
           yield* worker.drain();
-          assert.equal(started[1]!.runId, leader!.id);
           assert.deepEqual(steered, ["follower"]);
+          // A batch member really was queued first, unlike a windowed steer.
+          assert.equal(
+            followerEvent.type === "turn-item.updated" &&
+              followerEvent.payload.type === "user_message"
+              ? followerEvent.payload.inputIntent
+              : null,
+            "promoted_queued_to_steer",
+          );
+          const stillHeld = (yield* orchestrator.getThreadProjection(threadId)).runs.find(
+            (run) => run.id === held!.id,
+          );
+          assert.equal(stillHeld?.status, "queued");
+          assert.equal(stillHeld?.queueBatchLeaderRunId, leader!.id);
 
           // The edit ends and the provider reports token usage on the same turn:
           // the batch was already released, so the message waits for its own turn.

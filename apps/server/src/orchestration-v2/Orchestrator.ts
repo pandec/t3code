@@ -3516,6 +3516,8 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
     readonly senderThreadId?: OrchestrationV2ConversationMessage["senderThreadId"];
     readonly delegatedCompletion?: OrchestrationV2ConversationMessage["delegatedCompletion"];
     readonly forceRestart: boolean;
+    /** Overrides the intent derived from the command, e.g. a windowed steer released by promotion. */
+    readonly inputIntent?: "steer" | "promoted_queued_to_steer";
   }) =>
     Effect.gen(function* () {
       const targetRun = input.projection.runs.find(
@@ -3696,9 +3698,10 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
             type: "user_message",
             messageId: input.messageId,
             inputIntent:
-              input.command.type === "queued-message.promote-to-steer"
+              input.inputIntent ??
+              (input.command.type === "queued-message.promote-to-steer"
                 ? "promoted_queued_to_steer"
-                : "steer",
+                : "steer"),
             text: input.text,
             attachments: input.attachments,
             ...(input.context ? { context: input.context } : {}),
@@ -4713,7 +4716,9 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
           rootNodeId,
           activeAttemptId: attemptId,
           status: "queued",
-          ...(projection.runs.some(
+          // A windowed steer targets the active turn, so a queue-level hold must not strand it.
+          ...(steerDeadlineAt === undefined &&
+          projection.runs.some(
             (candidate) => candidate.status === "queued" && candidate.queueHeld === true,
           )
             ? { queueHeld: true }
@@ -7111,6 +7116,8 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
         projection,
         modelSelection: projection.thread.modelSelection,
         targetRunId: command.targetRunId,
+        // A steer still inside its recall window was sent as a steer, not queued.
+        inputIntent: queuedRun.steerDeadlineAt !== undefined ? "steer" : "promoted_queued_to_steer",
         messageId: queuedMessage.id,
         text: queuedMessage.text,
         attachments: queuedMessage.attachments,

@@ -70,6 +70,7 @@ import {
   clearComposerDraftContent,
   composerDraftsAtom,
   composerContextImportsAtom,
+  setComposerContextImporting,
   ensureComposerDraftsLoaded,
   getComposerDraftSnapshot,
   mergeComposerDraftContent,
@@ -503,13 +504,20 @@ export function useThreadComposerState() {
       });
       return saved.length - downloaded.length;
     };
+    // Sending before the downloads land would leave them for the next draft;
+    // the import flag holds the send button and onSendMessage until then.
+    const restoring = saved.length > 0;
+    if (restoring) setComposerContextImporting(threadKey, true);
     void mergeComposerDraftContent(threadKey, {
       text: editDraft.text,
       attachments: [],
       ...(context ? { context } : {}),
     })
       .then(restoreSaved, restoreSaved)
-      .then(report, () => report(saved.length));
+      .then(report, () => report(saved.length))
+      .finally(() => {
+        if (restoring) setComposerContextImporting(threadKey, false);
+      });
     if (editedRun !== undefined) {
       updateComposerDraftSettings(threadKey, { modelSelection: editedRun.modelSelection });
     }

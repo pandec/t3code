@@ -20,6 +20,7 @@ import {
   planMessageContextRestore,
 } from "./chat/messageContextRestore";
 import { useQueuedRunEditHold } from "./chat/useQueuedRunEditHold";
+import { pendingDraftWork } from "./chat/pendingDraftWork";
 import {
   isPaintOnlyThreadTimeline,
   peekHeldThreadTimeline,
@@ -372,6 +373,7 @@ import {
   type DraftThreadEnvMode,
   useComposerDraftStore,
   DraftId,
+  composerTargetKey,
 } from "../composerDraftStore";
 import {
   formatTerminalContextLabel,
@@ -4502,9 +4504,10 @@ export default function ChatView(props: ChatViewProps) {
   const [queuedEditRescueThreadKeys, setQueuedEditRescueThreadKeys] = useState<
     ReadonlyArray<string>
   >([]);
+  // Sending now would leave the still-downloading attachments for the next draft.
+  const queuedEditRescueActive = queuedEditRescueThreadKeys.includes(routeThreadKey);
   // An open, saving or rescuing queued edit owns composer content, so rewind and compaction wait.
-  const queuedEditTransferActive =
-    editingQueuedRun !== null || queuedEditRescueThreadKeys.includes(routeThreadKey);
+  const queuedEditTransferActive = editingQueuedRun !== null || queuedEditRescueActive;
   const queuedEditImageResources = useMemo(
     () =>
       (editingQueuedRun?.existingAttachments ?? [])
@@ -4658,6 +4661,9 @@ export default function ChatView(props: ChatViewProps) {
     const connection = readPreparedConnection(environmentId);
     const rescueThreadKey = routeThreadKey;
     setQueuedEditRescueThreadKeys((keys) => [...keys, rescueThreadKey]);
+    // Also blocks stashing, which would empty the draft the downloads land in.
+    const rescueDraftKey = composerTargetKey(baseComposerDraftTarget);
+    pendingDraftWork.begin(rescueDraftKey);
     void restoreQueuedEditAttachments({
       attachments: savedAttachments,
       target: baseComposerDraftTarget,
@@ -4677,12 +4683,13 @@ export default function ChatView(props: ChatViewProps) {
           reportRecovered(recovery.skippedAttachmentCount + restored.skippedAttachmentCount),
         () => reportRecovered(recovery.skippedAttachmentCount + savedAttachments.length),
       )
-      .finally(() =>
+      .finally(() => {
+        pendingDraftWork.end(rescueDraftKey);
         setQueuedEditRescueThreadKeys((keys) => {
           const index = keys.indexOf(rescueThreadKey);
           return index === -1 ? keys : keys.toSpliced(index, 1);
-        }),
-      );
+        });
+      });
   }, [
     activeThread?.id,
     baseComposerDraftTarget,
@@ -8453,6 +8460,7 @@ export default function ChatView(props: ChatViewProps) {
       isSendBusy ||
       isConnecting ||
       isRevertingCheckpoint ||
+      queuedEditRescueActive ||
       !clientSettingsHydrated ||
       threadDetailLoading ||
       sendInFlightRef.current ||
@@ -11386,7 +11394,10 @@ export default function ChatView(props: ChatViewProps) {
                                       ? "Messages loading"
                                       : worktreeSetupBlocksSend
                                         ? "Preparing worktree"
-                                        : projectCloneSendBlockReason
+                                        : (projectCloneSendBlockReason ??
+                                          (queuedEditRescueActive
+                                            ? "Restoring the queued message's attachments"
+                                            : null))
                               }
                               isPreparingWorktree={isPreparingWorktree}
                               queuedRunsControl={

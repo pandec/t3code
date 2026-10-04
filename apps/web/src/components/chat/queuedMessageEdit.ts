@@ -128,29 +128,37 @@ export async function restoreQueuedEditAttachments(input: {
   /** Draft ids chosen up front, so chips already in the prompt bind to these copies. */
   readonly localIds?: ReadonlyMap<string, string>;
 }): Promise<{ readonly skippedAttachmentCount: number }> {
-  const downloaded = await input.download(input.attachments);
+  // Each attachment downloads on its own so one failure keeps the rest.
+  const results = await Promise.allSettled(
+    input.attachments.map(async (source) => {
+      const [file] = await input.download([source]);
+      if (file === undefined) throw new Error(`Could not restore attachment: ${source.name}`);
+      return { source, file };
+    }),
+  );
   const images: ComposerImageAttachment[] = [];
   const files: ComposerFileAttachment[] = [];
-  downloaded.forEach((file, index) => {
-    const source = input.attachments[index];
+  for (const result of results) {
+    if (result.status === "rejected") continue;
+    const { source, file } = result.value;
     const attachment = {
-      id: (source && input.localIds?.get(source.id)) ?? randomUUID(),
+      id: input.localIds?.get(source.id) ?? randomUUID(),
       name: file.name,
       mimeType: file.type,
       sizeBytes: file.size,
       file,
     };
-    if (source?.type === "image") {
+    if (source.type === "image") {
       images.push({ ...attachment, type: "image", previewUrl: URL.createObjectURL(file) });
     } else {
       files.push({ ...attachment, type: "file" });
     }
-  });
+  }
   const store = useComposerDraftStore.getState();
   const accepted =
     store.addImages(input.target, images, { allowDuplicates: true, allowOverflow: true }).length +
     store.addFiles(input.target, files, { allowDuplicates: true, allowOverflow: true }).length;
-  return { skippedAttachmentCount: downloaded.length - accepted };
+  return { skippedAttachmentCount: input.attachments.length - accepted };
 }
 
 /** Generic files need upload references; images also support the inline transport. */
