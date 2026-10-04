@@ -221,7 +221,12 @@ describe("repairForkMigrationHistory", () => {
         { thread_id: "thread-a", custom_group_id: "group-1" },
       ]);
       assert.deepStrictEqual(yield* sql`SELECT * FROM fork_project_repository_identity`, [
-        { project_id: "project-a", repository_identity_json: '{"remote":"a"}' },
+        {
+          project_id: "project-a",
+          repository_identity_json: '{"remote":"a"}',
+          // Fork migration 70 scopes the identity to the project's root.
+          workspace_root: "/tmp/a",
+        },
       ]);
     }).pipe(Effect.provide(NodeSqliteClient.layer({ filename: ":memory:" }))),
   );
