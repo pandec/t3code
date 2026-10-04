@@ -14,6 +14,7 @@ import {
   type ForkSessionOptions,
   type ForkSessionResult,
   getSubagentMessages,
+  type ModelUsage,
   query,
   type Options as ClaudeQueryOptions,
   type PermissionMode,
@@ -55,6 +56,7 @@ import {
   type OrchestrationV2ProviderSession,
   type OrchestrationV2ProviderThread,
   type OrchestrationV2ProviderTurn,
+  type OrchestrationV2ProviderTurnTokenUsage,
   type OrchestrationV2RuntimeRequest,
   type OrchestrationV2UserInputQuestion,
   type OrchestrationV2Subagent,
@@ -146,6 +148,30 @@ function claudeContextWindow(modelSelection: ModelSelection): number | null {
     : 200_000;
 }
 
+// Fork: `modelUsage` is keyed by every model that ran during the turn,
+// subagents included, so the largest window could be a child's rather than the
+// session's. Fall back to it only when the session model has no entry.
+export function claudeContextWindowFromModelUsage(
+  modelUsage: Readonly<Record<string, ModelUsage>> | undefined,
+  sessionModel: string | undefined,
+): number | undefined {
+  if (!modelUsage) return undefined;
+  const validWindow = (entry: ModelUsage | undefined) =>
+    entry !== undefined && Number.isInteger(entry.contextWindow) && entry.contextWindow > 0
+      ? entry.contextWindow
+      : undefined;
+  const sessionWindow = sessionModel ? validWindow(modelUsage[sessionModel]) : undefined;
+  if (sessionWindow !== undefined) return sessionWindow;
+  let maxWindow: number | undefined;
+  for (const entry of Object.values(modelUsage)) {
+    const window = validWindow(entry);
+    if (window !== undefined && (maxWindow === undefined || window > maxWindow)) {
+      maxWindow = window;
+    }
+  }
+  return maxWindow;
+}
+
 export function claudeProviderTurnTokenUsage(
   usage: {
     readonly input_tokens: number;
@@ -155,6 +181,8 @@ export function claudeProviderTurnTokenUsage(
   },
   modelSelection: ModelSelection,
   updatedAt: string,
+  // Fork: the window the serving model reported, which outranks the selection's.
+  observedContextWindow?: number,
 ) {
   const inputTokens =
     usage.input_tokens +
@@ -163,7 +191,7 @@ export function claudeProviderTurnTokenUsage(
   const outputTokens = usage.output_tokens;
   return {
     usedTokens: inputTokens + outputTokens,
-    maxTokens: claudeContextWindow(modelSelection),
+    maxTokens: observedContextWindow ?? claudeContextWindow(modelSelection),
     inputTokens,
     cachedInputTokens: usage.cache_read_input_tokens ?? 0,
     outputTokens,
@@ -2686,6 +2714,17 @@ interface ClaudeLiveQueryContext {
   // is gone and never reports their end; any later task_started replaces the
   // entry, so an entry still in this set runs nowhere.
   readonly subagentsFromEarlierProcesses: ReadonlySet<ActiveClaudeSubagent>;
+  // Fork context-meter corrections, scoped to this process (a new selection
+  // opens a new one). `apiModelId` is the selection's model; `observedModel`
+  // is the one the CLI reports serving the session, which a refusal retry
+  // swaps for the rest of the process. `contextWindow` is that model's window
+  // as the last result measured it, and `lastUsage` the last parent reading.
+  readonly apiModelId: string;
+  readonly contextMeter: {
+    observedModel: string | undefined;
+    contextWindow: number | undefined;
+    lastUsage: OrchestrationV2ProviderTurnTokenUsage | undefined;
+  };
 }
 
 interface ActiveClaudeToolCall {
@@ -4717,6 +4756,8 @@ export function makeClaudeAdapterV2(
           readonly failure?: OrchestrationV2ProviderFailure;
           readonly threadDisposition?: "reusable" | "broken";
           readonly result?: SDKResultMessage;
+          // Fork: the last context reading re-measured against the result's window.
+          readonly tokenUsage?: OrchestrationV2ProviderTurnTokenUsage;
         }) {
           yield* reasoningDeltas.flushTurn(input.context.nativeTurnId);
           for (const toolCall of input.context.toolCalls.values()) {
@@ -4856,6 +4897,7 @@ export function makeClaudeAdapterV2(
                     status: input.status,
                     completedAt: input.completedAt,
                   }),
+                  ...(input.tokenUsage === undefined ? {} : { tokenUsage: input.tokenUsage }),
                   turnTokenUsage: normalizeClaudeTurnTokenUsage(
                     input.result,
                     input.context.subagentsByTaskId.size > 0 ||
@@ -5335,6 +5377,21 @@ export function makeClaudeAdapterV2(
           }
 
           const message = input.message;
+          // Fork: follow the model actually serving the session, the id the
+          // result's `modelUsage` is keyed by. init names it; a session-scoped
+          // refusal retry swaps it for the rest of the process.
+          if (message.type === "system" && message.subtype === "init") {
+            const initModel = message.model.trim();
+            if (initModel.length > 0) liveQuery.contextMeter.observedModel = initModel;
+          } else if (
+            message.type === "system" &&
+            message.subtype === "model_refusal_fallback" &&
+            message.direction === "retry" &&
+            message.scope !== "local"
+          ) {
+            const fallbackModel = message.fallback_model.trim();
+            if (fallbackModel.length > 0) liveQuery.contextMeter.observedModel = fallbackModel;
+          }
           // Before any routing: a Monitor started during an idle wake turn
           // reports its task before the drain replays the tool call.
           yield* trackClaudeMonitorCalls(message);
@@ -5560,6 +5617,14 @@ export function makeClaudeAdapterV2(
                 ? Math.round(postTokens)
                 : undefined;
             if (afterTokenCount !== undefined) {
+              const tokenUsage = {
+                usedTokens: afterTokenCount,
+                maxTokens:
+                  liveQuery.contextMeter.contextWindow ??
+                  claudeContextWindow(context.input.modelSelection),
+                updatedAt: DateTime.formatIso(now),
+              };
+              liveQuery.contextMeter.lastUsage = tokenUsage;
               yield* emitProviderEvent({
                 type: "provider_turn.updated",
                 driver: CLAUDE_PROVIDER,
@@ -5578,11 +5643,7 @@ export function makeClaudeAdapterV2(
                   status: "running",
                   startedAt: context.startedAt,
                   completedAt: null,
-                  tokenUsage: {
-                    usedTokens: afterTokenCount,
-                    maxTokens: claudeContextWindow(context.input.modelSelection),
-                    updatedAt: DateTime.formatIso(now),
-                  },
+                  tokenUsage,
                 },
               });
             }
@@ -5706,6 +5767,13 @@ export function makeClaudeAdapterV2(
             const now = yield* DateTime.now;
             yield* completeProviderRetry(context, now);
             if (message.parent_tool_use_id === null && message.message.usage !== undefined) {
+              const tokenUsage = claudeProviderTurnTokenUsage(
+                message.message.usage,
+                context.input.modelSelection,
+                DateTime.formatIso(now),
+                liveQuery.contextMeter.contextWindow,
+              );
+              liveQuery.contextMeter.lastUsage = tokenUsage;
               yield* emitProviderEvent({
                 type: "provider_turn.updated",
                 driver: CLAUDE_PROVIDER,
@@ -5724,11 +5792,7 @@ export function makeClaudeAdapterV2(
                   status: "running",
                   startedAt: context.startedAt,
                   completedAt: null,
-                  tokenUsage: claudeProviderTurnTokenUsage(
-                    message.message.usage,
-                    context.input.modelSelection,
-                    DateTime.formatIso(now),
-                  ),
+                  tokenUsage,
                 },
               });
             }
@@ -6260,12 +6324,32 @@ export function makeClaudeAdapterV2(
               resultFailure?.class === "usage_limit"
                 ? { ...resultFailure, resetAt }
                 : resultFailure;
+            // Fork: the result names the serving model's real window. Its
+            // usage is cumulative across the session, so only the window is
+            // taken; the used count stays the last per-request reading.
+            const meter = liveQuery.contextMeter;
+            const resultContextWindow = claudeContextWindowFromModelUsage(
+              message.modelUsage,
+              meter.observedModel ?? liveQuery.apiModelId,
+            );
+            let correctedTokenUsage: OrchestrationV2ProviderTurnTokenUsage | undefined;
+            if (resultContextWindow !== undefined) {
+              meter.contextWindow = resultContextWindow;
+              if (
+                meter.lastUsage !== undefined &&
+                meter.lastUsage.maxTokens !== resultContextWindow
+              ) {
+                correctedTokenUsage = { ...meter.lastUsage, maxTokens: resultContextWindow };
+                meter.lastUsage = correctedTokenUsage;
+              }
+            }
             yield* finalizeActiveTurn({
               context,
               status: interrupted ? "interrupted" : terminalStatusFromResult(message, failureHint),
               completedAt,
               result: message,
               ...(terminalFailure === null ? {} : { failure: terminalFailure }),
+              ...(correctedTokenUsage === undefined ? {} : { tokenUsage: correctedTokenUsage }),
             });
           }
         });
@@ -6951,6 +7035,12 @@ export function makeClaudeAdapterV2(
                 (subagent) => subagent.task.status === "running",
               ),
             ),
+            apiModelId: compiledSelection.apiModelId,
+            contextMeter: {
+              observedModel: undefined,
+              contextWindow: undefined,
+              lastUsage: undefined,
+            },
           };
           yield* Ref.set(queryContext, context);
           yield* querySession.messages.pipe(

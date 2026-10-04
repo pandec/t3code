@@ -863,6 +863,41 @@ describe("ClaudeAdapterV2 context usage", () => {
   });
 });
 
+describe("ClaudeAdapterV2 result context window", () => {
+  const entry = (contextWindow: number) => ({
+    inputTokens: 0,
+    outputTokens: 0,
+    cacheReadInputTokens: 0,
+    cacheCreationInputTokens: 0,
+    webSearchRequests: 0,
+    costUSD: 0,
+    contextWindow,
+    maxOutputTokens: 0,
+  });
+
+  it("prefers the session model's window and falls back to the largest valid one", () => {
+    const modelUsage = {
+      "claude-sonnet-4-6": entry(200_000),
+      "claude-haiku-4-5": entry(1_000_000),
+    };
+    assert.equal(
+      ClaudeAdapterV2.claudeContextWindowFromModelUsage(modelUsage, "claude-sonnet-4-6"),
+      200_000,
+    );
+    assert.equal(
+      ClaudeAdapterV2.claudeContextWindowFromModelUsage(modelUsage, "claude-opus-4-8"),
+      1_000_000,
+    );
+    assert.equal(
+      ClaudeAdapterV2.claudeContextWindowFromModelUsage(
+        { "claude-sonnet-4-6": entry(0) },
+        "claude-sonnet-4-6",
+      ),
+      undefined,
+    );
+  });
+});
+
 describe("ClaudeAdapterV2 session permissions", () => {
   it("forces suggested permission updates to session scope", () => {
     const result = ClaudeAdapterV2.permissionResultFromDecision({
@@ -2768,6 +2803,218 @@ describe("ClaudeAdapterV2 background wake turns", () => {
             cacheCreationTokens: 0,
           });
         }
+      }).pipe(Effect.scoped, Effect.provide(Layer.mergeAll(NodeServices.layer, IdAllocator.layer))),
+  );
+
+  // Fork context-meter corrections (carry of upstream #8453/#8617).
+  const makeUsageFrame = (input: {
+    readonly uuid: string;
+    readonly inputTokens: number;
+    readonly cacheReadTokens: number;
+  }) =>
+    claudeSdkFrame({
+      type: "assistant",
+      message: {
+        model: "claude-sonnet-4-6",
+        id: `msg_${input.uuid}`,
+        type: "message",
+        role: "assistant",
+        content: [{ type: "text", text: "Working." }],
+        stop_reason: null,
+        stop_sequence: null,
+        usage: {
+          input_tokens: input.inputTokens,
+          output_tokens: 1_000,
+          cache_creation_input_tokens: 0,
+          cache_read_input_tokens: input.cacheReadTokens,
+        },
+      },
+      parent_tool_use_id: null,
+      uuid: input.uuid,
+      session_id: WAKE_NATIVE_SESSION,
+    });
+  const makeMeteredResultFrame = (input: {
+    readonly uuid: string;
+    readonly modelUsage: Record<string, number>;
+  }) =>
+    claudeSdkFrame({
+      ...makeResultFrame({ uuid: input.uuid, result: "Done." }),
+      // Cumulative across the whole session; never the active context.
+      usage: {
+        input_tokens: 900_000,
+        output_tokens: 40_000,
+        cache_creation_input_tokens: 0,
+        cache_read_input_tokens: 0,
+      },
+      modelUsage: Object.fromEntries(
+        Object.entries(input.modelUsage).map(([model, contextWindow]) => [
+          model,
+          {
+            inputTokens: 1,
+            outputTokens: 1,
+            cacheReadInputTokens: 0,
+            cacheCreationInputTokens: 0,
+            webSearchRequests: 0,
+            costUSD: 0,
+            contextWindow,
+            maxOutputTokens: 64_000,
+          },
+        ]),
+      ),
+    });
+  const initFrame = claudeSdkFrame({
+    type: "system",
+    subtype: "init",
+    model: "claude-sonnet-4-6",
+    cwd: "/workspace",
+    tools: [],
+    mcp_servers: [],
+    permissionMode: "bypassPermissions",
+    slash_commands: [],
+    apiKeySource: "none",
+    claude_code_version: "2.1.0",
+    output_style: "default",
+    skills: [],
+    plugins: [],
+    uuid: "00000000-0000-4000-8000-000000000a00",
+    session_id: WAKE_NATIVE_SESSION,
+  });
+  const lastTokenUsage = (events: ReadonlyArray<ProviderAdapterV2Event>) =>
+    events.findLast(
+      (event): event is Extract<ProviderAdapterV2Event, { type: "provider_turn.updated" }> =>
+        event.type === "provider_turn.updated" && event.providerTurn.tokenUsage !== undefined,
+    )?.providerTurn.tokenUsage;
+
+  it.effect(
+    "measures the parent's per-request context against the session model's reported window",
+    () =>
+      Effect.gen(function* () {
+        const harness = yield* makeWakeHarness;
+        const now = yield* DateTime.now;
+        yield* harness.runtime.startTurn(
+          makeClaudeTestTurnInput({
+            threadId: harness.threadId,
+            providerThread: harness.providerThread,
+            now,
+            attemptId: RunAttemptId.make("attempt-claude-meter-1"),
+            text: "Read the repo",
+            attachments: [],
+          }),
+        );
+        yield* harness.offerAndWait(initFrame);
+        yield* harness.offerAndWait(
+          makeUsageFrame({
+            uuid: "00000000-0000-4000-8000-000000000a01",
+            inputTokens: 40_000,
+            cacheReadTokens: 10_000,
+          }),
+        );
+        yield* awaitUntil(
+          () => lastTokenUsage(harness.events)?.usedTokens === 51_000,
+          "parent context reading",
+        );
+        assert.include(lastTokenUsage(harness.events), { usedTokens: 51_000, maxTokens: 200_000 });
+
+        // A subagent's model reports a larger window; the session model's entry wins.
+        yield* Queue.offer(
+          harness.sdkMessages,
+          makeMeteredResultFrame({
+            uuid: "00000000-0000-4000-8000-000000000a02",
+            modelUsage: { "claude-haiku-4-5": 2_000_000, "claude-sonnet-4-6": 1_000_000 },
+          }),
+        );
+        yield* Queue.take(harness.terminalReceipts);
+        const terminalUpdate = harness.events.findLast(
+          (event) => event.type === "provider_turn.updated",
+        );
+        assert.equal(terminalUpdate?.type, "provider_turn.updated");
+        if (terminalUpdate?.type === "provider_turn.updated") {
+          assert.include(terminalUpdate.providerTurn.tokenUsage, {
+            usedTokens: 51_000,
+            maxTokens: 1_000_000,
+          });
+        }
+
+        // Later readings in the same process keep the measured window.
+        yield* harness.runtime.startTurn(
+          makeClaudeTestTurnInput({
+            threadId: harness.threadId,
+            providerThread: harness.providerThread,
+            now,
+            attemptId: RunAttemptId.make("attempt-claude-meter-2"),
+            providerTurnOrdinal: 2,
+            text: "Keep going",
+            attachments: [],
+          }),
+        );
+        yield* harness.offerAndWait(
+          makeUsageFrame({
+            uuid: "00000000-0000-4000-8000-000000000a03",
+            inputTokens: 50_000,
+            cacheReadTokens: 9_000,
+          }),
+        );
+        yield* awaitUntil(
+          () => lastTokenUsage(harness.events)?.usedTokens === 60_000,
+          "parent context reading",
+        );
+        assert.include(lastTokenUsage(harness.events), {
+          usedTokens: 60_000,
+          maxTokens: 1_000_000,
+        });
+      }).pipe(Effect.scoped, Effect.provide(Layer.mergeAll(NodeServices.layer, IdAllocator.layer))),
+  );
+
+  it.effect.each([
+    { scope: "session", maxTokens: 1_000_000 },
+    { scope: "local", maxTokens: 200_000 },
+  ] as const)(
+    "measures the context meter against a $scope-scoped refusal fallback",
+    ({ scope, maxTokens }) =>
+      Effect.gen(function* () {
+        const harness = yield* makeWakeHarness;
+        yield* harness.runtime.startTurn(
+          makeClaudeTestTurnInput({
+            threadId: harness.threadId,
+            providerThread: harness.providerThread,
+            now: yield* DateTime.now,
+            attemptId: RunAttemptId.make("attempt-claude-meter-refusal"),
+            text: "Audit the code",
+            attachments: [],
+          }),
+        );
+        yield* harness.offerAndWait(initFrame);
+        yield* harness.offerAndWait(
+          claudeSdkFrame({
+            type: "system",
+            subtype: "model_refusal_fallback",
+            trigger: "refusal",
+            direction: "retry",
+            scope,
+            original_model: "claude-sonnet-4-6",
+            fallback_model: "claude-opus-4-8",
+            request_id: null,
+            content: "Retried on Opus 4.8.",
+            uuid: "00000000-0000-4000-8000-000000000b01",
+            session_id: WAKE_NATIVE_SESSION,
+          }),
+        );
+        yield* harness.offerAndWait(
+          makeUsageFrame({
+            uuid: "00000000-0000-4000-8000-000000000b02",
+            inputTokens: 30_000,
+            cacheReadTokens: 0,
+          }),
+        );
+        yield* Queue.offer(
+          harness.sdkMessages,
+          makeMeteredResultFrame({
+            uuid: "00000000-0000-4000-8000-000000000b03",
+            modelUsage: { "claude-sonnet-4-6": 200_000, "claude-opus-4-8": 1_000_000 },
+          }),
+        );
+        yield* Queue.take(harness.terminalReceipts);
+        assert.include(lastTokenUsage(harness.events), { usedTokens: 31_000, maxTokens });
       }).pipe(Effect.scoped, Effect.provide(Layer.mergeAll(NodeServices.layer, IdAllocator.layer))),
   );
 

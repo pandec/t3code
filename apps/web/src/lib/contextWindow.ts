@@ -65,9 +65,10 @@ export function resolveKnownContextWindowMaxTokens(
   modelSelection: ModelSelection | null | undefined,
 ): number | null {
   if (!model || model.isCustom) return null;
-  // Keep in sync with selectedClaudeContextWindow in
-  // apps/server/src/provider/Layers/ClaudeAdapter.ts until fixed capacity moves
-  // into shared model capability metadata.
+  // Pre-report fallback only. Keep in sync with claudeContextWindow in
+  // apps/server/src/orchestration-v2/Adapters/ClaudeAdapterV2.ts until fixed
+  // capacity moves into shared model capability metadata; once a turn reports,
+  // the server's reading (measured against the serving model) wins.
   if (model.slug === "claude-opus-4-8" || model.slug === "claude-opus-4-7") {
     return 1_000_000;
   }
