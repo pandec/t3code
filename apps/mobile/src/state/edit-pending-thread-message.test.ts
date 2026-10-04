@@ -1,5 +1,11 @@
 import { beforeEach, describe, expect, it, vi } from "vite-plus/test";
-import { CommandId, EnvironmentId, MessageId, ThreadId } from "@t3tools/contracts";
+import {
+  CommandId,
+  EnvironmentId,
+  MessageId,
+  ProviderInstanceId,
+  ThreadId,
+} from "@t3tools/contracts";
 import type { QueuedThreadMessage } from "./thread-outbox-model";
 
 const state = vi.hoisted(() => ({
@@ -9,6 +15,7 @@ const state = vi.hoisted(() => ({
   confirm: vi.fn(async () => true),
   remove: vi.fn(async () => true),
   flush: vi.fn(async () => {}),
+  stage: vi.fn(),
 }));
 vi.mock("./atom-registry", () => ({
   appAtomRegistry: {
@@ -39,12 +46,12 @@ vi.mock("./use-composer-drafts", () => ({
       attachments: [...state.draft.attachments, ...message.attachments],
     };
   },
-  updateComposerDraftSettings: () => {},
   flushComposerDrafts: state.flush,
   undoComposerDraftMerge: async (_key: string, snapshot: typeof state.draft) => {
     state.draft = snapshot;
   },
 }));
+vi.mock("./use-thread-staged-settings", () => ({ stageThreadSettings: state.stage }));
 import { editPendingThreadMessage } from "./edit-pending-thread-message";
 
 const message: QueuedThreadMessage = {
@@ -74,7 +81,36 @@ beforeEach(() => {
   state.remove.mockResolvedValue(true);
   state.flush.mockResolvedValue(undefined);
 });
+const liveThread = {
+  modelSelection: { instanceId: ProviderInstanceId.make("codex"), model: "gpt-5.4" },
+  runtimeMode: "full-access",
+  interactionMode: "default",
+} as const;
+const pickedModel = { instanceId: ProviderInstanceId.make("claude"), model: "claude-opus-4-1" };
+
 describe("editing a pending message", () => {
+  it("stages the message's model against the live thread once the edit owns it", async () => {
+    state.remove.mockImplementationOnce(async () => {
+      expect(state.stage).not.toHaveBeenCalled();
+      return true;
+    });
+    expect(
+      await editPendingThreadMessage({ ...message, modelSelection: pickedModel }, liveThread),
+    ).toBe(true);
+    expect(state.stage).toHaveBeenCalledWith(
+      "env:thread",
+      { modelSelection: pickedModel },
+      liveThread,
+    );
+  });
+  it("leaves the pickers alone when the queued copy stays queued", async () => {
+    state.remove.mockResolvedValueOnce(false);
+    expect(
+      await editPendingThreadMessage({ ...message, modelSelection: pickedModel }, liveThread),
+    ).toBe(false);
+    expect(state.stage).not.toHaveBeenCalled();
+  });
+
   it("locks delivery and persists text and attachments before removing the queued copy", async () => {
     state.confirm.mockImplementationOnce(async () => {
       expect(state.held[message.messageId]).toBe(true);
@@ -86,24 +122,24 @@ describe("editing a pending message", () => {
       expect(state.draft.attachments).toEqual(message.attachments);
       return true;
     });
-    expect(await editPendingThreadMessage(message)).toBe(true);
+    expect(await editPendingThreadMessage(message, null)).toBe(true);
     expect(state.held).toEqual({});
   });
   it("does not reclaim a message already being dispatched", async () => {
     state.dispatching = message.messageId;
-    expect(await editPendingThreadMessage(message)).toBe(false);
+    expect(await editPendingThreadMessage(message, null)).toBe(false);
     expect(state.confirm).not.toHaveBeenCalled();
     expect(state.draft.text).toBe("Existing draft");
   });
   it("rolls back the draft if removing the queued message fails", async () => {
     state.remove.mockRejectedValueOnce(new Error("disk error"));
-    await expect(editPendingThreadMessage(message)).rejects.toThrow("disk error");
+    await expect(editPendingThreadMessage(message, null)).rejects.toThrow("disk error");
     expect(state.draft).toEqual({ text: "Existing draft", attachments: [] });
     expect(state.held).toEqual({});
   });
   it("rolls back when a newer queue revision wins", async () => {
     state.remove.mockResolvedValueOnce(false);
-    expect(await editPendingThreadMessage(message)).toBe(false);
+    expect(await editPendingThreadMessage(message, null)).toBe(false);
     expect(state.draft.text).toBe("Existing draft");
   });
 });

@@ -95,13 +95,14 @@ import type { DraftComposerAttachment } from "../../lib/composerImages";
 import { requestKeyboardStickyReset } from "../../lib/keyboardStickyResetRequests";
 import { RenderErrorBoundary, RenderFailureView } from "../../components/RenderErrorBoundary";
 import { CHAT_CONTENT_MAX_WIDTH, type LayoutVariant } from "../../lib/layout";
+import { appAtomRegistry } from "../../state/atom-registry";
 import { editPendingThreadMessage } from "../../state/edit-pending-thread-message";
 import { deviceEnvironment } from "../../state/device";
 import { useEnvironmentQuery } from "../../state/query";
 import { threadDevicePreviews } from "../devices/threadDevicePreviews";
 import type { QueuedThreadMessage } from "../../state/thread-outbox-model";
 import { scopedThreadKey } from "../../lib/scopedEntities";
-import { threadEnvironment } from "../../state/threads";
+import { environmentThreadShells, threadEnvironment } from "../../state/threads";
 import { useAtomCommand } from "../../state/use-atom-command";
 import { useDelayedStatus } from "../../lib/useDelayedStatus";
 import type {
@@ -1082,7 +1083,15 @@ export const ThreadDetailScreen = memo(function ThreadDetailScreen(props: Thread
   const handleEditPendingMessage = useCallback(async (message: QueuedThreadMessage) => {
     try {
       if (
-        (await editPendingThreadMessage(message)) &&
+        (await editPendingThreadMessage(
+          message,
+          appAtomRegistry.get(
+            environmentThreadShells.threadShellAtom({
+              environmentId: message.environmentId,
+              threadId: message.threadId,
+            }),
+          ),
+        )) &&
         selectedThreadKeyRef.current === scopedThreadKey(message.environmentId, message.threadId)
       ) {
         composerEditorRef.current?.focus();

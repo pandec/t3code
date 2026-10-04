@@ -85,9 +85,15 @@ import {
   sameComposerDraftState,
   scheduleUnusedComposerAttachmentCleanup,
   setComposerDraftText,
-  updateComposerDraftSettings,
   useComposerDraft,
 } from "./use-composer-drafts";
+import {
+  getStagedThreadSettings,
+  pruneExpiredStagedThreadSettings,
+  resolveStagedThreadSettings,
+  stageThreadSettings,
+  useStagedThreadSettings,
+} from "./use-thread-staged-settings";
 import {
   resolveComposerDispatchMode,
   type ActiveTurnComposerAction,
@@ -339,23 +345,36 @@ export function useThreadComposerState() {
         ? selectedThreadKey
         : queuedEditDraftKey(selectedThreadKey, queuedRunEdit.runId);
   // Content follows the composer's current draft; the model and mode pickers
-  // stay bound to the thread's own draft, which is what they write to.
+  // stay bound to the thread, through its staged settings.
   const editedDraft = composerDraftKey ? composerDrafts[composerDraftKey] : null;
-  const selectedDraft = selectedThreadKey ? composerDrafts[selectedThreadKey] : null;
+  const stagedThreadSettings = useStagedThreadSettings(selectedThreadKey);
   const draftMessage = editedDraft?.text ?? "";
   const draftAttachments = editedDraft?.attachments ?? [];
   const selectedThreadQueueCount = selectedThreadQueuedMessages.length;
   const selectedThread = selectedThreadShell;
-  const modelSelection = selectedDraft?.modelSelection ?? selectedThread?.modelSelection ?? null;
-  const runtimeMode = selectedDraft?.runtimeMode ?? selectedThread?.runtimeMode ?? null;
+  // Fork: the pickers follow the thread's live settings. A pick is staged for
+  // this session only and holds while the thread still has the value it was
+  // made against; once the thread moves on, the pick expires for good, so a
+  // later return to that value (another client, a plan follow-up) cannot
+  // revive it. The ref gives the picker callbacks the thread to stage
+  // against without changing their identity on every thread update.
+  const latestThreadRef = useRef(selectedThread);
+  useEffect(() => {
+    latestThreadRef.current = selectedThread;
+    if (selectedThreadKey && selectedThread) {
+      pruneExpiredStagedThreadSettings(selectedThreadKey, selectedThread);
+    }
+  }, [selectedThread, selectedThreadKey]);
+  const resolvedThreadSettings = selectedThread
+    ? resolveStagedThreadSettings(stagedThreadSettings, selectedThread)
+    : null;
+  const modelSelection = resolvedThreadSettings?.modelSelection ?? null;
+  const runtimeMode = resolvedThreadSettings?.runtimeMode ?? null;
   const selectedProvider = selectedEnvironmentRuntime?.serverConfig?.providers.find(
     (provider) => provider.instanceId === modelSelection?.instanceId,
   );
-  const interactionMode = selectedThread
-    ? resolveProviderInteractionMode(
-        selectedProvider,
-        selectedDraft?.interactionMode ?? selectedThread.interactionMode,
-      )
+  const interactionMode = resolvedThreadSettings
+    ? resolveProviderInteractionMode(selectedProvider, resolvedThreadSettings.interactionMode)
     : null;
   // Whether the model picker may leave this thread's provider. Derived here
   // because the projection already drives this hook; the composer only needs
@@ -533,8 +552,9 @@ export function useThreadComposerState() {
       .finally(() => {
         if (restoring) setComposerContextImporting(threadKey, false);
       });
-    if (editedRun !== undefined) {
-      updateComposerDraftSettings(threadKey, { modelSelection: editedRun.modelSelection });
+    const baseline = latestThreadRef.current;
+    if (editedRun !== undefined && baseline) {
+      stageThreadSettings(threadKey, { modelSelection: editedRun.modelSelection }, baseline);
     }
   }, [editedRunId, selectedThreadKey, selectedThreadRuns]);
 
@@ -726,7 +746,12 @@ export function useThreadComposerState() {
         return null;
       }
 
-      const modelSelection = draft.modelSelection ?? thread.modelSelection;
+      pruneExpiredStagedThreadSettings(threadKey, thread);
+      const threadSettings = resolveStagedThreadSettings(
+        getStagedThreadSettings(threadKey),
+        thread,
+      );
+      const modelSelection = threadSettings.modelSelection;
       const serverConfig = selectedEnvironmentRuntime?.serverConfig;
       if (
         selectedEnvironmentRuntime?.connectionState === "connected" &&
@@ -809,11 +834,8 @@ export function useThreadComposerState() {
         attachments,
         context: draft.context,
         modelSelection,
-        runtimeMode: draft.runtimeMode ?? thread.runtimeMode,
-        interactionMode: resolveProviderInteractionMode(
-          provider,
-          draft.interactionMode ?? thread.interactionMode,
-        ),
+        runtimeMode: threadSettings.runtimeMode,
+        interactionMode: resolveProviderInteractionMode(provider, threadSettings.interactionMode),
         ...(followUpDispatchMode === null ? {} : { dispatchMode: followUpDispatchMode }),
         createdAt: metadata.createdAt,
       });
@@ -1121,48 +1143,58 @@ export function useThreadComposerState() {
 
   const onUpdateModelSelection = useCallback(
     (value: ModelSelection) => {
-      if (!selectedThreadKey) {
+      const baseline = latestThreadRef.current;
+      if (!selectedThreadKey || !baseline) {
         return;
       }
       const provider = selectedEnvironmentRuntime?.serverConfig?.providers.find(
         (candidate) => candidate.instanceId === value.instanceId,
       );
-      updateComposerDraftSettings(selectedThreadKey, {
-        modelSelection: value,
-        ...(provider?.showInteractionModeToggle === false
-          ? { interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE }
-          : {}),
-      });
+      stageThreadSettings(
+        selectedThreadKey,
+        {
+          modelSelection: value,
+          ...(provider?.showInteractionModeToggle === false
+            ? { interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE }
+            : {}),
+        },
+        baseline,
+      );
     },
     [selectedEnvironmentRuntime?.serverConfig, selectedThreadKey],
   );
 
   const onUpdateRuntimeMode = useCallback(
     (value: RuntimeMode) => {
-      if (!selectedThreadKey) {
+      const baseline = latestThreadRef.current;
+      if (!selectedThreadKey || !baseline) {
         return;
       }
-      updateComposerDraftSettings(selectedThreadKey, { runtimeMode: value });
+      stageThreadSettings(selectedThreadKey, { runtimeMode: value }, baseline);
     },
     [selectedThreadKey],
   );
 
   const onUpdateInteractionMode = useCallback(
     (value: ProviderInteractionMode) => {
-      if (!selectedThreadKey) {
+      const baseline = latestThreadRef.current;
+      if (!selectedThreadKey || !baseline) {
         return;
       }
-      const modelSelection =
-        getComposerDraftSnapshot(selectedThreadKey).modelSelection ??
-        selectedThread?.modelSelection;
+      const modelSelection = resolveStagedThreadSettings(
+        getStagedThreadSettings(selectedThreadKey),
+        baseline,
+      ).modelSelection;
       const provider = selectedEnvironmentRuntime?.serverConfig?.providers.find(
-        (candidate) => candidate.instanceId === modelSelection?.instanceId,
+        (candidate) => candidate.instanceId === modelSelection.instanceId,
       );
-      updateComposerDraftSettings(selectedThreadKey, {
-        interactionMode: resolveProviderInteractionMode(provider, value),
-      });
+      stageThreadSettings(
+        selectedThreadKey,
+        { interactionMode: resolveProviderInteractionMode(provider, value) },
+        baseline,
+      );
     },
-    [selectedEnvironmentRuntime?.serverConfig, selectedThread?.modelSelection, selectedThreadKey],
+    [selectedEnvironmentRuntime?.serverConfig, selectedThreadKey],
   );
 
   return {

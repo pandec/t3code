@@ -19,64 +19,22 @@ import {
   type PendingThreadRequests,
   type ThreadUserInputQuestion,
 } from "@t3tools/client-runtime/state/thread-requests";
-import { Atom } from "effect/unstable/reactivity";
 
 import { threadEnvironment } from "../state/threads";
 import { scopedRequestKey } from "../lib/scopedEntities";
-import {
-  buildPendingUserInputAnswers,
-  setPendingUserInputCustomAnswer,
-  togglePendingUserInputOptionSelection,
-  type PendingUserInputDraftAnswer,
-} from "../lib/threadActivity";
+import { buildPendingUserInputAnswers } from "../lib/threadActivity";
 import { appAtomRegistry } from "./atom-registry";
+import {
+  readLatestPendingUserInputAnswers,
+  setUserInputDraftCustomAnswer,
+  setUserInputDraftOption,
+  userInputDraftsByRequestKeyAtom,
+} from "./pending-user-input-drafts";
 import { useSelectedThreadPendingRequests } from "./use-thread-detail";
 import { useThreadSelection } from "./use-thread-selection";
 import { useAtomCommand } from "./use-atom-command";
 
 const EMPTY_PENDING_REQUESTS: PendingThreadRequests = { approvals: [], userInputs: [] };
-
-const userInputDraftsByRequestKeyAtom = Atom.make<
-  Record<string, Record<string, PendingUserInputDraftAnswer>>
->({}).pipe(Atom.keepAlive, Atom.withLabel("mobile:user-input-drafts"));
-
-function setUserInputDraftOption(
-  requestKey: string,
-  question: ThreadUserInputQuestion,
-  value: string,
-): void {
-  const current = appAtomRegistry.get(userInputDraftsByRequestKeyAtom);
-  appAtomRegistry.set(userInputDraftsByRequestKeyAtom, {
-    ...current,
-    [requestKey]: {
-      ...current[requestKey],
-      [question.id]: togglePendingUserInputOptionSelection(
-        question,
-        current[requestKey]?.[question.id],
-        value,
-      ),
-    },
-  });
-}
-
-function setUserInputDraftCustomAnswer(
-  requestKey: string,
-  question: ThreadUserInputQuestion,
-  customAnswer: string,
-): void {
-  const current = appAtomRegistry.get(userInputDraftsByRequestKeyAtom);
-  appAtomRegistry.set(userInputDraftsByRequestKeyAtom, {
-    ...current,
-    [requestKey]: {
-      ...current[requestKey],
-      [question.id]: setPendingUserInputCustomAnswer(
-        question,
-        current[requestKey]?.[question.id],
-        customAnswer,
-      ),
-    },
-  });
-}
 
 export function useSelectedThreadRequests() {
   const respondToApproval = useAtomCommand(
@@ -240,9 +198,17 @@ export function useSelectedThreadRequests() {
     if (
       !selectedThreadShell ||
       !activePendingUserInput ||
-      activePendingUserInput.responseCapability === "not_resumable" ||
-      !activePendingUserInputAnswers
+      activePendingUserInput.responseCapability === "not_resumable"
     ) {
+      return;
+    }
+    // Fork: the typed answers are read when Submit fires, not from this render.
+    const answers = readLatestPendingUserInputAnswers(
+      scopedRequestKey(selectedThreadShell.environmentId, activePendingUserInput.requestId),
+      activePendingUserInput.questions,
+      activePendingUserInputDrafts,
+    );
+    if (!answers) {
       return;
     }
 
@@ -298,7 +264,7 @@ export function useSelectedThreadRequests() {
       input: {
         threadId: selectedThreadShell.id,
         requestId: activePendingUserInput.requestId,
-        answers: activePendingUserInputAnswers,
+        answers,
         ...(attachmentsByQuestionId.size > 0
           ? { attachmentsByQuestionId: Object.fromEntries(attachmentsByQuestionId) }
           : {}),
@@ -311,7 +277,7 @@ export function useSelectedThreadRequests() {
     return result;
   }, [
     activePendingUserInput,
-    activePendingUserInputAnswers,
+    activePendingUserInputDrafts,
     respondToUserInput,
     selectedThreadShell,
   ]);
