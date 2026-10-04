@@ -52,6 +52,8 @@ import {
 import { useLocation, useNavigate, useParams } from "@tanstack/react-router";
 import * as Option from "effect/Option";
 import {
+  AlarmClockIcon,
+  AlarmClockOffIcon,
   ArchiveIcon,
   ArrowLeftIcon,
   CircleCheckIcon,
@@ -59,6 +61,7 @@ import {
   ArrowLeftRightIcon,
   ChartNoAxesColumnIcon,
   Columns2Icon,
+  CalendarIcon,
   CheckIcon,
   ChevronRightIcon,
   CornerLeftUpIcon,
@@ -107,7 +110,14 @@ import { useHandleNewThread } from "../hooks/useHandleNewThread";
 import { useSavedPromptList } from "../hooks/useSavedPrompts";
 import { savedPromptPreview } from "./chat/composerPromptPicker";
 import { useThreadActions } from "../hooks/useThreadActions";
-import { resolveArchiveToggleAction } from "@t3tools/client-runtime/state/thread-settled";
+import {
+  canSnooze,
+  canSnoozeUntilDone,
+  effectiveSnoozed,
+  resolveArchiveToggleAction,
+} from "@t3tools/client-runtime/state/thread-settled";
+import { requestCustomSnooze } from "./CustomSnoozeDialog";
+import { resolveSnoozePresets } from "./Sidebar.snooze";
 import { useProjectAccentColors } from "../hooks/useProjectAccentColors";
 import { useAccentTintSettings, useClientSettings } from "../hooks/useSettings";
 import { useOpenPanelPullRequestUrl } from "../hooks/useOpenPanelPullRequestUrl";
@@ -138,6 +148,8 @@ import { useEnvironments, usePrimaryEnvironmentId } from "../state/environments"
 import {
   readEnvironmentSupportsActiveReorder,
   readEnvironmentSupportsPinReorder,
+  readEnvironmentSupportsSnoozeIndefinite,
+  readEnvironmentSupportsSnoozeUntilDone,
   readThreadShells,
   useProjects,
   useServerConfigs,
@@ -199,9 +211,11 @@ import {
   buildThreadActionItems,
   buildLinkedThreadActionItems,
   buildRenameThreadViewItems,
+  buildSnoozeThreadViewItems,
   resolveThreadUtilityOpenTarget,
   enumerateCommandPaletteItems,
   RENAME_THREAD_VIEW_VALUE,
+  SNOOZE_THREAD_VIEW_VALUE,
   type CommandPaletteActionItem,
   type CommandPaletteProject,
   type CommandPaletteThreadActionId,
@@ -862,6 +876,8 @@ function OpenCommandPaletteDialog(props: {
     settleThread,
     confirmAndUnpinThread,
     unsettleThread,
+    snoozeThread,
+    unsnoozeThread,
     forkThread,
     setThreadCustomGroup,
     reorderActiveThread,
@@ -873,6 +889,7 @@ function OpenCommandPaletteDialog(props: {
   const updateThreadMetadata = useAtomCommand(threadEnvironment.updateMetadata, {
     reportFailure: false,
   });
+  const timestampFormat = useClientSettings((s) => s.timestampFormat);
   const projects = useProjects();
   const projectAccentColors = useProjectAccentColors();
   const accentTint = useAccentTintSettings();
@@ -975,6 +992,7 @@ function OpenCommandPaletteDialog(props: {
   const [viewStack, setViewStack] = useState<CommandPaletteView[]>([]);
   const currentView = viewStack.at(-1) ?? null;
   const isRenameThreadView = currentView?.groups[0]?.value === RENAME_THREAD_VIEW_VALUE;
+  const isSnoozeThreadView = currentView?.groups[0]?.value === SNOOZE_THREAD_VIEW_VALUE;
   const consumedThreadIntent = useRef<CommandPaletteOpenIntent | null>(null);
   const [threadActionPane] = useState(() => useThreadSplitStore.getState().activePaneId);
   const environmentIds = useMemo(
@@ -1249,6 +1267,7 @@ function OpenCommandPaletteDialog(props: {
         browseEnvironmentId !== null &&
           !isRemoteProjectRepositoryStep &&
           !isRenameThreadView &&
+          !isSnoozeThreadView &&
           newProjectFlow === null,
       ),
     [
@@ -1256,6 +1275,7 @@ function OpenCommandPaletteDialog(props: {
       browseEnvironmentPlatform,
       isRemoteProjectRepositoryStep,
       isRenameThreadView,
+      isSnoozeThreadView,
       newProjectFlow,
       query,
     ],
@@ -2379,6 +2399,7 @@ function OpenCommandPaletteDialog(props: {
   );
 
   if (openUnarchivedThread !== null && openUnarchivedThreadRef !== null) {
+    const threadRef = openUnarchivedThreadRef;
     const thread = openUnarchivedThread;
     actionItems.push({
       kind: "submenu",
@@ -2391,6 +2412,40 @@ function OpenCommandPaletteDialog(props: {
       groups: [{ value: RENAME_THREAD_VIEW_VALUE, label: "Rename", items: [] }],
       initialQuery: thread.title,
     });
+    // Fork: snooze/wake the open thread. thread.snooze opens whichever applies.
+    if (openThreadCapabilities?.threadSnooze === true) {
+      const now = new Date();
+      if (effectiveSnoozed(thread, { now: now.toISOString() })) {
+        actionItems.push({
+          kind: "action",
+          value: "action:thread:unsnooze",
+          searchTerms: ["wake", "unsnooze", "snooze", "resume", "current thread"],
+          title: "Wake current thread",
+          icon: <AlarmClockOffIcon className={ITEM_ICON_CLASS} />,
+          shortcutCommand: "thread.snooze",
+          run: async () => {
+            await reportThreadActionFailure("Failed to wake thread", () =>
+              unsnoozeThread(threadRef),
+            );
+          },
+        });
+      } else {
+        const canSnoozeNow = canSnooze(thread, { now: now.toISOString() });
+        actionItems.push({
+          kind: "submenu",
+          value: `action:${SNOOZE_THREAD_VIEW_VALUE}`,
+          searchTerms: ["snooze", "snooze thread", "hide", "later", "remind", "current thread"],
+          title: "Snooze current thread...",
+          icon: <AlarmClockIcon className={ITEM_ICON_CLASS} />,
+          shortcutCommand: "thread.snooze",
+          ...(canSnoozeNow
+            ? {}
+            : { disabled: true, description: "Thread is waiting on you or has queued work" }),
+          addonIcon: <AlarmClockIcon className={ADDON_ICON_CLASS} />,
+          groups: [{ value: SNOOZE_THREAD_VIEW_VALUE, label: "Snooze until", items: [] }],
+        });
+      }
+    }
   }
 
   // Fork: group-aware "Move to top", planned against the full group or pinned
@@ -3061,7 +3116,8 @@ function OpenCommandPaletteDialog(props: {
           ? changeAppearanceItem.groups
           : (currentView?.groups ?? rootGroups);
 
-  // The rename view derives its rows from the query and bypasses filtering.
+  // Both views derive rows from the query. Only rename bypasses filtering;
+  // snooze keeps matching presets alongside the parsed time.
   const liveThreadViewGroups: CommandPaletteView["groups"] | null =
     openUnarchivedThread === null || openUnarchivedThreadRef === null
       ? null
@@ -3096,7 +3152,55 @@ function OpenCommandPaletteDialog(props: {
               }),
             },
           ]
-        : null;
+        : isSnoozeThreadView
+          ? (() => {
+              const now = new Date();
+              const snooze = (preset: {
+                readonly snoozedUntil: string | null;
+                readonly untilDone?: true;
+              }) =>
+                reportThreadActionFailure("Failed to snooze thread", () =>
+                  snoozeThread(openUnarchivedThreadRef, preset.snoozedUntil, {
+                    untilDone: preset.untilDone === true,
+                  }),
+                );
+              return [
+                {
+                  value: SNOOZE_THREAD_VIEW_VALUE,
+                  label: "Snooze until",
+                  items: buildSnoozeThreadViewItems({
+                    query: deferredQuery,
+                    now,
+                    presets: resolveSnoozePresets(now, timestampFormat, {
+                      untilWoken: readEnvironmentSupportsSnoozeIndefinite(
+                        openUnarchivedThreadRef.environmentId,
+                      ),
+                      untilDone:
+                        canSnoozeUntilDone(openUnarchivedThread) &&
+                        readEnvironmentSupportsSnoozeUntilDone(
+                          openUnarchivedThreadRef.environmentId,
+                        ),
+                    }),
+                    timestampFormat,
+                    icon: <AlarmClockIcon className={ITEM_ICON_CLASS} />,
+                    customIcon: <CalendarIcon className={ITEM_ICON_CLASS} />,
+                    renderWhen: (whenLabel) => (
+                      <span className="ms-auto shrink-0 text-xs tabular-nums text-muted-foreground/70">
+                        {whenLabel}
+                      </span>
+                    ),
+                    snooze: async (preset) => {
+                      await snooze(preset);
+                    },
+                    custom: async () => {
+                      const choice = await requestCustomSnooze();
+                      if (choice) await snooze(choice);
+                    },
+                  }),
+                },
+              ];
+            })()
+          : null;
 
   const filteredGroups = filterCommandPaletteGroups({
     activeGroups: liveThreadViewGroups ?? activeGroups,
@@ -3726,10 +3830,12 @@ function OpenCommandPaletteDialog(props: {
 
   const inputPlaceholder = isRenameThreadView
     ? "New thread title"
-    : newProjectFlow !== null
-      ? "Project name"
-      : (remoteProjectInputPlaceholder(addProjectCloneFlow) ??
-        getCommandPaletteInputPlaceholder(paletteMode));
+    : isSnoozeThreadView
+      ? "Search presets, or type 45m, 2pm, fri 9am..."
+      : newProjectFlow !== null
+        ? "Project name"
+        : (remoteProjectInputPlaceholder(addProjectCloneFlow) ??
+          getCommandPaletteInputPlaceholder(paletteMode));
   const isSubmenu = paletteMode === "submenu" || paletteMode === "submenu-browse";
   const isSavedPromptsView = currentView?.groups[0]?.value === SAVED_PROMPTS_GROUP_VALUE;
   const hasHighlightedBrowseItem = highlightedItemValue?.startsWith("browse:") ?? false;
@@ -4132,17 +4238,19 @@ function OpenCommandPaletteDialog(props: {
     ? "Insert"
     : isRenameThreadView
       ? "Rename"
-      : newProjectFlow !== null
-        ? highlightedItemValue === null
-          ? "Create"
-          : highlightedItemValue === newProjectGitHubToggleValue
-            ? "Toggle"
-            : "Select"
-        : addProjectCloneFlow?.step === "repository"
-          ? (remoteProjectButtonLabel ?? "Continue")
-          : !canSubmitBrowsePath || hasHighlightedBrowseItem
-            ? "Select"
-            : undefined;
+      : isSnoozeThreadView
+        ? "Snooze"
+        : newProjectFlow !== null
+          ? highlightedItemValue === null
+            ? "Create"
+            : highlightedItemValue === newProjectGitHubToggleValue
+              ? "Toggle"
+              : "Select"
+          : addProjectCloneFlow?.step === "repository"
+            ? (remoteProjectButtonLabel ?? "Continue")
+            : !canSubmitBrowsePath || hasHighlightedBrowseItem
+              ? "Select"
+              : undefined;
 
   const footerTrailing = isSavedPromptsView ? (
     <KbdGroup className="shrink-0 items-center whitespace-nowrap">
