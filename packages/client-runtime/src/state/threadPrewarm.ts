@@ -278,30 +278,33 @@ const warmEnvironmentOnce = Effect.fn("EnvironmentThreadPrewarm.warmOnce")(funct
   readonly loader: ThreadSnapshotLoader["Service"];
   readonly environmentId: EnvironmentIdType;
   readonly previousLastRunAt: number | null;
-  /** Restricts a targeted run to threads whose run just finished. */
-  readonly only?: ReadonlySet<ThreadIdType>;
+  /** Sweeps the cached shell's candidates in addition to `settled`. */
+  readonly full: boolean;
+  /** Threads whose run just finished; warmed first, even in a full sweep. */
+  readonly settled: ReadonlySet<ThreadIdType>;
 }) {
   const prepared = yield* SubscriptionRef.get(input.supervisor.prepared);
   if (Option.isNone(prepared)) {
     return null;
   }
-  let candidates: ReadonlyArray<ThreadIdType>;
-  if (input.only === undefined) {
+  // The live shell already saw settled threads finish; the cached shell can
+  // lag behind it, so they are taken as given and ranked first.
+  let swept: ReadonlyArray<ThreadIdType> = [];
+  if (input.full) {
     // Candidates come from the cached shell so prewarming never adds a socket
     // or shell request of its own. A slightly stale shell only costs ranking;
     // fetched projections are re-checked before anything is cached.
     const shell = yield* input.cache
       .loadShell(input.environmentId)
       .pipe(Effect.orElseSucceed(() => Option.none<OrchestrationV2ShellSnapshot>()));
-    if (Option.isNone(shell)) {
+    if (Option.isNone(shell) && input.settled.size === 0) {
       return null;
     }
-    candidates = selectPrewarmCandidates(shell.value.threads);
-  } else {
-    // The live shell already saw these threads finish; the cached shell can
-    // lag behind it, so targeted runs take the ids as given.
-    candidates = [...input.only].slice(0, PREWARM_THREAD_LIMIT);
+    if (Option.isSome(shell)) {
+      swept = selectPrewarmCandidates(shell.value.threads);
+    }
   }
+  const candidates = [...new Set([...input.settled, ...swept])].slice(0, PREWARM_THREAD_LIMIT);
   let refreshed = 0;
   let skipped = 0;
   let failed = 0;
@@ -354,7 +357,7 @@ const warmEnvironmentOnce = Effect.fn("EnvironmentThreadPrewarm.warmOnce")(funct
   // every candidate failed confirmed nothing, and a targeted run says nothing
   // about the sweep the label reports; both keep the previous timestamp.
   const lastRunAt =
-    input.only !== undefined || (failed > 0 && refreshed === 0 && skipped === 0)
+    !input.full || (failed > 0 && refreshed === 0 && skipped === 0)
       ? input.previousLastRunAt
       : yield* Clock.currentTimeMillis;
   yield* Effect.logDebug("Prewarmed thread details.").pipe(
@@ -511,7 +514,8 @@ export const makeEnvironmentThreadPrewarm = Effect.fn("EnvironmentThreadPrewarm.
                 loader,
                 environmentId,
                 previousLastRunAt: previous.lastRunAt,
-                ...(runFull ? {} : { only: batch.settled }),
+                full: runFull,
+                settled: batch.settled,
               }).pipe(
                 Effect.timeoutOption(Duration.millis(PREWARM_RUN_TIMEOUT_MS)),
                 Effect.map(

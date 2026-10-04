@@ -351,7 +351,8 @@ describe("createEnvironmentThreadStateAtoms", () => {
       const otherRegistry = yield* h.makeRegistry;
       const unmountOther = otherRegistry.mount(h.stateAtom);
       const other = yield* Queue.take(h.subscriptions);
-      expect(h.counts()).toEqual({ httpLoads: 2, diskLoads: 2, opened: 2, active: 1 });
+      // The first scope's teardown persist re-reads the stored entry first.
+      expect(h.counts()).toEqual({ httpLoads: 2, diskLoads: 3, opened: 2, active: 1 });
       unmountOther();
       yield* Deferred.await(other.closed);
     }),
@@ -369,7 +370,8 @@ describe("createEnvironmentThreadStateAtoms", () => {
       yield* Effect.promise(() => vi.advanceTimersByTimeAsync(THREAD_SNAPSHOT_IDLE_TTL_MS + 1));
       const remount = h.registry.mount(h.stateAtom);
       const next = yield* Queue.take(h.subscriptions);
-      expect(h.counts()).toEqual({ httpLoads: 2, diskLoads: 2, opened: 2, active: 1 });
+      // The first scope's teardown persist re-reads the stored entry first.
+      expect(h.counts()).toEqual({ httpLoads: 2, diskLoads: 3, opened: 2, active: 1 });
       remount();
       yield* Deferred.await(next.closed);
     }),

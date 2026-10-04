@@ -705,11 +705,49 @@ describe("EnvironmentThreads", () => {
     }),
   );
 
+  it.effect("does not let teardown overwrite a newer cached snapshot", () =>
+    Effect.gen(function* () {
+      const stored = yield* Ref.make(
+        Option.some<OrchestrationV2ThreadDetailSnapshot>({
+          snapshotSequence: CACHED_SNAPSHOT_SEQUENCE,
+          projection: BASE_PROJECTION,
+        }),
+      );
+      const scope = yield* Scope.make();
+      const harness = yield* makeHarness({ loadCached: Ref.get(stored) }).pipe(
+        Effect.provideService(Scope.Scope, scope),
+      );
+      yield* Queue.offer(harness.inputs, titleUpdated("Live title", CACHED_SNAPSHOT_SEQUENCE + 1));
+      yield* awaitThreadState(
+        harness.observed,
+        (value) =>
+          value.status === "live" &&
+          Option.isSome(value.data) &&
+          value.data.value.thread.title === "Live title",
+      );
+
+      // Prewarm (or another writer) populated a newer entry before the
+      // teardown flush of the older live state.
+      const prewarmed: OrchestrationV2ThreadDetailSnapshot = {
+        snapshotSequence: CACHED_SNAPSHOT_SEQUENCE + 3,
+        projection: {
+          ...BASE_PROJECTION,
+          thread: { ...BASE_PROJECTION.thread, title: "Prewarmed title" },
+        },
+      };
+      yield* Ref.set(stored, Option.some(prewarmed));
+      yield* Scope.close(scope, Exit.void);
+
+      expect(yield* Ref.get(stored)).toEqual(Option.some(prewarmed));
+      expect(yield* Ref.get(harness.savedThreads)).toEqual([]);
+    }),
+  );
+
   it.effect("reduces live events and persists the latest thread", () =>
     Effect.gen(function* () {
       const harness = yield* makeHarness({ cached: BASE_PROJECTION });
-      yield* Queue.offer(harness.inputs, snapshot(BASE_PROJECTION));
-      yield* Queue.offer(harness.inputs, titleUpdated("Live title"));
+      yield* Queue.offer(harness.inputs, snapshot(BASE_PROJECTION, CACHED_SNAPSHOT_SEQUENCE + 1));
+      yield* Queue.offer(harness.inputs, titleUpdated("Live title", CACHED_SNAPSHOT_SEQUENCE + 2));
 
       const state = yield* awaitThreadState(
         harness.observed,
@@ -725,7 +763,9 @@ describe("EnvironmentThreads", () => {
       expect((yield* Ref.get(harness.savedThreads)).at(-1)?.projection.thread.title).toBe(
         "Live title",
       );
-      expect((yield* Ref.get(harness.savedThreads)).at(-1)?.snapshotSequence).toBe(2);
+      expect((yield* Ref.get(harness.savedThreads)).at(-1)?.snapshotSequence).toBe(
+        CACHED_SNAPSHOT_SEQUENCE + 2,
+      );
     }),
   );
 

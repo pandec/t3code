@@ -317,6 +317,8 @@ describe("makeEnvironmentThreadPrewarm", () => {
       foreground: Queue.offer(wakeups, "application-active").pipe(Effect.andThen(settle)),
       fire: (request: ThreadPrewarmTriggerRequest) =>
         Queue.offer(requests, request).pipe(Effect.andThen(settle)),
+      /** Queues a request without settling, so the next trigger shares its batch. */
+      enqueue: (request: ThreadPrewarmTriggerRequest) => Queue.offer(requests, request),
     };
   });
 
@@ -384,6 +386,49 @@ describe("makeEnvironmentThreadPrewarm", () => {
         // Targeted runs never advance the sweep label.
         expect(targeted.lastRunAt).toBe(first.lastRunAt);
         expect(yield* Ref.get(harness.loaderCalls)).toEqual(["missing", "busy"]);
+        expect((yield* Ref.get(harness.stored)).has("busy")).toBe(true);
+      }),
+    ),
+  );
+
+  // The cached shell still marks "busy" running; the settled trigger is the
+  // only evidence it finished, so a coalesced full sweep must not drop it.
+  const settledBusy: ThreadPrewarmTriggerRequest = {
+    reason: "thread-settled",
+    environmentId: ENVIRONMENT_ID,
+    threadId: ThreadId.make("busy"),
+  };
+
+  it.effect("warms a finished thread coalesced into a lifecycle sweep", () =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        const harness = yield* makeHarness();
+        yield* harness.enqueue(settledBusy);
+        yield* harness.connect;
+
+        yield* Queue.take(harness.started);
+        expect(yield* Queue.take(harness.statuses)).toMatchObject({ refreshed: 2, skipped: 1 });
+        expect(yield* Ref.get(harness.loaderCalls)).toEqual(["busy", "missing"]);
+        expect((yield* Ref.get(harness.stored)).get("busy")?.snapshotSequence).toBe(12);
+
+        // The coalesced sweep still consumed the lifecycle cooldown.
+        yield* harness.foreground;
+        expect(Option.isNone(yield* Queue.poll(harness.started))).toBe(true);
+      }),
+    ),
+  );
+
+  it.effect("warms a finished thread coalesced into a manual sync", () =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        const harness = yield* makeHarness();
+        yield* harness.enqueue({ reason: "manual" });
+        yield* harness.fire(settledBusy);
+
+        yield* Queue.take(harness.started);
+        const status = yield* Queue.take(harness.statuses);
+        expect(status).toMatchObject({ refreshed: 2, skipped: 1 });
+        expect(status.lastManualRequestCompletedAt).not.toBeNull();
         expect((yield* Ref.get(harness.stored)).has("busy")).toBe(true);
       }),
     ),

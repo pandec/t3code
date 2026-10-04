@@ -271,32 +271,50 @@ export const makeEnvironmentThreadState = Effect.fn("EnvironmentThreadState.make
     yield* withEnvironmentCacheMutationLock(
       cache,
       environmentId,
-      cache.saveThread(environmentId, snapshot),
-    ).pipe(
-      Effect.tap(() =>
-        Effect.sync(() => {
-          if (
-            !matchesThreadSnapshot(
-              committed,
-              snapshot.projection,
-              snapshot.snapshotSequence,
-              historyMetaFromCachedSnapshot(snapshot),
-            )
-          )
-            return;
-          committed = { ...committed, persisted: true };
-          if (resumeCache?.owner === owner) resumeCache.snapshot = committed;
-        }),
-      ),
-      Effect.catch((error) =>
-        Effect.logWarning("Could not persist the thread cache.").pipe(
-          Effect.annotateLogs({
-            environmentId,
-            threadId,
-            error: error.message,
-          }),
-        ),
-      ),
+      Effect.gen(function* () {
+        if (resumeCache !== undefined && resumeCache.owner !== owner) return;
+        const stored = yield* cache
+          .loadThread(environmentId, threadId)
+          .pipe(
+            Effect.catch((error) =>
+              Effect.logWarning("Could not inspect the thread cache before persisting.").pipe(
+                Effect.annotateLogs({ environmentId, threadId, error: error.message }),
+                Effect.as(Option.none<OrchestrationV2ThreadDetailSnapshot>()),
+              ),
+            ),
+          );
+        // Never replace a newer entry (e.g. one prewarm populated) with an
+        // older live or teardown snapshot.
+        if (Option.isSome(stored) && stored.value.snapshotSequence > snapshot.snapshotSequence) {
+          return;
+        }
+        yield* cache.saveThread(environmentId, snapshot).pipe(
+          Effect.tap(() =>
+            Effect.sync(() => {
+              if (
+                !matchesThreadSnapshot(
+                  committed,
+                  snapshot.projection,
+                  snapshot.snapshotSequence,
+                  historyMetaFromCachedSnapshot(snapshot),
+                )
+              )
+                return;
+              committed = { ...committed, persisted: true };
+              if (resumeCache?.owner === owner) resumeCache.snapshot = committed;
+            }),
+          ),
+          Effect.catch((error) =>
+            Effect.logWarning("Could not persist the thread cache.").pipe(
+              Effect.annotateLogs({
+                environmentId,
+                threadId,
+                error: error.message,
+              }),
+            ),
+          ),
+        );
+      }),
     );
   });
 
