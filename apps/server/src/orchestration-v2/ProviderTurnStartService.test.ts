@@ -36,6 +36,7 @@ import * as ProviderSessionManager from "./ProviderSessionManager.ts";
 import * as ProviderTurnStart from "./ProviderTurnStartService.ts";
 import * as RunExecutionService from "./RunExecutionService.ts";
 import * as RuntimePolicy from "./RuntimePolicy.ts";
+import * as StrictResume from "../sessionImport/StrictResume.ts";
 
 const isDomainEvent = Schema.is(OrchestrationV2DomainEvent);
 
@@ -165,6 +166,8 @@ function makeLocalCommandHarness(input: {
    * fallback succeeds, then reading history for its handoff fails.
    */
   readonly historyReadFailureAfterFallback?: unknown;
+  /** Resumes a strict-resume (imported) native thread whose resume fails. */
+  readonly strictResumeFailure?: boolean;
   readonly interruptOpen?: boolean;
   readonly interruptRunBeforeOpenFailure?: boolean;
   readonly writeFailure?: unknown;
@@ -339,7 +342,7 @@ function makeLocalCommandHarness(input: {
     checkpoints: [],
     updatedAt: now,
   };
-  if ("historyReadFailureAfterFallback" in input) {
+  if ("historyReadFailureAfterFallback" in input || input.strictResumeFailure === true) {
     const nativeThreadRef = {
       driver: providerThread.driver,
       nativeId: "native-resume-thread",
@@ -388,12 +391,12 @@ function makeLocalCommandHarness(input: {
           cause: "native thread is gone",
         }),
       ),
-    ensureThread: () => Effect.succeed(providerThread),
+    ensureThread: vi.fn(() => Effect.succeed(providerThread)),
   };
   const open = vi.fn(() =>
     input.interruptOpen === true
       ? Effect.interrupt
-      : "historyReadFailureAfterFallback" in input
+      : "historyReadFailureAfterFallback" in input || input.strictResumeFailure === true
         ? Effect.succeed(resumeFallbackSession as never)
         : "ensureThreadFailure" in input
           ? Effect.succeed({ driver: providerThread.driver, ensureThread } as never)
@@ -493,11 +496,18 @@ function makeLocalCommandHarness(input: {
         Layer.mock(RuntimePolicy.RuntimePolicyV2)({
           resolve: () => Effect.succeed({} as never),
         }),
+        Layer.succeed(StrictResume.StrictResume, {
+          markStrict: () => Effect.void,
+          isStrict: (id) =>
+            Effect.succeed(input.strictResumeFailure === true && id === providerThreadId),
+        }),
       ),
     ),
   );
   return {
     open,
+    resumeFallbackEnsureThread: resumeFallbackSession.ensureThread,
+    providerThreadId,
     writeIfRunCurrent,
     startRootRun,
     tryHandlePromptCommand,
@@ -701,6 +711,28 @@ effectIt.effect(
       expect(harness.projection().runs.at(-1)?.status).toBe("starting");
       expect(harness.events).toEqual([]);
     }),
+);
+
+effectIt.effect("fails the run instead of replacing a strict imported native session", () =>
+  Effect.gen(function* () {
+    const harness = makeLocalCommandHarness({ text: "Continue", strictResumeFailure: true });
+
+    yield* harness.start;
+
+    const projection = harness.projection();
+    expect(harness.resumeFallbackEnsureThread).not.toHaveBeenCalled();
+    expect(harness.startRootRun).not.toHaveBeenCalled();
+    expect(projection.runs.at(-1)?.status).toBe("failed");
+    expect(projection.turnItems).toMatchObject([
+      { type: "error", title: "Provider turn failed to start" },
+    ]);
+    expect(
+      projection.providerThreads.find((candidate) => candidate.id === harness.providerThreadId)
+        ?.nativeThreadRef?.nativeId,
+    ).toBe("native-resume-thread");
+    expect(projection.contextTransfers).toEqual([]);
+    expect(projection.contextHandoffs).toEqual([]);
+  }),
 );
 
 effectIt.effect("does not overwrite a run interrupted while its thread loads", () =>

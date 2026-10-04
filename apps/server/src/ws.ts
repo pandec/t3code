@@ -3266,6 +3266,12 @@ const makeWsRpcLayer = (
           observeRpcEffect(WS_METHODS.sessionImportImport, sessionImport.importSession(input), {
             "rpc.aggregate": "sessionImport",
           }),
+        [WS_METHODS.sessionImportForkThread]: (input) =>
+          observeRpcEffect(
+            WS_METHODS.sessionImportForkThread,
+            sessionImport.forkImportedThread(input),
+            { "rpc.aggregate": "sessionImport" },
+          ),
         [WS_METHODS.assetsCreateUrl]: (input) =>
           observeRpcEffect(
             WS_METHODS.assetsCreateUrl,

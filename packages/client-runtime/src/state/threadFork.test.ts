@@ -1,8 +1,12 @@
-import { ProviderInstanceId, RunId, ThreadId } from "@t3tools/contracts";
+import { ProviderInstanceId, ProviderThreadId, RunId, ThreadId } from "@t3tools/contracts";
 import { describe, expect, it } from "vite-plus/test";
 
 import type { ThreadRunSummary, ThreadRuntimeSummary } from "./models.ts";
-import { canForkConversation, conversationForkRunId } from "./threadFork.ts";
+import {
+  canForkConversation,
+  conversationForkRunId,
+  conversationForkTarget,
+} from "./threadFork.ts";
 
 const threadId = ThreadId.make("thread-fork-source");
 const runId = RunId.make("run-fork-latest");
@@ -36,6 +40,7 @@ function thread(overrides: Partial<Parameters<typeof conversationForkRunId>[0]> 
     lineage: { parentThreadId: null, relationshipToParent: null, rootThreadId: threadId },
     latestRun: run("completed"),
     runtime: runtime("idle"),
+    activeProviderThreadId: ProviderThreadId.make("provider-thread-fork-source"),
     ...overrides,
   } satisfies Parameters<typeof conversationForkRunId>[0];
 }
@@ -51,7 +56,22 @@ describe("conversationForkRunId", () => {
     expect(canForkConversation(thread({ runtime: runtime("running") }))).toBe(false);
     expect(canForkConversation(thread({ runtime: runtime("queued") }))).toBe(false);
     expect(canForkConversation(thread({ latestRun: run("rolled_back") }))).toBe(false);
-    expect(canForkConversation(thread({ latestRun: null }))).toBe(false);
+  });
+
+  it("forks a runless imported session natively, but not runless legacy history", () => {
+    expect(conversationForkTarget(thread({ latestRun: null, runtime: null }))).toEqual({
+      type: "imported-session",
+    });
+    expect(conversationForkRunId(thread({ latestRun: null }))).toBeNull();
+    // Legacy threads migrated at the v2 upgrade have no provider thread.
+    expect(
+      canForkConversation(thread({ latestRun: null, runtime: null, activeProviderThreadId: null })),
+    ).toBe(false);
+    expect(
+      canForkConversation(
+        thread({ latestRun: null, archivedAt: "2026-10-04T11:00:00.000Z", runtime: null }),
+      ),
+    ).toBe(false);
   });
 
   it("withholds the fork for archived, deleted and subagent threads", () => {

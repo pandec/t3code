@@ -1,7 +1,7 @@
 import { useNavigation } from "@react-navigation/native";
 import { scopeThreadRef } from "@t3tools/client-runtime/environment";
 import type { EnvironmentThreadShell } from "@t3tools/client-runtime/state/shell";
-import { conversationForkRunId } from "@t3tools/client-runtime/state/thread-fork";
+import { conversationForkTarget } from "@t3tools/client-runtime/state/thread-fork";
 import { ThreadId } from "@t3tools/contracts";
 import * as Cause from "effect/Cause";
 import * as Haptics from "expo-haptics";
@@ -11,6 +11,7 @@ import { Alert } from "react-native";
 import { uuidv4 } from "../../lib/uuid";
 import { scopedThreadKey } from "../../lib/scopedEntities";
 import { appAtomRegistry } from "../../state/atom-registry";
+import { sessionImportEnvironment } from "../../state/sessionImport";
 import { environmentThreadShells, threadEnvironment } from "../../state/threads";
 import { useAtomCommand } from "../../state/use-atom-command";
 import { waitForThreadShellReady } from "./threadForkNavigation";
@@ -19,17 +20,26 @@ import { waitForThreadShellReady } from "./threadForkNavigation";
 // menu, thread header), so a double tap cannot create two copies.
 const forkInFlightThreadKeys = new Set<string>();
 
-/** Forks a whole conversation into a new thread and opens it. */
-export function useForkConversation(): (thread: EnvironmentThreadShell) => void {
+/**
+ * Forks a whole conversation into a new thread and opens it. `openThread`
+ * opens the fork where the root stack is unreachable (the iPad sidebar's
+ * independent navigator); otherwise the fork is pushed on the root stack.
+ */
+export function useForkConversation(
+  openThread?: (thread: EnvironmentThreadShell) => void,
+): (thread: EnvironmentThreadShell) => void {
   const forkFromRun = useAtomCommand(threadEnvironment.forkFromRun, { reportFailure: false });
+  const forkImportedThread = useAtomCommand(sessionImportEnvironment.forkThread, {
+    reportFailure: false,
+  });
   const navigation = useNavigation();
 
   return useCallback(
     (thread: EnvironmentThreadShell) => {
       const key = scopedThreadKey(thread.environmentId, thread.id);
       if (forkInFlightThreadKeys.has(key)) return;
-      const runId = conversationForkRunId(thread);
-      if (runId === null) {
+      const forkTarget = conversationForkTarget(thread);
+      if (forkTarget === null) {
         Alert.alert(
           "Could not fork conversation",
           "This conversation cannot be forked right now. Wait for its turn to finish.",
@@ -38,20 +48,30 @@ export function useForkConversation(): (thread: EnvironmentThreadShell) => void 
       }
       forkInFlightThreadKeys.add(key);
       void Haptics.selectionAsync();
-      const targetThreadId = ThreadId.make(uuidv4());
       void (async () => {
         try {
-          const result = await forkFromRun({
-            environmentId: thread.environmentId,
-            input: {
-              sourceThreadId: thread.id,
-              targetThreadId,
-              runId,
-              creationSource: "mobile",
-            },
-          });
-          if (result._tag === "Failure") {
-            const error = Cause.squash(result.cause);
+          // A runless imported thread forks its native session server-side.
+          const forked: { readonly threadId: ThreadId } | Cause.Cause<unknown> =
+            forkTarget.type === "run"
+              ? await (async () => {
+                  const threadId = ThreadId.make(uuidv4());
+                  const result = await forkFromRun({
+                    environmentId: thread.environmentId,
+                    input: {
+                      sourceThreadId: thread.id,
+                      targetThreadId: threadId,
+                      runId: forkTarget.runId,
+                      creationSource: "mobile",
+                    },
+                  });
+                  return result._tag === "Failure" ? result.cause : { threadId };
+                })()
+              : await forkImportedThread({
+                  environmentId: thread.environmentId,
+                  input: { threadId: thread.id },
+                }).then((result) => (result._tag === "Failure" ? result.cause : result.value));
+          if (Cause.isCause(forked)) {
+            const error = Cause.squash(forked);
             Alert.alert(
               "Could not fork conversation",
               error instanceof Error && error.message.trim().length > 0
@@ -60,6 +80,7 @@ export function useForkConversation(): (thread: EnvironmentThreadShell) => void 
             );
             return;
           }
+          const targetThreadId = forked.threadId;
           const targetShell = environmentThreadShells.threadShellAtom(
             scopeThreadRef(thread.environmentId, targetThreadId),
           );
@@ -73,6 +94,11 @@ export function useForkConversation(): (thread: EnvironmentThreadShell) => void 
             );
             return;
           }
+          const shell = appAtomRegistry.get(targetShell);
+          if (openThread !== undefined && shell !== null) {
+            openThread(shell);
+            return;
+          }
           navigation.navigate("Thread", {
             environmentId: thread.environmentId,
             threadId: targetThreadId,
@@ -82,6 +108,6 @@ export function useForkConversation(): (thread: EnvironmentThreadShell) => void 
         }
       })();
     },
-    [forkFromRun, navigation],
+    [forkFromRun, forkImportedThread, navigation, openThread],
   );
 }

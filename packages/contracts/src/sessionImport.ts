@@ -7,6 +7,7 @@ import { ProviderDriverKind, ProviderInstanceId } from "./providerInstance.ts";
 export const SESSION_IMPORT_WS_METHODS = {
   listCandidates: "sessionImport.listCandidates",
   importSession: "sessionImport.import",
+  forkThread: "sessionImport.forkThread",
 } as const;
 
 export class SessionImportError extends Schema.TaggedError<SessionImportError>()(
@@ -98,6 +99,12 @@ export const SessionImportPayload = Schema.Struct({
   ),
 });
 export type SessionImportPayload = typeof SessionImportPayload.Type;
+
+/** Forks a runless thread that continues an imported native session. */
+export const SessionImportForkThreadPayload = Schema.Struct({
+  threadId: ThreadId,
+});
+export type SessionImportForkThreadPayload = typeof SessionImportForkThreadPayload.Type;
 
 export const SessionImportWarning = Schema.Struct({
   code: Schema.Literals(["meta-update-failed", "history-truncated"]),

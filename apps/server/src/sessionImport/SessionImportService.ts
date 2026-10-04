@@ -7,7 +7,10 @@
  * thread holds a strong reference to the native session, so the first turn
  * resumes it natively and later forks/handoffs include the imported history.
  * A session another live thread already continues is only importable as a
- * native fork, so two threads never resume the same provider session.
+ * native fork, so two threads never resume the same provider session. The same
+ * native fork path forks an imported thread before its first turn, when v2's
+ * run-based `thread.fork` has no source run yet. Imported Codex sessions resume
+ * strictly (StrictResume): never silently replaced by a fresh native session.
  */
 import {
   DEFAULT_MODEL_BY_PROVIDER,
@@ -17,11 +20,13 @@ import {
   type ModelSelection,
   type OrchestrationV2AppThread,
   type OrchestrationV2ProviderThread,
+  type OrchestrationV2ThreadShell,
   type ProjectId,
   ProviderDriverKind,
   type ProviderInstanceId,
   type SessionImportCandidate,
   SessionImportError,
+  type SessionImportForkThreadPayload,
   type SessionImportLinkedThread,
   type SessionImportPayload,
   type SessionImportResult,
@@ -53,6 +58,7 @@ import { extractSubstantiveUserText } from "../provider/Drivers/substantiveUserT
 import type { ProviderInstance } from "../provider/ProviderDriver.ts";
 import { ProviderInstanceRegistry } from "../provider/Services/ProviderInstanceRegistry.ts";
 import type { ProviderImportedMessage } from "./ProviderSessionImport.ts";
+import * as StrictResume from "./StrictResume.ts";
 
 /** Bounds imported display history; the provider keeps the full transcript. */
 export const SESSION_IMPORT_MAX_MESSAGES = 5_000;
@@ -74,6 +80,14 @@ export interface SessionImportServiceShape {
   /** Optional fields accept `undefined` so a decoded transport payload forwards verbatim. */
   readonly importSession: (
     input: SessionImportInput,
+  ) => Effect.Effect<SessionImportResult, SessionImportError>;
+  /**
+   * Forks a runless thread that continues an imported native session into a
+   * new thread holding a native fork of that session. Threads with runs fork
+   * through `thread.fork` instead.
+   */
+  readonly forkImportedThread: (
+    input: SessionImportForkThreadPayload,
   ) => Effect.Effect<SessionImportResult, SessionImportError>;
 }
 
@@ -136,6 +150,7 @@ export const make = Effect.gen(function* () {
   const fileSystem = yield* FileSystem.FileSystem;
   const path = yield* Path.Path;
   const crypto = yield* Crypto.Crypto;
+  const strictResume = yield* StrictResume.StrictResume;
   const processRunner = yield* ProcessRunner.make();
   const importSemaphore = yield* Semaphore.make(1);
 
@@ -447,6 +462,14 @@ export const make = Effect.gen(function* () {
     const deterministic = ThreadId.make(`import:${instanceId}:${nativeId}`);
     const existing = yield* Effect.option(orchestrator.getThreadRecords(deterministic, []));
     if (Option.isNone(existing)) return deterministic;
+    if (existing.value.thread.deletedAt === null) {
+      // Imported concurrently (e.g. by AgentSessionImporter) after the ownership check.
+      return yield* new SessionImportError({
+        reason: "already-imported",
+        detail: `Session '${nativeId}' is already attached to a T3 Code thread.`,
+        existingThreadId: deterministic,
+      });
+    }
     // Taken by a deleted import of the same session.
     const uuid = yield* crypto.randomUUIDv4.pipe(
       Effect.mapError((cause) =>
@@ -456,8 +479,13 @@ export const make = Effect.gen(function* () {
     return ThreadId.make(uuid);
   });
 
+  /**
+   * `forkSource` forks that thread's native session regardless of which
+   * thread the ownership lookup would find.
+   */
   const importSessionUnlocked = Effect.fn("SessionImportService.importSession")(function* (
     input: SessionImportInput,
+    forkSource?: OrchestrationV2ThreadShell,
   ) {
     const workspaceRoot = yield* resolveWorkspaceRoot(input.projectId);
     const instance = yield* instanceRegistry.getInstance(input.instanceId);
@@ -475,12 +503,16 @@ export const make = Effect.gen(function* () {
       );
     }
     const instances = yield* instanceRegistry.listInstances;
-    const ownerThreadId = findOwnerThread(
-      yield* readNativeSessionOwners(instances, instance.driverKind),
-      instance,
-      input.nativeSessionId,
-    );
-    const owner = ownerThreadId === undefined ? null : yield* readLinkedThread(ownerThreadId);
+    const ownerThreadId =
+      forkSource === undefined
+        ? findOwnerThread(
+            yield* readNativeSessionOwners(instances, instance.driverKind),
+            instance,
+            input.nativeSessionId,
+          )
+        : undefined;
+    const owner =
+      forkSource ?? (ownerThreadId === undefined ? null : yield* readLinkedThread(ownerThreadId));
     if (owner !== null && input.fork !== true) {
       return yield* new SessionImportError({
         reason: "already-imported",
@@ -528,6 +560,15 @@ export const make = Effect.gen(function* () {
       importedModel: history.model,
       override: input.modelSelection,
     });
+    // The registry reuses the instance object while its config is unchanged,
+    // so a different object means it was replaced (e.g. a new home) mid-read.
+    const currentInstance = yield* instanceRegistry.getInstance(input.instanceId);
+    if (currentInstance !== instance || !currentInstance.enabled) {
+      return yield* failure(
+        "instance-not-found",
+        `Provider instance '${input.instanceId}' changed while the session was being read. Retry the import with the current provider configuration.`,
+      );
+    }
 
     let nativeId = history.nativeSessionId;
     let defaultTitle = titleForImport(history.name, importedMessages);
@@ -539,16 +580,30 @@ export const make = Effect.gen(function* () {
           existingThreadId: owner.id,
         });
       }
-      if (owner.activeRunId !== null) {
+      // Re-read after the history read: a turn started meanwhile would make
+      // the native fork and the copied display history diverge.
+      const current = yield* readLinkedThread(owner.id);
+      if (current === null || current.activeRunId !== null) {
         return yield* failure(
           "import-failed",
-          `Cannot import this session as a fork while thread '${owner.title}' is running. Retry when it finishes.`,
+          `Cannot import this session as a fork while thread '${current?.title ?? owner.title}' is running. Retry when it finishes.`,
         );
       }
       nativeId = yield* sessionImport
         .forkSession({ nativeSessionId: input.nativeSessionId, cwd })
         .pipe(Effect.mapError((cause) => failure("import-failed", cause.detail, cause)));
-      defaultTitle = formatForkedThreadTitle(owner.title);
+      const currentAfterFork = yield* instanceRegistry.getInstance(input.instanceId);
+      if (currentAfterFork !== instance || !currentAfterFork.enabled) {
+        yield* Effect.logWarning(
+          "Provider instance changed after forking an imported session; the native fork may have been left orphaned.",
+          { instanceId: input.instanceId, forkedNativeSessionId: nativeId },
+        );
+        return yield* failure(
+          "import-failed",
+          `Provider instance '${input.instanceId}' changed while the session was being forked. Retry the import with the current provider configuration.`,
+        );
+      }
+      defaultTitle = formatForkedThreadTitle(current.title);
     }
 
     const threadId = yield* allocateThreadId(instance.instanceId, nativeId);
@@ -610,6 +665,17 @@ export const make = Effect.gen(function* () {
       updatedAt: now,
     };
     const nowIso = DateTime.formatIso(now);
+    // A native fork is a session T3 created; a plain Codex import continues
+    // the user's own session, which must resume or fail, never be replaced.
+    if (owner === null && driver === "codex") {
+      yield* strictResume
+        .markStrict(providerThreadId)
+        .pipe(
+          Effect.mapError((cause) =>
+            failure("import-failed", "Failed to record the imported session's resume mode.", cause),
+          ),
+        );
+    }
     yield* eventSink
       .write({
         events: [
@@ -664,7 +730,71 @@ export const make = Effect.gen(function* () {
   const importSession: SessionImportServiceShape["importSession"] = (input) =>
     importSemaphore.withPermits(1)(importSessionUnlocked(input));
 
-  return { listCandidates, importSession } satisfies SessionImportServiceShape;
+  const forkImportedThreadUnlocked = Effect.fn("SessionImportService.forkImportedThread")(
+    function* (input: SessionImportForkThreadPayload) {
+      const source = yield* readLinkedThread(input.threadId);
+      if (source === null || source.deletedAt !== null) {
+        return yield* failure("import-failed", `Thread '${input.threadId}' was not found.`);
+      }
+      if (source.archivedAt !== null || source.lineage.relationshipToParent === "subagent") {
+        return yield* failure(
+          "fork-unsupported",
+          "Archived and subagent threads cannot be forked.",
+        );
+      }
+      if (source.latestRunId !== null) {
+        return yield* failure(
+          "fork-unsupported",
+          `Thread '${source.title}' has turns; fork it through its latest run instead.`,
+        );
+      }
+      const records = yield* orchestrator
+        .getThreadRecords(source.id, ["providerThreads"])
+        .pipe(
+          Effect.mapError((cause) =>
+            failure("import-failed", `Failed to read thread '${source.id}'.`, cause),
+          ),
+        );
+      const providerThread = records.providerThreads.find(
+        (candidate) => candidate.id === source.activeProviderThreadId,
+      );
+      const nativeRef = providerThread?.nativeThreadRef;
+      const nativeId = nativeRef?.strength === "strong" ? nativeRef.nativeId : null;
+      if (providerThread === undefined || nativeId === null) {
+        return yield* failure(
+          "fork-unsupported",
+          `Thread '${source.title}' has no provider session to fork until its first turn.`,
+        );
+      }
+      const instance = yield* instanceRegistry.getInstance(providerThread.providerInstanceId);
+      if (instance?.sessionImport?.forkSession === undefined) {
+        return yield* failure(
+          "fork-unsupported",
+          `Provider instance '${providerThread.providerInstanceId}' cannot fork this thread before its first turn.`,
+        );
+      }
+      return yield* importSessionUnlocked(
+        {
+          projectId: source.projectId,
+          instanceId: providerThread.providerInstanceId,
+          nativeSessionId: nativeId,
+          fork: true,
+          ...(source.modelSelection.instanceId === providerThread.providerInstanceId
+            ? { modelSelection: source.modelSelection }
+            : {}),
+          ...(source.worktreePath === null || source.branch === null
+            ? {}
+            : { worktree: { worktreePath: source.worktreePath, branch: source.branch } }),
+        },
+        source,
+      );
+    },
+  );
+
+  const forkImportedThread: SessionImportServiceShape["forkImportedThread"] = (input) =>
+    importSemaphore.withPermits(1)(forkImportedThreadUnlocked(input));
+
+  return { listCandidates, importSession, forkImportedThread } satisfies SessionImportServiceShape;
 });
 
 export const layer = Layer.effect(SessionImportService, make);

@@ -160,7 +160,7 @@ function ThreadNavigationSidebarPane(
     renameThread,
     regenerateThreadTitle,
     forkThread,
-  } = useThreadListActions();
+  } = useThreadListActions({ onOpenForkedThread: props.onSelectThread });
   const pendingTasks = usePendingNewTasks();
   const queuedThreadKeys = useQueuedThreadKeys();
   const { openPendingTask, confirmDeletePendingTask } = usePendingTaskListActions();

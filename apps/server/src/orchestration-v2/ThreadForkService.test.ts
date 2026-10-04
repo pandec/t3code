@@ -220,23 +220,3 @@ it.effect("titles an untitled fork with the fork marker and leaves pin and order
     assert.isNull(result.targetThread.activeOrderKey);
   }),
 );
-
-it("forks a whole conversation through its latest finished run", () => {
-  const run = (ordinal: number, status: OrchestrationV2Run["status"]): OrchestrationV2Run => ({
-    ...makeSourceRun(status),
-    id: RunId.make(`run:conversation-${ordinal}`),
-    ordinal,
-  });
-  const interrupted = run(2, "interrupted");
-  assert.equal(
-    ThreadForkService.conversationForkSourceRun([run(1, "completed"), interrupted]),
-    interrupted,
-  );
-  assert.isNull(
-    ThreadForkService.conversationForkSourceRun([run(1, "completed"), run(2, "running")]),
-  );
-  assert.isNull(
-    ThreadForkService.conversationForkSourceRun([run(1, "completed"), run(2, "waiting")]),
-  );
-  assert.isNull(ThreadForkService.conversationForkSourceRun([]));
-});

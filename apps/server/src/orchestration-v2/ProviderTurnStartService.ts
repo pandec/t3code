@@ -22,6 +22,7 @@ import * as Schema from "effect/Schema";
 
 import * as GitWorkflowService from "../git/GitWorkflowService.ts";
 import * as ProjectService from "../project/ProjectService.ts";
+import * as StrictResume from "../sessionImport/StrictResume.ts";
 import * as ProviderAuthService from "../provider/Services/ProviderAuthService.ts";
 import * as EventSink from "./EventSink.ts";
 import * as ContextHandoffService from "./ContextHandoffService.ts";
@@ -109,6 +110,8 @@ export const layer: Layer.Layer<
     const providerSessions = yield* ProviderSessionManager.ProviderSessionManagerV2;
     const runExecution = yield* RunExecutionService.RunExecutionServiceV2;
     const runtimePolicy = yield* RuntimePolicy.RuntimePolicyV2;
+    // fork: optional so upstream's layer requirements stay unchanged.
+    const strictResume = yield* Effect.serviceOption(StrictResume.StrictResume);
 
     // These callbacks outlive startup while a run drains background work. Build
     // them outside start's scope so they cannot retain its full thread history.
@@ -682,6 +685,15 @@ export const layer: Layer.Layer<
         );
         if (resumed._tag === "Success") {
           return resumed.success;
+        }
+        // fork: an imported native session resumes or fails the run; a fresh
+        // session would silently drop the history the user imported.
+        if (
+          !uncertainDelivery &&
+          Option.isSome(strictResume) &&
+          (yield* strictResume.value.isStrict(providerThread.id))
+        ) {
+          return yield* loadFromProvider(Effect.fail(resumed.failure));
         }
 
         yield* Effect.logWarning("Provider resume failed; attempting a fresh native session", {

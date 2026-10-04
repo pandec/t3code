@@ -254,6 +254,8 @@ export function useThreadListActions(
   options: {
     readonly selectedThreadKey?: string | null;
     readonly onSelectedThreadRemoved?: () => void;
+    /** Opens a newly forked thread; defaults to pushing it on the root stack. */
+    readonly onOpenForkedThread?: (thread: EnvironmentThreadShell) => void;
   } = {},
 ): {
   readonly archiveThread: (thread: EnvironmentThreadShell) => void;
@@ -279,7 +281,7 @@ export function useThreadListActions(
   readonly forkThread: (thread: EnvironmentThreadShell) => void;
 } {
   const executeAction = useThreadActionExecutor();
-  const forkThread = useForkConversation();
+  const forkThread = useForkConversation(options.onOpenForkedThread);
   const snoozeMutation = useAtomCommand(threadEnvironment.snooze, { reportFailure: false });
   const unsnoozeMutation = useAtomCommand(threadEnvironment.unsnooze, { reportFailure: false });
   const pinMutation = useAtomCommand(threadEnvironment.pin, { reportFailure: false });

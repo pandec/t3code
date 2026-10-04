@@ -11,7 +11,6 @@ import {
   ThreadId,
 } from "@t3tools/contracts";
 import { formatForkedThreadTitle } from "@t3tools/shared/composerTrigger";
-import { latestUnheldRun } from "@t3tools/shared/orchestrationV2ThreadError";
 import * as Context from "effect/Context";
 import * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
@@ -53,22 +52,6 @@ export function forkableSourceRunStatusError(
   run: Pick<OrchestrationV2Run, "id" | "status">,
 ): string {
   return `Fork source run ${run.id} is ${run.status}; in-progress and rolled-back runs cannot be forked.`;
-}
-
-/**
- * The run a whole-conversation fork copies through: the thread's latest run
- * (as thread shells present it), once it has finished. Null while a turn is
- * in flight and before the first run. Clients gate their Fork actions with
- * the same rule (client-runtime `conversationForkRunId`); dispatch
- * `thread.fork` with `{ type: "run", runId }` for the returned run.
- */
-export function conversationForkSourceRun(
-  runs: ReadonlyArray<OrchestrationV2Run>,
-): OrchestrationV2Run | null {
-  const latest = latestUnheldRun(runs);
-  return latest !== null && latest.status !== "waiting" && isForkableSourceRunStatus(latest.status)
-    ? latest
-    : null;
 }
 
 export interface ThreadForkServiceV2Shape {

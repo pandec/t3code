@@ -61,6 +61,7 @@ import {
 import { VoiceTranscriptionRequest, VoiceTranscriptionResult } from "./voice.ts";
 import { ProviderCatalogResult } from "./providerCatalog.ts";
 import {
+  SessionImportForkThreadPayload,
   SessionImportListCandidatesPayload,
   SessionImportListCandidatesResult,
   SessionImportPayload,
@@ -653,6 +654,14 @@ export class EnvironmentSessionImportHttpApi extends HttpApiGroup.make("sessionI
     HttpApiEndpoint.post("importSession", "/api/session-import/import", {
       headers: OptionalBearerHeaders,
       payload: SessionImportPayload,
+      success: SessionImportResult,
+      error: [EnvironmentScopeRequiredError, EnvironmentSessionImportError],
+    }).middleware(EnvironmentAuthenticatedAuth),
+  )
+  .add(
+    HttpApiEndpoint.post("forkThread", "/api/session-import/fork-thread", {
+      headers: OptionalBearerHeaders,
+      payload: SessionImportForkThreadPayload,
       success: SessionImportResult,
       error: [EnvironmentScopeRequiredError, EnvironmentSessionImportError],
     }).middleware(EnvironmentAuthenticatedAuth),

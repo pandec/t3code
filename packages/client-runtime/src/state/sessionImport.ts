@@ -16,5 +16,9 @@ export function createSessionImportEnvironmentAtoms<R, E>(
       label: "environment-data:session-import:import",
       tag: WS_METHODS.sessionImportImport,
     }),
+    forkThread: createEnvironmentRpcCommand(runtime, {
+      label: "environment-data:session-import:fork-thread",
+      tag: WS_METHODS.sessionImportForkThread,
+    }),
   };
 }

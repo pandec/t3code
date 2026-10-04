@@ -7,7 +7,7 @@ import {
 import { settlePromise, squashAtomCommandFailure } from "@t3tools/client-runtime/state/runtime";
 import { canSnooze, threadWokeAt } from "@t3tools/client-runtime/state/thread-settled";
 import { threadRuntimeCanArchive } from "@t3tools/client-runtime/state/models";
-import { conversationForkRunId } from "@t3tools/client-runtime/state/thread-fork";
+import { conversationForkTarget } from "@t3tools/client-runtime/state/thread-fork";
 import { EnvironmentId, type ScopedThreadRef, ThreadId } from "@t3tools/contracts";
 import { resolveWorktreeCleanup } from "@t3tools/shared/projectSettings";
 import * as Cause from "effect/Cause";
@@ -23,6 +23,7 @@ import { terminalEnvironment } from "../state/terminal";
 import { appAtomRegistry } from "../rpc/atomRegistry";
 import { environmentServerConfigsAtom } from "../state/server";
 import { isScratchProject } from "@t3tools/client-runtime/state/projects";
+import { sessionImportEnvironment } from "../state/sessionImport";
 import { threadEnvironment } from "../state/threads";
 import { vcsEnvironment } from "../state/vcs";
 import { useNewThreadHandler } from "./useHandleNewThread";
@@ -344,6 +345,9 @@ export function useThreadActions() {
     reportFailure: false,
   });
   const forkThreadMutation = useAtomCommand(threadEnvironment.forkFromRun, {
+    reportFailure: false,
+  });
+  const forkImportedThreadMutation = useAtomCommand(sessionImportEnvironment.forkThread, {
     reportFailure: false,
   });
   const markThreadUnread = useMarkThreadUnread();
@@ -1045,8 +1049,8 @@ export function useThreadActions() {
       // no-ops, which is right for a duplicate click.
       if (forkingThreadKeys.has(threadKey)) return AsyncResult.failure(Cause.interrupt());
       const thread = readThreadShell(target);
-      const runId = thread === null ? null : conversationForkRunId(thread);
-      if (runId === null) {
+      const forkTarget = thread === null ? null : conversationForkTarget(thread);
+      if (forkTarget === null) {
         return AsyncResult.failure(
           Cause.fail(
             new ThreadForkUnavailableError({
@@ -1058,12 +1062,22 @@ export function useThreadActions() {
       }
       forkingThreadKeys.add(threadKey);
       try {
-        const targetThreadId = newThreadId();
-        const result = await forkThreadMutation({
-          environmentId: target.environmentId,
-          input: { sourceThreadId: target.threadId, targetThreadId, runId },
-        });
-        if (result._tag === "Failure") return result;
+        let targetThreadId = newThreadId();
+        if (forkTarget.type === "run") {
+          const result = await forkThreadMutation({
+            environmentId: target.environmentId,
+            input: { sourceThreadId: target.threadId, targetThreadId, runId: forkTarget.runId },
+          });
+          if (result._tag === "Failure") return result;
+        } else {
+          // A runless imported thread forks its native session server-side.
+          const result = await forkImportedThreadMutation({
+            environmentId: target.environmentId,
+            input: { threadId: target.threadId },
+          });
+          if (result._tag === "Failure") return result;
+          targetThreadId = result.value.threadId;
+        }
         const targetThreadRef = scopeThreadRef(target.environmentId, targetThreadId);
         if (!(await waitForThreadShell(targetThreadRef))) {
           return AsyncResult.failure(
@@ -1081,12 +1095,12 @@ export function useThreadActions() {
             params: buildThreadRouteParams(targetThreadRef),
           }),
         );
-        return navigation._tag === "Failure" ? navigation : result;
+        return navigation._tag === "Failure" ? navigation : AsyncResult.success(targetThreadId);
       } finally {
         forkingThreadKeys.delete(threadKey);
       }
     },
-    [forkThreadMutation, router],
+    [forkImportedThreadMutation, forkThreadMutation, router],
   );
 
   return useMemo(

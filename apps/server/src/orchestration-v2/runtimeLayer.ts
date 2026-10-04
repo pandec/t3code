@@ -9,6 +9,7 @@ import { ProviderAuthServiceLive } from "../provider/Layers/ProviderAuthService.
 import { layer as agentSessionImporterLayer } from "../project/AgentSessionImporter.ts";
 import * as AgentSessionScanner from "../project/AgentSessionScanner.ts";
 import { layer as sessionImportServiceLayer } from "../sessionImport/SessionImportService.ts";
+import { layer as strictResumeLayer } from "../sessionImport/StrictResume.ts";
 import { layer as projectServiceLayer } from "../project/ProjectService.ts";
 import { layer as projectSetupScriptRunnerLayer } from "../project/ProjectSetupScriptRunner.ts";
 import * as ManagedProjectFolders from "../project/ManagedProjectFolders.ts";
@@ -158,6 +159,7 @@ const providerTurnStartServiceProvided = providerTurnStartServiceLayer.pipe(
       providerAuthServiceProvided,
       runExecutionServiceProvided,
       runtimePolicyProvided,
+      strictResumeLayer,
     ),
   ),
 );
@@ -240,6 +242,7 @@ const sessionImportServiceProvided = sessionImportServiceLayer.pipe(
       orchestratorProvided,
       eventSinkProvided,
       idAllocatorLayer,
+      strictResumeLayer,
     ),
   ),
 );
