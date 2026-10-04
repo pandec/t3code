@@ -1,11 +1,15 @@
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import { assert, describe, it } from "@effect/vitest";
 import {
+  CheckpointId,
+  CheckpointRef,
+  CheckpointScopeId,
   CommandId,
   EnvironmentId,
   EventId,
   MessageId,
   type ModelSelection,
+  NodeId,
   type OrchestrationV2Run,
   type OrchestrationV2ThreadArchiveRequest,
   ProjectId,
@@ -36,6 +40,7 @@ import * as ServerSettings from "../serverSettings.ts";
 import * as SourceControlProviderRegistry from "../sourceControl/SourceControlProviderRegistry.ts";
 import * as VcsDriverRegistry from "../vcs/VcsDriverRegistry.ts";
 import * as VcsProcess from "../vcs/VcsProcess.ts";
+import { reserveWorkspace } from "../workspace/workspaceLease.ts";
 import { CodexProviderCapabilitiesV2 } from "./Adapters/CodexAdapterV2.ts";
 import * as ArchiveWorktreeRemoval from "./ArchiveWorktreeRemoval.ts";
 import {
@@ -61,7 +66,13 @@ const run = (
   ordinal: number,
   status: OrchestrationV2Run["status"],
   requestedAt = "2026-10-01T00:00:00.000Z",
-) => ({ id: RunId.make(id), ordinal, status, requestedAt: at(requestedAt) });
+) => ({
+  id: RunId.make(id),
+  ordinal,
+  status,
+  requestedAt: at(requestedAt),
+  checkpointId: null,
+});
 const pendingRequest = (
   overrides: Partial<OrchestrationV2ThreadArchiveRequest> = {},
 ): OrchestrationV2ThreadArchiveRequest => ({
@@ -175,6 +186,7 @@ describe("evaluateDeferredArchive", () => {
       thread: { worktreePath: "/work/tree" },
       request: pendingRequest(),
       runs: [run("run-1", 1, "completed")],
+      checkpoints: [],
       pendingBackgroundTasks: [],
       ...input,
     });
@@ -209,6 +221,25 @@ describe("evaluateDeferredArchive", () => {
         .type,
       "cancel",
     );
+  });
+});
+
+describe("evaluateDeferredArchive checkpoint outcome", () => {
+  it("fails on a failed final checkpoint; a missing one (no Git) still archives", () => {
+    const checkpointId = CheckpointId.make("checkpoint-1");
+    const evaluate = (status: "error" | "missing") =>
+      evaluateDeferredArchive({
+        thread: { worktreePath: "/work/tree" },
+        request: pendingRequest(),
+        runs: [{ ...run("run-1", 1, "completed"), checkpointId }],
+        checkpoints: [{ id: checkpointId, status }],
+        pendingBackgroundTasks: [],
+      });
+    assert.deepEqual(evaluate("error"), {
+      type: "fail",
+      detail: ARCHIVE_CANCEL_DETAIL.checkpointFailed,
+    });
+    assert.equal(evaluate("missing").type, "archive");
   });
 });
 
@@ -591,6 +622,73 @@ it.layer(TestLayer)("deferred archive on the orchestrator", (it) => {
     }),
   );
 
+  it.effect("a failed final checkpoint records an error and leaves the thread unarchived", () =>
+    Effect.gen(function* () {
+      yield* resetRemoval();
+      const scheduler = yield* ThreadArchiveScheduler.ThreadArchiveScheduler;
+      const eventSink = yield* EventSink.EventSinkV2;
+      const threadId = yield* createThread("checkpoint-failed");
+      const active = yield* sendMessage(threadId, "checkpoint-failed", {
+        type: "start_immediately",
+      });
+      yield* scheduler.schedule({ threadId, afterTurn: true, removeWorktree: true });
+
+      const now = yield* DateTime.now;
+      const checkpointId = CheckpointId.make("checkpoint-failed-cp");
+      yield* eventSink.commitCommand({
+        commandId: CommandId.make("checkpoint-failed-complete"),
+        threadId,
+        commandType: "checkpoint.capture",
+        acceptedAt: now,
+        events: [
+          {
+            id: EventId.make("checkpoint-failed-checkpoint"),
+            type: "checkpoint.captured",
+            threadId,
+            runId: active.id,
+            occurredAt: now,
+            payload: {
+              id: checkpointId,
+              threadId,
+              scopeId: CheckpointScopeId.make("checkpoint-failed-scope"),
+              runId: active.id,
+              nodeId: NodeId.make("checkpoint-failed-node"),
+              parentCheckpointId: null,
+              ordinalWithinScope: 0,
+              appRunOrdinal: active.ordinal,
+              ref: CheckpointRef.make("refs/t3/checkpoint-failed"),
+              status: "error",
+              files: [],
+              capturedAt: now,
+            },
+          },
+          {
+            id: EventId.make("checkpoint-failed-run"),
+            type: "run.updated",
+            threadId,
+            runId: active.id,
+            occurredAt: now,
+            payload: {
+              ...active,
+              status: "completed",
+              startedAt: now,
+              completedAt: now,
+              checkpointId,
+            },
+          },
+        ],
+        effects: [],
+      });
+      yield* scheduler.reconcilePending;
+      yield* scheduler.reconcilePending;
+      const thread = yield* threadState(threadId);
+      assert.isNull(thread.archivedAt);
+      assert.equal(thread.archiveRequest?.status, "error");
+      assert.equal(thread.archiveRequest?.detail, ARCHIVE_CANCEL_DETAIL.checkpointFailed);
+      assert.deepEqual(removal.removed, []);
+    }),
+  );
+
   it.effect("refuses up front a worktree that can never qualify", () =>
     Effect.gen(function* () {
       yield* resetRemoval({ blocker: ArchiveWorktreeRemoval.WORKTREE_KEPT_DETAIL.shared });
@@ -637,6 +735,42 @@ it.layer(TestLayer)("deferred archive on the orchestrator", (it) => {
         })
         .pipe(Effect.flip);
       assert.equal(late._tag, "OrchestratorDispatchError");
+    }),
+  );
+
+  it.effect("reopening waits while the worktree removal holds its reservation", () =>
+    Effect.gen(function* () {
+      yield* resetRemoval();
+      const scheduler = yield* ThreadArchiveScheduler.ThreadArchiveScheduler;
+      const orchestrator = yield* Orchestrator.OrchestratorV2;
+      const threadId = yield* createThread("remove-reserved");
+      yield* scheduler.schedule({ threadId, afterTurn: false, removeWorktree: true });
+      const unarchive = orchestrator.dispatch({
+        type: "thread.unarchive",
+        commandId: CommandId.make("remove-reserved-unarchive"),
+        threadId,
+      });
+      const message = sendMessage(threadId, "remove-reserved", { type: "start_immediately" });
+
+      yield* Effect.scoped(
+        Effect.gen(function* () {
+          assert.isTrue(
+            yield* reserveWorkspace("/tmp/deferred-archive-remove-reserved", "removal"),
+          );
+          assert.equal((yield* Effect.flip(unarchive))._tag, "OrchestratorDispatchError");
+          assert.equal((yield* Effect.flip(message))._tag, "OrchestratorDispatchError");
+          const thread = yield* threadState(threadId);
+          assert.isNotNull(thread.archivedAt);
+          assert.equal(thread.archiveRequest?.status, "pending");
+        }),
+      ).pipe(Effect.provide(NodeServices.layer));
+
+      // Released: the same commands now go through.
+      yield* unarchive;
+      const thread = yield* threadState(threadId);
+      assert.isNull(thread.archivedAt);
+      assert.equal(thread.archiveRequest?.detail, ARCHIVE_CANCEL_DETAIL.unarchived);
+      yield* message;
     }),
   );
 

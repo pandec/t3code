@@ -4,10 +4,12 @@ import {
   ComposerContextId,
   EnvironmentId,
   MessageId,
+  type OrchestrationV2ThreadProjection,
   ProjectId,
   ProviderInstanceId,
   ThreadId,
 } from "@t3tools/contracts";
+import * as DateTime from "effect/DateTime";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vite-plus/test";
 
 import type { PreparedTurnAttachments } from "../lib/attachmentUpload";
@@ -20,6 +22,7 @@ const harness = vi.hoisted(() => ({
   removeOutboxMessage: vi.fn(async (_message: QueuedThreadMessage) => undefined),
   prepareTurnAttachments: vi.fn<typeof import("../lib/attachmentUpload").prepareTurnAttachments>(),
   setPendingConnectionError: vi.fn(),
+  loadedDetails: new Map<string, OrchestrationV2ThreadProjection>(),
   draftFile: (() => {
     let document = "";
     let writeError: Error | null = null;
@@ -88,9 +91,22 @@ vi.mock("./server", async () => {
   return { serverEnvironment: { configValueAtom: Atom.family(() => Atom.make(null)) } };
 });
 
-vi.mock("./threads", () => ({
-  threadEnvironment: {},
-}));
+// Loaded thread details, keyed `${environmentId}:${threadId}`.
+vi.mock("./threads", async () => {
+  const { Atom, AsyncResult } = await import("effect/unstable/reactivity");
+  const Option = await import("effect/Option");
+  return {
+    threadEnvironment: {},
+    environmentThreads: {
+      stateAtom: (environmentId: string, threadId: string) =>
+        Atom.make(
+          AsyncResult.success({
+            data: Option.fromNullishOr(harness.loadedDetails.get(`${environmentId}:${threadId}`)),
+          }),
+        ),
+    },
+  };
+});
 
 vi.mock("./use-atom-command", () => ({
   useAtomCommand: () => async () => undefined,
@@ -137,12 +153,13 @@ import {
   clearPendingThreadCreationOutcome,
   pendingThreadCreationOutcomesAtom,
 } from "./pending-thread-creation";
-import type { QueuedThreadMessage } from "./thread-outbox-model";
+import { resolveThreadOutboxDeliveryAction, type QueuedThreadMessage } from "./thread-outbox-model";
 import * as composerDrafts from "./use-composer-drafts";
 import { recoverFailedThreadDraft } from "./recover-failed-thread-draft";
 import { editingQueuedMessageIdsAtom } from "./use-thread-outbox";
 import {
   completeQueuedMessageDelivery,
+  findQueuedMessageThread,
   prepareQueuedMessageAttachments,
   recoverEditedCreationAfterDelivery,
   removeAcknowledgedExistingThreadMessage,
@@ -214,6 +231,7 @@ afterEach(() => {
   harness.removeOutboxMessage.mockClear();
   harness.prepareTurnAttachments.mockReset();
   harness.setPendingConnectionError.mockClear();
+  harness.loadedDetails.clear();
 });
 
 describe("thread outbox attachment preparation", () => {
@@ -760,5 +778,73 @@ describe("thread outbox recovery rollback", () => {
     );
     expect(remainingMessages()).toEqual([]);
     expect(harness.setPendingConnectionError).toHaveBeenCalledWith("too large");
+  });
+});
+
+describe("thread outbox archived thread delivery", () => {
+  const archivedDetail = (): OrchestrationV2ThreadProjection => {
+    const now = DateTime.makeUnsafe("2026-08-24T12:00:00.000Z");
+    const threadId = ThreadId.make("thread-1");
+    return {
+      thread: {
+        id: threadId,
+        projectId: ProjectId.make("project-1"),
+        title: "Archived thread",
+        providerInstanceId: ProviderInstanceId.make("codex"),
+        modelSelection: { instanceId: ProviderInstanceId.make("codex"), model: "gpt-5.4" },
+        runtimeMode: "full-access",
+        interactionMode: "default",
+        branch: null,
+        worktreePath: null,
+        activeProviderThreadId: null,
+        lineage: { rootThreadId: threadId, parentThreadId: null, relationshipToParent: null },
+        forkedFrom: null,
+        createdBy: "user",
+        creationSource: "mobile",
+        createdAt: now,
+        updatedAt: now,
+        archivedAt: now,
+        settledOverride: null,
+        settledAt: null,
+        lastVisitedAt: null,
+        deletedAt: null,
+      },
+      runs: [],
+      attempts: [],
+      nodes: [],
+      subagents: [],
+      providerSessions: [],
+      providerThreads: [],
+      providerTurns: [],
+      runtimeRequests: [],
+      messages: [],
+      plans: [],
+      turnItems: [],
+      checkpointScopes: [],
+      checkpoints: [],
+      contextHandoffs: [],
+      contextTransfers: [],
+      visibleTurnItems: [],
+      updatedAt: now,
+    };
+  };
+  const deliveryAction = (message: QueuedThreadMessage) =>
+    resolveThreadOutboxDeliveryAction({
+      isCreation: false,
+      threadExists: findQueuedMessageThread([], message) !== undefined,
+      shellStatus: "live",
+      environmentConnected: true,
+      threadBusy: false,
+    });
+
+  it("sends to an archived thread whose detail is loaded instead of dropping it", () => {
+    const message = queuedMessage({ messageId: "archived", text: "Pick this back up" });
+    expect(deliveryAction(message)).toBe("remove");
+
+    harness.loadedDetails.set(`${message.environmentId}:${message.threadId}`, archivedDetail());
+    const thread = findQueuedMessageThread([], message);
+    expect(thread?.id).toBe(message.threadId);
+    expect(thread?.archivedAt).not.toBeNull();
+    expect(deliveryAction(message)).toBe("send");
   });
 });

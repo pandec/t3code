@@ -12,6 +12,8 @@ import * as FileSystem from "effect/FileSystem";
 import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
 import * as Path from "effect/Path";
+import * as Schedule from "effect/Schedule";
+import * as SqlClient from "effect/unstable/sql/SqlClient";
 
 import * as GitVcsDriver from "../vcs/GitVcsDriver.ts";
 import {
@@ -21,8 +23,6 @@ import {
 } from "../workspace/workspaceLease.ts";
 import { worktreeRemovalRequest } from "./DeferredArchive.ts";
 import * as ProjectStore from "./ProjectStore.ts";
-import * as ProviderSessionManager from "./ProviderSessionManager.ts";
-import { ResourceCleanupService } from "./ResourceCleanupService.ts";
 import * as ThreadManagement from "./ThreadManagementService.ts";
 
 export const WORKTREE_KEPT_DETAIL = {
@@ -38,7 +38,13 @@ export const WORKTREE_KEPT_DETAIL = {
   busy: "Another operation is using this worktree. Archive again after it finishes.",
   gitRefused: "Git refused to remove the worktree; it may be locked.",
   reopened: "The thread was unarchived before its worktree was removed; the worktree was kept.",
+  sessionStopFailed: "The thread's agent session did not stop; the worktree was kept.",
+  sessionStillStopping: "The thread's agent session is still stopping; the worktree was kept.",
 } as const;
+
+/** How often and how long removal waits for the archive's queued session and terminal stops. */
+const STOP_POLL_INTERVAL = "250 millis";
+const STOP_WAIT_TIMEOUT = "30 seconds";
 
 export class ArchiveWorktreeRemoval extends Context.Service<
   ArchiveWorktreeRemoval,
@@ -49,10 +55,10 @@ export class ArchiveWorktreeRemoval extends Context.Service<
      */
     readonly blocker: (threadId: ThreadId) => Effect.Effect<string | null>;
     /**
-     * Stops the archived thread's terminals and provider sessions, then removes
-     * `worktreePath` if every guard passes and the thread's removal is still
-     * pending (a message or unarchive can reopen it meanwhile). Returns why it
-     * was kept, or null once it is gone.
+     * Waits for the archive's queued provider-session and terminal stops to
+     * settle, then removes `worktreePath` if every guard passes and the
+     * thread's removal is still pending (a message or unarchive can reopen it
+     * meanwhile). Returns why it was kept, or null once it is gone.
      */
     readonly remove: (input: {
       readonly threadId: ThreadId;
@@ -65,8 +71,7 @@ export const make = Effect.gen(function* () {
   const threads = yield* ThreadManagement.ThreadManagementService;
   const projects = yield* ProjectStore.ProjectStoreV2;
   const git = yield* GitVcsDriver.GitVcsDriver;
-  const providerSessions = yield* ProviderSessionManager.ProviderSessionManagerV2;
-  const resourceCleanup = yield* ResourceCleanupService;
+  const sql = yield* SqlClient.SqlClient;
   const fs = yield* FileSystem.FileSystem;
   const path = yield* Path.Path;
 
@@ -143,31 +148,41 @@ export const make = Effect.gen(function* () {
       return reason === WORKTREE_KEPT_DETAIL.dirty ? null : reason;
     }).pipe(describeFailure("check"), providePlatform);
 
+  // The archive stops the thread's provider sessions and terminals through
+  // outbox effects (the session bindings are already gone from the
+  // projection); no process may still run in the checkout when Git removes it.
+  const unsettledStops = (threadId: ThreadId) =>
+    sql<{ readonly status: string }>`
+      SELECT status FROM orchestration_v2_effect_outbox
+      WHERE thread_id = ${threadId}
+        AND effect_type IN ('provider-session.detach', 'terminal.cleanup')
+        AND status NOT IN ('succeeded', 'cancelled')
+    `;
+  /** Why the worktree must be kept while those stops are unsettled, or null once they all ran. */
+  const lifecycleStopBlocker = (threadId: ThreadId) =>
+    unsettledStops(threadId).pipe(
+      Effect.repeat({
+        schedule: Schedule.spaced(STOP_POLL_INTERVAL),
+        until: (rows) => rows.every((row) => row.status === "failed"),
+      }),
+      Effect.timeoutOption(STOP_WAIT_TIMEOUT),
+      Effect.map(
+        Option.match({
+          onNone: () => WORKTREE_KEPT_DETAIL.sessionStillStopping,
+          onSome: (rows) => (rows.length === 0 ? null : WORKTREE_KEPT_DETAIL.sessionStopFailed),
+        }),
+      ),
+    );
+
   const remove = (input: { readonly threadId: ThreadId; readonly worktreePath: string }) =>
     Effect.gen(function* () {
-      const { thread, providerSessions: sessions } = yield* threads.getThreadRecords(
-        input.threadId,
-        ["providerSessions"],
-      );
+      const { thread } = yield* threads.getThreadRecords(input.threadId, []);
       const stillPending = (current: typeof thread) =>
         current.worktreePath === input.worktreePath &&
         worktreeRemovalRequest(current)?.worktreePath === input.worktreePath;
-      // Never stop the sessions of a thread that was reopened meanwhile.
       if (!stillPending(thread)) return WORKTREE_KEPT_DETAIL.reopened;
-      // The archive already queued these stops as effects; repeating them
-      // (both are idempotent) keeps processes out of the checkout first.
-      yield* resourceCleanup.cleanupTerminals(input.threadId);
-      yield* Effect.forEach(
-        sessions.filter((session) => session.status !== "stopped"),
-        (session) =>
-          providerSessions.detach({
-            providerSessionId: session.id,
-            threadId: input.threadId,
-            detail: "Thread archived.",
-            revokeMcpCredential: true,
-          }),
-        { discard: true },
-      );
+      const stopReason = yield* lifecycleStopBlocker(input.threadId);
+      if (stopReason !== null) return stopReason;
       const project = yield* projects.getShell(thread.projectId);
       if (Option.isNone(project)) return WORKTREE_KEPT_DETAIL.noProject;
       const projectRoot = project.value.workspaceRoot;

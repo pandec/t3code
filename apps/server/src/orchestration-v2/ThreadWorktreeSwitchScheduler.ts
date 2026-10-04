@@ -124,7 +124,10 @@ export const make = Effect.gen(function* () {
   const process = Effect.fn("ThreadWorktreeSwitchScheduler.process")(function* (
     threadId: ThreadId,
   ) {
-    const { thread, runs } = yield* threads.getThreadRecords(threadId, ["runs"]);
+    const { thread, runs, checkpoints } = yield* threads.getThreadRecords(threadId, [
+      "runs",
+      "checkpoints",
+    ]);
     const request = pendingWorktreeSwitch(thread);
     if (request === null) {
       tracked.delete(threadId);
@@ -136,6 +139,7 @@ export const make = Effect.gen(function* () {
       thread,
       request,
       runs,
+      checkpoints,
       pendingBackgroundTasks: shell?.pendingBackgroundTasks ?? [],
     });
     if (decision.type === "wait") return;
@@ -154,8 +158,8 @@ export const make = Effect.gen(function* () {
           ...outcome,
         });
       });
-    // The orchestrator records the cancellation.
-    if (decision.type === "cancel") return yield* execute({});
+    // The orchestrator records the cancellation or failure.
+    if (decision.type === "cancel" || decision.type === "fail") return yield* execute({});
     // Hold the target's lease so archive cleanup cannot remove it mid-switch.
     yield* withWorkspaceLease(
       request.targetPath,

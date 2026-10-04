@@ -4,16 +4,19 @@ import {
   type OrchestrationProjectShell,
   type OrchestrationV2ThreadShellSnapshot,
   ProjectId,
-  ProviderSessionId,
   ThreadId,
 } from "@t3tools/contracts";
 import * as Effect from "effect/Effect";
+import * as Fiber from "effect/Fiber";
 import * as FileSystem from "effect/FileSystem";
 import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
 import * as Path from "effect/Path";
+import * as TestClock from "effect/testing/TestClock";
+import * as SqlClient from "effect/unstable/sql/SqlClient";
 
 import * as ServerConfig from "../config.ts";
+import { SqlitePersistenceMemory } from "../persistence/Layers/Sqlite.ts";
 import * as GitVcsDriver from "../vcs/GitVcsDriver.ts";
 import {
   ArchiveWorktreeRemoval,
@@ -21,7 +24,6 @@ import {
   WORKTREE_KEPT_DETAIL,
 } from "./ArchiveWorktreeRemoval.ts";
 import * as ProjectStore from "./ProjectStore.ts";
-import * as ProviderSessionManager from "./ProviderSessionManager.ts";
 import * as ThreadManagement from "./ThreadManagementService.ts";
 
 const threadId = ThreadId.make("archive-removal");
@@ -37,7 +39,6 @@ interface Fixture {
     worktreePath: string | null;
     worktreeSwitch?: { status: "pending"; targetPath: string };
   }>;
-  detached: Array<string>;
   /** False once a message or unarchive reopened the thread. */
   archived: boolean;
 }
@@ -46,11 +47,11 @@ const fixture: Fixture = {
   worktreePath: null,
   projects: [],
   otherThreads: [],
-  detached: [],
   archived: true,
 };
 
-// Thread and project reads come from the fixture; Git and the file system are real.
+// Thread and project reads come from the fixture; Git, the file system and the
+// effect outbox table are real.
 const TestLayer = archiveWorktreeRemovalLayer.pipe(
   Layer.provide(
     Layer.mock(ThreadManagement.ThreadManagementService)({
@@ -70,10 +71,6 @@ const TestLayer = archiveWorktreeRemovalLayer.pipe(
                   worktreePath: fixture.worktreePath,
                 },
               },
-              providerSessions: [
-                { id: ProviderSessionId.make("session-live"), status: "ready" },
-                { id: ProviderSessionId.make("session-stopped"), status: "stopped" },
-              ],
             }) as never,
         ),
       getShellSnapshot: () =>
@@ -97,11 +94,7 @@ const TestLayer = archiveWorktreeRemovalLayer.pipe(
         ),
     }),
   ),
-  Layer.provide(
-    Layer.mock(ProviderSessionManager.ProviderSessionManagerV2)({
-      detach: (input) => Effect.sync(() => void fixture.detached.push(input.providerSessionId)),
-    }),
-  ),
+  Layer.provideMerge(SqlitePersistenceMemory),
   Layer.provideMerge(GitVcsDriver.layer),
   Layer.provide(ServerConfig.layerTest(process.cwd(), { prefix: "t3-archive-removal-" })),
   Layer.provideMerge(NodeServices.layer),
@@ -146,13 +139,27 @@ const setup = (branch: string | null) =>
     fixture.worktreePath = worktreePath;
     fixture.projects = [{ id: projectId, workspaceRoot: repository }];
     fixture.otherThreads = [];
-    fixture.detached = [];
     fixture.archived = true;
+    yield* (yield* SqlClient.SqlClient)`DELETE FROM orchestration_v2_effect_outbox`;
     return { repository, worktreePath };
   });
 
+/** An archive-queued stop of the thread's provider session, in `status`. */
+const seedSessionStop = (status: "pending" | "failed") =>
+  Effect.gen(function* () {
+    const sql = yield* SqlClient.SqlClient;
+    const now = "2026-01-01T00:00:00.000Z";
+    yield* sql`
+      INSERT INTO orchestration_v2_effect_outbox
+        (effect_id, command_id, thread_id, effect_type, payload_json, status,
+          available_at, created_at, updated_at)
+      VALUES ('effect:archive:detach', 'archive', ${threadId}, 'provider-session.detach',
+        '{}', ${status}, ${now}, ${now}, ${now})
+    `;
+  });
+
 it.layer(TestLayer)("archive worktree removal", (it) => {
-  it.effect("removes a clean, unshared worktree, keeps its branch, and stops sessions", () =>
+  it.effect("removes a clean, unshared worktree and keeps its branch", () =>
     Effect.gen(function* () {
       const fs = yield* FileSystem.FileSystem;
       const removal = yield* ArchiveWorktreeRemoval;
@@ -164,7 +171,6 @@ it.layer(TestLayer)("archive worktree removal", (it) => {
         yield* git(repository, ["branch", "--list", "feature/archive"]),
         "feature/archive",
       );
-      assert.deepEqual(fixture.detached, ["session-live"]);
       // Already gone: nothing left to remove.
       assert.isNull(yield* removal.remove({ threadId, worktreePath }));
     }).pipe(Effect.scoped),
@@ -248,7 +254,37 @@ it.layer(TestLayer)("archive worktree removal", (it) => {
         WORKTREE_KEPT_DETAIL.reopened,
       );
       assert.isTrue(yield* fs.exists(worktreePath));
-      assert.deepEqual(fixture.detached, []);
+    }).pipe(Effect.scoped),
+  );
+
+  // Live clock: removal re-checks the outbox on a short real interval.
+  it.effect("waits for the archive's session stop before removing the worktree", () =>
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
+      const sql = yield* SqlClient.SqlClient;
+      const removal = yield* ArchiveWorktreeRemoval;
+      const { worktreePath } = yield* setup("feature/stopping");
+      yield* seedSessionStop("pending");
+      const removing = yield* Effect.forkChild(removal.remove({ threadId, worktreePath }));
+      // The stop is unsettled until this update, so the checkout must still exist.
+      assert.isTrue(yield* fs.exists(worktreePath));
+      yield* sql`UPDATE orchestration_v2_effect_outbox SET status = 'succeeded'`;
+      assert.isNull(yield* Fiber.join(removing));
+      assert.isFalse(yield* fs.exists(worktreePath));
+    }).pipe(Effect.scoped, TestClock.withLive),
+  );
+
+  it.effect("keeps the worktree when the archive's session stop failed", () =>
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
+      const removal = yield* ArchiveWorktreeRemoval;
+      const { worktreePath } = yield* setup("feature/stop-failed");
+      yield* seedSessionStop("failed");
+      assert.equal(
+        yield* removal.remove({ threadId, worktreePath }),
+        WORKTREE_KEPT_DETAIL.sessionStopFailed,
+      );
+      assert.isTrue(yield* fs.exists(worktreePath));
     }).pipe(Effect.scoped),
   );
 

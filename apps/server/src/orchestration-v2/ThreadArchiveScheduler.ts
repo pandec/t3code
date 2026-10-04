@@ -157,7 +157,10 @@ export const make = Effect.gen(function* () {
   const queued = new Set<ThreadId>();
 
   const process = Effect.fn("ThreadArchiveScheduler.process")(function* (threadId: ThreadId) {
-    const { thread, runs } = yield* threads.getThreadRecords(threadId, ["runs"]);
+    const { thread, runs, checkpoints } = yield* threads.getThreadRecords(threadId, [
+      "runs",
+      "checkpoints",
+    ]);
     const removal = worktreeRemovalRequest(thread);
     if (removal !== null) {
       tracked.delete(threadId);
@@ -185,8 +188,10 @@ export const make = Effect.gen(function* () {
       thread,
       request,
       runs,
+      checkpoints,
       pendingBackgroundTasks: shell?.pendingBackgroundTasks ?? [],
     });
+    // The orchestrator records a cancellation or failure.
     if (decision.type === "wait") return;
     yield* threads.dispatch({
       type: "thread.archive.execute",

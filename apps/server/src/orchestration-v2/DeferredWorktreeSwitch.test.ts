@@ -1,10 +1,15 @@
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import { assert, describe, it } from "@effect/vitest";
 import {
+  CheckpointId,
+  CheckpointRef,
+  CheckpointScopeId,
   CommandId,
   EventId,
   MessageId,
   type ModelSelection,
+  NodeId,
+  type OrchestrationV2DomainEvent,
   type OrchestrationV2Run,
   type OrchestrationV2ThreadWorktreeSwitch,
   ProjectId,
@@ -55,6 +60,7 @@ const run = (id: string, ordinal: number, status: OrchestrationV2Run["status"]) 
   ordinal,
   status,
   requestedAt: at("2026-10-01T00:00:00.000Z"),
+  checkpointId: null,
 });
 const thread = {
   worktreeSwitch: null,
@@ -115,6 +121,7 @@ describe("evaluateWorktreeSwitch", () => {
       thread,
       request: pendingSwitch,
       runs: [run("run-1", 1, "completed")],
+      checkpoints: [],
       pendingBackgroundTasks: [],
       ...input,
     });
@@ -144,6 +151,19 @@ describe("evaluateWorktreeSwitch", () => {
     assert.deepEqual(
       evaluate({ thread: { ...thread, archivedAt: at("2026-10-01T00:00:02Z") } }),
       cancel(WORKTREE_SWITCH_DETAIL.archived),
+    );
+  });
+
+  it("fails on a failed final checkpoint; a missing one (no Git) still switches", () => {
+    const checkpointId = CheckpointId.make("checkpoint-1");
+    const runs = [{ ...run("run-1", 1, "completed"), checkpointId }];
+    assert.deepEqual(evaluate({ runs, checkpoints: [{ id: checkpointId, status: "error" }] }), {
+      type: "fail",
+      detail: WORKTREE_SWITCH_DETAIL.checkpointFailed,
+    });
+    assert.equal(
+      evaluate({ runs, checkpoints: [{ id: checkpointId, status: "missing" }] }).type,
+      "switch",
     );
   });
 });
@@ -325,23 +345,63 @@ const startThread = (name: string) =>
     return { threadId, active };
   });
 
-const completeRun = (threadId: ThreadId, active: OrchestrationV2Run, name: string) =>
+/** Completes `active`; with `checkpointStatus`, after capturing its final checkpoint. */
+const completeRun = (
+  threadId: ThreadId,
+  active: OrchestrationV2Run,
+  name: string,
+  checkpointStatus?: "ready" | "error",
+) =>
   Effect.gen(function* () {
     const eventSink = yield* EventSink.EventSinkV2;
     const now = yield* DateTime.now;
+    const checkpointId = checkpointStatus === undefined ? null : CheckpointId.make(`${name}-cp`);
+    const checkpointEvents: Array<OrchestrationV2DomainEvent> =
+      checkpointId === null || checkpointStatus === undefined
+        ? []
+        : [
+            {
+              id: EventId.make(`${name}-complete-checkpoint`),
+              type: "checkpoint.captured",
+              threadId,
+              runId: active.id,
+              occurredAt: now,
+              payload: {
+                id: checkpointId,
+                threadId,
+                scopeId: CheckpointScopeId.make(`${name}-scope`),
+                runId: active.id,
+                nodeId: NodeId.make(`${name}-node`),
+                parentCheckpointId: null,
+                ordinalWithinScope: 0,
+                appRunOrdinal: active.ordinal,
+                ref: CheckpointRef.make(`refs/t3/${name}`),
+                status: checkpointStatus,
+                files: [],
+                capturedAt: now,
+              },
+            },
+          ];
     yield* eventSink.commitCommand({
       commandId: CommandId.make(`${name}-complete`),
       threadId,
       commandType: "checkpoint.capture",
       acceptedAt: now,
       events: [
+        ...checkpointEvents,
         {
           id: EventId.make(`${name}-complete-run`),
           type: "run.updated",
           threadId,
           runId: active.id,
           occurredAt: now,
-          payload: { ...active, status: "completed", startedAt: now, completedAt: now },
+          payload: {
+            ...active,
+            status: "completed",
+            startedAt: now,
+            completedAt: now,
+            checkpointId,
+          },
         },
       ],
       effects: [],
@@ -455,6 +515,21 @@ it.layer(TestLayer)("deferred worktree switch on the orchestrator", (it) => {
         .pipe(Effect.flip);
       assert.equal(stale._tag, "OrchestratorDispatchError");
       assert.isNull((yield* threadState(cancelled.threadId)).worktreePath);
+    }).pipe(Effect.scoped),
+  );
+
+  it.effect("records an error and keeps the checkout when the final checkpoint failed", () =>
+    Effect.gen(function* () {
+      yield* setupRepository("checkpoint-failed");
+      const scheduler = yield* ThreadWorktreeSwitchScheduler.ThreadWorktreeSwitchScheduler;
+      const { threadId, active } = yield* startThread("checkpoint-failed");
+      yield* scheduler.request({ threadId, targetPath: repo.worktree });
+      yield* completeRun(threadId, active, "checkpoint-failed", "error");
+      yield* scheduler.reconcilePending;
+      const thread = yield* threadState(threadId);
+      assert.isNull(thread.worktreePath);
+      assert.equal(thread.worktreeSwitch?.status, "error");
+      assert.equal(thread.worktreeSwitch?.detail, WORKTREE_SWITCH_DETAIL.checkpointFailed);
     }).pipe(Effect.scoped),
   );
 

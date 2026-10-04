@@ -135,6 +135,7 @@ import {
   requestingRun,
   WORKTREE_SWITCH_DETAIL,
 } from "./DeferredWorktreeSwitch.ts";
+import { reserveWorkspace } from "../workspace/workspaceLease.ts";
 
 export class OrchestratorDispatchError extends Schema.TaggedError<OrchestratorDispatchError>()(
   "OrchestratorDispatchError",
@@ -9182,8 +9183,8 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
         return;
       }
 
-      const { runs } = yield* projectionStore
-        .getThreadRecords(command.threadId, ["runs"])
+      const { runs, checkpoints } = yield* projectionStore
+        .getThreadRecords(command.threadId, ["runs", "checkpoints"])
         .pipe(mapDispatchError(command));
       const pendingBackgroundTasks =
         (yield* projectionStore.getThreadShell(command.threadId).pipe(mapDispatchError(command)))
@@ -9211,12 +9212,25 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
       if (request === null || request.requestId !== command.requestId) {
         return yield* reject("The archive request is no longer pending.");
       }
-      const decision = evaluateDeferredArchive({ thread, request, runs, pendingBackgroundTasks });
+      const decision = evaluateDeferredArchive({
+        thread,
+        request,
+        runs,
+        checkpoints,
+        pendingBackgroundTasks,
+      });
       if (decision.type === "wait") return yield* reject(decision.detail);
       if (decision.type === "cancel") {
         yield* emitThread({
           ...thread,
           archiveRequest: cancelledArchiveRequest(request, decision.detail),
+        });
+        return;
+      }
+      if (decision.type === "fail") {
+        yield* emitThread({
+          ...thread,
+          archiveRequest: { ...request, status: "error", detail: decision.detail },
         });
         return;
       }
@@ -9260,8 +9274,8 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
           occurredAt: now,
           payload,
         });
-      const { runs } = yield* projectionStore
-        .getThreadRecords(command.threadId, ["runs"])
+      const { runs, checkpoints } = yield* projectionStore
+        .getThreadRecords(command.threadId, ["runs", "checkpoints"])
         .pipe(mapDispatchError(command));
 
       if (command.type === "thread.worktree-switch.schedule") {
@@ -9302,12 +9316,25 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
       const pendingBackgroundTasks =
         (yield* projectionStore.getThreadShell(command.threadId).pipe(mapDispatchError(command)))
           ?.pendingBackgroundTasks ?? [];
-      const decision = evaluateWorktreeSwitch({ thread, request, runs, pendingBackgroundTasks });
+      const decision = evaluateWorktreeSwitch({
+        thread,
+        request,
+        runs,
+        checkpoints,
+        pendingBackgroundTasks,
+      });
       if (decision.type === "wait") return yield* reject(decision.detail);
       if (decision.type === "cancel") {
         yield* emitThread({
           ...thread,
           worktreeSwitch: cancelledWorktreeSwitch(request, decision.detail),
+        });
+        return;
+      }
+      if (decision.type === "fail") {
+        yield* emitThread({
+          ...thread,
+          worktreeSwitch: finishedWorktreeSwitch(request, decision.detail),
         });
         return;
       }
@@ -9856,8 +9883,47 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
     } satisfies OrchestratorV2DispatchResult;
   });
 
+  // Fork: a command that reopens an archived thread claims the worktree its
+  // pending archive removal targets until its events commit, so the guarded
+  // removal (which reserves the same path) either sees the reopen or makes
+  // the command retry. No receipt is recorded, so a retry can reuse its id.
+  const withArchiveRemovalClaim = (
+    command: OrchestrationV2ServerCommand,
+    effect: Effect.Effect<OrchestratorV2DispatchResult, OrchestratorV2Error>,
+  ): Effect.Effect<OrchestratorV2DispatchResult, OrchestratorV2Error> =>
+    Effect.gen(function* () {
+      const reopens =
+        command.type === "thread.unarchive" ||
+        (command.type === "message.dispatch" && command.createdBy === "user");
+      if (!reopens) return yield* effect;
+      const thread = yield* projectionStore
+        .getThread(command.threadId)
+        .pipe(Effect.orElseSucceed(() => null));
+      const worktreePath = thread === null ? null : worktreeRemovalRequest(thread)?.worktreePath;
+      if (worktreePath === null || worktreePath === undefined) return yield* effect;
+      return yield* Effect.scoped(
+        Effect.gen(function* () {
+          const claimed = yield* reserveWorkspace(worktreePath, "claim").pipe(
+            Effect.provideService(FileSystem.FileSystem, fileSystem),
+            Effect.provideService(Path.Path, path),
+          );
+          if (!claimed) {
+            return yield* new OrchestratorDispatchError({
+              commandId: command.commandId,
+              commandType: command.type,
+              cause: "Thread is finishing archive worktree removal. Retry after it finishes.",
+            });
+          }
+          return yield* effect;
+        }),
+      );
+    });
+
   const dispatchWithReceipt = (command: OrchestrationV2ServerCommand) =>
-    threadDispatch.withLock(commandThreadId(command), dispatchWithReceiptEffect(command));
+    threadDispatch.withLock(
+      commandThreadId(command),
+      withArchiveRemovalClaim(command, dispatchWithReceiptEffect(command)),
+    );
 
   const handleTerminalRun = (stored: OrchestrationV2StoredEvent) =>
     Effect.gen(function* () {

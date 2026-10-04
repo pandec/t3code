@@ -1,10 +1,11 @@
 /**
  * Fork: deferred agent-requested worktree switch decisions. A Codex agent asks
  * from its running run to move the thread to another checkout of the same
- * repository; the move applies once that run completes (a v2 run only reaches
- * `completed` after its final checkpoint) and background work that holds
- * completion ends. New work, a stopped run, a checkout change, an archive or
- * a pending archive cancels it. Pure: the orchestrator and
+ * repository; the move applies once that run completes (a v2 run reaches
+ * `completed` after its final checkpoint capture, even a failed one) and
+ * background work that holds completion ends. New work, a stopped run, a
+ * checkout change, an archive or a pending archive cancels it; a failed final
+ * checkpoint records an error and keeps the checkout. Pure: the orchestrator and
  * `ThreadWorktreeSwitchScheduler` share these rules.
  */
 import type {
@@ -18,7 +19,9 @@ import { backgroundWorkHoldsCompletion } from "@t3tools/shared/orchestrationV2Pe
 import * as DateTime from "effect/DateTime";
 
 import {
+  type ArchiveCheckpoint,
   type ArchiveRun,
+  finalCheckpointFailed,
   pendingArchiveRequest,
   RUNNING_RUN_STATUSES,
   STOPPED_RUN_STATUSES,
@@ -31,6 +34,7 @@ export const WORKTREE_SWITCH_DETAIL = {
   archived: "The thread was archived.",
   archivePending: "An archive is pending for the thread.",
   failed: "The turn failed or was interrupted.",
+  checkpointFailed: "The final checkpoint failed. The checkout was not changed.",
 } as const;
 
 type SwitchThread = Pick<
@@ -118,13 +122,15 @@ export function planWorktreeSwitchSchedule(input: {
 export type WorktreeSwitchDecision =
   | { readonly type: "wait"; readonly detail: string }
   | { readonly type: "switch" }
-  | { readonly type: "cancel"; readonly detail: string };
+  | { readonly type: "cancel"; readonly detail: string }
+  | { readonly type: "fail"; readonly detail: string };
 
-/** Whether a pending switch can apply now, must keep waiting, or is void. */
+/** Whether a pending switch can apply now, must keep waiting, is void, or failed. */
 export function evaluateWorktreeSwitch(input: {
   readonly thread: SwitchThread;
   readonly request: OrchestrationV2ThreadWorktreeSwitch;
   readonly runs: ReadonlyArray<ArchiveRun>;
+  readonly checkpoints: ReadonlyArray<ArchiveCheckpoint>;
   readonly pendingBackgroundTasks: ReadonlyArray<
     Pick<OrchestrationV2PendingBackgroundTask, "kind">
   >;
@@ -149,6 +155,9 @@ export function evaluateWorktreeSwitch(input: {
     return { type: "cancel", detail: WORKTREE_SWITCH_DETAIL.failed };
   }
   if (target.status !== "completed") return { type: "wait", detail: "The turn has not finished." };
+  if (finalCheckpointFailed(target, input.checkpoints)) {
+    return { type: "fail", detail: WORKTREE_SWITCH_DETAIL.checkpointFailed };
+  }
   if (backgroundWorkHoldsCompletion(input.pendingBackgroundTasks)) {
     return { type: "wait", detail: "Background work is still running." };
   }

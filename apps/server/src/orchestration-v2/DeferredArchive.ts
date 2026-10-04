@@ -1,9 +1,10 @@
 /**
  * Fork: deferred archive decisions. A request waits on the run that was active
- * when it was scheduled (a v2 run only reaches `completed` after its final
- * checkpoint lands) and on background work that holds completion, then
- * archives through the ordinary `thread.archive` path. New work, a failed or
- * stopped run, or a workspace change cancels it. A request with
+ * when it was scheduled (a v2 run reaches `completed` after its final
+ * checkpoint capture, even a failed one) and on background work that holds
+ * completion, then archives through the ordinary `thread.archive` path. New
+ * work, a failed or stopped run, or a workspace change cancels it; a failed
+ * final checkpoint records an error and leaves the thread unarchived. A request with
  * `removeWorktree` stays pending after the archive until the scheduler's
  * guarded removal records its outcome. Pure: the orchestrator and
  * `ThreadArchiveScheduler` share these rules.
@@ -11,6 +12,7 @@
 import type {
   CommandId,
   OrchestrationV2AppThread,
+  OrchestrationV2Checkpoint,
   OrchestrationV2DomainEvent,
   OrchestrationV2PendingBackgroundTask,
   OrchestrationV2Run,
@@ -21,7 +23,24 @@ import type {
 import { backgroundWorkHoldsCompletion } from "@t3tools/shared/orchestrationV2PendingBackgroundWork";
 import * as DateTime from "effect/DateTime";
 
-export type ArchiveRun = Pick<OrchestrationV2Run, "id" | "ordinal" | "status" | "requestedAt">;
+export type ArchiveRun = Pick<
+  OrchestrationV2Run,
+  "id" | "ordinal" | "status" | "requestedAt" | "checkpointId"
+>;
+export type ArchiveCheckpoint = Pick<OrchestrationV2Checkpoint, "id" | "status">;
+
+/** Whether `run`'s final checkpoint capture failed; `missing` (no Git) still counts as captured. */
+export function finalCheckpointFailed(
+  run: ArchiveRun,
+  checkpoints: ReadonlyArray<ArchiveCheckpoint>,
+): boolean {
+  return (
+    run.checkpointId !== null &&
+    checkpoints.some(
+      (checkpoint) => checkpoint.id === run.checkpointId && checkpoint.status === "error",
+    )
+  );
+}
 
 /** Statuses of a run that is still working toward completion (waiting = capturing its checkpoint). */
 export const ACTIVE_RUN_STATUSES: ReadonlySet<OrchestrationV2Run["status"]> = new Set([
@@ -48,6 +67,7 @@ export const ARCHIVE_CANCEL_DETAIL = {
   newWork: "The thread started new work.",
   stopped: "The turn was stopped.",
   failed: "The turn failed or was interrupted.",
+  checkpointFailed: "The final checkpoint failed. The thread was left unarchived.",
   workspace: "The thread changed workspace.",
   manual: "The thread was archived manually.",
   unarchived: "The thread was unarchived before its worktree was removed.",
@@ -174,13 +194,15 @@ export function planArchiveSchedule(input: {
 export type DeferredArchiveDecision =
   | { readonly type: "wait"; readonly detail: string }
   | { readonly type: "archive" }
-  | { readonly type: "cancel"; readonly detail: string };
+  | { readonly type: "cancel"; readonly detail: string }
+  | { readonly type: "fail"; readonly detail: string };
 
-/** Whether a pending request can archive now, must keep waiting, or is void. */
+/** Whether a pending request can archive now, must keep waiting, is void, or failed. */
 export function evaluateDeferredArchive(input: {
   readonly thread: Pick<OrchestrationV2AppThread, "worktreePath">;
   readonly request: OrchestrationV2ThreadArchiveRequest;
   readonly runs: ReadonlyArray<ArchiveRun>;
+  readonly checkpoints: ReadonlyArray<ArchiveCheckpoint>;
   readonly pendingBackgroundTasks: ReadonlyArray<
     Pick<OrchestrationV2PendingBackgroundTask, "kind">
   >;
@@ -199,6 +221,9 @@ export function evaluateDeferredArchive(input: {
     }
     if (target.status !== "completed") {
       return { type: "wait", detail: "The turn has not finished." };
+    }
+    if (finalCheckpointFailed(target, input.checkpoints)) {
+      return { type: "fail", detail: ARCHIVE_CANCEL_DETAIL.checkpointFailed };
     }
   } else {
     const requestedAtMs = Date.parse(request.requestedAt);

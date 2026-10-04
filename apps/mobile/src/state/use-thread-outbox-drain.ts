@@ -5,6 +5,7 @@ import {
   type EnvironmentThreadShell,
 } from "@t3tools/client-runtime/state/shell";
 import type { AtomCommandResult } from "@t3tools/client-runtime/state/runtime";
+import { presentThreadShellFromProjection } from "@t3tools/client-runtime/state/thread-execution";
 import { deriveThreadTitleSeed } from "@t3tools/client-runtime/operations";
 import {
   CommandId,
@@ -15,6 +16,7 @@ import {
 } from "@t3tools/contracts";
 import { buildTemporaryWorktreeBranchName } from "@t3tools/shared/git";
 import * as Cause from "effect/Cause";
+import * as Option from "effect/Option";
 import { AsyncResult } from "effect/unstable/reactivity";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { Alert } from "react-native";
@@ -59,7 +61,7 @@ import {
   type ThreadOutboxCommandStage,
   type ThreadOutboxFailureAction,
 } from "./thread-outbox-model";
-import { environmentThreadShells, threadEnvironment } from "./threads";
+import { environmentThreadShells, environmentThreads, threadEnvironment } from "./threads";
 import {
   appendComposerDraftAttachments,
   composerDraftsAtom,
@@ -188,6 +190,28 @@ function findThread(
     (candidate) =>
       candidate.environmentId === message.environmentId && candidate.id === message.threadId,
   );
+}
+
+/**
+ * The queued message's thread: its active shell, else its loaded detail. An
+ * archived thread open on this device is missing from the active shells, and
+ * a user's message unarchives it on the server, so it must send, not drop.
+ */
+export function findQueuedMessageThread(
+  threads: ReadonlyArray<EnvironmentThreadShell>,
+  message: QueuedThreadMessage,
+): EnvironmentThreadShell | undefined {
+  const shell = findThread(threads, message);
+  if (shell !== undefined) return shell;
+  const state = Option.getOrUndefined(
+    AsyncResult.value(
+      appAtomRegistry.get(environmentThreads.stateAtom(message.environmentId, message.threadId)),
+    ),
+  );
+  const detail = state === undefined ? undefined : Option.getOrUndefined(state.data);
+  return detail === undefined
+    ? undefined
+    : presentThreadShellFromProjection(message.environmentId, detail);
 }
 
 function findCreationProject(
@@ -1150,7 +1174,7 @@ export function useThreadOutboxDrain(): void {
         continue;
       }
 
-      const thread = findThread(threads, nextQueuedMessage);
+      const thread = findQueuedMessageThread(threads, nextQueuedMessage);
       if (thread && scopedThreadKey(thread.environmentId, thread.id) !== threadKey) {
         continue;
       }
@@ -1267,7 +1291,7 @@ export function useThreadOutboxDrain(): void {
         // against the live thread snapshot so a vanished thread or newly
         // created target defers, while busy existing threads can still steer.
         if (deliveryAction === "send") {
-          const liveThread = findThread(
+          const liveThread = findQueuedMessageThread(
             appAtomRegistry.get(environmentThreadShells.threadShellsAtom),
             nextQueuedMessage,
           );
