@@ -734,4 +734,251 @@ it.layer(ProjectionStoreTestLayer)("CheckpointCaptureServiceV2", (it) => {
       assert.deepEqual([...projected.readyCheckpointOrdinals].toSorted(), [0, 1]);
     }),
   );
+
+  // Fork regression (late prior-turn checkpoint): a stopped run does not block
+  // the next message, so its capture can land after a newer run started. The
+  // late capture records the older run's checkpoint and keeps it interrupted;
+  // the newer run stays the thread's latest and active run.
+  it.effect("keeps a newer running run latest when an interrupted run's capture lands late", () =>
+    Effect.gen(function* () {
+      const projectionStore = yield* ProjectionStore.ProjectionStoreV2;
+      const now = yield* DateTime.now;
+      const interruptedAt = DateTime.add(now, { seconds: 1 });
+      const newerStartedAt = DateTime.add(now, { seconds: 2 });
+      const lateThreadId = ThreadId.make("thread:checkpoint-capture-late");
+      const lateScopeId = CheckpointScopeId.make("scope:checkpoint-capture-late");
+      const lateProviderThreadId = ProviderThreadId.make("provider-thread:checkpoint-capture-late");
+      const olderRunId = RunId.make("run:checkpoint-capture-late-1");
+      const olderRootNodeId = NodeId.make("node:checkpoint-capture-late-1");
+      const newerRunId = RunId.make("run:checkpoint-capture-late-2");
+      yield* projectionStore.apply({
+        id: EventId.make("event:checkpoint-capture-late:thread"),
+        type: "thread.created",
+        threadId: lateThreadId,
+        occurredAt: now,
+        payload: {
+          createdBy: "user",
+          creationSource: "web",
+          id: lateThreadId,
+          projectId,
+          title: "Late checkpoint capture",
+          providerInstanceId,
+          modelSelection,
+          runtimeMode: "full-access",
+          interactionMode: "default",
+          branch: null,
+          worktreePath: null,
+          activeProviderThreadId: null,
+          lineage: { parentThreadId: null, relationshipToParent: null, rootThreadId: lateThreadId },
+          forkedFrom: null,
+          createdAt: now,
+          updatedAt: now,
+          archivedAt: null,
+          settledOverride: null,
+          settledAt: null,
+          lastVisitedAt: null,
+          deletedAt: null,
+        },
+      });
+      yield* projectionStore.apply({
+        id: EventId.make("event:checkpoint-capture-late:provider-thread"),
+        type: "provider-thread.updated",
+        threadId: lateThreadId,
+        nodeId: olderRootNodeId,
+        driver,
+        providerInstanceId,
+        occurredAt: now,
+        payload: {
+          id: lateProviderThreadId,
+          driver,
+          providerInstanceId,
+          providerSessionId: null,
+          appThreadId: lateThreadId,
+          ownerNodeId: olderRootNodeId,
+          nativeThreadRef: null,
+          nativeConversationHeadRef: null,
+          status: "idle",
+          firstRunOrdinal: 1,
+          lastRunOrdinal: 2,
+          handoffIds: [],
+          forkedFrom: null,
+          createdAt: now,
+          updatedAt: now,
+        },
+      });
+      yield* projectionStore.apply({
+        id: EventId.make("event:checkpoint-capture-late:scope"),
+        type: "checkpoint-scope.created",
+        threadId: lateThreadId,
+        runId: olderRunId,
+        nodeId: olderRootNodeId,
+        occurredAt: now,
+        payload: {
+          id: lateScopeId,
+          threadId: lateThreadId,
+          runId: olderRunId,
+          nodeId: olderRootNodeId,
+          parentScopeId: null,
+          providerThreadId: lateProviderThreadId,
+          kind: "root_run",
+          ordinalWithinParent: 0,
+          advancesAppRunCount: true,
+          cwd: "/repo",
+          createdAt: now,
+        },
+      });
+      yield* projectionStore.apply({
+        id: EventId.make("event:checkpoint-capture-late:baseline"),
+        type: "checkpoint.captured",
+        threadId: lateThreadId,
+        nodeId: olderRootNodeId,
+        driver,
+        providerInstanceId,
+        occurredAt: now,
+        payload: {
+          id: CheckpointId.make("checkpoint:late-baseline-0"),
+          threadId: lateThreadId,
+          scopeId: lateScopeId,
+          runId: null,
+          nodeId: olderRootNodeId,
+          parentCheckpointId: null,
+          ordinalWithinScope: 0,
+          appRunOrdinal: null,
+          ref: CheckpointRef.make("checkpoint-ref:late-baseline-0"),
+          status: "ready",
+          files: [],
+          capturedAt: now,
+        },
+      });
+      // Run 1 was stopped (its capture is enqueued), then run 2 started.
+      const olderRun: OrchestrationV2Run = {
+        id: olderRunId,
+        threadId: lateThreadId,
+        ordinal: 1,
+        providerInstanceId,
+        modelSelection,
+        providerThreadId: lateProviderThreadId,
+        userMessageId: MessageId.make("message:checkpoint-capture-late-1"),
+        rootNodeId: olderRootNodeId,
+        activeAttemptId: null,
+        status: "interrupted",
+        requestedAt: now,
+        startedAt: now,
+        completedAt: interruptedAt,
+        checkpointId: null,
+        contextHandoffId: null,
+      };
+      const newerRun: OrchestrationV2Run = {
+        ...olderRun,
+        id: newerRunId,
+        ordinal: 2,
+        userMessageId: MessageId.make("message:checkpoint-capture-late-2"),
+        rootNodeId: NodeId.make("node:checkpoint-capture-late-2"),
+        status: "running",
+        requestedAt: newerStartedAt,
+        startedAt: newerStartedAt,
+        completedAt: null,
+      };
+      yield* projectionStore.apply({
+        id: EventId.make("event:checkpoint-capture-late:node-1"),
+        type: "node.updated",
+        threadId: lateThreadId,
+        runId: olderRunId,
+        nodeId: olderRootNodeId,
+        providerInstanceId,
+        occurredAt: interruptedAt,
+        payload: {
+          id: olderRootNodeId,
+          threadId: lateThreadId,
+          runId: olderRunId,
+          parentNodeId: null,
+          rootNodeId: olderRootNodeId,
+          kind: "root_turn",
+          status: "interrupted",
+          countsForRun: true,
+          providerThreadId: lateProviderThreadId,
+          providerTurnId: null,
+          nativeItemRef: null,
+          runtimeRequestId: null,
+          checkpointScopeId: lateScopeId,
+          startedAt: now,
+          completedAt: interruptedAt,
+        },
+      });
+      for (const run of [olderRun, newerRun]) {
+        yield* projectionStore.apply({
+          id: EventId.make(`event:checkpoint-capture-late:${run.id}`),
+          type: "run.updated",
+          threadId: lateThreadId,
+          runId: run.id,
+          providerInstanceId,
+          occurredAt: run.completedAt ?? run.requestedAt,
+          payload: run,
+        });
+      }
+
+      const captured = {
+        id: CheckpointId.make("checkpoint:late-captured-1"),
+        threadId: lateThreadId,
+        scopeId: lateScopeId,
+        runId: olderRunId,
+        nodeId: olderRootNodeId,
+        parentCheckpointId: CheckpointId.make("checkpoint:late-baseline-0"),
+        ordinalWithinScope: 1,
+        appRunOrdinal: 1,
+        ref: CheckpointRef.make("checkpoint-ref:late-captured-1"),
+        status: "ready" as const,
+        files: [],
+        capturedAt: newerStartedAt,
+      };
+      yield* CheckpointCaptureService.CheckpointCaptureServiceV2.pipe(
+        Effect.flatMap((service) =>
+          service.execute({ threadId: lateThreadId, runId: olderRunId, scopeId: lateScopeId }),
+        ),
+        Effect.provide(
+          CheckpointCaptureService.layer.pipe(
+            Layer.provide(
+              Layer.mergeAll(
+                IdAllocator.layer,
+                Layer.mock(CheckpointService.CheckpointServiceV2)({
+                  materializeBaselineCheckpoint: () =>
+                    Effect.die("baseline materialization must be skipped when ordinal 0 is ready"),
+                  capture: () => Effect.succeed(captured),
+                }),
+                Layer.mock(EventSink.EventSinkV2)({
+                  commitCommand: (input) =>
+                    Effect.forEach(input.events, (event) => projectionStore.apply(event)).pipe(
+                      Effect.as({ committed: true } as never),
+                      Effect.orDie,
+                    ),
+                }),
+              ),
+            ),
+          ),
+        ),
+      );
+
+      const projection = yield* projectionStore.getThreadProjection(lateThreadId);
+      const runsById = new Map(projection.runs.map((run) => [run.id, run]));
+      const older = runsById.get(olderRunId);
+      assert.equal(older?.status, "interrupted");
+      assert.equal(older?.checkpointId, captured.id);
+      assert.equal(
+        older?.completedAt ? DateTime.formatIso(older.completedAt) : older?.completedAt,
+        DateTime.formatIso(interruptedAt),
+      );
+      assert.equal(runsById.get(newerRunId)?.status, "running");
+      assert.isNull(runsById.get(newerRunId)?.checkpointId ?? null);
+
+      const sqlShell = (yield* projectionStore.getShellSnapshot()).threads.find(
+        (thread) => thread.id === lateThreadId,
+      );
+      for (const shell of [sqlShell, ProjectionStore.threadShellFromProjection(projection)]) {
+        assert.equal(shell?.latestRunId, newerRunId);
+        assert.equal(shell?.activeRunId, newerRunId);
+        assert.equal(shell?.status, "running");
+        assert.isNull(shell?.latestRunCompletedAt ?? null);
+      }
+    }),
+  );
 });
