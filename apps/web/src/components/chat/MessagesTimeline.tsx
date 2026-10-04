@@ -176,6 +176,11 @@ import {
   AssistantMessageSummaryPanel,
   useAssistantMessageSummary,
 } from "./AssistantMessageSummary";
+import {
+  AssistantMessageSpeechButton,
+  AssistantSpeechPlayer,
+  useAssistantMessageSpeech,
+} from "./AssistantMessageSpeech";
 import { PierreEntryIcon } from "./PierreEntryIcon";
 import { inferEntryKindFromPath } from "../../pierre-icons";
 import { AssistantSelectionToolbar } from "./AssistantSelectionToolbar";
@@ -307,6 +312,12 @@ interface TimelineRowSharedState {
   activeThreadEnvironmentId: EnvironmentId;
   /** The environment serves on-demand message summaries. */
   messageSummariesAvailable: boolean;
+  /** The environment can synthesize listening versions now. */
+  textToSpeechAvailable: boolean;
+  /** The environment streams its server-owned listening state. */
+  textToSpeechPersistentJobs: boolean;
+  /** Read at play time for the OS media controls, so title edits never re-render rows. */
+  getThreadTitle: () => string;
   onRevertToTurnCount: (targetTurnCount: number, messageId: MessageId) => void;
   onUseArtifactTemplate: (template: CodexArtifactTemplate) => void;
   onRunShellCommand: ((command: string) => void) | undefined;
@@ -457,6 +468,9 @@ interface MessagesTimelineProps {
   onFileDownload?: (attachment: ChatFileAttachment) => void;
   activeThreadEnvironmentId: EnvironmentId;
   messageSummariesAvailable?: boolean;
+  textToSpeechAvailable?: boolean;
+  textToSpeechPersistentJobs?: boolean;
+  threadTitle?: string;
   markdownCwd: string | undefined;
   resolvedTheme: "light" | "dark";
   timestampFormat: TimestampFormat;
@@ -531,6 +545,9 @@ export const MessagesTimeline = memo(function MessagesTimeline({
   onFileDownload = NOOP_OPEN_ATTACHMENT,
   activeThreadEnvironmentId,
   messageSummariesAvailable = false,
+  textToSpeechAvailable = false,
+  textToSpeechPersistentJobs = false,
+  threadTitle = "",
   markdownCwd,
   resolvedTheme,
   timestampFormat,
@@ -593,6 +610,11 @@ export const MessagesTimeline = memo(function MessagesTimeline({
     setExpandedAttemptIds(paintedExpandedAttemptIds);
   }
   const citationThreadRef = useMemo(() => parseScopedThreadKey(routeThreadKey), [routeThreadKey]);
+  const threadTitleRef = useRef(threadTitle);
+  useEffect(() => {
+    threadTitleRef.current = threadTitle;
+  }, [threadTitle]);
+  const getThreadTitle = useCallback(() => threadTitleRef.current, []);
   const openPullRequest = useOpenPrLink(citationThreadRef ?? undefined);
   const expandCitedRun = useCallback((runId: RunId) => {
     setExpandedRunIds((current) => (current.has(runId) ? current : new Set([...current, runId])));
@@ -1156,6 +1178,9 @@ export const MessagesTimeline = memo(function MessagesTimeline({
       runs,
       activeThreadEnvironmentId,
       messageSummariesAvailable,
+      textToSpeechAvailable,
+      textToSpeechPersistentJobs,
+      getThreadTitle,
       onRevertToTurnCount,
       onRunShellCommand,
       onImageExpand,
@@ -1190,6 +1215,9 @@ export const MessagesTimeline = memo(function MessagesTimeline({
       runs,
       activeThreadEnvironmentId,
       messageSummariesAvailable,
+      textToSpeechAvailable,
+      textToSpeechPersistentJobs,
+      getThreadTitle,
       onRevertToTurnCount,
       onRunShellCommand,
       onImageExpand,
@@ -2623,13 +2651,22 @@ function AssistantMessageMeta({
     streaming: message.streaming,
     available: ctx.messageSummariesAvailable,
   });
+  const speech = useAssistantMessageSpeech({
+    environmentId: ctx.activeThreadEnvironmentId,
+    threadId: ctx.threadRef?.threadId ?? null,
+    messageId: message.id,
+    text: message.text,
+    streaming: message.streaming,
+    available: ctx.textToSpeechAvailable,
+    persistentJobs: ctx.textToSpeechPersistentJobs,
+  });
 
   return (
     <>
       <div
         className={cn(
           "flex items-center gap-2 text-xs tabular-nums transition-opacity duration-200",
-          alwaysVisible || summary.expanded
+          alwaysVisible || summary.expanded || speech.expanded || speech.preparing
             ? "opacity-100"
             : "opacity-0 pointer-coarse:opacity-100 focus-within:opacity-100 group-hover/assistant:opacity-100",
           className,
@@ -2649,6 +2686,7 @@ function AssistantMessageMeta({
           streaming={copyStreaming}
         />
         <AssistantMessageSummaryButton state={summary} />
+        <AssistantMessageSpeechButton state={speech} />
         {!message.streaming && (
           <Tooltip>
             <TooltipTrigger render={<p className="text-muted-foreground text-xs tabular-nums" />}>
@@ -2669,6 +2707,16 @@ function AssistantMessageMeta({
             skills={ctx.skills}
           />
         </AssistantMessageSummaryPanel>
+      ) : null}
+      {speech.expanded && speech.speech !== null ? (
+        <AssistantSpeechPlayer
+          environmentId={ctx.activeThreadEnvironmentId}
+          threadId={ctx.threadRef?.threadId ?? null}
+          getThreadTitle={ctx.getThreadTitle}
+          messageId={message.id}
+          speech={speech.speech}
+          onRetry={speech.speech.origin === "agent" ? null : speech.regenerate}
+        />
       ) : null}
     </>
   );

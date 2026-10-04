@@ -10883,6 +10883,9 @@ export default function ChatView(props: ChatViewProps) {
                 messageSummariesAvailable={
                   serverConfig?.environment.capabilities.messageSummaries === true
                 }
+                textToSpeechAvailable={serverConfig?.textToSpeech.available === true}
+                textToSpeechPersistentJobs={serverConfig?.textToSpeech.persistentJobs === true}
+                threadTitle={activeThread.title}
                 routeThreadKey={displayedTimelineKey}
                 displayThreadKey={displayedTimelineKey}
                 onOpenTurnDiff={paintOnlyDisplayedTimeline ? noopHeldTurnDiff : onOpenTurnDiff}

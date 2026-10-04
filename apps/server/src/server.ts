@@ -186,6 +186,8 @@ import * as VoiceTranscription from "./voice/VoiceTranscription.ts";
 import * as TtsService from "./voice/TtsService.ts";
 import { voiceHttpApiLayer } from "./voice/http.ts";
 import * as MessageSummary from "./messageArtifacts/MessageSummary.ts";
+import * as MessageSpeechScript from "./messageArtifacts/MessageSpeechScript.ts";
+import * as MessageSpeech from "./voice/MessageSpeech.ts";
 import { messageArtifactsHttpApiLayer } from "./messageArtifacts/http.ts";
 import * as NetService from "@t3tools/shared/Net";
 import * as RelayClient from "@t3tools/shared/relayClient";
@@ -572,6 +574,9 @@ const RuntimeCoreDependenciesBaseLive = Layer.mergeAll(
   Layer.provideMerge(OrchestrationApplicationLayerLive),
   Layer.provideMerge(OrchestrationEventInfrastructureLayerLive),
   Layer.provideMerge(Layer.merge(ProjectStore.layer, ThreadSearch.layer)),
+  // One listening job registry for the HTTP request path and the WebSocket
+  // state stream, so every client sees the same pending jobs.
+  Layer.provideMerge(MessageSpeech.layer.pipe(Layer.provide(MessageSpeechScript.layer))),
   // Share the speech client across listening, voice replies, and settings RPCs.
   Layer.provideMerge(TtsService.layer.pipe(Layer.provide(ServerSecretStore.layer))),
   Layer.provideMerge(ServerSettingsLayerLive),

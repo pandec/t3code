@@ -1200,6 +1200,8 @@ export const ThreadDetailScreen = memo(function ThreadDetailScreen(props: Thread
               messageSummariesAvailable={
                 props.serverConfig?.environment.capabilities.messageSummaries === true
               }
+              textToSpeechAvailable={props.serverConfig?.textToSpeech.available === true}
+              textToSpeechPersistentJobs={props.serverConfig?.textToSpeech.persistentJobs === true}
               latestRun={props.activityRun}
               activeWorkStartedAt={props.activeWorkStartedAt}
               runlessWorkActive={props.runlessWorkActive ?? false}

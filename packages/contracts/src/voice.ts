@@ -1,6 +1,12 @@
 import * as Schema from "effect/Schema";
 
-import { IsoDateTime, MessageId, NonNegativeInt, TrimmedNonEmptyString } from "./baseSchemas.ts";
+import {
+  IsoDateTime,
+  MessageId,
+  NonNegativeInt,
+  ThreadId,
+  TrimmedNonEmptyString,
+} from "./baseSchemas.ts";
 
 export const VOICE_TRANSCRIPTION_MAX_DURATION_MS = 3 * 60 * 1_000;
 export const VOICE_TRANSCRIPTION_MIN_DURATION_MS = 100;
@@ -247,6 +253,24 @@ export const MessageSpeechSynthesisResult = Schema.Struct({
   createdAt: IsoDateTime,
 });
 export type MessageSpeechSynthesisResult = typeof MessageSpeechSynthesisResult.Type;
+
+export const MessageSpeechThreadInput = Schema.Struct({
+  threadId: ThreadId,
+});
+export type MessageSpeechThreadInput = typeof MessageSpeechThreadInput.Type;
+
+/**
+ * A thread's listening state as the server owns it: every current recording
+ * (stale ones, whose message text changed since, are left out) and the
+ * messages whose listening version is being prepared right now. Streamed
+ * whole after every change, so each connected client shows the same state.
+ */
+export const MessageSpeechThreadState = Schema.Struct({
+  threadId: ThreadId,
+  recordings: Schema.Array(MessageSpeechSynthesisResult),
+  pendingMessageIds: Schema.Array(MessageId),
+});
+export type MessageSpeechThreadState = typeof MessageSpeechThreadState.Type;
 
 export const AGENT_VOICE_REPLY_MAX_SCRIPT_CHARS = 10_000;
 

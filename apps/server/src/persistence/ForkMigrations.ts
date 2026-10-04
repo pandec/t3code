@@ -12,10 +12,12 @@ import * as Migrator from "effect/unstable/sql/Migrator";
 
 import ForkMigration0001 from "./ForkMigrations/001_ForkThreadGroupsAndRepositoryIdentity.ts";
 import ForkMigration0080 from "./ForkMigrations/080_ForkMessageArtifacts.ts";
+import ForkMigration0081 from "./ForkMigrations/081_ForkMessageSpeech.ts";
 
 export const forkMigrationEntries = [
   [1, "ForkThreadGroupsAndRepositoryIdentity", ForkMigration0001],
   [80, "ForkMessageArtifacts", ForkMigration0080],
+  [81, "ForkMessageSpeech", ForkMigration0081],
 ] as const;
 
 export const forkMigrationManifest = forkMigrationEntries.map(([id, name]) => [id, name] as const);

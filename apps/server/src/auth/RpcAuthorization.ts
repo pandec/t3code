@@ -45,6 +45,7 @@ export const RPC_REQUIRED_SCOPES = {
   [WS_METHODS.ttsConfigureOpenRouter]: AuthOrchestrationOperateScope,
   // Operate: a test synthesis spends vendor credits.
   [WS_METHODS.ttsTest]: AuthOrchestrationOperateScope,
+  [WS_METHODS.voiceSubscribeMessageSpeech]: AuthOrchestrationReadScope,
   [WS_METHODS.linearStatus]: AuthOrchestrationReadScope,
   [WS_METHODS.linearConfigure]: AuthOrchestrationOperateScope,
   [WS_METHODS.linearIssue]: AuthOrchestrationReadScope,

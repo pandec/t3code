@@ -204,6 +204,11 @@ import { environmentThreadShells, threadEnvironment } from "../../state/threads"
 import { useAtomCommand } from "../../state/use-atom-command";
 import { summarizeMessage } from "../../state/messageArtifacts";
 import {
+  AssistantMessageSpeechButton,
+  AssistantSpeechPlayer,
+  useAssistantMessageSpeech,
+} from "./AssistantMessageSpeech";
+import {
   beginMessageArtifactRequest,
   getMessageArtifactSessionSnapshot,
   rememberMessageSummary,
@@ -287,6 +292,10 @@ export interface ThreadFeedProps {
   readonly threadTitle: string;
   /** The environment serves on-demand message summaries. */
   readonly messageSummariesAvailable?: boolean;
+  /** The environment can synthesize listening versions now. */
+  readonly textToSpeechAvailable?: boolean;
+  /** The environment streams its server-owned listening state. */
+  readonly textToSpeechPersistentJobs?: boolean;
   readonly workspaceRoot?: string | null;
   readonly feed: ReadonlyArray<ThreadFeedEntry>;
   readonly contentPresentation: ThreadContentPresentation;
@@ -1544,6 +1553,8 @@ function renderFeedEntry(
     readonly markdownContentWidth: number;
     readonly threadTitle: string;
     readonly messageSummariesAvailable: boolean;
+    readonly textToSpeechAvailable: boolean;
+    readonly textToSpeechPersistentJobs: boolean;
   },
 ) {
   const entry = info.item;
@@ -1910,9 +1921,13 @@ function renderFeedEntry(
         {showAssistantMeta ? (
           <AssistantMessageMeta
             environmentId={props.environmentId}
+            threadId={props.threadId}
+            threadTitle={props.threadTitle}
             messageId={message.id}
             messageText={message.text}
             summariesAvailable={props.messageSummariesAvailable}
+            textToSpeechAvailable={props.textToSpeechAvailable}
+            textToSpeechPersistentJobs={props.textToSpeechPersistentJobs}
             timestampLabel={timestampLabel}
             iconSubtleColor={iconSubtleColor}
             markdownStyles={styles}
@@ -1969,9 +1984,13 @@ function renderFeedEntry(
 /** Meta row under a finished assistant message, with its on-demand summary. */
 function AssistantMessageMeta(props: {
   readonly environmentId: EnvironmentId;
+  readonly threadId: ThreadId;
+  readonly threadTitle: string;
   readonly messageId: MessageId;
   readonly messageText: string;
   readonly summariesAvailable: boolean;
+  readonly textToSpeechAvailable: boolean;
+  readonly textToSpeechPersistentJobs: boolean;
   readonly timestampLabel: string;
   readonly iconSubtleColor: ColorValue;
   readonly markdownStyles: MarkdownStyleSet;
@@ -1999,6 +2018,15 @@ function AssistantMessageMeta(props: {
   );
   const summary = session.summary;
   const showSummary = (summary !== null || props.summariesAvailable) && messageText.trim() !== "";
+  const speech = useAssistantMessageSpeech({
+    environmentId,
+    threadId: props.threadId,
+    messageId,
+    text: messageText,
+    available: props.textToSpeechAvailable,
+    persistentJobs: props.textToSpeechPersistentJobs,
+  });
+  const theme = useUniwindTheme();
 
   const onPressSummary = useCallback(() => {
     if (summary !== null) {
@@ -2055,6 +2083,7 @@ function AssistantMessageMeta(props: {
             )}
           </Pressable>
         ) : null}
+        <AssistantMessageSpeechButton state={speech} iconSubtleColor={props.iconSubtleColor} />
         <Text className="font-t3-medium text-xs tabular-nums text-foreground-secondary">
           {props.timestampLabel}
         </Text>
@@ -2079,6 +2108,19 @@ function AssistantMessageMeta(props: {
             skills={props.skills}
           />
         </View>
+      ) : null}
+      {speech.expanded && speech.speech !== null ? (
+        <AssistantSpeechPlayer
+          environmentId={environmentId}
+          threadId={props.threadId}
+          threadTitle={props.threadTitle}
+          messageId={messageId}
+          speech={speech.speech}
+          iconSubtleColor={props.iconSubtleColor}
+          foregroundColor={String(theme["--color-foreground"])}
+          onForegroundColor={theme["--color-sheet"]}
+          onRetry={speech.speech.origin === "agent" ? null : speech.regenerate}
+        />
       ) : null}
     </View>
   );
@@ -2624,6 +2666,8 @@ export const ThreadFeed = memo(function ThreadFeed(props: ThreadFeedProps) {
       userBubbleColor,
       viewportWidth,
       messageSummariesAvailable: props.messageSummariesAvailable,
+      textToSpeechAvailable: props.textToSpeechAvailable,
+      textToSpeechPersistentJobs: props.textToSpeechPersistentJobs,
     }),
     [
       props.worktreeSetup,
@@ -2641,6 +2685,8 @@ export const ThreadFeed = memo(function ThreadFeed(props: ThreadFeedProps) {
       userBubbleColor,
       viewportWidth,
       props.messageSummariesAvailable,
+      props.textToSpeechAvailable,
+      props.textToSpeechPersistentJobs,
     ],
   );
   const reportHeaderMaterialVisibility = useCallback(
@@ -3146,6 +3192,8 @@ export const ThreadFeed = memo(function ThreadFeed(props: ThreadFeedProps) {
             markdownContentWidth,
             threadTitle: props.threadTitle,
             messageSummariesAvailable: props.messageSummariesAvailable === true,
+            textToSpeechAvailable: props.textToSpeechAvailable === true,
+            textToSpeechPersistentJobs: props.textToSpeechPersistentJobs === true,
             skills: props.skills,
             workspaceRoot: props.workspaceRoot,
           })}
@@ -3193,6 +3241,8 @@ export const ThreadFeed = memo(function ThreadFeed(props: ThreadFeedProps) {
       props.threadId,
       props.threadTitle,
       props.messageSummariesAvailable,
+      props.textToSpeechAvailable,
+      props.textToSpeechPersistentJobs,
       props.skills,
       props.workspaceRoot,
       renderMarkdownImage,
