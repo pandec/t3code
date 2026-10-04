@@ -2715,6 +2715,7 @@ function AssistantMessageMeta({
           getThreadTitle={ctx.getThreadTitle}
           messageId={message.id}
           speech={speech.speech}
+          messageText={message.text}
           onRetry={speech.speech.origin === "agent" ? null : speech.regenerate}
         />
       ) : null}

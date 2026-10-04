@@ -150,6 +150,18 @@ interface MessageSpeechRow extends Omit<MessageSpeechCacheRow, "scriptRecipeHash
   readonly scriptRecipeHash: string | null;
 }
 
+/** A recording the agent made itself (`voice_reply`), with its audio already stored. */
+export interface AgentSpeechRecording {
+  readonly speechId: string;
+  readonly transcript: string;
+  readonly mimeType: SpeechAudioMimeType;
+  readonly sizeBytes: number;
+  readonly durationMs: number | null;
+  readonly voiceId: string;
+  readonly ttsModel: string;
+  readonly createdAt: string;
+}
+
 export interface MessageSpeechShape {
   /** Whether the listening profile's provider currently holds a key. Read per call. */
   readonly available: Effect.Effect<boolean>;
@@ -163,6 +175,15 @@ export interface MessageSpeechShape {
   ) => Effect.Effect<MessageSpeechSynthesisResult, MessageSpeechError>;
   /** The thread's listening state now, then again after every change to it. */
   readonly streamThread: (threadId: ThreadId) => Stream.Stream<MessageSpeechThreadState>;
+  /**
+   * Stores the agent's own recording as the message's speech. It replaces a
+   * listening version (whose audio is deleted) and is never replaced by one.
+   */
+  readonly attachAgentRecording: (input: {
+    readonly threadId: ThreadId;
+    readonly messageId: MessageId;
+    readonly recording: AgentSpeechRecording;
+  }) => Effect.Effect<void, MessageSpeechError>;
 }
 
 /**
@@ -564,7 +585,62 @@ export const make = Effect.gen(function* () {
     Effect.orElseSucceed(() => false),
   );
 
-  return MessageSpeech.of({ available, synthesize, streamThread });
+  const attachAgentRecording: MessageSpeechShape["attachAgentRecording"] = Effect.fn(
+    "MessageSpeech.attachAgentRecording",
+  )(function* ({ threadId, messageId, recording }) {
+    const prior = yield* findSpeechRow(messageId);
+    yield* sql`
+      INSERT INTO fork_message_speech (
+        message_id,
+        thread_id,
+        speech_id,
+        transcript,
+        mime_type,
+        size_bytes,
+        duration_ms,
+        source_text_hash,
+        script_recipe_hash,
+        voice_id,
+        tts_model,
+        origin,
+        created_at
+      )
+      VALUES (
+        ${messageId},
+        ${threadId},
+        ${recording.speechId},
+        ${recording.transcript},
+        ${recording.mimeType},
+        ${recording.sizeBytes},
+        ${recording.durationMs},
+        ${messageArtifactTextHash(recording.transcript.trim())},
+        NULL,
+        ${recording.voiceId},
+        ${recording.ttsModel},
+        'agent',
+        ${recording.createdAt}
+      )
+      ON CONFLICT(message_id) DO UPDATE SET
+        thread_id = excluded.thread_id,
+        speech_id = excluded.speech_id,
+        transcript = excluded.transcript,
+        mime_type = excluded.mime_type,
+        size_bytes = excluded.size_bytes,
+        duration_ms = excluded.duration_ms,
+        source_text_hash = excluded.source_text_hash,
+        script_recipe_hash = excluded.script_recipe_hash,
+        voice_id = excluded.voice_id,
+        tts_model = excluded.tts_model,
+        origin = excluded.origin,
+        created_at = excluded.created_at
+    `.pipe(Effect.mapError(storageError));
+    if (prior !== undefined && prior.speechId !== recording.speechId) {
+      yield* deleteSpeechFile(prior.speechId);
+    }
+    yield* publishChange(threadId);
+  });
+
+  return MessageSpeech.of({ available, synthesize, streamThread, attachAgentRecording });
 });
 
 export const layer = Layer.effect(MessageSpeech, make);

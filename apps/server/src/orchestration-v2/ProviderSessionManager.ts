@@ -32,6 +32,7 @@ import * as ProjectService from "../project/ProjectService.ts";
 import * as McpProviderSession from "../mcp/McpProviderSession.ts";
 import * as ServerSettings from "../serverSettings.ts";
 import * as McpSessionRegistry from "../mcp/McpSessionRegistry.ts";
+import * as AgentVoiceReply from "../voice/AgentVoiceReply.ts";
 import * as EventSink from "./EventSink.ts";
 import * as IdAllocator from "./IdAllocator.ts";
 import { makeKeyedSerialExecutor } from "./KeyedSerialExecutor.ts";
@@ -317,6 +318,21 @@ export const layerWithOptions = (
        */
       const serverSettings = yield* Effect.serviceOption(ServerSettings.ServerSettingsService);
       const projectService = yield* Effect.serviceOption(ProjectService.ProjectService);
+      // Optional like the settings above. Voice replies are environment-wide:
+      // the setting must be on and the agent-reply voice must have a key, both
+      // read per session start because a key can be added at runtime.
+      const agentVoiceReply = yield* Effect.serviceOption(AgentVoiceReply.AgentVoiceReply);
+      const voiceToolsAvailable =
+        Option.isNone(serverSettings) || Option.isNone(agentVoiceReply)
+          ? Effect.succeed(false)
+          : serverSettings.value.getSettings.pipe(
+              Effect.flatMap((settings) =>
+                settings.voice.enableAgentVoiceReplies
+                  ? agentVoiceReply.value.available
+                  : Effect.succeed(false),
+              ),
+              Effect.orElseSucceed(() => false),
+            );
       const eventSink = yield* EventSink.EventSinkV2;
       const idAllocator = yield* IdAllocator.IdAllocatorV2;
       const providerEventIngestor = yield* ProviderEventIngestor.ProviderEventIngestorV2;
@@ -435,6 +451,8 @@ export const layerWithOptions = (
                 >(["orchestration", "worktree", "pull-requests"]);
                 if (browserToolsAvailable) capabilities.add("preview");
                 if (deviceToolsAvailable) capabilities.add("device");
+                const voiceAvailable = yield* voiceToolsAvailable;
+                if (voiceAvailable) capabilities.add("voice");
                 const existing = McpProviderSession.readMcpProviderSession(threadId);
                 if (existing !== undefined) {
                   // Reserve before the async resolve so a release cannot
@@ -449,7 +467,8 @@ export const layerWithOptions = (
                     // A flipped browser-access setting must not survive through
                     // credential reuse: rotate so the new scope reflects it.
                     resolved.capabilities.has("preview") === browserToolsAvailable &&
-                    resolved.capabilities.has("device") === deviceToolsAvailable
+                    resolved.capabilities.has("device") === deviceToolsAvailable &&
+                    resolved.capabilities.has("voice") === voiceAvailable
                   ) {
                     return { mcpCredentialId: existing.providerSessionId, issued: false };
                   }

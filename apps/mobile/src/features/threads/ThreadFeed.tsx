@@ -2116,6 +2116,7 @@ function AssistantMessageMeta(props: {
           threadTitle={props.threadTitle}
           messageId={messageId}
           speech={speech.speech}
+          messageText={messageText}
           iconSubtleColor={props.iconSubtleColor}
           foregroundColor={String(theme["--color-foreground"])}
           onForegroundColor={theme["--color-sheet"]}

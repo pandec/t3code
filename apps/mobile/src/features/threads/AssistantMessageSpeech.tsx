@@ -148,12 +148,11 @@ export function AssistantMessageSpeechButton(props: {
   const { state } = props;
   if (!state.visible) return null;
   const busy = state.preparing && state.speech === null;
+  const noun = state.speech?.origin === "agent" ? "voice reply" : "listening version";
   return (
     <Pressable
       accessibilityRole="button"
-      accessibilityLabel={
-        state.speech === null ? "Create listening version" : "Toggle listening version"
-      }
+      accessibilityLabel={state.speech === null ? "Create listening version" : `Toggle ${noun}`}
       accessibilityState={{
         expanded: state.speech === null ? undefined : state.expanded,
         busy,
@@ -189,6 +188,8 @@ export function AssistantSpeechPlayer(props: {
   readonly threadTitle: string;
   readonly messageId: MessageId;
   readonly speech: MessageSpeechSynthesisResult;
+  /** The written reply; a transcript identical to it (a voice-only reply) is not repeated. */
+  readonly messageText: string;
   readonly iconSubtleColor: ColorValue;
   /** The theme's `--color-foreground`, which the scrubber and speed pill derive from. */
   readonly foregroundColor: string;
@@ -201,6 +202,9 @@ export function AssistantSpeechPlayer(props: {
   const { blocked, speed, track } = useListeningPlaybackSnapshot();
   const [transcriptExpanded, setTranscriptExpanded] = useState(false);
   const { trackColor, outlineColor } = listeningPlayerChrome(props.foregroundColor);
+  const isVoiceReply = props.speech.origin === "agent";
+  const noun = isVoiceReply ? "voice reply" : "listening version";
+  const showTranscript = props.speech.transcript.trim() !== props.messageText.trim();
   const speechId = props.speech.speechId;
   const speechMimeType = props.speech.mimeType;
   const environmentId = props.environmentId;
@@ -269,7 +273,9 @@ export function AssistantSpeechPlayer(props: {
           tintColor={props.iconSubtleColor}
           type="monochrome"
         />
-        <Text className="font-t3-bold text-xs text-foreground">Listening version</Text>
+        <Text className="font-t3-bold text-xs text-foreground">
+          {isVoiceReply ? "Voice reply" : "Listening version"}
+        </Text>
       </View>
       {audioUrlState._tag === "Failure" ? (
         <View className="gap-2 py-1">
@@ -296,10 +302,10 @@ export function AssistantSpeechPlayer(props: {
               accessibilityRole="button"
               accessibilityLabel={
                 blocked
-                  ? "Play listening version unavailable while recording"
+                  ? `Play ${noun} unavailable while recording`
                   : isPlaying
-                    ? "Pause listening version"
-                    : "Play listening version"
+                    ? `Pause ${noun}`
+                    : `Play ${noun}`
               }
               accessibilityState={{ disabled: blocked }}
               className={cn(
@@ -338,23 +344,25 @@ export function AssistantSpeechPlayer(props: {
           <ListeningSpeedControl outlineColor={outlineColor} speed={speed} />
         </View>
       )}
-      <Pressable
-        accessibilityRole="button"
-        accessibilityState={{ expanded: transcriptExpanded }}
-        className="min-h-8 flex-row items-center gap-1"
-        onPress={() => setTranscriptExpanded((current) => !current)}
-      >
-        <Text className="font-t3-medium text-xs text-foreground-muted">
-          View listening transcript
-        </Text>
-        <SymbolView
-          name={transcriptExpanded ? "chevron.up" : "chevron.down"}
-          size={13}
-          tintColor={props.iconSubtleColor}
-          type="monochrome"
-        />
-      </Pressable>
-      {transcriptExpanded ? (
+      {showTranscript ? (
+        <Pressable
+          accessibilityRole="button"
+          accessibilityState={{ expanded: transcriptExpanded }}
+          className="min-h-8 flex-row items-center gap-1"
+          onPress={() => setTranscriptExpanded((current) => !current)}
+        >
+          <Text className="font-t3-medium text-xs text-foreground-muted">
+            {isVoiceReply ? "View transcript" : "View listening transcript"}
+          </Text>
+          <SymbolView
+            name={transcriptExpanded ? "chevron.up" : "chevron.down"}
+            size={13}
+            tintColor={props.iconSubtleColor}
+            type="monochrome"
+          />
+        </Pressable>
+      ) : null}
+      {showTranscript && transcriptExpanded ? (
         <Text className="text-sm leading-5 text-foreground-muted">{props.speech.transcript}</Text>
       ) : null}
     </View>

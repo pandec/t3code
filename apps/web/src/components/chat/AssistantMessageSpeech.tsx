@@ -160,6 +160,7 @@ export function useAssistantMessageSpeech(input: {
 
 export function AssistantMessageSpeechButton({ state }: { state: AssistantMessageSpeechState }) {
   if (!state.visible) return null;
+  const noun = state.speech?.origin === "agent" ? "voice reply" : "listening version";
   return (
     <Tooltip>
       <TooltipTrigger
@@ -167,9 +168,7 @@ export function AssistantMessageSpeechButton({ state }: { state: AssistantMessag
           <Button
             variant="ghost"
             size="icon-xs"
-            aria-label={
-              state.speech === null ? "Create listening version" : "Toggle listening version"
-            }
+            aria-label={state.speech === null ? "Create listening version" : `Toggle ${noun}`}
             aria-expanded={state.speech === null ? undefined : state.expanded}
             aria-busy={state.preparing}
             disabled={state.preparing && state.speech === null}
@@ -189,8 +188,8 @@ export function AssistantMessageSpeechButton({ state }: { state: AssistantMessag
           : state.speech === null
             ? "Listen to this response"
             : state.expanded
-              ? "Hide listening version"
-              : "Show listening version"}
+              ? `Hide ${noun}`
+              : `Show ${noun}`}
       </TooltipPopup>
     </Tooltip>
   );
@@ -206,6 +205,7 @@ export function AssistantSpeechPlayer({
   getThreadTitle,
   messageId,
   speech,
+  messageText,
   onRetry,
 }: {
   environmentId: EnvironmentId;
@@ -216,6 +216,8 @@ export function AssistantSpeechPlayer({
   getThreadTitle: () => string;
   messageId: string;
   speech: MessageSpeechSynthesisResult;
+  /** The written reply; a transcript identical to it (a voice-only reply) is not repeated. */
+  messageText: string;
   /** null hides the regenerate action; the agent's own recording cannot be remade. */
   onRetry: (() => void) | null;
 }) {
@@ -228,6 +230,9 @@ export function AssistantSpeechPlayer({
   const isPlaying = isActiveTrack && track.playing;
   const audioUrl = audioUrlState._tag === "Success" ? audioUrlState.url : null;
   const playbackUnavailable = threadId === null;
+  const isVoiceReply = speech.origin === "agent";
+  const noun = isVoiceReply ? "voice reply" : "listening version";
+  const showTranscript = speech.transcript.trim() !== messageText.trim();
   const trackRef = useMemo<ListeningTrackRef>(
     () => ({ environmentId, threadId: threadId ?? "", messageId, speechId: speech.speechId }),
     [environmentId, threadId, messageId, speech.speechId],
@@ -255,7 +260,7 @@ export function AssistantSpeechPlayer({
     <div className="mt-2 rounded-xl border border-border/70 bg-secondary/35 p-3">
       <div className="mb-2 flex items-center gap-2 text-xs font-medium text-foreground">
         <HeadphonesIcon className="size-3.5 text-muted-foreground" />
-        <span>Listening version</span>
+        <span>{isVoiceReply ? "Voice reply" : "Listening version"}</span>
       </div>
       {audioUrlState._tag === "Failure" ? (
         <div className="space-y-2 text-xs text-muted-foreground">
@@ -284,10 +289,10 @@ export function AssistantSpeechPlayer({
                 playbackUnavailable
                   ? "Playback unavailable"
                   : blocked
-                    ? "Play listening version unavailable while recording"
+                    ? `Play ${noun} unavailable while recording`
                     : isPlaying
-                      ? "Pause listening version"
-                      : "Play listening version"
+                      ? `Pause ${noun}`
+                      : `Play ${noun}`
               }
               disabled={blocked || playbackUnavailable}
               onClick={handleTogglePlayback}
@@ -332,14 +337,16 @@ export function AssistantSpeechPlayer({
           <ListeningSpeedControl speed={speed} />
         </>
       )}
-      <details className="mt-2 text-xs text-muted-foreground">
-        <summary className="cursor-pointer select-none hover:text-foreground">
-          View listening transcript
-        </summary>
-        <p className="mt-2 whitespace-pre-wrap leading-relaxed text-foreground/85">
-          {speech.transcript}
-        </p>
-      </details>
+      {showTranscript ? (
+        <details className="mt-2 text-xs text-muted-foreground">
+          <summary className="cursor-pointer select-none hover:text-foreground">
+            {isVoiceReply ? "View transcript" : "View listening transcript"}
+          </summary>
+          <p className="mt-2 whitespace-pre-wrap leading-relaxed text-foreground/85">
+            {speech.transcript}
+          </p>
+        </details>
+      ) : null}
     </div>
   );
 }

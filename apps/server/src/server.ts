@@ -188,6 +188,7 @@ import { voiceHttpApiLayer } from "./voice/http.ts";
 import * as MessageSummary from "./messageArtifacts/MessageSummary.ts";
 import * as MessageSpeechScript from "./messageArtifacts/MessageSpeechScript.ts";
 import * as MessageSpeech from "./voice/MessageSpeech.ts";
+import * as AgentVoiceReply from "./voice/AgentVoiceReply.ts";
 import { messageArtifactsHttpApiLayer } from "./messageArtifacts/http.ts";
 import * as NetService from "@t3tools/shared/Net";
 import * as RelayClient from "@t3tools/shared/relayClient";
@@ -574,6 +575,9 @@ const RuntimeCoreDependenciesBaseLive = Layer.mergeAll(
   Layer.provideMerge(OrchestrationApplicationLayerLive),
   Layer.provideMerge(OrchestrationEventInfrastructureLayerLive),
   Layer.provideMerge(Layer.merge(ProjectStore.layer, ThreadSearch.layer)),
+  // Shared by the voice_reply MCP handler (stages recordings), run
+  // finalization (attaches them) and MCP session setup (voice-tool gating).
+  Layer.provideMerge(AgentVoiceReply.layer),
   // One listening job registry for the HTTP request path and the WebSocket
   // state stream, so every client sees the same pending jobs.
   Layer.provideMerge(MessageSpeech.layer.pipe(Layer.provide(MessageSpeechScript.layer))),

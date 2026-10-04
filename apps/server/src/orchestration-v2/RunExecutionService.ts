@@ -30,12 +30,14 @@ import * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
 import * as Fiber from "effect/Fiber";
 import * as Layer from "effect/Layer";
+import * as Option from "effect/Option";
 import * as Ref from "effect/Ref";
 import * as Schema from "effect/Schema";
 import * as Stream from "effect/Stream";
 
 import * as McpSessionRegistry from "../mcp/McpSessionRegistry.ts";
 import * as ServerSettings from "../serverSettings.ts";
+import * as AgentVoiceReply from "../voice/AgentVoiceReply.ts";
 import * as CheckpointService from "./CheckpointService.ts";
 import * as EventSink from "./EventSink.ts";
 import * as IdAllocator from "./IdAllocator.ts";
@@ -550,6 +552,8 @@ export const layer: Layer.Layer<
     const providerEventIngestor = yield* ProviderEventIngestor.ProviderEventIngestorV2;
     const serverSettings = yield* ServerSettings.ServerSettingsService;
     const finalizationObserver = yield* RunFinalizationService.RunFinalizationObserver;
+    // Optional so harnesses without voice need no stub; production provides it.
+    const agentVoiceReply = yield* Effect.serviceOption(AgentVoiceReply.AgentVoiceReply);
 
     const writeFinalRunEvents = (input: {
       readonly run: OrchestrationV2Run;
@@ -577,6 +581,20 @@ export const layer: Layer.Layer<
         };
         const shouldFinalizeRun =
           input.shouldFinalizeRun === undefined ? true : yield* input.shouldFinalizeRun();
+        const allocateEventId = () => idAllocator.allocate.event({ threadId: input.run.threadId });
+        // A staged agent voice reply is published only when its attempt both
+        // finalizes the run and completes normally.
+        const voiceReply = Option.isNone(agentVoiceReply)
+          ? undefined
+          : yield* agentVoiceReply.value.finalizeAttempt({
+              run: input.run,
+              attemptId: input.attempt.id,
+              rootNode: input.rootNode,
+              providerThreadId: input.providerThread.id,
+              completed: shouldFinalizeRun && input.terminal.status === "completed",
+              completedAt,
+              allocateEventId,
+            });
         if (!shouldFinalizeRun) {
           // Superseded attempt (steer / selection restart). Emit
           // run_interrupt_result only when hard Stop left an unpaired request
@@ -613,7 +631,6 @@ export const layer: Layer.Layer<
           }
           return;
         }
-        const allocateEventId = () => idAllocator.allocate.event({ threadId: input.run.threadId });
         const open = input.openRunOwnedSubagents ?? emptyOpenRunOwnedSubagentProjection();
         const hasOpenSubagentProjection =
           open.subagents.size > 0 ||
@@ -743,6 +760,7 @@ export const layer: Layer.Layer<
                   },
                 ]
               : []),
+            ...(voiceReply?.events ?? []),
             {
               id: runEventId,
               type: "run.updated",
@@ -782,11 +800,15 @@ export const layer: Layer.Layer<
             events: finalization.events,
           });
           if (!result.committed) {
+            yield* voiceReply?.abandoned ?? Effect.void;
             return;
           }
         } else {
-          yield* eventSink.writeWithEffects(finalization);
+          yield* eventSink
+            .writeWithEffects(finalization)
+            .pipe(Effect.tapError(() => voiceReply?.abandoned ?? Effect.void));
         }
+        yield* voiceReply?.committed ?? Effect.void;
         yield* input.refreshAfterTurn;
       });
 
