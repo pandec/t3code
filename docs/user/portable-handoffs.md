@@ -9,8 +9,10 @@ keep their full text, order, and user or assistant role, including partial work 
 interrupted turns. Your new request stays separate and is never shortened to make history fit.
 
 Codex receives historical messages directly when its installed version supports that operation.
-Other providers receive the same selection as attributed conversation context. A handoff does not
-copy the outgoing provider's reasoning, tool-call state, or attachments.
+Other providers receive the same selection as attributed conversation context. Context you attached
+inline, such as terminal output or a review comment, is written into your message's text as the
+original turn sent it. A handoff does not copy the outgoing provider's reasoning, tool-call state, or
+attachments.
 
 The handoff includes references to omitted history. The agent can use T3 Code's thread-reading tool
 to retrieve saved messages and activity, including the remainder of a long item. For an important

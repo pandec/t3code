@@ -72,6 +72,7 @@ import {
   resolveCodexHomeLayout,
 } from "./CodexHomeLayout.ts";
 import { makeManagedCodexProvider } from "./CodexManagedProvider.ts";
+import { makeCodexSessionImport } from "../../sessionImport/ProviderSessionImport.ts";
 import * as CodexInstallation from "../CodexInstallation.ts";
 import * as ServerSecretStore from "../../auth/ServerSecretStore.ts";
 import * as ServerEnvironment from "../../environment/ServerEnvironment.ts";
@@ -272,6 +273,12 @@ export const CodexDriver: ProviderDriver<CodexSettings, CodexDriverEnv> = {
         processEnv,
         snapshot.getSnapshot.pipe(Effect.map((value) => value.models)),
       );
+      const sessionImport = yield* makeCodexSessionImport({
+        binaryPath: effectiveConfig.binaryPath,
+        launchArgs: resolveCodexLaunchArgs(effectiveConfig.launchArgs, processEnv),
+        homePath: effectiveConfig.homePath,
+        environment: processEnv,
+      });
       const snapshotForCwd = (cwd: string) =>
         !effectiveConfig.enabled
           ? snapshot.getSnapshot
@@ -378,6 +385,7 @@ export const CodexDriver: ProviderDriver<CodexSettings, CodexDriverEnv> = {
         consumeResetCredit,
         orchestrationAdapter,
         textGeneration,
+        sessionImport,
       } satisfies ProviderInstance;
     }),
 };

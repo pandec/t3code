@@ -59,6 +59,14 @@ import {
   RelayLinkProofRequest,
 } from "./relay.ts";
 import { VoiceTranscriptionRequest, VoiceTranscriptionResult } from "./voice.ts";
+import { ProviderCatalogResult } from "./providerCatalog.ts";
+import {
+  SessionImportForkThreadPayload,
+  SessionImportListCandidatesPayload,
+  SessionImportListCandidatesResult,
+  SessionImportPayload,
+  SessionImportResult,
+} from "./sessionImport.ts";
 
 const OptionalBearerHeaders = Schema.Struct({
   authorization: Schema.optionalKey(Schema.String),
@@ -633,6 +641,40 @@ export class EnvironmentVoiceHttpApi extends HttpApiGroup.make("voice").add(
   }).middleware(EnvironmentAuthenticatedAuth),
 ) {}
 
+export class EnvironmentSessionImportHttpApi extends HttpApiGroup.make("sessionImport")
+  .add(
+    HttpApiEndpoint.post("candidates", "/api/session-import/candidates", {
+      headers: OptionalBearerHeaders,
+      payload: SessionImportListCandidatesPayload,
+      success: SessionImportListCandidatesResult,
+      error: [EnvironmentScopeRequiredError, EnvironmentSessionImportError],
+    }).middleware(EnvironmentAuthenticatedAuth),
+  )
+  .add(
+    HttpApiEndpoint.post("importSession", "/api/session-import/import", {
+      headers: OptionalBearerHeaders,
+      payload: SessionImportPayload,
+      success: SessionImportResult,
+      error: [EnvironmentScopeRequiredError, EnvironmentSessionImportError],
+    }).middleware(EnvironmentAuthenticatedAuth),
+  )
+  .add(
+    HttpApiEndpoint.post("forkThread", "/api/session-import/fork-thread", {
+      headers: OptionalBearerHeaders,
+      payload: SessionImportForkThreadPayload,
+      success: SessionImportResult,
+      error: [EnvironmentScopeRequiredError, EnvironmentSessionImportError],
+    }).middleware(EnvironmentAuthenticatedAuth),
+  ) {}
+
+export class EnvironmentProvidersHttpApi extends HttpApiGroup.make("providers").add(
+  HttpApiEndpoint.get("catalog", "/api/providers/catalog", {
+    headers: OptionalBearerHeaders,
+    success: ProviderCatalogResult,
+    error: [EnvironmentScopeRequiredError],
+  }).middleware(EnvironmentAuthenticatedAuth),
+) {}
+
 /** Large, compressible pull-request payloads travel over HTTP rather than the RPC socket. */
 class EnvironmentPullRequestsHttpApi extends HttpApiGroup.make("pullRequests").add(
   HttpApiEndpoint.post("diff", "/api/pull-requests/diff", {
@@ -732,6 +774,8 @@ export class EnvironmentHttpApi extends HttpApi.make("environment")
   .add(EnvironmentMetadataHttpApi)
   .add(EnvironmentAuthHttpApi)
   .add(EnvironmentOrchestrationHttpApi)
+  .add(EnvironmentSessionImportHttpApi)
+  .add(EnvironmentProvidersHttpApi)
   .add(EnvironmentVoiceHttpApi)
   .add(EnvironmentPullRequestsHttpApi)
   .add(EnvironmentProjectsHttpApi)

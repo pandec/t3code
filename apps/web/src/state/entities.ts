@@ -5,6 +5,10 @@ import type {
   EnvironmentThreadShell,
 } from "@t3tools/client-runtime/state/shell";
 import {
+  canForkImportedSessionWith,
+  type ConversationForkOptions,
+} from "@t3tools/client-runtime/state/thread-fork";
+import {
   EMPTY_THREAD_HISTORY_META,
   type EnvironmentThreadStatus,
   type ThreadHistoryMeta,
@@ -283,6 +287,18 @@ export function readEnvironmentSupportsVisitedTracking(environmentId: Environmen
     appAtomRegistry.get(environmentServerConfigsAtom).get(environmentId)?.environment.capabilities
       .threadVisitedTracking === true
   );
+}
+
+/** Fork options for a thread, read at call time: whether its provider can fork an imported session. */
+export function readConversationForkOptions(
+  thread: Pick<EnvironmentThreadShell, "environmentId" | "providerInstanceId">,
+): ConversationForkOptions {
+  return {
+    canForkImportedSession: canForkImportedSessionWith(
+      thread.providerInstanceId,
+      appAtomRegistry.get(environmentServerConfigsAtom).get(thread.environmentId)?.providers,
+    ),
+  };
 }
 
 export function readEnvironmentThreadRefs(

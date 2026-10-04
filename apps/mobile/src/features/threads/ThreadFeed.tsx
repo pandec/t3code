@@ -24,6 +24,7 @@ import {
 } from "@t3tools/contracts";
 import { renderAssistantCitationsAsText } from "@t3tools/shared/assistantCitations";
 import { encodeComposerContextFragment } from "@t3tools/shared/composerContextClipboard";
+import { formatForkedThreadTitle } from "@t3tools/shared/composerTrigger";
 import {
   parseComposerContextHref,
   collectComposerContextReferences,
@@ -351,7 +352,7 @@ function AssistantForkButton(props: {
             sourceThreadId: props.projectedItem.sourceThreadId,
             targetThreadId,
             runId,
-            title: `${props.sourceTitle} fork`,
+            title: formatForkedThreadTitle(props.sourceTitle),
             creationSource: "mobile",
           },
         })

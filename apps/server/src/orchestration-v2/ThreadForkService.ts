@@ -10,6 +10,7 @@ import {
   OrchestrationV2ThreadProjection,
   ThreadId,
 } from "@t3tools/contracts";
+import { formatForkedThreadTitle } from "@t3tools/shared/composerTrigger";
 import * as Context from "effect/Context";
 import * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
@@ -90,7 +91,7 @@ export const layer: Layer.Layer<ThreadForkServiceV2> = Layer.succeed(
           createdBy: input.createdBy,
           creationSource: input.creationSource,
           id: input.targetThreadId,
-          title: input.title ?? `${input.sourceProjection.thread.title} fork`,
+          title: input.title ?? formatForkedThreadTitle(input.sourceProjection.thread.title),
           activeProviderThreadId: null,
           lineage: {
             parentThreadId: input.sourceProjection.thread.id,
@@ -109,6 +110,11 @@ export const layer: Layer.Layer<ThreadForkServiceV2> = Layer.succeed(
           settledAt: null,
           snoozedUntil: null,
           snoozedAt: null,
+          // A fork starts unpinned and unarranged; it never takes over the
+          // source's slot in the pinned or active order.
+          pinnedAt: null,
+          pinOrderKey: null,
+          activeOrderKey: null,
           lastVisitedAt: null,
           deletedAt: null,
         };

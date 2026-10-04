@@ -211,3 +211,21 @@ export const readCodexImportableThread = Effect.fn("readCodexImportableThread")(
     }),
   );
 });
+
+/**
+ * Fork one Codex session into a new native thread, so an imported copy never
+ * resumes the same thread another T3 thread continues. Returns the new
+ * thread id.
+ */
+export const forkCodexImportableThread = Effect.fn("forkCodexImportableThread")(function* (
+  options: CodexImportReaderOptions & { readonly threadId: string },
+) {
+  return yield* withCodexAppServerClient(options, (client) =>
+    client
+      .request("thread/fork", { threadId: options.threadId, cwd: options.cwd, excludeTurns: true })
+      .pipe(
+        Effect.map((response) => response.thread.id),
+        Effect.mapError(toReaderError("Codex thread/fork request failed.")),
+      ),
+  );
+});

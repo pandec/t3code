@@ -106,11 +106,20 @@ function makeSourceProjection(sourceRun: OrchestrationV2Run): OrchestrationV2Thr
   };
 }
 
-const planFork = (sourceRun: OrchestrationV2Run) =>
+const planFork = (
+  sourceRun: OrchestrationV2Run,
+  options: {
+    readonly title?: string;
+    readonly sourceThread?: OrchestrationV2AppThread;
+  } = { title: "Awake fork" },
+) =>
   Effect.gen(function* () {
     const service = yield* ThreadForkService.ThreadForkServiceV2;
     return yield* service.plan({
-      sourceProjection: makeSourceProjection(sourceRun),
+      sourceProjection: {
+        ...makeSourceProjection(sourceRun),
+        ...(options.sourceThread === undefined ? {} : { thread: options.sourceThread }),
+      },
       sourceRun,
       sourceProviderThread: undefined,
       canonicalSourcePoint: {
@@ -119,7 +128,7 @@ const planFork = (sourceRun: OrchestrationV2Run) =>
       },
       transferId: ContextTransferId.make("context-transfer:fork-snoozed-source"),
       targetThreadId,
-      title: "Awake fork",
+      ...(options.title === undefined ? {} : { title: options.title }),
       createdBy: "user",
       creationSource: "mobile",
       createdAt: forkCreatedAt,
@@ -189,5 +198,25 @@ it.effect("rejects in-progress and rolled-back fork sources", () =>
       assert.equal(error.targetThreadId, targetThreadId);
       assert.equal(error.cause, ThreadForkService.forkableSourceRunStatusError(sourceRun));
     }
+  }),
+);
+
+it.effect("titles an untitled fork with the fork marker and leaves pin and order behind", () =>
+  Effect.gen(function* () {
+    const pinnedAt = DateTime.makeUnsafe("2026-07-24T09:06:00.000Z");
+    const result = yield* planFork(makeSourceRun("completed"), {
+      sourceThread: {
+        ...makeSourceThread(),
+        title: "💡 Snoozed source",
+        pinnedAt,
+        pinOrderKey: "a0",
+        activeOrderKey: "a1",
+      },
+    });
+
+    assert.equal(result.targetThread.title, "💡 (🔱) Snoozed source");
+    assert.isNull(result.targetThread.pinnedAt);
+    assert.isNull(result.targetThread.pinOrderKey);
+    assert.isNull(result.targetThread.activeOrderKey);
   }),
 );

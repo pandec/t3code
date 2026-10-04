@@ -45,6 +45,11 @@ import {
   type EnvironmentThreadShell,
 } from "@t3tools/client-runtime/state/models";
 import {
+  canForkConversation,
+  canForkImportedSessionDriver,
+  canForkImportedSessionWith,
+} from "@t3tools/client-runtime/state/thread-fork";
+import {
   parseScopedThreadKey,
   scopeProjectRef,
   scopeThreadRef,
@@ -76,6 +81,7 @@ import {
   FolderIcon,
   FolderPlusIcon,
   GitBranchIcon,
+  GitForkIcon,
   MessageCircleQuestionIcon,
   PinIcon,
   PinOffIcon,
@@ -1245,6 +1251,8 @@ const SidebarThreadRow = memo(function SidebarThreadRow(props: {
   onContextMenu: (threadRef: ScopedThreadRef, position: { x: number; y: number }) => void;
   onSettle: (threadRef: ScopedThreadRef) => void;
   onUnsettle: (threadRef: ScopedThreadRef) => void;
+  /** Forks the conversation; the hover action shows only where it can. */
+  onFork: (threadRef: ScopedThreadRef) => void;
   onSnooze: (threadRef: ScopedThreadRef, preset: Pick<SnoozePreset, "snoozedUntil">) => void;
   onUnsnooze: (threadRef: ScopedThreadRef) => void;
   onPin: (threadRef: ScopedThreadRef) => void;
@@ -1266,6 +1274,7 @@ const SidebarThreadRow = memo(function SidebarThreadRow(props: {
     onContextMenu,
     onAcknowledgeWoke,
     onFileDropThreads,
+    onFork,
     onRenameTitleChange,
     onSettle,
     onSnooze,
@@ -1579,6 +1588,19 @@ const SidebarThreadRow = memo(function SidebarThreadRow(props: {
     },
     [onUnsettle, threadRef],
   );
+  const handleForkClick = useCallback(
+    (event: ReactMouseEvent) => {
+      event.preventDefault();
+      event.stopPropagation();
+      onFork(threadRef);
+    },
+    [onFork, threadRef],
+  );
+  const showForkButton = canForkConversation(thread, {
+    canForkImportedSession: canForkImportedSessionDriver(
+      props.providerEntryByInstanceId.get(thread.providerInstanceId)?.driverKind,
+    ),
+  });
   const handleUnsnoozeClick = useCallback(
     (event: ReactMouseEvent) => {
       event.preventDefault();
@@ -2211,7 +2233,8 @@ const SidebarThreadRow = memo(function SidebarThreadRow(props: {
                   {props.settlementSupported ||
                   showSnoozeButton ||
                   hasUnsentDraft ||
-                  props.pinningSupported ? (
+                  props.pinningSupported ||
+                  showForkButton ? (
                     <span
                       className={cn(
                         // focus-visible, not focus-within: a mouse click leaves
@@ -2277,7 +2300,10 @@ const SidebarThreadRow = memo(function SidebarThreadRow(props: {
                                 type="button"
                                 aria-label="Settle thread"
                                 onClick={handleSettleClick}
-                                className="-mr-1 inline-flex cursor-pointer items-center gap-1 rounded-md bg-transparent px-1.5 text-xs text-muted-foreground hover:text-foreground"
+                                className={cn(
+                                  "inline-flex cursor-pointer items-center gap-1 rounded-md bg-transparent px-1.5 text-xs text-muted-foreground hover:text-foreground",
+                                  !showForkButton && "-mr-1",
+                                )}
                               />
                             }
                           >
@@ -2285,6 +2311,23 @@ const SidebarThreadRow = memo(function SidebarThreadRow(props: {
                             Settle
                           </TooltipTrigger>
                           <TooltipPopup>Settle thread</TooltipPopup>
+                        </Tooltip>
+                      ) : null}
+                      {showForkButton ? (
+                        <Tooltip>
+                          <TooltipTrigger
+                            render={
+                              <button
+                                type="button"
+                                aria-label="Fork conversation"
+                                onClick={handleForkClick}
+                                className="-mr-1 inline-flex cursor-pointer items-center rounded-md bg-transparent px-1.5 text-muted-foreground hover:text-foreground"
+                              >
+                                <GitForkIcon className="size-3.5" />
+                              </button>
+                            }
+                          />
+                          <TooltipPopup>Fork conversation</TooltipPopup>
                         </Tooltip>
                       ) : null}
                     </span>
@@ -2563,6 +2606,7 @@ export default function Sidebar() {
     markThreadUnread,
     archiveThread,
     deleteThread,
+    forkThread,
   } = useThreadActions();
   const updateThreadMetadata = useAtomCommand(threadEnvironment.updateMetadata, {
     reportFailure: false,
@@ -3767,6 +3811,24 @@ export default function Sidebar() {
     },
     [unsettleThread],
   );
+  const attemptFork = useCallback(
+    (threadRef: ScopedThreadRef) => {
+      void (async () => {
+        const result = await forkThread(threadRef);
+        if (result._tag === "Failure" && !isAtomCommandInterrupted(result)) {
+          const error = squashAtomCommandFailure(result);
+          toastManager.add(
+            stackedThreadToast({
+              type: "error",
+              title: "Failed to fork conversation",
+              description: error instanceof Error ? error.message : "An error occurred.",
+            }),
+          );
+        }
+      })();
+    },
+    [forkThread],
+  );
   const attemptUnsnooze = useCallback(
     (threadRef: ScopedThreadRef) => {
       void (async () => {
@@ -4831,6 +4893,14 @@ export default function Sidebar() {
                 titleRegeneration: supportsTitleRegeneration,
               },
               snoozePresets,
+              forkExtras: {
+                fork: canForkConversation(thread, {
+                  canForkImportedSession: canForkImportedSessionWith(
+                    thread.providerInstanceId,
+                    serverConfigs.get(thread.environmentId)?.providers,
+                  ),
+                }),
+              },
             }),
             position,
           ),
@@ -4891,6 +4961,9 @@ export default function Sidebar() {
             return;
           case "unpin":
             attemptUnpin(threadRef);
+            return;
+          case "fork":
+            attemptFork(threadRef);
             return;
           case "auto-settle:enabled":
           case "auto-settle:disabled": {
@@ -5017,6 +5090,7 @@ export default function Sidebar() {
     },
     [
       archiveThread,
+      attemptFork,
       attemptPin,
       attemptSettle,
       attemptSnooze,
@@ -5714,6 +5788,7 @@ export default function Sidebar() {
                             onContextMenu={handleThreadContextMenu}
                             onSettle={attemptSettle}
                             onUnsettle={attemptUnsettle}
+                            onFork={attemptFork}
                             onSnooze={attemptSnooze}
                             onUnsnooze={attemptUnsnooze}
                             onPin={attemptPin}

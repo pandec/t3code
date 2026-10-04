@@ -17,6 +17,10 @@ import {
 } from "@t3tools/client-runtime/operations/projects";
 import { connectionStatusText } from "@t3tools/client-runtime/connection";
 import { threadSearchMatchKey } from "@t3tools/client-runtime/state/thread-search";
+import {
+  canForkConversation,
+  canForkImportedSessionWith,
+} from "@t3tools/client-runtime/state/thread-fork";
 import { resolveThreadReferenceCopyTarget } from "@t3tools/shared/threadReference";
 import {
   canPreloadBrowsePath,
@@ -823,7 +827,8 @@ function OpenCommandPaletteDialog(props: {
   const availableSettingsSearchItems = useAvailableSettingsSearchItems();
   const { activeDraftThread, activeThread, defaultProjectRef, handleNewThread, routeThreadRef } =
     useHandleNewThread();
-  const { pinThread, settleThread, confirmAndUnpinThread, unsettleThread } = useThreadActions();
+  const { pinThread, settleThread, confirmAndUnpinThread, unsettleThread, forkThread } =
+    useThreadActions();
   const updateThreadMetadata = useAtomCommand(threadEnvironment.updateMetadata, {
     reportFailure: false,
   });
@@ -2211,7 +2216,14 @@ function OpenCommandPaletteDialog(props: {
         openUnarchivedThread?.settledOverride === "settled",
       // The server owns settle eligibility and returns the authoritative error.
       canSettleNow: true,
-      canFork: false,
+      canFork:
+        openUnarchivedThread !== null &&
+        canForkConversation(openUnarchivedThread, {
+          canForkImportedSession: canForkImportedSessionWith(
+            openUnarchivedThread.providerInstanceId,
+            serverConfigs.get(openUnarchivedThread.environmentId)?.providers,
+          ),
+        }),
       supports: {
         settlement: openThreadCapabilities?.threadSettlement === true,
         // Not gated on the sidebar variant: pinning is server-side state the
@@ -2238,6 +2250,11 @@ function OpenCommandPaletteDialog(props: {
           case "unpin":
             await reportThreadActionFailure("Failed to unpin thread", () =>
               confirmAndUnpinThread(threadRef),
+            );
+            return;
+          case "fork":
+            await reportThreadActionFailure("Failed to fork conversation", () =>
+              forkThread(threadRef),
             );
             return;
         }

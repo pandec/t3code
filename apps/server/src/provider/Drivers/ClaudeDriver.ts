@@ -67,8 +67,10 @@ import {
 import {
   makeClaudeCapabilitiesCacheKey,
   makeClaudeContinuationGroupKey,
+  makeClaudeEnvironment,
   resolveClaudeConfigDirPath,
 } from "./ClaudeHome.ts";
+import { makeClaudeSessionImport } from "../../sessionImport/ProviderSessionImport.ts";
 import {
   type ClaudeShadowHomeError,
   materializeClaudeShadowHome,
@@ -210,6 +212,10 @@ export const ClaudeDriver: ProviderDriver<ClaudeSettings, ClaudeDriverEnv> = {
         processEnv,
         modelCatalog,
       );
+      const sessionImport = yield* makeClaudeSessionImport({
+        config: effectiveConfig,
+        environment: yield* makeClaudeEnvironment(effectiveConfig, processEnv),
+      });
 
       // Per-instance capabilities cache: keyed on binary + shared config dir
       // + shadow config dir + cwd, so account-specific probes never share
@@ -381,6 +387,7 @@ export const ClaudeDriver: ProviderDriver<ClaudeSettings, ClaudeDriverEnv> = {
         orchestrationAdapter,
         textGeneration,
         consumeResetCredit,
+        sessionImport,
       } satisfies ProviderInstance;
     }),
 };

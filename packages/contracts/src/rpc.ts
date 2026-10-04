@@ -364,7 +364,15 @@ import {
   SourceControlRepositoryInfo,
   SourceControlRepositoryLookupInput,
 } from "./sourceControl.ts";
-import { SESSION_IMPORT_WS_METHODS } from "./sessionImport.ts";
+import {
+  SESSION_IMPORT_WS_METHODS,
+  SessionImportError,
+  SessionImportForkThreadPayload,
+  SessionImportListCandidatesPayload,
+  SessionImportListCandidatesResult,
+  SessionImportPayload,
+  SessionImportResult,
+} from "./sessionImport.ts";
 import { VcsError } from "./vcs.ts";
 import { Project, ProjectMutation, ProjectMutationError } from "./project.ts";
 
@@ -582,6 +590,7 @@ export const WS_METHODS = {
   // Session import methods
   sessionImportListCandidates: SESSION_IMPORT_WS_METHODS.listCandidates,
   sessionImportImport: SESSION_IMPORT_WS_METHODS.importSession,
+  sessionImportForkThread: SESSION_IMPORT_WS_METHODS.forkThread,
 
   subscribeBackgroundPolicy: "subscribeBackgroundPolicy",
   subscribeResourceTelemetry: "subscribeResourceTelemetry",
@@ -917,6 +926,24 @@ const WsServerLogoutAcpRegistryRpc = Rpc.make(WS_METHODS.serverLogoutAcpRegistry
   payload: AcpRegistryLogoutInput,
   success: AcpRegistryLogoutResult,
   error: Schema.Union([AcpRegistryOperationError, EnvironmentAuthorizationError]),
+});
+
+const WsSessionImportListCandidatesRpc = Rpc.make(WS_METHODS.sessionImportListCandidates, {
+  payload: SessionImportListCandidatesPayload,
+  success: SessionImportListCandidatesResult,
+  error: Schema.Union([SessionImportError, EnvironmentAuthorizationError]),
+});
+
+const WsSessionImportImportRpc = Rpc.make(WS_METHODS.sessionImportImport, {
+  payload: SessionImportPayload,
+  success: SessionImportResult,
+  error: Schema.Union([SessionImportError, EnvironmentAuthorizationError]),
+});
+
+const WsSessionImportForkThreadRpc = Rpc.make(WS_METHODS.sessionImportForkThread, {
+  payload: SessionImportForkThreadPayload,
+  success: SessionImportResult,
+  error: Schema.Union([SessionImportError, EnvironmentAuthorizationError]),
 });
 
 const WsServerGetTraceDiagnosticsRpc = Rpc.make(WS_METHODS.serverGetTraceDiagnostics, {
@@ -2004,4 +2031,7 @@ export const WsRpcGroup = RpcGroup.make(
   WsOrchestrationV2SubscribeArchivedShellRpc,
   WsOrchestrationV2SubscribeShellRpc,
   WsOrchestrationV2SubscribeThreadRpc,
+  WsSessionImportListCandidatesRpc,
+  WsSessionImportImportRpc,
+  WsSessionImportForkThreadRpc,
 );

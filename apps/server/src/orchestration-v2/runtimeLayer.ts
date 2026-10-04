@@ -8,6 +8,8 @@ import * as TextGeneration from "../textGeneration/TextGeneration.ts";
 import { ProviderAuthServiceLive } from "../provider/Layers/ProviderAuthService.ts";
 import { layer as agentSessionImporterLayer } from "../project/AgentSessionImporter.ts";
 import * as AgentSessionScanner from "../project/AgentSessionScanner.ts";
+import { layer as sessionImportServiceLayer } from "../sessionImport/SessionImportService.ts";
+import { layer as strictResumeLayer } from "../sessionImport/StrictResume.ts";
 import { layer as projectServiceLayer } from "../project/ProjectService.ts";
 import { layer as projectSetupScriptRunnerLayer } from "../project/ProjectSetupScriptRunner.ts";
 import * as ManagedProjectFolders from "../project/ManagedProjectFolders.ts";
@@ -157,6 +159,7 @@ const providerTurnStartServiceProvided = providerTurnStartServiceLayer.pipe(
       providerAuthServiceProvided,
       runExecutionServiceProvided,
       runtimePolicyProvided,
+      strictResumeLayer,
     ),
   ),
 );
@@ -228,6 +231,18 @@ const agentSessionImporterProvided = agentSessionImporterLayer.pipe(
       eventSinkProvided,
       idAllocatorLayer,
       providerSessionRuntimeLayer,
+    ),
+  ),
+);
+
+const sessionImportServiceProvided = sessionImportServiceLayer.pipe(
+  Layer.provide(
+    Layer.mergeAll(
+      ProjectServiceLayerLive,
+      orchestratorProvided,
+      eventSinkProvided,
+      idAllocatorLayer,
+      strictResumeLayer,
     ),
   ),
 );
@@ -319,6 +334,7 @@ export const OrchestrationV2ProductionLayerLive = Layer.mergeAll(
   ),
   providerContinuationWorkerProvided,
   agentSessionImporterProvided,
+  sessionImportServiceProvided,
 ).pipe(
   Layer.provide(Scheduler.layer),
   Layer.provideMerge(OrchestrationEventInfrastructureLayerLive),
