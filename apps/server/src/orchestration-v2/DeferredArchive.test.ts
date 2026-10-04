@@ -49,6 +49,7 @@ import {
   finishedWorktreeRemoval,
   planArchiveSchedule,
   stopCancelsArchive,
+  wakeRetargetedArchiveRequest,
   worktreeRemovalRequest,
 } from "./DeferredArchive.ts";
 import * as EffectOutbox from "./EffectOutbox.ts";
@@ -252,6 +253,81 @@ describe("stopCancelsArchive", () => {
   });
 });
 
+describe("wake runs", () => {
+  const wake = (id: string, ordinal: number, status: OrchestrationV2Run["status"]) => ({
+    ...run(id, ordinal, status),
+    startedAt: null,
+    completedAt: null,
+    workStartedAt: at("2026-10-01T00:00:00.000Z"),
+  });
+
+  it("moves a pending archive to the run a wake started, never backwards", () => {
+    const runs = [
+      { ...run("run-1", 1, "running"), userMessageId: MessageId.make("prompt") },
+      { ...run("run-2", 2, "queued"), userMessageId: MessageId.make("wake") },
+    ];
+    assert.equal(
+      wakeRetargetedArchiveRequest(pendingRequest(), runs, MessageId.make("wake"))?.runId,
+      RunId.make("run-2"),
+    );
+    // A request waiting only on background work moves too.
+    assert.equal(
+      wakeRetargetedArchiveRequest(pendingRequest({ runId: null }), runs, MessageId.make("wake"))
+        ?.runId,
+      RunId.make("run-2"),
+    );
+    // A wake that steered into the awaited run moves nothing.
+    assert.isNull(wakeRetargetedArchiveRequest(pendingRequest(), runs, MessageId.make("prompt")));
+    assert.isNull(wakeRetargetedArchiveRequest(pendingRequest(), runs, MessageId.make("other")));
+  });
+
+  it("a wake withdrawn before it started falls back to the run before it", () => {
+    const request = pendingRequest({ runId: RunId.make("run-2") });
+    const evaluate = (
+      runs: ReadonlyArray<Parameters<typeof evaluateDeferredArchive>[0]["runs"][number]>,
+    ) =>
+      evaluateDeferredArchive({
+        thread: { worktreePath: "/work/tree" },
+        request,
+        runs,
+        checkpoints: [],
+        pendingBackgroundTasks: [],
+      });
+    assert.equal(
+      evaluate([run("run-1", 1, "running"), wake("run-2", 2, "cancelled")]).type,
+      "wait",
+    );
+    assert.equal(
+      evaluate([run("run-1", 1, "completed"), wake("run-2", 2, "cancelled")]).type,
+      "archive",
+    );
+    assert.deepEqual(evaluate([run("run-1", 1, "interrupted"), wake("run-2", 2, "cancelled")]), {
+      type: "cancel",
+      detail: ARCHIVE_CANCEL_DETAIL.failed,
+    });
+    // A run that settled before the archive was scheduled is not waited on.
+    const settledEarlier = {
+      ...run("run-1", 1, "interrupted"),
+      completedAt: at("2026-10-01T00:00:00.500Z"),
+    };
+    assert.equal(evaluate([settledEarlier, wake("run-2", 2, "cancelled")]).type, "archive");
+    // A wake that started and was then cancelled still voids the archive.
+    assert.equal(
+      evaluate([
+        run("run-1", 1, "completed"),
+        { ...wake("run-2", 2, "cancelled"), startedAt: at("2026-10-01T00:00:02.000Z") },
+      ]).type,
+      "cancel",
+    );
+  });
+
+  it("Stop of the run before a queued wake still cancels", () => {
+    const request = pendingRequest({ runId: RunId.make("run-2") });
+    const runs = [run("run-1", 1, "running"), wake("run-2", 2, "queued")];
+    assert.isTrue(stopCancelsArchive(request, runs, RunId.make("run-1")));
+  });
+});
+
 // Orchestrator integration: the same runtime the server builds, over in-memory SQLite.
 const modelSelection = {
   instanceId: ProviderInstanceId.make("codex"),
@@ -411,6 +487,101 @@ const sendMessage = (
     return (yield* orchestrator.getThreadProjection(threadId)).runs.at(-1)!;
   });
 
+const completeRun = (threadId: ThreadId, target: OrchestrationV2Run, name: string) =>
+  Effect.gen(function* () {
+    const eventSink = yield* EventSink.EventSinkV2;
+    const now = yield* DateTime.now;
+    yield* eventSink.commitCommand({
+      commandId: CommandId.make(name),
+      threadId,
+      commandType: "checkpoint.capture",
+      acceptedAt: now,
+      events: [
+        {
+          id: EventId.make(`${name}-run`),
+          type: "run.updated",
+          threadId,
+          runId: target.id,
+          occurredAt: now,
+          payload: {
+            ...target,
+            status: "completed",
+            startedAt: target.startedAt ?? now,
+            completedAt: now,
+          },
+        },
+      ],
+      effects: [],
+    });
+  });
+
+/**
+ * A running parent turn with an archive pending after it, then the server's
+ * delivery of its delegated tasks' results, queued behind the turn.
+ */
+const dispatchCompletionWake = (
+  threadId: ThreadId,
+  name: string,
+  scheduler: ThreadArchiveScheduler.ThreadArchiveScheduler["Service"],
+) =>
+  Effect.gen(function* () {
+    const orchestrator = yield* Orchestrator.OrchestratorV2;
+    const eventSink = yield* EventSink.EventSinkV2;
+    const active = yield* sendMessage(threadId, name, { type: "start_immediately" });
+    const pending = yield* scheduler.schedule({ threadId, afterTurn: true });
+    assert.equal(pending.request?.runId, active.id);
+
+    const wakeMessageId = MessageId.make(`${name}-wake`);
+    const taskIds = [NodeId.make(`${name}-task`)];
+    const now = yield* DateTime.now;
+    const parent: OrchestrationV2Run = {
+      ...active,
+      status: "running",
+      startedAt: now,
+      delegatedCompletion: {
+        disposition: "open",
+        nextGeneration: 2,
+        delivery: { generation: 1, messageId: wakeMessageId, taskIds },
+      },
+    };
+    yield* eventSink.commitCommand({
+      commandId: CommandId.make(`${name}-delegate`),
+      threadId,
+      commandType: "run.update",
+      acceptedAt: now,
+      events: [
+        {
+          id: EventId.make(`${name}-delegate-run`),
+          type: "run.updated",
+          threadId,
+          runId: parent.id,
+          occurredAt: now,
+          payload: parent,
+        },
+      ],
+      effects: [],
+    });
+    yield* orchestrator.dispatch({
+      type: "message.dispatch",
+      createdBy: "agent",
+      creationSource: "server",
+      commandId: CommandId.make(`${name}-wake`),
+      threadId,
+      messageId: wakeMessageId,
+      text: "Delegated tasks finished.",
+      attachments: [],
+      modelSelection,
+      dispatchMode: { type: "queue_after_active" },
+      delegatedCompletion: { parentRunId: parent.id, generation: 1, taskIds },
+    });
+    const wakeRun = (yield* orchestrator.getThreadProjection(threadId)).runs.find(
+      (candidate) => candidate.userMessageId === wakeMessageId,
+    );
+    assert.isDefined(wakeRun);
+    assert.equal(wakeRun!.status, "queued");
+    return { parent, wakeRun: wakeRun! };
+  });
+
 const threadState = (threadId: ThreadId) =>
   Effect.gen(function* () {
     const orchestrator = yield* Orchestrator.OrchestratorV2;
@@ -492,6 +663,43 @@ it.layer(TestLayer)("deferred archive on the orchestrator", (it) => {
       yield* sendMessage(threadId, "new-message-first", { type: "start_immediately" });
       yield* scheduler.schedule({ threadId, afterTurn: true });
       yield* sendMessage(threadId, "new-message-second", { type: "queue_after_active" });
+      const status = yield* scheduler.status(threadId);
+      assert.equal(status.request?.status, "cancelled");
+      assert.equal(status.request?.detail, ARCHIVE_CANCEL_DETAIL.newWork);
+    }),
+  );
+
+  it.effect("a subagent-completion wake moves the archive to its run, then archives", () =>
+    Effect.gen(function* () {
+      const scheduler = yield* ThreadArchiveScheduler.ThreadArchiveScheduler;
+      const threadId = yield* createThread("wake");
+      const { parent, wakeRun } = yield* dispatchCompletionWake(threadId, "wake", scheduler);
+
+      // The wake carries on the awaited work instead of cancelling the archive.
+      const moved = yield* scheduler.status(threadId);
+      assert.equal(moved.request?.status, "pending");
+      assert.equal(moved.request?.runId, wakeRun.id);
+
+      // The parent turn finishing is not enough: the archive waits for the wake run.
+      yield* completeRun(threadId, parent, "wake-parent-complete");
+      yield* scheduler.reconcilePending;
+      assert.isNull((yield* threadState(threadId)).archivedAt);
+
+      yield* completeRun(threadId, wakeRun, "wake-run-complete");
+      yield* scheduler.reconcilePending;
+      const thread = yield* threadState(threadId);
+      assert.isNotNull(thread.archivedAt);
+      assert.equal(thread.archiveRequest?.status, "completed");
+      assert.equal(thread.archiveRequest?.runId, wakeRun.id);
+    }),
+  );
+
+  it.effect("a user's message still cancels an archive waiting through a wake", () =>
+    Effect.gen(function* () {
+      const scheduler = yield* ThreadArchiveScheduler.ThreadArchiveScheduler;
+      const threadId = yield* createThread("wake-user");
+      yield* dispatchCompletionWake(threadId, "wake-user", scheduler);
+      yield* sendMessage(threadId, "wake-user-followup", { type: "queue_after_active" });
       const status = yield* scheduler.status(threadId);
       assert.equal(status.request?.status, "cancelled");
       assert.equal(status.request?.detail, ARCHIVE_CANCEL_DETAIL.newWork);

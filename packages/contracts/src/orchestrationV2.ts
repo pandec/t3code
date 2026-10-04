@@ -356,7 +356,9 @@ export type OrchestrationV2LimitRecoveryUpdate = typeof OrchestrationV2LimitReco
 /**
  * Fork: a deferred archive. Pending until the run it waits on completes (which
  * includes its final checkpoint) and background work that holds completion
- * ends; `runId` is null when it waits only on background work. With
+ * ends; `runId` is null when it waits only on background work, and moves to
+ * the run a wake (delegated task result, background notification, restart
+ * continuation) starts. With
  * `removeWorktree`, it stays pending after the thread archives until the
  * guarded worktree removal finishes or is refused (`error` with the reason).
  */

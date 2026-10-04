@@ -2,7 +2,9 @@
  * Fork: deferred archive decisions. A request waits on the run that was active
  * when it was scheduled (a v2 run reaches `completed` after its final
  * checkpoint capture, even a failed one) and on background work that holds
- * completion, then archives through the ordinary `thread.archive` path. New
+ * completion, then archives through the ordinary `thread.archive` path. A wake
+ * (delegated task result, background notification, restart continuation)
+ * carries on that work, so the request moves to the run the wake starts. New
  * work, a failed or stopped run, or a workspace change cancels it; a failed
  * final checkpoint records an error and leaves the thread unarchived. A request with
  * `removeWorktree` stays pending after the archive until the scheduler's
@@ -11,6 +13,7 @@
  */
 import type {
   CommandId,
+  MessageId,
   OrchestrationV2AppThread,
   OrchestrationV2Checkpoint,
   OrchestrationV2DomainEvent,
@@ -26,7 +29,8 @@ import * as DateTime from "effect/DateTime";
 export type ArchiveRun = Pick<
   OrchestrationV2Run,
   "id" | "ordinal" | "status" | "requestedAt" | "checkpointId"
->;
+> &
+  Partial<Pick<OrchestrationV2Run, "startedAt" | "completedAt" | "workStartedAt">>;
 export type ArchiveCheckpoint = Pick<OrchestrationV2Checkpoint, "id" | "status">;
 
 /** Whether `run`'s final checkpoint capture failed; `missing` (no Git) still counts as captured. */
@@ -216,14 +220,17 @@ export function evaluateDeferredArchive(input: {
     if (target === undefined || input.runs.some((run) => run.ordinal > target.ordinal)) {
       return { type: "cancel", detail: ARCHIVE_CANCEL_DETAIL.newWork };
     }
-    if (STOPPED_RUN_STATUSES.has(target.status)) {
-      return { type: "cancel", detail: ARCHIVE_CANCEL_DETAIL.failed };
-    }
-    if (target.status !== "completed") {
-      return { type: "wait", detail: "The turn has not finished." };
-    }
-    if (finalCheckpointFailed(target, input.checkpoints)) {
-      return { type: "fail", detail: ARCHIVE_CANCEL_DETAIL.checkpointFailed };
+    const awaited = awaitedRun(target, input.runs, request);
+    if (awaited !== null) {
+      if (STOPPED_RUN_STATUSES.has(awaited.status)) {
+        return { type: "cancel", detail: ARCHIVE_CANCEL_DETAIL.failed };
+      }
+      if (awaited.status !== "completed") {
+        return { type: "wait", detail: "The turn has not finished." };
+      }
+      if (finalCheckpointFailed(awaited, input.checkpoints)) {
+        return { type: "fail", detail: ARCHIVE_CANCEL_DETAIL.checkpointFailed };
+      }
     }
   } else {
     const requestedAtMs = Date.parse(request.requestedAt);
@@ -237,15 +244,71 @@ export function evaluateDeferredArchive(input: {
   return { type: "archive" };
 }
 
-/** Stop cancels a pending archive only while the run it waits on is still running. */
+/**
+ * The run a request effectively waits on. A wake cancelled while still queued
+ * (its delegated tasks were withdrawn, or restart recovery dropped it) never
+ * ran, so the request falls back to the run before it; null when that run had
+ * already settled before the archive was scheduled (only background work counts).
+ */
+function awaitedRun(
+  target: ArchiveRun,
+  runs: ReadonlyArray<ArchiveRun>,
+  request: OrchestrationV2ThreadArchiveRequest,
+): ArchiveRun | null {
+  const requestedAtMs = Date.parse(request.requestedAt);
+  let run = target;
+  while (run.status === "cancelled" && run.startedAt === null && run.workStartedAt !== undefined) {
+    const ordinal = run.ordinal;
+    const previous = runs
+      .filter((candidate) => candidate.ordinal < ordinal)
+      .toSorted((left, right) => right.ordinal - left.ordinal)[0];
+    if (
+      previous === undefined ||
+      (previous.completedAt != null &&
+        DateTime.toEpochMillis(previous.completedAt) <= requestedAtMs)
+    ) {
+      return null;
+    }
+    run = previous;
+  }
+  return run;
+}
+
+/**
+ * The request moved to the run a wake message (`isWakeMessageDispatch`)
+ * started, or null when nothing moves: the wake steered into the awaited run
+ * or delivered nothing new.
+ */
+export function wakeRetargetedArchiveRequest(
+  request: OrchestrationV2ThreadArchiveRequest,
+  runs: ReadonlyArray<Pick<OrchestrationV2Run, "id" | "ordinal" | "userMessageId">>,
+  wakeMessageId: MessageId,
+): OrchestrationV2ThreadArchiveRequest | null {
+  const wakeRun = runs.find((run) => run.userMessageId === wakeMessageId);
+  if (wakeRun === undefined || wakeRun.id === request.runId) return null;
+  const target = runs.find((run) => run.id === request.runId);
+  if (target !== undefined && wakeRun.ordinal <= target.ordinal) return null;
+  return { ...request, runId: wakeRun.id };
+}
+
+/**
+ * Stop cancels a pending archive only while the run it waits on is still
+ * running, or the run before the queued wake it was moved to.
+ */
 export function stopCancelsArchive(
   request: OrchestrationV2ThreadArchiveRequest,
   runs: ReadonlyArray<ArchiveRun>,
   stoppedRunId: RunId,
 ): boolean {
-  if (request.runId === null || request.runId !== stoppedRunId) return false;
+  if (request.runId === null) return false;
   const run = runs.find((candidate) => candidate.id === stoppedRunId);
-  return run !== undefined && RUNNING_RUN_STATUSES.has(run.status);
+  const target = runs.find((candidate) => candidate.id === request.runId);
+  return (
+    run !== undefined &&
+    target !== undefined &&
+    run.ordinal <= target.ordinal &&
+    RUNNING_RUN_STATUSES.has(run.status)
+  );
 }
 
 type ThreadPayloadEvent = Extract<
