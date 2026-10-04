@@ -31,7 +31,12 @@ interface Fixture {
   repository: string;
   worktreePath: string | null;
   projects: Array<Pick<OrchestrationProjectShell, "id" | "workspaceRoot">>;
-  otherThreads: Array<{ id: ThreadId; projectId: ProjectId; worktreePath: string | null }>;
+  otherThreads: Array<{
+    id: ThreadId;
+    projectId: ProjectId;
+    worktreePath: string | null;
+    worktreeSwitch?: { status: "pending"; targetPath: string };
+  }>;
   detached: Array<string>;
   /** False once a message or unarchive reopened the thread. */
   archived: boolean;
@@ -204,6 +209,31 @@ it.layer(TestLayer)("archive worktree removal", (it) => {
         yield* removal.remove({ threadId, worktreePath: detached.worktreePath }),
         WORKTREE_KEPT_DETAIL.detached,
       );
+    }).pipe(Effect.scoped),
+  );
+
+  it.effect("refuses a worktree another thread is switching into, through an alias too", () =>
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
+      const path = yield* Path.Path;
+      const removal = yield* ArchiveWorktreeRemoval;
+      const { repository, worktreePath } = yield* setup("feature/move-target");
+      const alias = path.join(path.dirname(worktreePath), "alias");
+      yield* fs.symlink(worktreePath, alias);
+      fixture.otherThreads = [
+        {
+          id: ThreadId.make("moving-thread"),
+          projectId,
+          worktreePath: repository,
+          worktreeSwitch: { status: "pending", targetPath: alias },
+        },
+      ];
+      assert.equal(yield* removal.blocker(threadId), WORKTREE_KEPT_DETAIL.pendingMove);
+      assert.equal(
+        yield* removal.remove({ threadId, worktreePath }),
+        WORKTREE_KEPT_DETAIL.pendingMove,
+      );
+      assert.isTrue(yield* fs.exists(worktreePath));
     }).pipe(Effect.scoped),
   );
 

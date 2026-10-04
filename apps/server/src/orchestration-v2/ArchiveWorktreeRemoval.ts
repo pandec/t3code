@@ -32,6 +32,7 @@ export const WORKTREE_KEPT_DETAIL = {
   projectCheckout: "Refusing to remove a project checkout.",
   noProject: "The thread's project no longer exists.",
   shared: "Another unarchived thread uses this worktree.",
+  pendingMove: "Another thread is waiting to switch into this worktree.",
   detached: "Detached worktrees need manual removal to keep unreferenced commits.",
   dirty: "The worktree has uncommitted or untracked changes.",
   busy: "Another operation is using this worktree. Archive again after it finishes.",
@@ -100,6 +101,12 @@ export const make = Effect.gen(function* () {
         projectShells.find((project) => project.id === thread.projectId)?.workspaceRoot;
       if (cwd !== undefined && contains(root, yield* canonicalWorkspacePath(cwd))) {
         return WORKTREE_KEPT_DETAIL.shared;
+      }
+      if (
+        thread.worktreeSwitch?.status === "pending" &&
+        contains(root, yield* canonicalWorkspacePath(thread.worktreeSwitch.targetPath))
+      ) {
+        return WORKTREE_KEPT_DETAIL.pendingMove;
       }
     }
     // Read the live checkout: thread metadata does not track a detached HEAD.

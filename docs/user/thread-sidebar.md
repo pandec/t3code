@@ -186,7 +186,8 @@ failed turn, or a workspace change also cancels it. A pending archive survives a
 
 You can also ask the agent to remove the thread's worktree when it archives. The branch is
 always kept. Removal only happens when the worktree has no uncommitted or untracked changes, is
-on a branch, is not a project's checkout, and no other unarchived thread uses it. If the
+on a branch, is not a project's checkout, no other unarchived thread uses it, and no thread is
+waiting to switch into it. If the
 worktree can never qualify, the agent is told right away. If it is dirty when the thread
 archives, the thread still archives, the worktree stays, and the agent can read the reason from
 the archive status. Unarchiving the thread, or sending it a message, before removal finishes

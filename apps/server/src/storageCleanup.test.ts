@@ -1,5 +1,8 @@
 import { describe, expect, it } from "vite-plus/test";
+import * as NodeServices from "@effect/platform-node/NodeServices";
+import { assert, it as effectIt } from "@effect/vitest";
 import {
+  CommandId,
   ProjectId,
   ProviderInstanceId,
   RunId,
@@ -7,7 +10,14 @@ import {
   type OrchestrationV2ThreadShell,
 } from "@t3tools/contracts";
 import * as DateTime from "effect/DateTime";
-import { storageCleanupActivityAt, storageCleanupThreadIdle } from "./storageCleanup.ts";
+import * as Effect from "effect/Effect";
+import * as FileSystem from "effect/FileSystem";
+import * as Path from "effect/Path";
+import {
+  storageCleanupActivityAt,
+  storageCleanupThreadIdle,
+  storageCleanupWorktreeInUse,
+} from "./storageCleanup.ts";
 
 const NOW_MS = Date.parse("2026-06-10T12:00:00.000Z");
 const DAY_MS = 24 * 60 * 60 * 1_000;
@@ -103,4 +113,88 @@ describe("V2 storage cleanup eligibility", () => {
   function candidateWithStatus(status: OrchestrationV2ThreadShell["status"]) {
     return { ...candidate(), status };
   }
+});
+
+describe("V2 storage cleanup live-use protection", () => {
+  const candidateId = ThreadId.make("thread-1");
+  /** A real checkout plus a symlinked alias, so canonical path handling is exercised. */
+  const setup = Effect.gen(function* () {
+    const fs = yield* FileSystem.FileSystem;
+    const path = yield* Path.Path;
+    const root = yield* fs.realPath(yield* fs.makeTempDirectoryScoped());
+    const worktreePath = path.join(root, "worktree");
+    const alias = path.join(root, "alias");
+    yield* fs.makeDirectory(worktreePath);
+    yield* fs.symlink(worktreePath, alias);
+    const owner = shell({ branch: "feature", worktreePath });
+    const inUse = (
+      threads: ReadonlyArray<OrchestrationV2ThreadShell>,
+      sessionCwds: ReadonlyArray<string> = [],
+      id: ThreadId | null = candidateId,
+    ) => storageCleanupWorktreeInUse({ worktreePath, candidateId: id, threads, sessionCwds });
+    return { root, worktreePath, alias, owner, inUse, path };
+  });
+  const other = (overrides: Partial<OrchestrationV2ThreadShell>) =>
+    shell({ id: ThreadId.make("thread-2"), ...overrides });
+  const pendingSwitch = (targetPath: string, status: "pending" | "completed" = "pending") => ({
+    requestId: CommandId.make("switch"),
+    runId: RunId.make("run"),
+    sourceWorktreePath: null,
+    sourceBranch: null,
+    targetPath,
+    requestedAt: "2026-06-10T11:00:00.000Z",
+    status,
+  });
+
+  effectIt.effect("treats aliases and nested checkouts of another thread as shared", () =>
+    Effect.gen(function* () {
+      const { worktreePath, alias, owner, inUse, path } = yield* setup;
+      assert.isFalse(yield* inUse([owner]));
+      assert.isTrue(yield* inUse([owner, other({ worktreePath: alias })]));
+      assert.isTrue(yield* inUse([owner, other({ worktreePath: path.join(alias, "nested") })]));
+      // A deleted thread's checkout is in use by any remaining owner.
+      assert.isTrue(yield* inUse([owner], [], null));
+      assert.isFalse(
+        yield* inUse([other({ worktreePath: path.join(path.dirname(worktreePath), "sibling") })]),
+      );
+    }).pipe(Effect.scoped, Effect.provide(NodeServices.layer)),
+  );
+
+  effectIt.effect("keeps a worktree with a pending move into or out of it", () =>
+    Effect.gen(function* () {
+      const { root, worktreePath, alias, owner, inUse } = yield* setup;
+      assert.isTrue(yield* inUse([owner, other({ worktreeSwitch: pendingSwitch(alias) })]));
+      assert.isFalse(
+        yield* inUse([owner, other({ worktreeSwitch: pendingSwitch(alias, "completed") })]),
+      );
+      const moveOut = { ...pendingSwitch(root), sourceWorktreePath: worktreePath };
+      assert.isTrue(yield* inUse([{ ...owner, worktreeSwitch: moveOut }]));
+    }).pipe(Effect.scoped, Effect.provide(NodeServices.layer)),
+  );
+
+  effectIt.effect("keeps a worktree whose thread has a pending archive", () =>
+    Effect.gen(function* () {
+      const { worktreePath, owner, inUse } = yield* setup;
+      const archiveRequest = {
+        requestId: CommandId.make("archive"),
+        runId: null,
+        worktreePath,
+        removeWorktree: true,
+        requestedAt: "2026-06-10T11:00:00.000Z",
+        status: "pending" as const,
+      };
+      assert.isTrue(yield* inUse([{ ...owner, archiveRequest }]));
+      assert.isFalse(
+        yield* inUse([{ ...owner, archiveRequest: { ...archiveRequest, status: "error" } }]),
+      );
+    }).pipe(Effect.scoped, Effect.provide(NodeServices.layer)),
+  );
+
+  effectIt.effect("keeps a worktree a live provider session runs in, through an alias", () =>
+    Effect.gen(function* () {
+      const { alias, owner, inUse, path } = yield* setup;
+      assert.isTrue(yield* inUse([owner], [path.join(alias, "packages")]));
+      assert.isFalse(yield* inUse([owner], [path.dirname(alias)]));
+    }).pipe(Effect.scoped, Effect.provide(NodeServices.layer)),
+  );
 });
