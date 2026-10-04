@@ -417,12 +417,15 @@ export function createThreadEnvironmentAtoms<R, E>(
       (!accepted &&
         (thread.pendingRuntimeRequest !== null ||
           ["preparing", "queued", "starting"].includes(thread.status))) ||
-      !(Date.parse(input.snoozedUntil) > DateTime.toEpochMillis(now))
+      // Fork: a null wake time is the indefinite snooze ("until I wake it").
+      (input.snoozedUntil !== null &&
+        !(Date.parse(input.snoozedUntil) > DateTime.toEpochMillis(now)))
         ? thread
         : {
             ...thread,
             pendingRuntimeRequest: null,
-            snoozedUntil: DateTime.makeUnsafe(input.snoozedUntil),
+            snoozedUntil:
+              input.snoozedUntil === null ? null : DateTime.makeUnsafe(input.snoozedUntil),
             snoozedAt:
               thread.snoozedUntil != null &&
               DateTime.formatIso(thread.snoozedUntil) === input.snoozedUntil

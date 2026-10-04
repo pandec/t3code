@@ -2502,7 +2502,9 @@ export const OrchestrationV2Command = Schema.Union([
     type: Schema.Literal("thread.snooze"),
     commandId: CommandId,
     threadId: ThreadId,
-    snoozedUntil: IsoDateTime,
+    // Fork: null is the indefinite snooze ("until I wake it"); snoozedAt
+    // alone marks it. Gated by the threadSnoozeIndefinite capability.
+    snoozedUntil: Schema.NullOr(IsoDateTime),
   }),
   Schema.Struct({
     type: Schema.Literal("thread.unsnooze"),

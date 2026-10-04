@@ -190,6 +190,19 @@ describe("isAutoSettlementCandidate", () => {
   });
 });
 
+describe("indefinite snooze settlement (fork)", () => {
+  it("never auto-settles an indefinitely snoozed thread, even after it woke", () => {
+    const parked = shell({ snoozedUntil: null, snoozedAt: at(-60 * 60 * 1_000) });
+    expect(ThreadSettlementService.isAutoSettlementCandidate(parked, NOW_MS)).toBe(false);
+    expect(
+      ThreadSettlementService.isAutoSettlementCandidate(
+        shell({ ...parked, latestRunCompletedAt: at(-30 * 60 * 1_000) }),
+        NOW_MS,
+      ),
+    ).toBe(false);
+  });
+});
+
 describe("threadHasQueuedTurnStart", () => {
   it("holds a fresh unadopted user message inside the grace window only", () => {
     const fresh = shell({ latestUserMessageAt: at(-1_000) });

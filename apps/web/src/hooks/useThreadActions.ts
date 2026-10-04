@@ -35,6 +35,7 @@ import {
   readEnvironmentSupportsActiveReorder,
   readEnvironmentSupportsSettlement,
   readEnvironmentSupportsSnooze,
+  readEnvironmentSupportsSnoozeIndefinite,
   readEnvironmentSupportsVisitedTracking,
   readEnvironmentThreadRefs,
   readProject,
@@ -927,9 +928,14 @@ export function useThreadActions() {
   );
 
   const snoozeThread = useCallback(
-    async (target: ScopedThreadRef, snoozedUntil: string) => {
+    async (target: ScopedThreadRef, snoozedUntil: string | null) => {
       // Version skew: never send the command to a server that predates it.
-      if (!readEnvironmentSupportsSnooze(target.environmentId)) {
+      // Fork: a null wake time (indefinite snooze) also needs the
+      // threadSnoozeIndefinite capability; older servers reject it.
+      if (
+        !readEnvironmentSupportsSnooze(target.environmentId) ||
+        (snoozedUntil === null && !readEnvironmentSupportsSnoozeIndefinite(target.environmentId))
+      ) {
         return AsyncResult.failure(
           Cause.fail(
             new ThreadSnoozeUnsupportedError({

@@ -4,9 +4,11 @@ import {
   canSnooze,
   effectiveSnoozed,
   hasQueuedTurnStart,
+  INDEFINITE_SNOOZE_LABEL,
   QUEUED_TURN_START_GRACE_MS,
   resolveSnoozePresets,
   snoozeWakeLabel,
+  snoozeWakeSortMs,
 } from "@t3tools/client-runtime/state/thread-settled";
 import type { SnoozePreset } from "@t3tools/client-runtime/state/thread-settled";
 import type { EnvironmentThreadShell } from "@t3tools/client-runtime/state/shell";
@@ -559,7 +561,9 @@ export function buildThreadListV2ListItems(input: {
     const snoozeWakeLabelText =
       item.snoozed && item.thread.snoozedUntil != null && input.snoozeLabelNow !== undefined
         ? snoozeWakeLabel(item.thread.snoozedUntil, { now: input.snoozeLabelNow })
-        : undefined;
+        : item.snoozed && item.thread.snoozedUntil == null
+          ? INDEFINITE_SNOOZE_LABEL
+          : undefined;
     // The minute clock belongs on the item, not the list's extraData, so the
     // recycler's equality can confine the per-minute re-render to rows whose
     // snooze menu actually shows preset times. The swipe-revealed snooze menu
@@ -795,9 +799,9 @@ export function buildThreadListV2Items(input: {
   }
 
   const orderedActive = applyPendingThreadOrder(sortThreadsForListV2(active), "active", pending);
+  // Indefinite snoozes (no wake time) sort last, matching the web sidebar.
   const orderedSnoozed = [...snoozed].sort(
-    (left, right) =>
-      parseTimestampMs(left.snoozedUntil ?? "") - parseTimestampMs(right.snoozedUntil ?? ""),
+    (left, right) => snoozeWakeSortMs(left) - snoozeWakeSortMs(right),
   );
   const selectedThreadKey = input.selectedThreadKey ?? null;
   const visibleSnoozed =

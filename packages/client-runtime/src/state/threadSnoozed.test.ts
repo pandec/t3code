@@ -9,6 +9,7 @@ import {
   hasQueuedTurnStart,
   resolveSnoozePresets,
   snoozeWakeLabel,
+  snoozeWakeSortMs,
   threadRaisedHandWhileSnoozed,
   threadWokeAt,
   type ThreadSnoozeShell,
@@ -145,6 +146,48 @@ describe("effectiveSnoozed", () => {
         { now: NOW },
       ),
     ).toBe(true);
+  });
+});
+
+describe("indefinite snooze (fork)", () => {
+  const parked = makeShell({ snoozedAt: SNOOZED_AT });
+
+  it("stays snoozed without a wake time and never wakes by timer", () => {
+    expect(effectiveSnoozed(parked, { now: "2099-01-01T00:00:00.000Z" })).toBe(true);
+    expect(threadWokeAt(parked, { now: "2099-01-01T00:00:00.000Z" })).toBeNull();
+  });
+
+  it("never hides a thread on a malformed marker", () => {
+    expect(effectiveSnoozed(makeShell({ snoozedAt: "garbage" }), { now: NOW })).toBe(false);
+    expect(threadWokeAt(makeShell({ snoozedAt: "garbage" }), { now: NOW })).toBeNull();
+  });
+
+  it("wakes when the thread needs attention", () => {
+    const blocked = makeShell({ snoozedAt: SNOOZED_AT, pending: "approval" });
+    expect(effectiveSnoozed(blocked, { now: NOW })).toBe(false);
+    const failed = makeShell({ snoozedAt: SNOOZED_AT, sessionStatus: "error" });
+    expect(effectiveSnoozed(failed, { now: NOW })).toBe(false);
+  });
+
+  it("wakes on any ended run after the snooze, where timed snoozes need completion", () => {
+    const completedAt = "2026-04-10T11:30:00.000Z";
+    const interrupted = (snoozedUntil: string | null): ThreadSnoozeShell => {
+      const shell = makeShell({
+        snoozedUntil,
+        snoozedAt: SNOOZED_AT,
+        turnCompletedAt: completedAt,
+      });
+      return { ...shell, latestTurn: { ...shell.latestTurn!, state: "interrupted" } };
+    };
+    expect(effectiveSnoozed(interrupted(null), { now: NOW })).toBe(false);
+    expect(threadWokeAt(interrupted(null), { now: NOW })).toBe(completedAt);
+    expect(effectiveSnoozed(interrupted(FUTURE_WAKE), { now: NOW })).toBe(true);
+  });
+
+  it("sorts after every timed snooze", () => {
+    expect(snoozeWakeSortMs({ snoozedUntil: null })).toBeGreaterThan(
+      snoozeWakeSortMs({ snoozedUntil: "2099-01-01T00:00:00.000Z" }),
+    );
   });
 });
 

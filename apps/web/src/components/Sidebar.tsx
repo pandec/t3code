@@ -29,6 +29,8 @@ import { CSS } from "@dnd-kit/utilities";
 import {
   canSnooze,
   effectiveSnoozed,
+  INDEFINITE_SNOOZE_LABEL,
+  snoozeWakeSortMs,
   threadWokeAt,
 } from "@t3tools/client-runtime/state/thread-settled";
 import {
@@ -204,7 +206,6 @@ import {
   buildBulkUnpinContextMenuItem,
   deleteSelectedThreadEntries,
   formatWorkingDurationLabel,
-  firstValidTimestampMs,
   hasUnseenCompletion,
   isSidebarNestedLinkClick,
   isSidebarProjectScopeIsolated,
@@ -598,13 +599,17 @@ function SnoozeMenuButton(props: {
   onOpenChange: (open: boolean) => void;
   onSnooze: (preset: Pick<SnoozePreset, "snoozedUntil">) => void;
   timestampFormat: TimestampFormat;
+  untilWokenSupported: boolean;
 }) {
-  const { open, onOpenChange, onSnooze, timestampFormat } = props;
+  const { open, onOpenChange, onSnooze, timestampFormat, untilWokenSupported } = props;
   // Presets resolve at open time so "In 1 hour" is relative to the click,
   // not to when the row mounted.
   const presets = useMemo(
-    () => (open ? resolveSnoozePresets(new Date(), timestampFormat) : []),
-    [open, timestampFormat],
+    () =>
+      open
+        ? resolveSnoozePresets(new Date(), timestampFormat, { untilWoken: untilWokenSupported })
+        : [],
+    [open, timestampFormat, untilWokenSupported],
   );
   return (
     <Menu open={open} onOpenChange={onOpenChange}>
@@ -1194,6 +1199,8 @@ const SidebarThreadRow = memo(function SidebarThreadRow(props: {
   settlementSupported: boolean;
   // Same contract for thread.snooze/unsnooze.
   snoozeSupported: boolean;
+  // Fork: server accepts a null wake time (indefinite "Until I wake it").
+  snoozeUntilWokenSupported: boolean;
   // Renders the pin glyph. Pinned cards keep the full settle/snooze quick
   // actions: settling clears the pin server-side, and snoozing hides the
   // card until wake with the pin intact underneath. The glyph is also the
@@ -2267,6 +2274,7 @@ const SidebarThreadRow = memo(function SidebarThreadRow(props: {
                           onOpenChange={setSnoozeMenuOpen}
                           onSnooze={handleSnoozePreset}
                           timestampFormat={props.timestampFormat}
+                          untilWokenSupported={props.snoozeUntilWokenSupported}
                         />
                       ) : null}
                       {props.settlementSupported ? (
@@ -3177,10 +3185,9 @@ export default function Sidebar() {
       // Newest work first, by the same clock as the inbox.
       workingThreads: sortInboxThreadsByReturn(working),
       // Soonest wake first: "what comes back next" is the shelf's question.
+      // snoozeWakeSortMs parks indefinite snoozes (no wake time) last.
       snoozedThreads: snoozed.toSorted(
-        (left, right) =>
-          firstValidTimestampMs(left.snoozedUntil ?? null) -
-          firstValidTimestampMs(right.snoozedUntil ?? null),
+        (left, right) => snoozeWakeSortMs(left) - snoozeWakeSortMs(right),
       ),
       settledThreads: sortSettledThreads(settled),
       snoozeNow: preciseNow,
@@ -3948,14 +3955,16 @@ export default function Sidebar() {
       if (
         canonicalSection === optimisticDrop.section &&
         thread.pinnedAt == null &&
-        (!optimisticDrop.clearsSnooze || thread.snoozedUntil == null)
+        (!optimisticDrop.clearsSnooze || (thread.snoozedUntil == null && thread.snoozedAt == null))
       ) {
         setOptimisticDrop(null);
       }
       return;
     }
     if (canonicalSection !== optimisticDrop.section) return;
-    if (optimisticDrop.clearsSnooze && thread.snoozedUntil != null) return;
+    if (optimisticDrop.clearsSnooze && (thread.snoozedUntil != null || thread.snoozedAt != null)) {
+      return;
+    }
     const destinationKeys = optimisticDrop.section === "pinned" ? pinnedKeys : activeKeys;
     const canonicalDestination = destinationKeys.flatMap((key) => {
       const canonical = canonicalByKey.get(key);
@@ -4560,7 +4569,15 @@ export default function Sidebar() {
       const unpinMenuItem = buildBulkUnpinContextMenuItem({
         pinnedCount: pinnedSelectedThreads.length,
       });
-      const snoozePresets = resolveSnoozePresets(new Date(), timestampFormat);
+      // The indefinite preset needs every selected environment to support
+      // it; a mixed selection would half-apply.
+      const snoozePresets = resolveSnoozePresets(new Date(), timestampFormat, {
+        untilWoken: selectedThreads.every(
+          (thread) =>
+            serverConfigs.get(thread.environmentId)?.environment.capabilities
+              .threadSnoozeIndefinite === true,
+        ),
+      });
       const clicked = await settlePromise(() =>
         api.contextMenu.show(
           [
@@ -4794,7 +4811,11 @@ export default function Sidebar() {
         const isSnoozed = snoozedThreadKeysRef.current.has(threadKey);
         const isPinned = thread.pinnedAt != null;
         // Presets resolve at menu-open time (same as the popover).
-        const snoozePresets = resolveSnoozePresets(new Date(), timestampFormat);
+        const snoozePresets = resolveSnoozePresets(new Date(), timestampFormat, {
+          untilWoken:
+            serverConfigs.get(thread.environmentId)?.environment.capabilities
+              .threadSnoozeIndefinite === true,
+        });
         const threadProjectGroup =
           projectGroupsRef.current.find((project) =>
             project.memberProjectRefs.some(
@@ -5634,6 +5655,10 @@ export default function Sidebar() {
                               serverConfigs.get(thread.environmentId)?.environment.capabilities
                                 .threadSnooze === true
                             }
+                            snoozeUntilWokenSupported={
+                              serverConfigs.get(thread.environmentId)?.environment.capabilities
+                                .threadSnoozeIndefinite === true
+                            }
                             pinningSupported={
                               serverConfigs.get(thread.environmentId)?.environment.capabilities
                                 .threadPinning === true
@@ -5649,10 +5674,12 @@ export default function Sidebar() {
                               dragState?.activeKey === threadKey && dragTargetSection === "pinned"
                             }
                             snoozeWakeLabelText={
-                              section === "snoozed" && thread.snoozedUntil != null
-                                ? snoozeWakeLabel(thread.snoozedUntil, {
-                                    now: new Date().toISOString(),
-                                  })
+                              section === "snoozed"
+                                ? thread.snoozedUntil != null
+                                  ? snoozeWakeLabel(thread.snoozedUntil, {
+                                      now: new Date().toISOString(),
+                                    })
+                                  : INDEFINITE_SNOOZE_LABEL
                                 : null
                             }
                             // All sections: a woken thread can classify straight

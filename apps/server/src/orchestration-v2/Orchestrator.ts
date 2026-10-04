@@ -77,6 +77,7 @@ import { isUndeliveredMailboxSteer } from "./NotificationMailbox.ts";
 import { EventSinkV2 } from "./EventSink.ts";
 import type { OrchestrationEffectRequestV2, PendingOrchestrationEffectV2 } from "./EffectOutbox.ts";
 import { IdAllocatorV2 } from "./IdAllocator.ts";
+import { indefiniteSnoozeWokeByRun, isIndefinitelySnoozed } from "./IndefiniteSnooze.ts";
 import {
   ThreadCommandExecutor,
   layer as threadCommandExecutorLayer,
@@ -2493,14 +2494,21 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
       }
     }
     let snoozedUntil: DateTime.Utc | null = null;
+    // Fork: whether an existing indefinite snooze still holds, so a repeated
+    // indefinite snooze re-emits as a no-op instead of stamping fresh.
+    let indefiniteSnoozeHolds = false;
     if (command.type === "thread.snooze") {
       const projection = yield* loadProjectionForCommand(command, ["runs", "runtimeRequests"], {
         turnItemTypes: [],
       });
-      const parsedSnoozedUntil = DateTime.make(command.snoozedUntil);
+      // Fork: a null wake time is the indefinite snooze and has no deadline
+      // to validate.
+      const parsedSnoozedUntil =
+        command.snoozedUntil === null ? Option.some(null) : DateTime.make(command.snoozedUntil);
       if (
         Option.isNone(parsedSnoozedUntil) ||
-        DateTime.toEpochMillis(parsedSnoozedUntil.value) <= DateTime.toEpochMillis(now)
+        (parsedSnoozedUntil.value !== null &&
+          DateTime.toEpochMillis(parsedSnoozedUntil.value) <= DateTime.toEpochMillis(now))
       ) {
         return yield* new OrchestratorDispatchError({
           commandId: command.commandId,
@@ -2523,6 +2531,11 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
         });
       }
       snoozedUntil = parsedSnoozedUntil.value;
+      const previousSnoozedAt = thread.snoozedAt ?? null;
+      indefiniteSnoozeHolds =
+        thread.snoozedUntil == null &&
+        previousSnoozedAt !== null &&
+        !indefiniteSnoozeWokeByRun(projection.runs, previousSnoozedAt);
     }
     let markUnreadVisitedAt: DateTime.Utc | null = null;
     if (command.type === "thread.mark-unread") {
@@ -2547,10 +2560,17 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
           // Settling is "I'm done with this": it clears a pin the same way it
           // parks the thread (mirrors the v1 decider's settle/pin exclusion).
           const wasPinned = thread.pinnedAt != null;
+          // Fork: an indefinite snooze has no timer to fall back on, so
+          // settling clears it; un-settling must not resurrect it.
+          const clearsIndefiniteSnooze = isIndefinitelySnoozed(thread);
           const alreadySettled =
-            thread.settledOverride === "settled" && thread.settledAt !== null && !wasPinned;
+            thread.settledOverride === "settled" &&
+            thread.settledAt !== null &&
+            !wasPinned &&
+            !clearsIndefiniteSnooze;
           return {
             ...thread,
+            ...(clearsIndefiniteSnooze ? { snoozedAt: null } : {}),
             settledOverride: "settled",
             settledAt: alreadySettled ? thread.settledAt : (command.settledAt ?? now),
             unsettledAt: null,
@@ -2575,7 +2595,12 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
             thread.snoozedUntil != null &&
             snoozedUntil !== null &&
             DateTime.toEpochMillis(thread.snoozedUntil) === DateTime.toEpochMillis(snoozedUntil);
-          const existingSnoozedAt = sameWakeTime ? (thread.snoozedAt ?? null) : null;
+          // Fork: repeating an indefinite snooze that still holds is a
+          // duplicate too. One that already woke (a run ended after it)
+          // stamps fresh so the wake does not outrank the new snooze.
+          const sameIndefinite = snoozedUntil === null && indefiniteSnoozeHolds;
+          const existingSnoozedAt =
+            sameWakeTime || sameIndefinite ? (thread.snoozedAt ?? null) : null;
           return {
             ...thread,
             snoozedUntil,
@@ -2585,7 +2610,8 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
           };
         }
         case "thread.unsnooze": {
-          const alreadyAwake = thread.snoozedUntil == null;
+          // Fork: an indefinite snooze is marked by snoozedAt alone.
+          const alreadyAwake = thread.snoozedUntil == null && thread.snoozedAt == null;
           return {
             ...thread,
             snoozedUntil: null,
@@ -2606,7 +2632,10 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
           // silently outranking them — an explicit settle is un-settled and a
           // snooze's return ticket is spent (the thread is on top NOW).
           const alreadyPinned = thread.pinnedAt != null;
-          const promotes = thread.settledOverride === "settled" || thread.snoozedUntil != null;
+          const promotes =
+            thread.settledOverride === "settled" ||
+            thread.snoozedUntil != null ||
+            thread.snoozedAt != null;
           return {
             ...thread,
             pinnedAt: alreadyPinned ? thread.pinnedAt : now,
@@ -4252,7 +4281,8 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
         });
         projection = yield* getProjectionWithPendingEvents(command.threadId, events);
       }
-      if (projection.thread.snoozedUntil != null) {
+      // Fork: snoozedAt alone marks an indefinite snooze; a message wakes it too.
+      if (projection.thread.snoozedUntil != null || projection.thread.snoozedAt != null) {
         const now = yield* DateTime.now;
         const thread: OrchestrationV2AppThread = {
           ...projection.thread,
@@ -9073,6 +9103,14 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
             commandId: command.commandId,
             commandType: command.type,
             cause: `Thread ${command.threadId} changed before automatic settlement.`,
+          });
+        }
+        // Fork: an indefinite snooze only wakes by hand, never by settlement.
+        if (isIndefinitelySnoozed(thread)) {
+          return yield* new OrchestratorDispatchError({
+            commandId: command.commandId,
+            commandType: command.type,
+            cause: `Thread ${command.threadId} is indefinitely snoozed.`,
           });
         }
         yield* dispatchThreadMutation(

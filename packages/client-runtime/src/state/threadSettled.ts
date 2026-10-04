@@ -93,6 +93,36 @@ export interface ThreadSnoozeShell extends QueuedThreadShell {
 }
 
 /**
+ * Fork: an indefinite snooze ("until I wake it") carries no wake time, so
+ * snoozedAt alone marks it. Both fields clear together on wake.
+ */
+function isIndefiniteSnooze(shell: Pick<ThreadSnoozeShell, "snoozedUntil" | "snoozedAt">): boolean {
+  return (
+    shell.snoozedUntil == null &&
+    shell.snoozedAt != null &&
+    !Number.isNaN(Date.parse(shell.snoozedAt))
+  );
+}
+
+/**
+ * The latest run's end time when it ended after the snooze was set, else
+ * null. Timed snoozes wake on completion only; an indefinite snooze also
+ * wakes when the run was interrupted or failed, since the agent stopped
+ * either way and nothing else would bring the thread back.
+ */
+function runEndedAfterSnooze(shell: ThreadSnoozeShell): string | null {
+  const latestRun = shell.latestRun ?? shell.latestTurn ?? null;
+  if (shell.snoozedAt == null || latestRun == null || latestRun.completedAt == null) return null;
+  const endedAs = (outcome: string) => latestRun.state === outcome || latestRun.status === outcome;
+  const ended =
+    endedAs("completed") ||
+    (isIndefiniteSnooze(shell) && (endedAs("interrupted") || endedAs("failed")));
+  return ended && Date.parse(latestRun.completedAt) > Date.parse(shell.snoozedAt)
+    ? latestRun.completedAt
+    : null;
+}
+
+/**
  * A snoozed thread "raises its hand" when something happens that outranks
  * the user's snooze: the agent is blocked on them (approval / user input),
  * the session failed, or a run completed after the snooze was set — the
@@ -103,7 +133,6 @@ export interface ThreadSnoozeShell extends QueuedThreadShell {
 export function threadRaisedHandWhileSnoozed(shell: ThreadSnoozeShell): boolean {
   if (shell.hasPendingApprovals || shell.hasPendingUserInput) return true;
   const runtime = shell.runtime ?? shell.session ?? null;
-  const latestRun = shell.latestRun ?? shell.latestTurn ?? null;
   // Only a FRESH failure raises the hand: a thread snoozed while already
   // failed stays snoozed — that snooze was the user saying "I saw it, not
   // now". session.updatedAt stamps the status edge, so an error newer than
@@ -115,15 +144,7 @@ export function threadRaisedHandWhileSnoozed(shell: ThreadSnoozeShell): boolean 
   ) {
     return true;
   }
-  if (
-    shell.snoozedAt != null &&
-    (latestRun?.state === "completed" || latestRun?.status === "completed") &&
-    latestRun.completedAt != null &&
-    Date.parse(latestRun.completedAt) > Date.parse(shell.snoozedAt)
-  ) {
-    return true;
-  }
-  return false;
+  return runEndedAfterSnooze(shell) !== null;
 }
 
 /**
@@ -163,6 +184,9 @@ export function effectiveSnoozed(
   shell: ThreadSnoozeShell,
   options: { readonly now: string },
 ): boolean {
+  // Fork: an indefinite snooze holds until the user wakes it or the thread
+  // raises its hand. Malformed markers never hide a thread.
+  if (isIndefiniteSnooze(shell)) return !threadRaisedHandWhileSnoozed(shell);
   if (shell.snoozedUntil == null) return false;
   const wakeAtMs = Date.parse(shell.snoozedUntil);
   // Malformed data never hides a thread.
@@ -186,28 +210,24 @@ export function threadWokeAt(
   shell: ThreadSnoozeShell,
   options: { readonly now: string },
 ): string | null {
-  if (shell.snoozedUntil == null) return null;
-  const wakeAtMs = Date.parse(shell.snoozedUntil);
-  if (Number.isNaN(wakeAtMs)) return null;
+  // Fork: an indefinite snooze has no timer, so it only wakes by raising
+  // its hand.
+  const indefinite = isIndefiniteSnooze(shell);
+  if (shell.snoozedUntil == null && !indefinite) return null;
+  const wakeAtMs = shell.snoozedUntil == null ? Number.NaN : Date.parse(shell.snoozedUntil);
+  if (!indefinite && Number.isNaN(wakeAtMs)) return null;
   // An early hand-raise wake stays authoritative even after the scheduled
   // wake time passes: reporting snoozedUntil then would resurface a Woke
   // indicator the user already cleared by visiting (snoozedUntil is newer
   // than that visit's lastVisitedAt).
   if (threadRaisedHandWhileSnoozed(shell)) {
-    const latestRun = shell.latestRun ?? shell.latestTurn ?? null;
     const runtime = shell.runtime ?? shell.session ?? null;
-    if (
-      shell.snoozedAt != null &&
-      (latestRun?.state === "completed" || latestRun?.status === "completed") &&
-      latestRun.completedAt != null &&
-      Date.parse(latestRun.completedAt) > Date.parse(shell.snoozedAt)
-    ) {
-      return latestRun.completedAt;
-    }
-    return runtime?.updatedAt ?? shell.snoozedAt ?? null;
+    return runEndedAfterSnooze(shell) ?? runtime?.updatedAt ?? shell.snoozedAt ?? null;
   }
-  // No raised hand: woke iff the timer elapsed (still-snoozed → null).
-  return wakeAtMs <= Date.parse(options.now) ? shell.snoozedUntil : null;
+  // No raised hand: an indefinite snooze is still snoozed; a timed one woke
+  // iff the timer elapsed (still-snoozed → null).
+  if (indefinite) return null;
+  return wakeAtMs <= Date.parse(options.now) ? (shell.snoozedUntil ?? null) : null;
 }
 
 const HOUR_MS = 60 * 60 * 1_000;
@@ -301,6 +321,19 @@ export function resolveSnoozePresets(now: Date): ReadonlyArray<SnoozePreset> {
 
   return presets;
 }
+
+/**
+ * Fork: snoozed-shelf sort key. Timed wakes ascend; indefinite snoozes (no
+ * wake time) come back last by definition. Shared by web and mobile.
+ */
+export function snoozeWakeSortMs(thread: { readonly snoozedUntil?: string | null }): number {
+  if (thread.snoozedUntil == null) return Number.MAX_SAFE_INTEGER;
+  const wakeMs = Date.parse(thread.snoozedUntil);
+  return Number.isNaN(wakeMs) ? 0 : wakeMs;
+}
+
+/** Fork: snoozed-row label where a timed row shows its wake countdown. */
+export const INDEFINITE_SNOOZE_LABEL = "parked";
 
 /**
  * Compact "wakes in" label for snoozed rows: "2h", "18h", "3d". Minutes

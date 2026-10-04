@@ -3512,6 +3512,139 @@ it.layer(SharedApplicationDataPlaneTestLayer)("snooze projection", (it) => {
   );
 });
 
+// Fork: indefinite snooze ("until I wake it") is a null wake time with snoozedAt set.
+it.layer(SharedApplicationDataPlaneTestLayer)("indefinite snooze", (it) => {
+  const setup = (prefix: string) =>
+    Effect.gen(function* () {
+      const projects = yield* ProjectService.ProjectService;
+      const orchestrator = yield* Orchestrator.OrchestratorV2;
+      const projectId = ProjectId.make(`${prefix}-project`);
+      const threadId = ThreadId.make(`${prefix}-thread`);
+      yield* projects.create({
+        commandId: CommandId.make(`${prefix}-project-create`),
+        projectId,
+        title: "Indefinite snooze",
+        workspaceRoot: `/tmp/${prefix}-project`,
+      });
+      yield* orchestrator.dispatch({
+        type: "thread.create",
+        createdBy: "user",
+        creationSource: "web",
+        commandId: CommandId.make(`${prefix}-thread-create`),
+        threadId,
+        projectId,
+        title: "Indefinitely snoozed thread",
+        modelSelection,
+        runtimeMode: "full-access",
+        interactionMode: "default",
+        branch: null,
+        worktreePath: null,
+      });
+      yield* orchestrator.dispatch({
+        type: "thread.snooze",
+        commandId: CommandId.make(`${prefix}-snooze`),
+        threadId,
+        snoozedUntil: null,
+      });
+      return { orchestrator, threadId };
+    });
+
+  it.effect("snoozes without a wake time and dedupes a repeat while it holds", () =>
+    Effect.gen(function* () {
+      const { orchestrator, threadId } = yield* setup("indefinite-snooze-dedupe");
+      const first = (yield* orchestrator.getThreadProjection(threadId)).thread;
+      assert.isNull(first.snoozedUntil ?? null);
+      assert.isNotNull(first.snoozedAt ?? null);
+
+      yield* TestClock.adjust("1 minute");
+      yield* orchestrator.dispatch({
+        type: "thread.snooze",
+        commandId: CommandId.make("indefinite-snooze-dedupe-again"),
+        threadId,
+        snoozedUntil: null,
+      });
+      const repeated = (yield* orchestrator.getShellSnapshot()).threads.find(
+        (candidate) => candidate.id === threadId,
+      );
+      assert.isDefined(repeated);
+      assert.deepEqual(repeated.snoozedAt, first.snoozedAt);
+      assert.deepEqual(repeated.updatedAt, first.updatedAt);
+
+      yield* orchestrator.dispatch({
+        type: "thread.unsnooze",
+        commandId: CommandId.make("indefinite-snooze-dedupe-wake"),
+        threadId,
+        reason: "user",
+      });
+      const awake = (yield* orchestrator.getThreadProjection(threadId)).thread;
+      assert.isNull(awake.snoozedAt ?? null);
+      assert.isNull(awake.snoozedUntil ?? null);
+      assert.isAbove(
+        DateTime.toEpochMillis(awake.updatedAt),
+        DateTime.toEpochMillis(first.updatedAt),
+      );
+    }),
+  );
+
+  it.effect("rejects automatic settlement and clears on manual settle", () =>
+    Effect.gen(function* () {
+      const { orchestrator, threadId } = yield* setup("indefinite-snooze-settle");
+      const snoozed = (yield* orchestrator.getThreadProjection(threadId)).thread;
+      const autoSettle = yield* orchestrator
+        .dispatch({
+          type: "thread.auto-settle",
+          commandId: CommandId.make("indefinite-snooze-settle-auto"),
+          threadId,
+          snapshotAt: snoozed.updatedAt,
+        })
+        .pipe(Effect.exit);
+      assert.equal(autoSettle._tag, "Failure");
+      assert.isNull((yield* orchestrator.getThreadProjection(threadId)).thread.settledOverride);
+
+      yield* orchestrator.dispatch({
+        type: "thread.settle",
+        commandId: CommandId.make("indefinite-snooze-settle-manual"),
+        threadId,
+      });
+      const settled = (yield* orchestrator.getThreadProjection(threadId)).thread;
+      assert.equal(settled.settledOverride, "settled");
+      assert.isNull(settled.snoozedAt ?? null);
+    }),
+  );
+
+  it.effect("wakes when pinned or messaged", () =>
+    Effect.gen(function* () {
+      const pinned = yield* setup("indefinite-snooze-pin");
+      yield* pinned.orchestrator.dispatch({
+        type: "thread.pin",
+        commandId: CommandId.make("indefinite-snooze-pin-pin"),
+        threadId: pinned.threadId,
+      });
+      assert.isNull(
+        (yield* pinned.orchestrator.getThreadProjection(pinned.threadId)).thread.snoozedAt ?? null,
+      );
+
+      const messaged = yield* setup("indefinite-snooze-message");
+      yield* messaged.orchestrator.dispatch({
+        type: "message.dispatch",
+        createdBy: "user",
+        creationSource: "web",
+        commandId: CommandId.make("indefinite-snooze-message-send"),
+        threadId: messaged.threadId,
+        messageId: MessageId.make("indefinite-snooze-message-send"),
+        text: "Wake this thread.",
+        attachments: [],
+        modelSelection,
+        dispatchMode: { type: "start_immediately" },
+      });
+      assert.isNull(
+        (yield* messaged.orchestrator.getThreadProjection(messaged.threadId)).thread.snoozedAt ??
+          null,
+      );
+    }),
+  );
+});
+
 it.layer(SharedApplicationDataPlaneTestLayer)("visited projection", (it) => {
   it.effect("carries the visited watermark through the V2 shell projection", () =>
     Effect.gen(function* () {

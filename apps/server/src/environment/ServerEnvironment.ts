@@ -243,6 +243,7 @@ export const make = Effect.gen(function* () {
       threadRestartContinuation: true,
       projectSettingsOverrides: true,
       threadSnooze: true,
+      threadSnoozeIndefinite: true,
       projectAccentColors: true,
       projectAccentColorsFill: true,
       savedPrompts: true,

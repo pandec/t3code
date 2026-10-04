@@ -543,6 +543,32 @@ describe("buildThreadListV2Items", () => {
     expect(layout.snoozedCount).toBe(1);
   });
 
+  it("sorts indefinite snoozes after timed ones on the snoozed shelf (fork)", () => {
+    const layout = buildThreadListV2Items({
+      threads: [
+        makeThread({
+          id: ThreadId.make("parked"),
+          title: "Parked",
+          snoozedUntil: null,
+          snoozedAt: "2026-06-01T11:00:00.000Z",
+        }),
+        makeThread({
+          id: ThreadId.make("timed"),
+          title: "Timed",
+          snoozedUntil: "2026-06-03T09:00:00.000Z",
+          snoozedAt: "2026-06-01T12:00:00.000Z",
+        }),
+      ],
+      environmentId: null,
+      searchQuery: "",
+      now: NOW,
+      snoozedShelfExpanded: true,
+    });
+
+    expect(layout.snoozedCount).toBe(2);
+    expect(layout.items.map((item) => item.thread.id)).toEqual(["timed", "parked"]);
+  });
+
   it("places settled pinned threads in the settled shelf", () => {
     const layout = buildThreadListV2Items({
       threads: [
