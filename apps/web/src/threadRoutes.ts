@@ -1,4 +1,5 @@
 import { scopeThreadRef } from "@t3tools/client-runtime/environment";
+import type { EnvironmentThreadStatus } from "@t3tools/client-runtime/state/threads";
 import type { EnvironmentId, ScopedThreadRef, ThreadId } from "@t3tools/contracts";
 import type { DraftId } from "./composerDraftStore";
 
@@ -25,6 +26,8 @@ export function resolveThreadRouteRenderState(input: {
   serverThreadExists: boolean;
   serverThreadDeleted: boolean;
   draftThreadExists: boolean;
+  /** Fork: what the detail says when the active shell lacks the thread. */
+  archivedThread?: ThreadRouteRenderState;
 }): ThreadRouteRenderState {
   if (!input.bootstrapComplete) {
     return "loading";
@@ -35,7 +38,23 @@ export function resolveThreadRouteRenderState(input: {
   if (input.serverThreadDeleted) {
     return "missing";
   }
-  return input.serverThreadExists ? "ready" : "missing";
+  return input.serverThreadExists ? "ready" : (input.archivedThread ?? "missing");
+}
+
+/**
+ * Fork: a thread the active shell does not hold may be archived. Its detail
+ * opens it while archived; a detail that is not archived (yet) waits for the
+ * shell that is about to carry it, and only a deleted or unknown thread
+ * (the snapshot loader's definitive 404) is missing.
+ */
+export function resolveArchivedThreadRouteState(input: {
+  readonly detail: { readonly archived: boolean; readonly deleted: boolean } | null;
+  readonly status: EnvironmentThreadStatus;
+}): ThreadRouteRenderState {
+  if (input.status === "deleted" || input.detail?.deleted === true) {
+    return "missing";
+  }
+  return input.detail?.archived === true ? "ready" : "loading";
 }
 
 export function buildThreadRouteParams(ref: ScopedThreadRef): {

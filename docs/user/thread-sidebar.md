@@ -195,6 +195,19 @@ keeps the worktree.
 
 Sending a message to an archived thread unarchives it, then delivers the message.
 
+## Find recently archived threads
+
+The thread list ends with an **Archived** shelf of your most recently archived threads, folded
+to a count by default. Expand it to open one: the thread shows that it is archived, and sending
+a message or choosing **Unarchive** restores it. Unarchive a row directly, or delete it from its
+context menu (long-press on mobile). **View all archived threads** opens the full archive in
+Settings.
+
+On web and desktop the shelf follows the sidebar's environment and project filters. On mobile it
+hides while a search or filter is active. Set how many threads it shows with **Recent archived
+threads** in **Settings → Extras** on web and desktop, or **Settings → Thread behavior** on
+mobile.
+
 ## Link a pull request
 
 The server finds the PR for each unsettled thread's saved branch, even when your

@@ -1665,6 +1665,16 @@ const WsOrchestrationV2GetArchivedShellSnapshotRpc = Rpc.make(
   },
 );
 
+// Fork: bounded recent-archive window for the sidebar/home archive shelves.
+const WsOrchestrationV2GetRecentArchivedThreadsRpc = Rpc.make(
+  ORCHESTRATION_V2_WS_METHODS.getRecentArchivedThreads,
+  {
+    payload: OrchestrationV2RpcSchemas.getRecentArchivedThreads.input,
+    success: OrchestrationV2RpcSchemas.getRecentArchivedThreads.output,
+    error: Schema.Union([OrchestrationV2GetShellSnapshotError, EnvironmentAuthorizationError]),
+  },
+);
+
 const WsOrchestrationV2GetThreadProjectionRpc = Rpc.make(
   ORCHESTRATION_V2_WS_METHODS.getThreadProjection,
   {
@@ -1999,6 +2009,7 @@ export const WsRpcGroup = RpcGroup.make(
   WsOrchestrationV2GetFullThreadDiffRpc,
   WsOrchestrationV2SearchThreadsRpc,
   WsOrchestrationV2GetArchivedShellSnapshotRpc,
+  WsOrchestrationV2GetRecentArchivedThreadsRpc,
   WsOrchestrationV2GetThreadProjectionRpc,
   WsOrchestrationV2LaunchThreadRpc,
   WsOrchestrationV2SubscribeArchivedShellRpc,

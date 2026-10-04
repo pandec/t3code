@@ -248,6 +248,12 @@ export function HomeRouteScreen() {
               params: { screen: "Settings" },
             })
           }
+          onOpenArchivedThreads={() =>
+            navigation.navigate("SettingsSheet", {
+              screen: "SettingsContent",
+              params: { screen: "SettingsArchive" },
+            })
+          }
           onSearchQueryChange={setSearchQuery}
           onSelectThread={(thread) => {
             // Compact drills into the thread and leaves the search field

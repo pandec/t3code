@@ -14,11 +14,18 @@ import {
   useComposerDraftStore,
 } from "../composerDraftStore";
 import { useSidebarPendingFileDropStore } from "../sidebarPendingFileDropStore";
-import { useEnvironmentThreadRefs, useThreadRefs, useThreadShell } from "../state/entities";
+import {
+  useEnvironmentThreadRefs,
+  useThreadProjection,
+  useThreadRefs,
+  useThreadShell,
+  useThreadStatus,
+} from "../state/entities";
 import { useEnvironmentQuery } from "../state/query";
 import { environmentShell } from "../state/shell";
 import {
   buildThreadRouteParams,
+  resolveArchivedThreadRouteState,
   resolveThreadRouteRenderState,
   type ThreadRouteTarget,
 } from "../threadRoutes";
@@ -98,11 +105,33 @@ export function ThreadRouteView({ target }: { target: ThreadRouteTarget }) {
   const environmentHasDraftThreads = useComposerDraftStore((store) =>
     serverThreadRef ? store.hasDraftThreadsInEnvironment(serverThreadRef.environmentId) : false,
   );
+  // Fork: an archived thread has no active shell; its detail decides whether
+  // the route opens it (archive shelf, thread links) or the thread is gone.
+  const archivedLookupRef =
+    target.kind === "server" && bootstrapComplete && serverThreadShell === null && !draftThread
+      ? target.threadRef
+      : null;
+  const archivedLookupThread = useThreadProjection(archivedLookupRef)?.projection.thread ?? null;
+  const archivedLookupStatus = useThreadStatus(archivedLookupRef);
   const renderState = resolveThreadRouteRenderState({
     bootstrapComplete,
     serverThreadExists: serverThreadShell !== null,
     serverThreadDeleted: serverThreadShell?.deletedAt != null,
     draftThreadExists: draftThread !== null,
+    ...(archivedLookupRef === null
+      ? {}
+      : {
+          archivedThread: resolveArchivedThreadRouteState({
+            detail:
+              archivedLookupThread === null
+                ? null
+                : {
+                    archived: archivedLookupThread.archivedAt !== null,
+                    deleted: archivedLookupThread.deletedAt !== null,
+                  },
+            status: archivedLookupStatus,
+          }),
+        }),
   });
   const serverThreadStarted = threadHasStarted(serverThreadShell);
   const environmentHasAnyThreads = environmentThreadRefs.length > 0 || environmentHasDraftThreads;
@@ -178,7 +207,10 @@ export function ThreadRouteView({ target }: { target: ThreadRouteTarget }) {
         />
       );
     }
-  } else if (renderState === "ready" || (renderState === "loading" && serverThreadShell !== null)) {
+  } else if (
+    renderState === "ready" ||
+    (renderState === "loading" && (serverThreadShell !== null || archivedLookupThread !== null))
+  ) {
     view = (
       <ChatView
         {...(nextChatViewKey ? { key: nextChatViewKey.key } : {})}

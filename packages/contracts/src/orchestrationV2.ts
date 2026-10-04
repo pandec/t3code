@@ -3005,6 +3005,8 @@ export const ORCHESTRATION_V2_WS_METHODS = {
   subscribeArchivedShell: "orchestration.subscribeArchivedShell",
   subscribeShell: "orchestration.subscribeShell",
   subscribeThread: "orchestration.subscribeThread",
+  /** Fork: bounded recent-archive window for always-mounted archive shelves. */
+  getRecentArchivedThreads: "orchestration.getRecentArchivedThreads",
 } as const;
 
 export const OrchestrationV2ArchivedShellSnapshot = Schema.Struct({
@@ -3033,6 +3035,28 @@ export const OrchestrationV2ArchivedShellStreamItem = Schema.Union([
 ]);
 export type OrchestrationV2ArchivedShellStreamItem =
   typeof OrchestrationV2ArchivedShellStreamItem.Type;
+
+/** Fork: input of the bounded recent-archive query. */
+export const OrchestrationV2GetRecentArchivedThreadsInput = Schema.Struct({
+  limit: Schema.Int.check(Schema.isBetween({ minimum: 1, maximum: 50 })),
+  /** Restrict the window and its total to these projects. Absent means every
+      project; an empty list matches nothing. */
+  projectIds: Schema.optional(Schema.Array(ProjectId)),
+});
+export type OrchestrationV2GetRecentArchivedThreadsInput =
+  typeof OrchestrationV2GetRecentArchivedThreadsInput.Type;
+
+/**
+ * Fork: the newest archived root threads (subagents excluded), newest first,
+ * with the unclipped total the window was cut from.
+ */
+export const OrchestrationV2RecentArchivedThreads = Schema.Struct({
+  schemaVersion: PositiveInt,
+  snapshotSequence: NonNegativeInt,
+  threads: Schema.Array(OrchestrationV2ThreadShell),
+  totalArchivedCount: NonNegativeInt,
+});
+export type OrchestrationV2RecentArchivedThreads = typeof OrchestrationV2RecentArchivedThreads.Type;
 
 export const OrchestrationV2ThreadLaunchWorkspaceStrategy = Schema.Union([
   Schema.Struct({
@@ -3380,6 +3404,10 @@ export const OrchestrationV2RpcSchemas = {
   subscribeThread: {
     input: OrchestrationV2SubscribeThreadInput,
     output: OrchestrationV2ThreadStreamItem,
+  },
+  getRecentArchivedThreads: {
+    input: OrchestrationV2GetRecentArchivedThreadsInput,
+    output: OrchestrationV2RecentArchivedThreads,
   },
 } as const;
 

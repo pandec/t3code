@@ -422,6 +422,13 @@ function AdaptiveWorkspaceLayoutContent(
     });
   }, [navigation]);
 
+  const handleOpenArchivedThreads = useCallback(() => {
+    navigation.navigate("SettingsSheet", {
+      screen: "SettingsContent",
+      params: { screen: "SettingsArchive" },
+    });
+  }, [navigation]);
+
   const handleStartNewTask = useCallback(() => {
     navigation.navigate("NewTaskSheet", { screen: "NewTask" });
   }, [navigation]);
@@ -598,6 +605,7 @@ function AdaptiveWorkspaceLayoutContent(
                       selectedThreadKey={selectedThreadKey}
                       onOpenSettings={handleOpenSettings}
                       onOpenEnvironmentSettings={handleOpenEnvironmentSettings}
+                      onOpenArchivedThreads={handleOpenArchivedThreads}
                       onNewThreadInProject={handleNewThreadInProject}
                       onNewThreadOnBranch={handleNewThreadOnBranch}
                       onSelectThread={handleSelectThread}

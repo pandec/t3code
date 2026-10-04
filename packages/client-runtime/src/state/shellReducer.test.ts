@@ -2,7 +2,11 @@ import { ProjectId, ThreadId } from "@t3tools/contracts";
 import { describe, expect, it } from "vite-plus/test";
 
 import { v2Project, v2ShellSnapshot, v2ThreadShell } from "./orchestrationV2TestFixtures.ts";
-import { applyShellStreamEvent, mergeShellSnapshotProjects } from "./shellReducer.ts";
+import {
+  applyShellStreamEvent,
+  mergeShellSnapshotProjects,
+  shellEventInvalidatesArchivedThreads,
+} from "./shellReducer.ts";
 
 const repositoryIdentity = {
   canonicalKey: "github.com/example/repo",
@@ -446,5 +450,44 @@ describe("applyShellStreamEvent", () => {
     } as never);
 
     expect(next).toBe(v2ShellSnapshot);
+  });
+});
+
+describe("shellEventInvalidatesArchivedThreads", () => {
+  it("flags archive membership changes but not ordinary updates", () => {
+    const other = { ...v2ThreadShell, id: ThreadId.make("unarchived") };
+    // Archive, delete, or a change to an already archived thread.
+    expect(
+      shellEventInvalidatesArchivedThreads(v2ShellSnapshot, {
+        kind: "thread.removed",
+        sequence: 1,
+        location: "active",
+        threadId: v2ThreadShell.id,
+      }),
+    ).toBe(true);
+    // A thread the active shell did not hold: an unarchive.
+    expect(
+      shellEventInvalidatesArchivedThreads(v2ShellSnapshot, {
+        kind: "thread.updated",
+        sequence: 1,
+        location: "active",
+        thread: other,
+      }),
+    ).toBe(true);
+    expect(
+      shellEventInvalidatesArchivedThreads(v2ShellSnapshot, {
+        kind: "thread.updated",
+        sequence: 1,
+        location: "active",
+        thread: { ...v2ThreadShell, title: "Renamed" },
+      }),
+    ).toBe(false);
+    expect(
+      shellEventInvalidatesArchivedThreads(v2ShellSnapshot, {
+        kind: "project.updated",
+        sequence: 1,
+        project: v2Project,
+      }),
+    ).toBe(false);
   });
 });

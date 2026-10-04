@@ -99,6 +99,7 @@ import {
   deriveLatestThreadRun,
   deriveThreadRuntime,
   presentPendingBackgroundWork,
+  presentThreadShellFromProjection,
 } from "@t3tools/client-runtime/state/thread-execution";
 import { threadSupportsProviderHandoff } from "@t3tools/client-runtime/state/thread-workflows";
 import {
@@ -295,6 +296,7 @@ import { isEditableFocused } from "../lib/editableFocus";
 import ThreadTerminalDrawer from "./ThreadTerminalDrawer";
 import {
   AlarmClockIcon,
+  ArchiveIcon,
   CheckCircle2Icon,
   PaperclipIcon,
   ChevronDownIcon,
@@ -1531,7 +1533,7 @@ export default function ChatView(props: ChatViewProps) {
   } = props;
   const draftId = routeKind === "draft" ? props.draftId : null;
   const handleNewThread = useNewThreadHandler();
-  const { settleThread, pinThread, confirmAndUnpinThread } = useThreadActions();
+  const { settleThread, pinThread, confirmAndUnpinThread, unarchiveThread } = useThreadActions();
   const routeThreadRef = useMemo(
     () => scopeThreadRef(environmentId, threadId),
     [environmentId, threadId],
@@ -1665,13 +1667,26 @@ export default function ChatView(props: ChatViewProps) {
         ? store.getDraftSession(draftId)
         : null,
   );
-  const serverThread = useThreadShell(routeThreadRef);
+  const activeServerThread = useThreadShell(routeThreadRef);
   const routeThreadDetailRef = resolveThreadDetailRef(routeThreadRef, {
-    shellExists: serverThread !== null,
+    shellExists: activeServerThread !== null,
     waitForShell: draftThread !== null,
   });
   const serverThreadProjection = useThreadProjection(routeThreadDetailRef);
   const serverProjection = serverThreadProjection?.projection ?? null;
+  // Fork: an archived thread (opened from the archive shelf or a thread link)
+  // has no active shell, so its detail stands in for one.
+  const archivedServerThread = useMemo(
+    () =>
+      activeServerThread === null &&
+      serverProjection !== null &&
+      serverProjection.thread.archivedAt !== null &&
+      serverProjection.thread.deletedAt === null
+        ? presentThreadShellFromProjection(routeThreadRef.environmentId, serverProjection)
+        : null,
+    [activeServerThread, routeThreadRef.environmentId, serverProjection],
+  );
+  const serverThread = activeServerThread ?? archivedServerThread;
   const reportedModelSelection = serverProjection
     ? deriveReportedModelSelection(serverProjection)
     : null;
@@ -7106,8 +7121,53 @@ export default function ChatView(props: ChatViewProps) {
       onDismiss: acknowledgeActiveThreadWoke,
     };
   }, [acknowledgeActiveThreadWoke, activeThread?.id, activeThreadWokeVisible]);
+  const activeThreadArchived = isServerThread && activeThread?.archivedAt != null;
+  const [unarchivingThreadKey, setUnarchivingThreadKey] = useState<string | null>(null);
+  const isUnarchiving = unarchivingThreadKey !== null && unarchivingThreadKey === activeThreadKey;
+  const handleUnarchiveActiveThread = useCallback(async () => {
+    if (!activeThreadRef) return;
+    const threadKey = scopedThreadKey(activeThreadRef);
+    setUnarchivingThreadKey(threadKey);
+    try {
+      const result = await unarchiveThread(activeThreadRef);
+      if (result._tag === "Failure" && !isAtomCommandInterrupted(result)) {
+        const error = squashAtomCommandFailure(result);
+        toastManager.add(
+          stackedThreadToast({
+            type: "error",
+            title: "Failed to unarchive thread",
+            description: error instanceof Error ? error.message : "An error occurred.",
+          }),
+        );
+      }
+    } finally {
+      setUnarchivingThreadKey((current) => (current === threadKey ? null : current));
+    }
+  }, [activeThreadRef, unarchiveThread]);
+  // Fork: archived threads open from the sidebar's archive shelf and thread links.
+  const archivedThreadBannerItem = useMemo<ComposerBannerStackItem | null>(() => {
+    if (!activeThreadArchived) return null;
+    return {
+      id: `thread-archived:${activeThreadKey ?? "unknown"}`,
+      variant: "info",
+      icon: <ArchiveIcon />,
+      title: "This thread is archived",
+      description: "Send a message to unarchive",
+      actions: (
+        <Button
+          size="xs"
+          variant="ghost"
+          disabled={isUnarchiving}
+          onClick={() => void handleUnarchiveActiveThread()}
+        >
+          {isUnarchiving ? "Unarchiving..." : "Unarchive"}
+        </Button>
+      ),
+    };
+  }, [activeThreadArchived, activeThreadKey, handleUnarchiveActiveThread, isUnarchiving]);
   const parkedThreadBannerItem = useMemo<ComposerBannerStackItem | null>(() => {
-    if (!activeThreadSnoozed && !activeThreadSettled) {
+    // Fork: the archived banner already covers an archived thread.
+    if (activeThreadArchived || (!activeThreadSnoozed && !activeThreadSettled)) {
       return null;
     }
     const isSnoozed = activeThreadSnoozed;
@@ -7138,6 +7198,7 @@ export default function ChatView(props: ChatViewProps) {
     };
   }, [
     activeThread?.id,
+    activeThreadArchived,
     activeThreadSettled,
     activeThreadSnoozed,
     handleUnsnoozeActiveThread,
@@ -7298,6 +7359,7 @@ export default function ChatView(props: ChatViewProps) {
       resumeCompactionBannerItem === null ? [] : [resumeCompactionBannerItem];
     const wokeThreadItems = wokeThreadBannerItem === null ? [] : [wokeThreadBannerItem];
     const parkedThreadItems = parkedThreadBannerItem === null ? [] : [parkedThreadBannerItem];
+    const archivedThreadItems = archivedThreadBannerItem === null ? [] : [archivedThreadBannerItem];
     // The user asked for this one, so it leads the notice tier instead of trailing it.
     const usageLimitsItems = usageLimitsBanner === null ? [] : [usageLimitsBanner];
     const projectCloneItems = projectCloneBannerItem === null ? [] : [projectCloneBannerItem];
@@ -7312,6 +7374,7 @@ export default function ChatView(props: ChatViewProps) {
         ...resumeCompactionItems,
         ...wokeThreadItems,
         ...parkedThreadItems,
+        ...archivedThreadItems,
       ];
     }
     return [
@@ -7362,9 +7425,11 @@ export default function ChatView(props: ChatViewProps) {
         },
       },
       ...parkedThreadItems,
+      ...archivedThreadItems,
     ];
   }, [
     activeBranchMismatchKey,
+    archivedThreadBannerItem,
     activeThreadShell,
     serverRuntime?.usageLimitResetAt,
     feedbackBannerItems,

@@ -48,6 +48,7 @@ import { layer as runtimeRequestServiceLayer } from "./RuntimeRequestService.ts"
 import { layerWithLegacyImporter as threadManagementServiceLayer } from "./ThreadManagementService.ts";
 import { layer as threadLaunchServiceLayer } from "./ThreadLaunchService.ts";
 import { layer as threadLifecycleServiceLayer } from "./ThreadLifecycleService.ts";
+import * as RecentArchivedThreads from "./RecentArchivedThreads.ts";
 import * as ThreadArchiveScheduler from "./ThreadArchiveScheduler.ts";
 import * as ArchiveWorktreeRemoval from "./ArchiveWorktreeRemoval.ts";
 import * as ThreadWorktreeSwitchScheduler from "./ThreadWorktreeSwitchScheduler.ts";
@@ -343,6 +344,8 @@ export const OrchestrationV2ProductionLayerLive = Layer.mergeAll(
     Layer.provideMerge(ThreadWorktreeSwitchScheduler.layer),
     Layer.provide(Layer.mergeAll(threadManagementProvided, ProjectStore.layer)),
   ),
+  // Fork: bounded recent-archive window for the archive shelves.
+  RecentArchivedThreads.layer.pipe(Layer.provide(projectionStoreLayer)),
 ).pipe(
   Layer.provide(Scheduler.layer),
   Layer.provideMerge(OrchestrationEventInfrastructureLayerLive),
