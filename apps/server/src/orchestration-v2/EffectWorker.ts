@@ -28,6 +28,8 @@ import * as ThreadTitleRegenerationService from "./ThreadTitleRegenerationServic
 import * as ThreadManagementService from "./ThreadManagementService.ts";
 import * as ServerSettings from "../serverSettings.ts";
 import { continueRestartedRun } from "./RestartContinuation.ts";
+// Fork: a settled restart continuation may release a deferred archive it held.
+import { recheckAfterRestartContinuation } from "./ThreadArchiveScheduler.ts";
 
 export class OrchestrationEffectExecutionError extends Schema.TaggedError<OrchestrationEffectExecutionError>()(
   "OrchestrationEffectExecutionError",
@@ -667,6 +669,7 @@ export const layerWithOptions = (
                   cause: "The worker no longer owns the effect lease.",
                 });
               }
+              yield* recheckAfterRestartContinuation(effect);
               return true;
             }).pipe(Effect.onError((cause) => recoverPostSuccessSettlement(effect, cause)));
           }
@@ -706,6 +709,7 @@ export const layerWithOptions = (
               cause: "The worker no longer owns the effect lease.",
             });
           }
+          yield* recheckAfterRestartContinuation(effect);
           return true;
         }).pipe(
           Effect.mapError((cause) =>

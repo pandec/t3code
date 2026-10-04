@@ -78,6 +78,7 @@ import { isRestartNoteSource } from "./RestartBackgroundNote.ts";
 import { isUndeliveredMailboxSteer } from "./NotificationMailbox.ts";
 import { EventSinkV2 } from "./EventSink.ts";
 import type { OrchestrationEffectRequestV2, PendingOrchestrationEffectV2 } from "./EffectOutbox.ts";
+import { EffectOutboxV2 } from "./EffectOutbox.ts";
 import { IdAllocatorV2 } from "./IdAllocator.ts";
 import { indefiniteSnoozeWoke, isIndefinitelySnoozed } from "./IndefiniteSnooze.ts";
 import {
@@ -141,6 +142,7 @@ import {
   latestThreadState,
   pendingArchiveRequest,
   planArchiveSchedule,
+  restartContinuationPending,
   stopCancelsArchive,
   wakeRetargetedArchiveRequest,
   worktreeRemovalRequest,
@@ -779,6 +781,8 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
   const idAllocator = yield* IdAllocatorV2;
   const projects = yield* ProjectStore.ProjectStoreV2;
   const projectionStore = yield* ProjectionStoreV2;
+  // Fork: a deferred archive waits while a restart continuation is unsettled.
+  const effectOutbox = yield* EffectOutboxV2;
   const nextTurnItemOrdinal = (
     projection: Pick<OrchestrationV2ThreadProjection, "thread"> &
       Partial<Pick<OrchestrationV2ThreadProjection, "turnItems">>,
@@ -9695,6 +9699,9 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
         runs,
         checkpoints,
         pendingBackgroundTasks,
+        restartContinuationPending: yield* restartContinuationPending(effectOutbox, runs).pipe(
+          mapDispatchError(command),
+        ),
       });
       if (decision.type === "wait") return yield* reject(decision.detail);
       if (decision.type === "cancel") {
@@ -10948,6 +10955,7 @@ export const layer: Layer.Layer<
   | CommandPolicyV2
   | CommandReceiptStoreV2
   | ContextHandoffServiceV2
+  | EffectOutboxV2
   | EventSinkV2
   | IdAllocatorV2
   | ProjectStore.ProjectStoreV2

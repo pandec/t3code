@@ -5,7 +5,10 @@
  * Requests are thread state in the event log, so `start` re-checks every
  * pending request after a restart. A request with `removeWorktree` stays
  * pending after the archive until the guarded removal (ArchiveWorktreeRemoval)
- * records its outcome with `thread.archive.complete`.
+ * records its outcome with `thread.archive.complete`. A restart continuation
+ * holds a request until it settles; the effect worker then re-checks the
+ * thread (`recheckAfterRestartContinuation`), since a declined continuation
+ * emits no event.
  */
 import {
   CommandId,
@@ -21,6 +24,7 @@ import * as Crypto from "effect/Crypto";
 import type * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
+import * as Option from "effect/Option";
 import * as Schema from "effect/Schema";
 import type * as Scope from "effect/Scope";
 import * as Stream from "effect/Stream";
@@ -32,8 +36,10 @@ import {
   evaluateDeferredArchive,
   isThreadPayloadEvent,
   pendingArchiveRequest,
+  restartContinuationPending,
   worktreeRemovalRequest,
 } from "./DeferredArchive.ts";
+import * as EffectOutbox from "./EffectOutbox.ts";
 import * as ThreadManagement from "./ThreadManagementService.ts";
 
 export interface ThreadArchiveStatus {
@@ -78,6 +84,8 @@ export class ThreadArchiveScheduler extends Context.Service<
       readonly threadId: ThreadId;
       readonly commandId?: CommandId;
     }) => Effect.Effect<ThreadArchiveStatus, ThreadArchiveSchedulerError>;
+    /** Re-checks one thread's pending request. */
+    readonly recheck: (threadId: ThreadId) => Effect.Effect<void>;
     readonly start: () => Effect.Effect<void, never, Scope.Scope>;
     /** Re-checks every pending request (startup) and waits for the work to finish. */
     readonly reconcilePending: Effect.Effect<void>;
@@ -117,6 +125,7 @@ function errorDetail(cause: unknown): string {
 export const make = Effect.gen(function* () {
   const threads = yield* ThreadManagement.ThreadManagementService;
   const worktreeRemoval = yield* ArchiveWorktreeRemoval.ArchiveWorktreeRemoval;
+  const outbox = yield* EffectOutbox.EffectOutboxV2;
   const sql = yield* SqlClient.SqlClient;
   const crypto = yield* Crypto.Crypto;
   const newCommandId = (prefix: string, threadId: ThreadId) =>
@@ -190,6 +199,7 @@ export const make = Effect.gen(function* () {
       runs,
       checkpoints,
       pendingBackgroundTasks: shell?.pendingBackgroundTasks ?? [],
+      restartContinuationPending: yield* restartContinuationPending(outbox, runs),
     });
     // The orchestrator records a cancellation or failure.
     if (decision.type === "wait") return;
@@ -273,6 +283,7 @@ export const make = Effect.gen(function* () {
         return yield* status(input.threadId, "schedule");
       }),
     status: (threadId) => status(threadId, "status"),
+    recheck: enqueue,
     cancel: (input) =>
       Effect.gen(function* () {
         const current = yield* status(input.threadId, "cancel");
@@ -300,6 +311,24 @@ export const make = Effect.gen(function* () {
 });
 
 export const layer = Layer.effect(ThreadArchiveScheduler, make);
+
+/**
+ * Fork: after a restart continuation settles (EffectWorker), re-checks the
+ * deferred archive it may have held. A no-op where the scheduler is absent.
+ */
+export const recheckAfterRestartContinuation = (
+  effect: Pick<EffectOutbox.OrchestrationEffectV2, "threadId" | "request">,
+) =>
+  effect.request.type === "provider-runtime.continue"
+    ? Effect.serviceOption(ThreadArchiveScheduler).pipe(
+        Effect.flatMap(
+          Option.match({
+            onNone: () => Effect.void,
+            onSome: (scheduler) => scheduler.recheck(effect.threadId),
+          }),
+        ),
+      )
+    : Effect.void;
 
 /** Starts the deferred archive worker with the server. */
 export const workerLive = Layer.effectDiscard(

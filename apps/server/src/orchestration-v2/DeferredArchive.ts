@@ -5,13 +5,16 @@
  * completion, then archives through the ordinary `thread.archive` path. A wake
  * (delegated task result, background notification, restart continuation)
  * carries on that work, so the request moves to the run the wake starts. New
- * work, a failed or stopped run, or a workspace change cancels it; a failed
- * final checkpoint of any awaited run records an error and leaves the thread
- * unarchived. A delegated result reserved for a wake that has not dispatched
- * yet holds the archive like background work. A request with
+ * work, a stop or failure anywhere in the awaited chain, or a workspace change
+ * cancels it; a failed final checkpoint of any awaited run records an error
+ * and leaves the thread unarchived. A delegated result reserved for a wake
+ * that has not dispatched yet, or whose wake finished but has not been
+ * reconciled yet, holds the archive like background work, and so does a
+ * restart continuation still waiting to resume the agent. A request with
  * `removeWorktree` stays pending after the archive until the scheduler's
- * guarded removal records its outcome. Pure: the orchestrator and
- * `ThreadArchiveScheduler` share these rules.
+ * guarded removal records its outcome. Pure apart from the outbox read in
+ * `restartContinuationPending`: the orchestrator and `ThreadArchiveScheduler`
+ * share these rules.
  */
 import type {
   CommandId,
@@ -27,13 +30,24 @@ import type {
 } from "@t3tools/contracts";
 import { backgroundWorkHoldsCompletion } from "@t3tools/shared/orchestrationV2PendingBackgroundWork";
 import * as DateTime from "effect/DateTime";
+import * as Effect from "effect/Effect";
+import * as Option from "effect/Option";
+
+import type { EffectOutboxV2Shape } from "./EffectOutbox.ts";
 
 export type ArchiveRun = Pick<
   OrchestrationV2Run,
   "id" | "ordinal" | "status" | "requestedAt" | "checkpointId"
 > &
   Partial<
-    Pick<OrchestrationV2Run, "startedAt" | "completedAt" | "userMessageId" | "delegatedCompletion">
+    Pick<
+      OrchestrationV2Run,
+      | "startedAt"
+      | "completedAt"
+      | "userMessageId"
+      | "delegatedCompletion"
+      | "restartContinuationOfRunId"
+    >
   >;
 export type ArchiveCheckpoint = Pick<OrchestrationV2Checkpoint, "id" | "status">;
 
@@ -51,8 +65,10 @@ export function finalCheckpointFailed(
 }
 
 /**
- * A delegated result is reserved for a wake whose run does not exist yet: the
- * continuation worker will dispatch it, so archiving now would drop it.
+ * A delegated result is reserved for a wake whose run does not exist yet (the
+ * continuation worker will dispatch it), or whose run already finished before
+ * the terminal-run listener rewrote the delivery (it may reserve a follow-up
+ * for results that arrived meanwhile). Archiving now would drop it.
  */
 function undeliveredCompletionPending(runs: ReadonlyArray<ArchiveRun>): boolean {
   return runs.some((run) => {
@@ -62,9 +78,35 @@ function undeliveredCompletionPending(runs: ReadonlyArray<ArchiveRun>): boolean 
       cohort?.disposition === "open" &&
       delivery != null &&
       delivery.taskIds.length > 0 &&
-      !runs.some((candidate) => candidate.userMessageId === delivery.messageId)
+      !runs.some(
+        (candidate) =>
+          candidate.userMessageId === delivery.messageId &&
+          (candidate.status === "queued" || ACTIVE_RUN_STATUSES.has(candidate.status)),
+      )
     );
   });
+}
+
+/**
+ * Whether restart recovery's continuation of the latest run (the outbox id
+ * `ProviderRuntimeRecoveryService` enqueues) has not settled yet.
+ */
+export function restartContinuationPending(
+  outbox: Pick<EffectOutboxV2Shape, "get">,
+  runs: ReadonlyArray<Pick<OrchestrationV2Run, "id" | "ordinal">>,
+) {
+  const latest = runs.reduce<Pick<OrchestrationV2Run, "id" | "ordinal"> | null>(
+    (current, run) => (current === null || run.ordinal > current.ordinal ? run : current),
+    null,
+  );
+  if (latest === null) return Effect.succeed(false);
+  return outbox
+    .get(`effect:restart-continuation:${latest.id}`)
+    .pipe(
+      Effect.map(
+        Option.exists((effect) => effect.status === "pending" || effect.status === "running"),
+      ),
+    );
 }
 
 /** Statuses of a run that is still working toward completion (waiting = capturing its checkpoint). */
@@ -233,11 +275,20 @@ export function evaluateDeferredArchive(input: {
   readonly pendingBackgroundTasks: ReadonlyArray<
     Pick<OrchestrationV2PendingBackgroundTask, "kind">
   >;
+  /**
+   * `restartContinuationPending`: the continuation may yet resume the work and
+   * take the request over.
+   */
+  readonly restartContinuationPending?: boolean;
 }): DeferredArchiveDecision {
   const { request } = input;
   if (input.thread.worktreePath !== request.worktreePath) {
     return { type: "cancel", detail: ARCHIVE_CANCEL_DETAIL.workspace };
   }
+  if (input.restartContinuationPending === true) {
+    return { type: "wait", detail: "A restart continuation is waiting to resume the agent." };
+  }
+  const requestedAtMs = Date.parse(request.requestedAt);
   if (request.runId !== null) {
     const target = input.runs.find((run) => run.id === request.runId);
     if (target === undefined || input.runs.some((run) => run.ordinal > target.ordinal)) {
@@ -245,12 +296,28 @@ export function evaluateDeferredArchive(input: {
     }
     const awaited = awaitedRun(target, input.runs, request);
     if (awaited !== null) {
-      if (STOPPED_RUN_STATUSES.has(awaited.status)) {
-        return { type: "cancel", detail: ARCHIVE_CANCEL_DETAIL.failed };
-      }
       // Every awaited run counts, not only the latest wake: the run the archive
       // was scheduled during, and wakes before the current one.
-      const requestedAtMs = Date.parse(request.requestedAt);
+      const continued = new Set(input.runs.flatMap((run) => run.restartContinuationOfRunId ?? []));
+      const chainStopped = input.runs.some(
+        (run) =>
+          run.ordinal <= target.ordinal &&
+          // stopped after the archive was scheduled; the awaited run itself is checked below
+          run.completedAt != null &&
+          DateTime.toEpochMillis(run.completedAt) > requestedAtMs &&
+          STOPPED_RUN_STATUSES.has(run.status) &&
+          // restart recovery: the continuation carries this run's work on
+          !continued.has(run.id) &&
+          // a wake withdrawn before it started never ran
+          !(
+            run.status === "cancelled" &&
+            run.startedAt == null &&
+            DateTime.toEpochMillis(run.requestedAt) >= requestedAtMs
+          ),
+      );
+      if (chainStopped || STOPPED_RUN_STATUSES.has(awaited.status)) {
+        return { type: "cancel", detail: ARCHIVE_CANCEL_DETAIL.failed };
+      }
       const chainCheckpointFailed = input.runs.some(
         (run) =>
           run.ordinal <= target.ordinal &&
@@ -265,11 +332,8 @@ export function evaluateDeferredArchive(input: {
         return { type: "wait", detail: "The turn has not finished." };
       }
     }
-  } else {
-    const requestedAtMs = Date.parse(request.requestedAt);
-    if (input.runs.some((run) => DateTime.toEpochMillis(run.requestedAt) > requestedAtMs)) {
-      return { type: "cancel", detail: ARCHIVE_CANCEL_DETAIL.newWork };
-    }
+  } else if (input.runs.some((run) => DateTime.toEpochMillis(run.requestedAt) > requestedAtMs)) {
+    return { type: "cancel", detail: ARCHIVE_CANCEL_DETAIL.newWork };
   }
   if (backgroundWorkHoldsCompletion(input.pendingBackgroundTasks)) {
     return { type: "wait", detail: "Background work is still running." };
