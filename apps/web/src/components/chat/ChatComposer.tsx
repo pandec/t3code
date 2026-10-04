@@ -294,7 +294,18 @@ import {
   renderProviderTraitsMenuContent,
   renderProviderTraitsPicker,
 } from "./composerProviderState";
-import { ContextWindowMeter, ContextWindowMeterPlaceholder } from "./ContextWindowMeter";
+import {
+  ContextWindowMeter,
+  ContextWindowMeterPlaceholder,
+  type OpenRouterCreditsDisplay,
+  type ProviderUsageAccountRow,
+} from "./ContextWindowMeter";
+import { useComposerProviderUsage } from "./useComposerProviderUsage";
+import {
+  type ProviderUsageSnapshot,
+  type ProviderUsageWindow,
+  resolveProviderUsageModel,
+} from "@t3tools/client-runtime/state/provider-usage";
 import {
   providerSupportsManualCompaction,
   resolveContextWindowModelDisplayName,
@@ -1122,7 +1133,11 @@ import {
   resolveComposerDispatchMode,
   type ComposerDispatchMode,
 } from "@t3tools/client-runtime/state/composer-dispatch";
-import type { ContextWindowSnapshot } from "../../lib/contextWindow";
+import {
+  type ContextWindowSnapshot,
+  emptyContextWindowSnapshot as createEmptyContextWindowSnapshot,
+  resolveKnownContextWindowMaxTokens,
+} from "../../lib/contextWindow";
 import {
   formatProviderSkillDisplayName,
   getProviderSlashCommandsForSlashMenu,
@@ -1354,6 +1369,18 @@ const ComposerFooterModeControls = memo(function ComposerFooterModeControls(prop
 const ComposerFooterPrimaryActions = memo(function ComposerFooterPrimaryActions(props: {
   compact: boolean;
   activeContextWindow: ContextWindowSnapshot | null;
+  activeProviderUsage: ProviderUsageSnapshot | null;
+  fableUsage: ProviderUsageWindow | null;
+  fableAccountName: string | null;
+  providerUsageAccounts: ReadonlyArray<ProviderUsageAccountRow>;
+  providerUsageRefreshing: boolean;
+  providerUsageUnavailable: boolean;
+  maskProviderUsageEmails: boolean;
+  providerUsageLabel: string | null;
+  openRouterCredits: OpenRouterCreditsDisplay | null;
+  onRefreshOpenRouterCredits: () => void;
+  openRouterCreditsRefreshing: boolean;
+  onRefreshProviderUsage: () => Promise<void>;
   reserveContextWindowMeter: boolean;
   activeThreadModelDisplayName: string | null;
   isPreparingWorktree: boolean;
@@ -1389,9 +1416,25 @@ const ComposerFooterPrimaryActions = memo(function ComposerFooterPrimaryActions(
 }) {
   return (
     <>
-      {props.activeContextWindow ? (
+      {props.activeContextWindow ||
+      props.activeProviderUsage ||
+      props.fableUsage ||
+      props.providerUsageAccounts.length > 0 ||
+      props.openRouterCredits ? (
         <ContextWindowMeter
           usage={props.activeContextWindow}
+          providerUsage={props.activeProviderUsage}
+          fableUsage={props.fableUsage}
+          fableAccountName={props.fableAccountName}
+          providerUsageAccounts={props.providerUsageAccounts}
+          providerUsageRefreshing={props.providerUsageRefreshing}
+          providerUsageUnavailable={props.providerUsageUnavailable}
+          maskProviderUsageEmails={props.maskProviderUsageEmails}
+          providerUsageLabel={props.providerUsageLabel}
+          openRouterCredits={props.openRouterCredits}
+          onRefreshOpenRouterCredits={props.onRefreshOpenRouterCredits}
+          openRouterCreditsRefreshing={props.openRouterCreditsRefreshing}
+          onRefreshProviderUsage={props.onRefreshProviderUsage}
           modelDisplayName={props.activeThreadModelDisplayName}
           onCompact={props.onCompactContext}
           compactDisabled={props.compactDisabled}
@@ -1742,7 +1785,7 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
     activeProjectDefaultModelSelection,
     activeThreadModelSelection,
     reportedModelSelection,
-    activeContextWindow,
+    activeContextWindow: reportedContextWindow,
     compactThreadUnavailable,
     compactDisabled,
     compactDisabledReason,
@@ -2332,7 +2375,10 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
     () => resolveContextWindowModelDisplayName(activeThreadModelSelection, modelOptionsByInstance),
     [activeThreadModelSelection, modelOptionsByInstance],
   );
-  const reserveContextWindowMeter = shouldReserveContextWindowMeter({
+  // While a started thread's detail is still loading, the footer reserves the
+  // meter's space instead of showing a synthesized 0% that would shift once
+  // the real snapshot arrives.
+  const contextWindowDetailPending = shouldReserveContextWindowMeter({
     meterEnabled: settings.contextWindowMeterEnabled,
     detailLoading: props.threadSyncPhase === "loading",
     threadStarted: threadShellHasStarted(props.activeThreadShell),
@@ -2340,6 +2386,38 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
       ? selectedProviderStatus.reportsContextWindow === true
       : null,
   });
+  // Before the provider reports usage, the meter reads empty against the
+  // selected model's known window. Compaction keeps reading the reported
+  // snapshot: a thread that never reported usage has nothing to compact.
+  const fallbackContextWindow = useMemo(() => {
+    if (reportedContextWindow !== null || contextWindowDetailPending) return null;
+    const provider = providerStatuses.find(
+      (entry) => entry.instanceId === selectedModelSelection.instanceId,
+    );
+    const model = provider?.models.find((entry) => entry.slug === selectedModelSelection.model);
+    const maxTokens = resolveKnownContextWindowMaxTokens(model, selectedModelSelection);
+    return maxTokens === null
+      ? null
+      : createEmptyContextWindowSnapshot({
+          maxTokens,
+          compactsAutomatically: provider?.driver === "claudeAgent" || provider?.driver === "codex",
+        });
+  }, [contextWindowDetailPending, providerStatuses, reportedContextWindow, selectedModelSelection]);
+  const activeContextWindow = reportedContextWindow ?? fallbackContextWindow;
+  const providerUsage = useComposerProviderUsage({
+    environmentId,
+    providers: providerStatuses,
+    activeInstanceId: activeThread?.runtime?.providerInstanceId ?? selectedInstanceId,
+    activeModel: resolveProviderUsageModel({
+      liveSessionInstanceId: activeThread?.runtime?.providerInstanceId,
+      persistedModel: activeThreadModelSelection?.model,
+      selectedModel,
+    }),
+    threadId: activeThread?.id,
+    showOpenRouterCredits: settings.showOpenRouterCredits,
+    openRouterCreditsBudgetUsd: settings.openRouterCreditsBudgetUsd,
+  });
+  const providerUsageMeter = providerUsage.meter;
 
   // ------------------------------------------------------------------
   // Composer-local state
@@ -2833,7 +2911,16 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
     (!activePendingProgress ||
       (supportsQuestionAttachments &&
         activePendingProgress.activeQuestion?.allowCustomAnswer !== false));
-  const showComposerMeter = Boolean(settings.contextWindowMeterEnabled && activeContextWindow);
+  // Quota rings stay unconditional; only the context ring follows the legacy
+  // `contextWindowMeterEnabled` setting.
+  const showComposerMeter = Boolean(
+    (settings.contextWindowMeterEnabled && activeContextWindow) ||
+    providerUsageMeter.activeUsage ||
+    providerUsageMeter.fable ||
+    providerUsageMeter.accounts.length > 0 ||
+    providerUsage.openRouterCredits,
+  );
+  const reserveContextWindowMeter = !showComposerMeter && contextWindowDetailPending;
   const restingComposerTrailingControlCount =
     Number(showComposerAttachAction) +
     Number(voiceTranscriptionAvailable) +
@@ -7654,6 +7741,20 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
                     activeContextWindow={
                       settings.contextWindowMeterEnabled ? activeContextWindow : null
                     }
+                    activeProviderUsage={providerUsageMeter.activeUsage}
+                    fableUsage={providerUsageMeter.fable?.window ?? null}
+                    fableAccountName={providerUsageMeter.fable?.accountName ?? null}
+                    providerUsageAccounts={providerUsageMeter.accounts}
+                    providerUsageRefreshing={providerUsage.refreshing}
+                    providerUsageUnavailable={providerUsage.unavailable}
+                    maskProviderUsageEmails={
+                      !providerUsage.settingsHydrated || settings.maskProviderUsageEmails
+                    }
+                    providerUsageLabel={providerUsageMeter.label}
+                    openRouterCredits={providerUsage.openRouterCredits}
+                    onRefreshOpenRouterCredits={providerUsage.refreshOpenRouterCredits}
+                    openRouterCreditsRefreshing={providerUsage.openRouterCreditsRefreshing}
+                    onRefreshProviderUsage={providerUsage.refresh}
                     reserveContextWindowMeter={reserveContextWindowMeter}
                     activeThreadModelDisplayName={activeThreadModelDisplayName}
                     pendingAction={pendingPrimaryAction}
@@ -7697,7 +7798,9 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
                       compactDisabled || noProviderAvailable || isSendBusy || isConnecting
                     }
                     compactDisabledReason={resolvedCompactDisabledReason}
-                    {...(compactCommandAvailable ? { onCompactContext: compactThreadContext } : {})}
+                    {...(compactCommandAvailable && reportedContextWindow !== null
+                      ? { onCompactContext: compactThreadContext }
+                      : {})}
                   />
                 </div>
               </div>

@@ -1,4 +1,9 @@
-import type { ProviderDriverKind, ProviderInstanceUsageSnapshot } from "@t3tools/contracts";
+import type {
+  ProviderDriverKind,
+  ProviderInstanceUsageSnapshot,
+  ServerProviderUsageLimits,
+  ServerProviderUsageWindow,
+} from "@t3tools/contracts";
 import * as DateTime from "effect/DateTime";
 
 /**
@@ -610,6 +615,83 @@ export function deriveProviderUsageSnapshotFromServerSnapshot(
         ? "claude"
         : options.preferredUpstreamProvider,
     )?.usage ?? null
+  );
+}
+
+// ---------------------------------------------------------------------------
+// Direct accounts: upstream's typed `usageLimits`
+//
+// A provider instance signed in to its own subscription publishes typed quota
+// windows on its provider snapshot. They are relabelled with the same taxonomy
+// gateway pools use, so a direct account and a pooled one read identically.
+// ---------------------------------------------------------------------------
+
+function usageLimitWindowPresentation(
+  driver: string | null | undefined,
+  window: ServerProviderUsageWindow,
+): Pick<ProviderUsageWindow, "group" | "label" | "shortLabel"> {
+  if (driver === "claude" || driver === "claudeAgent") {
+    return { group: claudeWindowGroup(window.id), ...claudeWindowLabels(window.id) };
+  }
+  if (driver === "codex") {
+    const durationMins = window.windowDurationMins ?? null;
+    const { label, shortLabel } = codexWindowLabels(durationMins);
+    return {
+      group: durationMins === null ? "other" : durationMins < 24 * 60 ? "session" : "weekly",
+      label,
+      shortLabel,
+    };
+  }
+  return {
+    group: window.kind === "session" || window.kind === "weekly" ? window.kind : "other",
+    label: window.label,
+    shortLabel: window.label,
+  };
+}
+
+/**
+ * Normalize a direct account's typed `usageLimits` for the meter. Returns null
+ * for drivers without a meter label, accounts that report no windows, and
+ * reports older than a day; windows whose reset already passed are dropped.
+ */
+export function deriveProviderUsageSnapshotFromUsageLimits(
+  limits: ServerProviderUsageLimits | null | undefined,
+  options: DeriveProviderUsageOptions & { readonly provider: string | null | undefined },
+): ProviderUsageSnapshot | null {
+  const providerLabel = providerUsageLabelForDriver(options.provider);
+  if (providerLabel === null || !limits) return null;
+  const checkedAtMs = Date.parse(limits.checkedAt);
+  const nowMs = options.now;
+  if (
+    nowMs !== undefined &&
+    Number.isFinite(checkedAtMs) &&
+    nowMs - checkedAtMs >= PROVIDER_USAGE_MAX_AGE_MS
+  ) {
+    return null;
+  }
+  const windows: ProviderUsageWindow[] = [];
+  for (const window of limits.windows) {
+    const resetsAtMs = window.resetsAt === undefined ? Number.NaN : Date.parse(window.resetsAt);
+    if (nowMs !== undefined && Number.isFinite(resetsAtMs) && resetsAtMs <= nowMs) continue;
+    const usedPercent = clampPercent(window.usedPercent);
+    windows.push({
+      id: window.id,
+      ...usageLimitWindowPresentation(options.provider, window),
+      usedPercent,
+      resetsAt: Number.isFinite(resetsAtMs) ? Math.floor(resetsAtMs / 1_000) : null,
+      status: statusForPercent(usedPercent),
+    });
+  }
+  if (windows.length === 0) return null;
+  return applyProviderUsageThresholds(
+    {
+      providerLabel,
+      providerInstanceId: asString(options.providerInstanceId),
+      windows,
+      status: "ok",
+      updatedAt: limits.checkedAt,
+    },
+    options.thresholds,
   );
 }
 

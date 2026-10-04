@@ -65,6 +65,10 @@ import {
   NewTaskEnvironmentPickerRouteScreen,
 } from "./features/threads/NewTaskContextPickerScreens";
 import {
+  ProviderUsageRouteProvider,
+  ProviderUsageRouteScreen,
+} from "./features/threads/ProviderUsageSheet";
+import {
   ExistingThreadSettingsRouteProvider,
   ExistingThreadSettingsRouteScreen,
   NewTaskThreadSettingsRouteScreen,
@@ -550,6 +554,7 @@ const WORKSPACE_OVERLAY_ROUTES = new Set([
   "ThreadReviewComment",
   "ThreadDevicePreview",
   "ThreadSettingsSheet",
+  "ProviderUsageSheet",
 ]);
 
 /**
@@ -617,13 +622,15 @@ function RootStackLayout(props: {
       <ThreadOutboxDrainWorker />
       <ShowcaseCaptureCoordinator pathname={pathname} />
       <ExistingThreadSettingsRouteProvider>
-        <AdaptiveWorkspaceLayout
-          pathname={workspaceLocation.pathname}
-          workspaceRouteKey={workspaceLocation.routeKey}
-        >
-          {props.children}
-          <HardwareKeyboardCommandOverlay />
-        </AdaptiveWorkspaceLayout>
+        <ProviderUsageRouteProvider>
+          <AdaptiveWorkspaceLayout
+            pathname={workspaceLocation.pathname}
+            workspaceRouteKey={workspaceLocation.routeKey}
+          >
+            {props.children}
+            <HardwareKeyboardCommandOverlay />
+          </AdaptiveWorkspaceLayout>
+        </ProviderUsageRouteProvider>
       </ExistingThreadSettingsRouteProvider>
       <ThreadArrangementHost />
     </HardwareKeyboardCommandProvider>
@@ -759,6 +766,22 @@ const RootStackConfig = createNativeStackNavigator({
           : {
               ...FORM_SHEET_PRESENTATION_OPTIONS,
               sheetAllowedDetents: [1],
+              sheetGrabberVisible: true,
+            }),
+      },
+    }),
+    // No `linking:` path, like ThreadSettingsSheet: the active ThreadComposer
+    // presents its quota session into ProviderUsageRouteProvider first.
+    ProviderUsageSheet: createNativeStackScreen({
+      screen: ProviderUsageRouteScreen,
+      options: {
+        gestureEnabled: true,
+        headerShown: false,
+        ...(Platform.OS === "android"
+          ? { presentation: "card" as const }
+          : {
+              ...FORM_SHEET_PRESENTATION_OPTIONS,
+              sheetAllowedDetents: [0.55, 0.92],
               sheetGrabberVisible: true,
             }),
       },
