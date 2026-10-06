@@ -257,8 +257,9 @@ export function resolveSidebarDropTarget(
   if (headerTarget) {
     const headerIndex = moved.findIndex((item) => sidebarListItemId(item) === overId);
     const above = moved[headerIndex - 1];
-    const firstBelow = moved
-      .slice(headerIndex + 1)
+    // The dragged row counts: dropping back on itself keeps its first slot.
+    const firstBelow = items
+      .slice(overIndex + 1)
       .find((item) => item.kind === "thread" || !item.marker.endsWith("placeholder"));
     const closesGroupAbove =
       overIndex < activeIndex &&

@@ -48,6 +48,14 @@ it("reaches the last slot of a group from below through the next header", () => 
   expect(
     resolveSidebarDropTarget(expanded, "env:active2", sidebarMarkerId("active-header")),
   ).toMatchObject({ customGroupId: "research", activeOrder: ["env:research", "env:active2"] });
+  // Also when the dragged row is the group's only visible row.
+  expect(
+    resolveSidebarDropTarget(
+      expanded.filter((item) => item.kind !== "thread" || item.key !== "env:active1"),
+      "env:active2",
+      sidebarMarkerId("active-header"),
+    ),
+  ).toMatchObject({ customGroupId: "research", activeOrder: ["env:research", "env:active2"] });
   // From above, it still opens Active's first slot.
   expect(
     resolveSidebarDropTarget(expanded, "env:research", sidebarMarkerId("active-header")),
