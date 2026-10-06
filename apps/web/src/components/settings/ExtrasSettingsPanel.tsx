@@ -788,6 +788,41 @@ function SidebarExtrasSection() {
   );
 }
 
+function PanelsExtrasSection() {
+  const settings = usePrimarySettings();
+  const updateSettings = useUpdatePrimarySettings();
+
+  return (
+    <SettingsSection {...searchableSetting("extras-panels")}>
+      <SettingsRow
+        {...searchableSetting("panel-toggle-buttons")}
+        description="Show the terminal drawer and right panel toggles in the thread header, including both panes of a split view. Their keyboard shortcuts work either way."
+        resetAction={
+          settings.showPanelToggleButtons !== DEFAULT_UNIFIED_SETTINGS.showPanelToggleButtons ? (
+            <SettingResetButton
+              label="panel toggle buttons"
+              onClick={() =>
+                updateSettings({
+                  showPanelToggleButtons: DEFAULT_UNIFIED_SETTINGS.showPanelToggleButtons,
+                })
+              }
+            />
+          ) : null
+        }
+        control={
+          <Switch
+            checked={settings.showPanelToggleButtons}
+            onCheckedChange={(checked) =>
+              updateSettings({ showPanelToggleButtons: Boolean(checked) })
+            }
+            aria-label="Show panel toggle buttons"
+          />
+        }
+      />
+    </SettingsSection>
+  );
+}
+
 function ComposerExtrasSection() {
   const settings = usePrimarySettings();
   const updateSettings = useUpdatePrimarySettings();
@@ -937,6 +972,7 @@ export function ExtrasSettingsPanel() {
       <ProviderUsageExtrasSection />
       <LinearExtrasSection />
       <SidebarExtrasSection />
+      <PanelsExtrasSection />
       <ComposerExtrasSection />
       <AccentTintsExtrasSection />
       <VoiceSettingsSection />

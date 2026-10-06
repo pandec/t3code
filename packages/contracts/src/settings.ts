@@ -722,6 +722,9 @@ export const ClientSettingsSchema = Schema.Struct({
   /** Sidebar toolbar button for the thread groups dialog; the command palette
    * always offers the same dialog. */
   sidebarThreadGroupsButton: Schema.Boolean.pipe(Schema.withDecodingDefault(Effect.succeed(false))),
+  /** Terminal and right panel toggle buttons in the thread header; their
+   * keybindings work either way. */
+  showPanelToggleButtons: Schema.Boolean.pipe(Schema.withDecodingDefault(Effect.succeed(true))),
   /**
    * How long a steer rests in the outbox before delivery. 0 sends immediately;
    * mobile is unaffected (it keeps the model's built-in default).
@@ -2233,6 +2236,7 @@ export const ClientSettingsPatch = Schema.Struct({
   sidebarV2CompactCards: Schema.optionalKey(Schema.Boolean),
   sidebarV2NewThreadButtonInProjectRow: Schema.optionalKey(Schema.Boolean),
   sidebarThreadGroupsButton: Schema.optionalKey(Schema.Boolean),
+  showPanelToggleButtons: Schema.optionalKey(Schema.Boolean),
   steerGraceWindowMs: Schema.optionalKey(SteerGraceWindowMs),
   timestampFormat: Schema.optionalKey(TimestampFormat),
   snapShotEnabled: Schema.optionalKey(Schema.Boolean),

@@ -930,6 +930,17 @@ export const SETTINGS_SEARCH_ITEMS = [
     searchTerms: ["sidebar toolbar show hide manage custom groups"],
   },
   {
+    id: "extras-panels",
+    title: "Panels",
+    to: "/settings/extras",
+  },
+  {
+    id: "panel-toggle-buttons",
+    title: "Panel toggle buttons",
+    to: "/settings/extras",
+    searchTerms: ["terminal drawer right panel header show hide toggle split view"],
+  },
+  {
     id: "extras-composer",
     title: "Composer",
     to: "/settings/extras",

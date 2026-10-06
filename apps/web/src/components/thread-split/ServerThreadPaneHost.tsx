@@ -84,7 +84,6 @@ export function ServerThreadPaneHost({ threadRef }: { threadRef: ScopedThreadRef
           environmentId={threadRef.environmentId}
           threadId={threadRef.threadId}
           routeKind="server"
-          reserveTitleBarControlInset={false}
         />
       ) : null}
     </div>
