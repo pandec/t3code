@@ -229,7 +229,12 @@ const makeTildeProviderFixtures = Effect.fn(
       "    },",
       '  }) + "\\n");',
       "});",
-      "setInterval(() => {}, 1_000);",
+      // Exit when stdin closes so the fake never outlives its parent.
+      "const keepAlive = setInterval(() => {}, 1_000);",
+      'lines.on("close", () => {',
+      "  clearInterval(keepAlive);",
+      "  process.exit(0);",
+      "});",
       "",
     ].join("\n"),
   );
