@@ -123,6 +123,16 @@ describe("closeActiveThreadPane", () => {
     expect(closeActiveThreadPane(navigate)).toBe(true);
     expect(navigate).toHaveBeenCalledWith(REF_A);
   });
+
+  it("swallows the shortcut during an in-flight pane swap", () => {
+    const navigate = vi.fn();
+    useThreadSplitStore.getState().openSecondaryThread(REF_A);
+    mountSplit();
+    useThreadSplitStore.getState().beginPaneSwap(REF_B);
+    expect(closeActiveThreadPane(navigate)).toBe(true);
+    expect(useThreadSplitStore.getState().secondaryRef).toEqual(REF_B);
+    expect(navigate).not.toHaveBeenCalled();
+  });
 });
 
 describe("focusOtherThreadPane", () => {

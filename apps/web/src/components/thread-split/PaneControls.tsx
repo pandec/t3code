@@ -38,6 +38,8 @@ export function OpenSplitViewControl() {
           <Toggle
             className="shrink-0 [-webkit-app-region:no-drag]"
             pressed={false}
+            // A one-shot action styled as a toggle: no pressed state to announce.
+            aria-pressed={undefined}
             onPressedChange={() => openCommandPalette({ open: "open-in-split" })}
             aria-label="Open split view"
             variant="ghost"

@@ -7880,7 +7880,10 @@ export default function ChatView(props: ChatViewProps) {
           );
           if (closedPane) {
             event.preventDefault();
-            event.stopPropagation();
+            // Immediate: closing the secondary activates the primary pane
+            // synchronously, and its window listener must not also act on
+            // this keypress (e.g. close a terminal it just refocused).
+            event.stopImmediatePropagation();
           }
           return;
         }
@@ -11243,6 +11246,7 @@ export default function ChatView(props: ChatViewProps) {
       className={cn(
         // Keep one viewport anchor inside the header's no-drag region. The
         // header can shrink behind the right panel without moving the controls.
+        // The primary split pane anchors to its own header instead.
         "pointer-events-none z-50 mr-px flex h-[var(--workspace-topbar-height)] items-center gap-1 [-webkit-app-region:no-drag]",
         paneTouchesWindowRightEdge
           ? "fixed top-[var(--workspace-controls-top)] right-[var(--workspace-controls-right)]"
