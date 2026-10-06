@@ -33,6 +33,41 @@ it("keeps reordering inside the destination group and supports returning to Acti
     resolveSidebarDropTarget(items, "env:research", sidebarMarkerId("active-header")),
   ).toMatchObject({ customGroupId: null, activeOrder: ["env:research", "env:active"] });
 });
+it("reaches the last slot of a group from below through the next header", () => {
+  const expanded: SidebarListItem[] = [
+    { kind: "marker", marker: "pinned-divider" },
+    { kind: "marker", marker: "custom-group:research" },
+    { kind: "thread", key: "env:research", section: "active", customGroupId: "research" },
+    { kind: "marker", marker: "active-header" },
+    { kind: "marker", marker: "active-placeholder" },
+    { kind: "thread", key: "env:active1", section: "active" },
+    { kind: "thread", key: "env:active2", section: "active" },
+    { kind: "marker", marker: "settled-header" },
+  ];
+  // From below, the Active header closes the group above it.
+  expect(
+    resolveSidebarDropTarget(expanded, "env:active2", sidebarMarkerId("active-header")),
+  ).toMatchObject({ customGroupId: "research", activeOrder: ["env:research", "env:active2"] });
+  // From above, it still opens Active's first slot.
+  expect(
+    resolveSidebarDropTarget(expanded, "env:research", sidebarMarkerId("active-header")),
+  ).toMatchObject({
+    customGroupId: null,
+    activeOrder: ["env:research", "env:active1", "env:active2"],
+  });
+});
+it("drops below the pinned divider into the group that follows it", () => {
+  expect(
+    resolveSidebarDropTarget(items, "env:pinned", sidebarMarkerId("pinned-divider")),
+  ).toMatchObject({
+    section: "active",
+    customGroupId: "research",
+    activeOrder: ["env:pinned", "env:research"],
+  });
+  expect(
+    resolveSidebarDropTarget(items, "env:research", sidebarMarkerId("pinned-divider")),
+  ).toMatchObject({ section: "pinned", pinnedOrder: ["env:pinned", "env:research"] });
+});
 it("does not mistake a one-thread group move for an unchanged order", () => {
   expect(
     planSidebarThreadDrop({
