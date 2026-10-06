@@ -455,6 +455,31 @@ describe("sidebar drag projection", () => {
     expect(result.get("s")?.y).toBe(32);
   });
 
+  it("opens no space for boundaries whose label is hidden", () => {
+    const items = [
+      pinnedHeader,
+      thread("p", "pinned"),
+      divider,
+      thread("a1", "active"),
+      thread("a2", "active"),
+    ];
+    const result = preview(
+      {
+        items,
+        settledOrder: [],
+        settledExpanded: true,
+        boundaryLabelHeight: 16,
+        boundaryLabelHeights: { "pinned-header": 0, "pinned-divider": 0 },
+      },
+      "a2",
+      "a1",
+    );
+    // Rows stay on their at-rest drop rects; only the swap moves a1.
+    expect(result.get("p")?.y).toBe(0);
+    expect(result.get(sidebarMarkerId("pinned-divider"))?.y).toBe(0);
+    expect(result.get("a1")?.y).toBe(83);
+  });
+
   it.each(["s1", "missing-target"])(
     "keeps label clearance when a settled drag is over %s",
     (over) => {

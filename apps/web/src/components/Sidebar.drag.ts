@@ -113,6 +113,10 @@ export function createSidebarSortingStrategy(input: {
   /** Space each pinned boundary opens for its label while dragging; the
    * zero-height boundaries reserve nothing until pickup. */
   boundaryLabelHeight?: number;
+  /** Fork: per-boundary override for boundaries that hide their label (the
+   * Pinned shelf header or a group header already marks the boundary), so
+   * rows do not drift below their at-rest drop rects. */
+  boundaryLabelHeights?: Partial<Record<"pinned-header" | "pinned-divider", number>>;
 }): SortingStrategy {
   if (input.enabled === false) return () => stationary;
   const { items } = input;
@@ -154,7 +158,8 @@ export function createSidebarSortingStrategy(input: {
       slimHeight !== undefined ? slimHeight / 36 : (headerScale ?? (cardHeight ?? 82) / 82);
     cardHeight ??= 82 * scale;
     slimHeight ??= 36 * scale;
-    const labelHeight = (input.boundaryLabelHeight ?? 0) * scale;
+    const labelHeight = (marker: "pinned-header" | "pinned-divider") =>
+      (input.boundaryLabelHeights?.[marker] ?? input.boundaryLabelHeight ?? 0) * scale;
     const group = groups[target.section];
     const order =
       target.section === "pinned"
@@ -242,7 +247,7 @@ export function createSidebarSortingStrategy(input: {
       const height =
         item.kind === "marker" &&
         (item.marker === "pinned-header" || item.marker === "pinned-divider")
-          ? Math.max(rect?.height ?? 0, labelHeight)
+          ? Math.max(rect?.height ?? 0, labelHeight(item.marker))
           : item.kind === "marker" && item.marker.endsWith("placeholder")
             ? slimHeight
             : moved

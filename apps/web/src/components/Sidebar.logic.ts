@@ -245,15 +245,39 @@ export function resolveSidebarDropTarget(
   const overIndex = items.findIndex((item) => sidebarListItemId(item) === overId);
   if (activeIndex === -1 || overIndex === -1 || items[activeIndex]?.kind !== "thread") return null;
   const moved = items.filter((_, index) => index !== activeIndex);
-  // Fork: group headers own their drop, from either direction, including
-  // collapsed groups.
+  // Fork: a group header opens its group's first slot, including collapsed and
+  // empty groups. Reached from below, the header of a group with visible rows
+  // instead closes the group above it, the only target for that group's last
+  // slot; the first slot stays reachable through the first row.
   const over = items[overIndex];
   const headerTarget =
     over?.kind === "marker" &&
     (over.marker === "active-header" || over.marker.startsWith("custom-group:"));
-  const insertIndex = headerTarget
-    ? moved.findIndex((item) => sidebarListItemId(item) === overId) + 1
-    : overIndex;
+  let insertIndex = overIndex;
+  if (headerTarget) {
+    const headerIndex = moved.findIndex((item) => sidebarListItemId(item) === overId);
+    const above = moved[headerIndex - 1];
+    // The dragged row counts: dropping back on itself keeps its first slot.
+    const firstBelow = items
+      .slice(overIndex + 1)
+      .find((item) => item.kind === "thread" || !item.marker.endsWith("placeholder"));
+    const closesGroupAbove =
+      overIndex < activeIndex &&
+      above?.kind === "thread" &&
+      above.section === "active" &&
+      firstBelow?.kind === "thread" &&
+      firstBelow.section === "active";
+    insertIndex = closesGroupAbove ? headerIndex : headerIndex + 1;
+  } else if (over?.kind === "marker" && over.marker === "pinned-divider") {
+    // Fork: below the divider sits a group header, so the slot between them
+    // belongs to that group rather than to a header-less Active.
+    const next = moved[insertIndex];
+    if (
+      next?.kind === "marker" &&
+      (next.marker === "active-header" || next.marker.startsWith("custom-group:"))
+    )
+      insertIndex += 1;
+  }
   moved.splice(insertIndex, 0, items[activeIndex]!);
   const section = sectionAtSidebarSlot(moved, insertIndex);
   if (section === "working" || section === "snoozed") return null;

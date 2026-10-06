@@ -4533,6 +4533,11 @@ export default function Sidebar() {
     [confirmAndUnpinThread],
   );
 
+  // Fork: the Pinned shelf header and the group headers already mark these
+  // boundaries, so their drag labels stay hidden and open no space. Any space
+  // opened here draws every row below it away from its at-rest drop rect.
+  const pinnedDragLabelHeight = pinnedThreads.length > 0 ? 0 : SIDEBAR_DRAG_LABEL_HEIGHT;
+  const dividerDragLabelHeight = hasCustomGroups ? 0 : SIDEBAR_DRAG_LABEL_HEIGHT;
   const handleThreadDragStart = useCallback(
     (event: DragStartEvent) => {
       const activeKey = String(event.active.id);
@@ -4547,7 +4552,7 @@ export default function Sidebar() {
         const listRect = list.getBoundingClientRect();
         const scale = list.offsetWidth > 0 ? listRect.width / list.offsetWidth : 1;
         dragLabelOffsetRef.current =
-          header.getBoundingClientRect().top - listRect.top + SIDEBAR_DRAG_LABEL_HEIGHT * scale;
+          header.getBoundingClientRect().top - listRect.top + pinnedDragLabelHeight * scale;
       } else {
         dragLabelOffsetRef.current = 0;
       }
@@ -4562,7 +4567,7 @@ export default function Sidebar() {
           event.activatorEvent instanceof PointerEvent ? event.activatorEvent.clientY : null,
       });
     },
-    [sectionByThreadKey, threadByKey, customGroups.groups],
+    [sectionByThreadKey, threadByKey, customGroups.groups, pinnedDragLabelHeight],
   );
   // Include every visible row in the measured order. Older servers disable
   // pickup on their rows without changing where those rows render.
@@ -4718,6 +4723,10 @@ export default function Sidebar() {
         items: sidebarListItems,
         enabled: !isContextDrag,
         boundaryLabelHeight: SIDEBAR_DRAG_LABEL_HEIGHT,
+        boundaryLabelHeights: {
+          "pinned-header": pinnedDragLabelHeight,
+          "pinned-divider": dividerDragLabelHeight,
+        },
         settledOrder: draggedSettledOrder,
         ...(draggedActiveOrder === undefined ? {} : { activeOrder: draggedActiveOrder }),
         settledExpanded: settledShelfExpanded,
@@ -4729,9 +4738,11 @@ export default function Sidebar() {
       }),
     [
       compactCards,
+      dividerDragLabelHeight,
       draggedActiveOrder,
       draggedSettledOrder,
       isContextDrag,
+      pinnedDragLabelHeight,
       routeThreadKey,
       settledShelfExpanded,
       settledVisibleCount,
@@ -6493,7 +6504,14 @@ export default function Sidebar() {
                               // above it, and it brings its own spacing).
                               className="mb-1 flex w-full cursor-pointer items-center gap-2 px-2.5 text-left"
                             >
-                              <span className="text-xs font-medium text-muted-foreground/50">
+                              <span
+                                className={cn(
+                                  "text-xs font-medium",
+                                  from !== null && dragTargetSection === "pinned"
+                                    ? "text-primary"
+                                    : "text-muted-foreground/50",
+                                )}
+                              >
                                 {pinnedShelfExpanded
                                   ? "Pinned"
                                   : `Pinned (${pinnedThreads.length})`}
@@ -6556,7 +6574,7 @@ export default function Sidebar() {
                                 key="pinned-header"
                                 marker="pinned-header"
                                 label="Pinned"
-                                visible={from !== null}
+                                visible={from !== null && pinnedDragLabelHeight > 0}
                                 isDropTarget={dragTargetSection === "pinned"}
                               />,
                             );
@@ -6569,7 +6587,7 @@ export default function Sidebar() {
                                 key="pinned-divider"
                                 marker="pinned-divider"
                                 label=""
-                                visible={from !== null && !hasCustomGroups}
+                                visible={from !== null && dividerDragLabelHeight > 0}
                                 isDropTarget={dragTargetSection === "active"}
                               />,
                             );
