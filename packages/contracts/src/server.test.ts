@@ -45,6 +45,21 @@ describe("ServerConfig text-to-speech capability", () => {
 });
 
 describe("ServerProvider", () => {
+  it.each([undefined, true, false])("decodes workspace command discovery pending=%s", (pending) => {
+    const workspace = {
+      cwd: "/workspace/project",
+      checkedAt: baseProviderSnapshot.checkedAt,
+      slashCommands: [{ name: "compact" }],
+      ...(pending === undefined ? {} : { slashCommandsPending: pending }),
+      skills: [{ name: "project", path: "/workspace/project/SKILL.md", enabled: true }],
+    };
+    const parsed = decodeServerProvider({
+      ...baseProviderSnapshot,
+      workspaceSnapshots: [workspace],
+    });
+    expect(parsed.workspaceSnapshots).toEqual([workspace]);
+  });
+
   it("defaults capability arrays when decoding provider snapshots", () => {
     const parsed = decodeServerProvider({
       instanceId: "codex",

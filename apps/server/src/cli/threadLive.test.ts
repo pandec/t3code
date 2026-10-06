@@ -45,11 +45,11 @@ import * as Ref from "effect/Ref";
 import * as References from "effect/References";
 import * as Schema from "effect/Schema";
 import * as Stream from "effect/Stream";
-import { HttpServer } from "effect/unstable/http";
-import * as HttpRouter from "effect/unstable/http/HttpRouter";
-import * as HttpApi from "effect/unstable/httpapi/HttpApi";
-import * as HttpApiBuilder from "effect/unstable/httpapi/HttpApiBuilder";
-import { Rpc, RpcGroup, RpcSerialization, RpcServer } from "effect/unstable/rpc";
+import { HttpServer } from "effect/http";
+import * as HttpRouter from "effect/http/HttpRouter";
+import * as HttpApi from "effect/http-api/HttpApi";
+import * as HttpApiBuilder from "effect/http-api/HttpApiBuilder";
+import { Rpc, RpcGroup, RpcSerialization, RpcServer } from "effect/rpc";
 
 import * as ServerConfig from "../config.ts";
 import {

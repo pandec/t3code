@@ -13,10 +13,10 @@ import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
 import * as Path from "effect/Path";
 import * as TestClock from "effect/testing/TestClock";
-import * as SqlClient from "effect/unstable/sql/SqlClient";
+import * as SqlClient from "effect/sql/SqlClient";
 
 import * as ServerConfig from "../config.ts";
-import { SqlitePersistenceMemory } from "../persistence/Layers/Sqlite.ts";
+import * as SqlitePersistence from "../persistence/Sqlite.ts";
 import * as GitVcsDriver from "../vcs/GitVcsDriver.ts";
 import {
   ArchiveWorktreeRemoval,
@@ -99,7 +99,7 @@ const TestLayer = archiveWorktreeRemovalLayer.pipe(
         ),
     }),
   ),
-  Layer.provideMerge(SqlitePersistenceMemory),
+  Layer.provideMerge(SqlitePersistence.layerMemory),
   Layer.provideMerge(GitVcsDriver.layer),
   Layer.provide(ServerConfig.layerTest(process.cwd(), { prefix: "t3-archive-removal-" })),
   Layer.provideMerge(NodeServices.layer),

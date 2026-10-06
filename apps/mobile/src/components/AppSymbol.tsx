@@ -105,6 +105,7 @@ import IconStar from "@tabler/icons-react-native/IconStar";
 import IconStarFilled from "@tabler/icons-react-native/IconStarFilled";
 import IconStethoscope from "@tabler/icons-react-native/IconStethoscope";
 import IconSun from "@tabler/icons-react-native/IconSun";
+import IconTarget from "@tabler/icons-react-native/IconTarget";
 import IconTerminal2 from "@tabler/icons-react-native/IconTerminal2";
 import IconTextDecrease from "@tabler/icons-react-native/IconTextDecrease";
 import IconTextIncrease from "@tabler/icons-react-native/IconTextIncrease";
@@ -116,6 +117,7 @@ import IconUserCircle from "@tabler/icons-react-native/IconUserCircle";
 import IconVolume from "@tabler/icons-react-native/IconVolume";
 import IconVolume2 from "@tabler/icons-react-native/IconVolume2";
 import IconUsers from "@tabler/icons-react-native/IconUsers";
+import IconWifi from "@tabler/icons-react-native/IconWifi";
 import IconWifiOff from "@tabler/icons-react-native/IconWifiOff";
 import IconWorld from "@tabler/icons-react-native/IconWorld";
 import IconX from "@tabler/icons-react-native/IconX";
@@ -282,6 +284,7 @@ const ANDROID_ICON_BY_SF_SYMBOL = {
   "star.fill": IconStarFilled,
   "sun.max": IconSun,
   "stop.fill": IconPlayerStopFilled,
+  target: IconTarget,
   terminal: IconTerminal2,
   "text.alignleft": IconAlignLeft,
   "text.bubble": IconMessage,
@@ -293,6 +296,7 @@ const ANDROID_ICON_BY_SF_SYMBOL = {
   tray: IconInbox,
   "tray.and.arrow.up": IconUpload,
   waveform: IconAudioLines,
+  wifi: IconWifi,
   "wifi.slash": IconWifiOff,
   xmark: IconX,
   "xmark.circle.fill": IconCircleXFilled,

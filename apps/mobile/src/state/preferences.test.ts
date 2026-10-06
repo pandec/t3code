@@ -4,7 +4,7 @@ import * as Fiber from "effect/Fiber";
 import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
 import * as TestClock from "effect/testing/TestClock";
-import { AsyncResult, Atom, AtomRegistry } from "effect/unstable/reactivity";
+import { AsyncResult, Atom, AtomRegistry } from "effect/reactivity";
 import { vi } from "vite-plus/test";
 import { ProviderInstanceId } from "@t3tools/contracts";
 import { RegistryContext, useAtomSet } from "@effect/atom-react";
@@ -24,7 +24,7 @@ vi.mock("../lib/runtime", async () => {
   const Layer = await import("effect/Layer");
   return {
     runtime: { runPromise: vi.fn() },
-    runtimeContextLayer: Layer.empty,
+    layer: Layer.empty,
   };
 });
 

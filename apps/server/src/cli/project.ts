@@ -19,14 +19,14 @@ import * as Option from "effect/Option";
 import * as Path from "effect/Path";
 import * as References from "effect/References";
 import * as Schema from "effect/Schema";
-import { Argument, Command, Flag, GlobalFlag } from "effect/unstable/cli";
-import { FetchHttpClient, type HttpClient } from "effect/unstable/http";
+import { Argument, Command, Flag, GlobalFlag } from "effect/cli";
+import { FetchHttpClient, type HttpClient } from "effect/http";
 
 import * as EnvironmentAuth from "../auth/EnvironmentAuth.ts";
 
 import * as ServerConfig from "../config.ts";
-import * as SqlitePersistence from "../persistence/Layers/Sqlite.ts";
-import { ProjectServiceLayerLive } from "../orchestration-v2/runtimeLayer.ts";
+import * as SqlitePersistence from "../persistence/Sqlite.ts";
+import * as RuntimeLayer from "../orchestration-v2/runtimeLayer.ts";
 import * as ProjectEnrichmentService from "../project/ProjectEnrichmentService.ts";
 import * as ProjectRepositoryIdentityStore from "../project/ProjectRepositoryIdentityStore.ts";
 import * as ProjectFaviconResolver from "../project/ProjectFaviconResolver.ts";
@@ -163,7 +163,7 @@ const projectCommandUuid = Crypto.Crypto.pipe(
   ),
 );
 
-const ProjectCliRuntimeLive = ProjectServiceLayerLive.pipe(
+const layerProjectCliRuntime = RuntimeLayer.layerProjectService.pipe(
   Layer.provideMerge(ProjectEnrichmentService.layer),
   Layer.provideMerge(ProjectRepositoryIdentityStore.layer),
   Layer.provideMerge(RepositoryIdentityResolver.layer),
@@ -264,7 +264,7 @@ const runWithProjectCliEnvironment = <A, E, R>(
       return yield* body({ config, minimumLogLevel, environmentAuth, timeouts });
     }).pipe(
       Effect.provide(
-        Layer.mergeAll(EnvironmentAuth.runtimeLayer, WorkspacePaths.layer).pipe(
+        Layer.mergeAll(EnvironmentAuth.layerRuntime, WorkspacePaths.layer).pipe(
           Layer.provideMerge(FetchHttpClient.layer),
           Layer.provide(ServerConfig.layer(config)),
           Layer.provide(Layer.succeed(References.MinimumLogLevel, minimumLogLevel)),
@@ -317,7 +317,7 @@ const runProjectMutation = <E, R>(
         });
       }).pipe(
         Effect.provide(
-          ProjectCliRuntimeLive.pipe(
+          layerProjectCliRuntime.pipe(
             Layer.provide(ServerConfig.layer(config)),
             Layer.provide(Layer.succeed(References.MinimumLogLevel, minimumLogLevel)),
           ),

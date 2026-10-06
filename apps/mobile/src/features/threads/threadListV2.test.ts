@@ -1,3 +1,5 @@
+import { presentThreadShell } from "@t3tools/client-runtime/state/models";
+import * as DateTime from "effect/DateTime";
 import { planPinnedMove } from "@t3tools/client-runtime/state/thread-sort";
 import {
   computeGroupedThreadMoveAvailability,
@@ -24,7 +26,7 @@ import {
 import { describe, expect, it, vi } from "vite-plus/test";
 
 import type { PendingNewTask } from "../../state/use-pending-new-tasks";
-import { makeThreadShellFixture } from "../../test-fixtures";
+import { makeRawThreadShell, makeThreadShellFixture } from "../../test-fixtures";
 import { threadJumpTarget } from "../keyboard/threadKeyboardShortcuts";
 import {
   buildThreadListV2Items,
@@ -39,6 +41,7 @@ import {
   resolveThreadListV2WorkingTimeLabel,
   sortThreadsForListV2,
   threadListV2ListItemsAreEqual,
+  threadHasUnseenCompletion,
   type ThreadListV2ListItem,
 } from "./threadListV2";
 
@@ -233,6 +236,29 @@ describe("resolveThreadListV2Status", () => {
       vi.useRealTimers();
     }
   });
+
+  // Fork: a watch loop parked after the turn reads as monitoring, not waiting.
+  it.each([
+    { kind: "command", status: "ready" },
+    { kind: "monitor", status: "monitoring" },
+  ] as const)(
+    "presents an unseen completion with a $kind roster as $status",
+    ({ kind, status }) => {
+      const thread = presentThreadShell(
+        environmentId,
+        makeRawThreadShell({
+          latestRunId: RunId.make("run-background-completion"),
+          status: "completed",
+          latestRunCompletedAt: DateTime.makeUnsafe(NOW),
+          lastVisitedAt: DateTime.makeUnsafe("2026-06-01T23:59:00.000Z"),
+          pendingBackgroundTasks: [{ taskId: "background-work", kind }],
+        }),
+      );
+
+      expect(resolveThreadListV2Status(thread)).toBe(status);
+      expect(threadHasUnseenCompletion(thread)).toBe(true);
+    },
+  );
 
   it("resolves ready for quiescent threads", () => {
     expect(resolveThreadListV2Status(makeThread({ id: ThreadId.make("t"), title: "t" }))).toBe(
@@ -2705,5 +2731,151 @@ describe("custom thread groups", () => {
       placement: "before",
     });
     expect(assignments?.find(({ id }) => id === `${environmentId}:plain`)?.orderKey).toBeDefined();
+  });
+});
+
+describe("Working section beta", () => {
+  const running = {
+    status: "running" as const,
+    activeRunId: null,
+    providerInstanceId: ProviderInstanceId.make("codex"),
+    providerName: "Codex",
+    lastError: null,
+    updatedAt: NOW,
+  };
+  const finishedAt = (id: string, completedAt: string) =>
+    makeThread({
+      id: ThreadId.make(id),
+      title: id,
+      createdAt: "2026-06-01T00:00:00.000Z",
+      latestRun: {
+        runId: RunId.make(`run-${id}`),
+        status: "completed",
+        requestedAt: "2026-06-01T00:00:00.000Z",
+        startedAt: "2026-06-01T00:00:00.000Z",
+        completedAt,
+        assistantMessageId: null,
+      },
+    });
+  const threads = [
+    finishedAt("finished-early", "2026-06-01T01:00:00.000Z"),
+    finishedAt("finished-late", "2026-06-01T03:00:00.000Z"),
+    makeThread({ id: ThreadId.make("working"), title: "working", runtime: running }),
+    makeThread({
+      id: ThreadId.make("asks-approval"),
+      title: "asks-approval",
+      createdAt: "2026-06-01T02:00:00.000Z",
+      runtime: running,
+      hasPendingApprovals: true,
+    }),
+    makeThread({
+      id: ThreadId.make("pinned-working"),
+      title: "pinned-working",
+      runtime: running,
+      pinnedAt: "2026-06-01T00:00:00.000Z",
+    }),
+  ];
+  const build = (input: Partial<Parameters<typeof buildThreadListV2Items>[0]> = {}) =>
+    buildThreadListV2Items({
+      threads,
+      environmentId: null,
+      searchQuery: "",
+      now: NOW,
+      workingShelfEnabled: true,
+      ...input,
+    });
+  const ids = (layout: ReturnType<typeof buildThreadListV2Items>) =>
+    layout.items.map((item) => item.thread.id);
+
+  it("folds unpinned working threads into a collapsed shelf", () => {
+    const layout = build();
+    expect(ids(layout)).toEqual([
+      "pinned-working",
+      "finished-late",
+      "asks-approval",
+      "finished-early",
+    ]);
+    expect(layout.workingCount).toBe(1);
+    expect(layout.workingShelfHeaderIndex).toBe(4);
+
+    const off = build({ workingShelfEnabled: false });
+    expect(ids(off)).toContain("working");
+    expect(off.workingCount).toBe(0);
+  });
+
+  it("shows working rows as cards when expanded, or only the selected one when collapsed", () => {
+    expect(build({ workingShelfExpanded: true }).items.at(-1)).toMatchObject({
+      thread: { id: "working" },
+      variant: "card",
+    });
+    expect(ids(build({ selectedThreadKey: `${environmentId}:working` })).at(-1)).toBe("working");
+  });
+
+  it("orders the inbox by the latest return this device observed", () => {
+    const layout = build({
+      inboxReturnAt: (thread) =>
+        thread.id === "finished-early" ? Date.parse("2026-06-01T04:00:00.000Z") : undefined,
+    });
+    expect(ids(layout).slice(1)).toEqual(["finished-early", "finished-late", "asks-approval"]);
+  });
+
+  it("places the shelf after queued tasks and before snoozed and settled threads", () => {
+    const layout = buildThreadListV2Items({
+      threads: [
+        makeThread({ id: ThreadId.make("active"), title: "active" }),
+        makeThread({ id: ThreadId.make("working"), title: "working", runtime: running }),
+        makeThread({
+          id: ThreadId.make("snoozed"),
+          title: "snoozed",
+          runtime: running,
+          snoozedUntil: "2026-06-03T09:00:00.000Z",
+          snoozedAt: "2026-06-01T12:00:00.000Z",
+        }),
+        makeThread({
+          id: ThreadId.make("settled"),
+          title: "settled",
+          settledOverride: "settled",
+          settledAt: NOW,
+        }),
+      ],
+      environmentId: null,
+      searchQuery: "",
+      now: NOW,
+      workingShelfEnabled: true,
+      workingShelfExpanded: true,
+      snoozedShelfExpanded: true,
+    });
+    const items = buildThreadListV2ListItems({
+      items: layout.items,
+      pendingTasks: [makePendingTask("queued")],
+      workingCount: layout.workingCount,
+      workingShelfExpanded: true,
+      workingShelfHeaderIndex: layout.workingShelfHeaderIndex,
+      snoozedCount: layout.snoozedCount,
+      snoozedShelfExpanded: true,
+      snoozedShelfHeaderIndex: layout.snoozedShelfHeaderIndex,
+      settledCount: layout.settledCount,
+      settledShelfHeaderIndex: layout.settledShelfHeaderIndex,
+    });
+    expect(
+      items.map((item) =>
+        item.type === "v2-thread"
+          ? item.item.thread.id
+          : item.type === "v2-pending"
+            ? item.pendingTask.title
+            : item.type,
+      ),
+    ).toEqual([
+      // Fork: the built-in Active group header leads its rows.
+      "v2-custom-group",
+      "active",
+      "queued",
+      "v2-working-shelf",
+      "working",
+      "v2-snoozed-shelf",
+      "snoozed",
+      "v2-settled-shelf",
+      "settled",
+    ]);
   });
 });

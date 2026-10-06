@@ -1,5 +1,5 @@
 import * as Effect from "effect/Effect";
-import * as SqlClient from "effect/unstable/sql/SqlClient";
+import * as SqlClient from "effect/sql/SqlClient";
 
 // The continuation group each provider instance's native conversation was
 // created in (NativeContinuationStore.ts). Starts empty: conversations are

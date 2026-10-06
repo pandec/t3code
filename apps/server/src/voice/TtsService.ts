@@ -10,13 +10,13 @@ import { TtsRpcError, TTS_PROVIDER_LABELS } from "@t3tools/contracts";
 import * as Config from "effect/Config";
 import * as Context from "effect/Context";
 import * as Effect from "effect/Effect";
-import * as Encoding from "effect/Encoding";
+import * as Base64 from "effect/encoding/Base64";
 import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
 import * as PubSub from "effect/PubSub";
 import * as Redacted from "effect/Redacted";
 import * as Stream from "effect/Stream";
-import { HttpClient } from "effect/unstable/http";
+import { HttpClient } from "effect/http";
 
 import * as ServerSecretStore from "../auth/ServerSecretStore.ts";
 import {
@@ -311,7 +311,7 @@ export const layer = Layer.effect(
       );
       return {
         mimeType: synthesized.mimeType,
-        audioBase64: Encoding.encodeBase64(synthesized.bytes),
+        audioBase64: Base64.encode(synthesized.bytes),
         sizeBytes: synthesized.bytes.byteLength,
         characterCount: text.length,
         cost: synthesized.cost,

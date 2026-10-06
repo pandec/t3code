@@ -10,7 +10,7 @@ import {
 import * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
-import { McpSchema, McpServer } from "effect/unstable/ai";
+import { McpSchema, McpServer } from "effect/ai";
 
 import * as ThreadManagementService from "../../../orchestration-v2/ThreadManagementService.ts";
 import * as ThreadWorktreeSwitchScheduler from "../../../orchestration-v2/ThreadWorktreeSwitchScheduler.ts";
@@ -41,6 +41,13 @@ const client = McpSchema.McpServerClient.of({
   },
   getClient: Effect.die("unused"),
 });
+
+// Effect returns a declared tool failure as `isError` with its encoded payload
+// as JSON text, never as `structuredContent`.
+const declaredFailure = (result: McpSchema.CallToolResult) => {
+  const text = result.content[0];
+  return result.isError === true && text?.type === "text" ? JSON.parse(text.text) : undefined;
+};
 
 const makeLayer = (
   owner: string,
@@ -102,9 +109,13 @@ const call = (name: string, args: Record<string, unknown> = {}) =>
     return yield* server.callTool({ name, arguments: args }).pipe(
       Effect.provideService(McpInvocationContext.McpInvocationContext, {
         environmentId: EnvironmentId.make("environment-worktree-switch-tools"),
-        threadId,
-        providerSessionId: "provider-session-worktree-switch-tools",
-        providerInstanceId: ProviderInstanceId.make("codex"),
+        requestNamespace: "provider-session-worktree-switch-tools",
+        thread: {
+          threadId,
+          providerSessionId: "provider-session-worktree-switch-tools",
+          providerInstanceId: ProviderInstanceId.make("codex"),
+        },
+        client: undefined,
         capabilities: new Set(["orchestration", "worktree"] as const),
         issuedAt: 1,
       }),
@@ -120,7 +131,7 @@ it.effect("requests a switch for the credential's thread and reports failures", 
     expect(result.structuredContent).toEqual({ request });
     expect(requested).toEqual([{ threadId, targetPath: "/repo-worktree" }]);
     const refused = yield* call("switch_worktree", { path: "relative" });
-    expect(refused.structuredContent).toMatchObject({
+    expect(declaredFailure(refused)).toMatchObject({
       _tag: "OrchestratorMcpFailure",
       code: "invalid_request",
       message: "Pass an absolute path to an existing worktree.",
@@ -134,7 +145,7 @@ it.effect("rejects a provider that no longer owns the thread", () => {
   const requested: Array<{ threadId: ThreadId; targetPath: string }> = [];
   return Effect.gen(function* () {
     const result = yield* call("switch_worktree", { path: "/repo-worktree" });
-    expect(result.structuredContent).toMatchObject({
+    expect(declaredFailure(result)).toMatchObject({
       _tag: "OrchestratorMcpFailure",
       code: "parent_not_active",
     });
@@ -159,7 +170,7 @@ it.effect.each([
     return Effect.gen(function* () {
       for (const [name, args] of switchTools) {
         const result = yield* call(name, args);
-        expect(result.structuredContent).toMatchObject({ _tag: "OrchestratorMcpFailure", code });
+        expect(declaredFailure(result)).toMatchObject({ _tag: "OrchestratorMcpFailure", code });
       }
       expect(serviceCalls).toEqual([]);
     }).pipe(Effect.scoped, Effect.provide(makeLayer(owner, [], { shell, serviceCalls })));

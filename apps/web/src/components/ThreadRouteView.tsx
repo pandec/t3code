@@ -213,7 +213,7 @@ export function ThreadRouteView({ target }: { target: ThreadRouteTarget }) {
   ) {
     view = (
       <ChatView
-        {...(nextChatViewKey ? { key: nextChatViewKey.key } : {})}
+        key={nextChatViewKey?.key}
         environmentId={target.threadRef.environmentId}
         threadId={target.threadRef.threadId}
         routeKind="server"

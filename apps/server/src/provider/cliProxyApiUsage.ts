@@ -37,7 +37,7 @@ import * as Effect from "effect/Effect";
 import * as Fiber from "effect/Fiber";
 import * as Schema from "effect/Schema";
 import * as Semaphore from "effect/Semaphore";
-import { HttpClient, HttpClientRequest } from "effect/unstable/http";
+import { HttpClient, HttpClientRequest } from "effect/http";
 
 export const CLIPROXYAPI_USAGE_SOURCE_KIND = "cliproxyapi";
 export const CLIPROXYAPI_USAGE_PAYLOAD_SOURCE = "cliproxyapi.management";
@@ -563,9 +563,10 @@ export function makeCliProxyApiUsageProbe(
         timeoutMs,
       ).pipe(
         Effect.map((value) => ({ ok: true as const, value })),
-        Effect.catchTag("CliProxyApiRequestFailedError", (error) =>
-          Effect.succeed({ ok: false as const, message: error.detail }),
-        ),
+        Effect.catchTags({
+          CliProxyApiRequestFailedError: (error) =>
+            Effect.succeed({ ok: false as const, message: error.detail }),
+        }),
       );
       if (!result.ok) {
         return failed(result.message);

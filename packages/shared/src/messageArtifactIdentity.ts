@@ -1,5 +1,5 @@
 import { sha256 } from "@noble/hashes/sha2";
-import * as Encoding from "effect/Encoding";
+import * as Hex from "effect/encoding/Hex";
 
 export const messageArtifactTextHash = (value: string): string =>
-  Encoding.encodeHex(sha256(new TextEncoder().encode(value)));
+  Hex.encode(sha256(new TextEncoder().encode(value)));

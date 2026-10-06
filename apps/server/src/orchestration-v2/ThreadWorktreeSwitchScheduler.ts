@@ -24,7 +24,7 @@ import * as Option from "effect/Option";
 import * as Path from "effect/Path";
 import type * as Scope from "effect/Scope";
 import * as Stream from "effect/Stream";
-import * as SqlClient from "effect/unstable/sql/SqlClient";
+import * as SqlClient from "effect/sql/SqlClient";
 
 import { forkParked } from "../serverActivation.ts";
 import { withWorkspaceLease } from "../workspace/workspaceLease.ts";
@@ -167,7 +167,9 @@ export const make = Effect.gen(function* () {
         Effect.map((target) => ({
           target: { worktreePath: target.worktreePath, branch: target.branch },
         })),
-        Effect.catchTag("WorktreeSwitchError", (error) => Effect.succeed({ error: error.message })),
+        Effect.catchTags({
+          WorktreeSwitchError: (error) => Effect.succeed({ error: error.message }),
+        }),
         Effect.flatMap(execute),
       ),
     ).pipe(providePlatform);

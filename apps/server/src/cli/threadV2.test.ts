@@ -9,7 +9,7 @@ import {
   ThreadId,
 } from "@t3tools/contracts";
 import * as DateTime from "effect/DateTime";
-import { RpcClientError } from "effect/unstable/rpc";
+import { RpcClientError } from "effect/rpc";
 
 import { serializeCliError } from "./errorOutput.ts";
 import { makeTestThreadShell, testShellTime } from "./liveServerTestKit.ts";

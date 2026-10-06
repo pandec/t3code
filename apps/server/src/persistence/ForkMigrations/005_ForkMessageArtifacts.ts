@@ -1,5 +1,5 @@
 import * as Effect from "effect/Effect";
-import * as SqlClient from "effect/unstable/sql/SqlClient";
+import * as SqlClient from "effect/sql/SqlClient";
 
 // Per-message summaries and speech scripts, keyed by v2 message id. Rows are
 // caches over the message text: the source hash and recipe say what produced

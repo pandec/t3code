@@ -1,5 +1,5 @@
 import * as Effect from "effect/Effect";
-import * as SqlClient from "effect/unstable/sql/SqlClient";
+import * as SqlClient from "effect/sql/SqlClient";
 
 // Listening recordings, one per v2 message id. The audio itself is a file in
 // the attachments directory named by `speech_id`. The source hash says which

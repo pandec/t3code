@@ -1,5 +1,5 @@
 import * as Effect from "effect/Effect";
-import * as SqlClient from "effect/unstable/sql/SqlClient";
+import * as SqlClient from "effect/sql/SqlClient";
 
 // Scopes each stored repository identity to the workspace root it was resolved
 // for, so a project moved to another folder never falls back to the old one.

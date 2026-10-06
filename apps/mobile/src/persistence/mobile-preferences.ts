@@ -53,11 +53,18 @@ export interface Preferences {
   readonly sidebarSnoozedShelfExpanded?: boolean;
   readonly sidebarSettledShelfExpanded?: boolean;
   readonly sidebarArchivedShelfExpanded?: boolean;
-  /** Fresh keys reset the new thread list's settled and snoozed shelves. */
+  /**
+   * Upstream's shelf keys. The fork's `sidebar*ShelfExpanded` keys above own
+   * settled/snoozed fold state; these stay decoded for upstream compatibility.
+   * Only the dormant Working shelf (`workingShelfEnabled`) reads its own key.
+   */
   readonly threadListSettledShelfExpanded?: boolean;
   readonly threadListSnoozedShelfExpanded?: boolean;
+  readonly threadListWorkingShelfExpanded?: boolean;
   /** Device-local counterpart of desktop's `planModeEnabled` legacy flag. */
   readonly planModeEnabled?: boolean;
+  /** Device-local counterpart of web's `sidebarWorkingShelfEnabled` beta. */
+  readonly workingShelfEnabled?: boolean;
   /** Model favorites belong to this device, like the web client setting. */
   readonly modelFavorites?: ReadonlyArray<{
     readonly provider: ProviderInstanceId;
@@ -137,7 +144,9 @@ export function sanitizePreferences(parsed: Preferences): Preferences {
     sidebarArchivedShelfExpanded?: boolean;
     threadListSettledShelfExpanded?: boolean;
     threadListSnoozedShelfExpanded?: boolean;
+    threadListWorkingShelfExpanded?: boolean;
     planModeEnabled?: boolean;
+    workingShelfEnabled?: boolean;
     modelFavorites?: Preferences["modelFavorites"];
     steerGraceWindowMs?: number;
     accentTintsEnabled?: boolean;
@@ -240,6 +249,9 @@ export function sanitizePreferences(parsed: Preferences): Preferences {
   if (typeof parsed.planModeEnabled === "boolean") {
     preferences.planModeEnabled = parsed.planModeEnabled;
   }
+  if (typeof parsed.workingShelfEnabled === "boolean") {
+    preferences.workingShelfEnabled = parsed.workingShelfEnabled;
+  }
   if (Array.isArray(parsed.modelFavorites)) {
     preferences.modelFavorites = parsed.modelFavorites.filter(
       (favorite) =>
@@ -259,6 +271,9 @@ export function sanitizePreferences(parsed: Preferences): Preferences {
   }
   if (typeof parsed.accentTintIntensityPercent === "number") {
     preferences.accentTintIntensityPercent = parsed.accentTintIntensityPercent;
+  }
+  if (typeof parsed.threadListWorkingShelfExpanded === "boolean") {
+    preferences.threadListWorkingShelfExpanded = parsed.threadListWorkingShelfExpanded;
   }
   return preferences;
 }

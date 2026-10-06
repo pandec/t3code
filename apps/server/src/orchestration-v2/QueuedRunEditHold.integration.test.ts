@@ -29,7 +29,7 @@ import type {
   ProviderAdapterV2TurnInput,
 } from "./ProviderAdapter.ts";
 import * as ProviderAdapterRegistry from "./ProviderAdapterRegistry.ts";
-import { makeOrchestratorV2ReplayLayerWithRegistry } from "./testkit/ProviderReplayHarness.ts";
+import * as ProviderReplayHarness from "./testkit/ProviderReplayHarness.ts";
 import { checkpointWorkspace } from "./testkit/ReplayFixtureWorkspace.ts";
 
 const driver = ProviderDriverKind.make("codex");
@@ -126,9 +126,9 @@ const makeHarness = (name: string) =>
           };
         }),
     };
-    const layer = makeOrchestratorV2ReplayLayerWithRegistry(
+    const layer = ProviderReplayHarness.layerWithRegistry(
       { name },
-      ProviderAdapterRegistry.makeSingleLayer(adapter),
+      ProviderAdapterRegistry.layerSingle(adapter),
       { runEffectWorker: false },
     );
     return { cwd, events, started, steered, deferRunning, layer };
@@ -147,7 +147,7 @@ const scenario = (name: string) =>
           Stream.take(1),
           Stream.runCollect,
           Effect.map((collected) => Array.from(collected)[0]!),
-          Effect.forkScoped,
+          Effect.forkScoped({ startImmediately: true }),
         );
       const send = (id: string, mode: "start" | "queue") =>
         orchestrator.dispatch({

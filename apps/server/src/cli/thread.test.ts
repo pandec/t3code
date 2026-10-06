@@ -8,9 +8,9 @@ import * as Layer from "effect/Layer";
 import * as FileSystem from "effect/FileSystem";
 import * as Option from "effect/Option";
 import * as Path from "effect/Path";
-import { Command } from "effect/unstable/cli";
-import * as CliError from "effect/unstable/cli/CliError";
-import * as CliOutput from "effect/unstable/cli/CliOutput";
+import { Command } from "effect/cli";
+import * as CliError from "effect/cli/CliError";
+import * as CliOutput from "effect/cli/CliOutput";
 
 import {
   CliOrchestrationDeclaredResponseError,

@@ -721,6 +721,8 @@ const RootStackConfig = createNativeStackNavigator({
         presentation: "fullScreenModal",
         headerShown: false,
         gestureEnabled: false,
+        autoHideHomeIndicator: true,
+        navigationBarHidden: true,
       },
     }),
     ThreadReview: createNativeStackScreen({

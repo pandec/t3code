@@ -2,7 +2,7 @@ import { it } from "@effect/vitest";
 import * as Effect from "effect/Effect";
 import * as Redacted from "effect/Redacted";
 import * as Schema from "effect/Schema";
-import { HttpClient, HttpClientResponse, UrlParams } from "effect/unstable/http";
+import { HttpClient, HttpClientResponse, UrlParams } from "effect/http";
 import { describe, expect } from "vite-plus/test";
 
 import {

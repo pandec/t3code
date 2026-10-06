@@ -11,19 +11,19 @@ import * as FileSystem from "effect/FileSystem";
 import * as Layer from "effect/Layer";
 import * as Path from "effect/Path";
 import * as PlatformError from "effect/PlatformError";
-import { HttpClient } from "effect/unstable/http";
-import * as ChildProcessSpawner from "effect/unstable/process/ChildProcessSpawner";
+import { HttpClient } from "effect/http";
+import * as ChildProcessSpawner from "effect/process/ChildProcessSpawner";
 
 import * as BackgroundPolicy from "../../background/BackgroundPolicy.ts";
 import * as ServerConfig from "../../config.ts";
 import * as ServerSettings from "../../serverSettings.ts";
-import * as ProviderEventLoggers from "../Layers/ProviderEventLoggers.ts";
+import * as ProviderEventLoggers from "../ProviderEventLoggers.ts";
 import { GrokDriver } from "./GrokDriver.ts";
 
 import * as IdAllocator from "../../orchestration-v2/IdAllocator.ts";
 import { ProviderAdapterV2RuntimePolicy } from "../../orchestration-v2/ProviderAdapter.ts";
 
-const testLayer = ServerConfig.layerTest(process.cwd(), {
+const layerTest = ServerConfig.layerTest(process.cwd(), {
   prefix: "t3-grok-driver-update-",
 }).pipe(
   Layer.provideMerge(NodeServices.layer),
@@ -55,7 +55,7 @@ const noSpawner = ChildProcessSpawner.make(() =>
 // The `#!/bin/sh` stub below cannot be resolved as an executable on Windows.
 const windowsHost = HostProcessPlatform.defaultValue() === "win32";
 
-it.layer(testLayer)("GrokDriver", (it) => {
+it.layer(layerTest)("GrokDriver", (it) => {
   it.effect.skipIf(windowsHost)("updates through the configured executable's own updater", () =>
     Effect.gen(function* () {
       const fs = yield* FileSystem.FileSystem;

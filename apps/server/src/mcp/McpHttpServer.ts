@@ -1,7 +1,7 @@
-import * as NodeCrypto from "node:crypto";
 import * as Cause from "effect/Cause";
 import * as Clock from "effect/Clock";
 import * as Context from "effect/Context";
+import * as Crypto from "effect/Crypto";
 import * as Effect from "effect/Effect";
 import * as FileSystem from "effect/FileSystem";
 import * as Layer from "effect/Layer";
@@ -11,40 +11,39 @@ import * as Schema from "effect/Schema";
 import * as Sink from "effect/Sink";
 import * as Stream from "effect/Stream";
 import type * as Types from "effect/Types";
-import { McpProtocol, McpSchema, McpServer, Tool } from "effect/unstable/ai";
-import { HttpRouter, HttpServerRequest, HttpServerResponse } from "effect/unstable/http";
-import { PreviewAutomationError } from "@t3tools/contracts";
+import { AiError, McpProtocol, McpSchema, McpServer, Tool } from "effect/ai";
+import { HttpRouter, HttpServerRequest, HttpServerResponse } from "effect/http";
+import { OrchestratorMcpFailure, PreviewAutomationError } from "@t3tools/contracts";
 
 import packageJson from "../../package.json" with { type: "json" };
 import * as ServerConfig from "../config.ts";
 import * as DeviceService from "../device/DeviceService.ts";
+import * as HtmlRender from "../htmlRender/HtmlRender.ts";
+import * as PreviewBrowser from "../htmlRender/PreviewBrowser.ts";
 import * as McpInvocationContext from "./McpInvocationContext.ts";
 import * as OrchestratorMcpService from "./OrchestratorMcpService.ts";
 import { PreviewControlsToolkit } from "./toolkits/previewControls/tools.ts";
-import { PreviewControlsHandlersLive } from "./toolkits/previewControls/handlers.ts";
+import * as PreviewControlsHandlers from "./toolkits/previewControls/handlers.ts";
 import { EnvironmentToolkit } from "./toolkits/environment/tools.ts";
-import { EnvironmentHandlersLive } from "./toolkits/environment/handlers.ts";
+import * as EnvironmentHandlers from "./toolkits/environment/handlers.ts";
 import { ProjectToolkit } from "./toolkits/project/tools.ts";
-import { ProjectHandlersLive } from "./toolkits/project/handlers.ts";
+import * as ProjectHandlers from "./toolkits/project/handlers.ts";
 import { AttachmentToolkit } from "./toolkits/attachment/tools.ts";
-import { AttachmentHandlersLive } from "./toolkits/attachment/handlers.ts";
+import * as AttachmentHandlers from "./toolkits/attachment/handlers.ts";
 import { ThreadToolkit } from "./toolkits/thread/tools.ts";
-import { ThreadToolkitHandlersLive } from "./toolkits/thread/handlers.ts";
+import * as ThreadHandlers from "./toolkits/thread/handlers.ts";
 import * as ThreadMetadataMcpService from "./ThreadMetadataMcpService.ts";
 import * as McpSessionRegistry from "./McpSessionRegistry.ts";
 import * as PreviewAutomationBroker from "./PreviewAutomationBroker.ts";
-import { OrchestratorToolkitHandlersLive } from "./toolkits/orchestrator/handlers.ts";
+import * as OrchestratorHandlers from "./toolkits/orchestrator/handlers.ts";
 import { OrchestratorToolkit } from "./toolkits/orchestrator/tools.ts";
-import {
-  PreviewSnapshotToolkitHandlersLive,
-  PreviewStandardToolkitHandlersLive,
-} from "./toolkits/preview/handlers.ts";
+import * as PreviewHandlers from "./toolkits/preview/handlers.ts";
 import {
   PreviewSnapshotTool,
   PreviewSnapshotToolkit,
   PreviewStandardToolkit,
 } from "./toolkits/preview/tools.ts";
-import { WorktreeToolkitHandlersLive } from "./toolkits/worktree/handlers.ts";
+import * as WorktreeHandlers from "./toolkits/worktree/handlers.ts";
 import { WorktreeToolkit } from "./toolkits/worktree/tools.ts";
 import { ArchiveToolkitHandlersLive } from "./toolkits/archive/handlers.ts";
 import { ArchiveToolkit } from "./toolkits/archive/tools.ts";
@@ -53,17 +52,16 @@ import { WorktreeSwitchToolkit } from "./toolkits/worktreeSwitch/tools.ts";
 import * as WorktreeMcpService from "./WorktreeMcpService.ts";
 import { VoiceToolkitHandlersLive } from "./toolkits/voice/handlers.ts";
 import { VoiceToolkit } from "./toolkits/voice/tools.ts";
-import { PullRequestsToolkitHandlersLive } from "./toolkits/pullRequests/handlers.ts";
+import * as PullRequestsHandlers from "./toolkits/pullRequests/handlers.ts";
 import { PullRequestsToolkit } from "./toolkits/pullRequests/tools.ts";
-import {
-  DeviceScreenshotToolkitHandlersLive,
-  DeviceStandardToolkitHandlersLive,
-} from "./toolkits/device/handlers.ts";
+import * as DeviceHandlers from "./toolkits/device/handlers.ts";
 import {
   DeviceScreenshotTool,
   DeviceScreenshotToolkit,
   DeviceStandardToolkit,
 } from "./toolkits/device/tools.ts";
+import * as HtmlHandlers from "./toolkits/html/handlers.ts";
+import { HtmlPreviewTool, HtmlPreviewToolkit, HtmlRenderToolkit } from "./toolkits/html/tools.ts";
 
 const unauthorized = HttpServerResponse.jsonUnsafe(
   {
@@ -133,7 +131,7 @@ const makeMcpAuthMiddleware = McpSessionRegistry.McpSessionRegistry.pipe(
   Effect.withSpan("McpHttpServer.makeAuthMiddleware"),
 );
 
-const McpAuthMiddlewareLive = HttpRouter.middleware<{
+const layerMcpAuthMiddleware = HttpRouter.middleware<{
   provides: McpInvocationContext.McpInvocationContext;
 }>()(makeMcpAuthMiddleware).layer;
 
@@ -342,8 +340,10 @@ const saveScreenshot = Effect.fn("McpHttpServer.saveScreenshot")(function* (
   const fileSystem = yield* FileSystem.FileSystem;
   const path = yield* Path.Path;
   const millis = yield* Clock.currentTimeMillis;
+  const crypto = yield* Crypto.Crypto;
   // Two saves in the same millisecond must not overwrite each other.
-  const fileName = `browser-screenshot-${screenshotSiteSlug(pageUrl)}-${millis.toString(36)}-${NodeCrypto.randomUUID().slice(0, 8)}.png`;
+  const unique = (yield* crypto.randomUUIDv4.pipe(Effect.orDie)).slice(0, 8);
+  const fileName = `browser-screenshot-${screenshotSiteSlug(pageUrl)}-${millis.toString(36)}-${unique}.png`;
   const screenshotPath = path.join(config.browserArtifactsDir, fileName);
   yield* fileSystem.makeDirectory(config.browserArtifactsDir, { recursive: true }).pipe(
     Effect.andThen(fileSystem.writeFile(screenshotPath, data)),
@@ -395,7 +395,7 @@ const registerPreviewSnapshot = Effect.fn("McpHttpServer.registerPreviewSnapshot
   const broker = yield* PreviewAutomationBroker.PreviewAutomationBroker;
   // The MCP tool runner only supplies the client, so hand the save path its services here.
   const saveServices = yield* Effect.context<
-    ServerConfig.ServerConfig | FileSystem.FileSystem | Path.Path
+    ServerConfig.ServerConfig | FileSystem.FileSystem | Path.Path | Crypto.Crypto
   >();
   const built = yield* PreviewSnapshotToolkit;
   const tool = PreviewSnapshotTool;
@@ -516,12 +516,13 @@ interface ImageToolResult {
 }
 
 /**
- * Failures surface only their tag: the remote message may carry renderer or
- * device output the agent should not see, and the tag is what it can act on.
+ * Failures surface only their tag unless the tool describes them: the remote
+ * message may carry renderer or device output the agent should not see, and
+ * the tag is what it can act on. A describer returns a server-built message.
  */
 const imageToolFailure =
-  (toolName: string, operation: string, failureText: string) =>
-  <E>(cause: Cause.Cause<E>) => {
+  <E>(toolName: string, operation: string, failureText: string | ((error: E) => string)) =>
+  (cause: Cause.Cause<E>) => {
     if (Cause.hasInterrupts(cause) || cause.reasons.some(Cause.isDieReason)) {
       return Effect.failCause(cause).pipe(Effect.orDie);
     }
@@ -534,6 +535,10 @@ const imageToolFailure =
       typeof firstFailure._tag === "string"
         ? firstFailure._tag
         : `${toolName}Error`;
+    const message =
+      typeof failureText === "string" || failures[0] === undefined
+        ? undefined
+        : failureText(failures[0].error);
     const result = new McpSchema.CallToolResult({
       isError: true,
       structuredContent: {
@@ -541,9 +546,16 @@ const imageToolFailure =
           _tag: errorTag,
           operation,
           failureCount: failures.length,
+          ...(message === undefined ? {} : { message }),
         },
       },
-      content: [{ type: "text", text: failureText }],
+      // Some clients show only the text content and others only structuredContent, so both carry it.
+      content: [
+        {
+          type: "text",
+          text: typeof failureText === "string" ? failureText : (message ?? `${toolName} failed.`),
+        },
+      ],
     });
     return Effect.logWarning(`${toolName} failed`, {
       operation,
@@ -569,7 +581,7 @@ const registerImageTool = <T extends Tool.Any, E, R>(
     McpInvocationContext.McpInvocationContext
   >,
   operation: string,
-  failureText: string,
+  failureText: string | ((error: E) => string),
 ) =>
   Effect.gen(function* () {
     const server = yield* McpServer.McpServer;
@@ -653,78 +665,115 @@ const registerDeviceScreenshot = Effect.fn("McpHttpServer.registerDeviceScreensh
   );
 });
 
-const PreviewStandardToolkitRegistrationLive = McpServer.toolkit(PreviewStandardToolkit).pipe(
-  Layer.provide(PreviewStandardToolkitHandlersLive),
+const isOrchestratorMcpFailure = Schema.is(OrchestratorMcpFailure);
+
+const registerHtmlPreview = Effect.fn("McpHttpServer.registerHtmlPreview")(function* () {
+  const htmlRender = yield* HtmlRender.HtmlRender;
+  const built = yield* HtmlPreviewToolkit;
+  yield* registerImageTool(
+    HtmlPreviewTool,
+    (payload) =>
+      built
+        .handle("html_preview", payload)
+        .pipe(Stream.unwrap, Stream.run(Sink.last()), Effect.flatMap(Effect.fromOption)),
+    (effect) => effect.pipe(Effect.provideService(HtmlRender.HtmlRender, htmlRender)),
+    "preview",
+    // Parameter errors and HTML render errors are both written by the server for the agent.
+    (error) =>
+      isOrchestratorMcpFailure(error) || AiError.isAiError(error)
+        ? error.message
+        : "HTML preview failed.",
+  );
+});
+
+/**
+ * Fork: the HTML tools ride every island (see `layer`), so their registrations
+ * leave the renderer and pinned preview browser unmet; those hold install
+ * state and are provided once outside the islands.
+ */
+const layerHtmlToolkitRegistration = Layer.mergeAll(
+  McpServer.toolkit(HtmlRenderToolkit).pipe(Layer.provide(HtmlHandlers.layerRender)),
+  Layer.effectDiscard(registerHtmlPreview()).pipe(Layer.provide(HtmlHandlers.layerPreview)),
 );
 
-const PreviewSnapshotRegistrationLive = Layer.effectDiscard(registerPreviewSnapshot()).pipe(
-  Layer.provide(PreviewSnapshotToolkitHandlersLive),
+const layerHtmlServices = HtmlRender.layer.pipe(Layer.provideMerge(PreviewBrowser.layer));
+
+export const layerHtmlToolkit = layerHtmlToolkitRegistration.pipe(Layer.provide(layerHtmlServices));
+
+const layerPreviewStandardToolkitRegistration = McpServer.toolkit(PreviewStandardToolkit).pipe(
+  Layer.provide(PreviewHandlers.layerStandard),
 );
 
-export const PreviewToolkitRegistrationLive = Layer.mergeAll(
-  PreviewStandardToolkitRegistrationLive,
-  PreviewSnapshotRegistrationLive,
+const layerPreviewSnapshotRegistration = Layer.effectDiscard(registerPreviewSnapshot()).pipe(
+  Layer.provide(PreviewHandlers.layerSnapshot),
 );
 
-export const OrchestratorToolkitRegistrationLive = McpServer.toolkit(OrchestratorToolkit).pipe(
-  Layer.provide(OrchestratorToolkitHandlersLive),
+export const layerPreviewToolkit = Layer.mergeAll(
+  layerPreviewStandardToolkitRegistration,
+  layerPreviewSnapshotRegistration,
+);
+
+export const layerOrchestratorToolkit = McpServer.toolkit(OrchestratorToolkit).pipe(
+  Layer.provide(OrchestratorHandlers.layer),
   Layer.provide(OrchestratorMcpService.layer),
   Layer.provide(ThreadMetadataMcpService.layer),
 );
 
-export const ThreadToolkitRegistrationLive = McpServer.toolkit(ThreadToolkit).pipe(
-  Layer.provide(ThreadToolkitHandlersLive),
+export const layerThreadToolkit = McpServer.toolkit(ThreadToolkit).pipe(
+  Layer.provide(ThreadHandlers.layer),
 );
 
-const WorktreeToolkitRegistrationLive = McpServer.toolkit(WorktreeToolkit).pipe(
-  Layer.provide(WorktreeToolkitHandlersLive),
+// Fork: WorktreeMcpService holds the per-thread handoff guard, so `layer`
+// provides it once outside the islands instead of once per island.
+const layerWorktreeToolkitRegistration = McpServer.toolkit(WorktreeToolkit).pipe(
+  Layer.provide(WorktreeHandlers.layer),
 );
 
 // Fork: deferred archive tools for the credential's own thread.
-const ArchiveToolkitRegistrationLive = McpServer.toolkit(ArchiveToolkit).pipe(
+const layerArchiveToolkitRegistration = McpServer.toolkit(ArchiveToolkit).pipe(
   Layer.provide(ArchiveToolkitHandlersLive),
 );
 
 // Fork: deferred worktree switch tools for the credential's own thread.
-const WorktreeSwitchToolkitRegistrationLive = McpServer.toolkit(WorktreeSwitchToolkit).pipe(
+const layerWorktreeSwitchToolkitRegistration = McpServer.toolkit(WorktreeSwitchToolkit).pipe(
   Layer.provide(WorktreeSwitchToolkitHandlersLive),
 );
 
-const PreviewControlsRegistrationLive = McpServer.toolkit(PreviewControlsToolkit).pipe(
-  Layer.provide(PreviewControlsHandlersLive),
+const layerPreviewControlsRegistration = McpServer.toolkit(PreviewControlsToolkit).pipe(
+  Layer.provide(PreviewControlsHandlers.layer),
 );
 
-const EnvironmentRegistrationLive = McpServer.toolkit(EnvironmentToolkit).pipe(
-  Layer.provide(EnvironmentHandlersLive),
+const layerEnvironmentRegistration = McpServer.toolkit(EnvironmentToolkit).pipe(
+  Layer.provide(EnvironmentHandlers.layer),
 );
 
-const ProjectRegistrationLive = McpServer.toolkit(ProjectToolkit).pipe(
-  Layer.provide(ProjectHandlersLive),
+const layerProjectRegistration = McpServer.toolkit(ProjectToolkit).pipe(
+  Layer.provide(ProjectHandlers.layer),
 );
 
-const AttachmentRegistrationLive = McpServer.toolkit(AttachmentToolkit).pipe(
-  Layer.provide(AttachmentHandlersLive),
+const layerAttachmentRegistration = McpServer.toolkit(AttachmentToolkit).pipe(
+  Layer.provide(AttachmentHandlers.layer),
 );
 
-const VoiceToolkitRegistrationLive = McpServer.toolkit(VoiceToolkit).pipe(
+const layerVoiceToolkitRegistration = McpServer.toolkit(VoiceToolkit).pipe(
   Layer.provide(VoiceToolkitHandlersLive),
 );
 
-export const PullRequestsToolkitRegistrationLive = McpServer.toolkit(PullRequestsToolkit).pipe(
-  Layer.provide(PullRequestsToolkitHandlersLive),
+export const layerPullRequestsToolkit = McpServer.toolkit(PullRequestsToolkit).pipe(
+  Layer.provide(PullRequestsHandlers.layer),
 );
 
-const DeviceStandardToolkitRegistrationLive = McpServer.toolkit(DeviceStandardToolkit).pipe(
-  Layer.provide(DeviceStandardToolkitHandlersLive),
+const layerDeviceStandardToolkitRegistration = McpServer.toolkit(DeviceStandardToolkit).pipe(
+  Layer.provide(DeviceHandlers.layerStandard),
 );
 
-const DeviceScreenshotRegistrationLive = Layer.effectDiscard(registerDeviceScreenshot()).pipe(
-  Layer.provide(DeviceScreenshotToolkitHandlersLive),
+const layerDeviceScreenshotRegistration = Layer.effectDiscard(registerDeviceScreenshot()).pipe(
+  Layer.provide(DeviceHandlers.layerScreenshot),
 );
 
-export const DeviceToolkitRegistrationLive = Layer.mergeAll(
-  DeviceStandardToolkitRegistrationLive,
-  DeviceScreenshotRegistrationLive,
+export const layerDeviceToolkit = Layer.mergeAll(
+  layerDeviceStandardToolkitRegistration,
+  layerDeviceScreenshotRegistration,
 );
 
 const makeMcpTransport = (path: `/${string}`) =>
@@ -733,12 +782,12 @@ const makeMcpTransport = (path: `/${string}`) =>
     version: packageJson.version,
     path,
     protocols: [McpProtocol.v2025_06_18],
-  }).pipe(Layer.provide(McpAuthMiddlewareLive));
+  }).pipe(Layer.provide(layerMcpAuthMiddleware));
 
 /** Preview controls require the preview capability, so they ride with the preview toolkit. */
-const PreviewIslandRegistrationLive = Layer.mergeAll(
-  PreviewToolkitRegistrationLive,
-  PreviewControlsRegistrationLive,
+const layerPreviewIslandRegistration = Layer.mergeAll(
+  layerPreviewToolkit,
+  layerPreviewControlsRegistration,
 );
 
 /**
@@ -746,56 +795,59 @@ const PreviewIslandRegistrationLive = Layer.mergeAll(
  * filter, so each capability combination gets its own server island at its
  * own path — a session's credential (whose endpoint McpSessionRegistry picks
  * from its capabilities) then only ever sees the tools it can call. The
- * orchestration, thread, attachment, project, environment, worktree and pull
- * request toolkits are on every island because every credential carries
- * their capabilities; they only operate on what the credential's thread can reach.
+ * orchestration, thread, attachment, project, environment, worktree, pull
+ * request and HTML toolkits are on every island because every credential
+ * carries their capabilities (HTML needs none); they only operate on what the
+ * credential's thread can reach.
  * Layer boundaries: Layer.fresh un-memoizes the McpServer inside each island,
  * so the MCP service layers provided inside a registration (orchestrator,
  * thread metadata) are built once per island; they hold no cross-call state.
  * Requirements left unmet inside an island are satisfied by the outer,
  * memoized build, so all islands share one instance of each: the handlers'
- * runtime dependencies (broker, voice staging, session registry) and the worktree service,
- * which holds the per-thread handoff guard.
+ * runtime dependencies (broker, voice staging, session registry), the worktree
+ * service, which holds the per-thread handoff guard, and the HTML renderer and
+ * preview browser, which hold install state.
  */
 const mcpToolkitIsland = <E, R>(path: `/${string}`, registrations: Layer.Layer<never, E, R>) =>
   Layer.fresh(
     Layer.mergeAll(
       registrations,
-      OrchestratorToolkitRegistrationLive,
-      ThreadToolkitRegistrationLive,
-      AttachmentRegistrationLive,
-      ProjectRegistrationLive,
-      EnvironmentRegistrationLive,
-      WorktreeToolkitRegistrationLive,
-      PullRequestsToolkitRegistrationLive,
-      ArchiveToolkitRegistrationLive,
-      WorktreeSwitchToolkitRegistrationLive,
+      layerOrchestratorToolkit,
+      layerThreadToolkit,
+      layerAttachmentRegistration,
+      layerProjectRegistration,
+      layerEnvironmentRegistration,
+      layerWorktreeToolkitRegistration,
+      layerPullRequestsToolkit,
+      layerHtmlToolkitRegistration,
+      layerArchiveToolkitRegistration,
+      layerWorktreeSwitchToolkitRegistration,
     ).pipe(Layer.provideMerge(makeMcpTransport(path))),
   );
 
 export const layer = Layer.mergeAll(
   mcpToolkitIsland(
     "/mcp",
-    Layer.mergeAll(PreviewIslandRegistrationLive, VoiceToolkitRegistrationLive),
+    Layer.mergeAll(layerPreviewIslandRegistration, layerVoiceToolkitRegistration),
   ),
-  mcpToolkitIsland("/mcp/preview", PreviewIslandRegistrationLive),
-  mcpToolkitIsland("/mcp/voice", VoiceToolkitRegistrationLive),
+  mcpToolkitIsland("/mcp/preview", layerPreviewIslandRegistration),
+  mcpToolkitIsland("/mcp/voice", layerVoiceToolkitRegistration),
   mcpToolkitIsland("/mcp/pull-requests", Layer.empty),
-  mcpToolkitIsland("/mcp/device", DeviceToolkitRegistrationLive),
+  mcpToolkitIsland("/mcp/device", layerDeviceToolkit),
   mcpToolkitIsland(
     "/mcp/device/preview",
-    Layer.mergeAll(DeviceToolkitRegistrationLive, PreviewIslandRegistrationLive),
+    Layer.mergeAll(layerDeviceToolkit, layerPreviewIslandRegistration),
   ),
   mcpToolkitIsland(
     "/mcp/device/voice",
-    Layer.mergeAll(DeviceToolkitRegistrationLive, VoiceToolkitRegistrationLive),
+    Layer.mergeAll(layerDeviceToolkit, layerVoiceToolkitRegistration),
   ),
   mcpToolkitIsland(
     "/mcp/device/all",
     Layer.mergeAll(
-      DeviceToolkitRegistrationLive,
-      PreviewIslandRegistrationLive,
-      VoiceToolkitRegistrationLive,
+      layerDeviceToolkit,
+      layerPreviewIslandRegistration,
+      layerVoiceToolkitRegistration,
     ),
   ),
-).pipe(Layer.provide(WorktreeMcpService.layer));
+).pipe(Layer.provide(WorktreeMcpService.layer), Layer.provide(layerHtmlServices));

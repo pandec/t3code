@@ -324,7 +324,7 @@ export type ThreadMessagesReport = ReturnType<typeof threadMessagesReport>;
 // could smuggle escape sequences; newlines and tabs stay. JSON mode needs no
 // such pass because JSON.stringify escapes them.
 export const stripTerminalControlCharacters = (text: string): string =>
-  // eslint-disable-next-line no-control-regex
+  // eslint-disable-next-line no-control-regex -- stripping terminal control characters is the point.
   text.replace(/[\u0000-\u0008\u000B-\u001F\u007F-\u009F]/g, "");
 
 export const renderThreadMessagesText = (report: ThreadMessagesReport): string => {

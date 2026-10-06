@@ -26,7 +26,7 @@ import type {
   ProviderAdapterV2TurnInput,
 } from "./ProviderAdapter.ts";
 import * as ProviderAdapterRegistry from "./ProviderAdapterRegistry.ts";
-import { makeOrchestratorV2ReplayLayerWithRegistry } from "./testkit/ProviderReplayHarness.ts";
+import * as ProviderReplayHarness from "./testkit/ProviderReplayHarness.ts";
 import { checkpointWorkspace } from "./testkit/ReplayFixtureWorkspace.ts";
 
 const NOTICE_TAG = "<voice_transcription_notice>";
@@ -320,9 +320,9 @@ it.effect("carries voice origin through send, steer, queue and queued edits, and
         );
       }).pipe(
         Effect.provide(
-          makeOrchestratorV2ReplayLayerWithRegistry(
+          ProviderReplayHarness.layerWithRegistry(
             { name: "voice-origin" },
-            ProviderAdapterRegistry.makeSingleLayer(adapter),
+            ProviderAdapterRegistry.layerSingle(adapter),
             { runEffectWorker: false },
           ),
         ),

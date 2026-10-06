@@ -18,7 +18,7 @@ import {
   resolveSavedPromptLibrary,
   stampSavedPromptLibrary,
 } from "@t3tools/client-runtime/state/saved-prompts";
-import { Atom } from "effect/unstable/reactivity";
+import { Atom } from "effect/reactivity";
 
 import { environmentPresentations } from "~/state/presentation";
 import { serverEnvironment } from "~/state/server";

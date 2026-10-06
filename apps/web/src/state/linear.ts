@@ -3,7 +3,7 @@ import { createLinearEnvironmentAtoms } from "@t3tools/client-runtime/state/line
 import { LinearRpcError, type LinearRpcErrorReason } from "@t3tools/contracts";
 import * as Cause from "effect/Cause";
 import * as Schema from "effect/Schema";
-import { AsyncResult, Atom } from "effect/unstable/reactivity";
+import { AsyncResult, Atom } from "effect/reactivity";
 
 import { connectionAtomRuntime } from "../connection/runtime";
 

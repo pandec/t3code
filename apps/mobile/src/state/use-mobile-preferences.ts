@@ -11,7 +11,7 @@ import {
   type SteerGraceWindowMs,
 } from "@t3tools/contracts/settings";
 import { useCallback, useMemo, useRef } from "react";
-import { AsyncResult } from "effect/unstable/reactivity";
+import { AsyncResult } from "effect/reactivity";
 
 import { resolveAccentTintAlphas, type AccentTintAlphas } from "../lib/accentTint";
 import type { Preferences } from "../persistence/mobile-preferences";
@@ -80,6 +80,14 @@ export function useThreadShelfExpansion(shelf: ThreadShelfId): {
     savePreferences(threadShelfExpandedPatch(shelf, next));
   }, [savePreferences, shelf]);
   return useMemo(() => ({ expanded, loaded: hydrated, toggle }), [expanded, hydrated, toggle]);
+}
+
+/**
+ * Working section beta, off until preferences load. Fork: no settings row
+ * exposes it, so it stays off unless a stored preference enables it.
+ */
+export function useWorkingShelfEnabled(): boolean {
+  return useMobilePreferences().preferences.workingShelfEnabled === true;
 }
 
 export function useArchivedSectionVisibleCount(): ArchivedSectionVisibleCount {

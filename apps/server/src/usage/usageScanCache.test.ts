@@ -4,6 +4,7 @@ import {
   decodeScanCache,
   dedupeWithinFile,
   encodeScanCache,
+  makeScanCacheWriter,
   pruneScanCache,
   type CachedFile,
   type ScanCache,
@@ -25,7 +26,7 @@ function record(overrides: Partial<UsageRecord> = {}): UsageRecord {
       reasoningTokens: 0,
     },
     reportedCostUsd: null,
-    fast: false,
+    speed: "standard",
     dedupeKey: "msg_1:",
     ...overrides,
   };
@@ -38,6 +39,26 @@ function position(overrides: Partial<CachedFile["position"]> = {}): CachedFile["
     guardHash: 0xdeadbeef,
     codexState: null,
     ...overrides,
+  };
+}
+
+const MIGRATED_POSITION: CachedFile["position"] = {
+  resumeOffset: 0,
+  guardLength: 0,
+  guardHash: 0,
+  codexState: null,
+};
+
+function codexState(): NonNullable<CachedFile["position"]["codexState"]> {
+  return {
+    model: "gpt-6-astra",
+    speed: "ultrafast",
+    sessionId: "session-c",
+    lastUsageSignature: null,
+    sawSessionMeta: true,
+    suppressingForkCopies: false,
+    forkCopyAnchorMs: 0,
+    deliberateSkips: 1,
   };
 }
 
@@ -87,12 +108,119 @@ describe("scan cache round trip", () => {
     );
     const migrated = decodeScanCache({ ...encoded, version: 4, files });
     const expected = new Map(
-      [...original].map(([path, file]) => [path, { ...file, requiresReparse: true }]),
+      [...original].map(([path, file]) => [
+        path,
+        { ...file, requiresReparse: true, position: MIGRATED_POSITION },
+      ]),
     );
     expect(migrated).toEqual(expected);
-    expect(migrated.get("/deleted/session.jsonl")?.records[0]?.fast).toBe(false);
-    expect(encodeScanCache(migrated).version).toBe(5);
+    expect(migrated.get("/deleted/session.jsonl")?.records[0]?.speed).toBe("standard");
+    expect(encodeScanCache(migrated).version).toBe(6);
     expect(decodeScanCache(encodeScanCache(migrated))).toEqual(expected);
+  });
+
+  it("migrates fork v5 with retained totals, and re-parses Codex for its service tier", () => {
+    const original = cacheWith([["/deleted/claude.jsonl", 100, [record({ speed: "fast" })], 2, 1]]);
+    original.set("cursor-account:one", {
+      ...original.get("/deleted/claude.jsonl")!,
+      provider: "cursor",
+      records: [record({ provider: "cursor", model: "display-name", rateModel: "tier" })],
+      malformedRecords: 0,
+      tailMalformedRecords: 0,
+    });
+    original.set("/codex.jsonl", {
+      ...original.get("/deleted/claude.jsonl")!,
+      provider: "codex",
+      records: [record({ provider: "codex", model: "gpt-6-astra", dedupeKey: null })],
+      position: position({ codexState: codexState() }),
+    });
+    const encoded = encodeScanCache(original);
+    // Fork v5 wrote the same rows (its `fast` flag is speed index 0 or 1), but
+    // its Codex state had no service tier.
+    const { speed: _speed, ...forkCodexState } = codexState();
+    const forkV5 = {
+      ...encoded,
+      version: 5,
+      files: {
+        ...encoded.files,
+        "/codex.jsonl": { ...encoded.files["/codex.jsonl"]!, cs: forkCodexState },
+      },
+    };
+
+    const migrated = decodeScanCache(JSON.parse(JSON.stringify(forkV5)));
+
+    expect(migrated.get("/deleted/claude.jsonl")).toEqual(original.get("/deleted/claude.jsonl"));
+    expect(migrated.get("cursor-account:one")).toEqual(original.get("cursor-account:one"));
+    expect(migrated.get("/codex.jsonl")).toEqual({
+      ...original.get("/codex.jsonl")!,
+      requiresReparse: true,
+      position: MIGRATED_POSITION,
+    });
+    expect(decodeScanCache(encodeScanCache(migrated))).toEqual(migrated);
+  });
+
+  it("migrates upstream v5 rows with their speed, re-parsing for malformed counts", () => {
+    const original = cacheWith([["/deleted/claude.jsonl", 100, [record({ speed: "fast" })]]]);
+    original.set("/codex.jsonl", {
+      ...original.get("/deleted/claude.jsonl")!,
+      provider: "codex",
+      records: [
+        record({ provider: "codex", model: "gpt-6-astra", dedupeKey: null, speed: "ultrafast" }),
+      ],
+      position: position({ codexState: codexState() }),
+    });
+    const encoded = encodeScanCache(original);
+    const { deliberateSkips: _skips, ...upstreamCodexState } = codexState();
+    const upstreamV5 = {
+      ...encoded,
+      version: 5,
+      files: Object.fromEntries(
+        Object.entries(encoded.files).map(([path, { x: _x, tx: _tx, ...file }]) => [
+          path,
+          {
+            ...file,
+            r: file.r.map((row) => row.slice(0, 11)),
+            t: file.t.map((row) => row.slice(0, 11)),
+            cs: file.p === "codex" ? upstreamCodexState : null,
+          },
+        ]),
+      ),
+    };
+
+    const migrated = decodeScanCache(JSON.parse(JSON.stringify(upstreamV5)));
+
+    expect(migrated).toEqual(
+      new Map(
+        [...original].map(([path, file]) => [
+          path,
+          { ...file, requiresReparse: true, position: MIGRATED_POSITION },
+        ]),
+      ),
+    );
+    expect(migrated.get("/codex.jsonl")?.records[0]?.speed).toBe("ultrafast");
+    expect(migrated.get("/deleted/claude.jsonl")?.records[0]?.speed).toBe("fast");
+  });
+
+  it("migrates upstream v4 rows whose speed is a fast flag", () => {
+    const original = cacheWith([["/deleted/claude.jsonl", 100, [record({ speed: "fast" })]]]);
+    const encoded = encodeScanCache(original);
+    const upstreamV4 = {
+      ...encoded,
+      version: 4,
+      files: Object.fromEntries(
+        Object.entries(encoded.files).map(([path, { x: _x, tx: _tx, ...file }]) => [
+          path,
+          { ...file, r: file.r.map((row) => row.slice(0, 11)), t: [] },
+        ]),
+      ),
+    };
+
+    const migrated = decodeScanCache(JSON.parse(JSON.stringify(upstreamV4)));
+
+    expect(migrated.get("/deleted/claude.jsonl")?.records).toEqual(
+      original.get("/deleted/claude.jsonl")?.records,
+    );
+    expect(migrated.get("/deleted/claude.jsonl")?.requiresReparse).toBe(true);
   });
 
   it("preserves Cursor tier pricing and cache savings after serialization", () => {
@@ -122,7 +250,7 @@ describe("scan cache round trip", () => {
       [
         "/a.jsonl",
         100,
-        [record(), record({ dedupeKey: "msg_2:", model: "claude-opus-5-5", fast: true })],
+        [record(), record({ dedupeKey: "msg_2:", model: "claude-opus-5-5", speed: "fast" })],
       ],
       ["/b.jsonl", 200, [record({ sessionId: "session-b", reportedCostUsd: 1.5 })]],
     ]);
@@ -142,13 +270,16 @@ describe("scan cache round trip", () => {
       size: 80,
       mtimeMs: 400,
       provider: "codex",
-      records: [record({ provider: "codex", model: "gpt-5.2-codex", dedupeKey: null })],
+      records: [
+        record({ provider: "codex", model: "gpt-6-astra", dedupeKey: null, speed: "ultrafast" }),
+      ],
       malformedRecords: 2,
       tailRecords: [],
       tailMalformedRecords: 1,
       position: position({
         codexState: {
-          model: "gpt-5.2-codex",
+          model: "gpt-6-astra",
+          speed: "ultrafast",
           sessionId: "session-c",
           lastUsageSignature: '{"input_tokens":1}',
           sawSessionMeta: true,
@@ -194,22 +325,44 @@ describe("scan cache round trip", () => {
     expect(decodeScanCache(JSON.parse(JSON.stringify(poisoned))).has("/a.jsonl")).toBe(false);
   });
 
-  it("drops an entry whose fast flag is not 0 or 1", () => {
-    const encoded = encodeScanCache(cacheWith([["/a.jsonl", 100, [record({ fast: true })]]]));
+  it("drops an entry whose speed is not a known index", () => {
+    const encoded = encodeScanCache(cacheWith([["/a.jsonl", 100, [record({ speed: "fast" })]]]));
     const row = encoded.files["/a.jsonl"]!.r[0]!;
     const poisoned = {
       ...encoded,
-      files: { "/a.jsonl": { ...encoded.files["/a.jsonl"]!, r: [[...row.slice(0, 10), true]] } },
+      files: {
+        "/a.jsonl": { ...encoded.files["/a.jsonl"]!, r: [[...row.slice(0, 10), true, null]] },
+      },
     };
 
     expect(decodeScanCache(JSON.parse(JSON.stringify(poisoned))).has("/a.jsonl")).toBe(false);
   });
 
-  it("rejects a document from the previous cache version", () => {
+  it("rejects a document from before records carried a speed", () => {
     const encoded = encodeScanCache(cacheWith([["/a.jsonl", 100, [record()]]]));
     const previous = { ...encoded, version: 3 };
 
     expect(decodeScanCache(JSON.parse(JSON.stringify(previous))).size).toBe(0);
+  });
+
+  it("rewrites only changed entries and still restores the whole cache", () => {
+    const write = makeScanCacheWriter();
+    const cache = cacheWith([
+      ["/a.jsonl", 100, [record()]],
+      ["/b.jsonl", 200, [record({ sessionId: "session-b" })]],
+    ]);
+    const sources = { "claude\u0000/projects": { dir: "/projects", volumeId: "1:2" } };
+    expect(decodeScanCache(JSON.parse(write(cache, { sources })))).toEqual(cache);
+
+    // The replacement adds intern entries; /a's memoised indexes must hold.
+    cache.set("/b.jsonl", {
+      ...cache.get("/b.jsonl")!,
+      size: 30,
+      records: [record({ sessionId: "session-c", model: "claude-opus-5-5", dedupeKey: "msg_3:" })],
+    });
+    const document = JSON.parse(write(cache, { sources }));
+    expect(decodeScanCache(document)).toEqual(cache);
+    expect(document.sources).toEqual(sources);
   });
 
   it("interns repeated model and session strings", () => {

@@ -1,7 +1,7 @@
 import type { AtomCommandResult } from "@t3tools/client-runtime/state/runtime";
 import type { CommandId, OrchestrationV2DispatchCommandResult } from "@t3tools/contracts";
 import * as Cause from "effect/Cause";
-import { AsyncResult } from "effect/unstable/reactivity";
+import { AsyncResult } from "effect/reactivity";
 
 import type { ThreadLifecycleOutboxManager } from "./thread-lifecycle-outbox-manager";
 import {

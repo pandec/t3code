@@ -46,11 +46,12 @@ export const resolveFollowedWorkspace = Effect.fn("resolveFollowedWorkspace")(fu
     Effect.map((target) =>
       Option.some({ worktreePath: target.worktreePath, branch: target.branch }),
     ),
-    Effect.catchTag("WorktreeSwitchError", () =>
-      Effect.succeed(
-        Option.none<{ readonly worktreePath: string | null; readonly branch: string | null }>(),
-      ),
-    ),
+    Effect.catchTags({
+      WorktreeSwitchError: () =>
+        Effect.succeed(
+          Option.none<{ readonly worktreePath: string | null; readonly branch: string | null }>(),
+        ),
+    }),
   );
 });
 

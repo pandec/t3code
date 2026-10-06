@@ -2,8 +2,8 @@ import * as Console from "effect/Console";
 import * as Effect from "effect/Effect";
 import * as Predicate from "effect/Predicate";
 import * as Schema from "effect/Schema";
-import * as CliError from "effect/unstable/cli/CliError";
-import * as CliOutput from "effect/unstable/cli/CliOutput";
+import * as CliError from "effect/cli/CliError";
+import * as CliOutput from "effect/cli/CliOutput";
 
 import {
   CliOrchestrationOutcomeUnknownError,

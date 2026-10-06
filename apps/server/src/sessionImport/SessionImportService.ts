@@ -47,7 +47,7 @@ import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
 import * as Path from "effect/Path";
 import * as Semaphore from "effect/Semaphore";
-import * as SqlClient from "effect/unstable/sql/SqlClient";
+import * as SqlClient from "effect/sql/SqlClient";
 
 import { sanitizeGitRepositoryEnvironment } from "../git/Utils.ts";
 import * as EventSink from "../orchestration-v2/EventSink.ts";
@@ -58,7 +58,7 @@ import { messageEvents } from "../project/AgentSessionImporter.ts";
 import * as ProjectService from "../project/ProjectService.ts";
 import { extractSubstantiveUserText } from "../provider/Drivers/substantiveUserText.ts";
 import type { ProviderInstance } from "../provider/ProviderDriver.ts";
-import { ProviderInstanceRegistry } from "../provider/Services/ProviderInstanceRegistry.ts";
+import { ProviderInstanceRegistry } from "../provider/ProviderInstanceRegistry.ts";
 import type { ProviderImportedMessage } from "./ProviderSessionImport.ts";
 import * as StrictResume from "./StrictResume.ts";
 

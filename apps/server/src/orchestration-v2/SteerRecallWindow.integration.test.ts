@@ -28,7 +28,7 @@ import {
   type ProviderAdapterV2TurnInput,
 } from "./ProviderAdapter.ts";
 import * as ProviderAdapterRegistry from "./ProviderAdapterRegistry.ts";
-import { makeOrchestratorV2ReplayLayerWithRegistry } from "./testkit/ProviderReplayHarness.ts";
+import * as ProviderReplayHarness from "./testkit/ProviderReplayHarness.ts";
 import { checkpointWorkspace } from "./testkit/ReplayFixtureWorkspace.ts";
 
 const driver = ProviderDriverKind.make("codex");
@@ -123,7 +123,21 @@ const makeHarness = (name: string) =>
               Effect.sync(() => {
                 steered.push(turn.message.text);
               }),
-            interruptTurn: () => Effect.void,
+            // Like a real provider, an interrupted turn reports its terminal.
+            interruptTurn: ({ providerThread, providerTurnId }) =>
+              Queue.offer(events, {
+                type: "turn.terminal",
+                driver,
+                providerThreadId: providerThread.id,
+                providerTurnId,
+                runOrdinal: started.find(
+                  (turn) =>
+                    ProviderTurnId.make(`provider-turn:${turn.attemptId}`) === providerTurnId,
+                )!.runOrdinal,
+                status: "interrupted",
+                failure: null,
+                threadDisposition: "reusable",
+              }).pipe(Effect.asVoid),
             respondToRuntimeRequest: () => Effect.void,
             readThreadSnapshot: () => Effect.die("unused"),
             rollbackThread: () => Effect.die("unused"),
@@ -131,9 +145,9 @@ const makeHarness = (name: string) =>
           };
         }),
     };
-    const layer = makeOrchestratorV2ReplayLayerWithRegistry(
+    const layer = ProviderReplayHarness.layerWithRegistry(
       { name },
-      ProviderAdapterRegistry.makeSingleLayer(adapter),
+      ProviderAdapterRegistry.layerSingle(adapter),
       { runEffectWorker: false },
     );
     return { cwd, events, started, steered, nextCapabilities, layer };
@@ -487,7 +501,7 @@ it.effect(
 it.effect("steers into a new turn while older queued messages stay held after a stop", () =>
   Effect.scoped(
     Effect.gen(function* () {
-      const { events, started, steered, threadId, setup, layer } =
+      const { started, steered, threadId, setup, layer } =
         yield* scenario("steer-recall-held-queue");
       yield* Effect.gen(function* () {
         const { orchestrator, worker, watch, send } = yield* setup;
@@ -496,7 +510,14 @@ it.effect("steers into a new turn while older queued messages stay held after a 
           (run) => run.status === "queued",
         )!;
 
-        // Stop holds the queue; the stopped turn then ends.
+        // Stop holds the queue; the stopped turn reports its end.
+        const activeTurn = (yield* orchestrator.getThreadProjection(threadId)).providerTurns[0]!;
+        const activeEnded = yield* watch(
+          (event) =>
+            event.type === "run.updated" &&
+            event.payload.id === started[0]!.runId &&
+            event.payload.status === "interrupted",
+        );
         yield* orchestrator.dispatch({
           type: "run.interrupt",
           commandId: CommandId.make("stop"),
@@ -505,28 +526,6 @@ it.effect("steers into a new turn while older queued messages stay held after a 
           holdQueue: true,
         });
         yield* worker.drain();
-        const activeTurn = (yield* orchestrator.getThreadProjection(threadId)).providerTurns[0]!;
-        const activeEnded = yield* watch(
-          (event) =>
-            event.type === "run.updated" &&
-            event.payload.id === started[0]!.runId &&
-            event.payload.status === "interrupted",
-        );
-        yield* Queue.offer(events, {
-          type: "provider_turn.updated",
-          driver,
-          providerTurn: { ...activeTurn, status: "interrupted", completedAt: yield* DateTime.now },
-        });
-        yield* Queue.offer(events, {
-          type: "turn.terminal",
-          driver,
-          providerThreadId: activeTurn.providerThreadId,
-          providerTurnId: activeTurn.id,
-          runOrdinal: started[0]!.runOrdinal,
-          status: "interrupted",
-          failure: null,
-          threadDisposition: "reusable",
-        });
         yield* Fiber.join(activeEnded);
         yield* worker.drain();
 

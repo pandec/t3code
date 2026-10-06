@@ -22,8 +22,9 @@ import * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
+import * as Schema from "effect/Schema";
 import * as Stream from "effect/Stream";
-import { McpSchema, McpServer } from "effect/unstable/ai";
+import { McpSchema, McpServer } from "effect/ai";
 
 import * as CheckpointStore from "../checkpointing/CheckpointStore.ts";
 import * as ServerConfig from "../config.ts";
@@ -32,10 +33,10 @@ import * as McpInvocationContext from "../mcp/McpInvocationContext.ts";
 import * as McpSessionRegistryTestkit from "../mcp/McpSessionRegistry.testkit.ts";
 import { ArchiveToolkitHandlersLive } from "../mcp/toolkits/archive/handlers.ts";
 import { ArchiveToolkit } from "../mcp/toolkits/archive/tools.ts";
-import { SqlitePersistenceMemory } from "../persistence/Layers/Sqlite.ts";
+import * as SqlitePersistence from "../persistence/Sqlite.ts";
 import * as ProjectService from "../project/ProjectService.ts";
 import type { ProviderInstance } from "../provider/ProviderDriver.ts";
-import * as ProviderInstanceRegistry from "../provider/Services/ProviderInstanceRegistry.ts";
+import * as ProviderInstanceRegistry from "../provider/ProviderInstanceRegistry.ts";
 import * as ServerSettings from "../serverSettings.ts";
 import * as SourceControlProviderRegistry from "../sourceControl/SourceControlProviderRegistry.ts";
 import * as VcsDriverRegistry from "../vcs/VcsDriverRegistry.ts";
@@ -59,7 +60,7 @@ import * as Orchestrator from "./Orchestrator.ts";
 import { OrchestratorProjectionError } from "./Orchestrator.ts";
 import * as ProjectStore from "./ProjectStore.ts";
 import type { ProviderAdapterV2Shape } from "./ProviderAdapter.ts";
-import { OrchestrationV2EventSinkLayerLive, OrchestrationV2LayerLive } from "./runtimeLayer.ts";
+import * as RuntimeLayer from "./runtimeLayer.ts";
 import * as ThreadArchiveScheduler from "./ThreadArchiveScheduler.ts";
 import * as ThreadCommandExecutor from "./ThreadCommandExecutor.ts";
 import * as ThreadManagement from "./ThreadManagementService.ts";
@@ -550,15 +551,15 @@ const makeTestLayer = (settings: Parameters<typeof ServerSettings.layerTest>[0] 
     Layer.provideMerge(FakeWorktreeRemoval),
     Layer.provideMerge(
       Layer.mergeAll(
-        OrchestrationV2LayerLive,
-        OrchestrationV2EventSinkLayerLive,
+        RuntimeLayer.layer,
+        RuntimeLayer.layerEventSink,
         ProjectStore.layer,
         EffectOutbox.layer,
         ThreadCommandExecutor.layer,
       ),
     ),
     Layer.provide(McpSessionRegistryTestkit.layer),
-    Layer.provideMerge(SqlitePersistenceMemory),
+    Layer.provideMerge(SqlitePersistence.layerMemory),
     Layer.provide(
       CheckpointStore.layer.pipe(
         Layer.provide(
@@ -595,6 +596,7 @@ const makeTestLayer = (settings: Parameters<typeof ServerSettings.layerTest>[0] 
   );
 const TestLayer = makeTestLayer();
 
+const decodeJsonText = Schema.decodeUnknownEffect(Schema.fromJsonString(Schema.Unknown));
 const mcpClient = McpSchema.McpServerClient.of({
   clientId: 1,
   clientCapabilities: {},
@@ -1319,9 +1321,13 @@ it.layer(TestLayer)("deferred archive on the orchestrator", (it) => {
         server.callTool({ name, arguments: {} }).pipe(
           Effect.provideService(McpInvocationContext.McpInvocationContext, {
             environmentId: EnvironmentId.make("deferred-archive-mcp"),
-            threadId,
-            providerSessionId: "deferred-archive-mcp-session",
-            providerInstanceId,
+            requestNamespace: "deferred-archive-mcp-session",
+            thread: {
+              threadId,
+              providerSessionId: "deferred-archive-mcp-session",
+              providerInstanceId,
+            },
+            client: undefined,
             capabilities: new Set(["orchestration"] as const),
             issuedAt: 1,
           }),
@@ -1343,7 +1349,14 @@ it.layer(TestLayer)("deferred archive on the orchestrator", (it) => {
         ProviderInstanceId.make("deferred-archive-other"),
         "archive_thread_status",
       );
-      assert.deepInclude(stranger.structuredContent, {
+      // Effect returns a declared tool failure as JSON text, never as `structuredContent`.
+      const strangerText = stranger.content[0];
+      assert.isTrue(stranger.isError);
+      assert.equal(strangerText?.type, "text");
+      const strangerFailure = yield* decodeJsonText(
+        strangerText?.type === "text" ? strangerText.text : "null",
+      );
+      assert.deepInclude(strangerFailure, {
         _tag: "OrchestratorMcpFailure",
         code: "parent_not_active",
       });

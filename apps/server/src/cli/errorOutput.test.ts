@@ -1,5 +1,5 @@
 import { assert, it } from "@effect/vitest";
-import * as CliError from "effect/unstable/cli/CliError";
+import * as CliError from "effect/cli/CliError";
 
 import {
   CliOrchestrationOutcomeUnknownError,

@@ -28,7 +28,7 @@ import * as Path from "effect/Path";
 import * as Scheduler from "effect/Scheduler";
 import * as Schema from "effect/Schema";
 import * as TestClock from "effect/testing/TestClock";
-import { HttpClient, HttpClientResponse } from "effect/unstable/http";
+import { HttpClient, HttpClientResponse } from "effect/http";
 
 import * as ServerConfig from "../config.ts";
 import * as ServerSettings from "../serverSettings.ts";
@@ -89,7 +89,7 @@ it.layer(NodeServices.layer)("UsageService", (it) => {
         const claudeTranscriptDir = path.join(claudeHome, "projects");
         const codexTranscriptDir = path.join(codexHome, "sessions");
         const claudeTranscriptPath = path.join(claudeTranscriptDir, "session.jsonl");
-        const scanCachePath = path.join(config.stateDir, "usage-scan-cache.json");
+        const scanCachePath = path.join(config.stateDir, "usage-scan-cache-v6.json");
         yield* fileSystem.makeDirectory(claudeTranscriptDir, { recursive: true });
         yield* fileSystem.makeDirectory(codexTranscriptDir, { recursive: true });
         const canonicalClaudeTranscriptDir = yield* Effect.promise(() =>
@@ -121,10 +121,11 @@ it.layer(NodeServices.layer)("UsageService", (it) => {
               yield* Effect.yieldNow;
               return yield* fileSystem.exists(target);
             }),
-          writeFileString: (target, contents, options) =>
+          // The cache is written atomically: a temp file renamed over it.
+          rename: (from, to) =>
             Effect.gen(function* () {
-              if (target === scanCachePath) scanCacheWrites += 1;
-              return yield* fileSystem.writeFileString(target, contents, options);
+              if (to === scanCachePath) scanCacheWrites += 1;
+              return yield* fileSystem.rename(from, to);
             }),
         });
 
@@ -403,6 +404,7 @@ it.layer(NodeServices.layer)("UsageService", (it) => {
 
 const encodeUnknownJson = Schema.encodeEffect(Schema.fromJsonString(Schema.Unknown));
 const encodeUnknownJsonString = Schema.encodeSync(Schema.fromJsonString(Schema.Unknown));
+const decodeUnknownJsonString = Schema.decodeSync(Schema.fromJsonString(Schema.Unknown));
 
 function claudeLine(id: number, outputTokens: number, model = "claude-fable-5"): string {
   return `${JSON.stringify({
@@ -445,7 +447,7 @@ const setup = Effect.gen(function* () {
   };
 });
 
-const serviceLayers = (input: {
+const layerService = (input: {
   readonly prefix: string;
   readonly home: string;
   readonly settings: Parameters<typeof ServerSettings.layerTest>[0];
@@ -529,7 +531,7 @@ describe("UsageService", () => {
           return yield* service.readSummary(WINDOW);
         }).pipe(
           Effect.provide(
-            serviceLayers({
+            layerService({
               prefix: "usage-managed-accounts",
               home,
               settings: {
@@ -585,7 +587,7 @@ describe("UsageService", () => {
       for (const platform of ["linux", "win32", "darwin"] as const) {
         const service = yield* UsageService.make.pipe(
           Effect.provide(
-            serviceLayers({
+            layerService({
               prefix: `usage-service-cursor-no-login-${platform}`,
               home,
               settings,
@@ -610,7 +612,7 @@ describe("UsageService", () => {
       });
       const service = yield* UsageService.make.pipe(
         Effect.provide(
-          serviceLayers({ prefix: "usage-service-cursor-invalid-login", home, settings }),
+          layerService({ prefix: "usage-service-cursor-invalid-login", home, settings }),
         ),
       );
       const summary = yield* service.readSummary(WINDOW);
@@ -624,7 +626,7 @@ describe("UsageService", () => {
       const { settings, home } = yield* setup;
       const service = yield* UsageService.make.pipe(
         Effect.provide(
-          serviceLayers({
+          layerService({
             prefix: "usage-service-cursor-keychain-disabled",
             home,
             settings,
@@ -670,7 +672,7 @@ describe("UsageService", () => {
         });
         const service = yield* UsageService.make.pipe(
           Effect.provide(
-            serviceLayers({
+            layerService({
               prefix: `usage-service-cursor-store-${index}`,
               home,
               settings,
@@ -726,7 +728,7 @@ describe("UsageService", () => {
           }
         });
         const service = yield* UsageService.make.pipe(
-          Effect.provide(serviceLayers({ prefix: "usage-service-opencode", home, settings })),
+          Effect.provide(layerService({ prefix: "usage-service-opencode", home, settings })),
         );
         const summary = yield* service.readSummary(WINDOW);
         assert.strictEqual(summary.buckets[0]?.provider, "opencode");
@@ -789,7 +791,7 @@ describe("UsageService", () => {
         );
       }).pipe(
         Effect.provide(
-          serviceLayers({ prefix: "usage-service-opencode-retention", home, settings }),
+          layerService({ prefix: "usage-service-opencode-retention", home, settings }),
         ),
       );
     }).pipe(Effect.scoped),
@@ -807,7 +809,7 @@ describe("UsageService", () => {
         await NodeFSP.writeFile(NodePath.join(home, "config", "cursor", "auth.json"), "broken");
       });
       const service = yield* UsageService.make.pipe(
-        Effect.provide(serviceLayers({ prefix: "usage-service-reader-errors", home, settings })),
+        Effect.provide(layerService({ prefix: "usage-service-reader-errors", home, settings })),
       );
       const summary = yield* service.readSummary(WINDOW);
       for (const provider of ["opencode", "antigravity", "cursor"]) {
@@ -845,7 +847,7 @@ describe("UsageService", () => {
       });
       const service = yield* UsageService.make.pipe(
         Effect.provide(
-          serviceLayers({
+          layerService({
             prefix: "usage-service-aliased-roots-test",
             home,
             settings,
@@ -925,7 +927,7 @@ describe("UsageService", () => {
       });
       const service = yield* UsageService.make.pipe(
         Effect.provide(
-          serviceLayers({
+          layerService({
             prefix: "usage-service-accounts-test",
             home,
             settings: {
@@ -1047,7 +1049,7 @@ describe("UsageService", () => {
           );
         }).pipe(
           Effect.provide(
-            serviceLayers({
+            layerService({
               prefix: "usage-service-home-refresh-test",
               home,
               environment: { CLAUDE_CONFIG_DIR: NodePath.join(home, "host-ignored") },
@@ -1077,7 +1079,7 @@ describe("UsageService", () => {
         yield* Effect.promise(() => NodeFSP.writeFile(transcript, claudeLine(1, 5)));
         const service = yield* UsageService.make.pipe(
           Effect.provide(
-            serviceLayers({
+            layerService({
               prefix: "usage-service-inherited-homes-test",
               home,
               environment: {
@@ -1152,7 +1154,7 @@ describe("UsageService", () => {
         assert.deepStrictEqual(restored.buckets, original.buckets);
       }).pipe(
         Effect.provide(
-          serviceLayers({ prefix: "usage-service-price-overrides-test", home, settings }),
+          layerService({ prefix: "usage-service-price-overrides-test", home, settings }),
         ),
       );
     }).pipe(Effect.scoped),
@@ -1164,7 +1166,7 @@ describe("UsageService", () => {
       yield* Effect.promise(() => NodeFSP.writeFile(transcript, claudeLine(1, 5)));
 
       const service = yield* UsageService.make.pipe(
-        Effect.provide(serviceLayers({ prefix: "usage-service-grow-test", home, settings })),
+        Effect.provide(layerService({ prefix: "usage-service-grow-test", home, settings })),
       );
 
       const first = yield* service.readSummary(WINDOW);
@@ -1221,7 +1223,7 @@ describe("UsageService", () => {
       yield* Effect.promise(() => NodeFSP.writeFile(transcript, claudeLine(1, 5) + malformedTail));
 
       const service = yield* UsageService.make.pipe(
-        Effect.provide(serviceLayers({ prefix: "usage-service-tail-test", home, settings })),
+        Effect.provide(layerService({ prefix: "usage-service-tail-test", home, settings })),
       );
 
       const first = yield* service.readSummary(WINDOW);
@@ -1254,7 +1256,8 @@ describe("UsageService", () => {
       yield* Effect.promise(() => NodeFSP.writeFile(transcript, content));
       yield* Effect.gen(function* () {
         const config = yield* ServerConfig.ServerConfig;
-        const cachePath = NodePath.join(config.stateDir, "usage-scan-cache.json");
+        const cachePath = NodePath.join(config.stateDir, "usage-scan-cache-v6.json");
+        const legacyPath = NodePath.join(config.stateDir, "usage-scan-cache.json");
         const service = yield* UsageService.make;
         const first = yield* service.readSummary(WINDOW);
         const document = yield* Effect.promise(() => NodeFSP.readFile(cachePath, "utf8"));
@@ -1273,33 +1276,44 @@ describe("UsageService", () => {
             ]),
           ),
         };
-        for (const mode of ["unchanged", "grown", "deleted"] as const) {
-          yield* Effect.promise(() => NodeFSP.writeFile(cachePath, encodeUnknownJsonString(v4)));
+        for (const mode of ["unchanged", "grown", "deleted", "unreadable"] as const) {
+          // An upgraded server finds only the fork v4 cache an older build left.
+          yield* Effect.promise(() => NodeFSP.rm(cachePath, { force: true }));
+          yield* Effect.promise(() => NodeFSP.writeFile(legacyPath, encodeUnknownJsonString(v4)));
           if (mode === "grown") yield* Effect.promise(() => NodeFSP.appendFile(transcript, "{}\n"));
           if (mode === "deleted") yield* Effect.promise(() => NodeFSP.rm(transcript));
+          // Still listed but cannot be opened: migrated history must survive.
+          if (mode === "unreadable") {
+            yield* Effect.promise(() => NodeFSP.mkdir(`${transcript}.dir`, { recursive: true }));
+            yield* Effect.promise(() => NodeFSP.symlink(`${transcript}.dir`, transcript));
+          }
           const restarted = yield* UsageService.make;
           const summary = yield* restarted.readSummary(WINDOW);
           assert.strictEqual(totalOutputTokens(summary), 5);
           assert.strictEqual(
             summary.buckets[0]?.costUsd,
-            mode === "deleted" ? first.buckets[0]!.costUsd / 2 : first.buckets[0]!.costUsd,
+            mode === "grown" || mode === "unchanged"
+              ? first.buckets[0]!.costUsd
+              : first.buckets[0]!.costUsd / 2,
           );
+          if (mode === "unreadable") continue;
           const persisted = decodeScanCache(
             yield* decodeScanCacheDocument(
               yield* Effect.promise(() => NodeFSP.readFile(cachePath, "utf8")),
             ),
           );
           const cached = [...persisted.values()].find((file) => file.provider === "claude")!;
-          assert.strictEqual(cached.records[0]?.fast, mode !== "deleted");
+          assert.strictEqual(cached.records[0]?.speed, mode === "deleted" ? "standard" : "fast");
           assert.strictEqual(cached.requiresReparse, mode === "deleted" ? true : undefined);
         }
+        yield* Effect.promise(() => NodeFSP.rm(transcript, { force: true }));
         yield* Effect.promise(() => NodeFSP.writeFile(transcript, content));
         const restoredService = yield* UsageService.make;
         const restored = yield* restoredService.readSummary(WINDOW);
         assert.deepStrictEqual(restored.buckets, first.buckets);
       }).pipe(
         Effect.provide(
-          serviceLayers({
+          layerService({
             prefix: "usage-v4-fast-migration",
             home,
             settings,
@@ -1349,7 +1363,7 @@ describe("UsageService", () => {
                       rateModel: "tiered-rate",
                       timestampMs: Date.parse("2026-08-01T10:00:00Z"),
                       sessionId: "one",
-                      fast: false,
+                      speed: "standard",
                       reportedCostUsd: null,
                       dedupeKey: "one",
                       totals: {
@@ -1367,7 +1381,7 @@ describe("UsageService", () => {
           );
           yield* Effect.promise(() =>
             NodeFSP.writeFile(
-              NodePath.join(config.stateDir, "usage-scan-cache.json"),
+              NodePath.join(config.stateDir, "usage-scan-cache-v6.json"),
               encodeUnknownJsonString({
                 ...cache,
                 sources: { [`cursor\0${authPath}`]: { dir: source, volumeId: "retained-account" } },
@@ -1388,7 +1402,7 @@ describe("UsageService", () => {
           assert.deepStrictEqual((yield* restarted.readSummary(WINDOW)).buckets, summary.buckets);
         }).pipe(
           Effect.provide(
-            serviceLayers({
+            layerService({
               prefix: "usage-cursor-tier-retention",
               home,
               settings,
@@ -1445,12 +1459,116 @@ describe("UsageService", () => {
           );
         }).pipe(
           Effect.provide(
-            serviceLayers({
+            layerService({
               prefix: "usage-service-large-record-test",
               home,
               settings,
               ratesDocument: {
                 "claude-fable-5": { input_cost_per_token: 1e-5, output_cost_per_token: 5e-5 },
+              },
+            }),
+          ),
+        );
+      }).pipe(Effect.scoped),
+  );
+
+  it.live(
+    "upgrades a v4 cache: reprices live Codex tiers, keeps deleted rollouts, leaves v4 intact",
+    () =>
+      Effect.gen(function* () {
+        const { home, settings } = yield* setup;
+        const sessions = NodePath.join(home, "codex", "sessions");
+        const rollout = (sessionId: string, outputTokens: number) =>
+          [
+            { type: "session_meta", payload: { id: sessionId } },
+            { type: "turn_context", payload: { model: "gpt-6-astra" } },
+            {
+              type: "event_msg",
+              payload: {
+                type: "thread_settings_applied",
+                thread_settings: { service_tier: "ultrafast" },
+              },
+            },
+            {
+              type: "event_msg",
+              timestamp: "2026-08-01T10:00:00Z",
+              payload: {
+                type: "token_count",
+                info: { last_token_usage: { input_tokens: 0, output_tokens: outputTokens } },
+              },
+            },
+          ]
+            .map((line) => encodeUnknownJsonString(line))
+            .join("\n") + "\n";
+        const live = NodePath.join(sessions, "live.jsonl");
+        const deleted = NodePath.join(sessions, "deleted.jsonl");
+        yield* Effect.promise(async () => {
+          await NodeFSP.mkdir(sessions, { recursive: true });
+          await NodeFSP.writeFile(live, rollout("live", 10));
+          await NodeFSP.writeFile(deleted, rollout("deleted", 20));
+        });
+
+        yield* Effect.gen(function* () {
+          const { stateDir } = yield* ServerConfig.ServerConfig;
+          const cachePath = NodePath.join(stateDir, "usage-scan-cache-v6.json");
+          const legacyPath = NodePath.join(stateDir, "usage-scan-cache.json");
+          yield* (yield* UsageService.make).readSummary(WINDOW);
+
+          // Rewrite the cache as an upstream v4 server left it: every Codex
+          // record at speed 0 (standard), no tier in the reducer state, and no
+          // malformed counts.
+          const legacy = yield* Effect.promise(async () => {
+            const document = decodeUnknownJsonString(await NodeFSP.readFile(cachePath, "utf8")) as {
+              files: Record<
+                string,
+                {
+                  r: unknown[][];
+                  x?: unknown;
+                  tx?: unknown;
+                  cs: { speed?: unknown; deliberateSkips?: unknown };
+                }
+              >;
+            };
+            for (const file of Object.values(document.files)) {
+              file.r = file.r.map((row) => [...row.slice(0, 10), 0]);
+              delete file.x;
+              delete file.tx;
+              delete file.cs.speed;
+              delete file.cs.deliberateSkips;
+            }
+            const text = encodeUnknownJsonString({ ...document, version: 4 });
+            await NodeFSP.writeFile(legacyPath, text);
+            await NodeFSP.rm(cachePath);
+            await NodeFSP.rm(deleted);
+            return text;
+          });
+
+          const summary = yield* (yield* UsageService.make).readSummary(WINDOW);
+          // The live rollout re-parses at the ultrafast rate (10 x 6); the
+          // deleted one keeps its saved v4 usage at the standard rate (20 x 1).
+          assert.strictEqual(totalOutputTokens(summary), 30);
+          assert.strictEqual(
+            summary.buckets.reduce((sum, bucket) => sum + bucket.costUsd, 0),
+            80,
+          );
+          // A v4 server sharing this state directory still finds its own cache.
+          assert.strictEqual(
+            yield* Effect.promise(() => NodeFSP.readFile(legacyPath, "utf8")),
+            legacy,
+          );
+        }).pipe(
+          Effect.provide(
+            layerService({
+              prefix: "usage-service-v4-upgrade-test",
+              home,
+              settings,
+              ratesDocument: {
+                "gpt-6-astra": {
+                  input_cost_per_token: 0,
+                  output_cost_per_token: 1,
+                  input_cost_per_token_ultrafast: 0,
+                  output_cost_per_token_ultrafast: 6,
+                },
               },
             }),
           ),
@@ -1552,7 +1670,7 @@ describe("UsageService", () => {
         assert.strictEqual(outsideWindow.sources[0]?.distinctSessions, 0);
       }).pipe(
         Effect.provide(
-          serviceLayers({
+          layerService({
             prefix: "usage-service-cleanup-test",
             home,
             settings: { providers: { ...settings.providers, claudeAgent: { homePath: alias } } },
@@ -1562,6 +1680,88 @@ describe("UsageService", () => {
           }),
         ),
       );
+    }).pipe(Effect.scoped),
+  );
+
+  it.live("credits the same copy of a duplicate after its transcripts are deleted", () =>
+    Effect.gen(function* () {
+      const { transcript, settings, home } = yield* setup;
+      const dir = NodePath.dirname(transcript);
+      // The walk-first file is the original, padded so it finishes parsing
+      // after the small fork copy that repeats its record under a new session.
+      const [first = "", second = ""] = yield* Effect.promise(async () => {
+        await NodeFSP.writeFile(NodePath.join(dir, "a.jsonl"), "");
+        await NodeFSP.writeFile(NodePath.join(dir, "b.jsonl"), "");
+        return (await NodeFSP.readdir(dir)).map((name) => NodePath.join(dir, name));
+      });
+      const forked = (line: string) => line.replace('"session-1"', '"session-2"');
+      yield* Effect.promise(async () => {
+        await NodeFSP.writeFile(
+          first,
+          claudeLine(1, 5).replace(
+            '"message":',
+            '"padding":' + encodeUnknownJsonString("x".repeat(9 * 1024 * 1024)) + ',"message":',
+          ),
+        );
+        await NodeFSP.writeFile(second, forked(claudeLine(1, 5)) + forked(claudeLine(2, 7)));
+      });
+      yield* Effect.gen(function* () {
+        const service = yield* UsageService.make;
+        const live = yield* service.readSummary(WINDOW);
+        assert.strictEqual(live.buckets[0]?.sessions, 2);
+
+        yield* Effect.promise(() => Promise.all([NodeFSP.rm(first), NodeFSP.rm(second)]));
+        const saved = yield* service.readSummary(WINDOW);
+        assert.deepStrictEqual(saved.buckets, live.buckets);
+        // Retained history of deleted transcripts reports its source as partial.
+        const withoutStatus = (summary: typeof live) =>
+          summary.sources.map(({ status: _status, message: _message, ...source }) => source);
+        assert.deepStrictEqual(withoutStatus(saved), withoutStatus(live));
+        assert.strictEqual(
+          saved.sources.find((source) => source.fingerprint.provider === "claude")?.status,
+          "partial",
+        );
+        const restored = yield* (yield* UsageService.make).readSummary(WINDOW);
+        assert.deepStrictEqual(restored.buckets, live.buckets);
+      }).pipe(
+        Effect.provide(layerService({ prefix: "usage-service-copy-order-test", home, settings })),
+      );
+    }).pipe(Effect.scoped),
+  );
+
+  it.live("reports saved usage of a removed directory only for windows it reaches", () =>
+    Effect.gen(function* () {
+      const { transcript, settings, home } = yield* setup;
+      yield* Effect.promise(async () => {
+        await NodeFSP.writeFile(transcript, claudeLine(1, 5));
+        const lastWrite = Date.parse("2026-08-01T10:00:00Z") / 1000;
+        await NodeFSP.utimes(transcript, lastWrite, lastWrite);
+      });
+      const service = yield* UsageService.make.pipe(
+        Effect.provide(layerService({ prefix: "usage-service-saved-window-test", home, settings })),
+      );
+      const first = yield* service.readSummary(WINDOW);
+      yield* Effect.promise(() =>
+        NodeFSP.rm(NodePath.join(home, "claude", "projects"), { recursive: true }),
+      );
+
+      const claudeSource = (summary: typeof first) =>
+        summary.sources.find((source) => source.fingerprint.provider === "claude");
+      const reached = yield* service.readSummary(WINDOW);
+      assert.deepStrictEqual(reached.buckets, first.buckets);
+      // Retained history of a removed directory reports its source as partial.
+      assert.strictEqual(claudeSource(reached)?.status, "partial");
+
+      // A missing source cannot claim this directory from another environment
+      // that still reads it, so it adds nothing to a window after its last write.
+      const later = yield* service.readSummary({
+        timeZone: "UTC",
+        sinceDay: UsageDay.make("2026-08-10"),
+        untilDay: UsageDay.make("2026-08-12"),
+      });
+      assert.deepStrictEqual(later.buckets, []);
+      assert.strictEqual(claudeSource(later)?.status, "missing");
+      assert.strictEqual(claudeSource(later)?.scannedFiles, 0);
     }).pipe(Effect.scoped),
   );
 
@@ -1619,7 +1819,7 @@ describe("UsageService", () => {
         assert.strictEqual(original.buckets[0]?.costUsd, 0);
         assert.closeTo(updated.buckets[0]?.costUsd ?? -1, 0.00006, 1e-12);
       }).pipe(
-        Effect.provide(serviceLayers({ prefix: "usage-service-price-race-test", home, settings })),
+        Effect.provide(layerService({ prefix: "usage-service-price-race-test", home, settings })),
       );
     }).pipe(Effect.scoped),
   );
@@ -1632,7 +1832,7 @@ describe("UsageService", () => {
       let ratesFetches = 0;
       const service = yield* UsageService.make.pipe(
         Effect.provide(
-          serviceLayers({
+          layerService({
             prefix: "usage-service-flight-test",
             home,
             settings,
@@ -1664,7 +1864,7 @@ describe("UsageService", () => {
       let ratesFetches = 0;
       const service = yield* UsageService.make.pipe(
         Effect.provide(
-          serviceLayers({
+          layerService({
             prefix: "usage-service-rates-refresh-test",
             home,
             settings,
@@ -1702,9 +1902,7 @@ describe("UsageService", () => {
     Effect.gen(function* () {
       const { settings, home } = yield* setup;
       const service = yield* UsageService.make.pipe(
-        Effect.provide(
-          serviceLayers({ prefix: "usage-service-interruption-test", home, settings }),
-        ),
+        Effect.provide(layerService({ prefix: "usage-service-interruption-test", home, settings })),
       );
 
       let orphanedAt: number | undefined;

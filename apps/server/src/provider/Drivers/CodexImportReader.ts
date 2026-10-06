@@ -9,13 +9,13 @@ import * as Option from "effect/Option";
 import * as Layer from "effect/Layer";
 import * as Schema from "effect/Schema";
 import * as Scope from "effect/Scope";
-import { ChildProcess, ChildProcessSpawner } from "effect/unstable/process";
+import { ChildProcess, ChildProcessSpawner } from "effect/process";
 import * as CodexClient from "effect-codex-app-server/client";
 import { resolveSpawnCommand } from "@t3tools/shared/shell";
 
 import { expandHomePath } from "../../pathExpansion.ts";
-import { codexAppServerArgs } from "../Layers/codexLaunchArgs.ts";
-import { buildCodexInitializeParams } from "../Layers/CodexProvider.ts";
+import { codexAppServerArgs } from "../codexLaunchArgs.ts";
+import { buildCodexInitializeParams } from "../CodexProvider.ts";
 
 export class CodexImportReaderError extends Schema.TaggedError<CodexImportReaderError>()(
   "CodexImportReaderError",

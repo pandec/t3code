@@ -13,7 +13,7 @@ import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
 import * as Path from "effect/Path";
 import * as Schedule from "effect/Schedule";
-import * as SqlClient from "effect/unstable/sql/SqlClient";
+import * as SqlClient from "effect/sql/SqlClient";
 
 import * as GitVcsDriver from "../vcs/GitVcsDriver.ts";
 import {
@@ -225,9 +225,9 @@ export const make = Effect.gen(function* () {
             .removeWorktree({ cwd: projectRoot, path: input.worktreePath, force: false })
             .pipe(
               Effect.as(null),
-              Effect.catchTag("GitCommandError", () =>
-                Effect.succeed(WORKTREE_KEPT_DETAIL.gitRefused),
-              ),
+              Effect.catchTags({
+                GitCommandError: () => Effect.succeed(WORKTREE_KEPT_DETAIL.gitRefused),
+              }),
             );
         }).pipe(Effect.scoped),
       );

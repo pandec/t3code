@@ -23,18 +23,18 @@ import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import * as Ref from "effect/Ref";
 import * as References from "effect/References";
-import { HttpServer, HttpServerResponse } from "effect/unstable/http";
-import * as HttpRouter from "effect/unstable/http/HttpRouter";
-import * as HttpApi from "effect/unstable/httpapi/HttpApi";
-import * as HttpApiBuilder from "effect/unstable/httpapi/HttpApiBuilder";
+import { HttpServer, HttpServerResponse } from "effect/http";
+import * as HttpRouter from "effect/http/HttpRouter";
+import * as HttpApi from "effect/http-api/HttpApi";
+import * as HttpApiBuilder from "effect/http-api/HttpApiBuilder";
 
 import * as ServerConfig from "../config.ts";
 import { sanitizeGitRepositoryEnvironment } from "../git/Utils.ts";
-import { ProjectServiceLayerLive } from "../orchestration-v2/runtimeLayer.ts";
-import * as SqlitePersistence from "../persistence/Layers/Sqlite.ts";
+import * as RuntimeLayer from "../orchestration-v2/runtimeLayer.ts";
+import * as SqlitePersistence from "../persistence/Sqlite.ts";
 import * as ProjectEnrichmentService from "../project/ProjectEnrichmentService.ts";
 import * as ProjectFaviconResolver from "../project/ProjectFaviconResolver.ts";
-import { projectHttpApiLayer } from "../project/http.ts";
+import * as ProjectHttp from "../project/http.ts";
 import * as ProjectService from "../project/ProjectService.ts";
 import * as RepositoryIdentityResolver from "../project/RepositoryIdentityResolver.ts";
 import * as T3ProjectFileLoader from "../project/T3ProjectFileLoader.ts";
@@ -191,7 +191,7 @@ const withLiveServer = <A, E, R>(
       markHttpListening: Effect.void,
       enqueueCommand: (effect) => effect,
     });
-    const projectServiceLayer = ProjectServiceLayerLive.pipe(
+    const projectServiceLayer = RuntimeLayer.layerProjectService.pipe(
       Layer.provideMerge(ProjectEnrichmentService.layer),
       Layer.provideMerge(RepositoryIdentityResolver.layer),
       Layer.provideMerge(ProjectFaviconResolver.layer),
@@ -204,7 +204,7 @@ const withLiveServer = <A, E, R>(
         Layer.mergeAll(
           metadataLayer,
           shellHttpApiLayer,
-          projectHttpApiLayer.pipe(Layer.provide(startupLayer)),
+          ProjectHttp.layer.pipe(Layer.provide(startupLayer)),
           providersLayer,
           sessionImportLayer,
         ),

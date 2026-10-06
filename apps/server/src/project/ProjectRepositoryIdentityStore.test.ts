@@ -4,7 +4,7 @@ import * as NodeSqliteClient from "@t3tools/shared/nodeSqliteClient";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import * as PubSub from "effect/PubSub";
-import * as SqlClient from "effect/unstable/sql/SqlClient";
+import * as SqlClient from "effect/sql/SqlClient";
 
 import { runForkMigrations } from "../persistence/ForkMigrations.ts";
 import * as ProjectEnrichment from "./ProjectEnrichmentService.ts";

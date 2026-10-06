@@ -206,6 +206,8 @@ const ISOLATED_TEST_FILES = [
   "src/components/settings/SettingsPanels.restore.test.tsx",
   "src/hooks/useLiveRefresh.test.ts",
   "src/hooks/usePullRequestChecksRefresh.test.ts",
+  "src/lib/discardComposerDraft.test.ts",
+  "src/state/queries.threadSearch.test.tsx",
   "src/state/waitForAtomValue.test.ts",
 ];
 

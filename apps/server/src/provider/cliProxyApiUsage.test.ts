@@ -6,7 +6,7 @@ import * as Effect from "effect/Effect";
 import * as Fiber from "effect/Fiber";
 import * as Schema from "effect/Schema";
 import * as TestClock from "effect/testing/TestClock";
-import { HttpClient, type HttpClientRequest, HttpClientResponse } from "effect/unstable/http";
+import { HttpClient, type HttpClientRequest, HttpClientResponse } from "effect/http";
 
 import {
   makeCliProxyApiUsageProbe,

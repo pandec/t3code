@@ -12,7 +12,7 @@ import {
 } from "../Adapters/ClaudeAdapterV2.testkit.ts";
 import * as IdAllocator from "../IdAllocator.ts";
 import { STRANDED_PRIOR_TURN_NOTICE } from "../StrandedTurnNotice.ts";
-import { makeSqlitePersistenceLive } from "../../persistence/Layers/Sqlite.ts";
+import * as SqlitePersistence from "../../persistence/Sqlite.ts";
 import { provideDeterministicTestRuntime } from "./DeterministicRuntime.ts";
 import {
   CLAUDE_MODEL_SELECTION,
@@ -160,9 +160,9 @@ const runAfterStrandedTurn = (firstAfterRestart: string, firstPrompt: string) =>
       const phase1Steps = materialized.steps.slice(0, toolRunning + 1);
       const phase2Steps = materialized.steps.slice(interruptSettled + 1);
       const { harness, assertComplete } = makeClaudeRestartReplayHarness(transcript);
-      const databaseLayer = makeSqlitePersistenceLive(path.join(tempDir, "state.sqlite")).pipe(
-        Layer.provide(NodeServices.layer),
-      );
+      const databaseLayer = SqlitePersistence.layerFromPath(
+        path.join(tempDir, "state.sqlite"),
+      ).pipe(Layer.provide(NodeServices.layer));
       const scenario = (name: string, steps: typeof materialized.steps) => ({
         name: `${SCENARIO}:${name}`,
         transcript,

@@ -8,7 +8,7 @@ import {
   HttpClientResponse,
   type HttpClient,
   type HttpClientError,
-} from "effect/unstable/http";
+} from "effect/http";
 
 import { MP3_MIME_TYPE, TtsError, type SynthesizedSpeech } from "./ttsTypes.ts";
 

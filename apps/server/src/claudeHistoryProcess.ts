@@ -2,7 +2,7 @@ import { HostProcessExecutablePath, HostProcessIsExecutable } from "@t3tools/sha
 import * as Effect from "effect/Effect";
 import * as Path from "effect/Path";
 import * as Schema from "effect/Schema";
-import { ChildProcess } from "effect/unstable/process";
+import { ChildProcess } from "effect/process";
 
 import { spawnAndCollect } from "./provider/providerSnapshot.ts";
 

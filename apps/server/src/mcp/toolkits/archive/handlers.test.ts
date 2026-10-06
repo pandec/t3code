@@ -9,7 +9,7 @@ import {
 import * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
-import { McpSchema, McpServer } from "effect/unstable/ai";
+import { McpSchema, McpServer } from "effect/ai";
 
 import * as ThreadArchiveScheduler from "../../../orchestration-v2/ThreadArchiveScheduler.ts";
 import * as ThreadManagementService from "../../../orchestration-v2/ThreadManagementService.ts";
@@ -38,6 +38,13 @@ const client = McpSchema.McpServerClient.of({
   },
   getClient: Effect.die("unused"),
 });
+
+// Effect returns a declared tool failure as `isError` with its encoded payload
+// as JSON text, never as `structuredContent`.
+const declaredFailure = (result: McpSchema.CallToolResult) => {
+  const text = result.content[0];
+  return result.isError === true && text?.type === "text" ? JSON.parse(text.text) : undefined;
+};
 
 const makeLayer = (
   owner: string,
@@ -91,9 +98,13 @@ const call = (name: string, args: Record<string, unknown> = {}) =>
     return yield* server.callTool({ name, arguments: args }).pipe(
       Effect.provideService(McpInvocationContext.McpInvocationContext, {
         environmentId: EnvironmentId.make("environment-archive-tools"),
-        threadId,
-        providerSessionId: "provider-session-archive-tools",
-        providerInstanceId: ProviderInstanceId.make("codex"),
+        requestNamespace: "provider-session-archive-tools",
+        thread: {
+          threadId,
+          providerSessionId: "provider-session-archive-tools",
+          providerInstanceId: ProviderInstanceId.make("codex"),
+        },
+        client: undefined,
         capabilities: new Set(["orchestration"] as const),
         issuedAt: 1,
       }),
@@ -130,8 +141,7 @@ it.effect("rejects a provider that no longer owns the thread", () => {
   }> = [];
   return Effect.gen(function* () {
     const result = yield* call("archive_thread");
-    // failureMode "return": the typed failure is the tool's structured result.
-    expect(result.structuredContent).toMatchObject({
+    expect(declaredFailure(result)).toMatchObject({
       _tag: "OrchestratorMcpFailure",
       code: "parent_not_active",
     });
@@ -152,7 +162,7 @@ it.effect.each([
     return Effect.gen(function* () {
       for (const name of archiveTools) {
         const result = yield* call(name);
-        expect(result.structuredContent).toMatchObject({ _tag: "OrchestratorMcpFailure", code });
+        expect(declaredFailure(result)).toMatchObject({ _tag: "OrchestratorMcpFailure", code });
       }
       expect(serviceCalls).toEqual([]);
     }).pipe(Effect.scoped, Effect.provide(makeLayer(owner, [], { shell, serviceCalls })));

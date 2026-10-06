@@ -19,7 +19,7 @@ import * as Layer from "effect/Layer";
 import * as Queue from "effect/Queue";
 import * as Ref from "effect/Ref";
 import * as Stream from "effect/Stream";
-import * as SqlClient from "effect/unstable/sql/SqlClient";
+import * as SqlClient from "effect/sql/SqlClient";
 
 import * as ServerConfig from "../config.ts";
 import {
@@ -30,7 +30,7 @@ import * as MessageSpeechScript from "../messageArtifacts/MessageSpeechScript.ts
 import { seedMessage, setMessageText } from "../messageArtifacts/testFixtures.ts";
 import { resolveSummaryProvenance } from "../messageArtifacts/threadSummaries.ts";
 import * as ProjectionStore from "../orchestration-v2/ProjectionStore.ts";
-import { SqlitePersistenceMemory } from "../persistence/Layers/Sqlite.ts";
+import * as SqlitePersistence from "../persistence/Sqlite.ts";
 import * as ServerSettings from "../serverSettings.ts";
 import { TextGeneration } from "../textGeneration/TextGeneration.ts";
 import { make } from "./MessageSpeech.ts";
@@ -137,7 +137,7 @@ const insertAgentRecording = (message: OrchestrationV2ConversationMessage) =>
   );
 
 const TestLayer = Layer.mergeAll(
-  ProjectionStore.layer.pipe(Layer.provideMerge(SqlitePersistenceMemory)),
+  ProjectionStore.layer.pipe(Layer.provideMerge(SqlitePersistence.layerMemory)),
   ServerConfig.layerTest(process.cwd(), { prefix: "t3-message-speech-test-" }),
   ServerSettings.layerTest(),
 ).pipe(Layer.provideMerge(NodeServices.layer));

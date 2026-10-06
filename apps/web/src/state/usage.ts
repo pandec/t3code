@@ -11,6 +11,7 @@ import { needsCursorKeychainAccess, refreshUsage } from "@t3tools/client-runtime
 import {
   USAGE_CONTRACT_VERSION,
   type EnvironmentId,
+  type UsageBucket,
   type UsageSummary,
   type UsageSummaryInput,
 } from "@t3tools/contracts";
@@ -21,7 +22,7 @@ import {
   type UsageAttribution,
 } from "@t3tools/shared/usageMerge";
 import * as Option from "effect/Option";
-import { AsyncResult, Atom } from "effect/unstable/reactivity";
+import { AsyncResult, Atom } from "effect/reactivity";
 import { useCallback, useMemo } from "react";
 
 import { appAtomRegistry } from "../rpc/atomRegistry";
@@ -109,6 +110,61 @@ export interface UsageView {
   readonly refresh: (input?: UsageSummaryInput) => Promise<void>;
 }
 
+/**
+ * Merges every environment that has reported. `keepBucket` narrows the merge,
+ * for example to one model; source ownership still applies, so the result
+ * matches that slice of the full merge. Session counts are per directory and
+ * are not narrowed. `attribution` must match the full merge's so a slice
+ * credits gateway-routed buckets to the same pool.
+ */
+export function mergeAnsweredUsage(
+  environments: readonly EnvironmentUsageStatus[],
+  keepBucket?: (bucket: UsageBucket) => boolean,
+  attribution: UsageAttribution = "pool",
+): MergedUsage {
+  const answered: EnvironmentUsage[] = environments.flatMap((environment) => {
+    const state = environmentUsageState(environment);
+    if (state.kind !== "reported") return [];
+    const { summary } = state;
+    return [
+      {
+        environmentId: environment.environmentId,
+        label: environment.label,
+        summary:
+          keepBucket === undefined
+            ? summary
+            : { ...summary, buckets: summary.buckets.filter(keepBucket) },
+      },
+    ];
+  });
+  return mergeUsage(answered, USAGE_CONTRACT_VERSION, { attribution });
+}
+
+/**
+ * One model row's slice of the merge. Pool attribution can credit a model's
+ * buckets to a provider other than the harness that scanned them, so first
+ * narrow by model name alone: when every merged row for that name lands on the
+ * row's provider, that is exactly the row. Otherwise the name spans providers
+ * attribution leaves alone, and the scanned provider decides.
+ */
+export function mergeModelUsage(
+  environments: readonly EnvironmentUsageStatus[],
+  model: { readonly provider: UsageBucket["provider"]; readonly model: string },
+  attribution: UsageAttribution = "pool",
+): MergedUsage {
+  const byName = mergeAnsweredUsage(
+    environments,
+    (bucket) => bucket.model === model.model,
+    attribution,
+  );
+  if (byName.models.every((row) => row.provider === model.provider)) return byName;
+  return mergeAnsweredUsage(
+    environments,
+    (bucket) => bucket.provider === model.provider && bucket.model === model.model,
+    attribution,
+  );
+}
+
 export function useUsage(
   input: UsageSummaryInput,
   selectedEnvironmentIds: ReadonlySet<EnvironmentId> | null = null,
@@ -157,21 +213,10 @@ export function useUsage(
     [selectedEnvironments, windowKey],
   );
 
-  const merged = useMemo(() => {
-    const answered: EnvironmentUsage[] = selectedEnvironments.flatMap((environment) => {
-      const state = environmentUsageState(environment);
-      return state.kind === "reported"
-        ? [
-            {
-              environmentId: environment.environmentId,
-              label: environment.label,
-              summary: state.summary,
-            },
-          ]
-        : [];
-    });
-    return mergeUsage(answered, USAGE_CONTRACT_VERSION, { attribution });
-  }, [selectedEnvironments, attribution]);
+  const merged = useMemo(
+    () => mergeAnsweredUsage(selectedEnvironments, undefined, attribution),
+    [selectedEnvironments, attribution],
+  );
 
   const progress = usageProgress(selectedEnvironments.map(environmentUsageState));
 

@@ -1,11 +1,16 @@
 import type { Preferences } from "../persistence/mobile-preferences";
 
-/** The thread list's collapsible shelves, in the order they render. */
-export type ThreadShelfId = "pinned" | "active" | "snoozed" | "settled" | "archived";
+/**
+ * The thread list's collapsible shelves, in the order they render. `working`
+ * only renders while the dormant Working section beta is enabled.
+ */
+export type ThreadShelfId = "pinned" | "active" | "working" | "snoozed" | "settled" | "archived";
 
 const SHELF_PREFERENCE_KEYS = {
   pinned: "sidebarPinnedShelfExpanded",
   active: "sidebarActiveShelfExpanded",
+  // Upstream's key, as on web: the Working shelf has no fork predecessor.
+  working: "threadListWorkingShelfExpanded",
   snoozed: "sidebarSnoozedShelfExpanded",
   settled: "sidebarSettledShelfExpanded",
   archived: "sidebarArchivedShelfExpanded",
@@ -13,7 +18,7 @@ const SHELF_PREFERENCE_KEYS = {
 
 /**
  * Fold state for one shelf. Pinned, active, and settled start expanded;
- * snoozed and archived start folded. A stored choice overrides these defaults, including
+ * working, snoozed, and archived start folded. A stored choice overrides these defaults, including
  * while preferences are still loading: `preferences` is empty until they
  * arrive, so an untouched shelf never latches the pre-hydration default.
  */

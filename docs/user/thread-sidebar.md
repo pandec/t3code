@@ -19,7 +19,9 @@ A thread does not need a project. To start one without a project, click **or
 start without a project** under a new thread's heading, pick **No project** from
 the project menu in that heading or from **New thread in...** in the command
 palette, or press `mod+alt+n`. On mobile, pick **No project** from the project
-list. To move a draft into a project, pick the project in the heading.
+list. It starts on your current machine; before sending, pick another machine
+from the machine menu to move it there. To move a draft into a project, pick the
+project in the heading.
 
 Each thread without a project works in its own folder under `~/.t3/scratch` (the
 `scratch` folder of your T3 data directory), named after its date, the first words
@@ -72,7 +74,8 @@ state, including its pinned position and any snooze that settling cleared ("unti
 wake it" included). Settling stops the work an "until it's done" snooze waits on, so
 Undo leaves that thread awake. If archiving left you on an empty new-thread screen, undo
 can reopen the restored thread. It keeps another active conversation in place.
-`mod+z` triggers the most recent Undo when no text field is focused; see
+Discarding an unsent draft from the sidebar works the same way: Undo brings back its
+text and attachments. `mod+z` triggers the most recent Undo when no text field is focused; see
 [Keybindings](./keybindings.md#commands-with-special-behavior). With **Archive
 confirmation** on (Settings), every archive path (menus, command palette, shortcut) asks first.
 
@@ -184,12 +187,18 @@ sending an answer or restarting the agent. Settling also closes the thread's
 terminals that wait at an idle prompt, and keeps their output. A terminal that
 runs a command, such as a dev server, stays open.
 
+On web and desktop, press a thread's **Settle** button and drag up or down to
+settle every thread in that section between it and the one you release on.
+The **Un-settle** and **Wake** buttons work the same way in their sections.
+Press `Escape` while dragging to cancel.
+
 By default, environments settle inactive threads after three days and settle
 threads whose pull request merged. A closed pull request can also settle an idle
 thread. Work in progress, queued messages, pending questions or approvals, and live
 background work prevent automatic settlement. An open pull request does not prevent inactivity
 settlement, but an old closed or merged pull request does not settle work you
-resumed after it closed.
+resumed after it closed. Only your own messages count as resuming. A turn that
+finished background work or a pull request watch starts on its own does not.
 
 To disable automatic settlement for one thread, open its menu, choose **Auto-settle behavior**,
 and pick **Disabled**. Pick **Enabled** to use the environment and project rules again.
@@ -323,11 +332,13 @@ snooze limit stops by default. Providers without a reset time offer manual
 retry and the normal snooze choices.
 
 On web and desktop, use **Agents** to follow work delegated to subagents.
+Stop on a thread also stops the subagents it delegated to.
 
 When a turn ends while work it started keeps running, the thread list shows **Working** for live
-subagents and workflows, and **Monitoring** when only watch loops remain, such as a dev server or a
-monitor tailing checks. The conversation lists that work with a **Stop** button. Settling or
-archiving the thread also stops it.
+subagents and workflows, and **Monitoring** when only watch loops remain, such as a monitor tailing
+checks or a pull request watch. A command left running on its own, such as a dev server, does not
+keep the thread busy: the thread completes and notifies as usual. The conversation lists that work
+with a **Stop** button. Settling or archiving the thread also stops it.
 
 Subagent threads started by the agent can't take messages; message the parent
 thread instead. When such a subagent needs an approval or an answer, the parent

@@ -1,5 +1,5 @@
 import type { ThreadUserInputQuestion } from "@t3tools/client-runtime/state/thread-requests";
-import { Atom } from "effect/unstable/reactivity";
+import { Atom } from "effect/reactivity";
 
 import {
   buildPendingUserInputAnswers,

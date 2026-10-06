@@ -11,6 +11,7 @@ describe("resolveThreadShelfExpanded", () => {
   it("folds snoozed and archived away and opens settled by default", () => {
     expect(resolve("snoozed")).toBe(false);
     expect(resolve("archived")).toBe(false);
+    expect(resolve("working")).toBe(false);
     expect(resolve("settled")).toBe(true);
     expect(resolve("active")).toBe(true);
   });
@@ -36,7 +37,14 @@ describe("threadShelfExpandedPatch", () => {
   });
 
   it("round-trips through resolveThreadShelfExpanded for every shelf", () => {
-    for (const shelf of ["pinned", "active", "snoozed", "settled", "archived"] as const) {
+    for (const shelf of [
+      "pinned",
+      "active",
+      "working",
+      "snoozed",
+      "settled",
+      "archived",
+    ] as const) {
       for (const expanded of [true, false]) {
         expect(resolve(shelf, threadShelfExpandedPatch(shelf, expanded))).toBe(expanded);
       }

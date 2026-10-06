@@ -9,7 +9,7 @@ import {
   HttpClientRequest,
   HttpClientResponse,
   type HttpClientError,
-} from "effect/unstable/http";
+} from "effect/http";
 
 import { MP3_MIME_TYPE, TtsError, WAV_MIME_TYPE, type SynthesizedSpeech } from "./ttsTypes.ts";
 import { parsePcmContentType, wrapPcmAsWav } from "./wavAudio.ts";

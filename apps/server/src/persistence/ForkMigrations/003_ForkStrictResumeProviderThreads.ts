@@ -1,5 +1,5 @@
 import * as Effect from "effect/Effect";
-import * as SqlClient from "effect/unstable/sql/SqlClient";
+import * as SqlClient from "effect/sql/SqlClient";
 
 // Provider threads whose native session must resume or fail: no fresh-session
 // fallback (see sessionImport/StrictResume.ts).

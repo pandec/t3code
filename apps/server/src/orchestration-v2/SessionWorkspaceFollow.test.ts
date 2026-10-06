@@ -26,9 +26,9 @@ import * as Path from "effect/Path";
 import * as Queue from "effect/Queue";
 import * as Ref from "effect/Ref";
 import * as Stream from "effect/Stream";
-import { ChildProcess, ChildProcessSpawner } from "effect/unstable/process";
+import { ChildProcess, ChildProcessSpawner } from "effect/process";
 
-import { SqlitePersistenceMemory } from "../persistence/Layers/Sqlite.ts";
+import * as SqlitePersistence from "../persistence/Sqlite.ts";
 import { CodexProviderCapabilitiesV2 } from "./Adapters/CodexAdapterV2.ts";
 import * as EffectWorker from "./EffectWorker.ts";
 import * as EventSink from "./EventSink.ts";
@@ -43,7 +43,7 @@ import {
   resolveFollowedWorkspace,
   workerLive,
 } from "./SessionWorkspaceFollow.ts";
-import { makeOrchestratorV2ReplayLayerWithRegistry } from "./testkit/ProviderReplayHarness.ts";
+import * as ProviderReplayHarness from "./testkit/ProviderReplayHarness.ts";
 import * as ThreadManagement from "./ThreadManagementService.ts";
 import * as ThreadWorktreeSwitchScheduler from "./ThreadWorktreeSwitchScheduler.ts";
 import { checkpointWorkspace } from "./testkit/ReplayFixtureWorkspace.ts";
@@ -213,7 +213,7 @@ it.live("a followed move keeps the session; a T3 move restarts it in the new wor
         startedCwds: [],
         sessionEvents: [],
       });
-      const registry = ProviderAdapterRegistry.makeSingleLayer(makeFollowAdapter(state));
+      const registry = ProviderAdapterRegistry.layerSingle(makeFollowAdapter(state));
 
       yield* Effect.gen(function* () {
         const orchestrator = yield* Orchestrator.OrchestratorV2;
@@ -369,7 +369,7 @@ it.live("a followed move keeps the session; a T3 move restarts it in the new wor
         const afterReplaced = yield* orchestrator.getThreadProjection(threadId);
         assert.equal(afterReplaced.thread.worktreePath, moved);
         assert.equal(afterReplaced.thread.branch, "feature");
-      }).pipe(Effect.provide(makeOrchestratorV2ReplayLayerWithRegistry({ name }, registry)));
+      }).pipe(Effect.provide(ProviderReplayHarness.layerWithRegistry({ name }, registry)));
 
       // One process served start and entered; only the T3 move opened another.
       const captured = yield* Ref.get(state);
@@ -500,7 +500,7 @@ it.live("the follow worker moves the thread for the live process only", () =>
         startedCwds: [],
         sessionEvents: [],
       });
-      const registry = ProviderAdapterRegistry.makeSingleLayer(makeFollowAdapter(state));
+      const registry = ProviderAdapterRegistry.layerSingle(makeFollowAdapter(state));
       const projects = Layer.mock(ProjectStore.ProjectStoreV2)({
         get: (requested) =>
           Effect.succeed(
@@ -530,7 +530,7 @@ it.live("the follow worker moves the thread for the live process only", () =>
           Layer.provide(Layer.mergeAll(observationsLayer, projects, IdAllocator.layer)),
         ),
         observationsLayer,
-      ).pipe(Layer.provideMerge(makeOrchestratorV2ReplayLayerWithRegistry({ name }, registry)));
+      ).pipe(Layer.provideMerge(ProviderReplayHarness.layerWithRegistry({ name }, registry)));
 
       yield* Effect.gen(function* () {
         const orchestrator = yield* Orchestrator.OrchestratorV2;
@@ -653,9 +653,7 @@ it.live("a completed worktree switch restarts the session in the new worktree", 
         sessionEvents: [],
         holdNextTurn: true,
       });
-      const registry = ProviderAdapterRegistry.makeSingleLayer(
-        makeFollowAdapter(state, codexAdapter),
-      );
+      const registry = ProviderAdapterRegistry.layerSingle(makeFollowAdapter(state, codexAdapter));
       const projects = Layer.mock(ProjectStore.ProjectStoreV2)({
         getShell: (requested) =>
           Effect.succeed(
@@ -686,8 +684,8 @@ it.live("a completed worktree switch restarts the session in the new worktree", 
       // The scheduler runs as on the server: driven by domain events.
       const testLayer = ThreadWorktreeSwitchScheduler.workerLive.pipe(
         Layer.provideMerge(ThreadWorktreeSwitchScheduler.layer),
-        Layer.provide(Layer.mergeAll(threads, projects, SqlitePersistenceMemory)),
-        Layer.provideMerge(makeOrchestratorV2ReplayLayerWithRegistry({ name }, registry)),
+        Layer.provide(Layer.mergeAll(threads, projects, SqlitePersistence.layerMemory)),
+        Layer.provideMerge(ProviderReplayHarness.layerWithRegistry({ name }, registry)),
       );
 
       yield* Effect.gen(function* () {

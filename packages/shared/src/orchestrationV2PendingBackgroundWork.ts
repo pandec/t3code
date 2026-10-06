@@ -4,8 +4,11 @@ import type {
   OrchestrationV2Run,
   OrchestrationV2TurnItem,
   ThreadId,
+  ThreadPullRequestLink,
 } from "@t3tools/contracts";
 import { isOrchestrationV2WorkActive } from "@t3tools/contracts";
+
+import { threadPullRequestKeyOf } from "./threadPullRequests.ts";
 
 const BACKGROUND_TURN_ITEM_TYPES = new Set<OrchestrationV2TurnItem["type"]>([
   "command_execution",
@@ -85,6 +88,11 @@ function backgroundWorkKindHoldsCompletion(kind: PendingBackgroundWorkTask["kind
 }
 
 type PendingBackgroundWorkRun = Pick<OrchestrationV2Run, "id" | "ordinal" | "status">;
+
+type PendingBackgroundWorkPullRequest = Pick<
+  ThreadPullRequestLink,
+  "host" | "repository" | "number" | "url" | "source" | "watch"
+>;
 
 type PendingBackgroundWorkProviderThread = Pick<
   OrchestrationV2ProviderThread,
@@ -200,6 +208,10 @@ export function pendingBackgroundTurnItems<Item extends PendingBackgroundWorkTur
  * Sources:
  * - Provider-thread roster (Claude SDK background tasks)
  * - Active command_execution / dynamic_tool / subagent turn items
+ * - Pull request watches, as monitors: a watch wakes the agent, so the thread
+ *   stays working between wakes instead of returning to the inbox. Callers
+ *   that pick a run to interrupt leave `pullRequests` out; Stop ends watches
+ *   on its own.
  *
  * Gated on latest root run settlement. Dedupes by native task ID. Excludes
  * the roster while any interruptible foreground run remains active. Excludes
@@ -220,6 +232,7 @@ export function derivePendingBackgroundWork(input: {
    * pass projection runs so policy cannot drift.
    */
   readonly runs?: ReadonlyArray<PendingBackgroundWorkRun>;
+  readonly pullRequests?: ReadonlyArray<PendingBackgroundWorkPullRequest> | undefined;
 }): ReadonlyArray<PendingBackgroundWorkTask> {
   const hasActiveRun =
     input.hasActiveRun ??
@@ -229,6 +242,10 @@ export function derivePendingBackgroundWork(input: {
     false;
   if (hasActiveRun) {
     return [];
+  }
+  // A thread that never ran waits on nothing else, but a watch started on it still wakes it.
+  if (input.latestRun == null) {
+    return pullRequestWatchTasks(input.pullRequests);
   }
   if (!isLatestRunSettledForBackgroundWait(input.latestRun)) {
     return [];
@@ -263,6 +280,8 @@ export function derivePendingBackgroundWork(input: {
 
     byTaskId.set(taskId, pendingTaskFromTurnItem(taskId, item));
   }
+
+  for (const task of pullRequestWatchTasks(input.pullRequests)) byTaskId.set(task.taskId, task);
 
   return Array.from(byTaskId.values());
 }
@@ -303,9 +322,21 @@ export function backgroundWorkLiveness(
 }
 
 /**
+ * Fork: liveness as thread rows show it. A command left running (a dev server)
+ * does not hold the thread, matching `backgroundWorkHoldsCompletion`, so a
+ * command-only roster reads as done. The CLI keeps the raw
+ * `backgroundWorkLiveness` so automation still sees those commands.
+ */
+export function backgroundWorkDisplayLiveness(
+  tasks: ReadonlyArray<{ readonly kind: string }>,
+): BackgroundWorkLiveness | null {
+  return backgroundWorkLiveness(tasks.filter((task) => task.kind !== "command"));
+}
+
+/**
  * Fork: which pending work a drain waits for. "agents" (`thread wait --drain`)
  * waits for agent work and ignores watch loops; "all" (`--drain=all`) waits
- * for every task, monitors included.
+ * for every task, monitors (including pull request watches) included.
  */
 export type BackgroundWorkDrainScope = "agents" | "all";
 
@@ -387,5 +418,21 @@ export function snoozeUntilDoneWorkContinues(input: {
   return (
     UNTIL_DONE_LIVE_RUN_STATUSES.has(input.latestRunStatus) ||
     backgroundWorkKeepsSnoozeUntilDone(input.pendingBackgroundTasks)
+  );
+}
+
+function pullRequestWatchTasks(
+  pullRequests: ReadonlyArray<PendingBackgroundWorkPullRequest> | undefined,
+): Array<PendingBackgroundWorkTask> {
+  return (pullRequests ?? []).flatMap((link) =>
+    link.watch === undefined || link.source === "stack-dismissed"
+      ? []
+      : [
+          {
+            taskId: `pull-request-watch:${threadPullRequestKeyOf(link)}`,
+            description: `Watching pull request #${link.number}`,
+            kind: "monitor" as const,
+          },
+        ],
   );
 }

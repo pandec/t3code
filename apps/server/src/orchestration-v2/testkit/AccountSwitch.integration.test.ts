@@ -34,9 +34,9 @@ import * as Path from "effect/Path";
 import * as Ref from "effect/Ref";
 import * as Schema from "effect/Schema";
 import * as Stream from "effect/Stream";
-import * as SqlClient from "effect/unstable/sql/SqlClient";
+import * as SqlClient from "effect/sql/SqlClient";
 
-import { SqlitePersistenceMemory } from "../../persistence/Layers/Sqlite.ts";
+import * as SqlitePersistence from "../../persistence/Sqlite.ts";
 import * as ClaudeAdapterV2 from "../Adapters/ClaudeAdapterV2.ts";
 import { ClaudeProviderCapabilitiesV2 } from "../Adapters/ClaudeAdapterV2.ts";
 import * as EffectWorker from "../EffectWorker.ts";
@@ -51,7 +51,7 @@ import {
 import * as ProviderAdapterRegistry from "../ProviderAdapterRegistry.ts";
 import { makeProviderFailure } from "../ProviderFailure.ts";
 import * as ProviderSessionManager from "../ProviderSessionManager.ts";
-import { makeOrchestratorV2ReplayLayerWithRegistry } from "./ProviderReplayHarness.ts";
+import * as ProviderReplayHarness from "./ProviderReplayHarness.ts";
 import { checkpointWorkspace } from "./ReplayFixtureWorkspace.ts";
 
 const DRIVER = ProviderDriverKind.make("claudeAgent");
@@ -414,11 +414,11 @@ const runWithOrchestrator = <A, E>(
 ) =>
   Effect.gen(function* () {
     const cwd = yield* checkpointWorkspace(name);
-    const databaseLayer = SqlitePersistenceMemory;
+    const databaseLayer = SqlitePersistence.layerMemory;
     return yield* body.pipe(
       Effect.provide(
         Layer.mergeAll(
-          makeOrchestratorV2ReplayLayerWithRegistry(
+          ProviderReplayHarness.layerWithRegistry(
             {
               name,
               runtimePolicyOverride: {
@@ -789,7 +789,8 @@ describe("account switch races (generation fencing, per-thread ownership, compac
               yield* worker.drain();
               feedback.push(yield* uploadFeedback(threadId));
             }
-            // The provider acknowledges Stop only after both commands landed.
+            // The provider never acknowledges Stop in time: Stop's follow-up
+            // ends the run locally, so its late report reaches a released process.
             yield* completeTurn(first, "interrupted");
             yield* runSettled(threadId, 2);
             yield* worker.drain();
@@ -822,12 +823,14 @@ describe("account switch races (generation fencing, per-thread ownership, compac
         ]);
         assert.lengthOf(result.projection.contextHandoffs, 0);
         assert.include(log.closed, result.sessionA);
-        // While A's turn ran, feedback reached A's live process; afterwards B's.
+        // Feedback reaches A's live process until B's run replaces it: after
+        // the queued send while A still runs, and after a Stop that ended A's
+        // run but left its process; once both landed, B's.
         const sessionB = log.opened[1]![1];
         assert.deepEqual(result.feedback, [
           `feedback:${result.sessionA}`,
           `feedback:${result.sessionA}`,
-          `feedback:${result.sessionA}`,
+          `feedback:${sessionB}`,
           `feedback:${sessionB}`,
         ]);
       }),
@@ -1006,12 +1009,11 @@ describe("account switch races (generation fencing, per-thread ownership, compac
             });
             yield* stop(threadId, compaction.input.runId, "compact");
             yield* worker.drain();
-            // An unannounced compaction is stopped at once and the switch proceeds
-            // before the old process finishes compacting; an announced one waits
-            // for the provider's (late) report.
-            if (!announce) yield* runSettled(threadId, 3);
-            yield* completeTurn(compaction, "completed");
+            // Stop ends the compaction without the provider's report (at once when
+            // unannounced, after Stop's settle wait when announced), and the switch
+            // proceeds before the old process finishes compacting.
             yield* runSettled(threadId, 3);
+            yield* completeTurn(compaction, "completed");
             const oldProcess = yield* sessionHandle(harness, sessionA!);
             yield* Queue.end(oldProcess.events);
             yield* Deferred.await(oldProcess.streamEnded);
@@ -1030,7 +1032,7 @@ describe("account switch races (generation fencing, per-thread ownership, compac
           result.projection.runs.map((run) => [run.providerInstanceId, run.status]),
           [
             [ACCOUNT_A.instanceId, "completed"],
-            [ACCOUNT_A.instanceId, announce ? "completed" : "interrupted"],
+            [ACCOUNT_A.instanceId, "interrupted"],
             [ACCOUNT_B.instanceId, "completed"],
           ],
         );
@@ -1122,6 +1124,7 @@ const makeClaudeRegistry = Effect.gen(function* () {
                     ? Deferred.succeed(firstPrompt, messages).pipe(Effect.asVoid)
                     : Queue.offer(messages, result(`result-${prompts}`)).pipe(Effect.asVoid),
                 setModel: () => Effect.void,
+                setPermissionMode: () => Effect.void,
                 interrupt: Effect.void,
                 close: Queue.shutdown(messages),
               };

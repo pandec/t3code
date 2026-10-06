@@ -67,3 +67,4 @@ export * from "./sessionImport.ts";
 export * from "./voice.ts";
 export * from "./threadGroups.ts";
 export * from "./worktreeSetup.ts";
+export * from "./secretRequest.ts";

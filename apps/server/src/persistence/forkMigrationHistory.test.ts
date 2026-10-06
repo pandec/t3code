@@ -1,7 +1,7 @@
 import { assert, describe, it } from "@effect/vitest";
 import * as NodeSqliteClient from "@t3tools/shared/nodeSqliteClient";
 import * as Effect from "effect/Effect";
-import * as SqlClient from "effect/unstable/sql/SqlClient";
+import * as SqlClient from "effect/sql/SqlClient";
 
 import { forkOnlyMigrationNames, repairForkMigrationHistory } from "./forkMigrationHistory.ts";
 import { migrationManifest, runMigrations } from "./Migrations.ts";
@@ -133,13 +133,15 @@ const expectBadState = Effect.fn(function* (message: string) {
 });
 
 describe("repairForkMigrationHistory", () => {
-  it.effect("maps the fork ledger to upstream ids so 055 and 056 run", () =>
+  it.effect("maps the fork ledger to upstream ids so 055 onwards run", () =>
     Effect.gen(function* () {
       const sql = yield* SqlClient.SqlClient;
       yield* seedForkLedger();
       assert.deepStrictEqual(yield* runMigrations(), [
         [55, "OrchestrationV2"],
         [56, "RemoveRedundantProjectionIndexes"],
+        [57, "ScheduledTaskWebhooks"],
+        [58, "WebhookRelayDeliveries"],
       ]);
       const ledger = yield* readLedger;
       assert.deepStrictEqual(
@@ -173,6 +175,8 @@ describe("repairForkMigrationHistory", () => {
       assert.deepStrictEqual(yield* runMigrations(), [
         [55, "OrchestrationV2"],
         [56, "RemoveRedundantProjectionIndexes"],
+        [57, "ScheduledTaskWebhooks"],
+        [58, "WebhookRelayDeliveries"],
       ]);
       assert.deepStrictEqual(
         (yield* readLedger).map((row) => [row.migration_id, row.name] as const),
@@ -190,7 +194,7 @@ describe("repairForkMigrationHistory", () => {
       yield* seedForkLedger(forkLedger.slice(0, 60), 49);
       assert.deepStrictEqual(
         (yield* runMigrations()).map(([id]) => id),
-        [50, 51, 52, 53, 54, 55, 56],
+        [50, 51, 52, 53, 54, 55, 56, 57, 58],
       );
       assert.deepStrictEqual(
         (yield* readLedger).map((row) => [row.migration_id, row.name] as const),

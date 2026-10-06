@@ -49,8 +49,8 @@ import * as Option from "effect/Option";
 import * as Path from "effect/Path";
 import * as References from "effect/References";
 import * as Schema from "effect/Schema";
-import { Argument, Command, Flag, GlobalFlag, Param, Primitive } from "effect/unstable/cli";
-import { FetchHttpClient } from "effect/unstable/http";
+import { Argument, Command, Flag, GlobalFlag, Param, Primitive } from "effect/cli";
+import { FetchHttpClient } from "effect/http";
 import * as NodeOS from "node:os";
 
 import { resolveAttachmentPath } from "../attachmentStore.ts";
@@ -564,9 +564,9 @@ const resolveThreadIncludingArchived = Effect.fn("resolveThreadIncludingArchived
     ThreadId.make(threadId),
     input.timeouts,
   ).pipe(
-    Effect.catchTag("CliOrchestrationThreadNotFoundError", () =>
-      Effect.fail(threadNotFound(rawThreadId)),
-    ),
+    Effect.catchTags({
+      CliOrchestrationThreadNotFoundError: () => Effect.fail(threadNotFound(rawThreadId)),
+    }),
   );
   const thread = snapshot.projection.thread;
   if (thread.deletedAt != null) return yield* threadNotFound(rawThreadId);
@@ -689,7 +689,7 @@ const runThreadCli = Effect.fn("runThreadCli")(function* <A, E, R>(
       return outcome.value;
     }).pipe(
       Effect.provide(
-        Layer.mergeAll(EnvironmentAuth.runtimeLayer, WorkspacePaths.layer).pipe(
+        Layer.mergeAll(EnvironmentAuth.layerRuntime, WorkspacePaths.layer).pipe(
           Layer.provideMerge(FetchHttpClient.layer),
           Layer.provide(ServerConfig.layer(config)),
           Layer.provide(Layer.succeed(References.MinimumLogLevel, minimumLogLevel)),
@@ -1124,36 +1124,37 @@ const threadNewCommand = Command.make("new", {
             }).pipe(
               // A rejected launch can leave the claimed thread behind; delete
               // it so a rejection means nothing was created.
-              Effect.catchTag("CliOrchestrationCommandRejectedError", (error) =>
-                Effect.gen(function* () {
-                  const shell = yield* fetchLiveOrchestrationShell(
-                    input.live.origin,
-                    input.token,
-                    input.timeouts,
-                  ).pipe(
-                    Effect.mapError(
-                      (cause) =>
-                        new CliOrchestrationOutcomeUnknownError({
-                          operation: "dispatchLiveServer",
-                          cause,
+              Effect.catchTags({
+                CliOrchestrationCommandRejectedError: (error) =>
+                  Effect.gen(function* () {
+                    const shell = yield* fetchLiveOrchestrationShell(
+                      input.live.origin,
+                      input.token,
+                      input.timeouts,
+                    ).pipe(
+                      Effect.mapError(
+                        (cause) =>
+                          new CliOrchestrationOutcomeUnknownError({
+                            operation: "dispatchLiveServer",
+                            cause,
+                          }),
+                      ),
+                    );
+                    if (!shell.threads.some((thread) => thread.id === threadId)) {
+                      return yield* error;
+                    }
+                    return yield* compensateFailedThreadStart(
+                      error,
+                      Effect.flatMap(newCommandId, (cleanupCommandId) =>
+                        dispatchLiveThreadCommand(client, {
+                          type: "thread.delete",
+                          commandId: cleanupCommandId,
+                          threadId,
                         }),
-                    ),
-                  );
-                  if (!shell.threads.some((thread) => thread.id === threadId)) {
-                    return yield* error;
-                  }
-                  return yield* compensateFailedThreadStart(
-                    error,
-                    Effect.flatMap(newCommandId, (cleanupCommandId) =>
-                      dispatchLiveThreadCommand(client, {
-                        type: "thread.delete",
-                        commandId: cleanupCommandId,
-                        threadId,
-                      }),
-                    ),
-                  );
-                }),
-              ),
+                      ),
+                    );
+                  }),
+              }),
             );
             return yield* awaitLaunchedThread(client, {
               threadId,

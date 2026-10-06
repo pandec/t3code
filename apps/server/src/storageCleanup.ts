@@ -3,7 +3,7 @@ import {
   OrchestrationV2ProviderSessionJson,
 } from "@t3tools/contracts";
 import * as Schema from "effect/Schema";
-import * as SqlClient from "effect/unstable/sql/SqlClient";
+import * as SqlClient from "effect/sql/SqlClient";
 import type {
   OrchestrationV2ThreadShell,
   ProjectId,
@@ -35,6 +35,7 @@ import { threadHasQueuedTurnStart } from "./orchestration-v2/ThreadSettlementSer
 import { forkParked } from "./serverActivation.ts";
 import * as Settings from "./serverSettings.ts";
 import * as TerminalManager from "./terminal/Manager.ts";
+import { isFilesystemRoot, managedWorktreesDirectories } from "./worktreesDirectory.ts";
 import * as GitVcsDriver from "./vcs/GitVcsDriver.ts";
 import {
   canonicalWorkspacePath,
@@ -153,6 +154,22 @@ export const storageCleanupWorktreeInUse = Effect.fn("storageCleanupWorktreeInUs
   },
 );
 
+/**
+ * Fork: cwds of provider sessions that are not stopped, for
+ * `storageCleanupWorktreeInUse`. Sessions can outlive their run and can be
+ * shared across app threads.
+ */
+export const readLiveProviderSessionCwds = Effect.fn("readLiveProviderSessionCwds")(function* () {
+  const sql = yield* SqlClient.SqlClient;
+  const rows = yield* sql<{ payload_json: string }>`
+    SELECT payload_json FROM orchestration_v2_projection_provider_sessions
+    WHERE status != 'stopped'
+  `;
+  return (yield* Effect.forEach(rows, (row) => decodeCleanupSession(row.payload_json))).map(
+    (session) => session.cwd,
+  );
+});
+
 export const make = Effect.gen(function* () {
   const config = yield* ServerConfig.ServerConfig;
   const settingsService = yield* Settings.ServerSettingsService;
@@ -206,16 +223,8 @@ export const make = Effect.gen(function* () {
     return { projects, threads: [...active.threads, ...archived.threads] };
   });
 
-  // Sessions can outlive their run and can be shared across app threads.
-  const readLiveSessionCwds = Effect.fn("StorageCleanup.readLiveSessionCwds")(function* () {
-    const rows = yield* sql<{ payload_json: string }>`
-      SELECT payload_json FROM orchestration_v2_projection_provider_sessions
-      WHERE status != 'stopped'
-    `;
-    return (yield* Effect.forEach(rows, (row) => decodeCleanupSession(row.payload_json))).map(
-      (session) => session.cwd,
-    );
-  });
+  const readLiveSessionCwds = () =>
+    readLiveProviderSessionCwds().pipe(Effect.provideService(SqlClient.SqlClient, sql));
 
   // Local threads under another project need not have a worktreePath of their own.
   const containsProjectRoot = Effect.fn("StorageCleanup.containsProjectRoot")(function* (
@@ -236,7 +245,20 @@ export const make = Effect.gen(function* () {
     now: number,
   ) {
     if (!anyWorktreePolicy(serverSettings, worktreeCleanupEnabled)) return;
-    if (!(yield* fs.exists(config.worktreesDir))) return;
+    const roots: Array<string> = [];
+    for (const directory of managedWorktreesDirectories(
+      serverSettings,
+      config.worktreesDir,
+      path,
+    )) {
+      // An unmounted drive only skips its own worktrees.
+      const root = yield* fs.exists(directory).pipe(
+        Effect.flatMap((exists) => (exists ? fs.realPath(directory) : Effect.succeed(null))),
+        Effect.orElseSucceed(() => null),
+      );
+      if (root !== null && !isFilesystemRoot(root, path)) roots.push(root);
+    }
+    if (roots.length === 0) return;
     const hasDeleteRule = anyWorktreePolicy(serverSettings, (rules) => rules.worktreeOnDelete);
     const deletedRows = hasDeleteRule
       ? yield* sql<{ payload_json: string; workspaceRoot: string }>`
@@ -257,7 +279,6 @@ export const make = Effect.gen(function* () {
         resolveWorktreeCleanup(serverSettings, thread.projectId).worktreeOnDelete,
     );
     const snapshot = yield* readThreads();
-    const root = yield* fs.realPath(config.worktreesDir);
     const refreshedDefaultRefs = new Map<string, Set<string>>();
     // Aliases of one checkout are one owner group.
     const groups = new Map<string, OrchestrationV2ThreadShell[]>();
@@ -282,7 +303,18 @@ export const make = Effect.gen(function* () {
     for (const thread of candidates) {
       const settings = resolveWorktreeCleanup(serverSettings, thread.projectId);
       if (!worktreeCleanupEnabled(settings)) continue;
-      const worktreePath = path.resolve(thread.worktreePath!);
+      // Validate the recorded path itself first: a symlinked parent (a linked
+      // drive) is fine, a symlinked worktree directory is not. Every later
+      // check (owners, terminals, sessions, roots, reservations, revalidation)
+      // then uses the canonical path, so an alias cannot slip past them.
+      const recordedPath = path.resolve(thread.worktreePath!);
+      const worktreePath = yield* Effect.gen(function* () {
+        if (!(yield* fs.exists(recordedPath))) return null;
+        const realPath = yield* fs.realPath(recordedPath);
+        const realParent = yield* fs.realPath(path.dirname(recordedPath));
+        return realPath === path.join(realParent, path.basename(recordedPath)) ? realPath : null;
+      }).pipe(Effect.orElseSucceed(() => null));
+      if (worktreePath === null) continue;
       const deleted = "workspaceRoot" in thread;
       const project = deleted
         ? { workspaceRoot: thread.workspaceRoot }
@@ -300,8 +332,8 @@ export const make = Effect.gen(function* () {
       )
         continue;
       yield* Effect.gen(function* () {
-        if (!inside(root, worktreePath) || !(yield* fs.exists(worktreePath))) return;
-        if ((yield* fs.realPath(worktreePath)) !== worktreePath) return;
+        // Roots are canonical, like `worktreePath`.
+        if (!roots.some((root) => inside(root, worktreePath))) return;
         if (yield* containsProjectRoot(worktreePath, [project, ...snapshot.projects])) return;
         // A linked worktree has a .git file. Never remove a main checkout.
         if ((yield* fs.stat(path.join(worktreePath, ".git"))).type !== "File") return;

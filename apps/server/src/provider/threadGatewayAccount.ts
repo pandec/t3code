@@ -31,7 +31,7 @@ import type {
 import * as Clock from "effect/Clock";
 import * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
-import { HttpClient } from "effect/unstable/http";
+import { HttpClient } from "effect/http";
 
 import type {
   ProjectionStoreV2Error,
@@ -41,7 +41,7 @@ import {
   probeCliProxyApiSessionAccount,
   resolveCliProxyApiUsageProbeTarget,
 } from "./cliProxyApiUsage.ts";
-import type { ProviderInstanceRegistryShape } from "./Services/ProviderInstanceRegistry.ts";
+import type { ProviderInstanceRegistry } from "./ProviderInstanceRegistry.ts";
 
 const CLAUDE_DRIVER = "claudeAgent";
 
@@ -104,7 +104,7 @@ export interface ThreadGatewayAccountProjections {
 
 export interface ThreadGatewayAccountDependencies {
   readonly projections: ThreadGatewayAccountProjections;
-  readonly instanceRegistry: Pick<ProviderInstanceRegistryShape, "getInstanceConfig">;
+  readonly instanceRegistry: Pick<ProviderInstanceRegistry["Service"], "getInstanceConfig">;
   readonly httpClient: HttpClient.HttpClient;
 }
 
