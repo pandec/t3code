@@ -94,6 +94,8 @@ interface RightPanelTabsProps {
   defaultWidth?: number;
   inlineSize?: PreviewPanelInlineSize;
   layoutControls?: ReactNode;
+  /** Inline mode: the titlebar cluster over the tab bar holds only the maximize control. */
+  panelTogglesHidden?: boolean;
   surfaces: readonly RightPanelSurface[];
   /** Fallback environment for surfaces that do not carry their own. */
   environmentId: EnvironmentId | null;
@@ -1090,7 +1092,11 @@ export function RightPanelTabs(props: RightPanelTabsProps) {
           // The sheet overlays from the viewport top, so its tab bar keeps
           // the titlebar's height: a compact row re-centers the layout
           // controls a few pixels higher and the cluster jumps on open.
-          props.mode === "inline" && !props.layoutControls ? "pr-28" : "pr-3",
+          props.mode === "inline" && !props.layoutControls
+            ? props.panelTogglesHidden
+              ? "pr-12"
+              : "pr-28"
+            : "pr-3",
           ownsDesktopTitleBar && "drag-region",
           ownsDesktopTitleBar && "wco:pr-(--workspace-native-controls-inset)",
           props.mode === "inline" && props.maximized && COLLAPSED_SIDEBAR_TITLEBAR_INSET_CLASS,
@@ -1372,12 +1378,18 @@ export function RightPanelTabs(props: RightPanelTabsProps) {
         {props.layoutControls}
         {ownsDesktopTitleBar && !props.layoutControls ? (
           // Keeps the tabs clear of the window controls when the layout toggles live elsewhere.
-          <span aria-hidden className="hidden w-24 shrink-0 wco:block" />
+          <span
+            aria-hidden
+            className={cn("hidden shrink-0 wco:block", props.panelTogglesHidden ? "w-9" : "w-24")}
+          />
         ) : null}
         {ownsDesktopTitleBar ? (
           <span
             aria-hidden
-            className="pointer-events-none fixed top-[var(--workspace-controls-top)] right-[var(--workspace-controls-right)] h-[var(--workspace-topbar-height)] w-28 [-webkit-app-region:no-drag]"
+            className={cn(
+              "pointer-events-none fixed top-[var(--workspace-controls-top)] right-[var(--workspace-controls-right)] h-[var(--workspace-topbar-height)] [-webkit-app-region:no-drag]",
+              props.panelTogglesHidden ? "w-12" : "w-28",
+            )}
           />
         ) : null}
       </div>

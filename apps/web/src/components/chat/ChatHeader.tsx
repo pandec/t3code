@@ -31,7 +31,6 @@ import {
   WorkspaceBreadcrumbText,
 } from "../WorkspaceBreadcrumb";
 import { cn } from "~/lib/utils";
-import { OpenSplitViewControl } from "../thread-split/PaneControls";
 
 interface ChatHeaderProps {
   activeThreadEnvironmentId: EnvironmentId;
@@ -40,7 +39,8 @@ interface ChatHeaderProps {
   /** Drafts have no server thread yet, so the title carries no action menu. */
   isServerThread: boolean;
   activeProject: EnvironmentProject | null;
-  rightPanelOpen: boolean;
+  /** Controls in the titlebar cluster overlaying the header's right edge. */
+  titleBarControlCount: number;
   onNewThreadInProject: () => void;
   onOpenProjectSettings?: (() => void) | undefined;
 }
@@ -66,13 +66,23 @@ export function resolveRenameCommit(input: {
 // events (the second click dismisses it and dblclick still fires), so it
 // opens immediately.
 const TITLE_MENU_OPEN_DELAY_MS = 500;
+// Right padding that keeps the title clear of the titlebar cluster, indexed by
+// its control count: one toggle plus the cluster gap per control (wider
+// touch-sized toggles below sm).
+const TITLEBAR_CONTROL_RESERVE_CLASSES = [
+  "pr-0",
+  "pr-9 sm:pr-8",
+  "pr-18 sm:pr-16",
+  "pr-27 sm:pr-24",
+  "pr-36 sm:pr-32",
+] as const;
 export const ChatHeader = memo(function ChatHeader({
   activeThreadEnvironmentId,
   activeThreadId,
   activeThreadTitle,
   isServerThread,
   activeProject,
-  rightPanelOpen,
+  titleBarControlCount,
   onNewThreadInProject,
   onOpenProjectSettings,
 }: ChatHeaderProps) {
@@ -233,7 +243,9 @@ export const ChatHeader = memo(function ChatHeader({
     <div
       className={cn(
         "flex min-w-0 flex-1 items-center gap-2 sm:gap-3",
-        rightPanelOpen ? "pr-10" : "pr-24",
+        TITLEBAR_CONTROL_RESERVE_CLASSES[
+          Math.min(titleBarControlCount, TITLEBAR_CONTROL_RESERVE_CLASSES.length - 1)
+        ],
       )}
       onContextMenu={handleHeaderContextMenu}
     >
@@ -333,7 +345,6 @@ export const ChatHeader = memo(function ChatHeader({
           )}
         </WorkspaceBreadcrumbItem>
       </WorkspaceBreadcrumb>
-      <OpenSplitViewControl />
     </div>
   );
 });

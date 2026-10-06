@@ -85,6 +85,7 @@ const clientSettings: ClientSettings = {
   sidebarV2CompactCards: true,
   sidebarV2NewThreadButtonInProjectRow: true,
   sidebarThreadGroupsButton: true,
+  showPanelToggleButtons: false,
   steerGraceWindowMs: 5_000,
   sidebarWorkingShelfEnabled: false,
   loadBalancingEnabled: false,

@@ -296,6 +296,7 @@ thread in split view…** in the command palette, to show a second thread beside
 Threads you pick from the sidebar or the palette then open in the pane you are working in. Drag
 the divider to resize the panes, or hover it to swap the threads, switch the second thread, or
 close the split. `mod+\` moves focus to the other pane and `mod+shift+\` swaps the threads.
+With no right-panel tab open, `mod+w` closes the active pane's thread and keeps the other one.
 
 ## Inspect agent work
 

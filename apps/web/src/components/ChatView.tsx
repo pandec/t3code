@@ -575,9 +575,14 @@ import {
 import { useLocalStorage } from "~/hooks/useLocalStorage";
 import { useThreadGroupCatalog } from "../hooks/useThreadGroups";
 import { useComposerHandleContext } from "../composerHandleContext";
+import { useOpenSplitViewControlVisible } from "./thread-split/PaneControls";
 import { useThreadPaneId } from "./thread-split/threadPaneContext";
 import { useOpenThreadInPane } from "./thread-split/useOpenThreadInPane";
-import { isThreadPaneActive, useThreadSplitStore } from "./thread-split/threadSplitStore";
+import {
+  closeActiveThreadPane,
+  isThreadPaneActive,
+  useThreadSplitStore,
+} from "./thread-split/threadSplitStore";
 import {
   awaitAttachmentUploads,
   getUploadedAttachments,
@@ -845,7 +850,6 @@ type ChatViewProps =
       environmentId: EnvironmentId;
       threadId: ThreadId;
       onDiffPanelOpen?: () => void;
-      reserveTitleBarControlInset?: boolean;
       forceExpandedMobileComposer?: boolean;
       routeKind: "server";
       draftId?: never;
@@ -854,7 +858,6 @@ type ChatViewProps =
       environmentId: EnvironmentId;
       threadId: ThreadId;
       onDiffPanelOpen?: () => void;
-      reserveTitleBarControlInset?: boolean;
       forceExpandedMobileComposer?: boolean;
       routeKind: "draft";
       draftId: DraftId;
@@ -1561,7 +1564,6 @@ export default function ChatView(props: ChatViewProps) {
     threadId,
     routeKind,
     onDiffPanelOpen,
-    reserveTitleBarControlInset = true,
     forceExpandedMobileComposer = false,
   } = props;
   const draftId = routeKind === "draft" ? props.draftId : null;
@@ -1590,6 +1592,12 @@ export default function ChatView(props: ChatViewProps) {
     state.splitMounted && state.secondaryRef !== null ? scopedThreadKey(state.secondaryRef) : null,
   );
   const threadSplitActive = splitSecondaryThreadKey !== null;
+  // Only the pane flush with the window's right edge sits under the desktop
+  // window controls. The primary split pane anchors its titlebar cluster to
+  // its own header; viewport-anchored, the secondary's would cover it.
+  const paneTouchesWindowRightEdge = !threadSplitActive || isSecondaryPane;
+  const showPanelToggleButtons = useClientSettings((settings) => settings.showPanelToggleButtons);
+  const openSplitViewControlVisible = useOpenSplitViewControlVisible();
   // Deliberately NOT mounted-gated like the key above: terminal ownership
   // must swap in the same commit the secondary thread is picked or dropped,
   // or both panes would attach the same terminal for a frame. While a picked
@@ -7862,9 +7870,23 @@ export default function ChatView(props: ChatViewProps) {
       }
 
       if (command === "rightPanel.close") {
-        // Nothing open: leave the event alone so the shortcut keeps its
-        // native meaning (close window on desktop, close tab in a browser).
-        if (!activeRightPanelSurface) return;
+        if (!activeRightPanelSurface) {
+          // Nothing open in the panel: while split, close this pane's thread
+          // and keep the other one; otherwise leave the event alone so the
+          // shortcut keeps its native meaning (close window on desktop,
+          // close tab in a browser).
+          const closedPane = closeActiveThreadPane((ref) =>
+            navigate({ to: "/$environmentId/$threadId", params: buildThreadRouteParams(ref) }),
+          );
+          if (closedPane) {
+            event.preventDefault();
+            // Immediate: closing the secondary activates the primary pane
+            // synchronously, and its window listener must not also act on
+            // this keypress (e.g. close a terminal it just refocused).
+            event.stopImmediatePropagation();
+          }
+          return;
+        }
         event.preventDefault();
         event.stopPropagation();
         if (!event.repeat) closeRightPanelSurface(activeRightPanelSurface);
@@ -8042,6 +8064,7 @@ export default function ChatView(props: ChatViewProps) {
     toggleThreadPanel,
     toggleTerminalVisibility,
     composerRef,
+    navigate,
   ]);
 
   // Paste-to-focus: the resting composer blurs on a click into the timeline,
@@ -11189,6 +11212,8 @@ export default function ChatView(props: ChatViewProps) {
     onToggleTerminal: toggleTerminalVisibility,
     onToggleThreadPanel: toggleThreadPanel,
     onToggleRightPanel: toggleRightPanel,
+    showTerminalControl: showPanelToggleButtons,
+    showRightPanelControl: showPanelToggleButtons,
   } satisfies PanelLayoutControlsProps;
   const panelToggleControls = (
     <PanelLayoutControls
@@ -11203,17 +11228,29 @@ export default function ChatView(props: ChatViewProps) {
     >
       <PanelLayoutControls
         {...panelToggleControlProps}
+        showOpenSplitControl
         showTerminalControl={false}
         showRightPanelControl={false}
       />
     </div>
   );
+  // Controls in the chat header's titlebar cluster, which the header keeps
+  // clear of the thread title: the split opener, the thread details toggle,
+  // and the panel toggles unless the inline right panel's tab bar hosts them.
+  const headerTitleBarControlCount =
+    (openSplitViewControlVisible ? 1 : 0) +
+    1 +
+    (!inlineRightPanelOwnsTitleBar && showPanelToggleButtons ? 2 : 0);
   const panelLayoutControls = (
     <div
       className={cn(
         // Keep one viewport anchor inside the header's no-drag region. The
         // header can shrink behind the right panel without moving the controls.
-        "pointer-events-none fixed top-[var(--workspace-controls-top)] right-[var(--workspace-controls-right)] z-50 mr-px flex h-[var(--workspace-topbar-height)] items-center gap-1 [-webkit-app-region:no-drag]",
+        // The primary split pane anchors to its own header instead.
+        "pointer-events-none z-50 mr-px flex h-[var(--workspace-topbar-height)] items-center gap-1 [-webkit-app-region:no-drag]",
+        paneTouchesWindowRightEdge
+          ? "fixed top-[var(--workspace-controls-top)] right-[var(--workspace-controls-right)]"
+          : "absolute inset-y-0 right-3",
       )}
       data-workspace-titlebar-controls
     >
@@ -11224,9 +11261,9 @@ export default function ChatView(props: ChatViewProps) {
             "flex shrink-0",
             panelAnimationsActive &&
               "motion-safe:transition-opacity motion-safe:duration-(--panel-animation-duration) motion-safe:ease-out",
-            // Closed, the control leaves the flex flow so the cluster is only as wide as the two
-            // toggles the header reserves room for; anchored to the cluster's left edge, it fades
-            // out where it stood rather than over the terminal toggle.
+            // Closed, the control leaves the flex flow so the cluster is only as wide as the
+            // controls the header reserves room for; anchored to the cluster's left edge, it fades
+            // out where it stood rather than over its neighbor.
             rightPanelOpen
               ? "pointer-events-auto opacity-100"
               : "pointer-events-none absolute right-full mr-1 opacity-0",
@@ -11239,7 +11276,13 @@ export default function ChatView(props: ChatViewProps) {
           />
         </span>
       ) : null}
-      <div className="pointer-events-auto flex h-full items-center">{panelToggleControls}</div>
+      <div className="pointer-events-auto flex h-full items-center">
+        <PanelLayoutControls
+          {...panelToggleControlProps}
+          showOpenSplitControl={!inlineRightPanelOwnsTitleBar}
+          showThreadPanelControl={!inlineRightPanelOwnsTitleBar}
+        />
+      </div>
     </div>
   );
   const workspaceFileDropHandlers = makeWorkspaceFileDropHandlers({
@@ -11293,7 +11336,7 @@ export default function ChatView(props: ChatViewProps) {
             isElectron
               ? cn(
                   "drag-region flex h-[var(--workspace-topbar-height)] min-h-[var(--workspace-topbar-height)] shrink-0 items-center px-3 sm:px-5",
-                  reserveTitleBarControlInset &&
+                  paneTouchesWindowRightEdge &&
                     !inlineRightPanelOwnsTitleBar &&
                     "wco:pr-(--workspace-native-controls-inset)",
                 )
@@ -11304,7 +11347,10 @@ export default function ChatView(props: ChatViewProps) {
           {isElectron && rightPanelControlsAtRoot ? (
             <span
               aria-hidden
-              className="pointer-events-none fixed top-[var(--workspace-controls-top)] right-[var(--workspace-controls-right)] h-[var(--workspace-topbar-height)] w-28 [-webkit-app-region:no-drag]"
+              className={cn(
+                "pointer-events-none fixed top-[var(--workspace-controls-top)] right-[var(--workspace-controls-right)] h-[var(--workspace-topbar-height)] [-webkit-app-region:no-drag]",
+                showPanelToggleButtons ? "w-28" : "w-12",
+              )}
             />
           ) : null}
           {!rightPanelControlsAtRoot && !rightPanelControlsInPanel ? panelLayoutControls : null}
@@ -11315,7 +11361,7 @@ export default function ChatView(props: ChatViewProps) {
             isServerThread={isServerThread}
             activeThreadTitle={activeThread.title}
             activeProject={activeProject ?? null}
-            rightPanelOpen={inlineRightPanelOwnsTitleBar}
+            titleBarControlCount={headerTitleBarControlCount}
             onNewThreadInProject={handleNewThreadInActiveProject}
             {...(activeDraftLogicalProjectKey
               ? { onOpenProjectSettings: handleOpenDraftProjectSettings }
@@ -11922,6 +11968,7 @@ export default function ChatView(props: ChatViewProps) {
           mode="inline"
           open={rightPanelOpen}
           maximized={rightPanelMaximized}
+          panelTogglesHidden={!showPanelToggleButtons}
           inlineSize={previewPanelInlineSize}
           surfaces={renderedRightPanelSurfaces}
           environmentId={activeThreadRef.environmentId}
