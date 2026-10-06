@@ -7,6 +7,7 @@ import {
   activateThreadPane,
   capturePaletteOwnerPane,
   clampSplitRatio,
+  closeActiveThreadPane,
   focusOtherThreadPane,
   isThreadPaneActive,
   MAX_SPLIT_RATIO,
@@ -93,6 +94,34 @@ describe("isThreadPaneActive", () => {
     useThreadSplitStore.getState().setActivePane("primary");
     expect(isThreadPaneActive("primary")).toBe(true);
     expect(isThreadPaneActive("secondary")).toBe(false);
+  });
+});
+
+describe("closeActiveThreadPane", () => {
+  it("leaves the shortcut alone while the split is not rendered", () => {
+    const navigate = vi.fn();
+    expect(closeActiveThreadPane(navigate)).toBe(false);
+    useThreadSplitStore.getState().openSecondaryThread(REF_A);
+    expect(closeActiveThreadPane(navigate)).toBe(false);
+    expect(navigate).not.toHaveBeenCalled();
+  });
+
+  it("folds the split when the secondary pane is active", () => {
+    const navigate = vi.fn();
+    useThreadSplitStore.getState().openSecondaryThread(REF_A);
+    mountSplit();
+    expect(closeActiveThreadPane(navigate)).toBe(true);
+    expect(useThreadSplitStore.getState().secondaryRef).toBeNull();
+    expect(navigate).not.toHaveBeenCalled();
+  });
+
+  it("routes the primary pane to the secondary thread when the primary is active", () => {
+    const navigate = vi.fn();
+    useThreadSplitStore.getState().openSecondaryThread(REF_A);
+    mountSplit();
+    useThreadSplitStore.getState().setActivePane("primary");
+    expect(closeActiveThreadPane(navigate)).toBe(true);
+    expect(navigate).toHaveBeenCalledWith(REF_A);
   });
 });
 

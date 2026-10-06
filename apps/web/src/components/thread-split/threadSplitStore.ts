@@ -412,6 +412,29 @@ export function paletteOwnerPane(): ThreadPaneId {
   return paletteOwnerPaneId;
 }
 
+/**
+ * Close the active pane's thread and keep the other one as the only pane
+ * (mod+w with nothing else to close). Dropping the secondary just folds the
+ * split; dropping the primary routes to the secondary's thread, and
+ * SplitThreadLayout's no-duplicate rule folds the split once it lands.
+ * Returns false while the split is not rendered or a swap is in flight.
+ */
+export function closeActiveThreadPane(
+  navigateToThread: (ref: ScopedThreadRef) => void | Promise<unknown>,
+): boolean {
+  const state = useThreadSplitStore.getState();
+  if (!state.splitMounted || state.secondaryRef === null || state.pendingSwap !== null) {
+    return false;
+  }
+  if (state.activePaneId === "secondary") {
+    state.closeSplit();
+    return true;
+  }
+  // A rejected navigation leaves both panes as they were.
+  void Promise.resolve(navigateToThread(state.secondaryRef)).catch(() => undefined);
+  return true;
+}
+
 /** Jump focus to the other pane. Returns false while the split is not rendered. */
 export function focusOtherThreadPane(): boolean {
   const state = useThreadSplitStore.getState();
