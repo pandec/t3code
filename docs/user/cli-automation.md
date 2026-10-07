@@ -271,7 +271,8 @@ Ask an agent to archive its thread when it finishes. Agents with T3's MCP tools 
 `archive_thread`, optionally setting `removeWorktree: true` when you also request cleanup.
 `archive_thread_status` inspects the request and `cancel_thread_archive` cancels it before
 archiving starts. A pending request means the archive is scheduled; the agent must finish its
-response before it can run.
+response before it can run. Each tool also takes a `threadId` to act on another thread, which must
+run within the agent's own permission modes.
 
 The CLI supports the same workflow:
 
