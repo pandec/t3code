@@ -14,7 +14,9 @@ import { formatForkedThreadTitle } from "@t3tools/shared/composerTrigger";
 import * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
+import * as FileSystem from "effect/FileSystem";
 import * as Option from "effect/Option";
+import * as Path from "effect/Path";
 import * as SqlClient from "effect/sql/SqlClient";
 
 import * as EventSink from "../orchestration-v2/EventSink.ts";
@@ -23,6 +25,7 @@ import * as Orchestrator from "../orchestration-v2/Orchestrator.ts";
 import * as ProjectionStore from "../orchestration-v2/ProjectionStore.ts";
 import * as ProjectStore from "../orchestration-v2/ProjectStore.ts";
 import * as SqlitePersistence from "../persistence/Sqlite.ts";
+import * as ProcessRunner from "../processRunner.ts";
 import * as ProjectService from "../project/ProjectService.ts";
 import type { ProviderInstance } from "../provider/ProviderDriver.ts";
 import { ProviderInstanceRegistry } from "../provider/ProviderInstanceRegistry.ts";
@@ -65,23 +68,31 @@ function makeHarness(options: HarnessOptions = {}) {
   const driverKind = ProviderDriverKind.make(options.driver ?? "claudeAgent");
   const forks: Array<string> = [];
   const state = { writes: 0, readReturned: false };
+  /** The project's checkout; a test may point it at a real repository. */
+  const project = { workspaceRoot };
+  /** Workspaces the provider was asked to list and read sessions in. */
+  const cwds: Array<string> = [];
   let current: ProviderInstance;
   const replaceInstance = () => {
     current = { ...current } as ProviderInstance;
   };
   const sessionImport: ProviderSessionImport = {
-    listSessions: () =>
-      Effect.succeed([
-        {
-          nativeSessionId: sessionId,
-          name: session.name,
-          preview: "Fix the parser",
-          messageCount: 2,
-          updatedAt: "2026-09-01T10:01:00.000Z",
-        },
-      ]),
-    readSession: ({ nativeSessionId }) =>
+    listSessions: ({ cwd }) =>
       Effect.sync(() => {
+        cwds.push(cwd);
+        return [
+          {
+            nativeSessionId: sessionId,
+            name: session.name,
+            preview: "Fix the parser",
+            messageCount: 2,
+            updatedAt: "2026-09-01T10:01:00.000Z",
+          },
+        ];
+      }),
+    readSession: ({ nativeSessionId, cwd }) =>
+      Effect.sync(() => {
+        cwds.push(cwd);
         state.readReturned = true;
         if (options.replaceInstanceDuringRead === true) replaceInstance();
         return { ...session, nativeSessionId };
@@ -147,7 +158,9 @@ function makeHarness(options: HarnessOptions = {}) {
         Layer.mock(ProjectService.ProjectService)({
           getById: (id) =>
             Effect.succeed(
-              id === projectId ? Option.some({ id, workspaceRoot } as never) : Option.none(),
+              id === projectId
+                ? Option.some({ id, workspaceRoot: project.workspaceRoot } as never)
+                : Option.none(),
             ),
         }),
         Layer.mock(ProviderInstanceRegistry)({
@@ -166,7 +179,7 @@ function makeHarness(options: HarnessOptions = {}) {
     Layer.provideMerge(StrictResume.layer),
     Layer.provideMerge(projectionTestLayer),
   );
-  return { layer, forks, state };
+  return { layer, forks, state, project, cwds };
 }
 
 const createProject = Effect.flatMap(ProjectStore.ProjectStoreV2, (projects) =>
@@ -270,6 +283,77 @@ it.layer(main.layer)("SessionImportService", (it) => {
         forkedSessionId,
       );
     }),
+  );
+});
+
+const worktreeHarness = makeHarness();
+
+/** A repository with one commit and a linked worktree on `feature`. */
+const makeRepositoryWithWorktree = Effect.gen(function* () {
+  const fs = yield* FileSystem.FileSystem;
+  const path = yield* Path.Path;
+  const root = yield* fs.realPath(yield* fs.makeTempDirectoryScoped({ prefix: "t3-import-wt-" }));
+  const repository = path.join(root, "repo");
+  const worktreePath = path.join(root, "worktree");
+  yield* fs.makeDirectory(repository);
+  const git = (args: ReadonlyArray<string>) =>
+    ProcessRunner.ProcessRunner.pipe(
+      Effect.flatMap((runner) => runner.run({ command: "git", args: ["-C", repository, ...args] })),
+      Effect.provide(ProcessRunner.layer),
+    );
+  yield* git(["init", "-q"]);
+  yield* git([
+    "-c",
+    "user.email=t@t",
+    "-c",
+    "user.name=T",
+    "commit",
+    "-q",
+    "--allow-empty",
+    "-m",
+    "init",
+  ]);
+  yield* git(["worktree", "add", "-q", "-b", "feature", worktreePath]);
+  return { repository, worktreePath };
+});
+
+it.layer(worktreeHarness.layer)("SessionImportService worktrees", (it) => {
+  it.effect("lists and imports a session in an existing worktree of the project", () =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        const { repository, worktreePath } = yield* makeRepositoryWithWorktree;
+        worktreeHarness.project.workspaceRoot = repository;
+        yield* createProject;
+        const service = yield* SessionImportService.SessionImportService;
+        const projections = yield* ProjectionStore.ProjectionStoreV2;
+
+        yield* service.listCandidates({ projectId, cwd: worktreePath });
+        assert.deepEqual(worktreeHarness.cwds, [worktreePath]);
+
+        assert.equal(
+          yield* importFailure(
+            service.importSession({
+              projectId,
+              instanceId,
+              nativeSessionId: sessionId,
+              worktree: { branch: "main-elsewhere", worktreePath },
+            }),
+          ),
+          "invalid-worktree",
+        );
+
+        const imported = yield* service.importSession({
+          projectId,
+          instanceId,
+          nativeSessionId: sessionId,
+          worktree: { branch: "feature", worktreePath },
+        });
+        assert.deepEqual(worktreeHarness.cwds, [worktreePath, worktreePath]);
+        const records = yield* projections.getThreadRecords(imported.threadId, []);
+        assert.equal(records.thread.branch, "feature");
+        assert.equal(records.thread.worktreePath, worktreePath);
+      }),
+    ),
   );
 });
 
