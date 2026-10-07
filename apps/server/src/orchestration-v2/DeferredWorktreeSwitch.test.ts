@@ -86,6 +86,7 @@ describe("planWorktreeSwitchSchedule", () => {
   const plan = (input: Partial<Parameters<typeof planWorktreeSwitchSchedule>[0]> = {}) =>
     planWorktreeSwitchSchedule({
       thread,
+      runs: [run("run-1", 1, "running")],
       run: run("run-1", 1, "running"),
       driver: codex,
       targetPath: "/repo-worktree",
@@ -94,8 +95,14 @@ describe("planWorktreeSwitchSchedule", () => {
       ...input,
     });
 
-  it("records the source checkout and the requesting run", () => {
-    assert.deepEqual(plan(), { type: "pending", request: pendingSwitch });
+  it("records the source checkout, the requesting run, and the latest run ordinal", () => {
+    assert.deepEqual(plan(), {
+      type: "pending",
+      request: { ...pendingSwitch, latestRunOrdinal: 1 },
+    });
+    const runs = [run("run-2", 2, "running"), run("run-1", 1, "completed")];
+    const recorded = plan({ runs, run: runs[0]! });
+    assert.isTrue(recorded.type === "pending" && recorded.request.latestRunOrdinal === 2);
   });
 
   it("needs a running Codex run on a live thread without a pending archive", () => {
@@ -141,6 +148,7 @@ describe("evaluateWorktreeSwitch", () => {
       evaluate({ runs: [run("run-1", 1, "interrupted")] }),
       cancel(WORKTREE_SWITCH_DETAIL.failed),
     );
+    // A request recorded before start sequences compares creation order.
     assert.deepEqual(
       evaluate({ runs: [run("run-1", 1, "completed"), run("run-2", 2, "queued")] }),
       cancel(WORKTREE_SWITCH_DETAIL.newWork),
@@ -153,6 +161,25 @@ describe("evaluateWorktreeSwitch", () => {
       evaluate({ thread: { ...thread, archivedAt: at("2026-10-01T00:00:02Z") } }),
       cancel(WORKTREE_SWITCH_DETAIL.archived),
     );
+  });
+
+  it("ignores a later-created run that already ran; any queued run cancels", () => {
+    // run-3 was reordered ahead of an edit-held run-2 and ran before run-2 asked.
+    const fromRun2 = { ...pendingSwitch, runId: RunId.make("run-2"), latestRunOrdinal: 3 };
+    const earlier = run("run-3", 3, "completed");
+    assert.equal(
+      evaluate({
+        request: fromRun2,
+        runs: [run("run-1", 1, "completed"), run("run-2", 2, "completed"), earlier],
+      }).type,
+      "switch",
+    );
+    // run-3 asked while the older run-2 was held: run-2 would start in the old checkout.
+    const fromRun3 = { ...pendingSwitch, runId: RunId.make("run-3"), latestRunOrdinal: 3 };
+    assert.deepEqual(evaluate({ request: fromRun3, runs: [run("run-2", 2, "queued"), earlier] }), {
+      type: "cancel",
+      detail: WORKTREE_SWITCH_DETAIL.newWork,
+    });
   });
 
   it("fails on a failed final checkpoint; a missing one (no Git) still switches", () => {

@@ -376,6 +376,12 @@ export const OrchestrationV2ThreadArchiveRequest = Schema.Struct({
   worktreePath: Schema.NullOr(TrimmedNonEmptyString),
   removeWorktree: Schema.optional(Schema.Boolean),
   requestedAt: IsoDateTime,
+  /**
+   * The thread's highest run `ordinal` when requested: runs created later are
+   * new work, runs created earlier are not, whenever they ran. Absent on
+   * requests from before it was recorded.
+   */
+  latestRunOrdinal: Schema.optional(NonNegativeInt),
   status: Schema.Literals(["pending", "completed", "cancelled", "error"]),
   detail: Schema.optional(TrimmedNonEmptyString),
 });
@@ -394,6 +400,8 @@ export const OrchestrationV2ThreadWorktreeSwitch = Schema.Struct({
   sourceBranch: Schema.NullOr(TrimmedNonEmptyString),
   targetPath: TrimmedNonEmptyString,
   requestedAt: IsoDateTime,
+  /** As on `OrchestrationV2ThreadArchiveRequest`. */
+  latestRunOrdinal: Schema.optional(NonNegativeInt),
   status: Schema.Literals(["pending", "completed", "cancelled", "error"]),
   detail: Schema.optional(TrimmedNonEmptyString),
 });

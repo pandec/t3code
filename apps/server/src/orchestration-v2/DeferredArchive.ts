@@ -5,9 +5,10 @@
  * completion, then archives through the ordinary `thread.archive` path. A wake
  * (delegated task result, background notification, restart continuation)
  * carries on that work, so the request moves to the run the wake starts. New
- * work, a stop or failure anywhere in the awaited chain, or a workspace change
- * cancels it; a failed final checkpoint of any awaited run records an error
- * and leaves the thread unarchived. A delegated result reserved for a wake
+ * work (a message sent, or a run created after the request), a stop or failure
+ * anywhere in the awaited chain, or a workspace change cancels it; a failed
+ * final checkpoint of any awaited run records an error and leaves the thread
+ * unarchived. A delegated result reserved for a wake
  * that has not dispatched yet, or whose wake finished but has not been
  * reconciled yet, holds the archive like background work, and so does a
  * restart continuation still waiting to resume the agent. A request with
@@ -29,6 +30,7 @@ import type {
   ThreadId,
 } from "@t3tools/contracts";
 import { backgroundWorkHoldsCompletion } from "@t3tools/shared/orchestrationV2PendingBackgroundWork";
+import { runRanAfter } from "@t3tools/shared/orchestrationV2ThreadError";
 import * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
 import * as Option from "effect/Option";
@@ -87,16 +89,20 @@ function undeliveredCompletionPending(runs: ReadonlyArray<ArchiveRun>): boolean 
   });
 }
 
+type RestartContinuationRun = Pick<OrchestrationV2Run, "id" | "ordinal" | "status" | "completedAt">;
+
 /**
  * Whether restart recovery's continuation of the latest run (the outbox id
- * `ProviderRuntimeRecoveryService` enqueues) has not settled yet.
+ * `ProviderRuntimeRecoveryService` enqueues, for the run `restartContinuationRun`
+ * picks) has not settled yet.
  */
 export function restartContinuationPending(
   outbox: Pick<EffectOutboxV2Shape, "get">,
-  runs: ReadonlyArray<Pick<OrchestrationV2Run, "id" | "ordinal">>,
+  runs: ReadonlyArray<RestartContinuationRun>,
 ) {
-  const latest = runs.reduce<Pick<OrchestrationV2Run, "id" | "ordinal"> | null>(
-    (current, run) => (current === null || run.ordinal > current.ordinal ? run : current),
+  const latest = runs.reduce<RestartContinuationRun | null>(
+    (current, run) =>
+      run.status !== "queued" && (current === null || runRanAfter(run, current)) ? run : current,
     null,
   );
   if (latest === null) return Effect.succeed(false);
@@ -204,6 +210,15 @@ function activeRun(runs: ReadonlyArray<ArchiveRun>): ArchiveRun | null {
   );
 }
 
+/**
+ * The thread's highest run ordinal, recorded on a request: runs created after
+ * it are new work. Ordinals are creation order, not run order: a reordered
+ * queue runs a later message first, and that run is no new work.
+ */
+export function latestRunOrdinal(runs: ReadonlyArray<Pick<OrchestrationV2Run, "ordinal">>): number {
+  return runs.reduce((latest, run) => Math.max(latest, run.ordinal), 0);
+}
+
 export type ArchiveSchedulePlan =
   | { readonly type: "reject"; readonly detail: string }
   | { readonly type: "archive"; readonly request: OrchestrationV2ThreadArchiveRequest }
@@ -251,6 +266,7 @@ export function planArchiveSchedule(input: {
     worktreePath: input.thread.worktreePath,
     ...(input.removeWorktree === true ? { removeWorktree: true } : {}),
     requestedAt: DateTime.formatIso(input.now),
+    latestRunOrdinal: latestRunOrdinal(input.runs),
     status: "pending",
   };
   return run === null &&
@@ -291,7 +307,14 @@ export function evaluateDeferredArchive(input: {
   const requestedAtMs = Date.parse(request.requestedAt);
   if (request.runId !== null) {
     const target = input.runs.find((run) => run.id === request.runId);
-    if (target === undefined || input.runs.some((run) => run.ordinal > target.ordinal)) {
+    // Runs created after the request, other than the wakes it moved to, are new
+    // work. A later-created run that already ran (a reordered queue) is not;
+    // scheduling rejects queued runs, so no earlier one can start later.
+    const latestOrdinal = request.latestRunOrdinal ?? 0;
+    if (
+      target === undefined ||
+      input.runs.some((run) => run.ordinal > target.ordinal && run.ordinal > latestOrdinal)
+    ) {
       return { type: "cancel", detail: ARCHIVE_CANCEL_DETAIL.newWork };
     }
     const awaited = awaitedRun(target, input.runs, request);
@@ -347,8 +370,10 @@ export function evaluateDeferredArchive(input: {
 /**
  * The run a request effectively waits on. A wake cancelled while still queued
  * (its delegated tasks were withdrawn, or restart recovery dropped it) never
- * ran, so the request falls back to the run before it; null when that run had
- * already settled before the archive was scheduled (only background work counts).
+ * ran, so the request falls back to the latest run before it that had not
+ * settled when the archive was scheduled; null when there is none (only
+ * background work counts). Runs that settled earlier are skipped, not stopped
+ * at: a reordered queue can leave a later-created run settled before it.
  * Only a wake moves a pending request, so a target requested at or after the
  * archive is a wake; the run the archive was scheduled during was requested
  * before it (`>=` keeps same-millisecond wakes).
@@ -367,15 +392,16 @@ function awaitedRun(
   ) {
     const ordinal = run.ordinal;
     const previous = runs
-      .filter((candidate) => candidate.ordinal < ordinal)
+      .filter(
+        (candidate) =>
+          candidate.ordinal < ordinal &&
+          !(
+            candidate.completedAt != null &&
+            DateTime.toEpochMillis(candidate.completedAt) <= requestedAtMs
+          ),
+      )
       .toSorted((left, right) => right.ordinal - left.ordinal)[0];
-    if (
-      previous === undefined ||
-      (previous.completedAt != null &&
-        DateTime.toEpochMillis(previous.completedAt) <= requestedAtMs)
-    ) {
-      return null;
-    }
+    if (previous === undefined) return null;
     run = previous;
   }
   return run;

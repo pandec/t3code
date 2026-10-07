@@ -10765,6 +10765,43 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
 
   // Fork: deferred agent-requested worktree switch (DeferredWorktreeSwitch.ts).
   // Requests live on the thread payload, so they replay with the event log.
+
+  /**
+   * New work (a sent message, a retried preparation) cancels a pending switch,
+   * after this command's other thread events. `fallback` is the thread as read
+   * before the command, when the caller has it.
+   */
+  const cancelPendingThreadWorktreeSwitch = Effect.fn(
+    "orchestrationV2.dispatch.cancelPendingWorktreeSwitch",
+  )(function* (
+    command: Extract<
+      OrchestrationV2ServerCommand,
+      { readonly type: "message.dispatch" | "prepared-run.retry" }
+    >,
+    events: Ref.Ref<Array<OrchestrationV2DomainEvent>>,
+    fallback?: OrchestrationV2AppThread,
+  ) {
+    const thread = latestThreadState(
+      yield* Ref.get(events),
+      command.threadId,
+      fallback ?? (yield* readThreadForArchive(command.threadId)),
+    );
+    const request = pendingWorktreeSwitch(thread);
+    if (request === null) return;
+    yield* emit(
+      events,
+      command,
+    )({
+      type: "thread.metadata-updated",
+      threadId: command.threadId,
+      providerInstanceId: thread.providerInstanceId,
+      occurredAt: yield* DateTime.now,
+      payload: {
+        ...thread,
+        worktreeSwitch: cancelledWorktreeSwitch(request, WORKTREE_SWITCH_DETAIL.newWork),
+      },
+    });
+  });
   const dispatchThreadWorktreeSwitch = Effect.fn("orchestrationV2.dispatch.threadWorktreeSwitch")(
     function* (
       command: Extract<
@@ -10814,6 +10851,7 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
               );
         const plan = planWorktreeSwitchSchedule({
           thread,
+          runs,
           run,
           driver,
           targetPath: command.targetPath,
@@ -11112,6 +11150,10 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
               : ARCHIVE_CANCEL_DETAIL.unarchived,
           );
         }
+        // A wake's run cancels a pending worktree switch only once it starts.
+        if (!isWakeMessageDispatch(command)) {
+          yield* cancelPendingThreadWorktreeSwitch(command, events, thread);
+        }
         break;
       }
       case "notification.delivery.accept":
@@ -11128,6 +11170,14 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
         break;
       case "prepared-run.retry":
         yield* dispatchPreparedRunRetry(command, events);
+        // A retry runs an earlier-created run again: new work the deciders cannot see.
+        yield* cancelPendingThreadArchive(
+          command.threadId,
+          command,
+          events,
+          ARCHIVE_CANCEL_DETAIL.newWork,
+        );
+        yield* cancelPendingThreadWorktreeSwitch(command, events);
         break;
       case "runtime-request.respond":
         yield* dispatchRuntimeRequestRespond(command, events, effects);
