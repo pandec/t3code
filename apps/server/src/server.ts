@@ -82,7 +82,6 @@ import * as ServerRuntimeStartup from "./serverRuntimeStartup.ts";
 import * as AgentAwarenessRelay from "./relay/AgentAwarenessRelay.ts";
 import { hasCloudPublicConfig } from "./cloud/publicConfig.ts";
 import * as ServerSettings from "./serverSettings.ts";
-import { settingsHttpApiLayer } from "./settingsHttp.ts";
 import * as ProjectEnrichmentService from "./project/ProjectEnrichmentService.ts";
 import * as ProjectRepositoryIdentityStore from "./project/ProjectRepositoryIdentityStore.ts";
 import * as NativeAppIconResolver from "./assets/NativeAppIconResolver.ts";
@@ -181,8 +180,6 @@ import * as ProjectHttp from "./project/http.ts";
 import * as VoiceTranscription from "./voice/VoiceTranscription.ts";
 import * as TtsService from "./voice/TtsService.ts";
 import { voiceHttpApiLayer } from "./voice/http.ts";
-import { providerCatalogHttpApiLayer } from "./provider/http.ts";
-import { sessionImportHttpApiLayer } from "./sessionImport/http.ts";
 import * as MessageSummary from "./messageArtifacts/MessageSummary.ts";
 import * as MessageSpeechScript from "./messageArtifacts/MessageSpeechScript.ts";
 import * as MessageSpeech from "./voice/MessageSpeech.ts";
@@ -750,9 +747,6 @@ const layerMakeRoutes = Layer.mergeAll(
       Layer.provide(PullRequestHttp.layer),
       Layer.provide(ProjectHttp.layer),
       Layer.provide(ServerHttp.layerServerEnvironmentHttpApi),
-      Layer.provide(settingsHttpApiLayer),
-      Layer.provide(sessionImportHttpApiLayer),
-      Layer.provide(providerCatalogHttpApiLayer),
       Layer.provide(WebhookRoute.layer.pipe(Layer.provide(RelayDeliveryProof.layer))),
       Layer.provide(AuthHttp.layerAuthenticatedAuth),
     ),
