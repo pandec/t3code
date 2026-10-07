@@ -66,9 +66,11 @@ export function SessionImportDialog(props: {
   const worktrees = getSessionImportWorktrees(refs.refs);
   const { refresh: refreshRefs, loadNext: loadNextRefs } = refs;
   const hasMoreRefs = refs.data?.nextCursor != null && refs.error === null;
+  // Waits for every page in flight, including a first-page refresh on open,
+  // which resets the page list.
   useEffect(() => {
-    if (hasMoreRefs && !refs.isFetchingNextPage) loadNextRefs();
-  }, [hasMoreRefs, refs.isFetchingNextPage, loadNextRefs]);
+    if (hasMoreRefs && !refs.isPending) loadNextRefs();
+  }, [hasMoreRefs, refs.isPending, loadNextRefs]);
   const workspacePath = worktree?.worktreePath ?? member?.workspaceRoot;
 
   const candidatesQuery = useEnvironmentQuery(
