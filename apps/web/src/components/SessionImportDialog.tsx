@@ -2,7 +2,7 @@ import type { SessionImportCandidate } from "@t3tools/contracts";
 import { scopeThreadRef } from "@t3tools/client-runtime/environment";
 import { useNavigate } from "@tanstack/react-router";
 import { ChevronRightIcon } from "lucide-react";
-import { useEffect, useState } from "react";
+import { useEffect, useEffectEvent, useState } from "react";
 
 import type { SidebarProjectGroupMember } from "../sidebarProjectGrouping";
 import { waitForThreadShell } from "../state/entities";
@@ -58,16 +58,21 @@ export function SessionImportDialog(props: {
   const importSession = useAtomCommand(sessionImportEnvironment.importSession);
 
   // Every ref page is loaded while the dialog is open: a worktree's branch can
-  // sort past the first page. Ref atoms expire shortly after the dialog closes,
-  // so a later open lists fresh worktrees without an explicit refresh, which
-  // would restart paging.
+  // sort past the first page.
   const refs = usePaginatedBranches({
     environmentId: member?.environmentId ?? null,
     cwd: member?.workspaceRoot ?? null,
   });
   const worktrees = getSessionImportWorktrees(refs.refs);
-  const { loadNext: loadNextRefs } = refs;
+  const { refresh: refreshRefs, loadNext: loadNextRefs } = refs;
   const hasMoreRefs = refs.data?.nextCursor != null && refs.error === null;
+  // The branch selector keeps these ref atoms alive, so refetch on open to see
+  // worktrees created outside T3. Refreshing resets the page list; this effect
+  // runs before the paging one so a next-page request lands after the reset.
+  const refreshRefsOnOpen = useEffectEvent(() => refreshRefs());
+  useEffect(() => {
+    if (member !== null) refreshRefsOnOpen();
+  }, [member]);
   useEffect(() => {
     if (hasMoreRefs && !refs.isFetchingNextPage) loadNextRefs();
   }, [hasMoreRefs, refs.isFetchingNextPage, loadNextRefs]);
