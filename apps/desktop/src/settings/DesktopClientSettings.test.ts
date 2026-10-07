@@ -86,6 +86,7 @@ const clientSettings: ClientSettings = {
   sidebarV2NewThreadButtonInProjectRow: true,
   sidebarThreadGroupsButton: true,
   showPanelToggleButtons: false,
+  chatWideTables: false,
   steerGraceWindowMs: 5_000,
   sidebarWorkingShelfEnabled: false,
   loadBalancingEnabled: false,

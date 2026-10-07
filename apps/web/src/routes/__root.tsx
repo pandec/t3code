@@ -304,6 +304,11 @@ function ContrastAppearanceSync() {
     document.documentElement.dataset.chatWidth = chatWidth;
   }, [chatWidth]);
 
+  const chatWideTables = useClientSettings((settings) => settings.chatWideTables);
+  useEffect(() => {
+    document.documentElement.dataset.chatWideTables = chatWideTables ? "true" : "false";
+  }, [chatWideTables]);
+
   useEffect(() => {
     applyAppearanceContrast(document.documentElement, appearanceContrast);
   }, [appearanceContrast]);

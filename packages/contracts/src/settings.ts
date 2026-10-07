@@ -730,6 +730,9 @@ export const ClientSettingsSchema = Schema.Struct({
   /** Terminal and right panel toggle buttons in the thread header; their
    * keybindings work either way. */
   showPanelToggleButtons: Schema.Boolean.pipe(Schema.withDecodingDefault(Effect.succeed(true))),
+  /** Agent-reply tables wider than the chat column widen past it, up to the
+   * thread view's width. */
+  chatWideTables: Schema.Boolean.pipe(Schema.withDecodingDefault(Effect.succeed(true))),
   /**
    * How long a steer rests in the outbox before delivery. 0 sends immediately;
    * mobile is unaffected (it keeps the model's built-in default).
@@ -2304,6 +2307,7 @@ export const ClientSettingsPatch = Schema.Struct({
   sidebarV2NewThreadButtonInProjectRow: Schema.optionalKey(Schema.Boolean),
   sidebarThreadGroupsButton: Schema.optionalKey(Schema.Boolean),
   showPanelToggleButtons: Schema.optionalKey(Schema.Boolean),
+  chatWideTables: Schema.optionalKey(Schema.Boolean),
   steerGraceWindowMs: Schema.optionalKey(SteerGraceWindowMs),
   timestampFormat: Schema.optionalKey(TimestampFormat),
   snapShotEnabled: Schema.optionalKey(Schema.Boolean),
