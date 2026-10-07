@@ -11,15 +11,11 @@ import { acpMcpBridgeCommand, acpMcpCallCommand } from "./cli/acpMcpBridge.ts";
 import { authCommand } from "./cli/auth.ts";
 import { appCommand } from "./cli/app.ts";
 import { connectCommand } from "./cli/connect.ts";
-import { isCliJsonOutputRequested, withCliJsonUsageErrorOutput } from "./cli/errorOutput.ts";
 import { pairCommand } from "./cli/pair.ts";
 import { hasCloudPublicConfig } from "./cloud/publicConfig.ts";
 import { sharedServerCommandFlags } from "./cli/config.ts";
 import { projectCommand } from "./cli/project.ts";
 import { runDefaultServerCommand, serveCommand, startCommand } from "./cli/server.ts";
-import { statusCommand } from "./cli/status.ts";
-import { groupCommand, threadCommand } from "./cli/thread.ts";
-import { sessionCommand } from "./cli/session.ts";
 import { updateCommand } from "./cli/update.ts";
 import { uninstallCommand } from "./cli/uninstall.ts";
 import { serviceLauncherCommand } from "./cli/serviceLauncher.ts";
@@ -76,10 +72,6 @@ export const makeCli = ({ cloudEnabled = hasCloudPublicConfig } = {}) =>
       pairCommand,
       authCommand,
       projectCommand,
-      threadCommand,
-      groupCommand,
-      sessionCommand,
-      statusCommand,
       serviceCommand,
       updateCommand,
       uninstallCommand,
@@ -99,7 +91,6 @@ export const cli = makeCli();
 
 export function runCli() {
   Command.run(cli, { version: packageJson.version }).pipe(
-    withCliJsonUsageErrorOutput(isCliJsonOutputRequested(process.argv.slice(2))),
     Effect.scoped,
     Effect.provide(layerCliRuntime),
     NodeRuntime.runMain,

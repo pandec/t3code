@@ -202,7 +202,7 @@ const serviceUninstallCommand = Command.make("uninstall", projectLocationFlags).
 );
 
 const serviceStatusCommand = Command.make("status", projectLocationFlags).pipe(
-  Command.withDescription("Show the T3 Code background service installation and runtime health."),
+  Command.withDescription("Show whether the T3 Code background service is installed."),
   Command.withHandler((flags) =>
     runServiceCommand(
       flags,

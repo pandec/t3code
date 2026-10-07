@@ -1,4 +1,3 @@
-import { ServerSettings, ServerSettingsPatch } from "./settings.ts";
 import * as Context from "effect/Context";
 import type * as DateTime from "effect/DateTime";
 import * as Schema from "effect/Schema";
@@ -67,14 +66,6 @@ import {
   VoiceTranscriptionRequest,
   VoiceTranscriptionResult,
 } from "./voice.ts";
-import { ProviderCatalogResult } from "./providerCatalog.ts";
-import {
-  SessionImportForkThreadPayload,
-  SessionImportListCandidatesPayload,
-  SessionImportListCandidatesResult,
-  SessionImportPayload,
-  SessionImportResult,
-} from "./sessionImport.ts";
 
 const OptionalBearerHeaders = Schema.Struct({
   authorization: Schema.optionalKey(Schema.String),
@@ -135,8 +126,6 @@ export const EnvironmentInternalErrorReason = Schema.Literals([
   "orchestration_thread_snapshot_failed",
   "orchestration_thread_bounded_snapshot_failed",
   "orchestration_thread_history_failed",
-  "settings_read_failed",
-  "settings_update_failed",
   "summary_generation_failed",
   "transcription_unavailable",
   "transcription_provider_failed",
@@ -396,32 +385,6 @@ const EnvironmentVoiceTranscriptionErrors = [
   EnvironmentInternalError,
 ] as const;
 
-export class EnvironmentSessionImportError extends Schema.TaggedError<EnvironmentSessionImportError>()(
-  "EnvironmentSessionImportError",
-  {
-    code: Schema.Literal("session_import_error"),
-    reason: Schema.Literals([
-      "project-not-found",
-      "instance-not-found",
-      "provider-read-failed",
-      "nothing-to-import",
-      "already-imported",
-      "fork-unsupported",
-      "invalid-model",
-      "invalid-options",
-      "invalid-worktree",
-      "import-failed",
-    ]),
-    detail: Schema.String,
-    existingThreadId: Schema.optional(ThreadId),
-  },
-  { httpApiStatus: 400 },
-) {
-  [HttpServerRespondable.symbol]() {
-    return HttpServerResponse.schemaJson(EnvironmentSessionImportError)(this, { status: 400 });
-  }
-}
-
 export interface EnvironmentSessionPrincipalShape {
   readonly sessionId: AuthSessionId;
   readonly subject: string;
@@ -672,40 +635,6 @@ export class EnvironmentMessageArtifactsHttpApi extends HttpApiGroup.make("messa
   }).middleware(EnvironmentAuthenticatedAuth),
 ) {}
 
-export class EnvironmentSessionImportHttpApi extends HttpApiGroup.make("sessionImport")
-  .add(
-    HttpApiEndpoint.post("candidates", "/api/session-import/candidates", {
-      headers: OptionalBearerHeaders,
-      payload: SessionImportListCandidatesPayload,
-      success: SessionImportListCandidatesResult,
-      error: [EnvironmentScopeRequiredError, EnvironmentSessionImportError],
-    }).middleware(EnvironmentAuthenticatedAuth),
-  )
-  .add(
-    HttpApiEndpoint.post("importSession", "/api/session-import/import", {
-      headers: OptionalBearerHeaders,
-      payload: SessionImportPayload,
-      success: SessionImportResult,
-      error: [EnvironmentScopeRequiredError, EnvironmentSessionImportError],
-    }).middleware(EnvironmentAuthenticatedAuth),
-  )
-  .add(
-    HttpApiEndpoint.post("forkThread", "/api/session-import/fork-thread", {
-      headers: OptionalBearerHeaders,
-      payload: SessionImportForkThreadPayload,
-      success: SessionImportResult,
-      error: [EnvironmentScopeRequiredError, EnvironmentSessionImportError],
-    }).middleware(EnvironmentAuthenticatedAuth),
-  ) {}
-
-export class EnvironmentProvidersHttpApi extends HttpApiGroup.make("providers").add(
-  HttpApiEndpoint.get("catalog", "/api/providers/catalog", {
-    headers: OptionalBearerHeaders,
-    success: ProviderCatalogResult,
-    error: [EnvironmentScopeRequiredError],
-  }).middleware(EnvironmentAuthenticatedAuth),
-) {}
-
 /** Large, compressible pull-request payloads travel over HTTP rather than the RPC socket. */
 class EnvironmentPullRequestsHttpApi extends HttpApiGroup.make("pullRequests").add(
   HttpApiEndpoint.post("diff", "/api/pull-requests/diff", {
@@ -783,23 +712,6 @@ class EnvironmentConnectHttpApi extends HttpApiGroup.make("connect")
     }),
   ) {}
 
-export class EnvironmentSettingsHttpApi extends HttpApiGroup.make("settings")
-  .add(
-    HttpApiEndpoint.get("getSettings", "/api/settings", {
-      headers: OptionalBearerHeaders,
-      success: ServerSettings,
-      error: EnvironmentHttpCommonError,
-    }).middleware(EnvironmentAuthenticatedAuth),
-  )
-  .add(
-    HttpApiEndpoint.patch("updateSettings", "/api/settings", {
-      headers: OptionalBearerHeaders,
-      payload: Schema.Struct({ patch: ServerSettingsPatch }),
-      success: ServerSettings,
-      error: [EnvironmentHttpCommonError, EnvironmentHttpConflictError],
-    }).middleware(EnvironmentAuthenticatedAuth),
-  ) {}
-
 /**
  * Public entry point for webhook tasks. Unauthenticated by design: the token
  * in the path, and an optional body signature, are the credential. The handler
@@ -825,12 +737,9 @@ class EnvironmentWebhooksHttpApi extends HttpApiGroup.make("webhooks")
   .add(HttpApiEndpoint.get("webhookGet", WEBHOOK_PATH, webhookEndpoint)) {}
 
 export class EnvironmentHttpApi extends HttpApi.make("environment")
-  .add(EnvironmentSettingsHttpApi)
   .add(EnvironmentMetadataHttpApi)
   .add(EnvironmentAuthHttpApi)
   .add(EnvironmentOrchestrationHttpApi)
-  .add(EnvironmentSessionImportHttpApi)
-  .add(EnvironmentProvidersHttpApi)
   .add(EnvironmentVoiceHttpApi)
   .add(EnvironmentMessageArtifactsHttpApi)
   .add(EnvironmentPullRequestsHttpApi)

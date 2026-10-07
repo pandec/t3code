@@ -100,13 +100,14 @@ Complete the applicable local verification before pushing `dev`.
    - inspect changes to repository tooling for newly introduced checks that protect code affected by the sync
 7. Do not launch browser, simulator, emulator, physical-device, or installed-app verification during a routine upstream sync, even when upstream includes user-visible frontend or mobile changes. For this explicitly invoked workflow, this is the user-authorized exception to the integrated client verification rules in `AGENTS.md`. Perform runtime app verification only when the user explicitly requests it.
 8. Diagnose failures instead of bypassing them. Fix only clear integration defects; ask when a fix requires choosing upstream or fork behavior. Do not push with a failing applicable gate.
-9. Audit the fork-maintained CLI against the merged behavior. When upstream changes or merge resolutions touch project or thread lifecycle, orchestration commands or contracts, defaults, flags, JSON shapes, error semantics, or related documentation:
-   - compare `apps/server/src/cli/`, its focused tests, and `docs/user/cli-automation.md` with the merged contracts and behavior
-   - update repository-owned CLI implementation, tests, and documentation when alignment requires it, then rerun the affected checks
-   - verify the global `t3-cli` skill at `~/.agents/skills/t3-cli` still describes the implemented command contract; when it has drifted, update it by default to match the merged contract (the user has standing authorization for these keep-in-sync edits), then report the exact change made. Note `~/.agents/skills/t3-cli` and `~/.claude/skills/t3-cli` are hardlinked copies, so editing one updates both. Still ask before any change beyond mechanical contract alignment (renames, removals, behavioral rewrites)
-   - completion criterion: every CLI-affecting upstream or merge change is either reflected in the implementation, tests, and documentation or reported as a concrete unresolved decision
+9. Audit the fork's MCP tool additions against the merged behavior. When upstream changes or merge resolutions touch `apps/server/src/mcp` (toolkits, services, `threadAccess.ts`, `packages/contracts/src/orchestratorMcp.ts`), orchestration commands or contracts, thread groups, archive scheduling, or project scripts settings:
+   - verify the fork tools (thread groups, thread drain status, the cross-project thread-list extension, archive tools taking `threadId`, project actions) still compile, behave as their focused tests expect, and are not superseded by upstream
+   - update the fork tools and their tests when alignment requires it, then rerun the affected checks
+   - when upstream now covers a fork tool, report it as a trim candidate rather than removing it mid-sync
+   - the fork carries no CLI commands of its own; the global `t3-cli` skill covers only upstream machine-management commands and needs no fork alignment
+   - completion criterion: every MCP-affecting upstream or merge change is either reflected in the fork tools and tests or reported as a concrete unresolved decision
 10. Update `LEDGER.md` as part of the sync commit: record new standing decisions made during this sync, add watchpoints for newly observed fork/upstream friction files, resolve watchpoint checks that ran, and apply the ledger's self-cleaning rules. Keep it scoped to what changes future syncs — never a fork feature list.
-11. Only after the applicable local gates and CLI audit pass, create the merge commit. Verify the commit has the expected parents, no merge operation remains, the worktree and index are clean, and the stash refs still match preflight. A hook can print an error after Git has already created the commit, so determine the actual result from Git state rather than hook output alone.
+11. Only after the applicable local gates and MCP tool audit pass, create the merge commit. Verify the commit has the expected parents, no merge operation remains, the worktree and index are clean, and the stash refs still match preflight. A hook can print an error after Git has already created the commit, so determine the actual result from Git state rather than hook output alone.
 12. Before pushing, enter an `origin/dev` convergence loop. It exists only because a normal push cannot land over a moved `origin/dev`; it never widens the target, so a further upstream advance is out of scope here even if the fetch happens to show one.
     - fetch `origin` with pruning immediately before the push and compare `origin/dev` with the last reviewed tip
     - if `origin/dev` advanced, inspect that exact new range and its behavioral overlap with the synchronized candidate, then merge `origin/dev` with `--no-ff --no-commit` under the same conflict rules
@@ -123,7 +124,7 @@ After a completed sync, summarize what the fork gained from upstream: group the 
 
 State whether any conflict resolution could impact functionality. When every resolution was purely mechanical, one sentence saying so is enough — skip per-file detail. Only elaborate on resolutions that touched behavior and could plausibly change how something works.
 
-Report the CLI alignment audit result, including any repository changes made or any required `t3-cli` dotfiles update.
+Report the MCP tool audit result, including any repository changes made and any trim candidates.
 
 End with a rollout note: based on the protocol/contract, persistence, and update-feed changes in this sync, state whether the installed apps (desktop flavors, iOS) can be updated gradually one by one while older clients keep working against the new server, or whether everything should be closed and updated together, and call out anything that needs a reinstall or data migration.
 
