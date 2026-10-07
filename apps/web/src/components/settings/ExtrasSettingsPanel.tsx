@@ -823,6 +823,37 @@ function PanelsExtrasSection() {
   );
 }
 
+function MessagesExtrasSection() {
+  const settings = usePrimarySettings();
+  const updateSettings = useUpdatePrimarySettings();
+
+  return (
+    <SettingsSection {...searchableSetting("extras-messages")}>
+      <SettingsRow
+        {...searchableSetting("chat-wide-tables")}
+        description="Let a table in an agent reply widen past the chat column, up to the width of the thread view, instead of scrolling sideways."
+        resetAction={
+          settings.chatWideTables !== DEFAULT_UNIFIED_SETTINGS.chatWideTables ? (
+            <SettingResetButton
+              label="wide tables"
+              onClick={() =>
+                updateSettings({ chatWideTables: DEFAULT_UNIFIED_SETTINGS.chatWideTables })
+              }
+            />
+          ) : null
+        }
+        control={
+          <Switch
+            checked={settings.chatWideTables}
+            onCheckedChange={(checked) => updateSettings({ chatWideTables: Boolean(checked) })}
+            aria-label="Wide tables"
+          />
+        }
+      />
+    </SettingsSection>
+  );
+}
+
 function ComposerExtrasSection() {
   const settings = usePrimarySettings();
   const updateSettings = useUpdatePrimarySettings();
@@ -973,6 +1004,7 @@ export function ExtrasSettingsPanel() {
       <LinearExtrasSection />
       <SidebarExtrasSection />
       <PanelsExtrasSection />
+      <MessagesExtrasSection />
       <ComposerExtrasSection />
       <AccentTintsExtrasSection />
       <VoiceSettingsSection />

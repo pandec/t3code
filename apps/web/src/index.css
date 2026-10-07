@@ -2057,6 +2057,22 @@ code {
   overflow-wrap: anywhere;
 }
 
+/* Assistant replies let a top-level table outgrow the reading lane: it sizes
+   to its content, centered on the lane, up to the timeline's width (the
+   scroll container is an @container) less room for the minimaps.
+   Their hit strips are up to 40px wide (TIMELINE_MINIMAP_HIT_STRIP_MAX_WIDTH)
+   past a rem inset the scroll padding already covers, hence the px floor.
+   Narrow tables keep the lane width. Settings → Extras can turn it off. */
+:root:not([data-chat-wide-tables="false"])
+  .chat-markdown-wide-tables
+  > .chat-markdown-table-container {
+  width: max-content;
+  min-width: 100%;
+  max-width: calc(100cqi - 2 * max(2.5rem, 40px));
+  margin-left: 50%;
+  translate: -50% 0;
+}
+
 :root {
   --diff-addition: var(--success);
   --diff-deletion: var(--destructive);

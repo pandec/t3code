@@ -941,6 +941,17 @@ export const SETTINGS_SEARCH_ITEMS = [
     searchTerms: ["terminal drawer right panel header show hide toggle split view"],
   },
   {
+    id: "extras-messages",
+    title: "Messages",
+    to: "/settings/extras",
+  },
+  {
+    id: "chat-wide-tables",
+    title: "Wide tables",
+    to: "/settings/extras",
+    searchTerms: ["markdown table width column scroll horizontal breakout"],
+  },
+  {
     id: "extras-composer",
     title: "Composer",
     to: "/settings/extras",
