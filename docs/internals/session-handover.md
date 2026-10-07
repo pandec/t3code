@@ -37,9 +37,11 @@ fields (never message text) must be rewritten to the target path when the rollou
 3. **Copy the transcript (SSH).** Locate it on the source (provider thread ref → session id → file)
    and copy it into the target's provider home for the target cwd: the Claude file under the
    translated escaped-cwd directory, the Codex rollout with its `cwd` fields rewritten.
-4. **Retire the source (MCP tools).** Rename the source thread to mark the handover, then archive it.
-5. **Import (target, by the user).** The user opens the web Import dialog in the target project's
+4. **Import (target, by the user).** The user opens the web Import dialog in the target project's
    settings and imports the session; it continues natively in the new thread.
+5. **Retire the source (MCP tools).** Only after the user confirms the import, rename the source
+   thread to mark the handover, then archive it. Retiring first would leave no live thread if the
+   import fails.
 
 The import dialog lists and imports sessions for the project checkout, so place the transcript keyed
 to the checkout path even when the source thread ran in a T3-managed worktree; the imported thread
