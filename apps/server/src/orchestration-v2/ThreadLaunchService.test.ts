@@ -16,6 +16,7 @@ import {
   type ChatAttachment,
   CommandId,
   DEFAULT_SERVER_SETTINGS,
+  EventId,
   GitCommandError,
   MessageId,
   ProjectId,
@@ -53,7 +54,10 @@ import * as SecretRequests from "../secrets/SecretRequests.ts";
 import * as TextGeneration from "../textGeneration/TextGeneration.ts";
 import { CodexProviderCapabilitiesV2 } from "./Adapters/CodexAdapterV2.ts";
 import * as CommandReceiptStore from "./CommandReceiptStore.ts";
+import { ARCHIVE_CANCEL_DETAIL } from "./DeferredArchive.ts";
+import { WORKTREE_SWITCH_DETAIL } from "./DeferredWorktreeSwitch.ts";
 import * as EffectOutbox from "./EffectOutbox.ts";
+import * as EventSink from "./EventSink.ts";
 import * as IdAllocator from "./IdAllocator.ts";
 import type { ProviderAdapterV2Shape } from "./ProviderAdapter.ts";
 import * as ProviderAdapterRegistry from "./ProviderAdapterRegistry.ts";
@@ -119,7 +123,7 @@ function makeHarness(options: HarnessOptions = {}) {
     layerRegistry,
     { databaseLayer: layerDatabase, runEffectWorker: false },
   );
-  const layerThreadManagement = ThreadManagement.layer.pipe(Layer.provide(layerOrchestrator));
+  const layerThreadManagement = ThreadManagement.layer.pipe(Layer.provideMerge(layerOrchestrator));
   const layerReceipts = CommandReceiptStore.layer.pipe(Layer.provide(layerDatabase));
   const layerOutbox = EffectOutbox.layer.pipe(Layer.provide(layerDatabase));
   const createWorktree = vi.fn(
@@ -1451,6 +1455,97 @@ it.effect("retries a failed workspace preparation on the same run", () => {
       .retryPreparation({ ...retry, commandId: CommandId.make("command:launch:retry:2") })
       .pipe(Effect.flip);
     assert.equal(rejected._tag, "OrchestratorDispatchError");
+  }).pipe(Effect.provide(harness.layer));
+});
+
+it.effect("a retry is new work for a pending archive or worktree switch", () => {
+  let fetchFailures = 1;
+  const harness = makeHarness({
+    fetchRemote: () =>
+      fetchFailures-- > 0
+        ? Effect.fail(
+            new GitCommandError({
+              operation: "GitVcsDriver.fetchRemote",
+              command: "git",
+              cwd: project.workspaceRoot,
+              detail: "Git could not update a local reference.",
+              exitCode: 1,
+            }),
+          )
+        : Effect.void,
+  });
+  return Effect.gen(function* () {
+    const launches = yield* ThreadLaunch.ThreadLaunchService;
+    const threads = yield* ThreadManagement.ThreadManagementService;
+    const eventSink = yield* EventSink.EventSinkV2;
+    const launched = yield* launches.launch(
+      launchInput({
+        command: "command:launch:retry-deferred",
+        thread: "thread:launch:retry-deferred",
+        message: "Retry me",
+        workspace: { type: "worktree", baseRef: "main", startFromOrigin: true },
+      }),
+    );
+    yield* waitUntil(() =>
+      threads
+        .getThreadProjection(launched.threadId)
+        .pipe(Effect.map((projection) => projection.runs[0]?.status === "failed")),
+    );
+    const failed = yield* threads.getThreadProjection(launched.threadId);
+    // Requests recorded after the failed run, which the deciders count as already run.
+    const now = yield* DateTime.now;
+    const requestedAt = DateTime.formatIso(now);
+    yield* eventSink.commitCommand({
+      commandId: CommandId.make("command:launch:retry-deferred:requests"),
+      threadId: launched.threadId,
+      commandType: "thread.metadata.update",
+      acceptedAt: now,
+      events: [
+        {
+          id: EventId.make("event:launch:retry-deferred:requests"),
+          type: "thread.metadata-updated",
+          threadId: launched.threadId,
+          occurredAt: now,
+          payload: {
+            ...failed.thread,
+            archiveRequest: {
+              requestId: CommandId.make("archive"),
+              runId: null,
+              worktreePath: failed.thread.worktreePath,
+              requestedAt,
+              latestRunOrdinal: 1,
+              status: "pending",
+            },
+            worktreeSwitch: {
+              requestId: CommandId.make("switch"),
+              runId: failed.runs[0]!.id,
+              sourceWorktreePath: failed.thread.worktreePath,
+              sourceBranch: failed.thread.branch,
+              targetPath: "/elsewhere",
+              requestedAt,
+              latestRunOrdinal: 1,
+              status: "pending",
+            },
+          },
+        },
+      ],
+      effects: [],
+    });
+
+    yield* launches.retryPreparation({
+      commandId: CommandId.make("command:launch:retry-deferred:1"),
+      threadId: launched.threadId,
+      runId: failed.runs[0]!.id,
+    });
+    const { thread } = yield* threads.getThreadProjection(launched.threadId);
+    assert.deepInclude(thread.archiveRequest, {
+      status: "cancelled",
+      detail: ARCHIVE_CANCEL_DETAIL.newWork,
+    });
+    assert.deepInclude(thread.worktreeSwitch, {
+      status: "cancelled",
+      detail: WORKTREE_SWITCH_DETAIL.newWork,
+    });
   }).pipe(Effect.provide(harness.layer));
 });
 

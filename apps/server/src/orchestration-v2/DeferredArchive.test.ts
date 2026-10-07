@@ -493,22 +493,20 @@ describe("wake runs", () => {
 });
 
 describe("a reordered queue", () => {
-  // run-3 was reordered ahead of an edit-held run-2, so it started second.
-  const started = (
+  // run-3 was reordered ahead of an edit-held run-2, so it ran first.
+  const settled = (
     id: string,
     ordinal: number,
     status: OrchestrationV2Run["status"],
-    startSequence: number,
     completedAt: string | null = null,
   ) => ({
     ...run(id, ordinal, status),
     startedAt: at("2026-10-01T00:00:00.000Z"),
-    startSequence,
     completedAt: completedAt === null ? null : at(completedAt),
   });
-  const first = started("run-1", 1, "completed", 1, "2026-10-01T00:00:00.100Z");
-  const reordered = started("run-3", 3, "completed", 2, "2026-10-01T00:00:00.500Z");
-  const request = pendingRequest({ runId: RunId.make("run-2"), latestStartSequence: 3 });
+  const first = settled("run-1", 1, "completed", "2026-10-01T00:00:00.100Z");
+  const reordered = settled("run-3", 3, "completed", "2026-10-01T00:00:00.500Z");
+  const request = pendingRequest({ runId: RunId.make("run-2"), latestRunOrdinal: 3 });
   const evaluate = (
     archiveRequest: OrchestrationV2ThreadArchiveRequest,
     runs: ReadonlyArray<Parameters<typeof evaluateDeferredArchive>[0]["runs"][number]>,
@@ -521,29 +519,29 @@ describe("a reordered queue", () => {
       pendingBackgroundTasks: [],
     });
 
-  it("records the latest start sequence when scheduled", () => {
-    const plan = schedule({ runs: [first, reordered, started("run-2", 2, "running", 3)] });
-    assert.isTrue(plan.type === "pending" && plan.request.latestStartSequence === 3);
+  it("records the latest run ordinal when scheduled", () => {
+    const plan = schedule({ runs: [first, reordered, settled("run-2", 2, "running")] });
+    assert.isTrue(plan.type === "pending" && plan.request.latestRunOrdinal === 3);
   });
 
   it("waits on the requesting run past a later-created run that ran before it", () => {
     assert.equal(
-      evaluate(request, [first, reordered, started("run-2", 2, "running", 3)]).type,
+      evaluate(request, [first, reordered, settled("run-2", 2, "running")]).type,
       "wait",
     );
-    const completed = started("run-2", 2, "completed", 3, "2026-10-01T00:00:02.000Z");
+    const completed = settled("run-2", 2, "completed", "2026-10-01T00:00:02.000Z");
     assert.equal(evaluate(request, [first, reordered, completed]).type, "archive");
-    // A run that starts after the request is new work.
+    // A run created after the request is new work.
     assert.deepEqual(
-      evaluate(request, [first, reordered, completed, started("run-4", 4, "running", 4)]),
+      evaluate(request, [first, reordered, completed, settled("run-4", 4, "running")]),
       { type: "cancel", detail: ARCHIVE_CANCEL_DETAIL.newWork },
     );
-    // Requests recorded before start sequences keep comparing creation order.
-    const { latestStartSequence: _latest, ...legacy } = request;
+    // Requests recorded before the boundary keep comparing with the awaited run.
+    const { latestRunOrdinal: _latest, ...legacy } = request;
     assert.equal(evaluate(legacy, [first, reordered, completed]).type, "cancel");
   });
 
-  it("a withdrawn wake falls back to the run that started last", () => {
+  it("a withdrawn wake falls back past a run that settled before the archive", () => {
     const withdrawn = {
       ...run("run-4", 4, "cancelled", "2026-10-01T00:00:02.000Z"),
       startedAt: null,
@@ -551,14 +549,14 @@ describe("a reordered queue", () => {
     };
     const wakeRequest = { ...request, runId: RunId.make("run-4") };
     assert.equal(
-      evaluate(wakeRequest, [first, reordered, started("run-2", 2, "waiting", 3), withdrawn]).type,
+      evaluate(wakeRequest, [first, reordered, settled("run-2", 2, "waiting"), withdrawn]).type,
       "wait",
     );
     assert.equal(
       evaluate(wakeRequest, [
         first,
         reordered,
-        started("run-2", 2, "completed", 3, "2026-10-01T00:00:04.000Z"),
+        settled("run-2", 2, "completed", "2026-10-01T00:00:04.000Z"),
         withdrawn,
       ]).type,
       "archive",
@@ -575,7 +573,7 @@ describe("a reordered queue", () => {
               : Option.none(),
           ),
       };
-      const interrupted = started("run-2", 2, "interrupted", 3, "2026-10-01T00:00:05.000Z");
+      const interrupted = settled("run-2", 2, "interrupted", "2026-10-01T00:00:05.000Z");
       assert.isTrue(yield* restartContinuationPending(outbox, [first, reordered, interrupted]));
     }),
   );

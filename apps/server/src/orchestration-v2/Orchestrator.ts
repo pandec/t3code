@@ -145,7 +145,6 @@ import {
   evaluateDeferredArchive,
   finishedWorktreeRemoval,
   latestThreadState,
-  nextRunStartSequence,
   pendingArchiveRequest,
   planArchiveSchedule,
   restartContinuationPending,
@@ -1702,7 +1701,6 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
         status: "starting",
         queuePosition: null,
         startedAt: null,
-        startSequence: nextRunStartSequence(projection.runs),
         contextHandoffId: activeHandoff?.id ?? null,
         ...wakeWorkStartedAt(projection.runs, {
           notification: queuedMessage.notification,
@@ -5664,7 +5662,6 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
           queuePosition: null,
           requestedAt: now,
           startedAt: null,
-          startSequence: nextRunStartSequence(projection.runs),
           completedAt: null,
           checkpointId: null,
           contextHandoffId: legacyImportHandoff?.id ?? null,
@@ -6358,7 +6355,6 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
         queuePosition: null,
         requestedAt: now,
         startedAt: null,
-        startSequence: nextRunStartSequence(projection.runs),
         completedAt: null,
         checkpointId: null,
         contextHandoffId:
@@ -10770,15 +10766,26 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
   // Fork: deferred agent-requested worktree switch (DeferredWorktreeSwitch.ts).
   // Requests live on the thread payload, so they replay with the event log.
 
-  /** A sent message is new work: it cancels a pending switch, after this command's other thread events. */
+  /**
+   * New work (a sent message, a retried preparation) cancels a pending switch,
+   * after this command's other thread events. `fallback` is the thread as read
+   * before the command, when the caller has it.
+   */
   const cancelPendingThreadWorktreeSwitch = Effect.fn(
     "orchestrationV2.dispatch.cancelPendingWorktreeSwitch",
   )(function* (
-    command: Extract<OrchestrationV2Command, { readonly type: "message.dispatch" }>,
+    command: Extract<
+      OrchestrationV2ServerCommand,
+      { readonly type: "message.dispatch" | "prepared-run.retry" }
+    >,
     events: Ref.Ref<Array<OrchestrationV2DomainEvent>>,
-    fallback: OrchestrationV2AppThread,
+    fallback?: OrchestrationV2AppThread,
   ) {
-    const thread = latestThreadState(yield* Ref.get(events), command.threadId, fallback);
+    const thread = latestThreadState(
+      yield* Ref.get(events),
+      command.threadId,
+      fallback ?? (yield* readThreadForArchive(command.threadId)),
+    );
     const request = pendingWorktreeSwitch(thread);
     if (request === null) return;
     yield* emit(
@@ -11163,6 +11170,14 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
         break;
       case "prepared-run.retry":
         yield* dispatchPreparedRunRetry(command, events);
+        // A retry runs an earlier-created run again: new work the deciders cannot see.
+        yield* cancelPendingThreadArchive(
+          command.threadId,
+          command,
+          events,
+          ARCHIVE_CANCEL_DETAIL.newWork,
+        );
+        yield* cancelPendingThreadWorktreeSwitch(command, events);
         break;
       case "runtime-request.respond":
         yield* dispatchRuntimeRequestRespond(command, events, effects);

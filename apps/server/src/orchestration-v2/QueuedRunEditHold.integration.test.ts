@@ -470,9 +470,10 @@ it.effect(
     ),
 );
 
-// Fork: deferred archive and worktree switch judge new work by when runs
-// start, not when they were created. `older` is queued first and held for
-// editing; `newer` is reordered ahead of it, so it runs first.
+// Fork: deferred archive and worktree switch count runs created after the
+// request as new work, not runs created after the requesting one. `older` is
+// queued first and held for editing; `newer` is reordered ahead of it, so it
+// runs first.
 const reorderedQueue = (name: string) =>
   Effect.gen(function* () {
     const { started, threadId, setup, layer } = yield* scenario(name);
@@ -546,13 +547,13 @@ it.effect("a worktree switch follows run start order through a reordered queue",
             threadId,
             targetPath: "/elsewhere",
           });
-        // `newer` asks while the older message is held: once that one starts, it is new work.
+        // `newer` asks while the older message is held: it would start in the old checkout.
         yield* schedule("switch-from-newer");
-        yield* endTurn(1);
-        yield* releaseOlder;
         const fromNewer = yield* switchStatus(orchestrator, threadId, "switch-from-newer");
         assert.equal(fromNewer?.status, "cancelled");
         assert.equal(fromNewer?.detail, WORKTREE_SWITCH_DETAIL.newWork);
+        yield* endTurn(1);
+        yield* releaseOlder;
 
         // `older` asks after `newer` ran: that earlier run is no new work.
         yield* schedule("switch-from-older");

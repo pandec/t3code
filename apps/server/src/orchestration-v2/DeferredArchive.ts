@@ -5,9 +5,10 @@
  * completion, then archives through the ordinary `thread.archive` path. A wake
  * (delegated task result, background notification, restart continuation)
  * carries on that work, so the request moves to the run the wake starts. New
- * work (a message sent, or another run starting after the request), a stop or
- * failure anywhere in the awaited chain, or a workspace change cancels it; a failed final checkpoint of any awaited run records an error
- * and leaves the thread unarchived. A delegated result reserved for a wake
+ * work (a message sent, or a run created after the request), a stop or failure
+ * anywhere in the awaited chain, or a workspace change cancels it; a failed
+ * final checkpoint of any awaited run records an error and leaves the thread
+ * unarchived. A delegated result reserved for a wake
  * that has not dispatched yet, or whose wake finished but has not been
  * reconciled yet, holds the archive like background work, and so does a
  * restart continuation still waiting to resume the agent. A request with
@@ -44,7 +45,6 @@ export type ArchiveRun = Pick<
     Pick<
       OrchestrationV2Run,
       | "startedAt"
-      | "startSequence"
       | "completedAt"
       | "userMessageId"
       | "delegatedCompletion"
@@ -210,29 +210,13 @@ function activeRun(runs: ReadonlyArray<ArchiveRun>): ArchiveRun | null {
   );
 }
 
-/** The thread's latest run start sequence; 0 when no run recorded one. */
-export function latestRunStartSequence(
-  runs: ReadonlyArray<Pick<OrchestrationV2Run, "startSequence">>,
-): number {
-  return runs.reduce((latest, run) => Math.max(latest, run.startSequence ?? 0), 0);
-}
-
-/** The `startSequence` of a run entering execution now. */
-export function nextRunStartSequence(
-  runs: ReadonlyArray<Pick<OrchestrationV2Run, "startSequence">>,
-): number {
-  return latestRunStartSequence(runs) + 1;
-}
-
 /**
- * Whether `run` entered execution after a request recorded `latestStartSequence`.
- * A run that never started, or started before start sequences were recorded, did not.
+ * The thread's highest run ordinal, recorded on a request: runs created after
+ * it are new work. Ordinals are creation order, not run order: a reordered
+ * queue runs a later message first, and that run is no new work.
  */
-export function startedAfterRequest(
-  run: Pick<OrchestrationV2Run, "startSequence">,
-  latestStartSequence: number,
-): boolean {
-  return run.startSequence !== undefined && run.startSequence > latestStartSequence;
+export function latestRunOrdinal(runs: ReadonlyArray<Pick<OrchestrationV2Run, "ordinal">>): number {
+  return runs.reduce((latest, run) => Math.max(latest, run.ordinal), 0);
 }
 
 export type ArchiveSchedulePlan =
@@ -282,7 +266,7 @@ export function planArchiveSchedule(input: {
     worktreePath: input.thread.worktreePath,
     ...(input.removeWorktree === true ? { removeWorktree: true } : {}),
     requestedAt: DateTime.formatIso(input.now),
-    latestStartSequence: latestRunStartSequence(input.runs),
+    latestRunOrdinal: latestRunOrdinal(input.runs),
     status: "pending",
   };
   return run === null &&
@@ -323,17 +307,13 @@ export function evaluateDeferredArchive(input: {
   const requestedAtMs = Date.parse(request.requestedAt);
   if (request.runId !== null) {
     const target = input.runs.find((run) => run.id === request.runId);
-    // Runs created after the target, other than wakes it moved to, are new work
-    // once they start; a run that ran before the request (a reordered queue) is
-    // not. Requests from before start sequences fall back to creation order.
-    const { latestStartSequence } = request;
+    // Runs created after the request, other than the wakes it moved to, are new
+    // work. A later-created run that already ran (a reordered queue) is not;
+    // scheduling rejects queued runs, so no earlier one can start later.
+    const latestOrdinal = request.latestRunOrdinal ?? 0;
     if (
       target === undefined ||
-      input.runs.some(
-        (run) =>
-          run.ordinal > target.ordinal &&
-          (latestStartSequence === undefined || startedAfterRequest(run, latestStartSequence)),
-      )
+      input.runs.some((run) => run.ordinal > target.ordinal && run.ordinal > latestOrdinal)
     ) {
       return { type: "cancel", detail: ARCHIVE_CANCEL_DETAIL.newWork };
     }
@@ -390,10 +370,10 @@ export function evaluateDeferredArchive(input: {
 /**
  * The run a request effectively waits on. A wake cancelled while still queued
  * (its delegated tasks were withdrawn, or restart recovery dropped it) never
- * ran, so the request falls back to the run that started last before it
- * (`startSequence`, else creation order: a reordered queue starts runs out of
- * creation order); null when that run had
- * already settled before the archive was scheduled (only background work counts).
+ * ran, so the request falls back to the latest run before it that had not
+ * settled when the archive was scheduled; null when there is none (only
+ * background work counts). Runs that settled earlier are skipped, not stopped
+ * at: a reordered queue can leave a later-created run settled before it.
  * Only a wake moves a pending request, so a target requested at or after the
  * archive is a wake; the run the archive was scheduled during was requested
  * before it (`>=` keeps same-millisecond wakes).
@@ -412,18 +392,16 @@ function awaitedRun(
   ) {
     const ordinal = run.ordinal;
     const previous = runs
-      .filter((candidate) => candidate.ordinal < ordinal)
-      .toSorted(
-        (left, right) =>
-          (right.startSequence ?? 0) - (left.startSequence ?? 0) || right.ordinal - left.ordinal,
-      )[0];
-    if (
-      previous === undefined ||
-      (previous.completedAt != null &&
-        DateTime.toEpochMillis(previous.completedAt) <= requestedAtMs)
-    ) {
-      return null;
-    }
+      .filter(
+        (candidate) =>
+          candidate.ordinal < ordinal &&
+          !(
+            candidate.completedAt != null &&
+            DateTime.toEpochMillis(candidate.completedAt) <= requestedAtMs
+          ),
+      )
+      .toSorted((left, right) => right.ordinal - left.ordinal)[0];
+    if (previous === undefined) return null;
     run = previous;
   }
   return run;

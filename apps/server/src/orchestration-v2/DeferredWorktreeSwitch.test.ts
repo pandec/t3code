@@ -95,14 +95,14 @@ describe("planWorktreeSwitchSchedule", () => {
       ...input,
     });
 
-  it("records the source checkout, the requesting run, and the latest run start", () => {
+  it("records the source checkout, the requesting run, and the latest run ordinal", () => {
     assert.deepEqual(plan(), {
       type: "pending",
-      request: { ...pendingSwitch, latestStartSequence: 0 },
+      request: { ...pendingSwitch, latestRunOrdinal: 1 },
     });
-    const runs = [{ ...run("run-1", 1, "running"), startSequence: 2 }];
+    const runs = [run("run-2", 2, "running"), run("run-1", 1, "completed")];
     const recorded = plan({ runs, run: runs[0]! });
-    assert.isTrue(recorded.type === "pending" && recorded.request.latestStartSequence === 2);
+    assert.isTrue(recorded.type === "pending" && recorded.request.latestRunOrdinal === 2);
   });
 
   it("needs a running Codex run on a live thread without a pending archive", () => {
@@ -163,31 +163,23 @@ describe("evaluateWorktreeSwitch", () => {
     );
   });
 
-  it("compares when runs started, not when they were created", () => {
-    const started = (
-      id: string,
-      ordinal: number,
-      status: OrchestrationV2Run["status"],
-      startSequence: number,
-    ) => ({ ...run(id, ordinal, status), startSequence });
+  it("ignores a later-created run that already ran; any queued run cancels", () => {
     // run-3 was reordered ahead of an edit-held run-2 and ran before run-2 asked.
-    const fromRun2 = { ...pendingSwitch, runId: RunId.make("run-2"), latestStartSequence: 3 };
-    const earlier = started("run-3", 3, "completed", 2);
+    const fromRun2 = { ...pendingSwitch, runId: RunId.make("run-2"), latestRunOrdinal: 3 };
+    const earlier = run("run-3", 3, "completed");
     assert.equal(
       evaluate({
         request: fromRun2,
-        runs: [started("run-1", 1, "completed", 1), started("run-2", 2, "completed", 3), earlier],
+        runs: [run("run-1", 1, "completed"), run("run-2", 2, "completed"), earlier],
       }).type,
       "switch",
     );
-    // run-3 asked while the older run-2 was held: run-2 starting later is new work.
-    const fromRun3 = { ...pendingSwitch, runId: RunId.make("run-3"), latestStartSequence: 2 };
-    const held = run("run-2", 2, "queued");
-    assert.equal(evaluate({ request: fromRun3, runs: [earlier, held] }).type, "switch");
-    assert.deepEqual(
-      evaluate({ request: fromRun3, runs: [earlier, started("run-2", 2, "running", 3)] }),
-      { type: "cancel", detail: WORKTREE_SWITCH_DETAIL.newWork },
-    );
+    // run-3 asked while the older run-2 was held: run-2 would start in the old checkout.
+    const fromRun3 = { ...pendingSwitch, runId: RunId.make("run-3"), latestRunOrdinal: 3 };
+    assert.deepEqual(evaluate({ request: fromRun3, runs: [run("run-2", 2, "queued"), earlier] }), {
+      type: "cancel",
+      detail: WORKTREE_SWITCH_DETAIL.newWork,
+    });
   });
 
   it("fails on a failed final checkpoint; a missing one (no Git) still switches", () => {

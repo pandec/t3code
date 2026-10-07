@@ -3,10 +3,11 @@
  * from its running run to move the thread to another checkout of the same
  * repository; the move applies once that run completes (a v2 run reaches
  * `completed` after its final checkpoint capture, even a failed one) and
- * background work that holds completion ends. New work (a message sent, or
- * another run starting after the request), a stopped run, a checkout change, an archive or a pending archive cancels it; a failed final
- * checkpoint records an error and keeps the checkout. Pure: the orchestrator and
- * `ThreadWorktreeSwitchScheduler` share these rules.
+ * background work that holds completion ends. New work (a message sent or
+ * still queued, or a run created after the request), a stopped run, a
+ * checkout change, an archive or a pending archive cancels it; a failed final
+ * checkpoint records an error and keeps the checkout. Pure: the orchestrator
+ * and `ThreadWorktreeSwitchScheduler` share these rules.
  */
 import type {
   CommandId,
@@ -22,10 +23,9 @@ import {
   type ArchiveCheckpoint,
   type ArchiveRun,
   finalCheckpointFailed,
-  latestRunStartSequence,
+  latestRunOrdinal,
   pendingArchiveRequest,
   RUNNING_RUN_STATUSES,
-  startedAfterRequest,
   STOPPED_RUN_STATUSES,
 } from "./DeferredArchive.ts";
 
@@ -118,7 +118,7 @@ export function planWorktreeSwitchSchedule(input: {
       sourceBranch: input.thread.branch,
       targetPath: input.targetPath,
       requestedAt: DateTime.formatIso(input.now),
-      latestStartSequence: latestRunStartSequence(input.runs),
+      latestRunOrdinal: latestRunOrdinal(input.runs),
       status: "pending",
     },
   };
@@ -153,16 +153,14 @@ export function evaluateWorktreeSwitch(input: {
     return { type: "cancel", detail: WORKTREE_SWITCH_DETAIL.checkout };
   }
   const target = input.runs.find((run) => run.id === request.runId);
-  // Any other run starting after the request is new work, even one created
-  // earlier (a reordered or edit-held queue). Requests from before start
-  // sequences fall back to creation order.
-  const { latestStartSequence } = request;
+  // A queued run, even one created earlier (a reordered or edit-held queue),
+  // would start in the old checkout's scope, and a run created after the
+  // request is new work. A later-created run that already ran is not.
+  const latestOrdinal = request.latestRunOrdinal ?? target?.ordinal ?? 0;
   if (
     target === undefined ||
-    input.runs.some((run) =>
-      latestStartSequence === undefined
-        ? run.ordinal > target.ordinal
-        : run.id !== target.id && startedAfterRequest(run, latestStartSequence),
+    input.runs.some(
+      (run) => run.id !== target.id && (run.status === "queued" || run.ordinal > latestOrdinal),
     )
   ) {
     return { type: "cancel", detail: WORKTREE_SWITCH_DETAIL.newWork };
