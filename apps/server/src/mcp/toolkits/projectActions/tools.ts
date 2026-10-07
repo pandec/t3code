@@ -50,7 +50,7 @@ const ProjectActionsListTool = Tool.make("t3_project_actions_list", {
 const ProjectActionsUpsertTool = Tool.make("t3_project_actions_upsert", {
   ...shared,
   description:
-    "Create or update a project action. Omit actionId to create one (name and command required; its id derives from the name). Pass an actionId from t3_project_actions_list to update it; omitted fields keep their values. Only one action may run on worktree creation: setting runOnWorktreeCreate clears it elsewhere and reports those ids in clearedRunOnWorktreeCreate. Inherited default actions become this project's own actions on the first change. Fails if the actions changed since they were read; list them again and retry. Requires a full-access/default caller.",
+    "Create or update a project action. Omit actionId to create one (name and command required; its id derives from the name). Pass an actionId from t3_project_actions_list to update it; omitted fields keep their values. Only one action may run on worktree creation: setting runOnWorktreeCreate clears it elsewhere and reports those ids in clearedRunOnWorktreeCreate. Inherited default actions become this project's own actions on the first change. The read and write are atomic, but a list result can be stale: re-list before updating when another client may have edited the actions. Fails with a conflict when they change mid-write; list them again and retry. Requires a full-access/default caller.",
   parameters: Schema.Struct({
     projectId,
     actionId: Schema.optional(
@@ -87,7 +87,7 @@ const ProjectActionsUpsertTool = Tool.make("t3_project_actions_upsert", {
 })
   .annotate(Tool.Title, "Create or update a project action")
   .annotate(Tool.Readonly, false)
-  .annotate(Tool.Destructive, false)
+  .annotate(Tool.Destructive, true)
   .annotate(Tool.OpenWorld, false);
 
 const ProjectActionsRemoveTool = Tool.make("t3_project_actions_remove", {
