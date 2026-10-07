@@ -1,8 +1,8 @@
-import type { SessionImportCandidate } from "@t3tools/contracts";
+import type { SessionImportCandidate, VcsRef } from "@t3tools/contracts";
 import { scopeThreadRef } from "@t3tools/client-runtime/environment";
 import { useNavigate } from "@tanstack/react-router";
 import { ChevronRightIcon } from "lucide-react";
-import { useEffect, useEffectEvent, useState } from "react";
+import { useEffect, useState } from "react";
 
 import type { SidebarProjectGroupMember } from "../sidebarProjectGrouping";
 import { waitForThreadShell } from "../state/entities";
@@ -14,7 +14,6 @@ import {
 } from "@t3tools/client-runtime/state/runtime";
 
 import { useEnvironmentQuery } from "../state/query";
-import { usePaginatedBranches } from "../state/queries";
 import { useAtomCommand } from "../state/use-atom-command";
 import { formatRelativeTimeLabel } from "../timestampFormat";
 import { Badge } from "./ui/badge";
@@ -57,25 +56,39 @@ export function SessionImportDialog(props: {
   const [worktree, setWorktree] = useState<SessionImportWorktree | null>(null);
   const importSession = useAtomCommand(sessionImportEnvironment.importSession);
 
-  // Every ref page is loaded while the dialog is open: a worktree's branch can
-  // sort past the first page.
-  const refs = usePaginatedBranches({
-    environmentId: member?.environmentId ?? null,
-    cwd: member?.workspaceRoot ?? null,
-  });
-  const worktrees = getSessionImportWorktrees(refs.refs);
-  const { refresh: refreshRefs, loadNext: loadNextRefs } = refs;
-  const hasMoreRefs = refs.data?.nextCursor != null && refs.error === null;
-  // The branch selector keeps these ref atoms alive, so refetch on open to see
-  // worktrees created outside T3. Refreshing resets the page list; this effect
-  // runs before the paging one so a next-page request lands after the reset.
-  const refreshRefsOnOpen = useEffectEvent(() => refreshRefs());
+  // A failed lookup only hides the workspace picker; the checkout still works.
+  const listRefs = useAtomCommand(sessionImportEnvironment.listRefs, { reportFailure: false });
+  const [worktrees, setWorktrees] = useState<ReadonlyArray<SessionImportWorktree>>([]);
+
+  // Reads every local ref page on open: a worktree's branch can sort past the
+  // first page, and cached ref lists can miss worktrees created outside T3.
   useEffect(() => {
-    if (member !== null) refreshRefsOnOpen();
-  }, [member]);
-  useEffect(() => {
-    if (hasMoreRefs && !refs.isFetchingNextPage) loadNextRefs();
-  }, [hasMoreRefs, refs.isFetchingNextPage, loadNextRefs]);
+    if (member === null) return;
+    let cancelled = false;
+    void (async () => {
+      const refs: Array<VcsRef> = [];
+      let cursor: number | null = null;
+      do {
+        const result = await listRefs({
+          environmentId: member.environmentId,
+          input: {
+            cwd: member.workspaceRoot,
+            refKind: "local",
+            limit: 200,
+            // The first page rebuilds the server's ref snapshot; later pages read it.
+            ...(cursor === null ? { refresh: true } : { cursor }),
+          },
+        });
+        if (cancelled || result._tag !== "Success") return;
+        refs.push(...result.value.refs);
+        cursor = result.value.nextCursor;
+      } while (cursor !== null);
+      setWorktrees(getSessionImportWorktrees(refs));
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [member, listRefs]);
   const workspacePath = worktree?.worktreePath ?? member?.workspaceRoot;
 
   const candidatesQuery = useEnvironmentQuery(
@@ -101,6 +114,7 @@ export function SessionImportDialog(props: {
     setOpenedFor(member);
     setLinkedSectionOpen(false);
     setWorktree(null);
+    setWorktrees([]);
   }
 
   // Candidate query atoms are cached per workspace; refresh on open and on
