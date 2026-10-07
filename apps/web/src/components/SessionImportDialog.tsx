@@ -2,7 +2,7 @@ import type { SessionImportCandidate } from "@t3tools/contracts";
 import { scopeThreadRef } from "@t3tools/client-runtime/environment";
 import { useNavigate } from "@tanstack/react-router";
 import { ChevronRightIcon } from "lucide-react";
-import { useEffect, useEffectEvent, useState } from "react";
+import { useEffect, useState } from "react";
 
 import type { SidebarProjectGroupMember } from "../sidebarProjectGrouping";
 import { waitForThreadShell } from "../state/entities";
@@ -58,19 +58,19 @@ export function SessionImportDialog(props: {
   const importSession = useAtomCommand(sessionImportEnvironment.importSession);
 
   // Every ref page is loaded while the dialog is open: a worktree's branch can
-  // sort past the first page.
+  // sort past the first page. Ref atoms expire shortly after the dialog closes,
+  // so a later open lists fresh worktrees without an explicit refresh, which
+  // would restart paging.
   const refs = usePaginatedBranches({
     environmentId: member?.environmentId ?? null,
     cwd: member?.workspaceRoot ?? null,
   });
   const worktrees = getSessionImportWorktrees(refs.refs);
-  const { refresh: refreshRefs, loadNext: loadNextRefs } = refs;
+  const { loadNext: loadNextRefs } = refs;
   const hasMoreRefs = refs.data?.nextCursor != null && refs.error === null;
-  // Waits for every page in flight, including a first-page refresh on open,
-  // which resets the page list.
   useEffect(() => {
-    if (hasMoreRefs && !refs.isPending) loadNextRefs();
-  }, [hasMoreRefs, refs.isPending, loadNextRefs]);
+    if (hasMoreRefs && !refs.isFetchingNextPage) loadNextRefs();
+  }, [hasMoreRefs, refs.isFetchingNextPage, loadNextRefs]);
   const workspacePath = worktree?.worktreePath ?? member?.workspaceRoot;
 
   const candidatesQuery = useEnvironmentQuery(
@@ -104,12 +104,6 @@ export function SessionImportDialog(props: {
   useEffect(() => {
     if (member !== null) refreshCandidates();
   }, [member, refreshCandidates]);
-  // Refs refresh on open only: refreshing restarts pagination, so it must not
-  // follow the callback's identity as pages load.
-  const refreshRefsOnOpen = useEffectEvent(() => refreshRefs());
-  useEffect(() => {
-    if (member !== null) refreshRefsOnOpen();
-  }, [member]);
 
   const handleOpenLinkedThread = async (candidate: SessionImportCandidate) => {
     if (
