@@ -1441,8 +1441,9 @@ export const resolveProviderInstanceTerminalEnvironment = Effect.fn(
   readonly path: Path.Path;
   readonly rawProviderInstanceId: string;
   readonly env: Record<string, string> | undefined;
-  /** Environment and platform the terminal inherits; default to the server's. Test seams. */
+  /** Environment the terminal inherits; defaults to the server's. Test seam. */
   readonly baseEnv?: NodeJS.ProcessEnv;
+  /** Host platform; Windows env names are case-insensitive. */
   readonly platform?: NodeJS.Platform;
 }) {
   const providerInstanceId = ProviderInstanceId.make(input.rawProviderInstanceId);
@@ -1462,7 +1463,7 @@ export const resolveProviderInstanceTerminalEnvironment = Effect.fn(
       // Codex adapter does, so an inherited CODEX_HOME is not shadowed by the
       // HOME fallback. Only the effective CODEX_HOME joins the overrides.
       // Windows names are case-insensitive, so an override of any case wins.
-      const windows = (input.platform ?? process.platform) === "win32";
+      const windows = input.platform === "win32";
       const caseFold = (env: NodeJS.ProcessEnv): NodeJS.ProcessEnv =>
         windows
           ? Object.fromEntries(
@@ -1503,6 +1504,7 @@ export const make = Effect.fn("TerminalManager.make")(function* () {
   const nativeTelemetry = yield* NativeTelemetryClient.NativeTelemetryClient;
   const serverSettings = yield* ServerSettings.ServerSettingsService;
   const path = yield* Path.Path;
+  const platform = yield* HostProcessPlatform;
   const resolveProviderInstanceEnvironment = Effect.fn(
     "terminal.resolveProviderInstanceEnvironment",
   )((rawProviderInstanceId: string, env: Record<string, string> | undefined) =>
@@ -1511,6 +1513,7 @@ export const make = Effect.fn("TerminalManager.make")(function* () {
       path,
       rawProviderInstanceId,
       env,
+      platform,
     }),
   );
   return yield* makeWithOptions({
