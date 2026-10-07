@@ -219,7 +219,8 @@ Archiving a thread that is still working schedules the archive for when it is do
 menus (and swipe-right on mobile), plus the command palette and the archive keybinding on web and
 desktop, offer **Archive when done** while a turn runs. On any client, send
 [`/t3-archive`](./composer.md#commands-and-skills) in the thread. An agent can also schedule
-its own thread, for example when you ask it to "archive this thread when you're done". The
+its own thread, for example when you ask it to "archive this thread when you're done", or
+another thread, such as one whose results it has just read. The
 archive waits for the turn and its checkpoint, and for subagents or monitors it left running;
 background commands such as dev servers do not hold it and stop when the thread archives. An
 idle thread archives right away.

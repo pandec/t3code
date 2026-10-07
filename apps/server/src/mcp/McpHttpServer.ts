@@ -54,6 +54,9 @@ import { ThreadDrainToolkit } from "./toolkits/threadDrain/tools.ts";
 import { ThreadGroupsToolkitHandlersLive } from "./toolkits/threadGroups/handlers.ts";
 import { ThreadGroupsToolkit } from "./toolkits/threadGroups/tools.ts";
 import * as ThreadGroupsMcpService from "./ThreadGroupsMcpService.ts";
+import * as ProjectActionsHandlers from "./toolkits/projectActions/handlers.ts";
+import { ProjectActionsToolkit } from "./toolkits/projectActions/tools.ts";
+import * as ProjectActions from "../project/ProjectActions.ts";
 import * as WorktreeMcpService from "./WorktreeMcpService.ts";
 import { VoiceToolkitHandlersLive } from "./toolkits/voice/handlers.ts";
 import { VoiceToolkit } from "./toolkits/voice/tools.ts";
@@ -734,7 +737,7 @@ const layerWorktreeToolkitRegistration = McpServer.toolkit(WorktreeToolkit).pipe
   Layer.provide(WorktreeHandlers.layer),
 );
 
-// Fork: deferred archive tools for the credential's own thread.
+// Fork: deferred archive tools for the credential's own thread or a target thread.
 const layerArchiveToolkitRegistration = McpServer.toolkit(ArchiveToolkit).pipe(
   Layer.provide(ArchiveToolkitHandlersLive),
 );
@@ -742,6 +745,12 @@ const layerArchiveToolkitRegistration = McpServer.toolkit(ArchiveToolkit).pipe(
 // Fork: deferred worktree switch tools for the credential's own thread.
 const layerWorktreeSwitchToolkitRegistration = McpServer.toolkit(WorktreeSwitchToolkit).pipe(
   Layer.provide(WorktreeSwitchToolkitHandlersLive),
+);
+
+// Fork: project actions (run buttons), stored in server settings.
+const layerProjectActionsToolkitRegistration = McpServer.toolkit(ProjectActionsToolkit).pipe(
+  Layer.provide(ProjectActionsHandlers.layer),
+  Layer.provide(ProjectActions.layer),
 );
 
 // Fork: thread groups and drain status. ThreadGroupsMcpService holds the
@@ -840,6 +849,7 @@ const mcpToolkitIsland = <E, R>(path: `/${string}`, registrations: Layer.Layer<n
       layerWorktreeSwitchToolkitRegistration,
       layerThreadGroupsToolkitRegistration,
       layerThreadDrainToolkitRegistration,
+      layerProjectActionsToolkitRegistration,
     ).pipe(Layer.provideMerge(makeMcpTransport(path))),
   );
 
