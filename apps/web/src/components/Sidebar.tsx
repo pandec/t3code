@@ -4841,6 +4841,11 @@ export default function Sidebar() {
       inboxReturns.returnedAt,
     ).map(key);
   }, [activeThreads, dragState, threadByKey, workingShelfEnabled]);
+  const foldedGroupIds = useMemo(
+    () =>
+      new Set<string | null>(activeShelfExpanded ? collapsedGroups : [...collapsedGroups, null]),
+    [activeShelfExpanded, collapsedGroups],
+  );
   const sidebarSortingStrategy = useMemo(
     () =>
       createSidebarSortingStrategy({
@@ -4853,6 +4858,7 @@ export default function Sidebar() {
         },
         settledOrder: draggedSettledOrder,
         ...(draggedActiveOrder === undefined ? {} : { activeOrder: draggedActiveOrder }),
+        foldedGroupIds,
         settledExpanded: settledShelfExpanded,
         settledVisibleCount,
         routeThreadKey,
@@ -4865,6 +4871,7 @@ export default function Sidebar() {
       dividerDragLabelHeight,
       draggedActiveOrder,
       draggedSettledOrder,
+      foldedGroupIds,
       isContextDrag,
       pinnedDragLabelHeight,
       routeThreadKey,
@@ -6764,24 +6771,38 @@ export default function Sidebar() {
                               />,
                             );
                             break;
-                          case "active-placeholder":
+                          case "active-placeholder": {
+                            // Fork: custom groups hold active threads too; count
+                            // the Active group's own threads only.
+                            const activeGroupThreadCount = activeThreads.filter(
+                              (thread) => threadGroupId(thread, customGroups.groups) === null,
+                            ).length;
                             items.push(
                               <SidebarSectionPlaceholder
                                 key="active-placeholder"
                                 marker="active-placeholder"
                                 label="Active"
+                                // Fork: a folded Active opens no placeholder (see
+                                // the sorting strategy), so it shows no hint.
                                 showHint={
                                   from !== null &&
-                                  (activeThreads.length === 0 ||
-                                    (from === "active" &&
-                                      activeThreads.length === 1 &&
+                                  activeShelfExpanded &&
+                                  (activeGroupThreadCount === 0 ||
+                                    (activeGroupThreadCount === 1 &&
+                                      dragState?.activeSection === "active" &&
+                                      threadGroupId(
+                                        threadByKey.get(dragState.activeKey) ?? {},
+                                        customGroups.groups,
+                                      ) === null &&
                                       dragTargetSection !== null &&
-                                      dragTargetSection !== "active"))
+                                      (dragTargetSection !== "active" ||
+                                        dragState.targetCustomGroupId !== null)))
                                 }
                                 isDropTarget={dragTargetSection === "active"}
                               />,
                             );
                             break;
+                          }
                           case "working-header":
                             items.push(
                               <SidebarSectionHeader
