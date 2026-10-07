@@ -204,26 +204,15 @@ export interface CliServerFlags {
 export interface CliAuthLocationFlags {
   readonly baseDir: Option.Option<string>;
   readonly devUrl?: Option.Option<URL>;
-  readonly timeoutMs?: Option.Option<number>;
 }
 
-export const timeoutMsFlag = Flag.Int("timeout-ms").pipe(
-  Flag.withDescription(
-    "Timeout for live-server reads in milliseconds (equivalent to T3CODE_CLI_TIMEOUT_MS).",
-  ),
-  Flag.optional,
-);
-
-export const sharedServerLocationFlags = {
+export const authLocationFlags = {
   baseDir: baseDirFlag,
   devUrl: devUrlFlag,
 } as const;
 
-export const authLocationFlags = sharedServerLocationFlags;
-
 export const projectLocationFlags = {
   baseDir: baseDirFlag,
-  timeoutMs: timeoutMsFlag,
 } as const;
 
 export const sharedServerCommandFlags = {
@@ -493,37 +482,23 @@ export const resolveCliAuthConfig = (
   flags: CliAuthLocationFlags,
   cliLogLevel: Option.Option<LogLevel.LogLevel>,
 ) =>
-  Effect.gen(function* () {
-    const config = yield* resolveServerConfig(
-      {
-        mode: Option.none(),
-        port: Option.none(),
-        host: Option.none(),
-        baseDir: flags.baseDir,
-        cwd: Option.none(),
-        devUrl: flags.devUrl ?? Option.none(),
-        noBrowser: Option.none(),
-        bootstrapFd: Option.none(),
-        autoBootstrapProjectFromCwd: Option.none(),
-        logWebSocketEvents: Option.none(),
-        tailscaleServeEnabled: Option.none(),
-        tailscaleServePort: Option.none(),
-      },
-      cliLogLevel,
-    );
-    const stateDir = yield* Config.String("T3CODE_STATE_DIR").pipe(Config.option);
-    if (Option.isSome(flags.baseDir) || Option.isNone(stateDir) || !stateDir.value.trim())
-      return config;
-    const traceFile = yield* Config.String("T3CODE_TRACE_FILE").pipe(Config.option);
-    const derived = yield* ServerConfig.deriveServerPaths(config.baseDir, config.devUrl, {
-      stateDir: stateDir.value,
-    });
-    return {
-      ...config,
-      ...derived,
-      serverTracePath: Option.getOrElse(traceFile, () => derived.serverTracePath),
-    };
-  });
+  resolveServerConfig(
+    {
+      mode: Option.none(),
+      port: Option.none(),
+      host: Option.none(),
+      baseDir: flags.baseDir,
+      cwd: Option.none(),
+      devUrl: flags.devUrl ?? Option.none(),
+      noBrowser: Option.none(),
+      bootstrapFd: Option.none(),
+      autoBootstrapProjectFromCwd: Option.none(),
+      logWebSocketEvents: Option.none(),
+      tailscaleServeEnabled: Option.none(),
+      tailscaleServePort: Option.none(),
+    },
+    cliLogLevel,
+  );
 
 const DurationShorthandPattern = /^(?<value>\d+)(?<unit>ms|s|m|h|d|w)$/i;
 
