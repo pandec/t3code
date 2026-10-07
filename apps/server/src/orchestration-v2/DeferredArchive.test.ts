@@ -49,6 +49,7 @@ import {
   evaluateDeferredArchive,
   finishedWorktreeRemoval,
   planArchiveSchedule,
+  restartContinuationPending,
   stopCancelsArchive,
   wakeRetargetedArchiveRequest,
   worktreeRemovalRequest,
@@ -489,6 +490,95 @@ describe("wake runs", () => {
     const runs = [run("run-1", 1, "running"), wake("run-2", 2, "queued")];
     assert.isTrue(stopCancelsArchive(request, runs, RunId.make("run-1")));
   });
+});
+
+describe("a reordered queue", () => {
+  // run-3 was reordered ahead of an edit-held run-2, so it started second.
+  const started = (
+    id: string,
+    ordinal: number,
+    status: OrchestrationV2Run["status"],
+    startSequence: number,
+    completedAt: string | null = null,
+  ) => ({
+    ...run(id, ordinal, status),
+    startedAt: at("2026-10-01T00:00:00.000Z"),
+    startSequence,
+    completedAt: completedAt === null ? null : at(completedAt),
+  });
+  const first = started("run-1", 1, "completed", 1, "2026-10-01T00:00:00.100Z");
+  const reordered = started("run-3", 3, "completed", 2, "2026-10-01T00:00:00.500Z");
+  const request = pendingRequest({ runId: RunId.make("run-2"), latestStartSequence: 3 });
+  const evaluate = (
+    archiveRequest: OrchestrationV2ThreadArchiveRequest,
+    runs: ReadonlyArray<Parameters<typeof evaluateDeferredArchive>[0]["runs"][number]>,
+  ) =>
+    evaluateDeferredArchive({
+      thread: { worktreePath: "/work/tree" },
+      request: archiveRequest,
+      runs,
+      checkpoints: [],
+      pendingBackgroundTasks: [],
+    });
+
+  it("records the latest start sequence when scheduled", () => {
+    const plan = schedule({ runs: [first, reordered, started("run-2", 2, "running", 3)] });
+    assert.isTrue(plan.type === "pending" && plan.request.latestStartSequence === 3);
+  });
+
+  it("waits on the requesting run past a later-created run that ran before it", () => {
+    assert.equal(
+      evaluate(request, [first, reordered, started("run-2", 2, "running", 3)]).type,
+      "wait",
+    );
+    const completed = started("run-2", 2, "completed", 3, "2026-10-01T00:00:02.000Z");
+    assert.equal(evaluate(request, [first, reordered, completed]).type, "archive");
+    // A run that starts after the request is new work.
+    assert.deepEqual(
+      evaluate(request, [first, reordered, completed, started("run-4", 4, "running", 4)]),
+      { type: "cancel", detail: ARCHIVE_CANCEL_DETAIL.newWork },
+    );
+    // Requests recorded before start sequences keep comparing creation order.
+    const { latestStartSequence: _latest, ...legacy } = request;
+    assert.equal(evaluate(legacy, [first, reordered, completed]).type, "cancel");
+  });
+
+  it("a withdrawn wake falls back to the run that started last", () => {
+    const withdrawn = {
+      ...run("run-4", 4, "cancelled", "2026-10-01T00:00:02.000Z"),
+      startedAt: null,
+      completedAt: at("2026-10-01T00:00:03.000Z"),
+    };
+    const wakeRequest = { ...request, runId: RunId.make("run-4") };
+    assert.equal(
+      evaluate(wakeRequest, [first, reordered, started("run-2", 2, "waiting", 3), withdrawn]).type,
+      "wait",
+    );
+    assert.equal(
+      evaluate(wakeRequest, [
+        first,
+        reordered,
+        started("run-2", 2, "completed", 3, "2026-10-01T00:00:04.000Z"),
+        withdrawn,
+      ]).type,
+      "archive",
+    );
+  });
+
+  it.effect("follows the restart continuation of the run that ran last", () =>
+    Effect.gen(function* () {
+      const outbox = {
+        get: (effectId: string) =>
+          Effect.succeed(
+            effectId === "effect:restart-continuation:run-2"
+              ? Option.some({ status: "pending" } as EffectOutbox.OrchestrationEffectV2)
+              : Option.none(),
+          ),
+      };
+      const interrupted = started("run-2", 2, "interrupted", 3, "2026-10-01T00:00:05.000Z");
+      assert.isTrue(yield* restartContinuationPending(outbox, [first, reordered, interrupted]));
+    }),
+  );
 });
 
 // Orchestrator integration: the same runtime the server builds, over in-memory SQLite.

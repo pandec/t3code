@@ -22,6 +22,7 @@ import * as Stream from "effect/Stream";
 import * as TestClock from "effect/testing/TestClock";
 import { CodexProviderCapabilitiesV2 } from "./Adapters/CodexAdapterV2.ts";
 import * as EffectWorker from "./EffectWorker.ts";
+import { WORKTREE_SWITCH_DETAIL } from "./DeferredWorktreeSwitch.ts";
 import * as Orchestrator from "./Orchestrator.ts";
 import type {
   ProviderAdapterV2Event,
@@ -467,4 +468,161 @@ it.effect(
         }).pipe(Effect.provide(layer));
       }),
     ),
+);
+
+// Fork: deferred archive and worktree switch judge new work by when runs
+// start, not when they were created. `older` is queued first and held for
+// editing; `newer` is reordered ahead of it, so it runs first.
+const reorderedQueue = (name: string) =>
+  Effect.gen(function* () {
+    const { started, threadId, setup, layer } = yield* scenario(name);
+    const reordered = Effect.gen(function* () {
+      const { orchestrator, worker, watch, send, hold, endTurn, endActiveTurn } = yield* setup;
+      yield* send("older", "queue");
+      yield* send("newer", "queue");
+      const queued = (yield* orchestrator.getThreadProjection(threadId)).runs
+        .filter((run) => run.status === "queued")
+        .toSorted((left, right) => left.ordinal - right.ordinal);
+      const [older, newer] = [queued[0]!.id, queued[1]!.id];
+      // A started turn's run is ended only once the provider reports it running.
+      const turnRunning = (index: number) =>
+        watch(
+          (event) =>
+            event.type === "provider-turn.updated" &&
+            event.payload.status === "running" &&
+            event.payload.runAttemptId === queued[index]!.activeAttemptId,
+        );
+      yield* hold("hold-older", older, true);
+      yield* orchestrator.dispatch({
+        type: "queued-run.reorder",
+        commandId: CommandId.make("reorder"),
+        threadId,
+        runId: newer,
+        beforeRunId: older,
+      });
+      const newerRunning = yield* turnRunning(1);
+      yield* endActiveTurn;
+      yield* Fiber.join(newerRunning);
+      assert.equal(started[1]!.runId, newer);
+      const releaseOlder = Effect.gen(function* () {
+        const olderRunning = yield* turnRunning(0);
+        yield* hold("release-older", older, false);
+        yield* worker.drain();
+        yield* Fiber.join(olderRunning);
+        assert.equal(started[2]!.runId, older);
+      });
+      return { orchestrator, endTurn, releaseOlder };
+    });
+    return { threadId, layer, reordered };
+  });
+
+const switchStatus = (
+  orchestrator: Orchestrator.OrchestratorV2["Service"],
+  threadId: ThreadId,
+  requestId: string,
+) =>
+  Effect.gen(function* () {
+    // An error outcome stands in for the resolved target, so the checkout stays put.
+    yield* orchestrator.dispatch({
+      type: "thread.worktree-switch.execute",
+      commandId: CommandId.make(`${requestId}-execute`),
+      threadId,
+      requestId: CommandId.make(requestId),
+      error: "Recorded by the test.",
+    });
+    return (yield* orchestrator.getThreadProjection(threadId)).thread.worktreeSwitch;
+  });
+
+it.effect("a worktree switch follows run start order through a reordered queue", () =>
+  Effect.scoped(
+    Effect.gen(function* () {
+      const { threadId, layer, reordered } = yield* reorderedQueue("switch-start-order");
+      yield* Effect.gen(function* () {
+        const { orchestrator, endTurn, releaseOlder } = yield* reordered;
+        const schedule = (commandId: string) =>
+          orchestrator.dispatch({
+            type: "thread.worktree-switch.schedule",
+            commandId: CommandId.make(commandId),
+            threadId,
+            targetPath: "/elsewhere",
+          });
+        // `newer` asks while the older message is held: once that one starts, it is new work.
+        yield* schedule("switch-from-newer");
+        yield* endTurn(1);
+        yield* releaseOlder;
+        const fromNewer = yield* switchStatus(orchestrator, threadId, "switch-from-newer");
+        assert.equal(fromNewer?.status, "cancelled");
+        assert.equal(fromNewer?.detail, WORKTREE_SWITCH_DETAIL.newWork);
+
+        // `older` asks after `newer` ran: that earlier run is no new work.
+        yield* schedule("switch-from-older");
+        yield* endTurn(2);
+        const fromOlder = yield* switchStatus(orchestrator, threadId, "switch-from-older");
+        assert.equal(fromOlder?.status, "error");
+        assert.equal(fromOlder?.detail, "Recorded by the test.");
+      }).pipe(Effect.provide(layer));
+    }),
+  ),
+);
+
+it.effect("a deferred archive waits on its run past a reordered earlier run", () =>
+  Effect.scoped(
+    Effect.gen(function* () {
+      const { threadId, layer, reordered } = yield* reorderedQueue("archive-start-order");
+      yield* Effect.gen(function* () {
+        const { orchestrator, endTurn, releaseOlder } = yield* reordered;
+        yield* endTurn(1);
+        yield* releaseOlder;
+        yield* orchestrator.dispatch({
+          type: "thread.archive.schedule",
+          commandId: CommandId.make("archive"),
+          threadId,
+          afterTurn: true,
+        });
+        yield* endTurn(2);
+        yield* orchestrator.dispatch({
+          type: "thread.archive.execute",
+          commandId: CommandId.make("archive-execute"),
+          threadId,
+          requestId: CommandId.make("archive"),
+        });
+        const thread = (yield* orchestrator.getThreadProjection(threadId)).thread;
+        assert.isNotNull(thread.archivedAt);
+        assert.equal(thread.archiveRequest?.status, "completed");
+      }).pipe(Effect.provide(layer));
+    }),
+  ),
+);
+
+it.effect("a message steered into the requesting run cancels a pending worktree switch", () =>
+  Effect.scoped(
+    Effect.gen(function* () {
+      const { started, steered, threadId, setup, layer } = yield* scenario("switch-steer");
+      yield* Effect.gen(function* () {
+        const { orchestrator, worker } = yield* setup;
+        yield* orchestrator.dispatch({
+          type: "thread.worktree-switch.schedule",
+          commandId: CommandId.make("switch"),
+          threadId,
+          targetPath: "/elsewhere",
+        });
+        yield* orchestrator.dispatch({
+          type: "message.dispatch",
+          commandId: CommandId.make("steer"),
+          threadId,
+          messageId: MessageId.make("message:steer"),
+          text: "steer",
+          attachments: [],
+          dispatchMode: { type: "steer_active", targetRunId: started[0]!.runId },
+          createdBy: "user",
+          creationSource: "web",
+        });
+        yield* worker.drain();
+        assert.deepEqual(steered, ["steer"]);
+        const request = (yield* orchestrator.getThreadProjection(threadId)).thread.worktreeSwitch;
+        assert.equal(request?.status, "cancelled");
+        assert.equal(request?.detail, WORKTREE_SWITCH_DETAIL.newWork);
+      }).pipe(Effect.provide(layer));
+    }),
+  ),
 );

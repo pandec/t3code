@@ -5,8 +5,8 @@
  * completion, then archives through the ordinary `thread.archive` path. A wake
  * (delegated task result, background notification, restart continuation)
  * carries on that work, so the request moves to the run the wake starts. New
- * work, a stop or failure anywhere in the awaited chain, or a workspace change
- * cancels it; a failed final checkpoint of any awaited run records an error
+ * work (a message sent, or another run starting after the request), a stop or
+ * failure anywhere in the awaited chain, or a workspace change cancels it; a failed final checkpoint of any awaited run records an error
  * and leaves the thread unarchived. A delegated result reserved for a wake
  * that has not dispatched yet, or whose wake finished but has not been
  * reconciled yet, holds the archive like background work, and so does a
@@ -29,6 +29,7 @@ import type {
   ThreadId,
 } from "@t3tools/contracts";
 import { backgroundWorkHoldsCompletion } from "@t3tools/shared/orchestrationV2PendingBackgroundWork";
+import { runRanAfter } from "@t3tools/shared/orchestrationV2ThreadError";
 import * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
 import * as Option from "effect/Option";
@@ -43,6 +44,7 @@ export type ArchiveRun = Pick<
     Pick<
       OrchestrationV2Run,
       | "startedAt"
+      | "startSequence"
       | "completedAt"
       | "userMessageId"
       | "delegatedCompletion"
@@ -87,16 +89,20 @@ function undeliveredCompletionPending(runs: ReadonlyArray<ArchiveRun>): boolean 
   });
 }
 
+type RestartContinuationRun = Pick<OrchestrationV2Run, "id" | "ordinal" | "status" | "completedAt">;
+
 /**
  * Whether restart recovery's continuation of the latest run (the outbox id
- * `ProviderRuntimeRecoveryService` enqueues) has not settled yet.
+ * `ProviderRuntimeRecoveryService` enqueues, for the run `restartContinuationRun`
+ * picks) has not settled yet.
  */
 export function restartContinuationPending(
   outbox: Pick<EffectOutboxV2Shape, "get">,
-  runs: ReadonlyArray<Pick<OrchestrationV2Run, "id" | "ordinal">>,
+  runs: ReadonlyArray<RestartContinuationRun>,
 ) {
-  const latest = runs.reduce<Pick<OrchestrationV2Run, "id" | "ordinal"> | null>(
-    (current, run) => (current === null || run.ordinal > current.ordinal ? run : current),
+  const latest = runs.reduce<RestartContinuationRun | null>(
+    (current, run) =>
+      run.status !== "queued" && (current === null || runRanAfter(run, current)) ? run : current,
     null,
   );
   if (latest === null) return Effect.succeed(false);
@@ -204,6 +210,31 @@ function activeRun(runs: ReadonlyArray<ArchiveRun>): ArchiveRun | null {
   );
 }
 
+/** The thread's latest run start sequence; 0 when no run recorded one. */
+export function latestRunStartSequence(
+  runs: ReadonlyArray<Pick<OrchestrationV2Run, "startSequence">>,
+): number {
+  return runs.reduce((latest, run) => Math.max(latest, run.startSequence ?? 0), 0);
+}
+
+/** The `startSequence` of a run entering execution now. */
+export function nextRunStartSequence(
+  runs: ReadonlyArray<Pick<OrchestrationV2Run, "startSequence">>,
+): number {
+  return latestRunStartSequence(runs) + 1;
+}
+
+/**
+ * Whether `run` entered execution after a request recorded `latestStartSequence`.
+ * A run that never started, or started before start sequences were recorded, did not.
+ */
+export function startedAfterRequest(
+  run: Pick<OrchestrationV2Run, "startSequence">,
+  latestStartSequence: number,
+): boolean {
+  return run.startSequence !== undefined && run.startSequence > latestStartSequence;
+}
+
 export type ArchiveSchedulePlan =
   | { readonly type: "reject"; readonly detail: string }
   | { readonly type: "archive"; readonly request: OrchestrationV2ThreadArchiveRequest }
@@ -251,6 +282,7 @@ export function planArchiveSchedule(input: {
     worktreePath: input.thread.worktreePath,
     ...(input.removeWorktree === true ? { removeWorktree: true } : {}),
     requestedAt: DateTime.formatIso(input.now),
+    latestStartSequence: latestRunStartSequence(input.runs),
     status: "pending",
   };
   return run === null &&
@@ -291,7 +323,18 @@ export function evaluateDeferredArchive(input: {
   const requestedAtMs = Date.parse(request.requestedAt);
   if (request.runId !== null) {
     const target = input.runs.find((run) => run.id === request.runId);
-    if (target === undefined || input.runs.some((run) => run.ordinal > target.ordinal)) {
+    // Runs created after the target, other than wakes it moved to, are new work
+    // once they start; a run that ran before the request (a reordered queue) is
+    // not. Requests from before start sequences fall back to creation order.
+    const { latestStartSequence } = request;
+    if (
+      target === undefined ||
+      input.runs.some(
+        (run) =>
+          run.ordinal > target.ordinal &&
+          (latestStartSequence === undefined || startedAfterRequest(run, latestStartSequence)),
+      )
+    ) {
       return { type: "cancel", detail: ARCHIVE_CANCEL_DETAIL.newWork };
     }
     const awaited = awaitedRun(target, input.runs, request);
@@ -347,7 +390,9 @@ export function evaluateDeferredArchive(input: {
 /**
  * The run a request effectively waits on. A wake cancelled while still queued
  * (its delegated tasks were withdrawn, or restart recovery dropped it) never
- * ran, so the request falls back to the run before it; null when that run had
+ * ran, so the request falls back to the run that started last before it
+ * (`startSequence`, else creation order: a reordered queue starts runs out of
+ * creation order); null when that run had
  * already settled before the archive was scheduled (only background work counts).
  * Only a wake moves a pending request, so a target requested at or after the
  * archive is a wake; the run the archive was scheduled during was requested
@@ -368,7 +413,10 @@ function awaitedRun(
     const ordinal = run.ordinal;
     const previous = runs
       .filter((candidate) => candidate.ordinal < ordinal)
-      .toSorted((left, right) => right.ordinal - left.ordinal)[0];
+      .toSorted(
+        (left, right) =>
+          (right.startSequence ?? 0) - (left.startSequence ?? 0) || right.ordinal - left.ordinal,
+      )[0];
     if (
       previous === undefined ||
       (previous.completedAt != null &&

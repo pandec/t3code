@@ -376,6 +376,11 @@ export const OrchestrationV2ThreadArchiveRequest = Schema.Struct({
   worktreePath: Schema.NullOr(TrimmedNonEmptyString),
   removeWorktree: Schema.optional(Schema.Boolean),
   requestedAt: IsoDateTime,
+  /**
+   * The thread's latest run `startSequence` when requested: a run that starts
+   * with a higher one is new work. Absent on requests from before it was recorded.
+   */
+  latestStartSequence: Schema.optional(NonNegativeInt),
   status: Schema.Literals(["pending", "completed", "cancelled", "error"]),
   detail: Schema.optional(TrimmedNonEmptyString),
 });
@@ -394,6 +399,8 @@ export const OrchestrationV2ThreadWorktreeSwitch = Schema.Struct({
   sourceBranch: Schema.NullOr(TrimmedNonEmptyString),
   targetPath: TrimmedNonEmptyString,
   requestedAt: IsoDateTime,
+  /** As on `OrchestrationV2ThreadArchiveRequest`. */
+  latestStartSequence: Schema.optional(NonNegativeInt),
   status: Schema.Literals(["pending", "completed", "cancelled", "error"]),
   detail: Schema.optional(TrimmedNonEmptyString),
 });
@@ -605,6 +612,13 @@ export const OrchestrationV2Run = Schema.Struct({
   queueHeld: Schema.optional(Schema.Boolean),
   requestedAt: Schema.DateTimeUtc,
   startedAt: Schema.NullOr(Schema.DateTimeUtc),
+  /**
+   * Fork: the order in which the thread's runs entered execution (created
+   * running or preparing, or started from the queue), unlike `ordinal`, which
+   * is creation order. Absent on runs that never started and on runs started
+   * before it was recorded.
+   */
+  startSequence: Schema.optional(PositiveInt),
   completedAt: Schema.NullOr(Schema.DateTimeUtc),
   checkpointId: Schema.NullOr(CheckpointId),
   contextHandoffId: Schema.NullOr(ContextHandoffId),

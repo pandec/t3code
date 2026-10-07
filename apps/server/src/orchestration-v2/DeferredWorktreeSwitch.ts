@@ -3,8 +3,8 @@
  * from its running run to move the thread to another checkout of the same
  * repository; the move applies once that run completes (a v2 run reaches
  * `completed` after its final checkpoint capture, even a failed one) and
- * background work that holds completion ends. New work, a stopped run, a
- * checkout change, an archive or a pending archive cancels it; a failed final
+ * background work that holds completion ends. New work (a message sent, or
+ * another run starting after the request), a stopped run, a checkout change, an archive or a pending archive cancels it; a failed final
  * checkpoint records an error and keeps the checkout. Pure: the orchestrator and
  * `ThreadWorktreeSwitchScheduler` share these rules.
  */
@@ -22,8 +22,10 @@ import {
   type ArchiveCheckpoint,
   type ArchiveRun,
   finalCheckpointFailed,
+  latestRunStartSequence,
   pendingArchiveRequest,
   RUNNING_RUN_STATUSES,
+  startedAfterRequest,
   STOPPED_RUN_STATUSES,
 } from "./DeferredArchive.ts";
 
@@ -80,11 +82,13 @@ export type WorktreeSwitchSchedulePlan =
   | { readonly type: "pending"; readonly request: OrchestrationV2ThreadWorktreeSwitch };
 
 /**
- * Decide a `thread.worktree-switch.schedule`. `run` is the requesting run and
- * `driver` its provider driver. A later request replaces a pending one.
+ * Decide a `thread.worktree-switch.schedule`. `run` is the requesting run (one
+ * of the thread's `runs`) and `driver` its provider driver. A later request
+ * replaces a pending one.
  */
 export function planWorktreeSwitchSchedule(input: {
   readonly thread: SwitchThread;
+  readonly runs: ReadonlyArray<ArchiveRun>;
   readonly run: ArchiveRun | null;
   readonly driver: ProviderDriverKind | null;
   readonly targetPath: string;
@@ -114,6 +118,7 @@ export function planWorktreeSwitchSchedule(input: {
       sourceBranch: input.thread.branch,
       targetPath: input.targetPath,
       requestedAt: DateTime.formatIso(input.now),
+      latestStartSequence: latestRunStartSequence(input.runs),
       status: "pending",
     },
   };
@@ -148,7 +153,18 @@ export function evaluateWorktreeSwitch(input: {
     return { type: "cancel", detail: WORKTREE_SWITCH_DETAIL.checkout };
   }
   const target = input.runs.find((run) => run.id === request.runId);
-  if (target === undefined || input.runs.some((run) => run.ordinal > target.ordinal)) {
+  // Any other run starting after the request is new work, even one created
+  // earlier (a reordered or edit-held queue). Requests from before start
+  // sequences fall back to creation order.
+  const { latestStartSequence } = request;
+  if (
+    target === undefined ||
+    input.runs.some((run) =>
+      latestStartSequence === undefined
+        ? run.ordinal > target.ordinal
+        : run.id !== target.id && startedAfterRequest(run, latestStartSequence),
+    )
+  ) {
     return { type: "cancel", detail: WORKTREE_SWITCH_DETAIL.newWork };
   }
   if (STOPPED_RUN_STATUSES.has(target.status)) {
