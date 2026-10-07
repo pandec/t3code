@@ -105,6 +105,35 @@ it.effect("updates preserve omitted fields and null clears the preview", () =>
   }).pipe(Effect.provide(makeLayer())),
 );
 
+it.effect("an edit keeps the action's settle role", () =>
+  Effect.gen(function* () {
+    const actions = yield* service;
+    const clean: ProjectScript = {
+      id: "clean",
+      name: "Clean",
+      command: "pnpm clean",
+      icon: "build",
+      runOnWorktreeCreate: false,
+      runOnSettle: true,
+    };
+    yield* actions.upsert({ projectId, name: clean.name, command: clean.command });
+    const settingsService = yield* ServerSettings.ServerSettingsService;
+    // Give the new action the settle role, as the project settings editor does.
+    const listed = (yield* actions.list(projectId)).actions;
+    yield* settingsService.updateSettings({
+      projectScriptUpdate: {
+        projectId,
+        expectedScripts: Array.from(listed),
+        scripts: listed.map((action) => (action.id === clean.id ? clean : action)),
+      },
+    });
+
+    const renamed = yield* actions.upsert({ projectId, actionId: "clean", name: "Tidy" });
+
+    expect(renamed.projectAction).toEqual({ ...clean, name: "Tidy" });
+  }).pipe(Effect.provide(makeLayer())),
+);
+
 it.effect("keeps a single worktree setup action and reports the cleared one", () =>
   Effect.gen(function* () {
     const actions = yield* service;

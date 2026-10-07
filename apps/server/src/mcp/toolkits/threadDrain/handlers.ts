@@ -1,11 +1,12 @@
 import * as Effect from "effect/Effect";
 
 import { latestActiveRun } from "../../../orchestration-v2/ThreadManagementService.ts";
+import * as McpToolAccess from "../../McpToolAccess.ts";
 import { readThread, unavailable } from "../../threadAccess.ts";
 import { ThreadDrainToolkit } from "./tools.ts";
 
-export const ThreadDrainToolkitHandlersLive = ThreadDrainToolkit.toLayer({
-  t3_thread_drain_status: (input) =>
+export const ThreadDrainToolkitHandlersLive = McpToolAccess.toLayer(ThreadDrainToolkit, {
+  t3_thread_drain_status: McpToolAccess.reads((input) =>
     Effect.gen(function* () {
       const { threads, projection } = yield* readThread(input.threadId, ["runs"]);
       // Scope "all": a handover must also wait out monitors and background commands.
@@ -35,4 +36,5 @@ export const ThreadDrainToolkitHandlersLive = ThreadDrainToolkit.toLayer({
         },
       };
     }),
+  ),
 });

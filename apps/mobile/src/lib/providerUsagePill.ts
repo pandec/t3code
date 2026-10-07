@@ -26,3 +26,18 @@ export function canStartProviderUsageRefresh(lastStartedAtMs: number, nowMs: num
   if (lastStartedAtMs === 0) return true;
   return nowMs - lastStartedAtMs >= PROVIDER_USAGE_REFRESH_DEBOUNCE_MS;
 }
+
+/**
+ * Which usage requests the connection's grant permits. Quota snapshots and
+ * their refresh need `diagnostics:read`; the thread-account probe reads a live
+ * session binding and additionally needs `orchestration:operate`.
+ */
+export function resolveComposerProviderUsageAccess(grant: {
+  readonly canReadDiagnostics: boolean;
+  readonly canOperate: boolean;
+}): { readonly canReadUsage: boolean; readonly canProbeThreadAccount: boolean } {
+  return {
+    canReadUsage: grant.canReadDiagnostics,
+    canProbeThreadAccount: grant.canReadDiagnostics && grant.canOperate,
+  };
+}

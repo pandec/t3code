@@ -9,7 +9,10 @@ import "vite-plus/test/config";
 import { defineConfig, type Connect, type Plugin } from "vite-plus";
 import pkg from "./package.json" with { type: "json" };
 
-import { DEV_PROXIED_PATH_PREFIXES } from "@t3tools/shared/devProxy";
+import {
+  DEV_PROXIED_ORIGIN_PRESERVING_PREFIXES,
+  DEV_PROXIED_PATH_PREFIXES,
+} from "@t3tools/shared/devProxy";
 
 import { loadRepoEnv } from "../../scripts/lib/public-config";
 import { sharedTestDefaults } from "../../scripts/lib/vitest-shared.ts";
@@ -120,7 +123,6 @@ const ISOLATED_TEST_FILES = [
   "src/browser/browserLinkTarget.test.ts",
   "src/components/cloud/CloudEnvironmentConnectList.test.tsx",
   "src/components/diffs/DiffFileTree.test.tsx",
-  "src/components/preview/PreviewAutomationHosts.test.tsx",
   "src/components/settings/IntegrationsSettings.test.tsx",
   "src/hooks/useSettings.test.ts",
   "src/authBootstrap.test.ts",
@@ -155,8 +157,6 @@ const ISOLATED_TEST_FILES = [
   "src/components/preview/PreviewFaviconIcon.test.tsx",
   "src/components/preview/PreviewView.test.tsx",
   "src/components/preview/openTerminalLinkInPreview.test.ts",
-  "src/components/preview/previewAutomationHostBudget.test.ts",
-  "src/components/preview/previewNavigationReadiness.test.ts",
   "src/components/settings/AddProviderInstanceDialog.environment.test.tsx",
   "src/components/settings/ProjectFaviconPickerDialog.test.tsx",
   "src/components/settings/ProjectIconPickerDialog.test.tsx",
@@ -209,6 +209,37 @@ const ISOLATED_TEST_FILES = [
   "src/lib/discardComposerDraft.test.ts",
   "src/state/queries.threadSearch.test.tsx",
   "src/state/waitForAtomValue.test.ts",
+  "src/assets/assetUrls.test.ts",
+  "src/cloud/useCloudLinkController.test.tsx",
+  "src/components/ChatMarkdown.assets.test.tsx",
+  "src/components/ChatMarkdown.permissions.test.tsx",
+  "src/components/GitActionsControl.test.ts",
+  "src/components/KeybindingsConfigWarning.test.tsx",
+  "src/components/PermissionUpdateNotice.test.tsx",
+  "src/components/PullRequestThreadDialog.test.ts",
+  "src/components/ReopenClosedViewShortcut.test.tsx",
+  "src/components/RightPanelTabs.keyboard.test.tsx",
+  "src/components/ThreadTerminalDrawer.permissions.test.tsx",
+  "src/components/chat/ComposerPendingUserInputPanel.permissions.test.tsx",
+  "src/components/chat/OpenInPicker.test.tsx",
+  "src/components/chat/ThreadAutomationsPanel.permissions.test.tsx",
+  "src/components/files/projectFilesQueryState.test.ts",
+  "src/components/media/MediaActions.test.tsx",
+  "src/components/onboarding/WelcomeWizard.import.test.tsx",
+  "src/components/onboarding/WelcomeWizard.terminal.test.tsx",
+  "src/components/projectScriptEditor.permissions.test.tsx",
+  "src/components/pullRequest/PullRequestMarkdownEditor.test.tsx",
+  "src/components/search/ProjectContentSearchDialog.test.tsx",
+  "src/components/settings/KeybindingsSettings.environment.test.tsx",
+  "src/components/settings/ProjectSettingsPanel.test.tsx",
+  "src/editorPreferences.test.ts",
+  "src/hooks/useSettings.sync.test.tsx",
+  "src/hooks/useThreadActionMenu.test.ts",
+  "src/hooks/useThreadActions.permissions.test.ts",
+  "src/state/queries.filesystem.test.ts",
+  "src/state/sourceControlActions.test.ts",
+  "src/state/terminalSessionAvailability.test.ts",
+  "src/state/use-orchestration-command.test.ts",
 ];
 
 const unitTestProject = {
@@ -335,7 +366,7 @@ export default defineConfig(() => {
         "@clerk/clerk-js",
         "@clerk/react/internal",
         "@pierre/diffs",
-        "@pierre/diffs/editor",
+        "@pierre/diffs/edit",
         "@pierre/diffs/react",
         "@pierre/diffs/worker/worker.js",
         "effect/Array",
@@ -397,7 +428,7 @@ export default defineConfig(() => {
                 prefix,
                 {
                   target: devProxyTarget,
-                  changeOrigin: true,
+                  changeOrigin: !DEV_PROXIED_ORIGIN_PRESERVING_PREFIXES.has(prefix),
                   ...(prefix === "/ws" || prefix === "/api" ? { ws: true } : {}),
                 },
               ]),

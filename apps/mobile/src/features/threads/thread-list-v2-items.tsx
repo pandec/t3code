@@ -19,7 +19,7 @@ import type {
   EnvironmentThreadShell,
 } from "@t3tools/client-runtime/state/shell";
 import type { EnvironmentThreadSearchMatch } from "@t3tools/client-runtime/state/thread-search";
-import type { EnvironmentMachineKind } from "@t3tools/contracts";
+import { AuthOrchestrationOperateScope, type EnvironmentMachineKind } from "@t3tools/contracts";
 import {
   canForkConversation,
   canForkImportedSessionWith,
@@ -51,6 +51,7 @@ import { copyTextWithHaptic } from "../../lib/copyTextWithHaptic";
 import { useUniwindTheme } from "../../lib/useUniwindTheme";
 import { useThreadListeningState } from "../../state/listeningPlayback";
 import { toggleLoadedListeningTrack } from "../../state/listeningPlayer";
+import { useEnvironmentScope } from "../../state/session";
 import { useAccentTintSettings } from "../../state/use-mobile-preferences";
 import type { PendingNewTask } from "../../state/use-pending-new-tasks";
 import { useThreadPr } from "../../state/use-thread-pr";
@@ -825,6 +826,7 @@ export const ThreadListV2Row = memo(function ThreadListV2Row(props: {
 
   const handleDelete = useCallback(() => onDeleteThread(thread), [onDeleteThread, thread]);
   const handleRename = useCallback(() => onRenameThread(thread), [onRenameThread, thread]);
+  const canOperateThread = useEnvironmentScope(thread.environmentId, AuthOrchestrationOperateScope);
   const handleRegenerateTitle = useCallback(
     () => onRegenerateThreadTitle(thread),
     [onRegenerateThreadTitle, thread],
@@ -1259,18 +1261,21 @@ export const ThreadListV2Row = memo(function ThreadListV2Row(props: {
         : archiveToggle === "schedule"
           ? "archives when the thread is done"
           : "archives";
-  const swipeAccessibilityHint = [
-    secondaryAction === null
-      ? `Opens the thread. Swipe left to ${primaryAction.label.toLowerCase()}.`
-      : `Opens the thread. Swipe left for ${primaryAction.label.toLowerCase()} and snooze actions.`,
-    ...(leftActions.length === 0
-      ? []
-      : leftActions.length === 1
-        ? [`Swipe right to ${leftActions[0]!.label.toLowerCase()}.`]
-        : [
-            `Swipe right for ${leftActions.map((action) => action.label.toLowerCase()).join(", ")}; a full swipe ${fullSwipeHint}.`,
-          ]),
-  ].join(" ");
+  // Without operate access the row only opens the thread: no swipe actions.
+  const swipeAccessibilityHint = !canOperateThread
+    ? "Opens the thread"
+    : [
+        secondaryAction === null
+          ? `Opens the thread. Swipe left to ${primaryAction.label.toLowerCase()}.`
+          : `Opens the thread. Swipe left for ${primaryAction.label.toLowerCase()} and snooze actions.`,
+        ...(leftActions.length === 0
+          ? []
+          : leftActions.length === 1
+            ? [`Swipe right to ${leftActions[0]!.label.toLowerCase()}.`]
+            : [
+                `Swipe right for ${leftActions.map((action) => action.label.toLowerCase()).join(", ")}; a full swipe ${fullSwipeHint}.`,
+              ]),
+      ].join(" ");
 
   // Sidebar rows use navigation foregrounds on their active and idle surfaces.
   const cardContent = (
@@ -1625,6 +1630,8 @@ export const ThreadListV2Row = memo(function ThreadListV2Row(props: {
         </View>
       </RowPressable>
     );
+
+  if (!canOperateThread) return rowContent(() => {});
 
   return (
     <View collapsable={false}>

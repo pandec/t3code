@@ -9,17 +9,23 @@ import {
   type ProviderUsageThreadAccountProbe,
   type ProviderUsageThreadAccountState,
 } from "@t3tools/client-runtime/state/provider-usage-presentation";
-import type {
-  EnvironmentId,
-  ProviderInstanceId,
-  ServerProvider,
-  ThreadId,
+import {
+  AuthDiagnosticsReadScope,
+  AuthOrchestrationOperateScope,
+  type EnvironmentId,
+  type ProviderInstanceId,
+  type ServerProvider,
+  type ThreadId,
 } from "@t3tools/contracts";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
-import { canStartProviderUsageRefresh } from "../../lib/providerUsagePill";
+import {
+  canStartProviderUsageRefresh,
+  resolveComposerProviderUsageAccess,
+} from "../../lib/providerUsagePill";
 import { useEnvironmentQuery } from "../../state/query";
 import { serverEnvironment } from "../../state/server";
+import { useEnvironmentScope } from "../../state/session";
 import { useAtomCommand } from "../../state/use-atom-command";
 
 function useMinuteClockMs(): number {
@@ -46,8 +52,14 @@ export function useComposerProviderUsage(input: {
   readonly hasProviderSession: boolean;
 }) {
   const { environmentId } = input;
+  // Without the grant, usage presents as unavailable rather than issuing
+  // requests the server would reject.
+  const { canReadUsage, canProbeThreadAccount } = resolveComposerProviderUsageAccess({
+    canReadDiagnostics: useEnvironmentScope(environmentId, AuthDiagnosticsReadScope),
+    canOperate: useEnvironmentScope(environmentId, AuthOrchestrationOperateScope),
+  });
   const providerUsageQuery = useEnvironmentQuery(
-    serverEnvironment.providerUsage({ environmentId, input: {} }),
+    canReadUsage ? serverEnvironment.providerUsage({ environmentId, input: {} }) : null,
   );
   const nowMs = useMinuteClockMs();
   const snapshots = providerUsageQuery.data?.snapshots;
@@ -70,12 +82,15 @@ export function useComposerProviderUsage(input: {
         activeModel: input.activeModel,
         threadId: input.threadId,
         threadAccount:
-          threadAccount !== null && threadAccount.instanceId === input.activeInstanceId
+          canProbeThreadAccount &&
+          threadAccount !== null &&
+          threadAccount.instanceId === input.activeInstanceId
             ? threadAccount.account
             : null,
         now: nowMs,
       }),
     [
+      canProbeThreadAccount,
       input.activeInstanceId,
       input.activeModel,
       input.providers,
@@ -105,6 +120,7 @@ export function useComposerProviderUsage(input: {
   const probeThreadAccount = useCallback(
     (options?: { readonly force?: boolean }) => {
       const threadId = input.threadId;
+      if (!canProbeThreadAccount) return;
       if (!input.hasProviderSession || activeDriver !== "claudeAgent") return;
       const model = input.activeModel;
       const instanceId = input.activeInstanceId;
@@ -136,6 +152,7 @@ export function useComposerProviderUsage(input: {
     },
     [
       activeDriver,
+      canProbeThreadAccount,
       environmentId,
       input.activeInstanceId,
       input.activeModel,
@@ -185,6 +202,7 @@ export function useComposerProviderUsage(input: {
   const refresh = useCallback(() => {
     // An explicit refresh re-reads the binding past its cadence cap.
     probeThreadAccount({ force: true });
+    if (!canReadUsage) return;
     const nowMs = Date.now();
     if (!canStartProviderUsageRefresh(lastRefreshAtMs(), nowMs)) return;
     lastRefreshRef.current = { environmentId, atMs: nowMs };
@@ -210,6 +228,7 @@ export function useComposerProviderUsage(input: {
       }
     })();
   }, [
+    canReadUsage,
     directInstanceIds,
     environmentId,
     gatewayInstanceId,
@@ -232,7 +251,7 @@ export function useComposerProviderUsage(input: {
     probeThreadAccount,
     lastRefreshAtMs,
     panelObservedAt,
-    unavailable: providerUsageQuery.error !== null,
+    unavailable: !canReadUsage || providerUsageQuery.error !== null,
     primaryWindow: meter.activeUsage ? primaryProviderUsageWindow(meter.activeUsage) : null,
     // Fable has its own row, so it must not repaint the primary dot.
     ringStatus: providerUsageRingStatus(meter.activeUsage, meter.fable?.window.id ?? null),

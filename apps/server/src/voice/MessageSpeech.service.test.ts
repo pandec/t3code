@@ -338,7 +338,6 @@ it.layer(TestLayer)("message listening", (it) => {
       yield* setMessageText(preparing, "Second inherited answer.");
       yield* insertAgentRecording(recorded);
       const provenance = yield* resolveSummaryProvenance(
-        // @effect-diagnostics-next-line preferSchemaOverJson:off
         { runModelSelection: JSON.stringify(model), threadModelSelection: null },
         null,
       );

@@ -11,12 +11,14 @@
  */
 import { useAtomValue } from "@effect/atom-react";
 import {
+  AuthDiagnosticsReadScope,
   USAGE_CONTRACT_VERSION,
   type EnvironmentId,
   type UsageSummaryInput,
 } from "@t3tools/contracts";
 import { runAtomCommand } from "@t3tools/client-runtime/state/runtime";
 import { needsCursorKeychainAccess, refreshUsage } from "@t3tools/client-runtime/state/usage";
+import { resolveUsageAccess } from "@t3tools/client-runtime/state/usage-access";
 import { mergeUsage, type EnvironmentUsage, type MergedUsage } from "@t3tools/shared/usageMerge";
 import * as Option from "effect/Option";
 import { AsyncResult, Atom } from "effect/reactivity";
@@ -30,12 +32,20 @@ import {
 import { appAtomRegistry } from "./atom-registry";
 import { environmentPresentations } from "./presentation";
 import { serverEnvironment } from "./server";
+import { environmentSession, readEnvironmentScope } from "./session";
 
 export interface EnvironmentUsageStatus {
   readonly environmentId: EnvironmentId;
   readonly label: string;
   readonly queryPending: boolean;
   readonly state: EnvironmentUsageState;
+  /** Whether this connection holds the diagnostics grant usage needs. */
+  readonly canReadDiagnostics: boolean;
+  /**
+   * Why a `failed` environment cannot report: a denied grant or a failed
+   * access check need different fixes than a failed scan. Null otherwise.
+   */
+  readonly accessError: string | null;
   readonly needsCursorKeychainAccess: boolean;
 }
 
@@ -53,6 +63,35 @@ const usageByWindowAtom = Atom.family((windowKey: string) =>
 
     const statuses: EnvironmentUsageStatus[] = [];
     for (const [environmentId, presentation] of presentations) {
+      const sessionResult = get(environmentSession.sessionStateAtom(environmentId));
+      const session = Option.getOrNull(AsyncResult.value(sessionResult));
+      const hasSessionError = sessionResult._tag === "Failure";
+      const access = resolveUsageAccess({
+        connectionPhase: presentation.connection.phase,
+        session,
+        hasSessionError,
+      });
+      if (!access.canReadDiagnostics) {
+        // Map upstream's access check onto the fork's coverage states: a check
+        // still running is reporting, an offline connection that never
+        // prepared a session is unreachable, and a denial or failed check is
+        // a terminal failure carrying its reason.
+        const state: EnvironmentUsageState = access.isPending
+          ? { kind: "reporting" }
+          : session === null && !hasSessionError
+            ? { kind: "unreachable" }
+            : { kind: "failed" };
+        statuses.push({
+          environmentId,
+          label: presentation.entry.target.label,
+          queryPending: false,
+          state,
+          canReadDiagnostics: false,
+          accessError: state.kind === "failed" ? access.error : null,
+          needsCursorKeychainAccess: false,
+        });
+        continue;
+      }
       const result = get(serverEnvironment.usageSummary({ environmentId, input }));
       const summary = Option.getOrNull(AsyncResult.value(result));
       const state = classifyEnvironmentUsage({
@@ -65,6 +104,8 @@ const usageByWindowAtom = Atom.family((windowKey: string) =>
         label: presentation.entry.target.label,
         queryPending: result.waiting,
         state,
+        canReadDiagnostics: true,
+        accessError: null,
         needsCursorKeychainAccess: needsCursorKeychainAccess(
           state.kind === "reported" ? state.summary : null,
           get(serverEnvironment.providersValueAtom(environmentId)),
@@ -145,7 +186,15 @@ export function useUsage(
         registry: appAtomRegistry,
         server: serverEnvironment,
         presentations: environmentPresentations,
-        environmentIds,
+        // Only environments this connection may read; the others report a
+        // permission error instead of a stale or failed rescan.
+        environmentIds: selectedEnvironments
+          .filter(
+            (environment) =>
+              environment.canReadDiagnostics &&
+              readEnvironmentScope(environment.environmentId, AuthDiagnosticsReadScope),
+          )
+          .map(({ environmentId }) => environmentId),
         input: nextInput ?? (JSON.parse(windowKey) as UsageSummaryInput),
       });
     },

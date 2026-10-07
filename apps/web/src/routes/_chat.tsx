@@ -1,3 +1,4 @@
+import { AuthPreviewOperateScope } from "@t3tools/contracts";
 import { Outlet, createFileRoute, redirect, useParams, useRouter } from "@tanstack/react-router";
 import { useAtomValue } from "@effect/atom-react";
 import { useEffect, useMemo, useRef } from "react";
@@ -12,7 +13,9 @@ import { useClientSettings, useLegacySidebarEnabled } from "../hooks/useSettings
 import { useThreadActions } from "../hooks/useThreadActions";
 import { openCommandPalette } from "../commandPaletteBus";
 import { readThreadShell, useProjects } from "../state/entities";
+import { isPreviewAvailableFor } from "../browser/previewRuntime";
 import { usePrimaryEnvironmentId } from "../state/environments";
+import { useEnvironmentScope } from "../state/session";
 import { selectProjectGroupingSettings } from "../logicalProject";
 import { buildSidebarProjectSnapshots } from "../sidebarProjectGrouping";
 import { dispatchPreviewAction } from "../components/preview/previewActionBus";
@@ -32,7 +35,6 @@ import {
   threadVisitHistory,
 } from "../threadLastVisited";
 import { selectThreadTerminalUiState, useTerminalUiStateStore } from "../terminalUiStateStore";
-import { isPreviewSupportedInRuntime } from "../previewStateStore";
 import { selectActiveRightPanel, useRightPanelStore } from "../rightPanelStore";
 import { useThreadSelectionStore } from "../threadSelectionStore";
 import { stackedThreadToast, toastManager } from "~/components/ui/toast";
@@ -91,6 +93,10 @@ function ChatRouteGlobalShortcuts() {
     state.splitMounted && state.activePaneId === "secondary" ? state.secondaryRef : null,
   );
   const shortcutThreadRef = secondaryActiveThreadRef ?? routeThreadRef;
+  const canOperatePreview = useEnvironmentScope(
+    shortcutThreadRef?.environmentId ?? null,
+    AuthPreviewOperateScope,
+  );
   const terminalOpen = useTerminalUiStateStore((state) =>
     shortcutThreadRef
       ? selectThreadTerminalUiState(state.terminalUiStateByThreadKey, shortcutThreadRef)
@@ -276,8 +282,8 @@ function ChatRouteGlobalShortcuts() {
       if (command === "preview.toggle") {
         event.preventDefault();
         event.stopPropagation();
-        if (!shortcutThreadRef) return;
-        if (!isPreviewSupportedInRuntime()) {
+        if (!shortcutThreadRef || (!canOperatePreview && !previewOpen)) return;
+        if (!isPreviewAvailableFor(shortcutThreadRef.environmentId)) {
           toastManager.add(
             stackedThreadToast({
               type: "info",
@@ -303,6 +309,7 @@ function ChatRouteGlobalShortcuts() {
       ) {
         event.preventDefault();
         event.stopPropagation();
+        if (!canOperatePreview) return;
         const action =
           command === "preview.refresh"
             ? "refresh"
@@ -330,6 +337,7 @@ function ChatRouteGlobalShortcuts() {
     activeThread,
     attemptArchiveThread,
     clearSelection,
+    canOperatePreview,
     handleNewThread,
     keybindings,
     defaultProjectRef,

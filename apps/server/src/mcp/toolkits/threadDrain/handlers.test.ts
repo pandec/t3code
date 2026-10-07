@@ -18,6 +18,7 @@ import { McpSchema, McpServer } from "effect/ai";
 
 import * as ThreadManagementService from "../../../orchestration-v2/ThreadManagementService.ts";
 import * as McpInvocationContext from "../../McpInvocationContext.ts";
+import * as McpHttpServer from "../../McpHttpServer.ts";
 import { ThreadDrainToolkitHandlersLive } from "./handlers.ts";
 import { ThreadDrainStatusResult, ThreadDrainToolkit } from "./tools.ts";
 
@@ -60,8 +61,7 @@ const makeLayer = (target: TargetState | null, scopes: Array<string>) => {
           : null,
       deletedAt: null,
     }) as unknown as OrchestrationV2ThreadShell;
-  return McpServer.toolkit(ThreadDrainToolkit).pipe(
-    Layer.provide(ThreadDrainToolkitHandlersLive),
+  return McpHttpServer.toolkitRegistration(ThreadDrainToolkit, ThreadDrainToolkitHandlersLive).pipe(
     Layer.provideMerge(McpServer.McpServer.layer),
     Layer.provideMerge(
       Layer.mock(ThreadManagementService.ThreadManagementService)({

@@ -31,6 +31,7 @@ import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
 import * as Queue from "effect/Queue";
 import * as Path from "effect/Path";
+import * as Crypto from "effect/Crypto";
 import * as Ref from "effect/Ref";
 import * as Schema from "effect/Schema";
 import * as Stream from "effect/Stream";
@@ -1065,6 +1066,7 @@ const CLAUDE_SETTINGS = Schema.decodeSync(ClaudeSettings)({});
 const makeClaudeRegistry = Effect.gen(function* () {
   const fileSystem = yield* FileSystem.FileSystem;
   const path = yield* Path.Path;
+  const crypto = yield* Crypto.Crypto;
   const idAllocator = yield* IdAllocator.IdAllocatorV2;
   const opened: Array<{
     readonly instanceId: ProviderInstanceId;
@@ -1108,6 +1110,7 @@ const makeClaudeRegistry = Effect.gen(function* () {
         attachmentsDir,
         fileSystem,
         path,
+        crypto,
         idAllocator,
         queryRunner: {
           allocateSessionId: Effect.sync(

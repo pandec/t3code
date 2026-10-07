@@ -19,6 +19,7 @@ import { McpSchema, McpServer } from "effect/ai";
 import * as ThreadManagementService from "../../../orchestration-v2/ThreadManagementService.ts";
 import * as ServerSettings from "../../../serverSettings.ts";
 import * as McpInvocationContext from "../../McpInvocationContext.ts";
+import * as McpHttpServer from "../../McpHttpServer.ts";
 import * as ThreadGroupsMcpService from "../../ThreadGroupsMcpService.ts";
 import { ThreadGroupsToolkitHandlersLive } from "./handlers.ts";
 import { ThreadGroupsToolkit, ThreadGroupsToolResult } from "./tools.ts";
@@ -114,8 +115,10 @@ const makeLayer = (options: {
       }),
   });
   const settings = ServerSettings.layerTest({ threadGroups: seeded });
-  return McpServer.toolkit(ThreadGroupsToolkit).pipe(
-    Layer.provide(ThreadGroupsToolkitHandlersLive),
+  return McpHttpServer.toolkitRegistration(
+    ThreadGroupsToolkit,
+    ThreadGroupsToolkitHandlersLive,
+  ).pipe(
     Layer.provide(ThreadGroupsMcpService.layer),
     Layer.provideMerge(McpServer.McpServer.layer),
     Layer.provideMerge(Layer.mergeAll(threads, settings, NodeServices.layer)),

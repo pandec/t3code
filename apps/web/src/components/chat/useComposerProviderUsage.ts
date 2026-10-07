@@ -9,12 +9,14 @@ import {
   squashAtomCommandFailure,
   type AtomCommandResult,
 } from "@t3tools/client-runtime/state/runtime";
-import type {
-  EnvironmentId,
-  ProviderInstanceId,
-  ProviderUsageRefreshResult,
-  ServerProvider,
-  ThreadId,
+import {
+  AuthDiagnosticsReadScope,
+  AuthOrchestrationOperateScope,
+  type EnvironmentId,
+  type ProviderInstanceId,
+  type ProviderUsageRefreshResult,
+  type ServerProvider,
+  type ThreadId,
 } from "@t3tools/contracts";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
@@ -22,6 +24,7 @@ import { useNowMinute } from "../../hooks/useNowMinute";
 import { useClientSettingsHydrated, useEnvironmentSettings } from "../../hooks/useSettings";
 import { useEnvironmentQuery } from "../../state/query";
 import { serverEnvironment } from "../../state/server";
+import { useEnvironmentScope } from "../../state/session";
 import { useAtomCommand } from "../../state/use-atom-command";
 import { toastManager } from "../ui/toast";
 import type { OpenRouterCreditsDisplay } from "./ContextWindowMeter";
@@ -86,8 +89,12 @@ export function useComposerProviderUsage(input: {
 }) {
   const { environmentId } = input;
   const settingsHydrated = useClientSettingsHydrated();
+  // Usage reads need `diagnostics:read`; without it nothing is requested and the
+  // meter reads as unavailable. The thread-account probe also needs `orchestration:operate`.
+  const canReadUsage = useEnvironmentScope(environmentId, AuthDiagnosticsReadScope);
+  const canOperateThread = useEnvironmentScope(environmentId, AuthOrchestrationOperateScope);
   const providerUsageQuery = useEnvironmentQuery(
-    serverEnvironment.providerUsage({ environmentId, input: {} }),
+    canReadUsage ? serverEnvironment.providerUsage({ environmentId, input: {} }) : null,
   );
   // The settings envelope's `usageSource` marks gateway-backed instances even
   // before their first pool snapshot arrives.
@@ -101,7 +108,8 @@ export function useComposerProviderUsage(input: {
     [providerInstanceSettings],
   );
   const nowMinute = useNowMinute();
-  const snapshots = providerUsageQuery.data?.snapshots;
+  // Dropped as soon as access goes away, so no retained snapshot outlives the grant.
+  const snapshots = canReadUsage ? providerUsageQuery.data?.snapshots : undefined;
   // The pooled account the thread's session is bound to, read from the gateway
   // when the usage popover opens. Kept with the thread and model it was probed
   // for, so an answer landing after a switch cannot mislabel the new context,
@@ -156,6 +164,8 @@ export function useComposerProviderUsage(input: {
     (options?: { readonly force?: boolean }) => {
       const threadId = input.threadId;
       if (
+        !canReadUsage ||
+        !canOperateThread ||
         threadId === undefined ||
         !input.hasProviderSession ||
         !meter.gateway ||
@@ -193,6 +203,8 @@ export function useComposerProviderUsage(input: {
     },
     [
       activeDriver,
+      canOperateThread,
+      canReadUsage,
       environmentId,
       input.activeInstanceId,
       input.activeModel,
@@ -235,6 +247,7 @@ export function useComposerProviderUsage(input: {
   // A gateway meter lists only the active instance's pool.
   const gatewayInstanceId = meter.gateway ? input.activeInstanceId : null;
   const refresh = useCallback(async () => {
+    if (!canReadUsage) return;
     const refreshAt = Date.now();
     const lastRefreshAt =
       lastRefreshRef.current?.environmentId === environmentId ? lastRefreshRef.current.atMs : 0;
@@ -275,6 +288,7 @@ export function useComposerProviderUsage(input: {
       if (refreshTokenRef.current === token) setRefreshingEnvironmentId(null);
     }
   }, [
+    canReadUsage,
     directInstanceIds,
     environmentId,
     gatewayInstanceId,
@@ -285,7 +299,7 @@ export function useComposerProviderUsage(input: {
 
   // The OpenRouter balance is opt-in (Settings → Extras); while it is off no
   // query subscribes, so nothing is fetched.
-  const showOpenRouterCredits = settingsHydrated && input.showOpenRouterCredits;
+  const showOpenRouterCredits = settingsHydrated && canReadUsage && input.showOpenRouterCredits;
   const openRouterCreditsQuery = useEnvironmentQuery(
     showOpenRouterCredits
       ? serverEnvironment.openRouterCredits({ environmentId, input: {} })
@@ -319,7 +333,7 @@ export function useComposerProviderUsage(input: {
   return {
     meter,
     refreshing: refreshingEnvironmentId === environmentId,
-    unavailable: providerUsageQuery.error !== null,
+    unavailable: !canReadUsage || providerUsageQuery.error !== null,
     refresh,
     probeThreadAccount,
     // Fail closed while client settings hydrate: they start at defaults

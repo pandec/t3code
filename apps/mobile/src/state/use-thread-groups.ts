@@ -1,27 +1,24 @@
 import { useEffect, useMemo, useRef } from "react";
-import type { EnvironmentId } from "@t3tools/contracts";
+import { AuthSettingsWriteScope, type EnvironmentId } from "@t3tools/contracts";
 import {
-  canSyncThreadGroups,
   mergeThreadGroups,
   retryThreadGroupSync,
   visibleThreadGroups,
 } from "@t3tools/shared/threadGroups";
+import { threadGroupReplicationTargets } from "../lib/threadGroupSync";
 import { useEnvironments } from "./environments";
 import { serverEnvironment } from "./server";
+import { readEnvironmentScope, useEnvironmentsWithScope } from "./session";
 import { useAtomCommand } from "./use-atom-command";
 
 /** Connected clients bridge the catalog between servers; thread membership stays with its owner. */
 export function useThreadGroups() {
   const { environments } = useEnvironments();
   const persist = useAtomCommand(serverEnvironment.updateSettings, { reportFailure: false });
+  const writable = useEnvironmentsWithScope(environments, AuthSettingsWriteScope);
   const targets = useMemo(
-    () =>
-      environments.filter(
-        (environment) =>
-          environment.connection.phase === "connected" &&
-          canSyncThreadGroups(environment.serverConfig?.environment.capabilities),
-      ),
-    [environments],
+    () => threadGroupReplicationTargets(environments, writable),
+    [environments, writable],
   );
   const catalog = useMemo(
     () =>
@@ -62,6 +59,8 @@ export function useThreadGroups() {
       const pending = { signature, controller: new AbortController() };
       inFlight.current.set(environment.environmentId, pending);
       void retryThreadGroupSync(async () => {
+        // The grant can drop between scheduling and a retry; stop without writing.
+        if (!readEnvironmentScope(environment.environmentId, AuthSettingsWriteScope)) return true;
         const result = await persist({
           environmentId: environment.environmentId,
           input: { patch: { threadGroups: catalog } },

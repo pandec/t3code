@@ -9,12 +9,14 @@
 import { useAtomValue } from "@effect/atom-react";
 import { needsCursorKeychainAccess, refreshUsage } from "@t3tools/client-runtime/state/usage";
 import {
+  AuthDiagnosticsReadScope,
   USAGE_CONTRACT_VERSION,
   type EnvironmentId,
   type UsageBucket,
   type UsageSummary,
   type UsageSummaryInput,
 } from "@t3tools/contracts";
+import { resolveUsageAccess } from "@t3tools/client-runtime/state/usage-access";
 import {
   mergeUsage,
   type EnvironmentUsage,
@@ -33,11 +35,13 @@ import {
 } from "../usage/usageCoverage";
 import { environmentPresentations } from "./presentation";
 import { serverEnvironment } from "./server";
+import { environmentSession, readEnvironmentScope } from "./session";
 
 export interface EnvironmentUsageStatus {
   readonly environmentId: EnvironmentId;
   readonly label: string;
   readonly isPending: boolean;
+  readonly canReadDiagnostics: boolean;
   readonly error: string | null;
   readonly summary: UsageSummary | null;
   /** Rich coverage classification layered over upstream's progressive status fields. */
@@ -70,6 +74,31 @@ const usageByWindowAtom = Atom.family((windowKey: string) =>
 
     const statuses: EnvironmentUsageStatus[] = [];
     for (const [environmentId, presentation] of presentations) {
+      const sessionResult = get(environmentSession.sessionStateAtom(environmentId));
+      const session = Option.getOrNull(AsyncResult.value(sessionResult));
+      const hasSessionError = sessionResult._tag === "Failure";
+      const access = resolveUsageAccess({
+        connectionPhase: presentation.connection.phase,
+        session,
+        hasSessionError,
+      });
+      if (!access.canReadDiagnostics) {
+        statuses.push({
+          environmentId,
+          label: presentation.entry.target.label,
+          ...access,
+          summary: null,
+          // A known denial is terminal; an unchecked session waits like any
+          // other unanswered environment, or reads as not connected.
+          state: classifyEnvironmentUsage({
+            phase: presentation.connection.phase,
+            failed: session !== null || hasSessionError,
+            summary: null,
+          }),
+          needsCursorKeychainAccess: false,
+        });
+        continue;
+      }
       const result = get(serverEnvironment.usageSummary({ environmentId, input }));
       const summary = Option.getOrNull(AsyncResult.value(result));
       const state = classifyEnvironmentUsage({
@@ -81,6 +110,7 @@ const usageByWindowAtom = Atom.family((windowKey: string) =>
         environmentId,
         label: presentation.entry.target.label,
         isPending: result.waiting,
+        canReadDiagnostics: true,
         error: state.kind === "failed" ? "This environment could not report usage." : null,
         summary,
         state,
@@ -207,7 +237,15 @@ export function useUsage(
         registry: appAtomRegistry,
         server: serverEnvironment,
         presentations: environmentPresentations,
-        environmentIds: selectedEnvironments.map(({ environmentId }) => environmentId),
+        // Only environments this connection may read; the others report a
+        // permission error instead of a stale or failed rescan.
+        environmentIds: selectedEnvironments
+          .filter(
+            (environment) =>
+              environment.canReadDiagnostics &&
+              readEnvironmentScope(environment.environmentId, AuthDiagnosticsReadScope),
+          )
+          .map(({ environmentId }) => environmentId),
         input: nextInput ?? (JSON.parse(windowKey) as UsageSummaryInput),
       }),
     [selectedEnvironments, windowKey],

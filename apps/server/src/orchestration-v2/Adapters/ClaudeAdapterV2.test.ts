@@ -33,6 +33,7 @@ import { assert, describe, it } from "@effect/vitest";
 import * as Context from "effect/Context";
 import * as DateTime from "effect/DateTime";
 import * as Deferred from "effect/Deferred";
+import * as Crypto from "effect/Crypto";
 import * as Effect from "effect/Effect";
 import * as Exit from "effect/Exit";
 import * as FileSystem from "effect/FileSystem";
@@ -1030,6 +1031,7 @@ describe("ClaudeAdapterV2 Auto-accept edits", () => {
           attachmentsDir,
           fileSystem,
           path: yield* Path.Path,
+          crypto: yield* Crypto.Crypto,
           idAllocator,
           queryRunner: {
             allocateSessionId: Effect.succeed("native-thread-claude-accept-edits"),
@@ -1346,6 +1348,7 @@ describe("ClaudeAdapterV2 resume compaction", () => {
           attachmentsDir,
           fileSystem,
           path: yield* Path.Path,
+          crypto: yield* Crypto.Crypto,
           idAllocator,
           queryRunner: {
             allocateSessionId: Effect.succeed("native-thread-claude-resume"),
@@ -1565,6 +1568,7 @@ describe("ClaudeAdapterV2 attachments", () => {
           attachmentsDir,
           fileSystem,
           path: yield* Path.Path,
+          crypto: yield* Crypto.Crypto,
           idAllocator,
           queryRunner: {
             allocateSessionId: Effect.succeed("native-thread-claude-attachments"),
@@ -1705,6 +1709,7 @@ describe("ClaudeAdapterV2 attachments", () => {
           attachmentsDir,
           fileSystem,
           path: yield* Path.Path,
+          crypto: yield* Crypto.Crypto,
           idAllocator,
           queryRunner: {
             allocateSessionId: Effect.succeed("native-thread-claude-unsupported-attachment"),
@@ -1795,6 +1800,7 @@ describe("ClaudeAdapterV2 native fork", () => {
           attachmentsDir,
           fileSystem,
           path: yield* Path.Path,
+          crypto: yield* Crypto.Crypto,
           idAllocator,
           queryRunner: {
             allocateSessionId: Effect.succeed("source-native-session"),
@@ -1969,6 +1975,7 @@ describe("ClaudeAdapterV2 native session identity", () => {
           attachmentsDir,
           fileSystem,
           path: yield* Path.Path,
+          crypto: yield* Crypto.Crypto,
           idAllocator,
           queryRunner: {
             allocateSessionId: Effect.succeed("native-session-identity"),
@@ -2261,6 +2268,7 @@ describe("ClaudeAdapterV2 background wake turns", () => {
         attachmentsDir,
         fileSystem,
         path: yield* Path.Path,
+        crypto: yield* Crypto.Crypto,
         idAllocator,
         continuationRequests: {
           offer: (request) =>
@@ -4265,6 +4273,7 @@ describe("ClaudeAdapterV2 background wake turns", () => {
           attachmentsDir,
           fileSystem,
           path: yield* Path.Path,
+          crypto: yield* Crypto.Crypto,
           idAllocator,
           continuationRequests: {
             offer: (request) =>
@@ -4510,6 +4519,7 @@ describe("ClaudeAdapterV2 background wake turns", () => {
             attachmentsDir,
             fileSystem,
             path: yield* Path.Path,
+            crypto: yield* Crypto.Crypto,
             idAllocator,
             continuationRequests: {
               offer: () => Effect.void,
@@ -4762,11 +4772,12 @@ describe("ClaudeAdapterV2 background wake turns", () => {
           const continuationAttempt = RunAttemptId.make("attempt-claude-wake-callback-3");
           const planToolUseId = "toolu_01WakePlanExitPlanMode";
           const planMarkdown = "# Wake plan\n\n1. Report the background result.";
-          const stamp = (frame: SDKMessage, attemptId: RunAttemptId) =>
-            claudeSdkFrame({
+          const stamp = Effect.fnUntraced(function* (frame: SDKMessage, attemptId: RunAttemptId) {
+            return claudeSdkFrame({
               ...frame,
-              user_message_uuid: ClaudeAdapterV2.claudePromptUuid(attemptId),
+              user_message_uuid: yield* ClaudeAdapterV2.claudePromptUuid(attemptId),
             });
+          });
           const runOf = (attemptId: RunAttemptId) => RunId.make(`run-${attemptId}`);
           const planToolUse = claudeSdkFrame({
             type: "assistant",
@@ -4819,10 +4830,10 @@ describe("ClaudeAdapterV2 background wake turns", () => {
               runtimePolicy,
             }),
           );
-          yield* Queue.offer(harness.sdkMessages, stamp(wakeTaskStarted, firstAttempt));
+          yield* Queue.offer(harness.sdkMessages, yield* stamp(wakeTaskStarted, firstAttempt));
           yield* Queue.offer(
             harness.sdkMessages,
-            stamp(
+            yield* stamp(
               makeResultFrame({ uuid: "00000000-0000-4000-8000-000000000740", result: "STARTED" }),
               firstAttempt,
             ),
@@ -4881,7 +4892,7 @@ describe("ClaudeAdapterV2 background wake turns", () => {
           // The prompt's own turn follows and echoes its uuid.
           yield* Queue.offer(
             harness.sdkMessages,
-            stamp(
+            yield* stamp(
               makeAssistantTextFrame({
                 uuid: "00000000-0000-4000-8000-000000000743",
                 text: "USER_REPLY",
@@ -4891,7 +4902,7 @@ describe("ClaudeAdapterV2 background wake turns", () => {
           );
           yield* Queue.offer(
             harness.sdkMessages,
-            stamp(
+            yield* stamp(
               makeResultFrame({
                 uuid: "00000000-0000-4000-8000-000000000744",
                 result: "USER_REPLY",
@@ -5061,11 +5072,12 @@ describe("ClaudeAdapterV2 background wake turns", () => {
         const firstAttempt = RunAttemptId.make("attempt-claude-wake-approval-1");
         const userAttempt = RunAttemptId.make("attempt-claude-wake-approval-2");
         const bashToolUseId = "toolu_01WakeApprovalBash";
-        const stamp = (frame: SDKMessage, attemptId: RunAttemptId) =>
-          claudeSdkFrame({
+        const stamp = Effect.fnUntraced(function* (frame: SDKMessage, attemptId: RunAttemptId) {
+          return claudeSdkFrame({
             ...frame,
-            user_message_uuid: ClaudeAdapterV2.claudePromptUuid(attemptId),
+            user_message_uuid: yield* ClaudeAdapterV2.claudePromptUuid(attemptId),
           });
+        });
 
         yield* harness.runtime.startTurn(
           makeClaudeTestTurnInput({
@@ -5080,14 +5092,14 @@ describe("ClaudeAdapterV2 background wake turns", () => {
         );
         yield* Queue.offer(
           harness.sdkMessages,
-          stamp(
+          yield* stamp(
             makeAssistantTextFrame({ uuid: "00000000-0000-4000-8000-000000000780", text: "One." }),
             firstAttempt,
           ),
         );
         yield* Queue.offer(
           harness.sdkMessages,
-          stamp(
+          yield* stamp(
             makeResultFrame({ uuid: "00000000-0000-4000-8000-000000000781", result: "One." }),
             firstAttempt,
           ),
@@ -5184,11 +5196,12 @@ describe("ClaudeAdapterV2 background wake turns", () => {
         const now = yield* DateTime.now;
         const firstAttempt = RunAttemptId.make("attempt-claude-echo-debris-1");
         const secondAttempt = RunAttemptId.make("attempt-claude-echo-debris-2");
-        const stamp = (frame: SDKMessage, attemptId: RunAttemptId) =>
-          claudeSdkFrame({
+        const stamp = Effect.fnUntraced(function* (frame: SDKMessage, attemptId: RunAttemptId) {
+          return claudeSdkFrame({
             ...frame,
-            user_message_uuid: ClaudeAdapterV2.claudePromptUuid(attemptId),
+            user_message_uuid: yield* ClaudeAdapterV2.claudePromptUuid(attemptId),
           });
+        });
 
         yield* harness.runtime.startTurn(
           makeClaudeTestTurnInput({
@@ -5203,14 +5216,14 @@ describe("ClaudeAdapterV2 background wake turns", () => {
         // The first turn echoes on its first frame: this process echoes early.
         yield* Queue.offer(
           harness.sdkMessages,
-          stamp(
+          yield* stamp(
             makeAssistantTextFrame({ uuid: "00000000-0000-4000-8000-000000000760", text: "One." }),
             firstAttempt,
           ),
         );
         yield* Queue.offer(
           harness.sdkMessages,
-          stamp(
+          yield* stamp(
             makeResultFrame({ uuid: "00000000-0000-4000-8000-000000000761", result: "One." }),
             firstAttempt,
           ),
@@ -5237,14 +5250,14 @@ describe("ClaudeAdapterV2 background wake turns", () => {
         yield* Queue.offer(harness.sdkMessages, staleTaskNotificationResult);
         yield* Queue.offer(
           harness.sdkMessages,
-          stamp(
+          yield* stamp(
             makeAssistantTextFrame({ uuid: "00000000-0000-4000-8000-000000000762", text: "Two." }),
             secondAttempt,
           ),
         );
         yield* Queue.offer(
           harness.sdkMessages,
-          stamp(
+          yield* stamp(
             makeResultFrame({ uuid: "00000000-0000-4000-8000-000000000763", result: "Two." }),
             secondAttempt,
           ),
@@ -5282,11 +5295,12 @@ describe("ClaudeAdapterV2 background wake turns", () => {
         const now = yield* DateTime.now;
         const firstAttempt = RunAttemptId.make("attempt-claude-echo-1");
         const secondAttempt = RunAttemptId.make("attempt-claude-echo-2");
-        const stamp = (frame: SDKMessage, attemptId: RunAttemptId) =>
-          claudeSdkFrame({
+        const stamp = Effect.fnUntraced(function* (frame: SDKMessage, attemptId: RunAttemptId) {
+          return claudeSdkFrame({
             ...frame,
-            user_message_uuid: ClaudeAdapterV2.claudePromptUuid(attemptId),
+            user_message_uuid: yield* ClaudeAdapterV2.claudePromptUuid(attemptId),
           });
+        });
         const assistantTexts = () =>
           harness.events.flatMap((event) =>
             event.type === "message.updated" && event.message.role === "assistant"
@@ -5308,18 +5322,18 @@ describe("ClaudeAdapterV2 background wake turns", () => {
         );
         assert.equal(
           harness.offeredMessages[0]?.uuid,
-          ClaudeAdapterV2.claudePromptUuid(firstAttempt),
+          yield* ClaudeAdapterV2.claudePromptUuid(firstAttempt),
         );
         yield* Queue.offer(
           harness.sdkMessages,
-          stamp(
+          yield* stamp(
             makeAssistantTextFrame({ uuid: "00000000-0000-4000-8000-000000000701", text: "One." }),
             firstAttempt,
           ),
         );
         yield* Queue.offer(
           harness.sdkMessages,
-          stamp(
+          yield* stamp(
             makeResultFrame({ uuid: "00000000-0000-4000-8000-000000000702", result: "One." }),
             firstAttempt,
           ),
@@ -6741,11 +6755,12 @@ describe("ClaudeAdapterV2 background wake turns", () => {
         const userAttempt = RunAttemptId.make("attempt-claude-wake-subagent-2");
         const continuationAttempt = RunAttemptId.make("attempt-claude-wake-subagent-3");
         const runOf = (attemptId: RunAttemptId) => RunId.make(`run-${attemptId}`);
-        const stamp = (frame: SDKMessage, attemptId: RunAttemptId) =>
-          claudeSdkFrame({
+        const stamp = Effect.fnUntraced(function* (frame: SDKMessage, attemptId: RunAttemptId) {
+          return claudeSdkFrame({
             ...frame,
-            user_message_uuid: ClaudeAdapterV2.claudePromptUuid(attemptId),
+            user_message_uuid: yield* ClaudeAdapterV2.claudePromptUuid(attemptId),
           });
+        });
 
         yield* harness.runtime.startTurn(
           makeClaudeTestTurnInput({
@@ -6757,10 +6772,10 @@ describe("ClaudeAdapterV2 background wake turns", () => {
             attachments: [],
           }),
         );
-        yield* Queue.offer(harness.sdkMessages, stamp(wakeTaskStarted, firstAttempt));
+        yield* Queue.offer(harness.sdkMessages, yield* stamp(wakeTaskStarted, firstAttempt));
         yield* Queue.offer(
           harness.sdkMessages,
-          stamp(
+          yield* stamp(
             makeResultFrame({ uuid: "00000000-0000-4000-8000-000000000770", result: "STARTED" }),
             firstAttempt,
           ),
@@ -6829,14 +6844,14 @@ describe("ClaudeAdapterV2 background wake turns", () => {
             session_id: WAKE_NATIVE_SESSION,
           }),
           wakeResult,
-          stamp(
+          yield* stamp(
             makeAssistantTextFrame({
               uuid: "00000000-0000-4000-8000-000000000776",
               text: "USER_REPLY",
             }),
             userAttempt,
           ),
-          stamp(
+          yield* stamp(
             makeResultFrame({ uuid: "00000000-0000-4000-8000-000000000777", result: "USER_REPLY" }),
             userAttempt,
           ),
@@ -7764,6 +7779,7 @@ describe("ClaudeAdapterV2 background wake turns", () => {
           attachmentsDir,
           fileSystem,
           path: yield* Path.Path,
+          crypto: yield* Crypto.Crypto,
           idAllocator,
           continuationRequests: {
             offer: (request) =>
@@ -7947,6 +7963,7 @@ describe("ClaudeAdapterV2 background wake turns", () => {
             attachmentsDir,
             fileSystem,
             path: yield* Path.Path,
+            crypto: yield* Crypto.Crypto,
             idAllocator,
             continuationRequests: {
               offer: (request) =>
@@ -8182,6 +8199,7 @@ describe("ClaudeAdapterV2 background wake turns", () => {
             attachmentsDir,
             fileSystem,
             path: yield* Path.Path,
+            crypto: yield* Crypto.Crypto,
             idAllocator,
             continuationRequests: {
               offer: (request) =>
@@ -8374,6 +8392,7 @@ describe("ClaudeAdapterV2 background wake turns", () => {
           attachmentsDir,
           fileSystem,
           path: yield* Path.Path,
+          crypto: yield* Crypto.Crypto,
           idAllocator,
           continuationRequests: { offer: () => Effect.void },
           queryRunner: {
@@ -8540,6 +8559,7 @@ describe("ClaudeAdapterV2 background wake turns", () => {
             attachmentsDir,
             fileSystem,
             path: yield* Path.Path,
+            crypto: yield* Crypto.Crypto,
             idAllocator,
             continuationRequests: {
               offer: () => Effect.void,
@@ -8669,6 +8689,7 @@ describe("ClaudeAdapterV2 background wake turns", () => {
             attachmentsDir,
             fileSystem,
             path: yield* Path.Path,
+            crypto: yield* Crypto.Crypto,
             idAllocator,
             continuationRequests: {
               offer: (request) =>
@@ -8863,6 +8884,7 @@ describe("ClaudeAdapterV2 background wake turns", () => {
           attachmentsDir,
           fileSystem,
           path: yield* Path.Path,
+          crypto: yield* Crypto.Crypto,
           idAllocator,
           continuationRequests: {
             offer: () => Effect.void,

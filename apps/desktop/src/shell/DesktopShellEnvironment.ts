@@ -91,6 +91,8 @@ const LOGIN_SHELL_PASSTHROUGH_ENV_NAMES = [
   "ELEVENLABS_TTS_VOICE_ID",
   "OPENROUTER_TTS_MODEL",
   "OPENROUTER_TTS_VOICE_ID",
+  // The telemetry opt-out is documented as a shell variable; GUI launches never see it.
+  "T3CODE_TELEMETRY_ENABLED",
 ] as const;
 const WINDOWS_PROFILE_ENV_NAMES = ["PATH", "FNM_DIR", "FNM_MULTISHELL_PATH"] as const;
 /**

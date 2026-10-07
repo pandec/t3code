@@ -19,6 +19,7 @@ import * as ProjectActions from "../../../project/ProjectActions.ts";
 import * as ProjectService from "../../../project/ProjectService.ts";
 import * as ServerSettings from "../../../serverSettings.ts";
 import * as McpInvocationContext from "../../McpInvocationContext.ts";
+import * as McpHttpServer from "../../McpHttpServer.ts";
 import * as ProjectActionsHandlers from "./handlers.ts";
 import { ProjectActionsToolkit } from "./tools.ts";
 
@@ -43,8 +44,7 @@ const declaredFailure = (result: McpSchema.CallToolResult) => {
 };
 
 const makeLayer = (runtimeMode: RuntimeMode) =>
-  McpServer.toolkit(ProjectActionsToolkit).pipe(
-    Layer.provide(ProjectActionsHandlers.layer),
+  McpHttpServer.toolkitRegistration(ProjectActionsToolkit, ProjectActionsHandlers.layer).pipe(
     Layer.provide(ProjectActions.layer),
     Layer.provideMerge(McpServer.McpServer.layer),
     Layer.provide(

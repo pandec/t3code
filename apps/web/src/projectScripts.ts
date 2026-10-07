@@ -6,10 +6,12 @@ export {
   nextProjectScriptId,
   normalizeProjectSetupScript,
   primaryProjectScript,
+  releaseClaimedRoles,
   type ProjectScriptInput,
 } from "@t3tools/shared/projectScripts";
 
 const isScriptRunCommand = Schema.is(SCRIPT_RUN_COMMAND_PATTERN);
+
 /** Legacy script IDs may not support shortcuts; keep those scripts usable without one. */
 export function commandForProjectScript(scriptId: string): KeybindingCommand | null {
   const command = `script.${scriptId}.run`;

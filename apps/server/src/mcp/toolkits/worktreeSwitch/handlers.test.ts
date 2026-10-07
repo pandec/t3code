@@ -16,6 +16,7 @@ import * as ThreadManagementService from "../../../orchestration-v2/ThreadManage
 import * as ThreadWorktreeSwitchScheduler from "../../../orchestration-v2/ThreadWorktreeSwitchScheduler.ts";
 import { WorktreeSwitchError } from "../../../orchestration-v2/worktreeSwitch.ts";
 import * as McpInvocationContext from "../../McpInvocationContext.ts";
+import * as McpHttpServer from "../../McpHttpServer.ts";
 import { WorktreeSwitchToolkitHandlersLive } from "./handlers.ts";
 import { WorktreeSwitchToolkit } from "./tools.ts";
 
@@ -55,10 +56,10 @@ const makeLayer = (
   options: {
     readonly shell?: "missing" | "deleted" | undefined;
     readonly serviceCalls?: Array<string>;
+    readonly activeRunId?: RunId | null;
   } = {},
 ) =>
-  McpServer.toolkit(WorktreeSwitchToolkit).pipe(
-    Layer.provide(WorktreeSwitchToolkitHandlersLive),
+  McpHttpServer.toolkitRegistration(WorktreeSwitchToolkit, WorktreeSwitchToolkitHandlersLive).pipe(
     Layer.provideMerge(McpServer.McpServer.layer),
     Layer.provideMerge(
       Layer.mock(ThreadManagementService.ThreadManagementService)({
@@ -70,6 +71,8 @@ const makeLayer = (
                   id: threadId,
                   providerInstanceId: ProviderInstanceId.make(owner),
                   archivedAt: null,
+                  activeRunId:
+                    options.activeRunId === undefined ? RunId.make("run-1") : options.activeRunId,
                   deletedAt:
                     options.shell === "deleted"
                       ? DateTime.makeUnsafe("2026-10-04T10:00:00.000Z")
@@ -103,25 +106,35 @@ const makeLayer = (
     ),
   );
 
-const call = (name: string, args: Record<string, unknown> = {}) =>
+const threadCaller: McpInvocationContext.McpInvocationScope = {
+  environmentId: EnvironmentId.make("environment-worktree-switch-tools"),
+  requestNamespace: "provider-session-worktree-switch-tools",
+  thread: {
+    threadId,
+    providerSessionId: "provider-session-worktree-switch-tools",
+    providerInstanceId: ProviderInstanceId.make("codex"),
+  },
+  client: undefined,
+  capabilities: new Set(["orchestration", "worktree"] as const),
+  issuedAt: 1,
+};
+
+const callAs = (
+  scope: McpInvocationContext.McpInvocationScope,
+  name: string,
+  args: Record<string, unknown> = {},
+) =>
   Effect.gen(function* () {
     const server = yield* McpServer.McpServer;
-    return yield* server.callTool({ name, arguments: args }).pipe(
-      Effect.provideService(McpInvocationContext.McpInvocationContext, {
-        environmentId: EnvironmentId.make("environment-worktree-switch-tools"),
-        requestNamespace: "provider-session-worktree-switch-tools",
-        thread: {
-          threadId,
-          providerSessionId: "provider-session-worktree-switch-tools",
-          providerInstanceId: ProviderInstanceId.make("codex"),
-        },
-        client: undefined,
-        capabilities: new Set(["orchestration", "worktree"] as const),
-        issuedAt: 1,
-      }),
-      Effect.provideService(McpSchema.McpServerClient, client),
-    );
+    return yield* server
+      .callTool({ name, arguments: args })
+      .pipe(
+        Effect.provideService(McpInvocationContext.McpInvocationContext, scope),
+        Effect.provideService(McpSchema.McpServerClient, client),
+      );
   });
+
+const call = (name: string, args: Record<string, unknown> = {}) => callAs(threadCaller, name, args);
 
 it.effect("requests a switch for the credential's thread and reports failures", () => {
   const requested: Array<{ threadId: ThreadId; targetPath: string }> = [];
@@ -176,3 +189,27 @@ it.effect.each([
     }).pipe(Effect.scoped, Effect.provide(makeLayer(owner, [], { shell, serviceCalls })));
   },
 );
+
+it.effect("acts for an owning thread between runs but never for a client outside T3", () => {
+  const requested: Array<{ threadId: ThreadId; targetPath: string }> = [];
+  return Effect.gen(function* () {
+    // Ownership, not a live run: a switch requested as the turn ends still lands.
+    const idle = yield* call("switch_worktree", { path: "/repo-worktree" });
+    expect(idle.isError).toBe(false);
+    expect(requested).toEqual([{ threadId, targetPath: "/repo-worktree" }]);
+    const outside: McpInvocationContext.McpInvocationScope = {
+      ...threadCaller,
+      requestNamespace: "client:session",
+      thread: undefined,
+      client: { sessionId: "session", label: "Claude Code", access: "full-access" },
+    };
+    for (const [name, args] of switchTools) {
+      const refused = yield* callAs(outside, name, args);
+      expect(declaredFailure(refused)).toMatchObject({
+        _tag: "OrchestratorMcpFailure",
+        code: "thread_credential_required",
+      });
+    }
+    expect(requested).toHaveLength(1);
+  }).pipe(Effect.scoped, Effect.provide(makeLayer("codex", requested, { activeRunId: null })));
+});

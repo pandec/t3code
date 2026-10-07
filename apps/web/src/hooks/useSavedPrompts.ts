@@ -4,14 +4,14 @@
  * The library is a server setting (`ServerSettings.savedPromptLibrary`), one
  * copy per environment, synced with whole-library last-write-wins: reads pick
  * the newest stamp among connected environments, edits stamp and fan out to
- * every capable environment, and `useSavedPromptLibrarySync` repairs stale
+ * every capable environment this client may write (`settings:write`), and `useSavedPromptLibrarySync` repairs stale
  * environments when they reconnect. See
  * `@t3tools/client-runtime/state/saved-prompts` for the rules.
  */
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useAtomValue } from "@effect/atom-react";
 import type { EnvironmentPresentation } from "@t3tools/client-runtime/connection";
-import type { EnvironmentId } from "@t3tools/contracts";
+import { AuthSettingsWriteScope, type EnvironmentId } from "@t3tools/contracts";
 import type { SavedPrompt, SavedPromptLibrary } from "@t3tools/contracts/settings";
 import {
   buildSavedPromptSyncPatches,
@@ -22,6 +22,7 @@ import { Atom } from "effect/reactivity";
 
 import { environmentPresentations } from "~/state/presentation";
 import { serverEnvironment } from "~/state/server";
+import { useEnvironmentsWithScope } from "~/state/session";
 import { useAtomCommand } from "~/state/use-atom-command";
 import { useUpdateSettingsForEnvironment } from "./useSettings";
 
@@ -29,7 +30,7 @@ export interface SavedPrompts {
   readonly prompts: ReadonlyArray<SavedPrompt>;
   /** At least one environment is connected (capable or not). */
   readonly hasConnectedEnvironment: boolean;
-  /** At least one connected environment persists saved prompts. */
+  /** At least one connected environment persists saved prompts and grants `settings:write`. */
   readonly canEdit: boolean;
   /**
    * Stamps and replaces the library on every connected capable environment.
@@ -48,23 +49,39 @@ interface SavedPromptEnvironmentState {
 
 function collectSavedPromptEnvironmentState(
   presentations: ReadonlyMap<EnvironmentId, EnvironmentPresentation>,
-): SavedPromptEnvironmentState {
+) {
   const librariesByEnvironment = new Map<EnvironmentId, SavedPromptLibrary>();
-  const writableEnvironmentIds = new Set<EnvironmentId>();
+  const capableEnvironmentIds = new Set<EnvironmentId>();
   for (const [environmentId, presentation] of presentations) {
     const config = presentation.serverConfig;
     if (presentation.connection.phase !== "connected" || config === null) continue;
     librariesByEnvironment.set(environmentId, config.settings.savedPromptLibrary);
     if (config.environment.capabilities.savedPrompts === true) {
-      writableEnvironmentIds.add(environmentId);
+      capableEnvironmentIds.add(environmentId);
     }
   }
-  return { librariesByEnvironment, writableEnvironmentIds };
+  return { librariesByEnvironment, capableEnvironmentIds };
 }
 
+/**
+ * Every connected library is a merge source; only capable environments whose
+ * grant includes `settings:write` are edit and repair targets.
+ */
 function useSavedPromptEnvironmentState(): SavedPromptEnvironmentState {
   const presentations = useAtomValue(environmentPresentations.presentationsAtom);
-  return useMemo(() => collectSavedPromptEnvironmentState(presentations), [presentations]);
+  const state = useMemo(() => collectSavedPromptEnvironmentState(presentations), [presentations]);
+  const capableEnvironments = useMemo(
+    () => [...state.capableEnvironmentIds].map((environmentId) => ({ environmentId })),
+    [state],
+  );
+  const writableEnvironmentIds = useEnvironmentsWithScope(
+    capableEnvironments,
+    AuthSettingsWriteScope,
+  );
+  return useMemo(
+    () => ({ librariesByEnvironment: state.librariesByEnvironment, writableEnvironmentIds }),
+    [state, writableEnvironmentIds],
+  );
 }
 
 /**

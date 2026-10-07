@@ -33,6 +33,7 @@ import {
   type AtomCommandResult,
 } from "@t3tools/client-runtime/state/runtime";
 import { videoMimeType } from "@t3tools/shared/video";
+import type { ComposerDispatchMode } from "@t3tools/client-runtime/state/composer-dispatch";
 import {
   appendCodexArtifactTemplateUsePrompt,
   codexArtifactTemplateUsePrompt,
@@ -182,13 +183,58 @@ export function shouldOpenProactiveTurnDiff(input: {
   );
 }
 
+/**
+ * How one send dispatches. A stale Claude session (`resumeCompactionTokens`
+ * set) compacts before the message so the turn does not re-read the old
+ * history, unless the user keeps full history, the message is itself /compact,
+ * or an older unaccepted send still waits in the outbox (compacting would jump
+ * ahead of it). The message then queues behind the /compact run, since
+ * steering into it is rejected. A steer with a recall window also waits in the
+ * queue until it is sent.
+ */
+export function resolveSendDispatch(input: {
+  resumeCompactionTokens: number | null;
+  keepFullHistory: boolean;
+  messageText: string;
+  hasPendingOutboxSubmission: boolean;
+  running: boolean;
+  dispatchMode: ComposerDispatchMode;
+  steerGraceWindowMs: number;
+}): {
+  compactBeforeSend: boolean;
+  turnDispatchMode: ComposerDispatchMode;
+  queueBehindActiveRun: boolean;
+} {
+  const compactBeforeSend =
+    input.resumeCompactionTokens !== null &&
+    !input.keepFullHistory &&
+    !input.hasPendingOutboxSubmission &&
+    input.messageText.toLowerCase() !== "/compact";
+  const queueBehindActiveRun =
+    compactBeforeSend ||
+    (input.running &&
+      (input.dispatchMode === "queue" ||
+        (input.steerGraceWindowMs > 0 &&
+          (input.dispatchMode === "auto" || input.dispatchMode === "steer"))));
+  return {
+    compactBeforeSend,
+    turnDispatchMode: compactBeforeSend ? "queue" : input.dispatchMode,
+    queueBehindActiveRun,
+  };
+}
+
 export function resolveProactiveTurnDiffAction(input: {
   checkpoint: Pick<TurnDiffSummary, "status" | "files"> | undefined;
   isGitRepo: boolean | undefined;
   activeSurfaceKind: RightPanelSurface["kind"] | null;
 }): "defer" | "ignore" | "open" {
-  // Never yank the panel away from a pull request the user is reading.
-  if (input.activeSurfaceKind === "pull-request" || input.activeSurfaceKind === "pull-requests") {
+  // Never yank the panel away from a pull request the user is reading. An open
+  // diff already shows the work; reopening it would reset the chosen scope.
+  if (
+    input.activeSurfaceKind === "pull-request" ||
+    input.activeSurfaceKind === "pull-requests" ||
+    input.activeSurfaceKind === "diff"
+  ) {
     return "ignore";
   }
   if (input.checkpoint === undefined || input.checkpoint.status === "missing") return "defer";

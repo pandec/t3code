@@ -16,6 +16,7 @@ import { McpSchema, McpServer } from "effect/ai";
 import * as ThreadArchiveScheduler from "../../../orchestration-v2/ThreadArchiveScheduler.ts";
 import * as ThreadManagementService from "../../../orchestration-v2/ThreadManagementService.ts";
 import * as McpInvocationContext from "../../McpInvocationContext.ts";
+import * as McpHttpServer from "../../McpHttpServer.ts";
 import { ArchiveToolkitHandlersLive } from "./handlers.ts";
 import { ArchiveToolkit } from "./tools.ts";
 
@@ -56,8 +57,7 @@ const makeLayer = (
     readonly serviceCalls?: Array<string>;
   } = {},
 ) =>
-  McpServer.toolkit(ArchiveToolkit).pipe(
-    Layer.provide(ArchiveToolkitHandlersLive),
+  McpHttpServer.toolkitRegistration(ArchiveToolkit, ArchiveToolkitHandlersLive).pipe(
     Layer.provideMerge(McpServer.McpServer.layer),
     Layer.provideMerge(
       Layer.mock(ThreadManagementService.ThreadManagementService)({
@@ -192,8 +192,7 @@ const makeTargetLayer = (calls: Array<string>, options: { readonly callerLive?: 
     calls.push(`${operation}:${id}`);
     return Effect.succeed({ archivedAt: null, request });
   };
-  return McpServer.toolkit(ArchiveToolkit).pipe(
-    Layer.provide(ArchiveToolkitHandlersLive),
+  return McpHttpServer.toolkitRegistration(ArchiveToolkit, ArchiveToolkitHandlersLive).pipe(
     Layer.provideMerge(McpServer.McpServer.layer),
     Layer.provideMerge(
       Layer.mock(ThreadManagementService.ThreadManagementService)({

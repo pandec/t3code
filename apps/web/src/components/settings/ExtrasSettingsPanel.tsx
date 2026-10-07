@@ -1,4 +1,4 @@
-import { useCallback, useRef, type CSSProperties } from "react";
+import { useCallback, useMemo, useRef, type CSSProperties } from "react";
 import {
   clampArchivedSectionVisibleCount,
   clampAccentTintIntensityPercent,
@@ -16,7 +16,7 @@ import {
   MIN_STEER_GRACE_WINDOW_MS,
   type SidebarThreadProviderIconVisibility,
 } from "@t3tools/contracts/settings";
-import type { EnvironmentId } from "@t3tools/contracts";
+import { AuthSettingsWriteScope, type EnvironmentId } from "@t3tools/contracts";
 import { normalizeLinearTeamKeys } from "@t3tools/contracts/settings";
 import { formatUsd } from "@t3tools/shared/usageFormat";
 
@@ -26,6 +26,7 @@ import { environmentReadsLinearIssues } from "../../lib/openLinearLink";
 import { formatEnvironmentQueryError, useEnvironmentQuery } from "../../state/query";
 import { linearEnvironment } from "../../state/linear";
 import { serverEnvironment } from "../../state/server";
+import { useEnvironmentsWithScope } from "../../state/session";
 import { useAtomCommand } from "../../state/use-atom-command";
 import {
   usePrimarySettings,
@@ -169,10 +170,22 @@ function OpenRouterCreditsEnvironmentStatus({
   );
 }
 
+/** Key configuration targets: environments whose grant includes `settings:write`. */
+function useSettingsWritableEnvironments<T extends { readonly environmentId: EnvironmentId }>(
+  environments: ReadonlyArray<T>,
+): ReadonlyArray<T> {
+  const writableIds = useEnvironmentsWithScope(environments, AuthSettingsWriteScope);
+  return useMemo(
+    () => environments.filter((environment) => writableIds.has(environment.environmentId)),
+    [environments, writableIds],
+  );
+}
+
 function ProviderUsageExtrasSection() {
   const settings = usePrimarySettings();
   const updateSettings = useUpdatePrimarySettings();
   const { environments } = useEnvironments();
+  const writableEnvironments = useSettingsWritableEnvironments(environments);
   const configureOpenRouterCredits = useAtomCommand(serverEnvironment.configureOpenRouterCredits);
   const thresholds = {
     providerUsageWarningPercent: settings.providerUsageWarningPercent,
@@ -181,19 +194,20 @@ function ProviderUsageExtrasSection() {
 
   // The balance is account-wide and the meter reads it from whichever
   // environment the active thread runs on, so a save applies the key to
-  // every known environment rather than making the user pick one.
+  // every environment this client may configure rather than making the user pick one.
   const runOpenRouterApiKeyApply = useCallback(
     async (apiKey: string) => {
-      if (environments.length === 0) {
+      if (writableEnvironments.length === 0) {
         toastManager.add({
           type: "warning",
-          title: "No environments connected",
-          description: "Connect an environment before saving the OpenRouter management key.",
+          title: "No writable environments connected",
+          description:
+            "Connect an environment that allows settings changes before saving the OpenRouter management key.",
         });
         return;
       }
       const results = await Promise.all(
-        environments.map(async (environment) => ({
+        writableEnvironments.map(async (environment) => ({
           label: environment.label,
           result: await configureOpenRouterCredits({
             environmentId: environment.environmentId,
@@ -222,7 +236,7 @@ function ProviderUsageExtrasSection() {
         description: `Failed for: ${failed.join(", ")}.`,
       });
     },
-    [configureOpenRouterCredits, environments],
+    [configureOpenRouterCredits, writableEnvironments],
   );
 
   // Applies run strictly in click order. The configure command's
@@ -500,27 +514,35 @@ function LinearExtrasSection() {
   const updateSettings = useUpdatePrimarySettings();
   const serverConfigs = useServerConfigs();
   // Only servers that expose the RPCs: an older one would reject the probe and read as a failure.
-  const environments = useEnvironments().environments.filter((environment) =>
-    environmentReadsLinearIssues(serverConfigs, environment.environmentId),
+  const allEnvironments = useEnvironments().environments;
+  const environments = useMemo(
+    () =>
+      allEnvironments.filter((environment) =>
+        environmentReadsLinearIssues(serverConfigs, environment.environmentId),
+      ),
+    [allEnvironments, serverConfigs],
   );
+  // Status rows cover every Linear-capable environment; the key is only written where allowed.
+  const writableEnvironments = useSettingsWritableEnvironments(environments);
   const configureLinear = useAtomCommand(linearEnvironment.configure, { reportFailure: false });
 
-  // Like the OpenRouter key, one personal key applies to every connected environment; the
+  // Like the OpenRouter key, one personal key applies to every writable environment; the
   // server probes it before storing, so a rejected key never replaces a working one. The
   // command runs serially per environment, so a save and a clear in quick succession land in
   // the order they were asked for.
   const applyLinearApiKey = useCallback(
     async (apiKey: string) => {
-      if (environments.length === 0) {
+      if (writableEnvironments.length === 0) {
         toastManager.add({
           type: "warning",
-          title: "No environments connected",
-          description: "Connect an environment before saving the Linear API key.",
+          title: "No writable environments connected",
+          description:
+            "Connect an environment that allows settings changes before saving the Linear API key.",
         });
         return;
       }
       const results = await Promise.all(
-        environments.map(async (environment) => ({
+        writableEnvironments.map(async (environment) => ({
           label: environment.label,
           result: await configureLinear({
             environmentId: environment.environmentId,
@@ -550,7 +572,7 @@ function LinearExtrasSection() {
         }`,
       });
     },
-    [configureLinear, environments],
+    [configureLinear, writableEnvironments],
   );
   const setTeamKeys = useCallback(
     (teamKeys: ReadonlyArray<string>) => updateSettings({ linearTeamKeys: teamKeys }),

@@ -14,7 +14,11 @@ import {
 import { useAtomValue } from "@effect/atom-react";
 import { useCallback, useEffect, useRef, useState } from "react";
 
-import { type ProviderApprovalDecision, type RuntimeRequestId } from "@t3tools/contracts";
+import {
+  AuthOrchestrationOperateScope,
+  type ProviderApprovalDecision,
+  type RuntimeRequestId,
+} from "@t3tools/contracts";
 import {
   type PendingThreadRequests,
   type ThreadUserInputQuestion,
@@ -33,6 +37,7 @@ import {
 import { useSelectedThreadPendingRequests } from "./use-thread-detail";
 import { useThreadSelection } from "./use-thread-selection";
 import { useAtomCommand } from "./use-atom-command";
+import { readEnvironmentScope } from "./session";
 
 const EMPTY_PENDING_REQUESTS: PendingThreadRequests = { approvals: [], userInputs: [] };
 
@@ -169,7 +174,10 @@ export function useSelectedThreadRequests() {
 
   const onRespondToApproval = useCallback(
     async (requestId: RuntimeRequestId, decision: ProviderApprovalDecision) => {
-      if (!selectedThreadShell) {
+      if (
+        !selectedThreadShell ||
+        !readEnvironmentScope(selectedThreadShell.environmentId, AuthOrchestrationOperateScope)
+      ) {
         return;
       }
       if (
@@ -198,7 +206,8 @@ export function useSelectedThreadRequests() {
     if (
       !selectedThreadShell ||
       !activePendingUserInput ||
-      activePendingUserInput.responseCapability === "not_resumable"
+      activePendingUserInput.responseCapability === "not_resumable" ||
+      !readEnvironmentScope(selectedThreadShell.environmentId, AuthOrchestrationOperateScope)
     ) {
       return;
     }
@@ -284,7 +293,11 @@ export function useSelectedThreadRequests() {
 
   // Closes an async question without messaging the agent.
   const onDismissUserInput = useCallback(async () => {
-    if (!selectedThreadShell || !activePendingUserInput) {
+    if (
+      !selectedThreadShell ||
+      !activePendingUserInput ||
+      !readEnvironmentScope(selectedThreadShell.environmentId, AuthOrchestrationOperateScope)
+    ) {
       return;
     }
 

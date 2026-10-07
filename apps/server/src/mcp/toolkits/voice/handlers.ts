@@ -3,10 +3,11 @@ import * as Effect from "effect/Effect";
 
 import { AgentVoiceReply } from "../../../voice/AgentVoiceReply.ts";
 import * as McpInvocationContext from "../../McpInvocationContext.ts";
+import * as McpToolAccess from "../../McpToolAccess.ts";
 import { VoiceToolkit } from "./tools.ts";
 
-export const VoiceToolkitHandlersLive = VoiceToolkit.toLayer({
-  voice_reply: (input) =>
+export const VoiceToolkitHandlersLive = McpToolAccess.toLayer(VoiceToolkit, {
+  voice_reply: McpToolAccess.actsAsCaller((input) =>
     Effect.gen(function* () {
       const scope = yield* McpInvocationContext.requireMcpCapability("voice");
       // Voice replies attach to the calling thread's run, so only thread callers get them.
@@ -22,4 +23,5 @@ export const VoiceToolkitHandlersLive = VoiceToolkit.toLayer({
         script: input.script,
       });
     }),
+  ),
 });

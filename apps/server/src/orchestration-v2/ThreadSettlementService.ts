@@ -3,9 +3,11 @@ import { resolveProjectSettings } from "@t3tools/shared/projectSettings";
 import { visibleThreadPullRequests } from "@t3tools/shared/threadPullRequests";
 import {
   CommandId,
+  OrchestrationV2ProviderSessionJson,
   type ThreadId,
   type OrchestrationV2DomainEvent,
   type OrchestrationV2ThreadShell,
+  type TerminalSummary,
 } from "@t3tools/contracts";
 import { makeDrainableWorker } from "@t3tools/shared/DrainableWorker";
 import * as Cause from "effect/Cause";
@@ -15,15 +17,21 @@ import * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
 import * as FileSystem from "effect/FileSystem";
 import * as Layer from "effect/Layer";
+import * as Path from "effect/Path";
 import * as Schedule from "effect/Schedule";
+import * as Schema from "effect/Schema";
 import type * as Scope from "effect/Scope";
 import * as Stream from "effect/Stream";
+import * as SqlClient from "effect/sql/SqlClient";
 
 import * as GitManager from "../git/GitManager.ts";
+import * as ProjectSetupScriptRunner from "../project/ProjectSetupScriptRunner.ts";
 import * as PullRequestService from "../pullRequest/PullRequestService.ts";
 import * as ServerSettings from "../serverSettings.ts";
 import { forkParked } from "../serverActivation.ts";
+import { storageCleanupWorktreeInUse } from "../storageCleanup.ts";
 import * as TerminalManager from "../terminal/Manager.ts";
+import { canonicalWorkspacePath } from "../workspace/workspaceLease.ts";
 import * as ProjectStore from "./ProjectStore.ts";
 import { isIndefinitelySnoozed } from "./IndefiniteSnooze.ts";
 import * as Orchestrator from "./Orchestrator.ts";
@@ -36,6 +44,10 @@ export interface SettlementPullRequest {
 }
 
 const DAY_MS = 24 * 60 * 60 * 1_000;
+
+const decodeProviderSession = Schema.decodeUnknownEffect(
+  Schema.fromJsonString(OrchestrationV2ProviderSessionJson),
+);
 export const QUEUED_TURN_START_GRACE_MS = 2 * 60 * 1_000;
 
 function toMillis(value: DateTime.Utc | null | undefined): number | null {
@@ -271,6 +283,12 @@ export const make = Effect.gen(function* () {
   const crypto = yield* Crypto.Crypto;
   const fileSystem = yield* FileSystem.FileSystem;
   const terminals = yield* TerminalManager.TerminalManager;
+  const projectScripts = yield* ProjectSetupScriptRunner.ProjectSetupScriptRunner;
+  const sql = yield* SqlClient.SqlClient;
+  const path = yield* Path.Path;
+  // Settling a settled thread re-emits thread.settled with the same settledAt,
+  // so this keeps the settle action to one run per settlement.
+  const settleActionRunAt = new Map<ThreadId, number>();
 
   const sweep = Effect.fn("ThreadSettlementServiceV2.sweep")(function* (
     mergedPullRequest: PullRequestService.PullRequestMergeEvent | null,
@@ -520,20 +538,46 @@ export const make = Effect.gen(function* () {
 
   // Settling closes the thread's shells that sit at an idle prompt, so they stop
   // holding the worktree. A terminal running a command (a dev server, an
-  // editor) stays for the user to close.
-  const closeIdleTerminals = Effect.fn("ThreadSettlementServiceV2.closeIdleTerminals")(
+  // editor) stays for the user to close. Then the project's settle script runs
+  // in the thread's own worktree; a thread in the shared checkout, or in a
+  // worktree another thread still uses, skips it, because other threads may
+  // still be working there.
+  const cleanUpSettledThread = Effect.fn("ThreadSettlementServiceV2.cleanUpSettledThread")(
     function* (threadId: ThreadId) {
       // A thread re-engaged before this event ran keeps its shells.
+      const settled = yield* projections.getThread(threadId);
+      if (settled.settledOverride !== "settled") return;
+      yield* terminals.closeIdle({ threadId });
+      const worktreePath = settled.worktreePath;
+      if (worktreePath === null || !(yield* fileSystem.exists(worktreePath))) return;
+      // Closing and the worktree check wait on I/O. A thread re-engaged
+      // meanwhile is working again, so its worktree is no place for cleanup.
       const thread = yield* projections.getThread(threadId);
       if (thread.settledOverride !== "settled") return;
-      yield* terminals.closeIdle({ threadId });
+      const settledAtMs = toMillis(thread.settledAt);
+      if (settledAtMs === null || settleActionRunAt.get(threadId) === settledAtMs) return;
+      // Not recorded: a later settlement may find the worktree exclusive.
+      if (yield* worktreeUsedByOthers(threadId, worktreePath)) return;
+      const run = yield* projectScripts.runForThread({
+        threadId,
+        projectId: thread.projectId,
+        worktreePath,
+        trigger: "settle",
+        // A clean exit closes the script's shell so it does not hold the worktree.
+        observeCompletion: {},
+      });
+      // Recorded after a successful start, so a failed start retries on the next event.
+      settleActionRunAt.set(threadId, settledAtMs);
+      if (run.status === "started" && run.completion) {
+        yield* run.completion.pipe(Effect.forkDetach);
+      }
     },
     (effect, threadId) =>
       effect.pipe(
         Effect.catchCause((cause) =>
           Cause.hasInterruptsOnly(cause)
             ? Effect.failCause(cause)
-            : Effect.logWarning("closing idle terminals after settlement failed", {
+            : Effect.logWarning("cleaning up a settled thread failed", {
                 threadId,
                 cause: Cause.pretty(cause),
               }),
@@ -541,10 +585,68 @@ export const make = Effect.gen(function* () {
       ),
   );
 
+  // Fork: several threads can share one worktree, so the settle action runs
+  // only while nothing but the settling thread uses it: no other thread's
+  // checkout (alias or nested path), pending archive or worktree move, live
+  // provider session, or running terminal. The settling thread's own session
+  // and terminals do not count.
+  const worktreeUsedByOthers = Effect.fn("ThreadSettlementServiceV2.worktreeUsedByOthers")(
+    function* (threadId: ThreadId, worktreePath: string) {
+      const canonicalPath = yield* canonicalWorkspacePath(worktreePath);
+      const contains = (cwd: string) =>
+        canonicalWorkspacePath(cwd).pipe(
+          Effect.map((canonical) => {
+            const relative = path.relative(canonicalPath, canonical);
+            return (
+              relative === "" ||
+              (relative !== ".." &&
+                !relative.startsWith(`..${path.sep}`) &&
+                !path.isAbsolute(relative))
+            );
+          }),
+        );
+      // subscribeMetadata delivers its full snapshot before returning.
+      let liveTerminals: ReadonlyArray<TerminalSummary> = [];
+      const unsubscribe = yield* terminals.subscribeMetadata((event) =>
+        Effect.sync(() => {
+          if (event.type === "snapshot") liveTerminals = event.terminals;
+        }),
+      );
+      unsubscribe();
+      for (const terminal of liveTerminals) {
+        if (terminal.threadId === threadId) continue;
+        if (terminal.status !== "starting" && terminal.status !== "running") continue;
+        if (yield* contains(terminal.cwd)) return true;
+        if (terminal.worktreePath !== null && (yield* contains(terminal.worktreePath))) return true;
+      }
+      const active = yield* projections.getShellSnapshot();
+      const archived = yield* projections.getShellSnapshot({ location: "archive" });
+      const sessionRows = yield* sql<{ payload_json: string }>`
+        SELECT payload_json FROM orchestration_v2_projection_provider_sessions
+        WHERE status != 'stopped' AND (thread_id IS NULL OR thread_id != ${threadId})
+      `;
+      const sessions = yield* Effect.forEach(sessionRows, (row) =>
+        decodeProviderSession(row.payload_json),
+      );
+      return yield* storageCleanupWorktreeInUse({
+        worktreePath: canonicalPath,
+        candidateId: threadId,
+        // An archive-location snapshot lists its rows under archivedThreads.
+        threads: [...active.threads, ...archived.archivedThreads],
+        sessionCwds: sessions.map((session) => session.cwd),
+      });
+    },
+    (effect) =>
+      effect.pipe(
+        Effect.provideService(FileSystem.FileSystem, fileSystem),
+        Effect.provideService(Path.Path, path),
+      ),
+  );
+
   const processEvent = (event: OrchestrationV2DomainEvent) => {
     switch (event.type) {
       case "thread.settled":
-        return closeIdleTerminals(event.threadId);
+        return cleanUpSettledThread(event.threadId);
       case "thread.pull-request-synced":
       case "provider-session.detached":
         return worker.enqueue(event.threadId);

@@ -12,6 +12,7 @@ export interface ProjectScriptInput {
   readonly runOnWorktreeCreate: ProjectScript["runOnWorktreeCreate"];
   readonly async?: ProjectScript["async"];
   readonly waitForSetup?: boolean;
+  readonly runOnSettle?: boolean;
   readonly previewUrl: Exclude<ProjectScript["previewUrl"], undefined> | null;
   readonly autoOpenPreview: boolean;
 }
@@ -28,12 +29,31 @@ export function buildProjectScript(id: string, input: ProjectScriptInput): Proje
       : input.runOnWorktreeCreate && input.waitForSetup
         ? { async: false }
         : {}),
+    ...(input.runOnSettle ? { runOnSettle: true } : {}),
     ...(input.previewUrl === null
       ? {}
       : {
           previewUrl: input.previewUrl,
           autoOpenPreview: input.autoOpenPreview,
         }),
+  };
+}
+
+/**
+ * A project runs at most one setup script and one settle script, so saving a
+ * script that claims either role takes it from the script that held it.
+ */
+export function releaseClaimedRoles(
+  script: ProjectScript,
+  saved: Pick<ProjectScriptInput, "runOnWorktreeCreate" | "runOnSettle">,
+): ProjectScript {
+  const releaseSetup = saved.runOnWorktreeCreate && script.runOnWorktreeCreate;
+  const releaseSettle = saved.runOnSettle === true && script.runOnSettle === true;
+  if (!releaseSetup && !releaseSettle) return script;
+  return {
+    ...script,
+    ...(releaseSetup ? { runOnWorktreeCreate: false } : {}),
+    ...(releaseSettle ? { runOnSettle: false } : {}),
   };
 }
 
@@ -70,8 +90,8 @@ export function nextProjectScriptId(name: string, existingIds: Iterable<string>)
 }
 
 export function primaryProjectScript(scripts: ReadonlyArray<ProjectScript>): ProjectScript | null {
-  const regular = scripts.find((script) => !script.runOnWorktreeCreate);
-  return regular ?? scripts[0] ?? null;
+  const regular = scripts.find((script) => !script.runOnWorktreeCreate && !script.runOnSettle);
+  return regular ?? scripts.find((script) => !script.runOnSettle) ?? null;
 }
 
 export function normalizeProjectSetupScript(
@@ -171,4 +191,17 @@ export function projectScriptRuntimeEnv(
 
 export function setupProjectScript(scripts: readonly ProjectScript[]): ProjectScript | null {
   return scripts.find((script) => script.runOnWorktreeCreate) ?? null;
+}
+
+/** Menu label naming the lifecycle roles a script runs in, e.g. "Clean (on settle)". */
+export function projectScriptMenuLabel(script: ProjectScript): string {
+  const roles = [
+    ...(script.runOnWorktreeCreate ? ["setup"] : []),
+    ...(script.runOnSettle ? ["on settle"] : []),
+  ];
+  return roles.length === 0 ? script.name : `${script.name} (${roles.join(", ")})`;
+}
+
+export function settleProjectScript(scripts: readonly ProjectScript[]): ProjectScript | null {
+  return scripts.find((script) => script.runOnSettle === true) ?? null;
 }

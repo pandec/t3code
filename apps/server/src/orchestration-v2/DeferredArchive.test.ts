@@ -30,6 +30,7 @@ import * as CheckpointStore from "../checkpointing/CheckpointStore.ts";
 import * as ServerConfig from "../config.ts";
 import * as GitWorkflow from "../git/GitWorkflowService.ts";
 import * as McpInvocationContext from "../mcp/McpInvocationContext.ts";
+import * as McpHttpServer from "../mcp/McpHttpServer.ts";
 import * as McpSessionRegistryTestkit from "../mcp/McpSessionRegistry.testkit.ts";
 import { ArchiveToolkitHandlersLive } from "../mcp/toolkits/archive/handlers.ts";
 import { ArchiveToolkit } from "../mcp/toolkits/archive/tools.ts";
@@ -1450,8 +1451,7 @@ it.layer(TestLayer)("deferred archive on the orchestrator", (it) => {
       });
     }).pipe(
       Effect.provide(
-        McpServer.toolkit(ArchiveToolkit).pipe(
-          Layer.provide(ArchiveToolkitHandlersLive),
+        McpHttpServer.toolkitRegistration(ArchiveToolkit, ArchiveToolkitHandlersLive).pipe(
           Layer.provideMerge(McpServer.McpServer.layer),
         ),
       ),

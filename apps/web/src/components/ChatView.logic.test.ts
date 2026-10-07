@@ -43,6 +43,7 @@ import {
   restorePlanFollowUpComposer,
   resolveComposerProviderSelection,
   resolveProactiveTurnDiffAction,
+  resolveSendDispatch,
   resolveDraftHeroState,
   resolveWorktreeSetupProgress,
   isPaintOnlyThreadTimeline,
@@ -1895,6 +1896,81 @@ describe("proactive completed diff guard", () => {
         activeSurfaceKind: "pull-requests",
       }),
     ).toBe("ignore");
+  });
+
+  it("leaves an already open diff and its chosen scope alone", () => {
+    const largeCheckpoint = {
+      status: "ready",
+      files: Array.from({ length: 3 }, (_, index) => ({
+        path: `src/app-${index}.ts`,
+        kind: "modified" as const,
+        additions: 20,
+        deletions: 0,
+      })),
+    } satisfies Pick<TurnDiffSummary, "status" | "files">;
+
+    expect(
+      resolveProactiveTurnDiffAction({
+        checkpoint: largeCheckpoint,
+        isGitRepo: true,
+        activeSurfaceKind: "diff",
+      }),
+    ).toBe("ignore");
+  });
+});
+
+describe("resolveSendDispatch", () => {
+  const base = {
+    resumeCompactionTokens: null,
+    keepFullHistory: false,
+    messageText: "continue",
+    hasPendingOutboxSubmission: false,
+    running: false,
+    dispatchMode: "auto",
+    steerGraceWindowMs: 0,
+  } as const;
+
+  it("compacts a stale session first and queues the message behind /compact", () => {
+    expect(resolveSendDispatch({ ...base, resumeCompactionTokens: 120_000 })).toEqual({
+      compactBeforeSend: true,
+      turnDispatchMode: "queue",
+      queueBehindActiveRun: true,
+    });
+  });
+
+  it("skips compaction for full-history sends, /compact itself, and behind an unaccepted send", () => {
+    for (const input of [
+      { ...base, resumeCompactionTokens: 120_000, keepFullHistory: true },
+      { ...base, resumeCompactionTokens: 120_000, messageText: "/COMPACT" },
+      { ...base, resumeCompactionTokens: 120_000, hasPendingOutboxSubmission: true },
+    ]) {
+      expect(resolveSendDispatch(input)).toEqual({
+        compactBeforeSend: false,
+        turnDispatchMode: "auto",
+        queueBehindActiveRun: false,
+      });
+    }
+  });
+
+  it("holds a steer in the queue only while a recall window applies to a running turn", () => {
+    expect(
+      resolveSendDispatch({
+        ...base,
+        running: true,
+        dispatchMode: "steer",
+        steerGraceWindowMs: 3_000,
+      }).queueBehindActiveRun,
+    ).toBe(true);
+    expect(
+      resolveSendDispatch({ ...base, running: true, dispatchMode: "steer" }).queueBehindActiveRun,
+    ).toBe(false);
+    expect(
+      resolveSendDispatch({ ...base, running: true, dispatchMode: "queue" }).queueBehindActiveRun,
+    ).toBe(true);
+    expect(
+      resolveSendDispatch({ ...base, dispatchMode: "steer", steerGraceWindowMs: 3_000 })
+        .queueBehindActiveRun,
+    ).toBe(false);
   });
 });
 

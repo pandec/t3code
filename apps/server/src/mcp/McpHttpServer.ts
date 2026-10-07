@@ -11,7 +11,7 @@ import * as Schema from "effect/Schema";
 import * as Sink from "effect/Sink";
 import * as Stream from "effect/Stream";
 import type * as Types from "effect/Types";
-import { AiError, McpProtocol, McpSchema, McpServer, Tool } from "effect/ai";
+import { AiError, McpProtocol, McpSchema, McpServer, Tool, type Toolkit } from "effect/ai";
 import { HttpRouter, HttpServerRequest, HttpServerResponse } from "effect/http";
 import { OrchestratorMcpFailure, PreviewAutomationError } from "@t3tools/contracts";
 
@@ -19,8 +19,9 @@ import packageJson from "../../package.json" with { type: "json" };
 import * as ServerConfig from "../config.ts";
 import * as DeviceService from "../device/DeviceService.ts";
 import * as HtmlRender from "../htmlRender/HtmlRender.ts";
-import * as PreviewBrowser from "../htmlRender/PreviewBrowser.ts";
+import * as ThreadManagementService from "../orchestration-v2/ThreadManagementService.ts";
 import * as McpInvocationContext from "./McpInvocationContext.ts";
+import * as McpToolAccess from "./McpToolAccess.ts";
 import * as OrchestratorMcpService from "./OrchestratorMcpService.ts";
 import { PreviewControlsToolkit } from "./toolkits/previewControls/tools.ts";
 import * as PreviewControlsHandlers from "./toolkits/previewControls/handlers.ts";
@@ -71,19 +72,62 @@ import {
 import * as HtmlHandlers from "./toolkits/html/handlers.ts";
 import { HtmlPreviewTool, HtmlPreviewToolkit, HtmlRenderToolkit } from "./toolkits/html/tools.ts";
 
-const unauthorized = HttpServerResponse.jsonUnsafe(
-  {
-    error: "invalid_mcp_credential",
-    message: "A valid provider-scoped MCP bearer credential is required.",
-  },
-  {
-    status: 401,
-    headers: {
-      "cache-control": "no-store",
-      "www-authenticate": "Bearer",
+/** Where an MCP client discovers how to sign in (RFC 9728), at this request's own origin. */
+const mcpResourceMetadataUrl = (request: HttpServerRequest.HttpServerRequest) =>
+  HttpServerRequest.toURL(request).pipe(
+    Option.map((url) => `${url.origin}/.well-known/oauth-protected-resource/mcp`),
+  );
+
+/**
+ * Agents T3 Code launched carry a registry token and must never be sent into
+ * an OAuth flow when it dies: they cannot open a browser, and a sign-in
+ * would mint a credential that outlives their session. Only a request that
+ * does not look like a provider token is pointed at the OAuth metadata.
+ */
+const unauthorized = (input: {
+  readonly request: HttpServerRequest.HttpServerRequest;
+  readonly presentedToken: boolean;
+  readonly offerOAuth: boolean;
+}) => {
+  const metadataUrl = input.offerOAuth
+    ? Option.getOrUndefined(mcpResourceMetadataUrl(input.request))
+    : undefined;
+  const challenge = [
+    "Bearer",
+    [
+      ...(metadataUrl === undefined ? [] : [`resource_metadata="${metadataUrl}"`]),
+      ...(input.presentedToken ? ['error="invalid_token"'] : []),
+    ].join(", "),
+  ]
+    .filter((part) => part.length > 0)
+    .join(" ");
+  return HttpServerResponse.jsonUnsafe(
+    {
+      error: "invalid_mcp_credential",
+      message: "A valid T3 Code MCP credential is required.",
     },
-  },
-);
+    {
+      status: 401,
+      headers: {
+        "cache-control": "no-store",
+        "www-authenticate": challenge,
+      },
+    },
+  );
+};
+
+/**
+ * Resolves a bearer token that is not a provider-session token: an OAuth
+ * client signed in from outside T3. Undefined when the token is not one.
+ */
+export class McpClientAuthenticator extends Context.Service<
+  McpClientAuthenticator,
+  {
+    readonly authenticate: (
+      request: HttpServerRequest.HttpServerRequest,
+    ) => Effect.Effect<McpInvocationContext.McpInvocationScope | undefined>;
+  }
+>()("t3/mcp/McpHttpServer/McpClientAuthenticator") {}
 
 type AuthenticatedHttpEffect = Effect.Effect<
   HttpServerResponse.HttpServerResponse,
@@ -111,33 +155,43 @@ export const normalizeMcpHttpResponse = (
     : response;
 };
 
-const makeMcpAuthMiddleware = McpSessionRegistry.McpSessionRegistry.pipe(
-  Effect.map((registry): McpAuthMiddleware =>
-    Effect.fn("McpHttpServer.authenticateRequest")(function* (httpEffect) {
-      const request = yield* HttpServerRequest.HttpServerRequest;
-      const authorization = request.headers.authorization;
-      const token =
-        authorization?.startsWith("Bearer ") === true
-          ? authorization.slice("Bearer ".length).trim()
-          : "";
-      const invocation = yield* registry.resolve(token);
-      if (!invocation) {
-        // Without this the only symptom of a dead credential is the agent
-        // quietly losing the whole `t3-code` toolkit for the rest of its
-        // session, with nothing on the server to explain why.
-        yield* Effect.logWarning("rejected MCP request with an unusable credential", {
-          reason: token.length === 0 ? "missing_bearer_token" : "unknown_or_expired_token",
-        });
-        return unauthorized;
-      }
-      return yield* httpEffect.pipe(
-        Effect.provideService(McpInvocationContext.McpInvocationContext, invocation),
-        Effect.map(normalizeMcpHttpResponse),
-      );
-    }),
-  ),
-  Effect.withSpan("McpHttpServer.makeAuthMiddleware"),
-);
+// Session tokens are `<payload>.<signature>`; registry tokens are a bare base64url secret.
+const looksLikeProviderToken = (token: string) => token.length > 0 && !token.includes(".");
+
+const makeMcpAuthMiddleware = Effect.gen(function* () {
+  const registry = yield* McpSessionRegistry.McpSessionRegistry;
+  const clients = yield* Effect.serviceOption(McpClientAuthenticator);
+  return Effect.fn("McpHttpServer.authenticateRequest")(function* (httpEffect) {
+    const request = yield* HttpServerRequest.HttpServerRequest;
+    const authorization = request.headers.authorization;
+    const token =
+      authorization?.startsWith("Bearer ") === true
+        ? authorization.slice("Bearer ".length).trim()
+        : "";
+    const invocation =
+      (yield* registry.resolve(token)) ??
+      (Option.isSome(clients) && token.length > 0
+        ? yield* clients.value.authenticate(request)
+        : undefined);
+    if (!invocation) {
+      // Without this the only symptom of a dead credential is the agent
+      // quietly losing the whole `t3-code` toolkit for the rest of its
+      // session, with nothing on the server to explain why.
+      yield* Effect.logWarning("rejected MCP request with an unusable credential", {
+        reason: token.length === 0 ? "missing_bearer_token" : "unknown_or_expired_token",
+      });
+      return unauthorized({
+        request,
+        presentedToken: token.length > 0,
+        offerOAuth: Option.isSome(clients) && !looksLikeProviderToken(token),
+      });
+    }
+    return yield* httpEffect.pipe(
+      Effect.provideService(McpInvocationContext.McpInvocationContext, invocation),
+      Effect.map(normalizeMcpHttpResponse),
+    );
+  }) satisfies McpAuthMiddleware;
+}).pipe(Effect.withSpan("McpHttpServer.makeAuthMiddleware"));
 
 const layerMcpAuthMiddleware = HttpRouter.middleware<{
   provides: McpInvocationContext.McpInvocationContext;
@@ -195,7 +249,7 @@ type SnapshotMetadata = {
 };
 
 /**
- * Drops the accessibility tree, shortens page text, element names, identifiers,
+ * Keeps server ARIA refs, drops legacy object trees, shortens page text, names, identifiers,
  * and log strings, keeps only the newest log entries, and finally sheds
  * interactive elements until the JSON fits. Returns the bounded value, its
  * text, and notes on what is missing so the agent can reach for
@@ -204,7 +258,8 @@ type SnapshotMetadata = {
 const boundSnapshotMetadata = (metadata: SnapshotMetadata) => {
   const omitted: Array<string> = [];
   const { accessibilityTree, ...withoutTree } = metadata;
-  if (accessibilityTree !== undefined) {
+  const ariaTree = typeof accessibilityTree === "string" ? accessibilityTree : undefined;
+  if (accessibilityTree !== undefined && ariaTree === undefined) {
     omitted.push("accessibilityTree (use interactiveElements locators or preview_evaluate)");
   }
   const tail = <A>(entries: ReadonlyArray<A>, label: string) => {
@@ -267,8 +322,10 @@ const boundSnapshotMetadata = (metadata: SnapshotMetadata) => {
     actionTimeline: 0,
   };
   let visibleTextChars = Math.min(metadata.visibleText.length, MAX_SNAPSHOT_VISIBLE_TEXT_CHARS);
+  let ariaTreeChars = Math.min(ariaTree?.length ?? 0, 20_000);
   const value = () => ({
     ...bounded,
+    ...(ariaTree === undefined ? {} : { accessibilityTree: cutText(ariaTree, ariaTreeChars) }),
     visibleText: cutText(metadata.visibleText, visibleTextChars),
     ...lists,
   });
@@ -283,10 +340,14 @@ const boundSnapshotMetadata = (metadata: SnapshotMetadata) => {
         ? "visibleText"
         : lists.interactiveElements.length > 0
           ? "interactiveElements"
-          : undefined);
+          : ariaTreeChars > 0
+            ? "accessibilityTree"
+            : undefined);
     if (key === undefined) break;
     if (key === "visibleText") {
       visibleTextChars = Math.floor(visibleTextChars / 2);
+    } else if (key === "accessibilityTree") {
+      ariaTreeChars = Math.floor(ariaTreeChars / 2);
     } else {
       const keep = Math.floor(lists[key].length / 2);
       dropped[key] += lists[key].length - keep;
@@ -304,6 +365,9 @@ const boundSnapshotMetadata = (metadata: SnapshotMetadata) => {
     omitted.push(
       `visibleText after ${visibleTextChars} characters (use preview_evaluate for more)`,
     );
+  }
+  if (ariaTree !== undefined && ariaTreeChars < ariaTree.length) {
+    omitted.push(`accessibilityTree after ${ariaTreeChars} characters`);
   }
   for (const key of shedOrder) {
     if (dropped[key] > 0) {
@@ -401,6 +465,7 @@ const previewSnapshotFailure = <E>(cause: Cause.Cause<E>) => {
 const registerPreviewSnapshot = Effect.fn("McpHttpServer.registerPreviewSnapshot")(function* () {
   const server = yield* McpServer.McpServer;
   const broker = yield* PreviewAutomationBroker.PreviewAutomationBroker;
+  const threads = yield* ThreadManagementService.ThreadManagementService;
   // The MCP tool runner only supplies the client, so hand the save path its services here.
   const saveServices = yield* Effect.context<
     ServerConfig.ServerConfig | FileSystem.FileSystem | Path.Path | Crypto.Crypto
@@ -435,6 +500,7 @@ const registerPreviewSnapshot = Effect.fn("McpHttpServer.registerPreviewSnapshot
           Stream.run(Sink.last()),
           Effect.flatMap(Effect.fromOption),
           Effect.provideService(PreviewAutomationBroker.PreviewAutomationBroker, broker),
+          Effect.provideService(ThreadManagementService.ThreadManagementService, threads),
           Effect.provideService(McpInvocationContext.McpInvocationContext, invocation),
           Effect.flatMap(({ encodedResult }) =>
             Effect.gen(function* () {
@@ -660,6 +726,7 @@ const registerImageTool = <T extends Tool.Any, E, R>(
 
 const registerDeviceScreenshot = Effect.fn("McpHttpServer.registerDeviceScreenshot")(function* () {
   const devices = yield* DeviceService.DeviceService;
+  const threads = yield* ThreadManagementService.ThreadManagementService;
   const built = yield* DeviceScreenshotToolkit;
   yield* registerImageTool(
     DeviceScreenshotTool,
@@ -667,7 +734,11 @@ const registerDeviceScreenshot = Effect.fn("McpHttpServer.registerDeviceScreensh
       built
         .handle("device_screenshot", payload)
         .pipe(Stream.unwrap, Stream.run(Sink.last()), Effect.flatMap(Effect.fromOption)),
-    (effect) => effect.pipe(Effect.provideService(DeviceService.DeviceService, devices)),
+    (effect) =>
+      effect.pipe(
+        Effect.provideService(DeviceService.DeviceService, devices),
+        Effect.provideService(ThreadManagementService.ThreadManagementService, threads),
+      ),
     "screenshot",
     "Device screenshot failed.",
   );
@@ -677,6 +748,7 @@ const isOrchestratorMcpFailure = Schema.is(OrchestratorMcpFailure);
 
 const registerHtmlPreview = Effect.fn("McpHttpServer.registerHtmlPreview")(function* () {
   const htmlRender = yield* HtmlRender.HtmlRender;
+  const threads = yield* ThreadManagementService.ThreadManagementService;
   const built = yield* HtmlPreviewToolkit;
   yield* registerImageTool(
     HtmlPreviewTool,
@@ -684,7 +756,11 @@ const registerHtmlPreview = Effect.fn("McpHttpServer.registerHtmlPreview")(funct
       built
         .handle("html_preview", payload)
         .pipe(Stream.unwrap, Stream.run(Sink.last()), Effect.flatMap(Effect.fromOption)),
-    (effect) => effect.pipe(Effect.provideService(HtmlRender.HtmlRender, htmlRender)),
+    (effect) =>
+      effect.pipe(
+        Effect.provideService(HtmlRender.HtmlRender, htmlRender),
+        Effect.provideService(ThreadManagementService.ThreadManagementService, threads),
+      ),
     "preview",
     // Parameter errors and HTML render errors are both written by the server for the agent.
     (error) =>
@@ -695,25 +771,40 @@ const registerHtmlPreview = Effect.fn("McpHttpServer.registerHtmlPreview")(funct
 });
 
 /**
+ * `McpServer.toolkit` for handlers that declared their access (see
+ * `McpToolAccess`). Every toolkit on every MCP island registers through this.
+ */
+export const toolkitRegistration = <Tools extends Record<string, Tool.Any>, EX, RX>(
+  toolkit: Toolkit.Toolkit<Tools>,
+  handlers: McpToolAccess.HandlersLayer<Tools, EX, RX>,
+) => McpServer.toolkit(toolkit).pipe(Layer.provide(McpToolAccess.HandlersLayer.layer(handlers)));
+
+/** A hand-registered tool, also only with handlers that declared their access. */
+const imageToolRegistration = <Tools extends Record<string, Tool.Any>, A, E, R, EX, RX>(
+  register: Effect.Effect<A, E, R>,
+  handlers: McpToolAccess.HandlersLayer<Tools, EX, RX>,
+) => Layer.effectDiscard(register).pipe(Layer.provide(McpToolAccess.HandlersLayer.layer(handlers)));
+
+/**
  * Fork: the HTML tools ride every island (see `layer`), so their registrations
- * leave the renderer and pinned preview browser unmet; those hold install
- * state and are provided once outside the islands.
+ * leave the renderer unmet; it holds install state and is provided once
+ * outside the islands.
  */
 const layerHtmlToolkitRegistration = Layer.mergeAll(
-  McpServer.toolkit(HtmlRenderToolkit).pipe(Layer.provide(HtmlHandlers.layerRender)),
-  Layer.effectDiscard(registerHtmlPreview()).pipe(Layer.provide(HtmlHandlers.layerPreview)),
+  toolkitRegistration(HtmlRenderToolkit, HtmlHandlers.layerRender),
+  imageToolRegistration(registerHtmlPreview(), HtmlHandlers.layerPreview),
 );
 
-const layerHtmlServices = HtmlRender.layer.pipe(Layer.provideMerge(PreviewBrowser.layer));
+export const layerHtmlToolkit = layerHtmlToolkitRegistration.pipe(Layer.provide(HtmlRender.layer));
 
-export const layerHtmlToolkit = layerHtmlToolkitRegistration.pipe(Layer.provide(layerHtmlServices));
-
-const layerPreviewStandardToolkitRegistration = McpServer.toolkit(PreviewStandardToolkit).pipe(
-  Layer.provide(PreviewHandlers.layerStandard),
+const layerPreviewStandardToolkitRegistration = toolkitRegistration(
+  PreviewStandardToolkit,
+  PreviewHandlers.layerStandard,
 );
 
-const layerPreviewSnapshotRegistration = Layer.effectDiscard(registerPreviewSnapshot()).pipe(
-  Layer.provide(PreviewHandlers.layerSnapshot),
+const layerPreviewSnapshotRegistration = imageToolRegistration(
+  registerPreviewSnapshot(),
+  PreviewHandlers.layerSnapshot,
 );
 
 export const layerPreviewToolkit = Layer.mergeAll(
@@ -721,78 +812,82 @@ export const layerPreviewToolkit = Layer.mergeAll(
   layerPreviewSnapshotRegistration,
 );
 
-export const layerOrchestratorToolkit = McpServer.toolkit(OrchestratorToolkit).pipe(
-  Layer.provide(OrchestratorHandlers.layer),
-  Layer.provide(OrchestratorMcpService.layer),
-  Layer.provide(ThreadMetadataMcpService.layer),
-);
+export const layerOrchestratorToolkit = toolkitRegistration(
+  OrchestratorToolkit,
+  OrchestratorHandlers.layer,
+).pipe(Layer.provide(OrchestratorMcpService.layer), Layer.provide(ThreadMetadataMcpService.layer));
 
-export const layerThreadToolkit = McpServer.toolkit(ThreadToolkit).pipe(
-  Layer.provide(ThreadHandlers.layer),
-);
+export const layerThreadToolkit = toolkitRegistration(ThreadToolkit, ThreadHandlers.layer);
 
 // Fork: WorktreeMcpService holds the per-thread handoff guard, so `layer`
 // provides it once outside the islands instead of once per island.
-const layerWorktreeToolkitRegistration = McpServer.toolkit(WorktreeToolkit).pipe(
-  Layer.provide(WorktreeHandlers.layer),
+const layerWorktreeToolkitRegistration = toolkitRegistration(
+  WorktreeToolkit,
+  WorktreeHandlers.layer,
+);
+
+const layerPreviewControlsRegistration = toolkitRegistration(
+  PreviewControlsToolkit,
+  PreviewControlsHandlers.layer,
+);
+
+const layerEnvironmentRegistration = toolkitRegistration(
+  EnvironmentToolkit,
+  EnvironmentHandlers.layer,
+);
+
+const layerProjectRegistration = toolkitRegistration(ProjectToolkit, ProjectHandlers.layer);
+
+const layerAttachmentRegistration = toolkitRegistration(
+  AttachmentToolkit,
+  AttachmentHandlers.layer,
 );
 
 // Fork: deferred archive tools for the credential's own thread or a target thread.
-const layerArchiveToolkitRegistration = McpServer.toolkit(ArchiveToolkit).pipe(
-  Layer.provide(ArchiveToolkitHandlersLive),
+const layerArchiveToolkitRegistration = toolkitRegistration(
+  ArchiveToolkit,
+  ArchiveToolkitHandlersLive,
 );
 
 // Fork: deferred worktree switch tools for the credential's own thread.
-const layerWorktreeSwitchToolkitRegistration = McpServer.toolkit(WorktreeSwitchToolkit).pipe(
-  Layer.provide(WorktreeSwitchToolkitHandlersLive),
+const layerWorktreeSwitchToolkitRegistration = toolkitRegistration(
+  WorktreeSwitchToolkit,
+  WorktreeSwitchToolkitHandlersLive,
 );
 
 // Fork: project actions (run buttons), stored in server settings.
-const layerProjectActionsToolkitRegistration = McpServer.toolkit(ProjectActionsToolkit).pipe(
-  Layer.provide(ProjectActionsHandlers.layer),
-  Layer.provide(ProjectActions.layer),
-);
+const layerProjectActionsToolkitRegistration = toolkitRegistration(
+  ProjectActionsToolkit,
+  ProjectActionsHandlers.layer,
+).pipe(Layer.provide(ProjectActions.layer));
 
 // Fork: thread groups and drain status. ThreadGroupsMcpService holds the
 // create lock, so `layer` provides it once outside the islands.
-const layerThreadGroupsToolkitRegistration = McpServer.toolkit(ThreadGroupsToolkit).pipe(
-  Layer.provide(ThreadGroupsToolkitHandlersLive),
+const layerThreadGroupsToolkitRegistration = toolkitRegistration(
+  ThreadGroupsToolkit,
+  ThreadGroupsToolkitHandlersLive,
 );
 
-const layerThreadDrainToolkitRegistration = McpServer.toolkit(ThreadDrainToolkit).pipe(
-  Layer.provide(ThreadDrainToolkitHandlersLive),
+const layerThreadDrainToolkitRegistration = toolkitRegistration(
+  ThreadDrainToolkit,
+  ThreadDrainToolkitHandlersLive,
 );
 
-const layerPreviewControlsRegistration = McpServer.toolkit(PreviewControlsToolkit).pipe(
-  Layer.provide(PreviewControlsHandlers.layer),
+const layerVoiceToolkitRegistration = toolkitRegistration(VoiceToolkit, VoiceToolkitHandlersLive);
+
+export const layerPullRequestsToolkit = toolkitRegistration(
+  PullRequestsToolkit,
+  PullRequestsHandlers.layer,
 );
 
-const layerEnvironmentRegistration = McpServer.toolkit(EnvironmentToolkit).pipe(
-  Layer.provide(EnvironmentHandlers.layer),
+const layerDeviceStandardToolkitRegistration = toolkitRegistration(
+  DeviceStandardToolkit,
+  DeviceHandlers.layerStandard,
 );
 
-const layerProjectRegistration = McpServer.toolkit(ProjectToolkit).pipe(
-  Layer.provide(ProjectHandlers.layer),
-);
-
-const layerAttachmentRegistration = McpServer.toolkit(AttachmentToolkit).pipe(
-  Layer.provide(AttachmentHandlers.layer),
-);
-
-const layerVoiceToolkitRegistration = McpServer.toolkit(VoiceToolkit).pipe(
-  Layer.provide(VoiceToolkitHandlersLive),
-);
-
-export const layerPullRequestsToolkit = McpServer.toolkit(PullRequestsToolkit).pipe(
-  Layer.provide(PullRequestsHandlers.layer),
-);
-
-const layerDeviceStandardToolkitRegistration = McpServer.toolkit(DeviceStandardToolkit).pipe(
-  Layer.provide(DeviceHandlers.layerStandard),
-);
-
-const layerDeviceScreenshotRegistration = Layer.effectDiscard(registerDeviceScreenshot()).pipe(
-  Layer.provide(DeviceHandlers.layerScreenshot),
+const layerDeviceScreenshotRegistration = imageToolRegistration(
+  registerDeviceScreenshot(),
+  DeviceHandlers.layerScreenshot,
 );
 
 export const layerDeviceToolkit = Layer.mergeAll(
@@ -807,6 +902,8 @@ const makeMcpTransport = (path: `/${string}`) =>
     path,
     protocols: [McpProtocol.v2025_06_18],
   }).pipe(Layer.provide(layerMcpAuthMiddleware));
+
+export const layerMcpTransport = makeMcpTransport("/mcp");
 
 /** Preview controls require the preview capability, so they ride with the preview toolkit. */
 const layerPreviewIslandRegistration = Layer.mergeAll(
@@ -830,8 +927,8 @@ const layerPreviewIslandRegistration = Layer.mergeAll(
  * memoized build, so all islands share one instance of each: the handlers'
  * runtime dependencies (broker, voice staging, session registry), the worktree
  * service, which holds the per-thread handoff guard, the thread groups service,
- * which holds the create lock, and the HTML renderer and preview browser, which
- * hold install state.
+ * which holds the create lock, and the HTML renderer, which holds install state
+ * (the server provides the preview browser it drives).
  */
 const mcpToolkitIsland = <E, R>(path: `/${string}`, registrations: Layer.Layer<never, E, R>) =>
   Layer.fresh(
@@ -881,5 +978,5 @@ export const layer = Layer.mergeAll(
 ).pipe(
   Layer.provide(WorktreeMcpService.layer),
   Layer.provide(ThreadGroupsMcpService.layer),
-  Layer.provide(layerHtmlServices),
+  Layer.provide(HtmlRender.layer),
 );

@@ -1,6 +1,6 @@
 import { randomUUID } from "~/lib/utils";
 import { useCallback, useEffect, useMemo, useRef } from "react";
-import type { EnvironmentId, ThreadGroup } from "@t3tools/contracts";
+import { AuthSettingsWriteScope, type EnvironmentId, type ThreadGroup } from "@t3tools/contracts";
 import {
   canSyncThreadGroups,
   mergeThreadGroups,
@@ -10,13 +10,14 @@ import {
 } from "@t3tools/shared/threadGroups";
 import { useEnvironments } from "~/state/environments";
 import { serverEnvironment } from "~/state/server";
+import { useEnvironmentsWithScope } from "~/state/session";
 import { useAtomCommand } from "~/state/use-atom-command";
 
 /** Merged group catalog across environments, read-only. Mount `useThreadGroups`
  * exactly once in ThreadGroupsDialogHost for replication; other readers use this. */
 export function useThreadGroupCatalog() {
   const { environments } = useEnvironments();
-  const targets = useMemo(
+  const capableTargets = useMemo(
     () =>
       environments.filter(
         (environment) =>
@@ -24,6 +25,13 @@ export function useThreadGroupCatalog() {
           canSyncThreadGroups(environment.serverConfig?.environment.capabilities),
       ),
     [environments],
+  );
+  // Every environment's catalog is a merge source; only `settings:write` grants
+  // make an environment an edit or replication target.
+  const writableIds = useEnvironmentsWithScope(capableTargets, AuthSettingsWriteScope);
+  const targets = useMemo(
+    () => capableTargets.filter((environment) => writableIds.has(environment.environmentId)),
+    [capableTargets, writableIds],
   );
   const catalog = useMemo(
     () =>

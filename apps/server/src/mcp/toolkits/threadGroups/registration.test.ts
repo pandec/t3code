@@ -26,6 +26,7 @@ import * as McpHttpServer from "../../McpHttpServer.ts";
 import type { McpCapability } from "../../McpInvocationContext.ts";
 import * as McpSessionRegistry from "../../McpSessionRegistry.ts";
 import * as PreviewAutomationBroker from "../../PreviewAutomationBroker.ts";
+import * as PreviewBrowser from "../../../preview/PreviewBrowser.ts";
 
 const StubServicesLive = Layer.mergeAll(
   Layer.mock(Orchestrator.OrchestratorV2)({}),
@@ -103,6 +104,7 @@ it.effect("t3_thread_groups and t3_thread_drain_status are listed on every islan
           }),
         ),
         Layer.provide(PreviewAutomationBroker.layer),
+        Layer.provide(PreviewBrowser.layer),
         Layer.provide(
           Layer.merge(StubServicesLive, Layer.mock(AgentVoiceReply.AgentVoiceReply)({})),
         ),

@@ -308,7 +308,13 @@ function layerRegistry(
       Effect.map((adapter) => ProviderAdapterRegistry.layerFromAdapters([adapter])),
     ),
   ).pipe(
-    Layer.provide(Layer.mergeAll(layerReplayServerConfig(transcript.scenario), IdAllocator.layer)),
+    Layer.provide(
+      Layer.mergeAll(
+        layerReplayServerConfig(transcript.scenario),
+        IdAllocator.layer,
+        NodeServices.layer,
+      ),
+    ),
   );
 }
 
@@ -352,7 +358,13 @@ export const openCode2ReplayRuntime = (
       },
     });
   }).pipe(
-    Effect.provide(Layer.mergeAll(layerReplayServerConfig("opencode2_adapter"), IdAllocator.layer)),
+    Effect.provide(
+      Layer.mergeAll(
+        layerReplayServerConfig("opencode2_adapter"),
+        IdAllocator.layer,
+        NodeServices.layer,
+      ),
+    ),
   );
 
 export const OpenCode2OrchestratorReplayHarness: OrchestratorV2ProviderReplayHarness<

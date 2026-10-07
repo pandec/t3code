@@ -134,6 +134,9 @@ export function UsageRouteScreen() {
       ),
     ),
   ];
+  const canReadDiagnostics = selectedEnvironments.some(
+    (environment) => environment.canReadDiagnostics,
+  );
 
   const days = useMemo(
     () => enumerateDays(window.sinceDay, window.untilDay),
@@ -277,10 +280,12 @@ export function UsageRouteScreen() {
         contentContainerClassName="gap-6 px-5 pt-4"
         contentContainerStyle={{ paddingBottom: Math.max(insets.bottom, 18) + 18 }}
         refreshControl={
-          <RefreshControl
-            refreshing={showingLimits ? limits.refreshing : refreshingUsage}
-            onRefresh={showingLimits ? () => void limits.refresh() : refreshUsage}
-          />
+          showingLimits || canReadDiagnostics ? (
+            <RefreshControl
+              refreshing={showingLimits ? limits.refreshing : refreshingUsage}
+              onRefresh={showingLimits ? () => void limits.refresh() : refreshUsage}
+            />
+          ) : undefined
         }
       >
         <SegmentedControl options={TAB_OPTIONS} selected={tab} onSelect={setTab} role="tab" />
@@ -324,11 +329,15 @@ export function UsageRouteScreen() {
                 />
               </View>
               <ChatGptUsageSummary selectedEnvironmentIds={selectedEnvironmentIds} />
-              <UsageCoverageNotice
-                environments={selectedEnvironments}
-                merged={merged}
-                isPartial={isPartial}
-              />
+              {/* Without any diagnostics grant the access block below already
+                explains every environment. */}
+              {canReadDiagnostics ? (
+                <UsageCoverageNotice
+                  environments={selectedEnvironments}
+                  merged={merged}
+                  isPartial={isPartial}
+                />
+              ) : null}
               {isPending ? (
                 <Text className="py-16 text-center text-base text-foreground-muted">
                   Scanning provider transcripts…
@@ -339,6 +348,20 @@ export function UsageRouteScreen() {
                     ? "Connect an environment to see usage."
                     : "Select an environment to see usage."}
                 </Text>
+              ) : !canReadDiagnostics ? (
+                // Each environment explains itself: a denied grant and a failed
+                // access check are different problems.
+                <View className="gap-2 py-16">
+                  {selectedEnvironments.map((environment) => (
+                    <Text
+                      key={environment.environmentId}
+                      className="text-center text-base text-foreground-muted"
+                    >
+                      {selectedEnvironments.length > 1 ? `${environment.label}: ` : null}
+                      {environment.accessError ?? "This environment is not connected."}
+                    </Text>
+                  ))}
+                </View>
               ) : (
                 <>
                   {sourceMessages.map((message) => (
@@ -885,7 +908,9 @@ function UsageCoverageNotice(props: {
       ) : null}
       {failed.map((environment) => (
         <Text key={environment.environmentId} className="text-sm text-foreground-muted">
-          {environment.label} could not report usage.
+          {environment.accessError === null
+            ? `${environment.label} could not report usage.`
+            : `${environment.label}: ${environment.accessError}`}
         </Text>
       ))}
       {unreachable.map((environment) => (
@@ -932,6 +957,8 @@ function usageEnvironmentStatus(environment: EnvironmentUsageStatus): string {
       direction: summary.contractVersion < USAGE_CONTRACT_VERSION ? "serverBehind" : "clientBehind",
     });
   }
+  // The reason matters: a denied grant and a failed scan need different fixes.
+  if (environment.accessError !== null) return environment.accessError;
   if (environment.state.kind === "unreachable") return "Waiting for connection…";
   if (environment.state.kind === "failed") return "Usage unavailable";
   if (isUsageLoading(environment)) return summary ? "Updating usage…" : "Loading usage…";
