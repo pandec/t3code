@@ -125,16 +125,6 @@ export const ExecutionEnvironmentCapabilities = Schema.Struct({
       pre-settlement servers, so clients treat missing as unsupported and
       never send the commands under version skew. */
   threadSettlement: Schema.optionalKey(Schema.Boolean),
-  /** Server enforces expectedScripts on project metadata updates. Absent on
-      older servers, so action-management clients must not send whole-array
-      script mutations that could silently lose concurrent changes. */
-  conditionalProjectScriptUpdates: Schema.optionalKey(Schema.Boolean),
-  /** Server atomically compares and updates effective project actions in settings. */
-  conditionalProjectSettingsScriptUpdates: Schema.optionalKey(Schema.Boolean),
-  /** Server exposes authenticated session-import HTTP endpoints. */
-  sessionImport: Schema.optionalKey(Schema.Boolean),
-  /** Server exposes authenticated provider catalog metadata. */
-  providerCatalog: Schema.optionalKey(Schema.Boolean),
   /** Server evaluates merge and inactivity settlement without a client. */
   threadAutoSettlement: Schema.optionalKey(Schema.Boolean),
   storageCleanup: Schema.optionalKey(Schema.Boolean),
