@@ -49,6 +49,11 @@ import { ArchiveToolkitHandlersLive } from "./toolkits/archive/handlers.ts";
 import { ArchiveToolkit } from "./toolkits/archive/tools.ts";
 import { WorktreeSwitchToolkitHandlersLive } from "./toolkits/worktreeSwitch/handlers.ts";
 import { WorktreeSwitchToolkit } from "./toolkits/worktreeSwitch/tools.ts";
+import { ThreadDrainToolkitHandlersLive } from "./toolkits/threadDrain/handlers.ts";
+import { ThreadDrainToolkit } from "./toolkits/threadDrain/tools.ts";
+import { ThreadGroupsToolkitHandlersLive } from "./toolkits/threadGroups/handlers.ts";
+import { ThreadGroupsToolkit } from "./toolkits/threadGroups/tools.ts";
+import * as ThreadGroupsMcpService from "./ThreadGroupsMcpService.ts";
 import * as ProjectActionsHandlers from "./toolkits/projectActions/handlers.ts";
 import { ProjectActionsToolkit } from "./toolkits/projectActions/tools.ts";
 import * as ProjectActions from "../project/ProjectActions.ts";
@@ -748,6 +753,16 @@ const layerProjectActionsToolkitRegistration = McpServer.toolkit(ProjectActionsT
   Layer.provide(ProjectActions.layer),
 );
 
+// Fork: thread groups and drain status. ThreadGroupsMcpService holds the
+// create lock, so `layer` provides it once outside the islands.
+const layerThreadGroupsToolkitRegistration = McpServer.toolkit(ThreadGroupsToolkit).pipe(
+  Layer.provide(ThreadGroupsToolkitHandlersLive),
+);
+
+const layerThreadDrainToolkitRegistration = McpServer.toolkit(ThreadDrainToolkit).pipe(
+  Layer.provide(ThreadDrainToolkitHandlersLive),
+);
+
 const layerPreviewControlsRegistration = McpServer.toolkit(PreviewControlsToolkit).pipe(
   Layer.provide(PreviewControlsHandlers.layer),
 );
@@ -814,8 +829,9 @@ const layerPreviewIslandRegistration = Layer.mergeAll(
  * Requirements left unmet inside an island are satisfied by the outer,
  * memoized build, so all islands share one instance of each: the handlers'
  * runtime dependencies (broker, voice staging, session registry), the worktree
- * service, which holds the per-thread handoff guard, and the HTML renderer and
- * preview browser, which hold install state.
+ * service, which holds the per-thread handoff guard, the thread groups service,
+ * which holds the create lock, and the HTML renderer and preview browser, which
+ * hold install state.
  */
 const mcpToolkitIsland = <E, R>(path: `/${string}`, registrations: Layer.Layer<never, E, R>) =>
   Layer.fresh(
@@ -831,6 +847,8 @@ const mcpToolkitIsland = <E, R>(path: `/${string}`, registrations: Layer.Layer<n
       layerHtmlToolkitRegistration,
       layerArchiveToolkitRegistration,
       layerWorktreeSwitchToolkitRegistration,
+      layerThreadGroupsToolkitRegistration,
+      layerThreadDrainToolkitRegistration,
       layerProjectActionsToolkitRegistration,
     ).pipe(Layer.provideMerge(makeMcpTransport(path))),
   );
@@ -860,4 +878,8 @@ export const layer = Layer.mergeAll(
       layerVoiceToolkitRegistration,
     ),
   ),
-).pipe(Layer.provide(WorktreeMcpService.layer), Layer.provide(layerHtmlServices));
+).pipe(
+  Layer.provide(WorktreeMcpService.layer),
+  Layer.provide(ThreadGroupsMcpService.layer),
+  Layer.provide(layerHtmlServices),
+);

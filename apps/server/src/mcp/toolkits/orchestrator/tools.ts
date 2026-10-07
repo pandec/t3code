@@ -175,7 +175,7 @@ export const CreateThreadsTool = Tool.make("create_threads", {
 
 const ThreadListTool = Tool.make("t3_thread_list", {
   description:
-    "List T3 threads in a project, newest first. Omit projectId for the calling thread's project. Filter by durable run status, title, or settled state (settled=true lists threads the user or auto-settlement moved out of the active list) and paginate with the returned cursor.",
+    "List unarchived T3 threads in a project, newest first. Omit projectId for the calling thread's project, or set allProjects=true to list every project (projectId is then null in the result). Filter by durable run status, title, settled state (settled=true lists threads the user or auto-settlement moved out of the active list), or worktreePath (exact checkout path, e.g. to check whether any thread is still bound to a worktree before removing it), and paginate with the returned cursor. Each row carries its projectId and worktreePath (null on the project's main checkout).",
   parameters: OrchestratorMcpThreadListInput,
   success: OrchestratorMcpThreadListResult,
   failure: OrchestratorMcpFailure,

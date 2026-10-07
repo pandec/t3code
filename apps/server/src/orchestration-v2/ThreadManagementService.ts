@@ -265,12 +265,14 @@ export class ThreadManagementProjectionLoadError extends Schema.TaggedError<Thre
 export class ThreadManagementProjectThreadsListError extends Schema.TaggedError<ThreadManagementProjectThreadsListError>()(
   "ThreadManagementProjectThreadsListError",
   {
-    projectId: ProjectId,
+    projectId: Schema.NullOr(ProjectId),
     cause: Schema.Defect(),
   },
 ) {
   override get message(): string {
-    return `Unable to list threads in project ${this.projectId}.`;
+    return this.projectId === null
+      ? "Unable to list threads."
+      : `Unable to list threads in project ${this.projectId}.`;
   }
 }
 
@@ -341,7 +343,8 @@ export interface ThreadManagementServiceShape {
   }) => Effect.Effect<OrchestrationV2ThreadShellSnapshot, Orchestrator.OrchestratorV2Error>;
   readonly getThreadShell: Orchestrator.OrchestratorV2["Service"]["getThreadShell"];
   readonly listProjectThreads: (input: {
-    readonly projectId: ProjectId;
+    /** Fork: null lists every project's threads. */
+    readonly projectId: ProjectId | null;
     readonly includeSubagents: boolean;
   }) => Effect.Effect<ReadonlyArray<OrchestrationV2ThreadShell>, ThreadManagementError>;
   readonly sendToThread: (
@@ -563,7 +566,7 @@ const make = Effect.gen(function* () {
       ),
       Effect.map((snapshot) =>
         snapshot.threads
-          .filter((thread) => thread.projectId === input.projectId)
+          .filter((thread) => input.projectId === null || thread.projectId === input.projectId)
           .filter(
             (thread) =>
               input.includeSubagents || thread.lineage.relationshipToParent !== "subagent",

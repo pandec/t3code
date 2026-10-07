@@ -606,9 +606,15 @@ function threadSettlement(
   };
 }
 
+/** Fork: "/a/b/" and "/a/b" name the same checkout; the root stays "/". */
+function withoutTrailingSlash(path: string): string {
+  return path.replace(/\/+$/, "") || "/";
+}
+
 function listItemFromShell(shell: OrchestrationV2ThreadShell): OrchestratorMcpThreadListItem {
   return {
     threadId: shell.id,
+    projectId: shell.projectId,
     title: shell.title,
     createdBy: shell.createdBy,
     creationSource: shell.creationSource,
@@ -622,6 +628,7 @@ function listItemFromShell(shell: OrchestrationV2ThreadShell): OrchestratorMcpTh
     ...threadSettlement(shell),
     parentThreadId: shell.lineage.parentThreadId,
     relationshipToParent: shell.lineage.relationshipToParent,
+    worktreePath: shell.worktreePath,
     itemCount: shell.visibleItemCount,
     createdAt: DateTime.formatIso(shell.createdAt),
     updatedAt: DateTime.formatIso(shell.updatedAt),
@@ -2093,7 +2100,14 @@ const make = Effect.gen(function* () {
     listThreads: (scope, input) =>
       Effect.gen(function* () {
         const { parent } = yield* loadCaller(scope);
-        const projectId = yield* resolveProjectTarget(parent, input.projectId);
+        if (input.allProjects === true && input.projectId !== undefined) {
+          return yield* failure(
+            "invalid_request",
+            "Pass either projectId or allProjects, not both.",
+          );
+        }
+        const projectId =
+          input.allProjects === true ? null : yield* resolveProjectTarget(parent, input.projectId);
         const projectThreads = yield* threadManagement
           .listProjectThreads({
             projectId,
@@ -2106,7 +2120,15 @@ const make = Effect.gen(function* () {
           );
         const statuses = input.statuses === undefined ? null : new Set(input.statuses);
         const titleContains = input.titleContains?.toLocaleLowerCase();
+        const worktreePath =
+          input.worktreePath === undefined ? undefined : withoutTrailingSlash(input.worktreePath);
         const filtered = projectThreads
+          .filter(
+            (thread) =>
+              worktreePath === undefined ||
+              (thread.worktreePath !== null &&
+                withoutTrailingSlash(thread.worktreePath) === worktreePath),
+          )
           .filter(
             (thread) =>
               statuses === null || statuses.has(thread.activityRunStatus ?? thread.status),
