@@ -43,10 +43,11 @@ fields (never message text) must be rewritten to the target path when the rollou
    thread to mark the handover, then archive it. Retiring first would leave no live thread if the
    import fails.
 
-The import dialog lists and imports sessions for the project checkout, so place the transcript keyed
-to the checkout path even when the source thread ran in a T3-managed worktree; the imported thread
-then works in the checkout. An agent-made auxiliary worktree is recreated with ordinary git at the
-same relative path.
+The import dialog lists sessions for one workspace: the project checkout or an existing worktree of
+it, and the imported thread is bound to that workspace. A source thread that ran in a T3 worktree is
+continued in a worktree: create it on the target with ordinary git (same branch, same home-relative
+path), key the transcript to that path, and pick it in the dialog. An agent-made auxiliary worktree is
+recreated the same way.
 
 ## Constraints and traps
 

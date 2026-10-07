@@ -1,7 +1,28 @@
-import type { SessionImportCandidate, SessionImportError } from "@t3tools/contracts";
+import type { SessionImportCandidate, SessionImportError, VcsRef } from "@t3tools/contracts";
 
 export function getSessionImportCandidateKey(candidate: SessionImportCandidate): string {
   return `${candidate.instanceId}:${candidate.nativeSessionId}`;
+}
+
+export interface SessionImportWorktree {
+  readonly branch: string;
+  readonly worktreePath: string;
+}
+
+/**
+ * Worktrees a session can be imported into, from local refs listed at the
+ * project checkout: branches checked out somewhere other than that checkout.
+ */
+export function getSessionImportWorktrees(
+  refs: ReadonlyArray<VcsRef>,
+): ReadonlyArray<SessionImportWorktree> {
+  return refs
+    .flatMap((ref) =>
+      ref.isRemote !== true && !ref.current && ref.worktreePath !== null
+        ? [{ branch: ref.name, worktreePath: ref.worktreePath }]
+        : [],
+    )
+    .toSorted((left, right) => left.branch.localeCompare(right.branch));
 }
 
 export interface SessionImportCandidateGroups {
@@ -40,8 +61,8 @@ export function getSessionImportEmptyStateLabel(
     return null;
   }
   return groups.linked.length > 0
-    ? "Every session found for this project is already in T3 Code."
-    : "No sessions found for this project.";
+    ? "Every session found for this workspace is already in T3 Code."
+    : "No sessions found for this workspace.";
 }
 
 /** Extracts a reason from decoded or structurally equivalent import failures. */
