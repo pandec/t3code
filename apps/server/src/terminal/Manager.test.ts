@@ -2370,6 +2370,36 @@ it.layer(
     ),
   );
 
+  it.effect("lets a mixed-case Windows CODEX_HOME override win over the inherited one", () =>
+    Effect.gen(function* () {
+      const path = yield* Path.Path;
+      const serverSettings = yield* ServerSettings.ServerSettingsService;
+      const environment = yield* TerminalManager.resolveProviderInstanceTerminalEnvironment({
+        serverSettings,
+        path,
+        rawProviderInstanceId: "isolated_home",
+        env: { codex_home: "/accounts/work" },
+        baseEnv: { CODEX_HOME: "/accounts/server" },
+        platform: "win32",
+      });
+
+      expect(environment.CODEX_HOME).toBe(path.resolve("/accounts/work"));
+      expect(environment.codex_home).toBeUndefined();
+    }).pipe(
+      Effect.provide(
+        ServerSettings.layerTest({
+          providerInstances: {
+            [ProviderInstanceId.make("isolated_home")]: {
+              driver: ProviderDriverKind.make("codex"),
+              environment: [],
+              config: {},
+            },
+          },
+        }),
+      ),
+    ),
+  );
+
   it.effect("resolves the legacy Codex default instance", () =>
     Effect.gen(function* () {
       const path = yield* Path.Path;
