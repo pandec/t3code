@@ -606,11 +606,38 @@ describe("sidebar drag projection", () => {
     const args = [{ items, settledOrder: [], settledExpanded: true }, "g2", "g1"] as const;
     // Expanded but empty, Active opens its placeholder; folded, it only hides rows.
     expect(preview(...args).get(sidebarMarkerId("custom-group:g"))?.y).toBe(36);
-    const folded = preview({ ...args[0], activeCollapsed: true }, args[1], args[2]);
+    const folded = preview({ ...args[0], foldedGroupIds: new Set([null]) }, args[1], args[2]);
     expect(folded.get(sidebarMarkerId("active-placeholder"))?.scaleY).toBe(0);
     // -1: this layout gives the placeholder the gap its -mb-px cancels in the DOM.
     expect(folded.get(sidebarMarkerId("custom-group:g"))?.y).toBe(-1);
     expect(folded.get("g1")?.y).toBe(82);
+  });
+
+  it("opens no slot under a folded group header unless the open thread lands there", () => {
+    const items = [
+      pinnedHeader,
+      divider,
+      marker("active-header"),
+      thread("a1", "active"),
+      thread("a2", "active"),
+      marker("custom-group:g"),
+      settledHeader,
+    ];
+    const input = {
+      items,
+      settledOrder: [],
+      settledExpanded: true,
+      foldedGroupIds: new Set(["g"]),
+    };
+    const over = sidebarMarkerId("custom-group:g");
+    // a2 folds away on drop: g's header and the shelf below close a2's slot.
+    const hidden = preview(input, "a2", over);
+    expect(hidden.get(over)?.y).toBe(-83);
+    expect(hidden.get(sidebarMarkerId("settled-header"))?.y).toBe(-83);
+    // The open thread stays visible in a folded group, so its slot opens there.
+    const open = preview({ ...input, routeThreadKey: "a2" }, "a2", over);
+    expect(open.get(over)?.y).toBe(-83);
+    expect(open.get(sidebarMarkerId("settled-header"))?.y).toBe(0);
   });
 
   it("uses the canonical settled rank and the destination's slim height", () => {

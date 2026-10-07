@@ -117,9 +117,10 @@ export function createSidebarSortingStrategy(input: {
    * Pinned shelf header or a group header already marks the boundary), so
    * rows do not drift below their at-rest drop rects. */
   boundaryLabelHeights?: Partial<Record<"pinned-header" | "pinned-divider", number>>;
-  /** Fork: a folded Active group hides its rows rather than being empty, so it
-   * opens no placeholder; its header is the drop target. */
-  activeCollapsed?: boolean;
+  /** Fork: folded groups (null: Active). A drop into one hides the row, so the
+   * preview opens no slot under its header (the open thread excepted) and a
+   * folded Active opens no placeholder; the header is the drop target. */
+  foldedGroupIds?: ReadonlySet<string | null>;
 }): SortingStrategy {
   if (input.enabled === false) return () => stationary;
   const { items } = input;
@@ -219,9 +220,14 @@ export function createSidebarSortingStrategy(input: {
         marker(item.marker);
         const id =
           item.marker === "active-header" ? null : item.marker.slice("custom-group:".length);
-        const rows = groups.active.filter((row) => (row.customGroupId ?? null) === id);
+        const folded = input.foldedGroupIds?.has(id) === true;
+        const rows = groups.active.filter(
+          (row) =>
+            (row.customGroupId ?? null) === id &&
+            !(folded && row.key === active.key && row.key !== input.routeThreadKey),
+        );
         if (rows.length) projected.push(...rows);
-        else if (id === null && !input.activeCollapsed) marker("active-placeholder");
+        else if (id === null && !folded) marker("active-placeholder");
       }
     } else section("active");
     if (items.some((item) => item.kind === "marker" && item.marker === "working-header")) {
