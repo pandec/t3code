@@ -3,7 +3,9 @@ import {
   CommandId,
   EnvironmentId,
   type OrchestrationV2ThreadShell,
+  ProjectId,
   ProviderInstanceId,
+  RunId,
   ThreadId,
 } from "@t3tools/contracts";
 import * as DateTime from "effect/DateTime";
@@ -168,3 +170,88 @@ it.effect.each([
     }).pipe(Effect.scoped, Effect.provide(makeLayer(owner, [], { shell, serviceCalls })));
   },
 );
+
+// Targeting another thread: status reads any thread, schedule and cancel need
+// the caller's live run and a target within the caller's modes.
+const targetId = ThreadId.make("thread-archive-target");
+const broadId = ThreadId.make("thread-archive-broad");
+
+const makeTargetLayer = (calls: Array<string>, options: { readonly callerLive?: boolean } = {}) => {
+  const shell = (id: ThreadId) =>
+    ({
+      id,
+      projectId: ProjectId.make("project-archive-tools"),
+      providerInstanceId: ProviderInstanceId.make("codex"),
+      runtimeMode: id === broadId ? "full-access" : "auto-accept-edits",
+      interactionMode: "default",
+      activeRunId: id === threadId && options.callerLive === false ? null : RunId.make("run-1"),
+      archivedAt: id === targetId ? archivedAt : null,
+      deletedAt: null,
+    }) as unknown as OrchestrationV2ThreadShell;
+  const record = (operation: string) => (id: ThreadId) => {
+    calls.push(`${operation}:${id}`);
+    return Effect.succeed({ archivedAt: null, request });
+  };
+  return McpServer.toolkit(ArchiveToolkit).pipe(
+    Layer.provide(ArchiveToolkitHandlersLive),
+    Layer.provideMerge(McpServer.McpServer.layer),
+    Layer.provideMerge(
+      Layer.mock(ThreadManagementService.ThreadManagementService)({
+        getThreadShell: (id) => Effect.succeed(shell(id)),
+        getProjectThreadRecords: (input) =>
+          Effect.succeed({ thread: shell(input.threadId) } as never),
+      }),
+    ),
+    Layer.provideMerge(
+      Layer.mock(ThreadArchiveScheduler.ThreadArchiveScheduler)({
+        schedule: (input) => {
+          calls.push(`schedule:${input.threadId}:${input.afterTurn}:${input.removeWorktree}`);
+          return Effect.succeed({ archivedAt: null, request });
+        },
+        status: record("status"),
+        cancel: (input) => record("cancel")(input.threadId),
+      }),
+    ),
+  );
+};
+
+it.effect("schedules, reads, and cancels another thread's archive", () => {
+  const calls: Array<string> = [];
+  return Effect.gen(function* () {
+    for (const [name, args] of [
+      ["archive_thread", { threadId: targetId, removeWorktree: true }],
+      ["archive_thread_status", { threadId: targetId }],
+      ["cancel_thread_archive", { threadId: targetId }],
+    ] as const) {
+      expect((yield* call(name, args)).isError).toBe(false);
+    }
+    expect(calls).toEqual([
+      `schedule:${targetId}:true:true`,
+      `status:${targetId}`,
+      `cancel:${targetId}`,
+    ]);
+  }).pipe(Effect.scoped, Effect.provide(makeTargetLayer(calls)));
+});
+
+it.effect("refuses to change a target with broader modes but still reads its status", () => {
+  const calls: Array<string> = [];
+  return Effect.gen(function* () {
+    for (const name of ["archive_thread", "cancel_thread_archive"]) {
+      expect(declaredFailure(yield* call(name, { threadId: broadId }))).toMatchObject({
+        code: "runtime_mode_escalation_denied",
+      });
+    }
+    expect((yield* call("archive_thread_status", { threadId: broadId })).isError).toBe(false);
+    expect(calls).toEqual([`status:${broadId}`]);
+  }).pipe(Effect.scoped, Effect.provide(makeTargetLayer(calls)));
+});
+
+it.effect("refuses to archive another thread once the caller's run ended", () => {
+  const calls: Array<string> = [];
+  return Effect.gen(function* () {
+    expect(declaredFailure(yield* call("archive_thread", { threadId: targetId }))).toMatchObject({
+      code: "parent_not_active",
+    });
+    expect(calls).toEqual([]);
+  }).pipe(Effect.scoped, Effect.provide(makeTargetLayer(calls, { callerLive: false })));
+});

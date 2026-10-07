@@ -132,8 +132,16 @@ it.effect("voice_reply exists only for credentials with the voice capability", (
         new Set<McpCapability>(["preview", "device"]),
       ]) {
         const session = yield* mcpSession(capabilities);
-        expect(toolNames(yield* session.call(2, "tools/list", {})), session.path).not.toContain(
-          "voice_reply",
+        const names = toolNames(yield* session.call(2, "tools/list", {}));
+        expect(names, session.path).not.toContain("voice_reply");
+        // Fork toolkits that need no extra capability ride on every island.
+        expect(names, session.path).toEqual(
+          expect.arrayContaining([
+            "archive_thread",
+            "t3_project_actions_list",
+            "t3_project_actions_upsert",
+            "t3_project_actions_remove",
+          ]),
         );
       }
 

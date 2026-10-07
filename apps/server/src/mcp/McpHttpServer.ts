@@ -49,6 +49,9 @@ import { ArchiveToolkitHandlersLive } from "./toolkits/archive/handlers.ts";
 import { ArchiveToolkit } from "./toolkits/archive/tools.ts";
 import { WorktreeSwitchToolkitHandlersLive } from "./toolkits/worktreeSwitch/handlers.ts";
 import { WorktreeSwitchToolkit } from "./toolkits/worktreeSwitch/tools.ts";
+import * as ProjectActionsHandlers from "./toolkits/projectActions/handlers.ts";
+import { ProjectActionsToolkit } from "./toolkits/projectActions/tools.ts";
+import * as ProjectActions from "../project/ProjectActions.ts";
 import * as WorktreeMcpService from "./WorktreeMcpService.ts";
 import { VoiceToolkitHandlersLive } from "./toolkits/voice/handlers.ts";
 import { VoiceToolkit } from "./toolkits/voice/tools.ts";
@@ -729,7 +732,7 @@ const layerWorktreeToolkitRegistration = McpServer.toolkit(WorktreeToolkit).pipe
   Layer.provide(WorktreeHandlers.layer),
 );
 
-// Fork: deferred archive tools for the credential's own thread.
+// Fork: deferred archive tools for the credential's own thread or a target thread.
 const layerArchiveToolkitRegistration = McpServer.toolkit(ArchiveToolkit).pipe(
   Layer.provide(ArchiveToolkitHandlersLive),
 );
@@ -737,6 +740,12 @@ const layerArchiveToolkitRegistration = McpServer.toolkit(ArchiveToolkit).pipe(
 // Fork: deferred worktree switch tools for the credential's own thread.
 const layerWorktreeSwitchToolkitRegistration = McpServer.toolkit(WorktreeSwitchToolkit).pipe(
   Layer.provide(WorktreeSwitchToolkitHandlersLive),
+);
+
+// Fork: project actions (run buttons), stored in server settings.
+const layerProjectActionsToolkitRegistration = McpServer.toolkit(ProjectActionsToolkit).pipe(
+  Layer.provide(ProjectActionsHandlers.layer),
+  Layer.provide(ProjectActions.layer),
 );
 
 const layerPreviewControlsRegistration = McpServer.toolkit(PreviewControlsToolkit).pipe(
@@ -822,6 +831,7 @@ const mcpToolkitIsland = <E, R>(path: `/${string}`, registrations: Layer.Layer<n
       layerHtmlToolkitRegistration,
       layerArchiveToolkitRegistration,
       layerWorktreeSwitchToolkitRegistration,
+      layerProjectActionsToolkitRegistration,
     ).pipe(Layer.provideMerge(makeMcpTransport(path))),
   );
 
