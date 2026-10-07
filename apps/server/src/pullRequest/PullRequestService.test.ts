@@ -1433,6 +1433,69 @@ it.effect("uses a healthy sibling checkout to verify a mutation", () =>
   }),
 );
 
+it.effect("reads merge credit policy from the requested project when a sibling merges", () =>
+  Effect.gen(function* () {
+    const calls: boolean[] = [];
+    const service = yield* makeService({
+      projects: [
+        project({
+          id: "p2",
+          title: "web healthy",
+          workspaceRoot: "/healthy",
+          repository: "acme/web",
+        }),
+        project({ id: "p1", title: "web gone", workspaceRoot: "/gone", repository: "acme/web" }),
+      ],
+      settings: {
+        ...DEFAULT_SERVER_SETTINGS,
+        removeAgentCreditsOnMerge: false,
+        projectSettingsOverrides: {
+          ["p1" as ProjectId]: { removeAgentCreditsOnMerge: true },
+          ["p2" as ProjectId]: { removeAgentCreditsOnMerge: false },
+        },
+      },
+      providers: [
+        fakeProvider("github", {
+          capabilities: { ...fakeProvider("github").capabilities, actions: ["merge"] },
+          getChangeRequestSummary: () => Effect.succeed(changeRequest(1, "2026-07-02T00:00:00Z")),
+          getViewerPermissions: () =>
+            Effect.succeed({
+              actions: ["merge"],
+              comment: true,
+              resolve: true,
+              verdicts: ["comment"],
+              requestReviewers: false,
+            }),
+          runAction: (input) =>
+            Effect.sync(() => {
+              calls.push(input.removeAgentCreditsOnMerge === true);
+            }),
+        }),
+      ],
+      resolveRepositoryIdentity: (cwd) =>
+        Effect.succeed(
+          cwd === "/healthy"
+            ? (project({
+                id: "live",
+                title: "web",
+                workspaceRoot: cwd,
+                repository: "acme/web",
+              }).repositoryIdentity ?? null)
+            : null,
+        ),
+    });
+
+    yield* service.runAction({
+      projectId: "p1" as ProjectId,
+      repository: "acme/web",
+      number: 1,
+      action: "merge",
+    });
+
+    assert.deepStrictEqual(calls, [true]);
+  }),
+);
+
 it.effect("spends the shared host budget when a mutation falls back to a sibling checkout", () =>
   Effect.gen(function* () {
     // Sibling checkouts are recorded before project filtering, so they are built from a

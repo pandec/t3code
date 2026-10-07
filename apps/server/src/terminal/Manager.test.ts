@@ -2342,6 +2342,34 @@ it.layer(
     ),
   );
 
+  it.effect("keeps an inherited CODEX_HOME over an instance HOME override", () =>
+    Effect.gen(function* () {
+      const path = yield* Path.Path;
+      const serverSettings = yield* ServerSettings.ServerSettingsService;
+      const environment = yield* TerminalManager.resolveProviderInstanceTerminalEnvironment({
+        serverSettings,
+        path,
+        rawProviderInstanceId: "isolated_home",
+        env: undefined,
+        baseEnv: { CODEX_HOME: "/accounts/work", HOME: "/Users/server" },
+      });
+
+      expect(environment.CODEX_HOME).toBe(path.resolve("/accounts/work"));
+    }).pipe(
+      Effect.provide(
+        ServerSettings.layerTest({
+          providerInstances: {
+            [ProviderInstanceId.make("isolated_home")]: {
+              driver: ProviderDriverKind.make("codex"),
+              environment: [{ name: "HOME", value: "/accounts/isolated-user", sensitive: false }],
+              config: {},
+            },
+          },
+        }),
+      ),
+    ),
+  );
+
   it.effect("resolves the legacy Codex default instance", () =>
     Effect.gen(function* () {
       const path = yield* Path.Path;

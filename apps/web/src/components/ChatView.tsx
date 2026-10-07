@@ -4738,6 +4738,18 @@ export default function ChatView(props: ChatViewProps) {
   const queuedEditRescueActive = queuedEditRescueThreadKeys.includes(routeThreadKey);
   // An open, saving or rescuing queued edit owns composer content, so rewind and compaction wait.
   const queuedEditTransferActive = editingQueuedRun !== null || queuedEditRescueActive;
+  // Read at call time so a revert can recheck after an awaited confirmation.
+  const queuedEditTransferActiveRef = useRef(queuedEditTransferActive);
+  queuedEditTransferActiveRef.current = queuedEditTransferActive;
+  // Reverting rewrites history and files under the open edit, so both revert paths wait for it.
+  const rejectRevertDuringQueuedEdit = useCallback(
+    (threadId: ThreadId) => {
+      if (!queuedEditTransferActiveRef.current) return false;
+      setThreadError(threadId, "Finish editing the queued message before reverting checkpoints.");
+      return true;
+    },
+    [setThreadError],
+  );
   const queuedEditImageResources = useMemo(
     () =>
       (editingQueuedRun?.existingAttachments ?? [])
@@ -8561,13 +8573,7 @@ export default function ChatView(props: ChatViewProps) {
         return;
       }
       // The rewound prompt would land in, or race, a queued-message edit.
-      if (queuedEditTransferActive) {
-        setThreadError(
-          activeThread.id,
-          "Finish editing the queued message before reverting checkpoints.",
-        );
-        return;
-      }
+      if (rejectRevertDuringQueuedEdit(activeThread.id)) return;
       if (restoreFiles === undefined) {
         setPendingRevert({ turnCount, messageId, routeThreadKey });
         return;
@@ -8688,7 +8694,7 @@ export default function ChatView(props: ChatViewProps) {
       isRevertingCheckpoint,
       isSendBusy,
       phase,
-      queuedEditTransferActive,
+      rejectRevertDuringQueuedEdit,
       revertThreadCheckpoint,
       routeThreadKey,
       routeThreadRef,
@@ -8712,6 +8718,7 @@ export default function ChatView(props: ChatViewProps) {
         setThreadError(activeThread.id, "Interrupt the current turn before reverting checkpoints.");
         return;
       }
+      if (rejectRevertDuringQueuedEdit(activeThread.id)) return;
       const localApi = readLocalApi();
       const confirmed =
         localApi == null
@@ -8719,7 +8726,7 @@ export default function ChatView(props: ChatViewProps) {
           : await localApi.dialogs.confirm(
               "Roll back this thread to the selected checkpoint?\nThis action cannot be undone.",
             );
-      if (!confirmed) return;
+      if (!confirmed || rejectRevertDuringQueuedEdit(activeThread.id)) return;
 
       useComposerDraftStore.setState((store) => ({
         rewindingThreadKeys: new Set(store.rewindingThreadKeys).add(routeThreadKey),
@@ -8755,6 +8762,7 @@ export default function ChatView(props: ChatViewProps) {
       isRevertingCheckpoint,
       isSendBusy,
       phase,
+      rejectRevertDuringQueuedEdit,
       revertThreadCheckpoint,
       setThreadError,
     ],

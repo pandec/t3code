@@ -1441,6 +1441,8 @@ export const resolveProviderInstanceTerminalEnvironment = Effect.fn(
   readonly path: Path.Path;
   readonly rawProviderInstanceId: string;
   readonly env: Record<string, string> | undefined;
+  /** Environment the terminal inherits; defaults to the server's. Test seam. */
+  readonly baseEnv?: NodeJS.ProcessEnv;
 }) {
   const providerInstanceId = ProviderInstanceId.make(input.rawProviderInstanceId);
   const settings = yield* input.serverSettings.getSettings.pipe(
@@ -1455,9 +1457,13 @@ export const resolveProviderInstanceTerminalEnvironment = Effect.fn(
   if (instance.driver === "codex") {
     const config = decodeCodexSettings(instance.config ?? {});
     if (Option.isSome(config)) {
-      const layout = yield* resolveCodexHomeLayout(config.value, resolved).pipe(
-        Effect.provideService(Path.Path, input.path),
-      );
+      // Resolve against the environment the terminal actually inherits, as the
+      // Codex adapter does, so an inherited CODEX_HOME is not shadowed by the
+      // HOME fallback. Only the effective CODEX_HOME joins the overrides.
+      const layout = yield* resolveCodexHomeLayout(config.value, {
+        ...(input.baseEnv ?? process.env),
+        ...resolved,
+      }).pipe(Effect.provideService(Path.Path, input.path));
       if (layout.effectiveHomePath)
         resolved = { ...resolved, CODEX_HOME: layout.effectiveHomePath };
     }
