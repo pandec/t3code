@@ -212,6 +212,11 @@ describe("parseClaudeTranscript", () => {
           content: [{ type: "text", text: "real question" }],
         }),
         toJsonLine({ type: "attachment", uuid: "att1", parentUuid: "u1" }),
+        // Session bookkeeping records seen in real 2026-10 transcripts.
+        toJsonLine({ type: "atis-latch", atis: "", sessionId: "s" }),
+        toJsonLine({ type: "cost-state", sessionId: "s", totalCostUSD: 1 }),
+        toJsonLine({ type: "launched" }),
+        toJsonLine({ type: "failed", key: "k", agentId: "a" }),
         entry({
           uuid: "meta1",
           parentUuid: "att1",

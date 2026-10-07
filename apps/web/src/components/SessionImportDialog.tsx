@@ -1,4 +1,4 @@
-import type { SessionImportCandidate } from "@t3tools/contracts";
+import type { SessionImportCandidate, VcsRef } from "@t3tools/contracts";
 import { scopeThreadRef } from "@t3tools/client-runtime/environment";
 import { useNavigate } from "@tanstack/react-router";
 import { ChevronRightIcon } from "lucide-react";
@@ -34,9 +34,12 @@ import {
   getSessionImportCandidateKey,
   getSessionImportEmptyStateLabel,
   getSessionImportProviderLabel,
+  getSessionImportWorktrees,
   isSessionImportFailureWithReason,
   partitionSessionImportCandidates,
+  type SessionImportWorktree,
 } from "./SessionImportDialog.logic";
+import { Select, SelectItem, SelectPopup, SelectTrigger, SelectValue } from "./ui/select";
 import { toastManager } from "./ui/toast";
 import { Tooltip, TooltipPopup, TooltipTrigger } from "./ui/tooltip";
 
@@ -48,13 +51,54 @@ export function SessionImportDialog(props: {
   const navigate = useNavigate();
   const [importing, setImporting] = useState<{ key: string; fork: boolean } | null>(null);
   const [linkedSectionOpen, setLinkedSectionOpen] = useState(false);
+  // Null imports into the project checkout; a worktree lists and continues
+  // sessions recorded for that worktree's path instead.
+  const [worktree, setWorktree] = useState<SessionImportWorktree | null>(null);
   const importSession = useAtomCommand(sessionImportEnvironment.importSession);
+
+  // A failed lookup only hides the workspace picker; the checkout still works.
+  const listRefs = useAtomCommand(sessionImportEnvironment.listRefs, { reportFailure: false });
+  const [worktrees, setWorktrees] = useState<ReadonlyArray<SessionImportWorktree>>([]);
+
+  // Reads every local ref page on open: a worktree's branch can sort past the
+  // first page, and cached ref lists can miss worktrees created outside T3.
+  useEffect(() => {
+    if (member === null) return;
+    let cancelled = false;
+    void (async () => {
+      const refs: Array<VcsRef> = [];
+      let cursor: number | null = null;
+      do {
+        const result = await listRefs({
+          environmentId: member.environmentId,
+          input: {
+            cwd: member.workspaceRoot,
+            refKind: "local",
+            limit: 200,
+            // The first page rebuilds the server's ref snapshot; later pages read it.
+            ...(cursor === null ? { refresh: true } : { cursor }),
+          },
+        });
+        if (cancelled || result._tag !== "Success") return;
+        refs.push(...result.value.refs);
+        cursor = result.value.nextCursor;
+      } while (cursor !== null);
+      setWorktrees(getSessionImportWorktrees(refs));
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [member, listRefs]);
+  const workspacePath = worktree?.worktreePath ?? member?.workspaceRoot;
 
   const candidatesQuery = useEnvironmentQuery(
     member !== null
       ? sessionImportEnvironment.candidates({
           environmentId: member.environmentId,
-          input: { projectId: member.id },
+          input: {
+            projectId: member.id,
+            ...(worktree !== null ? { cwd: worktree.worktreePath } : {}),
+          },
         })
       : null,
   );
@@ -63,14 +107,21 @@ export function SessionImportDialog(props: {
   const hasAmbiguousProviders = ambiguousProviders.size > 0;
   const refreshCandidates = candidatesQuery.refresh;
 
-  // The candidates query atom is cached per project; refresh on every dialog
-  // open so freshly imported/bound sessions move to their linked state. The
-  // linked section collapses again so the import flow stays front and center.
+  // Each open starts at the checkout with the linked section collapsed, so the
+  // import flow stays front and center.
+  const [openedFor, setOpenedFor] = useState(member);
+  if (openedFor !== member) {
+    setOpenedFor(member);
+    setLinkedSectionOpen(false);
+    setWorktree(null);
+    setWorktrees([]);
+  }
+
+  // Candidate query atoms are cached per workspace; refresh on open and on
+  // every workspace pick so freshly imported/bound or newly placed sessions
+  // show their current state.
   useEffect(() => {
-    if (member !== null) {
-      refreshCandidates();
-      setLinkedSectionOpen(false);
-    }
+    if (member !== null) refreshCandidates();
   }, [member, refreshCandidates]);
 
   const handleOpenLinkedThread = async (candidate: SessionImportCandidate) => {
@@ -108,6 +159,7 @@ export function SessionImportDialog(props: {
           instanceId: candidate.instanceId,
           nativeSessionId: candidate.nativeSessionId,
           ...(fork ? { fork: true } : {}),
+          ...(worktree !== null ? { worktree } : {}),
         },
       });
       if (result._tag === "Success") {
@@ -207,12 +259,39 @@ export function SessionImportDialog(props: {
         <DialogHeader>
           <DialogTitle>Import CLI session</DialogTitle>
           <DialogDescription>
-            {member !== null
-              ? `Sessions found for ${member.workspaceRoot}, including ones already in T3 Code.`
+            {workspacePath !== undefined
+              ? `Sessions found for ${workspacePath}, including ones already in T3 Code.`
               : "Import a session created outside T3 Code."}
           </DialogDescription>
         </DialogHeader>
         <DialogPanel>
+          {member !== null && worktrees.length > 0 ? (
+            <div className="mb-3">
+              <Select
+                value={worktree?.worktreePath ?? member.workspaceRoot}
+                items={Object.fromEntries([
+                  [member.workspaceRoot, "Project checkout"],
+                  ...worktrees.map((entry) => [entry.worktreePath, `Worktree · ${entry.branch}`]),
+                ])}
+                onValueChange={(value) => {
+                  setWorktree(worktrees.find((entry) => entry.worktreePath === value) ?? null);
+                }}
+                disabled={importing !== null}
+              >
+                <SelectTrigger aria-label="Workspace">
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectPopup>
+                  <SelectItem value={member.workspaceRoot}>Project checkout</SelectItem>
+                  {worktrees.map((entry) => (
+                    <SelectItem key={entry.worktreePath} value={entry.worktreePath}>
+                      Worktree · {entry.branch}
+                    </SelectItem>
+                  ))}
+                </SelectPopup>
+              </Select>
+            </div>
+          ) : null}
           {hasAmbiguousProviders ? (
             <p className="mb-2 text-xs text-muted-foreground">
               More than one instance can import these sessions. Choose the instance to continue

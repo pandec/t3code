@@ -16,6 +16,11 @@ export function createSessionImportEnvironmentAtoms<R, E>(
       label: "environment-data:session-import:import",
       tag: WS_METHODS.sessionImportImport,
     }),
+    /** One uncached ref page, so the import dialog sees worktrees created outside T3. */
+    listRefs: createEnvironmentRpcCommand(runtime, {
+      label: "environment-data:session-import:list-refs",
+      tag: WS_METHODS.vcsListRefs,
+    }),
     forkThread: createEnvironmentRpcCommand(runtime, {
       label: "environment-data:session-import:fork-thread",
       tag: WS_METHODS.sessionImportForkThread,

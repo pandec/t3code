@@ -49,6 +49,10 @@ const BENIGN_RECORD_TYPES = new Set([
   "result",
   "fork-context-ref",
   "frame-link",
+  "atis-latch",
+  "cost-state",
+  "launched",
+  "failed",
 ]);
 const SYNTHETIC_MODEL_SENTINEL = "<synthetic>";
 

@@ -1,4 +1,4 @@
-import { SessionImportCandidate, SessionImportError } from "@t3tools/contracts";
+import { SessionImportCandidate, SessionImportError, VcsRef } from "@t3tools/contracts";
 import * as Schema from "effect/Schema";
 import { describe, expect, it } from "vite-plus/test";
 
@@ -8,6 +8,7 @@ import {
   getSessionImportCandidateKey,
   getSessionImportEmptyStateLabel,
   getSessionImportProviderLabel,
+  getSessionImportWorktrees,
   isSessionImportFailureWithReason,
   partitionSessionImportCandidates,
 } from "./SessionImportDialog.logic";
@@ -178,10 +179,10 @@ describe("session import candidate groups", () => {
     const owned = candidate({ instanceId: "codex_personal", provider: "codex", linkedThread });
 
     expect(getSessionImportEmptyStateLabel(partitionSessionImportCandidates([owned]))).toBe(
-      "Every session found for this project is already in T3 Code.",
+      "Every session found for this workspace is already in T3 Code.",
     );
     expect(getSessionImportEmptyStateLabel(partitionSessionImportCandidates([]))).toBe(
-      "No sessions found for this project.",
+      "No sessions found for this workspace.",
     );
   });
 });
@@ -212,5 +213,26 @@ describe("session import failure reasons", () => {
     expect(isSessionImportFailureWithReason(new Error("boom"), "already-imported")).toBe(false);
     expect(isSessionImportFailureWithReason("nope", "already-imported")).toBe(false);
     expect(isSessionImportFailureWithReason(null, "already-imported")).toBe(false);
+  });
+});
+
+describe("getSessionImportWorktrees", () => {
+  const decodeRef = Schema.decodeSync(VcsRef);
+  const ref = (name: string, worktreePath: string | null, extra?: Partial<VcsRef>) =>
+    decodeRef({ name, current: false, isDefault: false, worktreePath, ...extra });
+
+  it("lists other worktrees by branch, skipping the checkout, plain branches, and remotes", () => {
+    expect(
+      getSessionImportWorktrees([
+        ref("dev", "/repo", { current: true }),
+        ref("zeta", "/repo/.t3/zeta"),
+        ref("plain", null),
+        ref("origin/alpha", "/repo/.t3/remote", { isRemote: true }),
+        ref("alpha", "/repo/.t3/alpha"),
+      ]),
+    ).toEqual([
+      { branch: "alpha", worktreePath: "/repo/.t3/alpha" },
+      { branch: "zeta", worktreePath: "/repo/.t3/zeta" },
+    ]);
   });
 });
