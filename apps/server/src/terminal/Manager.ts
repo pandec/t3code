@@ -1441,6 +1441,10 @@ export const resolveProviderInstanceTerminalEnvironment = Effect.fn(
   readonly path: Path.Path;
   readonly rawProviderInstanceId: string;
   readonly env: Record<string, string> | undefined;
+  /** Environment the terminal inherits; defaults to the server's. Test seam. */
+  readonly baseEnv?: NodeJS.ProcessEnv;
+  /** Host platform; Windows env names are case-insensitive. */
+  readonly platform?: NodeJS.Platform;
 }) {
   const providerInstanceId = ProviderInstanceId.make(input.rawProviderInstanceId);
   const settings = yield* input.serverSettings.getSettings.pipe(
@@ -1455,11 +1459,27 @@ export const resolveProviderInstanceTerminalEnvironment = Effect.fn(
   if (instance.driver === "codex") {
     const config = decodeCodexSettings(instance.config ?? {});
     if (Option.isSome(config)) {
-      const layout = yield* resolveCodexHomeLayout(config.value, resolved).pipe(
-        Effect.provideService(Path.Path, input.path),
-      );
-      if (layout.effectiveHomePath)
-        resolved = { ...resolved, CODEX_HOME: layout.effectiveHomePath };
+      // Resolve against the environment the terminal actually inherits, as the
+      // Codex adapter does, so an inherited CODEX_HOME is not shadowed by the
+      // HOME fallback. Only the effective CODEX_HOME joins the overrides.
+      // Windows names are case-insensitive, so an override of any case wins.
+      const windows = input.platform === "win32";
+      const caseFold = (env: NodeJS.ProcessEnv): NodeJS.ProcessEnv =>
+        windows
+          ? Object.fromEntries(
+              Object.entries(env).map(([key, value]) => [key.toUpperCase(), value]),
+            )
+          : env;
+      const layout = yield* resolveCodexHomeLayout(config.value, {
+        ...caseFold(input.baseEnv ?? process.env),
+        ...caseFold(resolved),
+      }).pipe(Effect.provideService(Path.Path, input.path));
+      if (layout.effectiveHomePath) {
+        const kept = Object.entries(resolved).filter(
+          ([key]) => !windows || key.toUpperCase() !== "CODEX_HOME",
+        );
+        resolved = { ...Object.fromEntries(kept), CODEX_HOME: layout.effectiveHomePath };
+      }
     }
   } else if (instance.driver === "claudeAgent") {
     const config = decodeClaudeSettings(instance.config ?? {});
@@ -1484,6 +1504,7 @@ export const make = Effect.fn("TerminalManager.make")(function* () {
   const nativeTelemetry = yield* NativeTelemetryClient.NativeTelemetryClient;
   const serverSettings = yield* ServerSettings.ServerSettingsService;
   const path = yield* Path.Path;
+  const platform = yield* HostProcessPlatform;
   const resolveProviderInstanceEnvironment = Effect.fn(
     "terminal.resolveProviderInstanceEnvironment",
   )((rawProviderInstanceId: string, env: Record<string, string> | undefined) =>
@@ -1492,6 +1513,7 @@ export const make = Effect.fn("TerminalManager.make")(function* () {
       path,
       rawProviderInstanceId,
       env,
+      platform,
     }),
   );
   return yield* makeWithOptions({

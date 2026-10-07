@@ -2125,7 +2125,8 @@ export const make = Effect.gen(function* () {
                 ? serverSettings.getSettings.pipe(
                     Effect.map(
                       (settings) =>
-                        resolveProjectSettings(settings, project.project.id).settings
+                        // The requested project's policy, even when a sibling checkout serves the merge.
+                        resolveProjectSettings(settings, input.projectId).settings
                           .removeAgentCreditsOnMerge,
                     ),
                     Effect.mapError(
