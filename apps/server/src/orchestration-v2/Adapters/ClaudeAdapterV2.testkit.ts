@@ -8,7 +8,7 @@ import {
   type SDKUserMessage,
 } from "@anthropic-ai/claude-agent-sdk";
 import * as NodeServices from "@effect/platform-node/NodeServices";
-import { HostProcessPlatform } from "@t3tools/shared/hostProcess";
+import { HostProcessEnvironment, HostProcessPlatform } from "@t3tools/shared/hostProcess";
 import { SpawnExecutableResolution } from "@t3tools/shared/shell";
 import {
   ProviderReplayEntry,
@@ -985,6 +985,14 @@ function layerClaudeProviderAdapterRegistryReplay(
     ServerConfig.ServerConfig,
     makeReplayServerConfig(transcript.scenario).pipe(Effect.orDie),
   ).pipe(Layer.provide(NodeServices.layer));
+  // Replays must not inherit the host's Claude config dir: it changes the
+  // signed-out message, and a Claude session running these tests sets it.
+  const layerHostEnvironment = Layer.succeed(
+    HostProcessEnvironment,
+    Object.fromEntries(
+      Object.entries(process.env).filter(([name]) => name !== "CLAUDE_CONFIG_DIR"),
+    ),
+  );
   return ProviderAdapterRegistry.layerFromDrivers({
     drivers: [ClaudeAdapterV2.ClaudeAdapterV2Driver],
     configMap: {
@@ -999,6 +1007,7 @@ function layerClaudeProviderAdapterRegistryReplay(
         IdAllocator.layer,
         NodeServices.layer,
         layerServerConfig,
+        layerHostEnvironment,
       ),
     ),
   );
