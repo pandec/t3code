@@ -290,6 +290,19 @@ const OrchestratorMcpProjectTarget = Schema.optional(
 
 export const OrchestratorMcpThreadListInput = Schema.Struct({
   projectId: OrchestratorMcpProjectTarget,
+  /** Fork: list every project's threads; cannot be combined with projectId. */
+  allProjects: Schema.optional(
+    Schema.Boolean.annotate({
+      description: "List threads across every project. Cannot be combined with projectId.",
+    }),
+  ),
+  /** Fork: only threads bound to this checkout, compared without trailing slashes. */
+  worktreePath: Schema.optional(
+    TrimmedNonEmptyString.annotate({
+      description:
+        "Only threads whose worktree is exactly this absolute path (trailing slashes ignored). Threads on the project's main checkout have no worktree and never match.",
+    }),
+  ),
   statuses: Schema.optional(
     Schema.Array(OrchestratorMcpThreadStatus).check(Schema.isMaxLength(10)),
   ),
@@ -303,6 +316,7 @@ export type OrchestratorMcpThreadListInput = typeof OrchestratorMcpThreadListInp
 
 export const OrchestratorMcpThreadListItem = Schema.Struct({
   threadId: ThreadId,
+  projectId: ProjectId,
   title: Schema.String,
   createdBy: OrchestrationV2Actor,
   creationSource: OrchestrationV2CreationSource,
@@ -317,6 +331,7 @@ export const OrchestratorMcpThreadListItem = Schema.Struct({
   settledAt: Schema.NullOr(IsoDateTime),
   parentThreadId: Schema.NullOr(ThreadId),
   relationshipToParent: Schema.NullOr(Schema.Literals(["fork", "subagent"])),
+  worktreePath: Schema.NullOr(Schema.String),
   itemCount: NonNegativeInt,
   createdAt: IsoDateTime,
   updatedAt: IsoDateTime,
@@ -324,7 +339,8 @@ export const OrchestratorMcpThreadListItem = Schema.Struct({
 export type OrchestratorMcpThreadListItem = typeof OrchestratorMcpThreadListItem.Type;
 
 export const OrchestratorMcpThreadListResult = Schema.Struct({
-  projectId: ProjectId,
+  /** Null when allProjects lists every project. */
+  projectId: Schema.NullOr(ProjectId),
   /** The calling thread, or null when the caller is not a T3 thread. */
   currentThreadId: Schema.NullOr(ThreadId),
   threads: Schema.Array(OrchestratorMcpThreadListItem),
