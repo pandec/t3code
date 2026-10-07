@@ -2,12 +2,11 @@ import type { SessionImportCandidate } from "@t3tools/contracts";
 import { scopeThreadRef } from "@t3tools/client-runtime/environment";
 import { useNavigate } from "@tanstack/react-router";
 import { ChevronRightIcon } from "lucide-react";
-import { useEffect, useState } from "react";
+import { useEffect, useEffectEvent, useState } from "react";
 
 import type { SidebarProjectGroupMember } from "../sidebarProjectGrouping";
 import { waitForThreadShell } from "../state/entities";
 import { sessionImportEnvironment } from "../state/sessionImport";
-import { vcsEnvironment } from "../state/vcs";
 import { buildThreadRouteParams } from "../threadRoutes";
 import {
   isAtomCommandInterrupted,
@@ -15,6 +14,7 @@ import {
 } from "@t3tools/client-runtime/state/runtime";
 
 import { useEnvironmentQuery } from "../state/query";
+import { usePaginatedBranches } from "../state/queries";
 import { useAtomCommand } from "../state/use-atom-command";
 import { formatRelativeTimeLabel } from "../timestampFormat";
 import { Badge } from "./ui/badge";
@@ -57,16 +57,18 @@ export function SessionImportDialog(props: {
   const [worktree, setWorktree] = useState<SessionImportWorktree | null>(null);
   const importSession = useAtomCommand(sessionImportEnvironment.importSession);
 
-  const refsQuery = useEnvironmentQuery(
-    member !== null
-      ? vcsEnvironment.listRefs({
-          environmentId: member.environmentId,
-          input: { cwd: member.workspaceRoot, refKind: "local", limit: 200 },
-        })
-      : null,
-  );
-  const worktrees = getSessionImportWorktrees(refsQuery.data?.refs ?? []);
-  const refreshRefs = refsQuery.refresh;
+  // Every ref page is loaded while the dialog is open: a worktree's branch can
+  // sort past the first page.
+  const refs = usePaginatedBranches({
+    environmentId: member?.environmentId ?? null,
+    cwd: member?.workspaceRoot ?? null,
+  });
+  const worktrees = getSessionImportWorktrees(refs.refs);
+  const { refresh: refreshRefs, loadNext: loadNextRefs } = refs;
+  const hasMoreRefs = refs.data?.nextCursor != null && refs.error === null;
+  useEffect(() => {
+    if (hasMoreRefs && !refs.isFetchingNextPage) loadNextRefs();
+  }, [hasMoreRefs, refs.isFetchingNextPage, loadNextRefs]);
   const workspacePath = worktree?.worktreePath ?? member?.workspaceRoot;
 
   const candidatesQuery = useEnvironmentQuery(
@@ -85,18 +87,27 @@ export function SessionImportDialog(props: {
   const hasAmbiguousProviders = ambiguousProviders.size > 0;
   const refreshCandidates = candidatesQuery.refresh;
 
-  // The candidates query atom is cached per project; refresh on every dialog
-  // open so freshly imported/bound sessions move to their linked state. The
-  // linked section collapses again so the import flow stays front and center,
-  // and the workspace returns to the checkout.
+  // Each open starts at the checkout with the linked section collapsed, so the
+  // import flow stays front and center.
+  const [openedFor, setOpenedFor] = useState(member);
+  if (openedFor !== member) {
+    setOpenedFor(member);
+    setLinkedSectionOpen(false);
+    setWorktree(null);
+  }
+
+  // Candidate query atoms are cached per workspace; refresh on open and on
+  // every workspace pick so freshly imported/bound or newly placed sessions
+  // show their current state.
   useEffect(() => {
-    if (member !== null) {
-      refreshCandidates();
-      refreshRefs();
-      setLinkedSectionOpen(false);
-      setWorktree(null);
-    }
-  }, [member, refreshCandidates, refreshRefs]);
+    if (member !== null) refreshCandidates();
+  }, [member, refreshCandidates]);
+  // Refs refresh on open only: refreshing restarts pagination, so it must not
+  // follow the callback's identity as pages load.
+  const refreshRefsOnOpen = useEffectEvent(() => refreshRefs());
+  useEffect(() => {
+    if (member !== null) refreshRefsOnOpen();
+  }, [member]);
 
   const handleOpenLinkedThread = async (candidate: SessionImportCandidate) => {
     if (
