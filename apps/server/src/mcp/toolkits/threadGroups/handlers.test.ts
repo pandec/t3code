@@ -76,6 +76,7 @@ const shell = (
 
 const makeLayer = (options: {
   readonly callerActive?: boolean;
+  readonly callerFields?: Partial<OrchestrationV2ThreadShell>;
   readonly shells: Map<ThreadId, OrchestrationV2ThreadShell>;
   readonly dispatched: Array<OrchestrationV2Command>;
 }) => {
@@ -83,7 +84,10 @@ const makeLayer = (options: {
   if (!shells.has(callerId)) {
     shells.set(
       callerId,
-      shell(callerId, options.callerActive === false ? { activeRunId: null } : {}),
+      shell(callerId, {
+        ...(options.callerActive === false ? { activeRunId: null } : {}),
+        ...options.callerFields,
+      }),
     );
   }
   const threads = Layer.mock(ThreadManagementService.ThreadManagementService)({
@@ -248,4 +252,22 @@ it.effect("needs the caller's live run to create or move, but not to list", () =
     const settings = yield* ServerSettings.ServerSettingsService;
     expect((yield* settings.getSettings).threadGroups).toHaveLength(2);
   }).pipe(Effect.scoped, Effect.provide(makeLayer({ shells, dispatched, callerActive: false })));
+});
+
+it.effect("refuses group creation to callers below full access", () => {
+  const dispatched: Array<OrchestrationV2Command> = [];
+  const shells = new Map([[targetId, shell(targetId)]]);
+  return Effect.gen(function* () {
+    expect((yield* call({ action: "create", name: "Restricted" })).failure).toMatchObject({
+      code: "capability_denied",
+    });
+    expect((yield* call({ action: "list" })).value).toMatchObject({ action: "list" });
+    const settings = yield* ServerSettings.ServerSettingsService;
+    expect((yield* settings.getSettings).threadGroups).toHaveLength(2);
+  }).pipe(
+    Effect.scoped,
+    Effect.provide(
+      makeLayer({ shells, dispatched, callerFields: { runtimeMode: "approval-required" } }),
+    ),
+  );
 });

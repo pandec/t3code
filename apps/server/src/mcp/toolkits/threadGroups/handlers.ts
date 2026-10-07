@@ -1,7 +1,7 @@
 import { OrchestratorMcpFailure } from "@t3tools/contracts";
 import * as Effect from "effect/Effect";
 
-import { readCaller, readMutationCaller, readWritableThread } from "../../threadAccess.ts";
+import { readCaller, readFullAccessCaller, readWritableThread } from "../../threadAccess.ts";
 import * as ThreadGroupsMcpService from "../../ThreadGroupsMcpService.ts";
 import { ThreadGroupsToolkit } from "./tools.ts";
 
@@ -19,7 +19,9 @@ export const ThreadGroupsToolkitHandlersLive = ThreadGroupsToolkit.toLayer({
         }
         case "create": {
           if (input.name === undefined) return yield* missing("create needs a name.");
-          yield* readMutationCaller();
+          yield* readFullAccessCaller(
+            "Creating a thread group changes environment settings, so it needs a full-access agent in default mode.",
+          );
           return { action: input.action, ...(yield* service.create(input.name)) };
         }
         case "move_thread": {
