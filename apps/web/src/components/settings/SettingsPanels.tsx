@@ -648,6 +648,9 @@ export function useSettingsRestore(onRestored?: () => void) {
       ...(settings.showPanelToggleButtons !== DEFAULT_UNIFIED_SETTINGS.showPanelToggleButtons
         ? ["Panel toggle buttons"]
         : []),
+      ...(settings.chatWideTables !== DEFAULT_UNIFIED_SETTINGS.chatWideTables
+        ? ["Wide tables"]
+        : []),
       ...(settings.autoResumeLimitedThreads !== DEFAULT_UNIFIED_SETTINGS.autoResumeLimitedThreads
         ? ["Auto-resume limited threads"]
         : []),
@@ -827,6 +830,7 @@ export function useSettingsRestore(onRestored?: () => void) {
       settings.sidebarV2NewThreadButtonInProjectRow,
       settings.sidebarThreadGroupsButton,
       settings.showPanelToggleButtons,
+      settings.chatWideTables,
       settings.showSkillsInSlashMenu,
       settings.timestampFormat,
       settings.notificationMode,
@@ -941,6 +945,7 @@ export function useSettingsRestore(onRestored?: () => void) {
         DEFAULT_UNIFIED_SETTINGS.sidebarV2NewThreadButtonInProjectRow,
       sidebarThreadGroupsButton: DEFAULT_UNIFIED_SETTINGS.sidebarThreadGroupsButton,
       showPanelToggleButtons: DEFAULT_UNIFIED_SETTINGS.showPanelToggleButtons,
+      chatWideTables: DEFAULT_UNIFIED_SETTINGS.chatWideTables,
       autoResumeLimitedThreads: DEFAULT_UNIFIED_SETTINGS.autoResumeLimitedThreads,
       snoozeLimitedThreads: DEFAULT_UNIFIED_SETTINGS.snoozeLimitedThreads,
       responseStreamingMode: DEFAULT_UNIFIED_SETTINGS.responseStreamingMode,
