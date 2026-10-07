@@ -2552,6 +2552,9 @@ const SidebarThreadRow = memo(function SidebarThreadRow(props: {
                             aria-label={archiveLabel}
                             aria-pressed={archivePending}
                             onClick={handleArchiveClick}
+                            // Keeps a press from picking up the row for a reorder drag,
+                            // whose sensor would swallow the release click.
+                            onPointerDown={(event) => event.stopPropagation()}
                             className={cn(
                               "-mr-1 inline-flex cursor-pointer items-center rounded-md bg-transparent px-1.5 text-muted-foreground hover:text-foreground",
                               archivePending && "text-warning-foreground",
