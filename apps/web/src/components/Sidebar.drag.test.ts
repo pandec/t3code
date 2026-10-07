@@ -586,6 +586,33 @@ describe("sidebar drag projection", () => {
     },
   );
 
+  it("opens no empty Active target under a folded Active header", () => {
+    const group = (key: string): SidebarListItem => ({
+      kind: "thread",
+      key,
+      section: "active",
+      customGroupId: "g",
+    });
+    const items = [
+      pinnedHeader,
+      divider,
+      marker("active-header"),
+      marker("active-placeholder"),
+      marker("custom-group:g"),
+      group("g1"),
+      group("g2"),
+      settledHeader,
+    ];
+    const args = [{ items, settledOrder: [], settledExpanded: true }, "g2", "g1"] as const;
+    // Expanded but empty, Active opens its placeholder; folded, it only hides rows.
+    expect(preview(...args).get(sidebarMarkerId("custom-group:g"))?.y).toBe(36);
+    const folded = preview({ ...args[0], activeCollapsed: true }, args[1], args[2]);
+    expect(folded.get(sidebarMarkerId("active-placeholder"))?.scaleY).toBe(0);
+    // -1: this layout gives the placeholder the gap its -mb-px cancels in the DOM.
+    expect(folded.get(sidebarMarkerId("custom-group:g"))?.y).toBe(-1);
+    expect(folded.get("g1")?.y).toBe(82);
+  });
+
   it("uses the canonical settled rank and the destination's slim height", () => {
     const items = [
       pinnedHeader,

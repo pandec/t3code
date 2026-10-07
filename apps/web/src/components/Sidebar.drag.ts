@@ -117,6 +117,9 @@ export function createSidebarSortingStrategy(input: {
    * Pinned shelf header or a group header already marks the boundary), so
    * rows do not drift below their at-rest drop rects. */
   boundaryLabelHeights?: Partial<Record<"pinned-header" | "pinned-divider", number>>;
+  /** Fork: a folded Active group hides its rows rather than being empty, so it
+   * opens no placeholder; its header is the drop target. */
+  activeCollapsed?: boolean;
 }): SortingStrategy {
   if (input.enabled === false) return () => stationary;
   const { items } = input;
@@ -218,7 +221,7 @@ export function createSidebarSortingStrategy(input: {
           item.marker === "active-header" ? null : item.marker.slice("custom-group:".length);
         const rows = groups.active.filter((row) => (row.customGroupId ?? null) === id);
         if (rows.length) projected.push(...rows);
-        else if (id === null) marker("active-placeholder");
+        else if (id === null && !input.activeCollapsed) marker("active-placeholder");
       }
     } else section("active");
     if (items.some((item) => item.kind === "marker" && item.marker === "working-header")) {

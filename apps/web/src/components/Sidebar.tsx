@@ -4853,6 +4853,7 @@ export default function Sidebar() {
         },
         settledOrder: draggedSettledOrder,
         ...(draggedActiveOrder === undefined ? {} : { activeOrder: draggedActiveOrder }),
+        activeCollapsed: !activeShelfExpanded,
         settledExpanded: settledShelfExpanded,
         settledVisibleCount,
         routeThreadKey,
@@ -4861,6 +4862,7 @@ export default function Sidebar() {
         slimHeight: 2.25 * sidebarRemSizeRef.current,
       }),
     [
+      activeShelfExpanded,
       compactCards,
       dividerDragLabelHeight,
       draggedActiveOrder,
@@ -6647,6 +6649,11 @@ export default function Sidebar() {
                         );
                       };
                       const from = isContextDrag ? null : (dragState?.activeSection ?? null);
+                      // Fork: custom groups hold active threads too; the Active
+                      // placeholder counts the Active group's own threads only.
+                      const activeGroupThreadCount = activeThreads.filter(
+                        (thread) => threadGroupId(thread, customGroups.groups) === null,
+                      ).length;
                       const items: ReactNode[] = [
                         <SidebarDraftBlock
                           key="draft-sessions"
@@ -6770,13 +6777,21 @@ export default function Sidebar() {
                                 key="active-placeholder"
                                 marker="active-placeholder"
                                 label="Active"
+                                // Fork: a folded Active opens no placeholder (see
+                                // the sorting strategy), so it shows no hint.
                                 showHint={
                                   from !== null &&
-                                  (activeThreads.length === 0 ||
-                                    (from === "active" &&
-                                      activeThreads.length === 1 &&
+                                  activeShelfExpanded &&
+                                  (activeGroupThreadCount === 0 ||
+                                    (activeGroupThreadCount === 1 &&
+                                      dragState?.activeSection === "active" &&
+                                      threadGroupId(
+                                        threadByKey.get(dragState.activeKey) ?? {},
+                                        customGroups.groups,
+                                      ) === null &&
                                       dragTargetSection !== null &&
-                                      dragTargetSection !== "active"))
+                                      (dragTargetSection !== "active" ||
+                                        dragState.targetCustomGroupId !== null)))
                                 }
                                 isDropTarget={dragTargetSection === "active"}
                               />,
