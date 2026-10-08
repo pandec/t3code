@@ -1452,9 +1452,12 @@ const SidebarThreadRow = memo(function SidebarThreadRow(props: {
   // it. The subscription re-renders the row only when the state flips, never
   // on the player's progress tick.
   const listeningState = useThreadListeningState(thread.environmentId, thread.id);
+  // Both split panes are on screen, so both rows wear the open-thread
+  // surface; isActive alone (the route thread) still drives navigation.
+  const isOnScreen = props.isActive || props.splitPaneMarker !== null;
   // Unsent composer text on this thread. The open thread shows its own
   // composer, so the marker only decorates rows you have navigated away from.
-  const hasUnsentDraft = useThreadHasUnsentDraft(threadRef) && !props.isActive;
+  const hasUnsentDraft = useThreadHasUnsentDraft(threadRef) && !isOnScreen;
   const handleDiscardDraftClick = useCallback(
     (event: ReactMouseEvent) => {
       event.preventDefault();
@@ -1863,7 +1866,7 @@ const SidebarThreadRow = memo(function SidebarThreadRow(props: {
   const rowSurfaceClassName = cn(
     "group/sidebar-row relative w-full cursor-pointer overflow-hidden rounded-md text-left outline-none select-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring",
     variantAction === "unsettle" && "[&:not(:hover):not(:focus-within)_*]:text-secondary-label/70",
-    props.isActive
+    isOnScreen
       ? "bg-sidebar-row-active text-sidebar-foreground"
       : isSelected || props.sweepAction !== null
         ? "bg-sidebar-row-selected text-sidebar-foreground"
@@ -1878,7 +1881,7 @@ const SidebarThreadRow = memo(function SidebarThreadRow(props: {
       status === "working" &&
       "opacity-70 transition-opacity hover:opacity-100 focus-within:opacity-100 motion-reduce:transition-none",
     isFileDragOver && "ring-1 ring-inset ring-primary/70",
-    isFileDragOver && !props.isActive && !isSelected && "bg-sidebar-row-hover",
+    isFileDragOver && !isOnScreen && !isSelected && "bg-sidebar-row-hover",
     // The lifted row is an opaque card so the rows beneath it never show
     // through. The row tint is translucent in dark themes and the pointer
     // keeps the hover color applied, so both the tint and the solid sidebar
@@ -1984,7 +1987,7 @@ const SidebarThreadRow = memo(function SidebarThreadRow(props: {
                 "truncate group-focus-within/sidebar-row:text-foreground group-hover/sidebar-row:text-foreground",
                 shouldRecede
                   ? "text-secondary-label/70"
-                  : props.isActive || isWoke || status === "input"
+                  : isOnScreen || isWoke || status === "input"
                     ? "text-foreground"
                     : isUnread
                       ? "text-muted-foreground"
@@ -2188,7 +2191,7 @@ const SidebarThreadRow = memo(function SidebarThreadRow(props: {
             <span
               className={cn(
                 "shrink-0 transition-opacity",
-                (!props.isActive || variantAction === "unsettle") &&
+                (!isOnScreen || variantAction === "unsettle") &&
                   "opacity-40 grayscale group-focus-within/sidebar-row:opacity-100 group-focus-within/sidebar-row:grayscale-0 group-hover/sidebar-row:opacity-100 group-hover/sidebar-row:grayscale-0",
               )}
             >

@@ -7,11 +7,13 @@ export function RightPanelSheet(props: {
   children: ReactNode;
   open: boolean;
   onClose: () => void;
-  transparentBackdrop?: boolean;
+  /** Non-modal with no backdrop: the rest of the app stays usable. */
+  nonModal?: boolean;
 }) {
   return (
     <Sheet
       open={props.open}
+      modal={!props.nonModal}
       onOpenChange={(open) => {
         if (!open) {
           props.onClose();
@@ -24,7 +26,7 @@ export function RightPanelSheet(props: {
         showCloseButton={false}
         keepMounted
         className="w-[min(42vw,28rem)] min-w-80 max-w-[28rem] max-[760px]:w-[min(88vw,24rem)] max-[760px]:min-w-0 wco:mt-(--workspace-topbar-height) wco:h-[calc(100%-var(--workspace-topbar-height))] wco:max-h-[calc(100%-var(--workspace-topbar-height))]"
-        backdrop={props.transparentBackdrop ? "transparent" : "default"}
+        backdrop={props.nonModal ? "none" : "default"}
       >
         {props.children}
       </SheetPopup>

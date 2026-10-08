@@ -6163,6 +6163,22 @@ export default function ChatView(props: ChatViewProps) {
       useRightPanelStore.getState().close(activeThreadRef);
     }
   }, [activeRightPanelSurface, activeThreadRef]);
+  // Split view (fork): both panes' sheets dock to the window's right edge, so
+  // only one stays open — an opening sheet claims the slot, and the pane
+  // holding it closes its own once the other pane claims it. Panel state is
+  // per thread, so a claim for this same thread (mid pane swap, when both
+  // panes briefly show it) must not close it.
+  useEffect(() => {
+    if (!threadSplitActive || !rightPanelOpen || activeThreadKey === null) return;
+    useThreadSplitStore
+      .getState()
+      .claimSplitSheet({ paneId: threadPaneId, threadKey: activeThreadKey });
+    return useThreadSplitStore.subscribe((state) => {
+      const owner = state.splitSheetOwner;
+      if (owner === null || owner.paneId === threadPaneId) return;
+      if (owner.threadKey !== activeThreadKey) closePreviewPanel();
+    });
+  }, [activeThreadKey, closePreviewPanel, rightPanelOpen, threadPaneId, threadSplitActive]);
   const togglePreviewPanel = useCallback(() => {
     if (!activeThreadRef || !browserAvailable) return;
     if (previewPanelOpen) {
@@ -11924,7 +11940,11 @@ export default function ChatView(props: ChatViewProps) {
         // Keep one viewport anchor inside the header's no-drag region. The
         // header can shrink behind the right panel without moving the controls.
         // The primary split pane anchors to its own header instead.
-        "pointer-events-none z-50 mr-px flex h-[var(--workspace-topbar-height)] items-center gap-1 [-webkit-app-region:no-drag]",
+        "pointer-events-none mr-px flex h-[var(--workspace-topbar-height)] items-center gap-1 [-webkit-app-region:no-drag]",
+        // Split panes force the sheet presentation, and a sheet is viewport
+        // docked: it can slide over the other pane's cluster, which must sit
+        // under it or it swallows clicks meant for the sheet's own controls.
+        threadSplitActive ? "z-[calc(var(--z-sheet)-1)]" : "z-50",
         paneTouchesWindowRightEdge
           ? "fixed top-[var(--workspace-controls-top)] right-[var(--workspace-controls-right)]"
           : "absolute inset-y-0 right-3",
@@ -12716,10 +12736,10 @@ export default function ChatView(props: ChatViewProps) {
           animationDurationMs={panelAnimationsActive ? panelAnimationDurationMs : 0}
           open={rightPanelOpen}
           onClose={closePreviewPanel}
-          // While split, a blurred window-wide backdrop would hide the other
-          // pane — the panel stays modal, but the rest of the app stays
-          // legible and a click outside just dismisses it.
-          transparentBackdrop={threadSplitActive}
+          // While split, the other pane stays usable: a click there dismisses
+          // this sheet and still reaches its target, so the other pane's
+          // panel toggle opens its own sheet in one click.
+          nonModal={threadSplitActive}
         >
           <RightPanelTabs
             mode="sheet"

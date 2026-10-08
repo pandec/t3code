@@ -34,6 +34,13 @@ const SPLIT_GRID_TEMPLATE_COLUMNS =
   "minmax(min(20rem, 45%), var(--thread-split-a)) auto minmax(min(20rem, 45%), var(--thread-split-b))";
 const SINGLE_GRID_TEMPLATE_COLUMNS = "minmax(0, 1fr)";
 
+// Once a pane hits its floor it drops out of fr distribution, and a remaining
+// flex factor below 1 claims only that fraction of the free space — the rest
+// renders as a gap beside the divider. Scaling keeps every factor well above 1.
+function splitTrackFactors(ratio: number): { a: string; b: string } {
+  return { a: `${ratio * 100}fr`, b: `${(1 - ratio) * 100}fr` };
+}
+
 // Module-level so route changes made while the chat layout is unmounted
 // (e.g. picking another thread from Settings) still register as a change on
 // remount — a component ref would re-initialize and miss them.
@@ -129,6 +136,7 @@ function SplitThreadPanes({
   const setSplitMounted = useThreadSplitStore((state) => state.setSplitMounted);
   const containerRef = useRef<HTMLDivElement | null>(null);
   const splitOpen = secondaryRef !== null;
+  const trackFactors = splitTrackFactors(splitRatio);
 
   // splitMounted is the store's single source of truth for "two panes are on
   // screen"; every active-pane gate reads it, so it must track the rendered
@@ -151,8 +159,8 @@ function SplitThreadPanes({
           gridTemplateColumns: splitOpen
             ? SPLIT_GRID_TEMPLATE_COLUMNS
             : SINGLE_GRID_TEMPLATE_COLUMNS,
-          "--thread-split-a": `${splitRatio}fr`,
-          "--thread-split-b": `${1 - splitRatio}fr`,
+          "--thread-split-a": trackFactors.a,
+          "--thread-split-b": trackFactors.b,
         } as React.CSSProperties
       }
     >
@@ -258,8 +266,9 @@ function SplitResizeHandle({
     (ratio: number) => {
       const container = containerRef.current;
       if (!container) return;
-      container.style.setProperty("--thread-split-a", `${ratio}fr`);
-      container.style.setProperty("--thread-split-b", `${1 - ratio}fr`);
+      const factors = splitTrackFactors(ratio);
+      container.style.setProperty("--thread-split-a", factors.a);
+      container.style.setProperty("--thread-split-b", factors.b);
     },
     [containerRef],
   );
