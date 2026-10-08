@@ -1,37 +1,51 @@
-/** Session-local history of the two most recently focused server threads. */
-import type { KeybindingCommand, ScopedThreadRef } from "@t3tools/contracts";
+/** Session-local history of the two most recently focused threads and drafts. */
+import type { KeybindingCommand } from "@t3tools/contracts";
 import { scopedThreadKey } from "@t3tools/client-runtime/environment";
 
 import type { ShortcutEventLike } from "./keybindings";
+import type { ThreadRouteTarget } from "./threadRoutes";
+
+export function threadVisitKey(target: ThreadRouteTarget): string {
+  return target.kind === "server" ? scopedThreadKey(target.threadRef) : `draft:${target.draftId}`;
+}
+
+/**
+ * Maps a remembered entry onto what it can open now: a sent draft becomes
+ * its server thread, and a discarded draft or an unavailable thread is null.
+ */
+export type ThreadVisitResolver = (target: ThreadRouteTarget) => ThreadRouteTarget | null;
 
 export interface ThreadVisitHistory {
-  record(ref: ScopedThreadRef | null): void;
-  /** Most recent available entry other than the focused thread; drafts have no focused ref. */
+  record(target: ThreadRouteTarget | null, resolve?: ThreadVisitResolver): void;
+  /** Most recent openable entry other than the focused one. */
   resolveTarget(
-    focusedRef: ScopedThreadRef | null,
-    isOpenable?: (ref: ScopedThreadRef) => boolean,
-  ): ScopedThreadRef | null;
+    focused: ThreadRouteTarget | null,
+    resolve?: ThreadVisitResolver,
+  ): ThreadRouteTarget | null;
 }
 
 export function createThreadVisitHistory(): ThreadVisitHistory {
-  let current: ScopedThreadRef | null = null;
-  let previous: ScopedThreadRef | null = null;
+  let current: ThreadRouteTarget | null = null;
+  let previous: ThreadRouteTarget | null = null;
   return {
-    record(ref) {
-      if (ref === null) return;
-      if (current !== null && scopedThreadKey(current) === scopedThreadKey(ref)) return;
+    record(target, resolve = (entry) => entry) {
+      if (target === null) return;
+      const resolvedCurrent = current === null ? null : resolve(current);
+      // Sending a draft lands on its new thread: that is the same visit, so
+      // it replaces the draft instead of pushing the older entry out.
+      if (resolvedCurrent !== null && threadVisitKey(resolvedCurrent) === threadVisitKey(target)) {
+        current = target;
+        return;
+      }
       previous = current;
-      current = ref;
+      current = target;
     },
-    resolveTarget(focusedRef, isOpenable = () => true) {
-      const focusedKey = focusedRef === null ? null : scopedThreadKey(focusedRef);
+    resolveTarget(focused, resolve = (entry) => entry) {
+      const focusedKey = focused === null ? null : threadVisitKey(focused);
       for (const candidate of [current, previous]) {
-        if (
-          candidate !== null &&
-          scopedThreadKey(candidate) !== focusedKey &&
-          isOpenable(candidate)
-        ) {
-          return candidate;
+        const target = candidate === null ? null : resolve(candidate);
+        if (target !== null && threadVisitKey(target) !== focusedKey) {
+          return target;
         }
       }
       return null;
@@ -64,8 +78,8 @@ export interface LastVisitedThreadShortcutOptions {
   /** An overlay (palette, picker, modal) owns the keyboard: consume, do nothing. */
   isBlocked: () => boolean;
   /** The validated toggle target, or null when there is nothing to open. */
-  resolveTarget: () => ScopedThreadRef | null;
-  openThread: (ref: ScopedThreadRef) => void;
+  resolveTarget: () => ThreadRouteTarget | null;
+  openThread: (target: ThreadRouteTarget) => void;
 }
 
 /**

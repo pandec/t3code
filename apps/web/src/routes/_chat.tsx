@@ -3,6 +3,7 @@ import { Outlet, createFileRoute, redirect, useParams, useRouter } from "@tansta
 import { useAtomValue } from "@effect/atom-react";
 import { useEffect, useMemo, useRef } from "react";
 import type { ScopedThreadRef } from "@t3tools/contracts";
+import { scopeThreadRef } from "@t3tools/client-runtime/environment";
 
 import { isCommandPaletteOpen } from "../commandPaletteBus";
 import { environmentCatalog } from "../connection/catalog";
@@ -47,7 +48,12 @@ import {
 import { openThreadInActivePane } from "~/components/thread-split/threadOpenTarget";
 import { primaryServerKeybindingsAtom } from "~/state/server";
 import { hasOpenArchiveUndoBlockingLayer } from "../archiveUndo";
-import { buildThreadRouteParams, resolveThreadRouteTarget } from "../threadRoutes";
+import {
+  buildThreadRouteParams,
+  resolveThreadRouteTarget,
+  type ThreadRouteTarget,
+} from "../threadRoutes";
+import { type DraftId, useComposerDraftStore } from "../composerDraftStore";
 
 // A stale pair entry must not open: the thread may be gone or archived, and
 // point shell reads still serve cached snapshots for a removed or disabled
@@ -63,11 +69,45 @@ function isThreadOpenable(ref: ScopedThreadRef): boolean {
   return shell !== null && shell.archivedAt === null;
 }
 
+// The server thread each remembered draft becomes once sent. Promotion
+// cleanup deletes the draft session, possibly before the next visit is
+// recorded, so the ref is captured while the draft is open.
+const draftVisitThreadRefs = new Map<DraftId, ScopedThreadRef>();
+
+function rememberDraftThreadRef(draftId: DraftId): void {
+  const session = useComposerDraftStore.getState().getDraftSession(draftId);
+  if (session === null) return;
+  draftVisitThreadRefs.set(
+    draftId,
+    session.promotedTo ?? scopeThreadRef(session.environmentId, session.threadId),
+  );
+}
+
+// A sent draft resolves to its thread; a discarded one never got a thread.
+function resolveVisitTarget(target: ThreadRouteTarget): ThreadRouteTarget | null {
+  if (target.kind === "server") {
+    return isThreadOpenable(target.threadRef) ? target : null;
+  }
+  const session = useComposerDraftStore.getState().getDraftSession(target.draftId);
+  if (session !== null && session.promotedTo == null) return target;
+  rememberDraftThreadRef(target.draftId);
+  const threadRef = draftVisitThreadRefs.get(target.draftId);
+  return threadRef !== undefined && isThreadOpenable(threadRef)
+    ? { kind: "server", threadRef }
+    : null;
+}
+
 function ChatRouteGlobalShortcuts() {
   const clearSelection = useThreadSelectionStore((state) => state.clearSelection);
   const selectedThreadKeysSize = useThreadSelectionStore((state) => state.selectedThreadKeys.size);
-  const { activeDraftThread, activeThread, defaultProjectRef, handleNewThread, routeThreadRef } =
-    useHandleNewThread();
+  const {
+    activeDraftThread,
+    activeThread,
+    defaultProjectRef,
+    handleNewThread,
+    routeDraftId,
+    routeThreadRef,
+  } = useHandleNewThread();
   const keybindings = useAtomValue(primaryServerKeybindingsAtom);
   const legacySidebarEnabled = useLegacySidebarEnabled();
   const projectGroupingSettings = useClientSettings(selectProjectGroupingSettings);
@@ -111,9 +151,25 @@ function ChatRouteGlobalShortcuts() {
       ? selectActiveRightPanel(state.byThreadKey, shortcutThreadRef) === "preview"
       : false,
   );
+  // Ctrl+Tab history: the focused pane's thread, or the routed draft.
+  const focusedVisitTarget = useMemo<ThreadRouteTarget | null>(
+    () =>
+      shortcutThreadRef !== null
+        ? { kind: "server", threadRef: shortcutThreadRef }
+        : routeDraftId !== null
+          ? { kind: "draft", draftId: routeDraftId }
+          : null,
+    [routeDraftId, shortcutThreadRef],
+  );
   useEffect(() => {
-    if (isElectron) threadVisitHistory.record(shortcutThreadRef);
-  }, [shortcutThreadRef]);
+    if (!isElectron) return;
+    threadVisitHistory.record(focusedVisitTarget, resolveVisitTarget);
+    if (focusedVisitTarget?.kind !== "draft") return;
+    const { draftId } = focusedVisitTarget;
+    rememberDraftThreadRef(draftId);
+    // Tracks the draft's thread while it is open (an environment switch moves it).
+    return useComposerDraftStore.subscribe(() => rememberDraftThreadRef(draftId));
+  }, [focusedVisitTarget]);
   const lastVisitedPendingRelease = useRef<LastVisitedPendingRelease>({ key: null });
   useEffect(() => {
     const resolveCommand = (event: LastVisitedShortcutEvent) =>
@@ -140,9 +196,18 @@ function ChatRouteGlobalShortcuts() {
           : resolveCommand(event),
       isBlocked: () =>
         isCommandPaletteOpen() || isModelPickerOpen() || hasOpenArchiveUndoBlockingLayer(),
-      resolveTarget: () => threadVisitHistory.resolveTarget(shortcutThreadRef, isThreadOpenable),
-      openThread: (targetRef) => {
+      resolveTarget: () => threadVisitHistory.resolveTarget(focusedVisitTarget, resolveVisitTarget),
+      openThread: (target) => {
         clearSelection();
+        if (target.kind === "draft") {
+          // Drafts only open as the routed pane; from the secondary pane the
+          // split gives way to the draft as a single view.
+          const split = useThreadSplitStore.getState();
+          if (split.splitMounted && split.activePaneId === "secondary") split.closeSplit();
+          void router.navigate({ to: "/draft/$draftId", params: { draftId: target.draftId } });
+          return;
+        }
+        const targetRef = target.threadRef;
         const { completion } = openThreadInActivePane({
           targetRef,
           routeThreadRef,
@@ -341,6 +406,7 @@ function ChatRouteGlobalShortcuts() {
     handleNewThread,
     keybindings,
     defaultProjectRef,
+    focusedVisitTarget,
     previewOpen,
     primaryEnvironmentId,
     projectGroupCount,

@@ -73,16 +73,17 @@ under **Thread Pane: Focus Other** and **Thread Pane: Swap** in Settings → Key
 
 ## Previous thread on desktop
 
-Press `Ctrl+Tab` to switch between the current and previously viewed thread in the
-desktop app. Use Control on macOS too. Opening a third thread replaces the older
-thread in the pair; restarting the app clears the pair.
+Press `Ctrl+Tab` to switch between the current and previously viewed thread or
+unsent draft in the desktop app. Use Control on macOS too. Opening a third one
+replaces the older entry in the pair; restarting the app clears the pair.
 
-An unsent draft does not enter the pair. From a new-thread screen, the shortcut
-returns to the most recent available thread in the pair. Change the shortcut under
+Sending a draft keeps its place in the pair as the new thread, and a discarded
+draft drops out. Change the shortcut under
 **Settings → Keybindings → Thread: Last Visited**.
 
 The shortcut works from the composer and terminal. In split view, it follows the
 focused thread and focuses the other pane when that thread is already visible.
+Switching to a draft from the right pane closes the split.
 It does not handle keys inside an embedded browser page and is unavailable in the
 web and mobile clients.
 

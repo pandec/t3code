@@ -35,6 +35,8 @@ vi.mock("../../state/session", async () => {
   };
 });
 vi.mock("../../state/shell", () => ({ shellEnvironment: { openInEditor: "openInEditor" } }));
+// Fork: the split store's thread lookups would load the real shell atoms.
+vi.mock("../thread-split/threadSplitStore", () => ({ isThreadPaneActive: () => true }));
 // Fork: the picker's file actions come from the file context menu, unused by these folder cases.
 vi.mock("../../fileContextMenu", () => ({
   useFileContextMenu: () => ({ buildItems: () => [], activate: () => undefined }),
