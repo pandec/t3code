@@ -3671,6 +3671,39 @@ it.effect(
     }),
 );
 
+it.effect(
+  "ends a child thread's open tool call when the stream closes after the root completes",
+  () =>
+    Effect.gen(function* () {
+      const { written, observed } = yield* captureRootRunTermination({
+        key: "closed-stream-child-tool",
+        shouldFinalizeRun: () => Effect.succeed(true),
+        events: (ids) =>
+          Stream.fromIterable([
+            childThreadCreatedEvent(ids),
+            subagentEvent(ids, "running"),
+            childBackgroundTurnItemEvent(ids, "running", 1),
+            rootTerminalEvent(ids, "completed"),
+          ]).pipe(
+            Stream.concat(
+              Stream.fail(
+                new ProviderAdapterEventStreamError({
+                  driver,
+                  providerSessionId: ProviderSessionId.make("session:detached"),
+                  cause: "Provider session released: Workspace changed.",
+                }),
+              ),
+            ),
+          ),
+      });
+      assert.deepEqual(observed, ["run:waiting", "pull-requests-refreshed"]);
+      assert.deepEqual(
+        written.map((item) => `${item.type}:${item.status}`),
+        ["command_execution:interrupted"],
+      );
+    }),
+);
+
 it.effect("refreshes pull requests only once when startup failure closes its event stream", () =>
   Effect.gen(function* () {
     const ingestionStarted = yield* Deferred.make<void>();

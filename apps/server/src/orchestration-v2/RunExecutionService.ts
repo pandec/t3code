@@ -986,8 +986,8 @@ export const layer: Layer.Layer<
             ReadonlySet<OrchestrationV2TurnItem["id"]>
           >(new Set(inheritedBackgroundTurnItemsById.keys()));
           const openRunOwnedSubagents = yield* Ref.make(emptyOpenRunOwnedSubagentProjection());
-          // Open tool and command items of this run (and inherited ones), kept
-          // whole so a dead event stream can end them: no process will.
+          // Open tool and command items of this run, its child threads and
+          // inherited work, kept whole so a dead event stream can end them.
           const openToolTurnItems = yield* Ref.make<
             ReadonlyMap<OrchestrationV2TurnItem["id"], OrchestrationV2TurnItem>
           >(
@@ -1002,6 +1002,11 @@ export const layer: Layer.Layer<
           const endOrphanedToolTurnItems = Effect.gen(function* () {
             const open = yield* Ref.getAndSet(openToolTurnItems, new Map());
             if (open.size === 0) return;
+            // Ended here, so the failed run's cascade must not end them again.
+            yield* Ref.update(openRunOwnedSubagents, (current) => ({
+              ...current,
+              childTurnItems: new Map([...current.childTurnItems].filter(([id]) => !open.has(id))),
+            }));
             const completedAt = yield* DateTime.now;
             const events: Array<OrchestrationV2DomainEvent> = [];
             for (const turnItem of open.values()) {
@@ -1009,12 +1014,14 @@ export const layer: Layer.Layer<
                 id: yield* idAllocator.allocate.event({ threadId: input.run.threadId }),
                 type: "turn-item.updated",
                 threadId: turnItem.threadId,
-                ...(turnItem.runId === null ? {} : { runId: turnItem.runId }),
+                // A child thread's item may have no run; it is this run's work.
+                runId: turnItem.runId ?? input.run.id,
                 ...(turnItem.nodeId === null ? {} : { nodeId: turnItem.nodeId }),
                 providerInstanceId: input.run.providerInstanceId,
                 occurredAt: completedAt,
                 payload: {
                   ...turnItem,
+                  ...("streaming" in turnItem ? { streaming: false } : {}),
                   status: "interrupted",
                   completedAt,
                   updatedAt: completedAt,
@@ -1166,7 +1173,9 @@ export const layer: Layer.Layer<
                   deliverable &&
                   (event.turnItem.type === "command_execution" ||
                     event.turnItem.type === "dynamic_tool") &&
-                  (belongsToRootRun || belongsToInheritedBackgroundItem)
+                  (belongsToRootRun ||
+                    belongsToInheritedBackgroundItem ||
+                    belongsToOwnedChildThread)
                 ) {
                   const turnItem = event.turnItem;
                   yield* Ref.update(openToolTurnItems, (current) => {
