@@ -59,6 +59,7 @@ import * as Scope from "effect/Scope";
 import * as SynchronizedRef from "effect/SynchronizedRef";
 
 import * as DesktopEnvironment from "../app/DesktopEnvironment.ts";
+import { DesktopThreadLinkReceiver } from "../app/DesktopThreadLinkReceiver.ts";
 import * as DesktopRendererHistory from "../telemetry/DesktopRendererHistory.ts";
 import { MENU_ACTION_CHANNEL, PREVIEW_PICTURE_IN_PICTURE_FRAME_CHANNEL } from "../ipc/channels.ts";
 import * as DesktopBrowserHost from "./DesktopBrowserHost.ts";
@@ -554,6 +555,7 @@ const makeNativeOperations = Effect.fn("PreviewManager.makeOperations")(function
   const crypto = yield* Crypto.Crypto;
   const parentScope = yield* Scope.Scope;
   const browserHost = yield* DesktopBrowserHost.DesktopBrowserHost;
+  const threadLinks = yield* DesktopThreadLinkReceiver;
   const context = yield* Effect.context<never>();
   const runFork = Effect.runForkWith(context);
   const resolvedArtifactDirectory = path.resolve(artifactDirectory);
@@ -1335,6 +1337,11 @@ const makeNativeOperations = Effect.fn("PreviewManager.makeOperations")(function
     ) => {
       if (event.isMainFrame && !event.isSameDocument) cancelFaviconCapture();
     };
+    // Opens a thread link clicked in a page in the app, as a real browser would
+    // through the OS; the preview session cannot launch external protocols.
+    const willNavigate = (event: Electron.Event, url: string): void => {
+      if (threadLinks.receive(url)) event.preventDefault();
+    };
     const audioStateChanged = (
       event: Electron.Event<Electron.WebContentsAudioStateChangedEventParams>,
     ) => runFork(syncTabAudible(tabId, wc, event.audible));
@@ -1571,6 +1578,7 @@ const makeNativeOperations = Effect.fn("PreviewManager.makeOperations")(function
       scope,
       attempt({ operation: "detachListeners", tabId, webContentsId: wc.id }, () => {
         cancelFaviconCapture();
+        wc.off("will-navigate", willNavigate);
         wc.off("did-start-navigation", navigationStarted);
         wc.off("did-navigate", syncNavigation);
         wc.off("did-navigate-in-page", syncInPageNavigation);
@@ -1593,6 +1601,7 @@ const makeNativeOperations = Effect.fn("PreviewManager.makeOperations")(function
         // Only focused native editing shortcuts may reach the application menu.
         // Other preview input, including CDP keys, belongs to the page.
         wc.setIgnoreMenuShortcuts(true);
+        wc.on("will-navigate", willNavigate);
         wc.on("did-start-navigation", navigationStarted);
         wc.on("did-navigate", syncNavigation);
         wc.on("did-navigate-in-page", syncInPageNavigation);
@@ -1607,6 +1616,7 @@ const makeNativeOperations = Effect.fn("PreviewManager.makeOperations")(function
         wc.ipc.on(RECORDING_INPUT_CHANNEL, recordingInput);
         wc.ipc.on(MOUSE_NAVIGATE_CHANNEL, mouseNavigate);
         wc.setWindowOpenHandler((details) => {
+          if (threadLinks.receive(details.url)) return { action: "deny" };
           if (previewWindowOpenAction(details) === "popup") {
             return { action: "allow", overrideBrowserWindowOptions: POPUP_WINDOW_OPTIONS };
           }

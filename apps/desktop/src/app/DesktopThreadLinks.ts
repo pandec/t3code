@@ -14,6 +14,7 @@ import { DESKTOP_THREAD_LINK_OPEN_CHANNEL } from "../ipc/channels.ts";
 import * as DesktopWindow from "../window/DesktopWindow.ts";
 import * as DesktopEnvironment from "./DesktopEnvironment.ts";
 import { makeComponentLogger } from "./DesktopObservability.ts";
+import { DesktopThreadLinkReceiver } from "./DesktopThreadLinkReceiver.ts";
 
 // Whitespace, control characters, and path separators cannot be in an id.
 const INVALID_SEGMENT_CHARACTER = /[\p{C}\s/\\]/u;
@@ -99,6 +100,11 @@ export class DesktopThreadLinkInbox {
       const url = Array.isArray(argv) ? findThreadLinkArgument(argv) : null;
       if (url !== null) this.#receive(url);
     });
+  }
+
+  /** Takes a link the app found itself, such as one clicked in the preview browser. */
+  receive(url: string): void {
+    this.#receive(url);
   }
 
   attach(deliver: (url: string) => void): () => void {
@@ -237,3 +243,20 @@ export const make = (inbox: DesktopThreadLinkInbox) =>
 
 export const layer = (inbox: DesktopThreadLinkInbox) =>
   Layer.effect(DesktopThreadLinks, make(inbox));
+
+/** Accepts only this app's scheme; a link for the other build keeps its normal navigation. */
+export const receiverLayer = (inbox: DesktopThreadLinkInbox) =>
+  Layer.effect(
+    DesktopThreadLinkReceiver,
+    Effect.gen(function* () {
+      const environment = yield* DesktopEnvironment.DesktopEnvironment;
+      const scheme = ElectronProtocol.getDesktopScheme(environment.usesDevelopmentIdentity);
+      return DesktopThreadLinkReceiver.of({
+        receive: (url) => {
+          if (parseDesktopThreadLink(url, scheme) === null) return false;
+          inbox.receive(url);
+          return true;
+        },
+      });
+    }),
+  );

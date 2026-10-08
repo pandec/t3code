@@ -11,6 +11,7 @@ import * as ElectronWindow from "../electron/ElectronWindow.ts";
 import { DESKTOP_THREAD_LINK_OPEN_CHANNEL } from "../ipc/channels.ts";
 import * as DesktopWindow from "../window/DesktopWindow.ts";
 import * as DesktopEnvironment from "./DesktopEnvironment.ts";
+import { DesktopThreadLinkReceiver } from "./DesktopThreadLinkReceiver.ts";
 import * as DesktopThreadLinks from "./DesktopThreadLinks.ts";
 
 const THREAD_ID = "8f0e2a4c-7a1b-4c3d-9e5f-0123456789ab";
@@ -117,6 +118,32 @@ describe("DesktopThreadLinkInbox", () => {
     app.emit("second-instance", {}, ["/opt/T3 Code/t3code", "t3code-dev://app/?code=abc"]);
     app.emit("second-instance", {}, ["/opt/T3 Code/t3code"]);
     assert.deepEqual(delivered, [DEV_LINK, "t3code-dev://app/env-2/thread-2"]);
+  });
+});
+
+describe("receiverLayer", () => {
+  it.effect("takes only this build's thread links", () => {
+    const app = new NodeEvents.EventEmitter();
+    const inbox = new DesktopThreadLinks.DesktopThreadLinkInbox(app, []);
+    const layer = DesktopThreadLinks.receiverLayer(inbox).pipe(
+      Layer.provide(
+        Layer.succeed(DesktopEnvironment.DesktopEnvironment, {
+          usesDevelopmentIdentity: true,
+        } as unknown as DesktopEnvironment.DesktopEnvironment["Service"]),
+      ),
+    );
+
+    return Effect.gen(function* () {
+      const receiver = yield* DesktopThreadLinkReceiver;
+      assert.isTrue(receiver.receive(DEV_LINK));
+      assert.isFalse(receiver.receive("t3code://app/env-1/thread-1"));
+      assert.isFalse(receiver.receive("t3code-dev://app/?code=abc"));
+      assert.isFalse(receiver.receive("https://example.com/"));
+
+      const delivered: string[] = [];
+      inbox.attach((url) => delivered.push(url));
+      assert.deepEqual(delivered, [DEV_LINK]);
+    }).pipe(Effect.provide(layer));
   });
 });
 
