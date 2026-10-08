@@ -85,3 +85,40 @@ export function normalizeClaudeTurnTokenUsage(
     ...(rawOutputTokens !== undefined ? { outputTokens: rawOutputTokens } : {}),
   };
 }
+
+const SUMMED_CLAUDE_USAGE_KEYS = [
+  "input_tokens",
+  "cache_read_input_tokens",
+  "cache_creation_input_tokens",
+  "output_tokens",
+] as const;
+
+// Fork: Claude reports `usage` per native turn. When one app turn spans
+// several native turns (a steer Claude ran after the turn's result), add them
+// up so the turn's totals cover all of them. The last usage supplies any
+// fields that are not summed.
+export function sumClaudeResultUsage(
+  usages: readonly [...ReadonlyArray<SDKResultMessage["usage"]>, SDKResultMessage["usage"]],
+): SDKResultMessage["usage"] {
+  const last = usages[usages.length - 1]!;
+  const records: ReadonlyArray<Record<string, unknown>> = usages;
+  const summed: Record<string, unknown> = { ...last };
+  for (const key of SUMMED_CLAUDE_USAGE_KEYS) {
+    const values = records.map((usage) => finiteNonNegativeInteger(usage[key]));
+    if (values.some((value) => value !== undefined)) {
+      summed[key] = values.reduce<number>((total, value) => total + (value ?? 0), 0);
+    }
+  }
+  const thinking = records.map((usage) =>
+    finiteNonNegativeInteger(
+      (usage.output_tokens_details as Record<string, unknown> | undefined)?.thinking_tokens,
+    ),
+  );
+  if (thinking.some((value) => value !== undefined)) {
+    summed.output_tokens_details = {
+      ...(records.at(-1)?.output_tokens_details as Record<string, unknown> | undefined),
+      thinking_tokens: thinking.reduce<number>((total, value) => total + (value ?? 0), 0),
+    };
+  }
+  return { ...last, ...summed };
+}

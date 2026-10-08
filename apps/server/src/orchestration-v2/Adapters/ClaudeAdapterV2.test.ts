@@ -2933,6 +2933,18 @@ describe("ClaudeAdapterV2 background wake turns", () => {
         assert.isAtLeast(replyIndex, 0);
         assert.isAbove(terminalIndex, replyIndex);
         assert.lengthOf(harness.terminalEvents(), 1);
+        // Both native turns' usage counts toward the app turn.
+        const completed = harness.events.findLast(
+          (event) => event.type === "provider_turn.updated",
+        );
+        assert.equal(completed?.type, "provider_turn.updated");
+        if (completed?.type === "provider_turn.updated") {
+          assert.include(completed.providerTurn.turnTokenUsage, {
+            usageStatus: "complete",
+            inputTokens: 2,
+            outputTokens: 2,
+          });
+        }
       }).pipe(Effect.provide(Layer.merge(IdAllocator.layer, NodeServices.layer))),
     ),
   );

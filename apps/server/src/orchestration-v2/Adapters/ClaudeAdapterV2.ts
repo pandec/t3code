@@ -5,7 +5,10 @@ import {
   formatSearchToolLabel,
 } from "@t3tools/shared/toolActivity";
 import { isWorkspaceImagePreviewPath } from "@t3tools/shared/filePreview";
-import { normalizeClaudeTurnTokenUsage } from "../../provider/ClaudeTurnTokenUsage.ts";
+import {
+  normalizeClaudeTurnTokenUsage,
+  sumClaudeResultUsage,
+} from "../../provider/ClaudeTurnTokenUsage.ts";
 import {
   type CanUseTool,
   type ForkSessionOptions,
@@ -3233,6 +3236,10 @@ export function makeClaudeAdapterV2(
         // must not settle the app turn.
         const pendingNextSteers = yield* Ref.make(
           new Map<string, { providerTurnId: OrchestrationV2ProviderTurn["id"]; queued: boolean }>(),
+        );
+        // Usage of results skipped for a queued steer, added to the settling one.
+        const deferredResultUsage = yield* Ref.make(
+          new Map<OrchestrationV2ProviderTurn["id"], ReadonlyArray<SDKResultMessage["usage"]>>(),
         );
         const queryContext = yield* Ref.make<ClaudeLiveQueryContext | null>(null);
         const openedNativeThreads = yield* Ref.make(new Set<string>());
@@ -6792,6 +6799,12 @@ export function makeClaudeAdapterV2(
               yield* Effect.logInfo("orchestration-v2.claude-result-before-queued-steer", {
                 providerTurnId: context.providerTurnId,
               });
+              yield* Ref.update(deferredResultUsage, (current) =>
+                new Map(current).set(context.providerTurnId, [
+                  ...(current.get(context.providerTurnId) ?? []),
+                  message.usage,
+                ]),
+              );
               return;
             }
             yield* Ref.update(pendingNextSteers, (current) => {
@@ -6801,6 +6814,15 @@ export function makeClaudeAdapterV2(
               }
               return next;
             });
+            const deferredUsage = yield* Ref.modify(deferredResultUsage, (current) => {
+              const next = new Map(current);
+              next.delete(context.providerTurnId);
+              return [current.get(context.providerTurnId) ?? [], next] as const;
+            });
+            const settlingResult: SDKResultMessage =
+              deferredUsage.length === 0
+                ? message
+                : { ...message, usage: sumClaudeResultUsage([...deferredUsage, message.usage]) };
             yield* Ref.update(steeredTurns, (current) => {
               const next = new Set(current);
               next.delete(context.providerTurnId);
@@ -6855,7 +6877,7 @@ export function makeClaudeAdapterV2(
               context,
               status: interrupted ? "interrupted" : terminalStatusFromResult(message, failureHint),
               completedAt,
-              result: message,
+              result: settlingResult,
               ...(terminalFailure === null ? {} : { failure: terminalFailure }),
               ...(correctedTokenUsage === undefined ? {} : { tokenUsage: correctedTokenUsage }),
             });
