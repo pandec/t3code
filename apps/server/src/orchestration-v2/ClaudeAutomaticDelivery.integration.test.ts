@@ -41,7 +41,8 @@ import * as ProviderReplayHarness from "./testkit/ProviderReplayHarness.ts";
 import { checkpointWorkspace } from "./testkit/ReplayFixtureWorkspace.ts";
 
 const sessionId = "automatic-delivery-session";
-const settings = Schema.decodeSync(ClaudeSettings)({});
+// Covers the interrupting mode; the default steers between tool calls.
+const settings = Schema.decodeSync(ClaudeSettings)({ steeringMode: "interrupt" });
 const decodeScheduledTask = Schema.decodeEffect(ScheduledTaskUpsertInput);
 const refusal =
   "The user doesn't want to take this action right now. STOP what you are doing and wait for the user to tell you how to proceed.";

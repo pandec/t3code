@@ -103,6 +103,7 @@ describe("ProviderSettingsForm helpers", () => {
       "homePath",
       "shadowHomePath",
       "autoCompactWindow",
+      "steeringMode",
       "launchArgs",
     ]);
   });

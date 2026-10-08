@@ -75,6 +75,9 @@ import * as ClaudeAdapterV2 from "./ClaudeAdapterV2.ts";
 import * as IdAllocator from "../IdAllocator.ts";
 
 const DEFAULT_CLAUDE_SETTINGS = Schema.decodeSync(ClaudeSettings)({});
+const INTERRUPT_STEERING_CLAUDE_SETTINGS = Schema.decodeSync(ClaudeSettings)({
+  steeringMode: "interrupt",
+});
 const AUTO_COMPACT_CLAUDE_SETTINGS = Schema.decodeSync(ClaudeSettings)({
   autoCompactWindow: "300000",
 });
@@ -1681,7 +1684,7 @@ describe("ClaudeAdapterV2 attachments", () => {
           },
         });
 
-        assert.equal(offeredMessages[1]?.priority, "now");
+        assert.equal(offeredMessages[1]?.priority, "next");
         assert.deepEqual(offeredMessages[1]?.message.content, [
           expectedImageBlock,
           {
@@ -2237,6 +2240,7 @@ describe("ClaudeAdapterV2 background wake turns", () => {
     readonly environment?: NodeJS.ProcessEnv;
     readonly nativeSessionId?: string;
     readonly t3Paths?: { readonly baseDir: string; readonly stateDir: string };
+    readonly settings?: ClaudeSettings;
   }) =>
     Effect.gen(function* () {
       const fileSystem = yield* FileSystem.FileSystem;
@@ -2263,7 +2267,7 @@ describe("ClaudeAdapterV2 background wake turns", () => {
       let openedOptions: ClaudeAdapterV2.ClaudeAgentSdkQueryOptions | undefined;
       const adapter = ClaudeAdapterV2.makeClaudeAdapterV2({
         instanceId: ClaudeAdapterV2.CLAUDE_DEFAULT_INSTANCE_ID,
-        settings: DEFAULT_CLAUDE_SETTINGS,
+        settings: options?.settings ?? DEFAULT_CLAUDE_SETTINGS,
         environment: options?.environment ?? {},
         attachmentsDir,
         fileSystem,
@@ -2361,6 +2365,7 @@ describe("ClaudeAdapterV2 background wake turns", () => {
             event.type === "turn.terminal",
         );
       return {
+        adapter,
         runtime,
         providerThread,
         threadId,
@@ -2743,7 +2748,9 @@ describe("ClaudeAdapterV2 background wake turns", () => {
   )("handles $terminalReason with active steering=$steered", ({ terminalReason, steered }) =>
     Effect.scoped(
       Effect.gen(function* () {
-        const harness = yield* makeWakeHarness;
+        const harness = yield* makeWakeHarnessWithOptions({
+          settings: INTERRUPT_STEERING_CLAUDE_SETTINGS,
+        });
         const idAllocator = yield* IdAllocator.IdAllocatorV2;
         const attemptId = RunAttemptId.make("attempt-steering-abort");
         const input = makeClaudeTestTurnInput({
@@ -2807,6 +2814,152 @@ describe("ClaudeAdapterV2 background wake turns", () => {
         assert.lengthOf(harness.terminalEvents(), 1);
       }).pipe(Effect.provide(Layer.merge(IdAllocator.layer, NodeServices.layer))),
     ),
+  );
+
+  it.effect("steers between tool calls by default and completes on one result", () =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        const harness = yield* makeWakeHarness;
+        const idAllocator = yield* IdAllocator.IdAllocatorV2;
+        const attemptId = RunAttemptId.make("attempt-steering-next");
+        const input = makeClaudeTestTurnInput({
+          threadId: harness.threadId,
+          providerThread: harness.providerThread,
+          now: yield* DateTime.now,
+          attemptId,
+          text: "Audit the settings pages.",
+          attachments: [],
+        });
+        yield* harness.runtime.startTurn(input);
+        yield* harness.runtime.steerTurn({
+          threadId: harness.threadId,
+          runId: input.runId,
+          providerThread: harness.providerThread,
+          providerTurnId: idAllocator.derive.providerTurn({
+            driver: ClaudeAdapterV2.CLAUDE_PROVIDER,
+            nativeTurnId: `turn:${attemptId}`,
+          }),
+          message: {
+            createdBy: "user",
+            creationSource: "web",
+            messageId: MessageId.make("message-steering-next"),
+            text: "Include the hierarchy mock.",
+            attachments: [],
+          },
+        });
+        assert.equal(harness.offeredMessages[1]?.priority, "next");
+        // Claude folds the steer into the running turn: no abort result.
+        yield* Queue.offer(harness.sdkMessages, wakeAssistant);
+        yield* Queue.offer(
+          harness.sdkMessages,
+          makeResultFrame({
+            uuid: "00000000-0000-4000-8000-000000000903",
+            result: "Audit finished after the steer.",
+          }),
+        );
+        const terminal = yield* Queue.take(harness.terminalReceipts);
+        assert.equal(terminal.status, "completed");
+        assert.lengthOf(harness.terminalEvents(), 1);
+      }).pipe(Effect.provide(Layer.merge(IdAllocator.layer, NodeServices.layer))),
+    ),
+  );
+
+  it.effect("keeps the turn open while a between-tools steer is still queued", () =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        const harness = yield* makeWakeHarness;
+        const idAllocator = yield* IdAllocator.IdAllocatorV2;
+        const attemptId = RunAttemptId.make("attempt-steering-late");
+        const input = makeClaudeTestTurnInput({
+          threadId: harness.threadId,
+          providerThread: harness.providerThread,
+          now: yield* DateTime.now,
+          attemptId,
+          text: "Audit the settings pages.",
+          attachments: [],
+        });
+        yield* harness.runtime.startTurn(input);
+        yield* harness.runtime.steerTurn({
+          threadId: harness.threadId,
+          runId: input.runId,
+          providerThread: harness.providerThread,
+          providerTurnId: idAllocator.derive.providerTurn({
+            driver: ClaudeAdapterV2.CLAUDE_PROVIDER,
+            nativeTurnId: `turn:${attemptId}`,
+          }),
+          message: {
+            createdBy: "user",
+            creationSource: "web",
+            messageId: MessageId.make("message-steering-late"),
+            text: "Include the hierarchy mock.",
+            attachments: [],
+          },
+        });
+        const steerUuid = harness.offeredMessages[1]?.uuid;
+        assert.isString(steerUuid);
+        const lifecycle = (state: string, uuid: string) =>
+          claudeSdkFrame({
+            type: "command_lifecycle",
+            command_uuid: steerUuid,
+            state,
+            uuid,
+            session_id: WAKE_NATIVE_SESSION,
+          });
+        yield* harness.offerAndWait(lifecycle("queued", "00000000-0000-4000-8000-000000000911"));
+        // The steer missed the turn's last tool boundary: this result must not
+        // settle the turn, because Claude runs the steer as its next turn.
+        yield* harness.offerAndWait(
+          makeResultFrame({ uuid: "00000000-0000-4000-8000-000000000912", result: "Done." }),
+        );
+        yield* harness.offerAndWait(lifecycle("started", "00000000-0000-4000-8000-000000000913"));
+        yield* harness.offerAndWait(wakeAssistant);
+        yield* harness.offerAndWait(
+          makeResultFrame({
+            uuid: "00000000-0000-4000-8000-000000000914",
+            result: "Audit finished after the steer.",
+          }),
+        );
+        const terminal = yield* Queue.take(harness.terminalReceipts);
+        assert.equal(terminal.status, "completed");
+        // The steer's reply belongs to the steered turn, not to a continuation.
+        assert.lengthOf(harness.continuationRequests, 0);
+        const replyIndex = harness.events.findIndex(
+          (event) =>
+            event.type === "turn_item.updated" &&
+            event.turnItem.type === "assistant_message" &&
+            event.turnItem.text === WAKE_ASSISTANT_TEXT,
+        );
+        const terminalIndex = harness.events.findIndex((event) => event.type === "turn.terminal");
+        assert.isAtLeast(replyIndex, 0);
+        assert.isAbove(terminalIndex, replyIndex);
+        assert.lengthOf(harness.terminalEvents(), 1);
+        // Both native turns' usage counts toward the app turn.
+        const completed = harness.events.findLast(
+          (event) => event.type === "provider_turn.updated",
+        );
+        assert.equal(completed?.type, "provider_turn.updated");
+        if (completed?.type === "provider_turn.updated") {
+          assert.include(completed.providerTurn.turnTokenUsage, {
+            usageStatus: "complete",
+            inputTokens: 2,
+            outputTokens: 2,
+          });
+        }
+      }).pipe(Effect.provide(Layer.merge(IdAllocator.layer, NodeServices.layer))),
+    ),
+  );
+
+  it.effect("reports tool-interrupting steering only in interrupt mode", () =>
+    Effect.gen(function* () {
+      const between = yield* makeWakeHarness;
+      const interrupt = yield* makeWakeHarnessWithOptions({
+        settings: INTERRUPT_STEERING_CLAUDE_SETTINGS,
+      });
+      const betweenCapabilities = yield* between.adapter.getCapabilities();
+      const interruptCapabilities = yield* interrupt.adapter.getCapabilities();
+      assert.isFalse(betweenCapabilities.turns.activeSteeringInterruptsTools);
+      assert.isTrue(interruptCapabilities.turns.activeSteeringInterruptsTools);
+    }).pipe(Effect.scoped, Effect.provide(Layer.merge(IdAllocator.layer, NodeServices.layer))),
   );
 
   it.effect("announces usage-limit pauses once per window and again on a new turn", () =>

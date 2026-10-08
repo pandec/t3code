@@ -5,7 +5,10 @@ import {
   formatSearchToolLabel,
 } from "@t3tools/shared/toolActivity";
 import { isWorkspaceImagePreviewPath } from "@t3tools/shared/filePreview";
-import { normalizeClaudeTurnTokenUsage } from "../../provider/ClaudeTurnTokenUsage.ts";
+import {
+  normalizeClaudeTurnTokenUsage,
+  sumClaudeResultUsage,
+} from "../../provider/ClaudeTurnTokenUsage.ts";
 import {
   type CanUseTool,
   type ForkSessionOptions,
@@ -308,6 +311,19 @@ export const ClaudeProviderCapabilitiesV2 = {
     enforcement: "native",
   },
 } satisfies OrchestrationV2ProviderCapabilities;
+
+// Fork: "between-tools" steers wait for the next tool boundary instead of
+// cancelling the running tool, so automatic deliveries may steer as well.
+function claudeProviderCapabilitiesForSettings(
+  settings: ClaudeSettings,
+): OrchestrationV2ProviderCapabilities {
+  return settings.steeringMode === "interrupt"
+    ? ClaudeProviderCapabilitiesV2
+    : {
+        ...ClaudeProviderCapabilitiesV2,
+        turns: { ...ClaudeProviderCapabilitiesV2.turns, activeSteeringInterruptsTools: false },
+      };
+}
 
 const CLAUDE_CODE_PRESET_TOOLS = {
   type: "preset",
@@ -1087,6 +1103,7 @@ function providerSession(input: {
   readonly providerInstanceId: ProviderInstanceId;
   readonly cwd: string | null;
   readonly model: string;
+  readonly capabilities: OrchestrationV2ProviderSession["capabilities"];
   readonly now: DateTime.Utc;
 }): OrchestrationV2ProviderSession {
   return {
@@ -1096,7 +1113,7 @@ function providerSession(input: {
     status: "ready",
     cwd: input.cwd ?? process.cwd(),
     model: input.model,
-    capabilities: ClaudeProviderCapabilitiesV2,
+    capabilities: input.capabilities,
     createdAt: input.now,
     updatedAt: input.now,
     lastError: null,
@@ -3183,7 +3200,8 @@ export function makeClaudeAdapterV2(
   return ProviderAdapter.ProviderAdapterV2.of({
     instanceId: adapterOptions.instanceId,
     driver: CLAUDE_PROVIDER,
-    getCapabilities: () => Effect.succeed(ClaudeProviderCapabilitiesV2),
+    getCapabilities: () =>
+      Effect.succeed(claudeProviderCapabilitiesForSettings(adapterOptions.settings)),
     planSelectionTransition: () => Effect.succeed(turnScopedSelectionTransition()),
     openSession: Effect.fn("ClaudeAdapterV2.openSession")(
       function* (input: ProviderAdapter.ProviderAdapterV2OpenSessionInput) {
@@ -3200,6 +3218,7 @@ export function makeClaudeAdapterV2(
           providerInstanceId: adapterOptions.instanceId,
           cwd: input.runtimePolicy.cwd,
           model: input.modelSelection.model,
+          capabilities: claudeProviderCapabilitiesForSettings(adapterOptions.settings),
           now,
         });
         const events = yield* Queue.unbounded<ProviderAdapter.ProviderAdapterV2Event>();
@@ -3211,6 +3230,17 @@ export function makeClaudeAdapterV2(
           new Map<OrchestrationV2ProviderTurn["id"], Deferred.Deferred<void>>(),
         );
         const steeredTurns = yield* Ref.make(new Set<OrchestrationV2ProviderTurn["id"]>());
+        // Fork: "next" steers by uuid. Claude reports each one `queued`, then
+        // `started` once a turn takes it in. One still queued when its turn's
+        // result arrives runs as Claude's next native turn, so that result
+        // must not settle the app turn.
+        const pendingNextSteers = yield* Ref.make(
+          new Map<string, { providerTurnId: OrchestrationV2ProviderTurn["id"]; queued: boolean }>(),
+        );
+        // Usage of results skipped for a queued steer, added to the settling one.
+        const deferredResultUsage = yield* Ref.make(
+          new Map<OrchestrationV2ProviderTurn["id"], ReadonlyArray<SDKResultMessage["usage"]>>(),
+        );
         const queryContext = yield* Ref.make<ClaudeLiveQueryContext | null>(null);
         const openedNativeThreads = yield* Ref.make(new Set<string>());
         const latestPlanByKind = yield* Ref.make(new Map<string, OrchestrationV2PlanArtifact>());
@@ -6762,6 +6792,37 @@ export function makeClaudeAdapterV2(
             if (!interrupted && wasSteered && isClaudeActiveSteeringAbortResult(message)) {
               return;
             }
+            const steerStillQueued = [...(yield* Ref.get(pendingNextSteers)).values()].some(
+              (steer) => steer.providerTurnId === context.providerTurnId && steer.queued,
+            );
+            if (!interrupted && steerStillQueued) {
+              yield* Effect.logInfo("orchestration-v2.claude-result-before-queued-steer", {
+                providerTurnId: context.providerTurnId,
+              });
+              yield* Ref.update(deferredResultUsage, (current) =>
+                new Map(current).set(context.providerTurnId, [
+                  ...(current.get(context.providerTurnId) ?? []),
+                  message.usage,
+                ]),
+              );
+              return;
+            }
+            yield* Ref.update(pendingNextSteers, (current) => {
+              const next = new Map(current);
+              for (const [uuid, steer] of current) {
+                if (steer.providerTurnId === context.providerTurnId) next.delete(uuid);
+              }
+              return next;
+            });
+            const deferredUsage = yield* Ref.modify(deferredResultUsage, (current) => {
+              const next = new Map(current);
+              next.delete(context.providerTurnId);
+              return [current.get(context.providerTurnId) ?? [], next] as const;
+            });
+            const settlingResult: SDKResultMessage =
+              deferredUsage.length === 0
+                ? message
+                : { ...message, usage: sumClaudeResultUsage([...deferredUsage, message.usage]) };
             yield* Ref.update(steeredTurns, (current) => {
               const next = new Set(current);
               next.delete(context.providerTurnId);
@@ -6816,7 +6877,7 @@ export function makeClaudeAdapterV2(
               context,
               status: interrupted ? "interrupted" : terminalStatusFromResult(message, failureHint),
               completedAt,
-              result: message,
+              result: settlingResult,
               ...(terminalFailure === null ? {} : { failure: terminalFailure }),
               ...(correctedTokenUsage === undefined ? {} : { tokenUsage: correctedTokenUsage }),
             });
@@ -6914,6 +6975,18 @@ export function makeClaudeAdapterV2(
           readonly message: SDKMessage;
         }) {
           const message = input.message;
+          const lifecycleUuid = claudeAcknowledgedPromptUuid(message);
+          if (lifecycleUuid !== null) {
+            const queued = Reflect.get(message, "state") === "queued";
+            yield* Ref.update(pendingNextSteers, (current) => {
+              const steer = current.get(lifecycleUuid);
+              if (steer === undefined) return current;
+              const next = new Map(current);
+              if (queued) next.set(lifecycleUuid, { ...steer, queued: true });
+              else next.delete(lifecycleUuid);
+              return next;
+            });
+          }
           const context = yield* Ref.get(activeTurn);
           const liveQuery = yield* Ref.get(queryContext);
           if (
@@ -7904,6 +7977,13 @@ export function makeClaudeAdapterV2(
                 detail: `Claude provider turn ${turnInput.providerTurnId} is not the active turn.`,
               });
             }
+            const interruptSteering = adapterOptions.settings.steeringMode === "interrupt";
+            // Stable per message, so a replayed steer offer matches its recording.
+            const steerUuid = interruptSteering
+              ? undefined
+              : yield* claudePromptUuid(`steer:${turnInput.message.messageId}`).pipe(
+                  Effect.provideService(Crypto.Crypto, crypto),
+                );
             const userMessage = yield* makeClaudeUserMessageWithAttachments({
               text: applyClaudePromptEffortPrefix(
                 turnInput.message.text,
@@ -7911,7 +7991,8 @@ export function makeClaudeAdapterV2(
                   .promptEffort,
               ),
               attachments: turnInput.message.attachments,
-              priority: "now",
+              priority: interruptSteering ? "now" : "next",
+              ...(steerUuid === undefined ? {} : { uuid: steerUuid }),
               attachmentsDir,
               fileSystem,
               skillNames: yield* userInvocableSkillNames(currentTurn.input.runtimePolicy.cwd),
@@ -7921,6 +8002,14 @@ export function makeClaudeAdapterV2(
               next.add(turnInput.providerTurnId);
               return next;
             });
+            if (steerUuid !== undefined) {
+              yield* Ref.update(pendingNextSteers, (current) =>
+                new Map(current).set(steerUuid, {
+                  providerTurnId: turnInput.providerTurnId,
+                  queued: false,
+                }),
+              );
+            }
             yield* existing.query.offer(userMessage);
           },
           (effect, turnInput) =>
