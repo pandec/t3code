@@ -25,6 +25,16 @@ function sessionHasScope(
   return result._tag !== "Failure" && session !== null && sessionGrantsScope(session, scope);
 }
 
+/** Like `sessionHasScope`, but tells a missing grant apart from one that has not loaded. */
+export function sessionScopeGrant(
+  result: AsyncResult.AsyncResult<AuthSessionState, unknown>,
+  scope: AuthEnvironmentScope,
+): "granted" | "denied" | "unknown" {
+  const session = Option.getOrNull(AsyncResult.value(result));
+  if (result._tag === "Failure" || session === null) return "unknown";
+  return sessionGrantsScope(session, scope) ? "granted" : "denied";
+}
+
 /** Uses the selected environment's grant, including cached scopes during a refresh. */
 export function useEnvironmentScope(
   environmentId: EnvironmentId | null,

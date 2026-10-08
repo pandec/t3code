@@ -75,6 +75,7 @@ const live = {
   environmentConnected: true,
   shellStatus: "live",
   hasQueuedMessages: false,
+  operateGrant: "granted",
   requiresDispatch: false,
 } as const;
 const idle = { archivedAt: null, archiveRequest: null };
@@ -127,6 +128,20 @@ describe("thread lifecycle outbox model", () => {
     expect(resolveThreadLifecycleOutboxAction({ ...base, shellStatus: "cached" })).toBe("wait");
     expect(resolveThreadLifecycleOutboxAction({ ...base, hasQueuedMessages: true })).toBe("wait");
     expect(resolveThreadLifecycleOutboxAction(base)).toBe("archive");
+  });
+
+  it("waits for the connection's grant and drops intents it cannot dispatch", () => {
+    for (const thread of [idle, pendingArchive, undefined]) {
+      for (const desiredArchived of [true, false]) {
+        const base = { ...live, thread, desiredArchived, requiresDispatch: true };
+        expect(resolveThreadLifecycleOutboxAction({ ...base, operateGrant: "unknown" })).toBe(
+          "wait",
+        );
+        expect(resolveThreadLifecycleOutboxAction({ ...base, operateGrant: "denied" })).toBe(
+          "remove",
+        );
+      }
+    }
   });
 
   it("drops archives the server already holds", () => {

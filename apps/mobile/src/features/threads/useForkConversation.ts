@@ -2,7 +2,7 @@ import { useNavigation } from "@react-navigation/native";
 import { scopeThreadRef } from "@t3tools/client-runtime/environment";
 import type { EnvironmentThreadShell } from "@t3tools/client-runtime/state/shell";
 import { conversationForkTarget } from "@t3tools/client-runtime/state/thread-fork";
-import { ThreadId } from "@t3tools/contracts";
+import { AuthOrchestrationOperateScope, ThreadId } from "@t3tools/contracts";
 import * as Cause from "effect/Cause";
 import * as Haptics from "expo-haptics";
 import { useCallback } from "react";
@@ -12,6 +12,7 @@ import { uuidv4 } from "../../lib/uuid";
 import { scopedThreadKey } from "../../lib/scopedEntities";
 import { appAtomRegistry } from "../../state/atom-registry";
 import { readCanForkImportedSession } from "../../state/entities";
+import { readEnvironmentScope } from "../../state/session";
 import { sessionImportEnvironment } from "../../state/sessionImport";
 import { environmentThreadShells, threadEnvironment } from "../../state/threads";
 import { useAtomCommand } from "../../state/use-atom-command";
@@ -39,6 +40,10 @@ export function useForkConversation(
     (thread: EnvironmentThreadShell) => {
       const key = scopedThreadKey(thread.environmentId, thread.id);
       if (forkInFlightThreadKeys.has(key)) return;
+      if (!readEnvironmentScope(thread.environmentId, AuthOrchestrationOperateScope)) {
+        Alert.alert("Could not fork conversation", "This connection cannot change threads.");
+        return;
+      }
       const forkTarget = conversationForkTarget(thread, {
         canForkImportedSession: readCanForkImportedSession(thread),
       });
