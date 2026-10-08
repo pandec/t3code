@@ -16,6 +16,7 @@ import {
   AuthRelayWriteScope,
   AuthTerminalReadScope,
   AuthTerminalOperateScope,
+  CLIENT_GUARDED_RPC_SCOPES,
   WS_METHODS,
   WsRpcGroup,
 } from "@t3tools/contracts";
@@ -49,6 +50,12 @@ describe("RPC authorization scopes", () => {
     expect(requiredScopeForRpcMethod(WS_METHODS.subscribeBackgroundPolicy)).toBe(
       AuthOrchestrationReadScope,
     );
+  });
+
+  it("agrees with every client-guarded method, so clients disable what the server refuses", () => {
+    for (const [method, scope] of Object.entries(CLIENT_GUARDED_RPC_SCOPES)) {
+      expect(requiredScopeForRpcMethod(method), method).toBe(scope);
+    }
   });
 
   it("keeps webhook delivery logs, which hold request bodies, behind operate scope", () => {

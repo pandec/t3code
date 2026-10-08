@@ -626,6 +626,7 @@ function ProjectDetail({
                 <Button
                   size="sm"
                   variant="outline"
+                  disabled={!editableIds.has(representative.environmentId)}
                   onClick={() => setSessionImportTarget(representative)}
                 >
                   <ImportIcon className="size-3.5" />

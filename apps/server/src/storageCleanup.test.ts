@@ -12,8 +12,12 @@ import {
 import * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
 import * as FileSystem from "effect/FileSystem";
+import * as Layer from "effect/Layer";
 import * as Path from "effect/Path";
+import * as ProjectionStore from "./orchestration-v2/ProjectionStore.ts";
+import * as ProjectStore from "./orchestration-v2/ProjectStore.ts";
 import {
+  readStorageCleanupThreads,
   storageCleanupActivityAt,
   storageCleanupThreadIdle,
   storageCleanupWorktreeInUse,
@@ -196,5 +200,34 @@ describe("V2 storage cleanup live-use protection", () => {
       assert.isTrue(yield* inUse([owner], [path.join(alias, "packages")]));
       assert.isFalse(yield* inUse([owner], [path.dirname(alias)]));
     }).pipe(Effect.scoped, Effect.provide(NodeServices.layer)),
+  );
+});
+
+describe("V2 storage cleanup thread read", () => {
+  effectIt.effect("includes archived threads, which archive snapshots list separately", () =>
+    Effect.gen(function* () {
+      const active = shell({ id: ThreadId.make("active") });
+      const archived = shell({ id: ThreadId.make("archived"), archivedAt: at(-DAY_MS) });
+      const { threads } = yield* readStorageCleanupThreads().pipe(
+        Effect.provide(
+          Layer.mergeAll(
+            Layer.mock(ProjectionStore.ProjectionStoreV2)({
+              getShellSnapshot: (options) =>
+                Effect.succeed({
+                  schemaVersion: 1,
+                  snapshotSequence: 0,
+                  threads: options?.location === "archive" ? [] : [active],
+                  archivedThreads: options?.location === "archive" ? [archived] : [],
+                }),
+            }),
+            Layer.mock(ProjectStore.ProjectStoreV2)({ listShells: () => Effect.succeed([]) }),
+          ),
+        ),
+      );
+      assert.deepStrictEqual(
+        threads.map((thread) => thread.id),
+        [active.id, archived.id],
+      );
+    }),
   );
 });

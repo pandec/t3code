@@ -376,10 +376,12 @@ function ThreadRouteContent(
   const canForkImportedSession = useCanForkImportedSession(selectedThread);
   const handleForkThread = useMemo(
     () =>
-      selectedThread !== null && canForkConversation(selectedThread, { canForkImportedSession })
+      selectedThread !== null &&
+      canOperateThread &&
+      canForkConversation(selectedThread, { canForkImportedSession })
         ? () => forkConversation(selectedThread)
         : undefined,
-    [canForkImportedSession, forkConversation, selectedThread],
+    [canForkImportedSession, canOperateThread, forkConversation, selectedThread],
   );
   const loadEarlierHistory = useAtomCommand(threadEnvironment.loadEarlierHistory, {
     label: "load earlier thread history",

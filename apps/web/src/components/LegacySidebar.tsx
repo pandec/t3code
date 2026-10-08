@@ -1916,7 +1916,10 @@ const SidebarProjectItem = memo(function SidebarProjectItem(props: SidebarProjec
             }),
             buildTargetedItem("grouping", "Group into..."),
             buildTargetedItem("copy-path", "Copy Path"),
-            buildTargetedItem("import-session", "Import CLI Session..."),
+            buildTargetedItem("import-session", "Import CLI Session...", {
+              isDisabled: (member) =>
+                !readEnvironmentScope(member.environmentId, AuthOrchestrationOperateScope),
+            }),
             { id: "project-settings", label: "Project settings", icon: "settings" },
             buildTargetedItem("delete", "Remove", {
               destructive: true,

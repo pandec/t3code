@@ -5,11 +5,12 @@ import {
   subscribeMessageArtifactSession,
 } from "@t3tools/client-runtime/state/messageArtifacts";
 import { squashAtomCommandFailure } from "@t3tools/client-runtime/state/runtime";
-import type {
-  EnvironmentId,
-  MessageId,
-  MessageSpeechSynthesisResult,
-  ThreadId,
+import {
+  AuthOrchestrationOperateScope,
+  type EnvironmentId,
+  type MessageId,
+  type MessageSpeechSynthesisResult,
+  type ThreadId,
 } from "@t3tools/contracts";
 import {
   formatIdleListeningClock,
@@ -42,6 +43,7 @@ import {
   useListeningPlaybackSnapshot,
 } from "../../state/listeningPlayback";
 import { useEnvironmentQuery } from "../../state/query";
+import { useEnvironmentScope } from "../../state/session";
 import { useAtomCommand } from "../../state/use-atom-command";
 import {
   messageSpeechFailureDescription,
@@ -62,7 +64,8 @@ export interface AssistantMessageSpeechState {
   /** This client is waiting, or the server is preparing it for any client. */
   readonly preparing: boolean;
   readonly toggle: () => void;
-  readonly regenerate: () => void;
+  /** Null when this connection cannot create recordings. */
+  readonly regenerate: (() => void) | null;
 }
 
 /**
@@ -84,6 +87,9 @@ export function useAssistantMessageSpeech(input: {
 }): AssistantMessageSpeechState {
   const { environmentId, messageId, text, threadId } = input;
   const synthesize = useAtomCommand(synthesizeMessageSpeech, { reportFailure: false });
+  // Creating a recording operates the environment; playing an existing one does not.
+  const canCreate =
+    useEnvironmentScope(environmentId, AuthOrchestrationOperateScope) && input.available;
   const threadSpeech = useEnvironmentQuery(
     input.persistentJobs && threadId !== null
       ? messageSpeechThread({ environmentId, input: { threadId } })
@@ -145,16 +151,16 @@ export function useAssistantMessageSpeech(input: {
       setExpandedState(!(expandedState ?? true));
       return;
     }
-    if (!preparing) request();
-  }, [expandedState, preparing, request, speech]);
+    if (!preparing && canCreate) request();
+  }, [canCreate, expandedState, preparing, request, speech]);
 
   return {
-    visible: (speech !== null || input.available) && !input.streaming && text.trim().length > 0,
+    visible: (speech !== null || canCreate) && !input.streaming && text.trim().length > 0,
     speech,
     expanded: speech !== null && (expandedState ?? true),
     preparing,
     toggle,
-    regenerate: request,
+    regenerate: canCreate ? request : null,
   };
 }
 

@@ -235,9 +235,8 @@ function useThreadActionExecutor(
         }
 
         // Checked here, after the outbox branch: an offline connection cannot
-        // confirm its grant. The lifecycle-outbox drain does not recheck the
-        // operate scope; the server enforces it when the queued intent is
-        // dispatched on reconnect.
+        // confirm its grant. The lifecycle-outbox drain checks it on reconnect
+        // and drops intents the connection cannot dispatch.
         if (!checkThreadOperationPermission(thread, actionFailureTitle(action))) return false;
         const result = await withThreadDismissal(
           key,

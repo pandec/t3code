@@ -7,30 +7,40 @@ import {
   type ThreadPullRequestLink,
 } from "@t3tools/contracts";
 import { DEFAULT_CLIENT_SETTINGS } from "@t3tools/contracts/settings";
+import { DEFAULT_RESOLVED_KEYBINDINGS } from "@t3tools/shared/keybindings";
 import { act, type ReactNode, type ReactElement, type ComponentProps } from "react";
 import { create, type ReactTestRenderer } from "react-test-renderer";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vite-plus/test";
 import { DraftId, useComposerDraftStore } from "~/composerDraftStore";
 
-const { newThread, prepareThread, refresh, Wrapper, Trigger } = vi.hoisted(() => ({
-  newThread: vi.fn(),
-  prepareThread: vi.fn(),
-  refresh: vi.fn(),
-  Wrapper: ({ children }: { children?: ReactNode }) => children,
-  Trigger: ({ children, render }: { children?: ReactNode; render?: ReactElement }) => (
-    <>
-      {render}
-      {children}
-    </>
-  ),
-}));
+const { newThread, prepareThread, refresh, copied, keybindingsAtom, Wrapper, Trigger } = vi.hoisted(
+  () => ({
+    newThread: vi.fn(),
+    copied: vi.fn(),
+    keybindingsAtom: {},
+    prepareThread: vi.fn(),
+    refresh: vi.fn(),
+    Wrapper: ({ children }: { children?: ReactNode }) => children,
+    Trigger: ({ children, render }: { children?: ReactNode; render?: ReactElement }) => (
+      <>
+        {render}
+        {children}
+      </>
+    ),
+  }),
+);
 vi.mock("~/state/session", async (original) => ({
   ...(await original<typeof import("~/state/session")>()),
   useEnvironmentScope: () => true,
   readEnvironmentScope: () => true,
 }));
-vi.mock("@effect/atom-react", () => ({ useAtomValue: () => [] }));
-vi.mock("~/state/server", () => ({ primaryServerKeybindingsAtom: {} }));
+vi.mock("@effect/atom-react", () => ({
+  useAtomValue: (atom: unknown) => (atom === keybindingsAtom ? DEFAULT_RESOLVED_KEYBINDINGS : []),
+}));
+vi.mock("~/state/server", () => ({ primaryServerKeybindingsAtom: keybindingsAtom }));
+vi.mock("~/hooks/useCopyToClipboard", () => ({
+  useCopyToClipboard: () => ({ copyToClipboard: copied, isCopied: false }),
+}));
 vi.mock("~/state/entities", () => ({ useProjects: () => [], useServerConfigs: () => new Map() }));
 vi.mock("~/state/environments", () => ({
   useEnvironments: () => ({ environments: [] }),
@@ -149,6 +159,8 @@ vi.mock("./PullRequestCodeTab", () => ({
 
 import { PullRequestDetailPanel } from "./PullRequestDetailPanel";
 import { pullRequestPanelContext } from "./pullRequestDetail.logic";
+import { ThreadPaneContext } from "../thread-split/threadPaneContext";
+import { useThreadSplitStore } from "../thread-split/threadSplitStore";
 
 const detail: PullRequestDetailView = {
   provider: "github",
@@ -340,5 +352,73 @@ describe.each([
     } else {
       expect(newThread).toHaveBeenCalled();
     }
+  });
+});
+
+describe("copy PR number shortcut in split view", () => {
+  const initialSplit = useThreadSplitStore.getState();
+  afterEach(() => useThreadSplitStore.setState(initialSplit, true));
+
+  it("copies only the active pane's PR", async () => {
+    const listeners: Array<(event: KeyboardEvent) => void> = [];
+    vi.stubGlobal("navigator", { platform: "MacIntel" });
+    vi.stubGlobal("window", {
+      addEventListener: (type: string, listener: (event: KeyboardEvent) => void) => {
+        if (type === "keydown") listeners.push(listener);
+      },
+      removeEventListener: vi.fn(),
+    });
+    copied.mockReset();
+    useThreadSplitStore.setState({ splitMounted: true, activePaneId: "secondary" });
+    const panel = (number: number) => (
+      <PullRequestDetailPanel
+        environmentId={threadRef.environmentId}
+        reference={{ ...detail, number }}
+        context="page"
+        shortcutsEnabled
+        getShortcutContext={() => ({
+          terminalFocus: false,
+          terminalOpen: false,
+          previewFocus: false,
+          previewOpen: false,
+          isWeb: true,
+          isDesktop: false,
+        })}
+      />
+    );
+    await act(async () => {
+      renderer = create(
+        <>
+          <ThreadPaneContext value="primary">{panel(1)}</ThreadPaneContext>
+          <ThreadPaneContext value="secondary">{panel(2)}</ThreadPaneContext>
+        </>,
+      );
+    });
+    // The panel's own Mod+Shift+K; every mounted panel hears the same window event.
+    const press = () => {
+      const event = {
+        key: "k",
+        code: "KeyK",
+        metaKey: true,
+        shiftKey: true,
+        ctrlKey: false,
+        altKey: false,
+        repeat: false,
+        defaultPrevented: false,
+        preventDefault() {
+          this.defaultPrevented = true;
+        },
+        stopPropagation() {},
+      };
+      for (const listener of listeners) listener(event as unknown as KeyboardEvent);
+    };
+
+    press();
+    expect(copied.mock.calls).toEqual([["#2", "PR number"]]);
+
+    copied.mockReset();
+    act(() => useThreadSplitStore.setState({ activePaneId: "primary" }));
+    press();
+    expect(copied.mock.calls).toEqual([["#1", "PR number"]]);
   });
 });

@@ -5,7 +5,7 @@ import type {
   EnvironmentShellStatus,
   EnvironmentThreadShell,
 } from "@t3tools/client-runtime/state/shell";
-import { CommandId, type EnvironmentId } from "@t3tools/contracts";
+import { AuthOrchestrationOperateScope, CommandId, type EnvironmentId } from "@t3tools/contracts";
 import * as Option from "effect/Option";
 import { Atom } from "effect/reactivity";
 import { useEffect, useRef, useState } from "react";
@@ -14,12 +14,14 @@ import { refreshArchivedThreadsForEnvironment } from "../features/archive/useArc
 import { uuidv4 } from "../lib/uuid";
 import { appAtomRegistry } from "./atom-registry";
 import { environmentPresentations } from "./presentation";
+import { environmentSession, sessionScopeGrant } from "./session";
 import { environmentShell } from "./shell";
 import { threadLifecycleOutboxManager } from "./thread-lifecycle-outbox";
 import { deliverThreadLifecycleIntent } from "./thread-lifecycle-outbox-delivery";
 import {
   createThreadLifecycleDispatchFence,
   resolveThreadLifecycleOutboxAction,
+  type ScopeGrant,
   type ThreadLifecycleIntent,
   type ThreadLifecycleOutboxAction,
 } from "./thread-lifecycle-outbox-model";
@@ -30,6 +32,7 @@ import { queuedThreadKeysAtom } from "./use-thread-outbox";
 
 const EMPTY_SHELL_STATUSES: ReadonlyMap<EnvironmentId, EnvironmentShellStatus> = new Map();
 const EMPTY_SHELL_SEQUENCES: ReadonlyMap<EnvironmentId, number> = new Map();
+const EMPTY_OPERATE_GRANTS: ReadonlyMap<EnvironmentId, ScopeGrant> = new Map();
 const EMPTY_PRESENTATIONS: ReadonlyMap<EnvironmentId, EnvironmentPresentation> = new Map();
 const EMPTY_THREADS: ReadonlyArray<EnvironmentThreadShell> = [];
 const EMPTY_THREAD_KEYS: ReadonlySet<string> = new Set();
@@ -46,6 +49,7 @@ const threadLifecycleOutboxInputsAtom = Atom.make((get) => {
       loadState,
       shellStatuses: EMPTY_SHELL_STATUSES,
       shellSequences: EMPTY_SHELL_SEQUENCES,
+      operateGrants: EMPTY_OPERATE_GRANTS,
       presentations: EMPTY_PRESENTATIONS,
       threads: EMPTY_THREADS,
       queuedThreadKeys: EMPTY_THREAD_KEYS,
@@ -53,6 +57,7 @@ const threadLifecycleOutboxInputsAtom = Atom.make((get) => {
   }
   const shellStatuses: Map<EnvironmentId, EnvironmentShellStatus> = new Map();
   const shellSequences: Map<EnvironmentId, number> = new Map();
+  const operateGrants: Map<EnvironmentId, ScopeGrant> = new Map();
   for (const intent of Object.values(intents)) {
     if (!shellStatuses.has(intent.environmentId)) {
       const shell = get(environmentShell.stateValueAtom(intent.environmentId));
@@ -60,6 +65,13 @@ const threadLifecycleOutboxInputsAtom = Atom.make((get) => {
       if (Option.isSome(shell.snapshot)) {
         shellSequences.set(intent.environmentId, shell.snapshot.value.snapshotSequence);
       }
+      operateGrants.set(
+        intent.environmentId,
+        sessionScopeGrant(
+          get(environmentSession.sessionStateAtom(intent.environmentId)),
+          AuthOrchestrationOperateScope,
+        ),
+      );
     }
   }
   return {
@@ -67,6 +79,7 @@ const threadLifecycleOutboxInputsAtom = Atom.make((get) => {
     loadState,
     shellStatuses,
     shellSequences,
+    operateGrants,
     presentations: get(environmentPresentations.presentationsAtom),
     threads: get(environmentThreadShells.threadShellsAtom),
     queuedThreadKeys: get(queuedThreadKeysAtom),
@@ -108,6 +121,7 @@ function resolveIntentAction(
       inputs.presentations.get(intent.environmentId)?.connection.phase === "connected",
     shellStatus: inputs.shellStatuses.get(intent.environmentId) ?? "empty",
     hasQueuedMessages: inputs.queuedThreadKeys.has(threadKey),
+    operateGrant: inputs.operateGrants.get(intent.environmentId) ?? "loading",
     thread: liveThread(inputs, intent),
     desiredArchived: intent.desiredArchived,
     requiresDispatch: intent.requiresDispatch,

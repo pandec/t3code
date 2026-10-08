@@ -130,18 +130,38 @@ export type ThreadLifecycleOutboxAction =
 
 export type ThreadLifecycleDispatchAction = Exclude<ThreadLifecycleOutboxAction, "wait" | "remove">;
 
+/**
+ * A connection's grant of one scope: "loading" until its session first loads,
+ * "unverified" when that load failed with no cached grant.
+ */
+export type ScopeGrant = "granted" | "denied" | "loading" | "unverified";
+
 export function resolveThreadLifecycleOutboxAction(input: {
   readonly environmentConnected: boolean;
   readonly shellStatus: EnvironmentShellStatus;
   /** Messages for this thread still in the local outbox go first. */
   readonly hasQueuedMessages: boolean;
+  /**
+   * The connection's operate grant. Offline enqueues cannot check it, so an
+   * intent waits for the grant to load and is dropped when it is denied: the
+   * server would refuse every dispatch, and dropping restores the real state.
+   * Denial wins over queued messages, which the same grant also holds back.
+   * An unverified grant dispatches and leaves the decision to the server.
+   */
+  readonly operateGrant: ScopeGrant;
   readonly thread: Pick<EnvironmentThreadShell, "archivedAt" | "archiveRequest"> | undefined;
   readonly desiredArchived: boolean;
   readonly requiresDispatch: boolean;
 }): ThreadLifecycleOutboxAction {
-  if (!input.environmentConnected || input.shellStatus !== "live" || input.hasQueuedMessages) {
+  if (
+    !input.environmentConnected ||
+    input.shellStatus !== "live" ||
+    input.operateGrant === "loading"
+  ) {
     return "wait";
   }
+  if (input.operateGrant === "denied") return "remove";
+  if (input.hasQueuedMessages) return "wait";
   const { thread } = input;
   // Live shells omit archived (and deleted) threads.
   if (thread === undefined) {

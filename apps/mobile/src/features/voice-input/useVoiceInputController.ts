@@ -1,4 +1,4 @@
-import type { EnvironmentId } from "@t3tools/contracts";
+import { AuthOrchestrationOperateScope, type EnvironmentId } from "@t3tools/contracts";
 import { useFocusEffect } from "@react-navigation/native";
 import { useCallback, useEffect, useRef } from "react";
 import {
@@ -7,6 +7,7 @@ import {
 } from "@t3tools/client-runtime/voice-input";
 
 import type { ComposerEditorSelection } from "../../components/ComposerEditor";
+import { useEnvironmentScope } from "../../state/session";
 import { isDeviceVoiceInputAvailable, useGlobalVoiceInput } from "./VoiceInputProvider";
 import { createVoiceInputTarget } from "./voiceInputSession";
 
@@ -37,8 +38,15 @@ export function useVoiceInputController(input: {
 }) {
   const global = useGlobalVoiceInput();
   const { setOwnerFocused, session } = global;
-  const latestInput = useRef(input);
-  latestInput.current = input;
+  // Server transcription operates the environment; on-device dictation needs no grant.
+  const canOperateEnvironment = useEnvironmentScope(
+    input.environmentId,
+    AuthOrchestrationOperateScope,
+  );
+  const environmentTranscriptionAvailable =
+    input.environmentTranscriptionAvailable && canOperateEnvironment;
+  const latestInput = useRef({ ...input, environmentTranscriptionAvailable });
+  latestInput.current = { ...input, environmentTranscriptionAvailable };
   const mounted = useRef(true);
   useEffect(() => {
     mounted.current = true;
@@ -82,7 +90,7 @@ export function useVoiceInputController(input: {
   const isBusy = voiceInputBlocksSubmission(state);
   const canTranscribe =
     isDeviceVoiceInputAvailable() ||
-    (input.environmentId !== null && input.environmentTranscriptionAvailable);
+    (input.environmentId !== null && environmentTranscriptionAvailable);
   return {
     isAvailable: canTranscribe && (!global.isBusy || global.ownerKey === input.ownerKey),
     state,

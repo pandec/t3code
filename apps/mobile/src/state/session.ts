@@ -25,6 +25,21 @@ function sessionHasScope(
   return result._tag !== "Failure" && session !== null && sessionGrantsScope(session, scope);
 }
 
+/**
+ * Like `sessionHasScope`, but tells a missing grant apart from one that has
+ * not loaded ("loading") or whose load failed without a cached grant
+ * ("unverified"). A failed load is not retried on its own, so callers that
+ * must not stall treat "unverified" as the server's call.
+ */
+export function sessionScopeGrant(
+  result: AsyncResult.AsyncResult<AuthSessionState, unknown>,
+  scope: AuthEnvironmentScope,
+): "granted" | "denied" | "loading" | "unverified" {
+  const session = Option.getOrNull(AsyncResult.value(result));
+  if (session === null) return result._tag === "Failure" ? "unverified" : "loading";
+  return sessionGrantsScope(session, scope) ? "granted" : "denied";
+}
+
 /** Uses the selected environment's grant, including cached scopes during a refresh. */
 export function useEnvironmentScope(
   environmentId: EnvironmentId | null,

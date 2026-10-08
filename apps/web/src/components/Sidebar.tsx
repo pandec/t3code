@@ -1781,11 +1781,13 @@ const SidebarThreadRow = memo(function SidebarThreadRow(props: {
     },
     [archiveAction, onArchive, threadRef],
   );
-  const showForkButton = canForkConversation(thread, {
-    canForkImportedSession: canForkImportedSessionDriver(
-      props.providerEntryByInstanceId.get(thread.providerInstanceId)?.driverKind,
-    ),
-  });
+  const showForkButton =
+    canOperateThread &&
+    canForkConversation(thread, {
+      canForkImportedSession: canForkImportedSessionDriver(
+        props.providerEntryByInstanceId.get(thread.providerInstanceId)?.driverKind,
+      ),
+    });
   const handleUnsnoozeClick = useCallback(
     (event: ReactMouseEvent) => {
       event.preventDefault();
@@ -2247,8 +2249,9 @@ const SidebarThreadRow = memo(function SidebarThreadRow(props: {
                           <button
                             type="button"
                             aria-label="Dismiss Woke notification"
+                            disabled={!canOperateThread}
                             onClick={handleAcknowledgeWokeClick}
-                            className="inline-flex cursor-pointer items-center gap-1 rounded-sm text-xs font-medium text-warning-foreground outline-none hover:underline focus-visible:ring-2 focus-visible:ring-ring"
+                            className="inline-flex items-center gap-1 rounded-sm text-xs font-medium text-warning-foreground outline-none enabled:cursor-pointer enabled:hover:underline focus-visible:ring-2 focus-visible:ring-ring"
                           >
                             <AlarmClockIcon aria-hidden className="size-3" />
                             <span role="status">Woke</span>
@@ -2265,7 +2268,7 @@ const SidebarThreadRow = memo(function SidebarThreadRow(props: {
                     </span>
                   )}
                 </span>
-                {variantAction === "unsnooze" ? (
+                {!canOperateThread ? null : variantAction === "unsnooze" ? (
                   !props.snoozeSupported ? null : (
                     <button
                       type="button"
@@ -2464,9 +2467,10 @@ const SidebarThreadRow = memo(function SidebarThreadRow(props: {
                               <button
                                 type="button"
                                 aria-label="Dismiss Woke notification"
+                                disabled={!canOperateThread}
                                 onClick={handleAcknowledgeWokeClick}
                                 className={cn(
-                                  "inline-flex cursor-pointer items-center gap-1 rounded-sm font-medium outline-none hover:underline focus-visible:ring-2 focus-visible:ring-ring",
+                                  "inline-flex items-center gap-1 rounded-sm font-medium outline-none enabled:cursor-pointer enabled:hover:underline focus-visible:ring-2 focus-visible:ring-ring",
                                   topStatus.className,
                                 )}
                               >
@@ -2538,7 +2542,7 @@ const SidebarThreadRow = memo(function SidebarThreadRow(props: {
                         <TooltipPopup side="top">Discard draft</TooltipPopup>
                       </Tooltip>
                     ) : null}
-                    {props.pinningSupported ? (
+                    {props.pinningSupported && canOperateThread ? (
                       <Tooltip>
                         <TooltipTrigger
                           render={
@@ -2571,7 +2575,7 @@ const SidebarThreadRow = memo(function SidebarThreadRow(props: {
                         }
                       />
                     ) : null}
-                    {props.settlementSupported ? (
+                    {props.settlementSupported && canOperateThread ? (
                       <Tooltip>
                         <TooltipTrigger
                           render={
@@ -2606,28 +2610,30 @@ const SidebarThreadRow = memo(function SidebarThreadRow(props: {
                         <TooltipPopup>Fork conversation</TooltipPopup>
                       </Tooltip>
                     ) : null}
-                    <Tooltip>
-                      <TooltipTrigger
-                        render={
-                          <button
-                            type="button"
-                            aria-label={archiveLabel}
-                            aria-pressed={archivePending}
-                            onClick={handleArchiveClick}
-                            // Keeps a press from picking up the row for a reorder drag,
-                            // whose sensor would swallow the release click.
-                            onPointerDown={(event) => event.stopPropagation()}
-                            className={cn(
-                              "-mr-1 inline-flex cursor-pointer items-center rounded-md bg-transparent px-1.5 text-muted-foreground hover:text-foreground",
-                              archivePending && "text-warning-foreground",
-                            )}
-                          >
-                            <ArchiveIcon className="size-3.5" />
-                          </button>
-                        }
-                      />
-                      <TooltipPopup>{archiveLabel}</TooltipPopup>
-                    </Tooltip>
+                    {canOperateThread ? (
+                      <Tooltip>
+                        <TooltipTrigger
+                          render={
+                            <button
+                              type="button"
+                              aria-label={archiveLabel}
+                              aria-pressed={archivePending}
+                              onClick={handleArchiveClick}
+                              // Keeps a press from picking up the row for a reorder drag,
+                              // whose sensor would swallow the release click.
+                              onPointerDown={(event) => event.stopPropagation()}
+                              className={cn(
+                                "-mr-1 inline-flex cursor-pointer items-center rounded-md bg-transparent px-1.5 text-muted-foreground hover:text-foreground",
+                                archivePending && "text-warning-foreground",
+                              )}
+                            >
+                              <ArchiveIcon className="size-3.5" />
+                            </button>
+                          }
+                        />
+                        <TooltipPopup>{archiveLabel}</TooltipPopup>
+                      </Tooltip>
+                    ) : null}
                   </span>
                 </span>
               )}
@@ -2712,6 +2718,10 @@ const SidebarV2ArchivedRow = memo(function SidebarV2ArchivedRow(props: {
   ) => void;
 }) {
   const threadRef = scopeThreadRef(props.thread.environmentId, props.thread.id);
+  const canOperateThread = useEnvironmentScope(
+    props.thread.environmentId,
+    AuthOrchestrationOperateScope,
+  );
   return (
     <li
       className="group/v2-archived-row relative list-none"
@@ -2740,27 +2750,35 @@ const SidebarV2ArchivedRow = memo(function SidebarV2ArchivedRow(props: {
             </span>
           ) : null}
         </span>
-        <span className="text-3xs tabular-nums text-muted-foreground/45 group-hover/v2-archived-row:hidden group-focus-within/v2-archived-row:hidden">
+        <span
+          className={cn(
+            "text-3xs tabular-nums text-muted-foreground/45",
+            canOperateThread &&
+              "group-hover/v2-archived-row:hidden group-focus-within/v2-archived-row:hidden",
+          )}
+        >
           {formatCompactRelativeTimeLabel(
             props.thread.archivedAt ?? props.thread.updatedAt ?? props.thread.createdAt,
           )}
         </span>
       </button>
-      <Tooltip>
-        <TooltipTrigger
-          render={
-            <button
-              type="button"
-              aria-label={`Unarchive ${props.thread.title}`}
-              className="pointer-events-none absolute right-1.5 top-1.5 inline-flex size-7 cursor-pointer items-center justify-center rounded-md text-muted-foreground opacity-0 hover:text-foreground focus-visible:opacity-100 group-hover/v2-archived-row:pointer-events-auto group-hover/v2-archived-row:opacity-100 group-focus-within/v2-archived-row:pointer-events-auto group-focus-within/v2-archived-row:opacity-100"
-              onClick={() => props.onUnarchive(threadRef)}
-            >
-              <Undo2Icon className="size-3.5" />
-            </button>
-          }
-        />
-        <TooltipPopup>Unarchive</TooltipPopup>
-      </Tooltip>
+      {canOperateThread ? (
+        <Tooltip>
+          <TooltipTrigger
+            render={
+              <button
+                type="button"
+                aria-label={`Unarchive ${props.thread.title}`}
+                className="pointer-events-none absolute right-1.5 top-1.5 inline-flex size-7 cursor-pointer items-center justify-center rounded-md text-muted-foreground opacity-0 hover:text-foreground focus-visible:opacity-100 group-hover/v2-archived-row:pointer-events-auto group-hover/v2-archived-row:opacity-100 group-focus-within/v2-archived-row:pointer-events-auto group-focus-within/v2-archived-row:opacity-100"
+                onClick={() => props.onUnarchive(threadRef)}
+              >
+                <Undo2Icon className="size-3.5" />
+              </button>
+            }
+          />
+          <TooltipPopup>Unarchive</TooltipPopup>
+        </Tooltip>
+      ) : null}
     </li>
   );
 });
