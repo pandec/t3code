@@ -24,6 +24,7 @@ import { TestClock } from "effect/testing";
 import { beforeEach, describe, expect, it, vi } from "vite-plus/test";
 
 import * as DesktopEnvironment from "../app/DesktopEnvironment.ts";
+import { DesktopThreadLinkReceiver } from "../app/DesktopThreadLinkReceiver.ts";
 import * as DesktopRendererHistory from "../telemetry/DesktopRendererHistory.ts";
 import * as ElectronWindow from "../electron/ElectronWindow.ts";
 import * as BrowserSession from "./BrowserSession.ts";
@@ -270,8 +271,20 @@ const layerFileSystem = FileSystem.layerNoop({
     }),
 });
 
+const THREAD_LINK = "t3code-dev://app/primary/thread-1";
+const receivedThreadLinks: string[] = [];
+
 const managerLayer = (platform: NodeJS.Platform = "darwin") =>
   PreviewManager.layer.pipe(
+    Layer.provideMerge(
+      Layer.succeed(DesktopThreadLinkReceiver, {
+        receive: (url) => {
+          if (url !== THREAD_LINK) return false;
+          receivedThreadLinks.push(url);
+          return true;
+        },
+      }),
+    ),
     Layer.provideMerge(
       Layer.succeed(DesktopRendererHistory.DesktopRendererHistory, {
         register: () => Effect.void,
@@ -731,6 +744,39 @@ describe("PreviewManager", () => {
           }),
         platform,
       ),
+  );
+
+  effectIt.effect("opens thread links in the app instead of the preview", () =>
+    withManager((manager) =>
+      Effect.gen(function* () {
+        receivedThreadLinks.length = 0;
+        const preview = makeFaviconWebContents();
+        fromId.mockReturnValue(preview.webContents);
+        yield* manager.createTab("tab_thread_link");
+        yield* manager.registerWebview("tab_thread_link", 42);
+
+        const willNavigate = preview.listeners.get("will-frame-navigate")!;
+        const navigate = (url: string, isMainFrame: boolean) => {
+          const preventDefault = vi.fn();
+          willNavigate({ preventDefault, url, isMainFrame } as never);
+          return preventDefault;
+        };
+        expect(navigate(THREAD_LINK, true)).toHaveBeenCalledOnce();
+        expect(navigate(THREAD_LINK, false)).toHaveBeenCalledOnce();
+        expect(navigate("https://example.com/", true)).not.toHaveBeenCalled();
+
+        const setWindowOpenHandler = (preview.webContents as Electron.WebContents)
+          .setWindowOpenHandler as unknown as ReturnType<typeof vi.fn>;
+        const openHandler = setWindowOpenHandler.mock.calls[0]![0] as (
+          details: Electron.HandlerDetails,
+        ) => Electron.WindowOpenHandlerResponse;
+        expect(openHandler({ url: THREAD_LINK, disposition: "foreground-tab" } as never)).toEqual({
+          action: "deny",
+        });
+        expect(preview.loadURL).not.toHaveBeenCalled();
+        expect(receivedThreadLinks).toEqual([THREAD_LINK, THREAD_LINK, THREAD_LINK]);
+      }),
+    ),
   );
 
   effectIt.effect("preserves focused browser editing in tabs and sign-in popups", () =>

@@ -180,6 +180,7 @@ const layerDesktopPreview = PreviewManager.layer.pipe(
   // service alongside the manager; both sit on the same BrowserSession.
   Layer.provideMerge(BrowserImport.layer.pipe(Layer.provide(LinuxBrowserSecret.layer))),
   Layer.provideMerge(BrowserSession.layer),
+  Layer.provideMerge(DesktopThreadLinks.receiverLayer(threadLinkInbox)),
   Layer.provideMerge(layerDesktopFoundation),
 );
 
