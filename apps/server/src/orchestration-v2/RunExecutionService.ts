@@ -76,6 +76,8 @@ export interface ProviderEventRouteIdentity {
 export interface InheritedBackgroundTurnItemRoute {
   readonly id: TurnItemId;
   readonly runId: OrchestrationV2Run["id"];
+  /** The durable row, so a dead event stream can end the item. */
+  readonly turnItem?: OrchestrationV2TurnItem;
 }
 
 type ProviderTerminalEvent = Extract<ProviderAdapterV2Event, { readonly type: "turn.terminal" }>;
@@ -142,7 +144,7 @@ export function selectInheritedBackgroundTurnItems(input: {
     settledPriorRunIds.has(turnItem.runId) &&
     backgroundCapableTurnItemTypes.has(turnItem.type) &&
     !isSettledTurnItemStatus(turnItem.status)
-      ? [{ id: turnItem.id, runId: turnItem.runId }]
+      ? [{ id: turnItem.id, runId: turnItem.runId, turnItem }]
       : [],
   );
 }
@@ -988,7 +990,15 @@ export const layer: Layer.Layer<
           // whole so a dead event stream can end them: no process will.
           const openToolTurnItems = yield* Ref.make<
             ReadonlyMap<OrchestrationV2TurnItem["id"], OrchestrationV2TurnItem>
-          >(new Map());
+          >(
+            new Map(
+              inheritedBackgroundTurnItems.flatMap(({ turnItem }) =>
+                turnItem?.type === "command_execution" || turnItem?.type === "dynamic_tool"
+                  ? [[turnItem.id, turnItem] as const]
+                  : [],
+              ),
+            ),
+          );
           const endOrphanedToolTurnItems = Effect.gen(function* () {
             const open = yield* Ref.getAndSet(openToolTurnItems, new Map());
             if (open.size === 0) return;

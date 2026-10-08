@@ -465,11 +465,14 @@ it("selects only live background items from non-completed settled prior runs", (
     ],
   });
 
-  assert.deepEqual(selected, [
-    { id: inheritedItemId, runId: interruptedRunId },
-    { id: failedItemId, runId: failedRunId },
-    { id: cancelledItemId, runId: cancelledRunId },
-  ]);
+  assert.deepEqual(
+    selected.map(({ id, runId }) => ({ id, runId })),
+    [
+      { id: inheritedItemId, runId: interruptedRunId },
+      { id: failedItemId, runId: failedRunId },
+      { id: cancelledItemId, runId: cancelledRunId },
+    ],
+  );
 });
 
 it("does not carry interrupted or still-running child ownership into later attempts", () => {
@@ -3620,6 +3623,54 @@ it.effect("ends the open tool calls of a provider stream that closed mid-turn", 
   }),
 );
 
+it.effect(
+  "ends an inherited tool call when the provider stream closes before its next update",
+  () =>
+    Effect.gen(function* () {
+      const priorRunId = RunId.make("run:closed-stream-inherited:prior");
+      const { written } = yield* captureRootRunTermination({
+        key: "closed-stream-inherited",
+        shouldFinalizeRun: () => Effect.succeed(true),
+        inheritedTurnItems: (ids) =>
+          RunExecutionService.selectInheritedBackgroundTurnItems({
+            threadId: ids.threadId,
+            currentProviderThreadId: ids.providerThreadId,
+            currentRunOrdinal: 2,
+            runs: [
+              {
+                id: priorRunId,
+                threadId: ids.threadId,
+                ordinal: 1,
+                status: "failed",
+              } as OrchestrationV2Run,
+            ],
+            turnItems: [
+              {
+                id: ids.itemId,
+                threadId: ids.threadId,
+                runId: priorRunId,
+                nodeId: null,
+                providerThreadId: ids.providerThreadId,
+                type: "dynamic_tool",
+                status: "running",
+              } as OrchestrationV2TurnItem,
+            ],
+          }),
+        events: () =>
+          Stream.fail(
+            new ProviderAdapterEventStreamError({
+              driver,
+              providerSessionId: ProviderSessionId.make("session:detached"),
+              cause: "Provider session released: Workspace changed.",
+            }),
+          ),
+      });
+      const ended = written.find((item) => item.type === "dynamic_tool");
+      assert.equal(ended?.status, "interrupted");
+      assert.equal(ended?.runId, priorRunId);
+    }),
+);
+
 it.effect("refreshes pull requests only once when startup failure closes its event stream", () =>
   Effect.gen(function* () {
     const ingestionStarted = yield* Deferred.make<void>();
@@ -3675,6 +3726,9 @@ function captureRootRunTermination(input: {
   readonly startTurn?: ProviderAdapterV2SessionRuntime["startTurn"];
   readonly refreshAfterTurn?: Effect.Effect<void>;
   readonly agentVoiceReply?: AgentVoiceReply.AgentVoiceReplyShape;
+  readonly inheritedTurnItems?: (
+    ids: BackgroundScenarioIds,
+  ) => ReadonlyArray<RunExecutionService.InheritedBackgroundTurnItemRoute>;
 }) {
   return Effect.gen(function* () {
     const ids = backgroundScenarioIds(input.key);
@@ -3827,6 +3881,12 @@ function captureRootRunTermination(input: {
         } as OrchestrationV2RunAttempt,
         attemptId: ids.attemptId,
         providerTurnOrdinal: 1,
+        ...(input.inheritedTurnItems === undefined
+          ? {}
+          : {
+              loadInheritedBackgroundTurnItems: () =>
+                Effect.succeed(input.inheritedTurnItems?.(ids) ?? []),
+            }),
         shouldFinalizeRun: input.shouldFinalizeRun,
         ...(input.hasUnpairedRunInterruptRequest === undefined
           ? {}
