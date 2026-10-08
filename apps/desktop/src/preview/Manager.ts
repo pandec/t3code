@@ -1339,8 +1339,11 @@ const makeNativeOperations = Effect.fn("PreviewManager.makeOperations")(function
     };
     // Opens a thread link clicked in a page in the app, as a real browser would
     // through the OS; the preview session cannot launch external protocols.
-    const willNavigate = (event: Electron.Event, url: string): void => {
-      if (threadLinks.receive(url)) event.preventDefault();
+    // `will-frame-navigate` also covers links inside iframes.
+    const willNavigate = (
+      event: Electron.Event<Electron.WebContentsWillFrameNavigateEventParams>,
+    ): void => {
+      if (threadLinks.receive(event.url)) event.preventDefault();
     };
     const audioStateChanged = (
       event: Electron.Event<Electron.WebContentsAudioStateChangedEventParams>,
@@ -1578,7 +1581,7 @@ const makeNativeOperations = Effect.fn("PreviewManager.makeOperations")(function
       scope,
       attempt({ operation: "detachListeners", tabId, webContentsId: wc.id }, () => {
         cancelFaviconCapture();
-        wc.off("will-navigate", willNavigate);
+        wc.off("will-frame-navigate", willNavigate);
         wc.off("did-start-navigation", navigationStarted);
         wc.off("did-navigate", syncNavigation);
         wc.off("did-navigate-in-page", syncInPageNavigation);
@@ -1601,7 +1604,7 @@ const makeNativeOperations = Effect.fn("PreviewManager.makeOperations")(function
         // Only focused native editing shortcuts may reach the application menu.
         // Other preview input, including CDP keys, belongs to the page.
         wc.setIgnoreMenuShortcuts(true);
-        wc.on("will-navigate", willNavigate);
+        wc.on("will-frame-navigate", willNavigate);
         wc.on("did-start-navigation", navigationStarted);
         wc.on("did-navigate", syncNavigation);
         wc.on("did-navigate-in-page", syncInPageNavigation);

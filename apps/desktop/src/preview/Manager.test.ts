@@ -755,16 +755,15 @@ describe("PreviewManager", () => {
         yield* manager.createTab("tab_thread_link");
         yield* manager.registerWebview("tab_thread_link", 42);
 
-        const willNavigate = preview.listeners.get("will-navigate")!;
-        const linkPreventDefault = vi.fn();
-        const pagePreventDefault = vi.fn();
-        willNavigate({ preventDefault: linkPreventDefault } as never, THREAD_LINK as never);
-        willNavigate(
-          { preventDefault: pagePreventDefault } as never,
-          "https://example.com/" as never,
-        );
-        expect(linkPreventDefault).toHaveBeenCalledOnce();
-        expect(pagePreventDefault).not.toHaveBeenCalled();
+        const willNavigate = preview.listeners.get("will-frame-navigate")!;
+        const navigate = (url: string, isMainFrame: boolean) => {
+          const preventDefault = vi.fn();
+          willNavigate({ preventDefault, url, isMainFrame } as never);
+          return preventDefault;
+        };
+        expect(navigate(THREAD_LINK, true)).toHaveBeenCalledOnce();
+        expect(navigate(THREAD_LINK, false)).toHaveBeenCalledOnce();
+        expect(navigate("https://example.com/", true)).not.toHaveBeenCalled();
 
         const setWindowOpenHandler = (preview.webContents as Electron.WebContents)
           .setWindowOpenHandler as unknown as ReturnType<typeof vi.fn>;
@@ -775,7 +774,7 @@ describe("PreviewManager", () => {
           action: "deny",
         });
         expect(preview.loadURL).not.toHaveBeenCalled();
-        expect(receivedThreadLinks).toEqual([THREAD_LINK, THREAD_LINK]);
+        expect(receivedThreadLinks).toEqual([THREAD_LINK, THREAD_LINK, THREAD_LINK]);
       }),
     ),
   );
