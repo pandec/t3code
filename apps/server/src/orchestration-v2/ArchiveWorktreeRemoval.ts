@@ -155,7 +155,7 @@ export const make = Effect.gen(function* () {
       const root = yield* canonicalWorkspacePath(worktreePath);
       const archived = yield* threads.getShellSnapshot({ location: "archive" });
       const ids: Array<ThreadId> = [];
-      for (const thread of archived.threads) {
+      for (const thread of archived.archivedThreads) {
         if (thread.id === threadId || thread.worktreePath === null) continue;
         if (contains(root, yield* canonicalWorkspacePath(thread.worktreePath))) ids.push(thread.id);
       }

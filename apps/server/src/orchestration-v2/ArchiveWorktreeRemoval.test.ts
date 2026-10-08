@@ -74,17 +74,18 @@ const TestLayer = archiveWorktreeRemovalLayer.pipe(
               },
             }) as never,
         ),
+      // Like the projection, an archive-location snapshot lists its rows under archivedThreads.
       getShellSnapshot: (options) =>
-        Effect.sync(
-          () =>
-            ({
-              threads: fixture.otherThreads
-                .filter(
-                  (thread) => (thread.archived === true) === (options?.location === "archive"),
-                )
-                .map((thread) => ({ ...thread, deletedAt: null })),
-            }) as unknown as OrchestrationV2ThreadShellSnapshot,
-        ),
+        Effect.sync(() => {
+          const archive = options?.location === "archive";
+          const rows = fixture.otherThreads
+            .filter((thread) => (thread.archived === true) === archive)
+            .map((thread) => ({ ...thread, deletedAt: null }));
+          return {
+            threads: archive ? [] : rows,
+            archivedThreads: archive ? rows : [],
+          } as unknown as OrchestrationV2ThreadShellSnapshot;
+        }),
     }),
   ),
   Layer.provide(

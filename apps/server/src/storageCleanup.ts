@@ -170,6 +170,17 @@ export const readLiveProviderSessionCwds = Effect.fn("readLiveProviderSessionCwd
   );
 });
 
+/** Projects plus every active and archived thread shell; archived threads own worktrees too. */
+export const readStorageCleanupThreads = Effect.fn("StorageCleanup.readThreads")(function* () {
+  const projections = yield* ProjectionStore.ProjectionStoreV2;
+  const projectStore = yield* ProjectStore.ProjectStoreV2;
+  const active = yield* projections.getShellSnapshot();
+  // An archive-location snapshot lists its rows under archivedThreads.
+  const archived = yield* projections.getShellSnapshot({ location: "archive" });
+  const projects = yield* projectStore.listShells();
+  return { projects, threads: [...active.threads, ...archived.archivedThreads] };
+});
+
 export const make = Effect.gen(function* () {
   const config = yield* ServerConfig.ServerConfig;
   const settingsService = yield* Settings.ServerSettingsService;
@@ -216,12 +227,11 @@ export const make = Effect.gen(function* () {
     return false;
   });
 
-  const readThreads = Effect.fn("StorageCleanup.readThreads")(function* () {
-    const active = yield* projections.getShellSnapshot();
-    const archived = yield* projections.getShellSnapshot({ location: "archive" });
-    const projects = yield* projectStore.listShells();
-    return { projects, threads: [...active.threads, ...archived.threads] };
-  });
+  const readThreads = () =>
+    readStorageCleanupThreads().pipe(
+      Effect.provideService(ProjectionStore.ProjectionStoreV2, projections),
+      Effect.provideService(ProjectStore.ProjectStoreV2, projectStore),
+    );
 
   const readLiveSessionCwds = () =>
     readLiveProviderSessionCwds().pipe(Effect.provideService(SqlClient.SqlClient, sql));
