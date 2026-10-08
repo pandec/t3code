@@ -82,6 +82,8 @@ import {
   useSharedPullRequestSummary,
 } from "~/state/pullRequests";
 import { useAtomCommand } from "~/state/use-atom-command";
+import { useThreadPaneId } from "../thread-split/threadPaneContext";
+import { isThreadPaneActive } from "../thread-split/threadSplitStore";
 import { PullRequestStackMenu } from "./PullRequestStackMenu";
 import { PullRequestThreadLinks } from "./PullRequestThreadLinks";
 import { vcsEnvironment } from "~/state/vcs";
@@ -725,6 +727,7 @@ export function PullRequestDetailPanel({
     [activity, canWriteSourceControl, coreDetail],
   );
   const handoffSummary = detail ?? sharedSummary;
+  const threadPaneId = useThreadPaneId();
   const keybindings = useAtomValue(primaryServerKeybindingsAtom);
   const { copyToClipboard: copyReference } = useCopyToClipboard<string>({
     target: "pull request reference",
@@ -737,6 +740,8 @@ export function PullRequestDetailPanel({
       }),
   });
   const copyFromShortcut = useEffectEvent((event: KeyboardEvent) => {
+    // Split view mounts a panel per pane; only the active pane's panel answers.
+    if (!isThreadPaneActive(threadPaneId)) return;
     if (!shortcutsEnabled || event.defaultPrevented || isCommandPaletteOpen()) return;
     const command = resolveShortcutCommand(event, keybindings, {
       context: getShortcutContext(),

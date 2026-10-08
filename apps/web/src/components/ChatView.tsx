@@ -6872,13 +6872,14 @@ export default function ChatView(props: ChatViewProps) {
         // Keyboard scrolling (PageUp/Home/ArrowUp) bypasses wheel and
         // pointer events entirely; without this the timeline yanks back to
         // the end on the next stream chunk. Clicking message text can leave
-        // DOM focus on body, so these keys must also be heard at document.
+        // DOM focus on body, so these keys must also be heard at document;
+        // in split view only the active pane's timeline takes body keys.
         const handleKeyDown = (event: KeyboardEvent) => {
           if (
             !(event.target instanceof Node) ||
             (!scrollNode.contains(event.target) &&
-              event.target !== document.body &&
-              event.target !== document.documentElement) ||
+              ((event.target !== document.body && event.target !== document.documentElement) ||
+                !isThreadPaneActive(threadPaneId))) ||
             event.defaultPrevented ||
             event.isComposing ||
             event.altKey ||
@@ -6950,7 +6951,12 @@ export default function ChatView(props: ChatViewProps) {
       }
       removeListeners?.();
     };
-  }, [activeThread?.id, isTimelineAtLogicalEnd, timelineRealContentOverflowsViewport]);
+  }, [
+    activeThread?.id,
+    isTimelineAtLogicalEnd,
+    threadPaneId,
+    timelineRealContentOverflowsViewport,
+  ]);
 
   const onTimelineAnchorReady = useCallback((messageId: MessageId, anchorIndex: number) => {
     if (pendingTimelineAnchorRef.current === messageId) {
