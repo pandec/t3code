@@ -134,14 +134,32 @@ describe("thread lifecycle outbox model", () => {
     for (const thread of [idle, pendingArchive, undefined]) {
       for (const desiredArchived of [true, false]) {
         const base = { ...live, thread, desiredArchived, requiresDispatch: true };
-        expect(resolveThreadLifecycleOutboxAction({ ...base, operateGrant: "unknown" })).toBe(
+        expect(resolveThreadLifecycleOutboxAction({ ...base, operateGrant: "loading" })).toBe(
           "wait",
         );
-        expect(resolveThreadLifecycleOutboxAction({ ...base, operateGrant: "denied" })).toBe(
-          "remove",
-        );
+        // Queued messages wait on the same grant, so denial must not wait behind them.
+        for (const hasQueuedMessages of [false, true]) {
+          expect(
+            resolveThreadLifecycleOutboxAction({
+              ...base,
+              hasQueuedMessages,
+              operateGrant: "denied",
+            }),
+          ).toBe("remove");
+        }
       }
     }
+  });
+
+  it("leaves an unverified grant to the server instead of stalling", () => {
+    const base = {
+      ...live,
+      thread: idle,
+      desiredArchived: true,
+      operateGrant: "unverified",
+    } as const;
+    expect(resolveThreadLifecycleOutboxAction(base)).toBe("archive");
+    expect(resolveThreadLifecycleOutboxAction({ ...base, hasQueuedMessages: true })).toBe("wait");
   });
 
   it("drops archives the server already holds", () => {

@@ -8031,6 +8031,7 @@ export default function ChatView(props: ChatViewProps) {
         icon={<AlarmClockIcon />}
         label="Woke from snooze"
         actionLabel="Dismiss"
+        actionDisabled={!canOperateThread}
         onAction={acknowledgeActiveThreadWoke}
       />
     ) : null;

@@ -121,7 +121,7 @@ function resolveIntentAction(
       inputs.presentations.get(intent.environmentId)?.connection.phase === "connected",
     shellStatus: inputs.shellStatuses.get(intent.environmentId) ?? "empty",
     hasQueuedMessages: inputs.queuedThreadKeys.has(threadKey),
-    operateGrant: inputs.operateGrants.get(intent.environmentId) ?? "unknown",
+    operateGrant: inputs.operateGrants.get(intent.environmentId) ?? "loading",
     thread: liveThread(inputs, intent),
     desiredArchived: intent.desiredArchived,
     requiresDispatch: intent.requiresDispatch,
