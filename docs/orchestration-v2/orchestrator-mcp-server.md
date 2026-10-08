@@ -354,6 +354,19 @@ and `creationSource: "mcp"`; provider output uses `creationSource: "provider"`.
 Actor and ingress are separate so agent-authored user-role messages remain
 distinguishable from human-authored messages.
 
+Agents mention another thread as `[title](t3-thread://v1/<threadId>)`. The
+link carries only the id, which resolves in the environment of the message that
+holds it. Clients show the thread's current title rather than the label, so a
+rename never leaves a stale link.
+
+List and read results report `snoozed` and `snoozedUntil`, and
+`t3_thread_list` filters on `snoozed`. The server's `isSnoozed` follows the
+client's `effectiveSnoozed`, so agents and the sidebar agree: a snoozed thread
+wakes early when it has a pending request, fails, or completes after the snooze.
+The fork's snoozes without a wake time (`snoozedUntil` null) also count: "until I
+wake it" holds until a run ends after it, and "until it's done" holds while its
+awaited run or that run's agent background work goes on.
+
 ### `t3_thread_update`
 
 Updates metadata for the calling thread or any other thread in the environment.

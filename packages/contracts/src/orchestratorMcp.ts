@@ -308,6 +308,7 @@ export const OrchestratorMcpThreadListInput = Schema.Struct({
   ),
   titleContains: Schema.optional(TrimmedNonEmptyString.check(Schema.isMaxLength(256))),
   settled: Schema.optional(Schema.Boolean),
+  snoozed: Schema.optional(Schema.Boolean),
   includeSubagents: Schema.optional(Schema.Boolean),
   cursor: Schema.optional(NonNegativeInt),
   limit: Schema.optional(PositiveInt.check(Schema.isLessThanOrEqualTo(100))),
@@ -329,6 +330,9 @@ export const OrchestratorMcpThreadListItem = Schema.Struct({
   linkedPullRequest: Schema.NullOr(ThreadLinkedPullRequest),
   settled: Schema.Boolean,
   settledAt: Schema.NullOr(IsoDateTime),
+  snoozed: Schema.Boolean,
+  /** When a snoozed thread wakes; null when it is not snoozed or its snooze has no wake time (fork). */
+  snoozedUntil: Schema.NullOr(IsoDateTime),
   parentThreadId: Schema.NullOr(ThreadId),
   relationshipToParent: Schema.NullOr(Schema.Literals(["fork", "subagent"])),
   worktreePath: Schema.NullOr(Schema.String),
@@ -386,6 +390,9 @@ export const OrchestratorMcpThreadDetail = Schema.Struct({
   archived: Schema.Boolean,
   settled: Schema.Boolean,
   settledAt: Schema.NullOr(IsoDateTime),
+  snoozed: Schema.Boolean,
+  /** When a snoozed thread wakes; null when it is not snoozed or its snooze has no wake time (fork). */
+  snoozedUntil: Schema.NullOr(IsoDateTime),
   createdAt: IsoDateTime,
   updatedAt: IsoDateTime,
 });

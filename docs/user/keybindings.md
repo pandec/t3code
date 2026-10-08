@@ -86,6 +86,15 @@ focused thread and focuses the other pane when that thread is already visible.
 It does not handle keys inside an embedded browser page and is unavailable in the
 web and mobile clients.
 
+## Find in a diff
+
+Click into a diff in the Diff panel or a pull request's Code tab, then press
+`mod+f` to search every file in it, including folded files and unchanged lines
+hidden between changes. Enter and `Shift+Enter` move between matches, and a
+match in a folded file opens it. Escape closes the search. This shortcut is not
+configurable. A very large uncommitted diff loads its files as you scroll, and
+find only searches the files loaded so far.
+
 ## iPad
 
 With a hardware keyboard, use `Cmd+1` through `Cmd+9` to open the first nine

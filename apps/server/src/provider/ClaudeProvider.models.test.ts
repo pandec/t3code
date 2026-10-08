@@ -89,9 +89,14 @@ it("keeps built-in model id resolution unchanged", () => {
   );
   assert.equal(
     resolveClaudeApiModelId(
-      createModelSelection(INSTANCE_ID, "claude-opus-5", [{ id: "contextWindow", value: "1m" }]),
+      createModelSelection(INSTANCE_ID, "claude-opus-4-6", [{ id: "contextWindow", value: "1m" }]),
     ),
-    "claude-opus-5[1m]",
+    "claude-opus-4-6[1m]",
+  );
+  // 5-series models always run 1M, so their id carries no window suffix.
+  assert.equal(
+    resolveClaudeApiModelId(createModelSelection(INSTANCE_ID, "claude-opus-5")),
+    "claude-opus-5",
   );
 });
 

@@ -1,4 +1,7 @@
-import { backgroundWorkHoldsCompletion } from "@t3tools/shared/orchestrationV2PendingBackgroundWork";
+import {
+  backgroundWorkHoldsCompletion,
+  snoozeUntilDoneWorkContinues,
+} from "@t3tools/shared/orchestrationV2PendingBackgroundWork";
 import { resolveProjectSettings } from "@t3tools/shared/projectSettings";
 import { visibleThreadPullRequests } from "@t3tools/shared/threadPullRequests";
 import {
@@ -178,6 +181,86 @@ export function isAutoSettlementCandidate(
   const wokeOnCompletion =
     snoozedAtMs !== null && completedAtMs !== null && completedAtMs > snoozedAtMs;
   return wokeOnError || wokeOnCompletion;
+}
+
+/**
+ * Whether a thread is parked on its snooze: its wake time is in the future and
+ * it has not raised its hand with a pending request, a fresh failure, or work
+ * that completed after the snooze. Server twin of the client's
+ * `effectiveSnoozed`, so agents and the sidebar agree on what is snoozed. One
+ * difference: a failure counts as fresh when its run completed after the
+ * snooze, like `isAutoSettlementCandidate`. The client compares the shell's
+ * update time, so a rename can wake a failed thread there but not here.
+ */
+export function isSnoozed(
+  thread: Pick<
+    OrchestrationV2ThreadShell,
+    | "snoozedUntil"
+    | "snoozedAt"
+    | "snoozedUntilRunId"
+    | "latestRunId"
+    | "latestRunCompletedAt"
+    | "status"
+    | "pendingRuntimeRequest"
+    | "pendingBackgroundTasks"
+  >,
+  nowMs: number,
+): boolean {
+  if (thread.snoozedUntil == null && thread.snoozedAt != null) {
+    return timelessSnoozeHolds({ ...thread, snoozedAt: thread.snoozedAt });
+  }
+  const snoozedUntilMs = toMillis(thread.snoozedUntil);
+  if (snoozedUntilMs === null || snoozedUntilMs <= nowMs) return false;
+  if (thread.pendingRuntimeRequest !== null) return false;
+  const snoozedAtMs = toMillis(thread.snoozedAt);
+  const completedAtMs = toMillis(thread.latestRunCompletedAt);
+  const wokeOnError =
+    thread.status === "failed" &&
+    (snoozedAtMs === null || (completedAtMs !== null && completedAtMs > snoozedAtMs));
+  // Like the client, only a run that completed wakes it; an interrupt or cancel does not.
+  const wokeOnCompletion =
+    thread.status === "completed" &&
+    snoozedAtMs !== null &&
+    completedAtMs !== null &&
+    completedAtMs > snoozedAtMs;
+  return !wokeOnError && !wokeOnCompletion;
+}
+
+/**
+ * Fork: a snooze without a wake time, "until I wake it" or "until it's done"
+ * (an awaited `snoozedUntilRunId`). Mirrors client-runtime's
+ * threadRaisedHandWhileSnoozed: a pending request wakes it, and so does a run
+ * that ended after it was set (interrupted and failed count; a cancelled run
+ * ends "until it's done") unless the awaited work goes on.
+ */
+function timelessSnoozeHolds(
+  thread: Pick<
+    OrchestrationV2ThreadShell,
+    | "snoozedUntilRunId"
+    | "latestRunId"
+    | "latestRunCompletedAt"
+    | "status"
+    | "pendingRuntimeRequest"
+    | "pendingBackgroundTasks"
+  > & { readonly snoozedAt: DateTime.Utc },
+): boolean {
+  if (thread.pendingRuntimeRequest !== null) return false;
+  const untilDone = thread.snoozedUntilRunId != null;
+  const completedAtMs = toMillis(thread.latestRunCompletedAt);
+  const runEnded =
+    completedAtMs !== null &&
+    completedAtMs > DateTime.toEpochMillis(thread.snoozedAt) &&
+    (thread.status === "completed" ||
+      thread.status === "interrupted" ||
+      thread.status === "failed" ||
+      (untilDone && thread.status === "cancelled"));
+  if (!runEnded) return true;
+  return snoozeUntilDoneWorkContinues({
+    snoozedUntilRunId: thread.snoozedUntilRunId,
+    latestRunId: thread.latestRunId,
+    latestRunStatus: thread.status,
+    pendingBackgroundTasks: thread.pendingBackgroundTasks ?? [],
+  });
 }
 
 export function resolveAutoSettlementAt(input: {

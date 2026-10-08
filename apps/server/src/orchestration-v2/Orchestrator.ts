@@ -1371,15 +1371,17 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
       if (usageLimitBlockedRun(projection.runs, projection.turnItems, sessionError) !== null) {
         return;
       }
-      const queuedRun = nextQueuedRun(projection, yield* DateTime.now);
-      if (queuedRun === undefined) {
-        return;
-      }
-      selectedRunId = queuedRun.id;
       // A provider that just failed will likely fail the next message too.
       // Hold the queue so the user decides when to resume it. Validation
       // failures (setup, unsupported handoff) belong to that message alone,
       // and a message queued for another provider is how users recover.
+      // Fork: decided against the queue head before the edit-hold and steer
+      // recall gates, whose later wakes carry no failedRunId and would
+      // otherwise send the message the failure should hold.
+      const queueHead = queuedRunsInDeliveryOrder(projection)[0];
+      if (queueHead === undefined) {
+        return;
+      }
       const failedRun = latestExecutedRun(projection.runs);
       const failureClass =
         failedRun?.id === options?.failedRunId
@@ -1388,7 +1390,7 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
       if (
         failureClass !== undefined &&
         failureClass !== "validation_error" &&
-        failedRun?.providerInstanceId === queuedRun.providerInstanceId
+        failedRun?.providerInstanceId === queueHead.providerInstanceId
       ) {
         const now = yield* DateTime.now;
         yield* writeSystemEvents(
@@ -1405,6 +1407,11 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
         );
         return;
       }
+      const queuedRun = nextQueuedRun(projection, yield* DateTime.now);
+      if (queuedRun === undefined) {
+        return;
+      }
+      selectedRunId = queuedRun.id;
       const rootNodeId = queuedRun.rootNodeId;
       const attemptId = queuedRun.activeAttemptId;
       const providerThreadId = queuedRun.providerThreadId;
@@ -11671,25 +11678,33 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
       // while holding the parent lock, so nesting the parent lock inside the
       // child lock here would invert that order, and the keyed executor's
       // semaphores are neither reentrant nor deadlock-aware.
-      const parentThreadId = yield* appOwnedSubagentParentThreadId(threadId);
-      if (parentThreadId !== undefined) {
-        yield* threadDispatch.withLock(parentThreadId, finalizeAppOwnedSubagent(threadId));
-      }
       if (stored.event.type === "run.updated") {
         yield* threadDispatch.withLock(
           threadId,
           finalizeDelegatedCompletionDelivery(threadId, stored.event.payload.id),
         );
       }
-      yield* threadDispatch.withLock(
-        threadId,
-        startNextQueuedRun(
+      yield* threadDispatch
+        .withLock(
           threadId,
-          stored.event.type === "run.updated" && stored.event.payload.status === "failed"
-            ? { failedRunId: stored.event.payload.id }
-            : undefined,
-        ),
-      );
+          startNextQueuedRun(
+            threadId,
+            stored.event.type === "run.updated" && stored.event.payload.status === "failed"
+              ? { failedRunId: stored.event.payload.id }
+              : undefined,
+          ),
+        )
+        .pipe(
+          Effect.catchCause((cause) =>
+            Effect.logWarning("Failed to start the next queued V2 run", { threadId, cause }),
+          ),
+        );
+      // After the queue decision: a provider failure holds the child's queued
+      // wakes, and only then is the failed run the task's result.
+      const parentThreadId = yield* appOwnedSubagentParentThreadId(threadId);
+      if (parentThreadId !== undefined) {
+        yield* threadDispatch.withLock(parentThreadId, finalizeAppOwnedSubagent(threadId));
+      }
     }).pipe(
       Effect.catchCause((cause) =>
         Effect.logWarning("Failed to react to terminal V2 run", {

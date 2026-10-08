@@ -150,8 +150,9 @@ sessions, background work, pending archives and worktree moves, worktrees shared
 thread (also through a symlinked path), uncommitted changes, and ignored files other than
 `node_modules` prevent removal. Branches and thread history stay; starting another turn recreates
 the checkout.
-Merge cleanup requires the commits to be included in the remote default branch, so squash merges
-may need the inactivity rule instead.
+Merge cleanup requires a merged pull request whose commits are included in the remote default
+branch. A squash or rebase merge on GitHub also counts when the pull request targeted the default
+branch and the worktree is still at the pull request's last commit.
 
 Enable **Delete worktrees with deleted threads** to remove safe worktrees after their last
 thread is deleted, including archived threads and worktrees left by earlier deletions. The

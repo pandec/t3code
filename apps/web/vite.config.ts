@@ -89,6 +89,8 @@ const buildSourcemap: boolean | "hidden" =
  * files, not in the new test.
  */
 const ISOLATED_TEST_FILES = [
+  "src/components/BranchToolbar.panel.test.tsx",
+  "src/components/composerCodeBlockHighlight.test.ts",
   "src/browser/recordingCompositor.test.ts",
   "src/components/chat/AssistantCitationChip.test.tsx",
   "src/components/chat/ComposerBannerStack.test.tsx",

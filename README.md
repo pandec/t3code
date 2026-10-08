@@ -107,5 +107,8 @@ This is a personal fork of [pingdotgg/t3code](https://github.com/pingdotgg/t3cod
   macOS Dev builds require a verified Developer ID signature so permission grants can survive
   rebuilds. See [local signing setup](docs/operations/development.md#signed-macos-dev-builds).
   Remote Mac builds can automatically unlock a dedicated signing keychain.
+  The Dev app and upstream's release app both rewrite the same `<T3 home>/bin/t3` launcher when
+  they start, and Settings → Install `t3` command links that launcher onto PATH. With both apps
+  installed, `t3` runs whichever app started last; with only the fork installed, nothing changes.
 - **Fleet updater** — `vp run update:machines` updates the fork's dev machines, local and remote, in one pass: pick targets interactively or name them (`--host`, `--include-local-desktop`, `--include-local-ios`), see dirty or off-branch checkouts before rebuilding and cancel or continue the eligible remainder, build the local desktop and iPhone at the same time, let Expo prompt when a local iPhone needs unlocking, rehearse with `--dry-run`, and reread captured failures with `--show-failure-logs`.
 - **Upstream sync workflow** — a scripted `sync-upstream` flow that fast-forwards the `main` mirror from upstream, merges it into `dev`, and runs the required checks before pushing. `scripts/check-upstream-sync.sh` reports whether a sync is due; it is also offered as the **Check Upstream Sync** action in `t3.json`.

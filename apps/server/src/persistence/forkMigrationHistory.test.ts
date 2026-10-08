@@ -142,6 +142,8 @@ describe("repairForkMigrationHistory", () => {
         [56, "RemoveRedundantProjectionIndexes"],
         [57, "ScheduledTaskWebhooks"],
         [58, "WebhookRelayDeliveries"],
+        [59, "McpAppModelContext"],
+        [60, "ThreadSnapshotWindowIndexes"],
       ]);
       const ledger = yield* readLedger;
       assert.deepStrictEqual(
@@ -177,6 +179,8 @@ describe("repairForkMigrationHistory", () => {
         [56, "RemoveRedundantProjectionIndexes"],
         [57, "ScheduledTaskWebhooks"],
         [58, "WebhookRelayDeliveries"],
+        [59, "McpAppModelContext"],
+        [60, "ThreadSnapshotWindowIndexes"],
       ]);
       assert.deepStrictEqual(
         (yield* readLedger).map((row) => [row.migration_id, row.name] as const),
@@ -194,7 +198,7 @@ describe("repairForkMigrationHistory", () => {
       yield* seedForkLedger(forkLedger.slice(0, 60), 49);
       assert.deepStrictEqual(
         (yield* runMigrations()).map(([id]) => id),
-        [50, 51, 52, 53, 54, 55, 56, 57, 58],
+        [50, 51, 52, 53, 54, 55, 56, 57, 58, 59, 60],
       );
       assert.deepStrictEqual(
         (yield* readLedger).map((row) => [row.migration_id, row.name] as const),

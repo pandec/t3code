@@ -111,7 +111,7 @@ import {
   HttpServerRespondable,
   HttpServerResponse,
 } from "effect/http";
-import { RpcSerialization, RpcServer } from "effect/rpc";
+import { type Rpc, type RpcGroup, RpcSerialization, RpcServer } from "effect/rpc";
 
 import * as CheckpointDiffQuery from "./checkpointing/CheckpointDiffQuery.ts";
 import * as ServerConfig from "./config.ts";
@@ -119,6 +119,7 @@ import * as EnvironmentTheme from "./environmentTheme.ts";
 import * as Keybindings from "./keybindings.ts";
 import * as ExternalLauncher from "./process/externalLauncher.ts";
 import * as ThreadManagementService from "./orchestration-v2/ThreadManagementService.ts";
+import * as McpAppRequests from "./mcpApps/McpAppRequests.ts";
 import * as ProviderSessionManager from "./orchestration-v2/ProviderSessionManager.ts";
 import * as ThreadLaunchService from "./orchestration-v2/ThreadLaunchService.ts";
 import * as ThreadMessageIntake from "./orchestration-v2/ThreadMessageIntake.ts";
@@ -243,13 +244,17 @@ import * as TraceDiagnostics from "./diagnostics/TraceDiagnostics.ts";
 import * as PullRequestService from "./pullRequest/PullRequestService.ts";
 import { listLinkedPullRequestThreads } from "./pullRequest/linkedThreads.ts";
 import { pullRequestSyncKey } from "./pullRequest/pullRequestSyncKey.ts";
+import * as ChildProcessSpawner from "effect/process/ChildProcessSpawner";
+import * as AntigravityInstallation from "./provider/AntigravityInstallation.ts";
+import * as CodexInstallation from "./provider/CodexInstallation.ts";
+import * as ProjectFaviconResolver from "./project/ProjectFaviconResolver.ts";
 import * as SqlClient from "effect/sql/SqlClient";
 import * as PullRequestSyncReactor from "./orchestration-v2/PullRequestSyncReactor.ts";
 import * as SourceControlDiscovery from "./sourceControl/SourceControlDiscovery.ts";
 import * as SourceControlRepositoryService from "./sourceControl/SourceControlRepositoryService.ts";
 import * as AzureDevOpsCli from "./sourceControl/AzureDevOpsCli.ts";
 import * as BitbucketApi from "./sourceControl/BitbucketApi.ts";
-import * as GitHubCli from "./sourceControl/GitHubCli.ts";
+import * as GitHubApi from "./sourceControl/GitHubApi.ts";
 import * as GitLabCli from "./sourceControl/GitLabCli.ts";
 import * as ForgejoCli from "./sourceControl/ForgejoCli.ts";
 import * as SourceControlProviderRegistry from "./sourceControl/SourceControlProviderRegistry.ts";
@@ -794,6 +799,7 @@ export const subscribeOrchestrationV2Thread = Effect.fn("ws.orchestrationV2.subs
     readonly afterSequence?: number;
     readonly requestCompletionMarker?: boolean;
     readonly acceptBoundedSnapshot?: boolean;
+    readonly acceptCompactTurnItems?: boolean;
   }) {
     const threadManagement = yield* ThreadManagementService.ThreadManagementService;
     const applicationEvents = yield* OrchestrationEventStore.OrchestrationEventStore;
@@ -887,7 +893,10 @@ export const subscribeOrchestrationV2Thread = Effect.fn("ws.orchestrationV2.subs
       );
       const { snapshotSequence } = snapshot;
       const snapshotItem = useBoundedSnapshot
-        ? buildBoundedThreadStreamSnapshot(snapshot)
+        ? buildBoundedThreadStreamSnapshot({
+            ...snapshot,
+            compactTurnItems: input.acceptCompactTurnItems === true,
+          })
         : {
             kind: "snapshot" as const,
             snapshotSequence,
@@ -1236,7 +1245,99 @@ const threadArchiveRpcError = (error: ThreadArchiveScheduler.ThreadArchiveSchedu
 const failThreadArchiveRpc = (error: ThreadArchiveScheduler.ThreadArchiveSchedulerError) =>
   error.operation === "status" ? Effect.die(error) : Effect.fail(threadArchiveRpcError(error));
 
-const layerWsRpc = (
+/**
+ * Fork: what the WebSocket RPC handlers require, spelled out. Inferring it from
+ * the handler map in another file (server.ts) exceeds TypeScript's per-statement
+ * instantiation budget once the fork's RPCs join upstream's, and the server
+ * layer's requirements then silently become `any`. An in-file assignability
+ * error here names a service a handler gained or dropped.
+ */
+type WsRpcServices =
+  | AcpRegistrySupport.AcpRegistryCatalog
+  | AcpRegistryRuntimeCoordinator.AcpRegistryRuntimeCoordinator
+  | AgentSessionImporter.AgentSessionImporter
+  | AgentSessionScanner.AgentSessionScanner
+  | AnalyticsService.AnalyticsService
+  | AntigravityInstallation.AntigravityInstallation
+  | BackgroundPolicy.BackgroundPolicy
+  | CheckpointDiffQuery.CheckpointDiffQuery
+  | ChildProcessSpawner.ChildProcessSpawner
+  | CodexInstallation.CodexInstallation
+  | Crypto.Crypto
+  | DeviceService.DeviceService
+  | DirectEndpoints.DirectEndpoints
+  | EnvironmentAuth.EnvironmentAuth
+  | EnvironmentTheme.EnvironmentThemeService
+  | ExternalLauncher.ExternalLauncher
+  | FileSystem.FileSystem
+  | GitWorkflowService.GitWorkflowService
+  | HostResources.HostResources
+  | HttpClient.HttpClient
+  | Keybindings.Keybindings
+  | ManagedProjectFolders.ManagedProjectFolders
+  | McpAppRequests.McpAppRequests
+  | MessageSpeech
+  | ModelManifest.ModelManifest
+  | OrchestrationEventStore.OrchestrationEventStore
+  | Orchestrator.OrchestratorV2
+  | PairingGrantStore.PairingGrantStore
+  | Path.Path
+  | PortScanner.PortDiscovery
+  | PreviewManager.PreviewManager
+  | ProcessDiagnostics.ProcessDiagnostics
+  | ProcessResourceMonitor.ProcessResourceMonitor
+  | ProjectCloneTracker.ProjectCloneTracker
+  | ProjectEnrichmentService.ProjectEnrichmentService
+  | ProjectFaviconResolver.ProjectFaviconResolver
+  | ProjectService.ProjectService
+  | ProjectSetupScriptRunner.ProjectSetupScriptRunner
+  | ProjectStore.ProjectStoreV2
+  | ProviderAuthService.ProviderAuthService
+  | ProviderInstanceHealth.ProviderInstanceHealth
+  | ProviderInstanceRegistry.ProviderInstanceRegistry
+  | ProviderMaintenanceRunner.ProviderMaintenanceRunner
+  | ProviderRegistry.ProviderRegistry
+  | ProviderSessionManager.ProviderSessionManagerV2
+  | ProviderUsageRefresh.ProviderUsageRefresh
+  | PullRequestService.PullRequestService
+  | PullRequestSyncReactor.PullRequestSyncReactor
+  | RecentArchivedThreads.RecentArchivedThreads
+  | RelayClient.RelayClient
+  | RemoteOpenTargets.RemoteOpenTargets
+  | RepositoryIdentityResolver.RepositoryIdentityResolver
+  | ResourceTelemetry.ResourceTelemetry
+  | ReviewService.ReviewService
+  | ScheduledTasks.ScheduledTaskService
+  | SecretRequests.SecretRequests
+  | ServerConfig.ServerConfig
+  | ServerEnvironment.ServerEnvironment
+  | ServerLifecycleEvents.ServerLifecycleEvents
+  | ServerRuntimeStartup.ServerRuntimeStartup
+  | ServerSecretStore.ServerSecretStore
+  | ServerSelfUpdate.ServerSelfUpdate
+  | ServerSettings.ServerSettingsService
+  | SessionImportService.SessionImportService
+  | SessionStore.SessionStore
+  | SourceControlDiscovery.SourceControlDiscovery
+  | SourceControlRepositoryService.SourceControlRepositoryService
+  | SqlClient.SqlClient
+  | TerminalManager.TerminalManager
+  | ThreadArchiveScheduler.ThreadArchiveScheduler
+  | ThreadLaunchService.ThreadLaunchService
+  | ThreadManagementService.ThreadManagementService
+  | ThreadSearch.ThreadSearch
+  | TraceDiagnostics.TraceDiagnostics
+  | TtsService
+  | UsageLimitSources.UsageLimitSources
+  | UsageService.UsageService
+  | VcsProvisioningService.VcsProvisioningService
+  | VcsStatusBroadcaster.VcsStatusBroadcaster
+  | WorkspaceEntries.WorkspaceEntries
+  | WorkspaceFileSystem.WorkspaceFileSystem
+  | WorkspacePaths.WorkspacePaths
+  | WorktreeSetupTracker.WorktreeSetupTracker;
+
+const inferredLayerWsRpc = (
   currentSession: EnvironmentAuth.AuthenticatedSession,
   clientOrigin: OrchestrationClientOrigin,
   clientAnalyticsProps: Readonly<Record<string, unknown>>,
@@ -1263,6 +1364,7 @@ const layerWsRpc = (
       const threadArchiveScheduler = yield* ThreadArchiveScheduler.ThreadArchiveScheduler;
 
       const providerSessionsV2 = yield* ProviderSessionManager.ProviderSessionManagerV2;
+      const mcpAppRequests = yield* McpAppRequests.McpAppRequests;
       const analytics = yield* AnalyticsService.AnalyticsService;
       // Client-origin attribution (#7774): every thread/turn the connecting
       // client starts is credited to its surface + app version. Best-effort:
@@ -2393,6 +2495,10 @@ const layerWsRpc = (
             }
             return { providers };
           }),
+        [WS_METHODS.mcpAppsCallTool]: (input) => mcpAppRequests.callTool(input),
+        [WS_METHODS.mcpAppsToolInfo]: (input) => mcpAppRequests.toolInfo(input),
+        [WS_METHODS.mcpAppsUpdateModelContext]: (input) => mcpAppRequests.updateModelContext(input),
+        [WS_METHODS.mcpAppsReadResource]: (input) => mcpAppRequests.readResource(input),
         [WS_METHODS.providerUploadFeedback]: (input) =>
           Effect.gen(function* () {
             const projection = yield* threadManagement.getThreadRecords(input.threadId, [
@@ -3307,6 +3413,12 @@ export const WS_RPC_SERVER_OPTIONS = {
   disableFatalDefects: true,
 } as const;
 
+// Checked in its own statement against the inferred handlers (see WsRpcServices).
+const layerWsRpc: (
+  ...args: Parameters<typeof inferredLayerWsRpc>
+) => Layer.Layer<Rpc.ToHandler<RpcGroup.Rpcs<typeof ServerWsRpcGroup>>, never, WsRpcServices> =
+  inferredLayerWsRpc;
+
 export const layer = Layer.unwrap(
   Effect.gen(function* () {
     const previewAutomationBroker = yield* PreviewAutomationBroker.PreviewAutomationBroker;
@@ -3387,7 +3499,7 @@ export const layer = Layer.unwrap(
                         Layer.mergeAll(
                           AzureDevOpsCli.layer,
                           BitbucketApi.layer,
-                          GitHubCli.layer,
+                          GitHubApi.layerWithDependencies,
                           GitLabCli.layer,
                           ForgejoCli.layer,
                         ),

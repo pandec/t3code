@@ -24,6 +24,7 @@ import { CodexProviderCapabilitiesV2 } from "./Adapters/CodexAdapterV2.ts";
 import * as EffectWorker from "./EffectWorker.ts";
 import { WORKTREE_SWITCH_DETAIL } from "./DeferredWorktreeSwitch.ts";
 import * as Orchestrator from "./Orchestrator.ts";
+import { makeProviderFailure } from "./ProviderFailure.ts";
 import type {
   ProviderAdapterV2Event,
   ProviderAdapterV2Shape,
@@ -331,6 +332,72 @@ it.effect("resumes the queue once an abandoned edit hold lapses", () =>
             (run) => run.id === queued.id,
           )?.editHeldUntil,
         );
+      }).pipe(Effect.provide(layer));
+    }),
+  ),
+);
+
+it.effect("holds the queue after a provider failure even while a message is being edited", () =>
+  Effect.scoped(
+    Effect.gen(function* () {
+      const { started, events, threadId, setup, layer } = yield* scenario("edit-hold-failure");
+      yield* Effect.gen(function* () {
+        const { orchestrator, worker, watch, send, hold } = yield* setup;
+        yield* send("queued", "queue");
+        const queued = (yield* orchestrator.getThreadProjection(threadId)).runs.find(
+          (run) => run.status === "queued",
+        )!;
+        yield* hold("hold", queued.id, true);
+
+        const turnInput = started[0]!;
+        const activeTurn = (yield* orchestrator.getThreadProjection(threadId)).providerTurns.find(
+          (turn) => turn.runAttemptId === turnInput.attemptId,
+        )!;
+        const failed = yield* watch(
+          (event) =>
+            event.type === "run.updated" &&
+            event.payload.id === turnInput.runId &&
+            event.payload.status === "failed",
+        );
+        const queueHeld = yield* watch(
+          (event) =>
+            event.type === "run.updated" &&
+            event.payload.id === queued.id &&
+            event.payload.queueHeld === true,
+        );
+        const failure = makeProviderFailure({ class: "provider_error", message: "provider down" });
+        yield* Queue.offer(events, {
+          type: "provider_turn.updated",
+          driver,
+          providerTurn: { ...activeTurn, status: "failed", completedAt: yield* DateTime.now },
+        });
+        yield* Queue.offer(events, {
+          type: "turn.terminal",
+          driver,
+          providerThreadId: activeTurn.providerThreadId,
+          providerTurnId: activeTurn.id,
+          runOrdinal: turnInput.runOrdinal,
+          status: "failed",
+          failure,
+          failureItemOrdinal: 101,
+          threadDisposition: "reusable",
+        });
+        yield* Fiber.join(failed);
+        yield* Fiber.join(queueHeld);
+        yield* worker.drain();
+
+        const heldRun = () =>
+          orchestrator
+            .getThreadProjection(threadId)
+            .pipe(Effect.map((projection) => projection.runs.find((run) => run.id === queued.id)));
+        // The failure holds the queue although the edit hold kept the message from being picked.
+        assert.isTrue((yield* heldRun())?.queueHeld);
+
+        // Releasing the edit does not send the message the failure held.
+        yield* hold("release", queued.id, false);
+        yield* worker.drain();
+        assert.equal(started.length, 1);
+        assert.equal((yield* heldRun())?.status, "queued");
       }).pipe(Effect.provide(layer));
     }),
   ),

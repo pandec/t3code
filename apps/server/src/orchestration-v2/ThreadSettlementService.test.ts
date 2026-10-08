@@ -1334,3 +1334,64 @@ describe("ThreadSettlementServiceV2 single-thread sweeps", () => {
     ),
   );
 });
+
+describe("isSnoozed", () => {
+  const snoozed = { snoozedAt: at(-2 * DAY_MS), snoozedUntil: at(DAY_MS) };
+  it("wakes for completed work after the snooze, but not an interrupted run", () => {
+    expect(ThreadSettlementService.isSnoozed(shell(snoozed), NOW_MS)).toBe(true);
+    expect(
+      ThreadSettlementService.isSnoozed(
+        shell({ ...snoozed, status: "interrupted", latestRunCompletedAt: at(-DAY_MS) }),
+        NOW_MS,
+      ),
+    ).toBe(true);
+    expect(
+      ThreadSettlementService.isSnoozed(
+        shell({ ...snoozed, status: "completed", latestRunCompletedAt: at(-DAY_MS) }),
+        NOW_MS,
+      ),
+    ).toBe(false);
+    expect(
+      ThreadSettlementService.isSnoozed(shell({ ...snoozed, snoozedUntil: at(-1) }), NOW_MS),
+    ).toBe(false);
+  });
+
+  // Fork: snoozes without a wake time.
+  it("keeps an until-I-wake-it snooze until a run ends after it", () => {
+    const parked = { snoozedAt: at(-2 * DAY_MS), snoozedUntil: null };
+    expect(ThreadSettlementService.isSnoozed(shell(parked), NOW_MS)).toBe(true);
+    expect(
+      ThreadSettlementService.isSnoozed(
+        shell({ ...parked, status: "interrupted", latestRunCompletedAt: at(-DAY_MS) }),
+        NOW_MS,
+      ),
+    ).toBe(false);
+  });
+
+  it("keeps an until-it's-done snooze while the awaited work goes on", () => {
+    const runId = RunId.make("run-awaited");
+    const untilDone = {
+      snoozedAt: at(-2 * DAY_MS),
+      snoozedUntil: null,
+      snoozedUntilRunId: runId,
+      latestRunId: runId,
+    };
+    const ended = { status: "completed" as const, latestRunCompletedAt: at(-DAY_MS) };
+    expect(
+      ThreadSettlementService.isSnoozed(shell({ ...untilDone, status: "running" }), NOW_MS),
+    ).toBe(true);
+    expect(
+      ThreadSettlementService.isSnoozed(
+        shell({
+          ...untilDone,
+          ...ended,
+          pendingBackgroundTasks: [{ taskId: "agent", description: "Agent", kind: "subagent" }],
+        }),
+        NOW_MS,
+      ),
+    ).toBe(true);
+    expect(ThreadSettlementService.isSnoozed(shell({ ...untilDone, ...ended }), NOW_MS)).toBe(
+      false,
+    );
+  });
+});

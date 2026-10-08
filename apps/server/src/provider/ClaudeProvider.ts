@@ -53,7 +53,6 @@ import {
   isClaudeCatalogUltracodeEffort,
   normalizeClaudeCatalogEffort,
   resolveClaudeCatalogApiModelId,
-  resolveClaudeCatalogContextWindow,
   resolveClaudeCatalogModel,
   resolveClaudeModelsForVersion,
   scopeClaudeModelCatalog,
@@ -105,12 +104,6 @@ export function normalizeClaudeCliEffort(
 
 export function isClaudeUltracodeEffort(effort: string | null | undefined): boolean {
   return isClaudeCatalogUltracodeEffort(effort);
-}
-
-export function resolveClaudeContextWindow(
-  modelSelection: ModelSelection | undefined,
-): string | undefined {
-  return resolveClaudeCatalogContextWindow(BUNDLED_CLAUDE_MODEL_CATALOG, modelSelection);
 }
 
 export function resolveClaudeApiModelId(modelSelection: ModelSelection): string {

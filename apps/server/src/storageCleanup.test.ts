@@ -6,6 +6,7 @@ import {
   ProjectId,
   ProviderInstanceId,
   RunId,
+  RuntimeRequestId,
   ThreadId,
   type OrchestrationV2ThreadShell,
 } from "@t3tools/contracts";
@@ -19,6 +20,7 @@ import * as ProjectStore from "./orchestration-v2/ProjectStore.ts";
 import {
   readStorageCleanupThreads,
   storageCleanupActivityAt,
+  storageCleanupPullRequestMerged,
   storageCleanupThreadIdle,
   storageCleanupWorktreeInUse,
 } from "./storageCleanup.ts";
@@ -91,6 +93,47 @@ describe("V2 storage cleanup eligibility", () => {
     "retains a worktree while its thread is %s",
     (status) => {
       expect(storageCleanupThreadIdle(candidateWithStatus(status), NOW_MS)).toBe(false);
+    },
+  );
+
+  it.each(["idle", "completed", "interrupted", "failed", "cancelled", "rolled_back"] as const)(
+    "allows cleanup once its thread is %s",
+    (status) => {
+      expect(storageCleanupThreadIdle(candidateWithStatus(status), NOW_MS)).toBe(true);
+    },
+  );
+
+  it.each(["completed", "interrupted", "cancelled", "rolled_back"] as const)(
+    "retains %s while background work is pending",
+    (status) => {
+      expect(
+        storageCleanupThreadIdle(
+          {
+            ...candidateWithStatus(status),
+            pendingBackgroundTasks: [{ taskId: "task-1", kind: "command" }],
+          },
+          NOW_MS,
+        ),
+      ).toBe(false);
+    },
+  );
+
+  it.each(["completed", "interrupted", "cancelled", "rolled_back"] as const)(
+    "retains %s while a runtime request is pending",
+    (status) => {
+      expect(
+        storageCleanupThreadIdle(
+          {
+            ...candidateWithStatus(status),
+            pendingRuntimeRequest: {
+              id: RuntimeRequestId.make("request-1"),
+              kind: "command",
+              createdAt: at(0),
+            },
+          },
+          NOW_MS,
+        ),
+      ).toBe(false);
     },
   );
 
@@ -230,4 +273,50 @@ describe("V2 storage cleanup thread read", () => {
       );
     }),
   );
+});
+
+describe("merged pull request cleanup", () => {
+  const HEAD_SHA = "a".repeat(40);
+  const integrated = {
+    branch: "feature",
+    defaultBranch: "main",
+    headSha: HEAD_SHA,
+    integrated: true,
+  };
+  const squashed = { ...integrated, integrated: false };
+  const pullRequest = (
+    overrides: Partial<NonNullable<Parameters<typeof storageCleanupPullRequestMerged>[0]>> = {},
+  ) => ({
+    state: "merged" as const,
+    headRef: "feature",
+    baseRef: "main",
+    headSha: HEAD_SHA,
+    ...overrides,
+  });
+
+  it("removes a worktree whose head reached the default branch through a merged pull request", () => {
+    expect(storageCleanupPullRequestMerged(pullRequest({ headSha: null }), integrated)).toBe(true);
+  });
+
+  it("removes a squash-merged worktree when the pull request names its exact head", () => {
+    expect(storageCleanupPullRequestMerged(pullRequest(), squashed)).toBe(true);
+  });
+
+  it.each([
+    ["has a later commit than the merged head", { headSha: "c".repeat(40) }],
+    ["was merged into a release branch", { baseRef: "release" }],
+    ["was merged into its stack parent", { baseRef: "stack-parent" }],
+    ["was merged without a reported head commit", { headSha: null }],
+    ["belongs to a different branch", { headRef: "other" }],
+    ["is still open", { state: "open" }],
+    ["was closed without merging", { state: "closed" }],
+  ] as const)("keeps a squash worktree whose pull request %s", (_name, overrides) => {
+    expect(storageCleanupPullRequestMerged(pullRequest(overrides), squashed)).toBe(false);
+  });
+
+  it("keeps a worktree with no pull request, or one that is not merged", () => {
+    expect(storageCleanupPullRequestMerged(null, squashed)).toBe(false);
+    expect(storageCleanupPullRequestMerged(null, integrated)).toBe(false);
+    expect(storageCleanupPullRequestMerged(pullRequest({ state: "open" }), integrated)).toBe(false);
+  });
 });
