@@ -2864,6 +2864,79 @@ describe("ClaudeAdapterV2 background wake turns", () => {
     ),
   );
 
+  it.effect("keeps the turn open while a between-tools steer is still queued", () =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        const harness = yield* makeWakeHarness;
+        const idAllocator = yield* IdAllocator.IdAllocatorV2;
+        const attemptId = RunAttemptId.make("attempt-steering-late");
+        const input = makeClaudeTestTurnInput({
+          threadId: harness.threadId,
+          providerThread: harness.providerThread,
+          now: yield* DateTime.now,
+          attemptId,
+          text: "Audit the settings pages.",
+          attachments: [],
+        });
+        yield* harness.runtime.startTurn(input);
+        yield* harness.runtime.steerTurn({
+          threadId: harness.threadId,
+          runId: input.runId,
+          providerThread: harness.providerThread,
+          providerTurnId: idAllocator.derive.providerTurn({
+            driver: ClaudeAdapterV2.CLAUDE_PROVIDER,
+            nativeTurnId: `turn:${attemptId}`,
+          }),
+          message: {
+            createdBy: "user",
+            creationSource: "web",
+            messageId: MessageId.make("message-steering-late"),
+            text: "Include the hierarchy mock.",
+            attachments: [],
+          },
+        });
+        const steerUuid = harness.offeredMessages[1]?.uuid;
+        assert.isString(steerUuid);
+        const lifecycle = (state: string, uuid: string) =>
+          claudeSdkFrame({
+            type: "command_lifecycle",
+            command_uuid: steerUuid,
+            state,
+            uuid,
+            session_id: WAKE_NATIVE_SESSION,
+          });
+        yield* harness.offerAndWait(lifecycle("queued", "00000000-0000-4000-8000-000000000911"));
+        // The steer missed the turn's last tool boundary: this result must not
+        // settle the turn, because Claude runs the steer as its next turn.
+        yield* harness.offerAndWait(
+          makeResultFrame({ uuid: "00000000-0000-4000-8000-000000000912", result: "Done." }),
+        );
+        yield* harness.offerAndWait(lifecycle("started", "00000000-0000-4000-8000-000000000913"));
+        yield* harness.offerAndWait(wakeAssistant);
+        yield* harness.offerAndWait(
+          makeResultFrame({
+            uuid: "00000000-0000-4000-8000-000000000914",
+            result: "Audit finished after the steer.",
+          }),
+        );
+        const terminal = yield* Queue.take(harness.terminalReceipts);
+        assert.equal(terminal.status, "completed");
+        // The steer's reply belongs to the steered turn, not to a continuation.
+        assert.lengthOf(harness.continuationRequests, 0);
+        const replyIndex = harness.events.findIndex(
+          (event) =>
+            event.type === "turn_item.updated" &&
+            event.turnItem.type === "assistant_message" &&
+            event.turnItem.text === WAKE_ASSISTANT_TEXT,
+        );
+        const terminalIndex = harness.events.findIndex((event) => event.type === "turn.terminal");
+        assert.isAtLeast(replyIndex, 0);
+        assert.isAbove(terminalIndex, replyIndex);
+        assert.lengthOf(harness.terminalEvents(), 1);
+      }).pipe(Effect.provide(Layer.merge(IdAllocator.layer, NodeServices.layer))),
+    ),
+  );
+
   it.effect("reports tool-interrupting steering only in interrupt mode", () =>
     Effect.gen(function* () {
       const between = yield* makeWakeHarness;
