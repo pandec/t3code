@@ -90,7 +90,7 @@ This is a personal fork of [pingdotgg/t3code](https://github.com/pingdotgg/t3cod
 ### Reliability
 
 - A saved environment's label or URL can be edited without re-pairing — the stored pairing token survives the edit.
-- SSH environments work with fork Dev builds. Instead of downloading the upstream release with the same version number, whose pairing tokens the fork's server rejects, the remote runs its own `~/.local/bin/t3` launcher, which should run the installed fork app. Without a launcher it falls back to the download.
+- SSH environments work with fork Dev builds. Instead of downloading the upstream release with the same version number, whose pairing tokens the fork's server rejects, the remote runs its own `~/.local/bin/t3` launcher, which must run the installed fork app. Without a launcher it falls back to the download, which only works on a remote that isn't running a fork server.
 - Projects keep their repository identity after their checkout is deleted, so their archived threads stay grouped with the repository.
 - Pull request writes (merge, review, comment) first confirm that the checkout still points at the target repository, fall back to another checkout of the same repository when the original is gone, and refuse otherwise.
 - Automatic worktree cleanup also spares checkouts with background work, a pending archive or worktree move, or another thread reaching them through a symlinked path, and a turn never starts in a checkout that is being removed.
