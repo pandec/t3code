@@ -126,6 +126,7 @@ const makeClaudeConfig = (overrides: Partial<ClaudeSettings>): ClaudeSettings =>
   customModels: [],
   launchArgs: "",
   autoCompactWindow: "",
+  steeringMode: "between-tools",
   ...overrides,
 });
 

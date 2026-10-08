@@ -65,6 +65,11 @@ Set **Auto-compact after** in the Claude provider settings to an integer between
 `1000000`. For example, `300000` asks Claude to summarize at about 300,000 tokens. This changes
 when compaction happens, not the model's context window. Leave it empty for Claude Code's default.
 
+**Steering** in the Claude provider settings decides how a steer reaches a running turn. **Between
+tool calls**, the default, lets the running command or subagent finish and hands Claude your message
+before its next step. **Interrupt running tool** cancels the running tool so Claude reads the
+message at once.
+
 You can also send `/compact` in an existing conversation. Web and desktop offer
 **Compact context** from the context meter. When you return to a large thread
 after more than an hour, the send button changes to **Compact and send**: Enter

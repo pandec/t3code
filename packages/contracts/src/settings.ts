@@ -900,6 +900,18 @@ export type CodexSettings = typeof CodexSettings.Type;
 // the update that introduced it.
 const CLAUDE_AUTO_COMPACT_WINDOW_PATTERN = /^(?:|[1-9]\d{5}|1000000)$/;
 
+/**
+ * Fork: how a steer enters a running Claude turn. "between-tools" lets the
+ * running tool finish and hands the message to the next model call;
+ * "interrupt" cancels the running tool first.
+ */
+export const CLAUDE_STEERING_MODES = [
+  { value: "between-tools", label: "Between tool calls" },
+  { value: "interrupt", label: "Interrupt running tool" },
+] as const satisfies ReadonlyArray<ProviderSettingsFormOption>;
+export const ClaudeSteeringMode = Schema.Literals(CLAUDE_STEERING_MODES.map((mode) => mode.value));
+export type ClaudeSteeringMode = typeof ClaudeSteeringMode.Type;
+
 export const ClaudeSettings = makeProviderSettingsSchema(
   {
     enabled: Schema.Boolean.pipe(
@@ -963,9 +975,29 @@ export const ClaudeSettings = makeProviderSettingsSchema(
         },
       }),
     ),
+    steeringMode: ClaudeSteeringMode.pipe(
+      Schema.withDecodingDefault(Effect.succeed("between-tools" as const)),
+      Schema.annotateKey({
+        title: "Steering",
+        description:
+          "Where a steered message enters a running turn. Interrupt cancels the running tool.",
+        providerSettingsForm: {
+          control: "select",
+          options: CLAUDE_STEERING_MODES,
+          clearWhenEmpty: "omit",
+        },
+      }),
+    ),
   },
   {
-    order: ["binaryPath", "homePath", "shadowHomePath", "autoCompactWindow", "launchArgs"],
+    order: [
+      "binaryPath",
+      "homePath",
+      "shadowHomePath",
+      "autoCompactWindow",
+      "steeringMode",
+      "launchArgs",
+    ],
   },
 );
 export type ClaudeSettings = typeof ClaudeSettings.Type;
@@ -1965,6 +1997,7 @@ const ClaudeSettingsPatch = Schema.Struct({
   autoCompactWindow: Schema.optionalKey(
     TrimmedString.check(Schema.isPattern(CLAUDE_AUTO_COMPACT_WINDOW_PATTERN)),
   ),
+  steeringMode: Schema.optionalKey(ClaudeSteeringMode),
 });
 
 const CursorSettingsPatch = Schema.Struct({

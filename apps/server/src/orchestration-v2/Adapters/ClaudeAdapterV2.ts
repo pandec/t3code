@@ -309,6 +309,19 @@ export const ClaudeProviderCapabilitiesV2 = {
   },
 } satisfies OrchestrationV2ProviderCapabilities;
 
+// Fork: "between-tools" steers wait for the next tool boundary instead of
+// cancelling the running tool, so automatic deliveries may steer as well.
+function claudeProviderCapabilitiesForSettings(
+  settings: ClaudeSettings,
+): OrchestrationV2ProviderCapabilities {
+  return settings.steeringMode === "interrupt"
+    ? ClaudeProviderCapabilitiesV2
+    : {
+        ...ClaudeProviderCapabilitiesV2,
+        turns: { ...ClaudeProviderCapabilitiesV2.turns, activeSteeringInterruptsTools: false },
+      };
+}
+
 const CLAUDE_CODE_PRESET_TOOLS = {
   type: "preset",
   preset: "claude_code",
@@ -1087,6 +1100,7 @@ function providerSession(input: {
   readonly providerInstanceId: ProviderInstanceId;
   readonly cwd: string | null;
   readonly model: string;
+  readonly capabilities: OrchestrationV2ProviderSession["capabilities"];
   readonly now: DateTime.Utc;
 }): OrchestrationV2ProviderSession {
   return {
@@ -1096,7 +1110,7 @@ function providerSession(input: {
     status: "ready",
     cwd: input.cwd ?? process.cwd(),
     model: input.model,
-    capabilities: ClaudeProviderCapabilitiesV2,
+    capabilities: input.capabilities,
     createdAt: input.now,
     updatedAt: input.now,
     lastError: null,
@@ -3183,7 +3197,8 @@ export function makeClaudeAdapterV2(
   return ProviderAdapter.ProviderAdapterV2.of({
     instanceId: adapterOptions.instanceId,
     driver: CLAUDE_PROVIDER,
-    getCapabilities: () => Effect.succeed(ClaudeProviderCapabilitiesV2),
+    getCapabilities: () =>
+      Effect.succeed(claudeProviderCapabilitiesForSettings(adapterOptions.settings)),
     planSelectionTransition: () => Effect.succeed(turnScopedSelectionTransition()),
     openSession: Effect.fn("ClaudeAdapterV2.openSession")(
       function* (input: ProviderAdapter.ProviderAdapterV2OpenSessionInput) {
@@ -3200,6 +3215,7 @@ export function makeClaudeAdapterV2(
           providerInstanceId: adapterOptions.instanceId,
           cwd: input.runtimePolicy.cwd,
           model: input.modelSelection.model,
+          capabilities: claudeProviderCapabilitiesForSettings(adapterOptions.settings),
           now,
         });
         const events = yield* Queue.unbounded<ProviderAdapter.ProviderAdapterV2Event>();
@@ -7911,7 +7927,7 @@ export function makeClaudeAdapterV2(
                   .promptEffort,
               ),
               attachments: turnInput.message.attachments,
-              priority: "now",
+              priority: adapterOptions.settings.steeringMode === "interrupt" ? "now" : "next",
               attachmentsDir,
               fileSystem,
               skillNames: yield* userInvocableSkillNames(currentTurn.input.runtimePolicy.cwd),
