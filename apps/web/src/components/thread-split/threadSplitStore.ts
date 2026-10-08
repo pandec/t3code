@@ -10,6 +10,7 @@ import { scopedThreadKey } from "@t3tools/client-runtime/environment";
 import { create } from "zustand";
 
 import type { ComposerHandleRef } from "../../composerHandleContext";
+import { readThreadShell } from "../../state/entities";
 
 export type ThreadPaneId = "primary" | "secondary";
 
@@ -457,6 +458,51 @@ export function closeActiveThreadPane(
     return true;
   }
   // A rejected navigation leaves both panes as they were.
+  void Promise.resolve(navigateToThread(state.secondaryRef)).catch(() => undefined);
+  return true;
+}
+
+/** Whether a thread is parked out of the way: archived or snoozed (any kind). */
+export function isThreadParked(thread: {
+  archivedAt: unknown;
+  snoozedAt?: unknown;
+  snoozedUntil?: unknown;
+}): boolean {
+  return thread.archivedAt != null || thread.snoozedAt != null || thread.snoozedUntil != null;
+}
+
+/**
+ * Fold the split away from a thread that was just parked (snoozed or
+ * archived), keeping the other pane's thread as the only view. A parked
+ * secondary closes the split (even while it is not rendered, so it cannot
+ * reappear on a wider window); a parked primary routes to the secondary's
+ * thread, and SplitThreadLayout's no-duplicate rule folds the split once it
+ * lands. Returns whether the split took over — callers then skip their own
+ * move-on navigation, which would race this one.
+ */
+export function foldSplitForParkedThread(
+  threadKey: string,
+  routeThreadKey: string | null,
+  navigateToThread: (ref: ScopedThreadRef) => void | Promise<unknown>,
+): boolean {
+  const state = useThreadSplitStore.getState();
+  if (state.secondaryRef === null) {
+    return false;
+  }
+  if (scopedThreadKey(state.secondaryRef) === threadKey) {
+    state.closeSplit();
+    return true;
+  }
+  if (!state.splitMounted || threadKey !== routeThreadKey) {
+    return false;
+  }
+  // Parking both at once (bulk snooze) leaves no survivor worth showing:
+  // drop the split and let the caller move on as it would without one.
+  const survivor = readThreadShell(state.secondaryRef);
+  if (survivor === null || isThreadParked(survivor)) {
+    state.closeSplit();
+    return false;
+  }
   void Promise.resolve(navigateToThread(state.secondaryRef)).catch(() => undefined);
   return true;
 }

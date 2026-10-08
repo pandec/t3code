@@ -47,7 +47,12 @@ import {
 import { openThreadInActivePane } from "~/components/thread-split/threadOpenTarget";
 import { primaryServerKeybindingsAtom } from "~/state/server";
 import { hasOpenArchiveUndoBlockingLayer } from "../archiveUndo";
-import { buildThreadRouteParams, resolveThreadRouteTarget } from "../threadRoutes";
+import {
+  buildThreadRouteParams,
+  resolveThreadRouteTarget,
+  type ThreadRouteTarget,
+} from "../threadRoutes";
+import { useComposerDraftStore } from "../composerDraftStore";
 
 // A stale pair entry must not open: the thread may be gone or archived, and
 // point shell reads still serve cached snapshots for a removed or disabled
@@ -63,11 +68,32 @@ function isThreadOpenable(ref: ScopedThreadRef): boolean {
   return shell !== null && shell.archivedAt === null;
 }
 
+// A sent draft resolves to its thread; a discarded one has no session left.
+function resolveVisitTarget(target: ThreadRouteTarget): ThreadRouteTarget | null {
+  if (target.kind === "server") {
+    return isThreadOpenable(target.threadRef) ? target : null;
+  }
+  const session = useComposerDraftStore.getState().getDraftSession(target.draftId);
+  if (session === null) return null;
+  if (session.promotedTo != null) {
+    return isThreadOpenable(session.promotedTo)
+      ? { kind: "server", threadRef: session.promotedTo }
+      : null;
+  }
+  return target;
+}
+
 function ChatRouteGlobalShortcuts() {
   const clearSelection = useThreadSelectionStore((state) => state.clearSelection);
   const selectedThreadKeysSize = useThreadSelectionStore((state) => state.selectedThreadKeys.size);
-  const { activeDraftThread, activeThread, defaultProjectRef, handleNewThread, routeThreadRef } =
-    useHandleNewThread();
+  const {
+    activeDraftThread,
+    activeThread,
+    defaultProjectRef,
+    handleNewThread,
+    routeDraftId,
+    routeThreadRef,
+  } = useHandleNewThread();
   const keybindings = useAtomValue(primaryServerKeybindingsAtom);
   const legacySidebarEnabled = useLegacySidebarEnabled();
   const projectGroupingSettings = useClientSettings(selectProjectGroupingSettings);
@@ -111,9 +137,19 @@ function ChatRouteGlobalShortcuts() {
       ? selectActiveRightPanel(state.byThreadKey, shortcutThreadRef) === "preview"
       : false,
   );
+  // Ctrl+Tab history: the focused pane's thread, or the routed draft.
+  const focusedVisitTarget = useMemo<ThreadRouteTarget | null>(
+    () =>
+      shortcutThreadRef !== null
+        ? { kind: "server", threadRef: shortcutThreadRef }
+        : routeDraftId !== null
+          ? { kind: "draft", draftId: routeDraftId }
+          : null,
+    [routeDraftId, shortcutThreadRef],
+  );
   useEffect(() => {
-    if (isElectron) threadVisitHistory.record(shortcutThreadRef);
-  }, [shortcutThreadRef]);
+    if (isElectron) threadVisitHistory.record(focusedVisitTarget, resolveVisitTarget);
+  }, [focusedVisitTarget]);
   const lastVisitedPendingRelease = useRef<LastVisitedPendingRelease>({ key: null });
   useEffect(() => {
     const resolveCommand = (event: LastVisitedShortcutEvent) =>
@@ -140,9 +176,18 @@ function ChatRouteGlobalShortcuts() {
           : resolveCommand(event),
       isBlocked: () =>
         isCommandPaletteOpen() || isModelPickerOpen() || hasOpenArchiveUndoBlockingLayer(),
-      resolveTarget: () => threadVisitHistory.resolveTarget(shortcutThreadRef, isThreadOpenable),
-      openThread: (targetRef) => {
+      resolveTarget: () => threadVisitHistory.resolveTarget(focusedVisitTarget, resolveVisitTarget),
+      openThread: (target) => {
         clearSelection();
+        if (target.kind === "draft") {
+          // Drafts only open as the routed pane; from the secondary pane the
+          // split gives way to the draft as a single view.
+          const split = useThreadSplitStore.getState();
+          if (split.splitMounted && split.activePaneId === "secondary") split.closeSplit();
+          void router.navigate({ to: "/draft/$draftId", params: { draftId: target.draftId } });
+          return;
+        }
+        const targetRef = target.threadRef;
         const { completion } = openThreadInActivePane({
           targetRef,
           routeThreadRef,
@@ -341,6 +386,7 @@ function ChatRouteGlobalShortcuts() {
     handleNewThread,
     keybindings,
     defaultProjectRef,
+    focusedVisitTarget,
     previewOpen,
     primaryEnvironmentId,
     projectGroupCount,

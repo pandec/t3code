@@ -77,6 +77,7 @@ import * as ThreadUndo from "./threadUndo";
 import { showThreadUndoNotice } from "./showThreadUndoNotice";
 import { useAtomCommand } from "../state/use-atom-command";
 import { readEmptyNewThreadDraftId } from "../archiveUndo";
+import { foldSplitForParkedThread } from "../components/thread-split/threadSplitStore";
 import { newThreadId } from "../lib/utils";
 import { useOrchestrationCommand } from "../state/use-orchestration-command";
 import { useAtomQueryRunner } from "../state/use-atom-query-runner";
@@ -532,7 +533,18 @@ export function useThreadActions() {
         failureTitle: "Failed to undo archive",
       });
 
-      if (shouldNavigateToDraft) {
+      // In a split, the other pane's thread stays on screen instead of a new
+      // draft. Otherwise only a reader still on the archived thread moves —
+      // the split's own archive watcher may already have navigated away.
+      const threadKey = scopedThreadKey(threadRef);
+      const routeRefAfterArchive = getCurrentRouteThreadRef();
+      const routeKeyAfterArchive =
+        routeRefAfterArchive === null ? null : scopedThreadKey(routeRefAfterArchive);
+      const foldedSplit = foldSplitForParkedThread(threadKey, routeKeyAfterArchive, (ref) =>
+        router.navigate({ to: "/$environmentId/$threadId", params: buildThreadRouteParams(ref) }),
+      );
+
+      if (shouldNavigateToDraft && !foldedSplit && routeKeyAfterArchive === threadKey) {
         const navigationResult = await settlePromise(() =>
           handleNewThreadRef.current(scopeProjectRef(thread.environmentId, thread.projectId)),
         );
@@ -549,6 +561,7 @@ export function useThreadActions() {
       getCurrentRouteThreadRef,
       markThreadVisited,
       resolveThreadTarget,
+      router,
       unarchiveThread,
     ],
   );

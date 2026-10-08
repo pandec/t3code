@@ -314,6 +314,7 @@ Threads you pick from the sidebar or the palette then open in the pane you are w
 the divider to resize the panes, or hover it to swap the threads, switch the second thread, or
 close the split. `mod+\` moves focus to the other pane and `mod+shift+\` swaps the threads.
 With no right-panel tab open, `mod+w` closes the active pane's thread and keeps the other one.
+Snoozing or archiving a thread in either pane does the same.
 
 ## Inspect agent work
 

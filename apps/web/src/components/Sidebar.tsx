@@ -223,6 +223,7 @@ import {
   type ThreadActionMenuId,
 } from "./threadActionMenu.logic";
 import { openThreadInActivePane } from "./thread-split/threadOpenTarget";
+import { foldSplitForParkedThread } from "./thread-split/threadSplitStore";
 import {
   SplitPaneMarkerIcon,
   useSplitSecondaryThreadKey,
@@ -5304,9 +5305,11 @@ export default function Sidebar() {
             ? ({ status: "interrupted" } as const)
             : ({ status: "failure", error: squashAtomCommandFailure(result) } as const);
         }
-        // Only move forward if the user is still on the snoozed thread —
-        // a navigation made during the await wins over ours.
+        // In a split, the other pane's thread takes over instead. Otherwise
+        // move forward only if the user is still on the snoozed thread — a
+        // navigation made during the await wins over ours.
         if (
+          !foldSplitForParkedThread(threadKey, routeThreadKeyRef.current, navigateToThread) &&
           shouldNavigateAfterThreadPark({
             threadKey,
             currentThreadKey: routeThreadKeyRef.current,
@@ -5322,7 +5325,7 @@ export default function Sidebar() {
         snoozingThreadKeysRef.current.delete(threadKey);
       }
     },
-    [planForwardNavigation, snoozeThread],
+    [navigateToThread, planForwardNavigation, snoozeThread],
   );
   const attemptSnooze = useCallback(
     (

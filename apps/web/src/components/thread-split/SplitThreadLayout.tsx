@@ -8,6 +8,7 @@ import { openCommandPalette } from "../../commandPaletteBus";
 import { ComposerHandleContext, useComposerHandleContext } from "../../composerHandleContext";
 import type { ChatComposerHandle } from "../chat/ChatComposer";
 import { useMediaQuery } from "../../hooks/useMediaQuery";
+import { useThreadProjection } from "../../state/entities";
 import { buildThreadRouteParams, resolveThreadRouteRef } from "../../threadRoutes";
 import { swapThreadPanes } from "./swapThreadPanes";
 import { ServerThreadPaneHost } from "./ServerThreadPaneHost";
@@ -17,6 +18,8 @@ import { PaneControlButton } from "./PaneControls";
 import {
   cancelPendingThreadPaneFocus,
   clampSplitRatio,
+  foldSplitForParkedThread,
+  isThreadParked,
   noteThreadPaneFocus,
   reclaimThreadPaneFocus,
   redirectStrayThreadPaneFocus,
@@ -121,8 +124,57 @@ export function SplitThreadLayout({ children }: { children: ReactNode }) {
   const splitOpen = secondaryRef !== null && isWideEnoughForSplit;
 
   return (
-    <SplitThreadPanes secondaryRef={splitOpen ? secondaryRef : null}>{children}</SplitThreadPanes>
+    <>
+      {secondaryRef === null ? null : (
+        <>
+          {/* The route lands on the secondary's thread right before the split folds. */}
+          {routeThreadRef === null || routeThreadKey === scopedThreadKey(secondaryRef) ? null : (
+            <ParkedThreadWatcher
+              key={routeThreadKey}
+              threadRef={routeThreadRef}
+              routeThreadKey={routeThreadKey}
+            />
+          )}
+          <ParkedThreadWatcher
+            key={scopedThreadKey(secondaryRef)}
+            threadRef={secondaryRef}
+            routeThreadKey={routeThreadKey}
+          />
+        </>
+      )}
+      <SplitThreadPanes secondaryRef={splitOpen ? secondaryRef : null}>{children}</SplitThreadPanes>
+    </>
   );
+}
+
+/**
+ * Folds the split when a thread on screen gets snoozed or archived from any
+ * entry point (menus, shortcuts, an agent over MCP, another device). Reads the
+ * committed thread detail, and only a fresh transition counts: a thread that
+ * was already parked when it was opened in the split stays put. Rendered as
+ * its own component so streamed detail updates re-render nothing else.
+ */
+function ParkedThreadWatcher({
+  threadRef,
+  routeThreadKey,
+}: {
+  threadRef: ScopedThreadRef;
+  routeThreadKey: string | null;
+}) {
+  const router = useRouter();
+  const thread = useThreadProjection(threadRef)?.projection.thread ?? null;
+  const parked = thread === null ? null : isThreadParked(thread);
+  const lastParked = useRef<boolean | null>(null);
+  // Re-runs on route changes are no-ops: only a false → true flip folds.
+  useEffect(() => {
+    const wasParked = lastParked.current;
+    lastParked.current = parked;
+    if (parked !== true || wasParked !== false) return;
+    foldSplitForParkedThread(scopedThreadKey(threadRef), routeThreadKey, (ref) =>
+      router.navigate({ to: "/$environmentId/$threadId", params: buildThreadRouteParams(ref) }),
+    );
+  }, [parked, routeThreadKey, router, threadRef]);
+  return null;
 }
 
 function SplitThreadPanes({

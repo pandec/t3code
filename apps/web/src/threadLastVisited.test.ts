@@ -8,18 +8,24 @@ import {
   createThreadVisitHistory,
   type LastVisitedShortcutEvent,
 } from "./threadLastVisited";
+import { DraftId } from "./composerDraftStore";
+import type { ThreadRouteTarget } from "./threadRoutes";
 
 const threadRef = (environmentId: string, threadId: string): ScopedThreadRef => ({
   environmentId: EnvironmentId.make(environmentId),
   threadId: ThreadId.make(threadId),
 });
 
-const A = threadRef("env-a", "thread-a");
-const B = threadRef("env-a", "thread-b");
-const C = threadRef("env-b", "thread-a");
+const server = (ref: ScopedThreadRef): ThreadRouteTarget => ({ kind: "server", threadRef: ref });
+const draft = (id: string): ThreadRouteTarget => ({ kind: "draft", draftId: DraftId.make(id) });
+
+const A = server(threadRef("env-a", "thread-a"));
+const B = server(threadRef("env-a", "thread-b"));
+const C = server(threadRef("env-b", "thread-a"));
+const D = draft("draft-1");
 
 describe("createThreadVisitHistory", () => {
-  it("keeps only the last two distinct threads and toggles between them", () => {
+  it("keeps only the last two distinct entries and toggles between them", () => {
     const history = createThreadVisitHistory();
     expect(history.resolveTarget(null)).toBeNull();
     history.record(A);
@@ -30,28 +36,39 @@ describe("createThreadVisitHistory", () => {
     expect(history.resolveTarget(A)).toEqual(B);
     history.record(C);
     expect(history.resolveTarget(C)).toEqual(A);
-    // Repeated visits of the focused thread never shift the pair.
-    history.record({ ...C });
+    // Repeated visits of the focused entry never shift the pair.
+    history.record(server({ ...threadRef("env-b", "thread-a") }));
     expect(history.resolveTarget(C)).toEqual(A);
   });
 
-  it("returns the thread the user came from while a draft is focused", () => {
+  it("toggles between a thread and a draft", () => {
     const history = createThreadVisitHistory();
     history.record(A);
-    history.record(B);
-    history.record(null);
-    expect(history.resolveTarget(null)).toEqual(B);
+    history.record(D);
+    expect(history.resolveTarget(D)).toEqual(A);
+    history.record(A);
+    expect(history.resolveTarget(A)).toEqual(D);
   });
 
-  it("tries the other remembered thread when the latest is unavailable from a draft", () => {
+  it("follows a sent draft to its thread without losing the older entry", () => {
+    const history = createThreadVisitHistory();
+    // D was sent and became thread B.
+    const resolve = (target: ThreadRouteTarget) => (target === D ? B : target);
+    history.record(A, resolve);
+    history.record(D, resolve);
+    history.record(B, resolve);
+    expect(history.resolveTarget(B, resolve)).toEqual(A);
+  });
+
+  it("skips entries that can no longer open", () => {
     const history = createThreadVisitHistory();
     history.record(A);
-    history.record(B);
-    history.record(null);
-    const onlyAIsOpenable = (ref: ScopedThreadRef) => ref === A;
-    expect(history.resolveTarget(null, onlyAIsOpenable)).toEqual(A);
-    expect(history.resolveTarget(A, onlyAIsOpenable)).toBeNull();
-    expect(history.resolveTarget(null, () => false)).toBeNull();
+    history.record(D);
+    // The draft was discarded.
+    const withoutDraft = (target: ThreadRouteTarget) => (target === D ? null : target);
+    expect(history.resolveTarget(null, withoutDraft)).toEqual(A);
+    expect(history.resolveTarget(A, withoutDraft)).toBeNull();
+    expect(history.resolveTarget(null, () => null)).toBeNull();
   });
 });
 
