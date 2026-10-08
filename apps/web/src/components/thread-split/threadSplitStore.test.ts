@@ -1,7 +1,14 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vite-plus/test";
 import { EnvironmentId, ThreadId } from "@t3tools/contracts";
+import { scopedThreadKey } from "@t3tools/client-runtime/environment";
 
 import type { ComposerHandleRef } from "../../composerHandleContext";
+
+// Shells by thread id; the fold reads the survivor's shell.
+const shellByThreadId = vi.hoisted(() => new Map<string, Record<string, unknown>>());
+vi.mock("../../state/entities", () => ({
+  readThreadShell: (ref: { threadId: string }) => shellByThreadId.get(ref.threadId) ?? null,
+}));
 
 import {
   activateThreadPane,
@@ -9,6 +16,7 @@ import {
   clampSplitRatio,
   closeActiveThreadPane,
   focusOtherThreadPane,
+  foldSplitForParkedThread,
   isThreadPaneActive,
   MAX_SPLIT_RATIO,
   MIN_SPLIT_RATIO,
@@ -366,5 +374,48 @@ describe("blocked storage", () => {
     expect(store.useThreadSplitStore.getState().splitRatio).toBe(0.5);
     store.useThreadSplitStore.getState().setSplitRatio(0.6);
     expect(store.useThreadSplitStore.getState().splitRatio).toBe(0.6);
+  });
+});
+
+describe("foldSplitForParkedThread", () => {
+  const PRIMARY = threadRef("env-a", "primary");
+  const PRIMARY_KEY = scopedThreadKey(PRIMARY);
+  const SECONDARY_KEY = scopedThreadKey(REF_A);
+  const awake = { archivedAt: null, snoozedAt: null, snoozedUntil: null };
+
+  beforeEach(() => {
+    shellByThreadId.clear();
+    shellByThreadId.set(REF_A.threadId, awake);
+    useThreadSplitStore.getState().openSecondaryThread(REF_A);
+    mountSplit();
+  });
+
+  it("closes the split when the secondary thread is parked", () => {
+    const navigate = vi.fn();
+    expect(foldSplitForParkedThread(SECONDARY_KEY, PRIMARY_KEY, navigate)).toBe(true);
+    expect(useThreadSplitStore.getState().secondaryRef).toBeNull();
+    expect(useThreadSplitStore.getState().activePaneId).toBe("primary");
+    expect(navigate).not.toHaveBeenCalled();
+  });
+
+  it("routes to the secondary thread when the primary is parked", () => {
+    const navigate = vi.fn();
+    expect(foldSplitForParkedThread(PRIMARY_KEY, PRIMARY_KEY, navigate)).toBe(true);
+    expect(navigate).toHaveBeenCalledWith(REF_A);
+  });
+
+  it("drops the split without navigating when the survivor is parked too", () => {
+    shellByThreadId.set(REF_A.threadId, { ...awake, snoozedAt: "2026-10-08T00:00:00.000Z" });
+    const navigate = vi.fn();
+    expect(foldSplitForParkedThread(PRIMARY_KEY, PRIMARY_KEY, navigate)).toBe(false);
+    expect(useThreadSplitStore.getState().secondaryRef).toBeNull();
+    expect(navigate).not.toHaveBeenCalled();
+  });
+
+  it("ignores threads outside the split", () => {
+    const navigate = vi.fn();
+    expect(foldSplitForParkedThread("env-z:other", PRIMARY_KEY, navigate)).toBe(false);
+    expect(useThreadSplitStore.getState().secondaryRef).toEqual(REF_A);
+    expect(navigate).not.toHaveBeenCalled();
   });
 });
