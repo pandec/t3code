@@ -72,6 +72,25 @@ export function composerSubmissionIntentForKey(input: {
   return "foreground";
 }
 
+/**
+ * Whether a send key asks for the composer's secondary action: the alternate
+ * binding while a turn runs, or Mod+Enter when Enter alone already sends.
+ * The stale-session "Compact and send" button maps it to "Send with full history".
+ */
+export function isSecondaryComposerSubmission(input: {
+  intent: ComposerSubmissionIntent;
+  modifier: boolean;
+  sendShortcut?: ClientSettings["sendShortcut"];
+  prompt: string;
+}): boolean {
+  if (input.intent === "alternate") return true;
+  return (
+    input.intent === "foreground" &&
+    input.modifier &&
+    !composerRequiresModifier(input.sendShortcut, input.prompt)
+  );
+}
+
 const isInlineTokenSegment = (segment: ComposerPromptSegment): boolean => segment.type !== "text";
 
 function clampCursor(text: string, cursor: number): number {

@@ -36,6 +36,7 @@ import type {
   ServerProvider,
   ThreadId,
   SnapShotSource,
+  KeybindingShortcut,
 } from "@t3tools/contracts";
 import {
   AuthOrchestrationOperateScope,
@@ -82,6 +83,7 @@ import {
   detectComposerTrigger,
   expandCollapsedComposerCursor,
   formatAssistantCitationForComposer,
+  isSecondaryComposerSubmission,
   replaceTextRange,
 } from "../../composer-logic";
 import { DISCONNECTED_COMPOSER_PLACEHOLDER } from "../../composerPlaceholder";
@@ -187,7 +189,11 @@ import { getTerminalFocusOwner } from "../../lib/terminalFocus";
 import { useThreadPaneId } from "../thread-split/threadPaneContext";
 import { isThreadPaneActive } from "../thread-split/threadSplitStore";
 import type { AssistantCitationSourceAnchor } from "~/lib/assistantTextSelection";
-import { resolveShortcutCommand, shortcutLabelForCommand } from "../../keybindings";
+import {
+  formatShortcutLabel,
+  resolveShortcutCommand,
+  shortcutLabelForCommand,
+} from "../../keybindings";
 import {
   type TerminalContextDraft,
   type TerminalContextSelection,
@@ -426,6 +432,15 @@ const COMPOSER_PULL_REQUEST_LIST_LIMIT = 99;
 const COMPOSER_PULL_REQUEST_RESULT_LIMIT = 12;
 const EMPTY_PULL_REQUEST_LIST_TARGETS: ReadonlyArray<EnvironmentQueryTarget<PullRequestListInput>> =
   [];
+
+const MOD_ENTER_SHORTCUT: KeybindingShortcut = {
+  key: "enter",
+  metaKey: false,
+  ctrlKey: false,
+  shiftKey: false,
+  altKey: false,
+  modKey: true,
+};
 
 const COMPOSER_SCROLL_COLLAPSE_THRESHOLD_PX = 24;
 const COMPOSER_SCROLL_GESTURE_RESET_MS = 120;
@@ -1425,6 +1440,7 @@ const ComposerFooterPrimaryActions = memo(function ComposerFooterPrimaryActions(
   compactDisabledReason: string | null;
   compactBeforeSendTokens: number | null;
   onSendWithFullHistory: () => void;
+  sendWithFullHistoryShortcutLabel: string | null;
 }) {
   return (
     <>
@@ -1484,6 +1500,7 @@ const ComposerFooterPrimaryActions = memo(function ComposerFooterPrimaryActions(
         onImplementPlanInNewThread={props.onImplementPlanInNewThread}
         compactBeforeSendTokens={props.compactBeforeSendTokens}
         onSendWithFullHistory={props.onSendWithFullHistory}
+        sendWithFullHistoryShortcutLabel={props.sendWithFullHistoryShortcutLabel}
       />
     </>
   );
@@ -4518,6 +4535,33 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
     submitComposer(undefined, "steer");
   }, [submitComposer]);
   const { onSendWithFullHistory } = props;
+  // Advertise Mod+Enter only when pressing it would actually route here,
+  // so custom bindings and the send-shortcut setting stay truthful.
+  const modEnterIntent = composerSubmissionIntentForKey({
+    event: {
+      key: "Enter",
+      metaKey: isMacPlatform(navigator.platform),
+      ctrlKey: !isMacPlatform(navigator.platform),
+      shiftKey: false,
+      altKey: false,
+    },
+    keybindings,
+    isMobileViewport,
+    isDraftThread: routeKind === "draft",
+    isRunning: phase === "running",
+    sendShortcut: settings.sendShortcut,
+    prompt,
+  });
+  const sendWithFullHistoryShortcutLabel =
+    modEnterIntent !== null &&
+    isSecondaryComposerSubmission({
+      intent: modEnterIntent,
+      modifier: true,
+      sendShortcut: settings.sendShortcut,
+      prompt,
+    })
+      ? formatShortcutLabel(MOD_ENTER_SHORTCUT)
+      : null;
   const sendWithFullHistory = useCallback(
     () => onSendWithFullHistory(() => submitComposer()),
     [onSendWithFullHistory, submitComposer],
@@ -4731,15 +4775,29 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
       return navigatePromptHistory(key === "ArrowUp" ? "backward" : "forward", event);
     }
     if (submissionIntent) {
-      submitComposer(
-        undefined,
-        resolveComposerDispatchMode({
-          running: phase === "running",
-          alternateModifier: submissionIntent === "alternate",
-          activeTurnDefault: settings.followUpBehavior,
-        }),
-        submissionIntent,
-      );
+      const submit = () =>
+        submitComposer(
+          undefined,
+          resolveComposerDispatchMode({
+            running: phase === "running",
+            alternateModifier: submissionIntent === "alternate",
+            activeTurnDefault: settings.followUpBehavior,
+          }),
+          submissionIntent,
+        );
+      if (
+        props.resumeCompactionTokens !== null &&
+        isSecondaryComposerSubmission({
+          intent: submissionIntent,
+          modifier: event.metaKey || event.ctrlKey,
+          sendShortcut: settings.sendShortcut,
+          prompt: promptRef.current,
+        })
+      ) {
+        onSendWithFullHistory(submit);
+      } else {
+        submit();
+      }
       return true;
     }
     // Native task splitting preserves marks and chips on both sides of the caret.
@@ -7965,6 +8023,7 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
                     onImplementPlanInNewThread={handleImplementPlanInNewThreadPrimaryAction}
                     compactBeforeSendTokens={props.resumeCompactionTokens}
                     onSendWithFullHistory={sendWithFullHistory}
+                    sendWithFullHistoryShortcutLabel={sendWithFullHistoryShortcutLabel}
                     compactDisabled={
                       compactDisabled || noProviderAvailable || isSendBusy || isConnecting
                     }

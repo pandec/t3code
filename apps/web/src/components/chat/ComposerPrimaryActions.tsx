@@ -8,7 +8,7 @@ import { cn } from "~/lib/utils";
 import { useShortcutModifierState } from "../../shortcutModifierState";
 import { StageBackdropButtonArt, useSidebarStageBackdropVariant } from "../SidebarStageBackdrop";
 import { Button } from "../ui/button";
-import { Menu, MenuItem, MenuPopup, MenuTrigger } from "../ui/menu";
+import { Menu, MenuItem, MenuPopup, MenuShortcut, MenuTrigger } from "../ui/menu";
 import { Spinner } from "../ui/spinner";
 import { Tooltip, TooltipPopup, TooltipTrigger } from "../ui/tooltip";
 import { composerFloatingLayerProps } from "./composerEventScope";
@@ -57,6 +57,7 @@ interface ComposerPrimaryActionsProps {
   /** Tokens a stale session would re-read. When set, Enter compacts first and the button says so. */
   compactBeforeSendTokens?: number | null;
   onSendWithFullHistory?: () => void;
+  sendWithFullHistoryShortcutLabel?: string | null;
 }
 
 const formatPendingPrimaryActionLabel = (input: {
@@ -114,6 +115,7 @@ export const ComposerPrimaryActions = memo(function ComposerPrimaryActions({
   onImplementPlanInNewThread,
   compactBeforeSendTokens = null,
   onSendWithFullHistory,
+  sendWithFullHistoryShortcutLabel = null,
 }: ComposerPrimaryActionsProps) {
   const pointerFocusProps = preserveComposerFocusOnPointerDown
     ? { onPointerDown: preventPointerFocus }
@@ -371,6 +373,9 @@ export const ComposerPrimaryActions = memo(function ComposerPrimaryActions({
           <MenuPopup align="end" side="top" {...composerFloatingLayerProps}>
             <MenuItem disabled={sendBlocked} onClick={onSendWithFullHistory}>
               Send with full history ({tokens} tokens)
+              {sendWithFullHistoryShortcutLabel ? (
+                <MenuShortcut>{sendWithFullHistoryShortcutLabel}</MenuShortcut>
+              ) : null}
             </MenuItem>
           </MenuPopup>
         </Menu>

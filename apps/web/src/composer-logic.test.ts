@@ -22,6 +22,7 @@ import {
   expandCollapsedComposerCursor,
   formatAssistantCitationForComposer,
   isCollapsedCursorAdjacentToInlineToken,
+  isSecondaryComposerSubmission,
   parseStandaloneComposerSlashCommand,
   replaceTextRange,
 } from "./composer-logic";
@@ -242,6 +243,45 @@ describe("composerSubmissionIntentForKey", () => {
     { event: { ...enter, repeat: true } },
   ])("does not submit with %j", (override) => {
     expect(composerSubmissionIntentForKey({ ...input, event: enter, ...override })).toBeNull();
+  });
+});
+
+describe("isSecondaryComposerSubmission", () => {
+  it("treats Mod+Enter as secondary only when Enter alone sends", () => {
+    const base = { intent: "foreground" as const, prompt: "one\ntwo" };
+    expect(isSecondaryComposerSubmission({ ...base, modifier: true, sendShortcut: "enter" })).toBe(
+      true,
+    );
+    expect(isSecondaryComposerSubmission({ ...base, modifier: false, sendShortcut: "enter" })).toBe(
+      false,
+    );
+    expect(
+      isSecondaryComposerSubmission({ ...base, modifier: true, sendShortcut: "mod-enter" }),
+    ).toBe(false);
+    expect(
+      isSecondaryComposerSubmission({
+        ...base,
+        modifier: true,
+        sendShortcut: "mod-enter-multiline",
+      }),
+    ).toBe(false);
+    expect(
+      isSecondaryComposerSubmission({
+        ...base,
+        prompt: "one line",
+        modifier: true,
+        sendShortcut: "mod-enter-multiline",
+      }),
+    ).toBe(true);
+  });
+
+  it("treats the running-turn alternate binding as secondary", () => {
+    expect(isSecondaryComposerSubmission({ intent: "alternate", modifier: true, prompt: "" })).toBe(
+      true,
+    );
+    expect(
+      isSecondaryComposerSubmission({ intent: "background", modifier: true, prompt: "" }),
+    ).toBe(false);
   });
 });
 
