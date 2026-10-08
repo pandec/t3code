@@ -3589,6 +3589,37 @@ it.effect("refreshes pull requests after a provider stream exits with an error",
   }),
 );
 
+it.effect("ends the open tool calls of a provider stream that closed mid-turn", () =>
+  Effect.gen(function* () {
+    const finishedItemId = TurnItemId.make("turn-item:closed-stream:finished");
+    const { written, observed } = yield* captureRootRunTermination({
+      key: "closed-stream-tool-calls",
+      shouldFinalizeRun: () => Effect.succeed(true),
+      events: (ids) =>
+        Stream.fromIterable([
+          backgroundTurnItemEvent(ids, "dynamic_tool", "running", 1),
+          backgroundTurnItemEvent(ids, "command_execution", "running", 2, finishedItemId),
+          backgroundTurnItemEvent(ids, "command_execution", "completed", 3, finishedItemId),
+        ]).pipe(
+          Stream.concat(
+            Stream.fail(
+              new ProviderAdapterEventStreamError({
+                driver,
+                providerSessionId: ProviderSessionId.make("session:detached"),
+                cause: "Provider session released: Workspace changed.",
+              }),
+            ),
+          ),
+        ),
+    });
+    assert.deepEqual(observed, ["run:failed", "pull-requests-refreshed"]);
+    assert.deepEqual(
+      written.map((item) => `${item.type}:${item.status}`),
+      ["dynamic_tool:interrupted", "error:failed"],
+    );
+  }),
+);
+
 it.effect("refreshes pull requests only once when startup failure closes its event stream", () =>
   Effect.gen(function* () {
     const ingestionStarted = yield* Deferred.make<void>();

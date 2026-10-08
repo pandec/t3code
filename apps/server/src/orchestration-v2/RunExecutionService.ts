@@ -984,6 +984,35 @@ export const layer: Layer.Layer<
             ReadonlySet<OrchestrationV2TurnItem["id"]>
           >(new Set(inheritedBackgroundTurnItemsById.keys()));
           const openRunOwnedSubagents = yield* Ref.make(emptyOpenRunOwnedSubagentProjection());
+          // Open tool and command items of this run (and inherited ones), kept
+          // whole so a dead event stream can end them: no process will.
+          const openToolTurnItems = yield* Ref.make<
+            ReadonlyMap<OrchestrationV2TurnItem["id"], OrchestrationV2TurnItem>
+          >(new Map());
+          const endOrphanedToolTurnItems = Effect.gen(function* () {
+            const open = yield* Ref.getAndSet(openToolTurnItems, new Map());
+            if (open.size === 0) return;
+            const completedAt = yield* DateTime.now;
+            const events: Array<OrchestrationV2DomainEvent> = [];
+            for (const turnItem of open.values()) {
+              events.push({
+                id: yield* idAllocator.allocate.event({ threadId: input.run.threadId }),
+                type: "turn-item.updated",
+                threadId: turnItem.threadId,
+                ...(turnItem.runId === null ? {} : { runId: turnItem.runId }),
+                ...(turnItem.nodeId === null ? {} : { nodeId: turnItem.nodeId }),
+                providerInstanceId: input.run.providerInstanceId,
+                occurredAt: completedAt,
+                payload: {
+                  ...turnItem,
+                  status: "interrupted",
+                  completedAt,
+                  updatedAt: completedAt,
+                },
+              });
+            }
+            yield* eventSink.writeWithEffects({ effects: [], events });
+          });
           const finalizeRootRun = (terminal: ProviderTerminalEvent) =>
             Effect.gen(function* () {
               if (yield* Ref.get(rootRunFinalized)) {
@@ -1119,6 +1148,23 @@ export const layer: Layer.Layer<
                       next.delete(event.turnItem.id);
                     } else {
                       next.add(event.turnItem.id);
+                    }
+                    return next;
+                  });
+                }
+                if (
+                  deliverable &&
+                  (event.turnItem.type === "command_execution" ||
+                    event.turnItem.type === "dynamic_tool") &&
+                  (belongsToRootRun || belongsToInheritedBackgroundItem)
+                ) {
+                  const turnItem = event.turnItem;
+                  yield* Ref.update(openToolTurnItems, (current) => {
+                    const next = new Map(current);
+                    if (isSettledTurnItemStatus(turnItem.status)) {
+                      next.delete(turnItem.id);
+                    } else {
+                      next.set(turnItem.id, turnItem);
                     }
                     return next;
                   });
@@ -1293,6 +1339,20 @@ export const layer: Layer.Layer<
             ),
             Stream.takeUntilEffect(() => shouldStopProviderEventIngestion),
             Stream.runDrain,
+            // The session's event stream died with its process (a detach, a
+            // crash): the tool calls it had open will never report an end.
+            Effect.tapError((error) =>
+              error._tag === "ProviderAdapterEventStreamError"
+                ? endOrphanedToolTurnItems.pipe(
+                    Effect.catchCause((cause) =>
+                      Effect.logWarning("failed to end tool items of a closed event stream", {
+                        runId: input.run.id,
+                        cause,
+                      }),
+                    ),
+                  )
+                : Effect.void,
+            ),
             Effect.mapError((cause) => new RunExecutionIngestError({ runId: input.run.id, cause })),
             Effect.flatMap(() =>
               Effect.gen(function* () {

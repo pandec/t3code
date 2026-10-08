@@ -7751,9 +7751,12 @@ export default function ChatView(props: ChatViewProps) {
       return;
     const requestKey = `${environmentId}:${activeThread.id}`;
     setStoppingBackgroundWorkKey(requestKey);
+    // The run this work shows under, the one Stop must target. Without it the
+    // command reads a windowed history that may no longer hold the work.
+    const runId = serverProjection?.runs.findLast((run) => run.status !== "queued")?.id;
     const result = await interruptThreadTurn({
       environmentId,
-      input: { threadId: activeThread.id },
+      input: { threadId: activeThread.id, ...(runId === undefined ? {} : { runId }) },
     });
     // Acceptance does not confirm termination. Allow retry while the provider
     // finishes stopping the tasks or reports a failure.
@@ -7767,7 +7770,7 @@ export default function ChatView(props: ChatViewProps) {
         );
       }
     }
-  }, [activeThread, environmentId, interruptThreadTurn, setThreadError]);
+  }, [activeThread, environmentId, interruptThreadTurn, serverProjection, setThreadError]);
   // Related-thread links open in this pane via the split-aware helper, so a
   // link to the other pane's thread focuses it instead of folding the split.
   const onOpenRelatedThread = useCallback(
