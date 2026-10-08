@@ -1,4 +1,5 @@
 import { memo, type MouseEventHandler, type PointerEventHandler } from "react";
+import type { ClientSettings } from "@t3tools/contracts";
 import { CheckIcon, ChevronDownIcon, ChevronLeftIcon, PlayIcon } from "lucide-react";
 import { CornerUpRight, ListPlus } from "lucide";
 import { MorphIcon } from "~/components/MorphIcon";
@@ -54,10 +55,13 @@ interface ComposerPrimaryActionsProps {
   onQueue?: () => void;
   onSteer?: () => void;
   onImplementPlanInNewThread: () => void;
-  /** Tokens a stale session would re-read. When set, Enter compacts first and the button says so. */
+  /** Tokens a stale session would re-read. When set, the button offers compacting first. */
   compactBeforeSendTokens?: number | null;
   onSendWithFullHistory?: () => void;
-  sendWithFullHistoryShortcutLabel?: string | null;
+  onCompactAndSend?: () => void;
+  /** Which stale-session send the main button and Enter take; the menu holds the other. */
+  staleSessionSend?: ClientSettings["staleSessionSend"];
+  secondarySendShortcutLabel?: string | null;
 }
 
 const formatPendingPrimaryActionLabel = (input: {
@@ -115,7 +119,9 @@ export const ComposerPrimaryActions = memo(function ComposerPrimaryActions({
   onImplementPlanInNewThread,
   compactBeforeSendTokens = null,
   onSendWithFullHistory,
-  sendWithFullHistoryShortcutLabel = null,
+  onCompactAndSend,
+  staleSessionSend = "compact",
+  secondarySendShortcutLabel = null,
 }: ComposerPrimaryActionsProps) {
   const pointerFocusProps = preserveComposerFocusOnPointerDown
     ? { onPointerDown: preventPointerFocus }
@@ -331,27 +337,35 @@ export const ComposerPrimaryActions = memo(function ComposerPrimaryActions({
 
   if (compactBeforeSendTokens !== null && !showResume && !isEditingQueuedMessage) {
     const tokens = formatContextWindowTokens(compactBeforeSendTokens);
+    const compactFirst = staleSessionSend === "compact";
+    const secondaryLabel = compactFirst
+      ? `Send with full history (${tokens} tokens)`
+      : `Compact and send (${tokens} tokens)`;
     return (
       <div data-chat-composer-compact-send="true" className="flex items-center justify-end">
         <Tooltip>
           <TooltipTrigger
             render={
               <button
-                type="submit"
+                type={compactFirst ? "submit" : "button"}
                 className={cn(
                   messageActionPillClassName,
                   "h-9 rounded-r-none sm:h-8",
                   compact ? "px-3" : "px-4",
                 )}
                 {...pointerFocusProps}
-                onClick={onSubmitMessage}
+                onClick={compactFirst ? onSubmitMessage : onSendWithFullHistory}
                 disabled={sendBlocked || !hasSendableContent}
               />
             }
           >
-            {isConnecting || isSendBusy ? "Sending..." : "Compact and send"}
+            {isConnecting || isSendBusy ? "Sending..." : compactFirst ? "Compact and send" : "Send"}
           </TooltipTrigger>
-          <TooltipPopup>Summarize {tokens} tokens of history, then send</TooltipPopup>
+          <TooltipPopup>
+            {compactFirst
+              ? `Summarize ${tokens} tokens of history, then send`
+              : `Send with ${tokens} tokens of history`}
+          </TooltipPopup>
         </Tooltip>
         <Menu>
           <MenuTrigger
@@ -371,10 +385,13 @@ export const ComposerPrimaryActions = memo(function ComposerPrimaryActions({
             <ChevronDownIcon className="size-3.5" />
           </MenuTrigger>
           <MenuPopup align="end" side="top" {...composerFloatingLayerProps}>
-            <MenuItem disabled={sendBlocked} onClick={onSendWithFullHistory}>
-              Send with full history ({tokens} tokens)
-              {sendWithFullHistoryShortcutLabel ? (
-                <MenuShortcut>{sendWithFullHistoryShortcutLabel}</MenuShortcut>
+            <MenuItem
+              disabled={sendBlocked}
+              onClick={compactFirst ? onSendWithFullHistory : onCompactAndSend}
+            >
+              {secondaryLabel}
+              {secondarySendShortcutLabel ? (
+                <MenuShortcut>{secondarySendShortcutLabel}</MenuShortcut>
               ) : null}
             </MenuItem>
           </MenuPopup>

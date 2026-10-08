@@ -75,7 +75,8 @@ export function composerSubmissionIntentForKey(input: {
 /**
  * Whether a send key asks for the composer's secondary action: the alternate
  * binding while a turn runs, or Mod+Enter when Enter alone already sends.
- * The stale-session "Compact and send" button maps it to "Send with full history".
+ * On a stale session it takes whichever send (compact first or full history)
+ * the main button does not.
  */
 export function isSecondaryComposerSubmission(input: {
   intent: ComposerSubmissionIntent;

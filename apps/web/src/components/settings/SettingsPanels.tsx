@@ -690,6 +690,9 @@ export function useSettingsRestore(onRestored?: () => void) {
       ...(settings.followUpBehavior !== DEFAULT_UNIFIED_SETTINGS.followUpBehavior
         ? ["Follow-up behavior"]
         : []),
+      ...(settings.staleSessionSend !== DEFAULT_UNIFIED_SETTINGS.staleSessionSend
+        ? ["Old thread send"]
+        : []),
       ...(settings.contextWindowMeterEnabled !== DEFAULT_UNIFIED_SETTINGS.contextWindowMeterEnabled
         ? ["Context window indicator"]
         : []),
@@ -794,6 +797,7 @@ export function useSettingsRestore(onRestored?: () => void) {
       settings.composerRichTextEnabled,
       settings.sendShortcut,
       settings.followUpBehavior,
+      settings.staleSessionSend,
       settings.addProjectBaseDirectory,
       settings.defaultThreadEnvMode,
       settings.newWorktreesStartFromOrigin,
@@ -927,6 +931,7 @@ export function useSettingsRestore(onRestored?: () => void) {
       composerRichTextEnabled: DEFAULT_UNIFIED_SETTINGS.composerRichTextEnabled,
       sendShortcut: DEFAULT_UNIFIED_SETTINGS.sendShortcut,
       followUpBehavior: DEFAULT_UNIFIED_SETTINGS.followUpBehavior,
+      staleSessionSend: DEFAULT_UNIFIED_SETTINGS.staleSessionSend,
       contextWindowMeterEnabled: DEFAULT_UNIFIED_SETTINGS.contextWindowMeterEnabled,
       environmentIdentificationMode: DEFAULT_UNIFIED_SETTINGS.environmentIdentificationMode,
       glassOpacity: DEFAULT_UNIFIED_SETTINGS.glassOpacity,
@@ -3034,6 +3039,43 @@ export function GeneralSettingsPanel() {
               <SelectPopup align="end" alignItemWithTrigger={false}>
                 <SelectItem value="queue">Queue</SelectItem>
                 <SelectItem value="steer">Steer</SelectItem>
+              </SelectPopup>
+            </Select>
+          }
+        />
+
+        <SettingsRow
+          {...searchableSetting("stale-session-send")}
+          description="Choose what the send button and Enter do when sending to an old Claude thread would re-read a long history. The send menu offers the other option."
+          resetAction={
+            settings.staleSessionSend !== DEFAULT_UNIFIED_SETTINGS.staleSessionSend ? (
+              <SettingResetButton
+                label="old thread send"
+                onClick={() =>
+                  updateSettings({
+                    staleSessionSend: DEFAULT_UNIFIED_SETTINGS.staleSessionSend,
+                  })
+                }
+              />
+            ) : null
+          }
+          control={
+            <Select
+              value={settings.staleSessionSend}
+              onValueChange={(value) => {
+                if (value === "compact" || value === "full-history") {
+                  updateSettings({ staleSessionSend: value });
+                }
+              }}
+            >
+              <SelectTrigger size="sm" className="w-auto min-w-0" aria-label="Old thread send">
+                <SelectValue>
+                  {settings.staleSessionSend === "compact" ? "Compact and send" : "Send"}
+                </SelectValue>
+              </SelectTrigger>
+              <SelectPopup align="end" alignItemWithTrigger={false}>
+                <SelectItem value="compact">Compact and send</SelectItem>
+                <SelectItem value="full-history">Send</SelectItem>
               </SelectPopup>
             </Select>
           }

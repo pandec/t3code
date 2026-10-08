@@ -37,6 +37,7 @@ import type {
   ThreadId,
   SnapShotSource,
   KeybindingShortcut,
+  ClientSettings,
 } from "@t3tools/contracts";
 import {
   AuthOrchestrationOperateScope,
@@ -1444,7 +1445,9 @@ const ComposerFooterPrimaryActions = memo(function ComposerFooterPrimaryActions(
   compactDisabledReason: string | null;
   compactBeforeSendTokens: number | null;
   onSendWithFullHistory: () => void;
-  sendWithFullHistoryShortcutLabel: string | null;
+  onCompactAndSend: () => void;
+  staleSessionSend: ClientSettings["staleSessionSend"];
+  secondarySendShortcutLabel: string | null;
 }) {
   return (
     <>
@@ -1504,7 +1507,9 @@ const ComposerFooterPrimaryActions = memo(function ComposerFooterPrimaryActions(
         onImplementPlanInNewThread={props.onImplementPlanInNewThread}
         compactBeforeSendTokens={props.compactBeforeSendTokens}
         onSendWithFullHistory={props.onSendWithFullHistory}
-        sendWithFullHistoryShortcutLabel={props.sendWithFullHistoryShortcutLabel}
+        onCompactAndSend={props.onCompactAndSend}
+        staleSessionSend={props.staleSessionSend}
+        secondarySendShortcutLabel={props.secondarySendShortcutLabel}
       />
     </>
   );
@@ -3211,7 +3216,7 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
     (!composerSendState.hasSendableContent && !showResumeAction);
   const collapsedComposerPrimaryActionLabel = showResumeAction
     ? "Resume thread"
-    : props.resumeCompactionTokens !== null
+    : props.resumeCompactionTokens !== null && settings.staleSessionSend === "compact"
       ? "Open composer to compact and send"
       : "Send message";
   const showMobilePendingAnswerActions =
@@ -4561,7 +4566,7 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
     sendShortcut: settings.sendShortcut,
     prompt,
   });
-  const sendWithFullHistoryShortcutLabel =
+  const secondarySendShortcutLabel =
     modEnterIntent !== null &&
     isSecondaryComposerSubmission({
       intent: modEnterIntent,
@@ -4575,6 +4580,7 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
     () => onSendWithFullHistory(() => submitComposer()),
     [onSendWithFullHistory, submitComposer],
   );
+  const compactAndSend = useCallback(() => submitComposer(), [submitComposer]);
   const submitCitationAndSend = useCallback(() => {
     submitComposer(
       undefined,
@@ -4794,6 +4800,7 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
           }),
           submissionIntent,
         );
+      // The secondary key takes whichever stale-session send Enter does not.
       if (
         props.resumeCompactionTokens !== null &&
         isSecondaryComposerSubmission({
@@ -4801,7 +4808,8 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
           modifier: event.metaKey || event.ctrlKey,
           sendShortcut: settings.sendShortcut,
           prompt: promptRef.current,
-        })
+        }) ===
+          (settings.staleSessionSend === "compact")
       ) {
         onSendWithFullHistory(submit);
       } else {
@@ -7250,9 +7258,10 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
                   onClick={(event) => {
                     event.stopPropagation();
                     if (showResumeAction) onResume();
+                    else if (props.resumeCompactionTokens === null) submitComposer();
+                    else if (settings.staleSessionSend === "full-history") sendWithFullHistory();
                     // Compacting first is only sent from the labeled button, so expand to show it.
-                    else if (props.resumeCompactionTokens !== null) expandMobileComposer();
-                    else submitComposer();
+                    else expandMobileComposer();
                   }}
                 >
                   {showResumeAction ? (
@@ -8034,7 +8043,9 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
                     onImplementPlanInNewThread={handleImplementPlanInNewThreadPrimaryAction}
                     compactBeforeSendTokens={props.resumeCompactionTokens}
                     onSendWithFullHistory={sendWithFullHistory}
-                    sendWithFullHistoryShortcutLabel={sendWithFullHistoryShortcutLabel}
+                    onCompactAndSend={compactAndSend}
+                    staleSessionSend={settings.staleSessionSend}
+                    secondarySendShortcutLabel={secondarySendShortcutLabel}
                     compactDisabled={
                       compactDisabled || noProviderAvailable || isSendBusy || isConnecting
                     }
