@@ -8,7 +8,7 @@ import { openCommandPalette } from "../../commandPaletteBus";
 import { ComposerHandleContext, useComposerHandleContext } from "../../composerHandleContext";
 import type { ChatComposerHandle } from "../chat/ChatComposer";
 import { useMediaQuery } from "../../hooks/useMediaQuery";
-import { useThreadProjection } from "../../state/entities";
+import { useThreadProjection, useThreadShell } from "../../state/entities";
 import { buildThreadRouteParams, resolveThreadRouteRef } from "../../threadRoutes";
 import { swapThreadPanes } from "./swapThreadPanes";
 import { ServerThreadPaneHost } from "./ServerThreadPaneHost";
@@ -163,7 +163,14 @@ function ParkedThreadWatcher({
 }) {
   const router = useRouter();
   const thread = useThreadProjection(threadRef)?.projection.thread ?? null;
-  const parkState = thread === null ? null : threadParkState(thread);
+  // A reopened thread's detail can be a cached pre-snooze snapshot, so the
+  // optimistic shell also counts: it already reads snoozed on mount.
+  const shell = useThreadShell(threadRef);
+  const detailState = thread === null ? null : threadParkState(thread);
+  const parkState =
+    detailState === "active" && shell !== null && threadParkState(shell) === "snoozed"
+      ? "snoozed"
+      : detailState;
   const lastParkState = useRef<typeof parkState>(null);
   // Re-runs on route changes are no-ops: only a move into snoozed or archived
   // folds, so archiving an already-snoozed thread still counts.
