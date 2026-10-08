@@ -3,6 +3,7 @@ import { Outlet, createFileRoute, redirect, useParams, useRouter } from "@tansta
 import { useAtomValue } from "@effect/atom-react";
 import { useEffect, useMemo, useRef } from "react";
 import type { ScopedThreadRef } from "@t3tools/contracts";
+import { scopeThreadRef } from "@t3tools/client-runtime/environment";
 
 import { isCommandPaletteOpen } from "../commandPaletteBus";
 import { environmentCatalog } from "../connection/catalog";
@@ -52,7 +53,7 @@ import {
   resolveThreadRouteTarget,
   type ThreadRouteTarget,
 } from "../threadRoutes";
-import { useComposerDraftStore } from "../composerDraftStore";
+import { type DraftId, useComposerDraftStore } from "../composerDraftStore";
 
 // A stale pair entry must not open: the thread may be gone or archived, and
 // point shell reads still serve cached snapshots for a removed or disabled
@@ -68,19 +69,27 @@ function isThreadOpenable(ref: ScopedThreadRef): boolean {
   return shell !== null && shell.archivedAt === null;
 }
 
-// A sent draft resolves to its thread; a discarded one has no session left.
+// The server thread each remembered draft becomes once sent. Promotion
+// cleanup deletes the draft session, so the ref is captured while it exists.
+const draftVisitThreadRefs = new Map<DraftId, ScopedThreadRef>();
+
+// A sent draft resolves to its thread; a discarded one never got a thread.
 function resolveVisitTarget(target: ThreadRouteTarget): ThreadRouteTarget | null {
   if (target.kind === "server") {
     return isThreadOpenable(target.threadRef) ? target : null;
   }
   const session = useComposerDraftStore.getState().getDraftSession(target.draftId);
-  if (session === null) return null;
-  if (session.promotedTo != null) {
-    return isThreadOpenable(session.promotedTo)
-      ? { kind: "server", threadRef: session.promotedTo }
-      : null;
+  if (session !== null) {
+    draftVisitThreadRefs.set(
+      target.draftId,
+      session.promotedTo ?? scopeThreadRef(session.environmentId, session.threadId),
+    );
+    if (session.promotedTo == null) return target;
   }
-  return target;
+  const threadRef = draftVisitThreadRefs.get(target.draftId);
+  return threadRef !== undefined && isThreadOpenable(threadRef)
+    ? { kind: "server", threadRef }
+    : null;
 }
 
 function ChatRouteGlobalShortcuts() {

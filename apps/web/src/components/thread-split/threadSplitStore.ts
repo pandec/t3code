@@ -462,13 +462,21 @@ export function closeActiveThreadPane(
   return true;
 }
 
-/** Whether a thread is parked out of the way: archived or snoozed (any kind). */
-export function isThreadParked(thread: {
+interface ParkableThread {
   archivedAt: unknown;
   snoozedAt?: unknown;
   snoozedUntil?: unknown;
-}): boolean {
-  return thread.archivedAt != null || thread.snoozedAt != null || thread.snoozedUntil != null;
+}
+
+/** Where a thread sits: on screen, snoozed (any kind), or archived. */
+export function threadParkState(thread: ParkableThread): "active" | "snoozed" | "archived" {
+  if (thread.archivedAt != null) return "archived";
+  return thread.snoozedAt != null || thread.snoozedUntil != null ? "snoozed" : "active";
+}
+
+/** Whether a thread is parked out of the way: archived or snoozed. */
+export function isThreadParked(thread: ParkableThread): boolean {
+  return threadParkState(thread) !== "active";
 }
 
 /**

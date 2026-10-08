@@ -19,7 +19,7 @@ import {
   cancelPendingThreadPaneFocus,
   clampSplitRatio,
   foldSplitForParkedThread,
-  isThreadParked,
+  threadParkState,
   noteThreadPaneFocus,
   reclaimThreadPaneFocus,
   redirectStrayThreadPaneFocus,
@@ -163,17 +163,19 @@ function ParkedThreadWatcher({
 }) {
   const router = useRouter();
   const thread = useThreadProjection(threadRef)?.projection.thread ?? null;
-  const parked = thread === null ? null : isThreadParked(thread);
-  const lastParked = useRef<boolean | null>(null);
-  // Re-runs on route changes are no-ops: only a false → true flip folds.
+  const parkState = thread === null ? null : threadParkState(thread);
+  const lastParkState = useRef<typeof parkState>(null);
+  // Re-runs on route changes are no-ops: only a move into snoozed or archived
+  // folds, so archiving an already-snoozed thread still counts.
   useEffect(() => {
-    const wasParked = lastParked.current;
-    lastParked.current = parked;
-    if (parked !== true || wasParked !== false) return;
+    const previous = lastParkState.current;
+    lastParkState.current = parkState;
+    if (parkState === null || parkState === "active" || previous === null) return;
+    if (previous === parkState || previous === "archived") return;
     foldSplitForParkedThread(scopedThreadKey(threadRef), routeThreadKey, (ref) =>
       router.navigate({ to: "/$environmentId/$threadId", params: buildThreadRouteParams(ref) }),
     );
-  }, [parked, routeThreadKey, router, threadRef]);
+  }, [parkState, routeThreadKey, router, threadRef]);
   return null;
 }
 
