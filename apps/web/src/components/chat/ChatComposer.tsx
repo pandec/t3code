@@ -4535,6 +4535,33 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
     submitComposer(undefined, "steer");
   }, [submitComposer]);
   const { onSendWithFullHistory } = props;
+  // Advertise Mod+Enter only when pressing it would actually route here,
+  // so custom bindings and the send-shortcut setting stay truthful.
+  const modEnterIntent = composerSubmissionIntentForKey({
+    event: {
+      key: "Enter",
+      metaKey: isMacPlatform(navigator.platform),
+      ctrlKey: !isMacPlatform(navigator.platform),
+      shiftKey: false,
+      altKey: false,
+    },
+    keybindings,
+    isMobileViewport,
+    isDraftThread: routeKind === "draft",
+    isRunning: phase === "running",
+    sendShortcut: settings.sendShortcut,
+    prompt,
+  });
+  const sendWithFullHistoryShortcutLabel =
+    modEnterIntent !== null &&
+    isSecondaryComposerSubmission({
+      intent: modEnterIntent,
+      modifier: true,
+      sendShortcut: settings.sendShortcut,
+      prompt,
+    })
+      ? formatShortcutLabel(MOD_ENTER_SHORTCUT)
+      : null;
   const sendWithFullHistory = useCallback(
     () => onSendWithFullHistory(() => submitComposer()),
     [onSendWithFullHistory, submitComposer],
@@ -7996,16 +8023,7 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
                     onImplementPlanInNewThread={handleImplementPlanInNewThreadPrimaryAction}
                     compactBeforeSendTokens={props.resumeCompactionTokens}
                     onSendWithFullHistory={sendWithFullHistory}
-                    sendWithFullHistoryShortcutLabel={
-                      isSecondaryComposerSubmission({
-                        intent: "foreground",
-                        modifier: true,
-                        sendShortcut: settings.sendShortcut,
-                        prompt,
-                      })
-                        ? formatShortcutLabel(MOD_ENTER_SHORTCUT)
-                        : null
-                    }
+                    sendWithFullHistoryShortcutLabel={sendWithFullHistoryShortcutLabel}
                     compactDisabled={
                       compactDisabled || noProviderAvailable || isSendBusy || isConnecting
                     }
