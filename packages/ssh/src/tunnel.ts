@@ -79,6 +79,13 @@ export interface RemoteT3RunnerOptions {
    */
   readonly archiveVersion?: string | null;
   readonly releaseBaseUrl?: string | null;
+  /**
+   * Private fork: run the remote's own `~/.local/bin/t3` launcher when it
+   * exists, and fall back to the release archive otherwise. Fork builds share
+   * upstream version numbers but not storage, so the upstream archive would
+   * issue pairing tokens the fork's running server never sees.
+   */
+  readonly preferInstalledLauncher?: boolean;
 }
 
 export interface SshEnvironmentManagerOptions {
@@ -133,7 +140,10 @@ function sshRunnerLogFields(runner: RemoteT3RunnerOptions | undefined) {
     return { runner: "node-script", nodeScriptPath: runner.nodeScriptPath.trim() };
   }
   if (runner?.archiveVersion?.trim()) {
-    return { runner: "archive", archiveVersion: runner.archiveVersion.trim() };
+    return {
+      runner: runner.preferInstalledLauncher === true ? "installed-launcher-or-archive" : "archive",
+      archiveVersion: runner.archiveVersion.trim(),
+    };
   }
   return { runner: "archive" };
 }
@@ -437,6 +447,12 @@ if [ -n "$T3_NODE_SCRIPT_PATH" ]; then
     exit 1
   fi
   exec node "$T3_NODE_SCRIPT_PATH" "$@"
+fi
+# Private fork: the installed launcher runs the remote's own app build, which
+# shares storage with the server that app is running.
+T3_INSTALLED_LAUNCHER="$HOME/.local/bin/t3"
+if [ @@T3_PREFER_INSTALLED_LAUNCHER@@ = 1 ] && [ -x "$T3_INSTALLED_LAUNCHER" ]; then
+  exec "$T3_INSTALLED_LAUNCHER" "$@"
 fi
 T3_ARCHIVE_VERSION=@@T3_ARCHIVE_VERSION@@
 if [ -z "$T3_ARCHIVE_VERSION" ]; then
@@ -807,6 +823,7 @@ export function buildRemoteT3RunnerScript(input?: RemoteT3RunnerOptions): string
       T3_NODE_SCRIPT_PATH: shellSingleQuote(nodeScriptPath),
       T3_ARCHIVE_VERSION: shellSingleQuote(archiveVersion),
       T3_RELEASE_BASE_URL: shellSingleQuote(releaseBaseUrl),
+      T3_PREFER_INSTALLED_LAUNCHER: input?.preferInstalledLauncher === true ? "1" : "0",
       T3_ARCHIVE_LOCK_WAIT_SECONDS: String(REMOTE_ARCHIVE_LOCK_WAIT_SECONDS),
       T3_ARCHIVE_DOWNLOAD_SECONDS: String(REMOTE_ARCHIVE_DOWNLOAD_SECONDS),
       T3_ARCHIVE_CHECKSUMS_SECONDS: String(REMOTE_ARCHIVE_CHECKSUMS_SECONDS),

@@ -110,6 +110,8 @@ const layerDesktopEnvironment = Layer.unwrap(
 // The remote runs the exact release this app is on, from its self-contained
 // archive, so it needs neither Node nor npm. Development points the remote at
 // a source checkout instead so the two sides can be iterated together.
+// Packaged fork Dev builds prefer the remote's installed `t3` launcher, since
+// no fork release archives exist.
 const resolveDesktopSshCliRunner = (
   environment: DesktopEnvironment.DesktopEnvironment["Service"],
 ): RemoteT3RunnerOptions => {
@@ -120,7 +122,10 @@ const resolveDesktopSshCliRunner = (
       nodeEngineRange: serverPackageJson.engines.node,
     };
   }
-  return { archiveVersion: environment.appVersion };
+  return {
+    archiveVersion: environment.appVersion,
+    preferInstalledLauncher: environment.isPackaged && environment.usesDevelopmentIdentity,
+  };
 };
 
 const layerDesktopSshEnvironment = Layer.unwrap(
