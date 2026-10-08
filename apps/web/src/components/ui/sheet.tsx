@@ -66,8 +66,12 @@ function SheetPopup({
   showCloseButton?: boolean;
   keepMounted?: boolean;
   transitionDurationMs?: number;
-  /** "transparent" drops the dimming/blur, e.g. when the sheet overlays a split view. */
-  backdrop?: "default" | "transparent";
+  /**
+   * "none" renders no backdrop and lets pointer events through the viewport,
+   * for a non-modal sheet (`modal={false}` on the root) that leaves the rest
+   * of the app usable, e.g. when it overlays a split view.
+   */
+  backdrop?: "default" | "none";
   side?: "right" | "left" | "top" | "bottom";
   variant?: "default" | "inset";
 }) {
@@ -79,18 +83,23 @@ function SheetPopup({
 
   return (
     <SheetPortal keepMounted={keepMounted}>
-      <SheetBackdrop
-        className={cn(
-          instant &&
-            "transition-none! data-ending-style:opacity-100! data-starting-style:opacity-100!",
-          backdrop === "transparent" && "bg-transparent backdrop-blur-none",
-        )}
-        style={transitionStyle}
-      />
-      <SheetViewport side={side} variant={variant}>
+      {backdrop === "default" ? (
+        <SheetBackdrop
+          className={cn(
+            instant &&
+              "transition-none! data-ending-style:opacity-100! data-starting-style:opacity-100!",
+          )}
+          style={transitionStyle}
+        />
+      ) : null}
+      <SheetViewport
+        side={side}
+        variant={variant}
+        className={cn(backdrop === "none" && "pointer-events-none")}
+      >
         <SheetPrimitive.Popup
           className={cn(
-            "relative flex max-h-full min-h-0 w-full min-w-0 flex-col bg-popover not-dark:bg-clip-padding text-popover-foreground shadow-lg/5 transition-[opacity,translate] duration-200 ease-in-out will-change-transform before:pointer-events-none before:absolute before:inset-0 before:shadow-[0_1px_--theme(--color-black/4%)] data-ending-style:opacity-0 data-starting-style:opacity-0 max-sm:before:hidden dark:before:shadow-[0_-1px_--theme(--color-white/6%)]",
+            "pointer-events-auto relative flex max-h-full min-h-0 w-full min-w-0 flex-col bg-popover not-dark:bg-clip-padding text-popover-foreground shadow-lg/5 transition-[opacity,translate] duration-200 ease-in-out will-change-transform before:pointer-events-none before:absolute before:inset-0 before:shadow-[0_1px_--theme(--color-black/4%)] data-ending-style:opacity-0 data-starting-style:opacity-0 max-sm:before:hidden dark:before:shadow-[0_-1px_--theme(--color-white/6%)]",
             side === "bottom" &&
               "row-start-2 border-t data-ending-style:translate-y-8 data-starting-style:translate-y-8",
             side === "top" &&

@@ -111,11 +111,18 @@ interface ThreadSplitStore {
   activePaneId: ThreadPaneId;
   splitRatio: number;
   pendingSwap: PendingPaneSwap | null;
+  /**
+   * The pane whose right-panel sheet opened last. Both panes' sheets dock to
+   * the window's right edge, so a pane whose sheet is open closes it once the
+   * other pane claims the slot.
+   */
+  splitSheetPaneId: ThreadPaneId | null;
   openSecondaryThread: (ref: ScopedThreadRef) => void;
   closeSplit: () => void;
   setSplitMounted: (mounted: boolean) => void;
   setActivePane: (paneId: ThreadPaneId) => void;
   setSplitRatio: (ratio: number) => void;
+  claimSplitSheet: (paneId: ThreadPaneId) => void;
   beginPaneSwap: (
     routeThreadRef: ScopedThreadRef,
   ) => { target: ScopedThreadRef; pendingSwap: PendingPaneSwap } | null;
@@ -134,6 +141,7 @@ export const useThreadSplitStore = create<ThreadSplitStore>((set, get) => ({
   activePaneId: "primary",
   splitRatio: readStoredSplitRatio(),
   pendingSwap: null,
+  splitSheetPaneId: null,
 
   openSecondaryThread: (ref) => {
     // Overlay callers (command palette) queue their own pane-focus intent —
@@ -215,6 +223,11 @@ export const useThreadSplitStore = create<ThreadSplitStore>((set, get) => ({
   setSplitMounted: (mounted) => {
     if (get().splitMounted === mounted) return;
     set({ splitMounted: mounted });
+  },
+
+  claimSplitSheet: (paneId) => {
+    if (get().splitSheetPaneId === paneId) return;
+    set({ splitSheetPaneId: paneId });
   },
 
   setActivePane: (paneId) => {
