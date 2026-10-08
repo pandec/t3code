@@ -752,6 +752,45 @@ describe("archive runner script", () => {
   });
 
   it.effect.skipIf(windowsHost)(
+    "prefers an installed launcher when asked, and falls back to the archive without one",
+    () =>
+      Effect.gen(function* () {
+        const fs = yield* FileSystem.FileSystem;
+        const root = yield* fs.makeTempDirectoryScoped({ prefix: "t3-launcher-runner-" });
+        const releaseBaseUrl = yield* makeMirror(root);
+        const runner = `${root}/run-t3.sh`;
+        yield* fs.writeFileString(
+          runner,
+          SshTunnel.buildRemoteT3RunnerScript({
+            archiveVersion,
+            releaseBaseUrl,
+            preferInstalledLauncher: true,
+          }),
+        );
+        const home = `${root}/home`;
+        const versionsDir = `${home}/.t3/runtime/versions`;
+        yield* fs.makeDirectory(`${home}/.local/bin`, { recursive: true });
+
+        const withoutLauncher = yield* runRunner(home, runner);
+        assert.equal(withoutLauncher.exitCode, 0, withoutLauncher.stderr);
+        assert.include(withoutLauncher.stdout, `t3 v${archiveVersion}`);
+        assert.isTrue(yield* fs.exists(versionsDir));
+
+        yield* fs.remove(versionsDir, { recursive: true });
+        yield* fs.writeFileString(
+          `${home}/.local/bin/t3`,
+          `#!/bin/sh\necho "installed launcher $*"\n`,
+        );
+        yield* fs.chmod(`${home}/.local/bin/t3`, 0o755);
+        const withLauncher = yield* runRunner(home, runner);
+        assert.equal(withLauncher.exitCode, 0, withLauncher.stderr);
+        assert.equal(withLauncher.stdout.trim(), "installed launcher --version");
+        assert.isFalse(yield* fs.exists(versionsDir));
+      }).pipe(Effect.provide(NodeServices.layer)),
+    60_000,
+  );
+
+  it.effect.skipIf(windowsHost)(
     "installs once when several launches race, and reclaims stale locks",
     () =>
       Effect.gen(function* () {
