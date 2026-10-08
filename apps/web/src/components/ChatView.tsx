@@ -8154,8 +8154,9 @@ export default function ChatView(props: ChatViewProps) {
             : "Compacting is unavailable right now"
     : null;
   // Tokens a stale Claude session would re-read on its next turn. While set,
-  // Enter compacts first and the composer's send button says so; "Send with
-  // full history" in its menu skips that once. Held queues and multi-model
+  // the composer offers compacting first: the staleSessionSend setting picks
+  // whether Enter and the button compact or send with full history, and the
+  // menu offers the other. Held queues and multi-model
   // sends never compact first, so the offer hides for them.
   const resumeCompactionTokens =
     activeContextWindow &&
