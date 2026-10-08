@@ -6165,14 +6165,20 @@ export default function ChatView(props: ChatViewProps) {
   }, [activeRightPanelSurface, activeThreadRef]);
   // Split view (fork): both panes' sheets dock to the window's right edge, so
   // only one stays open — an opening sheet claims the slot, and the pane
-  // holding it closes its own once the other pane claims it.
+  // holding it closes its own once the other pane claims it. Panel state is
+  // per thread, so a claim for this same thread (mid pane swap, when both
+  // panes briefly show it) must not close it.
   useEffect(() => {
-    if (!threadSplitActive || !rightPanelOpen) return;
-    useThreadSplitStore.getState().claimSplitSheet(threadPaneId);
+    if (!threadSplitActive || !rightPanelOpen || activeThreadKey === null) return;
+    useThreadSplitStore
+      .getState()
+      .claimSplitSheet({ paneId: threadPaneId, threadKey: activeThreadKey });
     return useThreadSplitStore.subscribe((state) => {
-      if (state.splitSheetPaneId !== threadPaneId) closePreviewPanel();
+      const owner = state.splitSheetOwner;
+      if (owner === null || owner.paneId === threadPaneId) return;
+      if (owner.threadKey !== activeThreadKey) closePreviewPanel();
     });
-  }, [closePreviewPanel, rightPanelOpen, threadPaneId, threadSplitActive]);
+  }, [activeThreadKey, closePreviewPanel, rightPanelOpen, threadPaneId, threadSplitActive]);
   const togglePreviewPanel = useCallback(() => {
     if (!activeThreadRef || !browserAvailable) return;
     if (previewPanelOpen) {
