@@ -423,6 +423,12 @@ export const SETTINGS_SEARCH_ITEMS = [
     searchTerms: ["queue steer running turn send default behavior composer"],
   },
   {
+    id: "stale-session-send",
+    title: "Old thread send",
+    to: "/settings/general",
+    searchTerms: ["compact and send full history summarize stale session claude enter swap"],
+  },
+  {
     id: "provider-update-checks",
     title: "Provider update checks",
     to: "/settings/general",

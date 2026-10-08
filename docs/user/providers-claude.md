@@ -75,7 +75,8 @@ You can also send `/compact` in an existing conversation. Web and desktop offer
 after more than an hour, the send button changes to **Compact and send**: Enter
 summarizes the history first, then sends your message. To keep the full history
 for that message, open the menu next to the button and choose **Send with full
-history**. See [commands and skills](./composer.md#commands-and-skills) for using
+history**. To make plain sending the default instead, set **Settings → General → Old thread
+send** to **Send**; the menu then offers **Compact and send**. See [commands and skills](./composer.md#commands-and-skills) for using
 composer commands.
 
 ## Usage limits
