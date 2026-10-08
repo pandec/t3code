@@ -17,6 +17,7 @@ import {
   LinkIcon,
   SendIcon,
 } from "lucide-react";
+import { useAtomValue } from "@effect/atom-react";
 import { useCallback, useRef, useState, type ReactNode } from "react";
 
 import { RefreshIcon } from "~/components/ui/refresh-icon";
@@ -524,6 +525,7 @@ function CommentComposer({
   const body = useLinearCommentDraftStore((state) => state.drafts[draftKey]?.body ?? "");
   const posting = useLinearCommentDraftStore((state) => state.drafts[draftKey]?.posting ?? false);
   const createComment = useAtomCommand(linearEnvironment.createComment, { reportFailure: false });
+  const canComment = useAtomValue(linearEnvironment.createComment.permissionAtom(environmentId));
   const submit = async () => {
     const trimmed = useLinearCommentDraftStore.getState().beginPost(draftKey);
     if (trimmed === null) return;
@@ -535,6 +537,8 @@ function CommentComposer({
     }
     onPosted();
   };
+  // Pairings that cannot operate the environment read the issue but cannot post to it.
+  if (!canComment) return null;
   return (
     <div className="mt-3 space-y-2">
       <Textarea

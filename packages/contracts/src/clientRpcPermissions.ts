@@ -39,6 +39,11 @@ export const CLIENT_GUARDED_RPC_SCOPES = {
   [WS_METHODS.scheduledTasksDelete]: AuthOrchestrationOperateScope,
   [WS_METHODS.scheduledTasksRunNow]: AuthOrchestrationOperateScope,
   [WS_METHODS.scheduledTasksRotateWebhookToken]: AuthOrchestrationOperateScope,
+
+  // Fork methods.
+  [WS_METHODS.sessionImportImport]: AuthOrchestrationOperateScope,
+  [WS_METHODS.sessionImportForkThread]: AuthOrchestrationOperateScope,
+  [WS_METHODS.linearCreateComment]: AuthOrchestrationOperateScope,
 } as const;
 export type ClientGuardedRpcTag = keyof typeof CLIENT_GUARDED_RPC_SCOPES;
 

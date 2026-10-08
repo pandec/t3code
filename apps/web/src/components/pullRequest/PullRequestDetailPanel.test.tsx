@@ -373,7 +373,7 @@ describe("copy PR number shortcut in split view", () => {
     const panel = (number: number) => (
       <PullRequestDetailPanel
         environmentId={threadRef.environmentId}
-        reference={{ ...detail, number, url: `${detail.url.slice(0, -1)}${number}` }}
+        reference={{ ...detail, number }}
         context="page"
         shortcutsEnabled
         getShortcutContext={() => ({
