@@ -76,6 +76,8 @@ export interface ProviderEventRouteIdentity {
 export interface InheritedBackgroundTurnItemRoute {
   readonly id: TurnItemId;
   readonly runId: OrchestrationV2Run["id"];
+  /** The durable row, so a dead event stream can end the item. */
+  readonly turnItem?: OrchestrationV2TurnItem;
 }
 
 type ProviderTerminalEvent = Extract<ProviderAdapterV2Event, { readonly type: "turn.terminal" }>;
@@ -142,7 +144,7 @@ export function selectInheritedBackgroundTurnItems(input: {
     settledPriorRunIds.has(turnItem.runId) &&
     backgroundCapableTurnItemTypes.has(turnItem.type) &&
     !isSettledTurnItemStatus(turnItem.status)
-      ? [{ id: turnItem.id, runId: turnItem.runId }]
+      ? [{ id: turnItem.id, runId: turnItem.runId, turnItem }]
       : [],
   );
 }
@@ -984,6 +986,50 @@ export const layer: Layer.Layer<
             ReadonlySet<OrchestrationV2TurnItem["id"]>
           >(new Set(inheritedBackgroundTurnItemsById.keys()));
           const openRunOwnedSubagents = yield* Ref.make(emptyOpenRunOwnedSubagentProjection());
+          // Open tool and command items of this run, its child threads and
+          // inherited work, kept whole so a dead event stream can end them.
+          const openToolTurnItems = yield* Ref.make<
+            ReadonlyMap<OrchestrationV2TurnItem["id"], OrchestrationV2TurnItem>
+          >(
+            new Map(
+              inheritedBackgroundTurnItems.flatMap(({ turnItem }) =>
+                turnItem?.type === "command_execution" || turnItem?.type === "dynamic_tool"
+                  ? [[turnItem.id, turnItem] as const]
+                  : [],
+              ),
+            ),
+          );
+          const endOrphanedToolTurnItems = Effect.gen(function* () {
+            const open = yield* Ref.getAndSet(openToolTurnItems, new Map());
+            if (open.size === 0) return;
+            // Ended here, so the failed run's cascade must not end them again.
+            yield* Ref.update(openRunOwnedSubagents, (current) => ({
+              ...current,
+              childTurnItems: new Map([...current.childTurnItems].filter(([id]) => !open.has(id))),
+            }));
+            const completedAt = yield* DateTime.now;
+            const events: Array<OrchestrationV2DomainEvent> = [];
+            for (const turnItem of open.values()) {
+              events.push({
+                id: yield* idAllocator.allocate.event({ threadId: input.run.threadId }),
+                type: "turn-item.updated",
+                threadId: turnItem.threadId,
+                // A child thread's item may have no run; it is this run's work.
+                runId: turnItem.runId ?? input.run.id,
+                ...(turnItem.nodeId === null ? {} : { nodeId: turnItem.nodeId }),
+                providerInstanceId: input.run.providerInstanceId,
+                occurredAt: completedAt,
+                payload: {
+                  ...turnItem,
+                  ...("streaming" in turnItem ? { streaming: false } : {}),
+                  status: "interrupted",
+                  completedAt,
+                  updatedAt: completedAt,
+                },
+              });
+            }
+            yield* eventSink.writeWithEffects({ effects: [], events });
+          });
           const finalizeRootRun = (terminal: ProviderTerminalEvent) =>
             Effect.gen(function* () {
               if (yield* Ref.get(rootRunFinalized)) {
@@ -1119,6 +1165,25 @@ export const layer: Layer.Layer<
                       next.delete(event.turnItem.id);
                     } else {
                       next.add(event.turnItem.id);
+                    }
+                    return next;
+                  });
+                }
+                if (
+                  deliverable &&
+                  (event.turnItem.type === "command_execution" ||
+                    event.turnItem.type === "dynamic_tool") &&
+                  (belongsToRootRun ||
+                    belongsToInheritedBackgroundItem ||
+                    belongsToOwnedChildThread)
+                ) {
+                  const turnItem = event.turnItem;
+                  yield* Ref.update(openToolTurnItems, (current) => {
+                    const next = new Map(current);
+                    if (isSettledTurnItemStatus(turnItem.status)) {
+                      next.delete(turnItem.id);
+                    } else {
+                      next.set(turnItem.id, turnItem);
                     }
                     return next;
                   });
@@ -1293,6 +1358,20 @@ export const layer: Layer.Layer<
             ),
             Stream.takeUntilEffect(() => shouldStopProviderEventIngestion),
             Stream.runDrain,
+            // The session's event stream died with its process (a detach, a
+            // crash): the tool calls it had open will never report an end.
+            Effect.tapError((error) =>
+              error._tag === "ProviderAdapterEventStreamError"
+                ? endOrphanedToolTurnItems.pipe(
+                    Effect.catchCause((cause) =>
+                      Effect.logWarning("failed to end tool items of a closed event stream", {
+                        runId: input.run.id,
+                        cause,
+                      }),
+                    ),
+                  )
+                : Effect.void,
+            ),
             Effect.mapError((cause) => new RunExecutionIngestError({ runId: input.run.id, cause })),
             Effect.flatMap(() =>
               Effect.gen(function* () {

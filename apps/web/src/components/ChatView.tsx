@@ -3819,6 +3819,23 @@ export default function ChatView(props: ChatViewProps) {
       }),
     ];
   }, [serverProjection]);
+  // The run that agent work left running shows under, which background Stop
+  // targets: Stop's own lookup reads a windowed history that may no longer
+  // hold that work. Null when only pull request watches are pending, which
+  // Stop ends without a run.
+  const backgroundWorkRunId = useMemo(() => {
+    if (serverProjection === null || serverProjection === undefined) return null;
+    const latestRun = serverProjection.runs.findLast((run) => run.status !== "queued");
+    if (latestRun === undefined) return null;
+    const providerWork = derivePendingBackgroundWork({
+      latestRun,
+      providerThreads: serverProjection.providerThreads,
+      turnItems: serverProjection.turnItems,
+      activeProviderThreadId: serverProjection.thread.activeProviderThreadId,
+      runs: serverProjection.runs,
+    });
+    return providerWork.length > 0 ? latestRun.id : null;
+  }, [serverProjection]);
   const activeWorkStartedAt =
     deriveActiveWorkStartedAt(activeActivityRun, activeRuntime, localDispatchStartedAt) ??
     runlessWorkStartedAt;
@@ -7753,7 +7770,10 @@ export default function ChatView(props: ChatViewProps) {
     setStoppingBackgroundWorkKey(requestKey);
     const result = await interruptThreadTurn({
       environmentId,
-      input: { threadId: activeThread.id },
+      input: {
+        threadId: activeThread.id,
+        ...(backgroundWorkRunId === null ? {} : { runId: backgroundWorkRunId }),
+      },
     });
     // Acceptance does not confirm termination. Allow retry while the provider
     // finishes stopping the tasks or reports a failure.
@@ -7767,7 +7787,7 @@ export default function ChatView(props: ChatViewProps) {
         );
       }
     }
-  }, [activeThread, environmentId, interruptThreadTurn, setThreadError]);
+  }, [activeThread, backgroundWorkRunId, environmentId, interruptThreadTurn, setThreadError]);
   // Related-thread links open in this pane via the split-aware helper, so a
   // link to the other pane's thread focuses it instead of folding the split.
   const onOpenRelatedThread = useCallback(
