@@ -655,6 +655,9 @@ export function useSettingsRestore(onRestored?: () => void) {
       ...(settings.chatWideTables !== DEFAULT_UNIFIED_SETTINGS.chatWideTables
         ? ["Wide tables"]
         : []),
+      ...(settings.snoozeShortcutUntilDone !== DEFAULT_UNIFIED_SETTINGS.snoozeShortcutUntilDone
+        ? ["Snooze until done shortcut"]
+        : []),
       ...(settings.autoResumeLimitedThreads !== DEFAULT_UNIFIED_SETTINGS.autoResumeLimitedThreads
         ? ["Auto-resume limited threads"]
         : []),
@@ -839,6 +842,7 @@ export function useSettingsRestore(onRestored?: () => void) {
       settings.sidebarThreadGroupsButton,
       settings.showPanelToggleButtons,
       settings.chatWideTables,
+      settings.snoozeShortcutUntilDone,
       settings.showSkillsInSlashMenu,
       settings.timestampFormat,
       settings.notificationMode,
@@ -955,6 +959,7 @@ export function useSettingsRestore(onRestored?: () => void) {
       sidebarThreadGroupsButton: DEFAULT_UNIFIED_SETTINGS.sidebarThreadGroupsButton,
       showPanelToggleButtons: DEFAULT_UNIFIED_SETTINGS.showPanelToggleButtons,
       chatWideTables: DEFAULT_UNIFIED_SETTINGS.chatWideTables,
+      snoozeShortcutUntilDone: DEFAULT_UNIFIED_SETTINGS.snoozeShortcutUntilDone,
       autoResumeLimitedThreads: DEFAULT_UNIFIED_SETTINGS.autoResumeLimitedThreads,
       snoozeLimitedThreads: DEFAULT_UNIFIED_SETTINGS.snoozeLimitedThreads,
       responseStreamingMode: DEFAULT_UNIFIED_SETTINGS.responseStreamingMode,

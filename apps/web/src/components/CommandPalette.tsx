@@ -908,6 +908,7 @@ function OpenCommandPaletteDialog(props: {
     reportFailure: false,
   });
   const timestampFormat = useClientSettings((s) => s.timestampFormat);
+  const snoozeShortcutUntilDone = useClientSettings((s) => s.snoozeShortcutUntilDone);
   const projects = useProjects();
   const projectAccentColors = useProjectAccentColors();
   const accentTint = useAccentTintSettings();
@@ -3232,6 +3233,9 @@ function OpenCommandPaletteDialog(props: {
                       const choice = await requestCustomSnooze();
                       if (choice) await snooze(choice);
                     },
+                    ...(snoozeShortcutUntilDone
+                      ? { untilDoneShortcutCommand: "thread.snoozeUntilDone" as const }
+                      : {}),
                   }),
                 },
               ];

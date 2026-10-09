@@ -65,6 +65,11 @@ To open either step directly, assign a shortcut to "Thread: Rename" or "Thread: 
 Settings → Keybindings. Neither has a default binding. The snooze shortcut wakes an already
 snoozed thread.
 
+"Thread: Snooze Until Done", also unbound by default, snoozes a working thread until its work
+ends in one keystroke. When that doesn't apply, for example on an idle or already snoozed
+thread, it does what "Thread: Snooze" does. Turn off **Snooze until done shortcut** in
+Settings → Extras to make it always open the snooze picker.
+
 ## Split view
 
 With [two threads side by side](./thread-sidebar.md#view-two-threads-side-by-side),
