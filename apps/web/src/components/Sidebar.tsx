@@ -2810,6 +2810,8 @@ const SidebarSearchResultRow = memo(function SidebarSearchResultRow(props: {
   environmentLabel: string | null;
   environmentMachine: EnvironmentMachineKind;
   providerEntryByInstanceId: ReadonlyMap<string, ProviderInstanceEntry>;
+  projectAccentColor: SidebarProjectAccentColor | null;
+  accentTintIntensityPercent: AccentTintIntensityPercent;
   isHighlighted: boolean;
   isRouteActive: boolean;
   resultId: string;
@@ -2913,6 +2915,10 @@ const SidebarSearchResultRow = memo(function SidebarSearchResultRow(props: {
                   : "text-sidebar-muted-foreground/75 hover:bg-sidebar-row-hover hover:text-sidebar-foreground",
                 isFileDragOver && "ring-1 ring-inset ring-primary/70",
                 isFileDragOver && !props.isRouteActive && "bg-sidebar-row-hover",
+              )}
+              style={projectAccentTintStyle(
+                props.projectAccentColor,
+                props.accentTintIntensityPercent,
               )}
             />
           }
@@ -6628,6 +6634,12 @@ export default function Sidebar() {
                           providerEntriesByEnvironment.get(thread.environmentId) ??
                           EMPTY_PROVIDER_ENTRIES
                         }
+                        projectAccentColor={
+                          projectAccentColorByKey.get(
+                            `${thread.environmentId}:${thread.projectId}`,
+                          ) ?? null
+                        }
+                        accentTintIntensityPercent={accentTint.intensityPercent}
                         isHighlighted={activeSearchResultIndex === index}
                         isRouteActive={routeThreadKey === threadKey}
                         resultId={`sidebar-thread-search-result-${index}`}
