@@ -2161,6 +2161,8 @@ const make = Effect.gen(function* () {
                   interactionMode,
                   branch: parent.thread.branch,
                   worktreePath: parent.thread.worktreePath,
+                  // Fork: the create_threads handler has already validated the group.
+                  ...(input.groupId === undefined ? {} : { customGroupId: input.groupId }),
                 })
                 .pipe(
                   Effect.mapError((error) =>
