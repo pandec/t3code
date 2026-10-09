@@ -17,7 +17,7 @@ import {
   CliProxyApiUsageProbeError,
   resetCliProxyApiAuthFailuresForTest,
 } from "./cliProxyApiUsage.ts";
-import type { ProviderInstance } from "./ProviderDriver.ts";
+import type { ProviderInstance } from "@t3tools/provider-core/server/driver";
 import * as ProviderInstanceHealth from "./ProviderInstanceHealth.ts";
 import type { UsageObservationToken, UsageSourceKind } from "./ProviderInstanceHealth.ts";
 import { layerMemory as projectionStoreLayerMemory } from "../orchestration-v2/ProjectionStore.ts";

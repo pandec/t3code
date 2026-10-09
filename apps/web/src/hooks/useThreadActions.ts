@@ -68,6 +68,7 @@ import {
   waitForThreadShell,
 } from "../state/entities";
 import { useUiStateStore } from "../uiStateStore";
+import { clearThreadPreviewState } from "../previewStateStore";
 import { useTerminalUiStateStore } from "../terminalUiStateStore";
 import { buildThreadRouteParams, resolveThreadRouteRef } from "../threadRoutes";
 import { formatWorktreePathForDisplay, getOrphanedWorktreePathForThread } from "../worktreeCleanup";
@@ -583,6 +584,7 @@ export function useThreadActions() {
           // Audio owned by a deleted thread must not keep playing with no
           // control anywhere.
           stopListeningForThread(target.environmentId, target.threadId);
+          clearThreadPreviewState(target);
         }
         return result;
       }
@@ -693,6 +695,7 @@ export function useThreadActions() {
         threadRef,
       );
       clearTerminalUiState(threadRef);
+      clearThreadPreviewState(threadRef);
 
       if (shouldNavigateToFallback) {
         const fallbackThread = fallbackThreadId

@@ -18,8 +18,8 @@ import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
 import * as Path from "effect/Path";
 
-import { isExistingDirectory } from "../pathExpansion.ts";
-import * as IdAllocator from "./IdAllocator.ts";
+import { isExistingDirectory } from "@t3tools/provider-core/server/pathExpansion";
+import * as IdAllocator from "@t3tools/provider-core/server/IdAllocator";
 import * as Orchestrator from "./Orchestrator.ts";
 import * as ProjectStore from "./ProjectStore.ts";
 import {

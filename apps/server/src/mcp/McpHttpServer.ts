@@ -517,7 +517,10 @@ const registerPreviewSnapshot = Effect.fn("McpHttpServer.registerPreviewSnapshot
               const png = new Uint8Array(Buffer.from(screenshot.data, "base64"));
               const screenshotPath =
                 payload?.save === true ? yield* saveScreenshot(snapshot.url, png) : undefined;
-              if (screenshotPath !== undefined && payload?.includeImage === false) {
+              // Images stay out of tool history unless asked for: providers replay them on every
+              // later request, and some reject inline images outright.
+              const includeImage = payload?.includeImage === true;
+              if (screenshotPath !== undefined && !includeImage) {
                 // The agent only wants a file to show the user. The url keeps the site icon on the tool row.
                 const saved = {
                   url: cutText(snapshot.url, MAX_SNAPSHOT_IDENTIFIER_CHARS),
@@ -562,9 +565,9 @@ const registerPreviewSnapshot = Effect.fn("McpHttpServer.registerPreviewSnapshot
                           text: `Snapshot text was bounded. Omitted: ${bounded.omitted.join("; ")}.`,
                         },
                       ]),
-                  ...(payload?.includeImage === false
-                    ? []
-                    : [{ type: "image" as const, data: png, mimeType: screenshot.mimeType }]),
+                  ...(includeImage
+                    ? [{ type: "image" as const, data: png, mimeType: screenshot.mimeType }]
+                    : []),
                 ],
               });
             }),
@@ -838,7 +841,7 @@ const layerEnvironmentRegistration = toolkitRegistration(
 
 const layerProjectRegistration = toolkitRegistration(ProjectToolkit, ProjectHandlers.layer);
 
-const layerAttachmentRegistration = toolkitRegistration(
+export const layerAttachmentToolkit = toolkitRegistration(
   AttachmentToolkit,
   AttachmentHandlers.layer,
 );
@@ -927,8 +930,9 @@ const layerPreviewIslandRegistration = Layer.mergeAll(
  * memoized build, so all islands share one instance of each: the handlers'
  * runtime dependencies (broker, voice staging, session registry), the worktree
  * service, which holds the per-thread handoff guard, the thread groups service,
- * which holds the create lock, and the HTML renderer, which holds install state
- * (the server provides the preview browser it drives).
+ * which holds the create lock, the attachment upload owners, so a thread keeps
+ * its pending uploads across islands, and the HTML renderer, which holds install
+ * state (the server provides the preview browser it drives).
  */
 const mcpToolkitIsland = <E, R>(path: `/${string}`, registrations: Layer.Layer<never, E, R>) =>
   Layer.fresh(
@@ -936,7 +940,7 @@ const mcpToolkitIsland = <E, R>(path: `/${string}`, registrations: Layer.Layer<n
       registrations,
       layerOrchestratorToolkit,
       layerThreadToolkit,
-      layerAttachmentRegistration,
+      layerAttachmentToolkit,
       layerProjectRegistration,
       layerEnvironmentRegistration,
       layerWorktreeToolkitRegistration,
@@ -979,4 +983,5 @@ export const layer = Layer.mergeAll(
   Layer.provide(WorktreeMcpService.layer),
   Layer.provide(ThreadGroupsMcpService.layer),
   Layer.provide(HtmlRender.layer),
+  Layer.provide(AttachmentHandlers.layerUploadOwners),
 );

@@ -1,15 +1,9 @@
 import { isProviderDriverKind, ProviderDriverKind } from "@t3tools/contracts";
-import {
-  AntigravityIcon,
-  ClaudeAI,
-  CursorIcon,
-  GrokIcon,
-  Icon,
-  OpenAI,
-  OpenCodeIcon,
-  PiAgentIcon,
-  ZaiIcon,
-} from "../Icons";
+import { createElement } from "react";
+
+import { AntigravityIcon, ClaudeAI, CursorIcon, Icon, OpenAI, ZaiIcon } from "../Icons";
+import { providerClients } from "../settings/providerDriverMeta";
+import { ProviderPackageIcon } from "./ProviderPackageIcon";
 
 export type ProviderPickerKind = ProviderDriverKind;
 
@@ -48,14 +42,22 @@ export const PROVIDER_OPTIONS: Array<{
   },
 ];
 
+/** Wraps a provider package's plain-data glyph as an icon component. */
+function packageIcon(driverKind: string): Icon | undefined {
+  const icon = providerClients.get(ProviderDriverKind.make(driverKind))?.icon;
+  if (!icon) return undefined;
+  const PackageIcon: Icon = (props) => createElement(ProviderPackageIcon, { ...props, icon });
+  return PackageIcon;
+}
+
 export const PROVIDER_ICON_BY_PROVIDER: Partial<Record<ProviderDriverKind, Icon>> = {
   [ProviderDriverKind.make("codex")]: OpenAI,
   [ProviderDriverKind.make("claudeAgent")]: ClaudeAI,
-  [ProviderDriverKind.make("opencode")]: OpenCodeIcon,
+  [ProviderDriverKind.make("opencode")]: packageIcon("opencode"),
   [ProviderDriverKind.make("cursor")]: CursorIcon,
-  [ProviderDriverKind.make("grok")]: GrokIcon,
+  [ProviderDriverKind.make("grok")]: packageIcon("grok"),
   [ProviderDriverKind.make("antigravity")]: AntigravityIcon,
-  [ProviderDriverKind.make("pi")]: PiAgentIcon,
+  [ProviderDriverKind.make("pi")]: packageIcon("pi"),
 };
 
 /**

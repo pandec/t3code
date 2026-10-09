@@ -19,7 +19,7 @@ import { describe, expect, it } from "vite-plus/test";
 import * as EventStore from "../orchestration-v2/EventStore.ts";
 import * as ProjectionStore from "../orchestration-v2/ProjectionStore.ts";
 import * as SqlitePersistence from "../persistence/Sqlite.ts";
-import type { ProviderInstance } from "../provider/ProviderDriver.ts";
+import type { ProviderInstance } from "@t3tools/provider-core/server/driver";
 import { ProviderInstanceRegistry } from "../provider/ProviderInstanceRegistry.ts";
 import {
   type MessageSummaryGenerationInput,

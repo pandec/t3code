@@ -5,9 +5,9 @@ import { describe, expect, it } from "vite-plus/test";
 
 import { ClaudeDriver } from "./Drivers/ClaudeDriver.ts";
 import { CodexDriver } from "./Drivers/CodexDriver.ts";
-import { GrokDriver } from "./Drivers/GrokDriver.ts";
-import { OpenCodeDriver } from "./Drivers/OpenCodeDriver.ts";
-import { withExpandedProviderBinaryPath } from "./ProviderBinaryPath.ts";
+import { GrokDriver } from "@t3tools/provider-grok/server";
+import { OpenCodeDriver } from "@t3tools/provider-opencode/server";
+import { withExpandedProviderBinaryPath } from "@t3tools/provider-core/server/binaryPath";
 
 const defaultConfigFactories: ReadonlyArray<
   readonly [name: string, makeConfig: () => { readonly binaryPath: string }]

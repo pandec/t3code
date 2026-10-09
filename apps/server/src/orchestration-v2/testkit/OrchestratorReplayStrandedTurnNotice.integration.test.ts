@@ -10,7 +10,7 @@ import {
   ClaudeOrchestratorReplayHarness,
   makeClaudeRestartReplayHarness,
 } from "../Adapters/ClaudeAdapterV2.testkit.ts";
-import * as IdAllocator from "../IdAllocator.ts";
+import * as IdAllocator from "@t3tools/provider-core/server/IdAllocator";
 import { STRANDED_PRIOR_TURN_NOTICE } from "../StrandedTurnNotice.ts";
 import * as SqlitePersistence from "../../persistence/Sqlite.ts";
 import { provideDeterministicTestRuntime } from "./DeterministicRuntime.ts";
@@ -21,8 +21,8 @@ import {
   TURN_INTERRUPT_MID_TOOL_PROMPT,
 } from "./fixtures/shared.ts";
 import { runOrchestratorV2ProviderReplayScenario } from "./ProviderReplayHarness.ts";
-import { checkpointWorkspace } from "./ReplayFixtureWorkspace.ts";
-import { readProviderReplayTranscript } from "./ReplayTranscriptNdjson.ts";
+import { checkpointWorkspace } from "@t3tools/provider-testing/replayWorkspace";
+import { readProviderReplayTranscript } from "@t3tools/provider-testing/replayTranscript";
 
 const SCENARIO = "turn_interrupt_restart";
 const SESSION_ID = "fb591f8f-073f-4981-bf67-9b5bffb537d5";

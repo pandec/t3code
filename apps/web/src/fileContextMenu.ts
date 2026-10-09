@@ -28,7 +28,8 @@ import { type RemoteOpenMode, useRemoteOpenResolution } from "./remoteOpen";
 import { serverEnvironment } from "./state/server";
 import { shellEnvironment } from "./state/shell";
 import { useAtomCommand } from "./state/use-atom-command";
-import { isAbsolutePath, resolvePathLinkTarget } from "./terminal-links";
+import { resolvePathLinkTarget } from "@t3tools/shared/fileLinks";
+import { isAbsolutePath } from "@t3tools/shared/path";
 import { toastManager } from "./components/ui/toast";
 import { useAtomValue } from "@effect/atom-react";
 

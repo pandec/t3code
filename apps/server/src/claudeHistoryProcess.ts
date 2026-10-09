@@ -4,7 +4,7 @@ import * as Path from "effect/Path";
 import * as Schema from "effect/Schema";
 import { ChildProcess } from "effect/process";
 
-import { spawnAndCollect } from "./provider/providerSnapshot.ts";
+import { spawnAndCollect } from "@t3tools/provider-core/server/snapshotProbe";
 
 export type ClaudeHistoryMethod = "getSessionMessages" | "getSubagentMessages" | "forkSession";
 

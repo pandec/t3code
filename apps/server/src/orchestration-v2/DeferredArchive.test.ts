@@ -36,7 +36,7 @@ import { ArchiveToolkitHandlersLive } from "../mcp/toolkits/archive/handlers.ts"
 import { ArchiveToolkit } from "../mcp/toolkits/archive/tools.ts";
 import * as SqlitePersistence from "../persistence/Sqlite.ts";
 import * as ProjectService from "../project/ProjectService.ts";
-import type { ProviderInstance } from "../provider/ProviderDriver.ts";
+import type { ProviderInstance } from "@t3tools/provider-core/server/driver";
 import * as ProviderInstanceRegistry from "../provider/ProviderInstanceRegistry.ts";
 import * as ServerSettings from "../serverSettings.ts";
 import * as SourceControlProviderRegistry from "../sourceControl/SourceControlProviderRegistry.ts";
@@ -61,7 +61,7 @@ import * as EventSink from "./EventSink.ts";
 import * as Orchestrator from "./Orchestrator.ts";
 import { OrchestratorProjectionError } from "./Orchestrator.ts";
 import * as ProjectStore from "./ProjectStore.ts";
-import type { ProviderAdapterV2Shape } from "./ProviderAdapter.ts";
+import type { ProviderAdapterV2Shape } from "@t3tools/provider-core/server/ProviderAdapter";
 import * as RuntimeLayer from "./runtimeLayer.ts";
 import * as ThreadArchiveScheduler from "./ThreadArchiveScheduler.ts";
 import * as ThreadCommandExecutor from "./ThreadCommandExecutor.ts";

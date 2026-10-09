@@ -426,7 +426,9 @@ export const SETTINGS_SEARCH_ITEMS = [
     id: "stale-session-send",
     title: "Old thread send",
     to: "/settings/general",
-    searchTerms: ["compact and send full history summarize stale session claude enter swap"],
+    searchTerms: [
+      "compact chip and send full history summarize stale session claude enter default",
+    ],
   },
   {
     id: "provider-update-checks",

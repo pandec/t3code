@@ -31,55 +31,21 @@ import {
   readCodexImportableThread,
 } from "../provider/Drivers/CodexImportReader.ts";
 
-export class ProviderSessionImportError extends Schema.TaggedError<ProviderSessionImportError>()(
-  "ProviderSessionImportError",
-  {
-    detail: Schema.String,
-    cause: Schema.optional(Schema.Defect()),
-  },
-) {
-  override get message(): string {
-    return this.detail;
-  }
-}
+import {
+  ProviderSessionImportError,
+  type ProviderImportedMessage,
+  type ProviderImportedSession,
+  type ProviderImportableSession,
+  type ProviderSessionImport,
+} from "@t3tools/provider-core/server/sessionImport";
 
-export interface ProviderImportableSession {
-  readonly nativeSessionId: string;
-  /** Provider-derived session title, preferring an explicit user-assigned name. */
-  readonly name: string | null;
-  readonly preview: string;
-  readonly messageCount: number | null;
-  readonly updatedAt: string;
-}
-
-export interface ProviderImportedMessage {
-  readonly role: "user" | "assistant";
-  readonly text: string;
-  readonly createdAt: string;
-}
-
-export interface ProviderImportedSession {
-  readonly nativeSessionId: string;
-  readonly name: string | null;
-  readonly messages: ReadonlyArray<ProviderImportedMessage>;
-  /** Last model the session used, when the transcript records one. */
-  readonly model: string | null;
-}
-
-export interface ProviderSessionImport {
-  readonly listSessions: (input: {
-    readonly cwd: string;
-  }) => Effect.Effect<ReadonlyArray<ProviderImportableSession>, ProviderSessionImportError>;
-  readonly readSession: (input: {
-    readonly nativeSessionId: string;
-    readonly cwd: string;
-  }) => Effect.Effect<ProviderImportedSession, ProviderSessionImportError>;
-  /** Copies a session into a new native session and returns its id. */
-  readonly forkSession?: (input: {
-    readonly nativeSessionId: string;
-    readonly cwd: string;
-  }) => Effect.Effect<string, ProviderSessionImportError>;
-}
+export {
+  ProviderSessionImportError,
+  type ProviderImportedMessage,
+  type ProviderImportedSession,
+  type ProviderImportableSession,
+  type ProviderSessionImport,
+};
 
 const describeCause = (cause: unknown): string =>
   typeof cause === "object" && cause !== null && "detail" in cause

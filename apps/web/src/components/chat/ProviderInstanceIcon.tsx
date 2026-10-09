@@ -5,6 +5,8 @@ import { providerInstanceInitials } from "@t3tools/client-runtime/state/provider
 import { ProviderDriverKind } from "@t3tools/contracts";
 
 import { cn } from "~/lib/utils";
+import { providerClients } from "../settings/providerDriverMeta";
+import { ProviderPackageIcon } from "./ProviderPackageIcon";
 import {
   AcpRegistryAgentIcon,
   officialAcpRegistryIconUrlForAgentId,
@@ -15,15 +17,23 @@ import { getModelIconComponent, PROVIDER_ICON_BY_PROVIDER } from "./providerIcon
 const PROVIDER_TEXT_COLOR_BY_PROVIDER: Partial<Record<ProviderDriverKind, string>> = {
   [ProviderDriverKind.make("codex")]: "text-black dark:text-white",
   [ProviderDriverKind.make("claudeAgent")]: "text-[#d97757]",
-  [ProviderDriverKind.make("cursor")]: "text-[#26251E] dark:text-[#EDECEC]",
-  [ProviderDriverKind.make("grok")]: "text-[#0F0F0F] dark:text-[#F5F5F5]",
-  [ProviderDriverKind.make("pi")]: "text-[#0F0F0F] dark:text-[#F5F5F5]",
-  [ProviderDriverKind.make("opencode")]: "text-[#211E1E] dark:text-[#F1ECEC]",
   [ProviderDriverKind.make("antigravity")]: "text-[#5b87bf]",
 };
 
-export function providerTextColorClassName(driverKind: ProviderDriverKind): string | undefined {
-  return PROVIDER_TEXT_COLOR_BY_PROVIDER[driverKind];
+/** Brand text color for a provider label; package glyphs supply theirs as CSS variables. */
+export function providerTextColor(driverKind: ProviderDriverKind): {
+  readonly className?: string;
+  readonly style?: CSSProperties;
+} {
+  const icon = providerClients.get(driverKind)?.icon;
+  if (icon) {
+    return {
+      className: "text-(--icon-light) dark:text-(--icon-dark)",
+      style: { "--icon-light": icon.fill.light, "--icon-dark": icon.fill.dark } as CSSProperties,
+    };
+  }
+  const className = PROVIDER_TEXT_COLOR_BY_PROVIDER[driverKind];
+  return className ? { className } : {};
 }
 
 export function resolveProviderInstanceAcpRegistryIconUrl(input: {
@@ -60,6 +70,8 @@ export const ProviderInstanceIcon = memo(function ProviderInstanceIcon(props: {
 }) {
   const ModelOverrideIcon = getModelIconComponent(props.modelIcon);
   const Icon = ModelOverrideIcon ?? PROVIDER_ICON_BY_PROVIDER[props.driverKind] ?? null;
+  // A per-model override wins over the driver's package glyph.
+  const packageIcon = ModelOverrideIcon ? undefined : providerClients.get(props.driverKind)?.icon;
   const indicatorBackground = props.indicatorBackground ?? "var(--card)";
   const accentStyle = props.accentColor
     ? ({ "--provider-accent": props.accentColor } as CSSProperties)
@@ -88,6 +100,12 @@ export const ProviderInstanceIcon = memo(function ProviderInstanceIcon(props: {
           className={cn("size-5 rounded-none bg-transparent", props.iconClassName)}
           fallbackClassName="size-full"
           icon={acpRegistryIconUrl}
+        />
+      ) : packageIcon ? (
+        <ProviderPackageIcon
+          icon={packageIcon}
+          className={cn("size-5 shrink-0", props.iconClassName)}
+          aria-hidden
         />
       ) : Icon ? (
         <Icon className={cn("size-5 shrink-0", props.iconClassName)} aria-hidden />

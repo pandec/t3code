@@ -14,10 +14,12 @@ import {
   type EnvironmentId,
   type UsageBucket,
   type UsageSummary,
+  type UsageProviderKind,
   type UsageSummaryInput,
 } from "@t3tools/contracts";
 import { resolveUsageAccess } from "@t3tools/client-runtime/state/usage-access";
 import {
+  attributeGatewayBucket,
   mergeUsage,
   type EnvironmentUsage,
   type MergedUsage,
@@ -25,7 +27,7 @@ import {
 } from "@t3tools/shared/usageMerge";
 import * as Option from "effect/Option";
 import { AsyncResult, Atom } from "effect/reactivity";
-import { useCallback, useMemo } from "react";
+import { useCallback, useMemo, useState } from "react";
 
 import { appAtomRegistry } from "../rpc/atomRegistry";
 import {
@@ -42,6 +44,7 @@ export interface EnvironmentUsageStatus {
   readonly label: string;
   readonly isPending: boolean;
   readonly canReadDiagnostics: boolean;
+  readonly isConnected: boolean;
   readonly error: string | null;
   readonly summary: UsageSummary | null;
   /** Rich coverage classification layered over upstream's progressive status fields. */
@@ -74,6 +77,7 @@ const usageByWindowAtom = Atom.family((windowKey: string) =>
 
     const statuses: EnvironmentUsageStatus[] = [];
     for (const [environmentId, presentation] of presentations) {
+      const isConnected = presentation.connection.phase === "connected";
       const sessionResult = get(environmentSession.sessionStateAtom(environmentId));
       const session = Option.getOrNull(AsyncResult.value(sessionResult));
       const hasSessionError = sessionResult._tag === "Failure";
@@ -86,6 +90,7 @@ const usageByWindowAtom = Atom.family((windowKey: string) =>
         statuses.push({
           environmentId,
           label: presentation.entry.target.label,
+          isConnected,
           ...access,
           summary: null,
           // A known denial is terminal; an unchecked session waits like any
@@ -111,6 +116,7 @@ const usageByWindowAtom = Atom.family((windowKey: string) =>
         label: presentation.entry.target.label,
         isPending: result.waiting,
         canReadDiagnostics: true,
+        isConnected,
         error: state.kind === "failed" ? "This environment could not report usage." : null,
         summary,
         state,
@@ -130,6 +136,17 @@ export interface UsageView {
   readonly selectedEnvironments: readonly EnvironmentUsageStatus[];
   /** True until at least one selected environment has answered. */
   readonly isPending: boolean;
+  /**
+   * The usage to draw: this window's once a selected environment answers,
+   * until then the last window answered for the same selection and grouping.
+   * Null while nothing has answered and something still could.
+   */
+  readonly shown: { readonly window: UsageSummaryInput; readonly merged: MergedUsage } | null;
+  /**
+   * The selected environments with hidden providers' buckets and sources
+   * removed, for any further merge (a model's detail) that must match `merged`.
+   */
+  readonly visibleEnvironments: readonly EnvironmentUsageStatus[];
   /**
    * True while selected environments that can still answer are answering.
    * Failed and not-connected environments are reported through their own
@@ -195,10 +212,74 @@ export function mergeModelUsage(
   );
 }
 
+const NO_HIDDEN_PROVIDERS: ReadonlySet<UsageProviderKind> = new Set();
+
+/**
+ * Drops hidden providers' buckets and sources before merging, so totals,
+ * shares, and session counts all describe only the visible providers.
+ *
+ * Fork: filters the summary the merge reads (`state.summary` when present).
+ * Under `"pool"` rows are subscriptions, so a bucket is dropped only when the
+ * pool it is credited to is hidden, and every source stays (with a hidden
+ * app's sessions zeroed): sources decide bucket ownership, so dropping a
+ * hidden app's sources would also drop the buckets it spent from a visible
+ * subscription. Removing a bucket never
+ * changes another bucket's ownership, so this matches filtering after
+ * ownership and attribution.
+ */
+function withoutProviders(
+  environments: readonly EnvironmentUsageStatus[],
+  hiddenProviders: ReadonlySet<UsageProviderKind>,
+  attribution: UsageAttribution,
+): readonly EnvironmentUsageStatus[] {
+  if (hiddenProviders.size === 0) return environments;
+  const visible = (summary: UsageSummary): UsageSummary => ({
+    ...summary,
+    buckets: summary.buckets.filter(
+      (bucket) =>
+        !hiddenProviders.has(
+          attribution === "pool" ? attributeGatewayBucket(bucket).provider : bucket.provider,
+        ),
+    ),
+    sources:
+      attribution === "pool"
+        ? summary.sources.map((source) =>
+            hiddenProviders.has(source.fingerprint.provider)
+              ? { ...source, distinctSessions: 0 }
+              : source,
+          )
+        : summary.sources.filter((source) => !hiddenProviders.has(source.fingerprint.provider)),
+  });
+  return environments.map((environment) => {
+    const state = environmentUsageState(environment);
+    const summary = environment.summary === null ? null : visible(environment.summary);
+    return {
+      ...environment,
+      summary,
+      state:
+        state.kind !== "reported"
+          ? state
+          : {
+              kind: "reported",
+              summary:
+                summary !== null && state.summary === environment.summary
+                  ? summary
+                  : visible(state.summary),
+            },
+    };
+  });
+}
+
+export interface UsageOptions {
+  /** Gateway grouping; must match any further merge of the same view. */
+  readonly attribution?: UsageAttribution;
+  readonly hiddenProviders?: ReadonlySet<UsageProviderKind>;
+}
+
 export function useUsage(
   input: UsageSummaryInput,
   selectedEnvironmentIds: ReadonlySet<EnvironmentId> | null = null,
-  attribution: UsageAttribution = "pool",
+  { attribution = "pool", hiddenProviders = NO_HIDDEN_PROVIDERS }: UsageOptions = {},
 ): UsageView {
   const windowKey = useMemo(
     () =>
@@ -251,18 +332,66 @@ export function useUsage(
     [selectedEnvironments, windowKey],
   );
 
+  const visibleEnvironments = useMemo(
+    () => withoutProviders(selectedEnvironments, hiddenProviders, attribution),
+    [selectedEnvironments, hiddenProviders, attribution],
+  );
   const merged = useMemo(
-    () => mergeAnsweredUsage(selectedEnvironments, undefined, attribution),
-    [selectedEnvironments, attribution],
+    () => mergeAnsweredUsage(visibleEnvironments, undefined, attribution),
+    [visibleEnvironments, attribution],
   );
 
   const progress = usageProgress(selectedEnvironments.map(environmentUsageState));
+  const answered = selectedEnvironments.some(
+    (environment) => environmentUsageState(environment).kind === "reported",
+  );
+
+  // Stored during render, as React recommends for state that follows props, so
+  // the kept usage is on screen in the same frame the new window starts pending.
+  const [lastAnswered, setLastAnswered] = useState<
+    | (NonNullable<UsageView["shown"]> & {
+        readonly selection: typeof selectedEnvironmentIds;
+        readonly hidden: typeof hiddenProviders;
+        readonly attribution: UsageAttribution;
+      })
+    | null
+  >(null);
+  if (
+    answered &&
+    (lastAnswered?.merged !== merged ||
+      lastAnswered.window !== input ||
+      lastAnswered.selection !== selectedEnvironmentIds ||
+      lastAnswered.hidden !== hiddenProviders ||
+      lastAnswered.attribution !== attribution)
+  ) {
+    setLastAnswered({
+      window: input,
+      merged,
+      selection: selectedEnvironmentIds,
+      hidden: hiddenProviders,
+      attribution,
+    });
+  }
+  // Kept usage only stands in for the same environments, provider filter and
+  // grouping.
+  const kept =
+    lastAnswered?.selection === selectedEnvironmentIds &&
+    lastAnswered.hidden === hiddenProviders &&
+    lastAnswered.attribution === attribution
+      ? lastAnswered
+      : null;
+  // With no answers, even failed ones keep the last answered usage on screen.
+  const shown = answered
+    ? { window: input, merged }
+    : (kept ?? (progress.isPending ? null : { window: input, merged }));
 
   return {
     merged,
     environments,
     selectedEnvironments,
+    visibleEnvironments,
     isPending: progress.isPending,
+    shown,
     isPartial: progress.isPartial,
     refresh,
   };

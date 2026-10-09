@@ -242,6 +242,9 @@ const ISOLATED_TEST_FILES = [
   "src/state/sourceControlActions.test.ts",
   "src/state/terminalSessionAvailability.test.ts",
   "src/state/use-orchestration-command.test.ts",
+  "src/browser/previewRuntime.test.ts",
+  "src/components/chat/ThreadFindProvider.test.tsx",
+  "src/components/chat/useThreadFind.test.tsx",
 ];
 
 const unitTestProject = {

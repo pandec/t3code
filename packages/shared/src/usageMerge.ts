@@ -18,6 +18,9 @@ import {
 
 import { attributeGatewayBucket } from "./usageGatewayAttribution.ts";
 
+/** Fork: lets clients filter by the pool a bucket is credited to under `"pool"`. */
+export { attributeGatewayBucket };
+
 export interface EnvironmentUsage {
   readonly environmentId: EnvironmentId;
   readonly label: string;

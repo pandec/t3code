@@ -341,12 +341,13 @@ describe("EnvironmentProviderSettings routing", () => {
   it("keeps legacy provider configuration visible when disabled", () => {
     settingsState.value = {
       ...DEFAULT_UNIFIED_SETTINGS,
-      providers: {
-        ...DEFAULT_UNIFIED_SETTINGS.providers,
-        grok: {
-          ...DEFAULT_UNIFIED_SETTINGS.providers.grok,
+      providerInstances: {
+        [ProviderInstanceId.make("grok")]: {
+          driver: ProviderDriverKind.make("grok"),
           enabled: false,
-          binaryPath: "/custom/grok",
+          config: {
+            binaryPath: "/custom/grok",
+          },
         },
       },
     };
@@ -688,22 +689,17 @@ describe("EnvironmentProviderSettings routing", () => {
     (resetButton?.props.onClick as (() => void) | undefined)?.();
     await flushPromises();
 
-    const [, resetPatch] = settingsState.mutateProviderInstance.mock.lastCall ?? [];
-    expect(resetPatch).toEqual({
-      providers: { codex: DEFAULT_UNIFIED_SETTINGS.providers.codex },
-    });
+    const [resetMutation] = settingsState.mutateProviderInstance.mock.lastCall ?? [];
+    expect(resetMutation).toEqual({ operation: "remove", instanceId: codexId });
 
     // The server has not echoed the reset yet, so the card still renders the
     // old envelope; the edit must not resurrect it.
     commitDisplayName(editorCard!, codexId, "Fresh");
     await flushPromises();
 
-    const { enabled, ...config } = DEFAULT_UNIFIED_SETTINGS.providers.codex;
     expect(lastUpsertedInstance()).toEqual({
       driver: ProviderDriverKind.make("codex"),
-      enabled,
       displayName: "Fresh",
-      config,
     });
   });
 
@@ -838,9 +834,8 @@ describe("EnvironmentProviderSettings routing", () => {
 
     const [resetMutation, resetPatch] = settingsState.mutateProviderInstance.mock.lastCall ?? [];
     expect(resetMutation).toEqual({ operation: "remove", instanceId: codexId });
-    expect(Object.keys(resetPatch ?? {}).sort()).toEqual(["providers"]);
-    expect(resetPatch).not.toHaveProperty("favorites");
-    expect(resetPatch).not.toHaveProperty("providerModelPreferences");
+    // Removing the instance is the whole reset; shared preferences stay untouched.
+    expect(resetPatch ?? {}).toEqual({});
   });
 
   it("updates one provider instance without sending a stale whole map", async () => {

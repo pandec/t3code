@@ -92,6 +92,7 @@ import {
   SunIcon,
   TextSearchIcon,
 } from "lucide-react";
+import { requestThreadFindOpen } from "./chat/threadFindActionBus";
 import {
   useCallback,
   useDeferredValue,
@@ -1763,6 +1764,12 @@ function OpenCommandPaletteDialog(props: {
   const splitMounted = useThreadSplitStore((state) => state.splitMounted);
   const currentThreadRef =
     splitMounted && threadActionPane === "secondary" ? splitSecondaryRef : routeThreadRef;
+  // Fork: find opens in the pane the palette was opened from, not the route's.
+  const findThreadPane = splitMounted && threadActionPane === "secondary" ? "secondary" : "primary";
+  const supportsThreadFind =
+    currentThreadRef !== null &&
+    environments.find((environment) => environment.environmentId === currentThreadRef.environmentId)
+      ?.serverConfig?.threadFind === true;
   const copyThreadIdTarget =
     splitMounted && paletteOwnerPane() === "secondary"
       ? (splitSecondaryRef?.threadId ?? null)
@@ -2309,6 +2316,20 @@ function OpenCommandPaletteDialog(props: {
       icon: <MessageSquareDashedIcon className={ITEM_ICON_CLASS} />,
       shortcutCommand: "chat.newWithoutProject",
       run: () => startScratchThread(scratchTargetEnvironmentId),
+    });
+  }
+
+  if (currentThreadRef !== null && supportsThreadFind) {
+    actionItems.push({
+      kind: "action",
+      value: "find-current-thread",
+      title: "Find in current thread",
+      searchTerms: ["find", "search", "messages", "plans"],
+      icon: <TextSearchIcon className={ITEM_ICON_CLASS} />,
+      shortcutCommand: "chat.find",
+      run: async () => {
+        requestThreadFindOpen(findThreadPane);
+      },
     });
   }
 
@@ -3985,6 +4006,15 @@ function OpenCommandPaletteDialog(props: {
       if (activeThreadReferenceCopyTarget === null) return;
       setOpen(false);
       void copyActiveThreadReference();
+      return;
+    }
+    // ChatView ignores shortcuts while the palette is open, so handle find here
+    // instead of letting the browser's own Find open.
+    if (command === "chat.find" && currentThreadRef !== null && !event.nativeEvent.isComposing) {
+      event.preventDefault();
+      event.stopPropagation();
+      setOpen(false);
+      requestThreadFindOpen(findThreadPane);
       return;
     }
 

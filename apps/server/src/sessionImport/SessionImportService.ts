@@ -51,13 +51,13 @@ import * as SqlClient from "effect/sql/SqlClient";
 
 import { sanitizeGitRepositoryEnvironment } from "../git/Utils.ts";
 import * as EventSink from "../orchestration-v2/EventSink.ts";
-import * as IdAllocator from "../orchestration-v2/IdAllocator.ts";
+import * as IdAllocator from "@t3tools/provider-core/server/IdAllocator";
 import * as Orchestrator from "../orchestration-v2/Orchestrator.ts";
 import * as ProcessRunner from "../processRunner.ts";
 import { messageEvents } from "../project/AgentSessionImporter.ts";
 import * as ProjectService from "../project/ProjectService.ts";
 import { extractSubstantiveUserText } from "../provider/Drivers/substantiveUserText.ts";
-import type { ProviderInstance } from "../provider/ProviderDriver.ts";
+import type { ProviderInstance } from "@t3tools/provider-core/server/driver";
 import { ProviderInstanceRegistry } from "../provider/ProviderInstanceRegistry.ts";
 import type { ProviderImportedMessage } from "./ProviderSessionImport.ts";
 import * as StrictResume from "./StrictResume.ts";

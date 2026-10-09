@@ -13,7 +13,7 @@ import { ChildProcess, ChildProcessSpawner } from "effect/process";
 import * as CodexClient from "effect-codex-app-server/client";
 import { resolveSpawnCommand } from "@t3tools/shared/shell";
 
-import { expandHomePath } from "../../pathExpansion.ts";
+import { expandHomePath } from "@t3tools/provider-core/server/pathExpansion";
 import { codexAppServerArgs } from "../codexLaunchArgs.ts";
 import { buildCodexInitializeParams } from "../CodexProvider.ts";
 

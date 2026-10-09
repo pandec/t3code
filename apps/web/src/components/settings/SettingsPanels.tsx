@@ -3046,7 +3046,7 @@ export function GeneralSettingsPanel() {
 
         <SettingsRow
           {...searchableSetting("stale-session-send")}
-          description="Choose what the send button and Enter do when sending to an old Claude thread would re-read a long history. The send menu offers the other option."
+          description="Choose the default of the Compact chip shown when sending to an old Claude thread would re-read a long history. Clicking the chip changes it for that thread until the next send; the secondary send shortcut sends once with the other choice."
           resetAction={
             settings.staleSessionSend !== DEFAULT_UNIFIED_SETTINGS.staleSessionSend ? (
               <SettingResetButton
@@ -3070,12 +3070,12 @@ export function GeneralSettingsPanel() {
             >
               <SelectTrigger size="sm" className="w-auto min-w-0" aria-label="Old thread send">
                 <SelectValue>
-                  {settings.staleSessionSend === "compact" ? "Compact and send" : "Send"}
+                  {settings.staleSessionSend === "compact" ? "Compact" : "Full history"}
                 </SelectValue>
               </SelectTrigger>
               <SelectPopup align="end" alignItemWithTrigger={false}>
-                <SelectItem value="compact">Compact and send</SelectItem>
-                <SelectItem value="full-history">Send</SelectItem>
+                <SelectItem value="compact">Compact</SelectItem>
+                <SelectItem value="full-history">Full history</SelectItem>
               </SelectPopup>
             </Select>
           }

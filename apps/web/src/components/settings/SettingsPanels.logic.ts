@@ -1,7 +1,6 @@
 import type {
   BackgroundActivityProfile,
   BackgroundActivitySettings,
-  ProviderDriverKind,
   ProviderInstanceConfig,
   PreviewViewportSetting,
   ProviderInstanceId,
@@ -9,7 +8,7 @@ import type {
   SidebarProjectGroupingMode,
   UnifiedSettings,
 } from "@t3tools/contracts";
-import { DEFAULT_UNIFIED_SETTINGS, type ServerSettingsPatch } from "@t3tools/contracts/settings";
+import { DEFAULT_UNIFIED_SETTINGS } from "@t3tools/contracts/settings";
 import {
   getBackgroundActivityBaseProfile,
   normalizeBackgroundActivitySettings,
@@ -290,31 +289,14 @@ export function formatDiagnosticsDescription(input: {
 }
 
 export function buildProviderInstanceUpdatePatch(input: {
-  readonly settings: Pick<ServerSettings, "providers" | "providerInstances">;
+  readonly settings: Pick<ServerSettings, "providerInstances">;
   readonly instanceId: ProviderInstanceId;
   readonly instance: ProviderInstanceConfig;
-  readonly driver: ProviderDriverKind;
-  readonly isDefault: boolean;
   readonly textGenerationModelSelection?:
     | ServerSettings["textGenerationModelSelection"]
     | undefined;
-}): ServerSettingsPatch {
-  type LegacyProviderSettings = ServerSettings["providers"][keyof ServerSettings["providers"]];
-  const legacyProviderDefaults = DEFAULT_UNIFIED_SETTINGS.providers as Record<
-    string,
-    LegacyProviderSettings | undefined
-  >;
-  const legacyProviderDefault = input.isDefault ? legacyProviderDefaults[input.driver] : undefined;
+}): Partial<UnifiedSettings> {
   return {
-    ...(legacyProviderDefault !== undefined
-      ? {
-          // Only this driver's entry: a stale copy of the other drivers
-          // would undo another provider card's in-flight reset.
-          providers: {
-            [input.driver]: legacyProviderDefault,
-          } as NonNullable<ServerSettingsPatch["providers"]>,
-        }
-      : {}),
     providerInstances: {
       ...input.settings.providerInstances,
       [input.instanceId]: input.instance,

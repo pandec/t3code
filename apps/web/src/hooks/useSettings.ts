@@ -41,6 +41,10 @@ import {
 } from "@t3tools/client-runtime/state/provider-usage";
 import { safeErrorLogAttributes } from "@t3tools/client-runtime/errors";
 import {
+  isAtomCommandInterrupted,
+  squashAtomCommandFailure,
+} from "@t3tools/client-runtime/state/runtime";
+import {
   filterSharedServerPatch,
   splitSharedServerPatch,
   supportsSharedSettingsSync,
@@ -528,11 +532,29 @@ function useSharedSettingsSyncTargetIds(includePending = false): ReadonlyArray<E
 function useUpdateSettingsTarget(environmentId: EnvironmentId | null) {
   // Mount this session even on pages without a visible permission-gated control.
   useEnvironmentScope(environmentId, AuthSettingsWriteScope);
-  const persistServerSettings = useAtomCommand(
-    serverEnvironment.updateSettings,
-    "server settings update",
-  );
+  const persist = useAtomCommand(serverEnvironment.updateSettings, {
+    label: "server settings update",
+    reportFailure: false,
+  });
   const { environments } = useEnvironments();
+  const persistServerSettings = useCallback(
+    async (request: Parameters<typeof persist>[0]) => {
+      const result = await persist(request);
+      if (result._tag === "Failure" && !isAtomCommandInterrupted(result)) {
+        const label =
+          environments.find((environment) => environment.environmentId === request.environmentId)
+            ?.label ?? request.environmentId;
+        const error = squashAtomCommandFailure(result);
+        toastManager.add({
+          type: "error",
+          title: "Setting not saved",
+          description: `Could not save on ${label}: ${error instanceof Error ? error.message : "The save failed. Try reconnecting and saving again."}`,
+        });
+      }
+      return result;
+    },
+    [environments, persist],
+  );
   const sharedSettingsSyncTargetIds = useSharedSettingsSyncTargetIds(true);
   const updateSettings = useCallback(
     (patch: UnifiedSettingsPatch) => {
@@ -547,7 +569,7 @@ function useUpdateSettingsTarget(environmentId: EnvironmentId | null) {
         toastManager.add({
           type: "warning",
           title: "Setting not saved",
-          description: "This connection does not have permission to change these settings.",
+          description: `This connection lacks permission to change settings on ${environments.find((target) => target.environmentId === environmentId)?.label ?? "the selected environment"}.`,
         });
       }
       if (Object.keys(serverPatch).length > 0 && canWriteServerPatch) {
@@ -575,8 +597,8 @@ function useUpdateSettingsTarget(environmentId: EnvironmentId | null) {
           if (environmentId) {
             targets.add(environmentId);
           }
-          let wroteToTarget = false;
-          let permissionDenied = false;
+          const writes: Array<Parameters<typeof persist>[0]> = [];
+          const deniedLabels: string[] = [];
           for (const targetId of targets) {
             const target = environments.find((candidate) => candidate.environmentId === targetId);
             const targetPatch = filterSharedServerPatch(
@@ -594,25 +616,57 @@ function useUpdateSettingsTarget(environmentId: EnvironmentId | null) {
                 readEnvironmentScope(targetId, scope),
               )
             ) {
-              permissionDenied = true;
+              deniedLabels.push(target?.label ?? targetId);
               continue;
             }
-            wroteToTarget = true;
-            void persistServerSettings({
+            writes.push({
               environmentId: targetId,
               input: { patch: targetPatch },
             });
           }
-          // Only warn when every reachable target refused the keys. No targets
-          // at all is not a save failure here: the local-patch branch above
-          // already covers the missing-server case.
-          if (!wroteToTarget && targets.size > 0) {
-            toastManager.add({
-              type: "warning",
-              title: "Setting not saved",
-              description: permissionDenied
-                ? "This connection does not have permission to change these settings."
-                : "Update older servers to save this setting.",
+          // Fork: only warn when every reachable target refused the keys. No
+          // targets at all is not a save failure here: the local-patch branch
+          // above already covers the missing-server case.
+          if (writes.length === 0) {
+            if (targets.size > 0) {
+              toastManager.add({
+                type: "warning",
+                title: "Setting not saved",
+                description:
+                  deniedLabels.length > 0
+                    ? `This connection lacks permission to change settings on ${deniedLabels.join(", ")}.`
+                    : "Update older servers to save this setting.",
+              });
+            }
+          } else {
+            void Promise.all(
+              writes.map(async (request) => ({
+                label:
+                  environments.find((target) => target.environmentId === request.environmentId)
+                    ?.label ?? request.environmentId,
+                result: await persist(request),
+              })),
+            ).then((outcomes) => {
+              const failures = outcomes.flatMap(({ label, result }) => {
+                if (result._tag !== "Failure" || isAtomCommandInterrupted(result)) return [];
+                const error = squashAtomCommandFailure(result);
+                return [
+                  `Could not save on ${label}: ${error instanceof Error ? error.message : "The save failed. Try reconnecting and saving again."}`,
+                ];
+              });
+              if (failures.length === 0) return;
+              const saved = outcomes
+                .filter(({ result }) => result._tag === "Success")
+                .map(({ label }) => label);
+              toastManager.add({
+                type: "error",
+                title:
+                  saved.length > 0 ? "Setting saved on some environments" : "Setting not saved",
+                description: [
+                  ...failures,
+                  ...(saved.length > 0 ? [`Saved on ${saved.join(", ")}.`] : []),
+                ].join("\n"),
+              });
             });
           }
         }
@@ -621,7 +675,7 @@ function useUpdateSettingsTarget(environmentId: EnvironmentId | null) {
         void persistClientSettingsPatch(clientPatch);
       }
     },
-    [environmentId, environments, persistServerSettings, sharedSettingsSyncTargetIds],
+    [environmentId, environments, persist, persistServerSettings, sharedSettingsSyncTargetIds],
   );
 
   return updateSettings;
