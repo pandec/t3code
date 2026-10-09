@@ -1460,6 +1460,21 @@ export function resolveThreadStatusPill(input: {
     };
   }
 
+  // A plan prompt outranks lingering background work: the user has to act on it.
+  const hasPlanReadyPrompt =
+    !thread.hasPendingUserInput &&
+    thread.interactionMode === "plan" &&
+    isLatestRunSettled(thread.latestRun, thread.runtime) &&
+    thread.hasActionableProposedPlan;
+  if (hasPlanReadyPrompt) {
+    return {
+      label: "Plan Ready",
+      colorClass: "text-violet-600 dark:text-violet-300/90",
+      dotClass: "bg-violet-500 dark:bg-violet-300/90",
+      pulse: false,
+    };
+  }
+
   // The turn ended while background work runs on. Live agents and workflows
   // read as plain Working; Monitoring is reserved for watch loops (a monitor
   // tailing checks, a command such as a test run or dev server) with no other
@@ -1478,20 +1493,6 @@ export function resolveThreadStatusPill(input: {
       label: "Monitoring",
       colorClass: "text-sky-600 dark:text-sky-300/80",
       dotClass: "bg-sky-500 dark:bg-sky-300/80",
-      pulse: false,
-    };
-  }
-
-  const hasPlanReadyPrompt =
-    !thread.hasPendingUserInput &&
-    thread.interactionMode === "plan" &&
-    isLatestRunSettled(thread.latestRun, thread.runtime) &&
-    thread.hasActionableProposedPlan;
-  if (hasPlanReadyPrompt) {
-    return {
-      label: "Plan Ready",
-      colorClass: "text-violet-600 dark:text-violet-300/90",
-      dotClass: "bg-violet-500 dark:bg-violet-300/90",
       pulse: false,
     };
   }

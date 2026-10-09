@@ -1570,6 +1570,24 @@ describe("resolveThreadStatusPill", () => {
     ).toMatchObject({ label: "Plan Ready", pulse: false });
   });
 
+  it("shows plan ready over a command left running", () => {
+    expect(
+      resolveThreadStatusPill({
+        thread: {
+          ...baseThread,
+          hasActionableProposedPlan: true,
+          latestRun: makeLatestRun(),
+          pendingBackgroundTasks: [{ taskId: "bg-1", kind: "command" }],
+          runtime: {
+            ...baseThread.runtime,
+            status: "completed",
+            activeRunId: null,
+          },
+        },
+      }),
+    ).toMatchObject({ label: "Plan Ready", pulse: false });
+  });
+
   it("does not manufacture completed state without a client visit marker", () => {
     expect(
       resolveThreadStatusPill({
