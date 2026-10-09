@@ -738,6 +738,9 @@ export const ClientSettingsSchema = Schema.Struct({
   /** Agent-reply tables wider than the chat column widen past it, up to the
    * thread view's width. */
   chatWideTables: Schema.Boolean.pipe(Schema.withDecodingDefault(Effect.succeed(true))),
+  /** thread.snoozeUntilDone snoozes a working thread until it's done and opens
+   * the snooze picker otherwise; false always opens the picker. */
+  snoozeShortcutUntilDone: Schema.Boolean.pipe(Schema.withDecodingDefault(Effect.succeed(true))),
   /**
    * How long a steer rests in the outbox before delivery. 0 sends immediately;
    * mobile is unaffected (it keeps the model's built-in default).
@@ -2142,6 +2145,7 @@ export const ClientSettingsPatch = Schema.Struct({
   sidebarThreadGroupsButton: Schema.optionalKey(Schema.Boolean),
   showPanelToggleButtons: Schema.optionalKey(Schema.Boolean),
   chatWideTables: Schema.optionalKey(Schema.Boolean),
+  snoozeShortcutUntilDone: Schema.optionalKey(Schema.Boolean),
   steerGraceWindowMs: Schema.optionalKey(SteerGraceWindowMs),
   timestampFormat: Schema.optionalKey(TimestampFormat),
   snapShotEnabled: Schema.optionalKey(Schema.Boolean),

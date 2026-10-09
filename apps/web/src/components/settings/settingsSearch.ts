@@ -982,6 +982,17 @@ export const SETTINGS_SEARCH_ITEMS = [
     searchTerms: ["markdown table width column scroll horizontal breakout"],
   },
   {
+    id: "extras-threads",
+    title: "Threads",
+    to: "/settings/extras",
+  },
+  {
+    id: "snooze-until-done-shortcut",
+    title: "Snooze until done shortcut",
+    to: "/settings/extras",
+    searchTerms: ["keybinding snooze picker working thread wake when finished"],
+  },
+  {
     id: "extras-composer",
     title: "Composer",
     to: "/settings/extras",
