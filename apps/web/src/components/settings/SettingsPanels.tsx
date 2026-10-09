@@ -118,7 +118,8 @@ import { isMacPlatform } from "../../lib/utils";
 import { EMPTY_SERVER_PROVIDERS, serverEnvironment } from "../../state/server";
 import { useEnvironments, usePrimaryEnvironment } from "../../state/environments";
 import { useAllEnvironmentShellsBootstrapped, useProjects } from "../../state/entities";
-import { useClientSettings } from "../../hooks/useSettings";
+import { useAccentTintSettings, useClientSettings } from "../../hooks/useSettings";
+import { projectAccentTintStyle } from "../../projectAccentTint";
 import { useArchivedThreadSnapshots } from "../../lib/archivedThreadsState";
 import { formatRelativeTimeLabel } from "../../timestampFormat";
 import { Button } from "../ui/button";
@@ -3682,6 +3683,8 @@ export function ArchivedThreadsPanel() {
   const primaryEnvironment = usePrimaryEnvironment();
   const projects = useProjects();
   const groupingSettings = useClientSettings(selectProjectGroupingSettings);
+  const projectAccentColors = useProjectAccentColors();
+  const accentTint = useAccentTintSettings();
   const { unarchiveThread, confirmAndDeleteThread } = useThreadActions();
   const [searchQuery, setSearchQuery] = useState("");
   const [collapsedProjectKeys, setCollapsedProjectKeys] = useState<ReadonlySet<string>>(
@@ -3981,6 +3984,12 @@ export function ArchivedThreadsPanel() {
       ) : (
         filteredArchivedGroups.map((group, index) => {
           const isCollapsed = !hasActiveFilter && collapsedProjectKeys.has(group.key);
+          const accentStyle = accentTint.enabled
+            ? projectAccentTintStyle(
+                projectAccentColors.resolve(group.projects),
+                accentTint.intensityPercent,
+              )
+            : undefined;
           return (
             <SettingsSection
               key={group.key}
@@ -4009,6 +4018,7 @@ export function ArchivedThreadsPanel() {
                 return (
                   <SettingsRow
                     key={`${thread.environmentId}:${thread.id}`}
+                    style={accentStyle}
                     onContextMenu={(event) => {
                       event.preventDefault();
                       void (async () => {
