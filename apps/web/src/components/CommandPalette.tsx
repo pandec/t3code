@@ -123,7 +123,7 @@ import {
 } from "@t3tools/client-runtime/state/thread-settled";
 import { requestCustomSnooze } from "./CustomSnoozeDialog";
 import { resolveSnoozePresets } from "./Sidebar.snooze";
-import { useProjectAccentColors } from "../hooks/useProjectAccentColors";
+import { useProjectAccentColorByKey } from "../hooks/useProjectAccentColors";
 import { useAccentTintSettings, useClientSettings } from "../hooks/useSettings";
 import { useOpenPanelPullRequestUrl } from "../hooks/useOpenPanelPullRequestUrl";
 import { useTheme } from "../hooks/useTheme";
@@ -911,7 +911,6 @@ function OpenCommandPaletteDialog(props: {
   const timestampFormat = useClientSettings((s) => s.timestampFormat);
   const snoozeShortcutUntilDone = useClientSettings((s) => s.snoozeShortcutUntilDone);
   const projects = useProjects();
-  const projectAccentColors = useProjectAccentColors();
   const accentTint = useAccentTintSettings();
   // Fork: thread-scoped actions target the thread in the pane the palette was
   // opened from (split view), not always the routed primary thread.
@@ -1178,20 +1177,7 @@ function OpenCommandPaletteDialog(props: {
       ),
     [projectPickerEntries],
   );
-  const projectAccentColorByTargetKey = useMemo(
-    () =>
-      new Map(
-        accentTint.enabled
-          ? projectPickerEntries.flatMap(({ group, targetProject }) => {
-              const color = projectAccentColors.resolve(group.memberProjects);
-              return color === null
-                ? []
-                : [[`${targetProject.environmentId}:${targetProject.id}`, color] as const];
-            })
-          : [],
-      ),
-    [accentTint.enabled, projectAccentColors, projectPickerEntries],
-  );
+  const projectAccentColorByKey = useProjectAccentColorByKey(projectGroups);
 
   const addProjectEnvironmentOptions = useMemo(() => {
     const options = environments
@@ -1534,14 +1520,14 @@ function OpenCommandPaletteDialog(props: {
           );
         },
         projectAccentColor: (project) =>
-          projectAccentColorByTargetKey.get(`${project.environmentId}:${project.id}`) ?? null,
+          projectAccentColorByKey.get(`${project.environmentId}:${project.id}`) ?? null,
         icon: projectFaviconIcon,
         runProject: openProjectFromSearch,
       }),
     [
       openProjectFromSearch,
       pickerProjects,
-      projectAccentColorByTargetKey,
+      projectAccentColorByKey,
       projectEnvironmentLocationById,
       projectGroupByTargetKey,
     ],
@@ -1610,7 +1596,7 @@ function OpenCommandPaletteDialog(props: {
             );
           },
           projectAccentColor: (project) =>
-            projectAccentColorByTargetKey.get(`${project.environmentId}:${project.id}`) ?? null,
+            projectAccentColorByKey.get(`${project.environmentId}:${project.id}`) ?? null,
           icon: projectFaviconIcon,
           runProject: async (project) => {
             await handleNewThread(
@@ -1657,7 +1643,7 @@ function OpenCommandPaletteDialog(props: {
       resolveNewThreadTargetRef,
       handleNewThread,
       pickerProjects,
-      projectAccentColorByTargetKey,
+      projectAccentColorByKey,
       projectEnvironmentLocationById,
       projectGroupByTargetKey,
       scratchTargetEnvironmentId,
@@ -1689,6 +1675,8 @@ function OpenCommandPaletteDialog(props: {
         icon: <MessageSquareIcon className={ITEM_ICON_CLASS} />,
         renderLeadingContent: (thread) => <ThreadRowLeadingStatus thread={thread} />,
         renderTrailingContent: (thread) => <ThreadRowTrailingStatus thread={thread} />,
+        projectAccentColor: (thread) =>
+          projectAccentColorByKey.get(`${thread.environmentId}:${thread.projectId}`) ?? null,
         renderDescription: (thread, { projectTitle }) => {
           const modelInstanceId =
             thread.runtime?.providerInstanceId ?? thread.modelSelection.instanceId;
@@ -1757,6 +1745,7 @@ function OpenCommandPaletteDialog(props: {
       routeThreadRef,
       clientSettings.sidebarThreadSortOrder,
       navigate,
+      projectAccentColorByKey,
       projectCwdByKey,
       projectByKey,
       projectEnvironmentLocationById,
