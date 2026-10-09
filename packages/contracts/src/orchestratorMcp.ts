@@ -245,6 +245,13 @@ export const OrchestratorMcpCreateThreadsInput = Schema.Struct({
     Schema.isMinLength(1),
     Schema.isMaxLength(20),
   ),
+  /** Fork: sidebar group every created thread starts in; omitted means Active. */
+  groupId: Schema.optional(
+    TrimmedNonEmptyString.annotate({
+      description:
+        "Sidebar group all created threads start in, an id from t3_thread_groups. Omit for Active.",
+    }),
+  ),
   clientRequestId: Schema.optional(OrchestratorMcpClientRequestId),
 });
 export type OrchestratorMcpCreateThreadsInput = typeof OrchestratorMcpCreateThreadsInput.Type;

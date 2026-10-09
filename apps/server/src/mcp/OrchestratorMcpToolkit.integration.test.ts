@@ -17,6 +17,7 @@ import {
   type OrchestrationV2ThreadProjection,
   OrchestratorMcpCreateThreadsResult,
   OrchestratorMcpDelegateTaskResult,
+  OrchestratorMcpFailure,
   OrchestratorMcpTaskCancelResult,
   OrchestratorMcpThreadInterruptResult,
   OrchestratorMcpThreadListResult,
@@ -78,6 +79,7 @@ import * as SecretRequests from "../secrets/SecretRequests.ts";
 import * as ServerSecretStore from "../auth/ServerSecretStore.ts";
 import * as McpHttpServer from "./McpHttpServer.ts";
 import * as McpInvocationContext from "./McpInvocationContext.ts";
+import * as ThreadGroupsMcpService from "./ThreadGroupsMcpService.ts";
 import { delegatedTaskRun, hasPendingChildRuns } from "./OrchestratorMcpService.ts";
 
 // Effect returns a declared tool failure as `isError` with its encoded payload
@@ -682,6 +684,19 @@ describe("orchestrator MCP toolkit", () => {
             Layer.provide(layerRegistry),
             Layer.provide(layerProviderRegistry),
             Layer.provide(layerScheduledTaskStub),
+            Layer.provide(
+              Layer.mock(ThreadGroupsMcpService.ThreadGroupsMcpService)({
+                requireGroup: (groupId) =>
+                  groupId === "group:batch"
+                    ? Effect.succeed({ id: groupId, name: "Batch" })
+                    : Effect.fail(
+                        new OrchestratorMcpFailure({
+                          code: "invalid_request",
+                          message: "The group was not found or was deleted.",
+                        }),
+                      ),
+              }),
+            ),
             Layer.provide(
               Layer.mock(ProjectService.ProjectService)({
                 getById: (id) =>
@@ -2472,6 +2487,33 @@ describe("orchestrator MCP toolkit", () => {
             expect(
               (yield* orchestrator.getThreadProjection(emptyThread.threadId)).runs,
             ).toHaveLength(1);
+
+            // Fork: a batch starts in the requested group; an unknown group creates nothing.
+            const groupedCall = yield* invoke("create_threads", {
+              threads: [{ title: "Grouped one" }, { title: "Grouped two" }],
+              groupId: "group:batch",
+              clientRequestId: "grouped-batch-1",
+            });
+            const grouped = yield* decodeCreateThreadsResult(groupedCall.structuredContent).pipe(
+              Effect.orDie,
+            );
+            const threadManagement = yield* ThreadManagementService.ThreadManagementService;
+            for (const thread of grouped.threads) {
+              expect((yield* threadManagement.getThreadShell(thread.threadId))?.customGroupId).toBe(
+                "group:batch",
+              );
+            }
+            const unknownGroupCall = yield* invoke("create_threads", {
+              threads: [{ title: "Lost" }],
+              groupId: "group:deleted",
+              clientRequestId: "grouped-batch-unknown",
+            });
+            expect(declaredFailure(unknownGroupCall)).toMatchObject({ code: "invalid_request" });
+            expect(
+              (yield* orchestrator.getThreadProjection(parentThreadId)).visibleTurnItems.some(
+                (row) => row.item.type === "thread_created" && row.item.title === "Lost",
+              ),
+            ).toBe(false);
 
             const activeThreadCall = yield* invoke("create_threads", {
               threads: [{ prompt: cancellationPrompt, title: "Managed active thread" }],

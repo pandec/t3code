@@ -4,6 +4,7 @@ import * as Effect from "effect/Effect";
 import * as McpInvocationContext from "../../McpInvocationContext.ts";
 import * as McpToolAccess from "../../McpToolAccess.ts";
 import * as OrchestratorMcpService from "../../OrchestratorMcpService.ts";
+import * as ThreadGroupsMcpService from "../../ThreadGroupsMcpService.ts";
 import * as ThreadMetadataMcpService from "../../ThreadMetadataMcpService.ts";
 
 const handlers = {
@@ -77,6 +78,11 @@ const handlers = {
     Effect.gen(function* () {
       const scope = yield* McpInvocationContext.McpInvocationContext;
       const service = yield* OrchestratorMcpService.OrchestratorMcpService;
+      // Fork: rejected before any thread exists, so a bad id creates nothing.
+      if (input.groupId !== undefined) {
+        const groups = yield* ThreadGroupsMcpService.ThreadGroupsMcpService;
+        yield* groups.requireGroup(input.groupId);
+      }
       return yield* service.createThreads(scope, input);
     }),
   ),

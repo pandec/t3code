@@ -37,7 +37,8 @@ export interface ThreadGroupListEntry {
 /**
  * Fork: the custom sidebar thread groups agents may list, create, and move
  * threads into. The catalog lives in server settings and membership in the
- * `thread.custom-group.set` command, written exactly as the web client does.
+ * `thread.custom-group.set` command, written exactly as the web client does;
+ * thread launch tools validate a group with `requireGroup` and set it at creation.
  * Callers check thread access first; rename, delete, and reorder stay in the UI.
  */
 export class ThreadGroupsMcpService extends Context.Service<
@@ -65,6 +66,10 @@ export class ThreadGroupsMcpService extends Context.Service<
       },
       OrchestratorMcpFailure
     >;
+    /** Checks that a group exists and is not deleted, for tools that create threads in it. */
+    readonly requireGroup: (
+      groupId: string,
+    ) => Effect.Effect<ThreadGroupRef, OrchestratorMcpFailure>;
   }
 >()("t3/mcp/ThreadGroupsMcpService") {}
 
@@ -91,6 +96,19 @@ const make = Effect.gen(function* () {
     Effect.mapError(unavailable),
   );
   const randomId = crypto.randomUUIDv4.pipe(Effect.orDie);
+  const findGroup = Effect.fn("ThreadGroupsMcpService.findGroup")(function* (
+    groups: ReadonlyArray<ThreadGroup>,
+    groupId: string,
+  ) {
+    const group = groups.find((candidate) => candidate.id === groupId);
+    if (group === undefined) {
+      return yield* new OrchestratorMcpFailure({
+        code: "invalid_request",
+        message: "The group was not found or was deleted. List groups for valid ids.",
+      });
+    }
+    return group;
+  });
 
   const list = Effect.fn("ThreadGroupsMcpService.list")(function* () {
     const groups = visibleThreadGroups(yield* catalog);
@@ -152,14 +170,7 @@ const make = Effect.gen(function* () {
     readonly groupId: string | null;
   }) {
     const groups = visibleThreadGroups(yield* catalog);
-    const target =
-      input.groupId === null ? null : groups.find((group) => group.id === input.groupId);
-    if (target === undefined) {
-      return yield* new OrchestratorMcpFailure({
-        code: "invalid_request",
-        message: "The group was not found or was deleted. List groups for valid ids.",
-      });
-    }
+    const target = input.groupId === null ? null : yield* findGroup(groups, input.groupId);
     const shell = yield* threads.getThreadShell(input.threadId).pipe(Effect.mapError(unavailable));
     if (shell === null || shell.deletedAt !== null) {
       return yield* new OrchestratorMcpFailure({
@@ -183,7 +194,13 @@ const make = Effect.gen(function* () {
     return { threadId: input.threadId, group: groupRef(target), previousGroup, changed };
   });
 
-  return ThreadGroupsMcpService.of({ list, create, moveThread });
+  const requireGroup = Effect.fn("ThreadGroupsMcpService.requireGroup")(function* (
+    groupId: string,
+  ) {
+    return groupRef(yield* findGroup(visibleThreadGroups(yield* catalog), groupId))!;
+  });
+
+  return ThreadGroupsMcpService.of({ list, create, moveThread, requireGroup });
 });
 
 export const layer = Layer.effect(ThreadGroupsMcpService, make);
