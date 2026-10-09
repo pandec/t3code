@@ -11,6 +11,8 @@ import { getProviderClient } from "../lib/providerClients";
 type ProviderIconProps = {
   readonly provider: string | null | undefined;
   readonly iconUrl?: string | null | undefined;
+  /** Fork: a custom model's icon override; unknown ids fall back to the provider glyph. */
+  readonly modelIcon?: string | null | undefined;
   readonly size?: number;
 };
 
@@ -63,11 +65,33 @@ function AcpRegistryProviderIcon(props: {
   );
 }
 
+const HAND_DRAWN_MODEL_ICONS = new Set(["codex", "claudeAgent", "antigravity", "zai"]);
+
+function knownModelIcon(icon: string | null | undefined): string | null {
+  if (!icon) return null;
+  return HAND_DRAWN_MODEL_ICONS.has(icon) || getProviderClient(icon)?.icon ? icon : null;
+}
+
 export function ProviderIcon(props: ProviderIconProps) {
   const { themeAppearance } = useAppearancePreferences();
   const isDarkMode = themeAppearance === "dark";
   const size = props.size ?? 16;
   const mono = isDarkMode ? "#e5e5e5" : "#171717";
+  const modelIcon = knownModelIcon(props.modelIcon);
+  if (modelIcon !== null && modelIcon !== props.provider) {
+    return <ProviderIcon provider={modelIcon} size={size} />;
+  }
+
+  // Z.ai's glyph, used only as a custom model's icon (GLM models behind a gateway).
+  if (props.provider === "zai") {
+    return (
+      <Svg width={size} height={size} viewBox="0 0 24 24" fill={mono}>
+        <Path d="M4.9 5.6h7.7l-1.3 1.9H4.9Z" />
+        <Path d="M13.1 5.6h6.2l-8.4 12.6H4.7Z" />
+        <Path d="M12.6 16.4h6.5v1.8h-7.7Z" />
+      </Svg>
+    );
+  }
 
   if (props.provider?.trim().toLowerCase() === "antigravity") {
     return (

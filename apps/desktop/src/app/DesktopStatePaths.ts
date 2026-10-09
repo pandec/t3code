@@ -21,8 +21,8 @@ export function resolveDesktopBaseDir(input: {
 }
 
 /**
- * Packaged Dev builds keep their own state directory so the fork's Dev app never shares
- * data with the production install, even when `T3CODE_HOME` points both at one base dir.
+ * Packaged Dev builds keep their own desktop state directory (Electron-side settings), even
+ * when `T3CODE_HOME` points both at one base dir. Their server still uses `<base>/userdata`.
  */
 export function resolveDesktopStateDir(input: {
   readonly baseDir: string;

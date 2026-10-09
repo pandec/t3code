@@ -92,6 +92,43 @@ describe("mobile model options", () => {
     });
   });
 
+  it("carries custom model icon overrides only onto custom models", () => {
+    const config = {
+      providers: [
+        {
+          instanceId: "claude_gateway",
+          driver: "claudeAgent",
+          enabled: true,
+          installed: true,
+          auth: { status: "authenticated" },
+          models: [
+            { slug: "glm-5", name: "GLM 5", isCustom: true, capabilities: null },
+            { slug: "constructor", name: "Odd slug", isCustom: true, capabilities: null },
+            { slug: "claude-opus", name: "Opus", isCustom: false, capabilities: null },
+          ],
+        },
+      ],
+      settings: {
+        providerInstances: {
+          claude_gateway: {
+            driver: "claudeAgent",
+            config: { customModelIcons: { " glm-5 ": " zai ", "claude-opus": "codex" } },
+          },
+        },
+      },
+    } as unknown as ServerConfig;
+
+    const icons = Object.fromEntries(
+      buildModelOptions(config, null).map((option) => [option.key, option.modelIcon]),
+    );
+
+    expect(icons).toEqual({
+      "claude_gateway:glm-5": "zai",
+      "claude_gateway:constructor": undefined,
+      "claude_gateway:claude-opus": undefined,
+    });
+  });
+
   it("distinguishes same-name OpenCode models without changing their routing", () => {
     const sources = [
       { id: "anthropic", label: "Anthropic" },

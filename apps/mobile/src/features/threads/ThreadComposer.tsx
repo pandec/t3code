@@ -1386,6 +1386,7 @@ export const ThreadComposer = memo(function ThreadComposer(props: ThreadComposer
                         renderIcon={(size) => (
                           <ProviderIcon
                             iconUrl={currentModelOption?.providerIconUrl}
+                            modelIcon={currentModelOption?.modelIcon}
                             provider={currentModelOption?.providerDriver}
                             size={size}
                           />

@@ -9,6 +9,7 @@ import {
   buildExplicitProviderOptionSelectionsFromDescriptors,
   getProviderOptionDescriptors,
 } from "@t3tools/shared/model";
+import { customModelIcon, readCustomModelIcons } from "@t3tools/client-runtime/customModelIcons";
 
 export type ModelOption = {
   readonly key: string;
@@ -19,6 +20,8 @@ export type ModelOption = {
   readonly providerDriver: string;
   readonly supportedRuntimeModes?: ReadonlyArray<RuntimeMode>;
   readonly providerIconUrl?: string | undefined;
+  /** Fork: the custom model's icon override (a model icon id), drawn instead of the driver's. */
+  readonly modelIcon?: string | undefined;
   readonly isDefault: boolean;
   readonly isLegacy: boolean;
   readonly isUnavailable?: boolean;
@@ -185,8 +188,12 @@ export function buildModelOptions(
     const updateRequired = provider.updateRequiredModels?.length
       ? { driver: provider.driver, updateRequiredModels: provider.updateRequiredModels }
       : undefined;
+    const modelIcons = readCustomModelIcons(
+      config?.settings?.providerInstances[provider.instanceId]?.config,
+    );
     for (const model of provider.models) {
       const key = `${provider.instanceId}:${model.slug}`;
+      const modelIcon = model.isCustom ? customModelIcon(modelIcons, model.slug) : undefined;
       options.set(key, {
         key,
         label: model.name,
@@ -198,6 +205,7 @@ export function buildModelOptions(
           ? {}
           : { supportedRuntimeModes: provider.supportedRuntimeModes }),
         ...(provider.iconUrl ? { providerIconUrl: provider.iconUrl } : {}),
+        ...(modelIcon ? { modelIcon } : {}),
         isDefault: model.isDefault === true,
         isLegacy: model.isLegacy === true,
         ...(updateRequired ? { providerUpdateRequired: updateRequired } : {}),
@@ -249,6 +257,14 @@ export function buildModelOptions(
         providerKey: fallbackModelSelection.instanceId,
         providerLabel,
         providerDriver,
+        ...(model?.isCustom
+          ? {
+              modelIcon: customModelIcon(
+                readCustomModelIcons(instanceConfig?.config),
+                fallbackModelSelection.model,
+              ),
+            }
+          : {}),
         isDefault: false,
         isLegacy: model?.isLegacy === true,
         ...(isModelSelectionUnavailable(config, fallbackModelSelection) ||
