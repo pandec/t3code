@@ -11,8 +11,6 @@ import { RowPressable } from "../../components/RowPressable";
 import { CustomSnoozeSheet } from "./CustomSnoozeSheet";
 import { appAtomRegistry } from "../../state/atom-registry";
 import { threadArrangementOpenAtom } from "../../state/thread-order";
-import { threadEnvironment } from "../../state/threads";
-import { useAtomCommand } from "../../state/use-atom-command";
 import type { ThreadMoveDestination } from "./threadOrder";
 import type {
   EnvironmentProject,
@@ -32,7 +30,6 @@ import {
   resolveSnoozePresets,
   SNOOZE_UNTIL_DONE_PRESET,
 } from "@t3tools/client-runtime/state/thread-settled";
-import { squashAtomCommandFailure } from "@t3tools/client-runtime/state/runtime";
 import type { MenuAction } from "@react-native-menu/menu";
 import { memo, useCallback, useEffect, useMemo, useState, type ComponentProps } from "react";
 import { Alert, Pressable, StyleSheet, useWindowDimensions, View } from "react-native";
@@ -789,38 +786,6 @@ export const ThreadListV2Row = memo(function ThreadListV2Row(props: {
       type="monochrome"
     />
   ) : null;
-  const cancelArchiveMutation = useAtomCommand(threadEnvironment.cancelArchive, {
-    reportFailure: false,
-  });
-  const handleCancelArchive = useCallback(() => {
-    void cancelArchiveMutation({
-      environmentId: thread.environmentId,
-      input: { threadId: thread.id },
-    }).then((result) => {
-      if (result._tag !== "Failure") return;
-      const error = squashAtomCommandFailure(result);
-      Alert.alert(
-        "Could not cancel pending archive",
-        error instanceof Error ? error.message : "The archive could not be cancelled.",
-      );
-    });
-  }, [cancelArchiveMutation, thread.environmentId, thread.id]);
-  const scheduleArchiveMutation = useAtomCommand(threadEnvironment.scheduleArchive, {
-    reportFailure: false,
-  });
-  const handleScheduleArchive = useCallback(() => {
-    void scheduleArchiveMutation({
-      environmentId: thread.environmentId,
-      input: { threadId: thread.id, afterTurn: true },
-    }).then((result) => {
-      if (result._tag !== "Failure") return;
-      const error = squashAtomCommandFailure(result);
-      Alert.alert(
-        "Could not schedule archive",
-        error instanceof Error ? error.message : "The archive could not be scheduled.",
-      );
-    });
-  }, [scheduleArchiveMutation, thread.environmentId, thread.id]);
   // One archive behavior on every surface: a busy thread archives when done
   // and a pending archive can be cancelled from the same item.
   const archiveToggle = resolveArchiveToggleAction(thread);
@@ -903,11 +868,8 @@ export const ThreadListV2Row = memo(function ThreadListV2Row(props: {
   );
   const handleMoveUp = useCallback(() => onMoveThread?.(thread, "up"), [onMoveThread, thread]);
   const handleMoveDown = useCallback(() => onMoveThread?.(thread, "down"), [onMoveThread, thread]);
-  const handleArchive = useCallback(() => {
-    if (archiveToggle === "cancel") handleCancelArchive();
-    else if (archiveToggle === "schedule") handleScheduleArchive();
-    else onArchiveThread(thread);
-  }, [archiveToggle, handleCancelArchive, handleScheduleArchive, onArchiveThread, thread]);
+  // The toggle itself resolves in onArchiveThread, which queues it offline.
+  const handleArchive = useCallback(() => onArchiveThread(thread), [onArchiveThread, thread]);
   const archiveMenuItem = useMemo<MenuAction>(
     () => ({
       ...MENU_ACTION_BY_ID.archive,

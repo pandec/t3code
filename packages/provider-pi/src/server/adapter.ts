@@ -43,6 +43,7 @@ import {
   type OrchestrationV2UserInputQuestion,
   type ProviderApprovalDecision,
   type ProviderInstanceId,
+  type ThreadId,
   type OrchestrationV2ProviderTurnTokenUsage,
 } from "@t3tools/contracts";
 import { PiSettings } from "../settings.ts";
@@ -61,6 +62,7 @@ import * as Stream from "effect/Stream";
 import { ChildProcessSpawner } from "effect/process";
 
 import * as ProviderHost from "@t3tools/provider-core/server/ProviderHost";
+import { providerThreadEnvironment } from "@t3tools/provider-core/server/threadEnvironment";
 import { mcpToolPresentation } from "@t3tools/provider-core/server/mcpToolPresentation";
 import * as McpProviderSession from "@t3tools/provider-core/server/mcpSession";
 import {
@@ -431,9 +433,12 @@ export function makePiAdapterV2(
       if (!resolvedLaunchArgs.ok) {
         return yield* protocolError(resolvedLaunchArgs.message);
       }
+      // Fork: commands Pi runs know their thread and T3 install.
+      const threadEnvironment = (threadId: ThreadId) =>
+        providerThreadEnvironment({ threadId, cwd }, options.environment, options.host.paths);
       const launch = buildPiRpcLaunch({
         launchArgs: resolvedLaunchArgs.args,
-        environment: options.environment,
+        environment: threadEnvironment(input.threadId),
         mcpSession,
         extensionPath,
         runtimeMode: input.runtimePolicy.runtimeMode,
@@ -2998,7 +3003,7 @@ export function makePiAdapterV2(
             // This short-lived process never prompts or runs user extensions.
             const forkLaunch = buildPiRpcLaunch({
               launchArgs: resolvedLaunchArgs.args,
-              environment: options.environment,
+              environment: threadEnvironment(forkInput.targetThreadId),
               mcpSession: undefined,
               extensionPath: undefined,
               disableExtensions: true,

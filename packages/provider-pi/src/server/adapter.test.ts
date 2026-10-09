@@ -1322,6 +1322,10 @@ describe("PiAdapterV2", () => {
       assert.equal(spawn.env.T3_MCP_URL, "http://127.0.0.1:43123/mcp");
       assert.equal(spawn.env.T3_MCP_BEARER_TOKEN, "secret-pi-token");
       assert.equal(spawn.env.T3_PI_RUNTIME_MODE, "full-access");
+      const host = yield* ProviderHost.ProviderHost;
+      assert.equal(spawn.env.T3CODE_THREAD_ID, THREAD_ID);
+      assert.equal(spawn.env.T3CODE_HOME, host.paths.baseDir);
+      assert.equal(spawn.env.T3CODE_STATE_DIR, host.paths.stateDir);
     }).pipe(
       Effect.ensuring(Effect.sync(() => McpProviderSession.clearMcpProviderSession(THREAD_ID))),
       Effect.scoped,
@@ -1847,6 +1851,7 @@ describe("PiAdapterV2", () => {
       assert.include(args, "--no-extensions");
       assert.include(args, "--no-tools");
       assert.notInclude(args, "--no-session");
+      assert.equal(forkFake.lastSpawn().env.T3CODE_THREAD_ID, target);
       assert.deepEqual(
         forkFake
           .allRequests()

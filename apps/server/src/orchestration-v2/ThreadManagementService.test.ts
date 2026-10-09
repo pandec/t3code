@@ -427,6 +427,7 @@ it.effect("reads background work against a drain scope from the thread shell", (
   const projectId = ProjectId.make("project:thread-management:drain");
   const threadId = ThreadId.make("thread:thread-management:drain");
   let shell: OrchestrationV2ThreadShell | null = null;
+  let runs: Array<Pick<OrchestrationV2Run, "status" | "queueHeld">> = [];
   const settledShell = (
     pendingBackgroundTasks: OrchestrationV2ThreadShell["pendingBackgroundTasks"],
     run: Partial<OrchestrationV2ThreadShell> = {},
@@ -444,6 +445,8 @@ it.effect("reads background work against a drain scope from the thread shell", (
     Layer.provide(
       Layer.mock(Orchestrator.OrchestratorV2)({
         getThreadShell: () => Effect.sync(() => shell),
+        getThreadRecords: () =>
+          Effect.sync(() => ({ runs }) as unknown as OrchestrationV2ThreadProjection),
       }),
     ),
   );
@@ -488,6 +491,12 @@ it.effect("reads background work against a drain scope from the thread shell", (
 
     shell = settledShell([]);
     expect(yield* read("all")).toMatchObject({ liveness: null, runActive: false, drained: true });
+
+    // Stop held a queued message: the shell presents the interrupted run only.
+    shell = settledShell([], { status: "interrupted" });
+    runs = [{ status: "interrupted" }, { status: "queued", queueHeld: true }];
+    expect(yield* read("agents")).toMatchObject({ runActive: true, drained: false });
+    runs = [];
 
     // A thread in another project, or no thread, is not found.
     shell = { ...settledShell([]), projectId: ProjectId.make("project:other") };

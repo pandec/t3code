@@ -9,7 +9,7 @@ import type { EnvironmentId } from "@t3tools/contracts";
 import * as Arr from "effect/Array";
 import * as Order from "effect/Order";
 
-import { scopedProjectKey } from "../../lib/scopedEntities";
+import { scopedProjectKey, scopedThreadKey } from "../../lib/scopedEntities";
 
 export type ArchivedThreadSortOrder = "newest" | "oldest";
 
@@ -34,6 +34,8 @@ export function buildArchivedThreadGroups(input: {
   readonly environmentId: EnvironmentId | null;
   readonly searchQuery: string;
   readonly sortOrder: ArchivedThreadSortOrder;
+  /** Fork: threads with a pending offline unarchive, already back in the active list. */
+  readonly pendingUnarchivedThreadKeys?: ReadonlySet<string>;
 }): ReadonlyArray<ArchivedThreadGroup> {
   const query = input.searchQuery.trim().toLocaleLowerCase();
   const groups: ArchivedThreadGroup[] = [];
@@ -46,7 +48,10 @@ export function buildArchivedThreadGroups(input: {
     const environmentLabel = input.environmentLabels[entry.environmentId] ?? null;
     const threadsByProjectId = new Map<string, EnvironmentThreadShell[]>();
     for (const thread of entry.snapshot.threads) {
-      if (thread.archivedAt === null) {
+      if (
+        thread.archivedAt === null ||
+        input.pendingUnarchivedThreadKeys?.has(scopedThreadKey(entry.environmentId, thread.id))
+      ) {
         continue;
       }
       const threads = threadsByProjectId.get(thread.projectId) ?? [];

@@ -149,11 +149,7 @@ interface ProviderModelsSectionProps {
   readonly favoriteModels: ReadonlyArray<string>;
   /** Explicit user-authored model ordering for this provider instance. */
   readonly modelOrder: ReadonlyArray<string>;
-  /**
-   * Commit the new custom-model list. Caller is responsible for routing the
-   * write to the correct storage (legacy `settings.providers[kind]` vs.
-   * `providerInstances[id].config`).
-   */
+  /** Commit the new custom-model list to the instance's `providerInstances[id].config`. */
   readonly onChange: (next: ReadonlyArray<CustomModelDefinition>) => void;
   readonly onHiddenModelsChange: (next: ReadonlyArray<string>) => void;
   readonly onFavoriteModelsChange: (next: ReadonlyArray<string>) => void;

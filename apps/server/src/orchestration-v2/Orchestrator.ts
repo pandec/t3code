@@ -94,7 +94,11 @@ import { EventSinkV2 } from "./EventSink.ts";
 import * as EffectOutbox from "./EffectOutbox.ts";
 import type { OrchestrationEffectRequestV2, PendingOrchestrationEffectV2 } from "./EffectOutbox.ts";
 import { IdAllocatorV2 } from "@t3tools/provider-core/server/IdAllocator";
-import { indefiniteSnoozeWoke, isIndefinitelySnoozed } from "./IndefiniteSnooze.ts";
+import {
+  indefiniteSnoozeHoldsOverLatestRun,
+  indefiniteSnoozeWoke,
+  isIndefinitelySnoozed,
+} from "./IndefiniteSnooze.ts";
 import {
   clearedSnoozeUntilDone,
   delegatedCompletionContinuesUntilDone,
@@ -4884,6 +4888,15 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
         const failure = latestRootProviderFailure(run, projection.turnItems);
         const recovery = projection.thread.limitRecovery;
         const now = yield* DateTime.now;
+        // Fork: an indefinite snooze set after the failure holds, like a
+        // pending wake time; the sweep skips it, but it can land after selection.
+        const snoozeHolds =
+          (projection.thread.snoozedUntil != null &&
+            DateTime.toEpochMillis(projection.thread.snoozedUntil) > DateTime.toEpochMillis(now)) ||
+          indefiniteSnoozeHoldsOverLatestRun({
+            ...projection.thread,
+            latestRunCompletedAt: run?.completedAt ?? null,
+          });
         if (
           run?.id !== command.usageLimitContinuationOfRunId ||
           failure?.class !== "usage_limit" ||
@@ -4898,8 +4911,7 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
           projection.thread.settledOverride === "settled" ||
           projection.thread.providerInstanceId !== run.providerInstanceId ||
           projection.runtimeRequests.some((request) => request.status === "pending") ||
-          (projection.thread.snoozedUntil != null &&
-            DateTime.toEpochMillis(projection.thread.snoozedUntil) > DateTime.toEpochMillis(now))
+          snoozeHolds
         ) {
           yield* emit(
             events,
@@ -4913,8 +4925,7 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
               ...(recovery?.autoResume &&
               recovery.requestId === command.usageLimitRecoveryRequestId &&
               recovery.runId === command.usageLimitContinuationOfRunId &&
-              projection.thread.snoozedUntil != null &&
-              DateTime.toEpochMillis(projection.thread.snoozedUntil) > DateTime.toEpochMillis(now)
+              snoozeHolds
                 ? { limitRecovery: { ...recovery, requestId: command.commandId } }
                 : {}),
             },
@@ -11644,11 +11655,30 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
     } satisfies OrchestratorV2DispatchResult;
   });
 
+  // Fork: the checkout a command makes a thread own: a created thread's, a
+  // fork's (inherited from its source), or one a metadata update sets.
+  const adoptedCheckout = (command: OrchestrationV2ServerCommand) => {
+    switch (command.type) {
+      case "thread.create":
+      case "thread.metadata.update":
+      case "thread.workspace.follow-session":
+        return Effect.succeed(command.worktreePath ?? null);
+      case "thread.fork":
+        return projectionStore.getThread(command.sourceThreadId).pipe(
+          Effect.map((thread) => thread.worktreePath),
+          Effect.orElseSucceed(() => null),
+        );
+      default:
+        return Effect.succeed(null);
+    }
+  };
+
   // Fork: a command that reopens an archived thread claims the worktree its
-  // pending archive removal targets, and a worktree switch schedule claims its
-  // target, until its events commit. The guarded removal (which reserves the
-  // same path) then either sees the reopen or pending move, or makes the
-  // command retry. No receipt is recorded, so a retry can reuse its id.
+  // pending archive removal targets, a worktree switch schedule claims its
+  // target, and a command that adopts a checkout claims it, until its events
+  // commit. The guarded removals (archive and automatic cleanup, which reserve
+  // the same path) then either see the new owner, reopen, or pending move, or
+  // make the command retry. No receipt is recorded, so a retry can reuse its id.
   const withArchiveRemovalClaim = (
     command: OrchestrationV2ServerCommand,
     effect: Effect.Effect<OrchestratorV2DispatchResult, OrchestratorV2Error>,
@@ -11658,13 +11688,14 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
       const reopens =
         command.type === "thread.unarchive" ||
         (command.type === "message.dispatch" && command.createdBy === "user");
-      if (!schedulesSwitch && !reopens) return yield* effect;
       const claimPath = schedulesSwitch
         ? command.targetPath
-        : yield* projectionStore.getThread(command.threadId).pipe(
-            Effect.map((thread) => worktreeRemovalRequest(thread)?.worktreePath),
-            Effect.orElseSucceed(() => null),
-          );
+        : reopens
+          ? yield* projectionStore.getThread(command.threadId).pipe(
+              Effect.map((thread) => worktreeRemovalRequest(thread)?.worktreePath),
+              Effect.orElseSucceed(() => null),
+            )
+          : yield* adoptedCheckout(command);
       if (claimPath === null || claimPath === undefined) return yield* effect;
       return yield* Effect.scoped(
         Effect.gen(function* () {
@@ -11676,9 +11707,9 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
             return yield* new OrchestratorDispatchError({
               commandId: command.commandId,
               commandType: command.type,
-              cause: schedulesSwitch
-                ? "This workspace is being removed. Retry after cleanup finishes."
-                : "Thread is finishing archive worktree removal. Retry after it finishes.",
+              cause: reopens
+                ? "Thread is finishing archive worktree removal. Retry after it finishes."
+                : "This workspace is being removed. Retry after cleanup finishes.",
             });
           }
           return yield* effect;

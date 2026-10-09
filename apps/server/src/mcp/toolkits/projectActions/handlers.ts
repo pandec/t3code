@@ -16,8 +16,9 @@ const resolveTarget = (projectId: ProjectId | undefined) =>
 
 /**
  * Fork: project actions toolkit. Listing reads; edits, like other project
- * changes, need a full-access caller. Edits compare-and-set against the
- * actions they read, so a concurrent change is refused rather than lost.
+ * changes, need a full-access caller, re-checked under the caller's lock
+ * right before writing. Edits compare-and-set against the actions they read,
+ * so a concurrent change is refused rather than lost.
  */
 export const layer = McpToolAccess.toLayer(ProjectActionsToolkit, {
   t3_project_actions_list: McpToolAccess.reads((input) =>
@@ -27,20 +28,24 @@ export const layer = McpToolAccess.toLayer(ProjectActionsToolkit, {
       return yield* actions.list(projectId).pipe(Effect.mapError(failure));
     }),
   ),
-  t3_project_actions_upsert: McpToolAccess.writesEnvironment((input) =>
+  t3_project_actions_upsert: McpToolAccess.writesEnvironment((input, check) =>
     Effect.gen(function* () {
       const projectId = yield* resolveTarget(input.projectId);
       const actions = yield* ProjectActions.ProjectActions;
-      return yield* actions.upsert({ ...input, projectId }).pipe(Effect.mapError(failure));
+      return yield* McpToolAccess.recheckedWrite(
+        check,
+        actions.upsert({ ...input, projectId }).pipe(Effect.mapError(failure)),
+      );
     }),
   ),
-  t3_project_actions_remove: McpToolAccess.writesEnvironment((input) =>
+  t3_project_actions_remove: McpToolAccess.writesEnvironment((input, check) =>
     Effect.gen(function* () {
       const projectId = yield* resolveTarget(input.projectId);
       const actions = yield* ProjectActions.ProjectActions;
-      return yield* actions
-        .remove({ projectId, actionId: input.actionId })
-        .pipe(Effect.mapError(failure));
+      return yield* McpToolAccess.recheckedWrite(
+        check,
+        actions.remove({ projectId, actionId: input.actionId }).pipe(Effect.mapError(failure)),
+      );
     }),
   ),
 });

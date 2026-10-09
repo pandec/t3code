@@ -29,7 +29,14 @@ export const ThreadGroupsToolkitHandlersLive = McpToolAccess.toLayer(ThreadGroup
           }
           case "create": {
             if (input.name === undefined) return yield* missing("create needs a name.");
-            return { action: input.action, ...(yield* service.create(input.name)) };
+            // Fork: re-check the caller under its thread lock, held while create waits for its own.
+            return {
+              action: input.action,
+              ...(yield* McpToolAccess.recheckedWrite(
+                McpToolAccess.environmentCheck,
+                service.create(input.name),
+              )),
+            };
           }
           case "move_thread": {
             if (input.groupId === undefined)

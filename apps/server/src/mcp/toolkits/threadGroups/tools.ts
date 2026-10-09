@@ -7,6 +7,7 @@ import {
 import * as Schema from "effect/Schema";
 import { Tool, Toolkit } from "effect/ai";
 
+import * as ThreadCommandExecutor from "../../../orchestration-v2/ThreadCommandExecutor.ts";
 import * as ThreadManagementService from "../../../orchestration-v2/ThreadManagementService.ts";
 import * as McpInvocationContext from "../../McpInvocationContext.ts";
 import * as ThreadGroupsMcpService from "../../ThreadGroupsMcpService.ts";
@@ -63,6 +64,7 @@ const ThreadGroups = Tool.make("t3_thread_groups", {
     McpInvocationContext.McpInvocationContext,
     ThreadManagementService.ThreadManagementService,
     ThreadGroupsMcpService.ThreadGroupsMcpService,
+    ThreadCommandExecutor.ThreadCommandExecutor,
   ],
 })
   .annotate(Tool.Title, "Manage thread groups")

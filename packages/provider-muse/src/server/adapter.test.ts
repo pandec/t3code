@@ -354,6 +354,38 @@ const approval = (turnId: string) => ({
 });
 
 describe("MuseAdapterV2", () => {
+  it.effect("launches Muse with the thread's T3 environment", () =>
+    Effect.gen(function* () {
+      const fake = yield* makeFakeMuse();
+      const launches: Array<NodeJS.ProcessEnv | undefined> = [];
+      const host = yield* ProviderHost.ProviderHost;
+      const adapter = makeMuseAdapterV2({
+        instanceId: INSTANCE_ID,
+        settings: museSettings,
+        environment: { PATH: "/fake/bin", T3CODE_THREAD_ID: "stale", T3CODE_TURN_ID: "stale" },
+        idAllocator: yield* IdAllocator.IdAllocatorV2,
+        host,
+        fileSystem: yield* FileSystem.FileSystem,
+        createHost: async (options) => {
+          launches.push(options.environment);
+          return fake.host;
+        },
+      });
+      yield* adapter.openSession({
+        threadId: THREAD_ID,
+        providerSessionId: ProviderSessionId.make("session-environment"),
+        modelSelection: modelSelection(),
+        runtimePolicy,
+      });
+      const environment = launches[0];
+      assert.strictEqual(environment?.T3CODE_THREAD_ID, THREAD_ID);
+      assert.strictEqual(environment?.T3CODE_HOME, host.paths.baseDir);
+      assert.strictEqual(environment?.T3CODE_STATE_DIR, host.paths.stateDir);
+      assert.isUndefined(environment?.T3CODE_TURN_ID);
+      assert.strictEqual(environment?.PATH, "/fake/bin");
+    }).pipe(Effect.scoped, Effect.provide(testLayer)),
+  );
+
   it.effect("connects the thread's MCP credential on native start and resume", () =>
     Effect.gen(function* () {
       yield* Effect.addFinalizer(() =>

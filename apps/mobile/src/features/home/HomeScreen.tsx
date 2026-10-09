@@ -115,6 +115,8 @@ interface HomeScreenProps {
   /** Fork: archives queued offline, shown at the top of the archive shelf. */
   readonly pendingArchivedThreads: ReadonlyArray<EnvironmentThreadShell>;
   readonly pendingArchivedThreadKeys: ReadonlySet<string>;
+  /** Fork: unarchives queued offline, hidden from the archive shelf. */
+  readonly pendingUnarchivedThreadKeys: ReadonlySet<string>;
   readonly onStartNewTask: () => void;
   readonly onSelectThread: (thread: EnvironmentThreadShell) => void;
   readonly onArchiveThread: (thread: EnvironmentThreadShell) => void;
@@ -1042,7 +1044,10 @@ export function HomeScreen(props: HomeScreenProps) {
       archiveShelfVisible
         ? mergePendingArchivedThreads(
             selectRecentArchivedThreads(archivedSnapshots, archivedSectionVisibleCount),
-            props.pendingArchivedThreads,
+            {
+              pendingArchivedThreads: props.pendingArchivedThreads,
+              pendingUnarchivedThreadKeys: props.pendingUnarchivedThreadKeys,
+            },
             archivedSectionVisibleCount,
           )
         : { threads: [], totalCount: 0 },
@@ -1051,6 +1056,7 @@ export function HomeScreen(props: HomeScreenProps) {
       archivedSectionVisibleCount,
       archivedSnapshots,
       props.pendingArchivedThreads,
+      props.pendingUnarchivedThreadKeys,
     ],
   );
   const archivedEnvironmentLabels = useMemo(

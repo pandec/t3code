@@ -141,6 +141,7 @@ import {
   resolveActiveThreadRouteRef,
   resolveThreadRouteTarget,
 } from "../threadRoutes";
+import { openThreadInActivePane } from "./thread-split/threadOpenTarget";
 import { stackedThreadToast, toastManager } from "./ui/toast";
 import { formatCompactRelativeTimeLabel } from "../timestampFormat";
 import { SettingsSidebarNav } from "./settings/SettingsSidebarNav";
@@ -390,7 +391,7 @@ interface SidebarThreadRowProps {
     threadRef: ScopedThreadRef,
     orderedProjectThreadKeys: readonly string[],
   ) => void;
-  navigateToThread: (threadRef: ScopedThreadRef) => Promise<void>;
+  navigateToThread: (threadRef: ScopedThreadRef) => void;
   handleMultiSelectContextMenu: (position: { x: number; y: number }) => Promise<void>;
   handleThreadContextMenu: (
     threadRef: ScopedThreadRef,
@@ -1106,7 +1107,7 @@ interface SidebarProjectThreadListProps {
     threadRef: ScopedThreadRef,
     orderedProjectThreadKeys: readonly string[],
   ) => void;
-  navigateToThread: (threadRef: ScopedThreadRef) => Promise<void>;
+  navigateToThread: (threadRef: ScopedThreadRef) => void;
   onFileDropThreads: (threadRef: ScopedThreadRef, files: File[]) => void;
   handleMultiSelectContextMenu: (position: { x: number; y: number }) => Promise<void>;
   handleThreadContextMenu: (
@@ -1990,6 +1991,36 @@ const SidebarProjectItem = memo(function SidebarProjectItem(props: SidebarProjec
     },
     [clearPendingFileDrop, navigateToThread, queuePendingFileDrop, router],
   );
+  // Fork: direct picks (row clicks, Enter/Space, row PR/port shortcuts) land in
+  // the active split pane; file drops keep retargeting the primary route. Only
+  // a thread of this project can match the route's, so activeRouteThreadKey
+  // stands in for the route ref. The primary branch delegates to
+  // navigateToThread, so only the split-local branches repeat its prep.
+  const openThreadFromSidebar = useCallback(
+    (threadRef: ScopedThreadRef) => {
+      const { plan } = openThreadInActivePane({
+        targetRef: threadRef,
+        routeThreadRef: activeRouteThreadKey ? parseScopedThreadKey(activeRouteThreadKey) : null,
+        navigateToPrimary: () => navigateToThread(threadRef),
+      });
+      if (plan.kind === "navigate-primary") return;
+      if (useThreadSelectionStore.getState().selectedThreadKeys.size > 0) {
+        clearSelection();
+      }
+      setSelectionAnchor(scopedThreadKey(threadRef));
+      if (isMobile) {
+        setOpenMobile(false);
+      }
+    },
+    [
+      activeRouteThreadKey,
+      clearSelection,
+      isMobile,
+      navigateToThread,
+      setOpenMobile,
+      setSelectionAnchor,
+    ],
+  );
 
   const handleThreadClick = useCallback(
     (
@@ -2002,7 +2033,6 @@ const SidebarProjectItem = memo(function SidebarProjectItem(props: SidebarProjec
       const isModClick = isMac ? event.metaKey : event.ctrlKey;
       const isShiftClick = event.shiftKey;
       const threadKey = scopedThreadKey(threadRef);
-      const currentSelectionCount = useThreadSelectionStore.getState().selectedThreadKeys.size;
 
       if (isModClick) {
         event.preventDefault();
@@ -2023,27 +2053,9 @@ const SidebarProjectItem = memo(function SidebarProjectItem(props: SidebarProjec
         return;
       }
 
-      if (currentSelectionCount > 0) {
-        clearSelection();
-      }
-      setSelectionAnchor(threadKey);
-      if (isMobile) {
-        setOpenMobile(false);
-      }
-      void router.navigate({
-        to: "/$environmentId/$threadId",
-        params: buildThreadRouteParams(threadRef),
-      });
+      openThreadFromSidebar(threadRef);
     },
-    [
-      clearSelection,
-      isMobile,
-      rangeSelectTo,
-      router,
-      setOpenMobile,
-      setSelectionAnchor,
-      toggleThreadSelection,
-    ],
+    [openThreadFromSidebar, rangeSelectTo, toggleThreadSelection],
   );
 
   const handleMultiSelectContextMenu = useCallback(
@@ -2719,7 +2731,7 @@ const SidebarProjectItem = memo(function SidebarProjectItem(props: SidebarProjec
         confirmArchiveButtonRefs={confirmArchiveButtonRefs}
         attachThreadListAutoAnimateRef={attachThreadListAutoAnimateRef}
         handleThreadClick={handleThreadClick}
-        navigateToThread={navigateToThread}
+        navigateToThread={openThreadFromSidebar}
         onFileDropThreads={handleThreadFileDrop}
         handleMultiSelectContextMenu={handleMultiSelectContextMenu}
         handleThreadContextMenu={handleThreadContextMenu}

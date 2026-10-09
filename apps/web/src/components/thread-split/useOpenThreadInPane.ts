@@ -1,17 +1,30 @@
 import type { ScopedThreadRef } from "@t3tools/contracts";
-import { useNavigate, useParams } from "@tanstack/react-router";
+import { useNavigate, useParams, type HistoryState } from "@tanstack/react-router";
 import { useCallback, useMemo, type MouseEvent } from "react";
 
 import { buildThreadRouteParams, resolveThreadRouteRef } from "../../threadRoutes";
-import { openThreadInActivePane, type ThreadOpenResult } from "./threadOpenTarget";
+import {
+  openThreadInActivePane,
+  threadOpenHashRouteRef,
+  type ThreadOpenResult,
+} from "./threadOpenTarget";
 import { useThreadPaneId } from "./threadPaneContext";
+
+/** A URL hash to land with the opened thread; see threadOpenHashRouteRef. */
+export interface ThreadOpenHash {
+  hash: string;
+  state?: HistoryState;
+}
 
 /**
  * Open a thread from inside a pane (fork feature): it lands in the pane the
  * action came from, or focuses the pane already showing it, instead of always
  * replacing the primary route.
  */
-export function useOpenThreadInPane(): (targetRef: ScopedThreadRef) => ThreadOpenResult {
+export function useOpenThreadInPane(): (
+  targetRef: ScopedThreadRef,
+  withHash?: ThreadOpenHash,
+) => ThreadOpenResult {
   const navigate = useNavigate();
   const paneId = useThreadPaneId();
   // The router's (primary) thread, not the pane's own.
@@ -21,14 +34,35 @@ export function useOpenThreadInPane(): (targetRef: ScopedThreadRef) => ThreadOpe
     [environmentId, threadId],
   );
   return useCallback(
-    (targetRef: ScopedThreadRef) =>
-      openThreadInActivePane({
+    (targetRef: ScopedThreadRef, withHash?: ThreadOpenHash) => {
+      const navigateWithHash = (ref: ScopedThreadRef) =>
+        navigate({
+          to: "/$environmentId/$threadId",
+          params: buildThreadRouteParams(ref),
+          ...(withHash
+            ? {
+                hash: withHash.hash,
+                resetScroll: false,
+                ...(withHash.state ? { state: withHash.state } : {}),
+              }
+            : {}),
+        });
+      const result = openThreadInActivePane({
         targetRef,
         routeThreadRef,
         paneOverride: paneId,
-        navigateToPrimary: () =>
-          navigate({ to: "/$environmentId/$threadId", params: buildThreadRouteParams(targetRef) }),
-      }),
+        navigateToPrimary: () => navigateWithHash(targetRef),
+      });
+      if (withHash && result.plan.kind !== "navigate-primary") {
+        const hashRouteRef = threadOpenHashRouteRef({
+          plan: result.plan,
+          targetRef,
+          routeThreadRef,
+        });
+        if (hashRouteRef) void navigateWithHash(hashRouteRef);
+      }
+      return result;
+    },
     [navigate, paneId, routeThreadRef],
   );
 }

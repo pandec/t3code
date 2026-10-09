@@ -2,9 +2,11 @@ import { makeThreadShellFixture } from "../../test-fixtures";
 import type { EnvironmentThreadShell } from "@t3tools/client-runtime/state/shell";
 import {
   AuthOrchestrationOperateScope,
+  CommandId,
   EnvironmentId,
   ProjectId,
   ProviderInstanceId,
+  RunId,
   ThreadId,
 } from "@t3tools/contracts";
 import * as Cause from "effect/Cause";
@@ -108,8 +110,9 @@ vi.mock("../../state/thread-lifecycle-outbox", () => ({
   threadLifecycleOutboxManager: { intentsByThreadKeyAtom: "lifecycle-intents" },
 }));
 vi.mock("../../state/thread-lifecycle-outbox-model", () => ({
+  isThreadLifecycleUserAction: () => true,
   threadLifecycleActionUsesOutbox: () => false,
-  threadLifecycleRevisionRequiresDispatch: () => false,
+  threadLifecycleIntentRevision: () => ({ desiredArchived: true, requiresDispatch: false }),
 }));
 vi.mock("../../lib/uuid", () => ({ uuidv4: () => "uuid" }));
 vi.mock("../threads/useForkConversation", () => ({
@@ -143,6 +146,8 @@ vi.mock("../../state/threads", () => ({
   threadEnvironment: Object.fromEntries(
     [
       "archive",
+      "scheduleArchive",
+      "cancelArchive",
       "unarchive",
       "delete",
       "settle",
@@ -294,6 +299,43 @@ describe("thread list operation permissions", () => {
     await actions.unarchiveThread(thread);
 
     expect(state.requests).toEqual([]);
+  });
+
+  it("archives a busy thread when done and cancels a pending archive", async () => {
+    const { archiveThread } = useThreadListActions();
+    archiveThread(
+      makeThread({
+        runtime: {
+          status: "running",
+          activeRunId: RunId.make("run-1"),
+          providerInstanceId: ProviderInstanceId.make("codex"),
+          providerName: null,
+          lastError: null,
+          updatedAt: "2026-10-04T10:00:00.000Z",
+        },
+      }),
+    );
+    archiveThread(
+      makeThread({
+        id: ThreadId.make("pending"),
+        archiveRequest: {
+          requestId: CommandId.make("request-1"),
+          runId: null,
+          worktreePath: null,
+          requestedAt: "2026-10-04T10:00:00.000Z",
+          status: "pending",
+        },
+      }),
+    );
+    await vi.waitFor(() => expect(state.requests).toHaveLength(2));
+
+    expect(state.requests).toEqual([
+      expect.objectContaining({
+        action: "scheduleArchive",
+        input: { threadId: "thread", afterTurn: true },
+      }),
+      expect.objectContaining({ action: "cancelArchive", input: { threadId: "pending" } }),
+    ]);
   });
 
   it("keeps delete independent of terminal and source-control permissions", async () => {

@@ -6,6 +6,7 @@ import {
   openThreadInActivePane,
   planThreadOpen,
   shouldCloseSplitForRoute,
+  threadOpenHashRouteRef,
 } from "./threadOpenTarget";
 import { useThreadSplitStore, type PendingPaneSwap } from "./threadSplitStore";
 
@@ -189,6 +190,35 @@ describe("openThreadInActivePane", () => {
     });
     expect(opened.plan).toEqual({ kind: "open-secondary" });
     expect(opened.completion).toBeNull();
+  });
+});
+
+describe("threadOpenHashRouteRef", () => {
+  it("puts the hash on the target's route when it lands in the primary", () => {
+    for (const plan of [
+      { kind: "navigate-primary" as const },
+      // Also an in-flight swap's destination, which the route is about to become.
+      { kind: "focus-pane" as const, paneId: "primary" as const },
+    ]) {
+      expect(
+        threadOpenHashRouteRef({ plan, targetRef: OTHER_REF, routeThreadRef: ROUTE_REF }),
+      ).toBe(OTHER_REF);
+    }
+  });
+
+  it("keeps the primary route when the target lands in the secondary", () => {
+    for (const plan of [
+      { kind: "open-secondary" as const },
+      { kind: "focus-pane" as const, paneId: "secondary" as const },
+    ]) {
+      expect(
+        threadOpenHashRouteRef({ plan, targetRef: SECONDARY_REF, routeThreadRef: ROUTE_REF }),
+      ).toBe(ROUTE_REF);
+      // A draft primary has no thread route to carry the hash.
+      expect(
+        threadOpenHashRouteRef({ plan, targetRef: SECONDARY_REF, routeThreadRef: null }),
+      ).toBeNull();
+    }
   });
 });
 

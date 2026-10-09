@@ -8,6 +8,7 @@ import {
 import * as Schema from "effect/Schema";
 import { Tool, Toolkit } from "effect/ai";
 
+import * as ThreadCommandExecutor from "../../../orchestration-v2/ThreadCommandExecutor.ts";
 import * as ThreadManagementService from "../../../orchestration-v2/ThreadManagementService.ts";
 import * as ProjectActions from "../../../project/ProjectActions.ts";
 import * as McpInvocationContext from "../../McpInvocationContext.ts";
@@ -23,6 +24,7 @@ const shared = {
     McpInvocationContext.McpInvocationContext,
     ThreadManagementService.ThreadManagementService,
     ProjectActions.ProjectActions,
+    ThreadCommandExecutor.ThreadCommandExecutor,
   ],
 };
 

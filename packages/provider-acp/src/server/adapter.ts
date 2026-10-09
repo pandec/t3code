@@ -95,7 +95,10 @@ import {
   type T3AcpInstructionState,
 } from "@t3tools/provider-core/server/orchestrationInstructions";
 import { buildRuntimeInstructions } from "@t3tools/provider-core/server/runtimeInstructions";
-import type { ProviderThreadPaths } from "@t3tools/provider-core/server/threadEnvironment";
+import {
+  providerThreadEnvironmentVariables,
+  type ProviderThreadPaths,
+} from "@t3tools/provider-core/server/threadEnvironment";
 import * as IdAllocator from "@t3tools/provider-core/server/IdAllocator";
 import { type ProviderContinuationRequest } from "@t3tools/provider-core/server/continuationRequests";
 import {
@@ -1547,13 +1550,27 @@ export function makeAcpAdapterV2(
           itemIdentityVersion = thread.nativeMetadata?.itemIdentityVersion;
         };
         const terminalEnvironmentBySessionId = new Map<string, NodeJS.ProcessEnv>();
+        // Fork (DECISIONS 5.9): client terminals know their thread and T3 install.
+        const terminalEnvironmentFor = (
+          threadId: ThreadId | null,
+        ): NodeJS.ProcessEnv | undefined => {
+          const mcpEnvironment = acpMcpContext(threadId, self).processEnvironment;
+          if (threadId === null) return mcpEnvironment;
+          return {
+            ...providerThreadEnvironmentVariables(
+              { threadId, cwd: input.runtimePolicy.cwd },
+              { baseDir: host.paths.baseDir, stateDir: host.paths.stateDir },
+            ),
+            ...mcpEnvironment,
+          };
+        };
         interface PendingTerminalEnvironment {
           readonly environment: NodeJS.ProcessEnv | undefined;
           readonly claimUnknownSession: boolean;
           readonly sessionId: string | null;
         }
         let pendingTerminalEnvironment: PendingTerminalEnvironment | null = {
-          environment: acpMcpContext(input.threadId, self).processEnvironment,
+          environment: terminalEnvironmentFor(input.threadId),
           claimUnknownSession: input.initialNativeThreadId === undefined,
           sessionId: input.initialNativeThreadId ?? null,
         };
@@ -1562,14 +1579,14 @@ export function makeAcpAdapterV2(
           sessionId?: string,
         ): void => {
           pendingTerminalEnvironment = {
-            environment: acpMcpContext(threadId, self).processEnvironment,
+            environment: terminalEnvironmentFor(threadId),
             claimUnknownSession: false,
             sessionId: sessionId ?? null,
           };
         };
         const prepareClaimableTerminalEnvironment = (threadId: ThreadId | null): void => {
           pendingTerminalEnvironment = {
-            environment: acpMcpContext(threadId, self).processEnvironment,
+            environment: terminalEnvironmentFor(threadId),
             claimUnknownSession: true,
             sessionId: null,
           };
@@ -1578,7 +1595,7 @@ export function makeAcpAdapterV2(
           sessionId: string,
           threadId: ThreadId | null,
         ): void => {
-          const environment = acpMcpContext(threadId, self).processEnvironment;
+          const environment = terminalEnvironmentFor(threadId);
           pendingTerminalEnvironment = null;
           if (environment === undefined) {
             terminalEnvironmentBySessionId.delete(sessionId);

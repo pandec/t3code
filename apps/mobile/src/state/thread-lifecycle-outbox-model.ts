@@ -86,23 +86,61 @@ export function decodeThreadLifecycleIntent(value: unknown): ThreadLifecycleInte
 export const threadLifecycleIntentKey = scopedThreadKey;
 
 /**
- * Archive/unarchive revise an existing intent whatever the connection state,
- * so a direct command never races a pending reversal; with no intent, only a
- * disconnected archive queues one.
+ * The archive controls: "schedule-archive" is archive-when-done for a busy
+ * thread, "cancel-archive" withdraws a pending deferred archive.
+ */
+export type ThreadLifecycleUserAction =
+  | "archive"
+  | "schedule-archive"
+  | "unarchive"
+  | "cancel-archive";
+
+const THREAD_LIFECYCLE_USER_ACTIONS: ReadonlySet<string> = new Set<ThreadLifecycleUserAction>([
+  "archive",
+  "schedule-archive",
+  "unarchive",
+  "cancel-archive",
+]);
+
+export function isThreadLifecycleUserAction(action: string): action is ThreadLifecycleUserAction {
+  return THREAD_LIFECYCLE_USER_ACTIONS.has(action);
+}
+
+/**
+ * Archive controls queue a durable intent while disconnected, and revise an
+ * existing intent whatever the connection state, so a direct command never
+ * races a pending reversal.
  */
 export function threadLifecycleActionUsesOutbox(input: {
   readonly action: string;
   readonly environmentConnected: boolean;
   readonly hasIntent: boolean;
 }): boolean {
-  if (input.action === "archive") return !input.environmentConnected || input.hasIntent;
-  return input.action === "unarchive" && input.hasIntent;
+  return (
+    isThreadLifecycleUserAction(input.action) && (!input.environmentConnected || input.hasIntent)
+  );
 }
 
 export function threadLifecycleRevisionRequiresDispatch(
   previous: ThreadLifecycleIntent | undefined,
 ): boolean {
   return previous?.requiresDispatch === true || previous?.dispatchAttempted === true;
+}
+
+/**
+ * The intent an archive control records. Archives (scheduled or not) are
+ * delivered as archive-when-done. A cancel targets a deferred archive the
+ * server already holds, so it always requires a dispatch.
+ */
+export function threadLifecycleIntentRevision(
+  action: ThreadLifecycleUserAction,
+  previous: ThreadLifecycleIntent | undefined,
+): Pick<ThreadLifecycleIntent, "desiredArchived" | "requiresDispatch"> {
+  return {
+    desiredArchived: action === "archive" || action === "schedule-archive",
+    requiresDispatch:
+      action === "cancel-archive" || threadLifecycleRevisionRequiresDispatch(previous),
+  };
 }
 
 export function groupThreadLifecycleIntents(
@@ -224,6 +262,8 @@ export interface ThreadLifecyclePresentation {
   readonly activeThreads: ReadonlyArray<EnvironmentThreadShell>;
   readonly pendingArchivedThreads: ReadonlyArray<EnvironmentThreadShell>;
   readonly pendingArchivedThreadKeys: ReadonlySet<string>;
+  /** Threads a pending intent returns to the active list; hidden from the server shelf. */
+  readonly pendingUnarchivedThreadKeys: ReadonlySet<string>;
 }
 
 /**
@@ -240,6 +280,7 @@ export function deriveThreadLifecyclePresentation(
       activeThreads: canonicalThreads,
       pendingArchivedThreads: [],
       pendingArchivedThreadKeys: new Set(),
+      pendingUnarchivedThreadKeys: new Set(),
     };
   }
   const activeByKey = new Map(
@@ -250,6 +291,7 @@ export function deriveThreadLifecyclePresentation(
   );
   const pendingArchivedThreads: EnvironmentThreadShell[] = [];
   const pendingArchivedThreadKeys = new Set<string>();
+  const pendingUnarchivedThreadKeys = new Set<string>();
 
   for (const [key, intent] of Object.entries(intents)) {
     const shell =
@@ -262,7 +304,11 @@ export function deriveThreadLifecyclePresentation(
         pendingArchivedThreads.push({ ...shell, archivedAt: intent.createdAt });
       continue;
     }
-    if (shell !== undefined) activeByKey.set(key, { ...shell, archivedAt: null });
+    pendingUnarchivedThreadKeys.add(key);
+    // A pending unarchive or archive cancel also withdraws any deferred archive.
+    if (shell !== undefined) {
+      activeByKey.set(key, { ...shell, archivedAt: null, archiveRequest: null });
+    }
   }
 
   pendingArchivedThreads.sort((left, right) =>
@@ -272,26 +318,36 @@ export function deriveThreadLifecyclePresentation(
     activeThreads: [...activeByKey.values()],
     pendingArchivedThreads,
     pendingArchivedThreadKeys,
+    pendingUnarchivedThreadKeys,
   };
 }
 
-/** Puts pending archives at the top of the server's recent archived shelf. */
+/**
+ * Puts pending archives at the top of the server's recent archived shelf and
+ * hides threads a pending intent returns to the active list.
+ */
 export function mergePendingArchivedThreads(
   serverArchive: {
     readonly threads: ReadonlyArray<EnvironmentThreadShell>;
     readonly totalCount: number;
   },
-  pendingThreads: ReadonlyArray<EnvironmentThreadShell>,
+  pending: Pick<
+    ThreadLifecyclePresentation,
+    "pendingArchivedThreads" | "pendingUnarchivedThreadKeys"
+  >,
   visibleCount: number,
   selectedThreadKey: string | null = null,
 ): { readonly threads: ReadonlyArray<EnvironmentThreadShell>; readonly totalCount: number } {
-  if (pendingThreads.length === 0) return serverArchive;
+  const { pendingArchivedThreads: pendingThreads, pendingUnarchivedThreadKeys } = pending;
+  if (pendingThreads.length === 0 && pendingUnarchivedThreadKeys.size === 0) return serverArchive;
   const keyOf = (thread: EnvironmentThreadShell) =>
     threadLifecycleIntentKey(thread.environmentId, thread.id);
   const pendingKeys = new Set(pendingThreads.map(keyOf));
+  const overridden = (thread: EnvironmentThreadShell) =>
+    pendingKeys.has(keyOf(thread)) || pendingUnarchivedThreadKeys.has(keyOf(thread));
   const combined = [
     ...pendingThreads,
-    ...serverArchive.threads.filter((thread) => !pendingKeys.has(keyOf(thread))),
+    ...serverArchive.threads.filter((thread) => !overridden(thread)),
   ];
   const clipped = combined.slice(0, Math.max(0, visibleCount));
   if (
@@ -301,11 +357,9 @@ export function mergePendingArchivedThreads(
     const selected = combined.find((thread) => keyOf(thread) === selectedThreadKey);
     if (selected !== undefined) clipped.push(selected);
   }
-  const serverPendingOverlap = serverArchive.threads.filter((thread) =>
-    pendingKeys.has(keyOf(thread)),
-  ).length;
+  const serverOverridden = serverArchive.threads.filter(overridden).length;
   return {
     threads: clipped,
-    totalCount: serverArchive.totalCount + pendingThreads.length - serverPendingOverlap,
+    totalCount: serverArchive.totalCount + pendingThreads.length - serverOverridden,
   };
 }

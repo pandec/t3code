@@ -26,11 +26,13 @@ import { Tool, Toolkit } from "effect/ai";
 import * as ThreadSearch from "../../../orchestration-v2/ThreadSearch.ts";
 import * as ScheduledTaskService from "../../../scheduledTasks/ScheduledTaskService.ts";
 import * as ThreadManagementService from "../../../orchestration-v2/ThreadManagementService.ts";
+import * as ThreadArchiveScheduler from "../../../orchestration-v2/ThreadArchiveScheduler.ts";
 import * as McpInvocationContext from "../../McpInvocationContext.ts";
+import { ArchiveToolResult } from "../archive/tools.ts";
 
 const ThreadOrganizeTool = Tool.make("t3_thread_organize", {
   description:
-    "Pin, snooze, settle, archive, or mark a thread unread. Omit threadId for this thread. snooze requires snoozedUntil. Existing thread lifecycle rules apply. Settling this thread takes effect when your turn completes, returning settlesWhenTurnEnds=true; a turn that fails or is interrupted, or a queued message, leaves it active.",
+    "Pin, snooze, settle, archive, or mark a thread unread. Omit threadId for this thread. snooze requires snoozedUntil. Existing thread lifecycle rules apply. Settling this thread takes effect when your turn completes, returning settlesWhenTurnEnds=true; a turn that fails or is interrupted, or a queued message, leaves it active. Archive behaves like archive_thread: a working thread archives once its turn, final checkpoint, and background work finish, returning the archive request (pending means scheduled, not archived).",
   parameters: Schema.Struct({
     threadId: Schema.optional(ThreadId),
     action: Schema.Literals([
@@ -49,6 +51,8 @@ const ThreadOrganizeTool = Tool.make("t3_thread_organize", {
   success: Schema.Union([
     OrchestrationV2DispatchCommandResult,
     Schema.Struct({ settlesWhenTurnEnds: Schema.Literal(true) }),
+    // Fork: the archive action schedules through the deferred archive.
+    ArchiveToolResult,
   ]),
   failure: OrchestratorMcpFailure,
   failureMode: "return" as const,
@@ -56,6 +60,7 @@ const ThreadOrganizeTool = Tool.make("t3_thread_organize", {
     McpInvocationContext.McpInvocationContext,
     ThreadManagementService.ThreadManagementService,
     Crypto.Crypto,
+    ThreadArchiveScheduler.ThreadArchiveScheduler,
   ],
 })
   .annotate(Tool.Title, "Organize a thread")

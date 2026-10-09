@@ -5,6 +5,7 @@ import {
 import * as Schema from "effect/Schema";
 import * as SqlClient from "effect/sql/SqlClient";
 import type {
+  OrchestrationV2Run,
   OrchestrationV2ThreadShell,
   ProjectId,
   ServerSettings,
@@ -84,9 +85,18 @@ function sameProjectWorktreePolicies(left: ServerSettings, right: ServerSettings
   );
 }
 
-/** Live sessions keep their cwd even when no turn is currently running. */
-export function storageCleanupThreadIdle(thread: OrchestrationV2ThreadShell, now: number): boolean {
+/**
+ * Live sessions keep their cwd even when no turn is currently running. Fork:
+ * `runs` are the thread's run records, since the shell's presented status
+ * leaves out a queue held by Stop.
+ */
+export function storageCleanupThreadIdle(
+  thread: OrchestrationV2ThreadShell,
+  now: number,
+  runs: ReadonlyArray<Pick<OrchestrationV2Run, "status">>,
+): boolean {
   return (
+    !runs.some((run) => run.status === "queued") &&
     thread.branch !== null &&
     thread.worktreePath !== null &&
     thread.activeRunId === null &&
@@ -267,6 +277,13 @@ export const make = Effect.gen(function* () {
   const readLiveSessionCwds = () =>
     readLiveProviderSessionCwds().pipe(Effect.provideService(SqlClient.SqlClient, sql));
 
+  // Fork: a queue held by Stop is pending work the shell's status leaves out.
+  const threadIdle = (thread: OrchestrationV2ThreadShell, now: number) =>
+    projections.getThreadRecords(thread.id, ["runs"]).pipe(
+      Effect.map(({ runs }) => storageCleanupThreadIdle(thread, now, runs)),
+      Effect.orElseSucceed(() => false),
+    );
+
   // Local threads under another project need not have a worktreePath of their own.
   const containsProjectRoot = Effect.fn("StorageCleanup.containsProjectRoot")(function* (
     worktreePath: string,
@@ -362,7 +379,7 @@ export const make = Effect.gen(function* () {
         : snapshot.projects.find((entry) => entry.id === thread.projectId);
       if (
         project === undefined ||
-        (!deleted && !storageCleanupThreadIdle(thread, now)) ||
+        (!deleted && !(yield* threadIdle(thread, now))) ||
         (yield* hasTerminal(worktreePath)) ||
         (yield* storageCleanupWorktreeInUse({
           worktreePath,
@@ -480,7 +497,7 @@ export const make = Effect.gen(function* () {
             latest !== undefined &&
             latest.worktreePath !== null &&
             (yield* canonicalWorkspacePath(latest.worktreePath)) === worktreePath &&
-            storageCleanupThreadIdle(latest, now) &&
+            (yield* threadIdle(latest, now)) &&
             storageCleanupActivityAt(latest) === storageCleanupActivityAt(thread)
           );
         });

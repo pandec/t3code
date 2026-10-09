@@ -37,20 +37,9 @@ export const MAX_CUSTOM_MODEL_LENGTH = 256;
 const DEFAULT_TEXT_GENERATION_INSTANCE_ID = ProviderInstanceId.make("codex");
 
 /**
- * Resolve the custom-model list for a given instance, preferring the
- * instance's own `providerInstances[id].config.customModels` blob when
- * present and falling back to the legacy per-kind
- * `settings.providers[kind].customModels` bucket for default instances only.
- *
- * The Settings UI promotes the legacy bucket into an explicit
- * `providerInstances[defaultId]` entry on every edit (the "migrate on
- * first write" scheme documented in
- * `ProviderInstanceRegistryHydration`), so this helper exists primarily
- * so readers pick up that promotion immediately — and so first-time
- * viewers on pre-migration settings still see their legacy list on
- * default slots. Custom instances intentionally do not read the legacy
- * per-driver bucket; otherwise one custom model added to `claude_openrouter`
- * can appear on the stock `claudeAgent` instance.
+ * Resolve the custom-model list for a given instance from its own
+ * `providerInstances[id].config.customModels` blob. Legacy per-driver
+ * `settings.providers` entries are migrated into instances on server start.
  */
 function readInstanceCustomModels(
   settings: UnifiedSettings,

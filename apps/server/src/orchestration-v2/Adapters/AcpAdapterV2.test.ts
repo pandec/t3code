@@ -2429,7 +2429,10 @@ describe("AcpAdapterV2", () => {
         {
           sessionId: "mock-session-1-fork",
           command: process.execPath,
-          args: ["-e", "process.stdout.write(process.env.T3_ACP_MCP_AUTHORIZATION ?? '')"],
+          args: [
+            "-e",
+            "const e = process.env; process.stdout.write([e.T3_ACP_MCP_AUTHORIZATION, e.T3CODE_THREAD_ID, e.T3CODE_HOME, e.T3CODE_STATE_DIR].join('|'))",
+          ],
         },
         { requestId: "test-terminal-create", method: "terminal/create" },
       );
@@ -2447,7 +2450,15 @@ describe("AcpAdapterV2", () => {
         },
         { requestId: "test-terminal-output", method: "terminal/output" },
       );
-      assert.equal(terminalOutput.output, "Bearer target-thread-token");
+      assert.equal(
+        terminalOutput.output,
+        [
+          "Bearer target-thread-token",
+          targetThreadId,
+          host.paths.baseDir,
+          host.paths.stateDir,
+        ].join("|"),
+      );
     }).pipe(Effect.provide(layerTest), Effect.scoped),
   );
 

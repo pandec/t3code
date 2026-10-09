@@ -152,11 +152,11 @@ export interface ThreadManagementWaitResult {
   readonly timedOut: boolean;
 }
 
-/** Fork: input for reading what a `thread wait --drain` still waits on. */
+/** Fork: input for reading what a thread drain still waits on. */
 export interface ThreadManagementBackgroundWorkDrainInput {
   readonly projectId: ProjectId;
   readonly threadId: ThreadId;
-  /** "agents" (`--drain`) ignores watch loops; "all" (`--drain=all`) includes monitors. */
+  /** "agents" ignores watch loops; "all" includes monitors. */
   readonly scope: BackgroundWorkDrainScope;
 }
 
@@ -397,7 +397,7 @@ export interface ThreadManagementServiceShape {
   readonly interruptThread: (
     input: ThreadManagementInterruptInput,
   ) => Effect.Effect<ThreadManagementInterruptResult, ThreadManagementFailure>;
-  /** Fork: what a `thread wait --drain` still waits on, read from the thread shell's roster. */
+  /** Fork: what a drain still waits on: the thread shell's roster plus queued runs, held ones included. */
   readonly getBackgroundWorkDrain: (
     input: ThreadManagementBackgroundWorkDrainInput,
   ) => Effect.Effect<ThreadManagementBackgroundWorkDrain, ThreadManagementError>;
@@ -880,31 +880,32 @@ const make = Effect.gen(function* () {
     });
 
   const getBackgroundWorkDrain: ThreadManagementServiceShape["getBackgroundWorkDrain"] = (input) =>
-    orchestrator.getThreadShell(input.threadId).pipe(
-      Effect.mapError(
-        (cause) =>
-          new ThreadManagementProjectionLoadError({
-            projectId: input.projectId,
-            threadId: input.threadId,
-            cause,
-          }),
-      ),
-      Effect.flatMap((shell) => {
-        if (shell === null || shell.projectId !== input.projectId) {
-          return Effect.fail(
-            new ThreadManagementThreadNotFoundError({
-              projectId: input.projectId,
-              threadId: input.threadId,
-            }),
-          );
-        }
-        return Effect.succeed({
+    Effect.gen(function* () {
+      const loadError = (cause: unknown) =>
+        new ThreadManagementProjectionLoadError({
+          projectId: input.projectId,
           threadId: input.threadId,
-          scope: input.scope,
-          ...backgroundWorkDrainState(shell, input.scope),
+          cause,
         });
-      }),
-    );
+      const shell = yield* orchestrator
+        .getThreadShell(input.threadId)
+        .pipe(Effect.mapError(loadError));
+      if (shell === null || shell.projectId !== input.projectId) {
+        return yield* new ThreadManagementThreadNotFoundError({
+          projectId: input.projectId,
+          threadId: input.threadId,
+        });
+      }
+      // Fork: the shell's status leaves out a queue held by Stop.
+      const { runs } = yield* orchestrator
+        .getThreadRecords(input.threadId, ["runs"])
+        .pipe(Effect.mapError(loadError));
+      return {
+        threadId: input.threadId,
+        scope: input.scope,
+        ...backgroundWorkDrainState(shell, input.scope, runs),
+      };
+    });
   const stopDelegatedTasks: ThreadManagementServiceShape["stopDelegatedTasks"] = (input) =>
     Effect.gen(function* () {
       const { subagents } = yield* orchestrator.getThreadRecords(input.threadId, ["subagents"]);

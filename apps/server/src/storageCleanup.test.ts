@@ -85,21 +85,21 @@ describe("V2 storage cleanup eligibility", () => {
   const candidate = () => shell({ branch: "feature", worktreePath: "/worktrees/feature" });
 
   it("allows an idle worktree and rejects the project checkout", () => {
-    expect(storageCleanupThreadIdle(candidate(), NOW_MS)).toBe(true);
-    expect(storageCleanupThreadIdle(shell(), NOW_MS)).toBe(false);
+    expect(storageCleanupThreadIdle(candidate(), NOW_MS, [])).toBe(true);
+    expect(storageCleanupThreadIdle(shell(), NOW_MS, [])).toBe(false);
   });
 
   it.each(["running", "starting", "preparing", "waiting", "queued"] as const)(
     "retains a worktree while its thread is %s",
     (status) => {
-      expect(storageCleanupThreadIdle(candidateWithStatus(status), NOW_MS)).toBe(false);
+      expect(storageCleanupThreadIdle(candidateWithStatus(status), NOW_MS, [])).toBe(false);
     },
   );
 
   it.each(["idle", "completed", "interrupted", "failed", "cancelled", "rolled_back"] as const)(
     "allows cleanup once its thread is %s",
     (status) => {
-      expect(storageCleanupThreadIdle(candidateWithStatus(status), NOW_MS)).toBe(true);
+      expect(storageCleanupThreadIdle(candidateWithStatus(status), NOW_MS, [])).toBe(true);
     },
   );
 
@@ -113,6 +113,7 @@ describe("V2 storage cleanup eligibility", () => {
             pendingBackgroundTasks: [{ taskId: "task-1", kind: "command" }],
           },
           NOW_MS,
+          [],
         ),
       ).toBe(false);
     },
@@ -132,6 +133,7 @@ describe("V2 storage cleanup eligibility", () => {
             },
           },
           NOW_MS,
+          [],
         ),
       ).toBe(false);
     },
@@ -139,13 +141,28 @@ describe("V2 storage cleanup eligibility", () => {
 
   it("retains an active run even if the shell status is idle", () => {
     expect(
-      storageCleanupThreadIdle({ ...candidate(), activeRunId: RunId.make("run") }, NOW_MS),
+      storageCleanupThreadIdle({ ...candidate(), activeRunId: RunId.make("run") }, NOW_MS, []),
     ).toBe(false);
+  });
+
+  it("retains an interrupted thread whose queue Stop held", () => {
+    // The shell presents the interrupted run; the held queued run stays pending.
+    expect(
+      storageCleanupThreadIdle(candidateWithStatus("interrupted"), NOW_MS, [
+        { status: "interrupted" },
+        { status: "queued" },
+      ]),
+    ).toBe(false);
+    expect(
+      storageCleanupThreadIdle(candidateWithStatus("interrupted"), NOW_MS, [
+        { status: "interrupted" },
+      ]),
+    ).toBe(true);
   });
 
   it("retains a queued prompt before the new run has been projected", () => {
     expect(
-      storageCleanupThreadIdle({ ...candidate(), latestUserMessageAt: at(-1_000) }, NOW_MS),
+      storageCleanupThreadIdle({ ...candidate(), latestUserMessageAt: at(-1_000) }, NOW_MS, []),
     ).toBe(false);
   });
 

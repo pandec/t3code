@@ -299,6 +299,7 @@ export function HomeRouteScreen() {
           pendingTasks={pendingTasks}
           pendingArchivedThreads={threadLifecyclePresentation.pendingArchivedThreads}
           pendingArchivedThreadKeys={threadLifecyclePresentation.pendingArchivedThreadKeys}
+          pendingUnarchivedThreadKeys={threadLifecyclePresentation.pendingUnarchivedThreadKeys}
           projectGroupingMode={listOptions.projectGroupingMode}
           projects={projects}
           savedConnectionsById={savedConnectionsById}

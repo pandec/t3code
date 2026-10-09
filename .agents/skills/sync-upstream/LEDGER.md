@@ -13,6 +13,7 @@ An entry earns its place only if a capable agent with the code in front of it wo
 - Keep the Working beta compiled but default-off, with its web/mobile settings and search entries hidden; ask before exposing it (`useWorkingShelfEnabled`).
 - Gate new pane-local keyboard handlers with `isThreadPaneActive` and route thread navigation through `openThreadInActivePane`/`useThreadLinkClick`.
 - Provider packages never import `apps/server`: when upstream moves a provider out, move the fork helpers it needs into `packages/provider-core` and take T3 paths from `host.paths`.
+- New provider packages and launch paths (including fork launches and client terminals) apply `providerThreadEnvironment` at spawn.
 - Fork schema goes only through fork-owned tables and `ForkMigrations`; upstream migrations keep their ids.
 - When both sides reuse one usage-cache version for incompatible formats, assign a fresh `USAGE_SCAN_CACHE_VERSION` and keep supported legacy decoders.
 - Merge a conflicted `patches/` file in extracted package source, regenerate it against the pristine package, and verify the patch reproduces the merged tree.
@@ -36,4 +37,4 @@ When the upstream range touches a path, spawn one reviewer for its question.
 
 ## Full audit
 
-- Next due: **2026-10-16**. Scope: fork hooks rebuilt in upstream v2 paths, especially lifecycle/worktree ownership and reasoning propagation into voice and client caches.
+- Last run 2026-10-09 (all areas); next due: **2026-11-06**. Scope: fork hooks rebuilt in upstream v2 paths, especially lifecycle/worktree ownership, upstream thread actions that bypass split-pane targeting or archive-when-done, and reasoning propagation into voice and client caches.

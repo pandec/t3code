@@ -4,6 +4,7 @@ import * as Order from "effect/Order";
 import { useFocusEffect } from "@react-navigation/native";
 import { useCallback, useMemo, useState } from "react";
 
+import { useThreadLifecycleIntents } from "../../state/thread-lifecycle-outbox.ts";
 import { useSavedRemoteConnections } from "../../state/use-remote-environment-registry";
 import { useArchivedThreadListActions } from "../home/useThreadListActions";
 import {
@@ -46,6 +47,17 @@ export function ArchivedThreadsRouteScreen() {
     [environments],
   );
   const { error, isLoading, refresh, snapshots } = useArchivedThreadSnapshots(environmentIds);
+  // Fork: an unarchive queued offline leaves this list right away.
+  const lifecycleIntents = useThreadLifecycleIntents();
+  const pendingUnarchivedThreadKeys = useMemo(
+    () =>
+      new Set(
+        Object.entries(lifecycleIntents).flatMap(([key, intent]) =>
+          intent.desiredArchived ? [] : [key],
+        ),
+      ),
+    [lifecycleIntents],
+  );
   const groups = useMemo(
     () =>
       buildArchivedThreadGroups({
@@ -54,8 +66,16 @@ export function ArchivedThreadsRouteScreen() {
         environmentId: selectedEnvironmentId,
         searchQuery,
         sortOrder,
+        pendingUnarchivedThreadKeys,
       }),
-    [environmentLabels, searchQuery, selectedEnvironmentId, snapshots, sortOrder],
+    [
+      environmentLabels,
+      pendingUnarchivedThreadKeys,
+      searchQuery,
+      selectedEnvironmentId,
+      snapshots,
+      sortOrder,
+    ],
   );
   const refreshChangedEnvironment = useCallback(
     (thread: { readonly environmentId: EnvironmentId }) => {

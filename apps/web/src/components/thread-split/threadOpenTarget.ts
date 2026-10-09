@@ -104,6 +104,28 @@ export function openThreadInActivePane(input: {
 }
 
 /**
+ * Which route carries a URL hash (a citation's source) for an executed open.
+ * Both panes share one URL and each ChatView acts only on a hash addressed
+ * to its own thread, so a thread landing in or focusing the secondary keeps
+ * the primary route and only adds the hash. A primary landing (including an
+ * in-flight swap's destination) uses the target's own route. Null means no
+ * thread route to carry it.
+ */
+export function threadOpenHashRouteRef(input: {
+  plan: ThreadOpenPlan;
+  targetRef: ScopedThreadRef;
+  routeThreadRef: ScopedThreadRef | null;
+}): ScopedThreadRef | null {
+  if (
+    input.plan.kind === "navigate-primary" ||
+    (input.plan.kind === "focus-pane" && input.plan.paneId === "primary")
+  ) {
+    return input.targetRef;
+  }
+  return input.routeThreadRef;
+}
+
+/**
  * The duplicate-thread guard's decision: the primary route landing on the
  * secondary's thread normally folds the split ("the thread moved there"),
  * except while a fresh pane swap is in flight — mid-swap the route briefly

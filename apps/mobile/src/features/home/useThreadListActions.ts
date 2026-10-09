@@ -1,6 +1,10 @@
 import type { ThreadMoveDestination } from "../threads/threadOrder";
 import type { EnvironmentThreadShell } from "@t3tools/client-runtime/state/shell";
-import { canSnooze, effectiveSnoozed } from "@t3tools/client-runtime/state/thread-settled";
+import {
+  canSnooze,
+  effectiveSnoozed,
+  resolveArchiveToggleAction,
+} from "@t3tools/client-runtime/state/thread-settled";
 import { mergeThreadGroups, threadGroupId } from "@t3tools/shared/threadGroups";
 import { AuthOrchestrationOperateScope, CommandId } from "@t3tools/contracts";
 import * as Cause from "effect/Cause";
@@ -23,8 +27,10 @@ import {
   threadLifecycleOutboxManager,
 } from "../../state/thread-lifecycle-outbox";
 import {
+  isThreadLifecycleUserAction,
   threadLifecycleActionUsesOutbox,
-  threadLifecycleRevisionRequiresDispatch,
+  threadLifecycleIntentRevision,
+  type ThreadLifecycleUserAction,
 } from "../../state/thread-lifecycle-outbox-model";
 import { environmentThreadShells, threadEnvironment } from "../../state/threads";
 import { useRemoteConnectionStatus } from "../../state/use-remote-environment-registry";
@@ -102,22 +108,23 @@ function environmentSupportsTitleRegeneration(
   );
 }
 
-type ThreadListAction = "archive" | "unarchive" | "delete" | "settle" | "unsettle";
+type ThreadListAction = ThreadLifecycleUserAction | "delete" | "settle" | "unsettle";
 
-const ACTION_VERBS: Record<ThreadListAction, string> = {
-  archive: "archived",
-  unarchive: "unarchived",
-  delete: "deleted",
-  settle: "settled",
-  unsettle: "un-settled",
+const ACTION_FAILURE_MESSAGES: Record<ThreadListAction, string> = {
+  archive: "The thread could not be archived.",
+  "schedule-archive": "The archive could not be scheduled.",
+  unarchive: "The thread could not be unarchived.",
+  "cancel-archive": "The archive could not be cancelled.",
+  delete: "The thread could not be deleted.",
+  settle: "The thread could not be settled.",
+  unsettle: "The thread could not be un-settled.",
 };
 
-function actionFailureMessage(action: ThreadListAction, cause: Cause.Cause<unknown>): string {
-  const error = Cause.squash(cause);
+function actionFailureMessage(action: ThreadListAction, error: unknown): string {
   if (error instanceof Error && error.message.trim().length > 0) {
     return error.message;
   }
-  return `The thread could not be ${ACTION_VERBS[action]}.`;
+  return ACTION_FAILURE_MESSAGES[action];
 }
 
 function selectionHaptic(): void {
@@ -126,6 +133,8 @@ function selectionHaptic(): void {
 
 function actionFailureTitle(action: ThreadListAction): string {
   if (action === "archive") return "Could not archive thread";
+  if (action === "schedule-archive") return "Could not schedule archive";
+  if (action === "cancel-archive") return "Could not cancel pending archive";
   if (action === "unarchive") return "Could not unarchive thread";
   if (action === "settle") return "Could not settle thread";
   if (action === "unsettle") return "Could not un-settle thread";
@@ -143,6 +152,12 @@ function useThreadActionExecutor(
   onCompleted?: (action: ThreadListAction, thread: EnvironmentThreadShell) => void,
 ) {
   const archiveMutation = useAtomCommand(threadEnvironment.archive, { reportFailure: false });
+  const scheduleArchiveMutation = useAtomCommand(threadEnvironment.scheduleArchive, {
+    reportFailure: false,
+  });
+  const cancelArchiveMutation = useAtomCommand(threadEnvironment.cancelArchive, {
+    reportFailure: false,
+  });
   const unarchiveMutation = useAtomCommand(threadEnvironment.unarchive, { reportFailure: false });
   const deleteMutation = useAtomCommand(threadEnvironment.delete, { reportFailure: false });
   const settleMutation = useAtomCommand(threadEnvironment.settle, { reportFailure: false });
@@ -170,19 +185,10 @@ function useThreadActionExecutor(
           );
           return false;
         }
-        // Archive keeps its original, narrower guard: never interrupt a
-        // thread mid-turn.
-        if (action === "archive" && !threadCanArchive(thread.runtime)) {
-          Alert.alert(
-            actionFailureTitle(action),
-            "This thread is working. Interrupt it first, then try again.",
-          );
-          return false;
-        }
-
-        // Fork: archive while disconnected queues a durable intent applied on
-        // reconnect. Archive/unarchive revise any existing intent (Undo),
-        // whatever the connection state, so a direct command never races it.
+        // Fork: archive controls while disconnected queue a durable intent
+        // applied on reconnect, where archives are sent as archive-when-done.
+        // They revise any existing intent (Undo), whatever the connection
+        // state, so a direct command never races it.
         const existingIntent = appAtomRegistry.get(
           threadLifecycleOutboxManager.intentsByThreadKeyAtom,
         )[key];
@@ -192,52 +198,76 @@ function useThreadActionExecutor(
             environment.connectionState === "connected",
         );
         if (
+          isThreadLifecycleUserAction(action) &&
           threadLifecycleActionUsesOutbox({
             action,
             environmentConnected,
             hasIntent: existingIntent !== undefined,
           })
         ) {
-          const desiredArchived = action === "archive";
+          const revision = threadLifecycleIntentRevision(action, existingIntent);
+          const { desiredArchived } = revision;
           if (existingIntent?.desiredArchived === desiredArchived) return true;
+          const enqueue = async () => {
+            await enqueueThreadLifecycleIntent({
+              environmentId: thread.environmentId,
+              threadId: thread.id,
+              ...revision,
+              dispatchAttempted: false,
+              dispatchedAction: null,
+              commandId: CommandId.make(uuidv4()),
+              createdAt: new Date().toISOString(),
+              thread: existingIntent?.thread ?? thread.source,
+            });
+            return true;
+          };
           try {
-            await withThreadDismissal(
-              key,
-              async () => {
-                await enqueueThreadLifecycleIntent({
-                  environmentId: thread.environmentId,
-                  threadId: thread.id,
-                  desiredArchived,
-                  requiresDispatch: threadLifecycleRevisionRequiresDispatch(existingIntent),
-                  dispatchAttempted: false,
-                  dispatchedAction: null,
-                  commandId: CommandId.make(uuidv4()),
-                  createdAt: new Date().toISOString(),
-                  thread: existingIntent?.thread ?? thread.source,
-                });
-                return true;
-              },
-              (result) => result,
-            );
+            // A cancelled pending archive keeps its row in place.
+            if (action === "cancel-archive") await enqueue();
+            else await withThreadDismissal(key, enqueue, (result) => result);
           } catch (error) {
-            Alert.alert(
-              actionFailureTitle(action),
-              error instanceof Error && error.message.trim().length > 0
-                ? error.message
-                : `The thread could not be ${ACTION_VERBS[action]}.`,
-            );
+            Alert.alert(actionFailureTitle(action), actionFailureMessage(action, error));
             return false;
           }
           // A queued archive hides the row just like a direct one.
-          if (action === "archive") pauseListeningForThread(thread.environmentId, thread.id);
-          onCompleted?.(action, thread);
+          if (desiredArchived) pauseListeningForThread(thread.environmentId, thread.id);
+          onCompleted?.(desiredArchived ? "archive" : "unarchive", thread);
           return true;
+        }
+
+        // Archive keeps its original, narrower guard: never interrupt a
+        // thread mid-turn. Offline, the queued intent defers instead.
+        if (action === "archive" && !threadCanArchive(thread.runtime)) {
+          Alert.alert(
+            actionFailureTitle(action),
+            "This thread is working. Interrupt it first, then try again.",
+          );
+          return false;
         }
 
         // Checked here, after the outbox branch: an offline connection cannot
         // confirm its grant. The lifecycle-outbox drain checks it on reconnect
         // and drops intents the connection cannot dispatch.
         if (!checkThreadOperationPermission(thread, actionFailureTitle(action))) return false;
+        // Scheduling or cancelling a deferred archive keeps the row in place.
+        if (action === "schedule-archive" || action === "cancel-archive") {
+          const input = { threadId: thread.id };
+          const result = await (action === "schedule-archive"
+            ? scheduleArchiveMutation({
+                environmentId: thread.environmentId,
+                input: { ...input, afterTurn: true },
+              })
+            : cancelArchiveMutation({ environmentId: thread.environmentId, input }));
+          if (result._tag === "Failure") {
+            Alert.alert(
+              actionFailureTitle(action),
+              actionFailureMessage(action, Cause.squash(result.cause)),
+            );
+            return false;
+          }
+          onCompleted?.(action, thread);
+          return true;
+        }
         const result = await withThreadDismissal(
           key,
           async () =>
@@ -263,7 +293,10 @@ function useThreadActionExecutor(
           (result) => result._tag === "Success",
         );
         if (result._tag === "Failure") {
-          Alert.alert(actionFailureTitle(action), actionFailureMessage(action, result.cause));
+          Alert.alert(
+            actionFailureTitle(action),
+            actionFailureMessage(action, Cause.squash(result.cause)),
+          );
           return false;
         }
         // Settled threads stay in the live shell stream; only the archive
@@ -288,9 +321,11 @@ function useThreadActionExecutor(
     },
     [
       archiveMutation,
+      cancelArchiveMutation,
       connectedEnvironments,
       deleteMutation,
       onCompleted,
+      scheduleArchiveMutation,
       settleMutation,
       unarchiveMutation,
       unsettleMutation,
@@ -374,7 +409,23 @@ export function useThreadListActions(
   /** Forks the conversation and opens the copy. */
   readonly forkThread: (thread: EnvironmentThreadShell) => void;
 } {
-  const executeAction = useThreadActionExecutor();
+  const handleSelectedThreadRemoved = useCallback(
+    (thread: EnvironmentThreadShell) => {
+      if (scopedThreadKey(thread.environmentId, thread.id) === options.selectedThreadKey) {
+        options.onSelectedThreadRemoved?.();
+      }
+    },
+    [options.onSelectedThreadRemoved, options.selectedThreadKey],
+  );
+  // Archived rows leave the list, including archives queued offline; a
+  // scheduled or cancelled deferred archive keeps the row.
+  const handleCompleted = useCallback(
+    (action: ThreadListAction, thread: EnvironmentThreadShell) => {
+      if (action === "archive") handleSelectedThreadRemoved(thread);
+    },
+    [handleSelectedThreadRemoved],
+  );
+  const executeAction = useThreadActionExecutor(handleCompleted);
   const forkThread = useForkConversation(options.onOpenForkedThread);
   const snoozeMutation = useAtomCommand(threadEnvironment.snooze, { reportFailure: false });
   const unsnoozeMutation = useAtomCommand(threadEnvironment.unsnooze, { reportFailure: false });
@@ -388,22 +439,21 @@ export function useThreadListActions(
   });
   const snoozeInFlightThreadKeys = useRef(new Set<string>());
   const titleRegenerationInFlightThreadKeys = useRef(new Set<string>());
-  const handleSelectedThreadRemoved = useCallback(
-    (thread: EnvironmentThreadShell) => {
-      if (scopedThreadKey(thread.environmentId, thread.id) === options.selectedThreadKey) {
-        options.onSelectedThreadRemoved?.();
-      }
-    },
-    [options.onSelectedThreadRemoved, options.selectedThreadKey],
-  );
 
+  /** The archive toggle: archives, archives when done, or cancels a pending archive. */
   const archiveThread = useCallback(
     (thread: EnvironmentThreadShell) => {
-      void executeAction("archive", thread).then((result) => {
-        if (result) handleSelectedThreadRemoved(thread);
-      });
+      const toggle = resolveArchiveToggleAction(thread);
+      void executeAction(
+        toggle === "cancel"
+          ? "cancel-archive"
+          : toggle === "schedule"
+            ? "schedule-archive"
+            : "archive",
+        thread,
+      );
     },
-    [executeAction, handleSelectedThreadRemoved],
+    [executeAction],
   );
   const settleThread = useCallback(
     async (thread: EnvironmentThreadShell) => (await executeAction("settle", thread)) === true,

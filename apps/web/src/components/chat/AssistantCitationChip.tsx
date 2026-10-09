@@ -3,7 +3,7 @@ import {
   assistantCitationLabel,
   serializeAssistantCitation,
 } from "@t3tools/shared/assistantCitations";
-import { Link, useNavigate } from "@tanstack/react-router";
+import { Link } from "@tanstack/react-router";
 import { ArrowUpRightIcon, PencilIcon, QuoteIcon } from "lucide-react";
 import {
   useEffect,
@@ -22,6 +22,7 @@ import {
 } from "../../lib/assistantCitationNavigation";
 import { cn } from "~/lib/utils";
 import { ContextChip, ContextChipAction, ContextChipLabel } from "../ContextChip";
+import { useOpenThreadInPane } from "../thread-split/useOpenThreadInPane";
 import { ContextChipPopover } from "../contextChipParts";
 import { Button } from "../ui/button";
 import { Popover, PopoverClose, PopoverPopup, PopoverTrigger } from "../ui/popover";
@@ -49,7 +50,7 @@ export function AssistantCitationChip({
     onRestoreFocus?: () => void;
   };
 }) {
-  const navigate = useNavigate();
+  const openThreadInPane = useOpenThreadInPane();
   const commentInputRef = useRef<HTMLTextAreaElement>(null);
   const commentPopupRef = useRef<HTMLDivElement>(null);
   const draftCommentRef = useRef<string | null>(null);
@@ -112,7 +113,9 @@ export function AssistantCitationChip({
         return;
       }
       event.preventDefault();
-      void navigate(assistantCitationNavigation(citation));
+      // Fork: in split view the source opens in the pane the chip sits in.
+      const navigation = assistantCitationNavigation(citation);
+      openThreadInPane(navigation.params, { hash: navigation.hash, state: navigation.state });
     },
   };
   const composerSourceLink = (

@@ -11,6 +11,7 @@ import type * as Layer from "effect/Layer";
 import type * as Scope from "effect/Scope";
 import type { Tool, Toolkit } from "effect/ai";
 
+import * as ThreadCommandExecutor from "../orchestration-v2/ThreadCommandExecutor.ts";
 import {
   DispatchModeLimit,
   type DispatchModeRefusal,
@@ -240,6 +241,14 @@ const fullAccessRequired =
   "Changing projects or environment settings needs a live full-access/default calling thread or a full-access client.";
 
 /**
+ * The check `writesEnvironment` runs and hands its handler. Fork: exported so
+ * a `dependsOnParams` handler can re-check an environment write it chose.
+ */
+export const environmentCheck = orchestratingCaller.pipe(
+  Effect.tap((caller) => assertFullAccess(caller, fullAccessRequired)),
+);
+
+/**
  * Changes projects or environment settings, which needs a full-access/default
  * caller. `check` re-checks the caller wherever the handler waits before
  * writing, such as for a lock, since the caller's modes can change meanwhile.
@@ -250,14 +259,30 @@ export const writesEnvironment = <P, A, E, R>(
     check: Effect.Effect<Caller, OrchestratorMcpFailure, CheckServices>,
   ) => Effect.Effect<A, E, R>,
 ) => {
-  const check = orchestratingCaller.pipe(
-    Effect.tap((caller) => assertFullAccess(caller, fullAccessRequired)),
-  );
+  const check = environmentCheck;
   return declare((params: P) => check.pipe(Effect.flatMap(() => handle(params, check))));
 };
 
 /** What a declaration's own check needs. */
 type CheckServices = Effect.Services<typeof orchestratingCaller>;
+
+/**
+ * Fork: runs a `writesEnvironment` handler's `write` after its `check`, under
+ * the calling thread's lock so the caller's turn cannot end, nor its modes
+ * change, between them; `write` may wait on its own locks meanwhile. A client
+ * has no thread to lock. `t3_environment_preferences_update` does the same.
+ */
+export const recheckedWrite = Effect.fn("mcp.recheckedWrite")(function* <A, E, R>(
+  check: Effect.Effect<Caller, OrchestratorMcpFailure, CheckServices>,
+  write: Effect.Effect<A, E, R>,
+) {
+  const scope = yield* McpInvocationContext.McpInvocationContext;
+  const executor = yield* ThreadCommandExecutor.ThreadCommandExecutor;
+  const update = check.pipe(Effect.andThen(write));
+  return yield* scope.thread === undefined
+    ? update
+    : executor.withLock(scope.thread.threadId, update);
+});
 
 /**
  * Fork: changes the calling thread's own lifecycle (a deferred archive or

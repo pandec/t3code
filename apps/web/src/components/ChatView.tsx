@@ -195,6 +195,7 @@ import { AsyncResult } from "effect/reactivity";
 import { isElectron } from "../env";
 import { readLocalApi } from "../localApi";
 import { useDiffPanelStore } from "../diffPanelStore";
+import { useKeepFullHistoryOverrideStore } from "../keepFullHistoryOverrideStore";
 import { useActiveThreadRef } from "../hooks/useActiveThreadRef";
 import {
   type ComposerSubmissionIntent,
@@ -8197,19 +8198,10 @@ export default function ChatView(props: ChatViewProps) {
   const keepFullHistoryByDefault = useClientSettings(
     (settings) => settings.staleSessionSend === "full-history",
   );
-  const [keepFullHistoryOverrides, setKeepFullHistoryOverrides] = useState<
-    ReadonlyMap<string, boolean>
-  >(() => new Map());
-  const keepFullHistory = keepFullHistoryOverrides.get(routeThreadKey) ?? keepFullHistoryByDefault;
-  const setKeepFullHistoryOverride = useCallback((threadKey: string, keep: boolean | null) => {
-    setKeepFullHistoryOverrides((current) => {
-      if ((current.get(threadKey) ?? null) === keep) return current;
-      const next = new Map(current);
-      if (keep === null) next.delete(threadKey);
-      else next.set(threadKey, keep);
-      return next;
-    });
-  }, []);
+  const keepFullHistory =
+    useKeepFullHistoryOverrideStore((state) => state.overrides.get(routeThreadKey)) ??
+    keepFullHistoryByDefault;
+  const setKeepFullHistoryOverride = useKeepFullHistoryOverrideStore((state) => state.setOverride);
   const toggleKeepFullHistory = useCallback(
     () =>
       setKeepFullHistoryOverride(

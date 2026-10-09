@@ -7,12 +7,13 @@ import * as McpToolAccess from "../../McpToolAccess.ts";
 import { readOwnedCaller, readThread } from "../../threadAccess.ts";
 import { ArchiveToolkit } from "./tools.ts";
 
-const toResult = (status: ThreadArchiveScheduler.ThreadArchiveStatus) => ({
+/** Also returned by `t3_thread_organize` for its archive action. */
+export const toResult = (status: ThreadArchiveScheduler.ThreadArchiveStatus) => ({
   archivedAt: status.archivedAt === null ? null : DateTime.formatIso(status.archivedAt),
   request: status.request,
 });
 
-const failure = (error: ThreadArchiveScheduler.ThreadArchiveSchedulerError) =>
+export const failure = (error: ThreadArchiveScheduler.ThreadArchiveSchedulerError) =>
   new OrchestratorMcpFailure({ code: "invalid_request", message: error.detail });
 
 /** The credential's own thread when omitted (readable after it is archived), else that thread. */

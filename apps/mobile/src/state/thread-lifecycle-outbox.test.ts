@@ -28,6 +28,7 @@ import {
   resolveThreadLifecycleOutboxAction,
   threadLifecycleActionUsesOutbox,
   threadLifecycleIntentKey,
+  threadLifecycleIntentRevision,
   threadLifecycleRevisionRequiresDispatch,
   type ThreadLifecycleIntent,
   type ThreadLifecycleOutboxAction,
@@ -205,6 +206,11 @@ describe("thread lifecycle outbox model", () => {
     expect(route("archive", true, true)).toBe(true);
     expect(route("unarchive", true, true)).toBe(true);
     expect(route("unarchive", true, false)).toBe(false);
+    // Offline, every archive control queues, even without an earlier intent.
+    for (const action of ["unarchive", "schedule-archive", "cancel-archive"]) {
+      expect(route(action, false, false)).toBe(true);
+      expect(route(action, true, false)).toBe(false);
+    }
     expect(route("delete", false, true)).toBe(false);
 
     // The revised pending Undo now archives instead of unarchiving.
@@ -220,6 +226,34 @@ describe("thread lifecycle outbox model", () => {
     expect(resolveThreadLifecycleOutboxAction({ ...live, ...revised, thread: idle })).toBe(
       "archive",
     );
+  });
+
+  it("delivers an offline unarchive of a server-archived thread", () => {
+    const revision = threadLifecycleIntentRevision("unarchive", undefined);
+    expect(revision).toEqual({ desiredArchived: false, requiresDispatch: false });
+    // Live shells omit archived threads.
+    expect(resolveThreadLifecycleOutboxAction({ ...live, ...revision, thread: undefined })).toBe(
+      "unarchive",
+    );
+  });
+
+  it("delivers an offline archive of a busy thread as a deferred archive", () => {
+    const revision = threadLifecycleIntentRevision("schedule-archive", undefined);
+    expect(revision).toEqual({ desiredArchived: true, requiresDispatch: false });
+    // "archive" is dispatched as archive-when-done, so the work finishes first.
+    expect(resolveThreadLifecycleOutboxAction({ ...live, ...revision, thread: idle })).toBe(
+      "archive",
+    );
+  });
+
+  it("delivers an offline cancel of a server-held deferred archive", () => {
+    const revision = threadLifecycleIntentRevision("cancel-archive", undefined);
+    expect(revision).toEqual({ desiredArchived: false, requiresDispatch: true });
+    const resolve = (thread: typeof idle | typeof pendingArchive | undefined) =>
+      resolveThreadLifecycleOutboxAction({ ...live, ...revision, thread });
+    expect(resolve(pendingArchive)).toBe("cancel-archive");
+    // The deferred archive ran while offline: keep the thread out of the archive.
+    expect(resolve(undefined)).toBe("unarchive");
   });
 
   it("requires a reversal dispatch only after the prior revision may have been sent", () => {
@@ -270,6 +304,9 @@ describe("thread lifecycle outbox model", () => {
     expect(presentation.activeThreads.map((thread) => thread.id)).toEqual([other.id, unarchivedId]);
     expect(presentation.activeThreads[1]?.archivedAt).toBeNull();
     expect(presentation.pendingArchivedThreadKeys).toEqual(new Set([key]));
+    expect(presentation.pendingUnarchivedThreadKeys).toEqual(
+      new Set([threadLifecycleIntentKey(environmentId, unarchivedId)]),
+    );
     // The canonical shell wins over the enqueue-time snapshot.
     expect(presentation.pendingArchivedThreads).toMatchObject([
       { id: threadId, title: "Live title", archivedAt: "2026-08-20T10:02:00.000Z" },
@@ -281,12 +318,45 @@ describe("thread lifecycle outbox model", () => {
     const serverOnly = makeThreadShellFixture({ environmentId, id: ThreadId.make("thread-2") });
     const merged = mergePendingArchivedThreads(
       { threads: [pending, serverOnly], totalCount: 5 },
-      [pending],
+      { pendingArchivedThreads: [pending], pendingUnarchivedThreadKeys: new Set() },
       1,
       threadLifecycleIntentKey(environmentId, serverOnly.id),
     );
     expect(merged.threads.map((thread) => thread.id)).toEqual([pending.id, serverOnly.id]);
     expect(merged.totalCount).toBe(5);
+  });
+
+  it("shows a cancelled deferred archive and an offline unarchive at once", () => {
+    const busy = makeThreadShellFixture({
+      environmentId,
+      id: threadId,
+      archiveRequest: pendingArchive.archiveRequest,
+    });
+    const archivedId = ThreadId.make("thread-archived");
+    const archived = makeThreadShellFixture({
+      environmentId,
+      id: archivedId,
+      archivedAt: "2026-08-20T09:00:00.000Z",
+    });
+    const presentation = deriveThreadLifecyclePresentation([busy], {
+      [key]: intent({ desiredArchived: false, requiresDispatch: true }),
+      [threadLifecycleIntentKey(environmentId, archivedId)]: intent({
+        threadId: archivedId,
+        desiredArchived: false,
+        thread: archived.source,
+      }),
+    });
+    expect(presentation.activeThreads).toMatchObject([
+      { id: threadId, archiveRequest: null },
+      { id: archivedId, archivedAt: null },
+    ]);
+    // The unarchived thread leaves the server shelf.
+    const merged = mergePendingArchivedThreads(
+      { threads: [archived], totalCount: 3 },
+      presentation,
+      5,
+    );
+    expect(merged).toEqual({ threads: [], totalCount: 2 });
   });
 });
 

@@ -340,7 +340,10 @@ function ThreadNavigationSidebarPane(
               archivedSectionVisibleCount,
               props.selectedThreadKey,
             ),
-            threadLifecyclePresentation.pendingArchivedThreads,
+            {
+              pendingArchivedThreads: threadLifecyclePresentation.pendingArchivedThreads,
+              pendingUnarchivedThreadKeys: threadLifecyclePresentation.pendingUnarchivedThreadKeys,
+            },
             archivedSectionVisibleCount,
             props.selectedThreadKey,
           )
@@ -351,6 +354,7 @@ function ThreadNavigationSidebarPane(
       archivedSnapshots,
       props.selectedThreadKey,
       threadLifecyclePresentation.pendingArchivedThreads,
+      threadLifecyclePresentation.pendingUnarchivedThreadKeys,
     ],
   );
   const selectedProjectRefs = useMemo(

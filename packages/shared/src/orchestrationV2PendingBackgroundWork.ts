@@ -334,9 +334,9 @@ export function backgroundWorkDisplayLiveness(
 }
 
 /**
- * Fork: which pending work a drain waits for. "agents" (`thread wait --drain`)
- * waits for agent work and ignores watch loops; "all" (`--drain=all`) waits
- * for every task, monitors (including pull request watches) included.
+ * Fork: which pending work a drain waits for. "agents" waits for agent work and
+ * ignores watch loops; "all" waits for every task, monitors (including pull
+ * request watches) included.
  */
 export type BackgroundWorkDrainScope = "agents" | "all";
 
@@ -360,9 +360,9 @@ export interface BackgroundWorkDrainState<Task> {
 }
 
 /**
- * Fork: what a `thread wait --drain` still waits on, read from a thread shell.
- * Shared by the server's drain read and the CLI, which evaluates the same
- * shells it follows over the shell stream.
+ * Fork: what a drain still waits on, read from a thread shell and the
+ * thread's run records. The shell's status leaves out a queue held by Stop,
+ * so `runs` supplies queued runs independently of it.
  */
 export function backgroundWorkDrainState<Task extends { readonly kind: string }>(
   shell: {
@@ -372,15 +372,17 @@ export function backgroundWorkDrainState<Task extends { readonly kind: string }>
     readonly pendingBackgroundTasks?: ReadonlyArray<Task> | undefined;
   },
   scope: BackgroundWorkDrainScope,
+  runs: ReadonlyArray<{ readonly status: string }>,
 ): BackgroundWorkDrainState<Task> {
   const tasks = shell.pendingBackgroundTasks ?? [];
   const pendingTasks = backgroundWorkInDrainScope(tasks, scope);
   // The roster stays empty while a run is live, so a live or queued run
-  // (a wake continuing the work) keeps the drain open on its own.
+  // (a wake continuing the work, or a held queue) keeps the drain open on its own.
   const runActive =
     shell.activeRunId !== null ||
     (shell.activityRunStatus ?? null) !== null ||
-    shell.status === "queued";
+    shell.status === "queued" ||
+    runs.some((run) => run.status === "queued");
   return {
     liveness: backgroundWorkLiveness(tasks),
     runActive,

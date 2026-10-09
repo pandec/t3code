@@ -5823,6 +5823,7 @@ it.layer(layerTest)("usage-limit recovery", (it) => {
     "cancel",
     "rearm",
     "snooze-race",
+    "indefinite-snooze-race",
     "new-message",
     "archive",
     "settle",
@@ -6162,6 +6163,38 @@ it.layer(layerTest)("usage-limit recovery", (it) => {
         yield* orchestrator.dispatch(freshResume!);
         yield* orchestrator.dispatch(freshResume!);
         assert.lengthOf((yield* orchestrator.getThreadProjection(threadId)).runs, 2);
+      }
+      if (scenario === "indefinite-snooze-race") {
+        // "Until I wake it" lands after the sweep selected the thread.
+        yield* orchestrator.dispatch({
+          type: "thread.snooze",
+          commandId: CommandId.make("recovery:raced-indefinite-snooze"),
+          threadId,
+          snoozedUntil: null,
+        });
+        yield* orchestrator.dispatch(resume!);
+        let current = yield* orchestrator.getThreadProjection(threadId);
+        assert.lengthOf(current.runs, 1);
+        assert.isNotNull(current.thread.snoozedAt);
+        yield* orchestrator.dispatch({
+          type: "thread.unsnooze",
+          commandId: CommandId.make("recovery:indefinite-wake"),
+          threadId,
+          reason: "user",
+        });
+        const woken = (yield* orchestrator.getShellSnapshot()).threads.find(
+          (thread) => thread.id === threadId,
+        )!;
+        const freshResume = limitRecoveryCommand(
+          woken,
+          true,
+          DateTime.toEpochMillis(yield* DateTime.now),
+        );
+        assert.isNotNull(freshResume);
+        assert.notEqual(freshResume!.commandId, resume!.commandId);
+        yield* orchestrator.dispatch(freshResume!);
+        current = yield* orchestrator.getThreadProjection(threadId);
+        assert.lengthOf(current.runs, 2);
       }
       if (scenario === "expired-snooze") {
         const staleSnooze = yield* orchestrator

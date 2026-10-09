@@ -38,6 +38,7 @@ import * as Stream from "effect/Stream";
 import type * as ProviderHost from "@t3tools/provider-core/server/ProviderHost";
 import * as McpProviderSession from "@t3tools/provider-core/server/mcpSession";
 import { buildRuntimeInstructions } from "@t3tools/provider-core/server/runtimeInstructions";
+import { providerThreadEnvironment } from "@t3tools/provider-core/server/threadEnvironment";
 import { museModelCapabilities, resolveMuseReasoningEffort } from "./modelCatalog.ts";
 import {
   MuseApproval,
@@ -1370,8 +1371,13 @@ export function makeMuseAdapterV2(
             {
               binaryPath: options.settings.binaryPath || "muse",
               cwd,
+              // Fork: commands Muse runs know their thread and T3 install.
               environment: McpProviderSession.withAgentDeviceEnvironment(
-                options.environment,
+                providerThreadEnvironment(
+                  { threadId: input.threadId, cwd },
+                  options.environment,
+                  options.host.paths,
+                ),
                 mcpSession,
               ),
               runtimeMode: input.runtimePolicy.runtimeMode,

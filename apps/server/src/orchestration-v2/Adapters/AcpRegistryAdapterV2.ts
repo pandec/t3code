@@ -33,6 +33,7 @@ import * as AcpSessionRuntime from "@t3tools/provider-acp/server/AcpSessionRunti
 import { makeAcpNativeLoggerFactory } from "@t3tools/provider-acp/server/nativeLogging";
 import * as ProviderEventLoggers from "../../provider/ProviderEventLoggers.ts";
 import { mergeProviderInstanceEnvironment } from "@t3tools/provider-core/server/instanceEnvironment";
+import { providerThreadEnvironment } from "@t3tools/provider-core/server/threadEnvironment";
 import * as IdAllocator from "@t3tools/provider-core/server/IdAllocator";
 import { makeProviderFailure } from "@t3tools/provider-core/server/failure";
 import {
@@ -146,7 +147,7 @@ function makeAcpRegistryRuntime(options: AcpRegistryAdapterV2Options) {
     Crypto.Crypto | Scope.Scope
   > =>
     Effect.gen(function* () {
-      const { processEnvironment, ...runtimeInput } = input;
+      const { processEnvironment, threadId, t3Paths, ...runtimeInput } = input;
       const resolved = yield* options.resolver
         .resolve(options.settings, input.cwd, options.environment)
         .pipe(
@@ -161,13 +162,20 @@ function makeAcpRegistryRuntime(options: AcpRegistryAdapterV2Options) {
       const context = yield* Layer.build(
         AcpSessionRuntime.layer({
           ...runtimeInput,
-          spawn:
-            processEnvironment === undefined
-              ? resolved.spawn
-              : {
-                  ...resolved.spawn,
-                  env: { ...resolved.spawn.env, ...processEnvironment },
-                },
+          // Fork (DECISIONS 5.9): commands the agent runs know their thread and T3 install.
+          spawn: {
+            ...resolved.spawn,
+            env: {
+              ...(threadId === undefined
+                ? resolved.spawn.env
+                : providerThreadEnvironment(
+                    { threadId, cwd: input.cwd },
+                    resolved.spawn.env ?? options.environment,
+                    t3Paths,
+                  )),
+              ...processEnvironment,
+            },
+          },
           ...(options.settings.authMethodId ? { authMethodId: options.settings.authMethodId } : {}),
         }).pipe(
           Layer.provide(

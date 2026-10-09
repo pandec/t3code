@@ -18,9 +18,11 @@ import {
   readThread,
   unavailable,
 } from "../../threadAccess.ts";
+import * as ThreadArchiveScheduler from "../../../orchestration-v2/ThreadArchiveScheduler.ts";
 import * as ThreadSearch from "../../../orchestration-v2/ThreadSearch.ts";
 import * as ScheduledTasks from "../../../scheduledTasks/ScheduledTaskService.ts";
 import { queuedRunsInDeliveryOrder } from "../../../orchestration-v2/QueuedRunOrder.ts";
+import * as ArchiveHandlers from "../archive/handlers.ts";
 import { ThreadToolkit } from "./tools.ts";
 
 function queueEntry(
@@ -293,6 +295,16 @@ export const layer = McpToolAccess.toLayer(ThreadToolkit, {
   t3_thread_organize: writesThread((input) =>
     Effect.gen(function* () {
       const { threads, projection, caller } = yield* readThread(input.threadId);
+      // Fork: archive like archive_thread, after a working thread's turn,
+      // final checkpoint, and background work, instead of cutting them off.
+      if (input.action === "archive") {
+        const scheduler = yield* ThreadArchiveScheduler.ThreadArchiveScheduler;
+        return ArchiveHandlers.toResult(
+          yield* scheduler
+            .schedule({ threadId: projection.thread.id, afterTurn: true })
+            .pipe(Effect.mapError(ArchiveHandlers.failure)),
+        );
+      }
       const common = { commandId: yield* newCommandId(), threadId: projection.thread.id };
       if (input.action === "settle") {
         return yield* threads

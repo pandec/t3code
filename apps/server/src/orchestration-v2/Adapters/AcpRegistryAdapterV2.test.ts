@@ -11,7 +11,7 @@ import * as Option from "effect/Option";
 import * as Path from "effect/Path";
 import * as Schema from "effect/Schema";
 import { HttpClient, HttpClientResponse } from "effect/http";
-import { ChildProcessSpawner } from "effect/process";
+import { ChildProcess, ChildProcessSpawner } from "effect/process";
 import * as EffectAcpErrors from "effect-acp/errors";
 
 import * as ProviderHost from "@t3tools/provider-core/server/ProviderHost";
@@ -369,6 +369,7 @@ describe("AcpRegistryAdapterV2", () => {
         readonly commands: AcpRegistryAvailableCommands;
       }>();
       const configurationPublished = yield* Deferred.make<AcpRegistryLiveConfiguration>();
+      const agentEnvironments: Array<NodeJS.ProcessEnv | undefined> = [];
       const adapter = makeAcpRegistryAdapterV2({
         crypto: yield* Crypto.Crypto,
         selfInvocation: yield* resolveSelfInvocation(),
@@ -377,8 +378,12 @@ describe("AcpRegistryAdapterV2", () => {
         environment: {
           T3_ACP_SESSION_LIFECYCLE: "1",
           T3_ACP_COMMAND_ADVERTISEMENT_DELAY_MS: "750",
+          T3CODE_THREAD_ID: "stale-thread",
         },
-        childProcessSpawner,
+        childProcessSpawner: ChildProcessSpawner.make((command) => {
+          if (ChildProcess.isStandardCommand(command)) agentEnvironments.push(command.options.env);
+          return childProcessSpawner.spawn(command);
+        }),
         fileSystem,
         idAllocator,
         runtimeCoordinator: {
@@ -450,6 +455,9 @@ describe("AcpRegistryAdapterV2", () => {
       });
 
       assert.equal(runtime.providerSession.driver, "acpRegistry");
+      assert.equal(agentEnvironments[0]?.T3CODE_THREAD_ID, threadId);
+      assert.equal(agentEnvironments[0]?.T3CODE_HOME, host.paths.baseDir);
+      assert.equal(agentEnvironments[0]?.T3CODE_STATE_DIR, host.paths.stateDir);
       assert.equal(startupCount, 1);
       assert.isFalse(startupActive);
       assert.equal(providerThread.nativeThreadRef?.nativeId, "mock-session-1");

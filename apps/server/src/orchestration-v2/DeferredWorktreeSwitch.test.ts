@@ -573,6 +573,52 @@ it.layer(TestLayer)("deferred worktree switch on the orchestrator", (it) => {
     }).pipe(Effect.scoped),
   );
 
+  it.effect("rejects adopting a checkout being removed until removal ends", () =>
+    Effect.gen(function* () {
+      yield* setupRepository("adopting");
+      const orchestrator = yield* Orchestrator.OrchestratorV2;
+      const { threadId } = yield* startThread("adopting");
+      const create = orchestrator.dispatch({
+        type: "thread.create",
+        createdBy: "user",
+        creationSource: "web",
+        commandId: CommandId.make("adopting-create-onto"),
+        threadId: ThreadId.make("worktree-switch-adopting-new"),
+        projectId: repo.projectId,
+        title: "adopting",
+        modelSelection,
+        runtimeMode: "full-access",
+        interactionMode: "default",
+        branch: "feature/switch",
+        worktreePath: repo.worktree,
+      });
+      const update = orchestrator.dispatch({
+        type: "thread.metadata.update",
+        commandId: CommandId.make("adopting-update"),
+        threadId,
+        branch: "feature/switch",
+        worktreePath: repo.worktree,
+      });
+
+      const rejected = yield* Effect.scoped(
+        Effect.gen(function* () {
+          assert.isTrue(yield* reserveWorkspace(repo.worktree, "removal"));
+          return [yield* Effect.flip(create), yield* Effect.flip(update)];
+        }),
+      );
+      assert.deepEqual(
+        rejected.map((error) => error._tag),
+        ["OrchestratorDispatchError", "OrchestratorDispatchError"],
+      );
+      assert.isNull((yield* threadState(threadId)).worktreePath);
+
+      // No receipt was recorded, so the same commands commit once removal ends.
+      yield* create;
+      yield* update;
+      assert.equal((yield* threadState(threadId)).worktreePath, repo.worktree);
+    }).pipe(Effect.scoped),
+  );
+
   it.effect("records an error and keeps the checkout when the final checkpoint failed", () =>
     Effect.gen(function* () {
       yield* setupRepository("checkpoint-failed");

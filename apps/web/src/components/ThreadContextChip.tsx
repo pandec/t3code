@@ -1,9 +1,11 @@
 import type { ThreadContextRecord } from "@t3tools/contracts";
 import { Link } from "@tanstack/react-router";
 import { MessagesSquareIcon } from "lucide-react";
+import { useMemo } from "react";
 
 import { useThreadShell } from "~/state/entities";
 import { ContextChip, ContextChipLabel } from "./ContextChip";
+import { useThreadLinkClick } from "./thread-split/useOpenThreadInPane";
 import { Tooltip, TooltipPopup, TooltipTrigger } from "./ui/tooltip";
 
 /**
@@ -17,13 +19,22 @@ export function ThreadContextChip(props: {
   const { environmentId, threadId } = props.record;
   const shell = useThreadShell({ environmentId, threadId });
   const title = shell?.title?.trim() || props.record.title;
+  // Fork: in split view the thread opens in the pane the chip sits in.
+  const targetRef = useMemo(() => ({ environmentId, threadId }), [environmentId, threadId]);
+  const onClick = useThreadLinkClick(targetRef);
   return (
     <Tooltip>
       <TooltipTrigger
         render={
           <ContextChip
             kind="thread"
-            render={<Link to="/$environmentId/$threadId" params={{ environmentId, threadId }} />}
+            render={
+              <Link
+                to="/$environmentId/$threadId"
+                params={{ environmentId, threadId }}
+                onClick={onClick}
+              />
+            }
             aria-label={`Thread, ${title}`}
             data-markdown-copy={props.copyMarkdown}
             className="no-underline"

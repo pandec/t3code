@@ -11,11 +11,14 @@ import {
   type ThreadGroup,
   ThreadId,
 } from "@t3tools/contracts";
+import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
+import * as Fiber from "effect/Fiber";
 import * as Layer from "effect/Layer";
 import * as Schema from "effect/Schema";
 import { McpSchema, McpServer } from "effect/ai";
 
+import * as ThreadCommandExecutor from "../../../orchestration-v2/ThreadCommandExecutor.ts";
 import * as ThreadManagementService from "../../../orchestration-v2/ThreadManagementService.ts";
 import * as ServerSettings from "../../../serverSettings.ts";
 import * as McpInvocationContext from "../../McpInvocationContext.ts";
@@ -80,6 +83,8 @@ const makeLayer = (options: {
   readonly callerFields?: Partial<OrchestrationV2ThreadShell>;
   readonly shells: Map<ThreadId, OrchestrationV2ThreadShell>;
   readonly dispatched: Array<OrchestrationV2Command>;
+  /** Completes on each read of the caller's shell. */
+  readonly callerRead?: Deferred.Deferred<void>;
 }) => {
   const shells = options.shells;
   if (!shells.has(callerId)) {
@@ -92,7 +97,14 @@ const makeLayer = (options: {
     );
   }
   const threads = Layer.mock(ThreadManagementService.ThreadManagementService)({
-    getThreadShell: (threadId) => Effect.sync(() => shells.get(threadId) ?? null),
+    getThreadShell: (threadId) =>
+      Effect.sync(() => shells.get(threadId) ?? null).pipe(
+        Effect.tap(() =>
+          threadId === callerId && options.callerRead !== undefined
+            ? Deferred.succeed(options.callerRead, undefined)
+            : Effect.void,
+        ),
+      ),
     getProjectThreadRecords: (input) =>
       Effect.sync(() => ({ thread: shells.get(input.threadId) }) as never),
     getShellSnapshot: () =>
@@ -121,7 +133,9 @@ const makeLayer = (options: {
   ).pipe(
     Layer.provide(ThreadGroupsMcpService.layer),
     Layer.provideMerge(McpServer.McpServer.layer),
-    Layer.provideMerge(Layer.mergeAll(threads, settings, NodeServices.layer)),
+    Layer.provideMerge(
+      Layer.mergeAll(threads, settings, ThreadCommandExecutor.layer, NodeServices.layer),
+    ),
   );
 };
 
@@ -273,4 +287,33 @@ it.effect("refuses group creation to callers below full access", () => {
       makeLayer({ shells, dispatched, callerFields: { runtimeMode: "approval-required" } }),
     ),
   );
+});
+
+it.effect("refuses group creation when the caller's turn ends while it waits for its lock", () => {
+  const shells = new Map([[targetId, shell(targetId)]]);
+  return Effect.gen(function* () {
+    const callerRead = yield* Deferred.make<void>();
+    yield* Effect.gen(function* () {
+      const executor = yield* ThreadCommandExecutor.ThreadCommandExecutor;
+      const held = yield* Deferred.make<void>();
+      const release = yield* Deferred.make<void>();
+      // A turn-completion command holds the caller's lock.
+      const holder = yield* executor
+        .withLock(
+          callerId,
+          Deferred.succeed(held, undefined).pipe(Effect.andThen(Deferred.await(release))),
+        )
+        .pipe(Effect.forkChild);
+      yield* Deferred.await(held);
+      const create = yield* call({ action: "create", name: "Late" }).pipe(Effect.forkChild);
+      // The create passed its first check and waits for the lock; the turn then ends.
+      yield* Deferred.await(callerRead);
+      shells.set(callerId, { ...shells.get(callerId)!, activeRunId: null });
+      yield* Deferred.succeed(release, undefined);
+      yield* Fiber.join(holder);
+      expect((yield* Fiber.join(create)).failure).toMatchObject({ code: "parent_not_active" });
+      const settings = yield* ServerSettings.ServerSettingsService;
+      expect((yield* settings.getSettings).threadGroups).toHaveLength(2);
+    }).pipe(Effect.provide(makeLayer({ shells, dispatched: [], callerRead })));
+  }).pipe(Effect.scoped);
 });

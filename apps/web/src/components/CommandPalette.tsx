@@ -159,6 +159,7 @@ import {
   readThreadShells,
   useProjects,
   useServerConfigs,
+  useThreadShell,
   useThreadShells,
   waitForProject,
 } from "../state/entities";
@@ -911,6 +912,14 @@ function OpenCommandPaletteDialog(props: {
   const projects = useProjects();
   const projectAccentColors = useProjectAccentColors();
   const accentTint = useAccentTintSettings();
+  // Fork: thread-scoped actions target the thread in the pane the palette was
+  // opened from (split view), not always the routed primary thread.
+  const [threadActionPane] = useState(() => useThreadSplitStore.getState().activePaneId);
+  const splitSecondaryRef = useThreadSplitStore((state) => state.secondaryRef);
+  const splitMounted = useThreadSplitStore((state) => state.splitMounted);
+  const currentThreadRef =
+    splitMounted && threadActionPane === "secondary" ? splitSecondaryRef : routeThreadRef;
+  const currentThread = useThreadShell(currentThreadRef);
   const referenceThreadRef =
     pathname === "/pull-requests"
       ? environments.some(
@@ -918,12 +927,12 @@ function OpenCommandPaletteDialog(props: {
         )
         ? PULL_REQUESTS_PANEL_REF
         : null
-      : activeThread
-        ? scopeThreadRef(activeThread.environmentId, activeThread.id)
+      : currentThread
+        ? scopeThreadRef(currentThread.environmentId, currentThread.id)
         : null;
   const openPanelPullRequestUrl = useOpenPanelPullRequestUrl(referenceThreadRef);
   const activeThreadServerConfig = useServerConfigs().get(
-    activeThread?.environmentId ?? ("" as EnvironmentId),
+    currentThread?.environmentId ?? ("" as EnvironmentId),
   );
   const activeThreadReferenceCopyTarget =
     referenceThreadRef === null || (pathname === "/pull-requests" && !openPanelPullRequestUrl)
@@ -931,9 +940,9 @@ function OpenCommandPaletteDialog(props: {
       : resolveThreadReferenceCopyTarget({
           threadId: referenceThreadRef.threadId,
           openPanelPullRequestUrl,
-          pullRequests: activeThread?.pullRequests,
+          pullRequests: currentThread?.pullRequests,
           linkedPullRequestUrl:
-            activeThread?.linkedPullRequest?.url ?? activeThread?.branchPullRequest?.url ?? null,
+            currentThread?.linkedPullRequest?.url ?? currentThread?.branchPullRequest?.url ?? null,
         });
   const copyActiveThreadReference = useCallback(
     async (target = activeThreadReferenceCopyTarget) => {
@@ -1012,7 +1021,6 @@ function OpenCommandPaletteDialog(props: {
   const isRenameThreadView = currentView?.groups[0]?.value === RENAME_THREAD_VIEW_VALUE;
   const isSnoozeThreadView = currentView?.groups[0]?.value === SNOOZE_THREAD_VIEW_VALUE;
   const consumedThreadIntent = useRef<CommandPaletteOpenIntent | null>(null);
-  const [threadActionPane] = useState(() => useThreadSplitStore.getState().activePaneId);
   const environmentIds = useMemo(
     () =>
       environments
@@ -1760,10 +1768,6 @@ function OpenCommandPaletteDialog(props: {
   );
   const recentThreadItems = allThreadItems.slice(0, RECENT_THREAD_LIMIT);
 
-  const splitSecondaryRef = useThreadSplitStore((state) => state.secondaryRef);
-  const splitMounted = useThreadSplitStore((state) => state.splitMounted);
-  const currentThreadRef =
-    splitMounted && threadActionPane === "secondary" ? splitSecondaryRef : routeThreadRef;
   // Fork: find opens in the pane the palette was opened from, not the route's.
   const findThreadPane = splitMounted && threadActionPane === "secondary" ? "secondary" : "primary";
   const supportsThreadFind =
@@ -2350,14 +2354,6 @@ function OpenCommandPaletteDialog(props: {
     actionItems.push(savedPromptsSubmenu);
   }
 
-  const currentThread =
-    currentThreadRef === null
-      ? null
-      : (threads.find(
-          (thread) =>
-            thread.environmentId === currentThreadRef.environmentId &&
-            thread.id === currentThreadRef.threadId,
-        ) ?? null);
   const openUnarchivedThread = currentThread?.archivedAt === null ? currentThread : null;
   const openUnarchivedThreadRef = openUnarchivedThread === null ? null : currentThreadRef;
   // Fork: archive goes through the shared toggle, confirmation and in-flight guard.
@@ -2739,10 +2735,10 @@ function OpenCommandPaletteDialog(props: {
   );
 
   if (
-    activeThread !== null &&
+    currentThread !== null &&
     threadPullRequestLinkMode(activeThreadServerConfig?.environment.capabilities) !== "unsupported"
   ) {
-    const threadRef = scopeThreadRef(activeThread.environmentId, activeThread.id);
+    const threadRef = scopeThreadRef(currentThread.environmentId, currentThread.id);
     actionItems.push({
       kind: "action",
       value: "action:link-pull-request",
@@ -2759,7 +2755,7 @@ function OpenCommandPaletteDialog(props: {
         value: "action:open-thread-pull-requests",
         searchTerms: ["pull requests", "linked", "stack", "prs"],
         title: "Show linked pull requests",
-        disabled: visibleThreadPullRequests(activeThread.pullRequests).length === 0,
+        disabled: visibleThreadPullRequests(currentThread.pullRequests).length === 0,
         icon: <PullRequestGlyph.link className={ITEM_ICON_CLASS} />,
         run: async () => {
           useRightPanelStore.getState().open(threadRef, "pull-requests");
@@ -2768,8 +2764,8 @@ function OpenCommandPaletteDialog(props: {
     }
   }
 
-  if (activeThread !== null) {
-    const thread = activeThread;
+  if (currentThread !== null) {
+    const thread = currentThread;
     actionItems.push({
       kind: "action",
       value: "action:restart-agent-session",
