@@ -48,6 +48,7 @@ const THREAD_KEYBINDING_COMMANDS = [
   "thread.pin",
   "thread.rename",
   "thread.snooze",
+  "thread.snoozeUntilDone",
   "thread.undo",
   ...THREAD_JUMP_KEYBINDING_COMMANDS,
 ] as const;

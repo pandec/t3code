@@ -651,6 +651,8 @@ export function buildSnoozeThreadViewItems(input: {
   readonly renderWhen: (whenLabel: string) => ReactNode;
   readonly snooze: (preset: Pick<SnoozePreset, "snoozedUntil" | "untilDone">) => Promise<void>;
   readonly custom: () => Promise<void>;
+  /** Fork: shortcut hint for the "Until it's done" row. */
+  readonly untilDoneShortcutCommand?: KeybindingCommand;
 }): CommandPaletteActionItem[] {
   const items: CommandPaletteActionItem[] = [];
   const parsed = parseSnoozeQuery(input.query, input.now);
@@ -677,6 +679,9 @@ export function buildSnoozeThreadViewItems(input: {
       title: preset.label,
       icon: input.icon,
       titleTrailingContent: input.renderWhen(preset.whenLabel),
+      ...(preset.untilDone === true && input.untilDoneShortcutCommand
+        ? { shortcutCommand: input.untilDoneShortcutCommand }
+        : {}),
       run: async () => {
         await input.snooze(preset);
       },

@@ -1,9 +1,18 @@
-import { AuthPreviewOperateScope } from "@t3tools/contracts";
+import { AuthOrchestrationOperateScope, AuthPreviewOperateScope } from "@t3tools/contracts";
 import { Outlet, createFileRoute, redirect, useParams, useRouter } from "@tanstack/react-router";
 import { useAtomValue } from "@effect/atom-react";
 import { useEffect, useMemo, useRef } from "react";
-import type { ScopedThreadRef } from "@t3tools/contracts";
+import type { ClientSettings, ScopedThreadRef } from "@t3tools/contracts";
 import { scopeThreadRef } from "@t3tools/client-runtime/environment";
+import {
+  isAtomCommandInterrupted,
+  squashAtomCommandFailure,
+} from "@t3tools/client-runtime/state/runtime";
+import {
+  canSnooze,
+  canSnoozeUntilDone,
+  effectiveSnoozed,
+} from "@t3tools/client-runtime/state/thread-settled";
 
 import { isCommandPaletteOpen } from "../commandPaletteBus";
 import { environmentCatalog } from "../connection/catalog";
@@ -13,10 +22,14 @@ import { ThreadRouteView } from "../components/ThreadRouteView";
 import { useClientSettings, useLegacySidebarEnabled } from "../hooks/useSettings";
 import { useThreadActions } from "../hooks/useThreadActions";
 import { openCommandPalette } from "../commandPaletteBus";
-import { readThreadShell, useProjects } from "../state/entities";
+import {
+  readEnvironmentSupportsSnoozeUntilDone,
+  readThreadShell,
+  useProjects,
+} from "../state/entities";
 import { isPreviewAvailableFor } from "../browser/previewRuntime";
 import { usePrimaryEnvironmentId } from "../state/environments";
-import { useEnvironmentScope } from "../state/session";
+import { readEnvironmentScope, useEnvironmentScope } from "../state/session";
 import { selectProjectGroupingSettings } from "../logicalProject";
 import { buildSidebarProjectSnapshots } from "../sidebarProjectGrouping";
 import { dispatchPreviewAction } from "../components/preview/previewActionBus";
@@ -97,6 +110,9 @@ function resolveVisitTarget(target: ThreadRouteTarget): ThreadRouteTarget | null
     : null;
 }
 
+const selectSnoozeShortcutUntilDone = (settings: ClientSettings) =>
+  settings.snoozeShortcutUntilDone;
+
 function ChatRouteGlobalShortcuts() {
   const clearSelection = useThreadSelectionStore((state) => state.clearSelection);
   const selectedThreadKeysSize = useThreadSelectionStore((state) => state.selectedThreadKeys.size);
@@ -114,7 +130,8 @@ function ChatRouteGlobalShortcuts() {
   const projects = useProjects();
   const primaryEnvironmentId = usePrimaryEnvironmentId();
   const router = useRouter();
-  const { attemptArchiveThread } = useThreadActions();
+  const { attemptArchiveThread, snoozeThread } = useThreadActions();
+  const snoozeShortcutUntilDone = useClientSettings(selectSnoozeShortcutUntilDone);
   const { scratchEnvironmentId, startScratchThread } = useScratchProject();
   const projectGroupCount = useMemo(
     () =>
@@ -320,13 +337,50 @@ function ChatRouteGlobalShortcuts() {
         return;
       }
 
-      if (command === "thread.rename" || command === "thread.snooze") {
+      if (
+        command === "thread.rename" ||
+        command === "thread.snooze" ||
+        command === "thread.snoozeUntilDone"
+      ) {
         if (!shortcutThreadRef) return;
         // An unloaded shell passes: the palette holds the intent until the
         // thread hydrates. Only a loaded, archived thread has nothing to open.
-        if (readThreadShell(shortcutThreadRef)?.archivedAt != null) return;
+        const shell = readThreadShell(shortcutThreadRef);
+        if (shell?.archivedAt != null) return;
         event.preventDefault();
         event.stopPropagation();
+        // Fork: snooze a working thread until it's done in one keystroke; any
+        // other state falls through to the snooze picker, as thread.snooze does.
+        // A held key must not repeat into the picker, which would wake the
+        // thread it just snoozed.
+        if (command === "thread.snoozeUntilDone" && event.repeat) return;
+        if (
+          command === "thread.snoozeUntilDone" &&
+          snoozeShortcutUntilDone &&
+          shell != null &&
+          readEnvironmentScope(shortcutThreadRef.environmentId, AuthOrchestrationOperateScope) &&
+          readEnvironmentSupportsSnoozeUntilDone(shortcutThreadRef.environmentId)
+        ) {
+          const now = new Date().toISOString();
+          if (
+            !effectiveSnoozed(shell, { now }) &&
+            canSnooze(shell, { now }) &&
+            canSnoozeUntilDone(shell)
+          ) {
+            void snoozeThread(shortcutThreadRef, null, { untilDone: true }).then((result) => {
+              if (result._tag !== "Failure" || isAtomCommandInterrupted(result)) return;
+              const error = squashAtomCommandFailure(result);
+              toastManager.add(
+                stackedThreadToast({
+                  type: "error",
+                  title: "Failed to snooze thread",
+                  description: error instanceof Error ? error.message : "An error occurred.",
+                }),
+              );
+            });
+            return;
+          }
+        }
         openCommandPalette({
           open: command === "thread.rename" ? "rename-thread" : "snooze-thread",
         });
@@ -401,6 +455,8 @@ function ChatRouteGlobalShortcuts() {
     activeDraftThread,
     activeThread,
     attemptArchiveThread,
+    snoozeThread,
+    snoozeShortcutUntilDone,
     clearSelection,
     canOperatePreview,
     handleNewThread,

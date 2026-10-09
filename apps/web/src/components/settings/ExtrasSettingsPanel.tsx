@@ -876,6 +876,41 @@ function MessagesExtrasSection() {
   );
 }
 
+function ThreadsExtrasSection() {
+  const settings = usePrimarySettings();
+  const updateSettings = useUpdatePrimarySettings();
+
+  return (
+    <SettingsSection {...searchableSetting("extras-threads")}>
+      <SettingsRow
+        {...searchableSetting("snooze-until-done-shortcut")}
+        description="The Thread: Snooze Until Done shortcut snoozes a working thread until its work ends and opens the snooze picker otherwise. Turn off to always open the picker."
+        resetAction={
+          settings.snoozeShortcutUntilDone !== DEFAULT_UNIFIED_SETTINGS.snoozeShortcutUntilDone ? (
+            <SettingResetButton
+              label="snooze until done shortcut"
+              onClick={() =>
+                updateSettings({
+                  snoozeShortcutUntilDone: DEFAULT_UNIFIED_SETTINGS.snoozeShortcutUntilDone,
+                })
+              }
+            />
+          ) : null
+        }
+        control={
+          <Switch
+            checked={settings.snoozeShortcutUntilDone}
+            onCheckedChange={(checked) =>
+              updateSettings({ snoozeShortcutUntilDone: Boolean(checked) })
+            }
+            aria-label="Snooze until done shortcut"
+          />
+        }
+      />
+    </SettingsSection>
+  );
+}
+
 function ComposerExtrasSection() {
   const settings = usePrimarySettings();
   const updateSettings = useUpdatePrimarySettings();
@@ -1027,6 +1062,7 @@ export function ExtrasSettingsPanel() {
       <SidebarExtrasSection />
       <PanelsExtrasSection />
       <MessagesExtrasSection />
+      <ThreadsExtrasSection />
       <ComposerExtrasSection />
       <AccentTintsExtrasSection />
       <VoiceSettingsSection />
