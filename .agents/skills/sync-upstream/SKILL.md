@@ -5,7 +5,7 @@ description: Synchronize this T3 Code private fork by fast-forwarding mirror-onl
 
 # Sync T3 Code From Upstream
 
-Synchronize this private fork while making deliberate choices about fork behavior that upstream overlaps or supersedes. Explicit invocation authorizes fetching both remotes, updating and pushing `main`, merging into and pushing `dev`, and running required checks. Never push to `upstream-sync`.
+Synchronize this private fork while making deliberate choices about fork behavior that upstream overlaps or supersedes. Explicit invocation authorizes fetching both remotes, updating and pushing `main`, merging into and pushing `dev`, and running required checks. Read the current `AGENTS.md` first.
 
 ## Fixed topology
 
@@ -14,118 +14,68 @@ Synchronize this private fork while making deliberate choices about fork behavio
 - `main`: clean mirror of `upstream-sync/main`
 - `dev`: fork integration and build branch
 
-Verify these facts from live Git state before changing anything. Stop if the remotes or branches no longer match; do not rewrite configuration to make the assumptions true.
+Verify these from live Git state and stop if they no longer match; never rewrite configuration to make them true.
 
 ## Safety rules
 
-- Never merge `dev` or fork commits into `main`.
-- Merge synchronized `main` into `dev`; do not rebase or squash `dev`.
-- Never force-push, destructively reset, discard changes, or commit unrelated work.
-- Preserve compatible fork additions that remain intentionally distinct after the behavioral-overlap review.
-- Resolve mechanical conflicts autonomously. Stop for the user's decision when upstream and fork logic require different behavior or intent is uncertain.
-- Read and follow the current `AGENTS.md` before acting.
+- `main` only ever fast-forwards to upstream; `dev` receives `main` through a merge commit (no rebase, no squash).
+- Push normally; a rejected push means fetch and re-prove, never force.
+- Leave pre-existing changes, unrelated worktrees, and stashes untouched; stop instead of stashing, committing, or discarding them.
+- Resolve mechanical conflicts autonomously. When upstream and fork need different behavior, or intent is uncertain, stop and ask.
 
 ## 1. Preflight
 
-1. Inspect `git status --short --branch`, `git remote -v`, `git worktree list --porcelain`, branch tracking, any in-progress Git operation, and `git stash list`.
-2. Record the old tips of local `main`, `origin/main`, local `dev`, and `upstream-sync/main`, plus the existing stash refs so hook-created leftovers can be detected later. Note the time (`date`) now and at each later numbered-phase boundary so the report can state per-phase durations.
-3. Fetch `origin` and `upstream-sync` with pruning, then record the fetched `upstream-sync/main` tip as this sync's **target**. The target is pinned for the whole run: every later step synchronizes to it, `upstream-sync` is fetched only here, and anything upstream publishes afterwards is the next sync's range. A pinned target ships in one pass; chasing upstream restarts review and validation per range and once dragged a single sync across five ranges and six hours.
-4. Require clean worktrees for branches that will change. Leave unrelated worktrees untouched. If `dev` is not checked out, create a temporary sibling worktree rather than switching an active worktree; remove it only after successful completion while it is clean.
-5. Stop instead of stashing, committing, or discarding pre-existing changes.
+Check status, remotes, worktrees, any in-progress Git operation, and stashes. Record the old tips of `main`, `origin/main`, and `dev`, the stash list, and the time (again at each phase boundary, for the report). Fetch both remotes with pruning, then pin the fetched `upstream-sync/main` tip as this sync's **target**: every later step synchronizes to it and `upstream-sync` is not fetched again. Chasing a moving upstream once stretched a sync to six hours; anything newer is the next sync's range. If `dev` is not checked out, use a temporary sibling worktree and remove it once the sync completes cleanly.
 
 ## 2. Fast-forward main
 
-1. Prove both local `main` and `origin/main` are ancestors of the target. Stop and report unexpected commits if either has diverged or contains fork-only work.
-2. Advance local `main` with fast-forward-only semantics:
-   - In a clean `main` worktree, use `git merge --ff-only <target>`.
-   - If `main` is not checked out, atomically update `refs/heads/main` only after the ancestry proof and while requiring its recorded old tip.
-3. Push `main:main` to `origin` normally. If rejected, fetch again and repeat the ancestry checks. Never force the push.
-4. Verify `main` and `origin/main` now identify the target.
+Prove local `main` and `origin/main` are both ancestors of the target (stop and report fork-only commits if not), fast-forward `main` to it, push `main:main`, and verify both identify the target.
 
 ## 3. Review behavioral overlap
 
-Read `LEDGER.md` next to this skill first. Apply its standing decisions instead of re-deliberating them. For each ledger watchpoint whose path is touched by the incoming upstream range, spawn one targeted sub-agent to answer that entry's question (whether the fork change there is still needed and compatible); untouched watchpoints need no check.
+Read `LEDGER.md` beside this skill and apply its rules. For each watchpoint whose paths the upstream range touches, launch one read-only reviewer for its question, all in one batch. Reviewers inspect committed objects only, spawn nothing, and must all return before the merge starts.
 
-Review agents are read-only: they inspect committed Git objects (`git show`, `git diff`, `git log`) and report; they never edit files or run any Git command that changes refs, the index, or a worktree. Each targeted reviewer answers its ledger question directly without spawning sub-agents or workflows. Launch the touched-watchpoint reviews as one batch and block until every reviewer has returned. If a coordinator must spawn descendants, it owns their lifecycle and returns only after every descendant has completed or been stopped; its report includes the spawned count and confirms zero live descendants. The merge starts only after the whole review tree is quiescent.
+Compare upstream's range (old `main` → target) with the fork's changes since the merge base. A clean textual merge does not prove behavioral compatibility. Classify every overlap:
 
-Before changing `dev`, compare:
+- **Complementary:** both provide distinct value and coexist. Continue.
+- **Superseding:** upstream now implements the same goal or competes with the fork's approach. Collect all of these and present them to the user as one decision batch, with fork trimming as an explicit option, before touching `dev`.
 
-- upstream changes from old `main` to new `main`
-- fork changes from the relevant old-main merge base to `dev`
-
-Inspect overlapping files plus nearby callers, contracts, schemas, tests, configuration, state transitions, persistence, protocols, and failure handling. A clean textual merge does not prove behavioral compatibility.
-
-Classify every behavioral overlap before changing `dev`:
-
-- **Complementary:** both implementations provide distinct value and can coexist without conflicting behavior. Continue.
-- **Superseding:** upstream now implements the same goal, replaces the fork's approach, or moves close enough that keeping both would create redundant or competing functionality. Assess whether the fork code still provides distinct value or should be simplified or removed in favor of upstream. Collect every superseding overlap and present them to the user together as one decision batch — tradeoffs, with fork trimming as an explicit option — before starting the `dev` merge.
-
-Continue only after every superseding overlap has an explicit user decision. Apply the same gate if a semantic conflict discovered during the merge reveals an overlap that the pre-merge review could not identify.
+The same gate applies when a conflict during the merge reveals an overlap the review missed.
 
 ## 4. Merge into dev
 
-One agent owns the merge state from here through the push: only the owner runs Git commands that touch refs, the index, or the worktree (`merge`, `checkout`, `add`, `rm`, `restore`, `reset`, `stash`, `commit`). Delegate conflict resolution only on broad merges (roughly 15+ conflicted files) and only as disjoint-file editors: each sub-agent edits its assigned files and reports, coupled files stay in one assignment, and the owner stages and verifies everything. On any unexpected Git state, the owner finishes alone.
+One agent owns the merge state through the push: only the owner runs Git commands that touch refs, the index, or the worktree. On broad merges (roughly 15+ conflicted files) the owner may hand disjoint file sets, coupled files together, to sub-agents that only edit and report.
 
-1. In the clean `dev` worktree, run a no-fast-forward, no-commit merge of `main` when it adds commits. Do not create the merge commit yet.
-2. Resolve only clearly mechanical conflicts such as independent adjacent edits, formatting, imports, documentation, straightforward renames, or generated files that can be regenerated with the documented toolchain.
-3. Treat conflicts involving behavior, control flow, state, persistence, APIs, schemas, security, failure semantics, feature removal, or incompatible test expectations as semantic.
-4. For semantic conflicts:
-   - never choose `ours`, `theirs`, or invent a hybrid merely to finish
-   - resolve unrelated mechanical conflicts only if it clarifies the remaining choice
-   - leave the merge in a recoverable in-progress state
-   - report each file, upstream intent, fork intent, incompatibility, and realistic options
-   - apply the behavioral-overlap gate above and ask the user which option to take
-5. After resolution, assert merge-state sanity before spending time on validation. Stage tracked files through their real `.agents/...` paths, never the `.claude/...` symlinks. Scan staged files safely with:
+1. Run `git merge --no-ff --no-commit main`.
+2. Resolve mechanical conflicts. Treat conflicts in behavior, control flow, state, persistence, APIs, schemas, security, failure semantics, feature removal, or test expectations as semantic: never pick `ours`/`theirs` or invent a hybrid to finish. Leave the merge recoverable and report each file's upstream intent, fork intent, and realistic options.
+3. Before validating, assert merge-state sanity. Stage through the real `.agents/...` paths, never the `.claude/...` symlinks. This scan must print nothing:
    ```sh
    git diff --cached --name-only --diff-filter=ACMR -z |
-     xargs -0 awk '/^(<<<<<<<|=======|>>>>>>>)/{print FILENAME ":" FNR}'
+     LC_ALL=C xargs -0 awk '/^(<<<<<<<|=======|>>>>>>>)/{print FILENAME ":" FNR}'
    ```
-   Require no output, `.git/MERGE_HEAD` to name the merged `main` tip, no unrelated root `package.json` modification, and no fork file under `apps/server/src/persistence/Migrations/` (upstream migrations keep their own ids; fork schema goes through the fork ledger, see the ledger's fork-schema standing decision). The ledger's verification gotchas explain the other failure modes.
+   Also require `.git/MERGE_HEAD` to name the target, no unrelated root `package.json` change, and no fork file under `apps/server/src/persistence/Migrations/`.
 
 ## 5. Validate and publish
 
-Complete the applicable local verification before pushing `dev`.
-
-1. Re-read the merged `AGENTS.md` after conflict resolution; upstream may have changed the instructions that were read during preflight. Determine the applicable checks from the complete merged diff, the merged instructions, affected package scripts, and changed repository tooling. Run every relevant check that is available locally before pushing; do not omit a relevant check merely because it is conditional or slower than the baseline.
-2. Install the merged dependency graph with `vp install --frozen-lockfile`.
-3. Run the cheap gates first in the merged worktree:
-   - `vp check`
-   - `vp run typecheck`
-   - focused tests for conflict resolutions, fork-customized areas, and other risky behavioral overlap: `vp test run --root <package-dir> <test-files>` so nested worktrees are not discovered by the root test runner. Use a package's own test script only when it specifically requires one.
-4. With the cheap gates green, audit the complete staged merge — including cleanly merged behavioral overlap — for integration defects. This is a hard barrier: do not start the full suite while the audit or any descendant reviewer is still live. Stop if the audit exposes an unresolved product or architecture choice. Fix confirmed defects and rerun the cheap checks they touch. Completion criterion: every finding is fixed or reported as a concrete unresolved decision, and the audit review tree has zero live descendants.
-5. Only after step 4 is complete, run the full suite exactly once: `env -u CLAUDE_CONFIG_DIR -u ELECTRON_RUN_AS_NODE -u ELEVENLABS_API_KEY vp run test` (the ledger's verification gotchas explain the cleared variables). If later convergence changes code, its required rerun is separate from this initial validation pass.
-6. Add conditional static, generated-output, or build checks when the merged changes make them relevant:
-   - run `vp run lint:mobile` when native mobile code, native configuration, mobile dependencies, or patches changed
-   - run the affected build, smoke, or generated-asset check when packaging, preload code, build configuration, release/update behavior, or generated assets changed
-   - inspect changes to repository tooling for newly introduced checks that protect code affected by the sync
-7. Do not launch browser, simulator, emulator, physical-device, or installed-app verification during a routine upstream sync, even when upstream includes user-visible frontend or mobile changes. For this explicitly invoked workflow, this is the user-authorized exception to the integrated client verification rules in `AGENTS.md`. Perform runtime app verification only when the user explicitly requests it.
-8. Diagnose failures instead of bypassing them. Fix only clear integration defects; ask when a fix requires choosing upstream or fork behavior. Do not push with a failing applicable gate.
-9. Audit the fork's MCP tool additions against the merged behavior. When upstream changes or merge resolutions touch `apps/server/src/mcp` (toolkits, services, `threadAccess.ts`, `packages/contracts/src/orchestratorMcp.ts`), orchestration commands or contracts, thread groups, archive scheduling, or project scripts settings:
-   - verify the fork tools (thread groups, thread drain status, the cross-project thread-list extension, archive tools taking `threadId`, project actions) still compile, behave as their focused tests expect, and are not superseded by upstream
-   - update the fork tools and their tests when alignment requires it, then rerun the affected checks
-   - when upstream now covers a fork tool, report it as a trim candidate rather than removing it mid-sync
-   - the fork carries no CLI commands of its own; the global `t3-cli` skill covers only upstream machine-management commands and needs no fork alignment
-   - completion criterion: every MCP-affecting upstream or merge change is either reflected in the fork tools and tests or reported as a concrete unresolved decision
-10. Update `LEDGER.md` as part of the sync commit: record new standing decisions made during this sync, add watchpoints for newly observed fork/upstream friction files, resolve watchpoint checks that ran, and apply the ledger's self-cleaning rules. Keep it scoped to what changes future syncs — never a fork feature list.
-11. Only after the applicable local gates and MCP tool audit pass, create the merge commit. Verify the commit has the expected parents, no merge operation remains, the worktree and index are clean, and the stash refs still match preflight. A hook can print an error after Git has already created the commit, so determine the actual result from Git state rather than hook output alone.
-12. Before pushing, enter an `origin/dev` convergence loop. It exists only because a normal push cannot land over a moved `origin/dev`; it never widens the target, so a further upstream advance is out of scope here even if the fetch happens to show one.
-    - fetch `origin` with pruning immediately before the push and compare `origin/dev` with the last reviewed tip
-    - if `origin/dev` advanced, inspect that exact new range and its behavioral overlap with the synchronized candidate, then merge `origin/dev` with `--no-ff --no-commit` under the same conflict rules
-    - rerun every gate invalidated by the new delta; behavioral or source changes require at least `vp check`, `vp run typecheck`, `env -u CLAUDE_CONFIG_DIR -u ELECTRON_RUN_AS_NODE -u ELEVENLABS_API_KEY vp run test`, and relevant focused or conditional checks
-    - commit the reconciliation, perform the post-commit checks above, fetch again, and repeat until the freshly fetched `origin/dev` is an ancestor of local `dev`
-    - push `dev:dev` normally only after that ancestry proof; if the push is rejected because `origin/dev` moved again, repeat the loop. Never force the push.
-13. Fetch `origin` after the push. Verify `dev` equals `origin/dev`, `main` equals `origin/main` at the target, `dev` contains the target, and the worktree is clean.
+1. Re-read the merged `AGENTS.md`, then run `vp install --frozen-lockfile`, `vp check`, `vp run typecheck`, and focused tests for conflict resolutions and risky overlap. Run focused tests from inside the package (`(cd apps/web && vp test run <files>)`) so package-local plugins resolve and nested worktrees are not discovered.
+2. Audit the complete staged merge, including cleanly merged overlap, for integration defects. Fix confirmed defects and rerun the checks they touch; report anything that needs a product or architecture choice. Wait for the audit to finish before the full suite.
+3. Run the full suite once: `env -u CLAUDE_CONFIG_DIR -u ELECTRON_RUN_AS_NODE -u ELEVENLABS_API_KEY vp run test`. Add `vp run lint:mobile` when native mobile code, config, dependencies, or patches changed, and the affected build or smoke check when packaging, preload, build config, or update behavior changed.
+4. Skip browser, simulator, device, and installed-app verification unless the user asks; this workflow is the authorized exception to `AGENTS.md`'s integrated-verification guidance.
+5. If the range touches `apps/server/src/mcp`, `packages/contracts/src/orchestratorMcp.ts`, orchestration commands, thread groups, archive scheduling, or project-script settings, confirm the fork's MCP tools still behave as their tests expect and are not superseded by upstream. Align them where needed; report upstream equivalents as trim candidates rather than removing them mid-sync.
+6. Update `LEDGER.md` under its own entry rules and line cap.
+7. Commit the merge once every applicable gate passes. Judge the result from Git state, not hook output: two parents, no merge in progress, clean tree, stash list unchanged.
+8. Fetch `origin`. If `origin/dev` moved, merge it with `--no-ff --no-commit` under the same conflict rules, rerun the gates the new delta invalidates (source changes need at least check, typecheck, and the full suite), commit, and repeat until `origin/dev` is an ancestor of `dev`. This loop never widens the target. Then push `dev:dev`.
+9. Fetch `origin` and verify `dev` equals `origin/dev`, `main` equals `origin/main` at the target, and the tree is clean.
 
 ## Report
 
-Report the old tip and the target, the `main` update and push, the `dev` merge and push, conflicts resolved, fork behavior preserved, checks run, and per-phase durations from the recorded timestamps. If stopped, separate completed safe work from the user decision and state whether a merge remains in progress. Do not call the sync complete until required checks pass and both origin branches are verified. If the final `origin` fetch shows upstream already past the target, say so in one line as the next sync's range. Deliver this report as soon as the sync is verified; follow-up work such as a full audit, a TestFlight build, cleanup, or feature PRs is a separate task that starts only after the report.
+Deliver as soon as the sync is verified; follow-up work is a separate task. If stopped, separate completed safe work from the pending decision and say whether a merge is in progress. Include:
 
-After a completed sync, summarize what the fork gained from upstream: group the incorporated upstream commits into user-visible features, fixes, and notable internal changes, highlighting anything that affects fork-customized areas. Write it for the fork owner deciding what to try or watch out for, not as a raw commit list.
+- old tips, target, the `main` and `dev` pushes, and per-phase durations
+- what the fork gained from upstream, grouped into user-visible features, fixes, and notable internal changes, flagging anything touching fork-customized areas
+- whether any conflict resolution could change behavior (one sentence when all were mechanical)
+- checks run, and the MCP tool audit result with any trim candidates
+- a rollout note: whether installed desktop and iOS apps can update one at a time against the new server or must update together, and anything needing a reinstall or data migration
+- one line if the final fetch shows upstream already past the target
 
-State whether any conflict resolution could impact functionality. When every resolution was purely mechanical, one sentence saying so is enough — skip per-file detail. Only elaborate on resolutions that touched behavior and could plausibly change how something works.
-
-Report the MCP tool audit result, including any repository changes made and any trim candidates.
-
-End with a rollout note: based on the protocol/contract, persistence, and update-feed changes in this sync, state whether the installed apps (desktop flavors, iOS) can be updated gradually one by one while older clients keep working against the new server, or whether everything should be closed and updated together, and call out anything that needs a reinstall or data migration.
-
-After the summary, check the full-audit due date in `LEDGER.md`. If it has passed (or this sync merged an unusually large upstream drop), ask the user whether to run the cross-feature fork-vs-upstream audit now or postpone; record the answer by updating the ledger's audit marker. Do not block or delay the sync itself on this.
+Then check the full-audit due date in `LEDGER.md`. If it has passed, or the upstream drop was unusually large, ask whether to run the cross-feature fork-vs-upstream audit now or postpone, and record the answer in the ledger.
