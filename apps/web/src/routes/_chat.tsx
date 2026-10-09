@@ -351,9 +351,11 @@ function ChatRouteGlobalShortcuts() {
         event.stopPropagation();
         // Fork: snooze a working thread until it's done in one keystroke; any
         // other state falls through to the snooze picker, as thread.snooze does.
+        // A held key must not repeat into the picker, which would wake the
+        // thread it just snoozed.
+        if (command === "thread.snoozeUntilDone" && event.repeat) return;
         if (
           command === "thread.snoozeUntilDone" &&
-          !event.repeat &&
           snoozeShortcutUntilDone &&
           shell != null &&
           readEnvironmentScope(shortcutThreadRef.environmentId, AuthOrchestrationOperateScope) &&
