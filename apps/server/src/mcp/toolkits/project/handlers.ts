@@ -9,6 +9,7 @@ import * as ManagedProjectFolders from "../../../project/ManagedProjectFolders.t
 import * as Repositories from "../../../sourceControl/SourceControlRepositoryService.ts";
 import * as GitVcsDriver from "../../../vcs/GitVcsDriver.ts";
 import * as McpToolAccess from "../../McpToolAccess.ts";
+import * as ThreadGroupsMcpService from "../../ThreadGroupsMcpService.ts";
 import { newCommandId, readCaller, resolveProjectId, unavailable } from "../../threadAccess.ts";
 import { ProjectToolkit } from "./tools.ts";
 
@@ -76,6 +77,11 @@ export const layer = McpToolAccess.toLayer(ProjectToolkit, {
             message:
               "scratch:true picks its own project and folder; omit projectId and workspaceStrategy.",
           });
+        // Fork: rejected before any project or thread exists, so a bad id creates nothing.
+        if (input.groupId !== undefined) {
+          const groups = yield* ThreadGroupsMcpService.ThreadGroupsMcpService;
+          yield* groups.requireGroup(input.groupId);
+        }
         const projectId =
           input.scratch === true
             ? (yield* ManagedProjectFolders.ManagedProjectFolders.pipe(
@@ -123,6 +129,7 @@ export const layer = McpToolAccess.toLayer(ProjectToolkit, {
           runtimeMode,
           interactionMode,
           workspaceStrategy: input.workspaceStrategy ?? { type: "root" },
+          ...(input.groupId === undefined ? {} : { customGroupId: input.groupId }),
           ...(input.message === undefined && attachments.length === 0
             ? {}
             : {
