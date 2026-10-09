@@ -322,18 +322,6 @@ export function backgroundWorkLiveness(
 }
 
 /**
- * Fork: liveness as thread rows show it. A command left running (a dev server)
- * does not hold the thread, matching `backgroundWorkHoldsCompletion`, so a
- * command-only roster reads as done. The CLI keeps the raw
- * `backgroundWorkLiveness` so automation still sees those commands.
- */
-export function backgroundWorkDisplayLiveness(
-  tasks: ReadonlyArray<{ readonly kind: string }>,
-): BackgroundWorkLiveness | null {
-  return backgroundWorkLiveness(tasks.filter((task) => task.kind !== "command"));
-}
-
-/**
  * Fork: which pending work a drain waits for. "agents" waits for agent work and
  * ignores watch loops; "all" waits for every task, monitors (including pull
  * request watches) included.

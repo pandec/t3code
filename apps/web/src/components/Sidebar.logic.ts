@@ -1,6 +1,6 @@
 import { resolveThreadWorkingStartedAt } from "@t3tools/client-runtime/state/models";
 import { threadPullRequestSearchTerms } from "@t3tools/shared/threadPullRequests";
-import { backgroundWorkDisplayLiveness } from "@t3tools/shared/orchestrationV2PendingBackgroundWork";
+import { backgroundWorkLiveness } from "@t3tools/shared/orchestrationV2PendingBackgroundWork";
 import * as React from "react";
 import {
   isAtomCommandInterrupted,
@@ -1227,13 +1227,16 @@ export function resolveSidebarThreadStatus(thread: SidebarThreadStatusInput): Si
   ) {
     return "working";
   }
+  const liveness = backgroundWorkLiveness(thread.pendingBackgroundTasks ?? []);
   if (thread.runtime?.status === "idle") {
-    return backgroundWorkDisplayLiveness(thread.pendingBackgroundTasks ?? []) ?? "waiting";
+    return liveness ?? "waiting";
   }
   if (thread.runtime?.status === "failed") {
     return thread.runtime.lastErrorClass === "usage_limit" ? "limited" : "failed";
   }
-  return "ready";
+  // Fork: a command left running (a test run, a dev server) does not park the
+  // runtime at idle, but the row still reads as Monitoring until it exits.
+  return liveness ?? "ready";
 }
 
 export type SidebarV2TopStatusKind =
@@ -1459,9 +1462,9 @@ export function resolveThreadStatusPill(input: {
 
   // The turn ended while background work runs on. Live agents and workflows
   // read as plain Working; Monitoring is reserved for watch loops (a monitor
-  // tailing checks) with no other live work. A running command alone (a dev
-  // server) does not hold the thread, so it reads as done.
-  const liveness = backgroundWorkDisplayLiveness(thread.pendingBackgroundTasks ?? []);
+  // tailing checks, a command such as a test run or dev server) with no other
+  // live work.
+  const liveness = backgroundWorkLiveness(thread.pendingBackgroundTasks ?? []);
   if (liveness === "working") {
     return {
       label: "Working",

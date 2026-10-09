@@ -3,7 +3,6 @@ import type { OrchestrationV2PendingBackgroundTask } from "@t3tools/contracts";
 import {
   backgroundWorkHoldsCompletion,
   backgroundWorkInDrainScope,
-  backgroundWorkDisplayLiveness,
   backgroundWorkLiveness,
   derivePendingBackgroundWork,
   turnItemUpdateCanEndBackgroundWork,
@@ -607,12 +606,6 @@ describe("background work liveness and drain scope", () => {
     expect(backgroundWorkLiveness([devServer, monitor, subagent])).toBe("working");
     expect(backgroundWorkLiveness([devServer])).toBe("monitoring");
     expect(backgroundWorkLiveness([devServer, monitor])).toBe("monitoring");
-  });
-
-  it("shows a running command alone as done on thread rows", () => {
-    expect(backgroundWorkDisplayLiveness([devServer])).toBeNull();
-    expect(backgroundWorkDisplayLiveness([devServer, monitor])).toBe("monitoring");
-    expect(backgroundWorkDisplayLiveness([devServer, subagent])).toBe("working");
   });
 
   it("drains agents only by default and every task with all", () => {

@@ -237,9 +237,9 @@ describe("resolveThreadListV2Status", () => {
     }
   });
 
-  // Fork: a watch loop parked after the turn reads as monitoring, not waiting.
+  // Fork: a watch loop left after the turn, a command included, reads as monitoring.
   it.each([
-    { kind: "command", status: "ready" },
+    { kind: "command", status: "monitoring" },
     { kind: "monitor", status: "monitoring" },
   ] as const)(
     "presents an unseen completion with a $kind roster as $status",

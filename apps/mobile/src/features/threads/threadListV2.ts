@@ -1,7 +1,7 @@
 import type { ThreadGroup } from "@t3tools/contracts";
 import { threadGroupId, threadGroupSections } from "@t3tools/shared/threadGroups";
 import { threadPullRequestSearchTerms } from "@t3tools/shared/threadPullRequests";
-import { backgroundWorkDisplayLiveness } from "@t3tools/shared/orchestrationV2PendingBackgroundWork";
+import { backgroundWorkLiveness } from "@t3tools/shared/orchestrationV2PendingBackgroundWork";
 import {
   canSnooze,
   effectiveSnoozed,
@@ -258,13 +258,16 @@ export function resolveThreadListV2Status(
   ) {
     return "working";
   }
+  const liveness = backgroundWorkLiveness(thread.pendingBackgroundTasks ?? []);
   if (thread.runtime?.status === "idle") {
-    return backgroundWorkDisplayLiveness(thread.pendingBackgroundTasks ?? []) ?? "waiting";
+    return liveness ?? "waiting";
   }
   if (thread.runtime?.status === "failed") {
     return thread.runtime.lastErrorClass === "usage_limit" ? "limited" : "failed";
   }
-  return "ready";
+  // Fork: a command left running (a test run, a dev server) does not park the
+  // runtime at idle, but the row still reads as Monitoring until it exits.
+  return liveness ?? "ready";
 }
 
 /** How long a working row's current work has run, as coarse relative time

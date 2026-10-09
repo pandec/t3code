@@ -2326,10 +2326,16 @@ describe("navigation after parking a thread", () => {
 });
 
 describe("unseen completion with background work", () => {
-  // A command left running (a dev server) does not hold completion. A monitor
-  // still parks the shell at idle, which the fork reads as Monitoring.
+  // A command left running (a test run, a dev server) does not hold completion,
+  // and a monitor parks the shell at idle; the fork reads both as Monitoring.
   it.each([
-    { kind: "command", status: "ready", topStatus: "done", receded: false, pill: "Completed" },
+    {
+      kind: "command",
+      status: "monitoring",
+      topStatus: "monitoring",
+      receded: true,
+      pill: "Monitoring",
+    },
     {
       kind: "monitor",
       status: "monitoring",
