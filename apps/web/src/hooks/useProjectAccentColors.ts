@@ -8,7 +8,7 @@
  */
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useAtomValue } from "@effect/atom-react";
-import type { EnvironmentId } from "@t3tools/contracts";
+import type { EnvironmentId, ScopedProjectRef } from "@t3tools/contracts";
 import type { SidebarProjectAccentColor } from "@t3tools/contracts/settings";
 import {
   collectWritableProjectAccentKeys,
@@ -25,6 +25,7 @@ import { environmentPresentations } from "~/state/presentation";
 import { enqueueProjectAccentColorWrite } from "./projectAccentColorWriteQueue";
 import {
   getClientSettings,
+  useAccentTintSettings,
   useClientSettings,
   useUpdateClientSettings,
   useUpdateSettingsForEnvironment,
@@ -167,6 +168,38 @@ export function useProjectAccentColors(): ProjectAccentColors {
   return useMemo(
     () => ({ resolve, update, clearAllServerColors, hasAnyServerAccentColors }),
     [clearAllServerColors, hasAnyServerAccentColors, resolve, update],
+  );
+}
+
+/**
+ * Row tint per member project, keyed `environmentId:projectId`. Empty while
+ * tints are switched off, so every tinted surface follows the toggle; the
+ * accents themselves stay untouched.
+ */
+export function useProjectAccentColorByKey(
+  groups: ReadonlyArray<{
+    readonly memberProjects: ReadonlyArray<ProjectAccentSource>;
+    readonly memberProjectRefs: ReadonlyArray<ScopedProjectRef>;
+  }>,
+): ReadonlyMap<string, SidebarProjectAccentColor> {
+  const { resolve } = useProjectAccentColors();
+  const { enabled } = useAccentTintSettings();
+  return useMemo(
+    () =>
+      new Map(
+        enabled
+          ? groups.flatMap((group) => {
+              const color = resolve(group.memberProjects);
+              return color === null
+                ? []
+                : group.memberProjectRefs.map(
+                    (projectRef) =>
+                      [`${projectRef.environmentId}:${projectRef.projectId}`, color] as const,
+                  );
+            })
+          : [],
+      ),
+    [enabled, groups, resolve],
   );
 }
 

@@ -178,6 +178,7 @@ import { isCommandPaletteOpen, openCommandPalette } from "../commandPaletteBus";
 import { resolveThreadActionProjectRef, startNewThreadFromContext } from "../lib/chatThreadActions";
 import { useAccentTintSettings, useClientSettings } from "../hooks/useSettings";
 import {
+  useProjectAccentColorByKey,
   useProjectAccentColorMigration,
   useProjectAccentColors,
 } from "../hooks/useProjectAccentColors";
@@ -2725,6 +2726,8 @@ const SidebarV2ArchivedRow = memo(function SidebarV2ArchivedRow(props: {
   readonly thread: EnvironmentThreadShell;
   readonly project: ProjectFaviconProject | null;
   readonly projectTitle: string | null;
+  readonly projectAccentColor: SidebarProjectAccentColor | null;
+  readonly accentTintIntensityPercent: AccentTintIntensityPercent;
   readonly isActive: boolean;
   readonly onOpen: (threadRef: ScopedThreadRef) => void;
   readonly onUnarchive: (threadRef: ScopedThreadRef) => void;
@@ -2753,6 +2756,7 @@ const SidebarV2ArchivedRow = memo(function SidebarV2ArchivedRow(props: {
           "flex h-10 w-full cursor-pointer items-center gap-2 rounded-md px-2.5 text-left text-sidebar-muted-foreground/65 outline-none hover:bg-sidebar-row-hover hover:text-sidebar-foreground focus-visible:bg-sidebar-row-hover focus-visible:ring-2 focus-visible:ring-ring",
           props.isActive && "bg-sidebar-row-hover text-sidebar-foreground",
         )}
+        style={projectAccentTintStyle(props.projectAccentColor, props.accentTintIntensityPercent)}
         onClick={() => props.onOpen(threadRef)}
       >
         {props.project ? (
@@ -3191,26 +3195,7 @@ export default function Sidebar() {
       ),
     [projectGroups],
   );
-  // Empty while tints are switched off: every tinted surface reads this map,
-  // so the toggle lands in one place. Accents themselves are untouched — the
-  // project rows still show their dot and the picker still writes colors.
-  const projectAccentColorByKey = useMemo(
-    () =>
-      new Map(
-        accentTint.enabled
-          ? projectGroups.flatMap((group) => {
-              const color = projectAccentColors.resolve(group.memberProjects);
-              return color === null
-                ? []
-                : group.memberProjectRefs.map(
-                    (projectRef) =>
-                      [`${projectRef.environmentId}:${projectRef.projectId}`, color] as const,
-                  );
-            })
-          : [],
-      ),
-    [accentTint.enabled, projectAccentColors, projectGroups],
-  );
+  const projectAccentColorByKey = useProjectAccentColorByKey(projectGroups);
 
   const nowMinute = useNowMinute();
   const changeRequestSnapshotByKey = useAtomValue(threadChangeRequestSnapshotsAtom);
@@ -7177,6 +7162,12 @@ export default function Sidebar() {
                                 `${thread.environmentId}:${thread.projectId}`,
                               ) ?? null
                             }
+                            projectAccentColor={
+                              projectAccentColorByKey.get(
+                                `${thread.environmentId}:${thread.projectId}`,
+                              ) ?? null
+                            }
+                            accentTintIntensityPercent={accentTint.intensityPercent}
                             isActive={
                               routeThreadKey ===
                               scopedThreadKey(scopeThreadRef(thread.environmentId, thread.id))

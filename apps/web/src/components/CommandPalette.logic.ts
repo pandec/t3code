@@ -776,6 +776,7 @@ export function buildThreadActionItems<TThread extends BuildThreadActionItemsThr
   /** Optional rich description (e.g. favicon + workspace icons). Falls back to text. */
   renderDescription?: (thread: TThread, meta: { projectTitle: string | undefined }) => ReactNode;
   getContentMatch?: (thread: TThread) => CommandPaletteThreadContentMatch | undefined;
+  projectAccentColor?: (thread: TThread) => SidebarProjectAccentColor | null;
   runThread: (thread: Pick<SidebarThreadSummary, "environmentId" | "id">) => Promise<void>;
   limit?: number;
 }): CommandPaletteActionItem[] {
@@ -804,6 +805,7 @@ export function buildThreadActionItems<TThread extends BuildThreadActionItemsThr
     const leadingContent = input.renderLeadingContent?.(thread);
     const trailingContent = input.renderTrailingContent?.(thread);
     const contentMatch = input.getContentMatch?.(thread);
+    const projectAccentColor = input.projectAccentColor?.(thread) ?? null;
     const description = input.renderDescription
       ? input.renderDescription(thread, { projectTitle })
       : descriptionParts.join(` · `);
@@ -832,6 +834,7 @@ export function buildThreadActionItems<TThread extends BuildThreadActionItemsThr
       leadingContent ? { titleLeadingContent: leadingContent } : {},
       trailingContent ? { titleTrailingContent: trailingContent } : {},
       contentMatch ? { threadContentMatch: contentMatch } : {},
+      projectAccentColor !== null ? { projectAccentColor } : {},
       {
         run: async () => {
           await input.runThread(thread);
