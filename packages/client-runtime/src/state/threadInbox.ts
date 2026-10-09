@@ -12,14 +12,22 @@ type WorkingThreadInput = Pick<
   | "interactionMode"
   | "latestRun"
   | "runtime"
->;
+> & {
+  readonly pendingBackgroundTasks?: EnvironmentThreadShell["pendingBackgroundTasks"] | undefined;
+};
 
 /** Threads busy with work that does not need the user fold into the Working
-    section: a running run, or one stopped with background work that will wake
-    it. Approvals, questions, plan prompts, and failures stay in the inbox. */
+    section: a running run, or one stopped with background work still running.
+    Approvals, questions, plan prompts, and failures stay in the inbox. */
 export function isThreadWorking(thread: WorkingThreadInput): boolean {
   if (thread.hasPendingApprovals || thread.hasPendingUserInput) return false;
-  if (!threadRuntimeIsActive(thread.runtime) && thread.runtime?.status !== "idle") return false;
+  // Fork: work left running after the turn, a command included, keeps a
+  // thread that did not fail working, matching the row's Monitoring status.
+  const lingering =
+    thread.runtime?.status !== "failed" && (thread.pendingBackgroundTasks?.length ?? 0) > 0;
+  if (!threadRuntimeIsActive(thread.runtime) && thread.runtime?.status !== "idle" && !lingering) {
+    return false;
+  }
   // A plan prompt outranks lingering background work: the user has to act on it.
   const run = thread.latestRun;
   const runSettled =

@@ -1570,6 +1570,24 @@ describe("resolveThreadStatusPill", () => {
     ).toMatchObject({ label: "Plan Ready", pulse: false });
   });
 
+  it("shows plan ready over a command left running", () => {
+    expect(
+      resolveThreadStatusPill({
+        thread: {
+          ...baseThread,
+          hasActionableProposedPlan: true,
+          latestRun: makeLatestRun(),
+          pendingBackgroundTasks: [{ taskId: "bg-1", kind: "command" }],
+          runtime: {
+            ...baseThread.runtime,
+            status: "completed",
+            activeRunId: null,
+          },
+        },
+      }),
+    ).toMatchObject({ label: "Plan Ready", pulse: false });
+  });
+
   it("does not manufacture completed state without a client visit marker", () => {
     expect(
       resolveThreadStatusPill({
@@ -2326,10 +2344,16 @@ describe("navigation after parking a thread", () => {
 });
 
 describe("unseen completion with background work", () => {
-  // A command left running (a dev server) does not hold completion. A monitor
-  // still parks the shell at idle, which the fork reads as Monitoring.
+  // A command left running (a test run, a dev server) does not hold completion,
+  // and a monitor parks the shell at idle; the fork reads both as Monitoring.
   it.each([
-    { kind: "command", status: "ready", topStatus: "done", receded: false, pill: "Completed" },
+    {
+      kind: "command",
+      status: "monitoring",
+      topStatus: "monitoring",
+      receded: true,
+      pill: "Monitoring",
+    },
     {
       kind: "monitor",
       status: "monitoring",

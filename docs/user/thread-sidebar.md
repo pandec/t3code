@@ -346,8 +346,8 @@ Stop on a thread also stops the subagents it delegated to.
 
 When a turn ends while work it started keeps running, the thread list shows **Working** for live
 subagents and workflows, and **Monitoring** when only watch loops remain, such as a monitor tailing
-checks or a pull request watch. A command left running on its own, such as a dev server, does not
-keep the thread busy: the thread completes and notifies as usual. The conversation lists that work
+checks, a pull request watch, or a command left running such as a test run or dev server. A command
+alone still lets the thread complete and notify as usual. The conversation lists that work
 with a **Stop** button. Settling or archiving the thread also stops it.
 
 Subagent threads started by the agent can't take messages; message the parent
