@@ -61,6 +61,8 @@ import { ProjectActionsToolkit } from "./toolkits/projectActions/tools.ts";
 import * as ProjectActions from "../project/ProjectActions.ts";
 import * as WorktreeMcpService from "./WorktreeMcpService.ts";
 import { VoiceToolkitHandlersLive } from "./toolkits/voice/handlers.ts";
+import { TelegramToolkitHandlersLive } from "./toolkits/telegram/handlers.ts";
+import { TelegramToolkit } from "./toolkits/telegram/tools.ts";
 import { VoiceToolkit } from "./toolkits/voice/tools.ts";
 import * as PullRequestsHandlers from "./toolkits/pullRequests/handlers.ts";
 import { PullRequestsToolkit } from "./toolkits/pullRequests/tools.ts";
@@ -899,6 +901,12 @@ const layerThreadDrainToolkitRegistration = toolkitRegistration(
 
 const layerVoiceToolkitRegistration = toolkitRegistration(VoiceToolkit, VoiceToolkitHandlersLive);
 
+// Fork: Telegram dispatches need no capability; the server provides TelegramService.
+const layerTelegramToolkitRegistration = toolkitRegistration(
+  TelegramToolkit,
+  TelegramToolkitHandlersLive,
+);
+
 export const layerPullRequestsToolkit = toolkitRegistration(
   PullRequestsToolkit,
   PullRequestsHandlers.layer,
@@ -942,8 +950,8 @@ const layerPreviewIslandRegistration = Layer.mergeAll(
  * own path — a session's credential (whose endpoint McpSessionRegistry picks
  * from its capabilities) then only ever sees the tools it can call. The
  * orchestration, thread, attachment, project, environment, worktree, pull
- * request and HTML toolkits are on every island because every credential
- * carries their capabilities (HTML needs none); they only operate on what the
+ * request, HTML and Telegram toolkits are on every island because every credential
+ * carries their capabilities (HTML and Telegram need none); they only operate on what the
  * credential's thread can reach.
  * Layer boundaries: Layer.fresh un-memoizes the McpServer inside each island,
  * so the MCP service layers provided inside a registration (orchestrator,
@@ -974,6 +982,7 @@ const mcpToolkitIsland = <E, R>(path: `/${string}`, registrations: Layer.Layer<n
       layerThreadGroupsToolkitRegistration,
       layerThreadDrainToolkitRegistration,
       layerProjectActionsToolkitRegistration,
+      layerTelegramToolkitRegistration,
     ).pipe(Layer.provideMerge(makeMcpTransport(path))),
   );
 

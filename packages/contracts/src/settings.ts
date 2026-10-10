@@ -1123,6 +1123,20 @@ export const BitbucketSettings = Schema.Struct({
 export type BitbucketSettings = typeof BitbucketSettings.Type;
 
 /**
+ * Telegram bot dispatches (fork). `botToken` lives in the server's secret
+ * store, like the Bitbucket tokens; clients only see the redaction marker.
+ * `botUsername` is filled by the server from `getMe`, and `chatId` once the
+ * owner sends `/start <linkCode>` to the bot. An empty `chatId` means unlinked.
+ */
+export const TelegramSettings = Schema.Struct({
+  botToken: TrimmedString.pipe(Schema.withDecodingDefault(Effect.succeed(""))),
+  botUsername: TrimmedString.pipe(Schema.withDecodingDefault(Effect.succeed(""))),
+  chatId: TrimmedString.pipe(Schema.withDecodingDefault(Effect.succeed(""))),
+  linkCode: TrimmedString.pipe(Schema.withDecodingDefault(Effect.succeed(""))),
+});
+export type TelegramSettings = typeof TelegramSettings.Type;
+
+/**
  * Per-host choices for the GitHub CLI's logins. `account` pins one of the logins
  * `gh` holds for the host instead of its active one; a disabled host gets no
  * credential at all. A token saved here wins over `GH_TOKEN` and friends, which win over `gh`.
@@ -1677,6 +1691,7 @@ export const ServerSettings = Schema.Struct({
     Schema.withDecodingDefault(Effect.succeed(EMPTY_SAVED_PROMPT_LIBRARY)),
   ),
   bitbucket: BitbucketSettings.pipe(Schema.withDecodingDefault(Effect.succeed({}))),
+  telegram: TelegramSettings.pipe(Schema.withDecodingDefault(Effect.succeed({}))),
   github: GitHubSettings.pipe(Schema.withDecodingDefault(Effect.succeed({}))),
   // Keyed by a user-chosen id so a source keeps its rows across edits. Entries
   // this build cannot decode round-trip untouched, as provider instances do.
@@ -1946,6 +1961,15 @@ export const ServerSettingsPatch = Schema.Struct({
       email: Schema.optionalKey(TrimmedString),
       accessToken: Schema.optionalKey(TrimmedString),
       apiToken: Schema.optionalKey(TrimmedString),
+    }),
+  ),
+  /** An empty token clears it; an omitted one keeps what the server has. */
+  telegram: Schema.optionalKey(
+    Schema.Struct({
+      botToken: Schema.optionalKey(TrimmedString),
+      botUsername: Schema.optionalKey(TrimmedString),
+      chatId: Schema.optionalKey(TrimmedString),
+      linkCode: Schema.optionalKey(TrimmedString),
     }),
   ),
   /**

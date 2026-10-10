@@ -194,6 +194,9 @@ import * as MessageSummary from "./messageArtifacts/MessageSummary.ts";
 import * as MessageSpeechScript from "./messageArtifacts/MessageSpeechScript.ts";
 import * as MessageSpeech from "./voice/MessageSpeech.ts";
 import * as AgentVoiceReply from "./voice/AgentVoiceReply.ts";
+import * as TelegramBotApi from "./telegram/TelegramBotApi.ts";
+import * as TelegramService from "./telegram/TelegramService.ts";
+import * as TelegramTopicStore from "./telegram/TelegramTopicStore.ts";
 import * as OrchestratorV2 from "./orchestration-v2/Orchestrator.ts";
 import { messageArtifactsHttpApiLayer } from "./messageArtifacts/http.ts";
 import * as NetService from "@t3tools/shared/Net";
@@ -618,6 +621,17 @@ const layerRuntimeCoreDependenciesBase = Layer.mergeAll(
   StorageCleanup.layer.pipe(Layer.provide(ProjectionStoreV2.layer)),
   layerThreadPullRequestWorker,
   layerMessageSpeechPurge,
+  // Fork: the telegram_send MCP tool and the bot's long-polling loop.
+  TelegramService.layer.pipe(
+    Layer.provide(
+      Layer.mergeAll(
+        TelegramBotApi.layer,
+        TelegramTopicStore.layer,
+        VoiceTranscription.layer,
+        ProcessRunner.layer,
+      ),
+    ),
+  ),
   Layer.effectDiscard(
     Effect.gen(function* () {
       const service = yield* PullRequestSyncReactor.PullRequestSyncReactor;
