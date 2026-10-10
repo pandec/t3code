@@ -25,6 +25,7 @@ it.effect("persists topics and the update offset, and starts over for another ch
       botId: "",
       chatId: "42",
       lastUpdateId: 7,
+      lastUpdateAt: 0,
       threads: { "thread-a": { topicId: 100, name: "Alpha" } },
     });
     assert.equal(TelegramTopicStore.threadForTopic(reloaded, "42", 100), "thread-a");
@@ -37,5 +38,26 @@ it.effect("persists topics and the update offset, and starts over for another ch
     const rebotted = TelegramTopicStore.withBot(reloaded, "bot-2");
     assert.equal(rebotted.lastUpdateId, 0);
     assert.deepEqual(rebotted.threads, {});
+  }).pipe(Effect.scoped, Effect.provide(NodeServices.layer)),
+);
+
+it.effect("reads a store written before lastUpdateAt existed without losing its topics", () =>
+  Effect.gen(function* () {
+    const fileSystem = yield* FileSystem.FileSystem;
+    const path = yield* Path.Path;
+    const directory = yield* fileSystem.makeTempDirectoryScoped({ prefix: "t3-telegram-store-" });
+    const filePath = path.join(directory, "telegram.json");
+    yield* fileSystem.writeFileString(
+      filePath,
+      JSON.stringify({
+        botId: "1",
+        chatId: "42",
+        lastUpdateId: 7,
+        threads: { "thread-a": { topicId: 100, name: "Alpha" } },
+      }),
+    );
+    const state = yield* (yield* TelegramTopicStore.make(filePath)).read;
+    assert.equal(state.lastUpdateAt, 0);
+    assert.equal(TelegramTopicStore.threadForTopic(state, "42", 100), "thread-a");
   }).pipe(Effect.scoped, Effect.provide(NodeServices.layer)),
 );

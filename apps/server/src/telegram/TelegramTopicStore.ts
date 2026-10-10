@@ -17,6 +17,8 @@ const TelegramTopicState = Schema.Struct({
   botId: Schema.String,
   chatId: Schema.String,
   lastUpdateId: Schema.Number,
+  /** When the last update arrived (epoch ms); a week of silence lets Telegram restart update ids. */
+  lastUpdateAt: Schema.Number.pipe(Schema.withDecodingDefault(Effect.succeed(0))),
   /** Keyed by T3 thread id. */
   threads: Schema.Record(Schema.String, TelegramTopic),
 });
@@ -29,6 +31,7 @@ export const EMPTY_TELEGRAM_TOPIC_STATE: TelegramTopicState = {
   botId: "",
   chatId: "",
   lastUpdateId: 0,
+  lastUpdateAt: 0,
   threads: {},
 };
 
@@ -41,7 +44,9 @@ export const withChat = (state: TelegramTopicState, chatId: string): TelegramTop
  * previous bot's chat, so keeping them could route replies to the wrong thread.
  */
 export const withBot = (state: TelegramTopicState, botId: string): TelegramTopicState =>
-  state.botId === botId ? state : { ...state, botId, lastUpdateId: 0, threads: {} };
+  state.botId === botId
+    ? state
+    : { ...state, botId, lastUpdateId: 0, lastUpdateAt: 0, threads: {} };
 
 export const threadForTopic = (
   state: TelegramTopicState,

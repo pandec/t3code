@@ -116,7 +116,7 @@ export interface TelegramBotClient {
   >;
   /** Long poll. Updates that fail to decode come back with only their id, to advance the offset. */
   readonly getUpdates: Call<
-    { readonly offset: number; readonly timeoutSeconds: number },
+    { readonly offset?: number; readonly timeoutSeconds: number },
     ReadonlyArray<TelegramUpdate>
   >;
   readonly sendRichMessage: Call<
@@ -279,7 +279,11 @@ export const makeClient = (httpClient: HttpClient.HttpClient, token: string): Te
     getUpdates: ({ offset, timeoutSeconds }) =>
       callOnce(
         "getUpdates",
-        json({ offset, timeout: timeoutSeconds, allowed_updates: ["message", "callback_query"] }),
+        json({
+          ...(offset === undefined ? {} : { offset }),
+          timeout: timeoutSeconds,
+          allowed_updates: ["message", "callback_query"],
+        }),
         Schema.Array(Schema.Unknown),
         Duration.seconds(timeoutSeconds + 15),
       ).pipe(

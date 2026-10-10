@@ -11,6 +11,7 @@ import {
   VOICE_TRANSCRIPTION_MAX_DURATION_MS,
   VOICE_TRANSCRIPTION_MIN_DURATION_MS,
 } from "@t3tools/contracts";
+import * as Clock from "effect/Clock";
 import * as Context from "effect/Context";
 import * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";
@@ -49,6 +50,7 @@ const POLL_TIMEOUT_SECONDS = 50;
 const POLL_BACKOFF_MIN_SECONDS = 5;
 const POLL_BACKOFF_MAX_SECONDS = 60;
 const POLL_CONFLICT_BACKOFF_SECONDS = 30;
+const IDLE_OFFSET_RESET_MS = 6 * 24 * 60 * 60 * 1_000;
 
 const WELCOME_TEXT =
   "Linked to T3 Code. Ask an agent to send you a summary to Telegram; each T3 thread gets its own topic here. Reply inside a topic to follow up.";
@@ -386,6 +388,18 @@ export const make = Effect.gen(function* () {
     staleTopicId?: number,
   ) =>
     Effect.gen(function* () {
+      // The owner may have linked another chat since this dispatch read the
+      // settings; stop rather than send to, or remap, the old one.
+      const linkedChatId = yield* serverSettings.getSettings.pipe(
+        Effect.map((settings) => settings.telegram.chatId),
+        Effect.orElseSucceed(() => ""),
+      );
+      if (linkedChatId !== chatId) {
+        return yield* new TelegramDispatchError({
+          reason: "not_linked",
+          detail: "The linked Telegram chat changed during this dispatch.",
+        });
+      }
       const state = yield* topicStore.update((current) =>
         TelegramTopicStore.withChat(current, chatId),
       );
@@ -500,14 +514,18 @@ export const make = Effect.gen(function* () {
         .pipe(Effect.orElseSucceed(() => null));
       const topicName = truncateTopicName(input.title ?? shell?.title ?? "");
 
+      const toDispatchError =
+        (delivered: boolean) => (error: TelegramApiError | TelegramDispatchError) =>
+          error._tag === "TelegramApiError" ? telegramFailed(error, delivered) : error;
+
       let topicId = yield* ensureTopic(client, chatId, input.threadId, topicName, false).pipe(
-        Effect.mapError((error) => telegramFailed(error, false)),
+        Effect.mapError(toDispatchError(false)),
       );
       let recreated = false;
       // A topic deleted in Telegram is recreated once, then the send is retried.
       const inTopic = <A>(
         send: (topicId: number) => Effect.Effect<A, TelegramApiError>,
-      ): Effect.Effect<A, TelegramApiError> =>
+      ): Effect.Effect<A, TelegramApiError | TelegramDispatchError> =>
         Effect.suspend(() => send(topicId)).pipe(
           Effect.catch((error) => {
             if (recreated || !isTopicMissing(error)) return Effect.fail(error);
@@ -530,13 +548,13 @@ export const make = Effect.gen(function* () {
           markdown: input.summary,
           buttons: [DONE_BUTTON],
         }),
-      ).pipe(Effect.mapError((error) => telegramFailed(error, false)));
+      ).pipe(Effect.mapError(toDispatchError(false)));
 
       const reportParts = input.report === undefined ? [] : splitTelegramReport(input.report);
       for (const part of reportParts) {
         yield* inTopic((topic) =>
           client.sendRichMessage({ chatId, topicId: topic, markdown: part }),
-        ).pipe(Effect.mapError((error) => telegramFailed(error, true)));
+        ).pipe(Effect.mapError(toDispatchError(true)));
       }
 
       const audioSeconds =
@@ -581,8 +599,11 @@ export const make = Effect.gen(function* () {
       const step = Effect.gen(function* () {
         if (!started) yield* start;
         const state = yield* topicStore.read;
+        // After a week without updates Telegram may restart update ids below the
+        // saved offset; polling without one returns every unconfirmed update instead.
+        const idle = (yield* Clock.currentTimeMillis) - state.lastUpdateAt >= IDLE_OFFSET_RESET_MS;
         const updates = yield* client.getUpdates({
-          offset: state.lastUpdateId + 1,
+          ...(idle ? {} : { offset: state.lastUpdateId + 1 }),
           timeoutSeconds: POLL_TIMEOUT_SECONDS,
         });
         if (updates.length === 0) return;
@@ -598,10 +619,8 @@ export const make = Effect.gen(function* () {
           );
         }
         const lastUpdateId = Math.max(...updates.map((update) => update.update_id));
-        yield* topicStore.update((current) => ({
-          ...current,
-          lastUpdateId: Math.max(current.lastUpdateId, lastUpdateId),
-        }));
+        const lastUpdateAt = yield* Clock.currentTimeMillis;
+        yield* topicStore.update((current) => ({ ...current, lastUpdateId, lastUpdateAt }));
       });
 
       while (true) {
