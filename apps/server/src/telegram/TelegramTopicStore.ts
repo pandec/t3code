@@ -36,9 +36,12 @@ export const EMPTY_TELEGRAM_TOPIC_STATE: TelegramTopicState = {
 export const withChat = (state: TelegramTopicState, chatId: string): TelegramTopicState =>
   state.chatId === chatId ? state : { ...state, chatId, threads: {} };
 
-/** A new bot starts its update offset over. */
+/**
+ * A new bot starts over: update ids are per bot, and topic ids belong to the
+ * previous bot's chat, so keeping them could route replies to the wrong thread.
+ */
 export const withBot = (state: TelegramTopicState, botId: string): TelegramTopicState =>
-  state.botId === botId ? state : { ...state, botId, lastUpdateId: 0 };
+  state.botId === botId ? state : { ...state, botId, lastUpdateId: 0, threads: {} };
 
 export const threadForTopic = (
   state: TelegramTopicState,

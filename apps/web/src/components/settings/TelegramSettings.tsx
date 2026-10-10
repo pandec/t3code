@@ -78,8 +78,11 @@ function TelegramBotForm({ environmentId }: { readonly environmentId: Environmen
     }
   };
 
+  // A new token may belong to another bot, so the old bot's name and chat link go with it.
+  const resetLink = { botUsername: "", chatId: "", linkCode: "" } as const;
+
   const saveToken = async () => {
-    if (await save({ botToken: newToken })) {
+    if (await save({ botToken: newToken, ...resetLink })) {
       setTokenDraft("");
       setReplacing(false);
     }
@@ -153,7 +156,7 @@ function TelegramBotForm({ environmentId }: { readonly environmentId: Environmen
               for <span className="text-foreground">@{saved.botUsername}</span>
             </>
           ) : (
-            ". Waiting for the server to reach the bot…"
+            ". Waiting for the server to reach the bot… If this stays, check the token."
           )}
         </p>
         <div className="flex shrink-0 gap-2">
@@ -164,7 +167,7 @@ function TelegramBotForm({ environmentId }: { readonly environmentId: Environmen
             size="xs"
             variant="outline"
             disabled={saving}
-            onClick={() => void save({ botToken: "", chatId: "", linkCode: "" })}
+            onClick={() => void save({ botToken: "", ...resetLink })}
           >
             Remove
           </Button>

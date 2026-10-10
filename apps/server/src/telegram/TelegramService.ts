@@ -12,13 +12,13 @@ import {
   VOICE_TRANSCRIPTION_MIN_DURATION_MS,
 } from "@t3tools/contracts";
 import * as Context from "effect/Context";
-import * as Crypto from "effect/Crypto";
 import * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";
 import * as FileSystem from "effect/FileSystem";
 import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
 import * as Path from "effect/Path";
+import * as Semaphore from "effect/Semaphore";
 import * as Stream from "effect/Stream";
 
 import * as ThreadManagementService from "../orchestration-v2/ThreadManagementService.ts";
@@ -115,13 +115,13 @@ export const makeUpdateHandler = Effect.gen(function* () {
   const threads = yield* ThreadManagementService.ThreadManagementService;
   const topicStore = yield* TelegramTopicStore;
   const transcription = yield* VoiceTranscription;
-  const crypto = yield* Crypto.Crypto;
 
-  const newId = (kind: string) =>
-    crypto.randomUUIDv4.pipe(
-      Effect.orDie,
-      Effect.map((uuid) => `telegram:${kind}:${uuid}`),
-    );
+  /**
+   * Ids derived from the bot and the update, so an update replayed after a
+   * crash or restart (before its offset was saved) dedupes in the orchestrator
+   * instead of starting a second turn.
+   */
+  type UpdateIds = (kind: "command" | "message") => string;
 
   const reply = (client: TelegramBotClient, message: TelegramMessage, text: string) =>
     client
@@ -137,6 +137,7 @@ export const makeUpdateHandler = Effect.gen(function* () {
     client: TelegramBotClient,
     owner: string,
     query: TelegramCallbackQuery,
+    ids: UpdateIds,
   ) {
     const answer = (text: string) =>
       client.answerCallbackQuery({ callbackQueryId: query.id, text });
@@ -152,7 +153,7 @@ export const makeUpdateHandler = Effect.gen(function* () {
     if (threadId === undefined) {
       return yield* answer("This topic is no longer linked to a T3 thread.");
     }
-    const commandId = CommandId.make(yield* newId("command"));
+    const commandId = CommandId.make(ids("command"));
     const setButtons = (button: InlineButton) =>
       client
         .editMessageButtons({ chatId: owner, messageId: message.message_id, buttons: [button] })
@@ -193,6 +194,7 @@ export const makeUpdateHandler = Effect.gen(function* () {
     message: TelegramMessage,
     threadId: ThreadId,
     text: string,
+    ids: UpdateIds,
   ) {
     const shell = yield* threads.getThreadShell(threadId).pipe(Effect.orElseSucceed(() => null));
     if (shell === null) {
@@ -201,9 +203,9 @@ export const makeUpdateHandler = Effect.gen(function* () {
     const sent = yield* threads
       .sendToThread({
         projectId: shell.projectId,
-        commandId: CommandId.make(yield* newId("command")),
+        commandId: CommandId.make(ids("command")),
         threadId,
-        messageId: MessageId.make(yield* newId("message")),
+        messageId: MessageId.make(ids("message")),
         text,
         attachments: [],
         mode: "queue",
@@ -235,7 +237,10 @@ export const makeUpdateHandler = Effect.gen(function* () {
       VOICE_TRANSCRIPTION_MIN_DURATION_MS,
     );
     if (durationMs > VOICE_TRANSCRIPTION_MAX_DURATION_MS) return Option.none<string>();
-    const bytes = yield* client.downloadFile(voice.file_id);
+    // A failed download reads as an untranscribable note, so the owner is told instead of the reply vanishing.
+    const bytes = yield* client
+      .downloadFile(voice.file_id)
+      .pipe(Effect.orElseSucceed(() => new Uint8Array()));
     if (bytes.byteLength === 0 || bytes.byteLength > VOICE_TRANSCRIPTION_MAX_BYTES) {
       return Option.none<string>();
     }
@@ -256,6 +261,7 @@ export const makeUpdateHandler = Effect.gen(function* () {
     client: TelegramBotClient,
     settings: ServerSettings,
     message: TelegramMessage,
+    ids: UpdateIds,
   ) {
     const chatId = String(message.chat.id);
     const owner = settings.telegram.chatId;
@@ -289,7 +295,7 @@ export const makeUpdateHandler = Effect.gen(function* () {
       return yield* reply(client, message, HELP_TEXT);
     }
     if (text !== undefined && text.length > 0) {
-      return yield* forward(client, message, ThreadId.make(threadId), text);
+      return yield* forward(client, message, ThreadId.make(threadId), text, ids);
     }
     if (message.voice !== undefined) {
       const transcript = yield* transcribe(client, message.voice);
@@ -303,7 +309,7 @@ export const makeUpdateHandler = Effect.gen(function* () {
         );
       }
       yield* reply(client, message, `🎙️ ${transcript.value}`);
-      return yield* forward(client, message, ThreadId.make(threadId), transcript.value);
+      return yield* forward(client, message, ThreadId.make(threadId), transcript.value, ids);
     }
     return yield* reply(client, message, UNSUPPORTED_TEXT);
   });
@@ -314,11 +320,18 @@ export const makeUpdateHandler = Effect.gen(function* () {
   ) {
     const settings = yield* serverSettings.getSettings.pipe(Effect.option);
     if (Option.isNone(settings)) return;
+    const { botId } = yield* topicStore.read;
+    const ids: UpdateIds = (kind) => `telegram:${botId}:${update.update_id}:${kind}`;
     if (update.callback_query !== undefined) {
-      return yield* handleCallback(client, settings.value.telegram.chatId, update.callback_query);
+      return yield* handleCallback(
+        client,
+        settings.value.telegram.chatId,
+        update.callback_query,
+        ids,
+      );
     }
     if (update.message !== undefined) {
-      return yield* handleMessage(client, settings.value, update.message);
+      return yield* handleMessage(client, settings.value, update.message, ids);
     }
   });
 });
@@ -360,16 +373,25 @@ export const make = Effect.gen(function* () {
       }),
     ).pipe(Effect.orElseSucceed(() => Option.none<Uint8Array>()));
 
+  // Serializes topic lookup and creation so concurrent dispatches for one
+  // thread share a topic instead of each creating one.
+  const topicLock = yield* Semaphore.make(1);
+
   const ensureTopic = (
     client: TelegramBotClient,
     chatId: string,
     threadId: ThreadId,
     name: string,
     recreate: boolean,
+    staleTopicId?: number,
   ) =>
     Effect.gen(function* () {
       const state = yield* topicStore.update((current) => withChat(current, chatId));
       const existing = state.threads[threadId];
+      // A concurrent dispatch may already have replaced the missing topic.
+      if (existing !== undefined && recreate && existing.topicId !== staleTopicId) {
+        return existing.topicId;
+      }
       if (existing !== undefined && !recreate) {
         if (existing.name !== name) {
           // A failed rename keeps the old name stored, so the next dispatch retries it.
@@ -386,12 +408,17 @@ export const make = Effect.gen(function* () {
         return existing.topicId;
       }
       const created = yield* client.createForumTopic({ chatId, name });
-      yield* topicStore.update((current) => ({
-        ...withChat(current, chatId),
-        threads: { ...current.threads, [threadId]: { topicId: created.topicId, name } },
-      }));
+      // The owner may have linked another chat meanwhile; its mapping must stay clean.
+      yield* topicStore.update((current) =>
+        current.chatId !== chatId
+          ? current
+          : {
+              ...current,
+              threads: { ...current.threads, [threadId]: { topicId: created.topicId, name } },
+            },
+      );
       return created.topicId;
-    });
+    }).pipe(topicLock.withPermits(1));
 
   const sendVoiceNote = Effect.fn("TelegramService.sendVoiceNote")(function* (input: {
     readonly client: TelegramBotClient;
@@ -476,7 +503,7 @@ export const make = Effect.gen(function* () {
           Effect.catch((error) => {
             if (recreated || !isTopicMissing(error)) return Effect.fail(error);
             recreated = true;
-            return ensureTopic(client, chatId, input.threadId, topicName, true).pipe(
+            return ensureTopic(client, chatId, input.threadId, topicName, true, topicId).pipe(
               Effect.tap((next) =>
                 Effect.sync(() => {
                   topicId = next;

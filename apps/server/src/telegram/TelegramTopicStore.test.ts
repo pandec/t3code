@@ -33,7 +33,9 @@ it.effect("persists topics and the update offset, and starts over for another ch
     const relinked = TelegramTopicStore.withChat(reloaded, "43");
     assert.deepEqual(relinked.threads, {});
     assert.equal(relinked.lastUpdateId, 7);
-    // A new bot's update ids start over.
-    assert.equal(TelegramTopicStore.withBot(reloaded, "bot-2").lastUpdateId, 0);
+    // A new bot's update ids and topics start over.
+    const rebotted = TelegramTopicStore.withBot(reloaded, "bot-2");
+    assert.equal(rebotted.lastUpdateId, 0);
+    assert.deepEqual(rebotted.threads, {});
   }).pipe(Effect.scoped, Effect.provide(NodeServices.layer)),
 );

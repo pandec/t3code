@@ -171,6 +171,9 @@ it.effect("forwards the owner's topic reply to its thread as a queued user messa
       createdBy: "user",
       creationSource: "server",
       attachments: [],
+      // Derived from the update, so a replayed update dedupes instead of starting another turn.
+      commandId: "telegram::1:command",
+      messageId: "telegram::1:message",
     });
 
     // General (no topic) gets the help text instead.
