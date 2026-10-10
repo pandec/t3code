@@ -183,14 +183,11 @@ export interface TelegramBotClient {
   readonly downloadFile: Call<string, Uint8Array>;
 }
 
-export interface TelegramBotApiShape {
-  readonly client: (token: string) => TelegramBotClient;
-}
-
 /** Fork: Telegram Bot API access for `TelegramService`, replaced by a fake in tests. */
-export class TelegramBotApi extends Context.Service<TelegramBotApi, TelegramBotApiShape>()(
-  "t3/telegram/TelegramBotApi",
-) {}
+export class TelegramBotApi extends Context.Service<
+  TelegramBotApi,
+  { readonly client: (token: string) => TelegramBotClient }
+>()("t3/telegram/TelegramBotApi") {}
 
 const inlineKeyboard = (buttons: ReadonlyArray<InlineButton>) => ({
   inline_keyboard: [

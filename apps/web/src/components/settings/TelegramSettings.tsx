@@ -64,6 +64,8 @@ function TelegramBotForm({ environmentId }: { readonly environmentId: Environmen
   const [tokenDraft, setTokenDraft] = useState("");
   const [replacing, setReplacing] = useState(false);
   const [saving, setSaving] = useState(false);
+  // Clients only see that a code is pending, so the link to resend lives here.
+  const [pendingLinkCode, setPendingLinkCode] = useState<string | null>(null);
   const tokenSaved = saved.botToken.length > 0;
   const newToken = tokenDraft.trim();
   const editingToken = !tokenSaved || replacing;
@@ -99,6 +101,7 @@ function TelegramBotForm({ environmentId }: { readonly environmentId: Environmen
       pending?.close();
       return;
     }
+    setPendingLinkCode(linkCode);
     if (pending) pending.location.href = url;
     else await ensureLocalApi().shell.openExternal(url);
   };
@@ -181,18 +184,20 @@ function TelegramBotForm({ environmentId }: { readonly environmentId: Environmen
             ) : waiting ? (
               <>
                 Waiting for /start in Telegram…{" "}
-                <InlineButton
-                  render={
-                    <a
-                      href={botStartUrl(saved.botUsername, saved.linkCode)}
-                      target="_blank"
-                      rel="noreferrer noopener"
-                    />
-                  }
-                >
-                  Open the bot
-                  <ExternalLinkIcon aria-hidden className="size-3" />
-                </InlineButton>
+                {pendingLinkCode ? (
+                  <InlineButton
+                    render={
+                      <a
+                        href={botStartUrl(saved.botUsername, pendingLinkCode)}
+                        target="_blank"
+                        rel="noreferrer noopener"
+                      />
+                    }
+                  >
+                    Open the bot
+                    <ExternalLinkIcon aria-hidden className="size-3" />
+                  </InlineButton>
+                ) : null}
               </>
             ) : (
               "Link your Telegram chat so the bot knows where to send."

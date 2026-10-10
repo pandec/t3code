@@ -8,7 +8,7 @@ import * as Schema from "effect/Schema";
 import { Tool, Toolkit } from "effect/ai";
 
 import * as ThreadManagementService from "../../../orchestration-v2/ThreadManagementService.ts";
-import { TelegramService } from "../../../telegram/TelegramService.ts";
+import * as TelegramService from "../../../telegram/TelegramService.ts";
 import * as McpInvocationContext from "../../McpInvocationContext.ts";
 
 export const TelegramSendTool = Tool.make("telegram_send", {
@@ -20,7 +20,7 @@ export const TelegramSendTool = Tool.make("telegram_send", {
   dependencies: [
     McpInvocationContext.McpInvocationContext,
     ThreadManagementService.ThreadManagementService,
-    TelegramService,
+    TelegramService.TelegramService,
   ],
 })
   .annotate(Tool.Title, "Send to Telegram")

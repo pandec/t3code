@@ -9,7 +9,7 @@ import * as Path from "effect/Path";
 import * as McpToolAccessTestkit from "../mcp/McpToolAccess.testkit.ts";
 import * as ThreadManagementService from "../orchestration-v2/ThreadManagementService.ts";
 import * as ServerSettings from "../serverSettings.ts";
-import { VoiceTranscription } from "../voice/VoiceTranscription.ts";
+import * as VoiceTranscription from "../voice/VoiceTranscription.ts";
 import type { TelegramBotClient, TelegramUpdate } from "./TelegramBotApi.ts";
 import { makeUpdateHandler } from "./TelegramService.ts";
 import * as TelegramTopicStore from "./TelegramTopicStore.ts";
@@ -112,7 +112,7 @@ const harness = (telegram: { readonly chatId?: string; readonly linkCode?: strin
         threads,
         settingsLayer,
         Layer.succeed(TelegramTopicStore.TelegramTopicStore, store),
-        Layer.succeed(VoiceTranscription, {
+        Layer.succeed(VoiceTranscription.VoiceTranscription, {
           available: false,
           transcribe: () => Effect.die("unused"),
         }),

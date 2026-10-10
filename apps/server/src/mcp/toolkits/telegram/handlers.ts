@@ -1,6 +1,6 @@
 import * as Effect from "effect/Effect";
 
-import { TelegramService } from "../../../telegram/TelegramService.ts";
+import * as TelegramService from "../../../telegram/TelegramService.ts";
 import * as McpInvocationContext from "../../McpInvocationContext.ts";
 import * as McpToolAccess from "../../McpToolAccess.ts";
 import { TelegramToolkit } from "./tools.ts";
@@ -11,7 +11,7 @@ export const TelegramToolkitHandlersLive = McpToolAccess.toLayer(TelegramToolkit
     Effect.gen(function* () {
       const scope = yield* McpInvocationContext.McpInvocationContext;
       const { thread } = yield* McpInvocationContext.requireThreadScope(scope, "telegram_send");
-      const telegram = yield* TelegramService;
+      const telegram = yield* TelegramService.TelegramService;
       return yield* telegram.dispatch({ ...input, threadId: thread.threadId });
     }),
   ),

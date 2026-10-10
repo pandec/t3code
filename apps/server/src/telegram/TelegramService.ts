@@ -24,23 +24,23 @@ import * as Stream from "effect/Stream";
 import * as ThreadManagementService from "../orchestration-v2/ThreadManagementService.ts";
 import * as ProcessRunner from "../processRunner.ts";
 import * as ServerActivation from "../serverActivation.ts";
-import { ServerSettingsService } from "../serverSettings.ts";
+import * as ServerSettingsModule from "../serverSettings.ts";
 import { getTtsCharacterLimit, resolveAgentReplyTtsProfile } from "../voice/ttsProfile.ts";
-import { TtsService } from "../voice/TtsService.ts";
+import * as TtsService from "../voice/TtsService.ts";
 import { MP3_MIME_TYPE } from "../voice/ttsTypes.ts";
-import { VoiceTranscription } from "../voice/VoiceTranscription.ts";
+import * as VoiceTranscription from "../voice/VoiceTranscription.ts";
 import { splitTelegramReport } from "./reportSplit.ts";
+import * as TelegramBotApi from "./TelegramBotApi.ts";
 import {
   type InlineButton,
   isTopicMissing,
   type TelegramApiError,
-  TelegramBotApi,
   type TelegramBotClient,
   type TelegramCallbackQuery,
   type TelegramMessage,
   type TelegramUpdate,
 } from "./TelegramBotApi.ts";
-import { TelegramTopicStore, threadForTopic, withBot, withChat } from "./TelegramTopicStore.ts";
+import * as TelegramTopicStore from "./TelegramTopicStore.ts";
 
 const DONE_BUTTON: InlineButton = { text: "✅ Done", callbackData: "settle" };
 const REOPEN_BUTTON: InlineButton = { text: "↩️ Reopen", callbackData: "unsettle" };
@@ -60,24 +60,23 @@ export interface TelegramDispatchRequest extends TelegramDispatchInput {
   readonly threadId: ThreadId;
 }
 
-export interface TelegramServiceShape {
-  /**
-   * Delivers a summary (with a Done button), the optional report, and the
-   * optional voice note into the thread's own topic, creating it on first use.
-   */
-  readonly dispatch: (
-    input: TelegramDispatchRequest,
-  ) => Effect.Effect<TelegramDispatchResult, TelegramDispatchError>;
-}
-
 /**
  * Fork: Telegram dispatches. Agents send summaries to the owner's private chat
  * with their bot, one forum topic per T3 thread; a long-polling loop routes
  * the owner's replies and Done/Reopen buttons back into those threads.
  */
-export class TelegramService extends Context.Service<TelegramService, TelegramServiceShape>()(
-  "t3/telegram/TelegramService",
-) {}
+export class TelegramService extends Context.Service<
+  TelegramService,
+  {
+    /**
+     * Delivers a summary (with a Done button), the optional report, and the
+     * optional voice note into the thread's own topic, creating it on first use.
+     */
+    readonly dispatch: (
+      input: TelegramDispatchRequest,
+    ) => Effect.Effect<TelegramDispatchResult, TelegramDispatchError>;
+  }
+>()("t3/telegram/TelegramService") {}
 
 export const truncateTopicName = (name: string) => {
   const trimmed = name.trim() || "T3 thread";
@@ -111,10 +110,10 @@ const telegramFailed = (error: TelegramApiError, delivered: boolean) =>
  * buttons, and forwards topic replies into their threads. Exported for tests.
  */
 export const makeUpdateHandler = Effect.gen(function* () {
-  const serverSettings = yield* ServerSettingsService;
+  const serverSettings = yield* ServerSettingsModule.ServerSettingsService;
   const threads = yield* ThreadManagementService.ThreadManagementService;
-  const topicStore = yield* TelegramTopicStore;
-  const transcription = yield* VoiceTranscription;
+  const topicStore = yield* TelegramTopicStore.TelegramTopicStore;
+  const transcription = yield* VoiceTranscription.VoiceTranscription;
 
   /**
    * Ids derived from the bot and the update, so an update replayed after a
@@ -149,7 +148,7 @@ export const makeUpdateHandler = Effect.gen(function* () {
     const threadId =
       message.message_thread_id === undefined
         ? undefined
-        : threadForTopic(state, owner, message.message_thread_id);
+        : TelegramTopicStore.threadForTopic(state, owner, message.message_thread_id);
     if (threadId === undefined) {
       return yield* answer("This topic is no longer linked to a T3 thread.");
     }
@@ -290,7 +289,8 @@ export const makeUpdateHandler = Effect.gen(function* () {
 
     const topicId = message.message_thread_id;
     const state = yield* topicStore.read;
-    const threadId = topicId === undefined ? undefined : threadForTopic(state, owner, topicId);
+    const threadId =
+      topicId === undefined ? undefined : TelegramTopicStore.threadForTopic(state, owner, topicId);
     if (threadId === undefined) {
       return yield* reply(client, message, HELP_TEXT);
     }
@@ -337,11 +337,11 @@ export const makeUpdateHandler = Effect.gen(function* () {
 });
 
 export const make = Effect.gen(function* () {
-  const serverSettings = yield* ServerSettingsService;
+  const serverSettings = yield* ServerSettingsModule.ServerSettingsService;
   const threads = yield* ThreadManagementService.ThreadManagementService;
-  const topicStore = yield* TelegramTopicStore;
-  const botApi = yield* TelegramBotApi;
-  const tts = yield* TtsService;
+  const topicStore = yield* TelegramTopicStore.TelegramTopicStore;
+  const botApi = yield* TelegramBotApi.TelegramBotApi;
+  const tts = yield* TtsService.TtsService;
   const processRunner = yield* ProcessRunner.ProcessRunner;
   const fileSystem = yield* FileSystem.FileSystem;
   const path = yield* Path.Path;
@@ -386,7 +386,9 @@ export const make = Effect.gen(function* () {
     staleTopicId?: number,
   ) =>
     Effect.gen(function* () {
-      const state = yield* topicStore.update((current) => withChat(current, chatId));
+      const state = yield* topicStore.update((current) =>
+        TelegramTopicStore.withChat(current, chatId),
+      );
       const existing = state.threads[threadId];
       // A concurrent dispatch may already have replaced the missing topic.
       if (existing !== undefined && recreate && existing.topicId !== staleTopicId) {
@@ -474,7 +476,7 @@ export const make = Effect.gen(function* () {
     return null;
   });
 
-  const dispatch: TelegramServiceShape["dispatch"] = Effect.fn("TelegramService.dispatch")(
+  const dispatch: TelegramService["Service"]["dispatch"] = Effect.fn("TelegramService.dispatch")(
     function* (input) {
       const settings = yield* serverSettings.getSettings.pipe(
         Effect.mapError(
@@ -566,7 +568,7 @@ export const make = Effect.gen(function* () {
 
       const start = Effect.gen(function* () {
         const me = yield* client.getMe;
-        yield* topicStore.update((state) => withBot(state, me.id));
+        yield* topicStore.update((state) => TelegramTopicStore.withBot(state, me.id));
         const settings = yield* serverSettings.getSettings.pipe(Effect.option);
         if (Option.isSome(settings) && settings.value.telegram.botUsername !== me.username) {
           yield* serverSettings

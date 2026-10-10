@@ -234,7 +234,12 @@ export function redactServerSettingsForClient(settings: ServerSettings): ServerS
     accessToken: redactSecret(settings.bitbucket.accessToken),
     apiToken: redactSecret(settings.bitbucket.apiToken),
   };
-  const telegram = { ...settings.telegram, botToken: redactSecret(settings.telegram.botToken) };
+  // A pending link code lets whoever sends it to the bot become its owner, so clients only see that one is pending.
+  const telegram = {
+    ...settings.telegram,
+    botToken: redactSecret(settings.telegram.botToken),
+    linkCode: redactSecret(settings.telegram.linkCode),
+  };
   const github = {
     ...settings.github,
     tokens: Object.fromEntries(
@@ -1352,6 +1357,8 @@ const make = Effect.gen(function* () {
 
       // Same rules as the Bitbucket tokens above.
       const telegram = { ...next.telegram };
+      // The redacted link code echoed back by a client keeps the pending one.
+      if (telegram.linkCode === SECRET_REDACTED) telegram.linkCode = current.telegram.linkCode;
       let telegramToken: string | undefined = telegram.botToken;
       if (telegramToken === SECRET_REDACTED) {
         const inline = current.telegram.botToken;

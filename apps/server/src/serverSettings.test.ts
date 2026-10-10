@@ -1764,9 +1764,13 @@ it.layer(NodeServices.layer)("server settings", (it) => {
       const forClient = ServerSettingsModule.redactServerSettingsForClient(saved).telegram;
       assert.notInclude(forClient.botToken, "tg-secret");
       assert.isAbove(forClient.botToken.length, 0);
+      // Whoever sends the pending code to the bot becomes its owner, so clients never see it.
+      assert.notEqual(forClient.linkCode, "abc");
+      assert.isAbove(forClient.linkCode.length, 0);
 
-      // Echoing the marker or patching other fields keeps the token.
+      // Echoing the markers or patching other fields keeps the token and the pending code.
       yield* serverSettings.updateSettings({ telegram: forClient });
+      assert.equal((yield* serverSettings.getSettings).telegram.linkCode, "abc");
       yield* serverSettings.updateSettings({ telegram: { chatId: "42", linkCode: "" } });
       assert.deepEqual((yield* serverSettings.getSettings).telegram, {
         botToken: "123:tg-secret",

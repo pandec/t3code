@@ -52,14 +52,6 @@ export const threadForTopic = (
     ? undefined
     : Object.entries(state.threads).find(([, topic]) => topic.topicId === topicId)?.[0];
 
-export interface TelegramTopicStoreShape {
-  readonly read: Effect.Effect<TelegramTopicState>;
-  /** Applies `f` and persists the result. A failed write is logged; memory keeps the change. */
-  readonly update: (
-    f: (state: TelegramTopicState) => TelegramTopicState,
-  ) => Effect.Effect<TelegramTopicState>;
-}
-
 /**
  * Fork: which Telegram forum topic each T3 thread dispatches into, plus the
  * poller's update offset. A small JSON file in the state directory; it holds
@@ -67,7 +59,13 @@ export interface TelegramTopicStoreShape {
  */
 export class TelegramTopicStore extends Context.Service<
   TelegramTopicStore,
-  TelegramTopicStoreShape
+  {
+    readonly read: Effect.Effect<TelegramTopicState>;
+    /** Applies `f` and persists the result. A failed write is logged; memory keeps the change. */
+    readonly update: (
+      f: (state: TelegramTopicState) => TelegramTopicState,
+    ) => Effect.Effect<TelegramTopicState>;
+  }
 >()("t3/telegram/TelegramTopicStore") {}
 
 export const make = (filePath: string) =>
