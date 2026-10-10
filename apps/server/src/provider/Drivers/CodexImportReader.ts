@@ -11,6 +11,7 @@ import * as Schema from "effect/Schema";
 import * as Scope from "effect/Scope";
 import { ChildProcess, ChildProcessSpawner } from "effect/process";
 import * as CodexClient from "effect-codex-app-server/client";
+import * as HostProcess from "@t3tools/shared/HostProcess";
 import { resolveSpawnCommand } from "@t3tools/shared/shell";
 
 import { expandHomePath } from "@t3tools/provider-core/server/pathExpansion";
@@ -81,7 +82,9 @@ const withCodexAppServerClient = <A, E>(
   Effect.scopedWith((scope) =>
     Effect.gen(function* () {
       const spawner = yield* ChildProcessSpawner.ChildProcessSpawner;
-      const resolvedHomePath = options.homePath ? expandHomePath(options.homePath) : undefined;
+      const resolvedHomePath = options.homePath
+        ? expandHomePath(options.homePath, yield* HostProcess.HomeDirectory)
+        : undefined;
       const env = {
         ...(options.environment ?? process.env),
         ...(resolvedHomePath ? { CODEX_HOME: resolvedHomePath } : {}),

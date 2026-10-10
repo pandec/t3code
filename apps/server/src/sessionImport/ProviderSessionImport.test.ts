@@ -1,6 +1,6 @@
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import { assert, describe, it } from "@effect/vitest";
-import { HostProcessExecutablePath, HostProcessIsExecutable } from "@t3tools/shared/hostProcess";
+import * as HostProcess from "@t3tools/shared/HostProcess";
 import * as Effect from "effect/Effect";
 import * as FileSystem from "effect/FileSystem";
 import * as Queue from "effect/Queue";
@@ -231,8 +231,8 @@ describe("makeClaudeSessionImport", () => {
       });
     }).pipe(
       Effect.provideService(ChildProcessSpawner.ChildProcessSpawner, spawner),
-      Effect.provideService(HostProcessIsExecutable, false),
-      Effect.provideService(HostProcessExecutablePath, "/host/node"),
+      Effect.provideService(HostProcess.IsExecutable, false),
+      Effect.provideService(HostProcess.ExecutablePath, "/host/node"),
       Effect.provide(NodeServices.layer),
     );
   };

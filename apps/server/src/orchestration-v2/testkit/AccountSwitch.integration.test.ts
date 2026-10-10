@@ -42,11 +42,12 @@ import * as ClaudeAdapterV2 from "../Adapters/ClaudeAdapterV2.ts";
 import { ClaudeProviderCapabilitiesV2 } from "../Adapters/ClaudeAdapterV2.ts";
 import * as EffectWorker from "../EffectWorker.ts";
 import * as IdAllocator from "@t3tools/provider-core/server/IdAllocator";
+import * as McpProviderSessions from "@t3tools/provider-core/server/McpProviderSessions";
 import * as Orchestrator from "../Orchestrator.ts";
 import {
   ProviderAdapterProtocolError,
   type ProviderAdapterV2Event,
-  type ProviderAdapterV2Shape,
+  type ProviderAdapterV2,
   type ProviderAdapterV2TurnInput,
 } from "@t3tools/provider-core/server/ProviderAdapter";
 import * as ProviderAdapterRegistry from "../ProviderAdapterRegistry.ts";
@@ -202,7 +203,7 @@ const makeHarness = (options: {
     const startedSignals = new Map<string, Deferred.Deferred<void>>();
     for (const hold of options.holds) startedSignals.set(hold.text, yield* Deferred.make<void>());
 
-    const makeAdapter = (instanceId: ProviderInstanceId): ProviderAdapterV2Shape => ({
+    const makeAdapter = (instanceId: ProviderInstanceId): ProviderAdapterV2["Service"] => ({
       instanceId,
       driver: DRIVER,
       getCapabilities: () => Effect.succeed(ClaudeProviderCapabilitiesV2),
@@ -1103,7 +1104,7 @@ const makeClaudeRegistry = Effect.gen(function* () {
       const attachmentsDir = yield* fileSystem.makeTempDirectoryScoped({
         prefix: "t3-account-switch-claude-",
       });
-      return ClaudeAdapterV2.makeClaudeAdapterV2({
+      return yield* ClaudeAdapterV2.makeClaudeAdapterV2({
         instanceId,
         settings: CLAUDE_SETTINGS,
         environment: {},
@@ -1145,7 +1146,7 @@ const makeClaudeRegistry = Effect.gen(function* () {
   const lookup = (
     instanceId: ProviderInstanceId,
   ): Effect.Effect<
-    ProviderAdapterV2Shape,
+    ProviderAdapterV2["Service"],
     ProviderAdapterRegistry.ProviderAdapterRegistryLookupError
   > => {
     const adapter = adapters.find((candidate) => candidate.instanceId === instanceId);
@@ -1219,7 +1220,11 @@ describe("queued account switch through the Claude adapter", () => {
             [ACCOUNT_B.instanceId, nativeA, undefined],
           ],
         );
-      }).pipe(Effect.provide(Layer.merge(IdAllocator.layer, NodeServices.layer))),
+      }).pipe(
+        Effect.provide(
+          Layer.mergeAll(IdAllocator.layer, McpProviderSessions.layer, NodeServices.layer),
+        ),
+      ),
     ),
   );
 });

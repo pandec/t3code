@@ -27,7 +27,7 @@ import * as Orchestrator from "./Orchestrator.ts";
 import { makeProviderFailure } from "@t3tools/provider-core/server/failure";
 import type {
   ProviderAdapterV2Event,
-  ProviderAdapterV2Shape,
+  ProviderAdapterV2,
   ProviderAdapterV2TurnInput,
 } from "@t3tools/provider-core/server/ProviderAdapter";
 import * as ProviderAdapterRegistry from "./ProviderAdapterRegistry.ts";
@@ -62,7 +62,7 @@ const makeHarness = (name: string) =>
     const steered: Array<string> = [];
     // While set, started turns wait for the test to report them running.
     const deferRunning = { current: false };
-    const adapter: ProviderAdapterV2Shape = {
+    const adapter: ProviderAdapterV2["Service"] = {
       instanceId,
       driver,
       getCapabilities: () => Effect.succeed(CodexProviderCapabilitiesV2),

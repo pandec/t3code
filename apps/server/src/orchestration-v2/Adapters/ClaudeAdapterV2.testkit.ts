@@ -8,7 +8,7 @@ import {
   type SDKUserMessage,
 } from "@anthropic-ai/claude-agent-sdk";
 import * as NodeServices from "@effect/platform-node/NodeServices";
-import { HostProcessEnvironment, HostProcessPlatform } from "@t3tools/shared/hostProcess";
+import * as HostProcess from "@t3tools/shared/HostProcess";
 import { SpawnExecutableResolution } from "@t3tools/shared/shell";
 import {
   ProviderReplayEntry,
@@ -989,7 +989,7 @@ function layerClaudeProviderAdapterRegistryReplay(
   // Replays must not inherit the host's Claude config dir: it changes the
   // signed-out message, and a Claude session running these tests sets it.
   const layerHostEnvironment = Layer.succeed(
-    HostProcessEnvironment,
+    HostProcess.Environment,
     Object.fromEntries(
       Object.entries(process.env).filter(([name]) => name !== "CLAUDE_CONFIG_DIR"),
     ),
@@ -1449,7 +1449,7 @@ async function recordMessagesUntilToolUse(input: {
 const resolveClaudeRecordingExecutablePath = Effect.fn("resolveClaudeRecordingExecutablePath")(
   function* (environment: NodeJS.ProcessEnv) {
     const resolveExecutable = yield* SpawnExecutableResolution;
-    const platform = yield* HostProcessPlatform;
+    const platform = yield* HostProcess.Platform;
     const resolved = resolveExecutable("claude", platform, environment);
     if (resolved === undefined) {
       return undefined;

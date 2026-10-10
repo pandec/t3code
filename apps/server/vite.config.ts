@@ -1,5 +1,5 @@
 import "vite-plus/test/config";
-import { HostProcessPlatform } from "@t3tools/shared/hostProcess";
+import * as HostProcess from "@t3tools/shared/HostProcess";
 import * as Effect from "effect/Effect";
 import { defineConfig, mergeConfig } from "vite-plus";
 
@@ -25,7 +25,7 @@ export { shouldBundleCliDependency };
 
 const repoEnv = loadRepoEnv();
 const macLoopbackTransportRetry =
-  Effect.runSync(HostProcessPlatform) === "darwin"
+  Effect.runSync(HostProcess.Platform) === "darwin"
     ? {
         count: 2,
         condition:

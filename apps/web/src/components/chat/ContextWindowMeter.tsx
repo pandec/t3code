@@ -579,7 +579,7 @@ export function ContextWindowMeter(props: {
               // Focusable and labelled: the rows hold no controls, so without a
               // tab stop a keyboard user has nothing to scroll the list from.
               <div
-                className="flex min-h-0 flex-1 flex-col gap-3 overflow-y-auto overscroll-contain rounded outline-none focus-visible:ring-1 focus-visible:ring-ring"
+                className="flex min-h-0 flex-1 flex-col gap-3 overflow-y-auto overscroll-contain rounded outline-none focus-visible:ring-1 focus-visible:ring-inset focus-visible:ring-ring"
                 tabIndex={0}
                 role="group"
                 aria-label={

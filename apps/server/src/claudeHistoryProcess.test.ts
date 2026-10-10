@@ -1,6 +1,6 @@
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import { assert, describe, it } from "@effect/vitest";
-import { HostProcessExecutablePath, HostProcessIsExecutable } from "@t3tools/shared/hostProcess";
+import * as HostProcess from "@t3tools/shared/HostProcess";
 import * as Effect from "effect/Effect";
 import * as FileSystem from "effect/FileSystem";
 import * as Path from "effect/Path";
@@ -83,8 +83,8 @@ describe("runClaudeHistoryProcess", () => {
         assert.equal(command.options.env.ELECTRON_RUN_AS_NODE, "1");
       }).pipe(
         Effect.provideService(ChildProcessSpawner.ChildProcessSpawner, spawner),
-        Effect.provideService(HostProcessIsExecutable, executable),
-        Effect.provideService(HostProcessExecutablePath, "/host/executable"),
+        Effect.provideService(HostProcess.IsExecutable, executable),
+        Effect.provideService(HostProcess.ExecutablePath, "/host/executable"),
         Effect.provide(NodeServices.layer),
       );
     },

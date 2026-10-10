@@ -14,7 +14,6 @@ import type { Atom } from "effect/reactivity";
 import { RemoteEnvironmentAuthorization } from "../authorization/service.ts";
 import type { EnvironmentRegistry } from "../connection/registry.ts";
 import { EnvironmentSupervisor } from "../connection/supervisor.ts";
-import { environmentEndpointUrl } from "../environment/endpoint.ts";
 import { ManagedRelayDpopSigner } from "../relay/managedRelay.ts";
 import { RemoteEnvironmentAuthFetchError } from "../rpc/http.ts";
 import { executeAuthenticatedEnvironmentHttpRequest } from "./environmentHttpAuth.ts";
@@ -158,7 +157,7 @@ export const summarizeMessage = Effect.fn("clientRuntime.messageArtifacts.summar
       signer,
       remoteAuthorization,
       method: "POST",
-      url: (httpBaseUrl) => environmentEndpointUrl(httpBaseUrl, "/api/messages/summaries"),
+      url: (urls) => urls.summarizeMessage(),
       timeoutMs: MESSAGE_SUMMARY_TIMEOUT_MS,
       request: ({ client, headers }) => client.summarizeMessage({ payload: request, headers }),
     });

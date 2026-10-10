@@ -223,7 +223,7 @@ export function SettingsSection({
                   aria-controls={contentId}
                   aria-expanded={!collapsed}
                   aria-label={`${collapsed ? "Expand" : "Collapse"} ${title}`}
-                  className="-m-1 inline-flex size-5 cursor-pointer items-center justify-center rounded-sm text-muted-foreground hover:bg-muted hover:text-foreground focus-visible:outline-hidden focus-visible:ring-1 focus-visible:ring-ring"
+                  className="-m-1 inline-flex size-5 cursor-pointer items-center justify-center rounded-sm text-muted-foreground hover:bg-muted hover:text-foreground focus-visible:outline-hidden focus-visible:ring-1 focus-visible:ring-inset focus-visible:ring-ring"
                   onClick={onToggleCollapsed}
                 >
                   {collapsed ? <PlusIcon className="size-3" /> : <MinusIcon className="size-3" />}
@@ -399,7 +399,7 @@ export function SettingsRow({
           // Focusable so keyboard users can still reach the explanation.
           <span
             tabIndex={0}
-            className="flex w-full items-center rounded-md outline-none focus-visible:ring-2 focus-visible:ring-ring @min-[32rem]/settings-row:w-auto"
+            className="flex w-full items-center rounded-md outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring @min-[32rem]/settings-row:w-auto"
           />
         }
       >

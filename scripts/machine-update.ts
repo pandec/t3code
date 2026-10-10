@@ -6,7 +6,7 @@ import * as NodeFS from "node:fs";
 import * as NodeOS from "node:os";
 import * as NodePath from "node:path";
 import * as NodeServices from "@effect/platform-node/NodeServices";
-import { HostProcessPlatform } from "@t3tools/shared/hostProcess";
+import * as HostProcess from "@t3tools/shared/HostProcess";
 import { collectSshConfigAliasesFromFile } from "@t3tools/ssh/config";
 import * as Effect from "effect/Effect";
 
@@ -2267,7 +2267,7 @@ export async function main(
 if (import.meta.main) {
   Effect.runPromise(
     Effect.gen(function* () {
-      const platform = yield* HostProcessPlatform;
+      const platform = yield* HostProcess.Platform;
       return yield* Effect.promise(() =>
         main(process.argv.slice(2), process.stdin, process.stdout, platform),
       );

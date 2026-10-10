@@ -4,7 +4,7 @@ import * as NodeOS from "node:os";
 
 import * as NodeRuntime from "@effect/platform-node/NodeRuntime";
 import * as NodeServices from "@effect/platform-node/NodeServices";
-import { HostProcessPlatform } from "@t3tools/shared/hostProcess";
+import * as HostProcess from "@t3tools/shared/HostProcess";
 import * as Cause from "effect/Cause";
 import * as Data from "effect/Data";
 import * as Duration from "effect/Duration";
@@ -581,7 +581,7 @@ export const runDesktopInstallLifecycle = Effect.fn("runDesktopInstallLifecycle"
 
 const main = Effect.fn("installDesktopDev.main")(function* () {
   const path = yield* Path.Path;
-  const hostPlatform = yield* HostProcessPlatform;
+  const hostPlatform = yield* HostProcess.Platform;
   const repoRoot = yield* path.fromFileUrl(new URL("..", import.meta.url));
   const lifecycle =
     hostPlatform === "darwin"

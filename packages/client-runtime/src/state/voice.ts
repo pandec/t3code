@@ -21,7 +21,6 @@ import type { Atom } from "effect/reactivity";
 import { RemoteEnvironmentAuthorization } from "../authorization/service.ts";
 import type { EnvironmentRegistry } from "../connection/registry.ts";
 import { EnvironmentSupervisor } from "../connection/supervisor.ts";
-import { environmentEndpointUrl } from "../environment/endpoint.ts";
 import { ManagedRelayDpopSigner } from "../relay/managedRelay.ts";
 import { RemoteEnvironmentAuthFetchError } from "../rpc/http.ts";
 import { executeAuthenticatedEnvironmentHttpRequest } from "./environmentHttpAuth.ts";
@@ -92,7 +91,7 @@ export const transcribeVoiceRecording = Effect.fn("clientRuntime.voice.transcrib
       signer,
       remoteAuthorization,
       method: "POST",
-      url: (httpBaseUrl) => environmentEndpointUrl(httpBaseUrl, "/api/voice/transcriptions"),
+      url: (urls) => urls.transcribe(),
       timeoutMs: VOICE_TRANSCRIPTION_TIMEOUT_MS,
       request: ({ client, headers }) => client.transcribe({ payload: request, headers }),
     });
@@ -133,7 +132,7 @@ export const synthesizeMessageSpeech = Effect.fn("clientRuntime.voice.synthesize
       signer,
       remoteAuthorization,
       method: "POST",
-      url: (httpBaseUrl) => environmentEndpointUrl(httpBaseUrl, "/api/voice/message-speech"),
+      url: (urls) => urls.synthesizeMessage(),
       timeoutMs: MESSAGE_SPEECH_SYNTHESIS_TIMEOUT_MS,
       request: ({ client, headers }) => client.synthesizeMessage({ payload: request, headers }),
     });

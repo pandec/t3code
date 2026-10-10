@@ -26,7 +26,7 @@ describe("withExpandedProviderBinaryPath", () => {
       homePath: "~/.provider",
     };
 
-    expect(withExpandedProviderBinaryPath(config)).toEqual({
+    expect(withExpandedProviderBinaryPath(config, NodeOS.homedir())).toEqual({
       ...config,
       binaryPath: NodePath.join(NodeOS.homedir(), ".local/bin/provider"),
     });
@@ -38,7 +38,7 @@ describe("withExpandedProviderBinaryPath", () => {
     (_name, makeConfig) => {
       const config = makeConfig();
 
-      expect(withExpandedProviderBinaryPath(config)).toEqual(config);
+      expect(withExpandedProviderBinaryPath(config, NodeOS.homedir())).toEqual(config);
     },
   );
 });

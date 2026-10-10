@@ -19,6 +19,7 @@ import packageJson from "../../package.json" with { type: "json" };
 import * as ServerConfig from "../config.ts";
 import * as DeviceService from "../device/DeviceService.ts";
 import * as HtmlRender from "../htmlRender/HtmlRender.ts";
+import * as ThreadCommandExecutor from "../orchestration-v2/ThreadCommandExecutor.ts";
 import * as ThreadManagementService from "../orchestration-v2/ThreadManagementService.ts";
 import * as McpInvocationContext from "./McpInvocationContext.ts";
 import * as McpToolAccess from "./McpToolAccess.ts";
@@ -776,11 +777,25 @@ const registerHtmlPreview = Effect.fn("McpHttpServer.registerHtmlPreview")(funct
 /**
  * `McpServer.toolkit` for handlers that declared their access (see
  * `McpToolAccess`). Every toolkit on every MCP island registers through this.
+ *
+ * `McpServer.toolkit` asks for every service its tools declare when it
+ * registers them, but the auth middleware provides `McpInvocationContext` to
+ * each request instead. Registration must not get one: the services it
+ * captures would replace the request's.
  */
 export const toolkitRegistration = <Tools extends Record<string, Tool.Any>, EX, RX>(
   toolkit: Toolkit.Toolkit<Tools>,
   handlers: McpToolAccess.HandlersLayer<Tools, EX, RX>,
-) => McpServer.toolkit(toolkit).pipe(Layer.provide(McpToolAccess.HandlersLayer.layer(handlers)));
+) => {
+  const registration = McpServer.toolkit(toolkit);
+  // @effect-diagnostics-next-line unsafeEffectTypeAssertion:off - the auth middleware provides it per request.
+  const registered = registration as Layer.Layer<
+    never,
+    never,
+    Exclude<Layer.Services<typeof registration>, McpInvocationContext.McpInvocationContext>
+  >;
+  return registered.pipe(Layer.provide(McpToolAccess.HandlersLayer.layer(handlers)));
+};
 
 /** A hand-registered tool, also only with handlers that declared their access. */
 const imageToolRegistration = <Tools extends Record<string, Tool.Any>, A, E, R, EX, RX>(
@@ -834,9 +849,15 @@ const layerPreviewControlsRegistration = toolkitRegistration(
   PreviewControlsHandlers.layer,
 );
 
+// Fork: the executor's per-thread lock must be the orchestrator's instance, so
+// islands use the bare registration and `layer` provides the executor outside them.
 const layerEnvironmentRegistration = toolkitRegistration(
   EnvironmentToolkit,
   EnvironmentHandlers.layer,
+);
+
+export const layerEnvironmentToolkit = layerEnvironmentRegistration.pipe(
+  Layer.provide(ThreadCommandExecutor.layer),
 );
 
 const layerProjectRegistration = toolkitRegistration(ProjectToolkit, ProjectHandlers.layer);
@@ -904,6 +925,7 @@ const makeMcpTransport = (path: `/${string}`) =>
     version: packageJson.version,
     path,
     protocols: [McpProtocol.v2025_06_18],
+    allowSessionTermination: true,
   }).pipe(Layer.provide(layerMcpAuthMiddleware));
 
 export const layerMcpTransport = makeMcpTransport("/mcp");
@@ -928,7 +950,8 @@ const layerPreviewIslandRegistration = Layer.mergeAll(
  * thread metadata) are built once per island; they hold no cross-call state.
  * Requirements left unmet inside an island are satisfied by the outer,
  * memoized build, so all islands share one instance of each: the handlers'
- * runtime dependencies (broker, voice staging, session registry), the worktree
+ * runtime dependencies (broker, voice staging, session registry), the thread
+ * command executor, whose per-thread lock is the orchestrator's, the worktree
  * service, which holds the per-thread handoff guard, the thread groups service,
  * which holds the create lock, the attachment upload owners, so a thread keeps
  * its pending uploads across islands, and the HTML renderer, which holds install
@@ -980,6 +1003,7 @@ export const layer = Layer.mergeAll(
     ),
   ),
 ).pipe(
+  Layer.provide(ThreadCommandExecutor.layer),
   Layer.provide(WorktreeMcpService.layer),
   Layer.provide(ThreadGroupsMcpService.layer),
   Layer.provide(HtmlRender.layer),

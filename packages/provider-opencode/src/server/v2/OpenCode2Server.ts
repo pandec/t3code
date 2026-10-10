@@ -130,7 +130,7 @@ export const verifyServer = (client: OpenCodeClient) =>
         ),
     }),
     Effect.mapError((cause) =>
-      OpenCodeRuntime.OpenCodeRuntimeError.is(cause)
+      OpenCodeRuntime.isOpenCodeRuntimeError(cause)
         ? cause
         : new OpenCodeRuntime.OpenCodeRuntimeError({
             operation: "server.info",

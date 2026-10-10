@@ -24,7 +24,7 @@ import * as Orchestrator from "./Orchestrator.ts";
 import {
   ProviderAdapterCapabilitiesError,
   type ProviderAdapterV2Event,
-  type ProviderAdapterV2Shape,
+  type ProviderAdapterV2,
   type ProviderAdapterV2TurnInput,
 } from "@t3tools/provider-core/server/ProviderAdapter";
 import * as ProviderAdapterRegistry from "./ProviderAdapterRegistry.ts";
@@ -62,7 +62,7 @@ const makeHarness = (name: string) =>
     const nextCapabilities: {
       current: Effect.Effect<void, ProviderAdapterCapabilitiesError> | null;
     } = { current: null };
-    const adapter: ProviderAdapterV2Shape = {
+    const adapter: ProviderAdapterV2["Service"] = {
       instanceId,
       driver,
       getCapabilities: () => {

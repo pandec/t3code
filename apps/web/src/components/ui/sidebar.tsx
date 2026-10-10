@@ -77,15 +77,6 @@ type SidebarResolvedResizableOptions = {
   storageKey: string | null;
 };
 
-type SidebarResizeState = {
-  pendingWidth: number;
-  rail: HTMLButtonElement;
-  sidebarRoot: HTMLElement;
-  side: "left" | "right";
-  width: number;
-  wrapper: HTMLElement;
-};
-
 type SidebarInstanceContextProps = {
   resizable: SidebarResolvedResizableOptions | null;
   side: "left" | "right";
@@ -383,29 +374,6 @@ function parseSidebarPixelWidth(value: string): number | null {
   return Number.isFinite(width) ? width : null;
 }
 
-function applyPendingSidebarResize(
-  resizeState: SidebarResizeState,
-  options: SidebarResolvedResizableOptions,
-): boolean {
-  const nextWidth = resizeState.pendingWidth;
-  const accepted =
-    options.shouldAcceptWidth?.({
-      currentWidth: resizeState.width,
-      nextWidth,
-      rail: resizeState.rail,
-      side: resizeState.side,
-      sidebarRoot: resizeState.sidebarRoot,
-      wrapper: resizeState.wrapper,
-    }) ?? true;
-  if (!accepted) {
-    return false;
-  }
-
-  resizeState.wrapper.style.setProperty("--sidebar-width", `${nextWidth}px`);
-  resizeState.width = nextWidth;
-  return true;
-}
-
 function SidebarRail({
   className,
   onClick,
@@ -431,6 +399,7 @@ function SidebarRail({
   // nothing stored and would otherwise silently keep the old width.
   const preferredWidthRef = React.useRef<{ storageKey: string | null; width: number } | null>(null);
   const resolvedResizable = sidebarInstance?.resizable ?? null;
+  const latestResizable = React.useRef(resolvedResizable);
   const canResize = resolvedResizable !== null && open;
   const railLabel = canResize ? "Resize Sidebar" : "Toggle Sidebar";
   const railTitle = canResize ? "Drag to resize sidebar" : "Toggle Sidebar";
@@ -444,40 +413,56 @@ function SidebarRail({
     );
     if (!wrapper || !sidebarRoot || !sidebarContainer) return null;
 
-    const options = resolvedResizable;
     const side = sidebarInstance?.side ?? "left";
-    const width = clampSidebarWidth(
+    let width = clampSidebarWidth(
       sidebarContainer.getBoundingClientRect().width,
       resolvedResizable,
     );
-    const transitionTargets = [
+    // Drag frames write width to the gap and container only. Changing the
+    // inherited --sidebar-width on the wrapper restyles the whole app, so it is
+    // written once when the drag commits.
+    const widthTargets = [
       sidebarRoot.querySelector<HTMLElement>("[data-slot='sidebar-gap']"),
       sidebarContainer,
     ].filter((element): element is HTMLElement => element !== null);
-    transitionTargets.forEach((element) => {
+    const setTargetWidth = (value: number) => {
+      widthTargets.forEach((element) => {
+        element.style.setProperty("width", `${value}px`);
+      });
+    };
+    widthTargets.forEach((element) => {
       element.style.setProperty("transition-duration", "0ms");
     });
-    wrapper.style.setProperty("--sidebar-width", `${width}px`);
+    setTargetWidth(width);
 
-    const state: SidebarResizeState = {
-      width,
-      pendingWidth: width,
-      rail,
-      side,
-      sidebarRoot,
-      wrapper,
-    };
     resizingRef.current = true;
     return {
       width,
       edge: side === "left" ? "right" : "left",
       resize(value) {
-        state.pendingWidth = clampSidebarWidth(value, options);
-        applyPendingSidebarResize(state, options);
-        return state.width;
+        const options = latestResizable.current;
+        if (!options) return width;
+        const nextWidth = clampSidebarWidth(value, options);
+        const accepted =
+          options.shouldAcceptWidth?.({
+            currentWidth: width,
+            nextWidth,
+            rail,
+            side,
+            sidebarRoot,
+            wrapper,
+          }) ?? true;
+        if (accepted) {
+          setTargetWidth(nextWidth);
+          width = nextWidth;
+        }
+        return width;
       },
       finish(finalWidth, moved) {
+        wrapper.style.setProperty("--sidebar-width", `${finalWidth}px`);
         suppressClickRef.current = moved;
+        const options = latestResizable.current;
+        if (!options) return;
         preferredWidthRef.current = { storageKey: options.storageKey, width: finalWidth };
         if (options.storageKey) {
           try {
@@ -490,12 +475,20 @@ function SidebarRail({
       },
       cleanup() {
         resizingRef.current = false;
-        transitionTargets.forEach((element) => {
+        widthTargets.forEach((element) => {
+          element.style.removeProperty("width");
           element.style.removeProperty("transition-duration");
         });
       },
     };
-  });
+    // Toggling the sidebar cancels a drag so the inline width never pins a
+    // collapsed sidebar open.
+  }, String(open));
+  React.useLayoutEffect(() => {
+    latestResizable.current = resolvedResizable;
+    // Bounds follow the window; keep an active drag's inline width inside them.
+    resize.refresh();
+  }, [resolvedResizable]);
 
   const handleClick = React.useCallback(
     (event: React.MouseEvent<HTMLButtonElement>) => {
@@ -545,8 +538,8 @@ function SidebarRail({
     // would overwrite a live drag (which only writes storage once it settles)
     // with the pre-drag width every time an unrelated render lands.
     if (hydratedStorageKeyRef.current === storageKey) return;
-    // A drag owns the width until it settles, and it settles against the options
-    // it began with — so restoring waits rather than racing it.
+    // A drag owns the width until it settles, so restoring waits rather than
+    // racing it.
     if (resizingRef.current) return;
     const rail = railRef.current;
     if (!rail) return;
@@ -807,7 +800,7 @@ function SidebarMenuItem({ className, ...props }: React.ComponentProps<"li">) {
 }
 
 const sidebarMenuButtonVariants = cva(
-  "peer/menu-button flex w-full cursor-pointer items-center gap-[var(--sidebar-control-gap)] overflow-hidden text-left outline-hidden ring-ring transition-[width,height,padding] hover:bg-sidebar-row-hover hover:text-sidebar-foreground focus-visible:ring-2 active:bg-sidebar-row-active active:text-sidebar-foreground disabled:pointer-events-none disabled:opacity-64 aria-disabled:pointer-events-none aria-disabled:opacity-64 data-[active=true]:bg-sidebar-row-selected data-[active=true]:font-medium data-[active=true]:text-sidebar-foreground data-[state=open]:hover:bg-sidebar-row-hover data-[state=open]:hover:text-sidebar-foreground group-data-[collapsible=icon]:size-8! group-data-[collapsible=icon]:p-[var(--sidebar-content-inset)]! [&>span:last-child]:truncate [&>svg:not([class*='size-'])]:size-4 [&>svg]:shrink-0 [&>svg]:text-[var(--sidebar-icon-color)] hover:[&>svg]:text-sidebar-foreground active:[&>svg]:text-sidebar-foreground data-[active=true]:[&>svg]:text-sidebar-foreground",
+  "peer/menu-button flex w-full cursor-pointer items-center gap-[var(--sidebar-control-gap)] overflow-hidden text-left outline-hidden ring-ring transition-[width,height,padding] hover:bg-sidebar-row-hover hover:text-sidebar-foreground focus-visible:ring-2 focus-visible:ring-inset active:bg-sidebar-row-active active:text-sidebar-foreground disabled:pointer-events-none disabled:opacity-64 aria-disabled:pointer-events-none aria-disabled:opacity-64 data-[active=true]:bg-sidebar-row-selected data-[active=true]:font-medium data-[active=true]:text-sidebar-foreground data-[state=open]:hover:bg-sidebar-row-hover data-[state=open]:hover:text-sidebar-foreground group-data-[collapsible=icon]:size-8! group-data-[collapsible=icon]:p-[var(--sidebar-content-inset)]! [&>span:last-child]:truncate [&>svg:not([class*='size-'])]:size-4 [&>svg]:shrink-0 [&>svg]:text-[var(--sidebar-icon-color)] hover:[&>svg]:text-sidebar-foreground active:[&>svg]:text-sidebar-foreground data-[active=true]:[&>svg]:text-sidebar-foreground",
   {
     defaultVariants: {
       size: "default",
@@ -920,7 +913,7 @@ function SidebarMenuSubButton({
 }) {
   const defaultProps = {
     className: cn(
-      "-translate-x-px flex h-7 min-w-0 cursor-pointer items-center gap-2 overflow-hidden rounded-lg px-2 text-sidebar-foreground outline-hidden ring-ring hover:bg-sidebar-row-hover hover:text-sidebar-foreground focus-visible:ring-2 active:bg-sidebar-row-active active:text-sidebar-foreground disabled:pointer-events-none disabled:opacity-64 aria-disabled:pointer-events-none aria-disabled:opacity-64 [&>span:last-child]:truncate [&>svg:not([class*='size-'])]:size-4 [&>svg]:shrink-0 [&>svg]:text-sidebar-muted-foreground",
+      "-translate-x-px flex h-7 min-w-0 cursor-pointer items-center gap-2 overflow-hidden rounded-lg px-2 text-sidebar-foreground outline-hidden ring-ring hover:bg-sidebar-row-hover hover:text-sidebar-foreground focus-visible:ring-2 focus-visible:ring-inset active:bg-sidebar-row-active active:text-sidebar-foreground disabled:pointer-events-none disabled:opacity-64 aria-disabled:pointer-events-none aria-disabled:opacity-64 [&>span:last-child]:truncate [&>svg:not([class*='size-'])]:size-4 [&>svg]:shrink-0 [&>svg]:text-sidebar-muted-foreground",
       "data-[active=true]:bg-sidebar-row-selected data-[active=true]:text-sidebar-foreground",
       size === "sm" && "text-xs",
       size === "md" && "text-sm",
@@ -943,7 +936,6 @@ function SidebarMenuSubButton({
 export {
   SidebarInput,
   Sidebar,
-  applyPendingSidebarResize,
   parseSidebarPixelWidth,
   SidebarContent,
   SidebarFooter,

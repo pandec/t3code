@@ -3656,7 +3656,7 @@ function ArchivedThreadModelIcon({ thread }: { readonly thread: EnvironmentThrea
             role="img"
             tabIndex={0}
             aria-label={label}
-            className="inline-flex size-5 shrink-0 items-center justify-center rounded-sm text-muted-foreground outline-hidden focus-visible:ring-1 focus-visible:ring-ring"
+            className="inline-flex size-5 shrink-0 items-center justify-center rounded-sm text-muted-foreground outline-hidden focus-visible:ring-1 focus-visible:ring-inset focus-visible:ring-ring"
           />
         }
       >
@@ -3869,7 +3869,7 @@ export function ArchivedThreadsPanel() {
             placeholder="Search archived threads"
             aria-label="Search archived threads"
             aria-describedby="archived-thread-search-status"
-            className="h-9 w-full rounded-lg border border-input bg-background pr-9 pl-9 text-sm text-foreground shadow-xs/5 outline-none placeholder:text-muted-foreground/72 focus-visible:border-ring focus-visible:ring-3 focus-visible:ring-ring/24 [&::-webkit-search-cancel-button]:appearance-none [&::-webkit-search-decoration]:appearance-none"
+            className="h-9 w-full rounded-lg border border-input bg-background pr-9 pl-9 text-sm text-foreground shadow-xs/5 outline-none placeholder:text-muted-foreground/72 focus-visible:border-ring focus-visible:ring-3 focus-visible:ring-inset focus-visible:ring-ring/24 [&::-webkit-search-cancel-button]:appearance-none [&::-webkit-search-decoration]:appearance-none"
           />
           {searchQuery.length > 0 ? (
             <Button

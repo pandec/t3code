@@ -1,19 +1,22 @@
 import type { ProviderInstanceEnvironment } from "@t3tools/contracts";
+import * as HostProcess from "@t3tools/shared/HostProcess";
+import * as Effect from "effect/Effect";
 
 import { expandHomePath } from "./pathExpansion.ts";
 
-export function mergeProviderInstanceEnvironment(
+export const mergeProviderInstanceEnvironment = Effect.fn(function* (
   environment: ProviderInstanceEnvironment | undefined,
   baseEnv: NodeJS.ProcessEnv = process.env,
-): NodeJS.ProcessEnv {
+) {
   // Drivers retain a stable environment snapshot for the instance lifetime.
+  const home = yield* HostProcess.HomeDirectory;
   const next: NodeJS.ProcessEnv = { ...baseEnv };
   for (const variable of environment ?? []) {
     // Child processes do not apply shell expansion to environment values.
     next[variable.name] =
       variable.name === "CODEX_HOME" || variable.name === "CLAUDE_CONFIG_DIR"
-        ? expandHomePath(variable.value)
+        ? expandHomePath(variable.value, home)
         : variable.value;
   }
   return next;
-}
+});

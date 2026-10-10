@@ -16,6 +16,8 @@ vi.mock("./AssistantCitationSource", () => ({
 }));
 vi.mock("@tanstack/react-router", () => ({
   useNavigate: () => vi.fn(),
+  // Fork: the chip opens threads pane-aware, which reads the primary route's params.
+  useParams: () => ({}),
   Link: ({ children }: { children: ReactNode }) => <a>{children}</a>,
 }));
 // Keep the real chip/editor lifecycle while replacing DOM positioning and floating layers.

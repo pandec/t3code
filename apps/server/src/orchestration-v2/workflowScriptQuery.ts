@@ -18,16 +18,17 @@
  * never trusted beyond these checks.
  */
 import * as NodeFSP from "node:fs/promises";
-import * as NodeOS from "node:os";
 import * as NodePath from "node:path";
 
 import { OrchestrationGetWorkflowScriptError } from "@t3tools/contracts";
 import * as Effect from "effect/Effect";
+import * as HostProcess from "@t3tools/shared/HostProcess";
 
 const SCRIPT_BYTE_CAP = 256 * 1024;
 
-export function defaultScriptsRoot(): string {
-  return NodePath.join(NodeOS.homedir(), ".claude", "projects");
+/** The default Claude projects root under the given home directory. */
+export function defaultScriptsRoot(home: string): string {
+  return NodePath.join(home, ".claude", "projects");
 }
 
 export const readWorkflowScript = Effect.fn("orchestration.readWorkflowScript")(function* (input: {
@@ -50,7 +51,7 @@ export const readWorkflowScript = Effect.fn("orchestration.readWorkflowScript")(
   const rootCandidates =
     input.permittedRoots !== undefined && input.permittedRoots.length > 0
       ? input.permittedRoots
-      : [defaultScriptsRoot()];
+      : [defaultScriptsRoot(yield* HostProcess.HomeDirectory)];
   // A configured root that does not exist (e.g. a Claude home that has never
   // persisted a project) is skipped rather than failing the read; only when
   // every root is unavailable does the query fail.

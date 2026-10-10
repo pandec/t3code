@@ -103,6 +103,7 @@ import {
   GitForkIcon,
   GroupIcon,
   InboxIcon,
+  ListFilterIcon,
   MessageCircleQuestionIcon,
   PinIcon,
   PinOffIcon,
@@ -2062,7 +2063,7 @@ const SidebarThreadRow = memo(function SidebarThreadRow(props: {
               type="button"
               aria-label={listeningState === "playing" ? "Pause audio" : "Play audio"}
               onClick={handleToggleListeningClick}
-              className="inline-flex cursor-pointer items-center rounded-sm text-muted-foreground outline-none transition-colors hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring"
+              className="inline-flex cursor-pointer items-center rounded-sm text-muted-foreground outline-none transition-colors hover:text-foreground focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring"
             />
           }
         >
@@ -2123,7 +2124,7 @@ const SidebarThreadRow = memo(function SidebarThreadRow(props: {
               type="button"
               aria-label="Unpin thread"
               onClick={handlePinToggleClick}
-              className="group/unpin inline-flex cursor-pointer items-center rounded-sm text-muted-foreground/65 outline-none transition-colors hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring"
+              className="group/unpin inline-flex cursor-pointer items-center rounded-sm text-muted-foreground/65 outline-none transition-colors hover:text-foreground focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring"
             />
           }
         >
@@ -2256,7 +2257,7 @@ const SidebarThreadRow = memo(function SidebarThreadRow(props: {
                             aria-label="Dismiss Woke notification"
                             disabled={!canOperateThread}
                             onClick={handleAcknowledgeWokeClick}
-                            className="inline-flex items-center gap-1 rounded-sm text-xs font-medium text-warning-foreground outline-none enabled:cursor-pointer enabled:hover:underline focus-visible:ring-2 focus-visible:ring-ring"
+                            className="inline-flex items-center gap-1 rounded-sm text-xs font-medium text-warning-foreground outline-none enabled:cursor-pointer enabled:hover:underline focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring"
                           >
                             <AlarmClockIcon aria-hidden className="size-3" />
                             <span role="status">Woke</span>
@@ -2476,7 +2477,7 @@ const SidebarThreadRow = memo(function SidebarThreadRow(props: {
                                 disabled={!canOperateThread}
                                 onClick={handleAcknowledgeWokeClick}
                                 className={cn(
-                                  "inline-flex items-center gap-1 rounded-sm font-medium outline-none enabled:cursor-pointer enabled:hover:underline focus-visible:ring-2 focus-visible:ring-ring",
+                                  "inline-flex items-center gap-1 rounded-sm font-medium outline-none enabled:cursor-pointer enabled:hover:underline focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring",
                                   topStatus.className,
                                 )}
                               >
@@ -2753,7 +2754,7 @@ const SidebarV2ArchivedRow = memo(function SidebarV2ArchivedRow(props: {
         type="button"
         aria-current={props.isActive ? "page" : undefined}
         className={cn(
-          "flex h-10 w-full cursor-pointer items-center gap-2 rounded-md px-2.5 text-left text-sidebar-muted-foreground/65 outline-none hover:bg-sidebar-row-hover hover:text-sidebar-foreground focus-visible:bg-sidebar-row-hover focus-visible:ring-2 focus-visible:ring-ring",
+          "flex h-10 w-full cursor-pointer items-center gap-2 rounded-md px-2.5 text-left text-sidebar-muted-foreground/65 outline-none hover:bg-sidebar-row-hover hover:text-sidebar-foreground focus-visible:bg-sidebar-row-hover focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring",
           props.isActive && "bg-sidebar-row-hover text-sidebar-foreground",
         )}
         style={projectAccentTintStyle(props.projectAccentColor, props.accentTintIntensityPercent)}
@@ -6431,7 +6432,7 @@ export default function Sidebar() {
                           className="size-4 shrink-0"
                         />
                       ) : (
-                        <FolderIcon className="size-4 shrink-0" />
+                        <ListFilterIcon className="size-4 shrink-0" />
                       )}
                       <span className="min-w-0 flex-1 truncate">{projectScopeLabel}</span>
                       {singleScopedProjectGroup && showProjectEnvironments ? (
@@ -6526,7 +6527,7 @@ export default function Sidebar() {
                                   <button
                                     type="button"
                                     aria-label={`${isHidden ? "Show" : "Hide"} ${project.displayName}`}
-                                    className="ml-auto inline-flex size-6 shrink-0 cursor-pointer items-center justify-center rounded-md text-muted-foreground/55 outline-none transition-colors hover:bg-accent hover:text-foreground focus-visible:bg-accent focus-visible:text-foreground focus-visible:ring-2 focus-visible:ring-ring"
+                                    className="ml-auto inline-flex size-6 shrink-0 cursor-pointer items-center justify-center rounded-md text-muted-foreground/55 outline-none transition-colors hover:bg-accent hover:text-foreground focus-visible:bg-accent focus-visible:text-foreground focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring"
                                     onPointerDown={(event) => event.stopPropagation()}
                                     onMouseUp={(event) => event.stopPropagation()}
                                     onClick={(event) => {
@@ -6578,7 +6579,7 @@ export default function Sidebar() {
                             type="button"
                             data-testid="sidebar-v2-project-filter-clear"
                             aria-label="Clear project filter"
-                            className="absolute right-8 top-1/2 z-10 inline-flex size-6 -translate-y-1/2 cursor-pointer items-center justify-center rounded-md text-sidebar-muted-foreground/70 outline-none transition-colors hover:bg-sidebar-row-hover hover:text-sidebar-foreground focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 focus-visible:ring-offset-sidebar"
+                            className="absolute right-8 top-1/2 z-10 inline-flex size-6 -translate-y-1/2 cursor-pointer items-center justify-center rounded-md text-sidebar-muted-foreground/70 outline-none transition-colors hover:bg-sidebar-row-hover hover:text-sidebar-foreground focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring"
                             onClick={clearProjectFilters}
                           >
                             <XIcon className="size-3.5" />

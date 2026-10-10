@@ -1,10 +1,6 @@
 import * as NodeRuntime from "@effect/platform-node/NodeRuntime";
 import * as NodeServices from "@effect/platform-node/NodeServices";
-import {
-  HostProcessEnvironment,
-  HostProcessExecutablePath,
-  HostProcessPlatform,
-} from "@t3tools/shared/hostProcess";
+import * as HostProcess from "@t3tools/shared/HostProcess";
 import { isCommandAvailable, resolveSpawnCommand } from "@t3tools/shared/shell";
 import * as Console from "effect/Console";
 import * as Crypto from "effect/Crypto";
@@ -181,9 +177,9 @@ const collect = <E>(stream: Stream.Stream<Uint8Array, E>) =>
   );
 export const resolveAdb = Effect.gen(function* () {
   if (yield* isCommandAvailable("adb")) return "adb";
-  const environment = yield* HostProcessEnvironment;
+  const environment = yield* HostProcess.Environment;
   const path = yield* Path.Path;
-  const executable = (yield* HostProcessPlatform) === "win32" ? "adb.exe" : "adb";
+  const executable = (yield* HostProcess.Platform) === "win32" ? "adb.exe" : "adb";
   for (const sdk of [environment.ANDROID_SDK_ROOT, environment.ANDROID_HOME]) {
     if (!sdk) continue;
     const candidate = path.join(sdk, "platform-tools", executable);
@@ -202,7 +198,7 @@ const command = Effect.fn("nativeClient.command")(function* (
   cwd?: string,
 ) {
   const spawner = yield* ChildProcessSpawner.ChildProcessSpawner;
-  const environment = yield* HostProcessEnvironment;
+  const environment = yield* HostProcess.Environment;
   const spawn = yield* resolveSpawnCommand(program === "adb" ? yield* resolveAdb : program, args);
   const child = yield* spawner.spawn(
     ChildProcess.make(spawn.command, spawn.args, {
@@ -232,7 +228,7 @@ const command = Effect.fn("nativeClient.command")(function* (
 }, Effect.scoped);
 
 const fingerprint = Effect.fn("nativeClient.fingerprint")(function* (platform: NativePlatform) {
-  const output = yield* command(yield* HostProcessExecutablePath, [
+  const output = yield* command(yield* HostProcess.ExecutablePath, [
     "--eval",
     `require('expo/fingerprint').createFingerprintAsync(process.cwd(), { platforms: [process.argv[1]], silent: true }).then(fp => console.log('T3_NATIVE_FINGERPRINT=' + fp.hash)).catch(e => { console.error(e); process.exitCode = 1; });`,
     platform,
@@ -249,7 +245,7 @@ const fingerprint = Effect.fn("nativeClient.fingerprint")(function* (platform: N
 const nativeIdentifier = Effect.fn("nativeClient.nativeIdentifier")(function* (
   platform: NativePlatform,
 ) {
-  const output = yield* command(yield* HostProcessExecutablePath, [
+  const output = yield* command(yield* HostProcess.ExecutablePath, [
     "--eval",
     `const { getConfig } = require('@expo/config'); console.log('T3_NATIVE_CONFIG=' + JSON.stringify(getConfig(process.cwd()).exp));`,
   ]);
@@ -307,7 +303,7 @@ const validateDevice = Effect.fn("nativeClient.validateDevice")(function* (
   device: string,
 ) {
   if (platform === "ios") {
-    if ((yield* HostProcessPlatform) !== "darwin")
+    if ((yield* HostProcess.Platform) !== "darwin")
       return yield* new NativeClientError({
         message: "Run iOS check/ensure on the Mac that hosts the simulator.",
       });
@@ -389,7 +385,7 @@ const main = Command.make(
     yield* validateDevice(platform, device);
     const fs = yield* FileSystem.FileSystem;
     const path = yield* Path.Path;
-    const environment = yield* HostProcessEnvironment;
+    const environment = yield* HostProcess.Environment;
     const identifier = yield* nativeIdentifier(platform);
     const home = environment.HOME ?? environment.USERPROFILE;
     if (!home)

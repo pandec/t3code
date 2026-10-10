@@ -1,4 +1,4 @@
-import { HostProcessExecutablePath, HostProcessIsExecutable } from "@t3tools/shared/hostProcess";
+import * as HostProcess from "@t3tools/shared/HostProcess";
 import * as Effect from "effect/Effect";
 import * as Path from "effect/Path";
 import * as Schema from "effect/Schema";
@@ -38,8 +38,8 @@ export const runClaudeHistoryProcess = Effect.fn("runClaudeHistoryProcess")(func
   readonly options: object;
   readonly environment: NodeJS.ProcessEnv;
 }) {
-  const executablePath = yield* HostProcessExecutablePath;
-  const workerArguments = (yield* HostProcessIsExecutable)
+  const executablePath = yield* HostProcess.ExecutablePath;
+  const workerArguments = (yield* HostProcess.IsExecutable)
     ? ["__claude-history"]
     : [
         yield* (yield* Path.Path)

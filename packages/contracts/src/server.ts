@@ -638,6 +638,10 @@ export const ServerTextToSpeechAvailability = Schema.Struct({
   persistentJobs: Schema.optionalKey(Schema.Boolean),
 });
 
+/**
+ * "tailnet" when the address is on this machine's Tailscale interface, "lan"
+ * for any other private address, including other VPNs in 100.64.0.0/10.
+ */
 export const ServerDirectEndpointKind = Schema.Literals(["lan", "tailnet"]);
 export type ServerDirectEndpointKind = typeof ServerDirectEndpointKind.Type;
 

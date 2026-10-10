@@ -21,7 +21,7 @@ import { withInputOriginNotice } from "./InputOriginNotice.ts";
 import * as Orchestrator from "./Orchestrator.ts";
 import type {
   ProviderAdapterV2Event,
-  ProviderAdapterV2Shape,
+  ProviderAdapterV2,
   ProviderAdapterV2SteerInput,
   ProviderAdapterV2TurnInput,
 } from "@t3tools/provider-core/server/ProviderAdapter";
@@ -57,7 +57,7 @@ it.effect("carries voice origin through send, steer, queue and queued edits, and
         ...CodexProviderCapabilitiesV2,
         turns: { ...CodexProviderCapabilitiesV2.turns, supportsActiveSteering: true },
       };
-      const adapter: ProviderAdapterV2Shape = {
+      const adapter: ProviderAdapterV2["Service"] = {
         instanceId,
         driver,
         getCapabilities: () => Effect.succeed(capabilities),

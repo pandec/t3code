@@ -8,7 +8,7 @@ import {
   ProviderInstanceId,
   type ServerSettings as ContractServerSettings,
 } from "@t3tools/contracts";
-import { HostProcessEnvironment } from "@t3tools/shared/hostProcess";
+import * as HostProcess from "@t3tools/shared/HostProcess";
 import { symlinksSupported } from "@t3tools/shared/testing/symlinks";
 import * as Effect from "effect/Effect";
 import * as FileSystem from "effect/FileSystem";
@@ -62,7 +62,7 @@ const layerScannerTest = (input: ScannerTestInput) =>
     Layer.provide(
       input.hostEnvironment === undefined
         ? Layer.empty
-        : Layer.succeed(HostProcessEnvironment, input.hostEnvironment),
+        : Layer.succeed(HostProcess.Environment, input.hostEnvironment),
     ),
     Layer.provide(
       Layer.mergeAll(

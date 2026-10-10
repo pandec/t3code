@@ -302,7 +302,7 @@ export function AssistantSpeechPlayer({
               }
               disabled={blocked || playbackUnavailable}
               onClick={handleTogglePlayback}
-              className="flex size-9 shrink-0 cursor-pointer items-center justify-center rounded-full bg-foreground text-background outline-none transition-opacity hover:opacity-85 focus-visible:ring-2 focus-visible:ring-ring disabled:cursor-default disabled:opacity-50"
+              className="flex size-9 shrink-0 cursor-pointer items-center justify-center rounded-full bg-foreground text-background outline-none transition-opacity hover:opacity-85 focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring disabled:cursor-default disabled:opacity-50"
             >
               {isPlaying ? (
                 <PauseIcon aria-hidden className="size-4 fill-current" />

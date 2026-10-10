@@ -26,7 +26,7 @@ import * as Orchestrator from "./Orchestrator.ts";
 import {
   ProviderAdapterSteerRunError,
   type ProviderAdapterV2Event,
-  type ProviderAdapterV2Shape,
+  type ProviderAdapterV2,
   type ProviderAdapterV2TurnInput,
 } from "@t3tools/provider-core/server/ProviderAdapter";
 import * as ProviderAdapterRegistry from "./ProviderAdapterRegistry.ts";
@@ -54,7 +54,7 @@ it.effect.each([{ stop: false }, { stop: true }])(
           ...CodexProviderCapabilitiesV2,
           turns: { ...CodexProviderCapabilitiesV2.turns, supportsActiveSteering: true },
         };
-        const adapter: ProviderAdapterV2Shape = {
+        const adapter: ProviderAdapterV2["Service"] = {
           instanceId,
           driver,
           getCapabilities: () => Effect.succeed(capabilities),

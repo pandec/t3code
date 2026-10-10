@@ -1,11 +1,10 @@
-import * as NodeOS from "node:os";
-
 import type { ClaudeSettings } from "@t3tools/contracts";
 import * as Effect from "effect/Effect";
 import * as Path from "effect/Path";
 import * as Schema from "effect/Schema";
 
 import { expandHomePath } from "@t3tools/provider-core/server/pathExpansion";
+import * as HostProcess from "@t3tools/shared/HostProcess";
 
 const quotePath = Schema.encodeSync(Schema.fromJsonString(Schema.String));
 
@@ -13,8 +12,9 @@ export const resolveClaudeHomePath = Effect.fn("resolveClaudeHomePath")(function
   config: Pick<ClaudeSettings, "homePath">,
 ): Effect.fn.Return<string, never, Path.Path> {
   const path = yield* Path.Path;
+  const home = yield* HostProcess.HomeDirectory;
   const homePath = config.homePath.trim();
-  return path.resolve(homePath.length > 0 ? expandHomePath(homePath) : NodeOS.homedir());
+  return path.resolve(homePath.length > 0 ? expandHomePath(homePath, home) : home);
 });
 
 /**
@@ -30,9 +30,10 @@ export const resolveClaudeConfigDirPath = Effect.fn("resolveClaudeConfigDirPath"
   cwd?: string,
 ): Effect.fn.Return<string, never, Path.Path> {
   const path = yield* Path.Path;
+  const home = yield* HostProcess.HomeDirectory;
   const homePath = config.homePath.trim();
   if (homePath.length > 0) {
-    return path.resolve(expandHomePath(homePath));
+    return path.resolve(expandHomePath(homePath, home));
   }
   const environmentConfigDir = environment.CLAUDE_CONFIG_DIR?.trim() ?? "";
   if (environmentConfigDir.length > 0) {
@@ -43,7 +44,7 @@ export const resolveClaudeConfigDirPath = Effect.fn("resolveClaudeConfigDirPath"
     const resolvedHome = cwd ? path.resolve(cwd, environmentHome) : path.resolve(environmentHome);
     return path.join(resolvedHome, ".claude");
   }
-  return path.join(NodeOS.homedir(), ".claude");
+  return path.join(home, ".claude");
 });
 
 /**
@@ -62,7 +63,7 @@ export const resolveClaudeShadowConfigDirPath = Effect.fn("resolveClaudeShadowCo
     const path = yield* Path.Path;
     const shadowHomePath = config.shadowHomePath.trim();
     if (shadowHomePath.length === 0) return undefined;
-    return path.resolve(expandHomePath(shadowHomePath));
+    return path.resolve(expandHomePath(shadowHomePath, yield* HostProcess.HomeDirectory));
   },
 );
 

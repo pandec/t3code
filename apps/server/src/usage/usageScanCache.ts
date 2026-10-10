@@ -14,10 +14,15 @@
  *
  * @module usageScanCache
  */
-import type { UsageProviderKind } from "@t3tools/contracts";
+import { UsageProviderKind } from "@t3tools/contracts";
+import type {
+  TranscriptUsageFormat,
+  UsageRecord,
+  UsageSpeed,
+} from "@t3tools/provider-core/server/usage";
+import * as Schema from "effect/Schema";
 
 import { GUARD_LENGTH, type TranscriptParsePosition } from "./usageTranscriptReader.ts";
-import type { CodexScanState, UsageRecord, UsageSpeed } from "./usageTranscripts.ts";
 
 // v2: Codex fork-copy suppression changed what a file parses to, so v1
 // entries would keep serving double-counted records forever.
@@ -47,10 +52,6 @@ export const LEGACY_SCAN_CACHE_FILE_NAMES = [
 
 /** Serialised as the index into this list. Index 0 and 1 match the legacy `fast` flag. */
 const SPEEDS: readonly UsageSpeed[] = ["standard", "fast", "ultrafast"];
-
-function isSpeed(value: unknown): value is UsageSpeed {
-  return SPEEDS.some((speed) => speed === value);
-}
 
 export interface CachedFile {
   readonly size: number;
@@ -110,8 +111,8 @@ interface SerializedFile {
   readonly o: number;
   readonly gl: number;
   readonly gh: number;
-  /** Codex reducer state at `o`; `null` for stateless providers. */
-  readonly cs: CodexScanState | null;
+  /** The format's encoded reducer state at `o`; `null` for stateless formats. */
+  readonly cs: unknown;
 }
 
 interface SerializedCache {
@@ -171,7 +172,7 @@ function serializeFile(entry: CachedFile, tables: InternTables): SerializedFile 
     o: entry.position.resumeOffset,
     gl: entry.position.guardLength,
     gh: entry.position.guardHash,
-    cs: entry.position.codexState,
+    cs: entry.position.state,
   };
 }
 
@@ -230,6 +231,8 @@ function isRecordArray(value: unknown): value is readonly unknown[] {
   return Array.isArray(value);
 }
 
+const isProviderKind = Schema.is(UsageProviderKind);
+
 function isCount(value: unknown): value is number {
   return typeof value === "number" && Number.isSafeInteger(value) && value >= 0;
 }
@@ -267,10 +270,16 @@ const ROW_LENGTH: Record<EntryLayout, number> = {
  * `requiresReparse` until a full parse replaces them.
  *
  * Anything malformed yields an empty cache rather than an error: a corrupt
- * cache should cost one cold scan, never a broken page.
+ * cache should cost one cold scan, never a broken page. `formats` validates the
+ * persisted reducer state of stateful transcript formats; entries of providers
+ * without a transcript format are kept, since scan readers cache records too.
  */
-export function decodeScanCache(document: unknown): ScanCache {
+export function decodeScanCache(
+  document: unknown,
+  formats: ReadonlyMap<UsageProviderKind, TranscriptUsageFormat<unknown>>,
+): ScanCache {
   const cache: ScanCache = new Map();
+  const isValidState = makeStateValidator(formats);
   if (typeof document !== "object" || document === null) return cache;
 
   const root = document as Partial<SerializedCache>;
@@ -374,15 +383,7 @@ export function decodeScanCache(document: unknown): ScanCache {
     const layout = entryLayout(version, entry);
     if (layout === null) continue;
     if (typeof entry.s !== "number" || typeof entry.m !== "number") continue;
-    if (
-      entry.p !== "claude" &&
-      entry.p !== "codex" &&
-      entry.p !== "grok" &&
-      entry.p !== "opencode" &&
-      entry.p !== "antigravity" &&
-      entry.p !== "cursor"
-    )
-      continue;
+    if (!isProviderKind(entry.p)) continue;
     if (!isRecordArray(entry.r) || !isRecordArray(entry.t)) continue;
     const countsMalformed = layout === "current" || layout === "forkV5" || layout === "forkV4";
     if (countsMalformed && (!isCount(entry.x) || !isCount(entry.tx))) continue;
@@ -413,10 +414,11 @@ export function decodeScanCache(document: unknown): ScanCache {
       (layout === "forkV5" && entry.p === "codex");
     // A migrated position is never resumed: a full parse replaces the entry.
     const migrated = layout !== "current" && requiresReparse;
-    const codexState = migrated ? null : decodeCodexState(entry.cs);
-    if (codexState === undefined) continue;
+    // A corrupt state disqualifies the entry: resuming with it would attach
+    // appended usage to the wrong model or tier, or replay fork-copied history.
+    if (!migrated && !isValidState(entry.p, entry.cs)) continue;
 
-    const provider: UsageProviderKind = entry.p;
+    const provider = entry.p;
     const records = decodeRecords(entry.r, provider, layout);
     const tailRecords = decodeRecords(entry.t, provider, layout);
     if (records === null || tailRecords === null) continue;
@@ -431,8 +433,13 @@ export function decodeScanCache(document: unknown): ScanCache {
       tailRecords,
       tailMalformedRecords: countsMalformed ? (entry.tx ?? 0) : 0,
       position: migrated
-        ? { resumeOffset: 0, guardLength: 0, guardHash: 0, codexState: null }
-        : { resumeOffset: entry.o, guardLength: entry.gl, guardHash: entry.gh, codexState },
+        ? { resumeOffset: 0, guardLength: 0, guardHash: 0, state: null }
+        : {
+            resumeOffset: entry.o,
+            guardLength: entry.gl,
+            guardHash: entry.gh,
+            state: entry.cs,
+          },
     });
   }
 
@@ -440,37 +447,20 @@ export function decodeScanCache(document: unknown): ScanCache {
 }
 
 /**
- * Validates a persisted Codex reducer state. Returns `undefined` for a corrupt
- * value, which disqualifies the entry: resuming with a bad state would attach
- * appended usage to the wrong model or tier, or replay fork-copied history.
+ * Whether a persisted reducer state is valid for its provider: `null`, or one
+ * the provider's transcript format schema accepts. Providers without a
+ * transcript format (scan readers such as OpenCode and Cursor) keep their
+ * retained records but never carry state.
  */
-function decodeCodexState(value: unknown): CodexScanState | null | undefined {
-  if (value === null) return null;
-  if (typeof value !== "object") return undefined;
-  const state = value as Partial<CodexScanState>;
-  if (
-    typeof state.model !== "string" ||
-    !isSpeed(state.speed) ||
-    typeof state.sessionId !== "string" ||
-    (state.lastUsageSignature !== null && typeof state.lastUsageSignature !== "string") ||
-    typeof state.sawSessionMeta !== "boolean" ||
-    typeof state.suppressingForkCopies !== "boolean" ||
-    typeof state.forkCopyAnchorMs !== "number" ||
-    !Number.isFinite(state.forkCopyAnchorMs) ||
-    !isCount(state.deliberateSkips)
-  ) {
-    return undefined;
-  }
-  return {
-    model: state.model,
-    speed: state.speed,
-    sessionId: state.sessionId,
-    lastUsageSignature: state.lastUsageSignature ?? null,
-    sawSessionMeta: state.sawSessionMeta,
-    suppressingForkCopies: state.suppressingForkCopies,
-    forkCopyAnchorMs: state.forkCopyAnchorMs,
-    deliberateSkips: state.deliberateSkips,
-  };
+function makeStateValidator(
+  formats: ReadonlyMap<UsageProviderKind, TranscriptUsageFormat<unknown>>,
+): (provider: UsageProviderKind, value: unknown) => boolean {
+  const validators = new Map(
+    [...formats].flatMap(([provider, format]) =>
+      format.state === undefined ? [] : [[provider, Schema.is(format.state.schema)] as const],
+    ),
+  );
+  return (provider, value) => value === null || (validators.get(provider)?.(value) ?? false);
 }
 
 /** Keeps saved usage after transcript cleanup, until the reporting retention expires. */

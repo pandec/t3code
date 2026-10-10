@@ -18,6 +18,9 @@ An entry earns its place only if a capable agent with the code in front of it wo
 - When both sides reuse one usage-cache version for incompatible formats, assign a fresh `USAGE_SCAN_CACHE_VERSION` and keep supported legacy decoders.
 - Merge a conflicted `patches/` file in extracted package source, regenerate it against the pristine package, and verify the patch reproduces the merged tree.
 - Use `.ts` relative imports in code the mobile app bundles; Metro does not remap `.js` specifiers the way tsc and Vite do.
+- Usage parsing is driver-owned (`Drivers/*Usage.ts`, provider `usage.ts`): port fork usage behavior there, keep the global scan mutex (adapt upstream tests that assume concurrent scans) and the v6 cache wire format.
+- Keep the fork's per-capability MCP islands: apply upstream transport options in `makeMcpTransport` and provide stateful shared layers (e.g. `ThreadCommandExecutor`) outside the fresh island layers.
+- Storage cleanup defaults `worktreeKeepWhen` to `any-local-files` (fork policy: ignored files such as `.env` stay protected).
 - Treat fork-only unused-export findings from `knip:check` as advisory.
 - Verify the SEA executable with official Node 26 (`SEA_NODE_VERSION` in `apps/server/vite.config.ts`); `vp` may select the repository's Node 24.
 - Known macOS baseline failures: Antigravity missing-parent `/var` path tests and Claude steering replay's now/next mismatch. Compare against pre-merge before blaming the merge.
@@ -33,6 +36,8 @@ When the upstream range touches a path, spawn one reviewer for its question.
 - `Adapters/ClaudeAdapterV2.ts`, `claudeHistory*.ts`: are Stop grace, the parent-only cursor, context/history fixes, gateway models, and worktree-follow intact?
 - `ProviderSessionManager.ts`, `mcp/**`, adapter MCP injection: does every path respect per-thread capabilities and voice tool timeouts?
 - `provider/Drivers/Codex*`, `CodexAdapterV2.ts`, `project/AgentSessionScanner.ts`: do runtime and discovery resolve the Codex home from the same merged environment?
+- `apps/server/src/usage/**`, `Drivers/*Usage*`, `provider-*/src/server/usage.ts`, `CursorUsageAccounts.ts`: do fork usage semantics (homes, malformed vs deliberate skips, retained history, Cursor legacy) and the v6 cache survive?
+- `apps/server/src/storageCleanup.ts`: do canonical ownership, Stop-held queue, pending archive/move guards and the final removal reservation still wrap removal?
 - `patches/`, `patchedDependencies`, Expo SDK bumps: does each fork-carried native patch still apply, remain needed, and match the SDK's exact version?
 
 ## Full audit

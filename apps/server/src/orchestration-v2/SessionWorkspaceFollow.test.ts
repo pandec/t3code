@@ -37,7 +37,7 @@ import * as Orchestrator from "./Orchestrator.ts";
 import * as ProjectStore from "./ProjectStore.ts";
 import type {
   ProviderAdapterV2Event,
-  ProviderAdapterV2Shape,
+  ProviderAdapterV2,
 } from "@t3tools/provider-core/server/ProviderAdapter";
 import * as ProviderAdapterRegistry from "./ProviderAdapterRegistry.ts";
 import * as ProviderSessionCwdObservations from "./ProviderSessionCwdObservations.ts";
@@ -81,7 +81,7 @@ const claudeFollowAdapter = { driver, providerInstanceId };
 function makeFollowAdapter(
   state: Ref.Ref<FollowAdapterState>,
   { driver, providerInstanceId } = claudeFollowAdapter,
-): ProviderAdapterV2Shape {
+): ProviderAdapterV2["Service"] {
   return {
     instanceId: providerInstanceId,
     driver,
@@ -724,8 +724,19 @@ it.live("a completed worktree switch restarts the session in the new worktree", 
           branch: null,
           worktreePath: root,
         });
+        // The replay harness runs its own effect daemon, so drain() may find the
+        // turn start already claimed; wait for the held turn's run to be running.
+        const firstRunning = yield* orchestrator.streamDomainEvents.pipe(
+          Stream.filter(
+            (event) => event.type === "run.updated" && event.payload.status === "running",
+          ),
+          Stream.take(1),
+          Stream.runDrain,
+          Effect.forkScoped,
+        );
         yield* send("first");
         yield* worker.drain();
+        yield* Fiber.join(firstRunning);
         const session = (yield* orchestrator.getThreadProjection(threadId)).providerSessions.find(
           (entry) => entry.status !== "stopped",
         );
