@@ -697,6 +697,15 @@ export const SETTINGS_SEARCH_ITEMS = [
     searchTerms: ["xcode android studio sdk avd runtime"],
   },
   {
+    id: "telegram-bot",
+    title: "Telegram bot",
+    to: "/settings/integrations",
+    searchTerms: [
+      "telegram bot botfather token chat link topics summary report voice note dispatch send",
+    ],
+    environmentOnly: true,
+  },
+  {
     id: "browser-profiles",
     title: "Browser profiles",
     to: "/settings/integrations",

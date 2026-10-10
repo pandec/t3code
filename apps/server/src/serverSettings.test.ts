@@ -1747,6 +1747,40 @@ it.layer(NodeServices.layer)("server settings", (it) => {
       }).pipe(Effect.provide(layerServerSettingsWithSecrets())),
   );
 
+  it.effect("keeps the Telegram bot token in the secret store and redacts it for clients", () =>
+    Effect.gen(function* () {
+      const serverSettings = yield* ServerSettingsModule.ServerSettingsService;
+      const secrets = yield* ServerSecretStore.ServerSecretStore;
+      const serverConfig = yield* ServerConfig.ServerConfig;
+      const fileSystem = yield* FileSystem.FileSystem;
+
+      const saved = yield* serverSettings.updateSettings({
+        telegram: { botToken: "123:tg-secret", linkCode: "abc" },
+      });
+      assert.equal(saved.telegram.botToken, "123:tg-secret");
+      const raw = yield* fileSystem.readFileString(serverConfig.settingsPath);
+      assert.notInclude(raw, "tg-secret");
+
+      const forClient = ServerSettingsModule.redactServerSettingsForClient(saved).telegram;
+      assert.notInclude(forClient.botToken, "tg-secret");
+      assert.isAbove(forClient.botToken.length, 0);
+
+      // Echoing the marker or patching other fields keeps the token.
+      yield* serverSettings.updateSettings({ telegram: forClient });
+      yield* serverSettings.updateSettings({ telegram: { chatId: "42", linkCode: "" } });
+      assert.deepEqual((yield* serverSettings.getSettings).telegram, {
+        botToken: "123:tg-secret",
+        botUsername: "",
+        chatId: "42",
+        linkCode: "",
+      });
+
+      const cleared = yield* serverSettings.updateSettings({ telegram: { botToken: "" } });
+      assert.equal(cleared.telegram.botToken, "");
+      assert.isTrue(Option.isNone(yield* secrets.get("telegram-bot-token")));
+    }).pipe(Effect.provide(layerServerSettingsWithSecrets())),
+  );
+
   it.effect(
     "keeps GitHub tokens per host in the secret store and tells clients only that one is set",
     () =>

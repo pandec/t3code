@@ -179,6 +179,7 @@ const BITBUCKET_SECRET_NAMES = {
   apiToken: "bitbucket-api-token",
 } as const;
 const BITBUCKET_SECRET_FIELDS = ["accessToken", "apiToken"] as const;
+const TELEGRAM_BOT_TOKEN_SECRET_NAME = "telegram-bot-token";
 
 /** Hosts are case-insensitive; a patch can arrive before decoding lowercased its keys. */
 function gitHubTokenSecretName(host: string): string {
@@ -233,13 +234,14 @@ export function redactServerSettingsForClient(settings: ServerSettings): ServerS
     accessToken: redactSecret(settings.bitbucket.accessToken),
     apiToken: redactSecret(settings.bitbucket.apiToken),
   };
+  const telegram = { ...settings.telegram, botToken: redactSecret(settings.telegram.botToken) };
   const github = {
     ...settings.github,
     tokens: Object.fromEntries(
       Object.entries(settings.github.tokens).map(([host, token]) => [host, redactSecret(token)]),
     ),
   };
-  return { ...settings, providerInstances, usageLimitSources, bitbucket, github };
+  return { ...settings, providerInstances, usageLimitSources, bitbucket, telegram, github };
 }
 
 /** Validate and translate action CAS while the caller holds the settings write permit. */
@@ -866,6 +868,23 @@ const make = Effect.gen(function* () {
         bitbucket[field] = SECRET_REDACTED;
         moved = true;
       }
+      const telegram = { ...settings.telegram };
+      if (telegram.botToken.length > 0 && telegram.botToken !== SECRET_REDACTED) {
+        const stored = yield* secretStore
+          .set(TELEGRAM_BOT_TOKEN_SECRET_NAME, textEncoder.encode(telegram.botToken))
+          .pipe(
+            Effect.as(true),
+            Effect.catch(() =>
+              Effect.logWarning("failed to move the Telegram bot token into the secret store").pipe(
+                Effect.as(false),
+              ),
+            ),
+          );
+        if (stored) {
+          telegram.botToken = SECRET_REDACTED;
+          moved = true;
+        }
+      }
       const tokens = { ...settings.github.tokens };
       for (const [host, value] of Object.entries(tokens)) {
         if (value.length === 0 || value === SECRET_REDACTED) continue;
@@ -883,7 +902,9 @@ const make = Effect.gen(function* () {
         tokens[host] = SECRET_REDACTED;
         moved = true;
       }
-      return moved ? { ...settings, bitbucket, github: { ...settings.github, tokens } } : settings;
+      return moved
+        ? { ...settings, bitbucket, telegram, github: { ...settings.github, tokens } }
+        : settings;
     });
 
   const loadSettingsFromDisk = Effect.gen(function* () {
@@ -1085,6 +1106,17 @@ const make = Effect.gen(function* () {
           );
         bitbucket[field] = Option.isSome(secret) ? textDecoder.decode(secret.value) : "";
       }
+      const telegram = { ...settings.telegram };
+      if (telegram.botToken === SECRET_REDACTED) {
+        const secret = yield* secretStore
+          .get(TELEGRAM_BOT_TOKEN_SECRET_NAME)
+          .pipe(
+            Effect.mapError(
+              (cause) => new ServerSettingsError({ settingsPath, operation: "read-secret", cause }),
+            ),
+          );
+        telegram.botToken = Option.isSome(secret) ? textDecoder.decode(secret.value) : "";
+      }
       const tokens: Record<string, string> = {};
       for (const [host, value] of Object.entries(settings.github.tokens)) {
         if (value !== SECRET_REDACTED) {
@@ -1105,6 +1137,7 @@ const make = Effect.gen(function* () {
         providerInstances: providerInstances as ServerSettings["providerInstances"],
         usageLimitSources: usageLimitSources as ServerSettings["usageLimitSources"],
         bitbucket,
+        telegram,
         github: { ...settings.github, tokens },
       };
     });
@@ -1317,6 +1350,23 @@ const make = Effect.gen(function* () {
         bitbucket[field] = SECRET_REDACTED;
       }
 
+      // Same rules as the Bitbucket tokens above.
+      const telegram = { ...next.telegram };
+      let telegramToken: string | undefined = telegram.botToken;
+      if (telegramToken === SECRET_REDACTED) {
+        const inline = current.telegram.botToken;
+        telegramToken = inline === SECRET_REDACTED || inline.length === 0 ? undefined : inline;
+      }
+      if (telegramToken !== undefined) {
+        const secretName = TELEGRAM_BOT_TOKEN_SECRET_NAME;
+        if (telegramToken.length === 0) {
+          changes.push({ kind: "remove", secretName, operation: "remove-secret" });
+        } else {
+          changes.push({ kind: "write", secretName, value: textEncoder.encode(telegramToken) });
+          telegram.botToken = SECRET_REDACTED;
+        }
+      }
+
       const tokens: Record<string, string> = {};
       for (const [rawHost, raw] of Object.entries(next.github.tokens)) {
         const host = rawHost.trim().toLowerCase();
@@ -1356,6 +1406,7 @@ const make = Effect.gen(function* () {
           providerInstances: providerInstances as ServerSettings["providerInstances"],
           usageLimitSources: usageLimitSources as ServerSettings["usageLimitSources"],
           bitbucket,
+          telegram,
           github: { ...next.github, tokens },
         },
         changes,
