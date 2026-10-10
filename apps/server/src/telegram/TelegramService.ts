@@ -397,10 +397,17 @@ export const make = Effect.gen(function* () {
           // A failed rename keeps the old name stored, so the next dispatch retries it.
           yield* client.editForumTopic({ chatId, topicId: existing.topicId, name }).pipe(
             Effect.andThen(
-              topicStore.update((current) => ({
-                ...current,
-                threads: { ...current.threads, [threadId]: { topicId: existing.topicId, name } },
-              })),
+              topicStore.update((current) =>
+                current.threads[threadId]?.topicId !== existing.topicId
+                  ? current
+                  : {
+                      ...current,
+                      threads: {
+                        ...current.threads,
+                        [threadId]: { topicId: existing.topicId, name },
+                      },
+                    },
+              ),
             ),
             Effect.ignore,
           );
@@ -408,9 +415,9 @@ export const make = Effect.gen(function* () {
         return existing.topicId;
       }
       const created = yield* client.createForumTopic({ chatId, name });
-      // The owner may have linked another chat meanwhile; its mapping must stay clean.
+      // The owner may have linked another chat, or switched bots, meanwhile; the new mapping must stay clean.
       yield* topicStore.update((current) =>
-        current.chatId !== chatId
+        current.chatId !== chatId || current.botId !== state.botId
           ? current
           : {
               ...current,
