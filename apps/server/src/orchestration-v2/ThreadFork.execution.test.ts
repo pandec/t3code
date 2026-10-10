@@ -227,12 +227,14 @@ it.effect.each(forkCases)(
         createdBy: "user",
         creationSource: "web",
       });
+      const forkTitle = (yield* orchestrator.getThreadProjection(targetThreadId)).thread.title;
       yield* orchestrator.dispatch({
         type: "message.dispatch",
         commandId: CommandId.make("continue-fork"),
         threadId: targetThreadId,
         messageId: MessageId.make("continue-fork"),
         text: "Continue from the selected source run",
+        titleSeed: "Continue from the selected source run",
         attachments: [],
         modelSelection,
         dispatchMode: { type: "start_immediately" },
@@ -240,6 +242,9 @@ it.effect.each(forkCases)(
         creationSource: "web",
       });
       const target = yield* orchestrator.getThreadProjection(targetThreadId);
+      // The first message in a fork keeps the fork's title.
+      assert.equal(target.thread.title, forkTitle);
+      assert.notExists(target.thread.titleRegeneration);
       assert.equal(target.contextTransfers[0]?.resolution?.strategy, "portable_context");
       assert.lengthOf(target.contextHandoffs, 1);
       const handoff = target.contextHandoffs[0]!;

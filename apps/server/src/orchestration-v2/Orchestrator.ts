@@ -5041,7 +5041,10 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
       const userMessages = projection.messages.filter((message) => message.role === "user");
       const onlyMaintenanceHistory =
         userMessages.length > 0 && userMessages.every(isNativeMaintenanceCommand);
+      // Fork: a fork keeps the title it was created with; its first message
+      // continues the source conversation rather than naming a new one.
       if (
+        projection.thread.lineage.relationshipToParent !== "fork" &&
         !isNativeMaintenanceCommand(command) &&
         ((command.titleSeed !== undefined &&
           (yield* projectionStore
