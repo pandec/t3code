@@ -118,11 +118,11 @@ describe("scan cache round trip", () => {
     );
     expect(migrated).toEqual(expected);
     expect(migrated.get("/deleted/session.jsonl")?.records[0]?.speed).toBe("standard");
-    expect(encodeScanCache(migrated).version).toBe(6);
+    expect(encodeScanCache(migrated).version).toBe(7);
     expect(decodeScanCache(encodeScanCache(migrated), TEST_FORMAT_MAP)).toEqual(expected);
   });
 
-  it("migrates fork v5 with retained totals, and re-parses Codex for its service tier", () => {
+  it("migrates fork v5 with retained totals, re-parsing Claude and Codex", () => {
     const original = cacheWith([["/deleted/claude.jsonl", 100, [record({ speed: "fast" })], 2, 1]]);
     original.set("cursor-account:one", {
       ...original.get("/deleted/claude.jsonl")!,
@@ -152,7 +152,11 @@ describe("scan cache round trip", () => {
 
     const migrated = decodeScanCache(JSON.parse(JSON.stringify(forkV5)), TEST_FORMAT_MAP);
 
-    expect(migrated.get("/deleted/claude.jsonl")).toEqual(original.get("/deleted/claude.jsonl"));
+    expect(migrated.get("/deleted/claude.jsonl")).toEqual({
+      ...original.get("/deleted/claude.jsonl")!,
+      requiresReparse: true,
+      position: MIGRATED_POSITION,
+    });
     expect(migrated.get("cursor-account:one")).toEqual(original.get("cursor-account:one"));
     expect(migrated.get("/codex.jsonl")).toEqual({
       ...original.get("/codex.jsonl")!,
@@ -160,6 +164,40 @@ describe("scan cache round trip", () => {
       position: MIGRATED_POSITION,
     });
     expect(decodeScanCache(encodeScanCache(migrated), TEST_FORMAT_MAP)).toEqual(migrated);
+  });
+
+  it("migrates fork v6, re-parsing only Claude entries", () => {
+    // v6 Claude entries kept a proxied message's placeholder over its real usage.
+    const original = cacheWith([["/claude.jsonl", 100, [record()], 2, 1]]);
+    original.set("/codex.jsonl", {
+      ...original.get("/claude.jsonl")!,
+      provider: "codex",
+      records: [record({ provider: "codex", model: "gpt-6-astra", dedupeKey: null })],
+      position: position({ state: codexState() }),
+    });
+    const encoded = encodeScanCache(original);
+
+    const migrated = decodeScanCache({ ...encoded, version: 6 }, TEST_FORMAT_MAP);
+
+    expect(migrated.get("/claude.jsonl")).toEqual({
+      ...original.get("/claude.jsonl")!,
+      requiresReparse: true,
+      position: MIGRATED_POSITION,
+    });
+    expect(migrated.get("/codex.jsonl")).toEqual(original.get("/codex.jsonl"));
+  });
+
+  it("round-trips provisional records and one-hour cache writes", () => {
+    const provisional = record({
+      totals: { ...record().totals, uncachedInputTokens: 0, outputTokens: 0 },
+      provisional: true,
+    });
+    const oneHour = record({ dedupeKey: "b", oneHourCacheCreationTokens: 7 });
+    const original = cacheWith([
+      ["/claude.jsonl", 100, [provisional, oneHour, record({ dedupeKey: "c" })]],
+    ]);
+
+    expect(decodeScanCache(encodeScanCache(original), TEST_FORMAT_MAP)).toEqual(original);
   });
 
   it("migrates upstream v5 rows with their speed, re-parsing for malformed counts", () => {
@@ -502,15 +540,41 @@ describe("pruneScanCache", () => {
 });
 
 describe("dedupeWithinFile", () => {
-  it("keeps the first record per dedupe key", () => {
+  it("keeps a Claude message's completed record, at its first position", () => {
+    // Native records repeat the input split, but only the last has full output.
     const kept = dedupeWithinFile([
-      record({ totals: { ...record().totals, outputTokens: 1 } }),
-      record({ totals: { ...record().totals, outputTokens: 999 } }),
+      record({ totals: { ...record().totals, outputTokens: 6 } }),
       record({ dedupeKey: "msg_2:" }),
+      record({ totals: { ...record().totals, outputTokens: 999 }, speed: "fast" }),
+      record({ totals: { ...record().totals, outputTokens: 6 } }),
     ]);
 
-    expect(kept).toHaveLength(2);
-    expect(kept[0]?.totals.outputTokens).toBe(1);
+    expect(kept.map((r) => [r.dedupeKey, r.totals.outputTokens, r.speed])).toEqual([
+      ["msg_1:", 999, "fast"],
+      ["msg_2:", 50, "standard"],
+    ]);
+  });
+
+  it("keeps the first record per dedupe key for other providers", () => {
+    const grok = (outputTokens: number) =>
+      record({ provider: "grok", totals: { ...record().totals, outputTokens } });
+
+    expect(dedupeWithinFile([grok(1), grok(999)]).map((r) => r.totals.outputTokens)).toEqual([1]);
+  });
+
+  it("replaces a provisional record with real usage, at its position", () => {
+    const placeholder = record({
+      totals: { ...record().totals, uncachedInputTokens: 0, outputTokens: 0 },
+      provisional: true,
+    });
+    const final = record({ totals: { ...record().totals, outputTokens: 312 } });
+    const other = record({ dedupeKey: "msg_2:" });
+
+    expect(dedupeWithinFile([placeholder, placeholder, other, final])).toEqual([final, other]);
+    // A later placeholder never replaces real usage.
+    expect(dedupeWithinFile([final, placeholder])).toEqual([final]);
+    // Without real usage, the first placeholder stays.
+    expect(dedupeWithinFile([placeholder, other])).toEqual([placeholder, other]);
   });
 
   it("keeps every record that has no dedupe key", () => {

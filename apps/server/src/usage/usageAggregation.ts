@@ -94,6 +94,11 @@ export interface AggregateOptions {
   readonly resolution?: UsageResolution;
   readonly sinceTimeMs?: number;
   readonly untilTimeMs?: number;
+  /**
+   * From `selectDedupeWinners`. A keyed record that is not its key's winner is
+   * dropped as a duplicate.
+   */
+  readonly dedupeWinners?: ReadonlyMap<string, UsageRecord>;
 }
 
 /**
@@ -131,7 +136,8 @@ export interface AggregateResult {
  *
  * De-duplication is global across the whole scan, not per file: Claude Code
  * copies a message's records forward when a session is resumed or forked, so
- * the same `dedupeKey` legitimately appears in several transcripts.
+ * the same `dedupeKey` legitimately appears in several transcripts. The
+ * record `dedupeWinners` names wins, or else the first one.
  */
 export class UsageAggregator {
   readonly #buckets = new Map<string, MutableBucket>();
@@ -174,11 +180,14 @@ export class UsageAggregator {
   add(input: UsageRecord, sourcePath?: string): boolean {
     const record = this.#mapModel(input);
     if (record.dedupeKey !== null) {
-      if (this.#seen.has(record.dedupeKey)) {
+      // A winner decides its key outright, so only keys without one (such as
+      // re-keyed shared-session copies) need the first-seen set.
+      const winner = this.#options.dedupeWinners?.get(record.dedupeKey);
+      if (winner !== undefined ? winner !== input : this.#seen.has(record.dedupeKey)) {
         this.#duplicatesDropped += 1;
         return false;
       }
-      this.#seen.add(record.dedupeKey);
+      if (winner === undefined) this.#seen.add(record.dedupeKey);
     }
 
     if (

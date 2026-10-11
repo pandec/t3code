@@ -14,7 +14,9 @@ split, such as a provider-reported cost for a model without public rates, shows 
 Select a model under **Breakdown** to see its trend, cache hit rate, and cost per million tokens.
 
 Totals depend on the history available on each server. Grok turns without a saved completed-turn
-record are missing from the totals.
+record are missing from the totals. Claude Code sometimes doesn't save the final usage of a request
+sent through a gateway such as CLIProxyAPI. Usage then counts Claude Code's estimate of the prompt
+as cache reads, with no output tokens.
 
 Use **By subscription** to credit activity to the subscription it consumes. This includes
 gateway routing across providers: Claude Code routed to an OpenAI model counts toward Codex, and

@@ -32,8 +32,12 @@ import { GUARD_LENGTH, type TranscriptParsePosition } from "./usageTranscriptRea
 // completed/tail malformed counts, upstream's adds Claude fast mode instead.
 // v5 was used by both a third time: the fork's adds fast mode and `rateModel`
 // to its v4, upstream's replaces fast mode with Codex service tiers.
-// v6 carries all of it. `decodeScanCache` migrates every v4 and v5 layout.
-const USAGE_SCAN_CACHE_VERSION = 6 as const;
+// v6 carries all of it.
+// v7 keeps each Claude message's completed record, marks provisional ones,
+// and records one-hour cache writes. v6 Claude entries kept a message's first
+// record, so they re-parse.
+// `decodeScanCache` migrates every v4 to v6 layout.
+const USAGE_SCAN_CACHE_VERSION = 7 as const;
 const OLDEST_MIGRATED_VERSION = 4;
 
 /**
@@ -42,12 +46,13 @@ const OLDEST_MIGRATED_VERSION = 4;
  * it, dropping saved usage for deleted transcripts. Separate files keep both.
  * When its own file is missing, this server migrates the files older builds
  * wrote: the fork's v4/v5 and upstream's v4 share the unversioned name, and
- * upstream's v5 has its own.
+ * upstream's v5 and the fork's v6 have their own.
  */
-export const SCAN_CACHE_FILE_NAME = "usage-scan-cache-v6.json";
+export const SCAN_CACHE_FILE_NAME = "usage-scan-cache-v7.json";
 export const LEGACY_SCAN_CACHE_FILE_NAMES = [
   "usage-scan-cache.json",
   "usage-scan-cache-v5.json",
+  "usage-scan-cache-v6.json",
 ] as const;
 
 /** Serialised as the index into this list. Index 0 and 1 match the legacy `fast` flag. */
@@ -94,6 +99,9 @@ type SerializedRecord = readonly [
   reportedCostUsd: number | null,
   speed: number,
   rateModelIndex: number | null,
+  /** `1` for a provisional record. Omitted with the next column when both are unset. */
+  provisional?: 0 | 1,
+  oneHourCacheCreationTokens?: number,
 ];
 
 interface SerializedFile {
@@ -144,22 +152,28 @@ function intern(table: string[], index: Map<string, number>, value: string): num
 }
 
 function serializeFile(entry: CachedFile, tables: InternTables): SerializedFile {
-  const serializeRecord = (record: UsageRecord): SerializedRecord => [
-    record.timestampMs,
-    intern(tables.models, tables.modelIndex, record.model),
-    intern(tables.sessions, tables.sessionIndex, record.sessionId),
-    record.totals.uncachedInputTokens,
-    record.totals.cachedInputTokens,
-    record.totals.cacheCreationTokens,
-    record.totals.outputTokens,
-    record.totals.reasoningTokens,
-    record.dedupeKey,
-    record.reportedCostUsd,
-    SPEEDS.indexOf(record.speed),
-    record.rateModel === undefined
-      ? null
-      : intern(tables.models, tables.modelIndex, record.rateModel),
-  ];
+  const serializeRecord = (record: UsageRecord): SerializedRecord => {
+    const row: [...SerializedRecord] = [
+      record.timestampMs,
+      intern(tables.models, tables.modelIndex, record.model),
+      intern(tables.sessions, tables.sessionIndex, record.sessionId),
+      record.totals.uncachedInputTokens,
+      record.totals.cachedInputTokens,
+      record.totals.cacheCreationTokens,
+      record.totals.outputTokens,
+      record.totals.reasoningTokens,
+      record.dedupeKey,
+      record.reportedCostUsd,
+      SPEEDS.indexOf(record.speed),
+      record.rateModel === undefined
+        ? null
+        : intern(tables.models, tables.modelIndex, record.rateModel),
+    ];
+    const oneHour = record.oneHourCacheCreationTokens ?? 0;
+    if (record.provisional || oneHour > 0) row.push(record.provisional ? 1 : 0);
+    if (oneHour > 0) row.push(oneHour);
+    return row;
+  };
   return {
     ...(entry.requiresReparse ? { reparse: true as const } : {}),
     s: entry.size,
@@ -241,11 +255,12 @@ function isCount(value: unknown): value is number {
  * The entry layouts this build reads, named for the build that wrote them.
  * Fork entries always carry malformed counts (`x`, `tx`); upstream's never do.
  */
-type EntryLayout = "current" | "forkV5" | "forkV4" | "upstreamV5" | "upstreamV4";
+type EntryLayout = "current" | "forkV6" | "forkV5" | "forkV4" | "upstreamV5" | "upstreamV4";
 
 function entryLayout(version: number, entry: Partial<SerializedFile>): EntryLayout | null {
   const fork = entry.x !== undefined || entry.tx !== undefined;
   if (version === USAGE_SCAN_CACHE_VERSION) return "current";
+  if (version === 6) return "forkV6";
   if (version === 5) return fork ? "forkV5" : "upstreamV5";
   if (version === 4) return fork ? "forkV4" : "upstreamV4";
   return null;
@@ -254,6 +269,7 @@ function entryLayout(version: number, entry: Partial<SerializedFile>): EntryLayo
 /** Shortest row each layout writes; the columns after it are absent. */
 const ROW_LENGTH: Record<EntryLayout, number> = {
   current: 12,
+  forkV6: 12,
   forkV5: 12,
   forkV4: 10,
   upstreamV5: 11,
@@ -265,8 +281,9 @@ const ROW_LENGTH: Record<EntryLayout, number> = {
  *
  * Migrated entries keep their records, because the transcript may be gone,
  * but most must re-parse while their file still exists: upstream layouts never
- * counted malformed records, fork v4 predates fast mode, and only v6 and
- * upstream v5 Codex entries know their service tier. Those carry
+ * counted malformed records, fork v4 predates fast mode, only v6+ and
+ * upstream v5 Codex entries know their service tier, and only v7 Claude
+ * entries keep a message's completed record. Those carry
  * `requiresReparse` until a full parse replaces them.
  *
  * Anything malformed yields an empty cache rather than an error: a corrupt
@@ -326,20 +343,26 @@ export function decodeScanCache(
         reportedCostUsd,
         speedIndex,
         rateModelIndex,
+        provisional,
+        oneHourCacheCreationTokens,
       ] = row as SerializedRecord;
 
       // Fork v4 predates fast mode. A legacy `fast` flag (0 or 1) is the
-      // speed index it maps to; only v6 and upstream v5 record ultrafast.
+      // speed index it maps to; only v6+ and upstream v5 record ultrafast.
       const speed =
         layout === "forkV4"
           ? "standard"
           : typeof speedIndex === "number" &&
-              (speedIndex <= 1 || layout === "current" || layout === "upstreamV5")
+              (speedIndex <= 1 ||
+                layout === "current" ||
+                layout === "forkV6" ||
+                layout === "upstreamV5")
             ? SPEEDS[speedIndex]
             : undefined;
-      // Fork v5 and v6 rows always carry `rateModel`; upstream v4/v5 rows may append it.
+      // Fork v5+ rows always carry `rateModel`; upstream v4/v5 rows may append it.
       const hasRateModel =
         layout === "current" ||
+        layout === "forkV6" ||
         layout === "forkV5" ||
         ((layout === "upstreamV4" || layout === "upstreamV5") && row.length > ROW_LENGTH[layout]);
       const rateModel =
@@ -355,7 +378,8 @@ export function decodeScanCache(
         !Number.isFinite(cacheCreation) ||
         !Number.isFinite(output) ||
         !Number.isFinite(reasoning) ||
-        speed === undefined
+        speed === undefined ||
+        (oneHourCacheCreationTokens !== undefined && !isCount(oneHourCacheCreationTokens))
       ) {
         return null;
       }
@@ -376,6 +400,10 @@ export function decodeScanCache(
         reportedCostUsd: typeof reportedCostUsd === "number" ? reportedCostUsd : null,
         speed,
         dedupeKey: typeof dedupeKey === "string" ? dedupeKey : null,
+        ...(layout === "current" && provisional === 1 ? { provisional: true as const } : {}),
+        ...(layout === "current" && oneHourCacheCreationTokens
+          ? { oneHourCacheCreationTokens }
+          : {}),
       });
     }
     return records;
@@ -389,7 +417,8 @@ export function decodeScanCache(
     if (typeof entry.s !== "number" || typeof entry.m !== "number") continue;
     if (!isProviderKind(entry.p)) continue;
     if (!isRecordArray(entry.r) || !isRecordArray(entry.t)) continue;
-    const countsMalformed = layout === "current" || layout === "forkV5" || layout === "forkV4";
+    const countsMalformed =
+      layout === "current" || layout === "forkV6" || layout === "forkV5" || layout === "forkV4";
     if (countsMalformed && (!isCount(entry.x) || !isCount(entry.tx))) continue;
     // Position fields feed byte offsets and a Buffer allocation in the reader,
     // so anything outside their real ranges must reject the entry: a bogus
@@ -415,7 +444,9 @@ export function decodeScanCache(
       !countsMalformed ||
       layout === "forkV4" ||
       // Fork v5 Codex state has no service tier, so its records all priced standard.
-      (layout === "forkV5" && entry.p === "codex");
+      (layout === "forkV5" && entry.p === "codex") ||
+      // Claude entries before v7 kept each message's first, incomplete record.
+      (layout !== "current" && entry.p === "claude");
     // A migrated position is never resumed: a full parse replaces the entry.
     const migrated = layout !== "current" && requiresReparse;
     // A corrupt state disqualifies the entry: resuming with it would attach
@@ -480,23 +511,59 @@ export function pruneScanCache(cache: ScanCache, retentionCutoffMs: number): num
 }
 
 /**
- * Within-file de-duplication, applied before an entry is cached.
- *
- * Callers stitching an incremental parse together pass one `seen` set across
- * the line and tail record batches so the whole file stays deduplicated as a
- * unit; the set is mutated in place.
+ * Whether `candidate` should replace `kept`, an earlier record with the same
+ * dedupe key. Real usage replaces a provisional estimate. Claude Code writes a
+ * message's records as growing snapshots, so its record with the most output
+ * is the completed one. Otherwise the first record wins, as in ccusage.
  */
-export function dedupeWithinFile(
-  records: readonly UsageRecord[],
-  seen: Set<string> = new Set(),
-): readonly UsageRecord[] {
+export function supersedesUsageRecord(candidate: UsageRecord, kept: UsageRecord): boolean {
+  const keptProvisional = kept.provisional === true;
+  if (keptProvisional !== (candidate.provisional === true)) return keptProvisional;
+  return (
+    candidate.provider === "claude" && candidate.totals.outputTokens > kept.totals.outputTokens
+  );
+}
+
+/**
+ * Within-file de-duplication, applied before an entry is cached. One record
+ * survives per dedupe key, at the position of the key's first record.
+ */
+export function dedupeWithinFile(records: readonly UsageRecord[]): readonly UsageRecord[] {
   const kept: UsageRecord[] = [];
+  const indexByKey = new Map<string, number>();
   for (const record of records) {
-    if (record.dedupeKey !== null) {
-      if (seen.has(record.dedupeKey)) continue;
-      seen.add(record.dedupeKey);
+    if (record.dedupeKey === null) {
+      kept.push(record);
+      continue;
     }
-    kept.push(record);
+    const index = indexByKey.get(record.dedupeKey);
+    if (index === undefined) {
+      indexByKey.set(record.dedupeKey, kept.length);
+      kept.push(record);
+    } else if (supersedesUsageRecord(record, kept[index]!)) {
+      kept[index] = record;
+    }
   }
   return kept;
+}
+
+/**
+ * The record each dedupe key keeps across a whole scan, by the same rule as
+ * `dedupeWithinFile`. A resumed or forked Claude session copies records into
+ * another transcript, so the completed record may sit in a later file.
+ */
+export function selectDedupeWinners(
+  files: readonly { readonly records: readonly UsageRecord[] }[],
+): ReadonlyMap<string, UsageRecord> {
+  const winners = new Map<string, UsageRecord>();
+  for (const { records } of files) {
+    for (const record of records) {
+      if (record.dedupeKey === null) continue;
+      const kept = winners.get(record.dedupeKey);
+      if (kept === undefined || supersedesUsageRecord(record, kept)) {
+        winners.set(record.dedupeKey, record);
+      }
+    }
+  }
+  return winners;
 }

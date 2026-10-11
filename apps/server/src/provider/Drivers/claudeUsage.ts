@@ -22,10 +22,20 @@ import { resolveClaudeConfigDirPath } from "./ClaudeHome.ts";
 /**
  * Parses one line of a Claude Code transcript.
  *
- * T3 Code writes one record per assistant *content block*, and every one of
- * those records repeats the same complete `usage` object for the parent
- * message. Summing them overcounts by roughly 2.4x on a real workload, so the
- * caller must drop repeats by `dedupeKey` and keep the first.
+ * Claude Code writes one record per assistant *content block*, each carrying
+ * the parent message's `usage` as known when the block was written. Summing
+ * them overcounts by roughly 2.4x on a real workload, so the caller keeps one
+ * record per `dedupeKey`: the one with the most output (see
+ * `supersedesUsageRecord`).
+ *
+ * Anthropic reports the input and cache split at message start, so native
+ * records all carry it, but only a record written after the response
+ * completes has the full output, speed, and thinking tokens. A model proxied
+ * through an Anthropic-compatible gateway such as CLIProxyAPI reports nothing
+ * until completion. Before that, Claude Code writes its own prompt-size
+ * estimate as `input_tokens` with zero output and no cache fields. Roughly one
+ * proxied message in five never gets a completed record, even though the
+ * request completed.
  */
 export function parseClaudeLine(line: string): UsageRecord | null {
   let parsed: unknown;
@@ -65,6 +75,20 @@ function parseClaudeRecord(parsed: unknown): UsageRecord | null {
     messageId === null && requestId === null ? null : `${messageId ?? ""}:${requestId ?? ""}`;
 
   const cost = record["costUSD"];
+  const inputTokens = tokenCount(usageRecord["input_tokens"]);
+  const outputTokens = tokenCount(usageRecord["output_tokens"]);
+  const cacheCreationTokens = tokenCount(usageRecord["cache_creation_input_tokens"]);
+  const oneHourCacheCreationTokens = Math.min(
+    cacheCreationTokens,
+    tokenCount(nested(usageRecord["cache_creation"])["ephemeral_1h_input_tokens"]),
+  );
+  // Claude Code fills the cache fields in once real usage arrives, and always
+  // writes the output count, so a record with neither cache field and no
+  // output is the placeholder estimate.
+  const provisional =
+    !("cache_read_input_tokens" in usageRecord) &&
+    !("cache_creation_input_tokens" in usageRecord) &&
+    outputTokens === 0;
 
   return {
     provider: "claude",
@@ -72,17 +96,31 @@ function parseClaudeRecord(parsed: unknown): UsageRecord | null {
     model,
     sessionId: typeof record["sessionId"] === "string" ? record["sessionId"] : "",
     totals: {
-      uncachedInputTokens: tokenCount(usageRecord["input_tokens"]),
-      cachedInputTokens: tokenCount(usageRecord["cache_read_input_tokens"]),
-      cacheCreationTokens: tokenCount(usageRecord["cache_creation_input_tokens"]),
-      outputTokens: tokenCount(usageRecord["output_tokens"]),
-      // Anthropic folds thinking tokens into output and does not break them out.
-      reasoningTokens: 0,
+      // The estimate covers the whole prompt. Proxied requests that report
+      // usage read about 96% of it from cache, so counting it as uncached
+      // would bill a guess at full price.
+      uncachedInputTokens: provisional ? 0 : inputTokens,
+      cachedInputTokens: provisional
+        ? inputTokens
+        : tokenCount(usageRecord["cache_read_input_tokens"]),
+      cacheCreationTokens,
+      outputTokens,
+      // Thinking is billed as output; Claude Code breaks it out on completion.
+      reasoningTokens: Math.min(
+        outputTokens,
+        tokenCount(nested(usageRecord["output_tokens_details"])["thinking_tokens"]),
+      ),
     },
+    ...(oneHourCacheCreationTokens > 0 ? { oneHourCacheCreationTokens } : {}),
     reportedCostUsd: typeof cost === "number" && Number.isFinite(cost) ? cost : null,
     speed: usageRecord["speed"] === "fast" ? "fast" : "standard",
     dedupeKey,
+    ...(provisional ? { provisional: true as const } : {}),
   };
+}
+
+function nested(value: unknown): Record<string, unknown> {
+  return typeof value === "object" && value !== null ? (value as Record<string, unknown>) : {};
 }
 
 const orEmpty = (record: UsageRecord | null): readonly UsageRecord[] =>

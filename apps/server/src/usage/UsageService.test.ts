@@ -15,6 +15,7 @@ import {
   ProviderInstanceId,
   UsageDay,
   type UsageSource,
+  type UsageSummary,
   type UsageSummaryInput,
 } from "@t3tools/contracts";
 import { assert, describe, it } from "@effect/vitest";
@@ -44,7 +45,7 @@ import * as AntigravityUsage from "../provider/Drivers/AntigravityUsage.ts";
 import * as ProviderHostLive from "../provider/ProviderHostLive.ts";
 import { totalTokens, type UsageRecord } from "@t3tools/provider-core/server/usage";
 import * as UsageService from "./UsageService.ts";
-import { decodeScanCache, encodeScanCache } from "./usageScanCache.ts";
+import { decodeScanCache, encodeScanCache, SCAN_CACHE_FILE_NAME } from "./usageScanCache.ts";
 import { TEST_FORMAT_MAP, TEST_FORMATS } from "./usageTestFormats.ts";
 import { readTranscriptRecords } from "./usageTranscriptReader.ts";
 
@@ -115,7 +116,7 @@ it.layer(NodeServices.layer)("UsageService", (it) => {
         const claudeTranscriptDir = path.join(claudeHome, "projects");
         const codexTranscriptDir = path.join(codexHome, "sessions");
         const claudeTranscriptPath = path.join(claudeTranscriptDir, "session.jsonl");
-        const scanCachePath = path.join(config.stateDir, "usage-scan-cache-v6.json");
+        const scanCachePath = path.join(config.stateDir, SCAN_CACHE_FILE_NAME);
         yield* fileSystem.makeDirectory(claudeTranscriptDir, { recursive: true });
         yield* fileSystem.makeDirectory(codexTranscriptDir, { recursive: true });
         const canonicalClaudeTranscriptDir = yield* Effect.promise(() =>
@@ -1910,6 +1911,81 @@ describe("UsageService", () => {
     }).pipe(Effect.scoped),
   );
 
+  it.live("keeps a proxied message's real usage over its placeholder estimate", () =>
+    Effect.gen(function* () {
+      const { transcript, settings, home } = yield* setup;
+      // CLIProxyAPI streams Codex usage only at completion, so Claude Code's
+      // earlier block records carry a prompt estimate with no cache fields.
+      const line = (id: string, usage: Record<string, number>) =>
+        JSON.stringify({
+          type: "assistant",
+          timestamp: "2026-08-01T10:00:00Z",
+          sessionId: "session-1",
+          message: { id, model: "gpt-6.1-sol", usage },
+        });
+      const placeholder = (id: string, input: number) =>
+        line(id, { input_tokens: input, output_tokens: 0 });
+      const final = (id: string, input: number, cacheRead: number, output: number) =>
+        line(id, {
+          input_tokens: input,
+          cache_creation_input_tokens: 0,
+          cache_read_input_tokens: cacheRead,
+          output_tokens: output,
+        });
+      const totals = (summary: UsageSummary) =>
+        summary.buckets.reduce(
+          (sum, { totals, records }) => ({
+            uncached: sum.uncached + totals.uncachedInputTokens,
+            cached: sum.cached + totals.cachedInputTokens,
+            output: sum.output + totals.outputTokens,
+            records: sum.records + records,
+          }),
+          { uncached: 0, cached: 0, output: 0, records: 0 },
+        );
+      // A resumed session copies resp_4's placeholder into another file.
+      const copy = NodePath.join(NodePath.dirname(transcript), "copy.jsonl");
+      yield* Effect.promise(() =>
+        Promise.all([
+          NodeFSP.writeFile(transcript, `${placeholder("resp_1", 1000)}\n`),
+          NodeFSP.writeFile(copy, `${placeholder("resp_4", 4000)}\n`),
+        ]),
+      );
+
+      const service = yield* UsageService.make.pipe(
+        Effect.provide(layerService({ prefix: "usage-service-provisional-test", home, settings })),
+      );
+
+      // Placeholders alone count as cache reads, never as uncached input.
+      assert.deepStrictEqual(totals(yield* service.readSummary(WINDOW)), {
+        uncached: 0,
+        cached: 5000,
+        output: 0,
+        records: 2,
+      });
+
+      // The finals land in a later, resumed read; resp_3's in the unfinished tail.
+      yield* Effect.promise(() =>
+        NodeFSP.appendFile(
+          transcript,
+          [
+            final("resp_1", 30, 900, 12),
+            placeholder("resp_2", 2000),
+            final("resp_4", 40, 3600, 7),
+            placeholder("resp_3", 3000),
+            final("resp_3", 50, 2700, 9),
+          ].join("\n"),
+        ),
+      );
+      const expected = { uncached: 120, cached: 9200, output: 28, records: 4 };
+      assert.deepStrictEqual(totals(yield* service.readSummary(WINDOW)), expected);
+
+      // Once the tail line completes, the resumed parse keeps the same records.
+      yield* Effect.promise(() => NodeFSP.appendFile(transcript, "\n"));
+      assert.deepStrictEqual(totals(yield* service.readSummary(WINDOW)), expected);
+      assert.deepStrictEqual(totals(yield* service.readSummary(WINDOW)), expected);
+    }).pipe(Effect.scoped),
+  );
+
   it.live("counts malformed completed and tail records with both transcript readers", () =>
     Effect.gen(function* () {
       const { transcript } = yield* setup;
@@ -1990,7 +2066,7 @@ describe("UsageService", () => {
       yield* Effect.promise(() => NodeFSP.writeFile(transcript, content));
       yield* Effect.gen(function* () {
         const config = yield* ServerConfig.ServerConfig;
-        const cachePath = NodePath.join(config.stateDir, "usage-scan-cache-v6.json");
+        const cachePath = NodePath.join(config.stateDir, SCAN_CACHE_FILE_NAME);
         const legacyPath = NodePath.join(config.stateDir, "usage-scan-cache.json");
         const service = yield* UsageService.make;
         const first = yield* service.readSummary(WINDOW);
@@ -2121,7 +2197,7 @@ describe("UsageService", () => {
           );
           yield* Effect.promise(() =>
             NodeFSP.writeFile(
-              NodePath.join(config.stateDir, "usage-scan-cache-v6.json"),
+              NodePath.join(config.stateDir, SCAN_CACHE_FILE_NAME),
               encodeUnknownJsonString({
                 ...cache,
                 sources: { [`cursor\0${authPath}`]: { dir: source, volumeId: "retained-account" } },
@@ -2258,7 +2334,7 @@ describe("UsageService", () => {
 
         yield* Effect.gen(function* () {
           const { stateDir } = yield* ServerConfig.ServerConfig;
-          const cachePath = NodePath.join(stateDir, "usage-scan-cache-v6.json");
+          const cachePath = NodePath.join(stateDir, SCAN_CACHE_FILE_NAME);
           const legacyPath = NodePath.join(stateDir, "usage-scan-cache.json");
           const first = yield* UsageService.make;
           yield* first.readSummary(WINDOW);
