@@ -180,12 +180,14 @@ export class UsageAggregator {
   add(input: UsageRecord, sourcePath?: string): boolean {
     const record = this.#mapModel(input);
     if (record.dedupeKey !== null) {
+      // A winner decides its key outright, so only keys without one (such as
+      // re-keyed shared-session copies) need the first-seen set.
       const winner = this.#options.dedupeWinners?.get(record.dedupeKey);
-      if (this.#seen.has(record.dedupeKey) || (winner !== undefined && winner !== input)) {
+      if (winner !== undefined ? winner !== input : this.#seen.has(record.dedupeKey)) {
         this.#duplicatesDropped += 1;
         return false;
       }
-      this.#seen.add(record.dedupeKey);
+      if (winner === undefined) this.#seen.add(record.dedupeKey);
     }
 
     if (

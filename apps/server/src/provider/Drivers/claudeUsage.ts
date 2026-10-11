@@ -82,9 +82,13 @@ function parseClaudeRecord(parsed: unknown): UsageRecord | null {
     cacheCreationTokens,
     tokenCount(nested(usageRecord["cache_creation"])["ephemeral_1h_input_tokens"]),
   );
-  // Claude Code fills the cache fields in once real usage arrives, so their
-  // absence with no output marks the placeholder estimate.
-  const provisional = !("cache_read_input_tokens" in usageRecord) && outputTokens === 0;
+  // Claude Code fills the cache fields in once real usage arrives, and always
+  // writes the output count, so a record with neither cache field and no
+  // output is the placeholder estimate.
+  const provisional =
+    !("cache_read_input_tokens" in usageRecord) &&
+    !("cache_creation_input_tokens" in usageRecord) &&
+    outputTokens === 0;
 
   return {
     provider: "claude",

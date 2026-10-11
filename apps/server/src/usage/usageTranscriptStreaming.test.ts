@@ -47,6 +47,8 @@ const claude = (id = "m1", output = 99) => ({
       output_tokens: output,
       cache_read_input_tokens: 20,
       cache_creation_input_tokens: 5,
+      cache_creation: { ephemeral_5m_input_tokens: 2, ephemeral_1h_input_tokens: 3 },
+      output_tokens_details: { thinking_tokens: 40 },
       speed: "fast",
     },
   },
@@ -154,7 +156,12 @@ describe("large usage records", () => {
   });
 
   it("keeps usage after large Claude tool input, including fast-mode cost and dedupe metadata", async () => {
-    const result = await scan([claude()], "claude");
+    // A proxied model's placeholder: a prompt estimate with no cache fields.
+    const placeholder = {
+      ...claude("m0"),
+      message: { ...claude("m0").message, usage: { input_tokens: 700, output_tokens: 0 } },
+    };
+    const result = await scan([claude(), placeholder], "claude");
     expect(result.records).toEqual([
       {
         provider: "claude",
@@ -166,11 +173,29 @@ describe("large usage records", () => {
           outputTokens: 99,
           cachedInputTokens: 20,
           cacheCreationTokens: 5,
-          reasoningTokens: 0,
+          reasoningTokens: 40,
         },
+        oneHourCacheCreationTokens: 3,
         reportedCostUsd: 0.25,
         speed: "fast",
         dedupeKey: "m1:r-m1",
+      },
+      {
+        provider: "claude",
+        timestampMs: Date.parse(timestamp),
+        sessionId: "s1",
+        model: "claude-fable-5",
+        totals: {
+          uncachedInputTokens: 0,
+          outputTokens: 0,
+          cachedInputTokens: 700,
+          cacheCreationTokens: 0,
+          reasoningTokens: 0,
+        },
+        reportedCostUsd: 0.25,
+        speed: "standard",
+        dedupeKey: "m0:r-m0",
+        provisional: true,
       },
     ]);
   });
