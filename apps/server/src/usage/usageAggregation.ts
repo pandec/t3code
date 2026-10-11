@@ -94,37 +94,11 @@ export interface AggregateOptions {
   readonly resolution?: UsageResolution;
   readonly sinceTimeMs?: number;
   readonly untilTimeMs?: number;
-  /** From {@link supersededProvisionalKeys}. Provisional records under these keys are dropped. */
-  readonly supersededKeys?: ReadonlySet<string>;
-}
-
-/**
- * Dedupe keys of provisional records that a real record replaces somewhere in
- * the scan, which may be a later file. The aggregator drops those provisional
- * records, so the first real record wins regardless of file order, matching
- * `dedupeWithinFile`.
- */
-export function supersededProvisionalKeys(
-  files: readonly { readonly records: readonly UsageRecord[] }[],
-): ReadonlySet<string> {
-  // Provisional records are a small share, so collect them first rather than
-  // building a set of every key.
-  const provisional = new Set<string>();
-  for (const { records } of files) {
-    for (const record of records) {
-      if (record.provisional && record.dedupeKey !== null) provisional.add(record.dedupeKey);
-    }
-  }
-  const superseded = new Set<string>();
-  if (provisional.size === 0) return superseded;
-  for (const { records } of files) {
-    for (const { dedupeKey, provisional: isProvisional } of records) {
-      if (!isProvisional && dedupeKey !== null && provisional.has(dedupeKey)) {
-        superseded.add(dedupeKey);
-      }
-    }
-  }
-  return superseded;
+  /**
+   * From `selectDedupeWinners`. A keyed record that is not its key's winner is
+   * dropped as a duplicate.
+   */
+  readonly dedupeWinners?: ReadonlyMap<string, UsageRecord>;
 }
 
 /**
@@ -162,8 +136,8 @@ export interface AggregateResult {
  *
  * De-duplication is global across the whole scan, not per file: Claude Code
  * copies a message's records forward when a session is resumed or forked, so
- * the same `dedupeKey` legitimately appears in several transcripts. The first
- * record per key wins, unless it is provisional and `supersededKeys` lists it.
+ * the same `dedupeKey` legitimately appears in several transcripts. The
+ * record `dedupeWinners` names wins, or else the first one.
  */
 export class UsageAggregator {
   readonly #buckets = new Map<string, MutableBucket>();
@@ -206,10 +180,8 @@ export class UsageAggregator {
   add(input: UsageRecord, sourcePath?: string): boolean {
     const record = this.#mapModel(input);
     if (record.dedupeKey !== null) {
-      if (
-        this.#seen.has(record.dedupeKey) ||
-        (record.provisional === true && this.#options.supersededKeys?.has(record.dedupeKey))
-      ) {
+      const winner = this.#options.dedupeWinners?.get(record.dedupeKey);
+      if (this.#seen.has(record.dedupeKey) || (winner !== undefined && winner !== input)) {
         this.#duplicatesDropped += 1;
         return false;
       }

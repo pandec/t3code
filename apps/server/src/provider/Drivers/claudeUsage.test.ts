@@ -102,6 +102,33 @@ describe("parseClaudeLine", () => {
     expect(line({ input_tokens: 500, output_tokens: 20 })?.provisional).toBeUndefined();
   });
 
+  it("reads thinking tokens and one-hour cache writes", () => {
+    const record = parseClaudeLine(
+      JSON.stringify({
+        type: "assistant",
+        timestamp: "2026-10-10T12:00:00.000Z",
+        message: {
+          id: "msg_3",
+          model: "claude-opus-5-5",
+          usage: {
+            input_tokens: 4,
+            cache_creation_input_tokens: 6927,
+            cache_read_input_tokens: 222513,
+            cache_creation: { ephemeral_5m_input_tokens: 927, ephemeral_1h_input_tokens: 6000 },
+            output_tokens: 526,
+            output_tokens_details: { thinking_tokens: 106 },
+          },
+        },
+      }),
+    );
+
+    expect(record?.totals.reasoningTokens).toBe(106);
+    expect(record?.oneHourCacheCreationTokens).toBe(6000);
+    expect(parseClaudeLine(claudeLine({ messageId: "m", contentType: "text" }))).not.toHaveProperty(
+      "oneHourCacheCreationTokens",
+    );
+  });
+
   it("ignores records that are not assistant messages", () => {
     expect(parseClaudeLine(JSON.stringify({ type: "user", message: {} }))).toBeNull();
     expect(parseClaudeLine("not json")).toBeNull();

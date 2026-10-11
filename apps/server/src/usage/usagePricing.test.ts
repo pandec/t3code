@@ -55,6 +55,36 @@ describe("usage pricing", () => {
     expect(cacheSavingsUsd(table, record("example-model"), overrides)).toBe(1.5);
   });
 
+  it("prices one-hour cache writes at their own rate, also in fast mode", () => {
+    const table = parseRateTable({
+      "claude-opus-5-5": {
+        input_cost_per_token: 4e-6,
+        output_cost_per_token: 20e-6,
+        cache_read_input_token_cost: 0.2e-6,
+        cache_creation_input_token_cost: 5e-6,
+        cache_creation_input_token_cost_above_1hr: 8e-6,
+        provider_specific_entry: { fast: 2 },
+      },
+      // Without a one-hour rate, one-hour writes bill at the default write rate.
+      "no-hour-rate": rate(4e-6),
+    });
+    const writes = (model: string, speed: UsageSpeed = "standard") => ({
+      ...record(model, null, speed),
+      totals: { ...totals, uncachedInputTokens: 0, cachedInputTokens: 0, outputTokens: 0 },
+      oneHourCacheCreationTokens: 250_000,
+    });
+
+    // 750k five-minute writes at $5/M plus 250k one-hour writes at $8/M.
+    expect(priceUsage(table, writes("claude-opus-5-5")).categoryCostUsd?.cacheWrite).toBeCloseTo(
+      5.75,
+    );
+    expect(priceUsage(table, writes("claude-opus-5-5", "fast"))).toMatchObject({
+      costUsd: expect.closeTo(11.5),
+      speedPremiumUsd: expect.closeTo(5.75),
+    });
+    expect(priceUsage(table, writes("no-hour-rate")).costUsd).toBeCloseTo(4);
+  });
+
   it("prices Cursor cache savings at the base model rate", () => {
     const table = parseRateTable({
       "claude-fable-5-1": rate(10e-6, 1e-6),

@@ -187,12 +187,15 @@ describe("scan cache round trip", () => {
     expect(migrated.get("/codex.jsonl")).toEqual(original.get("/codex.jsonl"));
   });
 
-  it("round-trips provisional records", () => {
+  it("round-trips provisional records and one-hour cache writes", () => {
     const provisional = record({
       totals: { ...record().totals, uncachedInputTokens: 0, outputTokens: 0 },
       provisional: true,
     });
-    const original = cacheWith([["/claude.jsonl", 100, [provisional, record({ dedupeKey: "b" })]]]);
+    const oneHour = record({ dedupeKey: "b", oneHourCacheCreationTokens: 7 });
+    const original = cacheWith([
+      ["/claude.jsonl", 100, [provisional, oneHour, record({ dedupeKey: "c" })]],
+    ]);
 
     expect(decodeScanCache(encodeScanCache(original), TEST_FORMAT_MAP)).toEqual(original);
   });
@@ -537,15 +540,26 @@ describe("pruneScanCache", () => {
 });
 
 describe("dedupeWithinFile", () => {
-  it("keeps the first record per dedupe key", () => {
+  it("keeps a Claude message's completed record, at its first position", () => {
+    // Native records repeat the input split, but only the last has full output.
     const kept = dedupeWithinFile([
-      record({ totals: { ...record().totals, outputTokens: 1 } }),
-      record({ totals: { ...record().totals, outputTokens: 999 } }),
+      record({ totals: { ...record().totals, outputTokens: 6 } }),
       record({ dedupeKey: "msg_2:" }),
+      record({ totals: { ...record().totals, outputTokens: 999 }, speed: "fast" }),
+      record({ totals: { ...record().totals, outputTokens: 6 } }),
     ]);
 
-    expect(kept).toHaveLength(2);
-    expect(kept[0]?.totals.outputTokens).toBe(1);
+    expect(kept.map((r) => [r.dedupeKey, r.totals.outputTokens, r.speed])).toEqual([
+      ["msg_1:", 999, "fast"],
+      ["msg_2:", 50, "standard"],
+    ]);
+  });
+
+  it("keeps the first record per dedupe key for other providers", () => {
+    const grok = (outputTokens: number) =>
+      record({ provider: "grok", totals: { ...record().totals, outputTokens } });
+
+    expect(dedupeWithinFile([grok(1), grok(999)]).map((r) => r.totals.outputTokens)).toEqual([1]);
   });
 
   it("replaces a provisional record with real usage, at its position", () => {

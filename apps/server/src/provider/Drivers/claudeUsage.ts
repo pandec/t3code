@@ -25,15 +25,17 @@ import { resolveClaudeConfigDirPath } from "./ClaudeHome.ts";
  * Claude Code writes one record per assistant *content block*, each carrying
  * the parent message's `usage` as known when the block was written. Summing
  * them overcounts by roughly 2.4x on a real workload, so the caller keeps one
- * record per `dedupeKey`.
+ * record per `dedupeKey`: the one with the most output (see
+ * `supersedesUsageRecord`).
  *
  * Anthropic reports the input and cache split at message start, so native
- * records already carry it. A model proxied through an Anthropic-compatible
- * gateway such as CLIProxyAPI reports usage only when the response completes.
- * Until then, Claude Code writes its own prompt-size estimate as `input_tokens`
- * with zero output and no cache fields. Only a record written after the
- * completion has the real usage, and roughly one message in five never gets
- * one, even though the request completed.
+ * records all carry it, but only a record written after the response
+ * completes has the full output, speed, and thinking tokens. A model proxied
+ * through an Anthropic-compatible gateway such as CLIProxyAPI reports nothing
+ * until completion. Before that, Claude Code writes its own prompt-size
+ * estimate as `input_tokens` with zero output and no cache fields. Roughly one
+ * proxied message in five never gets a completed record, even though the
+ * request completed.
  */
 export function parseClaudeLine(line: string): UsageRecord | null {
   let parsed: unknown;
@@ -75,6 +77,11 @@ function parseClaudeRecord(parsed: unknown): UsageRecord | null {
   const cost = record["costUSD"];
   const inputTokens = tokenCount(usageRecord["input_tokens"]);
   const outputTokens = tokenCount(usageRecord["output_tokens"]);
+  const cacheCreationTokens = tokenCount(usageRecord["cache_creation_input_tokens"]);
+  const oneHourCacheCreationTokens = Math.min(
+    cacheCreationTokens,
+    tokenCount(nested(usageRecord["cache_creation"])["ephemeral_1h_input_tokens"]),
+  );
   // Claude Code fills the cache fields in once real usage arrives, so their
   // absence with no output marks the placeholder estimate.
   const provisional = !("cache_read_input_tokens" in usageRecord) && outputTokens === 0;
@@ -92,16 +99,24 @@ function parseClaudeRecord(parsed: unknown): UsageRecord | null {
       cachedInputTokens: provisional
         ? inputTokens
         : tokenCount(usageRecord["cache_read_input_tokens"]),
-      cacheCreationTokens: tokenCount(usageRecord["cache_creation_input_tokens"]),
+      cacheCreationTokens,
       outputTokens,
-      // Anthropic folds thinking tokens into output and does not break them out.
-      reasoningTokens: 0,
+      // Thinking is billed as output; Claude Code breaks it out on completion.
+      reasoningTokens: Math.min(
+        outputTokens,
+        tokenCount(nested(usageRecord["output_tokens_details"])["thinking_tokens"]),
+      ),
     },
+    ...(oneHourCacheCreationTokens > 0 ? { oneHourCacheCreationTokens } : {}),
     reportedCostUsd: typeof cost === "number" && Number.isFinite(cost) ? cost : null,
     speed: usageRecord["speed"] === "fast" ? "fast" : "standard",
     dedupeKey,
     ...(provisional ? { provisional: true as const } : {}),
   };
+}
+
+function nested(value: unknown): Record<string, unknown> {
+  return typeof value === "object" && value !== null ? (value as Record<string, unknown>) : {};
 }
 
 const orEmpty = (record: UsageRecord | null): readonly UsageRecord[] =>

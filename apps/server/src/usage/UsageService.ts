@@ -62,11 +62,7 @@ import type {
   TranscriptUsageFormat,
   UsageRecord,
 } from "@t3tools/provider-core/server/usage";
-import {
-  resolveModelAliases,
-  supersededProvisionalKeys,
-  UsageAggregator,
-} from "./usageAggregation.ts";
+import { resolveModelAliases, UsageAggregator } from "./usageAggregation.ts";
 import { createOverrideRateTable, parseRateTable, type RateTable } from "./usagePricing.ts";
 import {
   listTranscriptFiles,
@@ -76,6 +72,7 @@ import {
 import {
   decodeScanCache,
   dedupeWithinFile,
+  selectDedupeWinners,
   LEGACY_SCAN_CACHE_FILE_NAMES,
   makeScanCacheWriter,
   pruneScanCache,
@@ -1018,7 +1015,7 @@ export const make = Effect.gen(function* () {
       rates,
       priceOverrides: createOverrideRateTable(settings.usagePriceOverrides),
       modelAliases: resolveModelAliases(settings.usageModelAliases),
-      supersededKeys: supersededProvisionalKeys(allFiles),
+      dedupeWinners: selectDedupeWinners(allFiles),
     });
 
     for (const [

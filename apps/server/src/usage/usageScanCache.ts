@@ -33,8 +33,9 @@ import { GUARD_LENGTH, type TranscriptParsePosition } from "./usageTranscriptRea
 // v5 was used by both a third time: the fork's adds fast mode and `rateModel`
 // to its v4, upstream's replaces fast mode with Codex service tiers.
 // v6 carries all of it.
-// v7 marks provisional Claude records. v6 Claude entries kept a message's
-// placeholder estimate over its real usage, so they re-parse.
+// v7 keeps each Claude message's completed record, marks provisional ones,
+// and records one-hour cache writes. v6 Claude entries kept a message's first
+// record, so they re-parse.
 // `decodeScanCache` migrates every v4 to v6 layout.
 const USAGE_SCAN_CACHE_VERSION = 7 as const;
 const OLDEST_MIGRATED_VERSION = 4;
@@ -98,8 +99,9 @@ type SerializedRecord = readonly [
   reportedCostUsd: number | null,
   speed: number,
   rateModelIndex: number | null,
-  /** `1` for a provisional record. Written only then, so most rows omit it. */
-  provisional?: 1,
+  /** `1` for a provisional record. Omitted with the next column when both are unset. */
+  provisional?: 0 | 1,
+  oneHourCacheCreationTokens?: number,
 ];
 
 interface SerializedFile {
@@ -167,7 +169,9 @@ function serializeFile(entry: CachedFile, tables: InternTables): SerializedFile 
         ? null
         : intern(tables.models, tables.modelIndex, record.rateModel),
     ];
-    if (record.provisional) row.push(1);
+    const oneHour = record.oneHourCacheCreationTokens ?? 0;
+    if (record.provisional || oneHour > 0) row.push(record.provisional ? 1 : 0);
+    if (oneHour > 0) row.push(oneHour);
     return row;
   };
   return {
@@ -279,7 +283,7 @@ const ROW_LENGTH: Record<EntryLayout, number> = {
  * but most must re-parse while their file still exists: upstream layouts never
  * counted malformed records, fork v4 predates fast mode, only v6+ and
  * upstream v5 Codex entries know their service tier, and only v7 Claude
- * entries keep a message's real usage over its placeholder. Those carry
+ * entries keep a message's completed record. Those carry
  * `requiresReparse` until a full parse replaces them.
  *
  * Anything malformed yields an empty cache rather than an error: a corrupt
@@ -340,6 +344,7 @@ export function decodeScanCache(
         speedIndex,
         rateModelIndex,
         provisional,
+        oneHourCacheCreationTokens,
       ] = row as SerializedRecord;
 
       // Fork v4 predates fast mode. A legacy `fast` flag (0 or 1) is the
@@ -373,7 +378,8 @@ export function decodeScanCache(
         !Number.isFinite(cacheCreation) ||
         !Number.isFinite(output) ||
         !Number.isFinite(reasoning) ||
-        speed === undefined
+        speed === undefined ||
+        (oneHourCacheCreationTokens !== undefined && !isCount(oneHourCacheCreationTokens))
       ) {
         return null;
       }
@@ -395,6 +401,9 @@ export function decodeScanCache(
         speed,
         dedupeKey: typeof dedupeKey === "string" ? dedupeKey : null,
         ...(layout === "current" && provisional === 1 ? { provisional: true as const } : {}),
+        ...(layout === "current" && oneHourCacheCreationTokens
+          ? { oneHourCacheCreationTokens }
+          : {}),
       });
     }
     return records;
@@ -436,7 +445,7 @@ export function decodeScanCache(
       layout === "forkV4" ||
       // Fork v5 Codex state has no service tier, so its records all priced standard.
       (layout === "forkV5" && entry.p === "codex") ||
-      // Claude entries before v7 kept placeholder estimates over real usage.
+      // Claude entries before v7 kept each message's first, incomplete record.
       (layout !== "current" && entry.p === "claude");
     // A migrated position is never resumed: a full parse replaces the entry.
     const migrated = layout !== "current" && requiresReparse;
@@ -503,11 +512,16 @@ export function pruneScanCache(cache: ScanCache, retentionCutoffMs: number): num
 
 /**
  * Whether `candidate` should replace `kept`, an earlier record with the same
- * dedupe key. Real usage replaces a provisional estimate; otherwise the first
- * record wins, as in ccusage.
+ * dedupe key. Real usage replaces a provisional estimate. Claude Code writes a
+ * message's records as growing snapshots, so its record with the most output
+ * is the completed one. Otherwise the first record wins, as in ccusage.
  */
 export function supersedesUsageRecord(candidate: UsageRecord, kept: UsageRecord): boolean {
-  return kept.provisional === true && candidate.provisional !== true;
+  const keptProvisional = kept.provisional === true;
+  if (keptProvisional !== (candidate.provisional === true)) return keptProvisional;
+  return (
+    candidate.provider === "claude" && candidate.totals.outputTokens > kept.totals.outputTokens
+  );
 }
 
 /**
@@ -531,4 +545,25 @@ export function dedupeWithinFile(records: readonly UsageRecord[]): readonly Usag
     }
   }
   return kept;
+}
+
+/**
+ * The record each dedupe key keeps across a whole scan, by the same rule as
+ * `dedupeWithinFile`. A resumed or forked Claude session copies records into
+ * another transcript, so the completed record may sit in a later file.
+ */
+export function selectDedupeWinners(
+  files: readonly { readonly records: readonly UsageRecord[] }[],
+): ReadonlyMap<string, UsageRecord> {
+  const winners = new Map<string, UsageRecord>();
+  for (const { records } of files) {
+    for (const record of records) {
+      if (record.dedupeKey === null) continue;
+      const kept = winners.get(record.dedupeKey);
+      if (kept === undefined || supersedesUsageRecord(record, kept)) {
+        winners.set(record.dedupeKey, record);
+      }
+    }
+  }
+  return winners;
 }

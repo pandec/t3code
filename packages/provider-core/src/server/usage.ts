@@ -38,6 +38,11 @@ export interface UsageRecord {
   readonly rateModel?: string;
   readonly sessionId: string;
   readonly totals: UsageTokenTotals;
+  /**
+   * The part of `totals.cacheCreationTokens` written to a one-hour cache,
+   * which Anthropic bills at a higher rate than the five-minute default.
+   */
+  readonly oneHourCacheCreationTokens?: number;
   readonly reportedCostUsd: number | null;
   /** Only Claude Code and Codex record a speed; other providers are `standard`. */
   readonly speed: UsageSpeed;

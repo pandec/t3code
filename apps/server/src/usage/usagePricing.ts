@@ -11,7 +11,6 @@ import type {
   UsageCategoryCost,
   UsageCostSource,
   UsageModelPriceOverride,
-  UsageTokenTotals,
 } from "@t3tools/contracts";
 
 import type { UsageRecord, UsageSpeed } from "@t3tools/provider-core/server/usage";
@@ -22,6 +21,8 @@ export interface TokenRates {
   readonly outputCostPerToken: number;
   readonly cacheReadCostPerToken: number;
   readonly cacheCreationCostPerToken: number;
+  /** Anthropic bills one-hour cache writes above the five-minute default. */
+  readonly oneHourCacheCreationCostPerToken: number;
 }
 
 /**
@@ -61,6 +62,8 @@ export function createOverrideRateTable(
           (prices.cacheReadCostPerMillionTokens ?? prices.inputCostPerMillionTokens) / 1_000_000,
         cacheCreationCostPerToken:
           (prices.cacheWriteCostPerMillionTokens ?? prices.inputCostPerMillionTokens) / 1_000_000,
+        oneHourCacheCreationCostPerToken:
+          (prices.cacheWriteCostPerMillionTokens ?? prices.inputCostPerMillionTokens) / 1_000_000,
         fast: null,
         ultrafast: null,
       },
@@ -82,7 +85,8 @@ function finiteNumber(value: unknown): number | null {
  * Anthropic bills cache reads at a discount and cache writes at a premium.
  * When the standard tier omits them, cached input is priced as plain input
  * rather than as free. A faster tier that omits them keeps the standard tier's
- * cache-to-input ratio.
+ * cache-to-input ratio. Without a one-hour write rate, one-hour writes bill at
+ * the default write rate.
  */
 function readTokenRates(
   entry: LiteLlmEntry,
@@ -92,18 +96,32 @@ function readTokenRates(
   const input = finiteNumber(entry[`input_cost_per_token${suffix}`]);
   const output = finiteNumber(entry[`output_cost_per_token${suffix}`]);
   if (input === null || output === null) return null;
-  const cacheRate = (name: string, field: "cacheReadCostPerToken" | "cacheCreationCostPerToken") =>
+  const cacheRate = (
+    name: string,
+    field:
+      | "cacheReadCostPerToken"
+      | "cacheCreationCostPerToken"
+      | "oneHourCacheCreationCostPerToken",
+    fallback: number,
+  ) =>
     finiteNumber(entry[`${name}${suffix}`]) ??
     (standard !== undefined && standard.inputCostPerToken > 0
       ? (standard[field] / standard.inputCostPerToken) * input
-      : input);
+      : fallback);
+  const cacheCreation = cacheRate(
+    "cache_creation_input_token_cost",
+    "cacheCreationCostPerToken",
+    input,
+  );
   return {
     inputCostPerToken: input,
     outputCostPerToken: output,
-    cacheReadCostPerToken: cacheRate("cache_read_input_token_cost", "cacheReadCostPerToken"),
-    cacheCreationCostPerToken: cacheRate(
-      "cache_creation_input_token_cost",
-      "cacheCreationCostPerToken",
+    cacheReadCostPerToken: cacheRate("cache_read_input_token_cost", "cacheReadCostPerToken", input),
+    cacheCreationCostPerToken: cacheCreation,
+    oneHourCacheCreationCostPerToken: cacheRate(
+      "cache_creation_input_token_cost_above_1hr",
+      "oneHourCacheCreationCostPerToken",
+      cacheCreation,
     ),
   };
 }
@@ -114,6 +132,7 @@ function scaleTokenRates(rates: TokenRates, multiple: number): TokenRates {
     outputCostPerToken: rates.outputCostPerToken * multiple,
     cacheReadCostPerToken: rates.cacheReadCostPerToken * multiple,
     cacheCreationCostPerToken: rates.cacheCreationCostPerToken * multiple,
+    oneHourCacheCreationCostPerToken: rates.oneHourCacheCreationCostPerToken * multiple,
   };
 }
 
@@ -183,7 +202,8 @@ function sameTokenRates(a: TokenRates | null, b: TokenRates | null): boolean {
     a.inputCostPerToken === b.inputCostPerToken &&
     a.outputCostPerToken === b.outputCostPerToken &&
     a.cacheReadCostPerToken === b.cacheReadCostPerToken &&
-    a.cacheCreationCostPerToken === b.cacheCreationCostPerToken
+    a.cacheCreationCostPerToken === b.cacheCreationCostPerToken &&
+    a.oneHourCacheCreationCostPerToken === b.oneHourCacheCreationCostPerToken
   );
 }
 
@@ -265,7 +285,7 @@ function resolveRate(table: RateTable, model: string): ModelRate | null {
 /** The parts of a transcript record that decide its price. */
 export type PricedRecord = Pick<
   UsageRecord,
-  "model" | "rateModel" | "totals" | "speed" | "reportedCostUsd"
+  "model" | "rateModel" | "totals" | "oneHourCacheCreationTokens" | "speed" | "reportedCostUsd"
 >;
 
 export interface PricedUsage {
@@ -277,11 +297,15 @@ export interface PricedUsage {
   readonly speedPremiumUsd: number;
 }
 
-function costByCategory(totals: UsageTokenTotals, rates: TokenRates): UsageCategoryCost {
+function costByCategory(record: PricedRecord, rates: TokenRates): UsageCategoryCost {
+  const { totals } = record;
+  const oneHour = record.oneHourCacheCreationTokens ?? 0;
   return {
     input: totals.uncachedInputTokens * rates.inputCostPerToken,
     cacheRead: totals.cachedInputTokens * rates.cacheReadCostPerToken,
-    cacheWrite: totals.cacheCreationTokens * rates.cacheCreationCostPerToken,
+    cacheWrite:
+      (totals.cacheCreationTokens - oneHour) * rates.cacheCreationCostPerToken +
+      oneHour * rates.oneHourCacheCreationCostPerToken,
     output: totals.outputTokens * rates.outputCostPerToken,
   };
 }
@@ -304,7 +328,7 @@ export function priceUsage(
   record: PricedRecord,
   overrides?: RateTable,
 ): PricedUsage {
-  const { model, totals, reportedCostUsd } = record;
+  const { model, reportedCostUsd } = record;
   const override = overrides?.get(model.trim());
   const reported =
     override === undefined && reportedCostUsd !== null && Number.isFinite(reportedCostUsd)
@@ -321,11 +345,11 @@ export function priceUsage(
     return reported === null ? unsplit(0, "unpriced") : unsplit(reported, "providerReported");
   }
 
-  const listCost = costByCategory(totals, ratesAt(rate, record.speed));
+  const listCost = costByCategory(record, ratesAt(rate, record.speed));
   const listCostUsd = sumCategories(listCost);
   if (reported !== null && listCostUsd <= 0) return unsplit(reported, "providerReported");
   const premiumUsd =
-    record.speed === "standard" ? 0 : listCostUsd - sumCategories(costByCategory(totals, rate));
+    record.speed === "standard" ? 0 : listCostUsd - sumCategories(costByCategory(record, rate));
   const scale = reported === null ? 1 : reported / listCostUsd;
   return {
     costUsd: reported ?? listCostUsd,

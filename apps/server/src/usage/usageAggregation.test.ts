@@ -1,10 +1,7 @@
 import { describe, expect, it } from "@effect/vitest";
 
-import {
-  resolveModelAliases,
-  supersededProvisionalKeys,
-  UsageAggregator,
-} from "./usageAggregation.ts";
+import { resolveModelAliases, UsageAggregator } from "./usageAggregation.ts";
+import { selectDedupeWinners } from "./usageScanCache.ts";
 import type { RateTable } from "./usagePricing.ts";
 import type { UsageRecord } from "@t3tools/provider-core/server/usage";
 
@@ -16,11 +13,13 @@ const rates: RateTable = new Map([
       outputCostPerToken: 5e-5,
       cacheReadCostPerToken: 1e-6,
       cacheCreationCostPerToken: 1.25e-5,
+      oneHourCacheCreationCostPerToken: 2e-5,
       fast: {
         inputCostPerToken: 2e-5,
         outputCostPerToken: 1e-4,
         cacheReadCostPerToken: 2e-6,
         cacheCreationCostPerToken: 2.5e-5,
+        oneHourCacheCreationCostPerToken: 4e-5,
       },
       ultrafast: null,
     },
@@ -117,7 +116,7 @@ describe("UsageAggregator", () => {
     expect(result.buckets[0]?.totals.outputTokens).toBe(50);
   });
 
-  it("lets real usage in a later file replace a provisional record", () => {
+  it("keeps each key's completed record when it sits in a later file", () => {
     const placeholder = record({
       dedupeKey: "resp_1:",
       totals: { ...record().totals, uncachedInputTokens: 0, outputTokens: 0 },
@@ -125,25 +124,37 @@ describe("UsageAggregator", () => {
     });
     const final = record({ dedupeKey: "resp_1:" });
     const unmatched = record({ dedupeKey: "resp_2:", provisional: true });
-    const files = [{ records: [placeholder, unmatched] }, { records: [final] }];
-    const supersededKeys = supersededProvisionalKeys(files);
-    expect([...supersededKeys]).toEqual(["resp_1:"]);
+    // A native message copied forward before it completed.
+    const snapshot = record({
+      dedupeKey: "msg_1:",
+      totals: { ...record().totals, outputTokens: 6 },
+    });
+    const completed = record({
+      dedupeKey: "msg_1:",
+      totals: { ...record().totals, outputTokens: 500 },
+    });
+    const files = [
+      { records: [placeholder, unmatched, snapshot] },
+      { records: [final, completed] },
+    ];
 
     const aggregator = new UsageAggregator({
       timeZone: "UTC",
       sinceDay: "2026-08-01",
       untilDay: "2026-08-31",
       rates,
-      supersededKeys,
+      dedupeWinners: selectDedupeWinners(files),
     });
     expect(files.flatMap((file) => file.records.map((r) => aggregator.add(r)))).toEqual([
+      false,
+      true,
       false,
       true,
       true,
     ]);
     const result = aggregator.finish();
-    expect(result.duplicatesDropped).toBe(1);
-    expect(result.buckets[0]?.totals.outputTokens).toBe(100);
+    expect(result.duplicatesDropped).toBe(2);
+    expect(result.buckets[0]?.totals.outputTokens).toBe(50 + 50 + 500);
   });
 
   it("still sums records that carry no dedupe key", () => {
