@@ -22,10 +22,18 @@ import { resolveClaudeConfigDirPath } from "./ClaudeHome.ts";
 /**
  * Parses one line of a Claude Code transcript.
  *
- * T3 Code writes one record per assistant *content block*, and every one of
- * those records repeats the same complete `usage` object for the parent
- * message. Summing them overcounts by roughly 2.4x on a real workload, so the
- * caller must drop repeats by `dedupeKey` and keep the first.
+ * Claude Code writes one record per assistant *content block*, each carrying
+ * the parent message's `usage` as known when the block was written. Summing
+ * them overcounts by roughly 2.4x on a real workload, so the caller keeps one
+ * record per `dedupeKey`.
+ *
+ * Anthropic reports the input and cache split at message start, so native
+ * records already carry it. A model proxied through an Anthropic-compatible
+ * gateway such as CLIProxyAPI reports usage only when the response completes.
+ * Until then, Claude Code writes its own prompt-size estimate as `input_tokens`
+ * with zero output and no cache fields. Only a record written after the
+ * completion has the real usage, and roughly one message in five never gets
+ * one, even though the request completed.
  */
 export function parseClaudeLine(line: string): UsageRecord | null {
   let parsed: unknown;
@@ -65,6 +73,11 @@ function parseClaudeRecord(parsed: unknown): UsageRecord | null {
     messageId === null && requestId === null ? null : `${messageId ?? ""}:${requestId ?? ""}`;
 
   const cost = record["costUSD"];
+  const inputTokens = tokenCount(usageRecord["input_tokens"]);
+  const outputTokens = tokenCount(usageRecord["output_tokens"]);
+  // Claude Code fills the cache fields in once real usage arrives, so their
+  // absence with no output marks the placeholder estimate.
+  const provisional = !("cache_read_input_tokens" in usageRecord) && outputTokens === 0;
 
   return {
     provider: "claude",
@@ -72,16 +85,22 @@ function parseClaudeRecord(parsed: unknown): UsageRecord | null {
     model,
     sessionId: typeof record["sessionId"] === "string" ? record["sessionId"] : "",
     totals: {
-      uncachedInputTokens: tokenCount(usageRecord["input_tokens"]),
-      cachedInputTokens: tokenCount(usageRecord["cache_read_input_tokens"]),
+      // The estimate covers the whole prompt. Proxied requests that report
+      // usage read about 96% of it from cache, so counting it as uncached
+      // would bill a guess at full price.
+      uncachedInputTokens: provisional ? 0 : inputTokens,
+      cachedInputTokens: provisional
+        ? inputTokens
+        : tokenCount(usageRecord["cache_read_input_tokens"]),
       cacheCreationTokens: tokenCount(usageRecord["cache_creation_input_tokens"]),
-      outputTokens: tokenCount(usageRecord["output_tokens"]),
+      outputTokens,
       // Anthropic folds thinking tokens into output and does not break them out.
       reasoningTokens: 0,
     },
     reportedCostUsd: typeof cost === "number" && Number.isFinite(cost) ? cost : null,
     speed: usageRecord["speed"] === "fast" ? "fast" : "standard",
     dedupeKey,
+    ...(provisional ? { provisional: true as const } : {}),
   };
 }
 

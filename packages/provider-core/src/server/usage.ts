@@ -46,6 +46,11 @@ export interface UsageRecord {
    * unique and needs no dedup.
    */
   readonly dedupeKey: string | null;
+  /**
+   * The totals are an estimate written before the provider reported real
+   * usage. A non-provisional record with the same `dedupeKey` replaces it.
+   */
+  readonly provisional?: true;
 }
 
 export const EMPTY_TOTALS: UsageTokenTotals = {

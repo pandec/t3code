@@ -62,7 +62,11 @@ import type {
   TranscriptUsageFormat,
   UsageRecord,
 } from "@t3tools/provider-core/server/usage";
-import { resolveModelAliases, UsageAggregator } from "./usageAggregation.ts";
+import {
+  resolveModelAliases,
+  supersededProvisionalKeys,
+  UsageAggregator,
+} from "./usageAggregation.ts";
 import { createOverrideRateTable, parseRateTable, type RateTable } from "./usagePricing.ts";
 import {
   listTranscriptFiles,
@@ -605,15 +609,18 @@ export const make = Effect.gen(function* () {
       }
 
       // Stored already de-duplicated within the file, which is 99% of all
-      // duplicates. The aggregator still runs the cross-file dedupe pass. One
-      // seen set spans the cached base, the new lines, and the tail so a
-      // resumed parse dedupes exactly like a full one. The previous tail is not
-      // part of the base because the reader deliberately re-reads it.
+      // duplicates. The aggregator still runs the cross-file dedupe pass. The
+      // cached base, the new lines, and the tail dedupe as one sequence so a
+      // resumed parse keeps the same record per key as a full one. The
+      // previous tail is not part of the base because the reader deliberately
+      // re-reads it. A tail record that replaced an earlier one stays a tail
+      // record, so the next resumed parse reads it again.
       const resumedFromCache = parsed.resumed && cached !== undefined;
       const baseRecords = resumedFromCache ? cached.records : [];
-      const seen = new Set<string>();
-      const records = dedupeWithinFile([...baseRecords, ...parsed.records], seen);
-      const tailRecords = dedupeWithinFile(parsed.tailRecords, seen);
+      const tail = new Set(parsed.tailRecords);
+      const kept = dedupeWithinFile([...baseRecords, ...parsed.records, ...parsed.tailRecords]);
+      const records = tail.size === 0 ? kept : kept.filter((record) => !tail.has(record));
+      const tailRecords = tail.size === 0 ? [] : kept.filter((record) => tail.has(record));
       const malformedRecords =
         (resumedFromCache ? cached.malformedRecords : 0) + parsed.malformedRecords;
 
@@ -963,17 +970,6 @@ export const make = Effect.gen(function* () {
       { concurrency: 2 },
     );
 
-    const aggregator = new UsageAggregator({
-      timeZone: input.timeZone,
-      sinceDay: input.sinceDay,
-      untilDay: input.untilDay,
-      resolution: input.resolution ?? "day",
-      ...hourlyWindow,
-      rates,
-      priceOverrides: createOverrideRateTable(settings.usagePriceOverrides),
-      modelAliases: resolveModelAliases(settings.usageModelAliases),
-    });
-
     const sources: UsageSource[] = [];
     // Lexically distinct configured paths can still resolve to one directory
     // through symlinks. Keep only one source per provider and filesystem root.
@@ -1011,7 +1007,19 @@ export const make = Effect.gen(function* () {
       }
       return { files: retainedFiles, retainedMissingFiles };
     });
-    const crossFileSessions = sharedSessions(filesByDir.flatMap((dir) => dir?.files ?? []));
+    const allFiles = filesByDir.flatMap((dir) => dir?.files ?? []);
+    const crossFileSessions = sharedSessions(allFiles);
+    const aggregator = new UsageAggregator({
+      timeZone: input.timeZone,
+      sinceDay: input.sinceDay,
+      untilDay: input.untilDay,
+      resolution: input.resolution ?? "day",
+      ...hourlyWindow,
+      rates,
+      priceOverrides: createOverrideRateTable(settings.usagePriceOverrides),
+      modelAliases: resolveModelAliases(settings.usageModelAliases),
+      supersededKeys: supersededProvisionalKeys(allFiles),
+    });
 
     for (const [
       index,

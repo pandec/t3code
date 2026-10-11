@@ -1,6 +1,10 @@
 import { describe, expect, it } from "@effect/vitest";
 
-import { resolveModelAliases, UsageAggregator } from "./usageAggregation.ts";
+import {
+  resolveModelAliases,
+  supersededProvisionalKeys,
+  UsageAggregator,
+} from "./usageAggregation.ts";
 import type { RateTable } from "./usagePricing.ts";
 import type { UsageRecord } from "@t3tools/provider-core/server/usage";
 
@@ -111,6 +115,35 @@ describe("UsageAggregator", () => {
     expect(result.buckets).toHaveLength(1);
     expect(result.buckets[0]?.records).toBe(1);
     expect(result.buckets[0]?.totals.outputTokens).toBe(50);
+  });
+
+  it("lets real usage in a later file replace a provisional record", () => {
+    const placeholder = record({
+      dedupeKey: "resp_1:",
+      totals: { ...record().totals, uncachedInputTokens: 0, outputTokens: 0 },
+      provisional: true,
+    });
+    const final = record({ dedupeKey: "resp_1:" });
+    const unmatched = record({ dedupeKey: "resp_2:", provisional: true });
+    const files = [{ records: [placeholder, unmatched] }, { records: [final] }];
+    const supersededKeys = supersededProvisionalKeys(files);
+    expect([...supersededKeys]).toEqual(["resp_1:"]);
+
+    const aggregator = new UsageAggregator({
+      timeZone: "UTC",
+      sinceDay: "2026-08-01",
+      untilDay: "2026-08-31",
+      rates,
+      supersededKeys,
+    });
+    expect(files.flatMap((file) => file.records.map((r) => aggregator.add(r)))).toEqual([
+      false,
+      true,
+      true,
+    ]);
+    const result = aggregator.finish();
+    expect(result.duplicatesDropped).toBe(1);
+    expect(result.buckets[0]?.totals.outputTokens).toBe(100);
   });
 
   it("still sums records that carry no dedupe key", () => {
