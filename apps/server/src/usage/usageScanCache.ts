@@ -337,7 +337,11 @@ export function decodeScanCache(
               (speedIndex <= 1 || layout === "current" || layout === "upstreamV5")
             ? SPEEDS[speedIndex]
             : undefined;
-      const hasRateModel = layout === "current" || layout === "forkV5";
+      // Fork v5 and v6 rows always carry `rateModel`; upstream v4/v5 rows may append it.
+      const hasRateModel =
+        layout === "current" ||
+        layout === "forkV5" ||
+        ((layout === "upstreamV4" || layout === "upstreamV5") && row.length > ROW_LENGTH[layout]);
       const rateModel =
         hasRateModel && typeof rateModelIndex === "number" ? models[rateModelIndex] : undefined;
       if (hasRateModel && rateModelIndex !== null && rateModel === undefined) return null;

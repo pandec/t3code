@@ -11,6 +11,8 @@ import * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 
+import * as ServerSettings from "../serverSettings.ts";
+import * as ProviderSessionManager from "../orchestration-v2/ProviderSessionManager.ts";
 import * as Orchestrator from "../orchestration-v2/Orchestrator.ts";
 import * as ProviderAdapterRegistry from "../orchestration-v2/ProviderAdapterRegistry.ts";
 import * as ThreadManagementService from "../orchestration-v2/ThreadManagementService.ts";
@@ -68,15 +70,20 @@ const layer = OrchestratorMcpService.layer.pipe(
       ThreadManagementService.layer.pipe(
         Layer.provide(
           Layer.mock(Orchestrator.OrchestratorV2)({
-            getShellSnapshot: () =>
+            // Like the projection store, a project-scoped read returns only that project.
+            getShellSnapshot: (options) =>
               Effect.succeed({
                 schemaVersion: 1,
                 snapshotSequence: 1,
-                threads,
+                threads:
+                  options?.projectId === undefined
+                    ? threads
+                    : threads.filter((thread) => thread.projectId === options.projectId),
                 archivedThreads: [],
               }),
           }),
         ),
+        Layer.provide(Layer.mock(ProviderSessionManager.ProviderSessionManagerV2)({})),
       ),
       Layer.mock(ProviderRegistry.ProviderRegistry)({ getProviders: Effect.succeed([]) }),
       Layer.mock(ProviderAdapterRegistry.ProviderAdapterRegistryV2)({
@@ -85,6 +92,7 @@ const layer = OrchestratorMcpService.layer.pipe(
       Layer.mock(ProjectService.ProjectService)({}),
       Layer.mock(SecretRequests.SecretRequests)({}),
       Layer.mock(ScheduledTaskService.ScheduledTaskService)({}),
+      ServerSettings.layerTest(),
     ),
   ),
 );

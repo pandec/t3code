@@ -200,6 +200,8 @@ export function resolveSendDispatch(input: {
   running: boolean;
   dispatchMode: ComposerDispatchMode;
   steerGraceWindowMs: number;
+  /** A message sent while the thread's worktree is still being set up waits for it. */
+  queueBehindSetup?: boolean;
 }): {
   compactBeforeSend: boolean;
   turnDispatchMode: ComposerDispatchMode;
@@ -210,15 +212,17 @@ export function resolveSendDispatch(input: {
     !input.keepFullHistory &&
     !input.hasPendingOutboxSubmission &&
     input.messageText.toLowerCase() !== "/compact";
+  const queueBehindSetup = input.queueBehindSetup === true;
   const queueBehindActiveRun =
     compactBeforeSend ||
+    queueBehindSetup ||
     (input.running &&
       (input.dispatchMode === "queue" ||
         (input.steerGraceWindowMs > 0 &&
           (input.dispatchMode === "auto" || input.dispatchMode === "steer"))));
   return {
     compactBeforeSend,
-    turnDispatchMode: compactBeforeSend ? "queue" : input.dispatchMode,
+    turnDispatchMode: compactBeforeSend || queueBehindSetup ? "queue" : input.dispatchMode,
     queueBehindActiveRun,
   };
 }

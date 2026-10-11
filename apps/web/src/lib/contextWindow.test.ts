@@ -5,6 +5,7 @@ import { createModelCapabilities, createModelSelection } from "@t3tools/shared/m
 import {
   deriveLatestContextWindowSnapshot,
   formatContextWindowTokens,
+  latestProviderTurnTokenUsage,
   resolveKnownContextWindowMaxTokens,
 } from "./contextWindow";
 
@@ -122,5 +123,20 @@ describe("live provider-turn usage (#8144)", () => {
     });
     expect(snapshot?.maxTokens).toBeNull();
     expect(snapshot?.usedPercentage).toBeNull();
+  });
+});
+
+describe("latestProviderTurnTokenUsage", () => {
+  it("picks the newest report, not the last turn in snapshot order", () => {
+    const usage = (usedTokens: number, updatedAt: string) => ({
+      tokenUsage: { usedTokens, updatedAt },
+    });
+    // Snapshots sort by provider thread id, so an older thread can come last.
+    const latest = latestProviderTurnTokenUsage([
+      usage(300_000, "2026-06-20T12:00:00.000Z"),
+      {},
+      usage(90_000, "2026-06-20T09:00:00.000Z"),
+    ]);
+    expect(latest?.usedTokens).toBe(300_000);
   });
 });

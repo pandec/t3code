@@ -366,6 +366,63 @@ const make = Effect.gen(function* () {
     return false;
   });
 
+  // Whether cwd stopped being a checkout of this branch. Two small Git reads,
+  // since every worktree in a sweep is asked; statusDetailsLocal also diffs and
+  // counts.
+  const branchChanged = Effect.fn("StorageCleanup.branchChanged")(function* (
+    cwd: string,
+    branch: string | null,
+  ) {
+    const failure = (detail: string) =>
+      new GitCommandError({
+        operation: "StorageCleanup.branchChanged",
+        command: "git",
+        cwd,
+        detail,
+      });
+    // Null when cwd is not a repository, or is gone. Git's own messages are
+    // matched, so they must not be translated.
+    const read = Effect.fnUntraced(function* (args: string[], allowedExitCode?: number) {
+      const result = yield* git
+        .execute({
+          operation: "StorageCleanup.branchChanged",
+          cwd,
+          args,
+          env: { LC_ALL: "C" },
+          allowNonZeroExit: true,
+        })
+        .pipe(
+          Effect.catch((error) =>
+            Effect.flatMap(fs.exists(cwd), (exists) =>
+              exists ? Effect.fail(error) : Effect.succeed(null),
+            ),
+          ),
+        );
+      if (result === null) return null;
+      if (result.exitCode === 0 || result.exitCode === allowedExitCode) return result;
+      if (result.stderr.toLowerCase().includes("not a git repository")) return null;
+      return yield* failure(
+        result.stderr.trim().split(/\r?\n/)[0]?.slice(0, 1000) || "command failed",
+      );
+    });
+    const index = yield* read(["rev-parse", "--git-path", "index"]);
+    if (index === null) return true;
+    // Another Git process is writing to this checkout.
+    if (yield* fs.exists(`${path.resolve(cwd, index.stdout.trim())}.lock`))
+      return yield* failure(
+        "Git index is locked. Status will resume when the index lock is removed.",
+      );
+    // Exits 1 for a detached HEAD. Reads the full ref name, which is never
+    // shortened to "heads/<branch>" when a tag shares the branch name.
+    const head = yield* read(["symbolic-ref", "--quiet", "HEAD"], 1);
+    if (head === null) return true;
+    const ref = head.exitCode === 0 ? head.stdout.trim() : "";
+    const name = ref.startsWith("refs/heads/") ? ref.slice("refs/heads/".length).trim() : null;
+    // Status output writes a detached HEAD as "(detached)", so a branch named
+    // with a leading "(" has always been read as one.
+    return (name?.startsWith("(") ? null : name) !== branch;
+  });
+
   const localChangesReason = Effect.fn("StorageCleanup.localChangesReason")(function* (
     cwd: string,
     rules: WorktreeCleanupRules,
@@ -546,8 +603,7 @@ const make = Effect.gen(function* () {
         // A linked worktree has a .git file. Never remove a main checkout.
         if ((yield* fs.stat(path.join(worktreePath, ".git"))).type !== "File")
           return keep("not a linked worktree");
-        const status = yield* git.statusDetailsLocal(worktreePath);
-        if (!status.isRepo || status.branch !== thread.branch)
+        if (yield* branchChanged(worktreePath, thread.branch))
           return keep("repository or branch changed");
         const changes = yield* localChangesReason(worktreePath, settings);
         if (changes !== null) return keep(changes);
@@ -611,11 +667,10 @@ const make = Effect.gen(function* () {
                 ? "not merged"
                 : "has commits beyond the default branch",
           );
-        const bytes = yield* measureWorktree(worktreePath);
-        // Re-read after Git/host calls and size measurement so a queued turn,
-        // resumed session, new owner or pending move cancels the removal. The
-        // last check runs under a removal reservation, right before Git removes
-        // the checkout. Returns why the worktree must be kept, or null.
+        // Re-read after Git/host calls, and again after size measurement, so a queued turn,
+        // resumed session, new owner or pending move cancels the removal. The last check
+        // runs under a removal reservation, right before Git removes the checkout. Returns
+        // why the worktree must be kept, or null.
         const keepReasonNow = Effect.fn("StorageCleanup.keepReasonNow")(function* () {
           const latestSnapshot = yield* readThreads();
           if (yield* containsProjectRoot(worktreePath, [project, ...latestSnapshot.projects]))
@@ -653,10 +708,14 @@ const make = Effect.gen(function* () {
             ? null
             : "thread activity or shared worktree changed since check";
         });
-        const changedReason = yield* keepReasonNow();
-        if (changedReason !== null) return keep(changedReason);
-        const finalStatus = yield* git.statusDetailsLocal(worktreePath);
-        if (!finalStatus.isRepo || finalStatus.branch !== thread.branch)
+        // Most cancelled removals are caught here, before the worktree is walked.
+        const blocked = yield* keepReasonNow();
+        if (blocked !== null) return keep(blocked);
+        const bytes = yield* measureWorktree(worktreePath);
+        // The walk can take a while; ask again for anything that started during it.
+        const blockedWhileMeasuring = yield* keepReasonNow();
+        if (blockedWhileMeasuring !== null) return keep(blockedWhileMeasuring);
+        if (yield* branchChanged(worktreePath, thread.branch))
           return keep("repository or branch changed since check");
         if (
           (yield* git.resolveCommit({ cwd: worktreePath, revision: "HEAD" })).commitSha !==

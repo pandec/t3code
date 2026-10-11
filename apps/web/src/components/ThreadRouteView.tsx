@@ -26,6 +26,7 @@ import { environmentShell } from "../state/shell";
 import {
   buildThreadRouteParams,
   resolveArchivedThreadRouteState,
+  isThreadRouteSnapshotAuthoritative,
   resolveThreadRouteRenderState,
   type ThreadRouteTarget,
 } from "../threadRoutes";
@@ -79,7 +80,7 @@ export function ThreadRouteView({ target }: { target: ThreadRouteTarget }) {
   );
   const serverThreadShell = serverThread;
   const environmentThreadRefs = useEnvironmentThreadRefs(serverThreadRef?.environmentId ?? null);
-  const bootstrapComplete = shell.data?.snapshot._tag === "Some";
+  const bootstrapComplete = isThreadRouteSnapshotAuthoritative(shell.data?.status);
   const draftThread = useComposerDraftStore((store) =>
     serverThreadRef ? store.getDraftThreadByRef(serverThreadRef) : null,
   );
@@ -107,8 +108,12 @@ export function ThreadRouteView({ target }: { target: ThreadRouteTarget }) {
   );
   // Fork: an archived thread has no active shell; its detail decides whether
   // the route opens it (archive shelf, thread links) or the thread is gone.
+  // Any snapshot, cached included, keeps an open archived thread on screen.
   const archivedLookupRef =
-    target.kind === "server" && bootstrapComplete && serverThreadShell === null && !draftThread
+    target.kind === "server" &&
+    shell.data?.snapshot._tag === "Some" &&
+    serverThreadShell === null &&
+    !draftThread
       ? target.threadRef
       : null;
   const archivedLookupThread = useThreadProjection(archivedLookupRef)?.projection.thread ?? null;

@@ -125,6 +125,7 @@ const makeSummaryService = Effect.fn("makeSummaryService")(function* (
     generatePrContent: () => Effect.die("unused"),
     generateBranchName: () => Effect.die("unused"),
     generateThreadTitle: () => Effect.die("unused"),
+    generateReviewGuide: () => Effect.die("unused"),
     generateSpeechScript: () => Effect.die("unused"),
     generateMessageSummary: (input) =>
       Ref.update(calls, (current) => [...current, input]).pipe(Effect.andThen(generate(input))),

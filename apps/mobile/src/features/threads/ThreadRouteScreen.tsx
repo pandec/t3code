@@ -906,7 +906,9 @@ function ThreadRouteContent(
   ]);
   const creationState = ((): ThreadDetailScreenProps["creationState"] => {
     if (selectedThreadCreation === null) {
-      return awaitingBootstrapTurn ? { kind: "preparing", preparingWorktree: true } : null;
+      return awaitingBootstrapTurn
+        ? { kind: "preparing", preparingWorktree: true, serverOwned: true }
+        : null;
     }
     if (selectedThreadCreation.outcome?.kind === "failed") {
       return {
@@ -918,6 +920,7 @@ function ThreadRouteContent(
     return {
       kind: "preparing",
       preparingWorktree: selectedThreadCreation.message.creation?.workspaceMode === "worktree",
+      serverOwned: false,
     };
   })();
   if (!environmentId || !threadId) {

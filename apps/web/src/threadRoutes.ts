@@ -1,5 +1,6 @@
 import { scopeThreadRef } from "@t3tools/client-runtime/environment";
 import type { EnvironmentThreadStatus } from "@t3tools/client-runtime/state/threads";
+import type { EnvironmentShellStatus } from "@t3tools/client-runtime/state/shell";
 import type { EnvironmentId, ScopedThreadRef, ThreadId } from "@t3tools/contracts";
 import type { DraftId } from "./composerDraftStore";
 
@@ -21,6 +22,12 @@ type DraftThreadRouteState = {
 
 export type ThreadRouteRenderState = "loading" | "ready" | "missing";
 
+export function isThreadRouteSnapshotAuthoritative(
+  status: EnvironmentShellStatus | undefined,
+): boolean {
+  return status === "live";
+}
+
 export function resolveThreadRouteRenderState(input: {
   bootstrapComplete: boolean;
   serverThreadExists: boolean;
@@ -29,16 +36,17 @@ export function resolveThreadRouteRenderState(input: {
   /** Fork: what the detail says when the active shell lacks the thread. */
   archivedThread?: ThreadRouteRenderState;
 }): ThreadRouteRenderState {
+  if (
+    input.draftThreadExists ||
+    (input.serverThreadExists && !input.serverThreadDeleted) ||
+    input.archivedThread === "ready"
+  ) {
+    return "ready";
+  }
   if (!input.bootstrapComplete) {
     return "loading";
   }
-  if (input.draftThreadExists) {
-    return "ready";
-  }
-  if (input.serverThreadDeleted) {
-    return "missing";
-  }
-  return input.serverThreadExists ? "ready" : (input.archivedThread ?? "missing");
+  return input.serverThreadDeleted ? "missing" : (input.archivedThread ?? "missing");
 }
 
 /**

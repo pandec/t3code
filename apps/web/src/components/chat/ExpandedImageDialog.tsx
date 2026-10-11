@@ -194,7 +194,7 @@ export const ExpandedImageDialog = memo(function ExpandedImageDialog({
         variant="media"
         showCloseButton={false}
         bottomStickOnMobile={false}
-        className="row-start-1 max-h-[92vh] w-[92vw] max-w-[92vw] items-center overflow-visible [--media-width:92vw] [--media-height:min(86vh,calc(100vh-160px))] sm:[--media-width:calc(92vw-96px)]"
+        className="row-start-1 h-full max-h-[92vh] w-[92vw] max-w-[92vw] items-center justify-center overflow-visible [--media-width:92vw] [--media-height:min(86vh,calc(100vh-160px))] sm:[--media-width:calc(92vw-96px)]"
         onKeyDown={onKeyDown}
         data-expanded-image-dialog
         initialFocus={closeButtonRef}
@@ -204,12 +204,24 @@ export const ExpandedImageDialog = memo(function ExpandedImageDialog({
         }}
       >
         <DialogTitle className="sr-only">Expanded {mediaLabel} preview</DialogTitle>
+        {/* The stage keeps a fixed size, so the close button stays put whatever the media or caption. */}
+        <Button
+          type="button"
+          ref={closeButtonRef}
+          size="icon-sm"
+          variant="media-close"
+          className="absolute right-0 top-0 z-20"
+          onClick={onClose}
+          aria-label={`Close ${mediaLabel} preview`}
+        >
+          <XIcon />
+        </Button>
         {preview.images.length > 1 && (
           <Button
             type="button"
             size="icon"
             variant="media-navigation"
-            className="left-0 top-auto -bottom-12 translate-y-0 sm:top-1/2 sm:bottom-auto sm:-translate-y-1/2"
+            className="left-0 top-auto bottom-0 translate-y-0 sm:top-1/2 sm:bottom-auto sm:-translate-y-1/2"
             aria-label="Previous media"
             onClick={() => navigateImage(-1)}
           >
@@ -217,18 +229,7 @@ export const ExpandedImageDialog = memo(function ExpandedImageDialog({
           </Button>
         )}
         <MediaActions source={actionsSource}>
-          <div className="relative isolate z-10 max-h-[92vh] max-w-[var(--media-width)]">
-            <Button
-              type="button"
-              ref={closeButtonRef}
-              size="icon-xs"
-              variant="media-close"
-              className="absolute right-0 -top-10 z-20"
-              onClick={onClose}
-              aria-label={`Close ${mediaLabel} preview`}
-            >
-              <XIcon />
-            </Button>
+          <div className="relative isolate z-10 flex max-h-full max-w-[var(--media-width)] flex-col items-center">
             {item.type === "video" ? (
               <ExpandedVideo key={index} item={item} />
             ) : showingAccessibilityDetails ? (
@@ -256,7 +257,7 @@ export const ExpandedImageDialog = memo(function ExpandedImageDialog({
                 onError={() => setFailedImageSrc(item.src)}
               />
             )}
-            <div className="mt-2 flex max-w-[var(--media-width)] items-center justify-center gap-1.5 text-xs text-white/80">
+            <div className="mt-2 flex max-w-[var(--media-width)] items-center justify-center gap-1.5 text-xs text-white/80 max-sm:px-10">
               <span className="truncate" aria-live="polite" aria-atomic="true">
                 {item.name}
                 {preview.images.length > 1 ? ` (${index + 1}/${preview.images.length})` : ""}
@@ -295,7 +296,7 @@ export const ExpandedImageDialog = memo(function ExpandedImageDialog({
             type="button"
             size="icon"
             variant="media-navigation"
-            className="right-0 top-auto -bottom-12 translate-y-0 sm:top-1/2 sm:bottom-auto sm:-translate-y-1/2"
+            className="right-0 top-auto bottom-0 translate-y-0 sm:top-1/2 sm:bottom-auto sm:-translate-y-1/2"
             aria-label="Next media"
             onClick={() => navigateImage(1)}
           >

@@ -11,6 +11,8 @@ import {
   type ChatAttachment,
   CommandId,
   MessageId,
+  OrchestrationV2StopWorkflowError,
+  type OrchestrationV2StopWorkflowInput,
   type ModelSelection,
   type OrchestrationV2Actor,
   type OrchestrationV2Command,
@@ -36,6 +38,7 @@ import * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
+import * as Ref from "effect/Ref";
 import * as Schema from "effect/Schema";
 import * as Stream from "effect/Stream";
 import {
@@ -45,6 +48,9 @@ import {
 } from "@t3tools/shared/orchestrationV2PendingBackgroundWork";
 
 import * as Orchestrator from "./Orchestrator.ts";
+import * as ProviderSessionManager from "./ProviderSessionManager.ts";
+import * as ThreadCommandExecutor from "./ThreadCommandExecutor.ts";
+import { DispatchModeLimit, exceededDispatchModeLimit } from "./DispatchModeLimit.ts";
 import { projectTurnItemForDetail } from "./WireProjection.ts";
 import * as LegacyV1ThreadImporter from "./legacy/LegacyV1ThreadImporter.ts";
 
@@ -402,6 +408,13 @@ export interface ThreadManagementServiceShape {
     input: ThreadManagementBackgroundWorkDrainInput,
   ) => Effect.Effect<ThreadManagementBackgroundWorkDrain, ThreadManagementError>;
   /**
+   * Asks the provider to stop a running workflow coordinator. The provider's
+   * own terminal notification then settles the coordinator and its members.
+   */
+  readonly stopWorkflow: (
+    input: OrchestrationV2StopWorkflowInput,
+  ) => Effect.Effect<void, OrchestrationV2StopWorkflowError>;
+  /**
    * Sends `thread.stop` to every delegated task under a thread, depth first. Their command IDs
    * derive from `commandId`, so a retry repeats nothing that already stopped. A task that
    * cannot be stopped does not keep the others running: all are tried, then it fails.
@@ -477,7 +490,9 @@ function latestSteerableRun(
 const SETTLE_AFTER_RUN_WAIT_MS = 24 * 60 * 60 * 1_000;
 
 const make = Effect.gen(function* () {
+  const threadDispatch = yield* ThreadCommandExecutor.ThreadCommandExecutor;
   const orchestrator = yield* Orchestrator.OrchestratorV2;
+  const sessions = yield* ProviderSessionManager.ProviderSessionManagerV2;
   const layerScope = yield* Effect.scope;
   const legacyImporter = yield* LegacyV1ThreadImporter.LegacyV1ThreadImporter;
 
@@ -600,28 +615,33 @@ const make = Effect.gen(function* () {
       );
 
   const listProjectThreads: ThreadManagementServiceShape["listProjectThreads"] = (input) =>
-    orchestrator.getShellSnapshot().pipe(
-      Effect.mapError(
-        (cause) =>
-          new ThreadManagementProjectThreadsListError({
-            projectId: input.projectId,
-            cause,
-          }),
-      ),
-      Effect.map((snapshot) =>
-        snapshot.threads
-          .filter((thread) => input.projectId === null || thread.projectId === input.projectId)
-          .filter(
-            (thread) =>
-              input.includeSubagents || thread.lineage.relationshipToParent !== "subagent",
-          )
-          .toSorted(
-            (left, right) =>
-              DateTime.toEpochMillis(right.updatedAt) - DateTime.toEpochMillis(left.updatedAt) ||
-              right.id.localeCompare(left.id),
-          ),
-      ),
-    );
+    orchestrator
+      .getShellSnapshot({
+        // Fork: a null project lists every project's threads.
+        ...(input.projectId === null ? {} : { projectId: input.projectId }),
+        location: "active",
+      })
+      .pipe(
+        Effect.mapError(
+          (cause) =>
+            new ThreadManagementProjectThreadsListError({
+              projectId: input.projectId,
+              cause,
+            }),
+        ),
+        Effect.map((snapshot) =>
+          snapshot.threads
+            .filter(
+              (thread) =>
+                input.includeSubagents || thread.lineage.relationshipToParent !== "subagent",
+            )
+            .toSorted(
+              (left, right) =>
+                DateTime.toEpochMillis(right.updatedAt) - DateTime.toEpochMillis(left.updatedAt) ||
+                right.id.localeCompare(left.id),
+            ),
+        ),
+      );
 
   const sendToThread: ThreadManagementServiceShape["sendToThread"] = (input) =>
     Effect.gen(function* () {
@@ -906,6 +926,90 @@ const make = Effect.gen(function* () {
         ...backgroundWorkDrainState(shell, input.scope, runs),
       };
     });
+  const stopWorkflow: ThreadManagementServiceShape["stopWorkflow"] = (input) =>
+    Effect.gen(function* () {
+      const records = yield* orchestrator
+        .getThreadRecords(input.threadId, ["subagents", "runs", "providerThreads"])
+        .pipe(
+          Effect.mapError(
+            (cause) =>
+              new OrchestrationV2StopWorkflowError({ ...input, reason: "unavailable", cause }),
+          ),
+        );
+      if (records.thread.deletedAt !== null) {
+        return yield* new OrchestrationV2StopWorkflowError({ ...input, reason: "unavailable" });
+      }
+      // A limited caller (an agent over MCP) may not stop work on a thread
+      // running above its own modes. Checked under the thread lock, where the
+      // thread's user cannot raise the modes between this read and the stop.
+      const limit = yield* DispatchModeLimit;
+      const exceeded =
+        limit === undefined ? undefined : exceededDispatchModeLimit(limit, records.thread);
+      if (limit !== undefined && exceeded !== undefined) {
+        if (limit.refused !== undefined) {
+          yield* Ref.set(limit.refused, {
+            threadId: input.threadId,
+            runtimeMode: records.thread.runtimeMode,
+            interactionMode: records.thread.interactionMode,
+            mode: exceeded,
+          });
+        }
+        return yield* new OrchestrationV2StopWorkflowError({ ...input, reason: "unavailable" });
+      }
+      const task = records.subagents.find((candidate) => candidate.id === input.subagentId);
+      if (
+        task === undefined ||
+        task.threadId !== input.threadId ||
+        task.workflow === undefined ||
+        task.status !== "running"
+      ) {
+        return yield* new OrchestrationV2StopWorkflowError({ ...input, reason: "not-running" });
+      }
+      if (task.origin !== "provider_native" || task.driver !== "claudeAgent") {
+        return yield* new OrchestrationV2StopWorkflowError({ ...input, reason: "unsupported" });
+      }
+      const providerThreadId =
+        task.providerThreadId ??
+        records.runs.find((run) => run.id === task.runId)?.providerThreadId;
+      const providerThread = records.providerThreads.find(
+        (candidate) =>
+          candidate.id === providerThreadId &&
+          candidate.appThreadId === input.threadId &&
+          candidate.providerInstanceId === task.providerInstanceId &&
+          candidate.driver === task.driver,
+      );
+      const taskId = task.nativeTaskRef?.nativeId;
+      if (providerThread?.providerSessionId == null || taskId == null || taskId.length === 0) {
+        return yield* new OrchestrationV2StopWorkflowError({ ...input, reason: "unavailable" });
+      }
+      const runtime = yield* sessions
+        .get(providerThread.providerSessionId)
+        .pipe(
+          Effect.mapError(
+            (cause) =>
+              new OrchestrationV2StopWorkflowError({ ...input, reason: "unavailable", cause }),
+          ),
+        );
+      if (Option.isNone(runtime)) {
+        return yield* new OrchestrationV2StopWorkflowError({ ...input, reason: "unavailable" });
+      }
+      if (runtime.value.stopTask === undefined) {
+        return yield* new OrchestrationV2StopWorkflowError({ ...input, reason: "unsupported" });
+      }
+      // Bounded so a provider that never answers cannot hold the thread lock.
+      yield* runtime.value.stopTask({ providerThread, taskId }).pipe(
+        Effect.timeout("15 seconds"),
+        Effect.mapError(
+          (cause) =>
+            new OrchestrationV2StopWorkflowError({
+              ...input,
+              reason: "stop-failed",
+              cause,
+            }),
+        ),
+      );
+    }).pipe((effect) => threadDispatch.withLock(input.threadId, effect));
+
   const stopDelegatedTasks: ThreadManagementServiceShape["stopDelegatedTasks"] = (input) =>
     Effect.gen(function* () {
       const { subagents } = yield* orchestrator.getThreadRecords(input.threadId, ["subagents"]);
@@ -985,6 +1089,7 @@ const make = Effect.gen(function* () {
     interruptThread,
     getBackgroundWorkDrain,
     stopDelegatedTasks,
+    stopWorkflow,
     getThreadEventSequence: orchestrator.getThreadEventSequence,
     recoverDelegatedTask: orchestrator.recoverDelegatedTask,
     delegatedTaskResultPending: orchestrator.delegatedTaskResultPending,
@@ -1004,11 +1109,19 @@ const layerLegacyV1ThreadImporterNoop = Layer.succeed(
   }),
 );
 
-export const layer: Layer.Layer<ThreadManagementService, never, Orchestrator.OrchestratorV2> =
-  Layer.effect(ThreadManagementService, make).pipe(Layer.provide(layerLegacyV1ThreadImporterNoop));
+export const layer: Layer.Layer<
+  ThreadManagementService,
+  never,
+  Orchestrator.OrchestratorV2 | ProviderSessionManager.ProviderSessionManagerV2
+> = Layer.effect(ThreadManagementService, make).pipe(
+  Layer.provide(layerLegacyV1ThreadImporterNoop),
+  Layer.provide(ThreadCommandExecutor.layer),
+);
 
 export const layerWithLegacyImporter: Layer.Layer<
   ThreadManagementService,
   never,
-  LegacyV1ThreadImporter.LegacyV1ThreadImporter | Orchestrator.OrchestratorV2
-> = Layer.effect(ThreadManagementService, make);
+  | LegacyV1ThreadImporter.LegacyV1ThreadImporter
+  | Orchestrator.OrchestratorV2
+  | ProviderSessionManager.ProviderSessionManagerV2
+> = Layer.effect(ThreadManagementService, make).pipe(Layer.provide(ThreadCommandExecutor.layer));

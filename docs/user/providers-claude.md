@@ -72,12 +72,14 @@ message at once.
 
 You can also send `/compact` in an existing conversation. Web and desktop offer
 **Compact context** from the context meter. When you return to a large thread
-after more than an hour, a **Compact** chip with the thread's token count shows
+after Claude's prompt cache expires, a **Compact** chip with the thread's token count shows
 next to the send button. While it is on, Enter summarizes the history first, then
 sends your message. Click the chip to switch it to **Full** and keep the full
 history; the choice holds for that thread until the message is sent. ⌘Enter
 (Ctrl+Enter) sends once with the chip's other choice. To start every old thread
-on **Full**, set **Settings → General → Old thread send** to **Full history**. See [commands and skills](./composer.md#commands-and-skills) for using
+on **Full**, set **Settings → General → Old thread send** to **Full history**.
+The cache lasts about an hour on a Claude subscription and 5 minutes with an API
+key, Bedrock, or Vertex. See [commands and skills](./composer.md#commands-and-skills) for using
 composer commands.
 
 ## Usage limits

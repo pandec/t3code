@@ -1129,6 +1129,7 @@ const makeClaudeRegistry = Effect.gen(function* () {
                     : Queue.offer(messages, result(`result-${prompts}`)).pipe(Effect.asVoid),
                 setModel: () => Effect.void,
                 setPermissionMode: () => Effect.void,
+                stopTask: () => Effect.void,
                 interrupt: Effect.void,
                 close: Queue.shutdown(messages),
               };

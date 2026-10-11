@@ -22,8 +22,11 @@ An entry earns its place only if a capable agent with the code in front of it wo
 - Keep the fork's per-capability MCP islands: apply upstream transport options in `makeMcpTransport` and provide stateful shared layers (e.g. `ThreadCommandExecutor`) outside the fresh island layers.
 - Storage cleanup defaults `worktreeKeepWhen` to `any-local-files` (fork policy: ignored files such as `.env` stay protected).
 - Treat fork-only unused-export findings from `knip:check` as advisory.
+- Web unit tests run with `isolate: false` (fork): add new upstream tests using `vi.mock`, fake timers, or `vi.resetModules` to `ISOLATED_TEST_FILES` in `apps/web/vite.config.ts`.
 - Verify the SEA executable with official Node 26 (`SEA_NODE_VERSION` in `apps/server/vite.config.ts`); `vp` may select the repository's Node 24.
-- Known macOS baseline failures: Antigravity missing-parent `/var` path tests and Claude steering replay's now/next mismatch. Compare against pre-merge before blaming the merge.
+- Upstream Claude tests that interrupt a turn the harness never settles hang on the fork's Stop grace: run `passInterruptSettleGrace` after forking the interrupt.
+- Custom Claude models expose the fork's gateway effort ladder, not their declared effort descriptors; adapt upstream tests that expect the declared ones.
+- Known macOS baseline failures: Antigravity missing-parent `/var` path tests, Claude steering replay's now/next mismatch, and storage cleanup's expired-artifacts aggregation. Compare against pre-merge before blaming the merge.
 
 ## Watchpoints
 

@@ -265,5 +265,9 @@ export const makeMuseTextGeneration = Effect.fn("makeMuseTextGeneration")(functi
     return yield* TextGenerationOperations.decodeJsonReply(input, "Muse", response);
   });
 
-  return TextGenerationOperations.fromRunner("MuseTextGeneration", runMuseJson);
+  // Muse runs in an empty read-only directory and cannot be pointed at a checkout to read.
+  return TextGenerationOperations.fromRunner(
+    "MuseTextGeneration",
+    TextGenerationOperations.withoutInvestigation("Muse Code", runMuseJson),
+  );
 });

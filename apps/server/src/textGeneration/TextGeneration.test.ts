@@ -28,6 +28,7 @@ const makeStubTextGeneration = (
       Effect.die("generateSpeechScript stub not configured for this test"),
     generateMessageSummary: () =>
       Effect.die("generateMessageSummary stub not configured for this test"),
+    generateReviewGuide: () => Effect.die("generateReviewGuide stub not configured for this test"),
     ...overrides,
   });
 

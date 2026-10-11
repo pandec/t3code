@@ -316,6 +316,7 @@ export const openCode2ReplayRuntime = (
     readonly sessionEnvironments?: Array<ReplayedSessionEnvironment>;
     /** A spawned server's shell environment; external servers have none. */
     readonly shellEnvironment?: NodeJS.ProcessEnv;
+    readonly replayGate?: ProviderReplayGate;
   },
 ) =>
   Effect.gen(function* () {
