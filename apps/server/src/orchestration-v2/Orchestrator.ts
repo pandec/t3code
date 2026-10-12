@@ -8481,11 +8481,16 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
         ...(queuedRun.rootNodeId === null ? {} : { nodeId: queuedRun.rootNodeId }),
         providerInstanceId: queuedRun.providerInstanceId,
         occurredAt: now,
-        // A steer's recall window restarts once its last edit ends; a stale
-        // release from a lapsed editor ends nothing and leaves it alone.
+        // A steer's recall window restarts once its last edit ends while a turn
+        // can still take it; a waiting run cannot, so the steer queues behind it.
+        // A stale release from a lapsed editor ends nothing and leaves it alone.
         payload:
           queuedRun.editHeldUntil !== undefined && updated.editHeldUntil === undefined
-            ? steerAfterEdit(updated, now, projection.runs.some(isBlockingRun))
+            ? steerAfterEdit(
+                updated,
+                now,
+                projection.runs.some((run) => isBlockingRun(run) && run.status !== "waiting"),
+              )
             : updated,
       });
     });
