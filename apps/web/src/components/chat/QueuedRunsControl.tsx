@@ -427,9 +427,10 @@ export function QueuedRunsControl({
                         {previewText}
                       </TooltipPopup>
                     </Tooltip>
-                    {item.steerLabel !== null ? (
+                    {isEditing || item.steerLabel !== null ? (
                       <span className="shrink-0 text-muted-foreground text-xs tabular-nums">
-                        {item.steerLabel}
+                        {/* An open edit holds the steer; its window restarts when the edit ends. */}
+                        {isEditing ? "Editing" : item.steerLabel}
                       </span>
                     ) : null}
                   </ComposerBanner.Content>

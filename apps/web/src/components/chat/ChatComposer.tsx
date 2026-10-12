@@ -1732,6 +1732,8 @@ export interface ChatComposerProps {
     readonly url: string | null;
   }> | null;
   onRemoveEditingQueuedAttachment: (attachmentId: string) => void;
+  /** Escape leaves the queued-message edit; undefined when no edit is open. */
+  onCancelEditingQueuedMessage?: (() => void) | undefined;
 
   // Callbacks
   onCompactContext: () => void;
@@ -1891,6 +1893,7 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
     onFileOpen,
     editingQueuedAttachments,
     onRemoveEditingQueuedAttachment,
+    onCancelEditingQueuedMessage,
   } = props;
   const primaryEnvironmentId = usePrimaryEnvironmentId();
   const composerDraftTargetKey = composerTargetKey(composerDraftTarget);
@@ -4793,7 +4796,20 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
     const menuIsActive =
       !isLiteralPendingAnswer && (composerMenuOpenRef.current || trigger !== null);
     if (key === "Escape") {
-      if (!menuIsActive || event.isComposing || event.keyCode === 229) return false;
+      if (event.isComposing || event.keyCode === 229) return false;
+      if (!menuIsActive) {
+        if (
+          onCancelEditingQueuedMessage === undefined ||
+          event.shiftKey ||
+          event.altKey ||
+          event.metaKey ||
+          event.ctrlKey
+        ) {
+          return false;
+        }
+        onCancelEditingQueuedMessage();
+        return true;
+      }
       dismissComposerTrigger(trigger);
       composerMenuOpenRef.current = false;
       return true;

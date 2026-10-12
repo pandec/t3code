@@ -8,6 +8,7 @@ import {
   ProviderThreadId,
   ProviderTurnId,
   ThreadId,
+  type RunId,
   type OrchestrationV2DomainEvent,
   type OrchestrationV2ProviderTurn,
 } from "@t3tools/contracts";
@@ -28,6 +29,7 @@ import {
   type ProviderAdapterV2TurnInput,
 } from "@t3tools/provider-core/server/ProviderAdapter";
 import * as ProviderAdapterRegistry from "./ProviderAdapterRegistry.ts";
+import { STEER_RECALL_TAIL_MS } from "./SteerRecallWindow.ts";
 import * as ProviderReplayHarness from "./testkit/ProviderReplayHarness.ts";
 import { checkpointWorkspace } from "@t3tools/provider-testing/replayWorkspace";
 
@@ -35,6 +37,8 @@ const driver = ProviderDriverKind.make("codex");
 const instanceId = ProviderInstanceId.make("codex");
 const modelSelection = { instanceId, model: "test-model" };
 const GRACE_MS = 5_000;
+// The steer leaves its window a short hidden tail after the shown deadline.
+const RELEASE_MS = GRACE_MS + STEER_RECALL_TAIL_MS;
 
 const providerTurnFor = (
   turn: ProviderAdapterV2TurnInput,
@@ -248,7 +252,7 @@ it.effect("holds a steer for its recall window, then steers its latest text", ()
             event.payload.type === "user_message" &&
             event.payload.messageId === typo!.userMessageId,
         );
-        yield* TestClock.adjust(Duration.millis(GRACE_MS));
+        yield* TestClock.adjust(Duration.millis(RELEASE_MS));
         const deliveredEvent = yield* Fiber.join(delivered);
         yield* worker.drain();
 
@@ -326,7 +330,7 @@ it.effect("starts a held steer as its own turn when the turn ends inside the win
             event.payload.status === "starting",
         );
         yield* worker.drain();
-        yield* TestClock.adjust(Duration.millis(GRACE_MS));
+        yield* TestClock.adjust(Duration.millis(RELEASE_MS));
         const startingEvent = yield* Fiber.join(heldStarting);
         yield* worker.drain();
 
@@ -413,7 +417,7 @@ it.effect("lets the next queued turn start ahead of a held steer, then steers in
             event.payload.type === "user_message" &&
             event.payload.messageId === heldSteer!.userMessageId,
         );
-        yield* TestClock.adjust(Duration.millis(GRACE_MS));
+        yield* TestClock.adjust(Duration.millis(RELEASE_MS));
         const deliveredEvent = yield* Fiber.join(delivered);
         yield* worker.drain();
 
@@ -453,7 +457,7 @@ it.effect(
             .toSorted((left, right) => left.ordinal - right.ordinal);
 
           // The queued message's start outlasts the steer's window, then fails.
-          nextCapabilities.current = TestClock.adjust(Duration.millis(GRACE_MS)).pipe(
+          nextCapabilities.current = TestClock.adjust(Duration.millis(RELEASE_MS)).pipe(
             Effect.andThen(Effect.fail(new ProviderAdapterCapabilitiesError({ driver }))),
           );
           const firstFailure = yield* watch(
@@ -553,7 +557,7 @@ it.effect("steers into a new turn while older queued messages stay held after a 
             event.payload.type === "user_message" &&
             event.payload.messageId === steer!.userMessageId,
         );
-        yield* TestClock.adjust(Duration.millis(GRACE_MS));
+        yield* TestClock.adjust(Duration.millis(RELEASE_MS));
         yield* Fiber.join(delivered);
         yield* worker.drain();
 
@@ -566,6 +570,167 @@ it.effect("steers into a new turn while older queued messages stay held after a 
         const old = final.runs.find((run) => run.id === oldQueued.id);
         assert.equal(old?.status, "queued");
         assert.isTrue(old?.queueHeld);
+      }).pipe(Effect.provide(layer));
+    }),
+  ),
+);
+
+const holdFor = (threadId: ThreadId, runId: RunId) =>
+  Effect.gen(function* () {
+    const orchestrator = yield* Orchestrator.OrchestratorV2;
+    return (commandId: string, held: boolean, holderId = "editor") =>
+      orchestrator.dispatch({
+        type: "queued-run.edit-hold",
+        commandId: CommandId.make(commandId),
+        threadId,
+        runId,
+        held,
+        holderId,
+      });
+  });
+
+it.effect("an edit pauses a held steer and restarts its window when it is saved", () =>
+  Effect.scoped(
+    Effect.gen(function* () {
+      const { steered, started, threadId, setup, layer } = yield* scenario(
+        "steer-recall-edit-restart",
+      );
+      yield* Effect.gen(function* () {
+        const { orchestrator, worker, watch, send } = yield* setup;
+        yield* send("typo", "steer");
+        const typo = (yield* orchestrator.getThreadProjection(threadId)).runs.find(
+          (run) => run.status === "queued",
+        )!;
+        const hold = yield* holdFor(threadId, typo.id);
+        // The edit opens in the hidden tail, after the shown countdown reached zero.
+        yield* TestClock.adjust(Duration.millis(GRACE_MS + STEER_RECALL_TAIL_MS / 2));
+        yield* hold("hold", true);
+        yield* TestClock.adjust(Duration.millis(GRACE_MS * 2));
+        assert.deepEqual(steered, []);
+
+        yield* orchestrator.dispatch({
+          type: "queued-run.edit",
+          commandId: CommandId.make("save"),
+          threadId,
+          runId: typo.id,
+          text: "fixed",
+        });
+        const savedAt = yield* DateTime.now;
+        yield* hold("release", false);
+        const restarted = (yield* orchestrator.getThreadProjection(threadId)).runs.find(
+          (run) => run.id === typo.id,
+        )!;
+        assert.equal(restarted.status, "queued");
+        assert.isTrue(
+          DateTime.Equivalence(
+            restarted.steerDeadlineAt!,
+            DateTime.add(savedAt, { milliseconds: GRACE_MS }),
+          ),
+        );
+        assert.deepEqual(steered, []);
+
+        const delivered = yield* watch(
+          (event) =>
+            event.type === "turn-item.updated" &&
+            event.payload.type === "user_message" &&
+            event.payload.messageId === typo.userMessageId,
+        );
+        yield* TestClock.adjust(Duration.millis(RELEASE_MS));
+        yield* Fiber.join(delivered);
+        yield* worker.drain();
+        assert.deepEqual(steered, ["fixed"]);
+        assert.equal(started.length, 1);
+      }).pipe(Effect.provide(layer));
+    }),
+  ),
+);
+
+it.effect("an edit that outlasts the turn starts the steer as soon as it ends", () =>
+  Effect.scoped(
+    Effect.gen(function* () {
+      const { events, steered, started, threadId, setup, layer } = yield* scenario(
+        "steer-recall-edit-after-turn",
+      );
+      yield* Effect.gen(function* () {
+        const { orchestrator, worker, watch, send } = yield* setup;
+        yield* send("late", "steer");
+        const late = (yield* orchestrator.getThreadProjection(threadId)).runs.find(
+          (run) => run.status === "queued",
+        )!;
+        const hold = yield* holdFor(threadId, late.id);
+        yield* hold("hold", true);
+
+        const activeTurn = (yield* orchestrator.getThreadProjection(threadId)).providerTurns[0]!;
+        const activeEnded = yield* watch(
+          (event) =>
+            event.type === "run.updated" &&
+            event.payload.id === started[0]!.runId &&
+            event.payload.status === "waiting",
+        );
+        yield* Queue.offer(events, {
+          type: "provider_turn.updated",
+          driver,
+          providerTurn: { ...activeTurn, status: "completed", completedAt: yield* DateTime.now },
+        });
+        yield* Queue.offer(events, {
+          type: "turn.terminal",
+          driver,
+          providerThreadId: activeTurn.providerThreadId,
+          providerTurnId: activeTurn.id,
+          runOrdinal: started[0]!.runOrdinal,
+          status: "completed",
+          failure: null,
+          threadDisposition: "reusable",
+        });
+        yield* Fiber.join(activeEnded);
+        yield* worker.drain();
+        yield* TestClock.adjust(Duration.millis(RELEASE_MS));
+        assert.equal(started.length, 1);
+
+        // No window restart: with the turn over, ending the edit starts the steer at once.
+        yield* hold("release", false);
+        yield* worker.drain();
+        assert.equal(started.length, 2);
+        assert.equal(started[1]!.message.text, "late");
+        assert.deepEqual(steered, []);
+      }).pipe(Effect.provide(layer));
+    }),
+  ),
+);
+
+it.effect("every edit restarts the original window, and a stale release restarts nothing", () =>
+  Effect.scoped(
+    Effect.gen(function* () {
+      const { steered, threadId, setup, layer } = yield* scenario("steer-recall-edit-repeat");
+      yield* Effect.gen(function* () {
+        const { orchestrator, send } = yield* setup;
+        yield* send("again", "steer");
+        const again = (yield* orchestrator.getThreadProjection(threadId)).runs.find(
+          (run) => run.status === "queued",
+        )!;
+        const hold = yield* holdFor(threadId, again.id);
+        const deadlineOf = Effect.map(
+          orchestrator.getThreadProjection(threadId),
+          (projection) => projection.runs.find((run) => run.id === again.id)!.steerDeadlineAt!,
+        );
+        const expectFreshWindow = Effect.gen(function* () {
+          const expected = DateTime.add(yield* DateTime.now, { milliseconds: GRACE_MS });
+          assert.isTrue(DateTime.Equivalence(yield* deadlineOf, expected));
+        });
+
+        for (const round of [1, 2]) {
+          yield* hold(`hold-${round}`, true);
+          yield* TestClock.adjust(Duration.millis(GRACE_MS * 2));
+          yield* hold(`release-${round}`, false);
+          yield* expectFreshWindow;
+        }
+
+        // A second editor whose release arrives after the edit already ended.
+        const restarted = yield* deadlineOf;
+        yield* TestClock.adjust(Duration.millis(1_000));
+        yield* hold("late-release", false, "lapsed-editor");
+        assert.isTrue(DateTime.Equivalence(yield* deadlineOf, restarted));
+        assert.deepEqual(steered, []);
       }).pipe(Effect.provide(layer));
     }),
   ),

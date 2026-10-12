@@ -654,6 +654,8 @@ export const OrchestrationV2Run = Schema.Struct({
    * it into the running turn, or starts it as a turn when nothing is running.
    */
   steerDeadlineAt: Schema.optional(Schema.DateTimeUtc),
+  /** Fork: the steer's recall window length, reused when an edit restarts it. */
+  steerWindowMs: Schema.optional(NonNegativeInt),
   /**
    * Fork queued-message edit hold: while a client has this message open for
    * editing it neither starts nor is steered. The editing client renews the
