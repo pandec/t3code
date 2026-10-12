@@ -578,14 +578,14 @@ it.effect("steers into a new turn while older queued messages stay held after a 
 const holdFor = (threadId: ThreadId, runId: RunId) =>
   Effect.gen(function* () {
     const orchestrator = yield* Orchestrator.OrchestratorV2;
-    return (commandId: string, held: boolean) =>
+    return (commandId: string, held: boolean, holderId = "editor") =>
       orchestrator.dispatch({
         type: "queued-run.edit-hold",
         commandId: CommandId.make(commandId),
         threadId,
         runId,
         held,
-        holderId: "editor",
+        holderId,
       });
   });
 
@@ -692,6 +692,44 @@ it.effect("an edit that outlasts the turn starts the steer as soon as it ends", 
         yield* worker.drain();
         assert.equal(started.length, 2);
         assert.equal(started[1]!.message.text, "late");
+        assert.deepEqual(steered, []);
+      }).pipe(Effect.provide(layer));
+    }),
+  ),
+);
+
+it.effect("every edit restarts the original window, and a stale release restarts nothing", () =>
+  Effect.scoped(
+    Effect.gen(function* () {
+      const { steered, threadId, setup, layer } = yield* scenario("steer-recall-edit-repeat");
+      yield* Effect.gen(function* () {
+        const { orchestrator, send } = yield* setup;
+        yield* send("again", "steer");
+        const again = (yield* orchestrator.getThreadProjection(threadId)).runs.find(
+          (run) => run.status === "queued",
+        )!;
+        const hold = yield* holdFor(threadId, again.id);
+        const deadlineOf = Effect.map(
+          orchestrator.getThreadProjection(threadId),
+          (projection) => projection.runs.find((run) => run.id === again.id)!.steerDeadlineAt!,
+        );
+        const expectFreshWindow = Effect.gen(function* () {
+          const expected = DateTime.add(yield* DateTime.now, { milliseconds: GRACE_MS });
+          assert.isTrue(DateTime.Equivalence(yield* deadlineOf, expected));
+        });
+
+        for (const round of [1, 2]) {
+          yield* hold(`hold-${round}`, true);
+          yield* TestClock.adjust(Duration.millis(GRACE_MS * 2));
+          yield* hold(`release-${round}`, false);
+          yield* expectFreshWindow;
+        }
+
+        // A second editor whose release arrives after the edit already ended.
+        const restarted = yield* deadlineOf;
+        yield* TestClock.adjust(Duration.millis(1_000));
+        yield* hold("late-release", false, "lapsed-editor");
+        assert.isTrue(DateTime.Equivalence(yield* deadlineOf, restarted));
         assert.deepEqual(steered, []);
       }).pipe(Effect.provide(layer));
     }),

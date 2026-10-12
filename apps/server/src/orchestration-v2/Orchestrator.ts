@@ -137,7 +137,7 @@ import {
   isSteerDue,
   isSteerInRecallWindow,
   steerAfterEdit,
-  steerRecallDeadline,
+  steerRecallWindowMs,
   steerReleaseAt,
   withoutSteerDeadline,
 } from "./SteerRecallWindow.ts";
@@ -1770,6 +1770,7 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
       const {
         queueBatchLeaderRunId: _previousBatchLeader,
         steerDeadlineAt: _steerDeadlineAt,
+        steerWindowMs: _steerWindowMs,
         editHeldUntil: _editHeldUntil,
         editHolds: _editHolds,
         ...unbatchedQueuedRun
@@ -5146,10 +5147,14 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
       }
       // Fork steer recall window: the steer waits as a queued run until its
       // deadline, then releaseDueSteers sends it into the running turn.
-      const steerDeadlineAt =
+      const steerWindowMs =
         dispatchMode.type === "steer_active"
-          ? steerRecallDeadline(command, yield* DateTime.now, isNativeMaintenanceCommand(command))
+          ? steerRecallWindowMs(command, isNativeMaintenanceCommand(command))
           : undefined;
+      const steerDeadlineAt =
+        steerWindowMs === undefined
+          ? undefined
+          : DateTime.add(yield* DateTime.now, { milliseconds: steerWindowMs });
       if (steerDeadlineAt !== undefined) {
         dispatchMode = { type: "queue_after_active" };
       }
@@ -5489,7 +5494,7 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
           ...(command.restartContinuationOfRunId === undefined
             ? {}
             : { restartContinuationOfRunId: command.restartContinuationOfRunId }),
-          ...(steerDeadlineAt === undefined ? {} : { steerDeadlineAt }),
+          ...(steerDeadlineAt === undefined ? {} : { steerDeadlineAt, steerWindowMs }),
           ...(continuedTaskId === undefined ? {} : { delegatedTaskId: continuedTaskId }),
         };
         const attempt: OrchestrationV2RunAttempt = {
@@ -8476,9 +8481,10 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
         ...(queuedRun.rootNodeId === null ? {} : { nodeId: queuedRun.rootNodeId }),
         providerInstanceId: queuedRun.providerInstanceId,
         occurredAt: now,
-        // A steer's recall window restarts once its last edit ends.
+        // A steer's recall window restarts once its last edit ends; a stale
+        // release from a lapsed editor ends nothing and leaves it alone.
         payload:
-          updated.editHeldUntil === undefined
+          queuedRun.editHeldUntil !== undefined && updated.editHeldUntil === undefined
             ? steerAfterEdit(updated, now, projection.runs.some(isBlockingRun))
             : updated,
       });

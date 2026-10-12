@@ -12,12 +12,11 @@ import * as DateTime from "effect/DateTime";
  * steers it into the running turn.
  */
 
-/** When a steer submitted now may leave its recall window, or undefined to steer at once. */
-export function steerRecallDeadline(
+/** How long a steer submitted now is held, or undefined to steer at once. */
+export function steerRecallWindowMs(
   command: Extract<OrchestrationV2Command, { readonly type: "message.dispatch" }>,
-  now: DateTime.Utc,
   isMaintenanceCommand: boolean,
-): DateTime.Utc | undefined {
+): number | undefined {
   const windowMs = Math.min(command.steerGraceWindowMs ?? 0, MAX_STEER_GRACE_WINDOW_MS);
   if (
     windowMs <= 0 ||
@@ -32,7 +31,7 @@ export function steerRecallDeadline(
   ) {
     return undefined;
   }
-  return DateTime.add(now, { milliseconds: windowMs });
+  return windowMs;
 }
 
 /**
@@ -66,7 +65,7 @@ export function isSteerDue(run: OrchestrationV2Run, now: DateTime.Utc): boolean 
 
 /** The run as an ordinary queued message, without its steer deadline. */
 export function withoutSteerDeadline(run: OrchestrationV2Run): OrchestrationV2Run {
-  const { steerDeadlineAt: _steerDeadlineAt, ...ordinary } = run;
+  const { steerDeadlineAt: _steerDeadlineAt, steerWindowMs: _steerWindowMs, ...ordinary } = run;
   return ordinary;
 }
 
@@ -81,8 +80,10 @@ export function steerAfterEdit(
   turnActive: boolean,
 ): OrchestrationV2Run {
   if (run.steerDeadlineAt === undefined) return run;
+  // Runs held before steerWindowMs existed fall back to their first window.
   const windowMs = Math.min(
-    DateTime.toEpochMillis(run.steerDeadlineAt) - DateTime.toEpochMillis(run.requestedAt),
+    run.steerWindowMs ??
+      DateTime.toEpochMillis(run.steerDeadlineAt) - DateTime.toEpochMillis(run.requestedAt),
     MAX_STEER_GRACE_WINDOW_MS,
   );
   if (!turnActive || windowMs <= 0) return withoutSteerDeadline(run);

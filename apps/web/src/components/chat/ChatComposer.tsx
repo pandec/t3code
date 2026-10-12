@@ -4798,7 +4798,15 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
     if (key === "Escape") {
       if (event.isComposing || event.keyCode === 229) return false;
       if (!menuIsActive) {
-        if (onCancelEditingQueuedMessage === undefined) return false;
+        if (
+          onCancelEditingQueuedMessage === undefined ||
+          event.shiftKey ||
+          event.altKey ||
+          event.metaKey ||
+          event.ctrlKey
+        ) {
+          return false;
+        }
         onCancelEditingQueuedMessage();
         return true;
       }
