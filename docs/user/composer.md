@@ -255,7 +255,9 @@ turn, queued messages run one turn each.
 A steer waits in the queue for a few seconds before it reaches the agent, showing how long it has
 left. Until then you can edit it, remove it, or press **Steer** to send it at once. On web and
 desktop, pressing `Enter` in an empty composer sends the newest waiting steer at once. If the turn ends
-first, it starts the next turn when its time is up. The wait is five seconds by default; change it
+first, it starts the next turn when its time is up. Opening a waiting steer for editing pauses it;
+saving or cancelling the edit (`Escape` on web and desktop) starts a fresh wait, or sends it right
+away if the turn has ended meanwhile. The wait is five seconds by default; change it
 under **Settings → Extras** on web and desktop or **Settings → Thread behavior** on mobile (set per
 device). Set it to 0 to steer immediately.
 

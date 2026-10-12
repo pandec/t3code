@@ -12758,6 +12758,9 @@ export default function ChatView(props: ChatViewProps) {
                               onFileOpen={openFileAttachment}
                               editingQueuedAttachments={composerEditingQueuedAttachments}
                               onRemoveEditingQueuedAttachment={removeEditingQueuedAttachment}
+                              onCancelEditingQueuedMessage={
+                                editingQueuedRun === null ? undefined : cancelEditingQueuedRun
+                              }
                             />
                           )}
                         </div>

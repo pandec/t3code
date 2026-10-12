@@ -136,7 +136,9 @@ import { RuntimePolicyV2 } from "./RuntimePolicy.ts";
 import {
   isSteerDue,
   isSteerInRecallWindow,
+  steerAfterEdit,
   steerRecallDeadline,
+  steerReleaseAt,
   withoutSteerDeadline,
 } from "./SteerRecallWindow.ts";
 import {
@@ -8463,6 +8465,7 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
         });
       }
       const now = yield* DateTime.now;
+      const updated = withEditHold(queuedRun, command.holderId, command.held, now);
       yield* emit(
         events,
         command,
@@ -8473,7 +8476,11 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
         ...(queuedRun.rootNodeId === null ? {} : { nodeId: queuedRun.rootNodeId }),
         providerInstanceId: queuedRun.providerInstanceId,
         occurredAt: now,
-        payload: withEditHold(queuedRun, command.holderId, command.held, now),
+        // A steer's recall window restarts once its last edit ends.
+        payload:
+          updated.editHeldUntil === undefined
+            ? steerAfterEdit(updated, now, projection.runs.some(isBlockingRun))
+            : updated,
       });
     });
 
@@ -12415,14 +12422,14 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
       ),
     );
 
-  // Wakes releaseDueSteers when a held steer's deadline passes (set on create,
-  // and again when a held queue resumes) and whenever a run starts running.
+  // Wakes releaseDueSteers when a held steer's window ends (set on create, and
+  // again when a held queue resumes or an edit ends) and whenever a run starts running.
   const watchSteerDeadlines = (stored: OrchestrationV2StoredEvent) => {
     const event = stored.event;
     if (event.type !== "run.created" && event.type !== "run.updated") return Effect.void;
     const run = event.payload;
     if (run.status === "running") return releaseDueSteers(event.threadId);
-    const deadline = run.steerDeadlineAt;
+    const deadline = steerReleaseAt(run);
     if (run.status !== "queued" || deadline === undefined || run.queueHeld === true) {
       return Effect.void;
     }

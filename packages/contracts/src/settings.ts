@@ -743,8 +743,8 @@ export const ClientSettingsSchema = Schema.Struct({
    * the snooze picker otherwise; false always opens the picker. */
   snoozeShortcutUntilDone: Schema.Boolean.pipe(Schema.withDecodingDefault(Effect.succeed(true))),
   /**
-   * How long a steer rests in the outbox before delivery. 0 sends immediately;
-   * mobile is unaffected (it keeps the model's built-in default).
+   * How long the server holds a steer as an editable queued message before it
+   * reaches the agent. 0 sends immediately. Mobile keeps its own per-device value.
    */
   steerGraceWindowMs: SteerGraceWindowMs.pipe(
     Schema.withDecodingDefault(Effect.succeed(DEFAULT_STEER_GRACE_WINDOW_MS)),

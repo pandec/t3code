@@ -2776,6 +2776,36 @@ it.layer(layerTest)("ProjectionStoreV2", (it) => {
         assert.equal(heldShell.status, "completed");
       }
 
+      // A queued message open for editing also waits for the user, so the
+      // thread does not read as starting while it is edited.
+      yield* projectionStore.apply({
+        id: EventId.make("event:clock:newer:edit-held"),
+        type: "run.updated",
+        threadId,
+        occurredAt: later,
+        payload: {
+          ...run,
+          id: RunId.make("run:clock:newer"),
+          ordinal: 2,
+          status: "queued",
+          editHeldUntil: later,
+          requestedAt: later,
+          startedAt: null,
+          completedAt: null,
+        },
+      });
+      const editHeldProjection = yield* projectionStore.getThreadProjection(threadId);
+      const editHeldSqlShell = (yield* projectionStore.getShellSnapshot()).threads.find(
+        (row) => row.id === threadId,
+      )!;
+      for (const editHeldShell of [
+        editHeldSqlShell,
+        ProjectionStore.threadShellFromProjection(editHeldProjection),
+      ]) {
+        assert.equal(editHeldShell.latestRunId, runId);
+        assert.equal(editHeldShell.status, "completed");
+      }
+
       // With only held runs, nothing has executed: both shells read idle.
       yield* projectionStore.apply({
         id: EventId.make("event:projection-shell-interruptible:held-first"),
