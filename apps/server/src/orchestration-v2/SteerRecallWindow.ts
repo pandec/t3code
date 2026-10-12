@@ -80,12 +80,16 @@ export function steerAfterEdit(
   turnActive: boolean,
 ): OrchestrationV2Run {
   if (run.steerDeadlineAt === undefined) return run;
-  // Runs held before steerWindowMs existed fall back to their first window.
+  // Runs held before steerWindowMs existed fall back to their first window, kept from now on.
   const windowMs = Math.min(
     run.steerWindowMs ??
       DateTime.toEpochMillis(run.steerDeadlineAt) - DateTime.toEpochMillis(run.requestedAt),
     MAX_STEER_GRACE_WINDOW_MS,
   );
   if (!turnActive || windowMs <= 0) return withoutSteerDeadline(run);
-  return { ...run, steerDeadlineAt: DateTime.add(now, { milliseconds: windowMs }) };
+  return {
+    ...run,
+    steerDeadlineAt: DateTime.add(now, { milliseconds: windowMs }),
+    steerWindowMs: windowMs,
+  };
 }
