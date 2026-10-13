@@ -567,7 +567,7 @@ export const make = Effect.gen(function* () {
       }
       const continuationRun =
         continueAfterRestart && trigger === "startup"
-          ? restartContinuationRun(projection)
+          ? restartContinuationRun(projection, now)
           : undefined;
       const effects: Array<EffectOutbox.PendingOrchestrationEffectV2> = continuationRun
         ? [
@@ -703,7 +703,7 @@ export const make = Effect.gen(function* () {
             .continueThreadsAfterServerUpdate
         )
           return;
-        const run = restartContinuationRun(projection);
+        const run = restartContinuationRun(projection, yield* DateTime.now);
         if (!run) return;
         const commandId = CommandId.make(`command:restart-prepare:${run.id}`);
         yield* eventSink.writeWithEffects({

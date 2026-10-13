@@ -2,7 +2,6 @@ import type { MenuAction } from "@react-native-menu/menu";
 import { useCallback, useMemo } from "react";
 import { NativeStackScreenOptions } from "../../native/StackHeader";
 import { MaterialThreadListToolbar } from "./MaterialThreadListToolbar";
-import { hasActiveHomeListFilters } from "./home-list-options";
 import type { HomeHeaderProps } from "./HomeHeader.types";
 
 export type { HomeHeaderEnvironment } from "./HomeHeader.types";
@@ -12,18 +11,13 @@ function checkedMenuState(checked: boolean) {
 }
 
 export function HomeHeader(props: HomeHeaderProps) {
-  const hasActiveFilters = hasActiveHomeListFilters(props);
-  const hasCustomListOptions = hasActiveFilters;
+  // The list uses a fixed creation order and ignores sort/group options, so
+  // the filter menu only carries the filters and the "customized" icon state
+  // keys off those alone.
+  const hasCustomListOptions =
+    props.selectedEnvironmentId !== null || props.selectedProjectKey !== null;
   const menuActions = useMemo<MenuAction[]>(
     () => [
-      ...(hasActiveFilters
-        ? ([
-            {
-              id: "clear-filters",
-              title: "Clear filters",
-            },
-          ] satisfies MenuAction[])
-        : []),
       {
         id: "environment",
         title: "Environment",
@@ -60,51 +54,12 @@ export function HomeHeader(props: HomeHeaderProps) {
               ],
             },
           ] satisfies MenuAction[])),
-      // One model across every thread makes the section a no-op; it appears
-      // only once it can discriminate (same rule as the shared iOS builder).
-      ...(props.models.length < 2
-        ? []
-        : ([
-            {
-              id: "model",
-              title: "Model",
-              subactions: [
-                {
-                  // "clear", not "all": a model slug could legitimately be
-                  // "all" and would then be unselectable.
-                  id: "model:clear",
-                  title: "All models",
-                  state: checkedMenuState(props.selectedModel === null),
-                },
-                ...props.models.map((model) => ({
-                  id: `model:${model.key}`,
-                  title: model.label,
-                  state: checkedMenuState(props.selectedModel === model.key),
-                })),
-              ],
-            },
-          ] satisfies MenuAction[])),
     ],
-    [
-      props.environments,
-      props.models,
-      props.projects,
-      props.selectedEnvironmentId,
-      props.selectedModel,
-      props.selectedProjectKey,
-      hasActiveFilters,
-    ],
+    [props.environments, props.projects, props.selectedEnvironmentId, props.selectedProjectKey],
   );
   const handleMenuAction = useCallback(
     (event: { nativeEvent: { event: string } }) => {
       const id = event.nativeEvent.event;
-      if (id === "clear-filters") {
-        props.onEnvironmentChange(null);
-        props.onProjectChange(null);
-        props.onModelChange(null);
-        return;
-      }
-
       if (id === "environment:all") {
         props.onEnvironmentChange(null);
         return;
@@ -130,19 +85,6 @@ export function HomeHeader(props: HomeHeaderProps) {
         const projectKey = id.slice("project:".length);
         if (props.projects.some((project) => project.key === projectKey)) {
           props.onProjectChange(projectKey);
-        }
-        return;
-      }
-
-      if (id === "model:clear") {
-        props.onModelChange(null);
-        return;
-      }
-
-      if (id.startsWith("model:")) {
-        const modelKey = id.slice("model:".length);
-        if (props.models.some((model) => model.key === modelKey)) {
-          props.onModelChange(modelKey);
         }
         return;
       }

@@ -92,6 +92,8 @@ vi.mock("./server", async () => {
   return { serverEnvironment: { configValueAtom: Atom.family(() => Atom.make(null)) } };
 });
 
+vi.mock("./git", () => ({ gitEnvironment: {} }));
+
 // Thread details, keyed `${environmentId}:${threadId}`: loaded, deleted, or
 // (absent from both) still empty.
 vi.mock("./threads", async () => {

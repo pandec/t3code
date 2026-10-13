@@ -211,8 +211,28 @@ async function guardMatches(
 }
 
 /**
- * Streams one transcript and returns what it contains, or `null` when the file
- * could not be read.
+ * Builds the byte-level test for a format's `usageMarkers`: whether a line
+ * contains any of them.
+ *
+ * One marker is a single `Buffer` search. Several would be one pass over the
+ * line each, so they are matched together as one alternation over the line's
+ * latin1 view instead: latin1 maps every byte to one character without
+ * validating it, so an ASCII marker matches exactly where its bytes do.
+ */
+export function transcriptLineGate(markers: readonly [string, ...string[]]) {
+  if (markers.length === 1) {
+    const marker = Buffer.from(markers[0]);
+    return (line: Buffer) => line.includes(marker);
+  }
+  const pattern = new RegExp(
+    markers.map((marker) => marker.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")).join("|"),
+  );
+  return (line: Buffer) => pattern.test(line.toString("latin1"));
+}
+
+/**
+ * Streams one transcript and returns the usage records it contains, or `null`
+ * when the file could not be read.
  *
  * The distinction matters twice over. To the caller's cache: a genuinely empty
  * transcript is a stable fact worth memoising, while a transient read failure
@@ -279,8 +299,22 @@ export async function readTranscriptRecords<State>(
       for (const record of parsed) out.push(record);
       return usageBearing && parsed.length === 0 && skipsOf(lineState) === skipsBefore ? 1 : 0;
     };
-    const parseLine = (line: string, lineState: State, out: UsageRecord[]): number => {
-      if (!format.mightCarryUsage(line)) return 0;
+
+    const toLineString = (lineBuffer: Buffer): string => {
+      const content =
+        lineBuffer.length > 0 && lineBuffer[lineBuffer.length - 1] === CARRIAGE_RETURN
+          ? lineBuffer.subarray(0, -1)
+          : lineBuffer;
+      return content.toString("utf8");
+    };
+
+    // Gate on the raw bytes so the lines that fail it, which is most of them,
+    // are never decoded.
+    const mightCarryUsage = transcriptLineGate(format.usageMarkers);
+    /** Returns 1 when a usage-bearing line was malformed (see `classify`). */
+    const parseLine = (lineBuffer: Buffer, lineState: State, out: UsageRecord[]): number => {
+      if (!mightCarryUsage(lineBuffer)) return 0;
+      const line = toLineString(lineBuffer);
       const skipsBefore = skipsOf(lineState);
       return classify(
         carriesUsage(line),
@@ -289,14 +323,6 @@ export async function readTranscriptRecords<State>(
         skipsBefore,
         out,
       );
-    };
-
-    const toLineString = (lineBuffer: Buffer): string => {
-      const content =
-        lineBuffer.length > 0 && lineBuffer[lineBuffer.length - 1] === CARRIAGE_RETURN
-          ? lineBuffer.subarray(0, -1)
-          : lineBuffer;
-      return content.toString("utf8");
     };
 
     const records: UsageRecord[] = [];
@@ -358,7 +384,7 @@ export async function readTranscriptRecords<State>(
           pendingChunks.length === 1
             ? pendingChunks[0]!
             : Buffer.concat(pendingChunks, pendingBytes);
-        malformed = parseLine(toLineString(line), lineState, out);
+        malformed = parseLine(line, lineState, out);
       }
       pendingChunks = [];
       pendingBytes = 0;
@@ -384,11 +410,7 @@ export async function readTranscriptRecords<State>(
         // Most lines fit in the current chunk. Avoid buffering/streaming
         // machinery on this hot path.
         if (!streaming && pendingBytes === 0) {
-          malformedRecords += parseLine(
-            toLineString(chunk.subarray(lineStart, newlineIndex)),
-            state,
-            records,
-          );
+          malformedRecords += parseLine(chunk.subarray(lineStart, newlineIndex), state, records);
         } else {
           append(chunk.subarray(lineStart, newlineIndex));
           malformedRecords += finish(state, records);

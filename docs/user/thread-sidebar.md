@@ -375,7 +375,7 @@ several selected threads together. Choose **Wake thread** to bring a thread back
 On web and desktop, **Snooze → Until I wake it** snoozes without a timer. The thread stays in the
 Snoozed section, after the timed snoozes, until you wake, pin, settle, or message it, or until it
 needs attention: a question or approval, a failure, or the agent finishing its work. Automatic
-settlement skips these threads.
+settlement and resuming after a restart skip these threads.
 
 While the agent is mid-turn or its subagents are still working, **Snooze → Until it's done** hides
 the thread until that work finishes, including the agent's follow-up on the subagents' results. Watch

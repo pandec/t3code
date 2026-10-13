@@ -19,6 +19,7 @@ import { environmentCatalog } from "../connection/catalog";
 import { isElectron } from "../env";
 import { appAtomRegistry } from "../rpc/atomRegistry";
 import { ThreadRouteView } from "../components/ThreadRouteView";
+import { ThreadLinkPrompt } from "../components/promptLinks/ThreadLinkPrompt";
 import { useClientSettings, useLegacySidebarEnabled } from "../hooks/useSettings";
 import { useThreadActions } from "../hooks/useThreadActions";
 import { openCommandPalette } from "../commandPaletteBus";
@@ -489,6 +490,9 @@ function ChatRouteLayout() {
   return (
     <>
       <ChatRouteGlobalShortcuts />
+      {threadTarget?.kind === "server" ? (
+        <ThreadLinkPrompt threadRef={threadTarget.threadRef} />
+      ) : null}
       <SplitThreadLayout>
         {threadTarget ? <ThreadRouteView target={threadTarget} /> : <Outlet />}
       </SplitThreadLayout>

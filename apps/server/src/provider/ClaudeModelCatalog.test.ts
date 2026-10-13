@@ -264,6 +264,25 @@ describe("Claude model catalog", () => {
       }
     });
 
+    it("keeps a renamed built-in native instead of on the gateway ladder", () => {
+      const scoped = scopeClaudeModelCatalog(catalogFromManifest(manifest()), [
+        "claude-synthetic-next=Renamed",
+      ]);
+      const selection = {
+        instanceId: claude,
+        model: "claude-synthetic-next",
+        options: [{ id: "effort", value: "extreme" }],
+      };
+      assert.notStrictEqual(
+        resolveClaudeCatalogApiModelId(scoped, selection),
+        "claude-synthetic-next(high)",
+      );
+      assert.strictEqual(
+        resolveClaudeCatalogApiModelId(scoped, selection),
+        resolveClaudeCatalogApiModelId(catalogFromManifest(manifest()), selection),
+      );
+    });
+
     it("keeps structured names and supported non-effort descriptors", () => {
       const scoped = scopeClaudeModelCatalog(catalogFromManifest(manifest()), [
         "synthetic",

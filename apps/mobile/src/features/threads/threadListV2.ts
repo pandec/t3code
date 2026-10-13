@@ -861,8 +861,6 @@ export function buildThreadListV2Items(input: {
   readonly pendingOrder?: PendingThreadOrder | null;
   readonly threads: ReadonlyArray<EnvironmentThreadShell>;
   readonly environmentId: EnvironmentId | null;
-  /** Model slug filter; null shows every model. */
-  readonly model?: string | null;
   readonly projectRefs?: ReadonlyArray<{
     readonly environmentId: EnvironmentId;
     readonly projectId: ProjectId;
@@ -933,7 +931,6 @@ export function buildThreadListV2Items(input: {
     if (thread.archivedAt !== null || thread.lineage.relationshipToParent === "subagent") continue;
     // The server stamps settledOverride for the tail.
     if (input.environmentId !== null && thread.environmentId !== input.environmentId) continue;
-    if (input.model != null && thread.modelSelection.model !== input.model) continue;
     if (projectKeys !== null && !projectKeys.has(`${thread.environmentId}:${thread.projectId}`)) {
       continue;
     }

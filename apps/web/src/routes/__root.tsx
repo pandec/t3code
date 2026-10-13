@@ -70,6 +70,7 @@ import { syncBrowserChromeTheme } from "../hooks/useTheme";
 import { configureClientTracing } from "../observability/clientTracing";
 import { resolveInitialServerAuthGateState } from "../environments/primary";
 import { hasHostedPairingRequest, isHostedStaticApp } from "../hostedPairing";
+import { useHostedPromptLinkLanding } from "../components/promptLinks/HostedPromptLinkLanding";
 import { isLocalEnvironmentDisabled } from "../localEnvironment";
 import { environmentShell } from "../state/shell";
 import { listeningPlayback, pauseListeningForThread } from "../state/listeningPlayback";
@@ -162,6 +163,9 @@ function RootRouteView() {
   // syncs and toasts so its connect/import actions can report failures.
   const isWelcomeRoute = pathname === "/welcome";
   const returningFromWelcomeRef = useRef(isWelcomeRoute);
+  const hostedPromptLinkLanding = useHostedPromptLinkLanding(
+    authGateState.status === "hosted-static",
+  );
 
   useEffect(() => {
     if (pathname === "/welcome") {
@@ -183,6 +187,17 @@ function RootRouteView() {
       <>
         <DocumentTitleSync />
         <Outlet />
+      </>
+    );
+  }
+
+  // Ahead of first-run onboarding, which would otherwise send a new visitor to the welcome
+  // wizard and lose the link.
+  if (hostedPromptLinkLanding !== null) {
+    return (
+      <>
+        <DocumentTitleSync />
+        {hostedPromptLinkLanding}
       </>
     );
   }

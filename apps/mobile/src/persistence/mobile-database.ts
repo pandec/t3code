@@ -22,6 +22,11 @@ const AUTO_VACUUM_CONVERSION_META_KEY = "auto-vacuum-conversion-v1";
 
 export const MOBILE_CACHE_MAX_ROW_BYTES = 4 * MEBIBYTE;
 export const MOBILE_CACHE_MAX_TOTAL_BYTES = 128 * MEBIBYTE;
+// Diffs can be large. Keep the offline PR cache within 32 MiB and 256 responses per
+// environment, and expire responses after 30 days.
+const PULL_REQUEST_CACHE_MAX_RECORDS = 256;
+const PULL_REQUEST_CACHE_MAX_BYTES = 32 * MEBIBYTE;
+const PULL_REQUEST_CACHE_MAX_AGE_MS = 30 * 24 * 60 * 60_000;
 const LEGACY_CACHE_DIRECTORIES = [
   "connection-shell-snapshots",
   "shell-snapshots",
@@ -36,6 +41,7 @@ export const ClientCacheKind = Schema.Literals([
   "server-config",
   "vcs-refs",
   "project-favicon",
+  "pull-request",
 ]);
 export type ClientCacheKind = typeof ClientCacheKind.Type;
 
@@ -306,10 +312,33 @@ export async function saveBoundedCacheRecord(
     payloadBytes,
     now,
   );
-  const pruneResult = await pruneCacheToBudget(database, {
+  const pullRequestEvictions =
+    input.kind === "pull-request"
+      ? await database.runAsync(
+          `DELETE FROM client_cache WHERE environment_id = ? AND kind = 'pull-request'
+           AND cache_key IN (
+             SELECT cache_key FROM (
+               SELECT cache_key, updated_at,
+                 ROW_NUMBER() OVER (ORDER BY updated_at DESC, cache_key) AS position,
+                 SUM(payload_bytes) OVER (ORDER BY updated_at DESC, cache_key) AS total_bytes
+               FROM client_cache WHERE environment_id = ? AND kind = 'pull-request'
+             ) WHERE position > ? OR total_bytes > ? OR updated_at < ?
+           )`,
+          input.environmentId,
+          input.environmentId,
+          PULL_REQUEST_CACHE_MAX_RECORDS,
+          PULL_REQUEST_CACHE_MAX_BYTES,
+          now - PULL_REQUEST_CACHE_MAX_AGE_MS,
+        )
+      : null;
+  const budgetPrune = await pruneCacheToBudget(database, {
     maxTotalBytes: options.maxTotalBytes,
     protectedIdentity: input,
   });
+  const pruneResult = {
+    ...budgetPrune,
+    removedRows: budgetPrune.removedRows + (pullRequestEvictions?.changes ?? 0),
+  };
   if (pruneResult.removedRows > 0) {
     await database.execAsync(`PRAGMA incremental_vacuum(${CACHE_INCREMENTAL_VACUUM_PAGES});`);
   }
@@ -329,12 +358,15 @@ export async function loadCacheRecord(
   const row = await database.getFirstAsync<{ readonly payload: string }>(
     `SELECT payload
      FROM client_cache
-     WHERE environment_id = ? AND kind = ? AND cache_key = ?`,
+     WHERE environment_id = ? AND kind = ? AND cache_key = ?
+       AND (kind != 'pull-request' OR updated_at >= ?)`,
     identity.environmentId,
     identity.kind,
     identity.cacheKey,
+    now - PULL_REQUEST_CACHE_MAX_AGE_MS,
   );
-  if (row !== null) {
+  // Pull-request responses expire 30 days after they were saved, so reads do not refresh them.
+  if (row !== null && identity.kind !== "pull-request") {
     await database.runAsync(
       `UPDATE client_cache
        SET updated_at = ?

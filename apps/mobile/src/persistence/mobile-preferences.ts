@@ -5,7 +5,15 @@ import * as Option from "effect/Option";
 import * as Ref from "effect/Ref";
 import * as Schema from "effect/Schema";
 import * as Semaphore from "effect/Semaphore";
-import type { ProviderInstanceId, SidebarProjectGroupingMode } from "@t3tools/contracts";
+import {
+  EnvironmentId,
+  PullRequestInvolvement,
+  PullRequestListFilters,
+  PullRequestListState,
+  type ProviderInstanceId,
+  type PullRequestMergeMethod,
+  type SidebarProjectGroupingMode,
+} from "@t3tools/contracts";
 import type { ComposerEnterBehavior } from "../lib/composerEnterBehavior";
 import type { FollowUpBehavior } from "../lib/followUpBehavior";
 import { isMicrophoneKind, type MicrophoneEntry } from "../lib/microphonePriority";
@@ -18,8 +26,37 @@ const PREFERENCES_KEY = "t3code.preferences";
 const PREFERENCES_FALLBACK_KEY = "t3code.preferences.fallback";
 export const MOBILE_PREFERENCES_OPERATION_TIMEOUT_MS = 5_000;
 
+/** The pull request list's filters and sort for one environment scope. */
+export const PullRequestListControls = Schema.Struct({
+  state: PullRequestListState,
+  involvement: PullRequestInvolvement,
+  filters: PullRequestListFilters,
+  projectId: Schema.optional(Schema.String),
+  projectEnvironmentId: Schema.optional(Schema.String),
+  sort: Schema.Literals(["updated", "created", "oldest"]),
+});
+export type PullRequestListControls = typeof PullRequestListControls.Type;
+
+const ThreadListFilters = Schema.Struct({
+  environmentId: Schema.NullOr(EnvironmentId),
+  projectKey: Schema.NullOr(Schema.String),
+});
+export type ThreadListFilters = typeof ThreadListFilters.Type;
+
+/** Controls are keyed by environment id, with "" for all environments. */
+const PullRequestListPreferences = Schema.Struct({
+  environmentId: Schema.NullOr(Schema.String),
+  controls: Schema.Record(Schema.String, PullRequestListControls),
+});
+export type PullRequestListPreferences = typeof PullRequestListPreferences.Type;
+
+const isThreadListFilters = Schema.is(ThreadListFilters);
+const isPullRequestListPreferences = Schema.is(PullRequestListPreferences);
+
 export interface Preferences {
   readonly archivedSectionVisibleCount?: number;
+  readonly pullRequestHideTestFiles?: boolean;
+  readonly pullRequestMergeMethod?: PullRequestMergeMethod;
   readonly liveActivitiesEnabled?: boolean;
   readonly themeId?: MobileThemeId;
   readonly lightThemeId?: MobileThemeId;
@@ -81,6 +118,9 @@ export interface Preferences {
   readonly steerGraceWindowMs?: number;
   readonly accentTintsEnabled?: boolean;
   readonly accentTintIntensityPercent?: number;
+  /** Home list filters, restored on the next launch. */
+  readonly threadListFilters?: ThreadListFilters;
+  readonly pullRequestListFilters?: PullRequestListPreferences;
 }
 
 export class MobilePreferencesLoadError extends Schema.TaggedError<MobilePreferencesLoadError>()(
@@ -123,6 +163,8 @@ export class MobilePreferencesStore extends Context.Service<
 export function sanitizePreferences(parsed: Preferences): Preferences {
   const preferences: {
     archivedSectionVisibleCount?: number;
+    pullRequestHideTestFiles?: boolean;
+    pullRequestMergeMethod?: PullRequestMergeMethod;
     liveActivitiesEnabled?: boolean;
     themeId?: MobileThemeId;
     lightThemeId?: MobileThemeId;
@@ -155,10 +197,23 @@ export function sanitizePreferences(parsed: Preferences): Preferences {
     steerGraceWindowMs?: number;
     accentTintsEnabled?: boolean;
     accentTintIntensityPercent?: number;
+    threadListFilters?: ThreadListFilters;
+    pullRequestListFilters?: PullRequestListPreferences;
   } = {};
 
   if (typeof parsed.archivedSectionVisibleCount === "number") {
     preferences.archivedSectionVisibleCount = parsed.archivedSectionVisibleCount;
+  }
+  if (typeof parsed.pullRequestHideTestFiles === "boolean") {
+    preferences.pullRequestHideTestFiles = parsed.pullRequestHideTestFiles;
+  }
+
+  if (
+    parsed.pullRequestMergeMethod === "squash" ||
+    parsed.pullRequestMergeMethod === "merge" ||
+    parsed.pullRequestMergeMethod === "rebase"
+  ) {
+    preferences.pullRequestMergeMethod = parsed.pullRequestMergeMethod;
   }
   if (typeof parsed.liveActivitiesEnabled === "boolean") {
     preferences.liveActivitiesEnabled = parsed.liveActivitiesEnabled;
@@ -287,6 +342,12 @@ export function sanitizePreferences(parsed: Preferences): Preferences {
   }
   if (typeof parsed.threadListWorkingShelfExpanded === "boolean") {
     preferences.threadListWorkingShelfExpanded = parsed.threadListWorkingShelfExpanded;
+  }
+  if (isThreadListFilters(parsed.threadListFilters)) {
+    preferences.threadListFilters = parsed.threadListFilters;
+  }
+  if (isPullRequestListPreferences(parsed.pullRequestListFilters)) {
+    preferences.pullRequestListFilters = parsed.pullRequestListFilters;
   }
   return preferences;
 }

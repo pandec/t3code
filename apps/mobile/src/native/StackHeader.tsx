@@ -3,7 +3,8 @@ import type {
   NativeStackNavigationOptions,
   NativeStackNavigationProp,
 } from "@react-navigation/native-stack";
-import { useEffect, useLayoutEffect, useMemo, useRef } from "react";
+import { use, useEffect, useLayoutEffect, useMemo, useRef } from "react";
+import { NativeWorkspaceTabActivityContext } from "./v5-workspace-context";
 import type { ColorValue } from "react-native";
 
 import {
@@ -153,6 +154,7 @@ export function NativeStackScreenOptions(props: {
   readonly name?: string;
 }) {
   const navigation = useNativeStackNavigation();
+  const tabActive = use(NativeWorkspaceTabActivityContext)?.active ?? true;
   const lastAppliedOptionsSignatureRef = useRef<string | undefined>(undefined);
   const latestOptionFunctionsRef = useRef(new Map<string, (...args: unknown[]) => unknown>());
   const optionFunctionWrappersRef = useRef(new Map<string, (...args: unknown[]) => unknown>());
@@ -169,6 +171,10 @@ export function NativeStackScreenOptions(props: {
   finishHeaderDiagnosticWork("stabilize", stabilizationStartedAt);
 
   useLayoutEffect(() => {
+    if (!tabActive) {
+      lastAppliedOptionsSignatureRef.current = undefined;
+      return;
+    }
     if (!navigation || !stableOptions) {
       return;
     }
@@ -185,7 +191,7 @@ export function NativeStackScreenOptions(props: {
     lastAppliedOptionsSignatureRef.current = signature;
     recordHeaderOptionsDecision(true);
     navigation.setOptions(stableOptions);
-  }, [navigation, props.optionsVersion, stableOptions]);
+  }, [navigation, props.optionsVersion, stableOptions, tabActive]);
 
   useEffect(() => {
     if (!navigation || !props.listeners) {

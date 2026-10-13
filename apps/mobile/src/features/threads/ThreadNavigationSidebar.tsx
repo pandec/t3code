@@ -1,4 +1,5 @@
 import { useAndroidControlSizing } from "../../components/useAndroidControlSizing";
+import { resolveScratchProjectScopeKey } from "@t3tools/client-runtime/state/project-grouping";
 import { useAppearancePreferences } from "../settings/appearance/AppearancePreferencesProvider";
 import { computeGroupedThreadMoveAvailability } from "./threadOrder";
 import type {
@@ -45,9 +46,8 @@ import { useWorkspaceState } from "../../state/workspace";
 import { useSavedRemoteConnections } from "../../state/use-remote-environment-registry";
 import { useHardwareKeyboardCommand } from "../keyboard/hardwareKeyboardCommands";
 import { useThreadJumpShortcuts } from "../keyboard/threadKeyboardShortcuts";
-import { hasActiveHomeListFilters, useHomeListOptions } from "../home/home-list-options";
+import { useHomeListOptions } from "../home/home-list-options";
 import { buildHomeListFilterMenu } from "../home/home-list-filter-menu";
-import { useHomeModelFilterOptions } from "../home/use-home-model-filter-options";
 import { buildHomeProjectScopes } from "../home/homeThreadList";
 import { SwipeableScrollGateProvider, useSwipeableScrollGate } from "../home/thread-swipe-actions";
 import { usePendingTaskListActions } from "../home/usePendingTaskListActions";
@@ -220,11 +220,8 @@ function ThreadNavigationSidebarPane(
       ),
     [environments],
   );
-  const { modelFilterOptions, availableModels } = useHomeModelFilterOptions(threads);
-  const { options, setSelectedEnvironmentId, setSelectedModel } = useHomeListOptions(
-    availableEnvironmentIds,
-    availableModels,
-  );
+  const { options, setSelectedEnvironmentId, setSelectedProjectKey } =
+    useHomeListOptions(availableEnvironmentIds);
   const searchEnvironmentIds = useMemo(
     () =>
       options.selectedEnvironmentId === null
@@ -254,9 +251,16 @@ function ThreadNavigationSidebarPane(
     () => new Set(threadSearch.matches.map(threadSearchMatchKey)),
     [threadSearch.matches],
   );
-  const [selectedProjectKey, setSelectedProjectKey] = useState<string | null>(null);
-  const selectedModelLabel =
-    modelFilterOptions.find((model) => model.key === options.selectedModel)?.label ?? null;
+  const projectScopeKey = options.selectedProjectKey;
+  const resolvedProjectKey = resolveScratchProjectScopeKey(projectScopeKey, projects, {
+    sidebarProjectGroupingMode: options.projectGroupingMode,
+    sidebarProjectGroupingOverrides: {},
+  });
+  useEffect(() => {
+    if (resolvedProjectKey !== projectScopeKey) {
+      setSelectedProjectKey(resolvedProjectKey);
+    }
+  }, [projectScopeKey, resolvedProjectKey, setSelectedProjectKey]);
   const projectScopes = useMemo(
     () =>
       buildHomeProjectScopes({
@@ -311,25 +315,15 @@ function ThreadNavigationSidebarPane(
     [projectScopes, resolveProjectAccentColor],
   );
   const selectedProjectScope = useMemo(
-    () =>
-      selectedProjectKey === null
-        ? null
-        : (projectScopes.find((scope) => scope.key === selectedProjectKey) ?? null),
-    [projectScopes, selectedProjectKey],
+    () => projectScopes.find((scope) => scope.key === resolvedProjectKey) ?? null,
+    [projectScopes, resolvedProjectKey],
   );
-  useEffect(() => {
-    if (
-      selectedProjectKey !== null &&
-      !projectFilterOptions.some((project) => project.key === selectedProjectKey)
-    ) {
-      setSelectedProjectKey(null);
-    }
-  }, [projectFilterOptions, selectedProjectKey]);
+  // A saved project stays selected while its environment is offline or filtered out.
+  const selectedProjectKey = selectedProjectScope?.key ?? null;
   // The shelf is unfiltered, so any active filter or search hides it.
   const archiveShelfVisible =
     props.searchQuery.trim().length === 0 &&
     options.selectedEnvironmentId === null &&
-    options.selectedModel === null &&
     selectedProjectScope === null;
   const recentArchive = useMemo(
     () =>
@@ -383,13 +377,12 @@ function ThreadNavigationSidebarPane(
   const [settledVisibleCount, setSettledVisibleCount] = useState(
     THREAD_LIST_V2_SETTLED_INITIAL_COUNT,
   );
-  // JSON, not a colon join: model slugs, project keys, and searches all admit
+  // JSON, not a colon join: project keys and searches both admit
   // colons, so a delimited string can collide across different filter states
   // and silently skip the reset.
   const settledResetKey = JSON.stringify([
     options.selectedEnvironmentId,
     selectedProjectKey,
-    options.selectedModel,
     props.searchQuery.trim(),
   ]);
   const lastSettledResetKeyRef = useRef(settledResetKey);
@@ -494,7 +487,6 @@ function ThreadNavigationSidebarPane(
       pendingOrder,
       threads: threads.filter((thread) => thread.archivedAt === null),
       environmentId: options.selectedEnvironmentId,
-      model: options.selectedModel,
       projectRefs: selectedProjectScope === null ? null : selectedProjectScope.projectRefs,
       searchQuery: props.searchQuery,
       matchedThreadKeys,
@@ -523,7 +515,6 @@ function ThreadNavigationSidebarPane(
     pinnedShelfExpanded,
     props.selectedThreadKey,
     options.selectedEnvironmentId,
-    options.selectedModel,
     props.searchQuery,
     matchedThreadKeys,
     settledVisibleCount,
@@ -550,17 +541,13 @@ function ThreadNavigationSidebarPane(
     // Queued offline tasks are not thread shells, so the v2 item builder
     // never sees them; the shared splice puts them below the active block
     // (mirrors the compact Home v2 list) where they stay visible and
-    // deletable while their environment is offline. Same environment, model,
+    // deletable while their environment is offline. Same environment,
     // project, and search filters as the list.
     const v2SearchQuery = props.searchQuery.trim().toLocaleLowerCase();
     const v2PendingTasks = pendingTasks.filter(
       (pendingTask) =>
         (options.selectedEnvironmentId === null ||
           pendingTask.environmentId === options.selectedEnvironmentId) &&
-        (options.selectedModel === null ||
-          (pendingTask.kind === "pending"
-            ? pendingTask.message.modelSelection?.model
-            : pendingTask.draft.modelSelection?.model) === options.selectedModel) &&
         (selectedProjectRefs === null ||
           selectedProjectRefs.has(
             scopedProjectKey(pendingTask.environmentId, pendingTask.projectId),
@@ -608,7 +595,6 @@ function ThreadNavigationSidebarPane(
     props.selectedThreadKey,
     nowMinute,
     options.selectedEnvironmentId,
-    options.selectedModel,
     pendingTasks,
     props.searchQuery,
     queuedThreadKeys,
@@ -665,32 +651,8 @@ function ThreadNavigationSidebarPane(
               ],
             },
           ] satisfies MenuAction[])),
-      // Only once it can discriminate (same rule as the shared iOS builder).
-      ...(modelFilterOptions.length < 2
-        ? []
-        : ([
-            {
-              id: "model",
-              title: "Model",
-              subactions: [
-                {
-                  // "clear", not "all": a model slug could legitimately be
-                  // "all" and would then be unselectable.
-                  id: "model:clear",
-                  title: "All models",
-                  subtitle: "Show threads on every model",
-                  state: options.selectedModel === null ? "on" : "off",
-                },
-                ...modelFilterOptions.map((model) => ({
-                  id: `model:${model.key}`,
-                  title: model.label,
-                  state: options.selectedModel === model.key ? ("on" as const) : ("off" as const),
-                })),
-              ],
-            },
-          ] satisfies MenuAction[])),
     ],
-    [environments, modelFilterOptions, options, projectFilterOptions, selectedProjectKey],
+    [environments, options, projectFilterOptions, selectedProjectKey],
   );
   const handleListMenuAction = useCallback(
     ({ nativeEvent }: { readonly nativeEvent: { readonly event: string } }) => {
@@ -717,25 +679,8 @@ function ThreadNavigationSidebarPane(
         }
         return;
       }
-      if (event === "model:clear") {
-        setSelectedModel(null);
-        return;
-      }
-      if (event.startsWith("model:")) {
-        const modelKey = event.slice("model:".length);
-        if (modelFilterOptions.some((model) => model.key === modelKey)) {
-          setSelectedModel(modelKey);
-        }
-        return;
-      }
     },
-    [
-      environments,
-      modelFilterOptions,
-      projectFilterOptions,
-      setSelectedEnvironmentId,
-      setSelectedModel,
-    ],
+    [environments, projectFilterOptions, setSelectedEnvironmentId, setSelectedProjectKey],
   );
 
   const [measuredHeaderHeight, setMeasuredHeaderHeight] = useState<number | null>(null);
@@ -1087,7 +1032,9 @@ function ThreadNavigationSidebarPane(
       workingShelfEnabled,
     ],
   );
-  const filterCustomized = hasActiveHomeListFilters({ ...options, selectedProjectKey });
+  // The list ignores sort/group options, so only the environment and project
+  // filters can light the "customized" state.
+  const filterCustomized = options.selectedEnvironmentId !== null || selectedProjectKey !== null;
   const filterIcon = filterCustomized
     ? "line.3.horizontal.decrease.circle.fill"
     : "line.3.horizontal.decrease.circle";
@@ -1096,27 +1043,18 @@ function ThreadNavigationSidebarPane(
       buildHomeListFilterMenu({
         environments,
         projects: projectFilterOptions,
-        models: modelFilterOptions,
         selectedEnvironmentId: options.selectedEnvironmentId,
         selectedProjectKey,
-        selectedModel: options.selectedModel,
         onEnvironmentChange: setSelectedEnvironmentId,
         onProjectChange: setSelectedProjectKey,
-        onModelChange: setSelectedModel,
-        onClearFilters: () => {
-          setSelectedEnvironmentId(null);
-          setSelectedProjectKey(null);
-          setSelectedModel(null);
-        },
       }),
     [
       environments,
-      modelFilterOptions,
       options,
       projectFilterOptions,
       selectedProjectKey,
       setSelectedEnvironmentId,
-      setSelectedModel,
+      setSelectedProjectKey,
     ],
   );
   const nativeHeaderItems = useMemo(
@@ -1148,11 +1086,7 @@ function ThreadNavigationSidebarPane(
               : "No matching threads"
             : selectedProjectScope !== null
               ? `No threads in ${selectedProjectScope.title}`
-              : // A model pin can empty the list in one tap; "No threads yet"
-                // over a filtered inbox reads as data loss.
-                options.selectedModel !== null
-                ? `No threads on ${selectedModelLabel ?? options.selectedModel}`
-                : "No threads yet"}
+              : "No threads yet"}
     </Text>
   );
   // Fork: with archived rows below, "No threads yet" would read as data loss.

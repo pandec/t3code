@@ -1,6 +1,9 @@
 import { ThreadHoverCard, ThreadHoverCardPopup } from "./ThreadHoverCard";
 import { CollapsibleSectionHeader } from "./ui/collapsible-section-header";
-import { setThreadChangeRequestSnapshot } from "./ThreadStatusIndicators";
+import {
+  setThreadChangeRequestSnapshot,
+  ThreadTerminalStatusButton,
+} from "./ThreadStatusIndicators";
 import { ThreadContextDragGhost } from "./chat/ThreadContextDragGhost";
 import {
   dropThreadContext,
@@ -74,6 +77,7 @@ import {
   type EnvironmentId,
   type EnvironmentMachineKind,
   type ProjectId,
+  type ScopedProjectRef,
   type ScopedThreadRef,
   type SidebarProjectAccentColor,
   type SidebarThreadProviderIconVisibility,
@@ -162,6 +166,8 @@ import { getProjectOrderKey, selectProjectGroupingSettings } from "../logicalPro
 import {
   buildSidebarProjectSnapshots,
   projectGroupsSpanEnvironments,
+  resolveSidebarProjectScopeKey,
+  getSidebarProjectSettingsKey,
   type SidebarProjectSnapshot,
 } from "../sidebarProjectGrouping";
 import { legacyProjectCwdPreferenceKey, useUiStateStore } from "../uiStateStore";
@@ -202,6 +208,7 @@ import {
   useThreadShells,
 } from "../state/entities";
 import { environmentServerConfigsAtom, primaryServerKeybindingsAtom } from "../state/server";
+import { environmentProjects } from "../state/projects";
 import { vcsEnvironment } from "../state/vcs";
 import { threadEnvironment } from "../state/threads";
 import { useEnvironmentQuery } from "../state/query";
@@ -307,7 +314,6 @@ import {
   terminalStatusFromRunningIds,
   threadChangeRequestSnapshotsAtom,
   type ThreadChangeRequestSnapshot,
-  synchronizeTerminalPulse,
   type TerminalStatusIndicator,
   useLinkedThreadPullRequest,
   ThreadSearchPullRequestNumber,
@@ -2034,19 +2040,13 @@ const SidebarThreadRow = memo(function SidebarThreadRow(props: {
         onOpenPullRequest={handlePrClick}
       />
     ) : null;
-  const terminalStatusIcon = terminalStatus ? (
-    <span
-      role="img"
-      aria-label={terminalProcessLabel(terminalProcessCount)}
-      data-testid={`sidebar-terminal-status-${thread.id}`}
-      className={cn("inline-flex shrink-0 items-center justify-center", terminalStatus.colorClass)}
-    >
-      <TerminalIcon
-        className={cn("size-3.5", terminalStatus.pulse && "motion-safe:animate-status-pulse")}
-        onAnimationStart={synchronizeTerminalPulse}
-      />
-    </span>
-  ) : null;
+  const terminalStatusIcon = (
+    <ThreadTerminalStatusButton
+      threadRef={threadRef}
+      terminalIds={runningTerminalIds}
+      onThreadActivate={onThreadActivate}
+    />
+  );
   // Only the two threads on screen ever get a non-null marker, so the list
   // stays quiet.
   const splitPaneIcon = props.splitPaneMarker ? (
@@ -3185,6 +3185,7 @@ export default function Sidebar() {
     () =>
       buildSidebarProjectSnapshots({
         projects: sidebarProjectSortOrder === "manual" ? orderedProjects : projects,
+        groupScratchProjects: true,
         settings: projectGroupingSettings,
         primaryEnvironmentId,
         resolveEnvironmentLabel: (environmentId) => environmentLabelById.get(environmentId) ?? null,
@@ -3522,16 +3523,23 @@ export default function Sidebar() {
   }, [clearSelection, environmentFilter.signature, projectFilterSignature]);
 
   const openProjectSettings = useCallback(
-    (projectGroup: SidebarProjectSnapshot) => {
+    (projectGroup: SidebarProjectSnapshot, projectRef?: ScopedProjectRef) => {
       if (isMobile) {
         setOpenMobile(false);
       }
       void router.navigate({
         to: "/projects/$projectKey",
-        params: { projectKey: projectGroup.projectKey },
+        params: {
+          projectKey: getSidebarProjectSettingsKey(
+            projectGroup,
+            projectGroupingSettings,
+            projects,
+            projectRef,
+          ),
+        },
       });
     },
-    [isMobile, router, setOpenMobile],
+    [isMobile, projectGroupingSettings, projects, router, setOpenMobile],
   );
   const handleProjectSettings = useCallback(
     (
@@ -5794,7 +5802,11 @@ export default function Sidebar() {
         if (clicked._tag === "Failure") return;
         switch (clicked.value) {
           case "project-settings":
-            if (projectGroup) openProjectSettings(projectGroup);
+            if (projectGroup)
+              openProjectSettings(projectGroup, {
+                environmentId: session.environmentId,
+                projectId: session.projectId,
+              });
             return;
           case "copy-path":
             if (workspacePath) copyPathToClipboard(workspacePath, { path: workspacePath });
@@ -5978,7 +5990,11 @@ export default function Sidebar() {
             if (threadProjectGroup) isolateProjectScope(threadProjectGroup.projectKey);
             return;
           case "project-settings":
-            if (threadProjectGroup) openProjectSettings(threadProjectGroup);
+            if (threadProjectGroup)
+              openProjectSettings(threadProjectGroup, {
+                environmentId: threadRef.environmentId,
+                projectId: thread.projectId,
+              });
             return;
           case "new-thread-on-branch": {
             // Explicit branch carry-over: reuse the thread's worktree when it

@@ -1,6 +1,7 @@
 import { scopeProjectRef, scopeThreadRef } from "@t3tools/client-runtime/environment";
 import { squashAtomCommandFailure } from "@t3tools/client-runtime/state/runtime";
 import type { EnvironmentId, ScopedThreadRef } from "@t3tools/contracts";
+import { parseThreadLinkPrompt, promptLinkAppPath } from "@t3tools/shared/promptLinks";
 import { useRouter } from "@tanstack/react-router";
 import { useEffect, useEffectEvent, useRef } from "react";
 
@@ -10,7 +11,9 @@ import { useComposerDraftStore } from "../../composerDraftStore";
 import { useNewThreadHandler } from "../../hooks/useHandleNewThread";
 import { useScratchProject } from "../../hooks/useScratchProject";
 import { selectActiveRightPanelSurface, useRightPanelStore } from "../../rightPanelStore";
-import { resolveThreadRouteTarget } from "../../threadRoutes";
+import { resolveThreadRouteRef, resolveThreadRouteTarget } from "../../threadRoutes";
+import { placeLinkedPrompt } from "../promptLinks/linkedPrompt";
+import { openThreadInActivePane } from "../thread-split/threadOpenTarget";
 import { useThreadSplitStore } from "../thread-split/threadSplitStore";
 import { assetEnvironment } from "../../state/assets";
 import { useEnvironmentHttpBaseUrl, usePrimaryEnvironment } from "../../state/environments";
@@ -18,6 +21,9 @@ import { previewEnvironment } from "../../state/preview";
 import { useAtomCommand } from "../../state/use-atom-command";
 import { useAtomQueryRunner } from "../../state/use-atom-query-runner";
 import { stackedThreadToast, toastManager } from "../ui/toast";
+
+/** An in-app thread path from `promptLinkAppPath`: `/<environmentId>/<threadId>[?…]`. */
+const THREAD_APP_PATH = /^\/([^/?]+)\/([^/?]+)\/?(\?.*)?$/;
 
 /** Fork: the thread in the active split pane; the route covers only the primary pane. */
 function activePaneThread(routeParams: Record<string, string | undefined>): ScopedThreadRef | null {
@@ -53,9 +59,11 @@ function threadShowingBrowser(
 }
 
 /**
- * Opens each web link or HTML file the OS hands T3 Code as the default browser
- * (macOS). With a browser panel on screen the page opens as a new tab there;
- * otherwise it starts a thread without a project, its browser panel maximized.
+ * Opens each link the OS hands T3 Code. Prompt and thread links, by `t3code://`
+ * or as hosted-app pages, open in the app. Other web links and HTML files arrive
+ * because T3 Code is the default browser (macOS): with a browser panel on screen
+ * the page opens as a new tab there; otherwise it starts a thread without a
+ * project, its browser panel maximized.
  */
 export function DesktopWebLinkCoordinator() {
   const router = useRouter();
@@ -100,7 +108,40 @@ export function DesktopWebLinkCoordinator() {
     return threadRef;
   };
 
+  // Fork: a thread link opens in the active split pane. A primary-pane landing keeps the
+  // `?prompt=` in the route for ThreadLinkPrompt; any other landing places the prompt here.
+  const openAppPath = (appPath: string) => {
+    const threadPath = THREAD_APP_PATH.exec(appPath);
+    const targetRef = threadPath
+      ? resolveThreadRouteRef({
+          environmentId: decodeURIComponent(threadPath[1]!),
+          threadId: decodeURIComponent(threadPath[2]!),
+        })
+      : null;
+    if (targetRef === null) {
+      void router.navigate({ href: appPath });
+      return;
+    }
+    const opened = openThreadInActivePane({
+      targetRef,
+      routeThreadRef: resolveThreadRouteRef(router.state.matches.at(-1)?.params ?? {}),
+      navigateToPrimary: () => router.navigate({ href: appPath }),
+    });
+    if (opened.plan.kind === "navigate-primary") return;
+    const parsed = parseThreadLinkPrompt(threadPath?.[3] ?? "");
+    if (!parsed.ok) {
+      reportFailure(appPath, parsed.error);
+    } else if (parsed.value !== null) {
+      placeLinkedPrompt(targetRef, parsed.value);
+    }
+  };
+
   const openLink = useEffectEvent(async (url: string) => {
+    const appPath = promptLinkAppPath(url);
+    if (appPath !== null) {
+      openAppPath(appPath);
+      return;
+    }
     const isFile = url.startsWith("file:");
     const routeParams = router.state.matches.at(-1)?.params ?? {};
     const threadRef =

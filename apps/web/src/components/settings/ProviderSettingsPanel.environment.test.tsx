@@ -142,6 +142,7 @@ vi.mock("../../state/session", () => ({
 
 vi.mock("../../state/entities", () => ({
   useProjects: () => [],
+  useServerConfigs: () => new Map(),
 }));
 
 import { ProviderInstanceCard } from "./ProviderInstanceCard";

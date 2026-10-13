@@ -937,32 +937,6 @@ describe("buildThreadListV2Items", () => {
     expect(layout.snoozedCount).toBe(0);
   });
 
-  it("keeps only threads on the pinned model", () => {
-    const layout = buildThreadListV2Items({
-      threads: [
-        makeThread({
-          id: ThreadId.make("opus"),
-          title: "Opus",
-          modelSelection: {
-            instanceId: ProviderInstanceId.make("claude"),
-            model: "claude-opus-4-5",
-          },
-        }),
-        makeThread({
-          id: ThreadId.make("codex"),
-          title: "Codex",
-          modelSelection: { instanceId: ProviderInstanceId.make("codex"), model: "gpt-5.4" },
-        }),
-      ],
-      environmentId: null,
-      model: "claude-opus-4-5",
-      searchQuery: "",
-      now: NOW,
-    });
-
-    expect(layout.items.map((item) => item.thread.id)).toEqual(["opus"]);
-  });
-
   it("partitions settled threads into a slim shelf", () => {
     const layout = buildThreadListV2Items({
       threads: [

@@ -124,13 +124,19 @@ export const BUNDLED_CLAUDE_MODEL_CATALOG = resolveClaudeModelCatalog(
  * Scope the catalog to one instance's settings. Custom slugs stay opaque, keep
  * the gateway effort ladder, and may add only the non-effort descriptors that
  * the adapter handles directly. Built-in aliases shadowed by custom slugs are
- * removed without changing canonical built-in models.
+ * removed without changing canonical built-in models; an entry that names a
+ * canonical slug is a rename and leaves that model native.
  */
 export function scopeClaudeModelCatalog(
   catalog: ClaudeModelCatalog,
   customModels: ReadonlyArray<CustomModelSetting>,
 ): ClaudeModelCatalog {
-  const customEntries = readCustomModelEntries(customModels);
+  // A custom entry naming a canonical built-in slug only renames that built-in
+  // (upstream display-name overrides), so it stays a native Claude model.
+  const canonicalSlugs = new Set(catalog.models.map((entry) => entry.model.slug.toLowerCase()));
+  const customEntries = readCustomModelEntries(customModels).filter(
+    (entry) => !canonicalSlugs.has(entry.slug.toLowerCase()),
+  );
   if (customEntries.length === 0) return catalog;
   const customAliases = new Set(customEntries.map((entry) => entry.slug.toLowerCase()));
 
@@ -146,10 +152,9 @@ export function scopeClaudeModelCatalog(
       },
     };
   });
-  const builtInSlugs = new Set(builtInModels.map((entry) => entry.model.slug));
   const customCatalogModels: Array<ClaudeCatalogModel> = [];
   for (const entry of customEntries) {
-    if (!entry.capabilities || builtInSlugs.has(entry.slug)) continue;
+    if (!entry.capabilities) continue;
     customCatalogModels.push({
       model: {
         slug: entry.slug,

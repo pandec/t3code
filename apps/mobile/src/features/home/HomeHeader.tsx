@@ -12,7 +12,6 @@ import { withNativeGlassHeaderItem } from "../layout/native-glass-header-items";
 import { createNativeMailSearchToolbarItem } from "../layout/native-mail-search-toolbar";
 import { useNativeMailSearchToolbar } from "../../native/use-native-mail-search-toolbar";
 import { buildHomeListFilterMenu } from "./home-list-filter-menu";
-import { hasActiveHomeListFilters } from "./home-list-options";
 import { createSidebarHeaderItems } from "../threads/sidebar-native-header-items";
 import type { HomeHeaderProps } from "./HomeHeader.types";
 import { useAdaptiveWorkspaceLayout } from "../layout/AdaptiveWorkspaceLayout";
@@ -21,13 +20,14 @@ export type { HomeHeaderEnvironment } from "./HomeHeader.types";
 
 export function HomeHeader(props: HomeHeaderProps) {
   const navigation = useNavigation<NativeStackNavigationProp<ParamListBase>>();
-  const { panes, togglePrimarySidebar } = useAdaptiveWorkspaceLayout();
+  const { layout, panes, togglePrimarySidebar } = useAdaptiveWorkspaceLayout();
   const usesNativeMailSearchToolbar = useNativeMailSearchToolbar();
   const primaryColumn = use(NativePrimaryColumnContext);
   const sidebarHeader =
     Platform.OS === "ios" &&
     primaryColumn !== null &&
     (Platform.isPad || !usesNativeMailSearchToolbar);
+  const showsCompactCompose = Platform.OS === "ios" && Platform.isPad && !layout.usesSplitView;
   const searchBarRef = useRef<SearchBarCommands>(null);
   const focusAfterReveal = useRef(false);
   useEffect(
@@ -41,8 +41,11 @@ export function HomeHeader(props: HomeHeaderProps) {
     [navigation],
   );
   const iconColor = useUniwindTheme()["--color-icon"];
-  const hasActiveFilters = hasActiveHomeListFilters(props);
-  const hasCustomListOptions = hasActiveFilters;
+  // The list uses a fixed creation order and ignores sort/group options, so
+  // the filter menu only carries the filters and the "customized" icon state
+  // keys off those alone.
+  const hasCustomListOptions =
+    props.selectedEnvironmentId !== null || props.selectedProjectKey !== null;
   const focusSearch = useCallback(() => {
     if (primaryColumn && !panes.primarySidebarVisible) {
       focusAfterReveal.current = true;
@@ -53,18 +56,16 @@ export function HomeHeader(props: HomeHeaderProps) {
     return searchBarRef.current !== null;
   }, [primaryColumn, panes.primarySidebarVisible, togglePrimarySidebar]);
   useHardwareKeyboardCommand("focusSearch", focusSearch);
-  const filterMenu = buildHomeListFilterMenu({
-    ...props,
-    onClearFilters: () => {
-      props.onEnvironmentChange(null);
-      props.onProjectChange(null);
-      props.onModelChange(null);
-    },
-  });
+  const filterMenu = buildHomeListFilterMenu(props);
+
+  if (props.usesWorkspaceToolbar) {
+    return null;
+  }
+
   return (
     <>
       <NativeStackScreenOptions
-        optionsVersion={filterMenu.items}
+        optionsVersion={[filterMenu.items, showsCompactCompose]}
         options={{
           // Static header config (glass, title, fonts) lives in Stack.tsx
           // (GLASS_HEADER_OPTIONS). Only dynamic values are set here.
@@ -72,13 +73,28 @@ export function HomeHeader(props: HomeHeaderProps) {
           headerTintColor: iconColor,
           unstable_headerRightItems: () =>
             sidebarHeader
-              ? createSidebarHeaderItems({
-                  filterIcon: hasCustomListOptions
-                    ? "line.3.horizontal.decrease.circle.fill"
-                    : "line.3.horizontal.decrease.circle",
-                  filterMenu,
-                  onOpenSettings: props.onOpenSettings,
-                })
+              ? [
+                  ...createSidebarHeaderItems({
+                    filterIcon: hasCustomListOptions
+                      ? "line.3.horizontal.decrease.circle.fill"
+                      : "line.3.horizontal.decrease.circle",
+                    filterMenu,
+                    onOpenSettings: props.onOpenSettings,
+                  }),
+                  ...(showsCompactCompose
+                    ? [
+                        withNativeGlassHeaderItem({
+                          accessibilityLabel: "New task",
+                          axisBehavior: "horizontalOnly",
+                          icon: { name: "square.and.pencil", type: "sfSymbol" } as const,
+                          identifier: "home-new-task",
+                          label: "",
+                          onPress: props.onStartNewTask,
+                          type: "button",
+                        }),
+                      ]
+                    : []),
+                ]
               : [
                   withNativeGlassHeaderItem({
                     accessibilityLabel: "Open settings",
@@ -165,18 +181,6 @@ export function HomeHeader(props: HomeHeaderProps) {
             title="Thread list options"
             separateBackground
           >
-            {hasActiveFilters ? (
-              <NativeHeaderToolbar.MenuAction
-                onPress={() => {
-                  props.onEnvironmentChange(null);
-                  props.onProjectChange(null);
-                  props.onModelChange(null);
-                }}
-              >
-                <NativeHeaderToolbar.Label>Clear filters</NativeHeaderToolbar.Label>
-              </NativeHeaderToolbar.MenuAction>
-            ) : null}
-
             <NativeHeaderToolbar.Menu title="Environment">
               <NativeHeaderToolbar.Label>Environment</NativeHeaderToolbar.Label>
               <NativeHeaderToolbar.MenuAction
@@ -218,27 +222,6 @@ export function HomeHeader(props: HomeHeaderProps) {
                 ))}
               </NativeHeaderToolbar.Menu>
             ) : null}
-
-            {props.models.length < 2 ? null : (
-              <NativeHeaderToolbar.Menu title="Model">
-                <NativeHeaderToolbar.Label>Model</NativeHeaderToolbar.Label>
-                <NativeHeaderToolbar.MenuAction
-                  isOn={props.selectedModel === null}
-                  onPress={() => props.onModelChange(null)}
-                >
-                  <NativeHeaderToolbar.Label>All models</NativeHeaderToolbar.Label>
-                </NativeHeaderToolbar.MenuAction>
-                {props.models.map((model) => (
-                  <NativeHeaderToolbar.MenuAction
-                    key={model.key}
-                    isOn={props.selectedModel === model.key}
-                    onPress={() => props.onModelChange(model.key)}
-                  >
-                    <NativeHeaderToolbar.Label>{model.label}</NativeHeaderToolbar.Label>
-                  </NativeHeaderToolbar.MenuAction>
-                ))}
-              </NativeHeaderToolbar.Menu>
-            )}
           </NativeHeaderToolbar.Menu>
           <NativeHeaderToolbar.Spacer flexible />
           <NativeHeaderToolbar.Button

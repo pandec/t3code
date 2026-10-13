@@ -1,19 +1,11 @@
 import type { EnvironmentId } from "@t3tools/contracts";
 
-import { hasActiveHomeListFilters } from "./home-list-options";
-
 export interface HomeListFilterMenuEnvironment {
   readonly environmentId: EnvironmentId;
   readonly label: string;
 }
 
 export interface HomeListFilterMenuProject {
-  readonly key: string;
-  readonly label: string;
-}
-
-export interface HomeListFilterMenuModel {
-  /** Model slug, matched against `thread.modelSelection.model`. */
   readonly key: string;
   readonly label: string;
 }
@@ -40,24 +32,12 @@ export interface HomeListFilterMenu {
 export function buildHomeListFilterMenu(props: {
   readonly environments: ReadonlyArray<HomeListFilterMenuEnvironment>;
   readonly projects: ReadonlyArray<HomeListFilterMenuProject>;
-  readonly models: ReadonlyArray<HomeListFilterMenuModel>;
   readonly selectedEnvironmentId: EnvironmentId | null;
   readonly selectedProjectKey: string | null;
-  readonly selectedModel: string | null;
   readonly onEnvironmentChange: (environmentId: EnvironmentId | null) => void;
   readonly onProjectChange: (projectKey: string | null) => void;
-  readonly onModelChange: (model: string | null) => void;
-  readonly onClearFilters: () => void;
 }): HomeListFilterMenu {
   const items: Array<HomeListFilterMenuAction | HomeListFilterMenuSubmenu> = [];
-
-  if (hasActiveHomeListFilters(props)) {
-    items.push({
-      type: "action",
-      title: "Clear filters",
-      onPress: props.onClearFilters,
-    });
-  }
 
   items.push({
     type: "submenu",
@@ -99,30 +79,6 @@ export function buildHomeListFilterMenu(props: {
           title: project.label,
           state: props.selectedProjectKey === project.key ? ("on" as const) : ("off" as const),
           onPress: () => props.onProjectChange(project.key),
-        })),
-      ],
-    });
-  }
-
-  // A single model across every thread makes the section a no-op — every
-  // choice shows the same list — so it only appears once it can discriminate.
-  if (props.models.length > 1) {
-    items.push({
-      type: "submenu",
-      title: "Model",
-      items: [
-        {
-          type: "action",
-          title: "All models",
-          subtitle: "Show threads on every model",
-          state: props.selectedModel === null ? "on" : "off",
-          onPress: () => props.onModelChange(null),
-        },
-        ...props.models.map((model) => ({
-          type: "action" as const,
-          title: model.label,
-          state: props.selectedModel === model.key ? ("on" as const) : ("off" as const),
-          onPress: () => props.onModelChange(model.key),
         })),
       ],
     });
