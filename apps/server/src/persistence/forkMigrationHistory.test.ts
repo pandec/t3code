@@ -145,6 +145,7 @@ describe("repairForkMigrationHistory", () => {
         [59, "McpAppModelContext"],
         [60, "ThreadSnapshotWindowIndexes"],
         [61, "PullRequestReviewGuides"],
+        [62, "ThreadFailureLookupIndex"],
       ]);
       const ledger = yield* readLedger;
       assert.deepStrictEqual(
@@ -183,6 +184,7 @@ describe("repairForkMigrationHistory", () => {
         [59, "McpAppModelContext"],
         [60, "ThreadSnapshotWindowIndexes"],
         [61, "PullRequestReviewGuides"],
+        [62, "ThreadFailureLookupIndex"],
       ]);
       assert.deepStrictEqual(
         (yield* readLedger).map((row) => [row.migration_id, row.name] as const),
@@ -200,7 +202,7 @@ describe("repairForkMigrationHistory", () => {
       yield* seedForkLedger(forkLedger.slice(0, 60), 49);
       assert.deepStrictEqual(
         (yield* runMigrations()).map(([id]) => id),
-        [50, 51, 52, 53, 54, 55, 56, 57, 58, 59, 60, 61],
+        [50, 51, 52, 53, 54, 55, 56, 57, 58, 59, 60, 61, 62],
       );
       assert.deepStrictEqual(
         (yield* readLedger).map((row) => [row.migration_id, row.name] as const),

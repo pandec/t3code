@@ -93,7 +93,7 @@ export const make = Effect.gen(function* () {
       Effect.provideService(Path.Path, path),
     );
   const newCommandId = (prefix: string, threadId: ThreadId) =>
-    crypto.randomUUIDv4.pipe(
+    crypto.randomUUIDv4().pipe(
       Effect.orDie,
       Effect.map((uuid) => CommandId.make(`server:${prefix}:${threadId}:${uuid}`)),
     );

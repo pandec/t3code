@@ -16,9 +16,13 @@ installs the latest release from its own channel. Hover the button to see what
 it will update.
 
 Server updates appear only after that version is published to npm. Remote
-desktop apps do not wait for npm. Servers that need
-a manual update are not included. Use the notice or **Settings → Connections**
-for those.
+desktop apps do not wait for npm. The confirmation lists each machine it skips
+and why, such as a machine that is offline or needs a manual update. Use the
+notice or **Settings → Connections** for those.
+
+If a desktop app restarts on its old version, T3 Code tells you the update did
+not apply. It does not install that version again on its own, even when another
+device asks. Use the update button on that machine to retry.
 
 The confirmation counts the running threads that the restarts will interrupt,
 and how many can resume afterwards. See **Continue threads after restarts**
@@ -37,6 +41,9 @@ different value, use **Apply to all** in Settings after it connects.
 T3 Code must start again on that machine;
 the setting does not enable automatic startup. Terminal commands may still be
 interrupted, and threads without saved provider resume state need a new message.
+A thread that finished its turn to wait on a monitor, subagent, or background task
+is woken and told that this work stopped. A background shell, such as a dev server,
+does not wake it; the thread learns about it with your next message.
 A thread is not resumed while it waits for your approval, answer, or secret, or
 while it is archived, snoozed, or settled; a thread snoozed **Until it's done** still resumes, because
 it waits for that work. After three automatic resumes in a row,
@@ -97,6 +104,10 @@ If the update reports that it requires a newer service launcher, update the CLI
 on the server machine using the [installer](install.md), then run
 `t3 service install` from that updated CLI. This replaces the legacy launcher
 and restarts the service while preserving its data.
+
+Only one server can use a T3 home directory at a time. If startup reports that
+another server owns it, stop that server before retrying, or use a separate home
+directory and pair with the running server.
 
 ## Update providers
 

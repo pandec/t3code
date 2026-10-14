@@ -4,7 +4,7 @@ import { useMarkdownImageSource } from "../../native/useMarkdownImageSource";
 import { enrichedContextLinkPresentation } from "../../lib/enrichedLinkPresentation";
 import { ThreadContextDivider } from "./thread-context-divider";
 import { ThreadForkRow } from "./thread-fork-row";
-import { ThreadHandoffRow } from "./thread-handoff-row";
+import { ThreadHandoffDivider, ThreadHandoffRow } from "./thread-handoff-row";
 import { SecretRequestCard } from "./SecretRequestCard";
 import { AppActivityIndicator } from "../../components/AppActivityIndicator";
 import {
@@ -16,6 +16,7 @@ import * as Haptics from "expo-haptics";
 import { KeyboardAwareLegendList } from "@legendapp/list/keyboard";
 import { useViewabilityAmount, type LegendListRef } from "@legendapp/list/react-native";
 import { scopeThreadRef } from "@t3tools/client-runtime/environment";
+import type { HandoffEndpoints } from "@t3tools/client-runtime/handoff";
 import { resolveUserMessagePresentation } from "@t3tools/client-runtime/user-message";
 import { canForkProjectedAssistantItem } from "@t3tools/client-runtime/state/thread-workflows";
 import {
@@ -311,6 +312,7 @@ export interface ThreadFeedProps {
   readonly textToSpeechPersistentJobs?: boolean;
   readonly workspaceRoot?: string | null;
   readonly feed: ReadonlyArray<ThreadFeedEntry>;
+  readonly pendingHandoff?: HandoffEndpoints | null;
   readonly contentPresentation: ThreadContentPresentation;
   readonly agentLabel: string;
   readonly latestRun: ThreadFeedLatestRun | null;
@@ -2923,6 +2925,16 @@ export const ThreadFeed = memo(function ThreadFeed(props: ThreadFeedProps) {
                   <ThreadFeedLoadEarlierControl {...props.historyControls} />
                 ) : null}
               </>
+            }
+            ListFooterComponent={
+              props.pendingHandoff ? (
+                <ThreadHandoffDivider
+                  environmentId={props.environmentId}
+                  endpoints={props.pendingHandoff}
+                  iconColor={iconSubtleColor}
+                  label="Context handoff pending"
+                />
+              ) : null
             }
             contentContainerStyle={{
               paddingTop: 12,

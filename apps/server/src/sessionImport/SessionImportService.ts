@@ -490,11 +490,13 @@ export const make = Effect.gen(function* () {
       });
     }
     // Taken by a deleted import of the same session.
-    const uuid = yield* crypto.randomUUIDv4.pipe(
-      Effect.mapError((cause) =>
-        failure("import-failed", "Failed to allocate an id for the imported thread.", cause),
-      ),
-    );
+    const uuid = yield* crypto
+      .randomUUIDv4()
+      .pipe(
+        Effect.mapError((cause) =>
+          failure("import-failed", "Failed to allocate an id for the imported thread.", cause),
+        ),
+      );
     return ThreadId.make(uuid);
   });
 

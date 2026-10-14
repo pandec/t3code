@@ -335,6 +335,7 @@ it.layer(NodeServices.layer)("build-desktop-artifact", (it) => {
       assert.deepStrictEqual(mac.extendInfo, {
         NSAppleEventsUsageDescription: "Allow T3 Code agents to automate apps you authorize.",
         NSMicrophoneUsageDescription: "Allow T3 Code to record voice prompts for transcription.",
+        NSAutoFillRequiresTextContentTypeForOneTimeCodeOnMac: true,
         NSLocalNetworkUsageDescription:
           "T3 Code connects to devices on your local network for remote environments and commands run by terminals and coding agents.",
         NSScreenCaptureUsageDescription:
@@ -872,6 +873,7 @@ it.layer(NodeServices.layer)("build-desktop-artifact", (it) => {
       ]);
       // macOS lists a default browser only when it also opens web pages as documents.
       const macInfo = (mac.mac as { extendInfo: Record<string, unknown> }).extendInfo;
+      assert.strictEqual(macInfo.NSAutoFillRequiresTextContentTypeForOneTimeCodeOnMac, true);
       assert.deepStrictEqual(macInfo.CFBundleDocumentTypes, [
         {
           CFBundleTypeName: "Web page",

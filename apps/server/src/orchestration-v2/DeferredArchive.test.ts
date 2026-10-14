@@ -10,6 +10,7 @@ import {
   MessageId,
   type ModelSelection,
   NodeId,
+  type OrchestrationV2DomainEvent,
   type OrchestrationV2Run,
   type OrchestrationV2ThreadArchiveRequest,
   ProjectId,
@@ -49,6 +50,7 @@ import {
   ARCHIVE_CANCEL_DETAIL,
   evaluateDeferredArchive,
   finishedWorktreeRemoval,
+  isThreadPayloadEvent,
   planArchiveSchedule,
   restartContinuationPending,
   stopCancelsArchive,
@@ -248,6 +250,20 @@ describe("evaluateDeferredArchive checkpoint outcome", () => {
       detail: ARCHIVE_CANCEL_DETAIL.checkpointFailed,
     });
     assert.equal(evaluate("missing").type, "archive");
+  });
+});
+
+describe("isThreadPayloadEvent", () => {
+  // Schedulers read a pending request from the payload; a partial event must not clear it.
+  it("excludes the partial pull request link event", () => {
+    const event = (type: string) =>
+      ({
+        type,
+        threadId: ThreadId.make("thread"),
+        payload: {},
+      }) as unknown as OrchestrationV2DomainEvent;
+    assert.isTrue(isThreadPayloadEvent(event("thread.archived")));
+    assert.isFalse(isThreadPayloadEvent(event("thread.pull-request-link-updated")));
   });
 });
 

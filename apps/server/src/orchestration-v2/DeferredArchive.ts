@@ -452,7 +452,8 @@ type ThreadPayloadEvent = Extract<
 export function isThreadPayloadEvent(
   event: OrchestrationV2DomainEvent,
 ): event is ThreadPayloadEvent {
-  return event.type.startsWith("thread.");
+  // `thread.pull-request-link-updated` carries only the changed link, not the thread.
+  return event.type.startsWith("thread.") && event.type !== "thread.pull-request-link-updated";
 }
 
 /** The thread as of the last thread event already decided in this command, else `fallback`. */

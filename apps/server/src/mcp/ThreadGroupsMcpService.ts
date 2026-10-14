@@ -95,7 +95,7 @@ const make = Effect.gen(function* () {
     Effect.map((current) => current.threadGroups),
     Effect.mapError(unavailable),
   );
-  const randomId = crypto.randomUUIDv4.pipe(Effect.orDie);
+  const randomId = crypto.randomUUIDv4().pipe(Effect.orDie);
   const findGroup = Effect.fn("ThreadGroupsMcpService.findGroup")(function* (
     groups: ReadonlyArray<ThreadGroup>,
     groupId: string,

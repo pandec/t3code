@@ -22,15 +22,15 @@ An entry earns its place only if a capable agent with the code in front of it wo
 - Keep the fork's per-capability MCP islands: apply upstream transport options in `makeMcpTransport` and provide stateful shared layers (e.g. `ThreadCommandExecutor`) outside the fresh island layers.
 - Storage cleanup defaults `worktreeKeepWhen` to `any-local-files` (fork policy: ignored files such as `.env` stay protected).
 - Fork settings secrets (usage-source key, Telegram token) go through `mapSettingsSecrets` in `settingsSecrets.ts` under their existing store names; a sent value wins over a stale redaction flag; the Telegram link code is a client-only redaction in `serverSettings.ts`.
-- `apps/server` typechecks with `tsc`, not `tsc-rs`: tsc-rs (≤0.6) hits TS2589 on the fork's larger `ws.ts` RPC group. Retry tsc-rs when upstream bumps it.
 - Mobile home list filters follow upstream (fork model filter and Clear filters trimmed 2026-10-13); web keeps the fork's multi-select.
 - Desktop app links (`t3code*://new|threads`) accept only the running build's scheme (`DesktopClerk.openAppLink`) and open threads through `openThreadInActivePane`.
 - Treat fork-only unused-export findings from `knip:check` as advisory.
 - Web unit tests run with `isolate: false` (fork): add new upstream tests using `vi.mock`, fake timers, or `vi.resetModules` to `ISOLATED_TEST_FILES` in `apps/web/vite.config.ts`.
 - Verify the SEA executable with official Node 26 (`SEA_NODE_VERSION` in `apps/server/vite.config.ts`); `vp` may select the repository's Node 24.
+- Upstream API migrations (e.g. Effect 4.0.4 `crypto.randomUUIDv4()`) skip fork-only call sites, and fork test layers miss services upstream adds to shared layers; typecheck finds both, but grep fork files for the old form first.
 - Upstream Claude tests that interrupt a turn the harness never settles hang on the fork's Stop grace: run `passInterruptSettleGrace` after forking the interrupt.
 - Custom Claude models expose the fork's gateway effort ladder, not their declared effort descriptors; adapt upstream tests that expect the declared ones.
-- Known macOS baseline failures: Antigravity missing-parent `/var` path tests, Claude steering replay's now/next mismatch, storage cleanup's expired-artifacts aggregation, and AccountSwitch's "send then Stop" feedback race. Compare against pre-merge before blaming the merge.
+- Known macOS baseline failures: Antigravity missing-parent `/var` path tests, Claude steering replay's now/next mismatch, storage cleanup's expired-artifacts aggregation, AccountSwitch's send/Stop feedback race (either order), and SessionWorkspaceFollow's completed-switch restart timeout. Compare against pre-merge before blaming the merge.
 
 ## Watchpoints
 

@@ -36,7 +36,7 @@ import { GUARD_LENGTH, type TranscriptParsePosition } from "./usageTranscriptRea
 // v7 keeps each Claude message's completed record, marks provisional ones,
 // and records one-hour cache writes. v6 Claude entries kept a message's first
 // record, so they re-parse.
-// `decodeScanCache` migrates every v4 to v6 layout.
+// `decodeScanCache` migrates every v4–v6 cache to the current layout.
 const USAGE_SCAN_CACHE_VERSION = 7 as const;
 const OLDEST_MIGRATED_VERSION = 4;
 
