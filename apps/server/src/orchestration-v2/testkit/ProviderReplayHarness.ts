@@ -55,6 +55,7 @@ import * as RunExecutionService from "../RunExecutionService.ts";
 import * as RunFinalizationService from "../RunFinalizationService.ts";
 import * as ThreadTitleRegenerationService from "../ThreadTitleRegenerationService.ts";
 import * as RuntimePolicy from "../RuntimePolicy.ts";
+import * as ThreadHiddenNotes from "../ThreadHiddenNotes.ts";
 import * as TurnItemPositionStore from "../TurnItemPositionStore.ts";
 import * as RuntimeRequestService from "../RuntimeRequestService.ts";
 import * as ThreadCommandExecutor from "../ThreadCommandExecutor.ts";
@@ -407,6 +408,8 @@ export function layerWithRegistry<Error>(
         }),
         layerRunExecutionServiceProvided,
         layerRuntime,
+        // fork: as runtimeLayer.ts provides it.
+        ThreadHiddenNotes.layer.pipe(Layer.provide(layerDatabase)),
       ),
     ),
   );

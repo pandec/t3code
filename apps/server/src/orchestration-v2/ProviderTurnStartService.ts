@@ -54,6 +54,7 @@ import {
   restartCancelledBackgroundWorkNote,
 } from "./RestartBackgroundNote.ts";
 import { priorTurnStrandedByRestart, STRANDED_PRIOR_TURN_NOTICE } from "./StrandedTurnNotice.ts";
+import * as ThreadHiddenNotes from "./ThreadHiddenNotes.ts";
 
 export class ProviderTurnStartError extends Schema.TaggedError<ProviderTurnStartError>()(
   "ProviderTurnStartError",
@@ -120,6 +121,8 @@ export const layer: Layer.Layer<
     const runtimePolicy = yield* RuntimePolicy.RuntimePolicyV2;
     // fork: optional so upstream's layer requirements stay unchanged.
     const strictResume = yield* Effect.serviceOption(StrictResume.StrictResume);
+    // fork: hidden notes (SP Labs); optional for the same reason.
+    const hiddenNotes = yield* Effect.serviceOption(ThreadHiddenNotes.ThreadHiddenNotes);
 
     // These callbacks outlive startup while a run drains background work. Build
     // them outside start's scope so they cannot retain its full thread history.
@@ -1035,6 +1038,13 @@ export const layer: Layer.Layer<
         }))
           ? STRANDED_PRIOR_TURN_NOTICE
           : "";
+      // Fork: notes queued for this thread's next turn, acknowledged once the
+      // provider accepts it. A slash command keeps them for the turn after.
+      const pendingHiddenNotes =
+        Option.isNone(hiddenNotes) || userText.trimStart().startsWith("/")
+          ? []
+          : yield* hiddenNotes.value.pending(projection.thread.id);
+      const hiddenNote = ThreadHiddenNotes.renderThreadHiddenNotes(pendingHiddenNotes);
       const tokenCap = yield* handoffTokenCapConfig.pipe(
         Effect.orElseSucceed(() => DEFAULT_HANDOFF_TOKEN_CAP),
       );
@@ -1184,7 +1194,7 @@ export const layer: Layer.Layer<
                 tokenCap,
                 modelContextWindow,
                 // The notes are sent with the user text, so they spend the same allowance.
-                userText: [restartNote, strandedNotice, userText]
+                userText: [restartNote, strandedNotice, hiddenNote, userText]
                   .filter((part) => part !== "")
                   .join("\n\n"),
                 attachments: message.attachments,
@@ -1227,7 +1237,7 @@ export const layer: Layer.Layer<
           });
           if (!(yield* isCurrentAttemptInStatus("running"))) return;
           const start = compact ? session.compactThread! : session.startTurn;
-          const context = [delivery.context, restartNote, strandedNotice]
+          const context = [delivery.context, restartNote, strandedNotice, hiddenNote]
             .filter((part) => part !== "")
             .join("\n\n");
           // A note continuation has no turn to resume; its text is the prompt.
@@ -1253,6 +1263,9 @@ export const layer: Layer.Layer<
                 : Effect.void,
             ),
           );
+          if (Option.isSome(hiddenNotes) && pendingHiddenNotes.length > 0) {
+            yield* hiddenNotes.value.acknowledge(pendingHiddenNotes.map((note) => note.id));
+          }
           // The provider already accepted the turn. A stale pending marker
           // can force a fresh thread later, but must not stop live ingestion.
           yield* delivery.delivered.pipe(
@@ -1281,6 +1294,7 @@ export const layer: Layer.Layer<
         missedItems.length === 0 &&
         restartNote === "" &&
         strandedNotice === "" &&
+        hiddenNote === "" &&
         !noteContinuation
           ? session
           : makeDeliverySession(session, startWithHandoffs);

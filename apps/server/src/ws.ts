@@ -126,6 +126,7 @@ import * as ThreadLaunchService from "./orchestration-v2/ThreadLaunchService.ts"
 import * as ThreadMessageIntake from "./orchestration-v2/ThreadMessageIntake.ts";
 import * as IdAllocator from "@t3tools/provider-core/server/IdAllocator";
 import * as ScheduledTasks from "./scheduledTasks/ScheduledTaskService.ts";
+import * as LabsService from "./labs/LabsService.ts";
 import * as SecretRequests from "./secrets/SecretRequests.ts";
 import {
   archivedShellStreamItemFromThreadShell,
@@ -1289,6 +1290,7 @@ type WsRpcServices =
   | HostResources.HostResources
   | HttpClient.HttpClient
   | Keybindings.Keybindings
+  | LabsService.LabsService
   | ManagedProjectFolders.ManagedProjectFolders
   | McpAppRequests.McpAppRequests
   | MessageSpeech
@@ -1401,6 +1403,7 @@ const inferredLayerWsRpc = (
       const threadLaunch = yield* ThreadLaunchService.ThreadLaunchService;
       const providerSessionManager = yield* ProviderSessionManager.ProviderSessionManagerV2;
       const scheduledTasks = yield* ScheduledTasks.ScheduledTaskService;
+      const labs = yield* LabsService.LabsService;
       const secretRequests = yield* SecretRequests.SecretRequests;
       const pullRequests = yield* PullRequestService.PullRequestService;
       const reviewGuides = yield* PullRequestReviewGuideService.PullRequestReviewGuideService;
@@ -2468,6 +2471,16 @@ const inferredLayerWsRpc = (
           provideSecretHttpServices(readLinearComments(input)),
         [WS_METHODS.linearCreateComment]: (input) =>
           provideSecretHttpServices(createLinearComment(input)),
+        [WS_METHODS.labsSubscribe]: (_input) => labs.subscribe,
+        [WS_METHODS.labsGetInventory]: (_input) => labs.getInventory,
+        [WS_METHODS.labsPrepareThread]: (input) =>
+          Effect.annotateCurrentSpan({ "thread.id": input.threadId }).pipe(
+            Effect.andThen(labs.prepareThread(input)),
+          ),
+        [WS_METHODS.labsAction]: (input) => labs.action(input),
+        [WS_METHODS.labsRelease]: (input) => labs.release(input),
+        [WS_METHODS.labsHistory]: (input) => labs.history(input),
+        [WS_METHODS.labsLogs]: (input) => labs.logs(input),
         [WS_METHODS.serverRefreshProviders]: (input) =>
           Effect.gen(function* () {
             // Only explicit catalog refreshes bypass T3's caches. Workspace

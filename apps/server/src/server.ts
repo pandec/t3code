@@ -201,6 +201,9 @@ import * as AgentVoiceReply from "./voice/AgentVoiceReply.ts";
 import * as TelegramBotApi from "./telegram/TelegramBotApi.ts";
 import * as TelegramService from "./telegram/TelegramService.ts";
 import * as TelegramTopicStore from "./telegram/TelegramTopicStore.ts";
+import * as LabsCli from "./labs/LabsCli.ts";
+import * as LabsService from "./labs/LabsService.ts";
+import * as ThreadHiddenNotes from "./orchestration-v2/ThreadHiddenNotes.ts";
 import * as OrchestratorV2 from "./orchestration-v2/Orchestrator.ts";
 import { messageArtifactsHttpApiLayer } from "./messageArtifacts/http.ts";
 import * as NetService from "@t3tools/shared/Net";
@@ -634,6 +637,15 @@ const layerRuntimeCoreDependenciesBase = Layer.mergeAll(
         TelegramTopicStore.layer,
         VoiceTranscription.layer,
         ProcessRunner.layer,
+      ),
+    ),
+  ),
+  // Fork: SP Labs (labs.* RPCs).
+  LabsService.layer.pipe(
+    Layer.provide(
+      Layer.mergeAll(
+        LabsCli.layer.pipe(Layer.provide(ProcessRunner.layer)),
+        ThreadHiddenNotes.layer,
       ),
     ),
   ),
