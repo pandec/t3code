@@ -407,6 +407,15 @@ describe("threadWokeAt", () => {
   it("tells finished-work wakes from timer wakes", () => {
     expect(threadWokeOnFinishedWork(makeShell({ snoozedUntil: PAST_WAKE }))).toBe(false);
     expect(
+      threadWokeOnFinishedWork(makeShell({ snoozedUntil: FUTURE_WAKE, pending: "approval" })),
+    ).toBe(false);
+    // A run that ended before the snooze is not what woke it.
+    expect(
+      threadWokeOnFinishedWork(
+        makeShell({ snoozedUntil: PAST_WAKE, turnCompletedAt: "2026-04-10T08:00:00.000Z" }),
+      ),
+    ).toBe(false);
+    expect(
       threadWokeOnFinishedWork(
         makeShell({ snoozedUntil: FUTURE_WAKE, turnCompletedAt: "2026-04-10T10:30:00.000Z" }),
       ),
