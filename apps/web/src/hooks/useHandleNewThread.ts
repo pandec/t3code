@@ -17,10 +17,13 @@ import {
   composerDraftHasUserContent,
   markPromotedDraftThreadByRef,
   type DraftId,
+  type DraftLabIntent,
   type DraftThreadEnvMode,
   type DraftThreadState,
   useComposerDraftStore,
 } from "../composerDraftStore";
+import { shouldDefaultToLabMode } from "../components/labs/labs.logic";
+import { loadLabsInventory } from "../state/labs";
 import { newDraftId, newThreadId } from "../lib/utils";
 import { orderItemsByPreferredIds } from "../components/Sidebar.logic";
 import {
@@ -146,6 +149,8 @@ interface NewThreadWorkspaceOptions {
   worktreePath?: string | null;
   envMode?: DraftThreadEnvMode;
   startFromOrigin?: boolean;
+  /** Fork (SP Labs): the lab a Lab-mode draft targets. */
+  lab?: DraftLabIntent | null;
 }
 
 // The workspace options the caller passed explicitly, shaped for the draft
@@ -157,6 +162,7 @@ function pickExplicitWorkspaceOptions(options: NewThreadWorkspaceOptions | undef
     ...(options?.worktreePath !== undefined ? { worktreePath: options.worktreePath } : {}),
     ...(options?.envMode !== undefined ? { envMode: options.envMode } : {}),
     ...(options?.startFromOrigin !== undefined ? { startFromOrigin: options.startFromOrigin } : {}),
+    ...(options?.lab !== undefined ? { lab: options.lab } : {}),
   };
 }
 
@@ -177,6 +183,7 @@ export function useNewThreadHandler() {
         worktreePath?: string | null;
         envMode?: DraftThreadEnvMode;
         startFromOrigin?: boolean;
+        lab?: DraftLabIntent | null;
         /** Custom group the new thread joins on first send; null is Active.
          * Absent keeps whatever the reused draft already holds. */
         customGroupId?: string | null;
@@ -249,6 +256,22 @@ export function useNewThreadHandler() {
       // skipped entirely when a higher-priority source decides, and its
       // query atom caches per project after the first call.
       const resolveDefaultEnvMode = async (): Promise<DraftThreadEnvMode> => {
+        // Fork (SP Labs): "Default to Lab mode" wins, but only in the labs project.
+        if (targetServerSettings.labs.defaultToLabMode && project !== undefined) {
+          const labsProjectId =
+            targetServerSettings.labs.projectId ??
+            (await loadLabsInventory(projectRef.environmentId))?.projectId ??
+            null;
+          if (
+            shouldDefaultToLabMode({
+              defaultToLabMode: true,
+              labsProjectId,
+              projectId: project.id,
+            })
+          ) {
+            return "lab";
+          }
+        }
         const consultProjectFile =
           project !== undefined && projectSettings.settings.defaultThreadEnvMode === null;
         const projectFile = consultProjectFile
@@ -285,6 +308,7 @@ export function useNewThreadHandler() {
       const hasWorktreePathOption = options?.worktreePath !== undefined;
       const hasEnvModeOption = options?.envMode !== undefined;
       const hasStartFromOriginOption = options?.startFromOrigin !== undefined;
+      const hasLabOption = options?.lab !== undefined;
       // A group pick belongs to the unsent draft, like its branch and env
       // mode: landing on that draft again (app start, post-settle
       // navigation) keeps it, and only an explicit option
@@ -331,7 +355,8 @@ export function useNewThreadHandler() {
             hasBranchOption ||
             hasWorktreePathOption ||
             hasEnvModeOption ||
-            hasStartFromOriginOption;
+            hasStartFromOriginOption ||
+            hasLabOption;
           // Resurrecting an empty stored draft must not resurrect its stale
           // context: explicit workspace options win outright; otherwise the
           // env context resets to the configured defaults so drafts seeded
@@ -460,7 +485,8 @@ export function useNewThreadHandler() {
           hasBranchOption ||
           hasWorktreePathOption ||
           hasEnvModeOption ||
-          hasStartFromOriginOption
+          hasStartFromOriginOption ||
+          hasLabOption
         ) {
           setDraftThreadContext(currentRouteTarget.draftId, pickExplicitWorkspaceOptions(options));
         }
@@ -535,6 +561,7 @@ export function useNewThreadHandler() {
               envMode: initialEnvMode,
               newWorktreesStartFromOrigin: projectSettings.settings.newWorktreesStartFromOrigin,
             }),
+          ...(options?.lab !== undefined ? { lab: options.lab } : {}),
           runtimeMode: defaultRuntimeMode,
           ...(carryInteractionMode ? { interactionMode: carryInteractionMode } : {}),
           ...customGroupFields,

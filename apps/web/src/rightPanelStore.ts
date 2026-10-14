@@ -31,6 +31,7 @@ const RIGHT_PANEL_KINDS = [
   "pull-request",
   "linear-issue",
   "pull-requests",
+  "labs",
 ] as const;
 export type RightPanelKind = (typeof RIGHT_PANEL_KINDS)[number];
 
@@ -92,7 +93,9 @@ export type RightPanelSurface =
       identifier: string;
     }
   /** The thread's linked pull requests, one singleton tab beside any number of `pull-request` tabs. */
-  | { id: "pull-requests"; kind: "pull-requests" };
+  | { id: "pull-requests"; kind: "pull-requests" }
+  /** Fork: the SP Labs overview, offered in threads of the labs project. */
+  | { id: "labs"; kind: "labs" };
 
 const RIGHT_PANEL_STORAGE_KEY = "t3code:right-panel-state:v2";
 // v9 removed the "plan" surface kind (plans render inline in the transcript).
@@ -231,6 +234,8 @@ const singletonSurface = (
       return { id: "files", kind };
     case "pull-requests":
       return { id: "pull-requests", kind };
+    case "labs":
+      return { id: "labs", kind };
     case "device":
       return { id: "device", kind };
   }

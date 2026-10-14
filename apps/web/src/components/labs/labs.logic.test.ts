@@ -1,0 +1,210 @@
+import type { LabEnvironment, LabRuntime } from "@t3tools/contracts";
+import { describe, expect, it } from "vite-plus/test";
+
+import { DEFAULT_DRAFT_LAB_INTENT, normalizeDraftLabIntent } from "../../composerDraftStore";
+import {
+  findLabForWorktree,
+  releaseCanStopFirst,
+  resolveLabAvailability,
+  resolveLabBranchRequest,
+  resolveLabSendTarget,
+  resolveLabStackHealth,
+  shouldDefaultToLabMode,
+} from "./labs.logic";
+
+const stoppedRuntime: LabRuntime = {
+  checkedAt: "2026-10-14T10:00:00.000Z",
+  chrome: { state: "down", detail: "" },
+  wxt: { state: "down", detail: "" },
+  backend: { state: "unknown", detail: "" },
+  extension: { state: "unverified", detail: "" },
+  git: { branch: "master", commit: "abc1234", dirty: false },
+  session: false,
+  diagnosis: [],
+  operation: null,
+};
+
+const runningRuntime: LabRuntime = {
+  ...stoppedRuntime,
+  chrome: { state: "up", detail: "" },
+  wxt: { state: "up", detail: "" },
+  backend: { state: "ready", detail: "" },
+  session: true,
+};
+
+function lab(id: string, overrides: Partial<LabEnvironment> = {}): LabEnvironment {
+  return {
+    id,
+    name: id,
+    kind: "lab",
+    phase: "ready",
+    available: true,
+    worktree: `/repos/${id}`,
+    cdpPort: 9311,
+    wxtPort: 3111,
+    lease: null,
+    hold: null,
+    handoff: null,
+    runtime: stoppedRuntime,
+    lastActivityAt: null,
+    ...overrides,
+  };
+}
+
+const lease = (labId: string, threadId: string) => ({
+  id: `lease-${labId}`,
+  labId,
+  threadId,
+  purpose: "work",
+  acquiredAt: "2026-10-14T09:00:00.000Z",
+});
+
+describe("lab draft intent", () => {
+  it("accepts a well-formed intent and drops malformed ones", () => {
+    expect(normalizeDraftLabIntent(DEFAULT_DRAFT_LAB_INTENT)).toEqual(DEFAULT_DRAFT_LAB_INTENT);
+    expect(normalizeDraftLabIntent({ ...DEFAULT_DRAFT_LAB_INTENT, branchMode: "rebase" })).toBe(
+      null,
+    );
+    expect(normalizeDraftLabIntent({ labId: "sp-lab-1" })).toBe(null);
+    expect(normalizeDraftLabIntent(undefined)).toBe(null);
+  });
+
+  it("asks for an automatic name when creating without one, from master by default", () => {
+    expect(resolveLabBranchRequest({ ...DEFAULT_DRAFT_LAB_INTENT, baseRef: " " })).toEqual({
+      ok: true,
+      branch: null,
+      baseRef: "master",
+    });
+    expect(
+      resolveLabBranchRequest({
+        ...DEFAULT_DRAFT_LAB_INTENT,
+        branchName: " fix/picklist ",
+        baseRef: "develop",
+      }),
+    ).toEqual({ ok: true, branch: "fix/picklist", baseRef: "develop" });
+  });
+
+  it("continues an existing branch without a base and requires its name", () => {
+    expect(
+      resolveLabBranchRequest({
+        ...DEFAULT_DRAFT_LAB_INTENT,
+        branchMode: "continue",
+        branchName: "design/cosmos",
+      }),
+    ).toEqual({ ok: true, branch: "design/cosmos", baseRef: null });
+    expect(
+      resolveLabBranchRequest({ ...DEFAULT_DRAFT_LAB_INTENT, branchMode: "continue" }).ok,
+    ).toBe(false);
+  });
+});
+
+describe("lab send target", () => {
+  const snapshot = {
+    environments: [
+      lab("sp-lab-1", { lease: lease("sp-lab-1", "other"), available: false }),
+      lab("sp-lab-2", {
+        hold: { labId: "sp-lab-2", note: "excel", heldAt: "" },
+        available: false,
+      }),
+      lab("sp-lab-3"),
+    ],
+  };
+
+  it("falls back to the first free lab", () => {
+    expect(resolveLabSendTarget(DEFAULT_DRAFT_LAB_INTENT, snapshot, "thread-1")).toEqual({
+      ok: true,
+      labId: "sp-lab-3",
+    });
+  });
+
+  it("refuses a pick that another thread reserved or the human holds", () => {
+    const pick = (labId: string) => ({ ...DEFAULT_DRAFT_LAB_INTENT, labId });
+    expect(resolveLabSendTarget(pick("sp-lab-1"), snapshot, "thread-1").ok).toBe(false);
+    expect(resolveLabSendTarget(pick("sp-lab-2"), snapshot, "thread-1").ok).toBe(false);
+    // A retried send finds the lab already reserved for this thread, whatever the pick.
+    expect(resolveLabSendTarget(DEFAULT_DRAFT_LAB_INTENT, snapshot, "other")).toEqual({
+      ok: true,
+      labId: "sp-lab-1",
+    });
+  });
+
+  it("reports when no lab is free or labs have not loaded", () => {
+    expect(resolveLabSendTarget(DEFAULT_DRAFT_LAB_INTENT, { environments: [] }, "t").ok).toBe(
+      false,
+    );
+    expect(resolveLabSendTarget(DEFAULT_DRAFT_LAB_INTENT, null, "t").ok).toBe(false);
+  });
+});
+
+describe("lab classification", () => {
+  it("prefers a reservation over a hold", () => {
+    expect(
+      resolveLabAvailability(
+        lab("a", {
+          lease: lease("a", "t"),
+          hold: { labId: "a", note: "", heldAt: "" },
+          available: false,
+        }),
+      ),
+    ).toBe("reserved");
+    expect(resolveLabAvailability(lab("b", { phase: "quarantined", available: false }))).toBe(
+      "unavailable",
+    );
+  });
+
+  it("matches lab threads by exact worktree path only", () => {
+    const environments = [
+      lab("sp-lab-1"),
+      { ...lab("staging"), kind: "staging" as const, worktree: "/repos/salespros" },
+    ];
+    expect(findLabForWorktree(environments, "/repos/sp-lab-1/")?.id).toBe("sp-lab-1");
+    expect(findLabForWorktree(environments, "/repos/sp-lab-10")).toBe(null);
+    expect(findLabForWorktree(environments, "/repos/salespros")).toBe(null);
+    expect(findLabForWorktree(environments, null)).toBe(null);
+  });
+
+  it("defaults to Lab mode only in the labs project", () => {
+    const base = { defaultToLabMode: true, labsProjectId: "p1" };
+    expect(shouldDefaultToLabMode({ ...base, projectId: "p1" })).toBe(true);
+    expect(shouldDefaultToLabMode({ ...base, projectId: "p2" })).toBe(false);
+    expect(shouldDefaultToLabMode({ ...base, labsProjectId: null, projectId: null })).toBe(false);
+    expect(shouldDefaultToLabMode({ ...base, defaultToLabMode: false, projectId: "p1" })).toBe(
+      false,
+    );
+  });
+});
+
+describe("lab stack health", () => {
+  it("shows a running operation first, then a failed start", () => {
+    expect(resolveLabStackHealth(lab("a"), { operation: "starting", lastUp: null }).tone).toBe(
+      "busy",
+    );
+    expect(
+      resolveLabStackHealth(lab("a"), {
+        operation: null,
+        lastUp: { ok: false, detail: "extension", at: "" },
+      }),
+    ).toEqual({ tone: "error", label: "Start failed" });
+  });
+
+  it("reads passive health when T3 is idle", () => {
+    expect(resolveLabStackHealth(lab("a", { runtime: runningRuntime }), undefined).tone).toBe("ok");
+    expect(resolveLabStackHealth(lab("a"), undefined).tone).toBe("off");
+    expect(
+      resolveLabStackHealth(
+        lab("a", { runtime: { ...stoppedRuntime, chrome: { state: "up", detail: "" } } }),
+        undefined,
+      ).tone,
+    ).toBe("warn");
+  });
+});
+
+describe("release blockers", () => {
+  it("offers stop-first only when a running stack is the sole blocker", () => {
+    const running = { kind: "stack_running" as const, detail: "" };
+    const dirty = { kind: "dirty_worktree" as const, detail: "2 files" };
+    expect(releaseCanStopFirst([running])).toBe(true);
+    expect(releaseCanStopFirst([running, dirty])).toBe(false);
+    expect(releaseCanStopFirst([])).toBe(false);
+  });
+});

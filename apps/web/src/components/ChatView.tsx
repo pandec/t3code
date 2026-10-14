@@ -314,6 +314,18 @@ import { LinkPullRequestDialogHost } from "./pullRequest/LinkPullRequestDialog";
 import { ThreadPullRequestsPanel } from "./pullRequest/ThreadPullRequestsPanel";
 import { copyFilePathToClipboard, type FilePathCopyKind } from "~/fileContextMenu";
 import { useDeviceState } from "~/state/device";
+import {
+  isLabsProjectInventory,
+  labsEnvironment,
+  readLabsSnapshot,
+  useLabsInventory,
+} from "~/state/labs";
+import { LabsPanel } from "./labs/LabsPanel";
+import {
+  resolveLabBranchRequest,
+  resolveLabPurpose,
+  resolveLabSendTarget,
+} from "./labs/labs.logic";
 import { resolvePathLinkTarget } from "@t3tools/shared/fileLinks";
 import { isAbsolutePath } from "@t3tools/shared/path";
 import { DeviceSetup } from "./device/DeviceSetup";
@@ -404,6 +416,7 @@ import {
   composerDraftHasUserContent,
   type ComposerFileAttachment,
   type ComposerImageAttachment,
+  DEFAULT_DRAFT_LAB_INTENT,
   type DraftThreadEnvMode,
   useComposerDraftStore,
   DraftId,
@@ -1749,6 +1762,8 @@ export default function ChatView(props: ChatViewProps) {
     reportFailure: false,
   });
   const closePreview = useAtomCommand(previewEnvironment.close, "preview close");
+  // Fork (SP Labs): a Lab-mode first send reserves its lab before launching.
+  const prepareLabThread = useAtomCommand(labsEnvironment.prepareThread, { reportFailure: false });
   const { environments } = useEnvironments();
   const serverConfigs = useServerConfigs();
   const primaryEnvironment = usePrimaryEnvironment();
@@ -5833,6 +5848,18 @@ export default function ChatView(props: ChatViewProps) {
     if (!activeThreadRef || !activeProject) return;
     useRightPanelStore.getState().open(activeThreadRef, "files");
   }, [activeProject, activeThreadRef]);
+  const labsInventory = useLabsInventory(activeThread?.environmentId ?? null);
+  // null while the inventory loads.
+  const labsProjectStatus: boolean | null =
+    labsInventory === null
+      ? null
+      : isLabsProjectInventory(labsInventory, activeProject?.id ?? null);
+  // Fork (SP Labs): the Labs surface is offered only in threads of the labs project.
+  const labsSurfaceAvailable = labsProjectStatus === true && activeThreadRef !== null;
+  const addLabsSurface = useCallback(() => {
+    if (!activeThreadRef || !labsSurfaceAvailable) return;
+    useRightPanelStore.getState().open(activeThreadRef, "labs");
+  }, [activeThreadRef, labsSurfaceAvailable]);
   const supportsThreadPullRequests =
     serverConfig?.environment.capabilities.threadPullRequests === true;
   const visiblePullRequests = visibleThreadPullRequests(
@@ -7373,9 +7400,17 @@ export default function ChatView(props: ChatViewProps) {
     activeThread.worktreePath === null &&
     !envLocked,
   );
-  const envMode: DraftThreadEnvMode = canOverrideServerThreadEnvMode
+  const requestedEnvMode: DraftThreadEnvMode = canOverrideServerThreadEnvMode
     ? (pendingServerThreadEnvMode ?? draftThread?.envMode ?? derivedEnvMode)
     : derivedEnvMode;
+  // Fork (SP Labs): Lab mode exists for drafts in the labs project. A draft left in Lab mode
+  // after that stops being true reads as the project checkout once the inventory says so.
+  const labModeAvailable =
+    isLocalDraftThread && labsProjectStatus === true && multipleModelSelections === null;
+  const envMode: DraftThreadEnvMode =
+    requestedEnvMode === "lab" && (labsProjectStatus === false || !isLocalDraftThread)
+      ? "local"
+      : requestedEnvMode;
   const activeThreadBranch =
     canOverrideServerThreadEnvMode && pendingServerThreadBranch !== undefined
       ? pendingServerThreadBranch
@@ -9959,6 +9994,33 @@ export default function ChatView(props: ChatViewProps) {
       setThreadError(threadIdForSend, "Select a base branch before sending in New worktree mode.");
       return;
     }
+    // Fork (SP Labs): a Lab-mode first send reserves its lab, then launches into its worktree.
+    let labSendRequest: {
+      readonly labId: string;
+      readonly branch: string | null;
+      readonly baseRef: string | null;
+    } | null = null;
+    if (isFirstMessage && sendEnvMode === "lab" && !activeThread.worktreePath) {
+      const labIntent = draftThread?.lab ?? DEFAULT_DRAFT_LAB_INTENT;
+      const branchRequest = resolveLabBranchRequest(labIntent);
+      const target = resolveLabSendTarget(
+        labIntent,
+        readLabsSnapshot(activeThread.environmentId),
+        threadIdForSend,
+      );
+      if (!branchRequest.ok || !target.ok) {
+        setThreadError(
+          threadIdForSend,
+          !branchRequest.ok ? branchRequest.error : !target.ok ? target.error : null,
+        );
+        return;
+      }
+      labSendRequest = {
+        labId: target.labId,
+        branch: branchRequest.branch,
+        baseRef: branchRequest.baseRef,
+      };
+    }
     // Fork: the draft's custom group joins the thread this send creates. The
     // send environment can differ from where the group was picked, so the
     // capability is read live.
@@ -10706,6 +10768,24 @@ export default function ChatView(props: ChatViewProps) {
       }
     }
 
+    // Fork (SP Labs): reserve the lab only once everything else is ready. A failure keeps the
+    // composer content (the failure path below restores it) and launches nothing.
+    let labWorkspace: { readonly worktreePath: string; readonly branch: string } | null = null;
+    if (failure === null && labSendRequest !== null) {
+      const prepared = await prepareLabThread({
+        environmentId,
+        input: {
+          threadId: threadIdForSend,
+          labId: labSendRequest.labId,
+          branch: labSendRequest.branch,
+          baseRef: labSendRequest.baseRef,
+          purpose: resolveLabPurpose(trimmed, title),
+        },
+      });
+      if (prepared._tag === "Failure") failure = prepared;
+      else labWorkspace = prepared.value;
+    }
+
     let backgroundDraftOpened = false;
     let turnStartSucceeded = false;
     if (failure === null && turnAttachmentsResult._tag === "Success") {
@@ -10720,8 +10800,8 @@ export default function ChatView(props: ChatViewProps) {
                       modelSelection: threadCreateModelSelection,
                       runtimeMode,
                       interactionMode: sendInteractionMode,
-                      branch: activeThreadBranch,
-                      worktreePath: activeThread.worktreePath,
+                      branch: labWorkspace?.branch ?? activeThreadBranch,
+                      worktreePath: labWorkspace?.worktreePath ?? activeThread.worktreePath,
                       createdAt: activeThread.createdAt,
                       ...creationGroupFields,
                     },
@@ -11765,7 +11845,9 @@ export default function ChatView(props: ChatViewProps) {
             envMode: mode,
             newWorktreesStartFromOrigin: activeProjectSettings.settings.newWorktreesStartFromOrigin,
           }),
-          ...(mode === "worktree" && draftThread?.worktreePath ? { worktreePath: null } : {}),
+          ...((mode === "worktree" || mode === "lab") && draftThread?.worktreePath
+            ? { worktreePath: null }
+            : {}),
         });
       }
       scheduleComposerFocus();
@@ -12085,6 +12167,12 @@ export default function ChatView(props: ChatViewProps) {
       />
     ) : renderedRightPanelSurface?.kind === "pull-requests" && activeThreadRef ? (
       <ThreadPullRequestsPanel threadRef={activeThreadRef} />
+    ) : renderedRightPanelSurface?.kind === "labs" ? (
+      <LabsPanel
+        environmentId={activeThread.environmentId}
+        projectId={activeProject?.id ?? null}
+        visible={rightPanelOpen}
+      />
     ) : renderedRightPanelSurface?.kind === "device" ? (
       <Suspense fallback={null}>
         <DevicePanel
@@ -12180,6 +12268,7 @@ export default function ChatView(props: ChatViewProps) {
     onEnvironmentChange,
     onEnvModeChange,
     envMode,
+    labModeAvailable,
     ...(canOverrideServerThreadEnvMode
       ? {
           activeThreadBranchOverride: activeThreadBranch,
@@ -12374,6 +12463,7 @@ export default function ChatView(props: ChatViewProps) {
             {...(activeDraftLogicalProjectKey
               ? { onOpenProjectSettings: handleOpenDraftProjectSettings }
               : {})}
+            activeWorktreePath={activeThread.worktreePath ?? null}
           />
         </header>
 
@@ -12896,6 +12986,7 @@ export default function ChatView(props: ChatViewProps) {
                                 availableEnvironments={logicalProjectEnvironments}
                                 composerControlsHostRef={setRestingComposerControlsHost}
                                 contextStripVisible={showComposerContextStrip}
+                                labModeAvailable={labModeAvailable}
                               />
                             </div>
                           )}
@@ -13034,6 +13125,8 @@ export default function ChatView(props: ChatViewProps) {
           onAddFiles={addFilesSurface}
           onAddPullRequest={addPullRequestSurface}
           onAddPullRequests={addPullRequestsSurface}
+          onAddLabs={addLabsSurface}
+          labsAvailable={labsSurfaceAvailable}
           onAddDevice={addDeviceSurface}
           browserAvailable={canOperatePreview && browserAvailable}
           terminalAvailable={activeProject !== null && canOperateTerminal}
@@ -13097,6 +13190,8 @@ export default function ChatView(props: ChatViewProps) {
             onAddFiles={addFilesSurface}
             onAddPullRequest={addPullRequestSurface}
             onAddPullRequests={addPullRequestsSurface}
+            onAddLabs={addLabsSurface}
+            labsAvailable={labsSurfaceAvailable}
             onAddDevice={addDeviceSurface}
             browserAvailable={canOperatePreview && browserAvailable}
             terminalAvailable={activeProject !== null && canOperateTerminal}

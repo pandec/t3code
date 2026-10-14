@@ -32,6 +32,7 @@ import {
   ChevronRight,
   FileDiff,
   Files,
+  FlaskConical,
   Globe2,
   Plus,
   TerminalSquare,
@@ -150,6 +151,9 @@ interface RightPanelTabsProps {
   onAddPullRequest: () => void;
   onAddPullRequests: () => void;
   onAddDevice: () => void;
+  /** Fork (SP Labs): offered only in threads of the labs project. */
+  onAddLabs?: (() => void) | undefined;
+  labsAvailable?: boolean;
   browserAvailable: boolean;
   terminalAvailable: boolean;
   diffAvailable: boolean;
@@ -186,6 +190,25 @@ const SURFACE_DISABLED_REASONS = {
   pullRequests: "No linked pull requests are available for this thread.",
   device: "Devices are only available from a thread.",
 } as const;
+
+/** Fork (SP Labs): the Labs launcher row, present only where it applies. */
+function labsSurfaceActions(props: {
+  onAddLabs?: (() => void) | undefined;
+  labsAvailable?: boolean;
+}) {
+  return props.labsAvailable && props.onAddLabs
+    ? [
+        {
+          label: "SP Labs",
+          icon: FlaskConical,
+          shortcut: "S",
+          available: true,
+          disabledReason: "",
+          onClick: props.onAddLabs,
+        },
+      ]
+    : [];
+}
 
 /** Overlays that must win over the launcher's letter shortcuts. */
 const LAUNCHER_SHORTCUT_BLOCKING_LAYERS = [
@@ -349,6 +372,9 @@ function RightPanelEmptyState(props: {
   onAddPullRequest: () => void;
   onAddPullRequests: () => void;
   onAddDevice: () => void;
+  /** Fork (SP Labs): offered only in threads of the labs project. */
+  onAddLabs?: (() => void) | undefined;
+  labsAvailable?: boolean;
   browserAvailable: boolean;
   terminalAvailable: boolean;
   diffAvailable: boolean;
@@ -418,6 +444,7 @@ function RightPanelEmptyState(props: {
       disabledReason: SURFACE_UNAVAILABLE_HINTS.device,
       onClick: props.onAddDevice,
     },
+    ...labsSurfaceActions(props),
   ] as const;
 
   type SurfaceAction = (typeof actions)[number];
@@ -631,6 +658,8 @@ function surfaceTitle(
       return surface.identifier;
     case "pull-requests":
       return "Pull requests";
+    case "labs":
+      return "SP Labs";
     case "device":
       return surface.title ?? surface.target?.name ?? "Device";
     case "preview": {
@@ -716,6 +745,8 @@ function SurfaceIcon({
       return <LinearIcon className="size-3 shrink-0 text-muted-foreground" />;
     case "pull-requests":
       return <PullRequestGlyph.link className="size-3 shrink-0" />;
+    case "labs":
+      return <FlaskConical className="size-3 shrink-0" />;
     case "device":
       return surface.target?.platform === "ios" ? (
         <AppleIcon className="size-3 shrink-0" />
@@ -1009,6 +1040,7 @@ export function RightPanelTabs(props: RightPanelTabsProps) {
       disabledReason: SURFACE_DISABLED_REASONS.device,
       onClick: props.onAddDevice,
     },
+    ...labsSurfaceActions(props),
   ] as const;
 
   const handleAddSurfaceMenuKeyDown = (event: ReactKeyboardEvent<HTMLDivElement>) => {
@@ -1519,6 +1551,8 @@ export function RightPanelTabs(props: RightPanelTabsProps) {
             onAddPullRequest={props.onAddPullRequest}
             onAddPullRequests={props.onAddPullRequests}
             onAddDevice={props.onAddDevice}
+            onAddLabs={props.onAddLabs}
+            labsAvailable={props.labsAvailable ?? false}
             browserAvailable={props.browserAvailable}
             terminalAvailable={props.terminalAvailable}
             diffAvailable={props.diffAvailable}

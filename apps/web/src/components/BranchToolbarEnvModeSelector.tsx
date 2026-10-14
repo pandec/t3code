@@ -1,6 +1,6 @@
 import { ComposerSelectControl } from "./chat/ComposerControl";
 import { ComposerContextLabel } from "./ComposerContextLabel";
-import { FolderGit2Icon, FolderGitIcon, FolderIcon } from "lucide-react";
+import { FlaskConicalIcon, FolderGit2Icon, FolderGitIcon, FolderIcon } from "lucide-react";
 import { memo, useMemo, type MouseEvent as ReactMouseEvent } from "react";
 
 import {
@@ -32,6 +32,8 @@ interface BranchToolbarEnvModeSelectorProps {
   previousWorktreeLabel?: string | null;
   previousWorktreeBranch?: string | null;
   onUsePreviousWorktree?: () => void;
+  /** Fork (SP Labs): offer Lab for a draft in the labs project. */
+  labModeAvailable?: boolean;
 }
 
 export const BranchToolbarEnvModeSelector = memo(function BranchToolbarEnvModeSelector({
@@ -43,6 +45,7 @@ export const BranchToolbarEnvModeSelector = memo(function BranchToolbarEnvModeSe
   previousWorktreeLabel,
   previousWorktreeBranch = null,
   onUsePreviousWorktree,
+  labModeAvailable = false,
 }: BranchToolbarEnvModeSelectorProps) {
   const composerFloatingLayerProps = useComposerMenuProps();
   const showPreviousWorktree = Boolean(previousWorktreeLabel && onUsePreviousWorktree);
@@ -53,11 +56,12 @@ export const BranchToolbarEnvModeSelector = memo(function BranchToolbarEnvModeSe
         label: resolveCurrentWorkspaceLabel(activeWorktreePath),
       },
       { value: "worktree", label: resolveEnvModeLabel("worktree") },
+      ...(labModeAvailable ? [{ value: "lab", label: resolveEnvModeLabel("lab") }] : []),
       ...(showPreviousWorktree && previousWorktreeLabel
         ? [{ value: PREVIOUS_WORKTREE_SELECT_VALUE, label: previousWorktreeLabel }]
         : []),
     ],
-    [activeWorktreePath, previousWorktreeLabel, showPreviousWorktree],
+    [activeWorktreePath, labModeAvailable, previousWorktreeLabel, showPreviousWorktree],
   );
 
   const stopContextMenuMouseDown = (event: ReactMouseEvent) => {
@@ -125,7 +129,9 @@ export const BranchToolbarEnvModeSelector = memo(function BranchToolbarEnvModeSe
             />
           }
         >
-          {effectiveEnvMode === "worktree" ? (
+          {effectiveEnvMode === "lab" ? (
+            <FlaskConicalIcon className="size-3" />
+          ) : effectiveEnvMode === "worktree" ? (
             <FolderGit2Icon className="size-3" />
           ) : activeWorktreePath ? (
             <FolderGitIcon className="size-3" />
@@ -137,9 +143,9 @@ export const BranchToolbarEnvModeSelector = memo(function BranchToolbarEnvModeSe
           </ComposerContextLabel>
         </TooltipTrigger>
         <TooltipPopup>
-          {effectiveEnvMode === "worktree"
-            ? resolveEnvModeLabel("worktree")
-            : resolveCurrentWorkspaceLabel(activeWorktreePath)}
+          {effectiveEnvMode === "local"
+            ? resolveCurrentWorkspaceLabel(activeWorktreePath)
+            : resolveEnvModeLabel(effectiveEnvMode)}
         </TooltipPopup>
       </Tooltip>
       <SelectPopup
@@ -165,6 +171,14 @@ export const BranchToolbarEnvModeSelector = memo(function BranchToolbarEnvModeSe
               {resolveEnvModeLabel("worktree")}
             </span>
           </SelectItem>
+          {labModeAvailable ? (
+            <SelectItem value="lab">
+              <span className="inline-flex items-center gap-1.5">
+                <FlaskConicalIcon className="size-3" />
+                {resolveEnvModeLabel("lab")}
+              </span>
+            </SelectItem>
+          ) : null}
           {showPreviousWorktree && previousWorktreeLabel ? (
             <SelectItem value={PREVIOUS_WORKTREE_SELECT_VALUE}>
               <PreviousWorktreeItemContent branch={previousWorktreeBranch} />

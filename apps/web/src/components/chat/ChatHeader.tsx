@@ -39,6 +39,7 @@ import {
 import { observeResize } from "~/lib/observeResize";
 import { cn } from "~/lib/utils";
 import { useClientSettings } from "../../hooks/useSettings";
+import { LabThreadChip } from "../labs/LabThreadChip";
 
 interface ChatHeaderProps {
   activeThreadEnvironmentId: EnvironmentId;
@@ -54,6 +55,8 @@ interface ChatHeaderProps {
   onOpenThread: (threadId: ThreadId) => void;
   onNewThreadInProject: () => void;
   onOpenProjectSettings?: (() => void) | undefined;
+  /** Fork (SP Labs): a thread in a lab worktree shows the lab chip. */
+  activeWorktreePath?: string | null;
 }
 
 /**
@@ -98,6 +101,7 @@ export const ChatHeader = memo(function ChatHeader({
   onOpenThread,
   onNewThreadInProject,
   onOpenProjectSettings,
+  activeWorktreePath = null,
 }: ChatHeaderProps) {
   const activeProjectName = activeProject?.title;
   const activeProjectCwd = activeProject?.workspaceRoot ?? null;
@@ -450,6 +454,9 @@ export const ChatHeader = memo(function ChatHeader({
           )}
         </WorkspaceBreadcrumbItem>
       </WorkspaceBreadcrumb>
+      {isServerThread ? (
+        <LabThreadChip threadRef={activeThreadRef} worktreePath={activeWorktreePath} />
+      ) : null}
     </div>
   );
 });

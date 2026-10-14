@@ -19,6 +19,7 @@ vi.mock("../hooks/useCopyToClipboard", () => ({
 }));
 vi.mock("./BranchToolbarBranchSelector", () => ({ BranchToolbarBranchSelector: () => null }));
 vi.mock("../composerDraftStore", () => ({
+  DEFAULT_DRAFT_LAB_INTENT: null,
   useComposerDraftStore: (select: (store: unknown) => unknown) =>
     select({ getDraftThreadByRef: () => null, setDraftThreadContext: vi.fn() }),
 }));

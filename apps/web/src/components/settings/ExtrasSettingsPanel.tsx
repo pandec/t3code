@@ -55,6 +55,7 @@ import {
   SettingsSection,
 } from "./settingsLayout";
 import { searchableSetting } from "./settingsSearch";
+import { SpLabsSettingsSection } from "./SpLabsSettings";
 import { VoiceSettingsSection } from "./VoiceSettingsSection";
 
 const THREAD_PROVIDER_ICON_LABELS: Record<SidebarThreadProviderIconVisibility, string> = {
@@ -1059,6 +1060,7 @@ export function ExtrasSettingsPanel() {
     <SettingsPageContainer>
       <ProviderUsageExtrasSection />
       <LinearExtrasSection />
+      <SpLabsSettingsSection />
       <SidebarExtrasSection />
       <PanelsExtrasSection />
       <MessagesExtrasSection />
