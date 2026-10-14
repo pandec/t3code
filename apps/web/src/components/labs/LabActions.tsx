@@ -160,6 +160,11 @@ export function useLabCommands(environmentId: EnvironmentId) {
 
 export type LabCommands = ReturnType<typeof useLabCommands>;
 
+/** Stack commands wait for permission and for the lab's running operation to finish. */
+export function isLabBusy(commands: LabCommands, t3: LabT3State | undefined): boolean {
+  return !commands.canOperate || t3?.operation != null;
+}
+
 /** A tooltip naming the action, then what it does in one line. */
 export function LabActionTooltip({
   label,
@@ -195,7 +200,7 @@ function ActionButton({
   readonly tooltip: string;
   readonly icon: typeof PlayIcon;
   readonly disabled?: boolean;
-  readonly variant?: "outline" | "default";
+  readonly variant?: "outline" | "default" | "destructive";
   readonly compact: boolean;
   readonly onClick: () => void;
 }) {
@@ -300,11 +305,39 @@ function HoldButton({
   );
 }
 
+/** Releases the reservation; `emphasized` (solid destructive) when nothing else will release it. */
+export function LabReleaseButton({
+  environment,
+  commands,
+  disabled,
+  compact = false,
+  emphasized = false,
+}: {
+  readonly environment: LabEnvironment;
+  readonly commands: LabCommands;
+  readonly disabled: boolean;
+  readonly compact?: boolean;
+  readonly emphasized?: boolean;
+}) {
+  return (
+    <ActionButton
+      label="Release"
+      tooltip="Releases the reservation now, keeping the standing handoff note. Offers to stop a running stack first; uncommitted changes block it."
+      icon={LogOutIcon}
+      compact={compact}
+      variant={emphasized ? "destructive" : "outline"}
+      disabled={disabled}
+      onClick={() => void commands.release(environment)}
+    />
+  );
+}
+
 /**
  * Every action for one lab in one row: a new thread in a free lab, the stack commands, hold, and
  * the two ways to release. Main/Staging and Preview have none; the CLI manages only lab stacks.
  * `extra` appends a caller's own action (the chip's Details). `compact` is the chip's single row
- * of icon buttons; otherwise labeled buttons wrap.
+ * of icon buttons; otherwise labeled buttons wrap. `emphasizeRelease` colors Release when the
+ * owner thread is archived.
  */
 export function LabActionBar({
   environmentId,
@@ -314,6 +347,7 @@ export function LabActionBar({
   commands,
   extra,
   compact = false,
+  emphasizeRelease = false,
 }: {
   readonly environmentId: EnvironmentId;
   readonly projectId: ProjectId | null;
@@ -323,6 +357,7 @@ export function LabActionBar({
   readonly commands: LabCommands;
   readonly extra?: ReactNode;
   readonly compact?: boolean;
+  readonly emphasizeRelease?: boolean;
 }) {
   const handleNewThread = useNewThreadHandler();
   const ownerThreadId = environment?.lease?.threadId ?? null;
@@ -330,7 +365,7 @@ export function LabActionBar({
   if (environment === null || environment.kind !== "lab") {
     return extra ? <div className="flex flex-wrap items-center gap-1">{extra}</div> : null;
   }
-  const busy = !commands.canOperate || t3?.operation != null;
+  const busy = isLabBusy(commands, t3);
   const running = isLabStackRunning(environment);
   const free = resolveLabAvailability(environment) === "free";
   return (
@@ -403,13 +438,12 @@ export function LabActionBar({
         />
       ) : null}
       {environment.lease ? (
-        <ActionButton
-          label="Release"
-          tooltip="Releases the reservation now, keeping the standing handoff note. Offers to stop a running stack first; uncommitted changes block it."
-          icon={LogOutIcon}
-          compact={compact}
+        <LabReleaseButton
+          environment={environment}
+          commands={commands}
           disabled={busy}
-          onClick={() => void commands.release(environment)}
+          compact={compact}
+          emphasized={emphasizeRelease}
         />
       ) : null}
       {extra}

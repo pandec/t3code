@@ -17,11 +17,18 @@ import { Badge } from "../ui/badge";
 import { Button } from "../ui/button";
 import { ScrollArea } from "../ui/scroll-area";
 import { Tooltip, TooltipPopup, TooltipTrigger } from "../ui/tooltip";
-import { LabActionBar, useLabCommands, type LabCommands } from "./LabActions";
+import {
+  isLabBusy,
+  LabActionBar,
+  LabReleaseButton,
+  useLabCommands,
+  type LabCommands,
+} from "./LabActions";
 import { LabOwnerLink, LabSummarySentence, useLabOwnerView, useLabOwnerViews } from "./LabParts";
 import {
   LAB_IDLE_HOLD_HOURS,
   formatLabAgo,
+  isLabHeldByArchivedThread,
   labOperationLabel,
   orderLabEnvironments,
   resolveLabBranch,
@@ -142,6 +149,7 @@ function VisibleLabsPanel({
       environmentId={environmentId}
       data={data}
       owners={owners}
+      commands={commands}
       now={now}
       onOpen={(id) => select(id)}
     />
@@ -175,12 +183,14 @@ function LabList({
   environmentId,
   data,
   owners,
+  commands,
   now,
   onOpen,
 }: {
   readonly environmentId: EnvironmentId;
   readonly data: LabsSnapshot;
   readonly owners: OwnerViews;
+  readonly commands: LabCommands;
   readonly now: number;
   readonly onOpen: (labId: string) => void;
 }) {
@@ -215,6 +225,8 @@ function LabList({
             environmentId={environmentId}
             environment={environment}
             owner={ownerOf(owners, environment)}
+            t3={data.t3[environment.id]}
+            commands={commands}
             now={now}
             onOpen={onOpen}
           />
@@ -230,6 +242,8 @@ function LabList({
             environmentId={environmentId}
             environment={environment}
             owner={ownerOf(owners, environment)}
+            t3={data.t3[environment.id]}
+            commands={commands}
             now={now}
             onOpen={onOpen}
           />
@@ -269,12 +283,16 @@ function LabListRow({
   environmentId,
   environment,
   owner,
+  t3,
+  commands,
   now,
   onOpen,
 }: {
   readonly environmentId: EnvironmentId;
   readonly environment: LabEnvironment;
   readonly owner: LabOwnerView | null;
+  readonly t3: LabT3State | undefined;
+  readonly commands: LabCommands;
   readonly now: number;
   readonly onOpen: (labId: string) => void;
 }) {
@@ -334,6 +352,18 @@ function LabListRow({
         </Tooltip>
         {summary.since ? (
           <span className="text-muted-foreground">{formatLabAgo(summary.since, now)}</span>
+        ) : null}
+        {isLabHeldByArchivedThread(environment, owner) ? (
+          // Its own control inside the clickable row: a click never opens the detail, and the
+          // row's key handler already ignores keys from nested controls.
+          <span className="mt-1.5" onClick={(event) => event.stopPropagation()}>
+            <LabReleaseButton
+              environment={environment}
+              commands={commands}
+              disabled={isLabBusy(commands, t3)}
+              emphasized
+            />
+          </span>
         ) : null}
       </div>
     </div>
@@ -403,6 +433,7 @@ function LabDetail({
               environment={environment}
               t3={t3}
               commands={commands}
+              emphasizeRelease={isLabHeldByArchivedThread(environment, owner)}
             />
             {t3?.operation ? (
               <p className="text-info-foreground">{labOperationLabel(t3.operation)}…</p>

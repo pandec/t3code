@@ -284,6 +284,14 @@ export function isLabIdleHold(
   return time !== null && now - time >= LAB_IDLE_HOLD_HOURS * 3_600_000;
 }
 
+/** Reserved by a thread that was archived: nothing will release it, so the panel offers to. */
+export function isLabHeldByArchivedThread(
+  environment: Pick<LabEnvironment, "lease">,
+  owner: LabOwnerView | null,
+): boolean {
+  return environment.lease !== null && owner?.archived === true;
+}
+
 /** One word and one sentence per environment, in the dashboard's words. */
 export function summarizeLabEnvironment(
   environment: LabEnvironment,
@@ -357,7 +365,7 @@ export function summarizeLabEnvironment(
       };
     }
     const link = { owner: owner.title };
-    if (owner.archived) {
+    if (isLabHeldByArchivedThread(environment, owner)) {
       return {
         ...base,
         word: "Reserved",
