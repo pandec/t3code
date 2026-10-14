@@ -107,6 +107,24 @@ describe("RPC authorization scopes", () => {
     );
   });
 
+  it("reads SP Labs under read scope and runs lab commands under operate scope", () => {
+    for (const method of [
+      WS_METHODS.labsSubscribe,
+      WS_METHODS.labsGetInventory,
+      WS_METHODS.labsHistory,
+      WS_METHODS.labsLogs,
+    ]) {
+      expect(requiredScopeForRpcMethod(method)).toBe(AuthOrchestrationReadScope);
+    }
+    for (const method of [
+      WS_METHODS.labsPrepareThread,
+      WS_METHODS.labsAction,
+      WS_METHODS.labsRelease,
+    ]) {
+      expect(requiredScopeForRpcMethod(method)).toBe(AuthOrchestrationOperateScope);
+    }
+  });
+
   it("allows relay status reads without granting relay installation access", () => {
     expect(requiredScopeForRpcMethod(WS_METHODS.cloudGetRelayClientStatus)).toBe(
       AuthRelayReadScope,

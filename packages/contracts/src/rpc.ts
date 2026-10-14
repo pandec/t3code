@@ -191,6 +191,23 @@ import {
   LinearStatus,
   LinearStatusInput,
 } from "./linear.ts";
+import {
+  LabsActionInput,
+  LabsActionResult,
+  LabsError,
+  LabsHistoryInput,
+  LabsHistoryResult,
+  LabsInventory,
+  LabsInventoryInput,
+  LabsLogsInput,
+  LabsLogsResult,
+  LabsPrepareThreadInput,
+  LabsPrepareThreadResult,
+  LabsReleaseInput,
+  LabsReleaseResult,
+  LabsSnapshot,
+  LabsSubscribeInput,
+} from "./labs.ts";
 import { ProviderInstanceId, ProviderInstanceMutation } from "./providerInstance.ts";
 import { PullRequestReviewGuideResult } from "./pullRequestReviewGuide.ts";
 import {
@@ -542,6 +559,13 @@ export const WS_METHODS = {
   linearIssue: "linear.issue",
   linearComments: "linear.comments",
   linearCreateComment: "linear.createComment",
+  labsSubscribe: "labs.subscribe",
+  labsGetInventory: "labs.getInventory",
+  labsPrepareThread: "labs.prepareThread",
+  labsAction: "labs.action",
+  labsRelease: "labs.release",
+  labsHistory: "labs.history",
+  labsLogs: "labs.logs",
   serverUpdateProvider: "server.updateProvider",
   serverUpdateServer: "server.updateServer",
   serverUpdateServerWithProgress: "server.updateServerWithProgress",
@@ -943,6 +967,53 @@ const WsLinearCreateCommentRpc = Rpc.make(WS_METHODS.linearCreateComment, {
   payload: LinearCreateCommentInput,
   success: LinearComment,
   error: LinearRpcErrors,
+});
+
+// Fork: SP Labs (see labs.ts).
+const LabsRpcErrors = Schema.Union([LabsError, EnvironmentAuthorizationError]);
+
+/** Live labs snapshot. The server polls the CLI only while someone subscribes. */
+const WsLabsSubscribeRpc = Rpc.make(WS_METHODS.labsSubscribe, {
+  payload: LabsSubscribeInput,
+  success: LabsSnapshot,
+  error: LabsRpcErrors,
+  stream: true,
+});
+
+const WsLabsGetInventoryRpc = Rpc.make(WS_METHODS.labsGetInventory, {
+  payload: LabsInventoryInput,
+  success: LabsInventory,
+  error: LabsRpcErrors,
+});
+
+const WsLabsPrepareThreadRpc = Rpc.make(WS_METHODS.labsPrepareThread, {
+  payload: LabsPrepareThreadInput,
+  success: LabsPrepareThreadResult,
+  error: LabsRpcErrors,
+});
+
+const WsLabsActionRpc = Rpc.make(WS_METHODS.labsAction, {
+  payload: LabsActionInput,
+  success: LabsActionResult,
+  error: LabsRpcErrors,
+});
+
+const WsLabsReleaseRpc = Rpc.make(WS_METHODS.labsRelease, {
+  payload: LabsReleaseInput,
+  success: LabsReleaseResult,
+  error: LabsRpcErrors,
+});
+
+const WsLabsHistoryRpc = Rpc.make(WS_METHODS.labsHistory, {
+  payload: LabsHistoryInput,
+  success: LabsHistoryResult,
+  error: LabsRpcErrors,
+});
+
+const WsLabsLogsRpc = Rpc.make(WS_METHODS.labsLogs, {
+  payload: LabsLogsInput,
+  success: LabsLogsResult,
+  error: LabsRpcErrors,
 });
 
 const WsServerDiscoverSourceControlRpc = Rpc.make(WS_METHODS.serverDiscoverSourceControl, {
@@ -2116,6 +2187,13 @@ export const WsRpcGroup = RpcGroup.make(
   WsLinearIssueRpc,
   WsLinearCommentsRpc,
   WsLinearCreateCommentRpc,
+  WsLabsSubscribeRpc,
+  WsLabsGetInventoryRpc,
+  WsLabsPrepareThreadRpc,
+  WsLabsActionRpc,
+  WsLabsReleaseRpc,
+  WsLabsHistoryRpc,
+  WsLabsLogsRpc,
   WsServerUpdateProviderRpc,
   WsProviderConsumeResetCreditRpc,
   WsProviderAuthStartRpc,

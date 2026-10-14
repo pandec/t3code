@@ -80,6 +80,7 @@ import {
   CornerLeftUpIcon,
   FileSearchIcon,
   FolderGit2Icon,
+  FlaskConicalIcon,
   FolderIcon,
   FolderPlusIcon,
   GitForkIcon,
@@ -178,6 +179,8 @@ import {
   useThreadShells,
   waitForProject,
 } from "../state/entities";
+import { useIsLabsProject } from "../state/labs";
+import { openLabsPanel } from "./labs/labsPanelStore";
 import { useThreadSearch } from "../state/queries";
 import { resolveThreadActionProjectRef, startNewThreadFromContext } from "../lib/chatThreadActions";
 import {
@@ -825,6 +828,11 @@ function OpenCommandPaletteDialog(props: {
   const currentThreadRef =
     splitMounted && threadActionPane === "secondary" ? splitSecondaryRef : routeThreadRef;
   const currentThread = useThreadShell(currentThreadRef);
+  // Fork (SP Labs): "Open Labs panel" is offered in threads of the labs project.
+  const currentThreadInLabsProject = useIsLabsProject(
+    currentThread?.environmentId ?? null,
+    currentThread?.projectId ?? null,
+  );
   const referenceThreadRef =
     pathname === "/pull-requests"
       ? environments.some(
@@ -2733,6 +2741,20 @@ function OpenCommandPaletteDialog(props: {
         },
       });
     }
+  }
+
+  if (currentThread !== null && currentThreadInLabsProject) {
+    const threadRef = scopeThreadRef(currentThread.environmentId, currentThread.id);
+    actionItems.push({
+      kind: "action",
+      value: "action:open-labs-panel",
+      searchTerms: ["labs", "sp-labs", "lab", "salespros", "dev stack", "release"],
+      title: "Open Labs panel",
+      icon: <FlaskConicalIcon className={ITEM_ICON_CLASS} />,
+      run: async () => {
+        openLabsPanel(threadRef);
+      },
+    });
   }
 
   if (currentThread !== null) {

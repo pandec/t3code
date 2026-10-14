@@ -1346,6 +1346,37 @@ it.effect("renames a temporary branch on an existing worktree to a generated nam
   }),
 );
 
+// Fork (SP Labs): sp-labs provisions lab worktrees and its `up` installs dependencies.
+it.effect("does not run the project setup script in an sp-labs lab worktree", () =>
+  Effect.gen(function* () {
+    const fileSystem = yield* FileSystem.FileSystem;
+    const lab = yield* fileSystem.makeTempDirectoryScoped({ prefix: "t3-sp-lab-" });
+    yield* fileSystem.writeFileString(`${lab}/.sp-lab.json`, "{}");
+    let setupRuns = 0;
+    const harness = makeHarness({
+      runSetup: () => Effect.sync(() => (setupRuns++, { status: "no-script" as const })),
+    });
+    yield* Effect.gen(function* () {
+      const launches = yield* ThreadLaunch.ThreadLaunchService;
+      const threads = yield* ThreadManagement.ThreadManagementService;
+      const launched = yield* launches.launch(
+        launchInput({
+          command: "command:launch:sp-lab",
+          thread: "thread:launch:sp-lab",
+          message: "Fix it in the lab",
+          workspace: { type: "existing_worktree", worktreePath: lab, branch: "feature/lab" },
+        }),
+      );
+      yield* waitUntil(() =>
+        threads
+          .getThreadProjection(launched.threadId)
+          .pipe(Effect.map((projection) => projection.runs[0]?.status === "starting")),
+      );
+      assert.equal(setupRuns, 0);
+    }).pipe(Effect.provide(harness.layer));
+  }).pipe(Effect.scoped, Effect.provide(NodeServices.layer)),
+);
+
 it.effect("shows the fetch diagnosis when preparing a worktree from origin fails", () => {
   const detail =
     "Git could not authenticate with the remote. Check Git credentials or SSH access on the server, then retry.";

@@ -21,6 +21,8 @@ import { appAtomRegistry } from "../rpc/atomRegistry";
 import { useEnvironment, usePrimaryEnvironmentId } from "../state/environments";
 import { EnvironmentMachineIcon } from "./EnvironmentMachineIcon";
 import { useProject } from "../state/entities";
+import { useLabsInventory } from "../state/labs";
+import { findLabForThread } from "./labs/labs.logic";
 import {
   resolveThreadCurrentPullRequestLink,
   resolveThreadPullRequestChains,
@@ -840,17 +842,58 @@ export function ThreadTerminalStatusButton({
 export function ThreadWorktreeIndicator({
   thread,
 }: {
-  thread: Pick<SidebarThreadSummary, "id" | "branch" | "worktreePath">;
+  thread: Pick<SidebarThreadSummary, "id" | "branch" | "worktreePath"> &
+    Partial<Pick<SidebarThreadSummary, "environmentId">>;
 }) {
   const worktreePath = thread.worktreePath?.trim();
   if (!worktreePath) {
     return null;
   }
+  if (thread.environmentId !== undefined) {
+    return (
+      <LabAwareWorktreeIndicator
+        thread={thread}
+        environmentId={thread.environmentId}
+        worktreePath={worktreePath}
+      />
+    );
+  }
+  return <WorktreeIndicatorIcon thread={thread} worktreePath={worktreePath} labName={null} />;
+}
 
+/** Fork (SP Labs): lab worktrees get a tinted icon, read from the cheap lab inventory only. */
+function LabAwareWorktreeIndicator({
+  thread,
+  environmentId,
+  worktreePath,
+}: {
+  thread: Pick<SidebarThreadSummary, "id" | "branch">;
+  environmentId: EnvironmentId;
+  worktreePath: string;
+}) {
+  const inventory = useLabsInventory(environmentId);
+  const lab =
+    inventory?.configured === true
+      ? findLabForThread(inventory.environments, { threadId: thread.id, worktreePath })
+      : null;
+  return (
+    <WorktreeIndicatorIcon thread={thread} worktreePath={worktreePath} labName={lab?.id ?? null} />
+  );
+}
+
+function WorktreeIndicatorIcon({
+  thread,
+  worktreePath,
+  labName,
+}: {
+  thread: Pick<SidebarThreadSummary, "id" | "branch">;
+  worktreePath: string;
+  labName: string | null;
+}) {
   const displayPath = formatWorktreePathForDisplay(worktreePath);
-  const tooltip = thread.branch
-    ? `Worktree: ${displayPath} (${thread.branch})`
-    : `Worktree: ${displayPath}`;
+  const tooltip =
+    labName ??
+    (thread.branch ? `Worktree: ${displayPath} (${thread.branch})` : `Worktree: ${displayPath}`);
 
   return (
     <Tooltip>
@@ -864,7 +907,9 @@ export function ThreadWorktreeIndicator({
           />
         }
       >
-        <FolderGit2Icon className="size-3 text-muted-foreground/40" />
+        <FolderGit2Icon
+          className={labName ? "size-3 text-info/80" : "size-3 text-muted-foreground/40"}
+        />
       </TooltipTrigger>
       <TooltipPopup side="top">{tooltip}</TooltipPopup>
     </Tooltip>

@@ -51,6 +51,7 @@ import * as RuntimePolicy from "./RuntimePolicy.ts";
 import * as RuntimeRequestService from "./RuntimeRequestService.ts";
 import * as ThreadManagementService from "./ThreadManagementService.ts";
 import * as ThreadLaunchService from "./ThreadLaunchService.ts";
+import * as ThreadHiddenNotes from "./ThreadHiddenNotes.ts";
 import * as ThreadLifecycleService from "./ThreadLifecycleService.ts";
 import * as RecentArchivedThreads from "./RecentArchivedThreads.ts";
 import * as ThreadArchiveScheduler from "./ThreadArchiveScheduler.ts";
@@ -177,12 +178,19 @@ const layerProviderTurnStartServiceProvided = ProviderTurnStartService.layer.pip
       layerRunExecutionServiceProvided,
       layerRuntimePolicyProvided,
       StrictResume.layer,
+      ThreadHiddenNotes.layer,
     ),
   ),
 );
 
 const layerProviderTurnControlServiceProvided = ProviderTurnControlService.layer.pipe(
-  Layer.provide(Layer.merge(ProjectionStore.layer, layerProviderSessionManagerProvided)),
+  Layer.provide(
+    Layer.mergeAll(
+      ProjectionStore.layer,
+      layerProviderSessionManagerProvided,
+      ThreadHiddenNotes.layer,
+    ),
+  ),
 );
 const layerRuntimeRequestServiceProvided = RuntimeRequestService.layer.pipe(
   Layer.provide(Layer.merge(ProjectionStore.layer, layerProviderSessionManagerProvided)),

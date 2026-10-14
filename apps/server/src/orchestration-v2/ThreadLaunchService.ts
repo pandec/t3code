@@ -58,6 +58,7 @@ import type * as Orchestrator from "./Orchestrator.ts";
 import { makeProviderFailure } from "@t3tools/provider-core/server/failure";
 import { randomUuidV4 } from "@t3tools/provider-core/server/randomUuid";
 import * as ThreadManagement from "./ThreadManagementService.ts";
+import { isSpLabWorktree } from "../labs/labWorktree.ts";
 
 export type ThreadLaunchWorkspaceStrategy =
   | { readonly type: "root"; readonly branch?: string | undefined }
@@ -635,7 +636,7 @@ const make = Effect.gen(function* () {
           .pipe(Effect.mapError(mapError(input, "update-thread", threadId)));
       }
       yield* setupTracker.stageStatus(threadId, "setup-script", "running");
-      const setup = yield* setupScripts
+      const runSetup = setupScripts
         .runForThread({
           threadId,
           projectId: input.projectId,
@@ -656,6 +657,14 @@ const make = Effect.gen(function* () {
           },
         })
         .pipe(Effect.mapError(mapError(input, "run-setup-script", threadId)));
+      // Fork (SP Labs): sp-labs provisions lab worktrees; see isSpLabWorktree. A
+      // reused worktree is one this service created, never a lab.
+      const setup =
+        input.workspaceStrategy.type === "existing_worktree" &&
+        reused === undefined &&
+        (yield* isSpLabWorktree(fs, path, cwd))
+          ? ({ status: "no-script" } as const)
+          : yield* runSetup;
 
       let awaitAsyncSetup = Effect.void;
       if (setup.status === "started") {

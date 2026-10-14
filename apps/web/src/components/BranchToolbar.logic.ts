@@ -23,7 +23,8 @@ export interface EnvironmentOption {
   machine: EnvironmentMachineKind;
 }
 
-export const EnvMode = Schema.Literals(["local", "worktree"]);
+// Fork: "lab" runs a new thread in an SP Labs lab worktree; only drafts in the labs project offer it.
+export const EnvMode = Schema.Literals(["local", "worktree", "lab"]);
 export type EnvMode = typeof EnvMode.Type;
 
 const GENERIC_LOCAL_ENVIRONMENT_LABELS = new Set(["local", "local environment"]);
@@ -95,7 +96,7 @@ export function resolveContextStripLabelsCompact(input: {
 }
 
 export function resolveEnvModeLabel(mode: EnvMode): string {
-  return mode === "worktree" ? "New worktree" : "Current checkout";
+  return mode === "worktree" ? "New worktree" : mode === "lab" ? "Lab" : "Current checkout";
 }
 
 export const WORKTREE_SUBMODULES_LABELS: Record<WorktreeSubmodules, string> = {
@@ -180,7 +181,9 @@ export function resolveEffectiveEnvMode(input: {
     if (activeWorktreePath) {
       return "local";
     }
-    return draftThreadEnvMode === "worktree" ? "worktree" : "local";
+    return draftThreadEnvMode === "worktree" || draftThreadEnvMode === "lab"
+      ? draftThreadEnvMode
+      : "local";
   }
   return activeWorktreePath || preparingWorktree ? "worktree" : "local";
 }

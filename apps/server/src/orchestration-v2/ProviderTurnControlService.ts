@@ -20,6 +20,7 @@ import type * as ProviderAdapter from "@t3tools/provider-core/server/ProviderAda
 import * as ProjectionStore from "./ProjectionStore.ts";
 import * as ProviderSessionManager from "./ProviderSessionManager.ts";
 import { withInputOriginNotice } from "./InputOriginNotice.ts";
+import * as ThreadHiddenNotes from "./ThreadHiddenNotes.ts";
 
 const yieldToRuntime = Effect.yieldNow.pipe(
   Effect.andThen(
@@ -91,6 +92,8 @@ export const layer: Layer.Layer<
   Effect.gen(function* () {
     const projections = yield* ProjectionStore.ProjectionStoreV2;
     const sessions = yield* ProviderSessionManager.ProviderSessionManagerV2;
+    // fork: optional so upstream's layer requirements stay unchanged.
+    const hiddenNotes = yield* Effect.serviceOption(ThreadHiddenNotes.ThreadHiddenNotes);
 
     const load = (input: {
       readonly threadId: ThreadId;
@@ -353,6 +356,20 @@ export const layer: Layer.Layer<
               cause: "The persisted steering message or target run is missing.",
             });
           }
+          const userText = withInputOriginNotice(
+            projectComposerContextForProvider({
+              text: message.text,
+              records: message.context?.records ?? [],
+            }),
+            message.inputOrigin,
+          );
+          // Fork: a steer is the user's next message too, so it carries pending hidden notes
+          // (not worktree-bound ones; the steer does not read the thread's worktree).
+          const notes =
+            Option.isNone(hiddenNotes) || userText.trimStart().startsWith("/")
+              ? []
+              : yield* hiddenNotes.value.pending(input.threadId, null);
+          const hiddenNote = ThreadHiddenNotes.renderThreadHiddenNotes(notes);
           yield* loaded.session.value
             .steerTurn({
               threadId: input.threadId,
@@ -361,13 +378,7 @@ export const layer: Layer.Layer<
               providerTurnId: loaded.providerTurn.id,
               message: {
                 messageId: message.id,
-                text: withInputOriginNotice(
-                  projectComposerContextForProvider({
-                    text: message.text,
-                    records: message.context?.records ?? [],
-                  }),
-                  message.inputOrigin,
-                ),
+                text: hiddenNote === "" ? userText : `${hiddenNote}\n\nUser message:\n${userText}`,
                 attachments: message.attachments,
                 createdBy: message.createdBy,
                 creationSource: message.creationSource,
@@ -396,6 +407,9 @@ export const layer: Layer.Layer<
                 }),
               ),
             );
+          if (Option.isSome(hiddenNotes) && notes.length > 0) {
+            yield* hiddenNotes.value.acknowledge(notes.map((note) => note.id));
+          }
         }).pipe(
           Effect.mapError((cause) =>
             isProviderTurnControlError(cause)

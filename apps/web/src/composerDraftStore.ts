@@ -90,8 +90,47 @@ const isPreviewAnnotationPayload = Schema.is(PreviewAnnotationPayloadSchema);
 
 export const COMPOSER_DRAFT_STORAGE_KEY = "t3code:composer-drafts:v1";
 const COMPOSER_DRAFT_STORAGE_VERSION = 9;
-const DraftThreadEnvModeSchema = Schema.Literals(["local", "worktree"]);
+// Fork: "lab" runs the thread in an SP Labs lab worktree (see DraftLabIntent).
+const DraftThreadEnvModeSchema = Schema.Literals(["local", "worktree", "lab"]);
 export type DraftThreadEnvMode = typeof DraftThreadEnvModeSchema.Type;
+
+/**
+ * Fork (SP Labs): what a Lab-mode draft reserves on first send. `labId` null picks the first free
+ * lab then. "create" makes `branchName` from `baseRef` (empty name: an automatic one);
+ * "continue" checks out the existing `branchName`.
+ */
+const DraftLabIntentSchema = Schema.Struct({
+  labId: Schema.NullOr(Schema.String),
+  branchMode: Schema.Literals(["create", "continue"]),
+  branchName: Schema.String,
+  baseRef: Schema.String,
+});
+export type DraftLabIntent = typeof DraftLabIntentSchema.Type;
+export const DEFAULT_DRAFT_LAB_INTENT: DraftLabIntent = {
+  labId: null,
+  branchMode: "create",
+  branchName: "",
+  baseRef: "master",
+};
+const isDraftLabIntent = Schema.is(DraftLabIntentSchema);
+
+/** A persisted or passed lab intent, or null when it is malformed or absent. */
+export function normalizeDraftLabIntent(value: unknown): DraftLabIntent | null {
+  return isDraftLabIntent(value) ? value : null;
+}
+
+function draftLabIntentsEqual(
+  left: DraftLabIntent | null | undefined,
+  right: DraftLabIntent | null | undefined,
+): boolean {
+  if (!left || !right) return (left ?? null) === (right ?? null);
+  return (
+    left.labId === right.labId &&
+    left.branchMode === right.branchMode &&
+    left.branchName === right.branchName &&
+    left.baseRef === right.baseRef
+  );
+}
 
 export const DraftId = Schema.String.pipe(Schema.brand("DraftId"));
 export type DraftId = typeof DraftId.Type;
@@ -332,6 +371,7 @@ const PersistedDraftThreadState = Schema.Struct({
   worktreePath: Schema.NullOr(Schema.String),
   envMode: DraftThreadEnvModeSchema,
   startFromOrigin: Schema.Boolean.pipe(Schema.withDecodingDefault(Effect.succeed(false))),
+  lab: Schema.optionalKey(Schema.NullOr(DraftLabIntentSchema)),
   customGroupId: Schema.optionalKey(Schema.NullOr(Schema.String)),
   promotedTo: Schema.optionalKey(
     Schema.NullOr(
@@ -468,6 +508,8 @@ export interface DraftSessionState {
   worktreePath: string | null;
   envMode: DraftThreadEnvMode;
   startFromOrigin: boolean;
+  /** Fork (SP Labs): the Lab-mode reservation; kept across mode switches, read only in "lab". */
+  lab?: DraftLabIntent | null;
   /** Custom thread group the thread joins on first send; null or absent is Active. */
   customGroupId?: string | null;
   promotedTo?: ScopedThreadRef | null;
@@ -549,6 +591,7 @@ interface ComposerDraftStoreState {
       createdAt?: string;
       envMode?: DraftThreadEnvMode;
       startFromOrigin?: boolean;
+      lab?: DraftLabIntent | null;
       runtimeMode?: RuntimeMode;
       interactionMode?: ProviderInteractionMode;
       environmentSelection?: "auto" | "manual";
@@ -567,6 +610,7 @@ interface ComposerDraftStoreState {
       createdAt?: string;
       envMode?: DraftThreadEnvMode;
       startFromOrigin?: boolean;
+      lab?: DraftLabIntent | null;
       runtimeMode?: RuntimeMode;
       interactionMode?: ProviderInteractionMode;
       environmentSelection?: "auto" | "manual";
@@ -584,6 +628,7 @@ interface ComposerDraftStoreState {
       createdAt?: string;
       envMode?: DraftThreadEnvMode;
       startFromOrigin?: boolean;
+      lab?: DraftLabIntent | null;
       runtimeMode?: RuntimeMode;
       interactionMode?: ProviderInteractionMode;
       environmentSelection?: "auto" | "manual";
@@ -1458,7 +1503,7 @@ function normalizeDraftThreadEnvMode(
   value: unknown,
   fallbackWorktreePath: string | null,
 ): DraftThreadEnvMode {
-  if (value === "local" || value === "worktree") {
+  if (value === "local" || value === "worktree" || value === "lab") {
     return value;
   }
   return fallbackWorktreePath ? "worktree" : "local";
@@ -1614,6 +1659,7 @@ function createDraftThreadState(
     createdAt?: string;
     envMode?: DraftThreadEnvMode;
     startFromOrigin?: boolean;
+    lab?: DraftLabIntent | null;
     runtimeMode?: RuntimeMode;
     interactionMode?: ProviderInteractionMode;
     environmentSelection?: "auto" | "manual";
@@ -1671,6 +1717,8 @@ function createDraftThreadState(
     envMode:
       options?.envMode ?? (nextWorktreePath ? "worktree" : (existingThread?.envMode ?? "local")),
     startFromOrigin: nextStartFromOrigin,
+    // Labs belong to one environment, so a project change drops the chosen lab.
+    lab: resolveNextDraftLabIntent(existingThread?.lab, options?.lab, projectChanged),
     // Groups span environments, so the choice survives project changes.
     customGroupId:
       options?.customGroupId === undefined
@@ -1678,6 +1726,16 @@ function createDraftThreadState(
         : options.customGroupId,
     promotedTo: null,
   };
+}
+
+function resolveNextDraftLabIntent(
+  existing: DraftLabIntent | null | undefined,
+  next: DraftLabIntent | null | undefined,
+  projectChanged: boolean,
+): DraftLabIntent | null {
+  if (next !== undefined) return next;
+  if (!existing) return null;
+  return projectChanged && existing.labId !== null ? { ...existing, labId: null } : existing;
 }
 
 function scopedThreadRefsEqual(
@@ -1710,6 +1768,7 @@ function draftThreadsEqual(left: DraftThreadState | undefined, right: DraftThrea
     left.worktreePath === right.worktreePath &&
     left.envMode === right.envMode &&
     left.startFromOrigin === right.startFromOrigin &&
+    draftLabIntentsEqual(left.lab, right.lab) &&
     (left.customGroupId ?? null) === (right.customGroupId ?? null) &&
     scopedThreadRefsEqual(left.promotedTo, right.promotedTo)
   );
@@ -1859,6 +1918,9 @@ function normalizePersistedDraftThreads(
         worktreePath: normalizedWorktreePath,
         envMode: normalizeDraftThreadEnvMode(candidateDraftThread.envMode, normalizedWorktreePath),
         startFromOrigin,
+        ...(normalizeDraftLabIntent(candidateDraftThread.lab) !== null
+          ? { lab: normalizeDraftLabIntent(candidateDraftThread.lab) }
+          : {}),
         ...(typeof candidateDraftThread.customGroupId === "string" &&
         candidateDraftThread.customGroupId.length > 0
           ? { customGroupId: candidateDraftThread.customGroupId }
@@ -2633,6 +2695,7 @@ function toHydratedDraftThreadState(
     worktreePath: persistedDraftThread.worktreePath,
     envMode: persistedDraftThread.envMode,
     startFromOrigin: persistedDraftThread.startFromOrigin,
+    ...(persistedDraftThread.lab ? { lab: persistedDraftThread.lab } : {}),
     ...(persistedDraftThread.customGroupId != null
       ? { customGroupId: persistedDraftThread.customGroupId }
       : {}),
@@ -2941,6 +3004,7 @@ const composerDraftStore = create<ComposerDraftStoreState>()(
               envMode:
                 options.envMode ?? (nextWorktreePath ? "worktree" : (existing.envMode ?? "local")),
               startFromOrigin: nextStartFromOrigin,
+              lab: resolveNextDraftLabIntent(existing.lab, options.lab, projectChanged),
               customGroupId:
                 options.customGroupId === undefined
                   ? (existing.customGroupId ?? null)
@@ -2960,6 +3024,7 @@ const composerDraftStore = create<ComposerDraftStoreState>()(
               nextDraftThread.worktreePath === existing.worktreePath &&
               nextDraftThread.envMode === existing.envMode &&
               nextDraftThread.startFromOrigin === existing.startFromOrigin &&
+              draftLabIntentsEqual(nextDraftThread.lab, existing.lab) &&
               nextDraftThread.customGroupId === (existing.customGroupId ?? null) &&
               scopedThreadRefsEqual(nextDraftThread.promotedTo, existing.promotedTo);
             if (isUnchanged) {

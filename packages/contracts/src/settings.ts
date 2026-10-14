@@ -1145,6 +1145,20 @@ export const TelegramSettings = Schema.Struct({
 });
 export type TelegramSettings = typeof TelegramSettings.Type;
 
+/**
+ * SP Labs (fork). `spLabsDirectory` null auto-detects `~/SynologyDrive/AIMac/repos/sp-labs` when
+ * it exists; an empty string turns the feature off. `projectId` null picks the project rooted at
+ * the labs' source checkout. `defaultToLabMode` preselects Lab for new threads in that project.
+ */
+export const LabsSettings = Schema.Struct({
+  spLabsDirectory: Schema.NullOr(TrimmedString).pipe(
+    Schema.withDecodingDefault(Effect.succeed(null)),
+  ),
+  projectId: Schema.NullOr(ProjectId).pipe(Schema.withDecodingDefault(Effect.succeed(null))),
+  defaultToLabMode: Schema.Boolean.pipe(Schema.withDecodingDefault(Effect.succeed(false))),
+});
+export type LabsSettings = typeof LabsSettings.Type;
+
 /** A GitHub host name, lowercased on decode so `GitHub.com` and `github.com` are one entry. */
 export const GitHubHost = TrimmedNonEmptyString.pipe(
   Schema.decodeTo(Schema.String, SchemaTransformation.toLowerCase()),
@@ -1732,6 +1746,7 @@ export const ServerSettings = Schema.Struct({
     Schema.withDecodingDefault(Effect.succeed(EMPTY_SAVED_PROMPT_LIBRARY)),
   ),
   telegram: TelegramSettings.pipe(Schema.withDecodingDefault(Effect.succeed({}))),
+  labs: LabsSettings.pipe(Schema.withDecodingDefault(Effect.succeed({}))),
   /** Keyed by source control host kind, such as `gitcafe`; see `SourceControlHostSettings`. */
   sourceControlHosts: Schema.Record(Schema.String, SourceControlHostSettings).pipe(
     Schema.withDecodingDefault(Effect.succeed({})),
@@ -2055,6 +2070,13 @@ export const ServerSettingsPatch = Schema.Struct({
       botUsername: Schema.optionalKey(TrimmedString),
       chatId: Schema.optionalKey(TrimmedString),
       linkCode: Schema.optionalKey(TrimmedString),
+    }),
+  ),
+  labs: Schema.optionalKey(
+    Schema.Struct({
+      spLabsDirectory: Schema.optionalKey(Schema.NullOr(TrimmedString)),
+      projectId: Schema.optionalKey(Schema.NullOr(ProjectId)),
+      defaultToLabMode: Schema.optionalKey(Schema.Boolean),
     }),
   ),
   /**

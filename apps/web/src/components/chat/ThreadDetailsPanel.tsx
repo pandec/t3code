@@ -48,6 +48,8 @@ export interface ThreadDetailsPanelProps extends Pick<
   onEnvModeChange: (mode: EnvMode) => void;
   /** The thread's env mode as ChatView resolves it. */
   envMode: EnvMode;
+  /** Fork (SP Labs): offer Lab mode (a draft in the labs project). */
+  labModeAvailable?: boolean;
   activeThreadBranchOverride?: string | null;
   onActiveThreadBranchOverrideChange?: (branch: string | null) => void;
   startFromOrigin: boolean;
@@ -87,6 +89,7 @@ export function ThreadDetailsPanel(props: ThreadDetailsPanelProps) {
       : {}),
     envLocked: props.envLocked,
     forceNewWorktree: props.forceNewWorktree ?? false,
+    labModeAvailable: props.labModeAvailable ?? false,
     onComposerFocusRequest: props.onComposerFocusRequest,
     ...(props.onCheckoutPullRequestRequest
       ? { onCheckoutPullRequestRequest: props.onCheckoutPullRequestRequest }

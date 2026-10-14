@@ -9,6 +9,7 @@ const testState = vi.hoisted(() => {
     newWorktreesStartFromOrigin: false,
     defaultModelSelection: null,
     defaultRuntimeMode: "full-access" as RuntimeMode,
+    labs: { spLabsDirectory: null, projectId: null, defaultToLabMode: false },
   };
   let storedDraft: {
     readonly draftId: string;
@@ -58,6 +59,7 @@ const testState = vi.hoisted(() => {
         newWorktreesStartFromOrigin: workspaceDefaults.startFromOrigin,
         defaultModelSelection: null,
         defaultRuntimeMode: "full-access",
+        labs: { spLabsDirectory: null, projectId: null, defaultToLabMode: false },
       };
       router.state.location.href = "/";
       router.navigate.mockClear();
@@ -174,6 +176,7 @@ vi.mock("../state/entities", () => ({
   useProjects: () => [],
   useThread: () => null,
 }));
+vi.mock("../state/labs", () => ({ loadLabsInventory: async () => null }));
 vi.mock("../state/server", () => ({
   environmentServerConfigsAtom: {},
   primaryServerSettingsAtom: "primary-settings",

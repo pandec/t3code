@@ -52,6 +52,10 @@ export const CLIENT_GUARDED_RPC_SCOPES = {
   [WS_METHODS.sessionImportImport]: AuthOrchestrationOperateScope,
   [WS_METHODS.sessionImportForkThread]: AuthOrchestrationOperateScope,
   [WS_METHODS.linearCreateComment]: AuthOrchestrationOperateScope,
+  // SP Labs mutations reserve labs and run their dev stacks on the host.
+  [WS_METHODS.labsPrepareThread]: AuthOrchestrationOperateScope,
+  [WS_METHODS.labsAction]: AuthOrchestrationOperateScope,
+  [WS_METHODS.labsRelease]: AuthOrchestrationOperateScope,
 } as const;
 export type ClientGuardedRpcTag = keyof typeof CLIENT_GUARDED_RPC_SCOPES;
 

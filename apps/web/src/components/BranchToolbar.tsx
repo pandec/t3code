@@ -6,6 +6,7 @@ import { scopeProjectRef, scopeThreadRef } from "@t3tools/client-runtime/environ
 import type { EnvironmentId, ThreadId } from "@t3tools/contracts";
 import {
   ChevronDownIcon,
+  FlaskConicalIcon,
   FolderGit2Icon,
   FolderGitIcon,
   FolderIcon,
@@ -24,7 +25,13 @@ import {
   useState,
 } from "react";
 
-import { useComposerDraftStore, type DraftId } from "../composerDraftStore";
+import {
+  DEFAULT_DRAFT_LAB_INTENT,
+  useComposerDraftStore,
+  type DraftId,
+  type DraftLabIntent,
+} from "../composerDraftStore";
+import { LabWorkspacePicker } from "./labs/LabWorkspacePicker";
 import { EnvironmentMachineIcon } from "./EnvironmentMachineIcon";
 import { useProject, useThreadShell, useThreadShellsForProjectRefs } from "../state/entities";
 import {
@@ -101,6 +108,8 @@ interface BranchToolbarProps {
   onEnvironmentChange?: (environmentId: EnvironmentId) => void;
   composerControlsHostRef?: (element: HTMLDivElement | null) => void;
   contextStripVisible?: boolean;
+  /** Fork (SP Labs): offer Lab mode (a draft in the labs project). */
+  labModeAvailable?: boolean;
 }
 
 function showWorkspaceContextMenu(event: ReactMouseEvent, workspacePath: string) {
@@ -157,6 +166,7 @@ interface RunContextSelectorProps {
   previousWorktreeLabel: string | null;
   previousWorktreeBranch: string | null;
   onUsePreviousWorktree: () => void;
+  labModeAvailable: boolean;
 }
 
 const RunContextSelector = memo(function RunContextSelector({
@@ -178,6 +188,7 @@ const RunContextSelector = memo(function RunContextSelector({
   previousWorktreeLabel,
   previousWorktreeBranch,
   onUsePreviousWorktree,
+  labModeAvailable,
 }: RunContextSelectorProps) {
   const composerFloatingLayerProps = useComposerMenuProps();
   const activeEnvironment = useMemo(
@@ -185,22 +196,24 @@ const RunContextSelector = memo(function RunContextSelector({
     [availableEnvironments, environmentId],
   );
   const WorkspaceIcon =
-    effectiveEnvMode === "worktree"
-      ? FolderGit2Icon
-      : activeWorktreePath
-        ? FolderGitIcon
-        : FolderIcon;
+    effectiveEnvMode === "lab"
+      ? FlaskConicalIcon
+      : effectiveEnvMode === "worktree"
+        ? FolderGit2Icon
+        : activeWorktreePath
+          ? FolderGitIcon
+          : FolderIcon;
   const workspaceLabel = forceNewWorktree
     ? resolveEnvModeLabel("worktree")
     : envModeLocked
       ? resolveLockedWorkspaceLabel(activeWorktreePath, effectiveEnvMode)
-      : effectiveEnvMode === "worktree"
-        ? resolveEnvModeLabel("worktree")
+      : effectiveEnvMode !== "local"
+        ? resolveEnvModeLabel(effectiveEnvMode)
         : resolveCurrentWorkspaceLabel(activeWorktreePath);
   const isPanel = displayMode === "panel";
   const isLocked = envLocked || (envModeLocked && (!isPanel || !showEnvironmentPicker));
   const workspacePath =
-    forceNewWorktree || (effectiveEnvMode === "worktree" && !activeWorktreePath)
+    forceNewWorktree || (effectiveEnvMode !== "local" && !activeWorktreePath)
       ? null
       : (activeWorktreePath ?? workspaceRoot);
   const handleContextMenu = (event: ReactMouseEvent) => {
@@ -390,6 +403,14 @@ const RunContextSelector = memo(function RunContextSelector({
                 <span className="min-w-0 truncate">{resolveEnvModeLabel("worktree")}</span>
               </span>
             </MenuRadioItem>
+            {labModeAvailable ? (
+              <MenuRadioItem disabled={envModeLocked || forceNewWorktree} value="lab" closeOnClick>
+                <span className="flex min-w-0 items-center gap-1.5">
+                  <FlaskConicalIcon className="size-3" />
+                  <span className="min-w-0 truncate">{resolveEnvModeLabel("lab")}</span>
+                </span>
+              </MenuRadioItem>
+            ) : null}
             {previousWorktreeLabel ? (
               <MenuRadioItem disabled={envModeLocked} value="previous-worktree" closeOnClick>
                 <PreviousWorktreeItemContent branch={previousWorktreeBranch} />
@@ -616,6 +637,7 @@ export const BranchToolbar = memo(function BranchToolbar({
   onEnvironmentChange,
   composerControlsHostRef,
   contextStripVisible = true,
+  labModeAvailable = false,
 }: BranchToolbarProps) {
   const branchSelectorRef = useRef<BranchToolbarBranchSelectorHandle>(null);
   const threadRef = useMemo(
@@ -705,6 +727,15 @@ export const BranchToolbar = memo(function BranchToolbar({
   });
   const [stripElement, setStripElement] = useState<HTMLDivElement | null>(null);
   const labelsOverflow = useLabelsOverflow(stripElement);
+  // Fork (SP Labs): Lab mode swaps the branch selector for the lab and branch picker.
+  const showLabPicker = effectiveEnvMode === "lab" && draftThread !== null && serverThread === null;
+  const labIntent = draftThread?.lab ?? DEFAULT_DRAFT_LAB_INTENT;
+  // The branch selector never sees Lab mode; it only renders when the lab picker does not.
+  const branchSelectorEnvMode = effectiveEnvMode === "lab" ? "local" : effectiveEnvMode;
+  const onLabIntentChange = useCallback(
+    (lab: DraftLabIntent) => setDraftThreadContext(draftId ?? threadRef, { lab }),
+    [draftId, setDraftThreadContext, threadRef],
+  );
 
   if (!hasActiveThread || !activeProject) return null;
 
@@ -731,9 +762,17 @@ export const BranchToolbar = memo(function BranchToolbar({
             previousWorktreeLabel={previousWorktreeLabel}
             previousWorktreeBranch={previousWorktreeSeed?.branch ?? null}
             onUsePreviousWorktree={onUsePreviousWorktree}
+            labModeAvailable={labModeAvailable}
           />
         ) : null}
-        {panelSection !== "workspace" ? (
+        {panelSection !== "workspace" && showLabPicker ? (
+          <LabWorkspacePicker
+            displayMode="panel"
+            environmentId={environmentId}
+            intent={labIntent}
+            onIntentChange={onLabIntentChange}
+          />
+        ) : panelSection !== "workspace" ? (
           <BranchToolbarBranchSelector
             displayMode="panel"
             className="w-full"
@@ -741,7 +780,7 @@ export const BranchToolbar = memo(function BranchToolbar({
             threadId={threadId}
             {...(draftId ? { draftId } : {})}
             envLocked={envLocked}
-            effectiveEnvModeOverride={effectiveEnvMode}
+            effectiveEnvModeOverride={branchSelectorEnvMode}
             {...(activeThreadBranchOverride !== undefined ? { activeThreadBranchOverride } : {})}
             {...(onActiveThreadBranchOverrideChange ? { onActiveThreadBranchOverrideChange } : {})}
             startFromOrigin={startFromOrigin}
@@ -785,6 +824,7 @@ export const BranchToolbar = memo(function BranchToolbar({
             previousWorktreeLabel={previousWorktreeLabel}
             previousWorktreeBranch={previousWorktreeSeed?.branch ?? null}
             onUsePreviousWorktree={onUsePreviousWorktree}
+            labModeAvailable={labModeAvailable}
           />
         </div>
       ) : null}
@@ -825,6 +865,7 @@ export const BranchToolbar = memo(function BranchToolbar({
               previousWorktreeLabel={previousWorktreeLabel}
               previousWorktreeBranch={previousWorktreeSeed?.branch ?? null}
               onUsePreviousWorktree={onUsePreviousWorktree}
+              labModeAvailable={labModeAvailable}
             />
           ) : null}
         </div>
@@ -842,7 +883,14 @@ export const BranchToolbar = memo(function BranchToolbar({
         />
       ) : null}
 
-      {showGitControls ? (
+      {showGitControls && showLabPicker ? (
+        <LabWorkspacePicker
+          className="flex-initial justify-end @3xl/composer-surface:ml-auto"
+          environmentId={environmentId}
+          intent={labIntent}
+          onIntentChange={onLabIntentChange}
+        />
+      ) : showGitControls ? (
         <BranchToolbarBranchSelector
           forceNewWorktree={forceNewWorktree}
           ref={branchSelectorRef}
@@ -851,7 +899,7 @@ export const BranchToolbar = memo(function BranchToolbar({
           threadId={threadId}
           {...(draftId ? { draftId } : {})}
           envLocked={envLocked}
-          effectiveEnvModeOverride={effectiveEnvMode}
+          effectiveEnvModeOverride={branchSelectorEnvMode}
           {...(activeThreadBranchOverride !== undefined ? { activeThreadBranchOverride } : {})}
           {...(onActiveThreadBranchOverrideChange ? { onActiveThreadBranchOverrideChange } : {})}
           startFromOrigin={startFromOrigin}
