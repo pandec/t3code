@@ -4,12 +4,18 @@ import { describe, expect, it } from "vite-plus/test";
 import { DEFAULT_DRAFT_LAB_INTENT, normalizeDraftLabIntent } from "../../composerDraftStore";
 import {
   findLabForThread,
+  isLabIdleHold,
+  orderLabEnvironments,
   releaseCanStopFirst,
   resolveLabAvailability,
   resolveLabBranchRequest,
   resolveLabSendTarget,
   resolveLabStackHealth,
   shouldDefaultToLabMode,
+  summarizeLabEnvironment,
+  summarizeLabsHeadline,
+  type LabOwnerView,
+  type LabSummary,
 } from "./labs.logic";
 
 const stoppedRuntime: LabRuntime = {
@@ -215,5 +221,92 @@ describe("release blockers", () => {
     expect(releaseCanStopFirst([running])).toBe(true);
     expect(releaseCanStopFirst([running, dirty])).toBe(false);
     expect(releaseCanStopFirst([])).toBe(false);
+  });
+});
+
+describe("dashboard summaries", () => {
+  const now = Date.parse("2026-10-14T12:00:00.000Z");
+  const hoursAgo = (hours: number) => new Date(now - hours * 3_600_000).toISOString();
+  const owner = (overrides: Partial<LabOwnerView> = {}): LabOwnerView => ({
+    title: "Fix picklists",
+    working: false,
+    needsYou: false,
+    archived: false,
+    lastActivityAt: hoursAgo(1),
+    ...overrides,
+  });
+  const reserved = (acquiredHoursAgo: number, lastActivityAt: string | null = null) =>
+    lab("sp-lab-2", {
+      available: false,
+      lease: { ...lease("sp-lab-2", "t"), acquiredAt: hoursAgo(acquiredHoursAgo) },
+      lastActivityAt,
+    });
+
+  it("phrases a held reservation and a free lab like the dashboard", () => {
+    expect(summarizeLabEnvironment(reserved(3), owner(), now)).toMatchObject({
+      word: "Reserved",
+      tone: "reserved",
+      sentence: [{ owner: "Fix picklists" }, " holds it, taken 3 h ago."],
+    });
+    const free = lab("sp-lab-3", {
+      handoff: {
+        summary: "Stripe clock advanced",
+        branch: "t3/x",
+        commit: "abc",
+        disposition: "usable",
+        threadId: null,
+        releasedAt: hoursAgo(0.75),
+      },
+    });
+    expect(summarizeLabEnvironment(free, null, now)).toMatchObject({
+      word: "Free",
+      sentence: ["Released 45 min ago, left usable."],
+      note: "Stripe clock advanced",
+    });
+  });
+
+  it("calls a quiet reservation an idle hold after 18 h, never while the owner works", () => {
+    const quiet = owner({ lastActivityAt: hoursAgo(23) });
+    expect(isLabIdleHold(reserved(30, hoursAgo(23)), quiet, now)).toBe(true);
+    expect(isLabIdleHold(reserved(30, hoursAgo(23)), { ...quiet, working: true }, now)).toBe(false);
+    // Recent lab activity keeps a quiet thread's reservation live.
+    expect(isLabIdleHold(reserved(30, hoursAgo(2)), quiet, now)).toBe(false);
+    expect(summarizeLabEnvironment(reserved(30, hoursAgo(23)), quiet, now)).toMatchObject({
+      word: "Idle hold",
+      sentence: [{ owner: "Fix picklists" }, " finished 23 h ago but still holds the lab."],
+      needsLook: true,
+    });
+  });
+
+  it("writes the headline from the lab summaries", () => {
+    const summary = (word: string, tone: LabSummary["tone"], needsLook = false) => ({
+      word,
+      tone,
+      sentence: [],
+      note: null,
+      since: null,
+      needsLook,
+    });
+    expect(
+      summarizeLabsHeadline([
+        { name: "sp-lab-1", summary: summary("Reserved", "reserved") },
+        { name: "sp-lab-2", summary: summary("Idle hold", "attention", true) },
+        { name: "sp-lab-3", summary: summary("Free", "free") },
+      ]),
+    ).toEqual({ text: "1 of 3 labs free, 1 in use.", attention: "sp-lab-2 needs a look." });
+    expect(summarizeLabsHeadline([{ name: "a", summary: summary("Free", "free") }]).text).toBe(
+      "1 of 1 labs free. Nothing needs you.",
+    );
+  });
+
+  it("lists labs in numeric order before the shared checkouts", () => {
+    const ordered = orderLabEnvironments([
+      { kind: "staging" as const, name: "Main / Staging" },
+      { kind: "lab" as const, name: "sp-lab-10" },
+      { kind: "lab" as const, name: "sp-lab-2" },
+      { kind: "preview" as const, name: "Preview" },
+    ]);
+    expect(ordered.labs.map((entry) => entry.name)).toEqual(["sp-lab-2", "sp-lab-10"]);
+    expect(ordered.shared.map((entry) => entry.name)).toEqual(["Main / Staging", "Preview"]);
   });
 });

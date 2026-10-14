@@ -1,11 +1,12 @@
 import type { EnvironmentId, ScopedThreadRef } from "@t3tools/contracts";
-import { GitBranchIcon, ScrollTextIcon } from "lucide-react";
+import { GitBranchIcon, InfoIcon } from "lucide-react";
 
-import { useRightPanelStore } from "../../rightPanelStore";
 import { useLabsInventory, useLabsSnapshot } from "../../state/labs";
 import { Button } from "../ui/button";
 import { Popover, PopoverClose, PopoverPopup, PopoverTrigger } from "../ui/popover";
-import { LabReservationActions, LabStackActions, useLabCommands } from "./LabActions";
+import { Tooltip, TooltipPopup, TooltipTrigger } from "../ui/tooltip";
+import { LabActionBar, useLabCommands } from "./LabActions";
+import { openLabsPanel } from "./labsPanelStore";
 import { LabHealthDot } from "./LabParts";
 import { findLabForThread, resolveLabStackHealth } from "./labs.logic";
 
@@ -76,24 +77,31 @@ function LiveLabChip({
               Start failed: {t3.lastUp.detail ?? "unknown error"}
             </p>
           ) : null}
-          {environment ? (
-            <>
-              <LabStackActions environment={environment} t3={t3} commands={commands} />
-              <LabReservationActions
-                environmentId={environmentId}
-                environment={environment}
-                t3={t3}
-                commands={commands}
-              />
-            </>
-          ) : null}
-          <PopoverClose
-            render={<Button size="xs" variant="ghost-muted" className="self-start" />}
-            onClick={() => useRightPanelStore.getState().open(threadRef, "labs")}
-          >
-            <ScrollTextIcon />
-            Logs and history in the Labs panel
-          </PopoverClose>
+          <LabActionBar
+            environmentId={environmentId}
+            projectId={null}
+            environment={environment ?? null}
+            t3={t3}
+            commands={commands}
+            extra={
+              <Tooltip>
+                <TooltipTrigger
+                  render={
+                    <PopoverClose
+                      render={<Button size="xs" variant="outline" />}
+                      onClick={() => openLabsPanel(threadRef, labId)}
+                    />
+                  }
+                >
+                  <InfoIcon />
+                  Details
+                </TooltipTrigger>
+                <TooltipPopup>
+                  Opens {name} in the Labs panel: reservation, handoff, runtime, history and output.
+                </TooltipPopup>
+              </Tooltip>
+            }
+          />
         </div>
       </PopoverPopup>
     </Popover>

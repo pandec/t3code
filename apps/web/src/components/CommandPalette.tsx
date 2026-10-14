@@ -180,6 +180,7 @@ import {
   waitForProject,
 } from "../state/entities";
 import { useIsLabsProject } from "../state/labs";
+import { openLabsPanel } from "./labs/labsPanelStore";
 import { useThreadSearch } from "../state/queries";
 import { resolveThreadActionProjectRef, startNewThreadFromContext } from "../lib/chatThreadActions";
 import {
@@ -2751,7 +2752,7 @@ function OpenCommandPaletteDialog(props: {
       title: "Open Labs panel",
       icon: <FlaskConicalIcon className={ITEM_ICON_CLASS} />,
       run: async () => {
-        useRightPanelStore.getState().open(threadRef, "labs");
+        openLabsPanel(threadRef);
       },
     });
   }

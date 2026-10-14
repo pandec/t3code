@@ -21,7 +21,7 @@ import {
   RotateCwIcon,
   SquareIcon,
 } from "lucide-react";
-import { useCallback, useState } from "react";
+import { type ReactNode, useCallback, useState } from "react";
 
 import { useNewThreadHandler } from "../../hooks/useHandleNewThread";
 import { ensureLocalApi } from "../../localApi";
@@ -161,72 +161,32 @@ export function useLabCommands(environmentId: EnvironmentId) {
 
 export type LabCommands = ReturnType<typeof useLabCommands>;
 
+/** A small action with a one-line explanation; actions never stretch to fill their row. */
 function ActionButton({
   label,
+  tooltip,
   icon: Icon,
   disabled,
+  variant = "outline",
   onClick,
 }: {
   readonly label: string;
+  readonly tooltip: string;
   readonly icon: typeof PlayIcon;
   readonly disabled?: boolean;
+  readonly variant?: "outline" | "default";
   readonly onClick: () => void;
 }) {
   return (
-    <Button size="xs" variant="outline" disabled={disabled} onClick={onClick}>
-      <Icon />
-      {label}
-    </Button>
-  );
-}
-
-/** Stack controls: start, stop, reload, browser and side panel. */
-export function LabStackActions({
-  environment,
-  t3,
-  commands,
-}: {
-  readonly environment: LabEnvironment;
-  readonly t3: LabT3State | undefined;
-  readonly commands: LabCommands;
-}) {
-  const busy = !commands.canOperate || t3?.operation != null;
-  const running = isLabStackRunning(environment);
-  return (
-    <div className="flex flex-wrap gap-1">
-      {running ? (
-        <ActionButton
-          label="Stop"
-          icon={SquareIcon}
-          disabled={busy}
-          onClick={() => void commands.action(environment, "down")}
-        />
-      ) : null}
-      <ActionButton
-        label={running ? "Restart" : "Start"}
-        icon={PlayIcon}
-        disabled={busy}
-        onClick={() => void commands.action(environment, "up")}
-      />
-      <ActionButton
-        label="Reload"
-        icon={RotateCwIcon}
-        disabled={busy || !running}
-        onClick={() => void commands.action(environment, "reload")}
-      />
-      <ActionButton
-        label="Browser"
-        icon={AppWindowIcon}
-        disabled={busy}
-        onClick={() => void commands.action(environment, "browser")}
-      />
-      <ActionButton
-        label="Side panel"
-        icon={PanelRightIcon}
-        disabled={busy}
-        onClick={() => void commands.action(environment, "sidepanel")}
-      />
-    </div>
+    <Tooltip>
+      <TooltipTrigger
+        render={<Button size="xs" variant={variant} disabled={disabled} onClick={onClick} />}
+      >
+        <Icon />
+        {label}
+      </TooltipTrigger>
+      <TooltipPopup>{tooltip}</TooltipPopup>
+    </Tooltip>
   );
 }
 
@@ -245,6 +205,7 @@ function HoldButton({
     return (
       <ActionButton
         label="Unhold"
+        tooltip="Drops your hold so agents looking for a free lab can take it again."
         icon={LockOpenIcon}
         disabled={disabled}
         onClick={() => void commands.action(environment, "unhold")}
@@ -253,10 +214,17 @@ function HoldButton({
   }
   return (
     <Popover open={open} onOpenChange={setOpen}>
-      <PopoverTrigger render={<Button size="xs" variant="outline" disabled={disabled} />}>
-        <LockIcon />
-        Hold
-      </PopoverTrigger>
+      <Tooltip>
+        <TooltipTrigger
+          render={
+            <PopoverTrigger render={<Button size="xs" variant="outline" disabled={disabled} />} />
+          }
+        >
+          <LockIcon />
+          Hold
+        </TooltipTrigger>
+        <TooltipPopup>Keeps this lab for you: agents looking for a free lab skip it.</TooltipPopup>
+      </Tooltip>
       <PopoverPopup width="sm" padding="compact" align="start">
         <form
           className="flex flex-col gap-2 text-xs"
@@ -287,82 +255,116 @@ function HoldButton({
   );
 }
 
-/** Reservation controls for a lab: hold, release, and asking its owner agent to release. */
-export function LabReservationActions({
-  environmentId,
-  environment,
-  t3,
-  commands,
-}: {
-  readonly environmentId: EnvironmentId;
-  readonly environment: LabEnvironment;
-  readonly t3: LabT3State | undefined;
-  readonly commands: LabCommands;
-}) {
-  const busy = !commands.canOperate || t3?.operation != null;
-  const ownerThreadId = environment.lease?.threadId ?? null;
-  const owner = useLabOwnerThread(environmentId, ownerThreadId);
-  if (environment.kind !== "lab") return null;
-  return (
-    <div className="flex flex-wrap gap-1">
-      <HoldButton environment={environment} disabled={busy} commands={commands} />
-      {environment.lease ? (
-        <>
-          {owner && ownerThreadId ? (
-            <Tooltip>
-              <TooltipTrigger
-                render={
-                  <Button
-                    size="xs"
-                    variant="outline"
-                    disabled={!commands.canOperate}
-                    onClick={() => commands.askOwnerToRelease(environment, ownerThreadId)}
-                  />
-                }
-              >
-                <MessageSquareIcon />
-                Ask agent to wrap up & release
-              </TooltipTrigger>
-              <TooltipPopup>Sends a message to {owner.title}</TooltipPopup>
-            </Tooltip>
-          ) : null}
-          <ActionButton
-            label="Release"
-            icon={LogOutIcon}
-            disabled={busy}
-            onClick={() => void commands.release(environment)}
-          />
-        </>
-      ) : null}
-    </div>
-  );
-}
-
-/** Stages a Lab-mode draft for `environment` in the labs project; nothing is reserved yet. */
-export function NewThreadInLabButton({
+/**
+ * Every action for one lab in one wrapping row: a new thread in a free lab, the stack commands,
+ * hold, and the two ways to release. Main/Staging and Preview have none; the CLI manages only lab
+ * stacks. `extra` appends a caller's own action (the chip's Details).
+ */
+export function LabActionBar({
   environmentId,
   projectId,
   environment,
+  t3,
+  commands,
+  extra,
 }: {
   readonly environmentId: EnvironmentId;
   readonly projectId: ProjectId | null;
-  readonly environment: LabEnvironment;
+  /** Null while the snapshot loads: only `extra` shows. */
+  readonly environment: LabEnvironment | null;
+  readonly t3: LabT3State | undefined;
+  readonly commands: LabCommands;
+  readonly extra?: ReactNode;
 }) {
   const handleNewThread = useNewThreadHandler();
-  if (projectId === null || resolveLabAvailability(environment) !== "free") return null;
+  const ownerThreadId = environment?.lease?.threadId ?? null;
+  const owner = useLabOwnerThread(environmentId, ownerThreadId);
+  if (environment === null || environment.kind !== "lab") {
+    return extra ? <div className="flex flex-wrap items-center gap-1">{extra}</div> : null;
+  }
+  const busy = !commands.canOperate || t3?.operation != null;
+  const running = isLabStackRunning(environment);
+  const free = resolveLabAvailability(environment) === "free";
   return (
-    <Button
-      size="xs"
-      onClick={() =>
-        void handleNewThread(scopeProjectRef(environmentId, projectId), {
-          envMode: "lab",
-          worktreePath: null,
-          lab: { ...DEFAULT_DRAFT_LAB_INTENT, labId: environment.id },
-        })
-      }
-    >
-      <FlaskConicalIcon />
-      New thread here
-    </Button>
+    <div className="flex flex-wrap items-center gap-1">
+      {free && projectId !== null ? (
+        <ActionButton
+          label="New thread"
+          tooltip={`Opens a new Lab-mode thread for ${environment.name}; sending its first message reserves the lab.`}
+          icon={FlaskConicalIcon}
+          variant="default"
+          onClick={() =>
+            void handleNewThread(scopeProjectRef(environmentId, projectId), {
+              envMode: "lab",
+              worktreePath: null,
+              lab: { ...DEFAULT_DRAFT_LAB_INTENT, labId: environment.id },
+            })
+          }
+        />
+      ) : null}
+      <ActionButton
+        label={running ? "Restart" : "Start"}
+        tooltip={
+          running
+            ? "Runs sp-labs up again: restarts Chrome and the dev server and rechecks the extension."
+            : "Runs sp-labs up: starts this lab's Chrome, dev server and backend (about 20 s)."
+        }
+        icon={PlayIcon}
+        disabled={busy}
+        onClick={() => void commands.action(environment, "up")}
+      />
+      {running ? (
+        <ActionButton
+          label="Stop"
+          tooltip="Runs sp-labs down: stops this lab's Chrome, dev server and tmux session."
+          icon={SquareIcon}
+          disabled={busy}
+          onClick={() => void commands.action(environment, "down")}
+        />
+      ) : null}
+      {running ? (
+        <ActionButton
+          label="Reload"
+          tooltip="Reloads the SalesPros extension in this lab's Chrome."
+          icon={RotateCwIcon}
+          disabled={busy}
+          onClick={() => void commands.action(environment, "reload")}
+        />
+      ) : null}
+      <ActionButton
+        label="Browser"
+        tooltip="Brings this lab's Chrome window to the front."
+        icon={AppWindowIcon}
+        disabled={busy}
+        onClick={() => void commands.action(environment, "browser")}
+      />
+      <ActionButton
+        label="Extension panel"
+        tooltip="Opens the SalesPros side panel on a Salesforce tab in this lab's Chrome."
+        icon={PanelRightIcon}
+        disabled={busy}
+        onClick={() => void commands.action(environment, "sidepanel")}
+      />
+      <HoldButton environment={environment} disabled={busy} commands={commands} />
+      {environment.lease && owner && ownerThreadId ? (
+        <ActionButton
+          label="Ask agent to release"
+          tooltip={`Sends ${owner.title} a message asking its agent to commit, stop the stack and release the lab.`}
+          icon={MessageSquareIcon}
+          disabled={!commands.canOperate}
+          onClick={() => commands.askOwnerToRelease(environment, ownerThreadId)}
+        />
+      ) : null}
+      {environment.lease ? (
+        <ActionButton
+          label="Release"
+          tooltip="Releases the reservation now, keeping the standing handoff note. Offers to stop a running stack first; uncommitted changes block it."
+          icon={LogOutIcon}
+          disabled={busy}
+          onClick={() => void commands.release(environment)}
+        />
+      ) : null}
+      {extra}
+    </div>
   );
 }

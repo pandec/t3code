@@ -1,6 +1,6 @@
 import type { EnvironmentId, LabEnvironment } from "@t3tools/contracts";
 import { FlaskConicalIcon } from "lucide-react";
-import { memo, useId } from "react";
+import { memo, useId, useState } from "react";
 
 import { cn } from "~/lib/utils";
 import type { DraftLabIntent } from "../../composerDraftStore";
@@ -14,7 +14,7 @@ import { Button } from "../ui/button";
 import { Input } from "../ui/input";
 import { Popover, PopoverPopup, PopoverTrigger } from "../ui/popover";
 import { Radio, RadioGroup } from "../ui/radio-group";
-import { LabAvailabilityBadge, LabOwnerTitle } from "./LabParts";
+import { LabAvailabilityBadge, LabOwnerLink, useLabOwnerThread } from "./LabParts";
 import { resolveLabAvailability } from "./labs.logic";
 
 const AUTO_LAB_VALUE = "auto";
@@ -60,9 +60,10 @@ export const LabWorkspacePicker = memo(function LabWorkspacePicker({
   const update = (patch: Partial<DraftLabIntent>) => onIntentChange({ ...intent, ...patch });
   const isPanel = displayMode === "panel";
   const label = intentLabel(intent);
+  const [open, setOpen] = useState(false);
 
   return (
-    <Popover>
+    <Popover open={open} onOpenChange={setOpen}>
       <PopoverTrigger
         render={
           isPanel ? (
@@ -123,7 +124,11 @@ export const LabWorkspacePicker = memo(function LabWorkspacePicker({
                         <span className="font-medium">{environment.name}</span>
                         <LabAvailabilityBadge availability={availability} />
                       </span>
-                      <LabPickerDetail environmentId={environmentId} environment={environment} />
+                      <LabPickerDetail
+                        environmentId={environmentId}
+                        environment={environment}
+                        onOpenOwner={() => setOpen(false)}
+                      />
                     </span>
                   </label>
                 );
@@ -197,33 +202,38 @@ export const LabWorkspacePicker = memo(function LabWorkspacePicker({
   );
 });
 
+/** Free labs need no explanation; a reservation names its owner, a hold its note. */
 function LabPickerDetail({
   environmentId,
   environment,
+  onOpenOwner,
 }: {
   readonly environmentId: EnvironmentId;
   readonly environment: LabEnvironment;
+  readonly onOpenOwner: () => void;
 }) {
+  const ownerThreadId = environment.lease?.threadId ?? null;
+  const owner = useLabOwnerThread(environmentId, ownerThreadId);
   if (environment.lease) {
-    return (
-      <span className="flex min-w-0 text-muted-foreground">
-        <LabOwnerTitle environmentId={environmentId} threadId={environment.lease.threadId} />
+    return owner && ownerThreadId ? (
+      <span className="min-w-0 truncate">
+        <LabOwnerLink
+          environmentId={environmentId}
+          threadId={ownerThreadId}
+          title={owner.title}
+          onOpen={onOpenOwner}
+        />
       </span>
+    ) : (
+      <span className="text-muted-foreground">Reserved outside T3</span>
     );
   }
   if (environment.hold) {
     return (
       <span className="truncate text-muted-foreground">
-        Held{environment.hold.note ? `: ${environment.hold.note}` : ""}
+        {environment.hold.note ? `“${environment.hold.note}”` : "Held for you"}
       </span>
     );
   }
-  if (environment.handoff) {
-    return (
-      <span className="line-clamp-2 text-muted-foreground">
-        Handoff: {environment.handoff.summary}
-      </span>
-    );
-  }
-  return <span className="text-muted-foreground">No handoff</span>;
+  return null;
 }

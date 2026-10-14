@@ -321,6 +321,7 @@ import {
   useLabsInventory,
 } from "~/state/labs";
 import { LabsPanel } from "./labs/LabsPanel";
+import { openLabsPanel } from "./labs/labsPanelStore";
 import {
   resolveLabBranchRequest,
   resolveLabPurpose,
@@ -5858,7 +5859,7 @@ export default function ChatView(props: ChatViewProps) {
   const labsSurfaceAvailable = labsProjectStatus === true && activeThreadRef !== null;
   const addLabsSurface = useCallback(() => {
     if (!activeThreadRef || !labsSurfaceAvailable) return;
-    useRightPanelStore.getState().open(activeThreadRef, "labs");
+    openLabsPanel(activeThreadRef);
   }, [activeThreadRef, labsSurfaceAvailable]);
   const supportsThreadPullRequests =
     serverConfig?.environment.capabilities.threadPullRequests === true;
@@ -12167,9 +12168,9 @@ export default function ChatView(props: ChatViewProps) {
       />
     ) : renderedRightPanelSurface?.kind === "pull-requests" && activeThreadRef ? (
       <ThreadPullRequestsPanel threadRef={activeThreadRef} />
-    ) : renderedRightPanelSurface?.kind === "labs" ? (
+    ) : renderedRightPanelSurface?.kind === "labs" && activeThreadRef ? (
       <LabsPanel
-        environmentId={activeThread.environmentId}
+        threadRef={activeThreadRef}
         projectId={activeProject?.id ?? null}
         visible={rightPanelOpen}
       />

@@ -1,10 +1,17 @@
 import { scopeThreadRef } from "@t3tools/client-runtime/environment";
 import type { EnvironmentId, ThreadId } from "@t3tools/contracts";
+import { useAtomValue } from "@effect/atom-react";
+import type { EnvironmentThreadShell } from "@t3tools/client-runtime/state/shell";
+import { Atom } from "effect/reactivity";
+import { useMemo } from "react";
 
 import { cn } from "~/lib/utils";
 import { useThreadShell } from "../../state/entities";
+import { environmentThreadShells } from "../../state/threads";
 import { Badge } from "../ui/badge";
-import type { LabAvailability, LabHealthTone } from "./labs.logic";
+import { resolveSidebarThreadStatus } from "../Sidebar.logic";
+import { useOpenThreadInPane } from "../thread-split/useOpenThreadInPane";
+import type { LabAvailability, LabHealthTone, LabOwnerView, LabSummarySegment } from "./labs.logic";
 
 const TONE_CLASS: Record<LabHealthTone, string> = {
   ok: "bg-success",
@@ -53,18 +60,106 @@ export function useLabOwnerThread(environmentId: EnvironmentId, threadId: string
   );
 }
 
-export function LabOwnerTitle({
+function toLabOwnerView(owner: EnvironmentThreadShell): LabOwnerView {
+  const status = resolveSidebarThreadStatus(owner);
+  return {
+    title: owner.title,
+    working: status === "working" || status === "monitoring",
+    needsYou: status === "approval" || status === "input",
+    archived: owner.archivedAt !== null,
+    lastActivityAt: owner.updatedAt,
+  };
+}
+
+/** The owner as the summaries read it; null when the lease names no T3 thread. */
+export function useLabOwnerView(
+  environmentId: EnvironmentId,
+  threadId: string | null,
+): LabOwnerView | null {
+  const owner = useLabOwnerThread(environmentId, threadId);
+  return useMemo(() => (owner ? toLabOwnerView(owner) : null), [owner]);
+}
+
+/** Owner views for many leases at once, keyed by thread id; one subscription per owner shell. */
+export function useLabOwnerViews(
+  environmentId: EnvironmentId,
+  threadIds: ReadonlyArray<string | null>,
+): ReadonlyMap<string, LabOwnerView> {
+  const key = threadIds.filter((id): id is string => id !== null).join("\n");
+  const atom = useMemo(() => {
+    const ids = key.length > 0 ? key.split("\n") : [];
+    return Atom.make((get) => {
+      const views = new Map<string, LabOwnerView>();
+      for (const id of ids) {
+        const shell = get(
+          environmentThreadShells.threadShellAtom(scopeThreadRef(environmentId, id as ThreadId)),
+        );
+        if (shell) views.set(id, toLabOwnerView(shell));
+      }
+      return views;
+    });
+  }, [environmentId, key]);
+  return useAtomValue(atom);
+}
+
+/**
+ * An owner thread inside a sentence. Opens the thread like the sidebar does, without
+ * activating whatever row or label it sits in.
+ */
+export function LabOwnerLink({
   environmentId,
   threadId,
+  title,
+  onOpen,
+}: {
+  readonly environmentId: EnvironmentId;
+  readonly threadId: string;
+  readonly title: string;
+  readonly onOpen?: () => void;
+}) {
+  const openThread = useOpenThreadInPane();
+  return (
+    <button
+      type="button"
+      className="inline cursor-pointer rounded-sm bg-info/10 px-1 text-left text-info-foreground hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring"
+      onClick={(event) => {
+        event.preventDefault();
+        event.stopPropagation();
+        openThread(scopeThreadRef(environmentId, threadId as ThreadId));
+        onOpen?.();
+      }}
+    >
+      {title}
+    </button>
+  );
+}
+
+/** A summary sentence, with the owner thread rendered as a link. */
+export function LabSummarySentence({
+  environmentId,
+  threadId,
+  segments,
 }: {
   readonly environmentId: EnvironmentId;
   readonly threadId: string | null;
+  readonly segments: ReadonlyArray<LabSummarySegment>;
 }) {
-  const owner = useLabOwnerThread(environmentId, threadId);
-  if (threadId === null) return <span className="text-muted-foreground">No owner thread</span>;
-  return owner ? (
-    <span className="min-w-0 truncate">{owner.title}</span>
-  ) : (
-    <span className="text-muted-foreground">Owner outside T3</span>
+  return (
+    <>
+      {segments.map((segment) =>
+        typeof segment === "string" ? (
+          <span key={`text:${segment}`}>{segment}</span>
+        ) : threadId ? (
+          <LabOwnerLink
+            key="owner"
+            environmentId={environmentId}
+            threadId={threadId}
+            title={segment.owner}
+          />
+        ) : (
+          <span key="owner">{segment.owner}</span>
+        ),
+      )}
+    </>
   );
 }
