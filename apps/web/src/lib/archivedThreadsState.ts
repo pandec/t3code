@@ -7,7 +7,12 @@ import {
   makeRecentArchivedThreadsKey,
   type RecentArchivedThreadSnapshotsState,
 } from "@t3tools/client-runtime/state/threads";
-import type { EnvironmentId, ProjectId } from "@t3tools/contracts";
+import { createEnvironmentRpcQueryAtomFamily } from "@t3tools/client-runtime/state/runtime";
+import {
+  ORCHESTRATION_V2_WS_METHODS,
+  type EnvironmentId,
+  type ProjectId,
+} from "@t3tools/contracts";
 import { Atom } from "effect/reactivity";
 import { useCallback, useMemo } from "react";
 
@@ -33,19 +38,23 @@ export function refreshArchivedThreadsForEnvironment(environmentId: EnvironmentI
   appAtomRegistry.refresh(archivedSnapshotAtom(environmentId));
 }
 
-// Fork (SP Labs): the full archive, refetched whenever the shell reports an archive change, so a
-// lab owner archived by an agent or another client resolves without a manual refresh.
+// Fork (SP Labs): the full archive for owner lookups, refetched after an archive change even one
+// that happened while nothing read it, so a lab owner archived by an agent or another client
+// resolves without a manual refresh.
 const archiveInvalidationAtom = Atom.family((environmentId: EnvironmentId) =>
   Atom.make(
     (get) => get(environmentShell.stateValueAtom(environmentId)).archiveInvalidationSequence ?? 0,
   ),
 );
 
-export const liveArchivedShellSnapshotAtom = Atom.family((environmentId: EnvironmentId) =>
-  archivedSnapshotAtom(environmentId).pipe(
-    Atom.makeRefreshOnSignal(archiveInvalidationAtom(environmentId)),
-  ),
-);
+const liveArchivedShellSnapshot = createEnvironmentRpcQueryAtomFamily(connectionAtomRuntime, {
+  label: "web:live-archived-shell-snapshot",
+  tag: ORCHESTRATION_V2_WS_METHODS.getArchivedShellSnapshot,
+  refreshTrigger: ({ environmentId }) => archiveInvalidationAtom(environmentId),
+});
+
+export const liveArchivedShellSnapshotAtom = (environmentId: EnvironmentId) =>
+  liveArchivedShellSnapshot({ environmentId, input: {} });
 
 export function useArchivedThreadSnapshots(environmentIds: ReadonlyArray<EnvironmentId>): {
   readonly snapshots: ReadonlyArray<ArchivedSnapshotEntry>;

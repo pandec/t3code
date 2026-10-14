@@ -160,6 +160,11 @@ export function useLabCommands(environmentId: EnvironmentId) {
 
 export type LabCommands = ReturnType<typeof useLabCommands>;
 
+/** Stack commands wait for permission and for the lab's running operation to finish. */
+export function isLabBusy(commands: LabCommands, t3: LabT3State | undefined): boolean {
+  return !commands.canOperate || t3?.operation != null;
+}
+
 /** A tooltip naming the action, then what it does in one line. */
 export function LabActionTooltip({
   label,
@@ -360,7 +365,7 @@ export function LabActionBar({
   if (environment === null || environment.kind !== "lab") {
     return extra ? <div className="flex flex-wrap items-center gap-1">{extra}</div> : null;
   }
-  const busy = !commands.canOperate || t3?.operation != null;
+  const busy = isLabBusy(commands, t3);
   const running = isLabStackRunning(environment);
   const free = resolveLabAvailability(environment) === "free";
   return (

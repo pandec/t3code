@@ -17,7 +17,13 @@ import { Badge } from "../ui/badge";
 import { Button } from "../ui/button";
 import { ScrollArea } from "../ui/scroll-area";
 import { Tooltip, TooltipPopup, TooltipTrigger } from "../ui/tooltip";
-import { LabActionBar, LabReleaseButton, useLabCommands, type LabCommands } from "./LabActions";
+import {
+  isLabBusy,
+  LabActionBar,
+  LabReleaseButton,
+  useLabCommands,
+  type LabCommands,
+} from "./LabActions";
 import { LabOwnerLink, LabSummarySentence, useLabOwnerView, useLabOwnerViews } from "./LabParts";
 import {
   LAB_IDLE_HOLD_HOURS,
@@ -348,16 +354,13 @@ function LabListRow({
           <span className="text-muted-foreground">{formatLabAgo(summary.since, now)}</span>
         ) : null}
         {isLabHeldByArchivedThread(environment, owner) ? (
-          // Its own control inside the clickable row: never opens the detail.
-          <span
-            className="mt-1.5"
-            onClick={(event) => event.stopPropagation()}
-            onKeyDown={(event) => event.stopPropagation()}
-          >
+          // Its own control inside the clickable row: a click never opens the detail, and the
+          // row's key handler already ignores keys from nested controls.
+          <span className="mt-1.5" onClick={(event) => event.stopPropagation()}>
             <LabReleaseButton
               environment={environment}
               commands={commands}
-              disabled={!commands.canOperate || t3?.operation != null}
+              disabled={isLabBusy(commands, t3)}
               emphasized
             />
           </span>
