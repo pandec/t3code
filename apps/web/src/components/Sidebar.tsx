@@ -2262,7 +2262,12 @@ const SidebarThreadRow = memo(function SidebarThreadRow(props: {
                             aria-label="Dismiss Woke notification"
                             disabled={!canOperateThread}
                             onClick={handleAcknowledgeWokeClick}
-                            className="inline-flex items-center gap-1 rounded-sm text-xs font-medium text-warning-foreground outline-none enabled:cursor-pointer enabled:hover:underline focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring"
+                            className={cn(
+                              "inline-flex items-center gap-1 rounded-sm text-xs font-medium outline-none enabled:cursor-pointer enabled:hover:underline focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring",
+                              props.wokeOnFinishedWork
+                                ? "text-success-foreground"
+                                : "text-warning-foreground",
+                            )}
                           >
                             <AlarmClockIcon aria-hidden className="size-3" />
                             <span role="status">Woke</span>
