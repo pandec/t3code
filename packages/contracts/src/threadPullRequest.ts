@@ -95,9 +95,9 @@ export type ThreadPullRequestKey = typeof ThreadPullRequestKey.Type;
 
 /**
  * Present while the server watches the pull request for its thread. The server wakes the
- * thread's agent when checks finish on the head commit, someone else comments, or the branch
- * starts to conflict. The other fields record what the agent was last told, so each change is
- * reported once.
+ * thread's agent when checks finish on the head commit, someone else comments, the branch
+ * starts to conflict, or the pull request merges or closes, which also ends the watch. The
+ * other fields record what the agent was last told, so each change is reported once.
  */
 export const ThreadPullRequestWatch = Schema.Struct({
   startedAt: IsoDateTime,

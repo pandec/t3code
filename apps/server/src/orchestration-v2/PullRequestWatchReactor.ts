@@ -218,8 +218,8 @@ function watchesEqual(left: ThreadPullRequestWatch, right: ThreadPullRequestWatc
  * the pass which pull requests moved, and only those are read; elsewhere a pull request is read
  * unless its sync snapshot has not moved while nothing is in flight.
  * Settling or archiving a thread ends its watches, and a merged or closed pull request ends
- * its watch. Each ended watch is logged once with why it ended and how long it went without
- * a push, for debugging watches that live too long.
+ * its watch with a wake saying so. Each ended watch is logged once with why it ended and how
+ * long it went without a push, for debugging watches that live too long.
  */
 export class PullRequestWatchReactor extends Context.Service<
   PullRequestWatchReactor,
@@ -406,16 +406,31 @@ export const make = Effect.gen(function* () {
       Effect.tap(() => ended(target, "closed")),
     );
 
+  // A merged pull request cannot reopen; the wake lets the agent do its follow-up, such as cleanup.
+  const merged = (target: WatchTarget, baseBranch: string | undefined) =>
+    record(target, null, {
+      text: `Pull request #${target.link.number} (${target.link.url}) was merged${baseBranch === undefined ? "" : ` into ${baseBranch}`}, so T3 Code stopped watching it. Do any follow-up your task calls for.`,
+      notification: {
+        source: { kind: "monitor" },
+        outcome: "completed",
+        summary: `#${target.link.number}: merged, stopped watching`,
+      },
+    }).pipe(
+      Effect.tap(() => woke(target)),
+      Effect.tap(() => ended(target, "merged")),
+    );
+
   /** Why a watch ends without a host read; the rest are read once per pull request. */
   const endsWithoutRead = ({ thread, link }: WatchTarget): WatchEndReason | undefined =>
-    // A merged pull request cannot reopen. Settling and archiving end watches, and a subagent
-    // cannot start one; a watch left from before those rules ends here.
-    link.snapshot?.state === "merged"
-      ? "merged"
-      : thread.settledOverride === "settled" || thread.settledAt !== null
-        ? "settled"
-        : thread.lineage.relationshipToParent === "subagent"
-          ? "subagent"
+    // Settling and archiving end watches, and a subagent cannot start one; a watch left from
+    // before those rules ends here. Neither takes a wake, so they are checked before a merge
+    // that sync saw first, which wakes the agent like a merge the read finds.
+    thread.settledOverride === "settled" || thread.settledAt !== null
+      ? "settled"
+      : thread.lineage.relationshipToParent === "subagent"
+        ? "subagent"
+        : link.snapshot?.state === "merged"
+          ? "merged"
           : undefined;
 
   /**
@@ -524,9 +539,7 @@ export const make = Effect.gen(function* () {
     if (detail.state !== "open") {
       lastReads.delete(group.key);
       return yield* eachTarget(group, (target) =>
-        detail.state === "closed"
-          ? closed(target)
-          : record(target, null).pipe(Effect.tap(() => ended(target, "merged"))),
+        detail.state === "closed" ? closed(target) : merged(target, detail.baseBranch),
       );
     }
 
@@ -608,8 +621,10 @@ export const make = Effect.gen(function* () {
     yield* Effect.forEach(
       ending,
       ([target, reason]) =>
-        record(target, null).pipe(
-          Effect.tap(() => ended(target, reason)),
+        (reason === "merged"
+          ? merged(target, target.link.snapshot?.baseBranch)
+          : record(target, null).pipe(Effect.tap(() => ended(target, reason)))
+        ).pipe(
           Effect.catchCause(
             logFailure("pull request watch stop failed", {
               threadId: target.thread.id,

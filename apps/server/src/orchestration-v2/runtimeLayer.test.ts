@@ -2823,6 +2823,143 @@ it.layer(layerTest)("OrchestrationV2LayerLive lifecycle", (it) => {
       }),
   );
 
+  it.effect("wakes the agent once when a watched pull request merges", () =>
+    Effect.gen(function* () {
+      const orchestrator = yield* Orchestrator.OrchestratorV2;
+      const projectId = ProjectId.make("pr-watch-merged-project");
+      yield* seedProject({
+        projectId,
+        title: "Watch merged",
+        workspaceRoot: "/workspace/watch-merged",
+        defaultModelSelection: null,
+        createdAt: "2026-10-01T00:00:00.000Z",
+      });
+      const watchFrom = (threadId: ThreadId, number: number) =>
+        Effect.gen(function* () {
+          yield* orchestrator.dispatch({
+            type: "thread.create",
+            createdBy: "user",
+            creationSource: "web",
+            commandId: CommandId.make(`create:${threadId}`),
+            threadId,
+            projectId,
+            title: "Watch merged",
+            modelSelection,
+            runtimeMode: "full-access",
+            interactionMode: "default",
+            branch: null,
+            worktreePath: null,
+          });
+          yield* orchestrator.dispatch({
+            type: "thread.pull-request.watch",
+            commandId: CommandId.make(`watch:${threadId}`),
+            threadId,
+            host: "github.com",
+            repository: "pingdotgg/t3code",
+            number,
+            watching: true,
+            link: { url: `https://github.com/pingdotgg/t3code/pull/${number}`, source: "agent" },
+          });
+        });
+      // The read finds #12 merged; sync already saw #13 merged, so it ends without a read.
+      const read = ThreadId.make("runtime-pull-request-watch-merged-read");
+      const synced = ThreadId.make("runtime-pull-request-watch-merged-synced");
+      yield* watchFrom(read, 12);
+      yield* watchFrom(synced, 13);
+      yield* orchestrator.dispatch({
+        type: "thread.pull-request-link.sync",
+        commandId: CommandId.make("pr-watch-merged-sync"),
+        threadId: synced,
+        host: "github.com",
+        repository: "pingdotgg/t3code",
+        number: 13,
+        snapshot: {
+          state: "merged",
+          title: "Watched pull request",
+          headBranch: "feature",
+          baseBranch: "release",
+          isDraft: false,
+          updatedAt: null,
+          syncedAt: "2026-10-02T12:00:00.000Z",
+        },
+        stack: null,
+      });
+
+      const reads: Array<number> = [];
+      const ended: Array<unknown> = [];
+      const capture = Logger.make(({ message }) => {
+        const [text, fields] = Array.isArray(message) ? message : [message];
+        if (text === "pull request watch ended") ended.push(fields);
+      });
+      const reactor = yield* PullRequestWatchReactor.make.pipe(
+        Effect.provide(
+          Layer.mergeAll(
+            NodeServices.layer,
+            Layer.mock(PullRequestService.PullRequestService)({
+              detail: (input) =>
+                Effect.sync(() => {
+                  reads.push(input.number);
+                  return {
+                    ...watchedPullRequestDetail({
+                      projectId,
+                      number: input.number,
+                      at: "2026-10-02T12:00:00.000Z",
+                    }),
+                    state: "merged" as const,
+                  };
+                }),
+              activity: () =>
+                Effect.succeed({
+                  comments: [],
+                  commentCount: 0,
+                  commentsTruncated: false,
+                  reviewThreads: [],
+                  commits: [],
+                }),
+            }),
+          ),
+        ),
+      );
+      const sweep = reactor.sweep.pipe(Effect.provide(Logger.layer([capture])));
+      yield* sweep;
+      yield* sweep;
+
+      assert.deepEqual(reads, [12]);
+      const wakes = (threadId: ThreadId) =>
+        Effect.map(orchestrator.getThreadRecords(threadId, ["messages"]), ({ messages }) =>
+          messages.flatMap((message) =>
+            message.notification === undefined || message.notification === null
+              ? []
+              : [{ text: message.text, summary: message.notification.summary }],
+          ),
+        );
+      assert.deepEqual(yield* wakes(read), [
+        {
+          text: "Pull request #12 (https://github.com/pingdotgg/t3code/pull/12) was merged into main, so T3 Code stopped watching it. Do any follow-up your task calls for.",
+          summary: "#12: merged, stopped watching",
+        },
+      ]);
+      assert.deepEqual(yield* wakes(synced), [
+        {
+          text: "Pull request #13 (https://github.com/pingdotgg/t3code/pull/13) was merged into release, so T3 Code stopped watching it. Do any follow-up your task calls for.",
+          summary: "#13: merged, stopped watching",
+        },
+      ]);
+      for (const threadId of [read, synced]) {
+        const thread = yield* orchestrator.getThreadShell(threadId);
+        assert.isUndefined(thread?.pullRequests?.[0]?.watch);
+      }
+      assert.deepEqual(
+        ended.map((fields) =>
+          typeof fields === "object" && fields !== null && "reason" in fields
+            ? fields.reason
+            : undefined,
+        ),
+        ["merged", "merged"],
+      );
+    }),
+  );
+
   it.effect("reports how long an ended watch was quiet", () =>
     Effect.gen(function* () {
       const orchestrator = yield* Orchestrator.OrchestratorV2;
