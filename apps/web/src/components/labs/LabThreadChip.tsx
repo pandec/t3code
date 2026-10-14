@@ -4,8 +4,8 @@ import { GitBranchIcon, InfoIcon } from "lucide-react";
 import { useLabsInventory, useLabsSnapshot } from "../../state/labs";
 import { Button } from "../ui/button";
 import { Popover, PopoverClose, PopoverPopup, PopoverTrigger } from "../ui/popover";
-import { Tooltip, TooltipPopup, TooltipTrigger } from "../ui/tooltip";
-import { LabActionBar, useLabCommands } from "./LabActions";
+import { Tooltip, TooltipTrigger } from "../ui/tooltip";
+import { LabActionBar, LabActionTooltip, useLabCommands } from "./LabActions";
 import { openLabsPanel } from "./labsPanelStore";
 import { LabHealthDot } from "./LabParts";
 import { findLabForThread, resolveLabStackHealth } from "./labs.logic";
@@ -83,22 +83,23 @@ function LiveLabChip({
             environment={environment ?? null}
             t3={t3}
             commands={commands}
+            compact
             extra={
               <Tooltip>
                 <TooltipTrigger
                   render={
                     <PopoverClose
-                      render={<Button size="xs" variant="outline" />}
+                      render={<Button size="icon-xs" variant="outline" aria-label="Details" />}
                       onClick={() => openLabsPanel(threadRef, labId)}
                     />
                   }
                 >
                   <InfoIcon />
-                  Details
                 </TooltipTrigger>
-                <TooltipPopup>
-                  Opens {name} in the Labs panel: reservation, handoff, runtime, history and output.
-                </TooltipPopup>
+                <LabActionTooltip
+                  label="Details"
+                  description={`Opens ${name} in the Labs panel: reservation, handoff, runtime, history and output.`}
+                />
               </Tooltip>
             }
           />

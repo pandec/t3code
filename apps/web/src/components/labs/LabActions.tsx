@@ -16,7 +16,6 @@ import {
   LockOpenIcon,
   LogOutIcon,
   MessageSquareIcon,
-  PanelRightIcon,
   PlayIcon,
   RotateCwIcon,
   SquareIcon,
@@ -161,13 +160,35 @@ export function useLabCommands(environmentId: EnvironmentId) {
 
 export type LabCommands = ReturnType<typeof useLabCommands>;
 
-/** A small action with a one-line explanation; actions never stretch to fill their row. */
+/** A tooltip naming the action, then what it does in one line. */
+export function LabActionTooltip({
+  label,
+  description,
+}: {
+  readonly label: string;
+  readonly description: string;
+}) {
+  return (
+    <TooltipPopup>
+      <span className="flex max-w-64 flex-col gap-0.5">
+        <span className="font-medium">{label}</span>
+        <span>{description}</span>
+      </span>
+    </TooltipPopup>
+  );
+}
+
+/**
+ * A small action that never stretches to fill its row. `compact` shows only the icon (the header
+ * chip); the label then lives in the aria-label and the tooltip.
+ */
 function ActionButton({
   label,
   tooltip,
   icon: Icon,
   disabled,
   variant = "outline",
+  compact,
   onClick,
 }: {
   readonly label: string;
@@ -175,17 +196,26 @@ function ActionButton({
   readonly icon: typeof PlayIcon;
   readonly disabled?: boolean;
   readonly variant?: "outline" | "default";
+  readonly compact: boolean;
   readonly onClick: () => void;
 }) {
   return (
     <Tooltip>
       <TooltipTrigger
-        render={<Button size="xs" variant={variant} disabled={disabled} onClick={onClick} />}
+        render={
+          <Button
+            size={compact ? "icon-xs" : "xs"}
+            variant={variant}
+            disabled={disabled}
+            aria-label={compact ? label : undefined}
+            onClick={onClick}
+          />
+        }
       >
         <Icon />
-        {label}
+        {compact ? null : label}
       </TooltipTrigger>
-      <TooltipPopup>{tooltip}</TooltipPopup>
+      <LabActionTooltip label={label} description={tooltip} />
     </Tooltip>
   );
 }
@@ -193,10 +223,12 @@ function ActionButton({
 function HoldButton({
   environment,
   disabled,
+  compact,
   commands,
 }: {
   readonly environment: LabEnvironment;
   readonly disabled: boolean;
+  readonly compact: boolean;
   readonly commands: LabCommands;
 }) {
   const [open, setOpen] = useState(false);
@@ -208,6 +240,7 @@ function HoldButton({
         tooltip="Drops your hold so agents looking for a free lab can take it again."
         icon={LockOpenIcon}
         disabled={disabled}
+        compact={compact}
         onClick={() => void commands.action(environment, "unhold")}
       />
     );
@@ -217,13 +250,25 @@ function HoldButton({
       <Tooltip>
         <TooltipTrigger
           render={
-            <PopoverTrigger render={<Button size="xs" variant="outline" disabled={disabled} />} />
+            <PopoverTrigger
+              render={
+                <Button
+                  size={compact ? "icon-xs" : "xs"}
+                  variant="outline"
+                  disabled={disabled}
+                  aria-label={compact ? "Hold" : undefined}
+                />
+              }
+            />
           }
         >
           <LockIcon />
-          Hold
+          {compact ? null : "Hold"}
         </TooltipTrigger>
-        <TooltipPopup>Keeps this lab for you: agents looking for a free lab skip it.</TooltipPopup>
+        <LabActionTooltip
+          label="Hold"
+          description="Keeps this lab for you: agents looking for a free lab skip it."
+        />
       </Tooltip>
       <PopoverPopup width="sm" padding="compact" align="start">
         <form
@@ -256,9 +301,10 @@ function HoldButton({
 }
 
 /**
- * Every action for one lab in one wrapping row: a new thread in a free lab, the stack commands,
- * hold, and the two ways to release. Main/Staging and Preview have none; the CLI manages only lab
- * stacks. `extra` appends a caller's own action (the chip's Details).
+ * Every action for one lab in one row: a new thread in a free lab, the stack commands, hold, and
+ * the two ways to release. Main/Staging and Preview have none; the CLI manages only lab stacks.
+ * `extra` appends a caller's own action (the chip's Details). `compact` is the chip's single row
+ * of icon buttons; otherwise labeled buttons wrap.
  */
 export function LabActionBar({
   environmentId,
@@ -267,6 +313,7 @@ export function LabActionBar({
   t3,
   commands,
   extra,
+  compact = false,
 }: {
   readonly environmentId: EnvironmentId;
   readonly projectId: ProjectId | null;
@@ -275,6 +322,7 @@ export function LabActionBar({
   readonly t3: LabT3State | undefined;
   readonly commands: LabCommands;
   readonly extra?: ReactNode;
+  readonly compact?: boolean;
 }) {
   const handleNewThread = useNewThreadHandler();
   const ownerThreadId = environment?.lease?.threadId ?? null;
@@ -286,12 +334,13 @@ export function LabActionBar({
   const running = isLabStackRunning(environment);
   const free = resolveLabAvailability(environment) === "free";
   return (
-    <div className="flex flex-wrap items-center gap-1">
+    <div className={compact ? "flex items-center gap-1" : "flex flex-wrap items-center gap-1"}>
       {free && projectId !== null ? (
         <ActionButton
           label="New thread"
           tooltip={`Opens a new Lab-mode thread for ${environment.name}; sending its first message reserves the lab.`}
           icon={FlaskConicalIcon}
+          compact={compact}
           variant="default"
           onClick={() =>
             void handleNewThread(scopeProjectRef(environmentId, projectId), {
@@ -306,18 +355,20 @@ export function LabActionBar({
         label={running ? "Restart" : "Start"}
         tooltip={
           running
-            ? "Runs sp-labs up again: restarts Chrome and the dev server and rechecks the extension."
-            : "Runs sp-labs up: starts this lab's Chrome, dev server and backend (about 20 s)."
+            ? "Stops and starts this lab's dev stack."
+            : "Starts this lab's Chrome, dev server and backend (about 20 s)."
         }
         icon={PlayIcon}
+        compact={compact}
         disabled={busy}
         onClick={() => void commands.action(environment, "up")}
       />
       {running ? (
         <ActionButton
           label="Stop"
-          tooltip="Runs sp-labs down: stops this lab's Chrome, dev server and tmux session."
+          tooltip="Stops this lab's Chrome, dev server and tmux session."
           icon={SquareIcon}
+          compact={compact}
           disabled={busy}
           onClick={() => void commands.action(environment, "down")}
         />
@@ -327,6 +378,7 @@ export function LabActionBar({
           label="Reload"
           tooltip="Reloads the SalesPros extension in this lab's Chrome."
           icon={RotateCwIcon}
+          compact={compact}
           disabled={busy}
           onClick={() => void commands.action(environment, "reload")}
         />
@@ -335,22 +387,17 @@ export function LabActionBar({
         label="Browser"
         tooltip="Brings this lab's Chrome window to the front."
         icon={AppWindowIcon}
+        compact={compact}
         disabled={busy}
         onClick={() => void commands.action(environment, "browser")}
       />
-      <ActionButton
-        label="Extension panel"
-        tooltip="Opens the SalesPros side panel on a Salesforce tab in this lab's Chrome."
-        icon={PanelRightIcon}
-        disabled={busy}
-        onClick={() => void commands.action(environment, "sidepanel")}
-      />
-      <HoldButton environment={environment} disabled={busy} commands={commands} />
+      <HoldButton environment={environment} disabled={busy} compact={compact} commands={commands} />
       {environment.lease && owner && ownerThreadId ? (
         <ActionButton
           label="Ask agent to release"
           tooltip={`Sends ${owner.title} a message asking its agent to commit, stop the stack and release the lab.`}
           icon={MessageSquareIcon}
+          compact={compact}
           disabled={!commands.canOperate}
           onClick={() => commands.askOwnerToRelease(environment, ownerThreadId)}
         />
@@ -360,6 +407,7 @@ export function LabActionBar({
           label="Release"
           tooltip="Releases the reservation now, keeping the standing handoff note. Offers to stop a running stack first; uncommitted changes block it."
           icon={LogOutIcon}
+          compact={compact}
           disabled={busy}
           onClick={() => void commands.release(environment)}
         />

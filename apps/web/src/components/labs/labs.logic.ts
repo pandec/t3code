@@ -421,21 +421,21 @@ export function summarizeLabEnvironment(
   };
 }
 
-/** "3 of 5 labs free, 1 in use. sp-lab-2 needs a look." */
+/** "3 of 5 labs free, 1 in use." then "sp-lab-2 needs a look." or "Nothing needs you." */
 export function summarizeLabsHeadline(
   labs: ReadonlyArray<{ readonly name: string; readonly summary: LabSummary }>,
-): { readonly text: string; readonly attention: string | null } {
+): { readonly counts: string; readonly followUp: string; readonly needsLook: boolean } {
   const free = labs.filter((lab) => lab.summary.word === "Free").length;
   const inUse = labs.filter((lab) => lab.summary.tone === "reserved").length;
-  const text = `${free} of ${labs.length} labs free${inUse > 0 ? `, ${inUse} in use` : ""}.`;
+  const counts = `${free} of ${labs.length} labs free${inUse > 0 ? `, ${inUse} in use` : ""}.`;
   const look = labs.filter((lab) => lab.summary.needsLook);
-  const attention =
+  const followUp =
     look.length === 1
       ? `${look[0]!.name} needs a look.`
       : look.length > 1
         ? `${look.length} need a look.`
-        : null;
-  return { text: attention ? text : `${text} Nothing needs you.`, attention };
+        : "Nothing needs you.";
+  return { counts, followUp, needsLook: look.length > 0 };
 }
 
 export type LabCheckState = "ok" | "off" | "bad" | "unknown" | "na";

@@ -293,10 +293,16 @@ describe("dashboard summaries", () => {
         { name: "sp-lab-2", summary: summary("Idle hold", "attention", true) },
         { name: "sp-lab-3", summary: summary("Free", "free") },
       ]),
-    ).toEqual({ text: "1 of 3 labs free, 1 in use.", attention: "sp-lab-2 needs a look." });
-    expect(summarizeLabsHeadline([{ name: "a", summary: summary("Free", "free") }]).text).toBe(
-      "1 of 1 labs free. Nothing needs you.",
-    );
+    ).toEqual({
+      counts: "1 of 3 labs free, 1 in use.",
+      followUp: "sp-lab-2 needs a look.",
+      needsLook: true,
+    });
+    expect(summarizeLabsHeadline([{ name: "a", summary: summary("Free", "free") }])).toEqual({
+      counts: "1 of 1 labs free.",
+      followUp: "Nothing needs you.",
+      needsLook: false,
+    });
   });
 
   it("lists labs in numeric order before the shared checkouts", () => {

@@ -193,13 +193,15 @@ function LabList({
   );
   return (
     <ScrollArea className="h-full min-h-0">
-      <div className="flex flex-col gap-1 px-2 py-3">
-        <div className="flex flex-col gap-1 px-1 pb-2">
-          <p className="font-medium text-sm leading-snug">
-            {headline.text}
-            {headline.attention ? (
-              <span className="text-warning-foreground"> {headline.attention}</span>
-            ) : null}
+      {/* Centered while shorter than the panel; scrolls normally once taller. */}
+      <div className="flex min-h-full flex-col justify-center gap-1 px-2 py-4">
+        <div className="flex flex-col gap-1 px-1 pb-3">
+          <p className="font-medium text-base leading-snug">
+            {headline.counts}
+            <br />
+            <span className={headline.needsLook ? "text-warning-foreground" : undefined}>
+              {headline.followUp}
+            </span>
           </p>
           <p className="text-muted-foreground text-xs">
             Checked {formatLabAgo(data.checkedAt, now)}. Holds count as idle after{" "}
@@ -218,7 +220,7 @@ function LabList({
           />
         ))}
         {shared.length > 0 ? (
-          <h3 className="px-1 pt-3 pb-1 font-medium text-muted-foreground text-xs">
+          <h3 className="px-1 pt-8 pb-1 font-medium text-muted-foreground text-xs">
             Shared checkouts
           </h3>
         ) : null}
