@@ -42,6 +42,7 @@ import {
   snoozeShelfLabel,
   snoozeWakeSortMs,
   threadWokeAt,
+  threadWokeOnFinishedWork,
 } from "@t3tools/client-runtime/state/thread-settled";
 import { createInboxReturnTracker } from "@t3tools/client-runtime/state/thread-inbox";
 import { formatDiffCount } from "@t3tools/client-runtime/diff-count";
@@ -1355,6 +1356,8 @@ const SidebarThreadRow = memo(function SidebarThreadRow(props: {
   // When a snooze ended (timer or early wake); drives the Woke pill until
   // the user visits the thread.
   wokeAt: string | null;
+  // The wake came from the agent's work ending, not a timer: colored like Done.
+  wokeOnFinishedWork: boolean;
   isActive: boolean;
   // Which split pane shows this thread, while the split view is on screen.
   splitPaneMarker: SplitPaneMarker | null;
@@ -1596,7 +1599,7 @@ const SidebarThreadRow = memo(function SidebarThreadRow(props: {
                     ? {
                         label: "Woke",
                         icon: "woke" as const,
-                        className: "text-warning",
+                        className: props.wokeOnFinishedWork ? "text-success" : "text-warning",
                       }
                     : isUnread
                       ? {
@@ -2259,7 +2262,12 @@ const SidebarThreadRow = memo(function SidebarThreadRow(props: {
                             aria-label="Dismiss Woke notification"
                             disabled={!canOperateThread}
                             onClick={handleAcknowledgeWokeClick}
-                            className="inline-flex items-center gap-1 rounded-sm text-xs font-medium text-warning-foreground outline-none enabled:cursor-pointer enabled:hover:underline focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring"
+                            className={cn(
+                              "inline-flex items-center gap-1 rounded-sm text-xs font-medium outline-none enabled:cursor-pointer enabled:hover:underline focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring",
+                              props.wokeOnFinishedWork
+                                ? "text-success-foreground"
+                                : "text-warning-foreground",
+                            )}
                           >
                             <AlarmClockIcon aria-hidden className="size-3" />
                             <span role="status">Woke</span>
@@ -6845,6 +6853,7 @@ export default function Sidebar() {
                             // the wake signal must survive the trip. Still-snoozed
                             // rows resolve to null on their own.
                             wokeAt={threadWokeAt(thread, { now: snoozeNow })}
+                            wokeOnFinishedWork={threadWokeOnFinishedWork(thread)}
                             isActive={routeThreadKey === threadKey}
                             splitPaneMarker={
                               splitSecondaryKey === null

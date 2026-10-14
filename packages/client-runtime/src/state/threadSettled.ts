@@ -359,6 +359,16 @@ export function threadWokeAt(
   return wakeAtMs <= Date.parse(options.now) ? (shell.snoozedUntil ?? null) : null;
 }
 
+/**
+ * Fork: whether a wake reported by threadWokeAt came from the agent's work
+ * ending ("until it's done", or a run that ended after the snooze) rather
+ * than a timer. Only meaningful while threadWokeAt is non-null; the sidebar
+ * colors such wakes like Done.
+ */
+export function threadWokeOnFinishedWork(shell: ThreadSnoozeShell): boolean {
+  return isUntilDoneSnooze(shell) || runEndedAfterSnooze(shell) !== null;
+}
+
 const HOUR_MS = 60 * 60 * 1_000;
 const EVENING_HOUR = 18;
 const MORNING_HOUR = 6;

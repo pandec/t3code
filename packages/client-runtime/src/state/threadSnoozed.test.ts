@@ -14,6 +14,7 @@ import {
   snoozeWakeSortMs,
   threadRaisedHandWhileSnoozed,
   threadWokeAt,
+  threadWokeOnFinishedWork,
   type ThreadSnoozeShell,
 } from "./threadSettled.ts";
 
@@ -401,6 +402,30 @@ describe("threadWokeAt", () => {
         now: NOW,
       }),
     ).toBe("2026-04-10T11:00:00.000Z");
+  });
+
+  it("tells finished-work wakes from timer wakes", () => {
+    expect(threadWokeOnFinishedWork(makeShell({ snoozedUntil: PAST_WAKE }))).toBe(false);
+    expect(
+      threadWokeOnFinishedWork(makeShell({ snoozedUntil: FUTURE_WAKE, pending: "approval" })),
+    ).toBe(false);
+    // A run that ended before the snooze is not what woke it.
+    expect(
+      threadWokeOnFinishedWork(
+        makeShell({ snoozedUntil: PAST_WAKE, turnCompletedAt: "2026-04-10T08:00:00.000Z" }),
+      ),
+    ).toBe(false);
+    expect(
+      threadWokeOnFinishedWork(
+        makeShell({ snoozedUntil: FUTURE_WAKE, turnCompletedAt: "2026-04-10T10:30:00.000Z" }),
+      ),
+    ).toBe(true);
+    expect(
+      threadWokeOnFinishedWork({
+        ...makeShell({ snoozedAt: SNOOZED_AT }),
+        snoozedUntilRunId: "run-1",
+      }),
+    ).toBe(true);
   });
 
   it("keeps the early wake authoritative after the scheduled time passes", () => {
