@@ -4,6 +4,7 @@ import { describe, expect, it } from "vite-plus/test";
 import { DEFAULT_DRAFT_LAB_INTENT, normalizeDraftLabIntent } from "../../composerDraftStore";
 import {
   findLabForThread,
+  isLabHeldByArchivedThread,
   isLabIdleHold,
   orderLabEnvironments,
   releaseCanStopFirst,
@@ -274,6 +275,17 @@ describe("dashboard summaries", () => {
       word: "Free",
       sentence: ["Released 45 min ago, left usable."],
       note: "Stripe clock advanced",
+    });
+  });
+
+  it("flags a reservation held by an archived thread as bad, even while it looks idle", () => {
+    const archived = owner({ archived: true, lastActivityAt: hoursAgo(23) });
+    expect(isLabHeldByArchivedThread(reserved(30), archived)).toBe(true);
+    expect(isLabHeldByArchivedThread(reserved(30), owner())).toBe(false);
+    expect(summarizeLabEnvironment(reserved(30, hoursAgo(23)), archived, now)).toMatchObject({
+      tone: "bad",
+      sentence: [{ owner: "Fix picklists" }, " was archived but still holds this lab."],
+      needsLook: true,
     });
   });
 
