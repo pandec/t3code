@@ -407,9 +407,9 @@ export const make = Effect.gen(function* () {
     );
 
   // A merged pull request cannot reopen; the wake lets the agent do its follow-up, such as cleanup.
-  const merged = (target: WatchTarget, baseBranch: string | undefined) =>
+  const merged = (target: WatchTarget, baseBranch: string) =>
     record(target, null, {
-      text: `Pull request #${target.link.number} (${target.link.url}) was merged${baseBranch === undefined ? "" : ` into ${baseBranch}`}, so T3 Code stopped watching it. Do any follow-up your task calls for.`,
+      text: `Pull request #${target.link.number} (${target.link.url}) was merged into ${baseBranch}, so T3 Code stopped watching it. Do any follow-up your task calls for.`,
       notification: {
         source: { kind: "monitor" },
         outcome: "completed",
@@ -622,7 +622,7 @@ export const make = Effect.gen(function* () {
       ending,
       ([target, reason]) =>
         (reason === "merged"
-          ? merged(target, target.link.snapshot?.baseBranch)
+          ? merged(target, target.link.snapshot!.baseBranch)
           : record(target, null).pipe(Effect.tap(() => ended(target, reason)))
         ).pipe(
           Effect.catchCause(
