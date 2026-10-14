@@ -70,7 +70,7 @@ export const LABS_POLL_INTERVAL = Duration.seconds(15);
 const DEFAULT_SP_LABS_RELATIVE_DIRECTORY = "SynologyDrive/AIMac/repos/sp-labs";
 
 /** Hidden note kinds (see ThreadHiddenNotes). */
-const LAB_NOTE_KIND = "sp-labs:lab";
+const labNoteKind = (leaseId: string) => `sp-labs:lab:${leaseId}`;
 const UP_FAILED_NOTE_KIND = "sp-labs:up-failed";
 
 const TIMEOUTS = {
@@ -483,8 +483,6 @@ const make = Effect.gen(function* () {
               leaseId: environment.lease.id,
               autoBranch: false,
               stackStopped: isLabStackStopped(environment.runtime),
-              // The first call queued the first-turn note; it may already be delivered.
-              fresh: false,
             };
           }
           // The launch renames a temporary branch from the first message, in the lab worktree.
@@ -514,28 +512,28 @@ const make = Effect.gen(function* () {
             leaseId: acquired.lease.id,
             autoBranch: input.branch === null,
             stackStopped: true,
-            fresh: true,
           };
         }),
       );
-      // Bound to the lab worktree: a thread launched elsewhere after all never hears it.
-      yield* (
-        prepared.fresh
-          ? hiddenNotes.put({
-              threadId: input.threadId,
-              kind: LAB_NOTE_KIND,
-              text: labThreadNote(prepared),
-              worktreePath: prepared.worktreePath,
-            })
-          : Effect.void
-      ).pipe(
-        Effect.catch((cause) =>
-          Effect.logWarning("Failed to queue the lab thread's first-turn note", {
-            labId: input.labId,
-            cause,
-          }),
-        ),
-      );
+      // Every call for the holding thread ensures the note, once per lease: a retry restores one
+      // a failed write lost, and never repeats one already delivered. Bound to the lab worktree,
+      // so a thread launched elsewhere after all never hears it.
+      yield* hiddenNotes
+        .put({
+          threadId: input.threadId,
+          kind: labNoteKind(prepared.leaseId),
+          text: labThreadNote(prepared),
+          worktreePath: prepared.worktreePath,
+          once: true,
+        })
+        .pipe(
+          Effect.catch((cause) =>
+            Effect.logWarning("Failed to queue the lab thread's first-turn note", {
+              labId: input.labId,
+              cause,
+            }),
+          ),
+        );
       // The agent starts right away; `up` runs beside it and reports through the snapshot.
       const operation = (yield* Ref.get(t3State))[input.labId]?.operation ?? null;
       if (prepared.stackStopped && operation !== "starting") {
@@ -607,7 +605,7 @@ const make = Effect.gen(function* () {
         const owner = lease.threadId;
         if (owner !== null) {
           const threadId = ThreadId.make(owner);
-          yield* Effect.forEach([LAB_NOTE_KIND, UP_FAILED_NOTE_KIND], (kind) =>
+          yield* Effect.forEach([labNoteKind(lease.id), UP_FAILED_NOTE_KIND], (kind) =>
             hiddenNotes.remove({ threadId, kind }),
           ).pipe(Effect.ignore);
         }

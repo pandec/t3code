@@ -14,11 +14,11 @@ import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
 import * as Queue from "effect/Queue";
 import * as Ref from "effect/Ref";
+import * as SqlClient from "effect/sql/SqlClient";
 import * as Stream from "effect/Stream";
 import { TestClock } from "effect/testing";
 
 import ForkThreadHiddenNotesMigration from "../persistence/ForkMigrations/007_ForkThreadHiddenNotes.ts";
-import ForkThreadHiddenNoteWorktreeMigration from "../persistence/ForkMigrations/008_ForkThreadHiddenNoteWorktree.ts";
 import * as ThreadHiddenNotes from "../orchestration-v2/ThreadHiddenNotes.ts";
 import * as ProjectService from "../project/ProjectService.ts";
 import * as ServerSettings from "../serverSettings.ts";
@@ -143,17 +143,17 @@ const makeFakeCli = Effect.gen(function* () {
 type FakeCli = Effect.Success<typeof makeFakeCli>;
 
 const notesLayer = ThreadHiddenNotes.layer.pipe(
-  Layer.provideMerge(
-    Layer.effectDiscard(
-      ForkThreadHiddenNotesMigration.pipe(Effect.andThen(ForkThreadHiddenNoteWorktreeMigration)),
-    ),
-  ),
-  Layer.provide(NodeSqliteClient.layer({ filename: ":memory:" })),
+  Layer.provideMerge(Layer.effectDiscard(ForkThreadHiddenNotesMigration)),
+  Layer.provideMerge(NodeSqliteClient.layer({ filename: ":memory:" })),
 );
 
 const withService = <A, E>(
   fake: FakeCli,
-  effect: Effect.Effect<A, E, LabsService.LabsService | ThreadHiddenNotes.ThreadHiddenNotes>,
+  effect: Effect.Effect<
+    A,
+    E,
+    LabsService.LabsService | ThreadHiddenNotes.ThreadHiddenNotes | SqlClient.SqlClient
+  >,
 ) =>
   effect.pipe(
     Effect.provide(
@@ -230,7 +230,7 @@ describe("LabsService", () => {
     }),
   );
 
-  it.effect("prepares a lab thread: acquire for the thread, first-turn note, then up", () =>
+  it.effect("prepares a lab thread: acquire for the thread, first-turn note once, then up", () =>
     Effect.gen(function* () {
       const fake = yield* makeFakeCli;
       yield* withService(
@@ -238,6 +238,7 @@ describe("LabsService", () => {
         Effect.gen(function* () {
           const labs = yield* LabsService.LabsService;
           const notes = yield* ThreadHiddenNotes.ThreadHiddenNotes;
+          const sql = yield* SqlClient.SqlClient;
           const input = {
             threadId: THREAD,
             labId: "sp-lab-1",
@@ -245,6 +246,8 @@ describe("LabsService", () => {
             baseRef: "master",
             purpose: "Fix the parser",
           };
+          // The reservation lands, but writing its first-turn note fails.
+          yield* sql`ALTER TABLE fork_thread_hidden_notes RENAME TO broken_notes`;
           const prepared = yield* labs.prepareThread(input);
           assert.match(prepared.branch, /^t3\/[0-9a-f]{8}$/);
           assert.deepEqual(prepared, {
@@ -266,12 +269,6 @@ describe("LabsService", () => {
             "--base",
             "master",
           ]);
-          const labTurn = { worktreePath: "/fake/sp-lab-1" };
-          const pending = yield* notes.pending(THREAD, labTurn);
-          assert.equal(pending.length, 1);
-          assert.include(pending[0]!.text, "This thread runs in sp-lab-1");
-          assert.include(pending[0]!.text, prepared.branch);
-
           // `up` runs in the background, for the thread's lease.
           const up = yield* takeCall(fake, "up");
           assert.deepEqual(up.args, ["up", "sp-lab-1", "--lease", "lease-1"]);
@@ -281,18 +278,25 @@ describe("LabsService", () => {
               snapshot.t3["sp-lab-1"]?.operation === null,
           );
           assert.isTrue(settled.t3["sp-lab-1"]!.lastUp!.ok);
-          // Success tells the agent nothing more.
-          assert.equal((yield* notes.pending(THREAD, labTurn)).length, 1);
-          // The first turn hears it; a retry must not queue it again.
-          yield* notes.acknowledge(pending.map((note) => note.id));
+          yield* sql`ALTER TABLE broken_notes RENAME TO fork_thread_hidden_notes`;
+          const labTurn = { worktreePath: "/fake/sp-lab-1" };
+          assert.deepEqual(yield* notes.pending(THREAD, labTurn), []);
 
-          // A retried launch reuses the reservation instead of acquiring again.
+          // A retried launch reuses the reservation and restores the lost note.
           yield* Queue.clear(fake.calls);
           const retried = yield* labs.prepareThread(input);
           assert.equal(retried.leaseId, "lease-1");
           assert.equal(retried.branch, prepared.branch);
           const later = yield* Queue.clear(fake.calls);
           assert.isFalse(later.some((call) => call.args[0] === "acquire" || call.args[0] === "up"));
+          const pending = yield* notes.pending(THREAD, labTurn);
+          assert.equal(pending.length, 1);
+          assert.include(pending[0]!.text, "This thread runs in sp-lab-1");
+          assert.include(pending[0]!.text, prepared.branch);
+
+          // Once the first turn heard it, a retry never queues it again.
+          yield* notes.acknowledge(pending.map((note) => note.id));
+          yield* labs.prepareThread(input);
           assert.deepEqual(yield* notes.pending(THREAD, labTurn), []);
 
           // Never act on cached state: a failed status read fails the mutation.

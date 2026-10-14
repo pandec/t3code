@@ -1,8 +1,8 @@
 /**
- * Fork: notes a thread's next provider turn carries without showing them in the
- * transcript. ProviderTurnStartService prepends pending notes to the provider
- * text (beside the restart notices) and acknowledges them once the provider
- * accepts the turn, so each note is delivered once. Persisted so a note
+ * Fork: notes a thread's next provider message carries without showing them in
+ * the transcript. ProviderTurnStartService (and ProviderTurnControlService for
+ * steers) prepends pending notes to the provider text and acknowledges them
+ * once the provider accepts it, so each note is delivered once. Persisted so a note
  * survives a server restart between being queued and the next user message.
  */
 import type { ThreadId } from "@t3tools/contracts";
@@ -27,16 +27,19 @@ export class ThreadHiddenNotes extends Context.Service<
   ThreadHiddenNotes,
   {
     /**
-     * Queues a note; a pending note of the same kind for the thread is replaced. With
-     * `worktreePath`, only a turn running in that worktree hears it; a turn elsewhere drops it.
+     * Queues a note; a note of the same kind for the thread is replaced and becomes pending
+     * again. With `once`, an existing note of that kind, pending or delivered, is kept
+     * instead. With `worktreePath`, only a turn running in that worktree hears it; a turn
+     * elsewhere drops it.
      */
     readonly put: (input: {
       readonly threadId: ThreadId;
       readonly kind: string;
       readonly text: string;
       readonly worktreePath?: string;
+      readonly once?: boolean;
     }) => Effect.Effect<void, SqlError.SqlError>;
-    /** Drops a pending note of `kind`, e.g. a failure the thread no longer needs to hear about. */
+    /** Forgets the note of `kind`, e.g. a failure the thread no longer needs to hear about. */
     readonly remove: (input: {
       readonly threadId: ThreadId;
       readonly kind: string;
@@ -64,6 +67,16 @@ export const renderThreadHiddenNotes = (notes: ReadonlyArray<ThreadHiddenNote>):
 
 const make = Effect.gen(function* () {
   const sql = yield* SqlClient.SqlClient;
+  // Delivered rows stay as markers until retention removes them.
+  const markDelivered = (ids: ReadonlyArray<string>) =>
+    ids.length === 0
+      ? Effect.void
+      : Effect.flatMap(DateTime.now, (now) =>
+          sql`
+            UPDATE fork_thread_hidden_notes SET delivered_at = ${DateTime.formatIso(now)}
+            WHERE note_id IN ${sql.in(ids)}
+          `.pipe(Effect.asVoid),
+        );
   return ThreadHiddenNotes.of({
     put: (input) =>
       Effect.gen(function* () {
@@ -71,18 +84,25 @@ const make = Effect.gen(function* () {
         const noteId = yield* randomUuidV4;
         const cutoff = DateTime.formatIso(DateTime.subtract(now, { days: NOTE_RETENTION_DAYS }));
         yield* sql`DELETE FROM fork_thread_hidden_notes WHERE created_at < ${cutoff}`;
-        yield* sql`
-          INSERT INTO fork_thread_hidden_notes
-            (note_id, thread_id, kind, text, worktree_path, created_at)
-          VALUES (
-            ${noteId}, ${input.threadId}, ${input.kind}, ${input.text},
-            ${input.worktreePath ?? null}, ${DateTime.formatIso(now)}
-          )
-          ON CONFLICT (thread_id, kind) DO UPDATE SET
-            note_id = excluded.note_id,
-            text = excluded.text,
-            worktree_path = excluded.worktree_path,
-            created_at = excluded.created_at
+        const createdAt = DateTime.formatIso(now);
+        const worktreePath = input.worktreePath ?? null;
+        yield* input.once === true
+          ? sql`
+              INSERT INTO fork_thread_hidden_notes
+                (note_id, thread_id, kind, text, worktree_path, created_at)
+              VALUES (${noteId}, ${input.threadId}, ${input.kind}, ${input.text}, ${worktreePath}, ${createdAt})
+              ON CONFLICT (thread_id, kind) DO NOTHING
+            `
+          : sql`
+              INSERT INTO fork_thread_hidden_notes
+                (note_id, thread_id, kind, text, worktree_path, created_at)
+              VALUES (${noteId}, ${input.threadId}, ${input.kind}, ${input.text}, ${worktreePath}, ${createdAt})
+              ON CONFLICT (thread_id, kind) DO UPDATE SET
+                note_id = excluded.note_id,
+                text = excluded.text,
+                worktree_path = excluded.worktree_path,
+                created_at = excluded.created_at,
+                delivered_at = NULL
         `;
       }),
     remove: (input) =>
@@ -99,7 +119,7 @@ const make = Effect.gen(function* () {
           readonly worktree_path: string | null;
         }>`
           SELECT note_id, kind, text, worktree_path FROM fork_thread_hidden_notes
-          WHERE thread_id = ${threadId}
+          WHERE thread_id = ${threadId} AND delivered_at IS NULL
           ORDER BY created_at, note_id
         `;
         const misplaced =
@@ -108,11 +128,8 @@ const make = Effect.gen(function* () {
             : rows.filter(
                 (row) => row.worktree_path !== null && row.worktree_path !== turn.worktreePath,
               );
-        if (misplaced.length > 0) {
-          yield* sql`DELETE FROM fork_thread_hidden_notes WHERE note_id IN ${sql.in(
-            misplaced.map((row) => row.note_id),
-          )}`;
-        }
+        // Settled like a delivered note, so a note queued once is not queued again.
+        yield* markDelivered(misplaced.map((row) => row.note_id));
         return rows
           .filter((row) => row.worktree_path === null || row.worktree_path === turn?.worktreePath)
           .map((row) => ({ id: row.note_id, kind: row.kind, text: row.text }));
@@ -124,14 +141,11 @@ const make = Effect.gen(function* () {
         ),
       ),
     acknowledge: (ids) =>
-      ids.length === 0
-        ? Effect.void
-        : sql`DELETE FROM fork_thread_hidden_notes WHERE note_id IN ${sql.in(ids)}`.pipe(
-            Effect.asVoid,
-            Effect.catch((cause) =>
-              Effect.logWarning("Failed to acknowledge hidden thread notes", { cause }),
-            ),
-          ),
+      markDelivered(ids).pipe(
+        Effect.catch((cause) =>
+          Effect.logWarning("Failed to acknowledge hidden thread notes", { cause }),
+        ),
+      ),
   });
 });
 
