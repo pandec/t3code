@@ -67,7 +67,12 @@ function toLabOwnerView(owner: EnvironmentThreadShell): LabOwnerView {
     working: status === "working" || status === "monitoring",
     needsYou: status === "approval" || status === "input",
     archived: owner.archivedAt !== null,
-    lastActivityAt: owner.updatedAt,
+    // The latest run, not `updatedAt`: pull request syncs and settling bump that without work.
+    lastActivityAt:
+      owner.latestRun?.completedAt ??
+      owner.latestRun?.startedAt ??
+      owner.latestRun?.requestedAt ??
+      null,
   };
 }
 
