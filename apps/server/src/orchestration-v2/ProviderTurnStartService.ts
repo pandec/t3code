@@ -1043,7 +1043,9 @@ export const layer: Layer.Layer<
       const pendingHiddenNotes =
         Option.isNone(hiddenNotes) || userText.trimStart().startsWith("/")
           ? []
-          : yield* hiddenNotes.value.pending(projection.thread.id);
+          : yield* hiddenNotes.value.pending(projection.thread.id, {
+              worktreePath: projection.thread.worktreePath,
+            });
       const hiddenNote = ThreadHiddenNotes.renderThreadHiddenNotes(pendingHiddenNotes);
       const tokenCap = yield* handoffTokenCapConfig.pipe(
         Effect.orElseSucceed(() => DEFAULT_HANDOFF_TOKEN_CAP),

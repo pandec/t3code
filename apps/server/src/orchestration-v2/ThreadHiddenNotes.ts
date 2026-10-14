@@ -26,19 +26,31 @@ const NOTE_RETENTION_DAYS = 14;
 export class ThreadHiddenNotes extends Context.Service<
   ThreadHiddenNotes,
   {
-    /** Queues a note; a pending note of the same kind for the thread is replaced. */
+    /**
+     * Queues a note; a pending note of the same kind for the thread is replaced. With
+     * `worktreePath`, only a turn running in that worktree hears it; a turn elsewhere drops it.
+     */
     readonly put: (input: {
       readonly threadId: ThreadId;
       readonly kind: string;
       readonly text: string;
+      readonly worktreePath?: string;
     }) => Effect.Effect<void, SqlError.SqlError>;
     /** Drops a pending note of `kind`, e.g. a failure the thread no longer needs to hear about. */
     readonly remove: (input: {
       readonly threadId: ThreadId;
       readonly kind: string;
     }) => Effect.Effect<void, SqlError.SqlError>;
-    /** Pending notes, oldest first. A failed read delivers nothing rather than failing the turn. */
-    readonly pending: (threadId: ThreadId) => Effect.Effect<ReadonlyArray<ThreadHiddenNote>>;
+    /**
+     * The notes a message to the thread should carry, oldest first. `turn` is where it runs;
+     * notes bound to another worktree are dropped. Null (a steer, whose worktree is not read)
+     * leaves worktree-bound notes for the next turn. A failed read delivers nothing rather than
+     * failing the message.
+     */
+    readonly pending: (
+      threadId: ThreadId,
+      turn: { readonly worktreePath: string | null } | null,
+    ) => Effect.Effect<ReadonlyArray<ThreadHiddenNote>>;
     /** Marks notes delivered. A note replaced since it was read stays pending. */
     readonly acknowledge: (ids: ReadonlyArray<string>) => Effect.Effect<void>;
   }
@@ -60,11 +72,16 @@ const make = Effect.gen(function* () {
         const cutoff = DateTime.formatIso(DateTime.subtract(now, { days: NOTE_RETENTION_DAYS }));
         yield* sql`DELETE FROM fork_thread_hidden_notes WHERE created_at < ${cutoff}`;
         yield* sql`
-          INSERT INTO fork_thread_hidden_notes (note_id, thread_id, kind, text, created_at)
-          VALUES (${noteId}, ${input.threadId}, ${input.kind}, ${input.text}, ${DateTime.formatIso(now)})
+          INSERT INTO fork_thread_hidden_notes
+            (note_id, thread_id, kind, text, worktree_path, created_at)
+          VALUES (
+            ${noteId}, ${input.threadId}, ${input.kind}, ${input.text},
+            ${input.worktreePath ?? null}, ${DateTime.formatIso(now)}
+          )
           ON CONFLICT (thread_id, kind) DO UPDATE SET
             note_id = excluded.note_id,
             text = excluded.text,
+            worktree_path = excluded.worktree_path,
             created_at = excluded.created_at
         `;
       }),
@@ -73,15 +90,33 @@ const make = Effect.gen(function* () {
         DELETE FROM fork_thread_hidden_notes
         WHERE thread_id = ${input.threadId} AND kind = ${input.kind}
       `.pipe(Effect.asVoid),
-    pending: (threadId) =>
-      sql<{ readonly note_id: string; readonly kind: string; readonly text: string }>`
-        SELECT note_id, kind, text FROM fork_thread_hidden_notes
-        WHERE thread_id = ${threadId}
-        ORDER BY created_at, note_id
-      `.pipe(
-        Effect.map((rows) =>
-          rows.map((row) => ({ id: row.note_id, kind: row.kind, text: row.text })),
-        ),
+    pending: (threadId, turn) =>
+      Effect.gen(function* () {
+        const rows = yield* sql<{
+          readonly note_id: string;
+          readonly kind: string;
+          readonly text: string;
+          readonly worktree_path: string | null;
+        }>`
+          SELECT note_id, kind, text, worktree_path FROM fork_thread_hidden_notes
+          WHERE thread_id = ${threadId}
+          ORDER BY created_at, note_id
+        `;
+        const misplaced =
+          turn === null
+            ? []
+            : rows.filter(
+                (row) => row.worktree_path !== null && row.worktree_path !== turn.worktreePath,
+              );
+        if (misplaced.length > 0) {
+          yield* sql`DELETE FROM fork_thread_hidden_notes WHERE note_id IN ${sql.in(
+            misplaced.map((row) => row.note_id),
+          )}`;
+        }
+        return rows
+          .filter((row) => row.worktree_path === null || row.worktree_path === turn?.worktreePath)
+          .map((row) => ({ id: row.note_id, kind: row.kind, text: row.text }));
+      }).pipe(
         Effect.catch((cause) =>
           Effect.logWarning("Failed to read hidden thread notes", { threadId, cause }).pipe(
             Effect.as([]),

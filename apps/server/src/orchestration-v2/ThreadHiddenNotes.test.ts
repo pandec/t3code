@@ -13,6 +13,7 @@ import {
 import type {
   ProviderAdapterV2,
   ProviderAdapterV2Event,
+  ProviderAdapterV2SteerInput,
   ProviderAdapterV2TurnInput,
 } from "@t3tools/provider-core/server/ProviderAdapter";
 import { checkpointWorkspace } from "@t3tools/provider-testing/replayWorkspace";
@@ -35,16 +36,21 @@ const driver = ProviderDriverKind.make("codex");
 const instanceId = ProviderInstanceId.make("codex");
 const modelSelection = { instanceId, model: "test-model" };
 
-it.effect("a pending hidden note reaches the provider with the next turn, once", () =>
+it.effect("pending hidden notes reach the provider with the next turn or steer, once", () =>
   Effect.scoped(
     Effect.gen(function* () {
       const cwd = yield* checkpointWorkspace("hidden-notes");
       const events = yield* Queue.unbounded<ProviderAdapterV2Event>();
       const started: ProviderAdapterV2TurnInput[] = [];
+      const steered: ProviderAdapterV2SteerInput[] = [];
+      const capabilities = {
+        ...CodexProviderCapabilitiesV2,
+        turns: { ...CodexProviderCapabilitiesV2.turns, supportsActiveSteering: true },
+      };
       const adapter: ProviderAdapterV2["Service"] = {
         instanceId,
         driver,
-        getCapabilities: () => Effect.succeed(CodexProviderCapabilitiesV2),
+        getCapabilities: () => Effect.succeed(capabilities),
         planSelectionTransition: () => Effect.succeed({ type: "apply_on_next_turn" }),
         openSession: (input) =>
           Effect.gen(function* () {
@@ -60,7 +66,7 @@ it.effect("a pending hidden note reaches the provider with the next turn, once",
                 status: "ready",
                 cwd,
                 model: modelSelection.model,
-                capabilities: CodexProviderCapabilitiesV2,
+                capabilities,
                 createdAt: now,
                 updatedAt: now,
                 lastError: null,
@@ -108,7 +114,7 @@ it.effect("a pending hidden note reaches the provider with the next turn, once",
                     },
                   });
                 }),
-              steerTurn: () => Effect.void,
+              steerTurn: (turn) => Effect.sync(() => void steered.push(turn)),
               interruptTurn: () => Effect.void,
               respondToRuntimeRequest: () => Effect.void,
               readThreadSnapshot: () => Effect.die("unused"),
@@ -145,6 +151,13 @@ it.effect("a pending hidden note reaches the provider with the next turn, once",
           creationSource: "web",
         });
         yield* notes.put({ threadId, kind: "test", text: "This thread runs in sp-lab-1." });
+        // Bound to another checkout: a thread launched elsewhere never hears it.
+        yield* notes.put({
+          threadId,
+          kind: "elsewhere",
+          text: "This thread runs in sp-lab-2.",
+          worktreePath: "/somewhere/else",
+        });
 
         const running = yield* watch(
           (event) => event.type === "provider-turn.updated" && event.payload.status === "running",
@@ -174,13 +187,40 @@ it.effect("a pending hidden note reaches the provider with the next turn, once",
             "fix the parser",
           ].join("\n"),
         );
-        // Delivered once, and the transcript keeps only what the user sent.
-        assert.deepEqual(yield* notes.pending(threadId), []);
+        // Delivered once, the misplaced note dropped, and the transcript keeps what the user sent.
+        assert.deepEqual(yield* notes.pending(threadId, { worktreePath: "/somewhere/else" }), []);
         const projection = yield* orchestrator.getThreadProjection(threadId);
         assert.equal(
           projection.messages.find((message) => message.id === "message:first")?.text,
           "fix the parser",
         );
+
+        // A steer is the user's next message too.
+        yield* notes.put({ threadId, kind: "test", text: "`sp-labs up sp-lab-1` failed: boom" });
+        yield* orchestrator.dispatch({
+          type: "message.dispatch",
+          commandId: CommandId.make("command:steer"),
+          threadId,
+          messageId: MessageId.make("message:steer"),
+          text: "also the lexer",
+          attachments: [],
+          dispatchMode: { type: "steer_active", targetRunId: started[0]!.runId },
+          createdBy: "user",
+          creationSource: "web",
+        });
+        yield* worker.drain();
+        assert.equal(
+          steered[0]?.message.text,
+          [
+            "<system-reminder>",
+            "`sp-labs up sp-lab-1` failed: boom",
+            "</system-reminder>",
+            "",
+            "User message:",
+            "also the lexer",
+          ].join("\n"),
+        );
+        assert.deepEqual(yield* notes.pending(threadId, null), []);
       }).pipe(
         Effect.provide(
           Layer.merge(

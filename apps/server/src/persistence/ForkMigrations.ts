@@ -17,6 +17,7 @@ import ForkMigration0004 from "./ForkMigrations/004_ForkProjectRepositoryIdentit
 import ForkMigration0005 from "./ForkMigrations/005_ForkMessageArtifacts.ts";
 import ForkMigration0006 from "./ForkMigrations/006_ForkMessageSpeech.ts";
 import ForkMigration0007 from "./ForkMigrations/007_ForkThreadHiddenNotes.ts";
+import ForkMigration0008 from "./ForkMigrations/008_ForkThreadHiddenNoteWorktree.ts";
 
 export const forkMigrationEntries = [
   [1, "ForkThreadGroupsAndRepositoryIdentity", ForkMigration0001],
@@ -26,6 +27,7 @@ export const forkMigrationEntries = [
   [5, "ForkMessageArtifacts", ForkMigration0005],
   [6, "ForkMessageSpeech", ForkMigration0006],
   [7, "ForkThreadHiddenNotes", ForkMigration0007],
+  [8, "ForkThreadHiddenNoteWorktree", ForkMigration0008],
 ] as const;
 
 export const forkMigrationManifest = forkMigrationEntries.map(([id, name]) => [id, name] as const);

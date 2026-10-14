@@ -18,6 +18,7 @@ import * as Stream from "effect/Stream";
 import { TestClock } from "effect/testing";
 
 import ForkThreadHiddenNotesMigration from "../persistence/ForkMigrations/007_ForkThreadHiddenNotes.ts";
+import ForkThreadHiddenNoteWorktreeMigration from "../persistence/ForkMigrations/008_ForkThreadHiddenNoteWorktree.ts";
 import * as ThreadHiddenNotes from "../orchestration-v2/ThreadHiddenNotes.ts";
 import * as ProjectService from "../project/ProjectService.ts";
 import * as ServerSettings from "../serverSettings.ts";
@@ -77,6 +78,9 @@ const makeFakeCli = Effect.gen(function* () {
     "sp-lab-1": { lease: null, running: false, dirty: false, branch: "Detached HEAD" },
   });
   const up = yield* Ref.make<UpBehaviour>({ type: "ok" });
+  const statusFails = yield* Ref.make(false);
+  /** A reservation someone else takes while `down` runs. */
+  const leaseAfterDown = yield* Ref.make<LabLease | null | undefined>(undefined);
   const setLab = (id: string, update: (lab: FakeLab) => FakeLab) =>
     Ref.update(labs, (all) => ({ ...all, [id]: update(all[id]!) }));
   const run = (input: LabsCli.LabsCliRunInput): Effect.Effect<unknown, LabsError> =>
@@ -85,6 +89,9 @@ const makeFakeCli = Effect.gen(function* () {
       const [command, target = ""] = input.args;
       switch (command) {
         case "status": {
+          if (yield* Ref.get(statusFails)) {
+            return yield* new LabsError({ reason: "cli_failed", detail: "status broke" });
+          }
           const all = yield* Ref.get(labs);
           return {
             checkedAt: "2026-10-14T00:00:00.000Z",
@@ -108,9 +115,15 @@ const makeFakeCli = Effect.gen(function* () {
           yield* setLab(target, (lab) => ({ ...lab, running: true }));
           return { devReady: true, extension: { ok: true } };
         }
-        case "down":
-          yield* setLab(target, (lab) => ({ ...lab, running: false }));
+        case "down": {
+          const next = yield* Ref.get(leaseAfterDown);
+          yield* setLab(target, (lab) => ({
+            ...lab,
+            running: false,
+            lease: next === undefined ? lab.lease : next,
+          }));
           return [];
+        }
         case "release":
           yield* setLab(target, (lab) => ({ ...lab, lease: null, branch: "Detached HEAD" }));
           return { released: target, phase: "ready", handoff: null };
@@ -118,12 +131,23 @@ const makeFakeCli = Effect.gen(function* () {
           return yield* Effect.die(`unexpected sp-labs ${command}`);
       }
     });
-  return { calls, up, setLab, layer: Layer.succeed(LabsCli.LabsCli, LabsCli.LabsCli.of({ run })) };
+  return {
+    calls,
+    up,
+    statusFails,
+    leaseAfterDown,
+    setLab,
+    layer: Layer.succeed(LabsCli.LabsCli, LabsCli.LabsCli.of({ run })),
+  };
 });
 type FakeCli = Effect.Success<typeof makeFakeCli>;
 
 const notesLayer = ThreadHiddenNotes.layer.pipe(
-  Layer.provideMerge(Layer.effectDiscard(ForkThreadHiddenNotesMigration)),
+  Layer.provideMerge(
+    Layer.effectDiscard(
+      ForkThreadHiddenNotesMigration.pipe(Effect.andThen(ForkThreadHiddenNoteWorktreeMigration)),
+    ),
+  ),
   Layer.provide(NodeSqliteClient.layer({ filename: ":memory:" })),
 );
 
@@ -242,7 +266,8 @@ describe("LabsService", () => {
             "--base",
             "master",
           ]);
-          const pending = yield* notes.pending(THREAD);
+          const labTurn = { worktreePath: "/fake/sp-lab-1" };
+          const pending = yield* notes.pending(THREAD, labTurn);
           assert.equal(pending.length, 1);
           assert.include(pending[0]!.text, "This thread runs in sp-lab-1");
           assert.include(pending[0]!.text, prepared.branch);
@@ -257,7 +282,9 @@ describe("LabsService", () => {
           );
           assert.isTrue(settled.t3["sp-lab-1"]!.lastUp!.ok);
           // Success tells the agent nothing more.
-          assert.equal((yield* notes.pending(THREAD)).length, 1);
+          assert.equal((yield* notes.pending(THREAD, labTurn)).length, 1);
+          // The first turn hears it; a retry must not queue it again.
+          yield* notes.acknowledge(pending.map((note) => note.id));
 
           // A retried launch reuses the reservation instead of acquiring again.
           yield* Queue.clear(fake.calls);
@@ -266,6 +293,14 @@ describe("LabsService", () => {
           assert.equal(retried.branch, prepared.branch);
           const later = yield* Queue.clear(fake.calls);
           assert.isFalse(later.some((call) => call.args[0] === "acquire" || call.args[0] === "up"));
+          assert.deepEqual(yield* notes.pending(THREAD, labTurn), []);
+
+          // Never act on cached state: a failed status read fails the mutation.
+          yield* Ref.set(fake.statusFails, true);
+          const failed = yield* labs
+            .prepareThread(input)
+            .pipe(Effect.match({ onFailure: (error) => error, onSuccess: () => null }));
+          assert.equal(failed?.reason, "cli_failed");
         }),
       );
     }),
@@ -291,13 +326,13 @@ describe("LabsService", () => {
               detail: "Convex did not become ready",
             });
             assert.deepEqual(
-              (yield* notes.pending(THREAD)).map((note) => note.text),
+              (yield* notes.pending(THREAD, null)).map((note) => note.text),
               ["`sp-labs up sp-lab-1` failed: Convex did not become ready"],
             );
 
             yield* Ref.set(fake.up, { type: "ok" });
             assert.isTrue((yield* labs.action({ envId: "sp-lab-1", action: "up" })).ok);
-            assert.deepEqual(yield* notes.pending(THREAD), []);
+            assert.deepEqual(yield* notes.pending(THREAD, null), []);
           }),
         );
       }),
@@ -333,6 +368,19 @@ describe("LabsService", () => {
             ["down", "sp-lab-1", "--lease", "lease-1"],
             ["release", "sp-lab-1", "--lease", "lease-1"],
           ]);
+
+          // A reservation taken while the stack stops is never released.
+          yield* fake.setLab("sp-lab-1", (lab) => ({ ...lab, running: true, lease: LEASE }));
+          yield* Ref.set(fake.leaseAfterDown, { ...LEASE, id: "lease-2", threadId: "other" });
+          yield* Queue.clear(fake.calls);
+          const raced = yield* labs.release({ labId: "sp-lab-1", stopFirst: true });
+          assert.deepEqual(
+            raced.status === "blocked" ? raced.blockers.map((blocker) => blocker.kind) : [],
+            ["not_reserved"],
+          );
+          assert.isFalse(
+            (yield* Queue.clear(fake.calls)).some((call) => call.args[0] === "release"),
+          );
         }),
       );
     }),

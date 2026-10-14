@@ -340,11 +340,15 @@ const make = Effect.gen(function* () {
       const directory = yield* requireDirectory;
       yield* refresh;
       const state = yield* Ref.get(core);
+      // Never act on the cached status: ownership may have changed since.
+      if (state.error !== null) {
+        return yield* new LabsError({ reason: "cli_failed", detail: state.error });
+      }
       const environment = state.environments.find((candidate) => candidate.id === envId);
       if (environment === undefined) {
         return yield* new LabsError({
           reason: "not_found",
-          detail: state.error ?? `No SP Labs environment named ${envId}.`,
+          detail: `No SP Labs environment named ${envId}.`,
         });
       }
       if (environment.kind !== "lab") {
@@ -479,6 +483,8 @@ const make = Effect.gen(function* () {
               leaseId: environment.lease.id,
               autoBranch: false,
               stackStopped: isLabStackStopped(environment.runtime),
+              // The first call queued the first-turn note; it may already be delivered.
+              fresh: false,
             };
           }
           // The launch renames a temporary branch from the first message, in the lab worktree.
@@ -508,19 +514,28 @@ const make = Effect.gen(function* () {
             leaseId: acquired.lease.id,
             autoBranch: input.branch === null,
             stackStopped: true,
+            fresh: true,
           };
         }),
       );
-      yield* hiddenNotes
-        .put({ threadId: input.threadId, kind: LAB_NOTE_KIND, text: labThreadNote(prepared) })
-        .pipe(
-          Effect.catch((cause) =>
-            Effect.logWarning("Failed to queue the lab thread's first-turn note", {
-              labId: input.labId,
-              cause,
-            }),
-          ),
-        );
+      // Bound to the lab worktree: a thread launched elsewhere after all never hears it.
+      yield* (
+        prepared.fresh
+          ? hiddenNotes.put({
+              threadId: input.threadId,
+              kind: LAB_NOTE_KIND,
+              text: labThreadNote(prepared),
+              worktreePath: prepared.worktreePath,
+            })
+          : Effect.void
+      ).pipe(
+        Effect.catch((cause) =>
+          Effect.logWarning("Failed to queue the lab thread's first-turn note", {
+            labId: input.labId,
+            cause,
+          }),
+        ),
+      );
       // The agent starts right away; `up` runs beside it and reports through the snapshot.
       const operation = (yield* Ref.get(t3State))[input.labId]?.operation ?? null;
       if (prepared.stackStopped && operation !== "starting") {
@@ -541,7 +556,9 @@ const make = Effect.gen(function* () {
       Effect.gen(function* () {
         const { directory, environment } = yield* findLab(input.labId);
         const blockers = labReleaseBlockers(environment, input.stopFirst);
-        if (blockers.length > 0) {
+        // Every step acts on this reservation (a missing one is a blocker), never a later one.
+        const lease = environment.lease;
+        if (blockers.length > 0 || lease === null) {
           return { status: "blocked" as const, labId: input.labId, blockers };
         }
         let current = environment;
@@ -549,10 +566,22 @@ const make = Effect.gen(function* () {
           yield* setOperation(input.labId, "stopping");
           yield* cli.run({
             directory,
-            args: ["down", input.labId, ...leaseArgs(current)],
+            args: ["down", input.labId, "--lease", lease.id],
             timeout: TIMEOUTS.down,
           });
           current = (yield* findLab(input.labId)).environment;
+          if (current.lease?.id !== lease.id) {
+            return {
+              status: "blocked" as const,
+              labId: input.labId,
+              blockers: [
+                {
+                  kind: "not_reserved" as const,
+                  detail: "The reservation changed while the stack stopped; nothing was released.",
+                },
+              ],
+            };
+          }
           if (!isLabStackStopped(current.runtime)) {
             return {
               status: "blocked" as const,
@@ -571,11 +600,11 @@ const make = Effect.gen(function* () {
         const released = yield* cli
           .run({
             directory,
-            args: ["release", input.labId, ...leaseArgs(current)],
+            args: ["release", input.labId, "--lease", lease.id],
             timeout: TIMEOUTS.release,
           })
           .pipe(Effect.flatMap(decodeOutput(ReleaseOutput, "release")));
-        const owner = current.lease?.threadId ?? null;
+        const owner = lease.threadId;
         if (owner !== null) {
           const threadId = ThreadId.make(owner);
           yield* Effect.forEach([LAB_NOTE_KIND, UP_FAILED_NOTE_KIND], (kind) =>
