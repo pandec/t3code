@@ -4,10 +4,10 @@ import { GitBranchIcon, ScrollTextIcon } from "lucide-react";
 import { useRightPanelStore } from "../../rightPanelStore";
 import { useLabsInventory, useLabsSnapshot } from "../../state/labs";
 import { Button } from "../ui/button";
-import { Popover, PopoverPopup, PopoverTrigger } from "../ui/popover";
+import { Popover, PopoverClose, PopoverPopup, PopoverTrigger } from "../ui/popover";
 import { LabReservationActions, LabStackActions, useLabCommands } from "./LabActions";
 import { LabHealthDot } from "./LabParts";
-import { findLabForWorktree, resolveLabStackHealth } from "./labs.logic";
+import { findLabForThread, resolveLabStackHealth } from "./labs.logic";
 
 /**
  * Fork (SP Labs): the header chip of a lab thread. The cheap inventory decides whether the thread
@@ -20,10 +20,10 @@ export function LabThreadChip({
   readonly threadRef: ScopedThreadRef;
   readonly worktreePath: string | null;
 }) {
-  const inventory = useLabsInventory(worktreePath ? threadRef.environmentId : null);
+  const inventory = useLabsInventory(threadRef.environmentId);
   const lab =
     inventory?.configured === true
-      ? findLabForWorktree(inventory.environments, worktreePath)
+      ? findLabForThread(inventory.environments, { threadId: threadRef.threadId, worktreePath })
       : null;
   if (!lab) return null;
   return <LiveLabChip threadRef={threadRef} labId={lab.id} name={lab.name} />;
@@ -87,15 +87,13 @@ function LiveLabChip({
               />
             </>
           ) : null}
-          <Button
-            size="xs"
-            variant="ghost-muted"
-            className="self-start"
+          <PopoverClose
+            render={<Button size="xs" variant="ghost-muted" className="self-start" />}
             onClick={() => useRightPanelStore.getState().open(threadRef, "labs")}
           >
             <ScrollTextIcon />
             Logs and history in the Labs panel
-          </Button>
+          </PopoverClose>
         </div>
       </PopoverPopup>
     </Popover>

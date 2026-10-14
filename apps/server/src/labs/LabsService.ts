@@ -39,6 +39,7 @@ import {
 import { randomUuidV4 } from "@t3tools/provider-core/server/randomUuid";
 import { buildTemporaryWorktreeBranchName } from "@t3tools/shared/git";
 import * as KeyedLock from "@t3tools/shared/KeyedLock";
+import * as Clock from "effect/Clock";
 import * as Context from "effect/Context";
 import * as DateTime from "effect/DateTime";
 import * as Duration from "effect/Duration";
@@ -129,6 +130,9 @@ const INITIAL_CORE: CoreState = {
   error: null,
   loaded: false,
 };
+
+/** How old the inventory's status may be before `getInventory` re-reads it. */
+const INVENTORY_MAX_AGE_MS = 30_000;
 
 const IDLE_T3_STATE: LabT3State = { operation: null, lastUp: null };
 
@@ -616,18 +620,24 @@ const make = Effect.gen(function* () {
     });
 
   const getInventory: LabsService["Service"]["getInventory"] = Effect.gen(function* () {
-    const state = yield* ensureLoaded;
+    // Agents acquire and release labs through the CLI too; re-read a status older than this.
+    const loaded = yield* ensureLoaded;
+    const now = yield* Clock.currentTimeMillis;
+    const age = loaded.checkedAt === null ? Infinity : now - Date.parse(loaded.checkedAt);
+    const state =
+      age > INVENTORY_MAX_AGE_MS ? yield* refresh.pipe(Effect.andThen(Ref.get(core))) : loaded;
     return {
       configured: state.directory !== null,
       spLabsDirectory: state.directory,
       projectId: state.projectId,
       sourceCheckout: state.sourceCheckout,
       error: state.error,
-      environments: state.environments.map(({ id, name, kind, worktree }) => ({
+      environments: state.environments.map(({ id, name, kind, worktree, lease }) => ({
         id,
         name,
         kind,
         worktree,
+        ownerThreadId: lease?.threadId ?? null,
       })),
     };
   });

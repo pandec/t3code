@@ -3,7 +3,7 @@ import { describe, expect, it } from "vite-plus/test";
 
 import { DEFAULT_DRAFT_LAB_INTENT, normalizeDraftLabIntent } from "../../composerDraftStore";
 import {
-  findLabForWorktree,
+  findLabForThread,
   releaseCanStopFirst,
   resolveLabAvailability,
   resolveLabBranchRequest,
@@ -152,15 +152,24 @@ describe("lab classification", () => {
     );
   });
 
-  it("matches lab threads by exact worktree path only", () => {
+  it("matches lab threads by worktree path, then by lease owner", () => {
     const environments = [
-      lab("sp-lab-1"),
-      { ...lab("staging"), kind: "staging" as const, worktree: "/repos/salespros" },
+      { ...lab("sp-lab-1"), ownerThreadId: null },
+      { ...lab("sp-lab-2"), worktree: "/repos/sp-lab-2", ownerThreadId: "mcp:t2" },
+      {
+        ...lab("staging"),
+        kind: "staging" as const,
+        worktree: "/repos/salespros",
+        ownerThreadId: "t9",
+      },
     ];
-    expect(findLabForWorktree(environments, "/repos/sp-lab-1/")?.id).toBe("sp-lab-1");
-    expect(findLabForWorktree(environments, "/repos/sp-lab-10")).toBe(null);
-    expect(findLabForWorktree(environments, "/repos/salespros")).toBe(null);
-    expect(findLabForWorktree(environments, null)).toBe(null);
+    const find = (threadId: string, worktreePath: string | null) =>
+      findLabForThread(environments, { threadId, worktreePath })?.id ?? null;
+    expect(find("t1", "/repos/sp-lab-1/")).toBe("sp-lab-1");
+    expect(find("t1", "/repos/sp-lab-10")).toBe(null);
+    expect(find("mcp:t2", "/t3/worktrees/salespros/feature")).toBe("sp-lab-2");
+    expect(find("t9", "/repos/salespros")).toBe(null);
+    expect(find("t1", null)).toBe(null);
   });
 
   it("defaults to Lab mode only in the labs project", () => {

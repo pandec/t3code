@@ -268,7 +268,8 @@ function LabRow({
             environment={environment}
           />
         ) : null}
-        <LabStackActions environment={environment} t3={t3} commands={commands} />
+        {/* The CLI manages only lab stacks; Main/Staging and Preview are read-only here. */}
+        {isLab ? <LabStackActions environment={environment} t3={t3} commands={commands} /> : null}
         <LabReservationActions
           environmentId={environmentId}
           environment={environment}

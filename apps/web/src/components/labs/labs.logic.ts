@@ -23,18 +23,24 @@ export function resolveLabAvailability(environment: LabEnvironment): LabAvailabi
 
 const trimTrailingSlashes = (path: string) => path.replace(/[/\\]+$/, "");
 
-/** The lab whose worktree is `worktreePath`; a thread is a lab thread exactly when one matches. */
-export function findLabForWorktree<T extends Pick<LabInventoryEntry, "kind" | "worktree">>(
+/**
+ * The lab a thread works in: the one whose worktree is the thread's, or the one its lease names
+ * (an agent that acquired a lab itself keeps its own T3 worktree).
+ */
+export function findLabForThread<
+  T extends Pick<LabInventoryEntry, "kind" | "worktree" | "ownerThreadId">,
+>(
   environments: ReadonlyArray<T>,
-  worktreePath: string | null | undefined,
+  thread: { readonly threadId: string; readonly worktreePath: string | null | undefined },
 ): T | null {
-  if (!worktreePath) return null;
-  const target = trimTrailingSlashes(worktreePath);
+  const target = thread.worktreePath ? trimTrailingSlashes(thread.worktreePath) : null;
+  const labs = environments.filter((environment) => environment.kind === "lab");
   return (
-    environments.find(
-      (environment) =>
-        environment.kind === "lab" && trimTrailingSlashes(environment.worktree) === target,
-    ) ?? null
+    labs.find(
+      (environment) => target !== null && trimTrailingSlashes(environment.worktree) === target,
+    ) ??
+    labs.find((environment) => environment.ownerThreadId === thread.threadId) ??
+    null
   );
 }
 

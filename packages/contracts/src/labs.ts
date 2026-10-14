@@ -168,6 +168,8 @@ export const LabInventoryEntry = Schema.Struct({
   name: Schema.String,
   kind: LabEnvironmentKind,
   worktree: Schema.String,
+  /** The current lease's thread; a thread that acquired the lab itself owns it from any worktree. */
+  ownerThreadId: Schema.NullOr(Schema.String),
 });
 export type LabInventoryEntry = typeof LabInventoryEntry.Type;
 

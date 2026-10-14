@@ -22,7 +22,7 @@ import { useEnvironment, usePrimaryEnvironmentId } from "../state/environments";
 import { EnvironmentMachineIcon } from "./EnvironmentMachineIcon";
 import { useProject } from "../state/entities";
 import { useLabsInventory } from "../state/labs";
-import { findLabForWorktree } from "./labs/labs.logic";
+import { findLabForThread } from "./labs/labs.logic";
 import {
   resolveThreadCurrentPullRequestLink,
   resolveThreadPullRequestChains,
@@ -874,7 +874,7 @@ function LabAwareWorktreeIndicator({
   const inventory = useLabsInventory(environmentId);
   const lab =
     inventory?.configured === true
-      ? findLabForWorktree(inventory.environments, worktreePath)
+      ? findLabForThread(inventory.environments, { threadId: thread.id, worktreePath })
       : null;
   return (
     <WorktreeIndicatorIcon thread={thread} worktreePath={worktreePath} labName={lab?.id ?? null} />
