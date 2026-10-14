@@ -1,8 +1,7 @@
 import { createLabsEnvironmentAtoms } from "@t3tools/client-runtime/state/labs";
 import type { EnvironmentId, LabsInventory, LabsSnapshot, ProjectId } from "@t3tools/contracts";
 import * as Option from "effect/Option";
-import { useAtomValue } from "@effect/atom-react";
-import { AsyncResult, Atom } from "effect/reactivity";
+import { AsyncResult } from "effect/reactivity";
 
 import { connectionAtomRuntime } from "../connection/runtime";
 import { appAtomRegistry } from "../rpc/atomRegistry";
@@ -26,22 +25,16 @@ export function useLabsSnapshot(
   );
 }
 
-const EMPTY_INVENTORY_ATOM = Atom.make(AsyncResult.initial<LabsInventory, never>()).pipe(
-  Atom.withLabel("web-labs:inventory:empty"),
-);
-
 /**
  * The cheap, non-polling lab worktree list; safe for sidebar rows. Every reader of one
- * environment shares one atom: the fetch and its stale revalidation run when that atom is
- * first mounted (or refreshed), never per reader, so a row only adds a subscription.
+ * environment shares one query atom, so a row adds a subscription, not a fetch.
  */
 export function useLabsInventory(environmentId: EnvironmentId | null): LabsInventory | null {
-  const result = useAtomValue(
+  return useEnvironmentQuery(
     environmentId === null
-      ? EMPTY_INVENTORY_ATOM
+      ? null
       : labsEnvironment.inventory({ environmentId, input: EMPTY_INPUT }),
-  );
-  return Option.getOrNull(AsyncResult.value(result));
+  ).data;
 }
 
 /** Whether `projectId` is the environment's configured labs project. */
