@@ -23,6 +23,7 @@ import * as Fiber from "effect/Fiber";
 import * as Layer from "effect/Layer";
 import * as Queue from "effect/Queue";
 import * as Stream from "effect/Stream";
+import * as TestClock from "effect/testing/TestClock";
 
 import * as SqlitePersistence from "../persistence/Sqlite.ts";
 import { CodexProviderCapabilitiesV2 } from "./Adapters/CodexAdapterV2.ts";
@@ -234,5 +235,21 @@ it.effect("pending hidden notes reach the provider with the next turn or steer, 
         ),
       );
     }),
+  ),
+);
+
+it.effect("a delivered once-only note outlives note retention, so a late retry stays quiet", () =>
+  Effect.gen(function* () {
+    const notes = yield* ThreadHiddenNotes.ThreadHiddenNotes;
+    const threadId = ThreadId.make("thread:retention");
+    const once = { threadId, kind: "sp-labs:lab:lease-1", text: "In sp-lab-1.", once: true };
+    yield* notes.put(once);
+    yield* notes.acknowledge((yield* notes.pending(threadId, null)).map((note) => note.id));
+    // Past the 14-day retention of undelivered notes; the lease still holds the lab.
+    yield* TestClock.adjust("30 days");
+    yield* notes.put(once);
+    assert.deepEqual(yield* notes.pending(threadId, null), []);
+  }).pipe(
+    Effect.provide(ThreadHiddenNotes.layer.pipe(Layer.provideMerge(SqlitePersistence.layerMemory))),
   ),
 );

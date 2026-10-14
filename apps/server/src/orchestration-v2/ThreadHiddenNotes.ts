@@ -22,6 +22,7 @@ interface ThreadHiddenNote {
 
 /** Notes nobody consumed (a launch that never started a turn) expire after this. */
 const NOTE_RETENTION_DAYS = 14;
+const DELIVERED_MARKER_RETENTION_DAYS = 365;
 
 export class ThreadHiddenNotes extends Context.Service<
   ThreadHiddenNotes,
@@ -82,8 +83,17 @@ const make = Effect.gen(function* () {
       Effect.gen(function* () {
         const now = yield* DateTime.now;
         const noteId = yield* randomUuidV4;
+        // Undelivered notes go stale; delivered markers back once-only notes for as long as their
+        // owner (e.g. a lab lease) lives, so they are kept far longer and cleared by that owner.
         const cutoff = DateTime.formatIso(DateTime.subtract(now, { days: NOTE_RETENTION_DAYS }));
-        yield* sql`DELETE FROM fork_thread_hidden_notes WHERE created_at < ${cutoff}`;
+        const markerCutoff = DateTime.formatIso(
+          DateTime.subtract(now, { days: DELIVERED_MARKER_RETENTION_DAYS }),
+        );
+        yield* sql`
+          DELETE FROM fork_thread_hidden_notes
+          WHERE (delivered_at IS NULL AND created_at < ${cutoff})
+            OR (delivered_at IS NOT NULL AND created_at < ${markerCutoff})
+        `;
         const createdAt = DateTime.formatIso(now);
         const worktreePath = input.worktreePath ?? null;
         yield* input.once === true
