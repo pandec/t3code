@@ -44,14 +44,16 @@ export function findLabForThread<
   );
 }
 
-/** "Default to Lab mode" applies only to new drafts in the resolved labs project. */
+/** "Default to Lab mode" applies only to new drafts in the resolved labs project, while SP Labs is on. */
 export function shouldDefaultToLabMode(input: {
   readonly defaultToLabMode: boolean;
+  readonly configured: boolean;
   readonly labsProjectId: string | null;
   readonly projectId: string | null;
 }): boolean {
   return (
     input.defaultToLabMode &&
+    input.configured &&
     input.labsProjectId !== null &&
     input.labsProjectId === input.projectId
   );

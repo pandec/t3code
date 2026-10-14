@@ -178,11 +178,12 @@ describe("lab classification", () => {
     expect(find("t1", null)).toBe(null);
   });
 
-  it("defaults to Lab mode only in the labs project", () => {
-    const base = { defaultToLabMode: true, labsProjectId: "p1" };
+  it("defaults to Lab mode only in the labs project, while SP Labs is on", () => {
+    const base = { defaultToLabMode: true, configured: true, labsProjectId: "p1" };
     expect(shouldDefaultToLabMode({ ...base, projectId: "p1" })).toBe(true);
     expect(shouldDefaultToLabMode({ ...base, projectId: "p2" })).toBe(false);
     expect(shouldDefaultToLabMode({ ...base, labsProjectId: null, projectId: null })).toBe(false);
+    expect(shouldDefaultToLabMode({ ...base, configured: false, projectId: "p1" })).toBe(false);
     expect(shouldDefaultToLabMode({ ...base, defaultToLabMode: false, projectId: "p1" })).toBe(
       false,
     );

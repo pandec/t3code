@@ -7408,10 +7408,15 @@ export default function ChatView(props: ChatViewProps) {
   // after that stops being true reads as the project checkout once the inventory says so.
   const labModeAvailable =
     isLocalDraftThread && labsProjectStatus === true && multipleModelSelections === null;
+  // Several models each start in their own new worktree, as the toolbar shows.
   const envMode: DraftThreadEnvMode =
-    requestedEnvMode === "lab" && (labsProjectStatus === false || !isLocalDraftThread)
-      ? "local"
-      : requestedEnvMode;
+    requestedEnvMode !== "lab"
+      ? requestedEnvMode
+      : multipleModelSelections !== null
+        ? "worktree"
+        : labsProjectStatus === false || !isLocalDraftThread
+          ? "local"
+          : "lab";
   const activeThreadBranch =
     canOverrideServerThreadEnvMode && pendingServerThreadBranch !== undefined
       ? pendingServerThreadBranch
@@ -10001,7 +10006,12 @@ export default function ChatView(props: ChatViewProps) {
       readonly branch: string | null;
       readonly baseRef: string | null;
     } | null = null;
-    if (isFirstMessage && sendEnvMode === "lab" && !activeThread.worktreePath) {
+    if (
+      isFirstMessage &&
+      sendEnvMode === "lab" &&
+      multipleModelSelections === null &&
+      !activeThread.worktreePath
+    ) {
       const labIntent = draftThread?.lab ?? DEFAULT_DRAFT_LAB_INTENT;
       const branchRequest = resolveLabBranchRequest(labIntent);
       const target = resolveLabSendTarget(

@@ -256,16 +256,19 @@ export function useNewThreadHandler() {
       // skipped entirely when a higher-priority source decides, and its
       // query atom caches per project after the first call.
       const resolveDefaultEnvMode = async (): Promise<DraftThreadEnvMode> => {
-        // Fork (SP Labs): "Default to Lab mode" wins, but only in the labs project.
-        if (targetServerSettings.labs.defaultToLabMode && project !== undefined) {
-          const labsProjectId =
-            targetServerSettings.labs.projectId ??
-            (await loadLabsInventory(projectRef.environmentId))?.projectId ??
-            null;
+        // Fork (SP Labs): "Default to Lab mode" wins, but only in the labs project and only while
+        // SP Labs resolves; the inventory carries both the resolved state and project.
+        if (
+          targetServerSettings.labs.defaultToLabMode &&
+          targetServerSettings.labs.spLabsDirectory !== "" &&
+          project !== undefined
+        ) {
+          const inventory = await loadLabsInventory(projectRef.environmentId);
           if (
             shouldDefaultToLabMode({
               defaultToLabMode: true,
-              labsProjectId,
+              configured: inventory?.configured === true,
+              labsProjectId: inventory?.projectId ?? null,
               projectId: project.id,
             })
           ) {
