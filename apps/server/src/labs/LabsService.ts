@@ -211,6 +211,8 @@ const make = Effect.gen(function* () {
   const defaultDirectory = path.join(NodeOS.homedir(), DEFAULT_SP_LABS_RELATIVE_DIRECTORY);
   const core = yield* Ref.make<CoreState>(INITIAL_CORE);
   const t3State = yield* Ref.make<Readonly<Record<string, LabT3State>>>({});
+  /** When `getInventory` last re-read status, so a failing CLI is not re-run on every call. */
+  const inventoryAttemptAt = yield* Ref.make(0);
   const snapshots = yield* SubscriptionRef.make<LabsSnapshot | null>(null);
   const refreshLock = yield* Semaphore.make(1);
   const environmentLocks = yield* KeyedLock.make<string>();
@@ -650,9 +652,15 @@ const make = Effect.gen(function* () {
     // Agents acquire and release labs through the CLI too; re-read a status older than this.
     const loaded = yield* ensureLoaded;
     const now = yield* Clock.currentTimeMillis;
-    const age = loaded.checkedAt === null ? Infinity : now - Date.parse(loaded.checkedAt);
+    const checkedAt = loaded.checkedAt === null ? 0 : Date.parse(loaded.checkedAt);
+    const age = now - Math.max(checkedAt, yield* Ref.get(inventoryAttemptAt));
     const state =
-      age > INVENTORY_MAX_AGE_MS ? yield* refresh.pipe(Effect.andThen(Ref.get(core))) : loaded;
+      age > INVENTORY_MAX_AGE_MS
+        ? yield* Ref.set(inventoryAttemptAt, now).pipe(
+            Effect.andThen(refresh),
+            Effect.andThen(Ref.get(core)),
+          )
+        : loaded;
     return {
       configured: state.directory !== null,
       spLabsDirectory: state.directory,

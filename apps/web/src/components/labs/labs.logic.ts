@@ -162,8 +162,8 @@ export type LabSendTarget =
   | { readonly ok: false; readonly error: string };
 
 /**
- * The lab a first send reserves: the draft's pick, else the first free lab. A pick that has
- * since been reserved by another thread or held fails here rather than in the CLI.
+ * The lab a first send reserves: the draft's pick, else the first free lab. A pick that is no
+ * longer free fails here rather than late in the CLI.
  */
 export function resolveLabSendTarget(
   intent: DraftLabIntent,
@@ -174,15 +174,21 @@ export function resolveLabSendTarget(
   // A retried send finds its lab already reserved for this thread.
   const ownLab = labs.find((environment) => environment.lease?.threadId === threadId);
   if (ownLab) return { ok: true, labId: ownLab.id };
+  if (snapshot === null) return { ok: false, error: "Labs are still loading. Try again." };
   if (intent.labId !== null) {
     const picked = labs.find((environment) => environment.id === intent.labId);
     if (picked?.lease) {
       return { ok: false, error: `${picked.name} is reserved. Pick a free lab.` };
     }
     if (picked?.hold) return { ok: false, error: `${picked.name} is held. Pick a free lab.` };
+    if (!picked || resolveLabAvailability(picked) !== "free") {
+      return {
+        ok: false,
+        error: `${picked?.name ?? intent.labId} is not available. Pick a free lab.`,
+      };
+    }
     return { ok: true, labId: intent.labId };
   }
-  if (snapshot === null) return { ok: false, error: "Labs are still loading. Try again." };
   const free = labs.find((environment) => resolveLabAvailability(environment) === "free");
   return free
     ? { ok: true, labId: free.id }

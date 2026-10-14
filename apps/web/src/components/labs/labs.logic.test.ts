@@ -127,6 +127,17 @@ describe("lab send target", () => {
     const pick = (labId: string) => ({ ...DEFAULT_DRAFT_LAB_INTENT, labId });
     expect(resolveLabSendTarget(pick("sp-lab-1"), snapshot, "thread-1").ok).toBe(false);
     expect(resolveLabSendTarget(pick("sp-lab-2"), snapshot, "thread-1").ok).toBe(false);
+    // Quarantined, unknown, or not loaded yet: fail before the send, not in the CLI.
+    const quarantined = {
+      environments: [lab("sp-lab-4", { phase: "quarantined", available: false })],
+    };
+    expect(resolveLabSendTarget(pick("sp-lab-4"), quarantined, "thread-1").ok).toBe(false);
+    expect(resolveLabSendTarget(pick("sp-lab-9"), snapshot, "thread-1").ok).toBe(false);
+    expect(resolveLabSendTarget(pick("sp-lab-3"), null, "thread-1").ok).toBe(false);
+    expect(resolveLabSendTarget(pick("sp-lab-3"), snapshot, "thread-1")).toEqual({
+      ok: true,
+      labId: "sp-lab-3",
+    });
     // A retried send finds the lab already reserved for this thread, whatever the pick.
     expect(resolveLabSendTarget(DEFAULT_DRAFT_LAB_INTENT, snapshot, "other")).toEqual({
       ok: true,

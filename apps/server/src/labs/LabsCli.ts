@@ -88,6 +88,10 @@ const make = Effect.gen(function* () {
           timeoutBehavior: "timedOutResult",
         })
         .pipe(
+          // The cause (bun missing from PATH, a bad directory) only reaches the server log.
+          Effect.tapError((cause) =>
+            Effect.logWarning("Could not spawn sp-labs", { subcommand, cause }),
+          ),
           Effect.mapError(
             () =>
               new LabsError({
