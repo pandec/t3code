@@ -71,7 +71,8 @@ export type EnvironmentSubscriptionRpcTag =
   | typeof WS_METHODS.subscribeProjectClones
   | typeof WS_METHODS.terminalAttach
   | typeof WS_METHODS.terminalObserve
-  | typeof WS_METHODS.voiceSubscribeMessageSpeech;
+  | typeof WS_METHODS.voiceSubscribeMessageSpeech
+  | typeof WS_METHODS.labsSubscribe;
 
 export type EnvironmentStreamCommandRpcTag =
   | typeof WS_METHODS.chatGptHandoffSubscribe

@@ -235,6 +235,10 @@
       "types": "./src/state/linear.ts",
       "default": "./src/state/linear.ts"
     },
+    "./state/labs": {
+      "types": "./src/state/labs.ts",
+      "default": "./src/state/labs.ts"
+    },
     "./state/project-grouping": {
       "types": "./src/state/projectGrouping.ts",
       "default": "./src/state/projectGrouping.ts"
