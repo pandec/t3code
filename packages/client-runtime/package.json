@@ -11,6 +11,10 @@
       "types": "./src/customModelIcons.ts",
       "default": "./src/customModelIcons.ts"
     },
+    "./image-attachment-size": {
+      "types": "./src/imageAttachmentSize.ts",
+      "default": "./src/imageAttachmentSize.ts"
+    },
     "./handoff": {
       "types": "./src/handoff.ts",
       "default": "./src/handoff.ts"

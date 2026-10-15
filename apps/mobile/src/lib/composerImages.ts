@@ -25,6 +25,7 @@ import {
 } from "./composerAttachmentFiles";
 import { imageMimeType } from "@t3tools/shared/image";
 import { videoMimeType } from "@t3tools/shared/video";
+import { fitComposerImage, renderPhoto } from "./composerImageFit";
 import { beginForegroundHandoff } from "./foreground-handoff";
 import { uuidv4 } from "./uuid";
 import { writeFileAtomically } from "./atomic-file";
@@ -323,46 +324,6 @@ export async function pickComposerFiles(input: {
   return { files: attachments, error };
 }
 
-/**
- * Longest edge kept when a photo has to be re-encoded. Matches the web composer's
- * MAX_DIMENSION so every client hands providers the same resolution.
- */
-const PHOTO_MAX_EDGE = 2048;
-const PHOTO_JPEG_QUALITY = 0.85;
-
-/**
- * Renders a photo-library pick to a provider-readable JPEG. Decode, downscale, and encode run
- * natively; only the bounded result crosses the bridge. Camera photos are 12-48 MP HEIC files,
- * so a full-size conversion is both slow to transfer and far more than a model can use.
- */
-async function renderPhotoAsJpeg(uri: string): Promise<{ base64: string; uri: string }> {
-  const { ImageManipulator, SaveFormat } = await import("expo-image-manipulator");
-  let image = await ImageManipulator.manipulate(uri).renderAsync();
-  try {
-    const longestEdge = Math.max(image.width, image.height);
-    if (longestEdge > PHOTO_MAX_EDGE) {
-      const resized = await ImageManipulator.manipulate(image)
-        .resize(
-          image.width >= image.height ? { width: PHOTO_MAX_EDGE } : { height: PHOTO_MAX_EDGE },
-        )
-        .renderAsync();
-      image.release();
-      image = resized;
-    }
-    const saved = await image.saveAsync({
-      format: SaveFormat.JPEG,
-      compress: PHOTO_JPEG_QUALITY,
-      base64: true,
-    });
-    if (!saved.base64) {
-      throw new Error("The rendered photo has no bytes.");
-    }
-    return { base64: saved.base64, uri: saved.uri };
-  } finally {
-    image.release();
-  }
-}
-
 async function loadImagePicker() {
   try {
     return await import("expo-image-picker");
@@ -382,20 +343,19 @@ async function loadClipboard() {
   }
 }
 
-const REENCODE_JPEG_QUALITY = 0.9;
-
 /**
- * Re-encode a pasted image as full-resolution JPEG. Pastes are almost always
+ * Re-encode a pasted image as JPEG with its long edge capped at
+ * `IMAGE_ATTACHMENT_MAX_EDGE` (`renderPhoto`). Pastes are almost always
  * multi-MB PNG screenshots, and on servers without attachment uploads the
  * whole message travels in a single WebSocket RPC frame, so payload size
- * directly gates deliverability; JPEG at 0.9 is visually lossless for
- * screenshots while several times smaller. Library picks don't come through
- * here: the picker flow keeps supported originals and relies on iOS's native
- * HEIC-to-JPEG conversion instead. Sources that are already JPEG are left
- * alone (nothing to gain, avoids generation loss), and GIFs are skipped
- * because re-encoding would drop animation. Returns null when re-encoding is
- * skipped or unavailable (e.g. a binary that predates the
- * expo-image-manipulator dependency) — callers keep the original bytes.
+ * directly gates deliverability; JPEG is visually lossless for screenshots
+ * while several times smaller. Library picks don't come through here: the
+ * picker flow keeps supported originals and relies on iOS's native
+ * HEIC-to-JPEG conversion instead. Sources that are already JPEG are left to
+ * `fitComposerImage` (avoids generation loss), and GIFs are skipped because
+ * re-encoding would drop animation. Returns null when re-encoding is skipped
+ * or unavailable (e.g. a binary that predates the expo-image-manipulator
+ * dependency) — callers keep the original bytes.
  */
 async function reencodeImageAsJpeg(input: {
   readonly uri: string;
@@ -405,21 +365,8 @@ async function reencodeImageAsJpeg(input: {
     return null;
   }
   try {
-    const { ImageManipulator, SaveFormat } = await import("expo-image-manipulator");
-    const image = await ImageManipulator.manipulate(input.uri).renderAsync();
-    try {
-      const result = await image.saveAsync({
-        base64: true,
-        compress: REENCODE_JPEG_QUALITY,
-        format: SaveFormat.JPEG,
-      });
-      if (!result.base64) {
-        return null;
-      }
-      return { base64: result.base64, sizeBytes: estimateBase64ByteSize(result.base64) };
-    } finally {
-      image.release();
-    }
+    const rendered = await renderPhoto(input.uri, "jpeg");
+    return { base64: rendered.base64, sizeBytes: estimateBase64ByteSize(rendered.base64) };
   } catch {
     return null;
   }
@@ -586,14 +533,20 @@ async function pickComposerMediaOnce(input: {
     try {
       if (originalMimeType !== null) {
         const { File } = await import("expo-file-system");
+        const base64 = await new File(asset.uri).base64();
+        const fitted = await fitComposerImage({
+          uri: asset.uri,
+          mimeType: originalMimeType,
+          base64,
+        });
         image = {
-          base64: await new File(asset.uri).base64(),
+          base64: fitted?.base64 ?? base64,
           mimeType: originalMimeType,
           name,
-          previewUri: asset.uri,
+          previewUri: fitted?.uri ?? asset.uri,
         };
       } else {
-        const rendered = await renderPhotoAsJpeg(asset.uri);
+        const rendered = await renderPhoto(asset.uri);
         image = {
           base64: rendered.base64,
           mimeType: "image/jpeg",
@@ -768,14 +721,20 @@ export async function convertPastedImagesToAttachments(input: {
       }
       const originalMimeType = mimeTypeFromUri(uri);
       const reencoded = await reencodeImageAsJpeg({ uri, mimeType: originalMimeType });
-      const base64 = reencoded ? reencoded.base64 : await new File(uri).base64();
+      const originalBase64 = reencoded ? null : await new File(uri).base64();
+      // A JPEG skips the re-encode; an oversized one is still scaled down.
+      const fitted =
+        originalBase64 === null
+          ? null
+          : await fitComposerImage({ uri, mimeType: originalMimeType, base64: originalBase64 });
+      const base64 = reencoded?.base64 ?? fitted?.base64 ?? originalBase64 ?? "";
       const mimeType = reencoded ? "image/jpeg" : originalMimeType;
       // Same attach-time invariant as the picker: a paste whose re-encode
       // failed must not enter the draft as an unsendable type.
       if (!isProviderSendTurnSupportedImageMimeType(mimeType)) {
         continue;
       }
-      const sizeBytes = reencoded ? reencoded.sizeBytes : estimateBase64ByteSize(base64);
+      const sizeBytes = estimateBase64ByteSize(base64);
       if (sizeBytes <= 0 || sizeBytes > PROVIDER_SEND_TURN_MAX_IMAGE_BYTES) {
         continue;
       }
@@ -786,7 +745,7 @@ export async function convertPastedImagesToAttachments(input: {
         mimeType,
         sizeBytes,
         dataUrl: `data:${mimeType};base64,${base64}`,
-        previewUri: ownedTemporaryFile ? `data:${mimeType};base64,${base64}` : uri,
+        previewUri: ownedTemporaryFile ? `data:${mimeType};base64,${base64}` : (fitted?.uri ?? uri),
       });
     } catch (error) {
       console.warn("Failed to read pasted image", uri, error);

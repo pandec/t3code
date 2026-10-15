@@ -24,9 +24,11 @@ import {
   type OrchestrationV2Run,
   type OrchestrationV2ThreadShellSnapshot,
   type OrchestrationV2ThreadProjection,
+  type OrchestrationV2ThreadTranscript,
   type OrchestrationV2ThreadShell,
   type OrchestrationV2TurnItem,
   ProjectId,
+  PROVIDER_SEND_TURN_MAX_FILE_BYTES,
   ProviderInstanceId,
   resolveProjectProviderInstanceEnabled,
   RunId,
@@ -34,6 +36,7 @@ import {
   ThreadId,
   type TurnItemId,
 } from "@t3tools/contracts";
+import { threadTranscriptHeader } from "@t3tools/shared/threadTranscript";
 import * as Context from "effect/Context";
 import * as DateTime from "effect/DateTime";
 import * as Duration from "effect/Duration";
@@ -51,6 +54,8 @@ import {
 
 import * as CommandReceiptStore from "./CommandReceiptStore.ts";
 import * as Orchestrator from "./Orchestrator.ts";
+import * as ServerEnvironment from "../environment/ServerEnvironment.ts";
+import { projectedRowEncodedBytes } from "./threadHistoryPaging.ts";
 import * as ProviderSessionManager from "./ProviderSessionManager.ts";
 import * as ThreadCommandExecutor from "./ThreadCommandExecutor.ts";
 import { DispatchModeLimit, exceededDispatchModeLimit } from "./DispatchModeLimit.ts";
@@ -216,6 +221,15 @@ export class ThreadManagementThreadNotFoundError extends Schema.TaggedError<Thre
   }
 }
 
+export class ThreadTranscriptTooLargeError extends Schema.TaggedError<ThreadTranscriptTooLargeError>()(
+  "ThreadTranscriptTooLargeError",
+  { threadId: ThreadId },
+) {
+  override get message(): string {
+    return "The thread transcript exceeds the file attachment limit.";
+  }
+}
+
 export class ThreadManagementRunNotFoundError extends Schema.TaggedError<ThreadManagementRunNotFoundError>()(
   "ThreadManagementRunNotFoundError",
   {
@@ -368,6 +382,13 @@ export interface ThreadManagementServiceShape {
   ) => Effect.Effect<OrchestrationV2ThreadProjection, Orchestrator.OrchestratorV2Error>;
   readonly getCheckpointContext: Orchestrator.OrchestratorV2["Service"]["getCheckpointContext"];
   readonly getThreadSnapshot: Orchestrator.OrchestratorV2["Service"]["getThreadSnapshot"];
+  readonly getThreadTranscript: (
+    threadId: ThreadId,
+  ) => Effect.Effect<
+    OrchestrationV2ThreadTranscript,
+    Orchestrator.OrchestratorV2Error | ThreadTranscriptTooLargeError,
+    ServerEnvironment.ServerEnvironmentIdentity
+  >;
   readonly getThreadSnapshotWindow: Orchestrator.OrchestratorV2["Service"]["getThreadSnapshotWindow"];
   readonly getProjectThreadRecords: <K extends ProjectionRecordField>(
     input: { readonly projectId: ProjectId; readonly threadId: ThreadId },
@@ -664,6 +685,32 @@ const make = Effect.gen(function* () {
     ensureProjectionTranscript(threadId).pipe(
       Effect.andThen(orchestrator.getThreadSnapshot(threadId)),
     );
+  const getThreadTranscript = Effect.fn("orchestrationV2.threadManagement.getThreadTranscript")(
+    function* (threadId: ThreadId) {
+      const { projection } = yield* getThreadSnapshot(threadId);
+      const environment = yield* ServerEnvironment.ServerEnvironmentIdentity;
+      const transcript = {
+        threadId: projection.thread.id,
+        title: projection.thread.title,
+        updatedAt: projection.updatedAt,
+        items: projection.visibleTurnItems,
+      };
+      let sizeBytes = Buffer.byteLength(
+        threadTranscriptHeader(yield* environment.getEnvironmentId, transcript),
+        "utf8",
+      );
+      if (sizeBytes > PROVIDER_SEND_TURN_MAX_FILE_BYTES) {
+        return yield* new ThreadTranscriptTooLargeError({ threadId });
+      }
+      for (const row of transcript.items) {
+        sizeBytes += projectedRowEncodedBytes(row) + 1;
+        if (sizeBytes > PROVIDER_SEND_TURN_MAX_FILE_BYTES) {
+          return yield* new ThreadTranscriptTooLargeError({ threadId });
+        }
+      }
+      return transcript;
+    },
+  );
   const getThreadSnapshotWindow: ThreadManagementServiceShape["getThreadSnapshotWindow"] = (
     threadId,
     options,
@@ -1231,6 +1278,7 @@ const make = Effect.gen(function* () {
     getThreadProjection,
     getCheckpointContext,
     getThreadSnapshot,
+    getThreadTranscript,
     getThreadSnapshotWindow,
     getProjectThreadRecords,
     getProjectThread,

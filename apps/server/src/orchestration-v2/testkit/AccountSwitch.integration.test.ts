@@ -1128,6 +1128,7 @@ const makeClaudeRegistry = Effect.gen(function* () {
                     ? Deferred.succeed(firstPrompt, messages).pipe(Effect.asVoid)
                     : Queue.offer(messages, result(`result-${prompts}`)).pipe(Effect.asVoid),
                 setModel: () => Effect.void,
+                applyFlagSettings: () => Effect.void,
                 setPermissionMode: () => Effect.void,
                 stopTask: () => Effect.void,
                 interrupt: Effect.void,

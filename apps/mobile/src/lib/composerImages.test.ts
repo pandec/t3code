@@ -12,6 +12,35 @@ const clipboard = vi.hoisted(() => ({
 
 vi.mock("expo-clipboard", () => clipboard);
 
+/** A native image renderer that reports the source size the test gives it. */
+const manipulator = vi.hoisted(() => {
+  const state = { sourceSize: { width: 0, height: 0 } };
+  const manipulate = vi.fn((source: string | { width: number; height: number }) => {
+    let size = typeof source === "string" ? state.sourceSize : source;
+    const context = {
+      resize: vi.fn((next: { width: number; height: number }) => {
+        size = next;
+        return context;
+      }),
+      renderAsync: vi.fn(async () => ({
+        ...size,
+        release: vi.fn(),
+        saveAsync: vi.fn(async (options: { format: string }) => ({
+          uri: `file:///cache/rendered.${options.format}`,
+          base64: `cmVuZGVyZWQ=`,
+        })),
+      })),
+    };
+    return context;
+  });
+  return { state, manipulate };
+});
+
+vi.mock("expo-image-manipulator", () => ({
+  ImageManipulator: { manipulate: manipulator.manipulate },
+  SaveFormat: { JPEG: "jpeg", PNG: "png" },
+}));
+
 vi.mock("expo-file-system", () => ({
   File: class {
     readonly uri: string;
@@ -95,7 +124,8 @@ describe("composer clipboard paste", () => {
     clipboard.hasImageAsync.mockResolvedValue(true);
     const result = await pasteComposerClipboard({ existingCount: 0 });
     expect(result).toEqual({
-      images: [expect.objectContaining({ type: "image", name: "pasted-image.png" })],
+      // Fork: pasted PNGs are re-encoded as JPEG.
+      images: [expect.objectContaining({ type: "image", name: "pasted-image.jpg" })],
       text: null,
       error: null,
     });
@@ -128,6 +158,71 @@ describe("composer clipboard paste", () => {
   });
 });
 
+describe("oversized pasted images", () => {
+  const u32 = (n: number) => [(n >>> 24) & 0xff, (n >>> 16) & 0xff, (n >>> 8) & 0xff, n & 0xff];
+  const pngDataUrl = (width: number, height: number) =>
+    `data:image/png;base64,${Buffer.from([
+      0x89,
+      0x50,
+      0x4e,
+      0x47,
+      0x0d,
+      0x0a,
+      0x1a,
+      0x0a,
+      ...u32(13),
+      0x49,
+      0x48,
+      0x44,
+      0x52,
+      ...u32(width),
+      ...u32(height),
+      8,
+      6,
+      0,
+      0,
+      0,
+    ]).toString("base64")}`;
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    clipboard.hasImageAsync.mockResolvedValue(true);
+  });
+
+  // Fork: pastes are re-encoded as JPEG, with upstream's 2000px long-edge cap.
+  it("scales a clipboard screenshot over 2000px to a 2000px JPEG", async () => {
+    manipulator.state.sourceSize = { width: 3024, height: 1964 };
+    const pasted = pngDataUrl(3024, 1964);
+    clipboard.getImageAsync.mockResolvedValue({ data: pasted });
+
+    const result = await pasteComposerClipboard({ existingCount: 0 });
+
+    expect(manipulator.manipulate).toHaveBeenCalledWith(pasted);
+    const resize = manipulator.manipulate.mock.results.at(-1)?.value.resize;
+    expect(resize).toHaveBeenCalledWith({ width: 2000, height: 1299 });
+    expect(result.images).toEqual([
+      expect.objectContaining({
+        mimeType: "image/jpeg",
+        dataUrl: "data:image/jpeg;base64,cmVuZGVyZWQ=",
+        previewUri: "data:image/jpeg;base64,cmVuZGVyZWQ=",
+      }),
+    ]);
+  });
+
+  it("re-encodes a 2000px clipboard image as JPEG without resizing it", async () => {
+    manipulator.state.sourceSize = { width: 2000, height: 1200 };
+    const pasted = pngDataUrl(2000, 1200);
+    clipboard.getImageAsync.mockResolvedValue({ data: pasted });
+
+    const result = await pasteComposerClipboard({ existingCount: 0 });
+
+    expect(manipulator.manipulate).toHaveBeenCalledOnce();
+    expect(result.images).toEqual([
+      expect.objectContaining({ dataUrl: "data:image/jpeg;base64,cmVuZGVyZWQ=" }),
+    ]);
+  });
+});
+
 describe("native pasted image cleanup", () => {
   beforeEach(() => {
     files.clear();
@@ -155,8 +250,9 @@ describe("native pasted image cleanup", () => {
 
     expect(attachments).toEqual([
       expect.objectContaining({
-        dataUrl: "data:image/png;base64,aGVsbG8=",
-        previewUri: "data:image/png;base64,aGVsbG8=",
+        mimeType: "image/jpeg",
+        dataUrl: "data:image/jpeg;base64,cmVuZGVyZWQ=",
+        previewUri: "data:image/jpeg;base64,cmVuZGVyZWQ=",
       }),
     ]);
     expect(files.get(uri)?.deleted).toBe(true);

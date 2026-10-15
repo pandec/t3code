@@ -470,50 +470,42 @@ export const layer: Layer.Layer<
       }
       const { worktreePath, branch } = projection.thread;
       if (worktreePath !== null && branch !== null) {
-        // Fork: storage and archive cleanup remove checkouts under this lease,
-        // so a start never opens a session in a half-removed worktree.
-        yield* withWorkspaceLease(
-          worktreePath,
-          Effect.gen(function* () {
-            const exists = yield* fileSystem
-              .exists(worktreePath)
-              .pipe(Effect.orElseSucceed(() => true));
-            if (!exists) {
-              const project = yield* projects.getById(projection.thread.projectId).pipe(
-                Effect.map(Option.getOrUndefined),
-                Effect.orElseSucceed(() => undefined),
-              );
-              if (project !== undefined) {
-                yield* Effect.logWarning("provider turn start recreating missing worktree", {
-                  threadId: projection.thread.id,
-                  worktreePath,
-                  branch,
-                });
-                yield* gitWorkflow.pruneWorktrees({ cwd: project.workspaceRoot }).pipe(
-                  Effect.andThen(
-                    gitWorkflow.createWorktree({
-                      cwd: project.workspaceRoot,
-                      refName: branch,
-                      path: worktreePath,
+        // Fork: recreates a missing checkout. `start` runs under the workspace
+        // lease (below), so storage and archive cleanup cannot remove it meanwhile.
+        const exists = yield* fileSystem
+          .exists(worktreePath)
+          .pipe(Effect.orElseSucceed(() => true));
+        if (!exists) {
+          const project = yield* projects.getById(projection.thread.projectId).pipe(
+            Effect.map(Option.getOrUndefined),
+            Effect.orElseSucceed(() => undefined),
+          );
+          if (project !== undefined) {
+            yield* Effect.logWarning("provider turn start recreating missing worktree", {
+              threadId: projection.thread.id,
+              worktreePath,
+              branch,
+            });
+            yield* gitWorkflow.pruneWorktrees({ cwd: project.workspaceRoot }).pipe(
+              Effect.andThen(
+                gitWorkflow.createWorktree({
+                  cwd: project.workspaceRoot,
+                  refName: branch,
+                  path: worktreePath,
+                }),
+              ),
+              Effect.catchCause((cause) =>
+                Cause.hasInterruptsOnly(cause)
+                  ? Effect.failCause(cause)
+                  : Effect.logWarning("provider turn start failed to recreate worktree", {
+                      threadId: projection.thread.id,
+                      worktreePath,
+                      cause: Cause.pretty(cause),
                     }),
-                  ),
-                  Effect.catchCause((cause) =>
-                    Cause.hasInterruptsOnly(cause)
-                      ? Effect.failCause(cause)
-                      : Effect.logWarning("provider turn start failed to recreate worktree", {
-                          threadId: projection.thread.id,
-                          worktreePath,
-                          cause: Cause.pretty(cause),
-                        }),
-                  ),
-                );
-              }
-            }
-          }),
-        ).pipe(
-          Effect.provideService(FileSystem.FileSystem, fileSystem),
-          Effect.provideService(Path.Path, path),
-        );
+              ),
+            );
+          }
+        }
       }
       const selectInheritedBackgroundItems = (
         current: ProjectionStore.ProjectionRuntimeRecoveryState,
@@ -1329,7 +1321,7 @@ export const layer: Layer.Layer<
           (accepted.length > 0 && accepted.every((source) => source.nativeThreadId === undefined))
         );
       });
-      yield* runExecution.startRootRun({
+      return runExecution.startRootRun({
         commandId: CommandId.make(`command:effect:provider-turn.start:${run.id}`),
         appThread: projection.thread,
         providerSessionId,
@@ -1385,7 +1377,18 @@ export const layer: Layer.Layer<
 
     return ProviderTurnStartServiceV2.of({
       start: (input) =>
-        start(input).pipe(
+        Effect.gen(function* () {
+          // Storage cleanup removes worktrees under the same lease. Only startup
+          // holds it; the provider turn runs after it is released.
+          const { thread } = yield* projectionStore.getThreadRecords(input.threadId, []);
+          const providerTurn = yield* thread.worktreePath === null
+            ? start(input)
+            : withWorkspaceLease(path.resolve(thread.worktreePath), start(input)).pipe(
+                Effect.provideService(FileSystem.FileSystem, fileSystem),
+                Effect.provideService(Path.Path, path),
+              );
+          if (providerTurn !== undefined) yield* providerTurn;
+        }).pipe(
           Effect.mapError((cause) =>
             isProviderTurnStartError(cause)
               ? cause

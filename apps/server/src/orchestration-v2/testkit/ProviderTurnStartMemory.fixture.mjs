@@ -32,6 +32,7 @@ const [Start, Projection, Run, Sessions, Policy, Id, Sink, Handoff, Git, Project
   ]);
 let current;
 let fullReads = 0;
+let threadReads = 0;
 const liveRuns = [];
 const refs = [];
 const checkpoints = [];
@@ -60,6 +61,13 @@ const dependencies = Layer.mergeAll(
         throw new Error("full transcript read");
       }),
     hasUnpairedRunInterruptRequest: () => Effect.succeed(false),
+    getThreadRecords: (threadId, fields) =>
+      Effect.sync(() => {
+        NodeAssert.equal(threadId, current.thread.id);
+        NodeAssert.deepEqual(fields, []);
+        threadReads++;
+        return { thread: current.thread };
+      }),
     getTurnStartContext: () =>
       Effect.sync(() => {
         fullReads++;
@@ -183,8 +191,10 @@ await Effect.runPromise(
       NodeAssert.equal(yield* controls.shouldFinalizeRun(), false);
       NodeAssert.deepEqual(yield* controls.loadInheritedBackgroundTurnItems(), []);
       NodeAssert.equal(fullReads, i + 1);
+      NodeAssert.equal(threadReads, i + 1);
       NodeAssert.equal(yield* controls.hasUnpairedRunInterruptRequest(), false);
       NodeAssert.equal(fullReads, i + 1);
+      NodeAssert.equal(threadReads, i + 1);
       current = null;
       if (i === Math.floor(count / 2) - 1 || i === count - 1) {
         yield* Effect.promise(async () => {

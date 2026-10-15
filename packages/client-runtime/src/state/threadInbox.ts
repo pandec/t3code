@@ -9,6 +9,7 @@ type WorkingThreadInput = Pick<
   | "hasActionableProposedPlan"
   | "hasPendingApprovals"
   | "hasPendingUserInput"
+  | "pendingSubagentRequest"
   | "interactionMode"
   | "latestRun"
   | "runtime"
@@ -18,9 +19,11 @@ type WorkingThreadInput = Pick<
 
 /** Threads busy with work that does not need the user fold into the Working
     section: a running run, or one stopped with background work still running.
-    Approvals, questions, plan prompts, and failures stay in the inbox. */
+    Approvals, questions (its own or a subagent's), plan prompts, and failures
+    stay in the inbox. */
 export function isThreadWorking(thread: WorkingThreadInput): boolean {
   if (thread.hasPendingApprovals || thread.hasPendingUserInput) return false;
+  if (thread.pendingSubagentRequest != null) return false;
   // Fork: work left running after the turn, a command included, keeps a
   // thread that did not fail working, matching the row's Monitoring status.
   const lingering =

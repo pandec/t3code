@@ -152,15 +152,16 @@ Inherit follows each machine's rules; Off keeps that project's worktrees until y
 manually. Custom applies separate worktree rules to the selected project or checkout. Browser
 captures and log retention remain machine-wide.
 
-Worktrees can be removed after a chosen number of inactive days, after merging, or when they
-have no commits beyond the default branch. Only T3-managed worktrees are eligible. Active
-sessions, background work, pending archives and worktree moves, and worktrees shared by another
-thread (also through a symlinked path) prevent removal. **Keep worktrees with local changes**
-defaults to **Any local files**, which protects tracked edits, untracked files, and ignored files
-such as `.env` (except `node_modules`). **Uncommitted changes** protects tracked edits and
-untracked files but deletes ignored files and build output. **Edited tracked files** protects only
-tracked edits and allows untracked and ignored files to be deleted. Branches and thread history
-stay; starting another turn recreates the checkout.
+Worktrees can be removed after a chosen number of inactive days, after a thread settles, after
+merging, or when they have no commits beyond the default branch. Set settled retention to 0 days
+to remove a worktree at the next cleanup after settlement. Only T3-managed worktrees are eligible.
+Active sessions, background work, pending archives and worktree moves, and worktrees shared by
+another thread (also through a symlinked path) prevent removal. **Keep worktrees with local
+changes** defaults to **Any local files**, which protects tracked edits, untracked files, and
+ignored files such as `.env` (except `node_modules`). **Uncommitted changes** protects tracked
+edits and untracked files but deletes ignored files and build output. **Edited tracked files**
+protects only tracked edits and allows untracked and ignored files to be deleted. Branches and
+thread history stay; starting another turn recreates the checkout.
 Merge cleanup requires a merged pull request whose commits are included in the remote default
 branch. A squash or rebase merge on GitHub also counts when the pull request targeted the default
 branch and the worktree is still at the pull request's last commit.

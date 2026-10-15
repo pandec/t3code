@@ -74,6 +74,10 @@ const LOGIN_SHELL_PREFERRED_ENV_NAMES = [
   "XDG_CURRENT_DESKTOP",
   "XDG_SESSION_DESKTOP",
   "XDG_SESSION_TYPE",
+  // mise's record of the PATH entries it added. It must travel with the
+  // shell's PATH, or `mise x` can rebuild PATH behind a same-named wrapper
+  // (`exec mise x claude -- claude`) that then re-runs itself forever.
+  "__MISE_DIFF",
 ] as const;
 /** Login-shell values that only fill in gaps in the inherited environment. */
 const LOGIN_SHELL_PASSTHROUGH_ENV_NAMES = [
@@ -92,6 +96,12 @@ const LOGIN_SHELL_PASSTHROUGH_ENV_NAMES = [
   "ELEVENLABS_TTS_VOICE_ID",
   "OPENROUTER_TTS_MODEL",
   "OPENROUTER_TTS_VOICE_ID",
+  // CA trust set in the shell profile. Without it, a Node or OpenSSL build
+  // that has no bundled roots (a shared-OpenSSL node on PATH) cannot verify
+  // TLS, so provider updaters and agents fail to reach their registries.
+  "SSL_CERT_FILE",
+  "SSL_CERT_DIR",
+  "NODE_EXTRA_CA_CERTS",
   // The telemetry opt-out is documented as a shell variable; GUI launches never see it.
   "T3CODE_TELEMETRY_ENABLED",
 ] as const;
