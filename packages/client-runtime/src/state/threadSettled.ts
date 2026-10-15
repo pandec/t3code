@@ -31,7 +31,6 @@ interface SettlementRuntimeLike {
 }
 
 interface QueuedThreadShell {
-  readonly latestUserMessageAt?: string | null;
   readonly latestTurn?: SettlementRunLike | null;
   readonly latestRun?: SettlementRunLike | null;
   readonly session?: SettlementRuntimeLike | null;

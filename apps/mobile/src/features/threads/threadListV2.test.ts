@@ -1136,8 +1136,6 @@ describe("buildThreadListV2Items settled paging", () => {
           settledOverride: "settled",
           settledAt: `2026-06-01T0${index}:10:00.000Z`,
           latestUserMessageAt: `2026-06-01T0${index}:00:00.000Z`,
-          // A turn adopted the message (same requestedAt): without it the
-          // thread reads as a queued turn start, which never settles.
           latestRun: {
             runId: RunId.make(`run-${index}`),
             status: "completed",

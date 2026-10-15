@@ -283,7 +283,7 @@ describe("threadRaisedHandWhileSnoozed", () => {
 describe("canSnooze", () => {
   it("allows snoozing quiet and working threads alike", () => {
     expect(canSnooze(makeShell({}))).toBe(true);
-    expect(canSnooze(makeShell({ sessionStatus: "running" }))).toBe(true);
+    expect(canSnooze({ ...makeShell({}), runtime: { status: "running" } })).toBe(true);
   });
 
   it("refuses blocked-on-you work", () => {
@@ -301,7 +301,8 @@ describe("canSnooze", () => {
   it("allows a running thread whose newest message was steered into the run", () => {
     // The cancelled steer run ends 1ms before the message is recorded into
     // the running run, so the message is newer than every latestRun stamp.
-    const steered: ThreadSnoozeShell = {
+    // Real shells carry latestUserMessageAt; canSnooze must ignore it.
+    const steered = {
       ...makeShell({}),
       runtime: { status: "running" },
       latestUserMessageAt: "2026-04-10T11:59:18.488Z",
