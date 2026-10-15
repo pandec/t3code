@@ -35,7 +35,6 @@ import {
   getThreadListV2OrderedSection,
   isThreadListV2ListItem,
   resolveThreadListV2SnoozeMenuSelection,
-  resolveThreadListV2SnoozeGateExpiryMs,
   resolveThreadListV2Status,
   resolveThreadListV2SwipeActions,
   resolveThreadListV2WorkingTimeLabel,
@@ -449,39 +448,6 @@ describe("resolveThreadListV2SwipeActions", () => {
         forkable: true,
       }).left,
     ).toEqual(["archive"]);
-  });
-});
-
-describe("resolveThreadListV2SnoozeGateExpiryMs", () => {
-  it("reports when an unadopted turn's grace window lapses", () => {
-    const thread = makeThread({
-      id: ThreadId.make("t"),
-      title: "t",
-      latestUserMessageAt: "2026-06-02T00:00:30.000Z",
-    });
-    expect(resolveThreadListV2SnoozeGateExpiryMs(thread, { now: "2026-06-02T00:01:00.000Z" })).toBe(
-      Date.parse("2026-06-02T00:02:30.000Z"),
-    );
-  });
-
-  it("returns null once the thread is snoozable or when only data can unblock it", () => {
-    expect(
-      resolveThreadListV2SnoozeGateExpiryMs(
-        makeThread({ id: ThreadId.make("ready"), title: "Ready" }),
-        { now: NOW },
-      ),
-    ).toBe(null);
-    expect(
-      resolveThreadListV2SnoozeGateExpiryMs(
-        makeThread({
-          id: ThreadId.make("blocked"),
-          title: "Blocked",
-          hasPendingApprovals: true,
-          latestUserMessageAt: NOW,
-        }),
-        { now: NOW },
-      ),
-    ).toBe(null);
   });
 });
 
@@ -1170,8 +1136,6 @@ describe("buildThreadListV2Items settled paging", () => {
           settledOverride: "settled",
           settledAt: `2026-06-01T0${index}:10:00.000Z`,
           latestUserMessageAt: `2026-06-01T0${index}:00:00.000Z`,
-          // A turn adopted the message (same requestedAt): without it the
-          // thread reads as a queued turn start, which never settles.
           latestRun: {
             runId: RunId.make(`run-${index}`),
             status: "completed",

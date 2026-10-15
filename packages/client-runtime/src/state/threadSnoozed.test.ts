@@ -7,7 +7,6 @@ import {
   canSnooze,
   canSnoozeUntilDone,
   effectiveSnoozed,
-  hasQueuedTurnStart,
   resolveSnoozePresets,
   snoozeShelfLabel,
   snoozeWakeLabel,
@@ -64,12 +63,6 @@ function makeShell(input: {
             assistantMessageId: null,
           },
   };
-}
-
-type QueuedTurnShell = Parameters<typeof hasQueuedTurnStart>[0];
-
-function makeQueuedTurnShell(overrides: Partial<QueuedTurnShell> = {}): QueuedTurnShell {
-  return { latestUserMessageAt: null, latestTurn: null, session: null, ...overrides };
 }
 
 describe("effectiveSnoozed", () => {
@@ -289,97 +282,38 @@ describe("threadRaisedHandWhileSnoozed", () => {
 
 describe("canSnooze", () => {
   it("allows snoozing quiet and working threads alike", () => {
-    expect(canSnooze({ ...makeShell({}), latestUserMessageAt: null }, { now: NOW })).toBe(true);
-    expect(
-      canSnooze(
-        { ...makeShell({ sessionStatus: "running" }), latestUserMessageAt: null },
-        { now: NOW },
-      ),
-    ).toBe(true);
+    expect(canSnooze(makeShell({}))).toBe(true);
+    expect(canSnooze({ ...makeShell({}), runtime: { status: "running" } })).toBe(true);
   });
 
   it("refuses blocked-on-you work", () => {
-    expect(
-      canSnooze({ ...makeShell({ pending: "approval" }), latestUserMessageAt: null }, { now: NOW }),
-    ).toBe(false);
-    expect(
-      canSnooze(
-        { ...makeShell({ pending: "user-input" }), latestUserMessageAt: null },
-        { now: NOW },
-      ),
-    ).toBe(false);
-    expect(
-      canSnooze(
-        { ...makeShell({}), latestUserMessageAt: null, pendingSubagentRequest: "approval" },
-        { now: NOW },
-      ),
-    ).toBe(false);
+    expect(canSnooze(makeShell({ pending: "approval" }))).toBe(false);
+    expect(canSnooze(makeShell({ pending: "user-input" }))).toBe(false);
+    expect(canSnooze({ ...makeShell({}), pendingSubagentRequest: "approval" })).toBe(false);
   });
 
-  it("refuses a queued turn start — same invisible-pending-work rule as settle", () => {
-    // Fresh user message, no turn has adopted it, within the grace window.
-    expect(
-      canSnooze(
-        { ...makeShell({}), latestUserMessageAt: "2026-04-10T11:59:30.000Z" },
-        { now: NOW },
-      ),
-    ).toBe(false);
-    // Outside the grace window the message is stale data, not queued work.
-    expect(
-      canSnooze(
-        { ...makeShell({}), latestUserMessageAt: "2026-04-10T11:00:00.000Z" },
-        { now: NOW },
-      ),
-    ).toBe(true);
-  });
-});
-
-describe("hasQueuedTurnStart", () => {
-  it("expires queued state after two minutes", () => {
-    const thread = makeQueuedTurnShell({
-      latestUserMessageAt: "2026-04-10T11:57:59.000Z",
-    });
-    expect(hasQueuedTurnStart(thread, { now: NOW })).toBe(false);
+  it("refuses a run that has not started yet", () => {
+    for (const status of ["preparing", "queued", "starting"]) {
+      expect(canSnooze({ ...makeShell({}), runtime: { status } })).toBe(false);
+    }
   });
 
-  it("clears queued state when a turn adopts the message or the session fails", () => {
-    const messageAt = "2026-04-10T11:59:00.000Z";
-    const adopted = makeQueuedTurnShell({
-      latestUserMessageAt: messageAt,
-      latestTurn: {
-        turnId: TurnId.make("turn-adopted"),
-        state: "running",
-        requestedAt: messageAt,
+  it("allows a running thread whose newest message was steered into the run", () => {
+    // The cancelled steer run ends 1ms before the message is recorded into
+    // the running run, so the message is newer than every latestRun stamp.
+    // Real shells carry latestUserMessageAt; canSnooze must ignore it.
+    const steered = {
+      ...makeShell({}),
+      runtime: { status: "running" },
+      latestUserMessageAt: "2026-04-10T11:59:18.488Z",
+      latestRun: {
+        status: "cancelled",
+        requestedAt: "2026-04-10T11:59:17.628Z",
         startedAt: null,
-        completedAt: null,
-        assistantMessageId: null,
+        completedAt: "2026-04-10T11:59:18.487Z",
       },
-    });
-    const failed = makeQueuedTurnShell({
-      latestUserMessageAt: messageAt,
-      session: {
-        threadId: ThreadId.make("thread-failed"),
-        status: "error",
-        providerName: "Codex",
-        runtimeMode: "full-access",
-        activeTurnId: null,
-        lastError: "failed",
-        updatedAt: NOW,
-      },
-    });
-    expect(hasQueuedTurnStart(adopted, { now: NOW })).toBe(false);
-    expect(hasQueuedTurnStart(failed, { now: NOW })).toBe(false);
-  });
-
-  it("bounds future client clock skew", () => {
-    const farAhead = makeQueuedTurnShell({
-      latestUserMessageAt: "2026-04-10T12:03:00.000Z",
-    });
-    const slightlyAhead = makeQueuedTurnShell({
-      latestUserMessageAt: "2026-04-10T12:01:00.000Z",
-    });
-    expect(hasQueuedTurnStart(farAhead, { now: NOW })).toBe(false);
-    expect(hasQueuedTurnStart(slightlyAhead, { now: NOW })).toBe(true);
+    };
+    expect(canSnooze(steered)).toBe(true);
   });
 });
 

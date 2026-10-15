@@ -492,7 +492,7 @@ export function useThreadListActions(
           );
           return false;
         }
-        if (!canSnooze(thread, { now: new Date().toISOString() })) {
+        if (!canSnooze(thread)) {
           Alert.alert(
             "Could not snooze thread",
             thread.hasPendingApprovals ||

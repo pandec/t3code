@@ -2383,7 +2383,7 @@ function OpenCommandPaletteDialog(props: {
           },
         });
       } else {
-        const canSnoozeNow = canSnooze(thread, { now: now.toISOString() });
+        const canSnoozeNow = canSnooze(thread);
         actionItems.push({
           kind: "submenu",
           value: `action:${SNOOZE_THREAD_VIEW_VALUE}`,

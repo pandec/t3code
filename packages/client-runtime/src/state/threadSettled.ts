@@ -31,7 +31,6 @@ interface SettlementRuntimeLike {
 }
 
 interface QueuedThreadShell {
-  readonly latestUserMessageAt?: string | null;
   readonly latestTurn?: SettlementRunLike | null;
   readonly latestRun?: SettlementRunLike | null;
   readonly session?: SettlementRuntimeLike | null;
@@ -74,55 +73,7 @@ export function resolveArchiveToggleAction(
     : "schedule";
 }
 
-/**
- * A queued turn start lives for at most this long: session adoption takes
- * seconds, so a user message still unadopted after the grace window is a
- * failed start (or stale data — shells from older servers can carry user
- * messages with no latestTurn at all), not pending work. Without this bound
- * such threads would be permanently unsettleable.
- */
-export const QUEUED_TURN_START_GRACE_MS = 2 * 60 * 1_000;
 const DAY_MS = 24 * 60 * 60 * 1_000;
-
-/**
- * A user message no turn has picked up yet: the turn.start command was
- * dispatched (message-sent + turn-start-requested) but no session has
- * adopted it, so `session` is still null and the pending work is invisible
- * to the session-status checks. Detectable as a user message strictly newer
- * than every timestamp on the latest turn — on adoption the new turn's
- * requestedAt equals the message time, clearing the condition — and only
- * within the adoption grace window.
- */
-export function hasQueuedTurnStart(
-  shell: QueuedThreadShell,
-  options: { readonly now: string },
-): boolean {
-  if (
-    shell.runtime?.status === "preparing" ||
-    shell.runtime?.status === "queued" ||
-    shell.runtime?.status === "starting"
-  ) {
-    return true;
-  }
-  if (shell.latestUserMessageAt == null) return false;
-  // A failed session start clears the queued state: the failure is already
-  // visible (status edge / error).
-  if (shell.session?.status === "error") return false;
-  const messageAt = Date.parse(shell.latestUserMessageAt);
-  if (Number.isNaN(messageAt)) return false;
-  const nowMs = Date.parse(options.now);
-  if (Number.isNaN(nowMs)) return false;
-  // Bounded on both sides: message timestamps originate on whichever device
-  // sent the message, so a clock ahead of this one yields a negative age
-  // that would otherwise hold the queued state for the whole skew. Mirrors
-  // the decider's guard.
-  if (Math.abs(nowMs - messageAt) > QUEUED_TURN_START_GRACE_MS) return false;
-  const turn = shell.latestRun ?? shell.latestTurn ?? null;
-  if (turn === null) return true;
-  return [turn.requestedAt, turn.startedAt, turn.completedAt].every(
-    (candidate) => candidate == null || Date.parse(candidate) < messageAt,
-  );
-}
 
 /**
  * The snooze lifecycle fields plus everything needed to detect a raised
@@ -267,30 +218,23 @@ export function threadRaisedHandWhileSnoozed(shell: ThreadSnoozeShell): boolean 
 
 /**
  * A thread may be snoozed unless the agent or one of its subagents is blocked
- * on the user: hiding a pending approval or user-input request defeats the
- * request, and a queued turn start (a message no turn has adopted yet) is
- * invisible pending work the same way it is for settle. A running session IS snoozable — snooze
- * only affects visibility, never the agent. Client-side twin of the server
- * invariants so the UI can reject before a round trip.
+ * on the user (hiding a pending approval or user-input request defeats the
+ * request) or a run is still waiting to start. A running session IS
+ * snoozable — snooze only affects visibility, never the agent. Client-side
+ * twin of the server invariants so the UI can reject before a round trip.
+ * Run status only, never user-message timestamps: a message steered into the
+ * running run is newer than every run timestamp yet is not queued work.
  */
 export function canSnooze(
   shell: Pick<
     ThreadSnoozeShell,
-    | "hasPendingApprovals"
-    | "hasPendingUserInput"
-    | "pendingSubagentRequest"
-    | "latestUserMessageAt"
-    | "latestTurn"
-    | "latestRun"
-    | "session"
-    | "runtime"
+    "hasPendingApprovals" | "hasPendingUserInput" | "pendingSubagentRequest" | "runtime"
   >,
-  options: { readonly now: string },
 ): boolean {
   if (shell.hasPendingApprovals || shell.hasPendingUserInput) return false;
   if (shell.pendingSubagentRequest != null) return false;
-  if (hasQueuedTurnStart(shell, options)) return false;
-  return true;
+  const status = shell.runtime?.status;
+  return status !== "preparing" && status !== "queued" && status !== "starting";
 }
 
 /**

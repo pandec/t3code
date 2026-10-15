@@ -363,11 +363,7 @@ function ChatRouteGlobalShortcuts() {
           readEnvironmentSupportsSnoozeUntilDone(shortcutThreadRef.environmentId)
         ) {
           const now = new Date().toISOString();
-          if (
-            !effectiveSnoozed(shell, { now }) &&
-            canSnooze(shell, { now }) &&
-            canSnoozeUntilDone(shell)
-          ) {
+          if (!effectiveSnoozed(shell, { now }) && canSnooze(shell) && canSnoozeUntilDone(shell)) {
             void snoozeThread(shortcutThreadRef, null, { untilDone: true }).then((result) => {
               if (result._tag !== "Failure" || isAtomCommandInterrupted(result)) return;
               const error = squashAtomCommandFailure(result);
