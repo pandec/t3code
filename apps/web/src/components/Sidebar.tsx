@@ -1843,10 +1843,7 @@ const SidebarThreadRow = memo(function SidebarThreadRow(props: {
   const [snoozeMenuOpenRaw, setSnoozeMenuOpen] = useState(false);
   // Snooze is offered only where it can succeed: capability-gated and never
   // on blocked-on-you work or queued turns (the server rejects both).
-  const showSnoozeButton =
-    canOperateThread &&
-    props.snoozeSupported &&
-    canSnooze(thread, { now: new Date().toISOString() });
+  const showSnoozeButton = canOperateThread && props.snoozeSupported && canSnooze(thread);
   const showHoverActions =
     (canOperateThread && props.settlementSupported) || showSnoozeButton || hasUnsentDraft;
   // If the thread becomes blocked while the popover is open, the button
@@ -5412,7 +5409,6 @@ export default function Sidebar() {
       const count = threadKeys.length;
       // Snooze (N) is offered when every selected thread can actually take
       // it — a mixed selection with blocked-on-you work would half-apply.
-      const selectionNow = new Date();
       const selectedThreads = threadKeys.flatMap((threadKey) => {
         const thread = threadByKeyRef.current.get(threadKey);
         return thread ? [thread] : [];
@@ -5423,7 +5419,7 @@ export default function Sidebar() {
       const canSnoozeSelection = selectedThreads.every(
         (thread) =>
           serverConfigs.get(thread.environmentId)?.environment.capabilities.threadSnooze === true &&
-          canSnooze(thread, { now: selectionNow.toISOString() }),
+          canSnooze(thread),
       );
       const titleRegenerationThreads = selectedThreads.filter(
         (thread) =>
@@ -5884,7 +5880,7 @@ export default function Sidebar() {
           isSettled,
           autoSettleEnabled: thread.autoSettleDisabledAt == null,
           isSnoozed,
-          canSnoozeNow: canSnooze(thread, { now: new Date().toISOString() }),
+          canSnoozeNow: canSnooze(thread),
           isRegeneratingTitle,
           isRunning: !threadRuntimeCanArchive(thread.runtime),
           archiveAction: resolveArchiveToggleAction(thread),

@@ -1234,7 +1234,7 @@ export function useThreadActions() {
       // Blocked-on-you work and queued turns can't be snoozed away —
       // client-side twin of the server invariants so the UI rejects before
       // a round trip.
-      if (resolved && !canSnooze(resolved.thread, { now: new Date().toISOString() })) {
+      if (resolved && !canSnooze(resolved.thread)) {
         return AsyncResult.failure(
           Cause.fail(
             new ThreadSnoozeBlockedError({

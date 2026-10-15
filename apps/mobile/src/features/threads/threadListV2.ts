@@ -5,8 +5,6 @@ import { backgroundWorkLiveness } from "@t3tools/shared/orchestrationV2PendingBa
 import {
   canSnooze,
   effectiveSnoozed,
-  hasQueuedTurnStart,
-  QUEUED_TURN_START_GRACE_MS,
   resolveSnoozePresets,
   snoozeShelfLabel,
   snoozeWakeLabel,
@@ -189,32 +187,6 @@ export function resolveThreadListV2SwipeActions(input: {
             "archive" as const,
           ],
   };
-}
-
-/**
- * The point at which a queued-turn snooze guard expires on its own. Rows arm
- * a one-shot timer for this boundary so Snooze appears without waiting for an
- * unrelated render. User-blocked threads return null because only fresh
- * server data can make them snoozable.
- */
-export function resolveThreadListV2SnoozeGateExpiryMs(
-  thread: Pick<
-    EnvironmentThreadShell,
-    | "hasPendingApprovals"
-    | "hasPendingUserInput"
-    | "pendingSubagentRequest"
-    | "latestRun"
-    | "latestUserMessageAt"
-    | "runtime"
-  >,
-  options: { readonly now: string },
-): number | null {
-  if (thread.hasPendingApprovals || thread.hasPendingUserInput) return null;
-  if (thread.pendingSubagentRequest != null) return null;
-  if (!hasQueuedTurnStart(thread, options)) return null;
-  const messageAtMs = Date.parse(thread.latestUserMessageAt ?? "");
-  if (Number.isNaN(messageAtMs)) return null;
-  return messageAtMs + QUEUED_TURN_START_GRACE_MS;
 }
 
 // Settled-tail paging: recent history is the common lookup; the deep tail
@@ -688,7 +660,7 @@ export function buildThreadListV2ListItems(input: {
       !item.snoozed &&
       input.snoozeLabelNow !== undefined &&
       (input.snoozeEnvironmentIds?.has(item.thread.environmentId) ?? true) &&
-      canSnooze(item.thread, { now: input.snoozeLabelNow })
+      canSnooze(item.thread)
         ? input.snoozeLabelNow
         : undefined;
     const move =

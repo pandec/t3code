@@ -170,7 +170,7 @@ export function useThreadActionMenu(input: {
           isSettled: supports.settlement && thread.settledOverride === "settled",
           autoSettleEnabled: thread.autoSettleDisabledAt == null,
           isSnoozed: supports.snooze && effectiveSnoozed(thread, { now: now.toISOString() }),
-          canSnoozeNow: canSnooze(thread, { now: now.toISOString() }),
+          canSnoozeNow: canSnooze(thread),
           isRegeneratingTitle,
           isRunning: !threadRuntimeCanArchive(thread.runtime),
           archiveAction: resolveArchiveToggleAction(thread),
