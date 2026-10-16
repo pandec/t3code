@@ -76,7 +76,7 @@ const UP_FAILED_NOTE_KIND = "sp-labs:up-failed";
 const TIMEOUTS = {
   status: Duration.seconds(30),
   acquire: Duration.minutes(2),
-  // `up` may install dependencies, then waits up to 60 s for readiness.
+  // `up` (and `restart-wxt`) may install dependencies, then waits up to 60 s for readiness.
   up: Duration.minutes(6),
   down: Duration.minutes(2),
   reload: Duration.minutes(2),
@@ -150,9 +150,9 @@ const labThreadNote = (input: {
     `When done: commit, then \`sp-labs down ${input.labId}\` and \`sp-labs release ${input.labId}\` (pass --handoff only for surprising state).`,
   ].join(" ");
 
-/** The one-liner a lab thread's next turn carries after a failed `up`. */
-const labUpFailedNote = (labId: string, detail: string): string =>
-  `\`sp-labs up ${labId}\` failed: ${detail}`;
+/** The one-liner a lab thread's next turn carries after a failed `up` or `restart-wxt`. */
+const labUpFailedNote = (command: string, labId: string, detail: string): string =>
+  `\`sp-labs ${command} ${labId}\` failed: ${detail}`;
 
 /** What stops a release. A running stack only blocks when the caller did not ask to stop it. */
 const labReleaseBlockers = (
@@ -379,18 +379,26 @@ const make = Effect.gen(function* () {
   const leaseArgs = (environment: LabEnvironment) =>
     environment.lease === null ? [] : ["--lease", environment.lease.id];
 
-  const runUp = (labId: string): Effect.Effect<LabsActionResult, LabsError> =>
+  /** `up` and `restart-wxt` share their output, success rule, and failure note. */
+  const runUp = (
+    labId: string,
+    action: "up" | "restart-wxt",
+  ): Effect.Effect<LabsActionResult, LabsError> =>
     mutate(
       labId,
-      "starting",
+      action === "up" ? "starting" : "restarting-wxt",
       Effect.gen(function* () {
         const { directory, environment } = yield* findLab(labId);
         const outcome = yield* cli
-          .run({ directory, args: ["up", labId, ...leaseArgs(environment)], timeout: TIMEOUTS.up })
-          .pipe(Effect.flatMap(decodeOutput(UpOutput, "up")), Effect.exit);
+          .run({
+            directory,
+            args: [action, labId, ...leaseArgs(environment)],
+            timeout: TIMEOUTS.up,
+          })
+          .pipe(Effect.flatMap(decodeOutput(UpOutput, action)), Effect.exit);
         const failure = Exit.isFailure(outcome)
           ? Option.match(Exit.findErrorOption(outcome), {
-              onNone: () => "sp-labs up stopped unexpectedly.",
+              onNone: () => `sp-labs ${action} stopped unexpectedly.`,
               onSome: (error) => error.message,
             })
           : outcome.value.extension.ok
@@ -411,7 +419,7 @@ const make = Effect.gen(function* () {
               : hiddenNotes.put({
                   threadId,
                   kind: UP_FAILED_NOTE_KIND,
-                  text: labUpFailedNote(labId, failure),
+                  text: labUpFailedNote(action, labId, failure),
                 })
           ).pipe(
             Effect.catch((cause) =>
@@ -419,13 +427,13 @@ const make = Effect.gen(function* () {
             ),
           );
         }
-        return { envId: labId, action: "up" as const, ok: failure === null, detail: failure };
+        return { envId: labId, action, ok: failure === null, detail: failure };
       }),
     );
 
   const runSimple = (
     envId: string,
-    action: Exclude<LabsActionInput["action"], "up">,
+    action: Exclude<LabsActionInput["action"], "up" | "restart-wxt">,
     note: string | undefined,
   ): Effect.Effect<LabsActionResult, LabsError> => {
     const plan = {
@@ -461,7 +469,9 @@ const make = Effect.gen(function* () {
   };
 
   const action: LabsService["Service"]["action"] = (input) =>
-    input.action === "up" ? runUp(input.envId) : runSimple(input.envId, input.action, input.note);
+    input.action === "up" || input.action === "restart-wxt"
+      ? runUp(input.envId, input.action)
+      : runSimple(input.envId, input.action, input.note);
 
   const prepareThread: LabsService["Service"]["prepareThread"] = (input) =>
     Effect.gen(function* () {
@@ -539,7 +549,7 @@ const make = Effect.gen(function* () {
       // The agent starts right away; `up` runs beside it and reports through the snapshot.
       const operation = (yield* Ref.get(t3State))[input.labId]?.operation ?? null;
       if (prepared.stackStopped && operation !== "starting") {
-        yield* runUp(input.labId).pipe(Effect.ignore, Effect.forkIn(scope));
+        yield* runUp(input.labId, "up").pipe(Effect.ignore, Effect.forkIn(scope));
       }
       return {
         labId: prepared.labId,

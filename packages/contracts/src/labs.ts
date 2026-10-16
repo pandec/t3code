@@ -1,3 +1,4 @@
+import * as Effect from "effect/Effect";
 import * as Schema from "effect/Schema";
 
 import { PositiveInt, ProjectId, ThreadId, TrimmedNonEmptyString } from "./baseSchemas.ts";
@@ -47,6 +48,15 @@ export const LabHandoff = Schema.Struct({
 });
 export type LabHandoff = typeof LabHandoff.Type;
 
+/** A released reservation; `status --runtime` lists a lab's last three, newest first. */
+export const LabRecentLease = Schema.Struct({
+  threadId: Schema.NullOr(Schema.String),
+  purpose: Schema.String,
+  acquiredAt: Schema.String,
+  releasedAt: Schema.String,
+});
+export type LabRecentLease = typeof LabRecentLease.Type;
+
 export const LabLinkState = Schema.Literals(["up", "down", "unknown"]);
 export type LabLinkState = typeof LabLinkState.Type;
 
@@ -95,6 +105,8 @@ export const LabEnvironment = Schema.Struct({
   lease: Schema.NullOr(LabLease),
   hold: Schema.NullOr(LabHold),
   handoff: Schema.NullOr(LabHandoff),
+  /** Empty for staging and preview, and from an sp-labs checkout that predates the field. */
+  recentLeases: Schema.Array(LabRecentLease).pipe(Schema.withDecodingDefault(Effect.succeed([]))),
   runtime: LabRuntime,
   /** Latest journaled command of the current reservation. */
   lastActivityAt: Schema.NullOr(Schema.String),
@@ -138,6 +150,7 @@ export type LabLogEntry = typeof LabLogEntry.Type;
 export const LabT3Operation = Schema.Literals([
   "acquiring",
   "starting",
+  "restarting-wxt",
   "stopping",
   "reloading",
   "releasing",
@@ -147,7 +160,7 @@ export const LabT3Operation = Schema.Literals([
 ]);
 export type LabT3Operation = typeof LabT3Operation.Type;
 
-/** The last `up` T3 ran on an environment. Success means exit 0 and `extension.ok`. */
+/** The last `up` or `restart-wxt` T3 ran on an environment. Success means exit 0 and `extension.ok`. */
 export const LabUpResult = Schema.Struct({
   ok: Schema.Boolean,
   /** The failure reason; null on success. */
@@ -248,6 +261,8 @@ export type LabsPrepareThreadResult = typeof LabsPrepareThreadResult.Type;
 
 export const LabAction = Schema.Literals([
   "up",
+  /** Replaces the dev server session even when healthy; Chrome keeps running. */
+  "restart-wxt",
   "down",
   "reload",
   "browser",
@@ -269,7 +284,7 @@ export type LabsActionInput = typeof LabsActionInput.Type;
 export const LabsActionResult = Schema.Struct({
   envId: Schema.String,
   action: LabAction,
-  /** False only for an `up` whose extension check failed (the CLI exited 0). */
+  /** False only for an `up`/`restart-wxt` whose extension check failed (the CLI exited 0). */
   ok: Schema.Boolean,
   detail: Schema.NullOr(Schema.String),
 });

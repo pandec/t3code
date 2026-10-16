@@ -57,6 +57,7 @@ const environment = (id: string, lab: FakeLab | null): LabEnvironment => ({
   lease: lab?.lease ?? null,
   hold: null,
   handoff: null,
+  recentLeases: [],
   runtime: {
     checkedAt: "2026-10-14T00:00:00.000Z",
     chrome: { state: lab?.running === true ? "up" : "down", detail: "" },
@@ -107,7 +108,8 @@ const makeFakeCli = Effect.gen(function* () {
           yield* setLab(target, (lab) => ({ ...lab, lease, branch }));
           return { lease, worktree: `/fake/${target}`, handoff: null, branch };
         }
-        case "up": {
+        case "up":
+        case "restart-wxt": {
           const behaviour = yield* Ref.get(up);
           if (behaviour.type === "fail") {
             return yield* new LabsError({ reason: "cli_failed", detail: behaviour.error });
@@ -337,6 +339,22 @@ describe("LabsService", () => {
             yield* Ref.set(fake.up, { type: "ok" });
             assert.isTrue((yield* labs.action({ envId: "sp-lab-1", action: "up" })).ok);
             assert.deepEqual(yield* notes.pending(THREAD, null), []);
+
+            // A WXT restart runs under the lease and reports like `up`.
+            yield* Ref.set(fake.up, { type: "fail", error: "WXT did not rebuild" });
+            const restart = yield* labs.action({ envId: "sp-lab-1", action: "restart-wxt" });
+            assert.deepEqual(restart, {
+              envId: "sp-lab-1",
+              action: "restart-wxt",
+              ok: false,
+              detail: "WXT did not rebuild",
+            });
+            const call = yield* takeCall(fake, "restart-wxt");
+            assert.deepEqual(call.args, ["restart-wxt", "sp-lab-1", "--lease", LEASE.id]);
+            assert.deepEqual(
+              (yield* notes.pending(THREAD, null)).map((note) => note.text),
+              ["`sp-labs restart-wxt sp-lab-1` failed: WXT did not rebuild"],
+            );
           }),
         );
       }),

@@ -2,6 +2,7 @@ import type {
   EnvironmentId,
   LabEnvironment,
   LabHistoryItem,
+  LabRecentLease,
   LabT3State,
   LabsSnapshot,
   ProjectId,
@@ -42,13 +43,14 @@ import {
 } from "./labs.logic";
 import { useLabsPanelStore, useSelectedLab } from "./labsPanelStore";
 
+/** Hover deepens the row's own tint instead of greying it out. */
 const ROW_TINT: Record<LabSummaryTone, string> = {
-  free: "bg-success/6",
-  reserved: "bg-info/8",
-  attention: "bg-warning/8",
-  bad: "bg-destructive/8",
-  kept: "bg-muted/60",
-  shared: "bg-muted/40",
+  free: "bg-success/6 hover:bg-success/12",
+  reserved: "bg-info/8 hover:bg-info/16",
+  attention: "bg-warning/8 hover:bg-warning/16",
+  bad: "bg-destructive/8 hover:bg-destructive/16",
+  kept: "bg-muted/60 hover:bg-muted",
+  shared: "bg-muted/40 hover:bg-muted/80",
 };
 
 const WORD_COLOR: Record<LabSummaryTone, string> = {
@@ -315,7 +317,7 @@ function LabListRow({
       onClick={open}
       onKeyDown={onKeyDown}
       className={cn(
-        "grid cursor-pointer grid-cols-[auto_minmax(0,1fr)_auto] gap-x-3 rounded-lg px-3 py-2 text-xs outline-none transition-colors hover:bg-accent/60 focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring",
+        "grid cursor-pointer grid-cols-[auto_minmax(0,1fr)_auto] gap-x-3 rounded-lg px-3 py-2 text-xs outline-none transition-colors focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring",
         ROW_TINT[summary.tone],
       )}
     >
@@ -490,6 +492,14 @@ function LabDetail({
           </Section>
         ) : null}
 
+        {isLab && environment.recentLeases.length > 0 ? (
+          <LabRecentHolders
+            environmentId={environmentId}
+            leases={environment.recentLeases}
+            now={now}
+          />
+        ) : null}
+
         {isLab ? (
           <Section title="Last handoff">
             {environment.handoff ? (
@@ -621,6 +631,55 @@ function historyLine(item: LabHistoryItem): { title: string; detail: string | nu
         detail: item.purpose,
       };
   }
+}
+
+/** The lab's last released reservations, newest first, linked to their threads when T3 knows them. */
+function LabRecentHolders({
+  environmentId,
+  leases,
+  now,
+}: {
+  readonly environmentId: EnvironmentId;
+  readonly leases: ReadonlyArray<LabRecentLease>;
+  readonly now: number;
+}) {
+  const owners = useLabOwnerViews(
+    environmentId,
+    leases.map((lease) => lease.threadId),
+  );
+  return (
+    <Section title="Recent holders">
+      <ol className="flex flex-col gap-1.5">
+        {leases.map((lease) => {
+          const owner = lease.threadId ? owners.get(lease.threadId) : undefined;
+          return (
+            <li key={`${lease.acquiredAt}:${lease.releasedAt}`} className="flex flex-col">
+              <p className="min-w-0">
+                {owner && lease.threadId ? (
+                  <LabOwnerLink
+                    environmentId={environmentId}
+                    threadId={lease.threadId}
+                    title={owner.title}
+                  />
+                ) : (
+                  <span className="text-muted-foreground">
+                    {lease.threadId ? "Thread not in T3" : "Outside T3"}
+                  </span>
+                )}
+                <span className="text-muted-foreground">
+                  {" · released "}
+                  {formatLabAgo(lease.releasedAt, now)}
+                </span>
+              </p>
+              {lease.purpose ? (
+                <p className="truncate text-muted-foreground">{lease.purpose}</p>
+              ) : null}
+            </li>
+          );
+        })}
+      </ol>
+    </Section>
+  );
 }
 
 /** The lab's timeline, fetched when its detail opens. */

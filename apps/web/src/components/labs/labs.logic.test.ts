@@ -52,6 +52,7 @@ function lab(id: string, overrides: Partial<LabEnvironment> = {}): LabEnvironmen
     lease: null,
     hold: null,
     handoff: null,
+    recentLeases: [],
     runtime: stoppedRuntime,
     lastActivityAt: null,
     ...overrides,
