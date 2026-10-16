@@ -402,7 +402,10 @@ describe("settle and snooze Undo", () => {
 });
 
 describe("snoozing the open thread", () => {
-  const snoozeOpenThread = async (options?: { moveOnFallback?: () => void }) => {
+  const snoozeOpenThread = async (
+    options?: { moveOnFallback?: () => void },
+    routeDuringSnooze?: Record<string, string>,
+  ) => {
     router.state.matches[0]!.params = {
       environmentId: target.environmentId,
       threadId: target.threadId,
@@ -410,6 +413,7 @@ describe("snoozing the open thread", () => {
     const snoozedUntil = new Date(Date.now() + 60_000).toISOString();
     commands.snooze.mockImplementation(async () => {
       threadShell.snoozedUntil = snoozedUntil;
+      if (routeDuringSnooze) router.state.matches[0]!.params = routeDuringSnooze;
       return { _tag: "Success", value: undefined };
     });
     await useThreadActions().snoozeThread(target, snoozedUntil, options);
@@ -434,5 +438,19 @@ describe("snoozing the open thread", () => {
     await snoozeOpenThread({ moveOnFallback });
     expect(router.navigate).not.toHaveBeenCalled();
     expect(moveOnFallback).toHaveBeenCalledOnce();
+  });
+
+  it("leaves a reader who navigated away during the snooze where they are", async () => {
+    visitAfterSnooze.target = {
+      kind: "server",
+      threadRef: { environmentId: "undo-env", threadId: "previous" },
+    };
+    const moveOnFallback = vi.fn();
+    await snoozeOpenThread(
+      { moveOnFallback },
+      { environmentId: "undo-env", threadId: "elsewhere" },
+    );
+    expect(router.navigate).not.toHaveBeenCalled();
+    expect(moveOnFallback).not.toHaveBeenCalled();
   });
 });

@@ -25,10 +25,9 @@ const visit = (id: string) => threadVisitHistory.record({ kind: "server", thread
 
 beforeEach(() => {
   shells.clear();
-  for (const id of ["previous", "snoozed", "other"]) {
+  for (const id of ["previous", "snoozed"]) {
     shells.set(id, { archivedAt: null, snoozedUntil: null });
   }
-  visit("other");
   visit("previous");
   visit("snoozed");
 });

@@ -374,8 +374,9 @@ you confirm; one day means 24 hours. On web and desktop, you can also snooze
 several selected threads together. Choose **Wake thread** to bring a thread back early.
 
 On web and desktop, snoozing the thread you have open takes you back to the thread you viewed
-before it, the one `Ctrl+Tab` opens on desktop. If that one is snoozed too, a snooze from the
-sidebar moves to the next thread in the list, and other snoozes keep you where you are.
+before it, the one `Ctrl+Tab` opens on desktop. If there is no such thread or it is snoozed too, a
+snooze from the sidebar moves to the next thread in the list, and other snoozes keep you where you
+are.
 
 On web and desktop, **Snooze → Until I wake it** snoozes without a timer. The thread stays in the
 Snoozed section, after the timed snoozes, until you wake, pin, settle, or message it, or until it
