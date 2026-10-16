@@ -69,6 +69,7 @@ export interface LabStackHealth {
 const T3_OPERATION_LABELS: Record<LabT3Operation, string> = {
   acquiring: "Reserving",
   starting: "Starting",
+  "restarting-wxt": "Restarting WXT",
   stopping: "Stopping",
   reloading: "Reloading",
   releasing: "Releasing",

@@ -17,6 +17,7 @@ import {
   LogOutIcon,
   MessageSquareIcon,
   PlayIcon,
+  RefreshCwIcon,
   RotateCwIcon,
   SquareIcon,
 } from "lucide-react";
@@ -52,6 +53,7 @@ function errorMessage(result: Parameters<typeof squashAtomCommandFailure>[0]): s
 
 const ACTION_TITLES: Record<LabAction, string> = {
   up: "Start",
+  "restart-wxt": "Restart WXT",
   down: "Stop",
   reload: "Reload",
   browser: "Focus browser",
@@ -387,10 +389,10 @@ export function LabActionBar({
         />
       ) : null}
       <ActionButton
-        label={running ? "Restart" : "Start"}
+        label={running ? "Refresh" : "Start"}
         tooltip={
           running
-            ? "Stops and starts this lab's dev stack."
+            ? "Starts whatever is stopped and restarts the dev server only if it is stale (dependencies or branch changed). Chrome keeps running."
             : "Starts this lab's Chrome, dev server and backend (about 20 s)."
         }
         icon={PlayIcon}
@@ -398,6 +400,16 @@ export function LabActionBar({
         disabled={busy}
         onClick={() => void commands.action(environment, "up")}
       />
+      {running ? (
+        <ActionButton
+          label="Restart WXT"
+          tooltip="Restarts this lab's dev server and backend watcher, then reloads the extension. Chrome and its sign-ins stay."
+          icon={RefreshCwIcon}
+          compact={compact}
+          disabled={busy}
+          onClick={() => void commands.action(environment, "restart-wxt")}
+        />
+      ) : null}
       {running ? (
         <ActionButton
           label="Stop"
