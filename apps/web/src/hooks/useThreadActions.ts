@@ -1255,7 +1255,15 @@ export function useThreadActions() {
           ),
         );
       }
-      const action = ThreadUndo.begin("snooze", scopedThreadKey(target));
+      const threadKey = scopedThreadKey(target);
+      const routeKeyNow = () => {
+        const routeRef = getCurrentRouteThreadRef();
+        return routeRef === null ? null : scopedThreadKey(routeRef);
+      };
+      // Only a reader who had the thread open when snoozing moves on; opening
+      // it during the await is a choice to look at it.
+      const wasOpen = routeKeyNow() === threadKey;
+      const action = ThreadUndo.begin("snooze", threadKey);
       const result = await snoozeThreadMutation({
         environmentId: target.environmentId,
         input: { threadId: target.threadId, snoozedUntil, ...(untilDone ? { untilDone } : {}) },
@@ -1274,13 +1282,12 @@ export function useThreadActions() {
       // A reader still on the snoozed thread moves back to the thread they
       // visited before it (the Ctrl+Tab target); in a split, the other pane
       // takes over instead. A navigation made during the await wins over ours.
-      const threadKey = scopedThreadKey(target);
-      const routeRef = getCurrentRouteThreadRef();
-      const routeKey = routeRef === null ? null : scopedThreadKey(routeRef);
+      const routeKey = routeKeyNow();
       const navigateToThread = (ref: ScopedThreadRef) =>
         router.navigate({ to: "/$environmentId/$threadId", params: buildThreadRouteParams(ref) });
       if (
         !foldSplitForParkedThread(threadKey, routeKey, navigateToThread) &&
+        wasOpen &&
         shouldNavigateAfterThreadPark({
           threadKey,
           currentThreadKey: routeKey,
