@@ -148,11 +148,14 @@ export function SplitThreadLayout({ children }: { children: ReactNode }) {
 }
 
 /**
- * Folds the split when a thread on screen gets snoozed or archived from any
- * entry point (menus, shortcuts, an agent over MCP, another device). Reads the
- * committed thread detail, and only a fresh transition counts: a thread that
- * was already parked when it was opened in the split stays put. Rendered as
- * its own component so streamed detail updates re-render nothing else.
+ * Folds the split when a thread on screen gets snoozed from any entry point
+ * (menus, shortcuts, an agent over MCP, another device). An archive only folds
+ * when this client's own archive action does it (`archiveThread`): one the
+ * agent requested or scheduled for when the thread is done leaves the thread
+ * readable. Reads the committed thread detail, and only a fresh transition
+ * counts: a thread that was already parked when it was opened in the split
+ * stays put. Rendered as its own component so streamed detail updates
+ * re-render nothing else.
  */
 function ParkedThreadWatcher({
   threadRef,
@@ -172,13 +175,11 @@ function ParkedThreadWatcher({
       ? "snoozed"
       : detailState;
   const lastParkState = useRef<typeof parkState>(null);
-  // Re-runs on route changes are no-ops: only a move into snoozed or archived
-  // folds, so archiving an already-snoozed thread still counts.
+  // Re-runs on route changes are no-ops: only a move into snoozed folds.
   useEffect(() => {
     const previous = lastParkState.current;
     lastParkState.current = parkState;
-    if (parkState === null || parkState === "active" || previous === null) return;
-    if (previous === parkState || previous === "archived") return;
+    if (parkState !== "snoozed" || previous !== "active") return;
     foldSplitForParkedThread(scopedThreadKey(threadRef), routeThreadKey, (ref) =>
       router.navigate({ to: "/$environmentId/$threadId", params: buildThreadRouteParams(ref) }),
     );

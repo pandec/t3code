@@ -3,7 +3,7 @@ import { scopeThreadRef, scopedThreadKey } from "@t3tools/client-runtime/environ
 import { beforeEach, describe, expect, it, vi } from "vite-plus/test";
 
 import { threadVisitHistory } from "./threadLastVisited";
-import { resolveVisitTargetAfterSnooze } from "./threadVisitTargets";
+import { resolveVisitTargetAfterPark } from "./threadVisitTargets";
 
 const shells = vi.hoisted(
   () => new Map<string, { archivedAt: string | null; snoozedUntil: string | null }>(),
@@ -32,9 +32,9 @@ beforeEach(() => {
   visit("snoozed");
 });
 
-describe("resolveVisitTargetAfterSnooze", () => {
+describe("resolveVisitTargetAfterPark", () => {
   it("returns the thread visited before the snoozed one", () => {
-    expect(resolveVisitTargetAfterSnooze(ref("snoozed"))).toEqual({
+    expect(resolveVisitTargetAfterPark(ref("snoozed"))).toEqual({
       kind: "server",
       threadRef: ref("previous"),
     });
@@ -42,10 +42,10 @@ describe("resolveVisitTargetAfterSnooze", () => {
 
   it("skips a previous thread that is snoozed or snoozing in the same batch", () => {
     shells.set("previous", { archivedAt: null, snoozedUntil: "2999-01-01T00:00:00.000Z" });
-    expect(resolveVisitTargetAfterSnooze(ref("snoozed"))).toBeNull();
+    expect(resolveVisitTargetAfterPark(ref("snoozed"))).toBeNull();
     shells.set("previous", { archivedAt: null, snoozedUntil: null });
     expect(
-      resolveVisitTargetAfterSnooze(ref("snoozed"), new Set([scopedThreadKey(ref("previous"))])),
+      resolveVisitTargetAfterPark(ref("snoozed"), new Set([scopedThreadKey(ref("previous"))])),
     ).toBeNull();
   });
 });

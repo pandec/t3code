@@ -53,16 +53,16 @@ export function resolveVisitTarget(target: ThreadRouteTarget): ThreadRouteTarget
 }
 
 /**
- * Where snoozing the open thread takes the reader: the thread visited before
- * it (the Ctrl+Tab target), unless that one is snoozed too or is among
- * `alsoParking` (a bulk snooze in flight).
+ * Where snoozing or archiving the open thread takes the reader: the thread
+ * visited before it (the Ctrl+Tab target), unless that one is snoozed or
+ * archived too, or is among `alsoParking` (a bulk snooze in flight).
  */
-export function resolveVisitTargetAfterSnooze(
-  snoozed: ScopedThreadRef,
+export function resolveVisitTargetAfterPark(
+  parked: ScopedThreadRef,
   alsoParking?: ReadonlySet<string>,
 ): ThreadRouteTarget | null {
   const now = new Date().toISOString();
-  return threadVisitHistory.resolveTarget({ kind: "server", threadRef: snoozed }, (entry) => {
+  return threadVisitHistory.resolveTarget({ kind: "server", threadRef: parked }, (entry) => {
     const target = resolveVisitTarget(entry);
     if (target?.kind !== "server") return target;
     if (alsoParking?.has(scopedThreadKey(target.threadRef))) return null;

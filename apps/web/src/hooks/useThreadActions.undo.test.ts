@@ -79,11 +79,11 @@ vi.mock("../state/entities", async (original) => ({
   readEnvironmentSupportsSnooze: () => true,
   readThreadShell: () => (shellLookup.missing ? null : threadShell),
 }));
-const visitAfterSnooze = vi.hoisted(() => ({
+const visitAfterPark = vi.hoisted(() => ({
   target: null as { kind: "server"; threadRef: { environmentId: string; threadId: string } } | null,
 }));
 vi.mock("../threadVisitTargets", () => ({
-  resolveVisitTargetAfterSnooze: () => visitAfterSnooze.target,
+  resolveVisitTargetAfterPark: () => visitAfterPark.target,
 }));
 vi.mock("../state/use-atom-command", () => ({
   useAtomCommand: (command: unknown) => {
@@ -129,7 +129,7 @@ beforeEach(() => {
   }
   router.navigate.mockClear();
   router.state.matches[0]!.params = {};
-  visitAfterSnooze.target = null;
+  visitAfterPark.target = null;
   emptyDraft.ids = [];
   shellLookup.missing = false;
   threadShell.pinnedAt = null;
@@ -302,6 +302,41 @@ describe("archive Undo", () => {
     expect(router.navigate).not.toHaveBeenCalled();
   });
 
+  it("returns the reader to the previous thread, and Undo brings them back", async () => {
+    const openThread = { environmentId: target.environmentId, threadId: target.threadId };
+    const previous = { environmentId: "undo-env", threadId: "previous" };
+    router.state.matches[0]!.params = openThread;
+    visitAfterPark.target = { kind: "server", threadRef: previous };
+    await useThreadActions().archiveThread(target);
+    expect(router.navigate).toHaveBeenCalledExactlyOnceWith({
+      to: "/$environmentId/$threadId",
+      params: previous,
+    });
+    router.navigate.mockClear();
+    router.state.matches[0]!.params = previous;
+    await currentUndo()();
+    expect(router.navigate).toHaveBeenCalledExactlyOnceWith(
+      expect.objectContaining({ to: "/$environmentId/$threadId", params: openThread }),
+    );
+  });
+
+  it("leaves a reader who moved off the previous thread there on Undo", async () => {
+    router.state.matches[0]!.params = {
+      environmentId: target.environmentId,
+      threadId: target.threadId,
+    };
+    visitAfterPark.target = {
+      kind: "server",
+      threadRef: { environmentId: "undo-env", threadId: "previous" },
+    };
+    await useThreadActions().archiveThread(target);
+    router.navigate.mockClear();
+    router.state.matches[0]!.params = { environmentId: "undo-env", threadId: "elsewhere" };
+    await currentUndo()();
+    expect(commands.unarchive).toHaveBeenCalledOnce();
+    expect(router.navigate).not.toHaveBeenCalled();
+  });
+
   it("shows no Undo when the archive failed", async () => {
     commands.archive.mockResolvedValue({ _tag: "Failure", cause: new Error("nope") });
     const add = vi.spyOn(toastManager, "add").mockReturnValue("toast");
@@ -421,7 +456,7 @@ describe("snoozing the open thread", () => {
   };
 
   it("returns the reader to the previously visited thread", async () => {
-    visitAfterSnooze.target = {
+    visitAfterPark.target = {
       kind: "server",
       threadRef: { environmentId: "undo-env", threadId: "previous" },
     };
@@ -442,7 +477,7 @@ describe("snoozing the open thread", () => {
   });
 
   it("leaves a reader who navigated away during the snooze where they are", async () => {
-    visitAfterSnooze.target = {
+    visitAfterPark.target = {
       kind: "server",
       threadRef: { environmentId: "undo-env", threadId: "previous" },
     };
@@ -456,7 +491,7 @@ describe("snoozing the open thread", () => {
   });
 
   it("leaves a reader who opened the thread during the snooze on it", async () => {
-    visitAfterSnooze.target = {
+    visitAfterPark.target = {
       kind: "server",
       threadRef: { environmentId: "undo-env", threadId: "previous" },
     };
