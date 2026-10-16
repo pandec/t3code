@@ -2440,7 +2440,7 @@ const SidebarThreadRow = memo(function SidebarThreadRow(props: {
                 canOperateThread &&
                   !sortable?.isDragging &&
                   cn(
-                    "group-has-[:focus-visible]/sidebar-row:hidden group-hover/sidebar-row:hidden",
+                    "group-has-[:focus-visible]/sidebar-row:hidden group-any-hover/sidebar-row:hidden",
                     snoozeMenuOpen && "hidden",
                   ),
               )}
