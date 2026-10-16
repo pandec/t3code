@@ -1,3 +1,4 @@
+import * as Dialog from "../../components/ui/Dialog";
 import { useNavigation } from "@react-navigation/native";
 import { scopeThreadRef } from "@t3tools/client-runtime/environment";
 import type { EnvironmentThreadShell } from "@t3tools/client-runtime/state/shell";
@@ -6,7 +7,6 @@ import { AuthOrchestrationOperateScope, ThreadId } from "@t3tools/contracts";
 import * as Cause from "effect/Cause";
 import * as Haptics from "expo-haptics";
 import { useCallback } from "react";
-import { Alert } from "react-native";
 
 import { uuidv4 } from "../../lib/uuid";
 import { scopedThreadKey } from "../../lib/scopedEntities";
@@ -41,14 +41,14 @@ export function useForkConversation(
       const key = scopedThreadKey(thread.environmentId, thread.id);
       if (forkInFlightThreadKeys.has(key)) return;
       if (!readEnvironmentScope(thread.environmentId, AuthOrchestrationOperateScope)) {
-        Alert.alert("Could not fork conversation", "This connection cannot change threads.");
+        Dialog.alert("Could not fork conversation", "This connection cannot change threads.");
         return;
       }
       const forkTarget = conversationForkTarget(thread, {
         canForkImportedSession: readCanForkImportedSession(thread),
       });
       if (forkTarget === null) {
-        Alert.alert(
+        Dialog.alert(
           "Could not fork conversation",
           "This conversation cannot be forked right now. Wait for its turn to finish.",
         );
@@ -80,7 +80,7 @@ export function useForkConversation(
                 }).then((result) => (result._tag === "Failure" ? result.cause : result.value));
           if (Cause.isCause(forked)) {
             const error = Cause.squash(forked);
-            Alert.alert(
+            Dialog.alert(
               "Could not fork conversation",
               error instanceof Error && error.message.trim().length > 0
                 ? error.message
@@ -96,7 +96,7 @@ export function useForkConversation(
             read: () => appAtomRegistry.get(targetShell) !== null,
           });
           if (!ready) {
-            Alert.alert(
+            Dialog.alert(
               "Fork created",
               "Its thread data did not reach this client. Reconnect and try opening it from the thread list.",
             );

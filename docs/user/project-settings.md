@@ -156,7 +156,8 @@ Worktrees can be removed after a chosen number of inactive days, after a thread 
 merging, or when they have no commits beyond the default branch. Set settled retention to 0 days
 to remove a worktree at the next cleanup after settlement. Only T3-managed worktrees are eligible.
 Active sessions, background work, pending archives and worktree moves, and worktrees shared by
-another thread (also through a symlinked path) prevent removal. **Keep worktrees with local
+another thread (also through a symlinked path) prevent removal; a thread's own subagents don't count
+as another thread. **Keep worktrees with local
 changes** defaults to **Any local files**, which protects tracked edits, untracked files, and
 ignored files such as `.env` (except `node_modules`). **Uncommitted changes** protects tracked
 edits and untracked files but deletes ignored files and build output. **Edited tracked files**
@@ -173,6 +174,7 @@ Existing prompts for deleting a worktree manually remain available when this pol
 
 Choose **Delete now** to run the enabled rules immediately. The latest results show which
 worktrees were removed or kept and why, plus any failures.
+Results also list folders in the worktree folder that no thread uses, with their sizes; cleanup never removes them, so remove them manually if you want.
 
 Browser captures and rotated logs have separate retention periods. Expired capture links stop
 working. Current logs, message attachments, and browser profiles are kept.

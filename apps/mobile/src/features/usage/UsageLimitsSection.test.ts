@@ -40,7 +40,7 @@ vi.mock("react-native", () => ({
   Pressable: "button",
   View: "div",
 }));
-vi.mock("../../components/AppText", () => ({ AppText: "span" }));
+vi.mock("../../components/ui/AppText", () => ({ AppText: "span" }));
 vi.mock("../../components/ProviderIcon", () => ({ ProviderIcon: () => null }));
 vi.mock("./usageProviders", () => ({ useProviderColors: () => ({}) }));
 vi.mock("../../state/presentation", () => ({

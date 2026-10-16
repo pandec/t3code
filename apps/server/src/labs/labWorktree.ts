@@ -3,7 +3,7 @@ import type * as FileSystem from "effect/FileSystem";
 import type * as Path from "effect/Path";
 
 /** sp-labs writes this marker into every lab worktree it provisions. */
-const SP_LAB_MARKER_FILE = ".sp-lab.json";
+export const SP_LAB_MARKER_FILE = ".sp-lab.json";
 
 /**
  * Whether `directory` is an sp-labs lab worktree. sp-labs owns a lab's provisioning (its `up`

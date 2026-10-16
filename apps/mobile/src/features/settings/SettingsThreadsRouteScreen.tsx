@@ -1,7 +1,7 @@
 import { AuthSettingsWriteScope } from "@t3tools/contracts";
 import { readEnvironmentScope, useEnvironmentsWithScope } from "../../state/session";
 import { AutoSettleDaysField } from "./components/AutoSettleDaysField";
-import { ScreenScrollView as ScrollView } from "../../components/ScreenScrollView";
+import { ScreenScrollView as ScrollView } from "../../components/ui/ScreenScrollView";
 import { useAtomSet, useAtomValue } from "@effect/atom-react";
 import { AsyncResult } from "effect/reactivity";
 import { useEffect, useRef, useState } from "react";
@@ -16,7 +16,7 @@ import {
   MIN_STEER_GRACE_WINDOW_MS,
 } from "@t3tools/contracts/settings";
 import { supportsSharedSettingsSync } from "@t3tools/client-runtime/state/shared-settings";
-import { AppText as Text } from "../../components/AppText";
+import { AppText as Text } from "../../components/ui/AppText";
 import { mobilePreferencesAtom, updateMobilePreferencesAtom } from "../../state/preferences";
 import {
   didEnvironmentPrewarmRunsAdvance,

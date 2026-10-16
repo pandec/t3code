@@ -41,8 +41,11 @@ const runtimeVersionPolicy =
 
 const personalTeamBundleIdentifier = repoEnv.T3CODE_IOS_PERSONAL_TEAM_BUNDLE_ID?.trim();
 // Marketing version. Forks that ship their own builds set T3CODE_FORK_VERSION so the
-// Settings screen distinguishes them from an upstream build; otherwise use upstream's version.
-const appVersion = repoEnv.T3CODE_FORK_VERSION?.trim() || "2.0.0";
+// Settings screen distinguishes them from an upstream build; otherwise upstream's
+// T3CODE_MOBILE_VERSION release override, then upstream's version. fingerprint.config.js
+// resolves the same precedence.
+const appVersion =
+  repoEnv.T3CODE_FORK_VERSION?.trim() || repoEnv.T3CODE_MOBILE_VERSION?.trim() || "2.0.0";
 // CFBundleVersion. Only set when a build pipeline supplies one: App Store Connect
 // rejects a repeat build number, but leaving it unset elsewhere keeps `expo prebuild`
 // output stable for local dev builds.
@@ -51,7 +54,7 @@ const IOS_DEPLOYMENT_TARGET = "18.0";
 
 if (!isAppVersion(appVersion)) {
   throw new Error(
-    `T3CODE_FORK_VERSION must be three dot-separated integers such as 3.0.29 (received "${appVersion}").`,
+    `T3CODE_FORK_VERSION / T3CODE_MOBILE_VERSION must be three dot-separated integers such as 3.0.29 (received "${appVersion}").`,
   );
 }
 

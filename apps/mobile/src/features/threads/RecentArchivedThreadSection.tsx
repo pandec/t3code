@@ -6,9 +6,9 @@ import type { MenuAction } from "@react-native-menu/menu";
 import { memo, useCallback } from "react";
 import { Pressable, View } from "react-native";
 
-import { AppText as Text } from "../../components/AppText";
-import { SymbolView } from "../../components/AppSymbol";
-import { ControlPillMenu } from "../../components/ControlPill";
+import { AppText as Text } from "../../components/ui/AppText";
+import { SymbolView } from "../../components/ui/AppSymbol";
+import { Menu } from "../../components/ui/Menu";
 import { ProjectFavicon } from "../../components/ProjectFavicon";
 import { scopedProjectKey, scopedThreadKey } from "../../lib/scopedEntities";
 import { relativeTime } from "../../lib/time";
@@ -45,7 +45,7 @@ const RecentArchivedThreadRow = memo(function RecentArchivedThreadRow(props: {
     [props],
   );
   return (
-    <ControlPillMenu
+    <Menu
       actions={props.isPending ? PENDING_ARCHIVE_MENU_ACTIONS : ARCHIVED_MENU_ACTIONS}
       onPressAction={handleMenuAction}
       shouldOpenOnLongPress
@@ -133,7 +133,7 @@ const RecentArchivedThreadRow = memo(function RecentArchivedThreadRow(props: {
         </View>
         {props.pane === "sidebar" ? null : <View className="ml-5 h-px bg-border-subtle" />}
       </Pressable>
-    </ControlPillMenu>
+    </Menu>
   );
 });
 

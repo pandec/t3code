@@ -8,7 +8,13 @@ const path = require("node:path");
 // version keeps each major's OTAs on its own binaries: a new major reaches
 // users only once its store build is promoted.
 const appConfig = fs.readFileSync(path.join(__dirname, "app.config.ts"), "utf8");
-const majorVersion = appConfig.match(/^ {2}version: "(\d+)\./m)?.[1];
+// Same precedence as `appVersion` in app.config.ts (fork override, upstream release
+// override, then the literal default).
+const version =
+  process.env.T3CODE_FORK_VERSION?.trim() ||
+  process.env.T3CODE_MOBILE_VERSION?.trim() ||
+  appConfig.match(/^ {2}repoEnv\.T3CODE_FORK_VERSION\?\.trim\(\) \|\| .* \|\| "([^"]+)";$/m)?.[1];
+const majorVersion = version?.match(/^(\d+)\./)?.[1];
 if (!majorVersion) {
   throw new Error("fingerprint.config.js could not read the app version from app.config.ts");
 }

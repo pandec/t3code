@@ -5,7 +5,10 @@ import type {
   ThreadContextRecord,
   ThreadId,
 } from "@t3tools/contracts";
-import { replaceComposerContextReferences } from "@t3tools/shared/composerContextReferences";
+import {
+  replaceComposerContextReferences,
+  toKindScopedComposerContextId,
+} from "@t3tools/shared/composerContextReferences";
 
 import { useComposerDraftStore, type ComposerThreadTarget } from "../../composerDraftStore";
 import {
@@ -19,7 +22,6 @@ import {
 } from "../../lib/composerContextRecords";
 import {
   formatInlineContextReference,
-  toKindScopedComposerContextId,
   type ComposerContextReference,
 } from "../../lib/composerContextReferences";
 import { elementContextToPreviewAnnotation } from "../../lib/elementContext";

@@ -7,11 +7,11 @@ import {
 import {
   collectComposerContextReferences,
   formatComposerContextReference,
+  toKindScopedComposerContextId,
 } from "@t3tools/shared/composerContextReferences";
 import { describe, expect, it } from "vite-plus/test";
 
 import { previewAnnotationContextId } from "../../lib/composerContextRecords";
-import { toKindScopedComposerContextId } from "../../lib/composerContextReferences";
 import { planMessageContextRestore } from "./messageContextRestore";
 
 const environmentId = EnvironmentId.make("environment-local");

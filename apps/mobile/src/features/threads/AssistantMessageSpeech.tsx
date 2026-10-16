@@ -1,3 +1,4 @@
+import * as Dialog from "../../components/ui/Dialog";
 import {
   beginMessageArtifactRequest,
   getMessageArtifactSessionSnapshot,
@@ -24,10 +25,10 @@ import {
   type ListeningTrackRef,
 } from "@t3tools/shared/listeningPlayback";
 import { useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
-import { ActivityIndicator, Alert, type ColorValue, Pressable, Text, View } from "react-native";
+import { ActivityIndicator, type ColorValue, Pressable, Text, View } from "react-native";
 
-import { SymbolView } from "../../components/AppSymbol";
-import { ControlPillMenu } from "../../components/ControlPill";
+import { SymbolView } from "../../components/ui/AppSymbol";
+import { Menu } from "../../components/ui/Menu";
 import { cn } from "../../lib/cn";
 import { useAssetUrlState, watchAssetUrl } from "../../state/assets";
 import {
@@ -121,7 +122,7 @@ export function useAssistantMessageSpeech(input: {
         // A dropped connection says nothing about the server's job, which the
         // thread's listening state still shows.
         if (reason === undefined && serverPendingRef.current) return;
-        Alert.alert("Listening version unavailable", messageSpeechFailureDescription(reason));
+        Dialog.alert("Listening version unavailable", messageSpeechFailureDescription(reason));
       })
       .finally(() => {
         setRequesting(false);
@@ -432,7 +433,7 @@ function ListeningSpeedControl(props: { readonly speed: number; readonly outline
         >
           <Text className="text-lg leading-5 text-foreground">−</Text>
         </Pressable>
-        <ControlPillMenu
+        <Menu
           accessibilityLabel={`Playback speed, ${spokenSpeed}. Choose preset.`}
           androidActionAccessibilityRole="radio"
           actions={speedActions}
@@ -448,7 +449,7 @@ function ListeningSpeedControl(props: { readonly speed: number; readonly outline
               {formatListeningSpeed(props.speed)}
             </Text>
           </Pressable>
-        </ControlPillMenu>
+        </Menu>
         <Pressable
           accessibilityLabel="Increase playback speed"
           accessibilityRole="button"

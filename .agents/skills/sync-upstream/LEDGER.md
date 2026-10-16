@@ -17,10 +17,12 @@ An entry earns its place only if a capable agent with the code in front of it wo
 - Fork schema goes only through fork-owned tables and `ForkMigrations`; upstream migrations keep their ids.
 - When both sides reuse one usage-cache version for incompatible formats, assign a fresh `USAGE_SCAN_CACHE_VERSION` and keep supported legacy decoders.
 - Merge a conflicted `patches/` file in extracted package source, regenerate it against the pristine package, and verify the patch reproduces the merged tree.
+- Fork-only native patches (`expo-image-picker`, `expo-modules-core`, `expo-notifications`) merge cleanly but stop applying when upstream bumps the SDK: re-key and regenerate them at the locked version.
+- When upstream's lockfile pins packages inside the release-age window, add those exact versions to `minimumReleaseAgeExclude` as upstream does.
 - Use `.ts` relative imports in code the mobile app bundles; Metro does not remap `.js` specifiers the way tsc and Vite do.
 - Usage parsing is driver-owned (`Drivers/*Usage.ts`, provider `usage.ts`): port fork usage behavior there, keep the global scan mutex (adapt upstream tests that assume concurrent scans), the fork's v7 cache wire format with its legacy decoders, and malformed-line accounting under upstream's byte gate.
 - Keep the fork's per-capability MCP islands: apply upstream transport options in `makeMcpTransport` and provide stateful shared layers (e.g. `ThreadCommandExecutor`) outside the fresh island layers.
-- Storage cleanup defaults `worktreeKeepWhen` to `any-local-files` (fork policy: ignored files such as `.env` stay protected) and keeps the fork's full rechecks (active+archived snapshot, every non-stopped stored session protects); restate upstream tests that count snapshot reads or use `isLive` in those terms rather than adopting upstream's lighter rechecks.
+- Storage cleanup defaults `worktreeKeepWhen` to `any-local-files` (fork policy: ignored files such as `.env` stay protected) and keeps the fork's full rechecks (active+archived snapshot, every non-stopped stored session protects); restate upstream tests that count snapshot reads or use `isLive` in those terms rather than adopting upstream's lighter rechecks. Parent→subagent families are removable, but unrelated sharers and `.sp-lab.json` worktrees always keep theirs.
 - `withWorkspaceLease` is a non-reentrant permit that canonicalizes asynchronously (needs `FileSystem`/`Path`): never nest it for one path (upstream's whole-startup and rollback leases replace fork inner leases), and in tests make a holder signal acquisition and canonicalize through the service's file system.
 - Mobile pastes re-encode PNGs as JPEG through upstream's `renderPhoto` edge cap; adapt upstream paste tests that expect PNG output.
 - Fork settings secrets (usage-source key, Telegram token) go through `mapSettingsSecrets` in `settingsSecrets.ts` under their existing store names; a sent value wins over a stale redaction flag; the Telegram link code is a client-only redaction in `serverSettings.ts`.
@@ -45,7 +47,7 @@ When the upstream range touches a path, spawn one reviewer for its question.
 - `Adapters/ClaudeAdapterV2.ts`, `claudeHistory*.ts`: are Stop grace, the parent-only cursor, context/history fixes, gateway models, and worktree-follow intact?
 - `ProviderSessionManager.ts`, `mcp/**`, adapter MCP injection: does every path respect per-thread capabilities and voice tool timeouts?
 - `provider/Drivers/Codex*`, `CodexAdapterV2.ts`, `project/AgentSessionScanner.ts`: do runtime and discovery resolve the Codex home from the same merged environment?
-- `apps/server/src/usage/**`, `Drivers/*Usage*`, `provider-*/src/server/usage.ts`, `CursorUsageAccounts.ts`: do fork usage semantics (homes, malformed vs deliberate skips, retained history, Cursor legacy) and the v6 cache survive?
+- `apps/server/src/usage/**`, `Drivers/*Usage*`, `provider-*/src/server/usage.ts`, `CursorUsageAccounts.ts`: do fork usage semantics (homes, malformed vs deliberate skips, retained history, Cursor legacy) and the v7 cache survive?
 - `apps/server/src/storageCleanup.ts`: do canonical ownership, Stop-held queue, pending archive/move guards and the final removal reservation still wrap removal?
 - `patches/`, `patchedDependencies`, Expo SDK bumps: does each fork-carried native patch still apply, remain needed, and match the SDK's exact version?
 

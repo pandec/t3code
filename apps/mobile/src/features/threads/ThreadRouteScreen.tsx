@@ -1,3 +1,4 @@
+import * as Dialog from "../../components/ui/Dialog";
 import { useOpenPullRequest } from "../../native/useOpenPullRequest";
 import { makeTurnCommandMetadata } from "../../lib/commandMetadata";
 import { buildProjectThreadStartTurnInput } from "../../lib/projectThreadStartTurn";
@@ -5,7 +6,7 @@ import { useWorktreeSetup } from "./use-worktree-setup";
 import { worktreeSetupAgentStarted } from "@t3tools/client-runtime/worktree-setup";
 import { canForkConversation } from "@t3tools/client-runtime/state/thread-fork";
 import { useForkConversation } from "./useForkConversation";
-import { ScreenHeader } from "../../components/ScreenHeader";
+import { AppBar } from "../../components/ui/AppBar";
 import {
   StackActions,
   useFocusEffect,
@@ -28,7 +29,7 @@ import {
   projectScriptRuntimeEnv,
   resolveProjectScripts,
 } from "@t3tools/shared/projectScripts";
-import { Alert, Platform, ScrollView, View } from "react-native";
+import { Platform, ScrollView, View } from "react-native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { useConnectionsReady } from "../../state/workspace";
 import { useEnvironmentShellReadiness } from "../../state/shell";
@@ -39,7 +40,7 @@ import { recoverFailedThreadDraft } from "../../state/recover-failed-thread-draf
 import { useEnvironmentQuery } from "../../state/query";
 import { dismissGitActionResult, useGitActionProgress } from "../../state/use-vcs-action-state";
 import { vcsEnvironment } from "../../state/vcs";
-import { EmptyState } from "../../components/EmptyState";
+import { EmptyState } from "../../components/ui/EmptyState";
 import { LoadingScreen } from "../../components/LoadingScreen";
 import { scopedThreadKey } from "../../lib/scopedEntities";
 import { NATIVE_LIQUID_GLASS_SUPPORTED } from "../../native/native-glass";
@@ -130,7 +131,7 @@ function ThreadRouteFallbackLayout(props: { readonly children: ReactNode }) {
 
   return (
     <>
-      <ScreenHeader
+      <AppBar
         title="Thread"
         options={{ contentStyle: { backgroundColor: themeVariables["--color-header"] } }}
         onBack={layout.usesSplitView ? undefined : returnToList}
@@ -278,6 +279,7 @@ function ThreadRouteContent(
   const {
     selectedThread,
     selectedThreadCreation,
+    selectedThreadDetailRef,
     selectedThreadProject,
     selectedEnvironmentConnection,
   } = useThreadSelection();
@@ -850,7 +852,7 @@ function ThreadRouteContent(
     try {
       await recoverFailedThreadDraft(creation);
     } catch (error) {
-      Alert.alert(
+      Dialog.alert(
         "Could not restore draft",
         error instanceof Error ? error.message : String(error),
       );
@@ -1007,6 +1009,7 @@ function ThreadRouteContent(
           selectedThread={selectedThreadWithDraftSettings ?? selectedThread}
           // Quota follows the model serving the live session, not a staged draft choice.
           persistedModel={selectedThread.modelSelection.model}
+          selectedThreadDetailRef={selectedThreadDetailRef}
           contentPresentation={contentPresentation}
           screenTone={connectionTone(routeConnectionState)}
           connectionError={routeConnectionError}

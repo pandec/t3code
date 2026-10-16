@@ -277,7 +277,8 @@ under **Settings → Extras** on web and desktop or **Settings → Thread behavi
 device). Set it to 0 to steer immediately.
 
 The agent doesn't always read a steer straight away. Most agents only check for new input between
-steps, so a steer sent during a long shell command or subagent can wait until that step finishes.
+steps, so a steer sent during a long shell command can wait until that step finishes. Claude moves a
+running foreground subagent to the background when you steer, so the steer arrives right away.
 Until the agent moves on, the message is dimmed with **Waiting for the agent to pick this up** under
 it. The note clears when the agent produces new output, or when the turn ends. It shows on every
 device and survives a reload.

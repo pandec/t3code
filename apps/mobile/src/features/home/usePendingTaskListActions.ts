@@ -1,6 +1,6 @@
+import * as Dialog from "../../components/ui/Dialog";
 import { useNavigation } from "@react-navigation/native";
 import { useCallback } from "react";
-import { Alert } from "react-native";
 
 import { removeThreadOutboxMessage } from "../../state/thread-outbox-removal";
 import { clearComposerDraftContent } from "../../state/use-composer-drafts";
@@ -36,7 +36,7 @@ export function usePendingTaskListActions(): {
 
   const confirmDeletePendingTask = useCallback((pendingTask: PendingNewTask) => {
     if (pendingTask.kind === "draft") {
-      Alert.alert("Discard draft?", `“${pendingTask.title}” will be removed.`, [
+      Dialog.alert("Discard draft?", `“${pendingTask.title}” will be removed.`, [
         { text: "Cancel", style: "cancel" },
         {
           text: "Discard",
@@ -62,7 +62,7 @@ export function usePendingTaskListActions(): {
     const releaseConfirmationHold = () => {
       if (heldForConfirmation && !deleting) releaseEditingQueuedMessage(messageId);
     };
-    Alert.alert(
+    Dialog.alert(
       "Delete pending task?",
       `“${pendingTask.title}” has not been sent yet and will be removed from the outbox.`,
       [
@@ -80,7 +80,7 @@ export function usePendingTaskListActions(): {
               .catch((error) => {
                 deleting = false;
                 releaseConfirmationHold();
-                Alert.alert(
+                Dialog.alert(
                   "Could not delete pending task",
                   error instanceof Error ? error.message : "The pending task could not be removed.",
                 );

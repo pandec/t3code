@@ -1,4 +1,4 @@
-import { PermissionUpdateNotice } from "./components/PermissionUpdateNotice";
+import { PermissionUpdateNotice } from "./features/connection/PermissionUpdateNotice";
 import * as Linking from "expo-linking";
 import * as SplashScreen from "expo-splash-screen";
 import { useEffect } from "react";
@@ -9,7 +9,7 @@ import { SafeAreaProvider } from "react-native-safe-area-context";
 import { createStaticNavigation } from "@react-navigation/native";
 
 import { RegistryContext } from "@effect/atom-react";
-import { ConfirmDialogHost } from "./components/ConfirmDialogHost";
+import * as Dialog from "./components/ui/Dialog";
 import { KeyboardStickyResetCoordinator } from "./components/KeyboardStickyResetCoordinator";
 import { CloudAuthProvider } from "./features/cloud/CloudAuthProvider";
 import { prepareNativeShowcaseCapture } from "./features/showcase/nativeShowcaseScene";
@@ -21,7 +21,7 @@ import {
 import { RootStack } from "./Stack";
 import { appAtomRegistry } from "./state/atom-registry";
 import { useThreadPrewarm } from "./state/prewarm";
-import { OverlayPortalHost } from "./components/OverlayPortal";
+import { OverlayPortalHost } from "./components/ui/OverlayPortal";
 import { shouldHandleAppLink } from "./lib/appLinking";
 import { useMobileNavigationTheme } from "./lib/useMobileNavigationTheme";
 import { MobileDiagnosticsCoordinator } from "./diagnostics/MobileDiagnosticsCoordinator";
@@ -106,7 +106,7 @@ function AppContent() {
                   <IncomingShareProvider>
                     <Navigation linking={appLinking} theme={navigationTheme} />
                   </IncomingShareProvider>
-                  <ConfirmDialogHost />
+                  <Dialog.Host />
                 </NativeLayoutMetricsProvider>
               </GlobalVoiceInputControl>
               {/* Anchored-menu overlays render here — in-window, so the

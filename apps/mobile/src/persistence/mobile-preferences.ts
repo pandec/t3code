@@ -70,6 +70,8 @@ export interface Preferences {
   readonly connectOnboardingOptOutAccounts?: ReadonlyArray<string>;
   readonly collapsedProjectGroups?: readonly string[];
   collapsedThreadGroups?: readonly string[];
+  /** Environments whose "reclaim database space" notice was dismissed. */
+  readonly dismissedDatabaseStorageNotices?: readonly string[];
   /** What the Return key does in the composer on a hardware keyboard. iOS only. */
   readonly composerEnterBehavior?: ComposerEnterBehavior;
   /**
@@ -178,6 +180,7 @@ export function sanitizePreferences(parsed: Preferences): Preferences {
     connectOnboardingOptOutAccounts?: ReadonlyArray<string>;
     collapsedProjectGroups?: readonly string[];
     collapsedThreadGroups?: readonly string[];
+    dismissedDatabaseStorageNotices?: readonly string[];
     composerEnterBehavior?: ComposerEnterBehavior;
     followUpBehavior?: FollowUpBehavior;
     microphones?: ReadonlyArray<MicrophoneEntry>;
@@ -266,6 +269,11 @@ export function sanitizePreferences(parsed: Preferences): Preferences {
   if (Array.isArray(parsed.collapsedProjectGroups)) {
     preferences.collapsedProjectGroups = parsed.collapsedProjectGroups.filter(
       (key): key is string => typeof key === "string",
+    );
+  }
+  if (Array.isArray(parsed.dismissedDatabaseStorageNotices)) {
+    preferences.dismissedDatabaseStorageNotices = parsed.dismissedDatabaseStorageNotices.filter(
+      (value): value is string => typeof value === "string",
     );
   }
   if (parsed.composerEnterBehavior === "send" || parsed.composerEnterBehavior === "newline") {

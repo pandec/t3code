@@ -1,3 +1,4 @@
+import * as Dialog from "../../components/ui/Dialog";
 import {
   beginMessageArtifactRequest,
   getMessageArtifactSessionSnapshot,
@@ -7,9 +8,9 @@ import {
 import { currentThreadMessageSummary } from "@t3tools/client-runtime/state/voice";
 import type { EnvironmentId, MessageId, MessageSummaryResult, ThreadId } from "@t3tools/contracts";
 import { type ReactNode, useCallback, useMemo, useState, useSyncExternalStore } from "react";
-import { ActivityIndicator, Alert, type ColorValue, Pressable, Text, View } from "react-native";
+import { ActivityIndicator, type ColorValue, Pressable, Text, View } from "react-native";
 
-import { SymbolView } from "../../components/AppSymbol";
+import { SymbolView } from "../../components/ui/AppSymbol";
 import { summarizeMessage } from "../../state/messageArtifacts";
 import { useEnvironmentQuery } from "../../state/query";
 import { useAtomCommand } from "../../state/use-atom-command";
@@ -83,7 +84,7 @@ export function useAssistantMessageSummary(input: {
           setExpanded(true);
           return;
         }
-        Alert.alert(
+        Dialog.alert(
           "Summary unavailable",
           "T3 Code could not summarize this message. Try again in a moment.",
         );

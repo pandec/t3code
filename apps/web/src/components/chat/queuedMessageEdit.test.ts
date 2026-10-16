@@ -8,6 +8,7 @@ import {
 import {
   collectComposerContextReferences,
   formatComposerContextReference,
+  toKindScopedComposerContextId,
 } from "@t3tools/shared/composerContextReferences";
 import { scopeThreadRef } from "@t3tools/client-runtime/environment";
 import { beforeEach, describe, expect, it } from "vite-plus/test";
@@ -22,7 +23,6 @@ import {
   recoverQueuedMessageEdit,
   restoreQueuedEditAttachments,
 } from "./queuedMessageEdit";
-import { toKindScopedComposerContextId } from "../../lib/composerContextReferences";
 
 const environmentId = EnvironmentId.make("remote-environment");
 const threadTarget = scopeThreadRef(environmentId, ThreadId.make("thread:edit"));

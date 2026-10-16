@@ -153,6 +153,7 @@ export type BrowserDefaultSettings = Pick<
   | "browserRecordingShowMousePresses"
   | "browserLinkTarget"
   | "browserAutoShowFloatingPreview"
+  | "pullRequestLinksOpenInApp"
 >;
 
 /**
@@ -200,6 +201,9 @@ export function getChangedBrowserSettingLabels(settings: BrowserDefaultSettings)
     ...(settings.browserAutoShowFloatingPreview !==
     DEFAULT_UNIFIED_SETTINGS.browserAutoShowFloatingPreview
       ? ["Floating preview"]
+      : []),
+    ...(settings.pullRequestLinksOpenInApp !== DEFAULT_UNIFIED_SETTINGS.pullRequestLinksOpenInApp
+      ? ["Open pull requests in T3 Code"]
       : []),
   ];
 }
