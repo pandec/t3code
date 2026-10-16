@@ -241,6 +241,11 @@ or background notifications that wake the thread, don't: the archive waits for t
 thread stays unarchived and the archive status shows the error. A pending archive survives a
 server restart, and waits for a turn the server resumes after restarting.
 
+On web and desktop, archiving the thread you have open takes you back to the thread you viewed
+before it, the one `Ctrl+Tab` opens on desktop, or to a new thread when there is none. **Undo**
+brings you back. An archive the agent requested or that was scheduled to run when the thread is
+done leaves the thread on screen, so you can still read its final message.
+
 You can also ask the agent to remove the thread's worktree when it archives. The branch is
 always kept. Removal only happens when the worktree has no uncommitted or untracked changes, is
 on a branch, is not a project's checkout, no other unarchived thread uses it, and no thread is
@@ -315,7 +320,7 @@ Threads you pick from the sidebar or the palette then open in the pane you are w
 the divider to resize the panes, or hover it to swap the threads, switch the second thread, or
 close the split. `mod+\` moves focus to the other pane and `mod+shift+\` swaps the threads.
 With no right-panel tab open, `mod+w` closes the active pane's thread and keeps the other one.
-Snoozing or archiving a thread in either pane does the same.
+Snoozing a thread in either pane, or archiving it yourself, does the same.
 
 ## Inspect agent work
 

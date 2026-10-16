@@ -2080,23 +2080,25 @@ const SidebarThreadRow = memo(function SidebarThreadRow(props: {
       </Tooltip>
     ) : null;
   // Fork: a scheduled (deferred) archive stays visible at a glance in both
-  // row variants until it runs or is cancelled from the thread menu.
-  const archivePendingIndicator = hasPendingArchive(thread) ? (
-    <Tooltip>
-      <TooltipTrigger
-        render={
-          <span
-            role="img"
-            aria-label="Archives when done"
-            className="inline-flex items-center text-warning-foreground"
-          />
-        }
-      >
-        <ArchiveIcon aria-hidden className="size-3 shrink-0" />
-      </TooltipTrigger>
-      <TooltipPopup>Archives when the current turn and background work finish</TooltipPopup>
-    </Tooltip>
-  ) : null;
+  // row variants until it runs or is cancelled. Where the hover actions
+  // include the archive toggle, the marker yields to it.
+  const renderArchivePendingIndicator = (className?: string | false) =>
+    hasPendingArchive(thread) ? (
+      <Tooltip>
+        <TooltipTrigger
+          render={
+            <span
+              role="img"
+              aria-label="Archives when done"
+              className={cn("inline-flex items-center text-warning-foreground", className)}
+            />
+          }
+        >
+          <ArchiveIcon aria-hidden className="size-3 shrink-0" />
+        </TooltipTrigger>
+        <TooltipPopup>Archives when the current turn and background work finish</TooltipPopup>
+      </Tooltip>
+    ) : null;
   // Same pen the new-thread draft rows lead with, so both kinds of unsent
   // work read the same way in the list.
   const draftIndicator = hasUnsentDraft ? (
@@ -2211,7 +2213,7 @@ const SidebarThreadRow = memo(function SidebarThreadRow(props: {
             {draftIndicator}
             {title}
             {listeningIndicator}
-            {archivePendingIndicator}
+            {renderArchivePendingIndicator()}
             {pinIndicator}
             {providerIcon}
             {/* A settled or snoozed thread can still occupy a split pane, so
@@ -2434,7 +2436,14 @@ const SidebarThreadRow = memo(function SidebarThreadRow(props: {
                 <span className="flex-1" />
               )}
               {listeningIndicator}
-              {archivePendingIndicator}
+              {renderArchivePendingIndicator(
+                canOperateThread &&
+                  !sortable?.isDragging &&
+                  cn(
+                    "group-has-[:focus-visible]/sidebar-row:hidden group-hover/sidebar-row:hidden",
+                    snoozeMenuOpen && "hidden",
+                  ),
+              )}
               {showPin ? (
                 <PinIcon
                   aria-label="Pinned"

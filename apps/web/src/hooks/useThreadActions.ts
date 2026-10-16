@@ -75,7 +75,7 @@ import { useUiStateStore } from "../uiStateStore";
 import { clearThreadPreviewState } from "../previewStateStore";
 import { useTerminalUiStateStore } from "../terminalUiStateStore";
 import { buildThreadRouteParams, resolveThreadRouteRef } from "../threadRoutes";
-import { resolveVisitTargetAfterSnooze } from "../threadVisitTargets";
+import { resolveVisitTargetAfterPark } from "../threadVisitTargets";
 import { formatWorktreePathForDisplay, getOrphanedWorktreePathForThread } from "../worktreeCleanup";
 import { stackedThreadToast, toastManager } from "../components/ui/toast";
 import { useClientSettings } from "./useSettings";
@@ -466,12 +466,29 @@ export function useThreadActions() {
   }, [router]);
 
   const unarchiveThread = useCallback(
-    async (target: ScopedThreadRef, opts: { navigate?: boolean } = {}) => {
+    async (
+      target: ScopedThreadRef,
+      opts: {
+        navigate?: boolean;
+        /** The thread archiving moved the reader to; still on it, they return. */
+        returnFrom?: string | null;
+      } = {},
+    ) => {
       ThreadUndo.invalidate("archive", scopedThreadKey(target));
-      // Only an empty, unsubmitted draft gets replaced by the restored thread;
-      // re-checked after the round trip so a draft the reader started typing
-      // into meanwhile stays put.
+      // Only an empty, unsubmitted draft (or the thread archiving moved the
+      // reader to) gets replaced by the restored thread; re-checked after the
+      // round trip so a draft the reader started typing into, or a thread
+      // they opened, meanwhile stays put.
       const emptyDraftId = opts.navigate ? readEmptyNewThreadDraftId(router) : null;
+      const isOnLanding = () => {
+        const routeRef = getCurrentRouteThreadRef();
+        return (
+          opts.returnFrom != null &&
+          routeRef !== null &&
+          scopedThreadKey(routeRef) === opts.returnFrom
+        );
+      };
+      const wasOnLanding = isOnLanding();
       const result = await unarchiveThreadMutation({
         environmentId: target.environmentId,
         input: { threadId: target.threadId },
@@ -480,7 +497,10 @@ export function useThreadActions() {
         return result;
       }
       refreshArchivedThreadsForEnvironment(target.environmentId);
-      if (emptyDraftId !== null && readEmptyNewThreadDraftId(router) === emptyDraftId) {
+      if (
+        (emptyDraftId !== null && readEmptyNewThreadDraftId(router) === emptyDraftId) ||
+        (wasOnLanding && isOnLanding())
+      ) {
         return settlePromise(() =>
           router.navigate({
             to: "/$environmentId/$threadId",
@@ -490,7 +510,7 @@ export function useThreadActions() {
       }
       return result;
     },
-    [router, unarchiveThreadMutation],
+    [getCurrentRouteThreadRef, router, unarchiveThreadMutation],
   );
 
   const archiveThread = useCallback(
@@ -510,9 +530,11 @@ export function useThreadActions() {
       }
 
       const currentRouteThreadRef = getCurrentRouteThreadRef();
-      const shouldNavigateToDraft =
+      const wasOpen =
         currentRouteThreadRef?.threadId === threadRef.threadId &&
         currentRouteThreadRef.environmentId === threadRef.environmentId;
+      // The thread the reader moves to below, which Undo leaves again.
+      let landedOn: string | null = null;
       const action = ThreadUndo.begin("archive", scopedThreadKey(threadRef));
       const archiveResult = await archiveThreadMutation({
         environmentId: threadRef.environmentId,
@@ -534,14 +556,16 @@ export function useThreadActions() {
       showThreadUndoNotice({
         action: "Archived",
         claim: action,
-        // Undo also brings the reader back when archiving moved them to a draft.
-        undo: () => unarchiveThread(threadRef, { navigate: shouldNavigateToDraft }),
+        // Undo also brings the reader back when archiving moved them away.
+        undo: () => unarchiveThread(threadRef, { navigate: wasOpen, returnFrom: landedOn }),
         failureTitle: "Failed to undo archive",
       });
 
-      // In a split, the other pane's thread stays on screen instead of a new
-      // draft. Otherwise only a reader still on the archived thread moves —
-      // the split's own archive watcher may already have navigated away.
+      // In a split, the other pane's thread stays on screen. Otherwise only a
+      // reader still on the archived thread moves, back to the thread visited
+      // before it (the Ctrl+Tab target), or to a new draft when none is left.
+      // Only this user action moves the reader: an agent's or a scheduled
+      // archive leaves the thread on screen (see ParkedThreadWatcher).
       const threadKey = scopedThreadKey(threadRef);
       const routeRefAfterArchive = getCurrentRouteThreadRef();
       const routeKeyAfterArchive =
@@ -550,9 +574,18 @@ export function useThreadActions() {
         router.navigate({ to: "/$environmentId/$threadId", params: buildThreadRouteParams(ref) }),
       );
 
-      if (shouldNavigateToDraft && !foldedSplit && routeKeyAfterArchive === threadKey) {
-        const navigationResult = await settlePromise(() =>
-          handleNewThreadRef.current(scopeProjectRef(thread.environmentId, thread.projectId)),
+      if (wasOpen && !foldedSplit && routeKeyAfterArchive === threadKey) {
+        const previous = resolveVisitTargetAfterPark(threadRef);
+        if (previous?.kind === "server") landedOn = scopedThreadKey(previous.threadRef);
+        const navigationResult = await settlePromise((): Promise<unknown> =>
+          previous === null
+            ? handleNewThreadRef.current(scopeProjectRef(thread.environmentId, thread.projectId))
+            : previous.kind === "draft"
+              ? router.navigate({ to: "/draft/$draftId", params: { draftId: previous.draftId } })
+              : router.navigate({
+                  to: "/$environmentId/$threadId",
+                  params: buildThreadRouteParams(previous.threadRef),
+                }),
         );
         if (navigationResult._tag === "Failure") {
           return navigationResult;
@@ -1296,7 +1329,7 @@ export function useThreadActions() {
           thread: readThreadShell(target),
         })
       ) {
-        const previous = resolveVisitTargetAfterSnooze(target, options?.alsoParking);
+        const previous = resolveVisitTargetAfterPark(target, options?.alsoParking);
         if (previous === null) {
           options?.moveOnFallback?.();
         } else if (previous.kind === "draft") {
