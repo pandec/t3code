@@ -45,3 +45,20 @@ export function threadShelfExpandedPatch(
 ): Partial<Preferences> {
   return { [SHELF_PREFERENCE_KEYS[shelf]]: expanded };
 }
+
+/**
+ * Folds or unfolds one custom thread group against the latest stored list.
+ * Pass it as a preferences `transform`: building the list from the rendered
+ * value lets a quick second tap overwrite the first, reopening that group.
+ */
+export function toggleCollapsedThreadGroup(
+  preferences: Preferences,
+  groupId: string,
+): Partial<Preferences> {
+  const collapsed = preferences.collapsedThreadGroups ?? [];
+  return {
+    collapsedThreadGroups: collapsed.includes(groupId)
+      ? collapsed.filter((id) => id !== groupId)
+      : [...collapsed, groupId],
+  };
+}

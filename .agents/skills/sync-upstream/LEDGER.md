@@ -34,7 +34,7 @@ An entry earns its place only if a capable agent with the code in front of it wo
 - Upstream API migrations (e.g. Effect 4.0.4 `crypto.randomUUIDv4()`) skip fork-only call sites, and fork test layers miss services upstream adds to shared layers; typecheck finds both, but grep fork files for the old form first.
 - Upstream Claude tests that interrupt a turn the harness never settles hang on the fork's Stop grace: run `passInterruptSettleGrace` after forking the interrupt.
 - Custom Claude models expose the fork's gateway effort ladder, not their declared effort descriptors; adapt upstream tests that expect the declared ones.
-- Known macOS baseline failures: Antigravity missing-parent `/var` path tests, Claude steering replay's now/next mismatch, storage cleanup's expired-artifacts aggregation, AccountSwitch's send/Stop feedback race (either order), and SessionWorkspaceFollow's completed-switch restart timeout. Compare against pre-merge before blaming the merge.
+- Known macOS baseline failures: Antigravity missing-parent `/var` path tests, Claude steering replay's now/next mismatch, storage cleanup's expired-artifacts aggregation, AccountSwitch's send/Stop feedback race (either order), SessionWorkspaceFollow's completed-switch restart timeout, and CheckpointRollbackService's cleanup-first lock order (intermittent). Compare against pre-merge before blaming the merge.
 
 ## Watchpoints
 

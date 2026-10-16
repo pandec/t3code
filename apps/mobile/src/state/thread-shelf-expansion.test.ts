@@ -1,6 +1,11 @@
 import { describe, expect, it } from "@effect/vitest";
 
-import { resolveThreadShelfExpanded, threadShelfExpandedPatch } from "./thread-shelf-expansion";
+import {
+  resolveThreadShelfExpanded,
+  threadShelfExpandedPatch,
+  toggleCollapsedThreadGroup,
+} from "./thread-shelf-expansion";
+import type { Preferences } from "../persistence/mobile-preferences";
 
 const resolve = (
   shelf: Parameters<typeof resolveThreadShelfExpanded>[0]["shelf"],
@@ -49,5 +54,15 @@ describe("threadShelfExpandedPatch", () => {
         expect(resolve(shelf, threadShelfExpandedPatch(shelf, expanded))).toBe(expanded);
       }
     }
+  });
+});
+
+describe("toggleCollapsedThreadGroup", () => {
+  it("keeps earlier folds when toggles chain before a render", () => {
+    let preferences: Preferences = {};
+    for (const groupId of ["a", "b", "c", "b"]) {
+      preferences = { ...preferences, ...toggleCollapsedThreadGroup(preferences, groupId) };
+    }
+    expect(preferences).toEqual({ collapsedThreadGroups: ["a", "c"] });
   });
 });

@@ -19,6 +19,7 @@ import { mobilePreferencesAtom, updateMobilePreferencesAtom } from "./preference
 import {
   resolveThreadShelfExpanded,
   threadShelfExpandedPatch,
+  toggleCollapsedThreadGroup,
   type ThreadShelfId,
 } from "./thread-shelf-expansion";
 
@@ -137,13 +138,8 @@ export function useCollapsedThreadGroups() {
     [preferences.collapsedThreadGroups],
   );
   const toggle = useCallback(
-    (id: string) => {
-      const next = new Set(ids);
-      if (next.has(id)) next.delete(id);
-      else next.add(id);
-      save({ collapsedThreadGroups: [...next] });
-    },
-    [ids, save],
+    (id: string) => save({ transform: (current) => toggleCollapsedThreadGroup(current, id) }),
+    [save],
   );
   return { ids, toggle };
 }
