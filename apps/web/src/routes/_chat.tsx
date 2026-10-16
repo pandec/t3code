@@ -2,8 +2,7 @@ import { AuthOrchestrationOperateScope, AuthPreviewOperateScope } from "@t3tools
 import { Outlet, createFileRoute, redirect, useParams, useRouter } from "@tanstack/react-router";
 import { useAtomValue } from "@effect/atom-react";
 import { useEffect, useMemo, useRef } from "react";
-import type { ClientSettings, ScopedThreadRef } from "@t3tools/contracts";
-import { scopeThreadRef } from "@t3tools/client-runtime/environment";
+import type { ClientSettings } from "@t3tools/contracts";
 import {
   isAtomCommandInterrupted,
   squashAtomCommandFailure,
@@ -15,9 +14,7 @@ import {
 } from "@t3tools/client-runtime/state/thread-settled";
 
 import { isCommandPaletteOpen } from "../commandPaletteBus";
-import { environmentCatalog } from "../connection/catalog";
 import { isElectron } from "../env";
-import { appAtomRegistry } from "../rpc/atomRegistry";
 import { ThreadRouteView } from "../components/ThreadRouteView";
 import { ThreadLinkPrompt } from "../components/promptLinks/ThreadLinkPrompt";
 import { useClientSettings, useLegacySidebarEnabled } from "../hooks/useSettings";
@@ -67,49 +64,8 @@ import {
   resolveThreadRouteTarget,
   type ThreadRouteTarget,
 } from "../threadRoutes";
-import { type DraftId, useComposerDraftStore } from "../composerDraftStore";
-
-// A stale pair entry must not open: the thread may be gone or archived, and
-// point shell reads still serve cached snapshots for a removed or disabled
-// environment, so the catalog is checked explicitly.
-function isThreadOpenable(ref: ScopedThreadRef): boolean {
-  if (
-    appAtomRegistry.get(environmentCatalog.catalogValueAtom).entries.get(ref.environmentId)
-      ?.enabled !== true
-  ) {
-    return false;
-  }
-  const shell = readThreadShell(ref);
-  return shell !== null && shell.archivedAt === null;
-}
-
-// The server thread each remembered draft becomes once sent. Promotion
-// cleanup deletes the draft session, possibly before the next visit is
-// recorded, so the ref is captured while the draft is open.
-const draftVisitThreadRefs = new Map<DraftId, ScopedThreadRef>();
-
-function rememberDraftThreadRef(draftId: DraftId): void {
-  const session = useComposerDraftStore.getState().getDraftSession(draftId);
-  if (session === null) return;
-  draftVisitThreadRefs.set(
-    draftId,
-    session.promotedTo ?? scopeThreadRef(session.environmentId, session.threadId),
-  );
-}
-
-// A sent draft resolves to its thread; a discarded one never got a thread.
-function resolveVisitTarget(target: ThreadRouteTarget): ThreadRouteTarget | null {
-  if (target.kind === "server") {
-    return isThreadOpenable(target.threadRef) ? target : null;
-  }
-  const session = useComposerDraftStore.getState().getDraftSession(target.draftId);
-  if (session !== null && session.promotedTo == null) return target;
-  rememberDraftThreadRef(target.draftId);
-  const threadRef = draftVisitThreadRefs.get(target.draftId);
-  return threadRef !== undefined && isThreadOpenable(threadRef)
-    ? { kind: "server", threadRef }
-    : null;
-}
+import { useComposerDraftStore } from "../composerDraftStore";
+import { rememberDraftThreadRef, resolveVisitTarget } from "../threadVisitTargets";
 
 const selectSnoozeShortcutUntilDone = (settings: ClientSettings) =>
   settings.snoozeShortcutUntilDone;
@@ -169,7 +125,8 @@ function ChatRouteGlobalShortcuts() {
       ? selectActiveRightPanel(state.byThreadKey, shortcutThreadRef) === "preview"
       : false,
   );
-  // Ctrl+Tab history: the focused pane's thread, or the routed draft.
+  // Visit history: the focused pane's thread, or the routed draft. Ctrl+Tab
+  // (desktop) toggles through it, and snoozing the open thread returns to it.
   const focusedVisitTarget = useMemo<ThreadRouteTarget | null>(
     () =>
       shortcutThreadRef !== null
@@ -180,7 +137,6 @@ function ChatRouteGlobalShortcuts() {
     [routeDraftId, shortcutThreadRef],
   );
   useEffect(() => {
-    if (!isElectron) return;
     threadVisitHistory.record(focusedVisitTarget, resolveVisitTarget);
     if (focusedVisitTarget?.kind !== "draft") return;
     const { draftId } = focusedVisitTarget;

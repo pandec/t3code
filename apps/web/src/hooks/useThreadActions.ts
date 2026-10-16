@@ -34,7 +34,11 @@ import { AsyncResult } from "effect/reactivity";
 import { useRouter } from "@tanstack/react-router";
 import { useCallback, useMemo, useRef } from "react";
 
-import { getFallbackThreadIdAfterDelete, pinOrderKeyBetween } from "../components/Sidebar.logic";
+import {
+  getFallbackThreadIdAfterDelete,
+  pinOrderKeyBetween,
+  shouldNavigateAfterThreadPark,
+} from "../components/Sidebar.logic";
 import { useComposerDraftStore } from "../composerDraftStore";
 import { pauseListeningForThread, stopListeningForThread } from "../state/listeningPlayback";
 import { environmentSession, readEnvironmentScope } from "../state/session";
@@ -71,6 +75,7 @@ import { useUiStateStore } from "../uiStateStore";
 import { clearThreadPreviewState } from "../previewStateStore";
 import { useTerminalUiStateStore } from "../terminalUiStateStore";
 import { buildThreadRouteParams, resolveThreadRouteRef } from "../threadRoutes";
+import { resolveVisitTargetAfterSnooze } from "../threadVisitTargets";
 import { formatWorktreePathForDisplay, getOrphanedWorktreePathForThread } from "../worktreeCleanup";
 import { stackedThreadToast, toastManager } from "../components/ui/toast";
 import { useClientSettings } from "./useSettings";
@@ -1207,7 +1212,13 @@ export function useThreadActions() {
     async (
       target: ScopedThreadRef,
       snoozedUntil: string | null,
-      options?: { readonly untilDone?: boolean },
+      options?: {
+        readonly untilDone?: boolean;
+        /** Other threads snoozed in the same batch: never a place to land. */
+        readonly alsoParking?: ReadonlySet<string> | undefined;
+        /** Where to go when the reader was on the thread and no previous one is left. */
+        readonly moveOnFallback?: (() => void) | null;
+      },
     ) => {
       const untilDone = options?.untilDone === true;
       // Version skew: never send the command to a server that predates it.
@@ -1260,9 +1271,38 @@ export function useThreadActions() {
         undo: () => unsnoozeThread(target),
         failureTitle: "Failed to wake thread",
       });
+      // A reader still on the snoozed thread moves back to the thread they
+      // visited before it (the Ctrl+Tab target); in a split, the other pane
+      // takes over instead. A navigation made during the await wins over ours.
+      const threadKey = scopedThreadKey(target);
+      const routeRef = getCurrentRouteThreadRef();
+      const routeKey = routeRef === null ? null : scopedThreadKey(routeRef);
+      const navigateToThread = (ref: ScopedThreadRef) =>
+        router.navigate({ to: "/$environmentId/$threadId", params: buildThreadRouteParams(ref) });
+      if (
+        !foldSplitForParkedThread(threadKey, routeKey, navigateToThread) &&
+        shouldNavigateAfterThreadPark({
+          threadKey,
+          currentThreadKey: routeKey,
+          action: "snooze",
+          now: new Date().toISOString(),
+          thread: readThreadShell(target),
+        })
+      ) {
+        const previous = resolveVisitTargetAfterSnooze(target, options?.alsoParking);
+        if (previous === null) {
+          options?.moveOnFallback?.();
+        } else if (previous.kind === "draft") {
+          void router
+            .navigate({ to: "/draft/$draftId", params: { draftId: previous.draftId } })
+            .catch(() => undefined);
+        } else {
+          void navigateToThread(previous.threadRef).catch(() => undefined);
+        }
+      }
       return result;
     },
-    [resolveThreadTarget, snoozeThreadMutation, unsnoozeThread],
+    [getCurrentRouteThreadRef, resolveThreadTarget, router, snoozeThreadMutation, unsnoozeThread],
   );
 
   const confirmAndDeleteThread = useCallback(
