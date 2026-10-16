@@ -84,10 +84,8 @@ import {
 const LITELLM_RATES_URL =
   "https://raw.githubusercontent.com/BerriAI/litellm/main/model_prices_and_context_window.json";
 
-/** Rates move rarely; a day-old table keeps the page working offline. */
 const RATES_TTL_MS = 24 * 60 * 60 * 1000;
 
-/** An explicit refresh ignores the TTL, but not a table fetched this recently. */
 const RATES_REFRESH_FLOOR_MS = 60 * 1000;
 
 /**
@@ -97,31 +95,22 @@ const RATES_REFRESH_FLOOR_MS = 60 * 1000;
 const MTIME_SLACK_MS = 36 * 60 * 60 * 1000;
 const MAX_HOURLY_WINDOW_MS = 24 * 60 * 60 * 1000;
 
-/**
- * The longest window the UI offers, 90 days, plus its `MTIME_SLACK_MS`, rounded
- * up. Older entries are pruned.
- */
 const CACHE_RETENTION_DAYS = 92;
 
-/** Transcripts parsed at once. More gains little once the disk stays busy. */
 const TRANSCRIPT_READ_CONCURRENCY = 4;
 
-/** The transcript readers, in driver order. */
 const transcriptReaders = BUILT_IN_USAGE_DRIVERS.flatMap((driver) =>
   driver.usage?.kind === "transcripts" ? [{ driver, reader: driver.usage }] : [],
 );
 
-/** The scan readers, in driver order. */
 const scanReaders = BUILT_IN_USAGE_DRIVERS.flatMap((driver) =>
   driver.usage?.kind === "scan" ? [{ driver, reader: driver.usage }] : [],
 );
 
-/** Transcript formats by provider, for decoding the persisted scan cache. */
 const transcriptFormats = new Map(
   transcriptReaders.map(({ reader }) => [reader.provider, reader.format] as const),
 );
 
-/** One transcript directory to scan. */
 interface TranscriptSource {
   readonly provider: UsageProviderKind;
   readonly format: TranscriptUsageFormat<unknown>;
@@ -130,7 +119,6 @@ interface TranscriptSource {
   readonly fileName?: string;
 }
 
-/** On-disk shape of the rate snapshot. */
 const RatesCacheFile = Schema.Struct({
   fetchedAtMs: Schema.Number,
   document: Schema.Unknown,
@@ -142,18 +130,15 @@ const encodeRatesCache = Schema.encodeEffect(
   Schema.fromJsonString(RatesCacheFile as unknown as Schema.Codec<typeof RatesCacheFile.Type>),
 );
 
-/** The scan cache is narrowed by hand in `usageScanCache`, so JSON is enough here. */
 const ScanCacheJson = Schema.fromJsonString(Schema.Unknown as unknown as Schema.Codec<unknown>);
 const decodeScanCacheFile = Schema.decodeUnknownEffect(ScanCacheJson);
 const encodeUsageRecordKey = Schema.encodeSync(ScanCacheJson);
 const CachedSource = Schema.Struct({ dir: Schema.String, volumeId: Schema.String });
 
-/** Whether `a` read a later state of its file than `b`. Transcripts only grow. */
 function isLaterRead(a: CachedFile, b: CachedFile): boolean {
   return a.mtimeMs > b.mtimeMs || (a.mtimeMs === b.mtimeMs && a.size > b.size);
 }
 
-/** Providers whose format lets one session's records appear in several files. */
 const sharedSessionProviders: ReadonlySet<UsageProviderKind> = new Set(
   transcriptReaders.flatMap(({ reader }) =>
     reader.format.sharedSessionsAcrossFiles ? [reader.provider] : [],
@@ -161,11 +146,9 @@ const sharedSessionProviders: ReadonlySet<UsageProviderKind> = new Set(
 );
 
 /**
- * Sessions of `sharedSessionProviders` with records in more than one file,
- * such as a rollout that moved after it was read. Only these need cross-file
- * dedupe keys: within one file the occurrence count already keeps every key
- * unique, so keying the rest would only build and hash a string for each of
- * their records.
+ * Only these need cross-file dedupe keys: within one file the occurrence count
+ * already keeps every key unique, so keying the rest would only build and hash
+ * a string for each of their records.
  */
 function sharedSessions(
   files: readonly { readonly records: readonly UsageRecord[] }[],
@@ -193,7 +176,6 @@ export class UsageService extends Context.Service<
   UsageService,
   {
     readonly readSummary: (input: UsageSummaryInput) => Effect.Effect<UsageSummary, UsageReadError>;
-    /** Refetches the rate table ahead of its TTL. See `ensureRates`. */
     readonly refreshRates: Effect.Effect<UsagePricing>;
   }
 >()("t3/usage/UsageService") {}
@@ -205,7 +187,6 @@ const EMPTY_PRICING: UsagePricing = {
   knownModels: 0,
 };
 
-/** Empty summary, for suites that only need the RPC surface to resolve. */
 const layerTest = Layer.succeed(
   UsageService,
   UsageService.of({
@@ -232,7 +213,6 @@ export const make = Effect.gen(function* () {
   const settingsService = yield* ServerSettings.ServerSettingsService;
   const httpClient = yield* HttpClient.HttpClient;
   const hostEnvironment = yield* HostProcess.Environment;
-  // The readers yield their own services; scans run them against this context.
   const readerContext = yield* Effect.context<BuiltInUsageReadersEnv>();
 
   const fileCache: ScanCache = new Map();
@@ -267,8 +247,6 @@ export const make = Effect.gen(function* () {
   let rates: RateTable = new Map();
   let ratesFetchedAtMs: number | null = null;
   let ratesStatus: UsagePricing["status"] = "unavailable";
-  // One fetch at a time. A burst of refreshes from several clients waits on
-  // the first fetch and then sees a table young enough to skip its own.
   const ratesLock = yield* Semaphore.make(1);
 
   const pricing = (): UsagePricing => ({
@@ -279,12 +257,6 @@ export const make = Effect.gen(function* () {
     knownModels: rates.size,
   });
 
-  /**
-   * Loads the LiteLLM rate table, preferring a fresh copy and falling back to
-   * the on-disk snapshot. With neither, every model reports as unpriced rather
-   * than the page failing. `force` refetches inside the TTL so a model that
-   * LiteLLM added since the last fetch gets priced now.
-   */
   const loadRates = Effect.fn("UsageService.loadRates")(function* (force: boolean) {
     const now = yield* Clock.currentTimeMillis;
     const maxAgeMs = force ? RATES_REFRESH_FLOOR_MS : RATES_TTL_MS;
@@ -313,8 +285,6 @@ export const make = Effect.gen(function* () {
       Effect.catchCause(() => Effect.succeed(null)),
     );
     if (fetched === null) {
-      // The refresh failed; whatever we are serving is now past its TTL and
-      // must not keep claiming to be fresh.
       if (rates.size > 0) ratesStatus = "cached";
       return;
     }
@@ -339,7 +309,6 @@ export const make = Effect.gen(function* () {
     Effect.withSpan("UsageService.refreshRates"),
   );
 
-  // A settings failure must not silently discard custom rates or transcript homes.
   const readSettings = settingsService.getSettings.pipe(
     Effect.catchCause(
       (cause) =>
@@ -351,11 +320,6 @@ export const make = Effect.gen(function* () {
     ),
   );
 
-  /**
-   * Every instance of `driver` with its decoded config, or none when it does
-   * not decode. Disabled accounts still have history. An unconfigured default
-   * slot runs with default config, just as it does in the provider registry.
-   */
   const usageInstances = Effect.fn("UsageService.usageInstances")(function* <Config>(
     driver: ProviderDriver<Config, unknown, unknown>,
     settings: ServerSettingsValue,
@@ -386,7 +350,6 @@ export const make = Effect.gen(function* () {
     );
   });
 
-  /** Resolves every transcript directory the usage readers point at. */
   const resolveTranscriptDirs = Effect.fn("UsageService.resolveTranscriptDirs")(function* (
     settings: ServerSettingsValue,
     retentionCutoffMs: number,
@@ -402,8 +365,6 @@ export const make = Effect.gen(function* () {
       for (const { dir: directory, fileName } of directories.flat()) {
         const sourceKey = provider + "\0" + directory;
         const previous = sourceCache.get(sourceKey);
-        // Keep canonical paths and source fingerprints stable after root cleanup,
-        // including aliases and clients merging pre-cleanup environment summaries.
         const dir = yield* fileSystem
           .realPath(directory)
           .pipe(Effect.orElseSucceed(() => previous?.dir ?? directory));
@@ -417,7 +378,6 @@ export const make = Effect.gen(function* () {
               entry.records.length + entry.tailRecords.length > 0 &&
               isWithinDirectory(filePath, dir),
           );
-        // A recreated directory still reports the retained history under its old identity.
         const volumeId =
           previous?.dir === dir && (hasRetainedHistory || !currentVolumeId)
             ? previous.volumeId || currentVolumeId
@@ -442,8 +402,6 @@ export const make = Effect.gen(function* () {
   });
 
   /**
-   * Loads the persisted scan cache exactly once per process.
-   *
    * `Effect.cached` makes concurrent first readers await the same load rather
    * than each seeing a "loaded" flag set before the read finished and cold
    * scanning against an empty cache.
@@ -463,7 +421,6 @@ export const make = Effect.gen(function* () {
         current === null ? yield* Effect.forEach(legacyScanCachePaths, readDocument) : [current];
       for (const document of documents) {
         if (document === null) continue;
-        // Write the migrated cache to its own file on the next scan.
         if (document !== current) cacheDirty = true;
         for (const [path, entry] of decodeScanCache(document, transcriptFormats)) {
           const existing = fileCache.get(path);
@@ -485,8 +442,7 @@ export const make = Effect.gen(function* () {
 
   // The dirty flag is cleared before encoding, so a change while the write is
   // in flight marks it dirty again. A failed write restores the flag, so the
-  // next persist retries instead of leaving disk stale. A cache we cannot
-  // write is a slower next start, not a failed read.
+  // next persist retries instead of leaving disk stale.
   const persistCaches = Effect.gen(function* () {
     if (cacheDirty) {
       cacheDirty = false;
@@ -504,14 +460,12 @@ export const make = Effect.gen(function* () {
   }).pipe(persistLock.withPermit, Effect.withSpan("UsageService.persistCaches"));
 
   const pendingPersists = new Set<Fiber.Fiber<void>>();
-  /** Writes dirty caches in the background, after the summary that dirtied them answers. */
   const schedulePersist = Effect.forkDetach(persistCaches).pipe(
     Effect.map((fiber) => {
       pendingPersists.add(fiber);
       fiber.addObserver(() => pendingPersists.delete(fiber));
     }),
   );
-  /** Waits for every write scheduled so far, as a restart would need. */
   const awaitPersisted = Effect.suspend(() => Fiber.awaitAll([...pendingPersists])).pipe(
     Effect.asVoid,
   );
@@ -532,18 +486,9 @@ export const make = Effect.gen(function* () {
   }
 
   /**
-   * Parses one transcript, reusing the cached result when it is unchanged.
-   *
-   * A file that only grew re-parses from the cached position, so an actively
-   * written multi-hundred-megabyte rollout costs its appended bytes per scan
-   * rather than a full re-read. The reader verifies the position's guard bytes
-   * and silently restarts from byte 0 when they no longer match.
-   *
-   * A fresh parse comes back as `update` for the caller to cache, with the
-   * entry it was built from. Reads run concurrently, and the caller stores
-   * updates in walk order rather than completion order: saved records of
-   * deleted transcripts aggregate in cache order, where the first copy of a
-   * duplicate wins.
+   * Reads run concurrently, and the caller stores updates in walk order rather
+   * than completion order: saved records of deleted transcripts aggregate in
+   * cache order, where the first copy of a duplicate wins.
    */
   const readFileRecords = (
     filePath: string,
@@ -641,7 +586,6 @@ export const make = Effect.gen(function* () {
       };
     });
 
-  /** One provider directory's walk and parse, before rates are involved. */
   interface ScannedFile extends FileScanResult {
     readonly path: string;
   }
@@ -654,11 +598,9 @@ export const make = Effect.gen(function* () {
     readonly status?: UsageSource["status"];
     readonly message?: string;
     readonly action?: UsageSource["action"];
-    /** Parsed records per file, or `null` when the directory does not exist. */
     readonly files: readonly ScannedFile[] | null;
     /** Directories and files the walk could not list or stat. */
     readonly unreadablePaths?: number;
-    /** Answered from a cache while a refresh runs. */
     readonly refreshing?: true;
   }
 
@@ -756,8 +698,6 @@ export const make = Effect.gen(function* () {
     const { files, failedPaths } = yield* Effect.promise(() =>
       listTranscriptFiles(dir, windowStartMs, fileName === undefined ? undefined : { fileName }),
     );
-    // A cold parse waits on disk reads, so a few files in flight read
-    // close to twice as fast. Results keep walk order.
     const read = yield* Effect.forEach(
       files,
       (file) =>
@@ -956,9 +896,6 @@ export const make = Effect.gen(function* () {
 
     const retentionCutoffMs = startedAtMs - CACHE_RETENTION_DAYS * 24 * 60 * 60 * 1000;
 
-    // Pricing only matters once records are aggregated, so the rate table
-    // loads while transcripts stream instead of gating them: a cold rates
-    // fetch on a slow network no longer delays the scan by its own timeout.
     const [, scannedDirs] = yield* Effect.all(
       [
         ensureRates(false),
@@ -973,9 +910,7 @@ export const make = Effect.gen(function* () {
     const seenRootIdentities = new Set<string>();
 
     // Cleanup may remove transcripts, but the usage we already saved still
-    // contributes to its source through the normal aggregation and dedupe
-    // path. Like the walk, skip files last written before the window: they
-    // cannot hold records inside it.
+    // contributes to its source through the normal aggregation and dedupe path.
     const retainedSinceMs = Math.max(windowStartMs, retentionCutoffMs);
     const filesByDir = scannedDirs.map(({ provider, dir, volumeId, files }) => {
       if (volumeId.length > 0) {
@@ -1061,7 +996,6 @@ export const make = Effect.gen(function* () {
           ) {
             // Match moved copies without collapsing repeated equal events
             // within one file (timestamps can have only second precision).
-            // Only sessions seen in several files can have a copy to match.
             const key = encodeUsageRecordKey([
               record.provider,
               record.sessionId,
@@ -1073,8 +1007,6 @@ export const make = Effect.gen(function* () {
             eventOccurrences.set(key, occurrence);
             usageRecord = { ...record, dedupeKey: key + ":" + occurrence };
           }
-          // Only sessions contributing in-window count; the mtime slack can
-          // admit boundary files whose records fall outside the range.
           if (aggregator.add(usageRecord, dir) && record.sessionId.length > 0) {
             sessionIds.add(record.sessionId);
           }
@@ -1152,7 +1084,6 @@ export const make = Effect.gen(function* () {
       input.sinceTime ?? null,
       input.untilTime ?? null,
       settings,
-      // A waiting read must never share a scan that answers with `refreshing`.
       input.awaitRefresh === true,
     ]);
 
@@ -1186,13 +1117,9 @@ export const make = Effect.gen(function* () {
         return created;
       }),
     );
-    // Waiting stays interruptible. The detached scan continues for other
-    // callers and still warms the cache if this caller leaves.
     return yield* Deferred.await(deferred);
   });
 
-  // `awaitPersisted` is outside the service interface: tests use it to restart
-  // against what a previous instance wrote.
   return { readSummary, refreshRates, awaitPersisted } as const;
 });
 

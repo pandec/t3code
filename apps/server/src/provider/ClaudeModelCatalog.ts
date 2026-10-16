@@ -100,10 +100,6 @@ function tryResolveClaudeModelCatalog(
 const BUNDLED_CLAUDE_PROVIDER_CATALOG =
   resolveProviderCatalog(BUNDLED_MODEL_MANIFEST, CLAUDE) ?? undefined;
 
-/**
- * Claude's built-in catalog from its manifest entry, falling back to the
- * bundled entry when the current one is missing or has invalid adapters.
- */
 export function resolveClaudeModelCatalog(
   catalog: ModelCatalog.ProviderCatalog | undefined,
 ): ClaudeModelCatalog {
@@ -240,10 +236,6 @@ export function resolveClaudeModelsForVersion(
     .map((entry) => entry.model);
 }
 
-/**
- * Current catalog models the installed Claude Code is too old to run, so the
- * picker can show them as "update to use" instead of hiding them.
- */
 export function resolveClaudeUpdateRequiredModels(
   catalog: ClaudeModelCatalog,
   version: string | null | undefined,

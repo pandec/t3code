@@ -1,11 +1,3 @@
-/**
- * Multi-environment usage state.
- *
- * Every connected environment answers the same typed query; the client merges
- * the results. Raw transcripts never leave the machine that produced them.
- *
- * @module state/usage
- */
 import { useAtomValue } from "@effect/atom-react";
 import { needsCursorKeychainAccess, refreshUsage } from "@t3tools/client-runtime/state/usage";
 import {
@@ -134,7 +126,6 @@ export interface UsageView {
   readonly merged: MergedUsage;
   readonly environments: readonly EnvironmentUsageStatus[];
   readonly selectedEnvironments: readonly EnvironmentUsageStatus[];
-  /** True until at least one selected environment has answered. */
   readonly isPending: boolean;
   /**
    * The usage to draw: this window's once a selected environment answers,
@@ -318,8 +309,6 @@ export function useUsage(
         registry: appAtomRegistry,
         server: serverEnvironment,
         presentations: environmentPresentations,
-        // Only environments this connection may read; the others report a
-        // permission error instead of a stale or failed rescan.
         environmentIds: selectedEnvironments
           .filter(
             (environment) =>
@@ -346,8 +335,6 @@ export function useUsage(
     (environment) => environmentUsageState(environment).kind === "reported",
   );
 
-  // Stored during render, as React recommends for state that follows props, so
-  // the kept usage is on screen in the same frame the new window starts pending.
   const [lastAnswered, setLastAnswered] = useState<
     | (NonNullable<UsageView["shown"]> & {
         readonly selection: typeof selectedEnvironmentIds;
@@ -380,7 +367,6 @@ export function useUsage(
     lastAnswered.attribution === attribution
       ? lastAnswered
       : null;
-  // With no answers, even failed ones keep the last answered usage on screen.
   const shown = answered
     ? { window: input, merged }
     : (kept ?? (progress.isPending ? null : { window: input, merged }));

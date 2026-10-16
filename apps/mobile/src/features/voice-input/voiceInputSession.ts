@@ -8,7 +8,6 @@ import {
 
 export type VoiceInputTarget = {
   readonly ownerKey: string;
-  /** Names the draft being dictated into while its composer is off screen. */
   readonly label?: string;
   /**
    * Environment whose server transcriber backs this target when on-device

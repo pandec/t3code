@@ -27,7 +27,6 @@ export type AppNativeStackNavigationOptions = Omit<
   NativeStackNavigationOptions,
   "headerTintColor" | "unstable_headerLeftItems" | "unstable_headerRightItems"
 > & {
-  /** Nested navigator leaves apply their own horizontal safe area. */
   readonly nativeContentInsetHorizontally?: boolean;
   readonly headerTintColor?: string | ColorValue;
   readonly unstable_headerCenterItems?: unknown;
@@ -182,8 +181,6 @@ export function NativeStackScreenOptions(props: {
     const signature = optionsSignature([stableOptions, props.optionsVersion]);
     finishHeaderDiagnosticWork("signature", signatureStartedAt);
     recordHeaderSignatureLength(signature.length);
-    // Avoid re-entering navigation state when semantically equal options are
-    // reapplied every layout (common when callers pass unstable object literals).
     if (lastAppliedOptionsSignatureRef.current === signature) {
       recordHeaderOptionsDecision(false);
       return;

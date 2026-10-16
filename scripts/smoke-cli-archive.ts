@@ -1,11 +1,4 @@
 #!/usr/bin/env node
-/**
- * Unpacks a CLI archive into a scratch directory and runs the executable the
- * way an installer would: no repo, no node_modules, no Node on PATH. Catches
- * the failures that only show inside the single-executable, such as an
- * external package reached through `import` or a native addon the hardened
- * runtime refuses to load.
- */
 import * as NodeRuntime from "@effect/platform-node/NodeRuntime";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import * as Duration from "effect/Duration";

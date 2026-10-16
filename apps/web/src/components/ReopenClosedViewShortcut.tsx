@@ -45,7 +45,6 @@ import { openThreadInActivePane } from "./thread-split/threadOpenTarget";
 import { useThreadSplitStore } from "./thread-split/threadSplitStore";
 import { toastManager } from "./ui/toast";
 
-/** Layout commands a focused desktop browser page hands back to the app. */
 const PREVIEW_FORWARDED_LAYOUT_COMMANDS = [
   "sidebar.toggle",
   "rightPanel.toggle",

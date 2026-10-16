@@ -164,7 +164,6 @@ export async function restoreQueuedEditAttachments(input: {
   return { skippedAttachmentCount: input.attachments.length - accepted };
 }
 
-/** Generic files need upload references; images also support the inline transport. */
 export async function prepareQueuedEditAttachments(input: {
   readonly existingAttachments: ReadonlyArray<ChatAttachment>;
   readonly images: ReadonlyArray<ComposerImageAttachment>;

@@ -32,7 +32,6 @@ const TAB_TITLES = {
   pullRequests: "Pull requests",
 };
 
-/** Brand and connection status occupy the same leading slot in both roots. */
 function WorkspaceRootTitle(props: {
   readonly maxWidth: number;
   readonly onOpenEnvironments: () => void;
@@ -62,6 +61,7 @@ function WorkspaceRootContent() {
   const nativeMetrics = useNativeLayoutMetrics();
   const systemTabBar = useSystemWorkspaceTabBar();
   const sidebarTabs = useSidebarWorkspaceTabs();
+  const sidebarPicker = sidebarTabs === "picker";
   const sidebarNavigation =
     primaryColumn !== null &&
     (layout.usesSplitView ||
@@ -101,8 +101,8 @@ function WorkspaceRootContent() {
   return (
     <WorkspaceTabsContext value={context}>
       <View
-        className="flex-1 bg-screen"
-        style={sidebarTabs ? { paddingTop: insets.top } : undefined}
+        className={sidebarPicker ? "flex-1 bg-drawer" : "flex-1 bg-screen"}
+        style={sidebarPicker ? { paddingTop: insets.top } : undefined}
       >
         {Platform.OS === "ios" ? (
           <NativeStackScreenOptions
@@ -139,9 +139,8 @@ function WorkspaceRootContent() {
             ]}
           />
         )}
-        {sidebarTabs ? <WorkspaceSidebarTabs /> : null}
-        {/* The pinned picker already clears the navigation bar; lists must not inset it again. */}
-        <SafeAreaInsetsContext value={sidebarTabs ? { ...insets, top: 0 } : insets}>
+        {sidebarPicker ? <WorkspaceSidebarTabs /> : null}
+        <SafeAreaInsetsContext value={sidebarPicker ? { ...insets, top: 0 } : insets}>
           {state.selectedTab === "threads" ? <HomeRouteScreen /> : <PullRequestsScreen />}
         </SafeAreaInsetsContext>
         <WorkspaceToolbar
@@ -153,7 +152,6 @@ function WorkspaceRootContent() {
   );
 }
 
-/** Keep workspace state mounted as the native columns expand and collapse. */
 export function WorkspaceRootScreen() {
   const { layout } = useAdaptiveWorkspaceLayout();
   const workspace = useWorkspaceTabs();

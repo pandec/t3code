@@ -65,8 +65,6 @@ if (iosBuildNumber !== undefined && !isIosBuildNumber(iosBuildNumber)) {
 }
 
 const fromRepoRoot = (relativePath: string) => `../../${relativePath}`;
-// Android layers are rendered by scripts/export-android-icons.ts from the Icon Composer sources.
-// The wordmark sits inside the adaptive safe zone; the variant artwork is a full-bleed background.
 const androidAdaptiveForeground = "./assets/android-icon-foreground.png";
 
 if (
@@ -295,7 +293,6 @@ const widgetsPlugin: NonNullable<ExpoConfig["plugins"]>[number] = [
         name: "AgentActivity",
         displayName: "Agent Activity",
         description: "Shows the current state of active T3 Code agents.",
-        // Live Activity companion; there is no Android presentation for it.
         android: null,
         ios: { supportedFamilies: ["systemSmall", "systemMedium", "accessoryRectangular"] },
       },
@@ -369,8 +366,6 @@ const config: ExpoConfig = {
   ios: {
     icon: variant.assets.iosIcon,
     supportsTablet: true,
-    // Multitasking-capable iPad apps cannot rotate programmatically, so the
-    // showcase capture build requires full screen (see infoPlist below).
     requireFullScreen: process.env.T3_SHOWCASE_CAPTURE_BUILD === "1",
     bundleIdentifier: iosBundleIdentifier,
     ...(iosBuildNumber ? { buildNumber: iosBuildNumber } : {}),
@@ -559,16 +554,13 @@ const config: ExpoConfig = {
       "expo-build-properties",
       {
         android: {
-          // Keep the supported floor explicit and covered by native notification tests.
           minSdkVersion: 24,
           // kotlinx-io uses Kotlin 2.3's return-value checker annotation, while
           // SDK 58 builds with Kotlin 2.2. It has no runtime behavior.
-          //
           // WorkManager 2.9 keeps InputMerger classes but not their constructors,
           // and R8 full mode no longer keeps a default constructor implicitly.
           // Without it no work request can start, so the Glance session behind
-          // the widget never renders and it stays on "Loading widget". WorkManager
-          // 2.10 ships this rule itself; drop it once the resolved version gets there.
+          // the widget never renders and it stays on "Loading widget".
           extraProguardRules: [
             "-dontwarn kotlin.MustUseReturnValues",
             "-keep class * extends androidx.work.InputMerger { <init>(); }",
@@ -625,7 +617,7 @@ const config: ExpoConfig = {
       publishableKey: repoEnv.EXPO_PUBLIC_CLERK_PUBLISHABLE_KEY ?? null,
       jwtTemplate: repoEnv.EXPO_PUBLIC_CLERK_JWT_TEMPLATE ?? null,
     },
-    // Native Google sign-in credentials. @clerk/expo reads these from `extra`
+    // @clerk/expo reads these from `extra`
     // under their exact env-var names (not nested), and its config plugin reads
     // the iOS URL scheme at prebuild to register it in Info.plist.
     // Unset values must be omitted (not null): the public manifest serializes

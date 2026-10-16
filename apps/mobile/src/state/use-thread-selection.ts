@@ -29,8 +29,6 @@ type ThreadSelectionRouteParams = {
   readonly threadId?: string | string[];
 };
 
-// A blank param (a hand-typed deep link) is treated as missing, since branded
-// IDs reject whitespace-only values.
 function firstRouteParam(value: string | string[] | undefined): string | null {
   const first = Array.isArray(value) ? value[0] : value;
   return first === undefined || first.trim().length === 0 ? null : first;
@@ -62,8 +60,6 @@ function useResolvedThreadSelection(params: ThreadSelectionRouteParams | undefin
       : scopedThreadKey(selectedThreadRef.environmentId, selectedThreadRef.threadId);
   const queuedMessagesByThreadKey = useThreadOutboxMessages();
   const creationOutcome = useAtomValue(pendingThreadCreationOutcomesAtom);
-  // A creation the outbox still holds or just delivered: the thread screen
-  // opened before the server made the thread, so present a stand-in shell.
   const pendingCreation = useMemo<PendingThreadCreation | null>(() => {
     if (selectedThreadKey === null) {
       return null;
@@ -85,8 +81,6 @@ function useResolvedThreadSelection(params: ThreadSelectionRouteParams | undefin
       ? selectedThreadRef
       : null;
   const [previousCreation, setPreviousCreation] = useState<PendingThreadCreation | null>(null);
-  // Normal selection is shell-only. Detail readers subscribe separately; only
-  // optimistic creation needs the projection here until its prompt arrives.
   const needsDetail =
     selectedThreadShell === null || pendingCreation !== null || previousCreation !== null;
   const selectedThreadDetailState = useEnvironmentThread(

@@ -154,7 +154,6 @@ function titleCase(value: string): string {
     .join(" ");
 }
 
-// ---------------------------------------------------------------------------
 // Claude
 //
 // Window ids follow Claude's rateLimitType taxonomy ("five_hour", "seven_day", ...).
@@ -162,7 +161,6 @@ function titleCase(value: string): string {
 // an Opus/Sonnet split that no longer exists, and a Fable weekly window exists
 // that predates the type), so unknown values are labelled heuristically, never
 // dropped.
-// ---------------------------------------------------------------------------
 
 const CLAUDE_WINDOW_LABELS: Record<string, { label: string; shortLabel: string }> = {
   five_hour: { label: "Session (5h)", shortLabel: "5h" },
@@ -196,7 +194,6 @@ function claudeWindowLabels(rateLimitType: string): { label: string; shortLabel:
   return { label: humanized, shortLabel: humanized };
 }
 
-// ---------------------------------------------------------------------------
 // Claude structured /usage API
 //
 // The passive event stream omits utilization at normal usage levels, so the
@@ -210,7 +207,6 @@ function claudeWindowLabels(rateLimitType: string): { label: string; shortLabel:
 // without `limits`; it also carries a long tail of codenamed placeholder
 // windows that are always null, so null entries must be skipped rather than
 // rendered.
-// ---------------------------------------------------------------------------
 
 function claudeUsageApiWindowLabels(
   kind: string,
@@ -379,7 +375,6 @@ function normalizeClaudeUsageApiPayload(payload: Record<string, unknown>): {
   };
 }
 
-// ---------------------------------------------------------------------------
 // Codex
 //
 // The app-server notification is `{ rateLimits: { limitId?, limitName?,
@@ -388,7 +383,6 @@ function normalizeClaudeUsageApiPayload(payload: Record<string, unknown>): {
 // two levels deep. Windows are `{ usedPercent, windowDurationMins?, resetsAt? }`
 // (camelCase, validated against the generated protocol schema server-side).
 // The 5h window is often absent — only render windows actually reported.
-// ---------------------------------------------------------------------------
 
 /**
  * Codex reports a per-model-tier limit for the Spark tier as its own snapshot
@@ -487,10 +481,6 @@ function normalizeCodexRateLimits(
     suppressed,
   };
 }
-
-// ---------------------------------------------------------------------------
-// Payload dispatch + snapshot derivation
-// ---------------------------------------------------------------------------
 
 type NormalizedRateLimitPayload =
   | {
@@ -618,13 +608,11 @@ export function deriveProviderUsageSnapshotFromServerSnapshot(
   );
 }
 
-// ---------------------------------------------------------------------------
 // Direct accounts: upstream's typed `usageLimits`
 //
 // A provider instance signed in to its own subscription publishes typed quota
 // windows on its provider snapshot. They are relabelled with the same taxonomy
 // gateway pools use, so a direct account and a pooled one read identically.
-// ---------------------------------------------------------------------------
 
 function usageLimitWindowPresentation(
   driver: string | null | undefined,
@@ -695,7 +683,6 @@ export function deriveProviderUsageSnapshotFromUsageLimits(
   );
 }
 
-// ---------------------------------------------------------------------------
 // CLIProxyAPI gateway pools
 //
 // A provider instance backed by a CLIProxyAPI gateway reports one snapshot
@@ -704,7 +691,6 @@ export function deriveProviderUsageSnapshotFromUsageLimits(
 // error? }] }`. Each account's `usage` arrives in the matching direct
 // provider's payload shape, so per-account normalization reuses the dispatch
 // above verbatim.
-// ---------------------------------------------------------------------------
 
 export const CLIPROXYAPI_USAGE_PAYLOAD_SOURCE = "cliproxyapi.management";
 

@@ -97,8 +97,6 @@ function appendUnavailableDynamicModelSelection(
   if (!slug) return options;
   if (provider === "antigravity" && slug === ANTIGRAVITY_DEFAULT_MODEL) return options;
 
-  // A model that exists in the raw catalog can be absent from `options`
-  // because the user hid it. Keep that preference authoritative.
   if (resolveSelectableModel(provider, slug, rawModels) !== null) return options;
   if (hiddenModels.includes(slug)) return options;
   if (options.some((option) => option.slug === slug)) return options;
@@ -210,10 +208,6 @@ function getAppModelOptions(
     ),
   );
 
-  // Read from the default instance's config first (that's where edits
-  // now land), falling back to the legacy per-kind bucket so unmigrated
-  // settings and the initial render before the first write both still
-  // see the user's authored custom models.
   const defaultInstanceId = defaultInstanceIdForDriver(provider);
   const customModels = readInstanceCustomModels(settings, defaultInstanceId, provider);
   for (const entry of normalizeCustomModelEntries(customModels, builtInModelSlugs)) {
@@ -238,16 +232,6 @@ function getAppModelOptions(
   );
 }
 
-/**
- * Instance-scoped variant of {@link getAppModelOptions}. Built-in models
- * come from the instance's own `entry.models` snapshot (rather than the
- * first-matching-kind fallback in `getProviderModels`), so each custom
- * instance gets the precise model list its driver reported. Custom model
- * slugs come from the instance's own `providerInstances[id].config.customModels`,
- * so two instances of the same kind never leak custom slugs into each other. Custom rows reported by the server are
- * ignored so a slug removed in Settings disappears without waiting for the
- * next provider probe.
- */
 export function getAppModelOptionsForInstance(
   settings: UnifiedSettings,
   entry: ProviderInstanceEntry,
@@ -338,11 +322,6 @@ export function resolveAppModelSelectionForInstance(
   return options.find((option) => option.isDefault)?.slug ?? options[0]?.slug ?? null;
 }
 
-/**
- * Instance-keyed model options map. Each configured instance gets its own
- * option list so the model picker can show the same driver's built-in and
- * custom instances side by side without collapsing them.
- */
 export function getCustomModelOptionsByInstance(
   settings: UnifiedSettings,
   providers: ReadonlyArray<ServerProvider>,
@@ -363,12 +342,6 @@ export function getCustomModelOptionsByInstance(
   return out;
 }
 
-/**
- * Whether stored model options pick the opencode "plan" agent. Shared settings
- * pickers keep and show such a value even while this device's legacy plan
- * mode is off: another device may have chosen it, and this device's filter
- * only applies to picks made here.
- */
 export function selectsPlanAgent(options: ModelSelection["options"]): boolean {
   return options?.some((option) => option.id === "agent" && option.value === "plan") ?? false;
 }
@@ -391,8 +364,6 @@ export function resolveAppModelSelectionState(
   const entry =
     selectedEntry ?? entries.find((candidate) => candidate.enabled && candidate.isAvailable);
   if (entry) {
-    // When the instance changed due to fallback (e.g. selected instance was disabled),
-    // don't carry over the old instance's model.
     const selectedModel = selectedEntry ? selection.model : null;
     // A saved model the catalog no longer lists, or a new fallback instance,
     // gets the driver's cheap text generation default. The catalog's own

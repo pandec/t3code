@@ -20,7 +20,6 @@ vi.mock("@tanstack/react-router", () => ({
   useParams: () => ({}),
   Link: ({ children }: { children: ReactNode }) => <a>{children}</a>,
 }));
-// Keep the real chip and comment editor while replacing floating layers.
 vi.mock("./ui/popover", () => ({
   Popover: ({ children }: { children: ReactNode }) => <>{children}</>,
   PopoverTrigger: ({ "aria-label": label }: { "aria-label": string }) => (
@@ -61,7 +60,6 @@ afterEach(async () => {
   vi.unstubAllGlobals();
 });
 
-// Mirrors ChatComposer: a pending question shows its answer in the same editor.
 function Composer({
   question,
   editorRef,

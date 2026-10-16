@@ -445,7 +445,6 @@ const main = Command.make(
               message:
                 "Could not choose the generated iOS app scheme: expected the workspace name or one sole scheme.",
             });
-          // Target this simulator only, without Expo's desktop activation or log streaming.
           yield* command(
             "xcrun",
             [

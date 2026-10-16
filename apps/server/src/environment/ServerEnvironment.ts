@@ -180,7 +180,7 @@ const makeIdentity = Effect.gen(function* () {
   });
 });
 
-/** @public Service construction is part of the canonical Effect module API. */
+/** @public */
 export const make = Effect.gen(function* () {
   const path = yield* Path.Path;
   const serverConfig = yield* ServerConfig.ServerConfig;
@@ -281,8 +281,6 @@ export const make = Effect.gen(function* () {
         ? {}
         : { serverSelfUpdate: advertisedServerSelfUpdate }),
       ...(serverInstallation === null ? {} : { serverInstallation }),
-      // V2 restart recovery uses the environment-owned opt-in. The old
-      // per-update request flag is not wired into the V2 update RPC path.
       ...(advertisedServerSelfUpdate === "boot-service" || desktopAppUpdate
         ? { serverSelfUpdateProgress: true }
         : {}),
@@ -307,12 +305,6 @@ export const make = Effect.gen(function* () {
 
 export const layerIdentity = Layer.effect(ServerEnvironmentIdentity, makeIdentity);
 
-/**
- * ServerEnvironment is acquired from persisted filesystem and host-process
- * state. It intentionally has no fallback Layer.succeed value: callers must
- * provide the external platform services, a ServerConfig, and the
- * ServerSecretStore backing the descriptor's publishing capability.
- */
 export const layer = Layer.effect(ServerEnvironment, make).pipe(
   Layer.provideMerge(layerIdentity),
   Layer.provide(ProcessRunner.layer),

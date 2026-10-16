@@ -1,11 +1,3 @@
-/**
- * Merges per-environment usage summaries into the single view the page renders.
- *
- * Pure, so the de-duplication and derivation rules can be tested without a
- * connected environment.
- *
- * @module usageMerge
- */
 import {
   USAGE_MERGE_COMPATIBLE_SINCE,
   type EnvironmentId,
@@ -57,15 +49,7 @@ export interface ModelTotals {
   readonly totalTokens: number;
   readonly tokens: UsageTokenTotals;
   readonly records: number;
-  /**
-   * Records whose tokens are counted here but which contributed nothing to
-   * `costUsd`. When it equals `records` the cost is unknown, not zero.
-   */
   readonly unpricedRecords: number;
-  /**
-   * Tokens with no known rates, which a custom price would cover. A cell that
-   * mixes these with reported costs counts its tokens by record share.
-   */
   readonly unpricedTokens: number;
   readonly costShare: number;
   readonly tokenShare: number;
@@ -109,10 +93,6 @@ export interface PartialUsageSource {
   readonly message: string | null;
 }
 
-/**
- * `costUsd` by token category. `unsplit` is cost no rates could split,
- * including all cost from servers that predate the split.
- */
 export interface CategoryCost {
   readonly input: number;
   readonly cacheRead: number;
@@ -121,12 +101,10 @@ export interface CategoryCost {
   readonly unsplit: number;
 }
 
-/** `costUsd` by request speed. Servers that predate speeds count as standard. */
 export interface SpeedCost {
   readonly standard: number;
   readonly fast: number;
   readonly ultrafast: number;
-  /** What fast and ultrafast requests cost above the standard rate. */
   readonly premium: number;
 }
 
@@ -155,19 +133,14 @@ export interface MergedUsage {
   readonly partialSources: readonly PartialUsageSource[];
   readonly categoryCost: CategoryCost;
   readonly speedCost: SpeedCost;
-  /** Environments whose data was dropped as a duplicate of another's. */
   readonly duplicateSources: readonly string[];
   readonly contributingEnvironments: readonly EnvironmentId[];
   readonly contractMismatches: readonly UsageContractMismatch[];
 }
 
 /**
- * Two sources are the same physical transcript directory only when host,
- * provider, path and filesystem identity all agree.
- *
- * `volumeId` is what stops two machines that happen to share a hostname and a
- * home path, which is every Mac in a fleet, from collapsing into one source and
- * having one of them silently dropped.
+ * `volumeId` is what stops two machines that happen to share a hostname and a home path, which is
+ * every Mac in a fleet, from collapsing into one source and having one of them silently dropped.
  */
 function fingerprintKey(fingerprint: UsageSourceFingerprint): string {
   return [
@@ -215,7 +188,6 @@ function claimSources(environments: readonly EnvironmentUsage[]): {
   return { ownerByFingerprint, duplicates };
 }
 
-/** Sources this environment owns after fingerprint claims, plus their buckets. */
 function ownedContribution(
   environment: EnvironmentUsage,
   ownerByFingerprint: ReadonlyMap<string, EnvironmentId>,
@@ -309,15 +281,6 @@ const EMPTY_MERGED: MergedUsage = {
   contractMismatches: [],
 };
 
-/**
- * Merges every connected environment's summary.
- *
- * `expectedContractVersion` guards against incompatible server code: rather
- * than blocking the page, its data is excluded and the mismatch direction is
- * reported so the UI can identify which side needs updating. Versions in
- * [{@link USAGE_MERGE_COMPATIBLE_SINCE}, expected] still merge, so an additive
- * provider expansion does not drop Claude/Codex totals from older servers.
- */
 export function mergeUsage(
   environments: readonly EnvironmentUsage[],
   expectedContractVersion: number,
@@ -634,7 +597,6 @@ export function mergeUsage(
       cacheSavingsUsd,
     },
     partialSources,
-    // Clamped so float error never shows as a negative remainder.
     categoryCost: {
       ...categoryCost,
       unsplit: Math.max(

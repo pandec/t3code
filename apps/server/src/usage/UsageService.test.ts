@@ -516,10 +516,6 @@ const layerCursorUsageAccounts = <E, R>(
   reader: Layer.Layer<CursorAccountReader.CursorAccountReader, E, R>,
 ) => Layer.fresh(CursorUsageAccounts.layer).pipe(Layer.provide(reader));
 
-/**
- * A service with its own Cursor account caches over `read`, as a fresh server
- * process has. `awaitPersisted` also waits for the account cache writes.
- */
 const makeWithCursor = (read: CursorAccountReader.CursorAccountReader["Service"]["read"]) =>
   Effect.gen(function* () {
     const context = yield* Layer.build(
@@ -538,7 +534,6 @@ const layerService = (input: {
   readonly home: string;
   readonly settings: Parameters<typeof ServerSettings.layerTest>[0];
   readonly onRatesFetch?: () => void;
-  /** Defaults to an unparsable document so every scan retries the fetch. */
   readonly ratesDocument?: unknown;
   readonly environment?: NodeJS.ProcessEnv;
   readonly platform?: NodeJS.Platform;
@@ -562,8 +557,6 @@ const layerService = (input: {
         HttpClient.make((request) =>
           Effect.sync(() => {
             input.onRatesFetch?.();
-            // Unparsable rates: every scan retries the fetch, which makes the
-            // fetch count a boundary-level observation of how many scans ran.
             return HttpClientResponse.fromWeb(request, Response.json(input.ratesDocument ?? {}));
           }),
         ),
@@ -583,7 +576,6 @@ const layerService = (input: {
     ),
   );
 
-/** Outside `NARROW_WINDOW`, inside `WINDOW`. Seconds, as `utimes` takes them. */
 const BEFORE_NARROW_WINDOW = Date.parse("2026-08-01T10:00:00Z") / 1000;
 const NARROW_WINDOW: UsageSummaryInput = {
   timeZone: "UTC",
@@ -592,9 +584,7 @@ const NARROW_WINDOW: UsageSummaryInput = {
 };
 
 /**
- * A FIFO named like a transcript. A scan's read of it waits in `open` until
- * `openGate`, then fails at once, so a gate holds that scan's directory reads
- * in flight. Each waiting gate holds one libuv pool thread; keep at most three.
+ * Each waiting gate holds one libuv pool thread; keep at most three.
  */
 const makeGate = (path: string, lastWriteSeconds?: number) =>
   Effect.promise(async () => {
@@ -604,14 +594,9 @@ const makeGate = (path: string, lastWriteSeconds?: number) =>
     }
   });
 
-/**
- * Returns once a scan has opened the gate. A scan opens every file of a
- * directory at once, so it then holds the directory's transcripts open too.
- */
 const openGate = (path: string) =>
   Effect.promise(async () => (await NodeFSP.open(path, "w")).close());
 
-/** Replaces a file by rename, so a scan holding the old one keeps reading it. */
 const replaceFile = (path: string, content: string) =>
   Effect.promise(async () => {
     await NodeFSP.writeFile(path + ".next", content);
@@ -622,17 +607,10 @@ function totalOutputTokens(summary: { buckets: readonly { totals: { outputTokens
   return summary.buckets.reduce((sum, bucket) => sum + bucket.totals.outputTokens, 0);
 }
 
-/** Inside `WINDOW`: the time Cursor tests run at. */
 const CURSOR_NOW = Date.parse("2026-08-02T12:00:00Z");
 const HOUR_MS = 60 * 60 * 1000;
-/** The service's cache retention, which the Cursor account cache always covers. */
 const CURSOR_RETENTION_MS = 92 * 24 * HOUR_MS;
 
-/**
- * Stands in for Cursor's dashboard API. Each read returns the account's events
- * in its range, keyed like the real reader: occurrences count within one read.
- * While `gate` is set, reads wait for it.
- */
 function makeFakeCursor() {
   const state = {
     accountKey: "account-a",
@@ -819,7 +797,6 @@ describe("UsageService", () => {
             first.sources.filter((source) => source.fingerprint.provider === "pi").length,
             1,
           );
-          // Warm scans retain header state and only charge appended entries.
           yield* Effect.promise(() =>
             NodeFSP.appendFile(
               NodePath.join(dir, "fork.jsonl"),
@@ -1148,12 +1125,10 @@ describe("UsageService", () => {
       cursor.state.gate = gate;
       yield* Effect.gen(function* () {
         const service = yield* makeWithCursor(cursor.read);
-        // Cold: nothing cached yet, so Cursor answers empty while it refreshes.
         const cold = yield* service.readSummary(WINDOW);
         assert.strictEqual(cursorSource(cold)?.refreshing, true);
         assert.strictEqual(cursorSource(cold)?.status, "ok");
         assert.strictEqual(totalOutputTokens(cold), 0);
-        // A second reader joins the refresh in flight.
         const joined = yield* service.readSummary(WINDOW);
         assert.strictEqual(cursorSource(joined)?.refreshing, true);
 
@@ -1167,14 +1142,12 @@ describe("UsageService", () => {
         assert.strictEqual(totalOutputTokens(refreshed), 5);
         assert.strictEqual(cursor.state.calls.length, 1);
 
-        // Inside the TTL a plain read answers from the cache without refreshing.
         yield* TestClock.adjust(Duration.seconds(30));
         const cached = yield* service.readSummary(WINDOW);
         assert.isUndefined(cursorSource(cached)?.refreshing);
         assert.strictEqual(totalOutputTokens(cached), 5);
         assert.strictEqual(cursor.state.calls.length, 1);
 
-        // Past it, a plain read answers from the stale cache and refreshes.
         yield* TestClock.adjust(Duration.seconds(31));
         cursor.state.events.push({ timestampMs: CURSOR_NOW, outputTokens: 7 });
         const stale = yield* service.readSummary(WINDOW);
@@ -1194,7 +1167,6 @@ describe("UsageService", () => {
       yield* writeCursorLogin(home);
       yield* TestClock.setTime(CURSOR_NOW);
       const cursor = makeFakeCursor();
-      // Two identical billed rows inside the refetched hour must both survive it, once each.
       cursor.state.events = [
         { timestampMs: Date.parse("2026-07-10T10:00:00Z"), outputTokens: 17 },
         { timestampMs: CURSOR_NOW - 24 * HOUR_MS, outputTokens: 5 },
@@ -1210,12 +1182,10 @@ describe("UsageService", () => {
           { sinceMs: CURSOR_NOW - CURSOR_RETENTION_MS, untilMs: CURSOR_NOW },
         ]);
 
-        // A wider window is answered from the same cache.
         const wide = { ...WINDOW, sinceDay: UsageDay.make("2026-07-01") };
         assert.strictEqual(totalOutputTokens(yield* read(wide)), 36);
         assert.strictEqual(cursor.state.calls.length, 1);
 
-        // An event finalized late, inside the overlap, and a new one.
         cursor.state.events.push(
           { timestampMs: CURSOR_NOW - HOUR_MS / 6, outputTokens: 11 },
           { timestampMs: CURSOR_NOW + HOUR_MS, outputTokens: 13 },
@@ -1227,7 +1197,6 @@ describe("UsageService", () => {
           untilMs: CURSOR_NOW + 2 * HOUR_MS,
         });
 
-        // Another login replaces the cached account's history instead of adding to it.
         cursor.state.accountKey = "account-b";
         yield* TestClock.adjust(Duration.minutes(2));
         assert.strictEqual(totalOutputTokens(yield* read(wide)), 60);
@@ -1260,13 +1229,11 @@ describe("UsageService", () => {
         assert.isUndefined(cursorSource(failed)?.refreshing);
         assert.strictEqual(totalOutputTokens(failed), 5);
 
-        // The failure stands for the TTL; a plain read does not retry it.
         const again = yield* service.readSummary(WINDOW);
         assert.strictEqual(cursorSource(again)?.status, "partial");
         assert.isUndefined(cursorSource(again)?.refreshing);
         assert.strictEqual(cursor.state.calls.length, 2);
 
-        // A failing read of another login drops the previous account's history.
         yield* TestClock.adjust(Duration.minutes(2));
         cursor.state.accountKey = "account-b";
         const switched = yield* service.readSummary({ ...WINDOW, awaitRefresh: true });
@@ -1306,7 +1273,6 @@ describe("UsageService", () => {
         assert.deepStrictEqual(cursorSource(restored), cursorSource(original));
         assert.strictEqual(after.state.calls.length, 0);
 
-        // Once stale, the restored cache refreshes only its newest edge.
         yield* TestClock.adjust(Duration.minutes(2));
         const refreshed = yield* restarted.readSummary({ ...WINDOW, awaitRefresh: true });
         assert.deepStrictEqual(refreshed.buckets, original.buckets);
@@ -1593,7 +1559,6 @@ describe("UsageService", () => {
           [
             { type: "session_meta", payload: { id: "codex-account-session" } },
             { type: "turn_context", payload: { model: "gpt-5.6-sol" } },
-            // A-B-A at one timestamp must preserve both equal A events.
             ...[11, 12, 11].map((outputTokens) => ({
               type: "event_msg",
               timestamp: "2026-08-01T10:00:00Z",
@@ -1654,7 +1619,6 @@ describe("UsageService", () => {
                 },
                 [ProviderInstanceId.make("grok-work")]: {
                   driver: ProviderDriverKind.make("grok"),
-                  // An undecodable config must not hide history Grok reads by home alone.
                   config: { customModels: "not-a-list" },
                   environment: [{ name: "GROK_HOME", value: grokHome, sensitive: false }],
                 },
@@ -2261,7 +2225,6 @@ describe("UsageService", () => {
           );
           const warm = yield* service.readSummary(WINDOW);
           assert.deepStrictEqual(warm.buckets, first.buckets);
-          // The repeated content block has the same message/request identity.
           yield* Effect.promise(() => NodeFSP.appendFile(transcript, large + claudeLine(2, 100)));
           const appended = yield* service.readSummary(WINDOW);
           assert.strictEqual(totalOutputTokens(appended), 10000);
@@ -2372,14 +2335,11 @@ describe("UsageService", () => {
           const upgraded = yield* UsageService.make;
           const summary = yield* upgraded.readSummary(WINDOW);
           yield* upgraded.awaitPersisted;
-          // The live rollout re-parses at the ultrafast rate (10 x 6); the
-          // deleted one keeps its saved v4 usage at the standard rate (20 x 1).
           assert.strictEqual(totalOutputTokens(summary), 30);
           assert.strictEqual(
             summary.buckets.reduce((sum, bucket) => sum + bucket.costUsd, 0),
             80,
           );
-          // A v4 server sharing this state directory still finds its own cache.
           assert.strictEqual(
             yield* Effect.promise(() => NodeFSP.readFile(legacyPath, "utf8")),
             legacy,
@@ -2433,7 +2393,6 @@ describe("UsageService", () => {
         assert.deepStrictEqual(restored.buckets, first.buckets);
         assert.deepStrictEqual(restored.sources, deleted.sources);
 
-        // A moved transcript must not count the saved usage twice.
         yield* Effect.promise(() => NodeFSP.writeFile(transcript + ".jsonl", content));
         const moved = yield* restarted.readSummary(WINDOW);
         assert.deepStrictEqual(moved.buckets, first.buckets);
@@ -2499,8 +2458,6 @@ describe("UsageService", () => {
         assert.deepStrictEqual(outsideWindow.buckets, []);
         assert.strictEqual(outsideWindow.sources[0]?.distinctSessions, 0);
       }).pipe(
-        // Scoped inside the state directory, so pending cache writes land
-        // before it is removed.
         Effect.scoped,
         Effect.provide(
           layerService({
@@ -2528,8 +2485,6 @@ describe("UsageService", () => {
     Effect.gen(function* () {
       const { transcript, settings, home } = yield* setup;
       const dir = NodePath.dirname(transcript);
-      // The walk-first file is the original, padded so it finishes parsing
-      // after the small fork copy that repeats its record under a new session.
       const [first = "", second = ""] = yield* Effect.promise(async () => {
         await NodeFSP.writeFile(NodePath.join(dir, "a.jsonl"), "");
         await NodeFSP.writeFile(NodePath.join(dir, "b.jsonl"), "");
@@ -2634,8 +2589,6 @@ describe("UsageService", () => {
       // Retained history of a removed directory reports its source as partial.
       assert.strictEqual(claudeSource(reached)?.status, "partial");
 
-      // A missing source cannot claim this directory from another environment
-      // that still reads it, so it adds nothing to a window after its last write.
       const later = yield* service.readSummary({
         timeZone: "UTC",
         sinceDay: UsageDay.make("2026-08-10"),
@@ -2732,7 +2685,6 @@ describe("UsageService", () => {
       assert.deepStrictEqual(first, second);
       assert.strictEqual(ratesFetches, 1);
 
-      // A later request is fresh work again, not a stale cached answer.
       yield* service.readSummary(WINDOW);
       assert.strictEqual(ratesFetches, 2);
     }).pipe(Effect.scoped),
@@ -2764,13 +2716,10 @@ describe("UsageService", () => {
       assert.strictEqual(ratesFetches, 1);
       assert.strictEqual(first.pricing.status, "fresh");
 
-      // Inside the daily TTL a plain rescan keeps the cached table.
       yield* TestClock.adjust(Duration.minutes(2));
       yield* service.readSummary(WINDOW);
       assert.strictEqual(ratesFetches, 1);
 
-      // An explicit refresh fetches again so a newly listed model gets priced.
-      // A burst of refreshes shares that one fetch.
       const [refreshed] = yield* Effect.all([service.refreshRates, service.refreshRates], {
         concurrency: 2,
       });
@@ -2812,9 +2761,6 @@ describe("UsageService", () => {
           },
         };
 
-        // Each candidate needs a distinct key because the broken case leaves
-        // its entry in the service's private in-flight map. The invalid window
-        // keeps the real scan synchronous once its detached fiber starts.
         const input: UsageSummaryInput = {
           ...WINDOW,
           sinceDay: UsageDay.make("2026-09-01"),

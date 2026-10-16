@@ -1,10 +1,3 @@
-/**
- * Usage history for Claude Code: the transcript format of its
- * `<home>/projects/**.jsonl` session files and where each instance keeps them.
- *
- * @module provider/Drivers/claudeUsage
- */
-
 import type { ClaudeSettings } from "@t3tools/contracts";
 import * as Effect from "effect/Effect";
 import * as Path from "effect/Path";
@@ -69,8 +62,6 @@ function parseClaudeRecord(parsed: unknown): UsageRecord | null {
 
   const messageId = typeof messageRecord["id"] === "string" ? messageRecord["id"] : null;
   const requestId = typeof record["requestId"] === "string" ? record["requestId"] : null;
-  // Matches ccusage: prefer the message/request pair, fall back to whichever
-  // half exists. Records with neither cannot be de-duplicated.
   const dedupeKey =
     messageId === null && requestId === null ? null : `${messageId ?? ""}:${requestId ?? ""}`;
 
@@ -127,7 +118,6 @@ const orEmpty = (record: UsageRecord | null): readonly UsageRecord[] =>
   record === null ? [] : [record];
 
 export const claudeUsageFormat: TranscriptUsageFormat<void> = {
-  // Keeps the dedupe and cost metadata. The `usage` subtree keeps future token fields.
   selectFields: {
     type: true,
     timestamp: true,
@@ -147,7 +137,6 @@ export const claudeUsageReader: ProviderUsageReader<ClaudeSettings, Path.Path> =
   provider: "claude",
   format: claudeUsageFormat,
   directories: Effect.fn("claudeUsageReader.directories")(function* ({ config, environment }) {
-    // An undecodable config has no trustworthy home to read.
     if (config === undefined) return [];
     const path = yield* Path.Path;
     // Shadow config dirs link `projects` back to this shared config dir, so it

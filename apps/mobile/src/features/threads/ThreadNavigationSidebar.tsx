@@ -92,8 +92,6 @@ import {
   type ThreadListV2ListItem,
 } from "./threadListV2";
 
-/** The sidebar list: flat v2 rows with queued tasks spliced in, plus a
-    settled "Show more" pager row. */
 type SidebarListItem =
   | ThreadListV2ListItem
   | { readonly type: "v2-show-more"; readonly key: string; readonly hiddenCount: number };
@@ -119,15 +117,6 @@ interface ThreadNavigationSidebarProps {
   readonly searchQuery: string;
 }
 
-/**
- * iPad/large-width sidebar column.
- *
- * On iOS the pane is hosted inside its own navigation-inert single-screen
- * native stack (SidebarNavigationShell) so the header is a real
- * UINavigationBar: large title, native bar-button items, and a
- * UISearchController search field — the same chrome a UISplitViewController
- * column gets. Other platforms keep the custom header chrome.
- */
 export function ThreadNavigationSidebar(props: ThreadNavigationSidebarProps) {
   if (Platform.OS !== "ios") {
     return <ThreadNavigationSidebarPane {...props} nativeChrome={false} />;
@@ -318,7 +307,6 @@ function ThreadNavigationSidebarPane(
     () => projectScopes.find((scope) => scope.key === resolvedProjectKey) ?? null,
     [projectScopes, resolvedProjectKey],
   );
-  // A saved project stays selected while its environment is offline or filtered out.
   const selectedProjectKey = selectedProjectScope?.key ?? null;
   // The shelf is unfiltered, so any active filter or search hides it.
   const archiveShelfVisible =
@@ -370,10 +358,6 @@ function ThreadNavigationSidebarPane(
     return map;
   }, [projects]);
 
-  // Thread List v2 (beta) support — same model as the compact Home list
-  // (HomeScreen.tsx): flat creation-order card block + settled recency tail.
-  // The settled tail renders in pages; expansion resets when the filter
-  // context changes so environment/search flips never inherit a deep page.
   const [settledVisibleCount, setSettledVisibleCount] = useState(
     THREAD_LIST_V2_SETTLED_INITIAL_COUNT,
   );
@@ -414,18 +398,12 @@ function ThreadNavigationSidebarPane(
     useThreadShelfExpansion("active");
   // Queued-start and snooze helpers need a clock while the pane stays open.
   const [nowMinute, setNowMinute] = useState(() => new Date().toISOString().slice(0, 16));
-  // Snooze wake times are second-precise; a counter bumped exactly at the
-  // next wake boundary re-runs the partition with a fresh clock so a woken
-  // thread reappears immediately instead of on the next minute tick.
   const [snoozeWakeTick, bumpSnoozeWakeTick] = useState(0);
   useEffect(() => {
-    // Refresh immediately because the mount-time value can be hours old.
     setNowMinute(new Date().toISOString().slice(0, 16));
     const id = setInterval(() => setNowMinute(new Date().toISOString().slice(0, 16)), 60_000);
     return () => clearInterval(id);
   }, []);
-  // Threads on servers without the settlement capability never classify as
-  // settled (the user could neither un-settle nor pin them).
   const listEnvironments = useAtomValue(threadListEnvironmentsAtom);
   const {
     providersByEnvironmentId,
@@ -463,7 +441,6 @@ function ThreadNavigationSidebarPane(
           queuedThreadKeys,
         }),
       });
-    // The Working beta orders the inbox by time, so only pins can move.
     return new Map([
       ...sectionAvailability("pinned"),
       ...(workingShelfEnabled ? [] : sectionAvailability("active")),
@@ -523,8 +500,6 @@ function ThreadNavigationSidebarPane(
     threads,
     selectedProjectScope,
   ]);
-  // Re-partition the moment the earliest snooze expires (clamped to the
-  // signed-32-bit setTimeout range; far-future wakes re-arm at the clamp).
   const nextSnoozeWakeAt = threadListV2Layout.nextSnoozeWakeAt;
   useEffect(() => {
     if (nextSnoozeWakeAt === null) return;
@@ -758,7 +733,6 @@ function ThreadNavigationSidebarPane(
       savedConnectionsById,
       listEnvironments,
       threadSearchMatchByKey,
-      // Rows read it for their reorder menu items.
       workingShelfEnabled,
     }),
     [
@@ -840,14 +814,6 @@ function ThreadNavigationSidebarPane(
         case "v2-thread": {
           const thread = item.item.thread;
           const scopeKey = scopedProjectKey(thread.environmentId, thread.projectId);
-          // Intentional difference from Home: the sidebar never passes
-          // `showTrailingDivider` because its rows render no Home-style row
-          // hairline at all — card rows carry tonal containers in this pane
-          // (the hairline branch is !sidebarPane-only) and slim rows have no
-          // hairline branch. The stamp still rides the shared list items
-          // because Home's boundary suppression consumes it; the sidebar's
-          // only cost is the occasional divider-only equality invalidation,
-          // which re-renders identically.
           return (
             <ThreadListV2Row
               onNewThreadOnBranch={props.onNewThreadOnBranch}
@@ -1032,8 +998,6 @@ function ThreadNavigationSidebarPane(
       workingShelfEnabled,
     ],
   );
-  // The list ignores sort/group options, so only the environment and project
-  // filters can light the "customized" state.
   const filterCustomized = options.selectedEnvironmentId !== null || selectedProjectKey !== null;
   const filterIcon = filterCustomized
     ? "line.3.horizontal.decrease.circle.fill"
@@ -1066,8 +1030,6 @@ function ThreadNavigationSidebarPane(
       }),
     [filterIcon, filterMenu, props.onOpenSettings],
   );
-  // Snoozed threads need no special case: the shelf header is a list row
-  // even while collapsed.
   const listEmpty = (
     <Text
       className={
@@ -1098,9 +1060,6 @@ function ThreadNavigationSidebarPane(
         <NativeStackScreenOptions
           optionsVersion={[nativeHeaderItems, props.width]}
           options={{
-            // Re-applies the shell's static brand slot with the
-            // connection-status swap so reconnects surface in the header
-            // instead of shifting the list.
             ...getConnectionAwareBrandHeaderOptions({
               headerWidth: props.width,
               trailingItemCount: nativeHeaderItems.length,
@@ -1112,8 +1071,6 @@ function ThreadNavigationSidebarPane(
               ref: searchBarRef,
               autoCapitalize: "none",
               hideNavigationBar: false,
-              // Keep the search bar pinned under the title — UIKit's default
-              // hidesSearchBarWhenScrolling collapses it on scroll.
               hideWhenScrolling: false,
               obscureBackground: false,
               placeholder: "Search",
@@ -1255,9 +1212,6 @@ function ThreadNavigationSidebarPane(
           style={{ paddingTop: insets.top }}
         >
           <View className="h-[50px] flex-row items-end gap-0.5 pr-2 pl-5">
-            {/* Title slot doubles as the connection status surface: while an
-              environment reconnects, the brand fades to a status label in
-              place (no layout shift in the list below). */}
             <WorkspaceConnectionTitle
               grow
               onPress={props.onOpenEnvironmentSettings}

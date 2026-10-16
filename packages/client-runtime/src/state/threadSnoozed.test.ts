@@ -96,7 +96,6 @@ describe("effectiveSnoozed", () => {
   });
 
   it("wakes early on a failure that happened after the snooze", () => {
-    // makeShell stamps session.updatedAt at 11:00, after SNOOZED_AT (9:00).
     expect(
       effectiveSnoozed(makeShell({ snoozedUntil: FUTURE_WAKE, sessionStatus: "error" }), {
         now: NOW,
@@ -110,7 +109,6 @@ describe("effectiveSnoozed", () => {
         makeShell({
           snoozedUntil: FUTURE_WAKE,
           sessionStatus: "error",
-          // Snoozed AFTER the error's status edge.
           snoozedAt: "2026-04-10T11:30:00.000Z",
         }),
         { now: NOW },
@@ -369,10 +367,6 @@ describe("threadWokeAt", () => {
   });
 
   it("keeps the early wake authoritative after the scheduled time passes", () => {
-    // Woke early at 10:30 via run-completed; the scheduled wake (PAST_WAKE
-    // 10:00 relative to a later now) has ALSO passed. Reporting the
-    // scheduled time would resurface a Woke pill the user already cleared
-    // by visiting between the early wake and now.
     expect(
       threadWokeAt(
         makeShell({ snoozedUntil: PAST_WAKE, turnCompletedAt: "2026-04-10T09:30:00.000Z" }),

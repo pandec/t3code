@@ -298,8 +298,6 @@ function useThreadActionExecutor(
           );
           return false;
         }
-        // Settled threads stay in the live shell stream; only the archive
-        // lifecycle still feeds the archived-snapshot surface.
         if (action === "archive" || action === "unarchive" || action === "delete") {
           refreshArchivedThreadsForEnvironment(thread.environmentId);
         }
@@ -379,7 +377,6 @@ export function useThreadListActions(
   readonly unsettleThread: (thread: EnvironmentThreadShell) => Promise<boolean>;
   readonly pinThread: (thread: EnvironmentThreadShell) => Promise<boolean>;
   readonly unpinThread: (thread: EnvironmentThreadShell) => Promise<boolean>;
-  /** Sets per-thread automatic settlement on or off. */
   readonly setThreadAutoSettle: (
     thread: EnvironmentThreadShell,
     enabled: boolean,
@@ -927,7 +924,6 @@ export function useThreadListActions(
                 ? error.message
                 : "The thread could not be moved.",
             );
-            // Keep confirmed keys when a later environment rejects its write.
             return false;
           }
         }

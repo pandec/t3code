@@ -7,7 +7,6 @@ import * as Effect from "effect/Effect";
 import { GROK_COST_USD_TICKS_PER_DOLLAR, grokUsageReader, parseGrokLine } from "./usage.ts";
 
 describe("parseGrokLine", () => {
-  /** Shaped after a real Grok Build `turn_completed` session update. */
   function turnCompleted(overrides?: {
     sessionId?: string;
     promptId?: string;

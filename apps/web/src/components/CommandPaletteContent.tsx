@@ -11,10 +11,6 @@ type CommandPaletteContentProps = Omit<ComponentProps<typeof Command>, "children
   readonly footerTrailing?: ReactNode;
   readonly inputAccessory?: ReactNode;
   readonly inputProps: ComponentProps<typeof CommandInput>;
-  /**
-   * How tall the results panel may grow: the palette's list, a taller file list, or the whole
-   * dialog body (for modes that lay out their own status and empty states).
-   */
   readonly panelSize?: "list" | "tall-list" | "fill";
   /** Select the prefilled query on mount so typing replaces it (rename view). */
   readonly selectInputOnMount?: boolean;
@@ -22,11 +18,6 @@ type CommandPaletteContentProps = Omit<ComponentProps<typeof Command>, "children
   readonly testId?: string;
 };
 
-/**
- * Shared command palette chrome. Palette modes provide their query behavior,
- * results, and optional input accessory while retaining one input, panel, and
- * keyboard-hint gutter.
- */
 export function CommandPaletteContent({
   children,
   escapeLabel = "Close",

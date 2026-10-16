@@ -15,7 +15,6 @@ const IDLE_STATE: VoiceInputState = { phase: "idle", error: null, errorAction: n
 
 export function useVoiceInputController(input: {
   readonly ownerKey: string | null;
-  /** Shown by the global dictation pill when this composer is off screen. */
   readonly label: string;
   /**
    * Environment whose server transcriber backs this composer when on-device

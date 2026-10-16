@@ -46,7 +46,6 @@ export interface ThreadDetailsPanelProps extends Pick<
   onAutoEnvironment?: (() => void) | undefined;
   onEnvironmentChange: (environmentId: EnvironmentId) => void;
   onEnvModeChange: (mode: EnvMode) => void;
-  /** The thread's env mode as ChatView resolves it. */
   envMode: EnvMode;
   /** Fork (SP Labs): offer Lab mode (a draft in the labs project). */
   labModeAvailable?: boolean;

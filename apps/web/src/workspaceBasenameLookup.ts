@@ -1,5 +1,3 @@
-// Enough hits to look past same-named neighbours (`ChatView.test.tsx`) without
-// asking for a full listing on a single click.
 export const WORKSPACE_BASENAME_LOOKUP_LIMIT = 25;
 
 // One counter per scope (scoped thread key): within a pane the newest click
@@ -7,7 +5,6 @@ export const WORKSPACE_BASENAME_LOOKUP_LIMIT = 25;
 // in-flight lookup — they open different panels.
 const latestLookupSequenceByScope = new Map<string, number>();
 
-/** Call the returned predicate when the search settles; false means a later click superseded it. */
 export function claimWorkspaceBasenameLookup(scopeKey = ""): () => boolean {
   const claimed = (latestLookupSequenceByScope.get(scopeKey) ?? 0) + 1;
   latestLookupSequenceByScope.set(scopeKey, claimed);
@@ -44,9 +41,6 @@ export function pickWorkspaceBasenameMatch(
   const files = entries.filter((entry) => entry.kind === "file");
   const exact = files.find((entry) => basenameOfPath(entry.path) === target);
   if (exact) return exact.path;
-  // Folded matching covers casing that drifted from disk, but `FOO.ts` against
-  // both `Foo.ts` and `foo.ts` has no right answer, so it resolves to nothing
-  // rather than opening whichever the index ranked first.
   const folded = target.toLowerCase();
   const foldedMatches = files.filter(
     (entry) => basenameOfPath(entry.path).toLowerCase() === folded,
