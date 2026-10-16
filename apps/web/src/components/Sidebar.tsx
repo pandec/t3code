@@ -237,7 +237,6 @@ import {
   type ThreadActionMenuId,
 } from "./threadActionMenu.logic";
 import { openThreadInActivePane } from "./thread-split/threadOpenTarget";
-import { foldSplitForParkedThread } from "./thread-split/threadSplitStore";
 import {
   SplitPaneMarkerIcon,
   useSplitSecondaryThreadKey,
@@ -5331,39 +5330,25 @@ export default function Sidebar() {
       }
       snoozingThreadKeysRef.current.add(threadKey);
       try {
-        // Snoozing the open thread moves you forward, same as settle —
-        // both park the thread you're done with for now.
-        const navigateAfterSnooze = planForwardNavigation(threadKey, opts.coSnoozingKeys);
+        // snoozeThread moves the reader back to their previous thread; with
+        // none left, the sidebar moves them forward, same as settle. Planned
+        // before the await, while the thread still holds its place.
         const result = await snoozeThread(threadRef, preset.snoozedUntil, {
           untilDone: preset.untilDone === true,
+          alsoParking: opts.coSnoozingKeys,
+          moveOnFallback: planForwardNavigation(threadKey, opts.coSnoozingKeys),
         });
         if (result._tag === "Failure") {
-          // Never navigate away from a thread that did not snooze.
           return isAtomCommandInterrupted(result)
             ? ({ status: "interrupted" } as const)
             : ({ status: "failure", error: squashAtomCommandFailure(result) } as const);
-        }
-        // In a split, the other pane's thread takes over instead. Otherwise
-        // move forward only if the user is still on the snoozed thread — a
-        // navigation made during the await wins over ours.
-        if (
-          !foldSplitForParkedThread(threadKey, routeThreadKeyRef.current, navigateToThread) &&
-          shouldNavigateAfterThreadPark({
-            threadKey,
-            currentThreadKey: routeThreadKeyRef.current,
-            action: "snooze",
-            now: new Date().toISOString(),
-            thread: readThreadShell(threadRef),
-          })
-        ) {
-          navigateAfterSnooze?.();
         }
         return { status: "success" } as const;
       } finally {
         snoozingThreadKeysRef.current.delete(threadKey);
       }
     },
-    [navigateToThread, planForwardNavigation, snoozeThread],
+    [planForwardNavigation, snoozeThread],
   );
   const attemptSnooze = useCallback(
     (

@@ -9,7 +9,7 @@ This is a personal fork of [pingdotgg/t3code](https://github.com/pingdotgg/t3cod
 
 ## What the fork adds
 
-- **Switch back to the previous thread.** In the desktop app, Ctrl+Tab toggles between the current and previously viewed thread or unsent draft, including across projects and environments. It works while typing in the composer or terminal and follows the focused pane in split view. The pair lasts for the current app session.
+- **Switch back to the previous thread.** In the desktop app, Ctrl+Tab toggles between the current and previously viewed thread or unsent draft, including across projects and environments. It works while typing in the composer or terminal and follows the focused pane in split view. The pair lasts for the current app session. On web and desktop, snoozing the open thread returns you to that previous thread.
 
 - **Move a thread to the top.** The command palette moves the current thread to the top of Pinned, Active, or its custom group, counting members hidden by filters or folded groups, and keeps its group. Drafts and archived, snoozed, or settled threads can't be moved this way.
 
