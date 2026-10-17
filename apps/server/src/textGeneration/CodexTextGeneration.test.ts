@@ -806,7 +806,13 @@ it.layer(layerCodexTextGenerationTest)("CodexTextGeneration", (it) => {
     withFakeCodexEnv(
       {
         output: JSON.stringify({ script: "There are three retries." }),
-        requireArg: "project_doc_max_bytes=0",
+        // Naming a user server under --ignore-user-config declares it without a
+        // transport, which Codex rejects; the empty table still clears servers
+        // defined in launch args.
+        mcpServers: [{ name: "augmenter", enabled: true }],
+        requireArg:
+          "--config mcp_servers={} --ephemeral --skip-git-repo-check -s read-only --ignore-user-config --ignore-rules --config project_doc_max_bytes=0",
+        forbidArg: '--config mcp_servers={"augmenter"={enabled=false}}',
         stdinMustContain: "within 5000 characters",
       },
       (textGeneration) =>
