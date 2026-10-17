@@ -1,7 +1,7 @@
 "use client";
 
 import { FILL_PREVIEW_VIEWPORT, type ScopedThreadRef } from "@t3tools/contracts";
-import { PanelRightIcon, PictureInPicture2, XIcon } from "lucide-react";
+import { ExternalLink, PanelRightIcon, PictureInPicture2, XIcon } from "lucide-react";
 import {
   type PointerEvent as ReactPointerEvent,
   type ReactNode,
@@ -34,6 +34,7 @@ import { Button } from "~/components/ui/button";
 import { toastManager } from "~/components/ui/toast";
 import { Tooltip, TooltipPopup, TooltipTrigger } from "~/components/ui/tooltip";
 import { cn } from "~/lib/utils";
+import { ensureLocalApi } from "~/localApi";
 import { useThreadPreviewState } from "~/previewStateStore";
 import {
   type PreviewMiniPlayerSize,
@@ -73,6 +74,8 @@ interface PointerGesture {
 }
 
 const HANDLE_TAP_SLOP_PX = 6;
+
+const localApi = typeof window === "undefined" ? null : ensureLocalApi();
 
 interface Props {
   readonly threadRef: ScopedThreadRef;
@@ -172,6 +175,7 @@ function BrowserMiniPlayer({ threadRef, tabId, miniPlayer }: Props & { readonly 
   };
 
   if (!snapshot) return null;
+  const url = snapshot.navStatus._tag === "Idle" ? "" : snapshot.navStatus.url;
   const poppedOut = serverTab ? serverPictureInPicture : Boolean(desktopOverlay?.pictureInPicture);
   const canPopOut = serverTab ? supportsServerPictureInPicture() : true;
 
@@ -184,29 +188,49 @@ function BrowserMiniPlayer({ threadRef, tabId, miniPlayer }: Props & { readonly 
       recording={recording}
       onOpenInPanel={openInPanel}
       pillActions={
-        canPopOut ? (
-          <Tooltip>
-            <TooltipTrigger
-              render={
-                <Button
-                  variant={poppedOut ? "secondary" : "ghost"}
-                  size="icon-xs"
-                  aria-label={
-                    poppedOut ? "Close popped-out preview" : "Pop preview into separate window"
-                  }
-                  disabled={!serverTab && !desktopOverlay?.hasWebContents}
-                  onPointerDown={(event) => event.stopPropagation()}
-                  onClick={toggleNativePictureInPicture}
-                />
-              }
-            >
-              <PictureInPicture2 />
-            </TooltipTrigger>
-            <TooltipPopup side="top">
-              {poppedOut ? "Close separate window" : "Pop into separate window"}
-            </TooltipPopup>
-          </Tooltip>
-        ) : null
+        <>
+          {canPopOut ? (
+            <Tooltip>
+              <TooltipTrigger
+                render={
+                  <Button
+                    variant={poppedOut ? "secondary" : "ghost"}
+                    size="icon-xs"
+                    aria-label={
+                      poppedOut ? "Close popped-out preview" : "Pop preview into separate window"
+                    }
+                    disabled={!serverTab && !desktopOverlay?.hasWebContents}
+                    onPointerDown={(event) => event.stopPropagation()}
+                    onClick={toggleNativePictureInPicture}
+                  />
+                }
+              >
+                <PictureInPicture2 />
+              </TooltipTrigger>
+              <TooltipPopup side="top">
+                {poppedOut ? "Close separate window" : "Pop into separate window"}
+              </TooltipPopup>
+            </Tooltip>
+          ) : null}
+          {localApi && url ? (
+            <Tooltip>
+              <TooltipTrigger
+                render={
+                  <Button
+                    variant="ghost"
+                    size="icon-xs"
+                    aria-label="Open in system browser"
+                    onPointerDown={(event) => event.stopPropagation()}
+                    onClick={() => void localApi.shell.openExternal(url).catch(() => undefined)}
+                  />
+                }
+              >
+                <ExternalLink />
+              </TooltipTrigger>
+              <TooltipPopup side="top">Open in system browser</TooltipPopup>
+            </Tooltip>
+          ) : null}
+        </>
       }
     >
       {(frame) =>
