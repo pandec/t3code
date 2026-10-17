@@ -278,10 +278,11 @@ export const makeCodexTextGeneration = Effect.fn("makeCodexTextGeneration")(func
       };
       const execLaunchArgs = codexExecLaunchArgs(launchArgs);
       const ignoresUserConfig = TextGenerationOperations.isSourceRewriteOperation(operation);
-      // With --ignore-user-config no user MCP server loads, and naming one in
-      // the override would declare it without a transport, which Codex rejects.
+      // Under --ignore-user-config only launch-arg servers remain, and an empty
+      // table clears those; naming a config.toml server here would declare it
+      // without a transport, which Codex rejects.
       const mcpServersOff = ignoresUserConfig
-        ? null
+        ? "mcp_servers={}"
         : yield* listEnabledMcpServers({
             binary,
             cwd,
