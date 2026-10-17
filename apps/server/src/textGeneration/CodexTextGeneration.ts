@@ -277,13 +277,18 @@ export const makeCodexTextGeneration = Effect.fn("makeCodexTextGeneration")(func
           : {}),
       };
       const execLaunchArgs = codexExecLaunchArgs(launchArgs);
-      const mcpServersOff = yield* listEnabledMcpServers({
-        binary,
-        cwd,
-        env,
-        // `codex mcp` rejects --strict-config; the overrides still apply.
-        launchArgs: execLaunchArgs.filter((arg) => arg !== "--strict-config"),
-      }).pipe(Effect.map(codexMcpServersOff));
+      const ignoresUserConfig = TextGenerationOperations.isSourceRewriteOperation(operation);
+      // With --ignore-user-config no user MCP server loads, and naming one in
+      // the override would declare it without a transport, which Codex rejects.
+      const mcpServersOff = ignoresUserConfig
+        ? null
+        : yield* listEnabledMcpServers({
+            binary,
+            cwd,
+            env,
+            // `codex mcp` rejects --strict-config; the overrides still apply.
+            launchArgs: execLaunchArgs.filter((arg) => arg !== "--strict-config"),
+          }).pipe(Effect.map(codexMcpServersOff));
       const spawnCommand = yield* resolveSpawnCommand(
         binary,
         [
@@ -298,7 +303,7 @@ export const makeCodexTextGeneration = Effect.fn("makeCodexTextGeneration")(func
           "--skip-git-repo-check",
           "-s",
           "read-only",
-          ...(TextGenerationOperations.isSourceRewriteOperation(operation)
+          ...(ignoresUserConfig
             ? [
                 "--ignore-user-config",
                 "--ignore-rules",
