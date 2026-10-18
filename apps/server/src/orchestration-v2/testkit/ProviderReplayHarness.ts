@@ -415,6 +415,8 @@ export function layerWithRegistry<Error>(
         layerRuntime,
         // fork: as runtimeLayer.ts provides it.
         ThreadHiddenNotes.layer.pipe(Layer.provide(layerDatabase)),
+        layerServerConfig,
+        layerServerSettings,
       ),
     ),
   );
@@ -441,6 +443,8 @@ export function layerWithRegistry<Error>(
         layerProviderSessionManagerProvided,
         ThreadCommandExecutor.layer,
         layerRuntime,
+        layerServerConfig,
+        layerServerSettings,
       ),
     ),
   );

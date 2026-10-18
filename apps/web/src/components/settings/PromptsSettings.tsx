@@ -1,6 +1,6 @@
 import type { SavedPrompt } from "@t3tools/contracts/settings";
 import { ChevronDownIcon, PencilIcon, PlusIcon } from "lucide-react";
-import React, { type FormEvent, useEffect, useId, useState } from "react";
+import React, { type FormEvent, useId, useState } from "react";
 
 import { useSavedPrompts } from "~/hooks/useSavedPrompts";
 import { cn, randomUUID } from "~/lib/utils";
@@ -208,12 +208,15 @@ function SavedPromptEditorDialog({
   const isEditing = request?.promptId != null;
 
   // Hydrate the form whenever a new request opens the dialog.
-  useEffect(() => {
-    if (!request) return;
-    setTitle(request.initial.title);
-    setContent(request.initial.content);
-    setValidationError(null);
-  }, [request]);
+  const [hydratedRequest, setHydratedRequest] = useState<SavedPromptEditorRequest | null>(null);
+  if (request !== hydratedRequest) {
+    setHydratedRequest(request);
+    if (request) {
+      setTitle(request.initial.title);
+      setContent(request.initial.content);
+      setValidationError(null);
+    }
+  }
 
   const submit = (event: FormEvent) => {
     event.preventDefault();

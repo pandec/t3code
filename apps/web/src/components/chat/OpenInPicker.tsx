@@ -6,7 +6,7 @@ import {
   type EnvironmentId,
   type ResolvedKeybindingsConfig,
 } from "@t3tools/contracts";
-import { memo, useCallback, useEffect, useMemo, useRef } from "react";
+import { memo, useEffect, useRef } from "react";
 import { isOpenFavoriteEditorShortcut, shortcutLabelForCommand } from "../../keybindings";
 import { usePreferredEditor } from "../../editorPreferences";
 import { editorLabelForPlatform } from "../../editorLabels";
@@ -237,6 +237,18 @@ export const resolveOpenInOptions = (
     }));
 };
 
+// A component of its own: the compiler lint rejects an icon component picked in render.
+function RevealInFolderIcon() {
+  const platform = navigator.platform;
+  if (isMacPlatform(platform)) {
+    return <FinderIcon aria-hidden="true" className={getOpenInIconClass("brand")} />;
+  }
+  if (isWindowsPlatform(platform)) {
+    return <FileExplorerIcon aria-hidden="true" className={getOpenInIconClass("brand")} />;
+  }
+  return <FolderClosedIcon aria-hidden="true" className={getOpenInIconClass("generic")} />;
+}
+
 function getOpenInIconClass(kind: OpenInOption["kind"]) {
   return cn(kind === "brand" ? "text-foreground opacity-100" : "text-muted-foreground");
 }
@@ -284,10 +296,6 @@ export const OpenInPicker = memo(function OpenInPicker({
   const effectiveEditors = remote.mode === "local-exec" ? availableEditors : remoteCapableEditors;
   const [preferredEditor, setPreferredEditor] = usePreferredEditor(effectiveEditors);
   const isFile = fileRelativePath !== undefined;
-  const options = useMemo(
-    () => resolveOpenInOptions(navigator.platform, effectiveEditors, isFile ? "file" : "directory"),
-    [effectiveEditors, isFile],
-  );
   // Reveal and copy act on the environment host, so they take the file's
   // resolved path as is; the picker never guesses it from a workspace root.
   const fileContextMenu = useFileContextMenu(isFile ? environmentId : null);
@@ -300,55 +308,43 @@ export const OpenInPicker = memo(function OpenInPicker({
           absolutePath: openInCwd,
         }
       : null;
-  const primaryOption = options.find(({ value }) => value === preferredEditor) ?? null;
 
-  const openInEditor = useCallback(
-    (editorId: EditorId | null) => {
-      if (!openInCwd) return;
-      const editor = editorId ?? preferredEditor;
-      if (!editor) return;
-      if (remote.mode === "remote-unavailable") return;
-      if (remote.mode === "remote-links") {
-        const url = buildRemoteOpenUrl({
-          editor,
-          host: remote.host.host,
-          absolutePath: openInCwd,
-        });
-        if (url === undefined) return;
-        // Only record hint-seen/preferred when the shell actually accepted
-        // the URL (an older desktop build can refuse the editor scheme).
-        void openRemoteEditorUrl(url).then((opened) => {
-          if (!opened) return;
-          markRemoteHintSeen();
-          setPreferredEditor(editor);
-        });
-        return;
-      }
-      if (!readEnvironmentScope(environmentId, AuthOrchestrationOperateScope)) return;
-      const result = openInEditorMutation({
-        environmentId,
-        input: {
-          cwd: openInCwd,
-          editor,
-        },
+  const openInEditor = (editorId: EditorId | null) => {
+    if (!openInCwd) return;
+    const editor = editorId ?? preferredEditor;
+    if (!editor) return;
+    if (remote.mode === "remote-unavailable") return;
+    if (remote.mode === "remote-links") {
+      const url = buildRemoteOpenUrl({
+        editor,
+        host: remote.host.host,
+        absolutePath: openInCwd,
       });
-      setPreferredEditor(editor);
-      return result;
-    },
-    [
+      if (url === undefined) return;
+      // Only record hint-seen/preferred when the shell actually accepted
+      // the URL (an older desktop build can refuse the editor scheme).
+      void openRemoteEditorUrl(url).then((opened) => {
+        if (!opened) return;
+        markRemoteHintSeen();
+        setPreferredEditor(editor);
+      });
+      return;
+    }
+    if (!readEnvironmentScope(environmentId, AuthOrchestrationOperateScope)) return;
+    const result = openInEditorMutation({
       environmentId,
-      markRemoteHintSeen,
-      openInCwd,
-      openInEditorMutation,
-      preferredEditor,
-      remote,
-      setPreferredEditor,
-    ],
-  );
+      input: {
+        cwd: openInCwd,
+        editor,
+      },
+    });
+    setPreferredEditor(editor);
+    return result;
+  };
 
-  const openFavoriteEditorShortcutLabel = useMemo(
-    () => shortcutLabelForCommand(keybindings, "editor.openFavorite"),
-    [keybindings],
+  const openFavoriteEditorShortcutLabel = shortcutLabelForCommand(
+    keybindings,
+    "editor.openFavorite",
   );
 
   const threadPaneId = useThreadPaneId();
@@ -383,6 +379,13 @@ export const OpenInPicker = memo(function OpenInPicker({
     remote.mode,
     threadPaneId,
   ]);
+  // Derived after the shortcut effect so the compiler can cache the resolved editor list.
+  const options = resolveOpenInOptions(
+    navigator.platform,
+    effectiveEditors,
+    isFile ? "file" : "directory",
+  );
+  const primaryOption = options.find(({ value }) => value === preferredEditor) ?? null;
   const primaryLabel = isPanel ? `Open in ${primaryOption?.label ?? "editor"}` : "Open";
 
   const editorItems = (
@@ -428,14 +431,6 @@ export const OpenInPicker = memo(function OpenInPicker({
     </>
   );
   const density = presentation === "menu" ? "touch" : "default";
-  // Chosen once like `options`: the compiler lint rejects a component picked in render.
-  const revealIcon = useMemo(() => {
-    const platform = navigator.platform;
-    return {
-      Icon: fileManagerIconForPlatform(platform),
-      kind: isMacPlatform(platform) || isWindowsPlatform(platform) ? "brand" : "generic",
-    } as const;
-  }, []);
   // The shared builder decides which file actions apply (reveal only on the
   // host, no relative path for a host file); the picker only adds icons.
   const fileMenuItems = fileTarget
@@ -452,7 +447,7 @@ export const OpenInPicker = memo(function OpenInPicker({
             onClick={() => void fileContextMenu.activate(item.id, fileTarget)}
           >
             {item.id === "reveal-in-folder" ? (
-              <revealIcon.Icon aria-hidden="true" className={getOpenInIconClass(revealIcon.kind)} />
+              <RevealInFolderIcon />
             ) : (
               <CopyIcon aria-hidden="true" className={getOpenInIconClass("generic")} />
             )}

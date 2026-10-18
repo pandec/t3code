@@ -12,7 +12,7 @@ import {
   officialAcpRegistryIconUrlForAgentId,
   resolveOfficialAcpRegistryIconUrl,
 } from "../settings/AcpRegistryIcon";
-import { getModelIconComponent, PROVIDER_ICON_BY_PROVIDER } from "./providerIconUtils";
+import { MODEL_ICON_BY_ID, PROVIDER_ICON_BY_PROVIDER } from "./providerIconUtils";
 
 const PROVIDER_TEXT_COLOR_BY_PROVIDER: Partial<Record<ProviderDriverKind, string>> = {
   [ProviderDriverKind.make("codex")]: "text-black dark:text-white",
@@ -67,7 +67,7 @@ export const ProviderInstanceIcon = memo(function ProviderInstanceIcon(props: {
   statusDotClassName?: string;
   indicatorBackground?: string;
 }) {
-  const ModelOverrideIcon = getModelIconComponent(props.modelIcon);
+  const ModelOverrideIcon = props.modelIcon ? MODEL_ICON_BY_ID[props.modelIcon] : undefined;
   const Icon = ModelOverrideIcon ?? PROVIDER_ICON_BY_PROVIDER[props.driverKind] ?? null;
   // A per-model override wins over the driver's package glyph.
   const packageIcon = ModelOverrideIcon ? undefined : providerClients.get(props.driverKind)?.icon;

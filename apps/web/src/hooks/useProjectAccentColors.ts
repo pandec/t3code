@@ -6,7 +6,7 @@
  * and fans a pick out to each environment owning a member of the group. See
  * `@t3tools/client-runtime/state/project-accent-colors` for the rules.
  */
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { useAtomValue } from "@effect/atom-react";
 import type { EnvironmentId, ScopedProjectRef } from "@t3tools/contracts";
 import type { SidebarProjectAccentColor } from "@t3tools/contracts/settings";
@@ -23,6 +23,7 @@ import {
 import { derivePhysicalProjectKey } from "~/logicalProject";
 import { environmentPresentations } from "~/state/presentation";
 import { enqueueProjectAccentColorWrite } from "./projectAccentColorWriteQueue";
+import { useStableCallback } from "./useStableCallback";
 import {
   getClientSettings,
   useAccentTintSettings,
@@ -54,100 +55,97 @@ interface AccentEnvironmentState {
 
 function useAccentEnvironmentState(): AccentEnvironmentState {
   const presentations = useAtomValue(environmentPresentations.presentationsAtom);
-  return useMemo(() => {
-    const accentColorsByEnvironment = new Map<EnvironmentId, ProjectAccentColorMap>();
-    const writableEnvironmentIds = new Set<EnvironmentId>();
-    const fillCapableEnvironmentIds = new Set<EnvironmentId>();
-    for (const [environmentId, presentation] of presentations) {
-      const config = presentation.serverConfig;
-      if (presentation.connection.phase !== "connected" || config === null) continue;
-      accentColorsByEnvironment.set(environmentId, config.settings.projectAccentColors);
-      if (config.environment.capabilities.projectAccentColors === true) {
-        writableEnvironmentIds.add(environmentId);
-      }
-      if (config.environment.capabilities.projectAccentColorsFill === true) {
-        fillCapableEnvironmentIds.add(environmentId);
-      }
+  const accentColorsByEnvironment = new Map<EnvironmentId, ProjectAccentColorMap>();
+  const writableEnvironmentIds = new Set<EnvironmentId>();
+  const fillCapableEnvironmentIds = new Set<EnvironmentId>();
+  for (const [environmentId, presentation] of presentations) {
+    const config = presentation.serverConfig;
+    if (presentation.connection.phase !== "connected" || config === null) continue;
+    accentColorsByEnvironment.set(environmentId, config.settings.projectAccentColors);
+    if (config.environment.capabilities.projectAccentColors === true) {
+      writableEnvironmentIds.add(environmentId);
     }
-    return { accentColorsByEnvironment, writableEnvironmentIds, fillCapableEnvironmentIds };
-  }, [presentations]);
+    if (config.environment.capabilities.projectAccentColorsFill === true) {
+      fillCapableEnvironmentIds.add(environmentId);
+    }
+  }
+  return { accentColorsByEnvironment, writableEnvironmentIds, fillCapableEnvironmentIds };
+}
+
+/** The latest committed map, for queued writes that read it after an await. */
+function useReadCurrentAccentColors(
+  accentColorsByEnvironment: ReadonlyMap<EnvironmentId, ProjectAccentColorMap>,
+) {
+  return useStableCallback((environmentId: EnvironmentId) =>
+    accentColorsByEnvironment.get(environmentId),
+  );
 }
 
 function usePersistProjectAccentColors() {
   const updateEnvironmentSettings = useUpdateSettingsForEnvironment();
-  return useCallback(
-    async (
-      environmentId: EnvironmentId,
-      projectAccentColors: Record<string, SidebarProjectAccentColor>,
-    ): Promise<ProjectAccentColorMap | null> => {
-      const result = await updateEnvironmentSettings(environmentId, { projectAccentColors });
-      return result?._tag === "Success" ? result.value.projectAccentColors : null;
-    },
-    [updateEnvironmentSettings],
-  );
+  return async (
+    environmentId: EnvironmentId,
+    projectAccentColors: Record<string, SidebarProjectAccentColor>,
+  ): Promise<ProjectAccentColorMap | null> => {
+    const result = await updateEnvironmentSettings(environmentId, { projectAccentColors });
+    return result?._tag === "Success" ? result.value.projectAccentColors : null;
+  };
 }
 
 function useFillProjectAccentColors() {
   const updateEnvironmentSettings = useUpdateSettingsForEnvironment();
-  return useCallback(
-    async (
-      environmentId: EnvironmentId,
-      projectAccentColorsFill: Record<string, SidebarProjectAccentColor>,
-    ): Promise<ProjectAccentColorMap | null> => {
-      const result = await updateEnvironmentSettings(environmentId, {
-        projectAccentColorsFill,
-      });
-      return result?._tag === "Success" ? result.value.projectAccentColors : null;
-    },
-    [updateEnvironmentSettings],
-  );
+  return async (
+    environmentId: EnvironmentId,
+    projectAccentColorsFill: Record<string, SidebarProjectAccentColor>,
+  ): Promise<ProjectAccentColorMap | null> => {
+    const result = await updateEnvironmentSettings(environmentId, {
+      projectAccentColorsFill,
+    });
+    return result?._tag === "Success" ? result.value.projectAccentColors : null;
+  };
 }
 
 export function useProjectAccentColors(): ProjectAccentColors {
   const { accentColorsByEnvironment, writableEnvironmentIds } = useAccentEnvironmentState();
   const persistAccentColors = usePersistProjectAccentColors();
-  const accentColorsRef = useRef(accentColorsByEnvironment);
-  accentColorsRef.current = accentColorsByEnvironment;
+  const readCurrentAccentColors = useReadCurrentAccentColors(accentColorsByEnvironment);
 
-  const resolve = useCallback(
-    (members: ReadonlyArray<ProjectAccentSource>) =>
-      resolveProjectAccentColor({
-        members: toProjectAccentMembers(members),
-        accentColorsByEnvironment,
-      }),
-    [accentColorsByEnvironment],
-  );
+  const resolve = (members: ReadonlyArray<ProjectAccentSource>) =>
+    resolveProjectAccentColor({
+      members: toProjectAccentMembers(members),
+      accentColorsByEnvironment,
+    });
 
-  const update = useCallback(
-    (members: ReadonlyArray<ProjectAccentSource>, color: SidebarProjectAccentColor | null) => {
-      const accentKeysByEnvironment = collectWritableProjectAccentKeys({
-        members: toProjectAccentMembers(members),
-        accentColorsByEnvironment,
-        writableEnvironmentIds,
+  const update = (
+    members: ReadonlyArray<ProjectAccentSource>,
+    color: SidebarProjectAccentColor | null,
+  ) => {
+    const accentKeysByEnvironment = collectWritableProjectAccentKeys({
+      members: toProjectAccentMembers(members),
+      accentColorsByEnvironment,
+      writableEnvironmentIds,
+    });
+    for (const [environmentId, accentKeys] of accentKeysByEnvironment) {
+      void enqueueProjectAccentColorWrite({
+        environmentId,
+        fallbackMap: accentColorsByEnvironment.get(environmentId) ?? {},
+        readCurrentMap: () => readCurrentAccentColors(environmentId),
+        update: (current) => {
+          const { next, changed } = withProjectAccentKeys(current, accentKeys, color);
+          return { payload: next, changed };
+        },
+        persist: (projectAccentColors) => persistAccentColors(environmentId, projectAccentColors),
       });
-      for (const [environmentId, accentKeys] of accentKeysByEnvironment) {
-        void enqueueProjectAccentColorWrite({
-          environmentId,
-          fallbackMap: accentColorsByEnvironment.get(environmentId) ?? {},
-          readCurrentMap: () => accentColorsRef.current.get(environmentId),
-          update: (current) => {
-            const { next, changed } = withProjectAccentKeys(current, accentKeys, color);
-            return { payload: next, changed };
-          },
-          persist: (projectAccentColors) => persistAccentColors(environmentId, projectAccentColors),
-        });
-      }
-    },
-    [accentColorsByEnvironment, persistAccentColors, writableEnvironmentIds],
-  );
+    }
+  };
 
-  const clearAllServerColors = useCallback(() => {
+  const clearAllServerColors = () => {
     for (const environmentId of writableEnvironmentIds) {
       const current = accentColorsByEnvironment.get(environmentId) ?? {};
       void enqueueProjectAccentColorWrite({
         environmentId,
         fallbackMap: current,
-        readCurrentMap: () => accentColorsRef.current.get(environmentId),
+        readCurrentMap: () => readCurrentAccentColors(environmentId),
         update: () => ({
           payload: {},
           changed: true,
@@ -155,20 +153,13 @@ export function useProjectAccentColors(): ProjectAccentColors {
         persist: (projectAccentColors) => persistAccentColors(environmentId, projectAccentColors),
       });
     }
-  }, [accentColorsByEnvironment, persistAccentColors, writableEnvironmentIds]);
+  };
 
-  const hasAnyServerAccentColors = useMemo(
-    () =>
-      [...accentColorsByEnvironment.values()].some(
-        (accentColors) => Object.keys(accentColors).length > 0,
-      ),
-    [accentColorsByEnvironment],
+  const hasAnyServerAccentColors = [...accentColorsByEnvironment.values()].some(
+    (accentColors) => Object.keys(accentColors).length > 0,
   );
 
-  return useMemo(
-    () => ({ resolve, update, clearAllServerColors, hasAnyServerAccentColors }),
-    [clearAllServerColors, hasAnyServerAccentColors, resolve, update],
-  );
+  return { resolve, update, clearAllServerColors, hasAnyServerAccentColors };
 }
 
 /**
@@ -184,23 +175,75 @@ export function useProjectAccentColorByKey(
 ): ReadonlyMap<string, SidebarProjectAccentColor> {
   const { resolve } = useProjectAccentColors();
   const { enabled } = useAccentTintSettings();
-  return useMemo(
-    () =>
-      new Map(
-        enabled
-          ? groups.flatMap((group) => {
-              const color = resolve(group.memberProjects);
-              return color === null
-                ? []
-                : group.memberProjectRefs.map(
-                    (projectRef) =>
-                      [`${projectRef.environmentId}:${projectRef.projectId}`, color] as const,
-                  );
-            })
-          : [],
-      ),
-    [enabled, groups, resolve],
+  return new Map(
+    enabled
+      ? groups.flatMap((group) => {
+          const color = resolve(group.memberProjects);
+          return color === null
+            ? []
+            : group.memberProjectRefs.map(
+                (projectRef) =>
+                  [`${projectRef.environmentId}:${projectRef.projectId}`, color] as const,
+              );
+        })
+      : [],
   );
+}
+
+/** Writes one migration plan and drops the legacy entries that landed; true when some did not. */
+async function runProjectAccentColorMigration({
+  plan,
+  accentColorsByEnvironment,
+  readCurrentMap,
+  fillProjectAccentColors,
+  updateClientSettings,
+}: {
+  readonly plan: ReturnType<typeof planProjectAccentColorMigration>;
+  readonly accentColorsByEnvironment: ReadonlyMap<EnvironmentId, ProjectAccentColorMap>;
+  readonly readCurrentMap: (environmentId: EnvironmentId) => ProjectAccentColorMap | undefined;
+  readonly fillProjectAccentColors: ReturnType<typeof useFillProjectAccentColors>;
+  readonly updateClientSettings: ReturnType<typeof useUpdateClientSettings>;
+}): Promise<boolean> {
+  const consumedLegacyKeys = new Set(plan.consumedWithoutWrite);
+  let retryNeeded = false;
+  await Promise.all(
+    plan.patches.map(async (patch) => {
+      const persisted = await enqueueProjectAccentColorWrite({
+        environmentId: patch.environmentId,
+        fallbackMap: accentColorsByEnvironment.get(patch.environmentId) ?? {},
+        readCurrentMap: () => readCurrentMap(patch.environmentId),
+        update: (current) => ({
+          payload: patch.projectAccentColorsFill,
+          changed: patch.migrations.some((migration) => current[migration.accentKey] === undefined),
+        }),
+        persist: (projectAccentColorsFill) =>
+          fillProjectAccentColors(patch.environmentId, projectAccentColorsFill),
+      });
+      if (persisted === null) {
+        retryNeeded = true;
+        return;
+      }
+      for (const migration of patch.migrations) {
+        if (persisted[migration.accentKey] !== undefined) {
+          consumedLegacyKeys.add(migration.legacyKey);
+        } else {
+          retryNeeded = true;
+        }
+      }
+    }),
+  );
+
+  if (consumedLegacyKeys.size > 0) {
+    const currentLegacyAccentColors = getClientSettings().sidebarProjectAccentColors;
+    updateClientSettings({
+      sidebarProjectAccentColors: Object.fromEntries(
+        Object.entries(currentLegacyAccentColors).filter(
+          ([legacyKey]) => !consumedLegacyKeys.has(legacyKey),
+        ),
+      ),
+    });
+  }
+  return retryNeeded;
 }
 
 /**
@@ -217,8 +260,7 @@ export function useProjectAccentColorMigration(projects: ReadonlyArray<ProjectAc
   const legacyAccentColors = useClientSettings((settings) => settings.sidebarProjectAccentColors);
   const fillProjectAccentColors = useFillProjectAccentColors();
   const updateClientSettings = useUpdateClientSettings();
-  const accentColorsRef = useRef(accentColorsByEnvironment);
-  accentColorsRef.current = accentColorsByEnvironment;
+  const readCurrentAccentColors = useReadCurrentAccentColors(accentColorsByEnvironment);
   // One in-flight migration at a time: the server patches are async, so a
   // re-render before they land would otherwise re-send the same writes.
   const inFlightRef = useRef(false);
@@ -252,50 +294,14 @@ export function useProjectAccentColorMigration(projects: ReadonlyArray<ProjectAc
     if (plan.patches.length === 0 && plan.consumedWithoutWrite.length === 0) return;
 
     inFlightRef.current = true;
-    void (async () => {
-      const consumedLegacyKeys = new Set(plan.consumedWithoutWrite);
-      let retryNeeded = false;
-      try {
-        await Promise.all(
-          plan.patches.map(async (patch) => {
-            const persisted = await enqueueProjectAccentColorWrite({
-              environmentId: patch.environmentId,
-              fallbackMap: accentColorsByEnvironment.get(patch.environmentId) ?? {},
-              readCurrentMap: () => accentColorsRef.current.get(patch.environmentId),
-              update: (current) => ({
-                payload: patch.projectAccentColorsFill,
-                changed: patch.migrations.some(
-                  (migration) => current[migration.accentKey] === undefined,
-                ),
-              }),
-              persist: (projectAccentColorsFill) =>
-                fillProjectAccentColors(patch.environmentId, projectAccentColorsFill),
-            });
-            if (persisted === null) {
-              retryNeeded = true;
-              return;
-            }
-            for (const migration of patch.migrations) {
-              if (persisted[migration.accentKey] !== undefined) {
-                consumedLegacyKeys.add(migration.legacyKey);
-              } else {
-                retryNeeded = true;
-              }
-            }
-          }),
-        );
-
-        if (consumedLegacyKeys.size > 0) {
-          const currentLegacyAccentColors = getClientSettings().sidebarProjectAccentColors;
-          updateClientSettings({
-            sidebarProjectAccentColors: Object.fromEntries(
-              Object.entries(currentLegacyAccentColors).filter(
-                ([legacyKey]) => !consumedLegacyKeys.has(legacyKey),
-              ),
-            ),
-          });
-        }
-
+    void runProjectAccentColorMigration({
+      plan,
+      accentColorsByEnvironment,
+      readCurrentMap: readCurrentAccentColors,
+      fillProjectAccentColors,
+      updateClientSettings,
+    })
+      .then((retryNeeded) => {
         if (retryNeeded && mountedRef.current && retryTimeoutRef.current === null) {
           const retryDelay = retryDelayRef.current;
           retryDelayRef.current = Math.min(retryDelay * 2, 30_000);
@@ -312,16 +318,18 @@ export function useProjectAccentColorMigration(projects: ReadonlyArray<ProjectAc
             retryTimeoutRef.current = null;
           }
         }
-      } finally {
+      })
+      .finally(() => {
         inFlightRef.current = false;
-      }
-    })();
+      });
   }, [
     accentColorsByEnvironment,
     fillProjectAccentColors,
     legacyAccentColors,
     fillCapableEnvironmentIds,
     projects,
+    readCurrentAccentColors,
+    // oxlint-disable-next-line react/exhaustive-effect-dependencies -- A retry bump re-runs the migration for the writes that did not land.
     retryGeneration,
     updateClientSettings,
   ]);

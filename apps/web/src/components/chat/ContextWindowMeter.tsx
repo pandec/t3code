@@ -20,8 +20,9 @@ import {
 import type { ProviderInstanceId } from "@t3tools/contracts";
 import { formatUsd } from "@t3tools/shared/usageFormat";
 import { CircleDollarSignIcon, Minimize2Icon, RefreshCwIcon } from "lucide-react";
-import { Fragment, useMemo, useRef } from "react";
+import { Fragment, useRef, useState } from "react";
 
+import { useNowMinute } from "~/hooks/useNowMinute";
 import { useProviderUsageThresholds } from "~/hooks/useSettings";
 import { cn } from "~/lib/utils";
 import { Button } from "../ui/button";
@@ -303,32 +304,30 @@ export function ContextWindowMeter(props: {
   // Colour thresholds are a user setting; re-evaluate the snapshot on read so a
   // change applies to whatever is already on screen.
   const usageThresholds = useProviderUsageThresholds();
-  const providerUsage = useMemo(
-    () => applyProviderUsageThresholds(props.providerUsage ?? null, usageThresholds),
-    [props.providerUsage, usageThresholds],
-  );
-  const providerUsageAccounts = useMemo(
-    () =>
-      (props.providerUsageAccounts ?? []).map((account) => ({
-        ...account,
-        usage: applyProviderUsageThresholds(account.usage, usageThresholds),
-      })),
-    [props.providerUsageAccounts, usageThresholds],
-  );
-  const fableUsage = useMemo(
-    () =>
-      props.fableUsage
-        ? applyProviderUsageWindowThresholds(props.fableUsage, usageThresholds)
-        : null,
-    [props.fableUsage, usageThresholds],
-  );
+  const providerUsage = applyProviderUsageThresholds(props.providerUsage ?? null, usageThresholds);
+  const providerUsageAccounts = (props.providerUsageAccounts ?? []).map((account) => ({
+    ...account,
+    usage: applyProviderUsageThresholds(account.usage, usageThresholds),
+  }));
+  const fableUsage = props.fableUsage
+    ? applyProviderUsageWindowThresholds(props.fableUsage, usageThresholds)
+    : null;
   const openRouterBalanceUsd = props.openRouterCredits?.balanceUsd ?? null;
   const openRouterBudgetUsd = props.openRouterCredits?.budgetUsd ?? null;
-  const openRouterBudgetWindow = useMemo(() => {
-    const window = openRouterCreditsBudgetWindow(openRouterBalanceUsd, openRouterBudgetUsd);
-    return window ? applyProviderUsageWindowThresholds(window, usageThresholds) : null;
-  }, [openRouterBalanceUsd, openRouterBudgetUsd, usageThresholds]);
-  const nowMs = Date.now();
+  const openRouterRawBudgetWindow = openRouterCreditsBudgetWindow(
+    openRouterBalanceUsd,
+    openRouterBudgetUsd,
+  );
+  const openRouterBudgetWindow = openRouterRawBudgetWindow
+    ? applyProviderUsageWindowThresholds(openRouterRawBudgetWindow, usageThresholds)
+    : null;
+  // The React Compiler caches render output on its inputs, so a clock read in
+  // render would freeze. Ages and resets are minute-precision: the shared
+  // minute clock keeps them moving, and the open time covers the gap between
+  // its ticks when the popover appears.
+  const nowMinute = useNowMinute();
+  const [openedAtMs, setOpenedAtMs] = useState(() => Date.now());
+  const nowMs = Math.max(openedAtMs, Date.parse(`${nowMinute}:00.000Z`));
   const panelObservedAt = oldestProviderUsageObservedAt(providerUsageAccounts);
   // When this popover last asked for a read, so an account that never reports
   // can't turn every open into another probe of the whole pool.
@@ -415,42 +414,54 @@ export function ContextWindowMeter(props: {
     .filter(Boolean)
     .join(", ");
 
+  function handleOpenChange(open: boolean) {
+    if (!open) return;
+    // Read the clock here, not at render: a popover opened right after a
+    // long-backgrounded tab resumes would otherwise compare two equally
+    // old timestamps and skip the refresh the user came for.
+    const openedAtMs = Date.now();
+    setOpenedAtMs(openedAtMs);
+    props.onProbeThreadAccount?.();
+    if (
+      props.onRefreshProviderUsage !== undefined &&
+      // The raw accounts: thresholds do not change when they were observed.
+      shouldRefreshProviderUsageOnOpen(
+        props.providerUsageAccounts ?? [],
+        openedAtMs,
+        lastRefreshAskedAtRef.current,
+      )
+    ) {
+      lastRefreshAskedAtRef.current = openedAtMs;
+      void props.onRefreshProviderUsage();
+    }
+    // Gated on the display too: with the feature off the callback is
+    // bound to the shared empty-query sentinel, which must not be
+    // refreshed on behalf of a block that is not even rendered.
+    if (
+      props.openRouterCredits &&
+      props.onRefreshOpenRouterCredits !== undefined &&
+      openedAtMs - lastOpenRouterRefreshAskedAtRef.current >= 60_000
+    ) {
+      lastOpenRouterRefreshAskedAtRef.current = openedAtMs;
+      props.onRefreshOpenRouterCredits();
+    }
+  }
+
+  function handleRefreshClick() {
+    const askedAtMs = Date.now();
+    lastRefreshAskedAtRef.current = askedAtMs;
+    props.onProbeThreadAccount?.({ force: true });
+    void props.onRefreshProviderUsage?.();
+    // The credits row now lives under this header, so the
+    // button has to cover it too.
+    if (props.openRouterCredits && props.onRefreshOpenRouterCredits) {
+      lastOpenRouterRefreshAskedAtRef.current = askedAtMs;
+      props.onRefreshOpenRouterCredits();
+    }
+  }
+
   return (
-    <Popover
-      onOpenChange={(open) => {
-        if (open) {
-          props.onProbeThreadAccount?.();
-        }
-        if (
-          open &&
-          props.onRefreshProviderUsage !== undefined &&
-          shouldRefreshProviderUsageOnOpen(
-            providerUsageAccounts,
-            nowMs,
-            lastRefreshAskedAtRef.current,
-          )
-        ) {
-          lastRefreshAskedAtRef.current = nowMs;
-          void props.onRefreshProviderUsage();
-        }
-        // Read the clock here, not at render: a popover opened right after a
-        // long-backgrounded tab resumes would otherwise compare two equally
-        // old timestamps and skip the refresh the user came for.
-        const openedAtMs = Date.now();
-        // Gated on the display too: with the feature off the callback is
-        // bound to the shared empty-query sentinel, which must not be
-        // refreshed on behalf of a block that is not even rendered.
-        if (
-          open &&
-          props.openRouterCredits &&
-          props.onRefreshOpenRouterCredits !== undefined &&
-          openedAtMs - lastOpenRouterRefreshAskedAtRef.current >= 60_000
-        ) {
-          lastOpenRouterRefreshAskedAtRef.current = openedAtMs;
-          props.onRefreshOpenRouterCredits();
-        }
-      }}
-    >
+    <Popover onOpenChange={handleOpenChange}>
       <PopoverTrigger
         openOnHover
         delay={150}
@@ -542,18 +553,7 @@ export function ContextWindowMeter(props: {
                     <button
                       type="button"
                       className="inline-flex size-6 items-center justify-center rounded text-muted-foreground/70 hover:bg-muted hover:text-foreground disabled:cursor-not-allowed disabled:opacity-50"
-                      onClick={() => {
-                        const askedAtMs = Date.now();
-                        lastRefreshAskedAtRef.current = askedAtMs;
-                        props.onProbeThreadAccount?.({ force: true });
-                        void props.onRefreshProviderUsage?.();
-                        // The credits row now lives under this header, so the
-                        // button has to cover it too.
-                        if (props.openRouterCredits && props.onRefreshOpenRouterCredits) {
-                          lastOpenRouterRefreshAskedAtRef.current = askedAtMs;
-                          props.onRefreshOpenRouterCredits();
-                        }
-                      }}
+                      onClick={handleRefreshClick}
                       disabled={props.providerUsageRefreshing}
                       aria-label="Refresh provider usage"
                     >

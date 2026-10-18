@@ -92,6 +92,22 @@ export function getModelIconComponent(icon: string | null | undefined): Icon | n
     : null;
 }
 
+/**
+ * {@link getModelIconComponent} as a lookup table, for components that render
+ * the glyph: the React Compiler accepts a component read from a module-level
+ * table but not one returned by a call. Null-prototype, so no settings value
+ * can reach an inherited member.
+ */
+export const MODEL_ICON_BY_ID: Readonly<Record<string, Icon | undefined>> = Object.assign(
+  Object.create(null) as Record<string, Icon | undefined>,
+  Object.fromEntries(
+    [...Object.keys(PROVIDER_ICON_BY_PROVIDER), ...EXTRA_MODEL_ICON_IDS].map((id) => [
+      id,
+      getModelIconComponent(id) ?? undefined,
+    ]),
+  ),
+);
+
 function isAvailableProviderOption(option: (typeof PROVIDER_OPTIONS)[number]): option is {
   value: ProviderDriverKind;
   label: string;

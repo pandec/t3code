@@ -42,36 +42,14 @@ resort and would not reduce the single-process floor anyway.
 - **`vp run -r test` bails at the first failing project**, so one broken
   package makes the whole-workspace run unable to complete.
 
-## `apps/web` split isolation (shipped)
+## `apps/web` isolation
 
-Under full isolation every worker re-imports the module graph per file, so
-import CPU scales with workers: 37 s → 99 s of import CPU between one and
-eight workers, against ~10 s of actual test CPU (`from "vite-plus/test"`
-appears in nearly every test file, so the heavy entry is paid each time).
-
-The suite is therefore split into two projects in `apps/web/vite.config.ts`:
-
-- **`unit`** — `isolate: false`; the bulk of the files share a module registry
-  per worker and import the graph once.
-- **`unit-isolated`** — default isolation for the `ISOLATED_TEST_FILES` list:
-  files using `vi.mock` (whose factories leak into _unrelated_ files through a
-  shared registry — the victim reports "No X export is defined on the mock"
-  for a mock it never registered), fake timers, or `vi.resetModules`.
-
-Measured effect: 21.7 s → ~8 s wall for the whole suite, 7/7 repeat runs
-green. Two source modules were also fixed to resolve storage lazily instead of
-capturing `window.localStorage`/`localStorage` at import
-(`src/hooks/useLocalStorage.ts`, `src/promptStashStore.ts`) — module-scope
-capture pins whatever global existed when the module first evaluated, which
-under a shared registry is some other file's stub.
-
-**Maintenance rule:** a test that gains `vi.mock`, `vi.useFakeTimers`, or
-`vi.resetModules` must be added to `ISOLATED_TEST_FILES`. The symptom of
-forgetting is order-dependent failures in _other_ files, not in the new test.
-
-Caveat kept from the original analysis: no-isolate _raises_ peak memory
-(943 MB → 1612 MB measured at 4 workers) because workers accumulate the graph
-— it is a speed fix, not a memory fix.
+The fork once ran `apps/web` unit tests with `isolate: false` (21.7 s → ~8 s),
+keeping files that use `vi.mock`, fake timers, or `vi.resetModules` in an
+isolated project. Upstream later moved every React-rendering test into a
+headless-Chromium `browser` project, leaving the `unit` project with plain
+logic tests, so the 2026-10-18 sync dropped the split and took upstream's
+default isolation. Re-measure before reintroducing it.
 
 ## Closed items
 

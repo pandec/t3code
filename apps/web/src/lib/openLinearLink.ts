@@ -2,7 +2,7 @@ import type { EnvironmentId, ScopedThreadRef } from "@t3tools/contracts";
 import { LINEAR_ISSUE_NUMBER_SOURCE, LINEAR_TEAM_KEY_SOURCE } from "@t3tools/contracts";
 import * as Option from "effect/Option";
 import { AsyncResult } from "effect/reactivity";
-import { type MouseEvent, useCallback } from "react";
+import type { MouseEvent } from "react";
 
 import { useRightPanelStore } from "../rightPanelStore";
 import { appAtomRegistry } from "../rpc/atomRegistry";
@@ -78,21 +78,18 @@ export function useOpenLinearIssueLink(
   threadRef?: ScopedThreadRef,
 ): (event: LinkClickEvent, targetUrl: string, targetThreadRef?: ScopedThreadRef) => boolean {
   const serverConfigs = useServerConfigs();
-  return useCallback(
-    (event, targetUrl, targetThreadRef) => {
-      if (event.metaKey || event.ctrlKey || event.shiftKey || event.altKey) return false;
-      const resolvedThreadRef = targetThreadRef ?? threadRef;
-      if (resolvedThreadRef === undefined) return false;
-      const parsed = parseLinearIssueUrl(targetUrl);
-      if (parsed === null) return false;
-      const { environmentId } = resolvedThreadRef;
-      if (!environmentReadsLinearIssues(serverConfigs, environmentId)) return false;
-      if (!environmentCanOpenLinearLink(environmentId, parsed)) return false;
-      event.preventDefault();
-      event.stopPropagation();
-      useRightPanelStore.getState().openLinearIssue(resolvedThreadRef, parsed.identifier);
-      return true;
-    },
-    [serverConfigs, threadRef],
-  );
+  return (event, targetUrl, targetThreadRef) => {
+    if (event.metaKey || event.ctrlKey || event.shiftKey || event.altKey) return false;
+    const resolvedThreadRef = targetThreadRef ?? threadRef;
+    if (resolvedThreadRef === undefined) return false;
+    const parsed = parseLinearIssueUrl(targetUrl);
+    if (parsed === null) return false;
+    const { environmentId } = resolvedThreadRef;
+    if (!environmentReadsLinearIssues(serverConfigs, environmentId)) return false;
+    if (!environmentCanOpenLinearLink(environmentId, parsed)) return false;
+    event.preventDefault();
+    event.stopPropagation();
+    useRightPanelStore.getState().openLinearIssue(resolvedThreadRef, parsed.identifier);
+    return true;
+  };
 }

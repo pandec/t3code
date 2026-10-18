@@ -1,5 +1,5 @@
 import { useParams, useRouter } from "@tanstack/react-router";
-import { useCallback, useEffect, useLayoutEffect, useRef, type ReactNode } from "react";
+import { useEffect, useLayoutEffect, useRef, type ReactNode } from "react";
 import { scopedThreadKey } from "@t3tools/client-runtime/environment";
 import type { ScopedThreadRef } from "@t3tools/contracts";
 import { ArrowLeftRightIcon, ReplaceIcon, XIcon } from "lucide-react";
@@ -267,12 +267,9 @@ function ThreadPaneSection({
   const isActive = useThreadSplitStore((state) => state.activePaneId === paneId);
   const setActivePane = useThreadSplitStore((state) => state.setActivePane);
 
-  const attachRoot = useCallback(
-    (element: HTMLElement | null) => {
-      registerThreadPaneRoot(paneId, element);
-    },
-    [paneId],
-  );
+  const attachRoot = (element: HTMLElement | null) => {
+    registerThreadPaneRoot(paneId, element);
+  };
 
   return (
     <section
@@ -324,24 +321,21 @@ function SplitResizeHandle({
   } | null>(null);
   const frameRef = useRef<number | null>(null);
 
-  const applyRatio = useCallback(
-    (ratio: number) => {
-      const container = containerRef.current;
-      if (!container) return;
-      const factors = splitTrackFactors(ratio);
-      container.style.setProperty("--thread-split-a", factors.a);
-      container.style.setProperty("--thread-split-b", factors.b);
-    },
-    [containerRef],
-  );
+  const applyRatio = (ratio: number) => {
+    const container = containerRef.current;
+    if (!container) return;
+    const factors = splitTrackFactors(ratio);
+    container.style.setProperty("--thread-split-a", factors.a);
+    container.style.setProperty("--thread-split-b", factors.b);
+  };
 
-  const endDrag = useCallback(() => {
-    delete wrapperRef.current?.dataset.dragging;
+  const endDrag = () => {
+    wrapperRef.current?.removeAttribute("data-dragging");
     if (frameRef.current !== null) {
       window.cancelAnimationFrame(frameRef.current);
       frameRef.current = null;
     }
-  }, []);
+  };
 
   // The wrapper is the visible divider line and owns the grid track; the drag
   // surface is a wider invisible child so the divider is grabbable without

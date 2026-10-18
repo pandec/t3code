@@ -18,7 +18,7 @@ import {
   SendIcon,
 } from "lucide-react";
 import { useAtomValue } from "@effect/atom-react";
-import { useCallback, useRef, useState, type ReactNode } from "react";
+import { useRef, useState, type ReactNode } from "react";
 
 import { RefreshIcon } from "~/components/ui/refresh-icon";
 import { cn } from "~/lib/utils";
@@ -591,7 +591,7 @@ export function LinearIssueDetailPanel({
   // The server caches each read for a minute; `refresh: true` busts it, and the displayed atoms
   // then re-read the fresh entry. A forced read that fails leaves the server's old entry in
   // place, so re-reading would show it as if fresh; say so instead.
-  const refresh = useCallback(async () => {
+  const refresh = async () => {
     setRefreshing(true);
     const results = await Promise.all([
       readIssue({ environmentId, input: { identifier, refresh: true } }),
@@ -609,19 +609,16 @@ export function LinearIssueDetailPanel({
       refreshComments();
     }
     setRefreshing(false);
-  }, [environmentId, identifier, readComments, readIssue, refreshComments, refreshIssue]);
+  };
   // Issues named from this one live in the same workspace, so they open as tabs of their own
   // beside the thread. Without a thread to attach the tab to, Linear itself is the destination.
-  const openIssue = useCallback(
-    (ref: LinearIssueRef) => {
-      if (threadRef === null) {
-        openExternal(ref.url);
-        return;
-      }
-      useRightPanelStore.getState().openLinearIssue(threadRef, ref.identifier);
-    },
-    [threadRef],
-  );
+  const openIssue = (ref: LinearIssueRef) => {
+    if (threadRef === null) {
+      openExternal(ref.url);
+      return;
+    }
+    useRightPanelStore.getState().openLinearIssue(threadRef, ref.identifier);
+  };
 
   if (!supported) {
     return (

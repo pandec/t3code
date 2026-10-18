@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import {
   DEFAULT_UNIFIED_SETTINGS,
   type TtsProfileSettings,
@@ -265,27 +265,37 @@ function TtsTestDialog({
 
   const [audioSession] = useState(createTtsTestAudioSession);
 
-  useEffect(() => {
-    setAudioUrl(null);
-    setResult(null);
-    setError(null);
-    setPending(false);
-    return () => audioSession.clear();
-  }, [
-    audioSession,
+  // Opening, closing, or changing the selection discards the previous sample.
+  const sampleKey = [
     open,
     environmentId,
     profile.provider,
     profile.modelId,
     profile.voiceId,
     profile.instructions,
-  ]);
+  ].join("\u0000");
+  const [renderedSampleKey, setRenderedSampleKey] = useState(sampleKey);
+  if (renderedSampleKey !== sampleKey) {
+    setRenderedSampleKey(sampleKey);
+    setAudioUrl(null);
+    setResult(null);
+    setError(null);
+    setPending(false);
+  }
+  useEffect(
+    () => () => audioSession.clear(),
+    [
+      audioSession,
+      // oxlint-disable-next-line react/exhaustive-effect-dependencies -- A new sample key revokes the previous sample's blob URL.
+      sampleKey,
+    ],
+  );
 
   useEffect(() => {
     if (open && audioUrl !== null) void audioRef.current?.play().catch(() => undefined);
   }, [open, audioUrl]);
 
-  const generate = useCallback(async () => {
+  const generate = async () => {
     const trimmed = text.trim();
     if (!open || trimmed.length === 0 || pending) return;
     const request = audioSession.begin();
@@ -303,7 +313,7 @@ function TtsTestDialog({
     }
     setAudioUrl(audioSession.accept(request, outcome.value));
     setResult(outcome.value);
-  }, [audioSession, environmentId, open, pending, profile, testTts, text]);
+  };
 
   const model = findCatalogModel(catalog, profile.modelId);
   const voiceName =
@@ -417,53 +427,50 @@ function OpenRouterTtsKeyRow() {
   const configure = useAtomCommand(serverEnvironment.configureTtsOpenRouter);
   const pendingApplyRef = useRef<Promise<void>>(Promise.resolve());
 
-  const apply = useCallback(
-    (apiKey: string) => {
-      const run = async () => {
-        if (environments.length === 0) {
-          toastManager.add({
-            type: "warning",
-            title: "No environments connected",
-            description: "Connect an environment before saving the OpenRouter key.",
-          });
-          return;
-        }
-        // Speech runs on whichever server owns the thread, so the key goes to
-        // every connected environment, like the credits management key.
-        const results = await Promise.all(
-          environments.map(async (environment) => ({
-            label: environment.label,
-            result: await configure({
-              environmentId: environment.environmentId,
-              input: { apiKey },
-            }),
-          })),
-        );
-        const failed = results
-          .filter(({ result }) => result._tag === "Failure")
-          .map(({ label }) => label);
-        const removed = apiKey.trim().length === 0;
-        if (failed.length === 0) {
-          toastManager.add({
-            type: "success",
-            title: removed ? "OpenRouter speech key removed" : "OpenRouter speech key saved",
-          });
-          return;
-        }
+  const apply = (apiKey: string) => {
+    const run = async () => {
+      if (environments.length === 0) {
         toastManager.add({
           type: "warning",
-          title: removed
-            ? "Could not remove the key everywhere"
-            : "Could not save the key everywhere",
-          description: `Failed for: ${failed.join(", ")}.`,
+          title: "No environments connected",
+          description: "Connect an environment before saving the OpenRouter key.",
         });
-      };
-      const chained = pendingApplyRef.current.then(run);
-      pendingApplyRef.current = chained;
-      return chained;
-    },
-    [configure, environments],
-  );
+        return;
+      }
+      // Speech runs on whichever server owns the thread, so the key goes to
+      // every connected environment, like the credits management key.
+      const results = await Promise.all(
+        environments.map(async (environment) => ({
+          label: environment.label,
+          result: await configure({
+            environmentId: environment.environmentId,
+            input: { apiKey },
+          }),
+        })),
+      );
+      const failed = results
+        .filter(({ result }) => result._tag === "Failure")
+        .map(({ label }) => label);
+      const removed = apiKey.trim().length === 0;
+      if (failed.length === 0) {
+        toastManager.add({
+          type: "success",
+          title: removed ? "OpenRouter speech key removed" : "OpenRouter speech key saved",
+        });
+        return;
+      }
+      toastManager.add({
+        type: "warning",
+        title: removed
+          ? "Could not remove the key everywhere"
+          : "Could not save the key everywhere",
+        description: `Failed for: ${failed.join(", ")}.`,
+      });
+    };
+    const chained = pendingApplyRef.current.then(run);
+    pendingApplyRef.current = chained;
+    return chained;
+  };
 
   const configured = status.data?.openrouter.configured === true;
   const statusText =
@@ -517,14 +524,11 @@ export function VoiceSettingsSection() {
 
   const defaultProfile = settings.voice.tts;
   const override = settings.voice.agentReplyTts;
-  const defaultDirty = useMemo(
-    () =>
-      defaultProfile.provider !== DEFAULT_UNIFIED_SETTINGS.voice.tts.provider ||
-      defaultProfile.modelId !== "" ||
-      defaultProfile.voiceId !== "" ||
-      defaultProfile.instructions !== "",
-    [defaultProfile],
-  );
+  const defaultDirty =
+    defaultProfile.provider !== DEFAULT_UNIFIED_SETTINGS.voice.tts.provider ||
+    defaultProfile.modelId !== "" ||
+    defaultProfile.voiceId !== "" ||
+    defaultProfile.instructions !== "";
 
   return (
     <SettingsSection {...searchableSetting("extras-voice-listening")}>

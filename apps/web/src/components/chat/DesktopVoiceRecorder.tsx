@@ -13,7 +13,9 @@ import {
   Trash2Icon,
   XIcon,
 } from "lucide-react";
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useEffect, useRef, useState } from "react";
+
+import { useStableCallback } from "../../hooks/useStableCallback";
 
 import { readFileAsDataUrl } from "../ChatView.logic";
 import { transcribeVoiceRecording } from "../../state/voice";
@@ -28,6 +30,8 @@ interface RetainedRecording {
   readonly durationMs: number;
   readonly mimeType: VoiceAudioMimeType;
 }
+
+type RecorderPhase = "idle" | "starting" | "recording" | "transcribing" | "failed";
 
 interface DesktopVoiceRecorderProps {
   readonly environmentId: EnvironmentId;
@@ -69,9 +73,7 @@ export function DesktopVoiceRecorder({
   onTranscript,
 }: DesktopVoiceRecorderProps) {
   const transcribe = useAtomCommand(transcribeVoiceRecording, { reportFailure: false });
-  const [phase, setPhase] = useState<"idle" | "starting" | "recording" | "transcribing" | "failed">(
-    "idle",
-  );
+  const [phase, setPhaseState] = useState<RecorderPhase>("idle");
   const [elapsedMs, setElapsedMs] = useState(0);
   const [retained, setRetained] = useState<RetainedRecording | null>(null);
   const recorderRef = useRef<MediaRecorder | null>(null);
@@ -80,11 +82,15 @@ export function DesktopVoiceRecorder({
   const startedAtRef = useRef(0);
   const finishingRef = useRef(false);
   const mountedRef = useRef(true);
+  // Mirrors `phase` for async steps that must see transitions made since they began.
   const phaseRef = useRef(phase);
   const listeningRecordingOwnerRef = useRef(Symbol("desktop-voice-recorder"));
-  phaseRef.current = phase;
+  const setPhase = (next: RecorderPhase) => {
+    phaseRef.current = next;
+    setPhaseState(next);
+  };
 
-  const releaseStream = useCallback(() => {
+  const releaseStream = () => {
     const recorder = recorderRef.current;
     if (recorder !== null && recorder.state !== "inactive") {
       try {
@@ -97,7 +103,7 @@ export function DesktopVoiceRecorder({
     streamRef.current = null;
     recorderRef.current = null;
     chunksRef.current = [];
-  }, []);
+  };
 
   useEffect(() => {
     mountedRef.current = true;
@@ -121,111 +127,95 @@ export function DesktopVoiceRecorder({
     return () => onActiveChange(false);
   }, [onActiveChange, phase]);
 
-  const submitRecording = useCallback(
-    async (recording: RetainedRecording) => {
-      if (!mountedRef.current || phaseRef.current === "transcribing") return;
-      phaseRef.current = "transcribing";
-      setPhase("transcribing");
-      try {
-        const dataUrl = await readFileAsDataUrl(
-          new File([recording.blob], "voice-recording", { type: recording.mimeType }),
-        );
-        const result = await transcribe({
-          environmentId,
-          input: {
-            mimeType: recording.mimeType,
-            dataUrl,
-            durationMs: recording.durationMs,
-            sizeBytes: recording.blob.size,
-          },
-        });
-        if (result._tag === "Success" && mountedRef.current) {
-          setRetained(null);
-          phaseRef.current = "idle";
-          setPhase("idle");
-          onTranscript(result.value.text);
-          return;
-        }
-      } catch {
-        // Retain the Blob for the explicit Retry action below.
-      }
-      if (mountedRef.current) {
-        setRetained(recording);
-        phaseRef.current = "failed";
-        setPhase("failed");
-      }
-    },
-    [environmentId, onTranscript, transcribe],
-  );
-
-  const stopRecording = useCallback(
-    async (discard: boolean) => {
-      const recorder = recorderRef.current;
-      if (recorder === null || recorder.state === "inactive" || finishingRef.current) return;
-      finishingRef.current = true;
-      const durationMs = Math.min(
-        VOICE_TRANSCRIPTION_MAX_DURATION_MS,
-        Math.max(1, Date.now() - startedAtRef.current),
+  const submitRecording = async (recording: RetainedRecording) => {
+    if (!mountedRef.current || phaseRef.current === "transcribing") return;
+    setPhase("transcribing");
+    try {
+      const dataUrl = await readFileAsDataUrl(
+        new File([recording.blob], "voice-recording", { type: recording.mimeType }),
       );
-      const blob = await new Promise<Blob>((resolve) => {
-        recorder.addEventListener(
-          "stop",
-          () => resolve(new Blob(chunksRef.current, { type: recorder.mimeType })),
-          { once: true },
-        );
-        recorder.stop();
+      const result = await transcribe({
+        environmentId,
+        input: {
+          mimeType: recording.mimeType,
+          dataUrl,
+          durationMs: recording.durationMs,
+          sizeBytes: recording.blob.size,
+        },
       });
-      if (!mountedRef.current) {
-        finishingRef.current = false;
-        return;
-      }
-      const mimeType = normalizeMimeType(blob.type);
-      releaseStream();
-      finishingRef.current = false;
-      if (discard) {
-        setElapsedMs(0);
+      if (result._tag === "Success" && mountedRef.current) {
         setRetained(null);
-        phaseRef.current = "idle";
         setPhase("idle");
+        onTranscript(result.value.text);
         return;
       }
-      if (durationMs < VOICE_TRANSCRIPTION_MIN_DURATION_MS) {
-        setRetained(null);
-        phaseRef.current = "idle";
-        setPhase("idle");
-        toastManager.add({
-          type: "error",
-          title: "Recording too short",
-          description: "Hold the microphone a little longer and try again.",
-        });
-        return;
-      }
-      if (mimeType === null || blob.size === 0 || blob.size > VOICE_TRANSCRIPTION_MAX_BYTES) {
-        setRetained(null);
-        phaseRef.current = "idle";
-        setPhase("idle");
-        toastManager.add({
-          type: "error",
-          title: "Recording unavailable",
-          description:
-            blob.size > VOICE_TRANSCRIPTION_MAX_BYTES
-              ? "The recording is too large to transcribe."
-              : "T3 Code could not read that recording.",
-        });
-        return;
-      }
-      await submitRecording({ blob, durationMs, mimeType });
-    },
-    [releaseStream, submitRecording],
-  );
+    } catch {
+      // Retain the Blob for the explicit Retry action below.
+    }
+    if (mountedRef.current) {
+      setRetained(recording);
+      setPhase("failed");
+    }
+  };
 
-  // `stopRecording` changes identity whenever the composer re-renders (its
-  // `onTranscript` prop is an inline closure). Reading it through a ref keeps
-  // the ticker keyed on `phase` alone, so a busy composer cannot restart the
-  // interval before it fires and stall both the elapsed readout and the
-  // maximum-duration auto-stop.
-  const stopRecordingRef = useRef(stopRecording);
-  stopRecordingRef.current = stopRecording;
+  // Stable, so the ticker below stays keyed on `phase` alone: the composer
+  // re-renders often (its `onTranscript` prop is an inline closure), and
+  // restarting the interval before it fires would stall both the elapsed
+  // readout and the maximum-duration auto-stop.
+  const stopRecording = useStableCallback(async (discard: boolean) => {
+    const recorder = recorderRef.current;
+    if (recorder === null || recorder.state === "inactive" || finishingRef.current) return;
+    finishingRef.current = true;
+    const durationMs = Math.min(
+      VOICE_TRANSCRIPTION_MAX_DURATION_MS,
+      Math.max(1, Date.now() - startedAtRef.current),
+    );
+    const blob = await new Promise<Blob>((resolve) => {
+      recorder.addEventListener(
+        "stop",
+        () => resolve(new Blob(chunksRef.current, { type: recorder.mimeType })),
+        { once: true },
+      );
+      recorder.stop();
+    });
+    if (!mountedRef.current) {
+      finishingRef.current = false;
+      return;
+    }
+    const mimeType = normalizeMimeType(blob.type);
+    releaseStream();
+    finishingRef.current = false;
+    if (discard) {
+      setElapsedMs(0);
+      setRetained(null);
+      setPhase("idle");
+      return;
+    }
+    if (durationMs < VOICE_TRANSCRIPTION_MIN_DURATION_MS) {
+      setRetained(null);
+      setPhase("idle");
+      toastManager.add({
+        type: "error",
+        title: "Recording too short",
+        description: "Hold the microphone a little longer and try again.",
+      });
+      return;
+    }
+    if (mimeType === null || blob.size === 0 || blob.size > VOICE_TRANSCRIPTION_MAX_BYTES) {
+      setRetained(null);
+      setPhase("idle");
+      toastManager.add({
+        type: "error",
+        title: "Recording unavailable",
+        description:
+          blob.size > VOICE_TRANSCRIPTION_MAX_BYTES
+            ? "The recording is too large to transcribe."
+            : "T3 Code could not read that recording.",
+      });
+      return;
+    }
+    await submitRecording({ blob, durationMs, mimeType });
+  });
 
   useEffect(() => {
     if (phase !== "recording") return;
@@ -234,17 +224,19 @@ export function DesktopVoiceRecorder({
       setElapsedMs(Math.min(nextElapsedMs, VOICE_TRANSCRIPTION_MAX_DURATION_MS));
       if (nextElapsedMs >= VOICE_TRANSCRIPTION_MAX_DURATION_MS) {
         window.clearInterval(timer);
-        void stopRecordingRef.current(false);
+        void stopRecording(false);
       }
     }, 250);
     return () => window.clearInterval(timer);
-  }, [phase]);
+  }, [phase, stopRecording]);
 
-  const startRecording = useCallback(async () => {
+  const startRecording = async () => {
     if (disabled || phaseRef.current !== "idle") return;
     setListeningRecordingActive(listeningRecordingOwnerRef.current, true);
+    // Assigned directly, not via setPhase, so TypeScript drops the "idle"
+    // narrowing for the post-await check below.
     phaseRef.current = "starting";
-    setPhase("starting");
+    setPhaseState("starting");
     let stream: MediaStream | null = null;
     try {
       stream = await navigator.mediaDevices.getUserMedia({ audio: true });
@@ -264,7 +256,6 @@ export function DesktopVoiceRecorder({
       });
       startedAtRef.current = Date.now();
       setElapsedMs(0);
-      phaseRef.current = "recording";
       setPhase("recording");
       recorder.start(1_000);
     } catch {
@@ -280,7 +271,7 @@ export function DesktopVoiceRecorder({
         description: "Allow microphone access to record a voice message.",
       });
     }
-  }, [disabled, releaseStream]);
+  };
 
   if (typeof MediaRecorder === "undefined") return null;
 

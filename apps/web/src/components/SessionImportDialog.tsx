@@ -151,7 +151,7 @@ export function SessionImportDialog(props: {
     }
     const fork = options?.fork === true;
     setImporting({ key: getSessionImportCandidateKey(candidate), fork });
-    try {
+    const runImport = async () => {
       const result = await importSession({
         environmentId: member.environmentId,
         input: {
@@ -203,15 +203,16 @@ export function SessionImportDialog(props: {
           description: error instanceof Error ? error.message : "An error occurred.",
         });
       }
-    } catch (error) {
-      toastManager.add({
-        type: "error",
-        title: "Failed to import session",
-        description: error instanceof Error ? error.message : "An unexpected error occurred.",
-      });
-    } finally {
-      setImporting(null);
-    }
+    };
+    await runImport()
+      .catch((error: unknown) => {
+        toastManager.add({
+          type: "error",
+          title: "Failed to import session",
+          description: error instanceof Error ? error.message : "An unexpected error occurred.",
+        });
+      })
+      .finally(() => setImporting(null));
   };
 
   const groups = partitionSessionImportCandidates(candidates ?? []);

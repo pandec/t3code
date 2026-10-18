@@ -4,7 +4,6 @@ import {
   type ModelTotals,
   type UsageAttribution,
 } from "@t3tools/shared/usageMerge";
-import { useMemo } from "react";
 
 import { mergeModelUsage, type EnvironmentUsageStatus } from "../../state/usage";
 import { ProviderInstanceIcon } from "../chat/ProviderInstanceIcon";
@@ -54,11 +53,8 @@ export function UsageModelDialog({
   readonly onSetPrice: () => void;
   readonly onClose: () => void;
 }) {
-  const usage = useMemo(
-    () => mergeModelUsage(environments, model, attribution),
-    [environments, model, attribution],
-  );
-  const providers = useMemo(() => [model.provider], [model.provider]);
+  const usage = mergeModelUsage(environments, model, attribution);
+  const providers = [model.provider];
   const presentation = PROVIDER_PRESENTATION[model.provider];
   const costUnknown = isModelCostUnknown(model);
   const hitRate = cacheHitRate(model);

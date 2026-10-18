@@ -1,5 +1,5 @@
 import { randomUUID } from "~/lib/utils";
-import { useCallback, useEffect, useMemo, useRef } from "react";
+import { useEffect, useRef } from "react";
 import { AuthSettingsWriteScope, type EnvironmentId, type ThreadGroup } from "@t3tools/contracts";
 import {
   canSyncThreadGroups,
@@ -17,32 +17,23 @@ import { useAtomCommand } from "~/state/use-atom-command";
  * exactly once in ThreadGroupsDialogHost for replication; other readers use this. */
 export function useThreadGroupCatalog() {
   const { environments } = useEnvironments();
-  const capableTargets = useMemo(
-    () =>
-      environments.filter(
-        (environment) =>
-          environment.connection.phase === "connected" &&
-          canSyncThreadGroups(environment.serverConfig?.environment.capabilities),
-      ),
-    [environments],
+  const capableTargets = environments.filter(
+    (environment) =>
+      environment.connection.phase === "connected" &&
+      canSyncThreadGroups(environment.serverConfig?.environment.capabilities),
   );
   // Every environment's catalog is a merge source; only `settings:write` grants
   // make an environment an edit or replication target.
   const writableIds = useEnvironmentsWithScope(capableTargets, AuthSettingsWriteScope);
-  const targets = useMemo(
-    () => capableTargets.filter((environment) => writableIds.has(environment.environmentId)),
-    [capableTargets, writableIds],
+  const targets = capableTargets.filter((environment) =>
+    writableIds.has(environment.environmentId),
   );
-  const catalog = useMemo(
-    () =>
-      mergeThreadGroups(
-        ...environments.flatMap((environment) =>
-          environment.serverConfig ? [environment.serverConfig.settings.threadGroups] : [],
-        ),
-      ),
-    [environments],
+  const catalog = mergeThreadGroups(
+    ...environments.flatMap((environment) =>
+      environment.serverConfig ? [environment.serverConfig.settings.threadGroups] : [],
+    ),
   );
-  const groups = useMemo(() => visibleThreadGroups(catalog), [catalog]);
+  const groups = visibleThreadGroups(catalog);
   return { catalog, groups, targets, canEdit: targets.length > 0 };
 }
 
@@ -95,28 +86,25 @@ export function useThreadGroups() {
       });
     }
   }, [catalog, targets, persist]);
-  const update = useCallback(
-    async (entries: ReadonlyArray<Omit<ThreadGroup, "revision">>) => {
-      const revision = nextThreadGroupRevision(
-        mergeThreadGroups(latest.current, catalog),
-        Date.now(),
-        randomUUID(),
-      );
-      const patch = entries.map((entry) => ({ ...entry, revision }));
-      latest.current = mergeThreadGroups(latest.current, patch);
-      const results = await Promise.all(
-        targets.map((environment) =>
-          save({
-            environmentId: environment.environmentId,
-            input: { patch: { threadGroups: patch } },
-          }),
-        ),
-      );
-      const success = results.some((result) => result._tag === "Success");
-      if (success) latest.current = mergeThreadGroups(latest.current, patch);
-      return success;
-    },
-    [save, targets, catalog],
-  );
+  const update = async (entries: ReadonlyArray<Omit<ThreadGroup, "revision">>) => {
+    const revision = nextThreadGroupRevision(
+      mergeThreadGroups(latest.current, catalog),
+      Date.now(),
+      randomUUID(),
+    );
+    const patch = entries.map((entry) => ({ ...entry, revision }));
+    latest.current = mergeThreadGroups(latest.current, patch);
+    const results = await Promise.all(
+      targets.map((environment) =>
+        save({
+          environmentId: environment.environmentId,
+          input: { patch: { threadGroups: patch } },
+        }),
+      ),
+    );
+    const success = results.some((result) => result._tag === "Success");
+    if (success) latest.current = mergeThreadGroups(latest.current, patch);
+    return success;
+  };
   return { groups, update, canEdit };
 }

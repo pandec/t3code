@@ -6,7 +6,7 @@ import {
   DEFAULT_RUNTIME_MODE,
   type MessageId,
 } from "@t3tools/contracts";
-import { useEffect, useEffectEvent, useMemo, useRef, useState } from "react";
+import { useEffect, useEffectEvent, useRef, useState } from "react";
 
 import { useSteerGraceWindowMs } from "../hooks/useSettings";
 import { useConnectedEnvironmentIds } from "../state/environments";
@@ -33,7 +33,7 @@ export function ThreadOutboxDrainHost() {
   const submissions = useThreadOutboxStore((state) => state.submissions);
   const inFlight = useThreadOutboxStore((state) => state.inFlight);
   const connectedEnvironmentIds = useConnectedEnvironmentIds();
-  const connected = useMemo(() => new Set(connectedEnvironmentIds), [connectedEnvironmentIds]);
+  const connected = new Set(connectedEnvironmentIds);
   const startTurn = useAtomCommand(threadEnvironment.startTurn, { reportFailure: false });
   const setRuntimeMode = useAtomCommand(threadEnvironment.setRuntimeMode, {
     reportFailure: false,
@@ -70,52 +70,56 @@ export function ThreadOutboxDrainHost() {
           },
         }),
       );
-      failure ??= threadSubmissionFailure(
-        await setInteractionMode({
+      if (failure === null) {
+        failure = threadSubmissionFailure(
+          await setInteractionMode({
+            environmentId: submission.environmentId,
+            input: {
+              threadId: submission.threadId,
+              commandId: commandIdFor("interaction-mode"),
+              interactionMode: submission.settings.interactionMode,
+            },
+          }),
+        );
+      }
+    }
+    if (failure === null) {
+      failure = threadSubmissionFailure(
+        await startTurn({
           environmentId: submission.environmentId,
           input: {
             threadId: submission.threadId,
-            commandId: commandIdFor("interaction-mode"),
-            interactionMode: submission.settings.interactionMode,
+            commandId: submission.commandId,
+            message: {
+              messageId: submission.messageId,
+              role: "user",
+              text: submission.text,
+              ...(submission.inputOrigin === undefined
+                ? {}
+                : { inputOrigin: submission.inputOrigin }),
+              attachments: submission.attachments,
+              ...(submission.context === undefined ? {} : { context: submission.context }),
+            },
+            ...(submission.modelSelection === undefined
+              ? {}
+              : { modelSelection: submission.modelSelection }),
+            ...(submission.titleSeed === undefined ? {} : { titleSeed: submission.titleSeed }),
+            // Only thread launches read these; an existing thread's settings were applied above.
+            runtimeMode: submission.settings?.runtimeMode ?? DEFAULT_RUNTIME_MODE,
+            interactionMode:
+              submission.settings?.interactionMode ?? DEFAULT_PROVIDER_INTERACTION_MODE,
+            dispatchMode: submission.dispatchMode,
+            // The recall window started when the message was sent, not on resend.
+            steerGraceWindowMs: remainingSteerGraceWindowMs(
+              submission.createdAt,
+              steerGraceWindowMs,
+              Date.now(),
+            ),
+            createdAt: submission.createdAt,
           },
         }),
       );
     }
-    failure ??= threadSubmissionFailure(
-      await startTurn({
-        environmentId: submission.environmentId,
-        input: {
-          threadId: submission.threadId,
-          commandId: submission.commandId,
-          message: {
-            messageId: submission.messageId,
-            role: "user",
-            text: submission.text,
-            ...(submission.inputOrigin === undefined
-              ? {}
-              : { inputOrigin: submission.inputOrigin }),
-            attachments: submission.attachments,
-            ...(submission.context === undefined ? {} : { context: submission.context }),
-          },
-          ...(submission.modelSelection === undefined
-            ? {}
-            : { modelSelection: submission.modelSelection }),
-          ...(submission.titleSeed === undefined ? {} : { titleSeed: submission.titleSeed }),
-          // Only thread launches read these; an existing thread's settings were applied above.
-          runtimeMode: submission.settings?.runtimeMode ?? DEFAULT_RUNTIME_MODE,
-          interactionMode:
-            submission.settings?.interactionMode ?? DEFAULT_PROVIDER_INTERACTION_MODE,
-          dispatchMode: submission.dispatchMode,
-          // The recall window started when the message was sent, not on resend.
-          steerGraceWindowMs: remainingSteerGraceWindowMs(
-            submission.createdAt,
-            steerGraceWindowMs,
-            Date.now(),
-          ),
-          createdAt: submission.createdAt,
-        },
-      }),
-    );
     const outcome = resolveThreadSubmissionOutcome(failure);
     if (outcome === "retry") {
       const attempt = (attemptsRef.current.get(submission.messageId) ?? 0) + 1;

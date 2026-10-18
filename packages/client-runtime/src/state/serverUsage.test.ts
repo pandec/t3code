@@ -7,7 +7,7 @@ import {
   WS_METHODS,
   type ServerConfig,
   type ServerConfigStreamEvent,
-  type ServerSettings,
+  ServerSettings,
   type TtsStatusResult,
   type UsageSource,
   type UsageSummary,
@@ -20,6 +20,7 @@ import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
 import * as Queue from "effect/Queue";
 import * as Result from "effect/Result";
+import * as Schema from "effect/Schema";
 import * as Stream from "effect/Stream";
 import * as SubscriptionRef from "effect/SubscriptionRef";
 import { AsyncResult, Atom, AtomRegistry } from "effect/reactivity";
@@ -75,6 +76,8 @@ const cursorSource = (refreshing: boolean): UsageSource => ({
   message: null,
   ...(refreshing ? { refreshing: true as const } : {}),
 });
+
+const sameServerSettings = Schema.toEquivalence(ServerSettings);
 
 const makeHarness = Effect.fn("ServerUsageTest.makeHarness")(function* (
   beforeRead: (
@@ -216,8 +219,9 @@ const makeHarness = Effect.fn("ServerUsageTest.makeHarness")(function* (
         ...(nextTextToSpeech === undefined ? {} : { textToSpeech: nextTextToSpeech }),
       },
     });
+    // An equal settings document keeps the previous object, so match on content.
     yield* AtomRegistry.toStream(registry, atoms.settingsValueAtom(TARGET.environmentId)).pipe(
-      Stream.filter((current) => current === next),
+      Stream.filter((current) => current !== null && sameServerSettings(current, next)),
       Stream.runHead,
     );
   });

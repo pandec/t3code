@@ -65,7 +65,7 @@ When T3's preview tools are available, the Browser panel can replace the browser
 
 Run `node apps/server/src/bin.ts pair` from the repository root. It discovers the running dev server (worktree `.t3` first, same precedence as the dev runner) and prints a fresh `Pair URL` against the server's current web origin, including a `--share` tailnet origin. Pass `--base-dir <base-dir>` only when the server was started with `--home-dir`, using the identical path.
 
-Tokens from `pair` carry standard client scopes. The startup pairing URL carries admin scopes; if the user needs Settings → Connections management (`access:write`), restart the server and hand over the new startup URL instead.
+Tokens from `pair` carry the standard client scopes, which include Settings → Connections management (`access:write`).
 
 ## Inspect or seed SQLite state
 

@@ -7,7 +7,7 @@ import {
 import { currentThreadMessageSummary } from "@t3tools/client-runtime/state/voice";
 import type { EnvironmentId, MessageId, MessageSummaryResult, ThreadId } from "@t3tools/contracts";
 import { FileTextIcon } from "lucide-react";
-import { type ReactNode, useCallback, useMemo, useState, useSyncExternalStore } from "react";
+import { type ReactNode, useState, useSyncExternalStore } from "react";
 
 import { summarizeMessage } from "../../state/messageArtifacts";
 import { useEnvironmentQuery } from "../../state/query";
@@ -51,25 +51,16 @@ export function useAssistantMessageSummary(input: {
   ).data;
   const [preparing, setPreparing] = useState(false);
   const [expanded, setExpanded] = useState(false);
-  const readSession = useCallback(
-    () => getMessageArtifactSessionSnapshot(environmentId, messageId, text),
-    [environmentId, messageId, text],
-  );
+  const readSession = () => getMessageArtifactSessionSnapshot(environmentId, messageId, text);
   const session = useSyncExternalStore(
-    useCallback(
-      (listener) => subscribeMessageArtifactSession(environmentId, messageId, listener),
-      [environmentId, messageId],
-    ),
+    (listener) => subscribeMessageArtifactSession(environmentId, messageId, listener),
     readSession,
     readSession,
   );
-  const storedSummary = useMemo(
-    () => currentThreadMessageSummary(threadState, messageId, text),
-    [threadState, messageId, text],
-  );
+  const storedSummary = currentThreadMessageSummary(threadState, messageId, text);
   const summary = session.summary ?? storedSummary;
 
-  const toggle = useCallback(() => {
+  const toggle = () => {
     if (summary !== null) {
       setExpanded((current) => !current);
       return;
@@ -94,7 +85,7 @@ export function useAssistantMessageSummary(input: {
         setPreparing(false);
         endRequest();
       });
-  }, [environmentId, messageId, preparing, summarize, summary, text]);
+  };
 
   return {
     visible: (summary !== null || input.available) && !input.streaming && text.trim().length > 0,

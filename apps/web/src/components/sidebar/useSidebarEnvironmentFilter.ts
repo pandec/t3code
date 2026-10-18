@@ -1,6 +1,5 @@
 import type { EnvironmentThreadShell } from "@t3tools/client-runtime/state/models";
 import type { EnvironmentId } from "@t3tools/contracts";
-import { useCallback, useMemo } from "react";
 
 import type { EnvironmentPresentation } from "../../state/environments";
 import { useUiStateStore } from "../../uiStateStore";
@@ -29,26 +28,21 @@ export function useSidebarEnvironmentFilter(input: {
 }) {
   const storedScopeIds = useUiStateStore((store) => store.sidebarV2EnvironmentScopeIds);
   const setStoredScopeIds = useUiStateStore((store) => store.setSidebarV2EnvironmentScopeIds);
-  const scope = useMemo<SidebarEnvironmentScope>(
-    () => (storedScopeIds === null ? null : new Set(storedScopeIds)),
-    [storedScopeIds],
-  );
+  const scope: SidebarEnvironmentScope = storedScopeIds === null ? null : new Set(storedScopeIds);
   // Before the catalog hydrates, an empty environment list is indistinguishable
   // from "every selection was removed". Resolving against it would either hide
   // everything or — since null means all — widen the filter for a frame, which
   // is exactly what the scope is designed never to do. Client-persisted drafts
   // exist before any environment does and would be the visible tell, so fall
   // back to raw intent until the catalog can be trusted to answer.
-  const resolvedScope = useMemo(
-    () =>
-      input.environmentsReady ? resolveSidebarEnvironmentScope(input.environments, scope) : scope,
-    [input.environments, input.environmentsReady, scope],
+  const resolvedScope = input.environmentsReady
+    ? resolveSidebarEnvironmentScope(input.environments, scope)
+    : scope;
+  const sortedEnvironments = buildProviderEnvironmentOptions(
+    input.environments,
+    input.primaryEnvironmentId,
   );
-  const sortedEnvironments = useMemo(
-    () => buildProviderEnvironmentOptions(input.environments, input.primaryEnvironmentId),
-    [input.environments, input.primaryEnvironmentId],
-  );
-  const threadCountByEnvironmentId = useMemo(() => {
+  const threadCountByEnvironmentId = (() => {
     const counts = new Map<string, number>();
     for (const thread of input.threads) {
       const projectKey = `${thread.environmentId}:${thread.projectId}`;
@@ -62,70 +56,57 @@ export function useSidebarEnvironmentFilter(input: {
       counts.set(thread.environmentId, (counts.get(thread.environmentId) ?? 0) + 1);
     }
     return counts;
-  }, [input.hiddenProjectKeys, input.scopedProjectKeys, input.threads]);
-  const environments = useMemo<readonly SidebarEnvironmentFilterEnvironment[]>(
-    () =>
-      sortedEnvironments.map((environment) => ({
-        environmentId: environment.environmentId,
-        label: environment.label,
-        connection: environment.connection,
-        isPrimary: environment.environmentId === input.primaryEnvironmentId,
-        threadCount: threadCountByEnvironmentId.get(environment.environmentId) ?? 0,
-      })),
-    [input.primaryEnvironmentId, sortedEnvironments, threadCountByEnvironmentId],
+  })();
+  const environments: readonly SidebarEnvironmentFilterEnvironment[] = sortedEnvironments.map(
+    (environment) => ({
+      environmentId: environment.environmentId,
+      label: environment.label,
+      connection: environment.connection,
+      isPrimary: environment.environmentId === input.primaryEnvironmentId,
+      threadCount: threadCountByEnvironmentId.get(environment.environmentId) ?? 0,
+    }),
   );
-  const emptyStateLabel = useMemo(
-    () =>
-      input.environmentsReady
-        ? resolveSidebarEnvironmentEmptyStateLabel({
-            environments,
-            scope,
-            shellsBootstrapped: input.shellsBootstrapped,
-          })
-        : null,
-    [environments, input.environmentsReady, input.shellsBootstrapped, scope],
-  );
+  const emptyStateLabel = input.environmentsReady
+    ? resolveSidebarEnvironmentEmptyStateLabel({
+        environments,
+        scope,
+        shellsBootstrapped: input.shellsBootstrapped,
+      })
+    : null;
   // Archived recents follow the scope like live rows do, so only the scoped
   // environments' per-environment RPCs are subscribed; an unresolved catalog
   // subscribes nothing rather than paging remote links for rows that may
   // not render.
-  const environmentIds = useMemo(
-    () =>
-      !input.environmentsReady
-        ? []
-        : resolvedScope === null
-          ? input.environments.map((environment) => environment.environmentId)
-          : input.environments.flatMap((environment) =>
-              resolvedScope.has(environment.environmentId) ? [environment.environmentId] : [],
-            ),
-    [input.environments, input.environmentsReady, resolvedScope],
-  );
-  const toggleEnvironment = useCallback(
-    (environmentId: string) => {
-      const currentIds = useUiStateStore.getState().sidebarV2EnvironmentScopeIds;
-      const currentScope = currentIds === null ? null : new Set(currentIds);
-      const resolvedCurrentScope = resolveSidebarEnvironmentScope(input.environments, currentScope);
-      const next = toggleSidebarEnvironmentScope(resolvedCurrentScope, environmentId);
-      setStoredScopeIds(next === null ? null : [...next]);
-    },
-    [input.environments, setStoredScopeIds],
-  );
-  const selectAll = useCallback(() => setStoredScopeIds(null), [setStoredScopeIds]);
-  const selectPrimaryOnly = useCallback(() => {
+  const environmentIds = !input.environmentsReady
+    ? []
+    : resolvedScope === null
+      ? input.environments.map((environment) => environment.environmentId)
+      : input.environments.flatMap((environment) =>
+          resolvedScope.has(environment.environmentId) ? [environment.environmentId] : [],
+        );
+  const toggleEnvironment = (environmentId: string) => {
+    const currentIds = useUiStateStore.getState().sidebarV2EnvironmentScopeIds;
+    const currentScope = currentIds === null ? null : new Set(currentIds);
+    const resolvedCurrentScope = resolveSidebarEnvironmentScope(input.environments, currentScope);
+    const next = toggleSidebarEnvironmentScope(resolvedCurrentScope, environmentId);
+    setStoredScopeIds(next === null ? null : [...next]);
+  };
+  const selectAll = () => setStoredScopeIds(null);
+  const selectPrimaryOnly = () => {
     const primaryEnvironmentId = environments.find(
       (environment) => environment.isPrimary,
     )?.environmentId;
     const next = selectPrimaryEnvironmentScope(primaryEnvironmentId ?? null);
     if (next !== null) setStoredScopeIds([...next]);
-  }, [environments, setStoredScopeIds]);
-  const selectRemoteOnly = useCallback(() => {
+  };
+  const selectRemoteOnly = () => {
     const primaryEnvironmentId = environments.find(
       (environment) => environment.isPrimary,
     )?.environmentId;
     const next = selectRemoteEnvironmentScope(environments, primaryEnvironmentId ?? null);
     if (next !== null) setStoredScopeIds([...next]);
-  }, [environments, setStoredScopeIds]);
-  const signature = useMemo(() => sidebarEnvironmentScopeSignature(scope), [scope]);
+  };
+  const signature = sidebarEnvironmentScopeSignature(scope);
 
   return {
     emptyStateLabel,

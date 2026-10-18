@@ -21,7 +21,7 @@ import {
   RotateCwIcon,
   SquareIcon,
 } from "lucide-react";
-import { type ReactNode, useCallback, useState } from "react";
+import { type ReactNode, useState } from "react";
 
 import { useNewThreadHandler } from "../../hooks/useHandleNewThread";
 import { ensureLocalApi } from "../../localApi";
@@ -71,91 +71,89 @@ export function useLabCommands(environmentId: EnvironmentId) {
   const runRelease = useAtomCommand(labsEnvironment.release, { reportFailure: false });
   const canOperate = useAtomValue(labsEnvironment.action.permissionAtom(environmentId));
 
-  const action = useCallback(
-    async (environment: Pick<LabEnvironment, "id" | "name">, kind: LabAction, note?: string) => {
-      const result = await runAction({
+  const action = async (
+    environment: Pick<LabEnvironment, "id" | "name">,
+    kind: LabAction,
+    note?: string,
+  ) => {
+    const result = await runAction({
+      environmentId,
+      input: { envId: environment.id, action: kind, ...(note === undefined ? {} : { note }) },
+    });
+    if (result._tag === "Failure") {
+      toastManager.add({
+        type: "error",
+        title: `${ACTION_TITLES[kind]} failed in ${environment.name}`,
+        description: errorMessage(result),
+      });
+      return;
+    }
+    if (!result.value.ok) {
+      toastManager.add({
+        type: "warning",
+        title: `${environment.name} started with problems`,
+        description: result.value.detail ?? "The extension check failed.",
+      });
+    }
+  };
+
+  /** Releases without a handoff note; a running stack can be stopped first, other blockers show. */
+  const release = async (environment: Pick<LabEnvironment, "id" | "name">) => {
+    const attempt = async (stopFirst: boolean) => {
+      const result = await runRelease({
         environmentId,
-        input: { envId: environment.id, action: kind, ...(note === undefined ? {} : { note }) },
+        input: { labId: environment.id, stopFirst },
       });
       if (result._tag === "Failure") {
         toastManager.add({
           type: "error",
-          title: `${ACTION_TITLES[kind]} failed in ${environment.name}`,
+          title: `Could not release ${environment.name}`,
           description: errorMessage(result),
         });
         return;
       }
-      if (!result.value.ok) {
-        toastManager.add({
-          type: "warning",
-          title: `${environment.name} started with problems`,
-          description: result.value.detail ?? "The extension check failed.",
-        });
+      if (result.value.status === "released") {
+        toastManager.add({ type: "success", title: `Released ${environment.name}` });
+        return;
       }
-    },
-    [environmentId, runAction],
-  );
-
-  /** Releases without a handoff note; a running stack can be stopped first, other blockers show. */
-  const release = useCallback(
-    async (environment: Pick<LabEnvironment, "id" | "name">) => {
-      const attempt = async (stopFirst: boolean) => {
-        const result = await runRelease({
-          environmentId,
-          input: { labId: environment.id, stopFirst },
-        });
-        if (result._tag === "Failure") {
-          toastManager.add({
-            type: "error",
-            title: `Could not release ${environment.name}`,
-            description: errorMessage(result),
-          });
-          return;
-        }
-        if (result.value.status === "released") {
-          toastManager.add({ type: "success", title: `Released ${environment.name}` });
-          return;
-        }
-        const blockers = result.value.blockers;
-        if (!stopFirst && releaseCanStopFirst(blockers)) {
-          const confirmed = await ensureLocalApi().dialogs.confirm(
-            `Stop ${environment.name}'s stack and release it?\nIts dev stack is still running.`,
-          );
-          if (confirmed) await attempt(true);
-          return;
-        }
-        toastManager.add({
-          type: "warning",
-          title: `${environment.name} was not released`,
-          description: blockers.map(describeReleaseBlocker).join("\n"),
-        });
-      };
-      await attempt(false);
-    },
-    [environmentId, runRelease],
-  );
+      const blockers = result.value.blockers;
+      if (!stopFirst && releaseCanStopFirst(blockers)) {
+        const confirmed = await ensureLocalApi().dialogs.confirm(
+          `Stop ${environment.name}'s stack and release it?\nIts dev stack is still running.`,
+        );
+        if (confirmed) await attempt(true);
+        return;
+      }
+      toastManager.add({
+        type: "warning",
+        title: `${environment.name} was not released`,
+        description: blockers.map(describeReleaseBlocker).join("\n"),
+      });
+    };
+    await attempt(false);
+  };
 
   /** A normal, visible message to the owner thread; the outbox delivers it like any send. */
-  const askOwnerToRelease = useCallback(
-    (environment: Pick<LabEnvironment, "id" | "name">, ownerThreadId: string) => {
-      const queued = enqueueThreadSubmission({
-        environmentId,
-        threadId: ThreadId.make(ownerThreadId),
-        commandId: newCommandId(),
-        messageId: newMessageId(),
-        text: buildLabWrapUpMessage(environment.id),
-        attachments: [],
-        dispatchMode: "queue",
-        createdAt: new Date().toISOString(),
-      });
-      toastManager.add(
-        queued
-          ? { type: "success", title: `Asked the agent to wrap up ${environment.name}` }
-          : { type: "error", title: "Could not send the message" },
-      );
-    },
-    [environmentId],
-  );
+  const askOwnerToRelease = (
+    environment: Pick<LabEnvironment, "id" | "name">,
+    ownerThreadId: string,
+  ) => {
+    const queued = enqueueThreadSubmission({
+      environmentId,
+      threadId: ThreadId.make(ownerThreadId),
+      commandId: newCommandId(),
+      messageId: newMessageId(),
+      text: buildLabWrapUpMessage(environment.id),
+      attachments: [],
+      dispatchMode: "queue",
+      createdAt: new Date().toISOString(),
+    });
+    toastManager.add(
+      queued
+        ? { type: "success", title: `Asked the agent to wrap up ${environment.name}` }
+        : { type: "error", title: "Could not send the message" },
+    );
+  };
 
   return { action, release, askOwnerToRelease, canOperate };
 }

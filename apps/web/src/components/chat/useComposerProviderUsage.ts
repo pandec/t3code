@@ -18,7 +18,7 @@ import {
   type ServerProvider,
   type ThreadId,
 } from "@t3tools/contracts";
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 
 import { useNowMinute } from "../../hooks/useNowMinute";
 import { useClientSettingsHydrated, useEnvironmentSettings } from "../../hooks/useSettings";
@@ -102,11 +102,8 @@ export function useComposerProviderUsage(input: {
     environmentId,
     (settings) => settings.providerInstances,
   );
-  const isGatewayInstance = useCallback(
-    (instanceId: ProviderInstanceId) =>
-      providerInstanceSettings[instanceId]?.usageSource !== undefined,
-    [providerInstanceSettings],
-  );
+  const isGatewayInstance = (instanceId: ProviderInstanceId) =>
+    providerInstanceSettings[instanceId]?.usageSource !== undefined;
   const nowMinute = useNowMinute();
   // Dropped as soon as access goes away, so no retained snapshot outlives the grant.
   const snapshots = canReadUsage ? providerUsageQuery.data?.snapshots : undefined;
@@ -118,33 +115,20 @@ export function useComposerProviderUsage(input: {
     readonly instanceId: ProviderInstanceId;
     readonly account: ProviderUsageThreadAccountState;
   } | null>(null);
-  const meter = useMemo(
-    () =>
-      resolveProviderUsageMeter({
-        providers: input.providers,
-        snapshots: snapshots ?? [],
-        activeInstanceId: input.activeInstanceId,
-        activeModel: input.activeModel,
-        isGatewayInstance,
-        threadId: input.threadId,
-        threadAccount:
-          threadAccount !== null && threadAccount.instanceId === input.activeInstanceId
-            ? threadAccount.account
-            : null,
-        // The minute clock re-evaluates staleness and passed resets.
-        now: Date.parse(`${nowMinute}:00.000Z`),
-      }),
-    [
-      input.activeInstanceId,
-      input.activeModel,
-      input.providers,
-      input.threadId,
-      isGatewayInstance,
-      nowMinute,
-      snapshots,
-      threadAccount,
-    ],
-  );
+  const meter = resolveProviderUsageMeter({
+    providers: input.providers,
+    snapshots: snapshots ?? [],
+    activeInstanceId: input.activeInstanceId,
+    activeModel: input.activeModel,
+    isGatewayInstance,
+    threadId: input.threadId,
+    threadAccount:
+      threadAccount !== null && threadAccount.instanceId === input.activeInstanceId
+        ? threadAccount.account
+        : null,
+    // The minute clock re-evaluates staleness and passed resets.
+    now: Date.parse(`${nowMinute}:00.000Z`),
+  });
 
   const readThreadAccount = useAtomCommand(serverEnvironment.readProviderUsageThreadAccount, {
     // Best-effort marker: a failed probe just leaves the badge off.
@@ -160,60 +144,46 @@ export function useComposerProviderUsage(input: {
   // Only a Claude session on a gateway-backed instance has a binding the
   // server can read. Throttles itself; `force` (the refresh button) outranks
   // the cadence cap but not the spam floor.
-  const probeThreadAccount = useCallback(
-    (options?: { readonly force?: boolean }) => {
-      const threadId = input.threadId;
-      if (
-        !canReadUsage ||
-        !canOperateThread ||
-        threadId === undefined ||
-        !input.hasProviderSession ||
-        !meter.gateway ||
-        activeDriver !== "claudeAgent"
-      ) {
-        return;
-      }
-      const model = input.activeModel;
-      const instanceId = input.activeInstanceId;
-      if (instanceId === null) return;
-      const probeKey = `${environmentId}:${instanceId}:${threadId}:${model}`;
-      const nowMs = Date.now();
-      if (
-        !shouldProbeProviderUsageThreadAccount(
-          lastThreadAccountProbeRef.current,
-          probeKey,
-          nowMs,
-          options?.force === true,
-        )
-      ) {
-        return;
-      }
-      lastThreadAccountProbeRef.current = { key: probeKey, askedAtMs: nowMs };
-      void (async () => {
-        const result = await readThreadAccount({ environmentId, input: { threadId, model } });
-        if (result._tag === "Failure") return;
-        // A newer thread or model claimed the slot while this probe was in
-        // flight; its answer must not be evicted by this stale one.
-        if (lastThreadAccountProbeRef.current.key !== probeKey) return;
-        const authIndex = result.value.authIndex;
-        setThreadAccount(
-          authIndex === null ? null : { instanceId, account: { threadId, model, authIndex } },
-        );
-      })();
-    },
-    [
-      activeDriver,
-      canOperateThread,
-      canReadUsage,
-      environmentId,
-      input.activeInstanceId,
-      input.activeModel,
-      input.hasProviderSession,
-      input.threadId,
-      meter.gateway,
-      readThreadAccount,
-    ],
-  );
+  const probeThreadAccount = (options?: { readonly force?: boolean }) => {
+    const threadId = input.threadId;
+    if (
+      !canReadUsage ||
+      !canOperateThread ||
+      threadId === undefined ||
+      !input.hasProviderSession ||
+      !meter.gateway ||
+      activeDriver !== "claudeAgent"
+    ) {
+      return;
+    }
+    const model = input.activeModel;
+    const instanceId = input.activeInstanceId;
+    if (instanceId === null) return;
+    const probeKey = `${environmentId}:${instanceId}:${threadId}:${model}`;
+    const nowMs = Date.now();
+    if (
+      !shouldProbeProviderUsageThreadAccount(
+        lastThreadAccountProbeRef.current,
+        probeKey,
+        nowMs,
+        options?.force === true,
+      )
+    ) {
+      return;
+    }
+    lastThreadAccountProbeRef.current = { key: probeKey, askedAtMs: nowMs };
+    void (async () => {
+      const result = await readThreadAccount({ environmentId, input: { threadId, model } });
+      if (result._tag === "Failure") return;
+      // A newer thread or model claimed the slot while this probe was in
+      // flight; its answer must not be evicted by this stale one.
+      if (lastThreadAccountProbeRef.current.key !== probeKey) return;
+      const authIndex = result.value.authIndex;
+      setThreadAccount(
+        authIndex === null ? null : { instanceId, account: { threadId, model, authIndex } },
+      );
+    })();
+  };
 
   const refreshProviders = useAtomCommand(serverEnvironment.refreshProviders, {
     // Failures are reported with a user-visible toast below.
@@ -246,7 +216,7 @@ export function useComposerProviderUsage(input: {
   const directInstanceIds = meter.directInstanceIds;
   // A gateway meter lists only the active instance's pool.
   const gatewayInstanceId = meter.gateway ? input.activeInstanceId : null;
-  const refresh = useCallback(async () => {
+  const refresh = async () => {
     if (!canReadUsage) return;
     const refreshAt = Date.now();
     const lastRefreshAt =
@@ -256,7 +226,8 @@ export function useComposerProviderUsage(input: {
     refreshTokenRef.current += 1;
     const token = refreshTokenRef.current;
     setRefreshingEnvironmentId(environmentId);
-    try {
+    // A promise `finally`, not try/finally, which the React Compiler cannot compile.
+    const run = async () => {
       // A gateway pool is probed on demand through the gateway; direct
       // accounts re-probe through their provider snapshot.
       if (gatewayInstanceId !== null) {
@@ -284,18 +255,11 @@ export function useComposerProviderUsage(input: {
       if (failure !== undefined && failure._tag === "Failure") {
         reportProviderUsageRefreshFailure(failure);
       }
-    } finally {
+    };
+    await run().finally(() => {
       if (refreshTokenRef.current === token) setRefreshingEnvironmentId(null);
-    }
-  }, [
-    canReadUsage,
-    directInstanceIds,
-    environmentId,
-    gatewayInstanceId,
-    refreshGatewayUsage,
-    refreshProviderUsageSnapshots,
-    refreshProviders,
-  ]);
+    });
+  };
 
   // The OpenRouter balance is opt-in (Settings → Extras); while it is off no
   // query subscribes, so nothing is fetched.
@@ -307,28 +271,23 @@ export function useComposerProviderUsage(input: {
   );
   const openRouterCreditsData = openRouterCreditsQuery.data;
   const openRouterCreditsUnavailable = openRouterCreditsQuery.error !== null;
-  const openRouterCredits = useMemo<OpenRouterCreditsDisplay | null>(() => {
-    if (!showOpenRouterCredits || openRouterCreditsData === null) return null;
-    return {
-      configured: openRouterCreditsData.configured,
-      balanceUsd:
-        openRouterCreditsData.snapshot === null
-          ? null
-          : openRouterCreditsData.snapshot.totalCreditsUsd -
-            openRouterCreditsData.snapshot.totalUsageUsd,
-      budgetUsd: input.openRouterCreditsBudgetUsd,
-      observedAt: openRouterCreditsData.snapshot?.observedAt ?? null,
-      error: openRouterCreditsData.error ?? null,
-      // A failed refresh keeps the previous success, so the transport error
-      // travels with it rather than presenting an old balance as current.
-      unavailable: openRouterCreditsUnavailable,
-    };
-  }, [
-    input.openRouterCreditsBudgetUsd,
-    openRouterCreditsData,
-    openRouterCreditsUnavailable,
-    showOpenRouterCredits,
-  ]);
+  const openRouterCredits: OpenRouterCreditsDisplay | null =
+    !showOpenRouterCredits || openRouterCreditsData === null
+      ? null
+      : {
+          configured: openRouterCreditsData.configured,
+          balanceUsd:
+            openRouterCreditsData.snapshot === null
+              ? null
+              : openRouterCreditsData.snapshot.totalCreditsUsd -
+                openRouterCreditsData.snapshot.totalUsageUsd,
+          budgetUsd: input.openRouterCreditsBudgetUsd,
+          observedAt: openRouterCreditsData.snapshot?.observedAt ?? null,
+          error: openRouterCreditsData.error ?? null,
+          // A failed refresh keeps the previous success, so the transport error
+          // travels with it rather than presenting an old balance as current.
+          unavailable: openRouterCreditsUnavailable,
+        };
 
   return {
     meter,

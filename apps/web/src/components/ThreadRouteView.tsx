@@ -16,13 +16,12 @@ import {
 import { useSidebarPendingFileDropStore } from "../sidebarPendingFileDropStore";
 import {
   useEnvironmentThreadRefs,
+  useQuietThreadShell,
   useThreadProjection,
   useThreadRefs,
-  useThreadShell,
   useThreadStatus,
 } from "../state/entities";
-import { useEnvironmentQuery } from "../state/query";
-import { environmentShell } from "../state/shell";
+import { useEnvironmentShellHasSnapshot, useEnvironmentShellStatus } from "../state/shell";
 import {
   buildThreadRouteParams,
   resolveArchivedThreadRouteState,
@@ -52,7 +51,7 @@ export function ThreadRouteView({ target }: { target: ThreadRouteTarget }) {
     : null;
   const serverThreadRef: ScopedThreadRef | null =
     target.kind === "server" ? target.threadRef : (draftSession?.promotedTo ?? inferredThreadRef);
-  const serverThread = useThreadShell(serverThreadRef);
+  const serverThread = useQuietThreadShell(serverThreadRef);
   const backgroundSubmissionPending = useBackgroundDraftSubmissionPending(
     target.kind === "draft" ? serverThreadRef : null,
   );
@@ -65,12 +64,11 @@ export function ThreadRouteView({ target }: { target: ThreadRouteTarget }) {
         })
       : null;
 
-  const shell = useEnvironmentQuery(
-    serverThreadRef === null ? null : environmentShell.stateAtom(serverThreadRef.environmentId),
-  );
+  const shellStatus = useEnvironmentShellStatus(serverThreadRef?.environmentId ?? null);
+  const shellHasSnapshot = useEnvironmentShellHasSnapshot(serverThreadRef?.environmentId ?? null);
   const serverThreadShell = serverThread;
   const environmentThreadRefs = useEnvironmentThreadRefs(serverThreadRef?.environmentId ?? null);
-  const bootstrapComplete = isThreadRouteSnapshotAuthoritative(shell.data?.status);
+  const bootstrapComplete = isThreadRouteSnapshotAuthoritative(shellStatus);
   const draftThread = useComposerDraftStore((store) =>
     serverThreadRef ? store.getDraftThreadByRef(serverThreadRef) : null,
   );
@@ -100,10 +98,7 @@ export function ThreadRouteView({ target }: { target: ThreadRouteTarget }) {
   // the route opens it (archive shelf, thread links) or the thread is gone.
   // Any snapshot, cached included, keeps an open archived thread on screen.
   const archivedLookupRef =
-    target.kind === "server" &&
-    shell.data?.snapshot._tag === "Some" &&
-    serverThreadShell === null &&
-    !draftThread
+    target.kind === "server" && shellHasSnapshot && serverThreadShell === null && !draftThread
       ? target.threadRef
       : null;
   const archivedLookupThread = useThreadProjection(archivedLookupRef)?.projection.thread ?? null;

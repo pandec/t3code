@@ -72,12 +72,10 @@ function TelegramBotForm({ environmentId }: { readonly environmentId: Environmen
 
   const save = async (telegram: TelegramPatch): Promise<boolean> => {
     setSaving(true);
-    try {
-      const result = await updateSettings({ environmentId, input: { patch: { telegram } } });
-      return result._tag === "Success";
-    } finally {
-      setSaving(false);
-    }
+    const result = await updateSettings({ environmentId, input: { patch: { telegram } } }).finally(
+      () => setSaving(false),
+    );
+    return result._tag === "Success";
   };
 
   // A new token may belong to another bot, so the old bot's name and chat link go with it.

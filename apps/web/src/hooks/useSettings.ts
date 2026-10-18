@@ -1,4 +1,5 @@
-import { useCallback, useEffect, useMemo, useRef, useSyncExternalStore, use } from "react";
+import { useEffect, useRef, useSyncExternalStore, use } from "react";
+import { useSyncExternalStoreWithSelector } from "use-sync-external-store/with-selector";
 import { RegistryContext, useAtomValue } from "@effect/atom-react";
 import {
   DEFAULT_SERVER_SETTINGS,
@@ -51,6 +52,7 @@ import {
   modelPreferencesMigrationPatch,
   resolveModelPreferences,
 } from "@t3tools/shared/serverSettings";
+import * as Equal from "effect/Equal";
 import * as Struct from "effect/Struct";
 import * as Option from "effect/Option";
 import { AsyncResult, Atom } from "effect/reactivity";
@@ -60,7 +62,13 @@ import { primaryServerSettingsAtom, serverEnvironment } from "~/state/server";
 import { useEnvironments, usePrimaryEnvironment } from "~/state/environments";
 import { useAtomCommand } from "~/state/use-atom-command";
 import { useTheme } from "./useTheme";
-import { environmentSession, readEnvironmentScope, useEnvironmentScope } from "~/state/session";
+import {
+  environmentSession,
+  environmentSessionStatesAtom,
+  readEnvironmentScope,
+  useEnvironmentScope,
+} from "~/state/session";
+import { environmentIdsKey } from "~/state/environmentAtomList";
 import { appAtomRegistry } from "~/rpc/atomRegistry";
 
 const CLIENT_SETTINGS_PERSISTENCE_ERROR_SCOPE = "[CLIENT_SETTINGS]";
@@ -294,11 +302,23 @@ export function useClientSettingsHydrationStatus(): ClientSettingsHydrationStatu
   );
 }
 
-function useClientSettingsValue(): ClientSettings {
-  return useSyncExternalStore(
+const getDefaultClientSettings = () => DEFAULT_CLIENT_SETTINGS;
+const selectWholeClientSettings = (settings: ClientSettings) => settings;
+
+/**
+ * The selection, not the whole snapshot, is what the store compares, so a write re-renders only
+ * readers whose selected value changed. Selectors may build objects or arrays: a structurally
+ * equal result keeps the previous reference.
+ */
+export function useClientSettings<T = ClientSettings>(
+  selector?: (settings: ClientSettings) => T,
+): T {
+  return useSyncExternalStoreWithSelector(
     subscribeClientSettings,
     getClientSettingsSnapshot,
-    () => DEFAULT_CLIENT_SETTINGS,
+    getDefaultClientSettings,
+    selector ?? (selectWholeClientSettings as (settings: ClientSettings) => T),
+    Equal.equals,
   );
 }
 
@@ -317,11 +337,16 @@ export function mergeEnvironmentSettings(
 
 const pendingModelPreferencesMigrations = new Set<EnvironmentId>();
 
+const selectLegacyModelPreferences = (settings: ClientSettings) => ({
+  favorites: settings.favorites,
+  providerModelPreferences: settings.providerModelPreferences,
+});
+
 export function useMigrateModelPreferences(
   environmentId: EnvironmentId | null,
   settings: ServerSettings | null,
 ) {
-  const clientSettings = useClientSettingsValue();
+  const clientSettings = useClientSettings(selectLegacyModelPreferences);
   const hydrated = useClientSettingsHydrated();
   const migrate = useAtomCommand(serverEnvironment.updateSettings, { reportFailure: false });
   useEffect(() => {
@@ -341,25 +366,15 @@ export function useMigrateModelPreferences(
   }, [clientSettings, environmentId, hydrated, migrate, settings]);
 }
 
-function useMergedSettings<T>(
+/** Selecting inside the client store keeps a client write from re-rendering unaffected readers. */
+export function useMergedSettings<T = UnifiedSettings>(
   serverSettings: ServerSettings,
-  selector: ((settings: UnifiedSettings) => T) | undefined,
+  selector?: (settings: UnifiedSettings) => T,
 ): T {
-  const clientSettings = useClientSettingsValue();
-
-  const merged = useMemo<UnifiedSettings>(
-    () => mergeEnvironmentSettings(serverSettings, clientSettings),
-    [clientSettings, serverSettings],
-  );
-
-  return useMemo(() => (selector ? selector(merged) : (merged as T)), [merged, selector]);
-}
-
-export function useClientSettings<T = ClientSettings>(
-  selector?: (settings: ClientSettings) => T,
-): T {
-  const settings = useClientSettingsValue();
-  return useMemo(() => (selector ? selector(settings) : (settings as T)), [selector, settings]);
+  return useClientSettings((clientSettings) => {
+    const merged = mergeEnvironmentSettings(serverSettings, clientSettings);
+    return selector ? selector(merged) : (merged as T);
+  });
 }
 
 /**
@@ -370,29 +385,24 @@ export function useClientSettings<T = ClientSettings>(
  * runtime; every consumer of a numeric setting clamps it here instead.
  */
 export function useSteerGraceWindowMs(): SteerGraceWindowMs {
-  const value = useClientSettingsValue().steerGraceWindowMs;
-  return useMemo(() => clampSteerGraceWindowMs(value), [value]);
+  const value = useClientSettings((settings) => settings.steerGraceWindowMs);
+  return clampSteerGraceWindowMs(value);
 }
 
 /** Warning/critical usage thresholds for the provider quota meter. */
 export function useProviderUsageThresholds(): ProviderUsageThresholds {
-  const settings = useClientSettingsValue();
-  const warningPercent = settings.providerUsageWarningPercent;
-  const criticalPercent = settings.providerUsageCriticalPercent;
-  return useMemo(
-    () =>
-      normalizeProviderUsageThresholds({
-        warningPercent: clampProviderUsageAlertPercent(
-          warningPercent,
-          DEFAULT_PROVIDER_USAGE_WARNING_PERCENT,
-        ),
-        criticalPercent: clampProviderUsageAlertPercent(
-          criticalPercent,
-          DEFAULT_PROVIDER_USAGE_CRITICAL_PERCENT,
-        ),
-      }),
-    [criticalPercent, warningPercent],
-  );
+  const warningPercent = useClientSettings((settings) => settings.providerUsageWarningPercent);
+  const criticalPercent = useClientSettings((settings) => settings.providerUsageCriticalPercent);
+  return normalizeProviderUsageThresholds({
+    warningPercent: clampProviderUsageAlertPercent(
+      warningPercent,
+      DEFAULT_PROVIDER_USAGE_WARNING_PERCENT,
+    ),
+    criticalPercent: clampProviderUsageAlertPercent(
+      criticalPercent,
+      DEFAULT_PROVIDER_USAGE_CRITICAL_PERCENT,
+    ),
+  });
 }
 
 export interface AccentTintSettings {
@@ -402,13 +412,9 @@ export interface AccentTintSettings {
 
 /** Whether (and how strongly) project accent colors tint web surfaces. */
 export function useAccentTintSettings(): AccentTintSettings {
-  const settings = useClientSettingsValue();
-  const enabled = settings.accentTintsEnabled;
-  const intensity = settings.accentTintIntensityPercent;
-  return useMemo(
-    () => ({ enabled, intensityPercent: clampAccentTintIntensityPercent(intensity) }),
-    [enabled, intensity],
-  );
+  const enabled = useClientSettings((settings) => settings.accentTintsEnabled);
+  const intensity = useClientSettings((settings) => settings.accentTintIntensityPercent);
+  return { enabled, intensityPercent: clampAccentTintIntensityPercent(intensity) };
 }
 
 export function resolveEnvironmentIdentificationMode(input: {
@@ -425,7 +431,7 @@ export function resolveEnvironmentIdentificationMode(input: {
 
 export function useEnvironmentIdentificationMode(): EnvironmentIdentificationMode {
   const settingsHydrated = useClientSettingsHydrated();
-  const mode = useClientSettingsValue().environmentIdentificationMode;
+  const mode = useClientSettings((settings) => settings.environmentIdentificationMode);
   const { resolvedTheme, theme, themeHalves } = useTheme();
   const previewSidebarArtwork = useSyncExternalStore(
     subscribeToThemePreview,
@@ -450,7 +456,7 @@ export function useEnvironmentIdentificationMode(): EnvironmentIdentificationMod
  */
 export function useLegacySidebarEnabled(): boolean {
   const settingsHydrated = useClientSettingsHydrated();
-  const legacySidebarEnabled = useClientSettingsValue().legacySidebarEnabled;
+  const legacySidebarEnabled = useClientSettings((settings) => settings.legacySidebarEnabled);
   return settingsHydrated && legacySidebarEnabled;
 }
 
@@ -469,24 +475,21 @@ export function useUpdateEnvironmentModelPreferences(environmentId: EnvironmentI
     environmentId ? serverEnvironment.settingsValueAtom(environmentId) : noEnvironmentSettingsAtom,
   );
   const save = useAtomCommand(serverEnvironment.updateSettings, "model preferences update");
-  return useCallback(
-    async (patch: ServerSettingsPatch) => {
-      if (!environmentId || !settings) return;
-      let prepared: ServerSettingsPatch;
-      try {
-        prepared = await prepareModelPreferencesPatch(settings, patch);
-      } catch {
-        toastManager.add({
-          type: "error",
-          title: "Model preferences not saved",
-          description: "Could not load saved model preferences. Try again.",
-        });
-        return;
-      }
-      return save({ environmentId, input: { patch: prepared } });
-    },
-    [environmentId, save, settings],
-  );
+  return async (patch: ServerSettingsPatch) => {
+    if (!environmentId || !settings) return;
+    let prepared: ServerSettingsPatch;
+    try {
+      prepared = await prepareModelPreferencesPatch(settings, patch);
+    } catch {
+      toastManager.add({
+        type: "error",
+        title: "Model preferences not saved",
+        description: "Could not load saved model preferences. Try again.",
+      });
+      return;
+    }
+    return save({ environmentId, input: { patch: prepared } });
+  };
 }
 
 /** Send the desired state so two clients adding a favorite do not cancel each other. */
@@ -496,68 +499,61 @@ export function useToggleEnvironmentModelFavorite(environmentId: EnvironmentId |
     new Map<string, { favorite: boolean; settings: ServerSettings; pending: boolean }>(),
   );
   const save = useUpdateEnvironmentModelPreferences(environmentId);
-  return useCallback(
-    async (provider: ProviderInstanceId, model: string) => {
-      if (!environmentId) return;
-      const settingsAtom = serverEnvironment.settingsValueAtom(environmentId);
-      const settings = registry.get(settingsAtom);
-      if (!settings) return;
-      if (settings.favorites === null) {
-        try {
-          await ensureClientSettingsHydrated();
-        } catch {
-          toastManager.add({
-            type: "error",
-            title: "Favorites not saved",
-            description: "Could not load saved model preferences. Try again.",
-          });
-          return;
-        }
-      }
-      const currentSettings = registry.get(settingsAtom) ?? settings;
-      const favorites = resolveModelPreferences(currentSettings, getClientSettings()).favorites;
-      const key = JSON.stringify([environmentId, provider, model]);
-      const previous = pendingFavorites.current.get(key);
-      // Keep the acknowledged choice until the config stream catches up with the RPC reply.
-      const previousFavorite =
-        previous && (previous.pending || previous.settings.favorites === currentSettings.favorites)
-          ? previous.favorite
-          : favorites.some(
-              (favorite) => favorite.provider === provider && favorite.model === model,
-            );
-      const pending = {
-        favorite: !previousFavorite,
-        settings: currentSettings,
-        pending: true,
-      };
-      pendingFavorites.current.set(key, pending);
+  return async (provider: ProviderInstanceId, model: string) => {
+    if (!environmentId) return;
+    const settingsAtom = serverEnvironment.settingsValueAtom(environmentId);
+    const settings = registry.get(settingsAtom);
+    if (!settings) return;
+    if (settings.favorites === null) {
       try {
-        const result = await save({
-          setModelFavorites: [{ provider, model, favorite: pending.favorite }],
+        await ensureClientSettingsHydrated();
+      } catch {
+        toastManager.add({
+          type: "error",
+          title: "Favorites not saved",
+          description: "Could not load saved model preferences. Try again.",
         });
-        if (
-          result &&
-          AsyncResult.isSuccess(result) &&
-          registry.get(settingsAtom)?.favorites === currentSettings.favorites
-        ) {
-          pending.pending = false;
-        }
-      } finally {
-        if (pending.pending && pendingFavorites.current.get(key) === pending) {
-          if (
-            previous &&
-            !previous.pending &&
-            registry.get(settingsAtom)?.favorites === previous.settings.favorites
-          ) {
-            pendingFavorites.current.set(key, previous);
-          } else {
-            pendingFavorites.current.delete(key);
-          }
-        }
+        return;
       }
-    },
-    [environmentId, registry, save],
-  );
+    }
+    const currentSettings = registry.get(settingsAtom) ?? settings;
+    const favorites = resolveModelPreferences(currentSettings, getClientSettings()).favorites;
+    const key = JSON.stringify([environmentId, provider, model]);
+    const previous = pendingFavorites.current.get(key);
+    // Keep the acknowledged choice until the config stream catches up with the RPC reply.
+    const previousFavorite =
+      previous && (previous.pending || previous.settings.favorites === currentSettings.favorites)
+        ? previous.favorite
+        : favorites.some((favorite) => favorite.provider === provider && favorite.model === model);
+    const pending = {
+      favorite: !previousFavorite,
+      settings: currentSettings,
+      pending: true,
+    };
+    pendingFavorites.current.set(key, pending);
+    // save settles into a result and never rejects, so the rollback below always runs.
+    const result = await save({
+      setModelFavorites: [{ provider, model, favorite: pending.favorite }],
+    });
+    if (
+      result &&
+      AsyncResult.isSuccess(result) &&
+      registry.get(settingsAtom)?.favorites === currentSettings.favorites
+    ) {
+      pending.pending = false;
+    }
+    if (pending.pending && pendingFavorites.current.get(key) === pending) {
+      if (
+        previous &&
+        !previous.pending &&
+        registry.get(settingsAtom)?.favorites === previous.settings.favorites
+      ) {
+        pendingFavorites.current.set(key, previous);
+      } else {
+        pendingFavorites.current.delete(key);
+      }
+    }
+  };
 }
 
 const noEnvironmentSettingsAtom = Atom.make<ServerSettings | null>(null);
@@ -566,12 +562,9 @@ export function useEnvironmentModelPreferences(environmentId: EnvironmentId | nu
   const settings = useAtomValue(
     environmentId ? serverEnvironment.settingsValueAtom(environmentId) : noEnvironmentSettingsAtom,
   );
-  const legacy = useClientSettingsValue();
+  const legacy = useClientSettings(selectLegacyModelPreferences);
   useMigrateModelPreferences(environmentId, settings);
-  return useMemo(
-    () => resolveModelPreferences(settings ?? DEFAULT_SERVER_SETTINGS, legacy),
-    [legacy, settings],
-  );
+  return resolveModelPreferences(settings ?? DEFAULT_SERVER_SETTINGS, legacy);
 }
 
 export function useEnvironmentSettings<T = UnifiedSettings>(
@@ -587,14 +580,11 @@ export function usePersistEnvironmentProviderInstanceMutation(environmentId: Env
   const mutateProviderInstance = useAtomCommand(serverEnvironment.mutateProviderInstance, {
     reportFailure: false,
   });
-  return useCallback(
-    (providerInstanceMutation: ProviderInstanceMutation, patch: ServerSettingsPatch = {}) =>
-      mutateProviderInstance({
-        environmentId,
-        input: { patch, providerInstanceMutation },
-      }),
-    [environmentId, mutateProviderInstance],
-  );
+  return (providerInstanceMutation: ProviderInstanceMutation, patch: ServerSettingsPatch = {}) =>
+    mutateProviderInstance({
+      environmentId,
+      input: { patch, providerInstanceMutation },
+    });
 }
 
 export function usePrimarySettings<T = UnifiedSettings>(
@@ -624,26 +614,22 @@ export function usePrimarySettingsAvailable(): boolean {
 
 function useSharedSettingsSyncTargetIds(includePending = false): ReadonlyArray<EnvironmentId> {
   const { environments } = useEnvironments();
-  const writableTargetsAtom = useMemo(
-    () =>
-      Atom.make((get) =>
-        environments.filter(supportsSharedSettingsSync).flatMap((environment) => {
-          const result = get(environmentSession.sessionStateAtom(environment.environmentId));
-          // A cold grant must not drop a shared edit. The server authorizes the
-          // write; mismatch suggestions still wait for a confirmed grant.
-          if (includePending && result._tag === "Initial") {
-            return [environment.environmentId];
-          }
-          const session =
-            result._tag === "Failure" ? null : Option.getOrNull(AsyncResult.value(result));
-          return session !== null && sessionGrantsScope(session, AuthSettingsWriteScope)
-            ? [environment.environmentId]
-            : [];
-        }),
-      ),
-    [environments, includePending],
-  );
-  return useAtomValue(writableTargetsAtom);
+  const targetIds = environments
+    .filter(supportsSharedSettingsSync)
+    .map(({ environmentId }) => environmentId);
+  const results = useAtomValue(environmentSessionStatesAtom(environmentIdsKey(targetIds)));
+  return targetIds.flatMap((environmentId, index) => {
+    const result = results[index]!;
+    // A cold grant must not drop a shared edit. The server authorizes the
+    // write; mismatch suggestions still wait for a confirmed grant.
+    if (includePending && result._tag === "Initial") {
+      return [environmentId];
+    }
+    const session = result._tag === "Failure" ? null : Option.getOrNull(AsyncResult.value(result));
+    return session !== null && sessionGrantsScope(session, AuthSettingsWriteScope)
+      ? [environmentId]
+      : [];
+  });
 }
 
 /**
@@ -661,146 +647,137 @@ function useUpdateSettingsTarget(environmentId: EnvironmentId | null) {
     reportFailure: false,
   });
   const { environments } = useEnvironments();
-  const persistServerSettings = useCallback(
-    async (request: Parameters<typeof persist>[0]) => {
-      const result = await persist(request);
-      if (result._tag === "Failure" && !isAtomCommandInterrupted(result)) {
-        const label =
-          environments.find((environment) => environment.environmentId === request.environmentId)
-            ?.label ?? request.environmentId;
-        const error = squashAtomCommandFailure(result);
-        toastManager.add({
-          type: "error",
-          title: "Setting not saved",
-          description: `Could not save on ${label}: ${error instanceof Error ? error.message : "The save failed. Try reconnecting and saving again."}`,
-        });
-      }
-      return result;
-    },
-    [environments, persist],
-  );
+  const persistServerSettings = async (request: Parameters<typeof persist>[0]) => {
+    const result = await persist(request);
+    if (result._tag === "Failure" && !isAtomCommandInterrupted(result)) {
+      const label =
+        environments.find((environment) => environment.environmentId === request.environmentId)
+          ?.label ?? request.environmentId;
+      const error = squashAtomCommandFailure(result);
+      toastManager.add({
+        type: "error",
+        title: "Setting not saved",
+        description: `Could not save on ${label}: ${error instanceof Error ? error.message : "The save failed. Try reconnecting and saving again."}`,
+      });
+    }
+    return result;
+  };
   const sharedSettingsSyncTargetIds = useSharedSettingsSyncTargetIds(true);
-  const updateSettings = useCallback(
-    (patch: UnifiedSettingsPatch) => {
-      const { serverPatch, clientPatch } = splitSettingsPatch(patch);
+  const updateSettings = (patch: UnifiedSettingsPatch) => {
+    const { serverPatch, clientPatch } = splitSettingsPatch(patch);
 
-      const canWriteServerPatch =
-        environmentId === null ||
-        requiredScopesForServerSettingsPatch(serverPatch).every((scope) =>
-          readEnvironmentScope(environmentId, scope),
-        );
-      if (Object.keys(serverPatch).length > 0 && !canWriteServerPatch) {
+    const canWriteServerPatch =
+      environmentId === null ||
+      requiredScopesForServerSettingsPatch(serverPatch).every((scope) =>
+        readEnvironmentScope(environmentId, scope),
+      );
+    if (Object.keys(serverPatch).length > 0 && !canWriteServerPatch) {
+      toastManager.add({
+        type: "warning",
+        title: "Setting not saved",
+        description: `This connection lacks permission to change settings on ${environments.find((target) => target.environmentId === environmentId)?.label ?? "the selected environment"}.`,
+      });
+    }
+    if (Object.keys(serverPatch).length > 0 && canWriteServerPatch) {
+      const { sharedPatch, localPatch } = splitSharedServerPatch(serverPatch);
+      // Dropping the write silently leaves the control looking saved.
+      const warnUnsaved = (description = PRIMARY_SETTINGS_UNAVAILABLE_MESSAGE) =>
         toastManager.add({
           type: "warning",
           title: "Setting not saved",
-          description: `This connection lacks permission to change settings on ${environments.find((target) => target.environmentId === environmentId)?.label ?? "the selected environment"}.`,
+          description,
         });
-      }
-      if (Object.keys(serverPatch).length > 0 && canWriteServerPatch) {
-        const { sharedPatch, localPatch } = splitSharedServerPatch(serverPatch);
-        if (Object.keys(localPatch).length > 0) {
-          if (environmentId) {
-            void persistServerSettings({
-              environmentId,
-              input: { patch: localPatch },
-            });
-          } else {
-            // Dropping the write silently leaves the control looking saved.
-            toastManager.add({
-              type: "warning",
-              title: "Setting not saved",
-              description: PRIMARY_SETTINGS_UNAVAILABLE_MESSAGE,
-            });
-          }
+      if (Object.keys(localPatch).length > 0) {
+        if (environmentId) {
+          void persistServerSettings({
+            environmentId,
+            input: { patch: localPatch },
+          });
+        } else {
+          warnUnsaved();
         }
-        if (Object.keys(sharedPatch).length > 0) {
-          const sourceSettings = environments.find(
-            (target) => target.environmentId === environmentId,
-          )?.serverConfig?.settings;
-          const targets = new Set(sharedSettingsSyncTargetIds);
-          if (environmentId) {
-            targets.add(environmentId);
+      }
+      if (Object.keys(sharedPatch).length > 0) {
+        const sourceSettings = environments.find((target) => target.environmentId === environmentId)
+          ?.serverConfig?.settings;
+        const targets = new Set(sharedSettingsSyncTargetIds);
+        if (environmentId) {
+          targets.add(environmentId);
+        }
+        const writes: Array<Parameters<typeof persist>[0]> = [];
+        const deniedLabels: string[] = [];
+        for (const targetId of targets) {
+          const target = environments.find((candidate) => candidate.environmentId === targetId);
+          const targetPatch = filterSharedServerPatch(
+            sharedPatch,
+            target?.serverConfig?.environment.capabilities,
+            target?.serverConfig?.settings,
+            sourceSettings,
+            targetId === environmentId,
+          );
+          if (Object.keys(targetPatch).length === 0) continue;
+          const session = appAtomRegistry.get(environmentSession.sessionStateAtom(targetId));
+          if (
+            session._tag !== "Initial" &&
+            !requiredScopesForServerSettingsPatch(sharedPatch).every((scope) =>
+              readEnvironmentScope(targetId, scope),
+            )
+          ) {
+            deniedLabels.push(target?.label ?? targetId);
+            continue;
           }
-          const writes: Array<Parameters<typeof persist>[0]> = [];
-          const deniedLabels: string[] = [];
-          for (const targetId of targets) {
-            const target = environments.find((candidate) => candidate.environmentId === targetId);
-            const targetPatch = filterSharedServerPatch(
-              sharedPatch,
-              target?.serverConfig?.environment.capabilities,
-              target?.serverConfig?.settings,
-              sourceSettings,
-              targetId === environmentId,
+          writes.push({
+            environmentId: targetId,
+            input: { patch: targetPatch },
+          });
+        }
+        // Fork: only warn when every reachable target refused the keys. No
+        // targets at all is not a save failure here: the local-patch branch
+        // above already covers the missing-server case.
+        if (writes.length === 0) {
+          if (targets.size > 0) {
+            warnUnsaved(
+              deniedLabels.length > 0
+                ? `This connection lacks permission to change settings on ${deniedLabels.join(", ")}.`
+                : "Update older servers to save this setting.",
             );
-            if (Object.keys(targetPatch).length === 0) continue;
-            const session = appAtomRegistry.get(environmentSession.sessionStateAtom(targetId));
-            if (
-              session._tag !== "Initial" &&
-              !requiredScopesForServerSettingsPatch(sharedPatch).every((scope) =>
-                readEnvironmentScope(targetId, scope),
-              )
-            ) {
-              deniedLabels.push(target?.label ?? targetId);
-              continue;
-            }
-            writes.push({
-              environmentId: targetId,
-              input: { patch: targetPatch },
-            });
           }
-          // Fork: only warn when every reachable target refused the keys. No
-          // targets at all is not a save failure here: the local-patch branch
-          // above already covers the missing-server case.
-          if (writes.length === 0) {
-            if (targets.size > 0) {
-              toastManager.add({
-                type: "warning",
-                title: "Setting not saved",
-                description:
-                  deniedLabels.length > 0
-                    ? `This connection lacks permission to change settings on ${deniedLabels.join(", ")}.`
-                    : "Update older servers to save this setting.",
-              });
-            }
-          } else {
-            void Promise.all(
-              writes.map(async (request) => ({
-                label:
-                  environments.find((target) => target.environmentId === request.environmentId)
-                    ?.label ?? request.environmentId,
-                result: await persist(request),
-              })),
-            ).then((outcomes) => {
-              const failures = outcomes.flatMap(({ label, result }) => {
-                if (result._tag !== "Failure" || isAtomCommandInterrupted(result)) return [];
-                const error = squashAtomCommandFailure(result);
-                return [
-                  `Could not save on ${label}: ${error instanceof Error ? error.message : "The save failed. Try reconnecting and saving again."}`,
-                ];
-              });
-              if (failures.length === 0) return;
-              const saved = outcomes
-                .filter(({ result }) => result._tag === "Success")
-                .map(({ label }) => label);
-              toastManager.add({
-                type: "error",
-                title:
-                  saved.length > 0 ? "Setting saved on some environments" : "Setting not saved",
-                description: [
-                  ...failures,
-                  ...(saved.length > 0 ? [`Saved on ${saved.join(", ")}.`] : []),
-                ].join("\n"),
-              });
+        } else {
+          void Promise.all(
+            writes.map(async (request) => ({
+              label:
+                environments.find((target) => target.environmentId === request.environmentId)
+                  ?.label ?? request.environmentId,
+              result: await persist(request),
+            })),
+          ).then((outcomes) => {
+            const failures = outcomes.flatMap(({ label, result }) => {
+              if (result._tag !== "Failure" || isAtomCommandInterrupted(result)) return [];
+              const error = squashAtomCommandFailure(result);
+              return [
+                `Could not save on ${label}: ${error instanceof Error ? error.message : "The save failed. Try reconnecting and saving again."}`,
+              ];
             });
-          }
+            if (failures.length === 0) return;
+            const saved = outcomes
+              .filter(({ result }) => result._tag === "Success")
+              .map(({ label }) => label);
+            toastManager.add({
+              type: "error",
+              title: saved.length > 0 ? "Setting saved on some environments" : "Setting not saved",
+              description: [
+                ...failures,
+                ...(saved.length > 0 ? [`Saved on ${saved.join(", ")}.`] : []),
+              ].join("\n"),
+            });
+          });
         }
       }
-      if (Object.keys(clientPatch).length > 0) {
-        void persistClientSettingsPatch(clientPatch);
-      }
-    },
-    [environmentId, environments, persist, persistServerSettings, sharedSettingsSyncTargetIds],
-  );
+    }
+    if (Object.keys(clientPatch).length > 0) {
+      void persistClientSettingsPatch(clientPatch);
+    }
+  };
 
   return updateSettings;
 }
@@ -821,13 +798,10 @@ export function useUpdateSettingsForEnvironment() {
     serverEnvironment.updateSettings,
     "server settings update",
   );
-  return useCallback(
-    (environmentId: EnvironmentId, patch: ServerSettingsPatch) => {
-      if (Object.keys(patch).length === 0) return Promise.resolve(null);
-      return persistServerSettings({ environmentId, input: { patch } });
-    },
-    [persistServerSettings],
-  );
+  return (environmentId: EnvironmentId, patch: ServerSettingsPatch) => {
+    if (Object.keys(patch).length === 0) return Promise.resolve(null);
+    return persistServerSettings({ environmentId, input: { patch } });
+  };
 }
 
 export function useUpdatePrimarySettings() {
@@ -835,9 +809,7 @@ export function useUpdatePrimarySettings() {
 }
 
 export function useUpdateClientSettings() {
-  return useCallback((patch: ClientSettingsPatch) => {
-    return persistClientSettingsPatch(patch);
-  }, []);
+  return (patch: ClientSettingsPatch) => persistClientSettingsPatch(patch);
 }
 
 export function __resetClientSettingsPersistenceForTests(): void {

@@ -3,9 +3,11 @@ import * as NodeZlib from "node:zlib";
 import react from "@vitejs/plugin-react";
 import { tanstackRouter } from "@tanstack/router-plugin/vite";
 import compression from "compression";
+import { playwright } from "vite-plus/test/browser-playwright";
 import { defineProject, type TestProjectInlineConfiguration } from "vite-plus/test/config";
 import "vite-plus/test/config";
 import { defineConfig, type Connect, type Plugin } from "vite-plus";
+import * as Hash from "effect/Hash";
 import pkg from "./package.json" with { type: "json" };
 
 import {
@@ -66,212 +68,45 @@ const buildSourcemap: boolean | "hidden" =
       ? "hidden"
       : true;
 
-/**
- * Test files that require worker isolation because they mutate cross-file
- * runtime state: `vi.mock` factories (which leak into unrelated files through
- * a shared module registry — the victim sees "No X export is defined on the
- * mock" for a mock it never registered), fake timers, and `vi.resetModules`
- * registry games. Everything else runs with `isolate: false`, importing the
- * module graph once per worker instead of once per file — measured 21.7s ->
- * ~5s for this suite.
- *
- * When a test gains `vi.mock`, `vi.useFakeTimers`, or `vi.resetModules`, add
- * it here; the symptom of forgetting is order-dependent failures in *other*
- * files, not in the new test.
- */
-const ISOLATED_TEST_FILES = [
-  "src/components/chat/ChatCanvas.test.tsx",
-  "src/components/chat/ComposerPendingUserInputPanel.navigation.test.tsx",
-  "src/components/settings/TelemetryExportSettings.test.tsx",
-  "src/components/settings/settingsScopeRetention.test.tsx",
-  "src/hooks/useHtmlRenderTheme.test.ts",
-  "src/hooks/useSettings.favorites.test.tsx",
-
-  "src/components/BranchToolbar.panel.test.tsx",
-  "src/components/composerCodeBlockHighlight.test.ts",
-  "src/browser/recordingCompositor.test.ts",
-  "src/components/chat/AssistantCitationChip.test.tsx",
-  "src/components/ComposerPromptEditorTiptap.citationDraft.test.tsx",
-  "src/components/ComposerPromptEditorTiptap.navigation.test.tsx",
-  "src/components/chat/WorkLog.test.tsx",
-  "src/components/chat/composerThreadImport.test.ts",
-  "src/components/settings/StorageSettings.test.tsx",
-  "src/components/settings/useProjectScriptSettings.test.tsx",
-  "src/hooks/useLocalStorage.hook.test.tsx",
-  "src/components/settings/SecretInput.test.tsx",
-  "src/components/chat/ComposerBannerStack.test.tsx",
-  "src/hooks/showThreadUndoNotice.test.ts",
-  "src/hooks/useThreadActions.undo.test.ts",
-
-  "src/components/pullRequest/PullRequestSummaryTab.test.tsx",
-  "src/components/pullRequest/PullRequestDetailPanel.test.tsx",
-  "src/components/pullRequest/usePullRequestFilesViewed.test.tsx",
-  "src/components/settings/colorPickers.test.tsx",
-
-  "src/hooks/useResizeDrag.test.tsx",
-  "src/components/ThreadNotificationCoordinator.badge.test.tsx",
-  "src/components/ThreadNotificationCoordinator.test.tsx",
-  "src/hooks/useEnvironmentDisconnectDelay.test.tsx",
-
-  "src/components/files/AttachmentFilePreview.test.tsx",
-
-  "src/components/device/DeviceStreamView.test.tsx",
-  "src/components/device/phoneTrackpad.test.ts",
-  "src/components/device/useDeviceControls.test.tsx",
-  "src/components/permissions/usePermissionStatus.test.ts",
-  "src/components/projectScriptEditor.test.tsx",
-  "src/components/settings/SourceControlWritingSettings.test.tsx",
-  "src/components/usage/UsagePage.refresh.test.tsx",
-  "src/components/usage/UsagePage.test.tsx",
-  "src/components/onboarding/WelcomeWizard.test.tsx",
-  "src/components/Sidebar.logic.test.ts",
-
-  "src/hooks/useLocalStorage.test.ts",
-  "src/browser/HostedBrowserWebview.test.tsx",
-  "src/browser/browserLinkTarget.test.ts",
-  "src/components/cloud/CloudEnvironmentConnectList.test.tsx",
-  "src/components/diffs/DiffFileTree.test.tsx",
-  "src/components/settings/IntegrationsSettings.test.tsx",
-  "src/hooks/useSettings.test.ts",
-  "src/authBootstrap.test.ts",
-  "src/bootstrap.test.ts",
-  "src/branding.test.ts",
-  "src/browser/browserDefaults.test.ts",
-  "src/browser/browserRecording.test.ts",
-  "src/browser/browserTargetResolver.test.ts",
-  "src/browser/browserViewportActions.test.ts",
-  "src/browser/desktopTabLifetime.test.ts",
-  "src/browserFaviconStore.test.ts",
-  "src/browserHistoryStore.test.ts",
-  "src/clientPersistenceStorage.test.ts",
-  "src/cloud/linkEnvironment.test.ts",
-  "src/cloud/managedAuth.test.ts",
-  "src/components/ChatMarkdown.test.tsx",
-  "src/components/ChatView.logic.test.ts",
-  "src/components/CommandPalette.logic.test.ts",
-  "src/components/ProjectFavicon.test.tsx",
-  "src/components/ProviderUpdateEnvironmentRows.test.tsx",
-  "src/components/ServerUpdateAction.test.tsx",
-  "src/components/chat/AssistantCitationSource.test.ts",
-  "src/components/chat/ComposerPrimaryActions.test.tsx",
-  "src/components/chat/ExpandedImagePreview.test.ts",
-  "src/components/chat/MessagesTimeline.test.tsx",
-  "src/components/desktopUpdate.toast.test.tsx",
-  "src/components/diffs/StyledDiffCodeView.test.tsx",
-  "src/components/files/fileSaveCoordinator.test.ts",
-  "src/components/files/projectFilesQueryState.test.tsx",
-  "src/components/files/useFileSaveCoordinator.test.tsx",
-  "src/components/preview/PreviewEmptyState.test.tsx",
-  "src/components/preview/PreviewFaviconIcon.test.tsx",
-  "src/components/preview/PreviewView.test.tsx",
-  "src/components/preview/openTerminalLinkInPreview.test.ts",
-  "src/components/settings/AddProviderInstanceDialog.environment.test.tsx",
-  "src/components/settings/ProjectFaviconPickerDialog.test.tsx",
-  "src/components/settings/ProjectIconPickerDialog.test.tsx",
-  "src/components/settings/PromptsSettings.test.tsx",
-  "src/components/settings/ProviderSettingsPanel.environment.test.tsx",
-  "src/components/settings/ProviderSetupSection.test.tsx",
-  "src/components/settings/ThemeEditorHost.test.tsx",
-  "src/components/sidebar/SidebarUpdateReleaseNotes.test.tsx",
-  "src/components/thread-split/threadSplitStore.test.ts",
-  "src/composerDraftStore.test.ts",
-  "src/hooks/useEnvironmentThemeSync.test.ts",
-  "src/hooks/useHandleNewThread.test.ts",
-  "src/hooks/useTheme.test.ts",
-  "src/lib/attachmentUploadQueue.test.ts",
-  "src/lib/imageCompression.test.ts",
-  "src/lib/previewAnnotation.test.ts",
-  "src/lib/selectionActions.test.ts",
-  "src/lib/syntaxHighlighting.test.ts",
-  "src/lib/terminalCloseConfirm.test.ts",
-  "src/localApi.test.ts",
-  "src/openVsxThemes.test.ts",
-  "src/rpc/requestLatencyState.test.ts",
-  "src/state/terminalSessions.test.ts",
-  "src/state/usage.test.tsx",
-  "src/terminal/ghostty/core.test.ts",
-  "src/terminal/ghostty/surface.test.ts",
-  "src/timestampFormat.test.ts",
-  "src/versionSkew.test.ts",
-  "src/components/Sidebar.pointer.test.ts",
-  "src/components/desktop/SnapShotCoordinator.test.ts",
-  "src/components/settings/CaptureShortcutConfig.test.tsx",
-  "src/components/settings/SnapShotSettings.test.tsx",
-  "src/components/settings/useSnapShotShortcutRecorder.test.tsx",
-  "src/lib/snapShotSetupResume.test.ts",
-  "src/questionAttachments.test.ts",
-
-  // Upstream tests that mock shared modules or use fake timers.
-  "src/components/ThreadStatusIndicators.subscriptions.test.tsx",
-  "src/components/chat/QueuedRunsControl.test.tsx",
-  "src/components/chat/ThreadDetailsPanel.test.tsx",
-  "src/components/chat/ThreadDetailsPrRow.test.tsx",
-  "src/components/chat/ThreadDetailsPrRows.test.tsx",
-  "src/components/chat/ThreadRelationshipsControl.agents.test.tsx",
-  "src/components/settings/AcpRegistryIcon.test.ts",
-  "src/components/settings/AcpRegistrySearchStep.test.tsx",
-  "src/components/settings/AcpSessionManagementSection.test.tsx",
-  "src/components/settings/SettingsPanels.restore.test.tsx",
-  "src/hooks/useLiveRefresh.test.ts",
-  "src/hooks/usePullRequestChecksRefresh.test.ts",
-  "src/lib/discardComposerDraft.test.ts",
-  "src/state/queries.threadSearch.test.tsx",
-  "src/state/waitForAtomValue.test.ts",
-  "src/assets/assetUrls.test.ts",
-  "src/cloud/useCloudLinkController.test.tsx",
-  "src/components/ChatMarkdown.assets.test.tsx",
-  "src/components/ChatMarkdown.permissions.test.tsx",
-  "src/components/GitActionsControl.test.ts",
-  "src/components/KeybindingsConfigWarning.test.tsx",
-  "src/components/PermissionUpdateNotice.test.tsx",
-  "src/components/PullRequestThreadDialog.test.ts",
-  "src/components/ReopenClosedViewShortcut.test.tsx",
-  "src/components/RightPanelTabs.keyboard.test.tsx",
-  "src/components/ThreadTerminalDrawer.permissions.test.tsx",
-  "src/components/chat/ComposerPendingUserInputPanel.permissions.test.tsx",
-  "src/components/chat/OpenInPicker.test.tsx",
-  "src/components/chat/ThreadAutomationsPanel.permissions.test.tsx",
-  "src/components/files/projectFilesQueryState.test.ts",
-  "src/components/media/MediaActions.test.tsx",
-  "src/components/onboarding/WelcomeWizard.import.test.tsx",
-  "src/components/onboarding/WelcomeWizard.terminal.test.tsx",
-  "src/components/projectScriptEditor.permissions.test.tsx",
-  "src/components/pullRequest/PullRequestMarkdownEditor.test.tsx",
-  "src/components/search/ProjectContentSearchDialog.test.tsx",
-  "src/components/settings/KeybindingsSettings.environment.test.tsx",
-  "src/components/settings/ProjectSettingsPanel.test.tsx",
-  "src/editorPreferences.test.ts",
-  "src/hooks/useSettings.sync.test.tsx",
-  "src/hooks/useThreadActionMenu.test.ts",
-  "src/hooks/useThreadActions.permissions.test.ts",
-  "src/state/queries.filesystem.test.ts",
-  "src/state/sourceControlActions.test.ts",
-  "src/state/terminalSessionAvailability.test.ts",
-  "src/state/use-orchestration-command.test.ts",
-  "src/browser/previewRuntime.test.ts",
-  "src/components/chat/ThreadFindProvider.test.tsx",
-  "src/components/chat/useThreadFind.test.tsx",
-];
-
 const unitTestProject = {
   extends: true,
   test: {
     ...sharedTestDefaults,
     name: "unit",
     include: ["src/**/*.test.{ts,tsx}"],
-    exclude: ISOLATED_TEST_FILES,
-    isolate: false,
+    exclude: ["src/**/*.browser.test.{ts,tsx}"],
+    hookTimeout: 15_000,
+    testTimeout: 15_000,
     setupFiles: ["../../packages/shared/src/testing/longTempDir.ts"],
   },
 } satisfies TestProjectInlineConfiguration;
 
-const isolatedUnitTestProject = {
+// Anything that renders React or touches the DOM is named *.browser.test.{ts,tsx} and runs
+// in headless Chromium through the same plugins as the app, so it exercises compiled code.
+// Vitest's fixed browser API port (63315) collides when two checkouts run
+// browser tests at once, and `server.strictPort` above is inherited, so the
+// second run fails instead of moving on. Hash the checkout path like
+// scripts/dev-runner.ts does, into 61000-64999 (above Linux's ephemeral range).
+const browserTestApiPort = 61_000 + ((Hash.string(import.meta.dirname) >>> 0) % 4_000);
+
+const browserTestProject = {
   extends: true,
+  // Pre-bundled so the first test importing userEvent does not trigger a mid-run reload.
+  optimizeDeps: { include: ["vite-plus/test/browser"] },
   test: {
     ...sharedTestDefaults,
-    name: "unit-isolated",
-    include: ISOLATED_TEST_FILES,
-    setupFiles: ["../../packages/shared/src/testing/longTempDir.ts"],
+    name: "browser",
+    include: ["src/**/*.browser.test.{ts,tsx}"],
+    hookTimeout: 15_000,
+    testTimeout: 15_000,
+    api: { port: browserTestApiPort, strictPort: false },
+    browser: {
+      enabled: true,
+      headless: true,
+      provider: playwright(),
+      instances: [{ browser: "chromium" }],
+      screenshotFailures: false,
+    },
   },
 } satisfies TestProjectInlineConfiguration;
 
@@ -447,7 +282,7 @@ export default defineConfig(() => {
       sourcemap: buildSourcemap,
     },
     test: {
-      projects: [defineProject(unitTestProject), defineProject(isolatedUnitTestProject)],
+      projects: [defineProject(unitTestProject), defineProject(browserTestProject)],
     },
   };
 });

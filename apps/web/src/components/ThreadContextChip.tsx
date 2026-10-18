@@ -1,7 +1,6 @@
 import type { ThreadContextRecord } from "@t3tools/contracts";
 import { Link } from "@tanstack/react-router";
 import { MessagesSquareIcon } from "lucide-react";
-import { useMemo } from "react";
 
 import { useThreadShell } from "~/state/entities";
 import { ContextChip, ContextChipLabel } from "./ContextChip";
@@ -16,8 +15,7 @@ export function ThreadContextChip(props: {
   const shell = useThreadShell({ environmentId, threadId });
   const title = shell?.title?.trim() || props.record.title;
   // Fork: in split view the thread opens in the pane the chip sits in.
-  const targetRef = useMemo(() => ({ environmentId, threadId }), [environmentId, threadId]);
-  const onClick = useThreadLinkClick(targetRef);
+  const onClick = useThreadLinkClick({ environmentId, threadId });
   return (
     <Tooltip>
       <TooltipTrigger

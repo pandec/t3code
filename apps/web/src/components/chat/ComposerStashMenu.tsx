@@ -2,7 +2,7 @@ import { BookmarkIcon, FileIcon, FileTextIcon } from "lucide-react";
 import { memo, useEffect, useRef, useState } from "react";
 import { assistantCitationsToPlainText } from "@t3tools/shared/assistantCitations";
 
-import { formatRelativeTimeLabel } from "../../timestampFormat";
+import { RelativeTime } from "../RelativeTime";
 import { cn } from "~/lib/utils";
 import { type PromptStashEntry } from "../../promptStashStore";
 import { useThreadPaneId } from "../thread-split/threadPaneContext";
@@ -46,6 +46,11 @@ export const ComposerStashMenu = memo(function ComposerStashMenu(props: {
   const drawerRef = useRef<HTMLDivElement>(null);
   const [highlightedId, setHighlightedId] = useState<string | null>(entries[0]?.id ?? null);
 
+  // Adjusted during render so deleting the highlighted entry moves the
+  // highlight without painting a stale one first.
+  if (entries.length > 0 && !entries.some((entry) => entry.id === highlightedId)) {
+    setHighlightedId(entries[0]?.id ?? null);
+  }
   const highlightedEntry = entries.find((entry) => entry.id === highlightedId) ?? entries[0];
 
   useEffect(() => {
@@ -63,13 +68,6 @@ export const ComposerStashMenu = memo(function ComposerStashMenu(props: {
     document.addEventListener("pointerdown", closeOnOutsidePointer, true);
     return () => document.removeEventListener("pointerdown", closeOnOutsidePointer, true);
   }, [onClose]);
-
-  useEffect(() => {
-    if (entries.length === 0) return;
-    if (!entries.some((entry) => entry.id === highlightedId)) {
-      setHighlightedId(entries[0]?.id ?? null);
-    }
-  }, [entries, highlightedId]);
 
   useEffect(() => {
     const handler = (event: KeyboardEvent) => {
@@ -218,7 +216,7 @@ export const ComposerStashMenu = memo(function ComposerStashMenu(props: {
                     dateTime={entry.createdAt}
                     className="shrink-0 text-muted-foreground tabular-nums max-sm:hidden"
                   >
-                    {formatRelativeTimeLabel(entry.createdAt)}
+                    <RelativeTime timestamp={entry.createdAt} />
                   </time>
                   <ComposerBanner.Dismiss
                     className="z-10"

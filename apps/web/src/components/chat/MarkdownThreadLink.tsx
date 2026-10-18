@@ -3,7 +3,6 @@ import type { EnvironmentId, ThreadId } from "@t3tools/contracts";
 import { formatThreadLink, percentDecodedThreadLinkId } from "@t3tools/shared/threadLinks";
 import { Link } from "@tanstack/react-router";
 import { MessageSquareTextIcon } from "lucide-react";
-import { useMemo } from "react";
 
 import { useProject, useThreadShell } from "../../state/entities";
 import { ProjectFavicon } from "../ProjectFavicon";
@@ -26,11 +25,7 @@ export function MarkdownThreadLink(props: {
   );
   const title = thread?.title.trim() || props.label;
   // Fork: in split view the thread opens in the pane the link sits in.
-  const targetRef = useMemo(
-    () => scopeThreadRef(props.environmentId, threadId),
-    [props.environmentId, threadId],
-  );
-  const onClick = useThreadLinkClick(targetRef);
+  const onClick = useThreadLinkClick(scopeThreadRef(props.environmentId, threadId));
   return (
     <Link
       to="/$environmentId/$threadId"

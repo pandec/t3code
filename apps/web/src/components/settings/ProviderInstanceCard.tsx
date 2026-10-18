@@ -40,6 +40,7 @@ import {
 } from "@t3tools/shared/model";
 import { cn } from "../../lib/utils";
 import { useCopyToClipboard } from "../../hooks/useCopyToClipboard";
+import { useStableCallback } from "../../hooks/useStableCallback";
 import { normalizeProviderAccentColor } from "../../providerInstances";
 import { Badge } from "../ui/badge";
 import { Button } from "../ui/button";
@@ -772,6 +773,7 @@ interface ProviderInstanceCardProps {
 }
 
 const EMPTY_ACP_PROJECTS: NonNullable<ProviderInstanceCardProps["acpProjects"]> = [];
+const NO_CUSTOM_MODELS: ReadonlyArray<CustomModelDefinition> = [];
 
 /**
  * Unknown drivers (`driverOption === undefined`) get a read-only
@@ -1030,6 +1032,155 @@ export function ProviderInstanceCard({
     </Popover>
   ) : null;
 
+  // Render reads the echoed `instance`; only mutators read the pending
+  // envelope. Keyed on the stored list, not the whole instance, so writing
+  // another field leaves the models list (often ~50 rows) with the same props.
+  const storedCustomModels =
+    instance.config !== null && typeof instance.config === "object"
+      ? (instance.config as Record<string, unknown>).customModels
+      : undefined;
+  const customModels =
+    instance.driver === "antigravity"
+      ? NO_CUSTOM_MODELS
+      : readCustomModelEntries(storedCustomModels);
+  const customModelIcons =
+    instance.driver === "antigravity"
+      ? EMPTY_STRING_RECORD
+      : readConfigStringRecord(instance.config, "customModelIcons");
+  // Server-returned models may lag behind settings writes. Treat server
+  // models as the source for built-ins only; custom rows come directly
+  // from the current instance config so add/remove reflects immediately.
+  const modelsForDisplay = deriveProviderModelsForDisplay({
+    liveModels: liveProvider?.models,
+    customModels,
+  });
+
+  const updateDisplayName = (value: string) => {
+    const trimmed = value.trim();
+    const { displayName: _omit, ...rest } = baseInstance();
+    commitInstance(
+      trimmed.length > 0
+        ? ({ ...rest, displayName: trimmed } as ProviderInstanceConfig)
+        : (rest as ProviderInstanceConfig),
+    );
+  };
+
+  const updateAccentColor = (value: string) => {
+    const normalized = normalizeProviderAccentColor(value);
+    const { accentColor: _omit, ...rest } = baseInstance();
+    commitInstance(
+      normalized
+        ? ({ ...rest, accentColor: normalized } as ProviderInstanceConfig)
+        : (rest as ProviderInstanceConfig),
+    );
+  };
+
+  const commitConfig = (nextConfig: Record<string, unknown> | undefined) => {
+    const { config: _omit, ...rest } = baseInstance();
+    commitInstance(
+      nextConfig !== undefined
+        ? ({ ...rest, config: nextConfig } as ProviderInstanceConfig)
+        : (rest as ProviderInstanceConfig),
+    );
+  };
+
+  // Keys owned by the models section below, not by ProviderSettingsForm.
+  const MODEL_SECTION_CONFIG_KEYS = ["customModels", "customModelIcons"] as const;
+
+  const updateConfig = (formConfig: Record<string, unknown> | undefined) => {
+    // The form computes a complete replacement blob from its rendered
+    // `value` prop, which may predate an in-flight models/icons write. The
+    // form never edits the models-section keys, so re-overlay those from
+    // the latest base instead of letting the stale form snapshot clobber
+    // them (or resurrect ones the base deleted).
+    const base = baseConfig();
+    const baseObject =
+      base !== null && typeof base === "object" ? (base as Record<string, unknown>) : undefined;
+    let next = formConfig;
+    for (const key of MODEL_SECTION_CONFIG_KEYS) {
+      const baseValue = baseObject?.[key];
+      if (baseValue !== undefined) {
+        next = { ...next, [key]: baseValue };
+      } else if (next !== undefined && Object.hasOwn(next, key)) {
+        const rest = { ...next };
+        delete rest[key];
+        next = rest;
+      }
+    }
+    commitConfig(next);
+  };
+
+  const updateCustomModels = useStableCallback((next: ReadonlyArray<CustomModelDefinition>) => {
+    const base = baseConfig();
+    // `onChange` describes one edit relative to this render. Replay that
+    // delta onto the latest pending list so a second add/edit/remove cannot
+    // overwrite an earlier write that the server has not echoed yet.
+    const nextSlugs = new Set(next.map((entry) => entry.slug));
+    const removedSlugs = new Set(
+      customModels.filter((entry) => !nextSlugs.has(entry.slug)).map((entry) => entry.slug),
+    );
+    let merged = readConfigCustomModels(base).filter((entry) => !removedSlugs.has(entry.slug));
+    for (const nextEntry of next) {
+      const renderedEntry = customModels.find((entry) => entry.slug === nextEntry.slug);
+      const currentIndex = merged.findIndex((entry) => entry.slug === nextEntry.slug);
+      if (renderedEntry === undefined) {
+        if (currentIndex === -1) merged = [...merged, nextEntry];
+      } else if (!configsEqual(renderedEntry, nextEntry) && currentIndex !== -1) {
+        // The rendered row is the echoed definition, which can predate a
+        // pending edit of the same model; carry over only the fields this
+        // edit changed so an unechoed rename or option change survives.
+        const pending = merged[currentIndex]!;
+        const edited: CustomModelDefinition = {
+          slug: nextEntry.slug,
+          name: renderedEntry.name === nextEntry.name ? pending.name : nextEntry.name,
+          capabilities: configsEqual(renderedEntry.capabilities, nextEntry.capabilities)
+            ? pending.capabilities
+            : nextEntry.capabilities,
+        };
+        merged = merged.map((entry, index) => (index === currentIndex ? edited : entry));
+      }
+    }
+    const nextConfig = nextConfigBlobWithValue(
+      base,
+      "customModels",
+      merged.map(toCustomModelSetting),
+    );
+    // Model removal and icon pruning belong to one config write so a stale
+    // icon map cannot resurrect an override for a deleted slug.
+    const remainingSlugs = new Set(merged.map((entry) => entry.slug));
+    const keptIcons = Object.fromEntries(
+      Object.entries(readConfigStringRecord(base, "customModelIcons")).filter(([slug]) =>
+        remainingSlugs.has(slug),
+      ),
+    );
+    if (Object.keys(keptIcons).length > 0) {
+      nextConfig.customModelIcons = keptIcons;
+    } else {
+      delete nextConfig.customModelIcons;
+    }
+    commitConfig(nextConfig);
+  });
+
+  const updateCustomModelIcon = (slug: string, icon: string | null) => {
+    const base = baseConfig();
+    // Null prototype so a slug like "__proto__" becomes an own data
+    // property instead of silently vanishing into the inherited setter.
+    const icons: Record<string, string> = Object.assign(
+      Object.create(null),
+      readConfigStringRecord(base, "customModelIcons"),
+    );
+    if (icon === null) {
+      delete icons[slug];
+    } else {
+      icons[slug] = icon;
+    }
+    const nextConfig = nextConfigBlobWithValue(base, "customModelIcons", icons);
+    if (Object.keys(icons).length === 0) {
+      delete nextConfig.customModelIcons;
+    }
+    commitConfig(nextConfig);
+  };
+
   if (mode === "list") {
     const listTitleIconNode = (
       <ProviderInstanceIcon
@@ -1138,134 +1289,6 @@ export function ProviderInstanceCard({
       </div>
     );
   }
-
-  const customModels =
-    instance.driver === "antigravity" ? [] : readConfigCustomModels(baseConfig());
-  const customModelIcons =
-    instance.driver === "antigravity"
-      ? EMPTY_STRING_RECORD
-      : readConfigStringRecord(baseConfig(), "customModelIcons");
-  // Server-returned models may lag behind settings writes. Treat server
-  // models as the source for built-ins only; custom rows come directly
-  // from the current instance config so add/remove reflects immediately.
-  const modelsForDisplay = deriveProviderModelsForDisplay({
-    liveModels: liveProvider?.models,
-    customModels,
-  });
-
-  const updateDisplayName = (value: string) => {
-    const trimmed = value.trim();
-    const { displayName: _omit, ...rest } = baseInstance();
-    commitInstance(
-      trimmed.length > 0
-        ? ({ ...rest, displayName: trimmed } as ProviderInstanceConfig)
-        : (rest as ProviderInstanceConfig),
-    );
-  };
-
-  const updateAccentColor = (value: string) => {
-    const normalized = normalizeProviderAccentColor(value);
-    const { accentColor: _omit, ...rest } = baseInstance();
-    commitInstance(
-      normalized
-        ? ({ ...rest, accentColor: normalized } as ProviderInstanceConfig)
-        : (rest as ProviderInstanceConfig),
-    );
-  };
-
-  const commitConfig = (nextConfig: Record<string, unknown> | undefined) => {
-    const { config: _omit, ...rest } = baseInstance();
-    commitInstance(
-      nextConfig !== undefined
-        ? ({ ...rest, config: nextConfig } as ProviderInstanceConfig)
-        : (rest as ProviderInstanceConfig),
-    );
-  };
-
-  // Keys owned by the models section below, not by ProviderSettingsForm.
-  const MODEL_SECTION_CONFIG_KEYS = ["customModels", "customModelIcons"] as const;
-
-  const updateConfig = (formConfig: Record<string, unknown> | undefined) => {
-    // The form computes a complete replacement blob from its rendered
-    // `value` prop, which may predate an in-flight models/icons write. The
-    // form never edits the models-section keys, so re-overlay those from
-    // the latest base instead of letting the stale form snapshot clobber
-    // them (or resurrect ones the base deleted).
-    const base = baseConfig();
-    const baseObject =
-      base !== null && typeof base === "object" ? (base as Record<string, unknown>) : undefined;
-    let next = formConfig;
-    for (const key of MODEL_SECTION_CONFIG_KEYS) {
-      const baseValue = baseObject?.[key];
-      if (baseValue !== undefined) {
-        next = { ...next, [key]: baseValue };
-      } else if (next !== undefined && Object.hasOwn(next, key)) {
-        const { [key]: _drop, ...rest } = next;
-        next = rest;
-      }
-    }
-    commitConfig(next);
-  };
-
-  const updateCustomModels = (next: ReadonlyArray<CustomModelDefinition>) => {
-    const base = baseConfig();
-    // `onChange` describes one edit relative to this render. Replay that
-    // delta onto the latest pending list so a second add/edit/remove cannot
-    // overwrite an earlier write that the server has not echoed yet.
-    const nextSlugs = new Set(next.map((entry) => entry.slug));
-    const removedSlugs = new Set(
-      customModels.filter((entry) => !nextSlugs.has(entry.slug)).map((entry) => entry.slug),
-    );
-    let merged = readConfigCustomModels(base).filter((entry) => !removedSlugs.has(entry.slug));
-    for (const nextEntry of next) {
-      const renderedEntry = customModels.find((entry) => entry.slug === nextEntry.slug);
-      const currentIndex = merged.findIndex((entry) => entry.slug === nextEntry.slug);
-      if (renderedEntry === undefined) {
-        if (currentIndex === -1) merged = [...merged, nextEntry];
-      } else if (!configsEqual(renderedEntry, nextEntry) && currentIndex !== -1) {
-        merged = merged.map((entry, index) => (index === currentIndex ? nextEntry : entry));
-      }
-    }
-    const nextConfig = nextConfigBlobWithValue(
-      base,
-      "customModels",
-      merged.map(toCustomModelSetting),
-    );
-    // Model removal and icon pruning belong to one config write so a stale
-    // icon map cannot resurrect an override for a deleted slug.
-    const remainingSlugs = new Set(merged.map((entry) => entry.slug));
-    const keptIcons = Object.fromEntries(
-      Object.entries(readConfigStringRecord(base, "customModelIcons")).filter(([slug]) =>
-        remainingSlugs.has(slug),
-      ),
-    );
-    if (Object.keys(keptIcons).length > 0) {
-      nextConfig.customModelIcons = keptIcons;
-    } else {
-      delete nextConfig.customModelIcons;
-    }
-    commitConfig(nextConfig);
-  };
-
-  const updateCustomModelIcon = (slug: string, icon: string | null) => {
-    const base = baseConfig();
-    // Null prototype so a slug like "__proto__" becomes an own data
-    // property instead of silently vanishing into the inherited setter.
-    const icons: Record<string, string> = Object.assign(
-      Object.create(null),
-      readConfigStringRecord(base, "customModelIcons"),
-    );
-    if (icon === null) {
-      delete icons[slug];
-    } else {
-      icons[slug] = icon;
-    }
-    const nextConfig = nextConfigBlobWithValue(base, "customModelIcons", icons);
-    if (Object.keys(icons).length === 0) {
-      delete nextConfig.customModelIcons;
-    }
-    commitConfig(nextConfig);
-  };
 
   const updateEnvironment = (environment: ReadonlyArray<ProviderInstanceEnvironmentVariable>) => {
     const cleaned = environment.filter((variable) => variable.name.trim().length > 0);

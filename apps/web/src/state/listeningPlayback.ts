@@ -8,7 +8,7 @@ import {
   type ListeningTrackRef,
   type ThreadListeningState,
 } from "@t3tools/shared/listeningPlayback";
-import { useCallback, useSyncExternalStore } from "react";
+import { useSyncExternalStore } from "react";
 
 export const listeningPlayback = createListeningPlaybackCoordinator();
 const recordingOwners = new Set<symbol>();
@@ -356,9 +356,6 @@ export function useThreadListeningState(
   environmentId: string,
   threadId: string,
 ): ThreadListeningState {
-  const read = useCallback(
-    () => threadListeningState(listeningPlayback.getSnapshot(), environmentId, threadId),
-    [environmentId, threadId],
-  );
+  const read = () => threadListeningState(listeningPlayback.getSnapshot(), environmentId, threadId);
   return useSyncExternalStore(listeningPlayback.subscribe, read, read);
 }

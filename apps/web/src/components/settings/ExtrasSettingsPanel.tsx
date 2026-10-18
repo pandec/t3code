@@ -1,4 +1,4 @@
-import { useCallback, useMemo, useRef, type CSSProperties } from "react";
+import { useRef, type CSSProperties } from "react";
 import {
   clampArchivedSectionVisibleCount,
   clampAccentTintIntensityPercent,
@@ -176,10 +176,7 @@ function useSettingsWritableEnvironments<T extends { readonly environmentId: Env
   environments: ReadonlyArray<T>,
 ): ReadonlyArray<T> {
   const writableIds = useEnvironmentsWithScope(environments, AuthSettingsWriteScope);
-  return useMemo(
-    () => environments.filter((environment) => writableIds.has(environment.environmentId)),
-    [environments, writableIds],
-  );
+  return environments.filter((environment) => writableIds.has(environment.environmentId));
 }
 
 function ProviderUsageExtrasSection() {
@@ -196,63 +193,55 @@ function ProviderUsageExtrasSection() {
   // The balance is account-wide and the meter reads it from whichever
   // environment the active thread runs on, so a save applies the key to
   // every environment this client may configure rather than making the user pick one.
-  const runOpenRouterApiKeyApply = useCallback(
-    async (apiKey: string) => {
-      if (writableEnvironments.length === 0) {
-        toastManager.add({
-          type: "warning",
-          title: "No writable environments connected",
-          description:
-            "Connect an environment that allows settings changes before saving the OpenRouter management key.",
-        });
-        return;
-      }
-      const results = await Promise.all(
-        writableEnvironments.map(async (environment) => ({
-          label: environment.label,
-          result: await configureOpenRouterCredits({
-            environmentId: environment.environmentId,
-            input: { apiKey },
-          }),
-        })),
-      );
-      // Interrupted counts as failed: the write did not verifiably land on
-      // that environment, and a success toast would claim it did.
-      const failed = results
-        .filter(({ result }) => result._tag === "Failure")
-        .map(({ label }) => label);
-      const removed = apiKey.trim().length === 0;
-      if (failed.length === 0) {
-        toastManager.add({
-          type: "success",
-          title: removed ? "OpenRouter API key removed" : "OpenRouter API key saved",
-        });
-        return;
-      }
+  const runOpenRouterApiKeyApply = async (apiKey: string) => {
+    if (writableEnvironments.length === 0) {
       toastManager.add({
         type: "warning",
-        title: removed
-          ? "Could not remove the key everywhere"
-          : "Could not save the key everywhere",
-        description: `Failed for: ${failed.join(", ")}.`,
+        title: "No writable environments connected",
+        description:
+          "Connect an environment that allows settings changes before saving the OpenRouter management key.",
       });
-    },
-    [configureOpenRouterCredits, writableEnvironments],
-  );
+      return;
+    }
+    const results = await Promise.all(
+      writableEnvironments.map(async (environment) => ({
+        label: environment.label,
+        result: await configureOpenRouterCredits({
+          environmentId: environment.environmentId,
+          input: { apiKey },
+        }),
+      })),
+    );
+    // Interrupted counts as failed: the write did not verifiably land on
+    // that environment, and a success toast would claim it did.
+    const failed = results
+      .filter(({ result }) => result._tag === "Failure")
+      .map(({ label }) => label);
+    const removed = apiKey.trim().length === 0;
+    if (failed.length === 0) {
+      toastManager.add({
+        type: "success",
+        title: removed ? "OpenRouter API key removed" : "OpenRouter API key saved",
+      });
+      return;
+    }
+    toastManager.add({
+      type: "warning",
+      title: removed ? "Could not remove the key everywhere" : "Could not save the key everywhere",
+      description: `Failed for: ${failed.join(", ")}.`,
+    });
+  };
 
   // Applies run strictly in click order. The configure command's
   // single-flight lanes are keyed by payload, so without this chain a reset
   // clicked during a still-running save would race it — and could lose,
   // leaving the key configured after the user removed it.
   const pendingApplyRef = useRef<Promise<void>>(Promise.resolve());
-  const applyOpenRouterApiKey = useCallback(
-    (apiKey: string) => {
-      const chained = pendingApplyRef.current.then(() => runOpenRouterApiKeyApply(apiKey));
-      pendingApplyRef.current = chained;
-      return chained;
-    },
-    [runOpenRouterApiKeyApply],
-  );
+  const applyOpenRouterApiKey = (apiKey: string) => {
+    const chained = pendingApplyRef.current.then(() => runOpenRouterApiKeyApply(apiKey));
+    pendingApplyRef.current = chained;
+    return chained;
+  };
 
   return (
     <SettingsSection {...searchableSetting("extras-provider-usage")}>
@@ -516,12 +505,8 @@ function LinearExtrasSection() {
   const serverConfigs = useServerConfigs();
   // Only servers that expose the RPCs: an older one would reject the probe and read as a failure.
   const allEnvironments = useEnvironments().environments;
-  const environments = useMemo(
-    () =>
-      allEnvironments.filter((environment) =>
-        environmentReadsLinearIssues(serverConfigs, environment.environmentId),
-      ),
-    [allEnvironments, serverConfigs],
+  const environments = allEnvironments.filter((environment) =>
+    environmentReadsLinearIssues(serverConfigs, environment.environmentId),
   );
   // Status rows cover every Linear-capable environment; the key is only written where allowed.
   const writableEnvironments = useSettingsWritableEnvironments(environments);
@@ -531,54 +516,45 @@ function LinearExtrasSection() {
   // server probes it before storing, so a rejected key never replaces a working one. The
   // command runs serially per environment, so a save and a clear in quick succession land in
   // the order they were asked for.
-  const applyLinearApiKey = useCallback(
-    async (apiKey: string) => {
-      if (writableEnvironments.length === 0) {
-        toastManager.add({
-          type: "warning",
-          title: "No writable environments connected",
-          description:
-            "Connect an environment that allows settings changes before saving the Linear API key.",
-        });
-        return;
-      }
-      const results = await Promise.all(
-        writableEnvironments.map(async (environment) => ({
-          label: environment.label,
-          result: await configureLinear({
-            environmentId: environment.environmentId,
-            input: { apiKey },
-          }),
-        })),
-      );
-      const failed = results.filter(({ result }) => result._tag === "Failure");
-      const removed = apiKey.trim().length === 0;
-      if (failed.length === 0) {
-        toastManager.add({
-          type: "success",
-          title: removed ? "Linear API key removed" : "Linear API key saved",
-        });
-        return;
-      }
-      const firstFailure = failed[0]!.result;
+  const applyLinearApiKey = async (apiKey: string) => {
+    if (writableEnvironments.length === 0) {
       toastManager.add({
         type: "warning",
-        title: removed
-          ? "Could not remove the key everywhere"
-          : "Could not save the key everywhere",
-        description: `Failed for: ${failed.map(({ label }) => label).join(", ")}.${
-          firstFailure._tag === "Failure"
-            ? ` ${formatEnvironmentQueryError(firstFailure.cause)}`
-            : ""
-        }`,
+        title: "No writable environments connected",
+        description:
+          "Connect an environment that allows settings changes before saving the Linear API key.",
       });
-    },
-    [configureLinear, writableEnvironments],
-  );
-  const setTeamKeys = useCallback(
-    (teamKeys: ReadonlyArray<string>) => updateSettings({ linearTeamKeys: teamKeys }),
-    [updateSettings],
-  );
+      return;
+    }
+    const results = await Promise.all(
+      writableEnvironments.map(async (environment) => ({
+        label: environment.label,
+        result: await configureLinear({
+          environmentId: environment.environmentId,
+          input: { apiKey },
+        }),
+      })),
+    );
+    const failed = results.filter(({ result }) => result._tag === "Failure");
+    const removed = apiKey.trim().length === 0;
+    if (failed.length === 0) {
+      toastManager.add({
+        type: "success",
+        title: removed ? "Linear API key removed" : "Linear API key saved",
+      });
+      return;
+    }
+    const firstFailure = failed[0]!.result;
+    toastManager.add({
+      type: "warning",
+      title: removed ? "Could not remove the key everywhere" : "Could not save the key everywhere",
+      description: `Failed for: ${failed.map(({ label }) => label).join(", ")}.${
+        firstFailure._tag === "Failure" ? ` ${formatEnvironmentQueryError(firstFailure.cause)}` : ""
+      }`,
+    });
+  };
+  const setTeamKeys = (teamKeys: ReadonlyArray<string>) =>
+    updateSettings({ linearTeamKeys: teamKeys });
 
   return (
     <SettingsSection {...searchableSetting("extras-linear")}>

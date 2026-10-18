@@ -26,9 +26,7 @@ import { HeadphonesIcon, MinusIcon, PauseIcon, PlayIcon, PlusIcon } from "lucide
 import {
   type CSSProperties,
   type KeyboardEvent,
-  useCallback,
   useEffect,
-  useMemo,
   useRef,
   useState,
   useSyncExternalStore,
@@ -95,15 +93,9 @@ export function useAssistantMessageSpeech(input: {
       ? messageSpeechThread({ environmentId, input: { threadId } })
       : null,
   ).data;
-  const readSession = useCallback(
-    () => getMessageArtifactSessionSnapshot(environmentId, messageId, text),
-    [environmentId, messageId, text],
-  );
+  const readSession = () => getMessageArtifactSessionSnapshot(environmentId, messageId, text);
   const session = useSyncExternalStore(
-    useCallback(
-      (listener) => subscribeMessageArtifactSession(environmentId, messageId, listener),
-      [environmentId, messageId],
-    ),
+    (listener) => subscribeMessageArtifactSession(environmentId, messageId, listener),
     readSession,
     readSession,
   );
@@ -119,7 +111,7 @@ export function useAssistantMessageSpeech(input: {
   const [expandedState, setExpandedState] = useState<boolean | null>(null);
   const preparing = requesting || serverPending;
 
-  const request = useCallback(() => {
+  const request = () => {
     if (requesting) return;
     setRequesting(true);
     const endRequest = beginMessageArtifactRequest(environmentId, messageId);
@@ -144,15 +136,15 @@ export function useAssistantMessageSpeech(input: {
         setRequesting(false);
         endRequest();
       });
-  }, [environmentId, messageId, requesting, synthesize, text]);
+  };
 
-  const toggle = useCallback(() => {
+  const toggle = () => {
     if (speech !== null) {
       setExpandedState(!(expandedState ?? true));
       return;
     }
     if (!preparing && canCreate) request();
-  }, [canCreate, expandedState, preparing, request, speech]);
+  };
 
   return {
     visible: (speech !== null || canCreate) && !input.streaming && text.trim().length > 0,
@@ -239,13 +231,15 @@ export function AssistantSpeechPlayer({
   const isVoiceReply = speech.origin === "agent";
   const noun = isVoiceReply ? "voice reply" : "listening version";
   const showTranscript = speech.transcript.trim() !== messageText.trim();
-  const trackRef = useMemo<ListeningTrackRef>(
-    () => ({ environmentId, threadId: threadId ?? "", messageId, speechId: speech.speechId }),
-    [environmentId, threadId, messageId, speech.speechId],
-  );
+  const trackRef: ListeningTrackRef = {
+    environmentId,
+    threadId: threadId ?? "",
+    messageId,
+    speechId: speech.speechId,
+  };
 
   const speechId = speech.speechId;
-  const handleTogglePlayback = useCallback(() => {
+  const handleTogglePlayback = () => {
     if (isPlaying) {
       listeningPlayback.pauseActive();
       return;
@@ -260,7 +254,7 @@ export function AssistantSpeechPlayer({
       watchUrl: (onResolved) =>
         watchAssetUrl(environmentId, { _tag: "attachment", attachmentId: speechId }, onResolved),
     });
-  }, [audioUrl, environmentId, getThreadTitle, isPlaying, playbackUnavailable, speechId, trackRef]);
+  };
 
   return (
     <div className="mt-2 rounded-xl border border-border/70 bg-secondary/35 p-3">
@@ -381,54 +375,51 @@ function ListeningTransportProgress({ blocked }: { blocked: boolean }) {
   // pending value without side effects inside a state updater.
   const [scrubTime, setScrubTimeState] = useState<number | null>(null);
   const scrubTimeRef = useRef<number | null>(null);
-  const setScrubTime = useCallback((value: number | null) => {
+  const setScrubTime = (value: number | null) => {
     scrubTimeRef.current = value;
     setScrubTimeState(value);
-  }, []);
+  };
   const playedTime = Math.min(currentTime, duration > 0 ? duration : currentTime);
   const shownTime = scrubTime ?? playedTime;
   const ratio = duration > 0 ? Math.min(1, shownTime / duration) : 0;
 
-  const commitScrub = useCallback(() => {
+  const commitScrub = () => {
     const pending = scrubTimeRef.current;
     setScrubTime(null);
     if (pending !== null) seekListeningTrack(pending);
-  }, [setScrubTime]);
-  const handleSeekKeyDown = useCallback(
-    (event: KeyboardEvent<HTMLInputElement>) => {
-      // Native arrow steps are useless for audio: arrows jump 5s and
-      // PageUp/PageDown 15s, applied immediately.
-      const jump =
-        event.key === "ArrowRight" || event.key === "ArrowUp"
-          ? LISTENING_SEEK_JUMP_S
-          : event.key === "ArrowLeft" || event.key === "ArrowDown"
-            ? -LISTENING_SEEK_JUMP_S
-            : event.key === "PageUp"
-              ? LISTENING_SEEK_PAGE_JUMP_S
-              : event.key === "PageDown"
-                ? -LISTENING_SEEK_PAGE_JUMP_S
-                : null;
-      if (jump !== null) {
-        event.preventDefault();
-        const upperBound = duration > 0 ? duration : playedTime;
-        seekListeningTrack(Math.min(Math.max(0, playedTime + jump), upperBound));
-        setScrubTime(null);
-        return;
-      }
-      if (event.key === "Home") {
-        event.preventDefault();
-        seekListeningTrack(0);
-        setScrubTime(null);
-        return;
-      }
-      if (event.key === "End" && duration > 0) {
-        event.preventDefault();
-        seekListeningTrack(duration);
-        setScrubTime(null);
-      }
-    },
-    [duration, playedTime, setScrubTime],
-  );
+  };
+  const handleSeekKeyDown = (event: KeyboardEvent<HTMLInputElement>) => {
+    // Native arrow steps are useless for audio: arrows jump 5s and
+    // PageUp/PageDown 15s, applied immediately.
+    const jump =
+      event.key === "ArrowRight" || event.key === "ArrowUp"
+        ? LISTENING_SEEK_JUMP_S
+        : event.key === "ArrowLeft" || event.key === "ArrowDown"
+          ? -LISTENING_SEEK_JUMP_S
+          : event.key === "PageUp"
+            ? LISTENING_SEEK_PAGE_JUMP_S
+            : event.key === "PageDown"
+              ? -LISTENING_SEEK_PAGE_JUMP_S
+              : null;
+    if (jump !== null) {
+      event.preventDefault();
+      const upperBound = duration > 0 ? duration : playedTime;
+      seekListeningTrack(Math.min(Math.max(0, playedTime + jump), upperBound));
+      setScrubTime(null);
+      return;
+    }
+    if (event.key === "Home") {
+      event.preventDefault();
+      seekListeningTrack(0);
+      setScrubTime(null);
+      return;
+    }
+    if (event.key === "End" && duration > 0) {
+      event.preventDefault();
+      seekListeningTrack(duration);
+      setScrubTime(null);
+    }
+  };
 
   return (
     <div className="min-w-0 flex-1">

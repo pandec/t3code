@@ -1,6 +1,5 @@
 import { useAtomValue } from "@effect/atom-react";
 import type { EnvironmentId, ProjectId, ServerSettingsPatch } from "@t3tools/contracts";
-import { useMemo } from "react";
 
 import { useEnvironmentSettings } from "../../hooks/useSettings";
 import { useProjects } from "../../state/entities";
@@ -47,10 +46,7 @@ function SpLabsSettingsRows({ environmentId }: { readonly environmentId: Environ
     label: "save SP Labs settings",
   });
   const projects = useProjects();
-  const environmentProjects = useMemo(
-    () => projects.filter((project) => project.environmentId === environmentId),
-    [environmentId, projects],
-  );
+  const environmentProjects = projects.filter((project) => project.environmentId === environmentId);
   const enabled = saved.spLabsDirectory !== "";
 
   const save = async (labs: LabsPatch) => {

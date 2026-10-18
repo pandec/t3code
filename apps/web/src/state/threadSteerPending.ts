@@ -4,7 +4,7 @@ import {
   type SteerPendingThreadSnapshot,
 } from "@t3tools/client-runtime/state/thread-steer-pending";
 import { MessageId } from "@t3tools/contracts";
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useState } from "react";
 
 // Mirror of apps/mobile/src/state/thread-steer-pending.ts. Keep in sync.
 const NO_PENDING_MESSAGE_IDS: ReadonlySet<MessageId> = new Set();
@@ -24,17 +24,12 @@ export function useSteerPendingMessageIds(
   // Keyed by content, and the Set rebuilt from the key rather than the array,
   // so projection updates that leave the unread set unchanged neither restart
   // the reveal timer nor need a ref to keep Set identity stable.
-  const unreadKey = useMemo(
-    () => (snapshot === null ? "" : unreadSteerMessageIds(snapshot).join(UNREAD_KEY_SEPARATOR)),
-    [snapshot],
-  );
-  const unread = useMemo(
-    () =>
-      unreadKey === ""
-        ? NO_PENDING_MESSAGE_IDS
-        : new Set(unreadKey.split(UNREAD_KEY_SEPARATOR).map((id) => MessageId.make(id))),
-    [unreadKey],
-  );
+  const unreadKey =
+    snapshot === null ? "" : unreadSteerMessageIds(snapshot).join(UNREAD_KEY_SEPARATOR);
+  const unread =
+    unreadKey === ""
+      ? NO_PENDING_MESSAGE_IDS
+      : new Set(unreadKey.split(UNREAD_KEY_SEPARATOR).map((id) => MessageId.make(id)));
   const [revealed, setRevealed] = useState<ReadonlySet<MessageId>>(NO_PENDING_MESSAGE_IDS);
 
   // A steer that resolves drops out of `unread` at once; one that stays is
@@ -57,16 +52,21 @@ export function useSteerPendingMessageIds(
     return () => clearTimeout(timer);
   }, [revealed, unread]);
 
-  return useMemo(() => {
-    if (unread.size === 0 || revealed.size === 0) {
-      return NO_PENDING_MESSAGE_IDS;
+  return revealedSteerMessageIds(unread, revealed);
+}
+
+function revealedSteerMessageIds(
+  unread: ReadonlySet<MessageId>,
+  revealed: ReadonlySet<MessageId>,
+): ReadonlySet<MessageId> {
+  if (unread.size === 0 || revealed.size === 0) {
+    return NO_PENDING_MESSAGE_IDS;
+  }
+  const visible = new Set<MessageId>();
+  for (const messageId of unread) {
+    if (revealed.has(messageId)) {
+      visible.add(messageId);
     }
-    const visible = new Set<MessageId>();
-    for (const messageId of unread) {
-      if (revealed.has(messageId)) {
-        visible.add(messageId);
-      }
-    }
-    return visible.size === 0 ? NO_PENDING_MESSAGE_IDS : visible;
-  }, [revealed, unread]);
+  }
+  return visible.size === 0 ? NO_PENDING_MESSAGE_IDS : visible;
 }

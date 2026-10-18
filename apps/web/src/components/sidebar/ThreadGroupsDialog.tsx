@@ -2,7 +2,7 @@ import { newThreadGroupOrderKey, planThreadGroupMove } from "./ThreadGroupsDialo
 import { threadGroupSections } from "@t3tools/shared/threadGroups";
 import { randomUUID } from "~/lib/utils";
 import { cn } from "~/lib/utils";
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import type { ThreadGroup } from "@t3tools/contracts";
 import {
   DndContext,
@@ -82,13 +82,9 @@ export function ThreadGroupsDialog(props: {
   // Outstanding save count: a drop can be saving while a rename still is.
   const [pendingSaves, setPendingSaves] = useState(0);
   const saving = pendingSaves > 0;
-  const save = async (entries: readonly GroupEdit[]) => {
+  const save = (entries: readonly GroupEdit[]) => {
     setPendingSaves((count) => count + 1);
-    try {
-      return await props.update(entries);
-    } finally {
-      setPendingSaves((count) => count - 1);
-    }
+    return props.update(entries).finally(() => setPendingSaves((count) => count - 1));
   };
   const editsDisabled = props.disabled || saving;
   // Only a read-only catalog blocks a move. A drop can land while another
@@ -97,11 +93,8 @@ export function ThreadGroupsDialog(props: {
   const planMove = (index: number, delta: number) =>
     props.disabled ? null : planThreadGroupMove(props.groups, index, delta);
   // Groups render around a fixed Active divider; arrows and drags move across it.
-  const sections = useMemo(() => threadGroupSections(props.groups), [props.groups]);
-  const rowIds = useMemo(
-    () => sections.map((group) => (group === null ? ACTIVE_DIVIDER_ID : group.id)),
-    [sections],
-  );
+  const sections = threadGroupSections(props.groups);
+  const rowIds = sections.map((group) => (group === null ? ACTIVE_DIVIDER_ID : group.id));
   // A small distance threshold keeps a plain click on the handle from
   // starting a drag.
   const sensors = useSensors(useSensor(PointerSensor, { activationConstraint: { distance: 4 } }));

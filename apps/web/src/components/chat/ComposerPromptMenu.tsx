@@ -1,6 +1,6 @@
 import type { SavedPrompt } from "@t3tools/contracts/settings";
 import { NotebookPenIcon } from "lucide-react";
-import { memo, useMemo } from "react";
+import { memo } from "react";
 
 import { CommandItem } from "../ui/command";
 import {
@@ -18,10 +18,7 @@ export const ComposerPromptMenu = memo(function ComposerPromptMenu(props: {
 }) {
   const { prompts, onPick, onClose } = props;
   const { query, setQuery } = useComposerPickerQuery();
-  const entries = useMemo(
-    () => buildSavedPromptPickerEntries({ prompts, query }),
-    [prompts, query],
-  );
+  const entries = buildSavedPromptPickerEntries({ prompts, query });
   const picker = useComposerPickerKeyboard({ entries, onPick, onClose, setQuery });
 
   return (

@@ -5,7 +5,6 @@ import { presentThreadShell } from "@t3tools/client-runtime/state/models";
 import type { EnvironmentThreadShell } from "@t3tools/client-runtime/state/shell";
 import * as Option from "effect/Option";
 import { AsyncResult, Atom } from "effect/reactivity";
-import { useMemo } from "react";
 
 import { liveArchivedShellSnapshotAtom } from "../../lib/archivedThreadsState";
 import { cn } from "~/lib/utils";
@@ -99,6 +98,23 @@ export function useLabOwnerView(
   return useLabOwnerViews(environmentId, [threadId]).get(threadId ?? "") ?? null;
 }
 
+// Keyed by the environment and owner ids joined by newlines, which neither contains, so every
+// caller asking for the same owners shares one atom.
+const labOwnerViewsAtom = Atom.family((key: string) => {
+  const [environmentId, ...ids] = key.split("\n") as [EnvironmentId, ...string[]];
+  return Atom.make((get) => {
+    const views = new Map<string, LabOwnerView>();
+    for (const id of ids) {
+      const shell =
+        get(
+          environmentThreadShells.threadShellAtom(scopeThreadRef(environmentId, id as ThreadId)),
+        ) ?? archivedOwnerShell(get, environmentId, id);
+      if (shell) views.set(id, toLabOwnerView(shell));
+    }
+    return views;
+  });
+});
+
 /**
  * Owner views for many leases at once, keyed by thread id; one subscription per owner shell. An
  * owner missing from the active shell is looked up in the archive, which is fetched only then.
@@ -107,22 +123,8 @@ export function useLabOwnerViews(
   environmentId: EnvironmentId,
   threadIds: ReadonlyArray<string | null>,
 ): ReadonlyMap<string, LabOwnerView> {
-  const key = threadIds.filter((id): id is string => id !== null).join("\n");
-  const atom = useMemo(() => {
-    const ids = key.length > 0 ? key.split("\n") : [];
-    return Atom.make((get) => {
-      const views = new Map<string, LabOwnerView>();
-      for (const id of ids) {
-        const shell =
-          get(
-            environmentThreadShells.threadShellAtom(scopeThreadRef(environmentId, id as ThreadId)),
-          ) ?? archivedOwnerShell(get, environmentId, id);
-        if (shell) views.set(id, toLabOwnerView(shell));
-      }
-      return views;
-    });
-  }, [environmentId, key]);
-  return useAtomValue(atom);
+  const ids = threadIds.filter((id): id is string => id !== null);
+  return useAtomValue(labOwnerViewsAtom([environmentId, ...ids].join("\n")));
 }
 
 /**

@@ -14,7 +14,6 @@ export interface FileTreeDragStartEvent {
 }
 
 export interface FileTreeDragMentionHost {
-  deselect(treePath: string): void;
   /** Environment the dragged paths live in; stamped on the drag payload. */
   mentionScope?: string;
   /** The path a dragged row mentions; defaults to the tree path itself. */
@@ -25,7 +24,7 @@ export interface FileTreeDragMentionController {
   isDragInProgress(): boolean;
   handleSelectionChange(selectedPaths: ReadonlyArray<string>): void;
   handleDragStart(event: FileTreeDragStartEvent): void;
-  handleDragEnd(): void;
+  handleDragEnd(deselect: (treePath: string) => void): void;
 }
 
 const itemPathOf = (node: unknown): string | null => {
@@ -80,12 +79,12 @@ export function createFileTreeDragMentionController(
         event.dataTransfer.setData(COMPOSER_MENTION_DRAG_SCOPE_TYPE, host.mentionScope);
       }
     },
-    handleDragEnd() {
+    handleDragEnd(deselect) {
       if (draggedPaths.length === 0) {
         return;
       }
       for (const path of draggedPaths) {
-        host.deselect(path);
+        deselect(path);
       }
       draggedPaths = [];
     },

@@ -22,12 +22,16 @@ import * as Option from "effect/Option";
 import * as Path from "effect/Path";
 import * as Predicate from "effect/Predicate";
 import * as Schema from "effect/Schema";
+import * as HostProcess from "@t3tools/shared/HostProcess";
 
+import * as ServerConfig from "../config.ts";
+import { withWorkspaceLease } from "../workspace/workspaceLease.ts";
 import * as GitWorkflowService from "../git/GitWorkflowService.ts";
 import * as ProjectService from "../project/ProjectService.ts";
 import * as StrictResume from "../sessionImport/StrictResume.ts";
 import * as ProviderAuthService from "../provider/ProviderAuthService.ts";
-import { withWorkspaceLease } from "../workspace/workspaceLease.ts";
+import * as ServerSettings from "../serverSettings.ts";
+import { makeIsManagedWorktreePath } from "../worktreesDirectory.ts";
 import * as EventSink from "./EventSink.ts";
 import * as ContextHandoffService from "./ContextHandoffService.ts";
 import {
@@ -92,6 +96,8 @@ export const layer: Layer.Layer<
   | IdAllocator.IdAllocatorV2
   | FileSystem.FileSystem
   | Path.Path
+  | ServerConfig.ServerConfig
+  | ServerSettings.ServerSettingsService
   | GitWorkflowService.GitWorkflowService
   | ProjectService.ProjectService
   | ProviderAuthService.ProviderAuthService
@@ -107,6 +113,8 @@ export const layer: Layer.Layer<
     const idAllocator = yield* IdAllocator.IdAllocatorV2;
     const fileSystem = yield* FileSystem.FileSystem;
     const path = yield* Path.Path;
+    const serverConfig = yield* ServerConfig.ServerConfig;
+    const serverSettings = yield* ServerSettings.ServerSettingsService;
     const gitWorkflow = yield* GitWorkflowService.GitWorkflowService;
     const projects = yield* ProjectService.ProjectService;
     const providerAuth = yield* ProviderAuthService.ProviderAuthService;
@@ -118,6 +126,7 @@ export const layer: Layer.Layer<
     const strictResume = yield* Effect.serviceOption(StrictResume.StrictResume);
     // fork: hidden notes (SP Labs); optional for the same reason.
     const hiddenNotes = yield* Effect.serviceOption(ThreadHiddenNotes.ThreadHiddenNotes);
+    const isManagedWorktreePath = yield* makeIsManagedWorktreePath;
 
     // These callbacks outlive startup while a run drains background work. Build
     // them outside start's scope so they cannot retain its full thread history.
@@ -458,7 +467,7 @@ export const layer: Layer.Layer<
         const exists = yield* fileSystem
           .exists(worktreePath)
           .pipe(Effect.orElseSucceed(() => true));
-        if (!exists) {
+        if (!exists && (yield* isManagedWorktreePath(worktreePath))) {
           const project = yield* projects.getById(projection.thread.projectId).pipe(
             Effect.map(Option.getOrUndefined),
             Effect.orElseSucceed(() => undefined),

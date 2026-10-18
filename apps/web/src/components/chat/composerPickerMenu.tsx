@@ -59,12 +59,10 @@ export function useComposerPickerKeyboard<T extends { readonly id: string }>(inp
     return () => window.cancelAnimationFrame(frame);
   }, []);
 
-  useEffect(() => {
-    if (entries.length === 0) return;
-    if (!entries.some((entry) => entry.id === highlightedId)) {
-      setHighlightedId(entries[0]?.id ?? null);
-    }
-  }, [entries, highlightedId]);
+  // Adjusted during render so a filter change never paints a stale highlight.
+  if (entries.length > 0 && !entries.some((entry) => entry.id === highlightedId)) {
+    setHighlightedId(entries[0]?.id ?? null);
+  }
 
   useEffect(() => {
     // Interacting anywhere outside the menu hands control back — the picker
@@ -148,16 +146,14 @@ export function ComposerPickerShell(props: {
   readonly emptyState: ReactNode;
   readonly children: ReactNode;
 }) {
+  const { menuRef, inputRef } = props;
   return (
     <Command autoHighlight={false} mode="none">
-      <div
-        ref={props.menuRef}
-        className="dropdown-glass relative w-full overflow-hidden rounded-3xl"
-      >
+      <div ref={menuRef} className="dropdown-glass relative w-full overflow-hidden rounded-3xl">
         <div className="flex items-center gap-2 border-b border-border/60 px-4 py-2.5">
           <SearchIcon className="size-3.5 shrink-0 text-icon-muted" aria-hidden="true" />
           <input
-            ref={props.inputRef}
+            ref={inputRef}
             value={props.query}
             onChange={(event) => props.onQueryChange(event.target.value)}
             placeholder={props.placeholder}

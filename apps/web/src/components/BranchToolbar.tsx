@@ -17,10 +17,9 @@ import {
   type MouseEvent as ReactMouseEvent,
   memo,
   useImperativeHandle,
-  useCallback,
   useEffect,
+  useEffectEvent,
   useLayoutEffect,
-  useMemo,
   useRef,
   useState,
 } from "react";
@@ -33,7 +32,7 @@ import {
 } from "../composerDraftStore";
 import { LabWorkspacePicker } from "./labs/LabWorkspacePicker";
 import { EnvironmentMachineIcon } from "./EnvironmentMachineIcon";
-import { useProject, useThreadShell, useThreadShellsForProjectRefs } from "../state/entities";
+import { useProject, useQuietThreadShell, useThreadShellsForProjectRefs } from "../state/entities";
 import {
   type EnvMode,
   type EnvironmentOption,
@@ -190,10 +189,8 @@ const RunContextSelector = memo(function RunContextSelector({
   labModeAvailable,
 }: RunContextSelectorProps) {
   const composerFloatingLayerProps = useComposerMenuProps();
-  const activeEnvironment = useMemo(
-    () => availableEnvironments?.find((env) => env.environmentId === environmentId) ?? null,
-    [availableEnvironments, environmentId],
-  );
+  const activeEnvironment =
+    availableEnvironments?.find((env) => env.environmentId === environmentId) ?? null;
   const WorkspaceIcon =
     effectiveEnvMode === "lab"
       ? FlaskConicalIcon
@@ -446,14 +443,9 @@ function useLabelsOverflow(element: HTMLDivElement | null): boolean {
   const [overflows, setOverflows] = useState(false);
   const pendingLabelRectsRef = useRef<Map<HTMLElement, DOMRect> | null>(null);
   const labelAnimationsRef = useRef(new Map<HTMLElement, Animation>());
-  // A render-synced mirror instead of useEffectEvent: the compiler memoizes
-  // the event callback, which left observers reading the first render's null
-  // element forever.
-  const stateRef = useRef({ element, overflows });
-  stateRef.current = { element, overflows };
-
-  const measure = useCallback(() => {
-    const { element: current, overflows: compact } = stateRef.current;
+  const measure = useEffectEvent(() => {
+    const current = element;
+    const compact = overflows;
     if (!current) return;
     const available = current.clientWidth;
     if (available === 0) return;
@@ -516,7 +508,7 @@ function useLabelsOverflow(element: HTMLDivElement | null): boolean {
       );
     }
     setOverflows(nextOverflows);
-  }, []);
+  });
 
   useLayoutEffect(() => {
     const previousRects = pendingLabelRectsRef.current;
@@ -557,7 +549,7 @@ function useLabelsOverflow(element: HTMLDivElement | null): boolean {
         { once: true },
       );
     }
-  }, [overflows]);
+  });
 
   useEffect(
     () => () => {
@@ -569,6 +561,7 @@ function useLabelsOverflow(element: HTMLDivElement | null): boolean {
   );
 
   useLayoutEffect(() => {
+    // oxlint-disable-next-line react/set-state-in-effect -- The label mode comes from measuring the committed DOM, which render cannot read.
     measure();
   });
 
@@ -580,7 +573,7 @@ function useLabelsOverflow(element: HTMLDivElement | null): boolean {
       stopObserving();
       document.fonts.removeEventListener("loadingdone", measure);
     };
-  }, [element, measure]);
+  }, [element]);
 
   return overflows;
 }
@@ -612,14 +605,11 @@ export const BranchToolbar = memo(function BranchToolbar({
   labModeAvailable = false,
 }: BranchToolbarProps) {
   const branchSelectorRef = useRef<BranchToolbarBranchSelectorHandle>(null);
-  const threadRef = useMemo(
-    () => scopeThreadRef(environmentId, threadId),
-    [environmentId, threadId],
-  );
+  const threadRef = scopeThreadRef(environmentId, threadId);
   const draftThread = useComposerDraftStore((store) =>
     draftId ? store.getDraftSession(draftId) : store.getDraftThreadByRef(threadRef),
   );
-  const serverThread = useThreadShell(threadRef);
+  const serverThread = useQuietThreadShell(threadRef);
   const setDraftThreadContext = useComposerDraftStore((store) => store.setDraftThreadContext);
   const activeProjectRef = serverThread
     ? scopeProjectRef(serverThread.environmentId, serverThread.projectId)
@@ -636,25 +626,19 @@ export const BranchToolbar = memo(function BranchToolbar({
 
   const canUsePreviousWorktree =
     draftThread !== null && serverThread === null && !envModeLocked && !forceNewWorktree;
-  const projectRefsForWorktreeLookup = useMemo(
-    () => (canUsePreviousWorktree && activeProjectRef ? [activeProjectRef] : []),
-    [canUsePreviousWorktree, activeProjectRef],
-  );
+  const projectRefsForWorktreeLookup =
+    canUsePreviousWorktree && activeProjectRef ? [activeProjectRef] : [];
   const projectThreads = useThreadShellsForProjectRefs(projectRefsForWorktreeLookup);
-  const previousWorktreeSeed = useMemo(
-    () =>
-      canUsePreviousWorktree
-        ? resolvePreviousWorktreeSeed({
-            threads: projectThreads,
-            currentWorktreePath: activeWorktreePath,
-          })
-        : null,
-    [activeWorktreePath, canUsePreviousWorktree, projectThreads],
-  );
+  const previousWorktreeSeed = canUsePreviousWorktree
+    ? resolvePreviousWorktreeSeed({
+        threads: projectThreads,
+        currentWorktreePath: activeWorktreePath,
+      })
+    : null;
   const previousWorktreeLabel = previousWorktreeSeed
     ? resolvePreviousWorktreeLabel(previousWorktreeSeed)
     : null;
-  const onUsePreviousWorktree = useCallback(() => {
+  const onUsePreviousWorktree = () => {
     if (!previousWorktreeSeed || !activeProjectRef) return;
     setDraftThreadContext(draftId ?? threadRef, {
       branch: previousWorktreeSeed.branch,
@@ -662,7 +646,7 @@ export const BranchToolbar = memo(function BranchToolbar({
       envMode: "worktree",
       projectRef: activeProjectRef,
     });
-  }, [activeProjectRef, draftId, previousWorktreeSeed, setDraftThreadContext, threadRef]);
+  };
 
   useImperativeHandle(
     ref,
@@ -699,10 +683,8 @@ export const BranchToolbar = memo(function BranchToolbar({
   const labIntent = draftThread?.lab ?? DEFAULT_DRAFT_LAB_INTENT;
   // The branch selector never sees Lab mode; it only renders when the lab picker does not.
   const branchSelectorEnvMode = effectiveEnvMode === "lab" ? "local" : effectiveEnvMode;
-  const onLabIntentChange = useCallback(
-    (lab: DraftLabIntent) => setDraftThreadContext(draftId ?? threadRef, { lab }),
-    [draftId, setDraftThreadContext, threadRef],
-  );
+  const onLabIntentChange = (lab: DraftLabIntent) =>
+    setDraftThreadContext(draftId ?? threadRef, { lab });
 
   if (!hasActiveThread || !activeProject) return null;
 

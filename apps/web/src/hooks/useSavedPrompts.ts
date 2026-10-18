@@ -8,7 +8,7 @@
  * environments when they reconnect. See
  * `@t3tools/client-runtime/state/saved-prompts` for the rules.
  */
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useLayoutEffect, useRef, useState } from "react";
 import { useAtomValue } from "@effect/atom-react";
 import type { EnvironmentPresentation } from "@t3tools/client-runtime/connection";
 import { AuthSettingsWriteScope, type EnvironmentId } from "@t3tools/contracts";
@@ -69,19 +69,15 @@ function collectSavedPromptEnvironmentState(
  */
 function useSavedPromptEnvironmentState(): SavedPromptEnvironmentState {
   const presentations = useAtomValue(environmentPresentations.presentationsAtom);
-  const state = useMemo(() => collectSavedPromptEnvironmentState(presentations), [presentations]);
-  const capableEnvironments = useMemo(
-    () => [...state.capableEnvironmentIds].map((environmentId) => ({ environmentId })),
-    [state],
-  );
+  const state = collectSavedPromptEnvironmentState(presentations);
+  const capableEnvironments = [...state.capableEnvironmentIds].map((environmentId) => ({
+    environmentId,
+  }));
   const writableEnvironmentIds = useEnvironmentsWithScope(
     capableEnvironments,
     AuthSettingsWriteScope,
   );
-  return useMemo(
-    () => ({ librariesByEnvironment: state.librariesByEnvironment, writableEnvironmentIds }),
-    [state, writableEnvironmentIds],
-  );
+  return { librariesByEnvironment: state.librariesByEnvironment, writableEnvironmentIds };
 }
 
 /**
@@ -106,68 +102,59 @@ export function useSavedPrompts(): SavedPrompts {
   const { librariesByEnvironment, writableEnvironmentIds } = useSavedPromptEnvironmentState();
   const updateEnvironmentSettings = useUpdateSettingsForEnvironment();
 
-  const library = useMemo(
-    () => resolveSavedPromptLibrary(librariesByEnvironment).library,
-    [librariesByEnvironment],
-  );
+  const library = resolveSavedPromptLibrary(librariesByEnvironment).library;
   // Unacknowledged local edit, rendered optimistically: the UI and the next
   // edit's baseline are always the same library, so consecutive edits
   // compose on what the user sees rather than on a hidden pending value.
   const [pendingLibrary, setPendingLibrary] = useState<SavedPromptLibrary | null>(null);
+  // Housekeeping: once the resolved state reaches the pending stamp the edit
+  // is acknowledged, and keeping the pending value would only shadow later
+  // remote edits.
+  if (pendingLibrary !== null && library.updatedAt >= pendingLibrary.updatedAt) {
+    setPendingLibrary(null);
+  }
   // Strictly newer only: a resolved library that caught up — or tied, the
   // accepted equal-stamp collision residue — wins over the pending one.
   const effectiveLibrary =
     pendingLibrary !== null && pendingLibrary.updatedAt > library.updatedAt
       ? pendingLibrary
       : library;
+  // The edit baseline for `saveAll`, which also advances it synchronously.
   const effectiveLibraryRef = useRef(effectiveLibrary);
-  effectiveLibraryRef.current = effectiveLibrary;
+  useLayoutEffect(() => {
+    effectiveLibraryRef.current = effectiveLibrary;
+  });
 
-  // Housekeeping: once the resolved state reaches the pending stamp the edit
-  // is acknowledged, and keeping the pending value would only shadow later
-  // remote edits.
-  useEffect(() => {
-    if (pendingLibrary !== null && library.updatedAt >= pendingLibrary.updatedAt) {
-      setPendingLibrary(null);
-    }
-  }, [library, pendingLibrary]);
+  const saveAll = (update: (current: ReadonlyArray<SavedPrompt>) => ReadonlyArray<SavedPrompt>) => {
+    if (writableEnvironmentIds.size === 0) return;
+    const savedPromptLibrary = stampSavedPromptLibrary(
+      effectiveLibraryRef.current,
+      update(effectiveLibraryRef.current.prompts),
+      Date.now(),
+    );
+    // Advance the ref synchronously: a second saveAll in the same tick must
+    // compose on this edit, not wait for React to re-render.
+    effectiveLibraryRef.current = savedPromptLibrary;
+    setPendingLibrary(savedPromptLibrary);
+    const writes = [...writableEnvironmentIds].map((environmentId) =>
+      updateEnvironmentSettings(environmentId, { savedPromptLibrary }),
+    );
+    void Promise.all(writes).then((results) => {
+      if (results.every((result) => result?._tag !== "Success")) {
+        // Every environment rejected the edit: drop the optimistic value so
+        // the UI returns to server truth instead of showing a write that
+        // never landed. (A later pending edit stays — it has its own fate.)
+        setPendingLibrary((current) => (current === savedPromptLibrary ? null : current));
+      }
+    });
+  };
 
-  const saveAll = useCallback(
-    (update: (current: ReadonlyArray<SavedPrompt>) => ReadonlyArray<SavedPrompt>) => {
-      if (writableEnvironmentIds.size === 0) return;
-      const savedPromptLibrary = stampSavedPromptLibrary(
-        effectiveLibraryRef.current,
-        update(effectiveLibraryRef.current.prompts),
-        Date.now(),
-      );
-      // Advance the ref synchronously: a second saveAll in the same tick must
-      // compose on this edit, not wait for React to re-render.
-      effectiveLibraryRef.current = savedPromptLibrary;
-      setPendingLibrary(savedPromptLibrary);
-      const writes = [...writableEnvironmentIds].map((environmentId) =>
-        updateEnvironmentSettings(environmentId, { savedPromptLibrary }),
-      );
-      void Promise.all(writes).then((results) => {
-        if (results.every((result) => result?._tag !== "Success")) {
-          // Every environment rejected the edit: drop the optimistic value so
-          // the UI returns to server truth instead of showing a write that
-          // never landed. (A later pending edit stays — it has its own fate.)
-          setPendingLibrary((current) => (current === savedPromptLibrary ? null : current));
-        }
-      });
-    },
-    [updateEnvironmentSettings, writableEnvironmentIds],
-  );
-
-  return useMemo(
-    () => ({
-      prompts: effectiveLibrary.prompts,
-      hasConnectedEnvironment: librariesByEnvironment.size > 0,
-      canEdit: writableEnvironmentIds.size > 0,
-      saveAll,
-    }),
-    [effectiveLibrary, librariesByEnvironment, saveAll, writableEnvironmentIds],
-  );
+  return {
+    prompts: effectiveLibrary.prompts,
+    hasConnectedEnvironment: librariesByEnvironment.size > 0,
+    canEdit: writableEnvironmentIds.size > 0,
+    saveAll,
+  };
 }
 
 /**

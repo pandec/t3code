@@ -6,6 +6,7 @@ import * as DateTime from "effect/DateTime";
 import * as Duration from "effect/Duration";
 import * as Base64 from "effect/encoding/Base64";
 import * as Effect from "effect/Effect";
+import { identity } from "effect/Function";
 import * as Fiber from "effect/Fiber";
 import * as FileSystem from "effect/FileSystem";
 import * as Layer from "effect/Layer";
@@ -216,6 +217,7 @@ import { parseBase64DataUrl } from "./imageMime.ts";
 import { deletePendingAttachment, issueAttachmentUploadUrl } from "./assets/AttachmentUpload.ts";
 import * as PortScanner from "./preview/PortScanner.ts";
 import * as WorkspaceEntries from "./workspace/WorkspaceEntries.ts";
+import * as KnownWorkspaces from "./workspace/KnownWorkspaces.ts";
 import * as WorkspaceFileSystem from "./workspace/WorkspaceFileSystem.ts";
 import { defaultScriptsRoot, readWorkflowScript } from "./orchestration-v2/workflowScriptQuery.ts";
 import { resolveClaudeConfigDirPath } from "./provider/Drivers/ClaudeHome.ts";
@@ -558,7 +560,8 @@ function filesystemBrowseFailureContext(error: WorkspaceEntries.WorkspaceEntries
 function projectFileFailureContext(
   error:
     | WorkspaceFileSystem.WorkspaceFileSystemError
-    | WorkspacePaths.WorkspacePathOutsideRootError,
+    | WorkspacePaths.WorkspacePathOutsideRootError
+    | KnownWorkspaces.UnknownWorkspaceError,
 ): {
   readonly failure: ProjectFileFailure;
   readonly resolvedPath?: string;
@@ -568,6 +571,7 @@ function projectFileFailureContext(
 } {
   switch (error._tag) {
     case "WorkspacePathOutsideRootError":
+    case "UnknownWorkspaceError":
       return { failure: "workspace_path_outside_root" };
     case "WorkspaceFileSystemOperationError":
       return {
@@ -1319,14 +1323,18 @@ type WsRpcServices =
   | WorkspacePaths.WorkspacePaths
   | WorktreeSetupTracker.WorktreeSetupTracker;
 
-const inferredLayerWsRpc = (
+// Fork: the handlers are checked in a statement of their own. Checking them in
+// the statement that also infers `toLayer`'s requirements exceeds the same
+// instantiation budget. `identity` keeps the body at upstream's indentation so
+// upstream edits to it still merge cleanly.
+const makeWsRpcHandlers = (
   currentSession: EnvironmentAuth.AuthenticatedSession,
   clientOrigin: OrchestrationClientOrigin,
   clientAnalyticsProps: Readonly<Record<string, unknown>>,
   previewAutomationBroker: PreviewAutomationBroker.PreviewAutomationBroker["Service"],
   serverBrowser: ServerBrowser.ServerBrowser["Service"],
 ) =>
-  ServerWsRpcGroup.toLayer(
+  identity(
     Effect.gen(function* () {
       const currentSessionId = currentSession.sessionId;
       const sql = yield* SqlClient.SqlClient;
@@ -3414,6 +3422,9 @@ const inferredLayerWsRpc = (
       return handlers;
     }),
   );
+
+const inferredLayerWsRpc = (...args: Parameters<typeof makeWsRpcHandlers>) =>
+  ServerWsRpcGroup.toLayer(makeWsRpcHandlers(...args));
 
 // RpcServer's default sends a socket-level Defect frame instead, and the client
 // ends every pending request on the socket with it.

@@ -14,7 +14,6 @@ import {
   type ProjectId,
 } from "@t3tools/contracts";
 import { Atom } from "effect/reactivity";
-import { useCallback, useMemo } from "react";
 
 import { connectionAtomRuntime } from "../connection/runtime";
 import { orchestrationEnvironment } from "../state/orchestration";
@@ -62,16 +61,13 @@ export function useArchivedThreadSnapshots(environmentIds: ReadonlyArray<Environ
   readonly isLoading: boolean;
   readonly refresh: () => void;
 } {
-  const environmentKey = useMemo(
-    () => makeArchivedThreadsEnvironmentKey(environmentIds),
-    [environmentIds],
-  );
+  const environmentKey = makeArchivedThreadsEnvironmentKey(environmentIds);
   const result = useAtomValue(archivedSnapshotsAtom(environmentKey));
-  const refresh = useCallback(() => {
+  const refresh = () => {
     for (const environmentId of environmentIds) {
       appAtomRegistry.refresh(archivedSnapshotAtom(environmentId));
     }
-  }, [environmentIds]);
+  };
 
   return {
     ...result,
@@ -92,9 +88,6 @@ export function useRecentArchivedThreadSnapshots(
   visibleCount: number,
   projectIdsByEnvironment?: ReadonlyMap<EnvironmentId, ReadonlyArray<ProjectId>>,
 ): RecentArchivedThreadSnapshotsState {
-  const key = useMemo(
-    () => makeRecentArchivedThreadsKey(environmentIds, visibleCount, projectIdsByEnvironment),
-    [environmentIds, projectIdsByEnvironment, visibleCount],
-  );
+  const key = makeRecentArchivedThreadsKey(environmentIds, visibleCount, projectIdsByEnvironment);
   return useAtomValue(recentArchivedThreads.snapshotsAtom(key));
 }

@@ -1,7 +1,7 @@
 import { AuthOrchestrationOperateScope, AuthPreviewOperateScope } from "@t3tools/contracts";
-import { Outlet, createFileRoute, redirect, useParams, useRouter } from "@tanstack/react-router";
+import { Outlet, createFileRoute, redirect, useRouter } from "@tanstack/react-router";
 import { useAtomValue } from "@effect/atom-react";
-import { useEffect, useMemo, useRef } from "react";
+import { useEffect, useRef } from "react";
 import type { ClientSettings } from "@t3tools/contracts";
 import {
   isAtomCommandInterrupted,
@@ -59,13 +59,10 @@ import {
 import { openThreadInActivePane } from "~/components/thread-split/threadOpenTarget";
 import { primaryServerKeybindingsAtom } from "~/state/server";
 import { hasOpenArchiveUndoBlockingLayer } from "../archiveUndo";
-import {
-  buildThreadRouteParams,
-  resolveThreadRouteTarget,
-  type ThreadRouteTarget,
-} from "../threadRoutes";
+import { buildThreadRouteParams, type ThreadRouteTarget } from "../threadRoutes";
 import { useComposerDraftStore } from "../composerDraftStore";
 import { rememberDraftThreadRef, resolveVisitTarget } from "../threadVisitTargets";
+import { useThreadRouteTarget } from "../hooks/useThreadRouteTarget";
 
 const selectSnoozeShortcutUntilDone = (settings: ClientSettings) =>
   settings.snoozeShortcutUntilDone;
@@ -90,16 +87,12 @@ function ChatRouteGlobalShortcuts() {
   const { attemptArchiveThread, snoozeThread } = useThreadActions();
   const snoozeShortcutUntilDone = useClientSettings(selectSnoozeShortcutUntilDone);
   const { scratchEnvironmentId, startScratchThread } = useScratchProject();
-  const projectGroupCount = useMemo(
-    () =>
-      buildSidebarProjectSnapshots({
-        projects,
-        settings: projectGroupingSettings,
-        primaryEnvironmentId,
-        resolveEnvironmentLabel: () => null,
-      }).length,
-    [primaryEnvironmentId, projectGroupingSettings, projects],
-  );
+  const projectGroupCount = buildSidebarProjectSnapshots({
+    projects,
+    settings: projectGroupingSettings,
+    primaryEnvironmentId,
+    resolveEnvironmentLabel: () => null,
+  }).length;
   // Split view: thread-targeted shortcuts and their `when` context follow the
   // active pane, so mod+shift+E can never archive the thread the user is not
   // looking at while the secondary pane holds focus.
@@ -127,15 +120,12 @@ function ChatRouteGlobalShortcuts() {
   );
   // Visit history: the focused pane's thread, or the routed draft. Ctrl+Tab
   // (desktop) toggles through it, and snoozing the open thread returns to it.
-  const focusedVisitTarget = useMemo<ThreadRouteTarget | null>(
-    () =>
-      shortcutThreadRef !== null
-        ? { kind: "server", threadRef: shortcutThreadRef }
-        : routeDraftId !== null
-          ? { kind: "draft", draftId: routeDraftId }
-          : null,
-    [routeDraftId, shortcutThreadRef],
-  );
+  const focusedVisitTarget: ThreadRouteTarget | null =
+    shortcutThreadRef !== null
+      ? { kind: "server", threadRef: shortcutThreadRef }
+      : routeDraftId !== null
+        ? { kind: "draft", draftId: routeDraftId }
+        : null;
   useEffect(() => {
     threadVisitHistory.record(focusedVisitTarget, resolveVisitTarget);
     if (focusedVisitTarget?.kind !== "draft") return;
@@ -429,10 +419,7 @@ function ChatRouteGlobalShortcuts() {
 function ChatRouteLayout() {
   // Both thread routes render here, not in their own leaf components, so the
   // draft-to-thread promotion keeps one ChatView mounted across the swap.
-  const threadTarget = useParams({
-    strict: false,
-    select: (params) => resolveThreadRouteTarget(params),
-  });
+  const threadTarget = useThreadRouteTarget();
   return (
     <>
       <ChatRouteGlobalShortcuts />
