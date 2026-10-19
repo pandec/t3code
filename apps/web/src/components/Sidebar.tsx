@@ -6009,7 +6009,7 @@ export default function Sidebar() {
                         className="h-8 min-h-8 [&>span:last-child]:flex [&>span:last-child]:min-w-0 [&>span:last-child]:items-center"
                       >
                         <FolderIcon className="size-4 shrink-0" />
-                        <span className="min-w-0 truncate text-sm">All projects</span>
+                        <span className="ms-2 min-w-0 truncate text-sm">All projects</span>
                       </MenuCheckboxItem>
                       {menuProjectGroups.map((project) => {
                         const scopeKey = project.projectKey;
@@ -6048,19 +6048,27 @@ export default function Sidebar() {
                                 would leave the accent dot floating mid-row. */}
                             <span
                               className={cn(
-                                "min-w-0 flex-1 truncate text-sm",
+                                "ms-2 min-w-0 flex-1 truncate text-sm",
                                 isHidden && "line-through",
                               )}
                             >
                               {project.displayName}
                               {isHidden ? <span className="sr-only"> (hidden)</span> : null}
                             </span>
+                            {/* Badge and dot get the same 24px slot as the
+                                buttons after them so the trailing icons are
+                                evenly spaced. place-content-center (not flex)
+                                keeps the badge's own ml-auto from pushing it
+                                off-center; empty:hidden drops the slot when
+                                the badge renders nothing. */}
                             {showProjectEnvironments ? (
-                              <ProjectEnvironmentBadge
-                                group={project}
-                                primaryEnvironmentId={primaryEnvironmentId}
-                                machineByEnvironmentId={environmentMachineById}
-                              />
+                              <span className="grid size-6 shrink-0 place-content-center empty:hidden">
+                                <ProjectEnvironmentBadge
+                                  group={project}
+                                  primaryEnvironmentId={primaryEnvironmentId}
+                                  machineByEnvironmentId={environmentMachineById}
+                                />
+                              </span>
                             ) : null}
                             {/* Dot after the badge: the badge is only present
                                 on some rows, so the dots would otherwise sit
@@ -6069,9 +6077,13 @@ export default function Sidebar() {
                               <>
                                 <span
                                   aria-hidden
-                                  className="size-2.5 shrink-0 rounded-full ring-1 ring-black/10 dark:ring-white/10"
-                                  style={{ backgroundColor: accentColor }}
-                                />
+                                  className="grid size-6 shrink-0 place-content-center"
+                                >
+                                  <span
+                                    className="size-2.5 rounded-full ring-1 ring-black/10 dark:ring-white/10"
+                                    style={{ backgroundColor: accentColor }}
+                                  />
+                                </span>
                                 <span className="sr-only">Accent {accentColor}</span>
                               </>
                             ) : null}
