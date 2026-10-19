@@ -218,6 +218,13 @@ describe("snooze until done (fork)", () => {
     }
   });
 
+  // Fork: queued messages carry the work on; the server follows each one as it starts.
+  it("holds while queued messages wait, whichever run it last followed", () => {
+    const queued = untilDone({ status: "queued", runId: "run-3" });
+    expect(effectiveSnoozed(queued, { now: NOW })).toBe(true);
+    expect(threadWokeAt(queued, { now: NOW })).toBeNull();
+  });
+
   it("wakes when the work ends, even with watch loops left running", () => {
     for (const tasks of [[], [{ kind: "monitor" }, { kind: "command" }]]) {
       const ended = untilDone({ status: "completed", completedAt: ENDED_AT, tasks });

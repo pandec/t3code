@@ -3829,7 +3829,9 @@ export const layer: Layer.Layer<ProjectionStoreV2, never, SqlClient.SqlClient> =
                        AND NOT (status = 'queued' AND (
                          json_extract(payload_json, '$.queueHeld') IS 1
                          OR json_extract(payload_json, '$.editHeldUntil') IS NOT NULL))
-                     ORDER BY ordinal DESC LIMIT 1
+                     ORDER BY status = 'queued' DESC,
+                       (status = 'cancelled' AND json_extract(payload_json, '$.startedAt') IS NULL) ASC,
+                       ordinal DESC LIMIT 1
                     ) IN ('completed', 'interrupted', 'failed', 'cancelled', 'rolled_back')
                     AND NOT EXISTS (
                     SELECT 1 FROM orchestration_v2_projection_context_transfers
@@ -5622,7 +5624,12 @@ export const layer: Layer.Layer<ProjectionStoreV2, never, SqlClient.SqlClient> =
                     OR json_extract(candidate.payload_json, '$.editHeldUntil') IS NOT NULL
                   )
                 )
-              ORDER BY candidate.ordinal DESC, candidate.run_id DESC
+              ORDER BY candidate.status = 'queued' DESC,
+                (
+                  candidate.status = 'cancelled'
+                  AND json_extract(candidate.payload_json, '$.startedAt') IS NULL
+                ) ASC,
+                candidate.ordinal DESC, candidate.run_id DESC
               LIMIT 1
             )
             LEFT JOIN orchestration_v2_projection_runs blocked ON blocked.run_id = (

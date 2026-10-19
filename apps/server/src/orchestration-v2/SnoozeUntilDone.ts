@@ -8,7 +8,11 @@ import {
   derivePendingBackgroundWork,
   snoozeUntilDoneWorkContinues,
 } from "@t3tools/shared/orchestrationV2PendingBackgroundWork";
-import { latestUnheldRun } from "@t3tools/shared/orchestrationV2ThreadError";
+import {
+  latestUnheldRun,
+  usageLimitRunPresentedAsLatest,
+} from "@t3tools/shared/orchestrationV2ThreadError";
+import * as DateTime from "effect/DateTime";
 
 type SnoozeFields = Pick<
   OrchestrationV2AppThread,
@@ -17,8 +21,26 @@ type SnoozeFields = Pick<
 
 type UntilDoneProjection = Pick<
   OrchestrationV2ThreadProjection,
-  "thread" | "runs" | "providerThreads" | "turnItems" | "runtimeRequests"
+  "thread" | "runs" | "providerThreads" | "turnItems" | "runtimeRequests" | "providerSessions"
 >;
+
+/**
+ * The run the thread shell presents as latest: a usage-limited run ahead of
+ * the queue it blocks, else latestUnheldRun. Needs the run's error items.
+ */
+function presentedLatestRun(projection: UntilDoneProjection) {
+  const sessionError =
+    projection.providerSessions
+      .filter((session) => session.providerInstanceId === projection.thread.providerInstanceId)
+      .toSorted(
+        (left, right) =>
+          DateTime.toEpochMillis(right.updatedAt) - DateTime.toEpochMillis(left.updatedAt),
+      )[0]?.lastError ?? null;
+  return (
+    usageLimitRunPresentedAsLatest(projection.runs, projection.turnItems, sessionError) ??
+    latestUnheldRun(projection.runs)
+  );
+}
 
 /**
  * Fork: the "until it's done" snooze: no wake time, and the run whose work
@@ -37,16 +59,15 @@ export function clearedSnoozeUntilDone(
   return thread.snoozedUntilRunId == null ? {} : { snoozedUntilRunId: null };
 }
 
-/**
- * The run an "until it's done" snooze would wait on now: the latest run,
- * while it is live or its agent background work runs on. Null when nothing
- * is working, so there is nothing to wait for.
- */
-export function snoozeUntilDoneAwaitedRunId(projection: UntilDoneProjection): RunId | null {
-  const latestRun = latestUnheldRun(projection.runs);
-  if (latestRun === null) return null;
-  const continues = snoozeUntilDoneWorkContinues({
-    snoozedUntilRunId: latestRun.id,
+/** Whether work an "until it's done" snooze on `snoozedUntilRunId` waits on goes on. */
+function untilDoneWorkContinues(
+  projection: UntilDoneProjection,
+  snoozedUntilRunId: RunId | null | undefined,
+): boolean {
+  const latestRun = presentedLatestRun(projection);
+  if (latestRun === null) return false;
+  return snoozeUntilDoneWorkContinues({
+    snoozedUntilRunId,
     latestRunId: latestRun.id,
     latestRunStatus: latestRun.status,
     pendingBackgroundTasks: derivePendingBackgroundWork({
@@ -57,7 +78,18 @@ export function snoozeUntilDoneAwaitedRunId(projection: UntilDoneProjection): Ru
       runs: projection.runs,
     }),
   });
-  return continues ? latestRun.id : null;
+}
+
+/**
+ * The run an "until it's done" snooze would wait on now: the latest run,
+ * while it is live, queued messages wait behind it, or its agent background
+ * work runs on. Null when nothing is working, so there is nothing to wait for.
+ */
+export function snoozeUntilDoneAwaitedRunId(projection: UntilDoneProjection): RunId | null {
+  const latestRun = presentedLatestRun(projection);
+  return latestRun !== null && untilDoneWorkContinues(projection, latestRun.id)
+    ? latestRun.id
+    : null;
 }
 
 /**
@@ -69,7 +101,7 @@ export function snoozeUntilDoneHolds(projection: UntilDoneProjection): boolean {
   return (
     isSnoozedUntilDone(projection.thread) &&
     !projection.runtimeRequests.some((request) => request.status === "pending") &&
-    snoozeUntilDoneAwaitedRunId(projection) === projection.thread.snoozedUntilRunId
+    untilDoneWorkContinues(projection, projection.thread.snoozedUntilRunId)
   );
 }
 

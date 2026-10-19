@@ -73,6 +73,7 @@ import * as ProjectStore from "./ProjectStore.ts";
 import * as ProviderSessionManager from "./ProviderSessionManager.ts";
 import * as RuntimeLayer from "./runtimeLayer.ts";
 import { shellStreamItemFromThreadShell } from "./ShellStream.ts";
+import { isSnoozed } from "./ThreadSettlementService.ts";
 import { CodexProviderCapabilitiesV2 } from "./Adapters/CodexAdapterV2.ts";
 import * as ThreadManagementService from "./ThreadManagementService.ts";
 import * as ThreadCommandExecutor from "./ThreadCommandExecutor.ts";
@@ -5389,7 +5390,7 @@ it.layer(layerSharedApplicationDataPlaneTest)("pending provider interruption", (
 
 it.layer(layerTest)("snooze queued runs", (it) => {
   it.effect.each(["notification", "delegated-completion", "user"] as const)(
-    "only user messages block snooze with a held %s run",
+    "snoozes with a held %s run",
     (kind) =>
       Effect.gen(function* () {
         const orchestrator = yield* Orchestrator.OrchestratorV2;
@@ -5505,27 +5506,173 @@ it.layer(layerTest)("snooze queued runs", (it) => {
           threadId,
           snoozedUntil,
         });
-        if (kind === "user") {
-          const error = yield* snooze.pipe(Effect.flip);
-          assert.equal(error._tag, "OrchestratorDispatchError");
-          assert.equal(error.cause, `Thread ${threadId} has a queued run and cannot be snoozed.`);
-          assert.isNull((yield* orchestrator.getThreadProjection(threadId)).thread.snoozedUntil);
-        } else {
-          yield* snooze;
-          const snoozed = yield* orchestrator.getThreadProjection(threadId);
-          assert.equal(DateTime.formatIso(snoozed.thread.snoozedUntil!), snoozedUntil);
-          assert.deepEqual(snoozed.runs, beforeSnooze.runs);
-          yield* orchestrator.dispatch({
-            type: "thread.unsnooze",
-            commandId: CommandId.make(`unsnooze:${threadId}`),
-            threadId,
-            reason: "user",
-          });
-          const awake = yield* orchestrator.getThreadProjection(threadId);
-          assert.isNull(awake.thread.snoozedUntil);
-          assert.deepEqual(awake.runs, beforeSnooze.runs);
-        }
+        // Fork: queued user messages no longer block snooze either.
+        yield* snooze;
+        const snoozed = yield* orchestrator.getThreadProjection(threadId);
+        assert.equal(DateTime.formatIso(snoozed.thread.snoozedUntil!), snoozedUntil);
+        assert.deepEqual(snoozed.runs, beforeSnooze.runs);
+        yield* orchestrator.dispatch({
+          type: "thread.unsnooze",
+          commandId: CommandId.make(`unsnooze:${threadId}`),
+          threadId,
+          reason: "user",
+        });
+        const awake = yield* orchestrator.getThreadProjection(threadId);
+        assert.isNull(awake.thread.snoozedUntil);
+        assert.deepEqual(awake.runs, beforeSnooze.runs);
       }),
+  );
+
+  // Fork: a snooze set with queued messages holds until the queue drains.
+  // "Until it's done" follows each run the queue starts; changing the queue wakes it.
+  const queuedSnoozeThread = (key: string) =>
+    Effect.gen(function* () {
+      const orchestrator = yield* Orchestrator.OrchestratorV2;
+      const eventSink = yield* EventSink.EventSinkV2;
+      const threadId = ThreadId.make(`snooze-queue-drain:${key}`);
+      yield* orchestrator.dispatch({
+        type: "thread.create",
+        commandId: CommandId.make(`create:${threadId}`),
+        threadId,
+        projectId: ProjectId.make("snooze-queued-project"),
+        title: "Snooze with a queue",
+        modelSelection,
+        runtimeMode: "full-access",
+        interactionMode: "default",
+        branch: null,
+        worktreePath: "/tmp/snooze-queued",
+        createdBy: "user",
+        creationSource: "web",
+      });
+      const send = (name: string, start: boolean) =>
+        orchestrator.dispatch({
+          type: "message.dispatch",
+          commandId: CommandId.make(`${name}:${threadId}`),
+          threadId,
+          messageId: MessageId.make(`${name}:${threadId}`),
+          text: name,
+          attachments: [],
+          modelSelection,
+          dispatchMode: { type: start ? "start_immediately" : "queue_after_active" },
+          createdBy: "user",
+          creationSource: "web",
+        });
+      yield* send("compact", true);
+      yield* send("follow-up", false);
+      const runFor = (name: string) =>
+        Effect.map(orchestrator.getThreadProjection(threadId), ({ runs }) => {
+          const run = runs.find(
+            (candidate) => candidate.userMessageId === MessageId.make(`${name}:${threadId}`),
+          );
+          assert.isDefined(run);
+          return run;
+        });
+      const startedRunIds = yield* Queue.unbounded<RunId>();
+      yield* eventSink
+        .stream({ threadId, afterSequence: yield* orchestrator.getThreadEventSequence(threadId) })
+        .pipe(
+          Stream.runForEach((stored) =>
+            stored.event.type === "run.updated" && stored.event.payload.status === "starting"
+              ? Queue.offer(startedRunIds, stored.event.payload.id)
+              : Effect.void,
+          ),
+          Effect.forkScoped,
+        );
+      yield* Effect.yieldNow;
+      const complete = (name: string) =>
+        Effect.gen(function* () {
+          yield* TestClock.adjust("1 minute");
+          const run = yield* runFor(name);
+          const now = yield* DateTime.now;
+          yield* eventSink.write({
+            events: [
+              {
+                id: EventId.make(`${threadId}:${name}:completed`),
+                type: "run.updated",
+                threadId,
+                runId: run.id,
+                ...(run.rootNodeId === null ? {} : { nodeId: run.rootNodeId }),
+                providerInstanceId: run.providerInstanceId,
+                occurredAt: now,
+                payload: { ...run, status: "completed", startedAt: now, completedAt: now },
+              },
+            ],
+          });
+        });
+      const snoozedNow = Effect.gen(function* () {
+        const shell = (yield* orchestrator.getShellSnapshot()).threads.find(
+          (candidate) => candidate.id === threadId,
+        );
+        assert.isDefined(shell);
+        return isSnoozed(shell, DateTime.toEpochMillis(yield* DateTime.now));
+      });
+      return { orchestrator, threadId, runFor, startedRunIds, complete, snoozedNow };
+    });
+
+  it.effect.each(["until-done", "timed"] as const)(
+    "a %s snooze holds until the queued message finishes",
+    (mode) =>
+      Effect.gen(function* () {
+        const { orchestrator, threadId, runFor, startedRunIds, complete, snoozedNow } =
+          yield* queuedSnoozeThread(mode);
+        yield* orchestrator.dispatch({
+          type: "thread.snooze",
+          commandId: CommandId.make(`snooze:${threadId}`),
+          threadId,
+          ...(mode === "until-done"
+            ? { snoozedUntil: null, untilDone: true }
+            : { snoozedUntil: "2099-01-01T00:00:00.000Z" }),
+        });
+        const followUp = yield* runFor("follow-up");
+        assert.isTrue(yield* snoozedNow);
+
+        yield* complete("compact");
+        assert.equal(yield* Queue.take(startedRunIds), followUp.id);
+        if (mode === "until-done") {
+          const { thread } = yield* orchestrator.getThreadProjection(threadId);
+          assert.equal(thread.snoozedUntilRunId, followUp.id);
+        }
+        assert.isTrue(yield* snoozedNow);
+
+        yield* complete("follow-up");
+        assert.isFalse(yield* snoozedNow);
+      }),
+  );
+
+  it.effect("removing a queued message or resuming the queue wakes the snooze", () =>
+    Effect.gen(function* () {
+      const { orchestrator, threadId, runFor } = yield* queuedSnoozeThread("queue-change");
+      const snooze = (key: string) =>
+        orchestrator.dispatch({
+          type: "thread.snooze",
+          commandId: CommandId.make(`snooze:${key}:${threadId}`),
+          threadId,
+          snoozedUntil: null,
+          untilDone: true,
+        });
+      const snoozedAt = Effect.map(
+        orchestrator.getThreadProjection(threadId),
+        ({ thread }) => thread.snoozedAt ?? null,
+      );
+      yield* snooze("before-cancel");
+      assert.isNotNull(yield* snoozedAt);
+      yield* orchestrator.dispatch({
+        type: "queued-run.cancel",
+        commandId: CommandId.make(`cancel:${threadId}`),
+        threadId,
+        runId: (yield* runFor("follow-up")).id,
+      });
+      assert.isNull(yield* snoozedAt);
+
+      yield* snooze("before-resume");
+      assert.isNotNull(yield* snoozedAt);
+      yield* orchestrator.dispatch({
+        type: "queue.resume",
+        commandId: CommandId.make(`resume:${threadId}`),
+        threadId,
+      });
+      assert.isNull(yield* snoozedAt);
+    }),
   );
 });
 
@@ -6646,6 +6793,109 @@ it.layer(layerSharedApplicationDataPlaneTest)("shared application data plane", (
 });
 
 it.layer(layerTest)("usage-limit recovery", (it) => {
+  // Fork: a queue a usage limit blocks is no work an "until it's done" snooze
+  // can wait on; the shell shows the limited run, not the queue.
+  it.effect("rejects snoozing until done behind a usage-limited queue", () =>
+    Effect.gen(function* () {
+      const orchestrator = yield* Orchestrator.OrchestratorV2;
+      const events = yield* EventSink.EventSinkV2;
+      const threadId = ThreadId.make("until-done-limited-queue");
+      const projectId = ProjectId.make("until-done-limited-queue:project");
+      const now = yield* DateTime.now;
+      yield* seedProject({
+        projectId,
+        title: "Limited project",
+        workspaceRoot: process.cwd(),
+        defaultModelSelection: modelSelection,
+        createdAt: DateTime.formatIso(now),
+      });
+      yield* orchestrator.dispatch({
+        type: "thread.create",
+        commandId: CommandId.make(`${threadId}:create`),
+        threadId,
+        projectId,
+        title: "Limited thread",
+        modelSelection,
+        runtimeMode: "full-access",
+        interactionMode: "default",
+        branch: null,
+        worktreePath: null,
+        createdBy: "user",
+        creationSource: "web",
+      });
+      const send = (key: string, dispatchMode: "defer_start" | "queue_after_active") =>
+        orchestrator.dispatch({
+          type: "message.dispatch",
+          commandId: CommandId.make(`${threadId}:${key}`),
+          threadId,
+          messageId: MessageId.make(`${threadId}:${key}`),
+          text: key,
+          attachments: [],
+          dispatchMode: { type: dispatchMode },
+          createdBy: "user",
+          creationSource: "web",
+        });
+      yield* send("start", "defer_start");
+      yield* send("queued", "queue_after_active");
+      const [source] = (yield* orchestrator.getThreadProjection(threadId)).runs;
+      assert.isDefined(source);
+      yield* events.write({
+        events: [
+          {
+            id: EventId.make(`${threadId}:error`),
+            type: "turn-item.updated",
+            threadId,
+            occurredAt: now,
+            payload: {
+              id: TurnItemId.make(`${threadId}:error`),
+              type: "error",
+              threadId,
+              runId: source.id,
+              nodeId: source.rootNodeId,
+              providerThreadId: null,
+              providerTurnId: null,
+              nativeItemRef: null,
+              parentItemId: null,
+              ordinal: 2,
+              status: "failed",
+              title: "Usage limit reached",
+              startedAt: now,
+              completedAt: now,
+              updatedAt: now,
+              failure: {
+                class: "usage_limit",
+                message: "Plan limit reached.",
+                code: "usageLimitExceeded",
+                retryable: null,
+              },
+            },
+          },
+          {
+            id: EventId.make(`${threadId}:failed`),
+            type: "run.updated",
+            threadId,
+            occurredAt: now,
+            payload: { ...source, status: "failed", completedAt: now },
+          },
+        ],
+      });
+      const projection = yield* orchestrator.getThreadProjection(threadId);
+      assert.isTrue(
+        projection.runs.some((run) => run.status === "queued" && run.queueHeld !== true),
+      );
+      const snooze = yield* orchestrator
+        .dispatch({
+          type: "thread.snooze",
+          commandId: CommandId.make(`${threadId}:snooze`),
+          threadId,
+          snoozedUntil: null,
+          untilDone: true,
+        })
+        .pipe(Effect.flip);
+      assert.include(String(snooze.cause), "no running turn or working subagents");
+    }),
+  );
+
   it.effect.each(["interrupted", "usage_limit"] as const)(
     "manually resumes an %s run ahead of its queued message only once",
     (reason) =>

@@ -3376,7 +3376,10 @@ it.layer(layerTest)("ProjectionStoreV2", (it) => {
             value == null ? null : DateTime.toEpochMillis(value);
           assert.equal(timestamp(sqlShell.activityRunStartedAt), expected);
           assert.equal(timestamp(memoryShell.activityRunStartedAt), expected);
-          assert.equal(sqlShell.latestRunId, "run:clock:newer");
+          // Fork: a run cancelled before it started never stands for the outcome.
+          const expectedLatest = status === "queued" ? "run:clock:newer" : runId;
+          assert.equal(sqlShell.latestRunId, expectedLatest);
+          assert.equal(memoryShell.latestRunId, expectedLatest);
         }
       }
 

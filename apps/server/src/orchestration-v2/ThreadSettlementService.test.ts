@@ -1529,5 +1529,25 @@ describe("isSnoozed", () => {
     expect(ThreadSettlementService.isSnoozed(shell({ ...untilDone, ...ended }), NOW_MS)).toBe(
       false,
     );
+    // Fork: the awaited run was cancelled before it started, so an older run is
+    // the latest again; nothing ended after the snooze, but its work is over.
+    expect(
+      ThreadSettlementService.isSnoozed(
+        shell({
+          ...untilDone,
+          latestRunId: RunId.make("run-earlier"),
+          status: "completed",
+          latestRunCompletedAt: at(-3 * DAY_MS),
+        }),
+        NOW_MS,
+      ),
+    ).toBe(false);
+    // Queued messages still waiting keep it, whichever run it last followed.
+    expect(
+      ThreadSettlementService.isSnoozed(
+        shell({ ...untilDone, latestRunId: RunId.make("run-queued"), status: "queued" }),
+        NOW_MS,
+      ),
+    ).toBe(true);
   });
 });
