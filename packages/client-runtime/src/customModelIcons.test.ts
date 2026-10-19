@@ -10,6 +10,14 @@ describe("reportedModelIcon", () => {
     expect(reportedModelIcon(icons, "gpt-6-astra(high)")).toBe("codex");
   });
 
+  it("prefers an exactly configured suffixed slug", () => {
+    const suffixed = readCustomModelIcons({
+      customModelIcons: { "gpt-6.1-sol(high)": "codex", "gpt-6.1-sol": "zai" },
+    });
+    expect(reportedModelIcon(suffixed, "gpt-6.1-sol(high)")).toBe("codex");
+    expect(reportedModelIcon(suffixed, "gpt-6.1-sol(low)")).toBe("zai");
+  });
+
   it("returns undefined for unmapped or missing models", () => {
     expect(reportedModelIcon(icons, "claude-opus-5-5")).toBeUndefined();
     expect(reportedModelIcon(icons, null)).toBeUndefined();
