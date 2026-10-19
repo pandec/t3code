@@ -38,22 +38,16 @@ export function indefiniteSnoozeHoldsOverLatestRun(
  * Whether a run ended after the indefinite snooze was set: the derived wake
  * clients show for it. Unlike timed snoozes, an interrupted or failed run
  * counts as well as a completed one, since the agent stopped either way.
- * Fork: like clients, only the latest unheld run counts, so a run ending
- * with queued messages behind it doesn't wake; a failure always does.
+ * Fork: like clients, only the latest unheld run (shared latestUnheldRun,
+ * passed in) counts, so a run ending with queued messages behind it doesn't
+ * wake; a failure always does. Selecting it here trips TS2589 in ws.ts.
  */
 export function indefiniteSnoozeWokeByRun(
-  runs: ReadonlyArray<OrchestrationV2Run>,
+  runs: ReadonlyArray<Pick<OrchestrationV2Run, "status" | "completedAt">>,
+  latestRun: Pick<OrchestrationV2Run, "status" | "completedAt"> | null,
   snoozedAt: DateTime.Utc,
 ): boolean {
   const snoozedAtMs = DateTime.toEpochMillis(snoozedAt);
-  // Inlines shared latestUnheldRun: importing it here trips TS2589 in ws.ts.
-  let latestRun: OrchestrationV2Run | null = null;
-  for (const run of runs) {
-    if (run.status === "queued" && (run.queueHeld === true || run.editHeldUntil !== undefined)) {
-      continue;
-    }
-    if (latestRun === null || run.ordinal > latestRun.ordinal) latestRun = run;
-  }
   return runs.some(
     (run) =>
       (run === latestRun || run.status === "failed") &&
@@ -71,11 +65,12 @@ export function indefiniteSnoozeWokeByRun(
  * failure.
  */
 export function indefiniteSnoozeWoke(
-  runs: ReadonlyArray<OrchestrationV2Run>,
+  runs: ReadonlyArray<Pick<OrchestrationV2Run, "status" | "completedAt">>,
+  latestRun: Pick<OrchestrationV2Run, "status" | "completedAt"> | null,
   thread: Pick<OrchestrationV2AppThread, "updatedAt"> & { readonly snoozedAt: DateTime.Utc },
 ): boolean {
   return (
-    indefiniteSnoozeWokeByRun(runs, thread.snoozedAt) ||
+    indefiniteSnoozeWokeByRun(runs, latestRun, thread.snoozedAt) ||
     (runs.at(-1)?.status === "failed" &&
       DateTime.toEpochMillis(thread.updatedAt) > DateTime.toEpochMillis(thread.snoozedAt))
   );

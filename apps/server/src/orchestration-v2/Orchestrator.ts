@@ -6,6 +6,7 @@ import type {
 import {
   latestExecutedRun,
   latestRootProviderFailure,
+  latestUnheldRun,
   runRanAfter,
   usageLimitBlockedRun,
 } from "@t3tools/shared/orchestrationV2ThreadError";
@@ -3139,7 +3140,10 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
       indefiniteSnoozeHolds =
         isIndefinitelySnoozed(thread) &&
         previousSnoozedAt !== null &&
-        !indefiniteSnoozeWoke(projection.runs, { ...thread, snoozedAt: previousSnoozedAt });
+        !indefiniteSnoozeWoke(projection.runs, latestUnheldRun(projection.runs), {
+          ...thread,
+          snoozedAt: previousSnoozedAt,
+        });
     }
     let markUnreadVisitedAt: DateTime.Utc | null = null;
     if (command.type === "thread.mark-unread") {
