@@ -238,9 +238,9 @@ export function isSnoozed(
 /**
  * Fork: a snooze without a wake time, "until I wake it" or "until it's done"
  * (an awaited `snoozedUntilRunId`). Mirrors client-runtime's
- * threadRaisedHandWhileSnoozed: a pending request wakes it, and so does a run
- * that ended after it was set (interrupted and failed count; a cancelled run
- * ends "until it's done") unless the awaited work goes on.
+ * effectiveSnoozed: a pending request wakes either; "until it's done" holds
+ * while its work goes on, and "until I wake it" until a run ends after it was
+ * set (interrupted and failed count).
  */
 function timelessSnoozeHolds(
   thread: Pick<
@@ -255,21 +255,23 @@ function timelessSnoozeHolds(
 ): boolean {
   if (thread.pendingRuntimeRequest !== null) return false;
   const untilDone = thread.snoozedUntilRunId != null;
+  // Like clients' effectiveSnoozed, "until it's done" holds only while its work
+  // goes on, even when that work ended without a run finishing after the snooze
+  // (a run cancelled before it started no longer stands for the outcome).
+  if (untilDone) {
+    return snoozeUntilDoneWorkContinues({
+      snoozedUntilRunId: thread.snoozedUntilRunId,
+      latestRunId: thread.latestRunId,
+      latestRunStatus: thread.status,
+      pendingBackgroundTasks: thread.pendingBackgroundTasks ?? [],
+    });
+  }
   const completedAtMs = toMillis(thread.latestRunCompletedAt);
-  const runEnded =
+  return !(
     completedAtMs !== null &&
     completedAtMs > DateTime.toEpochMillis(thread.snoozedAt) &&
-    (thread.status === "completed" ||
-      thread.status === "interrupted" ||
-      thread.status === "failed" ||
-      (untilDone && thread.status === "cancelled"));
-  if (!runEnded) return true;
-  return snoozeUntilDoneWorkContinues({
-    snoozedUntilRunId: thread.snoozedUntilRunId,
-    latestRunId: thread.latestRunId,
-    latestRunStatus: thread.status,
-    pendingBackgroundTasks: thread.pendingBackgroundTasks ?? [],
-  });
+    (thread.status === "completed" || thread.status === "interrupted" || thread.status === "failed")
+  );
 }
 
 export function resolveAutoSettlementAt(input: {
