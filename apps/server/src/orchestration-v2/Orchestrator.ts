@@ -3086,28 +3086,9 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
           cause: `Thread ${command.threadId} has a pending approval or user-input request and cannot be snoozed.`,
         });
       }
-      const queuedRuns = projection.runs.filter((run) => run.status === "queued");
-      const queuedMessages =
-        queuedRuns.length === 0
-          ? []
-          : (yield* loadProjectionForCommand(command, ["messages"], {
-              messageIds: queuedRuns.map((run) => run.userMessageId),
-            })).messages;
-      const automaticMessageIds = new Set(
-        queuedMessages
-          .filter(
-            (message) =>
-              message.notification !== undefined || message.delegatedCompletion !== undefined,
-          )
-          .map((message) => message.id),
-      );
-      if (queuedRuns.some((run) => !automaticMessageIds.has(run.userMessageId))) {
-        return yield* new OrchestratorDispatchError({
-          commandId: command.commandId,
-          commandType: command.type,
-          cause: `Thread ${command.threadId} has a queued run and cannot be snoozed.`,
-        });
-      }
+      // Fork: queued messages don't block snooze. Clients and the shell read
+      // the last unheld queued run as the latest, so a snooze holds until the
+      // queue drains, and "until it's done" waits on that last run.
       snoozedUntil = parsedSnoozedUntil.value;
       if (command.untilDone === true) {
         if (snoozedUntil !== null) {

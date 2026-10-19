@@ -393,3 +393,7 @@ the thread until that work finishes, including the agent's follow-up on the suba
 loops such as a running dev server or a monitor don't hold it. These threads sit at the top of the
 Snoozed section and come back on their own, or earlier if they need attention. It's available on web,
 desktop, and mobile when the server supports it.
+
+You can snooze a thread that has queued messages. The snooze then waits for the queue: a turn ending
+doesn't wake the thread while queued messages are still to run, and **Until it's done** waits for the
+last one to finish. Stopping the queue, or sending another message, wakes it.

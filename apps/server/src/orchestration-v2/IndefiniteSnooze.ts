@@ -38,14 +38,25 @@ export function indefiniteSnoozeHoldsOverLatestRun(
  * Whether a run ended after the indefinite snooze was set: the derived wake
  * clients show for it. Unlike timed snoozes, an interrupted or failed run
  * counts as well as a completed one, since the agent stopped either way.
+ * Fork: like clients, only the latest unheld run counts, so a run ending
+ * with queued messages behind it doesn't wake; a failure always does.
  */
 export function indefiniteSnoozeWokeByRun(
-  runs: ReadonlyArray<Pick<OrchestrationV2Run, "status" | "completedAt">>,
+  runs: ReadonlyArray<OrchestrationV2Run>,
   snoozedAt: DateTime.Utc,
 ): boolean {
   const snoozedAtMs = DateTime.toEpochMillis(snoozedAt);
+  // Inlines shared latestUnheldRun: importing it here trips TS2589 in ws.ts.
+  let latestRun: OrchestrationV2Run | null = null;
+  for (const run of runs) {
+    if (run.status === "queued" && (run.queueHeld === true || run.editHeldUntil !== undefined)) {
+      continue;
+    }
+    if (latestRun === null || run.ordinal > latestRun.ordinal) latestRun = run;
+  }
   return runs.some(
     (run) =>
+      (run === latestRun || run.status === "failed") &&
       (run.status === "completed" || run.status === "interrupted" || run.status === "failed") &&
       run.completedAt !== null &&
       DateTime.toEpochMillis(run.completedAt) > snoozedAtMs,
@@ -60,7 +71,7 @@ export function indefiniteSnoozeWokeByRun(
  * failure.
  */
 export function indefiniteSnoozeWoke(
-  runs: ReadonlyArray<Pick<OrchestrationV2Run, "status" | "completedAt">>,
+  runs: ReadonlyArray<OrchestrationV2Run>,
   thread: Pick<OrchestrationV2AppThread, "updatedAt"> & { readonly snoozedAt: DateTime.Utc },
 ): boolean {
   return (
