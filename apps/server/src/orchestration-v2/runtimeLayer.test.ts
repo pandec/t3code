@@ -6793,6 +6793,109 @@ it.layer(layerSharedApplicationDataPlaneTest)("shared application data plane", (
 });
 
 it.layer(layerTest)("usage-limit recovery", (it) => {
+  // Fork: a queue a usage limit blocks is no work an "until it's done" snooze
+  // can wait on; the shell shows the limited run, not the queue.
+  it.effect("rejects snoozing until done behind a usage-limited queue", () =>
+    Effect.gen(function* () {
+      const orchestrator = yield* Orchestrator.OrchestratorV2;
+      const events = yield* EventSink.EventSinkV2;
+      const threadId = ThreadId.make("until-done-limited-queue");
+      const projectId = ProjectId.make("until-done-limited-queue:project");
+      const now = yield* DateTime.now;
+      yield* seedProject({
+        projectId,
+        title: "Limited project",
+        workspaceRoot: process.cwd(),
+        defaultModelSelection: modelSelection,
+        createdAt: DateTime.formatIso(now),
+      });
+      yield* orchestrator.dispatch({
+        type: "thread.create",
+        commandId: CommandId.make(`${threadId}:create`),
+        threadId,
+        projectId,
+        title: "Limited thread",
+        modelSelection,
+        runtimeMode: "full-access",
+        interactionMode: "default",
+        branch: null,
+        worktreePath: null,
+        createdBy: "user",
+        creationSource: "web",
+      });
+      const send = (key: string, dispatchMode: "defer_start" | "queue_after_active") =>
+        orchestrator.dispatch({
+          type: "message.dispatch",
+          commandId: CommandId.make(`${threadId}:${key}`),
+          threadId,
+          messageId: MessageId.make(`${threadId}:${key}`),
+          text: key,
+          attachments: [],
+          dispatchMode: { type: dispatchMode },
+          createdBy: "user",
+          creationSource: "web",
+        });
+      yield* send("start", "defer_start");
+      yield* send("queued", "queue_after_active");
+      const [source] = (yield* orchestrator.getThreadProjection(threadId)).runs;
+      assert.isDefined(source);
+      yield* events.write({
+        events: [
+          {
+            id: EventId.make(`${threadId}:error`),
+            type: "turn-item.updated",
+            threadId,
+            occurredAt: now,
+            payload: {
+              id: TurnItemId.make(`${threadId}:error`),
+              type: "error",
+              threadId,
+              runId: source.id,
+              nodeId: source.rootNodeId,
+              providerThreadId: null,
+              providerTurnId: null,
+              nativeItemRef: null,
+              parentItemId: null,
+              ordinal: 2,
+              status: "failed",
+              title: "Usage limit reached",
+              startedAt: now,
+              completedAt: now,
+              updatedAt: now,
+              failure: {
+                class: "usage_limit",
+                message: "Plan limit reached.",
+                code: "usageLimitExceeded",
+                retryable: null,
+              },
+            },
+          },
+          {
+            id: EventId.make(`${threadId}:failed`),
+            type: "run.updated",
+            threadId,
+            occurredAt: now,
+            payload: { ...source, status: "failed", completedAt: now },
+          },
+        ],
+      });
+      const projection = yield* orchestrator.getThreadProjection(threadId);
+      assert.isTrue(
+        projection.runs.some((run) => run.status === "queued" && run.queueHeld !== true),
+      );
+      const snooze = yield* orchestrator
+        .dispatch({
+          type: "thread.snooze",
+          commandId: CommandId.make(`${threadId}:snooze`),
+          threadId,
+          snoozedUntil: null,
+          untilDone: true,
+        })
+        .pipe(Effect.flip);
+      assert.include(String(snooze.cause), "no running turn or working subagents");
+    }),
+  );
+
   it.effect.each(["interrupted", "usage_limit"] as const)(
     "manually resumes an %s run ahead of its queued message only once",
     (reason) =>

@@ -3125,8 +3125,16 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
           });
         }
         // Waiting on nothing would park the thread for good, so reject.
-        // Watch loops alone (commands, monitors) don't count.
-        untilDoneRunId = snoozeUntilDoneAwaitedRunId(projection);
+        // Watch loops alone (commands, monitors) don't count, and neither does
+        // a queue a usage limit blocks (read as the shell presents it).
+        const limit = yield* loadProjectionForCommand(command, ["turnItems", "providerSessions"], {
+          turnItemTypes: ["error"],
+        });
+        untilDoneRunId = snoozeUntilDoneAwaitedRunId({
+          ...projection,
+          providerSessions: limit.providerSessions,
+          turnItems: [...projection.turnItems, ...limit.turnItems],
+        });
         if (untilDoneRunId === null) {
           return yield* new OrchestratorDispatchError({
             commandId: command.commandId,
@@ -5003,8 +5011,10 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
             turnItemStatuses: ["pending", "running", "waiting"],
           });
           keepsSnoozeUntilDone =
-            snoozeUntilDoneHolds({ ...current, turnItems: background.turnItems }) ||
-            delegatedCompletionContinuesUntilDone(current, command);
+            snoozeUntilDoneHolds({
+              ...current,
+              turnItems: [...current.turnItems, ...background.turnItems],
+            }) || delegatedCompletionContinuesUntilDone(current, command);
         }
       }
       yield* dispatchMessageCore(command, events, effects, keepsSnoozeUntilDone);
