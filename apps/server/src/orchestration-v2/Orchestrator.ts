@@ -2062,6 +2062,30 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
             occurredAt: now,
             payload: startingRun,
           },
+          // Fork: an "until it's done" snooze follows the queue onto each run it
+          // starts, so it ends with the last one (snoozeUntilDoneWorkContinues).
+          ...(isSnoozedUntilDone(projection.thread) &&
+          projection.thread.snoozedUntilRunId !== queuedRun.id
+            ? [
+                {
+                  type: "thread.snoozed" as const,
+                  threadId,
+                  providerInstanceId: queuedRun.providerInstanceId,
+                  occurredAt: now,
+                  payload: {
+                    ...projection.thread,
+                    ...(selectionChanged
+                      ? {
+                          providerInstanceId: queuedRun.providerInstanceId,
+                          modelSelection: queuedRun.modelSelection,
+                          updatedAt: now,
+                        }
+                      : {}),
+                    snoozedUntilRunId: queuedRun.id,
+                  },
+                },
+              ]
+            : []),
           // Fork batch release: the messages waiting now join this turn once
           // it runs (releaseQueueBatch); anything queued after this does not.
           ...queueBatchFollowers(projection, queuedRun, now).map((run) => ({
@@ -4995,6 +5019,44 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
       });
     });
 
+  // Clears any snooze on the user's own interaction. Returns whether it woke.
+  const wakeSnooze = (
+    command: OrchestrationV2ServerCommand,
+    events: Ref.Ref<Array<OrchestrationV2DomainEvent>>,
+    thread: OrchestrationV2AppThread,
+  ) =>
+    Effect.gen(function* () {
+      if (thread.snoozedUntil == null && thread.snoozedAt == null) return false;
+      const now = yield* DateTime.now;
+      yield* emit(
+        events,
+        command,
+      )({
+        type: "thread.unsnoozed",
+        threadId: thread.id,
+        providerInstanceId: thread.providerInstanceId,
+        occurredAt: now,
+        payload: {
+          ...thread,
+          snoozedUntil: null,
+          snoozedAt: null,
+          ...clearedSnoozeUntilDone(thread),
+          updatedAt: now,
+        },
+      });
+      return true;
+    });
+
+  // Fork: changing the queue is the user's own interaction with the thread,
+  // like sending a message, so it wakes a snooze.
+  const wakeSnoozeOnQueueChange = (
+    command: Extract<OrchestrationV2ServerCommand, { readonly threadId: ThreadId }>,
+    events: Ref.Ref<Array<OrchestrationV2DomainEvent>>,
+  ) =>
+    Effect.flatMap(getProjectionWithPendingEvents(command.threadId, events), ({ thread }) =>
+      wakeSnooze(command, events, thread),
+    );
+
   const dispatchMessageCore = (
     command: Extract<OrchestrationV2Command, { readonly type: "message.dispatch" }>,
     events: Ref.Ref<Array<OrchestrationV2DomainEvent>>,
@@ -5152,28 +5214,7 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
       }
       // Fork: snoozedAt alone marks an indefinite snooze; a message wakes it
       // too. A wake that carries on an "until it's done" snooze's work keeps it.
-      if (
-        (projection.thread.snoozedUntil != null || projection.thread.snoozedAt != null) &&
-        !keepsSnoozeUntilDone
-      ) {
-        const now = yield* DateTime.now;
-        const thread: OrchestrationV2AppThread = {
-          ...projection.thread,
-          snoozedUntil: null,
-          snoozedAt: null,
-          ...clearedSnoozeUntilDone(projection.thread),
-          updatedAt: now,
-        };
-        yield* emit(
-          events,
-          command,
-        )({
-          type: "thread.unsnoozed",
-          threadId: command.threadId,
-          providerInstanceId: thread.providerInstanceId,
-          occurredAt: now,
-          payload: thread,
-        });
+      if (!keepsSnoozeUntilDone && (yield* wakeSnooze(command, events, projection.thread))) {
         projection = yield* getProjectionWithPendingEvents(command.threadId, events);
       }
       const userMessages = projection.messages.filter((message) => message.role === "user");
@@ -12175,19 +12216,31 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
             payload: projection.thread,
           });
         }
+        // Fork: the resumed queue would otherwise re-hide a snooze its hold had woken.
+        yield* wakeSnoozeOnQueueChange(command, events);
         break;
       }
       case "queued-run.reorder":
         yield* dispatchQueuedRunReorder(command, events);
+        yield* wakeSnoozeOnQueueChange(command, events);
         break;
-      case "queued-run.cancel":
+      case "queued-run.cancel": {
+        // Reactors also cancel automatic deliveries; only a user's message wakes.
+        const { runs, messages } = yield* getProjectionWithPendingEvents(command.threadId, events);
+        const messageId = runs.find((run) => run.id === command.runId)?.userMessageId;
+        const userAuthored =
+          messages.find((message) => message.id === messageId)?.createdBy === "user";
         yield* dispatchQueuedRunCancel(command, events);
+        if (userAuthored) yield* wakeSnoozeOnQueueChange(command, events);
         break;
+      }
       case "queued-run.edit":
         yield* dispatchQueuedRunEdit(command, events);
+        yield* wakeSnoozeOnQueueChange(command, events);
         break;
       case "queued-run.edit-hold":
         yield* dispatchQueuedRunEditHold(command, events);
+        if (command.held) yield* wakeSnoozeOnQueueChange(command, events);
         break;
       case "checkpoint.rollback":
         yield* dispatchCheckpointRollback(command, events, effects);

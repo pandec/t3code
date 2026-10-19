@@ -103,8 +103,11 @@ export function usageLimitRunPresentedAsLatest(
 /**
  * The newest run that is not waiting on the user, or null when only such runs
  * exist. A held queue and a queued message open for editing wait for the user,
- * so they never stand for the thread's outcome. The SQL thread shell selects
- * the same run.
+ * so they never stand for the thread's outcome. Fork: neither does a message
+ * cancelled before it started (removed from the queue or batched into another
+ * turn), and an unheld queued message outranks finished runs, since it still
+ * runs after them even when a reorder left it with an older ordinal. The SQL
+ * thread shell selects the same run.
  */
 export function latestUnheldRun(
   runs: ReadonlyArray<OrchestrationV2Run>,
@@ -114,7 +117,15 @@ export function latestUnheldRun(
     if (run.status === "queued" && (run.queueHeld === true || run.editHeldUntil !== undefined)) {
       continue;
     }
-    if (latest === null || run.ordinal > latest.ordinal) latest = run;
+    if (run.status === "cancelled" && run.startedAt === null) continue;
+    if (latest === null) {
+      latest = run;
+      continue;
+    }
+    const queued = run.status === "queued";
+    if (queued !== (latest.status === "queued") ? queued : run.ordinal > latest.ordinal) {
+      latest = run;
+    }
   }
   return latest;
 }

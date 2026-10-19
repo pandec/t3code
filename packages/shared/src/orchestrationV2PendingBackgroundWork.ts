@@ -352,13 +352,14 @@ const UNTIL_DONE_LIVE_RUN_STATUSES: ReadonlySet<string> = new Set<OrchestrationV
 ]);
 
 /**
- * Fork: whether the work an "until it's done" snooze waits on continues: the
- * awaited run is still the latest one and is live (a run parked at
- * "waiting" is post-terminal drain, so its agent turn is over), or it ended
- * while its agent background work runs on. A wake run that continues the work takes
- * over as the awaited run on the server, so the latest run moving elsewhere
- * means the work was replaced. A failure always ends it. Shared by the
- * server (validation, settlement) and clients (snoozed classification).
+ * Fork: whether the work an "until it's done" snooze waits on continues:
+ * queued messages still wait to run, or the awaited run is still the latest
+ * one and is live (a run parked at "waiting" is post-terminal drain, so its
+ * agent turn is over), or it ended while its agent background work runs on.
+ * A wake run or a run started from the queue takes over as the awaited run on
+ * the server, so the latest run moving elsewhere means the work was replaced.
+ * A failure always ends it. Shared by the server (validation, settlement)
+ * and clients (snoozed classification).
  */
 export function snoozeUntilDoneWorkContinues(input: {
   readonly snoozedUntilRunId: string | null | undefined;
@@ -366,9 +367,12 @@ export function snoozeUntilDoneWorkContinues(input: {
   readonly latestRunStatus: string | null | undefined;
   readonly pendingBackgroundTasks: ReadonlyArray<{ readonly kind: string }>;
 }): boolean {
-  if (input.snoozedUntilRunId == null || input.latestRunId !== input.snoozedUntilRunId) {
-    return false;
-  }
+  if (input.snoozedUntilRunId == null) return false;
+  // A queued latest run means queued messages still wait to run, whichever
+  // one the snooze last followed: the server moves it onto each run that
+  // starts from the queue.
+  if (input.latestRunStatus === "queued") return true;
+  if (input.latestRunId !== input.snoozedUntilRunId) return false;
   if (input.latestRunStatus == null || input.latestRunStatus === "failed") return false;
   return (
     UNTIL_DONE_LIVE_RUN_STATUSES.has(input.latestRunStatus) ||

@@ -37,16 +37,15 @@ export function clearedSnoozeUntilDone(
   return thread.snoozedUntilRunId == null ? {} : { snoozedUntilRunId: null };
 }
 
-/**
- * The run an "until it's done" snooze would wait on now: the latest run,
- * while it is live or its agent background work runs on. Null when nothing
- * is working, so there is nothing to wait for.
- */
-export function snoozeUntilDoneAwaitedRunId(projection: UntilDoneProjection): RunId | null {
+/** Whether work an "until it's done" snooze on `snoozedUntilRunId` waits on goes on. */
+function untilDoneWorkContinues(
+  projection: UntilDoneProjection,
+  snoozedUntilRunId: RunId | null | undefined,
+): boolean {
   const latestRun = latestUnheldRun(projection.runs);
-  if (latestRun === null) return null;
-  const continues = snoozeUntilDoneWorkContinues({
-    snoozedUntilRunId: latestRun.id,
+  if (latestRun === null) return false;
+  return snoozeUntilDoneWorkContinues({
+    snoozedUntilRunId,
     latestRunId: latestRun.id,
     latestRunStatus: latestRun.status,
     pendingBackgroundTasks: derivePendingBackgroundWork({
@@ -57,7 +56,18 @@ export function snoozeUntilDoneAwaitedRunId(projection: UntilDoneProjection): Ru
       runs: projection.runs,
     }),
   });
-  return continues ? latestRun.id : null;
+}
+
+/**
+ * The run an "until it's done" snooze would wait on now: the latest run,
+ * while it is live, queued messages wait behind it, or its agent background
+ * work runs on. Null when nothing is working, so there is nothing to wait for.
+ */
+export function snoozeUntilDoneAwaitedRunId(projection: UntilDoneProjection): RunId | null {
+  const latestRun = latestUnheldRun(projection.runs);
+  return latestRun !== null && untilDoneWorkContinues(projection, latestRun.id)
+    ? latestRun.id
+    : null;
 }
 
 /**
@@ -69,7 +79,7 @@ export function snoozeUntilDoneHolds(projection: UntilDoneProjection): boolean {
   return (
     isSnoozedUntilDone(projection.thread) &&
     !projection.runtimeRequests.some((request) => request.status === "pending") &&
-    snoozeUntilDoneAwaitedRunId(projection) === projection.thread.snoozedUntilRunId
+    untilDoneWorkContinues(projection, projection.thread.snoozedUntilRunId)
   );
 }
 
