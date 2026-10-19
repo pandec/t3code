@@ -2,6 +2,8 @@ import * as Dialog from "../../components/ui/Dialog";
 import type { ComposerTextPaste } from "../../native/T3ComposerEditor.types";
 import { useAppearancePreferences } from "../settings/appearance/AppearancePreferencesProvider";
 import type { EnvironmentThreadShell } from "@t3tools/client-runtime/state/shell";
+import { settlePromise, squashAtomCommandFailure } from "@t3tools/client-runtime/state/runtime";
+import { AsyncResult } from "effect/reactivity";
 import { useAtomValue } from "@effect/atom-react";
 import { clampFileAttachmentUploadBytes } from "@t3tools/client-runtime/state/attachments";
 import { pastedTextDisposition, replaceTextSelection } from "@t3tools/client-runtime/text-paste";
@@ -25,16 +27,7 @@ import {
 } from "@t3tools/shared/usageLimits";
 import { StackActions, useFocusEffect, useNavigation } from "@react-navigation/native";
 import type { ReactNode } from "react";
-import {
-  memo,
-  useCallback,
-  useEffect,
-  useLayoutEffect,
-  useMemo,
-  useRef,
-  useState,
-  type RefObject,
-} from "react";
+import { useEffect, useLayoutEffect, useRef, useState, type RefObject } from "react";
 import {
   type AccessibilityActionEvent,
   Keyboard,
@@ -70,6 +63,7 @@ import {
   setComposerDraftText,
   composerContextImportsAtom,
   countComposerDraftAttachmentsAfterSelection,
+  useComposerDraft,
 } from "../../state/use-composer-drafts";
 import { appAtomRegistry } from "../../state/atom-registry";
 import type { ComposerDocumentAttachment } from "../../lib/composerContext";
@@ -104,7 +98,6 @@ import { useComposerProviderUsage } from "./useComposerProviderUsage";
 import { ProviderIcon } from "../../components/ProviderIcon";
 import {
   composerStripAttachments,
-  type DraftComposerAttachment,
   type DraftComposerFileAttachment,
 } from "../../lib/composerImages";
 import {
@@ -161,8 +154,6 @@ export const COMPOSER_EXPANDED_CHROME = 156;
 
 export interface ThreadComposerProps {
   readonly canOperateThread: boolean;
-  readonly draftMessage: string;
-  readonly draftAttachments: ReadonlyArray<DraftComposerAttachment>;
   readonly placeholder: string;
   readonly contentMaxWidth?: number;
   readonly bottomInset?: number;
@@ -374,7 +365,7 @@ export function ComposerSurface(props: {
   );
 }
 
-export const ThreadComposer = memo(function ThreadComposer(props: ThreadComposerProps) {
+export const ThreadComposer = function ThreadComposer(props: ThreadComposerProps) {
   const project = useProject(scopeProjectRef(props.environmentId, props.selectedThread.projectId));
   const { themeVariables: materialTheme } = useAppearancePreferences();
   const composerPanel = materialTheme["--color-composer-panel"];
@@ -414,15 +405,18 @@ export const ThreadComposer = memo(function ThreadComposer(props: ThreadComposer
 
   const [previewFile, setPreviewFile] = useState<FilePreviewSource | null>(null);
   const [previewVideo, setPreviewVideo] = useState<VideoPreviewSource | null>(null);
+  const composerOwnerKey = scopedThreadKey(props.environmentId, props.selectedThread.id);
+  // Content lives under the edit's own draft while a queued message is open;
+  // the owner key still identifies this composer for settings, while dictation
+  // targets the draft key so a queued edit dictates into its own draft.
+  const composerDraftKey = props.draftKey ?? composerOwnerKey;
+  const { text: draftMessage, attachments: draftAttachments } = useComposerDraft(composerDraftKey);
   const queuedEdit = props.queuedEdit ?? null;
   const hasContent =
-    props.draftMessage.trim().length > 0 ||
-    props.draftAttachments.length > 0 ||
+    draftMessage.trim().length > 0 ||
+    draftAttachments.length > 0 ||
     (queuedEdit?.existingAttachments.length ?? 0) > 0;
-  const stripAttachments = useMemo(
-    () => composerStripAttachments(props.draftAttachments),
-    [props.draftAttachments],
-  );
+  const stripAttachments = composerStripAttachments(draftAttachments);
   const showStopAction = !hasContent && props.canStopThread && queuedEdit === null;
 
   const uploadStates = useAtomValue(composerAttachmentUploadsAtom);
@@ -430,7 +424,7 @@ export const ThreadComposer = memo(function ThreadComposer(props: ThreadComposer
     props.connectionState === "connected" &&
     composerAttachmentsStillUploading({
       environmentId: props.environmentId,
-      attachments: props.draftAttachments,
+      attachments: draftAttachments,
       serverConfig: props.serverConfig,
       states: uploadStates,
     });
@@ -452,19 +446,14 @@ export const ThreadComposer = memo(function ThreadComposer(props: ThreadComposer
       currentModelSelection,
       props.selectedThread.projectId,
     );
-  const selectedProviderStatus = useMemo(() => {
+  const selectedProviderStatus = (() => {
     if (!props.serverConfig) return null;
     return (
       props.serverConfig.providers.find(
         (p) => p.instanceId === props.selectedThread.modelSelection.instanceId,
       ) ?? null
     );
-  }, [props.serverConfig, props.selectedThread.modelSelection.instanceId]);
-  const composerOwnerKey = scopedThreadKey(props.environmentId, props.selectedThread.id);
-  // Content lives under the edit's own draft while a queued message is open;
-  // the owner key still identifies this composer for settings, while dictation
-  // targets the draft key so a queued edit dictates into its own draft.
-  const composerDraftKey = props.draftKey ?? composerOwnerKey;
+  })();
   const openDraftDocument = (attachment: ComposerDocumentAttachment) => {
     Keyboard.dismiss();
     navigation.navigate("ThreadAttachment", {
@@ -485,7 +474,7 @@ export const ThreadComposer = memo(function ThreadComposer(props: ThreadComposer
       props.serverConfig?.providers ?? [],
       props.serverConfig?.usageLimitSources ?? [],
     );
-  const openUsageLimits = useCallback(() => {
+  const openUsageLimits = () => {
     const report = collectProviderUsageLimits(
       currentModelSelection.instanceId,
       props.serverConfig?.providers ?? [],
@@ -497,11 +486,11 @@ export const ThreadComposer = memo(function ThreadComposer(props: ThreadComposer
       Dialog.alert("Usage limits unavailable", "This provider does not currently report limits.");
     }
     return report !== null;
-  }, [currentModelSelection.instanceId, onShowUsageLimits, props.serverConfig]);
+  };
 
   const composerMenu = useComposerCommandMenu({
-    draftMessage: props.draftMessage,
-    ownerKey: composerOwnerKey,
+    draftMessage: draftMessage,
+    ownerKey: composerDraftKey,
     environmentId: props.environmentId,
     threadShells: useThreadShells(),
     currentThreadId: props.selectedThread.id,
@@ -521,7 +510,7 @@ export const ThreadComposer = memo(function ThreadComposer(props: ThreadComposer
         : props.onUpdateInteractionMode,
     offersUsageLimits: usageLimitsOffered,
     onUsageLimits:
-      usageLimitsOffered && props.draftAttachments.length === 0 ? openUsageLimits : undefined,
+      usageLimitsOffered && draftAttachments.length === 0 ? openUsageLimits : undefined,
   });
   const voiceInput = useVoiceInputController({
     ownerKey: composerDraftKey,
@@ -549,7 +538,7 @@ export const ThreadComposer = memo(function ThreadComposer(props: ThreadComposer
   const isToolbarVisible = isExpanded || isVoiceInputPresented;
   const attachmentBlockReason = composerAttachmentUploadBlockReason({
     environmentId: props.environmentId,
-    attachments: props.draftAttachments,
+    attachments: draftAttachments,
     connected: props.connectionState === "connected",
     serverConfig: props.serverConfig,
     states: uploadStates,
@@ -572,24 +561,21 @@ export const ThreadComposer = memo(function ThreadComposer(props: ThreadComposer
     onExpandedChange?.(isExpanded);
   }, [isExpanded, onExpandedChange]);
 
-  const onPressPreview = useCallback(
-    (source: FilePreviewSource) => {
-      if (overlaySheetOwnerRef.current !== null) return;
-      overlaySheetOwnerRef.current = "preview";
-      wasExpandedBeforePreviewRef.current = isFocused;
-      setPreviewVideo(null);
-      setPreviewFile(
-        (current) =>
-          current ?? {
-            ...source,
-            gallery: filePreviewGallery(source, composerImageGallery(props.draftAttachments)),
-          },
-      );
-    },
-    [isFocused, props.draftAttachments],
-  );
+  const onPressPreview = (source: FilePreviewSource) => {
+    if (overlaySheetOwnerRef.current !== null) return;
+    overlaySheetOwnerRef.current = "preview";
+    wasExpandedBeforePreviewRef.current = isFocused;
+    setPreviewVideo(null);
+    setPreviewFile(
+      (current) =>
+        current ?? {
+          ...source,
+          gallery: filePreviewGallery(source, composerImageGallery(draftAttachments)),
+        },
+    );
+  };
 
-  const closePreview = useCallback(() => {
+  const closePreview = () => {
     setPreviewFile(null);
     setPreviewVideo(null);
     if (overlaySheetOwnerRef.current === "preview") {
@@ -600,40 +586,37 @@ export const ThreadComposer = memo(function ThreadComposer(props: ThreadComposer
         if (navigation.isFocused()) inputRef.current?.focus();
       }, 100);
     }
-  }, [inputRef, navigation]);
+  };
 
-  const onPressVideo = useCallback(
-    (attachment: DraftComposerFileAttachment, sourceIdentifier: string) => {
-      if (overlaySheetOwnerRef.current !== null) return;
-      overlaySheetOwnerRef.current = "preview";
-      wasExpandedBeforePreviewRef.current = isFocused;
-      setPreviewFile(null);
-      setPreviewVideo({ type: "local", attachment, sourceIdentifier });
-    },
-    [isFocused],
-  );
+  const onPressVideo = (attachment: DraftComposerFileAttachment, sourceIdentifier: string) => {
+    if (overlaySheetOwnerRef.current !== null) return;
+    overlaySheetOwnerRef.current = "preview";
+    wasExpandedBeforePreviewRef.current = isFocused;
+    setPreviewFile(null);
+    setPreviewVideo({ type: "local", attachment, sourceIdentifier });
+  };
   // The inline context sheet (and the media preview it can present directly)
   // is one more composer overlay: it takes the same synchronous owner as the
   // settings and strip previews, and hands it back on every close.
-  const acquireContextOverlay = useCallback(() => {
+  const acquireContextOverlay = () => {
     if (overlaySheetOwnerRef.current !== null) return false;
     overlaySheetOwnerRef.current = "context";
     return true;
-  }, []);
-  const releaseContextOverlay = useCallback(() => {
+  };
+  const releaseContextOverlay = () => {
     if (overlaySheetOwnerRef.current === "context") {
       overlaySheetOwnerRef.current = null;
     }
-  }, []);
+  };
 
   const onEditorFocusChange = props.onEditorFocusChange;
-  const handleFocus = useCallback(() => {
+  const handleFocus = () => {
     setIsFocused(true);
     onExpandedChange?.(true);
     onEditorFocusChange?.(true);
-  }, [onEditorFocusChange, onExpandedChange]);
+  };
 
-  const handleBlur = useCallback(() => {
+  const handleBlur = () => {
     setIsFocused(false);
     if (
       !settingsSheetPresentation.keepsComposerExpanded &&
@@ -642,151 +625,91 @@ export const ThreadComposer = memo(function ThreadComposer(props: ThreadComposer
       onExpandedChange?.(false);
     }
     onEditorFocusChange?.(false);
-  }, [
-    onEditorFocusChange,
-    onExpandedChange,
-    settingsSheetPresentation.keepsComposerExpanded,
-    usageSheetPresentation.keepsComposerExpanded,
-  ]);
-  const handleSend = useCallback(
-    async (followUp?: ActiveTurnComposerAction) => {
-      if (voiceInput.blocksSubmission || pendingPastedTextAttachmentCountRef.current > 0) return;
-      if (
-        usageLimitsOffered &&
-        isUsageLimitsCommand(props.draftMessage) &&
-        props.draftAttachments.length === 0
-      ) {
-        if (openUsageLimits()) onChangeDraftMessage("");
-        return;
-      }
-      const threadKey = scopedThreadKey(props.environmentId, props.selectedThread.id);
-      if (inFlightThreadIdsRef.current.has(threadKey)) return;
-      inFlightThreadIdsRef.current.add(threadKey);
-      try {
-        const messageId = await onSendMessage(followUp);
-        if (messageId === null) {
-          return;
-        }
-        // Armed after the send so its preference read and native Activity start don't contend
-        // with the queued-message feedback on the tap frame.
-        armAgentAwarenessLiveActivityForLocalWork({
-          environmentId: props.environmentId,
-          threadTitle: props.selectedThread.title,
-          projectTitle: props.environmentLabel ?? "T3 Code",
-        });
-      } finally {
-        inFlightThreadIdsRef.current.delete(threadKey);
-      }
-    },
-    [
-      props.draftMessage,
-      props.draftAttachments.length,
-      onChangeDraftMessage,
-      openUsageLimits,
-      usageLimitsOffered,
-      onSendMessage,
-      props.environmentId,
-      props.environmentLabel,
-      props.selectedThread.id,
-      props.selectedThread.title,
-      voiceInput.blocksSubmission,
-    ],
-  );
+  };
+  const handleSend = async (followUp?: ActiveTurnComposerAction) => {
+    if (voiceInput.blocksSubmission || pendingPastedTextAttachmentCountRef.current > 0) return;
+    if (usageLimitsOffered && isUsageLimitsCommand(draftMessage) && draftAttachments.length === 0) {
+      if (openUsageLimits()) onChangeDraftMessage("");
+      return;
+    }
+    const threadKey = scopedThreadKey(props.environmentId, props.selectedThread.id);
+    if (inFlightThreadIdsRef.current.has(threadKey)) return;
+    inFlightThreadIdsRef.current.add(threadKey);
+    const sent = await settlePromise(() => onSendMessage(followUp));
+    inFlightThreadIdsRef.current.delete(threadKey);
+    if (AsyncResult.isFailure(sent)) {
+      // The composer state already surfaces send errors; only the lock needed releasing.
+      console.error("[composer] send failed", squashAtomCommandFailure(sent));
+      return;
+    }
+    if (sent.value === null) return;
+    // Armed after the send so its preference read and native Activity start don't contend
+    // with the queued-message feedback on the tap frame.
+    armAgentAwarenessLiveActivityForLocalWork({
+      environmentId: props.environmentId,
+      threadTitle: props.selectedThread.title,
+      projectTitle: props.environmentLabel ?? "T3 Code",
+    });
+  };
 
   const lockedProviderInstanceId = props.canSwitchProvider
     ? undefined
     : currentModelSelection.instanceId;
-  const modelOptions = useMemo(
-    () =>
-      buildModelOptions(
-        props.serverConfig,
-        currentModelSelection,
-        lockedProviderInstanceId,
-        props.selectedThread.projectId,
-      ),
-    [
-      props.serverConfig,
-      currentModelSelection,
-      lockedProviderInstanceId,
-      props.selectedThread.projectId,
-    ],
+  const modelOptions = buildModelOptions(
+    props.serverConfig,
+    currentModelSelection,
+    lockedProviderInstanceId,
+    props.selectedThread.projectId,
   );
-  const threadProviderGroups = useMemo(() => groupByProvider(modelOptions), [modelOptions]);
+  const threadProviderGroups = groupByProvider(modelOptions);
   const currentModelOption =
     modelOptions.find(
       (option) =>
         option.selection.instanceId === currentModelSelection.instanceId &&
         option.selection.model === currentModelSelection.model,
     ) ?? null;
-  const providerOptionDescriptors = useMemo(
-    () =>
-      resolveProviderOptionDescriptors({
-        capabilities: currentModelOption?.capabilities,
-        selections: currentModelSelection.options,
-      }),
-    [currentModelOption?.capabilities, currentModelSelection.options],
-  );
-  const settingsAccessibilityValue = useMemo(
-    () =>
-      [
-        currentModelOption?.label ?? currentModelSelection.model,
-        ...providerOptionValueLabels(providerOptionDescriptors),
-        RUNTIME_MODE_CHOICES.find((choice) => choice.mode === currentRuntimeMode)?.label,
-      ]
-        .filter((value): value is string => value !== undefined)
-        .join(" · "),
-    [
-      currentModelOption?.label,
-      currentModelSelection.model,
-      currentRuntimeMode,
-      providerOptionDescriptors,
-    ],
-  );
+  const providerOptionDescriptors = resolveProviderOptionDescriptors({
+    capabilities: currentModelOption?.capabilities,
+    selections: currentModelSelection.options,
+  });
+  const settingsAccessibilityValue = [
+    currentModelOption?.label ?? currentModelSelection.model,
+    ...providerOptionValueLabels(providerOptionDescriptors),
+    RUNTIME_MODE_CHOICES.find((choice) => choice.mode === currentRuntimeMode)?.label,
+  ]
+    .filter((value): value is string => value !== undefined)
+    .join(" · ");
   const settingsOwnerId = composerOwnerKey;
-  const settingsRouteSession = useMemo<ExistingThreadSettingsRouteSession>(
-    () => ({
-      ownerId: settingsOwnerId,
-      environmentId: props.environmentId,
-      projectId: props.selectedThread.projectId,
-      providerInstanceId: currentModelSelection.instanceId,
-      ...(lockedProviderInstanceId ? { lockedProviderInstanceId } : {}),
-      providerGroups: threadProviderGroups,
-      selectedModel: currentModelSelection,
-      reportedModelSelection: props.reportedModelSelection,
-      onSelectModel: (option) =>
-        props.onUpdateModelSelection(withRememberedModelOptions(option.selection)),
-      optionDescriptors: providerOptionDescriptors,
-      onUpdateOptionSelections: (options) => {
-        rememberModelOptions(
-          currentModelSelection.instanceId,
-          currentModelSelection.model,
-          options ?? [],
-        );
-        props.onUpdateModelSelection({ ...currentModelSelection, options });
-      },
-      runtimeMode: currentRuntimeMode,
-      onUpdateRuntimeMode: props.onUpdateRuntimeMode,
-    }),
-    [
-      currentModelSelection,
-      props.reportedModelSelection,
-      currentRuntimeMode,
-      props.onUpdateModelSelection,
-      props.onUpdateRuntimeMode,
-      providerOptionDescriptors,
-      settingsOwnerId,
-      lockedProviderInstanceId,
-      threadProviderGroups,
-      props.selectedThread.projectId,
-    ],
-  );
-  const openSettings = useCallback(() => {
+  const settingsRouteSession = {
+    ownerId: settingsOwnerId,
+    environmentId: props.environmentId,
+    projectId: props.selectedThread.projectId,
+    providerInstanceId: currentModelSelection.instanceId,
+    ...(lockedProviderInstanceId ? { lockedProviderInstanceId } : {}),
+    providerGroups: threadProviderGroups,
+    selectedModel: currentModelSelection,
+    reportedModelSelection: props.reportedModelSelection,
+    onSelectModel: (option) =>
+      props.onUpdateModelSelection(withRememberedModelOptions(option.selection)),
+    optionDescriptors: providerOptionDescriptors,
+    onUpdateOptionSelections: (options) => {
+      rememberModelOptions(
+        currentModelSelection.instanceId,
+        currentModelSelection.model,
+        options ?? [],
+      );
+      props.onUpdateModelSelection({ ...currentModelSelection, options });
+    },
+    runtimeMode: currentRuntimeMode,
+    onUpdateRuntimeMode: props.onUpdateRuntimeMode,
+  } satisfies ExistingThreadSettingsRouteSession;
+  const openSettings = () => {
     if (overlaySheetOwnerRef.current !== null) return;
     overlaySheetOwnerRef.current = "settings";
     settingsRoutePresentation.present(settingsRouteSession);
     settingsSheetPresentation.open();
-  }, [settingsRoutePresentation.present, settingsRouteSession, settingsSheetPresentation.open]);
-  const handleAttachmentOverlayVisibilityChange = useCallback((visible: boolean) => {
+  };
+  const handleAttachmentOverlayVisibilityChange = (visible: boolean) => {
     if (visible) {
       if (overlaySheetOwnerRef.current === null) {
         overlaySheetOwnerRef.current = "attachment";
@@ -796,7 +719,7 @@ export const ThreadComposer = memo(function ThreadComposer(props: ThreadComposer
     if (overlaySheetOwnerRef.current === "attachment") {
       overlaySheetOwnerRef.current = null;
     }
-  }, []);
+  };
 
   useEffect(() => {
     if (settingsSheetPresentation.isActive) {
@@ -819,36 +742,23 @@ export const ThreadComposer = memo(function ThreadComposer(props: ThreadComposer
   });
   const providerUsageMeter = providerUsage.meter;
   const providerUsageLabel = providerUsageMeter.label ?? "Provider";
-  const usageRouteSession = useMemo<ProviderUsageRouteSession>(
-    () => ({
-      ownerId: settingsOwnerId,
-      providerLabel: providerUsageLabel,
-      accounts: providerUsageMeter.accounts,
-      fableUsage: providerUsageMeter.fable,
-      nowMs: providerUsage.nowMs,
-      panelObservedAt: providerUsage.panelObservedAt,
-      refreshing: providerUsage.refreshing,
-      onRefresh: providerUsage.refresh,
-      unavailable: providerUsage.unavailable,
-    }),
-    [
-      providerUsage.nowMs,
-      providerUsage.panelObservedAt,
-      providerUsage.refresh,
-      providerUsage.refreshing,
-      providerUsage.unavailable,
-      providerUsageLabel,
-      providerUsageMeter.accounts,
-      providerUsageMeter.fable,
-      settingsOwnerId,
-    ],
-  );
+  const usageRouteSession = {
+    ownerId: settingsOwnerId,
+    providerLabel: providerUsageLabel,
+    accounts: providerUsageMeter.accounts,
+    fableUsage: providerUsageMeter.fable,
+    nowMs: providerUsage.nowMs,
+    panelObservedAt: providerUsage.panelObservedAt,
+    refreshing: providerUsage.refreshing,
+    onRefresh: providerUsage.refresh,
+    unavailable: providerUsage.unavailable,
+  } satisfies ProviderUsageRouteSession;
   const {
     lastRefreshAtMs: providerUsageLastRefreshAtMs,
     refresh: refreshProviderUsage,
     probeThreadAccount: probeProviderUsageThreadAccount,
   } = providerUsage;
-  const openProviderUsageSheet = useCallback(() => {
+  const openProviderUsageSheet = () => {
     if (overlaySheetOwnerRef.current !== null) return;
     overlaySheetOwnerRef.current = "usage";
     usageRoutePresentation.present(usageRouteSession);
@@ -868,14 +778,7 @@ export const ThreadComposer = memo(function ThreadComposer(props: ThreadComposer
     ) {
       refreshProviderUsage();
     }
-  }, [
-    probeProviderUsageThreadAccount,
-    providerUsageLastRefreshAtMs,
-    refreshProviderUsage,
-    usageRoutePresentation.present,
-    usageRouteSession,
-    usageSheetPresentation.open,
-  ]);
+  };
   useEffect(() => {
     if (usageSheetPresentation.isActive) {
       usageRoutePresentation.present(usageRouteSession);
@@ -920,30 +823,22 @@ export const ThreadComposer = memo(function ThreadComposer(props: ThreadComposer
     navigation.dispatch(StackActions.push("ThreadSettingsSheet"));
   }, [navigation, settingsSheetPresentation.isVisible]);
 
-  useFocusEffect(
-    useCallback(() => {
-      if (settingsRoutePresentedRef.current) {
-        settingsRoutePresentedRef.current = false;
-        settingsSheetPresentation.onDismissed();
-        settingsRoutePresentation.clear(settingsOwnerId);
-      }
-      if (usageRoutePresentedRef.current) {
-        usageRoutePresentedRef.current = false;
-        usageSheetPresentation.onDismissed();
-        usageRoutePresentation.clear(settingsOwnerId);
-      }
-      // The composer regaining focus means no overlay route is above it, so
-      // release the owner even if an open never reached its presented ref
-      // (a tap that blurred the editor but was dismissed before presenting).
-      overlaySheetOwnerRef.current = null;
-    }, [
-      settingsOwnerId,
-      settingsRoutePresentation.clear,
-      settingsSheetPresentation.onDismissed,
-      usageRoutePresentation.clear,
-      usageSheetPresentation.onDismissed,
-    ]),
-  );
+  useFocusEffect(() => {
+    if (settingsRoutePresentedRef.current) {
+      settingsRoutePresentedRef.current = false;
+      settingsSheetPresentation.onDismissed();
+      settingsRoutePresentation.clear(settingsOwnerId);
+    }
+    if (usageRoutePresentedRef.current) {
+      usageRoutePresentedRef.current = false;
+      usageSheetPresentation.onDismissed();
+      usageRoutePresentation.clear(settingsOwnerId);
+    }
+    // The composer regaining focus means no overlay route is above it, so
+    // release the owner even if an open never reached its presented ref
+    // (a tap that blurred the editor but was dismissed before presenting).
+    overlaySheetOwnerRef.current = null;
+  });
 
   useEffect(
     () =>
@@ -1123,7 +1018,7 @@ export const ThreadComposer = memo(function ThreadComposer(props: ThreadComposer
                 onReleaseOverlay={releaseContextOverlay}
                 ref={inputRef}
                 multiline
-                value={props.draftMessage}
+                value={draftMessage}
                 readOnly={voiceInput.freezesEditor}
                 skills={composerMenu.skills}
                 selection={composerMenu.selection}
@@ -1400,4 +1295,4 @@ export const ThreadComposer = memo(function ThreadComposer(props: ThreadComposer
       <FilePreviewModal source={previewFile} onRequestClose={closePreview} />
     </Animated.View>
   );
-});
+};

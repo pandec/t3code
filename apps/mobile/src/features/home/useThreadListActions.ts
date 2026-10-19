@@ -9,7 +9,7 @@ import { mergeThreadGroups, threadGroupId } from "@t3tools/shared/threadGroups";
 import { AuthOrchestrationOperateScope, CommandId } from "@t3tools/contracts";
 import * as Cause from "effect/Cause";
 import * as Haptics from "expo-haptics";
-import { useCallback, useRef } from "react";
+import { useRef } from "react";
 
 import { withThreadDismissal } from "./thread-dismissal";
 import * as Dialog from "../../components/ui/Dialog";
@@ -164,133 +164,103 @@ function useThreadActionExecutor(
   const { connectedEnvironments } = useRemoteConnectionStatus();
   const inFlightThreadKeys = useRef(new Set<string>());
 
-  const executeAction = useCallback(
-    async (action: ThreadListAction, thread: EnvironmentThreadShell) => {
-      const key = scopedThreadKey(thread.environmentId, thread.id);
-      if (inFlightThreadKeys.current.has(key)) {
+  const executeAction = async (action: ThreadListAction, thread: EnvironmentThreadShell) => {
+    const key = scopedThreadKey(thread.environmentId, thread.id);
+    if (inFlightThreadKeys.current.has(key)) {
+      return false;
+    }
+
+    inFlightThreadKeys.current.add(key);
+    selectionHaptic();
+    const succeeded = await (async () => {
+      if (
+        (action === "settle" || action === "unsettle") &&
+        !environmentSupportsSettlement(thread.environmentId)
+      ) {
+        Dialog.alert(
+          actionFailureTitle(action),
+          "This environment's server does not support settling yet. Update the server to use Settle.",
+        );
+        return false;
+      }
+      // Fork: archive controls while disconnected queue a durable intent
+      // applied on reconnect, where archives are sent as archive-when-done.
+      // They revise any existing intent (Undo), whatever the connection
+      // state, so a direct command never races it.
+      const existingIntent = appAtomRegistry.get(
+        threadLifecycleOutboxManager.intentsByThreadKeyAtom,
+      )[key];
+      const environmentConnected = connectedEnvironments.some(
+        (environment) =>
+          environment.environmentId === thread.environmentId &&
+          environment.connectionState === "connected",
+      );
+      if (
+        isThreadLifecycleUserAction(action) &&
+        threadLifecycleActionUsesOutbox({
+          action,
+          environmentConnected,
+          hasIntent: existingIntent !== undefined,
+        })
+      ) {
+        const revision = threadLifecycleIntentRevision(action, existingIntent);
+        const { desiredArchived } = revision;
+        if (existingIntent?.desiredArchived === desiredArchived) return true;
+        const enqueue = async () => {
+          await enqueueThreadLifecycleIntent({
+            environmentId: thread.environmentId,
+            threadId: thread.id,
+            ...revision,
+            dispatchAttempted: false,
+            dispatchedAction: null,
+            commandId: CommandId.make(uuidv4()),
+            createdAt: new Date().toISOString(),
+            thread: existingIntent?.thread ?? thread.source,
+          });
+          return true;
+        };
+        const enqueued = await // A cancelled pending archive keeps its row in place.
+        (
+          action === "cancel-archive"
+            ? enqueue()
+            : withThreadDismissal(key, enqueue, (result) => result)
+        ).then(
+          () => true,
+          (error: unknown) => {
+            Dialog.alert(actionFailureTitle(action), actionFailureMessage(action, error));
+            return false;
+          },
+        );
+        if (!enqueued) return false;
+        // A queued archive hides the row just like a direct one.
+        if (desiredArchived) pauseListeningForThread(thread.environmentId, thread.id);
+        onCompleted?.(desiredArchived ? "archive" : "unarchive", thread);
+        return true;
+      }
+
+      // Archive keeps its original, narrower guard: never interrupt a
+      // thread mid-turn. Offline, the queued intent defers instead.
+      if (action === "archive" && !threadCanArchive(thread.runtime)) {
+        Dialog.alert(
+          actionFailureTitle(action),
+          "This thread is working. Interrupt it first, then try again.",
+        );
         return false;
       }
 
-      inFlightThreadKeys.current.add(key);
-      selectionHaptic();
-      try {
-        if (
-          (action === "settle" || action === "unsettle") &&
-          !environmentSupportsSettlement(thread.environmentId)
-        ) {
-          Dialog.alert(
-            actionFailureTitle(action),
-            "This environment's server does not support settling yet. Update the server to use Settle.",
-          );
-          return false;
-        }
-        // Fork: archive controls while disconnected queue a durable intent
-        // applied on reconnect, where archives are sent as archive-when-done.
-        // They revise any existing intent (Undo), whatever the connection
-        // state, so a direct command never races it.
-        const existingIntent = appAtomRegistry.get(
-          threadLifecycleOutboxManager.intentsByThreadKeyAtom,
-        )[key];
-        const environmentConnected = connectedEnvironments.some(
-          (environment) =>
-            environment.environmentId === thread.environmentId &&
-            environment.connectionState === "connected",
-        );
-        if (
-          isThreadLifecycleUserAction(action) &&
-          threadLifecycleActionUsesOutbox({
-            action,
-            environmentConnected,
-            hasIntent: existingIntent !== undefined,
-          })
-        ) {
-          const revision = threadLifecycleIntentRevision(action, existingIntent);
-          const { desiredArchived } = revision;
-          if (existingIntent?.desiredArchived === desiredArchived) return true;
-          const enqueue = async () => {
-            await enqueueThreadLifecycleIntent({
+      // Checked here, after the outbox branch: an offline connection cannot
+      // confirm its grant. The lifecycle-outbox drain checks it on reconnect
+      // and drops intents the connection cannot dispatch.
+      if (!checkThreadOperationPermission(thread, actionFailureTitle(action))) return false;
+      // Scheduling or cancelling a deferred archive keeps the row in place.
+      if (action === "schedule-archive" || action === "cancel-archive") {
+        const input = { threadId: thread.id };
+        const result = await (action === "schedule-archive"
+          ? scheduleArchiveMutation({
               environmentId: thread.environmentId,
-              threadId: thread.id,
-              ...revision,
-              dispatchAttempted: false,
-              dispatchedAction: null,
-              commandId: CommandId.make(uuidv4()),
-              createdAt: new Date().toISOString(),
-              thread: existingIntent?.thread ?? thread.source,
-            });
-            return true;
-          };
-          try {
-            // A cancelled pending archive keeps its row in place.
-            if (action === "cancel-archive") await enqueue();
-            else await withThreadDismissal(key, enqueue, (result) => result);
-          } catch (error) {
-            Dialog.alert(actionFailureTitle(action), actionFailureMessage(action, error));
-            return false;
-          }
-          // A queued archive hides the row just like a direct one.
-          if (desiredArchived) pauseListeningForThread(thread.environmentId, thread.id);
-          onCompleted?.(desiredArchived ? "archive" : "unarchive", thread);
-          return true;
-        }
-
-        // Archive keeps its original, narrower guard: never interrupt a
-        // thread mid-turn. Offline, the queued intent defers instead.
-        if (action === "archive" && !threadCanArchive(thread.runtime)) {
-          Dialog.alert(
-            actionFailureTitle(action),
-            "This thread is working. Interrupt it first, then try again.",
-          );
-          return false;
-        }
-
-        // Checked here, after the outbox branch: an offline connection cannot
-        // confirm its grant. The lifecycle-outbox drain checks it on reconnect
-        // and drops intents the connection cannot dispatch.
-        if (!checkThreadOperationPermission(thread, actionFailureTitle(action))) return false;
-        // Scheduling or cancelling a deferred archive keeps the row in place.
-        if (action === "schedule-archive" || action === "cancel-archive") {
-          const input = { threadId: thread.id };
-          const result = await (action === "schedule-archive"
-            ? scheduleArchiveMutation({
-                environmentId: thread.environmentId,
-                input: { ...input, afterTurn: true },
-              })
-            : cancelArchiveMutation({ environmentId: thread.environmentId, input }));
-          if (result._tag === "Failure") {
-            Dialog.alert(
-              actionFailureTitle(action),
-              actionFailureMessage(action, Cause.squash(result.cause)),
-            );
-            return false;
-          }
-          onCompleted?.(action, thread);
-          return true;
-        }
-        const result = await withThreadDismissal(
-          key,
-          async () =>
-            action === "unsettle"
-              ? // reason "user" pins the thread active: auto-settle stays
-                // suppressed until real activity clears the pin server-side.
-                await unsettleMutation({
-                  environmentId: thread.environmentId,
-                  input: { threadId: thread.id, reason: "user" },
-                })
-              : await (
-                  action === "settle"
-                    ? settleMutation
-                    : action === "archive"
-                      ? archiveMutation
-                      : action === "unarchive"
-                        ? unarchiveMutation
-                        : deleteMutation
-                )({
-                  environmentId: thread.environmentId,
-                  input: { threadId: thread.id },
-                }),
-          (result) => result._tag === "Success",
-        );
+              input: { ...input, afterTurn: true },
+            })
+          : cancelArchiveMutation({ environmentId: thread.environmentId, input }));
         if (result._tag === "Failure") {
           Dialog.alert(
             actionFailureTitle(action),
@@ -298,63 +268,83 @@ function useThreadActionExecutor(
           );
           return false;
         }
-        if (action === "archive" || action === "unarchive" || action === "delete") {
-          refreshArchivedThreadsForEnvironment(thread.environmentId);
-        }
-        // Audio owned by a deleted thread must not keep playing with no
-        // control anywhere; deletion clears the player outright. Archive
-        // pauses instead — archived rows also leave every surface carrying
-        // the pause control, but the recording stays loaded and resumable.
-        if (action === "delete") {
-          stopListeningForThread(thread.environmentId, thread.id);
-        } else if (action === "archive") {
-          pauseListeningForThread(thread.environmentId, thread.id);
-        }
         onCompleted?.(action, thread);
         return true;
-      } finally {
-        inFlightThreadKeys.current.delete(key);
       }
-    },
-    [
-      archiveMutation,
-      cancelArchiveMutation,
-      connectedEnvironments,
-      deleteMutation,
-      onCompleted,
-      scheduleArchiveMutation,
-      settleMutation,
-      unarchiveMutation,
-      unsettleMutation,
-    ],
-  );
+      const result = await withThreadDismissal(
+        key,
+        async () =>
+          action === "unsettle"
+            ? // reason "user" pins the thread active: auto-settle stays
+              // suppressed until real activity clears the pin server-side.
+              await unsettleMutation({
+                environmentId: thread.environmentId,
+                input: { threadId: thread.id, reason: "user" },
+              })
+            : await (
+                action === "settle"
+                  ? settleMutation
+                  : action === "archive"
+                    ? archiveMutation
+                    : action === "unarchive"
+                      ? unarchiveMutation
+                      : deleteMutation
+              )({
+                environmentId: thread.environmentId,
+                input: { threadId: thread.id },
+              }),
+        (result) => result._tag === "Success",
+      );
+      if (result._tag === "Failure") {
+        Dialog.alert(
+          actionFailureTitle(action),
+          actionFailureMessage(action, Cause.squash(result.cause)),
+        );
+        return false;
+      }
+      if (action === "archive" || action === "unarchive" || action === "delete") {
+        refreshArchivedThreadsForEnvironment(thread.environmentId);
+      }
+      // Audio owned by a deleted thread must not keep playing with no
+      // control anywhere; deletion clears the player outright. Archive
+      // pauses instead — archived rows also leave every surface carrying
+      // the pause control, but the recording stays loaded and resumable.
+      if (action === "delete") {
+        stopListeningForThread(thread.environmentId, thread.id);
+      } else if (action === "archive") {
+        pauseListeningForThread(thread.environmentId, thread.id);
+      }
+      onCompleted?.(action, thread);
+      return true;
+    })();
+    inFlightThreadKeys.current.delete(key);
+    return succeeded;
+  };
 
   return executeAction;
 }
 
-function useConfirmDeleteThread(
+// A plain function, not a hook: a `use*` function that calls no hooks is skipped by
+// the compiler, so the delete handler it returned was a new closure every render.
+function confirmThreadDeletion(
   executeAction: (action: ThreadListAction, thread: EnvironmentThreadShell) => Promise<boolean>,
+  thread: EnvironmentThreadShell,
   onDeleted?: (thread: EnvironmentThreadShell) => void,
 ) {
-  return useCallback(
-    (thread: EnvironmentThreadShell) => {
-      if (!checkThreadOperationPermission(thread, actionFailureTitle("delete"))) return;
-      const title = "Delete thread?";
-      const message = `“${thread.title}” will be permanently deleted, including its terminal history.`;
-      Dialog.confirm({
-        title,
-        message,
-        confirmText: "Delete",
-        destructive: true,
-        onConfirm: () => {
-          void executeAction("delete", thread).then((result) => {
-            if (result) onDeleted?.(thread);
-          });
-        },
+  if (!checkThreadOperationPermission(thread, actionFailureTitle("delete"))) return;
+  const title = "Delete thread?";
+  const message = `“${thread.title}” will be permanently deleted, including its terminal history.`;
+  Dialog.confirm({
+    title,
+    message,
+    confirmText: "Delete",
+    destructive: true,
+    onConfirm: () => {
+      void executeAction("delete", thread).then((result) => {
+        if (result) onDeleted?.(thread);
       });
     },
-    [executeAction, onDeleted],
-  );
+  });
 }
 
 export function useThreadListActions(
@@ -390,22 +380,16 @@ export function useThreadListActions(
   /** Forks the conversation and opens the copy. */
   readonly forkThread: (thread: EnvironmentThreadShell) => void;
 } {
-  const handleSelectedThreadRemoved = useCallback(
-    (thread: EnvironmentThreadShell) => {
-      if (scopedThreadKey(thread.environmentId, thread.id) === options.selectedThreadKey) {
-        options.onSelectedThreadRemoved?.();
-      }
-    },
-    [options.onSelectedThreadRemoved, options.selectedThreadKey],
-  );
+  const handleSelectedThreadRemoved = (thread: EnvironmentThreadShell) => {
+    if (scopedThreadKey(thread.environmentId, thread.id) === options.selectedThreadKey) {
+      options.onSelectedThreadRemoved?.();
+    }
+  };
   // Archived rows leave the list, including archives queued offline; a
   // scheduled or cancelled deferred archive keeps the row.
-  const handleCompleted = useCallback(
-    (action: ThreadListAction, thread: EnvironmentThreadShell) => {
-      if (action === "archive") handleSelectedThreadRemoved(thread);
-    },
-    [handleSelectedThreadRemoved],
-  );
+  const handleCompleted = (action: ThreadListAction, thread: EnvironmentThreadShell) => {
+    if (action === "archive") handleSelectedThreadRemoved(thread);
+  };
   const executeAction = useThreadActionExecutor(handleCompleted);
   const forkThread = useForkConversation(options.onOpenForkedThread);
   const snoozeMutation = useAtomCommand(threadEnvironment.snooze, { reportFailure: false });
@@ -422,324 +406,293 @@ export function useThreadListActions(
   const titleRegenerationInFlightThreadKeys = useRef(new Set<string>());
 
   /** The archive toggle: archives, archives when done, or cancels a pending archive. */
-  const archiveThread = useCallback(
-    (thread: EnvironmentThreadShell) => {
-      const toggle = resolveArchiveToggleAction(thread);
-      void executeAction(
-        toggle === "cancel"
-          ? "cancel-archive"
-          : toggle === "schedule"
-            ? "schedule-archive"
-            : "archive",
-        thread,
-      );
-    },
-    [executeAction],
-  );
-  const settleThread = useCallback(
-    async (thread: EnvironmentThreadShell) => (await executeAction("settle", thread)) === true,
-    [executeAction],
-  );
-  const snoozeThread = useCallback(
-    async (
-      thread: EnvironmentThreadShell,
-      snoozedUntil: string | null,
-      options?: { readonly untilDone?: boolean },
-    ) => {
-      if (!checkThreadOperationPermission(thread, "Could not snooze thread")) return false;
-      const untilDone = options?.untilDone === true;
-      const key = scopedThreadKey(thread.environmentId, thread.id);
-      if (snoozeInFlightThreadKeys.current.has(key)) {
-        return false;
-      }
-      snoozeInFlightThreadKeys.current.add(key);
-      try {
-        if (!environmentSupportsSnooze(thread.environmentId)) {
-          Dialog.alert(
-            "Could not snooze thread",
-            "This environment's server does not support snoozing yet. Update the server to use Snooze.",
-          );
-          return false;
-        }
-        // Fork: only "Until it's done" may omit the wake time on mobile, and
-        // older servers drop its flag and would park the thread for good.
-        if (
-          snoozedUntil === null &&
-          (!untilDone || !environmentSupportsSnoozeUntilDone(thread.environmentId))
-        ) {
-          Dialog.alert(
-            "Could not snooze thread",
-            "This environment's server does not support snoozing until the work is done. Update the server to use it.",
-          );
-          return false;
-        }
-        if (!canSnooze(thread)) {
-          Dialog.alert(
-            "Could not snooze thread",
-            thread.hasPendingApprovals ||
-              thread.hasPendingUserInput ||
-              thread.pendingSubagentRequest != null
-              ? "This thread is waiting on you. Respond to the pending request before snoozing it."
-              : "This thread is still starting a turn. Try again once it's running.",
-          );
-          return false;
-        }
-
-        selectionHaptic();
-        const result = await withThreadDismissal(
-          key,
-          () =>
-            snoozeMutation({
-              environmentId: thread.environmentId,
-              input: {
-                threadId: thread.id,
-                snoozedUntil,
-                ...(untilDone ? { untilDone } : {}),
-              },
-            }),
-          (result) => result._tag === "Success",
-        );
-        if (result._tag === "Failure") {
-          const error = Cause.squash(result.cause);
-          Dialog.alert(
-            "Could not snooze thread",
-            error instanceof Error && error.message.trim().length > 0
-              ? error.message
-              : "The thread could not be snoozed.",
-          );
-          return false;
-        }
-        return true;
-      } finally {
-        snoozeInFlightThreadKeys.current.delete(key);
-      }
-    },
-    [snoozeMutation],
-  );
-  const unsnoozeThread = useCallback(
-    async (thread: EnvironmentThreadShell) => {
-      if (!checkThreadOperationPermission(thread, "Could not wake thread")) return false;
-      const key = scopedThreadKey(thread.environmentId, thread.id);
-      if (snoozeInFlightThreadKeys.current.has(key)) {
-        return false;
-      }
-      snoozeInFlightThreadKeys.current.add(key);
-      try {
-        if (!environmentSupportsSnooze(thread.environmentId)) {
-          Dialog.alert(
-            "Could not wake thread",
-            "This environment's server does not support snoozing yet. Update the server to wake this thread.",
-          );
-          return false;
-        }
-
-        selectionHaptic();
-        const result = await withThreadDismissal(
-          key,
-          () =>
-            unsnoozeMutation({
-              environmentId: thread.environmentId,
-              input: { threadId: thread.id, reason: "user" },
-            }),
-          (result) => result._tag === "Success",
-        );
-        if (result._tag === "Failure") {
-          const error = Cause.squash(result.cause);
-          Dialog.alert(
-            "Could not wake thread",
-            error instanceof Error && error.message.trim().length > 0
-              ? error.message
-              : "The thread could not be woken.",
-          );
-          return false;
-        }
-        return true;
-      } finally {
-        snoozeInFlightThreadKeys.current.delete(key);
-      }
-    },
-    [unsnoozeMutation],
-  );
-  const unsettleThread = useCallback(
-    async (thread: EnvironmentThreadShell) => (await executeAction("unsettle", thread)) === true,
-    [executeAction],
-  );
-  const pinThread = useCallback(
-    async (thread: EnvironmentThreadShell) => {
-      if (!checkThreadOperationPermission(thread, "Could not pin thread")) return false;
-      if (!environmentSupportsPinning(thread.environmentId)) {
+  const archiveThread = (thread: EnvironmentThreadShell) => {
+    const toggle = resolveArchiveToggleAction(thread);
+    void executeAction(
+      toggle === "cancel"
+        ? "cancel-archive"
+        : toggle === "schedule"
+          ? "schedule-archive"
+          : "archive",
+      thread,
+    );
+  };
+  const settleThread = async (thread: EnvironmentThreadShell) =>
+    (await executeAction("settle", thread)) === true;
+  const snoozeThread = async (
+    thread: EnvironmentThreadShell,
+    snoozedUntil: string | null,
+    options?: { readonly untilDone?: boolean },
+  ) => {
+    if (!checkThreadOperationPermission(thread, "Could not snooze thread")) return false;
+    const untilDone = options?.untilDone === true;
+    const key = scopedThreadKey(thread.environmentId, thread.id);
+    if (snoozeInFlightThreadKeys.current.has(key)) {
+      return false;
+    }
+    snoozeInFlightThreadKeys.current.add(key);
+    const succeeded = await (async () => {
+      if (!environmentSupportsSnooze(thread.environmentId)) {
         Dialog.alert(
-          "Could not pin thread",
-          "This environment's server does not support pinning yet. Update the server to use Pin.",
+          "Could not snooze thread",
+          "This environment's server does not support snoozing yet. Update the server to use Snooze.",
         );
         return false;
       }
-      selectionHaptic();
-      // Same placement as web: a fresh pin takes the top of the arranged
-      // run. Servers that predate reordering get the bare pin (keyless).
-      let orderKey: string | undefined;
-      if (environmentSupportsPinReorder(thread.environmentId)) {
-        const shells = appAtomRegistry.get(environmentThreadShells.threadShellsAtom);
-        let firstKey: string | null = null;
-        for (const shell of shells) {
-          if (shell.pinnedAt == null || shell.pinOrderKey == null) continue;
-          if (firstKey === null || shell.pinOrderKey < firstKey) firstKey = shell.pinOrderKey;
-        }
-        orderKey = pinOrderKeyBetween(null, firstKey) ?? undefined;
-      }
-      const result = await pinMutation({
-        environmentId: thread.environmentId,
-        input: { threadId: thread.id, ...(orderKey !== undefined ? { orderKey } : {}) },
-      });
-      if (result._tag === "Failure") {
-        const error = Cause.squash(result.cause);
-        Dialog.alert(
-          "Could not pin thread",
-          error instanceof Error && error.message.trim().length > 0
-            ? error.message
-            : "The thread could not be pinned.",
-        );
-        return false;
-      }
-      return true;
-    },
-    [pinMutation],
-  );
-  const unpinThread = useCallback(
-    async (thread: EnvironmentThreadShell) => {
-      if (!checkThreadOperationPermission(thread, "Could not unpin thread")) return false;
-      if (!environmentSupportsPinning(thread.environmentId)) {
-        Dialog.alert(
-          "Could not unpin thread",
-          "This environment's server does not support pinning yet. Update the server to use Pin.",
-        );
-        return false;
-      }
-      selectionHaptic();
-      const result = await unpinMutation({
-        environmentId: thread.environmentId,
-        input: { threadId: thread.id },
-      });
-      if (result._tag === "Failure") {
-        const error = Cause.squash(result.cause);
-        Dialog.alert(
-          "Could not unpin thread",
-          error instanceof Error && error.message.trim().length > 0
-            ? error.message
-            : "The thread could not be unpinned.",
-        );
-        return false;
-      }
-      return true;
-    },
-    [unpinMutation],
-  );
-  const setThreadAutoSettle = useCallback(
-    async (thread: EnvironmentThreadShell, enabled: boolean) => {
-      if (!checkThreadOperationPermission(thread, "Could not update auto-settle")) return false;
-      if (!environmentSupportsAutoSettleOptOut(thread.environmentId)) {
-        Dialog.alert(
-          "Could not update auto-settle",
-          "This environment's server does not support turning auto-settle off per thread yet. Update the server to use it.",
-        );
-        return false;
-      }
-      selectionHaptic();
-      const result = await setAutoSettleMutation({
-        environmentId: thread.environmentId,
-        input: { threadId: thread.id, enabled },
-      });
-      if (result._tag === "Failure") {
-        const error = Cause.squash(result.cause);
-        Dialog.alert(
-          "Could not update auto-settle",
-          error instanceof Error && error.message.trim().length > 0
-            ? error.message
-            : "The auto-settle setting could not be changed.",
-        );
-        return false;
-      }
-      return true;
-    },
-    [setAutoSettleMutation],
-  );
-  const regenerateThreadTitle = useCallback(
-    async (thread: EnvironmentThreadShell) => {
-      if (!checkThreadOperationPermission(thread, "Could not regenerate title")) return false;
-      const key = scopedThreadKey(thread.environmentId, thread.id);
+      // Fork: only "Until it's done" may omit the wake time on mobile, and
+      // older servers drop its flag and would park the thread for good.
       if (
-        thread.titleRegeneration != null ||
-        titleRegenerationInFlightThreadKeys.current.has(key)
+        snoozedUntil === null &&
+        (!untilDone || !environmentSupportsSnoozeUntilDone(thread.environmentId))
       ) {
+        Dialog.alert(
+          "Could not snooze thread",
+          "This environment's server does not support snoozing until the work is done. Update the server to use it.",
+        );
         return false;
       }
-      if (!environmentSupportsTitleRegeneration(thread.environmentId)) {
+      if (!canSnooze(thread)) {
+        Dialog.alert(
+          "Could not snooze thread",
+          thread.hasPendingApprovals ||
+            thread.hasPendingUserInput ||
+            thread.pendingSubagentRequest != null
+            ? "This thread is waiting on you. Respond to the pending request before snoozing it."
+            : "This thread is still starting a turn. Try again once it's running.",
+        );
+        return false;
+      }
+
+      selectionHaptic();
+      const result = await withThreadDismissal(
+        key,
+        () =>
+          snoozeMutation({
+            environmentId: thread.environmentId,
+            input: {
+              threadId: thread.id,
+              snoozedUntil,
+              ...(untilDone ? { untilDone } : {}),
+            },
+          }),
+        (result) => result._tag === "Success",
+      );
+      if (result._tag === "Failure") {
+        const error = Cause.squash(result.cause);
+        Dialog.alert(
+          "Could not snooze thread",
+          error instanceof Error && error.message.trim().length > 0
+            ? error.message
+            : "The thread could not be snoozed.",
+        );
+        return false;
+      }
+      return true;
+    })();
+    snoozeInFlightThreadKeys.current.delete(key);
+    return succeeded;
+  };
+  const unsnoozeThread = async (thread: EnvironmentThreadShell) => {
+    if (!checkThreadOperationPermission(thread, "Could not wake thread")) return false;
+    const key = scopedThreadKey(thread.environmentId, thread.id);
+    if (snoozeInFlightThreadKeys.current.has(key)) {
+      return false;
+    }
+    snoozeInFlightThreadKeys.current.add(key);
+    const succeeded = await (async () => {
+      if (!environmentSupportsSnooze(thread.environmentId)) {
+        Dialog.alert(
+          "Could not wake thread",
+          "This environment's server does not support snoozing yet. Update the server to wake this thread.",
+        );
+        return false;
+      }
+
+      selectionHaptic();
+      const result = await withThreadDismissal(
+        key,
+        () =>
+          unsnoozeMutation({
+            environmentId: thread.environmentId,
+            input: { threadId: thread.id, reason: "user" },
+          }),
+        (result) => result._tag === "Success",
+      );
+      if (result._tag === "Failure") {
+        const error = Cause.squash(result.cause);
+        Dialog.alert(
+          "Could not wake thread",
+          error instanceof Error && error.message.trim().length > 0
+            ? error.message
+            : "The thread could not be woken.",
+        );
+        return false;
+      }
+      return true;
+    })();
+    snoozeInFlightThreadKeys.current.delete(key);
+    return succeeded;
+  };
+  const unsettleThread = async (thread: EnvironmentThreadShell) =>
+    (await executeAction("unsettle", thread)) === true;
+  const pinThread = async (thread: EnvironmentThreadShell) => {
+    if (!checkThreadOperationPermission(thread, "Could not pin thread")) return false;
+    if (!environmentSupportsPinning(thread.environmentId)) {
+      Dialog.alert(
+        "Could not pin thread",
+        "This environment's server does not support pinning yet. Update the server to use Pin.",
+      );
+      return false;
+    }
+    selectionHaptic();
+    // Same placement as web: a fresh pin takes the top of the arranged
+    // run. Servers that predate reordering get the bare pin (keyless).
+    let orderKey: string | undefined;
+    if (environmentSupportsPinReorder(thread.environmentId)) {
+      const shells = appAtomRegistry.get(environmentThreadShells.threadShellsAtom);
+      let firstKey: string | null = null;
+      for (const shell of shells) {
+        if (shell.pinnedAt == null || shell.pinOrderKey == null) continue;
+        if (firstKey === null || shell.pinOrderKey < firstKey) firstKey = shell.pinOrderKey;
+      }
+      orderKey = pinOrderKeyBetween(null, firstKey) ?? undefined;
+    }
+    const result = await pinMutation({
+      environmentId: thread.environmentId,
+      input: { threadId: thread.id, ...(orderKey !== undefined ? { orderKey } : {}) },
+    });
+    if (result._tag === "Failure") {
+      const error = Cause.squash(result.cause);
+      Dialog.alert(
+        "Could not pin thread",
+        error instanceof Error && error.message.trim().length > 0
+          ? error.message
+          : "The thread could not be pinned.",
+      );
+      return false;
+    }
+    return true;
+  };
+  const unpinThread = async (thread: EnvironmentThreadShell) => {
+    if (!checkThreadOperationPermission(thread, "Could not unpin thread")) return false;
+    if (!environmentSupportsPinning(thread.environmentId)) {
+      Dialog.alert(
+        "Could not unpin thread",
+        "This environment's server does not support pinning yet. Update the server to use Pin.",
+      );
+      return false;
+    }
+    selectionHaptic();
+    const result = await unpinMutation({
+      environmentId: thread.environmentId,
+      input: { threadId: thread.id },
+    });
+    if (result._tag === "Failure") {
+      const error = Cause.squash(result.cause);
+      Dialog.alert(
+        "Could not unpin thread",
+        error instanceof Error && error.message.trim().length > 0
+          ? error.message
+          : "The thread could not be unpinned.",
+      );
+      return false;
+    }
+    return true;
+  };
+  const setThreadAutoSettle = async (thread: EnvironmentThreadShell, enabled: boolean) => {
+    if (!checkThreadOperationPermission(thread, "Could not update auto-settle")) return false;
+    if (!environmentSupportsAutoSettleOptOut(thread.environmentId)) {
+      Dialog.alert(
+        "Could not update auto-settle",
+        "This environment's server does not support turning auto-settle off per thread yet. Update the server to use it.",
+      );
+      return false;
+    }
+    selectionHaptic();
+    const result = await setAutoSettleMutation({
+      environmentId: thread.environmentId,
+      input: { threadId: thread.id, enabled },
+    });
+    if (result._tag === "Failure") {
+      const error = Cause.squash(result.cause);
+      Dialog.alert(
+        "Could not update auto-settle",
+        error instanceof Error && error.message.trim().length > 0
+          ? error.message
+          : "The auto-settle setting could not be changed.",
+      );
+      return false;
+    }
+    return true;
+  };
+  const regenerateThreadTitle = async (thread: EnvironmentThreadShell) => {
+    if (!checkThreadOperationPermission(thread, "Could not regenerate title")) return false;
+    const key = scopedThreadKey(thread.environmentId, thread.id);
+    if (thread.titleRegeneration != null || titleRegenerationInFlightThreadKeys.current.has(key)) {
+      return false;
+    }
+    if (!environmentSupportsTitleRegeneration(thread.environmentId)) {
+      Dialog.alert(
+        "Could not regenerate title",
+        "This environment's server does not support title regeneration yet. Update the server to regenerate thread titles.",
+      );
+      return false;
+    }
+
+    titleRegenerationInFlightThreadKeys.current.add(key);
+    selectionHaptic();
+    const succeeded = await (async () => {
+      const result = await updateThreadMetadata({
+        environmentId: thread.environmentId,
+        input: { threadId: thread.id, regenerateTitle: true },
+      });
+      if (result._tag === "Failure") {
+        const error = Cause.squash(result.cause);
         Dialog.alert(
           "Could not regenerate title",
-          "This environment's server does not support title regeneration yet. Update the server to regenerate thread titles.",
+          error instanceof Error && error.message.trim().length > 0
+            ? error.message
+            : "The thread title could not be regenerated.",
         );
         return false;
       }
-
-      titleRegenerationInFlightThreadKeys.current.add(key);
-      selectionHaptic();
-      try {
-        const result = await updateThreadMetadata({
-          environmentId: thread.environmentId,
-          input: { threadId: thread.id, regenerateTitle: true },
-        });
-        if (result._tag === "Failure") {
-          const error = Cause.squash(result.cause);
-          Dialog.alert(
-            "Could not regenerate title",
-            error instanceof Error && error.message.trim().length > 0
-              ? error.message
-              : "The thread title could not be regenerated.",
-          );
-          return false;
-        }
-        return true;
-      } finally {
-        titleRegenerationInFlightThreadKeys.current.delete(key);
+      return true;
+    })();
+    titleRegenerationInFlightThreadKeys.current.delete(key);
+    return succeeded;
+  };
+  const renameThread = (thread: EnvironmentThreadShell) => {
+    if (!checkThreadOperationPermission(thread, "Could not rename thread")) return;
+    const commit = (title: string) => {
+      const resolution = resolveThreadTitleRename({ title, originalTitle: thread.title });
+      if (resolution.action === "reject-empty") {
+        Dialog.alert("Could not rename thread", "Thread title cannot be empty.");
+        return;
       }
-    },
-    [updateThreadMetadata],
-  );
-  const renameThread = useCallback(
-    (thread: EnvironmentThreadShell) => {
-      if (!checkThreadOperationPermission(thread, "Could not rename thread")) return;
-      const commit = (title: string) => {
-        const resolution = resolveThreadTitleRename({ title, originalTitle: thread.title });
-        if (resolution.action === "reject-empty") {
-          Dialog.alert("Could not rename thread", "Thread title cannot be empty.");
-          return;
-        }
-        if (resolution.action === "noop") return;
-        selectionHaptic();
-        void updateThreadMetadata({
-          environmentId: thread.environmentId,
-          input: { threadId: thread.id, title: resolution.title },
-        }).then((result) => {
-          if (result._tag === "Success") return;
-          const error = Cause.squash(result.cause);
-          Dialog.alert(
-            "Could not rename thread",
-            error instanceof Error && error.message.trim().length > 0
-              ? error.message
-              : "The thread could not be renamed.",
-          );
-        });
-      };
-
-      Dialog.prompt({
-        title: "Rename thread",
-        initialValue: thread.title,
-        confirmText: "Rename",
-        onConfirm: commit,
+      if (resolution.action === "noop") return;
+      selectionHaptic();
+      void updateThreadMetadata({
+        environmentId: thread.environmentId,
+        input: { threadId: thread.id, title: resolution.title },
+      }).then((result) => {
+        if (result._tag === "Success") return;
+        const error = Cause.squash(result.cause);
+        Dialog.alert(
+          "Could not rename thread",
+          error instanceof Error && error.message.trim().length > 0
+            ? error.message
+            : "The thread could not be renamed.",
+        );
       });
-    },
-    [updateThreadMetadata],
-  );
+    };
+
+    Dialog.prompt({
+      title: "Rename thread",
+      initialValue: thread.title,
+      confirmText: "Rename",
+      onConfirm: commit,
+    });
+  };
 
   // Plan against the complete section so filtering does not change a move.
   const reorderPinnedMutation = useAtomCommand(threadEnvironment.reorderPin, {
@@ -751,203 +704,187 @@ export function useThreadListActions(
   const setCustomGroupMutation = useAtomCommand(threadEnvironment.setCustomGroup, {
     reportFailure: false,
   });
-  const moveThread = useCallback(
-    async (thread: EnvironmentThreadShell, direction: ThreadMoveDestination) => {
-      if (!checkThreadOperationPermission(thread, "Could not move thread")) return false;
-      if (getPendingThreadOrder() !== null || appAtomRegistry.get(threadDropBusyAtom)) return false;
-      const shells = appAtomRegistry.get(environmentThreadShells.threadShellsAtom);
-      const current = shells.find(
-        (row) => row.id === thread.id && row.environmentId === thread.environmentId,
-      );
-      if (!current || current.archivedAt !== null) return false;
-      thread = current;
-      const section =
-        typeof direction === "object" && direction.section !== undefined
-          ? direction.section
-          : thread.pinnedAt != null
-            ? "pinned"
-            : "active";
-      if (section === "settled") {
-        if (!environmentSupportsSettlement(thread.environmentId)) return false;
-        appAtomRegistry.set(threadDropBusyAtom, true);
-        try {
-          return await settleThread(thread);
-        } finally {
-          appAtomRegistry.set(threadDropBusyAtom, false);
-        }
-      }
-      const configs = appAtomRegistry.get(environmentServerConfigsAtom);
-      const supportsReorder = (environmentId: EnvironmentThreadShell["environmentId"]) => {
-        const capabilities = configs.get(environmentId)?.environment.capabilities;
-        return section === "pinned"
-          ? capabilities?.threadPinReorder === true
-          : capabilities?.threadActiveReorder === true;
-      };
-      if (!supportsReorder(thread.environmentId)) {
-        Dialog.alert(
-          "Could not move thread",
-          "This environment's server does not support reordering these threads. Update the server to arrange them.",
-        );
-        return false;
-      }
-      // Fork: active moves stay inside the source or requested custom group.
-      const groups = mergeThreadGroups(
-        ...[...configs.values()].map((config) => config.settings.threadGroups),
-      );
-      const customGroupId =
-        typeof direction === "object" && direction.customGroupId !== undefined
-          ? direction.customGroupId
-          : threadGroupId(thread, groups);
-      const changesGroup = section === "active" && customGroupId !== threadGroupId(thread, groups);
-      if (
-        changesGroup &&
-        configs.get(thread.environmentId)?.environment.capabilities.threadCustomGroups !== true
-      )
-        return false;
-      const sectionOrdered = getThreadListV2OrderedSection({
-        threads: shells,
-        section,
-        now: new Date().toISOString(),
-        queuedThreadKeys: appAtomRegistry.get(queuedThreadKeysAtom),
-        settlementEnvironmentIds: new Set(
-          [...configs].flatMap(([id, config]) =>
-            config.environment.capabilities.threadSettlement === true ? [id] : [],
-          ),
-        ),
-        snoozeEnvironmentIds: new Set(
-          [...configs].flatMap(([id, config]) =>
-            config.environment.capabilities.threadSnooze === true ? [id] : [],
-          ),
-        ),
-      });
-      const ordered = sectionOrdered.filter(
-        (row) => section !== "active" || threadGroupId(row, groups) === customGroupId,
-      );
-      const assignments = createThreadMovePlanner({
-        groups,
-        allThreads: shells,
-        ordered,
-        section,
-        reorderableEnvironmentIds: new Set([...configs.keys()].filter(supportsReorder)),
-      })(scopedThreadKey(thread.environmentId, thread.id), direction);
-      if (assignments === null) return false;
-      const lifecycle = threadDropLifecycle(thread, section, new Date().toISOString());
-      const crossSection = !ordered.some(
-        (row) => row.id === thread.id && row.environmentId === thread.environmentId,
-      );
-      if (
-        crossSection &&
-        (((section === "pinned" || thread.pinnedAt != null) &&
-          !environmentSupportsPinning(thread.environmentId)) ||
-          (thread.settledOverride === "settled" &&
-            !environmentSupportsSettlement(thread.environmentId)) ||
-          (effectiveSnoozed(thread, { now: new Date().toISOString() }) &&
-            !environmentSupportsSnooze(thread.environmentId)))
-      )
-        return false;
-      const shellByKey = new Map(
-        shells.map((shell) => [scopedThreadKey(shell.environmentId, shell.id), shell]),
-      );
-      for (const assignment of assignments) {
-        const target = shellByKey.get(assignment.id);
-        if (target && !checkThreadOperationPermission(target, "Could not move thread"))
-          return false;
-      }
-      selectionHaptic();
+  const moveThread = async (thread: EnvironmentThreadShell, direction: ThreadMoveDestination) => {
+    if (!checkThreadOperationPermission(thread, "Could not move thread")) return false;
+    if (getPendingThreadOrder() !== null || appAtomRegistry.get(threadDropBusyAtom)) return false;
+    const shells = appAtomRegistry.get(environmentThreadShells.threadShellsAtom);
+    const current = shells.find(
+      (row) => row.id === thread.id && row.environmentId === thread.environmentId,
+    );
+    if (!current || current.archivedAt !== null) return false;
+    thread = current;
+    const section =
+      typeof direction === "object" && direction.section !== undefined
+        ? direction.section
+        : thread.pinnedAt != null
+          ? "pinned"
+          : "active";
+    if (section === "settled") {
+      if (!environmentSupportsSettlement(thread.environmentId)) return false;
       appAtomRegistry.set(threadDropBusyAtom, true);
-      const pending = crossSection
-        ? null
-        : beginPendingThreadOrder(
-            createPendingThreadOrder({
-              ...(section === "active" ? { customGroupId } : {}),
-              section,
-              ordered,
-              movedId: scopedThreadKey(thread.environmentId, thread.id),
-              direction,
-              assignments,
-            }),
-          );
-      let succeeded = false;
-      const reorder = section === "pinned" ? reorderPinnedMutation : reorderActiveMutation;
-      try {
-        // Fork: a move into another group changes membership first.
-        if (changesGroup) {
-          const result = await setCustomGroupMutation({
-            environmentId: thread.environmentId,
-            input: { threadId: thread.id, customGroupId },
-          });
-          if (result._tag === "Failure") {
-            Dialog.alert("Could not move thread to group", String(Cause.squash(result.cause)));
-            return false;
-          }
+      const settled = await settleThread(thread);
+      appAtomRegistry.set(threadDropBusyAtom, false);
+      return settled;
+    }
+    const configs = appAtomRegistry.get(environmentServerConfigsAtom);
+    const supportsReorder = (environmentId: EnvironmentThreadShell["environmentId"]) => {
+      const capabilities = configs.get(environmentId)?.environment.capabilities;
+      return section === "pinned"
+        ? capabilities?.threadPinReorder === true
+        : capabilities?.threadActiveReorder === true;
+    };
+    if (!supportsReorder(thread.environmentId)) {
+      Dialog.alert(
+        "Could not move thread",
+        "This environment's server does not support reordering these threads. Update the server to arrange them.",
+      );
+      return false;
+    }
+    // Fork: active moves stay inside the source or requested custom group.
+    const groups = mergeThreadGroups(
+      ...[...configs.values()].map((config) => config.settings.threadGroups),
+    );
+    const customGroupId =
+      typeof direction === "object" && direction.customGroupId !== undefined
+        ? direction.customGroupId
+        : threadGroupId(thread, groups);
+    const changesGroup = section === "active" && customGroupId !== threadGroupId(thread, groups);
+    if (
+      changesGroup &&
+      configs.get(thread.environmentId)?.environment.capabilities.threadCustomGroups !== true
+    )
+      return false;
+    const sectionOrdered = getThreadListV2OrderedSection({
+      threads: shells,
+      section,
+      now: new Date().toISOString(),
+      queuedThreadKeys: appAtomRegistry.get(queuedThreadKeysAtom),
+      settlementEnvironmentIds: new Set(
+        [...configs].flatMap(([id, config]) =>
+          config.environment.capabilities.threadSettlement === true ? [id] : [],
+        ),
+      ),
+      snoozeEnvironmentIds: new Set(
+        [...configs].flatMap(([id, config]) =>
+          config.environment.capabilities.threadSnooze === true ? [id] : [],
+        ),
+      ),
+    });
+    const ordered = sectionOrdered.filter(
+      (row) => section !== "active" || threadGroupId(row, groups) === customGroupId,
+    );
+    const assignments = createThreadMovePlanner({
+      groups,
+      allThreads: shells,
+      ordered,
+      section,
+      reorderableEnvironmentIds: new Set([...configs.keys()].filter(supportsReorder)),
+    })(scopedThreadKey(thread.environmentId, thread.id), direction);
+    if (assignments === null) return false;
+    const lifecycle = threadDropLifecycle(thread, section, new Date().toISOString());
+    const crossSection = !ordered.some(
+      (row) => row.id === thread.id && row.environmentId === thread.environmentId,
+    );
+    if (
+      crossSection &&
+      (((section === "pinned" || thread.pinnedAt != null) &&
+        !environmentSupportsPinning(thread.environmentId)) ||
+        (thread.settledOverride === "settled" &&
+          !environmentSupportsSettlement(thread.environmentId)) ||
+        (effectiveSnoozed(thread, { now: new Date().toISOString() }) &&
+          !environmentSupportsSnooze(thread.environmentId)))
+    )
+      return false;
+    const shellByKey = new Map(
+      shells.map((shell) => [scopedThreadKey(shell.environmentId, shell.id), shell]),
+    );
+    for (const assignment of assignments) {
+      const target = shellByKey.get(assignment.id);
+      if (target && !checkThreadOperationPermission(target, "Could not move thread")) return false;
+    }
+    selectionHaptic();
+    appAtomRegistry.set(threadDropBusyAtom, true);
+    const pending = crossSection
+      ? null
+      : beginPendingThreadOrder(
+          createPendingThreadOrder({
+            ...(section === "active" ? { customGroupId } : {}),
+            section,
+            ordered,
+            movedId: scopedThreadKey(thread.environmentId, thread.id),
+            direction,
+            assignments,
+          }),
+        );
+    const reorder = section === "pinned" ? reorderPinnedMutation : reorderActiveMutation;
+    const moved = await (async () => {
+      // Fork: a move into another group changes membership first.
+      if (changesGroup) {
+        const result = await setCustomGroupMutation({
+          environmentId: thread.environmentId,
+          input: { threadId: thread.id, customGroupId },
+        });
+        if (result._tag === "Failure") {
+          Dialog.alert("Could not move thread to group", String(Cause.squash(result.cause)));
+          return false;
         }
-        if (crossSection) {
-          if (section === "pinned") {
-            const orderKey = assignments.find(
-              ({ id }) => id === scopedThreadKey(thread.environmentId, thread.id),
-            )?.orderKey;
-            const result = await pinMutation({
-              environmentId: thread.environmentId,
-              input: { threadId: thread.id, ...(orderKey === undefined ? {} : { orderKey }) },
-            });
-            if (result._tag === "Failure") {
-              Dialog.alert("Could not pin thread", String(Cause.squash(result.cause)));
-              return false;
-            }
-          } else {
-            if (lifecycle.unpin && !(await unpinThread(thread))) return false;
-            if (lifecycle.unsettle && !(await unsettleThread(thread))) return false;
-            if (lifecycle.unsnooze && !(await unsnoozeThread(thread))) return false;
-          }
-        }
-        for (const assignment of assignments) {
-          if (
-            crossSection &&
-            section === "pinned" &&
-            thread.pinnedAt == null &&
-            assignment.id === scopedThreadKey(thread.environmentId, thread.id)
-          )
-            continue;
-          if (pending !== null && !pending.isPending()) return false;
-          const target = shellByKey.get(assignment.id);
-          if (target === undefined) continue;
-          if (!checkThreadOperationPermission(target, "Could not move thread")) return false;
-          const result = await reorder({
-            environmentId: target.environmentId,
-            input: { threadId: target.id, orderKey: assignment.orderKey },
-          });
-          if (result._tag === "Failure") {
-            const error = Cause.squash(result.cause);
-            Dialog.alert(
-              "Could not move thread",
-              error instanceof Error && error.message.trim().length > 0
-                ? error.message
-                : "The thread could not be moved.",
-            );
-            return false;
-          }
-        }
-        succeeded = true;
-        pending?.complete();
-        return true;
-      } finally {
-        if (!succeeded) pending?.cancel();
-        appAtomRegistry.set(threadDropBusyAtom, false);
       }
-    },
-    [
-      settleThread,
-      setCustomGroupMutation,
-      reorderActiveMutation,
-      reorderPinnedMutation,
-      pinMutation,
-      unpinThread,
-      unsettleThread,
-      unsnoozeThread,
-    ],
-  );
+      if (crossSection) {
+        if (section === "pinned") {
+          const orderKey = assignments.find(
+            ({ id }) => id === scopedThreadKey(thread.environmentId, thread.id),
+          )?.orderKey;
+          const result = await pinMutation({
+            environmentId: thread.environmentId,
+            input: { threadId: thread.id, ...(orderKey === undefined ? {} : { orderKey }) },
+          });
+          if (result._tag === "Failure") {
+            Dialog.alert("Could not pin thread", String(Cause.squash(result.cause)));
+            return false;
+          }
+        } else {
+          if (lifecycle.unpin && !(await unpinThread(thread))) return false;
+          if (lifecycle.unsettle && !(await unsettleThread(thread))) return false;
+          if (lifecycle.unsnooze && !(await unsnoozeThread(thread))) return false;
+        }
+      }
+      for (const assignment of assignments) {
+        if (
+          crossSection &&
+          section === "pinned" &&
+          thread.pinnedAt == null &&
+          assignment.id === scopedThreadKey(thread.environmentId, thread.id)
+        )
+          continue;
+        if (pending !== null && !pending.isPending()) return false;
+        const target = shellByKey.get(assignment.id);
+        if (target === undefined) continue;
+        if (!checkThreadOperationPermission(target, "Could not move thread")) return false;
+        const result = await reorder({
+          environmentId: target.environmentId,
+          input: { threadId: target.id, orderKey: assignment.orderKey },
+        });
+        if (result._tag === "Failure") {
+          const error = Cause.squash(result.cause);
+          Dialog.alert(
+            "Could not move thread",
+            error instanceof Error && error.message.trim().length > 0
+              ? error.message
+              : "The thread could not be moved.",
+          );
+          return false;
+        }
+      }
+      pending?.complete();
+      return true;
+    })();
+    if (!moved) pending?.cancel();
+    appAtomRegistry.set(threadDropBusyAtom, false);
+    return moved;
+  };
 
-  const confirmDeleteThread = useConfirmDeleteThread(executeAction, handleSelectedThreadRemoved);
+  const confirmDeleteThread = (thread: EnvironmentThreadShell) =>
+    confirmThreadDeletion(executeAction, thread, handleSelectedThreadRemoved);
 
   return {
     archiveThread,
@@ -972,20 +909,15 @@ export function useArchivedThreadListActions(
   readonly unarchiveThread: (thread: EnvironmentThreadShell) => void;
   readonly confirmDeleteThread: (thread: EnvironmentThreadShell) => void;
 } {
-  const handleCompleted = useCallback(
-    (_action: ThreadListAction, thread: EnvironmentThreadShell) => {
-      onCompleted?.(thread);
-    },
-    [onCompleted],
-  );
+  const handleCompleted = (_action: ThreadListAction, thread: EnvironmentThreadShell) => {
+    onCompleted?.(thread);
+  };
   const executeAction = useThreadActionExecutor(handleCompleted);
-  const unarchiveThread = useCallback(
-    (thread: EnvironmentThreadShell) => {
-      void executeAction("unarchive", thread);
-    },
-    [executeAction],
-  );
-  const confirmDeleteThread = useConfirmDeleteThread(executeAction);
+  const unarchiveThread = (thread: EnvironmentThreadShell) => {
+    void executeAction("unarchive", thread);
+  };
+  const confirmDeleteThread = (thread: EnvironmentThreadShell) =>
+    confirmThreadDeletion(executeAction, thread);
 
   return { unarchiveThread, confirmDeleteThread };
 }

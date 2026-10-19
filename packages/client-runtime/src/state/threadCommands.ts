@@ -490,12 +490,12 @@ export function createThreadEnvironmentAtoms<R, E>(
               : thread.snoozedUntilRunId == null
                 ? {}
                 : { snoozedUntilRunId: null }),
+            // A timed re-snooze always restamps, even to the same wake time.
+            // Fork: an until-done snooze on the run it already waits on is a duplicate.
             snoozedAt:
-              (thread.snoozedUntil != null &&
-                DateTime.formatIso(thread.snoozedUntil) === input.snoozedUntil) ||
-              (input.untilDone === true &&
-                thread.snoozedUntilRunId != null &&
-                thread.snoozedUntilRunId === thread.latestRunId)
+              input.untilDone === true &&
+              thread.snoozedUntilRunId != null &&
+              thread.snoozedUntilRunId === thread.latestRunId
                 ? (thread.snoozedAt ?? now)
                 : now,
           },

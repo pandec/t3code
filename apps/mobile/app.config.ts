@@ -452,6 +452,7 @@ const config: ExpoConfig = {
     // stamps DEVELOPMENT_TEAM on the targets they create.
     "./plugins/withIosDevelopmentTeam.cjs",
     "expo-asset",
+    "react-native-pdf-jsi",
     [
       "expo-audio",
       {
@@ -601,6 +602,7 @@ const config: ExpoConfig = {
       : []),
     "./plugins/withAndroidCleartextTraffic.cjs",
     "./plugins/withAndroidGradleHeap.cjs",
+    "./plugins/withAndroidFbjniVersion.cjs",
     "./plugins/withAndroidInputBackground.cjs",
     "./plugins/withAndroidModernPopupMenu.cjs",
     "./plugins/withAndroidModernAlertDialog.cjs",

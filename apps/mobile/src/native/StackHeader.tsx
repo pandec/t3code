@@ -14,8 +14,6 @@ import {
   startHeaderDiagnosticWork,
 } from "../diagnostics/headerMetrics";
 
-export { NativeHeaderToolbar } from "./NativeHeaderToolbar";
-
 export {
   nativeHeaderScrollEdgeEffects,
   nativeTopScrollEdgeEffect,

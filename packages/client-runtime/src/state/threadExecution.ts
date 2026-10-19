@@ -7,6 +7,7 @@ import {
 import {
   isOrchestrationV2WorkActive,
   isProviderNativeSubagentThread,
+  latestProviderTurnForAttempt,
   type ModelSelection,
   type OrchestrationV2NotificationSource,
   type OrchestrationV2PendingBackgroundTask,
@@ -56,6 +57,9 @@ function summarizeThreadRun(
   projection: OrchestrationV2ThreadProjection,
   run: OrchestrationV2ThreadProjection["runs"][number],
 ): ThreadRunSummary {
+  const turnStatus = ACTIVITY_RUN_STATUSES.has(run.status)
+    ? latestProviderTurnForAttempt(projection.providerTurns, run.activeAttemptId)?.status
+    : undefined;
   return {
     runId: run.id,
     status: run.status,
@@ -66,6 +70,9 @@ function summarizeThreadRun(
       projection.messages.findLast(
         (message) => message.runId === run.id && message.role === "assistant",
       )?.id ?? null,
+    ...(turnStatus === undefined || turnStatus === "pending" || turnStatus === "running"
+      ? {}
+      : { turnEnded: true }),
     ...(run.sourcePlanRef === undefined ? {} : { sourcePlanRef: run.sourcePlanRef }),
   };
 }

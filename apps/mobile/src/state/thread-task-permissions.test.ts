@@ -126,6 +126,8 @@ vi.mock("./use-composer-drafts", async () => {
     mergeComposerDraftContent: vi.fn(),
     removeComposerDraftAttachment: vi.fn(),
     useComposerDraft: () => state.draft,
+    useComposerDraftSettings: () => ({}),
+    questionAttachmentDraftsAtom: () => Atom.make({}),
   };
 });
 // Fork: interaction-mode edits stage thread settings instead of writing draft settings.

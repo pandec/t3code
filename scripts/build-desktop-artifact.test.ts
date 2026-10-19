@@ -322,7 +322,7 @@ it.layer(NodeServices.layer)("build-desktop-artifact", (it) => {
       assert.match(String(mac.entitlements), /entitlements\.dev\.mac\.plist$/u);
       assert.equal(config.productName, "T3 Code (Dev)");
       assert.equal(config.artifactName, "T3-Code-Dev-${version}-${arch}.${ext}");
-      assert.notProperty(config, "publish");
+      assert.isNull(config.publish);
       assert.deepStrictEqual(mac.protocols, [
         { name: "T3 Code Dev", schemes: ["t3code-dev"] },
         { name: "Web site URL", schemes: ["http", "https"], role: "Viewer" },
@@ -443,8 +443,8 @@ it.layer(NodeServices.layer)("build-desktop-artifact", (it) => {
         undefined,
       );
 
-      assert.notProperty(preview, "publish");
-      assert.notProperty(previewChannel, "publish");
+      assert.isNull(preview.publish);
+      assert.isNull(previewChannel.publish);
       assert.deepStrictEqual(release.publish, [
         {
           provider: "github",
@@ -462,9 +462,9 @@ it.layer(NodeServices.layer)("build-desktop-artifact", (it) => {
     ),
   );
 
-  // The dev-identity test above asserts the same absence, but it runs without a
-  // resolvable publish config, so it passes whether or not the flavor guard is
-  // there. This one supplies a real config, which is what makes it a guard test:
+  // The dev-identity test above asserts the same disabled feed, but it runs
+  // without a resolvable publish config, so it passes whether or not the flavor
+  // guard is there. This one supplies a real config, which is what makes it a guard test:
   // upstream keeps re-wrapping this block (#8182 wrapped it in a preview check)
   // and each wrap deletes the flavor condition structurally rather than visibly.
   it.effect("keeps dev-flavor artifacts off every update feed", () =>
@@ -505,8 +505,8 @@ it.layer(NodeServices.layer)("build-desktop-artifact", (it) => {
         undefined,
       );
 
-      assert.notProperty(dev, "publish");
-      assert.notProperty(devWithMockUpdates, "publish");
+      assert.isNull(dev.publish);
+      assert.isNull(devWithMockUpdates.publish);
       assert.deepStrictEqual(release.publish, [
         {
           provider: "github",
@@ -522,6 +522,22 @@ it.layer(NodeServices.layer)("build-desktop-artifact", (it) => {
         ),
       ),
     ),
+  );
+
+  it.effect("disables electron-builder publish detection for local builds", () =>
+    Effect.gen(function* () {
+      const local = yield* createBuildConfig(
+        "mac",
+        "dmg",
+        "0.0.33",
+        false,
+        false,
+        undefined,
+        undefined,
+      );
+
+      assert.isNull(local.publish);
+    }).pipe(Effect.provide(ConfigProvider.layer(ConfigProvider.fromEnv({ env: {} })))),
   );
 
   it("stages only the desktop main-process externals", () => {

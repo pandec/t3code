@@ -10,7 +10,6 @@ import {
   type ArchivedSectionVisibleCount,
   type SteerGraceWindowMs,
 } from "@t3tools/contracts/settings";
-import { useCallback, useMemo, useRef } from "react";
 import { AsyncResult } from "effect/reactivity";
 
 import { resolveAccentTintAlphas, type AccentTintAlphas } from "../lib/accentTint";
@@ -53,7 +52,7 @@ export function useMobilePreferencesHydrated(): boolean {
 export function useSteerGraceWindowMs(): SteerGraceWindowMs {
   const { preferences } = useMobilePreferences();
   const value = preferences.steerGraceWindowMs;
-  return useMemo(() => clampSteerGraceWindowMs(value ?? DEFAULT_STEER_GRACE_WINDOW_MS), [value]);
+  return clampSteerGraceWindowMs(value ?? DEFAULT_STEER_GRACE_WINDOW_MS);
 }
 
 /**
@@ -70,17 +69,17 @@ export function useThreadShelfExpansion(shelf: ThreadShelfId): {
   const { preferences, hydrated } = useMobilePreferences();
   const savePreferences = useAtomSet(updateMobilePreferencesAtom);
   const expanded = resolveThreadShelfExpanded({ shelf, preferences });
-  // The ref advances before the write starts, so two presses in one render
-  // pass still toggle twice; reading `expanded` alone would make the second
-  // press rewrite the value the first one already chose.
-  const expandedRef = useRef(expanded);
-  expandedRef.current = expanded;
-  const toggle = useCallback(() => {
-    const next = !expandedRef.current;
-    expandedRef.current = next;
-    savePreferences(threadShelfExpandedPatch(shelf, next));
-  }, [savePreferences, shelf]);
-  return useMemo(() => ({ expanded, loaded: hydrated, toggle }), [expanded, hydrated, toggle]);
+  // A transform reads the optimistic value, so two presses before the next
+  // render still toggle twice instead of writing the same value.
+  const toggle = () =>
+    savePreferences({
+      transform: (current) =>
+        threadShelfExpandedPatch(
+          shelf,
+          !resolveThreadShelfExpanded({ shelf, preferences: current }),
+        ),
+    });
+  return { expanded, loaded: hydrated, toggle };
 }
 
 /**
@@ -94,10 +93,7 @@ export function useWorkingShelfEnabled(): boolean {
 export function useArchivedSectionVisibleCount(): ArchivedSectionVisibleCount {
   const { preferences } = useMobilePreferences();
   const value = preferences.archivedSectionVisibleCount;
-  return useMemo(
-    () => clampArchivedSectionVisibleCount(value ?? DEFAULT_ARCHIVED_SECTION_VISIBLE_COUNT),
-    [value],
-  );
+  return clampArchivedSectionVisibleCount(value ?? DEFAULT_ARCHIVED_SECTION_VISIBLE_COUNT);
 }
 
 export interface AccentTintSettings {
@@ -118,28 +114,21 @@ export function useAccentTintSettings(): AccentTintSettings {
   const { preferences } = useMobilePreferences();
   const enabled = preferences.accentTintsEnabled;
   const intensity = preferences.accentTintIntensityPercent;
-  return useMemo(() => {
-    const intensityPercent = clampAccentTintIntensityPercent(
-      intensity ?? DEFAULT_ACCENT_TINT_INTENSITY_PERCENT,
-    );
-    return {
-      enabled: enabled ?? true,
-      intensityPercent,
-      alphas: resolveAccentTintAlphas(intensityPercent),
-    };
-  }, [enabled, intensity]);
+  const intensityPercent = clampAccentTintIntensityPercent(
+    intensity ?? DEFAULT_ACCENT_TINT_INTENSITY_PERCENT,
+  );
+  return {
+    enabled: enabled ?? true,
+    intensityPercent,
+    alphas: resolveAccentTintAlphas(intensityPercent),
+  };
 }
 
 export function useCollapsedThreadGroups() {
   const { preferences } = useMobilePreferences();
   const save = useAtomSet(updateMobilePreferencesAtom);
-  const ids = useMemo(
-    () => new Set(preferences.collapsedThreadGroups ?? []),
-    [preferences.collapsedThreadGroups],
-  );
-  const toggle = useCallback(
-    (id: string) => save({ transform: (current) => toggleCollapsedThreadGroup(current, id) }),
-    [save],
-  );
+  const ids = new Set(preferences.collapsedThreadGroups ?? []);
+  const toggle = (id: string) =>
+    save({ transform: (current) => toggleCollapsedThreadGroup(current, id) });
   return { ids, toggle };
 }

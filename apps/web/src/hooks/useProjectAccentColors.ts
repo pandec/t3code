@@ -28,7 +28,7 @@ import {
   getClientSettings,
   useAccentTintSettings,
   useClientSettings,
-  useUpdateClientSettings,
+  updateClientSettings,
   useUpdateSettingsForEnvironment,
 } from "./useSettings";
 
@@ -196,13 +196,11 @@ async function runProjectAccentColorMigration({
   accentColorsByEnvironment,
   readCurrentMap,
   fillProjectAccentColors,
-  updateClientSettings,
 }: {
   readonly plan: ReturnType<typeof planProjectAccentColorMigration>;
   readonly accentColorsByEnvironment: ReadonlyMap<EnvironmentId, ProjectAccentColorMap>;
   readonly readCurrentMap: (environmentId: EnvironmentId) => ProjectAccentColorMap | undefined;
   readonly fillProjectAccentColors: ReturnType<typeof useFillProjectAccentColors>;
-  readonly updateClientSettings: ReturnType<typeof useUpdateClientSettings>;
 }): Promise<boolean> {
   const consumedLegacyKeys = new Set(plan.consumedWithoutWrite);
   let retryNeeded = false;
@@ -259,7 +257,6 @@ export function useProjectAccentColorMigration(projects: ReadonlyArray<ProjectAc
   const { accentColorsByEnvironment, fillCapableEnvironmentIds } = useAccentEnvironmentState();
   const legacyAccentColors = useClientSettings((settings) => settings.sidebarProjectAccentColors);
   const fillProjectAccentColors = useFillProjectAccentColors();
-  const updateClientSettings = useUpdateClientSettings();
   const readCurrentAccentColors = useReadCurrentAccentColors(accentColorsByEnvironment);
   // One in-flight migration at a time: the server patches are async, so a
   // re-render before they land would otherwise re-send the same writes.
@@ -299,7 +296,6 @@ export function useProjectAccentColorMigration(projects: ReadonlyArray<ProjectAc
       accentColorsByEnvironment,
       readCurrentMap: readCurrentAccentColors,
       fillProjectAccentColors,
-      updateClientSettings,
     })
       .then((retryNeeded) => {
         if (retryNeeded && mountedRef.current && retryTimeoutRef.current === null) {
@@ -331,6 +327,5 @@ export function useProjectAccentColorMigration(projects: ReadonlyArray<ProjectAc
     readCurrentAccentColors,
     // oxlint-disable-next-line react/exhaustive-effect-dependencies -- A retry bump re-runs the migration for the writes that did not land.
     retryGeneration,
-    updateClientSettings,
   ]);
 }

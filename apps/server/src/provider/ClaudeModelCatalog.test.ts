@@ -194,6 +194,16 @@ describe("Claude model catalog", () => {
     assert.isFalse(hasValidClaudeManifestAdapters(malformed));
   });
 
+  it("preserves only SDK effort levels for uncatalogued models", () => {
+    const catalog = catalogFromManifest(manifest());
+    for (const effort of ["low", "medium", "high", "xhigh", "max"]) {
+      assert.strictEqual(resolveClaudeCatalogEffort(catalog, "custom", ` ${effort} `), effort);
+    }
+    for (const effort of [undefined, null, "", "  ", "brutal", "extreme", "HIGH", "ultrathink"]) {
+      assert.isUndefined(resolveClaudeCatalogEffort(catalog, "custom", effort));
+    }
+  });
+
   // Gateway-served custom models encode effort in the model id instead of
   // using Claude's native effort option. The remote manifest owns built-ins,
   // never these instance-scoped rules.
