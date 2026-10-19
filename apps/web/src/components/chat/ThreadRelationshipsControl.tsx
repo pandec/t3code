@@ -59,6 +59,8 @@ import {
 import { useEnvironmentProviders } from "../../state/environments";
 import { threadEnvironment } from "../../state/threads";
 import { orchestrationEnvironment } from "../../state/orchestration";
+import { serverEnvironment } from "../../state/server";
+import { readCustomModelIcons, reportedModelIcon } from "@t3tools/client-runtime/customModelIcons";
 import { useAtomCommand } from "../../state/use-atom-command";
 import { AgentElapsed } from "./AgentElapsed";
 import { ThreadRelationshipIcon, threadRelationshipStatusLabel } from "./ThreadRelationshipIcon";
@@ -220,6 +222,10 @@ export function ThreadRelationshipsPanel(props: {
   const stopWorkflowCommand = useAtomCommand(orchestrationEnvironment.stopWorkflow);
   const canOperateWorkflow = useAtomValue(
     orchestrationEnvironment.stopWorkflow.permissionAtom(props.environmentId),
+  );
+  const providerInstances = useAtomValue(
+    serverEnvironment.settingsValueAtom(props.environmentId),
+    (settings) => settings?.providerInstances,
   );
   const [busyAction, setBusyAction] = useState<"merge" | "detach" | null>(null);
   const [stoppingId, setStoppingId] = useState<string | null>(null);
@@ -456,6 +462,12 @@ export function ThreadRelationshipsPanel(props: {
                   (agent?.providerInstanceId ?? node?.thread?.providerInstanceId),
               );
               const providerDriver = agent?.driver ?? provider?.driver;
+              const modelIcon = agent
+                ? reportedModelIcon(
+                    readCustomModelIcons(providerInstances?.[agent.providerInstanceId]?.config),
+                    agent.model,
+                  )
+                : undefined;
               const canStopWorkflow =
                 canOperateWorkflow &&
                 workflowGroup?.workflow.status === "running" &&
@@ -473,6 +485,7 @@ export function ThreadRelationshipsPanel(props: {
                 <SubagentTooltipContent
                   title={threadTitle}
                   model={agent.model}
+                  modelIcon={modelIcon}
                   providerInstanceId={agent.providerInstanceId}
                   origin={agent.origin}
                   modelSelection={agent.modelSelection}
@@ -496,6 +509,7 @@ export function ThreadRelationshipsPanel(props: {
                   <ThreadRelationshipIcon
                     driver={isSubagent && !isParent ? providerDriver : undefined}
                     provider={provider}
+                    modelIcon={isSubagent && !isParent ? modelIcon : undefined}
                     fallbackIcon={RelationshipIcon}
                     status={rowStatus}
                   />

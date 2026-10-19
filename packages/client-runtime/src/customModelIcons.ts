@@ -35,3 +35,16 @@ export function customModelIcon(
   // must not resolve to an Object.prototype member.
   return Object.hasOwn(icons, slug) ? icons[slug] : undefined;
 }
+
+/**
+ * Fork: the icon override for a model a provider reported at runtime, such as
+ * a Claude Code subagent routed to a Codex model through a gateway. Reported
+ * ids may carry a trailing effort suffix ("gpt-6-astra(high)").
+ */
+export function reportedModelIcon(
+  icons: Readonly<Record<string, string>>,
+  model: string | null | undefined,
+): string | undefined {
+  const slug = model?.replace(/\([^)]*\)$/u, "").trim();
+  return slug ? customModelIcon(icons, slug) : undefined;
+}

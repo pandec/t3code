@@ -3362,6 +3362,7 @@ const V2SubagentGroup = memo(function V2SubagentGroup({
     const live = liveAgents?.find((agent) => agent.id === item.subagentId);
     return {
       item,
+      model: live?.model,
       status: live?.status ?? item.status,
       startedAt: live?.startedAt ?? item.startedAt,
       completedAt: live?.completedAt ?? item.completedAt,
@@ -3390,11 +3391,12 @@ const V2SubagentGroup = memo(function V2SubagentGroup({
           )}
         >
           <span className="flex shrink-0 items-center -space-x-1.5" aria-hidden>
-            {agents.slice(0, 3).map(({ item, status }) => (
+            {agents.slice(0, 3).map(({ item, model, status }) => (
               <EnvironmentSubagentAvatar
                 key={item.id}
                 environmentId={ctx.activeThreadEnvironmentId}
                 providerInstanceId={item.providerInstanceId}
+                model={model}
                 driver={item.driver}
                 status={agents.length === 1 ? status : undefined}
               />

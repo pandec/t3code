@@ -47,6 +47,7 @@ import { formatShortTimestamp } from "../../timestampFormat";
 import { getTriggerDisplayModelName } from "./providerIconUtils";
 import { ProviderInstanceIcon, providerTextColor } from "./ProviderInstanceIcon";
 import { cn } from "~/lib/utils";
+import { useReportedModelIcon } from "~/hooks/useReportedModelIcon";
 import { TimelineSystemDivider } from "./TimelineSystemDivider";
 import { Button, InlineButton } from "../ui/button";
 import { T3Wordmark } from "../T3Wordmark";
@@ -253,12 +254,14 @@ function SubagentAvatar({
   driver,
   displayName,
   iconUrl,
+  modelIcon,
   status,
   className,
 }: {
   driver?: ProviderDriverKind | undefined;
   displayName?: string | undefined;
   iconUrl?: string | undefined;
+  modelIcon?: string | undefined;
   status?: OrchestrationV2TurnItem["status"] | undefined;
   className?: string;
 }) {
@@ -274,6 +277,7 @@ function SubagentAvatar({
         <ProviderInstanceIcon
           driverKind={driver}
           displayName={displayName ?? driver}
+          modelIcon={modelIcon}
           acpRegistryIconUrl={iconUrl}
           className="z-auto"
           iconClassName="size-3.5"
@@ -301,10 +305,12 @@ function SubagentAvatar({
 export function EnvironmentSubagentAvatar({
   environmentId,
   providerInstanceId,
+  model,
   ...props
 }: {
   environmentId: EnvironmentId;
   providerInstanceId: ProviderInstanceId;
+  model?: string | null | undefined;
   driver?: ProviderDriverKind | undefined;
   status?: OrchestrationV2TurnItem["status"] | undefined;
 }) {
@@ -319,7 +325,10 @@ export function EnvironmentSubagentAvatar({
     (providers) =>
       providers?.find((provider) => provider.instanceId === providerInstanceId)?.iconUrl,
   );
-  return <SubagentAvatar {...props} displayName={displayName} iconUrl={iconUrl} />;
+  const modelIcon = useReportedModelIcon(environmentId, providerInstanceId, model);
+  return (
+    <SubagentAvatar {...props} displayName={displayName} iconUrl={iconUrl} modelIcon={modelIcon} />
+  );
 }
 
 const NOTIFICATION_OUTCOME_STATUS: Record<
@@ -426,6 +435,7 @@ function SubagentTimelineLink(props: {
       <EnvironmentSubagentAvatar
         environmentId={props.parentRef.environmentId}
         providerInstanceId={props.providerInstanceId}
+        model={agent?.model}
         driver={props.driver}
         status={status ?? undefined}
       />
@@ -534,10 +544,12 @@ function SubagentTimelineTooltip(
     parent ? scopeProjectRef(environmentId, parent.projectId) : null,
   );
   const childProject = useProject(child ? scopeProjectRef(environmentId, child.projectId) : null);
+  const modelIcon = useReportedModelIcon(environmentId, props.providerInstanceId, props.model);
   return (
     <SubagentTooltipContent
       title={formatSubagentDisplayTitle(child?.title ?? props.title)}
       model={props.model}
+      modelIcon={modelIcon}
       providerInstanceId={props.providerInstanceId}
       origin={props.origin}
       modelSelection={props.modelSelection}
