@@ -166,6 +166,19 @@ describe("thread execution presentation", () => {
     expect(
       deriveThreadRuntime({ ...projection, runs: [failed, queued, cancelledQueued] }),
     ).toMatchObject({ status: "failed", lastErrorClass: "usage_limit" });
+    // Fork: a message cancelled before it started stands for the outcome only alone.
+    expect(deriveLatestThreadRun({ ...projection, runs: [failed, cancelledQueued] })?.runId).toBe(
+      failed.id,
+    );
+    expect(deriveLatestThreadRun({ ...projection, runs: [cancelledQueued] })?.runId).toBe(
+      cancelledQueued.id,
+    );
+    // Fork: a reorder can leave the waiting message with the older ordinal.
+    const reorderedQueued = run("reordered-queued", 0, "queued");
+    expect(deriveThreadRuntime({ ...projection, runs: [reorderedQueued, failed] })).toMatchObject({
+      status: "failed",
+      lastErrorClass: "usage_limit",
+    });
     expect(
       deriveThreadRuntime({
         ...projection,

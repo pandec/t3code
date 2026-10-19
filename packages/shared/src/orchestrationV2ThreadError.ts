@@ -87,9 +87,8 @@ export function usageLimitBlockedRun(
 }
 
 /**
- * That limited run, when newer runs were queued or cancelled before starting.
- * Callers that treat the highest-ordinal run as the thread outcome would
- * otherwise hide the limit.
+ * That limited run, when queued runs would otherwise stand for the thread
+ * outcome (latestUnheldRun) and hide the limit.
  */
 export function usageLimitRunPresentedAsLatest(
   runs: ReadonlyArray<OrchestrationV2Run>,
@@ -97,33 +96,35 @@ export function usageLimitRunPresentedAsLatest(
   sessionError: string | null,
 ): OrchestrationV2Run | null {
   const blocked = usageLimitBlockedRun(runs, turnItems, sessionError);
-  return blocked !== null && runs.some((run) => run.ordinal > blocked.ordinal) ? blocked : null;
+  if (blocked === null) return null;
+  const presented = latestUnheldRun(runs);
+  return presented !== null && presented !== blocked ? blocked : null;
 }
 
 /**
  * The newest run that is not waiting on the user, or null when only such runs
  * exist. A held queue and a queued message open for editing wait for the user,
- * so they never stand for the thread's outcome. Fork: neither does a message
- * cancelled before it started (removed from the queue or batched into another
- * turn), and an unheld queued message outranks finished runs, since it still
- * runs after them even when a reorder left it with an older ordinal. The SQL
- * thread shell selects the same run.
+ * so they never stand for the thread's outcome. Fork: an unheld queued message
+ * outranks other runs, since it still runs after them even when a reorder
+ * left it with an older ordinal, and a message cancelled before it started
+ * (removed from the queue or batched into another turn) only stands for the
+ * outcome when no other run does. The SQL thread shell selects the same run.
  */
 export function latestUnheldRun(
   runs: ReadonlyArray<OrchestrationV2Run>,
 ): OrchestrationV2Run | null {
+  const rank = (run: OrchestrationV2Run) =>
+    run.status === "queued" ? 2 : run.status === "cancelled" && run.startedAt === null ? 0 : 1;
   let latest: OrchestrationV2Run | null = null;
   for (const run of runs) {
     if (run.status === "queued" && (run.queueHeld === true || run.editHeldUntil !== undefined)) {
       continue;
     }
-    if (run.status === "cancelled" && run.startedAt === null) continue;
-    if (latest === null) {
-      latest = run;
-      continue;
-    }
-    const queued = run.status === "queued";
-    if (queued !== (latest.status === "queued") ? queued : run.ordinal > latest.ordinal) {
+    if (
+      latest === null ||
+      rank(run) > rank(latest) ||
+      (rank(run) === rank(latest) && run.ordinal > latest.ordinal)
+    ) {
       latest = run;
     }
   }

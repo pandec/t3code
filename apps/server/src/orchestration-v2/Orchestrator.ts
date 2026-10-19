@@ -1955,6 +1955,31 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
                 },
               ]
             : []),
+          // Fork: an "until it's done" snooze follows the queue onto each run it
+          // starts, so it ends with the last one (snoozeUntilDoneWorkContinues).
+          // Emitted ahead of provider-thread.updated, which sets activeProviderThreadId.
+          ...(isSnoozedUntilDone(projection.thread) &&
+          projection.thread.snoozedUntilRunId !== queuedRun.id
+            ? [
+                {
+                  type: "thread.snoozed" as const,
+                  threadId,
+                  providerInstanceId: queuedRun.providerInstanceId,
+                  occurredAt: now,
+                  payload: {
+                    ...projection.thread,
+                    ...(selectionChanged
+                      ? {
+                          providerInstanceId: queuedRun.providerInstanceId,
+                          modelSelection: queuedRun.modelSelection,
+                          updatedAt: now,
+                        }
+                      : {}),
+                    snoozedUntilRunId: queuedRun.id,
+                  },
+                },
+              ]
+            : []),
           ...(handoff === null || transferId === null || latestHandoffRun === undefined
             ? []
             : [
@@ -2063,30 +2088,6 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
             occurredAt: now,
             payload: startingRun,
           },
-          // Fork: an "until it's done" snooze follows the queue onto each run it
-          // starts, so it ends with the last one (snoozeUntilDoneWorkContinues).
-          ...(isSnoozedUntilDone(projection.thread) &&
-          projection.thread.snoozedUntilRunId !== queuedRun.id
-            ? [
-                {
-                  type: "thread.snoozed" as const,
-                  threadId,
-                  providerInstanceId: queuedRun.providerInstanceId,
-                  occurredAt: now,
-                  payload: {
-                    ...projection.thread,
-                    ...(selectionChanged
-                      ? {
-                          providerInstanceId: queuedRun.providerInstanceId,
-                          modelSelection: queuedRun.modelSelection,
-                          updatedAt: now,
-                        }
-                      : {}),
-                    snoozedUntilRunId: queuedRun.id,
-                  },
-                },
-              ]
-            : []),
           // Fork batch release: the messages waiting now join this turn once
           // it runs (releaseQueueBatch); anything queued after this does not.
           ...queueBatchFollowers(projection, queuedRun, now).map((run) => ({
