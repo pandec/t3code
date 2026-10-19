@@ -33,6 +33,8 @@ import { deriveProviderInstanceEntries, shouldShowInstanceBadge } from "../../pr
 export function SubagentTooltipContent(props: {
   title: string;
   model: string | null;
+  /** Fork: custom-model icon for {@link model}; replaces the driver glyph. */
+  modelIcon?: string | undefined;
   providerInstanceId: ProviderInstanceId;
   origin: OrchestrationV2Subagent["origin"];
   modelSelection?: OrchestrationV2Subagent["modelSelection"];
@@ -125,6 +127,7 @@ export function SubagentTooltipContent(props: {
           <ProviderInstanceIcon
             driverKind={driver}
             displayName={entry?.displayName ?? props.provider?.displayName ?? driver}
+            modelIcon={props.modelIcon}
             accentColor={entry?.accentColor}
             acpRegistryIconUrl={props.provider?.iconUrl}
             showBadge={showInstanceBadge && entry?.accentColor !== undefined}

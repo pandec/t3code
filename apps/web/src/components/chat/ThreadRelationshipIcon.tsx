@@ -45,11 +45,13 @@ export function threadRelationshipStatusLabel(status: string | null): string {
 export function ThreadRelationshipIcon({
   driver,
   provider,
+  modelIcon,
   status,
   fallbackIcon: FallbackIcon = BotIcon,
 }: {
   driver?: ProviderDriverKind | undefined;
   provider?: ServerProvider | undefined;
+  modelIcon?: string | undefined;
   status: string | null;
   fallbackIcon?: LucideIcon;
 }) {
@@ -60,6 +62,7 @@ export function ThreadRelationshipIcon({
         <ProviderInstanceIcon
           driverKind={driver}
           displayName={provider?.displayName ?? driver}
+          modelIcon={modelIcon}
           acpRegistryIconUrl={provider?.iconUrl}
           iconClassName={iconClassName}
           className="z-auto"
