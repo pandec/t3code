@@ -8,7 +8,10 @@ import {
   scopeProjectRef,
   scopeThreadRef,
 } from "@t3tools/client-runtime/environment";
-import { squashAtomCommandFailure } from "@t3tools/client-runtime/state/runtime";
+import {
+  isAtomCommandInterrupted,
+  squashAtomCommandFailure,
+} from "@t3tools/client-runtime/state/runtime";
 import {
   AuthOrchestrationOperateScope,
   AuthSourceControlWriteScope,
@@ -62,7 +65,7 @@ import {
 } from "react";
 
 import { type DraftId, useComposerDraftStore } from "~/composerDraftStore";
-import { useRightPanelStore } from "~/rightPanelStore";
+import { type PullRequestDetailTab, useRightPanelStore } from "~/rightPanelStore";
 import { useEnvironmentSettings } from "~/hooks/useSettings";
 import { useNewThreadHandler } from "~/hooks/useHandleNewThread";
 import { useCopyToClipboard } from "~/hooks/useCopyToClipboard";
@@ -74,6 +77,7 @@ import {
 } from "~/keybindings";
 import { primaryServerKeybindingsAtom } from "~/state/server";
 import { usePullRequestDefaultMergeMethodResolver } from "./usePullRequestActions";
+import { OFF_HEAD_PULL_REQUEST_CHECKOUT_TOAST } from "./pullRequestCheckoutToast";
 import { changeRequestRepositoryUrl, gitHubPullRequestBrowserUrl } from "~/lib/openPullRequestLink";
 import { usePreparePullRequestThreadAction } from "~/lib/sourceControlActions";
 import { cn } from "~/lib/utils";
@@ -95,6 +99,7 @@ import { useAtomCommand } from "~/state/use-atom-command";
 import { useThreadPaneId } from "../thread-split/threadPaneContext";
 import { isThreadPaneActive } from "../thread-split/threadSplitStore";
 import { PullRequestStackMenu } from "./PullRequestStackMenu";
+import { PullRequestChangeBreakdownStat } from "./PullRequestChangeBreakdownStat";
 import { sourceControlClients } from "@t3tools/client-runtime/source-control-clients";
 import { PullRequestThreadLinks } from "./PullRequestThreadLinks";
 import { vcsEnvironment } from "~/state/vcs";
@@ -157,6 +162,7 @@ import {
   pullRequestFindingKey,
   pullRequestHandoffLabels,
   PULL_REQUEST_MERGE_METHOD_LABELS,
+  checkoutFailureDescription,
   readableFailure,
   readPullRequestDetailSnapshot,
   resolvePullRequestReferenceHost,
@@ -179,7 +185,6 @@ import {
 import { PullRequestChecksPopover } from "./PullRequestChecksPopover";
 import {
   PullRequestActorLabel,
-  PullRequestDiffStat,
   PullRequestMetaLine,
   PullRequestReviewOutcomeIcon,
   pullRequestChecksState,
@@ -193,8 +198,6 @@ import { PullRequestGuideTab } from "./PullRequestGuideTab";
 import { guideRunKey, useGuideRunStore } from "./guide/guideRunStore";
 import { useReviewGuideWriter } from "./guide/useReviewGuideWriter";
 import { useInlineActionConfirm } from "./useInlineActionConfirm";
-
-type DetailTab = "summary" | "guide" | "timeline" | "code";
 
 const ACTION_FAILURE_LABELS: Record<PullRequestAction, string> = {
   merge: "Could not merge this pull request",
@@ -235,7 +238,7 @@ const ACTION_FAILURE_HINTS: Record<PullRequestAction, string> = {
 const UPDATE_BRANCH_REBASE_FAILURE_HINT =
   "The host refused it. A rebase stops at the first commit that does not apply cleanly; updating with a merge commit may still work.";
 
-const TABS: ReadonlyArray<{ value: DetailTab; label: string }> = [
+const TABS: ReadonlyArray<{ value: PullRequestDetailTab; label: string }> = [
   { value: "summary", label: "Summary" },
   { value: "guide", label: "Guide" },
   { value: "timeline", label: "Timeline" },
@@ -531,7 +534,15 @@ function usePullRequestDetail(
           author: activity?.author ?? coreDetail.author,
           reviewers: activity?.reviewers ?? coreDetail.reviewers,
           comments: activity?.comments ?? [],
-          commentCount: activity?.commentCount ?? 0,
+          commentCount: Math.max(
+            activity?.commentCount ?? 0,
+            new Set([
+              ...(activity?.comments.map((comment) => comment.id) ?? []),
+              ...(activity?.reviewThreads.flatMap((thread) =>
+                thread.comments.map((comment) => comment.id),
+              ) ?? []),
+            ]).size,
+          ),
           commentsTruncated: activity?.commentsTruncated ?? false,
           reviewThreads: activity?.reviewThreads ?? [],
           commits: activity?.commits ?? [],
@@ -585,6 +596,8 @@ export function PullRequestDetailPanel({
   onBack,
   onSelectPullRequest,
   onGuideShown,
+  initialTab = "summary",
+  onTabChange,
 }: {
   environmentId: EnvironmentId;
   shortcutsEnabled: boolean;
@@ -600,6 +613,8 @@ export function PullRequestDetailPanel({
   composerDraftTarget?: ScopedThreadRef | DraftId;
   onBack?: (() => void) | undefined;
   onGuideShown?: (() => void) | undefined;
+  initialTab?: PullRequestDetailTab;
+  onTabChange?: ((tab: PullRequestDetailTab) => void) | undefined;
 }) {
   const environmentConfigs = useServerConfigs();
   const projects = useProjects();
@@ -632,7 +647,11 @@ export function PullRequestDetailPanel({
       : null;
   const [threadPickerOpen, setThreadPickerOpen] = useState(false);
   const [openReviewRequest, setOpenReviewRequest] = useState(0);
-  const [tab, setTab] = useState<DetailTab>("summary");
+  const [tab, setTab] = useState<PullRequestDetailTab>(initialTab);
+  const selectTab = (next: PullRequestDetailTab) => {
+    setTab(next);
+    onTabChange?.(next);
+  };
   const [timelineOrder, setTimelineOrder] = useState<"newest" | "oldest">("newest");
   const [codeCommitScope, setCodeCommitScope] = useState<{
     readonly pullRequestKey: string;
@@ -645,7 +664,7 @@ export function PullRequestDetailPanel({
   };
   const openCommit = (oid: string) => {
     selectCodeCommit(oid);
-    setTab("code");
+    selectTab("code");
   };
   const [codeRevealRequest, setCodeRevealRequest] = useState<{
     readonly path: string;
@@ -655,32 +674,36 @@ export function PullRequestDetailPanel({
     selectCodeCommit(null);
     setCodeRevealRequest((previous) => ({ path, nonce: (previous?.nonce ?? 0) + 1 }));
     void loadCodeTab();
-    setTab("code");
+    selectTab("code");
   };
   const guideOpenRequested = useGuideRunStore(
     (state) => state.openRequestKey === guideRunKey(environmentId, reference),
   );
   if (guideOpenRequested && tab !== "guide") setTab("guide");
   useEffect(() => {
-    if (guideOpenRequested) useGuideRunStore.getState().requestOpen(null);
-  }, [guideOpenRequested]);
+    if (!guideOpenRequested) return;
+    useGuideRunStore.getState().requestOpen(null);
+    onTabChange?.("guide");
+  }, [guideOpenRequested, onTabChange]);
   const tabScopeKey = `${environmentId}:${pullRequestKey}`;
   const [tabMountState, setTabMountState] = useState(() => ({
     key: tabScopeKey,
-    tabs: new Set<DetailTab>(["summary"]),
+    tabs: new Set<PullRequestDetailTab>([tab]),
   }));
   // A previously visited Code tab must not fetch diffs for every later PR while hidden.
   const mountedTabs =
-    tabMountState.key === tabScopeKey ? tabMountState.tabs : new Set<DetailTab>([tab]);
+    tabMountState.key === tabScopeKey ? tabMountState.tabs : new Set<PullRequestDetailTab>([tab]);
   if (tabMountState.key !== tabScopeKey) {
     setTabMountState({ key: tabScopeKey, tabs: new Set([tab]) });
   } else if (!tabMountState.tabs.has(tab)) {
     setTabMountState({ key: tabScopeKey, tabs: new Set(tabMountState.tabs).add(tab) });
   }
   // Each tab restores the condensed state its own scrolling left behind.
-  const [condensedByTab, setCondensedByTab] = useState<Partial<Record<DetailTab, boolean>>>({});
+  const [condensedByTab, setCondensedByTab] = useState<
+    Partial<Record<PullRequestDetailTab, boolean>>
+  >({});
   const condensed = condensedByTab[tab] ?? false;
-  const scrollerByTab = useRef<Partial<Record<DetailTab, HTMLDivElement | null>>>({});
+  const scrollerByTab = useRef<Partial<Record<PullRequestDetailTab, HTMLDivElement | null>>>({});
   // Fresh ref callbacks would detach and reattach every scroller on each render.
   const [scrollerRefs] = useState(() => ({
     summary: (node: HTMLDivElement | null) => {
@@ -695,10 +718,12 @@ export function PullRequestDetailPanel({
   }));
   const foldRef = useRef<HTMLDivElement | null>(null);
   const condensedRowRef = useRef<HTMLDivElement | null>(null);
+  // Save the target before collapse: the browser may clamp scrollTop as the viewport grows,
+  // so applying a delta afterward would compensate twice.
   const compensationRef = useRef<{
-    tab: DetailTab;
+    tab: PullRequestDetailTab;
     scroller: HTMLDivElement;
-    delta: number;
+    target: number;
   } | null>(null);
   useLayoutEffect(() => {
     const compensation = compensationRef.current;
@@ -710,10 +735,7 @@ export function PullRequestDetailPanel({
       scrollerByTab.current[tab] !== compensation.scroller
     )
       return;
-    compensation.scroller.scrollTop = Math.max(
-      0,
-      compensation.scroller.scrollTop + compensation.delta,
-    );
+    compensation.scroller.scrollTop = Math.max(0, compensation.target);
   }, [condensed, tab]);
   const lastSelectedMergeMethod = useUiStateStore((state) => state.pullRequestMergeMethod);
   const setLastSelectedMergeMethod = useUiStateStore((state) => state.setPullRequestMergeMethod);
@@ -832,7 +854,6 @@ export function PullRequestDetailPanel({
     nativeStackQuery.refresh();
   };
   const [refreshToken, setRefreshToken] = useState(0);
-  const codeRefreshToken = refreshToken + (turnRefresh ?? 0);
   const [activityRevision, setActivityRevision] = useState<{
     readonly key: string;
     readonly updatedAt: string;
@@ -1046,7 +1067,7 @@ export function PullRequestDetailPanel({
   });
   const writeGuide = () => {
     void guideWriter.write();
-    if (guideWriter.data?.guide == null) setTab("guide");
+    if (guideWriter.data?.guide == null) selectTab("guide");
   };
 
   const writeTaskToComposer = (target: ScopedThreadRef | DraftId, task: ThreadTask) => {
@@ -1219,12 +1240,12 @@ export function PullRequestDetailPanel({
     });
     if (prepared._tag === "Failure") {
       setHandoff(null);
-      const detailMessage =
-        prepareThread.error instanceof Error ? prepareThread.error.message : null;
       toastManager.update(toastId, {
         type: "error",
         title: "Could not prepare the pull request checkout",
-        ...(detailMessage ? { description: detailMessage } : {}),
+        description: checkoutFailureDescription(
+          isAtomCommandInterrupted(prepared) ? undefined : squashAtomCommandFailure(prepared),
+        ),
       });
       return;
     }
@@ -1249,12 +1270,6 @@ export function PullRequestDetailPanel({
       return;
     }
     setHandoff(null);
-    const staleCheckoutToast = {
-      type: "warning",
-      title: "Checked out, but not on the latest commits",
-      description:
-        "The checkout could not be moved onto the pull request's latest commits, so the code there is older than the pull request. Uncommitted work or local commits keep it where it is.",
-    } as const;
     if (task === null) {
       toastManager.update(
         toastId,
@@ -1267,7 +1282,7 @@ export function PullRequestDetailPanel({
                   ? "This repository is on the pull request's branch, with a thread open on it."
                   : "The pull request is in its own worktree, with a thread open on it.",
             }
-          : staleCheckoutToast,
+          : OFF_HEAD_PULL_REQUEST_CHECKOUT_TOAST,
       );
       return;
     }
@@ -1280,7 +1295,7 @@ export function PullRequestDetailPanel({
             title: "Checkout ready",
             description: "The task is in the composer — read it over, then send.",
           }
-        : staleCheckoutToast,
+        : OFF_HEAD_PULL_REQUEST_CHECKOUT_TOAST,
     );
   };
 
@@ -1442,6 +1457,7 @@ export function PullRequestDetailPanel({
       (item.value !== "code" || detail === null || detail.capabilities.diff) &&
       (item.value !== "guide" || reviewGuidesEnabled),
   );
+  // Keep unavailable-tab fallbacks out of the saved selection.
   if (!visibleTabs.some((item) => item.value === tab)) setTab("summary");
   const can = (action: PullRequestAction) =>
     detail?.capabilities.actions.includes(action) === true &&
@@ -2419,7 +2435,9 @@ export function PullRequestDetailPanel({
                       <FileDiffIcon aria-hidden className="size-3" />
                       {detail.changedFiles.toLocaleString()}
                     </span>
-                    <PullRequestDiffStat
+                    <PullRequestChangeBreakdownStat
+                      environmentId={environmentId}
+                      reference={reference}
                       additions={detail.additions}
                       deletions={detail.deletions}
                       className="shrink-0 font-mono text-2xs"
@@ -2483,6 +2501,7 @@ export function PullRequestDetailPanel({
                           setTitleScope({ pullRequestKey, text: event.target.value })
                         }
                         onKeyDown={(event) => {
+                          if (event.nativeEvent.isComposing || event.keyCode === 229) return;
                           if (event.key === "Enter") {
                             event.preventDefault();
                             void saveTitle(titleDraft);
@@ -2592,7 +2611,9 @@ export function PullRequestDetailPanel({
                 }
                 files={`${detail.changedFiles.toLocaleString()} ${detail.changedFiles === 1 ? "file" : "files"}`}
                 diffStat={
-                  <PullRequestDiffStat
+                  <PullRequestChangeBreakdownStat
+                    environmentId={environmentId}
+                    reference={reference}
                     additions={detail.additions}
                     deletions={detail.deletions}
                     className="shrink-0 font-mono text-xs"
@@ -2607,7 +2628,7 @@ export function PullRequestDetailPanel({
           <PullRequestDetailTabBar
             tabs={visibleTabs}
             value={tab}
-            onValueChange={setTab}
+            onValueChange={selectTab}
             onTabIntent={(item) => {
               if (item === "code") void loadCodeTab();
             }}
@@ -2773,7 +2794,7 @@ export function PullRequestDetailPanel({
             if (top < 4 && foldHeight > 0) next = false;
           } else if (foldHeight > 0 && top > foldHeight + 32) {
             const chromeDelta = foldHeight - (condensedRowRef.current?.scrollHeight ?? 0);
-            compensationRef.current = { tab, scroller, delta: -chromeDelta };
+            compensationRef.current = { tab, scroller, target: top - chromeDelta };
             next = true;
           }
           if (next !== previous) setCondensedByTab({ ...condensedByTab, [tab]: next });
@@ -2879,7 +2900,8 @@ export function PullRequestDetailPanel({
                     fixFindingLabel={handoffLabels.fixFinding}
                     {...(canFixFindings ? { onFixFinding: startFixFinding } : {})}
                     onRefresh={refreshDetail}
-                    refreshToken={codeRefreshToken}
+                    refreshToken={refreshToken}
+                    backgroundRefreshToken={turnRefresh ?? 0}
                     revealRequest={codeRevealRequest}
                   />
                 </Suspense>

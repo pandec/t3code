@@ -1,3 +1,4 @@
+import { Button } from "../../components/ui/Button";
 import * as Dialog from "../../components/ui/Dialog";
 import type { ComposerTextPaste } from "../../native/T3ComposerEditor.types";
 import { useAppearancePreferences } from "../settings/appearance/AppearancePreferencesProvider";
@@ -32,7 +33,6 @@ import {
   type AccessibilityActionEvent,
   Keyboard,
   Platform,
-  Pressable,
   View,
   type ViewStyle,
 } from "react-native";
@@ -105,8 +105,9 @@ import {
   groupByProvider,
   isModelSelectionUnavailable,
 } from "../../lib/modelOptions";
-import { useScaledTextRole } from "../settings/appearance/useScaledTextRole";
+import { useScaledTextRole, type ScaledTextRole } from "../settings/appearance/useScaledTextRole";
 import type { RemoteClientConnectionState } from "../../lib/connection";
+import { MOBILE_TYPOGRAPHY } from "../../lib/typography";
 import {
   providerOptionValueLabels,
   resolveProviderOptionDescriptors,
@@ -149,6 +150,19 @@ import {
 export const COMPOSER_COLLAPSED_CHROME = 60;
 
 const EMPTY_PROVIDERS: ReadonlyArray<ServerProvider> = [];
+const COLLAPSED_EDITOR_DEFAULT_INSET = 6;
+// iOS puts line-height slack above glyphs. DM Sans's lowercase midline is
+// descender (0.31em) + half x-height (0.504em) above the line bottom.
+const LOWERCASE_MIDLINE_EM = 0.562;
+
+function lowercaseMidline(text: ScaledTextRole): number {
+  return text.lineHeight - LOWERCASE_MIDLINE_EM * text.fontSize;
+}
+
+function collapsedEditorInset(text: ScaledTextRole): number {
+  const shift = lowercaseMidline(text) - lowercaseMidline(MOBILE_TYPOGRAPHY.body);
+  return Math.max(0, Math.round(COLLAPSED_EDITOR_DEFAULT_INSET - shift));
+}
 
 export const COMPOSER_EXPANDED_CHROME = 156;
 
@@ -180,6 +194,7 @@ export interface ThreadComposerProps {
   } | null;
   readonly followUpBehavior: FollowUpBehavior;
   readonly canSteerActiveTurn: boolean;
+  readonly hidden: boolean;
   readonly editorRef?: RefObject<ComposerEditorHandle | null>;
   readonly onChangeDraftMessage: (
     value: string,
@@ -191,6 +206,8 @@ export interface ThreadComposerProps {
   readonly onNativePasteText: (paste: ComposerTextPaste) => Promise<void>;
   readonly onRemoveDraftImage: (imageId: string) => void;
   readonly onStopThread: () => void;
+  /** Present while the thread's queue is held. */
+  readonly onResumeQueue: (() => Promise<void>) | null;
   readonly onSendMessage: (followUp?: ActiveTurnComposerAction) => Promise<MessageId | null>;
   readonly onShowUsageLimits: (report: UsageLimitsReport | null) => void;
   readonly canSwitchProvider: boolean;
@@ -418,6 +435,16 @@ export const ThreadComposer = function ThreadComposer(props: ThreadComposerProps
     (queuedEdit?.existingAttachments.length ?? 0) > 0;
   const stripAttachments = composerStripAttachments(draftAttachments);
   const showStopAction = !hasContent && props.canStopThread && queuedEdit === null;
+  const onResumeQueue = props.onResumeQueue;
+  const [resumingQueue, setResumingQueue] = useState(false);
+  const showResumeAction =
+    !hasContent && !showStopAction && queuedEdit === null && onResumeQueue !== null;
+  const handleResumeQueue = async () => {
+    if (resumingQueue || onResumeQueue === null) return;
+    setResumingQueue(true);
+    await onResumeQueue();
+    setResumingQueue(false);
+  };
 
   const uploadStates = useAtomValue(composerAttachmentUploadsAtom);
   const attachmentsUploading =
@@ -691,6 +718,7 @@ export const ThreadComposer = function ThreadComposer(props: ThreadComposerProps
     reportedModelSelection: props.reportedModelSelection,
     onSelectModel: (option) =>
       props.onUpdateModelSelection(withRememberedModelOptions(option.selection)),
+    restoreSelection: withRememberedModelOptions,
     optionDescriptors: providerOptionDescriptors,
     onUpdateOptionSelections: (options) => {
       rememberModelOptions(
@@ -919,9 +947,11 @@ export const ThreadComposer = function ThreadComposer(props: ThreadComposerProps
           </Text>
         ) : null}
         {modelUnavailable ? (
-          <Pressable accessibilityRole="button" className="px-3 py-2" onPress={openSettings}>
-            <Text className="text-xs text-foreground">Model unavailable. Open model settings.</Text>
-          </Pressable>
+          <Button
+            label="Model unavailable. Open model settings."
+            tone="text"
+            onPress={openSettings}
+          />
         ) : null}
 
         <ComposerSurface
@@ -1001,6 +1031,7 @@ export const ThreadComposer = function ThreadComposer(props: ThreadComposerProps
               layout={COMPOSER_LAYOUT_TRANSITION}
             >
               <ComposerEditor
+                hidden={props.hidden}
                 draftKey={composerDraftKey}
                 environmentId={props.environmentId}
                 onOpenMention={(path) => {
@@ -1019,7 +1050,8 @@ export const ThreadComposer = function ThreadComposer(props: ThreadComposerProps
                 ref={inputRef}
                 multiline
                 value={draftMessage}
-                readOnly={voiceInput.freezesEditor}
+                // The save uses a draft snapshot; further typing would be discarded on success.
+                readOnly={voiceInput.freezesEditor || queuedEdit?.saving === true}
                 skills={composerMenu.skills}
                 selection={composerMenu.selection}
                 onChangeText={props.onChangeDraftMessage}
@@ -1113,7 +1145,9 @@ export const ThreadComposer = function ThreadComposer(props: ThreadComposerProps
                 }
                 scrollEnabled={isExpanded}
                 singleLineCentered={!isExpanded}
-                contentInsetVertical={isExpanded || Platform.OS === "android" ? 0 : 6}
+                contentInsetVertical={
+                  isExpanded || Platform.OS === "android" ? 0 : collapsedEditorInset(bodyText)
+                }
                 style={
                   isExpanded
                     ? {
@@ -1170,6 +1204,13 @@ export const ThreadComposer = function ThreadComposer(props: ThreadComposerProps
                     variant="danger"
                     disabled={!props.canOperateThread}
                     onPress={props.onStopThread}
+                  />
+                ) : showResumeAction ? (
+                  <ComposerActionButton
+                    accessibilityLabel="Resume queue"
+                    icon="play"
+                    disabled={!props.canOperateThread || resumingQueue}
+                    onPress={() => void handleResumeQueue()}
                   />
                 ) : (
                   <SendActionButton
@@ -1269,6 +1310,13 @@ export const ThreadComposer = function ThreadComposer(props: ThreadComposerProps
                       variant="danger"
                       disabled={!props.canOperateThread}
                       onPress={props.onStopThread}
+                    />
+                  ) : showResumeAction && voicePresentation.showsSend && isToolbarVisible ? (
+                    <ComposerActionButton
+                      accessibilityLabel="Resume queue"
+                      icon="play"
+                      disabled={!props.canOperateThread || resumingQueue}
+                      onPress={() => void handleResumeQueue()}
                     />
                   ) : voicePresentation.showsSend && isToolbarVisible ? (
                     <SendActionButton

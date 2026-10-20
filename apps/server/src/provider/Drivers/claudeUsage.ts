@@ -12,6 +12,10 @@ import {
 
 import { resolveClaudeConfigDirPath } from "./ClaudeHome.ts";
 
+// Claude Code uses this model for local placeholders that never reached the API.
+export const CLAUDE_SYNTHETIC_MODEL = "<synthetic>";
+const SYNTHETIC_MODEL_FIELD = `"model":${JSON.stringify(CLAUDE_SYNTHETIC_MODEL)}`;
+
 /**
  * Parses one line of a Claude Code transcript.
  *
@@ -58,7 +62,7 @@ function parseClaudeRecord(parsed: unknown): UsageRecord | null {
   if (timestampMs === null) return null;
 
   const model = typeof messageRecord["model"] === "string" ? messageRecord["model"] : "";
-  if (model.length === 0) return null;
+  if (model.length === 0 || model === CLAUDE_SYNTHETIC_MODEL) return null;
 
   const messageId = typeof messageRecord["id"] === "string" ? messageRecord["id"] : null;
   const requestId = typeof record["requestId"] === "string" ? record["requestId"] : null;
@@ -129,7 +133,10 @@ export const claudeUsageFormat: TranscriptUsageFormat<void> = {
   usageMarkers: ['"usage"'],
   parseLine: (line) => orEmpty(parseClaudeLine(line)),
   parseProjected: (projected) => orEmpty(parseClaudeRecord(projected)),
-  malformed: { carriesUsage: (text) => text.includes('"usage"') },
+  // A local placeholder carries usage but is skipped on purpose.
+  malformed: {
+    carriesUsage: (text) => text.includes('"usage"') && !text.includes(SYNTHETIC_MODEL_FIELD),
+  },
 };
 
 export const claudeUsageReader: ProviderUsageReader<ClaudeSettings, Path.Path> = {

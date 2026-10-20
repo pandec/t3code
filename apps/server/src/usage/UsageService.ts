@@ -218,6 +218,11 @@ export const make = Effect.gen(function* () {
   const readerContext = yield* Effect.context<BuiltInUsageReadersEnv>();
 
   const fileCache: ScanCache = new Map();
+  // File lists and older cache entries can still hold a record after its tier is corrected.
+  const resolvedRecords = new WeakMap<UsageRecord, UsageRecord>();
+  const correctedRecord = (record: UsageRecord) => resolvedRecords.get(record) ?? record;
+  const correctedBatch = (records: readonly UsageRecord[]) =>
+    records.some((record) => resolvedRecords.has(record)) ? records.map(correctedRecord) : records;
   const sourceCache = new Map<string, typeof CachedSource.Type>();
   let cacheDirty = false;
   /**
@@ -389,7 +394,8 @@ export const make = Effect.gen(function* () {
             ([filePath, entry]) =>
               entry.provider === provider &&
               entry.mtimeMs >= retentionCutoffMs &&
-              entry.records.length + entry.tailRecords.length > 0 &&
+              (entry.records.length + entry.tailRecords.length > 0 ||
+                entry.malformedRecords + entry.tailMalformedRecords > 0) &&
               isWithinDirectory(filePath, dir),
           );
         const volumeId =
@@ -504,101 +510,124 @@ export const make = Effect.gen(function* () {
    * than completion order: saved records of deleted transcripts aggregate in
    * cache order, where the first copy of a duplicate wins.
    */
-  const readFileRecords = (
+  const readFileRecords = Effect.fn("UsageService.readFileRecords")(function* (
     filePath: string,
     size: number,
     mtimeMs: number,
     provider: UsageProviderKind,
     format: TranscriptUsageFormat<unknown>,
-  ): Effect.Effect<
+  ): Effect.fn.Return<
     FileScanResult & {
       readonly update?: { readonly entry: CachedFile; readonly replaces: CachedFile | undefined };
     }
-  > =>
-    Effect.gen(function* () {
-      const cached = fileCache.get(filePath);
-      // Provider is part of the identity: if both providers were ever pointed
-      // at one directory, a hit parsed by the other parser must not be reused.
-      if (
-        cached &&
-        !cached.requiresReparse &&
-        cached.size === size &&
-        cached.mtimeMs === mtimeMs &&
-        cached.provider === provider
-      ) {
-        return {
-          records:
-            cached.tailRecords.length === 0
-              ? cached.records
-              : [...cached.records, ...cached.tailRecords],
-          malformedRecords: cached.malformedRecords + cached.tailMalformedRecords,
-          unreadable: false,
-        };
-      }
-
-      // Only a strictly grown file may resume. Same size with a new mtime, or
-      // a shrunken file, means rewritten content; re-parse it whole.
-      const resumeFrom =
-        cached !== undefined &&
-        !cached.requiresReparse &&
-        cached.provider === provider &&
-        size > cached.size
-          ? cached.position
-          : undefined;
-
-      const parsed = yield* Effect.promise(() =>
-        readTranscriptRecords(filePath, format, resumeFrom),
-      );
-      // A read failure is not an empty transcript: caching it under this
-      // (size, mtime) would silently drop the file's usage until it changes.
-      // Migrated history (requiresReparse) is exactly this fallback; the flag
-      // only stops it from serving warm hits or resuming a parse.
-      if (parsed === null) {
-        return {
-          records: cached?.provider === provider ? [...cached.records, ...cached.tailRecords] : [],
-          malformedRecords:
-            cached?.provider === provider
-              ? cached.malformedRecords + cached.tailMalformedRecords
-              : 0,
-          unreadable: true,
-        };
-      }
-
-      // Stored already de-duplicated within the file, which is 99% of all
-      // duplicates. The aggregator still runs the cross-file dedupe pass. The
-      // cached base, the new lines, and the tail dedupe as one sequence so a
-      // resumed parse keeps the same record per key as a full one. The
-      // previous tail is not part of the base because the reader deliberately
-      // re-reads it. A tail record that replaced an earlier one stays a tail
-      // record, so the next resumed parse reads it again.
-      const resumedFromCache = parsed.resumed && cached !== undefined;
-      const baseRecords = resumedFromCache ? cached.records : [];
-      const tail = new Set(parsed.tailRecords);
-      const kept = dedupeWithinFile([...baseRecords, ...parsed.records, ...parsed.tailRecords]);
-      const records = tail.size === 0 ? kept : kept.filter((record) => !tail.has(record));
-      const tailRecords = tail.size === 0 ? [] : kept.filter((record) => tail.has(record));
-      const malformedRecords =
-        (resumedFromCache ? cached.malformedRecords : 0) + parsed.malformedRecords;
-
+  > {
+    const cached = fileCache.get(filePath);
+    // Provider is part of the identity: if both providers were ever pointed
+    // at one directory, a hit parsed by the other parser must not be reused.
+    if (
+      cached &&
+      !cached.requiresReparse &&
+      cached.size === size &&
+      cached.mtimeMs === mtimeMs &&
+      cached.provider === provider
+    ) {
       return {
-        records: tailRecords.length === 0 ? records : [...records, ...tailRecords],
-        malformedRecords: malformedRecords + parsed.tailMalformedRecords,
+        records:
+          cached.tailRecords.length === 0
+            ? cached.records
+            : [...cached.records, ...cached.tailRecords],
+        malformedRecords: cached.malformedRecords + cached.tailMalformedRecords,
         unreadable: false,
-        update: {
-          entry: {
-            size,
-            mtimeMs,
-            provider,
-            records,
-            malformedRecords,
-            tailRecords,
-            tailMalformedRecords: parsed.tailMalformedRecords,
-            position: parsed.position,
-          },
-          replaces: cached,
-        },
       };
-    });
+    }
+
+    // Only a strictly grown file may resume. Same size with a new mtime, or
+    // a shrunken file, means rewritten content; re-parse it whole.
+    const resumeFrom =
+      cached !== undefined &&
+      !cached.requiresReparse &&
+      cached.provider === provider &&
+      size > cached.size
+        ? cached.position
+        : undefined;
+
+    const parsed = yield* Effect.promise(() => readTranscriptRecords(filePath, format, resumeFrom));
+    // A read failure is not an empty transcript: caching it under this
+    // (size, mtime) would silently drop the file's usage until it changes.
+    // Migrated history (requiresReparse) is exactly this fallback; the flag
+    // only stops it from serving warm hits or resuming a parse.
+    if (parsed === null) {
+      return {
+        records: cached?.provider === provider ? [...cached.records, ...cached.tailRecords] : [],
+        malformedRecords:
+          cached?.provider === provider ? cached.malformedRecords + cached.tailMalformedRecords : 0,
+        unreadable: true,
+      };
+    }
+
+    const resumedFromCache = parsed.resumed && cached !== undefined;
+    if (resumedFromCache && cached.tailRecords.length > 0) {
+      // Completing a tentative line reparses it. Reuse its saved correction only when the
+      // same usage is emitted again, without putting inferred tiers in the parser state.
+      const reparsed = [...parsed.records, ...parsed.tailRecords];
+      const identity = (record: UsageRecord) =>
+        encodeUsageRecordKey([
+          record.provider,
+          record.sessionId,
+          record.timestampMs,
+          record.model,
+          record.rateModel,
+          record.totals,
+          record.reportedCostUsd,
+          record.dedupeKey,
+        ]);
+      for (const [index, previous] of cached.tailRecords.entries()) {
+        const record = reparsed[index];
+        const corrected = correctedRecord(previous);
+        if (
+          record?.unresolvedServiceTierTurnId !== undefined &&
+          corrected.unresolvedServiceTierTurnId === undefined &&
+          identity(record) === identity(corrected)
+        ) {
+          resolvedRecords.set(record, corrected);
+        }
+      }
+    }
+
+    // Stored already de-duplicated within the file, which is 99% of all
+    // duplicates. The aggregator still runs the cross-file dedupe pass. The
+    // cached base, the new lines, and the tail dedupe as one sequence so a
+    // resumed parse keeps the same record per key as a full one. The
+    // previous tail is not part of the base because the reader deliberately
+    // re-reads it. A tail record that replaced an earlier one stays a tail
+    // record, so the next resumed parse reads it again.
+    const baseRecords = resumedFromCache ? cached.records : [];
+    const tail = new Set(parsed.tailRecords);
+    const kept = dedupeWithinFile([...baseRecords, ...parsed.records, ...parsed.tailRecords]);
+    const records = tail.size === 0 ? kept : kept.filter((record) => !tail.has(record));
+    const tailRecords = tail.size === 0 ? [] : kept.filter((record) => tail.has(record));
+    const malformedRecords =
+      (resumedFromCache ? cached.malformedRecords : 0) + parsed.malformedRecords;
+
+    return {
+      records: tailRecords.length === 0 ? records : [...records, ...tailRecords],
+      malformedRecords: malformedRecords + parsed.tailMalformedRecords,
+      unreadable: false,
+      update: {
+        entry: {
+          size,
+          mtimeMs,
+          provider,
+          records,
+          malformedRecords,
+          tailRecords,
+          tailMalformedRecords: parsed.tailMalformedRecords,
+          position: parsed.position,
+        },
+        replaces: cached,
+      },
+    };
+  });
 
   interface ScannedFile extends FileScanResult {
     readonly path: string;
@@ -729,9 +758,13 @@ export const make = Effect.gen(function* () {
       if (
         current === update.replaces ||
         current === undefined ||
-        !isLaterRead(current, update.entry)
+        isLaterRead(update.entry, current)
       ) {
-        fileCache.set(file.path, update.entry);
+        fileCache.set(file.path, {
+          ...update.entry,
+          records: correctedBatch(update.entry.records),
+          tailRecords: correctedBatch(update.entry.tailRecords),
+        });
         cacheDirty = true;
       }
       return file;
@@ -953,6 +986,49 @@ export const make = Effect.gen(function* () {
       }
       return { files: retainedFiles, retainedMissingFiles };
     });
+    const windowEndMs =
+      hourlyWindow?.untilTimeMs ??
+      Date.parse(`${input.untilDay}T00:00:00Z`) + 86400000 + MTIME_SLACK_MS;
+    let resolvedAny = false;
+    for (const { reader } of transcriptReaders) {
+      if (reader.resolveServiceTiers === undefined) continue;
+      const pending = new Set<UsageRecord>();
+      for (const [index, retained] of filesByDir.entries()) {
+        if (retained === null || scannedDirs[index]?.provider !== reader.provider) continue;
+        for (const file of retained.files) {
+          for (const raw of file.records) {
+            const record = correctedRecord(raw);
+            if (
+              record.provider === reader.provider &&
+              record.unresolvedServiceTierTurnId !== undefined &&
+              record.timestampMs >= windowStartMs &&
+              record.timestampMs < windowEndMs
+            ) {
+              pending.add(record);
+            }
+          }
+        }
+      }
+      if (pending.size === 0) continue;
+      const resolved = yield* reader
+        .resolveServiceTiers([...pending])
+        .pipe(Effect.provideContext(readerContext));
+      for (const [record, speed] of resolved) {
+        const { unresolvedServiceTierTurnId: _turnId, ...rest } = record;
+        resolvedRecords.set(record, { ...rest, speed });
+        resolvedAny = true;
+      }
+    }
+    if (resolvedAny) {
+      for (const [filePath, entry] of fileCache) {
+        const records = correctedBatch(entry.records);
+        const tailRecords = correctedBatch(entry.tailRecords);
+        if (records === entry.records && tailRecords === entry.tailRecords) continue;
+        // Update the current entry by identity; a slow resolver cannot restore an older file.
+        fileCache.set(filePath, { ...entry, records, tailRecords });
+        cacheDirty = true;
+      }
+    }
     const allFiles = filesByDir.flatMap((dir) => dir?.files ?? []);
     const crossFileSessions = sharedSessions(allFiles);
     const aggregator = new UsageAggregator({
@@ -964,7 +1040,10 @@ export const make = Effect.gen(function* () {
       rates,
       priceOverrides: createOverrideRateTable(settings.usagePriceOverrides),
       modelAliases: resolveModelAliases(settings.usageModelAliases),
-      dedupeWinners: selectDedupeWinners(allFiles),
+      // The aggregator matches winners by identity, so pick them among corrected records.
+      dedupeWinners: selectDedupeWinners(
+        allFiles.map((file) => ({ records: correctedBatch(file.records) })),
+      ),
     });
 
     for (const [
@@ -1002,7 +1081,8 @@ export const make = Effect.gen(function* () {
         }
         scannedFiles += 1;
         const eventOccurrences = new Map<string, number>();
-        for (const record of file.records) {
+        for (const rawRecord of file.records) {
+          const record = correctedRecord(rawRecord);
           let usageRecord = record;
           if (
             sharedSessionProviders.has(record.provider) &&
@@ -1030,6 +1110,17 @@ export const make = Effect.gen(function* () {
       // A source still refreshing has its final answer pending; its retained
       // history is not yet a sign of anything missing.
       const retainedMissing = retainedMissingFiles > 0 && refreshing !== true;
+      // Retained diagnostics alone do not make an absent directory available.
+      const absent = files === null && scannedFiles === 0;
+      const sourceMessage =
+        message ??
+        (unreadableFiles > 0
+          ? `${unreadableFiles} transcript ${unreadableFiles === 1 ? "file" : "files"} could not be read; saved usage is retained, but newer usage may be missing.`
+          : retainedMissing && !absent
+            ? "Some history is no longer available. Retained usage is shown from cache."
+            : files === null
+              ? "No transcript directory on this environment."
+              : null);
       sources.push({
         fingerprint: { hostId: sourceHostId ?? hostId, provider, resolvedHomePath: dir, volumeId },
         // Files that exist but would not open mean the totals below are a
@@ -1037,25 +1128,27 @@ export const make = Effect.gen(function* () {
         // a complete answer. Clients exclude missing sources, so saved records
         // remain an available source.
         status:
-          unreadableFiles > 0 || status === "partial" || retainedMissing
+          unreadableFiles > 0 || status === "partial" || (retainedMissing && !absent)
             ? "partial"
-            : files === null && scannedFiles === 0
+            : absent
               ? "missing"
-              : (status ?? "ok"),
+              : malformedRecords > 0 && (status === undefined || status === "ok")
+                ? "partial"
+                : (status ?? "ok"),
         scannedFiles,
         skippedFiles,
         malformedRecords,
         distinctSessions: sessionIds.size,
         ...(action ? { action } : {}),
         message:
-          message ??
-          (unreadableFiles > 0
-            ? `${unreadableFiles} transcript ${unreadableFiles === 1 ? "file" : "files"} could not be read; saved usage is retained, but newer usage may be missing.`
-            : retainedMissing
-              ? "Some history is no longer available. Retained usage is shown from cache."
-              : files === null
-                ? "No transcript directory on this environment."
-                : null),
+          malformedRecords > 0
+            ? [
+                sourceMessage,
+                `${malformedRecords} malformed or inconsistent usage record(s) were skipped; usage may be incomplete.`,
+              ]
+                .filter(Boolean)
+                .join(" ")
+            : sourceMessage,
         ...(refreshing ? { refreshing } : {}),
       });
     }

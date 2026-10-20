@@ -5,6 +5,7 @@ import { ProviderInstanceId, ThreadId } from "@t3tools/contracts";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import { HttpBody, HttpClient, HttpRouter } from "effect/http";
+import * as McpProviderSessions from "@t3tools/provider-core/server/McpProviderSessions";
 
 import * as ServerConfig from "../../../config.ts";
 import * as DeviceService from "../../../device/DeviceService.ts";
@@ -40,6 +41,7 @@ import * as PreviewAutomationBroker from "../../PreviewAutomationBroker.ts";
 import * as PreviewBrowser from "../../../preview/PreviewBrowser.ts";
 
 const StubServicesLive = Layer.mergeAll(
+  McpProviderSessions.layer,
   Layer.mock(Orchestrator.OrchestratorV2)({}),
   Layer.mock(ProjectionStore.ProjectionStoreV2)({}),
   Layer.mock(DeviceService.DeviceService)({}),

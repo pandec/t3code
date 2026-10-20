@@ -140,18 +140,21 @@ export const make = Effect.gen(function* () {
         ),
       );
 
-  const blocker = (threadId: ThreadId) =>
-    Effect.gen(function* () {
+  const blocker = Effect.fn("ArchiveWorktreeRemoval.blocker")(
+    function* (threadId: ThreadId) {
       const { thread } = yield* threads.getThreadRecords(threadId, []);
       if (thread.worktreePath === null) return WORKTREE_KEPT_DETAIL.noWorktree;
       if (!(yield* fs.exists(thread.worktreePath))) return null;
       const reason = yield* structuralBlocker(threadId, thread.worktreePath);
       return reason === WORKTREE_KEPT_DETAIL.dirty ? null : reason;
-    }).pipe(describeFailure("check"), providePlatform);
+    },
+    describeFailure("check"),
+    providePlatform,
+  );
 
   /** Other archived threads in the checkout; their archive stops may still be running there. */
-  const sharingArchivedThreadIds = (threadId: ThreadId, worktreePath: string) =>
-    Effect.gen(function* () {
+  const sharingArchivedThreadIds = Effect.fn("ArchiveWorktreeRemoval.sharingArchivedThreadIds")(
+    function* (threadId: ThreadId, worktreePath: string) {
       const root = yield* canonicalWorkspacePath(worktreePath);
       const archived = yield* threads.getShellSnapshot({ location: "archive" });
       const ids: Array<ThreadId> = [];
@@ -160,7 +163,8 @@ export const make = Effect.gen(function* () {
         if (contains(root, yield* canonicalWorkspacePath(thread.worktreePath))) ids.push(thread.id);
       }
       return ids;
-    });
+    },
+  );
 
   // The archive stops the thread's provider sessions and terminals through
   // outbox effects (the session bindings are already gone from the
@@ -197,8 +201,8 @@ export const make = Effect.gen(function* () {
       ),
     );
 
-  const remove = (input: { readonly threadId: ThreadId; readonly worktreePath: string }) =>
-    Effect.gen(function* () {
+  const remove = Effect.fn("ArchiveWorktreeRemoval.remove")(
+    function* (input: { readonly threadId: ThreadId; readonly worktreePath: string }) {
       const { thread } = yield* threads.getThreadRecords(input.threadId, []);
       const stillPending = (current: typeof thread) =>
         current.worktreePath === input.worktreePath &&
@@ -231,7 +235,10 @@ export const make = Effect.gen(function* () {
             );
         }).pipe(Effect.scoped),
       );
-    }).pipe(describeFailure("removal"), providePlatform);
+    },
+    describeFailure("removal"),
+    providePlatform,
+  );
 
   return ArchiveWorktreeRemoval.of({ blocker, remove });
 });

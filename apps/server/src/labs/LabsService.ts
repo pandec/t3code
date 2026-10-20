@@ -337,30 +337,29 @@ const make = Effect.gen(function* () {
   });
 
   /** The lab as the CLI reports it now; mutations act on current leases, not the last poll. */
-  const findLab = (envId: string) =>
-    Effect.gen(function* () {
-      const directory = yield* requireDirectory;
-      yield* refresh;
-      const state = yield* Ref.get(core);
-      // Never act on the cached status: ownership may have changed since.
-      if (state.error !== null) {
-        return yield* new LabsError({ reason: "cli_failed", detail: state.error });
-      }
-      const environment = state.environments.find((candidate) => candidate.id === envId);
-      if (environment === undefined) {
-        return yield* new LabsError({
-          reason: "not_found",
-          detail: `No SP Labs environment named ${envId}.`,
-        });
-      }
-      if (environment.kind !== "lab") {
-        return yield* new LabsError({
-          reason: "not_found",
-          detail: `${environment.name} is not a lab.`,
-        });
-      }
-      return { directory, environment };
-    });
+  const findLab = Effect.fn("LabsService.findLab")(function* (envId: string) {
+    const directory = yield* requireDirectory;
+    yield* refresh;
+    const state = yield* Ref.get(core);
+    // Never act on the cached status: ownership may have changed since.
+    if (state.error !== null) {
+      return yield* new LabsError({ reason: "cli_failed", detail: state.error });
+    }
+    const environment = state.environments.find((candidate) => candidate.id === envId);
+    if (environment === undefined) {
+      return yield* new LabsError({
+        reason: "not_found",
+        detail: `No SP Labs environment named ${envId}.`,
+      });
+    }
+    if (environment.kind !== "lab") {
+      return yield* new LabsError({
+        reason: "not_found",
+        detail: `${environment.name} is not a lab.`,
+      });
+    }
+    return { directory, environment };
+  });
 
   /** Runs one mutation on `envId`: marks the operation, then refreshes before clearing it. */
   const mutate = <A>(
@@ -473,91 +472,92 @@ const make = Effect.gen(function* () {
       ? runUp(input.envId, input.action)
       : runSimple(input.envId, input.action, input.note);
 
-  const prepareThread: LabsService["Service"]["prepareThread"] = (input) =>
-    Effect.gen(function* () {
-      if (input.branch === null && input.baseRef === null) {
-        return yield* new LabsError({
-          reason: "invalid_input",
-          detail: "An automatic branch name needs a base to create it from.",
-        });
-      }
-      const prepared = yield* mutate(
-        input.labId,
-        "acquiring",
-        Effect.gen(function* () {
-          const { directory, environment } = yield* findLab(input.labId);
-          // A retried launch finds the lab already reserved for this thread.
-          if (environment.lease !== null && environment.lease.threadId === input.threadId) {
-            return {
-              labId: input.labId,
-              worktreePath: environment.worktree,
-              branch: environment.runtime.git?.branch ?? input.branch ?? "",
-              leaseId: environment.lease.id,
-              autoBranch: false,
-              stackStopped: isLabStackStopped(environment.runtime),
-            };
-          }
-          // The launch renames a temporary branch from the first message, in the lab worktree.
-          const token = (yield* randomUuidV4).replaceAll("-", "");
-          const branch = input.branch ?? buildTemporaryWorktreeBranchName(() => token);
-          const acquired = yield* cli
-            .run({
-              directory,
-              args: [
-                "acquire",
-                input.labId,
-                "--purpose",
-                input.purpose,
-                "--branch",
-                branch,
-                ...(input.baseRef === null ? [] : ["--base", input.baseRef]),
-                ...(input.overrideHold === true ? ["--override-hold"] : []),
-              ],
-              threadId: input.threadId,
-              timeout: TIMEOUTS.acquire,
-            })
-            .pipe(Effect.flatMap(decodeOutput(AcquireOutput, "acquire")));
+  const prepareThread: LabsService["Service"]["prepareThread"] = Effect.fn(
+    "LabsService.prepareThread",
+  )(function* (input) {
+    if (input.branch === null && input.baseRef === null) {
+      return yield* new LabsError({
+        reason: "invalid_input",
+        detail: "An automatic branch name needs a base to create it from.",
+      });
+    }
+    const prepared = yield* mutate(
+      input.labId,
+      "acquiring",
+      Effect.gen(function* () {
+        const { directory, environment } = yield* findLab(input.labId);
+        // A retried launch finds the lab already reserved for this thread.
+        if (environment.lease !== null && environment.lease.threadId === input.threadId) {
           return {
             labId: input.labId,
-            worktreePath: acquired.worktree,
-            branch,
-            leaseId: acquired.lease.id,
-            autoBranch: input.branch === null,
-            stackStopped: true,
+            worktreePath: environment.worktree,
+            branch: environment.runtime.git?.branch ?? input.branch ?? "",
+            leaseId: environment.lease.id,
+            autoBranch: false,
+            stackStopped: isLabStackStopped(environment.runtime),
           };
-        }),
-      );
-      // Every call for the holding thread ensures the note, once per lease: a retry restores one
-      // a failed write lost, and never repeats one already delivered. Bound to the lab worktree,
-      // so a thread launched elsewhere after all never hears it.
-      yield* hiddenNotes
-        .put({
-          threadId: input.threadId,
-          kind: labNoteKind(prepared.leaseId),
-          text: labThreadNote(prepared),
-          worktreePath: prepared.worktreePath,
-          once: true,
-        })
-        .pipe(
-          Effect.catch((cause) =>
-            Effect.logWarning("Failed to queue the lab thread's first-turn note", {
-              labId: input.labId,
-              cause,
-            }),
-          ),
-        );
-      // The agent starts right away; `up` runs beside it and reports through the snapshot.
-      const operation = (yield* Ref.get(t3State))[input.labId]?.operation ?? null;
-      if (prepared.stackStopped && operation !== "starting") {
-        yield* runUp(input.labId, "up").pipe(Effect.ignore, Effect.forkIn(scope));
-      }
-      return {
-        labId: prepared.labId,
+        }
+        // The launch renames a temporary branch from the first message, in the lab worktree.
+        const token = (yield* randomUuidV4).replaceAll("-", "");
+        const branch = input.branch ?? buildTemporaryWorktreeBranchName(() => token);
+        const acquired = yield* cli
+          .run({
+            directory,
+            args: [
+              "acquire",
+              input.labId,
+              "--purpose",
+              input.purpose,
+              "--branch",
+              branch,
+              ...(input.baseRef === null ? [] : ["--base", input.baseRef]),
+              ...(input.overrideHold === true ? ["--override-hold"] : []),
+            ],
+            threadId: input.threadId,
+            timeout: TIMEOUTS.acquire,
+          })
+          .pipe(Effect.flatMap(decodeOutput(AcquireOutput, "acquire")));
+        return {
+          labId: input.labId,
+          worktreePath: acquired.worktree,
+          branch,
+          leaseId: acquired.lease.id,
+          autoBranch: input.branch === null,
+          stackStopped: true,
+        };
+      }),
+    );
+    // Every call for the holding thread ensures the note, once per lease: a retry restores one
+    // a failed write lost, and never repeats one already delivered. Bound to the lab worktree,
+    // so a thread launched elsewhere after all never hears it.
+    yield* hiddenNotes
+      .put({
+        threadId: input.threadId,
+        kind: labNoteKind(prepared.leaseId),
+        text: labThreadNote(prepared),
         worktreePath: prepared.worktreePath,
-        branch: prepared.branch,
-        leaseId: prepared.leaseId,
-      };
-    });
+        once: true,
+      })
+      .pipe(
+        Effect.catch((cause) =>
+          Effect.logWarning("Failed to queue the lab thread's first-turn note", {
+            labId: input.labId,
+            cause,
+          }),
+        ),
+      );
+    // The agent starts right away; `up` runs beside it and reports through the snapshot.
+    const operation = (yield* Ref.get(t3State))[input.labId]?.operation ?? null;
+    if (prepared.stackStopped && operation !== "starting") {
+      yield* runUp(input.labId, "up").pipe(Effect.ignore, Effect.forkIn(scope));
+    }
+    return {
+      labId: prepared.labId,
+      worktreePath: prepared.worktreePath,
+      branch: prepared.branch,
+      leaseId: prepared.leaseId,
+    };
+  });
 
   const release: LabsService["Service"]["release"] = (input) =>
     mutate(
@@ -625,8 +625,8 @@ const make = Effect.gen(function* () {
       }),
     );
 
-  const history: LabsService["Service"]["history"] = (input) =>
-    Effect.gen(function* () {
+  const history: LabsService["Service"]["history"] = Effect.fn("LabsService.history")(
+    function* (input) {
       const directory = yield* requireDirectory;
       return yield* cli
         .run({
@@ -640,23 +640,23 @@ const make = Effect.gen(function* () {
           timeout: TIMEOUTS.status,
         })
         .pipe(Effect.flatMap(decodeOutput(LabsHistoryResult, "history")));
-    });
+    },
+  );
 
-  const logs: LabsService["Service"]["logs"] = (input) =>
-    Effect.gen(function* () {
-      const directory = yield* requireDirectory;
-      return yield* cli
-        .run({
-          directory,
-          args: [
-            "env-logs",
-            input.envId,
-            ...(input.limit === undefined ? [] : ["--limit", String(input.limit)]),
-          ],
-          timeout: TIMEOUTS.status,
-        })
-        .pipe(Effect.flatMap(decodeOutput(LabsLogsResult, "env-logs")));
-    });
+  const logs: LabsService["Service"]["logs"] = Effect.fn("LabsService.logs")(function* (input) {
+    const directory = yield* requireDirectory;
+    return yield* cli
+      .run({
+        directory,
+        args: [
+          "env-logs",
+          input.envId,
+          ...(input.limit === undefined ? [] : ["--limit", String(input.limit)]),
+        ],
+        timeout: TIMEOUTS.status,
+      })
+      .pipe(Effect.flatMap(decodeOutput(LabsLogsResult, "env-logs")));
+  });
 
   const getInventory: LabsService["Service"]["getInventory"] = Effect.gen(function* () {
     // Agents acquire and release labs through the CLI too; re-read a status older than this.

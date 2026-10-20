@@ -76,10 +76,12 @@ class CreditsFetchError {
   }
 }
 
-const fetchSnapshot = (
+const fetchSnapshot: (
   apiKey: string,
-): Effect.Effect<OpenRouterCreditsSnapshot, CreditsFetchError, HttpClient.HttpClient> =>
-  Effect.gen(function* () {
+) => Effect.Effect<OpenRouterCreditsSnapshot, CreditsFetchError, HttpClient.HttpClient> = Effect.fn(
+  "OpenRouterCredits.fetchSnapshot",
+)(
+  function* (apiKey: string) {
     const client = yield* HttpClient.HttpClient;
     const response = yield* client.execute(
       HttpClientRequest.get(OPENROUTER_CREDITS_URL).pipe(
@@ -111,25 +113,22 @@ const fetchSnapshot = (
       totalUsageUsd: body.data.total_usage,
       observedAt,
     };
-  }).pipe(
-    // The timeout covers the whole exchange, body read included: a response
-    // that hangs after its headers would otherwise hold the single-flight
-    // gate forever and wedge every later read in this process.
-    Effect.timeout(REQUEST_TIMEOUT),
-    Effect.catchCause((cause) => {
-      const squashed = Cause.squash(cause);
-      if (squashed instanceof CreditsFetchError) {
-        return Effect.fail(squashed);
-      }
-      return Effect.fail(
-        new CreditsFetchError(
-          Cause.isTimeoutError(squashed)
-            ? "The OpenRouter request timed out."
-            : "Could not reach OpenRouter.",
-        ),
-      );
-    }),
-  );
+  },
+  Effect.timeout(REQUEST_TIMEOUT),
+  Effect.catchCause((cause) => {
+    const squashed = Cause.squash(cause);
+    if (squashed instanceof CreditsFetchError) {
+      return Effect.fail(squashed);
+    }
+    return Effect.fail(
+      new CreditsFetchError(
+        Cause.isTimeoutError(squashed)
+          ? "The OpenRouter request timed out."
+          : "Could not reach OpenRouter.",
+      ),
+    );
+  }),
+);
 
 /**
  * Read the environment's OpenRouter credits. Never fails: a missing key,
@@ -229,22 +228,21 @@ export const readOpenRouterCredits: Effect.Effect<
  * propagate so the caller's command surfaces them instead of reporting a
  * configuration that did not happen.
  */
-export const configureOpenRouterCredits = (
+export const configureOpenRouterCredits: (
   apiKey: string,
-): Effect.Effect<
+) => Effect.Effect<
   { readonly configured: boolean },
   ServerSecretStore.SecretStoreError,
   ServerSecretStore.ServerSecretStore
-> =>
-  Effect.gen(function* () {
-    const secretStore = yield* ServerSecretStore.ServerSecretStore;
-    const trimmed = apiKey.trim();
-    creditsCache = null;
-    creditsFailure = null;
-    if (trimmed.length === 0) {
-      yield* secretStore.remove(OPENROUTER_API_KEY_SECRET_NAME);
-      return { configured: false };
-    }
-    yield* secretStore.set(OPENROUTER_API_KEY_SECRET_NAME, textEncoder.encode(trimmed));
-    return { configured: true };
-  });
+> = Effect.fn("OpenRouterCredits.configureOpenRouterCredits")(function* (apiKey: string) {
+  const secretStore = yield* ServerSecretStore.ServerSecretStore;
+  const trimmed = apiKey.trim();
+  creditsCache = null;
+  creditsFailure = null;
+  if (trimmed.length === 0) {
+    yield* secretStore.remove(OPENROUTER_API_KEY_SECRET_NAME);
+    return { configured: false };
+  }
+  yield* secretStore.set(OPENROUTER_API_KEY_SECRET_NAME, textEncoder.encode(trimmed));
+  return { configured: true };
+});

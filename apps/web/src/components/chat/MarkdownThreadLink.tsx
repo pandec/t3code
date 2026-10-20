@@ -1,10 +1,14 @@
 import { scopeProjectRef, scopeThreadRef } from "@t3tools/client-runtime/environment";
 import type { EnvironmentId, ThreadId } from "@t3tools/contracts";
-import { formatThreadLink, percentDecodedThreadLinkId } from "@t3tools/shared/threadLinks";
+import {
+  formatThreadLink,
+  percentDecodedThreadLinkId,
+  resolveThreadLinkRef,
+} from "@t3tools/shared/threadLinks";
 import { Link } from "@tanstack/react-router";
 import { MessageSquareTextIcon } from "lucide-react";
 
-import { useProject, useThreadShell } from "../../state/entities";
+import { useProject, useThreadRefs, useThreadShell } from "../../state/entities";
 import { ProjectFavicon } from "../ProjectFavicon";
 import { useThreadLinkClick } from "../thread-split/useOpenThreadInPane";
 
@@ -18,18 +22,26 @@ export function MarkdownThreadLink(props: {
   const decoded = useThreadShell(
     written === null && decodedId !== null ? scopeThreadRef(props.environmentId, decodedId) : null,
   );
-  const thread = written ?? decoded;
+  const local = written ?? decoded;
+  const refs = useThreadRefs(local === null);
+  const remote = useThreadShell(
+    local === null
+      ? resolveThreadLinkRef(scopeThreadRef(props.environmentId, props.threadId), refs)
+      : null,
+  );
+  const thread = local ?? remote;
+  const environmentId = thread?.environmentId ?? props.environmentId;
   const threadId = thread?.id ?? props.threadId;
   const project = useProject(
-    thread === null ? null : scopeProjectRef(props.environmentId, thread.projectId),
+    thread === null ? null : scopeProjectRef(environmentId, thread.projectId),
   );
   const title = thread?.title.trim() || props.label;
   // Fork: in split view the thread opens in the pane the link sits in.
-  const onClick = useThreadLinkClick(scopeThreadRef(props.environmentId, threadId));
+  const onClick = useThreadLinkClick(scopeThreadRef(environmentId, threadId));
   return (
     <Link
       to="/$environmentId/$threadId"
-      params={{ environmentId: props.environmentId, threadId }}
+      params={{ environmentId, threadId }}
       onClick={onClick}
       title={thread === null ? "Thread no longer available" : project?.title}
       data-markdown-copy={formatThreadLink(threadId, title)}

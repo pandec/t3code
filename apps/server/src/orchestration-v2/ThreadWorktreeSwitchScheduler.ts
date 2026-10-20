@@ -107,14 +107,16 @@ export const make = Effect.gen(function* () {
     );
 
   /** Resolves `targetPath` against the thread's project; fails with a user-facing reason. */
-  const resolveTarget = (projectId: Parameters<typeof projects.getShell>[0], targetPath: string) =>
-    Effect.gen(function* () {
-      const project = yield* projects.getShell(projectId).pipe(Effect.mapError(toSwitchError));
-      if (Option.isNone(project)) {
-        return yield* new WorktreeSwitchError({ message: "The project no longer exists." });
-      }
-      return yield* resolveWorktreeSwitchTarget(project.value.workspaceRoot, targetPath);
-    }).pipe(providePlatform);
+  const resolveTarget = Effect.fn("ThreadWorktreeSwitchScheduler.resolveTarget")(function* (
+    projectId: Parameters<typeof projects.getShell>[0],
+    targetPath: string,
+  ) {
+    const project = yield* projects.getShell(projectId).pipe(Effect.mapError(toSwitchError));
+    if (Option.isNone(project)) {
+      return yield* new WorktreeSwitchError({ message: "The project no longer exists." });
+    }
+    return yield* resolveWorktreeSwitchTarget(project.value.workspaceRoot, targetPath);
+  }, providePlatform);
 
   // Threads whose latest known state has a pending request; events on other
   // threads never cost a read.
@@ -143,21 +145,20 @@ export const make = Effect.gen(function* () {
       pendingBackgroundTasks: shell?.pendingBackgroundTasks ?? [],
     });
     if (decision.type === "wait") return;
-    const execute = (
+    const execute = Effect.fn("ThreadWorktreeSwitchScheduler.execute")(function* (
       outcome:
         | { readonly target: { worktreePath: string | null; branch: string | null } }
         | { readonly error: string }
         | Record<string, never>,
-    ) =>
-      Effect.gen(function* () {
-        yield* threads.dispatch({
-          type: "thread.worktree-switch.execute",
-          commandId: yield* newCommandId("worktree-switch-execute", threadId),
-          threadId,
-          requestId: request.requestId,
-          ...outcome,
-        });
+    ) {
+      yield* threads.dispatch({
+        type: "thread.worktree-switch.execute",
+        commandId: yield* newCommandId("worktree-switch-execute", threadId),
+        threadId,
+        requestId: request.requestId,
+        ...outcome,
       });
+    });
     // The orchestrator records the cancellation or failure.
     if (decision.type === "cancel" || decision.type === "fail") return yield* execute({});
     // Hold the target's lease so archive cleanup cannot remove it mid-switch.
@@ -224,38 +225,36 @@ export const make = Effect.gen(function* () {
   );
 
   return ThreadWorktreeSwitchScheduler.of({
-    request: (input) =>
-      Effect.gen(function* () {
-        const { thread } = yield* threads
-          .getThreadRecords(input.threadId, [])
-          .pipe(Effect.mapError(toSwitchError));
-        const target = yield* resolveTarget(thread.projectId, input.targetPath);
-        yield* threads
-          .dispatch({
-            type: "thread.worktree-switch.schedule",
-            commandId:
-              input.commandId ?? (yield* newCommandId("worktree-switch-schedule", input.threadId)),
-            threadId: input.threadId,
-            targetPath: target.targetPath,
-          })
-          .pipe(Effect.mapError(toSwitchError));
-        return yield* status(input.threadId);
-      }),
+    request: Effect.fn("ThreadWorktreeSwitchScheduler.request")(function* (input) {
+      const { thread } = yield* threads
+        .getThreadRecords(input.threadId, [])
+        .pipe(Effect.mapError(toSwitchError));
+      const target = yield* resolveTarget(thread.projectId, input.targetPath);
+      yield* threads
+        .dispatch({
+          type: "thread.worktree-switch.schedule",
+          commandId:
+            input.commandId ?? (yield* newCommandId("worktree-switch-schedule", input.threadId)),
+          threadId: input.threadId,
+          targetPath: target.targetPath,
+        })
+        .pipe(Effect.mapError(toSwitchError));
+      return yield* status(input.threadId);
+    }),
     status,
-    cancel: (input) =>
-      Effect.gen(function* () {
-        const current = yield* status(input.threadId);
-        if (current.request?.status !== "pending") return current;
-        yield* threads
-          .dispatch({
-            type: "thread.worktree-switch.cancel",
-            commandId:
-              input.commandId ?? (yield* newCommandId("worktree-switch-cancel", input.threadId)),
-            threadId: input.threadId,
-          })
-          .pipe(Effect.mapError(toSwitchError));
-        return yield* status(input.threadId);
-      }),
+    cancel: Effect.fn("ThreadWorktreeSwitchScheduler.cancel")(function* (input) {
+      const current = yield* status(input.threadId);
+      if (current.request?.status !== "pending") return current;
+      yield* threads
+        .dispatch({
+          type: "thread.worktree-switch.cancel",
+          commandId:
+            input.commandId ?? (yield* newCommandId("worktree-switch-cancel", input.threadId)),
+          threadId: input.threadId,
+        })
+        .pipe(Effect.mapError(toSwitchError));
+      return yield* status(input.threadId);
+    }),
     start: Effect.fn("ThreadWorktreeSwitchScheduler.start")(function* () {
       yield* forkParked(
         Stream.runForEach(threads.streamDomainEvents, onEvent).pipe(

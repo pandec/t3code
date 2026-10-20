@@ -220,7 +220,7 @@ const readGenerationCost = (input: {
  * wrapped as WAV using the rate and channel count from its content type.
  * The cost is read from the generation record the response header names.
  */
-export const synthesizeOpenRouterSpeech = (input: {
+export const synthesizeOpenRouterSpeech: (input: {
   readonly httpClient: HttpClient.HttpClient;
   readonly apiKey: Redacted.Redacted<string>;
   readonly modelId: string;
@@ -229,8 +229,19 @@ export const synthesizeOpenRouterSpeech = (input: {
   readonly text: string;
   /** Whether to read the generation record for cost after synthesis. */
   readonly withCost: boolean;
-}): Effect.Effect<SynthesizedSpeech, TtsError> =>
-  Effect.gen(function* () {
+}) => Effect.Effect<SynthesizedSpeech, TtsError> = Effect.fn(
+  "OpenRouterTts.synthesizeOpenRouterSpeech",
+)(
+  function* (input: {
+    readonly httpClient: HttpClient.HttpClient;
+    readonly apiKey: Redacted.Redacted<string>;
+    readonly modelId: string;
+    readonly voiceId: string;
+    readonly instructions?: string | undefined;
+    readonly text: string;
+    /** Whether to read the generation record for cost after synthesis. */
+    readonly withCost: boolean;
+  }) {
     const instructions = input.instructions?.trim();
     const instructionMode = getOpenRouterInstructionMode(input.modelId);
     const foldInstructions =
@@ -280,17 +291,17 @@ export const synthesizeOpenRouterSpeech = (input: {
           })
         : null;
     return { bytes, mimeType, cost: { usd, billedCharacters: null } } satisfies SynthesizedSpeech;
-  }).pipe(
-    Effect.mapError(
-      (error: TtsError | HttpClientError.HttpClientError | { readonly _tag: "TimeoutError" }) =>
-        error._tag === "TtsError"
-          ? error
-          : new TtsError({
-              reason: "request_failed",
-              detail:
-                error._tag === "TimeoutError"
-                  ? "The OpenRouter request timed out."
-                  : "Could not reach OpenRouter.",
-            }),
-    ),
-  );
+  },
+  Effect.mapError(
+    (error: TtsError | HttpClientError.HttpClientError | { readonly _tag: "TimeoutError" }) =>
+      error._tag === "TtsError"
+        ? error
+        : new TtsError({
+            reason: "request_failed",
+            detail:
+              error._tag === "TimeoutError"
+                ? "The OpenRouter request timed out."
+                : "Could not reach OpenRouter.",
+          }),
+  ),
+);

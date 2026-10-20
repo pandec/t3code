@@ -436,15 +436,15 @@ export function makeCliProxyApiUsageProbe(
     }
   });
 
-  const managementRequest = (
+  const managementRequest: (
     request: HttpClientRequest.HttpClientRequest,
     timeoutMs: number,
-  ): Effect.Effect<
+  ) => Effect.Effect<
     unknown,
     CliProxyApiAuthRejectedError | CliProxyApiRequestFailedError,
     HttpClient.HttpClient
-  > =>
-    Effect.gen(function* () {
+  > = Effect.fn("CliProxyApiUsage.managementRequest")(
+    function* (request: HttpClientRequest.HttpClientRequest, timeoutMs: number) {
       const client = yield* HttpClient.HttpClient;
       const response = yield* client.execute(
         request.pipe(
@@ -493,18 +493,18 @@ export function makeCliProxyApiUsageProbe(
       // The timeout wraps the body read too: `execute` resolves at headers, so
       // a gateway that stalls mid-body would otherwise escape the budget and
       // let the coordinator's own 30s deadline discard the whole snapshot.
-    }).pipe(
-      Effect.timeout(timeoutMs),
-      Effect.mapError((cause) =>
-        cause instanceof CliProxyApiAuthRejectedError ||
-        cause instanceof CliProxyApiRequestFailedError
-          ? cause
-          : new CliProxyApiRequestFailedError({
-              detail: "CLIProxyAPI management request failed.",
-              cause,
-            }),
-      ),
-    );
+    },
+    (effect, _request, timeoutMs) => Effect.timeout(effect, timeoutMs),
+    Effect.mapError((cause) =>
+      cause instanceof CliProxyApiAuthRejectedError ||
+      cause instanceof CliProxyApiRequestFailedError
+        ? cause
+        : new CliProxyApiRequestFailedError({
+            detail: "CLIProxyAPI management request failed.",
+            cause,
+          }),
+    ),
+  );
 
   const modelProvidersEffect = (() => {
     const { clientUrl, clientKey } = target;
@@ -534,74 +534,76 @@ export function makeCliProxyApiUsageProbe(
     );
   })();
 
-  const probeAccount = (entry: AuthFileEntry, timeoutMs: number) =>
-    Effect.gen(function* () {
-      const failed = (error: string): CliProxyApiUsageAccount => ({
-        ...entry.account,
-        usage: null,
-        error,
-      });
+  const probeAccount = Effect.fn("CliProxyApiUsage.probeAccount")(function* (
+    entry: AuthFileEntry,
+    timeoutMs: number,
+  ) {
+    const failed = (error: string): CliProxyApiUsageAccount => ({
+      ...entry.account,
+      usage: null,
+      error,
+    });
 
-      const request = upstreamUsageRequest(entry.account.provider);
-      if (!request) {
-        return { ...entry.account, usage: null } satisfies CliProxyApiUsageAccount;
-      }
-      if (entry.authIndex.length === 0) {
-        return failed("Gateway account has no auth index.");
-      }
-      // Auth rejection aborts the whole probe (ban-strike budget); any other
-      // per-account failure degrades to an error row instead.
-      const result = yield* managementRequest(
-        HttpClientRequest.post(`${target.managementUrl}/v0/management/api-call`).pipe(
-          HttpClientRequest.bodyJsonUnsafe({
-            auth_index: entry.authIndex,
-            method: "GET",
-            url: request.url,
-            header: request.header,
-          }),
-        ),
-        timeoutMs,
-      ).pipe(
-        Effect.map((value) => ({ ok: true as const, value })),
-        Effect.catchTags({
-          CliProxyApiRequestFailedError: (error) =>
-            Effect.succeed({ ok: false as const, message: error.detail }),
+    const request = upstreamUsageRequest(entry.account.provider);
+    if (!request) {
+      return { ...entry.account, usage: null } satisfies CliProxyApiUsageAccount;
+    }
+    if (entry.authIndex.length === 0) {
+      return failed("Gateway account has no auth index.");
+    }
+    // Auth rejection aborts the whole probe (ban-strike budget); any other
+    // per-account failure degrades to an error row instead.
+    const result = yield* managementRequest(
+      HttpClientRequest.post(`${target.managementUrl}/v0/management/api-call`).pipe(
+        HttpClientRequest.bodyJsonUnsafe({
+          auth_index: entry.authIndex,
+          method: "GET",
+          url: request.url,
+          header: request.header,
         }),
-      );
-      if (!result.ok) {
-        return failed(result.message);
-      }
+      ),
+      timeoutMs,
+    ).pipe(
+      Effect.map((value) => ({ ok: true as const, value })),
+      Effect.catchTags({
+        CliProxyApiRequestFailedError: (error) =>
+          Effect.succeed({ ok: false as const, message: error.detail }),
+      }),
+    );
+    if (!result.ok) {
+      return failed(result.message);
+    }
 
-      const call = asRecord(result.value);
-      const statusCode = asFiniteNumber(call?.status_code);
-      const bodyText = asString(call?.body);
-      if (statusCode !== 200 || bodyText === null) {
-        return failed(`Upstream usage read failed (HTTP ${statusCode ?? "unknown"}).`);
-      }
-      const body = asRecord(yield* decodeJsonBody(bodyText).pipe(Effect.orElseSucceed(() => null)));
-      if (!body) {
-        return failed("Upstream usage body was not JSON.");
-      }
+    const call = asRecord(result.value);
+    const statusCode = asFiniteNumber(call?.status_code);
+    const bodyText = asString(call?.body);
+    if (statusCode !== 200 || bodyText === null) {
+      return failed(`Upstream usage read failed (HTTP ${statusCode ?? "unknown"}).`);
+    }
+    const body = asRecord(yield* decodeJsonBody(bodyText).pipe(Effect.orElseSucceed(() => null)));
+    if (!body) {
+      return failed("Upstream usage body was not JSON.");
+    }
 
-      if (entry.account.provider === "codex") {
-        const translated = translateCodexUsage(body);
-        if (Object.keys(asRecord(translated.usage) ?? {}).length === 0) {
-          return failed("Upstream usage body had no rate-limit windows.");
-        }
-        return {
-          ...entry.account,
-          usage: translated.usage,
-          ...(translated.planType !== null ? { planType: translated.planType } : {}),
-        } satisfies CliProxyApiUsageAccount;
-      }
-      if (Object.keys(body).length === 0) {
-        return failed("Upstream usage body had no rate-limit data.");
+    if (entry.account.provider === "codex") {
+      const translated = translateCodexUsage(body);
+      if (Object.keys(asRecord(translated.usage) ?? {}).length === 0) {
+        return failed("Upstream usage body had no rate-limit windows.");
       }
       return {
         ...entry.account,
-        usage: { source: "claude.usage-api", rateLimits: body },
+        usage: translated.usage,
+        ...(translated.planType !== null ? { planType: translated.planType } : {}),
       } satisfies CliProxyApiUsageAccount;
-    });
+    }
+    if (Object.keys(body).length === 0) {
+      return failed("Upstream usage body had no rate-limit data.");
+    }
+    return {
+      ...entry.account,
+      usage: { source: "claude.usage-api", rateLimits: body },
+    } satisfies CliProxyApiUsageAccount;
+  });
 
   const probe = Effect.acquireUseRelease(
     reserveManagementRequest,

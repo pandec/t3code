@@ -502,7 +502,7 @@ it.effect(
     ),
 );
 
-it.effect("steers into a new turn while older queued messages stay held after a stop", () =>
+it.effect("steers into a new turn ahead of older queued messages after a stop", () =>
   Effect.scoped(
     Effect.gen(function* () {
       const { started, steered, threadId, setup, layer } =
@@ -567,9 +567,11 @@ it.effect("steers into a new turn while older queued messages stay held after a 
           final.messages.find((message) => message.id === steer!.userMessageId)?.runId,
           started[1]!.runId,
         );
+        // The user's "next" send released the queue Stop held; the old message still
+        // waits behind the turn the steer joined.
         const old = final.runs.find((run) => run.id === oldQueued.id);
         assert.equal(old?.status, "queued");
-        assert.isTrue(old?.queueHeld);
+        assert.notEqual(old?.queueHeld, true);
       }).pipe(Effect.provide(layer));
     }),
   ),

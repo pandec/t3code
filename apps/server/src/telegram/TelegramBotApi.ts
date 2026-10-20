@@ -365,26 +365,25 @@ export const makeClient = (httpClient: HttpClient.HttpClient, token: string): Te
         json({ chat_id: chatId, message_id: messageId, reply_markup: inlineKeyboard(buttons) }),
         Schema.Unknown,
       ).pipe(Effect.asVoid),
-    downloadFile: (fileId) =>
-      Effect.gen(function* () {
-        const file = yield* call("getFile", json({ file_id: fileId }), TelegramFile);
-        if (file.file_path === undefined || (file.file_size ?? 0) > MAX_DOWNLOAD_BYTES) {
-          return yield* new TelegramApiError({
-            method: "getFile",
-            description: "The file is too large to download.",
-          });
-        }
-        const buffer = yield* httpClient
-          .get(`${TELEGRAM_API_ORIGIN}/file/bot${token}/${file.file_path}`)
-          .pipe(
-            Effect.flatMap(HttpClientResponse.filterStatusOk),
-            Effect.flatMap((response) => response.arrayBuffer),
-            Effect.timeout(UPLOAD_TIMEOUT),
-            Effect.provideService(HttpClient.TracerDisabledWhen, () => true),
-            Effect.mapError(() => transportError("downloadFile")),
-          );
-        return new Uint8Array(buffer);
-      }),
+    downloadFile: Effect.fn("TelegramBotApi.downloadFile")(function* (fileId) {
+      const file = yield* call("getFile", json({ file_id: fileId }), TelegramFile);
+      if (file.file_path === undefined || (file.file_size ?? 0) > MAX_DOWNLOAD_BYTES) {
+        return yield* new TelegramApiError({
+          method: "getFile",
+          description: "The file is too large to download.",
+        });
+      }
+      const buffer = yield* httpClient
+        .get(`${TELEGRAM_API_ORIGIN}/file/bot${token}/${file.file_path}`)
+        .pipe(
+          Effect.flatMap(HttpClientResponse.filterStatusOk),
+          Effect.flatMap((response) => response.arrayBuffer),
+          Effect.timeout(UPLOAD_TIMEOUT),
+          Effect.provideService(HttpClient.TracerDisabledWhen, () => true),
+          Effect.mapError(() => transportError("downloadFile")),
+        );
+      return new Uint8Array(buffer);
+    }),
   };
 };
 

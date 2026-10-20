@@ -11,25 +11,26 @@ import {
 import { MessageSpeech, type MessageSpeechError } from "./MessageSpeech.ts";
 import { VoiceTranscription } from "./VoiceTranscription.ts";
 
-const failForSpeechError = (error: MessageSpeechError) =>
-  Effect.gen(function* () {
-    switch (error.reason) {
-      case "unavailable":
-        return yield* failEnvironmentInternal("speech_unavailable", error);
-      case "message_unavailable":
-        return yield* failEnvironmentInvalidRequest("speech_message_unavailable");
-      case "source_too_long":
-        return yield* failEnvironmentInvalidRequest("speech_source_too_long");
-      case "script_failed":
-        return yield* failEnvironmentInternal("speech_script_failed", error);
-      case "provider_failed":
-        return yield* failEnvironmentInternal("speech_provider_failed", error);
-      case "provider_quota_exceeded":
-        return yield* failEnvironmentInternal("speech_provider_quota_exceeded", error);
-      case "storage_failed":
-        return yield* failEnvironmentInternal("internal_error", error);
-    }
-  });
+const failForSpeechError = Effect.fn("environment.voice.failForSpeechError")(function* (
+  error: MessageSpeechError,
+) {
+  switch (error.reason) {
+    case "unavailable":
+      return yield* failEnvironmentInternal("speech_unavailable", error);
+    case "message_unavailable":
+      return yield* failEnvironmentInvalidRequest("speech_message_unavailable");
+    case "source_too_long":
+      return yield* failEnvironmentInvalidRequest("speech_source_too_long");
+    case "script_failed":
+      return yield* failEnvironmentInternal("speech_script_failed", error);
+    case "provider_failed":
+      return yield* failEnvironmentInternal("speech_provider_failed", error);
+    case "provider_quota_exceeded":
+      return yield* failEnvironmentInternal("speech_provider_quota_exceeded", error);
+    case "storage_failed":
+      return yield* failEnvironmentInternal("internal_error", error);
+  }
+});
 
 export const voiceHttpApiLayer = HttpApiBuilder.group(
   EnvironmentHttpApi,

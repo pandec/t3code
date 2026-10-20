@@ -169,7 +169,8 @@ into a normal draft.
 
 On web and desktop, choose **Edit from here** beneath a sent message to rewind
 the conversation to before that message. Choose **Revert and keep changes** to
-leave workspace files as they are, or **Revert files too** to restore them as well.
+leave workspace files as they are, or **Revert files too** to put the workspace back
+to its checkpoint from before that message. That also undoes edits you made yourself.
 File restore requires an isolated worktree; a main checkout or a worktree shared
 with another thread can only rewind the conversation.
 File restore is only offered for threads running in a worktree, and it is
@@ -288,9 +289,10 @@ Until the agent moves on, the message is dimmed with **Waiting for the agent to 
 it. The note clears when the agent produces new output, or when the turn ends. It shows on every
 device and survives a reload.
 
-If the server restarts, saved queued messages keep their order and are held. Press
-**Resume** in an empty composer on web or desktop, or **Resume queue** in the queue
-sheet on mobile, to continue. You can edit, reorder, or remove held messages without starting them.
+If you stop the agent or the server restarts, queued messages keep their order and are held.
+Press **Resume** in an empty composer on web and desktop, or **Resume queue** in the queue sheet on
+mobile, to continue. Sending a new message also resumes the queue, unless it steers a turn that is
+already running. You can edit, reorder, or remove held messages without starting them.
 
 The pencil on a queued row opens that message in the composer for editing. The original message
 stays in the queue until you save, and its row is highlighted while you edit. The message's
@@ -323,6 +325,12 @@ Provider commands must start the message to run. T3 Code commands such as
 
 Send `/compact` in an existing conversation to reduce context usage when the
 provider supports it. Web and desktop also offer compaction from the context meter.
+
+Enable **Compact idle Claude threads (beta)** in **Settings > General** to compact
+an idle Claude thread with at least 200,000 tokens of context shortly before its
+prompt cache expires, so coming back does not reprocess the whole conversation.
+The cache lasts 1 hour on Claude subscriptions and 5 minutes with an API key. The
+compaction appears in the thread as a `/compact` turn sent by T3 Code.
 
 Send `/t3-archive` by itself, without attachments or context, to archive the current
 thread on web, desktop, or mobile. A working thread

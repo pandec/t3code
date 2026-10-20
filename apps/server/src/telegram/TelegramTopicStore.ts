@@ -73,62 +73,61 @@ export class TelegramTopicStore extends Context.Service<
   }
 >()("t3/telegram/TelegramTopicStore") {}
 
-export const make = (filePath: string) =>
-  Effect.gen(function* () {
-    const fileSystem = yield* FileSystem.FileSystem;
-    const path = yield* Path.Path;
-    const provideFs = <A, E>(effect: Effect.Effect<A, E, FileSystem.FileSystem | Path.Path>) =>
-      effect.pipe(
-        Effect.provideService(FileSystem.FileSystem, fileSystem),
-        Effect.provideService(Path.Path, path),
-      );
-
-    const load = fileSystem.readFileString(filePath).pipe(
-      Effect.flatMap(decodeState),
-      Effect.catch(() =>
-        fileSystem.exists(filePath).pipe(
-          Effect.orElseSucceed(() => false),
-          Effect.flatMap((exists) =>
-            exists
-              ? Effect.logWarning("telegram topic store unreadable, starting empty", {
-                  path: filePath,
-                })
-              : Effect.void,
-          ),
-          Effect.as(EMPTY_TELEGRAM_TOPIC_STATE),
-        ),
-      ),
+export const make = Effect.fn("TelegramTopicStore.make")(function* (filePath: string) {
+  const fileSystem = yield* FileSystem.FileSystem;
+  const path = yield* Path.Path;
+  const provideFs = <A, E>(effect: Effect.Effect<A, E, FileSystem.FileSystem | Path.Path>) =>
+    effect.pipe(
+      Effect.provideService(FileSystem.FileSystem, fileSystem),
+      Effect.provideService(Path.Path, path),
     );
-    const state = yield* SynchronizedRef.make<TelegramTopicState | undefined>(undefined);
-    const current = (value: TelegramTopicState | undefined) =>
-      value === undefined ? load : Effect.succeed(value);
 
-    return TelegramTopicStore.of({
-      read: SynchronizedRef.modifyEffect(state, (value) =>
-        current(value).pipe(Effect.map((loaded) => [loaded, loaded] as const)),
-      ),
-      update: (f) =>
-        SynchronizedRef.modifyEffect(state, (value) =>
-          Effect.gen(function* () {
-            const before = yield* current(value);
-            const next = f(before);
-            if (next !== before) {
-              yield* encodeState(next).pipe(
-                Effect.flatMap((contents) =>
-                  provideFs(writeFileStringAtomically({ filePath, contents: `${contents}\n` })),
-                ),
-                Effect.catch(() =>
-                  Effect.logWarning("failed to persist the telegram topic store", {
-                    path: filePath,
-                  }),
-                ),
-              );
-            }
-            return [next, next] as const;
-          }),
+  const load = fileSystem.readFileString(filePath).pipe(
+    Effect.flatMap(decodeState),
+    Effect.catch(() =>
+      fileSystem.exists(filePath).pipe(
+        Effect.orElseSucceed(() => false),
+        Effect.flatMap((exists) =>
+          exists
+            ? Effect.logWarning("telegram topic store unreadable, starting empty", {
+                path: filePath,
+              })
+            : Effect.void,
         ),
-    });
+        Effect.as(EMPTY_TELEGRAM_TOPIC_STATE),
+      ),
+    ),
+  );
+  const state = yield* SynchronizedRef.make<TelegramTopicState | undefined>(undefined);
+  const current = (value: TelegramTopicState | undefined) =>
+    value === undefined ? load : Effect.succeed(value);
+
+  return TelegramTopicStore.of({
+    read: SynchronizedRef.modifyEffect(state, (value) =>
+      current(value).pipe(Effect.map((loaded) => [loaded, loaded] as const)),
+    ),
+    update: (f) =>
+      SynchronizedRef.modifyEffect(state, (value) =>
+        Effect.gen(function* () {
+          const before = yield* current(value);
+          const next = f(before);
+          if (next !== before) {
+            yield* encodeState(next).pipe(
+              Effect.flatMap((contents) =>
+                provideFs(writeFileStringAtomically({ filePath, contents: `${contents}\n` })),
+              ),
+              Effect.catch(() =>
+                Effect.logWarning("failed to persist the telegram topic store", {
+                  path: filePath,
+                }),
+              ),
+            );
+          }
+          return [next, next] as const;
+        }),
+      ),
   });
+});
 
 export const layer = Layer.effect(
   TelegramTopicStore,

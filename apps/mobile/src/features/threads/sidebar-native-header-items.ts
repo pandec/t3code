@@ -1,8 +1,28 @@
-import type { NativeStackHeaderItem } from "@react-navigation/native-stack";
+import type {
+  NativeStackHeaderItem,
+  NativeStackHeaderItemMenu,
+} from "@react-navigation/native-stack";
 
 import type { HomeListFilterMenu } from "../home/home-list-filter-menu";
-import { createNativeFilterMenuHeaderItem, sfSymbolIcon } from "../layout/native-filter-menu-items";
+import { sfSymbolIcon, toNativeHeaderMenuItems } from "../layout/native-filter-menu-items";
 import { withNativeGlassHeaderItem } from "../layout/native-glass-header-items";
+
+export function createSidebarFilterHeaderItem(input: {
+  readonly filterIcon: string;
+  readonly filterMenu: HomeListFilterMenu;
+}): NativeStackHeaderItemMenu {
+  return withNativeGlassHeaderItem({
+    type: "menu",
+    axisBehavior: "horizontalOnly",
+    label: "",
+    accessibilityLabel: "Filter and sort threads",
+    icon: sfSymbolIcon(input.filterIcon),
+    menu: {
+      title: input.filterMenu.title,
+      items: toNativeHeaderMenuItems(input.filterMenu.items),
+    },
+  });
+}
 
 /**
  * Right-side UINavigationBar items for the sidebar column: settings, then the
@@ -16,10 +36,6 @@ export function createSidebarHeaderItems(input: {
   readonly filterMenu: HomeListFilterMenu;
   readonly onOpenSettings: () => void;
 }): NativeStackHeaderItem[] {
-  const filterItem = createNativeFilterMenuHeaderItem({
-    filterIcon: input.filterIcon,
-    filterMenu: input.filterMenu,
-  });
   return [
     withNativeGlassHeaderItem({
       type: "button",
@@ -29,7 +45,6 @@ export function createSidebarHeaderItems(input: {
       icon: sfSymbolIcon("gearshape"),
       onPress: input.onOpenSettings,
     }),
-    // Keep the filter beside the title on the Duo, like settings.
-    filterItem.type === "menu" ? { ...filterItem, axisBehavior: "horizontalOnly" } : filterItem,
+    createSidebarFilterHeaderItem(input),
   ];
 }

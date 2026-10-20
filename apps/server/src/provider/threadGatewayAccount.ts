@@ -115,8 +115,8 @@ export interface ThreadGatewayAccountDependencies {
  */
 export function makeThreadGatewayAccountReader(dependencies: ThreadGatewayAccountDependencies) {
   const none: ProviderUsageThreadAccountResult = { authIndex: null };
-  const readLiveSession = (input: ProviderUsageThreadAccountInput) =>
-    Effect.gen(function* () {
+  const readLiveSession = Effect.fn("ThreadGatewayAccount.readLiveSession")(
+    function* (input: ProviderUsageThreadAccountInput) {
       const thread = yield* dependencies.projections.getThread(input.threadId);
       const activeProviderThreadId = thread.activeProviderThreadId;
       if (activeProviderThreadId === null) return undefined;
@@ -142,7 +142,9 @@ export function makeThreadGatewayAccountReader(dependencies: ThreadGatewayAccoun
             instanceId: providerThread.providerInstanceId,
             driver: providerThread.driver,
           };
-    }).pipe(Effect.orElseSucceed(() => undefined));
+    },
+    Effect.orElseSucceed(() => undefined),
+  );
 
   return (
     input: ProviderUsageThreadAccountInput,

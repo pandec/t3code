@@ -379,69 +379,68 @@ export const make = Effect.gen(function* () {
   // thread share a topic instead of each creating one.
   const topicLock = yield* Semaphore.make(1);
 
-  const ensureTopic = (
+  const ensureTopic = Effect.fn("TelegramService.ensureTopic")(function* (
     client: TelegramBotClient,
     chatId: string,
     threadId: ThreadId,
     name: string,
     recreate: boolean,
     staleTopicId?: number,
-  ) =>
-    Effect.gen(function* () {
-      // The owner may have linked another chat since this dispatch read the
-      // settings; stop rather than send to, or remap, the old one.
-      const linkedChatId = yield* serverSettings.getSettings.pipe(
-        Effect.map((settings) => settings.telegram.chatId),
-        Effect.orElseSucceed(() => ""),
-      );
-      if (linkedChatId !== chatId) {
-        return yield* new TelegramDispatchError({
-          reason: "not_linked",
-          detail: "The linked Telegram chat changed during this dispatch.",
-        });
-      }
-      const state = yield* topicStore.update((current) =>
-        TelegramTopicStore.withChat(current, chatId),
-      );
-      const existing = state.threads[threadId];
-      // A concurrent dispatch may already have replaced the missing topic.
-      if (existing !== undefined && recreate && existing.topicId !== staleTopicId) {
-        return existing.topicId;
-      }
-      if (existing !== undefined && !recreate) {
-        if (existing.name !== name) {
-          // A failed rename keeps the old name stored, so the next dispatch retries it.
-          yield* client.editForumTopic({ chatId, topicId: existing.topicId, name }).pipe(
-            Effect.andThen(
-              topicStore.update((current) =>
-                current.threads[threadId]?.topicId !== existing.topicId
-                  ? current
-                  : {
-                      ...current,
-                      threads: {
-                        ...current.threads,
-                        [threadId]: { topicId: existing.topicId, name },
-                      },
+  ) {
+    // The owner may have linked another chat since this dispatch read the
+    // settings; stop rather than send to, or remap, the old one.
+    const linkedChatId = yield* serverSettings.getSettings.pipe(
+      Effect.map((settings) => settings.telegram.chatId),
+      Effect.orElseSucceed(() => ""),
+    );
+    if (linkedChatId !== chatId) {
+      return yield* new TelegramDispatchError({
+        reason: "not_linked",
+        detail: "The linked Telegram chat changed during this dispatch.",
+      });
+    }
+    const state = yield* topicStore.update((current) =>
+      TelegramTopicStore.withChat(current, chatId),
+    );
+    const existing = state.threads[threadId];
+    // A concurrent dispatch may already have replaced the missing topic.
+    if (existing !== undefined && recreate && existing.topicId !== staleTopicId) {
+      return existing.topicId;
+    }
+    if (existing !== undefined && !recreate) {
+      if (existing.name !== name) {
+        // A failed rename keeps the old name stored, so the next dispatch retries it.
+        yield* client.editForumTopic({ chatId, topicId: existing.topicId, name }).pipe(
+          Effect.andThen(
+            topicStore.update((current) =>
+              current.threads[threadId]?.topicId !== existing.topicId
+                ? current
+                : {
+                    ...current,
+                    threads: {
+                      ...current.threads,
+                      [threadId]: { topicId: existing.topicId, name },
                     },
-              ),
+                  },
             ),
-            Effect.ignore,
-          );
-        }
-        return existing.topicId;
+          ),
+          Effect.ignore,
+        );
       }
-      const created = yield* client.createForumTopic({ chatId, name });
-      // The owner may have linked another chat, or switched bots, meanwhile; the new mapping must stay clean.
-      yield* topicStore.update((current) =>
-        current.chatId !== chatId || current.botId !== state.botId
-          ? current
-          : {
-              ...current,
-              threads: { ...current.threads, [threadId]: { topicId: created.topicId, name } },
-            },
-      );
-      return created.topicId;
-    }).pipe(topicLock.withPermits(1));
+      return existing.topicId;
+    }
+    const created = yield* client.createForumTopic({ chatId, name });
+    // The owner may have linked another chat, or switched bots, meanwhile; the new mapping must stay clean.
+    yield* topicStore.update((current) =>
+      current.chatId !== chatId || current.botId !== state.botId
+        ? current
+        : {
+            ...current,
+            threads: { ...current.threads, [threadId]: { topicId: created.topicId, name } },
+          },
+    );
+    return created.topicId;
+  }, topicLock.withPermits(1));
 
   const sendVoiceNote = Effect.fn("TelegramService.sendVoiceNote")(function* (input: {
     readonly client: TelegramBotClient;
@@ -577,82 +576,81 @@ export const make = Effect.gen(function* () {
     },
   );
 
-  const runPoller = (token: string) =>
-    Effect.gen(function* () {
-      const client = botApi.client(token);
-      let started = false;
-      let backoffSeconds = POLL_BACKOFF_MIN_SECONDS;
-      let conflictWarned = false;
+  const runPoller = Effect.fn("TelegramService.runPoller")(function* (token: string) {
+    const client = botApi.client(token);
+    let started = false;
+    let backoffSeconds = POLL_BACKOFF_MIN_SECONDS;
+    let conflictWarned = false;
 
-      const start = Effect.gen(function* () {
-        const me = yield* client.getMe;
-        yield* topicStore.update((state) => TelegramTopicStore.withBot(state, me.id));
-        const settings = yield* serverSettings.getSettings.pipe(Effect.option);
-        if (Option.isSome(settings) && settings.value.telegram.botUsername !== me.username) {
-          yield* serverSettings
-            .updateSettings({ telegram: { botUsername: me.username } })
-            .pipe(Effect.ignore);
-        }
-        started = true;
-      });
-
-      const step = Effect.gen(function* () {
-        if (!started) yield* start;
-        const state = yield* topicStore.read;
-        // After a week without updates Telegram may restart update ids below the
-        // saved offset; polling without one returns every unconfirmed update instead.
-        const idle = (yield* Clock.currentTimeMillis) - state.lastUpdateAt >= IDLE_OFFSET_RESET_MS;
-        const updates = yield* client.getUpdates({
-          ...(idle ? {} : { offset: state.lastUpdateId + 1 }),
-          timeoutSeconds: POLL_TIMEOUT_SECONDS,
-        });
-        if (updates.length === 0) return;
-        for (const update of updates) {
-          // One bad update must not stall the queue; errors here are already sanitized.
-          yield* handleUpdate(client, update).pipe(
-            Effect.catch((error) =>
-              Effect.logWarning("telegram update handling failed", {
-                updateId: update.update_id,
-                error: error.message,
-              }),
-            ),
-          );
-        }
-        const lastUpdateId = Math.max(...updates.map((update) => update.update_id));
-        const lastUpdateAt = yield* Clock.currentTimeMillis;
-        yield* topicStore.update((current) => ({ ...current, lastUpdateId, lastUpdateAt }));
-      });
-
-      while (true) {
-        const failure = yield* step.pipe(
-          Effect.as(undefined),
-          Effect.catch((error) => Effect.succeed(error)),
-        );
-        if (failure === undefined) {
-          backoffSeconds = POLL_BACKOFF_MIN_SECONDS;
-          continue;
-        }
-        if (failure.errorCode === 401 || failure.errorCode === 404) {
-          yield* Effect.logWarning(
-            "telegram rejected the bot token; polling stops until the token changes",
-          );
-          return;
-        }
-        if (failure.errorCode === 409) {
-          if (!conflictWarned) {
-            conflictWarned = true;
-            yield* Effect.logWarning(
-              "another client is polling this Telegram bot; retrying until it stops",
-            );
-          }
-          yield* Effect.sleep(Duration.seconds(POLL_CONFLICT_BACKOFF_SECONDS));
-          continue;
-        }
-        yield* Effect.logWarning("telegram polling failed", { error: failure.message });
-        yield* Effect.sleep(Duration.seconds(backoffSeconds));
-        backoffSeconds = Math.min(backoffSeconds * 2, POLL_BACKOFF_MAX_SECONDS);
+    const start = Effect.gen(function* () {
+      const me = yield* client.getMe;
+      yield* topicStore.update((state) => TelegramTopicStore.withBot(state, me.id));
+      const settings = yield* serverSettings.getSettings.pipe(Effect.option);
+      if (Option.isSome(settings) && settings.value.telegram.botUsername !== me.username) {
+        yield* serverSettings
+          .updateSettings({ telegram: { botUsername: me.username } })
+          .pipe(Effect.ignore);
       }
+      started = true;
     });
+
+    const step = Effect.gen(function* () {
+      if (!started) yield* start;
+      const state = yield* topicStore.read;
+      // After a week without updates Telegram may restart update ids below the
+      // saved offset; polling without one returns every unconfirmed update instead.
+      const idle = (yield* Clock.currentTimeMillis) - state.lastUpdateAt >= IDLE_OFFSET_RESET_MS;
+      const updates = yield* client.getUpdates({
+        ...(idle ? {} : { offset: state.lastUpdateId + 1 }),
+        timeoutSeconds: POLL_TIMEOUT_SECONDS,
+      });
+      if (updates.length === 0) return;
+      for (const update of updates) {
+        // One bad update must not stall the queue; errors here are already sanitized.
+        yield* handleUpdate(client, update).pipe(
+          Effect.catch((error) =>
+            Effect.logWarning("telegram update handling failed", {
+              updateId: update.update_id,
+              error: error.message,
+            }),
+          ),
+        );
+      }
+      const lastUpdateId = Math.max(...updates.map((update) => update.update_id));
+      const lastUpdateAt = yield* Clock.currentTimeMillis;
+      yield* topicStore.update((current) => ({ ...current, lastUpdateId, lastUpdateAt }));
+    });
+
+    while (true) {
+      const failure = yield* step.pipe(
+        Effect.as(undefined),
+        Effect.catch((error) => Effect.succeed(error)),
+      );
+      if (failure === undefined) {
+        backoffSeconds = POLL_BACKOFF_MIN_SECONDS;
+        continue;
+      }
+      if (failure.errorCode === 401 || failure.errorCode === 404) {
+        yield* Effect.logWarning(
+          "telegram rejected the bot token; polling stops until the token changes",
+        );
+        return;
+      }
+      if (failure.errorCode === 409) {
+        if (!conflictWarned) {
+          conflictWarned = true;
+          yield* Effect.logWarning(
+            "another client is polling this Telegram bot; retrying until it stops",
+          );
+        }
+        yield* Effect.sleep(Duration.seconds(POLL_CONFLICT_BACKOFF_SECONDS));
+        continue;
+      }
+      yield* Effect.logWarning("telegram polling failed", { error: failure.message });
+      yield* Effect.sleep(Duration.seconds(backoffSeconds));
+      backoffSeconds = Math.min(backoffSeconds * 2, POLL_BACKOFF_MAX_SECONDS);
+    }
+  });
 
   // Polls while a bot token is set; a new token restarts the loop.
   yield* ServerActivation.forkParked(

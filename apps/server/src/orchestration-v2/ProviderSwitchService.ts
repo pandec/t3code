@@ -70,8 +70,8 @@ export const layer: Layer.Layer<
       NativeContinuationStore.NativeContinuationStore,
     );
     return ProviderSwitchServiceV2.of({
-      plan: ({ projection, targetModelSelection }) =>
-        Effect.gen(function* () {
+      plan: Effect.fn("ProviderSwitchService.plan")(
+        function* ({ projection, targetModelSelection }) {
           const current = projection.thread.modelSelection;
           const instanceChanged = current.instanceId !== targetModelSelection.instanceId;
           const modelChanged = current.model !== targetModelSelection.model;
@@ -233,16 +233,19 @@ export const layer: Layer.Layer<
             releaseProviderSessionIds,
             transition,
           };
-        }).pipe(
-          Effect.mapError(
-            (cause) =>
-              new ProviderSwitchPlanError({
-                threadId: projection.thread.id,
-                targetProviderInstanceId: targetModelSelection.instanceId,
-                cause,
-              }),
+        },
+        (effect, { projection, targetModelSelection }) =>
+          effect.pipe(
+            Effect.mapError(
+              (cause) =>
+                new ProviderSwitchPlanError({
+                  threadId: projection.thread.id,
+                  targetProviderInstanceId: targetModelSelection.instanceId,
+                  cause,
+                }),
+            ),
           ),
-        ),
+      ),
     });
   }),
 );

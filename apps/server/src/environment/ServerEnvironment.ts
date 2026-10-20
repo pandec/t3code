@@ -271,11 +271,13 @@ export const make = Effect.gen(function* () {
       pullRequestStackActions: true,
       threadPullRequestLinking: true,
       serverResolvedCommandContext: true,
+      threadStop: true,
       environmentIcon: true,
       projectCloneTracking: true,
       // Fork: bounded recent-archive query, project-filtered.
       recentArchivedThreads: true,
       recentArchivedThreadsProjectFilter: true,
+      ignoredFileListing: true,
       ...(advertisedServerSelfUpdate === null
         ? {}
         : { serverSelfUpdate: advertisedServerSelfUpdate }),

@@ -7,7 +7,6 @@ import {
   resolveTimelineMinimapAriaLabel,
   resolveTimelineMinimapItemIndexFromPointer,
   resolveTimelineMinimapTooltipTranslate,
-  resolveTimelineMinimapVisibleItemIds,
   TIMELINE_MINIMAP_PREVIEW_MAX_LENGTH,
   type TimelineMinimapItem,
 } from "./MessagesTimeline.minimap";
@@ -305,68 +304,5 @@ describe("resolveTimelineMinimapItemIndexFromPointer", () => {
         pointerY: 2 / 3,
       }),
     ).toBe(0);
-  });
-});
-
-describe("resolveTimelineMinimapVisibleItemIds", () => {
-  it("measures only the binary-search path and visible markers", () => {
-    let positionReads = 0;
-    const items: TimelineMinimapItem[] = Array.from({ length: 1_024 }, (_, index) => ({
-      id: `item-${index}`,
-      rowIndex: index * 2,
-      positionIndex: index,
-      positionCount: 1_024,
-      primaryText: null,
-      secondaryText: null,
-    }));
-
-    expect(
-      resolveTimelineMinimapVisibleItemIds({
-        items,
-        state: {
-          positionAtIndex: (rowIndex) => {
-            positionReads += 1;
-            return rowIndex * 10;
-          },
-          sizeAtIndex: () => 5,
-        },
-        scrollTop: 10_000,
-        scrollBottom: 10_025,
-      }),
-    ).toEqual(["item-500", "item-501"]);
-    expect(positionReads).toBeLessThan(30);
-  });
-
-  it("falls back to a full scan when layout positions are incomplete", () => {
-    const items: TimelineMinimapItem[] = [
-      {
-        id: "item-0",
-        rowIndex: 0,
-        positionIndex: 0,
-        positionCount: 2,
-        primaryText: null,
-        secondaryText: null,
-      },
-      {
-        id: "item-1",
-        rowIndex: 1,
-        positionIndex: 1,
-        positionCount: 2,
-        primaryText: null,
-        secondaryText: null,
-      },
-    ];
-
-    expect(
-      resolveTimelineMinimapVisibleItemIds({
-        items,
-        state: {
-          positionAtIndex: (rowIndex) => (rowIndex === 0 ? 0 : undefined),
-          sizeAtIndex: () => 20,
-        },
-        scrollTop: 0,
-        scrollBottom: 10,
-      }),
-    ).toEqual(["item-0"]);
   });
 });

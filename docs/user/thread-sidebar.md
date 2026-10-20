@@ -200,8 +200,9 @@ Press `Escape` while dragging to cancel.
 
 By default, environments settle inactive threads after three days and settle
 threads whose pull request merged. A closed pull request can also settle an idle
-thread. Work in progress, queued messages, pending questions or approvals, and live
-background work prevent automatic settlement. An open pull request does not prevent inactivity
+thread. An empty thread's inactivity counts from when it was created.
+Work in progress, queued messages, pending questions or approvals, and live background work
+prevent automatic settlement. An open pull request does not prevent inactivity
 settlement unless you turn on **Keep threads with a PR** in **Settings → General**,
 but an old closed or merged pull request does not settle work you
 resumed after it closed. Only your own messages count as resuming. A turn that
@@ -336,8 +337,8 @@ continuation. You can cancel it from the thread. Enable **Auto-resume limited
 threads** in **Settings → General** on web and desktop, or **Settings → Thread
 behavior** on mobile, to schedule limit stops by default.
 The environment must be running when the reset arrives; it resumes overdue
-continuations after a restart. Sending a new message, archiving, or settling the
-thread prevents a pending continuation from starting.
+continuations after a restart. Stopping the thread, sending a new message,
+archiving, or settling it prevents a pending continuation from starting.
 
 Choose **Snooze until reset** to hide the thread until its allowance returns.
 Snooze and auto-resume are independent: snooze alone wakes the thread without
@@ -377,6 +378,10 @@ local time zone, or a duration in minutes, hours, or days. Durations start when
 you confirm; one day means 24 hours. On web and desktop, you can also snooze
 several selected threads together. Choose **Wake thread** to bring a thread back early.
 
+A snoozed thread keeps working and stays hidden until its wake time, even while
+its agent wakes itself for background work. It comes back early only when it needs
+an approval or answer from you, when a run fails, or when you send it a message.
+
 On web and desktop, snoozing the thread you have open takes you back to the thread you viewed
 before it, the one `Ctrl+Tab` opens on desktop. If there is no such thread or it is snoozed too, a
 snooze from the sidebar moves to the next thread in the list, and other snoozes keep you where you
@@ -388,7 +393,6 @@ loops such as a running dev server or a monitor don't hold it. These threads sit
 Snoozed section and come back on their own, or earlier if they need attention. It's available on web,
 desktop, and mobile when the server supports it.
 
-You can snooze a thread that has queued messages. A turn ending doesn't wake it while messages are
-still queued, and **Until it's done** waits for the last queued message to finish. A timed snooze
-still wakes at its time. Removing, reordering, editing, or resuming queued messages wakes the
-thread, as sending a message does.
+You can snooze a thread that has queued messages. **Until it's done** waits for the last queued
+message to finish. Removing, reordering, editing, or resuming queued messages wakes the thread, as
+sending a message does.

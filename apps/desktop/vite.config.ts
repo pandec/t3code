@@ -1,5 +1,5 @@
 import "vite-plus/test/config";
-import { defineConfig } from "vite-plus";
+import { defaultInclude, defineConfig } from "vite-plus";
 
 import { isDesktopRuntimeExternalDependency } from "../../scripts/lib/desktop-external-packages.ts";
 import { loadRepoEnv } from "../../scripts/lib/public-config.ts";
@@ -24,6 +24,7 @@ const publicConfigDefine = {
 export default defineConfig({
   test: {
     ...sharedTestDefaults,
+    include: [...defaultInclude, "../../native/kde-snap-shot/src/*.test.ts"],
     setupFiles: ["../../packages/shared/src/testing/longTempDir.ts"],
   },
   run: {

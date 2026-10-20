@@ -1,3 +1,4 @@
+import { Button } from "../../components/ui/Button";
 import { AuthSettingsWriteScope } from "@t3tools/contracts";
 import { readEnvironmentScope, useEnvironmentsWithScope } from "../../state/session";
 import { AutoSettleDaysField } from "./components/AutoSettleDaysField";
@@ -5,7 +6,7 @@ import { ScreenScrollView as ScrollView } from "../../components/ui/ScreenScroll
 import { useAtomSet, useAtomValue } from "@effect/atom-react";
 import { AsyncResult } from "effect/reactivity";
 import { useEffect, useRef, useState } from "react";
-import { Pressable, View } from "react-native";
+import { View } from "react-native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 
 import { DEFAULT_SERVER_SETTINGS } from "@t3tools/contracts";
@@ -24,7 +25,6 @@ import {
   type ThreadPrewarmSummary,
   useThreadPrewarmSummary,
 } from "../../state/prewarm";
-import { serverEnvironment } from "../../state/server";
 import { useAtomCommand } from "../../state/use-atom-command";
 import {
   useArchivedSectionVisibleCount,
@@ -48,6 +48,7 @@ import {
   toStoredSteerGraceWindowMs,
 } from "./lib/extras-settings";
 import { useSettingsEnvironmentFilter } from "./settings-environment-filter";
+import { useSettingsWriter } from "./useSettingsWriter";
 import {
   planMobileScopedSettingsClear,
   planMobileScopedSettingsPatch,
@@ -91,10 +92,7 @@ function AutoSettleSettingsRows() {
   const [pendingTargets, setPendingTargets] = useState<
     readonly ScopedMobileSettingsTarget[] | null
   >(null);
-  const updateSettings = useAtomCommand(serverEnvironment.updateSettings, {
-    label: "server settings update",
-    reportFailure: true,
-  });
+  const writeSettings = useSettingsWriter();
 
   const syncEnvironments = selectedTargets.filter(supportsSharedSettingsSync);
   const syncTargets = resolveMobileSettingsTargets(
@@ -131,11 +129,7 @@ function AutoSettleSettingsRows() {
     writeInFlight.current = true;
     setPendingTargets(syncTargets);
     setPendingWrites((count) => count + 1);
-    void Promise.allSettled(
-      writes.map((entry) =>
-        updateSettings({ environmentId: entry.environmentId, input: { patch: entry.patch } }),
-      ),
-    ).finally(() => {
+    void writeSettings(syncTargets, writes).finally(() => {
       writeInFlight.current = false;
       setPendingTargets(null);
       setPendingWrites((count) => count - 1);
@@ -185,11 +179,7 @@ function AutoSettleSettingsRows() {
     writeInFlight.current = true;
     setPendingTargets(syncTargets);
     setPendingWrites((count) => count + 1);
-    void Promise.allSettled(
-      writes.map((entry) =>
-        updateSettings({ environmentId: entry.environmentId, input: { patch: entry.patch } }),
-      ),
-    ).finally(() => {
+    void writeSettings(syncTargets, writes).finally(() => {
       writeInFlight.current = false;
       setPendingTargets(null);
       setPendingWrites((count) => count - 1);
@@ -264,16 +254,12 @@ function AutoSettleSettingsRows() {
             <Text className="text-sm text-foreground-muted">
               {mismatches.map((mismatch) => mismatch.label).join(", ")}
             </Text>
-            <Pressable
-              accessibilityRole="button"
+            <Button
+              label="Apply auto-settle defaults"
+              tone="secondary"
               disabled={disabled}
               onPress={() => writeToAll(autoSettlePatch)}
-              className="self-start rounded-full bg-subtle px-4 py-2 active:opacity-70"
-            >
-              <Text className="text-sm font-t3-medium text-foreground">
-                Apply auto-settle defaults
-              </Text>
-            </Pressable>
+            />
           </View>
         </SettingsSection>
       ) : null}

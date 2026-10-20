@@ -79,31 +79,30 @@ const make = Effect.gen(function* () {
           `.pipe(Effect.asVoid),
         );
   return ThreadHiddenNotes.of({
-    put: (input) =>
-      Effect.gen(function* () {
-        const now = yield* DateTime.now;
-        const noteId = yield* randomUuidV4;
-        // Undelivered notes go stale; delivered markers back once-only notes for as long as their
-        // owner (e.g. a lab lease) lives, so they are kept far longer and cleared by that owner.
-        const cutoff = DateTime.formatIso(DateTime.subtract(now, { days: NOTE_RETENTION_DAYS }));
-        const markerCutoff = DateTime.formatIso(
-          DateTime.subtract(now, { days: DELIVERED_MARKER_RETENTION_DAYS }),
-        );
-        yield* sql`
+    put: Effect.fn("ThreadHiddenNotes.put")(function* (input) {
+      const now = yield* DateTime.now;
+      const noteId = yield* randomUuidV4;
+      // Undelivered notes go stale; delivered markers back once-only notes for as long as their
+      // owner (e.g. a lab lease) lives, so they are kept far longer and cleared by that owner.
+      const cutoff = DateTime.formatIso(DateTime.subtract(now, { days: NOTE_RETENTION_DAYS }));
+      const markerCutoff = DateTime.formatIso(
+        DateTime.subtract(now, { days: DELIVERED_MARKER_RETENTION_DAYS }),
+      );
+      yield* sql`
           DELETE FROM fork_thread_hidden_notes
           WHERE (delivered_at IS NULL AND created_at < ${cutoff})
             OR (delivered_at IS NOT NULL AND created_at < ${markerCutoff})
         `;
-        const createdAt = DateTime.formatIso(now);
-        const worktreePath = input.worktreePath ?? null;
-        yield* input.once === true
-          ? sql`
+      const createdAt = DateTime.formatIso(now);
+      const worktreePath = input.worktreePath ?? null;
+      yield* input.once === true
+        ? sql`
               INSERT INTO fork_thread_hidden_notes
                 (note_id, thread_id, kind, text, worktree_path, created_at)
               VALUES (${noteId}, ${input.threadId}, ${input.kind}, ${input.text}, ${worktreePath}, ${createdAt})
               ON CONFLICT (thread_id, kind) DO NOTHING
             `
-          : sql`
+        : sql`
               INSERT INTO fork_thread_hidden_notes
                 (note_id, thread_id, kind, text, worktree_path, created_at)
               VALUES (${noteId}, ${input.threadId}, ${input.kind}, ${input.text}, ${worktreePath}, ${createdAt})
@@ -114,14 +113,14 @@ const make = Effect.gen(function* () {
                 created_at = excluded.created_at,
                 delivered_at = NULL
         `;
-      }),
+    }),
     remove: (input) =>
       sql`
         DELETE FROM fork_thread_hidden_notes
         WHERE thread_id = ${input.threadId} AND kind = ${input.kind}
       `.pipe(Effect.asVoid),
-    pending: (threadId, turn) =>
-      Effect.gen(function* () {
+    pending: Effect.fn("ThreadHiddenNotes.pending")(
+      function* (threadId, turn) {
         const rows = yield* sql<{
           readonly note_id: string;
           readonly kind: string;
@@ -143,13 +142,16 @@ const make = Effect.gen(function* () {
         return rows
           .filter((row) => row.worktree_path === null || row.worktree_path === turn?.worktreePath)
           .map((row) => ({ id: row.note_id, kind: row.kind, text: row.text }));
-      }).pipe(
-        Effect.catch((cause) =>
-          Effect.logWarning("Failed to read hidden thread notes", { threadId, cause }).pipe(
-            Effect.as([]),
+      },
+      (effect, threadId) =>
+        effect.pipe(
+          Effect.catch((cause) =>
+            Effect.logWarning("Failed to read hidden thread notes", { threadId, cause }).pipe(
+              Effect.as([]),
+            ),
           ),
         ),
-      ),
+    ),
     acknowledge: (ids) =>
       markDelivered(ids).pipe(
         Effect.catch((cause) =>

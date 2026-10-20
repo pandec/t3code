@@ -1,6 +1,7 @@
 import { scopedThreadKey } from "@t3tools/client-runtime/environment";
 import type { ScopedThreadRef } from "@t3tools/contracts";
 import { useNavigate } from "@tanstack/react-router";
+import * as Option from "effect/Option";
 import { useEffect, useState } from "react";
 
 import ChatView from "./ChatView";
@@ -14,14 +15,9 @@ import {
   useComposerDraftStore,
 } from "../composerDraftStore";
 import { useSidebarPendingFileDropStore } from "../sidebarPendingFileDropStore";
-import {
-  useEnvironmentThreadRefs,
-  useQuietThreadShell,
-  useThreadProjection,
-  useThreadRefs,
-  useThreadStatus,
-} from "../state/entities";
-import { useEnvironmentShellHasSnapshot, useEnvironmentShellStatus } from "../state/shell";
+import { useEnvironmentThreadRefs, useThreadRefs, useQuietThreadShell } from "../state/entities";
+import { useEnvironmentShellStatus } from "../state/shell";
+import { useEnvironmentThread } from "../state/threads";
 import {
   buildThreadRouteParams,
   resolveArchivedThreadRouteState,
@@ -42,6 +38,7 @@ export function ThreadRouteView({ target }: { target: ThreadRouteTarget }) {
     draftId === null ? null : store.getDraftSession(draftId),
   );
   const threadRefs = useThreadRefs();
+  // Promotion can begin before the server creates the reserved thread.
   const inferredThreadRef = draftSession
     ? (threadRefs.find(
         (ref) =>
@@ -50,7 +47,7 @@ export function ThreadRouteView({ target }: { target: ThreadRouteTarget }) {
       ) ?? null)
     : null;
   const serverThreadRef: ScopedThreadRef | null =
-    target.kind === "server" ? target.threadRef : (draftSession?.promotedTo ?? inferredThreadRef);
+    target.kind === "server" ? target.threadRef : inferredThreadRef;
   const serverThread = useQuietThreadShell(serverThreadRef);
   const backgroundSubmissionPending = useBackgroundDraftSubmissionPending(
     target.kind === "draft" ? serverThreadRef : null,
@@ -65,7 +62,6 @@ export function ThreadRouteView({ target }: { target: ThreadRouteTarget }) {
       : null;
 
   const shellStatus = useEnvironmentShellStatus(serverThreadRef?.environmentId ?? null);
-  const shellHasSnapshot = useEnvironmentShellHasSnapshot(serverThreadRef?.environmentId ?? null);
   const serverThreadShell = serverThread;
   const environmentThreadRefs = useEnvironmentThreadRefs(serverThreadRef?.environmentId ?? null);
   const bootstrapComplete = isThreadRouteSnapshotAuthoritative(shellStatus);
@@ -94,32 +90,39 @@ export function ThreadRouteView({ target }: { target: ThreadRouteTarget }) {
   const environmentHasDraftThreads = useComposerDraftStore((store) =>
     serverThreadRef ? store.hasDraftThreadsInEnvironment(serverThreadRef.environmentId) : false,
   );
-  // Fork: an archived thread has no active shell; its detail decides whether
-  // the route opens it (archive shelf, thread links) or the thread is gone.
-  // Any snapshot, cached included, keeps an open archived thread on screen.
-  const archivedLookupRef =
-    target.kind === "server" && shellHasSnapshot && serverThreadShell === null && !draftThread
+  // Until the shell lists the thread, its own load (HTTP, then the socket)
+  // decides whether it exists. Read only then: once listed, ChatView keeps
+  // this stream open and its updates need not re-render the route.
+  const unlistedThreadRef =
+    target.kind === "server" && serverThreadShell === null && draftThread === null
       ? target.threadRef
       : null;
-  const archivedLookupThread = useThreadProjection(archivedLookupRef)?.projection.thread ?? null;
-  const archivedLookupStatus = useThreadStatus(archivedLookupRef);
+  const unlistedThreadDetail = useEnvironmentThread(
+    unlistedThreadRef?.environmentId ?? null,
+    unlistedThreadRef?.threadId ?? null,
+  );
+  // Fork: an archived thread has no active shell; its detail opens it
+  // (archive shelf, thread links), and keeps it on screen while the shell
+  // reconnects.
+  const unlistedThread = Option.getOrNull(unlistedThreadDetail.data)?.thread ?? null;
   const renderState = resolveThreadRouteRenderState({
     bootstrapComplete,
     serverThreadExists: serverThreadShell !== null,
     serverThreadDeleted: serverThreadShell?.deletedAt != null,
+    unlistedThreadDetail,
     draftThreadExists: draftThread !== null,
-    ...(archivedLookupRef === null
+    ...(unlistedThreadRef === null
       ? {}
       : {
           archivedThread: resolveArchivedThreadRouteState({
             detail:
-              archivedLookupThread === null
+              unlistedThread === null
                 ? null
                 : {
-                    archived: archivedLookupThread.archivedAt !== null,
-                    deleted: archivedLookupThread.deletedAt !== null,
+                    archived: unlistedThread.archivedAt !== null,
+                    deleted: unlistedThread.deletedAt !== null,
                   },
-            status: archivedLookupStatus,
+            status: unlistedThreadDetail.status,
           }),
         }),
   });
@@ -196,7 +199,7 @@ export function ThreadRouteView({ target }: { target: ThreadRouteTarget }) {
     }
   } else if (
     renderState === "ready" ||
-    (renderState === "loading" && (serverThreadShell !== null || archivedLookupThread !== null))
+    (renderState === "loading" && (serverThreadShell !== null || unlistedThread !== null))
   ) {
     view = (
       <ChatView

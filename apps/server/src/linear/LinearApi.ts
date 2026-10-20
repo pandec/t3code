@@ -524,10 +524,10 @@ export const readLinearStatus: Effect.Effect<LinearStatus, never, Services> = Ef
  * stored secret. A non-empty key is probed first and only stored when Linear
  * accepts it, so a typo never replaces a working key.
  */
-export const configureLinear = (
+export const configureLinear: (
   apiKey: string,
-): Effect.Effect<LinearStatus, LinearRpcError, Services> =>
-  Effect.gen(function* () {
+) => Effect.Effect<LinearStatus, LinearRpcError, Services> = Effect.fn("LinearApi.configureLinear")(
+  function* (apiKey: string) {
     const secretStore = yield* ServerSecretStore.ServerSecretStore;
     const trimmed = apiKey.trim();
     const storeFailure = (detail: string) => () => new LinearRpcError({ reason: "failed", detail });
@@ -545,14 +545,15 @@ export const configureLinear = (
     clearLinearCache();
     statusCache = { apiKey: trimmed, value: status, atMs: yield* Clock.currentTimeMillis };
     return status;
-  });
+  },
+);
 
 const normalizeIdentifier = (identifier: string) => identifier.trim().toUpperCase();
 
-export const readLinearIssue = (
+export const readLinearIssue: (
   input: LinearIssueInput,
-): Effect.Effect<LinearIssue, LinearRpcError, Services> =>
-  Effect.gen(function* () {
+) => Effect.Effect<LinearIssue, LinearRpcError, Services> = Effect.fn("LinearApi.readLinearIssue")(
+  function* (input: LinearIssueInput) {
     const apiKey = yield* requireApiKey;
     const identifier = normalizeIdentifier(input.identifier);
     const now = yield* Clock.currentTimeMillis;
@@ -566,63 +567,65 @@ export const readLinearIssue = (
     const value = toIssue(issue, envelope.data?.organization?.urlKey);
     issueCache.set(identifier, { apiKey, value, atMs: now });
     return value;
-  });
+  },
+);
 
-export const readLinearComments = (
+export const readLinearComments: (
   input: LinearCommentsInput,
-): Effect.Effect<LinearCommentsResult, LinearRpcError, Services> =>
-  Effect.gen(function* () {
-    const apiKey = yield* requireApiKey;
-    const identifier = normalizeIdentifier(input.identifier);
-    const now = yield* Clock.currentTimeMillis;
-    const cached = commentsCache.get(identifier);
-    if (input.refresh !== true && isFresh(cached, apiKey, now)) return cached!.value;
-    evictExpired(now);
-    const generation = commentsGeneration;
-    const envelope = yield* graphql(
-      apiKey,
-      COMMENTS_QUERY,
-      { id: identifier, first: COMMENTS_PAGE_SIZE },
-      CommentsEnvelope,
-    );
-    const issue = envelope.data?.issue ?? null;
-    if (issue === null)
-      return yield* fail("not-found", `Linear issue ${identifier} was not found.`);
-    const value: LinearCommentsResult = {
-      comments: issue.comments.nodes.map(toComment),
-      truncated: issue.comments.pageInfo.hasNextPage,
-    };
-    // A comment posted while this read was in flight is not in it; let the next read fetch it.
-    if (generation === commentsGeneration) {
-      commentsCache.set(identifier, { apiKey, value, atMs: now });
-    }
-    return value;
-  });
+) => Effect.Effect<LinearCommentsResult, LinearRpcError, Services> = Effect.fn(
+  "LinearApi.readLinearComments",
+)(function* (input: LinearCommentsInput) {
+  const apiKey = yield* requireApiKey;
+  const identifier = normalizeIdentifier(input.identifier);
+  const now = yield* Clock.currentTimeMillis;
+  const cached = commentsCache.get(identifier);
+  if (input.refresh !== true && isFresh(cached, apiKey, now)) return cached!.value;
+  evictExpired(now);
+  const generation = commentsGeneration;
+  const envelope = yield* graphql(
+    apiKey,
+    COMMENTS_QUERY,
+    { id: identifier, first: COMMENTS_PAGE_SIZE },
+    CommentsEnvelope,
+  );
+  const issue = envelope.data?.issue ?? null;
+  if (issue === null) return yield* fail("not-found", `Linear issue ${identifier} was not found.`);
+  const value: LinearCommentsResult = {
+    comments: issue.comments.nodes.map(toComment),
+    truncated: issue.comments.pageInfo.hasNextPage,
+  };
+  // A comment posted while this read was in flight is not in it; let the next read fetch it.
+  if (generation === commentsGeneration) {
+    commentsCache.set(identifier, { apiKey, value, atMs: now });
+  }
+  return value;
+});
 
 /**
  * Post a comment. Drops the cached comment list of the issue it landed on so the caller's
  * re-read sees it; the mutation names the issue by id, so the cached issue reads map it back to
  * an identifier, and when none does there is nothing stale to drop.
  */
-export const createLinearComment = (
+export const createLinearComment: (
   input: LinearCreateCommentInput,
-): Effect.Effect<LinearComment, LinearRpcError, Services> =>
-  Effect.gen(function* () {
-    const apiKey = yield* requireApiKey;
-    const envelope = yield* graphql(
-      apiKey,
-      COMMENT_CREATE_MUTATION,
-      { input: { issueId: input.issueId, body: input.body } },
-      CommentCreateEnvelope,
-    );
-    const result = envelope.data?.commentCreate;
-    const comment = result?.comment ?? null;
-    if (result === undefined || !result.success || comment === null) {
-      return yield* fail("failed", "Linear did not create the comment.");
-    }
-    commentsGeneration += 1;
-    for (const [identifier, entry] of issueCache) {
-      if (entry.value.id === input.issueId) commentsCache.delete(identifier);
-    }
-    return toComment(comment);
-  });
+) => Effect.Effect<LinearComment, LinearRpcError, Services> = Effect.fn(
+  "LinearApi.createLinearComment",
+)(function* (input: LinearCreateCommentInput) {
+  const apiKey = yield* requireApiKey;
+  const envelope = yield* graphql(
+    apiKey,
+    COMMENT_CREATE_MUTATION,
+    { input: { issueId: input.issueId, body: input.body } },
+    CommentCreateEnvelope,
+  );
+  const result = envelope.data?.commentCreate;
+  const comment = result?.comment ?? null;
+  if (result === undefined || !result.success || comment === null) {
+    return yield* fail("failed", "Linear did not create the comment.");
+  }
+  commentsGeneration += 1;
+  for (const [identifier, entry] of issueCache) {
+    if (entry.value.id === input.issueId) commentsCache.delete(identifier);
+  }
+  return toComment(comment);
+});

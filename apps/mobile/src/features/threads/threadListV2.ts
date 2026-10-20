@@ -199,7 +199,11 @@ export function threadHasUnseenCompletion(
 export function resolveThreadListV2Status(
   thread: Pick<
     EnvironmentThreadShell,
-    "hasPendingApprovals" | "hasPendingUserInput" | "pendingSubagentRequest" | "runtime"
+    | "hasPendingApprovals"
+    | "hasPendingUserInput"
+    | "pendingSubagentRequest"
+    | "runtime"
+    | "blockedOnThreadWait"
   > & {
     readonly pendingBackgroundTasks?: EnvironmentThreadShell["pendingBackgroundTasks"] | undefined;
   },
@@ -209,6 +213,9 @@ export function resolveThreadListV2Status(
   }
   if (thread.hasPendingUserInput || thread.pendingSubagentRequest === "user_input") {
     return "input";
+  }
+  if (thread.runtime?.status === "running" && thread.blockedOnThreadWait === true) {
+    return "waiting";
   }
   if (
     thread.runtime !== null &&
@@ -632,12 +639,12 @@ export function buildThreadListV2ListItems(input: {
   const snoozedEnd = settledShelfHeaderIndex ?? threadItems.length;
   const workingEnd = snoozedShelfHeaderIndex ?? snoozedEnd;
   const activeEnd = workingShelfHeaderIndex ?? workingEnd;
-  // Pinned rows lead the list under their own collapsible shelf header;
-  // close them with the same rule the web sidebar draws, so the inbox reads
-  // as its own block. While the header shows, the count is the whole
-  // footprint when collapsed and rows render only when expanded (or for the
-  // thread currently open); during a search the layout hides the header and
-  // the rows render unconditionally.
+  // Unsent drafts and queued tasks lead the list, as on web. Pinned rows
+  // follow under their own collapsible shelf header; close them with the same
+  // rule the web sidebar draws, so the inbox reads as its own block. While the
+  // header shows, the count is the whole footprint when collapsed and rows
+  // render only when expanded (or for the thread currently open); during a
+  // search the layout hides the header and the rows render unconditionally.
   let pinnedEnd = 0;
   while (pinnedEnd < activeEnd) {
     const item = threadItems[pinnedEnd];
@@ -646,7 +653,7 @@ export function buildThreadListV2ListItems(input: {
   }
   const pinnedCount = input.pinnedCount ?? pinnedEnd;
   const pinnedShelfHeaderVisible = input.pinnedShelfHeaderVisible ?? true;
-  const result: ThreadListV2ListItem[] = [];
+  const result: ThreadListV2ListItem[] = [...pendingItems];
   if (pinnedShelfHeaderVisible && pinnedCount > 0) {
     result.push({
       type: "v2-pinned-shelf",
@@ -673,10 +680,7 @@ export function buildThreadListV2ListItems(input: {
     const rows = activeItems.filter(
       (item) => item.type === "v2-thread" && threadGroupId(item.item.thread, customGroups) === id,
     );
-    if (group === null && rows.length === 0 && customGroups.length === 0) {
-      result.push(...pendingItems);
-      continue;
-    }
+    if (group === null && rows.length === 0 && customGroups.length === 0) continue;
     const expanded =
       group === null
         ? input.activeShelfExpanded !== false
@@ -690,7 +694,6 @@ export function buildThreadListV2ListItems(input: {
       expanded,
     });
     result.push(...(expanded ? rows : rows.filter(isSelected)));
-    if (group === null) result.push(...pendingItems);
   }
   const shelfDisabled = input.shelfPreferencesLoading === true;
   if (workingShelfHeaderIndex !== null && workingCount > 0) {

@@ -1,6 +1,6 @@
 import { describe, expect, it } from "@effect/vitest";
 
-import { parseClaudeLine } from "./claudeUsage.ts";
+import { claudeUsageFormat, parseClaudeLine } from "./claudeUsage.ts";
 
 function claudeLine(overrides: {
   messageId: string;
@@ -126,6 +126,38 @@ describe("parseClaudeLine", () => {
     expect(parseClaudeLine(claudeLine({ messageId: "m", contentType: "text" }))).not.toHaveProperty(
       "oneHourCacheCreationTokens",
     );
+  });
+
+  it("skips local placeholders in both reader paths but keeps real zero-token responses", () => {
+    const projected = {
+      type: "assistant",
+      timestamp: "2026-08-07T04:05:13.944Z",
+      message: {
+        model: "claude-fable-5",
+        usage: { input_tokens: 0, output_tokens: 0 },
+      },
+    };
+    const expected = [
+      expect.objectContaining({
+        model: "claude-fable-5",
+        totals: {
+          uncachedInputTokens: 0,
+          cachedInputTokens: 0,
+          cacheCreationTokens: 0,
+          outputTokens: 0,
+          reasoningTokens: 0,
+        },
+      }),
+    ];
+    expect(claudeUsageFormat.parseLine(JSON.stringify(projected), undefined)).toEqual(expected);
+    expect(claudeUsageFormat.parseProjected(projected, undefined)).toEqual(expected);
+
+    const synthetic = { ...projected, message: { ...projected.message, model: "<synthetic>" } };
+    expect(claudeUsageFormat.parseLine(JSON.stringify(synthetic), undefined)).toEqual([]);
+    expect(claudeUsageFormat.parseProjected(synthetic, undefined)).toEqual([]);
+    // A placeholder is skipped on purpose, so it must not read as malformed usage.
+    expect(claudeUsageFormat.malformed?.carriesUsage(JSON.stringify(projected))).toBe(true);
+    expect(claudeUsageFormat.malformed?.carriesUsage(JSON.stringify(synthetic))).toBe(false);
   });
 
   it("ignores records that are not assistant messages", () => {

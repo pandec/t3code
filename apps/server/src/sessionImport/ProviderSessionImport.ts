@@ -172,29 +172,28 @@ export const makeCodexSessionImport = Effect.fn("makeCodexSessionImport")(functi
         ),
         Effect.mapError(importError("Listing Codex sessions failed")),
       ),
-    readSession: ({ nativeSessionId, cwd }) =>
-      Effect.gen(function* () {
-        const imported = yield* provide(
-          readCodexImportableThread({ ...options, cwd, threadId: nativeSessionId }),
-        ).pipe(Effect.mapError(importError(`Reading Codex thread '${nativeSessionId}' failed`)));
-        // Codex validates a thread's recorded cwd against the workspace it
-        // resumes in, so a thread from another directory cannot continue here.
-        // A recorded cwd that no longer resolves is reported as a mismatch.
-        const nativeCwd = yield* fileSystem
-          .realPath(imported.cwd)
-          .pipe(Effect.orElseSucceed(() => imported.cwd));
-        if (nativeCwd !== cwd) {
-          return yield* new ProviderSessionImportError({
-            detail: `Codex thread '${nativeSessionId}' belongs to '${nativeCwd}', not the selected workspace '${cwd}'.`,
-          });
-        }
-        return {
-          nativeSessionId: imported.threadId,
-          name: imported.name,
-          messages: imported.messages,
-          model: null,
-        };
-      }),
+    readSession: Effect.fn("CodexSessionImport.readSession")(function* ({ nativeSessionId, cwd }) {
+      const imported = yield* provide(
+        readCodexImportableThread({ ...options, cwd, threadId: nativeSessionId }),
+      ).pipe(Effect.mapError(importError(`Reading Codex thread '${nativeSessionId}' failed`)));
+      // Codex validates a thread's recorded cwd against the workspace it
+      // resumes in, so a thread from another directory cannot continue here.
+      // A recorded cwd that no longer resolves is reported as a mismatch.
+      const nativeCwd = yield* fileSystem
+        .realPath(imported.cwd)
+        .pipe(Effect.orElseSucceed(() => imported.cwd));
+      if (nativeCwd !== cwd) {
+        return yield* new ProviderSessionImportError({
+          detail: `Codex thread '${nativeSessionId}' belongs to '${nativeCwd}', not the selected workspace '${cwd}'.`,
+        });
+      }
+      return {
+        nativeSessionId: imported.threadId,
+        name: imported.name,
+        messages: imported.messages,
+        model: null,
+      };
+    }),
     forkSession: ({ nativeSessionId, cwd }) =>
       provide(forkCodexImportableThread({ ...options, cwd, threadId: nativeSessionId })).pipe(
         Effect.mapError(importError(`Forking Codex thread '${nativeSessionId}' failed`)),

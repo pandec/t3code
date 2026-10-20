@@ -165,81 +165,80 @@ export class DesktopThreadLinks extends Context.Service<
 const { logInfo, logWarning } = makeComponentLogger("desktop-thread-links");
 
 /** @public Service construction is part of the canonical Effect module API. */
-export const make = (inbox: DesktopThreadLinkInbox) =>
-  Effect.gen(function* () {
-    const environment = yield* DesktopEnvironment.DesktopEnvironment;
-    const desktopWindow = yield* DesktopWindow.DesktopWindow;
-    const electronWindow = yield* ElectronWindow.ElectronWindow;
-    const runPromise = Effect.runPromiseWith(yield* Effect.context<never>());
-    const scheme = ElectronProtocol.getDesktopScheme(environment.usesDevelopmentIdentity);
-    const queue = new DesktopThreadLinkQueue();
-    let detachRenderer: (() => void) | null = null;
-    // Concurrent activations can each find no window and create one.
-    let revealing = false;
+export const make = Effect.fn("DesktopThreadLinks.make")(function* (inbox: DesktopThreadLinkInbox) {
+  const environment = yield* DesktopEnvironment.DesktopEnvironment;
+  const desktopWindow = yield* DesktopWindow.DesktopWindow;
+  const electronWindow = yield* ElectronWindow.ElectronWindow;
+  const runPromise = Effect.runPromiseWith(yield* Effect.context<never>());
+  const scheme = ElectronProtocol.getDesktopScheme(environment.usesDevelopmentIdentity);
+  const queue = new DesktopThreadLinkQueue();
+  let detachRenderer: (() => void) | null = null;
+  // Concurrent activations can each find no window and create one.
+  let revealing = false;
 
-    const clearRenderer = () => {
-      detachRenderer?.();
-      detachRenderer = null;
-      queue.setRenderer(null);
-    };
+  const clearRenderer = () => {
+    detachRenderer?.();
+    detachRenderer = null;
+    queue.setRenderer(null);
+  };
 
-    const deliver = (url: string) => {
-      const link = parseDesktopThreadLink(url, scheme);
-      if (link === null) return;
-      queue.enqueue(link);
-      if (revealing) return;
-      revealing = true;
-      void runPromise(
-        logInfo("opening thread link", { ...link }).pipe(
-          Effect.andThen(desktopWindow.activate),
-          Effect.catchCause((cause) =>
-            logWarning("failed to reveal the window for a thread link", { cause }),
-          ),
-          Effect.ensuring(
-            Effect.sync(() => {
-              revealing = false;
-            }),
-          ),
+  const deliver = (url: string) => {
+    const link = parseDesktopThreadLink(url, scheme);
+    if (link === null) return;
+    queue.enqueue(link);
+    if (revealing) return;
+    revealing = true;
+    void runPromise(
+      logInfo("opening thread link", { ...link }).pipe(
+        Effect.andThen(desktopWindow.activate),
+        Effect.catchCause((cause) =>
+          logWarning("failed to reveal the window for a thread link", { cause }),
         ),
-      );
-    };
-
-    return DesktopThreadLinks.of({
-      start: Effect.acquireRelease(
-        Effect.sync(() => inbox.attach(deliver)),
-        (detach) =>
+        Effect.ensuring(
           Effect.sync(() => {
-            detach();
-            clearRenderer();
+            revealing = false;
           }),
-      ).pipe(Effect.asVoid),
-      setRendererReady: Effect.fn("DesktopThreadLinks.setRendererReady")(function* (ready) {
-        clearRenderer();
-        if (!ready) return;
-        const main = yield* electronWindow.main;
-        if (Option.isNone(main)) return;
-        const webContents = main.value.webContents;
-        if (webContents.isDestroyed()) return;
+        ),
+      ),
+    );
+  };
 
-        // A reload or crash drops the renderer's listener without a setReady(false).
-        // A crashed renderer keeps its webContents, and send() to it fails silently.
-        const onNavigation = (
-          event: Electron.Event<Electron.WebContentsDidStartNavigationEventParams>,
-        ) => {
-          if (event.isMainFrame && !event.isSameDocument) clearRenderer();
-        };
-        webContents.on("did-start-navigation", onNavigation);
-        webContents.on("render-process-gone", clearRenderer);
-        webContents.once("destroyed", clearRenderer);
-        detachRenderer = () => {
-          webContents.removeListener("did-start-navigation", onNavigation);
-          webContents.removeListener("render-process-gone", clearRenderer);
-          webContents.removeListener("destroyed", clearRenderer);
-        };
-        queue.setRenderer((link) => webContents.send(DESKTOP_THREAD_LINK_OPEN_CHANNEL, link));
-      }),
-    });
+  return DesktopThreadLinks.of({
+    start: Effect.acquireRelease(
+      Effect.sync(() => inbox.attach(deliver)),
+      (detach) =>
+        Effect.sync(() => {
+          detach();
+          clearRenderer();
+        }),
+    ).pipe(Effect.asVoid),
+    setRendererReady: Effect.fn("DesktopThreadLinks.setRendererReady")(function* (ready) {
+      clearRenderer();
+      if (!ready) return;
+      const main = yield* electronWindow.main;
+      if (Option.isNone(main)) return;
+      const webContents = main.value.webContents;
+      if (webContents.isDestroyed()) return;
+
+      // A reload or crash drops the renderer's listener without a setReady(false).
+      // A crashed renderer keeps its webContents, and send() to it fails silently.
+      const onNavigation = (
+        event: Electron.Event<Electron.WebContentsDidStartNavigationEventParams>,
+      ) => {
+        if (event.isMainFrame && !event.isSameDocument) clearRenderer();
+      };
+      webContents.on("did-start-navigation", onNavigation);
+      webContents.on("render-process-gone", clearRenderer);
+      webContents.once("destroyed", clearRenderer);
+      detachRenderer = () => {
+        webContents.removeListener("did-start-navigation", onNavigation);
+        webContents.removeListener("render-process-gone", clearRenderer);
+        webContents.removeListener("destroyed", clearRenderer);
+      };
+      queue.setRenderer((link) => webContents.send(DESKTOP_THREAD_LINK_OPEN_CHANNEL, link));
+    }),
   });
+});
 
 export const layer = (inbox: DesktopThreadLinkInbox) =>
   Layer.effect(DesktopThreadLinks, make(inbox));

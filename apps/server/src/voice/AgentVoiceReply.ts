@@ -235,18 +235,17 @@ export const make = Effect.gen(function* () {
         .makeDirectory(serverConfig.attachmentsDir, { recursive: true })
         .pipe(Effect.mapError(() => new AgentVoiceReplyError({ reason: "storage_failed" })));
 
-      const storeAudio = (bytes: Uint8Array) =>
-        Effect.gen(function* () {
-          const speechId = createAttachmentId(input.threadId);
-          const speechPath = speechId ? resolveSpeechPath(speechId, mimeType) : null;
-          if (!speechId || !speechPath) {
-            return yield* new AgentVoiceReplyError({ reason: "storage_failed" });
-          }
-          yield* fileSystem
-            .writeFile(speechPath, bytes)
-            .pipe(Effect.mapError(() => new AgentVoiceReplyError({ reason: "storage_failed" })));
-          return speechId;
-        });
+      const storeAudio = Effect.fn("AgentVoiceReply.storeAudio")(function* (bytes: Uint8Array) {
+        const speechId = createAttachmentId(input.threadId);
+        const speechPath = speechId ? resolveSpeechPath(speechId, mimeType) : null;
+        if (!speechId || !speechPath) {
+          return yield* new AgentVoiceReplyError({ reason: "storage_failed" });
+        }
+        yield* fileSystem
+          .writeFile(speechPath, bytes)
+          .pipe(Effect.mapError(() => new AgentVoiceReplyError({ reason: "storage_failed" })));
+        return speechId;
+      });
 
       // The read-merge-write holds the map's lock, which taking an entry also
       // takes, so finalization sees either the fully merged entry or none.
@@ -357,110 +356,111 @@ export const make = Effect.gen(function* () {
       ),
     );
 
-  const finalizeAttempt: AgentVoiceReplyShape["finalizeAttempt"] = (input) =>
-    Effect.gen(function* () {
-      const threadId = input.run.threadId;
-      const entry = yield* takeForAttempt(threadId, {
-        runId: input.run.id,
-        attemptId: input.attemptId,
-      });
-      if (entry === undefined) return NO_FINALIZATION;
-      const discard = removeAudioFile(entry.recording);
-      if (!input.completed) {
-        yield* discard;
-        return NO_FINALIZATION;
-      }
-      // Fails closed: an unreadable projection must never be taken for "the
-      // run wrote nothing", which would add a duplicate voice-only reply.
-      const existing = yield* findFinalAssistantMessageId(
-        threadId,
-        input.run.id,
-        input.rootNode.id,
-      ).pipe(
-        Effect.map((messageId) => ({ ok: true as const, messageId })),
-        Effect.catch((error) =>
-          Effect.logWarning("agent voice reply dropped: final reply lookup failed", {
-            threadId,
-            runId: input.run.id,
-            error,
-          }).pipe(Effect.as({ ok: false as const })),
-        ),
-      );
-      if (!existing.ok) {
-        yield* discard;
-        return NO_FINALIZATION;
-      }
-      if (existing.messageId !== undefined) {
-        return {
-          events: [],
-          committed: publish(threadId, MessageId.make(existing.messageId), entry.recording),
-          abandoned: discard,
-        };
-      }
-
-      // A voice-only run: the transcript becomes the written reply.
-      const messageId = MessageId.make(`assistant:voice-reply:${input.attemptId}`);
-      const at = input.completedAt;
-      const base = {
-        threadId,
-        runId: input.run.id,
-        nodeId: input.rootNode.id,
-        providerInstanceId: input.run.providerInstanceId,
-        occurredAt: at,
-      };
-      const events: ReadonlyArray<OrchestrationV2DomainEvent> = [
-        {
-          ...base,
-          id: yield* input.allocateEventId(),
-          type: "message.updated",
-          payload: {
-            createdBy: "agent",
-            creationSource: "provider",
-            id: messageId,
-            threadId,
-            runId: input.run.id,
-            nodeId: input.rootNode.id,
-            role: "assistant",
-            text: entry.recording.transcript,
-            attachments: [],
-            streaming: false,
-            createdAt: at,
-            updatedAt: at,
-          },
-        },
-        {
-          ...base,
-          id: yield* input.allocateEventId(),
-          type: "turn-item.updated",
-          payload: {
-            id: TurnItemId.make(`turn-item:voice-reply:${input.attemptId}`),
-            threadId,
-            runId: input.run.id,
-            nodeId: input.rootNode.id,
-            providerThreadId: input.providerThreadId,
-            providerTurnId: input.rootNode.providerTurnId,
-            nativeItemRef: null,
-            parentItemId: null,
-            // Placeholder: the event sink assigns the run's next position.
-            ordinal: 0,
-            status: "completed",
-            title: null,
-            startedAt: at,
-            completedAt: at,
-            updatedAt: at,
-            type: "assistant_message",
-            messageId,
-            text: entry.recording.transcript,
-            streaming: false,
-          },
-        },
-      ];
+  const finalizeAttempt: AgentVoiceReplyShape["finalizeAttempt"] = Effect.fn(
+    "AgentVoiceReply.finalizeAttempt",
+  )(function* (input) {
+    const threadId = input.run.threadId;
+    const entry = yield* takeForAttempt(threadId, {
+      runId: input.run.id,
+      attemptId: input.attemptId,
+    });
+    if (entry === undefined) return NO_FINALIZATION;
+    const discard = removeAudioFile(entry.recording);
+    if (!input.completed) {
+      yield* discard;
+      return NO_FINALIZATION;
+    }
+    // Fails closed: an unreadable projection must never be taken for "the
+    // run wrote nothing", which would add a duplicate voice-only reply.
+    const existing = yield* findFinalAssistantMessageId(
+      threadId,
+      input.run.id,
+      input.rootNode.id,
+    ).pipe(
+      Effect.map((messageId) => ({ ok: true as const, messageId })),
+      Effect.catch((error) =>
+        Effect.logWarning("agent voice reply dropped: final reply lookup failed", {
+          threadId,
+          runId: input.run.id,
+          error,
+        }).pipe(Effect.as({ ok: false as const })),
+      ),
+    );
+    if (!existing.ok) {
+      yield* discard;
+      return NO_FINALIZATION;
+    }
+    if (existing.messageId !== undefined) {
       return {
-        events,
-        committed: publish(threadId, messageId, entry.recording),
+        events: [],
+        committed: publish(threadId, MessageId.make(existing.messageId), entry.recording),
         abandoned: discard,
       };
-    });
+    }
+
+    // A voice-only run: the transcript becomes the written reply.
+    const messageId = MessageId.make(`assistant:voice-reply:${input.attemptId}`);
+    const at = input.completedAt;
+    const base = {
+      threadId,
+      runId: input.run.id,
+      nodeId: input.rootNode.id,
+      providerInstanceId: input.run.providerInstanceId,
+      occurredAt: at,
+    };
+    const events: ReadonlyArray<OrchestrationV2DomainEvent> = [
+      {
+        ...base,
+        id: yield* input.allocateEventId(),
+        type: "message.updated",
+        payload: {
+          createdBy: "agent",
+          creationSource: "provider",
+          id: messageId,
+          threadId,
+          runId: input.run.id,
+          nodeId: input.rootNode.id,
+          role: "assistant",
+          text: entry.recording.transcript,
+          attachments: [],
+          streaming: false,
+          createdAt: at,
+          updatedAt: at,
+        },
+      },
+      {
+        ...base,
+        id: yield* input.allocateEventId(),
+        type: "turn-item.updated",
+        payload: {
+          id: TurnItemId.make(`turn-item:voice-reply:${input.attemptId}`),
+          threadId,
+          runId: input.run.id,
+          nodeId: input.rootNode.id,
+          providerThreadId: input.providerThreadId,
+          providerTurnId: input.rootNode.providerTurnId,
+          nativeItemRef: null,
+          parentItemId: null,
+          // Placeholder: the event sink assigns the run's next position.
+          ordinal: 0,
+          status: "completed",
+          title: null,
+          startedAt: at,
+          completedAt: at,
+          updatedAt: at,
+          type: "assistant_message",
+          messageId,
+          text: entry.recording.transcript,
+          streaming: false,
+        },
+      },
+    ];
+    return {
+      events,
+      committed: publish(threadId, messageId, entry.recording),
+      abandoned: discard,
+    };
+  });
 
   const available = serverSettings.getSettings.pipe(
     Effect.flatMap((settings) =>

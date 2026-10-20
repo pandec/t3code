@@ -1,7 +1,11 @@
 import { describe, expect, it } from "vite-plus/test";
 import { scopeThreadRef } from "@t3tools/client-runtime/environment";
+import { EMPTY_ENVIRONMENT_THREAD_STATE } from "@t3tools/client-runtime/state/threads";
 import { ThreadId } from "@t3tools/contracts";
+import * as DateTime from "effect/DateTime";
+import * as Option from "effect/Option";
 import { DraftId } from "./composerDraftStore";
+import { makeThreadProjectionFixture } from "./test-fixtures";
 
 import {
   buildDraftThreadRouteParams,
@@ -123,6 +127,7 @@ describe("threadRoutes", () => {
         bootstrapComplete: true,
         serverThreadExists: true,
         serverThreadDeleted: false,
+        unlistedThreadDetail: EMPTY_ENVIRONMENT_THREAD_STATE,
         draftThreadExists: false,
       }),
     ).toBe("ready");
@@ -134,6 +139,7 @@ describe("threadRoutes", () => {
         bootstrapComplete: true,
         serverThreadExists: true,
         serverThreadDeleted: false,
+        unlistedThreadDetail: EMPTY_ENVIRONMENT_THREAD_STATE,
         draftThreadExists: false,
       }),
     ).toBe("ready");
@@ -142,6 +148,7 @@ describe("threadRoutes", () => {
         bootstrapComplete: true,
         serverThreadExists: false,
         serverThreadDeleted: false,
+        unlistedThreadDetail: EMPTY_ENVIRONMENT_THREAD_STATE,
         draftThreadExists: true,
       }),
     ).toBe("ready");
@@ -160,6 +167,7 @@ describe("threadRoutes", () => {
           bootstrapComplete: isThreadRouteSnapshotAuthoritative(status),
           serverThreadExists: source === "server thread",
           serverThreadDeleted: false,
+          unlistedThreadDetail: EMPTY_ENVIRONMENT_THREAD_STATE,
           draftThreadExists: source === "draft",
         }),
       ).toBe("ready");
@@ -172,6 +180,7 @@ describe("threadRoutes", () => {
         bootstrapComplete: false,
         serverThreadExists: false,
         serverThreadDeleted: false,
+        unlistedThreadDetail: { ...EMPTY_ENVIRONMENT_THREAD_STATE, status: "deleted" },
         draftThreadExists: false,
       }),
     ).toBe("loading");
@@ -180,10 +189,100 @@ describe("threadRoutes", () => {
         bootstrapComplete: true,
         serverThreadExists: false,
         serverThreadDeleted: false,
+        unlistedThreadDetail: { ...EMPTY_ENVIRONMENT_THREAD_STATE, status: "deleted" },
         draftThreadExists: false,
       }),
     ).toBe("missing");
   });
+
+  it("opens an unlisted server thread once its detail arrives, without waiting for the shell", () => {
+    const route = {
+      bootstrapComplete: isThreadRouteSnapshotAuthoritative("live"),
+      serverThreadExists: false,
+      serverThreadDeleted: false,
+      draftThreadExists: false,
+    };
+
+    expect(
+      resolveThreadRouteRenderState({
+        ...route,
+        unlistedThreadDetail: EMPTY_ENVIRONMENT_THREAD_STATE,
+      }),
+    ).toBe("loading");
+    expect(
+      resolveThreadRouteRenderState({
+        ...route,
+        unlistedThreadDetail: {
+          ...EMPTY_ENVIRONMENT_THREAD_STATE,
+          status: "synchronizing",
+        },
+      }),
+    ).toBe("loading");
+    expect(
+      resolveThreadRouteRenderState({
+        ...route,
+        unlistedThreadDetail: {
+          ...EMPTY_ENVIRONMENT_THREAD_STATE,
+          status: "synchronizing",
+          error: Option.some("Connection interrupted"),
+        },
+      }),
+    ).toBe("loading");
+    expect(
+      resolveThreadRouteRenderState({
+        ...route,
+        unlistedThreadDetail: {
+          ...EMPTY_ENVIRONMENT_THREAD_STATE,
+          status: "live",
+          data: Option.some(makeThreadProjectionFixture()),
+        },
+      }),
+    ).toBe("ready");
+  });
+
+  it.each(["missing", "deleted", "archived"] as const)(
+    "redirects an unlisted thread only after detail confirms it is %s",
+    (outcome) => {
+      const route = {
+        bootstrapComplete: isThreadRouteSnapshotAuthoritative("live"),
+        serverThreadExists: false,
+        serverThreadDeleted: false,
+        draftThreadExists: false,
+      };
+      expect(
+        resolveThreadRouteRenderState({
+          ...route,
+          unlistedThreadDetail: {
+            ...EMPTY_ENVIRONMENT_THREAD_STATE,
+            status: "synchronizing",
+          },
+        }),
+      ).toBe("loading");
+
+      const projection = makeThreadProjectionFixture();
+      const removedAt = DateTime.makeUnsafe("2026-01-02T00:00:00Z");
+      expect(
+        resolveThreadRouteRenderState({
+          ...route,
+          unlistedThreadDetail:
+            outcome === "missing"
+              ? { ...EMPTY_ENVIRONMENT_THREAD_STATE, status: "deleted" }
+              : {
+                  ...EMPTY_ENVIRONMENT_THREAD_STATE,
+                  status: "live",
+                  data: Option.some({
+                    ...projection,
+                    thread: {
+                      ...projection.thread,
+                      deletedAt: outcome === "deleted" ? removedAt : null,
+                      archivedAt: outcome === "archived" ? removedAt : null,
+                    },
+                  }),
+                },
+        }),
+      ).toBe("missing");
+    },
+  );
 
   it("redirects deleted server threads", () => {
     expect(
@@ -191,6 +290,7 @@ describe("threadRoutes", () => {
         bootstrapComplete: true,
         serverThreadExists: true,
         serverThreadDeleted: true,
+        unlistedThreadDetail: EMPTY_ENVIRONMENT_THREAD_STATE,
         draftThreadExists: false,
       }),
     ).toBe("missing");
@@ -202,6 +302,7 @@ describe("threadRoutes", () => {
         bootstrapComplete: isThreadRouteSnapshotAuthoritative("cached"),
         serverThreadExists: true,
         serverThreadDeleted: true,
+        unlistedThreadDetail: EMPTY_ENVIRONMENT_THREAD_STATE,
         draftThreadExists: false,
       }),
     ).toBe("loading");

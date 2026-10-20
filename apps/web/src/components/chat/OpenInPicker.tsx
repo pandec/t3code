@@ -259,6 +259,7 @@ export const OpenInPicker = memo(function OpenInPicker({
   availableEditors,
   openInCwd,
   fileRelativePath,
+  openInCwdIsFile = false,
   presentation = "toolbar",
   compact = false,
   enableShortcut = true,
@@ -275,6 +276,8 @@ export const OpenInPicker = memo(function OpenInPicker({
    * string, so the memoized picker still skips renders with unchanged props.
    */
   fileRelativePath?: string | undefined;
+  /** Whether a remote editor link should open `openInCwd` as a file. */
+  openInCwdIsFile?: boolean;
   presentation?: "toolbar" | "menu";
   compact?: boolean;
   enableShortcut?: boolean;
@@ -319,8 +322,9 @@ export const OpenInPicker = memo(function OpenInPicker({
     if (remote.mode === "remote-links") {
       const url = buildRemoteOpenUrl({
         editor,
-        host: remote.host.host,
+        ...remote.host,
         absolutePath: openInCwd,
+        isFile: openInCwdIsFile,
       });
       if (url === undefined) return;
       // Only record hint-seen/preferred when the shell actually accepted
@@ -357,7 +361,7 @@ export const OpenInPicker = memo(function OpenInPicker({
       // Split view: both panes' headers mount this picker — only the active
       // pane's shortcut may open its cwd (possibly on another machine).
       if (!isThreadPaneActive(threadPaneId)) return;
-      if (!isOpenFavoriteEditorShortcut(e, keybindings)) return;
+      if (e.defaultPrevented || !isOpenFavoriteEditorShortcut(e, keybindings)) return;
       if (!openInCwd) return;
       if (!preferredEditor) return;
       if (
@@ -369,8 +373,8 @@ export const OpenInPicker = memo(function OpenInPicker({
       e.preventDefault();
       void openInEditor(preferredEditor);
     };
-    window.addEventListener("keydown", handler);
-    return () => window.removeEventListener("keydown", handler);
+    window.addEventListener("keydown", handler, true);
+    return () => window.removeEventListener("keydown", handler, true);
   }, [
     canOpenEditor,
     enableShortcut,

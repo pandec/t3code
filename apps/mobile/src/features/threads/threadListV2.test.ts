@@ -1,5 +1,6 @@
 import { presentThreadShell } from "@t3tools/client-runtime/state/models";
 import * as DateTime from "effect/DateTime";
+import * as Schema from "effect/Schema";
 import { planPinnedMove } from "@t3tools/client-runtime/state/thread-sort";
 import {
   computeGroupedThreadMoveAvailability,
@@ -18,6 +19,7 @@ import {
   CommandId,
   EnvironmentId,
   MessageId,
+  OrchestrationV2ThreadShell,
   ProjectId,
   ProviderInstanceId,
   RunId,
@@ -45,6 +47,7 @@ import {
 } from "./threadListV2";
 
 const environmentId = EnvironmentId.make("environment-1");
+const decodeThreadShell = Schema.decodeUnknownSync(OrchestrationV2ThreadShell);
 
 function makeThread(
   input: Partial<EnvironmentThreadShell> & Pick<EnvironmentThreadShell, "id" | "title">,
@@ -127,6 +130,30 @@ describe("resolveThreadListV2SnoozeMenuSelection", () => {
 });
 
 describe("resolveThreadListV2Status", () => {
+  it("presents decoded thread waits as Waiting while preserving requests and older servers", () => {
+    const raw = makeRawThreadShell({
+      status: "running",
+      activeRunId: RunId.make("run-wait"),
+      latestRunId: RunId.make("run-wait"),
+    });
+    const present = (shell: unknown) => presentThreadShell(environmentId, decodeThreadShell(shell));
+
+    expect(resolveThreadListV2Status(present(raw))).toBe("working");
+    const blocked = present({ ...raw, blockedOnThreadWait: true });
+    expect(
+      resolveThreadListV2Status({
+        ...blocked,
+        hasPendingApprovals: true,
+        hasPendingUserInput: true,
+      }),
+    ).toBe("approval");
+    expect(resolveThreadListV2Status({ ...blocked, hasPendingUserInput: true })).toBe("input");
+    expect(resolveThreadListV2Status(blocked)).toBe("waiting");
+    expect(resolveThreadListV2Status(present({ ...raw, blockedOnThreadWait: false }))).toBe(
+      "working",
+    );
+  });
+
   it("distinguishes usage limits from ordinary failures and clears the label after recovery", () => {
     const thread = makeThread({
       id: ThreadId.make("limited"),
@@ -1306,10 +1333,30 @@ describe("buildThreadListV2ListItems", () => {
     now: NOW,
   });
 
-  it("splices queued tasks between the active block and the settled tail", () => {
+  it("leads the list with unsent drafts and queued tasks, preserving section dividers", () => {
     const items = buildThreadListV2ListItems({
       items: layout.items,
-      pendingTasks: [makePendingTask("queued-1"), makePendingTask("queued-2")],
+      pendingTasks: [
+        {
+          kind: "draft",
+          key: "draft-task:new-task:unsent",
+          environmentId,
+          projectId: ProjectId.make("project-1"),
+          projectTitle: undefined,
+          projectCwd: undefined,
+          branch: null,
+          title: "unsent",
+          createdAt: NOW,
+          draftKey: "new-task:unsent",
+          draft: {
+            text: "unsent",
+            attachments: [],
+            project: { environmentId, projectId: ProjectId.make("project-1"), createdAt: NOW },
+          },
+        },
+        makePendingTask("queued-1"),
+        makePendingTask("queued-2"),
+      ],
       settledCount: layout.settledCount,
       settledShelfHeaderIndex: layout.settledShelfHeaderIndex,
     });
@@ -1326,10 +1373,23 @@ describe("buildThreadListV2ListItems", () => {
                 ? "active-header"
                 : "settled-shelf",
       ),
-    ).toEqual(["active-header", "active", "queued-1", "queued-2", "settled-shelf", "settled"]);
+    ).toEqual([
+      "queued-1",
+      "queued-2",
+      "unsent",
+      "active-header",
+      "active",
+      "settled-shelf",
+      "settled",
+    ]);
     expect(
-      items.filter((item) => item.type === "v2-pending" && item.showPendingDivider),
-    ).toHaveLength(1);
+      items.flatMap((item) => (item.type === "v2-pending" ? [item.showPendingDivider] : [])),
+    ).toEqual([true, false, false]);
+    expect(
+      items.map((item) =>
+        item.type === "v2-thread" || item.type === "v2-pending" ? item.showTrailingDivider : null,
+      ),
+    ).toEqual([true, true, false, null, false, null, false]);
   });
 
   it("places pending creations before drafts and keeps one unsent divider", () => {
@@ -1353,19 +1413,19 @@ describe("buildThreadListV2ListItems", () => {
       settledShelfHeaderIndex: layout.settledShelfHeaderIndex,
     });
     expect(items.map((item) => item.key)).toEqual([
-      "v2-active-header",
-      `v2-thread:${environmentId}:active`,
       "v2-pending-task:queued",
       "v2-draft-task:draft-1",
+      "v2-active-header",
+      `v2-thread:${environmentId}:active`,
       "v2-settled-shelf",
       `v2-thread:${environmentId}:settled`,
     ]);
     expect(
-      items.filter((item) => item.type === "v2-pending" && item.showPendingDivider),
-    ).toHaveLength(1);
+      items.flatMap((item) => (item.type === "v2-pending" ? [item.showPendingDivider] : [])),
+    ).toEqual([true, false]);
   });
 
-  it("ends the list with queued tasks when nothing has settled yet", () => {
+  it("puts queued tasks above active rows when nothing has settled yet", () => {
     const activeOnly = buildThreadListV2Items({
       threads: [makeThread({ id: ThreadId.make("active"), title: "active" })],
       environmentId: null,
@@ -1377,7 +1437,7 @@ describe("buildThreadListV2ListItems", () => {
       pendingTasks: [makePendingTask("queued-1")],
     });
 
-    expect(items.map((item) => item.type)).toEqual(["v2-custom-group", "v2-thread", "v2-pending"]);
+    expect(items.map((item) => item.type)).toEqual(["v2-pending", "v2-custom-group", "v2-thread"]);
   });
 
   it("opens the pinned block with a shelf header and closes it with a divider", () => {
@@ -1402,12 +1462,12 @@ describe("buildThreadListV2ListItems", () => {
     });
 
     expect(items.map((item) => item.key)).toEqual([
+      "v2-pending-task:queued",
       "v2-pinned-shelf",
       `v2-thread:${environmentId}:pinned`,
       "v2-pinned-divider",
       "v2-active-header",
       `v2-thread:${environmentId}:active`,
-      "v2-pending-task:queued",
     ]);
   });
 
@@ -1511,7 +1571,7 @@ describe("buildThreadListV2ListItems", () => {
     ]);
   });
 
-  it("places queued tasks before a collapsed snoozed shelf", () => {
+  it("places queued tasks above active rows and a collapsed snoozed shelf", () => {
     const snoozedLayout = buildThreadListV2Items({
       threads: [
         makeThread({ id: ThreadId.make("active"), title: "active" }),
@@ -1543,9 +1603,9 @@ describe("buildThreadListV2ListItems", () => {
     });
 
     expect(items.map((item) => item.type)).toEqual([
+      "v2-pending",
       "v2-custom-group",
       "v2-thread",
-      "v2-pending",
       "v2-snoozed-shelf",
       "v2-settled-shelf",
       "v2-thread",
@@ -2481,10 +2541,10 @@ describe("buildThreadListV2ListItems trailing dividers", () => {
     const dividers = items.map((item) =>
       item.type === "v2-thread" || item.type === "v2-pending" ? item.showTrailingDivider : "n/a",
     );
-    // Active header | thread A | thread B | queued 1 | queued 2: consecutive threads keep
-    // their hairlines, the row before the Unsent section rule loses its own,
-    // queued rows divide each other, and the last row has nothing under it.
-    expect(dividers).toEqual(["n/a", true, false, true, false]);
+    // queued 1 | queued 2 | Active header | thread A | thread B: queued rows divide
+    // each other, the row before the Active header loses its own, consecutive
+    // threads keep their hairlines, and the last row has nothing under it.
+    expect(dividers).toEqual([true, false, "n/a", true, false]);
   });
 });
 
@@ -2640,12 +2700,12 @@ describe("custom thread groups", () => {
       customGroups: groups,
     });
     expect(keysOf(items)).toEqual([
+      "v2-pending-task:queued",
       "v2-custom-group:research",
       "r1",
       "r2",
       "v2-active-header",
       "plain",
-      "v2-pending-task:queued",
       "v2-custom-group:later",
     ]);
   });
@@ -2682,9 +2742,9 @@ describe("custom thread groups", () => {
       activeShelfExpanded: false,
       selectedThreadKey: `${environmentId}:open`,
     });
-    // Unsent tasks stay visible under a folded Active header.
-    expect(keysOf(folded)).toEqual(["v2-active-header", "open", "v2-pending-task:queued"]);
-    expect(folded[0]).toMatchObject({ count: 2, expanded: false });
+    // Unsent tasks lead the list, outside the folded Active group.
+    expect(keysOf(folded)).toEqual(["v2-pending-task:queued", "v2-active-header", "open"]);
+    expect(folded[1]).toMatchObject({ count: 2, expanded: false });
     // No active rows and no custom groups: no header, so an empty list reads as empty.
     const emptyActive = buildThreadListV2ListItems({
       ...buildThreadListV2Items({ threads: [], environmentId: null, searchQuery: "", now: NOW }),
@@ -2862,10 +2922,10 @@ describe("Working section beta", () => {
             : item.type,
       ),
     ).toEqual([
+      "queued",
       // Fork: the built-in Active group header leads its rows.
       "v2-custom-group",
       "active",
-      "queued",
       "v2-working-shelf",
       "working",
       "v2-snoozed-shelf",

@@ -91,10 +91,10 @@ const unavailableError = (provider: TtsProvider) =>
  * call, so a container mismatch means the vendor changed output format
  * between requests; that is refused rather than spliced together as noise.
  */
-export const joinSynthesizedSpeech = (
+export const joinSynthesizedSpeech: (
   pieces: ReadonlyArray<SynthesizedSpeech>,
-): Effect.Effect<SynthesizedSpeech, TtsError> =>
-  Effect.gen(function* () {
+) => Effect.Effect<SynthesizedSpeech, TtsError> = Effect.fn("TtsService.joinSynthesizedSpeech")(
+  function* (pieces: ReadonlyArray<SynthesizedSpeech>) {
     const [first, ...rest] = pieces;
     if (first === undefined) {
       return yield* new TtsError({ reason: "empty_audio", detail: "No speech was produced." });
@@ -121,7 +121,8 @@ export const joinSynthesizedSpeech = (
           : billedCharacters + piece.cost.billedCharacters;
     }
     return { bytes, mimeType: first.mimeType, cost: { usd, billedCharacters } };
-  });
+  },
+);
 
 export const layer = Layer.effect(
   TtsService,
@@ -185,8 +186,10 @@ export const layer = Layer.effect(
       };
     });
 
-    const catalog = (provider: TtsProvider): Effect.Effect<TtsCatalogResult> =>
-      Effect.gen(function* () {
+    const catalog: (provider: TtsProvider) => Effect.Effect<TtsCatalogResult> = Effect.fn(
+      "TtsService.catalog",
+    )(
+      function* (provider: TtsProvider) {
         const key = yield* readKey(provider).pipe(Effect.orElseSucceed(() => Option.none()));
         if (Option.isNone(key)) {
           return { provider, configured: false, models: [], voices: [] };
@@ -204,20 +207,23 @@ export const layer = Layer.effect(
         }
         const models = yield* listOpenRouterSpeechModels({ httpClient, apiKey });
         return { provider, configured: true, models, voices: [] };
-      }).pipe(
-        Effect.catch((error: TtsError) =>
-          Effect.succeed({
-            provider,
-            configured: true,
-            models: [],
-            voices: [],
-            error: error.detail,
-          }),
+      },
+      (effect, provider) =>
+        effect.pipe(
+          Effect.catch((error: TtsError) =>
+            Effect.succeed({
+              provider,
+              configured: true,
+              models: [],
+              voices: [],
+              error: error.detail,
+            }),
+          ),
         ),
-      );
+    );
 
-    const configureOpenRouter = (apiKey: string) =>
-      Effect.gen(function* () {
+    const configureOpenRouter = Effect.fn("TtsService.configureOpenRouter")(
+      function* (apiKey: string) {
         const trimmed = apiKey.trim();
         if (trimmed.length === 0) {
           yield* secretStore.remove(OPENROUTER_TTS_API_KEY_SECRET_NAME);
@@ -226,15 +232,15 @@ export const layer = Layer.effect(
         }
         yield* PubSub.publish(configuredChanges, undefined);
         return { configured: trimmed.length > 0 };
-      }).pipe(
-        Effect.mapError(
-          () =>
-            new TtsRpcError({
-              reason: "unavailable",
-              detail: "Could not update the stored OpenRouter key.",
-            }),
-        ),
-      );
+      },
+      Effect.mapError(
+        () =>
+          new TtsRpcError({
+            reason: "unavailable",
+            detail: "Could not update the stored OpenRouter key.",
+          }),
+      ),
+    );
 
     const synthesize: TtsServiceShape["synthesize"] = Effect.fn("TtsService.synthesize")(
       function* (input) {

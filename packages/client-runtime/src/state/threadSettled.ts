@@ -76,6 +76,7 @@ export function resolveArchiveToggleAction(
 const DAY_MS = 24 * 60 * 60 * 1_000;
 
 export interface ThreadSnoozeShell extends QueuedThreadShell {
+  readonly source?: Pick<EnvironmentThreadShell["source"], "pendingRuntimeRequest">;
   readonly snoozedUntil?: string | null;
   readonly snoozedAt?: string | null;
   /** Fork: the run an "until it's done" snooze waits on. */
@@ -152,38 +153,55 @@ export function canSnoozeUntilDone(
 }
 
 /**
- * The latest run's end time when it ended after the snooze was set, else
- * null. Timed snoozes wake on completion only; "until it's done" snoozes
- * also wake when the run was interrupted, failed, or cancelled, since the
- * agent stopped either way and nothing else would bring the thread back.
+ * Fork: the latest run's end time when an "until it's done" snooze's run
+ * ended after the snooze was set, else null. Any ending counts (completed,
+ * interrupted, failed, cancelled): the agent stopped either way and nothing
+ * else would bring the thread back. Timed snoozes never wake on a run ending.
  */
 function runEndedAfterSnooze(shell: ThreadSnoozeShell): string | null {
+  if (!isUntilDoneSnooze(shell)) return null;
   const latestRun = shell.latestRun ?? shell.latestTurn ?? null;
   if (shell.snoozedAt == null || latestRun == null || latestRun.completedAt == null) return null;
   const endedAs = (outcome: string) => latestRun.state === outcome || latestRun.status === outcome;
   const ended =
-    endedAs("completed") ||
-    (isUntilDoneSnooze(shell) &&
-      (endedAs("interrupted") || endedAs("failed") || endedAs("cancelled")));
+    endedAs("completed") || endedAs("interrupted") || endedAs("failed") || endedAs("cancelled");
   return ended && Date.parse(latestRun.completedAt) > Date.parse(shell.snoozedAt)
     ? latestRun.completedAt
     : null;
 }
 
+/**
+ * Only a request for the user or a fresh failure ends a timed snooze early. Completed runs never
+ * do: a snoozed long-running thread keeps waking itself for background work and stays hidden
+ * until its timer. Fork: an "until it's done" snooze also wakes when its work ends.
+ */
 export function threadRaisedHandWhileSnoozed(shell: ThreadSnoozeShell): boolean {
   if (shell.hasPendingApprovals || shell.hasPendingUserInput) return true;
+  if (shell.source?.pendingRuntimeRequest != null) return true;
   if (shell.pendingSubagentRequest != null) return true;
-  const runtime = shell.runtime ?? shell.session ?? null;
+  const failedAt = failureEdgeAt(shell);
   if (
-    (runtime?.status === "error" || runtime?.status === "failed") &&
+    failedAt !== undefined &&
     (shell.snoozedAt == null ||
-      (runtime.updatedAt != null && Date.parse(runtime.updatedAt) > Date.parse(shell.snoozedAt)))
+      (failedAt != null && Date.parse(failedAt) > Date.parse(shell.snoozedAt)))
   ) {
     return true;
   }
   // Fork: an ended run is not news while an "until it's done" snooze still
   // sees its subagents working.
   return runEndedAfterSnooze(shell) !== null && !untilDoneWorkContinues(shell);
+}
+
+// V2 runtime.updatedAt includes metadata writes; prefer the failed run's completion.
+// Legacy sessions only expose the runtime timestamp.
+function failureEdgeAt(shell: ThreadSnoozeShell): string | null | undefined {
+  const runtime = shell.runtime ?? shell.session ?? null;
+  if (runtime?.status !== "error" && runtime?.status !== "failed") return undefined;
+  const latestRun = shell.latestRun ?? shell.latestTurn ?? null;
+  if (latestRun?.status === "failed" && latestRun.completedAt != null) {
+    return latestRun.completedAt;
+  }
+  return runtime.updatedAt ?? null;
 }
 
 /**
@@ -198,10 +216,12 @@ export function threadRaisedHandWhileSnoozed(shell: ThreadSnoozeShell): boolean 
 export function canSnooze(
   shell: Pick<
     ThreadSnoozeShell,
-    "hasPendingApprovals" | "hasPendingUserInput" | "pendingSubagentRequest" | "runtime"
+    "hasPendingApprovals" | "hasPendingUserInput" | "pendingSubagentRequest" | "runtime" | "source"
   >,
 ): boolean {
   if (shell.hasPendingApprovals || shell.hasPendingUserInput) return false;
+  // The server rejects snoozing even for nonblocking questions.
+  if (shell.source?.pendingRuntimeRequest != null) return false;
   if (shell.pendingSubagentRequest != null) return false;
   const status = shell.runtime?.status;
   return status !== "preparing" && status !== "queued" && status !== "starting";
@@ -236,6 +256,14 @@ export function threadWokeAt(
   // indicator the user already cleared by visiting (snoozedUntil is newer
   // than that visit's lastVisitedAt).
   if (threadRaisedHandWhileSnoozed(shell)) {
+    // An old failure must not replace the activity time of an approval or input wake.
+    const failedAt = failureEdgeAt(shell);
+    if (
+      failedAt != null &&
+      (shell.snoozedAt == null || Date.parse(failedAt) > Date.parse(shell.snoozedAt))
+    ) {
+      return failedAt;
+    }
     const runtime = shell.runtime ?? shell.session ?? null;
     return runEndedAfterSnooze(shell) ?? runtime?.updatedAt ?? shell.snoozedAt ?? null;
   }
@@ -254,12 +282,12 @@ export function threadWokeAt(
 
 /**
  * Fork: whether a wake reported by threadWokeAt came from the agent's work
- * ending ("until it's done", or a run that ended after the snooze) rather
- * than a timer. Only meaningful while threadWokeAt is non-null; the sidebar
- * colors such wakes like Done.
+ * ending rather than a timer. Only an "until it's done" snooze wakes that
+ * way; timed snoozes ignore finished runs. Only meaningful
+ * while threadWokeAt is non-null; the sidebar colors such wakes like Done.
  */
 export function threadWokeOnFinishedWork(shell: ThreadSnoozeShell): boolean {
-  return isUntilDoneSnooze(shell) || runEndedAfterSnooze(shell) !== null;
+  return isUntilDoneSnooze(shell);
 }
 
 const HOUR_MS = 60 * 60 * 1_000;

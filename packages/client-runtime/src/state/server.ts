@@ -391,13 +391,15 @@ export const makeEnvironmentServerConfigState = Effect.fn("EnvironmentServerConf
     const persist = Effect.fn("EnvironmentServerConfigState.persist")(function* (
       config: ServerConfig,
     ) {
+      // A cached stall would read as a fresh freeze on the next launch.
+      const { lastEventLoopStall: _stall, ...cacheable } = withoutEnvironmentThemes(config);
       return yield* withEnvironmentCacheMutationLock(
         cache,
         environmentId,
         SubscriptionRef.get(registry.entries).pipe(
           Effect.flatMap((entries) =>
             entries.get(environmentId) === catalogEntry
-              ? cache.saveServerConfig(environmentId, withoutEnvironmentThemes(config))
+              ? cache.saveServerConfig(environmentId, cacheable)
               : Effect.void,
           ),
           Effect.as(true),

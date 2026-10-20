@@ -261,41 +261,39 @@ export const make = Effect.gen(function* () {
   );
 
   return ThreadArchiveScheduler.of({
-    schedule: (input) =>
-      Effect.gen(function* () {
-        if (input.removeWorktree === true) {
-          const blocker = yield* worktreeRemoval.blocker(input.threadId);
-          if (blocker !== null) {
-            return yield* new ThreadArchiveSchedulerError({
-              operation: "schedule",
-              threadId: input.threadId,
-              detail: blocker,
-            });
-          }
+    schedule: Effect.fn("ThreadArchiveScheduler.schedule")(function* (input) {
+      if (input.removeWorktree === true) {
+        const blocker = yield* worktreeRemoval.blocker(input.threadId);
+        if (blocker !== null) {
+          return yield* new ThreadArchiveSchedulerError({
+            operation: "schedule",
+            threadId: input.threadId,
+            detail: blocker,
+          });
         }
-        yield* dispatch("schedule", input.threadId, {
-          type: "thread.archive.schedule",
-          commandId: input.commandId ?? (yield* newCommandId("archive-schedule", input.threadId)),
-          threadId: input.threadId,
-          afterTurn: input.afterTurn,
-          ...(input.removeWorktree === true ? { removeWorktree: true } : {}),
-        });
-        // After dispatch: a failed read leaves the outcome unknown, not refused.
-        return yield* status(input.threadId, "status");
-      }),
+      }
+      yield* dispatch("schedule", input.threadId, {
+        type: "thread.archive.schedule",
+        commandId: input.commandId ?? (yield* newCommandId("archive-schedule", input.threadId)),
+        threadId: input.threadId,
+        afterTurn: input.afterTurn,
+        ...(input.removeWorktree === true ? { removeWorktree: true } : {}),
+      });
+      // After dispatch: a failed read leaves the outcome unknown, not refused.
+      return yield* status(input.threadId, "status");
+    }),
     status: (threadId) => status(threadId, "status"),
     recheck: enqueue,
-    cancel: (input) =>
-      Effect.gen(function* () {
-        const current = yield* status(input.threadId, "cancel");
-        if (current.archivedAt !== null || current.request?.status !== "pending") return current;
-        yield* dispatch("cancel", input.threadId, {
-          type: "thread.archive.cancel",
-          commandId: input.commandId ?? (yield* newCommandId("archive-cancel", input.threadId)),
-          threadId: input.threadId,
-        });
-        return yield* status(input.threadId, "status");
-      }),
+    cancel: Effect.fn("ThreadArchiveScheduler.cancel")(function* (input) {
+      const current = yield* status(input.threadId, "cancel");
+      if (current.archivedAt !== null || current.request?.status !== "pending") return current;
+      yield* dispatch("cancel", input.threadId, {
+        type: "thread.archive.cancel",
+        commandId: input.commandId ?? (yield* newCommandId("archive-cancel", input.threadId)),
+        threadId: input.threadId,
+      });
+      return yield* status(input.threadId, "status");
+    }),
     start: Effect.fn("ThreadArchiveScheduler.start")(function* () {
       yield* forkParked(
         Stream.runForEach(threads.streamDomainEvents, onEvent).pipe(

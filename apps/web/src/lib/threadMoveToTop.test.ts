@@ -105,7 +105,11 @@ describe("planThreadMoveToTop", () => {
       row("active", { activeOrderKey: "m" }),
       row("archived", { customGroupId: "research", archivedAt: now }),
       row("settled", { customGroupId: "research", settledOverride: "settled" }),
-      row("snoozed", { customGroupId: "research", snoozedAt: now }),
+      row("snoozed", {
+        customGroupId: "research",
+        snoozedAt: now,
+        snoozedUntil: "2026-09-17T12:00:00.000Z",
+      }),
       row("pinned", { customGroupId: "research", pinnedAt: now }),
     ];
     const rows = [first, moved, ...untouched];
@@ -137,8 +141,7 @@ describe("planThreadMoveToTop", () => {
   it.each([
     { archivedAt: now },
     { settledOverride: "settled" as const },
-    { snoozedAt: now },
-    { snoozedAt: now, pinnedAt: now },
+    { snoozedAt: now, snoozedUntil: "2026-09-17T12:00:00.000Z", pinnedAt: now },
     { snoozedUntil: "2026-09-17T12:00:00.000Z" },
   ])("excludes unavailable lifecycle states: %j", (overrides) => {
     const moved = row("moved", overrides);

@@ -78,8 +78,8 @@ export const layer: Layer.Layer<NativeContinuationStore, never, SqlClient.SqlCli
     const recorded = new Set<string>();
 
     return NativeContinuationStore.of({
-      recordAttached: ({ providerInstanceId, providerThread, continuation }) =>
-        Effect.gen(function* () {
+      recordAttached: Effect.fn("NativeContinuationStore.recordAttached")(
+        function* ({ providerInstanceId, providerThread, continuation }) {
           const nativeThreadId = providerThread.nativeThreadRef?.nativeId ?? null;
           if (nativeThreadId === null) return;
           const ref: NativeConversationRef = {
@@ -103,15 +103,18 @@ export const layer: Layer.Layer<NativeContinuationStore, never, SqlClient.SqlCli
             ON CONFLICT DO NOTHING
           `;
           recorded.add(key);
-        }).pipe(
-          Effect.catchCause((cause) =>
-            Effect.logWarning("orchestration-v2.native-continuation.record-failed", {
-              providerInstanceId,
-              providerThreadId: providerThread.id,
-              cause,
-            }),
+        },
+        (effect, { providerInstanceId, providerThread }) =>
+          effect.pipe(
+            Effect.catchCause((cause) =>
+              Effect.logWarning("orchestration-v2.native-continuation.record-failed", {
+                providerInstanceId,
+                providerThreadId: providerThread.id,
+                cause,
+              }),
+            ),
           ),
-        ),
+      ),
       get: (ref) =>
         sql<{ readonly continuation_key: string }>`
           SELECT continuation_key FROM fork_native_continuation

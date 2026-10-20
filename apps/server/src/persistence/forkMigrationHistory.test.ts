@@ -148,6 +148,8 @@ describe("repairForkMigrationHistory", () => {
         [62, "ThreadFailureLookupIndex"],
         [63, "DropUnusedV1Projections"],
         [64, "CanonicalizeThreadPullRequestLinks"],
+        [65, "CodexUsageNativeTurnIndex"],
+        [66, "RepairClientSettlementTimestamps"],
       ]);
       const ledger = yield* readLedger;
       assert.deepStrictEqual(
@@ -189,6 +191,8 @@ describe("repairForkMigrationHistory", () => {
         [62, "ThreadFailureLookupIndex"],
         [63, "DropUnusedV1Projections"],
         [64, "CanonicalizeThreadPullRequestLinks"],
+        [65, "CodexUsageNativeTurnIndex"],
+        [66, "RepairClientSettlementTimestamps"],
       ]);
       assert.deepStrictEqual(
         (yield* readLedger).map((row) => [row.migration_id, row.name] as const),
@@ -206,7 +210,7 @@ describe("repairForkMigrationHistory", () => {
       yield* seedForkLedger(forkLedger.slice(0, 60), 49);
       assert.deepStrictEqual(
         (yield* runMigrations()).map(([id]) => id),
-        [50, 51, 52, 53, 54, 55, 56, 57, 58, 59, 60, 61, 62, 63, 64],
+        [50, 51, 52, 53, 54, 55, 56, 57, 58, 59, 60, 61, 62, 63, 64, 65, 66],
       );
       assert.deepStrictEqual(
         (yield* readLedger).map((row) => [row.migration_id, row.name] as const),

@@ -290,6 +290,7 @@ import {
   type SidebarListMarker,
   type SidebarProjectScope,
   type SidebarSection,
+  resolveSidebarRowThreadId,
 } from "./Sidebar.logic";
 import { resolveLocalCheckoutBranchMismatch } from "./BranchToolbar.logic";
 import {
@@ -356,6 +357,7 @@ type SidebarProviderEntry = Pick<
   ProviderInstanceEntry,
   | "instanceId"
   | "driverKind"
+  | "enabled"
   | "displayName"
   | "accentColor"
   | "acpRegistryAgentId"
@@ -373,6 +375,7 @@ function sameSidebarProviderEntries(
     if (
       other === undefined ||
       other.driverKind !== entry.driverKind ||
+      other.enabled !== entry.enabled ||
       other.displayName !== entry.displayName ||
       other.accentColor !== entry.accentColor ||
       other.acpRegistryAgentId !== entry.acpRegistryAgentId ||
@@ -906,8 +909,8 @@ function SidebarProviderStack(props: {
       acpRegistryAgentId={currentEntry.acpRegistryAgentId}
       acpRegistryIconUrl={currentEntry.acpRegistryIconUrl}
       showBadge={showInstanceBadge}
-      iconClassName="size-3.5 opacity-60"
-      badgeClassName="right-[-0.1875rem] bottom-[-0.1875rem] h-3 min-w-3 px-0.5 text-5xs"
+      size="compact"
+      iconClassName="opacity-60"
     />
   );
   if (stack.length === 1) {
@@ -1007,7 +1010,7 @@ function SidebarThreadTooltip({
         {branchMismatch ? (
           <div className="flex min-w-0 items-start gap-2 text-warning">
             <CircleAlertIcon aria-hidden className="mt-0.5 size-3 shrink-0 stroke-current" />
-            <div className="min-w-0 flex-1 wrap-break-word leading-5">
+            <div className="min-w-0 flex-1 wrap-break-word">
               You're currently checked out on another branch.
             </div>
           </div>
@@ -1697,7 +1700,11 @@ type SidebarThreadRowProps = {
   // The wake came from the agent's work ending, not a timer: colored like Done.
   wokeOnFinishedWork: boolean;
   isActive: boolean;
+  // Unlike isActive, never true for the ancestor standing in for an open
+  // subagent: drafts and PR clicks care about which composer is on screen.
+  isRouteThread: boolean;
   // Which split pane shows this thread, while the split view is on screen.
+  // The secondary ("right") marker is always the pane's own thread.
   splitPaneMarker: SplitPaneMarker | null;
   openPullRequestsInRightPanel: boolean;
   jumpLabel: string | null;
@@ -1801,7 +1808,10 @@ const SidebarThreadRow = memo(function SidebarThreadRow(props: SidebarThreadRowP
   // Both split panes are on screen, so both rows wear the open-thread
   // surface; isActive alone (the route thread) still drives navigation.
   const isOnScreen = props.isActive || props.splitPaneMarker !== null;
-  const hasUnsentDraft = useThreadHasUnsentDraft(threadRef) && !isOnScreen;
+  // An ancestor standing in for an open subagent keeps its draft marker:
+  // only a pane's own thread has its composer on screen.
+  const hasUnsentDraft =
+    useThreadHasUnsentDraft(threadRef) && !props.isRouteThread && props.splitPaneMarker !== "right";
   const handleDiscardDraftClick = (event: ReactMouseEvent) => {
     event.preventDefault();
     event.stopPropagation();
@@ -2098,7 +2108,7 @@ const SidebarThreadRow = memo(function SidebarThreadRow(props: SidebarThreadRowP
     if (!url) return;
     const showInRightPanel = targetUrl !== undefined || openPullRequestsInRightPanel;
     const openedInRightPanel = openPrLink(event, url, showInRightPanel ? threadRef : undefined);
-    if (openedInRightPanel && showInRightPanel && !props.isActive) {
+    if (openedInRightPanel && showInRightPanel && !props.isRouteThread) {
       onThreadActivate(threadRef);
     }
   };
@@ -2237,7 +2247,7 @@ const SidebarThreadRow = memo(function SidebarThreadRow(props: SidebarThreadRowP
     : null;
   const handlePrListClick = () => {
     useRightPanelStore.getState().open(threadRef, "pull-requests");
-    if (!props.isActive) onThreadActivate(threadRef);
+    if (!props.isRouteThread) onThreadActivate(threadRef);
   };
   const prBadge =
     prBadgeShape?.kind === "stack" || pr || currentLinkedPr ? (
@@ -3212,7 +3222,7 @@ function useSidebarThreads(input: {
   readonly serverConfigs: ReadonlyMap<EnvironmentId, EnvironmentServerConfig>;
   readonly optimisticDrop: SidebarOptimisticDrop | null;
   readonly workingShelfEnabled: boolean;
-  readonly routeThreadKey: string | null;
+  readonly routeThreadRef: ScopedThreadRef | null;
   readonly settledResetKey: string;
   readonly isSearchingThreads: boolean;
   readonly groups: ReturnType<typeof useThreadGroupCatalog>["groups"];
@@ -3226,12 +3236,25 @@ function useSidebarThreads(input: {
     serverConfigs,
     optimisticDrop,
     workingShelfEnabled,
-    routeThreadKey,
+    routeThreadRef,
     settledResetKey,
     isSearchingThreads,
     groups,
   } = input;
   const hasCustomGroups = groups.length > 0;
+  const routeRowThreadKey =
+    routeThreadRef === null
+      ? null
+      : scopedThreadKey(
+          scopeThreadRef(
+            routeThreadRef.environmentId,
+            resolveSidebarRowThreadId(
+              routeThreadRef.threadId,
+              routeThreadRef.environmentId,
+              threads,
+            ),
+          ),
+        );
   const [collapsedGroupIds, setCollapsedGroupIds] = useLocalStorage(
     "t3:collapsed-thread-groups",
     [] as readonly string[],
@@ -3308,10 +3331,10 @@ function useSidebarThreads(input: {
   const visibleSettledThreads = (() => {
     if (settledThreads.length <= settledVisibleCount) return settledThreads;
     const visible = settledThreads.slice(0, settledVisibleCount);
-    if (routeThreadKey !== null) {
+    if (routeRowThreadKey !== null) {
       const routeThread = settledThreads
         .slice(settledVisibleCount)
-        .find((thread) => threadShellKey(thread) === routeThreadKey);
+        .find((thread) => threadShellKey(thread) === routeRowThreadKey);
       if (routeThread !== undefined) visible.push(routeThread);
     }
     return visible;
@@ -3319,18 +3342,18 @@ function useSidebarThreads(input: {
   const hiddenSettledCount = settledThreads.length - visibleSettledThreads.length;
   const renderedSettledThreads = settledShelfExpanded
     ? visibleSettledThreads
-    : routeThreadOnly(visibleSettledThreads, routeThreadKey);
+    : routeThreadOnly(visibleSettledThreads, routeRowThreadKey);
   // Same exception every other shelf makes: the open thread keeps its row,
   // so a folded pinned block never hides the thread being read.
   const visiblePinnedThreads = pinnedShelfExpanded
     ? pinnedThreads
-    : routeThreadOnly(pinnedThreads, routeThreadKey);
+    : routeThreadOnly(pinnedThreads, routeRowThreadKey);
   const visibleSnoozedThreads = snoozedShelfExpanded
     ? snoozedThreads
-    : routeThreadOnly(snoozedThreads, routeThreadKey);
+    : routeThreadOnly(snoozedThreads, routeRowThreadKey);
   const visibleWorkingThreads = workingShelfExpanded
     ? workingThreads
-    : routeThreadOnly(workingThreads, routeThreadKey);
+    : routeThreadOnly(workingThreads, routeRowThreadKey);
   // Fork: Active split into custom group sections (Active itself is null),
   // in catalog placement order; without groups, Active is the only section.
   // A folded section keeps the open thread's row, and search shows every match.
@@ -3348,7 +3371,7 @@ function useSidebarThreads(input: {
           (thread) =>
             (group === null ? activeShelfExpanded : !collapsedGroups.has(group.id)) ||
             isSearchingThreads ||
-            scopedThreadKey(scopeThreadRef(thread.environmentId, thread.id)) === routeThreadKey,
+            scopedThreadKey(scopeThreadRef(thread.environmentId, thread.id)) === routeRowThreadKey,
         ),
     }));
   })();
@@ -3437,6 +3460,7 @@ function useSidebarThreads(input: {
     for (const thread of list) sectionByThreadKey.set(threadShellKey(thread), section);
   }
   return {
+    routeRowThreadKey,
     ...partition,
     searchableThreads: [
       ...pinnedThreads,
@@ -4024,6 +4048,7 @@ export default function Sidebar() {
     foldedGroupIds,
     pinnedKeysById,
     activeKeysById,
+    routeRowThreadKey,
   } = useSidebarThreads({
     threads,
     environmentScope: environmentFilter.resolvedScope,
@@ -4033,7 +4058,7 @@ export default function Sidebar() {
     serverConfigs,
     optimisticDrop,
     workingShelfEnabled,
-    routeThreadKey,
+    routeThreadRef,
     // The settled tail restarts whenever a project or environment filter changes.
     settledResetKey: `${projectFilterSignature}:${environmentFilter.signature}`,
     isSearchingThreads,
@@ -4748,7 +4773,7 @@ export default function Sidebar() {
     foldedGroupIds,
     settledExpanded: settledShelfExpanded,
     settledVisibleCount,
-    routeThreadKey,
+    routeThreadKey: routeRowThreadKey,
     snoozedThreadCount: snoozedThreads.length,
     cardHeight: (compactCards ? 3.75 : 5.125) * sidebarRemSize,
     slimHeight: 2.25 * sidebarRemSize,
@@ -5730,7 +5755,7 @@ export default function Sidebar() {
         navigateToThreadKey(
           resolveAdjacentThreadId({
             threadIds: orderedThreadKeys,
-            currentThreadId: routeThreadKey,
+            currentThreadId: routeRowThreadKey,
             direction: traversalDirection,
           }),
         );
@@ -5746,8 +5771,8 @@ export default function Sidebar() {
     keybindings,
     navigateToThread,
     orderedThreadKeys,
+    routeRowThreadKey,
     routeTerminalOpen,
-    routeThreadKey,
     threadByKey,
   ]);
 
@@ -6192,7 +6217,7 @@ export default function Sidebar() {
                         }
                         accentTintIntensityPercent={accentTint.intensityPercent}
                         isHighlighted={activeSearchResultIndex === index}
-                        isRouteActive={routeThreadKey === threadKey}
+                        isRouteActive={routeRowThreadKey === threadKey}
                         resultId={`sidebar-thread-search-result-${index}`}
                         searchMatch={
                           threadSearchMatchByKey.get(
@@ -6329,13 +6354,14 @@ export default function Sidebar() {
                             }
                             wokeAt={threadWokeAt(thread, { now: snoozeNow })}
                             wokeOnFinishedWork={threadWokeOnFinishedWork(thread)}
-                            isActive={routeThreadKey === threadKey}
+                            isActive={routeRowThreadKey === threadKey}
+                            isRouteThread={routeThreadKey === threadKey}
                             splitPaneMarker={
                               splitSecondaryKey === null
                                 ? null
                                 : threadKey === splitSecondaryKey
                                   ? "right"
-                                  : threadKey === routeThreadKey
+                                  : threadKey === routeRowThreadKey
                                     ? "left"
                                     : null
                             }
