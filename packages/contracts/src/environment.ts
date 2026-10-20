@@ -112,11 +112,6 @@ export const ExecutionEnvironmentCapabilities = Schema.Struct({
    */
   projectProviderInstanceOverrides: Schema.optionalKey(Schema.Boolean),
   threadSnooze: Schema.optionalKey(Schema.Boolean),
-  /** Server accepts thread.snooze with a null snoozedUntil (indefinite
-      snooze, "until I wake it"). Absent on servers whose snooze decoder
-      requires a wake time, so clients hide the preset instead of sending
-      a command that would fail to decode. */
-  threadSnoozeIndefinite: Schema.optionalKey(Schema.Boolean),
   /** Server accepts thread.snooze with untilDone (wake when the running
       turn ends). Older servers drop the unknown key and would park the
       thread indefinitely, so clients hide the preset without it. */

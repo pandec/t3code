@@ -175,7 +175,6 @@ import {
 import {
   readEnvironmentSupportsActiveReorder,
   readEnvironmentSupportsPinReorder,
-  readEnvironmentSupportsSnoozeIndefinite,
   readEnvironmentSupportsSnoozeUntilDone,
   readThreadShells,
   useProjects,
@@ -2964,9 +2963,6 @@ function OpenCommandPaletteDialog(props: {
                     query: deferredQuery,
                     now,
                     presets: resolveSnoozePresets(now, timestampFormat, {
-                      untilWoken: readEnvironmentSupportsSnoozeIndefinite(
-                        openUnarchivedThreadRef.environmentId,
-                      ),
                       untilDone:
                         canSnoozeUntilDone(openUnarchivedThread) &&
                         readEnvironmentSupportsSnoozeUntilDone(

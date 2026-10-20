@@ -1224,17 +1224,12 @@ it.effect("does not wake a snoozed or settled thread, but continues once a snooz
   }),
 );
 
-it.effect("keeps an indefinite snooze parked but continues an until-done snooze", () =>
-  Effect.gen(function* () {
-    const live = makeProjection();
-    const snoozedAt = DateTime.subtract(now, { minutes: 5 });
-    const parked = { ...live.thread, snoozedUntil: null, snoozedAt, snoozedUntilRunId: null };
-    assert.isUndefined(restartContinuationRun({ ...live, thread: parked }, now));
-    assert.deepEqual(yield* continuationTexts({ ...cutMidTurn(), thread: parked }), []);
-    const untilDone = { ...parked, snoozedUntilRunId: runId };
-    assert.equal(restartContinuationRun({ ...live, thread: untilDone }, now)?.id, runId);
-  }),
-);
+it("continues an until-done snooze", () => {
+  const live = makeProjection();
+  const snoozedAt = DateTime.subtract(now, { minutes: 5 });
+  const untilDone = { ...live.thread, snoozedUntil: null, snoozedAt, snoozedUntilRunId: runId };
+  assert.equal(restartContinuationRun({ ...live, thread: untilDone }, now)?.id, runId);
+});
 
 it.effect("does not continue a run waiting on a secret the restart closed", () =>
   Effect.gen(function* () {

@@ -93,7 +93,6 @@ import {
   THREAD_HISTORY_PAGE_POLICY,
   OLDER_THREAD_USER_TURN_LIMIT,
 } from "./threadHistoryPaging.ts";
-import { indefiniteSnoozeHoldsOverLatestRun } from "./IndefiniteSnooze.ts";
 
 export class ProjectionStoreApplyEventError extends Schema.TaggedError<ProjectionStoreApplyEventError>()(
   "ProjectionStoreApplyEventError",
@@ -3773,7 +3772,7 @@ export const layer: Layer.Layer<ProjectionStoreV2, never, SqlClient.SqlClient> =
             pendingRuntimeRequest: null,
             limitRecovery: thread.limitRecovery ?? null,
             snoozedUntil: thread.snoozedUntil ?? null,
-            // Fork: indefinite-snooze fields, only when set (they defer resume).
+            // Fork: snooze fields beyond the wake time, only when set.
             ...(thread.snoozedAt == null ? {} : { snoozedAt: thread.snoozedAt }),
             ...(thread.snoozedUntilRunId == null
               ? {}
@@ -6583,8 +6582,7 @@ export const layerMemory: Layer.Layer<ProjectionStoreV2> = Layer.effect(
                   thread.limitRecovery.autoResume &&
                   resetMs <= nowMs &&
                   (thread.snoozedUntil == null ||
-                    DateTime.toEpochMillis(thread.snoozedUntil) <= nowMs) &&
-                  !indefiniteSnoozeHoldsOverLatestRun(thread)
+                    DateTime.toEpochMillis(thread.snoozedUntil) <= nowMs)
                 );
               })
               .toSorted((left, right) => left.id.localeCompare(right.id)),

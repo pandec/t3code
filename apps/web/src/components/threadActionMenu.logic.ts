@@ -103,8 +103,8 @@ export interface ThreadActionMenuState {
   };
   /**
    * Only the fields the menu renders, so surfaces can pass the fork's wider
-   * preset list (which adds the indefinite "until I wake it" entry with a
-   * null wake time) as well as the shared timed presets.
+   * preset list (which adds "until it's done" with a null wake time) as well
+   * as the shared timed presets.
    */
   readonly snoozePresets: ReadonlyArray<{
     readonly id: string;

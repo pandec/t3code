@@ -14,7 +14,6 @@ import type { ProjectionRuntimeRecoveryState } from "./ProjectionStore.ts";
 
 import * as ServerSettings from "../serverSettings.ts";
 import { isNativeMaintenanceCommand } from "./CommandPolicy.ts";
-import { isIndefinitelySnoozed } from "./IndefiniteSnooze.ts";
 import * as ThreadManagementService from "./ThreadManagementService.ts";
 import {
   awaitingProviderThreadId,
@@ -47,9 +46,8 @@ function restartContinuationBlocked(
     thread.archivedAt !== null ||
     thread.deletedAt !== null ||
     thread.settledOverride === "settled" ||
-    (thread.snoozedUntil != null && DateTime.isGreaterThan(thread.snoozedUntil, now)) ||
-    // Fork: "until I wake it" stays parked; "until it's done" waits on this work, so it continues.
-    isIndefinitelySnoozed(thread)
+    // Fork: "until it's done" has no wake time; it waits on this work, so it continues.
+    (thread.snoozedUntil != null && DateTime.isGreaterThan(thread.snoozedUntil, now))
   )
     return true;
   const turn = latestProviderTurnForAttempt(projection.providerTurns, source.activeAttemptId);

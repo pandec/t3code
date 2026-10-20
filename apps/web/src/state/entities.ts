@@ -278,16 +278,6 @@ export function readEnvironmentSupportsTitleRegeneration(environmentId: Environm
   );
 }
 
-/** Whether the environment's server accepts thread.snooze with a null wake
-    time (indefinite snooze). Older snooze-capable servers require a wake
-    time, so this gates the "Until I wake it" preset separately. */
-export function readEnvironmentSupportsSnoozeIndefinite(environmentId: EnvironmentId): boolean {
-  return (
-    appAtomRegistry.get(environmentServerConfigsAtom).get(environmentId)?.environment.capabilities
-      .threadSnoozeIndefinite === true
-  );
-}
-
 /** Whether the environment's server accepts thread.snooze with untilDone.
     Older servers drop the unknown key and would park the thread
     indefinitely, so this gates the "Until it's done" preset. */

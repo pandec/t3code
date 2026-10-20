@@ -60,7 +60,6 @@ import {
   readEnvironmentSupportsCustomGroups,
   readEnvironmentSupportsSettlement,
   readEnvironmentSupportsSnooze,
-  readEnvironmentSupportsSnoozeIndefinite,
   readEnvironmentSupportsSnoozeUntilDone,
   readEnvironmentSupportsVisitedTracking,
   readEnvironmentThreadRefs,
@@ -982,8 +981,8 @@ export function useThreadActions() {
     // has to put those back as well.
     const pinOrderKey = resolved?.thread.pinnedAt != null ? resolved.thread.pinOrderKey : null;
     const wasPinned = resolved?.thread.pinnedAt != null;
-    // Fork: restore only a timed or indefinite (null wake time) snooze
-    // that still held; an expired or raised-hand one had already woken.
+    // Fork: restore only a timed snooze that still held; an expired or
+    // raised-hand one had already woken.
     // Settling stops the work an "until it's done" snooze waits on
     // (DECISIONS Q3.1), so that snooze would have woken: never restore it.
     const restoreSnooze =
@@ -1136,15 +1135,14 @@ export function useThreadActions() {
     },
   ) => {
     const untilDone = options?.untilDone === true;
-    // Fork: a null wake time (indefinite snooze) also needs the
-    // threadSnoozeIndefinite capability; older servers reject it. "Until
-    // it's done" needs threadSnoozeUntilDone: older servers drop the flag
-    // and would park the thread indefinitely.
+    // Fork: only "until it's done" omits the wake time, and it needs
+    // threadSnoozeUntilDone: older servers drop the flag and would park the
+    // thread indefinitely.
     if (
       !readEnvironmentSupportsSnooze(target.environmentId) ||
       (untilDone
         ? snoozedUntil !== null || !readEnvironmentSupportsSnoozeUntilDone(target.environmentId)
-        : snoozedUntil === null && !readEnvironmentSupportsSnoozeIndefinite(target.environmentId))
+        : snoozedUntil === null)
     ) {
       return AsyncResult.failure(
         Cause.fail(

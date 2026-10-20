@@ -248,7 +248,6 @@ export const make = Effect.gen(function* () {
       projectSettingsOverrides: true,
       projectProviderInstanceOverrides: true,
       threadSnooze: true,
-      threadSnoozeIndefinite: true,
       threadSnoozeUntilDone: true,
       projectAccentColors: true,
       projectAccentColorsFill: true,

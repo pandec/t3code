@@ -2775,8 +2775,7 @@ export const OrchestrationV2Command = Schema.Union([
     type: Schema.Literal("thread.snooze"),
     commandId: CommandId,
     threadId: ThreadId,
-    // Fork: null is the indefinite snooze ("until I wake it"); snoozedAt
-    // alone marks it. Gated by the threadSnoozeIndefinite capability.
+    // Fork: null only with untilDone; the orchestrator rejects it otherwise.
     snoozedUntil: Schema.NullOr(IsoDateTime),
     // Fork: "until it's done": wake when the latest run and its agent
     // background work finish. Requires a null snoozedUntil and the

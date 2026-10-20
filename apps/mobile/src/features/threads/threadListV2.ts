@@ -6,9 +6,9 @@ import {
   canSnooze,
   effectiveSnoozed,
   resolveSnoozePresets,
-  snoozeShelfLabel,
   snoozeWakeLabel,
   snoozeWakeSortMs,
+  UNTIL_DONE_SNOOZE_LABEL,
 } from "@t3tools/client-runtime/state/thread-settled";
 import type { SnoozePreset } from "@t3tools/client-runtime/state/thread-settled";
 import type { EnvironmentThreadShell } from "@t3tools/client-runtime/state/shell";
@@ -582,7 +582,7 @@ export function buildThreadListV2ListItems(input: {
       item.snoozed && item.thread.snoozedUntil != null && input.snoozeLabelNow !== undefined
         ? snoozeWakeLabel(item.thread.snoozedUntil, { now: input.snoozeLabelNow })
         : item.snoozed && item.thread.snoozedUntil == null
-          ? snoozeShelfLabel(item.thread)
+          ? UNTIL_DONE_SNOOZE_LABEL
           : undefined;
     // The minute clock belongs on the item, not the list's extraData, so the
     // recycler's equality can confine the per-minute re-render to rows whose
@@ -857,7 +857,6 @@ export function buildThreadListV2Items(input: {
     ? sortInboxThreadsByReturn(active, input.inboxReturnAt)
     : applyPendingThreadOrder(sortThreadsForListV2(active), "active", pending);
   const orderedWorking = sortWorkingThreadsBySend(working);
-  // Indefinite snoozes (no wake time) sort last, matching the web sidebar.
   const orderedSnoozed = [...snoozed].sort(
     (left, right) => snoozeWakeSortMs(left) - snoozeWakeSortMs(right),
   );

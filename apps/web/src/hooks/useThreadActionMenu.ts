@@ -36,7 +36,6 @@ import {
   readEnvironmentSupportsPinning,
   readEnvironmentSupportsSettlement,
   readEnvironmentSupportsSnooze,
-  readEnvironmentSupportsSnoozeIndefinite,
   readEnvironmentSupportsSnoozeUntilDone,
   readEnvironmentSupportsTitleRegeneration,
   readThreadShell,
@@ -138,7 +137,6 @@ export function useThreadActionMenu(input: {
       };
       const isRegeneratingTitle = thread.titleRegeneration != null;
       const snoozePresets = resolveSnoozePresets(now, timestampFormat, {
-        untilWoken: readEnvironmentSupportsSnoozeIndefinite(threadRef.environmentId),
         untilDone:
           readEnvironmentSupportsSnoozeUntilDone(threadRef.environmentId) &&
           canSnoozeUntilDone(thread),

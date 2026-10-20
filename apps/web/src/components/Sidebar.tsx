@@ -39,10 +39,10 @@ import {
   canSnoozeUntilDone,
   hasPendingArchive,
   resolveArchiveToggleAction,
-  snoozeShelfLabel,
   snoozeWakeSortMs,
   threadWokeAt,
   threadWokeOnFinishedWork,
+  UNTIL_DONE_SNOOZE_LABEL,
 } from "@t3tools/client-runtime/state/thread-settled";
 import { createInboxReturnTracker } from "@t3tools/client-runtime/state/thread-inbox";
 import { formatDiffCount } from "@t3tools/client-runtime/diff-count";
@@ -631,7 +631,6 @@ function partitionSidebarThreads(input: SidebarThreadPartitionInput) {
             getId: threadShellKey,
           }),
     workingThreads: sortWorkingThreadsBySend(working),
-    // snoozeWakeSortMs parks indefinite snoozes (no wake time) last.
     snoozedThreads: snoozed.toSorted(
       (left, right) => snoozeWakeSortMs(left) - snoozeWakeSortMs(right),
     ),
@@ -1079,16 +1078,11 @@ function SnoozeMenuButton(props: {
   onOpenChange: (open: boolean) => void;
   onSnooze: (preset: Pick<SnoozePreset, "snoozedUntil" | "untilDone">) => void;
   timestampFormat: TimestampFormat;
-  untilWokenSupported: boolean;
   untilDoneOffered: boolean;
 }) {
-  const { open, onOpenChange, onSnooze, timestampFormat, untilWokenSupported, untilDoneOffered } =
-    props;
+  const { open, onOpenChange, onSnooze, timestampFormat, untilDoneOffered } = props;
   const presets = open
-    ? resolveSnoozePresets(new Date(), timestampFormat, {
-        untilWoken: untilWokenSupported,
-        untilDone: untilDoneOffered,
-      })
+    ? resolveSnoozePresets(new Date(), timestampFormat, { untilDone: untilDoneOffered })
     : [];
   return (
     <Menu open={open} onOpenChange={onOpenChange}>
@@ -1681,8 +1675,6 @@ type SidebarThreadRowProps = {
   variantAction: SidebarSweepAction;
   settlementSupported: boolean;
   snoozeSupported: boolean;
-  // Fork: server accepts a null wake time (indefinite "Until I wake it").
-  snoozeUntilWokenSupported: boolean;
   // Fork: server accepts "Until it's done" (thread.snooze untilDone).
   snoozeUntilDoneSupported: boolean;
   // Renders the pin glyph. Pinned cards keep the full settle/snooze quick
@@ -2801,7 +2793,6 @@ const SidebarThreadRow = memo(function SidebarThreadRow(props: SidebarThreadRowP
                         onOpenChange={setSnoozeMenuOpen}
                         onSnooze={handleSnoozePreset}
                         timestampFormat={props.timestampFormat}
-                        untilWokenSupported={props.snoozeUntilWokenSupported}
                         untilDoneOffered={
                           props.snoozeUntilDoneSupported && canSnoozeUntilDone(thread)
                         }
@@ -5073,14 +5064,9 @@ export default function Sidebar() {
           )
         : [];
       const canMoveSelectionToGroup = canOperateThreads(groupMovableSelectedThreads);
-      // The indefinite preset needs every selected environment to support
-      // it; a mixed selection would half-apply.
+      // "Until it's done" needs every selected environment to support it; a
+      // mixed selection would half-apply.
       const snoozePresets = resolveSnoozePresets(new Date(), timestampFormat, {
-        untilWoken: selectedThreads.every(
-          (thread) =>
-            serverConfigs.get(thread.environmentId)?.environment.capabilities
-              .threadSnoozeIndefinite === true,
-        ),
         untilDone: selectedThreads.every(
           (thread) =>
             serverConfigs.get(thread.environmentId)?.environment.capabilities
@@ -5438,9 +5424,6 @@ export default function Sidebar() {
         const isSnoozed = snoozedThreadKeysRef.current.has(threadKey);
         const isPinned = thread.pinnedAt != null;
         const snoozePresets = resolveSnoozePresets(new Date(), timestampFormat, {
-          untilWoken:
-            serverConfigs.get(thread.environmentId)?.environment.capabilities
-              .threadSnoozeIndefinite === true,
           untilDone:
             serverConfigs.get(thread.environmentId)?.environment.capabilities
               .threadSnoozeUntilDone === true && canSnoozeUntilDone(thread),
@@ -6306,10 +6289,6 @@ export default function Sidebar() {
                               serverConfigs.get(thread.environmentId)?.environment.capabilities
                                 .threadSnooze === true
                             }
-                            snoozeUntilWokenSupported={
-                              serverConfigs.get(thread.environmentId)?.environment.capabilities
-                                .threadSnoozeIndefinite === true
-                            }
                             snoozeUntilDoneSupported={
                               serverConfigs.get(thread.environmentId)?.environment.capabilities
                                 .threadSnoozeUntilDone === true
@@ -6345,7 +6324,7 @@ export default function Sidebar() {
                                   ? snoozeWakeLabel(thread.snoozedUntil, {
                                       now: new Date().toISOString(),
                                     })
-                                  : snoozeShelfLabel(thread)
+                                  : UNTIL_DONE_SNOOZE_LABEL
                                 : null
                             }
                             wokeAt={threadWokeAt(thread, { now: snoozeNow })}

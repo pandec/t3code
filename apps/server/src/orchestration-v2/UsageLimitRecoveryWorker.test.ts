@@ -33,15 +33,10 @@ const armed: ProjectionLimitRecoveryCandidate = {
   snoozedAt: null,
 };
 
-describe("limitRecoveryCommand (fork: indefinite snooze)", () => {
-  it("defers resume while an indefinite snooze set after the failure holds", () => {
-    const snoozed = { ...armed, snoozedAt: DateTime.makeUnsafe("2026-10-04T10:30:00.000Z") };
-    expect(limitRecoveryCommand(snoozed, true, nowMs)).toBeNull();
-  });
-
-  it("resumes once unsnoozed, or when the snooze predates the failure", () => {
+describe("limitRecoveryCommand (fork)", () => {
+  it("resumes past a stored snooze marker without a wake time", () => {
     expect(limitRecoveryCommand(armed, true, nowMs)?.type).toBe("message.dispatch");
-    const earlier = { ...armed, snoozedAt: DateTime.makeUnsafe("2026-10-04T09:00:00.000Z") };
-    expect(limitRecoveryCommand(earlier, true, nowMs)?.type).toBe("message.dispatch");
+    const legacy = { ...armed, snoozedAt: DateTime.makeUnsafe("2026-10-04T10:30:00.000Z") };
+    expect(limitRecoveryCommand(legacy, true, nowMs)?.type).toBe("message.dispatch");
   });
 });

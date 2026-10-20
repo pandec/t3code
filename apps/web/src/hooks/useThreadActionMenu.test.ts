@@ -52,7 +52,6 @@ vi.mock("../state/entities", () => ({
   readEnvironmentSupportsPinning: () => true,
   readEnvironmentSupportsSettlement: () => true,
   readEnvironmentSupportsSnooze: () => true,
-  readEnvironmentSupportsSnoozeIndefinite: () => true,
   readEnvironmentSupportsSnoozeUntilDone: () => true,
   readEnvironmentSupportsTitleRegeneration: () => true,
   readThreadShell: () => ({

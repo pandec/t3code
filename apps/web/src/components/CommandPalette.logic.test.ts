@@ -360,10 +360,11 @@ describe("buildSnoozeThreadViewItems", () => {
       snoozedUntil: "2026-09-16T11:30:00.000Z",
     },
     {
-      id: "until-woken" as const,
-      label: "Until I wake it",
-      whenLabel: "no timer",
+      id: "until-done" as const,
+      label: "Until it's done",
+      whenLabel: "when the work ends",
       snoozedUntil: null,
+      untilDone: true as const,
     },
   ];
   const baseInput = {
@@ -380,7 +381,7 @@ describe("buildSnoozeThreadViewItems", () => {
   it("lists presets then Custom when the query is not a time", () => {
     expect(
       buildSnoozeThreadViewItems({ ...baseInput, query: "" }).map((item) => item.value),
-    ).toEqual(["snooze:hour", "snooze:until-woken", "snooze:custom"]);
+    ).toEqual(["snooze:hour", "snooze:until-done", "snooze:custom"]);
   });
 
   it("prepends a parsed row that snoozes to the typed time and stays searchable", async () => {
@@ -411,7 +412,7 @@ describe("buildSnoozeThreadViewItems", () => {
     },
   );
 
-  it("passes presets through untouched, including the indefinite one", async () => {
+  it("passes presets through untouched, including until-done", async () => {
     const snooze = vi.fn(async () => undefined);
     const items = buildSnoozeThreadViewItems({ ...baseInput, query: "", snooze });
     await items[1]!.run();

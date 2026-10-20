@@ -474,7 +474,7 @@ export function createThreadEnvironmentAtoms<R, E>(
       (!accepted &&
         (thread.pendingRuntimeRequest !== null ||
           ["preparing", "queued", "starting"].includes(thread.status))) ||
-      // Fork: a null wake time is the indefinite snooze ("until I wake it").
+      // Fork: a null wake time is the "until it's done" snooze.
       (input.snoozedUntil !== null &&
         !(Date.parse(input.snoozedUntil) > DateTime.toEpochMillis(now))) ||
       // Fork: "until it's done" waits on the latest run; none, nothing to wait on.

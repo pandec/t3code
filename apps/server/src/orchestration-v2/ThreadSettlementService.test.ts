@@ -211,21 +211,8 @@ describe("isAutoSettlementCandidate", () => {
   });
 });
 
-describe("indefinite snooze settlement (fork)", () => {
-  it("never auto-settles an indefinitely snoozed thread, even after it woke", () => {
-    const parked = shell({ snoozedUntil: null, snoozedAt: at(-60 * 60 * 1_000) });
-    expect(ThreadSettlementService.isAutoSettlementCandidate(parked, NOW_MS)).toBe(false);
-    expect(
-      ThreadSettlementService.isAutoSettlementCandidate(
-        shell({ ...parked, latestRunCompletedAt: at(-30 * 60 * 1_000) }),
-        NOW_MS,
-      ),
-    ).toBe(false);
-  });
-});
-
 describe("snooze until done settlement (fork)", () => {
-  it("settles an until-done snooze once its work ended (not treated as indefinite)", () => {
+  it("settles an until-done snooze once its work ended", () => {
     const runId = RunId.make("run-wake");
     expect(
       ThreadSettlementService.isAutoSettlementCandidate(
@@ -1492,16 +1479,10 @@ describe("isSnoozed", () => {
     ).toBe(false);
   });
 
-  // Fork: snoozes without a wake time.
-  it("keeps an until-I-wake-it snooze until a run ends after it", () => {
-    const parked = { snoozedAt: at(-2 * DAY_MS), snoozedUntil: null };
-    expect(ThreadSettlementService.isSnoozed(shell(parked), NOW_MS)).toBe(true);
-    expect(
-      ThreadSettlementService.isSnoozed(
-        shell({ ...parked, status: "interrupted", latestRunCompletedAt: at(-DAY_MS) }),
-        NOW_MS,
-      ),
-    ).toBe(false);
+  // Fork: a stored marker from the removed "until I wake it" snooze reads as awake.
+  it("reads a snooze without a wake time or awaited run as awake", () => {
+    const legacy = { snoozedAt: at(-2 * DAY_MS), snoozedUntil: null };
+    expect(ThreadSettlementService.isSnoozed(shell(legacy), NOW_MS)).toBe(false);
   });
 
   it("keeps an until-it's-done snooze while the awaited work goes on", () => {

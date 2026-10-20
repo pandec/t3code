@@ -117,8 +117,7 @@ export interface SetThreadCustomGroupInput extends ThreadCommandInput {
 }
 
 export interface SnoozeThreadInput extends ThreadCommandInput {
-  /** Fork: null snoozes indefinitely ("until I wake it"); requires the
-      threadSnoozeIndefinite capability. */
+  /** Fork: null only for "until it's done". */
   readonly snoozedUntil: string | null;
   /** Fork: "until it's done" (with a null snoozedUntil); requires the
       threadSnoozeUntilDone capability. */

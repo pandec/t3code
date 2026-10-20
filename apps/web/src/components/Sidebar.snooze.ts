@@ -10,10 +10,10 @@ import { formatShortTimestamp, parseTimestampDate } from "../timestampFormat";
 
 export { snoozeWakeLabel };
 
-/** The shared timed presets plus the fork's "Until it's done" and "Until I wake it". */
+/** The shared timed presets plus the fork's "Until it's done". */
 export interface SnoozePreset extends Omit<SharedSnoozePreset, "id" | "snoozedUntil"> {
-  readonly id: SharedSnoozePreset["id"] | "until-woken" | "until-done";
-  /** ISO wake time, or null for the indefinite and "until it's done" snoozes. */
+  readonly id: SharedSnoozePreset["id"] | "until-done";
+  /** ISO wake time, or null for the "until it's done" snooze. */
   readonly snoozedUntil: string | null;
   /** "Until it's done": wake when the running work and its subagents end. */
   readonly untilDone?: true;
@@ -28,13 +28,12 @@ function timeOfDayLabel(date: Date, timestampFormat: TimestampFormat): string {
 /**
  * Presets for "snooze until", computed against local time. "Until it's
  * done" leads when the caller offers it (a working thread on a server with
- * threadSnoozeUntilDone); the indefinite "Until I wake it" preset is opt-in
- * because it needs the server's threadSnoozeIndefinite capability.
+ * threadSnoozeUntilDone).
  */
 export function resolveSnoozePresets(
   now: Date,
   timestampFormat: TimestampFormat,
-  options?: { readonly untilWoken?: boolean; readonly untilDone?: boolean },
+  options?: { readonly untilDone?: boolean },
 ): ReadonlyArray<SnoozePreset> {
   const presets: SnoozePreset[] = resolveSharedSnoozePresets(now).map((preset) => {
     const wake = parseTimestampDate(preset.snoozedUntil);
@@ -50,14 +49,6 @@ export function resolveSnoozePresets(
   });
   if (options?.untilDone === true) {
     presets.unshift({ ...SNOOZE_UNTIL_DONE_PRESET, snoozedUntil: null, untilDone: true });
-  }
-  if (options?.untilWoken === true) {
-    presets.push({
-      id: "until-woken",
-      label: "Until I wake it",
-      whenLabel: "no timer",
-      snoozedUntil: null,
-    });
   }
   return presets;
 }

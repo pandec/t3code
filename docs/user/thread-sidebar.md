@@ -70,9 +70,8 @@ their own **Drafts** section at the top of the sidebar, which folds the same way
 
 On web and desktop, unpinning, settling, snoozing, and archiving a thread each show
 a notification with **Undo** for five seconds. Undo restores the thread's previous
-state, including its pinned position and any snooze that settling cleared ("until I
-wake it" included). Settling stops the work an "until it's done" snooze waits on, so
-Undo leaves that thread awake. If archiving left you on an empty new-thread screen, undo
+state, including its pinned position and any snooze that settling cleared. Settling stops
+the work an "until it's done" snooze waits on, so Undo leaves that thread awake. If archiving left you on an empty new-thread screen, undo
 can reopen the restored thread. It keeps another active conversation in place.
 Discarding an unsent draft from the sidebar works the same way: Undo brings back its
 text and attachments. `mod+z` triggers the most recent Undo when no text field is focused; see
@@ -382,11 +381,6 @@ On web and desktop, snoozing the thread you have open takes you back to the thre
 before it, the one `Ctrl+Tab` opens on desktop. If there is no such thread or it is snoozed too, a
 snooze from the sidebar moves to the next thread in the list, and other snoozes keep you where you
 are.
-
-On web and desktop, **Snooze → Until I wake it** snoozes without a timer. The thread stays in the
-Snoozed section, after the timed snoozes, until you wake, pin, settle, or message it, or until it
-needs attention: a question or approval, a failure, or the agent finishing its work. Automatic
-settlement and resuming after a restart skip these threads.
 
 While the agent is mid-turn or its subagents are still working, **Snooze → Until it's done** hides
 the thread until that work finishes, including the agent's follow-up on the subagents' results. Watch

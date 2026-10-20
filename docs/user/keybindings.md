@@ -63,7 +63,7 @@ The combined command still copies a PR URL when available and otherwise the thre
 On web and desktop, open the command palette with `mod+k` and choose **Rename current thread**
 or **Snooze current thread**. Rename edits the title in the palette input and also offers
 **Regenerate title**. Snooze offers the same presets as the thread menu, including
-[Until I wake it and Until it's done](./thread-sidebar.md#snooze-until-later), and accepts a
+[Until it's done](./thread-sidebar.md#snooze-until-later), and accepts a
 typed wake time such as `45m`, `2pm`, or `fri 9am`.
 
 To open either step directly, assign a shortcut to "Thread: Rename" or "Thread: Snooze" in

@@ -376,17 +376,6 @@ describe("settle and snooze Undo", () => {
     });
   });
 
-  it("restores an indefinite snooze that settling had cleared", async () => {
-    threadShell.snoozedAt = "2026-01-01T00:00:00.000Z";
-    const actions = useThreadActions();
-    await actions.settleThread(target);
-    await currentUndo()();
-    expect(commands.snooze).toHaveBeenCalledExactlyOnceWith({
-      environmentId: target.environmentId,
-      input: { threadId: target.threadId, snoozedUntil: null },
-    });
-  });
-
   it("leaves an until-done snooze awake, since settling stopped its work", async () => {
     threadShell.snoozedAt = "2026-01-01T00:00:00.000Z";
     threadShell.snoozedUntilRunId = "run-1";

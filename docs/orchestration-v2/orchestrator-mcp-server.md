@@ -385,9 +385,8 @@ List and read results report `snoozed` and `snoozedUntil`, and
 `t3_thread_list` filters on `snoozed`. The server's `isSnoozed` follows the
 client's `effectiveSnoozed`, so agents and the sidebar agree: a snoozed thread
 wakes early when it has a pending request, fails, or completes after the snooze.
-The fork's snoozes without a wake time (`snoozedUntil` null) also count: "until I
-wake it" holds until a run ends after it, and "until it's done" holds while its
-awaited run or that run's agent background work goes on.
+The fork's "until it's done" snooze (`snoozedUntil` null) also counts: it holds
+while its awaited run or that run's agent background work goes on.
 
 ### `t3_thread_update`
 

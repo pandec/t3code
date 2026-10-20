@@ -36,7 +36,6 @@ import { storageCleanupWorktreeInUse } from "../storageCleanup.ts";
 import * as TerminalManager from "../terminal/Manager.ts";
 import { canonicalWorkspacePath } from "../workspace/workspaceLease.ts";
 import * as ProjectStore from "./ProjectStore.ts";
-import { isIndefinitelySnoozed } from "./IndefiniteSnooze.ts";
 import * as Orchestrator from "./Orchestrator.ts";
 import * as ProjectionStore from "./ProjectionStore.ts";
 
@@ -184,8 +183,6 @@ export function isAutoSettlementCandidate(
   // Fork: a queued run is pending work. Redundant for getSettlementCandidates,
   // which already excludes queued runs, but keeps shell rows consistent.
   if (thread.status === "queued") return false;
-  // Fork: an indefinite snooze only wakes by hand, never by settlement.
-  if (isIndefinitelySnoozed(thread)) return false;
   const snoozedUntilMs = toMillis(thread.snoozedUntil);
   if (snoozedUntilMs === null || snoozedUntilMs <= nowMs) return true;
   const snoozedAtMs = toMillis(thread.snoozedAt);
@@ -216,8 +213,8 @@ export function isSnoozed(
   >,
   nowMs: number,
 ): boolean {
-  if (thread.snoozedUntil == null && thread.snoozedAt != null) {
-    return timelessSnoozeHolds({ ...thread, snoozedAt: thread.snoozedAt });
+  if (thread.snoozedUntil == null && thread.snoozedUntilRunId != null) {
+    return untilDoneSnoozeHolds(thread);
   }
   const snoozedUntilMs = toMillis(thread.snoozedUntil);
   if (snoozedUntilMs === null || snoozedUntilMs <= nowMs) return false;
@@ -236,42 +233,29 @@ export function isSnoozed(
 }
 
 /**
- * Fork: a snooze without a wake time, "until I wake it" or "until it's done"
- * (an awaited `snoozedUntilRunId`). Mirrors client-runtime's
- * effectiveSnoozed: a pending request wakes either; "until it's done" holds
- * while its work goes on, and "until I wake it" until a run ends after it was
- * set (interrupted and failed count).
+ * Fork: "until it's done" (an awaited `snoozedUntilRunId`, no wake time).
+ * Mirrors client-runtime's effectiveSnoozed: a pending request wakes it, and
+ * it holds only while its work goes on, even when that work ended without a
+ * run finishing after the snooze (a run cancelled before it started no longer
+ * stands for the outcome).
  */
-function timelessSnoozeHolds(
+function untilDoneSnoozeHolds(
   thread: Pick<
     OrchestrationV2ThreadShell,
     | "snoozedUntilRunId"
     | "latestRunId"
-    | "latestRunCompletedAt"
     | "status"
     | "pendingRuntimeRequest"
     | "pendingBackgroundTasks"
-  > & { readonly snoozedAt: DateTime.Utc },
+  >,
 ): boolean {
   if (thread.pendingRuntimeRequest !== null) return false;
-  const untilDone = thread.snoozedUntilRunId != null;
-  // Like clients' effectiveSnoozed, "until it's done" holds only while its work
-  // goes on, even when that work ended without a run finishing after the snooze
-  // (a run cancelled before it started no longer stands for the outcome).
-  if (untilDone) {
-    return snoozeUntilDoneWorkContinues({
-      snoozedUntilRunId: thread.snoozedUntilRunId,
-      latestRunId: thread.latestRunId,
-      latestRunStatus: thread.status,
-      pendingBackgroundTasks: thread.pendingBackgroundTasks ?? [],
-    });
-  }
-  const completedAtMs = toMillis(thread.latestRunCompletedAt);
-  return !(
-    completedAtMs !== null &&
-    completedAtMs > DateTime.toEpochMillis(thread.snoozedAt) &&
-    (thread.status === "completed" || thread.status === "interrupted" || thread.status === "failed")
-  );
+  return snoozeUntilDoneWorkContinues({
+    snoozedUntilRunId: thread.snoozedUntilRunId,
+    latestRunId: thread.latestRunId,
+    latestRunStatus: thread.status,
+    pendingBackgroundTasks: thread.pendingBackgroundTasks ?? [],
+  });
 }
 
 export function resolveAutoSettlementAt(input: {
