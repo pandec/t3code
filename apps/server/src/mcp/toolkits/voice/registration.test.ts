@@ -2,6 +2,7 @@ import { expect, it } from "@effect/vitest";
 import { NodeHttpServer } from "@effect/platform-node";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import { ProviderInstanceId, ThreadId } from "@t3tools/contracts";
+import * as Context from "effect/Context";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import * as Ref from "effect/Ref";
@@ -80,18 +81,21 @@ const StubServicesLive = Layer.mergeAll(
 const threadId = ThreadId.make("thread-voice-mcp");
 
 /** Speaks JSON-RPC to the island the credential's endpoint names. */
-const mcpSession = (capabilities: ReadonlySet<McpCapability>) =>
+const mcpSession = (
+  registry: McpSessionRegistry.McpSessionRegistry["Service"],
+  capabilities: ReadonlySet<McpCapability>,
+) =>
   Effect.gen(function* () {
-    const credential = yield* McpSessionRegistry.issueActiveMcpCredential({
+    const credential = yield* registry.issue({
       threadId,
       providerInstanceId: ProviderInstanceId.make("claudeAgent"),
       capabilities,
     });
-    const path = new URL(credential!.config.endpoint).pathname;
+    const path = new URL(credential.config.endpoint).pathname;
     const httpClient = yield* HttpClient.HttpClient;
     const headers = {
       accept: "application/json, text/event-stream",
-      authorization: credential!.config.authorizationHeader,
+      authorization: credential.config.authorizationHeader,
     };
     const init = yield* httpClient.post(path, {
       headers,
@@ -135,13 +139,18 @@ it.effect("voice_reply exists only for credentials with the voice capability", (
             Effect.as({ status: "staged" as const, transcriptChars: 5, audioSizeBytes: 10 }),
           ),
       });
-      const routes = McpHttpServer.layer.pipe(Layer.provide(McpSessionRegistry.layer));
+      const layerEnvironment = Layer.mock(ServerEnvironment.ServerEnvironment)({
+        getEnvironmentId: Effect.succeed("environment-voice" as never),
+      });
+      const registry = Context.get(
+        yield* Layer.build(McpSessionRegistry.layer.pipe(Layer.provide(layerEnvironment))),
+        McpSessionRegistry.McpSessionRegistry,
+      );
+      const routes = McpHttpServer.layer.pipe(
+        Layer.provide(Layer.succeed(McpSessionRegistry.McpSessionRegistry, registry)),
+      );
       yield* HttpRouter.serve(routes, { disableListenLog: true, disableLogger: true }).pipe(
-        Layer.provide(
-          Layer.mock(ServerEnvironment.ServerEnvironment)({
-            getEnvironmentId: Effect.succeed("environment-voice" as never),
-          }),
-        ),
+        Layer.provide(layerEnvironment),
         Layer.provide(PreviewAutomationBroker.layer),
         Layer.provide(PreviewBrowser.layer),
         Layer.provide(Layer.merge(StubServicesLive, voiceStub)),
@@ -154,7 +163,7 @@ it.effect("voice_reply exists only for credentials with the voice capability", (
         new Set<McpCapability>(["voice", "device"]),
         new Set<McpCapability>(["voice", "preview", "device"]),
       ]) {
-        const session = yield* mcpSession(capabilities);
+        const session = yield* mcpSession(registry, capabilities);
         expect(toolNames(yield* session.call(2, "tools/list", {})), session.path).toContain(
           "voice_reply",
         );
@@ -165,7 +174,7 @@ it.effect("voice_reply exists only for credentials with the voice capability", (
         new Set<McpCapability>(["device"]),
         new Set<McpCapability>(["preview", "device"]),
       ]) {
-        const session = yield* mcpSession(capabilities);
+        const session = yield* mcpSession(registry, capabilities);
         const names = toolNames(yield* session.call(2, "tools/list", {}));
         expect(names, session.path).not.toContain("voice_reply");
         // Fork toolkits that need no extra capability ride on every island.
@@ -181,7 +190,7 @@ it.effect("voice_reply exists only for credentials with the voice capability", (
       }
 
       // The call stages for the credential's own thread.
-      const voice = yield* mcpSession(new Set<McpCapability>(["voice"]));
+      const voice = yield* mcpSession(registry, new Set<McpCapability>(["voice"]));
       const result = yield* voice.call(3, "tools/call", {
         name: "voice_reply",
         arguments: { script: "Hello." },

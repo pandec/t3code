@@ -7,7 +7,7 @@ import type { HomeListFilterMenu } from "../home/home-list-filter-menu";
 import { sfSymbolIcon, toNativeHeaderMenuItems } from "../layout/native-filter-menu-items";
 import { withNativeGlassHeaderItem } from "../layout/native-glass-header-items";
 
-export function createSidebarFilterHeaderItem(input: {
+function createSidebarFilterHeaderItem(input: {
   readonly filterIcon: string;
   readonly filterMenu: HomeListFilterMenu;
 }): NativeStackHeaderItemMenu {

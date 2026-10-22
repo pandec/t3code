@@ -11,6 +11,7 @@ import {
   holdEditingQueuedMessage,
   releaseEditingQueuedMessage,
 } from "../../state/use-thread-outbox";
+import { withThreadDismissal } from "./thread-dismissal";
 
 export function usePendingTaskListActions(): {
   readonly openPendingTask: (pendingTask: PendingNewTask) => void;
@@ -42,10 +43,15 @@ export function usePendingTaskListActions(): {
           text: "Discard",
           style: "destructive",
           onPress: () => {
-            clearComposerDraftContent(pendingTask.draftKey, {
-              clearModelSelection: true,
-              clearWorkspaceSelection: true,
-            });
+            void withThreadDismissal(
+              pendingTask.key,
+              async () =>
+                clearComposerDraftContent(pendingTask.draftKey, {
+                  clearModelSelection: true,
+                  clearWorkspaceSelection: true,
+                }),
+              () => true,
+            );
           },
         },
       ]);
@@ -70,14 +76,23 @@ export function usePendingTaskListActions(): {
           style: "destructive",
           onPress: () => {
             deleting = true;
-            // Release the edit lock only after removal succeeds, and only if
-            // it is held for THIS task — clearing it up front (or for another
-            // task) would let the drain deliver a mid-edit payload.
-            void removeThreadOutboxMessage(pendingTask.message)
-              .then(() => releaseEditingQueuedMessage(messageId))
+            // The row animates out before removal runs; the confirmation hold
+            // keeps a reconnect from sending the task meanwhile. A task open in
+            // the editor is removed at once, since the editor could release the
+            // shared hold mid-animation; it keeps its hold unless removal succeeds.
+            const remove = () => removeThreadOutboxMessage(pendingTask.message);
+            const restoreHold = () => {
+              deleting = false;
+              releaseConfirmationHold();
+            };
+            void (
+              heldForConfirmation
+                ? withThreadDismissal(pendingTask.key, remove, (removed) => removed)
+                : remove()
+            )
+              .then((removed) => (removed ? releaseEditingQueuedMessage(messageId) : restoreHold()))
               .catch((error) => {
-                deleting = false;
-                releaseConfirmationHold();
+                restoreHold();
                 Dialog.alert(
                   "Could not delete pending task",
                   error instanceof Error ? error.message : "The pending task could not be removed.",

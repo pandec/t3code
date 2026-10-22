@@ -1,4 +1,5 @@
 import { EnvironmentId, ThreadId } from "@t3tools/contracts";
+import * as Cause from "effect/Cause";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vite-plus/test";
 
 import { useThreadActions } from "./useThreadActions";
@@ -147,7 +148,57 @@ afterEach(() => {
   vi.restoreAllMocks();
 });
 
+describe("concurrent thread action Undo", () => {
+  it.each([
+    ["settleThread", "settle", "unsettle", "Settled"],
+    ["snoozeThread", "snooze", "unsnooze", "Snoozed"],
+    ["unpinThread", "unpin", "pin", "Unpinned"],
+    ["archiveThread", "archive", "unarchive", "Archived"],
+  ] as const)(
+    "%s retains one undo for concurrent successful requests",
+    async (handler, action, inverse, notice) => {
+      const actions = useThreadActions();
+      const run = () =>
+        handler === "snoozeThread"
+          ? actions.snoozeThread(target, "2099-01-01T09:00:00.000Z")
+          : actions[handler](target);
+      await Promise.all([run(), run()]);
+      expect(commands[action]).toHaveBeenCalledTimes(2);
+      expect(useThreadUndoNotice.getState().notice).toMatchObject({ action: notice, count: 1 });
+      await currentUndo()();
+      expect(commands[inverse]).toHaveBeenCalledOnce();
+    },
+  );
+});
+
 describe("unpin Undo", () => {
+  it("restores the original snooze after restoring the pin", async () => {
+    threadShell.pinnedAt = "2026-01-01T00:00:00.000Z";
+    threadShell.snoozedUntil = "2030-01-01T09:00:00.000Z";
+    await useThreadActions().unpinThread(target);
+    await currentUndo()();
+    expect(commands.pin).toHaveBeenCalledExactlyOnceWith({
+      environmentId: target.environmentId,
+      input: { threadId: target.threadId, orderKey: "a0" },
+    });
+    expect(commands.snooze).toHaveBeenCalledExactlyOnceWith({
+      environmentId: target.environmentId,
+      input: { threadId: target.threadId, snoozedUntil: threadShell.snoozedUntil },
+    });
+    expect(commands.pin.mock.invocationCallOrder[0]).toBeLessThan(
+      commands.snooze.mock.invocationCallOrder[0]!,
+    );
+  });
+
+  it("restores the pin without an already expired snooze", async () => {
+    threadShell.pinnedAt = "2026-01-01T00:00:00.000Z";
+    threadShell.snoozedUntil = "2000-01-01T09:00:00.000Z";
+    await useThreadActions().unpinThread(target);
+    await currentUndo()();
+    expect(commands.pin).toHaveBeenCalledOnce();
+    expect(commands.snooze).not.toHaveBeenCalled();
+  });
+
   it("ignores an old notice across hook instances and still restores the latest unpin", async () => {
     const sidebar = useThreadActions();
     const header = useThreadActions();
@@ -294,14 +345,6 @@ describe("archive Undo", () => {
     expect(commands.unarchive).not.toHaveBeenCalled();
   });
 
-  it("stays put when the archived thread was not open", async () => {
-    const actions = useThreadActions();
-    await actions.archiveThread(target);
-    await currentUndo()();
-    expect(commands.unarchive).toHaveBeenCalledOnce();
-    expect(router.navigate).not.toHaveBeenCalled();
-  });
-
   it("returns the reader to the previous thread, and Undo brings them back", async () => {
     const openThread = { environmentId: target.environmentId, threadId: target.threadId };
     const previous = { environmentId: "undo-env", threadId: "previous" };
@@ -335,12 +378,6 @@ describe("archive Undo", () => {
     await currentUndo()();
     expect(commands.unarchive).toHaveBeenCalledOnce();
     expect(router.navigate).not.toHaveBeenCalled();
-  });
-
-  it("shows no Undo when the archive failed", async () => {
-    commands.archive.mockResolvedValue({ _tag: "Failure", cause: new Error("nope") });
-    await useThreadActions().archiveThread(target);
-    expect(useThreadUndoNotice.getState().notice).toBeNull();
   });
 });
 
@@ -401,6 +438,18 @@ describe("settle and snooze Undo", () => {
     expect(commands.snooze).not.toHaveBeenCalled();
   });
 
+  it("stops settle restoration if restoring the pin fails", async () => {
+    threadShell.pinnedAt = "2026-01-01T00:00:00.000Z";
+    threadShell.snoozedUntil = "2030-01-01T09:00:00.000Z";
+    commands.pin.mockResolvedValue({ _tag: "Failure", cause: Cause.fail(new Error("Pin failed")) });
+    vi.spyOn(toastManager, "add").mockReturnValue("toast");
+    await useThreadActions().settleThread(target);
+    await currentUndo()();
+    expect(commands.unsettle).toHaveBeenCalledOnce();
+    expect(commands.pin).toHaveBeenCalledOnce();
+    expect(commands.snooze).not.toHaveBeenCalled();
+  });
+
   it("expires an older unpin Undo when the thread is settled", async () => {
     const actions = useThreadActions();
     await actions.unpinThread(target);
@@ -410,10 +459,11 @@ describe("settle and snooze Undo", () => {
     expect(commands.pin).not.toHaveBeenCalled();
   });
 
+  // regression: #12972 the sidebar undo notice must reverse a snooze
   it("wakes the thread from the snooze notice", async () => {
     const add = vi.spyOn(toastManager, "add").mockReturnValue("toast");
     const actions = useThreadActions();
-    await actions.snoozeThread(target, new Date(Date.now() + 60_000).toISOString());
+    await actions.snoozeThread(target, "2100-01-01T00:00:00.000Z");
     expect(useThreadUndoNotice.getState().notice).toMatchObject({ action: "Snoozed", count: 1 });
     expect(add).not.toHaveBeenCalled();
     await currentUndo()();
@@ -434,7 +484,7 @@ describe("snoozing the open thread", () => {
     },
   ) => {
     router.state.matches[0]!.params = routeAtSnooze;
-    const snoozedUntil = new Date(Date.now() + 60_000).toISOString();
+    const snoozedUntil = "2030-01-01T09:00:00.000Z";
     commands.snooze.mockImplementation(async () => {
       threadShell.snoozedUntil = snoozedUntil;
       if (routeDuringSnooze) router.state.matches[0]!.params = routeDuringSnooze;

@@ -1,4 +1,5 @@
 import * as Schema from "effect/Schema";
+import * as Effect from "effect/Effect";
 import * as HttpServerRespondable from "effect/http/HttpServerRespondable";
 import * as HttpServerResponse from "effect/http/HttpServerResponse";
 
@@ -537,6 +538,7 @@ export type PullRequestInvalidateInput = typeof PullRequestInvalidateInput.Type;
 export const PullRequestReportStateInput = Schema.Struct({
   reference: PullRequestRef,
   state: PullRequestState,
+  isDraft: Schema.optional(Schema.Boolean),
 });
 export type PullRequestReportStateInput = typeof PullRequestReportStateInput.Type;
 
@@ -698,6 +700,10 @@ export const PullRequestChangeBreakdown = Schema.NullOr(
     tests: PullRequestLineCount,
     mocks: PullRequestLineCount,
     generated: PullRequestLineCount,
+    // Servers from before the docs split send no key; their docs lines sit in `code`.
+    docs: PullRequestLineCount.pipe(
+      Schema.withDecodingDefault(Effect.succeed({ additions: 0, deletions: 0 })),
+    ),
   }),
 );
 export type PullRequestChangeBreakdown = typeof PullRequestChangeBreakdown.Type;

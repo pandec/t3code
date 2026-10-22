@@ -1,3 +1,4 @@
+import { ThreadUndoNotice } from "./ThreadUndoNotice";
 import { Toolbar } from "../../components/ui/Toolbar";
 import { use } from "react";
 import { NativePrimaryColumnContext } from "../../native/v5-workspace-context";
@@ -231,7 +232,6 @@ export function HomeRouteScreen() {
           />
         )}
         <HomeHeader
-          usesWorkspaceToolbar={workspace !== null}
           environments={environments}
           projects={projectFilterOptions}
           searchQuery={searchQuery}
@@ -327,6 +327,7 @@ export function HomeRouteScreen() {
           selectedProjectKey={selectedProjectKey}
           threads={threads}
         />
+        <ThreadUndoNotice visible={visible} />
       </>
     </AndroidHomeFabLayout>
   );

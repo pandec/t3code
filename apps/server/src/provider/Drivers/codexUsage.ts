@@ -80,7 +80,8 @@ export const CodexScanState = Schema.Struct({
   forkCopyAnchorMs: Schema.mutableKey(Schema.Finite),
   /**
    * Well-formed `token_count` lines this scan chose not to count: duplicate
-   * re-emissions, stale cumulative counters, context-window fills, fork copies,
+   * re-emissions, stale cumulative counters, zero-component context-size
+   * markers (context-window fills, post-compaction totals), fork copies,
    * and events arriving before their model. The reader cannot tell these from
    * a parse failure, since both yield no record, and reporting them as
    * malformed would raise "usage is incomplete" on transcripts that are in fact
@@ -235,13 +236,9 @@ function parseCodexRecord(parsed: unknown, state: CodexScanState): UsageRecord |
     return null;
   }
 
-  // fill_to_context_window uses zero components and synthetic totals, then offsets future totals.
-  if (
-    cumulative !== null &&
-    last.input_tokens + last.output_tokens === 0 &&
-    cumulative.input_tokens + cumulative.output_tokens === 0 &&
-    cumulative.total_tokens === infoRecord["model_context_window"]
-  ) {
+  // Zero-component counters report context size, not a request: fill_to_context_window, or the
+  // post-compaction marker whose total is the new context size (its cumulative may reset to zero).
+  if (last.input_tokens + last.output_tokens === 0) {
     state.lastUsageSignature = null;
     state.deliberateSkips += 1;
     return null;
@@ -263,7 +260,10 @@ function parseCodexRecord(parsed: unknown, state: CodexScanState): UsageRecord |
 
   const signature = JSON.stringify(last);
   if (cumulative !== null) {
+    // A session resumed in a new Codex process restarts its cumulative counters at this request.
+    const restarted = CODEX_USAGE_FIELDS.every((key) => cumulative[key] === last[key]);
     if (
+      !restarted &&
       !CODEX_USAGE_FIELDS.every((key) => cumulative[key] - (previous?.[key] ?? 0) === last[key])
     ) {
       state.malformedRecords += 1;
@@ -299,8 +299,8 @@ function parseCodexRecord(parsed: unknown, state: CodexScanState): UsageRecord |
     reasoningTokens: last.reasoning_output_tokens,
   };
 
-  // Deliberately NOT a deliberate skip: an event that bills no tokens stays
-  // visible to the reader as malformed rather than hidden.
+  // Zero-component markers were skipped above, so a request that still bills
+  // nothing is inconsistent: not a deliberate skip, it stays visible as malformed.
   if (totalTokens(totals) === 0) return null;
 
   return {
@@ -348,7 +348,7 @@ export const codexUsageFormat: TranscriptUsageFormat<CodexScanState> = {
       thread_settings: { service_tier: true },
       forked_from_id: true,
       source: { subagent: { thread_spawn: { parent_thread_id: true } } },
-      info: { last_token_usage: true, total_token_usage: true, model_context_window: true },
+      info: { last_token_usage: true, total_token_usage: true },
     },
   },
   // `turn_context`, `thread_settings_applied` and `session_meta` lines hold no
@@ -360,8 +360,8 @@ export const codexUsageFormat: TranscriptUsageFormat<CodexScanState> = {
   readMalformedRecords: (state) => state.malformedRecords,
   // A rollout that moved after it was read leaves a copy in both places.
   sharedSessionsAcrossFiles: true,
-  // Fork copies, duplicate or stale counters, context-window fills, and
-  // pre-model events are deliberate reducer skips, not malformed usage records.
+  // Fork copies, duplicate or stale counters, zero-component context-size
+  // markers, and pre-model events are deliberate reducer skips, not malformed usage records.
   malformed: {
     carriesUsage: (text) => text.includes('"token_count"'),
     deliberateSkips: (state) => state.deliberateSkips,

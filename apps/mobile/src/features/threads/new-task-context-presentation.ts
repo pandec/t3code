@@ -1,7 +1,34 @@
 import { sanitizeNewRefName } from "@t3tools/shared/git";
 import { parseChangeRequestUrl } from "@t3tools/shared/changeRequestUrl";
+import { resolveSendEnvMode } from "@t3tools/shared/projectSettings";
+import type { ComposerDraftWorkspaceSelection } from "../../state/use-composer-drafts";
 
 type WorkspaceMode = "local" | "worktree";
+
+type ResolvedWorkspaceSelection = ComposerDraftWorkspaceSelection & {
+  readonly mode: WorkspaceMode;
+};
+
+function hasWorkspaceMode(
+  selection: ComposerDraftWorkspaceSelection,
+): selection is ResolvedWorkspaceSelection {
+  return selection.mode !== undefined;
+}
+
+export function resolveNewTaskWorkspaceSelection(input: {
+  readonly selection: ComposerDraftWorkspaceSelection | undefined;
+  readonly fallback: ResolvedWorkspaceSelection;
+  readonly isGitRepo: boolean;
+}): ResolvedWorkspaceSelection {
+  const selection = input.selection ?? input.fallback;
+  // A draft without an explicit mode follows the resolved project default.
+  const requestedEnvMode = selection.mode ?? input.fallback.mode;
+  if (!input.isGitRepo) {
+    const mode = resolveSendEnvMode({ requestedEnvMode, isGitRepo: false });
+    return { mode, branch: null, worktreePath: null };
+  }
+  return hasWorkspaceMode(selection) ? selection : { ...selection, mode: requestedEnvMode };
+}
 
 export function resolveNewTaskWorkspaceLabel(input: {
   readonly workspaceMode: WorkspaceMode;

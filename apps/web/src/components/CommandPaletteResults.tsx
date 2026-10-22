@@ -4,6 +4,7 @@ import { LegendList, type LegendListRef } from "@legendapp/list/react";
 import { ChevronRightIcon } from "lucide-react";
 import { type ReactNode, type RefObject, useState } from "react";
 import { cn } from "~/lib/utils";
+import { textDirection } from "~/textDirection";
 import { shortcutLabelForCommand } from "../keybindings";
 import { projectAccentTintStyle } from "../projectAccentTint";
 import {
@@ -161,6 +162,14 @@ export function CommandPaletteTitleIcon(props: { children: ReactNode }) {
   return <span className="flex h-5 shrink-0 items-center self-start pt-0.5">{props.children}</span>;
 }
 
+function CommandPaletteTitle({ title }: { title: ReactNode }) {
+  return (
+    <span className="truncate" dir={typeof title === "string" ? textDirection(title) : undefined}>
+      {title}
+    </span>
+  );
+}
+
 function DisabledCommandPaletteResultRow(props: {
   item: CommandPaletteActionItem | CommandPaletteSubmenuItem;
 }) {
@@ -171,7 +180,7 @@ function DisabledCommandPaletteResultRow(props: {
         <span className="flex min-w-0 flex-1 flex-col">
           <span className="flex min-w-0 items-center gap-1.5 text-sm text-foreground">
             {props.item.titleLeadingContent}
-            <span className="truncate">{props.item.title}</span>
+            <CommandPaletteTitle title={props.item.title} />
           </span>
           {props.item.threadContentMatch ? (
             <ThreadSearchMatchExcerpt match={props.item.threadContentMatch} />
@@ -185,7 +194,7 @@ function DisabledCommandPaletteResultRow(props: {
       ) : (
         <span className="flex min-w-0 flex-1 items-center gap-1.5 text-sm text-foreground">
           {props.item.titleLeadingContent}
-          <span className="truncate">{props.item.title}</span>
+          <CommandPaletteTitle title={props.item.title} />
         </span>
       )}
       {props.item.titleTrailingContent}
@@ -226,7 +235,7 @@ function CommandPaletteResultRow(props: {
         <span className="flex min-w-0 flex-1 flex-col">
           <span className="flex min-w-0 items-center gap-1.5 text-sm text-foreground">
             {props.item.titleLeadingContent}
-            <span className="truncate">{props.item.title}</span>
+            <CommandPaletteTitle title={props.item.title} />
           </span>
           {props.item.threadContentMatch ? (
             <ThreadSearchMatchExcerpt match={props.item.threadContentMatch} />
@@ -240,7 +249,7 @@ function CommandPaletteResultRow(props: {
       ) : (
         <span className="flex min-w-0 flex-1 items-center gap-1.5 text-sm text-foreground">
           {props.item.titleLeadingContent}
-          <span className="truncate">{props.item.title}</span>
+          <CommandPaletteTitle title={props.item.title} />
         </span>
       )}
       {props.item.titleTrailingContent}

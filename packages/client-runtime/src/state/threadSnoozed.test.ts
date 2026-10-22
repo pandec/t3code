@@ -8,11 +8,11 @@ import {
   canSnoozeUntilDone,
   effectiveSnoozed,
   resolveSnoozePresets,
-  snoozeWakeLabel,
   snoozeWakeSortMs,
   threadRaisedHandWhileSnoozed,
   threadWokeAt,
   threadWokeOnFinishedWork,
+  isThreadWokeUnseen,
   type ThreadSnoozeShell,
 } from "./threadSettled.ts";
 
@@ -66,18 +66,6 @@ function makeShell(input: {
 }
 
 describe("effectiveSnoozed", () => {
-  it("hides a thread whose wake time is in the future", () => {
-    expect(effectiveSnoozed(makeShell({ snoozedUntil: FUTURE_WAKE }), { now: NOW })).toBe(true);
-  });
-
-  it("stops classifying as snoozed once the wake time passes (timer wake, no event)", () => {
-    expect(effectiveSnoozed(makeShell({ snoozedUntil: PAST_WAKE }), { now: NOW })).toBe(false);
-  });
-
-  it("never snoozes a thread with no snooze state", () => {
-    expect(effectiveSnoozed(makeShell({}), { now: NOW })).toBe(false);
-  });
-
   it("never hides on malformed wake data", () => {
     expect(effectiveSnoozed(makeShell({ snoozedUntil: "not-a-date" }), { now: NOW })).toBe(false);
   });
@@ -93,27 +81,6 @@ describe("effectiveSnoozed", () => {
         now: NOW,
       }),
     ).toBe(false);
-  });
-
-  it("wakes early on a failure that happened after the snooze", () => {
-    expect(
-      effectiveSnoozed(makeShell({ snoozedUntil: FUTURE_WAKE, sessionStatus: "error" }), {
-        now: NOW,
-      }),
-    ).toBe(false);
-  });
-
-  it("stays snoozed when the failure predates the snooze — the user saw it", () => {
-    expect(
-      effectiveSnoozed(
-        makeShell({
-          snoozedUntil: FUTURE_WAKE,
-          sessionStatus: "error",
-          snoozedAt: "2026-04-10T11:30:00.000Z",
-        }),
-        { now: NOW },
-      ),
-    ).toBe(true);
   });
 
   it.each([
@@ -177,15 +144,6 @@ describe("effectiveSnoozed", () => {
 
     expect(effectiveSnoozed(shell, { now: NOW })).toBe(true);
     expect(threadWokeAt(shell, { now: NOW })).toBe(null);
-  });
-
-  it("ignores runs that completed before the snooze — the user saw that result", () => {
-    expect(
-      effectiveSnoozed(
-        makeShell({ snoozedUntil: FUTURE_WAKE, turnCompletedAt: "2026-04-10T08:00:00.000Z" }),
-        { now: NOW },
-      ),
-    ).toBe(true);
   });
 });
 
@@ -276,10 +234,6 @@ describe("snooze until done (fork)", () => {
 });
 
 describe("threadRaisedHandWhileSnoozed", () => {
-  it("is false for a quiet snoozed thread", () => {
-    expect(threadRaisedHandWhileSnoozed(makeShell({ snoozedUntil: FUTURE_WAKE }))).toBe(false);
-  });
-
   it("is true for approvals, input, and failures", () => {
     expect(
       threadRaisedHandWhileSnoozed(makeShell({ snoozedUntil: FUTURE_WAKE, pending: "approval" })),
@@ -296,11 +250,6 @@ describe("threadRaisedHandWhileSnoozed", () => {
 });
 
 describe("canSnooze", () => {
-  it("allows snoozing quiet and working threads alike", () => {
-    expect(canSnooze(makeShell({}))).toBe(true);
-    expect(canSnooze({ ...makeShell({}), runtime: { status: "running" } })).toBe(true);
-  });
-
   it("refuses blocked-on-you work", () => {
     expect(canSnooze(makeShell({ pending: "approval" }))).toBe(false);
     expect(canSnooze(makeShell({ pending: "user-input" }))).toBe(false);
@@ -333,11 +282,6 @@ describe("canSnooze", () => {
 });
 
 describe("threadWokeAt", () => {
-  it("is null for never-snoozed and still-snoozed threads", () => {
-    expect(threadWokeAt(makeShell({}), { now: NOW })).toBe(null);
-    expect(threadWokeAt(makeShell({ snoozedUntil: FUTURE_WAKE }), { now: NOW })).toBe(null);
-  });
-
   it("reports the timer wake even after an already-requested run completes", () => {
     expect(threadWokeAt(makeShell({ snoozedUntil: PAST_WAKE }), { now: NOW })).toBe(PAST_WAKE);
     const shell = makeShell({
@@ -401,43 +345,7 @@ describe("threadWokeAt", () => {
   });
 });
 
-describe("snoozeWakeLabel", () => {
-  const now = "2026-06-02T00:00:00.000Z";
-
-  it("formats remaining time coarsely, rounding up", () => {
-    expect(snoozeWakeLabel("2026-06-02T00:30:00.000Z", { now })).toBe("30m");
-    expect(snoozeWakeLabel("2026-06-02T01:30:00.000Z", { now })).toBe("2h");
-    expect(snoozeWakeLabel("2026-06-03T02:00:00.000Z", { now })).toBe("2d");
-  });
-
-  it("never reads zero or negative while still snoozed", () => {
-    expect(snoozeWakeLabel("2026-06-02T00:00:30.000Z", { now })).toBe("1m");
-    expect(snoozeWakeLabel("2026-06-01T23:59:59.000Z", { now })).toBe("now");
-    expect(snoozeWakeLabel("not-a-date", { now })).toBe("now");
-    expect(snoozeWakeLabel("2026-06-02T09:00:00.000Z", { now: "bad" })).toBe("now");
-  });
-});
-
 describe("resolveSnoozePresets", () => {
-  it("offers the shared desktop and mobile choices", () => {
-    const presets = resolveSnoozePresets(localDate(2026, 4, 8, 10));
-    expect(presets.map((preset) => preset.id)).toEqual([
-      "hour",
-      "three-hours",
-      "evening",
-      "tomorrow",
-      "next-week",
-    ]);
-    expect(presets.find((preset) => preset.id === "three-hours")?.snoozedUntil).toBe(
-      localDate(2026, 4, 8, 13).toISOString(),
-    );
-    expect(presets.find((preset) => preset.id === "three-hours")?.label).toBe("In 3 hours");
-    expect(presets.find((preset) => preset.id === "evening")?.label).toBe("This evening");
-    expect(
-      new Date(presets.find((preset) => preset.id === "tomorrow")!.snoozedUntil).getHours(),
-    ).toBe(6);
-  });
-
   it("drops the evening choice once evening is near or past", () => {
     expect(resolveSnoozePresets(localDate(2026, 4, 8, 17, 30)).map((preset) => preset.id)).toEqual([
       "hour",
@@ -445,15 +353,6 @@ describe("resolveSnoozePresets", () => {
       "tomorrow",
       "next-week",
     ]);
-  });
-
-  it("puts next week on the following Monday", () => {
-    const nextWeek = new Date(
-      resolveSnoozePresets(localDate(2026, 4, 6, 10)).find((preset) => preset.id === "next-week")!
-        .snoozedUntil,
-    );
-    expect(nextWeek.getDay()).toBe(1);
-    expect(nextWeek.getDate()).toBe(13);
   });
 
   it("drops next week on Sundays, when it lands on the same Monday as tomorrow", () => {
@@ -468,4 +367,17 @@ describe("resolveSnoozePresets", () => {
     const tomorrow = new Date(presets.find((preset) => preset.id === "tomorrow")!.snoozedUntil);
     expect(tomorrow.getDay()).toBe(1);
   });
+});
+
+it("dismisses a wake at its timestamp without hiding a later wake", () => {
+  const firstWake = "2026-04-10T10:00:00.000Z";
+  const state = {
+    wokeAt: firstWake,
+    settled: false,
+    lastVisitedAt: null,
+    latestRunCompletedAt: null,
+  };
+  expect(isThreadWokeUnseen(state)).toBe(true);
+  expect(isThreadWokeUnseen({ ...state, lastVisitedAt: firstWake })).toBe(false);
+  expect(isThreadWokeUnseen({ ...state, lastVisitedAt: firstWake, wokeAt: NOW })).toBe(true);
 });

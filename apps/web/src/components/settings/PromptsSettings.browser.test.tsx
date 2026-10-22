@@ -1,8 +1,9 @@
 import type { SavedPrompt } from "@t3tools/contracts/settings";
-import { act, type ReactNode } from "react";
-import { createRoot, type Root } from "react-dom/client";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vite-plus/test";
+import type { ReactNode } from "react";
+import { describe, expect, it, vi } from "vite-plus/test";
 import { userEvent } from "vite-plus/test/browser";
+
+import { act, render } from "../../../test/render";
 
 import type { SavedPrompts } from "~/hooks/useSavedPrompts";
 
@@ -12,7 +13,7 @@ vi.mock(import("~/hooks/useSavedPrompts"), () => ({
   useSavedPrompts: () => savedPrompts.current!,
 }));
 
-// The real page container needs a router; this suite is about the prompt rows and editor.
+// This suite is about the prompt rows and editor, not the page chrome.
 vi.mock(import("./settingsLayout"), async (original) => ({
   ...(await original()),
   SettingsPageContainer: (({ children }: { children: ReactNode }) => children) as never,
@@ -26,28 +27,15 @@ const multilinePrompt: SavedPrompt = {
   content: "First line of the prompt\nsecond line with more detail\n\nfourth line",
 };
 
-let root: Root;
-let container: HTMLDivElement;
-
-beforeEach(() => {
-  vi.stubGlobal("IS_REACT_ACT_ENVIRONMENT", true);
-  container = document.createElement("div");
-  document.body.append(container);
-  root = createRoot(container);
-});
-
-afterEach(async () => {
-  await act(async () => root.unmount());
-  container.remove();
-  savedPrompts.current = null;
-  vi.unstubAllGlobals();
-});
+function setup(prompts: SavedPrompts | null = null) {
+  savedPrompts.current = prompts;
+}
 
 const button = (label: string) =>
-  container.querySelector<HTMLButtonElement>(`button[aria-label="${label}"]`);
-const chevron = () => container.querySelector<HTMLButtonElement>("button[aria-expanded]")!;
+  document.querySelector<HTMLButtonElement>(`button[aria-label="${label}"]`);
+const chevron = () => document.querySelector<HTMLButtonElement>("button[aria-expanded]")!;
 const preview = () =>
-  [...container.querySelectorAll("span")].find(
+  [...document.querySelectorAll("span")].find(
     (element) => element.textContent === "First line of the prompt",
   );
 
@@ -59,16 +47,15 @@ async function clickText(text: string) {
   await act(async () => target.click());
 }
 
-async function renderRow(canEdit: boolean, onEdit = vi.fn()) {
-  await act(async () =>
-    root.render(<SavedPromptRow prompt={multilinePrompt} canEdit={canEdit} onEdit={onEdit} />),
-  );
-  return onEdit;
+function renderRow(canEdit: boolean, onEdit = vi.fn()) {
+  setup();
+  return render(<SavedPromptRow prompt={multilinePrompt} canEdit={canEdit} onEdit={onEdit} />);
 }
 
 describe("SavedPromptRow", () => {
   it("starts collapsed and expands in place to the exact multiline content", async () => {
-    const onEdit = await renderRow(true);
+    const onEdit = vi.fn();
+    await using _screen = await renderRow(true, onEdit);
 
     expect(chevron().getAttribute("aria-expanded")).toBe("false");
     expect(chevron().getAttribute("aria-label")).toBe("Expand Review checklist");
@@ -94,14 +81,15 @@ describe("SavedPromptRow", () => {
   });
 
   it("renders the chevron immediately before Edit, with Edit last", async () => {
-    await renderRow(true);
+    await using _screen = await renderRow(true);
     const edit = button(`Edit ${multilinePrompt.title}`)!;
     expect(chevron().nextElementSibling).toBe(edit);
     expect(edit.nextElementSibling).toBeNull();
   });
 
   it("keeps expansion enabled while Edit is disabled in read-only mode", async () => {
-    const onEdit = await renderRow(false);
+    const onEdit = vi.fn();
+    await using _screen = await renderRow(false, onEdit);
     expect(button(`Edit ${multilinePrompt.title}`)!.disabled).toBe(true);
     expect(chevron().disabled).toBe(false);
 
@@ -115,13 +103,13 @@ describe("PromptsSettings", () => {
   it("renders one row per prompt and Edit opens the editor filled with that prompt", async () => {
     const second: SavedPrompt = { id: "prompt-2", title: "Second", content: "Body" };
     const saveAll = vi.fn();
-    savedPrompts.current = {
+    setup({
       prompts: [multilinePrompt, second],
       hasConnectedEnvironment: true,
       canEdit: true,
       saveAll,
-    };
-    await act(async () => root.render(<PromptsSettings />));
+    });
+    await using _screen = await render(<PromptsSettings />);
 
     expect(button("Edit Review checklist")).not.toBeNull();
     expect(button("Edit Second")).not.toBeNull();

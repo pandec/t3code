@@ -120,24 +120,6 @@ export function useThreadHeaderOptions(props: {
     [navigation],
   );
 
-  const duoRightHeaderItems = useMemo<NativeHeaderItems>(
-    () => [
-      ...threadCenterHeaderItems,
-      ...forkHeaderItems,
-      { type: "spacing", spacing: 8 },
-      withNativeGlassHeaderItem({
-        type: "button" as const,
-        axisBehavior: "verticalPreferred",
-        identifier: "thread-right-new-task",
-        label: "New task",
-        accessibilityLabel: "New task",
-        icon: { name: "square.and.pencil", type: "sfSymbol" as const },
-        onPress: () => navigation.navigate("NewTaskSheet", { screen: "NewTask" }),
-      }),
-    ],
-    [navigation, threadCenterHeaderItems, forkHeaderItems],
-  );
-
   const options: AppNativeStackNavigationOptions = {
     headerShown: true,
     headerTitle: props.title,
@@ -154,13 +136,11 @@ export function useThreadHeaderOptions(props: {
       : canGoBack
         ? undefined
         : () => compactHomeHeaderItems,
+    // The workspace navigator adds compose to the Duo detail column's bar.
     unstable_headerRightItems: () =>
-      usesDuoHeader
-        ? duoRightHeaderItems
-        : [
-            ...(layout.usesSplitView ? threadCenterHeaderItems : compactRightHeaderItems),
-            ...forkHeaderItems,
-          ],
+      usesDuoHeader || layout.usesSplitView
+        ? [...threadCenterHeaderItems, ...forkHeaderItems]
+        : [...compactRightHeaderItems, ...forkHeaderItems],
     unstable_headerToolbarItems: () => [],
     unstable_headerSubtitle: props.usesNativeHeaderGlass ? props.subtitle : undefined,
     contentStyle: undefined,
@@ -176,7 +156,6 @@ export function useThreadHeaderOptions(props: {
       splitLeftHeaderItems,
       threadCenterHeaderItems,
       compactRightHeaderItems,
-      duoRightHeaderItems,
       usesDuoHeader,
       // Fork: the fork action comes and goes with the thread's forkability.
       forkHeaderItems,

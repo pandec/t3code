@@ -6,7 +6,10 @@ public enum UIBackgroundFetchResult {
   case noData
 }
 
-// UNNotificationPresentationOptions comes from NotificationCenterManagerRegression.h.
+public struct UNNotificationPresentationOptions: OptionSet {
+  public let rawValue: Int
+  public init(rawValue: Int) { self.rawValue = rawValue }
+}
 
 public final class UNNotification: NSObject {}
 
@@ -15,22 +18,7 @@ public final class UNNotificationResponse: NSObject {
   init(_ identifier: String) { self.identifier = identifier }
 }
 
-@objc public protocol UNUserNotificationCenterDelegate: NSObjectProtocol {
-  @objc optional func userNotificationCenter(
-    _ center: UNUserNotificationCenter,
-    willPresent notification: UNNotification,
-    withCompletionHandler completionHandler: @escaping (UNNotificationPresentationOptions) -> Void
-  )
-  @objc optional func userNotificationCenter(
-    _ center: UNUserNotificationCenter,
-    didReceive response: UNNotificationResponse,
-    withCompletionHandler completionHandler: @escaping () -> Void
-  )
-  @objc optional func userNotificationCenter(
-    _ center: UNUserNotificationCenter,
-    openSettingsFor notification: UNNotification?
-  )
-}
+public protocol UNUserNotificationCenterDelegate: AnyObject {}
 
 public final class UNUserNotificationCenter: NSObject {
   private static let instance = UNUserNotificationCenter()

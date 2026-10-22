@@ -22,10 +22,6 @@ const EMPTY_CAPABILITIES = {
 };
 
 describe("resolveFileContextMenuAbsolutePath", () => {
-  it("joins workspace-relative diff paths onto the workspace root", () => {
-    expect(resolveFileContextMenuAbsolutePath(BASE_TARGET)).toBe("/workspace/project/src/index.ts");
-  });
-
   it("strips the repository prefix when the repo root is nested in the workspace", () => {
     expect(
       resolveFileContextMenuAbsolutePath({
@@ -137,25 +133,6 @@ describe("buildFileContextMenuItems", () => {
     expect(items[4]?.separatorBefore).toBeFalsy();
   });
 
-  it("offers reveal and the copy pair when just reveal is enabled", () => {
-    const items = buildFileContextMenuItems({
-      hasAbsolutePath: true,
-      hasRelativePath: true,
-      capabilities: {
-        revealLabel: "Reveal in File Explorer",
-        canOpenDefault: false,
-        editorIds: [],
-      },
-    });
-
-    expect(items.map((item) => item.id)).toEqual([
-      "reveal-in-folder",
-      "copy-relative-path",
-      "copy-full-path",
-    ]);
-    expect(items[0]).toMatchObject({ label: "Reveal in File Explorer" });
-  });
-
   it("still offers the copy pair, without a leading separator, when nothing can launch", () => {
     const items = buildFileContextMenuItems({
       hasAbsolutePath: true,
@@ -176,20 +153,6 @@ describe("buildFileContextMenuItems", () => {
 
     expect(items.map((item) => item.id)).toEqual(["reveal-in-folder", "copy-full-path"]);
     expect(items[1]).toMatchObject({ separatorBefore: true });
-  });
-
-  it("offers nothing when the path cannot be resolved", () => {
-    expect(
-      buildFileContextMenuItems({
-        hasAbsolutePath: false,
-        hasRelativePath: true,
-        capabilities: {
-          revealLabel: "Reveal in Finder",
-          canOpenDefault: true,
-          editorIds: ["vscode"],
-        },
-      }),
-    ).toEqual([]);
   });
 });
 

@@ -9,13 +9,11 @@ import {
   snoozeWakeLabel,
   snoozeWakeSortMs,
   UNTIL_DONE_SNOOZE_LABEL,
+  threadWokeAt,
 } from "@t3tools/client-runtime/state/thread-settled";
 import type { SnoozePreset } from "@t3tools/client-runtime/state/thread-settled";
 import type { EnvironmentThreadShell } from "@t3tools/client-runtime/state/shell";
-import {
-  resolveThreadProviderStack,
-  resolveThreadWorkingStartedAt,
-} from "@t3tools/client-runtime/state/models";
+import { resolveThreadProviderStack } from "@t3tools/client-runtime/state/models";
 import { threadSearchMatchKey } from "@t3tools/client-runtime/state/thread-search";
 import {
   createInboxReturnTracker,
@@ -196,6 +194,20 @@ export function threadHasUnseenCompletion(
   return completedAtMs > lastVisitedAtMs;
 }
 
+export function resolveThreadListV2WokeAt(
+  thread: EnvironmentThreadShell,
+  options: { readonly now: string },
+): string | null {
+  // Older servers cannot persist an acknowledgement.
+  if (thread.lastVisitedAt === undefined || thread.settledOverride === "settled") return null;
+  const wokeAt = threadWokeAt(thread, options);
+  const wokeAtMs = Date.parse(wokeAt ?? "");
+  const lastVisitedAtMs = Date.parse(thread.lastVisitedAt ?? "");
+  return !Number.isNaN(wokeAtMs) && (Number.isNaN(lastVisitedAtMs) || lastVisitedAtMs < wokeAtMs)
+    ? wokeAt
+    : null;
+}
+
 export function resolveThreadListV2Status(
   thread: Pick<
     EnvironmentThreadShell,
@@ -233,19 +245,6 @@ export function resolveThreadListV2Status(
   // Fork: a command left running (a test run, a dev server) does not park the
   // runtime at idle, but the row still reads as Monitoring until it exits.
   return liveness ?? "ready";
-}
-
-/** How long a working row's current work has run, as coarse relative time
-    ("12m") that stays truthful without a per-row ticker. Null for every other
-    status, and when no valid start is known (background agents after the
-    turn ended). */
-export function resolveThreadListV2WorkingTimeLabel(
-  thread: Pick<EnvironmentThreadShell, "latestRun" | "runtime">,
-  status: ThreadListV2Status,
-): string | null {
-  if (status !== "working") return null;
-  const startedAt = resolveThreadWorkingStartedAt(thread);
-  return startedAt === null ? null : relativeTime(startedAt);
 }
 
 function parseTimestampMs(isoDate: string): number {
@@ -309,6 +308,7 @@ export interface ThreadListV2Item {
   readonly variant: "card" | "slim";
   readonly snoozed: boolean;
   readonly pinned: boolean;
+  readonly wokeAt: string | null;
   readonly isLast: boolean;
 }
 
@@ -463,6 +463,7 @@ export function threadListV2ListItemsAreEqual(
         previous.item.variant === item.item.variant &&
         previous.item.snoozed === item.item.snoozed &&
         previous.item.pinned === item.item.pinned &&
+        previous.item.wokeAt === item.item.wokeAt &&
         previous.snoozeWakeLabelText === item.snoozeWakeLabelText &&
         previous.timeLabel === item.timeLabel &&
         previous.snoozePresetMinute === item.snoozePresetMinute &&
@@ -520,22 +521,22 @@ export function threadListV2ListItemsAreEqual(
 }
 
 /** The timestamp a row renders when it shows no status label: the settle
-    stamp on settled slim rows, otherwise the latest activity. A working card
-    gets its elapsed time, drawn after the label. Blank for other
-    status-labelled cards and snoozed rows with a wake countdown — those
-    never draw a time, so their minute tick must not invalidate the cell. */
+    stamp on settled slim rows, otherwise the latest activity. Blank for
+    status-labelled or woke cards and snoozed rows with a wake countdown —
+    those never draw it, so their minute tick must not invalidate the cell. */
 function resolveThreadListV2ItemTimeLabel(
   item: ThreadListV2Item,
   showSnoozeWakeLabel: boolean,
 ): string {
   const { thread, variant, snoozed } = item;
   if (showSnoozeWakeLabel) return "";
-  if (variant === "card") {
-    const status = resolveThreadListV2Status(thread);
-    // A working card draws its elapsed time next to the label.
-    if (status === "working") return resolveThreadListV2WorkingTimeLabel(thread, status) ?? "";
-    if (status !== "ready" || threadHasUnseenCompletion(thread)) return "";
-  }
+  if (
+    variant === "card" &&
+    (resolveThreadListV2Status(thread) !== "ready" ||
+      item.wokeAt !== null ||
+      threadHasUnseenCompletion(thread))
+  )
+    return "";
   const settledTimestamp =
     variant === "slim" && !snoozed ? resolveSettledThreadTimestamp(thread) : null;
   return relativeTime(
@@ -917,6 +918,7 @@ export function buildThreadListV2Items(input: {
       variant: "card",
       snoozed: false,
       pinned: true,
+      wokeAt: resolveThreadListV2WokeAt(thread, { now }),
       isLast: false,
     });
   }
@@ -926,6 +928,7 @@ export function buildThreadListV2Items(input: {
       variant: "card",
       snoozed: false,
       pinned: false,
+      wokeAt: resolveThreadListV2WokeAt(thread, { now }),
       isLast: false,
     });
   }
@@ -936,6 +939,7 @@ export function buildThreadListV2Items(input: {
       variant: "card",
       snoozed: false,
       pinned: false,
+      wokeAt: resolveThreadListV2WokeAt(thread, { now }),
       isLast: false,
     });
   }
@@ -947,6 +951,7 @@ export function buildThreadListV2Items(input: {
       snoozed: true,
       // The pin survives a snooze: the row shows its glyph and offers Unpin.
       pinned: thread.pinnedAt != null,
+      wokeAt: null,
       isLast: false,
     });
   }
@@ -957,6 +962,7 @@ export function buildThreadListV2Items(input: {
       variant: "slim",
       snoozed: false,
       pinned: false,
+      wokeAt: null,
       isLast: false,
     });
   }

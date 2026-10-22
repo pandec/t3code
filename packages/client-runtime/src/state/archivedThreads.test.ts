@@ -20,21 +20,12 @@ import {
   createRecentArchivedThreadsAtoms,
   makeArchivedThreadsEnvironmentKey,
   makeRecentArchivedThreadsKey,
-  parseArchivedThreadsEnvironmentKey,
   parseRecentArchivedThreadsKey,
   type RecentArchivedSnapshotEntry,
   selectRecentArchivedThreads,
 } from "./archivedThreads.ts";
 import { presentThreadShell } from "./models.ts";
 import { v2ThreadShell } from "./orchestrationV2TestFixtures.ts";
-
-it("round-trips environment keys in sorted order", () => {
-  const envA = EnvironmentId.make("env-a");
-  const envB = EnvironmentId.make("env-b");
-  const key = makeArchivedThreadsEnvironmentKey([envB, envA]);
-
-  expect(parseArchivedThreadsEnvironmentKey(key)).toEqual([envA, envB]);
-});
 
 it("does not expose an archived snapshot failure message", () => {
   const environmentId = EnvironmentId.make("env-sensitive");

@@ -108,91 +108,86 @@ describe("runClaudeHistoryProcess", () => {
     );
   });
 
-  it.effect(
-    "forks and reads a transcript stored only in the pinned config directory",
-    () =>
-      Effect.scoped(
-        Effect.gen(function* () {
-          const fileSystem = yield* FileSystem.FileSystem;
-          const path = yield* Path.Path;
-          const configDir = yield* fileSystem.makeTempDirectoryScoped({
-            prefix: "t3-claude-history-config-",
-          });
-          const cwd = "/tmp/t3-claude-history-project";
-          const projectDir = path.join(configDir, "projects", cwd.replace(/[^a-zA-Z0-9]/g, "-"));
-          yield* fileSystem.makeDirectory(projectDir, { recursive: true });
-          const sessionId = "11111111-1111-4111-8111-111111111111";
-          const userId = "22222222-2222-4222-8222-222222222221";
-          const assistantId = "22222222-2222-4222-8222-222222222222";
-          const base = {
-            sessionId,
-            cwd,
-            isSidechain: false,
-            userType: "external",
-            version: "2.1.0",
-            timestamp: "2026-10-04T00:00:00.000Z",
-          };
-          yield* fileSystem.writeFileString(
-            path.join(projectDir, `${sessionId}.jsonl`),
-            [
-              {
-                ...base,
-                type: "user",
-                uuid: userId,
-                parentUuid: null,
-                message: { role: "user", content: "hello" },
+  it.effect("forks and reads a transcript stored only in the pinned config directory", () =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        const fileSystem = yield* FileSystem.FileSystem;
+        const path = yield* Path.Path;
+        const configDir = yield* fileSystem.makeTempDirectoryScoped({
+          prefix: "t3-claude-history-config-",
+        });
+        const cwd = "/tmp/t3-claude-history-project";
+        const projectDir = path.join(configDir, "projects", cwd.replace(/[^a-zA-Z0-9]/g, "-"));
+        yield* fileSystem.makeDirectory(projectDir, { recursive: true });
+        const sessionId = "11111111-1111-4111-8111-111111111111";
+        const userId = "22222222-2222-4222-8222-222222222221";
+        const assistantId = "22222222-2222-4222-8222-222222222222";
+        const base = {
+          sessionId,
+          cwd,
+          isSidechain: false,
+          userType: "external",
+          version: "2.1.0",
+          timestamp: "2026-10-04T00:00:00.000Z",
+        };
+        yield* fileSystem.writeFileString(
+          path.join(projectDir, `${sessionId}.jsonl`),
+          [
+            {
+              ...base,
+              type: "user",
+              uuid: userId,
+              parentUuid: null,
+              message: { role: "user", content: "hello" },
+            },
+            {
+              ...base,
+              type: "assistant",
+              uuid: assistantId,
+              parentUuid: userId,
+              message: {
+                role: "assistant",
+                id: "msg_1",
+                type: "message",
+                model: "claude-sonnet-4-6",
+                content: [{ type: "text", text: "hi" }],
               },
-              {
-                ...base,
-                type: "assistant",
-                uuid: assistantId,
-                parentUuid: userId,
-                message: {
-                  role: "assistant",
-                  id: "msg_1",
-                  type: "message",
-                  model: "claude-sonnet-4-6",
-                  content: [{ type: "text", text: "hi" }],
-                },
-              },
-            ]
-              .map((entry) => JSON.stringify(entry))
-              .join("\n") + "\n",
-          );
-          // The server's own CLAUDE_CONFIG_DIR/HOME never see this transcript.
-          const environment = { ...process.env, CLAUDE_CONFIG_DIR: configDir };
+            },
+          ]
+            .map((entry) => JSON.stringify(entry))
+            .join("\n") + "\n",
+        );
+        // The server's own CLAUDE_CONFIG_DIR/HOME never see this transcript.
+        const environment = { ...process.env, CLAUDE_CONFIG_DIR: configDir };
 
-          const forked = decodeFork(
-            yield* runClaudeHistoryProcess({
-              method: "forkSession",
-              sessionId,
-              options: { dir: cwd },
-              environment,
-            }),
-          );
-          const forkedMessages = decodeSessionMessages(
-            yield* runClaudeHistoryProcess({
-              method: "getSessionMessages",
-              sessionId: forked.sessionId,
-              options: { dir: cwd },
-              environment,
-            }),
-          );
-          const subagentMessages = yield* runClaudeHistoryProcess({
-            method: "getSubagentMessages",
+        const forked = decodeFork(
+          yield* runClaudeHistoryProcess({
+            method: "forkSession",
             sessionId,
-            options: { dir: cwd, agentId: "missing-agent", limit: 1 },
+            options: { dir: cwd },
             environment,
-          });
+          }),
+        );
+        const forkedMessages = decodeSessionMessages(
+          yield* runClaudeHistoryProcess({
+            method: "getSessionMessages",
+            sessionId: forked.sessionId,
+            options: { dir: cwd },
+            environment,
+          }),
+        );
+        const subagentMessages = yield* runClaudeHistoryProcess({
+          method: "getSubagentMessages",
+          sessionId,
+          options: { dir: cwd, agentId: "missing-agent", limit: 1 },
+          environment,
+        });
 
-          assert.notEqual(forked.sessionId, sessionId);
-          assert.isTrue(
-            yield* fileSystem.exists(path.join(projectDir, `${forked.sessionId}.jsonl`)),
-          );
-          assert.equal(forkedMessages.length, 2);
-          assert.equal(subagentMessages, "[]");
-        }),
-      ).pipe(Effect.provide(NodeServices.layer)),
-    30_000,
+        assert.notEqual(forked.sessionId, sessionId);
+        assert.isTrue(yield* fileSystem.exists(path.join(projectDir, `${forked.sessionId}.jsonl`)));
+        assert.equal(forkedMessages.length, 2);
+        assert.equal(subagentMessages, "[]");
+      }),
+    ).pipe(Effect.provide(NodeServices.layer)),
   );
 });

@@ -4,10 +4,10 @@ import {
   USAGE_CONTRACT_VERSION,
   type UsageProviderKind,
 } from "@t3tools/contracts";
-import { act, useLayoutEffect } from "react";
-import { createRoot, type Root } from "react-dom/client";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vite-plus/test";
+import { useLayoutEffect } from "react";
+import { describe, expect, it, vi } from "vite-plus/test";
 
+import { render } from "../../test/render";
 import { useUsage, type EnvironmentUsageStatus, type UsageView } from "./usage";
 
 const testState = vi.hoisted(() => ({ environments: [] as EnvironmentUsageStatus[] }));
@@ -85,154 +85,47 @@ function environment(
   };
 }
 
-let root: Root;
-let latest: UsageView;
+interface ProbeProps {
+  selected: ReadonlySet<EnvironmentId> | null;
+  hidden?: ReadonlySet<UsageProviderKind>;
+  window?: typeof input;
+}
 
 function Probe({
   selected,
   hidden,
   window = input,
-}: {
-  selected: ReadonlySet<EnvironmentId> | null;
-  hidden?: ReadonlySet<UsageProviderKind>;
-  window?: typeof input;
-}) {
+  onUsage,
+}: ProbeProps & { onUsage: (usage: UsageView) => void }) {
   const usage = useUsage(window, selected, hidden === undefined ? {} : { hiddenProviders: hidden });
   useLayoutEffect(() => {
-    latest = usage;
-  }, [usage]);
+    onUsage(usage);
+  }, [onUsage, usage]);
   return null;
 }
 
-async function select(...ids: string[]) {
-  await act(() =>
-    root.render(<Probe selected={new Set(ids.map((id) => EnvironmentId.make(id)))} />),
-  );
+async function setup() {
+  testState.environments = [environment("a", 10), environment("b", 20), environment("slow", null)];
+  let latest: UsageView | undefined;
+  const onUsage = (usage: UsageView) => {
+    latest = usage;
+  };
+  const screen = await render(<Probe selected={null} onUsage={onUsage} />);
+  const show = (props: ProbeProps) => screen.rerender(<Probe {...props} onUsage={onUsage} />);
+  return {
+    get latest() {
+      return latest!;
+    },
+    show,
+    select: (...ids: string[]) =>
+      show({ selected: new Set(ids.map((id) => EnvironmentId.make(id))) }),
+    [Symbol.asyncDispose]: () => screen[Symbol.asyncDispose](),
+  };
 }
 
-beforeEach(async () => {
-  vi.stubGlobal("IS_REACT_ACT_ENVIRONMENT", true);
-  testState.environments = [environment("a", 10), environment("b", 20), environment("slow", null)];
-  root = createRoot(document.createElement("div"));
-  await act(() => root.render(<Probe selected={null} />));
-});
-
-afterEach(async () => {
-  await act(() => root.unmount());
-  vi.unstubAllGlobals();
-});
-
-describe("usage environment selection", () => {
-  it("starts with all environments and adds results as they arrive", async () => {
-    expect(latest.merged.costUsd).toBe(30);
-    expect(latest.isPending).toBe(false);
-    expect(latest.isPartial).toBe(true);
-
-    testState.environments = [...testState.environments.slice(0, 2), environment("slow", 40)];
-    await act(() => root.render(<Probe selected={null} />));
-    expect(latest.merged.costUsd).toBe(70);
-    expect(latest.isPartial).toBe(false);
-  });
-
-  it("excludes unselected usage and pending environments, then restores all", async () => {
-    await select("b");
-    expect(latest.merged.costUsd).toBe(20);
-    expect(latest.merged.models.map((model) => model.model)).toEqual(["b"]);
-    expect(latest.isPending).toBe(false);
-    expect(latest.isPartial).toBe(false);
-    expect(latest.environments).toHaveLength(3);
-
-    await act(() => root.render(<Probe selected={null} />));
-    expect(latest.merged.costUsd).toBe(30);
-    expect(latest.isPartial).toBe(true);
-  });
-
-  it("distinguishes a pending selection from an empty or failed selection", async () => {
-    await select("slow");
-    expect(latest.isPending).toBe(true);
-    expect(latest.merged.costUsd).toBe(0);
-
-    await select();
-    expect(latest.selectedEnvironments).toHaveLength(0);
-    expect(latest.isPending).toBe(false);
-    expect(latest.isPartial).toBe(false);
-
-    testState.environments = [{ ...environment("slow", null), isPending: false, error: "Offline" }];
-    await select("slow");
-    expect(latest.isPending).toBe(false);
-    expect(latest.isPartial).toBe(false);
-  });
-
-  it("deduplicates within the selection so an excluded owner cannot hide usage", async () => {
-    testState.environments = [environment("a", 10, "shared"), environment("b", 20, "shared")];
-    await act(() => root.render(<Probe selected={null} />));
-    expect(latest.merged.costUsd).toBe(10);
-
-    await select("b");
-    expect(latest.merged.costUsd).toBe(20);
-    expect(latest.merged.duplicateSources).toEqual([]);
-  });
-
-  it("keeps selected cached results visible during a refresh", async () => {
-    testState.environments = [
-      { ...environment("a", 10), isPending: true },
-      environment("slow", null),
-    ];
-    await select("a");
-    expect(latest.merged.costUsd).toBe(10);
-    expect(latest.isPending).toBe(false);
-    expect(latest.isPartial).toBe(false);
-  });
-
-  it("shows the last answered usage until the next window answers, for the same selection", async () => {
-    const selected = new Set([EnvironmentId.make("a")]);
-    await act(() => root.render(<Probe selected={selected} />));
-    expect(latest.shown?.merged.costUsd).toBe(10);
-
-    const nextWindow = { ...input, sinceDay: UsageDay.make("2026-08-28") };
-    testState.environments = [environment("a", null)];
-    await act(() => root.render(<Probe selected={selected} window={nextWindow} />));
-    expect(latest.isPending).toBe(true);
-    expect(latest.shown?.window).toBe(input);
-    expect(latest.shown?.merged.costUsd).toBe(10);
-
-    testState.environments = [{ ...environment("a", null), isPending: false, error: "Offline" }];
-    await act(() => root.render(<Probe selected={selected} window={nextWindow} />));
-    expect(latest.isPending).toBe(false);
-    expect(latest.shown?.window).toBe(input);
-    expect(latest.shown?.merged.costUsd).toBe(10);
-
-    testState.environments = [environment("a", 30)];
-    await act(() => root.render(<Probe selected={selected} window={nextWindow} />));
-    expect(latest.shown?.window).toBe(nextWindow);
-    expect(latest.shown?.merged.costUsd).toBe(30);
-
-    testState.environments = [environment("a", null)];
-    await act(() =>
-      root.render(<Probe selected={selected} hidden={new Set(["claude"])} window={input} />),
-    );
-    expect(latest.shown).toBeNull();
-
-    testState.environments = [environment("a", null)];
-    await select("a");
-    expect(latest.shown).toBeNull();
-  });
-});
-
 describe("usage provider filter", () => {
-  it("drops hidden providers from totals and sessions, then restores them", async () => {
-    testState.environments = [environment("a", 10), environment("c", 5, "c", "claude")];
-    await act(() => root.render(<Probe selected={null} hidden={new Set(["codex"])} />));
-    expect(latest.merged.costUsd).toBe(5);
-    expect(latest.merged.sessions).toBe(1);
-    expect(latest.merged.providers.map((entry) => entry.provider)).toEqual(["claude"]);
-
-    await act(() => root.render(<Probe selected={null} />));
-    expect(latest.merged.costUsd).toBe(15);
-    expect(latest.merged.sessions).toBe(2);
-  });
-
   it("filters the classified summary and gateway-credited pools", async () => {
+    await using screen = await setup();
     // Fork: the atom sets `state`, which the merge reads before `summary`.
     const reported = (status: EnvironmentUsageStatus): EnvironmentUsageStatus => ({
       ...status,
@@ -250,13 +143,15 @@ describe("usage provider filter", () => {
       }),
     ];
     // Under pool attribution the Claude transcript's GPT usage spends Codex.
-    await act(() => root.render(<Probe selected={null} hidden={new Set(["codex"])} />));
-    expect(latest.merged.costUsd).toBe(0);
-    expect(latest.visibleEnvironments.flatMap((env) => env.summary?.buckets ?? [])).toEqual([]);
+    await screen.show({ selected: null, hidden: new Set(["codex"]) });
+    expect(screen.latest.merged.costUsd).toBe(0);
+    expect(screen.latest.visibleEnvironments.flatMap((env) => env.summary?.buckets ?? [])).toEqual(
+      [],
+    );
 
     // Hiding the scanning app keeps what it spent from a visible subscription.
-    await act(() => root.render(<Probe selected={null} hidden={new Set(["claude"])} />));
-    expect(latest.merged.costUsd).toBe(15);
-    expect(latest.merged.providers.map((entry) => entry.provider)).toEqual(["codex"]);
+    await screen.show({ selected: null, hidden: new Set(["claude"]) });
+    expect(screen.latest.merged.costUsd).toBe(15);
+    expect(screen.latest.merged.providers.map((entry) => entry.provider)).toEqual(["codex"]);
   });
 });

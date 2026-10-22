@@ -50,7 +50,7 @@ const DAY_MS = 24 * 60 * 60 * 1_000;
 const decodeProviderSession = Schema.decodeUnknownEffect(
   Schema.fromJsonString(OrchestrationV2ProviderSessionJson),
 );
-export const QUEUED_TURN_START_GRACE_MS = 2 * 60 * 1_000;
+const QUEUED_TURN_START_GRACE_MS = 2 * 60 * 1_000;
 
 function toMillis(value: DateTime.Utc | null | undefined): number | null {
   return value == null ? null : DateTime.toEpochMillis(value);

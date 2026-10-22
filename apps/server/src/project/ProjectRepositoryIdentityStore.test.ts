@@ -33,6 +33,7 @@ const enrichmentLayer = (resolve: (workspaceRoot: string) => RepositoryIdentity 
         }),
         Layer.succeed(ProjectFaviconResolver.ProjectFaviconResolver, {
           resolvePath: () => Effect.succeed(null),
+          invalidate: () => Effect.void,
         }),
         ProjectRepositoryIdentityStore.layer,
       ),

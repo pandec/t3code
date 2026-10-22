@@ -71,10 +71,12 @@ their own **Drafts** section at the top of the sidebar, which folds the same way
 On web and desktop, unpinning, settling, snoozing, and archiving a thread each show
 a notification with **Undo** for five seconds. Undo restores the thread's previous
 state, including its pinned position and any snooze that settling cleared. Settling stops
-the work an "until it's done" snooze waits on, so Undo leaves that thread awake. If archiving left you on an empty new-thread screen, undo
-can reopen the restored thread. It keeps another active conversation in place.
+the work an "until it's done" snooze waits on, so Undo leaves that thread awake. Snoozing
+or archiving the thread you are viewing returns you to the previous thread. Undoing the
+archive reopens it while you are still there, or when archiving left you on an empty
+new-thread screen; it keeps another active conversation in place.
 Discarding an unsent draft from the sidebar works the same way: Undo brings back its
-text and attachments. `mod+z` triggers the most recent Undo when no text field is focused; see
+text and attachments. `mod+z` triggers the most recent Undo, even from the composer; see
 [Keybindings](./keybindings.md#commands-with-special-behavior). With **Archive
 confirmation** on (Settings), every archive path (menus, command palette, shortcut) asks first.
 

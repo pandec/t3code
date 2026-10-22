@@ -177,6 +177,7 @@ export function ProviderIcon(props: ProviderIconProps) {
 
 export function ProviderInstanceIcon(props: {
   readonly iconUrl?: string | null;
+  readonly modelIcon?: string | null | undefined;
   readonly provider: string | null | undefined;
   readonly size?: number;
   readonly displayName: string;
@@ -188,7 +189,12 @@ export function ProviderInstanceIcon(props: {
   return (
     <View style={{ position: "relative" }}>
       <View style={{ opacity: 0.6 }}>
-        <ProviderIcon iconUrl={props.iconUrl} provider={props.provider} size={props.size} />
+        <ProviderIcon
+          iconUrl={props.iconUrl}
+          modelIcon={props.modelIcon}
+          provider={props.provider}
+          size={props.size}
+        />
       </View>
       {props.showBadge ? (
         // A wide right-aligned box lets the badge fit its initials. Alone, an

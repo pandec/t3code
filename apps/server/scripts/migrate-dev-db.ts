@@ -217,12 +217,11 @@ const CLEARED_TABLES: ReadonlyArray<string> = [
 
 const PROVIDER_SESSIONS_TABLE = "orchestration_v2_projection_provider_sessions";
 
+// Settled threads stay: they are most of real history, and the UI shows them.
 const rootIsVisible = (sql: SqlClient.SqlClient) => sql`
   root.deleted_at IS NULL
   AND json_extract(root.payload_json, '$.deletedAt') IS NULL
-  AND json_extract(root.payload_json, '$.archivedAt') IS NULL
-  AND json_extract(root.payload_json, '$.settledAt') IS NULL
-  AND json_extract(root.payload_json, '$.settledOverride') IS NOT 'settled'`;
+  AND json_extract(root.payload_json, '$.archivedAt') IS NULL`;
 
 /**
  * One transaction reads the source, so the copy is consistent while the real server writes.
@@ -299,7 +298,13 @@ const pruneSnapshot = Effect.fn("pruneDevDbSnapshot")(function* (input: RunMigra
       WHERE latest.thread_id = r.thread_id)
     UNION
     SELECT thread_id FROM orchestration_v2_projection_threads
-    WHERE json_extract(payload_json, '$.limitRecovery') IS NOT NULL`;
+    WHERE json_extract(payload_json, '$.limitRecovery') IS NOT NULL
+    UNION
+    -- Fork: the deferred archive and worktree-switch schedulers replay pending
+    -- requests on startup, and an archive may remove a real worktree.
+    SELECT thread_id FROM orchestration_v2_projection_threads
+    WHERE json_extract(payload_json, '$.archiveRequest.status') = 'pending'
+      OR json_extract(payload_json, '$.worktreeSwitch.status') = 'pending'`;
 
   // Forks and subagents read history and results through their lineage, so a
   // thread family is cloned or dropped as a whole.
@@ -309,7 +314,7 @@ const pruneSnapshot = Effect.fn("pruneDevDbSnapshot")(function* (input: RunMigra
     FROM orchestration_v2_projection_threads`;
 
   yield* sql`CREATE TEMP TABLE stopped_families AS
-    SELECT f.root_id, root.project_id, MAX(f.updated_at) AS updated_at
+    SELECT f.root_id, root.project_id, MAX(f.updated_at) AS updated_at, COUNT(*) AS size
     FROM thread_families f
     JOIN orchestration_v2_projection_threads root ON root.thread_id = f.root_id
     WHERE ${rootIsVisible(sql)}
@@ -341,6 +346,9 @@ const pruneSnapshot = Effect.fn("pruneDevDbSnapshot")(function* (input: RunMigra
           ) AS recency_rank
         FROM stopped_families sf
         JOIN kept_projects kp ON kp.project_id = sf.project_id
+        -- One orchestrator family can hold hundreds of subagents and most of
+        -- the database, so a family larger than the limit is skipped.
+        WHERE sf.size <= ${input.threadsPerProject}
       )
       WHERE recency_rank <= ${input.threadsPerProject}
     )`;
@@ -570,7 +578,7 @@ export const migrateDevDbCommand = Command.make(
     threadsPerProject: Flag.Int("threads-per-project").pipe(
       Flag.withDefault(10),
       Flag.withDescription(
-        "How many recent stopped threads, with their forks and subagents, to keep per project.",
+        "How many recent stopped threads, with their forks and subagents, to keep per project. A family with more threads than this is skipped.",
       ),
     ),
     baseDir: Flag.String("base-dir").pipe(

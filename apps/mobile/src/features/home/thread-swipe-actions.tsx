@@ -62,6 +62,7 @@ interface ThreadSwipeAction {
   readonly accessibilityLabel: string;
   readonly icon: ComponentProps<typeof SymbolView>["name"];
   readonly label: string;
+  readonly destructive?: boolean;
   readonly menu?: {
     readonly actions: MenuAction[];
     readonly onPressAction: NonNullable<ComponentProps<typeof Menu>["onPressAction"]>;
@@ -878,7 +879,7 @@ export function ThreadSwipeActions(props: {
       <SwipeActionButton
         accessibilityLabel={props.primaryAction.accessibilityLabel}
         actionsWidth={actionsWidth}
-        tone="primary"
+        tone={props.primaryAction.destructive === true ? "danger" : "primary"}
         compact={props.compact}
         entryRange={
           secondaryAction === null

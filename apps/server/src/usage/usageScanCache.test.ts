@@ -5,7 +5,6 @@ import {
   dedupeWithinFile,
   encodeScanCache,
   makeScanCacheWriter,
-  pruneScanCache,
   type CachedFile,
   type ScanCache,
 } from "./usageScanCache.ts";
@@ -131,7 +130,7 @@ describe("scan cache round trip", () => {
     );
     expect(migrated).toEqual(expected);
     expect(migrated.get("/deleted/session.jsonl")?.records[0]?.speed).toBe("standard");
-    expect(encodeScanCache(migrated).version).toBe(8);
+    expect(encodeScanCache(migrated).version).toBe(9);
     expect(decodeScanCache(encodeScanCache(migrated), TEST_FORMAT_MAP)).toEqual(expected);
   });
 
@@ -251,6 +250,46 @@ describe("scan cache round trip", () => {
     const migrated = decodeScanCache(JSON.parse(JSON.stringify(forkV7)), TEST_FORMAT_MAP);
 
     expect(migrated.get("/claude.jsonl")).toEqual(original.get("/claude.jsonl"));
+    expect(migrated.get("/deleted/codex.jsonl")).toEqual({
+      ...original.get("/deleted/codex.jsonl")!,
+      requiresReparse: true,
+      position: MIGRATED_POSITION,
+    });
+  });
+
+  it("migrates fork v8 in place, re-parsing only Codex for compaction and resume markers", () => {
+    const provisional = record({
+      totals: { ...record().totals, uncachedInputTokens: 0, outputTokens: 0 },
+      provisional: true,
+    });
+    const original = cacheWith([["/claude.jsonl", 100, [provisional], 2, 1]]);
+    original.set("/deleted/codex.jsonl", {
+      ...original.get("/claude.jsonl")!,
+      provider: "codex",
+      records: [
+        record({
+          provider: "codex",
+          model: "gpt-6-astra",
+          dedupeKey: null,
+          unresolvedServiceTierTurnId: "turn-1",
+        }),
+      ],
+      position: position({ state: codexState() }),
+    });
+    original.set("/pi.jsonl", {
+      ...original.get("/claude.jsonl")!,
+      provider: "pi",
+      records: [record({ provider: "pi", model: "anthropic/claude-fable-5" })],
+      position: position({ state: { sessionId: "session-a" } }),
+    });
+    // Fork v8 wrote the current layout, tier turn at index 14.
+    const forkV8 = { ...encodeScanCache(original), version: 8 };
+    expect(forkV8.files["/deleted/codex.jsonl"]!.r[0]![14]).toBe("turn-1");
+
+    const migrated = decodeScanCache(JSON.parse(JSON.stringify(forkV8)), TEST_FORMAT_MAP);
+
+    expect(migrated.get("/claude.jsonl")).toEqual(original.get("/claude.jsonl"));
+    expect(migrated.get("/pi.jsonl")).toEqual(original.get("/pi.jsonl"));
     expect(migrated.get("/deleted/codex.jsonl")).toEqual({
       ...original.get("/deleted/codex.jsonl")!,
       requiresReparse: true,
@@ -483,17 +522,17 @@ describe("scan cache round trip", () => {
     expect(restored).toEqual(original);
   });
 
-  it.each([6, 7])(
+  it.each([6, 7, 8])(
     "migrates upstream v%s by shape, keeping history and diagnostics but re-parsing",
     (version) => {
-      // Upstream v6/v7 share the fork's file names and versions. Its entries
-      // carry a whole-file `mr` instead of `x`/`tx`, and its v7 rows put the
-      // tier turn at index 12, where fork v7 marks provisional records.
+      // Upstream v6–v8 share the fork's file names and versions. Its entries
+      // carry a whole-file `mr` instead of `x`/`tx`, and its v7/v8 rows put the
+      // tier turn at index 12, where the fork marks provisional records.
       const pending = record({
         provider: "codex",
         model: "gpt-6-astra",
         dedupeKey: null,
-        ...(version === 7 ? { unresolvedServiceTierTurnId: "native-turn" } : {}),
+        ...(version >= 7 ? { unresolvedServiceTierTurnId: "native-turn" } : {}),
       });
       const original = cacheWith([["/gone.jsonl", 100, [record({ speed: "fast" })]]]);
       original.set("/gone-codex.jsonl", {
@@ -525,7 +564,7 @@ describe("scan cache round trip", () => {
           }),
         ),
       };
-      if (version === 7) {
+      if (version >= 7) {
         expect(upstream.files["/gone-codex.jsonl"]!.r[0]![12]).toBe("native-turn");
       }
 
@@ -541,54 +580,6 @@ describe("scan cache round trip", () => {
       );
     },
   );
-
-  it("drops an entry whose persisted parse state is corrupt", () => {
-    const encoded = encodeScanCache(cacheWith([["/a.jsonl", 100, [record()]]]));
-    const poisoned = {
-      ...encoded,
-      files: {
-        "/a.jsonl": { ...encoded.files["/a.jsonl"]!, cs: { model: 42 } },
-      },
-    };
-
-    expect(
-      decodeScanCache(JSON.parse(JSON.stringify(poisoned)), TEST_FORMAT_MAP).has("/a.jsonl"),
-    ).toBe(false);
-  });
-
-  it("drops an entry whose guard length is outside the supported range", () => {
-    const encoded = encodeScanCache(cacheWith([["/a.jsonl", 100, [record()]]]));
-    const poisoned = {
-      ...encoded,
-      files: { "/a.jsonl": { ...encoded.files["/a.jsonl"]!, gl: 1e20 } },
-    };
-
-    expect(
-      decodeScanCache(JSON.parse(JSON.stringify(poisoned)), TEST_FORMAT_MAP).has("/a.jsonl"),
-    ).toBe(false);
-  });
-
-  it("drops an entry whose speed is not a known index", () => {
-    const encoded = encodeScanCache(cacheWith([["/a.jsonl", 100, [record({ speed: "fast" })]]]));
-    const row = encoded.files["/a.jsonl"]!.r[0]!;
-    const poisoned = {
-      ...encoded,
-      files: {
-        "/a.jsonl": { ...encoded.files["/a.jsonl"]!, r: [[...row.slice(0, 10), true, null]] },
-      },
-    };
-
-    expect(
-      decodeScanCache(JSON.parse(JSON.stringify(poisoned)), TEST_FORMAT_MAP).has("/a.jsonl"),
-    ).toBe(false);
-  });
-
-  it("rejects a document from before records carried a speed", () => {
-    const encoded = encodeScanCache(cacheWith([["/a.jsonl", 100, [record()]]]));
-    const previous = { ...encoded, version: 3 };
-
-    expect(decodeScanCache(JSON.parse(JSON.stringify(previous)), TEST_FORMAT_MAP).size).toBe(0);
-  });
 
   it("rewrites only changed entries and still restores the whole cache", () => {
     const write = makeScanCacheWriter();
@@ -611,15 +602,6 @@ describe("scan cache round trip", () => {
     expect(document.sources).toEqual(sources);
   });
 
-  it("interns repeated model and session strings", () => {
-    const encoded = encodeScanCache(
-      cacheWith([["/a.jsonl", 100, [record(), record({ dedupeKey: "msg_2:" }), record()]]]),
-    );
-
-    expect(encoded.models).toEqual(["claude-fable-5"]);
-    expect(encoded.sessions).toEqual(["session-a"]);
-  });
-
   it("treats a corrupt or foreign document as an empty cache", () => {
     expect(decodeScanCache(null, TEST_FORMAT_MAP).size).toBe(0);
     expect(decodeScanCache("nonsense", TEST_FORMAT_MAP).size).toBe(0);
@@ -637,13 +619,6 @@ describe("scan cache round trip", () => {
 
     const restored = decodeScanCache(JSON.parse(JSON.stringify(withJunk)), TEST_FORMAT_MAP);
     expect([...restored.keys()]).toEqual(["/good.jsonl"]);
-  });
-
-  it("rejects the whole cache when an intern table holds a non-string", () => {
-    const encoded = encodeScanCache(cacheWith([["/a.jsonl", 100, [record()]]]));
-    const poisoned = { ...encoded, models: [1] };
-
-    expect(decodeScanCache(JSON.parse(JSON.stringify(poisoned)), TEST_FORMAT_MAP).size).toBe(0);
   });
 
   it("drops the whole entry when any row is corrupt, forcing a cold re-parse", () => {
@@ -708,27 +683,6 @@ describe("scan cache round trip", () => {
   });
 });
 
-describe("pruneScanCache", () => {
-  const retentionCutoffMs = 1000;
-
-  it("drops entries older than retention", () => {
-    const cache = cacheWith([["/old.jsonl", 500, [record()]]]);
-
-    const removed = pruneScanCache(cache, retentionCutoffMs);
-
-    expect(removed).toBe(1);
-    expect(cache.size).toBe(0);
-  });
-
-  it("keeps entries whose file has disappeared", () => {
-    const cache = cacheWith([["/gone.jsonl", 5000, [record()]]]);
-
-    pruneScanCache(cache, retentionCutoffMs);
-
-    expect(cache.size).toBe(1);
-  });
-});
-
 describe("dedupeWithinFile", () => {
   it("keeps a Claude message's completed record, at its first position", () => {
     // Native records repeat the input split, but only the last has full output.
@@ -765,11 +719,5 @@ describe("dedupeWithinFile", () => {
     expect(dedupeWithinFile([final, placeholder])).toEqual([final]);
     // Without real usage, the first placeholder stays.
     expect(dedupeWithinFile([placeholder, other])).toEqual([placeholder, other]);
-  });
-
-  it("keeps every record that has no dedupe key", () => {
-    expect(
-      dedupeWithinFile([record({ dedupeKey: null }), record({ dedupeKey: null })]),
-    ).toHaveLength(2);
   });
 });

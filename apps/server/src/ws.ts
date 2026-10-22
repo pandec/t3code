@@ -274,6 +274,7 @@ import * as PairingGrantStore from "./auth/PairingGrantStore.ts";
 import * as SessionStore from "./auth/SessionStore.ts";
 import { failEnvironmentAuthInvalid, failEnvironmentInternal } from "./auth/http.ts";
 import * as HostProcess from "@t3tools/shared/HostProcess";
+import { isNetworkPath } from "@t3tools/shared/path";
 import * as RelayClient from "@t3tools/shared/relayClient";
 import { isTelemetryIdHash } from "@t3tools/shared/telemetryId";
 import {
@@ -297,7 +298,7 @@ const resolveDiscoveryForConfig = <A, E, R>(
     Effect.map(Option.getOrElse(onTimeout)),
   );
 
-export const resolveAvailableEditorsForConfig = <A, E, R>(
+const resolveAvailableEditorsForConfig = <A, E, R>(
   discovery: Effect.Effect<ReadonlyArray<A>, E, R>,
 ) => resolveDiscoveryForConfig(discovery, () => []);
 
@@ -656,14 +657,14 @@ const MAX_CLIENT_APP_VERSION_LENGTH = 64;
 const MAX_CLIENT_BROWSER_LENGTH = 64;
 const MAX_CLIENT_DEVICE_MODEL_LENGTH = 80;
 
-export function hasCompatibleOrchestrationProtocol(url: URL): boolean {
+function hasCompatibleOrchestrationProtocol(url: URL): boolean {
   return (
     url.searchParams.get(ORCHESTRATION_PROTOCOL_QUERY_PARAM) ===
     String(ORCHESTRATION_PROTOCOL_VERSION)
   );
 }
 
-export function shouldUseBoundedThreadSnapshot(input: {
+function shouldUseBoundedThreadSnapshot(input: {
   readonly acceptBoundedSnapshot?: boolean;
 }): boolean {
   return input.acceptBoundedSnapshot === true;
@@ -3015,7 +3016,10 @@ const makeWsRpcHandlers = (
               input.resource._tag === "native-app-icon" ||
               input.resource._tag === "tool-output-image" ||
               input.resource._tag === "github-media" ||
-              (input.resource._tag === "media-file" && path.isAbsolute(input.resource.path))
+              // A network path is served only from the thread's project, looked up below.
+              (input.resource._tag === "media-file" &&
+                path.isAbsolute(input.resource.path) &&
+                !isNetworkPath(input.resource.path))
             ) {
               return yield* issueAssetUrl({ resource: input.resource });
             }
@@ -3050,10 +3054,9 @@ const makeWsRpcHandlers = (
                 ...(project.value.faviconPath
                   ? { projectFaviconPath: project.value.faviconPath }
                   : {}),
-                projectCheckoutPending:
-                  clone !== null &&
-                  clone.phase !== "done" &&
-                  clone.destinationPath === project.value.workspaceRoot,
+                ...(clone !== null && clone.destinationPath === project.value.workspaceRoot
+                  ? { projectCheckout: clone.phase === "done" ? "cloned" : "pending" }
+                  : {}),
               });
             }
             const thread = yield* threadManagement

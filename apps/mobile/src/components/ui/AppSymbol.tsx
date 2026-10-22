@@ -10,6 +10,7 @@ import IconAlertCircleFilled from "@tabler/icons-react-native/IconAlertCircleFil
 import IconAlertTriangle from "@tabler/icons-react-native/IconAlertTriangle";
 import IconApps from "@tabler/icons-react-native/IconApps";
 import IconArchive from "@tabler/icons-react-native/IconArchive";
+import IconCalendarClock from "@tabler/icons-react-native/IconCalendarClock";
 import IconArrowBackUp from "@tabler/icons-react-native/IconArrowBackUp";
 import IconArrowBarToUp from "@tabler/icons-react-native/IconArrowBarToUp";
 import IconArrowDown from "@tabler/icons-react-native/IconArrowDown";
@@ -234,6 +235,7 @@ const ANDROID_ICON_BY_SF_SYMBOL = {
   "circle.dashed": IconCircleDashed,
   "circle.inset.filled": IconCircleDot,
   "circle.dashed.inset.filled": IconCircleDot,
+  "calendar.badge.clock": IconCalendarClock,
   clock: IconClock,
   timer: IconClock,
   ticket: IconTicket,

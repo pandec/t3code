@@ -1,32 +1,12 @@
-import { act } from "react";
-import { createRoot, type Root } from "react-dom/client";
-import { afterEach, beforeEach, expect, it, vi } from "vite-plus/test";
+import { expect, it, vi } from "vite-plus/test";
 
+import { render } from "../../test/render";
 import { useResizeDrag } from "./useResizeDrag";
 
-let root: Root;
-let container: HTMLDivElement;
 let captured = false;
 
-beforeEach(() => {
-  captured = false;
-  vi.stubGlobal("IS_REACT_ACT_ENVIRONMENT", true);
-  // Frames never run, so only the pointer-up commit can resize.
-  vi.spyOn(window, "requestAnimationFrame").mockImplementation(() => 1);
-  container = document.createElement("div");
-  document.body.append(container);
-  root = createRoot(container);
-});
-
-afterEach(async () => {
-  await act(async () => root.unmount());
-  container.remove();
-  vi.restoreAllMocks();
-  vi.unstubAllGlobals();
-});
-
 function rail() {
-  const element = container.querySelector<HTMLButtonElement>("button")!;
+  const element = document.querySelector<HTMLButtonElement>("button[data-rail]")!;
   // Synthetic pointers have no active pointer for the browser to capture.
   element.setPointerCapture = () => {
     captured = true;
@@ -48,6 +28,9 @@ function pointer(
 }
 
 it("commits the final pointer position through the session that started the drag", async () => {
+  captured = false;
+  // Frames never run, so only the pointer-up commit can resize.
+  using _frames = vi.spyOn(window, "requestAnimationFrame").mockImplementation(() => 1);
   const firstFinish = vi.fn();
   const secondFinish = vi.fn();
   const resizeWidth = vi.fn((width: number) => width);
@@ -61,15 +44,18 @@ it("commits the final pointer position through the session that started the drag
       cleanup,
     }));
     const { refresh: _refresh, ...events } = handlers;
-    return <button type="button" {...events} />;
+    return <button type="button" data-rail {...events} />;
   }
 
-  await act(async () => root.render(<Harness finish={firstFinish} />));
+  await using screen = await render(<Harness finish={firstFinish} />, {
+    // A bare hook harness with no links.
+    router: false,
+  });
   pointer("pointerdown", 100);
   pointer("pointermove", 130);
   expect(resizeWidth).not.toHaveBeenCalled();
 
-  await act(async () => root.render(<Harness finish={secondFinish} />));
+  await screen.rerender(<Harness finish={secondFinish} />);
   pointer("pointerup", 145);
   expect(resizeWidth).toHaveBeenCalledWith(245);
   expect(firstFinish).toHaveBeenCalledExactlyOnceWith(245, true);

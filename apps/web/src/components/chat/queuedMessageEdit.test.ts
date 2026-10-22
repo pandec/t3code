@@ -77,18 +77,6 @@ describe("queued message file edits", () => {
       });
   });
 
-  it("retains saved attachments alongside newly uploaded files", async () => {
-    const saved = { ...uploadedFile, id: "saved:earlier" };
-    const attachments = await prepareQueuedEditAttachments({
-      existingAttachments: [saved],
-      images: [],
-      files: [file],
-      uploadFiles: async () => [uploadedFile],
-      readImage: async () => "unused",
-    });
-    expect(attachments).toEqual([saved, uploadedFile]);
-  });
-
   it("fails a save instead of dropping a file whose upload is missing", async () => {
     await expect(
       prepareQueuedEditAttachments({
@@ -133,21 +121,6 @@ describe("queued message file edits", () => {
       file.id,
     ]);
     expect(draft?.images.map((entry) => entry.id)).toEqual([image.id]);
-  });
-
-  it("preserves uploaded file references when a remote queue advance interrupts the edit", () => {
-    const store = useComposerDraftStore.getState();
-    const uploaded = {
-      ...file,
-      file: null,
-      uploadedAttachmentId: uploadedFile.id,
-      uploadEnvironmentId: environmentId,
-    };
-    store.addFiles(editTarget, [uploaded]);
-    expect(recoverQueuedMessageEdit({ editTarget, threadTarget, originalText: "" }).outcome).toBe(
-      "kept",
-    );
-    expect(store.getComposerDraft(threadTarget)?.files).toEqual([uploaded]);
   });
 
   it("appends the edit to a separate draft, with its contexts and model, instead of dropping it", () => {

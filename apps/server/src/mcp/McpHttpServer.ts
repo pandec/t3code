@@ -154,7 +154,7 @@ type McpAuthMiddleware = (
   HttpServerRequest.HttpServerRequest
 >;
 
-export const normalizeMcpHttpResponse = (
+const normalizeMcpHttpResponse = (
   response: HttpServerResponse.HttpServerResponse,
 ): HttpServerResponse.HttpServerResponse => {
   const bodyIsEmpty =
@@ -1058,10 +1058,6 @@ const layerPreviewControlsRegistration = toolkitRegistration(
 const layerEnvironmentRegistration = toolkitRegistration(
   EnvironmentToolkit,
   EnvironmentHandlers.layer,
-);
-
-export const layerEnvironmentToolkit = layerEnvironmentRegistration.pipe(
-  Layer.provide(ThreadCommandExecutor.layer),
 );
 
 const layerProjectRegistration = toolkitRegistration(ProjectToolkit, ProjectHandlers.layer);

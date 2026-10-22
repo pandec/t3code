@@ -150,6 +150,7 @@ describe("repairForkMigrationHistory", () => {
         [64, "CanonicalizeThreadPullRequestLinks"],
         [65, "CodexUsageNativeTurnIndex"],
         [66, "RepairClientSettlementTimestamps"],
+        [67, "WebhookDedupe"],
       ]);
       const ledger = yield* readLedger;
       assert.deepStrictEqual(
@@ -193,6 +194,7 @@ describe("repairForkMigrationHistory", () => {
         [64, "CanonicalizeThreadPullRequestLinks"],
         [65, "CodexUsageNativeTurnIndex"],
         [66, "RepairClientSettlementTimestamps"],
+        [67, "WebhookDedupe"],
       ]);
       assert.deepStrictEqual(
         (yield* readLedger).map((row) => [row.migration_id, row.name] as const),
@@ -210,7 +212,7 @@ describe("repairForkMigrationHistory", () => {
       yield* seedForkLedger(forkLedger.slice(0, 60), 49);
       assert.deepStrictEqual(
         (yield* runMigrations()).map(([id]) => id),
-        [50, 51, 52, 53, 54, 55, 56, 57, 58, 59, 60, 61, 62, 63, 64, 65, 66],
+        [50, 51, 52, 53, 54, 55, 56, 57, 58, 59, 60, 61, 62, 63, 64, 65, 66, 67],
       );
       assert.deepStrictEqual(
         (yield* readLedger).map((row) => [row.migration_id, row.name] as const),
