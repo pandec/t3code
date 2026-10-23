@@ -55,7 +55,6 @@ export function CommandPaletteResults(props: CommandPaletteResultsProps) {
   return (
     <CommandList>
       {props.groups.map((group) => (
-        // space-y keeps adjacent accent-tinted project rows from touching.
         <CommandGroup items={group.items} key={group.value}>
           {group.label ? <CommandGroupLabel>{group.label}</CommandGroupLabel> : null}
           <CommandCollection>
@@ -131,17 +130,23 @@ export function CommandPaletteVirtualizedResults(props: CommandPaletteVirtualize
             <div className={row.first ? undefined : "pt-1.5"}>
               <CommandListHeading>{row.label}</CommandListHeading>
             </div>
-          ) : row.itemIndex === null ? (
-            <DisabledCommandPaletteResultRow item={row.item} />
           ) : (
-            <CommandPaletteResultRow
-              index={row.itemIndex}
-              item={row.item}
-              keybindings={props.keybindings}
-              accentTintIntensityPercent={props.accentTintIntensityPercent}
-              isActive={props.highlightedItemValue === row.item.value}
-              onExecuteItem={props.onExecuteItem}
-            />
+            // Padding, not margin, so the measured row height includes the gap
+            // that keeps adjacent accent-tinted project rows from touching.
+            <div className="pb-0.5">
+              {row.itemIndex === null ? (
+                <DisabledCommandPaletteResultRow item={row.item} />
+              ) : (
+                <CommandPaletteResultRow
+                  index={row.itemIndex}
+                  item={row.item}
+                  keybindings={props.keybindings}
+                  accentTintIntensityPercent={props.accentTintIntensityPercent}
+                  isActive={props.highlightedItemValue === row.item.value}
+                  onExecuteItem={props.onExecuteItem}
+                />
+              )}
+            </div>
           )
         }
         estimatedItemSize={40}
