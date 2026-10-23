@@ -88,7 +88,15 @@ const StatusOutput = Schema.Struct({
   checkedAt: Schema.String,
   environments: Schema.Array(LabEnvironmentSchema),
 });
-const AcquireOutput = Schema.Struct({ lease: LabLease, worktree: Schema.String });
+/** `handoff` and `personaPlans` are optional: older sp-labs checkouts do not print them. */
+const AcquireOutput = Schema.Struct({
+  lease: LabLease,
+  worktree: Schema.String,
+  handoff: Schema.optional(Schema.NullOr(LabHandoff)),
+  personaPlans: Schema.optional(
+    Schema.NullOr(Schema.Struct({ warnings: Schema.Array(Schema.String) })),
+  ),
+});
 const UpOutput = Schema.Struct({
   extension: Schema.Struct({ ok: Schema.Boolean, reason: Schema.optional(Schema.String) }),
 });
@@ -142,13 +150,24 @@ const labThreadNote = (input: {
   readonly worktreePath: string;
   readonly branch: string;
   readonly autoBranch: boolean;
+  readonly handoff: LabHandoff | null;
+  readonly personaPlanWarnings: ReadonlyArray<string>;
 }): string =>
   [
-    `This thread runs in ${input.labId} (worktree ${input.worktreePath}, branch ${input.branch}${input.autoBranch ? ", which T3 renames to match the task" : ""}), reserved for this thread by T3 Code.`,
-    "Do not run `sp-labs acquire`.",
-    "The lab's dev stack is starting and will be available shortly; you will be told if it fails.",
-    `When done: commit, then \`sp-labs down ${input.labId}\` and \`sp-labs release ${input.labId}\` (pass --handoff only for surprising state).`,
-  ].join(" ");
+    [
+      `This thread runs in ${input.labId} (worktree ${input.worktreePath}, branch ${input.branch}${input.autoBranch ? ", which T3 renames to match the task" : ""}), reserved for this thread by T3 Code.`,
+      "Do not run `sp-labs acquire`.",
+      "The lab's dev stack is starting and will be available shortly; you will be told if it fails.",
+      `When done: commit, then \`sp-labs down ${input.labId}\` and \`sp-labs release ${input.labId}\` (pass --handoff only for surprising state).`,
+      "Run `sp-labs status` for the lab's handoff note and persona-plan warnings.",
+    ].join(" "),
+    ...(input.handoff === null || input.handoff.summary.trim() === ""
+      ? []
+      : [
+          `The lab's standing handoff note${input.handoff.disposition === "needs-repair" ? " (needs repair)" : ""}: ${input.handoff.summary.trim()}`,
+        ]),
+    ...input.personaPlanWarnings,
+  ].join("\n");
 
 /** The one-liner a lab thread's next turn carries after a failed `up` or `restart-wxt`. */
 const labUpFailedNote = (command: string, labId: string, detail: string): string =>
@@ -495,6 +514,9 @@ const make = Effect.gen(function* () {
             leaseId: environment.lease.id,
             autoBranch: false,
             stackStopped: isLabStackStopped(environment.runtime),
+            handoff: environment.handoff,
+            // `status --runtime` does not carry the plan check; the note points at `sp-labs status`.
+            personaPlanWarnings: [],
           };
         }
         // The launch renames a temporary branch from the first message, in the lab worktree.
@@ -524,6 +546,8 @@ const make = Effect.gen(function* () {
           leaseId: acquired.lease.id,
           autoBranch: input.branch === null,
           stackStopped: true,
+          handoff: acquired.handoff ?? null,
+          personaPlanWarnings: acquired.personaPlans?.warnings ?? [],
         };
       }),
     );
