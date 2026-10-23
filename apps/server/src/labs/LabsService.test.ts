@@ -79,6 +79,8 @@ const makeFakeCli = Effect.gen(function* () {
     "sp-lab-1": { lease: null, running: false, dirty: false, branch: "Detached HEAD" },
   });
   const up = yield* Ref.make<UpBehaviour>({ type: "ok" });
+  /** Fields a newer CLI adds to `acquire`; empty is an older CLI's output. */
+  const acquireExtra = yield* Ref.make<Record<string, unknown>>({});
   const statusFails = yield* Ref.make(false);
   /** A reservation someone else takes while `down` runs. */
   const leaseAfterDown = yield* Ref.make<LabLease | null | undefined>(undefined);
@@ -106,7 +108,7 @@ const makeFakeCli = Effect.gen(function* () {
           const branch = input.args[input.args.indexOf("--branch") + 1]!;
           const lease: LabLease = { ...LEASE, labId: target, threadId: input.threadId ?? null };
           yield* setLab(target, (lab) => ({ ...lab, lease, branch }));
-          return { lease, worktree: `/fake/${target}`, handoff: null, branch };
+          return { lease, worktree: `/fake/${target}`, branch, ...(yield* Ref.get(acquireExtra)) };
         }
         case "up":
         case "restart-wxt": {
@@ -136,6 +138,7 @@ const makeFakeCli = Effect.gen(function* () {
   return {
     calls,
     up,
+    acquireExtra,
     statusFails,
     leaseAfterDown,
     setLab,
@@ -295,6 +298,8 @@ describe("LabsService", () => {
           assert.equal(pending.length, 1);
           assert.include(pending[0]!.text, "This thread runs in sp-lab-1");
           assert.include(pending[0]!.text, prepared.branch);
+          // An older CLI prints neither a standing note nor persona plans.
+          assert.notInclude(pending[0]!.text, "\n");
 
           // Once the first turn heard it, a retry never queues it again.
           yield* notes.acknowledge(pending.map((note) => note.id));
@@ -307,6 +312,56 @@ describe("LabsService", () => {
             .prepareThread(input)
             .pipe(Effect.match({ onFailure: (error) => error, onSuccess: () => null }));
           assert.equal(failed?.reason, "cli_failed");
+        }),
+      );
+    }),
+  );
+
+  it.effect("the first-turn note carries the lab's standing note and persona-plan warnings", () =>
+    Effect.gen(function* () {
+      const fake = yield* makeFakeCli;
+      const warning =
+        "WARN free persona is on Pro (expected Free) via a trial grant until 2026-10-31";
+      yield* Ref.set(fake.acquireExtra, {
+        handoff: {
+          summary: "Pro persona left on a trial grant",
+          branch: "t3/old",
+          commit: "abc",
+          disposition: "usable",
+          threadId: null,
+          releasedAt: "2026-10-13T00:00:00.000Z",
+        },
+        personaPlans: {
+          checkedAt: "2026-10-14T00:00:00.000Z",
+          personas: [
+            {
+              persona: "free",
+              account: "free@example.com",
+              expectedPlan: "free",
+              actualPlan: "pro",
+              via: "a trial grant until 2026-10-31",
+            },
+          ],
+          warnings: [warning],
+        },
+      });
+      yield* withService(
+        fake,
+        Effect.gen(function* () {
+          const labs = yield* LabsService.LabsService;
+          const notes = yield* ThreadHiddenNotes.ThreadHiddenNotes;
+          yield* labs.prepareThread({
+            threadId: THREAD,
+            labId: "sp-lab-1",
+            branch: "feature/plans",
+            baseRef: null,
+            purpose: "Check plans",
+          });
+          const [note] = yield* notes.pending(THREAD, { worktreePath: "/fake/sp-lab-1" });
+          assert.deepEqual(note!.text.split("\n").slice(1), [
+            "The lab's standing handoff note: Pro persona left on a trial grant",
+            warning,
+          ]);
         }),
       );
     }),
