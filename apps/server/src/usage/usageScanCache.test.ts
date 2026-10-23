@@ -130,7 +130,7 @@ describe("scan cache round trip", () => {
     );
     expect(migrated).toEqual(expected);
     expect(migrated.get("/deleted/session.jsonl")?.records[0]?.speed).toBe("standard");
-    expect(encodeScanCache(migrated).version).toBe(9);
+    expect(encodeScanCache(migrated).version).toBe(10);
     expect(decodeScanCache(encodeScanCache(migrated), TEST_FORMAT_MAP)).toEqual(expected);
   });
 
@@ -295,6 +295,35 @@ describe("scan cache round trip", () => {
       requiresReparse: true,
       position: MIGRATED_POSITION,
     });
+  });
+
+  it("migrates fork v9 in place, re-parsing only Codex entries with malformed lines", () => {
+    const codexRecord = record({ provider: "codex", model: "gpt-6-astra", dedupeKey: null });
+    const original = cacheWith([["/claude.jsonl", 100, [record()], 2, 1]]);
+    const codexEntry = (malformedRecords: number, tailMalformedRecords: number) => ({
+      ...original.get("/claude.jsonl")!,
+      provider: "codex" as const,
+      records: [codexRecord],
+      malformedRecords,
+      tailMalformedRecords,
+      position: position({ state: codexState() }),
+    });
+    original.set("/clean/codex.jsonl", codexEntry(0, 0));
+    original.set("/malformed/codex.jsonl", codexEntry(1, 0));
+    original.set("/tail-malformed/codex.jsonl", codexEntry(0, 1));
+    const forkV9 = { ...encodeScanCache(original), version: 9 };
+
+    const migrated = decodeScanCache(JSON.parse(JSON.stringify(forkV9)), TEST_FORMAT_MAP);
+
+    expect(migrated.get("/claude.jsonl")).toEqual(original.get("/claude.jsonl"));
+    expect(migrated.get("/clean/codex.jsonl")).toEqual(original.get("/clean/codex.jsonl"));
+    for (const path of ["/malformed/codex.jsonl", "/tail-malformed/codex.jsonl"]) {
+      expect(migrated.get(path)).toEqual({
+        ...original.get(path)!,
+        requiresReparse: true,
+        position: MIGRATED_POSITION,
+      });
+    }
   });
 
   it("round-trips provisional records and one-hour cache writes", () => {
@@ -522,11 +551,11 @@ describe("scan cache round trip", () => {
     expect(restored).toEqual(original);
   });
 
-  it.each([6, 7, 8])(
+  it.each([6, 7, 8, 9])(
     "migrates upstream v%s by shape, keeping history and diagnostics but re-parsing",
     (version) => {
-      // Upstream v6–v8 share the fork's file names and versions. Its entries
-      // carry a whole-file `mr` instead of `x`/`tx`, and its v7/v8 rows put the
+      // Upstream v6–v9 share the fork's file names and versions. Its entries
+      // carry a whole-file `mr` instead of `x`/`tx`, and its v7–v9 rows put the
       // tier turn at index 12, where the fork marks provisional records.
       const pending = record({
         provider: "codex",
@@ -549,6 +578,11 @@ describe("scan cache round trip", () => {
         malformedRecords: 3,
         position: position({ state: { sessionId: "session-a" } }),
       });
+      const cleanCodex = {
+        ...original.get("/gone-codex.jsonl")!,
+        malformedRecords: 0,
+      };
+      original.set("/clean-codex.jsonl", cleanCodex);
       const encoded = encodeScanCache(original);
       const upstream = {
         ...encoded,

@@ -381,7 +381,7 @@ function ProviderUsageExtrasSection() {
         <>
           <SettingsRow
             title="OpenRouter management key"
-            description="A management key from openrouter.ai/settings/management-keys — the credits endpoint rejects regular inference keys. Stored in each environment's secret store, only used server-side to read the balance, and applied to every connected environment on save."
+            description="A management key from openrouter.ai/settings/management-keys (the credits endpoint rejects regular inference keys). Stored in each environment's secret store, only used server-side to read the balance, and applied to every connected environment on save."
             resetAction={
               <SettingResetButton
                 label="OpenRouter management key"

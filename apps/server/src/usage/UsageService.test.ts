@@ -2726,9 +2726,11 @@ describe("UsageService", () => {
     { layout: "upstream", version: 6 },
     { layout: "upstream", version: 7 },
     { layout: "upstream", version: 8 },
+    { layout: "upstream", version: 9 },
     { layout: "fork", version: 6 },
     { layout: "fork", version: 7 },
     { layout: "fork", version: 8 },
+    { layout: "fork", version: 9 },
   ] as const)(
     "upgrades $layout v$version cache: reparses live Codex usage, keeps deleted rollouts and the old file",
     ({ layout, version }) =>
@@ -2751,7 +2753,10 @@ describe("UsageService", () => {
               timestamp: "2026-08-01T10:00:00Z",
               payload: {
                 type: "token_count",
-                info: { last_token_usage: { input_tokens: 0, output_tokens: outputTokens } },
+                info: {
+                  last_token_usage: { input_tokens: 0, output_tokens: outputTokens },
+                  total_token_usage: { input_tokens: 100, output_tokens: outputTokens + 30 },
+                },
               },
             },
           ]
@@ -2778,10 +2783,12 @@ describe("UsageService", () => {
 
           // Rewrite the cache as that build left it. Upstream entries carry no
           // malformed counts (`x`/`tx`) or fork columns; fork v6/v7 Codex state
-          // predates counter reconciliation and fork v8 compaction/resume markers.
+          // predates counter reconciliation, fork v8 compaction/resume markers, and
+          // fork v9 initial requests with inherited totals.
           // The live row's output is wrong, so only a re-parse restores it; the
           // deleted rollout keeps its saved speed.
           const legacy = yield* Effect.promise(async () => {
+            const livePath = await NodeFSP.realpath(live);
             const document = decodeUnknownJsonString(await NodeFSP.readFile(cachePath, "utf8")) as {
               files: Record<
                 string,
@@ -2791,7 +2798,7 @@ describe("UsageService", () => {
             for (const [path, file] of Object.entries(document.files)) {
               file.r = file.r.map((row) => [
                 ...row.slice(0, 6),
-                path === live ? 99 : row[6],
+                path === livePath ? 99 : row[6],
                 ...row.slice(7, 10),
                 version === 4 ? 0 : 1,
                 ...(layout === "fork" ? [row[11]] : []),
@@ -2811,12 +2818,17 @@ describe("UsageService", () => {
                 delete file.cs.turnId;
                 delete file.cs.sawThreadSettings;
               }
+              // Fork v9 resumes clean Codex entries; one it counted malformed re-parses.
+              if (layout === "fork" && version === 9 && path === livePath) {
+                file.x = 1;
+              }
             }
             const text = encodeUnknownJsonString({ ...document, version });
             await NodeFSP.rm(cachePath);
             await NodeFSP.writeFile(legacyPath, text);
             if (version >= 6) {
               for (const [name, olderVersion] of [
+                ["usage-scan-cache-v8.json", 8],
                 ["usage-scan-cache-v7.json", 7],
                 ["usage-scan-cache-v6.json", 6],
                 ["usage-scan-cache-v5.json", 5],
@@ -2841,7 +2853,7 @@ describe("UsageService", () => {
             60 + 20 * (version === 4 ? 1 : 2),
           );
           yield* upgraded.awaitPersisted;
-          assert.strictEqual(SCAN_CACHE_FILE_NAME, "usage-scan-cache-v9.json");
+          assert.strictEqual(SCAN_CACHE_FILE_NAME, "usage-scan-cache-v10.json");
           assert.strictEqual(
             yield* Effect.promise(() => NodeFSP.readFile(legacyPath, "utf8")),
             legacy,

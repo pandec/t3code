@@ -159,7 +159,7 @@ function SidebarEnvironmentFilterMenuImpl({
                   type="button"
                   isActive={scope !== null}
                   aria-pressed={scope !== null}
-                  aria-label={`Filter threads by environment — ${scopeSummary}`}
+                  aria-label={`Filter threads by environment: ${scopeSummary}`}
                   data-testid="sidebar-v2-environment-filter-trigger"
                   // overflow-visible lets the count badge sit on the corner;
                   // the button clips its children by default.

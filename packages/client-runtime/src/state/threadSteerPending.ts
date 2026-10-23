@@ -4,6 +4,7 @@ import type {
   OrchestrationV2TurnItem,
   RunId,
 } from "@t3tools/contracts";
+import type { ThreadStructureTurnItem } from "./models.ts";
 
 /**
  * Steering is not the same as being heard. Claude Code, Codex and OpenCode
@@ -22,7 +23,7 @@ import type {
 /** The thread state a steer is resolved against. */
 export interface SteerPendingThreadSnapshot {
   readonly runs: ReadonlyArray<Pick<OrchestrationV2Run, "id" | "status">>;
-  readonly turnItems: ReadonlyArray<OrchestrationV2TurnItem>;
+  readonly turnItems: ReadonlyArray<ThreadStructureTurnItem>;
 }
 
 /**

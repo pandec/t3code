@@ -45,7 +45,7 @@ const personalTeamBundleIdentifier = repoEnv.T3CODE_IOS_PERSONAL_TEAM_BUNDLE_ID?
 // T3CODE_MOBILE_VERSION release override, then upstream's version. fingerprint.config.js
 // resolves the same precedence.
 const appVersion =
-  repoEnv.T3CODE_FORK_VERSION?.trim() || repoEnv.T3CODE_MOBILE_VERSION?.trim() || "2.0.0";
+  repoEnv.T3CODE_FORK_VERSION?.trim() || repoEnv.T3CODE_MOBILE_VERSION?.trim() || "2.1.0";
 // CFBundleVersion. Only set when a build pipeline supplies one: App Store Connect
 // rejects a repeat build number, but leaving it unset elsewhere keeps `expo prebuild`
 // output stable for local dev builds.

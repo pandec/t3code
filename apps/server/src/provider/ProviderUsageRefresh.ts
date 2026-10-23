@@ -183,7 +183,7 @@ export const makeProviderUsageRefresh = Effect.fn("makeProviderUsageRefresh")(fu
           ) {
             yield* Ref.set(outcome, {
               refreshed: false,
-              failureReason: "The account's usage source just changed — try again.",
+              failureReason: "The account's usage source just changed. Try again.",
             });
             return;
           }

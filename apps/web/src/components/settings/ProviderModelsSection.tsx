@@ -695,7 +695,7 @@ function CustomModelIconPicker({
                   size="icon-micro"
                   variant="ghost-muted"
                   disabled={disabled}
-                  aria-label={`Icon for ${modelName}: ${currentLabel} — change`}
+                  aria-label={`Icon for ${modelName}: ${currentLabel}, change`}
                 />
               }
             />

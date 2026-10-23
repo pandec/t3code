@@ -1,10 +1,9 @@
+import type { ThreadStructure, ThreadStructureTurnItem } from "@t3tools/client-runtime/state/shell";
 import type {
   ModelSelection,
   OrchestrationV2ProviderTurn,
   OrchestrationV2ProviderTurnTokenUsage,
   OrchestrationV2ProviderThread,
-  OrchestrationV2ThreadProjection,
-  OrchestrationV2TurnItem,
   ServerProviderModel,
   ThreadTokenUsageSnapshot,
 } from "@t3tools/contracts";
@@ -113,7 +112,7 @@ export function emptyContextWindowSnapshot(input: {
     by provider thread, not time, so pick by timestamp. */
 export function latestProviderTurnTokenUsage(
   turns: ReadonlyArray<Pick<OrchestrationV2ProviderTurn, "tokenUsage">>,
-  projection?: Pick<OrchestrationV2ThreadProjection, "thread" | "contextTransfers"> | null,
+  projection?: Pick<ThreadStructure, "thread" | "contextTransfers"> | null,
   providerThread?: Pick<OrchestrationV2ProviderThread, "contextUsage"> | null,
 ): OrchestrationV2ProviderTurnTokenUsage | null {
   let latest: OrchestrationV2ProviderTurnTokenUsage | null = null;
@@ -142,7 +141,7 @@ export function latestProviderTurnTokenUsage(
 
 export function deriveLatestContextWindowSnapshot(
   entries: ReadonlyArray<{
-    readonly item: OrchestrationV2TurnItem;
+    readonly item: ThreadStructureTurnItem;
   }>,
   liveUsage?: OrchestrationV2ProviderTurnTokenUsage | null,
   providerThread?: Pick<OrchestrationV2ProviderThread, "contextUsage" | "updatedAt"> | null,

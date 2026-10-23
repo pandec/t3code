@@ -36,7 +36,6 @@ describe("split pane find", () => {
           threadId,
         },
         enabled: true,
-        content: undefined,
       });
       useLayoutEffect(() => {
         open.set(paneId, state.isOpen);

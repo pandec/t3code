@@ -626,7 +626,7 @@ function ProviderUsageSourceSection(props: {
                 managementUrl: trimmed.length > 0 ? trimmed : undefined,
               });
             }}
-            placeholder="Management URL — defaults to the ANTHROPIC_BASE_URL origin"
+            placeholder="Management URL (defaults to the ANTHROPIC_BASE_URL origin)"
             spellCheck={false}
             aria-label="CLIProxyAPI management URL"
           />
@@ -929,7 +929,7 @@ export function ProviderInstanceCard({
                   size={mode === "list" ? "icon-micro" : "icon-xs"}
                   variant="ghost-muted"
                   className={mode === "list" ? "pointer-events-auto relative shrink-0" : undefined}
-                  aria-label={`${updateProgress ? "Updating" : versionAdvisory.title} — view details`}
+                  aria-label={`${updateProgress ? "Updating" : versionAdvisory.title}, view details`}
                 >
                   {updateProgress ? (
                     <Spinner tone="muted" {...(mode === "list" ? { size: "sm" as const } : {})} />

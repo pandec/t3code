@@ -240,6 +240,11 @@ import { resolveSnoozePresets, snoozeWakeLabel, type SnoozePreset } from "./Side
 import { ProjectFavicon, type ProjectFaviconProject } from "./ProjectFavicon";
 import { deriveProviderEntriesByEnvironment } from "../providerInstances";
 import { useStableCallback } from "../hooks/useStableCallback";
+import {
+  completeSidebarRouteReveal,
+  pendingSidebarRouteReveal,
+  type SidebarRouteReveal,
+} from "./sidebar/routeReveal";
 import { stackedThreadToast, toastManager } from "./ui/toast";
 import { Button } from "./ui/button";
 import { Menu, MenuCheckboxItem, MenuPopup, MenuTrigger } from "./ui/menu";
@@ -1238,7 +1243,7 @@ function useSidebarRecentArchive(input: {
   };
 }
 
-export default function Sidebar() {
+export default function Sidebar({ routeReveal }: { routeReveal: SidebarRouteReveal }) {
   const {
     projects,
     serverConfigs,
@@ -1755,6 +1760,52 @@ export default function Sidebar() {
   const settledThreadKeysRef = useRef(settledThreadKeys);
   const snoozedThreadKeysRef = useRef(snoozedThreadKeys);
   const sectionByThreadKeyRef = useRef(sectionByThreadKey);
+
+  // History, the command palette, and links can open a thread the filters
+  // hide or the list has scrolled away. A remount starts the list at the top,
+  // so each mount also scrolls to the open thread once, without widening the
+  // filters.
+  const mountRevealOwed = useRef(true);
+  const revealRouteRow = useStableCallback(() => {
+    const pendingKey = pendingSidebarRouteReveal(routeReveal, routeRowThreadKey);
+    // Search results replace the thread list; reveal once the list returns.
+    if (isSearchingThreads) return;
+    const revealKey = pendingKey ?? (mountRevealOwed.current ? routeRowThreadKey : null);
+    if (revealKey === null) return;
+    const thread = threads.find((candidate) => threadShellKey(candidate) === revealKey);
+    if (thread === undefined) return;
+    if (pendingKey !== null && filterSidebarV2VisibleThreads([thread], null).length === 1) {
+      // Fork: the filters are the persisted project multi-select, hidden
+      // projects, and environments; clear whichever hides the thread.
+      const projectKey = `${thread.environmentId}:${thread.projectId}`;
+      const hiddenByProjects =
+        hiddenPhysicalProjectKeys.has(projectKey) ||
+        (scopedProjectKeys !== null && !scopedProjectKeys.has(projectKey));
+      const hiddenByEnvironment =
+        environmentFilter.resolvedScope !== null &&
+        !environmentFilter.resolvedScope.has(thread.environmentId);
+      if (hiddenByProjects || hiddenByEnvironment) {
+        // The row renders under the widened filters; scroll on that pass.
+        if (hiddenByProjects) clearProjectFilters();
+        if (hiddenByEnvironment) environmentFilter.selectAll();
+        return;
+      }
+    }
+    const activeRow = document.querySelector('[data-sidebar="content"] [aria-current="page"]');
+    if (!activeRow) return;
+    completeSidebarRouteReveal(routeReveal);
+    mountRevealOwed.current = false;
+    activeRow.scrollIntoView({ block: "nearest" });
+  });
+  useEffect(revealRouteRow, [
+    revealRouteRow,
+    routeRowThreadKey,
+    threads,
+    isSearchingThreads,
+    projectFilterSignature,
+    environmentFilter.signature,
+  ]);
+
   const threadSearchMatchByKey = new Map(
     threadSearch.matches.map((match) => [threadSearchMatchKey(match), match] as const),
   );
@@ -3653,7 +3704,7 @@ export default function Sidebar() {
                     <MenuTrigger
                       render={
                         <SidebarMenuButton
-                          aria-label={`Filter threads by project — ${projectScopeDetail}`}
+                          aria-label={`Filter threads by project: ${projectScopeDetail}`}
                           title={projectScopeDetail}
                           className="min-w-0 flex-1"
                         />
