@@ -314,12 +314,14 @@ it("constructs and classifies the remote desktop command", () => {
 it("starts remote lanes and the local lane concurrently, while preserving summary order", async () => {
   const starts: string[] = [];
   const resolvers = new Map<string, (result: CommandResult) => void>();
+  const { promise: threeStarted, resolve: markThreeStarted } = Promise.withResolvers<void>();
   const runner: CommandRunner = {
     dryRun: false,
     cancel: () => undefined,
     run: (request) => {
       const key = `${request.target}:${request.stage}`;
       starts.push(key);
+      if (starts.length === 3) markThreeStarted();
       return new Promise((resolve) => resolvers.set(key, resolve));
     },
   };
@@ -330,7 +332,7 @@ it("starts remote lanes and the local lane concurrently, while preserving summar
     },
     testDependencies(runner),
   );
-  for (let index = 0; index < 5 && starts.length < 3; index += 1) await Promise.resolve();
+  await threeStarted;
   assert.sameMembers(starts, ["grey-mac:remote", "ubuntu-dell:remote", "space-mac:pull"]);
   resolvers.get("ubuntu-dell:remote")?.(ok());
   resolvers.get("grey-mac:remote")?.(ok());

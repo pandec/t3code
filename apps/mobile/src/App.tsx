@@ -9,6 +9,7 @@ import { SafeAreaProvider } from "react-native-safe-area-context";
 import { createStaticNavigation, getStateFromPath } from "@react-navigation/native";
 
 import { RegistryContext } from "@effect/atom-react";
+import { ProjectChipIconRasterizer } from "./native/ProjectChipIconImages";
 import * as Dialog from "./components/ui/Dialog";
 import { KeyboardStickyResetCoordinator } from "./components/KeyboardStickyResetCoordinator";
 import { CloudAuthProvider } from "./features/cloud/CloudAuthProvider";
@@ -119,6 +120,7 @@ function AppContent() {
                     <Navigation linking={appLinking} theme={navigationTheme} />
                   </IncomingShareProvider>
                   <Dialog.Host />
+                  <ProjectChipIconRasterizer />
                 </NativeLayoutMetricsProvider>
               </GlobalVoiceInputControl>
               {/* Anchored-menu overlays render here — in-window, so the

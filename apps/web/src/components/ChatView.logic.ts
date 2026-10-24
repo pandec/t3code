@@ -248,7 +248,7 @@ export function resolveSendDispatch(input: {
     input.resumeCompactionTokens !== null &&
     !input.keepFullHistory &&
     !input.hasPendingOutboxSubmission &&
-    input.messageText.toLowerCase() !== "/compact";
+    !COMPACT_COMMAND_PATTERN.test(input.messageText);
   const queueBehindSetup = input.queueBehindSetup === true;
   const queueBehindActiveRun =
     compactBeforeSend ||
@@ -1066,6 +1066,10 @@ export function shouldShowPlanFollowUpPrompt(input: {
     !input.hasComposerAttachments
   );
 }
+
+// A typed `/compact`, with or without instructions, is already the compaction. Queueing a
+// bare one ahead of it would run an uninstructed compaction first and charge for two.
+const COMPACT_COMMAND_PATTERN = /^\/compact(?:\s|$)/i;
 
 const sessionDismissedBranchMismatchKeys = new Set<string>();
 

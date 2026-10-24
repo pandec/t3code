@@ -166,7 +166,9 @@ export function storageCleanupActivityAt(thread: OrchestrationV2ThreadShell): nu
  * Only a complete subagent chain within this worktree shares ownership. Fork:
  * `threads` are every active and archived thread on the canonical path.
  */
-function worktreeOwner(threads: ReadonlyArray<OrchestrationV2ThreadShell>) {
+function worktreeOwner<T extends Pick<OrchestrationV2ThreadShell, "id" | "lineage">>(
+  threads: ReadonlyArray<T>,
+) {
   if (threads.length === 1) return threads[0];
   const byId = new Map(threads.map((thread) => [thread.id, thread]));
   const tops = threads.filter((thread) => !byId.has(thread.lineage.parentThreadId!));
@@ -255,7 +257,7 @@ export const readLiveProviderSessionCwds = Effect.fn("readLiveProviderSessionCwd
   const rows = yield* sql<{ payload_json: string }>`
     SELECT payload_json FROM orchestration_v2_projection_provider_sessions
     WHERE status != 'stopped'
-  `;
+  `.pipe(NodeSqliteClient.readOnly);
   return (yield* Effect.forEach(rows, (row) => decodeCleanupSession(row.payload_json))).map(
     (session) => session.cwd,
   );
@@ -856,7 +858,7 @@ const make = Effect.gen(function* () {
           FROM orchestration_v2_projection_threads t
           JOIN projection_projects p ON p.project_id = t.project_id
           WHERE t.deleted_at IS NOT NULL
-        `;
+        `.pipe(NodeSqliteClient.readOnly);
     const deletedThreads = (yield* Effect.forEach(deletedRows, (row) =>
       decodeCleanupThread(row.payload_json).pipe(
         Effect.map((thread) => ({ ...thread, workspaceRoot: row.workspaceRoot })),
@@ -874,16 +876,34 @@ const make = Effect.gen(function* () {
       const key = yield* groupKey(thread.worktreePath);
       groups.set(key, [...(groups.get(key) ?? []), thread]);
     }
+    const deletedByPath = new Map<string, typeof deletedThreads>();
+    for (const thread of deletedThreads) {
+      const key = yield* groupKey(thread.worktreePath!);
+      deletedByPath.set(key, [...(deletedByPath.get(key) ?? []), thread]);
+    }
     const candidates = [
       // Shared checkouts stay candidates so the report can say why they are kept.
       // A validated parent/subagent chain is owned by its top thread.
-      ...[...groups.values()].map((group) => ({
-        thread: worktreeOwner(group) ?? group[0]!,
+      ...[...groups].map(([key, group]) => ({
+        thread:
+          // A deleted thread still owns the worktree its remaining subagents share,
+          // but only deletion cleanup acts on it; otherwise the live rules apply.
+          deletedByPath
+            .get(key)
+            ?.find(
+              (deleted) =>
+                resolveWorktreeCleanup(serverSettings, deleted.projectId).worktreeOnDelete &&
+                worktreeOwner([deleted, ...group]) === deleted,
+            ) ??
+          worktreeOwner(group) ??
+          group[0]!,
         group,
       })),
-      ...(yield* Effect.filter(deletedThreads, (thread) =>
-        groupKey(thread.worktreePath!).pipe(Effect.map((key) => !groups.has(key))),
-      )).map((thread) => ({ thread, group: [] as OrchestrationV2ThreadShell[] })),
+      ...[...deletedByPath]
+        .filter(([key]) => !groups.has(key))
+        .flatMap(([, threads]) =>
+          threads.map((thread) => ({ thread, group: [] as OrchestrationV2ThreadShell[] })),
+        ),
     ];
     const sessionCwds = yield* readLiveSessionCwds();
     // Owners are already grouped by canonical path; keep this pre-check to the
@@ -917,6 +937,7 @@ const make = Effect.gen(function* () {
       // member's own pending work still protect the worktree.
       const familyIds = group.map((member) => member.id);
       const activityAt = Math.max(...group.map(storageCleanupActivityAt));
+      const members = deleted ? [thread, ...group] : group;
       const project = deleted
         ? { workspaceRoot: thread.workspaceRoot }
         : snapshot.projects.find((entry) => entry.id === thread.projectId);
@@ -946,10 +967,10 @@ const make = Effect.gen(function* () {
         if (!(yield* fs.exists(worktreePath))) return;
         if (yield* isLabWorktree(worktreePath)) return keep(LAB_WORKTREE_REASON);
         if (deleted && !settings.worktreeOnDelete) return keep("no rules apply");
-        if (group.length > 1 && worktreeOwner(group) === undefined)
-          return keep(`shared by ${group.length} threads`);
+        if (members.length > 1 && worktreeOwner(members) === undefined)
+          return keep(`shared by ${members.length} threads`);
         if (project === undefined) return keep("project is unavailable");
-        if (thread.branch === null || (!deleted && !(yield* familyIdle(group))))
+        if (thread.branch === null || !(yield* familyIdle(group)))
           return keep("thread is running or has pending work");
         if (group.some((member) => member.branch !== thread.branch))
           return keep("a subagent thread's branch differs from this worktree's branch");
@@ -976,7 +997,6 @@ const make = Effect.gen(function* () {
         const changes = yield* localChangesReason(worktreePath, settings);
         if (changes !== null) return keep(changes);
         if (
-          !deleted &&
           group.some(
             (member) =>
               member.settledAt !== null &&
@@ -1114,11 +1134,12 @@ const make = Effect.gen(function* () {
             const pendingCleanup = yield* sql`
               SELECT 1 FROM orchestration_v2_effect_outbox
               WHERE thread_id = ${thread.id} AND status NOT IN ('succeeded', 'cancelled') LIMIT 1
-            `;
-            return pendingCleanup.length === 0 ? null : "thread deletion is still pending";
+            `.pipe(NodeSqliteClient.readOnly);
+            if (pendingCleanup.length > 0) return "thread deletion is still pending";
           }
           // The whole family as it is now: same members on this path, same owner
-          // and branch, all idle, and no new activity or settlement.
+          // and branch, all idle, and no new activity or settlement. A deleted
+          // owner keeps its surviving subagents' worktree only while they stay put.
           const latestGroup: OrchestrationV2ThreadShell[] = [];
           for (const shell of latestSnapshot.threads)
             if (
@@ -1126,7 +1147,7 @@ const make = Effect.gen(function* () {
               samePath(yield* canonicalWorkspacePath(shell.worktreePath), worktreePath)
             )
               latestGroup.push(shell);
-          const latestOwner = worktreeOwner(latestGroup);
+          const latestOwner = worktreeOwner(deleted ? [thread, ...latestGroup] : latestGroup);
           const changed =
             latestGroup.length !== group.length ||
             latestOwner?.id !== thread.id ||

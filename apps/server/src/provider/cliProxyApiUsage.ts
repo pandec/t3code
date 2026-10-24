@@ -371,6 +371,8 @@ function upstreamUsageRequest(provider: string): UpstreamUsageRequest | null {
           Authorization: "Bearer $TOKEN$",
           "Content-Type": "application/json",
           "anthropic-beta": "oauth-2025-04-20",
+          // The OAuth usage endpoint can return 429 without a Claude Code user agent.
+          "User-Agent": "claude-code/2.1.273",
         },
       };
     case "codex":
