@@ -43,6 +43,7 @@ export const TimelineMinimap = memo(function TimelineMinimap({
   hitStripWidth,
   currentIndex = null,
   items,
+  pinnedIds,
   side,
   stripMap,
   testId,
@@ -53,6 +54,7 @@ export const TimelineMinimap = memo(function TimelineMinimap({
   hitStripWidth: number;
   currentIndex?: number | null;
   items: ReadonlyArray<TimelineMinimapItem>;
+  pinnedIds: ReadonlyArray<string>;
   side: "left" | "right";
   stripMap: Map<string, HTMLSpanElement>;
   testId: string;
@@ -60,6 +62,7 @@ export const TimelineMinimap = memo(function TimelineMinimap({
   onSelect: (item: TimelineMinimapItem) => void;
 }) {
   const [activeIndex, setActiveIndex] = useState<number | null>(null);
+  const pinnedIdSet = new Set(pinnedIds);
   const wheelTargetRef = (node: HTMLDivElement | null) => {
     if (!node) return;
     node.addEventListener("wheel", onWheel, { passive: false });
@@ -236,6 +239,7 @@ export const TimelineMinimap = memo(function TimelineMinimap({
               )}%`;
               const activeDistance =
                 resolvedActiveIndex === null ? null : Math.abs(index - resolvedActiveIndex);
+              const pinned = pinnedIdSet.has(item.id);
               return (
                 // Compositor-friendly on purpose: in-view state and the hover
                 // fisheye animate constantly (every scroll tick and streaming
@@ -246,7 +250,13 @@ export const TimelineMinimap = memo(function TimelineMinimap({
                   className={cn(
                     "group/strip pointer-events-none absolute h-0.5 w-6 -translate-y-1/2 rounded-full transition-transform duration-150",
                     side === "left" ? "left-0 origin-left" : "right-0 origin-right",
-                    activeDistance === 0 ? "bg-muted-foreground/75" : "bg-muted-foreground/35",
+                    pinned
+                      ? activeDistance === 0
+                        ? "bg-warning-foreground"
+                        : "bg-warning-foreground/60"
+                      : activeDistance === 0
+                        ? "bg-muted-foreground/75"
+                        : "bg-muted-foreground/35",
                     activeDistance === 0
                       ? "scale-x-100"
                       : activeDistance === 1
@@ -267,7 +277,12 @@ export const TimelineMinimap = memo(function TimelineMinimap({
                   }}
                   style={{ top }}
                 >
-                  <span className="absolute inset-0 rounded-full bg-foreground/90 opacity-0 transition-opacity duration-150 group-data-[in-view=true]/strip:opacity-100" />
+                  <span
+                    className={cn(
+                      "absolute inset-0 rounded-full opacity-0 transition-opacity duration-150 group-data-[in-view=true]/strip:opacity-100",
+                      pinned ? "bg-warning-foreground" : "bg-foreground/90",
+                    )}
+                  />
                 </span>
               );
             })}

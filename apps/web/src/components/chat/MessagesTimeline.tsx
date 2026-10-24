@@ -24,6 +24,7 @@ import { resolveWorkGroupScrollAnchor } from "@t3tools/client-runtime/work-log/s
 import type { WorkflowOpening } from "@t3tools/client-runtime/state/subagentRuntime";
 import { observeResize } from "~/lib/observeResize";
 import { useStableCallback } from "~/hooks/useStableCallback";
+import { usePinnedMessageIds } from "~/pinnedMessageStore";
 
 const NOOP_USE_ARTIFACT_TEMPLATE = () => {};
 const NOOP_OPEN_ATTACHMENT = (_attachment: ChatFileAttachment) => {};
@@ -633,6 +634,7 @@ const ConversationTimeline = memo(function ConversationTimeline({
   // must not change with them or every timeline row re-renders per event.
   const runs = useStableHandoffRuns(runsProp);
   const minimapState = useTimelineMinimapState(rows, listIdentityKey);
+  const pinnedMessageIds = usePinnedMessageIds(routeThreadKey);
   const userMinimapItems = minimapState.userItems;
   const assistantMinimapItems = minimapState.assistantItems;
   const minimapRowIndices = userMinimapItems.map((item) => item.rowIndex);
@@ -1172,6 +1174,7 @@ const ConversationTimeline = memo(function ConversationTimeline({
           />
           <TimelineMinimap
             items={userMinimapItems}
+            pinnedIds={pinnedMessageIds}
             hasPersistentGutter={minimapHasPersistentGutter}
             hitStripWidth={minimapHitStripWidth}
             currentIndex={minimapCurrentIndex}
@@ -1183,6 +1186,7 @@ const ConversationTimeline = memo(function ConversationTimeline({
           />
           <TimelineMinimap
             items={assistantMinimapItems}
+            pinnedIds={pinnedMessageIds}
             hasPersistentGutter={minimapHasPersistentGutter}
             hitStripWidth={minimapHitStripWidth}
             side="right"

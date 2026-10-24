@@ -13,6 +13,7 @@ import { ChangedFilesCard } from "./ChangedFilesTree";
 import { useFileContextMenuHandler } from "../../fileContextMenu";
 import { useProject, useThreadShell } from "../../state/entities";
 import { MessageCopyButton } from "./MessageCopyButton";
+import { MessagePinButton } from "./MessagePinButton";
 import {
   AssistantMessageSummaryButton,
   AssistantMessageSummaryPanel,
@@ -75,6 +76,7 @@ export function AssistantTimelineRow({ row }: { row: Extract<TimelineRow, { kind
             className="mt-1.5"
             projectedItem={row.projectedItem}
             message={row.message}
+            pinnable={row.isFinalAssistantResponse}
             showCopyButton={row.showAssistantCopyButton}
             copyStreaming={row.assistantCopyStreaming}
           />
@@ -141,6 +143,7 @@ export function AssistantMetaTimelineRow({
         className="mt-0.5"
         projectedItem={row.projectedItem}
         message={row.message}
+        pinnable={row.isFinalAssistantResponse}
         showCopyButton={row.showAssistantCopyButton}
         copyStreaming={row.assistantCopyStreaming}
         alwaysVisible
@@ -153,6 +156,7 @@ function AssistantMessageMeta({
   className,
   projectedItem,
   message,
+  pinnable,
   showCopyButton,
   copyStreaming,
   alwaysVisible = false,
@@ -161,6 +165,8 @@ function AssistantMessageMeta({
   className?: string;
   projectedItem?: Extract<TimelineRow, { kind: "message" }>["projectedItem"];
   message: ChatMessage;
+  /** Final answers have a minimap strip, so only they can be pinned. */
+  pinnable: boolean;
   showCopyButton: boolean;
   copyStreaming: boolean;
   alwaysVisible?: boolean;
@@ -192,6 +198,7 @@ function AssistantMessageMeta({
         <AssistantForkButton projectedItem={projectedItem} />
       ) : null}
       {children}
+      {pinnable ? <MessagePinButton messageId={message.id} /> : null}
       {!message.streaming && (
         <Tooltip>
           <TooltipTrigger render={<p className="text-muted-foreground text-xs tabular-nums" />}>
