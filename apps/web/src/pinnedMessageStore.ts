@@ -33,9 +33,28 @@ export const usePinnedMessageStore = create<PinnedMessageStoreState>()(
         resolveStorage(typeof window !== "undefined" ? window.localStorage : undefined),
       ),
       partialize: ({ pinnedMessageIdsByThreadKey }) => ({ pinnedMessageIdsByThreadKey }),
+      // Selectors index into this record, so a malformed stored value must not hydrate.
+      merge: (persisted, current) => ({
+        ...current,
+        pinnedMessageIdsByThreadKey: sanitizePinnedMessageIds(
+          (persisted as { pinnedMessageIdsByThreadKey?: unknown } | null)
+            ?.pinnedMessageIdsByThreadKey,
+        ),
+      }),
     },
   ),
 );
+
+function sanitizePinnedMessageIds(value: unknown): Record<string, ReadonlyArray<string>> {
+  if (typeof value !== "object" || value === null || Array.isArray(value)) return {};
+  const result: Record<string, ReadonlyArray<string>> = {};
+  for (const [threadKey, ids] of Object.entries(value)) {
+    if (!Array.isArray(ids)) continue;
+    const messageIds = ids.filter((id): id is string => typeof id === "string");
+    if (messageIds.length > 0) result[threadKey] = messageIds;
+  }
+  return result;
+}
 
 export function usePinnedMessageIds(threadKey: string): ReadonlyArray<string> {
   return usePinnedMessageStore(

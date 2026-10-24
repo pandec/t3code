@@ -25,4 +25,17 @@ describe("pinnedMessageStore", () => {
       "env:thread-a": ["message-2"],
     });
   });
+
+  it("drops malformed stored pins on hydration", () => {
+    const merge = usePinnedMessageStore.persist.getOptions().merge!;
+    const current = usePinnedMessageStore.getState();
+
+    expect(
+      merge({ pinnedMessageIdsByThreadKey: null }, current).pinnedMessageIdsByThreadKey,
+    ).toEqual({});
+    expect(
+      merge({ pinnedMessageIdsByThreadKey: { a: ["m1", 2], b: "m2", c: [] } }, current)
+        .pinnedMessageIdsByThreadKey,
+    ).toEqual({ a: ["m1"] });
+  });
 });
