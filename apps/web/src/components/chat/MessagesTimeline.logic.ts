@@ -610,6 +610,7 @@ type MessagesTimelineRowContent =
       id: string;
       createdAt: string;
       message: ChatMessage;
+      isFinalAssistantResponse: boolean;
       showAssistantCopyButton: boolean;
       assistantCopyStreaming: boolean;
     }
@@ -1301,6 +1302,7 @@ function attachTrailingToolGroupsToAssistant(
       ...(row.projectedItem === undefined ? {} : { projectedItem: row.projectedItem }),
       createdAt: rows[lastTrailingWorkIndex]?.createdAt ?? row.message.updatedAt,
       message: row.message,
+      isFinalAssistantResponse: row.isFinalAssistantResponse,
       showAssistantCopyButton: row.showAssistantCopyButton,
       assistantCopyStreaming: row.assistantCopyStreaming,
     });
@@ -2286,6 +2288,7 @@ function isRowUnchanged(a: MessagesTimelineRow, b: MessagesTimelineRow): boolean
         a.createdAt === bm.createdAt &&
         a.projectedItem === bm.projectedItem &&
         a.message === bm.message &&
+        a.isFinalAssistantResponse === bm.isFinalAssistantResponse &&
         a.showAssistantCopyButton === bm.showAssistantCopyButton &&
         a.assistantCopyStreaming === bm.assistantCopyStreaming
       );

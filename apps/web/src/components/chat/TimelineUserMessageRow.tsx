@@ -45,6 +45,7 @@ import {
   SnapShotAttachmentDetails,
 } from "./SnapShotAttachmentDetails";
 import { MessageCopyButton } from "./MessageCopyButton";
+import { MessagePinButton } from "./MessagePinButton";
 import { promptLinkFor } from "../promptLinks/copyPromptLink";
 import { PierreEntryIcon } from "./PierreEntryIcon";
 import { shouldCollapseUserMessage } from "./MessagesTimeline.logic";
@@ -217,6 +218,7 @@ function AutomationMessageRow({ row }: { row: Extract<TimelineRow, { kind: "mess
                   variant="ghost"
                 />
               )}
+              <MessagePinButton messageId={row.message.id} />
             </div>
           </div>
         </div>
@@ -632,6 +634,7 @@ function UserTimelineRow({ row }: { row: Extract<TimelineRow, { kind: "message" 
                   variant="ghost"
                 />
               )}
+              <MessagePinButton messageId={row.message.id} />
             </div>
           </div>
         </div>
