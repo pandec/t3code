@@ -12,7 +12,6 @@ export function MessagePinButton({ messageId }: { messageId: string }) {
   const { routeThreadKey } = use(TimelineRowCtx);
   const pinned = useIsMessagePinned(routeThreadKey, messageId);
   const togglePinnedMessage = usePinnedMessageStore((state) => state.togglePinnedMessage);
-  const label = pinned ? "Unpin message" : "Pin message";
 
   return (
     <Tooltip>
@@ -22,7 +21,7 @@ export function MessagePinButton({ messageId }: { messageId: string }) {
             type="button"
             size="xs"
             variant="ghost"
-            aria-label={label}
+            aria-label="Pin message"
             aria-pressed={pinned}
             onClick={() => togglePinnedMessage(routeThreadKey, messageId)}
           />
@@ -30,7 +29,7 @@ export function MessagePinButton({ messageId }: { messageId: string }) {
       >
         <PinIcon className={cn("size-3", pinned && "fill-current text-warning-foreground")} />
       </TooltipTrigger>
-      <TooltipPopup side="top">{label}</TooltipPopup>
+      <TooltipPopup side="top">{pinned ? "Unpin message" : "Pin message"}</TooltipPopup>
     </Tooltip>
   );
 }
