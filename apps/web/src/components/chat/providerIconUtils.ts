@@ -72,15 +72,9 @@ const EXTRA_MODEL_ICONS = {
 export const EXTRA_MODEL_ICON_IDS: ReadonlyArray<string> = Object.keys(EXTRA_MODEL_ICONS);
 
 /**
- * Resolve a per-model icon override to its glyph component. Icon ids are
- * provider driver kinds ("codex", "claudeAgent", …) or an extra model-family
- * id ("zai") so a custom model served through a gateway (e.g. a Codex model
- * behind the Claude provider) can carry the icon of the model's real family.
- * Unknown ids resolve to `null` and
- * callers fall back to the instance's driver icon. The `Object.hasOwn` guard
- * matters: ids come from a user-editable settings blob, and a value like
- * "constructor" passes the open slug check but must not resolve to an
- * inherited `Object.prototype` member.
+ * Unknown ids resolve to `null` so callers fall back to the driver icon. Ids come
+ * from user-editable settings, so `Object.hasOwn` keeps "constructor" from
+ * resolving to an inherited `Object.prototype` member.
  */
 export function getModelIconComponent(icon: string | null | undefined): Icon | null {
   if (!icon) return null;

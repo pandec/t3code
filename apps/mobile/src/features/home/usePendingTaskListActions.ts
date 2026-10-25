@@ -83,10 +83,9 @@ export function usePendingTaskListActions(
           style: "destructive",
           onPress: () => {
             deleting = true;
-            // The row animates out before removal runs; the confirmation hold
-            // keeps a reconnect from sending the task meanwhile. A task open in
-            // the editor is removed at once, since the editor could release the
-            // shared hold mid-animation; it keeps its hold unless removal succeeds.
+            // The row animates out before removal runs; the confirmation hold keeps a reconnect from
+            // sending the task meanwhile. The editor can release the shared hold mid-animation, so an
+            // edited task is removed at once and keeps its hold unless removal succeeds.
             const remove = () => removeThreadOutboxMessage(pendingTask.message);
             const restoreHold = () => {
               deleting = false;

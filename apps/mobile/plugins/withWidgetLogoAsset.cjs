@@ -1,22 +1,9 @@
 "use strict";
 
-// Applies the fork's missing widget-target integration:
-// - ships the branded T3 mark to the Live Activity / widget extension;
-// - marks the WidgetKit container background so gallery previews render;
-// - aligns the extension's deployment and bundle versions with the app.
-//
-// expo-widgets generates ExpoWidgetsTarget without a Resources build phase and
-// has no asset support. Its generated target also currently defaults to iOS
-// 16.4 / version 1.0 and omits WidgetKit's required container-background marker.
-// This plugin fixes those generated outputs after expo-widgets runs.
-//
-// ORDERING: must be listed BEFORE "expo-widgets" in the plugins array. Expo
-// chains same-type mods so the last-registered runs FIRST; registering this
-// plugin earlier makes its mods run AFTER expo-widgets' mods. That matters
-// twice: expo-widgets' dangerous mod rmSync's ios/ExpoWidgetsTarget/ (deleting
-// any catalog written before it), and its xcodeproj mod is what creates the
-// widget target. Listed after expo-widgets, both steps silently no-op on a
-// fresh prebuild — which is how prod build 8 shipped without the logo.
+// Fork widget-target integration: ships the T3 mark, marks the WidgetKit container background, and
+// aligns the extension's deployment/bundle versions with the app (expo-widgets defaults 16.4/1.0).
+// ORDERING: list BEFORE "expo-widgets" so its reverse-ordered mods create and wipe the target first;
+// listed after it, both steps silently no-op on a fresh prebuild (prod build 8 shipped without the logo).
 
 const path = require("path");
 const fs = require("fs");

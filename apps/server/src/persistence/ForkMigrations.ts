@@ -1,10 +1,7 @@
 /**
- * Fork-owned migrations, recorded in their own ledger (fork_sql_migrations,
- * ids from 1) and run by `runMigrations` after upstream's migrations.
- *
- * Rule: fork schema lives only in fork-owned tables through this ledger. Never
- * add fork files to Migrations/ or ALTER upstream tables; upstream ids and
- * tables stay upstream's.
+ * Fork-owned migrations in their own ledger (fork_sql_migrations), run after
+ * upstream's. Fork schema lives only in fork-owned tables: never add fork files
+ * to Migrations/ or ALTER upstream tables.
  */
 
 import * as Effect from "effect/Effect";

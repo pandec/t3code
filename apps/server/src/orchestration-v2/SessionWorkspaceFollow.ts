@@ -1,14 +1,7 @@
 /**
- * Fork (DECISIONS 5.8): a thread follows a provider session that moved itself
- * into another checkout of the project (Claude's EnterWorktree/ExitWorktree).
- *
- * The adapter notices the move and offers a ProviderSessionCwdObservation; this worker
- * mirrors it onto the thread's branch and worktree with the internal
- * `thread.workspace.follow-session` command, which names the session process,
- * so the decider keeps it running instead of detaching it as it does for a
- * T3-driven move.
- * Later turns, and any session restart, then start in the directory the
- * session is actually in.
+ * Fork: a thread follows a provider session that moved itself into another checkout (Claude's
+ * EnterWorktree/ExitWorktree). `thread.workspace.follow-session` names the session process, so
+ * the decider keeps it running instead of detaching it as for a T3-driven move.
  */
 import type { OrchestrationV2AppThread, OrchestrationV2ProviderSession } from "@t3tools/contracts";
 import * as DateTime from "effect/DateTime";
@@ -29,11 +22,9 @@ import {
 import { resolveWorktreeSwitchTarget } from "./worktreeSwitch.ts";
 
 /**
- * The thread workspace an observed session cwd stands for. Only an existing
- * checkout of the project's repository qualifies: a plain subdirectory or
- * another repository would retarget the thread's diffs, checkpoints and git
- * status at the wrong code, and a directory removed since the move would make
- * every later turn fail to start.
+ * Only an existing checkout of the project's repository qualifies: a subdirectory or another
+ * repository would retarget diffs, checkpoints and git status at the wrong code, and a removed
+ * directory would make every later turn fail to start.
  */
 export const resolveFollowedWorkspace = Effect.fn("resolveFollowedWorkspace")(function* (input: {
   readonly workspaceRoot: string;

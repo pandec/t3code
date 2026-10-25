@@ -79,14 +79,9 @@ export const CodexScanState = Schema.Struct({
   suppressingForkCopies: Schema.mutableKey(Schema.Boolean),
   forkCopyAnchorMs: Schema.mutableKey(Schema.Finite),
   /**
-   * Well-formed `token_count` lines this scan chose not to count: duplicate
-   * re-emissions, stale cumulative counters, zero-component context-size
-   * markers (context-window fills, post-compaction totals), fork copies,
-   * and events arriving before their model. The reader cannot tell these from
-   * a parse failure, since both yield no record, and reporting them as
-   * malformed would raise "usage is incomplete" on transcripts that are in fact
-   * read perfectly. Increment this at any new intentional skip, but never on a
-   * path a corrupt line can reach.
+   * Well-formed `token_count` lines deliberately not counted. Without this they
+   * read as parse failures and falsely flag usage as incomplete. Increment at any
+   * new intentional skip, never on a path a corrupt line can reach.
    */
   deliberateSkips: Schema.mutableKey(Schema.Int.check(Schema.isGreaterThanOrEqualTo(0))),
 });
@@ -110,12 +105,7 @@ export function initialCodexScanState(): CodexScanState {
   };
 }
 
-/**
- * A forked or subagent rollout opens with the parent's full history copied in,
- * every line re-stamped to the fork instant. Those copies are written in one
- * synchronous burst (observed gaps 0-40ms), while the child's first genuine
- * usage event only lands after a real model turn (observed 5s+).
- */
+/** Forks copy and restamp parent history in a burst (0-40ms gaps); genuine child usage follows a model turn (5s+ observed). */
 const FORK_COPY_MAX_GAP_MS = 1000;
 
 function isForkedSessionMeta(payload: Record<string, unknown>): boolean {
@@ -153,9 +143,7 @@ function parseCodexRecord(parsed: unknown, state: CodexScanState): UsageRecord |
   const payloadType = payloadRecord["type"];
 
   if (record["type"] === "session_meta") {
-    // Only the first meta describes this file's own session. A forked rollout
-    // repeats the ancestors' metas right after it; letting those through would
-    // reassign every subsequent record to an ancestor session.
+    // Only the first meta identifies this session; copied ancestor metas would misattribute later records.
     if (state.sawSessionMeta) return null;
     state.sawSessionMeta = true;
     const id = payloadRecord["id"] ?? payloadRecord["session_id"];
@@ -326,10 +314,7 @@ function parseCodexRecord(parsed: unknown, state: CodexScanState): UsageRecord |
   };
 }
 
-/**
- * Codex omits the field when no tier was requested, which bills as standard, as
- * do `default` and `standard`. `fast` is accepted as an alias of `priority`.
- */
+/** Missing, default and standard tiers bill as standard; fast aliases priority. */
 function codexSpeed(serviceTier: unknown): UsageSpeed {
   if (serviceTier === "priority" || serviceTier === "fast") return "fast";
   if (serviceTier === "ultrafast") return "ultrafast";
@@ -356,8 +341,7 @@ export const codexUsageFormat: TranscriptUsageFormat<CodexScanState> = {
       info: { last_token_usage: true, total_token_usage: true },
     },
   },
-  // `turn_context`, `thread_settings_applied` and `session_meta` lines hold no
-  // usage, but they carry the model, tier and session the reducer needs.
+  // Metadata lines carry model, tier and session even without usage.
   usageMarkers: ['"token_count"', '"turn_context"', '"thread_settings_applied"', '"session_meta"'],
   parseLine: (line, state) => orEmpty(parseCodexLine(line, state)),
   parseProjected: (projected, state) => orEmpty(parseCodexRecord(projected, state)),

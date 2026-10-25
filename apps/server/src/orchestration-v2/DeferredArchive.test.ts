@@ -7,6 +7,8 @@ import {
   CommandId,
   EnvironmentId,
   EventId,
+  GuestMessageId,
+  GuestShareId,
   MessageId,
   type ModelSelection,
   NodeId,
@@ -204,7 +206,13 @@ describe("evaluateDeferredArchive", () => {
   it("archives only after the run completed and holding background work ended", () => {
     assert.equal(evaluate().type, "archive");
     assert.equal(evaluate({ runs: [run("run-1", 1, "waiting")] }).type, "wait");
-    assert.equal(evaluate({ pendingBackgroundTasks: [{ kind: "monitor" }] }).type, "wait");
+    assert.equal(evaluate({ pendingBackgroundTasks: [{ kind: "subagent" }] }).type, "wait");
+    // A monitor holds only when the agent waits on it; a leftover dev server would never end.
+    assert.equal(evaluate({ pendingBackgroundTasks: [{ kind: "monitor" }] }).type, "archive");
+    assert.equal(
+      evaluate({ pendingBackgroundTasks: [{ kind: "monitor", awaited: true }] }).type,
+      "wait",
+    );
   });
 
   it("cancels on a stopped run, newer work, or a workspace change", () => {
@@ -972,6 +980,43 @@ it.layer(TestLayer)("deferred archive on the orchestrator", (it) => {
       const status = yield* scheduler.status(threadId);
       assert.equal(status.request?.status, "cancelled");
       assert.equal(status.request?.detail, ARCHIVE_CANCEL_DETAIL.newWork);
+    }),
+  );
+
+  it.effect("a guest's request cancels a pending archive", () =>
+    Effect.gen(function* () {
+      const scheduler = yield* ThreadArchiveScheduler.ThreadArchiveScheduler;
+      const orchestrator = yield* Orchestrator.OrchestratorV2;
+      const threadId = yield* createThread("guest-request");
+      yield* sendMessage(threadId, "guest-request-first", { type: "start_immediately" });
+      yield* scheduler.schedule({ threadId, afterTurn: true });
+      const shareId = GuestShareId.make("guest-request-share");
+      yield* orchestrator.dispatch({
+        type: "thread.guest-share.open",
+        commandId: CommandId.make("guest-request-open"),
+        threadId,
+        shareId,
+        host: "env.t3.test",
+        expiresAt: DateTime.formatIso(DateTime.add(yield* DateTime.now, { hours: 24 })),
+      });
+      yield* orchestrator.dispatch({
+        type: "thread.guest-share.redeem",
+        commandId: CommandId.make("guest-request-redeem"),
+        threadId,
+        shareId,
+        guestName: "Sam",
+      });
+      yield* orchestrator.dispatch({
+        type: "thread.guest-message.submit",
+        commandId: CommandId.make("guest-request-submit"),
+        threadId,
+        shareId,
+        guestMessageId: GuestMessageId.make("guest-request-message"),
+        text: "Can you check the tests too?",
+      });
+      const status = yield* scheduler.status(threadId);
+      assert.equal(status.request?.status, "cancelled");
+      assert.equal(status.request?.detail, ARCHIVE_CANCEL_DETAIL.guestRequest);
     }),
   );
 

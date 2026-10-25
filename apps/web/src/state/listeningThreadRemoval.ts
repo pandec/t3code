@@ -3,15 +3,10 @@ import type { ListeningPlaybackSnapshot } from "@t3tools/shared/listeningPlaybac
 import * as Option from "effect/Option";
 
 /**
- * Fork: pauses the loaded recording when the server takes its thread out of
- * the active shell (archived, including deferred, composer, MCP and
- * other-client archives, or deleted). Archived rows leave every surface that
- * carries the pause control, so the audio must not keep playing.
- *
- * Only the environment's own shell snapshot counts: a disconnect keeps the
- * last snapshot, and client-side filtering never touches it, so neither can
- * pause anything. The thread must have been seen active first, so a
- * recording played from an already archived thread keeps playing.
+ * Pauses the loaded recording when the server removes its thread from the active shell
+ * (any archive or delete), since archived rows lose every pause control. Only the
+ * environment's own shell snapshot counts, so disconnects and client filters never pause,
+ * and the thread must be seen active first, so already archived recordings keep playing.
  */
 export function watchListeningThreadRemoval(input: {
   readonly playback: {

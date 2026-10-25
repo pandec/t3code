@@ -53,19 +53,10 @@ import { useClientSettings } from "./useSettings";
 import { useThreadRouteTarget } from "./useThreadRouteTarget";
 
 /**
- * Seeds a freshly created draft's composer model state.
- *
- * Precedence, lowest to highest:
- * 1. Global per-provider sticky memory (`applyStickyState`).
- * 2. The owning project's `defaultModelSelection` — the last model the user
- *    picked in that project's composer. Options are not replaced so sticky
- *    option memory (effort, context window) still applies unless the stored
- *    default carries its own options.
- * 3. The carried selection — the exact model state of the thread the user was
- *    viewing — but only when that thread belongs to the same logical project.
- *    Creating a draft in a *different* project must land on that project's own
- *    default (or, when none is stored yet, the global sticky memory), not drag
- *    the previous project's model along.
+ * Precedence, lowest to highest: per-provider sticky memory; the project's
+ * `defaultModelSelection` (options merge, so sticky effort/context still apply); the
+ * viewed thread's carried selection, only within the same logical project. A draft in
+ * another project never inherits the previous project's model.
  */
 export function seedNewDraftModelState(input: {
   draftId: DraftId;
@@ -90,12 +81,9 @@ export function seedNewDraftModelState(input: {
 }
 
 /**
- * Applies the viewed thread's carried model selection to a REUSED empty
- * draft, under the same rule as seedNewDraftModelState: the carry only
- * applies within its own logical project — reusing a draft in a different
- * project must not drag the previous project's model along. Unlike a fresh
- * draft, a reused draft already has seeded model state, so nothing is
- * written when the carry does not apply.
+ * Same carry rule as seedNewDraftModelState, for a reused empty draft: the carry
+ * applies only within its own logical project. A reused draft is already seeded, so
+ * nothing is written when the carry does not apply.
  */
 export function applyCarryModelSelectionToReusedDraft(input: {
   draftId: DraftId;
@@ -114,12 +102,9 @@ export function applyCarryModelSelectionToReusedDraft(input: {
 }
 
 /**
- * Resolves the logical project a carried model selection originates from, so
- * the caller can decide whether the carry may out-rank the target project's
- * default model: it does within the same logical project, not across projects.
- * Draft sources record their logical project key directly; server-thread
- * sources resolve it through the project list, falling back to the scoped
- * project key when the project is not loaded.
+ * The carry may out-rank the target project's default only within the same logical
+ * project. Draft sources record their logical project key; server threads resolve it
+ * through the project list, falling back to the scoped key when the project is unloaded.
  */
 export function resolveCarrySourceLogicalProjectKey(input: {
   carrySourceDraftLogicalProjectKey: string | null;
@@ -188,8 +173,7 @@ export function useNewThreadHandler() {
     },
   ): Promise<{ draftId: DraftId; threadId: ThreadId } | null> => {
     const projects = readProjects();
-    // Read at call time: every provider status push replaces the config map, and
-    // subscribing would hand every sidebar row a new handler.
+    // Read at call time; status pushes replace the config map and would recreate every sidebar handler.
     const environmentServerConfigs = appAtomRegistry.get(environmentServerConfigsAtom);
     const targetServerSettings =
       environmentServerConfigs.get(projectRef.environmentId)?.settings ?? DEFAULT_SERVER_SETTINGS;
@@ -204,11 +188,9 @@ export function useNewThreadHandler() {
     const requestingRouteHref = router.state.location.href;
     const routeChangedSinceRequest = () => router.state.location.href !== requestingRouteHref;
     const currentRouteTarget = getCurrentRouteTarget();
-    // A new thread carries the user's working mode from the thread being
-    // viewed. A same-logical-project model carry wins over the project
-    // default; cross-project drafts use the target project's default instead.
-    // Interaction mode carries independently. Permissions, branch, worktree,
-    // and env mode come from configured defaults unless explicitly passed.
+    // A new thread carries the viewed thread's model (over the project default only in the
+    // same logical project) and interaction mode. Permissions, branch, worktree, and env
+    // mode come from configured defaults unless explicitly passed.
     const carrySourceShell =
       currentRouteTarget?.kind === "server" ? readThreadShell(currentRouteTarget.threadRef) : null;
     const carrySourceDraft =
@@ -307,11 +289,9 @@ export function useNewThreadHandler() {
     const hasEnvModeOption = options?.envMode !== undefined;
     const hasStartFromOriginOption = options?.startFromOrigin !== undefined;
     const hasLabOption = options?.lab !== undefined;
-    // A group pick belongs to the unsent draft, like its branch and env
-    // mode: landing on that draft again (app start, post-settle
-    // navigation) keeps it, and only an explicit option
-    // or the picker changes it. A promoted draft is left behind, so the
-    // next draft starts in Active.
+    // A group pick belongs to the unsent draft, like its branch and env mode: returning
+    // to that draft keeps it, and only an explicit option or the picker changes it. A
+    // promoted draft is left behind, so the next draft starts in Active.
     const customGroupFields =
       options?.customGroupId === undefined ? {} : { customGroupId: options.customGroupId };
     const storedDraftThread = getDraftSessionByLogicalProjectKey(logicalProjectKey);
@@ -357,13 +337,7 @@ export function useNewThreadHandler() {
           if (abandonedSinceRequest()) {
             return null;
           }
-          // If the draft was opened (a concurrent invocation's navigation
-          // landed), promoted to a real thread, remapped away (a concurrent
-          // invocation registered a fresh draft — remapping back would evict
-          // the winner and let the store GC it), or gained content (no longer
-          // a reusable empty draft) in the meantime, this invocation is a
-          // stale loser: resetting context, remapping, or navigating would
-          // all clobber state written after the snapshot above.
+          // Concurrent calls may change the draft; stale resets, remaps, or navigation could clobber it.
           const routeTargetNow = getCurrentRouteTarget();
           const openedMeanwhile =
             routeTargetNow?.kind === "draft" &&
@@ -396,13 +370,9 @@ export function useNewThreadHandler() {
             ...(carryInteractionMode ? { interactionMode: carryInteractionMode } : {}),
           });
         }
-        // Model intent: an explicit human pick always stands. Seeds and
-        // legacy entries alike re-resolve here — sticky first, mirroring
-        // the mint-fresh path, then the project default, then the carried
-        // selection when it comes from the same logical project. This runs
-        // even when the draft is already open: without it, a changed pin
-        // could never reach the draft the user is looking at, because
-        // explicit picks are the only thing the flag protects.
+        // An explicit human pick always stands; anything else re-resolves here (sticky,
+        // project default, then a same-project carry) even when the draft is already
+        // open, or a changed pin could never reach the draft on screen.
         const storedDraft = getComposerDraft(emptyStoredDraftThread.draftId);
         const storedDraftHasExplicitModelPick = hasExplicitComposerModelSelection(storedDraft);
         if (!storedDraftHasExplicitModelPick) {
@@ -414,10 +384,7 @@ export function useNewThreadHandler() {
             carrySourceLogicalProjectKey,
           });
         }
-        // The workspace context must also ride along here: when projectRef
-        // targets a different physical member of the logical project,
-        // createDraftThreadState treats the remap as a project change and
-        // would otherwise wipe branch/worktree, undoing the write above.
+        // Remapping physical projects clears workspace context; preserve the branch and worktree.
         setLogicalProjectDraftThreadId(
           logicalProjectKey,
           projectRef,
@@ -488,10 +455,7 @@ export function useNewThreadHandler() {
       if (abandonedSinceRequest()) {
         return null;
       }
-      // The await yields, so a concurrent invocation may have registered a
-      // draft for this logical project in the meantime. Registering ours
-      // too would evict that draft while its navigation is in flight —
-      // reuse the winner instead, like the synchronous path above does.
+      // Reuse drafts registered while awaiting so their pending navigation cannot lose them.
       const racedDraft = getDraftSessionByLogicalProjectKey(logicalProjectKey);
       if (
         racedDraft &&

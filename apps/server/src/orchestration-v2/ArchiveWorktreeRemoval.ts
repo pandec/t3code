@@ -1,9 +1,7 @@
 /**
- * Fork: guarded worktree removal for archive requests with `removeWorktree`.
- * Removes only a clean, attached, linked worktree that is not a project
- * checkout and that no other unarchived thread uses. Removal is never forced
- * (Git also keeps locked worktrees) and the branch is always kept. Callers get
- * the reason a worktree was kept instead of an error.
+ * Fork: removes only a clean, attached, linked worktree that is not a project checkout and that
+ * no other unarchived thread uses. Never forced (Git also keeps locked worktrees); the branch is
+ * always kept. Callers get the reason a worktree was kept instead of an error.
  */
 import type { ThreadId } from "@t3tools/contracts";
 import * as Context from "effect/Context";
@@ -55,11 +53,9 @@ export class ArchiveWorktreeRemoval extends Context.Service<
      */
     readonly blocker: (threadId: ThreadId) => Effect.Effect<string | null>;
     /**
-     * Waits for the archive's queued provider-session and terminal stops (and
-     * in-flight stops of other archived threads in the checkout) to settle,
-     * then removes `worktreePath` if every guard passes and the
-     * thread's removal is still pending (a message or unarchive can reopen it
-     * meanwhile). Returns why it was kept, or null once it is gone.
+     * Waits for the queued session and terminal stops to settle, then removes `worktreePath` if
+     * every guard passes and removal is still pending (a message or unarchive can reopen it).
+     * Returns why it was kept, or null once it is gone.
      */
     readonly remove: (input: {
       readonly threadId: ThreadId;
@@ -166,11 +162,9 @@ export const make = Effect.gen(function* () {
     },
   );
 
-  // The archive stops the thread's provider sessions and terminals through
-  // outbox effects (the session bindings are already gone from the
-  // projection); no process may still run in the checkout when Git removes it.
-  // Other archived threads in the checkout count only while their stops are
-  // in flight: their failed stops do not block this archive.
+  // No process may still run in the checkout when Git removes it; the archive's session and
+  // terminal stops run as outbox effects. Other archived threads' stops count only while in
+  // flight, so their failed stops do not block this archive.
   const unsettledStops = (threadId: ThreadId, sharingThreadIds: ReadonlyArray<ThreadId>) =>
     sql<{ readonly status: string }>`
       SELECT status FROM orchestration_v2_effect_outbox

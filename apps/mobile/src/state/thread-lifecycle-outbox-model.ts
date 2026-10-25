@@ -180,11 +180,9 @@ export function resolveThreadLifecycleOutboxAction(input: {
   /** Messages for this thread still in the local outbox go first. */
   readonly hasQueuedMessages: boolean;
   /**
-   * The connection's operate grant. Offline enqueues cannot check it, so an
-   * intent waits for the grant to load and is dropped when it is denied: the
-   * server would refuse every dispatch, and dropping restores the real state.
-   * Denial wins over queued messages, which the same grant also holds back.
-   * An unverified grant dispatches and leaves the decision to the server.
+   * Offline enqueues cannot check this grant, so an intent waits for it to load and is dropped
+   * when denied (the server would refuse every dispatch). Denial wins over queued messages; an
+   * unverified grant dispatches and leaves the decision to the server.
    */
   readonly operateGrant: ScopeGrant;
   readonly thread: Pick<EnvironmentThreadShell, "archivedAt" | "archiveRequest"> | undefined;

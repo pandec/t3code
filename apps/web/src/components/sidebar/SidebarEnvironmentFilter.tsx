@@ -126,12 +126,9 @@ function SidebarEnvironmentFilterMenuImpl({
     scope === null
       ? []
       : environments.filter((environment) => scope.has(environment.environmentId));
-  // Derived here rather than accepted as a prop: the parent can only compute it
-  // from a different array, and the two would agree by coincidence.
-  //
-  // An unhydrated catalog is empty, so subtracting against it would report the
-  // whole selection as removed at the one moment nothing has gone wrong. The
-  // count is only meaningful once the catalog can actually answer.
+  // Derived here: the parent could only compute it from a different array. An unhydrated
+  // catalog is empty and would report the whole selection as removed, so the count waits
+  // until the catalog can answer.
   const unavailableCount =
     scope === null || !catalogReady ? 0 : scope.size - selectedEnvironments.length;
   const scopeSummary =

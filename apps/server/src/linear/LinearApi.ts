@@ -1,14 +1,7 @@
 /**
- * Linear issue reader and comment writer.
- *
- * One personal API key per environment, stored in the server's secret store,
- * used against Linear's GraphQL endpoint. Personal keys go in the
- * `Authorization` header bare (no `Bearer`). The browser never sees the key.
- *
- * Caches are process-wide like `openRouterCredits.ts`: the WS handler layer is
- * built per connection, so a per-layer cache would re-read for every client.
- * Concurrent misses on one key are not coalesced; the minute-long entries make
- * that a rare double read, not a rate-limit risk.
+ * Personal API keys go in the `Authorization` header bare (no `Bearer`). Caches are process-wide
+ * because the WS handler layer is built per connection; concurrent misses are not coalesced,
+ * which the minute-long entries make a rare double read.
  */
 import type {
   LinearComment,

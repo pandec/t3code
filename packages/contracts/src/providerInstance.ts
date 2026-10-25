@@ -47,21 +47,10 @@ export const ProviderInstanceEnvironment = Schema.Array(ProviderInstanceEnvironm
 export type ProviderInstanceEnvironment = typeof ProviderInstanceEnvironment.Type;
 
 /**
- * Optional per-instance subscription-usage source override.
- *
- * A gateway instance (e.g. CLIProxyAPI) pools several upstream
- * subscriptions behind one endpoint, so the driver's own account probe has
- * no quota to report — the meaningful usage data is the pool's per-account
- * quota, which only the gateway's management API can serve. `kind` is an
- * open slug for the same rolling-compatibility reason as
- * `ProviderDriverKind`: builds that don't recognize a kind keep the
- * envelope verbatim and simply don't probe.
- *
- * `managementKey` is sensitive: the server persists it to the secret store
- * and blanks it (setting `managementKeyRedacted`) on the way to clients,
- * mirroring sensitive environment variables. `managementUrl` is optional;
- * when absent the server derives it from the instance's environment (for
- * `cliproxyapi`, the Anthropic- or OpenAI-compatible base URL origin).
+ * Per-instance subscription-usage source override: a gateway (e.g. CLIProxyAPI) pools
+ * subscriptions, so usage comes from its management API. `kind` is an open slug; unknown kinds
+ * round-trip unprobed. `managementKey` is a secret redacted to clients; a missing
+ * `managementUrl` is derived from the instance environment's base URL.
  */
 export const ProviderInstanceUsageSource = Schema.Struct({
   kind: slugSchema,
@@ -73,15 +62,7 @@ export type ProviderInstanceUsageSource = typeof ProviderInstanceUsageSource.Typ
 
 export const PROVIDER_USAGE_SOURCE_CLIPROXYAPI = "cliproxyapi";
 
-/**
- * Envelope shape for a provider instance configuration in `ServerSettings`.
- *
- * `driver` is intentionally accepted as any well-formed slug (see module
- * docs). The driver-specific config payload is left as `Schema.Unknown`;
- * each driver registers its own decoder with the runtime registry, and
- * envelopes for unknown drivers are preserved verbatim so they round-trip
- * across version changes without data loss.
- */
+/** Drivers decode their own config; unknown-driver envelopes round-trip verbatim across versions. */
 export const ProviderInstanceConfig = Schema.Struct({
   driver: ProviderDriverKind,
   displayName: Schema.optional(TrimmedNonEmptyString),
@@ -116,11 +97,6 @@ export type ProviderInstanceMutation = typeof ProviderInstanceMutation.Type;
 export const ProviderInstanceConfigMap = Schema.Record(ProviderInstanceId, ProviderInstanceConfig);
 export type ProviderInstanceConfigMap = typeof ProviderInstanceConfigMap.Type;
 
-/**
- * The legacy single-instance-per-driver world used the driver kind itself as
- * the instance id; preserving that mapping keeps existing persisted threads,
- * bindings, and cache files routable across the migration without rewriting
- * their stored selection payloads.
- */
+/** Driver-kind ids keep stored selections routable without migration. */
 export const defaultInstanceIdForDriver = (driver: ProviderDriverKind): ProviderInstanceId =>
   ProviderInstanceId.make(driver);

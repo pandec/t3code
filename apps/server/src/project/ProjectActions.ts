@@ -1,10 +1,7 @@
 /**
- * Fork: reads and edits a project's effective actions (the run buttons the UI
- * shows), which live in server settings rather than the project row. Writes
- * are a compare-and-set against the actions just read, under the settings
- * write lock, so a concurrent edit from another client is reported instead of
- * overwritten. Inherited default actions become the project's own override on
- * the first write. Keybindings are never touched.
+ * Fork: a project's effective actions, stored in server settings. Writes
+ * compare-and-set under the settings lock so concurrent edits are reported, not
+ * overwritten; inherited defaults become the project's override on first write.
  */
 import {
   type ProjectId,

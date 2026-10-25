@@ -7,17 +7,10 @@ import type {
 import type { ThreadStructureTurnItem } from "./models.ts";
 
 /**
- * Steering is not the same as being heard. Claude Code, Codex and OpenCode
- * hold a mid-turn prompt and only read it before the next model request, so a
- * steer sent behind a long subagent or shell call can sit unread for minutes
- * while the timeline keeps moving. This module tells the two apart from the
- * thread projection alone so the message bubble can say which one it is.
- *
- * A steer is a `user_message` item with a steer input intent on a live run.
- * The server allocates item ordinals per run in the order it first records
- * them, so any main-agent output item with a higher ordinal was produced by a
- * model request made after the steer was handed over. Nothing is client-local:
- * the marker survives reloads and shows on every device.
+ * Tells a steer that was handed over apart from one the model has read: providers only read a
+ * mid-turn prompt before their next model request. Run item ordinals follow record order, so any
+ * later main-agent output item proves a newer request. Derived from the projection alone, so it
+ * survives reloads and shows on every device.
  */
 
 /** The thread state a steer is resolved against. */
@@ -41,11 +34,9 @@ const LIVE_RUN_STATUSES: ReadonlySet<OrchestrationV2Run["status"]> = new Set([
 ]);
 
 /**
- * Items only a new model request produces. Updates to an item keep its
- * ordinal, so a tool that started before the steer and is still reporting
- * progress never counts. Subagent work lives in child threads, so it never
- * shows up here. Known imprecision: a sibling tool call from the same model
- * request that the server records after the steer clears the marker early.
+ * Items only a new model request produces. Updates keep an item's ordinal, so an earlier tool still
+ * reporting progress never counts; subagent work lives in child threads. Known imprecision: a
+ * sibling tool call from the same request recorded after the steer clears the marker early.
  */
 const AGENT_PROGRESS_ITEM_TYPES: Record<OrchestrationV2TurnItem["type"], boolean> = {
   assistant_message: true,

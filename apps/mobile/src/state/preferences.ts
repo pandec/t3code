@@ -36,8 +36,7 @@ export function loadMobilePreferencesWithFallback(
   );
 }
 
-// A bare function is interpreted by useAtomSet as an update to the command's
-// AsyncResult, not as a preference transform. Keep transforms inside a payload.
+// useAtomSet treats bare functions as AsyncResult updates; wrap preference transforms in payloads.
 type PreferencesUpdate =
   | Partial<MobilePreferences.Preferences>
   | {
@@ -46,10 +45,7 @@ type PreferencesUpdate =
       ) => Partial<MobilePreferences.Preferences>;
     };
 
-/**
- * Optimistic patches are kept separately so writes made while persistence is still loading cannot
- * be replaced by the eventual read result.
- */
+/** Keep optimistic patches separate so hydration cannot overwrite pending writes. */
 export function createMobilePreferencesState(
   runtime: Atom.AtomRuntime<MobilePreferences.MobilePreferencesStore>,
 ) {
@@ -147,9 +143,7 @@ export function createMobilePreferencesState(
           ),
         );
       },
-      // The storage layer serializes preference read-modify-write operations.
-      // Keep every invocation alive so one preference update cannot interrupt
-      // another update to a different field in the shared blob.
+      // Storage serializes shared-blob updates; keep concurrent invocations alive to prevent cross-field interruption.
       { concurrent: true },
     )
     .pipe(Atom.keepAlive, Atom.withLabel("mobile:preferences:update"));

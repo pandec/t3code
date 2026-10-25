@@ -117,11 +117,9 @@ export const BUNDLED_CLAUDE_MODEL_CATALOG = resolveClaudeModelCatalog(
 );
 
 /**
- * Scope the catalog to one instance's settings. Custom slugs stay opaque, keep
- * the gateway effort ladder, and may add only the non-effort descriptors that
- * the adapter handles directly. Built-in aliases shadowed by custom slugs are
- * removed without changing canonical built-in models; an entry that names a
- * canonical slug is a rename and leaves that model native.
+ * Custom slugs stay opaque, keep the gateway effort ladder, and add only
+ * adapter-handled non-effort descriptors. Shadowed built-in aliases are removed;
+ * an entry naming a canonical slug is a rename and leaves that model native.
  */
 export function scopeClaudeModelCatalog(
   catalog: ClaudeModelCatalog,

@@ -25,12 +25,9 @@ import {
 const EMPTY_PREFERENCES: Preferences = {};
 
 /**
- * Device preferences plus whether the persisted blob has arrived.
- *
- * Mobile has no client-settings sync, so these are the fork's Extras settings
- * as stored on this device. Preferences load asynchronously; `hydrated` lets a
- * consumer that cannot afford the default (see the steer hold in
- * `use-thread-outbox-drain`) wait for the stored value instead.
+ * Mobile has no client-settings sync, so these are the fork's Extras settings stored on this
+ * device. They load asynchronously; `hydrated` lets a consumer that cannot afford the default
+ * (the steer hold in `use-thread-outbox-drain`) wait for the stored value.
  */
 export function useMobilePreferences(): {
   readonly preferences: Preferences;

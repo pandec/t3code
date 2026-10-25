@@ -1,20 +1,7 @@
 /**
- * Fork: the continuation group each native provider conversation lives in.
- *
- * Instances that share a `continuationKey` (Claude shadow accounts on one
- * shared config dir, Codex instances on one home) can resume each other's
- * native conversations, so an account switch keeps native context. The live
- * key only describes an instance's current config, though; a conversation
- * stays where it was created. `ProviderSessionManager` captures the owner's key
- * when it opens a session and records that key when the session first attaches
- * a native conversation (a reconfiguration while the attach is pending doesn't
- * change where the conversation was created), and
- * `ProviderSwitchService` compares that recorded key, not the owner's live
- * one, when a switch moves the conversation to another instance. A
- * reconfigured owner therefore can't hand a conversation to an instance that
- * can't see it, and a removed owner's conversation still resumes on a
- * compatible sibling. Without a record the switch falls back to the live
- * owner, and with neither it hands context off instead of resuming natively.
+ * Fork: the `continuationKey` a native conversation was created under. `ProviderSwitchService`
+ * compares this, not the owner's live key, so a reconfigured owner can't hand a conversation to
+ * an instance that can't see it, and a removed owner's conversation still resumes on a sibling.
  *
  * @module orchestration-v2/NativeContinuationStore
  */

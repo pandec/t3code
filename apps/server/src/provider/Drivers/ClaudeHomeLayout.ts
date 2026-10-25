@@ -1,13 +1,7 @@
-// Claude analog of the Codex shadow home (`CodexHomeLayout.ts`), kept as a
-// parallel module rather than a shared abstraction so the upstream Codex file
-// stays untouched.
-//
-// Unlike Codex — whose home holds a small, well-known set of directories — a
-// Claude config dir accumulates heterogeneous per-account state
-// (`.claude.json`, `session-env/`, security-warning markers, caches). The
-// shadow overlay therefore shares an explicit whitelist instead of
-// enumerating the shared dir: entries not listed here stay local to whichever
-// config dir the CLI writes them in.
+// Claude analog of `CodexHomeLayout.ts`, kept separate so the upstream file
+// stays untouched. A Claude config dir accumulates per-account state, so the
+// shadow overlay shares an explicit whitelist; unlisted entries stay local to
+// whichever config dir the CLI writes them in.
 import type { ClaudeSettings } from "@t3tools/contracts";
 import * as Effect from "effect/Effect";
 import * as FileSystem from "effect/FileSystem";
@@ -33,11 +27,9 @@ export type ClaudeHomeLayout =
     };
 
 /**
- * Always created in the shared config dir and always linked into the shadow
- * dir. Directory-valued entries that Claude Code creates on demand must live
- * here, not in the optional list: an optional entry absent at first
- * materialization would stay shadow-local forever, silently splitting skills
- * or agents between the two accounts.
+ * Directories Claude Code creates on demand must live here, not in the optional
+ * list: an optional entry absent at first materialization would stay
+ * shadow-local forever, splitting skills or agents between the two accounts.
  */
 const REQUIRED_SHARED_DIRECTORIES = [
   "projects",
@@ -61,12 +53,9 @@ const OPTIONAL_SHARED_ENTRIES = [
 ] as const;
 
 /**
- * Never shared: these carry the account identity of a config dir. A stale
- * hand-made symlink for one of them would silently collapse both instances
- * onto one account, so materialization removes such symlinks — with a
- * warning rather than Codex's hard `PrivateEntrySymlinkError`, because on
- * this driver the likely author of such a link is a user migrating a
- * hand-made layout, not a corrupted overlay.
+ * Never shared: these carry a config dir's account identity. Symlinks for them
+ * are removed with a warning, not Codex's hard error, since the likely author is
+ * a user migrating a hand-made layout.
  */
 const PRIVATE_ENTRY_NAMES = [".credentials.json", ".claude.json"] as const;
 
@@ -410,12 +399,9 @@ const ensureSymlink = Effect.fn("ClaudeHomeLayout.ensureSymlink")(function* (inp
 });
 
 /**
- * Materialize the shadow config dir: create it (and the shared dir) if
- * missing, symlink shared session state and configuration into it, and drop
- * stale symlinks for account-private entries. Idempotent — an already
- * materialized shadow dir (including a hand-made one with matching symlinks)
- * is left as is. Managed symlinks pointing elsewhere are retargeted, and
- * managed optional links whose shared target disappeared are removed.
+ * Idempotent: a materialized shadow dir, including a hand-made one with matching
+ * symlinks, is left as is. Managed symlinks pointing elsewhere are retargeted,
+ * and optional links whose shared target disappeared are removed.
  */
 export const materializeClaudeShadowHome = Effect.fn("materializeClaudeShadowHome")(function* (
   layout: ClaudeHomeLayout,

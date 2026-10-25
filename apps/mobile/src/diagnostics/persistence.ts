@@ -36,11 +36,9 @@ export async function appendMobileDiagnosticEvents(
     const oldest = new File(directory, ROTATED_FILES[1]);
     if (oldest.exists) oldest.delete();
 
-    // `moveSync` rewrites the *moved* file's own uri to the destination, so a
-    // handle can only be used as a destination before it is itself moved.
-    // Every step therefore takes a fresh destination handle: reusing `previous`
-    // after moving it would aim the second move at the oldest slot and destroy
-    // the generation just rotated into it.
+    // `moveSync` rewrites the moved file's own uri to the destination, so every step takes a
+    // fresh destination handle: reusing `previous` after moving it would aim the next move at the
+    // oldest slot and destroy the generation just rotated into it.
     const previous = new File(directory, ROTATED_FILES[0]);
     if (previous.exists) {
       previous.moveSync(new File(directory, ROTATED_FILES[1]), { overwrite: true });

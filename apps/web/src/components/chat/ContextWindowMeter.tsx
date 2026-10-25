@@ -37,14 +37,9 @@ import {
 import { composerFloatingLayerProps } from "./composerEventScope";
 
 /**
- * Two concentric rings in one control: the outer ring is the thread's context
- * window (unchanged behaviour and colours), the inner ring is the provider's
- * subscription quota. They answer the same question — how much room is left —
- * and are read at the same moment, so they share a control and a popover
- * rather than competing for space in the composer row.
- *
- * Only the quota ring uses warning/critical colour: a context window filling
- * up is normal and self-correcting, so colouring both would cry wolf.
+ * Outer ring: the thread's context window; inner ring: subscription quota. Only
+ * the quota ring uses warning/critical colour, since a filling context window is
+ * normal and self-correcting.
  */
 
 const MUTED_RING = "color-mix(in oklab, var(--color-muted-foreground) 72%, transparent)";
@@ -517,22 +512,10 @@ export function ContextWindowMeter(props: {
         width="md"
         className="text-left whitespace-normal"
       >
-        {/* The popover viewport clips instead of scrolling, so the content
-            bounds itself and scrolls the usage list internally. A pooled gateway
-            lists every account it can serve, which easily outgrows the screen —
-            the header and the context window below have to stay reachable.
-
-            Two nested caps, not one min(): Base UI measures the popup with
-            --available-height set to `max-content`, which makes any length
-            expression using it invalid for that pass. The outer viewport-unit
-            cap is always valid, so the height the positioner commits is bounded
-            even during measurement; the inner cap then trims to the room
-            actually available. The outer element scrolls as a last resort, so a
-            viewport too short even for the pinned rows stays reachable.
-
-            The outer cap is deliberately generous: on a full desktop window the
-            inner cap is the smaller of the two, so the panel uses the room that
-            actually exists instead of scrolling a list that would have fit. */}
+        {/* Two nested caps, not one min(): Base UI measures with
+            --available-height as `max-content`, invalidating expressions using
+            it, so the outer vh cap bounds measurement and the inner trims to the
+            room available. The popover clips, so the list scrolls internally. */}
         <div className="flex max-h-[85vh] flex-col overflow-y-auto overscroll-contain">
           <div className="flex max-h-(--available-height) min-h-0 flex-col gap-3 p-(--floating-content-inset)">
             {providerUsageAccounts.length > 0 ? (

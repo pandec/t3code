@@ -161,12 +161,9 @@ function presentArchived(
 }
 
 /**
- * The shelf's per-environment windows. Each environment runs the bounded
- * `getRecentArchivedThreads` query, refetched whenever its shell stream
- * reports an archive-membership change (`archiveInvalidationSequence`).
- * Servers without the query fall back to the full archive snapshot for an
- * unfiltered shelf; a filtered shelf never pages the unbounded archive, so
- * an empty filter or a server without filter support contributes nothing.
+ * The shelf's per-environment windows, refetched on `archiveInvalidationSequence` changes. Servers
+ * without `getRecentArchivedThreads` fall back to the full archive only for an unfiltered shelf; a
+ * filtered shelf never pages the unbounded archive.
  */
 export function createRecentArchivedThreadsAtoms<R, E, FE>(
   runtime: Atom.AtomRuntime<EnvironmentRegistry | R, E>,
@@ -280,14 +277,9 @@ function archivedTimestamp(thread: EnvironmentThreadShell): number {
 }
 
 /**
- * The newest archived threads across every environment. `totalCount` is the
- * unclipped total, which is what the shelf header reports.
- *
- * `selectedThreadKey` names the open thread; when it is archived but falls
- * beyond the clip, its row is appended anyway so navigation never loses the
- * thread being read. This only reaches as far as the snapshots do: each
- * environment's window is server-limited, so a selected thread outside it
- * stays absent.
+ * The newest archived threads across every environment; `totalCount` is the unclipped total. The
+ * selected archived thread is appended even beyond the clip so navigation never loses it, but only
+ * if it is inside its environment's server-limited window.
  */
 export function selectRecentArchivedThreads(
   snapshots: ReadonlyArray<RecentArchivedSnapshotEntry>,

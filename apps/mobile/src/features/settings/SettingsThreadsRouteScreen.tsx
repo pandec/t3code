@@ -336,11 +336,9 @@ function useMinuteClockMs(): number {
 }
 
 /**
- * Manual counterpart of the automatic thread prewarming: fires the same
- * engine on demand (bypassing its cooldown) and shows when any environment
- * last completed a full sweep. The engine debounces briefly before running,
- * so the row tracks the manual-completion cursor until the request reaches a
- * terminal outcome, without treating unavailable attempts as successful syncs.
+ * Manual thread prewarm (bypasses the engine's cooldown). The engine debounces before running, so
+ * the row tracks the manual-completion cursor until a terminal outcome, without treating
+ * unavailable attempts as successful syncs.
  */
 const THREAD_SYNC_PENDING_TIMEOUT_MS = 45_000;
 

@@ -64,12 +64,7 @@ export function latestExecutedRun(
   return latest;
 }
 
-/**
- * Ordinals follow submission, but a run can start ahead of a held queue (a
- * restart continuation, or a message sent while the queue is held), so a queued
- * run resumed later can have a lower ordinal than one that already ended. An
- * unfinished run is the latest.
- */
+/** Held queues can execute out of ordinal order; unfinished runs count as latest. */
 export function runRanAfter(
   run: Pick<OrchestrationV2Run, "ordinal" | "completedAt">,
   other: Pick<OrchestrationV2Run, "ordinal" | "completedAt">,
@@ -108,13 +103,9 @@ export function usageLimitRunPresentedAsLatest(
 }
 
 /**
- * The newest run that is not waiting on the user, or null when only such runs
- * exist. A held queue and a queued message open for editing wait for the user,
- * so they never stand for the thread's outcome. Fork: an unheld queued message
- * outranks other runs, since it still runs after them even when a reorder
- * left it with an older ordinal, and a message cancelled before it started
- * (removed from the queue or batched into another turn) only stands for the
- * outcome when no other run does. The SQL thread shell selects the same run.
+ * Fork: the newest run not waiting on the user (held or edit-held queues never stand for the
+ * outcome). An unheld queued run outranks others even with an older ordinal after a reorder; a
+ * run cancelled before starting counts only when no other run does. The SQL shell matches this.
  */
 export function latestUnheldRun(
   runs: ReadonlyArray<OrchestrationV2Run>,

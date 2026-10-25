@@ -3,7 +3,6 @@ import { ComposerContextId } from "@t3tools/contracts";
 import { useAtomValue } from "@effect/atom-react";
 import { AsyncResult } from "effect/reactivity";
 import { settlePromise, squashAtomCommandFailure } from "@t3tools/client-runtime/state/runtime";
-import { useNavigation } from "@react-navigation/native";
 import { useEffect, useRef, useState } from "react";
 import type { EnvironmentId } from "@t3tools/contracts";
 import { encodeComposerContextFragment } from "@t3tools/shared/composerContextClipboard";
@@ -24,6 +23,7 @@ import {
 } from "../state/use-composer-drafts";
 import { importComposerContextClipboard } from "../lib/composerContextClipboard";
 import { mobilePreferencesAtom } from "../state/preferences";
+import { useOpenLinkedThread } from "../features/threads/useOpenLinkedThread";
 import { ComposerContextSheet } from "./ComposerContextSheet";
 import { AppText as Text } from "./ui/AppText";
 import {
@@ -41,11 +41,9 @@ export type ComposerEditorProps = NativeComposerEditorProps & {
   readonly chipsInert?: boolean;
   readonly onInertChipPress?: () => void;
   /**
-   * The context sheet (and the media or video preview it presents directly) is a composer
-   * overlay, so it competes with the settings, usage and preview overlays for the composer.
-   * `onAcquireOverlay` runs synchronously before the sheet is shown and returns false when
-   * another overlay already owns the composer, in which case the tap is dropped.
-   * `onReleaseOverlay` runs on every close path of that one sheet lifecycle.
+   * The context sheet (and the preview it presents) competes with other composer overlays.
+   * `onAcquireOverlay` runs before the sheet shows and returns false (dropping the tap) when
+   * another overlay owns the composer; `onReleaseOverlay` runs on every close path.
    */
   readonly onAcquireOverlay?: () => boolean;
   readonly onReleaseOverlay?: () => void;
@@ -178,7 +176,7 @@ export function ComposerEditor({
           }),
         })
       : "";
-  const navigation = useNavigation();
+  const openLinkedThread = useOpenLinkedThread();
   const selectedReference = selected
     ? collectComposerContextReferences(selected.source)[0]
     : undefined;
@@ -269,7 +267,7 @@ export function ComposerEditor({
             : {})}
           onOpenThread={(thread) => {
             closeSelected();
-            navigation.navigate("Thread", {
+            openLinkedThread({
               environmentId: String(thread.environmentId),
               threadId: String(thread.threadId),
             });

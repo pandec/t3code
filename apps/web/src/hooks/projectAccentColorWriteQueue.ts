@@ -19,12 +19,9 @@ export interface ProjectAccentColorWrite {
 const writeChains = new Map<EnvironmentId, Promise<ProjectAccentColorMap | null>>();
 
 /**
- * Serializes both accent payload construction and persistence per environment.
- *
- * The underlying settings command already serializes RPCs, but building two
- * accent operations before they enter that queue can still make a later
- * whole-map replacement overwrite the first. Each queued operation therefore
- * starts from the previous server response, or the freshest rendered map after
+ * The settings command serializes RPCs, but building two accent payloads before they
+ * enter that queue can let a later whole-map replacement overwrite the first. Each
+ * operation starts from the previous server response, or the freshest rendered map after
  * a failure.
  */
 export function enqueueProjectAccentColorWrite(

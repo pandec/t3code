@@ -20,15 +20,9 @@ export interface EnvironmentUsage {
 }
 
 /**
- * How buckets are credited to a provider row.
- *
- * `"pool"` credits each bucket to the subscription pool its model spends, so a
- * gateway-routed request counts against the vendor that billed it. `"source"`
- * keeps upstream's semantics: each bucket stays with the harness whose
- * transcript directory it was scanned under.
- *
- * Grouping is all that changes — every bucket lands in exactly one row either
- * way, so the two views sum to the same totals.
+ * How buckets are credited to a provider row: `"pool"` to the subscription pool its model spends (a
+ * gateway-routed request counts against the vendor that billed it), `"source"` (upstream's) to the
+ * harness whose transcript directory it was scanned under. Both views sum to the same totals.
  */
 export type UsageAttribution = "pool" | "source";
 
@@ -55,10 +49,7 @@ export interface ModelTotals {
   readonly tokenShare: number;
 }
 
-/**
- * A model whose every record lacked rates has an unknown cost, not a zero one.
- * Clients must not present its `costUsd` as a real dollar figure.
- */
+/** When every record lacks rates, costUsd is unknown and must not be displayed as a dollar figure. */
 export function isModelCostUnknown(model: ModelTotals): boolean {
   return model.records > 0 && model.unpricedRecords >= model.records;
 }
@@ -138,10 +129,7 @@ export interface MergedUsage {
   readonly contractMismatches: readonly UsageContractMismatch[];
 }
 
-/**
- * `volumeId` is what stops two machines that happen to share a hostname and a home path, which is
- * every Mac in a fleet, from collapsing into one source and having one of them silently dropped.
- */
+// volumeId distinguishes machines sharing a hostname and home path.
 function fingerprintKey(fingerprint: UsageSourceFingerprint): string {
   return [
     fingerprint.hostId,
@@ -152,13 +140,9 @@ function fingerprintKey(fingerprint: UsageSourceFingerprint): string {
 }
 
 /**
- * Decides which environment owns each physical transcript directory.
- *
- * Several environments on one machine (worktree servers, for instance) resolve
- * the same provider home and would otherwise double count every token. The
- * most recently read summary claims a fingerprint; the rest have that provider's
- * buckets dropped. Environment ids break ties so the winner is stable when
- * summaries have the same read time.
+ * Decides which environment owns each physical transcript directory, so environments resolving one
+ * provider home (worktree servers, for instance) don't double count. The most recently read summary
+ * claims a fingerprint, the rest drop that provider's buckets; environment ids break read-time ties.
  */
 function claimSources(environments: readonly EnvironmentUsage[]): {
   readonly ownerByFingerprint: ReadonlyMap<string, EnvironmentId>;
@@ -207,8 +191,7 @@ function ownedContribution(
       const provider = source.fingerprint.provider;
       ownedProviders.add(provider);
       ownedSources.add(`${provider}\u0000${source.fingerprint.resolvedHomePath}`);
-      // Distinct within a directory. Summing per-bucket session counts instead
-      // would count a session once per day and model it spans.
+      // Count distinct sessions per directory; bucket sums overcount sessions spanning days/models.
       sessionsByProvider.set(
         provider,
         (sessionsByProvider.get(provider) ?? 0) + source.distinctSessions,

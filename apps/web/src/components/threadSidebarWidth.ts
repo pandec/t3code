@@ -11,13 +11,9 @@ export function resolveThreadSidebarMaximumWidth(
   viewportWidth: number,
   minimumWidth = THREAD_SIDEBAR_MIN_WIDTH,
 ): number {
-  // Reserving a flat 40rem for the main content leaves almost no travel on a
-  // default-sized desktop window (~916px inner width caps the sidebar at 276px,
-  // where it usually already sits), so the rail feels dead. Below ~80rem the
-  // reservation scales down to half the window instead: the main content still
-  // keeps at least half, and the sidebar always has room to grow.
-  // Rounding up hands the odd pixel to the main content, so the sidebar stays
-  // at or below half the window rather than one pixel past it.
+  // A flat 40rem main-content reservation leaves almost no travel on a default desktop
+  // window (~916px caps the sidebar at 276px). Below ~80rem it scales to half the window;
+  // rounding up hands the odd pixel to the main content so the sidebar never exceeds half.
   const reservedMainContentWidth = Math.min(
     THREAD_MAIN_CONTENT_MIN_WIDTH,
     Math.ceil(Math.floor(viewportWidth) / 2),

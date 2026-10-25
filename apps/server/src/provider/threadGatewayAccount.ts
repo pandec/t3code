@@ -1,23 +1,8 @@
 /**
- * Which pooled gateway account serves a thread's provider session.
- *
- * The `CURRENT`-style marker a usage popover can derive client-side from
- * account priorities only answers "which account would a *new* session bind
- * to" — the gateway's session-affinity table is sticky, so the account a
- * running thread actually spends can differ once tiers change or an account
- * recovers from cooldown. This module answers the real question by reading
- * that binding: it resolves the thread's active provider thread, its live
- * provider session and gateway target, then asks the gateway which credential
- * the session is bound to for the thread's model (see
- * `probeCliProxyApiSessionAccount`).
- *
- * Scoped to Claude sessions deliberately: the gateway keys Claude affinity on
- * the session UUID that is the provider thread's native id, while other
- * providers carry no session identity the gateway would recognize. Every
- * unsupported or failed path answers null — the marker is best-effort and
- * clients render "unknown" by simply not showing it.
- *
- * @module provider/threadGatewayAccount
+ * Which pooled gateway account serves a thread's provider session, read from the
+ * gateway's sticky session-affinity binding rather than account priorities.
+ * Claude only: other providers carry no session id the gateway recognizes.
+ * Every unsupported or failed path answers null.
  */
 import type {
   OrchestrationV2AppThread,

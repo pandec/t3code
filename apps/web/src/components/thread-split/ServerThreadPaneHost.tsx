@@ -12,11 +12,9 @@ import { resolveArchivedThreadRouteState, resolveThreadRouteRenderState } from "
 import { useThreadSplitStore } from "./threadSplitStore";
 
 /**
- * Mounts one server thread as a split pane. This mirrors the server branch of
- * ThreadRouteView's render rules (including opening an archived thread from
- * its detail) with one deliberate difference: a missing or deleted thread
- * must never navigate the router (that would move the primary pane), so it
- * renders an in-pane unavailable state instead.
+ * Mirrors the server branch of ThreadRouteView's render rules, except that a missing or
+ * deleted thread renders an in-pane unavailable state: navigating the router would move
+ * the primary pane.
  */
 export function ServerThreadPaneHost({ threadRef }: { threadRef: ScopedThreadRef }) {
   const shell = useEnvironmentQuery(environmentShell.stateAtom(threadRef.environmentId));

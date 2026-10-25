@@ -39,14 +39,10 @@ export interface MessageContextRestore {
 }
 
 /**
- * Rebuilds the draft context behind a sent message's chips, so its text can go
- * back into a composer (rewind, a rescued queued edit) with working chips.
- * Only records the text references are restored. Image and file chips bind to
- * the restored draft attachments through `attachmentLocalIds` (server
- * attachment id to draft attachment id). A chip whose record cannot be rebuilt
- * here (a removed attachment, another server's thread, a kind this composer
- * has no draft shape for) keeps its label as plain text. References without a
- * record are left alone unless `labelUnmatchedReferences` is set.
+ * Rebuilds the draft context behind a sent message's chips so its text returns
+ * to a composer with working chips. Only referenced records are restored; a chip
+ * that cannot be rebuilt keeps its label as plain text. Unmatched references are
+ * left alone unless `labelUnmatchedReferences` is set.
  */
 export function planMessageContextRestore(input: {
   readonly text: string;

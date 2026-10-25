@@ -617,9 +617,7 @@ const NARROW_WINDOW: UsageSummaryInput = {
   untilDay: UsageDay.make("2026-09-02"),
 };
 
-/**
- * Each waiting gate holds one libuv pool thread; keep at most three.
- */
+// Each waiting gate holds a libuv thread; allow at most three.
 const makeGate = (path: string, lastWriteSeconds?: number) =>
   Effect.promise(async () => {
     NodeChildProcess.execFileSync("mkfifo", [path]);
@@ -3014,12 +3012,9 @@ describe("UsageService", () => {
           yield* first.readSummary(WINDOW);
           yield* first.awaitPersisted;
 
-          // Rewrite the cache as that build left it. Upstream entries carry no
-          // malformed counts (`x`/`tx`) or fork columns; fork v6/v7 Codex state
-          // predates counter reconciliation, fork v8 compaction/resume markers, and
-          // fork v9 initial requests with inherited totals.
-          // The live row's output is wrong, so only a re-parse restores it; the
-          // deleted rollout keeps its saved speed.
+          // Rewrite the cache as that build left it (no `x`/`tx` or fork
+          // columns). The live row's output is wrong, so only a re-parse
+          // restores it; the deleted rollout keeps its saved speed.
           const legacy = yield* Effect.promise(async () => {
             const livePath = await NodeFSP.realpath(live);
             const document = decodeUnknownJsonString(await NodeFSP.readFile(cachePath, "utf8")) as {

@@ -25,11 +25,9 @@ function createSidebarFilterHeaderItem(input: {
 }
 
 /**
- * Right-side UINavigationBar items for the sidebar column: settings, then the
- * thread list filter/sort menu, sharing one glass capsule. The filter sits
- * closest to the trailing edge to match the compact Home header. The embedded
- * sidebar keeps these beside its title; only the detail column uses the Duo's
- * vertical bar.
+ * Settings, then the filter/sort menu, in one glass capsule; the filter sits at the trailing edge
+ * to match the compact Home header. The embedded sidebar keeps these beside its title; only the
+ * detail column uses the Duo's vertical bar.
  */
 export function createSidebarHeaderItems(input: {
   readonly filterIcon: string;

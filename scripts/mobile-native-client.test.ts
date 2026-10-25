@@ -81,8 +81,6 @@ describe("generated iOS build target discovery", () => {
 
 const caches = [".gradle/history", "app/.cxx/object"];
 
-// A generated Android project with Gradle and native outputs, and a stand-in for
-// `expo prebuild --clean`, which deletes the directory and writes fresh sources.
 const fixture = Effect.gen(function* () {
   const fs = yield* FileSystem.FileSystem;
   const path = yield* Path.Path;

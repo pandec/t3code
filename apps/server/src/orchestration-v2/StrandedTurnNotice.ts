@@ -33,17 +33,10 @@ type ProviderTurnState = Pick<
 >;
 
 /**
- * Whether the previous turn this run's provider thread received was cut off
- * mid-turn by restart recovery. Recovery marks each run it cancels with
- * `strandedByRestart`; a run that had already settled (only background work
- * lost) keeps its completed provider turn, and a user stop settles a turn as
- * `interrupted`. A Stop the restart overtook leaves its unpaired durable
- * request (`stopRequested`), so that cut-off was asked for. Derived rather
- * than cleared: once a later turn reaches the provider, it is the previous
- * turn. Compactions are skipped both ways (a prefixed `/compact` stops being
- * the command; other slash commands are skipped by the caller for the same
- * reason), and a steer's replacement attempt does not repeat what an earlier
- * attempt delivered.
+ * Whether restart recovery cut off this provider thread's previous turn. Derived,
+ * not cleared: a later turn reaching the provider becomes the previous turn. A
+ * Stop the restart overtook (`stopRequested`) was asked for, and compactions are
+ * skipped since a prefixed `/compact` stops being the command.
  */
 export function priorTurnStrandedByRestart(input: {
   readonly runs: ReadonlyArray<RunState>;

@@ -46,8 +46,8 @@ and worktree while you stay in the new thread composer. This requires a Git proj
 ### Move a Codex thread to a worktree
 
 Ask Codex to create a worktree and switch this thread to it. The agent requests the move with
-`switch_worktree`. T3 Code waits for the current turn and its checkpoint, and for subagents or
-monitors it left running, then updates the thread's checkout. Your next message continues the
+`switch_worktree`. T3 Code waits for the current turn and its checkpoint, for subagents, and
+for commands or monitors the agent waits on, then updates the thread's checkout. Your next message continues the
 same conversation in that directory.
 
 The move stays pending during the current turn and survives a server restart. Ask the agent to
@@ -207,8 +207,8 @@ Press `Escape` while dragging to cancel.
 By default, environments settle inactive threads after three days and settle
 threads whose pull request merged. A closed pull request can also settle an idle
 thread. An empty thread's inactivity counts from when it was created.
-Work in progress, queued messages, pending questions or approvals, and live background work
-prevent automatic settlement. An open pull request does not prevent inactivity
+Work in progress, queued messages, pending questions or approvals, and background work the
+agent is waiting on prevent automatic settlement. An open pull request does not prevent inactivity
 settlement unless you turn on **Keep threads with a PR** in **Settings → General**,
 but an old closed or merged pull request does not settle work you
 resumed after it closed. Only your own messages count as resuming. A turn that
@@ -235,9 +235,9 @@ the archive keybinding on web and desktop, offer **Archive when done** while a t
 [`/t3-archive`](./composer.md#commands-and-skills) in the thread. An agent can also schedule
 its own thread, for example when you ask it to "archive this thread when you're done", or
 another thread, such as one whose results it has just read. The
-archive waits for the turn and its checkpoint, and for subagents or monitors it left running;
-background commands such as dev servers do not hold it and stop when the thread archives. An
-idle thread archives right away.
+archive waits for the turn and its checkpoint, for subagents, and for commands or monitors the
+agent waits on. Other background commands, such as dev servers, do not hold it and keep running
+after the thread archives. An idle thread archives right away.
 
 A thread with a pending archive shows an archive icon in its row. Choose **Cancel pending
 archive** from its menu or hover archive button, use the archive keybinding again, or send `/t3-archive` again to keep
@@ -310,8 +310,15 @@ filter or show either state as an empty environment.
 ## Find and reference work
 
 On web and desktop, open the command palette with `Cmd/Ctrl+K` to search threads
-across connected environments. Message search starts after two characters and
-includes your messages and final agent responses.
+across connected environments by title, branch, pull request, or project.
+Threads you open often or recently rank higher, and for three weeks the thread
+you last picked for a query ranks higher when you type that query again.
+Threads whose messages contain all your words appear below, under **In
+messages**, and open at the matching message. Message search needs at least
+one word of three or more letters, or two for Chinese, Japanese, and Korean.
+On mobile, the thread list search also lists message matches and opens them at
+the matching message; on an iPad with a keyboard, `Cmd+K` opens the same
+palette.
 
 Use **Settings → Keybindings** to find or customize shortcuts for searching files
 and copying a thread reference. A copied reference uses the thread's pull request
@@ -359,7 +366,8 @@ Stop on a thread also stops the subagents it delegated to.
 When a turn ends while work it started keeps running, the thread list shows **Working** for live
 subagents and workflows, and **Monitoring** when only watch loops remain, such as a monitor tailing
 checks, a pull request watch, or a command left running such as a test run or dev server. A command
-alone still lets the thread complete and notify as usual. The conversation lists that work
+or monitor still lets the thread complete and notify as usual unless the agent says it is waiting on
+it. The conversation lists that work
 with a **Stop** button. Settling or archiving the thread also stops it.
 
 Subagent threads started by the agent can't take messages; message the parent

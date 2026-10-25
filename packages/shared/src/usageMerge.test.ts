@@ -742,11 +742,9 @@ describe("mergeUsage", () => {
   });
 
   it("counts a directory once when environments scan overlapping sets", () => {
-    // env-a scans only the Claude directory, which a gateway routed to an
-    // OpenAI model. env-b scans that same directory and a Codex home of its
-    // own, so it loses the shared directory and keeps its Codex home. Crediting
-    // the gateway bucket before ownership is settled would let env-b's claim on
-    // its own Codex home pull in the shared directory's gateway bucket too.
+    // env-a scans only a Claude directory a gateway routed to an OpenAI model; env-b scans it too
+    // plus its own Codex home, so it loses the shared directory. Crediting the gateway bucket
+    // before ownership is settled would let env-b's Codex claim pull that bucket in.
     const claudeDir = { provider: "claude" as const, hostId: "mac", homePath: "/h/.claude" };
     const gatewayBucket = bucket({ model: "gpt-5.6-sol", costUsd: 4 });
     const merged = mergeUsage(

@@ -14,16 +14,9 @@ export interface ProviderUsageThresholdSettings {
 }
 
 /**
- * Commit one edited threshold while keeping `warning <= critical`.
- *
- * The runtime already coerces an inverted pair when it colours the usage ring,
- * so an inverted *stored* pair would silently render as something the settings
- * page does not show. Clamping here keeps what is persisted equal to what is
- * displayed: raising the warning past the critical mark pushes it back down to
- * the critical mark, and lowering the critical mark drags the warning with it.
- *
- * `null` (an emptied number field) is treated as "no change", matching how the
- * other numeric settings rows snap back to the persisted value.
+ * Keeps `warning <= critical` in what is persisted: the usage ring coerces an inverted
+ * pair, so a stored inverted pair would render differently from the settings page.
+ * `null` (an emptied field) means "no change", matching the other numeric rows.
  */
 export function resolveProviderUsageThresholdCommit(input: {
   readonly field: "warning" | "critical";
@@ -72,12 +65,9 @@ export function resolveProviderUsageThresholdCommit(input: {
 }
 
 /**
- * Commit the OpenRouter budget field. Unlike the threshold rows, an emptied
- * field is a real choice here, "no budget", so `null` persists as null rather
- * than snapping back. Zero and negatives mean the same thing: a $1 budget
- * would render an instantly-red bar nobody asked for. Anything above the
- * schema's maximum clamps down to it, since the patch would otherwise be
- * rejected on decode and the field would silently keep the old value.
+ * An emptied field means "no budget", so `null` persists rather than snapping back.
+ * Zero and negatives also mean no budget (a tiny one renders an instantly-red bar).
+ * Values above the schema maximum clamp to it, or decode would reject the patch silently.
  */
 export function resolveOpenRouterCreditsBudgetCommit(
   value: number | null,

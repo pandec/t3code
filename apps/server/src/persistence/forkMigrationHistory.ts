@@ -32,15 +32,10 @@ const previewMigrationNames: ReadonlySet<string> = new Set([
 const badState = (message: string) => new Migrator.MigrationError({ kind: "BadState", message });
 
 /**
- * Rewrites a fork database's migration ledger to upstream ids before upstream's
- * migrator runs. Fork builds interleaved fork-only migrations with upstream ones,
- * so upstream migrations sit at relocated ids and the recorded maximum masks
- * newer upstream ids. Upstream rows are mapped back by name (their files are
- * identical to upstream's), fork-only rows leave the ledger, and every original
- * row is kept in fork_legacy_migrations. Runs from `runMigrations` before the
- * V2 preview reconcile. Returns the original rows it moved; ledgers with neither
- * fork-only rows nor relocated upstream rows (including V2 previews) are left
- * untouched.
+ * Old fork builds interleaved migrations, so relocated upstream ids mask newer
+ * ones. Upstream rows are remapped by name, fork-only rows move out, and every
+ * original row is kept in fork_legacy_migrations. Must run before upstream's
+ * migrator and the V2 preview reconcile.
  */
 export const repairForkMigrationHistory = Effect.fn("repairForkMigrationHistory")(function* (
   manifest: ReadonlyArray<readonly [number, string]>,

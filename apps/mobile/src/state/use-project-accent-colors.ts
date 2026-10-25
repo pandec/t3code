@@ -11,20 +11,10 @@ import { projectAccentColorsFromServerConfigs } from "./project-accent-colors-fr
 import { environmentServerConfigsAtom } from "./server";
 
 /**
- * Project accent colors as seen by mobile: read-only.
- *
- * They live in each server's settings, so the phone gets them for free from
- * the per-environment `ServerConfig` it already holds. That config is cached
- * on-device, so disconnected environments keep their last-known colors and a
- * cold launch does not have to wait for reconnects. Picking a color stays a
- * desktop/web affordance; mobile only renders what the servers report.
- *
- * No primary environment is passed: mobile has no "local" server, so the
- * fallback order is purely the shared deterministic one (environmentId).
- *
- * The accent-tint opt-out deliberately does NOT land here: it gates the wash
- * at the paint site (`resolveRowAccentTintAlpha`) so a project keeps its
- * group-header dot with tints off, which is what web does too.
+ * Read-only: colors come from each environment's cached `ServerConfig`, so disconnected
+ * environments keep their last-known colors. No primary environment is passed (mobile has no
+ * local server). The tint opt-out gates the wash at `resolveRowAccentTintAlpha`, not here, so the
+ * group-header dot survives it.
  */
 export function useProjectAccentColors(): (
   members: ReadonlyArray<ProjectAccentSource>,

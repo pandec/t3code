@@ -16,17 +16,9 @@ export type ThreadOpenPlan =
   | { kind: "focus-pane"; paneId: ThreadPaneId };
 
 /**
- * Decide where a picked thread should open. Pure so the branch matrix is
- * testable without a DOM:
- *
- * 1. No rendered split → plain primary navigation (also covers a parked
- *    secondaryRef on a too-narrow viewport).
- * 2. Already the routed thread — including the destination of an in-flight
- *    pane swap, which the route is about to become → focus the primary
- *    pane, never re-navigate. Opening a swap destination in the secondary
- *    instead would recreate the duplicate the guard folds on arrival.
- * 3. Already the secondary thread → focus the secondary pane. Navigating
- *    instead would trip the duplicate-thread guard and fold the split.
+ * 1. No rendered split: primary navigation (covers a parked secondaryRef when narrow).
+ * 2. Already routed, or an in-flight swap's destination: focus primary, never navigate.
+ * 3. Already the secondary: focus it; navigating would trip the duplicate guard.
  * 4. Otherwise the active pane (or the caller's snapshot of it) receives it.
  */
 export function planThreadOpen(input: {
@@ -104,12 +96,9 @@ export function openThreadInActivePane(input: {
 }
 
 /**
- * Which route carries a URL hash (a citation's source) for an executed open.
- * Both panes share one URL and each ChatView acts only on a hash addressed
- * to its own thread, so a thread landing in or focusing the secondary keeps
- * the primary route and only adds the hash. A primary landing (including an
- * in-flight swap's destination) uses the target's own route. Null means no
- * thread route to carry it.
+ * Both panes share one URL and each ChatView acts only on a hash for its own thread, so
+ * a thread opening in or focusing the secondary keeps the primary route plus the hash. A
+ * primary landing (including a swap destination) uses the target's route. Null: no route.
  */
 export function threadOpenHashRouteRef(input: {
   plan: ThreadOpenPlan;

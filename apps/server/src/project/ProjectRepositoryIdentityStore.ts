@@ -11,13 +11,9 @@ const decodeRepositoryIdentityJson = Schema.decodeUnknownOption(
 );
 
 /**
- * Fork: the last successful repository identity of the active project at a
- * workspace root, kept in `fork_project_repository_identity`. Enrichment falls
- * back to it when live resolution yields nothing (typically a deleted checkout),
- * so repository grouping survives restarts. It is read-model metadata only;
- * pull-request mutations must verify a live checkout instead.
- *
- * Both methods are best-effort: failures are logged and read as "no value".
+ * Fork: last resolved repository identity per workspace root, the fallback when
+ * live resolution fails. Read-model metadata only: pull-request mutations must
+ * verify a live checkout. Failures are logged and read as "no value".
  */
 export class ProjectRepositoryIdentityStore extends Context.Service<
   ProjectRepositoryIdentityStore,

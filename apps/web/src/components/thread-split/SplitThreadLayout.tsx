@@ -53,13 +53,9 @@ const lastSeenRouteThreadKey: { value: string | null | typeof UNOBSERVED_ROUTE_T
 };
 
 /**
- * Wraps the chat routes' content. The tree shape is identical whether the
- * split is open or closed — only the separator and the secondary pane mount
- * and unmount — so toggling the split never remounts the routed ChatView
- * instance. (Its right panel still remounts on toggle: the split forces the
- * sheet presentation, which lives in a different tree position than the
- * inline one.) No diff worker pool is hoisted here on purpose: the pool is a
- * module singleton, so both panes' ChatView-level providers already share it.
+ * The tree shape is the same whether the split is open or closed, so toggling never
+ * remounts the routed ChatView (its right panel does: the split forces the sheet
+ * presentation). No diff worker pool is hoisted here: the module singleton is shared.
  */
 export function SplitThreadLayout({ children }: { children: ReactNode }) {
   const secondaryRef = useThreadSplitStore((state) => state.secondaryRef);
@@ -78,11 +74,9 @@ export function SplitThreadLayout({ children }: { children: ReactNode }) {
     return () => registerThreadPaneComposer("primary", null);
   }, [primaryComposerRef]);
 
-  // No duplicate thread across panes: navigating the primary pane onto the
-  // secondary's thread means it "moved" there, so the split closes — except
-  // mid-swap, where that duplicate is a transient the latch vouches for. An
-  // expired latch means the swap navigation never arrived; restoring the old
-  // secondary is the better degraded outcome than folding the split.
+  // Navigating the primary onto the secondary's thread "moves" it, so the split closes,
+  // except mid-swap where the latch vouches for the duplicate. An expired latch means the
+  // swap navigation never arrived; restoring the old secondary beats folding the split.
   const pendingSwap = useThreadSplitStore((state) => state.pendingSwap);
   const abortPaneSwap = useThreadSplitStore((state) => state.abortPaneSwap);
   const routeThreadKey = routeThreadRef === null ? null : scopedThreadKey(routeThreadRef);
@@ -101,12 +95,10 @@ export function SplitThreadLayout({ children }: { children: ReactNode }) {
     closeSplit();
   }, [abortPaneSwap, closeSplit, pendingSwap, routeThreadKey, secondaryRef]);
 
-  // A primary route change made outside both pane roots (sidebar, palette,
-  // deep link) retargets the primary pane — attention (and shortcut
-  // ownership, e.g. mod+shift+E archive) must follow, or the secondary pane
-  // would keep swallowing thread-targeted shortcuts after the user switched
-  // threads. A pane swap is the exception: the threads traded sides on
-  // purpose, so the side the user was working on keeps its activation.
+  // A primary route change from outside both panes (sidebar, palette, deep link) moves
+  // attention and shortcut ownership to the primary, or the secondary keeps swallowing
+  // thread shortcuts. A pane swap is exempt: the threads traded sides on purpose, so the
+  // side the user was working on stays active.
   useEffect(() => {
     if (lastSeenRouteThreadKey.value === routeThreadKey) return;
     const isFirstObservation = lastSeenRouteThreadKey.value === UNOBSERVED_ROUTE_THREAD_KEY;
@@ -148,14 +140,10 @@ export function SplitThreadLayout({ children }: { children: ReactNode }) {
 }
 
 /**
- * Folds the split when a thread on screen gets snoozed from any entry point
- * (menus, shortcuts, an agent over MCP, another device). An archive only folds
- * when this client's own archive action does it (`archiveThread`): one the
- * agent requested or scheduled for when the thread is done leaves the thread
- * readable. Reads the committed thread detail, and only a fresh transition
- * counts: a thread that was already parked when it was opened in the split
- * stays put. Rendered as its own component so streamed detail updates
- * re-render nothing else.
+ * Folds the split when a thread on screen is freshly snoozed from any entry point, or
+ * archived by this client's own `archiveThread`; agent-requested archives stay readable
+ * and threads already parked when opened stay put. A separate component so streamed
+ * detail updates re-render nothing else.
  */
 function ParkedThreadWatcher({
   threadRef,
@@ -200,12 +188,9 @@ function SplitThreadPanes({
   const splitOpen = secondaryRef !== null;
   const trackFactors = splitTrackFactors(splitRatio);
 
-  // splitMounted is the store's single source of truth for "two panes are on
-  // screen"; every active-pane gate reads it, so it must track the rendered
-  // state exactly — including this layout unmounting on a non-chat route.
-  // Layout effect on purpose: a passive effect would leave a stale-true
-  // window after the secondary pane is removed from the tree, during which
-  // the only visible pane still rejects shortcuts.
+  // splitMounted is the source of truth for "two panes on screen" that every active-pane
+  // gate reads, including when this layout unmounts on a non-chat route. A layout effect:
+  // a passive one leaves a stale-true window in which the only visible pane rejects shortcuts.
   useLayoutEffect(() => {
     setSplitMounted(splitOpen);
     return () => setSplitMounted(false);
@@ -337,13 +322,10 @@ function SplitResizeHandle({
     }
   };
 
-  // The wrapper is the visible divider line and owns the grid track; the drag
-  // surface is a wider invisible child so the divider is grabbable without
-  // fattening the line. Its overhang extends only into the secondary pane:
-  // the primary pane's right edge carries a classic scrollbar lane that must
-  // keep winning hit-testing. The control cluster is a sibling of the drag
-  // surface, so its clicks can never start a drag, and data-dragging on the
-  // wrapper hides the cluster while resizing so a drag can't end on a button.
+  // The wrapper is the visible line and owns the grid track; a wider invisible child is
+  // the drag surface, overhanging only the secondary since the primary's scrollbar lane
+  // must win hit-testing. Controls sit beside the drag surface so clicks never drag, and
+  // data-dragging hides them while resizing so a drag can't end on a button.
   return (
     <div
       ref={wrapperRef}
@@ -405,14 +387,9 @@ function SplitResizeHandle({
 }
 
 /**
- * Hover-revealed pane controls anchored near the top of the divider. They
- * live on the boundary instead of either pane's titlebar so they never cover
- * the header actions, and they read as owning the split rather than one
- * side. Reveal is a one-shot opacity transition (no continuous animation),
- * slightly delayed so a pointer merely crossing the divider does not flash
- * the cluster; focus-within keeps the buttons reachable by keyboard, and
- * coarse pointers see the cluster pinned visible — a touch user has no hover
- * to reveal it with.
+ * On the divider so it never covers either pane's header actions. Reveal is a delayed
+ * one-shot opacity transition so a pointer crossing the divider does not flash it;
+ * focus-within keeps it keyboard reachable, and coarse pointers see it pinned visible.
  */
 function SplitPaneControls() {
   const router = useRouter();

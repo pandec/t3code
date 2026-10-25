@@ -5,15 +5,9 @@ import { getMobileThemeRuntimeVariables } from "../../lib/mobileThemeVariables";
 import { listeningPlayerChrome } from "./listeningPlayerChrome";
 
 /**
- * The listening player's chrome is derived from `--color-foreground` rather
- * than taken from the surface ramp, because the card it sits on is itself
- * `--color-subtle`. The ramp's neighbouring tier (`--color-subtle-strong`)
- * collapses to 1.02 against that card on several built-in palettes, which
- * renders the track and the press feedback invisible.
- *
- * These floors run against the real `listeningPlayerChrome` output, so they
- * fail both when a palette regresses and when the derivation itself is retuned
- * past the point of visibility.
+ * The chrome is derived from `--color-foreground` because the ramp's neighbouring tier collapses
+ * to 1.02 against the `--color-subtle` card on several palettes. These floors run against the real
+ * `listeningPlayerChrome` output, so they catch both palette and derivation regressions.
  */
 
 type RGB = readonly [number, number, number];

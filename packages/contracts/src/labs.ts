@@ -4,14 +4,9 @@ import * as Schema from "effect/Schema";
 import { PositiveInt, ProjectId, ThreadId, TrimmedNonEmptyString } from "./baseSchemas.ts";
 
 /**
- * Fork: SP Labs. T3 drives the `sp-labs` CLI (`docs/t3.md` in the sp-labs repo) and mirrors its
- * JSON shapes here. Labs are persistent git worktrees of the labs project; Main/Staging and
- * Preview are shared environments shown beside them.
- *
- * A thread is a lab thread when its `worktreePath` equals a lab environment's `worktree`; no
- * other state links them. A lease's `threadId` is the T3 thread id that reserved it, compared
- * as-is (MCP-launched thread ids carry their `mcp:` prefix); an id that matches no thread is an
- * owner outside T3.
+ * Fork: SP Labs. Mirrors the `sp-labs` CLI's JSON shapes (`docs/t3.md` in the sp-labs repo). A
+ * thread is a lab thread when its `worktreePath` equals a lab's `worktree`. A lease's `threadId`
+ * is compared as-is (MCP thread ids keep their `mcp:` prefix); an unmatched id is an outside owner.
  */
 
 // ── CLI shapes (`sp-labs status --runtime`) ─────────────────────────────

@@ -612,11 +612,8 @@ it.layer(NodeServices.layer)("build-desktop-artifact", (it) => {
     ),
   );
 
-  // The dev-identity test above asserts the same disabled feed, but it runs
-  // without a resolvable publish config, so it passes whether or not the flavor
-  // guard is there. This one supplies a real config, which is what makes it a guard test:
-  // upstream keeps re-wrapping this block (#8182 wrapped it in a preview check)
-  // and each wrap deletes the flavor condition structurally rather than visibly.
+  // Unlike the dev-identity test, this supplies a real publish config, so it fails without the
+  // flavor guard. Upstream keeps re-wrapping this block and each wrap drops the flavor condition.
   it.effect("keeps dev-flavor artifacts off every update feed", () =>
     Effect.gen(function* () {
       const dev = yield* createBuildConfig(

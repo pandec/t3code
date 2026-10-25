@@ -1,13 +1,7 @@
 /**
- * Fork: deferred agent-requested worktree switch decisions. A Codex agent asks
- * from its running run to move the thread to another checkout of the same
- * repository; the move applies once that run completes (a v2 run reaches
- * `completed` after its final checkpoint capture, even a failed one) and
- * background work that holds completion ends. New work (a message sent or
- * still queued, or a run created after the request), a stopped run, a
- * checkout change, an archive or a pending archive cancels it; a failed final
- * checkpoint records an error and keeps the checkout. Pure: the orchestrator
- * and `ThreadWorktreeSwitchScheduler` share these rules.
+ * Fork: an agent-requested worktree switch applies once its run completes and held background
+ * work ends. New work, a stopped run, a checkout change, or an archive (even pending) cancels it;
+ * a failed final checkpoint records an error. Pure: shared with `ThreadWorktreeSwitchScheduler`.
  */
 import type {
   CommandId,

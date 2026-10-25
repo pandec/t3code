@@ -9,37 +9,16 @@ import * as Schema from "effect/Schema";
 import { CLAUDE_SYNTHETIC_MODEL } from "../provider/Drivers/claudeUsage.ts";
 import { GUARD_LENGTH, type TranscriptParsePosition } from "./usageTranscriptReader.ts";
 
-// v2: Codex fork-copy suppression changed what a file parses to, so v1
-// entries would keep serving double-counted records forever.
-// v3 was independently used by the fork for malformed-record counts and by
-// upstream for incremental parse positions, so neither v3 shape is compatible.
-// v4 was used by both again: the fork's carries incremental state with
-// completed/tail malformed counts, upstream's adds Claude fast mode instead.
-// v5 was used by both a third time: the fork's adds fast mode and `rateModel`
-// to its v4, upstream's replaces fast mode with Codex service tiers.
-// v6 was used by both a fourth time: the fork's carries all of the above,
-// upstream's reconciles Codex request and cumulative counters.
-// v7 was used by both a fifth time: the fork's keeps each Claude message's
-// completed record, marks provisional ones, and records one-hour cache writes;
-// upstream's appends a Codex turn awaiting tier resolution in the same column.
-// v8 was used by both a sixth time: the fork's carries all of the above,
-// upstream's keeps its v7 layout but re-reads Codex compaction and resume
-// counters.
-// v9 was used by both a seventh time: the fork's carries all of the above,
-// upstream's keeps its v7 layout but re-reads Codex requests with inherited
-// totals. v10 carries all of it. Fork entries always carry malformed counts
-// (`x`, `tx`) and upstream's never do, which tells the shared versions apart.
-// `decodeScanCache` migrates every v4–v9 cache to the current layout.
+// v3-v9 were each used by both the fork and upstream with incompatible layouts; v10 carries all of
+// the fork's changes. Fork entries always carry malformed counts (`x`, `tx`) and upstream's never
+// do, which tells the shared versions apart. `decodeScanCache` migrates every v4-v9 cache.
 const USAGE_SCAN_CACHE_VERSION = 10 as const;
 const OLDEST_MIGRATED_VERSION = 4;
 
 /**
- * Each cache version writes its own file in the state directory. An older
- * server sharing that directory cannot read a newer cache and would replace
- * it, dropping saved usage for deleted transcripts. Separate files keep both.
- * When its own file is missing, this server migrates the files older builds
- * wrote: the fork's v4/v5 and upstream's v4 share the unversioned name,
- * upstream's v5 has its own, and both builds' v6 through v9 share theirs.
+ * Each cache version writes its own file, so an older server sharing the state dir cannot replace a
+ * newer cache and drop saved usage. Without its own file, this server migrates older builds' files:
+ * fork v4/v5 and upstream v4 share the unversioned name, upstream v5 has its own, v6-v9 share theirs.
  */
 export const SCAN_CACHE_FILE_NAME = "usage-scan-cache-v10.json";
 export const LEGACY_SCAN_CACHE_FILE_NAMES = [
@@ -61,11 +40,7 @@ export interface CachedFile {
   readonly records: readonly UsageRecord[];
   /** Malformed usage-bearing newline-terminated lines up to the resume offset. */
   readonly malformedRecords: number;
-  /**
-   * Records from a trailing segment the writer had not newline-terminated at
-   * parse time. Kept apart from `records` because an incremental parse
-   * re-reads that segment and would otherwise double count it.
-   */
+  /** Unterminated tail records stay separate because incremental parsing rereads them. */
   readonly tailRecords: readonly UsageRecord[];
   /** Malformed usage-bearing content in the unconsumed trailing segment. */
   readonly tailMalformedRecords: number;
@@ -195,11 +170,7 @@ export function encodeScanCache(cache: ScanCache): SerializedCache {
   };
 }
 
-/**
- * Entries are replaced, never mutated, when their file changes, so an entry's JSON is memoised by
- * identity. The intern tables only grow, so a memoised entry's indexes stay valid; a pruned entry
- * can leave an unused string behind until the next process start.
- */
+/** Memoizes immutable entries by identity; growing intern tables preserve indexes, retaining unused strings until restart. */
 export function makeScanCacheWriter(): (
   cache: ScanCache,
   extra: Readonly<Record<string, unknown>>,
@@ -310,21 +281,10 @@ const RATE_MODEL_LAYOUTS: ReadonlySet<EntryLayout> = new Set([
 ]);
 
 /**
- * Rebuilds the cache from a parsed document, migrating older layouts.
- *
- * Migrated entries keep their records, because the transcript may be gone,
- * but most must re-parse while their file still exists: upstream layouts
- * never split completed from tail malformed counts, fork v4 predates fast
- * mode, only fork v9+ Codex reducer state reconciles cumulative counters
- * and keeps tier provenance (fork v9 rejected initial requests with inherited
- * totals, so its entries with malformed lines re-parse), and only fork v7+ Claude entries keep a
- * message's completed record. Those carry `requiresReparse` until a full
- * parse replaces them.
- *
- * Anything malformed yields an empty cache rather than an error: a corrupt
- * cache should cost one cold scan, never a broken page. `formats` validates the
- * persisted reducer state of stateful transcript formats; entries of providers
- * without a transcript format are kept, since scan readers cache records too.
+ * Rebuilds the cache, migrating older layouts. Migrated entries keep their records (the transcript
+ * may be gone) but carry `requiresReparse` while it exists: upstream layouts, fork v4, pre-v9 fork
+ * Codex (v9 only with malformed lines) and pre-v7 fork Claude entries. Malformed input yields an
+ * empty cache; `formats` validates stateful reducer state; formatless scan-reader entries are kept.
  */
 export function decodeScanCache(
   document: unknown,
@@ -351,9 +311,7 @@ export function decodeScanCache(
   const models = root.models as readonly string[];
   const sessions = root.sessions as readonly string[];
 
-  // Any corrupt row disqualifies the whole entry. Keeping the survivors
-  // under the original (size, mtime) would read as a valid warm hit and the
-  // file would never be re-parsed, silently losing the dropped rows' usage.
+  // Reject entire corrupt entries; partial survivors would appear warm and hide usage until the file changes.
   const decodeRecords = (
     rows: readonly unknown[],
     provider: UsageProviderKind,

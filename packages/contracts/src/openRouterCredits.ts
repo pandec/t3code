@@ -3,11 +3,9 @@ import * as Schema from "effect/Schema";
 import { NonNegativeInt } from "./baseSchemas.ts";
 
 /**
- * OpenRouter account credits, read server-side with the user's OpenRouter API
- * key (`GET /api/v1/credits`). The balance is account-wide — not tied to any
- * provider instance — so it travels outside the provider-usage snapshot
- * pipeline. OpenRouter caches these values for about a minute; the server
- * mirrors that with its own cache, so a read is always safe to issue.
+ * OpenRouter account credits (`GET /api/v1/credits`). Account-wide, not per provider instance, so
+ * they travel outside the provider-usage snapshot pipeline. The server caches reads for about a
+ * minute, mirroring OpenRouter, so a read is always safe to issue.
  */
 export const OpenRouterCreditsSnapshot = Schema.Struct({
   /** Lifetime credits purchased, in USD. */

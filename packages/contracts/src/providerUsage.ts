@@ -42,12 +42,9 @@ export const ProviderUsageRefreshFailure = Schema.Struct({
 export type ProviderUsageRefreshFailure = typeof ProviderUsageRefreshFailure.Type;
 
 /**
- * Ask which pooled gateway account a thread's live provider session is bound
- * to. The gateway keeps that binding per (session, model), so the caller names
- * the model the thread's session last ran — its persisted model selection, not
- * a merely staged composer choice, which has no binding yet and would make the
- * probe create one. The server supplies the session id from the thread's
- * persisted provider binding.
+ * Ask which pooled gateway account a thread's live session is bound to. The gateway binds per
+ * (session, model), so pass the thread's persisted model, not a staged composer choice, which has
+ * no binding and would make the probe create one. The server supplies the session id.
  */
 export const ProviderUsageThreadAccountInput = Schema.Struct({
   threadId: ThreadId,
@@ -57,11 +54,8 @@ export type ProviderUsageThreadAccountInput = typeof ProviderUsageThreadAccountI
 
 export const ProviderUsageThreadAccountResult = Schema.Struct({
   /**
-   * The gateway `auth_index` of the account serving the thread's session, or
-   * null when it cannot be determined (no session yet, a non-gateway thread, a
-   * provider without session identity, or a probe failure). Clients join it
-   * against the `authIndex` each pooled account row carries in the usage
-   * snapshot.
+   * Gateway `auth_index` of the account serving the thread's session, or null when unknown.
+   * Clients join it against each pooled account row's `authIndex` in the usage snapshot.
    */
   authIndex: Schema.NullOr(TrimmedNonEmptyString),
 });
@@ -70,14 +64,9 @@ export type ProviderUsageThreadAccountResult = typeof ProviderUsageThreadAccount
 export const ProviderUsageRefreshResult = Schema.Struct({
   snapshots: ProviderInstanceUsageSnapshots,
   /**
-   * Which instances actually produced a fresh payload during *this*
-   * invocation. Callers cannot infer that from the snapshots alone: those
-   * carry previously cached observations too, so a stale neighbour can
-   * masquerade as a successful probe.
-   *
-   * Optional so a newer client keeps working against a server that predates
-   * the field: absent means "this server cannot tell us", which callers must
-   * treat as inconclusive rather than as an all-probes-failed refresh.
+   * Instances that produced a fresh payload during this invocation; snapshots alone can't tell,
+   * since they carry cached observations too. Absent means the server predates the field, which
+   * callers must treat as inconclusive rather than as all probes failing.
    */
   refreshedInstanceIds: Schema.optional(Schema.Array(ProviderInstanceId)),
   /**

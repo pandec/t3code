@@ -1,12 +1,9 @@
 "use strict";
 
-// expo-sharing intentionally uses a fixed target name and also uses that
-// internal target name as CFBundleDisplayName. Brand the extension without
-// touching its signing team here; withIosDevelopmentTeam.cjs stamps
-// DEVELOPMENT_TEAM on every target after all plugins have run.
-//
-// ORDERING: list this plugin BEFORE expo-sharing. Expo runs same-type mods in
-// reverse registration order, so this executes after the extension exists.
+// expo-sharing uses its fixed target name as CFBundleDisplayName; brand it without touching the
+// signing team (withIosDevelopmentTeam.cjs stamps DEVELOPMENT_TEAM on every target afterwards).
+// ORDERING: list this plugin BEFORE expo-sharing. Expo runs same-type mods in reverse
+// registration order, so this executes after the extension exists.
 
 const fs = require("fs");
 const path = require("path");

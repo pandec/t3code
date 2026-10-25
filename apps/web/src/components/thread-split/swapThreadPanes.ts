@@ -25,11 +25,9 @@ export function canSwapThreadPanes(routeThreadRef: ScopedThreadRef | null): bool
 }
 
 /**
- * Run the swap. Returns false when it could not start or the navigation was
- * rejected (the store is rolled back and a toast shown). On success the
- * latch stays set — SplitThreadLayout's route effect settles it when the
- * expected route arrives, which is also what keeps the same physical side
- * active.
+ * Returns false when the swap could not start or navigation was rejected (store rolled
+ * back, toast shown). On success the latch stays set until SplitThreadLayout's route
+ * effect settles it on the expected route, which keeps the same physical side active.
  */
 // The most recent swap this module started. A swap whose latch expired can
 // still see its navigation settle much later; comparing against this token

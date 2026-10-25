@@ -38,7 +38,14 @@ import {
 } from "@t3tools/client-runtime/state/thread-settled";
 import { createInboxReturnTracker } from "@t3tools/client-runtime/state/thread-inbox";
 import { sortSettledThreads } from "@t3tools/client-runtime/state/thread-sort";
-import { threadSearchMatchKey } from "@t3tools/client-runtime/state/thread-search";
+import {
+  nextShownOrder,
+  threadSearchMatchKey,
+  threadSearchSubject,
+  type ShownOrder,
+} from "@t3tools/client-runtime/state/thread-search";
+import { foldSearchQuery, rankMessageMatches } from "@t3tools/shared/paletteSearch";
+import { findForMessageMatch, requestThreadFindQuery } from "./chat/threadFindActionBus";
 import {
   threadRuntimeCanArchive,
   type EnvironmentThreadShell,
@@ -171,6 +178,9 @@ import { threadEnvironment } from "../state/threads";
 import { useThreadSearch } from "../state/queries";
 import { useOrchestrationCommand } from "../state/use-orchestration-command";
 import { readEnvironmentScope, useEnvironmentScope } from "../state/session";
+import { appAtomRegistry } from "../rpc/atomRegistry";
+import { canShareWithGuestAtom } from "./chat/guestShareAvailability";
+import { openGuestShareDialog } from "./chat/guestShareDialogState";
 import { buildThreadRouteParams, resolveActiveThreadRouteRef } from "../threadRoutes";
 import { formatCompactRelativeTimeLabel } from "../timestampFormat";
 import { useRecentArchivedThreadSnapshots } from "../lib/archivedThreadsState";
@@ -291,9 +301,7 @@ function sameSidebarProviderEntries(
   return true;
 }
 
-// Threads on non-primary environments (T3 Connect, hosted) resolve their
-// provider entry from their own environment's config: default instance ids
-// are driver slugs, so a flat map would collide across environments.
+// Resolve providers per environment because default instance ids collide across environments.
 const sidebarProviderEntriesAtom = Atom.make((get) => {
   const providersByEnvironment = get(environmentPresentations.providersByEnvironmentAtom);
   const derived = deriveProviderEntriesByEnvironment(
@@ -320,8 +328,6 @@ const sidebarProviderEntriesAtom = Atom.make((get) => {
 }).pipe(Atom.withLabel("sidebar-provider-entries"));
 
 const EMPTY_PROVIDER_ENTRIES: ReadonlyMap<string, SidebarProviderEntry> = new Map();
-// Collapsed shelves share one empty list so a route change alone does not
-// give the sidebar list a new identity.
 const EMPTY_THREADS: readonly EnvironmentThreadShell[] = [];
 
 const SETTLED_TAIL_INITIAL_COUNT = 10;
@@ -380,8 +386,6 @@ const NO_DRAGGED_ORDERS: {
   readonly activeOrder: readonly string[] | undefined;
 } = { settledOrder: NO_DRAGGED_ORDER, activeOrder: undefined };
 
-// Where the dragged row would sort if dropped on the settled or the
-// time-ordered active shelf; the strategy previews those slots.
 function resolveDraggedOrders(input: {
   readonly drag: { readonly activeKey: string; readonly occurredAt: string };
   readonly threadByKey: ReadonlyMap<string, EnvironmentThreadShell>;
@@ -429,11 +433,9 @@ function partitionSidebarThreads(input: SidebarThreadPartitionInput) {
     workingShelfEnabled,
   } = input;
   const preciseNow = new Date().toISOString();
-  // Subagent child threads live in the parent's Agents surface, not the
-  // sidebar roster (v2 models them as real threads with lineage). Each fork
-  // filter is then evaluated separately so the empty state can be attributed
-  // by counterfactual — "would clearing just this one admit a row?" — rather
-  // than by which filters happen to be switched on.
+  // Subagent children live in the parent's Agents surface, not the roster. Each fork
+  // filter is evaluated separately so the empty state names the filter whose
+  // clearing alone would admit a row, not whichever filters are switched on.
   let admittedWithoutEnvironment = 0;
   let admittedWithoutProjects = 0;
   const visible: EnvironmentThreadShell[] = [];
@@ -509,9 +511,7 @@ function partitionSidebarThreads(input: SidebarThreadPartitionInput) {
       ).push(thread);
     }
   }
-  // Server capability only gates DRAGGING — it must not influence the
-  // sort, or mixed-version fleets would render different pinned orders on
-  // web and mobile from the same data.
+  // Capability gates dragging only; mixed server versions must preserve the same pinned order across clients.
   const sortedPinned = sortPinnedThreadsForSidebar(pinned);
   const sortedActive = workingShelfEnabled
     ? sortInboxThreadsByReturn(active, inboxReturns.returnedAt)
@@ -597,8 +597,7 @@ function resolveOptimisticDropHold(input: {
     return "release";
   }
   if (optimisticDrop.order === null) {
-    // Settle also emits unpin/unsnooze events. Wait for the entire move
-    // before releasing the projected fields and sort timestamps.
+    // Settle emits unpin/unsnooze too; hold projected fields and sort times until the whole move completes.
     return canonicalSection === optimisticDrop.section &&
       thread.pinnedAt == null &&
       (!optimisticDrop.clearsSnooze || (thread.snoozedUntil == null && thread.snoozedAt == null))
@@ -672,8 +671,7 @@ function resolveOptimisticDropHold(input: {
   return membershipChanged || foreignKeyLanded || allAssignmentsLanded ? "release" : "hold";
 }
 
-// Sidebar() is large enough that the compiler cannot prove its local maps stay
-// unmutated; built inside a hook they reach it frozen and cached.
+// Build maps in a hook so the compiler can prove they are frozen and cache them.
 function useSidebarLookups() {
   const projects = useProjects();
   const environments = useEnvironmentIdentities();
@@ -707,9 +705,7 @@ function useSidebarLookups() {
 function scheduleSnoozeWake(wakeAt: string | null, onWake: () => void): (() => void) | undefined {
   const wakeAtMs = wakeAt === null ? Number.NaN : Date.parse(wakeAt);
   if (Number.isNaN(wakeAtMs)) return undefined;
-  // setTimeout delays are signed 32-bit: anything larger overflows and fires
-  // immediately, turning a far-future wake (event-condition snoozes synced
-  // from elsewhere) into a tight re-arm loop.
+  // Delays beyond signed 32-bit range fire immediately and loop for far-future snoozes.
   const delayMs = Math.min(Math.max(0, wakeAtMs - Date.now()) + 50, 2_147_483_647);
   const id = window.setTimeout(onWake, delayMs);
   return () => window.clearTimeout(id);
@@ -881,12 +877,9 @@ const SidebarV2ArchivedRow = memo(function SidebarV2ArchivedRow(props: {
   );
 });
 
-// Everything Sidebar derives from thread shells. Computed inside one hook so
-// each value reaches the component frozen and cached on its real inputs: in
-// the component body, later hook calls made the compiler treat these maps as
-// possibly mutated and recompute them, and every dnd-kit input and row
-// callback with them. Fork: the environment/project filters, custom groups and
-// the foldable Pinned/Active shelves live here too.
+// Separate hooks cache maps independently of later Sidebar hooks and preserve dnd-kit inputs
+// and row callbacks. Fork: the environment/project filters, custom groups and the foldable
+// Pinned/Active shelves live here too.
 function useSidebarThreads(input: {
   readonly threads: readonly EnvironmentThreadShell[];
   readonly environmentScope: ReadonlySet<string> | null;
@@ -1648,7 +1641,7 @@ export default function Sidebar({ routeReveal }: { routeReveal: SidebarRouteReve
   const [optimisticDrop, setOptimisticDrop] = useState<SidebarOptimisticDrop | null>(null);
   const threadSearchInputRef = useRef<HTMLInputElement>(null);
   const [threadSearchQuery, setThreadSearchQuery] = useState("");
-  const [searchHighlight, setSearchHighlight] = useState({ orderKey: "", index: 0 });
+  const [searchHighlightKey, setSearchHighlightKey] = useState<string | null>(null);
   const [renamingThreadKey, setRenamingThreadKey] = useState<string | null>(null);
   const [renamingTitle, setRenamingTitle] = useState("");
   const settlingThreadKeysRef = useRef(new Set<string>());
@@ -1806,34 +1799,76 @@ export default function Sidebar({ routeReveal }: { routeReveal: SidebarRouteReve
     environmentFilter.signature,
   ]);
 
+  // Ranked across environments as the palette ranks them, so one
+  // environment's list does not sit above another's better matches; rows
+  // already shown keep their places while slower environments answer.
+  const threadByMatchKey =
+    threadSearch.matches.length === 0
+      ? null
+      : new Map(
+          searchableThreads.map((thread) => [
+            threadSearchMatchKey({ environmentId: thread.environmentId, threadId: thread.id }),
+            thread,
+          ]),
+        );
+  const rankedServerMatches =
+    threadByMatchKey === null
+      ? []
+      : rankMessageMatches(
+          threadSearch.matches,
+          (match) => {
+            const thread = threadByMatchKey.get(threadSearchMatchKey(match));
+            return thread ? threadSearchSubject(thread, null) : undefined;
+          },
+          foldSearchQuery(threadSearchQuery),
+          Date.now(),
+          // A list filter, as on mobile: a pick would move rows unexplained.
+          { picks: false },
+        );
+  const serverMatchByKey = new Map(
+    rankedServerMatches.map((match) => [threadSearchMatchKey(match), match] as const),
+  );
+  const [shownMessageOrder, setShownMessageOrder] = useState<ShownOrder | null>(null);
+  const messageOrder = nextShownOrder(
+    shownMessageOrder,
+    threadSearch.query,
+    [...serverMatchByKey.keys()],
+    Number.POSITIVE_INFINITY,
+  );
+  if (messageOrder !== shownMessageOrder) setShownMessageOrder(messageOrder);
+  const { titleMatches: threadTitleResults, contentMatches: threadContentResults } =
+    searchSidebarThreads(searchableThreads, threadSearchQuery, new Set(messageOrder.keys));
+  const threadSearchResults = [...threadTitleResults, ...threadContentResults];
+  // Only rows listed for their messages show one, and open find on it.
   const threadSearchMatchByKey = new Map(
-    threadSearch.matches.map((match) => [threadSearchMatchKey(match), match] as const),
+    threadContentResults.flatMap((thread) => {
+      const key = threadSearchMatchKey({
+        environmentId: thread.environmentId,
+        threadId: thread.id,
+      });
+      const match = serverMatchByKey.get(key);
+      return match ? [[key, match] as const] : [];
+    }),
   );
-  const threadSearchResults = searchSidebarThreads(
-    searchableThreads,
-    threadSearchQuery,
-    new Set(threadSearchMatchByKey.keys()),
+  const threadSearchResultKeys = threadSearchResults.map((thread) =>
+    scopedThreadKey(scopeThreadRef(thread.environmentId, thread.id)),
   );
-  const threadSearchResultOrderKey = threadSearchResults
-    .map((thread) => scopedThreadKey(scopeThreadRef(thread.environmentId, thread.id)))
-    .join("\0");
 
-  // The highlight belongs to one result list; a new list starts at the top.
-  const activeSearchResultIndex =
-    searchHighlight.orderKey === threadSearchResultOrderKey ? searchHighlight.index : 0;
+  // The highlight follows its thread, so rows that arrive late do not move
+  // it under Enter; a new query starts at the top.
+  const activeSearchResultIndex = Math.max(
+    0,
+    searchHighlightKey === null ? 0 : threadSearchResultKeys.indexOf(searchHighlightKey),
+  );
   const setActiveSearchResultIndex = (index: number | ((index: number) => number)) =>
-    setSearchHighlight((current) => {
-      const currentIndex = current.orderKey === threadSearchResultOrderKey ? current.index : 0;
-      return {
-        orderKey: threadSearchResultOrderKey,
-        index: typeof index === "function" ? index(currentIndex) : index,
-      };
-    });
-  const activeSearchResult = isSearchingThreads
-    ? threadSearchResults[activeSearchResultIndex]
-    : undefined;
-  const activeSearchResultKey =
-    activeSearchResult === undefined ? null : threadShellKey(activeSearchResult);
+    setSearchHighlightKey(
+      threadSearchResultKeys[
+        typeof index === "function" ? index(activeSearchResultIndex) : index
+      ] ?? null,
+    );
+  const activeSearchResultKey = isSearchingThreads
+    ? (threadSearchResultKeys[activeSearchResultIndex] ?? null)
+    : null;
   useEffect(() => {
     if (activeSearchResultKey === null) return;
     document
@@ -1873,16 +1908,10 @@ export default function Sidebar({ routeReveal }: { routeReveal: SidebarRouteReve
       params: buildThreadRouteParams(threadRef),
     });
   };
-  // Direct picks (row clicks, Enter/Space, search results) route through the
-  // split-aware helper so the thread lands in the active pane; forward
-  // navigation after settle/archive keeps using navigateToThread — it must
-  // always retarget the primary route. The primary branch delegates to
-  // navigateToThread wholesale, so only the split-local branches repeat its
-  // selection/mobile prep. The sidebar sits outside both pane roots, so the
-  // click's own pointerdown never changes which pane is active.
-  // The route ref is re-parsed from the latest key: handing the render's
-  // routeThreadRef to the pane helper would let the compiler assume the helper
-  // mutates it, and stop caching everything derived from the route.
+  // Direct picks land in the active pane; navigation after settle/archive keeps
+  // navigateToThread, which always retargets the primary route. The route ref is
+  // re-parsed from the latest key: passing the render's routeThreadRef would make
+  // the compiler assume the helper mutates it and stop caching route-derived values.
   const openThreadFromSidebar = (threadRef: ScopedThreadRef) => {
     const routeKey = routeThreadKeyRef.current;
     const { plan } = openThreadInActivePane({
@@ -1984,11 +2013,18 @@ export default function Sidebar({ routeReveal }: { routeReveal: SidebarRouteReve
 
   const clearThreadSearch = () => {
     setThreadSearchQuery("");
-    setActiveSearchResultIndex(0);
+    setSearchHighlightKey(null);
   };
   const selectThreadSearchResult = (thread: EnvironmentThreadShell) => {
+    const ref = scopeThreadRef(thread.environmentId, thread.id);
+    // A row listed for a message match opens find on it, as the palette does.
+    const match = threadSearchMatchByKey.get(
+      threadSearchMatchKey({ environmentId: thread.environmentId, threadId: thread.id }),
+    );
+    const query = threadSearch.query;
     clearThreadSearch();
-    openThreadFromSidebar(scopeThreadRef(thread.environmentId, thread.id));
+    openThreadFromSidebar(ref);
+    if (match) requestThreadFindQuery(scopedThreadKey(ref), findForMessageMatch(match, query));
   };
   const handleThreadSearchKeyDown = (event: ReactKeyboardEvent<HTMLInputElement>) => {
     if (event.nativeEvent.isComposing || event.keyCode === 229) return;
@@ -2072,8 +2108,7 @@ export default function Sidebar({ routeReveal }: { routeReveal: SidebarRouteReve
     openThreadFromSidebar(threadRef);
   };
 
-  // Callers snapshot the plan BEFORE the command mutates the partition;
-  // background parks never navigate (null plan).
+  // Snapshot navigation before partition mutation; background parks use a null plan.
   const planForwardNavigation = (
     threadKey: string,
     coParkingKeys?: ReadonlySet<string>,
@@ -2192,7 +2227,6 @@ export default function Sidebar({ routeReveal }: { routeReveal: SidebarRouteReve
   };
   const restrictBelowPins: Modifier = (args) =>
     restrictBelowSidebarLabel(args, dragLabelOffsetRef.current);
-  // A new array re-renders DndContext and with it every sortable row.
   const dndModifiers = [
     restrictToVerticalAxis,
     restrictBelowPins,
@@ -2210,7 +2244,6 @@ export default function Sidebar({ routeReveal }: { routeReveal: SidebarRouteReve
     listMotionRef.current?.update(false);
   };
 
-  // Working rows can supply chat context, but never preview sidebar movement.
   const isContextDrag = dragState?.contextDrag === true || dragState?.activeSection === "working";
   const dragTargetSection = isContextDrag ? null : (dragState?.targetSection ?? null);
   const finishThreadDrag = (started: boolean) => {
@@ -2266,8 +2299,7 @@ export default function Sidebar({ routeReveal }: { routeReveal: SidebarRouteReve
     dropThreadContext(point, contextDragThreads());
     return true;
   };
-  // useSensor memoizes on the options object; a fresh one each render rebuilds
-  // the sensors, and with them DndContext and every sortable row.
+  // useSensor memoizes options identity; fresh options rebuild DndContext and every sortable row.
   const pointerSensorOptions = {
     distance: SIDEBAR_DRAG_DISTANCE,
     onAttach: attachDragSensor,
@@ -2366,10 +2398,6 @@ export default function Sidebar({ routeReveal }: { routeReveal: SidebarRouteReve
   }
   const attemptPin = (threadRef: ScopedThreadRef) => {
     void (async () => {
-      // Fresh pins take the top of the arranged run: pinThread computes a
-      // key before the smallest key across ALL pinned shells — including
-      // snoozed pins hidden from this list, whose keys are still part of
-      // the run — so the new pin can't land beneath a hidden head.
       const result = await pinThread(threadRef);
       if (result._tag === "Failure" && !isAtomCommandInterrupted(result)) {
         const error = squashAtomCommandFailure(result);
@@ -2439,9 +2467,7 @@ export default function Sidebar({ routeReveal }: { routeReveal: SidebarRouteReve
       cancelThreadDrag();
     }
   }, [cancelThreadDrag, dragState, sidebarListItems]);
-  // Rows only move when the rendered order, a row's section, or the draft block
-  // changes. Running the motion pass on that alone keeps ordinary shell events
-  // from forcing a layout read and animating rows that drifted for other reasons.
+  // Only order, section, or draft changes need layout reads and motion.
   const listMotionLayoutKey = [
     sidebarListItemsKey,
     visibleDraftSessionCount,
@@ -2449,8 +2475,7 @@ export default function Sidebar({ routeReveal }: { routeReveal: SidebarRouteReve
   ].join("\0");
   const listMotionAnimate =
     dragState === null && sidebarListItems.length + visibleDraftSessionCount > 0;
-  // The effect reads only `animate`; the pass object is cached on both fields,
-  // so a new layout key alone also triggers it.
+  // Cache on both fields so layout-key changes trigger the effect even when animate is unchanged.
   const listMotionPass = { layoutKey: listMotionLayoutKey, animate: listMotionAnimate };
   useLayoutEffect(() => {
     listMotionRef.current?.update(listMotionPass.animate);
@@ -2470,8 +2495,7 @@ export default function Sidebar({ routeReveal }: { routeReveal: SidebarRouteReve
     );
   };
   const sortableIds = sidebarListItems.map(sidebarListItemId);
-  // Outside a drag the orders are constants, so the strategy, and with it
-  // every sortable row, keeps its identity while thread shells stream in.
+  // Keep non-drag orders constant to preserve sorting strategy and row identity during streaming.
   const { settledOrder: draggedSettledOrder, activeOrder: draggedActiveOrder } =
     dragState === null
       ? NO_DRAGGED_ORDERS
@@ -3125,8 +3149,7 @@ export default function Sidebar({ routeReveal }: { routeReveal: SidebarRouteReve
             if (session.branch) copyBranchToClipboard(session.branch, { branch: session.branch });
             return;
           case "discard": {
-            // The menu can stay open while the draft sends; discarding a
-            // promoting draft would strand the send.
+            // The menu may outlive draft promotion; discarding then would strand the send.
             const current = useComposerDraftStore.getState().getDraftSession(draftId);
             if (current && !current.promotedTo) discardComposerDraft(draftId);
             return;
@@ -3207,6 +3230,7 @@ export default function Sidebar({ routeReveal }: { routeReveal: SidebarRouteReve
           isRegeneratingTitle,
           isRunning: !threadRuntimeCanArchive(thread.runtime),
           archiveAction: resolveArchiveToggleAction(thread),
+          canShareWithGuest: appAtomRegistry.get(canShareWithGuestAtom(threadRef.environmentId)),
           supports: {
             settlement: supportsSettlement,
             autoSettleOptOut: supportsAutoSettleOptOut,
@@ -3359,6 +3383,9 @@ export default function Sidebar({ routeReveal }: { routeReveal: SidebarRouteReve
           }
           case "rename":
             startThreadRename(threadRef, thread.title);
+            return;
+          case "share-guest":
+            openGuestShareDialog(threadRef);
             return;
           case "regenerate-title": {
             if (isRegeneratingTitle) return;
@@ -3609,7 +3636,7 @@ export default function Sidebar({ routeReveal }: { routeReveal: SidebarRouteReve
                   value={threadSearchQuery}
                   onChange={(event) => {
                     setThreadSearchQuery(event.currentTarget.value);
-                    setActiveSearchResultIndex(0);
+                    setSearchHighlightKey(null);
                   }}
                   onKeyDown={handleThreadSearchKeyDown}
                   placeholder="Search threads or PRs"
@@ -3785,12 +3812,9 @@ export default function Sidebar({ routeReveal }: { routeReveal: SidebarRouteReve
                               {project.displayName}
                               {isHidden ? <span className="sr-only"> (hidden)</span> : null}
                             </span>
-                            {/* Badge and dot get the same 24px slot as the
-                                buttons after them so the trailing icons are
-                                evenly spaced. place-content-center (not flex)
-                                keeps the badge's own ml-auto from pushing it
-                                off-center; empty:hidden drops the slot when
-                                the badge renders nothing. */}
+                            {/* Same 24px slot as the buttons after it so icons space
+                                evenly; place-content-center (not flex) keeps the badge's
+                                ml-auto from pushing it off-center. */}
                             {showProjectEnvironments ? (
                               <span className="grid size-6 shrink-0 place-content-center empty:hidden">
                                 <ProjectEnvironmentBadge
@@ -3950,6 +3974,7 @@ export default function Sidebar({ routeReveal }: { routeReveal: SidebarRouteReve
                           ) ?? null
                         }
                         searchQuery={threadSearchQuery}
+                        searchMatchQuery={threadSearch.query}
                         onHighlight={() => setActiveSearchResultIndex(index)}
                         onSelect={() => selectThreadSearchResult(thread)}
                         onFileDropThreads={handleThreadFileDrop}
@@ -3987,10 +4012,8 @@ export default function Sidebar({ routeReveal }: { routeReveal: SidebarRouteReve
                 <SortableContext items={sortableIds} strategy={sidebarSortingStrategy}>
                   <ul
                     ref={attachListMotionRef}
-                    // VoiceOver treats an exposed list as an interaction boundary,
-                    // which hides its rows from ordinary linear navigation. A
-                    // presentational list also makes its implicit listitems
-                    // presentational while preserving every descendant control.
+                    // Presentation flattens VoiceOver's list interaction boundary while preserving descendant
+                    // controls.
                     role="presentation"
                     className={cn(
                       "relative flex flex-col gap-px",
@@ -4472,12 +4495,9 @@ export default function Sidebar({ routeReveal }: { routeReveal: SidebarRouteReve
             0 &&
           recentArchive.totalCount === 0 ? (
             <div className="flex flex-col items-center gap-2 px-2 py-6 text-center text-xs text-muted-foreground/60">
-              {/* Ordered by which clear action would actually refill the list,
-                  not by which filters are switched on. `emptyStateCause` is the
-                  counterfactual: a filter only appears here when clearing it
-                  alone admits a row. An unavailable environment scope is the one
-                  exception that outranks "No projects yet" — adding a project
-                  under it would land outside the scope and stay hidden. */}
+              {/* A filter appears only when clearing it alone admits a row
+                  (`emptyStateCause`). An unavailable environment scope outranks
+                  "No projects yet": a project added under it would stay hidden. */}
               {environmentFilter.emptyStateLabel !== null &&
               (emptyStateCause === "environment" || emptyStateCause === "none") ? (
                 <>

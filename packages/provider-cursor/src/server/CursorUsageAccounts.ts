@@ -77,11 +77,9 @@ const make = Effect.gen(function* () {
   const caches = new Map<string, CursorAccountCache>();
   let cacheDirty = false;
   /**
-   * The last failed refresh per credential source, standing for a TTL so a
-   * client refetching a broken login does not refetch Cursor each time. A
-   * `null` error means there is no login: no source to report. Fork: `missing`
-   * keeps a missing login apart from an unreadable one, which reports partial,
-   * and `accountKey` keeps the identity of an account whose usage failed.
+   * Failed refreshes share the cache TTL to prevent repeated requests; null means no login. Fork:
+   * `missing` keeps a missing login apart from an unreadable one, which reports partial, and
+   * `accountKey` keeps the identity of an account whose usage failed.
    */
   const failures = new Map<
     string,
@@ -131,9 +129,7 @@ const make = Effect.gen(function* () {
     }),
   );
 
-  // Serialized so an older snapshot never lands after a newer one. The dirty
-  // flag is cleared before encoding, so a change while the write is in flight
-  // marks it dirty again; a failed write restores it so the next persist retries.
+  // Serialize snapshots; clear dirty before encoding and restore it on failure so changes retry.
   const persistLock = yield* Semaphore.make(1);
   const persist = Effect.gen(function* () {
     if (!cacheDirty) return;
@@ -216,8 +212,7 @@ const make = Effect.gen(function* () {
     credentialKey: string,
     retentionStartMs: number,
   ) =>
-    // Enrollment and fork are atomic, so an interrupted caller cannot leave a
-    // registered refresh that nothing will finish.
+    // Enroll and fork atomically so interruption cannot strand a registered refresh.
     Effect.uninterruptible(
       Effect.gen(function* () {
         const current = refreshes.get(credentialKey);
@@ -282,11 +277,9 @@ const make = Effect.gen(function* () {
     const failureMessage = failure === undefined ? undefined : failure.error;
     if (failureMessage === null) return null;
     if (cache === undefined) {
-      // Fork: the account identity outlives a failed read. An account the
-      // server has history for reports under its stable identity, with no
-      // fresh records: the server shows the history it retained for that
-      // source (including what builds before the account cache saved) until
-      // a refresh succeeds.
+      // Fork: the account identity outlives a failed read, so an account with retained history
+      // (including what pre-account-cache builds saved) reports under its stable identity with no
+      // fresh records until a refresh succeeds.
       const accountKey =
         failure?.missing === true
           ? null
@@ -315,8 +308,7 @@ const make = Effect.gen(function* () {
             }),
       } satisfies ProviderUsageScan;
     }
-    // The same account includes CLI and desktop history from every machine.
-    // A stable remote fingerprint prevents connected environments counting it twice.
+    // Account history spans machines; a stable fingerprint prevents duplicate environment counts.
     const source = `cursor-account:${cache.accountKey}`;
     return {
       dir: source,

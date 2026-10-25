@@ -35,14 +35,10 @@ export function resolveThreadFeedInsetBaseline(input: {
 }
 
 /**
- * Decides whether the closed-keyboard composer baseline should be pushed into
- * the list's imperative content-inset override.
- *
- * The keyboard integration owns that override the rest of the time: it writes
- * `min(viewport, max(anchoredBlankSpace, keyboard + composer))` and only
- * re-emits when that total changes. So a JS write is only safe when nothing
- * larger is in play — otherwise it silently replaces the anchored end space
- * with the bare composer height and the integration never corrects it.
+ * The keyboard integration owns the list's content-inset override, writing
+ * `min(viewport, max(anchoredBlankSpace, keyboard + composer))` and re-emitting only on change. A
+ * JS write of the closed-keyboard baseline is safe only when nothing larger is in play, or it
+ * replaces the anchored end space and the integration never corrects it.
  */
 export function resolveThreadFeedInsetReport(input: {
   readonly listMountKey: string;

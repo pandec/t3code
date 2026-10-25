@@ -29,12 +29,9 @@ export function useSidebarEnvironmentFilter(input: {
   const storedScopeIds = useUiStateStore((store) => store.sidebarV2EnvironmentScopeIds);
   const setStoredScopeIds = useUiStateStore((store) => store.setSidebarV2EnvironmentScopeIds);
   const scope: SidebarEnvironmentScope = storedScopeIds === null ? null : new Set(storedScopeIds);
-  // Before the catalog hydrates, an empty environment list is indistinguishable
-  // from "every selection was removed". Resolving against it would either hide
-  // everything or — since null means all — widen the filter for a frame, which
-  // is exactly what the scope is designed never to do. Client-persisted drafts
-  // exist before any environment does and would be the visible tell, so fall
-  // back to raw intent until the catalog can be trusted to answer.
+  // Before hydration an empty environment list looks like "every selection was removed":
+  // resolving would hide everything or, since null means all, widen the filter for a
+  // frame. Use raw intent until the catalog can answer.
   const resolvedScope = input.environmentsReady
     ? resolveSidebarEnvironmentScope(input.environments, scope)
     : scope;

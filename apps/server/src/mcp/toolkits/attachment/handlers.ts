@@ -36,10 +36,7 @@ export function resolveAttachmentReferences(
   });
 }
 
-/**
- * The sweep counts its 24 hours from when the upload finishes, which can be up
- * to the upload URL's lifetime after issue.
- */
+/** The 24-hour sweep starts at upload completion, possibly one upload-URL lifetime after issue. */
 const UPLOAD_OWNER_TTL_MS = 24 * 60 * 60 * 1000 + ATTACHMENT_UPLOAD_URL_TTL_MS;
 
 const uploadOwner = McpInvocationContext.McpInvocationContext.pipe(
@@ -47,11 +44,9 @@ const uploadOwner = McpInvocationContext.McpInvocationContext.pipe(
 );
 
 /**
- * Fork: which caller prepared each pending upload, so only that caller can
- * discard it. A service rather than state in `layer`, because `McpHttpServer`
- * builds the attachment toolkit once per capability island; providing this
- * once outside the islands lets a thread whose credential rotates to another
- * island still discard its own upload.
+ * Fork: which caller prepared each pending upload, so only it can discard it. Provided once
+ * outside the per-capability islands, so a thread whose credential rotates to another island can
+ * still discard its own upload.
  */
 export class AttachmentUploadOwners extends Context.Service<
   AttachmentUploadOwners,

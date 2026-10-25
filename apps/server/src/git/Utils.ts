@@ -17,12 +17,9 @@ export function isSameDirectory(left: string, right: string): boolean {
 }
 
 /**
- * Resolve a directory to its canonical form, falling back to a normalized path
- * when it cannot be resolved (most often because it no longer exists).
- *
- * Persisted worktree paths are compared with strict equality across the server,
- * so storing an alias — `/tmp` for `/private/tmp`, or any symlinked parent —
- * makes later comparisons miss.
+ * Falls back to a normalized path when the directory cannot be resolved. Persisted worktree paths
+ * are compared with strict equality, so storing an alias (`/tmp` for `/private/tmp`, a symlinked
+ * parent) makes later comparisons miss.
  */
 export function canonicalizeDirectory(value: string): string {
   try {
@@ -33,13 +30,9 @@ export function canonicalizeDirectory(value: string): string {
 }
 
 /**
- * Resolve the shared git directory backing `cwd` — the repository a checkout
- * belongs to. A primary checkout points at its own `.git`; a linked worktree's
- * `gitdir` sits under `<repo>/.git/worktrees/<name>`, whose repository is two
- * levels up. Returns `null` when `cwd` is not a checkout.
- *
- * Two checkouts of the same repository share this value, which is what
- * distinguishes a worktree of the project from an unrelated clone.
+ * The shared git directory backing `cwd`, or `null` when it is not a checkout. A linked
+ * worktree's `gitdir` sits under `<repo>/.git/worktrees/<name>`, two levels below it. Checkouts
+ * of the same repository share this value, unlike unrelated clones.
  */
 export function readGitCommonDir(cwd: string): string | null {
   try {
@@ -63,13 +56,9 @@ export function readGitCommonDir(cwd: string): string | null {
 }
 
 /**
- * Read the branch checked out at `cwd` without shelling out to git.
- *
- * `.git` is a directory in a primary checkout and a `gitdir:` pointer file in a
- * linked worktree; both cases expose a `HEAD` holding either a symbolic ref or
- * a raw commit id. Returns `null` for a detached HEAD, a non-repository, or any
- * layout this cannot parse — callers treat that as "branch unknown" rather than
- * an error, so a surprising on-disk shape must not fail the caller.
+ * Reads `HEAD` without shelling out; `.git` is a directory in a primary checkout and a `gitdir:`
+ * file in a linked worktree. Returns `null` for a detached HEAD, a non-repository, or any
+ * unparseable layout: callers treat it as "branch unknown", never an error.
  */
 export function readCheckedOutBranch(cwd: string): string | null {
   try {

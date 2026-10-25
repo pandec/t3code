@@ -189,11 +189,9 @@ export function useRightPanelActions(input: RightPanelActionsInput) {
     }
   };
   const closePreviewPanelStable = useStableCallback(closePreviewPanel);
-  // Split view (fork): both panes' sheets dock to the window's right edge, so
-  // only one stays open — an opening sheet claims the slot, and the pane
-  // holding it closes its own once the other pane claims it. Panel state is
-  // per thread, so a claim for this same thread (mid pane swap, when both
-  // panes briefly show it) must not close it.
+  // Split view (fork): both panes' sheets share the right edge, so a claim from
+  // the other pane closes this one. A claim for the same thread (both panes show
+  // it mid swap) must not close it, since panel state is per thread.
   useEffect(() => {
     if (!threadSplitActive || !rightPanelOpen || activeThreadKey === null) return;
     useThreadSplitStore

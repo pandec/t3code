@@ -35,11 +35,9 @@ export interface ThreadGroupListEntry {
 }
 
 /**
- * Fork: the custom sidebar thread groups agents may list, create, and move
- * threads into. The catalog lives in server settings and membership in the
- * `thread.custom-group.set` command, written exactly as the web client does;
- * thread launch tools validate a group with `requireGroup` and set it at creation.
- * Callers check thread access first; rename, delete, and reorder stay in the UI.
+ * Fork: custom sidebar thread groups for agents. Membership goes through
+ * `thread.custom-group.set` exactly as the web client writes it. Callers check thread access
+ * first; rename, delete, and reorder stay in the UI.
  */
 export class ThreadGroupsMcpService extends Context.Service<
   ThreadGroupsMcpService,

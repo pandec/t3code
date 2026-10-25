@@ -30,13 +30,8 @@ import { AppText as Text } from "../../components/ui/AppText";
 import { cn } from "../../lib/cn";
 
 /**
- * Full provider quota for every configured account, as a native form sheet.
- *
- * This used to be a native context menu, which could only offer one truncated
- * subtitle per account: everything after the first window was cut off and a
- * menu cannot draw a bar at all. Usage is read, not acted on, so it belongs in
- * a scrollable surface that shows each window's percentage, bar, and reset the
- * same way the desktop meter does.
+ * Full provider quota for every configured account, as a native form sheet showing each window's
+ * percentage, bar, and reset like the desktop meter.
  */
 
 const STATUS_BAR_CLASS: Record<ProviderUsageStatus, string> = {
@@ -189,14 +184,9 @@ type ProviderUsageRouteContextValue = {
 const ProviderUsageRouteContext = createContext<ProviderUsageRouteContextValue | null>(null);
 
 /**
- * Whether a presented session would change anything on screen.
- *
- * The composer re-presents on every render while the sheet is open, and this
- * provider sits above the whole navigator — so storing an equal-but-new session
- * re-renders the app for nothing, and a caller whose session object is not
- * memoized would drive that render loop indefinitely. Comparing field by field
- * absorbs top-level identity churn; a caller that recreates a *field* (accounts,
- * onRefresh, …) each render still loops and must memoize it.
+ * The composer re-presents on every render while the sheet is open, and this provider sits above
+ * the navigator, so an equal-but-new session would re-render the app. Field-by-field comparison
+ * absorbs top-level identity churn; callers must still memoize each field (accounts, onRefresh).
  */
 function isSameProviderUsageRouteSession(
   current: ProviderUsageRouteSession | null,
@@ -252,12 +242,9 @@ export function ProviderUsageSheet(
     : null;
 
   return (
-    // A form sheet whose scrollable content sits beside other chrome is laid
-    // out natively, and react-native-screens only recognizes that shape when
-    // the sheet's container holds the chrome and the scroll view as two
-    // uncollapsed subviews. Flattening either one hands it a flat pile of
-    // leaves, and it positions the scroll view over the chrome instead of
-    // below it — the header ends up painted behind the first account card.
+    // react-native-screens lays out a form sheet natively only when its container holds the
+    // chrome and the scroll view as two uncollapsed subviews; otherwise it paints the scroll view
+    // over the header.
     <View collapsable={false} className="flex-1 bg-sheet">
       <View collapsable={false}>
         {/* Android presents this as a full-screen card under a translucent

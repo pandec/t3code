@@ -1,22 +1,8 @@
 /**
- * Saved prompt library, shared by every client.
- *
- * Prompts live in each server's `ServerSettings.savedPromptLibrary` so the
- * library a user builds on one machine is usable from every connected
- * environment. Unlike project accent colors (a per-key map merged with
- * owner precedence), the library is one atomic value under last-write-wins:
- *
- * - **Reads pick the newest stamp** (`resolveSavedPromptLibrary`) among the
- *   connected environments, with a stable environmentId tie-break so every
- *   client resolves the same winner.
- * - **Writes stamp and fan out** (`stampSavedPromptLibrary` + the caller's
- *   fan-out) to every connected environment that advertises `savedPrompts`,
- *   so an edit becomes durable on each machine rather than only on whichever
- *   one happened to be primary.
- * - **Stale environments are repaired** (`buildSavedPromptSyncPatches`): an
- *   environment that was offline during an edit receives the newest library
- *   when it reconnects. Whole-library LWW is what keeps deletion simple — a
- *   per-prompt merge would resurrect deleted prompts from the stale side.
+ * Saved prompt library, stored in each server's `ServerSettings.savedPromptLibrary` as one atomic
+ * last-write-wins value: reads pick the newest stamp (environmentId tie-break), writes stamp and
+ * fan out to every `savedPrompts` environment, and stale environments are repaired on reconnect.
+ * Whole-library LWW keeps deletion simple; a per-prompt merge would resurrect deleted prompts.
  */
 import type { EnvironmentId } from "@t3tools/contracts";
 import type { SavedPrompt, SavedPromptLibrary } from "@t3tools/contracts/settings";

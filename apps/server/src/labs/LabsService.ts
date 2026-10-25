@@ -1,13 +1,7 @@
 /**
- * Fork: SP Labs. Mirrors `sp-labs status --runtime` into a live snapshot, runs
- * lab commands for the user, and reserves labs for new threads.
- *
- * - The CLI is polled only while someone subscribes; a mutation refreshes once
- *   when it finishes, so the inventory stays current without polling.
- * - Mutations on one environment run one at a time (`KeyedLock`), and the
- *   snapshot shows what T3 is doing to each environment meanwhile.
- * - A lab thread's first turn carries a hidden note about its lab; a failed
- *   `up` queues a one-line hidden note for the owning thread's next turn.
+ * Fork: SP Labs. Mirrors `sp-labs status --runtime`, polling only while subscribed (mutations
+ * refresh once). `KeyedLock` serializes mutations per environment. A lab thread's first turn gets
+ * a hidden note about its lab; a failed `up` queues one for the owning thread's next turn.
  */
 import * as NodeOS from "node:os";
 

@@ -108,15 +108,10 @@ export interface AgentVoiceReplyShape {
 }
 
 /**
- * Agent voice replies. The `voice_reply` MCP tool synthesizes a recording
- * mid-run and parks it here, bound to the run attempt that was running. When
- * that attempt completes normally, run finalization attaches it to the run's
- * last assistant message as an agent recording (`MessageSpeech`). A run that
- * produced no written reply gets the transcript as its message text, in the
- * same event batch, so the recording always has a durable, searchable home.
- *
- * Staged recordings live in memory; their audio is written at stage time so
- * attaching stays metadata-only. A server restart drops them with their run.
+ * Agent voice replies staged per run attempt until finalization attaches them to
+ * the last assistant message; a run with no written reply gets the transcript as
+ * its text. Staging is in memory, with audio written up front so attaching is
+ * metadata-only; a restart drops staged recordings with their run.
  */
 export class AgentVoiceReply extends Context.Service<AgentVoiceReply, AgentVoiceReplyShape>()(
   "t3/voice/AgentVoiceReply",
@@ -247,11 +242,9 @@ export const make = Effect.gen(function* () {
         return speechId;
       });
 
-      // The read-merge-write holds the map's lock, which taking an entry also
-      // takes, so finalization sees either the fully merged entry or none.
-      // The superseded file is deleted only after the new entry is in place:
-      // an interrupt can at worst orphan a file, never leave the map pointing
-      // at a deleted one.
+      // Holding the map's lock means finalization sees the merged entry or none.
+      // The superseded file is deleted only after the new entry is in place, so
+      // an interrupt can orphan a file but never leave the map pointing at one.
       const result = yield* SynchronizedRef.modifyEffect(staged, (state) =>
         Effect.gen(function* () {
           // Finalized while synthesizing or waiting for the lock: nothing is

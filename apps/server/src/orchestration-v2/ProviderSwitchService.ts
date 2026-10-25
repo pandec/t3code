@@ -108,11 +108,9 @@ export const layer: Layer.Layer<
               thread.providerInstanceId === current.instanceId &&
               thread.nativeThreadRef !== null,
           );
-          // fork: a cross-instance move compares the continuation group the
-          // native conversation was recorded in, which outranks the owner's
-          // live config and outlives its removal. Without a record only a live
-          // owner on the conversation's driver can vouch for it; otherwise
-          // compatibility is unknown and the switch hands context off.
+          // fork: compare the continuation group the conversation was recorded in, which outranks
+          // the owner's live config. Without a record only a live owner on the conversation's
+          // driver can vouch for it; otherwise the switch hands context off.
           const nativeThreadId = currentProviderThread?.nativeThreadRef?.nativeId ?? null;
           const recordedContinuation =
             instanceChanged &&
@@ -216,8 +214,7 @@ export const layer: Layer.Layer<
             .filter((session) => {
               if (!isLiveProviderSession(session)) return false;
               if (transition.type === "restart_and_resume") {
-                // Other live records may serve pooled or delegated bindings;
-                // only the session being replaced is released.
+                // Release only the replaced session; peers can serve pooled or delegated bindings.
                 return session.id === currentSession?.id;
               }
               if (transition.type === "create_with_handoff") {

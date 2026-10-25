@@ -8,10 +8,7 @@ export function formatProviderUsageEmail(email: string, masked = false): string 
 }
 
 /**
- * Newest `observedAt` across usage snapshots, optionally restricted to the
- * instances a refresh actually targeted; 0 when there are none.
- *
- * A refresh RPC succeeds even when every server-side probe failed or timed
- * out, so the client compares this across the refresh result to tell
- * "refreshed" from "silently returned nothing".
+ * Newest `observedAt` across snapshots, optionally limited to the refreshed instances; 0
+ * when none. A refresh RPC succeeds even when every probe failed, so callers compare this
+ * across the refresh to tell "refreshed" from "silently returned nothing".
  */

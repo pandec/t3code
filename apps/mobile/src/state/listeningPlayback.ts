@@ -46,20 +46,16 @@ export interface PendingListeningStartGate {
 }
 
 /**
- * A pending intent that outlives its usefulness must expire rather than fire
- * surprise audio much later: one minute comfortably covers a slow asset RPC,
- * and anything slower (an environment mid-disconnect, hours offline) should
- * require a fresh tap. The cap also covers the disconnect case, so no
- * separate cancel-on-disconnect wiring exists.
+ * Long enough for a slow asset RPC; anything slower (mid-disconnect, offline) should require a
+ * fresh tap rather than fire surprise audio. This also covers disconnects, so there is no
+ * separate cancel-on-disconnect wiring.
  */
 export const PENDING_LISTENING_START_TTL_MS = 60_000;
 
 /**
- * The play-before-URL intent, owned by the controller instead of a message
- * row: tapping play on a slow link and navigating away must still start the
- * audio once the signed URL lands. A newer play supersedes it, thread
- * deletion or archival cancels it, becoming blocked (recording) cancels it,
- * and it expires after the TTL.
+ * The play-before-URL intent lives in the controller, not a message row, so navigating away from
+ * a slow load still starts the audio. A newer play, thread deletion or archival, or recording
+ * cancels it; it expires after the TTL.
  */
 export function createPendingListeningStart(options?: {
   /** Refuses to arm while blocked and cancels when blocking starts. */

@@ -42,11 +42,9 @@ export function useAssetUrlState(
 }
 
 /**
- * Imperative one-shot asset URL resolution, independent of any component
- * lifetime: subscribing through the app registry keeps the query mounted
- * until it settles, so a caller can outlive the row that started it. Calls
- * onResolved exactly once with the absolute URL, or null on failure; the
- * returned function cancels the watch.
+ * One-shot asset URL resolution that outlives the component that started it,
+ * since the app registry keeps the query mounted until it settles. Calls
+ * onResolved exactly once with the absolute URL, or null on failure.
  */
 export function watchAssetUrl(
   environmentId: EnvironmentId,

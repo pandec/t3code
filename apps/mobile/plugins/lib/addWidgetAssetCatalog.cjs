@@ -1,10 +1,6 @@
 "use strict";
 
-// expo-widgets generates the widget target without a Resources build phase, and
-// hand-adding a PBXResourcesBuildPhase does NOT get picked up — xcodebuild's
-// planner never schedules `actool` for it (verified: even a full re-plan skips
-// it). So instead we add a shell-script phase that runs `actool` directly and
-// drops the compiled Assets.car into the extension bundle.
+// xcodebuild ignores Resources phases on expo-widgets targets; compile assets in a shell phase.
 
 const PHASE_NAME = "Compile Widget Assets";
 
@@ -36,22 +32,9 @@ function findByName(map, name) {
   return null;
 }
 
-/**
- * Keep the generated widget extension aligned with its containing app.
- *
- * expo-widgets currently creates the target with iOS 16.4 and marketing
- * version 1.0 even when the app uses newer/different values. Besides producing
- * an extension-version validation warning, that can link iOS 18 objects into a
- * target advertised as iOS 16.4.
- *
+/** expo-widgets creates the target as iOS 16.4 / 1.0 regardless of the app; align it with the app.
  * @param {import('xcode').XcodeProject} proj
- * @param {{
- *   targetName: string,
- *   deploymentTarget: string,
- *   marketingVersion: string,
- *   currentProjectVersion: string
- * }} opts
- */
+ * @param {{ targetName: string, deploymentTarget: string, marketingVersion: string, currentProjectVersion: string }} opts */
 function configureWidgetTarget(proj, opts) {
   const objects = proj.hash.project.objects;
   const target = findByName(objects.PBXNativeTarget, opts.targetName);
@@ -76,10 +59,8 @@ function configureWidgetTarget(proj, opts) {
   }
 }
 
-/**
- * @param {import('xcode').XcodeProject} proj
- * @param {{ targetName: string }} opts
- */
+/** @param {import('xcode').XcodeProject} proj
+ * @param {{ targetName: string }} opts */
 function addWidgetAssetCatalog(proj, opts) {
   const objects = proj.hash.project.objects;
   const target = findByName(objects.PBXNativeTarget, opts.targetName);

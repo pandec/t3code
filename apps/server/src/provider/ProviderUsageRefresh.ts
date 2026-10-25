@@ -1,15 +1,8 @@
 /**
- * Server-wide subscription-usage refresh coordinator for gateway pools.
- *
- * The service owns cross-client concurrency and per-instance single-flight.
- * Only instances whose envelope declares a CLIProxyAPI usage source have a
- * probe: it polls the gateway's management API for the pooled accounts and
- * stores one snapshot per instance in `ProviderInstanceHealth`. Direct
- * accounts report quota through the drivers' typed `limits` instead, so a
- * non-gateway instance only re-declares the driver as its slot's owner (which
- * drops a pooled snapshot left behind when the usage source is turned off).
- *
- * @module provider/ProviderUsageRefresh
+ * Server-wide usage refresh for gateway pools, with per-instance single-flight.
+ * Direct accounts report quota through driver `limits`, so a non-gateway
+ * instance only re-declares the driver as its slot's owner, dropping any pooled
+ * snapshot left behind when its usage source was turned off.
  */
 import type {
   ProviderDriverKind,
@@ -424,14 +417,9 @@ export const layer = Layer.effect(
       return resolved;
     });
 
-    // A gateway snapshot outlives its source: once the usage source is turned
-    // off or pointed at another pool, nothing would ever overwrite the pooled
-    // payload. Watch registry reconciles and re-declare each instance's source
-    // (kind plus pool), which drops the snapshot the moment the pool
-    // disappears or changes and rejects late writes from the old pool, while
-    // re-declaring an unchanged pool keeps its snapshot.
-    // Subscribe before the initial read so a reconcile landing in between
-    // still produces an event that re-declares the current sources.
+    // Nothing else overwrites a snapshot once its usage source changes, so each
+    // reconcile re-declares sources, dropping changed pools' snapshots. Subscribe
+    // before the initial read so a reconcile in between still re-declares.
     const registryChanges = yield* registry.subscribeChanges;
     yield* resolveUsageInstances;
     const targetReconcileGate = yield* Semaphore.make(1);

@@ -45,6 +45,7 @@ import { appAtomRegistry } from "../rpc/atomRegistry";
 import { environmentServerConfigsAtom } from "../state/server";
 import { isScratchProject } from "@t3tools/client-runtime/state/projects";
 import { sessionImportEnvironment } from "../state/sessionImport";
+import { orchestrationEnvironment } from "../state/orchestration";
 import { threadEnvironment } from "../state/threads";
 import { vcsEnvironment } from "../state/vcs";
 import { useNewThreadHandler } from "./useHandleNewThread";
@@ -404,6 +405,10 @@ export function useThreadActions() {
   const loadSessionState = useAtomQueryRunner(environmentSession.sessionStateAtom, {
     reportFailure: false,
   });
+  const loadWorktreeThreadIds = useAtomQueryRunner(orchestrationEnvironment.worktreeThreadIds, {
+    reportFailure: false,
+    refresh: true,
+  });
   const refreshVcsStatus = useAtomCommand(vcsEnvironment.refreshStatus, {
     reportFailure: false,
   });
@@ -527,11 +532,9 @@ export function useThreadActions() {
       failureTitle: "Failed to undo archive",
     });
 
-    // In a split, the other pane's thread stays on screen. Otherwise only a
-    // reader still on the archived thread moves, back to the thread visited
-    // before it (the Ctrl+Tab target), or to a new draft when none is left.
-    // Only this user action moves the reader: an agent's or a scheduled
-    // archive leaves the thread on screen (see ParkedThreadWatcher).
+    // In a split, the other pane's thread stays on screen. Otherwise a reader still
+    // on the archived thread moves to the previously visited thread (Ctrl+Tab) or a
+    // new draft. Agent and scheduled archives never move the reader (ParkedThreadWatcher).
     const threadKey = scopedThreadKey(threadRef);
     const routeRefAfterArchive = getCurrentRouteThreadRef();
     const routeKeyAfterArchive =
@@ -606,16 +609,32 @@ export function useThreadActions() {
       deletedIds && deletedIds.size > 0
         ? threads.filter((entry) => entry.id === threadRef.threadId || !deletedIds.has(entry.id))
         : threads;
-    const orphanedWorktreePath = getOrphanedWorktreePathForThread(
-      survivingThreads,
-      threadRef.threadId,
-    );
-    const displayWorktreePath = orphanedWorktreePath
-      ? formatWorktreePathForDisplay(orphanedWorktreePath)
-      : null;
     const environmentConfig = appAtomRegistry
       .get(environmentServerConfigsAtom)
       .get(threadRef.environmentId);
+    let orphanedWorktreePath = getOrphanedWorktreePathForThread(
+      survivingThreads,
+      threadRef.threadId,
+    );
+    // A shell that leaves idle subagent children out cannot prove nobody else uses the worktree,
+    // so the server's list decides. A failed read keeps the worktree.
+    if (orphanedWorktreePath !== null && environmentConfig?.shellThreadFamilies === true) {
+      const occupants = await loadWorktreeThreadIds({
+        environmentId: threadRef.environmentId,
+        input: { worktreePath: orphanedWorktreePath },
+      });
+      if (
+        occupants._tag !== "Success" ||
+        occupants.value.threadIds.some(
+          (threadId) => threadId !== threadRef.threadId && deletedIds?.has(threadId) !== true,
+        )
+      ) {
+        orphanedWorktreePath = null;
+      }
+    }
+    const displayWorktreePath = orphanedWorktreePath
+      ? formatWorktreePathForDisplay(orphanedWorktreePath)
+      : null;
     const localApi = readLocalApi();
     let canDeleteWorktree = false;
     if (
@@ -765,8 +784,7 @@ export function useThreadActions() {
             : message,
         }),
       );
-      // The thread was deleted. Cleanup has its own toast; returning its
-      // failure would make callers incorrectly report a thread deletion error.
+      // Cleanup has its own toast; reporting its failure would falsely imply deletion failed.
     }
     return deleteResult;
   };
@@ -783,8 +801,7 @@ export function useThreadActions() {
       );
     }
     ThreadUndo.invalidate("settle", scopedThreadKey(target));
-    // reason "user" pins the thread active: auto-settle (PR merged /
-    // inactivity) stays suppressed until real activity clears the pin.
+    // reason "user" pins active until real activity, suppressing auto-settle.
     return unsettleThreadMutation({
       environmentId: target.environmentId,
       input: { threadId: target.threadId, reason: "user" },
@@ -792,16 +809,10 @@ export function useThreadActions() {
   };
 
   /**
-   * Fork: the one user-facing archive path behind menus, the palette and the
-   * shortcut. It archives now, schedules an archive for when a busy thread is
-   * done, or cancels a pending one (`resolveArchiveToggleAction`).
-   * `expectedAction` is what the surface showed; a request that changed
-   * meanwhile does nothing. Archiving now asks for confirmation when the
-   * setting is on and goes through `archiveThread` (undo notice, listening
-   * pause); failures surface as toasts. Concurrent attempts on one thread
-   * from any surface collapse into one. `onApplied` runs once the request
-   * lands (before an archive's navigation), e.g. so the composer's
-   * `/t3-archive` clears its draft only on success.
+   * Fork: the one user-facing archive path: archive now, when done, or cancel
+   * (`resolveArchiveToggleAction`). A changed `expectedAction` does nothing; archiving
+   * now confirms when set and toasts failures. Concurrent attempts collapse into one;
+   * `onApplied` runs once the request lands, before an archive's navigation.
    */
   const attemptArchiveThread = async (
     target: ScopedThreadRef,
@@ -916,8 +927,7 @@ export function useThreadActions() {
         ),
       );
     }
-    // orderKey rides only to servers that decode it; pre-reorder servers get the bare pin they
-    // understand and the thread stays keyless.
+    // Older servers cannot decode orderKey, so send only the pin to them.
     const orderKey = readEnvironmentSupportsPinReorder(target.environmentId)
       ? (opts.orderKey ?? topOfPinnedRunOrderKey())
       : undefined;

@@ -1,6 +1,5 @@
 import type { ThreadGroup } from "@t3tools/contracts";
 import { threadGroupId, threadGroupSections } from "@t3tools/shared/threadGroups";
-import { threadPullRequestSearchTerms } from "@t3tools/shared/threadPullRequests";
 import { backgroundWorkLiveness } from "@t3tools/shared/orchestrationV2PendingBackgroundWork";
 import {
   canSnooze,
@@ -14,7 +13,11 @@ import {
 import type { SnoozePreset } from "@t3tools/client-runtime/state/thread-settled";
 import type { EnvironmentThreadShell } from "@t3tools/client-runtime/state/shell";
 import { resolveThreadProviderStack } from "@t3tools/client-runtime/state/models";
-import { threadSearchMatchKey } from "@t3tools/client-runtime/state/thread-search";
+import {
+  threadSearchMatchKey,
+  threadSearchSubject,
+} from "@t3tools/client-runtime/state/thread-search";
+import { foldSearchQuery, rankSearchItems, scoreThreadSearch } from "@t3tools/shared/paletteSearch";
 import {
   createInboxReturnTracker,
   isThreadWorking,
@@ -62,19 +65,14 @@ export function resolveThreadListV2ProviderDrivers(
 }
 
 /**
- * Thread List v2 model, ported from the web sidebar v2
- * (apps/web/src/components/Sidebar.logic.ts + SidebarV2.tsx).
- *
- * Color distinguishes approval, input, active work, and failures. Ready is
- * the unlabeled resting state. The orchestrator v2 presentation bridge parks
- * runtime at idle when the post-settlement background roster is nonempty:
- * live agents or workflows then read as working, and watch loops alone (dev
- * servers, monitors) as monitoring, never a false Done. Waiting is left for
- * an idle runtime with no named work.
+ * Thread List v2 status, ported from the web sidebar v2. Ready is the unlabeled resting state.
+ * Runtime parks at idle while a post-settlement roster remains: live agents or workflows read as
+ * working and watch loops alone (dev servers, monitors) as monitoring, never a false Done.
  */
 export type ThreadListV2Status =
   | "approval"
   | "input"
+  | "request"
   | "working"
   | "monitoring"
   | "waiting"
@@ -214,6 +212,7 @@ export function resolveThreadListV2Status(
     | "hasPendingApprovals"
     | "hasPendingUserInput"
     | "pendingSubagentRequest"
+    | "pendingGuestMessageCount"
     | "runtime"
     | "blockedOnThreadWait"
   > & {
@@ -225,6 +224,10 @@ export function resolveThreadListV2Status(
   }
   if (thread.hasPendingUserInput || thread.pendingSubagentRequest === "user_input") {
     return "input";
+  }
+  // A guest is waiting on the owner; the agent's own requests come first.
+  if ((thread.pendingGuestMessageCount ?? 0) > 0) {
+    return "request";
   }
   if (thread.runtime?.status === "running" && thread.blockedOnThreadWait === true) {
     return "waiting";
@@ -318,11 +321,9 @@ export interface ThreadListV2Layout {
   /** Pinned threads matching the current filters, including rows hidden by
       collapse. */
   readonly pinnedCount: number;
-  /** Whether the pinned shelf header should render. Unlike the other
-      shelves, pinned is structurally always the leading block, so it needs a
-      visibility flag rather than a header index. The header steps aside (and
-      the collapse stops applying) while a search is active — folding rows the
-      search asked for would answer a different question. */
+  /** Pinned is always the leading block, so it gets a visibility flag rather than a header
+      index. The header steps aside (and the collapse stops applying) while a search is active:
+      folding rows the search asked for would answer a different question. */
   readonly pinnedShelfHeaderVisible: boolean;
   readonly workingCount: number;
   readonly workingShelfHeaderIndex: number | null;
@@ -330,11 +331,10 @@ export interface ThreadListV2Layout {
   readonly snoozedShelfHeaderIndex: number | null;
   readonly settledCount: number;
   readonly settledShelfHeaderIndex: number | null;
-  /**
-   * Callers arm a timeout at this boundary so the list re-partitions the moment
-   * a snooze expires instead of on the next minute tick.
-   */
+  /** Arm a timeout here to repartition at snooze expiry rather than the next minute tick. */
   readonly nextSnoozeWakeAt: string | null;
+  /** Threads listed only because their messages match the search. */
+  readonly contentOnlyThreadKeys: ReadonlySet<string>;
 }
 
 export interface ThreadListV2ThreadListItem {
@@ -345,11 +345,7 @@ export interface ThreadListV2ThreadListItem {
   readonly timeLabel: string;
   readonly snoozePresetMinute: string | undefined;
   readonly showTrailingDivider: boolean;
-  /**
-   * Carried on the item so an outbox write (which never touches the thread
-   * shell) reaches the row through recycled-list equality instead of leaving a
-   * stale icon.
-   */
+  /** Include queued state in item equality; outbox writes do not update thread shells. */
   readonly hasQueuedMessages: boolean;
   readonly canMoveUp: boolean;
   readonly canMoveDown: boolean;
@@ -393,11 +389,7 @@ export interface ThreadListV2SnoozedShelfListItem {
   readonly key: "v2-snoozed-shelf";
   readonly count: number;
   readonly expanded: boolean;
-  /**
-   * Carried on the item because a recycled cell ignores the render closure —
-   * without it the header would stay visibly disabled (or enabled too early)
-   * after the preference load lands.
-   */
+  /** Include disabled state in item equality; recycled cells ignore render-closure updates. */
   readonly disabled: boolean;
 }
 
@@ -445,11 +437,7 @@ export function isThreadListV2ListItem(value: {
   );
 }
 
-/**
- * Item objects are rebuilt on every minute tick and every partition run;
- * without this the lists would consider every mounted row changed and re-render
- * all of them (each carrying a swipeable + a PR subscription).
- */
+/** Compare rebuilt items by content so minute ticks and partition runs do not re-render every mounted row. */
 export function threadListV2ListItemsAreEqual(
   previous: ThreadListV2ListItem,
   item: ThreadListV2ListItem,
@@ -545,11 +533,8 @@ function resolveThreadListV2ItemTimeLabel(
 }
 
 /**
- * Builds the shared mobile order: pinned, active, pending creations, drafts,
- * working shelf (beta, off by default), snoozed, and settled shelves.
- * Pending tasks are waiting rather than asking, and busy or parked work
- * remains reachable without competing with either the inbox or settled
- * history.
+ * Builds the shared mobile order: pending creations and drafts, pinned, active (with custom
+ * groups), working shelf (beta, off by default), snoozed, and settled shelves.
  */
 export function buildThreadListV2ListItems(input: {
   readonly items: ReadonlyArray<ThreadListV2Item>;
@@ -583,6 +568,8 @@ export function buildThreadListV2ListItems(input: {
   readonly queuedThreadKeys?: ReadonlySet<string>;
   readonly moveAvailability?: ReadonlyMap<string, ThreadMoveAvailability>;
   readonly shelfPreferencesLoading?: boolean;
+  /** Search results arrive ranked across shelves; grouping them would undo the ranking. */
+  readonly searching?: boolean;
 }): ThreadListV2ListItem[] {
   const queuedThreadKeys = input.queuedThreadKeys?.size ? input.queuedThreadKeys : undefined;
   const threadItems = input.items.map((item): ThreadListV2ListItem => {
@@ -592,9 +579,7 @@ export function buildThreadListV2ListItems(input: {
         : item.snoozed && item.thread.snoozedUntil == null
           ? UNTIL_DONE_SNOOZE_LABEL
           : undefined;
-    // The minute clock belongs on the item, not the list's extraData, so the
-    // recycler's equality can confine the per-minute re-render to rows whose
-    // snooze menu actually shows preset times.
+    // Put the clock on items so recycler equality limits ticks to rows displaying snooze preset times.
     const snoozePresetMinute =
       !item.snoozed &&
       input.snoozeLabelNow !== undefined &&
@@ -640,12 +625,9 @@ export function buildThreadListV2ListItems(input: {
   const snoozedEnd = settledShelfHeaderIndex ?? threadItems.length;
   const workingEnd = snoozedShelfHeaderIndex ?? snoozedEnd;
   const activeEnd = workingShelfHeaderIndex ?? workingEnd;
-  // Unsent drafts and queued tasks lead the list, as on web. Pinned rows
-  // follow under their own collapsible shelf header; close them with the same
-  // rule the web sidebar draws, so the inbox reads as its own block. While the
-  // header shows, the count is the whole footprint when collapsed and rows
-  // render only when expanded (or for the thread currently open); during a
-  // search the layout hides the header and the rows render unconditionally.
+  // Unsent drafts and queued tasks lead, as on web; pinned rows follow under their collapsible
+  // header and close with the web sidebar's rule. Collapsed, only the open thread renders; during
+  // a search the layout hides the header and the rows render unconditionally.
   let pinnedEnd = 0;
   while (pinnedEnd < activeEnd) {
     const item = threadItems[pinnedEnd];
@@ -655,6 +637,9 @@ export function buildThreadListV2ListItems(input: {
   const pinnedCount = input.pinnedCount ?? pinnedEnd;
   const pinnedShelfHeaderVisible = input.pinnedShelfHeaderVisible ?? true;
   const result: ThreadListV2ListItem[] = [...pendingItems];
+  if (input.searching === true) {
+    return withTrailingDividers([...result, ...threadItems]);
+  }
   if (pinnedShelfHeaderVisible && pinnedCount > 0) {
     result.push({
       type: "v2-pinned-shelf",
@@ -727,6 +712,10 @@ export function buildThreadListV2ListItems(input: {
     });
     result.push(...threadItems.slice(settledShelfHeaderIndex));
   }
+  return withTrailingDividers(result);
+}
+
+function withTrailingDividers(result: ReadonlyArray<ThreadListV2ListItem>): ThreadListV2ListItem[] {
   return result.map((entry, index) => {
     if (entry.type !== "v2-thread" && entry.type !== "v2-pending") return entry;
     const next = result[index + 1];
@@ -738,8 +727,7 @@ export function buildThreadListV2ListItems(input: {
   });
 }
 
-// Shells are immutable and the settled sort reads only their own fields, so an
-// element-identical input has an identical output.
+// Immutable shells and field-only sorting make element-identical inputs produce identical output.
 let lastSettledInput: ReadonlyArray<EnvironmentThreadShell> = [];
 let lastSettledOutput: ReadonlyArray<EnvironmentThreadShell> = [];
 
@@ -797,7 +785,8 @@ export function buildThreadListV2Items(input: {
             pendingOrder: null,
           }),
         );
-  const query = input.searchQuery.trim().toLocaleLowerCase();
+  const query = foldSearchQuery(input.searchQuery);
+  const nowMs = Date.parse(now);
   const projectKeys = input.projectRefs
     ? new Set(input.projectRefs.map((ref) => `${ref.environmentId}:${ref.projectId}`))
     : null;
@@ -810,26 +799,36 @@ export function buildThreadListV2Items(input: {
   const snoozed: EnvironmentThreadShell[] = [];
   let nextSnoozeWakeAt: string | null = null;
   const queuedThreadKeys = input.queuedThreadKeys?.size ? input.queuedThreadKeys : undefined;
-  for (const thread of input.threads) {
-    if (thread.archivedAt !== null || thread.lineage.relationshipToParent === "subagent") continue;
-    if (input.environmentId !== null && thread.environmentId !== input.environmentId) continue;
-    if (projectKeys !== null && !projectKeys.has(`${thread.environmentId}:${thread.projectId}`)) {
-      continue;
-    }
-    if (
-      query.length > 0 &&
-      !thread.title.toLocaleLowerCase().includes(query) &&
-      !threadPullRequestSearchTerms(thread).some((term) =>
-        term.toLocaleLowerCase().includes(query),
-      ) &&
-      input.matchedThreadKeys?.has(
-        threadSearchMatchKey({
-          environmentId: thread.environmentId,
-          threadId: thread.id,
-        }),
-      ) !== true
-    ) {
-      continue;
+  const listedThreads = input.threads.filter(
+    (thread) =>
+      thread.archivedAt === null &&
+      thread.lineage.relationshipToParent !== "subagent" &&
+      (input.environmentId === null || thread.environmentId === input.environmentId) &&
+      (projectKeys === null || projectKeys.has(`${thread.environmentId}:${thread.projectId}`)),
+  );
+  // The same matches as the command palette, typo fallback included. Only
+  // listed threads are ranked: a hidden exact match must not turn typos off.
+  const rankedMatches =
+    query.length > 0
+      ? rankSearchItems(listedThreads, (thread, options) =>
+          scoreThreadSearch(query, threadSearchSubject(thread, null), nowMs, {
+            ...options,
+            picks: false,
+          }),
+        ).map(({ item }) => item)
+      : null;
+  const matchingThreads = rankedMatches === null ? null : new Set(rankedMatches);
+  // Threads listed only because their messages match; only their rows show
+  // the message and open at it.
+  const contentOnlyThreadKeys = new Set<string>();
+  for (const thread of listedThreads) {
+    if (matchingThreads !== null && !matchingThreads.has(thread)) {
+      const key = threadSearchMatchKey({
+        environmentId: thread.environmentId,
+        threadId: thread.id,
+      });
+      if (input.matchedThreadKeys?.has(key) !== true) continue;
+      contentOnlyThreadKeys.add(key);
     }
     const supportsSettlement = input.settlementEnvironmentIds?.has(thread.environmentId) ?? true;
     const supportsSnooze = input.snoozeEnvironmentIds?.has(thread.environmentId) ?? true;
@@ -855,6 +854,47 @@ export function buildThreadListV2Items(input: {
     } else {
       active.push(thread);
     }
+  }
+
+  if (rankedMatches !== null) {
+    // Searching lists every match by rank across shelves, as the palette and
+    // the web sidebar do, then threads listed for their messages in the
+    // server's order. Each row keeps its shelf's look.
+    const slim = new Set([...snoozed, ...settled]);
+    const snoozedThreads = new Set(snoozed);
+    const pinnedThreads = new Set(pinned);
+    const threadByKey = new Map(
+      listedThreads.map((thread) => [
+        threadSearchMatchKey({ environmentId: thread.environmentId, threadId: thread.id }),
+        thread,
+      ]),
+    );
+    const contentOnly = [...(input.matchedThreadKeys ?? [])].flatMap((key) => {
+      const thread = contentOnlyThreadKeys.has(key) ? threadByKey.get(key) : undefined;
+      return thread ? [thread] : [];
+    });
+    const results = [...rankedMatches, ...contentOnly];
+    return {
+      items: results.map((thread, index) => ({
+        thread,
+        variant: slim.has(thread) ? "slim" : "card",
+        snoozed: snoozedThreads.has(thread),
+        pinned: pinnedThreads.has(thread),
+        wokeAt: slim.has(thread) ? null : resolveThreadListV2WokeAt(thread, { now }),
+        isLast: index === results.length - 1,
+      })),
+      hiddenSettledCount: 0,
+      pinnedCount: pinned.length,
+      pinnedShelfHeaderVisible: false,
+      workingCount: 0,
+      workingShelfHeaderIndex: null,
+      snoozedCount: 0,
+      snoozedShelfHeaderIndex: null,
+      settledCount: 0,
+      settledShelfHeaderIndex: null,
+      nextSnoozeWakeAt,
+      contentOnlyThreadKeys,
+    };
   }
 
   const orderedActive = workingShelfEnabled
@@ -982,5 +1022,6 @@ export function buildThreadListV2Items(input: {
     settledCount: orderedSettled.length,
     settledShelfHeaderIndex,
     nextSnoozeWakeAt,
+    contentOnlyThreadKeys,
   };
 }

@@ -126,12 +126,9 @@ export function isThreadListeningLoaded(
 export type ThreadListeningState = "playing" | "paused" | null;
 
 /**
- * What the thread-list indicator should show for a thread: "playing" while
- * its audio runs, "paused" while it holds the recording mid-way (the
- * indicator is a toggle, so pausing from the list must leave a way back in),
- * null otherwise. A recording that played to the end, or was parked at the
- * start or the end, shows nothing: there is nothing left to resume, and the
- * message row still offers replay.
+ * "playing" while the thread's audio runs, "paused" while it holds the recording mid-way (the
+ * indicator is a toggle, so it must offer a way back in), else null. A finished or parked
+ * recording shows nothing; the message row still offers replay.
  */
 export function threadListeningState(
   snapshot: ListeningPlaybackSnapshot,

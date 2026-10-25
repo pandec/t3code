@@ -257,11 +257,9 @@ export type MessageSpeechSynthesisResult = typeof MessageSpeechSynthesisResult.T
 export const AGENT_VOICE_REPLY_MAX_SCRIPT_CHARS = 10_000;
 
 /**
- * Speech metadata carried on an assistant-message completion. The audio bytes
- * live in the server attachments directory under `<speechId>.mp3` or `.wav`
- * by MIME type (written
- * before the command is dispatched, mirroring how user image attachments are
- * persisted by the normalizer); the event stream only ever sees metadata.
+ * Speech metadata on an assistant-message completion. The audio is written to the attachments
+ * directory as `<speechId>.mp3` or `.wav` before the command is dispatched; the event stream only
+ * ever sees metadata.
  */
 const MessageSpeechAttachmentBase = {
   speechId: TrimmedNonEmptyString,

@@ -46,11 +46,10 @@ export function environmentReadsLinearIssues(
 }
 
 /**
- * Whether the environment's key can read the workspace a link names. The key reads exactly one
- * workspace, and an identifier from another may collide with an unrelated issue there, so a
- * link that names a different workspace stays the ordinary external link it was. Until the
- * status has been read, or for the workspace-less form, the link is given the benefit of the
- * doubt: the panel's own not-found state is the fallback then.
+ * The key reads exactly one workspace, and an identifier from another may collide with an
+ * unrelated issue there, so a link naming a different workspace stays external. Before the
+ * status is read, or without a workspace, the link opens and the panel's not-found state is
+ * the fallback.
  */
 export function environmentCanOpenLinearLink(
   environmentId: EnvironmentId,

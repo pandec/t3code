@@ -1,11 +1,9 @@
 import * as Effect from "effect/Effect";
 import * as SqlClient from "effect/sql/SqlClient";
 
-// Listening recordings, one per v2 message id. The audio itself is a file in
-// the attachments directory named by `speech_id`. The source hash says which
-// message text a listening version was made from, so a changed message hides
-// and regenerates it. `origin` "agent" marks a recording the agent made itself,
-// which listening never replaces. Legacy speech starts fresh (data plan).
+// One recording per v2 message id; audio lives in the attachments dir by
+// `speech_id`. The source hash lets a changed message regenerate its listening
+// version; `origin` "agent" recordings are never replaced.
 export default Effect.gen(function* () {
   const sql = yield* SqlClient.SqlClient;
   yield* sql`

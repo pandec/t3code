@@ -1,11 +1,7 @@
 /**
- * ClaudeSessionImport — discovery and parsing of Claude Code CLI sessions
- * persisted under `<config-dir>/projects/<escaped-cwd>/<uuid>.jsonl`.
- *
- * The JSONL format is not a public interchange contract. Parsing is
- * deliberately strict: known-benign record types are skipped, but an
- * unrecognized record type fails the whole parse so format drift surfaces
- * loudly instead of silently dropping history.
+ * Parses Claude Code sessions in `<config-dir>/projects/<escaped-cwd>/<uuid>.jsonl`.
+ * The format is not a public contract, so an unrecognized record type fails the
+ * whole parse: drift surfaces loudly instead of silently dropping history.
  */
 import * as Effect from "effect/Effect";
 import * as FileSystem from "effect/FileSystem";
@@ -479,17 +475,9 @@ const readFileTail = Effect.fn("readFileTail")(function* (input: {
 });
 
 /**
- * Resolve the working directory a live session is running in *now*.
- *
- * Claude stores a session under the project directory derived from its cwd and
- * relocates the file when the session moves (the agent entering or leaving a
- * worktree), so the directory the transcript currently sits in — and the `cwd`
- * on its most recent entries — is the only authoritative answer. The runtime
- * stream carries the cwd only in `system/init`, and `getSessionInfo` reports
- * the directory the session *started* in, so neither can see a move.
- *
- * Returns `null` when the transcript cannot be found or carries no cwd; callers
- * treat that as "unchanged" rather than an error.
+ * A live session's current cwd. Claude relocates the transcript when the session
+ * moves, so its location is authoritative; `system/init` and `getSessionInfo`
+ * cannot see a move. `null` (no transcript or cwd) means "unchanged".
  */
 export const findClaudeSessionCwd = Effect.fn("findClaudeSessionCwd")(function* (input: {
   readonly configDirPath: string;

@@ -24,13 +24,9 @@ export class ClaudeHistoryProcessError extends Schema.TaggedError<ClaudeHistoryP
 const encodeHistoryOptions = Schema.encodeSync(Schema.fromJsonString(Schema.Unknown));
 
 /**
- * Run a Claude Agent SDK history helper in a worker process under `environment`.
- * The SDK resolves session storage from `CLAUDE_CONFIG_DIR`, so callers pin it to
- * the provider instance's config directory (configured home, shadow overlay or
- * inherited environment) instead of letting the helper read the server's own
- * environment. Node and Electron run the bundled sibling worker; the
- * single-executable hosts it as its `__claude-history` subcommand. Returns the
- * worker's JSON stdout for the caller to decode.
+ * The SDK resolves session storage from `CLAUDE_CONFIG_DIR`, so callers pin it to the provider
+ * instance's config directory rather than the server's environment. Node and Electron run the
+ * bundled worker; the single-executable hosts it as its `__claude-history` subcommand.
  */
 export const runClaudeHistoryProcess = Effect.fn("runClaudeHistoryProcess")(function* (input: {
   readonly method: ClaudeHistoryMethod;

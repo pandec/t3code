@@ -33,14 +33,9 @@ import { followStreamInEnvironment } from "./runtime.ts";
 import { ThreadSnapshotLoader, type ThreadSnapshotLoadResult } from "./threadSnapshotHttp.ts";
 
 /**
- * Opportunistic thread-detail cache population (fork): shortly after an
- * environment connects (and on later app foregrounds), fetch bounded v2
- * snapshots for a few recently active idle threads whose cache entry is
- * missing, so they can be read offline. Existing entries are never refreshed;
- * opening them online resumes with `afterSequence`.
- *
- * Best-effort: failures are reported in the run status, and the regular
- * open-path reconciliation remains the source of truth.
+ * Fork: shortly after an environment connects (and on foreground), fetch bounded v2 snapshots for
+ * a few recent idle threads with no cache entry so they read offline. Existing entries are never
+ * refreshed. Best-effort; open-path reconciliation remains the source of truth.
  */
 
 const PREWARM_SETTLE_DELAY = "3 seconds";

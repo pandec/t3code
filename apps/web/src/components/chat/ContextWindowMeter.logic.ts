@@ -12,7 +12,7 @@ import {
 } from "../../providerInstances";
 import { getTriggerDisplayModelName, type ModelEsque } from "./providerIconUtils";
 
-// Used when the provider did not report its cache TTL: Claude's 1h cache plus slack.
+// Fallback TTL: Claude's 1h cache plus slack.
 const CLAUDE_RESUME_COMPACTION_FALLBACK_MS = 70 * 60_000;
 
 export function providerSupportsManualCompaction(
@@ -114,11 +114,9 @@ export function formatContextWindowCompactionMessage(
 }
 
 /**
- * The OpenRouter balance as a quota window against the user's budget, so the
- * popover can draw it with the same row, bar, and colour thresholds as a
- * provider window. OpenRouter only reports what is left; the budget setting
- * says what "full" is. Spending past the budget pins the bar at 100% rather
- * than going negative, and a topped-up balance above the budget reads as 0%.
+ * The OpenRouter balance as a quota window: OpenRouter only reports what is left,
+ * so the budget setting says what "full" is. Spending past the budget pins the
+ * bar at 100%, and a topped-up balance above the budget reads as 0%.
  */
 export function openRouterCreditsBudgetWindow(
   balanceUsd: number | null,

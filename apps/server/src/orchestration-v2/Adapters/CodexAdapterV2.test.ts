@@ -246,7 +246,7 @@ describe("CodexAdapterV2 process spawning (fork)", () => {
           "shell_environment_policy.set.T3CODE_HOME": "/t3",
           "shell_environment_policy.set.T3CODE_STATE_DIR": "/t3/userdata",
           "shell_environment_policy.set.T3CODE_WORKTREE_PATH": "/workspace/thread-codex-mcp",
-          // Codex waits up to 10 s, not 1 s, for MCP servers before the first request (#13437).
+          // Codex waits up to 10 s, not 1 s, for MCP servers before the first request.
           mcp_optional_startup_grace_ms: 10_000,
           "mcp_servers.t3-code": {
             url: "http://127.0.0.1:43123/mcp",
@@ -843,8 +843,7 @@ describe("CodexAdapterV2 session initialize", () => {
     Effect.gen(function* () {
       const initializeAwaitingResponse = yield* Deferred.make<void>();
       const releaseInitialize = yield* Deferred.make<void>();
-      // The transcript allows exactly one handshake: a second `initialize`
-      // frame fails the replay, as Codex rejects it with "Already initialized".
+      // Codex rejects a second initialize; the replay permits one handshake.
       const session = yield* openReplaySession(
         makeCodexReplayTranscript({
           scenario: "concurrent-initialize",

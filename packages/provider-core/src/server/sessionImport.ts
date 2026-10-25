@@ -1,8 +1,6 @@
 /**
- * Fork: per-instance access to sessions a provider CLI persisted outside
- * T3 Code, for explicit session import and handover. Drivers build it over
- * the instance's own home and environment; `cwd` is always a canonical
- * (realpath) directory.
+ * Fork: per-instance access to sessions a provider CLI persisted outside T3 Code, built over the
+ * instance's own home and environment. `cwd` is always a canonical (realpath) directory.
  *
  * @module sessionImport
  */

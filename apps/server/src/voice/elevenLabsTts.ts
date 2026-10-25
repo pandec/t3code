@@ -201,11 +201,9 @@ const parseBilledCharacters = (header: string | undefined): number | null => {
 };
 
 /**
- * One ElevenLabs text-to-speech request, shared by the on-demand listening
- * version, agent voice replies, and the settings test. Fails with `TtsError`
- * on any transport, status, or empty-body problem so callers can map it onto
- * their own error vocabulary. The `character-cost` response header is the
- * vendor's own count of billed characters.
+ * One ElevenLabs text-to-speech request. Fails with `TtsError` on any transport,
+ * status, or empty-body problem so callers map it onto their own errors. The
+ * `character-cost` response header is the vendor's count of billed characters.
  */
 export const synthesizeElevenLabsSpeech = (input: {
   readonly httpClient: HttpClient.HttpClient;

@@ -333,11 +333,9 @@ export function LabReleaseButton({
 }
 
 /**
- * Every action for one lab in one row: a new thread in a free lab, the stack commands, hold, and
- * the two ways to release. Main/Staging and Preview have none; the CLI manages only lab stacks.
- * `extra` appends a caller's own action (the chip's Details). `compact` is the chip's single row
- * of icon buttons; otherwise labeled buttons wrap. `emphasizeRelease` colors Release when the
- * owner thread is archived.
+ * Main/Staging and Preview have no actions; the CLI manages only lab stacks. `extra` appends the
+ * caller's own action, `compact` renders the chip's single icon row, and `emphasizeRelease` colors
+ * Release when the owner thread is archived.
  */
 export function LabActionBar({
   environmentId,

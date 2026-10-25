@@ -1,10 +1,7 @@
 /**
- * Fork: the bounded recent-archive window behind the clients' always-mounted
- * archive shelves (web sidebar, mobile home and split sidebar). Reads only the
- * newest archived root threads as full v2 shells (latest run, PR links and
- * archive request included) plus the unclipped total, so a large archive
- * never ships to a shelf that shows a handful of rows. The full archive stays
- * on `getArchivedShellSnapshot` for the Settings archive.
+ * Fork: the bounded window behind the clients' archive shelves: only the newest archived root
+ * threads as full v2 shells plus the unclipped total, so a large archive never ships to a shelf.
+ * The Settings archive uses `getArchivedShellSnapshot`.
  */
 import {
   OrchestrationV2GetShellSnapshotError,

@@ -1,16 +1,9 @@
 "use strict";
 
-// expo prebuild records ios.appleTeamId in workspace metadata but leaves
-// DEVELOPMENT_TEAM empty in the generated pbxproj, so non-interactive
-// `xcodebuild` — and `expo run:ios` on a machine whose Xcode has no session
-// for the team — falls back to whichever signing identity it finds first,
-// which on a personal team cannot sign app groups, Sign in with Apple, or
-// push entitlements. Stamp the configured team on every build configuration
-// so signing resolves deterministically on any machine that has the certs.
-//
-// ORDERING: register this plugin FIRST. Expo runs same-type mods in reverse
-// registration order, so it executes after every other plugin has created its
-// native targets (share extension, widgets) and stamps those too.
+// expo prebuild leaves DEVELOPMENT_TEAM empty in the pbxproj, so xcodebuild can fall back to a
+// personal-team identity that cannot sign app groups, Sign in with Apple, or push. Stamp the team
+// on every build configuration. Register this plugin FIRST: Expo runs same-type mods in reverse
+// order, so it then also stamps targets other plugins create (share extension, widgets).
 
 const { withXcodeProject } = require("expo/config-plugins");
 

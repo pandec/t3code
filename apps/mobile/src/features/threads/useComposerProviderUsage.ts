@@ -112,11 +112,9 @@ export function useComposerProviderUsage(input: {
   const activeDriver =
     input.providers.find((provider) => provider.instanceId === input.activeInstanceId)?.driver ??
     null;
-  // Only a Claude session has a binding the server can read. Mobile has no
-  // settings mirror to tell a gateway instance from a direct one before its
-  // first pool snapshot, so a direct-instance thread costs one RPC the server
-  // answers null. Throttles itself; `force` (the refresh button) outranks the
-  // cadence cap but not the spam floor.
+  // Only a Claude session has a binding the server can read; mobile cannot tell a gateway
+  // instance from a direct one before its first pool snapshot, so a direct thread costs one RPC.
+  // `force` (the refresh button) outranks the cadence cap but not the spam floor.
   const probeThreadAccount = useCallback(
     (options?: { readonly force?: boolean }) => {
       const threadId = input.threadId;

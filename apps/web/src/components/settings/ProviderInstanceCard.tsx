@@ -142,13 +142,8 @@ function readConfigString(config: unknown, key: string): string | null {
   return typeof value === "string" && value.trim().length > 0 ? value.trim() : null;
 }
 
-/**
- * Read a string-to-string record at `key` from the opaque config blob,
- * filtering out non-string values and trimming keys and values. Used for
- * `customModelIcons` (custom model slug → model icon id). Returns a
- * null-prototype record so user-authored keys like "constructor" miss
- * cleanly instead of resolving to `Object.prototype` members.
- */
+/** String-to-string record at `key` (e.g. `customModelIcons`), trimmed and null-prototype so
+ * user-authored keys like "constructor" miss cleanly. */
 const EMPTY_STRING_RECORD: Readonly<Record<string, string>> = Object.freeze(Object.create(null));
 
 function readConfigStringRecord(config: unknown, key: string): Readonly<Record<string, string>> {
@@ -169,11 +164,7 @@ function readConfigStringRecord(config: unknown, key: string): Readonly<Record<s
   return record;
 }
 
-/**
- * Structural equality for config blobs (JSON-shaped data, key order
- * ignored). Used to decide whether a server echo corresponds to the latest
- * pending local write.
- */
+/** Key-order-insensitive equality for JSON-shaped config blobs. */
 function configsEqual(a: unknown, b: unknown): boolean {
   if (Object.is(a, b)) return true;
   if (a === null || b === null || typeof a !== "object" || typeof b !== "object") return false;
@@ -191,19 +182,10 @@ function configsEqual(a: unknown, b: unknown): boolean {
   );
 }
 
-/**
- * Project an envelope to the shape the server echoes back. The server
- * normalizes secret-bearing fields on write — a sensitive environment value
- * is stored out of band and echoed as `value: ""` with `valueRedacted: true`
- * (and a client-sent `valueRedacted: false` is dropped), and a usage
- * source's `managementKey` is redacted the same way — so a pending envelope
- * can never match its echo byte-for-byte after such a write, which would
- * leave it pending forever and let later local edits overwrite newer remote
- * changes. Masking those fields on both sides lets such echoes acknowledge
- * the pending write. A concurrent foreign edit differing only in masked
- * fields can acknowledge one write early; that merely reverts this card to
- * prop-based behavior, and the local write's own echo still lands.
- */
+/** The server stores secret env values and usage-source management keys out of band and echoes
+ * them redacted, so mask those fields on both sides or a pending write never matches its echo.
+ * A foreign edit differing only in masked fields can acknowledge early; that only reverts the
+ * card to prop-based behavior. */
 function withComparableSecrets(envelope: ProviderInstanceConfig): unknown {
   if (envelope.environment === undefined && envelope.usageSource === undefined) return envelope;
   return {
@@ -229,14 +211,7 @@ function withComparableSecrets(envelope: ProviderInstanceConfig): unknown {
   };
 }
 
-/**
- * Set `key` to an arbitrary value on the opaque config blob. Unlike
- * provider settings field updates, does not drop empty-looking values — the
- * caller is responsible for deciding whether an empty array / empty
- * object should be stored explicitly (e.g. `customModels: []` is a
- * meaningful "user cleared their custom list" state distinct from
- * "driver default").
- */
+/** Preserve explicit empty arrays/objects; clearing a custom list differs from selecting driver defaults. */
 function nextConfigBlobWithValue(
   config: unknown,
   key: string,
@@ -773,14 +748,8 @@ interface ProviderInstanceCardProps {
 const EMPTY_ACP_PROJECTS: NonNullable<ProviderInstanceCardProps["acpProjects"]> = [];
 const NO_CUSTOM_MODELS: ReadonlyArray<CustomModelDefinition> = [];
 
-/**
- * Unknown drivers (`driverOption === undefined`) get a read-only
- *     notice instead of editable fields, so fork instances round-trip
- *     without accidentally destroying their config.
- * With `projectOverride` set, the Switch instead reads and writes
- *     that project's override, leaving the environment's `instance.enabled`
- *     untouched.
- */
+/** Unknown drivers stay read-only to preserve fork config. projectOverride switches affect only the
+ * project, not instance.enabled. */
 export function ProviderInstanceCard({
   instanceId,
   instance,
@@ -879,20 +848,10 @@ export function ProviderInstanceCard({
   const driverKind: ProviderDriverKind | null = isProviderDriverKind(instance.driver)
     ? instance.driver
     : null;
-  // Settings writes have no optimistic local patch (the `instance` prop only
-  // updates once the server echoes the new envelope back), and each write
-  // replaces this instance's whole envelope. A second edit computed
-  // from the still-stale prop would therefore silently drop an in-flight
-  // first one — add two models back to back, add a model and immediately
-  // pick its icon, or pick an icon and then toggle Enabled (the envelope
-  // spread carries the stale config, and vice versa). Every mutator in this
-  // card therefore bases on the last *written* envelope. The pending map is
-  // owned by the panel so the list and editor mounts share one envelope and
-  // selecting another provider cannot discard it. An entry is only cleared
-  // when an echo structurally matches it: an intermediate echo (of an older
-  // write, or a foreign edit) must not make a newer in-flight write invisible
-  // to the next edit. Secret-bearing fields use the server-normalized shape
-  // from withComparableSecrets so redacted echoes still acknowledge.
+  // Writes have no optimistic patch and replace the whole envelope, so every mutator bases on the
+  // last *written* envelope (panel-owned, shared by list and editor mounts) instead of the stale
+  // prop. Clear an entry only when an echo structurally matches it, so an intermediate echo cannot
+  // hide a newer in-flight write; secrets compare in the server-normalized shape.
   useEffect(() => {
     const pendingInstance = pendingInstancesRef.current.get(instanceId);
     if (
@@ -1085,11 +1044,9 @@ export function ProviderInstanceCard({
   const MODEL_SECTION_CONFIG_KEYS = ["customModels", "customModelIcons"] as const;
 
   const updateConfig = (formConfig: Record<string, unknown> | undefined) => {
-    // The form computes a complete replacement blob from its rendered
-    // `value` prop, which may predate an in-flight models/icons write. The
-    // form never edits the models-section keys, so re-overlay those from
-    // the latest base instead of letting the stale form snapshot clobber
-    // them (or resurrect ones the base deleted).
+    // The form's replacement blob comes from a `value` prop that may predate an in-flight
+    // models/icons write. It never edits those keys, so re-overlay them from the latest base
+    // instead of letting the stale snapshot clobber or resurrect them.
     const base = baseConfig();
     const baseObject =
       base !== null && typeof base === "object" ? (base as Record<string, unknown>) : undefined;

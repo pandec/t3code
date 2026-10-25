@@ -51,11 +51,9 @@ export function hasPendingArchive(shell: {
 export type ArchiveToggleAction = "archive" | "schedule" | "cancel";
 
 /**
- * Fork: what an archive control does for a thread. A pending archive is
- * cancelled; an active or checkpointing run, or background work that holds
- * completion, schedules one for when the thread is done; anything else
- * archives now. Every archive surface (menus, shortcut, palette) resolves
- * through this.
+ * Fork: what an archive control does. A pending archive is cancelled; an active or checkpointing
+ * run, or completion-holding background work, schedules one for when the thread is done; anything
+ * else archives now. Every archive surface (menus, shortcut, palette) resolves through this.
  */
 export function resolveArchiveToggleAction(
   shell: Pick<
@@ -85,6 +83,7 @@ export interface ThreadSnoozeShell extends QueuedThreadShell {
   readonly hasPendingApprovals: boolean;
   readonly hasPendingUserInput: boolean;
   readonly pendingSubagentRequest?: PendingSubagentRequest | null;
+  readonly pendingGuestMessageCount?: number;
 }
 
 /** A snooze without a wake time whose marker is usable (malformed never hides). */
@@ -117,11 +116,9 @@ function runIdOf(run: SettlementRunLike | null): string | null {
 }
 
 /**
- * Fork: whether the work an "until it's done" snooze waits on goes on: the
- * awaited run is still the latest and live, or it ended while its subagents
- * work on. The server moves the snooze onto a wake run that carries the
- * work on. Watch loops alone (commands, monitors) don't count. Mirrors the
- * server through the shared snoozeUntilDoneWorkContinues.
+ * Fork: whether an "until it's done" snooze's work goes on: the awaited run is still the latest
+ * and live, or it ended while its subagents work on (the server moves the snooze onto a wake run).
+ * Watch loops alone don't count. Mirrors the server via snoozeUntilDoneWorkContinues.
  */
 export function untilDoneWorkContinues(
   shell: Pick<
@@ -179,6 +176,7 @@ export function threadRaisedHandWhileSnoozed(shell: ThreadSnoozeShell): boolean 
   if (shell.hasPendingApprovals || shell.hasPendingUserInput) return true;
   if (shell.source?.pendingRuntimeRequest != null) return true;
   if (shell.pendingSubagentRequest != null) return true;
+  if ((shell.pendingGuestMessageCount ?? 0) > 0) return true;
   const failedAt = failureEdgeAt(shell);
   if (
     failedAt !== undefined &&
@@ -205,24 +203,28 @@ function failureEdgeAt(shell: ThreadSnoozeShell): string | null | undefined {
 }
 
 /**
- * A thread may be snoozed unless the agent or one of its subagents is blocked
- * on the user (hiding a pending approval or user-input request defeats the
- * request) or a run is still waiting to start. A running session IS
- * snoozable — snooze only affects visibility, never the agent. Client-side
- * twin of the server invariants so the UI can reject before a round trip.
- * Run status only, never user-message timestamps: a message steered into the
- * running run is newer than every run timestamp yet is not queued work.
+ * Client twin of the server's snooze invariants: rejects while the agent or a subagent is blocked
+ * on the user, a guest message waits, or a run waits to start. Running sessions are snoozable.
+ * Run status only, never user-message timestamps: a steered message is newer than every run
+ * timestamp yet is not queued work.
  */
 export function canSnooze(
   shell: Pick<
     ThreadSnoozeShell,
-    "hasPendingApprovals" | "hasPendingUserInput" | "pendingSubagentRequest" | "runtime" | "source"
+    | "hasPendingApprovals"
+    | "hasPendingUserInput"
+    | "pendingSubagentRequest"
+    | "pendingGuestMessageCount"
+    | "runtime"
+    | "source"
   >,
 ): boolean {
   if (shell.hasPendingApprovals || shell.hasPendingUserInput) return false;
   // The server rejects snoozing even for nonblocking questions.
   if (shell.source?.pendingRuntimeRequest != null) return false;
   if (shell.pendingSubagentRequest != null) return false;
+  // A waiting guest message would wake it at once.
+  if ((shell.pendingGuestMessageCount ?? 0) > 0) return false;
   const status = shell.runtime?.status;
   return status !== "preparing" && status !== "queued" && status !== "starting";
 }

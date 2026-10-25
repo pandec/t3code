@@ -29,12 +29,9 @@ export function clampSplitRatio(ratio: number): number {
   return Math.min(MAX_SPLIT_RATIO, Math.max(MIN_SPLIT_RATIO, ratio));
 }
 
-// `window` alone is not enough: the test runner and other embedded hosts define
-// a window without `localStorage`, and this store is constructed at import time.
-// Restricted hosts go further: the property access and every Storage operation
-// can throw a SecurityError. Dragging the splitter writes at pointer-move rate,
-// so the handle resolves once and is dropped on the first failing operation
-// instead of throwing (and catching) per move.
+// Test runners and embedded hosts define `window` without `localStorage`, and restricted
+// hosts throw SecurityError on access and every Storage call. The splitter writes at
+// pointer-move rate, so the handle resolves once and is dropped on the first failure.
 let resolvedStorage: Storage | null | undefined;
 
 function splitRatioStorage(): Storage | null {
@@ -68,11 +65,9 @@ function readStoredSplitRatio(): number {
 }
 
 /**
- * In-flight pane swap. Swapping sets the secondary to the old primary and
- * then navigates the primary route to the old secondary — between those two
- * steps the route still equals the new secondary, which the duplicate-thread
- * guard would read as "moved" and fold the split. The latch tells the guard
- * to hold off until the route arrives (or the swap visibly failed).
+ * Swapping sets the secondary to the old primary, then navigates the primary to the old
+ * secondary; in between the route equals the new secondary, which the duplicate-thread
+ * guard would fold. The latch holds the guard off until the route arrives or swap fails.
  */
 export interface PendingPaneSwap {
   /** Where the primary route is headed: the old secondary thread. */
@@ -107,22 +102,18 @@ export interface SplitSheetOwner {
 interface ThreadSplitStore {
   secondaryRef: ScopedThreadRef | null;
   /**
-   * True only while SplitThreadLayout actually renders two panes. This is
-   * stricter than `secondaryRef !== null`: a picked secondary thread survives
-   * a too-narrow viewport or a visit to a non-chat route, but during that
-   * time the app must behave as a single pane or every active-pane gate
-   * would go dead in the only visible view.
+   * True only while SplitThreadLayout renders two panes. A picked secondary survives a
+   * narrow viewport or a non-chat route, but the app must then behave as one pane or
+   * every active-pane gate goes dead.
    */
   splitMounted: boolean;
   activePaneId: ThreadPaneId;
   splitRatio: number;
   pendingSwap: PendingPaneSwap | null;
   /**
-   * The pane (and its thread) whose right-panel sheet opened last. Both
-   * panes' sheets dock to the window's right edge, so a pane whose sheet is
-   * open closes it once the other pane claims the slot. The thread key lets
-   * a pane swap's transient duplicate (one thread in both panes) claim
-   * without closing that same thread's panel.
+   * The pane and thread whose right-panel sheet opened last. Both sheets dock to the
+   * window's right edge, so an open one closes when the other pane claims the slot. The
+   * thread key lets a swap's transient duplicate claim without closing its own panel.
    */
   splitSheetOwner: SplitSheetOwner | null;
   openSecondaryThread: (ref: ScopedThreadRef) => void;
@@ -152,14 +143,9 @@ export const useThreadSplitStore = create<ThreadSplitStore>((set, get) => ({
   splitSheetOwner: null,
 
   openSecondaryThread: (ref) => {
-    // Overlay callers (command palette) queue their own pane-focus intent —
-    // the store must not, or a sidebar pick would leave a stray intent that
-    // bounces the next deliberate pane switch back here.
-    //
-    // An in-flight swap latch deliberately survives a pick: abortPaneSwap's
-    // restore guard already yields to the newer secondary, and clearing the
-    // latch early would let the swap's late route arrival re-activate the
-    // primary pane over this pick (or fold the split on a transient match).
+    // Overlay callers queue their own pane-focus intent; queuing here would leave a stray
+    // intent that bounces the next pane switch. A swap latch survives a pick: clearing it
+    // early lets the swap's late route re-activate the primary or fold the split.
     const current = get().secondaryRef;
     if (current && scopedThreadKey(current) === scopedThreadKey(ref)) {
       set({ activePaneId: "secondary" });
@@ -304,11 +290,9 @@ export function noteThreadPaneFocus(paneId: ThreadPaneId, element: EventTarget |
 }
 
 /**
- * One-shot intent that survives an overlay's close-time focus restore. A
- * palette pick activates a pane, but the closing dialog then restores focus
- * to its trigger in the other pane, which would silently re-activate it.
- * While the intent is fresh, that stray focus gets bounced to the intended
- * pane instead; a real pointerdown anywhere cancels it as user intent.
+ * One-shot intent that survives an overlay's close-time focus restore, which would
+ * otherwise re-activate the other pane via its trigger. While fresh, stray focus
+ * bounces to the intended pane; a real pointerdown anywhere cancels it.
  */
 let pendingPaneFocus: { paneId: ThreadPaneId; expiresAt: number } | null = null;
 const PENDING_PANE_FOCUS_TTL_MS = 1_500;
@@ -371,11 +355,9 @@ export function activeThreadPaneComposerHandle(): ComposerHandleRef | null {
 }
 
 /**
- * Overlay close hook (command palette): return focus to the active pane.
- * Falls through to the pane root when it shows a composer-less notice, so
- * dismissing an overlay never silently hands ownership to the other pane.
- * Returns false when the primary/app-root composer is the right target
- * anyway, so callers can keep their default.
+ * Overlay close hook: falls back to the pane root when it shows a composer-less notice,
+ * so ownership never moves to the other pane. Returns false when the primary/app-root
+ * composer is the right target anyway, so callers keep their default.
  */
 export function focusActiveThreadPane(): boolean {
   const state = useThreadSplitStore.getState();
@@ -387,11 +369,9 @@ export function focusActiveThreadPane(): boolean {
 }
 
 /**
- * A pointerdown that prevents default (toolbar buttons, drag affordances)
- * keeps DOM focus where it was — possibly in the other pane. Active pane and
- * real focus must not diverge: global focus probes (getTerminalFocusOwner)
- * would describe the other pane's terminal while this pane's handlers act on
- * it. Deferred a tick so it runs after the event cascade's default focusing.
+ * A default-prevented pointerdown keeps DOM focus where it was, possibly in the other
+ * pane. Active pane and real focus must not diverge, or global probes
+ * (getTerminalFocusOwner) describe the wrong terminal. Deferred past default focusing.
  */
 export function reclaimThreadPaneFocus(paneId: ThreadPaneId): void {
   window.setTimeout(() => {
@@ -406,11 +386,9 @@ export function reclaimThreadPaneFocus(paneId: ThreadPaneId): void {
 }
 
 /**
- * Make a pane active and hand it focus. Used when a sidebar click or palette
- * pick targets a thread that is already on screen: nothing navigates, so the
- * pane must be activated explicitly. The focus intent covers the palette case
- * (the closing dialog's focus restore would otherwise bounce activation back);
- * the direct focus covers the sidebar case, where no overlay close follows.
+ * For a pick targeting a thread already on screen, where nothing navigates. The focus
+ * intent covers the palette (its close-time focus restore would bounce activation back);
+ * the direct focus covers the sidebar, where no overlay close follows.
  */
 export function activateThreadPane(paneId: ThreadPaneId): void {
   requestThreadPaneFocus(paneId);
@@ -435,13 +413,9 @@ export function paletteOwnerPane(): ThreadPaneId {
 }
 
 /**
- * Close the active pane's thread and keep the other one as the only pane
- * (mod+w with nothing else to close). Dropping the secondary just folds the
- * split; dropping the primary routes to the secondary's thread, and
- * SplitThreadLayout's no-duplicate rule folds the split once it lands.
- * Returns whether the shortcut was consumed: false only while the split is
- * not rendered. During an in-flight swap it is consumed as a no-op, so the
- * shortcut cannot fall through to closing the window.
+ * mod+w with nothing else to close. Dropping the primary routes to the secondary's
+ * thread, which the no-duplicate rule folds on arrival. Returns false only while the
+ * split is not rendered; mid-swap it is a consumed no-op so the window cannot close.
  */
 export function closeActiveThreadPane(
   navigateToThread: (ref: ScopedThreadRef) => void | Promise<unknown>,
@@ -480,13 +454,10 @@ export function isThreadParked(thread: ParkableThread): boolean {
 }
 
 /**
- * Fold the split away from a thread that was just parked (snoozed or
- * archived), keeping the other pane's thread as the only view. A parked
- * secondary closes the split (even while it is not rendered, so it cannot
- * reappear on a wider window); a parked primary routes to the secondary's
- * thread, and SplitThreadLayout's no-duplicate rule folds the split once it
- * lands. Returns whether the split took over — callers then skip their own
- * move-on navigation, which would race this one.
+ * A parked secondary closes the split even when not rendered, so it cannot reappear on a
+ * wider window; a parked primary routes to the secondary's thread and the no-duplicate
+ * rule folds the split. Returns whether the split took over; callers then skip their own
+ * navigation, which would race this one.
  */
 export function foldSplitForParkedThread(
   threadKey: string,

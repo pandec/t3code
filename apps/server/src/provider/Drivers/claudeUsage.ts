@@ -17,22 +17,10 @@ export const CLAUDE_SYNTHETIC_MODEL = "<synthetic>";
 const SYNTHETIC_MODEL_FIELD = `"model":${JSON.stringify(CLAUDE_SYNTHETIC_MODEL)}`;
 
 /**
- * Parses one line of a Claude Code transcript.
- *
- * Claude Code writes one record per assistant *content block*, each carrying
- * the parent message's `usage` as known when the block was written. Summing
- * them overcounts by roughly 2.4x on a real workload, so the caller keeps one
- * record per `dedupeKey`: the one with the most output (see
- * `supersedesUsageRecord`).
- *
- * Anthropic reports the input and cache split at message start, so native
- * records all carry it, but only a record written after the response
- * completes has the full output, speed, and thinking tokens. A model proxied
- * through an Anthropic-compatible gateway such as CLIProxyAPI reports nothing
- * until completion. Before that, Claude Code writes its own prompt-size
- * estimate as `input_tokens` with zero output and no cache fields. Roughly one
- * proxied message in five never gets a completed record, even though the
- * request completed.
+ * Claude Code writes one record per content block, each repeating the message's
+ * usage, so the caller keeps the one with most output per `dedupeKey`. Proxied
+ * models report nothing until completion (earlier records hold a prompt-size
+ * estimate), and about one proxied message in five never gets a completed record.
  */
 export function parseClaudeLine(line: string): UsageRecord | null {
   let parsed: unknown;

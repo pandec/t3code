@@ -1,13 +1,8 @@
 import { toggleSidebarProjectScope } from "../Sidebar.logic";
 
 /**
- * Scope helpers for the sidebar environment filter.
- *
- * These live here rather than beside their project-scope counterparts in
- * `Sidebar.logic.ts` purely for merge cost: that file is upstream-owned and
- * actively edited upstream, while every symbol below is consumed only by
- * `useSidebarEnvironmentFilter`. Keeping fork-only logic out of a contended
- * file is worth the split.
+ * Kept apart from `Sidebar.logic.ts` to limit upstream merge cost: that file is
+ * upstream-owned, and these helpers are used only by `useSidebarEnvironmentFilter`.
  */
 export type SidebarEnvironmentScope = ReadonlySet<string> | null;
 
@@ -29,12 +24,10 @@ export function sidebarEnvironmentScopeSignature(scope: SidebarEnvironmentScope)
 }
 
 /**
- * The scope stores intent and is resolved against the environments that exist
- * right now instead of being pruned into state: an environment that drops out
- * of the catalog would otherwise silently and permanently narrow the selection,
- * with no way to tell that from a deliberate one. A scope whose environments
- * have all disappeared resolves to an EMPTY set — matching nothing — never to
- * null, which would broaden it to everything.
+ * The scope stores intent and resolves against current environments instead of being
+ * pruned: one leaving the catalog would otherwise permanently narrow the selection. A
+ * scope whose environments all disappeared resolves to an EMPTY set, never to null
+ * (which would broaden it to everything).
  */
 export function resolveSidebarEnvironmentScope(
   environments: readonly { readonly environmentId: string }[],
@@ -55,12 +48,9 @@ export function selectPrimaryEnvironmentScope(
   return primaryEnvironmentId === null ? null : new Set([primaryEnvironmentId]);
 }
 
-// Without a known primary, "remote" is not yet a meaningful distinction: every
-// environment would qualify and the result would be an every-environment scope
-// wearing a "remote only" label. Persisted environments hydrate synchronously
-// while the primary registration arrives over an async round-trip, so this is a
-// real window on cold start — and the scope it would persist is a static id set
-// that never corrects itself once the primary lands.
+// Without a known primary every environment qualifies, persisting an all-environments
+// scope labeled "remote only". The primary registers asynchronously after persisted
+// environments hydrate, and the persisted id set never corrects itself once it lands.
 export function selectRemoteEnvironmentScope(
   environments: readonly { readonly environmentId: string }[],
   primaryEnvironmentId: string | null,

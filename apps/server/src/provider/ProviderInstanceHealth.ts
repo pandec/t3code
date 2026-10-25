@@ -1,14 +1,7 @@
 /**
- * ProviderInstanceHealth — per-instance provider usage snapshots.
- *
- * Holds the latest opaque usage payload for each provider instance, ordered
- * by server-local observation tokens and owned by one usage source at a time.
- *
- * The state is deliberately in-memory only: usage is a live account
- * condition, and a server restart re-learning it from the next observation
- * is cheaper and safer than persisting a potentially stale snapshot.
- *
- * @module provider/ProviderInstanceHealth
+ * Latest usage payload per provider instance, owned by one usage source at a
+ * time. In-memory only: usage is a live account condition, and re-learning it
+ * after a restart is safer than persisting a stale snapshot.
  */
 import type { ProviderInstanceId } from "@t3tools/contracts";
 import * as Context from "effect/Context";

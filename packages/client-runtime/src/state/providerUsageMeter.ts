@@ -24,14 +24,9 @@ import {
 } from "./providerUsagePresentation.ts";
 
 /**
- * The composer quota meter (web ring popover, mobile usage sheet) as one pure
- * model, so both clients list the same accounts with the same badges.
- *
- * Direct accounts read upstream's typed `usageLimits` from their provider
- * snapshot. Gateway-backed instances (CLIProxyAPI) instead meter their pool of
- * upstream accounts from the server's gateway usage snapshot; their own typed
- * limits describe the proxy login, not the accounts that serve turns, so they
- * are ignored.
+ * The composer quota meter (web ring popover, mobile usage sheet) as one pure model. Gateway-backed
+ * instances (CLIProxyAPI) meter their upstream pool from the gateway usage snapshot and ignore
+ * their own typed limits, which describe the proxy login rather than the accounts serving turns.
  */
 
 export interface ProviderUsageMeterAccount {

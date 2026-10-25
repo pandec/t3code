@@ -643,42 +643,54 @@ function LabRecentHolders({
   readonly leases: ReadonlyArray<LabRecentLease>;
   readonly now: number;
 }) {
-  const owners = useLabOwnerViews(
-    environmentId,
-    leases.map((lease) => lease.threadId),
-  );
   return (
     <Section title="Recent holders">
       <ol className="flex flex-col gap-1.5">
-        {leases.map((lease) => {
-          const owner = lease.threadId ? owners.get(lease.threadId) : undefined;
-          return (
-            <li key={`${lease.acquiredAt}:${lease.releasedAt}`} className="flex flex-col">
-              <p className="min-w-0">
-                {owner && lease.threadId ? (
-                  <LabOwnerLink
-                    environmentId={environmentId}
-                    threadId={lease.threadId}
-                    title={owner.title}
-                  />
-                ) : (
-                  <span className="text-muted-foreground">
-                    {lease.threadId ? "Thread not in T3" : "Outside T3"}
-                  </span>
-                )}
-                <span className="text-muted-foreground">
-                  {" · released "}
-                  {formatLabAgo(lease.releasedAt, now)}
-                </span>
-              </p>
-              {lease.purpose ? (
-                <p className="truncate text-muted-foreground">{lease.purpose}</p>
-              ) : null}
-            </li>
-          );
-        })}
+        {leases.map((lease) => (
+          <LabRecentHolder
+            key={`${lease.acquiredAt}:${lease.releasedAt}`}
+            environmentId={environmentId}
+            lease={lease}
+            now={now}
+          />
+        ))}
       </ol>
     </Section>
+  );
+}
+
+// One row per holder so each owner goes through `useLabOwnerView`, which loads an omitted family.
+function LabRecentHolder({
+  environmentId,
+  lease,
+  now,
+}: {
+  readonly environmentId: EnvironmentId;
+  readonly lease: LabRecentLease;
+  readonly now: number;
+}) {
+  const owner = useLabOwnerView(environmentId, lease.threadId);
+  return (
+    <li className="flex flex-col">
+      <p className="min-w-0">
+        {owner && lease.threadId ? (
+          <LabOwnerLink
+            environmentId={environmentId}
+            threadId={lease.threadId}
+            title={owner.title}
+          />
+        ) : (
+          <span className="text-muted-foreground">
+            {lease.threadId ? "Thread not in T3" : "Outside T3"}
+          </span>
+        )}
+        <span className="text-muted-foreground">
+          {" · released "}
+          {formatLabAgo(lease.releasedAt, now)}
+        </span>
+      </p>
+      {lease.purpose ? <p className="truncate text-muted-foreground">{lease.purpose}</p> : null}
+    </li>
   );
 }
 

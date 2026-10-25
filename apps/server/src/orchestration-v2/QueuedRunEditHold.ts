@@ -2,11 +2,9 @@ import { QUEUED_RUN_EDIT_HOLD_LEASE_MS, type OrchestrationV2Run } from "@t3tools
 import * as DateTime from "effect/DateTime";
 
 /**
- * Fork queued-message edit hold. A client editing a queued message holds it
- * through `queued-run.edit-hold` so the server neither starts nor steers it
- * mid-edit; the queue waits behind it. The hold is a lease the client renews,
- * so an edit abandoned by a closed tab or a sleeping phone stops blocking the
- * queue once it lapses.
+ * Fork: a client editing a queued message holds it via `queued-run.edit-hold` so it neither
+ * starts nor is steered mid-edit. The hold is a renewed lease, so an abandoned edit stops
+ * blocking the queue once it lapses.
  */
 
 /** The queued run while a live edit hold keeps it from starting or being steered. */

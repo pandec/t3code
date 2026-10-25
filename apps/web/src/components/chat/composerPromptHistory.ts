@@ -48,11 +48,6 @@ function stripTrailingReviewComments(prompt: string): string {
   return cut === prompt.length ? prompt : prompt.slice(0, cut).trimEnd();
 }
 
-/**
- * Inline terminal chips are sent as `@terminal-1:12-13` labels in the text with
- * their content in the trailing block. Once the block is stripped the label
- * points at nothing, so remove it too.
- */
 function escapeRegExp(value: string): string {
   return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 }
@@ -110,7 +105,7 @@ export function recallableComposerPrompt(
     break;
   }
 
-  // Recall is text-only: never create dangling chips without their backing records.
+  // Recall strips chips because their backing records are absent.
   const references =
     options?.keepContextReferences === true ? [] : collectComposerContextReferences(prompt);
   for (const reference of references.toReversed()) {

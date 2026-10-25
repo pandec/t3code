@@ -2,11 +2,8 @@ import type { ProjectAccentColorMap } from "@t3tools/client-runtime/state/projec
 import type { EnvironmentId, ServerConfig } from "@t3tools/contracts";
 
 /**
- * The latest accent map for every catalog environment whose server config has
- * hydrated. Server configs already have a schema-validated SQLite cache that
- * survives disconnects and is cleared when the environment leaves the catalog,
- * so accent colors should reuse that lifecycle instead of maintaining a second
- * storage copy.
+ * Reuses the server-config SQLite cache, which survives disconnects and is cleared when the
+ * environment leaves the catalog, instead of keeping a second storage copy of accent colors.
  */
 export function projectAccentColorsFromServerConfigs(
   serverConfigs: ReadonlyMap<EnvironmentId, ServerConfig>,

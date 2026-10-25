@@ -1,12 +1,8 @@
 /**
- * Web access to the cross-environment saved prompt library.
- *
- * The library is a server setting (`ServerSettings.savedPromptLibrary`), one
- * copy per environment, synced with whole-library last-write-wins: reads pick
- * the newest stamp among connected environments, edits stamp and fan out to
- * every capable environment this client may write (`settings:write`), and `useSavedPromptLibrarySync` repairs stale
- * environments when they reconnect. See
- * `@t3tools/client-runtime/state/saved-prompts` for the rules.
+ * A server setting (`ServerSettings.savedPromptLibrary`) synced with whole-library
+ * last-write-wins: reads take the newest stamp, edits fan out to every environment this
+ * client may write (`settings:write`), and `useSavedPromptLibrarySync` repairs reconnects.
+ * Rules: `@t3tools/client-runtime/state/saved-prompts`.
  */
 import { useEffect, useLayoutEffect, useRef, useState } from "react";
 import { useAtomValue } from "@effect/atom-react";

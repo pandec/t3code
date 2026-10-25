@@ -14,11 +14,9 @@ export const PROVIDER_USAGE_STALE_AFTER_MS = 5 * 60_000;
 export const PROVIDER_USAGE_REFRESH_ON_OPEN_AFTER_MS = 60_000;
 
 /**
- * Minimum gap between gateway thread-account probes for one thread+model.
- * Deliberately wider than the pool-refresh debounce: the server-side probe
- * refreshes the gateway binding's sliding TTL, and the web popover opens on
- * hover, so a tight cadence would keep an idle session pinned to its account
- * just from the cursor grazing the meter.
+ * Minimum gap between gateway thread-account probes for one thread+model. Wider than the pool
+ * refresh debounce: each probe renews the gateway binding's sliding TTL and the web popover opens
+ * on hover, so a tight cadence would pin an idle session to its account.
  */
 export const PROVIDER_USAGE_THREAD_ACCOUNT_PROBE_AFTER_MS = 60_000;
 
@@ -29,11 +27,9 @@ export interface ProviderUsageThreadAccountProbe {
 }
 
 /**
- * Whether a thread-account probe may go out now. A changed key (another
- * thread or model) always re-asks; the same key waits out the cadence cap.
- * An explicit ask (the refresh button) outranks the hover cadence but not
- * the spam floor — the probe renews the gateway's session-affinity TTL on
- * every call, so button-mashing must not turn into a request per click.
+ * A changed key (thread or model) always re-asks; the same key waits out the cadence cap. An
+ * explicit refresh outranks the hover cadence but not the spam floor, since every probe renews the
+ * gateway's session-affinity TTL.
  */
 export function shouldProbeProviderUsageThreadAccount(
   last: ProviderUsageThreadAccountProbe,
@@ -158,15 +154,9 @@ export function oldestProviderUsageObservedAt(
 }
 
 /**
- * Whether opening a usage surface should re-read. Keyed on the oldest account
- * for the same reason freshness is: a fresh sibling must not keep a lagging
- * account stale. With nothing listed there is nothing to compare, so the read
- * goes ahead.
- *
- * `lastRefreshStartedAtMs` (0 = never asked here) caps the cadence at one probe
- * per window whatever the accounts say. An account that never reports — expired
- * auth, a probe that always fails — stays `null` forever, and without this the
- * gate would spawn a probe per account on every single open.
+ * Keyed on the oldest account so a fresh sibling cannot keep a lagging one stale; with nothing
+ * listed the read goes ahead. `lastRefreshStartedAtMs` (0 = never) caps it at one probe per
+ * window, because an account that never reports stays `null` and would otherwise probe every open.
  */
 export function shouldRefreshProviderUsageOnOpen(
   accounts: ReadonlyArray<{ readonly observedAt: number | null }>,

@@ -1,11 +1,8 @@
 /**
- * Fork: deferred agent-requested worktree switch service. Validates and
- * records a request for MCP, CLI and other callers, and applies pending
- * requests once their run and background work finish (rules in
- * DeferredWorktreeSwitch.ts). The target is resolved again under its
- * workspace lease right before the switch, so a checkout removed meanwhile
- * ends as `error`. Requests are thread state in the event log, so `start`
- * re-checks every pending request after a restart.
+ * Fork: deferred worktree switch service (rules in DeferredWorktreeSwitch.ts).
+ * The target is re-resolved under its workspace lease right before the switch,
+ * so a checkout removed meanwhile ends as `error`. `start` re-checks pending
+ * requests after a restart.
  */
 import {
   CommandId,

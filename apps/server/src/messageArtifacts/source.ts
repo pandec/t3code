@@ -32,13 +32,9 @@ export const isUsableArtifactSource = <
   source.text.trim().length > 0;
 
 /**
- * Joins `message` (an `orchestration_v2_projection_messages` alias) to the
- * model its run used while the message's attempt ran, selected by
- * `producingRunModelSelection`. A steering restart replaces the run's model
- * and root node in place, so the run row only knows the latest attempt; the
- * thread's run events keep each attempt's model. Runs without events fall back
- * to the run row. `threadIds` (an `IN` list or subquery naming the messages'
- * threads) scopes the one pass over their events.
+ * Joins `message` to the model its run used during the message's attempt. A steering restart
+ * replaces the run's model in place, so only the thread's run events keep each attempt's model;
+ * runs without events fall back to the run row. `threadIds` scopes the pass over those events.
  */
 export const producingRunModelJoin = (
   sql: SqlClient.SqlClient,

@@ -3,22 +3,16 @@ import type { SpeechAudioMimeType } from "@t3tools/contracts";
 import { appendWavAudio } from "./wavAudio.ts";
 
 /**
- * Longest piece one OpenRouter request carries when a script is split for
- * parallel synthesis. Gemini TTS generates at roughly two to three times
- * real time, so a 3,000-character script takes one to two minutes as a
- * single request; five pieces of this size finished in under 30 seconds
- * side by side. A floor keeps pieces long enough that each keeps its own
- * prosody context.
+ * Longest piece per OpenRouter request for parallel synthesis: Gemini TTS runs
+ * at about two to three times real time, so splitting cuts minutes to under 30
+ * seconds. A floor keeps pieces long enough to keep their own prosody context.
  */
 export const SPEECH_CHUNK_MAX_CHARS = 800;
 const SPEECH_CHUNK_MIN_CHARS = 200;
 
 /**
- * Splits a script at paragraph boundaries, then sentence boundaries,
- * targeting `maxChars` per piece. A cut mid-sentence gives the model no context
- * for pace or tone and is audible in the result; a cut between paragraphs
- * is where a reader would pause anyway. A single sentence longer than
- * `maxChars` stays whole rather than being sliced by character count.
+ * Splits at paragraph, then sentence boundaries: a mid-sentence cut loses pace
+ * and tone and is audible. A sentence longer than `maxChars` stays whole.
  */
 export function splitSpeechText(text: string, maxChars = SPEECH_CHUNK_MAX_CHARS): string[] {
   const trimmed = text.trim();
@@ -92,19 +86,10 @@ function splitSentences(paragraph: string, maxChars: number): string[] {
 }
 
 /**
- * Joins two recordings from the same synthesis pipeline into one playable
- * stream. Callers check that both use the same container; a WAV pair whose
- * sample rate or channel count differs (a settings change mid-turn moved to
- * another model) returns null rather than being spliced together as noise.
- * WAV segments are re-wrapped with a header covering both PCM payloads.
- *
- * For MP3: ElevenLabs returns CBR 44.1kHz mono and OpenRouter's MP3 output is
- * assumed CBR too (not checked per model), so bare frame streams concatenate
- * cleanly. Each segment can lead with an ID3v2 tag and a Xing/Info header
- * frame that declares that segment's frame count. Both are dropped from both
- * sides (a no-op on an already merged left side): a header frame surviving
- * into the merge caps the reported duration at the first segment, and without
- * one, CBR players derive the correct duration from the file size.
+ * Callers ensure a shared container; mismatched WAV formats return null rather
+ * than splicing noise. MP3 is assumed CBR, so ID3v2 tags and Xing/Info frames
+ * are dropped from both sides: a surviving header caps the reported duration at
+ * the first segment.
  */
 export function appendSpeechAudio(
   previous: Uint8Array,

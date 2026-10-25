@@ -38,11 +38,9 @@ let loadedTrackUrlWatcher: ListeningUrlWatcher | null = null;
 let loadedTrackMetadata: ListeningTrackMetadata | null = null;
 let cancelResumeWatch: (() => void) | null = null;
 let mediaSessionHandlersRegistered = false;
-// Whether our OS media entry should exist (the web twin of mobile's
-// lock-screen activation flag). Archiving disarms it so the element's async
-// pause event cannot resurrect the cleared session and the OS play key cannot
-// resume a thread whose every in-app pause control just left the screen; the
-// next explicit in-app play re-arms.
+// Whether our OS media entry should exist (web twin of mobile's lock-screen flag).
+// Archiving disarms it so the async pause event cannot resurrect the cleared session and
+// the OS play key cannot resume a thread with no visible pause control; in-app play re-arms.
 let mediaSessionArmed = false;
 
 function getMediaSession(): MediaSession | null {
@@ -195,11 +193,9 @@ function ensureSharedAudio(): HTMLAudioElement {
 }
 
 /**
- * Loads (or resumes) a recording on the shared element and starts playback.
- * Rows always pass their freshest signed URL: a re-signed URL for the loaded
- * recording is swapped in with the position restored (or replayed from the
- * start when the old one had finished), which covers token expiry across
- * long pauses without a dedicated refresh path.
+ * Rows always pass their freshest signed URL: a re-signed URL for the loaded recording
+ * is swapped in with the position restored (or restarted if it had finished), covering
+ * token expiry across long pauses without a separate refresh path.
  */
 export function playListeningTrack(input: {
   readonly track: ListeningTrackRef;
@@ -252,11 +248,9 @@ export function seekListeningTrack(seconds: number): void {
 }
 
 /**
- * Play/pause toggle for the loaded track, usable from any sidebar row.
- * Resume re-resolves a current signed URL through the watcher the row handed
- * over on play: after a long pause the loaded URL may have expired, and the
- * plan-based play path swap-restores the position on a fresh one. Without a
- * watcher it falls back to replaying the loaded source.
+ * Resume re-resolves a current signed URL through the watcher the row handed over on
+ * play, since the loaded URL may have expired during a long pause. Without a watcher it
+ * replays the loaded source.
  */
 export function toggleLoadedListeningTrack(): void {
   const track = listeningPlayback.getSnapshot().track;

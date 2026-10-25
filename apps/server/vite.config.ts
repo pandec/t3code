@@ -29,9 +29,7 @@ const macLoopbackTransportRetry =
 const cliBuildChannel = /^[^-+]+-(?:nightly|preview)\./.test(packageJson.version)
   ? "nightly"
   : "latest";
-// Sent with every analytics event. Release workflows set it for pingdotgg/t3code
-// builds only, so local builds and forks report "dev". A typo fails the build
-// instead of mislabeling events.
+// Official release workflows set the telemetry channel; local builds and forks use "dev".
 const TELEMETRY_CHANNELS = ["stable", "nightly", "preview", "dev"];
 const telemetryChannel = process.env.T3CODE_TELEMETRY_CHANNEL?.trim() || "dev";
 if (!TELEMETRY_CHANNELS.includes(telemetryChannel)) {
@@ -40,10 +38,7 @@ if (!TELEMETRY_CHANNELS.includes(telemetryChannel)) {
   );
 }
 
-// `build:exe` wraps the same bundle in a Node single-executable. tsdown's exe
-// step refuses multi-chunk output and counts the sourcemap as a chunk, and the
-// executable needs a host Node that supports `--build-sea` (25.7+), so this is
-// a separate mode rather than a second entry in the default build.
+// tsdown SEA needs one chunk (sourcemaps count) and Node >=25.7, so package separately.
 const packExecutable = process.env.T3CODE_PACK_EXE === "1";
 const SEA_TARGETS = {
   "darwin-arm64": { platform: "darwin", arch: "arm64" },
@@ -91,8 +86,7 @@ export default mergeConfig(
       },
     },
     pack: {
-      // The executable embeds one entry; the history worker becomes a hidden
-      // subcommand there instead of a sibling script.
+      // SEA embeds one entry; expose the history worker as a hidden subcommand.
       entry: packExecutable ? ["src/bin.ts"] : ["src/bin.ts", "src/claude-history-worker.ts"],
       outDir: packExecutable ? "dist-exe" : "dist",
       sourcemap: !packExecutable,
@@ -103,17 +97,13 @@ export default mergeConfig(
               fileName: "t3",
               outDir: "dist-exe",
               ...(packExecutableTargets ? { targets: packExecutableTargets } : {}),
-              // Node's SEA docs: `import()` does not work when useCodeCache is
-              // true, and the server reaches several modules that way.
+              // Node SEA useCodeCache breaks import(), which the server needs.
               seaConfig: { useCodeCache: false },
             },
           }
         : {}),
       deps: {
-        // `neverBundle` forces the native packages out: returning false from
-        // `alwaysBundle` only means "no opinion", so a transitive dependency
-        // would still be bundled — which silently inlined native loaders such
-        // as node-gyp-build, losing native acceleration.
+        // alwaysBundle=false has no opinion; neverBundle must retain transitive native acceleration.
         alwaysBundle: shouldBundleCliDependency,
         neverBundle: (id: string) => isExternalCliDependency(id),
         onlyBundle: false,
@@ -143,22 +133,11 @@ export default mergeConfig(
       },
     },
     test: {
-      // This suite ran with `fileParallelism: false` to avoid load-sensitive
-      // flakes from its sqlite, git, temp-worktree, and orchestration work.
-      // That serialization cost more than half the runtime: the same 213 files
-      // take 143.2s serialized versus 62.4s at four workers, both fully green.
-      // It also never bounded resource use the way it appeared to — the suite
-      // spawns git and sqlite children regardless, and peaked at 17 processes
-      // even when Vitest was pinned to a single worker. Worker count is now
-      // bounded centrally in scripts/lib/vitest-shared.ts instead.
-      //
-      // Re-verified only on Linux. If parallel files prove flaky here — macOS
-      // is the likelier place, given case-insensitive APFS and different
-      // temp-dir and fsync behaviour — fix the offending test's isolation
-      // rather than reinstating blanket serialization.
-      //
+      // No `fileParallelism: false`: serialization doubled runtime (143s vs 62s at four
+      // workers) without bounding child processes; workers are capped in
+      // scripts/lib/vitest-shared.ts. Fix a flaky test's isolation (macOS APFS/temp-dir
+      // behaviour is the likelier culprit) rather than reinstating serialization.
       sequence: { sequencer: WeightedShardSequencer },
-      // Appended to the root setup, which mergeConfig concatenates.
       setupFiles: ["./src/testUtils/gitConfig.setup.ts"],
       hookTimeout: 120_000,
       // macOS can drop a first request or briefly return 404 from an ephemeral

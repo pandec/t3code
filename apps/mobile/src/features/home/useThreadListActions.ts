@@ -52,8 +52,7 @@ import { threadCanArchive } from "./threadArchive";
 import { resolveThreadTitleRename } from "../threads/thread-title-rename";
 import { useForkConversation } from "../threads/useForkConversation";
 
-/** Version skew: never send settle/unsettle to a server that predates them
-    (capability defaults false on decode for older servers). */
+/** Older servers default the settlement capability to false; never send them settle/unsettle. */
 function environmentSupportsSettlement(environmentId: EnvironmentThreadShell["environmentId"]) {
   return (
     appAtomRegistry.get(environmentServerConfigsAtom).get(environmentId)?.environment.capabilities
@@ -338,8 +337,7 @@ function useThreadActionExecutor(
   return executeAction;
 }
 
-// A plain function, not a hook: a `use*` function that calls no hooks is skipped by
-// the compiler, so the delete handler it returned was a new closure every render.
+// Hookless use* functions skip compilation, leaving their returned handlers unstable.
 function confirmThreadDeletion(
   executeAction: (action: ThreadListAction, thread: EnvironmentThreadShell) => Promise<boolean>,
   thread: EnvironmentThreadShell,
@@ -627,8 +625,6 @@ export function useThreadListActions(
       return false;
     }
     selectionHaptic();
-    // Same placement as web: a fresh pin takes the top of the arranged
-    // run. Servers that predate reordering get the bare pin (keyless).
     let orderKey: string | undefined;
     if (environmentSupportsPinReorder(thread.environmentId)) {
       const shells = appAtomRegistry.get(environmentThreadShells.threadShellsAtom);

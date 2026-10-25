@@ -58,11 +58,9 @@ export const SessionImportCandidate = Schema.Struct({
   messageCount: Schema.NullOr(Schema.Number),
   updatedAt: IsoDateTime,
   /**
-   * Set when a t3 thread already owns this session's continuation. Such a
-   * candidate is listed rather than hidden, but importing it again requires
-   * `fork` so the two threads never resume the same provider session. Absent
-   * means the server predates linked candidates; those servers hide bound
-   * sessions entirely, so clients must treat absence as null.
+   * Set when a t3 thread already owns this session's continuation; re-importing it then requires
+   * `fork` so two threads never resume the same provider session. Older servers omit it and hide
+   * bound sessions, so treat absence as null.
    */
   linkedThread: Schema.optional(Schema.NullOr(SessionImportLinkedThread)),
 });

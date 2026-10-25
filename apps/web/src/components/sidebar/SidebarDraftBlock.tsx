@@ -150,11 +150,8 @@ interface SidebarDraftRowData {
   composer: ComposerThreadDraftState;
 }
 
-// Draft sessions with user content, surfaced as their own foldable section
-// above the pinned block so an interrupted "new thread" stays one click
-// away. Self-contained (own store subscription + closing divider) so
-// per-keystroke composer updates re-render only this block, never the
-// whole sidebar. Vanishes at count 0.
+// Self-contained (own store subscription and closing divider) so per-keystroke
+// composer updates re-render only this block, never the whole sidebar.
 export const SidebarDraftBlock = memo(function SidebarDraftBlock(props: {
   projectByKey: ReadonlyMap<string, EnvironmentProject>;
   projectDisplayNameByKey: ReadonlyMap<string, string>;

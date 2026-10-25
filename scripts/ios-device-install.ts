@@ -14,14 +14,9 @@ const SCHEME = "T3Code";
 const ARTIFACT_DIRECTORY = "local/ios-device";
 
 /**
- * Builds the production Release app for a physically connected iPhone or iPad
- * and installs it with devicectl, signing through the App Store Connect API
- * key instead of an Xcode account session. Installing over the TestFlight app
- * upgrades it in place and preserves its data, which makes this the canonical
- * way to reproduce and verify device-only issues.
- *
- * Flags: `--device <udid>` picks a device when several are connected;
- * `--no-console` skips the blocking console-attached launch.
+ * Builds the production Release app for a connected iPhone/iPad and installs it with devicectl,
+ * signing via the App Store Connect API key. Installing over TestFlight upgrades in place, keeping
+ * data. Flags: `--device <udid>` picks a device; `--no-console` skips the console-attached launch.
  */
 
 interface DevicectlDevice {

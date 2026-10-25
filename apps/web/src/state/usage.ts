@@ -51,15 +51,9 @@ function environmentUsageState(environment: EnvironmentUsageStatus): Environment
 }
 
 /**
- * Reads every environment's summary for one window.
- *
- * Keyed by the serialised window so switching ranges does not thrash the atom
- * cache, and so each environment's query is shared with any other reader of the
- * same window.
- *
- * The query atom for an environment that has never connected stays pending
- * forever (it waits for a connection that is not coming), so the connection
- * phase — not the query result — decides whether an unanswered environment is
+ * Keyed by the serialised window so switching ranges does not thrash the atom cache and
+ * readers of one window share each query. A never-connected environment's query stays
+ * pending forever, so the connection phase, not the query result, decides whether it is
  * still reporting or terminally unreachable.
  */
 const usageByWindowAtom = Atom.family((windowKey: string) =>
@@ -149,11 +143,9 @@ export interface UsageView {
 }
 
 /**
- * Merges every environment that has reported. `keepBucket` narrows the merge,
- * for example to one model; source ownership still applies, so the result
- * matches that slice of the full merge. Session counts are per directory and
- * are not narrowed. `attribution` must match the full merge's so a slice
- * credits gateway-routed buckets to the same pool.
+ * `keepBucket` narrows the merge (e.g. to one model) with source ownership still applied,
+ * so the result matches that slice of the full merge; session counts are not narrowed.
+ * `attribution` must match the full merge's so a slice credits gateway buckets alike.
  */
 export function mergeAnsweredUsage(
   environments: readonly EnvironmentUsageStatus[],
@@ -179,11 +171,9 @@ export function mergeAnsweredUsage(
 }
 
 /**
- * One model row's slice of the merge. Pool attribution can credit a model's
- * buckets to a provider other than the harness that scanned them, so first
- * narrow by model name alone: when every merged row for that name lands on the
- * row's provider, that is exactly the row. Otherwise the name spans providers
- * attribution leaves alone, and the scanned provider decides.
+ * Pool attribution can credit a model's buckets to a provider other than the scanning
+ * harness, so narrow by model name first: if every merged row for it lands on the row's
+ * provider, that is the row. Otherwise the scanned provider decides.
  */
 export function mergeModelUsage(
   environments: readonly EnvironmentUsageStatus[],
@@ -206,17 +196,10 @@ export function mergeModelUsage(
 const NO_HIDDEN_PROVIDERS: ReadonlySet<UsageProviderKind> = new Set();
 
 /**
- * Drops hidden providers' buckets and sources before merging, so totals,
- * shares, and session counts all describe only the visible providers.
- *
- * Fork: filters the summary the merge reads (`state.summary` when present).
- * Under `"pool"` rows are subscriptions, so a bucket is dropped only when the
- * pool it is credited to is hidden, and every source stays (with a hidden
- * app's sessions zeroed): sources decide bucket ownership, so dropping a
- * hidden app's sources would also drop the buckets it spent from a visible
- * subscription. Removing a bucket never
- * changes another bucket's ownership, so this matches filtering after
- * ownership and attribution.
+ * Filters the summary the merge reads so totals, shares, and session counts cover only visible
+ * providers. Under `"pool"` a bucket drops only when its credited pool is hidden and every source
+ * stays (hidden apps' sessions zeroed), since sources decide ownership; removing a bucket never
+ * changes another's, so this matches filtering after ownership and attribution.
  */
 function withoutProviders(
   environments: readonly EnvironmentUsageStatus[],
@@ -304,8 +287,7 @@ export function useUsage(
   });
   const atom = usageByWindowAtom(windowKey);
   const environments = useAtomValue(atom);
-  // The render-time sync below compares merged by identity, so the derivation is
-  // held in state keyed on its inputs rather than rebuilt every render.
+  // Identity-based render sync needs a derivation retained by inputs across renders.
   const [derived, setDerived] = useState(() =>
     deriveSelection(environments, selectedEnvironmentIds, hiddenProviders, attribution),
   );

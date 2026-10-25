@@ -1,16 +1,8 @@
 /**
- * SessionImportService — imports one Claude Code or Codex CLI session, created
- * outside T3 Code, as a new thread that continues the native session.
- *
- * The imported transcript is written as runless history (`historyOrigin:
- * "v1_import"`, like the bulk agent-session importer) and the thread's provider
- * thread holds a strong reference to the native session, so the first turn
- * resumes it natively and later forks/handoffs include the imported history.
- * A session another live thread already continues is only importable as a
- * native fork, so two threads never resume the same provider session. The same
- * native fork path forks an imported thread before its first turn, when v2's
- * run-based `thread.fork` has no source run yet. Imported Codex sessions resume
- * strictly (StrictResume): never silently replaced by a fresh native session.
+ * Imports an external CLI session as a thread that resumes it natively. A session
+ * another live thread continues imports only as a native fork, so two threads
+ * never resume one session. Imported Codex sessions resume strictly, never
+ * silently replaced by a fresh native session.
  */
 import {
   DEFAULT_MODEL_BY_PROVIDER,
@@ -277,11 +269,9 @@ export const make = Effect.gen(function* () {
   });
 
   /**
-   * Threads whose root provider thread holds a native session of `driver`:
-   * live ones, plus deleted ones whose provider session teardown is still
-   * queued, since that provider can still write the native transcript. A
-   * thread keeps owning a session after switching away from it, since
-   * switching back resumes it.
+   * Includes deleted threads with teardown still queued, since their provider
+   * can still write the transcript, and threads that switched away, since
+   * switching back resumes the session.
    */
   const readNativeSessionOwners = Effect.fn("SessionImportService.readNativeSessionOwners")(
     function* (instances: ReadonlyArray<ProviderInstance>, driver: ProviderDriverKind) {

@@ -12,7 +12,11 @@ import {
   type ThreadFindStart,
   stepThreadFindIndex,
 } from "./threadFind";
-import { subscribeThreadFindOpen } from "./threadFindActionBus";
+import {
+  subscribeThreadFindOpen,
+  subscribeThreadFindQuery,
+  takeThreadFindQuery,
+} from "./threadFindActionBus";
 import { useThreadPaneId } from "../thread-split/threadPaneContext";
 import { isThreadPaneActive } from "../thread-split/threadSplitStore";
 import { toastManager } from "../ui/toast";
@@ -106,6 +110,31 @@ export function useThreadFind({
       }),
     [open, threadPaneId],
   );
+  const openOnQuery = useStableCallback((query: string, start?: ThreadFindStart) => {
+    if (threadKey === null) return;
+    setState((previous) => ({
+      ...(previous.threadKey === threadKey ? previous : CLOSED_FIND),
+      threadKey,
+      query,
+      offset: 0,
+      start,
+      localSelection: null,
+      focusRequestId: previous.focusRequestId + 1,
+      navigationId: previous.navigationId + 1,
+      requestId: previous.navigationId + 1,
+    }));
+  });
+  // A palette message result opens find on its query, at its message, once
+  // this thread shows.
+  useEffect(() => {
+    if (threadKey === null || !enabled) return;
+    const take = () => {
+      const find = takeThreadFindQuery(threadKey);
+      if (find !== null) openOnQuery(find.query, find.start);
+    };
+    take();
+    return subscribeThreadFindQuery(take);
+  }, [enabled, openOnQuery, threadKey]);
 
   const remote = useServerResults(
     isOpen ? thread : null,
@@ -146,8 +175,7 @@ export function useThreadFind({
         : null,
     findNavigationId: navigationId,
   };
-  // Finishing the count or a pending response must not rerender the timeline or
-  // request another jump, so these keep their identity until a field changes.
+  // Keep timeline identity stable during count and response updates to avoid extra jumps.
   const [storedTimeline, setTimeline] = useState(() => ({
     fields: nextTimeline,
     props: { ...nextTimeline, findPositionReaderRef: positionReader },
@@ -223,8 +251,7 @@ export function useThreadFind({
   useLayoutEffect(() => {
     refreshLiveResultsRef.current = () => {
       if (!isOpen || !state.query.trim()) return;
-      // Paging can change client content while the server is still counting.
-      // Coalesce those updates instead of repeatedly restarting the scan.
+      // Coalesce paging updates while the server counts to avoid restarting scans.
       if (progressive && remote.isPending) {
         refreshAfterSearchRef.current = true;
         return;
@@ -370,8 +397,6 @@ function useServerResults(
         }
       : null;
   const targetKey = target ? JSON.stringify([progressive, target]) : null;
-  // Resolving the atom only when the request changes keeps unrelated renders from
-  // touching the atom family.
   const [storedAtom, setStoredAtom] = useState(() => ({
     key: targetKey,
     atom: resolveThreadFindAtom(target, progressive),

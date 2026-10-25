@@ -9,7 +9,6 @@ import {
 import * as Cause from "effect/Cause";
 import * as DateTime from "effect/DateTime";
 import * as Layer from "effect/Layer";
-import * as Option from "effect/Option";
 import { AsyncResult, Atom, AtomRegistry } from "effect/reactivity";
 import { describe, expect, it } from "vite-plus/test";
 
@@ -25,6 +24,7 @@ import {
   selectRecentArchivedThreads,
 } from "./archivedThreads.ts";
 import { presentThreadShell } from "./models.ts";
+import { EMPTY_SHELL_STATE } from "./shell.ts";
 import { v2ThreadShell } from "./orchestrationV2TestFixtures.ts";
 
 it("does not expose an archived snapshot failure message", () => {
@@ -115,8 +115,7 @@ describe("recent archive shelf", () => {
     );
     const atoms = createRecentArchivedThreadsAtoms(runtime, {
       labelPrefix: "test:recent-archive",
-      shellStateValueAtom: () =>
-        Atom.make({ snapshot: Option.none(), status: "empty" as const, error: Option.none() }),
+      shellStateValueAtom: () => Atom.make(EMPTY_SHELL_STATE),
       // Neither environment's server advertises the bounded query.
       serverConfigsAtom: Atom.make<ReadonlyMap<EnvironmentId, ServerConfig>>(new Map()),
       getFallbackAtom: (environmentId) =>

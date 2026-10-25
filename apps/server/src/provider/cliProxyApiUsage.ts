@@ -1,30 +1,8 @@
 /**
- * CLIProxyAPI gateway usage probe.
- *
- * A provider instance whose `usageSource.kind` is `cliproxyapi` fronts a pool
- * of upstream subscriptions behind one Anthropic-compatible endpoint. The
- * driver's own account probe runs a bearer-token session with no subscription
- * attached, so the SDK reports `rate_limits_available: false` and the usage
- * meter has nothing to show. The meaningful quota lives with the gateway's
- * management API:
- *
- *   - `GET  /v0/management/auth-files` — the pooled accounts with priority
- *     tier and cooldown state.
- *   - `POST /v0/management/api-call` — re-signs an upstream usage read with
- *     that account's live OAuth token server-side
- *     (`api.anthropic.com/api/oauth/usage` for Claude,
- *     `chatgpt.com/backend-api/wham/usage` for Codex).
- *
- * The probe emits one snapshot per instance carrying every pooled account.
- * Per-account usage is normalized here into the same payload shapes the
- * matching direct providers already report (Claude structured usage-API,
- * Codex rate-limit windows), so the client-side window normalizer is reused
- * verbatim and this module stays the only place that knows gateway shapes.
- *
- * Auth failures are terminal for a while: the gateway bans an IP for 30
- * minutes after five rejected management keys, so after a 401/403 the probe
- * refuses to contact the gateway again for a cooldown period rather than
- * letting popover-driven refreshes spend ban strikes.
+ * CLIProxyAPI gateway usage probe. The driver's own probe sees no subscription
+ * behind a gateway, so quota comes from the management API, normalized into the
+ * direct providers' payload shapes; this module is the only one that knows
+ * gateway shapes.
  */
 import type {
   ProviderDriverKind,
@@ -45,26 +23,18 @@ export const CLIPROXYAPI_USAGE_PAYLOAD_SOURCE = "cliproxyapi.management";
 const AUTH_FAILURE_COOLDOWN_MS = 10 * 60 * 1_000;
 const AUTH_FILES_REQUEST_TIMEOUT_MS = 5_000;
 /**
- * Fixed per-account timeout. The refresh coordinator bounds a whole provider
- * probe at 30 seconds, so a two-wide queue stays inside that for pools up to
- * roughly five accounts — past that a uniformly slow gateway loses the
- * snapshot rather than returning a page of timeout rows, which is the honest
- * trade for a pool that size.
+ * The coordinator bounds a whole probe at 30 seconds, so a two-wide queue fits
+ * pools up to roughly five accounts; past that a uniformly slow gateway loses
+ * the snapshot rather than returning a page of timeout rows.
  */
 const ACCOUNT_REQUEST_TIMEOUT_MS = 8_000;
 const ACCOUNT_REQUEST_CONCURRENCY = 2;
 
 /**
- * Rejected management keys are rate-limited by the gateway *per source IP*
- * (five inside 30 minutes earns a 30-minute ban that also covers the agent
- * traffic this machine routes through the same host). The cooldown therefore
- * cannot live in a per-configuration closure: re-typing a mistyped key builds
- * a new probe, and a user who cannot see why the meter is empty will do
- * exactly that. Strikes are counted per gateway origin, process-wide.
- *
- * A *different* key still probes immediately — that is the corrected-key case
- * worth serving — until the strike budget is spent, which keeps this well
- * under the gateway's own limit.
+ * The gateway bans a source IP for 30 minutes after five rejected management
+ * keys, agent traffic included. Strikes are per origin and process-wide because
+ * re-typing a key builds a new probe; a different key still probes immediately
+ * until the strike budget, kept well under the gateway's limit, is spent.
  */
 const GATEWAY_STRIKE_WINDOW_MS = 30 * 60 * 1_000;
 const GATEWAY_STRIKE_BUDGET = 3;
@@ -83,13 +53,9 @@ const gatewayAuthFailures = new Map<string, GatewayAuthFailureState>();
 const gatewayAuthReservations = new Map<string, number>();
 
 /**
- * A rejected *client* key must not be retried on every probe either: the
- * gateway's per-IP rejection budget is only documented for management keys,
- * but nothing guarantees it is endpoint-scoped, and this machine's live agent
- * traffic rides the same IP. One 401/403 permanently suppresses that exact
- * origin/key pairing; a corrected key can still probe immediately. Shared by
- * every client-key request this module makes (the model catalog and the
- * session-account probe), so one rejection silences them all.
+ * The per-IP rejection ban may cover client keys too, and live agent traffic
+ * shares the IP. One 401/403 permanently suppresses that origin/key pairing for
+ * every client-key request here; a corrected key still probes immediately.
  */
 interface ClientKeyState {
   readonly lock: Semaphore.Semaphore;
@@ -323,11 +289,8 @@ function parseModelProviders(payload: unknown): Record<string, string> | null {
 }
 
 /**
- * Translate the raw `wham/usage` body into the rate-limit window shape the
- * Codex app-server reports, so the client's existing Codex normalizer renders
- * gateway accounts identically to a direct Codex instance. The per-model
- * `additional_rate_limits` are intentionally dropped for parity with what a
- * direct Codex instance reports (primary/secondary only).
+ * Translate `wham/usage` into the Codex app-server's rate-limit window shape.
+ * `additional_rate_limits` are dropped for parity with direct Codex instances.
  */
 function translateCodexUsage(body: Record<string, unknown>): {
   readonly usage: unknown;
@@ -390,11 +353,8 @@ function upstreamUsageRequest(provider: string): UpstreamUsageRequest | null {
 }
 
 /**
- * Build a pool probe bound to one gateway target.
- * The returned effect resolves to the instance's usage payload, or undefined
- * while the gateway's auth-failure cooldown is active (see
- * `gatewayAuthFailures` — that state is deliberately process-wide, not
- * per-closure).
+ * Resolves to the instance's usage payload, or undefined while the process-wide
+ * gateway auth-failure cooldown is active.
  */
 export function makeCliProxyApiUsageProbe(
   target: CliProxyApiUsageProbeTarget,
@@ -687,19 +647,10 @@ export interface CliProxyApiSessionAccountProbeInput {
 const SESSION_ACCOUNT_REQUEST_TIMEOUT_MS = 5_000;
 
 /**
- * Read which pooled account the gateway's session-affinity table binds a
- * session to, via `count_tokens`: it runs the same credential selector as real
- * traffic, spends no subscription quota, and reports the selected credential's
- * `auth_index` in the `X-CPA-TRACE-ID` response header.
- *
- * The read is not entirely passive. A session with no live binding gets one
- * created — to exactly the account a real turn would have bound, so the answer
- * is still right — and a hit refreshes the binding's sliding TTL. Callers
- * therefore probe on demand (a popover opening), never on a timer, or an idle
- * session stays pinned to an account the gateway would otherwise release.
- *
- * Fail-soft by design: every failure mode answers null, because the caller
- * renders "unknown" identically for all of them.
+ * Reads a session's bound account via `count_tokens`, which spends no quota and
+ * reports the credential in `X-CPA-TRACE-ID`. It creates or refreshes the
+ * binding, so probe on demand, never on a timer, or an idle session stays
+ * pinned. Every failure answers null.
  */
 export function probeCliProxyApiSessionAccount(
   target: CliProxyApiUsageProbeTarget,
@@ -732,11 +683,9 @@ export function probeCliProxyApiSessionAccount(
         );
         const trace = response.headers["x-cpa-trace-id"];
         if (response.status === 401 || response.status === 403) {
-          // A trace id proves the gateway selected a credential, so the
-          // rejection came from the upstream provider — pooled tokens gone
-          // stale must not permanently silence this client key (and with it
-          // the model catalog). No trace id means the gateway itself refused
-          // the key, which is the case the latch exists for.
+          // A trace id means the upstream rejected a stale pooled token, which
+          // must not silence this client key; only a gateway refusal (no trace
+          // id) latches.
           if (typeof trace !== "string") {
             state.rejected = true;
           }

@@ -1,23 +1,8 @@
 /**
- * UsageService - reads every driver's usage history and returns priced usage
- * buckets.
- *
- * Each built-in driver with a `usage` reader contributes its sources, including
- * work driven outside T3 Code. A `transcripts` reader names JSONL directories
- * that this service streams itself; a `scan` reader reads its own sources.
- *
- * JSONL transcripts are append-only, so parsed records are memoised per file by
- * `(size, mtime)`. A cold 30-day scan of ~1.4 GB lands around 2-3 seconds; warm
- * scans only reparse files that changed, and a file that merely grew resumes
- * from its cached parse position so only the appended bytes are read.
- *
- * A scan reader with a slow source (an account API) may answer from its own
- * cache and mark itself `refreshing` while a background refresh runs;
- * `awaitRefresh` waits for that refresh instead. Records of local scan sources
- * (OpenCode, Antigravity) are kept in the scan cache too, so history survives
- * a source losing rows or disappearing.
- *
- * @module UsageService
+ * Reads every driver's usage history into priced buckets. Transcripts are memoised per file by
+ * `(size, mtime)` and grown files resume from their cached parse position; slow scan readers may
+ * answer from cache while `refreshing` (`awaitRefresh` waits). Local scan sources' records stay in
+ * the scan cache, so history survives a source losing rows or disappearing.
  */
 import * as NodeOS from "node:os";
 
@@ -90,10 +75,7 @@ const RATES_TTL_MS = 24 * 60 * 60 * 1000;
 
 const RATES_REFRESH_FLOOR_MS = 60 * 1000;
 
-/**
- * Files are filtered by mtime before opening. The slack covers a session whose
- * last write lands just before local midnight on the window's first day.
- */
+// mtime slack includes writes just before local midnight on the window's first day.
 const MTIME_SLACK_MS = 36 * 60 * 60 * 1000;
 const MAX_HOURLY_WINDOW_MS = 24 * 60 * 60 * 1000;
 
@@ -147,11 +129,7 @@ const sharedSessionProviders: ReadonlySet<UsageProviderKind> = new Set(
   ),
 );
 
-/**
- * Only these need cross-file dedupe keys: within one file the occurrence count
- * already keeps every key unique, so keying the rest would only build and hash
- * a string for each of their records.
- */
+// Only shared sessions need cross-file dedupe; per-file occurrence counts make other keys unique.
 function sharedSessions(
   files: readonly { readonly records: readonly UsageRecord[] }[],
 ): ReadonlySet<string> {
@@ -226,14 +204,9 @@ export const make = Effect.gen(function* () {
   const sourceCache = new Map<string, typeof CachedSource.Type>();
   let cacheDirty = false;
   /**
-   * One scan at a time.
-   *
-   * `fileCache`, `sourceCache` and `cacheDirty` are plain mutable state shared
-   * by every caller, and a scan interleaves at each `yield*`. Two concurrent
-   * scans, even of different windows, would each walk and re-parse the very
-   * files the other is populating the cache with. Scan readers' background
-   * refreshes (Cursor's account) and cache writes run detached and never take
-   * this lock, so a scan awaiting a refresh cannot deadlock on it.
+   * One scan at a time: the caches and `cacheDirty` are shared mutable state, and concurrent scans
+   * would re-parse the files the other is populating. Background refreshes and cache writes run
+   * detached without this lock, so a scan awaiting a refresh cannot deadlock on it.
    */
   const scanMutex = yield* Semaphore.make(1);
   const isWithinDirectory = (filePath: string, dir: string) => {
@@ -421,11 +394,7 @@ export const make = Effect.gen(function* () {
     return dirs;
   });
 
-  /**
-   * `Effect.cached` makes concurrent first readers await the same load rather
-   * than each seeing a "loaded" flag set before the read finished and cold
-   * scanning against an empty cache.
-   */
+  // Share first loads so concurrent readers cannot scan against a still-empty cache.
   const ensureScanCacheLoaded = yield* Effect.cached(
     Effect.gen(function* () {
       const readDocument = (filePath: string) =>
@@ -456,13 +425,10 @@ export const make = Effect.gen(function* () {
   );
 
   const writeScanCache = makeScanCacheWriter();
-  // Scans with different windows can finish together; serializing the writes
-  // keeps an older snapshot from landing after a newer one.
+  // Serialize writes so concurrently finished window scans cannot overwrite newer snapshots.
   const persistLock = yield* Semaphore.make(1);
 
-  // The dirty flag is cleared before encoding, so a change while the write is
-  // in flight marks it dirty again. A failed write restores the flag, so the
-  // next persist retries instead of leaving disk stale.
+  // Clear dirty before encoding to retain concurrent changes; restore it on failure for retry.
   const persistCaches = Effect.gen(function* () {
     if (cacheDirty) {
       cacheDirty = false;
@@ -489,8 +455,6 @@ export const make = Effect.gen(function* () {
   const awaitPersisted = Effect.suspend(() => Fiber.awaitAll([...pendingPersists])).pipe(
     Effect.asVoid,
   );
-  // A write still running when the service shuts down finishes first, so the
-  // next start does not lose the last scan.
   yield* Effect.addFinalizer(() => awaitPersisted);
 
   /** What one transcript contributed to the scan. */
@@ -594,13 +558,10 @@ export const make = Effect.gen(function* () {
       }
     }
 
-    // Stored already de-duplicated within the file, which is 99% of all
-    // duplicates. The aggregator still runs the cross-file dedupe pass. The
-    // cached base, the new lines, and the tail dedupe as one sequence so a
-    // resumed parse keeps the same record per key as a full one. The
-    // previous tail is not part of the base because the reader deliberately
-    // re-reads it. A tail record that replaced an earlier one stays a tail
-    // record, so the next resumed parse reads it again.
+    // Cached records are already deduped within the file; the aggregator still dedupes across files.
+    // Base, new lines and tail dedupe as one sequence so a resumed parse keeps a full parse's record
+    // per key. The previous tail is excluded because the reader re-reads it, and a tail record that
+    // replaced an earlier one stays a tail record so the next resumed parse reads it again.
     const baseRecords = resumedFromCache ? cached.records : [];
     const tail = new Set(parsed.tailRecords);
     const kept = dedupeWithinFile([...baseRecords, ...parsed.records, ...parsed.tailRecords]);
@@ -779,11 +740,9 @@ export const make = Effect.gen(function* () {
   });
 
   /**
-   * Turns one scan reader's source into a scanned directory. Local sources
-   * (no `hostId` or `volumeId` of their own) keep a stable identity, and what
-   * they read is kept in the scan cache; account-wide sources persist their
-   * own history. Returns `null` when another source already claimed the same
-   * identity.
+   * Turns one scan reader's source into a scanned directory, or `null` when another source already
+   * claimed its identity. Local sources (no own `hostId`/`volumeId`) keep a stable identity and are
+   * kept in the scan cache; account-wide sources persist their own history.
    */
   const resolveScanSource = Effect.fn("UsageService.resolveScanSource")(function* (
     provider: UsageProviderKind,
@@ -876,9 +835,7 @@ export const make = Effect.gen(function* () {
       return scanned;
     });
 
-    // Independent sources scan together. Transcript directories go one at a
-    // time, so open files stay at `TRANSCRIPT_READ_CONCURRENCY`. The result
-    // keeps this order, since aggregation keeps the first copy of a duplicate.
+    // Scan independent sources together, directories sequentially to bound open files; preserve order for first-copy dedupe.
     const [transcriptDirs, readerScans] = yield* Effect.all([transcripts, scans], {
       concurrency: "unbounded",
     });
@@ -956,8 +913,7 @@ export const make = Effect.gen(function* () {
     // through symlinks. Keep only one source per provider and filesystem root.
     const seenRootIdentities = new Set<string>();
 
-    // Cleanup may remove transcripts, but the usage we already saved still
-    // contributes to its source through the normal aggregation and dedupe path.
+    // Deleted transcripts' saved usage still aggregates and deduplicates normally.
     const retainedSinceMs = Math.max(windowStartMs, retentionCutoffMs);
     const filesByDir = scannedDirs.map(({ provider, dir, volumeId, files }) => {
       if (volumeId.length > 0) {
@@ -1088,8 +1044,7 @@ export const make = Effect.gen(function* () {
             sharedSessionProviders.has(record.provider) &&
             crossFileSessions.has(record.sessionId)
           ) {
-            // Match moved copies without collapsing repeated equal events
-            // within one file (timestamps can have only second precision).
+            // Dedupe moved copies but retain repeated equal events within a file, including second-precision timestamps.
             const key = encodeUsageRecordKey([
               record.provider,
               record.sessionId,
@@ -1174,11 +1129,8 @@ export const make = Effect.gen(function* () {
   });
 
   /**
-   * In-flight scans by window and settings, so concurrent identical requests (the usage
-   * page open on two clients at once) share one scan instead of racing over
-   * the same corpus twice. Readers read settings of their own, so a scan is
-   * shared only under the same settings snapshot. `scanMutex` still
-   * serializes scans of different keys, which all mutate the same caches.
+   * In-flight scans by window and settings snapshot, so identical concurrent requests (two clients on
+   * the usage page) share one scan. `scanMutex` still serializes scans of different keys.
    */
   const inflightScans = new Map<string, Deferred.Deferred<UsageSummary, UsageReadError>>();
 
@@ -1202,14 +1154,11 @@ export const make = Effect.gen(function* () {
         const existing = inflightScans.get(key);
         if (existing !== undefined) return existing;
 
-        // Enrollment and detached-fiber creation must be atomic. Otherwise a
-        // canceled first caller can leave a Deferred with no scan to finish it.
+        // Register and fork atomically so cancellation cannot leave a Deferred without a scan.
         const created = Deferred.makeUnsafe<UsageSummary, UsageReadError>();
         inflightScans.set(key, created);
-        // Detached so one departing client cannot tear the scan out from under
-        // the fibers awaiting it; a finished scan warms the cache either way.
-        // The cache write is registered before the waiters resume, so they
-        // can await it, but its fiber starts after they have the summary.
+        // Detach so caller departure cannot cancel shared scans; finished scans warm the cache.
+        // Register writes before releasing waiters, but start writing after delivering their summary.
         yield* scanMutex
           .withPermits(1)(scanSummary(input, settings))
           .pipe(

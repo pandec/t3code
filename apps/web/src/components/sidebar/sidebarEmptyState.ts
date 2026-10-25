@@ -1,13 +1,7 @@
 /**
- * Which filter to blame when the sidebar comes out empty.
- *
- * Three rewrites of this attribution keyed on "which filters are enabled",
- * and each one shipped a message whose recovery button did not refill the
- * list. Enabled is the wrong question: a filter that is on but removed no
- * rows is not the reason you are looking at nothing. The right question is
- * counterfactual — would clearing this one filter, and nothing else, admit a
- * row? The caller answers it while partitioning threads, which it already
- * walks, and this decides what to say.
+ * Blames a filter only when clearing that one filter alone would admit a row. Whether a
+ * filter is enabled is the wrong test: an enabled filter that removed nothing is not why
+ * the list is empty, and keying on it yields recovery buttons that do not refill the list.
  */
 export type SidebarEmptyStateCause =
   /** Exactly one filter is hiding rows; offer its clear action. */

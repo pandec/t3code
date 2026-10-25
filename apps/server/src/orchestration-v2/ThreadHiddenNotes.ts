@@ -1,9 +1,7 @@
 /**
  * Fork: notes a thread's next provider message carries without showing them in
- * the transcript. ProviderTurnStartService (and ProviderTurnControlService for
- * steers) prepends pending notes to the provider text and acknowledges them
- * once the provider accepts it, so each note is delivered once. Persisted so a note
- * survives a server restart between being queued and the next user message.
+ * the transcript. Acknowledged only once the provider accepts the message, so
+ * each note is delivered once; persisted so it survives a restart before then.
  */
 import type { ThreadId } from "@t3tools/contracts";
 import { randomUuidV4 } from "@t3tools/provider-core/server/randomUuid";

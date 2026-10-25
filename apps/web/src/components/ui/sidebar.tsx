@@ -43,12 +43,9 @@ type SidebarContextProps = {
 };
 
 /**
- * `minWidth`/`maxWidth` are enforced while dragging, when a persisted width is
- * restored, and whenever the limits themselves change. That last reconciliation
- * only applies to a pixel-valued `--sidebar-width`, which is what the resize
- * path writes; a sidebar left on the provider's `rem` default stays there until
- * its first drag. Pass an initial pixel width via `onResize` if the limits must
- * hold before then.
+ * `minWidth`/`maxWidth` hold while dragging, on restore, and when the limits change;
+ * the last applies only to a px `--sidebar-width`, so a `rem` default waits for the
+ * first drag. Pass an initial px width via `onResize` if the limits must hold sooner.
  */
 type SidebarResizableOptions = {
   maxWidth?: number;
@@ -415,11 +412,9 @@ function SidebarRail({
   const resizingRef = React.useRef(false);
   const hydratedStorageKeyRef = React.useRef<string | null>(null);
   const observedStorageKeyRef = React.useRef<string | null>(null);
-  // The width the user actually asked for, kept unclamped so a window that
-  // grows again can restore it rather than staying at a narrower window's cap.
-  // Tagged with the key that owns it: a sidebar that switches storage keys must
-  // not inherit the previous key's preference, least of all when the new key has
-  // nothing stored and would otherwise silently keep the old width.
+  // The user's requested width, unclamped so a window that grows again restores it.
+  // Tagged with its storage key so a sidebar that switches keys does not inherit the
+  // previous key's preference.
   const preferredWidthRef = React.useRef<{ storageKey: string | null; width: number } | null>(null);
   const resolvedResizable = sidebarInstance?.resizable ?? null;
   const latestResizable = React.useRef(resolvedResizable);
@@ -441,9 +436,8 @@ function SidebarRail({
       sidebarContainer.getBoundingClientRect().width,
       resolvedResizable,
     );
-    // Drag frames write width to the gap and container only. Changing the
-    // inherited --sidebar-width on the wrapper restyles the whole app, so it is
-    // written once when the drag commits.
+    // Write width only to gap/container during drag; inherited --sidebar-width restyles the whole app, so
+    // update it at commit.
     const widthTargets = [
       sidebarRoot.querySelector<HTMLElement>("[data-slot='sidebar-gap']"),
       sidebarContainer,
@@ -526,11 +520,9 @@ function SidebarRail({
     toggleSidebar();
   };
 
-  // A caller resetting the width can only clear what it owns: its own state and
-  // storage. The unclamped preference below lives here, and the reconciliation
-  // effect would restore it before the next paint, so the reset has to drop it
-  // too — otherwise the sidebar snaps straight back and only appears reset after
-  // a reload.
+  // A caller's reset clears only its own state and storage; the reconciliation
+  // effect would restore the unclamped preference before paint, so the reset drops
+  // it too or the sidebar snaps back until a reload.
   const handleDoubleClick = (event: React.MouseEvent<HTMLButtonElement>) => {
     onDoubleClick?.(event);
     if (event.defaultPrevented) return;
@@ -605,11 +597,9 @@ function SidebarRail({
     const clampedWidth = clampSidebarWidth(preferredWidth ?? appliedWidth, resolvedResizable);
     if (clampedWidth === appliedWidth) return;
 
-    // Bringing an out-of-bounds width back inside the limits is mandatory, so it
-    // skips the predicate: a caller that rejects shrinking would otherwise pin
-    // the sidebar above a maxWidth that just dropped. The predicate only governs
-    // optional movement between two valid widths, such as growing back toward
-    // the stored preference, where the caller may know a constraint we don't.
+    // Pulling an out-of-bounds width inside the limits skips the predicate, or a
+    // caller that rejects shrinking would pin it above a lowered maxWidth. The
+    // predicate governs only optional moves between valid widths (growing back).
     const appliedWithinLimits =
       appliedWidth >= resolvedResizable.minWidth && appliedWidth <= resolvedResizable.maxWidth;
     if (appliedWithinLimits) {
@@ -640,7 +630,7 @@ function SidebarRail({
           <button
             aria-label={railLabel}
             className={cn(
-              /* disable pointer events only when offcanvas sidebar is collapsed, that's when the rail sits over the native scrollbar on windows and linux. icon mode stays fully clickable. */
+              /* A collapsed offcanvas rail overlaps the native scrollbar on Windows and Linux. */
               "-translate-x-1/2 group-data-[side=left]:-right-4 absolute inset-y-0 z-20 hidden w-4 after:absolute after:inset-y-0 after:left-1/2 after:w-[2px] hover:after:bg-sidebar-border group-data-[side=right]:left-0 sm:flex [-webkit-app-region:no-drag] [[data-collapsible=offcanvas][data-state=collapsed]_&]:pointer-events-none",
               "[[data-panel-animations=true]_&]:transition-all [[data-panel-animations=true]_&]:[transition-duration:var(--panel-animation-duration)] [[data-panel-animations=true]_&]:ease-out",
               "in-data-[side=left]:cursor-w-resize in-data-[side=right]:cursor-e-resize",
@@ -749,9 +739,8 @@ function SidebarContent({
         hideScrollbars
         scrollFade
         scrollFadePadding={false}
-        // Thread rows provide keyboard access to this scroll region. Keeping
-        // Base UI's viewport out of the tab order lets its presentational role
-        // flatten in WebKit instead of becoming a VoiceOver interaction group.
+        // Rows provide keyboard access; exclude the viewport from tab order to flatten VoiceOver's WebKit
+        // interaction boundary.
         viewportTabIndex={-1}
         className="h-auto min-h-0 flex-1 [&>[data-slot=scroll-area-viewport]]:[--fade-size:0.75rem]"
       >

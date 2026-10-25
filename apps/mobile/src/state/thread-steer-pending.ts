@@ -11,12 +11,9 @@ const NO_PENDING_MESSAGE_IDS: ReadonlySet<MessageId> = new Set();
 const UNREAD_KEY_SEPARATOR = "\u0000";
 
 /**
- * The user messages whose steer the agent has not read yet, derived from the
- * thread projection so the answer is the same after a reload, on another
- * device, and after navigating away and back. The only local memory is the
- * reveal delay: a steer shows its marker once it has stayed unread for
- * `STEER_PENDING_REVEAL_DELAY_MS` on this client, which hides the ones a
- * provider reads within a round trip.
+ * Derived from the thread projection so the answer survives reloads, devices and navigation. The
+ * only local state is the reveal delay: a marker shows after `STEER_PENDING_REVEAL_DELAY_MS`
+ * unread on this client, hiding steers a provider reads within a round trip.
  */
 export function useSteerPendingMessageIds(
   snapshot: SteerPendingThreadSnapshot | null,

@@ -5,11 +5,12 @@ import { presentThreadShell } from "@t3tools/client-runtime/state/models";
 import type { EnvironmentThreadShell } from "@t3tools/client-runtime/state/shell";
 import * as Option from "effect/Option";
 import { AsyncResult, Atom } from "effect/reactivity";
+import { useState } from "react";
 
 import { liveArchivedShellSnapshotAtom } from "../../lib/archivedThreadsState";
 import { cn } from "~/lib/utils";
 import { useThreadShell } from "../../state/entities";
-import { environmentThreadShells } from "../../state/threads";
+import { environmentThreadShells, useThreadFamily } from "../../state/threads";
 import { Badge } from "../ui/badge";
 import { resolveSidebarThreadStatus } from "../Sidebar.logic";
 import { useOpenThreadInPane } from "../thread-split/useOpenThreadInPane";
@@ -55,19 +56,41 @@ export function LabAvailabilityBadge({ availability }: { readonly availability: 
   );
 }
 
+/**
+ * Shells can leave idle subagent children out, so an owner missing from them may be a delegated
+ * child rather than gone: mount its family before reading it as absent. Sticky per owner, since
+ * the mounted rows put it back in the shell.
+ */
+function useLabOwnerFamily(environmentId: EnvironmentId, threadId: string | null): void {
+  const shell = useThreadShell(
+    threadId === null ? null : scopeThreadRef(environmentId, threadId as ThreadId),
+  );
+  const [familyThreadId, setFamilyThreadId] = useState<string | null>(null);
+  if (threadId !== null && shell === null && familyThreadId !== threadId) {
+    setFamilyThreadId(threadId);
+  }
+  useThreadFamily(
+    environmentId,
+    familyThreadId === threadId ? (threadId as ThreadId | null) : null,
+  );
+}
+
 /** The owner thread, read from the cheap thread shells; null when it is not a T3 thread. */
 export function useLabOwnerThread(environmentId: EnvironmentId, threadId: string | null) {
+  useLabOwnerFamily(environmentId, threadId);
   return useThreadShell(
     threadId === null ? null : scopeThreadRef(environmentId, threadId as ThreadId),
   );
 }
 
 function toLabOwnerView(owner: EnvironmentThreadShell): LabOwnerView {
-  const status = resolveSidebarThreadStatus(owner);
+  // A guest's request outranks the run in the sidebar status, but the owner still works.
+  const status = resolveSidebarThreadStatus({ ...owner, pendingGuestMessageCount: 0 });
   return {
     title: owner.title,
     working: status === "working" || status === "monitoring",
-    needsYou: status === "approval" || status === "input",
+    needsYou:
+      status === "approval" || status === "input" || (owner.pendingGuestMessageCount ?? 0) > 0,
     archived: owner.archivedAt !== null,
     // The latest run, not `updatedAt`: pull request syncs and settling bump that without work.
     lastActivityAt:
@@ -95,6 +118,7 @@ export function useLabOwnerView(
   environmentId: EnvironmentId,
   threadId: string | null,
 ): LabOwnerView | null {
+  useLabOwnerFamily(environmentId, threadId);
   return useLabOwnerViews(environmentId, [threadId]).get(threadId ?? "") ?? null;
 }
 
@@ -118,6 +142,7 @@ const labOwnerViewsAtom = Atom.family((key: string) => {
 /**
  * Owner views for many leases at once, keyed by thread id; one subscription per owner shell. An
  * owner missing from the active shell is looked up in the archive, which is fetched only then.
+ * Owner families are mounted per row, by `LabSummarySentence` and the single-owner hooks.
  */
 export function useLabOwnerViews(
   environmentId: EnvironmentId,
@@ -169,6 +194,7 @@ export function LabSummarySentence({
   readonly threadId: string | null;
   readonly segments: ReadonlyArray<LabSummarySegment>;
 }) {
+  useLabOwnerFamily(environmentId, threadId);
   return (
     <>
       {segments.map((segment) =>

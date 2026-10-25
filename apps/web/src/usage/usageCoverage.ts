@@ -1,15 +1,7 @@
 /**
- * Terminal-vs-pending classification of each environment's usage answer.
- *
- * A saved environment that is not connected never runs its usage query: the
- * underlying query atom waits for a connection indefinitely. Without looking
- * at the connection phase the page would count such an environment as "still
- * scanning" forever and never leave the loading skeleton. Classification is
- * pure so the offline rules can be tested directly.
- *
- * "Terminal" is per render, not sticky: if an unreachable environment later
- * connects, the presentations atom recomputes and the environment moves back
- * through `reporting` to `reported`.
+ * Terminal-vs-pending classification of each environment's usage answer. A disconnected saved
+ * environment never runs its usage query, so without the connection phase the page would wait on
+ * it forever. "Terminal" is per render, not sticky: a later connection moves it back to pending.
  *
  * @module usageCoverage
  */

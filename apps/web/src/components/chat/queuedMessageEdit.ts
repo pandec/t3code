@@ -16,14 +16,10 @@ import { randomUUID } from "~/lib/utils";
 import { applyMessageContextRestore, planMessageContextRestore } from "./messageContextRestore";
 
 /**
- * Keep an unsaved edit when its queued run leaves the queue (removed from
- * another client, or started after its edit hold lapsed). The edit is appended
- * to the thread's draft with its attachments, contexts and the message's
- * model, so nothing typed is lost even when that draft already has content.
- * Saved attachments the edit kept are restored separately because they have
- * to be downloaded (restoreQueuedEditAttachments, with the same
- * `savedAttachmentLocalIds`); chips for the message's own context records are
- * rebuilt on the thread's draft so they keep their payload.
+ * Keep an unsaved edit when its queued run leaves the queue by appending it to
+ * the thread's draft, even when that draft has content. Saved attachments must
+ * be downloaded, so restoreQueuedEditAttachments restores them separately with
+ * the same `savedAttachmentLocalIds`.
  */
 export function recoverQueuedMessageEdit(input: {
   readonly editTarget: ComposerThreadTarget;
@@ -76,11 +72,9 @@ export function recoverQueuedMessageEdit(input: {
   const prompt = [destination?.prompt ?? "", restoredContext?.text ?? edit.prompt]
     .filter((part) => part.trim().length > 0)
     .join("\n\n");
-  // Attachments move with their upload state, past the per-message limit if
-  // need be (sending still enforces it); the prompt keeps its inline
-  // references because the contexts they point at move along with it.
-  // The move replaces the destination's origin with the edit's; the merged
-  // prompt keeps voice provenance from either side.
+  // Attachments may exceed the per-message limit here (sending still enforces
+  // it); inline references stay valid because their contexts move too. The
+  // merged prompt keeps voice provenance from either side.
   const inputOrigin = edit.inputOrigin ?? destination?.inputOrigin;
   store.moveComposerPromptAndImages(input.editTarget, input.threadTarget, { allowOverflow: true });
   store.setPrompt(input.threadTarget, prompt, inputOrigin);

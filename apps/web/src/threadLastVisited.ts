@@ -83,12 +83,9 @@ export interface LastVisitedThreadShortcutOptions {
 }
 
 /**
- * Capture-phase handlers for the toggle chord. Once the chord resolves to the
- * command the keydown is always consumed, even when nothing opens: the
- * composer's suggestion list and the terminal must never see a stray Tab.
- * The matching keyup is consumed too, with or without Control still held,
- * because Ghostty reports key releases to Kitty-protocol sessions and would
- * otherwise send an orphan release for a press it never saw.
+ * Capture-phase handlers for the toggle chord. Once the chord resolves, keydown is always consumed
+ * so the composer and terminal never see a stray Tab. The keyup is consumed too, Control held or
+ * not: Ghostty reports releases to Kitty-protocol sessions and would send an orphan release.
  */
 export function createLastVisitedThreadShortcut(options: LastVisitedThreadShortcutOptions): {
   onKeyDown: (event: LastVisitedShortcutEvent) => void;

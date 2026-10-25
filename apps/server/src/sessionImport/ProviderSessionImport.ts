@@ -1,10 +1,7 @@
 /**
- * ProviderSessionImport — per-instance access to sessions a provider CLI
- * persisted outside T3 Code, for explicit session import and handover.
- *
- * Built by the Claude and Codex drivers over the instance's own home and
- * environment, so a listing, read or fork always targets the same transcripts
- * that instance resumes. `cwd` is always a canonical (realpath) directory.
+ * Per-instance access to sessions a provider CLI persisted outside T3 Code. Built
+ * over the instance's own home and environment so it targets the transcripts that
+ * instance resumes. `cwd` is always a canonical (realpath) directory.
  */
 import type { ClaudeSettings } from "@t3tools/contracts";
 import * as Effect from "effect/Effect";

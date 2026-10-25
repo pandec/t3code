@@ -183,15 +183,16 @@ Press **Escape** before releasing to cancel. Failed closes stay in the list so y
 GitHub, GitLab, and Azure DevOps support auto-merge while checks are outstanding. GitHub also
 supports approving waiting fork workflows and opening a revert pull request for a merged change.
 
-GitHub sharing is off by default. In Settings → Connections → GitHub sharing (Environments on mobile), choose
-**Read PRs** or **Read and act** for each environment you trust to share GitHub access.
+Pull request sharing is off by default. In Settings → Connections → Pull request sharing (Pull
+request routing under Environments on mobile), choose **Read PRs** or **Read and act** for each
+environment you trust to share its source control access.
 Enable both the original environment and the environment answering its requests on this client.
-**Read and act** can use broader GitHub permissions than the original environment's credential;
+**Read and act** can use broader permissions than the original environment's credential;
 only enable it for environments you control and trust. Changing a saved endpoint or removing an
 environment clears its permission.
 
-GitHub review details, linked PR status, and permitted review actions can then use another
-connected environment signed in to the same GitHub account. Both the original environment and
+Review details, linked PR status, and permitted review actions can then use another connected
+environment signed in to the same account on the same host. Both the original environment and
 the one answering need a project whose checkout still exists and points at that same repository;
 a project for a different repository on the same host is not enough.
 A connected local environment is preferred for actions and can answer slow or failed reads.
@@ -282,7 +283,8 @@ The **Linked pull requests** panel lists every review and groups stacks. Unlink 
 row menu. An unlinked stack layer stays out of later syncs. Open linked reviews refresh on the server;
 closed reviews refresh periodically so reopening one on the host is detected. Merged reviews refresh
 when requested. A settled thread's reviews stop refreshing until you unsettle it. With **Auto-settle merged threads** enabled, a thread can settle after every linked
-review is terminal. An open or unsynced link keeps it active.
+review is terminal. An unsynced link always keeps it active; an open one follows the
+inactivity settlement policy (see **Keep threads with a PR** in Settings → General).
 
 Ask the agent to watch, monitor, or babysit a pull request and it calls `watch_pull_request`. While
 the thread is active, the server checks the pull request every two minutes and wakes the agent when a

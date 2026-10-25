@@ -1,15 +1,8 @@
 /**
- * OpenRouter account-credits reader.
- *
- * The balance is account-wide, so it lives outside the per-instance
- * provider-usage pipeline: one API key per environment, stored in the
- * server's secret store, read with `GET /api/v1/credits`. OpenRouter caches
- * the endpoint's values for about a minute, so the reader keeps its own
- * 60-second cache and reads are always safe to issue on popover open.
- *
- * Cache and single-flight state are process-wide, not per-closure: the WS
- * handler layer is built per connection, and two clients opening their usage
- * popovers must share one upstream request, not race two.
+ * OpenRouter account-credits reader. OpenRouter caches the endpoint for about a
+ * minute, so a matching 60-second cache makes reads safe on every popover open.
+ * Cache and single-flight state are process-wide because the WS handler layer is
+ * built per connection and concurrent clients must share one upstream request.
  */
 import type { OpenRouterCreditsResult, OpenRouterCreditsSnapshot } from "@t3tools/contracts";
 import * as Cause from "effect/Cause";

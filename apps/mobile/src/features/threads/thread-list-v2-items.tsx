@@ -113,6 +113,12 @@ const STATUS_LABEL_BY_STATUS: Partial<Record<ThreadListV2Status, StatusLabel>> =
     className: "text-adaptive-indigo-600-300",
     iconTintClassName: "accent-adaptive-indigo-600-300",
   },
+  request: {
+    label: "Request",
+    icon: "person.crop.circle",
+    className: "text-adaptive-fuchsia-600-300",
+    iconTintClassName: "accent-adaptive-fuchsia-600-300",
+  },
   working: {
     label: "Working",
     icon: "circle.dashed",
@@ -190,15 +196,9 @@ const SNOOZED_MENU_ACTIONS: MenuAction[] = [
 const SIDEBAR_V2_ROW_RADIUS = 12;
 
 /**
- * The project accent as a flat tint layered over the row's own background,
- * mirroring web's `color-mix` overlay. Null accent renders nothing, and a
- * selected row keeps its solid selection fill — the accent identifies the
- * project, selection identifies the open thread, and the second must win.
- *
- * The device's tint settings are read here rather than threaded through every
- * row: this is the one place a tint is painted, so it is also where the tint
- * opt-out is enforced. Accent resolution stays ungated on purpose — with tints
- * off the group-header dot still carries the project's color.
+ * The project accent as a flat tint over the row background (web's `color-mix`); a selected row
+ * keeps its solid fill, since selection must win. Tint settings are read here, the one place a tint
+ * is painted, so the opt-out is enforced here; accent resolution stays ungated for header dots.
  */
 function AccentTintOverlay(props: {
   readonly accentColor: string | null;
@@ -675,11 +675,9 @@ export const ThreadListV2Row = memo(function ThreadListV2Row(props: {
   readonly providerInstance: ThreadRowProviderInstance | null;
   readonly environmentLabel: string | null;
   readonly environmentMachine?: EnvironmentMachineKind;
-  /** Hosting surface. "screen" (default) renders the compact Home idiom:
-      flat edge-to-edge rows on the screen background with inset hairlines.
-      "sidebar" renders the iPad split-view idiom: rounded rows blending
-      into the drawer surface, selection filled with the accent color —
-      matching the sidebar rows. */
+  /** "screen" (default) is compact Home: flat edge-to-edge rows with inset hairlines.
+      "sidebar" is the iPad split view: rounded rows on the drawer surface, selection filled
+      with the accent color. */
   readonly pane?: "screen" | "sidebar";
   readonly showTrailingDivider?: boolean;
   readonly selected?: boolean;
@@ -754,6 +752,7 @@ export const ThreadListV2Row = memo(function ThreadListV2Row(props: {
   const pinnedRow = props.pinned === true;
   const dormant = useSwipeRowDormant(props.activationKey);
 
+  const selectThread = () => onSelectThread(thread);
   const { providerDrivers, providerIconUrl } = useMemo(() => {
     const provider = props.providers?.find(
       (candidate) =>
@@ -886,10 +885,7 @@ export const ThreadListV2Row = memo(function ThreadListV2Row(props: {
   );
   const handleSettle = useCallback(() => onSettleThread(thread), [onSettleThread, thread]);
   const [customSnoozeOpen, setCustomSnoozeOpen] = useState(false);
-  // A recycled cell reassigns this mounted row to a different thread without
-  // remounting it, and the render closure stops running while list equality
-  // says the item is unchanged — so any row-local UI state must be dismissed
-  // when the identity under it changes.
+  // Recycling changes identity without remounting; clear local UI directly because equality may skip the render closure.
   const rowIdentity = `${thread.environmentId}:${thread.id}`;
   const [boundIdentity, setBoundIdentity] = useState(rowIdentity);
   if (boundIdentity !== rowIdentity) {
@@ -1504,8 +1500,7 @@ export const ThreadListV2Row = memo(function ThreadListV2Row(props: {
             accessibilityRole="button"
             accessibilityLabel={prBadgeLabel ?? undefined}
             onPress={handleOpenPullRequests}
-            // Without a long-press handler a hold that opens the row's iOS
-            // context menu would also open the pull request on release.
+            // Handle long-press so opening the iOS row menu cannot also open the PR on release.
             onLongPress={() => undefined}
             style={({ pressed }) => ({ opacity: pressed ? 0.6 : 1 })}
           >
@@ -1612,7 +1607,7 @@ export const ThreadListV2Row = memo(function ThreadListV2Row(props: {
         }}
         onPress={() => {
           close();
-          onSelectThread(thread);
+          selectThread();
         }}
         style={rowAppearance.cardStyle}
       >
@@ -1649,7 +1644,7 @@ export const ThreadListV2Row = memo(function ThreadListV2Row(props: {
         onAccessibilityAction={onListeningAccessibilityAction}
         onPress={() => {
           close();
-          onSelectThread(thread);
+          selectThread();
         }}
         style={rowAppearance.style}
       >

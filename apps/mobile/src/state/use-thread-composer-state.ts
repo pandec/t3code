@@ -163,10 +163,7 @@ export function appendReviewCommentToDraft(input: {
   }
 }
 
-/**
- * Resolved per call rather than captured, so a callback created before the
- * edit began still writes to the right place.
- */
+/** Resolve per call so callbacks created before editing still target the current draft. */
 function activeComposerDraftKey(thread: {
   readonly environmentId: EnvironmentId;
   readonly id: ThreadId;
@@ -329,12 +326,9 @@ export function useThreadComposerState() {
   const stagedThreadSettings = useStagedThreadSettings(selectedThreadKey);
   const selectedThreadQueueCount = selectedThreadQueuedMessages.length;
   const selectedThread = selectedThreadShell;
-  // Fork: the pickers follow the thread's live settings. A pick is staged for
-  // this session only and holds while the thread still has the value it was
-  // made against; once the thread moves on, the pick expires for good, so a
-  // later return to that value (another client, a plan follow-up) cannot
-  // revive it. The ref gives the picker callbacks the thread to stage
-  // against without changing their identity on every thread update.
+  // Fork: a picker pick holds only while the thread still has the value it was made against;
+  // once the thread moves on it expires for good, so a later return to that value cannot revive
+  // it. The ref keeps the picker callbacks' identity stable across thread updates.
   const latestThreadRef = useRef(selectedThread);
   useEffect(() => {
     latestThreadRef.current = selectedThread;
@@ -434,11 +428,9 @@ export function useThreadComposerState() {
     ? deriveProviderSubagentStatus(selectedThreadProjection.projection)
     : null;
 
-  // The server holds a message while it is open here, but it can still be
-  // removed from another client, or start once an abandoned hold lapses. Leave
-  // edit mode rather than saving into a run the server will refuse, and append
-  // an unsaved edit to the thread's draft with its attachments, context and
-  // model instead of dropping it.
+  // The server holds an open message, but another client can remove it or an abandoned hold can
+  // lapse. Leave edit mode rather than saving into a run the server will refuse, and append an
+  // unsaved edit (attachments, context, model) to the thread's draft instead of dropping it.
   const selectedThreadRuns = selectedThreadProjection?.projection.runs;
   const editedRunId = queuedRunEdit?.runId ?? null;
   useEffect(() => {
@@ -556,7 +548,6 @@ export function useThreadComposerState() {
     const draft = getComposerDraftSnapshot(queuedEditDraftKey(threadKey, edit.runId));
     const text = draft.text.trim();
     if (text.length === 0) {
-      // The server rejects an empty queued message, attachments or not.
       Dialog.alert("Add a message", "A queued message cannot be left empty.");
       return;
     }
@@ -645,9 +636,7 @@ export function useThreadComposerState() {
     if (!selectedThreadShell) {
       return null;
     }
-    // The server has not created this thread yet. Queuing a follow-up against
-    // its id would strand the message: if the creation is rejected the thread
-    // never appears and the drain drops the orphan. The composer disables its
+    // Before thread creation succeeds, follow-ups could become orphaned and be dropped by the drain.
     if (selectedThreadCreation !== null) {
       return null;
     }
@@ -677,10 +666,7 @@ export function useThreadComposerState() {
     if (text.length === 0 && attachments.length === 0) {
       return null;
     }
-    // A send-failure restore appends with allowOverflow so it never drops the
-    // user's files, which can leave the draft over the cap. Sending it anyway
-    // would enqueue a message that outbox recovery rejects forever, so block
-    // here until the user removes attachments.
+    // Recovery preserves over-cap attachments; require trimming or outbox delivery would reject indefinitely.
     if (attachments.length > PROVIDER_SEND_TURN_MAX_ATTACHMENTS) {
       Dialog.alert(
         "Too many attachments",
@@ -823,12 +809,9 @@ export function useThreadComposerState() {
       }
     }
 
-    // Resolved here rather than at drain time: the outbox can deliver minutes
-    // later, and the choice belongs to the moment the user pressed send.
-    // Steering travels as "auto" so a turn that ends in the meantime degrades
-    // to a queued run on the server instead of failing the delivery and
-    // bouncing the message back into the draft.
-    // A redirect declined approvals to steer the waiting turn, not to queue behind it.
+    // Resolve at send time because outbox delivery may be delayed.
+    // Steering uses "auto" so an ended turn queues a run instead of restoring the draft.
+    // An approval redirect must steer the waiting turn instead of queueing behind it.
     const activeTurnDefault = beforeDispatch !== undefined ? "steer" : followUpBehavior;
     const followUpAction = resolveComposerDispatchMode({
       running: activeThreadBusy && canSteerActiveTurn,
@@ -868,10 +851,7 @@ export function useThreadComposerState() {
     enqueuePromise.then(
       () => scheduleUnusedComposerAttachmentCleanup(attachments),
       (error: unknown) => {
-        // Restore text via merge (idempotent) but attachments via the uncapped
-        // append: the merge path slots existing attachments first and truncates
-        // at the send limit, which would silently drop this message's images if
-        // the user attached new ones while the write was in flight.
+        // Restore with uncapped append; capped merge could drop attachments added during the failed write.
         void mergeComposerDraftContent(threadKey, {
           text,
           ...(draft.inputOrigin ? { inputOrigin: draft.inputOrigin } : {}),

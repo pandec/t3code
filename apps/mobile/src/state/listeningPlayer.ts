@@ -15,11 +15,9 @@ import {
 } from "./listeningPlayback";
 
 /**
- * The app-scoped player behind every listening version and voice reply.
- * Living at module scope (not in a message row) lets audio keep playing
- * while the user navigates anywhere in the app; rows are views over it.
- * Kept out of listeningPlayback.ts so the coordinator wrapper stays free of
- * native expo-audio imports and runs under node tests.
+ * Module scope (not a message row) keeps audio playing while the user navigates; rows are views
+ * over it. Kept out of listeningPlayback.ts so that wrapper stays free of native expo-audio
+ * imports and runs under node tests.
  */
 let sharedPlayer: AudioPlayer | null = null;
 let loadedUrl: string | null = null;
@@ -85,11 +83,9 @@ function ensureSharedPlayer(): AudioPlayer {
   if (sharedPlayer !== null) return sharedPlayer;
   const player = createAudioPlayer(null, { updateInterval: 250 });
   player.addListener("playbackStatusUpdate", (status) => {
-    // Native lock-screen play, pause, and seek actions emit this same status,
-    // so every app surface stays bound to the native player's real state.
-    // Position goes out before the playing flag: the at-rest state is derived
-    // when the flag flips, and a finish pins the position to the end because
-    // the native player's final reported position can fall short of it.
+    // Lock-screen actions emit this same status, so surfaces stay bound to the native state.
+    // Position goes out before the playing flag, which derives the at-rest state; a finish pins
+    // the position to the end because the native final position can fall short of it.
     const duration = Number.isFinite(status.duration) ? status.duration : 0;
     listeningPlayback.setProgress(
       status.didJustFinish
@@ -116,10 +112,8 @@ function ensureSharedPlayer(): AudioPlayer {
 }
 
 /**
- * Loads (or resumes) a recording on the shared player and starts playback.
- * Rows always pass their freshest signed URL: a re-signed URL for the loaded
- * recording is swapped in with the position restored (or replayed from the
- * start when the old one had finished), which covers token expiry across
+ * Rows always pass their freshest signed URL: a re-signed URL for the loaded recording is swapped
+ * in with the position restored (or replayed when finished), which covers token expiry across
  * long pauses without a dedicated refresh path.
  */
 export async function playListeningTrack(input: {

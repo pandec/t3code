@@ -303,12 +303,9 @@ const main = Effect.fn("iosTestFlight.main")(function* () {
     ...buildEnv,
     API_PRIVATE_KEYS_DIR: path.dirname(keyPath),
   };
-  // There is deliberately no credential preflight here. altool rejects API-key
-  // authentication for every command that would serve as one
-  // ("list-providers does not support APIKey authentication"), so such a check
-  // fails the run before it starts. Credentials are exercised seconds into the
-  // archive instead, when -allowProvisioningUpdates contacts the developer
-  // portal — long before the expensive compile.
+  // No credential preflight: altool rejects API-key auth for every command that could serve as
+  // one. Credentials are exercised early in the archive, when -allowProvisioningUpdates contacts
+  // the developer portal, long before the expensive compile.
 
   for (const target of cleanupTargets) {
     yield* fs.remove(target.path, { recursive: target.recursive, force: true });
@@ -321,20 +318,14 @@ const main = Effect.fn("iosTestFlight.main")(function* () {
     env: buildEnv,
   });
 
-  // Xcode build phases mutate ios/Pods (prebuilt-core probe markers, regenerated
-  // ExpoModulesProvider files), so the fingerprint expo-updates would embed
-  // mid-archive never matches the one `eas update` computes from a clean
-  // prebuild. Pin the embedded value to the clean post-prebuild state — the same
-  // state every later `eas update` run reproduces — via the override EAS Build
-  // itself uses. Only fork EAS builds have updates enabled, so skip otherwise.
+  // Xcode build phases mutate ios/Pods, so the fingerprint embedded mid-archive never matches what
+  // `eas update` computes from a clean prebuild. Pin it to the clean post-prebuild state via EAS
+  // Build's own override. Only fork EAS builds have updates enabled.
   let fingerprintEnv: Readonly<Record<string, string>> = {};
   if (repoEnv.T3CODE_EAS_PROJECT_ID?.trim()) {
     yield* Effect.log("[ios-testflight] Computing the update fingerprint...");
-    // Strip the build number: it flows into the resolved expo config, which the
-    // fingerprint hashes, so leaving it set would mint a unique runtime version
-    // per build that no later `eas update` run (which has no build number) can
-    // ever reproduce. The native Info.plist copy is already in the
-    // fingerprinter's default ignores.
+    // Strip the build number: the fingerprint hashes the resolved expo config, so keeping it would
+    // mint a per-build runtime version that no later `eas update` (no build number) reproduces.
     const fingerprintGenerateEnv = { ...buildEnv, T3CODE_IOS_BUILD_NUMBER: undefined };
     const fingerprintJson = yield* spawner
       .string(

@@ -20,12 +20,9 @@ import {
 } from "./composerAttachment.ts";
 
 /**
- * Helpers for the clients' pre-acceptance outboxes: messages the server has not
- * accepted yet (offline, reload). After acceptance the server queue owns them.
- *
- * The fork stored a client-owned outbox (schema versions 1-9) under the same
- * keys/directories the v2 outboxes use. Those rows are decoded here once and
- * rewritten in each client's current shape.
+ * Helpers for the clients' pre-acceptance outboxes (messages the server has not accepted yet);
+ * after acceptance the server queue owns them. The fork's legacy client-owned outbox (schema
+ * versions 1-9) shares the v2 keys/directories and is decoded here once into each client's shape.
  */
 
 const LegacyQueuedThreadCreationSchema = Schema.Struct({

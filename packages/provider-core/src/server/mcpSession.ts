@@ -1,13 +1,9 @@
 import type { EnvironmentId, ProviderInstanceId, ThreadId } from "@t3tools/contracts";
 
 /**
- * Per-call budget the provider CLI gives a `t3-code` MCP tool before it
- * abandons the request. Claude Code and Codex both default to 60 seconds,
- * which `voice_reply` outlives: speech synthesis is allowed two minutes per
- * request, and a Gemini script of a few thousand characters routinely needs
- * more than a minute. Progress heartbeats do not extend either client's
- * limit, so the budget must cover the longest handler outright. Four minutes
- * clears synthesis and a simulator boot with room to spare.
+ * Per-call budget the provider CLI gives a `t3-code` MCP tool. Claude Code and Codex default to
+ * 60s, which `voice_reply` outlives (synthesis may take two minutes), and progress heartbeats do
+ * not extend it, so this must cover the longest handler outright.
  */
 export const MCP_TOOL_CALL_TIMEOUT_MS = 240_000;
 
@@ -18,11 +14,7 @@ export interface McpProviderSessionConfig {
   readonly providerInstanceId: ProviderInstanceId;
   readonly endpoint: string;
   readonly authorizationHeader: string;
-  /**
-   * Adapters read it to keep developer instructions truthful: when the user
-   * withholds agent browser access, the prompt must not advertise `preview_*`
-   * tools that every call would reject.
-   */
+  /** Omit preview_* instructions when the user withholds agent browser access. */
   readonly browserToolsAvailable: boolean;
   /**
    * The toolkits the credential grants; orchestration, worktree and pull

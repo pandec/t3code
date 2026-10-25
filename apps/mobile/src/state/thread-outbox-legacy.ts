@@ -3,11 +3,9 @@ import { decodeLegacyQueuedThreadMessage } from "@t3tools/client-runtime/state/t
 import { decodeQueuedThreadMessage, type QueuedThreadMessage } from "./thread-outbox-model";
 
 /**
- * Decodes one stored outbox row. Rows the fork's client-owned outbox wrote
- * (schema versions 5-9, or inline images without a stored preview) are
- * converted to the current row; `migrated` tells storage to rewrite the file
- * once. The fork's delivery intent becomes the dispatch mode; its grace
- * anchor and settings fallback have no v2 meaning and are dropped.
+ * Rows the fork's client-owned outbox wrote (schema 5-9, or inline images without a stored
+ * preview) convert to the current row; `migrated` tells storage to rewrite the file once. Their
+ * delivery intent becomes the dispatch mode; the grace anchor and settings fallback are dropped.
  */
 export function decodeStoredOrLegacyQueuedThreadMessage(value: unknown): {
   readonly message: QueuedThreadMessage;

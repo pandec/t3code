@@ -11,11 +11,9 @@ import { readWavPcm } from "./wavAudio.ts";
 const MP3_FALLBACK_BIT_RATE = 128_000;
 
 /**
- * Playable length of a stored recording, derived from its bytes so clients
- * can show the total before the audio loads. WAV is exact from the header.
- * MP3 uses the first frame's bit rate as a constant-bit-rate estimate, the
- * same assumption the join helper makes, after dropping a leading ID3 tag.
- * The player corrects the clock from the loaded file if the estimate is off.
+ * Playable length from the bytes, so clients show it before the audio loads. WAV
+ * is exact; MP3 assumes constant bit rate from the first frame, as the join
+ * helper does. The player corrects the clock once the file loads.
  */
 export function estimateSpeechDurationMs(bytes: Uint8Array, mimeType: SpeechAudioMimeType): number {
   if (mimeType === "audio/wav") {

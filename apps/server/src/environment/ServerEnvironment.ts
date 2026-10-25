@@ -202,11 +202,9 @@ export const make = Effect.gen(function* () {
   const advertisedServerSelfUpdate =
     desktopAppUpdateDisabled && serverSelfUpdate === "desktop-managed" ? null : serverSelfUpdate;
   const serverInstallation = serverSelfUpdate === null ? yield* resolveServerInstallation : null;
-  // Static is correct: the control fd is known at bootstrap, and the desktop
-  // app and its bundled server ship in one artifact, so a present fd means
-  // the app speaks the requestDesktopUpdate protocol. WSL backends never get
-  // the fd and correctly do not advertise. Packaged Dev sets the disable marker
-  // before spawning its backend so it cannot advertise production app updates.
+  // Desktop and server ship together; a control fd guarantees requestDesktopUpdate support.
+  // WSL backends never get the fd. Packaged Dev sets the disable marker before
+  // spawning its backend so it cannot advertise production app updates.
   const desktopAppUpdate =
     !desktopAppUpdateDisabled &&
     serverSelfUpdate === "desktop-managed" &&
@@ -292,9 +290,7 @@ export const make = Effect.gen(function* () {
 
   return ServerEnvironment.of({
     getEnvironmentId: Effect.succeed(environmentId),
-    // The publish opt-in and relay link change at runtime (`t3 connect
-    // publish`, the client settings toggle), so the capability is read per
-    // descriptor request rather than baked in at startup.
+    // Publishing opt-in and relay links change at runtime; read the capability per request.
     getDescriptor: readAgentActivityPublishingActive(secrets).pipe(
       Effect.map((agentActivityPublishing) => ({
         ...descriptor,

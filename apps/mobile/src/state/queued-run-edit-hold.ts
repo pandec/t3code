@@ -1,9 +1,7 @@
 /**
- * Holds every queued message open for editing on the server, so it cannot
- * start or be steered mid-edit. Edits outlive the thread screen (they are
- * keyed by thread), so the holds follow the edit records rather than a
- * screen. Each hold is renewed while its edit stays open and released when it
- * ends; the server lets it lapse on its own if the app is suspended.
+ * Holds each queued message open on the server while it is edited so it cannot start or be
+ * steered mid-edit. Holds follow the thread-keyed edit records, not a screen; each is renewed
+ * while open and released when it ends, and the server lets it lapse if the app is suspended.
  */
 import { useAtomValue } from "@effect/atom-react";
 import { parseScopedThreadKey } from "@t3tools/client-runtime/environment";

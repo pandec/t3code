@@ -1,12 +1,8 @@
 /**
- * Right-click actions for a workspace file: reveal it in the environment's
- * file manager, open it in an editor, and copy its path. Reuse the chat
- * file-chip menu's machinery: reveal rides `shell.openInEditor` with
- * `reveal: true`, which the server only honors when its
- * `shellRevealInFileManager` config flag is set. Every launch action runs on
- * the environment host, so they are offered only while the viewing machine is
- * that host, like the chip menu; opening an app on another computer helps
- * nobody. Copying needs only the path and is offered everywhere.
+ * Right-click file actions (reveal, open in editor, copy path) on the chip menu's machinery: reveal
+ * rides `shell.openInEditor` with `reveal: true`, honored only with `shellRevealInFileManager`.
+ * Launch actions run on the environment host, so they appear only when viewing from that host;
+ * copying needs only the path and is offered everywhere.
  */
 import {
   EDITORS,
@@ -183,14 +179,9 @@ export async function copyFilePathToClipboard(
   toastManager.add({ type: "success", title: `${noun} copied`, description: value });
 }
 
-/**
- * Wording for the reveal action, or undefined when it must stay hidden: the
- * server does not advertise it, the viewer is not on the host machine, or that
- * is not yet known (the unresolved remote-open state defaults to local, so a
- * remote environment would briefly offer reveal). The wording comes from the
- * server because on WSL the reveal can run through Windows File Explorer even
- * though the host reports Linux.
- */
+/** Reveal wording, or undefined while hidden: unadvertised, viewer off-host, or not yet known (the
+ * unresolved remote-open state defaults to local, so a remote environment would briefly offer it).
+ * Server wording because WSL can reveal through Windows Explorer while reporting Linux. */
 export function revealInFileManagerLabel(input: {
   readonly environmentId: EnvironmentId | null;
   readonly serverConfig: ServerConfig | null;

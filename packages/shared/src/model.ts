@@ -446,19 +446,9 @@ export function normalizeCustomModelSlug(model: string | null | undefined): stri
 }
 
 /**
- * Decode a LEGACY string custom-model entry. Before structured entries, the
- * fork stored `slug=Label` to pair a slug with a display-only label; existing
- * settings still carry that shape, so `readCustomModelEntries` routes every
- * string through here and `toCustomModelSetting` writes the structured form
- * back on the next save. An entry is either the model slug itself, or `slug=Label`. The
- * slug is what reaches the provider and is persisted in model selections;
- * the label only changes how the model is presented. Whitespace around
- * either part is trimmed, an entry with an empty slug is invalid, and an
- * empty label falls back to the slug.
- *
- * `=` is reserved as the separator, so a model id that itself contains `=`
- * can no longer be expressed as a bare entry — an accepted trade-off, since
- * no known provider uses `=` in model identifiers.
+ * Decode a legacy string custom-model entry: the slug itself or `slug=Label` (the label is display
+ * only and falls back to the slug; an empty slug is invalid). `toCustomModelSetting` writes the
+ * structured form back on save. `=` is reserved, so model ids containing it are unsupported.
  */
 export function parseCustomModelEntry(
   entry: string | null | undefined,
@@ -620,10 +610,7 @@ export function applyClaudePromptEffortPrefix(
   if (!trimmed) {
     return trimmed;
   }
-  // Prefixing a slash command turns it into plain prose, so Claude never
-  // runs it. Command names come from arbitrary file names ("/deploy.prod",
-  // "/plugin:skill"), so accept any first token without a second slash;
-  // absolute paths like "/home/theo/app.ts" keep the prefix.
+  // Prefixing slash commands prevents Claude invocation; command names allow any token without a second slash.
   if (effort !== "ultrathink" || /^\/[^\s/]+(?:\s|$)/u.test(trimmed)) {
     return trimmed;
   }

@@ -7,12 +7,9 @@ import type {
 import * as DateTime from "effect/DateTime";
 
 /**
- * Subscription rate-limit usage derived from server-owned usage snapshots
- * (gateway account pools). Providers report usage in undocumented, provider-specific
- * shapes that have already drifted between CLI releases, so everything here is
- * defensive: unknown window taxonomies fall back to readable labels instead of
- * being dropped, and payloads that carry no usable data yield no snapshot —
- * a percentage is never fabricated.
+ * Subscription rate-limit usage from server-owned snapshots. Provider payloads are undocumented
+ * and drift between CLI releases, so everything is defensive: unknown windows get readable labels
+ * rather than being dropped, and unusable payloads yield no snapshot, never a made-up percentage.
  */
 
 /** Windows at or above this usage render as a warning, unless overridden. */
@@ -154,13 +151,8 @@ function titleCase(value: string): string {
     .join(" ");
 }
 
-// Claude
-//
-// Window ids follow Claude's rateLimitType taxonomy ("five_hour", "seven_day", ...).
-// The taxonomy drifts between releases (the SDK type still lists
-// an Opus/Sonnet split that no longer exists, and a Fable weekly window exists
-// that predates the type), so unknown values are labelled heuristically, never
-// dropped.
+// Claude window ids follow its rateLimitType taxonomy ("five_hour", "seven_day", ...), which
+// drifts between releases, so unknown values are labelled heuristically, never dropped.
 
 const CLAUDE_WINDOW_LABELS: Record<string, { label: string; shortLabel: string }> = {
   five_hour: { label: "Session (5h)", shortLabel: "5h" },
@@ -194,19 +186,9 @@ function claudeWindowLabels(rateLimitType: string): { label: string; shortLabel:
   return { label: humanized, shortLabel: humanized };
 }
 
-// Claude structured /usage API
-//
-// The passive event stream omits utilization at normal usage levels, so the
-// adapter also pulls the structured `/usage` payload. Its `limits` array is the
-// authoritative source and the only place the model-scoped weekly window (e.g.
-// Fable) appears with a percentage:
-//   { kind: "weekly_scoped", group: "weekly", percent: 44, severity: "normal",
-//     resets_at: "2026-07-31T02:59:59Z", is_active: true,
-//     scope: { model: { display_name: "Fable" } } }
-// The sibling flat map (five_hour/seven_day/…) is the fallback for payloads
-// without `limits`; it also carries a long tail of codenamed placeholder
-// windows that are always null, so null entries must be skipped rather than
-// rendered.
+// Claude structured /usage API: the passive stream omits utilization at normal levels. Its
+// `limits` array is authoritative and the only source of model-scoped weekly windows (e.g. Fable).
+// The flat map (five_hour/seven_day/…) is the fallback; skip its always-null placeholder windows.
 
 function claudeUsageApiWindowLabels(
   kind: string,
@@ -375,14 +357,9 @@ function normalizeClaudeUsageApiPayload(payload: Record<string, unknown>): {
   };
 }
 
-// Codex
-//
-// The app-server notification is `{ rateLimits: { limitId?, limitName?,
-// primary?, secondary?, rateLimitReachedType?, ... } }`, and the adapter wraps
-// the whole notification once more, so a gateway usage payload can nest one or
-// two levels deep. Windows are `{ usedPercent, windowDurationMins?, resetsAt? }`
-// (camelCase, validated against the generated protocol schema server-side).
-// The 5h window is often absent — only render windows actually reported.
+// Codex: `{ rateLimits: { primary?, secondary?, ... } }`, possibly wrapped once more by the
+// adapter, so a gateway payload nests one or two levels deep. Windows are `{ usedPercent,
+// windowDurationMins?, resetsAt? }`. The 5h window is often absent; render only reported windows.
 
 /**
  * Codex reports a per-model-tier limit for the Spark tier as its own snapshot
@@ -505,12 +482,9 @@ function normalizeRateLimitPayload(
   const record = asRecord(payload);
   if (!record) return null;
 
-  // Two shapes reach here: a server-owned refresh snapshot, which IS the
-  // provider payload, and a wrapped gateway usage payload, which nests that
-  // same payload in `{ rateLimits: <provider event> }`. A payload that names its own `source`
-  // is already unwrapped — unwrapping it again would hand the Claude branch
-  // the inner `rate_limits` object and normalize to null. Codex refresh
-  // payloads carry no top-level `source`, so they still unwrap as before.
+  // A refresh snapshot IS the provider payload; a gateway payload wraps it in `{ rateLimits }`.
+  // A payload naming its own `source` is already unwrapped (unwrapping again would break Claude);
+  // Codex refresh payloads have no top-level `source` and still unwrap.
   const event = asString(record.source) !== null ? record : (asRecord(record.rateLimits) ?? record);
 
   // Checked before the Codex branch: the usage-API payload also nests a
@@ -579,16 +553,9 @@ type ProviderUsagePayloadSource = {
 };
 
 /**
- * Normalize one server-owned per-instance usage snapshot. The caller supplies
- * the instance's driver via `options.provider` (it already has it from the
- * provider list).
- *
- * A gateway snapshot (`cliproxyapi.management`) carries a pool of upstream
- * accounts rather than one; here it collapses to the featured account so
- * single-account surfaces (the ring) keep working — the full pool is
- * available through `deriveProviderUsageAccountsFromServerSnapshot`. Pass
- * `preferredUpstreamProvider` when the caller knows which upstream serves the
- * thread; see `featuredProviderUsageAccount`.
+ * Normalize one server-owned per-instance usage snapshot; `options.provider` is the instance's
+ * driver. A gateway pool collapses to the featured account for single-account surfaces (the full
+ * pool is in `deriveProviderUsageAccountsFromServerSnapshot`); see `featuredProviderUsageAccount`.
  */
 export function deriveProviderUsageSnapshotFromServerSnapshot(
   snapshot: Pick<ProviderInstanceUsageSnapshot, "instanceId" | "payload" | "observedAt">,
@@ -683,14 +650,9 @@ export function deriveProviderUsageSnapshotFromUsageLimits(
   );
 }
 
-// CLIProxyAPI gateway pools
-//
-// A provider instance backed by a CLIProxyAPI gateway reports one snapshot
-// carrying every pooled upstream account: `{ source: "cliproxyapi.management",
-// accounts: [{ id, label, provider, priority, state, planType?, usage,
-// error? }] }`. Each account's `usage` arrives in the matching direct
-// provider's payload shape, so per-account normalization reuses the dispatch
-// above verbatim.
+// CLIProxyAPI gateway pools: one snapshot `{ source: "cliproxyapi.management", accounts: [...] }`
+// per gateway-backed instance. Each account's `usage` arrives in its direct provider's payload
+// shape, so per-account normalization reuses the dispatch above.
 
 export const CLIPROXYAPI_USAGE_PAYLOAD_SOURCE = "cliproxyapi.management";
 
@@ -815,25 +777,10 @@ export function listProviderUsageAccountsForDisplay(
 }
 
 /**
- * The pooled account a compact single-account surface (the ring) should
- * represent: the highest-priority account of `preferredUpstreamProvider` that
- * the gateway can still serve — the one a *new* session's first turn would
- * bind to. An existing session can be spending a different account: the
- * gateway's session-affinity binding is sticky and outranks priority, which is
- * what the server-side thread-account probe reads.
- *
- * Two deliberate choices:
- *   - An account whose own usage read failed is still featured. Substituting a
- *     sibling's percentage would misreport the account being spent; the
- *     popover shows that account's error instead.
- *   - When every matching account is cooling down, the highest-priority
- *     cooled-down one is featured rather than nothing: a fully exhausted pool
- *     is exactly when the meter must be loudest, and returning null there
- *     would make it go dark instead of red.
- *
- * `preferredUpstreamProvider` of null means the caller cannot tell which
- * upstream serves this thread (e.g. a custom model on a mixed pool); feature
- * nothing rather than a quota the turn will not spend.
+ * The pooled account the ring represents: the highest-priority servable account of
+ * `preferredUpstreamProvider` (the one a new session binds to; sticky affinity may differ). An
+ * account with a failed read is still featured, and a fully cooled-down pool features its top
+ * account so the meter goes red, not dark. A null provider features nothing.
  */
 export function featuredProviderUsageAccount(
   accounts: ReadonlyArray<ProviderUsageAccount>,
@@ -861,15 +808,9 @@ export function providerUsageFableWindow(
 }
 
 /**
- * Severity the compact ring should paint itself.
- *
- * The ring's *value* is the primary (session) window, but its colour must not
- * hide an exhausted window that has no other passive signal — a spent weekly
- * would otherwise be invisible until the popover is opened.
- *
- * The exception is any window rendered separately: the Fable sub-ring already
- * shows Fable, and repainting the outer ring for it is exactly the hijacking
- * that moving Fable out of the ring was meant to end.
+ * Severity the compact ring paints. Its value is the session window, but its colour must not hide
+ * an exhausted window that has no other passive signal. Windows rendered separately (the Fable
+ * sub-ring) are excluded so they do not hijack the outer ring.
  */
 export function providerUsageRingStatus(
   snapshot: ProviderUsageSnapshot | null,
@@ -955,13 +896,9 @@ export function providerUsageUpstreamProviderLabel(provider: string): string {
 }
 
 /**
- * Presentation fields shared by every surface that renders a pooled gateway
- * account, so the two composers cannot drift apart on labelling.
- *
- * The account is named by its upstream provider, not its auth-file name: the
- * file name repeats the email and plan anyway, and the email is what a human
- * recognizes. A label that is not an email (nothing to recognize it by) moves
- * to the detail slot instead so the account stays identifiable.
+ * Presentation fields shared by every surface that renders a pooled gateway account. Accounts are
+ * named by upstream provider, with the email as the recognizable label; a non-email label moves
+ * to the detail slot so the account stays identifiable.
  */
 export function presentProviderUsageAccount(account: ProviderUsageAccount): {
   readonly displayName: string;
@@ -1181,13 +1118,9 @@ export function applyProviderUsageWindowThresholds(
 }
 
 /**
- * Re-evaluates a snapshot's severities against different warning/critical
- * thresholds. Percentage-derived severity is recomputed; a severity the
- * provider itself reported is a floor and survives untouched, as does the
- * severity of a window that carries a state but no percentage.
- *
- * Lets a surface honour user thresholds by reapplying them to an existing
- * snapshot instead of re-normalizing the gateway usage payload.
+ * Re-evaluates a snapshot's severities against other thresholds without re-normalizing the
+ * payload. Percentage-derived severity is recomputed; a provider-reported severity is a floor and
+ * survives, as does that of a window with a state but no percentage.
  */
 export function applyProviderUsageThresholds(
   snapshot: ProviderUsageSnapshot,
@@ -1213,12 +1146,9 @@ export function applyProviderUsageThresholds(
 }
 
 /**
- * The single window a compact surface (a ring, a pill) should represent.
- *
- * Prefers the session window and falls back to the weekly one — the session
- * window is the actionable near-term constraint, and it is often absent
- * (Codex reports weekly only today). Model-scoped windows have their own compact
- * indicator and never replace this session view.
+ * The single window a compact surface (a ring, a pill) represents: the session window, the
+ * actionable near-term constraint, else the weekly one (Codex reports weekly only). Model-scoped
+ * windows have their own compact indicator and never replace it.
  */
 export function primaryProviderUsageWindow(
   snapshot: ProviderUsageSnapshot,

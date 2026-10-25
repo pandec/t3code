@@ -1,14 +1,8 @@
 /**
- * Fork: deferred archive service. Schedules, inspects and cancels a thread's
- * deferred archive for MCP, CLI and other callers, and runs pending requests
- * once their run and background work finish (rules in DeferredArchive.ts).
- * Requests are thread state in the event log, so `start` re-checks every
- * pending request after a restart. A request with `removeWorktree` stays
- * pending after the archive until the guarded removal (ArchiveWorktreeRemoval)
- * records its outcome with `thread.archive.complete`. A restart continuation
- * holds a request until it settles; the effect worker then re-checks the
- * thread (`recheckAfterRestartContinuation`), since a declined continuation
- * emits no event.
+ * Fork: deferred archive service (rules in DeferredArchive.ts). `start` re-checks
+ * pending requests after a restart. A `removeWorktree` request stays pending until
+ * `thread.archive.complete`; a restart continuation is re-checked explicitly
+ * because a declined continuation emits no event.
  */
 import {
   CommandId,

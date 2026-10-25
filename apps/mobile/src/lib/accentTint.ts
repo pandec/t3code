@@ -1,12 +1,6 @@
 /**
- * Project accent tints for native rows.
- *
- * Web overlays the accent on a sidebar row as a flat ~12% tint over whatever
- * background the row already has (`color-mix` in CSS). React Native has no
- * color-mix, so the same effect is an absolutely-positioned overlay filled
- * with the accent at the equivalent alpha — the row keeps its own opaque
- * background, pressed/selected states still read, and the tint composites on
- * top exactly as it does on web.
+ * React Native has no `color-mix`, so web's flat ~12% row tint is an absolutely-positioned overlay
+ * filled with the accent at the equivalent alpha; the row keeps its own background and states.
  */
 import {
   clampAccentTintIntensityPercent,
@@ -36,13 +30,8 @@ export function resolveAccentTintAlphas(intensityPercent: number | undefined): A
 export const DEFAULT_ACCENT_TINT_ALPHAS = resolveAccentTintAlphas(undefined);
 
 /**
- * The alpha a row paints its accent wash at, or null when it paints none.
- *
- * The tint opt-out is gated here, at the wash, rather than at accent
- * resolution: switching tints off must not un-color the group-header dot, which
- * is the only thing still naming the project. Web draws the same line — its
- * per-row tint map is what empties, while the dot resolves the accent
- * unconditionally.
+ * The tint opt-out is gated at the wash, not at accent resolution, so switching tints off keeps
+ * the group-header dot that still names the project. Web draws the same line.
  */
 export function resolveRowAccentTintAlpha(input: {
   readonly enabled: boolean;

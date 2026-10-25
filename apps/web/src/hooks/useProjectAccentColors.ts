@@ -1,10 +1,7 @@
 /**
- * Web access to the cross-environment project accent colors.
- *
- * Accents are server settings (`ServerSettings.projectAccentColors`), one map
- * per environment, so the sidebar merges every connected environment on read
- * and fans a pick out to each environment owning a member of the group. See
- * `@t3tools/client-runtime/state/project-accent-colors` for the rules.
+ * Accents are server settings (`ServerSettings.projectAccentColors`), one map per
+ * environment: reads merge every connected environment and a pick fans out to each
+ * environment owning a group member. Rules: `@t3tools/client-runtime/state/project-accent-colors`.
  */
 import { useEffect, useRef, useState } from "react";
 import { useAtomValue } from "@effect/atom-react";
@@ -245,13 +242,9 @@ async function runProjectAccentColorMigration({
 }
 
 /**
- * Lazily migrates pre-server accent colors out of client settings.
- *
- * Runs whenever projects or connected environment settings change: an entry
- * can only move once its environment is connected AND its project is known,
- * and both arrive asynchronously. The plan is idempotent — migrated entries
- * leave the client map, and an entry whose server-side key already has a
- * color is dropped rather than overwriting it — so re-running is a no-op.
+ * Re-runs on project or settings changes, since an entry moves only once its environment
+ * is connected and its project is known. Idempotent: migrated entries leave the client
+ * map, and an entry whose server key already has a color is dropped, not overwritten.
  */
 export function useProjectAccentColorMigration(projects: ReadonlyArray<ProjectAccentSource>): void {
   const { accentColorsByEnvironment, fillCapableEnvironmentIds } = useAccentEnvironmentState();

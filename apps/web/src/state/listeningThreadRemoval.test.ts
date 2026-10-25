@@ -1,4 +1,4 @@
-import type { EnvironmentShellState } from "@t3tools/client-runtime/state/shell";
+import { EMPTY_SHELL_STATE, type EnvironmentShellState } from "@t3tools/client-runtime/state/shell";
 import { createListeningPlaybackCoordinator } from "@t3tools/shared/listeningPlayback";
 import type { OrchestrationV2ShellSnapshot } from "@t3tools/contracts";
 import * as Option from "effect/Option";
@@ -15,6 +15,7 @@ const track = {
 
 function shellState(threadIds: ReadonlyArray<string> | null): EnvironmentShellState {
   return {
+    ...EMPTY_SHELL_STATE,
     snapshot:
       threadIds === null
         ? Option.none()

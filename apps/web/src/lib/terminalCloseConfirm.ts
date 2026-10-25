@@ -8,15 +8,10 @@ export function isTerminalCloseConfirmPending(): boolean {
 }
 
 /**
- * Confirmation for individual terminal close actions: drawer buttons, panel
- * buttons, the `terminal.close` keybinding, and closing a terminal surface from
- * the tab strip. Auto-exit cleanup and bulk tab closes skip this path and close
- * directly.
- *
- * The `confirmTerminalClose` setting turns the prompt off. The pre-hydration
- * snapshot is the schema default, so a close early in a cold start would ask
- * even though the user turned the prompt off; awaiting hydration reads the
- * persisted answer instead.
+ * For individual closes (drawer/panel buttons, `terminal.close`, the tab strip);
+ * auto-exit cleanup and bulk tab closes skip it. Awaits hydration because the
+ * pre-hydration snapshot is the schema default and would prompt even when
+ * `confirmTerminalClose` is off.
  */
 export async function confirmTerminalClose(
   labels: readonly [string, ...string[]],

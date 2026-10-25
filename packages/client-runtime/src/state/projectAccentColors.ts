@@ -1,24 +1,7 @@
 /**
- * Project accent colors, shared by every client.
- *
- * Accents live in each server's `ServerSettings.projectAccentColors` rather
- * than in client-local settings, so a color picked in the desktop sidebar
- * shows up in the mobile thread list and on every other machine. That storage
- * choice drives the three rules in this module:
- *
- * - **Keys are machine-independent** (`deriveProjectAccentKey`). The map is
- *   persisted per environment, so a key containing an environmentId would be
- *   meaningless to every other client reading it. Git projects key by the
- *   repository canonical key — every worktree and checkout of a repo shares
- *   one color, which is the intended behavior — and non-git projects fall
- *   back to the normalized workspace path.
- * - **Reads merge across environments** (`resolveProjectAccentColor`).
- *   Project-owning environments win; other connected environments only fill
- *   gaps. Both tiers use the same stable ordering on every client.
- * - **Writes fan out** (`buildProjectAccentColorPatches`). Picking a color
- *   patches every connected environment that owns a member of the group, so
- *   the color becomes durable on each machine rather than on whichever one
- *   happened to be primary.
+ * Project accent colors, stored in each server's `ServerSettings.projectAccentColors` so they
+ * reach every client. Keys are machine-independent (repo canonical key, else workspace path);
+ * reads prefer project-owning environments in a stable order; writes fan out to every owner.
  */
 import type { EnvironmentId } from "@t3tools/contracts";
 import type { SidebarProjectAccentColor } from "@t3tools/contracts/settings";
@@ -217,14 +200,9 @@ export interface ProjectAccentColorMigrationPlan {
 }
 
 /**
- * Plans the one-shot migration of pre-server accent entries.
- *
- * Legacy entries live in `ClientSettings.sidebarProjectAccentColors`, keyed
- * `${environmentId}:${normalizedWorkspacePath}`. Each one is translated into
- * its project's environment server settings under the machine-independent
- * key. The caller consumes entries only after their write succeeds. An entry
- * whose target already has a new-style color needs no write and is safe to
- * consume immediately — the server map is authoritative once populated.
+ * Plans the one-shot migration of legacy `ClientSettings.sidebarProjectAccentColors` entries
+ * (keyed `${environmentId}:${normalizedWorkspacePath}`) into server settings. Callers consume an
+ * entry only after its write succeeds, or immediately when the target already has a color.
  */
 export function planProjectAccentColorMigration(input: {
   readonly clientAccentColors: ProjectAccentColorMap;

@@ -229,11 +229,7 @@ export function persistClientSettingsPatch(
   });
 }
 
-/**
- * If another settings write lands while persistence is pending, the updater is
- * reapplied to that newer snapshot and persisted again so neither change is
- * lost.
- */
+/** Reapply to newer snapshots after pending writes to avoid losing concurrent changes. */
 export async function persistClientSettingsUpdate(
   update: (current: ClientSettings) => ClientSettings,
   persist: (settings: ClientSettings) => Promise<void> = defaultClientSettingsPersistence,
@@ -279,10 +275,7 @@ export function getClientSettings(): ClientSettings {
   return getClientSettingsSnapshot();
 }
 
-/**
- * Failed reads reject and remain retryable. They must not allow defaults to overwrite saved
- * preferences.
- */
+/** Failed reads reject and remain retryable so defaults cannot overwrite saved preferences. */
 export function ensureClientSettingsHydrated(): Promise<void> {
   return hydrateClientSettings();
 }
@@ -306,11 +299,7 @@ export function useClientSettingsHydrationStatus(): ClientSettingsHydrationStatu
 const getDefaultClientSettings = () => DEFAULT_CLIENT_SETTINGS;
 const selectWholeClientSettings = (settings: ClientSettings) => settings;
 
-/**
- * The selection, not the whole snapshot, is what the store compares, so a write re-renders only
- * readers whose selected value changed. Selectors may build objects or arrays: a structurally
- * equal result keeps the previous reference.
- */
+/** Structurally equal selections retain their reference and skip rendering. */
 export function useClientSettings<T = ClientSettings>(
   selector?: (settings: ClientSettings) => T,
 ): T {
@@ -327,8 +316,7 @@ export function mergeEnvironmentSettings(
   serverSettings: ServerSettings,
   clientSettings: ClientSettings,
 ): UnifiedSettings {
-  // Decode drops retired client keys, but older untyped persistence adapters
-  // can still return them. Server-owned values must always win.
+  // Older untyped adapters can return retired client keys; server values must win.
   return {
     ...clientSettings,
     ...serverSettings,
@@ -378,7 +366,6 @@ export function useMigrateModelPreferences(
   }, [clientSettings, connectionGeneration, environmentId, hydrated, migrate, settings]);
 }
 
-/** Selecting inside the client store keeps a client write from re-rendering unaffected readers. */
 export function useMergedSettings<T = UnifiedSettings>(
   serverSettings: ServerSettings,
   selector?: (settings: UnifiedSettings) => T,
@@ -460,12 +447,7 @@ export function useEnvironmentIdentificationMode(): EnvironmentIdentificationMod
   });
 }
 
-/**
- * Held at the default sidebar until client settings hydrate: the pre-hydration snapshot is just
- * the schema defaults, so resolving against it could mount one sidebar and then swap it out
- * once persisted settings land — remounting the whole tree for everyone instead of only for
- * legacy opt-ins.
- */
+/** Wait for hydration: swapping sidebar implementations after mount remounts the whole tree. */
 export function useLegacySidebarEnabled(): boolean {
   const settingsHydrated = useClientSettingsHydrated();
   const legacySidebarEnabled = useClientSettings((settings) => settings.legacySidebarEnabled);
@@ -543,7 +525,6 @@ export function useToggleEnvironmentModelFavorite(environmentId: EnvironmentId |
       pending: true,
     };
     pendingFavorites.current.set(key, pending);
-    // save settles into a result and never rejects, so the rollback below always runs.
     const result = await save({
       setModelFavorites: [{ provider, model, favorite: pending.favorite }],
     });
@@ -614,11 +595,7 @@ export function usePrimarySettings<T = UnifiedSettings>(
 export const PRIMARY_SETTINGS_UNAVAILABLE_MESSAGE =
   "This setting is saved on a server, and the hosted app is not anchored to one. Change it from the desktop app or from the server's own address.";
 
-/**
- * The hosted app connects to every environment as a remote, so it has no
- * primary: `usePrimarySettings` reads schema defaults there and writes have
- * nowhere to go.
- */
+/** Hosted clients have no primary: usePrimarySettings reads defaults and cannot write. */
 export function usePrimarySettingsAvailable(): boolean {
   const primaryEnvironment = usePrimaryEnvironment();
   return primaryEnvironment !== null || !isHostedStaticApp();
@@ -632,8 +609,7 @@ function useSharedSettingsSyncTargetIds(includePending = false): ReadonlyArray<E
   const results = useAtomValue(environmentSessionStatesAtom(environmentIdsKey(targetIds)));
   return targetIds.flatMap((environmentId, index) => {
     const result = results[index]!;
-    // A cold grant must not drop a shared edit. The server authorizes the
-    // write; mismatch suggestions still wait for a confirmed grant.
+    // Let the server authorize shared edits with cold grants; suggestions still need confirmed grants.
     if (includePending && result._tag === "Initial") {
       return [environmentId];
     }
@@ -645,12 +621,9 @@ function useSharedSettingsSyncTargetIds(includePending = false): ReadonlyArray<E
 }
 
 /**
- * Returns an updater that routes each key to the correct backing store.
- *
- * Server keys are persisted via RPC and reflected by the config stream. Shared server keys (see `SHARED_SERVER_SETTING_KEYS`)
- * are written to every eligible sync target, not only the selected target, so
- * a user preference does not silently drift between machines. Client keys go
- * through client persistence.
+ * Server keys persist via RPC and return through the config stream; shared server keys
+ * (`SHARED_SERVER_SETTING_KEYS`) go to every eligible sync target so preferences do not
+ * drift between machines. Client keys go through client persistence.
  */
 function useUpdateSettingsTarget(environmentId: EnvironmentId | null) {
   useEnvironmentScope(environmentId, AuthSettingsWriteScope);
@@ -799,11 +772,9 @@ export function useUpdateEnvironmentSettings(environmentId: EnvironmentId | null
 }
 
 /**
- * Fan-out updater: the target environment is chosen per call rather than per
- * hook, so one interaction can patch several servers at once (project accent
- * colors write to every environment owning a member of the group). Hooks
- * cannot be called in a loop, which rules out `useUpdateEnvironmentSettings`
- * for that shape.
+ * The target environment is chosen per call so one interaction can patch several
+ * servers (accent colors write to each environment owning a group member); hooks cannot
+ * be called in a loop, which rules out `useUpdateEnvironmentSettings` here.
  */
 export function useUpdateSettingsForEnvironment() {
   const persistServerSettings = useAtomCommand(

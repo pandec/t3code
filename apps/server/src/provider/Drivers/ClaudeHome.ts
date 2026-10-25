@@ -19,11 +19,9 @@ export const resolveClaudeHomePath = Effect.fn("resolveClaudeHomePath")(function
 });
 
 /**
- * Resolve the directory Claude uses for config and persisted project sessions:
- * `homePath`, then the environment's `CLAUDE_CONFIG_DIR` (a shadow dir when
- * the environment came from `makeClaudeEnvironment`), then `HOME/.claude`,
- * with relative inherited values resolved against `cwd`. This is the single
- * owner of that precedence; callers derive from it rather than re-deriving it.
+ * Single owner of Claude's config/session dir precedence: `homePath`, then the environment's
+ * `CLAUDE_CONFIG_DIR` (a shadow dir from `makeClaudeEnvironment`), then `HOME/.claude`, with
+ * relative inherited values resolved against `cwd`. Callers derive from it, never re-derive it.
  */
 export const resolveClaudeConfigDirPath = Effect.fn("resolveClaudeConfigDirPath")(function* (
   config: Pick<ClaudeSettings, "homePath">,
@@ -49,13 +47,10 @@ export const resolveClaudeConfigDirPath = Effect.fn("resolveClaudeConfigDirPath"
 });
 
 /**
- * Resolve the account-specific shadow config dir, or undefined when the
- * instance runs directly on its shared config dir. When set, the spawned CLI
- * receives the shadow dir as `CLAUDE_CONFIG_DIR` — giving it its own
- * credential slot (macOS keychain entries and Linux `.credentials.json` are
- * both keyed by the config dir) — while `materializeClaudeShadowHome`
- * symlinks session state back to the shared dir so continuation crosses
- * accounts.
+ * The account-specific shadow config dir, or undefined on the shared dir. The CLI gets it as
+ * `CLAUDE_CONFIG_DIR`, its own credential slot (macOS keychain entries and Linux
+ * `.credentials.json` are keyed by config dir), while `materializeClaudeShadowHome` symlinks
+ * session state back to the shared dir so continuation crosses accounts.
  */
 export const resolveClaudeShadowConfigDirPath = Effect.fn("resolveClaudeShadowConfigDirPath")(
   function* (
@@ -75,11 +70,7 @@ export const makeClaudeEnvironment = Effect.fn("makeClaudeEnvironment")(function
   // Keep the instance environment independent of later process environment changes.
   const environment = { ...(baseEnv ?? process.env) };
   // Isolate this instance's config via CLAUDE_CONFIG_DIR rather than HOME.
-  // Overriding HOME also relocates the macOS login keychain lookup
-  // ($HOME/Library/Keychains), so the spawned CLI can't find its stored
-  // OAuth credentials and reports "Not logged in". CLAUDE_CONFIG_DIR points
-  // Claude Code at its config dir directly while leaving HOME (and the
-  // keychain) intact.
+  // Changing HOME hides macOS Keychain credentials; use CLAUDE_CONFIG_DIR to keep login access.
   const shadowConfigDirPath = yield* resolveClaudeShadowConfigDirPath(config);
   if (shadowConfigDirPath !== undefined) {
     // The shadow dir wins over homePath: the CLI must read this account's
@@ -112,12 +103,7 @@ export const makeClaudeHistoryEnvironment = Effect.fn("makeClaudeHistoryEnvironm
   };
 });
 
-/**
- * While it exists Claude refuses `--strict-mcp-config` and exits before
- * initializing, but it already ignores user, project and `--mcp-config` servers
- * on its own, so callers that pass the flag for isolation can drop it. Paths
- * match the ones Claude Code checks.
- */
+/** managed-mcp.json excludes other MCP config and forbids --strict-mcp-config; omit the flag when present. */
 export const hasClaudeManagedMcpConfig = Effect.fn("hasClaudeManagedMcpConfig")(function* () {
   const fileSystem = yield* FileSystem.FileSystem;
   const platform = yield* HostProcess.Platform;
@@ -174,10 +160,7 @@ export const makeClaudeCapabilitiesCacheKey = Effect.fn("makeClaudeCapabilitiesC
   },
 );
 
-/**
- * Describe the spawned CLI's environment separately from the login command so
- * paths remain literal on every shell, including relative inherited values.
- */
+/** Separate spawn env from login commands to preserve literal paths, including relative inherited values. */
 export const claudeSignedOutMessage = (input: {
   readonly configDir: string | undefined;
   readonly cwd: string;

@@ -28,27 +28,16 @@ export class ProviderInstanceRegistry extends Context.Service<
       instanceId: ProviderInstanceId,
     ) => Effect.Effect<ProviderInstance | undefined>;
     /**
-     * The raw settings envelope (config + environment) the instance was built
-     * from, for callers that need settings not carried by the driver-created
-     * `ProviderInstance` (e.g. Claude config dirs for workflow-script roots).
-     *
-     * Optional so test doubles of this service need not implement it; the live
-     * registry always provides it, and callers treat an absent method as
-     * "no envelope".
+     * The raw settings envelope the instance was built from. Optional only for
+     * test doubles; the live registry always provides it, and callers treat an
+     * absent method as "no envelope".
      */
     readonly getInstanceConfig?: (
       instanceId: ProviderInstanceId,
     ) => Effect.Effect<ProviderInstanceConfig | undefined>;
     readonly listInstances: Effect.Effect<ReadonlyArray<ProviderInstance>>;
     readonly listUnavailable: Effect.Effect<ReadonlyArray<ServerProvider>>;
-    /**
-     * NOTE: because `Stream.fromPubSub` defers `PubSub.subscribe` until the stream starts
-     * running, forking a consumer via `Stream.runForEach(...).pipe(Effect.forkScoped)` races
-     * the next publish — the forked fiber may not have subscribed yet when the publish lands.
-     * Hot-reload consumers that must not miss a publish should use `subscribeChanges` below
-     * instead, which acquires the subscription synchronously in the caller's fiber before the
-     * consumer loop is forked.
-     */
+    /** streamChanges subscribes on consumption; use subscribeChanges before forking to avoid missing the next publish. */
     readonly streamChanges: Stream.Stream<void>;
     readonly subscribeChanges: Effect.Effect<PubSub.Subscription<void>, never, Scope.Scope>;
   }
@@ -69,11 +58,7 @@ interface RegistryState {
 const entryEqual = (a: ProviderInstanceConfig, b: ProviderInstanceConfig): boolean =>
   Equal.equals(a, b);
 
-/**
- * An explicit false on either the envelope or the raw config blob wins (most
- * restrictive) — old settings files can carry both flags with conflicting
- * values, and a user's disable must never be silently undone.
- */
+/** Conflicting saved flags must preserve any explicit disable. */
 const resolveEntryEnabled = (entry: ProviderInstanceConfig, typedConfig: unknown): boolean => {
   const rawConfigEnabled = providerInstanceConfigEnabledFlag(entry.config);
   if (entry.enabled === false || rawConfigEnabled === false) {
@@ -189,9 +174,7 @@ const makeReconcile = <R>(input: {
         nextRaw.map(([raw]) => ProviderInstanceId.make(raw)),
       );
 
-      // 1. Close scopes for instances that disappeared or whose config
-      //    changed. Do this BEFORE creating replacements so ids map 1-to-1
-      //    to live scopes at all times.
+      // Close changed/removed scopes before replacements to preserve one live scope per id.
       const removedIds: Array<ProviderInstanceId> = [];
       const replacedIds = new Set<ProviderInstanceId>();
       for (const [instanceId, live] of previousEntries) {

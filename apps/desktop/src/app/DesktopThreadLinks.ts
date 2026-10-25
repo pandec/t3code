@@ -164,7 +164,7 @@ export class DesktopThreadLinks extends Context.Service<
 
 const { logInfo, logWarning } = makeComponentLogger("desktop-thread-links");
 
-/** @public Service construction is part of the canonical Effect module API. */
+/** @public */
 export const make = Effect.fn("DesktopThreadLinks.make")(function* (inbox: DesktopThreadLinkInbox) {
   const environment = yield* DesktopEnvironment.DesktopEnvironment;
   const desktopWindow = yield* DesktopWindow.DesktopWindow;

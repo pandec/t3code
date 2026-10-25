@@ -68,11 +68,7 @@ export async function createPastedTextComposerAttachment(input: {
   };
 }
 
-/**
- * The chip is not optional for a non-media file. Every path that attaches one also writes
- * its reference, so a file with no chip means the draft lost it rather than that the strip
- * should stand in.
- */
+/** Non-media attachments require chip references; missing references mean lost draft files. */
 export function composerStripAttachments(
   attachments: ReadonlyArray<DraftComposerAttachment>,
 ): ReadonlyArray<DraftComposerAttachment> {
@@ -81,21 +77,14 @@ export function composerStripAttachments(
   );
 }
 
-/**
- * The document picker types every pick as a plain file, so the answer comes from the
- * attachment itself rather than from which picker made it.
- */
+/** Detect from the attachment; the document picker labels images as plain files. */
 export function isComposerImageAttachment(
   attachment: DraftComposerAttachment,
 ): attachment is DraftComposerImageAttachment {
   return attachment.type === "image" || imageMimeType(attachment) !== null;
 }
 
-/**
- * A picture taken from the photo library or the clipboard owns no file and carries its bytes
- * inline, and its `attachmentId` is a local draft id the server has never seen — so falling
- * back to a remote asset for one only ever fails.
- */
+/** Inline library/clipboard images own no file; local ids cannot resolve server assets. */
 export function composerAttachmentInlineUri(
   attachment: DraftComposerAttachment | undefined,
 ): string | undefined {
@@ -166,8 +155,7 @@ export async function persistComposerAttachmentFile(
   try {
     await source.copy(destination);
   } catch (error) {
-    // A failed copy can leave a partial destination file behind with no URI
-    // returned to release it later; delete it before surfacing the failure.
+    // Failed copies may leave untracked partial files; delete before surfacing failure.
     try {
       if (destination.exists) {
         destination.delete();
@@ -177,9 +165,7 @@ export async function persistComposerAttachmentFile(
     }
     throw error;
   }
-  // An Android content: stream can deliver more bytes than the size it
-  // reported before the copy. Validate the persisted copy so an oversized
-  // file is never retained under a stale recorded size.
+  // Android content streams may exceed reported size; validate the persisted copy.
   const copiedSize = destination.size;
   if (maxBytes !== undefined && copiedSize !== null && copiedSize > maxBytes) {
     try {
@@ -263,8 +249,7 @@ export async function pickComposerFiles(input: {
   const endHandoff = beginForegroundHandoff();
   let result: DocumentPickerResult;
   try {
-    // File providers may expose a URI that FileSystem cannot read directly.
-    // Import a readable cache copy before persisting the draft's owned file.
+    // Import a readable cache copy because FileSystem may not read provider URIs directly.
     result = await getDocumentAsync({ multiple: true, copyToCacheDirectory: true });
   } catch (cause) {
     return {
@@ -289,9 +274,7 @@ export async function pickComposerFiles(input: {
       exceededAttachmentLimit = true;
       break;
     }
-    // A SAF/document picker can hand back a blank display name; the wire
-    // contract rejects empty names at send time, so fall back before the name
-    // reaches storage, errors, or the attachment itself.
+    // SAF can return blank display names, but the wire contract rejects them; fill before persisting.
     const name = file.name.trim().length > 0 ? file.name : "file";
     try {
       const reportedMimeType = file.mimeType || "application/octet-stream";
@@ -334,18 +317,10 @@ async function loadClipboard() {
 }
 
 /**
- * Re-encode a pasted image as JPEG with its long edge capped at
- * `IMAGE_ATTACHMENT_MAX_EDGE` (`renderPhoto`). Pastes are almost always
- * multi-MB PNG screenshots, and on servers without attachment uploads the
- * whole message travels in a single WebSocket RPC frame, so payload size
- * directly gates deliverability; JPEG is visually lossless for screenshots
- * while several times smaller. Library picks don't come through here: the
- * picker flow keeps supported originals and relies on iOS's native
- * HEIC-to-JPEG conversion instead. Sources that are already JPEG are left to
- * `fitComposerImage` (avoids generation loss), and GIFs are skipped because
- * re-encoding would drop animation. Returns null when re-encoding is skipped
- * or unavailable (e.g. a binary that predates the expo-image-manipulator
- * dependency) — callers keep the original bytes.
+ * Pastes are multi-MB PNG screenshots, and without attachment uploads a message travels in one
+ * WebSocket frame, so re-encode them as edge-capped JPEG (`renderPhoto`). JPEG sources are left to
+ * `fitComposerImage` (no generation loss) and GIFs keep their animation. Null means skipped or
+ * unavailable (a binary predating expo-image-manipulator); callers keep the original bytes.
  */
 async function reencodeImageAsJpeg(input: {
   readonly uri: string;
@@ -421,8 +396,7 @@ async function pickComposerMediaOnce(input: {
     };
   }
 
-  // The picker covers the Android activity, which reports the app as
-  // backgrounded; the guard keeps background-triggered restarts away mid-pick.
+  // Android pickers report background state; guard against deferred restarts mid-pick.
   const endHandoff = beginForegroundHandoff();
   let result: Awaited<ReturnType<typeof imagePicker.launchImageLibraryAsync>>;
   try {
@@ -430,9 +404,7 @@ async function pickComposerMediaOnce(input: {
       mediaTypes: input.maxVideoBytes === undefined ? ["images"] : ["images", "videos"],
       allowsMultipleSelection: true,
       selectionLimit: remainingSlots,
-      // Bytes stay in the picker's file until we know how much of them we need. Asking for
-      // base64 here made iOS decode and re-encode every camera photo at full resolution and
-      // hand JS a 10 MB+ string, which stalled the composer for seconds.
+      // Base64 makes iOS decode all full-size photos and stalls JS with large strings; read bytes only as needed.
       base64: false,
       quality: 1,
       shouldDownloadFromNetwork: true,
@@ -496,9 +468,7 @@ async function pickComposerMediaOnce(input: {
     }
 
     const name = asset.fileName?.trim() || "image";
-    // The picker's reported size is a hint, not a measurement: Android content streams can
-    // deliver more bytes than they advertise. Only a size read from the file itself decides
-    // whether the original bytes are safe to load into JS.
+    // Android content streams can exceed their reported size; measure the file before loading bytes into JS.
     let sourceBytes: number | null = null;
     try {
       const { File } = await import("expo-file-system");
@@ -506,8 +476,7 @@ async function pickComposerMediaOnce(input: {
     } catch {
       sourceBytes = null;
     }
-    // Originals the provider can read and that fit the cap pass through byte for byte so
-    // transparency and animation survive.
+    // Pass through supported, under-cap originals unchanged to preserve transparency and animation.
     const originalMimeType =
       mimeType !== undefined &&
       isProviderSendTurnSupportedImageMimeType(mimeType) &&

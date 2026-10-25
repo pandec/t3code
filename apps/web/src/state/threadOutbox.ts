@@ -28,12 +28,10 @@ import { create } from "zustand";
 import type { ChatMessage } from "../types";
 
 /**
- * Durable web outbox for messages the server has not accepted yet: composed
- * while the environment is offline, or in flight when the page reloads or the
- * socket drops. Once the server accepts a message (by its stable commandId,
- * so a replay after reload is idempotent) the row is removed and v2's server
- * queue owns it. One localStorage entry per message so writes never clobber
- * siblings.
+ * Durable outbox for messages the server has not accepted (composed offline, or in flight
+ * across a reload or dropped socket). Acceptance by stable commandId keeps replays
+ * idempotent and hands the message to the server queue. One localStorage entry per
+ * message so writes never clobber siblings.
  */
 
 const STORAGE_KEY_PREFIX = "t3code:thread-submission-outbox:v1:";

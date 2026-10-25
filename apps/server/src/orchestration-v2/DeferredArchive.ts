@@ -1,21 +1,8 @@
 /**
- * Fork: deferred archive decisions. A request waits on the run that was active
- * when it was scheduled (a v2 run reaches `completed` after its final
- * checkpoint capture, even a failed one) and on background work that holds
- * completion, then archives through the ordinary `thread.archive` path. A wake
- * (delegated task result, background notification, restart continuation)
- * carries on that work, so the request moves to the run the wake starts. New
- * work (a message sent, or a run created after the request), a stop or failure
- * anywhere in the awaited chain, or a workspace change cancels it; a failed
- * final checkpoint of any awaited run records an error and leaves the thread
- * unarchived. A delegated result reserved for a wake
- * that has not dispatched yet, or whose wake finished but has not been
- * reconciled yet, holds the archive like background work, and so does a
- * restart continuation still waiting to resume the agent. A request with
- * `removeWorktree` stays pending after the archive until the scheduler's
- * guarded removal records its outcome. Pure apart from the outbox read in
- * `restartContinuationPending`: the orchestrator and `ThreadArchiveScheduler`
- * share these rules.
+ * Fork: a deferred archive waits on its scheduled run, the wakes that continue it, and background
+ * work that holds completion (including pending wake results and restart continuations). New work,
+ * a stop or failure in the chain, or a workspace change cancels it. Pure apart from
+ * `restartContinuationPending`; the orchestrator and `ThreadArchiveScheduler` share these rules.
  */
 import type {
   CommandId,
@@ -138,6 +125,7 @@ export const STOPPED_RUN_STATUSES: ReadonlySet<OrchestrationV2Run["status"]> = n
 export const ARCHIVE_CANCEL_DETAIL = {
   user: "Cancelled by user.",
   newWork: "The thread started new work.",
+  guestRequest: "A guest asked to send a message.",
   stopped: "The turn was stopped.",
   failed: "The turn failed or was interrupted.",
   checkpointFailed: "The final checkpoint failed. The thread was left unarchived.",
@@ -368,15 +356,10 @@ export function evaluateDeferredArchive(input: {
 }
 
 /**
- * The run a request effectively waits on. A wake cancelled while still queued
- * (its delegated tasks were withdrawn, or restart recovery dropped it) never
- * ran, so the request falls back to the latest run before it that had not
- * settled when the archive was scheduled; null when there is none (only
- * background work counts). Runs that settled earlier are skipped, not stopped
- * at: a reordered queue can leave a later-created run settled before it.
- * Only a wake moves a pending request, so a target requested at or after the
- * archive is a wake; the run the archive was scheduled during was requested
- * before it (`>=` keeps same-millisecond wakes).
+ * A wake cancelled while queued never ran, so the request falls back to the latest earlier run
+ * unsettled at scheduling; null when none. Settled runs are skipped, not stopped at, since a
+ * reordered queue can settle a later run first. A target requested at or after the archive is a
+ * wake (`>=` keeps same-millisecond wakes).
  */
 function awaitedRun(
   target: ArchiveRun,
