@@ -5,8 +5,16 @@ import {
   type ListeningTrackMetadata,
   type ListeningTrackRef,
 } from "@t3tools/shared/listeningPlayback";
-import { createAudioPlayer, setAudioModeAsync, type AudioPlayer } from "expo-audio";
+import { createAudioPlayer, type AudioPlayer } from "expo-audio";
 import { useSyncExternalStore } from "react";
+
+import {
+  acquireAudioSession,
+  activateAudioSession,
+  isAudioSessionOwner,
+  pauseAudioPlayer,
+  releaseAudioSession,
+} from "../lib/audioSession";
 
 import {
   createPendingListeningStart,
@@ -24,16 +32,57 @@ let loadedUrl: string | null = null;
 let loadedTrackMetadata: ListeningTrackMetadata | null = null;
 let appliedSpeed: number | null = null;
 let lockScreenActive = false;
+type AudioSessionToken = ReturnType<typeof acquireAudioSession>;
+let sessionToken: AudioSessionToken | null = null;
+// Statuses from before a start (the paused player, a stale error) must not release its session.
+// The latest start holds this until it gives up, or after play() until a status that is not the
+// stale pre-play pause: a terminal one, or buffering or playing.
+let startingAttempt: { played: boolean } | null = null;
+// Expo reports a source failure once, so a retry must load the source again. Statuses carry no
+// source identity and arrive late, so a failure from a replaced source sets this too.
+let loadedSourceFailed = false;
 
 const pendingStart = createPendingListeningStart({ coordinator: listeningPlayback });
 
+function releaseListeningSession(token = sessionToken): void {
+  if (token === null) return;
+  if (sessionToken === token) sessionToken = null;
+  void releaseAudioSession(token).catch(() => {});
+}
+
 const pauseSharedPlayer = () => {
   try {
-    sharedPlayer?.pause();
+    if (sharedPlayer !== null) pauseAudioPlayer(sharedPlayer);
   } catch {
     // The native player can already be torn down during app shutdown.
   }
+  releaseListeningSession();
 };
+
+/** Takes the app-wide audio session from inline media; null while a recording holds it. */
+function acquireListeningSession(player: AudioPlayer): AudioSessionToken | null {
+  if (sessionToken !== null && isAudioSessionOwner(sessionToken)) return sessionToken;
+  const token = acquireAudioSession(
+    "playback",
+    () => {
+      // Lock-screen controls would otherwise resume over the new owner.
+      deactivateLockScreenControls(player);
+      pauseSharedPlayer();
+    },
+    () => {
+      try {
+        pauseAudioPlayer(player);
+      } catch {}
+    },
+  );
+  if (!isAudioSessionOwner(token)) return null;
+  sessionToken = token;
+  return token;
+}
+
+function activateListeningSession(token: AudioSessionToken) {
+  return activateAudioSession(token, false, { background: true });
+}
 
 function applySharedPlaybackRate(speed: number): void {
   const player = sharedPlayer;
@@ -92,12 +141,37 @@ function ensureSharedPlayer(): AudioPlayer {
         ? { currentTime: duration, duration }
         : { currentTime: status.currentTime, duration },
     );
-    if (status.playing && listeningPlayback.getSnapshot().blocked) {
+    const snapshot = listeningPlayback.getSnapshot();
+    // A stopped clock also reports buffering and seeks; a lock-screen pause reports a paused one.
+    const nativePause =
+      !status.playing && !status.isBuffering && status.timeControlStatus === "paused";
+    const terminal = status.didJustFinish || status.error !== null;
+    if (status.error !== null) loadedSourceFailed = true;
+    if (startingAttempt?.played === true && (terminal || !nativePause)) startingAttempt = null;
+    if (sessionToken !== null && startingAttempt === null && (terminal || nativePause)) {
+      releaseListeningSession();
+    }
+    if (status.playing && snapshot.blocked) {
       pauseSharedPlayer();
       listeningPlayback.setTrackPlaying(false);
-    } else {
-      listeningPlayback.setTrackPlaying(status.playing);
+      return;
     }
+    // A lock-screen resume bypasses playListeningTrack. Only a paused-to-playing edge
+    // counts, so a status queued before a pause cannot take the session back.
+    if (
+      status.playing &&
+      snapshot.track?.playing === false &&
+      lockScreenActive &&
+      sessionToken === null
+    ) {
+      const token = acquireListeningSession(player);
+      if (token !== null) {
+        void activateListeningSession(token).catch(() => {
+          if (sessionToken === token) pauseSharedPlayer();
+        });
+      }
+    }
+    listeningPlayback.setTrackPlaying(status.playing);
   });
   sharedPlayer = player;
   // Speed changes mid-playback land on the native player immediately.
@@ -123,15 +197,31 @@ export async function playListeningTrack(input: {
 }): Promise<void> {
   // Any direct play supersedes a still-pending play-before-URL intent.
   pendingStart.cancel();
+  if (listeningPlayback.getSnapshot().blocked) return;
   const player = ensureSharedPlayer();
+  // Startup would pause the other recording, releasing the session taken below; pause it first.
+  const loaded = listeningPlayback.getSnapshot().track;
+  if (
+    loaded !== null &&
+    loaded.speechId !== input.track.speechId &&
+    listeningPlayback.isActive(loaded.speechId, pauseSharedPlayer)
+  ) {
+    listeningPlayback.pauseActive();
+    listeningPlayback.release(loaded.speechId, pauseSharedPlayer);
+  }
+  // Taken before preparing the source, so media started meanwhile cancels this attempt.
+  const token = acquireListeningSession(player);
+  if (token === null) return;
   const plan = planListeningTrackStart({
     loadedTrack: listeningPlayback.getSnapshot().track,
     nextTrack: input.track,
     positionSeconds: player.currentTime,
     durationSeconds: player.duration,
   });
-  const sameSource = plan.sameTrack && loadedUrl === input.url;
+  const sameSource = plan.sameTrack && loadedUrl === input.url && !loadedSourceFailed;
 
+  const attempt = { played: false };
+  startingAttempt = attempt;
   await startListeningPlayback({
     id: input.track.speechId,
     pause: pauseSharedPlayer,
@@ -141,34 +231,39 @@ export async function playListeningTrack(input: {
       : async () => {
           appliedSpeed = null;
           player.replace(input.url);
+          loadedSourceFailed = false;
           loadedUrl = input.url;
           loadedTrackMetadata = input.metadata;
           if (plan.resumeAt > 0) await player.seekTo(plan.resumeAt);
         },
     restartFromBeginning: sameSource && plan.finished,
     seekToBeginning: () => player.seekTo(0),
-    prepareAudioMode: () =>
-      setAudioModeAsync({
-        allowsRecording: false,
-        playsInSilentMode: true,
-        shouldPlayInBackground: true,
-        interruptionMode: "doNotMix",
-      }),
+    prepareAudioMode: async () => {
+      await activateListeningSession(token);
+    },
     applyPlaybackRate: (speed) => {
       appliedSpeed = null;
       applySharedPlaybackRate(speed);
     },
     play: () => {
       loadedTrackMetadata = input.metadata;
+      // Another owner (or a recording) took the session during startup; stay loaded and paused.
+      if (!isAudioSessionOwner(token)) return;
       activateLockScreenControls(player, input.metadata);
       try {
         player.play();
+        attempt.played = true;
       } catch (error) {
         clearLockScreenControls(player);
         throw error;
       }
     },
   });
+  if (startingAttempt === attempt && !attempt.played) startingAttempt = null;
+  // A failed or superseded start leaves this recording inactive, and its session goes with it.
+  if (!listeningPlayback.isActive(input.track.speechId, pauseSharedPlayer)) {
+    releaseListeningSession(token);
+  }
 }
 
 /**

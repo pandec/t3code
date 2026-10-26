@@ -1,9 +1,12 @@
+import { useAtomValue } from "@effect/atom-react";
 import type { EnvironmentThreadShell } from "@t3tools/client-runtime/state/models";
 import type { EnvironmentId } from "@t3tools/contracts";
 
 import type { EnvironmentPresentation } from "../../state/environments";
+import { olderSettledThreads } from "../../state/threads";
 import { useUiStateStore } from "../../uiStateStore";
 import {
+  countSidebarEnvironmentThreads,
   resolveSidebarEnvironmentScope,
   selectPrimaryEnvironmentScope,
   selectRemoteEnvironmentScope,
@@ -39,21 +42,25 @@ export function useSidebarEnvironmentFilter(input: {
     input.environments,
     input.primaryEnvironmentId,
   );
-  const threadCountByEnvironmentId = (() => {
-    const counts = new Map<string, number>();
-    for (const thread of input.threads) {
-      const projectKey = `${thread.environmentId}:${thread.projectId}`;
-      if (
-        thread.archivedAt !== null ||
-        input.hiddenProjectKeys.has(projectKey) ||
-        (input.scopedProjectKeys !== null && !input.scopedProjectKeys.has(projectKey))
-      ) {
-        continue;
-      }
-      counts.set(thread.environmentId, (counts.get(thread.environmentId) ?? 0) + 1);
-    }
-    return counts;
-  })();
+  // Zero pages: only each environment's cut and counts, which read no rows.
+  const olderSettled = useAtomValue(
+    olderSettledThreads.shelfAtom(
+      input.environments.map((environment) => ({
+        scope: { environmentId: environment.environmentId, projectIds: null },
+        pages: 0,
+      })),
+    ),
+  );
+  const threadCountByEnvironmentId = countSidebarEnvironmentThreads({
+    threads: input.threads,
+    olderSettled,
+    isProjectVisible:
+      input.hiddenProjectKeys.size === 0 && input.scopedProjectKeys === null
+        ? null
+        : (projectKey) =>
+            !input.hiddenProjectKeys.has(projectKey) &&
+            (input.scopedProjectKeys === null || input.scopedProjectKeys.has(projectKey)),
+  });
   const environments: readonly SidebarEnvironmentFilterEnvironment[] = sortedEnvironments.map(
     (environment) => ({
       environmentId: environment.environmentId,

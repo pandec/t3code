@@ -2,11 +2,15 @@
 import type { ScopedThreadRef } from "@t3tools/contracts";
 import { scopeThreadRef, scopedThreadKey } from "@t3tools/client-runtime/environment";
 import { effectiveSnoozed } from "@t3tools/client-runtime/state/thread-settled";
+import * as Option from "effect/Option";
+import { AsyncResult } from "effect/reactivity";
 
 import { type DraftId, useComposerDraftStore } from "./composerDraftStore";
 import { environmentCatalog } from "./connection/catalog";
 import { appAtomRegistry } from "./rpc/atomRegistry";
 import { readThreadShell } from "./state/entities";
+import { environmentShell } from "./state/shell";
+import { environmentThreadShells } from "./state/threads";
 import { threadVisitHistory } from "./threadLastVisited";
 import type { ThreadRouteTarget } from "./threadRoutes";
 
@@ -21,7 +25,47 @@ function isThreadOpenable(ref: ScopedThreadRef): boolean {
     return false;
   }
   const shell = readThreadShell(ref);
-  return shell !== null && shell.archivedAt === null;
+  const state = Option.getOrNull(
+    AsyncResult.value(appAtomRegistry.get(environmentShell.stateAtom(ref.environmentId))),
+  );
+  const key = scopedThreadKey(ref);
+  if (shell !== null) {
+    if (shell.archivedAt !== null) return false;
+    if (state !== null) noteShellSeen(key, state.generation);
+    return true;
+  }
+  // A shell that omits older settled threads holds one only while it is open or paged in. Within
+  // the snapshot it was seen in, only a streamed removal proves it gone; a newer snapshot cleared
+  // those, so it no longer can.
+  return (
+    state !== null &&
+    shellSeenAtGeneration.get(key) === state.generation &&
+    Option.exists(state.snapshot, (snapshot) => snapshot.olderSettled !== undefined) &&
+    !state.removedAt.has(ref.threadId)
+  );
+}
+
+// Shell generation at which recently visited threads last had an unarchived shell. History holds
+// two targets, so a few recent entries cover them.
+const shellSeenAtGeneration = new Map<string, number>();
+const SHELL_SEEN_LIMIT = 4;
+
+function noteShellSeen(key: string, generation: number): void {
+  shellSeenAtGeneration.delete(key);
+  shellSeenAtGeneration.set(key, generation);
+  if (shellSeenAtGeneration.size > SHELL_SEEN_LIMIT) {
+    const oldest = shellSeenAtGeneration.keys().next();
+    if (oldest.done !== true) shellSeenAtGeneration.delete(oldest.value);
+  }
+}
+
+/** Notes the focused thread's shell while it is open: an older settled one loses it on leaving. */
+export function trackVisitedThreadShell(ref: ScopedThreadRef): () => void {
+  return appAtomRegistry.subscribe(
+    environmentThreadShells.threadShellAtom(ref),
+    () => void isThreadOpenable(ref),
+    { immediate: true },
+  );
 }
 
 // The server thread each remembered draft becomes once sent. Promotion
@@ -67,6 +111,6 @@ export function resolveVisitTargetAfterPark(
     if (target?.kind !== "server") return target;
     if (alsoParking?.has(scopedThreadKey(target.threadRef))) return null;
     const shell = readThreadShell(target.threadRef);
-    return shell !== null && !effectiveSnoozed(shell, { now }) ? target : null;
+    return shell === null || !effectiveSnoozed(shell, { now }) ? target : null;
   });
 }
