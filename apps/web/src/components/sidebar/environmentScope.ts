@@ -1,3 +1,10 @@
+import type { EnvironmentThreadShell } from "@t3tools/client-runtime/state/models";
+import {
+  unloadedOlderSettledCount,
+  type OlderSettled,
+} from "@t3tools/client-runtime/state/threads";
+import type { EnvironmentId } from "@t3tools/contracts";
+
 import { toggleSidebarProjectScope } from "../Sidebar.logic";
 
 /**
@@ -62,4 +69,37 @@ export function selectRemoteEnvironmentScope(
     environment.environmentId === primaryEnvironmentId ? [] : [environment.environmentId],
   );
   return remoteEnvironmentIds.length === 0 ? null : new Set(remoteEnvironmentIds);
+}
+
+/**
+ * Unarchived threads per environment in the visible projects, including older settled threads a
+ * cold connect left out (the Settled shelf's unloaded count), so counts do not grow as it pages.
+ */
+export function countSidebarEnvironmentThreads(input: {
+  readonly threads: readonly EnvironmentThreadShell[];
+  readonly olderSettled: ReadonlyMap<EnvironmentId, { readonly older: OlderSettled | null }>;
+  readonly isProjectVisible: (projectKey: string) => boolean;
+}): ReadonlyMap<string, number> {
+  const counts = new Map<string, number>();
+  const counted = input.threads.filter(
+    (thread) =>
+      thread.archivedAt === null &&
+      input.isProjectVisible(`${thread.environmentId}:${thread.projectId}`),
+  );
+  for (const thread of counted) {
+    counts.set(thread.environmentId, (counts.get(thread.environmentId) ?? 0) + 1);
+  }
+  for (const [environmentId, { older }] of input.olderSettled) {
+    if (older === null) continue;
+    const projectIds = [...older.counts.keys()].filter((projectId) =>
+      input.isProjectVisible(`${environmentId}:${projectId}`),
+    );
+    const unloaded = unloadedOlderSettledCount({
+      olderSettled: () => older,
+      scopes: [{ environmentId, projectIds }],
+      threads: counted,
+    });
+    if (unloaded > 0) counts.set(environmentId, (counts.get(environmentId) ?? 0) + unloaded);
+  }
+  return counts;
 }
