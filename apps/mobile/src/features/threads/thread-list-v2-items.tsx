@@ -813,6 +813,7 @@ export const ThreadListV2Row = memo(function ThreadListV2Row(props: {
     thread.title,
     props.hasQueuedMessages && "messages queued to send",
     archivePending && "archives when done",
+    activeMarkedRow && "marked active",
   ]
     .filter(Boolean)
     .join(", ");

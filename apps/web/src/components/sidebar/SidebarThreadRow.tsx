@@ -975,6 +975,12 @@ const SidebarThreadRow = memo(function SidebarThreadRow(props: SidebarThreadRowP
       onPin(threadRef);
     }
   };
+  // The slim time label yields on hover only to an action that will render.
+  const slimHoverAction =
+    canOperateThread &&
+    (variantAction === "unsnooze"
+      ? props.snoozeSupported
+      : props.settlementSupported && (variantAction === "unsettle" || !props.hideSettleButton));
   const handleActiveMarkToggleClick = (event: ReactMouseEvent) => {
     event.preventDefault();
     event.stopPropagation();
@@ -1357,7 +1363,7 @@ const SidebarThreadRow = memo(function SidebarThreadRow(props: SidebarThreadRowP
                 <span
                   className={cn(
                     "inline-flex justify-end tabular-nums text-secondary-label transition-opacity",
-                    !isWoke && "group-any-hover/sidebar-row:opacity-0",
+                    !isWoke && slimHoverAction && "group-any-hover/sidebar-row:opacity-0",
                   )}
                 >
                   {variantAction === "unsnooze" && props.snoozeWakeLabelText !== null ? (

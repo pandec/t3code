@@ -385,8 +385,9 @@ interface SidebarThreadPartitionInput {
   readonly serverConfigs: ReadonlyMap<EnvironmentId, EnvironmentServerConfig>;
   readonly optimisticDrop: SidebarOptimisticDrop | null;
   readonly workingShelfEnabled: boolean;
-  /** Fork: the Active filter (marked or live threads only). */
+  /** Fork: the Active filter (marked or live threads only); the open thread always stays. */
   readonly activeWorkFilter: boolean;
+  readonly routeRowThreadKey: string | null;
   // Snooze wakes, the queued-turn grace and the Working shelf's exit grace depend
   // on the clock, so the minute tick, the precise snooze-wake tick and the inbox
   // tracker's expiry version are inputs: a new key repartitions.
@@ -449,6 +450,7 @@ function partitionSidebarThreads(input: SidebarThreadPartitionInput) {
     optimisticDrop,
     workingShelfEnabled,
     activeWorkFilter,
+    routeRowThreadKey,
   } = input;
   const preciseNow = new Date().toISOString();
   // Subagent children live in the parent's Agents surface, not the roster. Each fork
@@ -464,7 +466,13 @@ function partitionSidebarThreads(input: SidebarThreadPartitionInput) {
     const passesProjects =
       !hiddenProjectKeys.has(projectKey) &&
       (scopedProjectKeys === null || scopedProjectKeys.has(projectKey));
-    if (activeWorkFilter && !isSidebarActiveWorkThread(thread)) continue;
+    if (
+      activeWorkFilter &&
+      !isSidebarActiveWorkThread(thread) &&
+      threadShellKey(thread) !== routeRowThreadKey
+    ) {
+      continue;
+    }
     if (passesProjects) admittedWithoutEnvironment += 1;
     if (passesEnvironment) admittedWithoutProjects += 1;
     if (passesEnvironment && passesProjects) visible.push(thread);
@@ -1031,6 +1039,7 @@ function useSidebarThreads(input: {
     optimisticDrop,
     workingShelfEnabled,
     activeWorkFilter,
+    routeRowThreadKey,
     clockKey: `${nowMinute}:${snoozeWakeTick}:${inboxReturnsVersion}`,
   });
   const { pinnedThreads, activeThreads, workingThreads, snoozedThreads, settledThreads } =
