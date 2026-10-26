@@ -78,22 +78,28 @@ export function selectRemoteEnvironmentScope(
 export function countSidebarEnvironmentThreads(input: {
   readonly threads: readonly EnvironmentThreadShell[];
   readonly olderSettled: ReadonlyMap<EnvironmentId, { readonly older: OlderSettled | null }>;
-  readonly isProjectVisible: (projectKey: string) => boolean;
+  /** Null when every project is visible. */
+  readonly isProjectVisible: ((projectKey: string) => boolean) | null;
 }): ReadonlyMap<string, number> {
+  const isProjectVisible = input.isProjectVisible;
   const counts = new Map<string, number>();
   const counted = input.threads.filter(
     (thread) =>
       thread.archivedAt === null &&
-      input.isProjectVisible(`${thread.environmentId}:${thread.projectId}`),
+      (isProjectVisible === null ||
+        isProjectVisible(`${thread.environmentId}:${thread.projectId}`)),
   );
   for (const thread of counted) {
     counts.set(thread.environmentId, (counts.get(thread.environmentId) ?? 0) + 1);
   }
   for (const [environmentId, { older }] of input.olderSettled) {
     if (older === null) continue;
-    const projectIds = [...older.counts.keys()].filter((projectId) =>
-      input.isProjectVisible(`${environmentId}:${projectId}`),
-    );
+    const projectIds =
+      isProjectVisible === null
+        ? null
+        : [...older.counts.keys()].filter((projectId) =>
+            isProjectVisible(`${environmentId}:${projectId}`),
+          );
     const unloaded = unloadedOlderSettledCount({
       olderSettled: () => older,
       scopes: [{ environmentId, projectIds }],

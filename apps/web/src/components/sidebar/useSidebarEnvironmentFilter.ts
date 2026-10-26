@@ -54,9 +54,12 @@ export function useSidebarEnvironmentFilter(input: {
   const threadCountByEnvironmentId = countSidebarEnvironmentThreads({
     threads: input.threads,
     olderSettled,
-    isProjectVisible: (projectKey) =>
-      !input.hiddenProjectKeys.has(projectKey) &&
-      (input.scopedProjectKeys === null || input.scopedProjectKeys.has(projectKey)),
+    isProjectVisible:
+      input.hiddenProjectKeys.size === 0 && input.scopedProjectKeys === null
+        ? null
+        : (projectKey) =>
+            !input.hiddenProjectKeys.has(projectKey) &&
+            (input.scopedProjectKeys === null || input.scopedProjectKeys.has(projectKey)),
   });
   const environments: readonly SidebarEnvironmentFilterEnvironment[] = sortedEnvironments.map(
     (environment) => ({

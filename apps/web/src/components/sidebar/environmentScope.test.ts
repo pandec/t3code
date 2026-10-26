@@ -121,5 +121,13 @@ describe("countSidebarEnvironmentThreads", () => {
     });
     // One open row, one paged-in older row, and four older rows still unloaded.
     expect(counts.get(environmentId)).toBe(6);
+    // With no project filter, every project's older rows count.
+    expect(
+      countSidebarEnvironmentThreads({
+        threads: [shell("open", {}), shell("paged", { older: true })],
+        olderSettled,
+        isProjectVisible: null,
+      }).get(environmentId),
+    ).toBe(13);
   });
 });
