@@ -239,8 +239,8 @@ describe("listening player audio session", () => {
     const second = play(trackA, "https://audio/1");
     firstMode.resolve();
     await first;
-    // A status the player sent before the restart; it carries the last start's failure.
-    audio.emit(false, "paused", "Stale failure");
+    // The paused player's status from before the restart.
+    audio.emit(false);
     secondMode.resolve();
     await second;
     expect(playSpy).toHaveBeenCalledOnce();
@@ -270,6 +270,33 @@ describe("listening player audio session", () => {
     end();
     expect(await listeningHeldSession()).toBe(false);
     expect(listeningPlayback.getSnapshot().track?.speechId).toBe(trackA.speechId);
+    stop();
+  });
+
+  it("releases the session when the source fails while activation is pending, and retries it", async () => {
+    using playSpy = vi.spyOn(audio.player, "play");
+    using replace = vi.spyOn(audio.player, "replace");
+    const modeStarted = deferred();
+    const mode = deferred();
+    audio.setMode.mockImplementationOnce(() => {
+      modeStarted.resolve();
+      return mode.promise;
+    });
+    const start = play(trackA, "https://audio/1");
+    await modeStarted.promise;
+    // The native item reports its failure once; later periodic statuses carry no error.
+    audio.emit(false, "paused", "Source load failed");
+    mode.resolve();
+    await start;
+    audio.emit(false);
+    expect(playSpy).not.toHaveBeenCalled();
+    expect(await listeningHeldSession()).toBe(false);
+    expect(listeningPlayback.getSnapshot().track?.speechId).toBe(trackA.speechId);
+
+    replace.mockClear();
+    await play(trackA, "https://audio/1");
+    expect(replace).toHaveBeenCalledOnce();
+    expect(playSpy).toHaveBeenCalledOnce();
     stop();
   });
 });
