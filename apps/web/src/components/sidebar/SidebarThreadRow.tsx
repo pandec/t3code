@@ -1091,6 +1091,7 @@ const SidebarThreadRow = memo(function SidebarThreadRow(props: SidebarThreadRowP
     statusLabel: topStatus?.label ?? null,
     projectDisplayName: props.projectDisplayName,
     isActive: props.isActive,
+    activeMarked: props.isActiveMarked,
   });
 
   const title =

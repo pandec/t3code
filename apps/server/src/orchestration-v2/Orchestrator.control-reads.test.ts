@@ -1412,6 +1412,17 @@ it.effect("active mark toggles idempotently and clears on settle and archive", (
     assert.lengthOf(marked, 1);
     assert.equal(marked[0]?.event.type, "thread.active-mark-set");
     assert.deepEqual(yield* activeMarkedAt(), markedAt);
+    // A sweep snapshot taken in the same millisecond as the mark must not settle it.
+    const autoSettle = yield* Effect.exit(
+      orchestrator.dispatch({
+        type: "thread.auto-settle",
+        commandId: CommandId.make("auto-settle-marked"),
+        threadId,
+        snapshotAt: markedAt,
+      }),
+    );
+    assert.equal(autoSettle._tag, "Failure");
+    assert.deepEqual(yield* activeMarkedAt(), markedAt);
     yield* TestClock.adjust("1 second");
     assert.lengthOf(yield* setMark("mark-again", true), 0);
     assert.deepEqual(yield* activeMarkedAt(), markedAt);
