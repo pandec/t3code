@@ -34,6 +34,7 @@ import { readEnvironmentScope } from "../state/session";
 import {
   readConversationForkOptions,
   readEnvironmentSupportsAutoSettleOptOut,
+  readEnvironmentSupportsActiveMark,
   readEnvironmentSupportsPinning,
   readEnvironmentSupportsSettlement,
   readEnvironmentSupportsSnooze,
@@ -90,6 +91,7 @@ export function useThreadActionMenu(input: {
     pinThread,
     confirmAndUnpinThread,
     setThreadAutoSettle,
+    setThreadActiveMark,
     attemptArchiveThread,
     deleteThread,
     markThreadUnread,
@@ -135,6 +137,7 @@ export function useThreadActionMenu(input: {
         autoSettleOptOut: readEnvironmentSupportsAutoSettleOptOut(threadRef.environmentId),
         snooze: readEnvironmentSupportsSnooze(threadRef.environmentId),
         pinning: readEnvironmentSupportsPinning(threadRef.environmentId),
+        activeMark: readEnvironmentSupportsActiveMark(threadRef.environmentId),
         titleRegeneration: readEnvironmentSupportsTitleRegeneration(threadRef.environmentId),
       };
       const isRegeneratingTitle = thread.titleRegeneration != null;
@@ -148,6 +151,7 @@ export function useThreadActionMenu(input: {
         branch: thread.branch ?? null,
         projectFilter: null,
         isPinned: thread.pinnedAt != null,
+        isActiveMarked: thread.activeMarkedAt != null,
         isSettled: supports.settlement && thread.settledOverride === "settled",
         autoSettleEnabled: thread.autoSettleDisabledAt == null,
         isSnoozed: supports.snooze && effectiveSnoozed(thread, { now: now.toISOString() }),
@@ -243,6 +247,12 @@ export function useThreadActionMenu(input: {
           await reportFailure("Failed to unpin thread", () => confirmAndUnpinThread(threadRef));
           return;
         }
+        case "mark-active":
+        case "unmark-active":
+          await reportFailure("Failed to update the active mark", () =>
+            setThreadActiveMark(threadRef, action === "mark-active"),
+          );
+          return;
         case "auto-settle:enabled":
         case "auto-settle:disabled":
           await reportFailure("Failed to update auto-settle", () =>

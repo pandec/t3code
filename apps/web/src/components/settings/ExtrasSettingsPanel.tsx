@@ -749,6 +749,32 @@ function SidebarExtrasSection() {
             }
           />
           <SettingsRow
+            {...searchableSetting("sidebar-hide-settle-button")}
+            description="Hide the Settle button that appears when hovering a thread. Settle stays available from the thread menu, command palette, and shortcuts."
+            resetAction={
+              settings.sidebarHideSettleButton !==
+              DEFAULT_UNIFIED_SETTINGS.sidebarHideSettleButton ? (
+                <SettingResetButton
+                  label="hide settle button"
+                  onClick={() =>
+                    updateSettings({
+                      sidebarHideSettleButton: DEFAULT_UNIFIED_SETTINGS.sidebarHideSettleButton,
+                    })
+                  }
+                />
+              ) : null
+            }
+            control={
+              <Switch
+                checked={settings.sidebarHideSettleButton}
+                onCheckedChange={(checked) =>
+                  updateSettings({ sidebarHideSettleButton: Boolean(checked) })
+                }
+                aria-label="Hide Settle button on thread hover"
+              />
+            }
+          />
+          <SettingsRow
             title="Recent archived threads"
             description="Choose how many recently archived threads appear at the end of Sidebar V2."
             resetAction={

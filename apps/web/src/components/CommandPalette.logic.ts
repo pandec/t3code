@@ -517,7 +517,14 @@ export function buildArchiveCurrentThreadAction(input: {
  * per-thread context menu. Ids are shared between the item builder and the
  * dispatcher so labels and handlers cannot drift apart.
  */
-export type CommandPaletteThreadActionId = "settle" | "unsettle" | "pin" | "unpin" | "fork";
+export type CommandPaletteThreadActionId =
+  | "settle"
+  | "unsettle"
+  | "pin"
+  | "unpin"
+  | "mark-active"
+  | "unmark-active"
+  | "fork";
 
 interface CommandPaletteThreadActionSpec {
   readonly id: CommandPaletteThreadActionId;
@@ -546,6 +553,16 @@ const THREAD_ACTION_SPECS = {
     title: "Unpin current thread",
     searchTerms: ["unpin", "remove pin", "current thread"],
   },
+  "mark-active": {
+    id: "mark-active",
+    title: "Mark current thread as active",
+    searchTerms: ["mark active", "active", "zap", "focus", "current thread"],
+  },
+  "unmark-active": {
+    id: "unmark-active",
+    title: "Unmark current thread as active",
+    searchTerms: ["unmark active", "active", "zap", "current thread"],
+  },
   fork: {
     id: "fork",
     title: "Fork current thread",
@@ -556,6 +573,7 @@ const THREAD_ACTION_SPECS = {
 export function buildCurrentThreadActionItems(input: {
   readonly threadRef: ScopedThreadRef | null;
   readonly isPinned: boolean;
+  readonly isActiveMarked?: boolean;
   readonly isSettled: boolean;
   /** Client-side twin of the server's settle invariants (no live/queued work). */
   readonly canSettleNow: boolean;
@@ -563,6 +581,7 @@ export function buildCurrentThreadActionItems(input: {
   readonly supports: {
     readonly settlement: boolean;
     readonly pinning: boolean;
+    readonly activeMark?: boolean;
   };
   readonly icon: (id: CommandPaletteThreadActionId) => ReactNode;
   readonly run: (id: CommandPaletteThreadActionId, threadRef: ScopedThreadRef) => Promise<void>;
@@ -578,6 +597,9 @@ export function buildCurrentThreadActionItems(input: {
   const ids: CommandPaletteThreadActionId[] = [];
   if (input.supports.pinning) {
     ids.push(input.isPinned ? "unpin" : "pin");
+  }
+  if (input.supports.activeMark) {
+    ids.push(input.isActiveMarked ? "unmark-active" : "mark-active");
   }
   if (input.supports.settlement) {
     ids.push(input.isSettled ? "unsettle" : "settle");

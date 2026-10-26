@@ -32,12 +32,14 @@ import { ArchiveToolResult } from "../archive/tools.ts";
 
 const ThreadOrganizeTool = Tool.make("t3_thread_organize", {
   description:
-    "Pin, snooze, settle, archive, or mark a thread unread. Omit `threadId` for this thread. `snooze` needs `snoozedUntil`. Settling this thread applies at turn end. A failed turn or queued message leaves it active. Archiving a working thread waits for its turn and background work to finish; `pending` means scheduled, not archived.",
+    "Pin, mark active, snooze, settle, archive, or mark a thread unread. Omit `threadId` for this thread. `snooze` needs `snoozedUntil`. Settling this thread applies at turn end. A failed turn or queued message leaves it active. Archiving a working thread waits for its turn and background work to finish; `pending` means scheduled, not archived.",
   parameters: Schema.Struct({
     threadId: Schema.optional(ThreadId),
     action: Schema.Literals([
       "pin",
       "unpin",
+      "mark_active",
+      "unmark_active",
       "snooze",
       "unsnooze",
       "settle",

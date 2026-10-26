@@ -477,6 +477,9 @@ export function useSettingsRestore(onRestored?: () => void) {
     ...(settings.sidebarV2CompactCards !== DEFAULT_UNIFIED_SETTINGS.sidebarV2CompactCards
       ? ["Compact thread cards"]
       : []),
+    ...(settings.sidebarHideSettleButton !== DEFAULT_UNIFIED_SETTINGS.sidebarHideSettleButton
+      ? ["Hide Settle button"]
+      : []),
     ...(settings.sidebarV2NewThreadButtonInProjectRow !==
     DEFAULT_UNIFIED_SETTINGS.sidebarV2NewThreadButtonInProjectRow
       ? ["New thread button position"]
@@ -692,6 +695,7 @@ export function useSettingsRestore(onRestored?: () => void) {
       sidebarThreadProviderIconVisibility:
         DEFAULT_UNIFIED_SETTINGS.sidebarThreadProviderIconVisibility,
       sidebarV2CompactCards: DEFAULT_UNIFIED_SETTINGS.sidebarV2CompactCards,
+      sidebarHideSettleButton: DEFAULT_UNIFIED_SETTINGS.sidebarHideSettleButton,
       sidebarV2NewThreadButtonInProjectRow:
         DEFAULT_UNIFIED_SETTINGS.sidebarV2NewThreadButtonInProjectRow,
       sidebarThreadGroupsButton: DEFAULT_UNIFIED_SETTINGS.sidebarThreadGroupsButton,

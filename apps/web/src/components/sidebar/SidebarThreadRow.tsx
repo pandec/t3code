@@ -65,6 +65,7 @@ import {
   VolumeIcon,
   ArchiveIcon,
   GitForkIcon,
+  ZapIcon,
 } from "lucide-react";
 import {
   memo,
@@ -561,6 +562,10 @@ type SidebarThreadRowProps = {
   // adds a pin toggle and the glyph unpins on click; until then it is a passive marker.
   pinningSupported: boolean;
   isPinned: boolean;
+  /** Fork: the user's Active mark, which the sidebar's Active filter keeps. */
+  activeMarkSupported: boolean;
+  isActiveMarked: boolean;
+  hideSettleButton: boolean;
   sortable?: SortableThreadRowBag | undefined;
   dropVerb: SidebarDropVerb | null;
   /** Fork: "Move to <group>" while the lifted row hovers another custom group. */
@@ -623,6 +628,7 @@ type SidebarThreadRowProps = {
   onUnsnooze: (threadRef: ScopedThreadRef) => void;
   onPin: (threadRef: ScopedThreadRef) => void;
   onUnpin: (threadRef: ScopedThreadRef) => void;
+  onSetActiveMark: (threadRef: ScopedThreadRef, marked: boolean) => void;
   onAcknowledgeWoke: (threadRef: ScopedThreadRef, visitedAt: string) => void;
   onFileDropThreads?: ((threadRef: ScopedThreadRef, files: File[]) => void) | undefined;
 };
@@ -648,6 +654,7 @@ const SidebarThreadRow = memo(function SidebarThreadRow(props: SidebarThreadRowP
     onUnsnooze,
     onPin,
     onUnpin,
+    onSetActiveMark,
     openPullRequestsInRightPanel,
     renamingTitle,
     thread,
@@ -967,6 +974,11 @@ const SidebarThreadRow = memo(function SidebarThreadRow(props: SidebarThreadRowP
     } else {
       onPin(threadRef);
     }
+  };
+  const handleActiveMarkToggleClick = (event: ReactMouseEvent) => {
+    event.preventDefault();
+    event.stopPropagation();
+    onSetActiveMark(threadRef, !props.isActiveMarked);
   };
   const handleToggleListeningClick = (event: ReactMouseEvent) => {
     event.preventDefault();
@@ -1313,6 +1325,13 @@ const SidebarThreadRow = memo(function SidebarThreadRow(props: SidebarThreadRowP
             {listeningIndicator}
             {renderArchivePendingIndicator()}
             {pinIndicator}
+            {props.isActiveMarked ? (
+              <ZapIcon
+                aria-label="Marked as active"
+                role="img"
+                className="size-3 shrink-0 fill-current text-muted-foreground/65"
+              />
+            ) : null}
             {providerIcon}
             {/* A settled or snoozed thread can still occupy a split pane, so
                 the marker rides slim rows too — like the terminal and PR
@@ -1417,7 +1436,7 @@ const SidebarThreadRow = memo(function SidebarThreadRow(props: SidebarThreadRowP
                     </TooltipTrigger>
                     <TooltipPopup side="top">Un-settle thread</TooltipPopup>
                   </Tooltip>
-                ) : (
+                ) : props.hideSettleButton ? null : (
                   <button
                     type="button"
                     aria-label="Settle thread"
@@ -1568,6 +1587,24 @@ const SidebarThreadRow = memo(function SidebarThreadRow(props: SidebarThreadRowP
                   )}
                 />
               ) : null}
+              {props.isActiveMarked ? (
+                <ZapIcon
+                  aria-label="Marked as active"
+                  role="img"
+                  className={cn(
+                    "size-3 shrink-0 fill-current text-muted-foreground/65",
+                    // The quick actions include their own interactive toggle.
+                    props.activeMarkSupported &&
+                      canOperateThread &&
+                      !sortable?.isDragging &&
+                      "group-has-[:focus-visible]/sidebar-row:hidden group-hover/sidebar-row:hidden",
+                    props.activeMarkSupported &&
+                      snoozeMenuOpen &&
+                      !sortable?.isDragging &&
+                      "hidden",
+                  )}
+                />
+              ) : null}
               {sortable?.isDragging ? (
                 dragDestination
               ) : (
@@ -1695,6 +1732,30 @@ const SidebarThreadRow = memo(function SidebarThreadRow(props: SidebarThreadRowP
                         </TooltipPopup>
                       </Tooltip>
                     ) : null}
+                    {props.activeMarkSupported && canOperateThread ? (
+                      <Tooltip>
+                        <TooltipTrigger
+                          render={
+                            <button
+                              type="button"
+                              aria-label={
+                                props.isActiveMarked ? "Unmark as active" : "Mark as active"
+                              }
+                              aria-pressed={props.isActiveMarked}
+                              onClick={handleActiveMarkToggleClick}
+                              className="inline-flex cursor-pointer items-center rounded-md bg-transparent px-1.5 text-muted-foreground hover:text-foreground"
+                            >
+                              <ZapIcon
+                                className={cn("size-3.5", props.isActiveMarked && "fill-current")}
+                              />
+                            </button>
+                          }
+                        />
+                        <TooltipPopup>
+                          {props.isActiveMarked ? "Unmark as active" : "Mark as active"}
+                        </TooltipPopup>
+                      </Tooltip>
+                    ) : null}
                     {showSnoozeButton ? (
                       <SnoozeMenuButton
                         open={snoozeMenuOpen}
@@ -1706,7 +1767,7 @@ const SidebarThreadRow = memo(function SidebarThreadRow(props: SidebarThreadRowP
                         }
                       />
                     ) : null}
-                    {props.settlementSupported && canOperateThread ? (
+                    {props.settlementSupported && canOperateThread && !props.hideSettleButton ? (
                       <Tooltip>
                         <TooltipTrigger
                           render={

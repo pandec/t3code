@@ -1121,6 +1121,12 @@ export const SETTINGS_SEARCH_ITEMS = [
     searchTerms: ["sidebar toolbar show hide manage custom groups"],
   },
   {
+    id: "sidebar-hide-settle-button",
+    title: "Hide Settle button",
+    to: "/settings/extras",
+    searchTerms: ["sidebar thread row hover settle checkmark hide"],
+  },
+  {
     id: "extras-panels",
     title: "Panels",
     to: "/settings/extras",

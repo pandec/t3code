@@ -184,6 +184,7 @@ function menuActionsForRow(input: {
 const CARD_MENU_ACTIONS = menuActionsForRow({ settlementSupported: true, variant: "card" });
 const SLIM_MENU_ACTIONS = menuActionsForRow({ settlementSupported: true, variant: "slim" });
 const LEGACY_MENU_ACTIONS = menuActionsForRow({ settlementSupported: false, variant: "card" });
+const ACTIVE_MARK_SYMBOL: AppSymbolName = { ios: "bolt.fill", android: "bolt" };
 // Archive rides along so the swipe-right gesture keeps a menu (and
 // VoiceOver) twin on the snoozed shelf.
 const SNOOZED_MENU_ACTIONS: MenuAction[] = [
@@ -763,6 +764,7 @@ export const ThreadListV2Row = memo(function ThreadListV2Row(props: {
   } = props;
   const snoozedRow = props.snoozed === true;
   const pinnedRow = props.pinned === true;
+  const activeMarkedRow = thread.activeMarkedAt != null;
   const dormant = useSwipeRowDormant(props.activationKey);
 
   const selectThread = () => onSelectThread(thread);
@@ -1349,6 +1351,14 @@ export const ThreadListV2Row = memo(function ThreadListV2Row(props: {
             type="monochrome"
           />
         ) : null}
+        {activeMarkedRow ? (
+          <SymbolView
+            name={ACTIVE_MARK_SYMBOL}
+            size={11}
+            tintColorClassName={rowAppearance.mutedIconTintClassName}
+            type="monochrome"
+          />
+        ) : null}
         {showsWoke ? (
           <Pressable
             className="-m-2.5 flex-row items-center gap-1 p-2.5"
@@ -1716,6 +1726,14 @@ export const ThreadListV2Row = memo(function ThreadListV2Row(props: {
           </View>
           {listeningIndicator}
           {slimPinIndicator}
+          {activeMarkedRow ? (
+            <SymbolView
+              name={ACTIVE_MARK_SYMBOL}
+              size={12}
+              tintColor={selected ? selectedForegroundColor : pinTintColor}
+              type="monochrome"
+            />
+          ) : null}
           {archivePendingIcon}
           {props.hasQueuedMessages ? <QueuedMessageIcon selected={selected} /> : null}
           <Text

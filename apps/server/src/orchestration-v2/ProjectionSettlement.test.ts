@@ -154,6 +154,7 @@ it.effect.each([
         ["unsettled", { settledOverride: "active" }],
         ["pinned", { pinnedAt: old }],
         ["auto-settle-disabled", { autoSettleDisabledAt: old }],
+        ["active-marked", { activeMarkedAt: old }],
       ] satisfies ReadonlyArray<readonly [string, Partial<OrchestrationV2AppThread>]>) {
         yield* createRun(yield* createThread(name, overrides));
       }
