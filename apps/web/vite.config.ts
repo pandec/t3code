@@ -372,7 +372,7 @@ export default defineConfig(() => {
               },
               {
                 name: "icons",
-                test: /\/(?:components\/chat\/PierreEntryIcon\.tsx|pierre-icons\.ts|mediaPreview\.ts)$/,
+                test: /\/(?:components\/chat\/PierreEntryIcon\.tsx|pierre-icons\.ts|mediaPreview\.ts|shared\/src\/(?:video|image)\.ts)$/,
                 includeDependenciesRecursively: false,
               },
             ],
