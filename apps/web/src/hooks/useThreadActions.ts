@@ -55,6 +55,7 @@ import { readLocalApi } from "../localApi";
 import {
   readConversationForkOptions,
   readEnvironmentSupportsAutoSettleOptOut,
+  readEnvironmentSupportsActiveMark,
   readEnvironmentSupportsPinning,
   readEnvironmentSupportsPinReorder,
   readEnvironmentSupportsActiveReorder,
@@ -193,6 +194,18 @@ export class ThreadAutoSettleOptOutUnsupportedError extends Schema.TaggedError<T
 ) {
   override get message(): string {
     return "This environment's server does not support turning auto-settle off per thread yet. Update the server to use it.";
+  }
+}
+
+export class ThreadActiveMarkUnsupportedError extends Schema.TaggedError<ThreadActiveMarkUnsupportedError>()(
+  "ThreadActiveMarkUnsupportedError",
+  {
+    environmentId: EnvironmentId,
+    threadId: ThreadId,
+  },
+) {
+  override get message(): string {
+    return "This environment's server does not support marking threads as active yet. Update the server to use it.";
   }
 }
 
@@ -374,6 +387,9 @@ export function useThreadActions() {
     reportFailure: false,
   });
   const setThreadAutoSettleMutation = useOrchestrationCommand(threadEnvironment.setAutoSettle, {
+    reportFailure: false,
+  });
+  const setThreadActiveMarkMutation = useOrchestrationCommand(threadEnvironment.setActiveMark, {
     reportFailure: false,
   });
   const reorderPinnedThreadMutation = useOrchestrationCommand(threadEnvironment.reorderPin, {
@@ -916,6 +932,23 @@ export function useThreadActions() {
     });
   };
 
+  const setThreadActiveMark = async (target: ScopedThreadRef, marked: boolean) => {
+    if (!readEnvironmentSupportsActiveMark(target.environmentId)) {
+      return AsyncResult.failure(
+        Cause.fail(
+          new ThreadActiveMarkUnsupportedError({
+            environmentId: target.environmentId,
+            threadId: target.threadId,
+          }),
+        ),
+      );
+    }
+    return setThreadActiveMarkMutation({
+      environmentId: target.environmentId,
+      input: { threadId: target.threadId, marked },
+    });
+  };
+
   const pinThread = async (target: ScopedThreadRef, opts: { orderKey?: string } = {}) => {
     if (!readEnvironmentSupportsPinning(target.environmentId)) {
       return AsyncResult.failure(
@@ -1344,6 +1377,7 @@ export function useThreadActions() {
     setThreadCustomGroup,
     markThreadUnread,
     setThreadAutoSettle,
+    setThreadActiveMark,
     forkThread,
   };
 }

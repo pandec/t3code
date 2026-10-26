@@ -523,6 +523,7 @@ function commandThreadId(command: OrchestrationV2ServerCommand): ThreadId {
     case "thread.snooze":
     case "thread.unsnooze":
     case "thread.auto-settle.set":
+    case "thread.active-mark.set":
     case "thread.pin":
     case "thread.unpin":
     case "thread.pin.reorder":
@@ -3010,6 +3011,7 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
           | "thread.snooze"
           | "thread.unsnooze"
           | "thread.auto-settle.set"
+          | "thread.active-mark.set"
           | "thread.pin"
           | "thread.unpin"
           | "thread.pin.reorder"
@@ -3162,6 +3164,7 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
         command.type === "thread.snooze" ||
         command.type === "thread.unsnooze" ||
         command.type === "thread.auto-settle.set" ||
+        command.type === "thread.active-mark.set" ||
         command.type === "thread.pin" ||
         command.type === "thread.unpin" ||
         command.type === "thread.pin.reorder" ||
@@ -3494,6 +3497,7 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
             titleRegeneration: null,
             guestShare: null,
             pullRequests: thread.pullRequests?.map((link) => withPullRequestWatch(link, undefined)),
+            activeMarkedAt: null,
             updatedAt: now,
           };
         case "thread.unarchive":
@@ -3511,6 +3515,7 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
             pinnedAt: null,
             pinOrderKey: null,
             activeOrderKey: null,
+            activeMarkedAt: null,
             snoozedUntil: null,
             snoozedAt: null,
             // Fork: the awaited run of an "until it's done" snooze goes too, so
@@ -3567,6 +3572,18 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
             updatedAt: unchanged ? thread.updatedAt : now,
           };
         }
+        case "thread.active-mark.set":
+          return command.marked === (thread.activeMarkedAt != null)
+            ? thread
+            : {
+                ...thread,
+                activeMarkedAt: command.marked ? now : null,
+                // Settling clears the mark, so marking brings a settled thread back, like pin.
+                ...(command.marked && thread.settledOverride === "settled"
+                  ? { settledOverride: "active" as const, settledAt: null, unsettledAt: now }
+                  : {}),
+                updatedAt: now,
+              };
         case "thread.pin": {
           const alreadyPinned = thread.pinnedAt != null;
           const promotes =
@@ -3934,6 +3951,7 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
           };
       }
     })();
+    if (command.type === "thread.active-mark.set" && updatedThread === thread) return;
     if (
       command.type === "thread.pull-request-link.sync" ||
       command.type === "thread.pull-request-watch.sync"
@@ -3971,6 +3989,8 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
           return "thread.unsnoozed" as const;
         case "thread.auto-settle.set":
           return "thread.auto-settle-set" as const;
+        case "thread.active-mark.set":
+          return "thread.active-mark-set" as const;
         case "thread.pin":
           return "thread.pinned" as const;
         case "thread.unpin":
@@ -12559,6 +12579,7 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
           );
         if (
           thread.settledOverride !== null ||
+          thread.activeMarkedAt != null ||
           DateTime.toEpochMillis(thread.updatedAt) > DateTime.toEpochMillis(command.snapshotAt)
         ) {
           return yield* new OrchestratorDispatchError({
@@ -12623,6 +12644,7 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
       case "thread.snooze":
       case "thread.unsnooze":
       case "thread.auto-settle.set":
+      case "thread.active-mark.set":
       case "thread.pin":
       case "thread.unpin":
       case "thread.pin.reorder":
@@ -13073,6 +13095,8 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
         command.type === "thread.background-work.settle" ||
         command.type === "thread.stop" ||
         command.type === "subagent.stop" ||
+        // Re-marking or re-unmarking is a no-op, not an error.
+        command.type === "thread.active-mark.set" ||
         // A second Stop sharing, or one after the share already ended, is not an error.
         command.type === "thread.guest-share.close"
           ? Effect.succeed(planned)

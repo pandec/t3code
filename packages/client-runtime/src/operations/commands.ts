@@ -569,6 +569,20 @@ export const setThreadAutoSettle = Effect.fn("EnvironmentCommands.setThreadAutoS
   });
 });
 
+export interface SetThreadActiveMarkInput extends ThreadCommandInput {
+  readonly marked: boolean;
+}
+export const setThreadActiveMark = Effect.fn("EnvironmentCommands.setThreadActiveMark")(function* (
+  input: SetThreadActiveMarkInput,
+) {
+  return yield* dispatch({
+    type: "thread.active-mark.set",
+    commandId: yield* allocateCommandId(input),
+    threadId: input.threadId,
+    marked: input.marked,
+  });
+});
+
 export const reorderPinnedThread = Effect.fn("EnvironmentCommands.reorderPinnedThread")(function* (
   input: ReorderPinnedThreadInput,
 ) {

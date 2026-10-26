@@ -495,6 +495,7 @@ export function presentThreadShellFromProjection(
     unsettledAt: thread.unsettledAt,
     activeOrderKey: thread.activeOrderKey,
     autoSettleDisabledAt: thread.autoSettleDisabledAt,
+    activeMarkedAt: thread.activeMarkedAt,
     pinnedAt: thread.pinnedAt,
     pinOrderKey: thread.pinOrderKey,
     snoozedUntil: thread.snoozedUntil ?? null,

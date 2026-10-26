@@ -6,6 +6,8 @@ export type ThreadActionMenuId =
   | "project-settings"
   | "pin"
   | "unpin"
+  | "mark-active"
+  | "unmark-active"
   | "settle"
   | "unsettle"
   | "auto-settle"
@@ -83,6 +85,8 @@ export interface ThreadActionMenuState {
     readonly isActive: boolean;
   } | null;
   readonly isPinned: boolean;
+  /** Fork: the user's Active mark (the Active sidebar filter keeps marked threads). */
+  readonly isActiveMarked?: boolean;
   readonly isSettled: boolean;
   readonly autoSettleEnabled: boolean;
   readonly isSnoozed: boolean;
@@ -100,6 +104,7 @@ export interface ThreadActionMenuState {
     readonly autoSettleOptOut: boolean;
     readonly snooze: boolean;
     readonly pinning: boolean;
+    readonly activeMark?: boolean;
     readonly titleRegeneration: boolean;
   };
   /**
@@ -149,6 +154,13 @@ export function buildThreadActionMenuItems(
           state.isPinned
             ? { id: "unpin" as const, label: "Unpin thread", icon: "pin-off" }
             : { id: "pin" as const, label: "Pin thread", icon: "pin" },
+        ]
+      : []),
+    ...(state.supports.activeMark
+      ? [
+          state.isActiveMarked
+            ? { id: "unmark-active" as const, label: "Unmark as active", icon: "zap-off" }
+            : { id: "mark-active" as const, label: "Mark as active", icon: "zap" },
         ]
       : []),
     ...(state.supports.settlement

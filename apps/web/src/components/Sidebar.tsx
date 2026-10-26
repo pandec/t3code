@@ -91,6 +91,7 @@ import {
   GroupIcon,
   InboxIcon,
   ListFilterIcon,
+  ZapIcon,
   PlusIcon,
   SearchIcon,
   SettingsIcon,
@@ -206,6 +207,11 @@ import { openThreadInActivePane } from "./thread-split/threadOpenTarget";
 import { useSplitSecondaryThreadKey } from "./thread-split/SplitPaneMarker";
 import { SidebarEnvironmentFilterMenu } from "./sidebar/SidebarEnvironmentFilter";
 import { resolveSidebarEmptyStateCause } from "./sidebar/sidebarEmptyState";
+import {
+  isSidebarActiveWorkThread,
+  useActiveWorkFolds,
+  type SidebarShelfKey,
+} from "./sidebar/sidebarActiveWork";
 import { useSidebarEnvironmentFilter } from "./sidebar/useSidebarEnvironmentFilter";
 import {
   applySidebarThreadDrop,
@@ -348,6 +354,7 @@ const ACTIVE_SHELF_EXPANDED_KEY = "t3code:sidebar-v2:active-expanded";
 const COLLAPSED_GROUP_IDS_SCHEMA = Schema.Array(Schema.String);
 const WORKING_SHELF_EXPANDED_KEY = "t3code:sidebar:working-expanded";
 const ARCHIVED_SHELF_EXPANDED_KEY = "t3code:sidebar-v2:archived-expanded";
+const ACTIVE_WORK_FILTER_KEY = "t3code:sidebar-v2:active-work-filter";
 
 const inboxReturns = createInboxReturnTracker();
 
@@ -378,6 +385,9 @@ interface SidebarThreadPartitionInput {
   readonly serverConfigs: ReadonlyMap<EnvironmentId, EnvironmentServerConfig>;
   readonly optimisticDrop: SidebarOptimisticDrop | null;
   readonly workingShelfEnabled: boolean;
+  /** Fork: the Active filter (marked or live threads only); the open thread always stays. */
+  readonly activeWorkFilter: boolean;
+  readonly routeRowThreadKey: string | null;
   // Snooze wakes, the queued-turn grace and the Working shelf's exit grace depend
   // on the clock, so the minute tick, the precise snooze-wake tick and the inbox
   // tracker's expiry version are inputs: a new key repartitions.
@@ -439,6 +449,8 @@ function partitionSidebarThreads(input: SidebarThreadPartitionInput) {
     serverConfigs,
     optimisticDrop,
     workingShelfEnabled,
+    activeWorkFilter,
+    routeRowThreadKey,
   } = input;
   const preciseNow = new Date().toISOString();
   // Subagent children live in the parent's Agents surface, not the roster. Each fork
@@ -454,6 +466,13 @@ function partitionSidebarThreads(input: SidebarThreadPartitionInput) {
     const passesProjects =
       !hiddenProjectKeys.has(projectKey) &&
       (scopedProjectKeys === null || scopedProjectKeys.has(projectKey));
+    if (
+      activeWorkFilter &&
+      !isSidebarActiveWorkThread(thread) &&
+      threadShellKey(thread) !== routeRowThreadKey
+    ) {
+      continue;
+    }
     if (passesProjects) admittedWithoutEnvironment += 1;
     if (passesEnvironment) admittedWithoutProjects += 1;
     if (passesEnvironment && passesProjects) visible.push(thread);
@@ -901,6 +920,7 @@ function useSidebarThreads(input: {
   readonly serverConfigs: ReadonlyMap<EnvironmentId, EnvironmentServerConfig>;
   readonly optimisticDrop: SidebarOptimisticDrop | null;
   readonly workingShelfEnabled: boolean;
+  readonly activeWorkFilter: boolean;
   readonly routeThreadRef: ScopedThreadRef | null;
   readonly settledResetKey: string;
   readonly isSearchingThreads: boolean;
@@ -916,6 +936,7 @@ function useSidebarThreads(input: {
     serverConfigs,
     optimisticDrop,
     workingShelfEnabled,
+    activeWorkFilter,
     routeThreadRef,
     settledResetKey,
     isSearchingThreads,
@@ -964,37 +985,50 @@ function useSidebarThreads(input: {
   if (settledTail.resetKey !== settledResetKey) {
     setSettledTail({ resetKey: settledResetKey, count: SETTLED_TAIL_INITIAL_COUNT });
   }
-  const [settledShelfExpanded, setSettledShelfExpanded] = useLocalStorage(
+  const [settledShelfExpandedStored, setSettledShelfExpanded] = useLocalStorage(
     SETTLED_SHELF_EXPANDED_KEY,
     true,
     Schema.Boolean,
   );
-  const [snoozedShelfExpanded, setSnoozedShelfExpanded] = useLocalStorage(
+  const [snoozedShelfExpandedStored, setSnoozedShelfExpanded] = useLocalStorage(
     SNOOZED_SHELF_EXPANDED_KEY,
     false,
     Schema.Boolean,
   );
   // Pinned is the block the user curated to the top, so it starts expanded;
   // folding it is still remembered per device like every other shelf.
-  const [pinnedShelfExpanded, setPinnedShelfExpanded] = useLocalStorage(
+  const [pinnedShelfExpandedStored, setPinnedShelfExpanded] = useLocalStorage(
     PINNED_SHELF_EXPANDED_KEY,
     true,
     Schema.Boolean,
   );
-  const [workingShelfExpanded, setWorkingShelfExpanded] = useLocalStorage(
+  const [workingShelfExpandedStored, setWorkingShelfExpanded] = useLocalStorage(
     WORKING_SHELF_EXPANDED_KEY,
     false,
     Schema.Boolean,
   );
   // Fork: the built-in Active group folds like a custom group, open by
   // default and remembered per device under its own key.
-  const [activeShelfExpanded, setActiveShelfExpanded] = useLocalStorage(
+  const [activeShelfExpandedStored, setActiveShelfExpanded] = useLocalStorage(
     ACTIVE_SHELF_EXPANDED_KEY,
     true,
     Schema.Boolean,
   );
 
-  const collapsedGroups = new Set(collapsedGroupIds);
+  const activeWorkFolds = useActiveWorkFolds(activeWorkFilter);
+  const shelfExpanded = (key: SidebarShelfKey, stored: boolean) =>
+    activeWorkFilter ? !activeWorkFolds.folds.shelves.has(key) : stored;
+  const settledShelfExpanded = shelfExpanded("settled", settledShelfExpandedStored);
+  const snoozedShelfExpanded = shelfExpanded("snoozed", snoozedShelfExpandedStored);
+  const pinnedShelfExpanded = shelfExpanded("pinned", pinnedShelfExpandedStored);
+  const workingShelfExpanded = shelfExpanded("working", workingShelfExpandedStored);
+  const activeShelfExpanded = shelfExpanded("active", activeShelfExpandedStored);
+  const toggleShelf = (key: SidebarShelfKey, toggleStored: () => void) =>
+    activeWorkFilter ? activeWorkFolds.toggleShelf(key) : toggleStored();
+
+  const collapsedGroups = activeWorkFilter
+    ? activeWorkFolds.folds.groups
+    : new Set(collapsedGroupIds);
   const partition = partitionSidebarThreads({
     threads,
     environmentScope,
@@ -1004,6 +1038,8 @@ function useSidebarThreads(input: {
     serverConfigs,
     optimisticDrop,
     workingShelfEnabled,
+    activeWorkFilter,
+    routeRowThreadKey,
     clockKey: `${nowMinute}:${snoozeWakeTick}:${inboxReturnsVersion}`,
   });
   const { pinnedThreads, activeThreads, workingThreads, snoozedThreads, settledThreads } =
@@ -1060,17 +1096,21 @@ function useSidebarThreads(input: {
       ...groups.map((group) => [group.id, [] as EnvironmentThreadShell[]] as const),
     ]);
     for (const thread of activeThreads) sections.get(threadGroupId(thread, groups))!.push(thread);
-    return threadGroupSections(groups).map((group) => ({
-      id: group?.id ?? null,
-      threads: sections
-        .get(group?.id ?? null)!
-        .filter(
-          (thread) =>
-            (group === null ? activeShelfExpanded : !collapsedGroups.has(group.id)) ||
-            isSearchingThreads ||
-            scopedThreadKey(scopeThreadRef(thread.environmentId, thread.id)) === routeRowThreadKey,
-        ),
-    }));
+    // The Active filter leaves out groups it emptied.
+    return threadGroupSections(groups)
+      .filter((group) => !activeWorkFilter || group === null || sections.get(group.id)!.length > 0)
+      .map((group) => ({
+        id: group?.id ?? null,
+        threads: sections
+          .get(group?.id ?? null)!
+          .filter(
+            (thread) =>
+              (group === null ? activeShelfExpanded : !collapsedGroups.has(group.id)) ||
+              isSearchingThreads ||
+              scopedThreadKey(scopeThreadRef(thread.environmentId, thread.id)) ===
+                routeRowThreadKey,
+          ),
+      }));
   })();
 
   const orderedThreads = [
@@ -1168,11 +1208,15 @@ function useSidebarThreads(input: {
     ],
     collapsedGroups,
     toggleCustomGroup: (id: string) =>
-      setCollapsedGroupIds((current) =>
-        current.includes(id) ? current.filter((entry) => entry !== id) : [...current, id],
-      ),
+      activeWorkFilter
+        ? activeWorkFolds.toggleGroup(id)
+        : setCollapsedGroupIds((current) =>
+            current.includes(id) ? current.filter((entry) => entry !== id) : [...current, id],
+          ),
     expandCustomGroup: (id: string) =>
-      setCollapsedGroupIds((current) => current.filter((entry) => entry !== id)),
+      activeWorkFilter
+        ? activeWorkFolds.expandGroup(id)
+        : setCollapsedGroupIds((current) => current.filter((entry) => entry !== id)),
     settledVisibleCount,
     settledCount,
     olderSettledShelf,
@@ -1183,16 +1227,20 @@ function useSidebarThreads(input: {
         count: current.count + SETTLED_TAIL_PAGE_COUNT,
       })),
     settledShelfExpanded,
-    toggleSettledShelf: () => setSettledShelfExpanded((value) => !value),
+    toggleSettledShelf: () =>
+      toggleShelf("settled", () => setSettledShelfExpanded((value) => !value)),
     snoozedShelfExpanded,
-    toggleSnoozedShelf: () => setSnoozedShelfExpanded((value) => !value),
+    toggleSnoozedShelf: () =>
+      toggleShelf("snoozed", () => setSnoozedShelfExpanded((value) => !value)),
     pinnedShelfExpanded,
-    togglePinnedShelf: () => setPinnedShelfExpanded((value) => !value),
+    togglePinnedShelf: () => toggleShelf("pinned", () => setPinnedShelfExpanded((value) => !value)),
     workingShelfExpanded,
-    toggleWorkingShelf: () => setWorkingShelfExpanded((value) => !value),
+    toggleWorkingShelf: () =>
+      toggleShelf("working", () => setWorkingShelfExpanded((value) => !value)),
     activeShelfExpanded,
-    toggleActiveShelf: () => setActiveShelfExpanded((value) => !value),
-    expandActiveShelf: () => setActiveShelfExpanded(true),
+    toggleActiveShelf: () => toggleShelf("active", () => setActiveShelfExpanded((value) => !value)),
+    expandActiveShelf: () =>
+      activeWorkFilter ? activeWorkFolds.expandShelf("active") : setActiveShelfExpanded(true),
     renderedSettledThreads,
     visibleWorkingThreads,
     sidebarListItemsFresh,
@@ -1319,6 +1367,13 @@ export default function Sidebar({ routeReveal }: { routeReveal: SidebarRouteReve
   const accentTint = useAccentTintSettings();
   useProjectAccentColorMigration(projects);
   const compactCards = useClientSettings((s) => s.sidebarV2CompactCards);
+  const hideSettleButton = useClientSettings((s) => s.sidebarHideSettleButton);
+  const projectFilterRowRef = useRef<HTMLDivElement>(null);
+  const [activeWorkFilter, setActiveWorkFilter] = useLocalStorage(
+    ACTIVE_WORK_FILTER_KEY,
+    false,
+    Schema.Boolean,
+  );
   const newThreadButtonInProjectRow = useClientSettings(
     (s) => s.sidebarV2NewThreadButtonInProjectRow,
   );
@@ -1335,6 +1390,7 @@ export default function Sidebar({ routeReveal }: { routeReveal: SidebarRouteReve
     unpinThread,
     confirmAndUnpinThread,
     setThreadAutoSettle,
+    setThreadActiveMark,
     reorderPinnedThread,
     reorderActiveThread,
     setThreadCustomGroup,
@@ -1789,15 +1845,16 @@ export default function Sidebar({ routeReveal }: { routeReveal: SidebarRouteReve
     serverConfigs,
     optimisticDrop,
     workingShelfEnabled,
+    activeWorkFilter,
     routeThreadRef,
     // The settled tail restarts whenever a project or environment filter changes.
-    settledResetKey: `${projectFilterSignature}:${environmentFilter.signature}`,
+    settledResetKey: `${projectFilterSignature}:${environmentFilter.signature}:${activeWorkFilter}`,
     isSearchingThreads,
     groups: customGroups.groups,
-    olderSettledScopes: olderSettledScopes(
-      environmentFilter.environmentIds,
-      projectIdsByEnvironment,
-    ),
+    // Older settled pages hold no live or marked threads.
+    olderSettledScopes: activeWorkFilter
+      ? []
+      : olderSettledScopes(environmentFilter.environmentIds, projectIdsByEnvironment),
   });
   const [sidebarListItemsState, setSidebarListItems] = useState(sidebarListItemsFresh);
   const [sidebarListItemsKeyState, setSidebarListItemsKeyState] = useState(sidebarListItemsKey);
@@ -2471,6 +2528,21 @@ export default function Sidebar({ routeReveal }: { routeReveal: SidebarRouteReve
           stackedThreadToast({
             type: "error",
             title: "Failed to pin thread",
+            description: error instanceof Error ? error.message : "An error occurred.",
+          }),
+        );
+      }
+    })();
+  };
+  const attemptSetActiveMark = (threadRef: ScopedThreadRef, marked: boolean) => {
+    void (async () => {
+      const result = await setThreadActiveMark(threadRef, marked);
+      if (result._tag === "Failure" && !isAtomCommandInterrupted(result)) {
+        const error = squashAtomCommandFailure(result);
+        toastManager.add(
+          stackedThreadToast({
+            type: "error",
+            title: "Failed to update the active mark",
             description: error instanceof Error ? error.message : "An error occurred.",
           }),
         );
@@ -3289,6 +3361,7 @@ export default function Sidebar({ routeReveal }: { routeReveal: SidebarRouteReve
               }
             : null,
           isPinned,
+          isActiveMarked: thread.activeMarkedAt != null,
           isSettled,
           autoSettleEnabled: thread.autoSettleDisabledAt == null,
           isSnoozed,
@@ -3302,6 +3375,9 @@ export default function Sidebar({ routeReveal }: { routeReveal: SidebarRouteReve
             autoSettleOptOut: supportsAutoSettleOptOut,
             snooze: supportsSnooze,
             pinning: supportsPinning,
+            activeMark:
+              serverConfigs.get(thread.environmentId)?.environment.capabilities.threadActiveMark ===
+              true,
             titleRegeneration: supportsTitleRegeneration,
           },
           snoozePresets,
@@ -3425,6 +3501,10 @@ export default function Sidebar({ routeReveal }: { routeReveal: SidebarRouteReve
             return;
           case "unpin":
             attemptUnpin(threadRef);
+            return;
+          case "mark-active":
+          case "unmark-active":
+            attemptSetActiveMark(threadRef, clicked.value === "mark-active");
             return;
           case "fork":
             attemptFork(threadRef);
@@ -3791,7 +3871,27 @@ export default function Sidebar({ routeReveal }: { routeReveal: SidebarRouteReve
               {!newThreadButtonInProjectRow || projectGroups.length === 0 ? newThreadButton : null}
             </div>
             {projectGroups.length > 0 ? (
-              <div className="flex items-center gap-1">
+              <div ref={projectFilterRowRef} className="flex items-center gap-1">
+                <Tooltip>
+                  <TooltipTrigger
+                    render={
+                      <SidebarMenuButton
+                        size="icon"
+                        className="shrink-0"
+                        type="button"
+                        isActive={activeWorkFilter}
+                        aria-pressed={activeWorkFilter}
+                        aria-label="Show only active threads"
+                        onClick={() => setActiveWorkFilter((value) => !value)}
+                      />
+                    }
+                  >
+                    <ZapIcon className={cn(activeWorkFilter && "fill-current")} />
+                  </TooltipTrigger>
+                  <TooltipPopup side="right">
+                    {activeWorkFilter ? "Show all threads" : "Show only active threads"}
+                  </TooltipPopup>
+                </Tooltip>
                 <div className="relative min-w-0 flex-1">
                   <Menu open={projectScopeMenuOpen} onOpenChange={handleProjectScopeMenuOpenChange}>
                     <MenuTrigger
@@ -3824,7 +3924,12 @@ export default function Sidebar({ routeReveal }: { routeReveal: SidebarRouteReve
                       ) : null}
                       <ChevronDownIcon className="-mr-px size-4 shrink-0" />
                     </MenuTrigger>
-                    <MenuPopup align="start" className="w-(--anchor-width)">
+                    {/* Anchored to the whole row so the Active toggle leaves the menu full width. */}
+                    <MenuPopup
+                      align="start"
+                      anchor={projectFilterRowRef}
+                      className="w-(--anchor-width)"
+                    >
                       <MenuCheckboxItem
                         checked={resolvedProjectScopeKeys === null && hiddenProjectKeys.size === 0}
                         closeOnClick
@@ -4134,6 +4239,12 @@ export default function Sidebar({ routeReveal }: { routeReveal: SidebarRouteReve
                                 .threadPinning === true
                             }
                             isPinned={thread.pinnedAt != null}
+                            activeMarkSupported={
+                              serverConfigs.get(thread.environmentId)?.environment.capabilities
+                                .threadActiveMark === true
+                            }
+                            isActiveMarked={thread.activeMarkedAt != null}
+                            hideSettleButton={hideSettleButton}
                             dropGroupLabel={
                               hasCustomGroups &&
                               dragState?.activeKey === threadKey &&
@@ -4227,6 +4338,7 @@ export default function Sidebar({ routeReveal }: { routeReveal: SidebarRouteReve
                             onSnooze={attemptSnooze}
                             onUnsnooze={attemptUnsnooze}
                             onPin={attemptPin}
+                            onSetActiveMark={attemptSetActiveMark}
                             onUnpin={attemptUnpin}
                             onAcknowledgeWoke={acknowledgeWoke}
                             onFileDropThreads={handleThreadFileDrop}
@@ -4479,7 +4591,7 @@ export default function Sidebar({ routeReveal }: { routeReveal: SidebarRouteReve
                         </button>
                       </li>
                     ) : null}
-                    {recentArchive.totalCount > 0 ? (
+                    {!activeWorkFilter && recentArchive.totalCount > 0 ? (
                       <>
                         <li
                           key="archived-shelf-header"
@@ -4563,7 +4675,7 @@ export default function Sidebar({ routeReveal }: { routeReveal: SidebarRouteReve
             snoozedThreads.length +
             settledCount ===
             0 &&
-          recentArchive.totalCount === 0 ? (
+          (activeWorkFilter || recentArchive.totalCount === 0) ? (
             <div className="flex flex-col items-center gap-2 px-2 py-6 text-center text-xs text-muted-foreground/60">
               {/* A filter appears only when clearing it alone admits a row
                   (`emptyStateCause`). An unavailable environment scope outranks
@@ -4590,6 +4702,17 @@ export default function Sidebar({ routeReveal }: { routeReveal: SidebarRouteReve
                   >
                     <PlusIcon className="-mx-0.5 size-3" />
                     Add project
+                  </button>
+                </>
+              ) : activeWorkFilter ? (
+                <>
+                  <span>No active threads</span>
+                  <button
+                    type="button"
+                    onClick={() => setActiveWorkFilter(false)}
+                    className="inline-flex cursor-pointer items-center gap-1.5 rounded-md border border-sidebar-border px-2.5 py-1 text-2xs font-medium text-sidebar-muted-foreground transition-colors hover:bg-sidebar-row-hover hover:text-sidebar-foreground"
+                  >
+                    Show all threads
                   </button>
                 </>
               ) : emptyStateCause === "multiple" ? (

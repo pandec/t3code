@@ -141,6 +141,7 @@ export const ExecutionEnvironmentCapabilities = Schema.Struct({
       strip it on decode, so clients must not replicate catalogs to them. */
   threadGroupPlacement: Schema.optionalKey(Schema.Boolean),
   threadAutoSettleOptOut: Schema.optionalKey(Schema.Boolean),
+  threadActiveMark: Schema.optionalKey(Schema.Boolean),
   threadTitleRegeneration: Schema.optionalKey(Schema.Boolean),
   threadVisitedTracking: Schema.optionalKey(Schema.Boolean),
   threadPullRequestLinking: Schema.optionalKey(Schema.Boolean),

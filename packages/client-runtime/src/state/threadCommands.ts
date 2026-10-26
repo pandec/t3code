@@ -46,6 +46,7 @@ import {
   type ReorderActiveThreadInput,
   type SetThreadCustomGroupInput,
   type SetThreadAutoSettleInput,
+  type SetThreadActiveMarkInput,
   type SettleThreadInput,
   type SnoozeThreadInput,
   type StartThreadTurnInput,
@@ -90,6 +91,7 @@ import {
   reorderActiveThread,
   setThreadCustomGroup,
   setThreadAutoSettle,
+  setThreadActiveMark,
   settleThread,
   snoozeThread,
   startThreadTurn,
@@ -140,6 +142,7 @@ export type {
   ReorderActiveThreadInput,
   SetThreadCustomGroupInput,
   SetThreadAutoSettleInput,
+  SetThreadActiveMarkInput,
   SettleThreadInput,
   SnoozeThreadInput,
   StartThreadTurnInput,
@@ -298,6 +301,12 @@ export function createThreadEnvironmentAtoms<R, E>(
     setAutoSettle: createEnvironmentCommand(runtime, {
       label: "environment-data:commands:thread:set-auto-settle",
       execute: (input: SetThreadAutoSettleInput) => setThreadAutoSettle(input),
+      scheduler,
+      concurrency,
+    }),
+    setActiveMark: createEnvironmentCommand(runtime, {
+      label: "environment-data:commands:thread:set-active-mark",
+      execute: (input: SetThreadActiveMarkInput) => setThreadActiveMark(input),
       scheduler,
       concurrency,
     }),
@@ -496,6 +505,7 @@ export function createThreadEnvironmentAtoms<R, E>(
             settledAt: thread.settledOverride === "settled" ? (thread.settledAt ?? now) : now,
             unsettledAt: null,
             activeOrderKey: null,
+            activeMarkedAt: null,
             pinnedAt: null,
             pinOrderKey: null,
             snoozedAt: null,
@@ -548,6 +558,13 @@ export function createThreadEnvironmentAtoms<R, E>(
     setAutoSettle: optimistic.wrap(commands.setAutoSettle, (thread, input, now) => ({
       ...thread,
       autoSettleDisabledAt: input.enabled ? null : (thread.autoSettleDisabledAt ?? now),
+    })),
+    setActiveMark: optimistic.wrap(commands.setActiveMark, (thread, input, now) => ({
+      ...thread,
+      activeMarkedAt: input.marked ? (thread.activeMarkedAt ?? now) : null,
+      ...(input.marked && thread.settledOverride === "settled"
+        ? { settledOverride: "active" as const, settledAt: null, unsettledAt: now }
+        : {}),
     })),
     pin: optimistic.wrap(commands.pin, (thread, input, now) => ({
       ...thread,

@@ -86,6 +86,8 @@ import {
   PencilIcon,
   PinIcon,
   PinOffIcon,
+  ZapIcon,
+  ZapOffIcon,
   RotateCcwIcon,
   SettingsIcon,
   SparklesIcon,
@@ -332,6 +334,10 @@ function threadActionIcon(id: CommandPaletteThreadActionId): ReactNode {
       return <PinIcon className={ITEM_ICON_CLASS} />;
     case "unpin":
       return <PinOffIcon className={ITEM_ICON_CLASS} />;
+    case "mark-active":
+      return <ZapIcon className={ITEM_ICON_CLASS} />;
+    case "unmark-active":
+      return <ZapOffIcon className={ITEM_ICON_CLASS} />;
     case "fork":
       return <GitForkIcon className={ITEM_ICON_CLASS} />;
   }
@@ -694,6 +700,7 @@ function OpenCommandPaletteDialog(props: {
     pinThread,
     settleThread,
     confirmAndUnpinThread,
+    setThreadActiveMark,
     unsettleThread,
     snoozeThread,
     unsnoozeThread,
@@ -1618,6 +1625,7 @@ function OpenCommandPaletteDialog(props: {
     ...buildCurrentThreadActionItems({
       threadRef: openUnarchivedThreadRef,
       isPinned: openUnarchivedThread?.pinnedAt != null,
+      isActiveMarked: openUnarchivedThread?.activeMarkedAt != null,
       isSettled:
         openThreadCapabilities?.threadSettlement === true &&
         openUnarchivedThread?.settledOverride === "settled",
@@ -1637,6 +1645,7 @@ function OpenCommandPaletteDialog(props: {
         // mobile thread list renders, and the sibling thread menus offer it
         // regardless of which sidebar the web client shows.
         pinning: openThreadCapabilities?.threadPinning === true,
+        activeMark: openThreadCapabilities?.threadActiveMark === true,
       },
       icon: (id) => threadActionIcon(id),
       run: async (id, threadRef) => {
@@ -1657,6 +1666,12 @@ function OpenCommandPaletteDialog(props: {
           case "unpin":
             await reportThreadActionFailure("Failed to unpin thread", () =>
               confirmAndUnpinThread(threadRef),
+            );
+            return;
+          case "mark-active":
+          case "unmark-active":
+            await reportThreadActionFailure("Failed to update the active mark", () =>
+              setThreadActiveMark(threadRef, id === "mark-active"),
             );
             return;
           case "fork":

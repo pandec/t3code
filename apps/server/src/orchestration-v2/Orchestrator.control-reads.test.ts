@@ -1374,6 +1374,93 @@ it.effect("explicit settle clears snooze atomically and stays idempotent after r
   }).pipe(Effect.provide(layerTest)),
 );
 
+it.effect("active mark toggles idempotently and clears on settle and archive", () =>
+  Effect.gen(function* () {
+    const orchestrator = yield* Orchestrator.OrchestratorV2;
+    const projections = yield* ProjectionStore.ProjectionStoreV2;
+    const events = yield* EventSink.EventSinkV2;
+    const threadId = ThreadId.make("thread:active-mark");
+    yield* orchestrator.dispatch({
+      type: "thread.create",
+      commandId: CommandId.make("create-active-mark"),
+      threadId,
+      projectId: ProjectId.make("project:active-mark"),
+      title: "Marked thread",
+      modelSelection,
+      runtimeMode: "full-access",
+      interactionMode: "default",
+      branch: null,
+      worktreePath: null,
+      createdBy: "user",
+      creationSource: "web",
+    });
+    const setMark = Effect.fn(function* (id: string, marked: boolean) {
+      const commandId = CommandId.make(id);
+      yield* orchestrator.dispatch({ type: "thread.active-mark.set", commandId, threadId, marked });
+      return yield* events.readByCommandId({ commandId }).pipe(Stream.runCollect);
+    });
+    const activeMarkedAt = Effect.fn(function* () {
+      const shell = yield* projections.getThreadShell(threadId);
+      const { thread } = yield* projections.getThreadProjection(threadId);
+      assert.deepEqual(shell?.activeMarkedAt ?? null, thread.activeMarkedAt ?? null);
+      return thread.activeMarkedAt ?? null;
+    });
+
+    yield* TestClock.adjust("1 second");
+    const markedAt = yield* DateTime.now;
+    const marked = yield* setMark("mark", true);
+    assert.lengthOf(marked, 1);
+    assert.equal(marked[0]?.event.type, "thread.active-mark-set");
+    assert.deepEqual(yield* activeMarkedAt(), markedAt);
+    // A sweep snapshot taken in the same millisecond as the mark must not settle it.
+    const autoSettle = yield* Effect.exit(
+      orchestrator.dispatch({
+        type: "thread.auto-settle",
+        commandId: CommandId.make("auto-settle-marked"),
+        threadId,
+        snapshotAt: markedAt,
+      }),
+    );
+    assert.equal(autoSettle._tag, "Failure");
+    assert.deepEqual(yield* activeMarkedAt(), markedAt);
+    yield* TestClock.adjust("1 second");
+    assert.lengthOf(yield* setMark("mark-again", true), 0);
+    assert.deepEqual(yield* activeMarkedAt(), markedAt);
+    assert.lengthOf(yield* setMark("unmark", false), 1);
+    assert.equal(yield* activeMarkedAt(), null);
+    assert.lengthOf(yield* setMark("unmark-again", false), 0);
+
+    for (const [clear, restore] of [
+      ["thread.settle", "thread.unsettle"],
+      ["thread.archive", "thread.unarchive"],
+    ] as const) {
+      yield* setMark(`mark-before-${clear}`, true);
+      const commandId = CommandId.make(clear);
+      yield* orchestrator.dispatch({ type: clear, commandId, threadId });
+      const committed = yield* events.readByCommandId({ commandId }).pipe(Stream.runCollect);
+      assert.lengthOf(committed, 1);
+      assert.deepInclude(committed[0]?.event.payload, { activeMarkedAt: null });
+      assert.equal(yield* activeMarkedAt(), null);
+      yield* orchestrator.dispatch(
+        restore === "thread.unsettle"
+          ? { type: restore, commandId: CommandId.make(restore), threadId, reason: "user" }
+          : { type: restore, commandId: CommandId.make(restore), threadId },
+      );
+      assert.equal(yield* activeMarkedAt(), null);
+    }
+
+    yield* orchestrator.dispatch({
+      type: "thread.settle",
+      commandId: CommandId.make("settle-before-mark"),
+      threadId,
+    });
+    yield* setMark("mark-settled", true);
+    const { thread: promoted } = yield* projections.getThreadProjection(threadId);
+    assert.equal(promoted.settledOverride, "active");
+    assert.equal(promoted.settledAt, null);
+  }).pipe(Effect.provide(layerTest)),
+);
+
 it.effect("dispatch records the command outcome and its duration", () =>
   Effect.gen(function* () {
     const orchestrator = yield* Orchestrator.OrchestratorV2;

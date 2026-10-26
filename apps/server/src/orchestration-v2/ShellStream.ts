@@ -153,6 +153,7 @@ export function omitOlderSettledShells(input: {
     counts.set(thread.projectId, (counts.get(thread.projectId) ?? 0) + 1);
     return (
       thread.pinnedAt != null ||
+      thread.activeMarkedAt != null ||
       (thread.snoozedUntil != null && DateTime.toEpochMillis(thread.snoozedUntil) > nowMs) ||
       isLiveSubagentShell(thread) ||
       ancestorIds.has(thread.id)
