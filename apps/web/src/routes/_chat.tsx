@@ -68,7 +68,11 @@ import {
   type ThreadRouteTarget,
 } from "../threadRoutes";
 import { useComposerDraftStore } from "../composerDraftStore";
-import { rememberDraftThreadRef, resolveVisitTarget } from "../threadVisitTargets";
+import {
+  rememberDraftThreadRef,
+  resolveVisitTarget,
+  trackVisitedThreadShell,
+} from "../threadVisitTargets";
 import { useThreadRouteTarget } from "../hooks/useThreadRouteTarget";
 
 const selectSnoozeShortcutUntilDone = (settings: ClientSettings) =>
@@ -133,6 +137,9 @@ function ChatRouteGlobalShortcuts() {
         : null;
   useEffect(() => {
     threadVisitHistory.record(focusedVisitTarget, resolveVisitTarget);
+    if (focusedVisitTarget?.kind === "server") {
+      return trackVisitedThreadShell(focusedVisitTarget.threadRef);
+    }
     if (focusedVisitTarget?.kind !== "draft") return;
     const { draftId } = focusedVisitTarget;
     rememberDraftThreadRef(draftId);

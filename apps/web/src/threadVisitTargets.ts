@@ -10,6 +10,7 @@ import { environmentCatalog } from "./connection/catalog";
 import { appAtomRegistry } from "./rpc/atomRegistry";
 import { readThreadShell } from "./state/entities";
 import { environmentShell } from "./state/shell";
+import { environmentThreadShells } from "./state/threads";
 import { threadVisitHistory } from "./threadLastVisited";
 import type { ThreadRouteTarget } from "./threadRoutes";
 
@@ -24,19 +25,35 @@ function isThreadOpenable(ref: ScopedThreadRef): boolean {
     return false;
   }
   const shell = readThreadShell(ref);
-  return shell === null ? mayBeUnloadedOlderSettled(ref) : shell.archivedAt === null;
-}
-
-// A shell that omits older settled threads holds one only while it is open or paged in, so a
-// missing shell is gone only if the stream removed it since. The route shows any other outcome.
-function mayBeUnloadedOlderSettled(ref: ScopedThreadRef): boolean {
   const state = Option.getOrNull(
     AsyncResult.value(appAtomRegistry.get(environmentShell.stateAtom(ref.environmentId))),
   );
+  const key = scopedThreadKey(ref);
+  if (shell !== null) {
+    if (shell.archivedAt !== null) return false;
+    if (state !== null) shellSeenAtGeneration.set(key, state.generation);
+    return true;
+  }
+  // A shell that omits older settled threads holds one only while it is open or paged in. Within
+  // the snapshot it was seen in, only a streamed removal proves it gone; a newer snapshot cleared
+  // those, so it no longer can.
   return (
     state !== null &&
+    shellSeenAtGeneration.get(key) === state.generation &&
     Option.exists(state.snapshot, (snapshot) => snapshot.olderSettled !== undefined) &&
     !state.removedAt.has(ref.threadId)
+  );
+}
+
+// Shell generation at which each visited thread last had an unarchived shell.
+const shellSeenAtGeneration = new Map<string, number>();
+
+/** Notes the focused thread's shell while it is open: an older settled one loses it on leaving. */
+export function trackVisitedThreadShell(ref: ScopedThreadRef): () => void {
+  return appAtomRegistry.subscribe(
+    environmentThreadShells.threadShellAtom(ref),
+    () => void isThreadOpenable(ref),
+    { immediate: true },
   );
 }
 

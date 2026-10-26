@@ -14,6 +14,7 @@ vi.mock("./state/entities", () => ({
   readThreadShell: (ref: { threadId: string }) => shells.get(ref.threadId) ?? null,
 }));
 const shellState = vi.hoisted(() => ({
+  generation: 1,
   olderSettledCut: true,
   removed: new Set<string>(),
 }));
@@ -33,11 +34,13 @@ vi.mock("./state/shell", () => ({
           snapshot: Option.some(
             shellState.olderSettledCut ? { olderSettled: { before: "2026-01-01" } } : {},
           ),
+          generation: shellState.generation,
           removedAt: new Map([...shellState.removed].map((id) => [id, 1])),
         }),
     }),
   },
 }));
+vi.mock("./state/threads", () => ({ environmentThreadShells: {} }));
 vi.mock("./composerDraftStore", () => ({
   useComposerDraftStore: { getState: () => ({ getDraftSession: () => null }) },
 }));
@@ -48,6 +51,7 @@ const visit = (id: string) => threadVisitHistory.record({ kind: "server", thread
 
 beforeEach(() => {
   shells.clear();
+  shellState.generation = 1;
   shellState.olderSettledCut = true;
   shellState.removed.clear();
   for (const id of ["previous", "snoozed"]) {
@@ -76,8 +80,14 @@ describe("resolveVisitTargetAfterPark", () => {
 });
 
 describe("older settled threads without a loaded shell", () => {
-  it("stay openable after a cold connect leaves them out", () => {
-    shells.delete("previous");
+  // The thread is seen with a shell while open, then a cold-connect snapshot leaves it out.
+  const leave = (id: string) => {
+    expect(resolveVisitTarget({ kind: "server", threadRef: ref(id) })).not.toBeNull();
+    shells.delete(id);
+  };
+
+  it("stay openable after leaving them", () => {
+    leave("previous");
     expect(resolveVisitTarget({ kind: "server", threadRef: ref("previous") })).toEqual({
       kind: "server",
       threadRef: ref("previous"),
@@ -88,11 +98,15 @@ describe("older settled threads without a loaded shell", () => {
     });
   });
 
-  it("are rejected once removed, or when the shell keeps every settled thread", () => {
-    shells.delete("previous");
+  it("are rejected once removed, after a new snapshot, or when the shell keeps every settled thread", () => {
+    leave("previous");
     shellState.removed.add("previous");
     expect(resolveVisitTargetAfterPark(ref("snoozed"))).toBeNull();
     shellState.removed.clear();
+    // A reconnect's snapshot cleared any removal streamed while offline.
+    shellState.generation = 2;
+    expect(resolveVisitTargetAfterPark(ref("snoozed"))).toBeNull();
+    shellState.generation = 1;
     shellState.olderSettledCut = false;
     expect(resolveVisitTargetAfterPark(ref("snoozed"))).toBeNull();
   });
