@@ -31,7 +31,7 @@ function isThreadOpenable(ref: ScopedThreadRef): boolean {
   const key = scopedThreadKey(ref);
   if (shell !== null) {
     if (shell.archivedAt !== null) return false;
-    if (state !== null) shellSeenAtGeneration.set(key, state.generation);
+    if (state !== null) noteShellSeen(key, state.generation);
     return true;
   }
   // A shell that omits older settled threads holds one only while it is open or paged in. Within
@@ -45,8 +45,19 @@ function isThreadOpenable(ref: ScopedThreadRef): boolean {
   );
 }
 
-// Shell generation at which each visited thread last had an unarchived shell.
+// Shell generation at which recently visited threads last had an unarchived shell. History holds
+// two targets, so a few recent entries cover them.
 const shellSeenAtGeneration = new Map<string, number>();
+const SHELL_SEEN_LIMIT = 4;
+
+function noteShellSeen(key: string, generation: number): void {
+  shellSeenAtGeneration.delete(key);
+  shellSeenAtGeneration.set(key, generation);
+  if (shellSeenAtGeneration.size > SHELL_SEEN_LIMIT) {
+    const oldest = shellSeenAtGeneration.keys().next();
+    if (oldest.done !== true) shellSeenAtGeneration.delete(oldest.value);
+  }
+}
 
 /** Notes the focused thread's shell while it is open: an older settled one loses it on leaving. */
 export function trackVisitedThreadShell(ref: ScopedThreadRef): () => void {
