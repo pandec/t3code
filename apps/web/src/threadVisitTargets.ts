@@ -2,11 +2,14 @@
 import type { ScopedThreadRef } from "@t3tools/contracts";
 import { scopeThreadRef, scopedThreadKey } from "@t3tools/client-runtime/environment";
 import { effectiveSnoozed } from "@t3tools/client-runtime/state/thread-settled";
+import * as Option from "effect/Option";
+import { AsyncResult } from "effect/reactivity";
 
 import { type DraftId, useComposerDraftStore } from "./composerDraftStore";
 import { environmentCatalog } from "./connection/catalog";
 import { appAtomRegistry } from "./rpc/atomRegistry";
 import { readThreadShell } from "./state/entities";
+import { environmentShell } from "./state/shell";
 import { threadVisitHistory } from "./threadLastVisited";
 import type { ThreadRouteTarget } from "./threadRoutes";
 
@@ -21,7 +24,20 @@ function isThreadOpenable(ref: ScopedThreadRef): boolean {
     return false;
   }
   const shell = readThreadShell(ref);
-  return shell !== null && shell.archivedAt === null;
+  return shell === null ? mayBeUnloadedOlderSettled(ref) : shell.archivedAt === null;
+}
+
+// A shell that omits older settled threads holds one only while it is open or paged in, so a
+// missing shell is gone only if the stream removed it since. The route shows any other outcome.
+function mayBeUnloadedOlderSettled(ref: ScopedThreadRef): boolean {
+  const state = Option.getOrNull(
+    AsyncResult.value(appAtomRegistry.get(environmentShell.stateAtom(ref.environmentId))),
+  );
+  return (
+    state !== null &&
+    Option.exists(state.snapshot, (snapshot) => snapshot.olderSettled !== undefined) &&
+    !state.removedAt.has(ref.threadId)
+  );
 }
 
 // The server thread each remembered draft becomes once sent. Promotion
@@ -67,6 +83,6 @@ export function resolveVisitTargetAfterPark(
     if (target?.kind !== "server") return target;
     if (alsoParking?.has(scopedThreadKey(target.threadRef))) return null;
     const shell = readThreadShell(target.threadRef);
-    return shell !== null && !effectiveSnoozed(shell, { now }) ? target : null;
+    return shell === null || !effectiveSnoozed(shell, { now }) ? target : null;
   });
 }
