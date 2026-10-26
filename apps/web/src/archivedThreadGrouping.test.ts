@@ -265,4 +265,26 @@ describe("buildArchivedThreadGroups", () => {
 
     expect(groups).toEqual([]);
   });
+
+  it("omits archived subagent threads", () => {
+    const project = makeProject({ id: "project", root: "/repo", title: "Project" });
+    const parent = makeThread({ id: "parent", projectId: project.id, title: "Parent" });
+    const subagent: OrchestrationV2ThreadShell = {
+      ...makeThread({ id: "child", projectId: project.id, title: "Subagent" }),
+      lineage: {
+        rootThreadId: parent.id,
+        parentThreadId: parent.id,
+        relationshipToParent: "subagent",
+      },
+    };
+    const groups = buildArchivedThreadGroups({
+      groupingSettings,
+      primaryEnvironmentId: localEnvironmentId,
+      projects: [],
+      resolveEnvironmentLabel: String,
+      snapshots: [snapshot(localEnvironmentId, project, [parent, subagent])],
+    });
+
+    expect(groups[0]?.threads.map(({ thread }) => thread.id)).toEqual(["parent"]);
+  });
 });

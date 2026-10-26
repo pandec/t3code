@@ -286,7 +286,7 @@ The thread list ends with an **Archived** shelf of your most recently archived t
 to a count by default. Expand it to open one: the thread shows that it is archived, and sending
 a message or choosing **Unarchive** restores it. Unarchive a row directly, or delete it from its
 context menu (long-press on mobile). **View all archived threads** opens the full archive in
-Settings.
+Settings. Neither lists archived subagent threads.
 
 On web and desktop the full archive groups threads the way the sidebar groups projects, so
 checkouts of one repository share a section across environments, and it follows the Settings

@@ -149,14 +149,17 @@ export function parseRecentArchivedThreadsKey(key: string): {
   };
 }
 
+/** Fork: archive lists show the user's own archived threads, never subagent children. */
+export function isListedArchivedThread(thread: OrchestrationV2ThreadShell): boolean {
+  return thread.archivedAt !== null && thread.lineage.relationshipToParent !== "subagent";
+}
+
 function presentArchived(
   environmentId: EnvironmentId,
   threads: ReadonlyArray<OrchestrationV2ThreadShell>,
 ): ReadonlyArray<EnvironmentThreadShell> {
   return threads.flatMap((thread) =>
-    thread.archivedAt === null || thread.lineage.relationshipToParent === "subagent"
-      ? []
-      : [presentThreadShell(environmentId, thread)],
+    isListedArchivedThread(thread) ? [presentThreadShell(environmentId, thread)] : [],
   );
 }
 
