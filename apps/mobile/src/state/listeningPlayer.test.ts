@@ -273,7 +273,7 @@ describe("listening player audio session", () => {
     stop();
   });
 
-  it("releases the session when the source fails while activation is pending, and retries it", async () => {
+  it("reloads a source that failed while activation was pending when it is retried", async () => {
     using playSpy = vi.spyOn(audio.player, "play");
     using replace = vi.spyOn(audio.player, "replace");
     const modeStarted = deferred();
@@ -288,15 +288,32 @@ describe("listening player audio session", () => {
     audio.emit(false, "paused", "Source load failed");
     mode.resolve();
     await start;
-    audio.emit(false);
-    expect(playSpy).not.toHaveBeenCalled();
-    expect(await listeningHeldSession()).toBe(false);
     expect(listeningPlayback.getSnapshot().track?.speechId).toBe(trackA.speechId);
 
     replace.mockClear();
+    playSpy.mockClear();
     await play(trackA, "https://audio/1");
     expect(replace).toHaveBeenCalledOnce();
     expect(playSpy).toHaveBeenCalledOnce();
     stop();
+  });
+
+  it("still plays a replacement source after a queued failure of the previous one", async () => {
+    await play(trackA, "https://audio/1");
+    using playSpy = vi.spyOn(audio.player, "play");
+    const modeStarted = deferred();
+    const mode = deferred();
+    audio.setMode.mockImplementationOnce(() => {
+      modeStarted.resolve();
+      return mode.promise;
+    });
+    const next = play(trackB, "https://audio/2");
+    await modeStarted.promise;
+    // Expo queued this for the previous source; it reaches JS after the replacement.
+    audio.emit(false, "paused", "Previous source failed");
+    mode.resolve();
+    await next;
+    expect(playSpy).toHaveBeenCalledOnce();
+    stopListeningForThread(trackB.environmentId, trackB.threadId);
   });
 });

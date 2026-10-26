@@ -37,8 +37,9 @@ let sessionToken: AudioSessionToken | null = null;
 // Statuses from before a start (the paused player, a stale error) must not release its session.
 // The latest start holds this until it gives up, or after play() until a status that is not the
 // stale pre-play pause: a terminal one, or buffering or playing.
-let startingAttempt: { played: boolean; failed: boolean } | null = null;
-// Expo reports a source failure once, so a retry must load the source again.
+let startingAttempt: { played: boolean } | null = null;
+// Expo reports a source failure once, so a retry must load the source again. Statuses carry no
+// source identity and arrive late, so a failure from a replaced source sets this too.
 let loadedSourceFailed = false;
 
 const pendingStart = createPendingListeningStart({ coordinator: listeningPlayback });
@@ -145,11 +146,7 @@ function ensureSharedPlayer(): AudioPlayer {
     const nativePause =
       !status.playing && !status.isBuffering && status.timeControlStatus === "paused";
     const terminal = status.didJustFinish || status.error !== null;
-    if (status.error !== null) {
-      loadedSourceFailed = true;
-      // The source is replaced synchronously at startup, before any status can arrive.
-      if (startingAttempt?.played === false) startingAttempt.failed = true;
-    }
+    if (status.error !== null) loadedSourceFailed = true;
     if (startingAttempt?.played === true && (terminal || !nativePause)) startingAttempt = null;
     if (sessionToken !== null && startingAttempt === null && (terminal || nativePause)) {
       releaseListeningSession();
@@ -223,7 +220,7 @@ export async function playListeningTrack(input: {
   });
   const sameSource = plan.sameTrack && loadedUrl === input.url && !loadedSourceFailed;
 
-  const attempt = { played: false, failed: false };
+  const attempt = { played: false };
   startingAttempt = attempt;
   await startListeningPlayback({
     id: input.track.speechId,
@@ -250,9 +247,8 @@ export async function playListeningTrack(input: {
     },
     play: () => {
       loadedTrackMetadata = input.metadata;
-      // Another owner (or a recording) took the session, or the source failed, during startup;
-      // stay loaded and paused.
-      if (attempt.failed || !isAudioSessionOwner(token)) return;
+      // Another owner (or a recording) took the session during startup; stay loaded and paused.
+      if (!isAudioSessionOwner(token)) return;
       activateLockScreenControls(player, input.metadata);
       try {
         player.play();
@@ -263,13 +259,9 @@ export async function playListeningTrack(input: {
       }
     },
   });
-  const current = startingAttempt === attempt;
-  if (current && !attempt.played) startingAttempt = null;
+  if (startingAttempt === attempt && !attempt.played) startingAttempt = null;
   // A failed or superseded start leaves this recording inactive, and its session goes with it.
-  if (
-    (current && attempt.failed) ||
-    !listeningPlayback.isActive(input.track.speechId, pauseSharedPlayer)
-  ) {
+  if (!listeningPlayback.isActive(input.track.speechId, pauseSharedPlayer)) {
     releaseListeningSession(token);
   }
 }
