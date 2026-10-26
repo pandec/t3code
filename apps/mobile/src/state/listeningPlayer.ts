@@ -34,13 +34,15 @@ let appliedSpeed: number | null = null;
 let lockScreenActive = false;
 type AudioSessionToken = ReturnType<typeof acquireAudioSession>;
 let sessionToken: AudioSessionToken | null = null;
+// Statuses from before a start (the paused player, a stale error) must not release its session.
+let startingToken: AudioSessionToken | null = null;
 
 const pendingStart = createPendingListeningStart({ coordinator: listeningPlayback });
 
-function releaseListeningSession(): void {
-  const token = sessionToken;
-  sessionToken = null;
-  if (token !== null) void releaseAudioSession(token).catch(() => {});
+function releaseListeningSession(token = sessionToken): void {
+  if (token === null) return;
+  if (sessionToken === token) sessionToken = null;
+  void releaseAudioSession(token).catch(() => {});
 }
 
 const pauseSharedPlayer = () => {
@@ -134,8 +136,18 @@ function ensureSharedPlayer(): AudioPlayer {
         ? { currentTime: duration, duration }
         : { currentTime: status.currentTime, duration },
     );
-    if (status.didJustFinish) releaseListeningSession();
     const snapshot = listeningPlayback.getSnapshot();
+    // A stopped clock also reports buffering and seeks; a lock-screen pause reports a paused one.
+    const nativePause =
+      !status.playing && !status.isBuffering && status.timeControlStatus === "paused";
+    if (
+      sessionToken !== startingToken &&
+      (status.didJustFinish ||
+        status.error !== null ||
+        (nativePause && snapshot.track?.playing === true))
+    ) {
+      releaseListeningSession();
+    }
     if (status.playing && snapshot.blocked) {
       pauseSharedPlayer();
       listeningPlayback.setTrackPlaying(false);
@@ -150,7 +162,11 @@ function ensureSharedPlayer(): AudioPlayer {
       sessionToken === null
     ) {
       const token = acquireListeningSession(player);
-      if (token !== null) void activateListeningSession(token).catch(() => {});
+      if (token !== null) {
+        void activateListeningSession(token).catch(() => {
+          if (sessionToken === token) pauseSharedPlayer();
+        });
+      }
     }
     listeningPlayback.setTrackPlaying(status.playing);
   });
@@ -178,7 +194,21 @@ export async function playListeningTrack(input: {
 }): Promise<void> {
   // Any direct play supersedes a still-pending play-before-URL intent.
   pendingStart.cancel();
+  if (listeningPlayback.getSnapshot().blocked) return;
   const player = ensureSharedPlayer();
+  // Startup would pause the other recording, releasing the session taken below; pause it first.
+  const loaded = listeningPlayback.getSnapshot().track;
+  if (
+    loaded !== null &&
+    loaded.speechId !== input.track.speechId &&
+    listeningPlayback.isActive(loaded.speechId, pauseSharedPlayer)
+  ) {
+    listeningPlayback.pauseActive();
+    listeningPlayback.release(loaded.speechId, pauseSharedPlayer);
+  }
+  // Taken before preparing the source, so media started meanwhile cancels this attempt.
+  const token = acquireListeningSession(player);
+  if (token === null) return;
   const plan = planListeningTrackStart({
     loadedTrack: listeningPlayback.getSnapshot().track,
     nextTrack: input.track,
@@ -187,6 +217,7 @@ export async function playListeningTrack(input: {
   });
   const sameSource = plan.sameTrack && loadedUrl === input.url;
 
+  startingToken = token;
   await startListeningPlayback({
     id: input.track.speechId,
     pause: pauseSharedPlayer,
@@ -203,14 +234,7 @@ export async function playListeningTrack(input: {
     restartFromBeginning: sameSource && plan.finished,
     seekToBeginning: () => player.seekTo(0),
     prepareAudioMode: async () => {
-      const token = acquireListeningSession(player);
-      if (token === null) return;
-      try {
-        await activateListeningSession(token);
-      } catch (error) {
-        releaseListeningSession();
-        throw error;
-      }
+      await activateListeningSession(token);
     },
     applyPlaybackRate: (speed) => {
       appliedSpeed = null;
@@ -219,17 +243,21 @@ export async function playListeningTrack(input: {
     play: () => {
       loadedTrackMetadata = input.metadata;
       // Another owner (or a recording) took the session during startup; stay loaded and paused.
-      if (sessionToken === null || !isAudioSessionOwner(sessionToken)) return;
+      if (!isAudioSessionOwner(token)) return;
       activateLockScreenControls(player, input.metadata);
       try {
         player.play();
       } catch (error) {
         clearLockScreenControls(player);
-        releaseListeningSession();
         throw error;
       }
     },
   });
+  if (startingToken === token) startingToken = null;
+  // A failed or superseded start leaves this recording inactive, and its session goes with it.
+  if (!listeningPlayback.isActive(input.track.speechId, pauseSharedPlayer)) {
+    releaseListeningSession(token);
+  }
 }
 
 /**
