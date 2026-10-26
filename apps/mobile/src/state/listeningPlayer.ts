@@ -34,8 +34,9 @@ let appliedSpeed: number | null = null;
 let lockScreenActive = false;
 type AudioSessionToken = ReturnType<typeof acquireAudioSession>;
 let sessionToken: AudioSessionToken | null = null;
-// Statuses from before a start (the paused player, a stale error) must not release its session,
-// so the latest start holds this until the player reports playing or the start gives up.
+// Statuses from before a start (the paused player, a stale error) must not release its session.
+// The latest start holds this until it gives up, or after play() until a status that is not the
+// stale pre-play pause: a terminal one, or buffering or playing.
 let startingAttempt: { played: boolean } | null = null;
 
 const pendingStart = createPendingListeningStart({ coordinator: listeningPlayback });
@@ -138,15 +139,12 @@ function ensureSharedPlayer(): AudioPlayer {
         : { currentTime: status.currentTime, duration },
     );
     const snapshot = listeningPlayback.getSnapshot();
-    if (status.playing && startingAttempt?.played === true) startingAttempt = null;
     // A stopped clock also reports buffering and seeks; a lock-screen pause reports a paused one.
     const nativePause =
       !status.playing && !status.isBuffering && status.timeControlStatus === "paused";
-    if (
-      sessionToken !== null &&
-      startingAttempt === null &&
-      (status.didJustFinish || status.error !== null || nativePause)
-    ) {
+    const terminal = status.didJustFinish || status.error !== null;
+    if (startingAttempt?.played === true && (terminal || !nativePause)) startingAttempt = null;
+    if (sessionToken !== null && startingAttempt === null && (terminal || nativePause)) {
       releaseListeningSession();
     }
     if (status.playing && snapshot.blocked) {

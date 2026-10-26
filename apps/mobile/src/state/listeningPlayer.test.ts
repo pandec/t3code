@@ -32,6 +32,7 @@ const audio = vi.hoisted(() => {
       playing: boolean,
       stopped: "paused" | "buffering" = "paused",
       error: string | null = null,
+      didJustFinish = false,
     ) => {
       const buffering = !playing && stopped === "buffering";
       for (const listener of listeners) {
@@ -44,7 +45,7 @@ const audio = vi.hoisted(() => {
               ? "waitingToPlayAtSpecifiedRate"
               : "paused",
           error,
-          didJustFinish: false,
+          didJustFinish,
           currentTime: 1,
           duration: 10,
         });
@@ -250,6 +251,25 @@ describe("listening player audio session", () => {
     await play(trackA, "https://audio/1");
     audio.emit(false);
     expect(await listeningHeldSession()).toBe(true);
+    stop();
+  });
+
+  it.each([
+    ["a load failure", () => audio.emit(false, "paused", "Load failed")],
+    ["a finish", () => audio.emit(false, "paused", null, true)],
+    [
+      "a lock-screen pause during initial buffering",
+      () => {
+        audio.emit(false, "buffering");
+        audio.emit(false);
+      },
+    ],
+    ["an in-app pause", () => listeningPlayback.pauseActive()],
+  ])("releases the session on %s before the player reports playing", async (_name, end) => {
+    await play(trackA, "https://audio/1");
+    end();
+    expect(await listeningHeldSession()).toBe(false);
+    expect(listeningPlayback.getSnapshot().track?.speechId).toBe(trackA.speechId);
     stop();
   });
 });
