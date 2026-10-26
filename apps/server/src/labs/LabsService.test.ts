@@ -169,7 +169,7 @@ const withService = <A, E>(
             fake.layer,
             ServerSettings.layerTest({ labs: { spLabsDirectory: DIRECTORY } }),
             Layer.mock(ProjectService.ProjectService)({
-              getByWorkspaceRoot: () => Effect.succeed(Option.none()),
+              getByWorkspaceRoot: () => Effect.succeedNone,
             }),
             NodeServices.layer,
           ),

@@ -298,6 +298,7 @@ const ANDROID_ICON_BY_SF_SYMBOL = {
   pin: IconPin,
   "pin.slash": IconPinnedOff,
   play: IconPlayerPlay,
+  pause: IconPlayerPause,
   "pause.fill": IconPlayerPause,
   plus: IconPlus,
   minus: IconMinus,

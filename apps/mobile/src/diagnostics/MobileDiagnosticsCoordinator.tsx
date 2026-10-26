@@ -40,6 +40,7 @@ function EnvironmentConnectionDiagnostics(props: {
 }) {
   const connection = useEnvironmentConnectionState(props.environmentId).data;
 
+  // oxlint-disable-next-line t3code/react-effect-budget -- journals connection state changes from the environment store
   useEffect(() => {
     if (!connection) return;
     recordMobileDiagnostic(
@@ -55,6 +56,7 @@ function EnabledMobileDiagnosticsCoordinator() {
   const catalog = useAtomValue(environmentCatalog.catalogValueAtom);
   const runtimeNetworkStatus = useAtomValue(environmentCatalog.networkStatusValueAtom);
 
+  // oxlint-disable-next-line t3code/react-effect-budget -- subscribes to AppState, network and stall timers for the diagnostics journal
   useEffect(() => {
     if (!mobileDiagnosticsEnabled) return;
 
@@ -131,6 +133,7 @@ function EnabledMobileDiagnosticsCoordinator() {
     };
   }, []);
 
+  // oxlint-disable-next-line t3code/react-effect-budget -- journals runtime network status changes
   useEffect(() => {
     if (mobileDiagnosticsEnabled) {
       recordMobileDiagnostic("runtime-network", { status: runtimeNetworkStatus });

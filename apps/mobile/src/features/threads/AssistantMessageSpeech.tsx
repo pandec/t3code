@@ -98,6 +98,7 @@ export function useAssistantMessageSpeech(input: {
   const speech = threadSpeech?.recordings.get(messageId) ?? session.speech;
   const serverPending = threadSpeech?.pending.has(messageId) ?? false;
   const serverPendingRef = useRef(serverPending);
+  // oxlint-disable-next-line t3code/react-effect-budget -- latest value for the in-flight request's async completion
   useEffect(() => {
     serverPendingRef.current = serverPending;
   }, [serverPending]);

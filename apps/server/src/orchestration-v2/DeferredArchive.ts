@@ -220,7 +220,7 @@ export function planArchiveSchedule(input: {
   >;
   readonly runs: ReadonlyArray<ArchiveRun>;
   readonly pendingBackgroundTasks: ReadonlyArray<
-    Pick<OrchestrationV2PendingBackgroundTask, "kind">
+    Pick<OrchestrationV2PendingBackgroundTask, "kind" | "awaited">
   >;
   readonly afterTurn: boolean;
   readonly removeWorktree?: boolean;
@@ -277,7 +277,7 @@ export function evaluateDeferredArchive(input: {
   readonly runs: ReadonlyArray<ArchiveRun>;
   readonly checkpoints: ReadonlyArray<ArchiveCheckpoint>;
   readonly pendingBackgroundTasks: ReadonlyArray<
-    Pick<OrchestrationV2PendingBackgroundTask, "kind">
+    Pick<OrchestrationV2PendingBackgroundTask, "kind" | "awaited">
   >;
   /**
    * `restartContinuationPending`: the continuation may yet resume the work and

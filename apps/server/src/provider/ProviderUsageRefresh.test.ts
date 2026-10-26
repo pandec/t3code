@@ -103,9 +103,7 @@ it.effect("reuses gateway cooldown state and prunes removed probes", () =>
         getInstance: (instanceId) =>
           Effect.succeed(instanceId === target ? directInstance : undefined),
         getInstanceConfig: (instanceId) =>
-          instanceId === target
-            ? Ref.get(config)
-            : Effect.succeed<ProviderInstanceConfig | undefined>(undefined),
+          instanceId === target ? Ref.get(config) : Effect.undefined,
         listInstances: Ref.get(instances),
         listUnavailable: Effect.succeed([]),
         streamChanges: Stream.empty,
@@ -209,7 +207,7 @@ it.effect("reconciles usage-source transitions before refreshes and registry eve
                   ),
                 ),
               )
-            : Effect.succeed<ProviderInstanceConfig | undefined>(undefined),
+            : Effect.undefined,
         listInstances: Effect.succeed([gatewayInstance]),
         listUnavailable: Effect.succeed([]),
         streamChanges: Stream.fromPubSub(changes),
@@ -357,7 +355,7 @@ it.effect("drops a pool's snapshot and its late result when the gateway moves", 
                   ),
                 ),
               )
-            : Effect.succeed<ProviderInstanceConfig | undefined>(undefined),
+            : Effect.undefined,
         listInstances: Effect.succeed([gatewayInstance]),
         listUnavailable: Effect.succeed([]),
         streamChanges: Stream.fromPubSub(changes),
@@ -900,7 +898,7 @@ it.effect("reports only the instances that answered on this call", () =>
           // A provider that has nothing to report, and one that fails outright:
           // neither may be counted as refreshed, or the client would suppress
           // its "no new usage data" warning on an all-probes-failed refresh.
-          instance({ id: "claude_empty", read: Effect.succeed(undefined) }),
+          instance({ id: "claude_empty", read: Effect.undefined }),
           instance({
             id: "claude_broken",
             read: Effect.die(new Error("probe exploded")),

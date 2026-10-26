@@ -1,6 +1,8 @@
 import "vite-plus/test/config";
 import { defineConfig } from "vite-plus";
 import * as NodeURL from "node:url";
+import { remoteCacheUrl } from "./infra/task-cache/src/remoteCache.ts";
+import { cachedTestTasks } from "./scripts/lib/cached-tests.ts";
 
 import { sharedTestDefaults } from "./scripts/lib/vitest-shared.ts";
 
@@ -83,7 +85,18 @@ const RESTRICTED_PULL_REQUEST_GLYPH_IMPORTS = {
     "Pick a glyph by meaning from PullRequestGlyph in apps/web/src/components/pullRequest/pullRequestIcons.tsx so every surface draws the same pull request the same way.",
 };
 
+// Vite+ supports remote configuration before its published types include it.
+const cacheUrl = remoteCacheUrl(import.meta.dirname);
+const taskCacheConfig = {
+  scripts: false,
+  ...(cacheUrl ? { remote: { url: cacheUrl } } : {}),
+};
+
 export default defineConfig({
+  run: {
+    cache: taskCacheConfig,
+    tasks: cachedTestTasks(process.env.T3_CACHED_TESTS),
+  },
   resolve: {
     alias: {
       "~": NodeURL.fileURLToPath(new URL("./apps/web/src", import.meta.url)),
@@ -91,6 +104,8 @@ export default defineConfig({
   },
   test: {
     environment: "node",
+    // Fixture subprocesses must not inherit the outer task runner’s cache policy.
+    env: { VP_REMOTE_CACHE: "off", VP_REMOTE_CACHE_URL: "" },
     exclude: TEST_EXCLUDE,
     ...sharedTestDefaults,
     allowOnly: !process.env.CI,
@@ -145,6 +160,7 @@ export default defineConfig({
   fmt: {
     ignorePatterns: [
       ".repos/**",
+      "infra/task-cache/vendor/**",
       // Macroscope requires one glob per line; Markdown formatting corrupts it.
       ".macroscope/ignore.md",
       ".alchemy",
@@ -179,6 +195,7 @@ export default defineConfig({
     ignorePatterns: [
       ".repos",
       ".repos/**",
+      "infra/task-cache/vendor/**",
       "dist",
       "dist-electron",
       "node_modules",
@@ -203,6 +220,34 @@ export default defineConfig({
       perf: "warn",
     },
     rules: {
+      "eslint/no-control-regex": "off",
+      "typescript/no-this-alias": "off",
+      "unicorn/prefer-add-event-listener": "off",
+      "unicorn/prefer-string-starts-ends-with": "off",
+      "unicorn/prefer-set-has": "off",
+      "unicorn/prefer-array-find": "off",
+      "unicorn/no-new-array": "off",
+      "unicorn/no-array-reverse": "off",
+      "react/no-object-type-as-default-prop": "off",
+      "react/jsx-no-constructed-context-values": "off",
+      "react/memo-dependencies": "error",
+      "react/immutability": "error",
+      "react/no-array-index-key": "error",
+      "react/no-unstable-nested-components": "error",
+      "react/static-components": "error",
+      "react/capitalized-calls": "error",
+      "typescript/no-extraneous-class": "error",
+      "eslint/no-empty-pattern": "error",
+      "eslint/no-new": "error",
+      "unicorn/no-useless-spread": "error",
+      "eslint/no-unused-vars": [
+        "error",
+        { argsIgnorePattern: "^_", varsIgnorePattern: "^_", caughtErrorsIgnorePattern: "^_" },
+      ],
+      "eslint/no-unsafe-optional-chaining": "error",
+      "eslint/no-unneeded-ternary": "error",
+      "unicorn/no-useless-fallback-in-spread": "error",
+      "unicorn/require-module-specifiers": "error",
       "unicorn/no-array-sort": "off",
       "unicorn/consistent-function-scoping": "off",
       "oxc/no-map-spread": "off",
@@ -428,7 +473,10 @@ export default defineConfig({
       },
       {
         files: ["apps/mobile/src/**"],
-        rules: { "t3code/no-mobile-uniwind-theme-escape-hatches": "error" },
+        rules: {
+          "t3code/no-mobile-uniwind-theme-escape-hatches": "error",
+          "t3code/require-registered-list-scroll": "error",
+        },
       },
       {
         files: ["apps/mobile/src/**"],
@@ -438,6 +486,11 @@ export default defineConfig({
           "apps/mobile/src/features/pull-requests/pullRequestGlyphs.ts",
         ],
         rules: { "t3code/no-mobile-pull-request-glyph-literals": "error" },
+      },
+      {
+        files: ["apps/mobile/src/**"],
+        excludeFiles: ["**/*.test.{ts,tsx}"],
+        rules: { "t3code/no-ambiguous-detail-navigation": "error" },
       },
       {
         // Raw ResizeObserver state commits miss the paint; observeResize flushes derived layout together.
@@ -563,6 +616,10 @@ export default defineConfig({
         // Directives hide bailouts from mobile's compiler-coverage check; retain hooks until its allowlist is empty.
         files: ["apps/mobile/src/**/*.{ts,tsx}"],
         rules: { "t3code/no-manual-memo": ["error", { allowMemoHooks: true }] },
+      },
+      {
+        files: ["apps/web/src/**", "apps/mobile/src/**", "packages/*/src/**"],
+        rules: { "t3code/react-effect-budget": "error" },
       },
       {
         // React Compiler caches use* functions only if they call a hook.

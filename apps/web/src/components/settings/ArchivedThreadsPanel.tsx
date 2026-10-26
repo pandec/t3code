@@ -162,6 +162,7 @@ export function ArchivedThreadsPanel() {
     hasError: archiveError !== null,
   });
 
+  // oxlint-disable-next-line t3code/react-effect-budget -- window Mod+F focuses the search
   useEffect(() => {
     const handleKeyDown = (event: KeyboardEvent) => {
       const isMod = event.metaKey || event.ctrlKey;

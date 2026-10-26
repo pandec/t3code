@@ -704,9 +704,7 @@ const makeTestLayer = (settings: Parameters<typeof ServerSettings.layerTest>[0] 
         createWorktree: () => Effect.succeed({} as never),
       }),
     ),
-    Layer.provide(
-      Layer.mock(ProjectService.ProjectService)({ getById: () => Effect.succeed(Option.none()) }),
-    ),
+    Layer.provide(Layer.mock(ProjectService.ProjectService)({ getById: () => Effect.succeedNone })),
     Layer.provide(PlatformTestLayer),
   );
 const TestLayer = makeTestLayer();

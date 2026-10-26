@@ -424,12 +424,14 @@ export function ComposerSurface(props: {
   const animatedBorderRadius = useSharedValue(targetBorderRadius);
   const shouldAnimate = props.animateLayout !== false && Platform.OS !== "android";
   useLayoutEffect(() => {
-    animatedBorderRadius.value = shouldAnimate
-      ? withTiming(targetBorderRadius, {
-          duration: COMPOSER_TRANSITION_DURATION_MS,
-          reduceMotion: ReduceMotion.System,
-        })
-      : targetBorderRadius;
+    animatedBorderRadius.set(
+      shouldAnimate
+        ? withTiming(targetBorderRadius, {
+            duration: COMPOSER_TRANSITION_DURATION_MS,
+            reduceMotion: ReduceMotion.System,
+          })
+        : targetBorderRadius,
+    );
   }, [animatedBorderRadius, shouldAnimate, targetBorderRadius]);
   const borderCurve = props.style.borderCurve;
   const animatedShapeStyle = useAnimatedStyle(() => ({
@@ -916,11 +918,13 @@ export const ThreadComposer = function ThreadComposer(props: ThreadComposerProps
       refreshProviderUsage();
     }
   };
+  // oxlint-disable-next-line t3code/react-effect-budget -- keeps the presented usage route's session current
   useEffect(() => {
     if (usageSheetPresentation.isActive) {
       usageRoutePresentation.present(usageRouteSession);
     }
   }, [usageRoutePresentation.present, usageRouteSession, usageSheetPresentation.isActive]);
+  // oxlint-disable-next-line t3code/react-effect-budget -- pushes the usage sheet route once its presentation becomes visible
   useEffect(() => {
     if (!usageSheetPresentation.isVisible || usageRoutePresentedRef.current) {
       return;

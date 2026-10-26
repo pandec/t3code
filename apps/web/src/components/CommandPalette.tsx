@@ -2,9 +2,9 @@ import { threadPullRequestLinkMode } from "@t3tools/client-runtime/thread-pull-r
 import { visibleThreadPullRequests } from "@t3tools/shared/threadPullRequests";
 
 import {
+  scopedThreadKey,
   scopeProjectRef,
   scopeThreadRef,
-  scopedThreadKey,
 } from "@t3tools/client-runtime/environment";
 import {
   canCreateProjectInEnvironment,
@@ -93,7 +93,7 @@ import {
   TextSearchIcon,
   UserPlusIcon,
 } from "lucide-react";
-import { requestThreadFindOpen } from "./chat/threadFindActionBus";
+import { openThreadFind } from "./chat/threadFindStore";
 import {
   useDeferredValue,
   useEffect,
@@ -231,6 +231,7 @@ import {
   type CommandPaletteSubmenuItem,
   type CommandPaletteView,
   filterCommandPaletteGroups,
+  buildNestedSearchItems,
   filterPinnedBrowseEntries,
   getCommandPaletteInputPlaceholder,
   getCommandPaletteMode,
@@ -1162,8 +1163,6 @@ function OpenCommandPaletteDialog(props: {
     .filter((item) => item.value !== activeThreadValue)
     .slice(0, RECENT_THREAD_LIMIT);
 
-  // Fork: find opens in the pane the palette was opened from, not the route's.
-  const findThreadPane = splitMounted && threadActionPane === "secondary" ? "secondary" : "primary";
   const supportsThreadFind =
     currentThreadRef !== null &&
     environments.find((environment) => environment.environmentId === currentThreadRef.environmentId)
@@ -1354,7 +1353,7 @@ function OpenCommandPaletteDialog(props: {
               }
             />
             <TooltipPopup align="end" side="left">
-              {disabledHint ?? "Open Settings -> Source Control to configure this provider."}
+              {disabledHint ?? "Open Settings -> Source control to configure this provider."}
             </TooltipPopup>
           </Tooltip>
         </span>
@@ -1572,7 +1571,7 @@ function OpenCommandPaletteDialog(props: {
       icon: <TextSearchIcon className={ITEM_ICON_CLASS} />,
       shortcutCommand: "chat.find",
       run: async () => {
-        requestThreadFindOpen(findThreadPane);
+        openThreadFind(scopedThreadKey(currentThreadRef));
       },
     });
   }
@@ -2263,6 +2262,7 @@ function OpenCommandPaletteDialog(props: {
     }
   });
   const threadItemCount = allThreadItems.length;
+  // oxlint-disable-next-line t3code/react-effect-budget -- an open intent can arrive before thread shells hydrate, so it applies once the list lands.
   useLayoutEffect(() => {
     if (openIntent === null) return;
     if (openIntent.kind === "new-thread-in" && projectThreadItemCount === 0) return;
@@ -2393,6 +2393,7 @@ function OpenCommandPaletteDialog(props: {
     dispatchSearch({ type: "reset" });
     if (threadUtilityOpenTarget) executeItem(threadUtilityOpenTarget);
   });
+  // oxlint-disable-next-line t3code/react-effect-budget -- rename and snooze intents wait until the action list resolves their target.
   useLayoutEffect(() => {
     if (openIntent?.kind !== "rename-thread" && openIntent?.kind !== "snooze-thread") return;
     if (threadUtilityTargetPending) return;
@@ -2528,6 +2529,14 @@ function OpenCommandPaletteDialog(props: {
     activeGroups: liveThreadViewGroups ?? activeGroups,
     query: liveThreadViewGroups && isRenameThreadView ? "" : deferredQuery,
     isInSubmenu: currentView !== null,
+    ...(deferredQuery.trim().length > 0
+      ? {
+          allOptions: {
+            rootGroups,
+            nestedItems: buildNestedSearchItems(actionItems, deferredQuery),
+          },
+        }
+      : {}),
     projectSearchItems: projectSearchItems,
     settingsSearchItems,
     threadSearchItems:
@@ -3257,7 +3266,13 @@ function OpenCommandPaletteDialog(props: {
       event.preventDefault();
       event.stopPropagation();
       setOpen(false);
-      requestThreadFindOpen(findThreadPane);
+      if (supportsThreadFind) openThreadFind(scopedThreadKey(currentThreadRef));
+      else
+        toastManager.add({
+          id: "thread-find-unavailable",
+          title: "Thread search is unavailable on this server.",
+          description: "Update the server to enable it.",
+        });
       return;
     }
 

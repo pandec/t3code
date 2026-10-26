@@ -13,7 +13,6 @@ import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
 import * as Fiber from "effect/Fiber";
 import * as Layer from "effect/Layer";
-import * as Option from "effect/Option";
 import { McpSchema, McpServer } from "effect/ai";
 
 import * as ThreadCommandExecutor from "../../../orchestration-v2/ThreadCommandExecutor.ts";
@@ -60,14 +59,12 @@ const makeLayer = (
     Layer.provide(
       Layer.mock(ProjectService.ProjectService)({
         getById: () =>
-          Effect.succeed(
-            Option.some({
-              id: projectId,
-              title: "Tools",
-              workspaceRoot: "/repo",
-              scripts: [],
-            } as unknown as Project),
-          ),
+          Effect.succeedSome({
+            id: projectId,
+            title: "Tools",
+            workspaceRoot: "/repo",
+            scripts: [],
+          } as unknown as Project),
       }),
     ),
     Layer.provide(ServerSettings.layerTest({ projectSettingsFolded: true })),

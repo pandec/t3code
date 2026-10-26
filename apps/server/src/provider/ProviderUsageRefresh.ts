@@ -362,7 +362,7 @@ export const layer = Layer.effect(
       for (const instance of instances) {
         const sourceObservationToken = yield* health.beginUsageObservation();
         const envelope = yield* (
-          registry.getInstanceConfig?.(instance.instanceId) ?? Effect.succeed(undefined)
+          registry.getInstanceConfig?.(instance.instanceId) ?? Effect.undefined
         );
         // Gate on the *recognized* kind, not mere presence: the contract
         // promises a build that does not know a kind leaves the envelope

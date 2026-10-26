@@ -72,6 +72,8 @@ const WorkspaceSelections = Schema.Struct({
   ),
   settings: Schema.optional(Schema.String),
   settingsKey: Schema.optional(Schema.String),
+  /** A draft the threads tab showed after its last chat; only meaningful in its session. */
+  threadsDraft: Schema.optional(Schema.Struct({ key: Schema.String, params: Schema.Unknown })),
 });
 export type WorkspaceSelections = typeof WorkspaceSelections.Type;
 
@@ -120,7 +122,7 @@ export interface Preferences {
   /**
    * Upstream's shelf keys. The fork's `sidebar*ShelfExpanded` keys above own
    * settled/snoozed fold state; these stay decoded for upstream compatibility.
-   * Only the dormant Working shelf (`workingShelfEnabled`) reads its own key.
+   * Only the Working shelf reads its own key.
    */
   readonly threadListSettledShelfExpanded?: boolean;
   readonly threadListSnoozedShelfExpanded?: boolean;

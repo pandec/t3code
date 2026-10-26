@@ -1,4 +1,5 @@
-import { memo, useEffect, useRef, useState, type ReactNode, type KeyboardEvent } from "react";
+import { memo, useRef, useState, type ReactNode, type KeyboardEvent } from "react";
+import { flushSync } from "react-dom";
 import { ChevronLeftIcon, ChevronRightIcon, XIcon } from "lucide-react";
 import { Image as ImageGlyph, Text as TextGlyph } from "lucide";
 import { Button } from "../ui/button";
@@ -25,6 +26,7 @@ import { useAtomValue } from "@effect/atom-react";
 import { Atom } from "effect/reactivity";
 import { appAtomRegistry } from "~/rpc/atomRegistry";
 import { expandedImageKey } from "./ExpandedImagePreview";
+import { registerThreadOverlay } from "./threadOverlayRetention";
 
 interface ExpandedImageDialogProps {
   preview: ExpandedImagePreview;
@@ -79,6 +81,13 @@ export const ExpandedImageDialog = memo(function ExpandedImageDialog({
   const [returnFocusTarget] = useState(() =>
     document.activeElement instanceof HTMLElement ? document.activeElement : null,
   );
+  // The host unmounts the dialog outright, so Base UI never runs finalFocus. Without
+  // this, focus stays on the removed dialog, and the composer that owned the opener
+  // reads that as a blur and rests.
+  const close = () => {
+    flushSync(onClose);
+    if (returnFocusTarget?.isConnected) returnFocusTarget.focus({ preventScroll: true });
+  };
   const closeButtonRef = useRef<HTMLButtonElement>(null);
   const imageCount = preview.images.length;
   const index =
@@ -95,7 +104,7 @@ export const ExpandedImageDialog = memo(function ExpandedImageDialog({
         ...source,
         onOpenFile: () => {
           openFile();
-          onClose();
+          close();
         },
       }
     : source;
@@ -103,18 +112,6 @@ export const ExpandedImageDialog = memo(function ExpandedImageDialog({
   const navigateImage = (direction: -1 | 1) => {
     setImageOffset((current) => current + direction);
   };
-
-  // Restore opener focus to prevent composer collapse.
-  const openerRef = useRef<Element | null>(null);
-  useEffect(() => {
-    openerRef.current = document.activeElement;
-    return () => {
-      const opener = openerRef.current;
-      if (opener instanceof HTMLElement && opener.isConnected) {
-        opener.focus({ preventScroll: true });
-      }
-    };
-  }, []);
 
   const onKeyDown = (event: KeyboardEvent<HTMLDivElement>) => {
     if (event.defaultPrevented || isContextMenuOpen() || event.target instanceof HTMLVideoElement)
@@ -137,26 +134,6 @@ export const ExpandedImageDialog = memo(function ExpandedImageDialog({
     navigateImage(1);
   };
 
-  useEffect(() => {
-    const onEscape = (event: globalThis.KeyboardEvent) => {
-      if (event.key !== "Escape" || isContextMenuOpen()) return;
-      // With a dialog in each split pane only the active pane's owns Escape. A
-      // lone dialog covers the window, so it keeps Escape even from the
-      // inactive pane rather than becoming keyboard-undismissable.
-      if (
-        !isThreadPaneActive(threadPaneId) &&
-        document.querySelectorAll("[data-expanded-image-dialog]").length > 1
-      ) {
-        return;
-      }
-      event.preventDefault();
-      event.stopPropagation();
-      onClose();
-    };
-    window.addEventListener("keydown", onEscape, { capture: true });
-    return () => window.removeEventListener("keydown", onEscape, { capture: true });
-  }, [onClose, threadPaneId]);
-
   if (!item) return null;
   const mediaLabel = item.type === "video" ? "video" : "image";
   const openOriginalLink =
@@ -175,8 +152,24 @@ export const ExpandedImageDialog = memo(function ExpandedImageDialog({
   return (
     <Dialog
       open
-      onOpenChange={(open) => {
-        if (!open) onClose();
+      onOpenChange={(open, eventDetails) => {
+        if (open) return;
+        // Escape belongs to an open context menu first.
+        if (eventDetails.reason === "escape-key" && isContextMenuOpen()) {
+          eventDetails.cancel();
+          return;
+        }
+        // With a dialog in each split pane only the active pane's owns Escape. A
+        // lone dialog covers the window, so it keeps Escape even from the inactive pane.
+        if (
+          eventDetails.reason === "escape-key" &&
+          !isThreadPaneActive(threadPaneId) &&
+          document.querySelectorAll("[data-expanded-image-dialog]").length > 1
+        ) {
+          eventDetails.cancel();
+          return;
+        }
+        close();
       }}
     >
       <DialogPopup
@@ -190,7 +183,7 @@ export const ExpandedImageDialog = memo(function ExpandedImageDialog({
         initialFocus={closeButtonRef}
         finalFocus={() => returnFocusTarget}
         onClick={(event) => {
-          if (event.target === event.currentTarget) onClose();
+          if (event.target === event.currentTarget) close();
         }}
       >
         <DialogTitle className="sr-only">Expanded {mediaLabel} preview</DialogTitle>
@@ -200,7 +193,7 @@ export const ExpandedImageDialog = memo(function ExpandedImageDialog({
           size="icon-sm"
           variant="media-close"
           className="absolute right-0 top-0 z-20"
-          onClick={onClose}
+          onClick={close}
           aria-label={`Close ${mediaLabel} preview`}
         >
           <XIcon />
@@ -299,35 +292,45 @@ export const ExpandedImageDialog = memo(function ExpandedImageDialog({
 });
 
 // Keep preview state outside ChatView to isolate dialog renders.
-const expandedImagePreviewAtom = Atom.make<{
+type ExpandedImagePreviewState = {
   readonly threadKey: string;
   readonly preview: ExpandedImagePreview;
-} | null>(null).pipe(Atom.keepAlive, Atom.withLabel("chat:expanded-image-preview"));
+} | null;
+
+const expandedImagePreviewAtom = Atom.make<ExpandedImagePreviewState>(null).pipe(
+  Atom.keepAlive,
+  Atom.withLabel("chat:expanded-image-preview"),
+);
+
+function ownedSrc(state: ExpandedImagePreviewState): string | null {
+  const item = state?.preview.images[state.preview.index];
+  return item?.ownsSrc === true ? item.src : null;
+}
+
+// The preview owns a blob URL made for it, so whatever replaces it releases that URL.
+function setExpandedImagePreview(next: ExpandedImagePreviewState): void {
+  const previous = ownedSrc(appAtomRegistry.get(expandedImagePreviewAtom));
+  appAtomRegistry.set(expandedImagePreviewAtom, next);
+  if (previous !== null && previous !== ownedSrc(next)) URL.revokeObjectURL(previous);
+}
 
 export function openExpandedImagePreview(threadKey: string, preview: ExpandedImagePreview): void {
-  appAtomRegistry.set(expandedImagePreviewAtom, { threadKey, preview });
+  setExpandedImagePreview({ threadKey, preview });
 }
 
 function closeExpandedImagePreview(): void {
-  appAtomRegistry.set(expandedImagePreviewAtom, null);
+  setExpandedImagePreview(null);
 }
 
-function closeExpandedImagePreviewFor(threadKey: string): void {
-  if (appAtomRegistry.get(expandedImagePreviewAtom)?.threadKey === threadKey) {
-    closeExpandedImagePreview();
-  }
-}
+// Leaving the thread's route (or the chat view) drops its preview.
+registerThreadOverlay((threadKey) => {
+  const current = appAtomRegistry.get(expandedImagePreviewAtom);
+  if (current !== null && current.threadKey !== threadKey) closeExpandedImagePreview();
+});
 
 export function ExpandedImageDialogHost({ threadKey }: { readonly threadKey: string }) {
   const state = useAtomValue(expandedImagePreviewAtom);
   const preview = state?.threadKey === threadKey ? state.preview : null;
-  const item = preview?.images[preview.index];
-  const ownedSrc = item?.ownsSrc === true ? item.src : null;
-  useEffect(() => {
-    if (ownedSrc === null) return;
-    return () => URL.revokeObjectURL(ownedSrc);
-  }, [ownedSrc]);
-  useEffect(() => () => closeExpandedImagePreviewFor(threadKey), [threadKey]);
   if (preview === null) return null;
   return (
     <ExpandedImageDialog

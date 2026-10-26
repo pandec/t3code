@@ -94,6 +94,7 @@ export function ComposerEditor({
   };
   // A sheet still open when the draft changes underneath it or the editor unmounts would
   // otherwise keep the composer's overlay owner forever.
+  // oxlint-disable-next-line t3code/react-effect-budget -- releases the overlay owner when the draft changes or the editor unmounts
   useEffect(() => () => closeSelected(), [draftKey]);
   const importRef = useRef<AbortController | null>(null);
   const [importing, setImporting] = useState(false);

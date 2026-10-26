@@ -138,8 +138,7 @@ export function makeThreadGatewayAccountReader(dependencies: ThreadGatewayAccoun
       const live = yield* readLiveSession(input);
       if (live === undefined) return none;
       const envelope = yield* (
-        dependencies.instanceRegistry.getInstanceConfig?.(live.instanceId) ??
-          Effect.succeed(undefined)
+        dependencies.instanceRegistry.getInstanceConfig?.(live.instanceId) ?? Effect.undefined
       );
       if (envelope === undefined) return none;
       const target = resolveCliProxyApiUsageProbeTarget(envelope, live.driver);

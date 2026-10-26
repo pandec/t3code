@@ -136,7 +136,7 @@ export const readOpenRouterCredits: Effect.Effect<
 > = Effect.gen(function* () {
   const secretStore = yield* ServerSecretStore.ServerSecretStore;
   const stored = yield* secretStore.get(OPENROUTER_API_KEY_SECRET_NAME).pipe(
-    Effect.map(Option.some),
+    Effect.asSome,
     // A store that cannot be read is not "no key configured" — saying so
     // would send the user off to re-add a key that is already there.
     Effect.catch((error) =>

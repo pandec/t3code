@@ -282,6 +282,7 @@ function TtsTestDialog({
     setError(null);
     setPending(false);
   }
+  // oxlint-disable-next-line t3code/react-effect-budget -- revokes the sample's blob URL
   useEffect(
     () => () => audioSession.clear(),
     [
@@ -291,6 +292,7 @@ function TtsTestDialog({
     ],
   );
 
+  // oxlint-disable-next-line t3code/react-effect-budget -- autoplays the new sample
   useEffect(() => {
     if (open && audioUrl !== null) void audioRef.current?.play().catch(() => undefined);
   }, [open, audioUrl]);

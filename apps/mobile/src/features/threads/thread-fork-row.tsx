@@ -1,4 +1,4 @@
-import { useNavigation } from "@react-navigation/native";
+import { StackActions, useNavigation } from "@react-navigation/native";
 import { scopeThreadRef } from "@t3tools/client-runtime/environment";
 import type { EnvironmentId, OrchestrationV2TurnItem } from "@t3tools/contracts";
 import { Pressable, type ColorValue } from "react-native";
@@ -26,10 +26,12 @@ export function ThreadForkRow(props: {
       accessibilityLabel={label}
       accessibilityHint={divider.actionLabel}
       onPress={() =>
-        navigation.navigate("Thread", {
-          environmentId: props.environmentId,
-          threadId: divider.relatedThreadId,
-        })
+        navigation.dispatch(
+          StackActions.push("Thread", {
+            environmentId: props.environmentId,
+            threadId: divider.relatedThreadId,
+          }),
+        )
       }
     >
       <ThreadContextDivider

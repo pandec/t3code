@@ -2,7 +2,7 @@ import type { Preferences } from "../persistence/mobile-preferences";
 
 /**
  * The thread list's collapsible shelves, in the order they render. `working`
- * only renders while the dormant Working section beta is enabled.
+ * only renders while the Working section beta is enabled.
  */
 export type ThreadShelfId = "pinned" | "active" | "working" | "snoozed" | "settled" | "archived";
 

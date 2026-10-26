@@ -1160,6 +1160,7 @@ export function useThreadOutboxDrain(): void {
     }
   }, [creationOutcomes, threads]);
 
+  // oxlint-disable-next-line t3code/react-effect-budget -- releases thread detail subscriptions on unmount
   useEffect(
     () => () => {
       for (const unsubscribe of detailSubscriptionsRef.current.values()) unsubscribe();

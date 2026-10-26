@@ -54,6 +54,7 @@ export function AndroidAnchoredMenu(props: AndroidAnchoredMenuProps) {
   const windowHinge = use(WindowHingeContext);
   const anchorRef = useRef<ViewInstance>(null);
   const overlayRef = useRef<ViewInstance>(null);
+  const { onCloseMenu, onMenuInteractionStart, onOpenMenu } = props;
 
   const keyboardVisible = useKeyboardState((state) => state.isVisible);
   const keyboardHeight = useKeyboardState((state) => state.height);
@@ -62,16 +63,16 @@ export function AndroidAnchoredMenu(props: AndroidAnchoredMenuProps) {
     setPath([]);
     setOverlay(null);
     setRootHeight(null);
-    props.onCloseMenu?.();
-  }, [props.onCloseMenu]);
+    onCloseMenu?.();
+  }, [onCloseMenu]);
 
   const open = useCallback(() => {
-    props.onMenuInteractionStart?.();
+    onMenuInteractionStart?.();
     anchorRef.current?.measureInWindow((x, y, width, height) => {
       setAnchor({ x, y, width, height, keyboardWasVisible: keyboardVisible });
-      props.onOpenMenu?.();
+      onOpenMenu?.();
     });
-  }, [keyboardVisible, props.onMenuInteractionStart, props.onOpenMenu]);
+  }, [keyboardVisible, onMenuInteractionStart, onOpenMenu]);
 
   const measureOverlay = useCallback(() => {
     overlayRef.current?.measureInWindow((x, y, width, height) => {
@@ -133,6 +134,7 @@ export function AndroidAnchoredMenu(props: AndroidAnchoredMenuProps) {
   const maxHeight = Math.min(opensDown ? spaceBelow : spaceAbove, 480);
   const placeable = local !== null && rootHeight !== null;
 
+  const { onPressAction } = props;
   const onPressItem = useCallback(
     (action: MenuAction) => {
       if ((action.subactions?.length ?? 0) > 0) {
@@ -141,12 +143,12 @@ export function AndroidAnchoredMenu(props: AndroidAnchoredMenuProps) {
       }
       close();
       if (action.id !== undefined) {
-        props.onPressAction?.({
+        onPressAction?.({
           nativeEvent: { event: action.id },
         } as Parameters<NonNullable<MenuComponentProps["onPressAction"]>>[0]);
       }
     },
-    [close, props.onPressAction],
+    [close, onPressAction],
   );
 
   return (

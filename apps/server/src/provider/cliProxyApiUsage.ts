@@ -406,7 +406,7 @@ export function makeCliProxyApiUsageProbe(
     CliProxyApiAuthRejectedError | CliProxyApiRequestFailedError,
     HttpClient.HttpClient
   > = Effect.fn("CliProxyApiUsage.managementRequest")(
-    function* (request: HttpClientRequest.HttpClientRequest, timeoutMs: number) {
+    function* (request: HttpClientRequest.HttpClientRequest, _timeoutMs: number) {
       const client = yield* HttpClient.HttpClient;
       const response = yield* client.execute(
         request.pipe(

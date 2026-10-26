@@ -330,6 +330,7 @@ export function useThreadComposerState() {
   // once the thread moves on it expires for good, so a later return to that value cannot revive
   // it. The ref keeps the picker callbacks' identity stable across thread updates.
   const latestThreadRef = useRef(selectedThread);
+  // oxlint-disable-next-line t3code/react-effect-budget -- prunes staged picks once the thread projection moves past them
   useEffect(() => {
     latestThreadRef.current = selectedThread;
     if (selectedThreadKey && selectedThread) {

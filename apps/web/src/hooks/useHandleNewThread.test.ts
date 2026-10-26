@@ -203,6 +203,7 @@ vi.mock("../state/entities", () => {
   };
 });
 vi.mock("../state/labs", () => ({ loadLabsInventory: async () => null }));
+vi.mock("../state/olderSettledShelf", () => ({ readUnloadedThreadCount: () => 0 }));
 vi.mock("../state/presentation", () => ({
   environmentSummaries: { connectedEnvironmentIdsAtom: "connected-environment-ids" },
 }));

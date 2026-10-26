@@ -6,6 +6,7 @@ import { ArrowLeftRightIcon, ReplaceIcon, XIcon } from "lucide-react";
 
 import { openCommandPalette } from "../../commandPaletteBus";
 import { ComposerHandleContext, useComposerHandleContext } from "../../composerHandleContext";
+import { BackgroundThreadContext } from "../chat/backgroundThread";
 import type { ChatComposerHandle } from "../chat/ChatComposer";
 import { useMediaQuery } from "../../hooks/useMediaQuery";
 import { useThreadProjection, useThreadShell } from "../../state/entities";
@@ -57,7 +58,13 @@ const lastSeenRouteThreadKey: { value: string | null | typeof UNOBSERVED_ROUTE_T
  * remounts the routed ChatView (its right panel does: the split forces the sheet
  * presentation). No diff worker pool is hoisted here: the module singleton is shared.
  */
-export function SplitThreadLayout({ children }: { children: ReactNode }) {
+export function SplitThreadLayout({
+  children,
+  background = false,
+}: {
+  children: ReactNode;
+  background?: boolean;
+}) {
   const secondaryRef = useThreadSplitStore((state) => state.secondaryRef);
   const closeSplit = useThreadSplitStore((state) => state.closeSplit);
   const isWideEnoughForSplit = useMediaQuery(THREAD_SPLIT_MEDIA_QUERY);
@@ -69,6 +76,7 @@ export function SplitThreadLayout({ children }: { children: ReactNode }) {
   // The primary composer handle is the app-root one (the secondary pane gets
   // its own provider below, so the root ref only ever belongs to the primary).
   const primaryComposerRef = useComposerHandleContext();
+  // oxlint-disable-next-line t3code/react-effect-budget -- registers the primary composer handle
   useEffect(() => {
     registerThreadPaneComposer("primary", primaryComposerRef);
     return () => registerThreadPaneComposer("primary", null);
@@ -80,6 +88,7 @@ export function SplitThreadLayout({ children }: { children: ReactNode }) {
   const pendingSwap = useThreadSplitStore((state) => state.pendingSwap);
   const abortPaneSwap = useThreadSplitStore((state) => state.abortPaneSwap);
   const routeThreadKey = routeThreadRef === null ? null : scopedThreadKey(routeThreadRef);
+  // oxlint-disable-next-line t3code/react-effect-budget -- closes the split when the route takes the secondary's thread
   useEffect(() => {
     const shouldClose = shouldCloseSplitForRoute({
       routeThreadKey,
@@ -99,6 +108,7 @@ export function SplitThreadLayout({ children }: { children: ReactNode }) {
   // attention and shortcut ownership to the primary, or the secondary keeps swallowing
   // thread shortcuts. A pane swap is exempt: the threads traded sides on purpose, so the
   // side the user was working on stays active.
+  // oxlint-disable-next-line t3code/react-effect-budget -- hands pane focus to primary on outside route changes
   useEffect(() => {
     if (lastSeenRouteThreadKey.value === routeThreadKey) return;
     const isFirstObservation = lastSeenRouteThreadKey.value === UNOBSERVED_ROUTE_THREAD_KEY;
@@ -134,7 +144,9 @@ export function SplitThreadLayout({ children }: { children: ReactNode }) {
           />
         </>
       )}
-      <SplitThreadPanes secondaryRef={splitOpen ? secondaryRef : null}>{children}</SplitThreadPanes>
+      <SplitThreadPanes secondaryRef={splitOpen ? secondaryRef : null} background={background}>
+        {children}
+      </SplitThreadPanes>
     </>
   );
 }
@@ -164,6 +176,7 @@ function ParkedThreadWatcher({
       : detailState;
   const lastParkState = useRef<typeof parkState>(null);
   // Re-runs on route changes are no-ops: only a move into snoozed folds.
+  // oxlint-disable-next-line t3code/react-effect-budget -- folds the split when the parked thread snoozes
   useEffect(() => {
     const previous = lastParkState.current;
     lastParkState.current = parkState;
@@ -178,9 +191,11 @@ function ParkedThreadWatcher({
 function SplitThreadPanes({
   children,
   secondaryRef,
+  background,
 }: {
   children: ReactNode;
   secondaryRef: ScopedThreadRef | null;
+  background: boolean;
 }) {
   const splitRatio = useThreadSplitStore((state) => state.splitRatio);
   const setSplitMounted = useThreadSplitStore((state) => state.setSplitMounted);
@@ -191,6 +206,7 @@ function SplitThreadPanes({
   // splitMounted is the source of truth for "two panes on screen" that every active-pane
   // gate reads, including when this layout unmounts on a non-chat route. A layout effect:
   // a passive one leaves a stale-true window in which the only visible pane rejects shortcuts.
+  // oxlint-disable-next-line t3code/react-effect-budget -- publishes split-mounted before paint
   useLayoutEffect(() => {
     setSplitMounted(splitOpen);
     return () => setSplitMounted(false);
@@ -216,10 +232,12 @@ function SplitThreadPanes({
       </ThreadPaneSection>
       {splitOpen ? <SplitResizeHandle containerRef={containerRef} /> : null}
       {secondaryRef !== null ? (
-        <ThreadPaneSection paneId="secondary" showActiveIndicator>
+        <ThreadPaneSection paneId="secondary" showActiveIndicator inert={background}>
           <ThreadPaneContext value="secondary">
             <SecondaryPaneComposerScope>
-              <ServerThreadPaneHost threadRef={secondaryRef} />
+              <BackgroundThreadContext value={background}>
+                <ServerThreadPaneHost threadRef={secondaryRef} />
+              </BackgroundThreadContext>
             </SecondaryPaneComposerScope>
           </ThreadPaneContext>
         </ThreadPaneSection>
@@ -233,6 +251,7 @@ function SecondaryPaneComposerScope({ children }: { children: ReactNode }) {
   // ComposerHandleContext, whose single ref would otherwise be claimed by
   // whichever ChatComposer mounted last.
   const composerRef = useRef<ChatComposerHandle | null>(null);
+  // oxlint-disable-next-line t3code/react-effect-budget -- registers the secondary composer handle
   useEffect(() => {
     registerThreadPaneComposer("secondary", composerRef);
     return () => registerThreadPaneComposer("secondary", null);
@@ -244,10 +263,12 @@ function ThreadPaneSection({
   children,
   paneId,
   showActiveIndicator,
+  inert = false,
 }: {
   children: ReactNode;
   paneId: ThreadPaneId;
   showActiveIndicator: boolean;
+  inert?: boolean;
 }) {
   const isActive = useThreadSplitStore((state) => state.activePaneId === paneId);
   const setActivePane = useThreadSplitStore((state) => state.setActivePane);
@@ -260,6 +281,7 @@ function ThreadPaneSection({
     <section
       ref={attachRoot}
       tabIndex={-1}
+      inert={inert}
       data-thread-pane-id={paneId}
       data-active={isActive ? "true" : "false"}
       className="relative h-full min-h-0 min-w-0 outline-none"

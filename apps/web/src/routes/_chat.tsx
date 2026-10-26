@@ -1,7 +1,8 @@
 import { AuthOrchestrationOperateScope, AuthPreviewOperateScope } from "@t3tools/contracts";
-import { Outlet, createFileRoute, redirect, useRouter } from "@tanstack/react-router";
+import { scopedThreadKey } from "@t3tools/client-runtime/environment";
+import { Outlet, createFileRoute, redirect, useMatches, useRouter } from "@tanstack/react-router";
 import { useAtomValue } from "@effect/atom-react";
-import { useEffect, useRef } from "react";
+import { useEffect, useRef, useState } from "react";
 import type { ClientSettings } from "@t3tools/contracts";
 import {
   isAtomCommandInterrupted,
@@ -16,6 +17,9 @@ import {
 import { isCommandPaletteOpen } from "../commandPaletteBus";
 import { isElectron } from "../env";
 import { ThreadRouteView } from "../components/ThreadRouteView";
+import { isAppModalPage } from "../components/sidebar/mainAppLocation";
+import { SidebarInset } from "../components/ui/sidebar";
+import { retainThreadFindForRoute } from "../components/chat/threadFindStore";
 import { ThreadLinkPrompt } from "../components/promptLinks/ThreadLinkPrompt";
 import { useClientSettings, useLegacySidebarEnabled } from "../hooks/useSettings";
 import { useThreadActions } from "../hooks/useThreadActions";
@@ -58,7 +62,11 @@ import {
 import { openThreadInActivePane } from "~/components/thread-split/threadOpenTarget";
 import { primaryServerKeybindingsAtom } from "~/state/server";
 import { hasOpenArchiveUndoBlockingLayer } from "../archiveUndo";
-import { buildThreadRouteParams, type ThreadRouteTarget } from "../threadRoutes";
+import {
+  buildThreadRouteParams,
+  resolveThreadRouteTarget,
+  type ThreadRouteTarget,
+} from "../threadRoutes";
 import { useComposerDraftStore } from "../composerDraftStore";
 import { rememberDraftThreadRef, resolveVisitTarget } from "../threadVisitTargets";
 import { useThreadRouteTarget } from "../hooks/useThreadRouteTarget";
@@ -132,6 +140,7 @@ function ChatRouteGlobalShortcuts() {
     return useComposerDraftStore.subscribe(() => rememberDraftThreadRef(draftId));
   }, [focusedVisitTarget]);
   const lastVisitedPendingRelease = useRef<LastVisitedPendingRelease>({ key: null });
+  // oxlint-disable-next-line t3code/react-effect-budget -- the last-visited chord listens on window keydown/keyup outside React.
   useEffect(() => {
     const resolveCommand = (event: LastVisitedShortcutEvent) =>
       resolveShortcutCommand(event, keybindings, {
@@ -404,30 +413,68 @@ function ChatRouteGlobalShortcuts() {
   return null;
 }
 
+function threadRouteTargetKey(target: ThreadRouteTarget | null) {
+  if (!target) return null;
+  return target.kind === "server" ? scopedThreadKey(target.threadRef) : target.draftId;
+}
+
 function ChatRouteLayout() {
   // Render both routes here so draft promotion keeps the same ChatView mounted.
   const threadTarget = useThreadRouteTarget();
+  // Read matches, not location, so this agrees with the params useThreadRouteTarget reads.
+  const modalOpen = useMatches({
+    select: (matches) => matches.some((match) => isAppModalPage(match.pathname)),
+  });
+  // Settings and Usage render over the thread that opened them, so ChatView never remounts.
+  const [backgroundTarget, setBackgroundTarget] = useState(threadTarget);
+  if (!modalOpen && threadRouteTargetKey(backgroundTarget) !== threadRouteTargetKey(threadTarget)) {
+    setBackgroundTarget(threadTarget);
+  }
+  const shownTarget = modalOpen ? backgroundTarget : threadTarget;
   return (
     <>
-      <ChatRouteGlobalShortcuts />
-      {threadTarget?.kind === "server" ? (
-        <ThreadLinkPrompt threadRef={threadTarget.threadRef} />
+      {modalOpen ? null : <ChatRouteGlobalShortcuts />}
+      {shownTarget?.kind === "server" && !modalOpen ? (
+        <ThreadLinkPrompt threadRef={shownTarget.threadRef} />
       ) : null}
-      <SplitThreadLayout>
-        {threadTarget ? <ThreadRouteView target={threadTarget} /> : <Outlet />}
+      <SplitThreadLayout background={modalOpen}>
+        {shownTarget ? (
+          <ThreadRouteView target={shownTarget} background={modalOpen} />
+        ) : modalOpen ? (
+          <SidebarInset className="h-dvh" />
+        ) : (
+          <Outlet />
+        )}
       </SplitThreadLayout>
+      {modalOpen ? <Outlet /> : null}
     </>
   );
 }
 
 export const Route = createFileRoute("/_chat")({
-  beforeLoad: async ({ context }) => {
+  beforeLoad: async ({ context, location }) => {
     if (
       context.authGateState.status !== "authenticated" &&
       context.authGateState.status !== "hosted-static"
     ) {
       throw redirect({ to: "/pair", replace: true });
     }
+    return { appModalPage: isAppModalPage(location.pathname) };
   },
   component: ChatRouteLayout,
+  // Every match carries the whole location's params, so this layout sees the thread route's too.
+  onEnter: ({ context, params }) => retainThreadFindForRouteMatch(context.appModalPage, params),
+  onStay: ({ context, params }) => retainThreadFindForRouteMatch(context.appModalPage, params),
+  onLeave: () => retainThreadFindForRoute({ modalPage: false, threadRef: null }),
 });
+
+function retainThreadFindForRouteMatch(
+  modalPage: boolean,
+  params: Partial<Record<"environmentId" | "threadId", string>>,
+) {
+  const target = resolveThreadRouteTarget(params);
+  retainThreadFindForRoute({
+    modalPage,
+    threadRef: target?.kind === "server" ? target.threadRef : null,
+  });
+}

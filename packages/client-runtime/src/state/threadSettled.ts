@@ -79,7 +79,7 @@ export interface ThreadSnoozeShell extends QueuedThreadShell {
   readonly snoozedAt?: string | null;
   /** Fork: the run an "until it's done" snooze waits on. */
   readonly snoozedUntilRunId?: string | null;
-  readonly pendingBackgroundTasks?: ReadonlyArray<{ readonly kind: string }>;
+  readonly pendingBackgroundTasks?: ReadonlyArray<{ readonly kind: string }> | undefined;
   readonly hasPendingApprovals: boolean;
   readonly hasPendingUserInput: boolean;
   readonly pendingSubagentRequest?: PendingSubagentRequest | null;

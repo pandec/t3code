@@ -102,6 +102,7 @@ export function useAssistantMessageSpeech(input: {
   const speech = threadSpeech?.recordings.get(messageId) ?? session.speech;
   const serverPending = threadSpeech?.pending.has(messageId) ?? false;
   const serverPendingRef = useRef(serverPending);
+  // oxlint-disable-next-line t3code/react-effect-budget -- mirrors server pending for the async synthesize callback
   useEffect(() => {
     serverPendingRef.current = serverPending;
   }, [serverPending]);

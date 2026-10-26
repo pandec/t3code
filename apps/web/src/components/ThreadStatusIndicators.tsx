@@ -97,17 +97,13 @@ export function useLinkedThreadPullRequest(
     current === null ? ((!supportsLinks ? linkedPullRequest : null) ?? branchPullRequest) : null;
   // Preserve reference identity so sidebar renders do not touch the summary cache.
   const reference = fallback == null ? null : linkedPullRequestReference(fallback);
-  const queried = useEnvironmentQuery(
+  // Mounted for its answers, which land in the shared summary read below.
+  useEnvironmentQuery(
     !enabled || environmentId === null || reference === null
       ? null
       : linkedPullRequestDetailAtom({ environmentId, input: reference }),
   );
-  const detail = useSharedPullRequestSummary(
-    environmentId,
-    reference,
-    queried.data,
-    queried.dataUpdatedAt,
-  );
+  const detail = useSharedPullRequestSummary(environmentId, reference);
 
   if (current !== null) return currentStatus;
   return detail === null
@@ -293,7 +289,7 @@ function PullRequestBadge({
           className={cn("contents font-normal text-xs tabular-nums", presentation.toneClassName)}
         >
           <presentation.Icon aria-hidden className="size-3 shrink-0" />
-          <span>{presentation.text}</span>
+          <span className="redesign:text-secondary-label">{presentation.text}</span>
         </span>
       </TooltipTrigger>
       <TooltipPopup
@@ -844,7 +840,7 @@ function WorktreeIndicatorIcon({
         }
       >
         <FolderGit2Icon
-          className={labName ? "size-3 text-info/80" : "size-3 text-muted-foreground/40"}
+          className={cn("size-3.5 shrink-0", labName ? "text-info/80" : "text-icon-muted")}
         />
       </TooltipTrigger>
       <TooltipPopup side="top">{tooltip}</TooltipPopup>

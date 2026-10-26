@@ -50,11 +50,17 @@ import { useEffect, useRef, useState } from "react";
 import type { ComposerEditorSelection } from "../../components/ComposerEditor";
 import { serverEnvironment } from "../../state/server";
 import { useAtomCommand } from "../../state/use-atom-command";
-import { useComposerPathSearch, useComposerPullRequestSearch } from "../../state/queries";
+import {
+  useComposerPathSearch,
+  useComposerPullRequestSearch,
+  useThreadSearch,
+} from "../../state/queries";
 import type { ComposerCommandItem } from "./ComposerCommandPopover";
 import { matchesSlashSkillQuery } from "./composerSlashSkillSearch";
 
 const WORKSPACE_SNAPSHOT_RETRY_COOLDOWN_MS = 10_000;
+// A cwd that never scans, such as a deleted worktree, would otherwise retry forever.
+const WORKSPACE_SNAPSHOT_MAX_ATTEMPTS = 3;
 
 // Exported for the fork's test: the owner-key reset must land on the JS string
 // end (surrogate pairs count twice), which nothing else pins.
@@ -263,6 +269,7 @@ export function useComposerCommandMenu({
   );
   // Record client request time to enforce TTL even when the client clock runs ahead of the server.
   const workspaceRefreshKeyRef = useRef<{ key: string; requestedAt: number } | null>(null);
+  const failedRefreshesRef = useRef<{ key: string; count: number } | null>(null);
   const [workspaceRefreshRetry, setWorkspaceRefreshRetry] = useState<{
     key: string;
     notBefore: number;
@@ -318,6 +325,11 @@ export function useComposerCommandMenu({
     workspaceRefreshKeyRef.current = request;
     const retryLater = () => {
       if (workspaceRefreshKeyRef.current !== request) return;
+      const failed = failedRefreshesRef.current;
+      const count = failed?.key === key ? failed.count + 1 : 1;
+      failedRefreshesRef.current = { key, count };
+      // Keeping the request marker lets the TTL hold off the next scan.
+      if (count >= WORKSPACE_SNAPSHOT_MAX_ATTEMPTS) return;
       workspaceRefreshKeyRef.current = null;
       setWorkspaceRefreshRetry({
         key,
@@ -337,6 +349,7 @@ export function useComposerCommandMenu({
           projectCwd,
         );
       if (!refreshed) retryLater();
+      else failedRefreshesRef.current = null;
     }, retryLater);
   }, [
     draftMessage,
@@ -359,6 +372,12 @@ export function useComposerCommandMenu({
     cwd: trigger?.kind === "path" ? projectCwd : null,
     query: trigger?.kind === "path" ? trigger.query : null,
   });
+  // Mounts older settled threads matching the mention, which shells may leave out.
+  useThreadSearch(
+    trigger?.kind === "path" && environmentId ? [environmentId] : [],
+    trigger?.kind === "path" ? trigger.query : "",
+    { titlesOnly: true },
+  );
   const pullRequestSearch = useComposerPullRequestSearch({
     environmentId,
     projectId: pullRequestProjectId,

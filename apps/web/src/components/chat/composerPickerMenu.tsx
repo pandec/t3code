@@ -50,6 +50,7 @@ export function useComposerPickerKeyboard<T extends { readonly id: string }>(inp
 
   const highlightedEntry = entries.find((entry) => entry.id === highlightedId) ?? entries[0];
 
+  // oxlint-disable-next-line t3code/react-effect-budget -- focuses the filter after Lexical's same-tick refocus
   useEffect(() => {
     // Lexical re-asserts editor focus on the same tick the menu mounts, so a
     // synchronous focus loses the race; take it one frame later.
@@ -64,6 +65,7 @@ export function useComposerPickerKeyboard<T extends { readonly id: string }>(inp
     setHighlightedId(entries[0]?.id ?? null);
   }
 
+  // oxlint-disable-next-line t3code/react-effect-budget -- closes on any outside pointerdown
   useEffect(() => {
     // Interacting anywhere outside the menu hands control back — the picker
     // must never behave like a modal keyboard trap.
@@ -75,6 +77,7 @@ export function useComposerPickerKeyboard<T extends { readonly id: string }>(inp
     return () => window.removeEventListener("pointerdown", handler, true);
   }, [onClose]);
 
+  // oxlint-disable-next-line t3code/react-effect-budget -- window keyboard navigation for the picker
   useEffect(() => {
     const handler = (event: KeyboardEvent) => {
       // Split view: only the active pane's picker owns the window keys.

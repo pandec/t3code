@@ -49,6 +49,7 @@ export function ThreadOutboxDrainHost() {
   const previousConnectedRef = useRef(connected);
 
   // A reconnect retries at once instead of waiting out a backoff from before it.
+  // oxlint-disable-next-line t3code/react-effect-budget -- clears retry backoffs on reconnect
   useEffect(() => {
     if (previousConnectedRef.current === connected) return;
     previousConnectedRef.current = connected;
@@ -147,6 +148,7 @@ export function ThreadOutboxDrainHost() {
     }
   });
 
+  // oxlint-disable-next-line t3code/react-effect-budget -- delivers due outbox submissions
   useEffect(() => {
     for (const submission of selectThreadSubmissionsToSend({
       submissions,

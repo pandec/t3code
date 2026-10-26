@@ -50,6 +50,7 @@ export function useThreadPrewarm(): void {
   const fireTrigger = useAtomCommand(threadPrewarmTriggerCommand, { reportFailure: false });
   const snapshotRef = useRef<ThreadActivitySnapshot | null>(null);
 
+  // oxlint-disable-next-line t3code/react-effect-budget -- fires prewarm requests as observed thread runs settle
   useEffect(() => {
     if (snapshotRef.current === null) {
       snapshotRef.current = seedThreadActivitySnapshot(threadShells);

@@ -62,6 +62,7 @@ export function SessionImportDialog(props: {
 
   // Reads every local ref page on open: a worktree's branch can sort past the
   // first page, and cached ref lists can miss worktrees created outside T3.
+  // oxlint-disable-next-line t3code/react-effect-budget -- pages local refs for the picked workspace
   useEffect(() => {
     if (member === null) return;
     let cancelled = false;
@@ -120,6 +121,7 @@ export function SessionImportDialog(props: {
   // Candidate query atoms are cached per workspace; refresh on open and on
   // every workspace pick so freshly imported/bound or newly placed sessions
   // show their current state.
+  // oxlint-disable-next-line t3code/react-effect-budget -- refreshes cached candidates on open and workspace pick
   useEffect(() => {
     if (member !== null) refreshCandidates();
   }, [member, refreshCandidates]);

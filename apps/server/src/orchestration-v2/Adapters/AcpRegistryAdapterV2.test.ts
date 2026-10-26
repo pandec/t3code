@@ -22,7 +22,6 @@ import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
 import * as FileSystem from "effect/FileSystem";
 import * as Layer from "effect/Layer";
-import * as Option from "effect/Option";
 import * as Path from "effect/Path";
 import * as Schema from "effect/Schema";
 import * as HttpClient from "effect/http/HttpClient";
@@ -1915,7 +1914,7 @@ describe("AcpRegistryAdapterV2", () => {
                       startupActive = false;
                     }),
                 ),
-              runBackgroundProbe: (_agentId, effect) => effect.pipe(Effect.map(Option.some)),
+              runBackgroundProbe: (_agentId, effect) => effect.pipe(Effect.asSome),
               withSessionMutation: (effect) => effect,
               clearAvailableCommands: () => Effect.void,
               publishAvailableCommands: (publishedInstanceId, commands) =>
@@ -1923,16 +1922,16 @@ describe("AcpRegistryAdapterV2", () => {
                   instanceId: publishedInstanceId,
                   commands,
                 }).pipe(Effect.asVoid),
-              getAvailableCommands: () => Effect.succeed(Option.none()),
+              getAvailableCommands: () => Effect.succeedNone,
               watchAvailableCommands: () => Effect.never,
               clearLiveConfiguration: () => Effect.void,
               publishLiveConfiguration: (_publishedInstanceId, configuration) =>
                 Deferred.succeed(configurationPublished, configuration).pipe(Effect.asVoid),
-              getLiveConfiguration: () => Effect.succeed(Option.none()),
+              getLiveConfiguration: () => Effect.succeedNone,
               watchLiveConfiguration: () => Effect.never,
               requestUrlAuthentication: () => Effect.succeed(false),
               acceptUrlAuthentication: () => Effect.succeed(false),
-              getUrlAuthAction: () => Effect.succeed(Option.none()),
+              getUrlAuthAction: () => Effect.succeedNone,
               watchUrlAuthAction: () => Effect.never,
             }),
             Layer.mock(AcpRegistrySupport.AcpRegistryCatalog)({

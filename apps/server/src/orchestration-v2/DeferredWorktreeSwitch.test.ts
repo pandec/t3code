@@ -22,7 +22,6 @@ import * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
 import * as FileSystem from "effect/FileSystem";
 import * as Layer from "effect/Layer";
-import * as Option from "effect/Option";
 import * as Path from "effect/Path";
 import * as Stream from "effect/Stream";
 
@@ -273,9 +272,7 @@ const TestLayer = ThreadWorktreeSwitchScheduler.layer.pipe(
       createWorktree: () => Effect.succeed({} as never),
     }),
   ),
-  Layer.provide(
-    Layer.mock(ProjectService.ProjectService)({ getById: () => Effect.succeed(Option.none()) }),
-  ),
+  Layer.provide(Layer.mock(ProjectService.ProjectService)({ getById: () => Effect.succeedNone })),
   Layer.provideMerge(PlatformTestLayer),
 );
 

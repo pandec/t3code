@@ -1,12 +1,11 @@
 import * as Dialog from "../../components/ui/Dialog";
-import { useNavigation } from "@react-navigation/native";
+import { StackActions, useNavigation } from "@react-navigation/native";
 import { scopeThreadRef } from "@t3tools/client-runtime/environment";
 import type { EnvironmentThreadShell } from "@t3tools/client-runtime/state/shell";
 import { conversationForkTarget } from "@t3tools/client-runtime/state/thread-fork";
 import { AuthOrchestrationOperateScope, ThreadId } from "@t3tools/contracts";
 import * as Cause from "effect/Cause";
 import * as Haptics from "expo-haptics";
-import { useCallback } from "react";
 
 import { uuidv4 } from "../../lib/uuid";
 import { scopedThreadKey } from "../../lib/scopedEntities";
@@ -36,86 +35,81 @@ export function useForkConversation(
   });
   const navigation = useNavigation();
 
-  return useCallback(
-    (thread: EnvironmentThreadShell) => {
-      const key = scopedThreadKey(thread.environmentId, thread.id);
-      if (forkInFlightThreadKeys.has(key)) return;
-      if (!readEnvironmentScope(thread.environmentId, AuthOrchestrationOperateScope)) {
-        Dialog.alert("Could not fork conversation", "This connection cannot change threads.");
-        return;
-      }
-      const forkTarget = conversationForkTarget(thread, {
-        canForkImportedSession: readCanForkImportedSession(thread),
-      });
-      if (forkTarget === null) {
+  return (thread: EnvironmentThreadShell) => {
+    const key = scopedThreadKey(thread.environmentId, thread.id);
+    if (forkInFlightThreadKeys.has(key)) return;
+    if (!readEnvironmentScope(thread.environmentId, AuthOrchestrationOperateScope)) {
+      Dialog.alert("Could not fork conversation", "This connection cannot change threads.");
+      return;
+    }
+    const forkTarget = conversationForkTarget(thread, {
+      canForkImportedSession: readCanForkImportedSession(thread),
+    });
+    if (forkTarget === null) {
+      Dialog.alert(
+        "Could not fork conversation",
+        "This conversation cannot be forked right now. Wait for its turn to finish.",
+      );
+      return;
+    }
+    forkInFlightThreadKeys.add(key);
+    void Haptics.selectionAsync();
+    void (async () => {
+      // A runless imported thread forks its native session server-side.
+      const forked: { readonly threadId: ThreadId } | Cause.Cause<unknown> =
+        forkTarget.type === "run"
+          ? await (async () => {
+              const threadId = ThreadId.make(uuidv4());
+              const result = await forkFromRun({
+                environmentId: thread.environmentId,
+                input: {
+                  sourceThreadId: thread.id,
+                  targetThreadId: threadId,
+                  runId: forkTarget.runId,
+                  creationSource: "mobile",
+                },
+              });
+              return result._tag === "Failure" ? result.cause : { threadId };
+            })()
+          : await forkImportedThread({
+              environmentId: thread.environmentId,
+              input: { threadId: thread.id },
+            }).then((result) => (result._tag === "Failure" ? result.cause : result.value));
+      if (Cause.isCause(forked)) {
+        const error = Cause.squash(forked);
         Dialog.alert(
           "Could not fork conversation",
-          "This conversation cannot be forked right now. Wait for its turn to finish.",
+          error instanceof Error && error.message.trim().length > 0
+            ? error.message
+            : "The fork could not be created.",
         );
         return;
       }
-      forkInFlightThreadKeys.add(key);
-      void Haptics.selectionAsync();
-      void (async () => {
-        try {
-          // A runless imported thread forks its native session server-side.
-          const forked: { readonly threadId: ThreadId } | Cause.Cause<unknown> =
-            forkTarget.type === "run"
-              ? await (async () => {
-                  const threadId = ThreadId.make(uuidv4());
-                  const result = await forkFromRun({
-                    environmentId: thread.environmentId,
-                    input: {
-                      sourceThreadId: thread.id,
-                      targetThreadId: threadId,
-                      runId: forkTarget.runId,
-                      creationSource: "mobile",
-                    },
-                  });
-                  return result._tag === "Failure" ? result.cause : { threadId };
-                })()
-              : await forkImportedThread({
-                  environmentId: thread.environmentId,
-                  input: { threadId: thread.id },
-                }).then((result) => (result._tag === "Failure" ? result.cause : result.value));
-          if (Cause.isCause(forked)) {
-            const error = Cause.squash(forked);
-            Dialog.alert(
-              "Could not fork conversation",
-              error instanceof Error && error.message.trim().length > 0
-                ? error.message
-                : "The fork could not be created.",
-            );
-            return;
-          }
-          const targetThreadId = forked.threadId;
-          const targetShell = environmentThreadShells.threadShellAtom(
-            scopeThreadRef(thread.environmentId, targetThreadId),
-          );
-          const ready = await waitForThreadShellReady({
-            read: () => appAtomRegistry.get(targetShell) !== null,
-          });
-          if (!ready) {
-            Dialog.alert(
-              "Fork created",
-              "Its thread data did not reach this client. Reconnect and try opening it from the thread list.",
-            );
-            return;
-          }
-          const shell = appAtomRegistry.get(targetShell);
-          if (openThread !== undefined && shell !== null) {
-            openThread(shell);
-            return;
-          }
-          navigation.navigate("Thread", {
-            environmentId: thread.environmentId,
-            threadId: targetThreadId,
-          });
-        } finally {
-          forkInFlightThreadKeys.delete(key);
-        }
-      })();
-    },
-    [forkFromRun, forkImportedThread, navigation, openThread],
-  );
+      const targetThreadId = forked.threadId;
+      const targetShell = environmentThreadShells.threadShellAtom(
+        scopeThreadRef(thread.environmentId, targetThreadId),
+      );
+      const ready = await waitForThreadShellReady({
+        read: () => appAtomRegistry.get(targetShell) !== null,
+      });
+      if (!ready) {
+        Dialog.alert(
+          "Fork created",
+          "Its thread data did not reach this client. Reconnect and try opening it from the thread list.",
+        );
+        return;
+      }
+      const shell = appAtomRegistry.get(targetShell);
+      if (openThread !== undefined && shell !== null) {
+        openThread(shell);
+        return;
+      }
+      navigation.dispatch(
+        StackActions.push("Thread", {
+          environmentId: thread.environmentId,
+          threadId: targetThreadId,
+        }),
+      );
+    })().finally(() => forkInFlightThreadKeys.delete(key));
+  };
 }

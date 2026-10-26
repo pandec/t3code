@@ -8,6 +8,7 @@ import * as Layer from "effect/Layer";
 import { HttpBody, HttpClient, HttpRouter } from "effect/http";
 import * as McpProviderSessions from "@t3tools/provider-core/server/McpProviderSessions";
 
+import * as DocumentText from "../../../provider/DocumentText.ts";
 import * as ServerConfig from "../../../config.ts";
 import * as DeviceService from "../../../device/DeviceService.ts";
 import * as ServerEnvironment from "../../../environment/ServerEnvironment.ts";
@@ -171,6 +172,7 @@ it.effect("t3_thread_groups and t3_thread_drain_status are listed on every islan
           Layer.provide(NodeServices.layer),
         ),
         NodeServices.layer,
+        DocumentText.layer.pipe(Layer.provideMerge(NodeServices.layer)),
       ),
     ),
   ),

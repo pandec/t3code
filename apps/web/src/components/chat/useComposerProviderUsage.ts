@@ -205,6 +205,7 @@ export function useComposerProviderUsage(input: {
   // Identifies the in-flight refresh, so an older one finishing late cannot
   // clear a newer one's pending state.
   const refreshTokenRef = useRef(0);
+  // oxlint-disable-next-line t3code/react-effect-budget -- invalidates the in-flight refresh on unmount
   useEffect(
     // Unmount invalidates any in-flight token so its completion is a no-op.
     () => () => {

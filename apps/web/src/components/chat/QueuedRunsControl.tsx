@@ -73,6 +73,7 @@ function queuedImageResources(projection: ThreadQueueProjection | undefined) {
 // mounting with the hold keeps the first frame's clock fresh.
 function SteerRecallLabel({ run }: { readonly run: QueuedRun }) {
   const [nowMs, setNowMs] = useState(() => Date.now());
+  // oxlint-disable-next-line t3code/react-effect-budget -- ticks the recall countdown
   useEffect(() => {
     const interval = window.setInterval(() => setNowMs(Date.now()), 1_000);
     return () => window.clearInterval(interval);

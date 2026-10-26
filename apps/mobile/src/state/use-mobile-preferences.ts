@@ -79,12 +79,10 @@ export function useThreadShelfExpansion(shelf: ThreadShelfId): {
   return { expanded, loaded: hydrated, toggle };
 }
 
-/**
- * Working section beta, off until preferences load. Fork: no settings row
- * exposes it, so it stays off unless a stored preference enables it.
- */
+/** Working section, on by default once preferences load. */
 export function useWorkingShelfEnabled(): boolean {
-  return useMobilePreferences().preferences.workingShelfEnabled === true;
+  const { preferences, hydrated } = useMobilePreferences();
+  return hydrated && preferences.workingShelfEnabled !== false;
 }
 
 export function useArchivedSectionVisibleCount(): ArchivedSectionVisibleCount {

@@ -358,6 +358,7 @@ export function ProviderUsageRouteScreen() {
   const presentation = useProviderUsageRoutePresentation();
   const session = presentation.session;
 
+  // oxlint-disable-next-line t3code/react-effect-budget -- dismisses the native sheet route once its owner clears the session
   useEffect(() => {
     if (!session) {
       navigation.goBack();

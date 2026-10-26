@@ -105,6 +105,7 @@ export function DesktopVoiceRecorder({
     chunksRef.current = [];
   };
 
+  // oxlint-disable-next-line t3code/react-effect-budget -- releases the mic stream on unmount
   useEffect(() => {
     mountedRef.current = true;
     return () => {
@@ -115,6 +116,7 @@ export function DesktopVoiceRecorder({
     };
   }, [releaseStream]);
 
+  // oxlint-disable-next-line t3code/react-effect-budget -- publishes recording state to the listening store
   useEffect(() => {
     setListeningRecordingActive(
       listeningRecordingOwnerRef.current,
@@ -122,6 +124,7 @@ export function DesktopVoiceRecorder({
     );
   }, [phase]);
 
+  // oxlint-disable-next-line t3code/react-effect-budget -- reports recorder activity to the parent
   useEffect(() => {
     onActiveChange(phase !== "idle");
     return () => onActiveChange(false);
@@ -217,6 +220,7 @@ export function DesktopVoiceRecorder({
     await submitRecording({ blob, durationMs, mimeType });
   });
 
+  // oxlint-disable-next-line t3code/react-effect-budget -- ticks the recording timer and enforces the max duration
   useEffect(() => {
     if (phase !== "recording") return;
     const timer = window.setInterval(() => {

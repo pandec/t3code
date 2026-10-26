@@ -72,9 +72,11 @@ const packExecutableTargets = packExecutableTarget
 // The root config's `projects` route repo-root runs to package configs,
 // including this one. Inheriting them would make this config a container.
 const { projects: _rootTestProjects, ...baseTestConfig } = baseConfig.test ?? {};
+// Workspace cache configuration is invalid on a package config.
+const { run: _rootRunConfig, ...basePackageConfig } = baseConfig;
 
 export default mergeConfig(
-  { ...baseConfig, test: baseTestConfig },
+  { ...basePackageConfig, test: baseTestConfig },
   defineConfig({
     run: {
       tasks: {
@@ -138,7 +140,10 @@ export default mergeConfig(
       // scripts/lib/vitest-shared.ts. Fix a flaky test's isolation (macOS APFS/temp-dir
       // behaviour is the likelier culprit) rather than reinstating serialization.
       sequence: { sequencer: WeightedShardSequencer },
-      setupFiles: ["./src/testUtils/gitConfig.setup.ts"],
+      setupFiles: [
+        "./src/testUtils/gitConfig.setup.ts",
+        "./src/testUtils/managedServiceEnv.setup.ts",
+      ],
       hookTimeout: 120_000,
       // macOS can drop a first request or briefly return 404 from an ephemeral
       // Effect test server under package-wide load. Retry only those bootstrap

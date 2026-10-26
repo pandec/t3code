@@ -30,6 +30,7 @@ import { useAtomCommand } from "../../state/use-atom-command";
 
 function useMinuteClockMs(): number {
   const [nowMs, setNowMs] = useState(() => Date.now());
+  // oxlint-disable-next-line t3code/react-effect-budget -- minute clock interval
   useEffect(() => {
     const timer = setInterval(() => setNowMs(Date.now()), 60_000);
     return () => clearInterval(timer);
@@ -178,6 +179,7 @@ export function useComposerProviderUsage(input: {
   // Identifies the in-flight refresh, so an older one finishing late cannot
   // clear a newer one's pending state.
   const refreshTokenRef = useRef(0);
+  // oxlint-disable-next-line t3code/react-effect-budget -- invalidates the in-flight refresh on unmount
   useEffect(
     // Unmount invalidates any in-flight token so its completion is a no-op.
     () => () => {
@@ -208,23 +210,21 @@ export function useComposerProviderUsage(input: {
     const token = refreshTokenRef.current;
     setRefreshingEnvironmentId(environmentId);
     void (async () => {
-      try {
-        // A gateway pool is probed on demand through the gateway; direct
-        // accounts re-probe through their provider snapshot. Fail-soft: a
-        // failed probe keeps the previous reading.
-        await (gatewayInstanceId !== null
-          ? refreshGatewayUsage({ environmentId, input: { instanceIds: [gatewayInstanceId] } })
-          : Promise.all(
-              directInstanceIds.map((instanceId) =>
-                refreshProviders({ environmentId, input: { instanceId } }),
-              ),
-            ));
-        if (refreshTokenRef.current !== token) return;
-        refreshSnapshots();
-      } finally {
-        if (refreshTokenRef.current === token) setRefreshingEnvironmentId(null);
-      }
-    })();
+      // A gateway pool is probed on demand through the gateway; direct
+      // accounts re-probe through their provider snapshot. Fail-soft: a
+      // failed probe keeps the previous reading.
+      await (gatewayInstanceId !== null
+        ? refreshGatewayUsage({ environmentId, input: { instanceIds: [gatewayInstanceId] } })
+        : Promise.all(
+            directInstanceIds.map((instanceId) =>
+              refreshProviders({ environmentId, input: { instanceId } }),
+            ),
+          ));
+      if (refreshTokenRef.current !== token) return;
+      refreshSnapshots();
+    })().finally(() => {
+      if (refreshTokenRef.current === token) setRefreshingEnvironmentId(null);
+    });
   }, [
     canReadUsage,
     directInstanceIds,

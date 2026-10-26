@@ -117,6 +117,7 @@ export function useSavedPrompts(): SavedPrompts {
       : library;
   // The edit baseline for `saveAll`, which also advances it synchronously.
   const effectiveLibraryRef = useRef(effectiveLibrary);
+  // oxlint-disable-next-line t3code/react-effect-budget -- keeps the saveAll baseline current
   useLayoutEffect(() => {
     effectiveLibraryRef.current = effectiveLibrary;
   });
@@ -170,6 +171,7 @@ export function useSavedPromptLibrarySync(): void {
   // not re-sent on every unrelated presentation change in between.
   const pushedStampsRef = useRef(new Map<EnvironmentId, number>());
 
+  // oxlint-disable-next-line t3code/react-effect-budget -- pushes the saved prompt library to lagging environments
   useEffect(() => {
     // Settled or moot entries leave the guard: an environment that converged,
     // disconnected, or regressed (e.g. a hand-edited settings.json) becomes

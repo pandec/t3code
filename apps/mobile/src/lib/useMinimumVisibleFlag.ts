@@ -9,6 +9,7 @@ export function useMinimumVisibleFlag(active: boolean, minVisibleMs: number): bo
   const [held, setHeld] = useState(false);
   const shownAtRef = useRef<number | null>(null);
 
+  // oxlint-disable-next-line t3code/react-effect-budget -- minimum-visible hold timer
   useEffect(() => {
     if (active) {
       shownAtRef.current ??= Date.now();

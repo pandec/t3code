@@ -79,8 +79,8 @@ export function KeyboardStickyResetCoordinator() {
         trigger: context.trigger,
         reason: context.reason,
         appState: AppState.currentState ?? null,
-        height: normalizeKeyboardDiagnosticValue(keyboard.height.value),
-        progress: normalizeKeyboardDiagnosticValue(keyboard.progress.value),
+        height: normalizeKeyboardDiagnosticValue(keyboard.height.get()),
+        progress: normalizeKeyboardDiagnosticValue(keyboard.progress.get()),
         reportedVisible: KeyboardController.isVisible(),
         delayMs:
           context.delayMs === undefined || context.delayMs === null
@@ -103,7 +103,7 @@ export function KeyboardStickyResetCoordinator() {
       const decision: KeyboardStickyResetDecision = resolveKeyboardStickyResetDecision({
         scheduledGeneration: pass.generation,
         currentGeneration: generationRef.current,
-        keyboardHeight: keyboard.height.value,
+        keyboardHeight: keyboard.height.get(),
         appActive: AppState.currentState === "active",
         reportedVisible,
         requireReportedHidden: pass.requireReportedHidden,
@@ -123,8 +123,8 @@ export function KeyboardStickyResetCoordinator() {
         reset,
       });
       if (reset) {
-        keyboard.height.value = 0;
-        keyboard.progress.value = 0;
+        keyboard.height.set(0);
+        keyboard.progress.set(0);
       }
       if (pendingReconcileRef.current === pass) {
         pendingReconcileRef.current = null;
@@ -158,6 +158,7 @@ export function KeyboardStickyResetCoordinator() {
     [reconcileKeyboardOffset, recordKeyboardDiagnostic],
   );
 
+  // oxlint-disable-next-line t3code/react-effect-budget -- subscribes to native keyboard, AppState and reset-request events
   useEffect(() => {
     if (Platform.OS !== "ios") return;
 

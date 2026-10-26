@@ -255,8 +255,8 @@ export const TimelineMinimap = memo(function TimelineMinimap({
                         ? "bg-warning-foreground"
                         : "bg-warning-foreground/60"
                       : activeDistance === 0
-                        ? "bg-muted-foreground/75"
-                        : "bg-muted-foreground/35",
+                        ? "bg-muted-foreground/60"
+                        : "bg-muted-foreground/25",
                     activeDistance === 0
                       ? "scale-x-100"
                       : activeDistance === 1
@@ -280,7 +280,7 @@ export const TimelineMinimap = memo(function TimelineMinimap({
                   <span
                     className={cn(
                       "absolute inset-0 rounded-full opacity-0 transition-opacity duration-150 group-data-[in-view=true]/strip:opacity-100",
-                      pinned ? "bg-warning-foreground" : "bg-foreground/90",
+                      pinned ? "bg-warning-foreground" : "bg-foreground/55",
                     )}
                   />
                 </span>

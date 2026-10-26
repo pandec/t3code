@@ -19,28 +19,29 @@ export function ComposerAttachmentButton(props: {
   readonly onPickFiles: () => Promise<void>;
   readonly onOverlayVisibilityChange?: (visible: boolean) => void;
 }) {
+  const { disabled, onOverlayVisibilityChange } = props;
   const pickerActiveRef = useRef(false);
   const runPicker = useCallback(
     async (pick: () => Promise<void>) => {
-      if (props.disabled) return;
+      if (disabled) return;
       pickerActiveRef.current = true;
-      props.onOverlayVisibilityChange?.(true);
+      onOverlayVisibilityChange?.(true);
       try {
         await pick();
       } finally {
         pickerActiveRef.current = false;
-        props.onOverlayVisibilityChange?.(false);
+        onOverlayVisibilityChange?.(false);
       }
     },
-    [props.disabled, props.onOverlayVisibilityChange],
+    [disabled, onOverlayVisibilityChange],
   );
   const markMenuVisible = useCallback(
-    () => props.onOverlayVisibilityChange?.(true),
-    [props.onOverlayVisibilityChange],
+    () => onOverlayVisibilityChange?.(true),
+    [onOverlayVisibilityChange],
   );
   const handleMenuClosed = useCallback(() => {
-    if (!pickerActiveRef.current) props.onOverlayVisibilityChange?.(false);
-  }, [props.onOverlayVisibilityChange]);
+    if (!pickerActiveRef.current) onOverlayVisibilityChange?.(false);
+  }, [onOverlayVisibilityChange]);
 
   const { scale } = useAndroidControlSizing();
   const button = (

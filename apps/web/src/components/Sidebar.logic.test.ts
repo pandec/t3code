@@ -1,4 +1,5 @@
 import { presentThreadShell } from "@t3tools/client-runtime/state/models";
+import { isThreadWorking } from "@t3tools/client-runtime/state/thread-inbox";
 import * as DateTime from "effect/DateTime";
 import { deriveActiveWorkStartedAt } from "../session-logic.ts";
 import { describe, expect, it, vi } from "vite-plus/test";
@@ -10,7 +11,6 @@ import {
   getFallbackThreadIdAfterDelete,
   hasUnseenCompletion,
   resolveSidebarRowThreadId,
-  isSidebarThreadWorking,
   orderItemsByPreferredIds,
   pinOrderKeyBetween,
   resolveSidebarProjectScope,
@@ -1291,7 +1291,7 @@ describe("unseen completion with background work", () => {
         isSelected: false,
       }),
     ).toBe(expected.receded);
-    expect(isSidebarThreadWorking(thread)).toBe(expected.receded);
+    expect(isThreadWorking(thread)).toBe(expected.receded);
     expect(resolveThreadStatusPill({ thread })).toMatchObject({ label: expected.pill });
   });
 });
@@ -1327,13 +1327,13 @@ describe("Working shelf (beta)", () => {
   };
 
   it("folds away running threads and threads waiting on background work only", () => {
-    expect(isSidebarThreadWorking({ ...idle, runtime })).toBe(true);
-    expect(isSidebarThreadWorking(waiting)).toBe(true);
-    expect(isSidebarThreadWorking(idle)).toBe(false);
-    expect(isSidebarThreadWorking({ ...idle, runtime, hasPendingApprovals: true })).toBe(false);
-    expect(isSidebarThreadWorking({ ...idle, runtime, hasPendingUserInput: true })).toBe(false);
+    expect(isThreadWorking({ ...idle, runtime })).toBe(true);
+    expect(isThreadWorking(waiting)).toBe(true);
+    expect(isThreadWorking(idle)).toBe(false);
+    expect(isThreadWorking({ ...idle, runtime, hasPendingApprovals: true })).toBe(false);
+    expect(isThreadWorking({ ...idle, runtime, hasPendingUserInput: true })).toBe(false);
     expect(
-      isSidebarThreadWorking({
+      isThreadWorking({
         ...waiting,
         runtime: { ...runtime, status: "failed" as const, lastError: "boom" },
       }),
@@ -1342,7 +1342,7 @@ describe("Working shelf (beta)", () => {
 
   it("keeps a ready plan in the inbox while background work runs", () => {
     expect(
-      isSidebarThreadWorking({
+      isThreadWorking({
         ...waiting,
         interactionMode: "plan",
         hasActionableProposedPlan: true,

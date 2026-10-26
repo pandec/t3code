@@ -225,6 +225,7 @@ function GroupRow(props: {
   // catalog catches up, so its blur must not resend it on the pre-move record
   // and undo the reorder.
   const submittedName = useRef<string | null>(null);
+  // oxlint-disable-next-line t3code/react-effect-budget -- clears the folded rename once the catalog echoes it
   useEffect(() => {
     if (submittedName.current === group.name) submittedName.current = null;
   }, [group.name]);

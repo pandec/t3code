@@ -8,7 +8,6 @@ import {
   resolveTimelineMinimapItemIndexFromPointer,
   resolveTimelineMinimapTooltipTranslate,
   TIMELINE_MINIMAP_PREVIEW_MAX_LENGTH,
-  type TimelineMinimapItem,
 } from "./MessagesTimeline.minimap";
 
 function messageRow(input: {

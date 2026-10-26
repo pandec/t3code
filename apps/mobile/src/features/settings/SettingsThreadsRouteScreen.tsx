@@ -29,6 +29,7 @@ import { useAtomCommand } from "../../state/use-atom-command";
 import {
   useArchivedSectionVisibleCount,
   useSteerGraceWindowMs,
+  useWorkingShelfEnabled,
 } from "../../state/use-mobile-preferences";
 import { SettingsActionRow } from "./components/SettingsActionRow";
 import { SettingsSection } from "./components/SettingsSection";
@@ -73,6 +74,7 @@ export function SettingsThreadsRouteScreen() {
         >
           <AutoSettleSettingsRows />
           <DeviceThreadSettingsSection />
+          <BetaSettingsSection />
           <LegacySettingsSection />
         </ScrollView>
       </SettingsScreen>
@@ -204,14 +206,14 @@ function AutoSettleSettingsRows() {
         <SettingsSection title="Usage limits">
           <SettingsSwitchRow
             icon="clock"
-            label="Auto-resume limited threads"
+            label="Resume after usage limits"
             value={uniformMobileSetting(displayTargets, "autoResumeLimitedThreads")}
             disabled={disabled}
             onValueChange={(value) => writeToAll({ autoResumeLimitedThreads: value })}
           />
           <SettingsSwitchRow
             icon="clock"
-            label="Snooze limited threads"
+            label="Snooze until limits reset"
             value={uniformMobileSetting(displayTargets, "snoozeLimitedThreads")}
             disabled={disabled}
             onValueChange={(value) => writeToAll({ snoozeLimitedThreads: value })}
@@ -328,6 +330,7 @@ function formatLastSyncedLabel(lastRunAt: number | null, now: number): string {
 
 function useMinuteClockMs(): number {
   const [nowMs, setNowMs] = useState(() => Date.now());
+  // oxlint-disable-next-line t3code/react-effect-budget -- a wall-clock tick is an external source
   useEffect(() => {
     const timer = setInterval(() => setNowMs(Date.now()), 60_000);
     return () => clearInterval(timer);
@@ -359,6 +362,7 @@ function ThreadSyncRow() {
   const syncing = manualSyncing || summary.syncing;
 
   // Stop waiting on a request the engine never completed (e.g. it was torn down).
+  // oxlint-disable-next-line t3code/react-effect-budget -- the timeout outlives the render that armed it
   useEffect(() => {
     if (!manualSyncing) return;
     const timer = setTimeout(() => setRequestedFrom(null), THREAD_SYNC_PENDING_TIMEOUT_MS);
@@ -382,6 +386,29 @@ function ThreadSyncRow() {
         void fireTrigger({ reason: "manual" });
       }}
     />
+  );
+}
+
+function BetaSettingsSection() {
+  const savePreferences = useAtomSet(updateMobilePreferencesAtom);
+  const workingShelfEnabled = useWorkingShelfEnabled();
+
+  return (
+    <View className="gap-3">
+      <SettingsSection title="Beta">
+        <SettingsSwitchRow
+          icon="bolt.circle"
+          label="Working section"
+          value={workingShelfEnabled}
+          onValueChange={(value) => savePreferences({ workingShelfEnabled: value })}
+        />
+      </SettingsSection>
+      <Text className="px-2 text-sm text-foreground-muted">
+        Fold working and monitoring threads into a Working section. They return to the top of the
+        list when they need you. While this is on, active threads are ordered by time and cannot be
+        moved.
+      </Text>
+    </View>
   );
 }
 

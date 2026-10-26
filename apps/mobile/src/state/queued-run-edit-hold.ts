@@ -21,6 +21,7 @@ export function useQueuedRunEditHolds(): void {
   });
   const active = useRef(new Map<string, () => void>());
 
+  // oxlint-disable-next-line t3code/react-effect-budget -- holds and renews server-side edit leases as edits begin and end
   useEffect(() => {
     const wanted = new Map<string, () => () => void>();
     for (const [threadKey, edit] of Object.entries(edits)) {
@@ -54,6 +55,7 @@ export function useQueuedRunEditHolds(): void {
     }
   }, [edits, hold]);
 
+  // oxlint-disable-next-line t3code/react-effect-budget -- releases every held lease on unmount
   useEffect(() => {
     const holds = active.current;
     return () => {

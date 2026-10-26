@@ -33,6 +33,7 @@ export function useThreadGroups() {
   const inFlight = useRef(
     new Map<EnvironmentId, { signature: string; controller: AbortController }>(),
   );
+  // oxlint-disable-next-line t3code/react-effect-budget -- aborts in-flight catalog writes on unmount
   useEffect(() => {
     const pending = inFlight.current;
     return () => {
@@ -40,6 +41,7 @@ export function useThreadGroups() {
       pending.clear();
     };
   }, []);
+  // oxlint-disable-next-line t3code/react-effect-budget -- replicates the merged group catalog to connected servers
   useEffect(() => {
     const signature = JSON.stringify(catalog);
     const connected = new Set(targets.map((environment) => environment.environmentId));

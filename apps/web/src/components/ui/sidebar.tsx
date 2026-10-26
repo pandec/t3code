@@ -572,6 +572,7 @@ function SidebarRail({
   // changes to the limits: shrinking the window used to leave an oversized
   // sidebar squeezing the main content until the next drag. Reconciling is
   // separate from restoring, and idempotent, so an unrelated render is a no-op.
+  // oxlint-disable-next-line t3code/react-effect-budget -- re-clamps the DOM sidebar width to current limits
   React.useLayoutEffect(() => {
     if (!resolvedResizable || typeof window === "undefined") return;
     // Never fight a drag in progress — the pointer owns the width until it settles.

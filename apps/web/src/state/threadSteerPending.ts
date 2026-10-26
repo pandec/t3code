@@ -32,6 +32,7 @@ export function useSteerPendingMessageIds(
   // A steer that resolves drops out of `unread` at once; one that stays is
   // revealed once the delay passes. A second steer arriving before the first
   // is revealed delays both; one arriving after does not hide the first.
+  // oxlint-disable-next-line t3code/react-effect-budget -- reveals held steers after the delay
   useEffect(() => {
     let allRevealed = true;
     for (const messageId of unread) {

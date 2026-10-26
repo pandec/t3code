@@ -30,6 +30,7 @@ import {
 import type { SidebarThreadSummary, Thread } from "../types";
 import { normalizeSearchText } from "../lib/utils";
 import { isLatestRunSettled } from "../session-logic";
+import { observeIntersection } from "../lib/observeIntersection";
 
 export function shouldNavigateAfterThreadPark(input: {
   readonly threadKey: string;
@@ -86,31 +87,23 @@ const SIDEBAR_ROW_SUBSCRIPTION_OVERSCAN_PX = 160;
 
 export function useSidebarRowSubscriptionLease(isActive: boolean): {
   readonly leaseLiveStatus: boolean;
-  readonly rowRef: React.Dispatch<React.SetStateAction<HTMLElement | null>>;
+  readonly rowRef: (row: HTMLElement | null) => (() => void) | undefined;
 } {
-  const [row, setRow] = React.useState<HTMLElement | null>(null);
   const [isNearViewport, setIsNearViewport] = React.useState(isActive);
   if (isActive && !isNearViewport) setIsNearViewport(true);
   const canObserve = typeof IntersectionObserver !== "undefined";
 
-  React.useEffect(() => {
-    if (isActive || row === null || !canObserve) return;
-
-    const scrollRoot = row.closest<HTMLElement>('[data-slot="scroll-area-viewport"]');
-    const observer = new IntersectionObserver(
-      ([entry]) => setIsNearViewport(entry?.isIntersecting === true),
-      {
-        root: scrollRoot,
-        rootMargin: `${SIDEBAR_ROW_SUBSCRIPTION_OVERSCAN_PX}px 0px`,
-      },
-    );
-    observer.observe(row);
-    return () => observer.disconnect();
-  }, [canObserve, isActive, row]);
-
   return {
     leaseLiveStatus: isActive || isNearViewport || !canObserve,
-    rowRef: setRow,
+    rowRef: (row) => {
+      if (row === null || isActive || !canObserve) return undefined;
+      // The overscan has to apply to the sidebar's own scroller; a viewport-rooted
+      // margin is still clipped by it.
+      return observeIntersection(row, (entry) => setIsNearViewport(entry.isIntersecting), {
+        root: row.closest('[data-slot="scroll-area-viewport"]'),
+        rootMargin: `${SIDEBAR_ROW_SUBSCRIPTION_OVERSCAN_PX}px 0px`,
+      });
+    },
   };
 }
 
@@ -1199,17 +1192,6 @@ export function resolveSidebarV2TopStatus(input: {
     the Working shelf: a running run, or one stopped with background tasks
     still open (working or monitoring). Approvals, questions, plan prompts,
     and failures stay in the inbox. */
-export function isSidebarThreadWorking(thread: ThreadStatusInput): boolean {
-  const status = resolveSidebarThreadStatus(thread);
-  if (status !== "working" && status !== "monitoring" && status !== "waiting") return false;
-  // A plan prompt outranks lingering background work: the user has to act on it.
-  return !(
-    thread.interactionMode === "plan" &&
-    thread.hasActionableProposedPlan &&
-    isLatestRunSettled(thread.latestRun, thread.runtime)
-  );
-}
-
 export function firstValidTimestampMs(
   ...candidates: ReadonlyArray<string | null | undefined>
 ): number {
@@ -1222,8 +1204,6 @@ export function firstValidTimestampMs(
 }
 
 export { sortActiveThreadsByOrderKey as sortThreadsForSidebar } from "@t3tools/client-runtime/state/thread-sort";
-// `isSidebarThreadWorking` stays local: it folds by the fork's status model
-// (working, monitoring, waiting) so the shelf and the row status agree.
 export {
   sortInboxThreadsByReturn,
   sortWorkingThreadsBySend,
