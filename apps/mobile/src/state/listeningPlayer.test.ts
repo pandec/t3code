@@ -28,7 +28,11 @@ const audio = vi.hoisted(() => {
   };
   return {
     player,
-    emit: (playing: boolean, stopped: "paused" | "buffering" = "paused") => {
+    emit: (
+      playing: boolean,
+      stopped: "paused" | "buffering" = "paused",
+      error: string | null = null,
+    ) => {
       const buffering = !playing && stopped === "buffering";
       for (const listener of listeners) {
         listener({
@@ -39,7 +43,7 @@ const audio = vi.hoisted(() => {
             : buffering
               ? "waitingToPlayAtSpecifiedRate"
               : "paused",
-          error: null,
+          error,
           didJustFinish: false,
           currentTime: 1,
           duration: 10,
@@ -207,6 +211,45 @@ describe("listening player audio session", () => {
     expect(isAudioSessionOwner(inline)).toBe(true);
     expect(playSpy).not.toHaveBeenCalled();
     await releaseAudioSession(inline);
+    stop();
+  });
+
+  it("releases the session on a lock-screen pause that follows buffering", async () => {
+    await startListening();
+    audio.emit(false, "buffering");
+    audio.emit(false);
+    expect(await listeningHeldSession()).toBe(false);
+    stop();
+  });
+
+  it("keeps the session of a restart of the same recording when an earlier one completes", async () => {
+    using playSpy = vi.spyOn(audio.player, "play");
+    const firstModeStarted = deferred();
+    const firstMode = deferred();
+    const secondMode = deferred();
+    audio.setMode
+      .mockImplementationOnce(() => {
+        firstModeStarted.resolve();
+        return firstMode.promise;
+      })
+      .mockImplementationOnce(() => secondMode.promise);
+    const first = play(trackA, "https://audio/1");
+    await firstModeStarted.promise;
+    const second = play(trackA, "https://audio/1");
+    firstMode.resolve();
+    await first;
+    // A status the player sent before the restart; it carries the last start's failure.
+    audio.emit(false, "paused", "Stale failure");
+    secondMode.resolve();
+    await second;
+    expect(playSpy).toHaveBeenCalledOnce();
+    stop();
+  });
+
+  it("ignores a paused status sent before the player reports playing", async () => {
+    await play(trackA, "https://audio/1");
+    audio.emit(false);
+    expect(await listeningHeldSession()).toBe(true);
     stop();
   });
 });
