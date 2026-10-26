@@ -211,7 +211,7 @@ const uploadForm = (
   return HttpBody.formData(form);
 };
 
-export const makeClient = (httpClient: HttpClient.HttpClient, token: string): TelegramBotClient => {
+const makeClient = (httpClient: HttpClient.HttpClient, token: string): TelegramBotClient => {
   const transportError = (method: string) =>
     new TelegramApiError({ method, description: "Could not reach Telegram." });
 

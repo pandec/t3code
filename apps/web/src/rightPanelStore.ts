@@ -302,12 +302,12 @@ export function pullRequestSurface(target: {
 
 export type LinearIssueSurface = Extract<RightPanelSurface, { kind: "linear-issue" }>;
 
-export function linearIssueSurfaceId(identifier: string): LinearIssueSurface["id"] {
+function linearIssueSurfaceId(identifier: string): LinearIssueSurface["id"] {
   return `linear-issue:${identifier}`;
 }
 
 /** The one shape a Linear surface takes, whether opened now or restored from storage. */
-export function linearIssueSurface(identifier: string): LinearIssueSurface {
+function linearIssueSurface(identifier: string): LinearIssueSurface {
   return { id: linearIssueSurfaceId(identifier), kind: "linear-issue", identifier };
 }
 

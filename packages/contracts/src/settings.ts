@@ -70,7 +70,7 @@ const DEFAULT_SIDEBAR_THREAD_SORT_ORDER: SidebarThreadSortOrder = "updated_at";
 
 export const SidebarThreadProviderIconVisibility = Schema.Literals(["hover", "always", "never"]);
 export type SidebarThreadProviderIconVisibility = typeof SidebarThreadProviderIconVisibility.Type;
-export const DEFAULT_SIDEBAR_THREAD_PROVIDER_ICON_VISIBILITY: SidebarThreadProviderIconVisibility =
+const DEFAULT_SIDEBAR_THREAD_PROVIDER_ICON_VISIBILITY: SidebarThreadProviderIconVisibility =
   "hover";
 
 export const SidebarProjectAccentColor = Schema.String.check(Schema.isPattern(/^#[0-9a-f]{6}$/i));
@@ -895,7 +895,7 @@ const CLAUDE_AUTO_COMPACT_WINDOW_PATTERN = /^(?:|[1-9]\d{5}|1000000)$/;
  * running tool finish and hands the message to the next model call;
  * "interrupt" cancels the running tool first.
  */
-export const CLAUDE_STEERING_MODES = [
+const CLAUDE_STEERING_MODES = [
   { value: "between-tools", label: "Between tool calls" },
   { value: "interrupt", label: "Interrupt running tool" },
 ] as const satisfies ReadonlyArray<ProviderSettingsFormOption>;

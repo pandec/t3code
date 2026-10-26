@@ -18,7 +18,7 @@ import * as Semaphore from "effect/Semaphore";
 import { HttpClient, HttpClientRequest } from "effect/http";
 
 export const CLIPROXYAPI_USAGE_SOURCE_KIND = "cliproxyapi";
-export const CLIPROXYAPI_USAGE_PAYLOAD_SOURCE = "cliproxyapi.management";
+const CLIPROXYAPI_USAGE_PAYLOAD_SOURCE = "cliproxyapi.management";
 
 const AUTH_FAILURE_COOLDOWN_MS = 10 * 60 * 1_000;
 const AUTH_FILES_REQUEST_TIMEOUT_MS = 5_000;

@@ -103,7 +103,7 @@ export function restartContinuationPending(
 }
 
 /** Statuses of a run that is still working toward completion (waiting = capturing its checkpoint). */
-export const ACTIVE_RUN_STATUSES: ReadonlySet<OrchestrationV2Run["status"]> = new Set([
+const ACTIVE_RUN_STATUSES: ReadonlySet<OrchestrationV2Run["status"]> = new Set([
   "preparing",
   "starting",
   "running",
@@ -150,7 +150,7 @@ export function cancelledArchiveRequest(
   return { ...request, status: "cancelled", detail };
 }
 
-export function completedArchiveRequest(
+function completedArchiveRequest(
   request: OrchestrationV2ThreadArchiveRequest,
 ): OrchestrationV2ThreadArchiveRequest {
   const { detail: _detail, ...rest } = request;

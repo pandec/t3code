@@ -64,7 +64,7 @@ export class ArchiveWorktreeRemoval extends Context.Service<
   }
 >()("t3/orchestration-v2/ArchiveWorktreeRemoval") {}
 
-export const make = Effect.gen(function* () {
+const make = Effect.gen(function* () {
   const threads = yield* ThreadManagement.ThreadManagementService;
   const projects = yield* ProjectStore.ProjectStoreV2;
   const git = yield* GitVcsDriver.GitVcsDriver;

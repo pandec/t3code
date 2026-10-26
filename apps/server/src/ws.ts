@@ -315,7 +315,7 @@ const resolveFileManagerRevealKindForConfig = <E, R>(
   discovery: Effect.Effect<FileManagerRevealKind | undefined, E, R>,
 ) => resolveDiscoveryForConfig(discovery, () => undefined);
 
-export function filterProviderUsageSnapshotsToEnabledInstances(
+function filterProviderUsageSnapshotsToEnabledInstances(
   snapshots: ReadonlyArray<ProviderInstanceUsageSnapshot>,
   instances: ReadonlyArray<Pick<ProviderInstance, "instanceId" | "enabled">>,
 ): ReadonlyArray<ProviderInstanceUsageSnapshot> {

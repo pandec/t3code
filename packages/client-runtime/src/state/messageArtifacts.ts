@@ -138,31 +138,31 @@ export const rememberMessageSpeech = (
   speech: MessageSpeechSynthesisResult,
 ) => updateMessageArtifactSession(environmentId, speech.messageId, sourceText, { speech });
 
-export const summarizeMessage = Effect.fn("clientRuntime.messageArtifacts.summarizeMessage")(
-  function* (request: MessageSummaryRequest) {
-    const supervisor = yield* EnvironmentSupervisor;
-    const prepared = yield* SubscriptionRef.get(supervisor.prepared);
-    if (Option.isNone(prepared)) {
-      return yield* new RemoteEnvironmentAuthFetchError({
-        message: "The selected environment is not connected.",
-        cause: "environment_not_connected",
-      });
-    }
-
-    const signer = yield* Effect.serviceOption(ManagedRelayDpopSigner);
-    const remoteAuthorization = yield* Effect.serviceOption(RemoteEnvironmentAuthorization);
-    return yield* executeAuthenticatedEnvironmentHttpRequest({
-      group: "messageArtifacts",
-      prepared: prepared.value,
-      signer,
-      remoteAuthorization,
-      method: "POST",
-      url: (urls) => urls.summarizeMessage(),
-      timeoutMs: MESSAGE_SUMMARY_TIMEOUT_MS,
-      request: ({ client, headers }) => client.summarizeMessage({ payload: request, headers }),
+const summarizeMessage = Effect.fn("clientRuntime.messageArtifacts.summarizeMessage")(function* (
+  request: MessageSummaryRequest,
+) {
+  const supervisor = yield* EnvironmentSupervisor;
+  const prepared = yield* SubscriptionRef.get(supervisor.prepared);
+  if (Option.isNone(prepared)) {
+    return yield* new RemoteEnvironmentAuthFetchError({
+      message: "The selected environment is not connected.",
+      cause: "environment_not_connected",
     });
-  },
-);
+  }
+
+  const signer = yield* Effect.serviceOption(ManagedRelayDpopSigner);
+  const remoteAuthorization = yield* Effect.serviceOption(RemoteEnvironmentAuthorization);
+  return yield* executeAuthenticatedEnvironmentHttpRequest({
+    group: "messageArtifacts",
+    prepared: prepared.value,
+    signer,
+    remoteAuthorization,
+    method: "POST",
+    url: (urls) => urls.summarizeMessage(),
+    timeoutMs: MESSAGE_SUMMARY_TIMEOUT_MS,
+    request: ({ client, headers }) => client.summarizeMessage({ payload: request, headers }),
+  });
+});
 
 export function createMessageSummaryEnvironmentCommand<R, E>(
   runtime: Atom.AtomRuntime<EnvironmentRegistry | HttpClient.HttpClient | R, E>,

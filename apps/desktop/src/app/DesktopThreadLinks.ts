@@ -67,7 +67,7 @@ const isThreadLinkCandidate = (url: string) =>
   DESKTOP_SCHEMES.some((scheme) => parseDesktopThreadLink(url, scheme) !== null);
 
 /** The last argument that looks like a thread link for either desktop scheme. */
-export function findThreadLinkArgument(argv: ReadonlyArray<unknown>): string | null {
+function findThreadLinkArgument(argv: ReadonlyArray<unknown>): string | null {
   for (let index = argv.length - 1; index >= 0; index -= 1) {
     const argument = argv[index];
     if (typeof argument === "string" && isThreadLinkCandidate(argument)) return argument;

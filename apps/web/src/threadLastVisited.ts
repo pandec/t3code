@@ -5,7 +5,7 @@ import { scopedThreadKey } from "@t3tools/client-runtime/environment";
 import type { ShortcutEventLike } from "./keybindings";
 import type { ThreadRouteTarget } from "./threadRoutes";
 
-export function threadVisitKey(target: ThreadRouteTarget): string {
+function threadVisitKey(target: ThreadRouteTarget): string {
   return target.kind === "server" ? scopedThreadKey(target.threadRef) : `draft:${target.draftId}`;
 }
 

@@ -334,7 +334,7 @@ export const DiscoveredLocalServerList = Schema.Struct({
 });
 export type DiscoveredLocalServerList = typeof DiscoveredLocalServerList.Type;
 
-export const PREVIEW_FIND_WORKSPACE_SERVER_MAX_WAIT_MS = 120_000;
+const PREVIEW_FIND_WORKSPACE_SERVER_MAX_WAIT_MS = 120_000;
 
 /**
  * Finds a discovered web server whose process runs inside `cwd`, so a dev

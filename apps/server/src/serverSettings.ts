@@ -141,7 +141,7 @@ export function redactServerSettingsForClient(settings: ServerSettings): ServerS
 }
 
 /** Validate and translate action CAS while the caller holds the settings write permit. */
-export const prepareProjectScriptUpdate = Effect.fn("prepareProjectScriptUpdate")(function* (
+const prepareProjectScriptUpdate = Effect.fn("prepareProjectScriptUpdate")(function* (
   current: ServerSettings,
   patch: ServerSettingsPatch,
   settingsPath: string,
@@ -405,7 +405,7 @@ const decodeLegacyVoiceSettingsJsonExit = Schema.decodeUnknownExit(
   fromLenientJson(LegacyVoiceSettings),
 );
 
-export function foldLegacyVoiceSettings(
+function foldLegacyVoiceSettings(
   settings: ServerSettings,
   legacy: typeof LegacyVoiceSettings.Type,
 ): ServerSettings {

@@ -55,7 +55,7 @@ const VoicesBody = Schema.Struct({
 });
 const decodeVoicesBody = Schema.decodeUnknownEffect(Schema.fromJsonString(VoicesBody));
 
-export function toElevenLabsCatalogModel(entry: {
+function toElevenLabsCatalogModel(entry: {
   readonly model_id: string;
   readonly name?: string | undefined;
   readonly maximum_text_length_per_request?: number | null | undefined;
@@ -83,7 +83,7 @@ export function toElevenLabsCatalogModel(entry: {
   };
 }
 
-export function toElevenLabsCatalogVoice(entry: {
+function toElevenLabsCatalogVoice(entry: {
   readonly voice_id: string;
   readonly name?: string | null | undefined;
   readonly labels?: Readonly<Record<string, string>> | null | undefined;

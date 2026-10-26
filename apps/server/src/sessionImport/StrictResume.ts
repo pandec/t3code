@@ -24,7 +24,7 @@ export class StrictResume extends Context.Service<StrictResume, StrictResumeShap
   "t3/sessionImport/StrictResume",
 ) {}
 
-export const make = Effect.gen(function* () {
+const make = Effect.gen(function* () {
   const sql = yield* SqlClient.SqlClient;
   return {
     markStrict: (providerThreadId) =>

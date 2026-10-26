@@ -36,7 +36,7 @@ const OPENROUTER_GENERATION_TIMEOUT = "5 seconds";
  */
 export type OpenRouterInstructionMode = "prompt" | "openai" | "none";
 
-export function getOpenRouterInstructionMode(modelId: string): OpenRouterInstructionMode {
+function getOpenRouterInstructionMode(modelId: string): OpenRouterInstructionMode {
   if (modelId.startsWith("google/")) return "prompt";
   if (modelId.startsWith("openai/")) return "openai";
   return "none";
@@ -50,7 +50,7 @@ export function getOpenRouterInstructionMode(modelId: string): OpenRouterInstruc
  */
 export type OpenRouterResponseFormat = "mp3" | "pcm";
 
-export function getOpenRouterResponseFormat(modelId: string): OpenRouterResponseFormat {
+function getOpenRouterResponseFormat(modelId: string): OpenRouterResponseFormat {
   return modelId.startsWith("google/") ? "pcm" : "mp3";
 }
 

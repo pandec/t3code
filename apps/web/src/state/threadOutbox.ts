@@ -69,7 +69,7 @@ const encodeRow = Schema.encodeUnknownSync(PendingThreadSubmissionSchema);
 const isChatAttachmentId = Schema.is(ChatAttachmentId);
 
 /** Converts a fork outbox row; null when it holds something web cannot send. */
-export function pendingSubmissionFromLegacyRow(value: unknown): PendingThreadSubmission | null {
+function pendingSubmissionFromLegacyRow(value: unknown): PendingThreadSubmission | null {
   const legacy = decodeLegacyQueuedThreadMessage(value);
   // Pending thread creations were mobile-only.
   if (legacy.creation !== undefined) return null;

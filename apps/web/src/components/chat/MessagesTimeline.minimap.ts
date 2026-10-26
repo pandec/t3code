@@ -1,6 +1,6 @@
 import type { MessagesTimelineRow } from "./MessagesTimeline.logic";
 
-export const TIMELINE_MINIMAP_ARIA_EXCERPT_MAX_LENGTH = 120;
+const TIMELINE_MINIMAP_ARIA_EXCERPT_MAX_LENGTH = 120;
 export const TIMELINE_MINIMAP_PREVIEW_MAX_LENGTH = 240;
 
 export type TimelineMinimapKind = "user-turn" | "final-assistant";

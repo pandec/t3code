@@ -15,7 +15,6 @@ import * as Path from "effect/Path";
 import * as Ref from "effect/Ref";
 import * as Result from "effect/Result";
 import { ChildProcess, ChildProcessSpawner } from "effect/process";
-import { getProviderOptionCurrentValue, getProviderOptionDescriptors } from "@t3tools/shared/model";
 import { resolveSpawnCommand } from "@t3tools/shared/shell";
 import {
   query as claudeQuery,
@@ -55,7 +54,6 @@ import {
   CUSTOM_CLAUDE_MODEL_CAPABILITIES,
   type ClaudeModelCatalog,
   formatClaudeVersionUpgradeMessage,
-  isClaudeCatalogUltracodeEffort,
   normalizeClaudeCatalogEffort,
   resolveClaudeCatalogApiModelId,
   resolveClaudeCatalogModel,
@@ -76,27 +74,14 @@ export function getClaudeModelCapabilities(model: string | null | undefined): Mo
   );
 }
 
-export function isBuiltInClaudeModel(model: string | null | undefined): boolean {
+function isBuiltInClaudeModel(model: string | null | undefined): boolean {
   return resolveClaudeCatalogModel(BUNDLED_CLAUDE_MODEL_CATALOG, model) !== undefined;
 }
 
 /** Compatibility helper for callers that do not yet have a scoped catalog. */
-export function isCustomClaudeModel(model: string | null | undefined): boolean {
+function isCustomClaudeModel(model: string | null | undefined): boolean {
   const slug = model?.trim();
   return typeof slug === "string" && slug.length > 0 && !isBuiltInClaudeModel(slug);
-}
-
-export function resolveClaudeEffort(
-  caps: ModelCapabilities,
-  raw: string | null | undefined,
-): string | undefined {
-  const descriptors = getProviderOptionDescriptors({
-    caps,
-    ...(raw ? { selections: [{ id: "effort", value: raw }] } : {}),
-  });
-  const effortDescriptor = descriptors.find((descriptor) => descriptor.id === "effort");
-  const value = getProviderOptionCurrentValue(effortDescriptor);
-  return typeof value === "string" ? value : undefined;
 }
 
 export function normalizeClaudeCliEffort(
@@ -106,10 +91,6 @@ export function normalizeClaudeCliEffort(
   return !effort || !isBuiltInClaudeModel(model)
     ? undefined
     : normalizeClaudeCatalogEffort(BUNDLED_CLAUDE_MODEL_CATALOG, effort, model);
-}
-
-export function isClaudeUltracodeEffort(effort: string | null | undefined): boolean {
-  return isClaudeCatalogUltracodeEffort(effort);
 }
 
 export function resolveClaudeApiModelId(modelSelection: ModelSelection): string {

@@ -15,7 +15,7 @@ import ForkMigration0005 from "./ForkMigrations/005_ForkMessageArtifacts.ts";
 import ForkMigration0006 from "./ForkMigrations/006_ForkMessageSpeech.ts";
 import ForkMigration0007 from "./ForkMigrations/007_ForkThreadHiddenNotes.ts";
 
-export const forkMigrationEntries = [
+const forkMigrationEntries = [
   [1, "ForkThreadGroupsAndRepositoryIdentity", ForkMigration0001],
   [2, "ForkNativeContinuation", ForkMigration0002],
   [3, "ForkStrictResumeProviderThreads", ForkMigration0003],

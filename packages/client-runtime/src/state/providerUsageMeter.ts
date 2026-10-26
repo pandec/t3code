@@ -68,7 +68,7 @@ export interface ProviderUsageMeter {
   readonly directInstanceIds: ReadonlyArray<ProviderInstanceId>;
 }
 
-export const EMPTY_PROVIDER_USAGE_METER: ProviderUsageMeter = {
+const EMPTY_PROVIDER_USAGE_METER: ProviderUsageMeter = {
   activeUsage: null,
   fable: null,
   accounts: [],

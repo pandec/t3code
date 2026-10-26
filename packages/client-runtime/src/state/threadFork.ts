@@ -27,7 +27,7 @@ export interface ConversationForkOptions {
 }
 
 /** Driver kinds whose instances fork imported native sessions (server `sessionImport.forkSession`). */
-export const importedSessionForkDrivers: ReadonlySet<string> = new Set(["claudeAgent", "codex"]);
+const importedSessionForkDrivers: ReadonlySet<string> = new Set(["claudeAgent", "codex"]);
 
 export function canForkImportedSessionDriver(driver: string | undefined): boolean {
   return driver !== undefined && importedSessionForkDrivers.has(driver);

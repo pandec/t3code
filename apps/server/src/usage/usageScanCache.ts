@@ -524,7 +524,7 @@ export function pruneScanCache(cache: ScanCache, retentionCutoffMs: number): num
  * message's records as growing snapshots, so its record with the most output
  * is the completed one. Otherwise the first record wins, as in ccusage.
  */
-export function supersedesUsageRecord(candidate: UsageRecord, kept: UsageRecord): boolean {
+function supersedesUsageRecord(candidate: UsageRecord, kept: UsageRecord): boolean {
   const keptProvisional = kept.provisional === true;
   if (keptProvisional !== (candidate.provisional === true)) return keptProvisional;
   return (

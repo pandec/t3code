@@ -42,7 +42,7 @@ export function deriveProjectAccentKey(project: ProjectAccentSource): string | n
   return normalizedPath.length > 0 ? normalizedPath : null;
 }
 
-export function toProjectAccentMember(project: ProjectAccentSource): ProjectAccentMember | null {
+function toProjectAccentMember(project: ProjectAccentSource): ProjectAccentMember | null {
   const accentKey = deriveProjectAccentKey(project);
   return accentKey === null ? null : { environmentId: project.environmentId, accentKey };
 }

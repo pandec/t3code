@@ -13,9 +13,9 @@ import * as DateTime from "effect/DateTime";
  */
 
 /** Windows at or above this usage render as a warning, unless overridden. */
-export const PROVIDER_USAGE_WARNING_PERCENT = 80;
+const PROVIDER_USAGE_WARNING_PERCENT = 80;
 /** Windows at or above this usage render as critical, unless overridden. */
-export const PROVIDER_USAGE_CRITICAL_PERCENT = 95;
+const PROVIDER_USAGE_CRITICAL_PERCENT = 95;
 
 /**
  * Usage percentages at which windows turn amber and red. Web reads these from
@@ -26,7 +26,7 @@ export type ProviderUsageThresholds = {
   readonly criticalPercent: number;
 };
 
-export const DEFAULT_PROVIDER_USAGE_THRESHOLDS: ProviderUsageThresholds = {
+const DEFAULT_PROVIDER_USAGE_THRESHOLDS: ProviderUsageThresholds = {
   warningPercent: PROVIDER_USAGE_WARNING_PERCENT,
   criticalPercent: PROVIDER_USAGE_CRITICAL_PERCENT,
 };
@@ -131,7 +131,7 @@ function statusForPercent(
   return "ok";
 }
 
-export function maxProviderUsageStatus(
+function maxProviderUsageStatus(
   a: ProviderUsageStatus,
   b: ProviderUsageStatus,
 ): ProviderUsageStatus {
@@ -654,7 +654,7 @@ export function deriveProviderUsageSnapshotFromUsageLimits(
 // per gateway-backed instance. Each account's `usage` arrives in its direct provider's payload
 // shape, so per-account normalization reuses the dispatch above.
 
-export const CLIPROXYAPI_USAGE_PAYLOAD_SOURCE = "cliproxyapi.management";
+const CLIPROXYAPI_USAGE_PAYLOAD_SOURCE = "cliproxyapi.management";
 
 export function resolveProviderUsageUpstreamProvider(input: {
   readonly payload: unknown;
@@ -796,7 +796,7 @@ export function featuredProviderUsageAccount(
   );
 }
 
-export function providerUsageFableWindow(
+function providerUsageFableWindow(
   snapshot: ProviderUsageSnapshot | null,
 ): ProviderUsageWindow | null {
   return (
@@ -884,7 +884,7 @@ export function resolveProviderUsageFableRing(input: {
 }
 
 /** "claude" → "Claude"; an unknown slug is shown capitalized rather than hidden. */
-export function providerUsageUpstreamProviderLabel(provider: string): string {
+function providerUsageUpstreamProviderLabel(provider: string): string {
   switch (provider) {
     case "claude":
       return "Claude";

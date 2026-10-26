@@ -7,7 +7,7 @@ import { ProviderPackageIcon } from "./ProviderPackageIcon";
 
 export type ProviderPickerKind = ProviderDriverKind;
 
-export const PROVIDER_OPTIONS: Array<{
+const PROVIDER_OPTIONS: Array<{
   value: ProviderPickerKind;
   label: string;
   available: boolean;
@@ -111,7 +111,7 @@ function isAvailableProviderOption(option: (typeof PROVIDER_OPTIONS)[number]): o
   return option.available;
 }
 
-export const AVAILABLE_PROVIDER_OPTIONS = PROVIDER_OPTIONS.filter(isAvailableProviderOption);
+const AVAILABLE_PROVIDER_OPTIONS = PROVIDER_OPTIONS.filter(isAvailableProviderOption);
 
 /**
  * Selectable icon choices for custom models — one per available provider

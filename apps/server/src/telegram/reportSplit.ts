@@ -1,5 +1,5 @@
 /** Rich messages hold 32,768 characters; the rest is headroom for the part footer. */
-export const TELEGRAM_REPORT_PART_CHARS = 32_000;
+const TELEGRAM_REPORT_PART_CHARS = 32_000;
 
 const HEADING = /^#{1,6}\s/;
 const FENCE = /^\s{0,3}(```|~~~)/;

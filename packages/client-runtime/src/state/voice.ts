@@ -72,7 +72,7 @@ export const messageSpeechFailureReasonFromError = (
   }
 };
 
-export const transcribeVoiceRecording = Effect.fn("clientRuntime.voice.transcribeVoiceRecording")(
+const transcribeVoiceRecording = Effect.fn("clientRuntime.voice.transcribeVoiceRecording")(
   function* (request: VoiceTranscriptionRequest) {
     const supervisor = yield* EnvironmentSupervisor;
     const prepared = yield* SubscriptionRef.get(supervisor.prepared);
@@ -113,31 +113,31 @@ export function createVoiceTranscriptionEnvironmentCommand<R, E>(
  * and waits for its recording. Leaving does not cancel the job; the thread's
  * listening state shows it to every client until it finishes.
  */
-export const synthesizeMessageSpeech = Effect.fn("clientRuntime.voice.synthesizeMessageSpeech")(
-  function* (request: MessageSpeechSynthesisRequest) {
-    const supervisor = yield* EnvironmentSupervisor;
-    const prepared = yield* SubscriptionRef.get(supervisor.prepared);
-    if (Option.isNone(prepared)) {
-      return yield* new RemoteEnvironmentAuthFetchError({
-        message: "The selected environment is not connected.",
-        cause: "environment_not_connected",
-      });
-    }
-
-    const signer = yield* Effect.serviceOption(ManagedRelayDpopSigner);
-    const remoteAuthorization = yield* Effect.serviceOption(RemoteEnvironmentAuthorization);
-    return yield* executeAuthenticatedEnvironmentHttpRequest({
-      group: "voice",
-      prepared: prepared.value,
-      signer,
-      remoteAuthorization,
-      method: "POST",
-      url: (urls) => urls.synthesizeMessage(),
-      timeoutMs: MESSAGE_SPEECH_SYNTHESIS_TIMEOUT_MS,
-      request: ({ client, headers }) => client.synthesizeMessage({ payload: request, headers }),
+const synthesizeMessageSpeech = Effect.fn("clientRuntime.voice.synthesizeMessageSpeech")(function* (
+  request: MessageSpeechSynthesisRequest,
+) {
+  const supervisor = yield* EnvironmentSupervisor;
+  const prepared = yield* SubscriptionRef.get(supervisor.prepared);
+  if (Option.isNone(prepared)) {
+    return yield* new RemoteEnvironmentAuthFetchError({
+      message: "The selected environment is not connected.",
+      cause: "environment_not_connected",
     });
-  },
-);
+  }
+
+  const signer = yield* Effect.serviceOption(ManagedRelayDpopSigner);
+  const remoteAuthorization = yield* Effect.serviceOption(RemoteEnvironmentAuthorization);
+  return yield* executeAuthenticatedEnvironmentHttpRequest({
+    group: "voice",
+    prepared: prepared.value,
+    signer,
+    remoteAuthorization,
+    method: "POST",
+    url: (urls) => urls.synthesizeMessage(),
+    timeoutMs: MESSAGE_SPEECH_SYNTHESIS_TIMEOUT_MS,
+    request: ({ client, headers }) => client.synthesizeMessage({ payload: request, headers }),
+  });
+});
 
 export function createMessageSpeechSynthesisEnvironmentCommand<R, E>(
   runtime: Atom.AtomRuntime<EnvironmentRegistry | HttpClient.HttpClient | R, E>,

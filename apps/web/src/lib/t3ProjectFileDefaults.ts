@@ -12,7 +12,7 @@ import {
 import { appAtomRegistry } from "~/rpc/atomRegistry";
 
 /** The disconnected file query can suspend indefinitely, so New Thread bounds its read. */
-export const T3_PROJECT_FILE_READ_TIMEOUT_MS = 1_500;
+const T3_PROJECT_FILE_READ_TIMEOUT_MS = 1_500;
 
 export function boundedProjectFileRead(
   read: Promise<T3ProjectFile | null>,

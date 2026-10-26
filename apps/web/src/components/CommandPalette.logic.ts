@@ -626,7 +626,7 @@ export function buildCurrentThreadActionItems(input: {
   });
 }
 
-export const MOVE_TO_GROUP_NONE_VALUE = "group:none";
+const MOVE_TO_GROUP_NONE_VALUE = "group:none";
 export const RENAME_THREAD_VIEW_VALUE = "rename-thread";
 export const SNOOZE_THREAD_VIEW_VALUE = "snooze-thread";
 

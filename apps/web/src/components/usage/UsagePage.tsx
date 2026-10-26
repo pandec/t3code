@@ -1333,7 +1333,7 @@ function usageState(environment: EnvironmentUsageStatus) {
  * totals. It stays inside the environment filter so arriving results do not
  * move the page.
  */
-export function UsageCoverageNotice({
+function UsageCoverageNotice({
   environments,
   partialSources,
   duplicateSources,

@@ -349,23 +349,6 @@ export function resolveTimelineMinimapTopPercent(index: number, itemCount: numbe
   return (Math.max(0, Math.min(index, itemCount - 1)) / (itemCount - 1)) * 100;
 }
 
-export function resolveTimelineMinimapIndexFromPointer(input: {
-  readonly itemCount: number;
-  readonly railTop: number;
-  readonly railHeight: number;
-  readonly pointerY: number;
-}): number | null {
-  if (input.itemCount <= 0 || input.railHeight <= 0) {
-    return null;
-  }
-  if (input.itemCount === 1) {
-    return 0;
-  }
-
-  const progress = Math.max(0, Math.min(1, (input.pointerY - input.railTop) / input.railHeight));
-  return Math.max(0, Math.min(input.itemCount - 1, Math.round(progress * (input.itemCount - 1))));
-}
-
 /** Recheck the rendered buffer: LegendList's unbuffered range can lag during scrolling. */
 export function resolveTimelineMinimapVisibleRange(state: {
   readonly startBuffered: number | null | undefined;

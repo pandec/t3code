@@ -80,7 +80,7 @@ export class TelegramService extends Context.Service<
   }
 >()("t3/telegram/TelegramService") {}
 
-export const truncateTopicName = (name: string) => {
+const truncateTopicName = (name: string) => {
   const trimmed = name.trim() || "T3 thread";
   return trimmed.length <= TELEGRAM_TOPIC_TITLE_MAX_CHARS
     ? trimmed
@@ -88,7 +88,7 @@ export const truncateTopicName = (name: string) => {
 };
 
 /** Cuts a script to `limit` characters, at a sentence end when one is near. */
-export const clipSpeechScript = (script: string, limit: number) => {
+const clipSpeechScript = (script: string, limit: number) => {
   if (script.length <= limit) return script;
   const head = script.slice(0, limit);
   const sentenceEnd = Math.max(
@@ -338,7 +338,7 @@ export const makeUpdateHandler = Effect.gen(function* () {
   });
 });
 
-export const make = Effect.gen(function* () {
+const make = Effect.gen(function* () {
   const serverSettings = yield* ServerSettingsModule.ServerSettingsService;
   const threads = yield* ThreadManagementService.ThreadManagementService;
   const topicStore = yield* TelegramTopicStore.TelegramTopicStore;

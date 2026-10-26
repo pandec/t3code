@@ -61,8 +61,7 @@ import {
   withoutEnvironmentThemes,
 } from "./serverConfigProjection.ts";
 
-// Compatibility exports for callers that used the original state/server module.
-export { applyServerConfigProjection, withoutEnvironmentThemes };
+// Compatibility export for callers that used the original state/server module.
 export type { ServerConfigProjection } from "./serverConfigProjection.ts";
 
 export type ServerUpdateStage = "downloading" | "installing" | "resuming";

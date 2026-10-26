@@ -8,17 +8,17 @@ import type { ProviderUsageWindow } from "./providerUsage.ts";
  */
 
 /** A snapshot older than this is dimmed as stale rather than trusted. */
-export const PROVIDER_USAGE_STALE_AFTER_MS = 5 * 60_000;
+const PROVIDER_USAGE_STALE_AFTER_MS = 5 * 60_000;
 
 /** Opening a usage surface re-reads anything older than this. */
-export const PROVIDER_USAGE_REFRESH_ON_OPEN_AFTER_MS = 60_000;
+const PROVIDER_USAGE_REFRESH_ON_OPEN_AFTER_MS = 60_000;
 
 /**
  * Minimum gap between gateway thread-account probes for one thread+model. Wider than the pool
  * refresh debounce: each probe renews the gateway binding's sliding TTL and the web popover opens
  * on hover, so a tight cadence would pin an idle session to its account.
  */
-export const PROVIDER_USAGE_THREAD_ACCOUNT_PROBE_AFTER_MS = 60_000;
+const PROVIDER_USAGE_THREAD_ACCOUNT_PROBE_AFTER_MS = 60_000;
 
 /** The last thread-account probe a usage surface issued; key is thread+model. */
 export interface ProviderUsageThreadAccountProbe {

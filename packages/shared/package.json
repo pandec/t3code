@@ -335,10 +335,6 @@
       "types": "./src/messageArtifactIdentity.ts",
       "import": "./src/messageArtifactIdentity.ts"
     },
-    "./conversationFork": {
-      "types": "./src/conversationFork.ts",
-      "import": "./src/conversationFork.ts"
-    },
     "./nodeRuntime": {
       "types": "./src/nodeRuntime.ts",
       "import": "./src/nodeRuntime.ts"

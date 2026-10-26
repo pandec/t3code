@@ -1,6 +1,6 @@
 export const LISTENING_SPEED_MIN = 1;
 export const LISTENING_SPEED_MAX = 2;
-export const LISTENING_SPEED_STEP = 0.05;
+const LISTENING_SPEED_STEP = 0.05;
 export const LISTENING_SPEED_PRESETS = [1, 1.25, 1.5, 1.75, 2] as const;
 
 const LISTENING_SPEED_UNITS_PER_X = 1 / LISTENING_SPEED_STEP;
@@ -142,7 +142,7 @@ export function threadListeningState(
 }
 
 /** How close to the end still counts as "finished" for replay purposes. */
-export const LISTENING_TRACK_END_EPSILON_S = 0.1;
+const LISTENING_TRACK_END_EPSILON_S = 0.1;
 
 export interface ListeningTrackStartPlan {
   /** The request targets the recording already loaded in the player. */

@@ -293,7 +293,7 @@ export function derivePendingBackgroundWork(input: {
  * workflows). Commands and monitors are watch loops: a dev server or a
  * Monitor can outlive the work, so they never hold the snooze.
  */
-export function backgroundWorkKeepsSnoozeUntilDone(
+function backgroundWorkKeepsSnoozeUntilDone(
   tasks: ReadonlyArray<{ readonly kind: string }>,
 ): boolean {
   return tasks.some(isAgentBackgroundWork);
@@ -305,7 +305,7 @@ export function backgroundWorkKeepsSnoozeUntilDone(
  * such as a dev server, or a monitor). Unknown kinds decode as
  * background_task, so they count as agent work.
  */
-export function isAgentBackgroundWork(task: { readonly kind: string }): boolean {
+function isAgentBackgroundWork(task: { readonly kind: string }): boolean {
   return task.kind === "subagent" || task.kind === "background_task";
 }
 

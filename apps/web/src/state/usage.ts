@@ -147,7 +147,7 @@ export interface UsageView {
  * so the result matches that slice of the full merge; session counts are not narrowed.
  * `attribution` must match the full merge's so a slice credits gateway buckets alike.
  */
-export function mergeAnsweredUsage(
+function mergeAnsweredUsage(
   environments: readonly EnvironmentUsageStatus[],
   keepBucket?: (bucket: UsageBucket) => boolean,
   attribution: UsageAttribution = "pool",

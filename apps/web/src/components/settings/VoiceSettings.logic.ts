@@ -57,7 +57,7 @@ export function voiceIdAfterModelChange(
   return voices[0]?.id ?? currentVoiceId;
 }
 
-export function formatUsdPerMillionChars(price: number | null): string | null {
+function formatUsdPerMillionChars(price: number | null): string | null {
   if (price === null) return null;
   return `$${price % 1 === 0 ? price.toFixed(0) : price.toFixed(2)} / 1M chars`;
 }

@@ -68,7 +68,7 @@ export function ThreadGroupsDialogHost() {
   );
 }
 
-export function ThreadGroupsDialog(props: {
+function ThreadGroupsDialog(props: {
   open: boolean;
   onOpenChange: (open: boolean) => void;
   initialFocus: "new-group" | "none";

@@ -9,21 +9,18 @@ import * as Effect from "effect/Effect";
 
 /**
  * Built-in synthesis defaults, one per provider. Selecting a provider
- * without naming a model or voice lands here. OpenRouter's default is Gemini
- * 3.1 Flash TTS: it scores above every ElevenLabs model short of v3 in blind
- * listening tests, supports 70+ languages, and costs a third as much.
+ * without naming a model or voice lands here.
  */
-export const DEFAULT_TTS_PROVIDER: TtsProvider = "openrouter";
 export const DEFAULT_ELEVENLABS_TTS_MODEL = "eleven_flash_v2_5";
 export const DEFAULT_ELEVENLABS_TTS_VOICE_ID = "JBFqnCBsd6RMkjVDRZzb";
-export const DEFAULT_OPENROUTER_TTS_MODEL = "google/gemini-3.1-flash-tts-preview";
-export const DEFAULT_OPENROUTER_TTS_VOICE_ID = "Kore";
+const DEFAULT_OPENROUTER_TTS_MODEL = "google/gemini-3.1-flash-tts-preview";
+const DEFAULT_OPENROUTER_TTS_VOICE_ID = "Kore";
 
-export const DEFAULT_TTS_MODEL_BY_PROVIDER: Record<TtsProvider, string> = {
+const DEFAULT_TTS_MODEL_BY_PROVIDER: Record<TtsProvider, string> = {
   elevenlabs: DEFAULT_ELEVENLABS_TTS_MODEL,
   openrouter: DEFAULT_OPENROUTER_TTS_MODEL,
 };
-export const DEFAULT_TTS_VOICE_BY_PROVIDER: Record<TtsProvider, string> = {
+const DEFAULT_TTS_VOICE_BY_PROVIDER: Record<TtsProvider, string> = {
   elevenlabs: DEFAULT_ELEVENLABS_TTS_VOICE_ID,
   openrouter: DEFAULT_OPENROUTER_TTS_VOICE_ID,
 };
@@ -75,7 +72,7 @@ export function resolveMessageSpeechVoiceSetting(
   return environment && environment.length > 0 ? environment : defaultValue;
 }
 
-export function resolveTtsProfile(
+function resolveTtsProfile(
   settings: TtsProfileSettings,
   environment: TtsEnvironmentDefaults,
 ): TtsProfile {

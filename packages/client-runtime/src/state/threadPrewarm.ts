@@ -567,7 +567,7 @@ export const makeEnvironmentThreadPrewarm = Effect.fn("EnvironmentThreadPrewarm.
   },
 );
 
-export function threadPrewarmChanges(environmentId: EnvironmentIdType) {
+function threadPrewarmChanges(environmentId: EnvironmentIdType) {
   return followStreamInEnvironment(environmentId, Stream.unwrap(makeEnvironmentThreadPrewarm()));
 }
 

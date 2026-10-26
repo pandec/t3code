@@ -55,7 +55,7 @@ import type { ProviderImportedMessage } from "./ProviderSessionImport.ts";
 import * as StrictResume from "./StrictResume.ts";
 
 /** Bounds imported display history; the provider keeps the full transcript. */
-export const SESSION_IMPORT_MAX_MESSAGES = 5_000;
+const SESSION_IMPORT_MAX_MESSAGES = 5_000;
 const PREVIEW_MAX_CHARS = 120;
 const TITLE_MAX_CHARS = 80;
 const IMPORT_EVENT_PREFIX = "session-import:v2";
@@ -136,7 +136,7 @@ interface NativeSessionOwner {
   readonly deleted: boolean;
 }
 
-export const make = Effect.gen(function* () {
+const make = Effect.gen(function* () {
   const instanceRegistry = yield* ProviderInstanceRegistry;
   const projects = yield* ProjectService.ProjectService;
   const orchestrator = yield* Orchestrator.OrchestratorV2;

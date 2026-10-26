@@ -336,29 +336,3 @@ export const layer = Layer.effect(
     });
   }),
 );
-
-const noopDefaults: TtsEnvironmentDefaults = {
-  elevenlabs: { modelId: "eleven_flash_v2_5", voiceId: "JBFqnCBsd6RMkjVDRZzb" },
-  openrouter: { modelId: "google/gemini-3.1-flash-tts-preview", voiceId: "Kore" },
-};
-
-/** Inert instance for tests and harnesses that do not exercise speech. */
-export const layerNoop = Layer.succeed(
-  TtsService,
-  TtsService.of({
-    environmentDefaults: noopDefaults,
-    isConfigured: () => Effect.succeed(false),
-    configuredChanges: Stream.empty,
-    status: Effect.succeed({
-      elevenlabs: { configured: false, defaults: noopDefaults.elevenlabs },
-      openrouter: { configured: false, defaults: noopDefaults.openrouter },
-    }),
-    catalog: (provider) => Effect.succeed({ provider, configured: false, models: [], voices: [] }),
-    configureOpenRouter: () =>
-      Effect.fail(new TtsRpcError({ reason: "unavailable", detail: "Speech is not configured." })),
-    synthesize: () =>
-      Effect.fail(new TtsError({ reason: "request_failed", detail: "Speech is not configured." })),
-    test: () =>
-      Effect.fail(new TtsRpcError({ reason: "unavailable", detail: "Speech is not configured." })),
-  }),
-);

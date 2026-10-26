@@ -27,7 +27,7 @@ export type TelegramTopicState = typeof TelegramTopicState.Type;
 const decodeState = Schema.decodeUnknownEffect(Schema.fromJsonString(TelegramTopicState));
 const encodeState = Schema.encodeEffect(Schema.fromJsonString(TelegramTopicState));
 
-export const EMPTY_TELEGRAM_TOPIC_STATE: TelegramTopicState = {
+const EMPTY_TELEGRAM_TOPIC_STATE: TelegramTopicState = {
   botId: "",
   chatId: "",
   lastUpdateId: 0,

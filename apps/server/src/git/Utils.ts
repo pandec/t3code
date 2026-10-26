@@ -2,10 +2,6 @@
 import * as NodeFS from "node:fs";
 import * as NodePath from "node:path";
 
-export function isGitRepository(cwd: string): boolean {
-  return NodeFS.existsSync(NodePath.join(cwd, ".git"));
-}
-
 /**
  * Compare two directory paths for identity, resolving symlinks when both sides
  * still exist. Falls back to a normalized textual comparison so a directory
@@ -21,7 +17,7 @@ export function isSameDirectory(left: string, right: string): boolean {
  * are compared with strict equality, so storing an alias (`/tmp` for `/private/tmp`, a symlinked
  * parent) makes later comparisons miss.
  */
-export function canonicalizeDirectory(value: string): string {
+function canonicalizeDirectory(value: string): string {
   try {
     return NodeFS.realpathSync(value);
   } catch {

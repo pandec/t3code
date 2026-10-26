@@ -781,7 +781,7 @@ class EnvironmentProjectsHttpApi extends HttpApiGroup.make("projects")
     }).middleware(EnvironmentAuthenticatedAuth),
   ) {}
 
-export class EnvironmentVoiceHttpApi extends HttpApiGroup.make("voice")
+class EnvironmentVoiceHttpApi extends HttpApiGroup.make("voice")
   .add(
     HttpApiEndpoint.post("transcribe", "/api/voice/transcriptions", {
       headers: OptionalBearerHeaders,
@@ -799,7 +799,7 @@ export class EnvironmentVoiceHttpApi extends HttpApiGroup.make("voice")
     }).middleware(EnvironmentAuthenticatedAuth),
   ) {}
 
-export class EnvironmentMessageArtifactsHttpApi extends HttpApiGroup.make("messageArtifacts").add(
+class EnvironmentMessageArtifactsHttpApi extends HttpApiGroup.make("messageArtifacts").add(
   HttpApiEndpoint.post("summarizeMessage", "/api/messages/summaries", {
     headers: OptionalBearerHeaders,
     payload: MessageSummaryRequest,

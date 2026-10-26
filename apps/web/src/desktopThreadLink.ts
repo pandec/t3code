@@ -7,7 +7,7 @@ import type {
 } from "@t3tools/contracts";
 
 /** Stands in for the primary environment's id, which tools outside the app cannot know. */
-export const PRIMARY_ENVIRONMENT_LINK_ALIAS = "primary";
+const PRIMARY_ENVIRONMENT_LINK_ALIAS = "primary";
 
 export type DesktopThreadLinkResolution =
   | { readonly kind: "open"; readonly threadRef: ScopedThreadRef }

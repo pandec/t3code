@@ -120,7 +120,7 @@ function runIdOf(run: SettlementRunLike | null): string | null {
  * and live, or it ended while its subagents work on (the server moves the snooze onto a wake run).
  * Watch loops alone don't count. Mirrors the server via snoozeUntilDoneWorkContinues.
  */
-export function untilDoneWorkContinues(
+function untilDoneWorkContinues(
   shell: Pick<
     ThreadSnoozeShell,
     "snoozedUntilRunId" | "latestRun" | "latestTurn" | "pendingBackgroundTasks"

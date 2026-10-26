@@ -3,9 +3,9 @@ import * as Schema from "effect/Schema";
 import { NonNegativeInt, TrimmedNonEmptyString } from "./baseSchemas.ts";
 
 /** Fork: the `telegram_send` MCP tool. Everything lands in the calling thread's own topic. */
-export const TELEGRAM_SUMMARY_MAX_CHARS = 4_000;
-export const TELEGRAM_REPORT_MAX_CHARS = 200_000;
-export const TELEGRAM_AUDIO_SCRIPT_MAX_CHARS = 20_000;
+const TELEGRAM_SUMMARY_MAX_CHARS = 4_000;
+const TELEGRAM_REPORT_MAX_CHARS = 200_000;
+const TELEGRAM_AUDIO_SCRIPT_MAX_CHARS = 20_000;
 export const TELEGRAM_TOPIC_TITLE_MAX_CHARS = 128;
 
 export const TelegramDispatchInput = Schema.Struct({
