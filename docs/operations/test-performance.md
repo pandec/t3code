@@ -38,7 +38,9 @@ resort and would not reduce the single-process floor anyway.
 - **A project with its own `vite.config.ts` does not inherit the root `test`
   block.** That is why every project imports `sharedTestDefaults` explicitly.
   A new workspace project that declares a config and skips the import silently
-  runs on Vitest's 5 s default timeouts.
+  runs on Vitest's 5 s default timeouts, and a repo-root run that mixes it with
+  another project fails with `different 'maxWorkers' but same
+  'sequence.groupOrder'`.
 - **`vp run -r test` bails at the first failing project**, so one broken
   package makes the whole-workspace run unable to complete.
 

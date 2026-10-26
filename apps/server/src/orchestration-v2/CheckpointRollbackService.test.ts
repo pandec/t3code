@@ -197,6 +197,7 @@ it.effect.each([
     const release = Deferred.makeUnsafe<void>();
     const openEntered = Deferred.makeUnsafe<void>();
     const calls: string[] = [];
+    const cleanupStarted = Deferred.makeUnsafe<void>();
     let cleanupEntered = false;
     const providerThread = { id: providerThreadId, providerSessionId, providerInstanceId };
     const projection = {
@@ -304,6 +305,7 @@ it.effect.each([
         worktreePath,
         Effect.gen(function* () {
           cleanupEntered = true;
+          yield* Deferred.succeed(cleanupStarted, undefined);
           if (order === "cleanup-first") yield* Deferred.await(release);
           yield* fileSystem.remove(worktreePath, { recursive: true, force: true });
           calls.push("cleanup");
@@ -313,6 +315,8 @@ it.effect.each([
         order === "cleanup-first"
           ? yield* cleanupEffect.pipe(Effect.forkChild({ startImmediately: true }))
           : undefined;
+      // The lease resolves the real path before locking, so wait until cleanup holds it.
+      if (cleanup !== undefined) yield* Deferred.await(cleanupStarted);
       const rollback = yield* service
         .execute({ threadId, providerThreadId, checkpointId, scopeId, restoreFiles })
         .pipe(Effect.forkChild({ startImmediately: true }));

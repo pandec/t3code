@@ -1,6 +1,8 @@
 import { defineConfig } from "vite-plus";
 import "vite-plus/test/config";
 
+import { sharedTestDefaults } from "../../scripts/lib/vitest-shared.ts";
+
 const reactTests = [
   "src/features/pull-requests/usePullRequestEnvironmentFallback.test.tsx",
   "src/lib/filePreview.test.ts",
@@ -21,8 +23,7 @@ const reactTests = [
 
 export default defineConfig({
   test: {
-    hookTimeout: 60_000,
-    testTimeout: 60_000,
+    ...sharedTestDefaults,
     projects: [
       {
         extends: true,
