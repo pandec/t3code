@@ -3,6 +3,42 @@ import * as NodeFS from "node:fs";
 import * as NodeVM from "node:vm";
 import { describe, expect, it, vi } from "vite-plus/test";
 
+describe.each([
+  "react.js",
+  "react.mjs",
+  "react-native.web.js",
+  "react-native.web.mjs",
+  "react-native.js",
+  "react-native.mjs",
+])("initial scroll fallback (%s)", (bundle) => {
+  it("uses the measured target when bootstrap expires with a stale offset", () => {
+    const source = NodeFS.readFileSync(
+      new URL(`../apps/mobile/node_modules/@legendapp/list/${bundle}`, import.meta.url),
+      "utf8",
+    );
+    const start = source.indexOf("function abortBootstrapInitialScroll(");
+    const abort = source.slice(start, source.indexOf("\n}\n", start) + 2);
+    const initialScroll = { index: 12, viewPosition: 1 };
+    const ctx = { state: { initialScroll, refScroller: { current: {} } } };
+    const dispatchInitialScroll = vi.fn();
+    NodeVM.runInNewContext(`${abort}\nabortBootstrapInitialScroll(ctx);`, {
+      ctx,
+      getBootstrapInitialScrollSession: () => ({ scroll: 0 }),
+      isOffsetInitialScrollSession: () => false,
+      clearBootstrapInitialScrollSession: vi.fn(),
+      resolveInitialScrollOffset: () => 2074,
+      dispatchInitialScroll,
+      Platform: { OS: "web" },
+    });
+    expect(dispatchInitialScroll).toHaveBeenCalledWith(ctx, {
+      forceScroll: true,
+      resolvedOffset: 2074,
+      target: initialScroll,
+      waitForCompletionFrame: true,
+    });
+  });
+});
+
 function createList(bundle: string) {
   const source = NodeFS.readFileSync(
     new URL(`../apps/mobile/node_modules/@legendapp/list/${bundle}`, import.meta.url),

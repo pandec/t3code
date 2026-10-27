@@ -1034,6 +1034,10 @@ function layerClaudeProviderAdapterRegistryReplay(
             [ClaudeAdapterV2.CLAUDE_DEFAULT_INSTANCE_ID]: {
               driver: ClaudeAdapterV2.CLAUDE_PROVIDER,
               environment: [{ name: "CLAUDE_CODE_TMPDIR", value: tmpRoot, sensitive: false }],
+              // The active-steering recorder offers priority "now", which interrupts tools.
+              ...(transcript.metadata?.queryMode === "active_steering"
+                ? { config: { steeringMode: "interrupt" } }
+                : {}),
             },
           },
         }),
